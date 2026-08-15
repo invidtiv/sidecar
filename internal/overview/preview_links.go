@@ -367,20 +367,33 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
-// focusPreviewPane keeps the input owner and the layout tree's focused leaf in
-// lockstep. The tree focus also selects the pane rendered in narrow layouts.
+// focusPreviewPane focuses the first leaf of a kind. It is a thin wrapper over
+// the focus setter so callers that know only "the document pane" share one
+// body with the ring, which knows only leaf IDs.
 func (m *Model) focusPreviewPane(kind panelayout.Kind) bool {
 	leaf := panelayout.FirstOfKind(m.preview.paneRoot, kind)
+	if leaf == nil {
+		return false
+	}
+	// The leaf path of the setter issues no command; only the sidebar path does.
+	m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leaf.ID})
+	return true
+}
+
+// focusPreviewLeaf keeps the input owner and the layout tree's focused leaf in
+// lockstep. The tree focus also selects the pane rendered in narrow layouts.
+func (m *Model) focusPreviewLeaf(leafID int) bool {
+	leaf := panelayout.Find(m.preview.paneRoot, leafID)
 	if leaf == nil {
 		return false
 	}
 	m.preview.paneFocus = leaf.ID
 	m.preview.focus = focusPreview
 	if m.preview.doc != nil {
-		m.preview.doc.focused = kind == panelayout.Document
+		m.preview.doc.focused = leaf.Kind == panelayout.Document
 	}
 	if m.preview.issue != nil {
-		m.preview.issue.focused = kind == panelayout.Issue
+		m.preview.issue.focused = leaf.Kind == panelayout.Issue
 		if view := m.preview.issue.view(); view != nil {
 			view.SetFocused(m.preview.issue.focused)
 		}

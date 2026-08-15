@@ -429,8 +429,12 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 		before = append(before, workspacelist.RowField{Text: "shell", Rendered: dimText("shell")})
 	}
 	after := []workspacelist.RowField{{Text: status, Rendered: dimText(status)}}
+	var nameMeta []workspacelist.RowField
+	if badge, hasBadge := p.pendingViewBadge(shell.TmuxName); hasBadge {
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
+	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
-		Marker: marker, Kind: kind, Name: shell.Name, BeforeProvider: before,
+		Marker: marker, Kind: kind, Name: shell.Name, NameMeta: nameMeta, BeforeProvider: before,
 		Provider: string(provider), AfterProvider: after,
 	}, width, selected, selected && p.activePane == PaneSidebar)
 	return strings.Join(lines, "\n")

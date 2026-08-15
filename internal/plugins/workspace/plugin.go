@@ -121,11 +121,13 @@ const (
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
-	regionDocPane          = "doc-pane"
-	regionDocTab           = "doc-tab"
-	regionIssuePane        = "issue-pane"
-	regionIssueTab         = "issue-tab"
-	regionPaneTreeDivider  = "pane-tree-divider"
+	// regionPaneLeaf is any content leaf's body — document or issue. One region
+	// for both: the leaf ID it carries is what a click needs, and the tree says
+	// what kind of leaf that is, so the arms ask the tree instead of the name.
+	regionPaneLeaf        = "pane-leaf"
+	regionDocTab          = "doc-tab"
+	regionIssueTab        = "issue-tab"
+	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
@@ -535,6 +537,9 @@ type Plugin struct {
 	shellStartupEpoch    uint64
 	shellStartupVersion  uint64
 	shellStartupLoading  bool
+
+	// Pending agent UI requests
+	pendingViews map[string]*pendingView
 }
 
 // New creates a new worktree manager plugin.
@@ -2026,9 +2031,14 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
-	// If shell is selected, poll shell output immediately
-	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
-		cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
+	// If shell is selected, poll shell output immediately and consume pending views
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.Agent != nil {
+			cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
+		}
+		if cmd := p.consumePendingView(shell.TmuxName); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Always load diff

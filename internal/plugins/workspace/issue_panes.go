@@ -242,8 +242,9 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "tab", "shift+tab":
-		// The pane cycle lives on the list keymap so issue, doc, and
-		// terminal stay one ring. Claiming Tab here made the issue leaf
+		// Declining Tab is what keeps the issue leaf in the ring: the cycle
+		// lives on the list keymap, where sidebar, terminal, doc, issue and
+		// the terminal panel are one sequence. Claiming it here made the leaf
 		// a dead end.
 		return false, nil
 	case "\\":
@@ -303,9 +304,7 @@ func (p *Plugin) selectIssueTab(issue *issuePane, leafID, idx int) tea.Cmd {
 	if issue == nil {
 		return nil
 	}
-	p.activePane = PanePreview
-	p.paneFocus = leafID
-	p.termPanelFocused = false
+	p.focusLeaf(leafID)
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
@@ -340,7 +339,7 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 	}
 	inIssueHeader := false
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionIssuePane {
+		if region.ID != regionPaneLeaf {
 			continue
 		}
 		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
@@ -600,13 +599,32 @@ func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) s
 }
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
-	p.mouseHandler.HitMap.AddRect(regionIssuePane, box.X, box.Y, box.W, box.H, leafID)
+	p.mouseHandler.HitMap.AddRect(regionPaneLeaf, box.X, box.Y, box.W, box.H, leafID)
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
 	for _, tab := range layoutIssueTabStrip(issue, box.W, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+tab.Col, box.Y, tab.Width, 1, issueTabHit{LeafID: leafID, Index: tab.Index})
 	}
+}
+
+// issueLeafAt resolves a pane-leaf region's payload to the issue it names. It
+// answers nil for a document leaf, which is how the merged region's arms tell
+// the two kinds apart: the tree is the answer, not the region's name.
+func (p *Plugin) issueLeafAt(data any) (*issuePane, *PaneNode) {
+	leafID, ok := data.(int)
+	if !ok {
+		return nil, nil
+	}
+	leaf := FindPane(p.paneRoot, leafID)
+	if leaf == nil || leaf.Kind != PaneIssue {
+		return nil, nil
+	}
+	issue := p.issues[leaf.ContentID]
+	if issue == nil || issue.view() == nil {
+		return nil, nil
+	}
+	return issue, leaf
 }
 
 func issueViewLocal(actionX, actionY int, box Box) (int, int) {

@@ -130,7 +130,7 @@ func TestNestedPaneTreeGivesEveryDocumentLeafItsOwnRegion(t *testing.T) {
 		}
 		var found bool
 		for _, region := range p.mouseHandler.HitMap.Regions() {
-			if region.ID == regionDocPane && region.Data == placement.Node.ID {
+			if region.ID == regionPaneLeaf && region.Data == placement.Node.ID {
 				if region.Rect != want {
 					t.Fatalf("doc leaf %d region = %+v, want the box it was drawn in %+v",
 						placement.Node.ID, region.Rect, want)

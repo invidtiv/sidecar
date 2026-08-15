@@ -307,7 +307,16 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 	}
 	inDocHeader := false
 	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != regionDocPane {
+		if region.ID != regionPaneLeaf {
+			continue
+		}
+		// Content leaves share one region, so the tree says which of them the
+		// row belongs to: only a document's header row carries file tabs.
+		leafID, ok := region.Data.(int)
+		if !ok {
+			continue
+		}
+		if leaf := FindPane(p.paneRoot, leafID); leaf == nil || leaf.Kind != PaneDoc {
 			continue
 		}
 		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
@@ -1472,59 +1481,6 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.paneFocus = p.paneRoot.ID
 }
 
-func (p *Plugin) cycleDocumentFocus(reverse bool) {
-	leaves := p.contentLeafIDs()
-	if len(leaves) == 0 {
-		return
-	}
-	terminalID := terminalLeafID(p.paneRoot)
-	idx := -1
-	if p.activePane == PanePreview && p.paneFocus != terminalID {
-		for i, id := range leaves {
-			if id == p.paneFocus {
-				idx = i
-				break
-			}
-		}
-	}
-	if reverse {
-		switch {
-		case p.activePane == PaneSidebar:
-			p.activePane = PanePreview
-			p.paneFocus = leaves[len(leaves)-1]
-		case idx > 0:
-			p.paneFocus = leaves[idx-1]
-		case idx == 0:
-			p.paneFocus = terminalID
-		default:
-			if p.sidebarVisible {
-				p.activePane = PaneSidebar
-			} else {
-				p.activePane = PanePreview
-				p.paneFocus = leaves[len(leaves)-1]
-			}
-		}
-	} else {
-		switch {
-		case p.activePane == PaneSidebar:
-			p.activePane = PanePreview
-			p.paneFocus = terminalID
-		case idx >= 0 && idx < len(leaves)-1:
-			p.paneFocus = leaves[idx+1]
-		case idx == len(leaves)-1:
-			if p.sidebarVisible {
-				p.activePane = PaneSidebar
-			} else {
-				p.paneFocus = terminalID
-			}
-		default:
-			p.activePane = PanePreview
-			p.paneFocus = leaves[0]
-		}
-	}
-	p.termPanelFocused = false
-}
-
 // docPaneHeaderRow is the doc leaf's header: the tab strip only. focused is
 // the frame's answer, so the tab a click lands on matches the one the leaf drew.
 func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
@@ -1563,7 +1519,7 @@ func renderPaneTreeDividerH(width int, focused bool) string {
 }
 
 func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
-	p.mouseHandler.HitMap.AddRect(regionDocPane, box.X, box.Y, box.W, box.H, leafID)
+	p.mouseHandler.HitMap.AddRect(regionPaneLeaf, box.X, box.Y, box.W, box.H, leafID)
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {

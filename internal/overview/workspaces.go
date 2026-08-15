@@ -59,6 +59,9 @@ func (m *Model) syncWorkspaces() {
 		for _, workspace := range result.Workspaces {
 			m.catalog[workspace.ID] = workspace
 			item := listItem(workspace.Item(), project.Name, order, m.stale[key])
+			if badge, hasBadge := m.pendingViewBadge(workspace.TmuxName); hasBadge {
+				item.NameMeta = append(item.NameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
+			}
 			if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
 				continue
 			}
@@ -404,6 +407,16 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			return true, cmd
 		}
 		return m.handleViewFlyoutKey(msg)
+	}
+	// Tab cycles the windows on screen. It sits above the filter so focus moves
+	// even mid-query — the query text survives, the filter merely stops owning
+	// the keyboard — and below the live-pane check above, which is the one
+	// exception: a terminal being typed into keeps its own tab.
+	if key == "tab" || key == "shift+tab" {
+		if m.workspaces.Filter().Focused() {
+			m.workspaces.Filter().Blur()
+		}
+		return true, m.cyclePaneFocus(key == "shift+tab")
 	}
 	if m.workspaces.Filter().Focused() {
 		// ctrl+c is the host's, even mid-query. It is one of sidecar's two ways

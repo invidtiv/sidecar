@@ -568,11 +568,18 @@ func (p *Plugin) clearConfirmDeleteShellModal() {
 func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
+	// Tab walks every window on screen — sidebar, tree leaves, terminal panel —
+	// through the one ring, so no visible window is a dead end and none is
+	// unreachable. A terminal in interactive mode never gets here: that mode
+	// dispatches before the list keys and keeps Tab for the shell.
 	if msg.String() == "tab" || msg.String() == "shift+tab" {
-		if len(p.contentLeafIDs()) > 0 {
-			p.cycleDocumentFocus(msg.String() == "shift+tab")
-			return nil
-		}
+		// Leaving a live terminal search input the way the global overview
+		// leaves a focused filter: stop taking keystrokes, keep the query and
+		// its matches, then move focus. Without this the search box would keep
+		// drawing a cursor for an input that no longer receives keys.
+		p.terminalSearch.InputActive = false
+		p.cyclePaneFocus(msg.String() == "shift+tab")
+		return nil
 	}
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
@@ -984,13 +991,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 	case "\\":
 		return p.toggleSidebarCmd()
-	case "tab", "shift+tab":
-		// Switch focus between panes (consistent with other plugins)
-		if p.activePane == PaneSidebar && p.sidebarVisible {
-			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.sidebarVisible {
-			p.activePane = PaneSidebar
-		}
 	case ",":
 		return p.cyclePreviewTab(-1)
 	case ".":

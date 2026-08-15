@@ -82,6 +82,14 @@ type LookupResult struct {
 	Name  string `json:"name"`
 }
 
+type OriginInfo struct {
+	TmuxName    string `json:"tmuxName"`
+	Namespace   string `json:"namespace"`
+	ProjectKey  string `json:"projectKey"`
+	WorkDir     string `json:"workDir"`
+	DisplayName string `json:"displayName"`
+}
+
 type RenameRequest struct {
 	TmuxName  string
 	Namespace string
@@ -160,6 +168,75 @@ func LookupCurrent(stateDir string, id Identity) (LookupResult, error) {
 		return LookupResult{}, notFound()
 	}
 	return LookupResult{Shell: id.TmuxName, Name: m.Shells[match].DisplayName}, nil
+}
+
+// LookupOrigin returns origin identity and workspace root for the current shell.
+func LookupOrigin(stateDir string, id Identity) (OriginInfo, error) {
+	entries, err := os.ReadDir(filepath.Join(stateDir, "projects"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return OriginInfo{}, notFound()
+		}
+		return OriginInfo{}, &Error{Kind: KindState, Msg: "read registered Sidecar projects", Err: err}
+	}
+	var matches []struct {
+		projectKey string
+		dir        string
+		shell      Definition
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dir := filepath.Join(stateDir, "projects", entry.Name())
+		path := filepath.Join(dir, "shells.json")
+		m, readErr := readManifest(path)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				continue
+			}
+			return OriginInfo{}, &Error{Kind: KindState, Msg: "read registered shell manifest", Err: readErr}
+		}
+		for _, shell := range m.Shells {
+			if shell.TmuxName == id.TmuxName && sameNamespace(shell.Namespace, id.Namespace) {
+				matches = append(matches, struct {
+					projectKey string
+					dir        string
+					shell      Definition
+				}{
+					projectKey: entry.Name(),
+					dir:        dir,
+					shell:      shell,
+				})
+			}
+		}
+	}
+	if len(matches) == 0 {
+		return OriginInfo{}, notFound()
+	}
+	if len(matches) > 1 {
+		return OriginInfo{}, &Error{Kind: KindAmbiguous, Msg: "current shell matches multiple Sidecar project manifests; refusing ambiguous match"}
+	}
+	m := matches[0]
+	workDir := m.shell.WorkDir
+	if workDir == "" {
+		metaPath := filepath.Join(m.dir, "meta.json")
+		if data, err := os.ReadFile(metaPath); err == nil {
+			var meta struct {
+				Path string `json:"path"`
+			}
+			if err := json.Unmarshal(data, &meta); err == nil && meta.Path != "" {
+				workDir = meta.Path
+			}
+		}
+	}
+	return OriginInfo{
+		TmuxName:    id.TmuxName,
+		Namespace:   id.Namespace,
+		ProjectKey:  m.projectKey,
+		WorkDir:     workDir,
+		DisplayName: m.shell.DisplayName,
+	}, nil
 }
 
 // RenameCurrent searches registered project manifests without creating state.

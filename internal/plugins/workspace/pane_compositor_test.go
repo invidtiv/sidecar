@@ -167,10 +167,8 @@ func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers
 	for _, placement := range leaves {
 		region := ""
 		switch placement.Node.Kind {
-		case PaneDoc:
-			region = regionDocPane
-		case PaneIssue:
-			region = regionIssuePane
+		case PaneDoc, PaneIssue:
+			region = regionPaneLeaf
 		default:
 			continue
 		}

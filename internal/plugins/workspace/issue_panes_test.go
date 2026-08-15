@@ -322,8 +322,8 @@ func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
 
 	x, y := origin.X+box.X+1, origin.Y+box.Y+box.H-1
 	body := p.mouseHandler.HitMap.Test(x, y)
-	if body == nil || body.ID != regionIssuePane {
-		t.Fatalf("the issue leaf's body resolves to %#v, want %s", body, regionIssuePane)
+	if body == nil || body.ID != regionPaneLeaf {
+		t.Fatalf("the issue leaf's body resolves to %#v, want %s", body, regionPaneLeaf)
 	}
 	before := p.issues[3].view().View()
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Region: body, Delta: 3, X: x, Y: y})
@@ -371,7 +371,9 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			}
 			var pane *mouse.Region
 			for _, region := range p.mouseHandler.HitMap.Regions() {
-				if region.ID == regionIssuePane {
+				// Document and issue leaves share one region, so the leaf ID
+				// the region carries is what names the issue's box.
+				if region.ID == regionPaneLeaf && region.Data == issue.leafID {
 					copy := region
 					pane = &copy
 					break
@@ -383,12 +385,12 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			x := pane.Rect.X + child.X
 			y := pane.Rect.Y + terminalHeaderRows + child.Y
 			resolved := p.mouseHandler.HitMap.Test(x, y)
-			if resolved == nil || resolved.ID != regionIssuePane {
+			if resolved == nil || resolved.ID != regionPaneLeaf {
 				t.Fatalf("raw child coordinate (%d,%d) resolves to %#v", x, y, resolved)
 			}
 
 			action := p.mouseHandler.HandleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
-			if action.Type != mouse.ActionClick || action.Region == nil || action.Region.ID != regionIssuePane {
+			if action.Type != mouse.ActionClick || action.Region == nil || action.Region.ID != regionPaneLeaf {
 				t.Fatalf("raw click action = %#v, want an issue-pane click", action)
 			}
 			cmd := p.handleMouseClick(action)

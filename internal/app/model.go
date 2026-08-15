@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -335,6 +336,12 @@ type Model struct {
 	scope       AppScope
 	globalTab   GlobalTab
 	globalTasks *globalTasksHost
+
+	// UI request watcher for external CLI commands (e.g. sidecar open).
+	// The channel is deliberately not cached here: Init takes the model by
+	// value, so anything it assigns is discarded, and a cached-and-nil channel
+	// silently stops the listener re-arming after the first request.
+	uiRequestWatcher *uirequest.Watcher
 }
 
 // New creates a new application model.
@@ -371,6 +378,9 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
 	}
+	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
+		m.uiRequestWatcher = watcher
+	}
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
 	}
@@ -393,6 +403,19 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
 	}
 	return m
+}
+
+func listenForUIRequests(ch <-chan tea.Msg) tea.Cmd {
+	if ch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
 }
 
 // Init initializes the model and returns initial commands.
@@ -425,6 +448,11 @@ func (m Model) Init() tea.Cmd {
 	// model is built by the returned command, i.e. after the first frame.
 	if cmd := m.globalTasks.start(); cmd != nil {
 		cmds = append(cmds, cmd)
+	}
+
+	if m.uiRequestWatcher != nil {
+		m.uiRequestWatcher.Start()
+		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 	}
 
 	return tea.Batch(cmds...)

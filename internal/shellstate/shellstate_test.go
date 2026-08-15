@@ -166,6 +166,35 @@ func TestLookupCurrentAmbiguousAcrossProjects(t *testing.T) {
 	}
 }
 
+func TestLookupOrigin(t *testing.T) {
+	state := t.TempDir()
+	p1 := filepath.Join(state, "projects", "p1")
+	if err := os.MkdirAll(p1, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeTestManifest(t, filepath.Join(p1, "shells.json"), manifest{Version: 1, Shells: []Definition{
+		{TmuxName: "sidecar-sh-target", DisplayName: "readable name", Namespace: "/tmp/sock", WorkDir: "/work/p1"},
+	}})
+	if err := os.WriteFile(filepath.Join(p1, "meta.json"), []byte(`{"path":"/work/p1"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	res, err := LookupCurrent(state, Identity{TmuxName: "sidecar-sh-target", Namespace: "/tmp/sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Name != "readable name" || res.Shell != "sidecar-sh-target" {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+
+	origin, err := LookupOrigin(state, Identity{TmuxName: "sidecar-sh-target", Namespace: "/tmp/sock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if origin.DisplayName != "readable name" || origin.ProjectKey != "p1" || origin.WorkDir != "/work/p1" {
+		t.Fatalf("unexpected origin: %+v", origin)
+	}
+}
+
 func TestRenameCurrentMalformedRegisteredManifestFailsClosed(t *testing.T) {
 	state := t.TempDir()
 	validDir := filepath.Join(state, "projects", "valid")

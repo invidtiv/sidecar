@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -218,4 +219,95 @@ func TestACarriedBackgroundReachesEveryRowItCovers(t *testing.T) {
 	if drawn == 0 {
 		t.Fatal("the pane's output was not drawn at all")
 	}
+}
+
+// Tab is a shared rule, so this surface walks the same windows the project
+// plugin does. The sequence below is written out here and again in the project
+// plugin's own interaction_parity_test.go rather than computed from focusRing():
+// a surface held to a shared rule cannot be allowed to derive its expectation
+// from that rule, or a regression in the ring itself would pass on both sides.
+//
+// The one difference between the surfaces is named rather than smoothed over:
+// the project plugin draws a terminal panel below its preview and this one never
+// does, so the panel is an entry only its walk has. This surface's walk is the
+// project's with that entry removed — asserted there, and asserted here by the
+// ring carrying no panel target in any arrangement.
+var parityFocusWalk = []string{"terminal", "doc", "issue", "sidebar", "terminal"}
+
+// tabWalk presses Tab once per expected step and records where focus landed.
+func tabWalk(t *testing.T, m *Model, steps int) []string {
+	t.Helper()
+	walk := make([]string, 0, steps)
+	for i := range steps {
+		handled, cmd := m.WorkspacesKey(tabKey())
+		if !handled {
+			t.Fatalf("step %d: tab was not handled", i)
+		}
+		run(t, m, cmd)
+		walk = append(walk, focusTargetName(t, m))
+	}
+	return walk
+}
+
+func TestTabWalksTheSameWindowsAsTheProjectSurface(t *testing.T) {
+	m := focusRingModel(t)
+	run(t, m, m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetSidebar}))
+
+	if got := tabWalk(t, m, len(parityFocusWalk)); !sameWalk(got, parityFocusWalk) {
+		t.Fatalf("tab walk = %v, want the shared walk %v", got, parityFocusWalk)
+	}
+
+	// The panel belongs to the project surface alone, so no arrangement of this
+	// one may put one in the ring — the difference is this, and only this.
+	for _, arrangement := range []struct {
+		name string
+		set  func()
+	}{
+		{"split", func() {}},
+		{"preview only", func() { run(t, m, m.toggleWorkspaceSidebar()) }},
+		{"list only", func() {
+			m.WorkspacesResize(globalListMinWidth, previewTall)
+			m.WorkspacesView(globalListMinWidth, previewTall)
+		}},
+	} {
+		arrangement.set()
+		for _, target := range m.focusRing() {
+			if target.Kind == panelayout.TargetTermPanel {
+				t.Fatalf("the %s ring names a terminal panel this surface never draws", arrangement.name)
+			}
+		}
+	}
+}
+
+// The interactive exception is shared too: a pane being typed into owns Tab on
+// both surfaces, so neither moves focus while the keyboard is in a live pane.
+func TestTabIsHeldByALivePaneAsItIsInTheProjectSurface(t *testing.T) {
+	m := focusRingModel(t)
+	run(t, m, m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetSidebar}))
+	run(t, m, m.enterPreviewInteractive())
+	if !m.PreviewInteractive() {
+		t.Fatal("premise: the preview is not interactive")
+	}
+
+	before := focusTargetName(t, m)
+	handled, cmd := m.WorkspacesKey(tabKey())
+	run(t, m, cmd)
+	if !handled {
+		t.Fatal("tab was not forwarded to the live pane")
+	}
+	if got := focusTargetName(t, m); got != before {
+		t.Fatalf("tab moved focus from %q to %q while a pane was being typed in", before, got)
+	}
+}
+
+func sameWalk(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
