@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -328,5 +330,342 @@ func TestCreatedShellSelectionFollowsAcrossSortsAndTinyViewport(t *testing.T) {
 				t.Fatalf("selected = %q, want created", got)
 			}
 		})
+	}
+}
+
+func renderCreateModal(t *testing.T, m *Model) string {
+	t.Helper()
+	if m.width < 1 {
+		m.width = 80
+	}
+	if m.height < 1 {
+		m.height = 30
+	}
+	m.ensureCreateModal()
+	if m.createModal == nil {
+		t.Fatal("create modal is nil")
+	}
+	return m.createModal.Render(m.width, m.height, m.createMouse)
+}
+
+func createKey(k string) tea.KeyPressMsg {
+	switch k {
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "down":
+		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
+	default:
+		r := []rune(k)
+		if len(r) == 1 {
+			return tea.KeyPressMsg{Code: r[0], Text: k}
+		}
+		return tea.KeyPressMsg{Text: k}
+	}
+}
+
+func createHit(m *Model, id string) (mouse.Region, bool) {
+	for _, region := range m.createMouse.HitMap.Regions() {
+		if region.ID == id {
+			return region, true
+		}
+	}
+	return mouse.Region{}, false
+}
+
+func TestCreateModalProjectComboFiltersAndSubmitUsesProject(t *testing.T) {
+	m := catalogModel(t)
+	original := createManagedShell
+	defer func() { createManagedShell = original }()
+	var got workspaceops.ManagedShellSpec
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		got = spec
+		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
+	}
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	m.createModal.SetFocus(globalCreateProjectID)
+	m.createProjectInput.SetValue("")
+	renderCreateModal(t, m)
+
+	m.handleCreateShellKey(createKey("b"))
+	if m.createBusy || !m.CreateOpen() {
+		t.Fatal("typing a project filter submitted")
+	}
+	if m.createProjectInput.Value() != "b" {
+		t.Fatalf("filter = %q, want b", m.createProjectInput.Value())
+	}
+	if project, ok := m.selectedCreateProject(); !ok || project.Name != "braid" {
+		t.Fatalf("filtered project = %+v ok=%v, want braid", project, ok)
+	}
+
+	renderCreateModal(t, m)
+	item, ok := createHit(m, globalCreateProjectID+"/item/0")
+	if !ok {
+		t.Fatal("expected project overlay row")
+	}
+	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{X: item.Rect.X + 1, Y: item.Rect.Y, Button: tea.MouseLeft}); cmd != nil {
+		t.Fatal("overlay click submitted")
+	}
+	if project, ok := m.selectedCreateProject(); !ok || project.Path != "/tmp/braid" {
+		t.Fatalf("clicked project = %+v", project)
+	}
+
+	cmd := m.submitCreateShell()
+	if cmd == nil {
+		t.Fatal("expected submit cmd")
+	}
+	msg := cmd().(globalShellCreatedMsg)
+	if msg.Project.Path != "/tmp/braid" || got.ProjectRoot != "/tmp/braid" || got.WorkDir != "/tmp/braid" {
+		t.Fatalf("submit used wrong project: msg=%+v spec=%+v", msg.Project, got)
+	}
+}
+
+func TestCreateModalKindClickChangesKindAndPlaceholder(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	if m.createKindIndex != globalCreateShell {
+		t.Fatalf("kind = %d, want shell", m.createKindIndex)
+	}
+	if m.createNameInput.Placeholder != m.defaultShellDisplayName("sidecar") {
+		t.Fatalf("shell placeholder = %q", m.createNameInput.Placeholder)
+	}
+
+	region, ok := createHit(m, globalCreateKindID)
+	if !ok {
+		t.Fatal("kind control was not hit-tested")
+	}
+	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{
+		X: region.Rect.X + region.Rect.W - 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+	}); cmd != nil {
+		t.Fatalf("kind click submitted: %v", cmd)
+	}
+	if m.createKindIndex != globalCreateWorktree {
+		t.Fatalf("kind after click = %d, want worktree", m.createKindIndex)
+	}
+	if m.createNameInput.Placeholder != "feature-name" {
+		t.Fatalf("worktree placeholder = %q", m.createNameInput.Placeholder)
+	}
+
+	renderCreateModal(t, m)
+	region, ok = createHit(m, globalCreateKindID)
+	if !ok {
+		t.Fatal("kind control missing after rebuild")
+	}
+	m.handleCreateShellMouse(tea.MouseClickMsg{
+		X: region.Rect.X + 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+	})
+	if m.createKindIndex != globalCreateShell {
+		t.Fatalf("kind after left click = %d, want shell", m.createKindIndex)
+	}
+}
+
+func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "claude",
+		Agents:           []string{"claude", "grok"},
+		AgentStart:       map[string]string{"grok": "grok-custom"},
+	}}}
+	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
+	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	var spec workspaceops.ManagedShellSpec
+	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		spec = got
+		return workspaceops.ShellResult{SessionName: got.SessionName}, nil
+	}
+	var session, command string
+	started := 0
+	startGlobalShellAgent = func(_ context.Context, gotSession, gotCommand string) error {
+		started++
+		session, command = gotSession, gotCommand
+		return nil
+	}
+
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	if m.createAgentTypes()[0] != "" {
+		t.Fatalf("shell agent list should lead with None: %v", m.createAgentTypes())
+	}
+	m.createModal.SetFocus(globalCreateAgentID)
+	renderCreateModal(t, m)
+	m.handleCreateShellKey(createKey("down"))
+	if m.selectedCreateAgent() != "grok" {
+		t.Fatalf("selected agent = %q, want grok (input=%q idx=%d)", m.selectedCreateAgent(), m.createAgentInput.Value(), m.createAgentIndex)
+	}
+
+	msg := m.submitCreateShell()().(globalShellCreatedMsg)
+	if msg.Err != nil || spec.AgentType != "grok" || session == "" || !strings.Contains(command, "grok-custom") {
+		t.Fatalf("chosen agent not used: spec=%+v session=%q command=%q err=%v", spec, session, command, msg.Err)
+	}
+	if started != 1 {
+		t.Fatalf("start count = %d", started)
+	}
+
+	m.OpenCreateWorktree("sidecar")
+	m.createNameInput.SetValue("feature")
+	if got := m.createAgentTypes(); got[len(got)-1] != "" {
+		t.Fatalf("worktree agent list should end with None: %v", got)
+	}
+	originalPlan := resolveGlobalWorktree
+	defer func() { resolveGlobalWorktree = originalPlan }()
+	resolveGlobalWorktree = func(context.Context, string, string, string, string, bool, config.WorktreeSetupConfig) (*workspaceops.WorktreePlan, error) {
+		return &workspaceops.WorktreePlan{Branch: "feature", Path: "/tmp/feature"}, nil
+	}
+	m.createAgentType = ""
+	m.rematchCreateAgentIndex()
+	planMsg := m.planCreateWorktree()().(globalWorktreePlannedMsg)
+	if planMsg.Plan == nil || planMsg.Plan.AgentType != "" {
+		t.Fatalf("None should leave plan.AgentType empty: %+v", planMsg.Plan)
+	}
+}
+
+func TestCreateModalNoneDoesNotStartAgent(t *testing.T) {
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "claude", AgentStart: map[string]string{"claude": "claude-custom"},
+	}}}
+	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
+	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	var spec workspaceops.ManagedShellSpec
+	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		spec = got
+		return workspaceops.ShellResult{SessionName: got.SessionName}, nil
+	}
+	started := 0
+	startGlobalShellAgent = func(context.Context, string, string) error {
+		started++
+		return nil
+	}
+	m.OpenCreateShell("sidecar")
+	m.createAgentType = ""
+	m.rematchCreateAgentIndex()
+	msg := m.submitCreateShell()().(globalShellCreatedMsg)
+	if msg.Err != nil || spec.AgentType != "" || started != 0 {
+		t.Fatalf("None started an agent: spec=%+v started=%d err=%v", spec, started, msg.Err)
+	}
+}
+
+func TestCreateModalTabCyclesWithoutTrapping(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreate("")
+	renderCreateModal(t, m)
+	if m.createModal.FocusedID() != globalCreateKindID {
+		t.Fatalf("chooser focus = %q, want kind", m.createModal.FocusedID())
+	}
+	want := []string{globalCreateProjectID, globalCreateAgentID, globalCreateNameID, globalCreateSubmitID, globalCreateCancelID, globalCreateKindID}
+	for i, id := range want {
+		m.handleCreateShellKey(createKey("tab"))
+		if got := m.createModal.FocusedID(); got != id {
+			t.Fatalf("tab %d focus = %q, want %q", i+1, got, id)
+		}
+	}
+	m.handleCreateShellKey(createKey("shift+tab"))
+	if got := m.createModal.FocusedID(); got != globalCreateCancelID {
+		t.Fatalf("shift+tab focus = %q, want cancel", got)
+	}
+}
+
+func TestCreateModalEscClosesOverlayThenModal(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	m.createModal.SetFocus(globalCreateProjectID)
+	renderCreateModal(t, m)
+
+	handled, cmd := m.handleCreateShellKey(createKey("esc"))
+	if !handled || cmd != nil || !m.CreateOpen() {
+		t.Fatalf("first esc closed modal: handled=%v cmd=%v open=%v", handled, cmd != nil, m.CreateOpen())
+	}
+	handled, cmd = m.handleCreateShellKey(createKey("esc"))
+	if !handled || cmd != nil || m.CreateOpen() {
+		t.Fatalf("second esc should cancel: handled=%v cmd=%v open=%v", handled, cmd != nil, m.CreateOpen())
+	}
+}
+
+func TestCreateModalLastProjectAndAgentPersist(t *testing.T) {
+	var lastProject, lastAgent string
+	origLoadP, origSaveP := loadLastGlobalCreateProject, saveLastGlobalCreateProject
+	origLoadA, origSaveA := loadLastCreateAgent, saveLastCreateAgent
+	defer func() {
+		loadLastGlobalCreateProject, saveLastGlobalCreateProject = origLoadP, origSaveP
+		loadLastCreateAgent, saveLastCreateAgent = origLoadA, origSaveA
+	}()
+	loadLastGlobalCreateProject = func() string { return lastProject }
+	saveLastGlobalCreateProject = func(v string) error { lastProject = v; return nil }
+	loadLastCreateAgent = func() string { return lastAgent }
+	saveLastCreateAgent = func(v string) error { lastAgent = v; return nil }
+
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "claude",
+	}}}
+	original := createManagedShell
+	defer func() { createManagedShell = original }()
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
+	}
+	m.OpenCreateShell("braid")
+	m.createAgentType = "grok"
+	m.rematchCreateAgentIndex()
+	_ = m.submitCreateShell()()
+	if lastProject != "/tmp/braid" || lastAgent != "grok" {
+		t.Fatalf("persisted project=%q agent=%q", lastProject, lastAgent)
+	}
+
+	fresh := catalogModel(t)
+	fresh.config = m.config
+	fresh.workspaces.SetItems(nil)
+	fresh.OpenCreate("")
+	if project, ok := fresh.selectedCreateProject(); !ok || project.Name != "braid" {
+		t.Fatalf("fresh project = %+v ok=%v, want braid", project, ok)
+	}
+	if fresh.createAgentType != "grok" {
+		t.Fatalf("fresh agent = %q, want grok", fresh.createAgentType)
+	}
+}
+
+func TestCreateModalComboQuerySurvivesUnrelatedRebuild(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	renderCreateModal(t, m)
+	m.createModal.SetFocus(globalCreateAgentID)
+	m.createAgentInput.SetValue("")
+	renderCreateModal(t, m)
+	m.handleCreateShellKey(createKey("g"))
+	if m.createAgentInput.Value() != "g" {
+		t.Fatalf("agent query = %q, want g", m.createAgentInput.Value())
+	}
+	m.width = 40
+	renderCreateModal(t, m)
+	if m.createAgentInput.Value() != "g" {
+		t.Fatalf("rebuild wiped agent query: %q", m.createAgentInput.Value())
+	}
+	if m.createModal.FocusedID() != globalCreateAgentID {
+		t.Fatalf("rebuild dropped agent focus: %q", m.createModal.FocusedID())
+	}
+}
+
+func TestCreateModalOverlayDoesNotChangeHeight(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	m.createModal.SetFocus(globalCreateNameID)
+	closed := renderCreateModal(t, m)
+	m.createModal.SetFocus(globalCreateProjectID)
+	open := renderCreateModal(t, m)
+	if lipgloss.Height(closed) != lipgloss.Height(open) {
+		t.Fatalf("combo overlay changed height: closed=%d open=%d", lipgloss.Height(closed), lipgloss.Height(open))
 	}
 }

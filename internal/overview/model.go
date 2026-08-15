@@ -211,6 +211,10 @@ type Model struct {
 	createProjectKey   string
 	createKindIndex    int
 	createNameInput    textinput.Model
+	createProjectInput textinput.Model
+	createAgentInput   textinput.Model
+	createAgentIndex   int
+	createAgentType    string
 	createError        string
 	createWarning      string
 	createBusy         bool
@@ -249,6 +253,8 @@ var (
 	saveWorkspaceListSort       = state.SetWorkspaceListSort
 	loadLastGlobalCreateProject = state.GetLastGlobalCreateProject
 	saveLastGlobalCreateProject = state.SetLastGlobalCreateProject
+	loadLastCreateAgent         = state.GetLastCreateAgent
+	saveLastCreateAgent         = state.SetLastCreateAgent
 )
 
 func New(collector workspaceinventory.Collector) *Model {

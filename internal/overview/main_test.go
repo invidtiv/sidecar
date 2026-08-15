@@ -29,6 +29,8 @@ func TestMain(m *testing.M) {
 	saveWorkspaceListSort = func(string) error { return nil }
 	loadLastGlobalCreateProject = func() string { return "" }
 	saveLastGlobalCreateProject = func(string) error { return nil }
+	loadLastCreateAgent = func() string { return "" }
+	saveLastCreateAgent = func(string) error { return nil }
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
