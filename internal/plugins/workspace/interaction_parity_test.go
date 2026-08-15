@@ -206,3 +206,127 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 		t.Fatal("a window left in scrollback was dragged back to the live edge")
 	}
 }
+
+// Tab is a shared rule, so the browser walks the same windows this surface does.
+// The sequences below are written out here and again in the browser's own
+// interaction_parity_test.go rather than computed from focusRing(): a surface
+// held to a shared rule cannot be allowed to derive its expectation from that
+// rule, or a regression in the ring itself would pass on both sides.
+//
+// The one difference between the surfaces is named rather than smoothed over:
+// this surface draws a terminal panel and the browser does not, so the panel is
+// an entry only this file's walk has. With the panel off screen the two walks
+// are the same sequence, character for character.
+var (
+	parityFocusWalk      = []string{"terminal", "doc", "issue", "sidebar", "terminal"}
+	parityFocusWalkPanel = []string{"terminal", "doc", "issue", "panel", "sidebar", "terminal"}
+)
+
+// focusWindowName says which window holds the keyboard, in the terms both
+// surfaces' parity walks are written in.
+func focusWindowName(t *testing.T, p *Plugin) string {
+	t.Helper()
+	if p.activePane == PaneSidebar {
+		return "sidebar"
+	}
+	if p.termPanelVisible && p.termPanelFocused {
+		return "panel"
+	}
+	leaf := FindPane(p.paneRoot, p.paneFocus)
+	if leaf == nil {
+		t.Fatalf("focused leaf %d is not in the tree", p.paneFocus)
+	}
+	switch leaf.Kind {
+	case PaneTerminal:
+		return "terminal"
+	case PaneDoc:
+		return "doc"
+	case PaneIssue:
+		return "issue"
+	}
+	t.Fatalf("focused leaf %d has an unnamed kind %v", leaf.ID, leaf.Kind)
+	return ""
+}
+
+// tabWalk presses Tab once per expected step and records where focus landed.
+func tabWalk(t *testing.T, p *Plugin, steps int) []string {
+	t.Helper()
+	walk := make([]string, 0, steps)
+	for range steps {
+		p.handleListKeys(tabKey())
+		walk = append(walk, focusWindowName(t, p))
+	}
+	return walk
+}
+
+func TestTabWalksTheSameWindowsAsTheBrowser(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	steelThreadPaneTree(t, p, root)
+	p.sidebarVisible = true
+
+	// Without the panel the two surfaces draw the same windows, so they owe the
+	// same walk.
+	p.termPanelVisible = false
+	p.setFocusTarget(sidebarTarget())
+	if got := tabWalk(t, p, len(parityFocusWalk)); !sameWalk(got, parityFocusWalk) {
+		t.Fatalf("tab walk = %v, want the shared walk %v", got, parityFocusWalk)
+	}
+
+	// The panel is this surface's extra window. It joins the ring in placement
+	// order — after the leaves, before the wrap back to the sidebar — and is the
+	// only entry the browser's walk lacks.
+	p.termPanelVisible = true
+	p.setFocusTarget(sidebarTarget())
+	got := tabWalk(t, p, len(parityFocusWalkPanel))
+	if !sameWalk(got, parityFocusWalkPanel) {
+		t.Fatalf("tab walk with the panel = %v, want %v", got, parityFocusWalkPanel)
+	}
+	if without := withoutWindow(got, "panel"); !sameWalk(without, parityFocusWalk) {
+		t.Fatalf("the panel is not the only difference: %v without it is %v", got, without)
+	}
+}
+
+// The interactive exception is shared too: a pane being typed into owns Tab on
+// both surfaces, so neither moves focus while the keyboard is in a live pane.
+func TestTabIsHeldByALivePaneAsItIsInTheBrowser(t *testing.T) {
+	stubTd(t)
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	steelThreadPaneTree(t, p, root)
+	p.sidebarVisible = true
+	p.termPanelVisible = true
+	p.setFocusTarget(leafTarget(1))
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, TargetPane: "%1", TargetSession: "parity-focus"}
+	t.Cleanup(p.stopTerminalModels)
+
+	before := focusWindowName(t, p)
+	p.handleKeyPress(tabKey())
+	if got := focusWindowName(t, p); got != before {
+		t.Fatalf("tab moved focus from %q to %q while a pane was being typed in", before, got)
+	}
+}
+
+func sameWalk(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func withoutWindow(walk []string, name string) []string {
+	kept := make([]string, 0, len(walk))
+	for _, window := range walk {
+		if window != name {
+			kept = append(kept, window)
+		}
+	}
+	return kept
+}

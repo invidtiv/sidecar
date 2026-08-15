@@ -434,7 +434,7 @@ func clickDrawnDocTab(t *testing.T, p *Plugin, index int) {
 	if doc == nil || leaf == nil {
 		t.Fatal("no document pane")
 	}
-	pane := docPaneRegion(p, regionDocPane)
+	pane := docPaneRegion(p, regionPaneLeaf)
 	if pane == nil {
 		t.Fatal("document pane has no hit region")
 	}
@@ -782,7 +782,7 @@ func TestDocPaneFocusKeysMouseAndCloseLifecycle(t *testing.T) {
 	p.interactiveState = &InteractiveState{Active: true, PaneOnEntry: PanePreview}
 	p.handleMouseClick(mouse.MouseAction{
 		Type:   mouse.ActionClick,
-		Region: &mouse.Region{ID: regionDocPane, Data: leaf.ID},
+		Region: &mouse.Region{ID: regionPaneLeaf, Data: leaf.ID},
 	})
 	if p.viewMode != ViewModeList || p.interactiveState != nil || p.paneFocus != leaf.ID {
 		t.Fatalf("doc click did not exit interactive and focus doc: mode=%v interactive=%#v focus=%d", p.viewMode, p.interactiveState, p.paneFocus)

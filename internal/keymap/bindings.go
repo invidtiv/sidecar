@@ -86,6 +86,10 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "close-overview", Context: "global-workspaces"},
 		{Key: "K", Command: "toggle-overview", Context: "global-workspaces"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "global-workspaces"},
+		// Tab cycles the windows on screen — list, terminal, and any document or
+		// issue leaf beside it — as it does on the project surface.
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces"},
 		// Enter from the list starts typing. E is the remaining explicit
 		// alternate. i is Sidecar's find-TD-task shortcut, not a way in.
 		{Key: "E", Command: "interactive", Context: "global-workspaces"},
@@ -109,6 +113,8 @@ func DefaultBindings() []Binding {
 		{Key: "}", Command: "next-tab", Context: "global-workspaces-doc"},
 		{Key: "m", Command: "render", Context: "global-workspaces-doc"},
 		{Key: "Y", Command: "yank-path", Context: "global-workspaces-doc"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-doc"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-doc"},
 
 		// Focused td issue leaf. y/Y match td monitor and the project issue pane.
 		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
@@ -116,6 +122,8 @@ func DefaultBindings() []Binding {
 		{Key: "Y", Command: "yank-issue-key", Context: "global-workspaces-issue"},
 		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-issue"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
 		// The preview forwarding keys to a live pane. Almost every key is the
 		// pane's, ctrl+c included, so only the acts that belong to the surface

@@ -121,11 +121,13 @@ const (
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
-	regionDocPane          = "doc-pane"
-	regionDocTab           = "doc-tab"
-	regionIssuePane        = "issue-pane"
-	regionIssueClose       = "issue-close"
-	regionPaneTreeDivider  = "pane-tree-divider"
+	// regionPaneLeaf is any content leaf's body — document or issue. One region
+	// for both: the leaf ID it carries is what a click needs, and the tree says
+	// what kind of leaf that is, so the arms ask the tree instead of the name.
+	regionPaneLeaf        = "pane-leaf"
+	regionDocTab          = "doc-tab"
+	regionIssueClose      = "issue-close"
+	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
 	typeSelectorListID       = "type-selector-list"
