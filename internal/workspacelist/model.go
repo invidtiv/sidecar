@@ -47,6 +47,23 @@ type Model struct {
 	failures   []string
 	emptyText  string
 	pinnedIDs  []string
+	pulseFrame int
+}
+
+// SetPulseFrame advances the working/blocked marker animation. Consumers that
+// never tick leave it at zero and get the steady first frame.
+func (m *Model) SetPulseFrame(frame int) { m.pulseFrame = frame }
+
+// NeedsPulse reports whether any currently visible row carries a lane that
+// breathes, so a consumer can keep its animation clock off when nothing on
+// screen would move.
+func (m *Model) NeedsPulse() bool {
+	for _, item := range m.visible {
+		if PulseLane(item.Marker.Lane) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) Filter() *Filter { return &m.filter }
@@ -390,8 +407,12 @@ func (m *Model) renderRow(item Item, selected, focused bool, width int, now time
 	if item.Detail != "" {
 		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
 	}
+	marker := item.Marker
+	if icon, style, ok := PulseMarker(marker.Lane, m.pulseFrame); ok {
+		marker.Icon, marker.Style, marker.HasStyle = icon, style, true
+	}
 	return RenderRow(RowPresentation{
-		Marker:        item.Marker,
+		Marker:        marker,
 		Kind:          item.Kind,
 		Name:          item.Name,
 		NamePrefix:    namePrefix,

@@ -674,3 +674,37 @@ func visibleByID(m *Model) map[string]workspacelist.Item {
 	}
 	return byID
 }
+
+// The working/blocked markers breathe on the global list too, and keep
+// breathing while their row is selected — a selected agent is still working.
+func TestGlobalWorkspaceMarkersPulseIncludingWhenSelected(t *testing.T) {
+	m := catalogModel(t)
+	m.collector.Now = func() time.Time { return time.Now() }
+	m.workspaces.SelectID("b1")
+
+	cmd := m.Update(struct{}{})
+	if cmd == nil {
+		t.Fatal("no pulse tick armed for a board with a working row")
+	}
+
+	frames := map[string]bool{}
+	for i := 0; i < len(workspacelist.WorkingPulse); i++ {
+		row := workingRow(t, m.renderWorkspaceList(0, 0, 60, 22))
+		frames[row] = true
+		m.Update(workspacePulseTickMsg{generation: m.pulseGeneration})
+	}
+	if len(frames) < 3 {
+		t.Fatalf("selected working row barely animates: %d distinct frames", len(frames))
+	}
+}
+
+func workingRow(t *testing.T, list string) string {
+	t.Helper()
+	for _, line := range strings.Split(list, "\n") {
+		if strings.Contains(ansi.Strip(line), "braid pipeline") {
+			return line
+		}
+	}
+	t.Fatalf("working row missing from list:\n%s", list)
+	return ""
+}
