@@ -116,6 +116,21 @@ type previewState struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneCache       map[string]previewPaneCache
+
+	linkMemo previewLinkMemo
+}
+
+type previewLinkMemo struct {
+	root     string
+	buffer   *tty.OutputBuffer
+	revision uint64
+	specs    map[string]previewSpecResolution
+	newSpecs int
+}
+
+type previewSpecResolution struct {
+	value string
+	ok    bool
 }
 
 type previewPaneCache struct {

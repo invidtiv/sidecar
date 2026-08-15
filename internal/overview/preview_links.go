@@ -74,7 +74,7 @@ func (m *Model) previewResolveRoot() string {
 func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 	root := m.previewResolveRoot()
 	if root == "" {
-		return terminallink.Scan(line, nil)
+		return terminallink.Scan(line, nil, nil)
 	}
 	return terminallink.Scan(line, func(raw string) (string, terminallink.Extra, bool) {
 		display, _, ok := terminallink.ResolveFile(root, raw)
@@ -82,7 +82,57 @@ func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 			return "", terminallink.Extra{}, false
 		}
 		return display, terminallink.Extra{Raw: raw}, true
-	})
+	}, m.previewDiffResolver(root))
+}
+
+func (m *Model) previewDiffResolver(root string) terminallink.DiffResolver {
+	if m.preview.paneRoot == nil || root == "" {
+		return nil
+	}
+	buffer := m.previewBuffer()
+	if buffer == nil {
+		return nil
+	}
+	memo := m.ensurePreviewLinkMemo(root, buffer)
+	return func(raw string) (string, terminallink.Extra, bool) {
+		resolution, found := memo.specs[raw]
+		if !found {
+			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
+				return "", terminallink.Extra{}, false
+			}
+			memo.newSpecs++
+			value, ok := m.resolvePreviewSpec(root, raw)
+			resolution = previewSpecResolution{value: value, ok: ok}
+			memo.specs[raw] = resolution
+		}
+		if !resolution.ok {
+			return "", terminallink.Extra{}, false
+		}
+		if resolution.value == "" {
+			return raw, terminallink.Extra{Raw: raw}, true
+		}
+		return resolution.value, terminallink.Extra{Raw: raw}, true
+	}
+}
+
+func (m *Model) ensurePreviewLinkMemo(root string, buffer *tty.OutputBuffer) *previewLinkMemo {
+	revision := buffer.Revision()
+	memo := &m.preview.linkMemo
+	if memo.root != root || memo.buffer != buffer || memo.revision != revision || memo.specs == nil {
+		m.preview.linkMemo = previewLinkMemo{
+			root: root, buffer: buffer, revision: revision,
+			specs: make(map[string]previewSpecResolution),
+		}
+	}
+	return &m.preview.linkMemo
+}
+
+func (m *Model) resolvePreviewSpec(root, raw string) (string, bool) {
+	if m.previewSpecResolver != nil {
+		return m.previewSpecResolver(root, raw)
+	}
+	value, _, ok := terminallink.ResolveGitSpec(root, raw)
+	return value, ok
 }
 
 func (m *Model) decoratePreviewLine(line string, _ int) string {
@@ -95,7 +145,7 @@ func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
 	spans := m.previewLinkSpans(line)
 	bound := make([]terminallink.Span, 0, len(spans))
 	for _, span := range spans {
-		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue {
+		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue || span.Kind == terminallink.KindDiff {
 			bound = append(bound, span)
 		}
 	}
@@ -118,7 +168,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
 	for _, span := range m.previewLinkSpans(line) {
-		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue {
+		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue && span.Kind != terminallink.KindDiff {
 			continue
 		}
 		if cell.Col >= span.StartCol && cell.Col <= span.EndCol {
@@ -154,9 +204,28 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		}
 		m.clearPreviewSelection()
 		return cmd, true
+	case terminallink.KindDiff:
+		cmd := m.activatePreviewDiff(span)
+		if cmd == nil {
+			return nil, false
+		}
+		m.clearPreviewSelection()
+		return cmd, true
 	default:
 		return nil, false
 	}
+}
+
+func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
+	raw := span.Extra.Raw
+	if raw == "" {
+		raw = span.Value
+	}
+	target, ok := workspacediff.ParseSpec(raw)
+	if !ok || (target.Kind != workspacediff.TargetCommit && target.Kind != workspacediff.TargetRange) {
+		return nil
+	}
+	return m.openPreviewDiff(target)
 }
 
 func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {

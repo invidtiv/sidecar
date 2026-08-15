@@ -166,6 +166,7 @@ type Plugin struct {
 	terminalLinkMemo      terminalLinkMemo
 	terminalPathResolver  func(string, string) (string, string, bool)
 	terminalRootResolver  func(string) (string, error)
+	terminalSpecResolver  func(string, string) (string, bool)
 
 	// Worktree state
 	worktrees                  []*Worktree
