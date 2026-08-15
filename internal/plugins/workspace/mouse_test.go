@@ -27,6 +27,7 @@ func TestIsModalViewMode(t *testing.T) {
 		{ViewModeCommitForMerge, true},
 		{ViewModeTypeSelector, true},
 		{ViewModeRenameShell, true},
+		{ViewModeRenameWorktree, true},
 		{ViewModeFilePicker, true},
 	}
 
@@ -70,7 +71,7 @@ func TestModalClickGuard(t *testing.T) {
 	modalModes := []ViewMode{
 		ViewModeCreate, ViewModeMerge, ViewModeAgentChoice,
 		ViewModeConfirmDelete, ViewModeConfirmDeleteShell,
-		ViewModeRenameShell, ViewModeTypeSelector,
+		ViewModeRenameShell, ViewModeRenameWorktree, ViewModeTypeSelector,
 		ViewModeTaskLink,
 		ViewModeCommitForMerge, ViewModeFilePicker,
 	}

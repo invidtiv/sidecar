@@ -155,6 +155,10 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleRenameShellModalMouse(msg)
 	}
 
+	if p.viewMode == ViewModeRenameWorktree {
+		return p.handleRenameWorktreeModalMouse(msg)
+	}
+
 	if p.viewMode == ViewModeConfirmDelete {
 		return p.handleConfirmDeleteModalMouse(msg)
 	}
@@ -313,6 +317,26 @@ func (p *Plugin) handleRenameShellModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	case renameShellActionID, renameShellRenameID:
 		return p.executeRenameShell()
+	}
+	return nil
+}
+
+func (p *Plugin) handleRenameWorktreeModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return nil
+	}
+
+	action := p.renameWorktreeModal.HandleMouse(msg, p.mouseHandler)
+	switch action {
+	case "":
+		return nil
+	case "cancel", renameWorktreeCancelID:
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		return nil
+	case renameWorktreeActionID, renameWorktreeRenameID:
+		return p.executeRenameWorktree()
 	}
 	return nil
 }
@@ -557,7 +581,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	case ViewModeAgentChoice:
 		// Modal library handles hover state internally
 		return nil
-	case ViewModeRenameShell:
+	case ViewModeRenameShell, ViewModeRenameWorktree:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeMerge:

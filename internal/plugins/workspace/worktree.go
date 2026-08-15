@@ -676,6 +676,10 @@ func loadBaseBranchContext(ctx context.Context, projectRoot, worktreePath string
 	return strings.TrimSpace(string(content))
 }
 
+func saveDisplayName(projectRoot, worktreePath, name string) error {
+	return saveDisplayNameContext(context.Background(), projectRoot, worktreePath, name)
+}
+
 func saveDisplayNameContext(ctx context.Context, projectRoot, worktreePath, name string) error {
 	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
 	if err != nil {

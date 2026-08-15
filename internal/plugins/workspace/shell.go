@@ -206,6 +206,13 @@ type (
 		Err      error  // Non-nil if rename failed
 	}
 
+	// RenameWorktreeDoneMsg signals worktree display-name persist completed.
+	RenameWorktreeDoneMsg struct {
+		Path    string
+		NewName string
+		Err     error
+	}
+
 	// pollShellByNameMsg triggers a poll for a specific shell's output by name.
 	// Includes generation for timer leak prevention (td-83dc22).
 	pollShellByNameMsg struct {

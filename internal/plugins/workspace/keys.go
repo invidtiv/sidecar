@@ -41,6 +41,8 @@ func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return p.handleTypeSelectorKeys(msg)
 	case ViewModeRenameShell:
 		return p.handleRenameShellKeys(msg)
+	case ViewModeRenameWorktree:
+		return p.handleRenameWorktreeKeys(msg)
 	case ViewModeFetchPR:
 		return p.handleFetchPRKeys(msg)
 	case ViewModeFilePicker:
@@ -972,7 +974,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.StopAgent(wt)
 		}
 	case "R":
-		// Rename selected shell session
+		// Rename selected shell, or the selected worktree's display name.
 		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeRenameShell
 			p.renameShellSession = shell
@@ -982,6 +984,10 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.renameShellInput.SetWidth(30)
 			p.renameShellInput.Prompt = ""
 			p.renameShellError = ""
+			return nil
+		}
+		if wt := p.selectedWorktree(); wt != nil {
+			p.openRenameWorktree(wt)
 		}
 	case "y":
 		// Approve pending prompt on selected worktree
@@ -1624,6 +1630,81 @@ func (p *Plugin) clearRenameShellModal() {
 	p.renameShellModal = nil
 	p.renameShellModalWidth = 0
 	p.renameShellError = ""
+}
+
+func (p *Plugin) openRenameWorktree(wt *Worktree) {
+	p.viewMode = ViewModeRenameWorktree
+	p.renameWorktree = wt
+	p.renameWorktreeInput = textinput.New()
+	p.renameWorktreeInput.SetValue(wt.Name)
+	p.renameWorktreeInput.CharLimit = shellstate.MaxNameBytes
+	p.renameWorktreeInput.SetWidth(30)
+	p.renameWorktreeInput.Prompt = ""
+	p.renameWorktreeError = ""
+	p.renameWorktreeModal = nil
+	p.renameWorktreeModalWidth = 0
+}
+
+// handleRenameWorktreeKeys handles keys in the rename worktree modal.
+func (p *Plugin) handleRenameWorktreeKeys(msg tea.KeyPressMsg) tea.Cmd {
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return nil
+	}
+
+	if p.renameWorktreeModal.FocusedID() == renameWorktreeInputID {
+		p.renameWorktreeError = ""
+	}
+
+	action, cmd := p.renameWorktreeModal.HandleKey(msg)
+
+	switch action {
+	case "cancel", renameWorktreeCancelID:
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		return nil
+	case renameWorktreeActionID, renameWorktreeRenameID:
+		return p.executeRenameWorktree()
+	}
+
+	return cmd
+}
+
+// executeRenameWorktree persists a display name. It does not rename the git
+// branch, move the directory, or rewrite shells.json.
+func (p *Plugin) executeRenameWorktree() tea.Cmd {
+	newName, err := shellstate.NormalizeName(p.renameWorktreeInput.Value())
+	if err != nil {
+		p.renameWorktreeError = err.Error()
+		return nil
+	}
+
+	wt := p.renameWorktree
+	if wt == nil {
+		p.renameWorktreeError = "no worktree selected"
+		return nil
+	}
+	projectRoot := ""
+	if p.ctx != nil {
+		projectRoot = p.ctx.ProjectRoot
+	}
+	if projectRoot == "" {
+		p.renameWorktreeError = "owning project is unavailable"
+		return nil
+	}
+	path := wt.Path
+	return func() tea.Msg {
+		err := saveDisplayName(projectRoot, path, newName)
+		return RenameWorktreeDoneMsg{Path: path, NewName: newName, Err: err}
+	}
+}
+
+func (p *Plugin) clearRenameWorktreeModal() {
+	p.renameWorktree = nil
+	p.renameWorktreeInput = textinput.Model{}
+	p.renameWorktreeModal = nil
+	p.renameWorktreeModalWidth = 0
+	p.renameWorktreeError = ""
 }
 
 // handleFilePickerKeys handles keys in the file picker modal.

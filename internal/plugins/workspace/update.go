@@ -1351,6 +1351,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.scheduleShellPollByName(msg.TmuxName, interval))
 		return p, tea.Batch(cmds...)
 
+	case RenameWorktreeDoneMsg:
+		if msg.Err != nil {
+			p.renameWorktreeError = msg.Err.Error()
+			return p, nil
+		}
+		for _, wt := range p.worktrees {
+			if wt.Path == msg.Path {
+				wt.Name = msg.NewName
+				break
+			}
+		}
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		p.saveSelectionState()
+
 	case RenameShellDoneMsg:
 		if msg.Err != nil {
 			p.renameShellError = msg.Err.Error()

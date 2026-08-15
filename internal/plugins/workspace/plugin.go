@@ -436,6 +436,13 @@ type Plugin struct {
 	renameShellModalWidth int             // Cached width for rebuild detection
 	renameShellError      string          // Validation error message
 
+	// Rename worktree modal state (display-name only; branch and path stay put)
+	renameWorktree           *Worktree
+	renameWorktreeInput      textinput.Model
+	renameWorktreeModal      *modal.Modal
+	renameWorktreeModalWidth int
+	renameWorktreeError      string
+
 	// Initial reconnection tracking
 	initialReconnectDone bool
 

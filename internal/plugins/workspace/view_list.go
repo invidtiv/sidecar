@@ -79,6 +79,8 @@ func (p *Plugin) View(width, height int) string {
 		view = p.renderTypeSelectorModal(width, height)
 	case ViewModeRenameShell:
 		view = p.renderRenameShellModal(width, height)
+	case ViewModeRenameWorktree:
+		view = p.renderRenameWorktreeModal(width, height)
 	case ViewModeFetchPR:
 		view = p.renderFetchPRModal(width, height)
 	case ViewModeFilePicker:

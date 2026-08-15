@@ -363,6 +363,85 @@ func (p *Plugin) renderRenameShellModal(width, height int) string {
 	return ui.OverlayModal(background, modalContent, width, height)
 }
 
+const (
+	renameWorktreeInputID  = "rename-worktree-input"
+	renameWorktreeRenameID = "rename-worktree-rename"
+	renameWorktreeCancelID = "rename-worktree-cancel"
+	renameWorktreeActionID = "rename-worktree-action"
+)
+
+func (p *Plugin) ensureRenameWorktreeModal() {
+	if p.renameWorktree == nil {
+		return
+	}
+
+	modalW := 50
+	if modalW > p.width-4 {
+		modalW = p.width - 4
+	}
+	if modalW < 20 {
+		modalW = 20
+	}
+
+	if p.renameWorktreeModal != nil && p.renameWorktreeModalWidth == modalW {
+		return
+	}
+	p.renameWorktreeModalWidth = modalW
+
+	p.renameWorktreeModal = modal.New("Rename Worktree",
+		modal.WithWidth(modalW),
+		modal.WithPrimaryAction(renameWorktreeActionID),
+		modal.WithHints(false),
+	).
+		AddSection(p.renameWorktreeInfoSection()).
+		AddSection(modal.Spacer()).
+		AddSection(modal.InputWithLabel(renameWorktreeInputID, "New Name:", &p.renameWorktreeInput)).
+		AddSection(modal.When(func() bool { return p.renameWorktreeError != "" }, p.renameWorktreeErrorSection())).
+		AddSection(modal.Spacer()).
+		AddSection(modal.Buttons(
+			modal.Btn(" Rename ", renameWorktreeRenameID),
+			modal.Btn(" Cancel ", renameWorktreeCancelID),
+		))
+}
+
+func (p *Plugin) renameWorktreeInfoSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		if p.renameWorktree == nil {
+			return modal.RenderedSection{}
+		}
+
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Current: %s", lipgloss.NewStyle().Bold(true).Render(p.renameWorktree.Name))
+
+		return modal.RenderedSection{Content: sb.String()}
+	}, nil)
+}
+
+func (p *Plugin) renameWorktreeErrorSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		if p.renameWorktreeError == "" {
+			return modal.RenderedSection{}
+		}
+
+		errStyle := lipgloss.NewStyle().Foreground(styles.Error)
+		content := errStyle.Render("Error: " + p.renameWorktreeError)
+
+		return modal.RenderedSection{Content: content}
+	}, nil)
+}
+
+func (p *Plugin) renderRenameWorktreeModal(width, height int) string {
+	background := p.renderListView(width, height)
+
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return background
+	}
+
+	modalContent := p.renameWorktreeModal.Render(width, height, p.mouseHandler)
+	return ui.OverlayModal(background, modalContent, width, height)
+}
+
 func (p *Plugin) agentChoiceItems() []modal.ListItem {
 	items := make([]modal.ListItem, 0, 2)
 	if fullTmuxAttachEnabled() {
