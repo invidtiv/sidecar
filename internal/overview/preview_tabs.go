@@ -344,13 +344,30 @@ func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []str
 }
 
 func (m *Model) scrollVisiblePreviewTab(delta int) {
+	height := m.previewTabContentHeight()
 	switch {
 	case !m.previewTabsVisible() || m.previewTab == workspacediff.TabOutput:
 		m.scrollWatchedPreview(delta)
 	case m.previewTab == workspacediff.TabDiff:
-		m.diff.ScrollContent(delta)
+		m.diff.ScrollContent(delta, height)
 	case m.previewTab == workspacediff.TabTask:
-		m.task.Scroll(delta, max(1, m.height-2-previewTabRows))
+		m.task.Scroll(delta, height)
+	}
+}
+
+func (m *Model) previewTabContentHeight() int {
+	return max(1, m.height-2-previewTabRows)
+}
+
+func (m *Model) visiblePreviewTabAtBoundary(delta int) bool {
+	height := m.previewTabContentHeight()
+	switch m.previewTab {
+	case workspacediff.TabDiff:
+		return m.diff.ScrollAtBoundary(delta, height)
+	case workspacediff.TabTask:
+		return m.task.ScrollAtBoundary(delta, height)
+	default:
+		return false
 	}
 }
 
