@@ -572,7 +572,6 @@ func runCreateSetup(ctx context.Context, plan *CreateOperationPlan, wt *Worktree
 	add(CreateOutcomeIdentity, "base metadata", true, saveBaseBranchContext(ctx, plan.MainWorktree, plan.Path, base))
 	add(CreateOutcomeIdentity, "display name", true, saveDisplayNameContext(ctx, plan.MainWorktree, plan.Path, plan.DisplayName))
 	add(CreateOutcomeAgent, "agent metadata", true, saveAgentTypeContext(ctx, plan.MainWorktree, plan.Path, plan.AgentType))
-	add(CreateOutcomeTDRoot, ".td-root", false, setupTDRootContext(ctx, plan.SourceWorktree, plan.MainWorktree, plan.Path))
 
 	if plan.TaskID != "" {
 		var linkErr error

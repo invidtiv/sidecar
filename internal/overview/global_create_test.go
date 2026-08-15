@@ -3,6 +3,7 @@ package overview
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -67,15 +68,15 @@ func TestGlobalWorktreeCancellationBeforeAndAfterMutation(t *testing.T) {
 	}
 
 	m.OpenCreateWorktree("")
-	plan := &workspaceops.WorktreePlan{Path: "/tmp/created", Branch: "created"}
+	plan := &workspaceops.WorktreePlan{Path: "/tmp/created", Branch: "created", AgentType: "codex"}
 	record := &workspaceops.WorktreeRecord{Path: plan.Path, Branch: plan.Branch, HEADOID: "abc"}
 	m.Update(globalWorktreeCreatedMsg{Project: m.projects[0], Plan: plan, Record: record, Outcomes: []workspaceops.SetupOutcome{{Action: "optional hook", Err: errors.New("boom")}}})
 	if !m.CreateOpen() || m.createRecord == nil || m.createWarning == "" {
 		t.Fatalf("post-mutation cancel path lost recovery: open=%v record=%+v warning=%q", m.CreateOpen(), m.createRecord, m.createWarning)
 	}
 	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { return nil }
-	if cmd := m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex); cmd == nil || m.pendingCreatedPath != plan.Path {
-		t.Fatalf("post-mutation cancel did not retain created identity: cmd=%v path=%q", cmd, m.pendingCreatedPath)
+	if cmd := m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex); cmd == nil || !m.createBusy || m.createRecord == nil {
+		t.Fatalf("post-mutation cancel did not retain and launch created identity: cmd=%v busy=%v record=%+v", cmd, m.createBusy, m.createRecord)
 	}
 }
 
@@ -89,6 +90,78 @@ func TestGlobalWorktreeRequiredSetupFailureOffersRecovery(t *testing.T) {
 	m.ensureCreateModal()
 	if m.createModal == nil || m.createError == "" || m.createRecord == nil {
 		t.Fatalf("required failure did not retain recovery state: error=%q record=%+v", m.createError, m.createRecord)
+	}
+}
+
+func TestGlobalWorktreePartialMutationAndJournalFailuresStayRecoverable(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateWorktree("")
+	plan := &workspaceops.WorktreePlan{MainWorktree: "/tmp/main", Path: "/tmp/created", Branch: "created", AgentType: "codex"}
+	record := &workspaceops.WorktreeRecord{Path: plan.Path, Branch: plan.Branch, HEADOID: "abc"}
+	originalRemove, originalLaunch, originalExecute := removeGlobalJournal, launchGlobalSession, executeGlobalWorktree
+	originalJournal, originalSetup := persistGlobalJournal, runGlobalSetup
+	defer func() {
+		removeGlobalJournal, launchGlobalSession, executeGlobalWorktree = originalRemove, originalLaunch, originalExecute
+		persistGlobalJournal, runGlobalSetup = originalJournal, originalSetup
+	}()
+	removed, launched := 0, 0
+	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { removed++; return nil }
+	launchGlobalSession = func(context.Context, workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		launched++
+		return workspaceops.AgentLaunchResult{}, nil
+	}
+	executeGlobalWorktree = func(context.Context, string, *workspaceops.WorktreePlan) (*workspaceops.WorktreeRecord, error) {
+		return record, errors.New("repair failed")
+	}
+	persistGlobalJournal = func(context.Context, *workspaceops.WorktreePlan, *workspaceops.WorktreeRecord) error { return nil }
+	setupRuns := 0
+	runGlobalSetup = func(context.Context, *workspaceops.WorktreePlan) []workspaceops.SetupOutcome { setupRuns++; return nil }
+	m.createPlan = plan
+	msg := m.executeCreateWorktree()().(globalWorktreeCreatedMsg)
+	if setupRuns != 0 || msg.Record == nil || msg.Err == nil {
+		t.Fatalf("partial execute ran setup or lost identity: setup=%d msg=%+v", setupRuns, msg)
+	}
+	m.Update(msg)
+	if m.createError == "" || m.createRecord == nil || removed != 0 || launched != 0 || !m.CreateOpen() {
+		t.Fatalf("partial mutation escaped recovery: error=%q record=%+v removed=%d launched=%d open=%v", m.createError, m.createRecord, removed, launched, m.CreateOpen())
+	}
+
+	m.createError = ""
+	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { removed++; return errors.New("sync failed") }
+	m.Update(globalWorktreeCreatedMsg{Project: m.projects[0], Plan: plan, Record: record})
+	if !strings.Contains(m.createError, "finalize pending creation journal") || launched != 0 || m.createRecord == nil {
+		t.Fatalf("journal failure escaped recovery: error=%q launched=%d record=%+v", m.createError, launched, m.createRecord)
+	}
+	m.createError = ""
+	if cmd := m.openCreatedWorktreeAnyway(); cmd != nil || !strings.Contains(m.createError, "before opening") {
+		t.Fatalf("open-anyway ignored journal failure: cmd=%v error=%q", cmd, m.createError)
+	}
+}
+
+func TestGlobalWorktreeLaunchesConfiguredAgentBeforeRefresh(t *testing.T) {
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{AgentStart: map[string]string{"codex": "codex-custom"}}}}
+	m.OpenCreateWorktree("")
+	plan := &workspaceops.WorktreePlan{MainWorktree: t.TempDir(), Path: t.TempDir(), Branch: "created", AgentType: "codex"}
+	record := &workspaceops.WorktreeRecord{Path: plan.Path, Name: "Created", Branch: plan.Branch, HEADOID: "abc"}
+	originalRemove, originalLaunch := removeGlobalJournal, launchGlobalSession
+	defer func() { removeGlobalJournal, launchGlobalSession = originalRemove, originalLaunch }()
+	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { return nil }
+	var spec workspaceops.AgentLaunchSpec
+	launchGlobalSession = func(_ context.Context, got workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		spec = got
+		return workspaceops.AgentLaunchResult{SessionName: got.SessionName, PaneID: "%1"}, nil
+	}
+	launchCmd := m.update(globalWorktreeCreatedMsg{Project: m.projects[0], Plan: plan, Record: record})
+	if launchCmd == nil {
+		t.Fatal("successful setup refreshed before launching")
+	}
+	launchMsg := launchCmd().(globalWorkspaceLaunchedMsg)
+	if !spec.StartAgent || !strings.Contains(spec.AgentCommand, "codex-custom") || spec.WorkDir != plan.Path {
+		t.Fatalf("launch spec = %+v", spec)
+	}
+	if refresh := m.update(launchMsg); refresh == nil || m.CreateOpen() {
+		t.Fatalf("launch success did not close and refresh: refresh=%v open=%v", refresh, m.CreateOpen())
 	}
 }
 
@@ -187,6 +260,28 @@ func TestGlobalCreateResolvesNamesAndConfigInsideTargetProject(t *testing.T) {
 	}
 	if got.SessionName != "sidecar-sh-two-3" || got.DisplayName != "Shell 3" {
 		t.Fatalf("target names = %q/%q, want sidecar-sh-two-3/Shell 3", got.SessionName, got.DisplayName)
+	}
+}
+
+func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "codex", AgentStart: map[string]string{"codex": "codex-custom"},
+	}}}
+	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
+	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
+	}
+	var session, command string
+	startGlobalShellAgent = func(_ context.Context, gotSession, gotCommand string) error {
+		session, command = gotSession, gotCommand
+		return nil
+	}
+	m.OpenCreateShell("sidecar")
+	msg := m.submitCreateShell()().(globalShellCreatedMsg)
+	if msg.Err != nil || session == "" || !strings.Contains(command, "codex-custom") {
+		t.Fatalf("configured agent launch: session=%q command=%q err=%v", session, command, msg.Err)
 	}
 }
 

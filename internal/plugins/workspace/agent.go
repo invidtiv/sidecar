@@ -554,21 +554,11 @@ func normalizeOpenCodeBaseCommand(cmd string) string {
 // resolveAgentBaseCommand returns the command used to launch the selected agent family.
 // Precedence: worktree .sidecar-agent-start > config.plugins.workspace.agentStart > AgentCommands map.
 func (p *Plugin) resolveAgentBaseCommand(worktreePath string, agentType AgentType) string {
-	if overrideCmd := readAgentStartOverride(worktreePath); overrideCmd != "" {
-		if agentType == AgentOpenCode {
-			overrideCmd = normalizeOpenCodeBaseCommand(overrideCmd)
-		}
-		return overrideCmd
-	}
+	var configured map[string]string
 	if p != nil && p.ctx != nil && p.ctx.Config != nil {
-		if configCmd := resolveConfigAgentStart(p.ctx.Config.Plugins.Workspace.AgentStart, agentType); configCmd != "" {
-			if agentType == AgentOpenCode {
-				configCmd = normalizeOpenCodeBaseCommand(configCmd)
-			}
-			return configCmd
-		}
+		configured = p.ctx.Config.Plugins.Workspace.AgentStart
 	}
-	return getAgentCommand(agentType)
+	return workspaceops.ResolveAgentCommand(worktreePath, string(agentType), configured, false)
 }
 
 // buildAgentCommand builds the agent command with optional skip permissions and task context.
@@ -701,75 +691,24 @@ func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPe
 	if mainRoot == "" {
 		mainRoot = p.ctx.WorkDir
 	}
-	envOverrides := BuildEnvOverrides(mainRoot)
+	envOverrides := workspaceops.BuildEnvOverrides(mainRoot)
 	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms)
 	return func() tea.Msg {
-
-		// Check if session already exists
-		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
-		if checkCmd.Run() == nil {
-			// Session exists - reconnect to it instead of failing
-			paneID := getPaneID(sessionName)
-			return AgentStartedMsg{
-				Epoch:         epoch,
-				WorktreeKey:   key,
-				WorkspaceName: name,
-				SessionName:   sessionName,
-				PaneID:        paneID,
-				AgentType:     agentType,
-				Reconnected:   true,
-			}
+		result, err := workspaceops.LaunchWorktreeSession(p.operationCtx, workspaceops.AgentLaunchSpec{
+			SessionName: sessionName, WorkDir: path, AgentCommand: agentCmd, TaskID: taskID,
+			Env: envOverrides, StartAgent: true,
+		})
+		if err != nil {
+			return AgentStartedMsg{Epoch: epoch, Err: err}
 		}
-
-		// Create new detached session with working directory
-		args := []string{
-			"new-session",
-			"-d",              // Detached
-			"-s", sessionName, // Session name
-			"-c", path, // Working directory
-		}
-
-		if err := tty.NewSession(args...); err != nil {
-			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("create session: %w", err)}
-		}
-
-		// Set TD_SESSION_ID environment variable for td session tracking
-		tdEnvCmd := fmt.Sprintf("export TD_SESSION_ID=%s", shellQuote(sessionName))
-		_ = exec.Command("tmux", "send-keys", "-t", sessionName, tdEnvCmd, "Enter").Run()
-
-		// Apply environment isolation to prevent conflicts (GOWORK, etc.)
-		if envCmd := GenerateSingleEnvCommand(envOverrides); envCmd != "" {
-			_ = exec.Command("tmux", "send-keys", "-t", sessionName, envCmd, "Enter").Run()
-		}
-
-		// If worktree has a linked task, start it in td
-		if taskID != "" {
-			tdStartCmd := fmt.Sprintf("td start %s", taskID)
-			_ = exec.Command("tmux", "send-keys", "-t", sessionName, tdStartCmd, "Enter").Run()
-		}
-
-		// Small delay to ensure env is set
-		time.Sleep(100 * time.Millisecond)
-
-		// Build the agent command with skip permissions and prompt if enabled
-		// Send the agent command to start it
-		sendCmd := exec.Command("tmux", "send-keys", "-t", sessionName, agentCmd, "Enter")
-		if err := sendCmd.Run(); err != nil {
-			// Try to kill the session if we failed to start the agent
-			_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-			return AgentStartedMsg{Epoch: epoch, Err: fmt.Errorf("start agent: %w", err)}
-		}
-
-		// Capture pane ID for interactive mode support
-		paneID := getPaneID(sessionName)
-
 		return AgentStartedMsg{
 			Epoch:         epoch,
 			WorktreeKey:   key,
 			WorkspaceName: name,
 			SessionName:   sessionName,
-			PaneID:        paneID,
+			PaneID:        result.PaneID,
 			AgentType:     agentType,
+			Reconnected:   result.Reconnected,
 		}
 	}
 }

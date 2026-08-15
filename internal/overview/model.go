@@ -93,7 +93,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
 		return true
-	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg:
+	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg, globalWorkspaceLaunchedMsg:
 		return true
 	case globalShellDeletedMsg:
 		return true
@@ -579,6 +579,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		if msg.Err != nil {
 			m.createError = msg.Err.Error()
+			if failed := failedCreateOutcomes(msg.Outcomes, false); len(failed) > 0 {
+				m.createError += "; " + summarizeCreateOutcomes(failed)
+			}
+			m.createModal = nil
+			return nil
 		}
 		if failed := failedCreateOutcomes(msg.Outcomes, true); len(failed) > 0 {
 			m.createError = summarizeCreateOutcomes(failed)
@@ -590,7 +595,20 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.createModal = nil
 			return nil
 		}
-		_ = removeGlobalJournal(msg.Plan)
+		if err := removeGlobalJournal(msg.Plan); err != nil {
+			m.createError = "finalize pending creation journal: " + err.Error()
+			m.createModal = nil
+			return nil
+		}
+		return m.launchCreatedWorktree(msg.Project, msg.Plan, msg.Record)
+	case globalWorkspaceLaunchedMsg:
+		m.createBusy = false
+		m.createPlan, m.createRecord = msg.Plan, msg.Record
+		if msg.Err != nil {
+			m.createError = msg.Err.Error()
+			m.createModal = nil
+			return nil
+		}
 		m.pendingCreatedPath = msg.Record.Path
 		m.showIdleWorktrees = true
 		m.closeCreateShell()

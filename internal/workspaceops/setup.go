@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/marcus/sidecar/internal/tdroot"
 )
 
 type SetupOutcome struct {
@@ -22,6 +24,11 @@ func RunConfiguredSetup(ctx context.Context, plan *WorktreePlan) []SetupOutcome 
 		return []SetupOutcome{{Kind: "identity", Action: "read plan", Required: true, Err: fmt.Errorf("missing worktree plan")}}
 	}
 	var outcomes []SetupOutcome
+	mainPath := MainWorktreePath(ctx, plan.SourceWorktree)
+	if mainPath == "" {
+		mainPath = plan.MainWorktree
+	}
+	outcomes = append(outcomes, SetupOutcome{Kind: "td-root", Action: ".td-root", Err: tdroot.CreateTDRoot(plan.MainWorktree, plan.Path, mainPath)})
 	if plan.CopyEnv {
 		for _, rel := range plan.EnvFiles {
 			source, err := OpenContainedRegularFile(plan.MainWorktree, rel)
@@ -47,7 +54,7 @@ func RunSetupHookWithHook(ctx context.Context, plan *WorktreePlan, beforeOpen fu
 	cmd := exec.CommandContext(ctx, "bash", "/dev/fd/3")
 	cmd.ExtraFiles = []*os.File{hook}
 	cmd.Dir = plan.Path
-	cmd.Env = applySetupEnv(os.Environ(), map[string]string{"GOWORK": "off", "GOFLAGS": "", "NODE_OPTIONS": "", "NODE_PATH": "", "PYTHONPATH": "", "VIRTUAL_ENV": ""})
+	cmd.Env = applySetupEnv(os.Environ(), BuildEnvOverrides(plan.MainWorktree))
 	cmd.Env = append(cmd.Env, "MAIN_WORKTREE="+plan.MainWorktree, "SOURCE_WORKTREE="+plan.SourceWorktree, "WORKTREE_PATH="+plan.Path, "WORKTREE_BRANCH="+plan.Branch)
 	// Hook output may contain secrets and never crosses this boundary.
 	if err := cmd.Run(); err != nil {

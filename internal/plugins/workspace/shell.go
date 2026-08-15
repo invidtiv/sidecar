@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -698,8 +699,7 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 		baseCmd = withShellNamingInstruction(baseCmd, agentType)
 
 		// Send the command to the shell's tmux session
-		cmd := exec.Command("tmux", "send-keys", "-t", tmuxName, baseCmd, "Enter")
-		if err := cmd.Run(); err != nil {
+		if err := workspaceops.StartAgentInShell(context.Background(), tmuxName, baseCmd); err != nil {
 			return ShellAgentErrorMsg{
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("failed to start agent: %w", err),

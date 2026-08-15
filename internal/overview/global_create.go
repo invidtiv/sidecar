@@ -43,6 +43,8 @@ var (
 	runGlobalSetup        = workspaceops.RunConfiguredSetup
 	removeGlobalJournal   = workspaceops.RemovePendingCreation
 	deleteGlobalWorktree  = workspaceops.DeleteCreatedWorktree
+	launchGlobalSession   = workspaceops.LaunchWorktreeSession
+	startGlobalShellAgent = workspaceops.StartAgentInShell
 )
 
 type globalShellCreatedMsg struct {
@@ -67,6 +69,14 @@ type globalWorktreeCreatedMsg struct {
 
 type globalWorktreeDeletedMsg struct {
 	Project Project
+	Err     error
+}
+
+type globalWorkspaceLaunchedMsg struct {
+	Project Project
+	Plan    *workspaceops.WorktreePlan
+	Record  *workspaceops.WorktreeRecord
+	Result  workspaceops.AgentLaunchResult
 	Err     error
 }
 
@@ -440,6 +450,9 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		if journalErr := persistGlobalJournal(context.Background(), plan, record); journalErr != nil {
 			outcomes = append(outcomes, workspaceops.SetupOutcome{Kind: "journal", Action: "persist recovery", Required: true, Err: journalErr})
 		}
+		if err != nil {
+			return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes, Err: err}
+		}
 		outcomes = append(outcomes, persistGlobalIdentity(context.Background(), plan)...)
 		outcomes = append(outcomes, runGlobalSetup(context.Background(), plan)...)
 		return globalWorktreeCreatedMsg{Project: project, Plan: plan, Record: record, Outcomes: outcomes, Err: err}
@@ -487,11 +500,40 @@ func (m *Model) openCreatedWorktreeAnyway() tea.Cmd {
 	if !ok || m.createPlan == nil || m.createRecord == nil {
 		return nil
 	}
-	_ = removeGlobalJournal(m.createPlan)
-	m.pendingCreatedPath = m.createRecord.Path
-	m.showIdleWorktrees = true
-	m.closeCreateShell()
-	return m.refreshProjectAfterMutation(project)
+	if err := removeGlobalJournal(m.createPlan); err != nil {
+		m.createError = "finalize pending creation journal before opening: " + err.Error()
+		m.createModal = nil
+		return nil
+	}
+	return m.launchCreatedWorktree(project, m.createPlan, m.createRecord)
+}
+
+func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.WorktreePlan, record *workspaceops.WorktreeRecord) tea.Cmd {
+	if plan == nil || record == nil {
+		return nil
+	}
+	if plan.AgentType == "" {
+		m.pendingCreatedPath = record.Path
+		m.showIdleWorktrees = true
+		m.closeCreateShell()
+		return m.refreshProjectAfterMutation(project)
+	}
+	configured := map[string]string(nil)
+	if m.config != nil {
+		configured = m.config.Plugins.Workspace.AgentStart
+	}
+	command := workspaceops.ResolveAgentCommand(record.Path, plan.AgentType, configured, plan.SkipPerms)
+	spec := workspaceops.AgentLaunchSpec{
+		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
+		AgentCommand: command, TaskID: plan.TaskID, Env: workspaceops.BuildEnvOverrides(plan.MainWorktree),
+		StartAgent: true,
+	}
+	m.createBusy = true
+	m.createModal = nil
+	return func() tea.Msg {
+		result, err := launchGlobalSession(context.Background(), spec)
+		return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: err}
+	}
 }
 
 func (m *Model) deleteCreatedWorktree() tea.Cmd {
@@ -542,8 +584,31 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	_ = saveLastGlobalCreateProject(project.Path)
 	return func() tea.Msg {
 		_, err := createManagedShell(spec)
+		if err == nil && agent != "" {
+			configured := map[string]string(nil)
+			if m.config != nil {
+				configured = m.config.Plugins.Workspace.AgentStart
+			}
+			command := workspaceops.ResolveAgentCommand(project.Path, agent, configured, false)
+			command = withGlobalShellNaming(command, agent)
+			err = startGlobalShellAgent(context.Background(), session, command)
+		}
 		return globalShellCreatedMsg{Project: project, Tmux: session, Err: err}
 	}
+}
+
+func withGlobalShellNaming(command, agent string) string {
+	flag := ""
+	switch agent {
+	case "claude":
+		flag = "--append-system-prompt"
+	case "grok":
+		flag = "--rules"
+	}
+	if flag == "" {
+		return command
+	}
+	return command + " " + flag + " " + workspaceops.ShellQuote(shellstate.NamingInstruction)
 }
 
 func (m *Model) refreshProjectAfterMutation(project Project) tea.Cmd {
