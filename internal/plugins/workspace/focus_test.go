@@ -272,4 +272,10 @@ func TestTabSkipsTheTerminalPanelWhenTheSplitDoesNotFit(t *testing.T) {
 			t.Fatalf("undrawn panel is still in the ring: %+v", p.focusRing())
 		}
 	}
+
+	// Tab off the last leaf wraps to the first one rather than stopping at the
+	// panel on the way round.
+	p.setFocusTarget(leafTarget(3))
+	p.handleListKeys(tabKey())
+	assertFocus(t, p, leafTarget(1), "tab past the undrawn panel")
 }
