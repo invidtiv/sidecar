@@ -589,15 +589,17 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
-			case regionIssuePane:
-				if leafID, ok := action.Region.Data.(int); ok {
-					if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
-						if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
-							lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-							issue.view.HandleHover(lx, ly)
-						}
-					}
+			case regionPaneLeaf:
+				// Only an issue leaf hovers. A document under the pointer
+				// leaves the issue's hover behind, the same as any other
+				// region does, because both are now one region.
+				issue, _ := p.issueLeafAt(action.Region.Data)
+				if issue == nil {
+					p.clearIssueHover()
+					break
 				}
+				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+				issue.view.HandleHover(lx, ly)
 			default:
 				p.clearIssueHover()
 			}
@@ -696,13 +698,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Click on Worktrees [+] button - open new worktree modal directly
 		return p.openCreateModal()
 	case regionSidebar:
-		p.activePane = PaneSidebar
+		p.focusSidebar()
 	case regionPreviewPane:
-		p.activePane = PanePreview
-		p.paneFocus = terminalLeafID(p.paneRoot)
-		if p.termPanelVisible {
-			p.termPanelFocused = false
-		}
+		p.focusLeaf(terminalLeafID(p.paneRoot))
 		// Keep the passive viewport stable through the whole pointer gesture.
 		// A release without motion makes the terminal live; motion selects text.
 		// Entering interactive mode here would resize and reframe the terminal
@@ -729,42 +727,35 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
-		p.activePane = PanePreview
-		p.paneFocus = terminalLeafID(p.paneRoot)
-		p.termPanelFocused = true
+		// The setter thaws the panel's window, which is what this arm did by
+		// hand: a click is an explicit navigation of the surface it lands on.
+		p.focusTermPanel()
 		if !action.Shift && !action.Alt {
 			if cmd, ok := p.activateTerminalLink(action); ok {
 				return cmd
 			}
 		}
-		p.thawTermPanelWindow()
 		return p.prepareTerminalClickOrDrag(action)
-	case regionDocPane:
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
-				p.activePane = PanePreview
-				p.paneFocus = leafID
-				p.termPanelFocused = false
-			}
-		}
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
-	case regionIssuePane:
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
-				p.activePane = PanePreview
-				p.paneFocus = leafID
-				p.termPanelFocused = false
-				if issue := p.issues[leaf.ContentID]; issue != nil && issue.view != nil {
-					lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
-					beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
-					_, cmd := issue.view.HandleClick(lx, ly)
-					if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
-						p.saveSelectionState()
-					}
-					return cmd
-				}
+	case regionPaneLeaf:
+		leafID, ok := action.Region.Data.(int)
+		if !ok {
+			return nil
+		}
+		leaf := FindPane(p.paneRoot, leafID)
+		if leaf == nil || leaf.Split != nil || leaf.Kind == PaneTerminal {
+			return nil
+		}
+		p.focusLeaf(leafID)
+		if issue, _ := p.issueLeafAt(leafID); issue != nil {
+			lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+			beforeID, beforeScroll := issue.view.IssueID(), issue.view.ScrollOffset()
+			_, cmd := issue.view.HandleClick(lx, ly)
+			if issue.view.IssueID() != beforeID || issue.view.ScrollOffset() != beforeScroll {
+				p.saveSelectionState()
 			}
+			return cmd
 		}
 	case regionIssueClose:
 		if leafID, ok := action.Region.Data.(int); ok {
@@ -783,7 +774,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.mouseHandler.StartDrag(action.X, action.Y, regionTermPanelDivider, startSize)
 	case regionListFilter:
 		// Clicking the filter row focuses the query, the same as `/`.
-		p.activePane = PaneSidebar
+		p.focusSidebar()
 		p.focusListFilter()
 	case regionWorktreeItem:
 		// Click on worktree or shell entry - select it
@@ -798,7 +789,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					p.saveSelectionState()
 				}
 				p.ensureVisible()
-				p.activePane = PaneSidebar
+				p.focusSidebar()
 				return p.loadSelectedContent()
 			}
 		}
@@ -815,7 +806,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 						p.exitInteractiveMode()
 						p.saveSelectionState()
 					}
-					p.activePane = PaneSidebar
+					p.focusSidebar()
 					return p.loadSelectedContent()
 				}
 			} else if idx >= 0 && idx < len(p.worktrees) {
@@ -829,7 +820,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 					p.saveSelectionState()
 				}
 				p.ensureVisible()
-				p.activePane = PaneSidebar
+				p.focusSidebar()
 				return p.loadSelectedContent()
 			}
 		}
@@ -1182,18 +1173,14 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 				return p.loadCommitDetail(commit.Hash)
 			}
 		}
-	case regionIssuePane:
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
-				p.activePane = PanePreview
-				p.paneFocus = leafID
-				p.termPanelFocused = false
-				// Bubble Tea emits the first click and then a double-click event at
-				// the same cell. The first click is the sole issue navigation;
-				// replaying it here can open the child and then its newly rendered
-				// parent when both rows occupy the same coordinate.
-				return nil
-			}
+	case regionPaneLeaf:
+		if _, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
+			p.focusLeaf(leaf.ID)
+			// Bubble Tea emits the first click and then a double-click event at
+			// the same cell. The first click is the sole issue navigation;
+			// replaying it here can open the child and then its newly rendered
+			// parent when both rows occupy the same coordinate.
+			return nil
 		}
 	case regionKanbanCard:
 		// Double-click on kanban card - attach to tmux session if agent running
@@ -1270,7 +1257,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionDocPane, regionDocTab:
+	case regionPaneLeaf, regionDocTab, regionIssueClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1278,7 +1265,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case docTabHit:
 			leafID = data.LeafID
 		}
-		if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneDoc {
+		leaf := FindPane(p.paneRoot, leafID)
+		if leaf == nil {
+			return nil
+		}
+		switch leaf.Kind {
+		case PaneDoc:
 			if doc := p.docs[leaf.ContentID]; doc != nil {
 				if view := doc.view(); view != nil {
 					before := view.ScrollOffset()
@@ -1288,20 +1280,15 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 					}
 				}
 			}
-		}
-		return nil
-	case regionIssuePane, regionIssueClose:
-		// The issue component scrolls in rendered rows, the same units the
-		// document viewer answers a notch in, so the wheel reaches it by the
-		// same path rather than a second one.
-		if leafID, ok := action.Region.Data.(int); ok {
-			if leaf := FindPane(p.paneRoot, leafID); leaf != nil && leaf.Kind == PaneIssue {
-				if issue := p.issues[leaf.ContentID]; issue != nil {
-					before := issue.view.ScrollOffset()
-					issue.view.Scroll(delta)
-					if issue.view.ScrollOffset() != before {
-						p.saveSelectionState()
-					}
+		case PaneIssue:
+			// The issue component scrolls in rendered rows, the same units the
+			// document viewer answers a notch in, so the wheel reaches it by
+			// the same path rather than a second one.
+			if issue := p.issues[leaf.ContentID]; issue != nil {
+				before := issue.view.ScrollOffset()
+				issue.view.Scroll(delta)
+				if issue.view.ScrollOffset() != before {
+					p.saveSelectionState()
 				}
 			}
 		}

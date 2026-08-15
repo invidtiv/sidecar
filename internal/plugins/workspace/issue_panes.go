@@ -186,8 +186,9 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	issue.view.SetFocused(true)
 	switch msg.String() {
 	case "tab", "shift+tab":
-		// The pane cycle lives on the list keymap so issue, doc, and
-		// terminal stay one ring. Claiming Tab here made the issue leaf
+		// Declining Tab is what keeps the issue leaf in the ring: the cycle
+		// lives on the list keymap, where sidebar, terminal, doc, issue and
+		// the terminal panel are one sequence. Claiming it here made the leaf
 		// a dead end.
 		return false, nil
 	case "\\":
@@ -243,13 +244,32 @@ func (p *Plugin) issuePaneHeaderRow(title string, width int, focused bool) strin
 }
 
 func (p *Plugin) registerIssuePaneRegions(title string, leafID int, box Box) {
-	p.mouseHandler.HitMap.AddRect(regionIssuePane, box.X, box.Y, box.W, box.H, leafID)
+	p.mouseHandler.HitMap.AddRect(regionPaneLeaf, box.X, box.Y, box.W, box.H, leafID)
 	chips := p.issueHeaderChips(title, box.W, p.paneFocus == leafID)
 	for index, chip := range layoutHeaderChips(chips, box.W, 0) {
 		if chip.Drawn && index == len(chips)-1 {
 			p.mouseHandler.HitMap.AddRect(regionIssueClose, box.X+chip.Col, box.Y, chip.Width, 1, leafID)
 		}
 	}
+}
+
+// issueLeafAt resolves a pane-leaf region's payload to the issue it names. It
+// answers nil for a document leaf, which is how the merged region's arms tell
+// the two kinds apart: the tree is the answer, not the region's name.
+func (p *Plugin) issueLeafAt(data any) (*issuePane, *PaneNode) {
+	leafID, ok := data.(int)
+	if !ok {
+		return nil, nil
+	}
+	leaf := FindPane(p.paneRoot, leafID)
+	if leaf == nil || leaf.Kind != PaneIssue {
+		return nil, nil
+	}
+	issue := p.issues[leaf.ContentID]
+	if issue == nil || issue.view == nil {
+		return nil, nil
+	}
+	return issue, leaf
 }
 
 func issueViewLocal(actionX, actionY int, box Box) (int, int) {

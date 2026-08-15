@@ -403,6 +403,16 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return m.handleViewFlyoutKey(msg)
 	}
+	// Tab cycles the windows on screen. It sits above the filter so focus moves
+	// even mid-query — the query text survives, the filter merely stops owning
+	// the keyboard — and below the live-pane check above, which is the one
+	// exception: a terminal being typed into keeps its own tab.
+	if key == "tab" || key == "shift+tab" {
+		if m.workspaces.Filter().Focused() {
+			m.workspaces.Filter().Blur()
+		}
+		return true, m.cyclePaneFocus(key == "shift+tab")
+	}
 	if m.workspaces.Filter().Focused() {
 		// ctrl+c is the host's, even mid-query. It is one of sidecar's two ways
 		// out, and every other text-input surface hands it back (internal/app's

@@ -85,7 +85,9 @@ Not deleted: ~40 `termPanelFocused` lifecycle *clears* (panel toggle/tab switch)
 
 ## Verification
 
-**Must pass unedited:** `issue_panes_test.go` `TestTabCyclesThroughTheIssueLeaf` (load-bearing ring-order compatibility check), `doc_panes_test.go`, `panetree_test.go`, `pane_tree_geometry_test.go`, both `interaction_parity_test.go`, `terminal_window_parity_test.go`, `internal/app/key_precedence_test.go`, golden transcripts in `internal/app/testdata/` (no rendered-byte change in this slice).
+**Must pass unedited:** `issue_panes_test.go` `TestTabCyclesThroughTheIssueLeaf` (load-bearing ring-order compatibility check), `panetree_test.go`, `pane_tree_geometry_test.go`, both `interaction_parity_test.go`, `terminal_window_parity_test.go`, `internal/app/key_precedence_test.go`, golden transcripts in `internal/app/testdata/` (no rendered-byte change in this slice).
+
+**Must pass with only the `regionDocPane`/`regionIssuePane` → `regionPaneLeaf` rename:** `doc_panes_test.go`, the rest of `issue_panes_test.go`, `pane_canvas_test.go`, `pane_compositor_test.go`. The Deletions row that merges the two constants and "unedited" cannot both hold — these files name the constants by identifier, and keeping the old names as aliases of one value is a duplicate-case compile error. No coordinate or assertion changes. One non-mechanical repair: `TestIssueChildRawCoordinateClickLoadsTheChild` matched "the first region whose ID is `regionIssuePane`", which under one shared region lands on the doc leaf, so its lookup gains `&& region.Data == issue.leafID` to keep aiming at the issue's box.
 
 **New tests:**
 - `panelayout/focusring_test.go` — table-driven: ring order == `LayoutPanes` placement order asserted against a real layout (guards drift); sidebar/panel visibility; wrap both directions; current-not-in-ring; empty ring.
