@@ -64,14 +64,18 @@ func (p *Plugin) renderView() string {
 	// NOTE: Inline edit mode is handled within renderPreviewPane(), not here.
 	// This allows the tree pane to remain visible during editing.
 
-	// Project search is a full overlay - render modal over dimmed background
+	// The two search surfaces get one placement, not two. Both act on the whole
+	// project rather than on the preview, so both are centred over the whole
+	// plugin area with both panes dimmed behind them; the only thing that
+	// differs is how wide each box likes to be, which is a property of its rows
+	// (paths versus source lines) rather than of where it lives. Anything else
+	// reads as two components rather than one component in two modes.
 	if p.projectSearchMode {
 		background := p.renderNormalPanes()
 		modal := p.renderProjectSearchModalContent()
 		return ui.OverlayModal(background, modal, p.width, p.height)
 	}
 
-	// Quick open is a full overlay - render modal over dimmed background
 	if p.quickOpenMode {
 		background := p.renderNormalPanes()
 		modal := p.renderQuickOpenModalContent()

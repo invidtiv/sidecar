@@ -87,27 +87,38 @@ func (s *Search) ensureModal() {
 	}
 
 	modalW := s.modalWidthForView()
-	if s.modal != nil && s.modalWidth == modalW {
+	if s.modal != nil && s.modalWidth == modalW && s.modalFill == s.fill {
 		return
 	}
 	s.modalWidth = modalW
 
-	s.modal = modal.New("",
+	opts := []modal.Option{
 		modal.WithWidth(modalW),
 		modal.WithPrimaryAction(OpenActionID),
 		modal.WithHints(false),
-	).
+	}
+	if s.fill {
+		// No margin: the box is the surface, so there is nothing to keep clear
+		// around it.
+		opts = append(opts, modal.WithMargin(0, 0))
+	}
+
+	s.modal = modal.New("", opts...).
 		AddSection(s.headerSection()).
 		AddSection(s.optionsSection()).
 		AddSection(modal.Spacer()).
 		AddSection(s.resultsSection()).
-		AddSection(modal.When(s.hasResults, modal.Spacer())).
-		AddSection(modal.When(s.hasResults, s.statsSection()))
+		AddSection(modal.When(s.hasStats, modal.Spacer())).
+		AddSection(modal.When(s.hasStats, s.statsSection()))
+	s.modalFill = s.fill
 }
 
 func (s *Search) modalWidthForView() int {
-	modalW := 120
-	maxWidth := s.width - 4
+	if s.fill {
+		return maxInt(s.width, 1)
+	}
+	modalW := PreferredWidth
+	maxWidth := s.width - 2*modal.DefaultMarginX
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
@@ -124,6 +135,11 @@ func (s *Search) modalWidthForView() int {
 	return modalW
 }
 
+// PreferredWidth is how wide the search's box likes to be when the surface has
+// room to spare. It is wider than the finder's because its rows are source
+// lines rather than paths.
+const PreferredWidth = 120
+
 func (s *Search) clearModal() {
 	s.modal = nil
 	s.modalWidth = 0
@@ -131,6 +147,14 @@ func (s *Search) clearModal() {
 
 func (s *Search) hasResults() bool {
 	return s.State != nil && len(s.State.Results) > 0
+}
+
+// hasStats reports whether the counts line is affordable. It does not ask
+// whether there is anything to count: a line that comes and goes with the
+// results makes the whole box change height as the user types, which is exactly
+// what the padding below is there to prevent.
+func (s *Search) hasStats() bool {
+	return s.height-s.chromeHeight()-searchOverheadWithoutStats-statsHeight >= 1
 }
 
 func (s *Search) headerSection() modal.Section {
@@ -338,7 +362,9 @@ func (s *Search) statsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		state := s.State
 		if state == nil || len(state.Results) == 0 {
-			return modal.RenderedSection{}
+			// The row is still drawn: its height is part of the box's, and a
+			// line that appears with the first result makes the box jump.
+			return modal.RenderedSection{Content: " "}
 		}
 
 		position := ""
@@ -359,26 +385,51 @@ func (s *Search) statsSection() modal.Section {
 // than to a floor, because a file pane can be shorter than a modal ever is on
 // a screen.
 func (s *Search) maxVisible() int {
-	// title row + the blank line its style leaves + the options row + the
-	// blank line above the list.
-	overhead := 4
-	if s.hasResults() {
-		overhead += 2 // blank line + stats line
+	overhead := searchOverheadWithoutStats
+	if s.hasStats() {
+		overhead += statsHeight
 	}
 
-	height := s.height - modalChromeHeight - overhead
-	if height < 1 {
-		height = 1
+	available := s.height - s.chromeHeight() - overhead
+	if available < 1 {
+		available = 1
 	}
-	if height > 30 {
-		height = 30
+	if s.fill {
+		return available
 	}
-	return height
+	return minInt(modal.PreferredListRows(s.height), available)
 }
 
-// modalChromeHeight is what internal/modal spends on the box itself: border,
-// padding, and the margin it leaves around the modal on screen.
-const modalChromeHeight = 6
+// searchOverheadWithoutStats is everything drawn above the list: the title row
+// plus the blank line its style leaves, the options row, and the blank line
+// above the list.
+const searchOverheadWithoutStats = 4
+
+// statsHeight is the counts line plus the blank line above it.
+const statsHeight = 2
+
+// chromeHeight is what the box costs on this surface: border and padding, plus
+// the margin the modal keeps clear above and below itself unless it is filling.
+func (s *Search) chromeHeight() int {
+	if s.fill {
+		return modal.ChromeHeight
+	}
+	return modal.ChromeHeight + 2*modal.DefaultMarginY
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
 
 // renderHeader renders the search input bar.
 func (s *Search) renderHeader(width int) string {
@@ -404,7 +455,9 @@ func (s *Search) renderHeader(width int) string {
 	return styles.ModalTitle.Render(header)
 }
 
-// renderFileHeader renders a file header line.
+// renderFileHeader renders a file header line. The path is elided the way the
+// finder's rows are — leading directories first, the parent and the filename
+// last — so a narrow pane does not fill up with rows that all look alike.
 func renderFileHeader(file SearchFileResult, selected, hovered bool, width int) string {
 	icon := "▼ "
 	if file.Collapsed {
@@ -412,11 +465,14 @@ func renderFileHeader(file SearchFileResult, selected, hovered bool, width int) 
 	}
 
 	matchCount := fmt.Sprintf(" (%d)", len(file.Matches))
-	availableWidth := width - len(icon) - len(matchCount) - 2
+	availableWidth := width - ansi.StringWidth(icon) - ansi.StringWidth(matchCount)
+	if availableWidth < 1 {
+		availableWidth = 1
+	}
 
 	path := file.Path
-	if len(path) > availableWidth {
-		path = ui.TruncateStart(path, availableWidth)
+	if ansi.StringWidth(path) > availableWidth {
+		path, _ = ui.ElidePath(path, availableWidth)
 	}
 
 	if selected || hovered {
@@ -451,16 +507,22 @@ func matchGutter(results []SearchFileResult) docview.Gutter {
 	return docview.NewGutter(maxLine).WithSeparator(": ")
 }
 
-// renderMatchLine renders a single match line.
+// renderMatchLine renders a single match line. The window onto the line is
+// anchored so the match and what follows it stay visible: a narrow pane gives
+// up the leading context first. Centring the window on the match instead clips
+// both sides down to the query itself, which renders every row as the same four
+// characters.
 func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutter docview.Gutter) string {
-	indent := "    "
+	indent := matchIndent(width)
 	lineNum := gutter.Plain(match.LineNo)
 
-	availableWidth := width - len(indent) - len(lineNum) - 2
-	if availableWidth < 10 {
-		availableWidth = 10
+	availableWidth := width - ansi.StringWidth(indent) - ansi.StringWidth(lineNum)
+	if availableWidth < 1 {
+		availableWidth = 1
 	}
 
+	// The source line's own indentation says nothing here and would be spent
+	// before the match ever appeared.
 	lineText := strings.TrimSpace(match.LineText)
 
 	runeStart := ui.BytePosToRunePos(match.LineText, match.ColStart)
@@ -477,18 +539,18 @@ func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutte
 		runeEnd = runeStart
 	}
 
-	lineText, hlStart, hlEnd := ui.TruncateMid(lineText, availableWidth, runeStart, runeEnd)
+	lineText, hlStart, hlEnd := ui.TruncateAnchored(lineText, availableWidth, runeStart, runeEnd)
 
 	if selected || hovered {
 		// Build plain text for full-width highlight (keeps match visible within selection)
 		plainLine := indent + lineNum + lineText
 		// Pad to full width
-		if len(plainLine) < width {
-			plainLine += strings.Repeat(" ", width-len(plainLine))
+		if pad := width - ansi.StringWidth(plainLine); pad > 0 {
+			plainLine += strings.Repeat(" ", pad)
 		}
-		// Highlight the match within the plain text
-		matchStart := len(indent) + len(lineNum) + hlStart
-		matchEnd := len(indent) + len(lineNum) + hlEnd
+		// Highlight the match within the plain text, in bytes.
+		matchStart := len(indent) + len(lineNum) + runeToByte(lineText, hlStart)
+		matchEnd := len(indent) + len(lineNum) + runeToByte(lineText, hlEnd)
 		return highlightMatchInSelection(plainLine, matchStart, matchEnd)
 	}
 
@@ -498,6 +560,31 @@ func renderMatchLine(match SearchMatch, selected, hovered bool, width int, gutte
 		gutter.Number(match.LineNo),
 		highlightedLine,
 	)
+}
+
+// matchIndent is how far a match row sits under its file header. A narrow pane
+// spends two cells on the hierarchy rather than four; the row's content is
+// worth more than the extra step.
+func matchIndent(width int) string {
+	if width < 60 {
+		return "  "
+	}
+	return "    "
+}
+
+// runeToByte converts a rune index in s to a byte offset.
+func runeToByte(s string, runeIdx int) int {
+	if runeIdx <= 0 {
+		return 0
+	}
+	count := 0
+	for i := range s {
+		if count == runeIdx {
+			return i
+		}
+		count++
+	}
+	return len(s)
 }
 
 // highlightMatchInSelection applies selection style with embedded match highlight.

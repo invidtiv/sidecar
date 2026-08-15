@@ -18,11 +18,14 @@ import (
 // shell directory it was opened against, and neither surface asks anything else
 // about the host.
 //
-// The surface is drawn as a modal scoped to the pane's box (internal/panemodal):
-// centred with the pane's document dimmed around it when there is room, filling
-// the pane when there is not. It is never a full-screen takeover — a pane on a
-// large monitor is bigger than any picker needs — and never a bare inline
-// widget stranded in a large pane.
+// The surface is drawn as a modal scoped to the pane's box (internal/panemodal),
+// below the pane's header row: sized to its own content and centred with the
+// pane's document dimmed around it when the pane has room for a readable
+// margin, and taking the whole box when it does not. It is never a full-screen
+// takeover — a pane on a large monitor is bigger than any picker needs — and
+// never a bare inline widget stranded in a large pane. The header row is never
+// covered either way, so a pane always says both which file it holds and what
+// it is doing.
 
 // docSearchKind names which surface a pane is showing.
 type docSearchKind int
@@ -98,7 +101,11 @@ func (m *docSearchMode) setSize(width, height int) {
 	}
 }
 
-func (m *docSearchMode) view(width, height int, handler *mouse.Handler) string {
+// view draws the surface at the given size. fill is panemodal's answer to
+// whether the box has room to show the pane around the modal; passing it
+// through is what makes the tight case a modal that owns the pane rather than a
+// small box floating on an empty field.
+func (m *docSearchMode) view(width, height int, fill bool, handler *mouse.Handler) string {
 	if m == nil {
 		return ""
 	}
@@ -106,11 +113,13 @@ func (m *docSearchMode) view(width, height int, handler *mouse.Handler) string {
 		if m.search == nil {
 			return ""
 		}
+		m.search.SetFill(fill)
 		return m.search.View(width, height, handler)
 	}
 	if m.finder == nil {
 		return ""
 	}
+	m.finder.SetFill(fill)
 	return m.finder.View(width, height, handler)
 }
 
@@ -388,7 +397,7 @@ func (p *Plugin) applyDocSearchMsg(msg docSearchMsg) tea.Cmd {
 // win the reverse hit-test for the cells the modal is drawn on. The regions are
 // kept on the pane and added last (see registerDocSearchRegions).
 func (p *Plugin) renderDocSearchOverlay(doc *docPane, background string, origin mouse.Rect, size Size) string {
-	if doc == nil || doc.mode == nil {
+	if doc == nil || doc.mode == nil || size.Width <= 0 || size.Height <= 0 {
 		return background
 	}
 	box := panemodal.Box{X: origin.X, Y: origin.Y, W: size.Width, H: size.Height}

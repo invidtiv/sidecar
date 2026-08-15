@@ -209,28 +209,59 @@ func lineWidth(s string) int {
 	return widest
 }
 
-func TestElidePathKeepsTheFilename(t *testing.T) {
+func TestElidePathKeepsWhatDiffers(t *testing.T) {
 	tests := []struct {
 		path  string
 		width int
 		want  string
 	}{
-		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "a/very/deep…/file.go"},
-		{"a/very/deeply/nested/path/that/goes/on/file.go", 12, "a/v…/file.go"},
-		// A filename that cannot fit on its own keeps its end rather than
-		// pretending a directory prefix is the useful part.
+		// Leading directories are spent first; the parent and the filename —
+		// the pair that differs between rows — survive.
+		{"a/very/deeply/nested/path/that/goes/on/file.go", 20, "…hat/goes/on/file.go"},
+		{".claude/skills/create-modal/SKILL.md", 30, ".c/s/create-modal/SKILL.md"},
+		{"internal/plugins/filebrowser/view.go", 30, "i/p/filebrowser/view.go"},
+		// Too narrow even for that: keep the tail, never the shared head.
+		{"a/very/deeply/nested/path/that/goes/on/file.go", 12, "…/on/file.go"},
 		{"dir/an_extremely_long_filename_indeed.go", 12, "…e_indeed.go"},
 		{"short.go", 20, "short.go"},
 		{"no_directory_but_far_too_long.go", 10, "…o_long.go"},
 	}
 	for _, tt := range tests {
-		got := elidePath(tt.path, tt.width)
+		got, _ := ui.ElidePath(tt.path, tt.width)
 		if got != tt.want {
-			t.Errorf("elidePath(%q, %d) = %q, want %q", tt.path, tt.width, got, tt.want)
+			t.Errorf("ElidePath(%q, %d) = %q, want %q", tt.path, tt.width, got, tt.want)
 		}
 		if ansi.StringWidth(got) > tt.width {
-			t.Errorf("elidePath(%q, %d) = %q, which is %d cells wide",
+			t.Errorf("ElidePath(%q, %d) = %q, which is %d cells wide",
 				tt.path, tt.width, got, ansi.StringWidth(got))
+		}
+	}
+}
+
+// TestNarrowRowsStayDistinguishable is the property that actually matters in a
+// tight pane: rows that share a long prefix and a filename must not all render
+// as the same string. The old middle elision kept the shared head and threw the
+// discriminating segment away, so thirteen rows read ".claude/…/SKILL.md".
+func TestNarrowRowsStayDistinguishable(t *testing.T) {
+	paths := []string{
+		".claude/skills/create-modal/SKILL.md",
+		".claude/skills/create-plugin/SKILL.md",
+		".claude/skills/create-theme/SKILL.md",
+		".claude/skills/ui-features/SKILL.md",
+		".agents/skills/release-sidecar/SKILL.md",
+		".agents/skills/drag-pane/SKILL.md",
+	}
+	for _, width := range []int{30, 45} {
+		seen := map[string]string{}
+		for _, path := range paths {
+			row := ansi.Strip(RenderMatch(Match{Path: path}, width))
+			if ansi.StringWidth(row) > width {
+				t.Errorf("width %d: row %q is %d cells", width, row, ansi.StringWidth(row))
+			}
+			if other, dup := seen[row]; dup {
+				t.Errorf("width %d: %q and %q both render as %q", width, other, path, row)
+			}
+			seen[row] = path
 		}
 	}
 }
@@ -274,5 +305,71 @@ func TestFinderLongQueryDoesNotWrapTheHeader(t *testing.T) {
 	}
 	if h := len(strings.Split(out, "\n")); h > 16 {
 		t.Fatalf("modal is %d rows tall with a long query", h)
+	}
+}
+
+// The box must not breathe as the user types: an empty finder, a scanning one,
+// and one with results all occupy exactly the same rows.
+func TestFinderHeightIsStableAcrossStates(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 30}, {80, 24}, {56, 20}} {
+		f := NewFinder(&Cache{}, "/root", 1)
+		f.Open()
+		empty := renderSize(f, size.w, size.h)
+
+		f.Cache.Scanning = true
+		scanning := renderSize(f, size.w, size.h)
+
+		f.Cache.Scanning = false
+		f.Cache.Files = []string{"internal/app/view.go", "README.md"}
+		f.Cache.OK = true
+		f.Refilter()
+		results := renderSize(f, size.w, size.h)
+
+		f.SetQuery("zzzz")
+		nomatch := renderSize(f, size.w, size.h)
+
+		if empty != scanning || empty != results || empty != nomatch {
+			t.Errorf("%dx%d: box height jitters: empty=%v scanning=%v results=%v nomatch=%v",
+				size.w, size.h, empty, scanning, results, nomatch)
+		}
+	}
+}
+
+// renderSize is the rendered box's size, which is what a host composites.
+func renderSize(f *Finder, width, height int) [2]int {
+	out := f.View(width, height, mouse.NewHandler())
+	return [2]int{lineWidth(out), len(strings.Split(out, "\n"))}
+}
+
+// An empty or short state is empty space, not a pattern: every reserved row is
+// drawn the same way, so a run of them cannot read as banding.
+func TestEmptyStateRowsAreUniform(t *testing.T) {
+	f := NewFinder(&Cache{Files: []string{"README.md"}, OK: true}, "/root", 1)
+	f.Open()
+	f.SetQuery("zzzz")
+
+	spellings := map[string]bool{}
+	for _, line := range strings.Split(f.View(100, 30, mouse.NewHandler()), "\n") {
+		if plain := ansi.Strip(line); strings.Trim(plain, " \u2502") == "" {
+			spellings[line] = true
+		}
+	}
+	// The box's own padding rows and the list's filler rows are the only two
+	// blank spellings there may be; a third means the run is patterned.
+	if len(spellings) > 2 {
+		t.Errorf("%d different blank-row spellings; a run of them will read as banding", len(spellings))
+	}
+}
+
+// The finder must fill its box exactly when a host asks it to own the pane.
+func TestFillModeIsExactlyTheBox(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{56, 20}, {80, 24}, {40, 12}, {30, 8}} {
+		f := NewFinder(&Cache{Files: []string{"README.md"}, OK: true}, "/root", 1)
+		f.Open()
+		f.SetFill(true)
+		out := f.View(size.w, size.h, mouse.NewHandler())
+		if w, h := lineWidth(out), len(strings.Split(out, "\n")); w != size.w || h != size.h {
+			t.Errorf("fill at %dx%d rendered %dx%d", size.w, size.h, w, h)
+		}
 	}
 }

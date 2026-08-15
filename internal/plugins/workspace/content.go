@@ -170,9 +170,13 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 // View draws the tab strip above the viewer. Focus is the frame's answer, so
 // the active tab a click lands on matches the one the leaf drew.
 //
-// A live search surface is composited over the whole leaf — header row included
-// — as a modal scoped to this box, and the result is still exactly the box, so
-// the app's header cannot be pushed off screen.
+// A live search surface is composited over the leaf's body as a modal scoped to
+// that box, and the result is still exactly the leaf's box, so the app's header
+// cannot be pushed off screen. The pane's own header row is deliberately left
+// out of the modal's box: it is where the pane says it is in Find or Search
+// mode, and in a pane short enough for the modal to fill its box that row is the
+// only thing still saying so. Six cells of "⌕ Find" is a price every size can
+// pay.
 func (c *docContent) View(render Render) string {
 	// Where the box is, not only how big it is: a click-away test needs the
 	// origin whether or not a surface is up when the click arrives.
@@ -181,13 +185,19 @@ func (c *docContent) View(render Render) string {
 	if view := c.doc.view(); view != nil {
 		body = view.View()
 	}
-	out := composePaneLeaf(
-		c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused),
-		body)
+	header := c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused)
 	if c.doc.mode != nil {
-		return c.p.renderDocSearchOverlay(c.doc, out, render.Origin, c.size)
+		bodyH := c.size.Height - terminalHeaderRows
+		if header == "" || bodyH < 1 {
+			// Nothing to protect: the surface gets the whole box.
+			return c.p.renderDocSearchOverlay(c.doc, composePaneLeaf(header, body),
+				render.Origin, c.size)
+		}
+		origin := mouse.Rect{X: render.Origin.X, Y: render.Origin.Y + terminalHeaderRows}
+		body = c.p.renderDocSearchOverlay(c.doc, body, origin,
+			Size{Width: c.size.Width, Height: bodyH})
 	}
-	return out
+	return composePaneLeaf(header, body)
 }
 
 // issueContent is the td issue leaf: the pane's own header row above the issue

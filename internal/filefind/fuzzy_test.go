@@ -218,3 +218,29 @@ func TestFuzzyFilter_ExtractsName(t *testing.T) {
 		t.Errorf("Path should be 'src/app/main.go', got %q", matches[0].Path)
 	}
 }
+
+// Subsequence matching lights up any character in the right order, so a short
+// query paints stray letters far from what the user perceives as the match.
+// Only runs of two or more, and single characters that start a segment or a
+// word, survive into the highlight.
+func TestSignificantRangesDropStrayCharacters(t *testing.T) {
+	_, ranges := FuzzyMatch("wd", "website/docs/workspaces-plugin.md")
+	if len(ranges) == 0 {
+		t.Fatal("no match to filter")
+	}
+	got := significantRanges("website/docs/workspaces-plugin.md", ranges)
+	for _, r := range got {
+		if r.End-r.Start >= 2 {
+			continue
+		}
+		if !atWordStart("website/docs/workspaces-plugin.md", r.Start) {
+			t.Errorf("isolated character at %d survived the filter", r.Start)
+		}
+	}
+
+	// A run the user typed as one word is never dropped.
+	_, ranges = FuzzyMatch("view", "internal/app/view.go")
+	if got := significantRanges("internal/app/view.go", ranges); len(got) == 0 {
+		t.Fatal("a whole-word match was filtered away")
+	}
+}

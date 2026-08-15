@@ -51,7 +51,7 @@ func TestRenderFillsExactlyTheBox(t *testing.T) {
 }
 
 func TestRoomyBoxCentresAndDimsPaneContent(t *testing.T) {
-	box := Box{X: 12, Y: 4, W: 90, H: 26}
+	box := Box{X: 12, Y: 4, W: 110, H: 26}
 	out := Render(newModal(), box, background(box), mouse.NewHandler())
 	plain := ansi.Strip(out)
 
@@ -81,9 +81,9 @@ func TestRoomyBoxCentresAndDimsPaneContent(t *testing.T) {
 		found = true
 		leftMargin := start
 		rightMargin := len(runes) - 1 - end
-		if leftMargin < dimMargin || rightMargin < dimMargin {
+		if leftMargin < dimMarginX || rightMargin < dimMarginX {
 			t.Errorf("margins left=%d right=%d, want at least %d cells of pane content on each side",
-				leftMargin, rightMargin, dimMargin)
+				leftMargin, rightMargin, dimMarginX)
 		}
 		if diff := leftMargin - rightMargin; diff > 1 || diff < -1 {
 			t.Errorf("modal not centred: left margin %d, right margin %d", leftMargin, rightMargin)
@@ -176,9 +176,19 @@ func TestRenderDegenerateBox(t *testing.T) {
 // the finder and the project search draw themselves and register their own
 // regions, and neither of them is one.
 func TestRenderFuncCompositesAndTranslatesRegions(t *testing.T) {
-	draw := func(width, height int, h *mouse.Handler) string {
+	// The surface sizes itself to its content, and takes the whole box when it
+	// is asked to fill.
+	draw := func(width, height int, fill bool, h *mouse.Handler) string {
 		if h != nil {
 			h.HitMap.AddRect("row", 2, 1, 6, 1, 7)
+		}
+		if fill {
+			line := strings.Repeat("#", width)
+			lines := make([]string, height)
+			for i := range lines {
+				lines[i] = line
+			}
+			return strings.Join(lines, "\n")
 		}
 		return strings.Join([]string{
 			strings.Repeat("#", 20),

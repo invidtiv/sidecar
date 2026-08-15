@@ -51,6 +51,17 @@ type Model struct {
 
 	renderWidth   int
 	renderedLines []string
+
+	// Laying out a document is O(lines): every source line is measured, given a
+	// gutter cell, and possibly wrapped. View, maxScroll and displayRowForLine
+	// all need the result, and clampScroll runs on every scroll key, so a large
+	// file would pay that walk several times per keystroke. Hold the last pass
+	// and rebuild it only when something it depends on moves.
+	layout       displayRows
+	layoutKey    layoutKey
+	layoutValid  bool
+	contentGen   uint64
+	layoutBuilds int // test-visible count of full layout passes
 }
 
 // New creates an empty document viewer. A nil renderer uses the default
@@ -277,8 +288,46 @@ type docContent struct {
 	numbered bool
 }
 
+// layoutKey names everything a laid-out document depends on. Width changes the
+// gutter and the wrap points, wrap and rendered change what the lines are, and
+// contentGen moves whenever the document itself is replaced.
+type layoutKey struct {
+	width      int
+	wrap       bool
+	rendered   bool
+	contentGen uint64
+}
+
+func (m *Model) currentLayoutKey() layoutKey {
+	return layoutKey{width: m.width, wrap: m.wrap, rendered: m.rendered, contentGen: m.contentGen}
+}
+
 func (m *Model) display() displayRows {
-	content := m.content()
+	// A placeholder is a handful of lines that depend on transient state the
+	// cache key does not track - whether a load is in flight, which path was
+	// armed, what the error said. It is cheap enough to lay out every time, and
+	// doing so keeps the cache honest about the one thing it is for: documents.
+	if lines, ok := m.placeholder(); ok {
+		return m.layOutContent(docContent{lines: lines})
+	}
+
+	key := m.currentLayoutKey()
+	if m.layoutValid && m.layoutKey == key {
+		return m.layout
+	}
+	rows := m.layOut()
+	m.layout = rows
+	m.layoutKey = key
+	m.layoutValid = true
+	return rows
+}
+
+func (m *Model) layOut() displayRows {
+	m.layoutBuilds++
+	return m.layOutContent(m.content())
+}
+
+func (m *Model) layOutContent(content docContent) displayRows {
 	gutter := Gutter{}
 	if content.numbered {
 		gutter = NewGutterForWidth(len(content.lines)-content.banner, m.width)
@@ -379,6 +428,9 @@ func (m *Model) placeholder() ([]string, bool) {
 func (m *Model) invalidateRender() {
 	m.renderWidth = -1
 	m.renderedLines = nil
+	m.contentGen++
+	m.layoutValid = false
+	m.layout = displayRows{}
 }
 
 func (m *Model) maxScroll() int {

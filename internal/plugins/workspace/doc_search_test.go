@@ -513,3 +513,28 @@ func TestDiffTabFStillOpensTheFilePicker(t *testing.T) {
 		t.Fatalf("f on the diff tab left view mode %v, want the file picker", p.viewMode)
 	}
 }
+
+// The pane's mode indicator has to survive every size, including the sizes
+// where the surface fills the pane. The modal is drawn under the header row
+// rather than over it, so a pane never stops saying both which file it holds
+// and what it is doing.
+func TestDocPaneHeaderSurvivesASmallPane(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{120, 30}, {100, 30}, {80, 24}} {
+		p, _ := docSearchPlugin(t, true)
+		doc := p.focusedDocPane()
+		scanFinder(t, p, p.openDocFinder(doc))
+
+		rows := composePaneTree(t, p, size.w, size.h)
+		found := false
+		for _, row := range rows {
+			if strings.Contains(ansi.Strip(row), "Find") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%dx%d: no mode indicator anywhere on screen:\n%s",
+				size.w, size.h, ansi.Strip(strings.Join(rows, "\n")))
+		}
+	}
+}

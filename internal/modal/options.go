@@ -56,10 +56,55 @@ func WithCustomFooter(footer string) Option {
 	}
 }
 
+// WithMargin sets how much of the surface the modal leaves clear around itself.
+// The default keeps the box off the edge of a screen; a modal that is meant to
+// own its surface — a pane too small to show anything useful behind the modal —
+// passes 0, 0 and is then rendered at exactly the surface's size.
+func WithMargin(x, y int) Option {
+	return func(m *Modal) {
+		if x < 0 {
+			x = 0
+		}
+		if y < 0 {
+			y = 0
+		}
+		m.marginX, m.marginY = x, y
+	}
+}
+
+// PreferredListRows is the list length a content-sized modal aims for on a
+// surface this tall: enough to be worth opening, never so much that a picker
+// with three hits reserves most of a large pane. It deliberately does not
+// depend on how many rows there are to show — a box that grows as results land
+// breathes under the user's hands.
+func PreferredListRows(surfaceHeight int) int {
+	rows := surfaceHeight / 3
+	if rows < MinListRows {
+		rows = MinListRows
+	}
+	if rows > MaxListRows {
+		rows = MaxListRows
+	}
+	return rows
+}
+
 // Default modal dimensions
 const (
 	DefaultWidth  = 50
 	MinModalWidth = 30
 	MaxModalWidth = 120
 	ModalPadding  = 6 // border(2) + horizontal padding(4)
+
+	// DefaultMarginX/Y are the cells left clear around the modal box.
+	DefaultMarginX = 2
+	DefaultMarginY = 1
+
+	// MinListRows/MaxListRows bound PreferredListRows.
+	MinListRows = 8
+	MaxListRows = 14
+
+	// ChromeWidth/ChromeHeight are what the box itself costs: border plus
+	// padding. A caller budgeting its own content needs the same numbers.
+	ChromeWidth  = 6
+	ChromeHeight = 4
 )

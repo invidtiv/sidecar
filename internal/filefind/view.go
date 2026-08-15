@@ -53,6 +53,19 @@ func (f *Finder) SetSize(width, height int) {
 	f.clearModal()
 }
 
+// SetFill switches the finder between the two placements its hosts need. Off
+// (the default) it draws a box sized to its own content, which a host centres
+// on a screen or in a roomy pane with the surface behind it dimmed. On, it draws
+// a box that is exactly the surface it was given, for a pane with no room to
+// show anything useful behind the modal.
+func (f *Finder) SetFill(fill bool) {
+	if f.fill == fill {
+		return
+	}
+	f.fill = fill
+	f.clearModal()
+}
+
 // View renders the finder at the given size and registers its hit regions on
 // handler. The result is the modal box alone; the caller composites it over its
 // own background (ui.OverlayModal for a screen, panemodal for a pane).
@@ -68,21 +81,26 @@ func (f *Finder) View(width, height int, handler *mouse.Handler) string {
 // ensureModal builds/rebuilds the modal for the current width.
 func (f *Finder) ensureModal() {
 	modalW := f.modalWidthForView()
-	if f.modal != nil && f.modalWidth == modalW {
+	if f.modal != nil && f.modalWidth == modalW && f.modalFill == f.fill {
 		return
 	}
 	f.modalWidth = modalW
 
-	f.modal = modal.New("",
-		modal.WithWidth(modalW),
-		modal.WithHints(false),
-	).
+	opts := []modal.Option{modal.WithWidth(modalW), modal.WithHints(false)}
+	if f.fill {
+		// No margin: the box is the surface, so there is nothing to keep clear
+		// around it.
+		opts = append(opts, modal.WithMargin(0, 0))
+	}
+
+	f.modal = modal.New("", opts...).
 		AddSection(f.headerSection()).
 		AddSection(modal.When(f.hasScanError, f.errorSection())).
 		AddSection(modal.When(f.hasScanError, modal.Spacer())).
 		AddSection(f.resultsSection()).
 		AddSection(modal.When(f.hasStats, modal.Spacer())).
 		AddSection(modal.When(f.hasStats, f.statsSection()))
+	f.modalFill = f.fill
 }
 
 func (f *Finder) clearModal() {
@@ -91,10 +109,14 @@ func (f *Finder) clearModal() {
 }
 
 // modalWidthForView mirrors projectsearch.Search.modalWidthForView, with the
-// finder's narrower preferred width: rows are paths, not source lines.
+// finder's narrower preferred width: rows are paths, not source lines. Filling,
+// the box is the surface exactly.
 func (f *Finder) modalWidthForView() int {
-	modalW := 80
-	maxWidth := f.width - 4
+	if f.fill {
+		return maxInt(f.width, 1)
+	}
+	modalW := PreferredWidth
+	maxWidth := f.width - 2*modal.DefaultMarginX
 	if maxWidth < 1 {
 		maxWidth = 1
 	}
@@ -111,16 +133,17 @@ func (f *Finder) modalWidthForView() int {
 	return modalW
 }
 
+// PreferredWidth is how wide the finder's box likes to be when the surface has
+// room to spare.
+const PreferredWidth = 80
+
 func (f *Finder) hasScanError() bool { return f.Cache != nil && f.Cache.ErrText != "" }
 
-// hasStats reports whether the counts line is both meaningful and affordable.
-// In a pane short enough that the line would cost the list its last row, the
-// list wins.
+// hasStats reports whether the counts line is affordable. It does not ask
+// whether there is anything to count: a line that comes and goes with the
+// results makes the whole box change height as the user types.
 func (f *Finder) hasStats() bool {
-	if f.Cache == nil || (len(f.matches) == 0 && len(f.Cache.Files) == 0) {
-		return false
-	}
-	return f.height-modalChromeHeight-f.overheadWithoutStats()-statsHeight >= 1
+	return f.height-f.chromeHeight()-f.overheadWithoutStats()-statsHeight >= 1
 }
 
 // overheadWithoutStats is everything above the list.
@@ -138,30 +161,37 @@ func (f *Finder) overheadWithoutStats() int {
 // statsHeight is the counts line plus the blank line above it.
 const statsHeight = 2
 
-// maxVisible is how many rows the list gets: the modal's inner height less
-// everything drawn around the list. Counting the overhead exactly is what keeps
-// the box from overflowing into a scrollbar it does not need, and the search
-// budgets its list the same way. It drops to a single row rather than to a
-// floor, because a file pane can be shorter than a modal ever is on a screen.
+// maxVisible is how many rows the list gets. Filling, that is everything the
+// box has left after the rows drawn around the list, so the modal ends up
+// exactly the size of the surface. Otherwise it is a preferred row count that
+// does not depend on how many matches there are — the box must not breathe as
+// the user types — clamped to what the surface can hold. Counting the overhead
+// exactly is what keeps the box from overflowing into a scrollbar it does not
+// need, and the search budgets its list the same way.
 func (f *Finder) maxVisible() int {
 	overhead := f.overheadWithoutStats()
 	if f.hasStats() {
 		overhead += statsHeight
 	}
 
-	height := f.height - modalChromeHeight - overhead
-	if height < 1 {
-		height = 1
+	available := f.height - f.chromeHeight() - overhead
+	if available < 1 {
+		available = 1
 	}
-	if height > 30 {
-		height = 30
+	if f.fill {
+		return available
 	}
-	return height
+	return minInt(modal.PreferredListRows(f.height), available)
 }
 
-// modalChromeHeight is what internal/modal spends on the box itself: border,
-// padding, and the margin it leaves around the modal on screen.
-const modalChromeHeight = 6
+// chromeHeight is what the box costs on this surface: border and padding, plus
+// the margin the modal keeps clear above and below itself unless it is filling.
+func (f *Finder) chromeHeight() int {
+	if f.fill {
+		return modal.ChromeHeight
+	}
+	return modal.ChromeHeight + 2*modal.DefaultMarginY
+}
 
 func (f *Finder) headerSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
@@ -195,7 +225,7 @@ func (f *Finder) renderHeader(width int) string {
 // compact reports whether the box is too short to afford the blank line the
 // title style normally leaves under itself.
 func (f *Finder) compact() bool {
-	return f.height-modalChromeHeight-titleHeight < 1
+	return f.height-f.chromeHeight()-titleHeight < 1
 }
 
 // titleHeight is the query row plus the blank line styles.ModalTitle leaves
@@ -301,9 +331,18 @@ func (f *Finder) statsSection() modal.Section {
 			position = fmt.Sprintf("%d/%d  ", f.cursor+1, len(f.matches))
 		}
 
-		stats := fmt.Sprintf("%d files", len(f.Cache.Files))
-		if f.Cache.Scanning {
+		stats := ""
+		switch {
+		case f.Cache == nil:
+		case f.Cache.Scanning:
 			stats = "scanning..."
+		case len(f.Cache.Files) > 0:
+			stats = fmt.Sprintf("%d files", len(f.Cache.Files))
+		}
+		if position == "" && stats == "" {
+			// The row is still drawn: its height is part of the box's, and a
+			// line that appears with the first result makes the box jump.
+			return modal.RenderedSection{Content: " "}
 		}
 
 		return modal.RenderedSection{Content: styles.Muted.Render(position + stats)}

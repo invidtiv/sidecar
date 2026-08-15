@@ -462,3 +462,70 @@ func TestGutterGrowsWithLineCount(t *testing.T) {
 		t.Fatalf("wide gutter row = %q", row)
 	}
 }
+
+func largeDoc(lines int) []string {
+	out := make([]string, lines)
+	for i := range out {
+		out[i] = strings.Repeat("source text ", 12)
+	}
+	return out
+}
+
+func loadedRawModel(t *testing.T, lines []string, width, height int) *Model {
+	t.Helper()
+	m := newTestModel(t)
+	m.SetSize(width, height)
+	m.result = filepreview.PreviewResult{Content: strings.Join(lines, "\n"), Lines: lines}
+	m.loading = false
+	m.rendered = false
+	m.invalidateRender()
+	return m
+}
+
+// layoutPasses counts how many times fn rebuilds the laid-out document.
+func (m *Model) layoutPasses(fn func()) int {
+	before := m.layoutBuilds
+	fn()
+	return m.layoutBuilds - before
+}
+
+// A document is laid out lazily and the result is reused, because View,
+// maxScroll and displayRowForLine all want it and clampScroll runs on every
+// scroll key. Without reuse a large file re-measures every line several times
+// per keystroke.
+func TestLayoutIsReusedUntilSomethingItDependsOnMoves(t *testing.T) {
+	m := loadedRawModel(t, largeDoc(5000), 80, 40)
+	m.View() // first pass builds it
+
+	if got := m.layoutPasses(func() { m.View(); m.Scroll(1); m.View() }); got != 0 {
+		t.Fatalf("scrolling and re-rendering rebuilt the layout %d times, want 0", got)
+	}
+	if got := m.layoutPasses(func() { m.SetSize(100, 40); m.View() }); got == 0 {
+		t.Fatal("a width change must rebuild the layout")
+	}
+	if got := m.layoutPasses(func() { m.ToggleWrap(); m.View() }); got == 0 {
+		t.Fatal("toggling wrap must rebuild the layout")
+	}
+	if got := m.layoutPasses(func() { m.ToggleRenderMode(); m.View() }); got == 0 {
+		t.Fatal("toggling render mode must rebuild the layout")
+	}
+}
+
+// Scrolling a large document must not walk it. This guards the regression
+// where every keystroke re-measured all of its lines.
+func BenchmarkScrollLargeDocument(b *testing.B) {
+	lines := largeDoc(20000)
+	m := New(nil)
+	m.SetSize(120, 40)
+	m.result = filepreview.PreviewResult{Content: "x", Lines: lines}
+	m.loading = false
+	m.rendered = false
+	m.invalidateRender()
+	m.View()
+
+	b.ResetTimer()
+	for range b.N {
+		m.Scroll(1)
+		m.View()
+	}
+}

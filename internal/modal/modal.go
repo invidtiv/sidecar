@@ -15,6 +15,8 @@ type Modal struct {
 	primaryAction   string
 	closeOnBackdrop bool
 	customFooter    string // Fixed footer rendered outside scroll viewport
+	marginX         int    // Cells of surface kept clear either side of the box
+	marginY         int    // Rows of surface kept clear above and below the box
 
 	// State (managed internally)
 	focusIdx     int      // Current focused element index in focusIDs
@@ -41,6 +43,8 @@ func New(title string, opts ...Option) *Modal {
 		width:           DefaultWidth,
 		showHints:       true,
 		closeOnBackdrop: true,
+		marginX:         DefaultMarginX,
+		marginY:         DefaultMarginY,
 	}
 	for _, opt := range opts {
 		opt(m)

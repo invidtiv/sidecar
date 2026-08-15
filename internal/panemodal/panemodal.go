@@ -22,13 +22,24 @@ type Box struct {
 	X, Y, W, H int
 }
 
-// dimMargin is the number of cells of the pane's own content that must remain
-// visible on every side for the modal to read as an overlay rather than as the
-// pane's content. Below it there is not enough surviving context for the dimmed
-// ring to mean anything — a one- or two-cell frame of greyed characters reads
-// as noise around the modal — so the modal takes the box instead and the pane
-// content behind it is dropped entirely.
-const dimMargin = 2
+// dimMarginX and dimMarginY are how much of the pane's own content must survive
+// on each side for the modal to read as an overlay rather than as the pane's
+// content. They differ because a horizontal sliver and a horizontal strip are
+// not the same thing to read: two rows of full-width pane text above and below
+// the box are legible context, while a one- or two-cell column of greyed
+// characters down each side is vertical confetti — the fragments are too narrow
+// to be words. Below these thresholds the modal takes the box instead and the
+// pane content behind it is dropped entirely.
+const (
+	dimMarginX = 8
+	dimMarginY = 2
+)
+
+// Draw renders a surface into a box of the given size and registers its hit
+// regions on h (which may be nil). fill asks the surface to *be* the box —
+// exactly width by height, no margin — rather than to size itself to its own
+// content; see RenderFunc for when it is set.
+type Draw func(width, height int, fill bool, h *mouse.Handler) string
 
 // Render draws m inside box on top of background (the pane's own content,
 // rendered at box.W x box.H) and registers m's hit regions at their true screen
@@ -36,8 +47,8 @@ const dimMargin = 2
 // blit at (box.X, box.Y).
 //
 // When the box is roomy the modal is centred in it with the pane's content
-// dimmed around it. When the box is tight (see dimMargin) the modal fills the
-// box and the pane's content is not shown at all.
+// dimmed around it. When the box is tight (see dimMarginX/dimMarginY) the modal
+// fills the box and the pane's content is not shown at all.
 //
 // handler may be nil, in which case no regions are registered. Note that
 // modal.Modal.Render clears the handler's hit map, so the modal's regions are
@@ -50,9 +61,10 @@ func Render(m *modal.Modal, box Box, background string, handler *mouse.Handler) 
 		}
 		return ui.OverlayModal(background, "", box.W, box.H)
 	}
-	return RenderFunc(box, background, handler, func(width, height int, h *mouse.Handler) string {
+	return RenderFunc(box, background, handler, func(width, height int, _ bool, h *mouse.Handler) string {
 		// The modal sizes itself to the surface it is given, so handing it the
-		// box dimensions is what keeps it inside the pane.
+		// box dimensions is what keeps it inside the pane. A plain modal.Modal
+		// has no fill mode; it is centred either way.
 		return m.Render(width, height, h)
 	})
 }
@@ -64,17 +76,20 @@ func Render(m *modal.Modal, box Box, background string, handler *mouse.Handler) 
 // so a surface that knows only its own coordinates still lands where it is
 // drawn.
 //
-// The compositing rules are Render's: centred with the pane content dimmed
-// around it when the box is roomy, filling the box when it is not, and always
-// exactly box.H lines of exactly box.W cells.
+// The compositing rules are Render's: a surface sized to its own content,
+// centred with the pane dimmed around it, when the box has room for a readable
+// margin; otherwise a second pass with fill set, which asks the surface to take
+// the whole box, and no pane content behind it. The two passes are why draw
+// must be cheap and free of side effects beyond its own layout — it may be
+// called twice for one frame. The result is always exactly box.H lines of
+// exactly box.W cells.
 //
 // handler may be nil, in which case draw is called with nil and registers
 // nothing. A surface that clears the handler (modal.Modal does) leaves the
 // pane's earlier regions gone, exactly as a full-screen modal does; a surface
 // that only adds to it leaves them in place, so hosts that care about ordering
 // hand RenderFunc a scratch handler and merge its regions themselves.
-func RenderFunc(box Box, background string, handler *mouse.Handler,
-	draw func(width, height int, h *mouse.Handler) string) string {
+func RenderFunc(box Box, background string, handler *mouse.Handler, draw Draw) string {
 	if box.W <= 0 || box.H <= 0 {
 		return ""
 	}
@@ -82,20 +97,23 @@ func RenderFunc(box Box, background string, handler *mouse.Handler,
 		return ui.OverlayModal(background, "", box.W, box.H)
 	}
 
-	content := draw(box.W, box.H, handler)
-	translateRegions(handler, box.X, box.Y)
-
+	content := draw(box.W, box.H, false, handler)
 	if !roomy(content, box) {
+		// The pane cannot show enough of itself around the modal to be worth
+		// dimming, so the modal owns the box.
+		content = draw(box.W, box.H, true, handler)
 		background = ""
 	}
+	translateRegions(handler, box.X, box.Y)
+
 	return ui.OverlayModal(background, content, box.W, box.H)
 }
 
 // roomy reports whether the box has room for a dimmed ring of pane content
-// around the rendered modal.
+// around the rendered modal that is wide enough to read as context.
 func roomy(content string, box Box) bool {
-	return lipgloss.Width(content)+2*dimMargin <= box.W &&
-		lipgloss.Height(content)+2*dimMargin <= box.H
+	return lipgloss.Width(content)+2*dimMarginX <= box.W &&
+		lipgloss.Height(content)+2*dimMarginY <= box.H
 }
 
 // translateRegions shifts every region currently in the handler's hit map by

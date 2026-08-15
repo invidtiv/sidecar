@@ -66,9 +66,11 @@ type Search struct {
 	epoch uint64
 
 	width, height int
+	fill          bool
 
 	modal      *modal.Modal
 	modalWidth int
+	modalFill  bool
 }
 
 // New creates a search rooted at root. epoch is stamped on the commands it
@@ -87,6 +89,20 @@ func (s *Search) SetSize(width, height int) {
 	}
 	s.width, s.height = width, height
 	// The modal caches its layout by width; a resize invalidates it.
+	s.clearModal()
+}
+
+// SetFill switches the search between the two placements its hosts need. Off
+// (the default) it draws a box sized to its own content, which a host centres on
+// a screen or in a roomy pane with the surface behind it dimmed. On, it draws a
+// box that is exactly the surface it was given, for a pane with no room to show
+// anything useful behind the modal. filefind.Finder.SetFill is the same switch,
+// because the two are one component in two modes.
+func (s *Search) SetFill(fill bool) {
+	if s.fill == fill {
+		return
+	}
+	s.fill = fill
 	s.clearModal()
 }
 

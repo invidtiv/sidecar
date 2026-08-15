@@ -909,8 +909,10 @@ restores its own tabs.
 A pane can search for its own next file. `ctrl+p` opens the fuzzy file
 finder and `f` opens a project-wide ripgrep search, both rooted at the
 pane's own workspace or shell directory and drawn as a modal inside the
-pane: centred with the document dimmed around it when there is room,
-filling the pane when there is not. While one is open it owns every key
+pane, below its header row: sized to its own content and centred with the
+document dimmed around it when the pane is wide enough to show a readable
+margin of itself, and taking the whole pane when it is not. The header row
+keeps saying which mode the pane is in at every size. While one is open it owns every key
 in the pane; `esc` closes it, `enter` loads the hit in the active tab,
 and `shift+enter` opens it in a new tab. `F` in the list opens a new file
 pane straight into the finder.

@@ -2,6 +2,7 @@ package filefind
 
 import (
 	"strings"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -71,9 +72,25 @@ type Finder struct {
 	cursor  int
 
 	width, height int
+	fill          bool
 
 	modal      *modal.Modal
 	modalWidth int
+	modalFill  bool
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // NewFinder creates a finder over cache, rooted at root. A nil cache gives the
@@ -297,61 +314,78 @@ func RenderMatch(match Match, maxWidth int) string {
 	return HighlightMatch(path, ranges)
 }
 
-// elideMatch fits a match's path into maxWidth cells. A path that fits keeps
-// its match ranges; one that does not is elided in the middle, which drops the
-// ranges (they no longer describe the text) but keeps the filename — the part
-// that identifies the row — visible even in a pane a few dozen columns wide.
+// elideMatch fits a match's path into maxWidth cells, keeping the parts that
+// tell one row from another (see ui.ElidePath) and carrying the match ranges
+// across onto whatever text survived, so a narrow row still shows why it
+// matched.
 func elideMatch(match Match, maxWidth int) (string, []MatchRange) {
 	if maxWidth < 1 {
 		return "", nil
 	}
+	ranges := significantRanges(match.Path, match.MatchRanges)
 	if ansi.StringWidth(match.Path) <= maxWidth {
-		return match.Path, match.MatchRanges
+		return match.Path, ranges
 	}
-	return elidePath(match.Path, maxWidth), nil
+
+	elided, spans := ui.ElidePath(match.Path, maxWidth)
+	return elided, mapRanges(ranges, spans)
 }
 
-// elidePath shortens a path to maxWidth cells by eliding the middle of its
-// directories, so both where the file lives and what it is called survive:
-//
-//	a/very/deeply/nested/path/file.go -> a/ver…/file.go
-//
-// A final segment that cannot fit on its own is truncated from the front
-// instead, which at least keeps the end of the filename.
-func elidePath(path string, maxWidth int) string {
-	if maxWidth < 1 {
-		return ""
+// mapRanges translates match ranges onto elided text, dropping the ones whose
+// characters did not survive.
+func mapRanges(ranges []MatchRange, spans []ui.Span) []MatchRange {
+	if len(ranges) == 0 || len(spans) == 0 {
+		return nil
 	}
-	if ansi.StringWidth(path) <= maxWidth {
-		return path
-	}
-
-	slash := strings.LastIndex(path, "/")
-	if slash < 0 {
-		return ui.TruncateStart(path, maxWidth)
-	}
-
-	dir, base := path[:slash], path[slash+1:]
-
-	// "…/" plus the filename has to leave at least one cell of directory, or
-	// the elision says nothing that TruncateStart would not say better.
-	room := maxWidth - ansi.StringWidth(base) - 2
-	if room < 1 {
-		return ui.TruncateStart(path, maxWidth)
-	}
-
-	var head strings.Builder
-	used := 0
-	for _, r := range dir {
-		w := ansi.StringWidth(string(r))
-		if used+w > room {
-			break
+	out := make([]MatchRange, 0, len(ranges))
+	for _, r := range ranges {
+		if start, end, ok := ui.MapSpans(spans, r.Start, r.End); ok {
+			out = append(out, MatchRange{Start: start, End: end})
 		}
-		head.WriteRune(r)
-		used += w
 	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
 
-	return head.String() + "\u2026/" + base
+// significantRanges drops the highlights a reader would not recognise as part
+// of the match. Subsequence matching lights up any character in the right
+// order, so a query like "wd" paints the "w" in "website" and the "d" in "docs"
+// as though they were the match. A run of two or more characters reads as
+// intentional, and so does a single character that starts a path segment or a
+// word — which is exactly what the scorer already rewards. Everything else is
+// noise scattered across the row.
+func significantRanges(path string, ranges []MatchRange) []MatchRange {
+	if len(ranges) == 0 {
+		return nil
+	}
+	out := make([]MatchRange, 0, len(ranges))
+	for _, r := range ranges {
+		if r.Start < 0 || r.End > len(path) || r.End <= r.Start {
+			continue
+		}
+		if r.End-r.Start >= 2 || atWordStart(path, r.Start) {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// atWordStart reports whether the byte at idx begins a path segment or a word
+// inside one, including a camelCase hump.
+func atWordStart(path string, idx int) bool {
+	if idx <= 0 {
+		return true
+	}
+	prev := rune(path[idx-1])
+	if isWordSeparator(prev) {
+		return true
+	}
+	return unicode.IsUpper(rune(path[idx])) && unicode.IsLower(prev)
 }
 
 // HighlightMatch applies the fuzzy-match highlight style to the matched
