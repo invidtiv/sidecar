@@ -24,6 +24,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -160,6 +161,8 @@ type Model struct {
 	viewFlyoutWidth   int
 	viewFlyoutSortIdx int
 	viewFlyoutMouse   *mouse.Handler
+
+	pendingViews map[string]*pendingView
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace
@@ -429,6 +432,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil
+	case uirequest.RequestMsg:
+		return m.handleUIRequest(msg.Request)
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)

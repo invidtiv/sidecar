@@ -377,6 +377,8 @@ func defaultAgentIdxForAdapter(adapterID string) int {
 		agentType = workspace.AgentOpenCode
 	case "pi-agent", "pi":
 		agentType = workspace.AgentPi
+	case "grok":
+		agentType = workspace.AgentGrok
 	default:
 		return 0 // Default to first (Claude)
 	}

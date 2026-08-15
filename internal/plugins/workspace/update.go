@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // update handles messages. The public Update wrapper in terminal_control.go
@@ -1279,6 +1280,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			cmds = append(cmds, listenForShellManifestChanges(msg.scope, p.shellWatcherMessages))
 		}
 		return p, tea.Batch(cmds...)
+
+	case uirequest.RequestMsg:
+		if cmd := p.handleUIRequest(msg.Request); cmd != nil {
+			return p, cmd
+		}
+		return p, nil
 
 	case shellManifestSyncMsg:
 		if !p.shellScopeCurrent(msg.Scope) {

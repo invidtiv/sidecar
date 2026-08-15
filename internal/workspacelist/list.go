@@ -127,6 +127,7 @@ func (s Sort) Next() Sort {
 type Item struct {
 	ID           string
 	Name         string
+	NameMeta     []RowField
 	Project      string
 	ProjectKey   string
 	ProjectOrder int

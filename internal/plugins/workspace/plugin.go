@@ -534,6 +534,9 @@ type Plugin struct {
 	shellStartupEpoch    uint64
 	shellStartupVersion  uint64
 	shellStartupLoading  bool
+
+	// Pending agent UI requests
+	pendingViews map[string]*pendingView
 }
 
 // New creates a new worktree manager plugin.
@@ -2021,9 +2024,14 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
-	// If shell is selected, poll shell output immediately
-	if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
-		cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
+	// If shell is selected, poll shell output immediately and consume pending views
+	if shell := p.getSelectedShell(); shell != nil {
+		if shell.Agent != nil {
+			cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
+		}
+		if cmd := p.consumePendingView(shell.TmuxName); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Always load diff

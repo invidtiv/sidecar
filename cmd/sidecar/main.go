@@ -21,6 +21,7 @@ import (
 	_ "github.com/marcus/sidecar/internal/adapter/codex"
 	_ "github.com/marcus/sidecar/internal/adapter/copilot"
 	_ "github.com/marcus/sidecar/internal/adapter/cursor"
+	_ "github.com/marcus/sidecar/internal/adapter/grok"
 	_ "github.com/marcus/sidecar/internal/adapter/kiro"
 	_ "github.com/marcus/sidecar/internal/adapter/omp"
 	_ "github.com/marcus/sidecar/internal/adapter/opencode"
@@ -332,8 +333,15 @@ func effectiveVersion(v string) string {
 func init() {
 	// Customize usage output
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: sidecar [options]\n\n")
-		fmt.Fprintf(os.Stderr, "A TUI dashboard for AI coding agents.\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: sidecar [options] [command]\n\n")
+		fmt.Fprintf(os.Stderr, "A TUI dashboard and command-line companion for AI coding agents.\n\n")
+		// Listed from the command registry, so this stays true when a command
+		// is added there rather than becoming a second list to remember.
+		fmt.Fprintf(os.Stderr, "Commands:\n")
+		for _, cmd := range cli.RootCommand().Sub {
+			fmt.Fprintf(os.Stderr, "  %-14s %s\n", cmd.Name, cmd.Summary)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}

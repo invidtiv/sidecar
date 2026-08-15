@@ -180,6 +180,9 @@ func renderAdapterIcon(session adapter.Session) string {
 	case "amp":
 		// Sourcegraph orange
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5543")).Render(icon)
+	case "grok":
+		// Grok silver / slate
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("#E2E8F0")).Render(icon)
 	default:
 		return styles.Muted.Render(icon)
 	}
@@ -197,6 +200,8 @@ func adapterAbbrev(session adapter.Session) string {
 		return "AG"
 	case "amp":
 		return "AM"
+	case "grok":
+		return "GK"
 	default:
 		name := session.AdapterName
 		if name == "" {
@@ -233,6 +238,8 @@ func adapterShortName(session *adapter.Session) string {
 		return "warp"
 	case "amp":
 		return "amp"
+	case "grok":
+		return "grok"
 	default:
 		if session.AdapterName != "" {
 			return strings.ToLower(session.AdapterName)
@@ -292,10 +299,13 @@ func adapterFilterOptions(adapters map[string]adapter.Adapter) []adapterFilterOp
 	if a, ok := adapters["antigravity"]; ok {
 		addOption("antigravity", a.Name(), "g")
 	}
+	if a, ok := adapters["grok"]; ok {
+		addOption("grok", a.Name(), "k")
+	}
 
 	var extra []adapterFilterOption
 	for id, a := range adapters {
-		if id == "claude-code" || id == "codex" || id == "opencode" || id == "antigravity" {
+		if id == "claude-code" || id == "codex" || id == "opencode" || id == "antigravity" || id == "grok" {
 			continue
 		}
 		name := a.Name()
@@ -344,6 +354,8 @@ func resumeCommand(session *adapter.Session) string {
 		return fmt.Sprintf("amp threads continue %s", session.ID)
 	case "pi-agent", "pi":
 		return fmt.Sprintf("pi --session %s", session.ID)
+	case "grok":
+		return fmt.Sprintf("grok --resume %s", session.ID)
 	default:
 		return ""
 	}

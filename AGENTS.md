@@ -26,19 +26,13 @@ requested work is complete, verified, and reviewed. Stage only files that belong
 to the task, preserve unrelated dirty or staged changes, and do not push unless
 the user asks.
 
-## Keep the current shell name useful
+## Working inside a Sidecar shell
 
-When working inside a Sidecar project shell, keep its display name aligned with
-your current task. `$SIDECAR_SHELL_NAME` is a cue (it may be empty on older
-shells, or lag after a rename in this process); run `sidecar shell name` for the
-authoritative name from Sidecar's manifest. `Shell 3` is the unset default; a
-previous task's name is equally stale. At the start of work and whenever context
-changes materially, if the name does not describe what you are doing now, run
-`sidecar shell rename "short context"`. Update at meaningful context boundaries,
-not for every sub-step or status change. Prefer the outcome
-(`shell rename implementation`) over the model or transient action
-(`Codex running tests`). These commands act only on the current Sidecar shell;
-do not edit `shells.json` or rename tmux sessions directly.
+Run `sidecar --agents` for what you can do from here, and use it. The two that
+earn their keep every session: keep the shell's name describing your current
+task, and put a file or issue in front of the user rather than describing its
+path. Both act on the shell you are in — never edit `shells.json` or rename
+tmux sessions directly.
 
 ## Build & Versioning
 
