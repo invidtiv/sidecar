@@ -33,6 +33,111 @@ func newCreateRepo(t *testing.T) createRepo {
 	return createRepo{root: root, main: main, linked: linked}
 }
 
+func TestResolveCreateOperationSplitsDisplayNameFromSlug(t *testing.T) {
+	r := newCreateRepo(t)
+	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "Auth Refresh", "main", false, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DisplayName != "Auth Refresh" {
+		t.Fatalf("DisplayName = %q, want Auth Refresh", plan.DisplayName)
+	}
+	if plan.Branch != "auth-refresh" {
+		t.Fatalf("Branch = %q, want auth-refresh", plan.Branch)
+	}
+	rootReal, _ := filepath.EvalSymlinks(r.root)
+	if want := filepath.Join(rootReal, "auth-refresh"); plan.Path != want {
+		t.Fatalf("Path = %q, want %q", plan.Path, want)
+	}
+
+	plan, err = resolveCreateOperation(context.Background(), r.main, r.main, "feature", "main", false, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DisplayName != "feature" || plan.Branch != "feature" {
+		t.Fatalf("legal name plan = %+v", plan)
+	}
+	if want := filepath.Join(rootReal, "feature"); plan.Path != want {
+		t.Fatalf("legal name path = %q, want %q", plan.Path, want)
+	}
+}
+
+func TestResolveCreateDirPrefixAppliesToSlugNotDisplayName(t *testing.T) {
+	r := newCreateRepo(t)
+	mustGit(t, r.main, "remote", "add", "origin", "git@github.com:acme/widgets.git")
+	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "Auth Refresh", "main", true, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.DisplayName != "Auth Refresh" {
+		t.Fatalf("DisplayName = %q, want Auth Refresh", plan.DisplayName)
+	}
+	if plan.Branch != "auth-refresh" {
+		t.Fatalf("Branch = %q, want auth-refresh", plan.Branch)
+	}
+	rootReal, _ := filepath.EvalSymlinks(r.root)
+	if want := filepath.Join(rootReal, "widgets-auth-refresh"); plan.Path != want {
+		t.Fatalf("Path = %q, want %q", plan.Path, want)
+	}
+}
+
+func TestCreateSetupPersistsDisplayNameAcrossRefresh(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	r := newCreateRepo(t)
+	plan, err := resolveCreateOperation(context.Background(), r.main, r.main, "Auth Refresh", "main", false, config.WorktreeSetupConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wt, err := addCreatedWorktree(context.Background(), "repo", plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wt.Name != "Auth Refresh" {
+		t.Fatalf("created name = %q, want Auth Refresh", wt.Name)
+	}
+	result := runCreateSetup(context.Background(), plan, wt)
+	if warnings := result.Warnings(); len(warnings) != 0 {
+		t.Fatalf("setup warnings = %+v", warnings)
+	}
+	if got := loadDisplayName(plan.MainWorktree, wt.Path); got != "Auth Refresh" {
+		t.Fatalf("persisted display name = %q", got)
+	}
+	snapshot, err := BuildRepoSnapshot(context.Background(), r.main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, tree := range snapshotToWorktrees(snapshot) {
+		if tree.Path != wt.Path {
+			continue
+		}
+		found = true
+		if tree.Name != "Auth Refresh" {
+			t.Fatalf("refresh name = %q, want Auth Refresh", tree.Name)
+		}
+		if tree.Branch != "auth-refresh" {
+			t.Fatalf("refresh branch = %q, want auth-refresh", tree.Branch)
+		}
+	}
+	if !found {
+		t.Fatal("created worktree missing from refresh snapshot")
+	}
+}
+
+func TestSnapshotToWorktreesKeepsPathNameWithoutDisplayFile(t *testing.T) {
+	snapshot := &RepoSnapshot{
+		CanonicalRoot: "/repo",
+		Worktrees: []WorktreeSnapshot{
+			{Path: "/repo", IsMain: true},
+			{Path: "/auth-refresh", Branch: "auth-refresh"},
+		},
+	}
+	trees := snapshotToWorktrees(snapshot)
+	if len(trees) != 2 || trees[1].Name != "auth-refresh" {
+		t.Fatalf("path-derived name = %#v", trees)
+	}
+}
+
 func TestResolveAndCreateFromEveryRepositoryEntryPoint(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

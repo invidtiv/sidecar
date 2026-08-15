@@ -386,6 +386,7 @@ func (a *Agent) CheckRunaway() bool {
 func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	key, name, path, taskID := wt.IdentityKey(), wt.Name, wt.Path, wt.TaskID
+	sessionName := worktreeTmuxSession(wt)
 	mainRoot := p.ctx.ProjectRoot
 	if mainRoot == "" {
 		mainRoot = p.ctx.WorkDir
@@ -393,7 +394,6 @@ func (p *Plugin) StartAgent(wt *Worktree, agentType AgentType) tea.Cmd {
 	envOverrides := BuildEnvOverrides(mainRoot)
 	agentCmd := p.getAgentCommandWithContext(agentType, wt)
 	return func() tea.Msg {
-		sessionName := tmuxSessionPrefix + sanitizeName(name)
 
 		// Check if session already exists
 		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
@@ -572,7 +572,7 @@ func (p *Plugin) resolveAgentBaseCommand(worktreePath string, agentType AgentTyp
 
 // buildAgentCommand builds the agent command with optional skip permissions and task context.
 // If there's task context, it writes a launcher script to avoid shell escaping issues.
-func (p *Plugin) buildAgentCommand(agentType AgentType, wt *Worktree, skipPerms bool, prompt *Prompt) string {
+func (p *Plugin) buildAgentCommand(agentType AgentType, wt *Worktree, skipPerms bool) string {
 	worktreePath := ""
 	if wt != nil {
 		worktreePath = wt.Path
@@ -586,16 +586,11 @@ func (p *Plugin) buildAgentCommand(agentType AgentType, wt *Worktree, skipPerms 
 		}
 	}
 
-	// Determine context to pass to agent
+	// Task-linked launch injects task context when no other prompt is supplied.
 	var ctx string
-	if prompt != nil {
-		// Use prompt template with ticket expansion
-		ctx = ExpandPromptTemplate(prompt.Body, wt.TaskID)
-	} else if wt.TaskID != "" {
-		// No prompt selected but task selected: try to fetch full context
+	if wt != nil && wt.TaskID != "" {
 		ctx = p.getTaskContext(wt.TaskID)
 		if ctx == "" && wt.TaskTitle != "" {
-			// Fallback: use task title from modal if td show failed
 			ctx = fmt.Sprintf("Task: %s", wt.TaskTitle)
 		}
 	}
@@ -692,22 +687,22 @@ rm -f %q
 
 // getAgentCommandWithContext returns the agent command with optional task context (legacy, no skip perms).
 func (p *Plugin) getAgentCommandWithContext(agentType AgentType, wt *Worktree) string {
-	return p.buildAgentCommand(agentType, wt, false, nil)
+	return p.buildAgentCommand(agentType, wt, false)
 }
 
 // StartAgentWithOptions creates a tmux session and starts an agent with options.
 // If a session already exists, it reconnects to it instead of failing.
-func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPerms bool, prompt *Prompt) tea.Cmd {
+func (p *Plugin) StartAgentWithOptions(wt *Worktree, agentType AgentType, skipPerms bool) tea.Cmd {
 	epoch := p.ctx.Epoch // Capture epoch for stale detection
 	key, name, path, taskID := wt.IdentityKey(), wt.Name, wt.Path, wt.TaskID
+	sessionName := worktreeTmuxSession(wt)
 	mainRoot := p.ctx.ProjectRoot
 	if mainRoot == "" {
 		mainRoot = p.ctx.WorkDir
 	}
 	envOverrides := BuildEnvOverrides(mainRoot)
-	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms, prompt)
+	agentCmd := p.buildAgentCommand(agentType, wt, skipPerms)
 	return func() tea.Msg {
-		sessionName := tmuxSessionPrefix + sanitizeName(name)
 
 		// Check if session already exists
 		checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
@@ -783,7 +778,7 @@ func (p *Plugin) AttachToWorktreeDir(wt *Worktree) tea.Cmd {
 	if !fullTmuxAttachEnabled() {
 		return nil
 	}
-	sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+	sessionName := worktreeTmuxSession(wt)
 
 	// Check if session already exists
 	checkCmd := exec.Command("tmux", "has-session", "-t", sessionName)
@@ -847,6 +842,22 @@ func sanitizeName(name string) string {
 	name = strings.ReplaceAll(name, ":", "-")
 	name = strings.ReplaceAll(name, "/", "-")
 	return name
+}
+
+// worktreeSessionSuffix is the stable tmux suffix for a worktree. Display
+// names are user-editable; the git directory slug is not.
+func worktreeSessionSuffix(wt *Worktree) string {
+	if wt == nil {
+		return ""
+	}
+	if wt.Path != "" {
+		return sanitizeName(filepath.Base(wt.Path))
+	}
+	return sanitizeName(wt.Name)
+}
+
+func worktreeTmuxSession(wt *Worktree) string {
+	return tmuxSessionPrefix + worktreeSessionSuffix(wt)
 }
 
 // getPaneID retrieves the tmux pane ID for a session.
@@ -1821,7 +1832,7 @@ func (p *Plugin) detectOrphanedWorktrees() {
 			continue
 		}
 		// Check if tmux session exists
-		sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+		sessionName := worktreeTmuxSession(wt)
 		wt.IsOrphaned = !sessionExists(sessionName)
 	}
 }
@@ -1835,7 +1846,7 @@ func (p *Plugin) reconnectAgents() tea.Cmd {
 	candidates := make(map[string]candidate, len(p.worktrees))
 	ambiguous := make(map[string]bool)
 	for _, wt := range p.worktrees {
-		name := sanitizeName(wt.Name)
+		name := worktreeSessionSuffix(wt)
 		if ambiguous[name] {
 			continue
 		}
@@ -1872,7 +1883,7 @@ func (p *Plugin) reconnectAgents() tea.Cmd {
 			sanitizedName := strings.TrimPrefix(session, tmuxSessionPrefix)
 
 			// Check if we have a matching worktree
-			// Use sanitized name lookup since session names are created with sanitizeName()
+			// Session suffix is the path slug, not the display name.
 			candidate, ok := candidates[sanitizedName]
 			if !ok {
 				// Session exists but no worktree - orphaned, skip
@@ -1933,7 +1944,6 @@ func (p *Plugin) CleanupOrphanedSessions() error {
 		}
 
 		// Check if corresponding worktree still exists
-		// Use sanitized name lookup since session names are created with sanitizeName()
 		sanitizedName := strings.TrimPrefix(session, tmuxSessionPrefix)
 		if p.findWorktreeBySanitizedName(sanitizedName) == nil {
 			_ = exec.Command("tmux", "kill-session", "-t", session).Run()
@@ -1998,13 +2008,12 @@ func (p *Plugin) findWorktree(key string) *Worktree {
 	return match
 }
 
-// findWorktreeBySanitizedName finds a worktree by its sanitized name.
-// This is used when matching tmux session names back to worktrees, since
-// session names are created with sanitizeName(wt.Name) which replaces
-// '.', ':', and '/' with '-'.
+// findWorktreeBySanitizedName finds a worktree by its tmux session suffix.
+// Session identity is the path slug (or Name when Path is empty), not the
+// user-editable display name.
 func (p *Plugin) findWorktreeBySanitizedName(sanitizedName string) *Worktree {
 	for _, wt := range p.worktrees {
-		if sanitizeName(wt.Name) == sanitizedName {
+		if worktreeSessionSuffix(wt) == sanitizedName {
 			return wt
 		}
 	}

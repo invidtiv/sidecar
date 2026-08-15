@@ -472,8 +472,13 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "p":
 		return true, m.toggleWorkspacePin()
 	case "R":
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
-			return true, m.OpenRenameShell()
+		if workspace, ok := m.SelectedWorkspace(); ok {
+			switch workspace.Kind {
+			case workspaceinventory.KindShell:
+				return true, m.OpenRenameShell()
+			case workspaceinventory.KindWorktree:
+				return true, m.OpenRenameWorktree()
+			}
 		}
 		return false, nil
 	case "O":
@@ -947,5 +952,6 @@ func (m *Model) WorkspacesSummary() string {
 // internal/keymap under each WorkspaceFocusContext. Help, the palette, and
 // the host footer all read that pair, so a focused document or issue leaf
 // cannot advertise the list's keys. The list itself stays a reader: no
-// create, delete, or attach. rename-shell is a display-name write, not
-// create/destroy. Typing into a live pane is Enter / click / E.
+// create, delete, or attach. rename-shell and rename-worktree are
+// display-name writes, not create/destroy. Typing into a live pane is
+// Enter / click / E.

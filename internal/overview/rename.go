@@ -2,6 +2,7 @@ package overview
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -31,8 +32,13 @@ type renameShellDoneMsg struct {
 	Err     error
 }
 
-// RenameShellOpen reports that the Rename Shell overlay owns the keyboard.
+// RenameShellOpen reports that the rename overlay owns the keyboard.
 func (m *Model) RenameShellOpen() bool { return m.renameOpen }
+
+// RenameWorktreeOpen reports that the worktree display-name modal is open.
+func (m *Model) RenameWorktreeOpen() bool {
+	return m.renameOpen && m.renameWorkspace.Kind == workspaceinventory.KindWorktree
+}
 
 // SelectedShell reports that the list cursor is on a shell row.
 func (m *Model) SelectedShell() bool {
@@ -40,14 +46,24 @@ func (m *Model) SelectedShell() bool {
 	return ok && workspace.Kind == workspaceinventory.KindShell
 }
 
-// OpenRenameShell opens the same Rename Shell modal the project plugin uses,
-// prefilled with the selected shell's display name. Worktrees are ignored.
+// OpenRenameShell opens the Rename Shell modal, prefilled with the selected
+// shell's display name.
 func (m *Model) OpenRenameShell() tea.Cmd {
+	return m.openRename(workspaceinventory.KindShell)
+}
+
+// OpenRenameWorktree opens the display-name modal for the selected worktree.
+// The git branch and directory are not renamed.
+func (m *Model) OpenRenameWorktree() tea.Cmd {
+	return m.openRename(workspaceinventory.KindWorktree)
+}
+
+func (m *Model) openRename(kind workspaceinventory.Kind) tea.Cmd {
 	if m.PreviewInteractive() {
 		return nil
 	}
 	workspace, ok := m.SelectedWorkspace()
-	if !ok || workspace.Kind != workspaceinventory.KindShell {
+	if !ok || workspace.Kind != kind {
 		return nil
 	}
 	m.closeViewFlyout()
@@ -127,7 +143,11 @@ func (m *Model) ensureRenameShellModal() {
 		return
 	}
 	m.renameModalWidth = modalW
-	m.renameModal = modal.New("Rename Shell",
+	title := "Rename Shell"
+	if m.renameWorkspace.Kind == workspaceinventory.KindWorktree {
+		title = "Rename Worktree"
+	}
+	m.renameModal = modal.New(title,
 		modal.WithWidth(modalW),
 		modal.WithPrimaryAction(renameShellActionID),
 		modal.WithHints(false),
@@ -184,7 +204,7 @@ func (m *Model) handleRenameShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.closeRenameShell()
 		return true, nil
 	case renameShellActionID, renameShellRenameID:
-		return true, m.executeRenameShell()
+		return true, m.executeRename()
 	}
 	return true, cmd
 }
@@ -200,9 +220,47 @@ func (m *Model) handleRenameShellMouse(msg tea.MouseMsg) tea.Cmd {
 		m.closeRenameShell()
 		return nil
 	case renameShellActionID, renameShellRenameID:
-		return m.executeRenameShell()
+		return m.executeRename()
 	}
 	return nil
+}
+
+func (m *Model) executeRename() tea.Cmd {
+	if m.renameWorkspace.Kind == workspaceinventory.KindWorktree {
+		return m.executeRenameWorktree()
+	}
+	return m.executeRenameShell()
+}
+
+func (m *Model) executeRenameWorktree() tea.Cmd {
+	newName, err := shellstate.NormalizeName(m.renameInput.Value())
+	if err != nil {
+		m.renameError = err.Error()
+		return nil
+	}
+	workspace := m.renameWorkspace
+	root := workspace.ProjectRoot
+	if root == "" {
+		m.renameError = "owning project worktree state is unavailable"
+		return nil
+	}
+	id := workspace.ID
+	path := workspace.Path
+	return func() tea.Msg {
+		err := persistWorktreeDisplayName(root, path, newName)
+		return renameShellDoneMsg{ID: id, NewName: newName, Err: err}
+	}
+}
+
+func persistWorktreeDisplayName(projectRoot, worktreePath, name string) error {
+	if projectRoot == "" || worktreePath == "" {
+		return fmt.Errorf("owning project worktree state is unavailable")
+	}
+	dir, err := projectdir.WorktreeDir(projectRoot, worktreePath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "display-name"), []byte(name+"\n"), 0644)
 }
 
 func (m *Model) executeRenameShell() tea.Cmd {

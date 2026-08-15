@@ -2,6 +2,19 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Create New Worktree is a stable form: type a natural name, press Enter. Base
+  branch, task, and agent are one-line Combo fields that overlay instead of
+  stretching the modal. Git uses a slug of the display name.
+
+### Removed
+
+- Prompt templates and the prompt picker. Task-linked agent launch still injects
+  task context automatically.
+
 ## [v0.99.1] - 2026-08-14
 
 ### Features

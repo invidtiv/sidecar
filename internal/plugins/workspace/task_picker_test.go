@@ -104,15 +104,14 @@ func TestTaskPickerInputAndListNavigationParity(t *testing.T) {
 	create.viewMode = ViewModeCreate
 	create.createNameInput = textinput.New()
 	create.createBaseBranchInput = textinput.New()
+	create.createAgentInput = textinput.New()
 	create.taskSearchInput = textinput.New()
 	create.taskSearchInput.Prompt = ""
-	create.taskSearchInput.Focus()
-	create.createFocus = 3
 	create.taskSearchAll = tasks
 	create.taskSearchFiltered = tasks
 	create.ensureCreateModal()
 	create.createModal.Render(80, 42, create.mouseHandler)
-	create.syncCreateModalFocus()
+	create.createModal.SetFocus(createTaskFieldID)
 	create.createModal.Render(80, 42, create.mouseHandler)
 	for _, r := range []rune{'j', 'k'} {
 		create.handleCreateKeys(tea.KeyPressMsg{Code: r, Text: string(r)})
@@ -121,16 +120,19 @@ func TestTaskPickerInputAndListNavigationParity(t *testing.T) {
 		t.Fatalf("create input swallowed printable j/k: %q", got)
 	}
 	create.taskSearchInput.SetValue("")
-	create.taskSearchFiltered = tasks
-	create.taskSearchIdx = 0
+	create.createTaskIdx = 0
+	create.createModal.SetFocus(createTaskFieldID)
+	create.createModal.Render(80, 42, create.mouseHandler)
+	if got := create.createModal.FocusedID(); got != createTaskFieldID {
+		t.Fatalf("task combo focus = %q", got)
+	}
 	create.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeyDown})
-	afterDown := create.taskSearchIdx
+	afterDown := create.createTaskIdx
 	create.handleCreateKeys(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	afterNext := create.taskSearchIdx
+	afterNext := create.createTaskIdx
 	create.handleCreateKeys(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if create.taskSearchIdx != 1 {
-		t.Fatalf("create arrow/ctrl navigation indexes = down:%d next:%d prev:%d, want 1,2,1 (focus=%d down=%q next=%q prev=%q)", afterDown, afterNext, create.taskSearchIdx, create.createFocus,
-			tea.KeyPressMsg{Code: tea.KeyDown}.String(), tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}.String(), tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}.String())
+	if create.createTaskIdx != 1 {
+		t.Fatalf("create arrow/ctrl navigation indexes = down:%d next:%d prev:%d, want 1,2,1", afterDown, afterNext, create.createTaskIdx)
 	}
 }
 

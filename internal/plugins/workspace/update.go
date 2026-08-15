@@ -3,8 +3,6 @@ package workspace
 import (
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,6 +16,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -377,6 +376,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.createError = msg.Err.Error()
 			// Stay in ViewModeCreate - don't close modal or clear state
 		} else {
+			if msg.AgentType != "" {
+				_ = state.SetLastCreateAgent(string(msg.AgentType))
+			}
 			p.viewMode = ViewModeList
 			p.worktrees = append(p.worktrees, msg.Worktree)
 
@@ -393,7 +395,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 			// Start agent or attach based on selection
 			if msg.AgentType != AgentNone && msg.AgentType != "" {
-				cmds = append(cmds, p.StartAgentWithOptions(msg.Worktree, msg.AgentType, msg.SkipPerms, msg.Prompt))
+				cmds = append(cmds, p.StartAgentWithOptions(msg.Worktree, msg.AgentType, msg.SkipPerms))
 			} else {
 				// "None" selected - attach to worktree directory
 				cmds = append(cmds, p.AttachToWorktreeDir(msg.Worktree))
@@ -503,82 +505,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.createSetupResult.Outcomes = append(p.createSetupResult.Outcomes, CreateSetupOutcome{Kind: CreateOutcomeIdentity, Action: "delete newly created worktree", Required: true, Err: msg.Result.Err})
 			}
 			return p, nil
-		}
-
-	case PromptSelectedMsg:
-		// Prompt selected from picker
-		returnMode := p.promptPickerReturnMode
-		p.promptPicker = nil
-		p.clearPromptPickerModal()
-
-		if returnMode == ViewModeAgentConfig {
-			p.viewMode = ViewModeAgentConfig
-			if msg.Prompt != nil {
-				for i, pr := range p.agentConfigPrompts {
-					if pr.Name == msg.Prompt.Name {
-						p.agentConfigPromptIdx = i
-						break
-					}
-				}
-			} else {
-				p.agentConfigPromptIdx = -1
-			}
-		} else {
-			p.viewMode = ViewModeCreate
-			p.createModal = nil
-			if msg.Prompt != nil {
-				// Find index of selected prompt
-				for i, pr := range p.createPrompts {
-					if pr.Name == msg.Prompt.Name {
-						p.createPromptIdx = i
-						break
-					}
-				}
-				// If ticketMode is none, skip task field and jump to agent
-				if msg.Prompt.TicketMode == TicketNone {
-					p.createFocus = 4 // agent field
-				} else {
-					p.createFocus = 3 // task field
-				}
-			} else {
-				p.createPromptIdx = -1
-				p.createFocus = 3 // task field
-			}
-		}
-
-	case PromptCancelledMsg:
-		// Picker cancelled, return to originating modal
-		returnMode := p.promptPickerReturnMode
-		p.promptPicker = nil
-		p.clearPromptPickerModal()
-		if returnMode == ViewModeAgentConfig {
-			p.viewMode = ViewModeAgentConfig
-		} else {
-			p.viewMode = ViewModeCreate
-		}
-
-	case PromptInstallDefaultsMsg:
-		// User pressed 'd' to install default prompts
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Cannot determine home directory", Duration: 3 * time.Second, IsError: true}
-			}
-		}
-		configDir := filepath.Join(home, ".config", "sidecar")
-		if WriteDefaultPromptsToConfig(configDir) {
-			if p.promptPickerReturnMode == ViewModeAgentConfig {
-				p.agentConfigPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-				p.promptPicker = NewPromptPicker(p.agentConfigPrompts, p.width, p.height)
-			} else {
-				p.createPrompts = LoadPrompts(configDir, p.ctx.ProjectRoot)
-				p.promptPicker = NewPromptPicker(p.createPrompts, p.width, p.height)
-			}
-			p.clearPromptPickerModal()
-		} else {
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Failed to write default prompts", Duration: 3 * time.Second, IsError: true}
-			}
 		}
 
 	case FetchPRListMsg:
@@ -1425,6 +1351,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.scheduleShellPollByName(msg.TmuxName, interval))
 		return p, tea.Batch(cmds...)
 
+	case RenameWorktreeDoneMsg:
+		if msg.Err != nil {
+			p.renameWorktreeError = msg.Err.Error()
+			return p, nil
+		}
+		for _, wt := range p.worktrees {
+			if wt.Path == msg.Path {
+				wt.Name = msg.NewName
+				break
+			}
+		}
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		p.saveSelectionState()
+
 	case RenameShellDoneMsg:
 		if msg.Err != nil {
 			p.renameShellError = msg.Err.Error()
@@ -1472,8 +1413,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(agentPollKey(msg.WorkspaceName))
 		if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
-			// Capture session name before clearing Agent (uses sanitized name like StartAgent)
-			sessionName := tmuxSessionPrefix + sanitizeName(wt.Name)
+			// Capture session name before clearing Agent (path identity, like StartAgent)
+			sessionName := worktreeTmuxSession(wt)
 			wt.Agent = nil
 			wt.Status = StatusPaused
 			// Clean up cache, active registry, and session tracking (td-53e8a023, td-018f25)
@@ -1495,7 +1436,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case restartAgentWithOptionsMsg:
 		// Start new agent after stop completed, with user-selected options
 		if msg.worktree != nil {
-			return p, p.StartAgentWithOptions(msg.worktree, msg.agentType, msg.skipPerms, msg.prompt)
+			return p, p.StartAgentWithOptions(msg.worktree, msg.agentType, msg.skipPerms)
 		}
 		return p, nil
 
@@ -1564,24 +1505,23 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, p.viewMode == ViewModeTaskLink), len(p.taskSearchFiltered))
 			p.taskLinkModal = nil
+			if p.viewMode == ViewModeCreate {
+				p.rematchCreateTaskIdx()
+				p.createModal = nil
+				p.createModalWidth = 0
+			}
 		}
 
 	case BranchListMsg:
 		if msg.Err == nil {
-			selected := ""
-			if p.branchIdx >= 0 && p.branchIdx < len(p.branchFiltered) {
-				selected = p.branchFiltered[p.branchIdx]
-			}
 			p.branchAll = msg.Branches
 			p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
-			p.branchIdx = 0
-			for i := range p.branchFiltered {
-				if p.branchFiltered[i] == selected {
-					p.branchIdx = i
-					break
-				}
+			p.prefillCreateBaseBranch()
+			p.syncCreateBaseIdx()
+			if p.viewMode == ViewModeCreate {
+				p.createModal = nil
+				p.createModalWidth = 0
 			}
-			p.branchScroll = ensureListSelectionVisible(p.branchIdx, p.branchScroll, max(1, min(8, p.height-17)), len(p.branchFiltered))
 		}
 
 	case TaskDetailsLoadedMsg:
@@ -1850,6 +1790,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Remove worktree from list if deleted
 			if msg.Results.LocalWorktreeDeleted {
 				sessionName := tmuxSessionPrefix + sanitizeName(msg.WorkspaceName)
+				if wt := p.findWorktree(msg.WorkspaceName); wt != nil {
+					sessionName = worktreeTmuxSession(wt)
+				}
 				delete(p.managedSessions, sessionName)
 				globalPaneCache.remove(sessionName)
 				p.removeWorktreeByName(msg.WorkspaceName)

@@ -26,7 +26,7 @@
 │   21:47  ses_2a31ff  Checks passing                                          │
 │                                                                              │
 │   ACTIONS ──────────────────────────────────────────────────────────────     │
-│    o  open   b  back   y  yank   esc  close                                  │
+│    ↵  activate   o  open   b  back   y  yank   esc  close                    │
 │                                                                              │
 │                                                                              │
 │     Open in TD        Back        Close                                      │

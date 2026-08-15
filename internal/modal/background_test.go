@@ -54,6 +54,17 @@ func TestModalBackgroundIsUniform(t *testing.T) {
 				AddSection(Checkbox("force", "Force push", &toggled)).
 				AddSection(CheckboxDisplay("Include untracked", &toggled, "ctrl+a"))
 		}},
+		{"combo", func() *Modal {
+			sel := 0
+			ti := textinput.New()
+			return New("Create", WithWidth(50)).
+				AddSection(Combo("base", &ti, []DropdownItem{
+					{ID: "a", Label: "main"},
+					{ID: "b", Label: "develop"},
+					{ID: "c", Label: "feature"},
+				}, &sel)).
+				AddSection(Buttons(Btn(" Create ", "create"), Btn(" Cancel ", "cancel")))
+		}},
 		{"no title", func() *Modal {
 			return New("", WithWidth(40)).AddSection(Text("body only"))
 		}},

@@ -155,16 +155,16 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleRenameShellModalMouse(msg)
 	}
 
+	if p.viewMode == ViewModeRenameWorktree {
+		return p.handleRenameWorktreeModalMouse(msg)
+	}
+
 	if p.viewMode == ViewModeConfirmDelete {
 		return p.handleConfirmDeleteModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeConfirmDeleteShell {
 		return p.handleConfirmDeleteShellModalMouse(msg)
-	}
-
-	if p.viewMode == ViewModePromptPicker {
-		return p.handlePromptPickerModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeTypeSelector {
@@ -278,7 +278,11 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
+	prevAgent := p.createAgentType
+	prevSkip := p.createSkipPermissions
 	action := p.createModal.HandleMouse(msg, p.mouseHandler)
+	p.applyCreateModalAfterInput(prevAgent, prevSkip)
+
 	switch action {
 	case "":
 		return nil
@@ -288,54 +292,9 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
-	case createPromptFieldID:
-		p.createFocus = 2
-		p.syncCreateModalFocus()
-		p.openPromptPicker(p.createPrompts, ViewModeCreate)
-		return nil
-	case createNameFieldID:
-		p.createFocus = 0
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createBaseFieldID:
-		p.createFocus = 1
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
-	case createTaskFieldID:
-		p.createFocus = 3
-		p.focusCreateInput()
-		p.syncCreateModalFocus()
-		return nil
 	case createSkipPermissionsID:
-		p.createFocus = 5
 		p.createSkipPermissions = !p.createSkipPermissions
-		p.syncCreateModalFocus()
-		return nil
-	}
-
-	if idx, ok := parseIndexedID(createBranchItemPrefix, action); ok && idx < len(p.branchFiltered) {
-		p.createBaseBranchInput.SetValue(p.branchFiltered[idx])
-		p.branchFiltered = nil
-		p.createFocus = 1
-		p.syncCreateModalFocus()
-		return nil
-	}
-	if idx, ok := parseIndexedID(createTaskItemPrefix, action); ok && idx < len(p.taskSearchFiltered) {
-		task := p.taskSearchFiltered[idx]
-		p.createTaskID = task.ID
-		p.createTaskTitle = task.Title
-		p.createFocus = 3
-		p.syncCreateModalFocus()
-		return nil
-	}
-	agents := p.selectableAgentTypes()
-	if idx, ok := parseIndexedID(createAgentItemPrefix, action); ok && idx < len(agents) {
-		p.createAgentIdx = idx
-		p.createAgentType = agents[idx]
-		p.createFocus = 4
-		p.syncCreateModalFocus()
+		p.persistCreateAutoApprove()
 		return nil
 	}
 
@@ -358,6 +317,26 @@ func (p *Plugin) handleRenameShellModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	case renameShellActionID, renameShellRenameID:
 		return p.executeRenameShell()
+	}
+	return nil
+}
+
+func (p *Plugin) handleRenameWorktreeModalMouse(msg tea.MouseMsg) tea.Cmd {
+	p.ensureRenameWorktreeModal()
+	if p.renameWorktreeModal == nil {
+		return nil
+	}
+
+	action := p.renameWorktreeModal.HandleMouse(msg, p.mouseHandler)
+	switch action {
+	case "":
+		return nil
+	case "cancel", renameWorktreeCancelID:
+		p.viewMode = ViewModeList
+		p.clearRenameWorktreeModal()
+		return nil
+	case renameWorktreeActionID, renameWorktreeRenameID:
+		return p.executeRenameWorktree()
 	}
 	return nil
 }
@@ -435,38 +414,6 @@ func (p *Plugin) handleTypeSelectorModalMouse(msg tea.MouseMsg) tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) handlePromptPickerModalMouse(msg tea.MouseMsg) tea.Cmd {
-	if p.promptPicker == nil {
-		return nil
-	}
-
-	p.ensurePromptPickerModal()
-	if p.promptPickerModal == nil {
-		return nil
-	}
-
-	action := p.promptPickerModal.HandleMouse(msg, p.mouseHandler)
-	switch action {
-	case "":
-		return nil
-	case "cancel":
-		return func() tea.Msg { return PromptCancelledMsg{} }
-	case promptPickerFilterID:
-		p.promptPicker.filterFocused = true
-		p.syncPromptPickerFocus()
-		return nil
-	}
-
-	if idx, ok := parsePromptPickerItemID(action); ok {
-		p.promptPicker.selectedIdx = idx
-		p.promptPicker.filterFocused = false
-		p.syncPromptPickerFocus()
-		return p.promptPickerSelectCmd()
-	}
-
-	return nil
-}
-
 func (p *Plugin) handleAgentChoiceModalMouse(msg tea.MouseMsg) tea.Cmd {
 	p.ensureAgentChoiceModal()
 	if p.agentChoiceModal == nil {
@@ -493,14 +440,14 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return nil
 	}
 
-	prevAgentIdx := p.agentConfigAgentIdx
+	prevAgent := p.agentConfigAgentType
+	prevSkip := p.agentConfigSkipPerms
 	action := p.agentConfigModal.HandleMouse(msg, p.mouseHandler)
-
-	// Sync agent type when list selection changes via mouse (fixed modal list)
-	if p.agentConfigAgentIdx != prevAgentIdx {
-		if p.agentConfigAgentIdx >= 0 && p.agentConfigAgentIdx < len(p.agentConfigAgentList) {
-			p.agentConfigAgentType = p.agentConfigAgentList[p.agentConfigAgentIdx]
-		}
+	p.syncAgentConfigFromIdx()
+	if p.agentConfigAgentType != prevAgent {
+		p.loadAgentConfigAutoApprove()
+	} else if p.agentConfigSkipPerms != prevSkip {
+		p.persistAgentConfigAutoApprove()
 	}
 
 	switch action {
@@ -510,11 +457,12 @@ func (p *Plugin) handleAgentConfigModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearAgentConfigModal()
 		return nil
-	case agentConfigPromptFieldID:
-		p.openPromptPicker(p.agentConfigPrompts, ViewModeAgentConfig)
-		return nil
 	case agentConfigSubmitID:
 		return p.executeAgentConfig()
+	case agentConfigSkipPermissionsID:
+		p.agentConfigSkipPerms = !p.agentConfigSkipPerms
+		p.persistAgentConfigAutoApprove()
+		return nil
 	}
 	return nil
 }
@@ -626,30 +574,14 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	// Handle hover in modals that have button hover states
 	switch p.viewMode {
 	case ViewModeCreate:
-		if action.Region == nil {
-			p.createButtonHover = 0
-			return nil
-		}
-		switch action.Region.ID {
-		case regionCreateButton:
-			if idx, ok := action.Region.Data.(int); ok {
-				switch idx {
-				case 6:
-					p.createButtonHover = 1 // Create
-				case 7:
-					p.createButtonHover = 2 // Cancel
-				}
-			}
-		default:
-			p.createButtonHover = 0
-		}
+		return nil
 	case ViewModeAgentConfig:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeAgentChoice:
 		// Modal library handles hover state internally
 		return nil
-	case ViewModeRenameShell:
+	case ViewModeRenameShell, ViewModeRenameWorktree:
 		// Modal library handles hover state internally
 		return nil
 	case ViewModeMerge:
@@ -662,7 +594,6 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		// Modal library handles hover state internally
 		return nil
 	default:
-		p.createButtonHover = 0
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
 		p.hoverNewButton = false
@@ -1080,67 +1011,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			p.diffTabFocus = DiffTabFocusCommitFiles
 		} else {
 			p.diffTabFocus = DiffTabFocusFileList
-		}
-	case regionCreateBackdrop:
-		// Click outside create modal - close it
-		p.viewMode = ViewModeList
-		p.clearCreateModal()
-	case regionCreateModalBody:
-		// Click inside modal but not on a form element - absorb
-	case regionCreateInput:
-		// Click on input field in create modal
-		if focusIdx, ok := action.Region.Data.(int); ok {
-			p.blurCreateInputs()
-			p.createFocus = focusIdx
-			p.focusCreateInput()
-
-			// If clicking prompt field, open the picker
-			if focusIdx == 2 {
-				p.openPromptPicker(p.createPrompts, ViewModeCreate)
-			}
-		}
-	case regionCreateDropdown:
-		// Click on dropdown item
-		if data, ok := action.Region.Data.(dropdownItemData); ok {
-			switch data.field {
-			case 1:
-				// Branch selection
-				if data.idx >= 0 && data.idx < len(p.branchFiltered) {
-					p.createBaseBranchInput.SetValue(p.branchFiltered[data.idx])
-					p.branchFiltered = nil
-				}
-			case 3:
-				// Task selection
-				if data.idx >= 0 && data.idx < len(p.taskSearchFiltered) {
-					task := p.taskSearchFiltered[data.idx]
-					p.createTaskID = task.ID
-					p.createTaskTitle = task.Title
-					p.taskSearchFiltered = nil
-				}
-			}
-		}
-	case regionCreateAgentOption:
-		// Click on agent option
-		if idx, ok := action.Region.Data.(int); ok {
-			agents := p.selectableAgentTypes()
-			if idx >= 0 && idx < len(agents) {
-				p.createAgentType = agents[idx]
-				p.createAgentIdx = idx
-			}
-		}
-	case regionCreateCheckbox:
-		// Toggle checkbox
-		p.createSkipPermissions = !p.createSkipPermissions
-	case regionCreateButton:
-		// Click on button
-		if idx, ok := action.Region.Data.(int); ok {
-			switch idx {
-			case 6:
-				return p.validateAndCreateWorktree()
-			case 7:
-				p.viewMode = ViewModeList
-				p.clearCreateModal()
-			}
 		}
 	case regionTaskLinkDropdown:
 		// Click on task link dropdown item
