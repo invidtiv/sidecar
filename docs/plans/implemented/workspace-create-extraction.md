@@ -1,7 +1,17 @@
+> **Implemented for the part it drove.** Steps 1 to 3 are done: the containment
+> and durable-write layer, the tmux session helpers, and shell creation now live
+> in `internal/workspaceops`. Steps 4 to 6 — global shell create, extracting the
+> git layer, and global worktree create — carried forward into
+> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).
+>
+> Read the "Correction" section before trusting any survey like this one: the
+> first version of this document counted receivers and concluded the move was
+> mechanical, and it was not.
+
 # Extraction brief: the workspace creation core
 
 **Surveyed:** 2026-08-15, on `workspace-panel-redesign` at `a1c2fc51`
-**Serves:** [Workspace sidebar redesign](workspace-sidebar-redesign.md) slices 5 and 6,
+**Serves:** [Workspace sidebar redesign](../deprecated/workspace-sidebar-redesign.md) slices 5 and 6,
 and [td-70e32d](https://example.invalid/td-70e32d) (global lifecycle parity)
 
 This is the characterization the redesign plan asks for before extraction. It

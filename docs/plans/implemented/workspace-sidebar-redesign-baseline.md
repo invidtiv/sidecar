@@ -1,7 +1,13 @@
+> **Implemented.** Every finding recorded here was fixed; the "Still open" items
+> moved into
+> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).
+> The golden fixture it introduced is live at
+> `internal/workspacelist/testdata/baseline-sidebar.txt`.
+
 # Baseline: workspace sidebar before the redesign
 
 **Captured:** 2026-08-15, on `workspace-panel-redesign` at `97aaead7` (fast-forwarded to `main`).
-**Companion to:** [Workspace sidebar as one cross-project control surface](workspace-sidebar-redesign.md)
+**Companion to:** [Workspace sidebar as one cross-project control surface](../deprecated/workspace-sidebar-redesign.md)
 
 This is slice 0 of that plan, kept deliberately small. It exists to make the
 current behaviour visible and diffable before anything changes, and to correct

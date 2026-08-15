@@ -12,7 +12,7 @@ import (
 )
 
 // Baseline capture for the workspace sidebar redesign
-// (docs/plans/active/workspace-sidebar-redesign.md, slice 0).
+// (docs/plans/implemented/workspace-sidebar-redesign-baseline.md).
 //
 // The redesign's central claim is that project and global Workspaces should
 // share one header grammar and one row grammar. Today they share a renderer but

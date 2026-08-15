@@ -1,3 +1,18 @@
+> **Deprecated — superseded by
+> [Workspaces: finishing the cross-project surface](../active/workspaces-cross-project-completion.md).**
+>
+> Parts of this shipped: one header grammar, one row grammar, the shared View
+> surface, project sorting, and per-scope persistence. Parts were deliberately
+> decided against, and one part was wrong about the code. Its slice 5 assumed a
+> large state-free operation core had to be extracted from the workspace plugin;
+> the survey in
+> [the extraction brief](../implemented/workspace-create-extraction.md) found the
+> boundary is not where the receivers are but wherever the git layer stops, and
+> the sequencing changed accordingly.
+>
+> Kept for the product reasoning in "Decision first" and "Product principles",
+> which the successor still follows. Do not use its slice list.
+
 # Plan: Workspace sidebar as one cross-project control surface
 
 **Research snapshot:** 2026-08-14
