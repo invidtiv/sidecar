@@ -181,6 +181,22 @@ func (p *Plugin) previewTabChips() []string {
 	return workspacediff.TabChips(workspacediff.Tab(p.previewTab))
 }
 
+func (p *Plugin) previewActionChips() []string {
+	chips := []string{styles.RenderPillWithStyle("Diff", styles.BarChip, nil)}
+	if p.previewTaskID() != "" {
+		chips = append(chips, styles.RenderPillWithStyle("Task", styles.BarChip, nil))
+	}
+	return chips
+}
+
+// previewHeaderChips is tabs (when drawn) plus Diff/Task action chips.
+func (p *Plugin) previewHeaderChips() []string {
+	if p.previewTabsVisible() {
+		return append(p.previewTabChips(), p.previewActionChips()...)
+	}
+	return p.previewActionChips()
+}
+
 // previewTabsVisible reports whether the preview is in a state that draws the
 // Output/Diff/Task chips at all. The shell has no tabs, and neither the welcome
 // guide nor the main-worktree view is a tab; anything else — including the
@@ -197,7 +213,7 @@ func (p *Plugin) previewTabsVisible() bool {
 // It goes through the same header layout the Output tab's chips do, so the tab
 // hit regions describe this row too.
 func (p *Plugin) renderTabs(width int) string {
-	return p.terminalHeader(p.previewTabChips(), "", width, 0)
+	return p.terminalHeader(p.previewHeaderChips(), "", width, 0)
 }
 
 // paneFocusChip renders a sub-pane's identity chip, marked when that sub-pane
@@ -362,7 +378,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	// up they are followed by the agent sub-pane's own identity chip, so both
 	// children of the split name themselves and neither can be truncated away —
 	// the chips are also the row's only hit region (regionPreviewTab).
-	chips := p.previewTabChips()
+	chips := p.previewHeaderChips()
 
 	// The states below have no terminal to draw, but they are still the Output
 	// tab, so they still owe the header row the tabs live on: without it a
@@ -454,7 +470,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 		name = "Shell"
 	}
 	shellFocused := p.primaryTerminalFocused()
-	chips := []string{p.paneFocusChip(name, shellFocused)}
+	chips := append([]string{p.paneFocusChip(name, shellFocused)}, p.previewActionChips()...)
 
 	// Hint depends on mode - interactive mode shows exit hints
 	var hint string
@@ -573,6 +589,7 @@ func (p *Plugin) renderShellPrimer(width, height int) string {
 // renderMainWorktreeView renders a helpful view when the main worktree is selected.
 func (p *Plugin) renderMainWorktreeView(width, height int) string {
 	var lines []string
+	lines = append(lines, p.terminalHeader(p.previewActionChips(), "", width, 0))
 
 	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(styles.Primary)
 	hintStyle := lipgloss.NewStyle().Foreground(styles.Success)

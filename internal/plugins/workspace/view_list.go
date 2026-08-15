@@ -99,44 +99,73 @@ func (p *Plugin) View(width, height int) string {
 	return view
 }
 
-// registerPreviewTabRegions puts click targets over the Output/Diff/Task chips,
-// taken from the same layout that drew them and registered only where they are
-// drawn: a state with no tab row (shell, welcome guide, main worktree) gets no
-// regions, and a chip the header dropped for want of columns gets none either.
-//
-// The row's width and its hint floor are read here rather than re-derived,
-// because a second budget that merely ought to agree is how a dropped chip kept
-// a region — one that sat on the interactive exit hint and exited interactive
-// mode when clicked.
+// registerPreviewTabRegions puts click targets over the Output/Diff/Task tabs
+// and the Diff/Task action chips, taken from the same layout that drew them.
+// A chip the header dropped for want of columns gets no region.
 func (p *Plugin) registerPreviewTabRegions(split previewSplit) {
-	if !p.previewTabsVisible() {
+	chips, tabCount := p.previewHitChipRow()
+	if len(chips) == 0 {
 		return
 	}
-	// On the Output tab the chips are the terminal's own header row, laid out at
-	// that surface's width and behind its hint floor; Diff and Task draw their
-	// standalone tab row across the whole preview on the same first content row.
+	// On Output (and shells) the chips are the terminal's own header row.
+	// Diff/Task tabs and the main-worktree body draw their row across the
+	// preview's first content row.
 	row, width, originX, hintFloor := p.previewContentY(), split.ContentWidth, split.ContentX, 0
-	if p.previewTab == PreviewTabOutput {
+	useTerminalHeader := p.selectingShell() || p.previewTab == PreviewTabOutput
+	if useTerminalHeader {
 		surface := p.terminalSurfaceGeometry(false)
-		if !surface.OK {
-			// The terminal is not on screen (zoomed document, or no box yet).
-			// Falling back to the full preview would paint Output/Diff/Task
-			// targets on top of the file tabs.
+		if surface.OK {
+			row, width, originX = surface.HeaderY, surface.Width, surface.X
+			if p.interactiveDescribes(false) {
+				hintFloor = p.interactiveHintFloor()
+			}
+		} else if p.previewTabsVisible() {
+			// The terminal is not on screen (zoomed document). Do not paint
+			// Output/Diff/Task targets on top of the file tabs.
 			return
-		}
-		row, width, originX = surface.HeaderY, surface.Width, surface.X
-		if p.interactiveDescribes(false) {
-			hintFloor = p.interactiveHintFloor()
 		}
 	}
 
-	for i, placement := range layoutHeaderChips(p.previewTabChips(), width, hintFloor) {
-		if !placement.Drawn {
+	placements := layoutHeaderChips(chips, width, hintFloor)
+	for i, placement := range placements {
+		if !placement.Drawn || i >= tabCount {
 			continue
 		}
 		p.mouseHandler.HitMap.AddRect(regionPreviewTab,
 			originX+placement.Col, row, placement.Width, 1, i)
 	}
+	// Action chips last so they win any one-cell overlap with tab chips.
+	actionIdx := 0
+	for i, placement := range placements {
+		if !placement.Drawn || i < tabCount {
+			continue
+		}
+		hit := previewActionDiff
+		if actionIdx > 0 {
+			hit = previewActionTask
+		}
+		p.mouseHandler.HitMap.AddRect(regionPreviewAction,
+			originX+placement.Col, row, placement.Width, 1, hit)
+		actionIdx++
+	}
+}
+
+func (p *Plugin) previewHitChipRow() (chips []string, tabCount int) {
+	if p.selectingShell() {
+		name := "Shell"
+		if shell := p.getSelectedShell(); shell != nil && shell.Name != "" {
+			name = shell.Name
+		}
+		chips = append([]string{p.paneFocusChip(name, p.primaryTerminalFocused())}, p.previewActionChips()...)
+		return chips, 0
+	}
+	if p.previewTabsVisible() {
+		return p.previewHeaderChips(), len(p.previewTabChips())
+	}
+	if wt := p.selectedWorktree(); wt != nil && wt.IsMain {
+		return p.previewActionChips(), 0
+	}
+	return nil, 0
 }
 
 // renderListView renders the main split-pane list view.
