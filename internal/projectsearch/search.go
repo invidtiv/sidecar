@@ -37,6 +37,13 @@ type State struct {
 	// Debounce: only run search when version matches
 	DebounceVersion int
 
+	// RunToken names the newest ripgrep run this state has issued. Every run
+	// stamps it on the ResultsMsg it produces, and a result carrying an older
+	// token is dropped: two runs inside one epoch can finish out of order (a
+	// slow debounced run and the immediate re-run an option toggle issues), and
+	// the epoch alone cannot tell them apart.
+	RunToken int
+
 	// For future: multiple search tabs
 	TabID int
 }
@@ -64,7 +71,12 @@ type SearchMatch struct {
 
 // ResultsMsg contains results from a search.
 type ResultsMsg struct {
-	Epoch   uint64 // Epoch when request was issued (for stale detection)
+	Epoch uint64 // Epoch when request was issued (for stale detection)
+	// Run is the State.RunToken the run was issued with. Apply drops a message
+	// whose token is no longer the newest, so results cannot land out of order.
+	// A zero token means "not issued by Run" (a host or a test building the
+	// message by hand) and is always applied.
+	Run     int
 	Results []SearchFileResult
 	Error   error
 }
@@ -265,42 +277,84 @@ func Schedule(version int, query string) tea.Cmd {
 	})
 }
 
-// Run executes ripgrep and returns results.
+// ripgrepBin is the search binary. It is a variable so a test can point the
+// runner at a stand-in and watch what happens to the process — cancellation,
+// above all, which is invisible if the only observable is ripgrep's own output.
+var ripgrepBin = "rg"
+
+// request is everything one ripgrep run needs, copied out of the live State at
+// the moment the run is issued. The command runs on the Bubble Tea runtime's
+// goroutine while the update loop keeps mutating State on every keystroke, so
+// the goroutine must not read State at all — it reads this instead.
+type request struct {
+	workDir string
+	query   string
+	args    []string
+	epoch   uint64
+	run     int
+}
+
+// Run executes ripgrep and returns results. It snapshots everything the run
+// needs before returning, so the command it hands back touches no shared state.
 func Run(workDir string, state *State, epoch uint64) tea.Cmd {
-	return func() tea.Msg {
-		if state.Query == "" {
-			return ResultsMsg{Epoch: epoch, Results: nil}
-		}
+	return RunContext(context.Background(), workDir, state, epoch)
+}
 
-		ctx, cancel := context.WithTimeout(context.Background(), searchTimeout)
-		defer cancel()
-
-		args := buildRipgrepArgs(state)
-		cmd := exec.CommandContext(ctx, "rg", args...)
-		cmd.Dir = workDir
-
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return ResultsMsg{Epoch: epoch, Error: err}
-		}
-
-		if err := cmd.Start(); err != nil {
-			// Check if rg is not installed
-			if strings.Contains(err.Error(), "executable file not found") {
-				return ResultsMsg{Epoch: epoch, Error: &ripgrepNotFoundError{}}
-			}
-			return ResultsMsg{Epoch: epoch, Error: err}
-		}
-
-		results := parseRipgrepOutput(stdout, maxResults, len(state.Query))
-
-		// Kill ripgrep early if we hit our limit - don't wait for it to finish
-		// This is critical for queries with many matches (e.g., common words)
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-
-		return ResultsMsg{Epoch: epoch, Results: results}
+// RunContext is Run with a caller-owned context, so a host can kill the ripgrep
+// process when its search surface closes or is superseded rather than leaving it
+// to the timeout. Search.run does exactly that; see Search.Close.
+func RunContext(ctx context.Context, workDir string, state *State, epoch uint64) tea.Cmd {
+	if state == nil {
+		return nil
 	}
+	// Claiming the token here, on the update loop, is what makes "newest run
+	// wins" true regardless of the order the results come back in.
+	state.RunToken++
+	req := request{
+		workDir: workDir,
+		query:   state.Query,
+		args:    buildRipgrepArgs(state),
+		epoch:   epoch,
+		run:     state.RunToken,
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return func() tea.Msg { return req.exec(ctx) }
+}
+
+func (r request) exec(parent context.Context) tea.Msg {
+	if r.query == "" {
+		return ResultsMsg{Epoch: r.epoch, Run: r.run, Results: nil}
+	}
+
+	ctx, cancel := context.WithTimeout(parent, searchTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, ripgrepBin, r.args...)
+	cmd.Dir = r.workDir
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return ResultsMsg{Epoch: r.epoch, Run: r.run, Error: err}
+	}
+
+	if err := cmd.Start(); err != nil {
+		// Check if rg is not installed
+		if strings.Contains(err.Error(), "executable file not found") {
+			return ResultsMsg{Epoch: r.epoch, Run: r.run, Error: &ripgrepNotFoundError{}}
+		}
+		return ResultsMsg{Epoch: r.epoch, Run: r.run, Error: err}
+	}
+
+	results := parseRipgrepOutput(stdout, maxResults, len(r.query))
+
+	// Kill ripgrep early if we hit our limit - don't wait for it to finish
+	// This is critical for queries with many matches (e.g., common words)
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+
+	return ResultsMsg{Epoch: r.epoch, Run: r.run, Results: results}
 }
 
 // buildRipgrepArgs constructs the ripgrep command arguments.

@@ -29,9 +29,6 @@ const (
 	pluginName = "files"
 	pluginIcon = "F"
 
-	// Quick open limits
-	quickOpenMaxResults = 50 // Max matches to show
-
 	// Directory cache limits (for path auto-complete)
 	dirCacheMaxResults = 5 // Max suggestions to show
 
@@ -402,9 +399,13 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.pendingAutoRefresh = false
 	p.clearDragState()
 
-	// The quick-open caches describe the old project's disk; drop them.
+	// The quick-open caches describe the old project's disk; drop them, along
+	// with any search still open over it — a live project search also has a
+	// ripgrep process running in a directory the plugin is leaving.
 	p.quickOpen.Reset()
 	p.dirCache.Reset()
+	p.quickOpenMode = false
+	p.closeProjectSearch()
 
 	// Initialize markdown renderer
 	renderer, err := markdown.NewRenderer()

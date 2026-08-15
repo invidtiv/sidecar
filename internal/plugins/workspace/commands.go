@@ -299,11 +299,19 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "new-workspace", Name: "New", Description: "Create new workspace", Context: "workspace-list", Priority: 1},
 			{ID: "new-shell", Name: "Shell", Description: "Create new shell session", Context: "workspace-list", Priority: 2},
 			{ID: "fetch-pr", Name: "Fetch", Description: "Fetch remote PR as workspace", Context: "workspace-list", Priority: 3},
-			{ID: "find-file", Name: "Find", Description: "Open a file pane on the file finder", Context: "workspace-list", Priority: 8},
 			{ID: "toggle-view", Name: viewToggleName, Description: "Toggle list/kanban view", Context: "workspace-list", Priority: 4},
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-list", Priority: 5},
 			{ID: "refresh", Name: "Refresh", Description: "Refresh workspace list", Context: "workspace-list", Priority: 6},
 			{ID: "filter-list", Name: "Filter", Description: "Filter workspaces by name, branch, task, agent, or status", Context: "workspace-list", Priority: 7},
+		}
+
+		// F opens a document pane, and kanban draws no pane tree, so the key is
+		// only real in list view (see openFinderPane). A footer hint for a key
+		// that does nothing is worse than no hint: the fix is to stop
+		// advertising it where it cannot work, not to make kanban silently
+		// switch views out from under the board.
+		if p.viewMode == ViewModeList {
+			cmds = append(cmds, plugin.Command{ID: "find-file", Name: "Find", Description: "Open a file pane on the file finder", Context: "workspace-list", Priority: 8})
 		}
 
 		// Shell-specific commands when shell is selected
@@ -361,11 +369,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Task linking
 			if wt.TaskID != "" {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Unlink", Description: "Unlink task", Context: "workspace-list", Priority: 15},
 				)
 			} else {
 				cmds = append(cmds,
-					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 8},
+					plugin.Command{ID: "link-task", Name: "Task", Description: "Link task", Context: "workspace-list", Priority: 15},
 				)
 			}
 		}

@@ -635,11 +635,11 @@ Opens confirmation with options:
 
 ### Fetching Remote PRs
 
-Press `F` to fetch a pull request created remotely (e.g., via Claude Code on your phone) and create a local workspace from it.
+Press `P` to fetch a pull request created remotely (e.g., via Claude Code on your phone) and create a local workspace from it.
 
 | Key | Action |
 |-----|--------|
-| `F` | Open PR fetch modal |
+| `P` | Open PR fetch modal |
 
 The modal lists open PRs from GitHub (via `gh pr list`). Filter by typing, select a PR, and press Enter. Sidecar fetches the branch and creates a worktree tracking it, with the PR URL pre-linked. Start an agent with `s` to continue the work locally.
 
@@ -855,7 +855,7 @@ All keyboard shortcuts by context:
 | `v` | Toggle view mode |
 | `n` | Create workspace |
 | `P` | Fetch remote PR as workspace |
-| `F` | Open a file pane on the file finder |
+| `F` | Open a file pane on the file finder (list view) |
 | `D` | Delete workspace / Delete shell |
 | `p` | Push branch |
 | `d` | Show diff |
@@ -914,8 +914,9 @@ document dimmed around it when the pane is wide enough to show a readable
 margin of itself, and taking the whole pane when it is not. The header row
 keeps saying which mode the pane is in at every size. While one is open it owns every key
 in the pane; `esc` closes it, `enter` loads the hit in the active tab,
-and `shift+enter` opens it in a new tab. `F` in the list opens a new file
-pane straight into the finder.
+and `shift+enter` opens it in a new tab. `F` in the list view opens a new file
+pane straight into the finder; kanban draws no pane tree, so it is offered
+only in the list.
 
 | Key | Action |
 |-----|--------|

@@ -107,8 +107,11 @@ func (p *Plugin) openProjectSearch() (plugin.Plugin, tea.Cmd) {
 	return p, nil
 }
 
-// closeProjectSearch drops the search entirely; reopening starts fresh.
+// closeProjectSearch drops the search entirely; reopening starts fresh. Close
+// kills the ripgrep process still running for it, which dropping the pointer
+// does not.
 func (p *Plugin) closeProjectSearch() {
+	p.projectSearch.Close()
 	p.projectSearchMode = false
 	p.projectSearch = nil
 }

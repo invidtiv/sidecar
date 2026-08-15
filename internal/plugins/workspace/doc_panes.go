@@ -843,6 +843,11 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 	}
 	switch leaf.Kind {
 	case PaneDoc:
+		// A pane closed with a search up takes the search's work with it: an
+		// unclosed project search leaves rg running to its 30s timeout.
+		if doc := p.docs[leaf.ContentID]; doc != nil {
+			doc.mode.close()
+		}
 		delete(p.docs, leaf.ContentID)
 	case PaneIssue:
 		delete(p.issues, leaf.ContentID)
@@ -1587,6 +1592,9 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !p.docVisible() {
 		return "", false
 	}
+	// Regions are re-earned every frame: a pane this frame does not draw must
+	// not leave last frame's modal regions on screen.
+	p.clearDocSearchRegions()
 	layout, ok := LayoutPaneTree(p.paneRoot, Box{W: width, H: height}, paneTreeFloors(), p.paneFocus)
 	if !ok {
 		return "", false

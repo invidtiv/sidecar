@@ -145,10 +145,6 @@ func (s *Search) clearModal() {
 	s.modalWidth = 0
 }
 
-func (s *Search) hasResults() bool {
-	return s.State != nil && len(s.State.Results) > 0
-}
-
 // hasStats reports whether the counts line is affordable. It does not ask
 // whether there is anything to count: a line that comes and goes with the
 // results makes the whole box change height as the user types, which is exactly

@@ -15,24 +15,38 @@ import (
 )
 
 // The goldens in testdata pin the exact rendering of the quick-open finder and
-// the project search, down to the ANSI. They serve two purposes:
+// the project search, down to the ANSI, at three sizes and in every state worth
+// drawing. What they guarantee is narrow and worth having: a change to either
+// surface's layout, styling, elision, or hit regions shows up as a diff a human
+// has to look at and accept, rather than as a silent shift in what the user
+// sees. They are a record of the current rendering — they were generated from
+// the code as it stands, and are regenerated (with -update-golden) whenever a
+// change legitimately alters it — so they are not evidence that any past
+// refactor preserved pixels.
 //
-//   - they proved that moving both surfaces out of this plugin into
-//     internal/filefind and internal/projectsearch changed no pixels, and
-//   - each case renders twice, once through the Files plugin and once through
-//     the shared type driven directly at the same size, and asserts the two are
-//     byte-identical. That is what stops the Files plugin and the workspace
-//     panes from drifting apart once the panes host the same two surfaces.
+// Each case is also rendered through the shared type driven directly, and the
+// two are asserted byte-identical. That assertion is close to free: the Files
+// plugin's render method is a call to the shared type, so it mostly pins that
+// the plugin keeps passing its own width, height, and mouse handler through
+// unchanged. It is not the anti-drift property, and on its own it says nothing
+// about the workspace panes, which are not in this file. The real
+// host-to-host correspondence — same matches, same selection, same outcome from
+// the same keys in the Files plugin and in a workspace document pane — is
+// asserted in internal/plugins/workspace/search_parity_test.go, which can reach
+// both hosts.
 var updateGolden = flag.Bool("update-golden", false, "rewrite modal golden files")
 
 // goldenSizes are the surfaces each modal is rendered at: one comfortably wide,
-// one narrow enough to exercise every clamp in the layout.
+// one narrow enough to exercise every clamp in the layout, and one the size of
+// a genuinely cramped document pane, where the surface has to fill its box and
+// every part of the chrome is competing for the same few rows.
 var goldenSizes = []struct {
 	name          string
 	width, height int
 }{
 	{"wide", 100, 30},
 	{"narrow", 60, 20},
+	{"tight", 34, 10},
 }
 
 // goldenQuickOpenFiles is the fixed file list the finder golden renders from.

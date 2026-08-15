@@ -92,6 +92,18 @@ func (m *docSearchMode) headerLabel() string {
 	return label
 }
 
+// close releases whatever the surface still owns. The finder owns nothing (its
+// file list belongs to the plugin's per-root cache); the project search owns a
+// running ripgrep process, which would otherwise keep going to its timeout.
+func (m *docSearchMode) close() {
+	if m == nil {
+		return
+	}
+	if m.kind == docSearchProject {
+		m.search.Close()
+	}
+}
+
 func (m *docSearchMode) setSize(width, height int) {
 	if m == nil || m.kind != docSearchProject || m.search == nil {
 		return
@@ -278,15 +290,65 @@ func (p *Plugin) docPaneByLeaf(leafID int) *docPane {
 	return nil
 }
 
+// docFinderCacheTTL is how long a pane's file list is trusted without a rescan.
+//
+// The Files plugin has a filesystem watcher and marks its cache dirty the moment
+// the tree moves; Workspaces has no such signal — its only watcher is on the
+// shell manifest — so there is nothing here to invalidate the list precisely.
+// A short lifetime is the honest substitute: the second ctrl+p in a working
+// session costs nothing, and a finder opened minutes later still sees files
+// created since.
+const docFinderCacheTTL = 30 * time.Second
+
+// docFinderCache is one root's file list plus when its last scan was started.
+type docFinderCache struct {
+	cache   *filefind.Cache
+	scanned time.Time
+}
+
+// finderCache returns the file list for root, shared by every pane rooted
+// there. Panes on one root are looking at one directory tree, so they walk it
+// once between them rather than once per ctrl+p: a fresh cache per open meant
+// every open paid a full ScanPaths walk (up to 50k files), and open/esc/open
+// spawned walks whose results were then thrown away.
+func (p *Plugin) finderCache(root string) *filefind.Cache {
+	if p.docFinderCaches == nil {
+		p.docFinderCaches = make(map[string]*docFinderCache)
+	}
+	entry := p.docFinderCaches[root]
+	if entry == nil {
+		entry = &docFinderCache{cache: &filefind.Cache{}}
+		p.docFinderCaches[root] = entry
+	}
+	if !entry.scanned.IsZero() && time.Since(entry.scanned) > docFinderCacheTTL {
+		entry.cache.MarkDirty()
+	}
+	return entry.cache
+}
+
+// noteFinderScan records that a scan of root has just been issued. Only a scan
+// that actually started moves the clock, so a cache that answered from memory
+// keeps the age of the walk it is still showing.
+func (p *Plugin) noteFinderScan(root string, started bool) {
+	if !started {
+		return
+	}
+	if entry := p.docFinderCaches[root]; entry != nil {
+		entry.scanned = time.Now()
+	}
+}
+
 // openDocFinder opens the fuzzy file finder in the focused document pane,
 // rooted at that pane's directory.
 func (p *Plugin) openDocFinder(doc *docPane) tea.Cmd {
 	if doc == nil || p.ctx == nil {
 		return nil
 	}
-	finder := filefind.NewFinder(nil, doc.root, p.ctx.Epoch)
+	finder := filefind.NewFinder(p.finderCache(doc.root), doc.root, p.ctx.Epoch)
 	doc.mode = &docSearchMode{kind: docSearchFinder, finder: finder}
-	return docSearchCmd(doc.leafID, finder.Open())
+	scan := finder.Open()
+	p.noteFinderScan(doc.root, scan != nil)
+	return docSearchCmd(doc.leafID, scan)
 }
 
 // openDocProjectSearch opens the ripgrep project search in the focused document
@@ -307,6 +369,7 @@ func (p *Plugin) closeDocSearch(doc *docPane) {
 	if doc == nil {
 		return
 	}
+	doc.mode.close()
 	doc.mode = nil
 	doc.modeRegions = nil
 }
@@ -331,13 +394,20 @@ func (p *Plugin) handleDocSearchMouse(doc *docPane, msg tea.MouseMsg) tea.Cmd {
 	if doc == nil || doc.mode == nil {
 		return nil
 	}
-	// A press outside the pane dismisses the surface, the way a click on a
-	// full-screen modal's backdrop does. The click itself is spent on the
-	// dismissal rather than on whatever it landed over.
-	if click, ok := msg.(tea.MouseClickMsg); ok {
-		m := click.Mouse()
-		if !doc.boxContains(m.X, m.Y) {
-			p.closeDocSearch(doc)
+	// Outside the pane is outside the modal. A press there dismisses the
+	// surface, the way a click on a full-screen modal's backdrop does, and the
+	// click is spent on the dismissal rather than on whatever it landed over.
+	// Every other event — motion, wheel, release — is swallowed: it is over the
+	// modal's backdrop, and the file-info modal answers a backdrop event the
+	// same way, by consuming it and doing nothing. Routing them into the
+	// surface instead made the wheel over a terminal pane scroll the finder's
+	// list, which no modal in this app does.
+	if msg != nil {
+		pos := msg.Mouse()
+		if !doc.boxContains(pos.X, pos.Y) {
+			if _, isClick := msg.(tea.MouseClickMsg); isClick {
+				p.closeDocSearch(doc)
+			}
 			return nil
 		}
 	}
@@ -405,6 +475,20 @@ func (p *Plugin) renderDocSearchOverlay(doc *docPane, background string, origin 
 	out := panemodal.RenderFunc(box, ui.FitBlock(background, size.Width, size.Height), scratch, doc.mode.view)
 	doc.modeRegions = scratch.HitMap.Regions()
 	return out
+}
+
+// clearDocSearchRegions drops every pane's remembered surface regions at the
+// start of a frame. Only a pane that is drawn puts its regions back (see
+// renderDocSearchOverlay), which is what keeps a pane the frame did not draw —
+// the panes a zoomed leaf hides, above all — from registering hit regions over
+// the pane that was drawn. A search survives losing focus, so a second pane
+// holding an open surface off-screen is reachable, not theoretical.
+func (p *Plugin) clearDocSearchRegions() {
+	for _, doc := range p.docs {
+		if doc != nil {
+			doc.modeRegions = nil
+		}
+	}
 }
 
 // registerDocSearchRegions puts a live surface's hit regions into the plugin's

@@ -1,6 +1,8 @@
 package projectsearch
 
 import (
+	"context"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -65,6 +67,11 @@ type Search struct {
 	root  string
 	epoch uint64
 
+	// cancel kills the ripgrep process of the run that is still in flight. A
+	// run outlives the surface otherwise: closing the search only drops the
+	// surface, and rg would keep going to its 30s timeout.
+	cancel context.CancelFunc
+
 	width, height int
 	fill          bool
 
@@ -123,6 +130,51 @@ func (s *Search) View(width, height int, handler *mouse.Handler) string {
 	return s.renderModal(handler)
 }
 
+// run issues a ripgrep run for the current query and options, killing whatever
+// run was still going: its results are about to be dropped by the run token
+// anyway, so there is no reason to let the process finish.
+func (s *Search) run() tea.Cmd {
+	s.cancelRun()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	return RunContext(ctx, s.root, s.State, s.epoch)
+}
+
+// cancelled is the surface dismissing itself: drop the modal, kill the run
+// still going for it, and tell the host.
+func (s *Search) cancelled() Result {
+	s.clearModal()
+	s.abortRun()
+	return Result{Outcome: OutcomeCancelled}
+}
+
+// abortRun kills the in-flight run and retires its token, so a result already
+// on its way back cannot be applied.
+func (s *Search) abortRun() {
+	s.cancelRun()
+	if s.State != nil {
+		s.State.RunToken++
+	}
+}
+
+func (s *Search) cancelRun() {
+	if s.cancel != nil {
+		s.cancel()
+		s.cancel = nil
+	}
+}
+
+// Close releases the search: it kills the ripgrep process still running for it,
+// if any. Hosts call it when they drop the surface — the search is dismissed by
+// dropping the pointer to it, which on its own leaves rg running to its timeout.
+// It is safe to call more than once, and on a search that never ran.
+func (s *Search) Close() {
+	if s == nil {
+		return
+	}
+	s.cancelRun()
+}
+
 // Update handles the search's own async traffic: the debounce tick and the
 // ripgrep results. Messages stamped with a different epoch are dropped.
 func (s *Search) Update(msg tea.Msg) tea.Cmd {
@@ -130,7 +182,7 @@ func (s *Search) Update(msg tea.Msg) tea.Cmd {
 	case DebounceMsg:
 		// Only run search if debounce version matches (no newer keystrokes)
 		if s.State != nil && s.State.DebounceVersion == msg.Version {
-			return Run(s.root, s.State, s.epoch)
+			return s.run()
 		}
 		return nil
 
@@ -146,9 +198,17 @@ func (s *Search) Update(msg tea.Msg) tea.Cmd {
 
 // Apply stores a landed results message. Update calls it after the epoch check;
 // a host that does its own staleness filtering can call it directly.
+//
+// A message from a superseded run is dropped here rather than in Update,
+// because a host that filters staleness itself calls Apply directly and must
+// not be able to opt out of it: two runs in one epoch (the debounced one and
+// the immediate one an option toggle issues) can land in either order.
 func (s *Search) Apply(msg ResultsMsg) {
 	state := s.State
 	if state == nil {
+		return
+	}
+	if msg.Run != 0 && msg.Run != state.RunToken {
 		return
 	}
 	state.IsSearching = false
@@ -187,8 +247,7 @@ func (s *Search) HandleKey(msg tea.KeyPressMsg) (Result, tea.Cmd) {
 
 	action, cmd := s.modal.HandleKey(msg)
 	if action == "cancel" {
-		s.clearModal()
-		return Result{Outcome: OutcomeCancelled}, nil
+		return s.cancelled(), nil
 	}
 
 	if action != "" && state != nil {
@@ -261,8 +320,7 @@ func (s *Search) HandleKey(msg tea.KeyPressMsg) (Result, tea.Cmd) {
 
 	switch key {
 	case "esc":
-		s.clearModal()
-		return Result{Outcome: OutcomeCancelled}, nil
+		return s.cancelled(), nil
 
 	// Note: enter and shift+enter are handled before modal.HandleKey above
 
@@ -370,6 +428,9 @@ func (s *Search) HandleKey(msg tea.KeyPressMsg) (Result, tea.Cmd) {
 				state.Results = nil
 				state.Error = ""
 				state.DebounceVersion++ // Cancel any pending search
+				// And the run already out: its results describe a query the
+				// user has just erased.
+				s.abortRun()
 			} else {
 				state.IsSearching = true
 				state.DebounceVersion++
@@ -426,7 +487,7 @@ func (s *Search) ToggleOption(option *bool) tea.Cmd {
 	if state.Query != "" {
 		state.IsSearching = true
 		state.DebounceVersion++ // Cancel any pending debounced search
-		return Run(s.root, state, s.epoch)
+		return s.run()
 	}
 	return nil
 }
@@ -481,8 +542,7 @@ func (s *Search) handleClick(action mouse.MouseAction) (Result, tea.Cmd) {
 
 	switch action.Region.ID {
 	case "modal-backdrop":
-		s.clearModal()
-		return Result{Outcome: OutcomeCancelled}, nil
+		return s.cancelled(), nil
 	case "modal-body":
 		return Result{}, nil
 	}
