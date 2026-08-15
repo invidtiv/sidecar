@@ -151,6 +151,7 @@ func (m *Model) applyViewFlyoutAction(action string, beforeIdle bool) tea.Cmd {
 	if mode, ok := sortFromAction(action); ok {
 		m.workspaces.SetSort(mode)
 		m.viewFlyoutSortIdx = sortIndex(mode)
+		_ = saveWorkspaceListSort(mode.Label())
 		m.closeViewFlyout()
 		return m.previewSync()
 	}

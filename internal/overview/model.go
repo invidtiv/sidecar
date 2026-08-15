@@ -211,6 +211,8 @@ var (
 	saveShowIdleWorktrees     = state.SetShowIdleWorktrees
 	loadPinnedWorkspaceIDs    = state.GetPinnedWorkspaceIDs
 	savePinnedWorkspaceIDs    = state.SetPinnedWorkspaceIDs
+	loadWorkspaceListSort     = state.GetWorkspaceListSort
+	saveWorkspaceListSort     = state.SetWorkspaceListSort
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -227,6 +229,13 @@ func New(collector workspaceinventory.Collector) *Model {
 	}
 	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
 	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
+	// The chosen order is as much a part of "where I left off" as the pins and
+	// the sidebar width beside it. Without this the list reshuffled itself on
+	// every launch, which is the one moment a user is least able to tell a
+	// reset apart from something having actually changed.
+	if mode, ok := workspacelist.SortFromLabel(loadWorkspaceListSort(), workspacelist.SortModes); ok {
+		m.workspaces.SetSort(mode)
+	}
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}

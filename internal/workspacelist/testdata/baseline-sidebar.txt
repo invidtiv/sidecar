@@ -22,7 +22,7 @@ Worktrees (1)                                       +
 
 
 === global @ 56 cols ===
-Workspaces                                    Activity
+Workspaces                                  ⇅ Activity
 Needs Attention (1)                                    ┃
  ◆ ⑂ sidecar release fix                            2m ┃
      ◆ claude  td-a12bc3 · +41 -3                      ┃
@@ -62,7 +62,7 @@ Worktrees (1)                       +
 
 
 === global @ 40 cols ===
-Workspaces                    Activity
+Workspaces                  ⇅ Activity
 Needs Attention (1)                    ┃
  ◆ ⑂ sidecar release fix            2m ┃
      ◆ claude  td-a12bc3 · +41 -3      ┃
@@ -102,7 +102,7 @@ Worktrees (1)         +
 
 
 === global @ 26 cols ===
-Workspaces      Activity
+Workspaces    ⇅ Activity
 Needs Attention (1)
  ◆ ⑂ release … · ◆ claude
 

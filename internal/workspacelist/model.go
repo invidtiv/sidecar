@@ -368,7 +368,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	rendered := RenderSidebar(SidebarOptions{Width: opts.Width, Height: opts.Height, Title: opts.Title, Focused: opts.Focused,
 		SelectedID: m.selectedID, ScrollOffset: m.scroll,
-		HeaderMeta: &SidebarAction{ID: "sort", Label: m.sortMode.Label()},
+		HeaderMeta: &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode)},
 		// The filter row costs a row of chrome, so it appears when the filter is
 		// live and not before — the rule the project sidebar already follows, so
 		// the first heading sits on the same row on both surfaces.

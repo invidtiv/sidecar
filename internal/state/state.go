@@ -44,6 +44,14 @@ type State struct {
 	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
 	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 
+	// WorkspaceListSort is the global Workspaces list's chosen order, stored as
+	// its display label ("Activity", "Project", "Recent", "Name") rather than
+	// an ordinal, so the file reads plainly and the enum can be reordered.
+	// Unrecognised or empty falls back to the default. Its per-project
+	// counterpart lives on WorkspaceState, because the two scopes answer the
+	// question separately.
+	WorkspaceListSort string `json:"workspaceListSort,omitempty"`
+
 	// LastCreateAgent is the last agent chosen when creating a worktree.
 	LastCreateAgent string `json:"lastCreateAgent,omitempty"`
 
@@ -730,6 +738,28 @@ func SetLastGlobalTab(tab string) error {
 		current = &State{}
 	}
 	current.LastGlobalTab = tab
+	mu.Unlock()
+	return Save()
+}
+
+// GetWorkspaceListSort returns the global Workspaces list's saved order label,
+// or "" when the user has never chosen one.
+func GetWorkspaceListSort() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.WorkspaceListSort
+}
+
+// SetWorkspaceListSort saves the global Workspaces list's chosen order.
+func SetWorkspaceListSort(label string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.WorkspaceListSort = label
 	mu.Unlock()
 	return Save()
 }

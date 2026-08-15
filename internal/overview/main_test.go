@@ -22,6 +22,11 @@ func TestMain(m *testing.M) {
 	saveShowIdleWorktrees = func(bool) error { return nil }
 	loadPinnedWorkspaceIDs = func() []string { return nil }
 	savePinnedWorkspaceIDs = func([]string) error { return nil }
+	// The sort preference is package-global in production, so without this a
+	// test that picks a sort leaks it into every later New() in the same run —
+	// and the save would reach the developer's real state file.
+	loadWorkspaceListSort = func() string { return "" }
+	saveWorkspaceListSort = func(string) error { return nil }
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)

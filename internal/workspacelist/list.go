@@ -142,6 +142,22 @@ func (s Sort) Label() string {
 	}
 }
 
+// SortGlyph marks the header control as a sort rather than a caption. A bare
+// "Activity" in the corner of a panel says nothing about why it is there; the
+// same word behind ⇅ says the list is ordered by it and that the control is
+// worth pressing.
+//
+// It is ⇅ rather than the word "Sort:" because the control shares its row with
+// the create button and, on a narrow sidebar, six columns of label is the
+// difference between both controls fitting and neither. It is ⇅ rather than a
+// single arrow because the list offers no direction to point in — a ↓ would be
+// answering a question nobody asked. U+21C5 is ordinary Unicode, not a Nerd
+// Font glyph, so it survives a plain terminal font.
+const SortGlyph = "⇅"
+
+// SortPillLabel is what the header control reads.
+func SortPillLabel(mode Sort) string { return SortGlyph + " " + mode.Label() }
+
 // SortActionID names the choice a View surface reports when a sort is picked.
 // Both surfaces build their own sections — they offer different modes and
 // different extra toggles — but they must not invent two names for the same

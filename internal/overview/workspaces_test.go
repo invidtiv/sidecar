@@ -708,3 +708,46 @@ func workingRow(t *testing.T, list string) string {
 	t.Fatalf("working row missing from list:\n%s", list)
 	return ""
 }
+
+// The chosen order is as much a part of "where I left off" as the pins and the
+// sidebar width beside it, so it survives a relaunch.
+func TestWorkspaceListSortPersists(t *testing.T) {
+	origLoad, origSave := loadWorkspaceListSort, saveWorkspaceListSort
+	saved := ""
+	loadWorkspaceListSort = func() string { return saved }
+	saveWorkspaceListSort = func(label string) error { saved = label; return nil }
+	t.Cleanup(func() { loadWorkspaceListSort, saveWorkspaceListSort = origLoad, origSave })
+
+	m := New(workspaceinventory.Collector{})
+	if got := m.workspaces.Sort(); got != workspacelist.SortActivity {
+		t.Fatalf("fresh sort = %s, want the Activity default", got.Label())
+	}
+	m.openViewFlyout()
+	if cmd := m.applyViewFlyoutAction(workspacelist.SortActionID(workspacelist.SortProject), m.showIdleWorktrees); cmd != nil {
+		_ = cmd()
+	}
+	if saved != "Project" {
+		t.Fatalf("chosen sort saved as %q, want %q", saved, "Project")
+	}
+
+	// A fresh model over the same saved state comes back sorted the same way.
+	if got := New(workspaceinventory.Collector{}).workspaces.Sort(); got != workspacelist.SortProject {
+		t.Fatalf("restored sort = %s, want Project", got.Label())
+	}
+
+	// A label this list does not offer falls back to the default rather than
+	// landing on an arbitrary mode.
+	saved = "Manual" // the project sidebar offers it; global does not
+	if got := New(workspaceinventory.Collector{}).workspaces.Sort(); got != workspacelist.SortActivity {
+		t.Fatalf("unoffered saved sort restored as %s, want the Activity default", got.Label())
+	}
+}
+
+// The header control says the list is sorted, not just what word describes it.
+func TestSortPillNamesItselfAsASort(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	view := ansi.Strip(m.WorkspacesView(60, 24))
+	if !strings.Contains(view, workspacelist.SortGlyph+" Activity") {
+		t.Fatalf("header does not mark its sort control:\n%s", view)
+	}
+}
