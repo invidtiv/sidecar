@@ -8,8 +8,48 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
+
+// previewActionHit names a Git-style header action chip (not a tab).
+type previewActionHit int
+
+const (
+	previewActionDiff previewActionHit = iota
+	previewActionTask
+)
+
+func (p *Plugin) previewTaskID() string {
+	if wt := p.selectedWorktree(); wt != nil {
+		return wt.TaskID
+	}
+	return ""
+}
+
+func (p *Plugin) clickPreviewAction(data any) tea.Cmd {
+	hit, ok := data.(previewActionHit)
+	if !ok {
+		return nil
+	}
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		return nil
+	}
+	switch hit {
+	case previewActionTask:
+		id := p.previewTaskID()
+		if id == "" {
+			return nil
+		}
+		return p.openIssuePaneForSurface(root, surface, id)
+	default:
+		return p.openDiffPaneForSurface(root, surface, workspacediff.WorkingTreeTarget())
+	}
+}
 
 // isModalViewMode returns true when a modal overlay is active (not List, Kanban, or Interactive).
 func (p *Plugin) isModalViewMode() bool {
@@ -26,7 +66,7 @@ func (p *Plugin) isModalViewMode() bool {
 func isBackgroundRegion(regionID string) bool {
 	switch regionID {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
-		regionWorktreeItem, regionPreviewTab, regionListFilter,
+		regionWorktreeItem, regionPreviewTab, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
@@ -730,12 +770,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.mouseHandler.StartDrag(action.X, action.Y, regionPaneDivider, p.sidebarWidth)
 	case regionDiffTabDivider:
 		// Start drag from the width the divider actually occupies in the tab box.
+		view := p.activeDiffView()
 		leafW := p.width
-		if box, ok := p.diffTabBox(); ok {
+		if box, ok := p.diffDividerBox(); ok {
 			leafW = box.W
 		}
-		startWidth := p.diff.EffectiveListWidth(leafW)
-		p.diff.SetListWidth(startWidth)
+		startWidth := view.EffectiveListWidth(leafW)
+		view.SetListWidth(startWidth)
 		p.mouseHandler.StartDrag(action.X, action.Y, regionDiffTabDivider, startWidth)
 	case regionTermPanelContent:
 		// The setter thaws the panel's window, which is what this arm did by
@@ -751,6 +792,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
 		return p.clickIssueTab(action.Region.Data)
+	case regionDiffTargetTab:
+		return p.clickDiffTab(action.Region.Data)
 	case regionPaneLeaf:
 		leafID, ok := action.Region.Data.(int)
 		if !ok {
@@ -761,6 +804,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			return nil
 		}
 		p.focusLeaf(leafID)
+		if leaf.Kind == PaneDiff {
+			return nil
+		}
 		issue, _ := p.issueLeafAt(leafID)
 		if issue == nil {
 			return nil
@@ -842,6 +888,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				return p.loadSelectedContent()
 			}
 		}
+	case regionPreviewAction:
+		return p.clickPreviewAction(action.Region.Data)
 	case regionPreviewTab:
 		// Click on preview tab
 		if idx, ok := action.Region.Data.(int); ok && idx >= 0 && idx <= 2 {
@@ -897,44 +945,48 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionDiffTabFile:
 		// Click on file in diff tab file list
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diff.Focus = DiffTabFocusFileList
-			if idx != p.diff.Cursor {
-				oldCursor := p.diff.Cursor
-				p.diff.Cursor = idx
-				return p.onDiffTabCursorChanged(oldCursor)
+			view.Focus = DiffTabFocusFileList
+			if idx != view.Cursor {
+				oldCursor := view.Cursor
+				view.Cursor = idx
+				return view.OnCursorChanged(oldCursor)
 			}
 		}
 	case regionDiffTabCommit:
 		// Click on commit in diff tab
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diff.Focus = DiffTabFocusFileList
-			if idx != p.diff.Cursor {
-				oldCursor := p.diff.Cursor
-				p.diff.Cursor = idx
-				return p.onDiffTabCursorChanged(oldCursor)
+			view.Focus = DiffTabFocusFileList
+			if idx != view.Cursor {
+				oldCursor := view.Cursor
+				view.Cursor = idx
+				return view.OnCursorChanged(oldCursor)
 			}
 		}
 	case regionDiffTabDiffPane:
 		// Click in diff pane - focus it
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		if p.diff.Focus == DiffTabFocusCommitFiles || p.diff.Focus == DiffTabFocusCommitDiff {
-			p.diff.Focus = DiffTabFocusCommitDiff
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitDiff
 		} else {
-			p.diff.Focus = DiffTabFocusDiff
+			view.Focus = DiffTabFocusDiff
 		}
 	case regionDiffTabMinimap:
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		if p.diff.Focus == DiffTabFocusCommitFiles || p.diff.Focus == DiffTabFocusCommitDiff {
-			p.diff.Focus = DiffTabFocusCommitDiff
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitDiff
 		} else {
-			p.diff.Focus = DiffTabFocusDiff
+			view.Focus = DiffTabFocusDiff
 		}
 		if p.fullFileDiff != nil {
 			clickRow := action.Y - action.Region.Rect.Y
 			totalLines := p.fullFileDiff.TotalLines()
-			contentHeight := p.diff.Height()
+			contentHeight := view.Height()
 			if contentHeight < 1 {
 				contentHeight = 1
 			}
@@ -942,51 +994,56 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			if totalLines < mmH {
 				mmH = totalLines
 			}
-			p.diff.DiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
+			view.DiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
 		}
 	case regionCommitFileBack:
 		// Click on back button in commit drill-down
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		p.diff.Focus = DiffTabFocusFileList
-		p.diff.CommitDetail = nil
-		p.diff.CommitFileDiffRaw = ""
+		view.Focus = DiffTabFocusFileList
+		view.CommitDetail = nil
+		view.CommitFileDiffRaw = ""
 	case regionCommitFileItem:
 		// Click on file in commit file list
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			p.diff.Focus = DiffTabFocusCommitFiles
-			if idx != p.diff.CommitFileCursor {
-				p.diff.CommitFileCursor = idx
-				p.diff.CommitFileDiffRaw = ""
-				return p.loadSelectedCommitFileDiff()
+			view.Focus = DiffTabFocusCommitFiles
+			if idx != view.CommitFileCursor {
+				view.CommitFileCursor = idx
+				view.CommitFileDiffRaw = ""
+				return view.LoadSelectedCommitFile()
 			}
 		}
 	case regionCommitFileDiffPane:
 		// Click in commit file diff pane - focus it
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		p.diff.Focus = DiffTabFocusCommitDiff
+		view.Focus = DiffTabFocusCommitDiff
 	case regionDiffTabPreviewFile:
 		// Click on file in commit preview (right pane) — drill into commit files view
 		if idx, ok := action.Region.Data.(int); ok {
+			view := p.activeDiffView()
 			p.activePane = PanePreview
-			commitIdx := p.diff.Cursor - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.diff.Commits) {
-				commit := p.diff.Commits[commitIdx]
-				p.diff.Focus = DiffTabFocusCommitFiles
-				p.diff.CommitDetail = nil
-				p.diff.CommitFileCursor = idx
-				p.diff.CommitFileScroll = 0
-				p.diff.CommitFileDiffRaw = ""
-				return p.loadCommitDetail(commit.Hash)
+			commitIdx := view.Cursor - view.FileCount()
+			if commitIdx >= 0 && commitIdx < len(view.Commits) {
+				commit := view.Commits[commitIdx]
+				view.Focus = DiffTabFocusCommitFiles
+				view.CommitDetail = nil
+				view.CommitFileCursor = idx
+				view.CommitFileScroll = 0
+				view.CommitFileDiffRaw = ""
+				return view.LoadCommit(commit.Hash)
 			}
 		}
 	case regionDiffTabFileListPane:
 		// Click on empty space in the left pane — switch focus to file list
+		view := p.activeDiffView()
 		p.activePane = PanePreview
-		if p.diff.Focus == DiffTabFocusCommitFiles || p.diff.Focus == DiffTabFocusCommitDiff {
-			p.diff.Focus = DiffTabFocusCommitFiles
+		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
+			view.Focus = DiffTabFocusCommitFiles
 		} else {
-			p.diff.Focus = DiffTabFocusFileList
+			view.Focus = DiffTabFocusFileList
 		}
 	case regionCreateBackdrop:
 		// Click outside create modal - close it
@@ -1269,7 +1326,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1516,12 +1573,13 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		startValue := p.mouseHandler.DragStartValue()
 		p.sidebarWidth = workspacelist.ResizePercent(startValue, action.DragDX, p.width)
 	case regionDiffTabDivider:
+		view := p.activeDiffView()
 		leafW := p.width
-		if box, ok := p.diffTabBox(); ok {
+		if box, ok := p.diffDividerBox(); ok {
 			leafW = box.W
 		}
-		p.diff.SetListWidth(p.mouseHandler.DragStartValue())
-		p.diff.ApplyListWidthDelta(action.DragDX, leafW)
+		view.SetListWidth(p.mouseHandler.DragStartValue())
+		view.ApplyListWidthDelta(action.DragDX, leafW)
 	case regionTermPanelDivider:
 		// Calculate new terminal panel size based on drag (percentage-based).
 		startValue := p.mouseHandler.DragStartValue()
@@ -1614,7 +1672,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		p.lastDragRegion = ""
 		return p.resizeDocTerminalCmd()
 	case regionDiffTabDivider:
-		_ = state.SetDiffTabFileListWidth(p.diff.ListWidth())
+		_ = state.SetDiffTabFileListWidth(p.activeDiffView().ListWidth())
 	case regionTermPanelDivider:
 		_ = state.SetTermPanelSize(p.termPanelSize)
 		// Resize both panes after drag-to-resize

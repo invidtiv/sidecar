@@ -6,6 +6,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 const (
@@ -59,6 +60,7 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	if !ok || issueID == "" || workspace.Path == "" {
 		return nil
 	}
+	m.previewTab = workspacediff.TabOutput
 	leafID, refusal := m.ensurePreviewPane(panelayout.Issue, "Issue")
 	if refusal != nil {
 		return refusal
@@ -168,6 +170,10 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 	}
 	if m.preview.doc != nil {
 		m.focusPreviewPane(panelayout.Document)
+		return m.syncTerminalGeometry()
+	}
+	if m.preview.diff != nil {
+		m.focusPreviewPane(panelayout.Diff)
 		return m.syncTerminalGeometry()
 	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())

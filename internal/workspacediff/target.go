@@ -36,6 +36,38 @@ func WorkingTreeTarget() Target {
 	return Target{Kind: TargetWorkingTree}
 }
 
+// TabLabel is the short header label for this target.
+func (t Target) TabLabel() string {
+	switch t.Kind {
+	case TargetCommit:
+		if t.A == "" {
+			return "Commit"
+		}
+		if len(t.A) > 7 {
+			return t.A[:7]
+		}
+		return t.A
+	case TargetRange:
+		a, b := t.A, t.B
+		if len(a) > 7 {
+			a = a[:7]
+		}
+		if len(b) > 7 {
+			b = b[:7]
+		}
+		dots := t.Dots
+		if dots != "..." {
+			dots = ".."
+		}
+		if a == "" || b == "" {
+			return "Range"
+		}
+		return a + dots + b
+	default:
+		return "Working Tree"
+	}
+}
+
 // Identity is the stable tab key and the only string that crosses the request bus.
 func (t Target) Identity() string {
 	switch t.Kind {

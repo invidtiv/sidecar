@@ -35,6 +35,54 @@ const (
 	ViewFullFile
 )
 
+// Persist is the state.json spelling of a working-tree scope.
+func (s Scope) Persist() string {
+	switch s {
+	case ScopeCommits:
+		return "commits"
+	case ScopeAggregate:
+		return "aggregate"
+	default:
+		return "working-tree"
+	}
+}
+
+// ParseScope reads a persisted scope. Unknown values are working-tree.
+func ParseScope(s string) Scope {
+	switch s {
+	case "commits":
+		return ScopeCommits
+	case "aggregate":
+		return ScopeAggregate
+	default:
+		return ScopeWorkingTree
+	}
+}
+
+// Persist is the state.json spelling of a view mode.
+func (m ViewMode) Persist() string {
+	switch m {
+	case ViewSideBySide:
+		return "side-by-side"
+	case ViewFullFile:
+		return "full-file"
+	default:
+		return "unified"
+	}
+}
+
+// ParseViewMode reads a persisted view mode. Unknown values are unified.
+func ParseViewMode(s string) ViewMode {
+	switch s {
+	case "side-by-side":
+		return ViewSideBySide
+	case "full-file":
+		return ViewFullFile
+	default:
+		return ViewUnified
+	}
+}
+
 // Focus is which sub-pane of the Diff tab is active.
 type Focus int
 

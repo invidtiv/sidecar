@@ -428,7 +428,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		m.applyCommitDetail(msg)
 		return nil
 	case workspacediff.CommitFileDiffMsg:
-		return m.diff.ApplyCommitFileDiff(msg)
+		cmd := m.diff.ApplyCommitFileDiff(msg)
+		return tea.Batch(cmd, m.applyPreviewDiffFile(msg))
 	case workspacediff.TaskMsg:
 		m.applyTask(msg)
 		return nil

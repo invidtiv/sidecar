@@ -589,6 +589,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if handled, cmd := p.handleIssueKey(msg); handled {
 		return cmd
 	}
+	if handled, cmd := p.handleDiffKey(msg); handled {
+		return cmd
+	}
 	// A focused list filter owns the keyboard while the sidebar has focus. It is
 	// asked after the doc-pane keys deliberately: a focused document keeps its
 	// own q/m/+/- context, and the two focuses are mutually exclusive, so
@@ -795,6 +798,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case "ctrl+n":
 		// Create a shell directly, skipping the type selector modal
 		return p.createDefaultShell(false)
+	case "d":
+		return p.showDiffCmd()
 	case "D":
 		// Any selected shell answers D, including one nested under a sibling
 		// worktree: the row is a shell wherever it is drawn, and reaching it
@@ -1910,7 +1915,8 @@ func (p *Plugin) clearRenameShellModal() {
 
 // handleFilePickerKeys handles keys in the file picker modal.
 func (p *Plugin) handleFilePickerKeys(msg tea.KeyPressMsg) tea.Cmd {
-	fileCount := p.diff.FileCount()
+	view := p.activeDiffView()
+	fileCount := view.FileCount()
 	if fileCount == 0 {
 		p.viewMode = ViewModeList
 		return nil
@@ -1941,9 +1947,9 @@ func (p *Plugin) handleFilePickerKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		var cmd tea.Cmd
 		if p.filePickerIdx >= 0 && p.filePickerIdx < fileCount {
-			oldCursor := p.diff.Cursor
-			p.diff.Cursor = p.filePickerIdx
-			cmd = p.onDiffTabCursorChanged(oldCursor)
+			oldCursor := view.Cursor
+			view.Cursor = p.filePickerIdx
+			cmd = view.OnCursorChanged(oldCursor)
 		}
 		p.viewMode = ViewModeList
 		return cmd

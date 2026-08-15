@@ -85,6 +85,7 @@ type PaneLayoutJSON struct {
 	Split     *PaneSplitJSON     `json:"split,omitempty"`
 	Tabs      []PaneDocTabJSON   `json:"tabs,omitempty"`
 	IssueTabs []PaneIssueTabJSON `json:"issueTabs,omitempty"`
+	DiffTabs  []PaneDiffTabJSON  `json:"diffTabs,omitempty"`
 	Active    int                `json:"active,omitempty"`
 	// Open is true when restore should rebuild the split. False means this
 	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
@@ -100,6 +101,16 @@ type PaneLayoutJSON struct {
 // and applies Scroll; the body is not cached.
 type PaneIssueTabJSON struct {
 	Issue  string `json:"issue"`
+	Scroll int    `json:"scroll,omitempty"`
+}
+
+// PaneDiffTabJSON is one persisted Diff tab. Restore reloads the target
+// spec; the diff body is not cached.
+type PaneDiffTabJSON struct {
+	Spec   string `json:"spec"`
+	Path   string `json:"path,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Mode   string `json:"mode,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
 }
 

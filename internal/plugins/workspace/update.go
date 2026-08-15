@@ -278,14 +278,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case workspacediff.SnapshotMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplySnapshotMsg(msg, p.diff.WorkDir, p.diff.WorkspaceID))
+		cmds = append(cmds, p.applyDiffLoadedToLeaves(msg))
 
 	case workspacediff.CommitDetailMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplyCommitDetail(msg))
+		cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
 
 	case workspacediff.CommitFileDiffMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))
+		cmds = append(cmds, p.applyCommitFileDiffToLeaves(msg))
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {

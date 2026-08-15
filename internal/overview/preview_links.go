@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 const (
@@ -181,6 +182,7 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 			_ = file.Close()
 		}
 	}()
+	m.previewTab = workspacediff.TabOutput
 	leafID, refusal := m.ensurePreviewPane(panelayout.Document, "Document")
 	if refusal != nil {
 		return refusal
@@ -364,6 +366,10 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return m.syncTerminalGeometry()
 	}
+	if m.preview.diff != nil {
+		m.focusPreviewPane(panelayout.Diff)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
@@ -398,6 +404,9 @@ func (m *Model) focusPreviewLeaf(leafID int) bool {
 			view.SetFocused(m.preview.issue.focused)
 		}
 	}
+	if m.preview.diff != nil {
+		m.preview.diff.focused = leaf.Kind == panelayout.Diff
+	}
 	return true
 }
 
@@ -406,6 +415,7 @@ func previewPaneFloors() panelayout.Floors {
 		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
 		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 	}
 }
 

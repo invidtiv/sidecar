@@ -47,12 +47,13 @@ const (
 	flashDuration = 1500 * time.Millisecond
 
 	// Hit region IDs
-	regionSidebar      = "sidebar"
-	regionPreviewPane  = "preview-pane"
-	regionPaneDivider  = "pane-divider"
-	regionWorktreeItem = "workspace-item"
-	regionPreviewTab   = "preview-tab"
-	regionListFilter   = "workspace-list-filter"
+	regionSidebar       = "sidebar"
+	regionPreviewPane   = "preview-pane"
+	regionPaneDivider   = "pane-divider"
+	regionWorktreeItem  = "workspace-item"
+	regionPreviewTab    = "preview-tab"
+	regionPreviewAction = "preview-action"
+	regionListFilter    = "workspace-list-filter"
 	// Agent choice modal IDs (modal library)
 	agentChoiceListID    = "agent-choice-list"
 	agentChoiceConfirmID = "agent-choice-confirm"
@@ -128,6 +129,7 @@ const (
 	regionPaneLeaf        = "pane-leaf"
 	regionDocTab          = "doc-tab"
 	regionIssueTab        = "issue-tab"
+	regionDiffTargetTab   = "diff-target-tab"
 	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -235,6 +237,7 @@ type Plugin struct {
 	paneSizeCmds []tea.Cmd
 	docs         map[int]*docPane
 	issues       map[int]*issuePane
+	diffs        map[int]*diffPane
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
@@ -679,6 +682,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.diffs = make(map[int]*diffPane)
 	p.issueModelNextID = 0
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
@@ -814,6 +818,21 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-issue")
+
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(",", "prev-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(".", "next-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("}", "next-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("Y", "yank-id", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("+", "resize-pane-grow", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("-", "resize-pane-shrink", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("f", "file-picker", "workspace-diff")
 	}
 
 	// Load saved sidebar width

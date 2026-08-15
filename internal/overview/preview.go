@@ -110,6 +110,7 @@ type previewState struct {
 	// cache keeps that live layout when the global cursor visits another row.
 	doc             *previewDoc
 	issue           *previewIssue
+	diff            *previewDiff
 	paneRoot        *panelayout.Node
 	paneFocus       int
 	paneNextID      int
@@ -123,6 +124,7 @@ type previewPaneCache struct {
 	nextID int
 	doc    *previewDoc
 	issue  *previewIssue
+	diff   *previewDiff
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -191,6 +193,7 @@ func (m *Model) resetPreviewContent() {
 func (m *Model) resetActivePreviewPanes() {
 	m.preview.doc = nil
 	m.preview.issue = nil
+	m.preview.diff = nil
 	m.preview.paneRoot = &panelayout.Node{ID: 1, Kind: panelayout.Terminal}
 	m.preview.paneFocus = 1
 	m.preview.paneNextID = 2
@@ -211,14 +214,14 @@ func (m *Model) stashPreviewPanes() {
 	}
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
-		doc: m.preview.doc, issue: m.preview.issue,
+		doc: m.preview.doc, issue: m.preview.issue, diff: m.preview.diff,
 	}
 }
 
 func (m *Model) restorePreviewPanes(workspaceID string) {
 	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
 		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
-		m.preview.doc, m.preview.issue = cached.doc, cached.issue
+		m.preview.doc, m.preview.issue, m.preview.diff = cached.doc, cached.issue, cached.diff
 		m.preview.paneDragSplitID = 0
 		return
 	}
@@ -332,6 +335,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.forwardToTerminal(msg)
 	}
 	if handled, cmd := m.previewIssueKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.previewDiffPaneKey(msg); handled {
 		return true, cmd
 	}
 	if handled, cmd := m.previewDocKey(msg); handled {
@@ -724,6 +730,17 @@ func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout
 		PaneHeight:     input.PaneHeight,
 		LiveEdgeKey:    m.previewLiveEdgeKey(),
 	})
+	// A fetch in flight is the fact the header must keep even after Diff/Task
+	// action chips shrink the leftover. Lead with it so AppendStatus cannot
+	// drop it behind the lines-back note.
+	if m.preview.history.Loading {
+		for i, note := range notes {
+			if strings.Contains(note.Compact, "loading") || strings.Contains(note.Text, "loading") {
+				notes = append([]tty.StatusNote{note}, append(notes[:i], notes[i+1:]...)...)
+				break
+			}
+		}
+	}
 	return tty.AppendStatus(hints, notes, budget, func(note string) string { return styles.Muted.Render(note) })
 }
 

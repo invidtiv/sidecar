@@ -52,11 +52,18 @@ func (p *Plugin) bindDiffView() {
 }
 
 func (p *Plugin) attachDiffPaint() {
-	p.diff.LoadFullFile = p.loadFullFileForCurrent
-	p.diff.JumpChange = p.jumpFullFileChange
-	p.diff.PaintedLineCount = p.paintedLineCount
-	p.diff.LeavingFullFile = p.mapFullFileScroll
-	p.diff.ClearPaintedFile = func() { p.fullFileDiff = nil }
+	p.attachDiffPaintTo(&p.diff)
+}
+
+func (p *Plugin) attachDiffPaintTo(view *workspacediff.View) {
+	if view == nil {
+		return
+	}
+	view.LoadFullFile = func() tea.Cmd { return p.loadFullFileForView(view) }
+	view.JumpChange = p.jumpFullFileChange
+	view.PaintedLineCount = p.paintedLineCount
+	view.LeavingFullFile = p.mapFullFileScroll
+	view.ClearPaintedFile = func() { p.fullFileDiff = nil }
 }
 
 func (p *Plugin) persistDiffViewMode() {
@@ -68,6 +75,15 @@ func (p *Plugin) persistDiffViewMode() {
 	default:
 		_ = state.SetWorkspaceDiffMode("unified")
 	}
+}
+
+func (p *Plugin) diffDividerBox() (mouse.Rect, bool) {
+	if diff, leaf := p.activeDiffPane(); diff != nil && leaf != nil {
+		if box, ok := p.paneLeafBox(leaf.ID); ok {
+			return mouse.Rect{X: box.X, Y: box.Y + terminalHeaderRows, W: box.W, H: maxInt(box.H-terminalHeaderRows, 0)}, true
+		}
+	}
+	return p.diffTabBox()
 }
 
 func (p *Plugin) diffTabBox() (mouse.Rect, bool) {
@@ -212,28 +228,48 @@ func (p *Plugin) paintDiffFile(name, raw string, mode workspacediff.ViewMode, wi
 }
 
 func (p *Plugin) loadFullFileForCurrent() tea.Cmd {
-	if p.fullFileDiff != nil {
+	return p.loadFullFileForView(p.activeDiffView())
+}
+
+func (p *Plugin) loadFullFileForView(view *workspacediff.View) tea.Cmd {
+	if view == nil || p.fullFileDiff != nil {
 		return nil
 	}
-	if p.diff.Focus == DiffTabFocusCommitDiff || p.diff.Focus == DiffTabFocusCommitFiles {
-		return p.loadFullFileDiffForCommit()
+	if view.Focus == DiffTabFocusCommitDiff || view.Focus == DiffTabFocusCommitFiles {
+		return p.loadFullFileDiffForView(view)
 	}
-	return p.loadFullFileDiffForWorkspace()
+	return p.loadFullFileDiffForWorkspaceView(view)
 }
 
 func (p *Plugin) loadFullFileDiffForWorkspace() tea.Cmd {
-	wt := p.selectedWorktree()
-	filePath := p.diff.SelectedFileName()
-	if wt == nil || filePath == "" {
+	return p.loadFullFileDiffForWorkspaceView(p.activeDiffView())
+}
+
+func (p *Plugin) loadFullFileDiffForWorkspaceView(view *workspacediff.View) tea.Cmd {
+	if view == nil {
 		return nil
 	}
-	workdir := wt.Path
+	wt := p.selectedWorktree()
+	filePath := view.SelectedFileName()
+	if filePath == "" {
+		return nil
+	}
+	workdir := view.WorkDir
+	if workdir == "" && wt != nil {
+		workdir = wt.Path
+	}
+	if workdir == "" {
+		return nil
+	}
 	epoch := uint64(0)
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
 	}
-	name := wt.IdentityKey()
-	ident := p.diff.Target.Identity()
+	name := view.WorkspaceID
+	if name == "" && wt != nil {
+		name = wt.IdentityKey()
+	}
+	ident := view.Target.Identity()
 	return func() tea.Msg {
 		oldContent, _ := gitstatus.GetFileContentAtRef(workdir, filePath, "HEAD")
 		newContent, _ := gitstatus.GetWorkingTreeFileContent(workdir, filePath)
@@ -250,26 +286,37 @@ func (p *Plugin) loadFullFileDiffForWorkspace() tea.Cmd {
 }
 
 func (p *Plugin) loadFullFileDiffForCommit() tea.Cmd {
-	wt := p.selectedWorktree()
-	if wt == nil || p.diff.CommitDetail == nil {
+	return p.loadFullFileDiffForView(p.activeDiffView())
+}
+
+func (p *Plugin) loadFullFileDiffForView(view *workspacediff.View) tea.Cmd {
+	if view == nil || view.CommitDetail == nil {
 		return nil
 	}
-	if p.diff.CommitFileCursor < 0 || p.diff.CommitFileCursor >= len(p.diff.CommitDetail.Files) {
+	if view.CommitFileCursor < 0 || view.CommitFileCursor >= len(view.CommitDetail.Files) {
 		return nil
 	}
-	file := p.diff.CommitDetail.Files[p.diff.CommitFileCursor]
-	commitHash := p.diff.CommitDetail.Hash
+	file := view.CommitDetail.Files[view.CommitFileCursor]
+	commitHash := view.CommitDetail.Hash
 	parentHash := ""
-	if p.diff.CommitDetail.IsMerge && len(p.diff.CommitDetail.ParentHashes) > 0 {
-		parentHash = p.diff.CommitDetail.ParentHashes[0]
+	if view.CommitDetail.IsMerge && len(view.CommitDetail.ParentHashes) > 0 {
+		parentHash = view.CommitDetail.ParentHashes[0]
 	}
-	workdir := wt.Path
+	workdir := view.WorkDir
+	if workdir == "" {
+		if wt := p.selectedWorktree(); wt != nil {
+			workdir = wt.Path
+		}
+	}
+	if workdir == "" {
+		return nil
+	}
 	epoch := uint64(0)
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
 	}
-	name := wt.IdentityKey()
-	ident := p.diff.Target.Identity()
+	name := view.WorkspaceID
+	ident := view.Target.Identity()
 	return func() tea.Msg {
 		parentRef := commitHash + "~1"
 		if parentHash != "" {
@@ -327,11 +374,12 @@ func (p *Plugin) currentPaintRaw() string {
 }
 
 func (p *Plugin) openFilePicker() tea.Cmd {
-	if p.diff.FileCount() <= 1 {
+	view := p.activeDiffView()
+	if view.FileCount() <= 1 {
 		return nil
 	}
-	p.filePickerIdx = p.diff.Cursor
-	maxIdx := p.diff.FileCount() - 1
+	p.filePickerIdx = view.Cursor
+	maxIdx := view.FileCount() - 1
 	if p.filePickerIdx > maxIdx {
 		p.filePickerIdx = maxIdx
 	}
@@ -343,7 +391,7 @@ func (p *Plugin) openFilePicker() tea.Cmd {
 }
 
 func (p *Plugin) renderFilePickerModal(background string) string {
-	names := p.diff.FileNames()
+	names := p.activeDiffView().FileNames()
 	if len(names) == 0 {
 		return background
 	}

@@ -333,6 +333,7 @@ func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
 	}
 	m.registerPreviewDocRegions(box)
 	m.registerPreviewIssueRegions(box)
+	m.registerPreviewDiffPaneRegions(box)
 	if layout, ok := m.layoutPreviewPanes(box); ok {
 		for _, divider := range layout.Dividers {
 			hit := divider.Box
@@ -514,6 +515,9 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.issuePaneFocused() {
 		return "global-workspaces-issue"
 	}
+	if m.diffPaneFocused() {
+		return ctxGlobalWorkspacesDiff
+	}
 	if m.docPaneFocused() {
 		return "global-workspaces-doc"
 	}
@@ -528,6 +532,11 @@ func (m *Model) issuePaneFocused() bool {
 func (m *Model) docPaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.doc != nil && m.preview.doc.focused
+}
+
+func (m *Model) diffPaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.diff != nil && m.preview.diff.focused
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -743,6 +752,18 @@ func regionKind(region *mouse.Region) (string, bool) {
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over terminal output moves that
 	// output, not the list underneath it.
+	if _, ok := action.Region.Data.(previewDiffTabHit); ok {
+		return m.handlePreviewDiffMouse(action)
+	}
+	if kind, _ := regionKind(action.Region); kind == previewDiffRegionKind {
+		return m.handlePreviewDiffMouse(action)
+	}
+	if hit, ok := action.Region.Data.(previewActionHit); ok {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.clickPreviewAction(hit)
+		}
+		return nil
+	}
 	if _, ok := action.Region.Data.(previewGitHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.OpenSelectedInGit()

@@ -29,6 +29,11 @@ type DiffSnapshot = workspacediff.Snapshot
 // loadSelectedDiff returns a command to load diff for the selected worktree.
 // Also loads task details if Task tab is active.
 func (p *Plugin) loadSelectedDiff() tea.Cmd {
+	if p.diffLeafShowing() {
+		if diff, _ := p.activeDiffPane(); diff != nil {
+			return p.ensureActiveDiffTabLoaded(diff)
+		}
+	}
 	if p.previewTab != PreviewTabDiff {
 		return nil
 	}

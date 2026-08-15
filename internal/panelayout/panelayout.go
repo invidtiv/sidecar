@@ -17,6 +17,7 @@ const (
 	Terminal Kind = iota
 	Document
 	Issue
+	Diff
 )
 
 type Axis int
@@ -58,6 +59,7 @@ type Floors struct {
 	Terminal Floor
 	Doc      Floor
 	Issue    Floor
+	Diff     Floor
 }
 
 type Layout struct {
@@ -125,6 +127,8 @@ func paneMinimum(node *Node, floors Floors) Floor {
 			floor = floors.Doc
 		case Issue:
 			floor = floors.Issue
+		case Diff:
+			floor = floors.Diff
 		}
 		return Floor{Width: max(floor.Width, 0), Height: max(floor.Height, 0)}
 	}
