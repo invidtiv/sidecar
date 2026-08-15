@@ -49,11 +49,12 @@ func RenderHelp(cmd *Command) string {
 			pad := strings.Repeat(" ", maxName-len(sub.Name)+4)
 			fmt.Fprintf(&buf, "  %s%s%s\n", sub.Name, pad, sub.Summary)
 		}
-		if cmd.Name == "shell" {
+		switch cmd.Name {
+		case "shell":
 			buf.WriteString("\nRun \"sidecar shell <command> --help\" for command details.\n")
-		} else if cmd.Name == "" || cmd.Name == "sidecar" {
+		case "", "sidecar":
 			buf.WriteString("\nRun \"sidecar help <command>\" or \"sidecar <command> --help\" for command details.\n")
-		} else {
+		default:
 			fmt.Fprintf(&buf, "\nRun \"sidecar %s <command> --help\" for command details.\n", cmd.Name)
 		}
 		return buf.String()
@@ -123,9 +124,9 @@ func RenderHelp(cmd *Command) string {
 			parts = append(parts, fmt.Sprintf("%d %s", ec.Code, ec.Summary))
 		}
 		exitText := strings.Join(parts, ", ") + "."
-		if len(exitText) > 65 && len(cmd.ExitCodes) > 2 && cmd.Name == "open" {
-			buf.WriteString(fmt.Sprintf("%s,\n            %s,\n            %s.\n",
-				parts[0]+", "+parts[1], parts[2], parts[3]))
+		if len(exitText) > 65 && len(parts) >= 4 && cmd.Name == "open" {
+			fmt.Fprintf(&buf, "%s,\n            %s,\n            %s.\n",
+				parts[0]+", "+parts[1], parts[2], strings.Join(parts[3:], ", "))
 		} else {
 			buf.WriteString(exitText + "\n")
 		}

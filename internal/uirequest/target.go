@@ -73,7 +73,7 @@ func ResolveTarget(workDir, raw string, explicitLine int) (Target, error) {
 		if err != nil {
 			return Target{}, fmt.Errorf("resolve home dir: %w", err)
 		}
-		absPath = filepath.Join(home, targetPath[2:])
+		absPath = filepath.Join(home, strings.TrimPrefix(targetPath, "~"))
 	} else {
 		absPath = filepath.Join(workDirClean, targetPath)
 	}

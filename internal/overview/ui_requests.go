@@ -1,7 +1,6 @@
 package overview
 
 import (
-	"fmt"
 	"os"
 	"time"
 
@@ -19,11 +18,7 @@ type pendingView struct {
 }
 
 func hostInstanceID() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "localhost"
-	}
-	return fmt.Sprintf("%s-%d", host, os.Getpid())
+	return uirequest.InstanceID("overview")
 }
 
 func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
@@ -47,7 +42,8 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 	if isSelected {
 		var cmd tea.Cmd
-		if req.Target.Kind == uirequest.TargetKindFile {
+		switch req.Target.Kind {
+		case uirequest.TargetKindFile:
 			span := terminallink.Span{
 				Kind:  terminallink.KindFile,
 				Value: req.Target.Value,
@@ -57,14 +53,14 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 				},
 			}
 			cmd = m.openPreviewDoc(span)
-		} else if req.Target.Kind == uirequest.TargetKindIssue {
+		case uirequest.TargetKindIssue:
 			cmd = m.openPreviewIssue(req.Target.Value)
 		}
 
 		if cmd == nil {
 			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 				Instance: hostInstanceID(),
-				Host:     "localhost",
+				Host:     uirequest.HostName(),
 				PID:      os.Getpid(),
 				Status:   uirequest.StatusDeclined,
 				Reason:   "window too small to split",
@@ -76,7 +72,7 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 			Instance: hostInstanceID(),
-			Host:     "localhost",
+			Host:     uirequest.HostName(),
 			PID:      os.Getpid(),
 			Status:   uirequest.StatusOpened,
 			Surface:  "shell:" + targetWorkspace.TmuxName,
@@ -97,7 +93,7 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 		Instance: hostInstanceID(),
-		Host:     "localhost",
+		Host:     uirequest.HostName(),
 		PID:      os.Getpid(),
 		Status:   uirequest.StatusQueued,
 		Surface:  "shell:" + targetWorkspace.TmuxName,
@@ -120,11 +116,12 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 	if ttl <= 0 {
 		ttl = uirequest.DefaultTTL
 	}
-	if time.Now().Sub(pv.CreatedAt) > ttl {
+	if time.Since(pv.CreatedAt) > ttl {
 		return nil
 	}
 
-	if pv.Target.Kind == uirequest.TargetKindFile {
+	switch pv.Target.Kind {
+	case uirequest.TargetKindFile:
 		span := terminallink.Span{
 			Kind:  terminallink.KindFile,
 			Value: pv.Target.Value,
@@ -134,7 +131,7 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 			},
 		}
 		return m.openPreviewDoc(span)
-	} else if pv.Target.Kind == uirequest.TargetKindIssue {
+	case uirequest.TargetKindIssue:
 		return m.openPreviewIssue(pv.Target.Value)
 	}
 	return nil
@@ -152,7 +149,7 @@ func (m *Model) pendingViewBadge(tmuxName string) (string, bool) {
 	if ttl <= 0 {
 		ttl = uirequest.DefaultTTL
 	}
-	if time.Now().Sub(pv.CreatedAt) > ttl {
+	if time.Since(pv.CreatedAt) > ttl {
 		return "", false
 	}
 	return " ◫", true

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -81,6 +82,56 @@ func TestUIRequests_PendingViewLifecycle(t *testing.T) {
 	foreignAcks, _ := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), foreignReq.ID, foreignReq.Action)
 	if len(foreignAcks) > 0 {
 		t.Errorf("expected 0 acks for foreign shell, got %d", len(foreignAcks))
+	}
+}
+
+// An open that puts nothing on screen must be acknowledged as declined. The
+// agent's exit code is the only thing telling it whether the user can see the
+// file, so a pane that never opened may never be reported as opened.
+func TestUIRequests_SelectedShellDeclinesWhenNothingOpens(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	workDir := t.TempDir()
+	p := &Plugin{
+		ctx: &plugin.Context{WorkDir: workDir},
+		shells: []*ShellSession{
+			{TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", WorkDir: workDir},
+		},
+		selectedShellIdx: 0,
+		shellSelected:    true,
+	}
+
+	req := uirequest.Request{
+		ID:        "req-decline",
+		Action:    uirequest.ActionOpen,
+		CreatedAt: time.Now().UTC(),
+		TTLMs:     5000,
+		Origin:    uirequest.Origin{TmuxSession: "sidecar-sh-sidecar-1"},
+		Target:    uirequest.Target{Kind: uirequest.TargetKindFile, Value: "README.md"},
+	}
+
+	// No pane tree: the open cannot land anywhere.
+	p.handleUIRequest(req)
+
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil {
+		t.Fatalf("ReadAcks error: %v", err)
+	}
+	if len(acks) != 1 {
+		t.Fatalf("expected 1 ack, got %d", len(acks))
+	}
+	if acks[0].Status != uirequest.StatusDeclined {
+		t.Errorf("expected status %s, got %s", uirequest.StatusDeclined, acks[0].Status)
+	}
+}
+
+// Both pane hosts live in one process, so their acks must not share a file
+// name — otherwise one host's answer silently overwrites the other's.
+func TestUIRequests_InstanceIDIsPerHost(t *testing.T) {
+	if hostInstanceID() == uirequest.InstanceID("overview") {
+		t.Errorf("workspace and overview hosts share instance id %q", hostInstanceID())
 	}
 }
 

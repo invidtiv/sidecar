@@ -334,10 +334,13 @@ func init() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: sidecar [options] [command]\n\n")
 		fmt.Fprintf(os.Stderr, "A TUI dashboard and command-line companion for AI coding agents.\n\n")
+		// Listed from the command registry, so this stays true when a command
+		// is added there rather than becoming a second list to remember.
 		fmt.Fprintf(os.Stderr, "Commands:\n")
-		fmt.Fprintf(os.Stderr, "  help           Show help for sidecar or a subcommand\n")
-		fmt.Fprintf(os.Stderr, "  open           Open a file or issue in an adjacent split pane\n")
-		fmt.Fprintf(os.Stderr, "  shell          Manage the current Sidecar shell\n\n")
+		for _, cmd := range cli.RootCommand().Sub {
+			fmt.Fprintf(os.Stderr, "  %-14s %s\n", cmd.Name, cmd.Summary)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 	}

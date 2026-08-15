@@ -16,6 +16,14 @@ func TestResolveTargetIssue(t *testing.T) {
 	}
 }
 
+// A bare "~" is a target an agent can plausibly type; it must be refused, not
+// panic on the way to being refused.
+func TestResolveTargetBareTilde(t *testing.T) {
+	if _, err := ResolveTarget(t.TempDir(), "~", 0); err == nil {
+		t.Errorf("expected an error resolving bare \"~\"")
+	}
+}
+
 func TestResolveTargetFile(t *testing.T) {
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "sub")

@@ -24,6 +24,24 @@ func NewRequestID() string {
 	return fmt.Sprintf("%016x-%s", now.UnixNano(), hex.EncodeToString(b))
 }
 
+// HostName is the machine name reported in acks, with a stable fallback.
+func HostName() string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return "localhost"
+	}
+	return host
+}
+
+// InstanceID identifies one acknowledging host surface. A single Sidecar
+// process hosts more than one surface that can answer a request (the project
+// Workspaces plugin and the global Workspaces browser), and each ack is a file
+// named after this id — so the surface has to be part of it or one host's ack
+// silently overwrites the other's.
+func InstanceID(surface string) string {
+	return fmt.Sprintf("%s-%d-%s", HostName(), os.Getpid(), surface)
+}
+
 // Dir returns and ensures the requests directory under stateDir.
 func Dir(stateDir string) (string, error) {
 	if err := config.AssertIsolatedPath(stateDir); err != nil {
@@ -48,8 +66,7 @@ func AcksDirPath(stateDir, id string, action Action) string {
 
 // WriteRequest atomically creates the request file and its matching acks directory.
 func WriteRequest(stateDir string, req Request) (string, error) {
-	dir, err := Dir(stateDir)
-	if err != nil {
+	if _, err := Dir(stateDir); err != nil {
 		return "", err
 	}
 
@@ -103,7 +120,6 @@ func WriteRequest(stateDir string, req Request) (string, error) {
 		return "", fmt.Errorf("rename request: %w", err)
 	}
 
-	_ = dir
 	return targetPath, nil
 }
 

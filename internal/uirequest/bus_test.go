@@ -26,7 +26,6 @@ func TestWriteAndReadRequest(t *testing.T) {
 		},
 		Options: Options{
 			Split: "right",
-			Focus: true,
 		},
 	}
 

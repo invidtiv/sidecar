@@ -144,7 +144,6 @@ func runOpen(env Env, args []string) int {
 		Target: target,
 		Options: uirequest.Options{
 			Split: splitMode,
-			Focus: true,
 		},
 	}
 

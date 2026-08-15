@@ -1,12 +1,12 @@
 package workspace
 
 import (
-	"fmt"
 	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -17,11 +17,7 @@ type pendingView struct {
 }
 
 func hostInstanceID() string {
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		host = "localhost"
-	}
-	return fmt.Sprintf("%s-%d", host, os.Getpid())
+	return uirequest.InstanceID("workspace")
 }
 
 func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
@@ -47,20 +43,34 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 	if isSelected {
 		var cmd tea.Cmd
-		if req.Target.Kind == uirequest.TargetKindFile {
+		opened := false
+		switch req.Target.Kind {
+		case uirequest.TargetKindFile:
 			cmd = p.openDocPaneForSurface(root, surface, req.Target.Value, req.Target.Line)
-		} else if req.Target.Kind == uirequest.TargetKindIssue {
+			// A document open is not reported by its command: a split that did
+			// not fit still returns the reopen command, and re-opening a file
+			// already on screen legitimately returns none. The pane tree is the
+			// only honest witness.
+			opened = p.docPaneShows(req.Target.Value)
+		case uirequest.TargetKindIssue:
 			cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
+			opened = cmd != nil
 		}
 
-		if cmd == nil && p.toastMessage != "" {
-			// Refused due to fit / split constraints
+		// Nothing on screen: the split did not fit, or the target could not be
+		// loaded. Say so rather than claiming an open the user cannot see; the
+		// toast, when there is one, carries the reason.
+		if !opened {
+			reason := p.toastMessage
+			if reason == "" {
+				reason = "the window is too small to split"
+			}
 			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 				Instance: hostInstanceID(),
-				Host:     "localhost",
+				Host:     uirequest.HostName(),
 				PID:      os.Getpid(),
 				Status:   uirequest.StatusDeclined,
-				Reason:   p.toastMessage,
+				Reason:   reason,
 				Surface:  surface,
 				At:       time.Now().UTC(),
 			})
@@ -69,7 +79,7 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 			Instance: hostInstanceID(),
-			Host:     "localhost",
+			Host:     uirequest.HostName(),
 			PID:      os.Getpid(),
 			Status:   uirequest.StatusOpened,
 			Surface:  surface,
@@ -89,17 +99,28 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		TTLMs:     req.TTLMs,
 	}
 
-	if err := uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 		Instance: hostInstanceID(),
-		Host:     "localhost",
+		Host:     uirequest.HostName(),
 		PID:      os.Getpid(),
 		Status:   uirequest.StatusQueued,
 		Surface:  "shell:" + targetShell.TmuxName,
 		At:       time.Now().UTC(),
-	}); err != nil {
-		_ = err
-	}
+	})
 	return nil
+}
+
+// docPaneShows reports whether the live document pane is showing rel.
+func (p *Plugin) docPaneShows(rel string) bool {
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil {
+		return false
+	}
+	view := doc.view()
+	if view == nil {
+		return false
+	}
+	return docview.NormalizeTabPath(view.Title()) == docview.NormalizeTabPath(rel)
 }
 
 func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
@@ -116,7 +137,7 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 	if ttl <= 0 {
 		ttl = uirequest.DefaultTTL
 	}
-	if time.Now().Sub(pv.CreatedAt) > ttl {
+	if time.Since(pv.CreatedAt) > ttl {
 		return nil
 	}
 
@@ -125,9 +146,10 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 		return nil
 	}
 
-	if pv.Target.Kind == uirequest.TargetKindFile {
+	switch pv.Target.Kind {
+	case uirequest.TargetKindFile:
 		return p.openDocPaneForSurface(root, surface, pv.Target.Value, pv.Target.Line)
-	} else if pv.Target.Kind == uirequest.TargetKindIssue {
+	case uirequest.TargetKindIssue:
 		return p.openIssuePaneForSurface(root, surface, pv.Target.Value)
 	}
 	return nil
@@ -145,7 +167,7 @@ func (p *Plugin) pendingViewBadge(tmuxName string) (string, bool) {
 	if ttl <= 0 {
 		ttl = uirequest.DefaultTTL
 	}
-	if time.Now().Sub(pv.CreatedAt) > ttl {
+	if time.Since(pv.CreatedAt) > ttl {
 		return "", false
 	}
 	return " ◫", true

@@ -44,10 +44,10 @@ type Target struct {
 	Line  int        `json:"line"`
 }
 
-// Options specifies optional placement and presentation flags.
+// Options specifies optional placement flags. There is deliberately no focus
+// option: an open request never moves the user's selection or focus.
 type Options struct {
 	Split string `json:"split,omitempty"` // "auto", "right", "below"
-	Focus bool   `json:"focus,omitempty"`
 }
 
 // Request is the payload written by the CLI into the request bus.
@@ -76,10 +76,10 @@ type Ack struct {
 
 // Result is the consolidated outcome presented to the agent or caller.
 type Result struct {
-	Action    Action   `json:"action"`
-	Target    Target   `json:"target"`
-	Shell     string   `json:"shell"`
-	Name      string   `json:"name"`
-	Delivered int      `json:"delivered"`
-	Results   []Ack    `json:"results"`
+	Action    Action `json:"action"`
+	Target    Target `json:"target"`
+	Shell     string `json:"shell"`
+	Name      string `json:"name"`
+	Delivered int    `json:"delivered"`
+	Results   []Ack  `json:"results"`
 }
