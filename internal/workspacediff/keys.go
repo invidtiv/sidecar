@@ -171,6 +171,7 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		if msg.String() == "esc" || msg.String() == "h" || msg.String() == "left" {
 			v.Focus = FocusFileList
 			v.CommitDetail = nil
+			v.dropPaintedFile()
 			return nil, true
 		}
 		return nil, true
@@ -180,34 +181,26 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "j", "down":
 		if v.CommitFileCursor < n-1 {
 			v.CommitFileCursor++
-			v.clearCommitFileDiff()
-			v.ClampScroll()
-			return v.LoadSelectedCommitFile(), true
+			return v.afterCommitFileMove(), true
 		}
 		return nil, true
 	case "k", "up":
 		if v.CommitFileCursor > 0 {
 			v.CommitFileCursor--
-			v.clearCommitFileDiff()
-			v.ClampScroll()
-			return v.LoadSelectedCommitFile(), true
+			return v.afterCommitFileMove(), true
 		}
 		return nil, true
 	case "g":
 		if v.CommitFileCursor != 0 {
 			v.CommitFileCursor = 0
 			v.CommitFileScroll = 0
-			v.clearCommitFileDiff()
-			v.ClampScroll()
-			return v.LoadSelectedCommitFile(), true
+			return v.afterCommitFileMove(), true
 		}
 		return nil, true
 	case "G":
 		if n > 0 && v.CommitFileCursor != n-1 {
 			v.CommitFileCursor = n - 1
-			v.clearCommitFileDiff()
-			v.ClampScroll()
-			return v.LoadSelectedCommitFile(), true
+			return v.afterCommitFileMove(), true
 		}
 		return nil, true
 	case "l", "right", "enter":
@@ -221,6 +214,7 @@ func (v *View) handleCommitFilesKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		v.Focus = FocusFileList
 		v.CommitDetail = nil
 		v.clearCommitFileDiff()
+		v.dropPaintedFile()
 		return nil, true
 	case "v", "V":
 		return v.CycleViewMode(), true
@@ -333,9 +327,24 @@ func (v *View) pageCommitFiles(delta int) tea.Cmd {
 	if n := len(v.CommitDetail.Files); n > 0 && v.CommitFileCursor >= n {
 		v.CommitFileCursor = n - 1
 	}
+	return v.afterCommitFileMove()
+}
+
+func (v *View) afterCommitFileMove() tea.Cmd {
 	v.clearCommitFileDiff()
+	v.dropPaintedFile()
 	v.ClampScroll()
-	return v.LoadSelectedCommitFile()
+	load := v.LoadSelectedCommitFile()
+	if v.ViewMode == ViewFullFile && v.LoadFullFile != nil {
+		return tea.Batch(load, v.LoadFullFile())
+	}
+	return load
+}
+
+func (v *View) dropPaintedFile() {
+	if v.ClearPaintedFile != nil {
+		v.ClearPaintedFile()
+	}
 }
 
 func (v *View) clearCommitFileDiff() {

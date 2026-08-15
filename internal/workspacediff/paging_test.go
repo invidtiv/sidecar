@@ -130,6 +130,67 @@ func modeLabel(mode ViewMode) string {
 	}
 }
 
+func TestCycleScopeClearsPaintedFile(t *testing.T) {
+	cleared := 0
+	v := &View{
+		Scope: ScopeWorkingTree,
+		Snapshot: &Snapshot{
+			State:       LoadStateReady,
+			WorkingTree: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\n+hi\n",
+			Commits:     []CommitInfo{{Hash: "aaa1111", Subject: "first"}},
+		},
+		ClearPaintedFile: func() { cleared++ },
+	}
+	v.ApplySnapshot()
+	if v.FileCount() == 0 {
+		t.Fatal("premise: working-tree file so cursor can sit on file 0")
+	}
+	_ = v.CycleScope()
+	if cleared == 0 {
+		t.Fatal("CycleScope did not call ClearPaintedFile")
+	}
+}
+
+func TestCommitFileKeysClearPaintedFile(t *testing.T) {
+	v := &View{
+		Focus: FocusCommitFiles,
+		CommitDetail: &CommitDetail{
+			Hash:  "aaa1111",
+			Files: []CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
+		},
+	}
+	for _, key := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+		prep func(*View)
+	}{
+		{"j", tea.KeyPressMsg{Code: 'j', Text: "j"}, func(v *View) { v.CommitFileCursor = 0 }},
+		{"k", tea.KeyPressMsg{Code: 'k', Text: "k"}, func(v *View) { v.CommitFileCursor = 1 }},
+		{"g", tea.KeyPressMsg{Code: 'g', Text: "g"}, func(v *View) { v.CommitFileCursor = 2 }},
+		{"G", tea.KeyPressMsg{Code: 'G', Text: "G"}, func(v *View) { v.CommitFileCursor = 0 }},
+		{"esc", tea.KeyPressMsg{Code: tea.KeyEscape}, func(v *View) { v.CommitFileCursor = 0 }},
+		{"h", tea.KeyPressMsg{Code: 'h', Text: "h"}, func(v *View) { v.CommitFileCursor = 0; v.Focus = FocusCommitFiles }},
+	} {
+		t.Run(key.name, func(t *testing.T) {
+			cleared := 0
+			v.ClearPaintedFile = func() { cleared++ }
+			v.Focus = FocusCommitFiles
+			v.CommitDetail = &CommitDetail{
+				Hash:  "aaa1111",
+				Files: []CommitFile{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}},
+			}
+			key.prep(v)
+			_, handled := v.HandleKey(key.msg)
+			if !handled {
+				t.Fatalf("%s was not handled", key.name)
+			}
+			if cleared == 0 {
+				t.Fatalf("%s on commit files did not call ClearPaintedFile", key.name)
+			}
+		})
+	}
+}
+
 func TestDividerHitStaysInsideLeaf(t *testing.T) {
 	v := &View{}
 	v.SetSize(160, 24)

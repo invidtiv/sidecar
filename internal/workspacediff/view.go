@@ -301,8 +301,13 @@ func (v *View) CycleScope() tea.Cmd {
 	}
 	v.CommitDetail = nil
 	v.clearCommitFileDiff()
+	v.dropPaintedFile()
 	v.ApplySnapshot()
-	return v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)
+	cmd := v.LoadSelectedCommit(v.WorkDir, v.WorkspaceID)
+	if v.ViewMode == ViewFullFile && v.LoadFullFile != nil {
+		return tea.Batch(cmd, v.LoadFullFile())
+	}
+	return cmd
 }
 
 // CycleViewMode walks unified → side-by-side → full-file.

@@ -215,7 +215,7 @@ func (p *Plugin) loadFullFileForCurrent() tea.Cmd {
 	if p.fullFileDiff != nil {
 		return nil
 	}
-	if p.diff.Focus == DiffTabFocusCommitDiff {
+	if p.diff.Focus == DiffTabFocusCommitDiff || p.diff.Focus == DiffTabFocusCommitFiles {
 		return p.loadFullFileDiffForCommit()
 	}
 	return p.loadFullFileDiffForWorkspace()
