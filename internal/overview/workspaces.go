@@ -441,7 +441,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.toggleWorkspaceSidebar()
 	}
 	if key == "," || key == "." {
-		if m.previewTabsVisible() {
+		// A focused content leaf owns comma/dot. Cycling Output/Diff/Task
+		// here would hide the tree the leaf lives in.
+		if !m.contentLeafFocused() && m.previewTabsVisible() {
 			delta := 1
 			if key == "," {
 				delta = -1
@@ -537,6 +539,10 @@ func (m *Model) docPaneFocused() bool {
 func (m *Model) diffPaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.diff != nil && m.preview.diff.focused
+}
+
+func (m *Model) contentLeafFocused() bool {
+	return m.diffPaneFocused() || m.docPaneFocused() || m.issuePaneFocused()
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -654,9 +660,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		return m.syncTerminalGeometry()
 	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewDiffDividerKind {
-		w, _ := m.diffContentSize()
-		m.diff.SetListWidth(m.workspacesMouse.DragStartValue())
-		m.diff.ApplyListWidthDelta(action.DragDX, w)
+		view := m.previewDiffDragView()
+		view.SetListWidth(m.workspacesMouse.DragStartValue())
+		view.ApplyListWidthDelta(action.DragDX, m.previewDiffDragWidth())
 		return nil
 	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewPaneDividerKind {
@@ -679,7 +685,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		return m.syncTerminalGeometry()
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewDiffDividerKind {
-		_ = state.SetDiffTabFileListWidth(m.diff.ListWidth())
+		_ = state.SetDiffTabFileListWidth(m.previewDiffDragView().ListWidth())
 		return nil
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewPaneDividerKind {
@@ -782,9 +788,10 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	if _, ok := action.Region.Data.(previewDiffDividerHit); ok {
 		if action.Type == mouse.ActionClick {
-			w, _ := m.diffContentSize()
-			start := m.diff.EffectiveListWidth(w)
-			m.diff.SetListWidth(start)
+			view := m.previewDiffDragView()
+			w := m.previewDiffDragWidth()
+			start := view.EffectiveListWidth(w)
+			view.SetListWidth(start)
 			m.workspacesMouse.StartDrag(action.X, action.Y, previewDiffDividerKind, start)
 		}
 		return nil

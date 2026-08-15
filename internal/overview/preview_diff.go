@@ -303,17 +303,55 @@ func (m *Model) registerPreviewDiffPaneRegions(box termpreview.Box) {
 		)
 	}
 	if view := m.preview.diff.view(); view != nil {
-		body := mouse.Rect{
-			X: diffBox.X, Y: diffBox.Y + termpreview.HeaderRows,
-			W: diffBox.W, H: max(diffBox.H-termpreview.HeaderRows, 0),
-		}
-		if body.H > 0 {
+		if body, ok := m.previewDiffLeafBody(); ok {
 			view.SetSize(body.W, body.H)
+			for _, hit := range view.FileHits(body) {
+				m.workspacesMouse.HitMap.AddRect(hit.ID, hit.Rect.X, hit.Rect.Y, hit.Rect.W, hit.Rect.H, hit.Data)
+			}
 			if d := view.DividerHit(body); d.W > 0 && d.H > 0 {
 				m.workspacesMouse.HitMap.AddRect(previewDiffDividerKind, d.X, d.Y, d.W, d.H, previewDiffDividerHit{})
 			}
 		}
 	}
+}
+
+func (m *Model) previewDiffLeafBody() (mouse.Rect, bool) {
+	if m.preview.diff == nil {
+		return mouse.Rect{}, false
+	}
+	box, ok := m.previewBox()
+	if !ok {
+		return mouse.Rect{}, false
+	}
+	diffBox, ok := m.previewPaneBox(panelayout.Diff, box)
+	if !ok || diffBox.W < 1 {
+		return mouse.Rect{}, false
+	}
+	body := mouse.Rect{
+		X: diffBox.X, Y: diffBox.Y + termpreview.HeaderRows,
+		W: diffBox.W, H: max(diffBox.H-termpreview.HeaderRows, 0),
+	}
+	if body.H < 1 {
+		return mouse.Rect{}, false
+	}
+	return body, true
+}
+
+func (m *Model) previewDiffDragView() *workspacediff.View {
+	if m.preview.diff != nil {
+		if view := m.preview.diff.view(); view != nil {
+			return view
+		}
+	}
+	return &m.diff
+}
+
+func (m *Model) previewDiffDragWidth() int {
+	if body, ok := m.previewDiffLeafBody(); ok {
+		return body.W
+	}
+	w, _ := m.diffContentSize()
+	return w
 }
 
 func (m *Model) previewDiffPaneKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
