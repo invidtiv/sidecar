@@ -275,3 +275,47 @@ func TestCapitalVTogglesKanban(t *testing.T) {
 		t.Fatalf("V did not return to the list: %v", p.viewMode)
 	}
 }
+
+// The chosen order survives a relaunch, per project.
+func TestListSortPersistsPerProject(t *testing.T) {
+	p := sortPlugin(t)
+	if p.listSort != workspacelist.SortManual {
+		t.Fatalf("default sort = %s, want Manual", p.listSort.Label())
+	}
+	if cmd := p.setListSort(workspacelist.SortActivity); cmd != nil {
+		_ = cmd()
+	}
+
+	// A fresh plugin over the same saved state comes back sorted the same way.
+	next := New()
+	next.ctx = p.ctx
+	next.shellStartupHooks = p.shellStartupHooks
+	next.restoreListSort()
+	if next.listSort != workspacelist.SortActivity {
+		t.Fatalf("restored sort = %s, want Activity", next.listSort.Label())
+	}
+}
+
+// A state file naming a mode this surface does not offer must not select an
+// arbitrary one — it falls back to the default.
+func TestUnknownSavedSortFallsBackToTheDefault(t *testing.T) {
+	p := sortPlugin(t)
+	hooks := p.shellStartupHooks.withDefaults()
+	saved := hooks.getWorkspaceState(p.ctx.ProjectRoot)
+	saved.ListSort = "Project" // global offers it; this surface does not
+	_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, saved)
+
+	p.listSort = workspacelist.SortName
+	p.restoreListSort()
+	if p.listSort != workspacelist.SortName {
+		t.Fatalf("an unoffered saved sort changed the mode to %s", p.listSort.Label())
+	}
+
+	fresh := New()
+	fresh.ctx = p.ctx
+	fresh.shellStartupHooks = p.shellStartupHooks
+	fresh.restoreListSort()
+	if fresh.listSort != workspacelist.SortManual {
+		t.Fatalf("unoffered saved sort restored as %s, want the Manual default", fresh.listSort.Label())
+	}
+}

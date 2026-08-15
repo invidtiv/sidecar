@@ -79,6 +79,12 @@ type WorkspaceState struct {
 	ShellDisplayNames map[string]string          `json:"shellDisplayNames,omitempty"` // TmuxName -> display name
 	PaneLayout        *PaneLayoutJSON            `json:"paneLayout,omitempty"`        // Read-only migrate into PaneLayouts
 	PaneLayouts       map[string]*PaneLayoutJSON `json:"paneLayouts,omitempty"`       // surface → layout
+	// ListSort is the sidebar's chosen order, stored as its display label
+	// ("Manual", "Activity", "Recent", "Name") rather than an ordinal. A label
+	// survives reordering the enum, reads plainly in the state file, and an
+	// unrecognised one falls back to the default instead of selecting an
+	// arbitrary mode. Empty means the project has never chosen.
+	ListSort string `json:"listSort,omitempty"`
 }
 
 // PaneLayoutJSON is the persisted, presentation-neutral pane-tree shape. Doc

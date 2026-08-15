@@ -158,6 +158,20 @@ func SortFromAction(action string, modes []Sort) (Sort, bool) {
 	return 0, false
 }
 
+// SortFromLabel resolves a persisted label back to a mode within the offered
+// set, case-insensitively. Labels are what surfaces persist: they read plainly
+// in a state file and survive the enum being reordered. A label this set does
+// not offer reports false so the caller can fall back to its own default rather
+// than land on an arbitrary mode.
+func SortFromLabel(label string, modes []Sort) (Sort, bool) {
+	for _, mode := range modes {
+		if strings.EqualFold(label, mode.Label()) {
+			return mode, true
+		}
+	}
+	return 0, false
+}
+
 // SortIndex is a mode's position in the offered set, for a list cursor.
 func SortIndex(mode Sort, modes []Sort) int {
 	for i, candidate := range modes {

@@ -146,5 +146,34 @@ func (p *Plugin) setListSort(mode workspacelist.Sort) tea.Cmd {
 	}
 	p.listSort = mode
 	p.ensureVisible()
+	p.saveListSort()
 	return nil
+}
+
+// saveListSort persists the chosen order for this project. It is per-project
+// rather than global because the answer is genuinely project-shaped: a
+// repository you keep four agents in wants Activity, and one you keep two long
+// worktrees in wants Manual.
+func (p *Plugin) saveListSort() {
+	if p.ctx == nil {
+		return
+	}
+	hooks := p.shellStartupHooks.withDefaults()
+	wtState := hooks.getWorkspaceState(p.ctx.ProjectRoot)
+	wtState.ListSort = p.listSort.Label()
+	_ = hooks.setWorkspaceState(p.ctx.ProjectRoot, wtState)
+}
+
+// restoreListSort reads the saved order back. It is deliberately separate from
+// restoreSelectionState, which returns early when there is no saved selection:
+// a project can have a remembered sort and no remembered selection, and the
+// sort has to survive that.
+func (p *Plugin) restoreListSort() {
+	if p.ctx == nil {
+		return
+	}
+	saved := p.shellStartupHooks.withDefaults().getWorkspaceState(p.ctx.ProjectRoot).ListSort
+	if mode, ok := workspacelist.SortFromLabel(saved, projectSortModes); ok {
+		p.listSort = mode
+	}
 }
