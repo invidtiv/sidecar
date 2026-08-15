@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll/scrolltest"
 )
 
 func wheel(x, y int, down bool) tea.MouseWheelMsg {
@@ -58,6 +59,27 @@ func bodyPoint(t *testing.T, h *mouse.Handler) (int, int) {
 
 func scrollableModal() *Modal {
 	return New("Long").AddSection(Text(longText(200)))
+}
+
+// TestInertialTailOverTheModalBody runs the shared stress fixture against a
+// long modal body sitting at its bottom.
+func TestInertialTailOverTheModalBody(t *testing.T) {
+	m := scrollableModal()
+	h := mouse.NewHandler()
+	m.Render(80, 24, h)
+	m.ScrollToBottom()
+	m.Render(80, 24, h)
+	x, y := bodyPoint(t, h)
+
+	scrolltest.Run(t, scrolltest.Tail{
+		Name: "modal body at the bottom",
+		X:    x,
+		Y:    y,
+		Down: true,
+		Dropped: func(msg tea.MouseWheelMsg) bool {
+			return m.WheelAtBoundary(msg, h)
+		},
+	})
 }
 
 func TestWheelAtBoundaryTopAndBottom(t *testing.T) {

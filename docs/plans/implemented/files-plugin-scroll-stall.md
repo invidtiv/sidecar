@@ -1,7 +1,15 @@
 # Files plugin: Apple Mouse scroll stall
 
+> **Implemented — superseded by the global contract.** The Files-specific fix
+> landed as part of the repository-wide wheel boundary contract described in
+> [Complete inertial wheel boundary coverage](../active/scroll-inertia-complete-coverage.md):
+> `tea.WithFilter(app.FilterInput)`, `plugin.WheelBoundaryConsumer` (implemented
+> by `filebrowser.Plugin.WheelAtBoundary`), shared `internal/scroll.Bounds`, and
+> the declared policy registry in `internal/plugins/assembly`. Read that plan for
+> the current design; this document is kept as the original diagnosis.
+
 **Date:** 2026-08-13
-**Status:** diagnosis only — not started
+**Status:** implemented — promises satisfied by the global wheel boundary contract
 **Scope:** Files plugin wheel handling. No code in this pass; another agent was in the tree when this was written.
 
 ## Goal

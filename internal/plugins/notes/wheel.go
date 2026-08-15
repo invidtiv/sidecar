@@ -3,8 +3,13 @@ package notes
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/plugin"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 )
+
+// Notes is declared "covered" in assembly.WheelBoundaryRegistry; this assertion
+// makes losing the contract a compile error.
+var _ plugin.WheelBoundaryConsumer = (*Plugin)(nil)
 
 // listBounds describes the note list's wheel position: the wheel moves the
 // cursor over the currently displayed (filtered) notes.

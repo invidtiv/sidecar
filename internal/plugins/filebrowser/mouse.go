@@ -14,6 +14,10 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
+// The Files plugin is declared "covered" in assembly.WheelBoundaryRegistry;
+// this assertion makes losing the contract a compile error.
+var _ plugin.WheelBoundaryConsumer = (*Plugin)(nil)
+
 // WheelAtBoundary implements plugin.WheelBoundaryConsumer. It mirrors the
 // routing in handleMouseScroll without opening files, updating selection, or
 // rendering. Open overlays are answered by the overlay that owns mouse input,

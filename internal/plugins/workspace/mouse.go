@@ -5,12 +5,17 @@ import (
 	tea "charm.land/bubbletea/v2"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
+
+// Workspaces is declared "covered" in assembly.WheelBoundaryRegistry; this
+// assertion makes losing the contract a compile error.
+var _ plugin.WheelBoundaryConsumer = (*Plugin)(nil)
 
 // WheelAtBoundary implements plugin.WheelBoundaryConsumer for the project
 // Workspaces surface. It follows the same hit regions as handleMouseScroll but

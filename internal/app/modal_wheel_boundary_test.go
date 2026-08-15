@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll/scrolltest"
 )
 
 // --- helpers ---------------------------------------------------------------
@@ -605,20 +606,59 @@ func TestBoundaryWheelDoesNotSynchronizeChangelogState(t *testing.T) {
 
 // --- inertial tail and reverse --------------------------------------------
 
+// TestInertialTailIsDroppedAndReversePasses runs the shared stress fixture
+// through the real app filter for each overlay class that can sit at a
+// boundary. No sleeps: the fixture drives the pre-update answer directly.
 func TestInertialTailIsDroppedAndReversePasses(t *testing.T) {
-	m := boundaryModel(t)
-	m.showIssuePreview = true
-	view := longIssueView()
-	view.Scroll(100000)
-	m.issuePreviewView = view
-
-	for i := range 300 {
-		if got := FilterInput(m, wheelAt(10, 10, true)); got != nil {
-			t.Fatalf("tail event %d survived the filter", i)
-		}
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, m *Model) (x, y int, down bool)
+	}{
+		{
+			name: "issue preview at the bottom of a long card",
+			setup: func(t *testing.T, m *Model) (int, int, bool) {
+				m.showIssuePreview = true
+				view := longIssueView()
+				view.Scroll(100000)
+				m.issuePreviewView = view
+				return 10, 10, true
+			},
+		},
+		{
+			name: "diagnostics modal body at the top",
+			setup: func(t *testing.T, m *Model) (int, int, bool) {
+				m.showDiagnostics = true
+				md, h := renderedModal(m.width, m.height, longLines(200))
+				m.diagnosticsModal, m.diagnosticsMouseHandler = md, h
+				x, y := modalBodyPoint(t, h)
+				return x, y, false
+			},
+		},
+		{
+			name: "project switcher cursor at the top",
+			setup: func(t *testing.T, m *Model) (int, int, bool) {
+				m.showProjectSwitcher = true
+				m.projectSwitcherFiltered = make([]projectSwitcherDestination, 5)
+				m.projectSwitcherCursor = 0
+				return 10, 10, false
+			},
+		},
 	}
-	if got := FilterInput(m, wheelAt(10, 10, false)); got == nil {
-		t.Fatal("the first reverse event after the boundary was dropped")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := boundaryModel(t)
+			x, y, down := tt.setup(t, &m)
+			scrolltest.Run(t, scrolltest.Tail{
+				Name: tt.name,
+				X:    x,
+				Y:    y,
+				Down: down,
+				Dropped: func(msg tea.MouseWheelMsg) bool {
+					return FilterInput(m, msg) == nil
+				},
+			})
+		})
 	}
 }
 
