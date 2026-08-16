@@ -1037,6 +1037,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.interactiveState == nil {
 			return p, nil
 		}
+		if msg.Generation != p.resizeGeneration {
+			// Leftover tick from before a divider drop — the drop already
+			// flushed, so this must not fire a second resize.
+			return p, nil
+		}
 		// Cleared before the liveness guard: the retry has arrived either way,
 		// and a flag left set describes one still to come, which is what stops
 		// the next burst from arming its own.

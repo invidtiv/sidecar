@@ -166,7 +166,7 @@ func assertInteractiveTerminalGeometry(t *testing.T, p *Plugin, leaf Box) {
 }
 
 func armDeferredResize(model *tty.Model) time.Time {
-	armedAt := time.Now().Add(-tty.ResizeDebounce + 100*time.Millisecond)
+	armedAt := time.Now().Add(-tty.DefaultResizeDebounce + 100*time.Millisecond)
 	model.State.LastResizeAt = armedAt
 	return armedAt
 }

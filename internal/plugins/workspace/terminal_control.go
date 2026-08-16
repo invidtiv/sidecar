@@ -102,8 +102,19 @@ func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	// tty.New treats an empty AttachKey as "use default". Honour the resolved
 	// empty chord so ctrl+] stays the pane's when full attach is off.
 	model.Config.AttachKey = config.AttachKey
+	model.SetResizeDebounce(p.resizeDebounce())
 	model.SetHooks(p.terminalHooks())
 	return model
+}
+
+func (p *Plugin) applyResizeDebounceToTerminals() {
+	d := p.resizeDebounce()
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.SetResizeDebounce(d)
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.SetResizeDebounce(d)
+	}
 }
 
 // terminalHooks is everything this surface owns about a live pane, said once, to

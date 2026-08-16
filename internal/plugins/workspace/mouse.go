@@ -1723,6 +1723,11 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
 	}
+	if isDividerDragRegion(dragSource) {
+		// Immediate resize on drop. A leftover deferred tick must not fire
+		// a second SIGWINCH after this flush.
+		p.cancelDeferredPaneResize()
+	}
 	if p.terminalPointerIntent(mouse.ActionDragEnd, "", dragSource, false) == tty.PointerFinish &&
 		(p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {
 		return p.finishInteractiveSelection()

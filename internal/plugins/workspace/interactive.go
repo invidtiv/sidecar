@@ -392,10 +392,17 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 		return touch
 	}
 
+	// No SIGWINCH until drop: a divider drag already moved the box, and a poll
+	// that notices tmux ≠ box must not reflow the agent on every tick. Lease
+	// touch is fine. debounce 0 is the per-event escape hatch.
+	if p.dividerDragBlocksResize() {
+		return touch
+	}
+
 	// The budget is the shared one, and waiting it out is not dropping the
 	// resize: the pane is still drawn at the size it has not been given, so one
 	// deferred assertion is armed for the whole window.
-	if wait := tty.ResizeWait(p.interactiveState.LastResizeAt, time.Now()); wait > 0 {
+	if wait := tty.ResizeWaitFor(p.interactiveState.LastResizeAt, time.Now(), p.resizeDebounce()); wait > 0 {
 		return tea.Batch(touch, p.deferInteractivePaneResize(wait))
 	}
 	p.interactiveState.LastResizeAt = time.Now()
@@ -418,7 +425,47 @@ func (p *Plugin) deferInteractivePaneResize(wait time.Duration) tea.Cmd {
 		return nil
 	}
 	p.interactiveState.ResizeRetryPending = true
-	return tea.Tick(wait, func(time.Time) tea.Msg { return deferredPaneResizeMsg{} })
+	gen := p.resizeGeneration
+	return tea.Tick(wait, func(time.Time) tea.Msg { return deferredPaneResizeMsg{Generation: gen} })
+}
+
+func (p *Plugin) resizeDebounce() time.Duration {
+	if p.resizeDebounceDur == nil {
+		return tty.DefaultResizeDebounce
+	}
+	return *p.resizeDebounceDur
+}
+
+func (p *Plugin) setResizeDebounce(d time.Duration) {
+	p.resizeDebounceDur = &d
+}
+
+func (p *Plugin) cancelDeferredPaneResize() {
+	p.resizeGeneration++
+	if p.interactiveState != nil {
+		p.interactiveState.ResizeRetryPending = false
+	}
+}
+
+func isDividerDragRegion(id string) bool {
+	switch id {
+	case regionPaneDivider, regionPaneTreeDivider, regionTermPanelDivider, regionDiffTabDivider:
+		return true
+	default:
+		return false
+	}
+}
+
+// dividerDragBlocksResize is the no-SIGWINCH-until-drop gate. Keyboard +/-
+// and host WindowSizeMsg are not divider drags and never go through here.
+func (p *Plugin) dividerDragBlocksResize() bool {
+	if p.resizeDebounce() == 0 {
+		return false
+	}
+	if p.mouseHandler == nil || !p.mouseHandler.IsDragging() {
+		return false
+	}
+	return isDividerDragRegion(p.mouseHandler.DragRegion())
 }
 
 // resizeThroughTerminal hands a resize to the component that owns the pane. The
@@ -481,6 +528,9 @@ func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int
 	}
 	width = p.terminalContentWidth(width)
 	if paneWidth == width && paneHeight == height {
+		return nil
+	}
+	if p.dividerDragBlocksResize() {
 		return nil
 	}
 	return func() tea.Msg {

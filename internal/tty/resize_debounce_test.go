@@ -95,7 +95,7 @@ func TestDeferredResizeAssertsTheNewestGeometry(t *testing.T) {
 		t.Fatal("the burst armed a retry the model does not know about")
 	}
 
-	*clock = clock.Add(2 * ResizeDebounce)
+	*clock = clock.Add(2 * DefaultResizeDebounce)
 	cmd := m.Update(deferredResizeMsg{Scope: m.Scope()})
 	if cmd == nil {
 		t.Fatal("the retry asserted nothing")
@@ -118,7 +118,7 @@ func TestDeferredResizeAssertsTheNewestGeometry(t *testing.T) {
 func TestDroppedDeferredResizeDoesNotWedgeTheRetryFlag(t *testing.T) {
 	armBurst := func(m *Model, clock *time.Time) {
 		t.Helper()
-		*clock = clock.Add(2 * ResizeDebounce)
+		*clock = clock.Add(2 * DefaultResizeDebounce)
 		m.SetDimensions(70, 22)
 		if cmd := m.SetDimensions(60, 20); cmd == nil || !m.resizeRetryPending {
 			t.Fatalf("a resize inside the debounce window armed no retry (pending=%v)", m.resizeRetryPending)
@@ -161,7 +161,7 @@ func TestDroppedDeferredResizeDoesNotWedgeTheRetryFlag(t *testing.T) {
 
 // A retry belonging to another activation is not this model's work.
 func TestDeferredResizeIgnoresForeignScopes(t *testing.T) {
-	m := debouncedModel(t, 2*ResizeDebounce)
+	m := debouncedModel(t, 2*DefaultResizeDebounce)
 	if cmd := m.Update(deferredResizeMsg{Scope: MessageScope{Owner: m.Scope().Owner + 1}}); cmd != nil {
 		t.Fatal("a retry for another activation was answered")
 	}
@@ -191,7 +191,7 @@ func controlOwnedModel(t *testing.T, since time.Duration) *Model {
 // package's tests share the machine's default server. LastResizeAt is the honest
 // marker either way — it is recorded only where the resize is issued.
 func TestControlOwnedPaneIsStillGivenItsGeometry(t *testing.T) {
-	m := controlOwnedModel(t, 2*ResizeDebounce)
+	m := controlOwnedModel(t, 2*DefaultResizeDebounce)
 	before := m.State.LastResizeAt
 
 	cmd := m.SetDimensions(60, 20)
@@ -228,7 +228,7 @@ func TestControlOwnedResizeInsideTheWindowArmsTheRetry(t *testing.T) {
 // transport and nothing else — td-73fa86's letterboxing through a second door.
 // The command is not run, for the reason the sibling test gives.
 func TestControlOwnedImmediateResizeIsGivenItsGeometryToo(t *testing.T) {
-	m := controlOwnedModel(t, 2*ResizeDebounce)
+	m := controlOwnedModel(t, 2*DefaultResizeDebounce)
 	before := m.State.LastResizeAt
 
 	cmd := m.ResizeAndPollImmediate(60, 20)
@@ -258,7 +258,7 @@ func TestControlOwnedImmediateResizeIsGivenItsGeometryToo(t *testing.T) {
 // paid early: a future early return that stamps the clock without asserting
 // anything fails here rather than passing.
 func TestControlOwnedDeferredResizePaysBothDebtsWhenTheRetryFires(t *testing.T) {
-	m, clock := frozenDebouncedModel(t, 2*ResizeDebounce)
+	m, clock := frozenDebouncedModel(t, 2*DefaultResizeDebounce)
 	m.visible = true
 	m.subscription = &ControlSubscription{}
 
@@ -281,7 +281,7 @@ func TestControlOwnedDeferredResizePaysBothDebtsWhenTheRetryFires(t *testing.T) 
 			m.controlGen, m.State.LastResizeAt)
 	}
 
-	*clock = clock.Add(2 * ResizeDebounce)
+	*clock = clock.Add(2 * DefaultResizeDebounce)
 	if cmd := m.Update(deferredResizeMsg{Scope: m.Scope()}); cmd == nil {
 		t.Fatal("the retry asserted nothing, so the pane keeps the pre-drag geometry")
 	}
@@ -291,5 +291,38 @@ func TestControlOwnedDeferredResizePaysBothDebtsWhenTheRetryFires(t *testing.T) 
 	if !m.State.LastResizeAt.After(asserted) || m.Width != 60 || m.Height != 20 {
 		t.Fatalf("the retry did not give the pane the newest geometry: %dx%d at %v",
 			m.Width, m.Height, m.State.LastResizeAt)
+	}
+}
+
+func TestResizeWaitForZeroDebounceAssertsNow(t *testing.T) {
+	last := time.Now()
+	if got := ResizeWaitFor(last, last, 0); got != 0 {
+		t.Fatalf("0 debounce wait = %v, want 0", got)
+	}
+	if got := ResizeWaitFor(last, last.Add(10*time.Millisecond), -time.Second); got != 0 {
+		t.Fatalf("negative debounce wait = %v, want 0", got)
+	}
+}
+
+func TestResizeWaitUsesDefaultDebounce(t *testing.T) {
+	last := time.Now()
+	now := last.Add(100 * time.Millisecond)
+	got := ResizeWait(last, now)
+	want := DefaultResizeDebounce - 100*time.Millisecond
+	if got != want {
+		t.Fatalf("ResizeWait = %v, want %v", got, want)
+	}
+}
+
+func TestSetResizeDebounceZeroAssertsImmediately(t *testing.T) {
+	m := debouncedModel(t, 10*time.Millisecond)
+	m.SetResizeDebounce(0)
+	before := m.State.LastResizeAt
+	cmd := m.SetDimensions(60, 20)
+	if cmd == nil {
+		t.Fatal("0 debounce dropped the resize")
+	}
+	if !m.State.LastResizeAt.After(before) {
+		t.Fatal("0 debounce deferred instead of asserting")
 	}
 }

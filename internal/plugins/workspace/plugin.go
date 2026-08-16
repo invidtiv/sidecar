@@ -270,6 +270,12 @@ type Plugin struct {
 	// Agent state
 	attachedSession     string // Name of worktree we're attached to (pauses polling)
 	tmuxCaptureMaxBytes int    // Cap for tmux capture output (bytes)
+	// resizeDebounceDur is plugins.workspace.resizeDebounceMs. A nil pointer
+	// means tty.DefaultResizeDebounce; a set 0 is the per-event escape hatch.
+	resizeDebounceDur *time.Duration
+	// resizeGeneration invalidates leftover deferredPaneResizeMsg ticks after
+	// a divider drop so they cannot fire a second SIGWINCH.
+	resizeGeneration uint64
 
 	// Timer leak prevention (td-83dc22): generation counters to invalidate stale timers.
 	// When a timer fires, it checks if its captured generation matches the current one.
@@ -709,6 +715,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
+	if ctx.Config != nil {
+		p.setResizeDebounce(time.Duration(ctx.Config.Plugins.Workspace.ResizeDebounceMs) * time.Millisecond)
+	}
+	p.applyResizeDebounceToTerminals()
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()

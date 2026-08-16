@@ -22,6 +22,68 @@ func TestDefault(t *testing.T) {
 	if cfg.Plugins.Workspace.OverviewWorktreeScope != OverviewWorktreeScopeProject {
 		t.Errorf("got Overview worktree scope %q, want %q", cfg.Plugins.Workspace.OverviewWorktreeScope, OverviewWorktreeScopeProject)
 	}
+	if cfg.Plugins.Workspace.ResizeDebounceMs != 300 {
+		t.Errorf("got ResizeDebounceMs %d, want 300", cfg.Plugins.Workspace.ResizeDebounceMs)
+	}
+}
+
+func TestResizeDebounceMs(t *testing.T) {
+	t.Run("missing key keeps default 300", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"plugins":{"workspace":{}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Plugins.Workspace.ResizeDebounceMs != 300 {
+			t.Fatalf("missing key = %d, want 300", cfg.Plugins.Workspace.ResizeDebounceMs)
+		}
+	})
+	t.Run("explicit 0 is kept", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"plugins":{"workspace":{"resizeDebounceMs":0}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Plugins.Workspace.ResizeDebounceMs != 0 {
+			t.Fatalf("explicit 0 = %d, want 0", cfg.Plugins.Workspace.ResizeDebounceMs)
+		}
+	})
+	t.Run("negative becomes 300", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"plugins":{"workspace":{"resizeDebounceMs":-1}}}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadFrom(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Plugins.Workspace.ResizeDebounceMs != 300 {
+			t.Fatalf("negative = %d, want 300", cfg.Plugins.Workspace.ResizeDebounceMs)
+		}
+	})
+	t.Run("Validate leaves 0 and rewrites negative", func(t *testing.T) {
+		cfg := Default()
+		cfg.Plugins.Workspace.ResizeDebounceMs = 0
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Plugins.Workspace.ResizeDebounceMs != 0 {
+			t.Fatalf("Validate rewrote 0 to %d", cfg.Plugins.Workspace.ResizeDebounceMs)
+		}
+		cfg.Plugins.Workspace.ResizeDebounceMs = -1
+		if err := cfg.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Plugins.Workspace.ResizeDebounceMs != 300 {
+			t.Fatalf("Validate(-1) = %d, want 300", cfg.Plugins.Workspace.ResizeDebounceMs)
+		}
+	})
 }
 
 func TestLoadFrom_OverviewWorktreeScope(t *testing.T) {

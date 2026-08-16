@@ -173,6 +173,12 @@ type Model struct {
 	// still coming and swallows every resize after it.
 	resizeRetryPending bool
 
+	// resizeDebounce is the host-supplied interval for assertDimensions.
+	// resizeDebounceSet distinguishes an explicit 0 (assert now) from unset
+	// (DefaultResizeDebounce).
+	resizeDebounce    time.Duration
+	resizeDebounceSet bool
+
 	// nowFn is the model's clock for the resize debounce. Tests drive a burst
 	// through the window without wall-clock time passing inside it; nil is
 	// time.Now.
@@ -1123,14 +1129,14 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 	})
 }
 
-// ResizeDebounce bounds how often a resize is asserted against tmux while a
-// layout is still moving — a window drag delivers one size per frame.
-const ResizeDebounce = 500 * time.Millisecond
+// DefaultResizeDebounce is the shared interval when a host does not pass one.
+// Workspace's plugins.workspace.resizeDebounceMs default matches this.
+const DefaultResizeDebounce = 300 * time.Millisecond
 
 // ResizeWait is how long a host must hold off asserting geometry, given when it
-// last did. Zero means assert now. Every surface that resizes a pane asks here:
-// a second literal budget beside this one is how two surfaces come to answer the
-// same layout change at different rates.
+// last did, using DefaultResizeDebounce. Zero means assert now. Every surface
+// that resizes a pane asks here: a second literal budget beside this one is how
+// two surfaces come to answer the same layout change at different rates.
 //
 // Waiting is not dropping. A caller that gets a positive wait still owes the
 // pane the newest geometry and must schedule exactly one deferred assertion for
@@ -1138,13 +1144,33 @@ const ResizeDebounce = 500 * time.Millisecond
 // chain of resizes spaced a debounce apart, which is what the budget exists to
 // prevent.
 func ResizeWait(last, now time.Time) time.Duration {
-	if last.IsZero() {
+	return ResizeWaitFor(last, now, DefaultResizeDebounce)
+}
+
+// ResizeWaitFor is ResizeWait with a caller-supplied interval. A debounce of
+// 0 or less means assert now — that is the escape hatch, not "unset".
+func ResizeWaitFor(last, now time.Time, debounce time.Duration) time.Duration {
+	if debounce <= 0 || last.IsZero() {
 		return 0
 	}
-	if wait := ResizeDebounce - now.Sub(last); wait > 0 {
+	if wait := debounce - now.Sub(last); wait > 0 {
 		return wait
 	}
 	return 0
+}
+
+// SetResizeDebounce gives this model the host's interval so assertDimensions
+// is not a second clock beside the workspace poll path. 0 means assert now.
+func (m *Model) SetResizeDebounce(d time.Duration) {
+	m.resizeDebounce = d
+	m.resizeDebounceSet = true
+}
+
+func (m *Model) configuredResizeDebounce() time.Duration {
+	if !m.resizeDebounceSet {
+		return DefaultResizeDebounce
+	}
+	return m.resizeDebounce
 }
 
 // now reads the model's clock.
@@ -1196,7 +1222,7 @@ func (m *Model) assertDimensions() tea.Cmd {
 		return nil
 	}
 
-	if wait := ResizeWait(m.State.LastResizeAt, m.now()); wait > 0 {
+	if wait := ResizeWaitFor(m.State.LastResizeAt, m.now(), m.configuredResizeDebounce()); wait > 0 {
 		// One retry stands for the whole burst: it reads the geometry the model
 		// holds when it fires, which is the newest by then. Arming a second would
 		// chain a resize per size the window passed through.
