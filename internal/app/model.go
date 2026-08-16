@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overview"
@@ -268,6 +269,9 @@ type Model struct {
 	issuePreviewModalWidth   int
 	issuePreviewModalHeight  int
 	issuePreviewMouseHandler *mouse.Handler
+	// issuePreviewWatcher keeps the modal's card in step with the td store. It
+	// lives exactly as long as the modal. See issue_preview_live.go.
+	issuePreviewWatcher *livewatch.PathWatcher
 
 	// Header/footer
 	ui *UIState
@@ -1446,6 +1450,7 @@ func (m *Model) resetIssueInput() {
 
 // resetIssuePreview resets the issue preview modal state.
 func (m *Model) resetIssuePreview() {
+	m.stopIssuePreviewWatch()
 	m.showIssuePreview = false
 	m.issuePreviewView = nil
 	m.issuePreviewData = nil

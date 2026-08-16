@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/image"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -272,7 +273,11 @@ type Plugin struct {
 	clipboardIsDir bool   // Whether yanked item is a directory
 
 	// File watcher
-	watcher            *TreeWatcher
+	watcher *TreeWatcher
+	// previewLive gates watcher-driven re-reads of the previewed file: single
+	// flight, host veto, and the fingerprint that keeps an unchanged re-read off
+	// the screen. See live_preview.go.
+	previewLive        livewatch.Refresher
 	lastRefresh        time.Time // Debounce rapid refreshes on focus
 	pendingAutoRefresh bool      // A watched change arrived while a modal/search/editor was open
 	stopped            bool      // Set by Stop(); guards late WatchStartedMsg delivery
@@ -573,8 +578,10 @@ func (p *Plugin) handleWatchStarted(msg WatchStartedMsg) (plugin.Plugin, tea.Cmd
 // the listener.
 func (p *Plugin) handleWatchEvent(msg WatchEventMsg) (plugin.Plugin, tea.Cmd) {
 	cmds := []tea.Cmd{p.listenForWatchEvents()}
-	if msg.PreviewChanged && p.previewFile != "" && p.ctx != nil {
-		cmds = append(cmds, LoadPreview(p.ctx.WorkDir, p.previewFile, p.ctx.Epoch))
+	if msg.PreviewChanged {
+		if cmd := p.refreshPreview(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	// A background tab's file may have been rewritten in place, which is not a
 	// tree change but does make the tab's cached content wrong.
@@ -1005,12 +1012,22 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.previewFile = ""
 		p.previewScroll = 0
 
+	case previewRefreshedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		return p, p.applyPreviewRefresh(msg)
+
 	case PreviewLoadedMsg:
 		// Check for stale message from previous project context
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		if msg.Path == p.previewFile {
+			// An explicit load defines what is on screen; the refresh gate
+			// measures from here so the next watcher signal is not reported as
+			// a change.
+			p.adoptPreviewFingerprint(msg.Result)
 			p.applyPreviewResult(msg.Result)
 			p.updateActiveTabResult(msg.Result)
 			p.clampPreviewScroll()

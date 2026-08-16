@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -246,6 +247,25 @@ type Plugin struct {
 	docs           map[int]*docPane
 	issues         map[int]*issuePane
 	diffs          map[int]*diffPane
+
+	// Live refresh: one filesystem watcher per content-pane kind, created the
+	// first time a pane of that kind opens and released in Stop. See
+	// live_panes.go.
+	issueWatcher       *livewatch.PathWatcher
+	issueWatchStarting bool
+	docWatcher         *livewatch.PathWatcher
+	docWatchStarting   bool
+	diffWatcher        *livewatch.PathWatcher
+	diffWatchStarting  bool
+	// diffAdminTargets caches git's administrative paths per worktree, because
+	// resolving them costs five `git rev-parse` calls and they never move for
+	// the life of a worktree.
+	diffAdminTargets   map[string][]livewatch.Target
+	diffAdminResolving map[string]bool
+	// tdStoreTargets caches where td keeps its store per worktree. Resolving it
+	// walks parents and can shell out to git, so it must not happen inline.
+	tdStoreTargets   map[string][]livewatch.Target
+	tdStoreResolving map[string]bool
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
@@ -696,6 +716,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activityAnimationFrame = 0
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
+	p.stopLiveWatchers()
 	p.stopTerminalModels()
 	p.reuseHeldWheelViewOnce = false
 	p.wheelViewCacheOK = false

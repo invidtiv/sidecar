@@ -622,6 +622,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.applyIssuePreviewData(msg.Data, msg.Error)
 		return m, nil
 
+	case issuePreviewWatchStartedMsg:
+		return m, m.handleIssuePreviewWatchStarted(msg)
+
+	case issuePreviewStoreChangedMsg:
+		return m, m.handleIssuePreviewStoreChanged()
+
 	case issueview.LoadedMsg:
 		// The modal is one host of issueview. A workspace issue pane is
 		// another. Claiming every LoadedMsg here left those panes stuck on
@@ -2549,7 +2555,10 @@ func (m *Model) issueInputSubmit() (tea.Model, tea.Cmd) {
 		workDir = m.ui.WorkDir
 	}
 	m.issuePreviewView = issueview.New(nil)
-	return m, m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0)
+	return m, tea.Batch(
+		m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0),
+		m.startIssuePreviewWatch(workDir, issueID),
+	)
 }
 
 // handleIssueInputMouse handles mouse events for the issue input modal.

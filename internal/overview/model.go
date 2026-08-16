@@ -99,6 +99,12 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	if IsSharedDiffMessage(msg) {
 		return true
 	}
+	// Live-refresh results are background work by definition: a watcher signal
+	// is not a user gesture, and a preview left stale because a modal happened
+	// to own focus is the defect this exists to fix.
+	if isLiveWatchMessage(msg) {
+		return true
+	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
@@ -402,6 +408,7 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 }
 
 func (m *Model) Stop() {
+	m.stopLiveWatchers()
 	if m.cancel != nil {
 		if m.pollScheduled {
 			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
@@ -466,10 +473,22 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 // a refresh, a filter keystroke, scrolling, opening the tab — re-checks the
 // clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
-	cmd := m.update(msg)
+	// Live-refresh messages are handled instead of the product update — a
+	// watcher signal is not a gesture and must not be interpreted as one — but
+	// they still fall through to the tail below, so queued pane geometry and the
+	// pulse are not dropped just because a watcher happened to fire.
+	cmd, handled := m.handleLiveWatchMsg(msg)
+	if !handled {
+		cmd = m.update(msg)
+	}
 	// Geometry a pane content asserted from inside the last render, dispatched
 	// on the first update after it. See paneHost.QueueSizeCmd.
 	cmds := append([]tea.Cmd{cmd}, m.takePaneSizeCmds()...)
+	// Swept once per update: preview panes open, retarget and close from too
+	// many places to trust each of them to say so. See live_preview.go.
+	if sync := m.reconcileLiveWatches(); sync != nil {
+		cmds = append(cmds, sync)
+	}
 	if pulse := m.pulseCmd(); pulse != nil {
 		cmds = append(cmds, pulse)
 	}

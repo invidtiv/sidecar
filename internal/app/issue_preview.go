@@ -99,7 +99,18 @@ func (m *Model) claimIssuePreviewLoad(msg issueview.LoadedMsg) bool {
 		return false
 	}
 	if !m.issuePreviewView.SetResult(msg) {
-		return false
+		// A refresh that found nothing new returns false here, and must still be
+		// claimed: it was this modal's own result, and letting it fall through
+		// would offer a card the plugins have no reason to see. Claiming it
+		// without touching the modal is exactly the no-repaint behaviour.
+		return msg.Refresh && msg.ModelID == issuePreviewModelID
+	}
+	if msg.Refresh {
+		// The refresh changed the card in place. Only the cached modal has to be
+		// rebuilt; the surrounding loading and error state is already correct.
+		m.issuePreviewData = m.issuePreviewView.Data()
+		m.invalidateIssuePreviewModal()
+		return true
 	}
 	m.applyIssuePreviewData(m.issuePreviewView.Data(), msg.Error)
 	return true

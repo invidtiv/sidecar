@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/livewatch"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 )
 
@@ -56,6 +57,11 @@ type View struct {
 	width     int
 	height    int
 	listWidth int
+
+	// live sequences in-place re-runs of the diff driven by repository movement,
+	// and holds the fingerprint that keeps an unchanged re-run off the screen.
+	// See live.go.
+	live livewatch.Refresher
 
 	// Host paint/load hooks. workspacediff cannot import gitstatus; the
 	// project plugin fills these so CycleViewMode, n/N, and paging work.
@@ -300,6 +306,11 @@ type SnapshotMsg struct {
 	Err         error
 	Command     string
 	BaseRef     string
+
+	// Refresh marks a snapshot produced by View.Refresh rather than an explicit
+	// load: it preserves the selected file and scroll offset, and is discarded
+	// when the repository state came back unchanged. See live.go.
+	Refresh bool
 }
 
 // LoadSnapshotCmd loads a snapshot for workdir and tags it with workspaceID.
@@ -330,6 +341,10 @@ func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) te
 	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
+	if msg.Refresh {
+		cmd, _ := v.applyRefresh(msg, workdir, workspaceID)
+		return cmd
+	}
 	if msg.Err != nil {
 		v.Snapshot = nil
 		v.State = LoadStateError
@@ -350,6 +365,10 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 	if snapshot != nil {
 		v.State = snapshot.State
 	}
+	// An explicit load defines what is on screen, so the refresh gate measures
+	// from here rather than reporting the first watcher signal as a change.
+	v.live.Reset()
+	v.live.Adopt(fingerprintSnapshot(snapshot))
 	v.ApplySnapshot()
 	return v.LoadSelectedCommit(workdir, workspaceID)
 }

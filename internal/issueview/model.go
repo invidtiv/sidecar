@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
@@ -25,6 +26,11 @@ type LoadedMsg struct {
 	IssueID           string
 	Data              *Data
 	Error             error
+
+	// Refresh marks a result produced by Model.Refresh rather than Model.Load:
+	// an in-place re-read that must not disturb scroll, cursor or hover, and
+	// that is discarded entirely when it found nothing new. See live.go.
+	Refresh bool
 }
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
@@ -84,6 +90,11 @@ type Model struct {
 	data    *Data
 	err     error
 
+	// live sequences in-place re-reads driven by a change to the td store, and
+	// holds the fingerprint that keeps an unchanged re-read off the screen. See
+	// live.go.
+	live livewatch.Refresher
+
 	// Interaction. Active is the modal's "tab here and press enter, or click"
 	// state: only then do arrows walk the epic. A workspace pane that already
 	// owns the keyboard sets this when the pane is focused.
@@ -131,6 +142,10 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.loading = true
 	m.data = nil
 	m.err = nil
+	// A retarget invalidates the refresh gate: "unchanged since last time" is
+	// meaningless once the subject changed, and a re-read owed for the previous
+	// issue must not fire against this one.
+	m.live.Reset()
 	m.invalidateRender()
 
 	generation := m.requestGeneration
@@ -146,6 +161,10 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 
 // SetResult applies msg if it belongs to the current load. It returns false
 // without changing the model for stale model, request, epoch, or issue results.
+//
+// A result produced by [Model.Refresh] is applied in place instead: see
+// applyRefresh. It also returns false when the refresh found nothing new, so a
+// host can treat "false" uniformly as "nothing to repaint".
 func (m *Model) SetResult(msg LoadedMsg) bool {
 	if msg.ModelID != m.modelID ||
 		msg.RequestGeneration != m.requestGeneration ||
@@ -153,6 +172,13 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 		msg.IssueID != m.issueID {
 		return false
 	}
+	if msg.Refresh {
+		return m.applyRefresh(msg)
+	}
+	// A fresh load defines what is on screen, so the refresh gate measures from
+	// here rather than reporting the first watcher signal as a change.
+	m.live.Reset()
+	m.live.Adopt(fingerprintData(msg.Data))
 	m.loading = false
 	m.data = msg.Data
 	m.err = msg.Error
