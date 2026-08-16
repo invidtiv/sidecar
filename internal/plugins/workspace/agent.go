@@ -231,8 +231,9 @@ func init() {
 }
 
 const (
-	// Tmux session prefix for sidecar-managed worktree sessions
-	tmuxSessionPrefix = "sidecar-ws-"
+	// Tmux session prefix for sidecar-managed worktree sessions. Defined in
+	// workspaceops so the shared delete path names the same sessions.
+	tmuxSessionPrefix = workspaceops.WorktreeSessionPrefix
 
 	// Lines to capture from tmux. We only need recent output for status
 	// detection and display; the same window is requested from the tty control
@@ -734,13 +735,10 @@ func (p *Plugin) getTaskContext(taskID string) string {
 }
 
 // sanitizeName cleans a name for use in tmux session names.
-// tmux session names can't contain periods or colons.
-func sanitizeName(name string) string {
-	name = strings.ReplaceAll(name, ".", "-")
-	name = strings.ReplaceAll(name, ":", "-")
-	name = strings.ReplaceAll(name, "/", "-")
-	return name
-}
+// tmux session names can't contain periods or colons. The rule lives in
+// workspaceops so the shared delete path resolves the same session this
+// plugin created.
+func sanitizeName(name string) string { return workspaceops.SanitizeSessionName(name) }
 
 // worktreeSessionSuffix is the stable tmux suffix for a worktree. Display
 // names are user-editable; the git directory slug is not.
@@ -754,6 +752,10 @@ func worktreeSessionSuffix(wt *Worktree) string {
 	return sanitizeName(wt.Name)
 }
 
+// worktreeTmuxSession is this plugin's spelling of a worktree's session. The
+// shared delete path resolves it without being told, via
+// workspaceops.WorktreeSessionNames, which covers this spelling and the
+// slugified one the global surface and the CLI create sessions under.
 func worktreeTmuxSession(wt *Worktree) string {
 	return tmuxSessionPrefix + worktreeSessionSuffix(wt)
 }

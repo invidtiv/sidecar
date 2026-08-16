@@ -2,8 +2,10 @@ package overview
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -361,5 +363,57 @@ func TestOpeningTheShellConfirmationDisarmsTheWorktreeOne(t *testing.T) {
 	m.OpenDeleteSelectedShell()
 	if m.DeletingWorktree() || m.worktreeDelete.Active() {
 		t.Fatal("the shell confirmation left the worktree one armed")
+	}
+}
+
+// The stubs above only prove this surface calls execDeleteWorktree. What makes
+// that mean anything is that the variable is the shared workspaceops function
+// and nothing else — the session teardown for a deleted worktree lives inside
+// it (td-a66836), so a global host that grew its own delete, or wrapped this
+// one, would silently lose it again.
+func TestGlobalDeleteIsTheSharedWorkspaceopsPath(t *testing.T) {
+	pairs := []struct {
+		name        string
+		got, shared any
+	}{
+		{"execDeleteWorktree", execDeleteWorktree, workspaceops.DeleteWorktree},
+		{"execDeleteLocalBranch", execDeleteLocalBranch, workspaceops.DeleteLocalBranch},
+		{"execDeleteRemoteBranch", execDeleteRemoteBranch, workspaceops.DeleteRemoteBranch},
+	}
+	for _, pair := range pairs {
+		if reflect.ValueOf(pair.got).Pointer() != reflect.ValueOf(pair.shared).Pointer() {
+			t.Fatalf("%s is not the shared workspaceops function", pair.name)
+		}
+	}
+}
+
+// A worktree row carries no shells.json identity — worktree sessions are not
+// manifest shells — so deleting one must not write to any project's manifest.
+// This is the "no stale manifest entry" half of parity: there is no entry to go
+// stale, and the delete must not create one.
+func TestGlobalWorktreeDeleteLeavesTheShellManifestAlone(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	selectWorkspace(t, m, "a")
+
+	forgotten := 0
+	restoreForget := forgetShell
+	forgetShell = func(string, string, string, time.Time) error { forgotten++; return nil }
+	restoreDelete := execDeleteWorktree
+	execDeleteWorktree = func(context.Context, string, string, bool) error { return nil }
+	t.Cleanup(func() { forgetShell, execDeleteWorktree = restoreForget, restoreDelete })
+
+	if handled, _ := m.WorkspacesKey(key("D")); !handled {
+		t.Fatal("D was not answered for a selected worktree")
+	}
+	cmd := m.RunDeleteCommand("confirm-delete")
+	if cmd == nil {
+		t.Fatal("confirming produced no work")
+	}
+	if _, ok := cmd().(globalWorktreeDeleteDoneMsg); !ok {
+		t.Fatalf("delete produced %#v", cmd())
+	}
+	if forgotten != 0 {
+		t.Fatalf("the worktree delete touched the shell manifest %d times", forgotten)
 	}
 }

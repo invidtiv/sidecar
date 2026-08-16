@@ -40,8 +40,11 @@ var HostReservedKeys = map[string]bool{
 // against the real handler, so it cannot drift from the switch it describes.
 var GlobalKeys = map[string]bool{
 	"`": true, "~": true, "[": true, "]": true,
+	// 1-7 select project tabs positionally; 8, 9 and 0 select the header's
+	// global entries (Sessions, Activity, Tasks) by name. All ten belong to the
+	// host's own switch, so no plugin may claim them.
 	"1": true, "2": true, "3": true, "4": true, "5": true, "6": true,
-	"7": true, "8": true, "9": true,
+	"7": true, "8": true, "9": true, "0": true,
 	"?": true, "!": true, "@": true, "K": true, "W": true, "#": true,
 	"^": true, "i": true, "q": true, "ctrl+c": true,
 }

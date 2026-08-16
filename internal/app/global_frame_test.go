@@ -162,9 +162,10 @@ func TestGlobalTabsAreReachableWithAndWithoutNerdFontGlyphs(t *testing.T) {
 		if got := asAppModel(t, clicked); got.globalTab != GlobalSessions || !got.inGlobalScope() {
 			t.Fatalf("pills=%v tab click landed on tab %v (global=%v)", pills, got.globalTab, got.inGlobalScope())
 		}
-		numbered, _ := m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
-		if got := asAppModel(t, numbered); got.globalTab != GlobalSessions {
-			t.Fatalf("pills=%v number row landed on tab %v", pills, got.globalTab)
+		// 8 is Sessions from anywhere; it is a named entry, not a position.
+		numbered, _ := m.Update(tea.KeyPressMsg{Code: '8', Text: "8"})
+		if got := asAppModel(t, numbered); got.globalTab != GlobalSessions || !got.inGlobalScope() {
+			t.Fatalf("pills=%v number row landed on tab %v (global=%v)", pills, got.globalTab, got.inGlobalScope())
 		}
 	}
 }
@@ -306,9 +307,7 @@ func hintLabels(hints []footerHint) []string {
 	return labels
 }
 
-func tabDigitLabel(m Model) string {
-	if m.inGlobalScope() {
-		return "tabs"
-	}
-	return "plugins"
-}
+// tabDigitLabel names the footer hint for the positional project-tab digits.
+// The number row addresses the whole header from either scope now, so the hint
+// reads the same in both.
+func tabDigitLabel(Model) string { return "plugins" }

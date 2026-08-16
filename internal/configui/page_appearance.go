@@ -86,7 +86,7 @@ func (m *Model) appearanceCurrentEntry() theme.Entry {
 		}
 		return theme.Entry{}
 	}
-	return theme.EntryForConfig(cfg.UI.Theme)
+	return theme.GlobalEntry(cfg.UI.Theme)
 }
 
 // scopeProjects are the projects a theme override can be saved to. The scope

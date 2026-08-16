@@ -1489,7 +1489,13 @@ func (m *Model) initThemeSwitcher() {
 	m.clearThemeSwitcherModal()
 
 	// Determine original theme from config
-	m.themeSwitcherOriginal = themeEntry{Name: "default", IsBuiltIn: true, ThemeKey: "default"}
+	// With no recorded choice the running theme is the fresh-install one, so
+	// that is what the switcher must open on.
+	m.themeSwitcherOriginal = themeEntry{
+		Name:      styles.GetTheme(styles.FreshInstallTheme).DisplayName,
+		IsBuiltIn: true,
+		ThemeKey:  styles.FreshInstallTheme,
+	}
 	if freshCfg, err := config.Load(); err == nil {
 		if freshCfg.UI.Theme.Community != "" {
 			// Current theme is a community theme

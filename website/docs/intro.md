@@ -196,8 +196,9 @@ These shortcuts work across all plugins:
 | Key | Action |
 |-----|--------|
 | `q`, `ctrl+c` | Quit sidecar |
-| `tab` / `shift+tab` | Switch between plugins |
-| `1-5` | Jump to plugin by number |
+| `[` / `]` | Step through the whole header row (project tabs and Sessions / Activity / Tasks) |
+| `1`-`7` | Jump to a project tab by number |
+| `8` / `9` / `0` | Jump to Sessions / Activity / Tasks |
 | `@` | Open project switcher |
 | `W` | Open worktree switcher |
 | `#` | Open theme switcher |
@@ -224,7 +225,7 @@ owns the keyboard, so shortcuts work even if an embedded shell was focused under
 | `r` | Refresh the board |
 | `esc`, `q`, `K` | Close the Overview |
 
-Global shortcuts (`@`, `#`, `W`, `?`, `!`, `` ` ``, `1-9`) keep working; switching plugins
+Global shortcuts (`@`, `#`, `W`, `?`, `!`, `[` / `]`, `1`-`7`, `8` / `9` / `0`) keep working; switching plugins
 closes the Overview. In the Overview, `q` closes the board rather than quitting sidecar.
 
 ### Project Switching

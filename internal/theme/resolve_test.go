@@ -82,14 +82,14 @@ func TestResolveTheme(t *testing.T) {
 			want:        ResolvedTheme{BaseName: "default", CommunityName: "Solarized Dark"},
 		},
 		{
-			name: "empty base name defaults to default",
+			name: "empty base name falls through to the fresh-install theme",
 			cfg: &config.Config{
 				UI: config.UIConfig{
 					Theme: config.ThemeConfig{Name: ""},
 				},
 			},
 			projectPath: "/code/proj",
-			want:        ResolvedTheme{BaseName: "default"},
+			want:        ResolvedTheme{BaseName: styles.FreshInstallTheme},
 		},
 		{
 			name: "overrides propagated from global",

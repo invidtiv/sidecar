@@ -1563,30 +1563,48 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Tab switching. Cycling and the number row move between the tabs of the
-	// active scope only: in the global space they step across Agents /
-	// Workspaces / Tasks, in project space across the plugin tabs. Neither
-	// silently crosses the boundary — K, q, and the brand are the toggle.
+	// Tab switching. The header is one row of entries — the global ones the
+	// left cluster paints (Sessions / Activity / Tasks) followed by the
+	// project's plugin tabs — and these keys address that one row.
+	//
+	// Cycling wraps through all of it, in both scopes, so `]` from the last
+	// plugin tab lands on Sessions and `[` brings it back. The number row is
+	// positional for the project tabs (1-7) and named for the global entries
+	// (8/9/0), which is what makes 8 mean Sessions everywhere rather than
+	// "the eighth thing in whichever list you happen to be looking at".
 	switch msg.String() {
 	case "`", "]":
-		// Backtick cycles to the next tab (except in text input contexts)
+		// Next header entry (except in text input contexts).
 		if m.consumesTextInput() {
 			break
 		}
 		return m, m.cycleTabs(1)
 	case "~", "[":
-		// Tilde cycles to the previous tab (except in text input contexts)
+		// Previous header entry. `~` is kept as the long-standing alias for
+		// `[`, exactly as `` ` `` is for `]`; retiring it would break muscle
+		// memory for nothing.
 		if m.consumesTextInput() {
 			break
 		}
 		return m, m.cycleTabs(-1)
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		// Number keys for direct tab switching.
+	case "1", "2", "3", "4", "5", "6", "7":
+		// Positional project tabs.
 		// Block in text input contexts (user is typing numbers)
 		if m.consumesTextInput() {
 			break
 		}
-		return m, m.selectTabByNumber(int([]rune(msg.Text)[0] - '1'))
+		return m, m.selectProjectTabByNumber(int([]rune(msg.String())[0] - '1'))
+	case "8", "9", "0":
+		// The header's global entries, addressed by name. A key whose entry is
+		// disabled does nothing rather than falling through to a plugin tab.
+		if m.consumesTextInput() {
+			break
+		}
+		tab, ok := globalTabForKey(msg.String())
+		if !ok {
+			break
+		}
+		return m, m.selectGlobalTab(tab)
 	}
 
 	// Toggles

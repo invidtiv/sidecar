@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -294,11 +293,11 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	workDir := p.ctx.WorkDir
 	ctx, scope := p.newLifecycleScope(wt)
 
-	// Kill tmux session if it exists (before deleting worktree)
+	// The kill itself belongs to the shared delete path (workspaceops.
+	// DeleteWorktree kills the session before it removes the directory), so
+	// this surface only drops the state that is its own: the managed-session
+	// record and the cached pane.
 	sessionName := worktreeTmuxSession(wt)
-	if sessionExists(sessionName) {
-		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-	}
 	delete(p.managedSessions, sessionName)
 	globalPaneCache.remove(sessionName)
 

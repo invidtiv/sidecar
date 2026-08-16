@@ -48,11 +48,14 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `ctrl+u` | page-up | Page up |
 | `enter` | select | Select item |
 | `esc` | back | Go back / close |
-| `` ` `` | next-plugin | Next plugin |
-| `~` | prev-plugin | Previous plugin |
-| `]` | next-plugin | Next plugin |
-| `[` | prev-plugin | Previous plugin |
-| `1-5` | focus-plugin-N | Focus plugin by number |
+| `` ` `` | next-plugin | Next header entry |
+| `~` | prev-plugin | Previous header entry |
+| `]` | next-plugin | Next header entry |
+| `[` | prev-plugin | Previous header entry |
+| `1`-`7` | focus-plugin-N | Focus the Nth project tab (positional; stops at 7) |
+| `8` | focus-sessions | Sessions (global) |
+| `9` | focus-activity | Activity (global) |
+| `0` | focus-tasks | Tasks (global; no-op when the Tasks host is disabled) |
 | `?` | toggle-palette | Command palette |
 | `!` | toggle-diagnostics | Diagnostics overlay |
 | `@` | switch-project | Project switcher |
@@ -63,6 +66,30 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `r` | refresh | Refresh |
 | `q` | quit | Quit (root contexts only) |
 | `ctrl+c` | quit | Force quit |
+
+### The header row is one ring
+
+Sidecar's header is a single row of entries: the global ones in the left cluster
+(Sessions, Activity, and Tasks when its feature is on) followed by the project's
+plugin tabs on the right.
+
+`[` / `]` (and their `~` / `` ` `` aliases) wrap through **all** of it, in that
+order, and the ring is identical from either scope — the project tabs are
+painted only in project scope, but they stay in the ring from the global space
+so the cycle is never a trap and `]` then `[` is always the identity. Tasks is
+absent from the ring whenever its feature is off.
+
+The number row addresses the same row, but by two different rules:
+
+- `1`-`7` are **positional** project tabs. They stop at 7. An eighth plugin tab
+  is reached with `[` / `]` or from the command palette.
+- `8` / `9` / `0` are **named** global entries — Sessions, Activity, Tasks — and
+  mean the same thing in every scope. A key whose entry is disabled (`0` with
+  the Tasks host off) does nothing at all, silently; it never falls through to a
+  plugin tab.
+
+All ten digits and the four cycling keys are in `keymap.GlobalKeys`, so no
+plugin may claim them, and all of them yield to a focused text input.
 
 ## Configuration (`config` / `config-edit` / `config-confirm` contexts)
 
@@ -365,6 +392,14 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 | `F` | find-file | Open a file pane on the fuzzy file finder |
 | `P` | fetch-pr | Fetch a remote PR as a workspace |
 
+
+### Preview Shortcuts
+
+`g` / `G` jump to the top / bottom of the preview's scrollback. `0` is
+deliberately **not** bound here: it is the header's global Tasks shortcut, and a
+context-local binding would make the same key mean two different things one tab
+apart. (It previously carried a `reset-scroll` command that had no handler
+anywhere in the tree.)
 
 ### Interactive Mode
 

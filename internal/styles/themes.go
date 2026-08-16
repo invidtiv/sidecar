@@ -497,6 +497,130 @@ var (
 		},
 	}
 
+	// SidecarModernTheme is the launch theme, transcribed from the Agenda TUI
+	// Refresh design (docs/guides/active/launch-visual-language.md).
+	//
+	// Its organising rule is that gold (#c0982f) is the only strong accent in
+	// chrome — active tab, cursor, focused fill, key glyphs. Every other colour
+	// is earned by semantics: teal for identifiers and open state, green for
+	// live/success, red for failing and destructive, purple for reviewable,
+	// blue for links. Structure is carried by a seven-step neutral ramp rather
+	// than by saturation.
+	//
+	// The design's most recessive tone (#3c4247) is deliberately not used for
+	// any text role: it lands around 1.8:1 on the canvas, well under the 3.0
+	// floor NormalizePalette holds de-emphasised text to. It appears only as
+	// non-text structure (scrollbar thumb, inactive gradient border).
+	SidecarModernTheme = Theme{
+		Name:        "sidecar-modern",
+		DisplayName: "Sidecar Modern",
+		Colors: ColorPalette{
+			// Brand colors. Primary and Accent are both gold on purpose: the
+			// design gives chrome exactly one strong accent.
+			Primary:   "#c0982f", // gold - cursor, active tab, focused fill
+			Secondary: "#4a8f8f", // teal - identifiers, directories
+			Accent:    "#c0982f", // gold - inline code, emphasis
+
+			// Status colors
+			Success: "#5b8f63", // green - done / live
+			Warning: "#c0982f", // gold - attention, P2
+			Error:   "#bd645b", // red - failing, P1, destructive (doc's #b0574f lifted to AA as text)
+			Info:    "#4a8f8f", // teal - in progress / open
+
+			// Text ramp
+			TextPrimary:   "#cfd3d6",
+			TextSecondary: "#8b9298",
+			TextMuted:     "#858e95", // #7b848c misses 4.5 on SurfaceRaised by a hair
+			TextSubtle:    "#646b71", // one step up from the doc's #5a6167 to clear the 3.0 floor
+			TextSelection: "#ffffff", // selected row title
+
+			// Backgrounds
+			BgPrimary:   "#0f1113", // canvas
+			BgSecondary: "#131619", // header / footer bars
+			BgTertiary:  "#171b1f", // selected row
+			BgOverlay:   "#0b0d0ecc",
+
+			// Raised chrome (key-hint pills, bar chips). Set explicitly rather
+			// than derived so the pill sits between the bars and the rules
+			// instead of wherever the derivation lands.
+			SurfaceRaised: "#22272c",
+			KeyHintFg:     "#c0982f", // footer key glyphs are gold
+			OnPrimary:     "#0f1113", // canvas ink on a gold fill
+			OnWarning:     "#0f1113",
+
+			// Borders: hairline, rule, and the one gold active edge
+			BorderNormal: "#2f3438",
+			BorderActive: "#c0982f",
+			BorderMuted:  "#1c2126",
+
+			// Gradient borders stay inside the gold/neutral discipline: the
+			// design has no second chrome accent to gradient toward.
+			GradientBorderActive: []string{"#c0982f", "#7a6220"},
+			GradientBorderNormal: []string{"#2f3438", "#1c2126"},
+			GradientBorderAngle:  30.0,
+
+			// Tab strip, not pills: gold bold active, muted inactive.
+			TabStyle:  "minimal",
+			TabColors: []string{"#c0982f"},
+
+			// Diff: lighter green/red variants so the fill can stay near-black
+			DiffAddFg:    "#7fae86",
+			DiffAddBg:    "#14201a",
+			DiffRemoveFg: "#c97a72",
+			DiffRemoveBg: "#201415",
+
+			// Additional UI colors
+			TextHighlight:    "#e2e6e9", // emphasised row text
+			ButtonHover:      "#2f3438", // rule tone, the quietest visible lift
+			TabTextInactive:  "#7b848c",
+			Link:             "#4b8fd6", // blue - links and markdown headings
+			ToastSuccessText: "#0f1113",
+			ToastErrorText:   "#0f1113", // canvas ink: black clears 5.1 on the error red, white only 4.1
+
+			// Danger buttons
+			DangerLight:  "#d99a94",
+			DangerDark:   "#2a1614",
+			DangerBright: "#b0574f",
+			DangerHover:  "#96453e",
+			TextInverse:  "#ffffff",
+
+			// Scrollbar: track is the hairline, thumb the rule tone lifted
+			// enough to be findable without becoming chrome.
+			ScrollbarTrack: "#1c2126",
+			ScrollbarThumb: "#5a6167",
+
+			// Blame age ramp, newest → oldest, walking the semantic accents
+			BlameAge1: "#7fae86",
+			BlameAge2: "#5b8f63",
+			BlameAge3: "#c0982f",
+			BlameAge4: "#bd645b",
+			BlameAge5: "#7b848c",
+
+			// Third-party themes
+			SyntaxTheme:   "gruvbox",
+			MarkdownTheme: "dark",
+
+			// Overview board
+			ProjectHues: []string{"#c0982f", "#4a8f8f", "#5b8f63", "#9a6fb0", "#4b8fd6", "#c97a72"},
+			// Agent chips are drawn on SurfaceRaised, so these are the palette
+			// hues already nudged to clear 4.5 there — written out rather than
+			// left for NormalizePalette to discover.
+			AgentColors: map[string]string{
+				"claude":      "#c17c5b",
+				"codex":       "#8b9298",
+				"grok":        "#cfd3d6",
+				"antigravity": "#4f9999",
+				"gemini":      "#4d90d6",
+				"cursor":      "#a57fb9",
+			},
+			LaneWorking: "#5b8f63", // green - live
+			LaneBlocked: "#c0982f", // gold - wants attention (red is reserved for failing)
+			LaneDone:    "#9a6fb0", // purple - reviewable
+			LaneIdle:    "#8b9298",
+			LanePaused:  "#7b848c",
+		},
+	}
+
 	// TokyoNightTheme is a clean, dark theme that celebrates the lights of Downtown Tokyo
 	TokyoNightTheme = Theme{
 		Name:        "tokyo-night",
@@ -571,9 +695,16 @@ var themeRegistry = map[string]Theme{
 	"dracula":        DraculaTheme,
 	"molokai":        MolokaiTheme,
 	"nord":           NordTheme,
+	"sidecar-modern": SidecarModernTheme,
 	"solarized-dark": SolarizedDarkTheme,
 	"tokyo-night":    TokyoNightTheme,
 }
+
+// FreshInstallTheme is the theme a Sidecar with no recorded theme choice lands
+// on. It is deliberately not the registry key "default": that key names the
+// original purple theme, and an existing user who chose it — or any other theme
+// — keeps it. Only the absence of a choice resolves here.
+const FreshInstallTheme = "sidecar-modern"
 
 // currentTheme tracks the active theme name
 var currentTheme = "default"

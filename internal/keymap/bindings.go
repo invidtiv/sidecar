@@ -29,8 +29,13 @@ func DefaultBindings() []Binding {
 		{Key: "5", Command: "focus-plugin-5", Context: "global"},
 		{Key: "6", Command: "focus-plugin-6", Context: "global"},
 		{Key: "7", Command: "focus-plugin-7", Context: "global"},
-		{Key: "8", Command: "focus-plugin-8", Context: "global"},
-		{Key: "9", Command: "focus-plugin-9", Context: "global"},
+		// 8/9/0 address the header's global entries by name. They are not
+		// positional tab shortcuts: the project tabs stop at 7 so that Sessions,
+		// Activity and Tasks keep one meaning in every scope, and so a disabled
+		// Tasks tab cannot slide another entry onto `0`.
+		{Key: "8", Command: "focus-sessions", Context: "global"},
+		{Key: "9", Command: "focus-activity", Context: "global"},
+		{Key: "0", Command: "focus-tasks", Context: "global"},
 
 		// Navigation (Global defaults)
 		{Key: "j", Command: "cursor-down", Context: "global"},
@@ -659,7 +664,12 @@ func DefaultBindings() []Binding {
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
-		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
+		// `0` deliberately has no workspace-preview binding. It is the header's
+		// Tasks shortcut now, and a context-local binding that shadowed it here
+		// would make the same key mean two different things one tab apart. The
+		// binding it replaces cost nothing: `reset-scroll` had no handler
+		// anywhere in the tree, and the preview already jumps to the top of its
+		// scrollback with `g`.
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-preview"},

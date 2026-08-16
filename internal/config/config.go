@@ -279,8 +279,12 @@ func Default() *Config {
 			// Appearance is where it gets turned on.
 			ShowClock:     false,
 			TerminalTitle: "{project}{worktree}",
+			// Theme.Name is left empty on purpose: empty means "no recorded
+			// choice", which is what lets a fresh install land on
+			// styles.FreshInstallTheme while any name written by a user — or
+			// by an older Sidecar that wrote "default" — is preserved
+			// verbatim. theme.ResolveTheme owns that fallback.
 			Theme: ThemeConfig{
-				Name:      "default",
 				Overrides: make(map[string]interface{}),
 			},
 		},

@@ -523,7 +523,7 @@ func TestOverviewExitBeforeNavigateMsgIgnoresLateActivation(t *testing.T) {
 		staysGlobal bool
 	}{
 		{"esc returns to the project", tea.KeyPressMsg{Code: tea.KeyEsc}, false},
-		{"1 switches to another global tab", tea.KeyPressMsg{Code: '1', Text: "1"}, true},
+		{"8 switches to another global tab", tea.KeyPressMsg{Code: '8', Text: "8"}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -857,17 +857,17 @@ func TestOverviewGlobalShortcutsWorkOverInteractivePlugin(t *testing.T) {
 			t.Fatal("? did not open the command palette")
 		}
 	})
-	t.Run("numbers move between global tabs only", func(t *testing.T) {
+	t.Run("8 and 9 move between global tabs", func(t *testing.T) {
 		m, shell := overviewModelOverTextInput(t)
-		updated, _ := m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
 		m = asAppModel(t, updated)
 		if !m.inGlobalScope() || m.globalTab != GlobalActivity {
-			t.Fatalf("2 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
+			t.Fatalf("9 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
 		}
-		updated, _ = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+		updated, _ = m.Update(tea.KeyPressMsg{Code: '8', Text: "8"})
 		m = asAppModel(t, updated)
 		if !m.inGlobalScope() || m.globalTab != GlobalSessions {
-			t.Fatalf("1 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
+			t.Fatalf("8 left the global space: global=%v tab=%v", m.inGlobalScope(), m.globalTab)
 		}
 		if shell.keyInputs != 0 {
 			t.Fatalf("global tab numbers leaked to the covered plugin (%d key inputs)", shell.keyInputs)

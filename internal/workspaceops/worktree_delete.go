@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -11,11 +13,103 @@ import (
 // This file is the presentation-neutral worktree deletion path. Every surface
 // that can delete a worktree — the project workspace and the global Workspaces
 // browser — executes through it, so the two cannot drift in what "delete" does
-// to git.
+// to git, or in what it does to the worktree's tmux session.
 
-// DeleteWorktree removes the worktree at path. A worktree whose directory has
-// already gone is pruned from git's metadata instead.
+// WorktreeSessionPrefix names the tmux sessions Sidecar runs a worktree's agent
+// in.
+const WorktreeSessionPrefix = "sidecar-ws-"
+
+// SanitizeSessionName strips the characters tmux gives meaning to in a target.
+// It is the project plugin's rule, kept here so the shared delete path can
+// resolve a session that plugin created.
+func SanitizeSessionName(name string) string {
+	name = strings.ReplaceAll(name, ".", "-")
+	name = strings.ReplaceAll(name, ":", "-")
+	name = strings.ReplaceAll(name, "/", "-")
+	return name
+}
+
+// WorktreeSessionNames lists every tmux session name Sidecar may have started a
+// worktree's agent under, most-canonical first and never empty of meaning.
+//
+// There are two spellings in live use and this is not the place to unify them:
+// WorktreeSessionName above lowercases and slugifies (it names the sessions the
+// global surface and the CLI create), while the project plugin only replaces
+// tmux's metacharacters. For an ordinary lowercase directory the two agree and
+// this returns one name; for `My_Feature` they do not, and a delete that knew
+// only one spelling would leave the other session running — the exact bug this
+// path exists to prevent. Killing both is safe: both are Sidecar-owned
+// `sidecar-ws-` names derived from this one directory.
+func WorktreeSessionNames(path, name string) []string {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	candidates := []string{
+		WorktreeSessionName(path, name),
+		WorktreeSessionPrefix + SanitizeSessionName(filepath.Base(path)),
+	}
+	var out []string
+	for _, candidate := range candidates {
+		if candidate == "" || candidate == WorktreeSessionPrefix {
+			continue
+		}
+		if !slices.Contains(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+// KillWorktreeSession closes a worktree's tmux session, if one is running.
+//
+// A session tmux has already lost is success: the requested state is reached.
+// A session that is still there after the kill is a hard failure, because the
+// only reason to call this is that the directory underneath it is about to be
+// removed — see DeleteWorktree.
+func KillWorktreeSession(ctx context.Context, sessionName string) error {
+	if sessionName == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName)
+	output, err := cmd.CombinedOutput()
+	if err == nil || !SessionExists(sessionName) {
+		return nil
+	}
+	return fmt.Errorf("close worktree session %s: %s: %w", sessionName, strings.TrimSpace(string(output)), err)
+}
+
+// killWorktreeSessions is indirected so tests can exercise the delete ordering
+// without a tmux server.
+var killWorktreeSessions = func(ctx context.Context, path string) error {
+	for _, session := range WorktreeSessionNames(path, "") {
+		if err := KillWorktreeSession(ctx, session); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteWorktree closes the worktree's tmux session and then removes the
+// worktree at path. A worktree whose directory has already gone is pruned from
+// git's metadata instead.
+//
+// The session teardown lives here, ahead of the git work, because the ordering
+// is the point: removing the directory first leaves whatever is running in the
+// session — an agent, most of the time — alive in a working directory that no
+// longer exists (td-a66836). Putting it on the shared path is what stops one
+// surface having it and the other not; neither caller can opt out or spell the
+// session name differently, because neither one supplies it.
+//
+// Interaction with internal/shellliveness: none, deliberately. That subsystem
+// reaps *shells* — sidecar-sh-* sessions recorded in shells.json — and both of
+// its bindings skip anything that is not a KindShell workspace. A worktree
+// session is in neither the manifest nor a liveness tracker, so a kill here
+// cannot be mistaken for a suspicious disappearance and cannot race the reaper.
 func DeleteWorktree(ctx context.Context, workDir, path string, isMissing bool) error {
+	if err := killWorktreeSessions(ctx, path); err != nil {
+		return err
+	}
+
 	if isMissing {
 		return PruneWorktrees(ctx, workDir)
 	}
