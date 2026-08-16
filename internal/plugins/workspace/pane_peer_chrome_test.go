@@ -227,6 +227,7 @@ func TestPaneFocusMovesActivePerimeterWithoutDimmingBody(t *testing.T) {
 	if p.paneFocus != docLeaf.ID && p.activePane == PanePreview {
 		// Tab from terminal walks the ring; either the doc leaf or the sidebar
 		// is acceptable as long as setFocusTarget was the writer.
+		t.Fatalf("cyclePaneFocus from terminal did not land on doc leaf: focus=%d pane=%v", p.paneFocus, p.activePane)
 	}
 	p.focusLeaf(docLeaf.ID)
 	if p.paneFocus != docLeaf.ID || p.activePane != PanePreview {

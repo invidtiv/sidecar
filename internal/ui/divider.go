@@ -51,7 +51,7 @@ func RenderHandle(length int, vertical bool, state HandleState) string {
 	if vertical {
 		bar = handleBarV
 	}
-	body := strings.Repeat(bar, length)
+	var body string
 	if vertical {
 		// Keep the divider's allocated geometry stable while stopping the
 		// visible bar one row short of the surrounding panels at each end.
