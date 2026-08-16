@@ -1,4 +1,4 @@
-Shell                                        Diff │  upper-right.md
+Shell                                        Diff │  upper-right.md                               ×
 No output yet                                     │
                                                   │   upper
                                                   │
@@ -11,7 +11,7 @@ No output yet                                     │
                                                   │
                                                   │
 ──────────────────────────────────────────────────│─────────────────────────────────────────────────
-  under-terminal.md                               │  lower-right.md
+  under-terminal.md                             × │  lower-right.md                               ×
                                                   │
    under                                          │   lower
                                                   │

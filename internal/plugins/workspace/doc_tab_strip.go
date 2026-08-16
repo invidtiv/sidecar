@@ -16,8 +16,8 @@ type docTabHit struct {
 type docTabPlacement = docview.TabHit
 type docTabStrip = docview.TabStrip
 
-// layoutDocTabStrip is the doc leaf's header: a left-truncated path tab strip
-// and nothing else. The same strip is what registerDocPaneRegions hit-tests.
+// layoutDocTabStrip is the doc leaf's tab strip: a left-truncated path strip.
+// The same strip is what registerDocTabRegions hit-tests.
 func layoutDocTabStrip(doc *docPane, width int, focused bool) docTabStrip {
 	var group docview.Tabs
 	if doc != nil {

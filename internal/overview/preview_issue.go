@@ -6,6 +6,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -227,7 +228,7 @@ func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) str
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := issueview.LayoutTabStrip(issue.tabs, box.W, focused).Row
+	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row, box.W, panelayout.Issue)
 	if contentHeight <= 0 {
 		return header
 	}
@@ -262,7 +263,7 @@ func (m *Model) registerPreviewIssueTabRegions(box termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.issue.focused
-	for _, tab := range issueview.LayoutTabStrip(m.preview.issue.tabs, issueBox.W, focused).Tabs {
+	for _, tab := range issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused).Tabs {
 		m.workspacesMouse.HitMap.AddRect(
 			previewIssueTabKind,
 			issueBox.X+tab.Col, issueBox.Y, tab.Width, 1,

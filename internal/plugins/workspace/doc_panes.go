@@ -1620,10 +1620,9 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.paneFocus = p.paneRoot.ID
 }
 
-// docPaneHeaderRow is the doc leaf's header: the tab strip only. focused is
-// the frame's answer, so the tab a click lands on matches the one the leaf drew.
+// docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
 func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
-	return layoutDocTabStrip(doc, width, focused).Row
+	return p.composeContentHeader(layoutDocTabStrip(doc, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, doc != nil && p.hoverPaneClose == doc.leafID)
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -1662,7 +1661,7 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
-	for _, tab := range layoutDocTabStrip(doc, box.W, p.paneFocus == leafID).Tabs {
+	for _, tab := range layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+tab.Col, box.Y, tab.Width, 1, docTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }
@@ -1692,6 +1691,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 			box := Box{X: origin.X, Y: origin.Y, W: zoomed.Box.W, H: zoomed.Box.H}
 			p.registerPaneLeafRegions(zoomed.Node, box)
 			p.registerPaneTabRegions(zoomed.Node, box)
+			p.registerPaneCloseRegions(zoomed.Node, box)
 		}
 		// One leaf is still composed, not returned: the clip-and-pad the
 		// compositor guarantees is what makes the leaf's box the leaf's box, and
@@ -1825,6 +1825,19 @@ func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
 	}
 }
 
+func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	switch node.Kind {
+	case PaneDoc, PaneIssue, PaneDiff:
+		if p.paneContent(node) == nil {
+			return
+		}
+		p.registerPaneCloseRegion(node.ID, box)
+	}
+}
+
 // registerPaneTreeRegions registers hit regions from the same placements the
 // canvas drew from, so a click cannot land on geometry the frame did not draw.
 func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider) {
@@ -1853,6 +1866,14 @@ func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider)
 	// into the document header — the cell a click on the leftmost tab lands on.
 	for _, placement := range leaves {
 		p.registerPaneTabRegions(placement.Node, Box{
+			X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
+			W: placement.Box.W, H: placement.Box.H,
+		})
+	}
+	// Close buttons beat tabs: the X occupies the right edge the strip no
+	// longer claims, and a one-cell miss on a tab must not steal the close.
+	for _, placement := range leaves {
+		p.registerPaneCloseRegions(placement.Node, Box{
 			X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
 			W: placement.Box.W, H: placement.Box.H,
 		})

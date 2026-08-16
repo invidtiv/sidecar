@@ -95,7 +95,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -231,6 +231,7 @@ func isBackgroundRegion(regionID string) bool {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
 		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
+		regionPaneClose,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
@@ -725,6 +726,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverSortButton = false
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
+		p.hoverPaneClose = 0
 		if action.Region != nil {
 			switch action.Region.ID {
 			case regionKanbanCard:
@@ -739,6 +741,11 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
+			case regionPaneClose:
+				if leafID, ok := action.Region.Data.(int); ok {
+					p.hoverPaneClose = leafID
+				}
+				p.clearIssueHover()
 			case regionPaneLeaf:
 				// Only an issue leaf hovers. A document under the pointer
 				// leaves the issue's hover behind, the same as any other
@@ -808,6 +815,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	p.notePressAwayFromTerminal(action)
+	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
+		return cmd
+	}
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
 		return cmd
 	}
@@ -900,6 +910,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			}
 		}
 		return p.prepareTerminalClickOrDrag(action)
+	case regionPaneClose:
+		return p.clickPaneClose(action.Region.Data)
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
@@ -1161,6 +1173,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	}
 
 	p.notePressAwayFromTerminal(action)
+	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
+		return cmd
+	}
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
 		return cmd
 	}
@@ -1351,7 +1366,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:

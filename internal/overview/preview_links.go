@@ -25,9 +25,15 @@ import (
 const (
 	previewDocRegionKind     = "global-preview-doc"
 	previewDocTabKind        = "global-preview-doc-tab"
+	previewPaneCloseKind     = "global-preview-pane-close"
 	previewSecondaryMinWidth = markdown.MinWidthForMarkdown
 	previewTermMinWidth      = 12
 )
+
+// previewPaneCloseHit names the content pane whose header X was clicked.
+type previewPaneCloseHit struct {
+	Kind panelayout.Kind
+}
 
 func isPreviewDocRegion(kind string) bool {
 	return kind == previewDocRegionKind || kind == previewDocTabKind
@@ -599,7 +605,7 @@ func (m *Model) registerPreviewDocTabRegions(box termpreview.Box) {
 	if !ok {
 		return
 	}
-	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, docBox.W, m.PreviewFocused() && m.preview.doc.focused).Tabs {
+	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, ui.ReserveHeaderClose(docBox.W).TabsWidth, m.PreviewFocused() && m.preview.doc.focused).Tabs {
 		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+tab.Col, docBox.Y, tab.Width, 1, previewDocTabHit(tab.Index))
 	}
 }
@@ -678,7 +684,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := docview.LayoutTabStrip(doc.tabs, box.W, m.PreviewFocused() && doc.focused).Row
+	header := m.composePreviewHeader(docview.LayoutTabStrip(doc.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, m.PreviewFocused() && doc.focused).Row, box.W, panelayout.Document)
 	body := ""
 	if view != nil {
 		body = view.View()
@@ -687,6 +693,35 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 		return header
 	}
 	return header + "\n" + body
+}
+
+func (m *Model) composePreviewHeader(tabsRow string, width int, kind panelayout.Kind) string {
+	return ui.ComposeHeaderClose(tabsRow, width, m.previewCloseHover && m.hoverPreviewClose == kind)
+}
+
+func (m *Model) registerPreviewCloseRegion(kind panelayout.Kind, box termpreview.Box) {
+	reserve := ui.ReserveHeaderClose(box.W)
+	if reserve.CloseW < 1 {
+		return
+	}
+	m.workspacesMouse.HitMap.AddRect(
+		previewPaneCloseKind,
+		box.X+reserve.CloseCol, box.Y, reserve.CloseW, 1,
+		previewPaneCloseHit{Kind: kind},
+	)
+}
+
+func (m *Model) closePreviewPane(kind panelayout.Kind) tea.Cmd {
+	switch kind {
+	case panelayout.Document:
+		return m.closePreviewDoc()
+	case panelayout.Issue:
+		return m.closePreviewIssue()
+	case panelayout.Diff:
+		return m.closePreviewDiff()
+	default:
+		return nil
+	}
 }
 
 func renderPreviewPaneDivider(divider panelayout.Divider, focused bool) string {

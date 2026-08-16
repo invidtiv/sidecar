@@ -7,7 +7,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/issueview"
-	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -60,25 +59,21 @@ func addPreviewWorkspace(t *testing.T, m *Model, id, name string) {
 
 func visualPreviewIssueIDPoint(t *testing.T, m *Model, issueID string) (x, y int, ok bool) {
 	t.Helper()
-	box, hasBox := m.previewBox()
-	if !hasBox || m.preview.issue == nil {
+	if m.preview.issue == nil {
 		return 0, 0, false
 	}
-	issueBox, split := m.previewPaneBox(panelayout.Issue, box)
-	if !split {
+	index := m.preview.issue.tabs.Find(issueID)
+	if index < 0 {
 		return 0, 0, false
 	}
-	view := m.WorkspacesView(m.width, m.height)
-	lines := strings.Split(view, "\n")
-	if issueBox.Y < 0 || issueBox.Y >= len(lines) {
-		return 0, 0, false
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		hit, isTab := region.Data.(previewIssueTabHit)
+		if !isTab || int(hit) != index {
+			continue
+		}
+		return region.Rect.X + max(region.Rect.W/2, 0), region.Rect.Y, true
 	}
-	plain := ansi.Strip(lines[issueBox.Y])
-	at := strings.Index(plain, issueID)
-	if at < 0 {
-		return 0, 0, false
-	}
-	return ansi.StringWidth(plain[:at]) + ansi.StringWidth(issueID)/2, issueBox.Y, true
+	return 0, 0, false
 }
 
 func TestGlobalIssueTabsClickAndCycle(t *testing.T) {

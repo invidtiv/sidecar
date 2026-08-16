@@ -358,6 +358,83 @@ func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
 	// draggable. Pane and body regions are registered first.
 	m.registerPreviewDocTabRegions(box)
 	m.registerPreviewIssueTabRegions(box)
+	m.registerPreviewPaneCloseRegions(box)
+}
+
+func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
+	if action.Region == nil {
+		m.previewCloseHover = false
+		m.hoverPreviewClose = 0
+		return
+	}
+	hit, ok := action.Region.Data.(previewPaneCloseHit)
+	m.previewCloseHover = ok
+	if ok {
+		m.hoverPreviewClose = hit.Kind
+		return
+	}
+	m.hoverPreviewClose = 0
+}
+
+func (m *Model) scrollPreviewClose(kind panelayout.Kind, delta int) tea.Cmd {
+	switch kind {
+	case panelayout.Document:
+		if m.preview.doc != nil && m.preview.doc.view() != nil {
+			m.preview.doc.view().Scroll(delta)
+		}
+	case panelayout.Issue:
+		if m.preview.issue != nil && m.preview.issue.view() != nil {
+			m.preview.issue.view().Scroll(delta)
+		}
+	case panelayout.Diff:
+		if view := m.preview.diff.view(); view != nil {
+			view.ScrollContent(delta, view.Height())
+		}
+	}
+	return nil
+}
+
+func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) bool {
+	switch kind {
+	case panelayout.Document:
+		if m.preview.doc == nil {
+			return true
+		}
+		view := m.preview.doc.view()
+		return view == nil || view.ScrollAtBoundary(delta)
+	case panelayout.Issue:
+		if m.preview.issue == nil {
+			return true
+		}
+		view := m.preview.issue.view()
+		return view == nil || view.ScrollAtBoundary(delta)
+	case panelayout.Diff:
+		view := m.preview.diff.view()
+		if view == nil {
+			return true
+		}
+		return view.ScrollAtBoundary(delta, view.Height())
+	default:
+		return true
+	}
+}
+
+func (m *Model) registerPreviewPaneCloseRegions(box termpreview.Box) {
+	if m.preview.doc != nil {
+		if docBox, ok := m.previewPaneBox(panelayout.Document, box); ok {
+			m.registerPreviewCloseRegion(panelayout.Document, docBox)
+		}
+	}
+	if m.preview.issue != nil {
+		if issueBox, ok := m.previewPaneBox(panelayout.Issue, box); ok {
+			m.registerPreviewCloseRegion(panelayout.Issue, issueBox)
+		}
+	}
+	if m.preview.diff != nil {
+		if diffBox, ok := m.previewPaneBox(panelayout.Diff, box); ok {
+			m.registerPreviewCloseRegion(panelayout.Diff, diffBox)
+		}
+	}
 }
 
 // WorkspacesFilterFocused reports that the inline filter owns the keyboard, so
@@ -671,6 +748,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	wasDragging := m.workspacesMouse.IsDragging()
 	dragSourceBefore := m.workspacesMouse.DragRegion()
 	action := m.workspacesMouse.HandleMouse(mouseMsg)
+	if action.Type == mouse.ActionHover {
+		// Record before the terminal gesture machine: a press that opened the
+		// pane can still look like a lost release, and that path must not
+		// swallow the X's hover.
+		m.setPreviewCloseHover(action)
+	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.
 	switch m.previewPointerIntent(action, wasDragging, dragSourceBefore) {
@@ -742,7 +825,8 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	_, docTab := action.Region.Data.(previewDocTabHit)
 	_, issueTab := action.Region.Data.(previewIssueTabHit)
-	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind) || docTab || issueTab
+	_, closeHit := action.Region.Data.(previewPaneCloseHit)
+	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind) || docTab || issueTab || closeHit
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
@@ -776,6 +860,9 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	}
 	if action.Region == nil {
 		return false
+	}
+	if hit, ok := action.Region.Data.(previewPaneCloseHit); ok {
+		return m.previewCloseWheelAtBoundary(hit.Kind, action.Delta)
 	}
 	if _, ok := action.Region.Data.(previewDocTabHit); ok {
 		view := m.preview.doc.view()
@@ -844,6 +931,15 @@ func regionKind(region *mouse.Region) (string, bool) {
 func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	// The preview owns its own wheel: scrolling over terminal output moves that
 	// output, not the list underneath it.
+	if hit, ok := action.Region.Data.(previewPaneCloseHit); ok {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick:
+			return m.closePreviewPane(hit.Kind)
+		case mouse.ActionScrollUp, mouse.ActionScrollDown:
+			return m.scrollPreviewClose(hit.Kind, action.Delta)
+		}
+		return nil
+	}
 	if _, ok := action.Region.Data.(previewDiffTabHit); ok {
 		return m.handlePreviewDiffMouse(action)
 	}

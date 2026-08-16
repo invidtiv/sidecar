@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // stubTd puts a td on PATH that answers `td show <id> -f json` from its
@@ -304,9 +305,9 @@ func TestUnresolvableIssueLeafCollapsesWithoutResettingTheLayout(t *testing.T) {
 	}
 }
 
-// The issue leaf answers the wheel over its own box. The header is only the
-// tab strip: there is no close chip and no in-header "q close".
-func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
+// The issue leaf answers the wheel over its own box. The header is the tab
+// strip plus the shared X; there is no in-header "q close".
+func TestIssuePaneAnswersTheWheelAndHasCloseButton(t *testing.T) {
 	stubTd(t)
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
@@ -331,14 +332,15 @@ func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
 		t.Fatal("a notch over the issue leaf scrolled nothing")
 	}
 
-	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID == "issue-close" {
-			t.Fatal("the issue leaf still registered a close chip")
-		}
+	if paneCloseRegion(p, 3) == nil {
+		t.Fatal("the issue leaf has no close button region")
 	}
 	header := strings.TrimSpace(ansi.Strip(rows[box.Y]))
-	if strings.Contains(header, "q close") || strings.Contains(header, "×") {
-		t.Fatalf("issue header still has chips/hints: %q", header)
+	if strings.Contains(header, "q close") {
+		t.Fatalf("issue header still has q close: %q", header)
+	}
+	if !strings.Contains(header, ui.CloseButtonLabel) {
+		t.Fatalf("issue header has no close button: %q", header)
 	}
 }
 

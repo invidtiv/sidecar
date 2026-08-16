@@ -117,6 +117,7 @@ const (
 	regionDocTab          = "doc-tab"
 	regionIssueTab        = "issue-tab"
 	regionDiffTargetTab   = "diff-target-tab"
+	regionPaneClose       = "pane-close"
 	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Type selector modal element IDs
@@ -460,6 +461,8 @@ type Plugin struct {
 	hoverSortButton           bool
 	hoverShellsPlusButton     bool
 	hoverWorkspacesPlusButton bool
+	// hoverPaneClose is the content leaf whose header X is under the pointer.
+	hoverPaneClose int
 
 	// Multiple shell sessions (not tied to git worktrees)
 	shells           []*ShellSession // Current workDir shells (top Shells section)

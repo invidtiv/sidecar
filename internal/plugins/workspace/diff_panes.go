@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -586,7 +587,7 @@ func (p *Plugin) closeDiffPane(leafID int) tea.Cmd {
 }
 
 func (p *Plugin) diffPaneHeaderRow(diff *diffPane, width int, focused bool) string {
-	return layoutDiffTabStrip(diff, width, focused).Row
+	return p.composeContentHeader(layoutDiffTabStrip(diff, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, diff != nil && p.hoverPaneClose == diff.leafID)
 }
 
 func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {
@@ -594,7 +595,7 @@ func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDiffTargetTabRegions(diff *diffPane, leafID int, box Box) {
-	for _, tab := range layoutDiffTabStrip(diff, box.W, p.paneFocus == leafID).Tabs {
+	for _, tab := range layoutDiffTabStrip(diff, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionDiffTargetTab, box.X+tab.Col, box.Y, tab.Width, 1, diffTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // issuePane is one td issue leaf's tab group. The pane tree points at this,
@@ -593,9 +594,9 @@ func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 	return p.resizeDocTerminalCmd()
 }
 
-// issuePaneHeaderRow is the issue leaf's header: the tab strip only.
+// issuePaneHeaderRow is the issue leaf's header: the tab strip plus the shared X.
 func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) string {
-	return layoutIssueTabStrip(issue, width, focused).Row
+	return p.composeContentHeader(layoutIssueTabStrip(issue, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, issue != nil && p.hoverPaneClose == issue.leafID)
 }
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
@@ -603,7 +604,7 @@ func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box)
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
-	for _, tab := range layoutIssueTabStrip(issue, box.W, p.paneFocus == leafID).Tabs {
+	for _, tab := range layoutIssueTabStrip(issue, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+tab.Col, box.Y, tab.Width, 1, issueTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }

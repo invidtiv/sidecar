@@ -177,14 +177,20 @@ func TestDocumentSplitFocusChromeCloseRegionAndExactBox(t *testing.T) {
 			t.Fatalf("row %d width = %d, want %d: %q", row, got, width, line)
 		}
 	}
-	if stripped := ansi.Strip(docFocused); !strings.Contains(stripped, "guide.md") || strings.Contains(stripped, "Rendered") || strings.Contains(stripped, "×") || strings.Contains(stripped, "q close") || strings.Contains(stripped, "m raw") {
-		t.Fatalf("document header is not a path-only tab strip: %q", stripped)
+	if stripped := ansi.Strip(docFocused); !strings.Contains(stripped, "guide.md") || strings.Contains(stripped, "Rendered") || strings.Contains(stripped, "q close") || strings.Contains(stripped, "m raw") {
+		t.Fatalf("document header is not a path tab strip: %q", stripped)
+	}
+	if !strings.Contains(ansi.Strip(docFocused), ui.CloseButtonLabel) {
+		t.Fatalf("document header has no close button: %q", ansi.Strip(docFocused))
 	}
 	if docPaneRegion(p, regionDocTab) == nil {
 		t.Fatal("drawn tab has no hit region")
 	}
+	if docPaneRegion(p, regionPaneClose) == nil {
+		t.Fatal("header has no close hit region")
+	}
 	if docPaneRegion(p, "doc-mode") != nil || docPaneRegion(p, "doc-close") != nil {
-		t.Fatal("header still registered mode/close hit regions")
+		t.Fatal("header still registered old mode/close hit regions")
 	}
 
 	p.paneFocus = terminalLeafID(p.paneRoot)

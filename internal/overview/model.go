@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
@@ -197,6 +198,10 @@ type Model struct {
 	pendingViews map[string]*pendingView
 	// openSplit is the request-scoped --split axis override ("right"/"below").
 	openSplit string
+
+	// previewCloseHover is set while the pointer is over a content-pane X.
+	previewCloseHover bool
+	hoverPreviewClose panelayout.Kind
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace
