@@ -6,16 +6,18 @@ import "time"
 type Action string
 
 const (
-	ActionOpen Action = "open"
+	ActionOpen           Action = "open"
+	ActionRenameWorktree Action = "rename-worktree"
 )
 
-// TargetKind identifies the type of object to reveal.
+// TargetKind identifies the type of object affected by a UI request.
 type TargetKind string
 
 const (
-	TargetKindFile  TargetKind = "file"
-	TargetKindIssue TargetKind = "issue"
-	TargetKindDiff  TargetKind = "diff"
+	TargetKindFile     TargetKind = "file"
+	TargetKindIssue    TargetKind = "issue"
+	TargetKindDiff     TargetKind = "diff"
+	TargetKindWorktree TargetKind = "worktree"
 )
 
 // Status describes the host's response to a UI request.
@@ -38,7 +40,8 @@ type Origin struct {
 	PID         int    `json:"pid"`
 }
 
-// Target defines what to open in a split pane.
+// Target identifies the object affected by the request. Value carries the
+// action-specific path, issue ID, or presentation value.
 type Target struct {
 	Kind  TargetKind `json:"kind"`
 	Value string     `json:"value"`

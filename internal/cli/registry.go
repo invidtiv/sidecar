@@ -43,9 +43,9 @@ func RootCommand() *Command {
 		Name:    "name",
 		Summary: "Print the current shell's display name",
 		Usage:   "sidecar shell name [--json]",
-		Long: "Print the Sidecar display name of the project shell containing this command.\n" +
-			"Reads the registered manifest (authoritative), not $SIDECAR_SHELL_NAME, so it\n" +
-			"works for shells created before that environment cue existed.\n\n" +
+		Long: "Print the Sidecar display name of the managed shell or worktree agent containing\n" +
+			"this command. Reads registered Sidecar state (authoritative), not the agent SDK\n" +
+			"or $SIDECAR_SHELL_NAME, so reopening another agent in place keeps its context.\n\n" +
 			"Human output is the display name alone, one line, for easy scripting.\n" +
 			"JSON includes the stable tmux session id and display name.",
 		Flags: []Flag{
@@ -72,8 +72,9 @@ func RootCommand() *Command {
 		Name:    "rename",
 		Summary: "Rename the current shell's display name",
 		Usage:   "sidecar shell rename [--json] <display-name>",
-		Long: "Rename only the Sidecar project shell containing this command. This changes\n" +
-			"Sidecar's display name; it does not rename the tmux session.\n\n" +
+		Long: "Rename only the Sidecar-managed shell or worktree agent containing this command.\n" +
+			"This changes Sidecar's display name; it does not rename the tmux session, Git\n" +
+			"branch, or worktree directory.\n\n" +
 			"The current display name is also published as $SIDECAR_SHELL_NAME. \"Shell 3\"\n" +
 			"is the unset default; a previous task's name is equally stale — rename when\n" +
 			"the name no longer describes the work in this shell.",
@@ -98,9 +99,9 @@ func RootCommand() *Command {
 
 	shellCmd := &Command{
 		Name:    "shell",
-		Summary: "Manage the current Sidecar project shell",
+		Summary: "Manage the current Sidecar shell context",
 		Usage:   "sidecar shell <command>",
-		Long:    "Manage the current Sidecar project shell.",
+		Long:    "Manage the current Sidecar-managed shell or worktree agent context.",
 		Sub:     []*Command{nameCmd, renameCmd},
 		Run:     runShellRoot,
 	}

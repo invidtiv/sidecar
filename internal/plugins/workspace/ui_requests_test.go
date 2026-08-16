@@ -79,6 +79,19 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 	}
 }
 
+func TestUIRequests_WorktreeRenameRepaintsLiveList(t *testing.T) {
+	path := t.TempDir()
+	p := &Plugin{worktrees: []*Worktree{{Name: "panes", Path: path}}}
+	p.handleUIRequest(uirequest.Request{
+		Action: uirequest.ActionRenameWorktree,
+		Origin: uirequest.Origin{WorkDir: path},
+		Target: uirequest.Target{Kind: uirequest.TargetKindWorktree, Value: "pane handle polish"},
+	})
+	if got := p.worktrees[0].Name; got != "pane handle polish" {
+		t.Fatalf("live worktree name = %q", got)
+	}
+}
+
 func TestUIRequests_RefusedInteractiveSplitEmitsNoGeometryAssertion(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

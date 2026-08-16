@@ -24,6 +24,10 @@ func hostInstanceID() string {
 }
 
 func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
+	if req.Action == uirequest.ActionRenameWorktree {
+		m.applyWorktreeRenameRequest(req)
+		return nil
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -119,6 +123,31 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		At:       time.Now().UTC(),
 	})
 	return nil
+}
+
+func (m *Model) applyWorktreeRenameRequest(req uirequest.Request) {
+	if req.Target.Kind != uirequest.TargetKindWorktree || req.Origin.WorkDir == "" || req.Target.Value == "" {
+		return
+	}
+	targetPath := workspaceinventory.CanonicalPath(req.Origin.WorkDir)
+	changed := false
+	for key, result := range m.results {
+		resultChanged := false
+		for i := range result.Workspaces {
+			workspace := &result.Workspaces[i]
+			if workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == targetPath {
+				workspace.Name = req.Target.Value
+				resultChanged = true
+			}
+		}
+		if resultChanged {
+			m.results[key] = result
+			changed = true
+		}
+	}
+	if changed {
+		m.syncBoard()
+	}
 }
 
 // willRetargetPreviewPane reports whether opening kind would land in a pane

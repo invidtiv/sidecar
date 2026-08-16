@@ -27,6 +27,10 @@ func hostInstanceID() string {
 }
 
 func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
+	if req.Action == uirequest.ActionRenameWorktree {
+		p.applyWorktreeRenameRequest(req)
+		return nil
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -77,6 +81,18 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		At:       time.Now().UTC(),
 	})
 	return nil
+}
+
+func (p *Plugin) applyWorktreeRenameRequest(req uirequest.Request) {
+	if req.Target.Kind != uirequest.TargetKindWorktree || req.Origin.WorkDir == "" || req.Target.Value == "" {
+		return
+	}
+	for _, wt := range p.worktrees {
+		if sameCanonicalPath(wt.Path, req.Origin.WorkDir) {
+			wt.Name = req.Target.Value
+			return
+		}
+	}
 }
 
 func (p *Plugin) matchesProjectTarget(req uirequest.Request) bool {
