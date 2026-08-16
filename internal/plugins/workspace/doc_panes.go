@@ -1772,7 +1772,8 @@ func (p *Plugin) renderPaneLeafPanel(placement Placement, zoomed bool) string {
 // wrapLeafChrome is a reader of setFocusTarget: interactive/active on the
 // focused leaf, muted on neighbours. Content bytes are not dimmed.
 func (p *Plugin) wrapLeafChrome(node *PaneNode, content string, outer Box) string {
-	if node != nil && node.Kind == PaneTerminal && p.viewMode == ViewModeInteractive && p.activePane == PanePreview {
+	if node != nil && node.Kind == PaneTerminal && p.viewMode == ViewModeInteractive &&
+		p.activePane == PanePreview && p.paneFocus == node.ID {
 		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetInteractiveGradient())
 	}
 	if node != nil && node.Kind == PaneTerminal && p.previewFlashActive() && p.activePane == PanePreview && p.paneFocus == node.ID {

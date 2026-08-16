@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 func TestOneLeafInnerMatchesLegacyPreviewContentBox(t *testing.T) {
@@ -143,6 +144,39 @@ func TestNestedThreeAndFourLeafChromeAgreesOnInners(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWrapLeafChromeInteractiveDoesNotLightUnfocusedTerminal(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# chrome\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.width, p.height = 200, 50
+	if cmd := p.openTerminalPath("README.md", 1); cmd == nil {
+		t.Fatal("2-leaf open failed")
+	}
+	_, docLeaf := p.activeDocPane()
+	if docLeaf == nil {
+		t.Fatal("no document leaf")
+	}
+	p.activePane = PanePreview
+	p.focusLeaf(docLeaf.ID)
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, PaneOnEntry: PanePreview}
+
+	termID := terminalLeafID(p.paneRoot)
+	got := p.wrapLeafChrome(&PaneNode{ID: termID, Kind: PaneTerminal}, "body", Box{W: 40, H: 10})
+	interactive := styles.RenderPanelWithGradient("body", 40, 10, styles.GetInteractiveGradient())
+	if got == interactive {
+		t.Fatal("terminal used GetInteractiveGradient while paneFocus is the Doc")
+	}
+	muted := styles.RenderPanel("body", 40, 10, false)
+	if got != muted {
+		t.Fatalf("unfocused terminal chrome is not the muted panel")
+	}
+	docGot := p.wrapLeafChrome(docLeaf, "body", Box{W: 40, H: 10})
+	if docGot != styles.RenderPanel("body", 40, 10, true) {
+		t.Fatal("focused Doc did not use the active gradient")
 	}
 }
 
