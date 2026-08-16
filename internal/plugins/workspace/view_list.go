@@ -164,6 +164,13 @@ func (p *Plugin) renderListView(width, height int) string {
 		// Register hit region for full-width preview (uses outer dimensions)
 		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, split.PreviewWidth, paneHeight, nil)
 
+		if p.docVisible() {
+			// Multi-leaf: each leaf is its own panel. Do not wrap the peer again.
+			previewContent := p.renderPreviewContent(split.PreviewWidth, paneHeight)
+			p.registerPreviewActionRegions(split)
+			return previewContent
+		}
+
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
 		p.registerPreviewActionRegions(split)
@@ -193,7 +200,14 @@ func (p *Plugin) renderListView(width, height int) string {
 
 	// Render content for each pane using pre-calculated content widths
 	sidebarContent := p.renderSidebarContent(sidebarContentW, innerHeight)
-	previewContent := p.renderPreviewContent(previewContentW, innerHeight)
+	var previewContent string
+	if p.docVisible() {
+		// Multi-leaf: the preview peer is a canvas of leaf panels, not one
+		// outer RenderPanel wrapping inner frames.
+		previewContent = p.renderPreviewContent(previewW, paneHeight)
+	} else {
+		previewContent = p.renderPreviewContent(previewContentW, innerHeight)
+	}
 
 	// Preview tabs are registered after document bodies and their divider, so
 	// the visible chips remain the highest-priority targets.
@@ -205,7 +219,9 @@ func (p *Plugin) renderListView(width, height int) string {
 	leftPane := styles.RenderPanel(sidebarContent, sidebarW, paneHeight, sidebarActive)
 
 	var rightPane string
-	if p.viewMode == ViewModeInteractive {
+	if p.docVisible() {
+		rightPane = previewContent
+	} else if p.viewMode == ViewModeInteractive {
 		// Use interactive gradient when in interactive mode (td-70aed9)
 		rightPane = styles.RenderPanelWithGradient(previewContent, previewW, paneHeight, styles.GetInteractiveGradient())
 	} else if flashActive && previewActive {

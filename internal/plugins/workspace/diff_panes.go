@@ -99,7 +99,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 		return tea.Batch(reopen, load)
 	}
 
-	content, placed := p.previewContentBox()
+	peer, placed := p.previewPeerBox()
 	if !placed {
 		return reopen
 	}
@@ -109,7 +109,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 	if trialFocus != id {
 		return reopen
 	}
-	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Diff", plan.Axis)
 		p.toastTime = time.Now()
 		return reopen
@@ -673,20 +673,11 @@ func (p *Plugin) resizeFocusedLeaf(delta int) tea.Cmd {
 }
 
 func (p *Plugin) paneLeafBox(leafID int) (Box, bool) {
-	content, ok := p.previewContentBox()
+	geom, ok := p.leafGeometryFor(leafID)
 	if !ok {
 		return Box{}, false
 	}
-	layout, laid := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
-	if !laid {
-		return Box{}, false
-	}
-	for _, placement := range layout.Leaves {
-		if placement.Node != nil && placement.Node.ID == leafID {
-			return placement.Box, true
-		}
-	}
-	return Box{}, false
+	return geom.Inner, true
 }
 
 func (p *Plugin) activeDiffView() *workspacediff.View {

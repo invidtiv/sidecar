@@ -303,18 +303,14 @@ func TestDocPaneSearchKeepsTheLeafsBox(t *testing.T) {
 		t.Fatal("opening the finder changed nothing on screen")
 	}
 
-	box := docLeafBox(t, p, width, height)
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
+	box := insetPanelChrome(docLeafBox(t, p, width, height))
 	if len(doc.modeRegions) == 0 {
 		t.Fatal("the surface registered nothing to click")
 	}
 	for _, region := range doc.modeRegions {
 		r := region.Rect
-		if r.X < origin.X+box.X || r.Y < origin.Y+box.Y ||
-			r.X+r.W > origin.X+box.X+box.W || r.Y+r.H > origin.Y+box.Y+box.H {
+		if r.X < box.X || r.Y < box.Y ||
+			r.X+r.W > box.X+box.W || r.Y+r.H > box.Y+box.H {
 			t.Fatalf("region %q at %+v escapes the pane box %+v", region.ID, r, box)
 		}
 	}
@@ -333,11 +329,7 @@ func TestDocPaneSearchClickHitsTheModal(t *testing.T) {
 	}
 
 	composePaneTree(t, p, width, height)
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
-	box := docLeafBox(t, p, width, height)
+	box := insetPanelChrome(docLeafBox(t, p, width, height))
 
 	var row *mouse.Region
 	for _, region := range doc.modeRegions {
@@ -350,8 +342,8 @@ func TestDocPaneSearchClickHitsTheModal(t *testing.T) {
 	if row == nil {
 		t.Fatal("the finder registered no row regions")
 	}
-	if row.Rect.X < origin.X+box.X || row.Rect.Y < origin.Y+box.Y {
-		t.Fatalf("row region %+v sits outside the pane at (%d,%d)", row.Rect, origin.X+box.X, origin.Y+box.Y)
+	if row.Rect.X < box.X || row.Rect.Y < box.Y {
+		t.Fatalf("row region %+v sits outside the pane at (%d,%d)", row.Rect, box.X, box.Y)
 	}
 	hit := p.mouseHandler.HitMap.Test(row.Rect.X+1, row.Rect.Y)
 	if hit == nil || hit.ID != row.ID {
@@ -361,7 +353,7 @@ func TestDocPaneSearchClickHitsTheModal(t *testing.T) {
 
 func docLeafBox(t *testing.T, p *Plugin, width, height int) Box {
 	t.Helper()
-	leaves, _, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, _, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	for _, placement := range leaves {
 		if placement.Node.Kind == PaneDoc {
 			return placement.Box

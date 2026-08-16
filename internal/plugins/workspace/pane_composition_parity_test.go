@@ -106,7 +106,7 @@ func TestTwoLeafPaneCompositionMatchesTheJoinsItReplaced(t *testing.T) {
 							if !fits || len(leaves) != 2 || len(dividers) != 1 {
 								continue
 							}
-							origin, _ := p.previewContentBox()
+							origin := Box{}
 							measured++
 							where := fmt.Sprintf("%dx%d axis=%v terminalFirst=%v focusDoc=%v",
 								width, height, axis, terminalFirst, focusDoc)

@@ -367,9 +367,10 @@ func TestDocPaneTabRawCoordinateClickSelectsTab(t *testing.T) {
 			writeDocPaneFixture(t, root, "README.md", "# readme\n")
 			writeDocPaneFixture(t, root, "main.go", "package main\n")
 			p := docPaneTestPlugin(t, root, true)
-			p.width, p.height = width, 20
+			p.width, p.height = 140, 20
 			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
 			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+			p.width, p.height = width, 20
 			doc := p.activeDocPaneOrNil()
 			if doc.view().Title() != "main.go" {
 				t.Fatalf("active = %q, want main.go", doc.view().Title())
@@ -424,7 +425,8 @@ func clickDrawnDocTab(t *testing.T, p *Plugin, index int) {
 	if pane == nil {
 		t.Fatal("document pane has no hit region")
 	}
-	strip := layoutDocTabStrip(doc, pane.Rect.W, p.paneFocus == leaf.ID)
+	inner := insetPanelChrome(pane.Rect)
+	strip := layoutDocTabStrip(doc, ui.ReserveHeaderClose(inner.W).TabsWidth, p.paneFocus == leaf.ID)
 	var tab *docTabPlacement
 	for i := range strip.Tabs {
 		if strip.Tabs[i].Index == index {
@@ -435,8 +437,8 @@ func clickDrawnDocTab(t *testing.T, p *Plugin, index int) {
 	if tab == nil {
 		t.Fatalf("tab %d is not drawn: %+v", index, strip.Tabs)
 	}
-	x := pane.Rect.X + tab.Col + tab.Width/2
-	y := pane.Rect.Y
+	x := inner.X + tab.Col + tab.Width/2
+	y := inner.Y
 	resolved := p.mouseHandler.HitMap.Test(x, y)
 	if resolved == nil || resolved.ID != regionDocTab {
 		t.Fatalf("visual tab %d at (%d,%d) resolves to %#v, want %s", index, x, y, resolved, regionDocTab)
@@ -465,9 +467,10 @@ func TestDocPaneVisualTabClickSelectsOnShellAndWorktree(t *testing.T) {
 			writeDocPaneFixture(t, root, "main.go", "package main\n")
 			p := docPaneTestPlugin(t, root, tc.shell)
 			p.sidebarVisible = tc.side
-			p.width, p.height = tc.width, 24
+			p.width, p.height = 140, 24
 			applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
 			applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+			p.width, p.height = tc.width, 24
 			doc := p.activeDocPaneOrNil()
 			if doc.view().Title() != "main.go" {
 				t.Fatalf("active = %q, want main.go", doc.view().Title())
@@ -791,6 +794,21 @@ func TestDocPaneNarrowRefusalAndFocusedLeafFallback(t *testing.T) {
 	if p.activeDocPaneOrNil() != nil || p.toastMessage == "" || p.paneFocus != 1 {
 		t.Fatalf("narrow refusal left state: doc=%#v toast=%q focus=%d", p.activeDocPaneOrNil(), p.toastMessage, p.paneFocus)
 	}
+
+	// 80 cols with a 40% sidebar leaves a 48-col preview. Outer floors are
+	// 14+1+34=49, so a 2-col markdown split must refuse rather than clip.
+	p.width = 80
+	p.sidebarVisible = true
+	p.sidebarWidth = 40
+	p.toastMessage = ""
+	if cmd := p.openTerminalPath("README.md", 1); cmd != nil {
+		t.Fatal("80/40% sidebar 2-col open returned a command")
+	}
+	if p.activeDocPaneOrNil() != nil || p.toastMessage == "" {
+		t.Fatalf("80/40%% sidebar 2-col left state: doc=%#v toast=%q", p.activeDocPaneOrNil(), p.toastMessage)
+	}
+	p.sidebarVisible = false
+	p.toastMessage = ""
 
 	// An already-open pane can become too narrow after a terminal resize. The
 	// focused leaf gets the whole outer preview instead of an under-floor split.
@@ -2183,18 +2201,18 @@ func TestDividerReleaseRecapturesTheTerminalWithoutActivation(t *testing.T) {
 	// A sizer reporting the new width is half the claim; the other half is the
 	// grid. The composition after the release has to place the terminal — and the
 	// divider beside it — at the dragged geometry, with no activation in between.
-	content, ok := p.previewContentBox()
+	peer, ok := p.previewPeerBox()
 	if !ok {
-		t.Fatal("preview content box is unplaced after the release")
+		t.Fatal("preview peer box is unplaced after the release")
 	}
-	rows := composePaneTree(t, p, content.W, content.H)
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: content.W, H: content.H}, paneTreeFloors())
+	rows := composePaneTree(t, p, peer.W, peer.H)
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, peer, paneTreeFloors())
 	if !fits || len(dividers) != 1 {
 		t.Fatalf("post-release layout = %d dividers fits=%v, want one divider", len(dividers), fits)
 	}
 	for _, placement := range leaves {
-		if placement.Node.Kind == PaneTerminal && placement.Box.W != after.W {
-			t.Fatalf("the composed terminal is %d columns, want the released %d", placement.Box.W, after.W)
+		if placement.Node.Kind == PaneTerminal && insetPanelChrome(placement.Box).W != after.W {
+			t.Fatalf("the composed terminal is %d columns, want the released %d", insetPanelChrome(placement.Box).W, after.W)
 		}
 	}
 	assertDividersDrawn(t, rows, dividers)

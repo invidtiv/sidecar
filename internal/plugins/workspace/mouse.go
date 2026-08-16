@@ -1670,16 +1670,16 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionPaneTreeDivider:
 		split := FindPane(p.paneRoot, p.paneDragSplitID)
-		content, ok := p.previewContentBox()
+		peer, ok := p.previewPeerBox()
 		if split == nil || split.Split == nil || !ok {
 			return nil
 		}
 		startValue := p.mouseHandler.DragStartValue()
 		newRatio := startValue
-		if split.Split.Axis == SplitRows && content.H > 0 {
-			newRatio += action.DragDY * 100 / content.H
-		} else if split.Split.Axis == SplitCols && content.W > 0 {
-			newRatio += action.DragDX * 100 / content.W
+		if split.Split.Axis == SplitRows && peer.H > 0 {
+			newRatio += action.DragDY * 100 / peer.H
+		} else if split.Split.Axis == SplitCols && peer.W > 0 {
+			newRatio += action.DragDX * 100 / peer.W
 		}
 		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
 	case regionPreviewPane, regionTermPanelContent:
