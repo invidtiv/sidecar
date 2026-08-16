@@ -278,6 +278,18 @@ func TestDefaultBindings_DoNotAdvertiseGlobalWorkspacesPreview(t *testing.T) {
 	}
 }
 
+func TestDefaultBindings_KeepApprovalKeysOutOfWorkspaces(t *testing.T) {
+	for _, b := range DefaultBindings() {
+		if b.Context != "workspace-list" && b.Context != "workspace-preview" {
+			continue
+		}
+		switch b.Command {
+		case "approve", "approve-all", "reject":
+			t.Fatalf("approval binding leaked into %s: %+v", b.Context, b)
+		}
+	}
+}
+
 func TestDefaultBindings_NotesEditorsEachHaveTheirOwnKey(t *testing.T) {
 	// Three editors, three keys. The bug this pins was Enter inferring vim from
 	// a config value, which is why the simple editor became unreachable.

@@ -81,8 +81,8 @@ This document provides a comprehensive review of keyboard shortcuts across all s
 | `s`/`S` | stage/stage-all | Yes | sort/- | start/stop | No pattern |
 | `u`/`U` | unstage/unstage-all | Yes | - | - | Git only |
 | `d`/`D` | diff/discard | Yes (inconsistent) | delete/- | diff/delete | Confusing |
-| `y`/`Y` | yank/yank-path | Yes | yank/copy-path | approve/approve-all | Inconsistent meanings |
-| `n`/`N` | next/prev-match | Yes | next/prev-match | new/reject | Conflict: N means different things |
+| `y`/`Y` | yank/yank-path | Yes | yank/copy-path | - | Inconsistent meanings |
+| `n`/`N` | next/prev-match | Yes | next/prev-match | new/- | N unassigned in Workspace |
 | `r`/`R` | refresh/- | - | -/rename | -/resume | Underused |
 
 ### Navigation Inconsistencies
@@ -175,7 +175,7 @@ This document provides a comprehensive review of keyboard shortcuts across all s
 | `d` | diff/delete | **D**estroy vs **D**iff conflict | Use `x` for delete, `d` for diff |
 | `D` | discard/delete | Uppercase meaning varies | Standardize: `D` = **D**iscard/delete (destructive) |
 | `n` | new/next-match | **N**ew vs **N**ext | Use `+` or `ctrl+n` for new, keep `n` for next |
-| `N` | reject/prev-match | **N**o vs previous | Standardize: `N` = prev-match only |
+| `N` | prev-match | Previous match | Keep `N` = prev-match |
 | `p` | paste/push/path-filter | Too many meanings | `p` = **p**aste, `P` = **P**ush, `ctrl+p` = **p**ath |
 | `m` | move/merge/markdown | Too many meanings | `m` = **m**ove (file op), `M` = **M**erge |
 | `e` | edit/export | Different domains | `e` = **e**dit, `E` = **E**xport |
@@ -330,13 +330,9 @@ This document provides a comprehensive review of keyboard shortcuts across all s
 | `T` | link-task | Same | - | **T**ask |
 | `s` | start-agent | Same | - | **S**tart |
 | `S` | stop-agent | Same | - | **S**top |
-| `y` | approve | Same | - | **Y**es |
-| `N` | reject | - | Change from `N` | **N**o |
 | `K` | kill-shell | Same | - | **K**ill |
 | `O` | open-in-git | Same | - | **O**pen |
 | `enter` | interactive | Same | - | Enter session |
-
-**Note on `y`/`N` for approve/reject**: This deviates from yank semantics. Consider using `a`/**A**pprove and `ctrl+x`/reject or a dedicated confirm dialog instead.
 
 ### Conversations Shortcuts (Proposed)
 
@@ -541,10 +537,10 @@ This is advanced but aligns with vim philosophy.
 | `S` | - | stage-all | - | stop-agent | - | - | force/all variant |
 | `u` | - | unstage | - | - | - | - | unstage/undo |
 | `U` | - | unstage-all | - | - | - | - | force/all variant |
-| `y` | - | yank | yank | approve | yank | - | yank |
-| `Y` | - | yank-path | copy-path | approve-all | yank-resume | - | yank-full |
+| `y` | - | yank | yank | - | yank | - | yank |
+| `Y` | - | yank-path | copy-path | - | yank-resume | - | yank-full |
 | `n` | - | next-match | - | new | - | - | next-match |
-| `N` | - | prev-match | prev-match | reject | - | - | prev-match |
+| `N` | - | prev-match | prev-match | - | - | - | prev-match |
 | `p` | - | filter-path | paste | push | - | - | paste |
 | `P` | - | push | - | - | - | - | push |
 | `f` | - | fetch | project-search | - | filter | - | fetch/filter |

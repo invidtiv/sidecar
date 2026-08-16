@@ -239,12 +239,6 @@ func (p *Plugin) Commands() []plugin.Command {
 					if fullTmuxAttachEnabled() {
 						cmds = append(cmds, plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-preview", Priority: 10})
 					}
-					if wt.Status == StatusWaiting {
-						cmds = append(cmds,
-							plugin.Command{ID: "approve", Name: "Approve", Description: "Approve agent prompt", Context: "workspace-preview", Priority: 12},
-							plugin.Command{ID: "reject", Name: "Reject", Description: "Reject agent prompt", Context: "workspace-preview", Priority: 13},
-						)
-					}
 				}
 			}
 			// Show interactive mode hint when feature enabled and session active
@@ -360,13 +354,6 @@ func (p *Plugin) Commands() []plugin.Command {
 				)
 				if fullTmuxAttachEnabled() {
 					cmds = append(cmds, plugin.Command{ID: "attach", Name: "Attach", Description: "Attach to session", Context: "workspace-list", Priority: 10})
-				}
-				if wt.Status == StatusWaiting {
-					cmds = append(cmds,
-						plugin.Command{ID: "approve", Name: "Approve", Description: "Approve agent prompt", Context: "workspace-list", Priority: 12},
-						plugin.Command{ID: "reject", Name: "Reject", Description: "Reject agent prompt", Context: "workspace-list", Priority: 13},
-						plugin.Command{ID: "approve-all", Name: "Approve All", Description: "Approve all agent prompts", Context: "workspace-list", Priority: 14},
-					)
 				}
 			}
 			// Only advertise mutating actions that are safe for this worktree.

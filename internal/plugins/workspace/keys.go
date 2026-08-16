@@ -925,21 +925,6 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if wt := p.selectedWorktree(); wt != nil {
 			p.openRenameWorktree(wt)
 		}
-	case "y":
-		// Approve pending prompt on selected worktree
-		wt := p.selectedWorktree()
-		if wt != nil && wt.Status == StatusWaiting && wt.Agent != nil {
-			return p.Approve(wt)
-		}
-	case "Y":
-		// Approve all pending prompts
-		return p.ApproveAll()
-	case "N":
-		// Reject pending prompt on selected worktree
-		wt := p.selectedWorktree()
-		if wt != nil && wt.Status == StatusWaiting && wt.Agent != nil {
-			return p.Reject(wt)
-		}
 	case "T":
 		// Link/unlink td task
 		wt := p.selectedWorktree()

@@ -180,8 +180,6 @@ Complete shortcut listings and context reference. For implementation patterns, s
 | `enter` | interactive | Enter interactive mode |
 | `t` | attach | Full tmux attach (`tmux_full_attach`, default off) |
 | `S` | stop-agent | Stop agent |
-| `y` | approve | Approve agent prompt |
-| `N` | reject | Reject agent prompt |
 | `[` | prev-tab | Previous preview tab |
 | `]` | next-tab | Next preview tab |
 

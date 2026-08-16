@@ -325,8 +325,6 @@ active tab, and each tab's scroll.
 | `i` | open-issue | Find TD task (global; not interactive) |
 | `t` | attach | Full tmux attach (`tmux_full_attach`, default off) |
 | `S` | stop-agent | Stop agent |
-| `y` | approve | Approve agent prompt |
-| `N` | reject | Reject agent prompt |
 | `F` | find-file | Open a file pane on the fuzzy file finder |
 | `P` | fetch-pr | Fetch a remote PR as a workspace |
 
