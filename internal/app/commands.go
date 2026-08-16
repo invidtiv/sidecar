@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -85,6 +86,33 @@ type FocusPluginByIDMsg struct {
 type NavigateToFileMsg struct {
 	Path string // Relative path from workdir
 	Line int    // Optional 1-based line to reveal after loading
+}
+
+// OpenPrefilledShellMsg asks the Workspaces plugin for an ordinary new shell
+// with a command typed into it and left unexecuted. Hosts send this rather than
+// importing workspace.
+//
+// Nothing about it is privileged: it is the same shell the user could create by
+// hand, and the command sits at the prompt until the user reads it and presses
+// Enter. Sidecar never runs it, and never sends one that needs sudo.
+type OpenPrefilledShellMsg struct {
+	Command string
+}
+
+// OpenConfigurationMsg asks the host to open Configuration on a destination.
+// An empty or unknown Page means Configuration's own default, Sidecar Setup.
+//
+// It is how a surface that is empty because something is not configured yet
+// offers a way out of that state — a plugin sends this rather than importing
+// the Configuration surface — and it is also how a launch command's startup
+// destination is honored. Escape returns to whatever sent it.
+type OpenConfigurationMsg struct {
+	Page configui.PageID
+}
+
+// OpenConfiguration returns a command that opens Configuration on a page.
+func OpenConfiguration(page configui.PageID) tea.Cmd {
+	return func() tea.Msg { return OpenConfigurationMsg{Page: page} }
 }
 
 // SwitchWorktreeMsg requests switching to a different worktree.

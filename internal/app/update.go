@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -173,6 +174,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Configuration's own requests are answered before anything else looks at
+	// them: they are addressed to the host, not to a plugin.
+	if cmd, handled := (&m).configSurfaceMsg(msg); handled {
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	switch msg := msg.(type) {
 	case tea.FocusMsg:
 		m.applicationFocused = true
@@ -281,6 +291,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Left-clicks anywhere in that band stay here so they are not rewritten
 		// into plugin-local Y<0 (some surfaces treat that as the first row).
 		mi := msg.Mouse()
+		// The gear is the header's only control with a hover look, so tracking it
+		// is one bool against the same bounds a click is tested with. Motion
+		// anywhere else clears it, which is what keeps the highlight from being
+		// left behind when the pointer leaves the header.
+		if _, isMotion := msg.(tea.MouseMotionMsg); isMotion {
+			hovered := false
+			if mi.Y == 0 && !m.intro.Active {
+				if start, end, ok := m.getGearBounds(); ok && mi.X >= start && mi.X < end {
+					hovered = true
+				}
+			}
+			m.headerGearHovered = hovered
+		}
 		_, isClickPress := msg.(tea.MouseClickMsg)
 		if isClickPress && mi.Button == tea.MouseLeft && mi.Y < headerHeight {
 			if mi.Y == 0 {
@@ -291,6 +314,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				if start, end, ok := m.getProjectRestoreBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 					return m, m.exitOverview()
+				}
+
+				// The gear toggles Configuration: it is the control that opened
+				// the surface, so it is also the one that puts it away, and
+				// reopening returns to the section the user was last on.
+				if start, end, ok := m.getGearBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, m.toggleConfiguration()
 				}
 
 				// The project selector is a stable far-right target in both scopes.
@@ -312,6 +342,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		if m.configOpen() {
+			cmd := m.config.Mouse(offsetMouseY(msg, -headerHeight))
+			m.updateContext()
+			return m, cmd
 		}
 
 		if m.inGlobalScope() {
@@ -434,6 +470,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case OpenConfigurationMsg:
+		// One entry: an empty state, a launch command, and the gear all arrive
+		// here, and escape returns to whatever was underneath when they did. A
+		// named page is honored exactly; an unnamed one resumes where the user
+		// last was.
+		return m, m.openConfiguration(msg.Page)
+
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
 
@@ -551,8 +594,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// not be registered with the keymap instead: findCommand falls back to the
 		// global context whenever the focused context's binding has no handler, so
 		// a registered global would fire for every context that rebinds its key.
-		if (&m).runHostCommand(msg.CommandID) {
-			return m, nil
+		if cmd, ok := (&m).runHostCommand(msg.CommandID); ok {
+			return m, cmd
 		}
 		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
 			return m, cmd
@@ -765,6 +808,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, nil
 		case ModalNone:
+			// Configuration answers esc itself: clear the search, then return
+			// from a focused child route, then close and restore the surface it
+			// covered.
+			if m.configOpen() {
+				return m, m.configEscape()
+			}
 			// No modal: Esc leaves the global space and returns to the project
 			// plugin underneath — unless the focused global surface wants esc
 			// itself. The hosted Tasks tab is a real surface whose overlays,
@@ -794,6 +843,19 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// Configuration covers the content area, so it answers before any of
+	// sidecar's global switches: a tab number, `q`, or a printable key typed
+	// into Search must not reach the plugin hidden underneath.
+	if !m.hasModal() && m.configOpen() {
+		return m.configKey(msg)
+	}
+
+	// The placeholder behind an empty global Sessions tab offers the same
+	// contextual route the project sidebar does, and Enter is it.
+	if !m.hasModal() && m.globalWorkspacesPlaceholderVisible() && m.configurationBlocked() && msg.String() == "enter" {
+		return m, OpenConfiguration(configui.PageSetup)
 	}
 
 	// The global Workspaces browser answers for its own keys before sidecar's
@@ -1009,6 +1071,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			// No projects configured - handle y for LLM prompt, ctrl+a for add, close on q/@
 			switch msg.String() {
+			case "enter":
+				// The switcher has nothing to switch to, so enter is free for
+				// the route that fixes that. ctrl+a's direct add stays exactly
+				// as it was; this is the way into the rest of Setup.
+				m.resetProjectSwitcher()
+				m.updateContext()
+				return m, OpenConfiguration(configui.PageSetup)
 			case "y":
 				return m, m.copyProjectSetupPrompt()
 			case "ctrl+a":
@@ -1598,6 +1667,20 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 		}
 		return m, nil
+	case ",":
+		// The conventional settings key in a TUI, and free in sidecar's global
+		// context. A context that binds it for itself — the Workspaces diff
+		// leaf cycles target tabs with it — answers first, exactly as `i` does
+		// below. Configuration reopens where the user last left it, and comma
+		// closes it again the way the gear does. (An open surface answers comma
+		// in configKey; this branch is the closed case.)
+		if m.contextRebindsKey(",") {
+			break
+		}
+		if !m.hasModal() && !m.consumesTextInput() {
+			return m, m.toggleConfiguration()
+		}
+		return m, nil
 	case "^":
 		// Toggle Open In modal
 		if !m.hasModal() {
@@ -1611,7 +1694,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// or the binding help advertises could never fire. Workspaces no longer
 		// takes the key — Enter / E / click start typing — so find-TD-task
 		// stays reachable on those lists.
-		if _, bound := m.keymap.CommandForContextKey(m.activeContext, "i"); bound {
+		if m.contextRebindsKey("i") {
 			break
 		}
 		if m.openIssueInput() {
@@ -1650,6 +1733,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateContext() {
 	if ctx, ok := modalFocusContext(m.activeModal()); ok {
 		m.activeContext = ctx
+		return
+	}
+	if m.configOpen() {
+		// "config" for navigation, "config-edit" while an editor has the
+		// keyboard. The edit context is in isTextInputContext, so typing there
+		// can never reach a global shortcut.
+		m.activeContext = m.config.FocusContext()
 		return
 	}
 	if m.inGlobalScope() {
@@ -1826,6 +1916,7 @@ func isTextInputContext(ctx string) bool {
 	switch ctx {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
+		"config-edit",
 		"global-workspaces-filter",
 		"global-workspaces-rename",
 		"global-workspaces-create",
@@ -1834,6 +1925,23 @@ func isTextInputContext(ctx string) bool {
 	default:
 		return false
 	}
+}
+
+// contextRebindsKey reports that the focused context claimed a key for itself,
+// which is what makes a global fallback stand aside for it.
+//
+// The global context is never such a claim. Sidecar's own globals — `,` for
+// Configuration, `i` for the issue input — are registered there so the palette
+// and the help modal can name them, while the work itself lives in this key
+// handler. Treating that registration as a rebind made the key shadow itself:
+// with no plugin context focused, `,` matched its own global binding, stood
+// aside for it, and then found no handler to run.
+func (m *Model) contextRebindsKey(key string) bool {
+	if m.activeContext == "" || m.activeContext == "global" {
+		return false
+	}
+	_, bound := m.keymap.CommandForContextKey(m.activeContext, key)
+	return bound
 }
 
 // isGlobalRefreshContext returns true if 'r' should trigger a global refresh.

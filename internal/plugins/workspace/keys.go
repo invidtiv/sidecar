@@ -441,6 +441,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.cyclePaneFocus(msg.String() == "shift+tab")
 		return nil
 	}
+	// A Workspaces list that is empty because something is not configured yet
+	// offers one action, and Enter is it. Nothing else about the list changes:
+	// n still creates, and the branch is only reached while the contextual
+	// prompt is the thing on screen.
+	if msg.String() == "enter" && p.activePane == PaneSidebar && p.setupPromptActive() {
+		return p.openSetupCmd()
+	}
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
 	}

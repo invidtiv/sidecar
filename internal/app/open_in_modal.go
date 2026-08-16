@@ -105,11 +105,17 @@ func (m *Model) initOpenIn() {
 	// Detect installed apps
 	m.openInApps = detectInstalledApps(openInRegistry, "/Applications")
 
-	// Resolve last-used app ID: per-project first, then global fallback
+	// Resolve which app to land on. A project's configured preference wins: the
+	// user said which application this project opens in, so remembering the last
+	// one used is only the fallback for a project that never said.
 	m.openInLastID = ""
-	if pc := m.currentProjectConfig(); pc != nil && pc.LastOpenInApp != "" {
+	pc := m.currentProjectConfig()
+	switch {
+	case pc != nil && pc.OpenIn != "":
+		m.openInLastID = pc.OpenIn
+	case pc != nil && pc.LastOpenInApp != "":
 		m.openInLastID = pc.LastOpenInApp
-	} else if m.cfg != nil && m.cfg.UI.LastOpenInApp != "" {
+	case m.cfg != nil && m.cfg.UI.LastOpenInApp != "":
 		m.openInLastID = m.cfg.UI.LastOpenInApp
 	}
 

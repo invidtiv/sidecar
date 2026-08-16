@@ -58,10 +58,30 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `@` | switch-project | Project switcher |
 | `W` | switch-worktree | Worktree switcher |
 | `#` | switch-theme | Theme switcher |
+| `,` | open-configuration | Open Configuration (contexts that bind `,` win) |
 | `i` | open-issue | Open issue |
 | `r` | refresh | Refresh |
 | `q` | quit | Quit (root contexts only) |
 | `ctrl+c` | quit | Force quit |
+
+## Configuration (`config` / `config-edit` / `config-confirm` contexts)
+
+Opened with `,` or by clicking the header gear, always on Sidecar Setup. Like the Overview,
+Configuration covers the plugin pane and owns keyboard focus: unhandled keys are swallowed
+rather than leaking to the hidden plugin. `?` still opens the command palette.
+
+| Key | Command | Context | Action |
+|-----|---------|---------|--------|
+| `j` / `k` / `up` / `down` | cursor-down / cursor-up | config | Move through sidebar destinations |
+| `enter` | select | config | Open the selected destination |
+| `/` | search | config | Focus Search (enters `config-edit`) |
+| `tab` | focus-search | config | Move focus between sidebar and Search |
+| `esc` | close-configuration | config | Return from a child route, else close and restore the prior surface |
+| `down` | first-result | config-edit | Move from Search to the first visible result |
+| `up` | focus-search | config-edit | Return to Search from the first result |
+| `esc` | clear-search | config-edit | Clear the query and restore the full sidebar |
+| `enter` / `y` | confirm | config-confirm | Confirm a consequential change |
+| `esc` / `n` | cancel | config-confirm | Cancel it |
 
 ## Agent Overview (`overview` context)
 

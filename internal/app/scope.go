@@ -205,18 +205,26 @@ func (m Model) activeTab() tabRef {
 // activateTab performs the scope-correct activation for a tab the user clicked,
 // numbered, or cycled onto.
 func (m *Model) activateTab(ref tabRef) tea.Cmd {
+	// Configuration covers the tab it would switch to, so it closes first. Left
+	// open, the tab changed invisibly underneath and a later escape restored the
+	// snapshot taken when Configuration opened, undoing the move. Closing is
+	// cheap now that the surface remembers where the user was.
+	var closed tea.Cmd
+	if m.configOpen() {
+		closed = m.closeConfiguration()
+	}
 	if ref.scope == ScopeGlobal {
 		if !m.inGlobalScope() {
 			enter := m.enterOverview()
 			if m.globalTab == ref.global {
-				return enter
+				return tea.Batch(closed, enter)
 			}
-			return tea.Batch(enter, m.setGlobalTab(ref.global))
+			return tea.Batch(closed, enter, m.setGlobalTab(ref.global))
 		}
-		return m.setGlobalTab(ref.global)
+		return tea.Batch(closed, m.setGlobalTab(ref.global))
 	}
 	m.leaveOverview(false)
-	return m.SetActivePlugin(ref.plugin)
+	return tea.Batch(closed, m.SetActivePlugin(ref.plugin))
 }
 
 // setGlobalTab switches the visible global tab. Switching tabs is cheap: it

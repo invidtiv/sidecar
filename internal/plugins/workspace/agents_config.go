@@ -1,6 +1,6 @@
 package workspace
 
-import "strings"
+import "github.com/marcus/sidecar/internal/agentcatalog"
 
 // selectableAgentTypes returns the ordered agent list for worktree create and
 // start-agent pickers. Empty config agents = full AgentTypeOrder (including None last).
@@ -34,18 +34,13 @@ func resolveSelectableAgents(configAgents []string, defaultOrder []AgentType, sh
 		return out
 	}
 
-	seen := make(map[AgentType]bool)
-	var real []AgentType
-	for _, raw := range configAgents {
-		id := AgentType(strings.TrimSpace(raw))
-		if id == AgentNone {
-			continue // None is placed by shellMode rules, not via config
-		}
-		if !isKnownAgentType(id) || seen[id] {
-			continue
-		}
-		seen[id] = true
-		real = append(real, id)
+	// The allowlist rule itself lives in internal/agentcatalog, so Configuration's
+	// Agents page and these pickers cannot disagree about what a saved allowlist
+	// means. None is placed by the shellMode rules below, never by config.
+	resolved := agentcatalog.Resolve(configAgents)
+	real := make([]AgentType, 0, len(resolved))
+	for _, family := range resolved {
+		real = append(real, AgentType(family.ID))
 	}
 
 	// If nothing valid remains, fall back to default order.

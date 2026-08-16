@@ -73,7 +73,7 @@ func (m Model) View() tea.View {
 func (m Model) preferredMouseMode() tea.MouseMode {
 	// App-level overlays rely on hover motion, regardless of what the covered
 	// plugin prefers.
-	if !m.ready || m.hasModal() {
+	if !m.ready || m.hasModal() || m.configOpen() {
 		return tea.MouseModeAllMotion
 	}
 	// A global terminal being typed into is the same case as a plugin's: cell
@@ -93,6 +93,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
 		m.width < minWidth || m.height < minHeight {
+		return nil
+	}
+	if m.configOpen() {
+		// Configuration's inputs draw their own cursor, like every other
+		// sidecar-owned surface; no native cursor is placed for them.
 		return nil
 	}
 	if m.inGlobalScope() {
@@ -345,6 +350,8 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		// No projects configured
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.Muted.Render("No projects configured"))
+			b.WriteString("\n")
+			b.WriteString(styles.Muted.Render("Sidecar Setup walks through adding one."))
 			return modal.RenderedSection{Content: b.String()}
 		}
 
@@ -516,6 +523,8 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 
 		// No projects configured
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
+			b.WriteString(styles.KeyHint.Render("enter"))
+			b.WriteString(styles.Muted.Render(" Sidecar Setup  "))
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -694,10 +703,36 @@ type headerLayout struct {
 	selectorEnd             int
 	restoreStart            int
 	restoreEnd              int
+	gearStart               int
+	gearEnd                 int
+}
+
+// headerGear is the Configuration control. It is a plain Unicode glyph rather
+// than a Nerd Font one: the header's Nerd Font affordances are pill caps, and
+// an icon nobody can render is worse than a small one everybody can.
+const headerGear = "⚙"
+
+// renderHeaderGear paints the gear chip. Hovered, it takes the raised chrome
+// surface the rest of the bar's chips use, so the pointer has something to
+// land on before it clicks.
+func renderHeaderGear(hovered bool) string {
+	if hovered {
+		return styles.ProjectRestore.Background(styles.SurfaceRaised).Render(headerGear)
+	}
+	return styles.ProjectRestore.Render(headerGear)
+}
+
+// headerClock renders the optional clock, or "" when it is disabled.
+func (m Model) headerClock() string {
+	if !m.showClock || m.ui == nil {
+		return ""
+	}
+	return styles.BarText.Render(m.ui.Clock.Format("15:04"))
 }
 
 // headerGeometry lays out both stable anchor zones. Global navigation is
-// always part of the left cluster. The selector's right edge is always the
+// always part of the left cluster. The right cluster ends with the project
+// selector followed by the Configuration gear, and its right edge is always the
 // terminal's right edge; project tabs consume only the space between them.
 func (m Model) headerGeometry() headerLayout {
 	width := max(0, m.width)
@@ -749,6 +784,15 @@ func (m Model) headerGeometry() headerLayout {
 		return ansi.TruncateLeft(fitted, max(0, lipgloss.Width(fitted)-budget), "")
 	}
 
+	// The gear and the clock live inside the same right-cluster budget as the
+	// selector. The gear is small and is the only way into Configuration with a
+	// mouse, so it survives every width; the clock is the first thing dropped
+	// when the header runs out of room.
+	gear := renderHeaderGear(m.headerGearHovered)
+	gearWidth := lipgloss.Width(gear)
+	clock := m.headerClock()
+	clockWidth := lipgloss.Width(clock)
+
 	// A fully hidden or partially clipped tab must never retain a hit region.
 	// Fit whole global tabs into the space left of the pinned selector, dropping
 	// inactive tabs from the right at exceptionally narrow widths.
@@ -762,7 +806,7 @@ func (m Model) headerGeometry() headerLayout {
 		}
 		return result
 	}
-	minimumSelectorWidth := lipgloss.Width(renderSelector("", width))
+	minimumSelectorWidth := lipgloss.Width(renderSelector("", width)) + gearWidth + 1
 	for len(layout.globalTabs) > 0 && leftWidth(layout.globalTabs)+minimumSelectorWidth > width {
 		remove := -1
 		for i := len(layout.globalTabs) - 1; i >= 0; i-- {
@@ -790,7 +834,7 @@ func (m Model) headerGeometry() headerLayout {
 	// The left anchor is protected. Fit the selector into exactly the columns
 	// that remain so a long repo or worktree name cannot cover the brand/tabs or
 	// push its arrow beyond the right edge.
-	selectorBudget := max(0, width-lipgloss.Width(left))
+	selectorBudget := max(0, width-lipgloss.Width(left)-gearWidth-1)
 	selector := renderSelector(selectorLabel, selectorBudget)
 	selectorWidth := lipgloss.Width(selector)
 
@@ -799,7 +843,7 @@ func (m Model) headerGeometry() headerLayout {
 		if name := strings.TrimSpace(m.intro.RepoName); name != "" {
 			candidate := styles.ProjectRestore.Render("↖ " + name)
 			fullSelector := renderSelector(selectorLabel, width)
-			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+lipgloss.Width(fullSelector) <= width {
+			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+gearWidth+1+lipgloss.Width(fullSelector) <= width {
 				restore = candidate
 				selector = fullSelector
 				selectorWidth = lipgloss.Width(selector)
@@ -807,9 +851,12 @@ func (m Model) headerGeometry() headerLayout {
 		}
 	}
 	restoreWidth := lipgloss.Width(restore)
-	suffixWidth := selectorWidth
+	suffixWidth := selectorWidth + gearWidth + 1
 	if restoreWidth > 0 {
 		suffixWidth += restoreWidth + 1
+	}
+	if clockWidth > 0 {
+		suffixWidth += clockWidth + 1
 	}
 
 	project := []headerTab(nil)
@@ -836,6 +883,12 @@ func (m Model) headerGeometry() headerLayout {
 			}
 		}
 		return result
+	}
+	// The clock is the first casualty of a narrow header: it is the only piece
+	// of the right cluster nothing depends on.
+	if clockWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
+		suffixWidth -= clockWidth + 1
+		clock, clockWidth = "", 0
 	}
 	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		remove := -1
@@ -869,8 +922,15 @@ func (m Model) headerGeometry() headerLayout {
 		right += restore
 		right += " "
 	}
+	if clock != "" {
+		right += clock
+		right += " "
+	}
 	selectorOffset := lipgloss.Width(right)
 	right += selector
+	right += " "
+	gearOffset := lipgloss.Width(right)
+	right += gear
 	rightStart := max(lipgloss.Width(left), width-lipgloss.Width(right))
 	for i := range project {
 		project[i].start += rightStart
@@ -887,7 +947,22 @@ func (m Model) headerGeometry() headerLayout {
 	}
 	layout.selectorStart = rightStart + selectorOffset
 	layout.selectorEnd = min(width, layout.selectorStart+selectorWidth)
+	layout.gearStart = rightStart + gearOffset
+	layout.gearEnd = min(width, layout.gearStart+gearWidth)
 	return layout
+}
+
+// getGearBounds returns the painted geometry of the Configuration gear, which
+// sits immediately right of the project selector, at the terminal's right edge.
+// The gear, not the selector, is what the right cluster now ends with: settings
+// belong at the far corner of the bar, and the selector keeps its stable
+// position by staying the same distance from that corner at every width.
+func (m Model) getGearBounds() (start, end int, ok bool) {
+	layout := m.headerGeometry()
+	if layout.gearEnd <= layout.gearStart {
+		return 0, 0, false
+	}
+	return layout.gearStart, layout.gearEnd, true
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
@@ -923,7 +998,7 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 }
 
 // getProjectSelectorBounds returns the exact painted selector geometry in both
-// scopes. Its right edge is pinned to the terminal edge.
+// scopes. It ends one gear's width short of the terminal edge.
 func (m Model) getProjectSelectorBounds() (start, end int, ok bool) {
 	layout := m.headerGeometry()
 	if layout.selectorEnd <= layout.selectorStart {
@@ -944,6 +1019,9 @@ func (m Model) getProjectRestoreBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
+	if m.configOpen() {
+		return m.config.View(width, height)
+	}
 	if m.inGlobalScope() {
 		return m.renderGlobalContent(width, height)
 	}
@@ -986,15 +1064,40 @@ func (m Model) renderGlobalContent(width, height int) string {
 // no cross-project catalog behind the tab at all. With the Overview model
 // present, the tab renders the shared workspace list instead.
 func (m Model) renderGlobalWorkspacesPlaceholder(width, height int) string {
-	message := strings.Join([]string{
+	lines := []string{
 		styles.Title.Render("Workspaces"),
 		"",
 		styles.Muted.Render("Every configured project's shells and worktrees will be browsable here."),
 		styles.Muted.Render("Nothing is being collected for this tab yet."),
 		"",
 		styles.Muted.Render("Use the project Workspaces tab for the current project."),
-	}, "\n")
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, message)
+	}
+	// With no project configured there is nothing this tab could ever collect,
+	// so the placeholder offers the one route that changes that. With projects
+	// configured it stays a plain placeholder: the user is not blocked, this
+	// build simply has no cross-project catalog behind the tab.
+	if m.configurationBlocked() {
+		lines = append(lines,
+			"",
+			styles.Muted.Render("No projects are configured yet."),
+			"",
+			styles.RenderPillWithStyle("Enter  Open Sidecar Setup", styles.ButtonHover, nil),
+		)
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, strings.Join(lines, "\n"))
+}
+
+// configurationBlocked reports the one prerequisite the app itself can answer
+// for cheaply: whether any project is configured. It reads the configuration
+// already in memory and touches nothing on the render path.
+func (m Model) configurationBlocked() bool {
+	return m.cfg == nil || len(m.cfg.Projects.List) == 0
+}
+
+// globalWorkspacesPlaceholderVisible reports that the placeholder — not the
+// cross-project browser — is what the global Sessions tab is showing.
+func (m Model) globalWorkspacesPlaceholderVisible() bool {
+	return m.inGlobalScope() && m.globalTab == GlobalSessions && m.overview == nil
 }
 
 // renderFooter renders the bottom bar with key hints and status.
@@ -1104,6 +1207,10 @@ func (m Model) footerHints() []footerHint {
 	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
 	switch {
+	case m.configOpen():
+		// Derived from the registered config bindings like every other surface,
+		// so a rebound key changes the footer with it.
+		hints = m.commandFooterHints(m.configCommands(), m.activeContext)
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalSessions:
@@ -1161,7 +1268,7 @@ func (m Model) globalFooterHints() []footerHint {
 	// A focused text input has taken the digits: typing "2" into a file
 	// finder's query is a query, not a tab switch. A footer that advertises a
 	// binding the focused surface has claimed is not a hint, it is wrong.
-	if count := len(m.visibleTabs()); count > 1 && !typing {
+	if count := len(m.visibleTabs()); count > 1 && !typing && !m.configOpen() {
 		label := "plugins"
 		if m.inGlobalScope() {
 			label = "tabs"
@@ -1177,7 +1284,12 @@ func (m Model) globalFooterHints() []footerHint {
 	// only key is `?`, drops out entirely rather than promising a key that
 	// types.
 	for _, spec := range specs {
-		key, ok := firstReachableKey(keysByCmd[spec.id], typing)
+		// Configuration owns the keyboard the way a text input does — `q` types
+		// nothing there, but it does not quit either — so quit advertises the
+		// one key that still reaches the host. Help is unaffected: `?` opens
+		// the palette from Configuration.
+		reachable := typing || (m.configOpen() && spec.id == "quit")
+		key, ok := firstReachableKey(keysByCmd[spec.id], reachable)
 		if !ok {
 			continue
 		}

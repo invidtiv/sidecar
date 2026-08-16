@@ -193,18 +193,19 @@ func TestGlobalWorkspacesRendersTheSameFrameUnderAnyTheme(t *testing.T) {
 	}
 }
 
-func TestGlobalHeaderPinsSelectorAndRemovesClock(t *testing.T) {
+func TestGlobalHeaderPinsSelectorAndHidesClockWhenDisabled(t *testing.T) {
 	m := globalFrameModel(t)
-	m.showClock = true
+	m.showClock = false
 	m.width, m.height, m.ready = 200, 40, true
 	plain := ansi.Strip(m.renderHeader())
 	if strings.Contains(plain, ":") {
 		t.Fatalf("header still contains a clock: %q", plain)
 	}
 	start, end, ok := m.getProjectSelectorBounds()
-	if !ok || end != m.width || start >= end {
-		t.Fatalf("selector bounds = %d-%d ok=%v, want right edge %d", start, end, ok, m.width)
+	if !ok || start >= end {
+		t.Fatalf("selector bounds = %d-%d ok=%v", start, end, ok)
 	}
+	assertRightClusterPinned(t, m, end)
 }
 
 // Startup owes the global space nothing: the first frame is the project, and no

@@ -266,6 +266,13 @@ Sidecar ships with built-in themes plus a community theme browser with live prev
 
 ## Configuration
 
+Press `,` or select the gear in the header to open Configuration in the app. It opens on
+**Sidecar Setup**, which lists whatever is left to finish — adding a project, installing tmux,
+connecting agent instructions — and opens a focused repair for each one. `esc` returns to
+exactly where you were.
+
+From a terminal, `sidecar setup` starts Sidecar with that page already open.
+
 Sidecar runs with sensible defaults. Create `~/.config/sidecar/config.json` only if you need customization:
 
 ```json

@@ -19,6 +19,8 @@ func DefaultBindings() []Binding {
 		// K: Overview (Kanban board). Bare O is taken by open-in. Shell delete is D.
 		{Key: "K", Command: "toggle-overview", Context: "global"},
 		{Key: "i", Command: "open-issue", Context: "global"},
+		// Comma is the conventional settings key and is otherwise unbound.
+		{Key: ",", Command: "open-configuration", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},
 		{Key: "1", Command: "focus-plugin-1", Context: "global"},
 		{Key: "2", Command: "focus-plugin-2", Context: "global"},
@@ -57,6 +59,56 @@ func DefaultBindings() []Binding {
 		{Key: "r", Command: "refresh", Context: "overview"},
 		{Key: "esc", Command: "close-overview", Context: "overview"},
 		{Key: "K", Command: "toggle-overview", Context: "overview"},
+
+		// Configuration contexts. The surface answers these keys itself before
+		// keymap dispatch; they are registered so the footer, the help modal,
+		// and the command palette describe the same surface the user sees, and
+		// so a user override reaches them.
+		//
+		// config: sidebar navigation and page-level actions.
+		{Key: "up", Command: "cursor-up", Context: "config"},
+		{Key: "k", Command: "cursor-up", Context: "config"},
+		{Key: "down", Command: "cursor-down", Context: "config"},
+		{Key: "j", Command: "cursor-down", Context: "config"},
+		{Key: "enter", Command: "select", Context: "config"},
+		{Key: "/", Command: "search", Context: "config"},
+		{Key: "tab", Command: "focus-search", Context: "config"},
+		{Key: "esc", Command: "close-configuration", Context: "config"},
+		// q leaves the surface the way it leaves a pager. It is registered
+		// rather than hardcoded so it is described everywhere esc is and a
+		// rebind of close-configuration takes it with it.
+		{Key: "q", Command: "close-configuration", Context: "config"},
+		// Page-level actions on Sidecar Setup, Diagnostics, and the focused
+		// repair routes. They are registered here so the footer, the help modal,
+		// and the palette all name the same keys the pages print on their pills.
+		{Key: "r", Command: "recheck", Context: "config"},
+		{Key: "c", Command: "copy-guidance", Context: "config"},
+		{Key: "o", Command: "open-file", Context: "config"},
+		// Projects: add, remove, and reorder the configured list.
+		{Key: "a", Command: "add-project", Context: "config"},
+		{Key: "d", Command: "remove-project", Context: "config"},
+		{Key: "shift+up", Command: "move-project-up", Context: "config"},
+		{Key: "shift+down", Command: "move-project-down", Context: "config"},
+		{Key: "[", Command: "move-project-up", Context: "config"},
+		{Key: "]", Command: "move-project-down", Context: "config"},
+		// The theme picker, on Appearance and inline in Add Project.
+		{Key: "g", Command: "use-global-theme", Context: "config"},
+
+		// config-edit: an active editor owns typed characters. Registered in
+		// the app's isTextInputContext, so no global shortcut can steal them.
+		{Key: "down", Command: "first-result", Context: "config-edit"},
+		{Key: "up", Command: "focus-search", Context: "config-edit"},
+		{Key: "enter", Command: "select", Context: "config-edit"},
+		{Key: "esc", Command: "clear-search", Context: "config-edit"},
+		// A form field: Tab accepts a completion or moves to the next field,
+		// and the arrows walk the candidates under the input.
+		{Key: "tab", Command: "accept-completion", Context: "config-edit"},
+
+		// config-confirm: a consequential change has an explicit path out.
+		{Key: "enter", Command: "confirm", Context: "config-confirm"},
+		{Key: "y", Command: "confirm", Context: "config-confirm"},
+		{Key: "esc", Command: "cancel", Context: "config-confirm"},
+		{Key: "n", Command: "cancel", Context: "config-confirm"},
 
 		// Global Workspaces context (cross-project shell/worktree browser).
 		// Like the Agents board above, these keys are answered by the app before

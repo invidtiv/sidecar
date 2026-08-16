@@ -899,6 +899,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionCreateWorktreeButton:
 		// Click on the header [+] - open type selector modal
 		return p.openCreateModal()
+	case regionOpenSetupButton:
+		// The blocked empty state's pill: the mouse path for the Enter above it.
+		return p.openSetupCmd()
 	case regionShellsPlusButton:
 		// Click on Shells [+] button - immediately create a new shell
 		return p.createNewShell("")

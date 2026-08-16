@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/overlay"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -469,42 +469,12 @@ func placeOverlay(ov Overlay, sectionY, scroll, viewportH int) (overlayPlacement
 	}, true
 }
 
-// compositeOverlay draws overlay onto base at (x, y) without adding lines.
-func compositeOverlay(base, overlay string, x, y int) string {
-	if overlay == "" {
-		return base
-	}
-	baseLines := strings.Split(base, "\n")
-	overLines := strings.Split(strings.TrimRight(overlay, "\n"), "\n")
-	for i, ol := range overLines {
-		dest := y + i
-		if dest < 0 || dest >= len(baseLines) {
-			continue
-		}
-		baseLines[dest] = overlayOnLine(baseLines[dest], ol, x)
-	}
-	return strings.Join(baseLines, "\n")
-}
-
-func overlayOnLine(base, over string, x int) string {
-	if x < 0 {
-		over = ansi.Cut(over, -x, ansi.StringWidth(over))
-		x = 0
-	}
-	overW := ansi.StringWidth(over)
-	left := ""
-	if x > 0 {
-		left = ansi.Cut(base, 0, x)
-		if pad := x - ansi.StringWidth(left); pad > 0 {
-			left += strings.Repeat(" ", pad)
-		}
-	}
-	baseW := ansi.StringWidth(base)
-	right := ""
-	if x+overW < baseW {
-		right = ansi.Cut(base, x+overW, baseW)
-	}
-	return left + over + right
+// compositeOverlay draws overlay onto base at (x, y) without adding lines. The
+// cell arithmetic lives in internal/overlay, which the Configuration surface
+// composites its own dropdowns with: there is one way to paint a floating list
+// over what is behind it, not one per surface.
+func compositeOverlay(base, over string, x, y int) string {
+	return overlay.Composite(base, over, x, y)
 }
 
 // clamp constrains a value between min and max.
