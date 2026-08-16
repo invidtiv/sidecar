@@ -193,3 +193,152 @@ func TestEscapeFromEmptySearchReturnsToTheSidebar(t *testing.T) {
 		t.Fatal("the second Escape did not reach the host")
 	}
 }
+
+// Arrowing the sidebar is the same move as clicking a section: the detail pane
+// follows immediately, and the keyboard stays in the navigation pane.
+func TestSidebarArrowsNavigateImmediately(t *testing.T) {
+	m := New()
+	m.Open(PageSetup)
+	pages := m.visiblePages()
+
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	if m.cursor != 1 {
+		t.Fatalf("down moved the cursor to %d, want 1", m.cursor)
+	}
+	if m.Page() != pages[1] {
+		t.Fatalf("down left the detail pane on %q, want %q", m.Page(), pages[1])
+	}
+	if m.detailFocus || m.SearchFocused() {
+		t.Fatalf("down moved focus out of the sidebar: detail=%v search=%v", m.detailFocus, m.SearchFocused())
+	}
+
+	m.Key(tea.KeyPressMsg{Code: tea.KeyUp})
+	if m.cursor != 0 || m.Page() != pages[0] {
+		t.Fatalf("up landed on cursor=%d page=%q", m.cursor, m.Page())
+	}
+
+	// Enter on the destination already showing moves into it rather than
+	// navigating to where the user already is. Walk to a page with controls on
+	// it, since a page with none has nothing to move into.
+	for m.cursor < len(pages)-1 {
+		m.View(120, 40)
+		if m.hasDetailControls() {
+			break
+		}
+		m.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	m.View(120, 40)
+	if !m.hasDetailControls() {
+		t.Fatal("no destination rendered a control to move into")
+	}
+	page := m.Page()
+	m.Key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !m.detailFocus {
+		t.Fatal("enter on the current destination did not move into the page")
+	}
+	if m.Page() != page {
+		t.Fatalf("enter navigated away to %q", m.Page())
+	}
+}
+
+// A query is the exception: the detail pane belongs to the results while one is
+// active, so the cursor steps through matches and Enter opens the one it is on.
+func TestSearchResultArrowsStillNeedEnter(t *testing.T) {
+	m := New()
+	m.Open(PageSetup)
+	m.Key(tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "tmux" {
+		m.Key(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown}) // search -> first result
+	before := m.Page()
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	if !m.results {
+		t.Fatal("arrowing the results replaced them with a page")
+	}
+	if m.Page() != before {
+		t.Fatalf("arrowing the results navigated to %q", m.Page())
+	}
+	m.Key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if m.results {
+		t.Fatal("enter on a result did not open it")
+	}
+	if m.Page() != m.visiblePages()[m.cursor] {
+		t.Fatalf("enter opened %q, want %q", m.Page(), m.visiblePages()[m.cursor])
+	}
+}
+
+// Reopen puts the user back where they were; the first open of a session and an
+// explicitly named page both ignore it.
+func TestReopenRestoresTheLastPosition(t *testing.T) {
+	m := New()
+	m.Reopen()
+	if m.Page() != DefaultPage {
+		t.Fatalf("first Reopen of the session opened %q, want the default", m.Page())
+	}
+
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	page, cursor := m.Page(), m.cursor
+	m.Close()
+
+	m.Reopen()
+	if m.Page() != page || m.cursor != cursor {
+		t.Fatalf("Reopen landed on %q/%d, want %q/%d", m.Page(), m.cursor, page, cursor)
+	}
+	m.Open(PageAbout)
+	if m.Page() != PageAbout {
+		t.Fatalf("a named open landed on %q", m.Page())
+	}
+}
+
+// The detail pane's selection is restored with the focus that gives it meaning:
+// a remembered row nothing is looking at would be state that lies.
+func TestReopenRestoresTheDetailSelection(t *testing.T) {
+	m := New()
+	m.Open(PageAppearance)
+	m.View(120, 40)
+	if !m.hasDetailControls() {
+		t.Fatal("Appearance rendered no controls to select")
+	}
+	m.Key(tea.KeyPressMsg{Code: tea.KeyTab}) // into the page
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown})
+	m.View(120, 40)
+	if !m.detailFocus || m.rowCursor == 0 {
+		t.Fatalf("setup did not land inside the page: detail=%v row=%d", m.detailFocus, m.rowCursor)
+	}
+	row := m.rowCursor
+
+	m.Close()
+	m.Reopen()
+	m.View(120, 40)
+	if !m.detailFocus || m.rowCursor != row {
+		t.Fatalf("Reopen restored detail=%v row=%d, want true/%d", m.detailFocus, m.rowCursor, row)
+	}
+}
+
+// A remembered position is a page, never an index into a list a query was
+// filtering: reopening after closing mid-search must not leave the sidebar
+// highlighting one destination while the detail pane shows another.
+func TestReopenAfterClosingMidSearchAgreesWithTheDetailPane(t *testing.T) {
+	m := New()
+	m.Open(PageSetup)
+	m.Key(tea.KeyPressMsg{Code: '/', Text: "/"})
+	for _, r := range "theme" {
+		m.Key(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown}) // search -> first result
+	m.Key(tea.KeyPressMsg{Code: tea.KeyDown}) // second result
+	if m.cursor == 0 || m.Page() != PageSetup {
+		t.Fatalf("setup: cursor=%d page=%q, want a moved cursor on the unchanged page", m.cursor, m.Page())
+	}
+
+	m.Close()
+	m.Reopen()
+	if m.SearchActive() {
+		t.Fatal("Reopen carried the query across")
+	}
+	pages := m.visiblePages()
+	if pages[m.cursor] != m.Page() {
+		t.Fatalf("sidebar highlights %q while the detail pane shows %q", pages[m.cursor], m.Page())
+	}
+}

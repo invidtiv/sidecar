@@ -125,6 +125,23 @@ type Model struct {
 
 	mouse   *mouse.Handler
 	hoverID string
+
+	// resume is where the user was when Configuration last closed. It lives for
+	// the process, not on disk: reopening the surface in the same session should
+	// not throw away the section you were reading, and a fresh Sidecar should
+	// still start on Setup.
+	resume resumeState
+}
+
+// resumeState is the position an unnamed open restores. The sidebar cursor is
+// deliberately not part of it: it is an index into the list the sidebar was
+// showing, which a live query makes a different list, so Reopen derives it from
+// the page instead of restoring an index that may point somewhere else.
+type resumeState struct {
+	page        PageID
+	rowCursor   int
+	detailFocus bool
+	valid       bool
 }
 
 // savedFocus is a parent route's detail-pane selection, kept while a child
@@ -184,6 +201,39 @@ func (m *Model) Open(page PageID) {
 	m.addProject = nil
 	m.installing = nil
 	m.resetDetail()
+}
+
+// Reopen puts the surface back where it was when it last closed: the same
+// section, the same place in the sidebar, and the same row in the detail pane.
+// It is what the gear and the settings key ask for, so toggling Configuration
+// off and on is not a way to lose your place. Nothing to resume — the first open
+// of the session — starts on the default page.
+func (m *Model) Reopen() {
+	if !m.resume.valid {
+		m.Open(DefaultPage)
+		return
+	}
+	// Open sets the sidebar cursor from the page, on the unfiltered list it has
+	// just restored. That is the only correct index for it, which is why the
+	// remembered position never carries one.
+	m.Open(m.resume.page)
+	// The detail pane's selection is restored together with the focus that makes
+	// it mean anything; restoring the row alone would leave a number nothing on
+	// screen was using. Both are clamped by the first render, which is when the
+	// page's controls exist — a page with none takes the focus back there.
+	m.rowCursor = max(0, m.resume.rowCursor)
+	m.detailFocus = m.resume.detailFocus
+}
+
+// Close records the position Reopen restores. The host calls it as the surface
+// goes away, which is the only moment that position is still known.
+func (m *Model) Close() {
+	m.resume = resumeState{
+		page:        m.Page(),
+		rowCursor:   m.rowCursor,
+		detailFocus: m.detailFocus,
+		valid:       true,
+	}
 }
 
 // restoreActivePreview puts back the theme in force whenever a picker is still
@@ -537,7 +587,7 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "down", "j", "ctrl+n":
 		pages := m.visiblePages()
 		if m.cursor < len(pages)-1 {
-			m.cursor++
+			m.moveSidebarCursor(m.cursor + 1)
 		}
 		return true, nil
 	case "up", "k", "ctrl+p":
@@ -550,13 +600,13 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			}
 			return true, nil
 		}
-		m.cursor--
+		m.moveSidebarCursor(m.cursor - 1)
 		return true, nil
 	case "home", "g":
-		m.cursor = 0
+		m.moveSidebarCursor(0)
 		return true, nil
 	case "end", "G":
-		m.cursor = max(0, len(m.visiblePages())-1)
+		m.moveSidebarCursor(max(0, len(m.visiblePages())-1))
 		return true, nil
 	case "enter":
 		m.activateCursor()
@@ -591,6 +641,28 @@ func (m *Model) focusSidebarList() {
 	m.clampCursor()
 }
 
+// moveSidebarCursor moves the navigation cursor and opens what it lands on.
+// Arrowing the sidebar is the same move as clicking a section, so the detail
+// pane follows immediately rather than waiting for Enter. Focus stays in the
+// sidebar: the arrows keep walking sections until the user asks to go into one.
+//
+// A query is the exception. While one is narrowing the list the detail pane
+// belongs to the search results, and navigating on every keystroke would replace
+// the very list the user is stepping through, so the cursor moves alone and
+// Enter still opens the match.
+func (m *Model) moveSidebarCursor(cursor int) {
+	m.cursor = cursor
+	if m.SearchActive() {
+		return
+	}
+	pages := m.visiblePages()
+	m.clampCursor()
+	if len(pages) == 0 || pages[m.cursor] == m.Page() {
+		return
+	}
+	m.navigateFromSidebar(pages[m.cursor])
+}
+
 func (m *Model) clampCursor() {
 	pages := m.visiblePages()
 	if m.cursor >= len(pages) {
@@ -604,12 +676,21 @@ func (m *Model) clampCursor() {
 // activateCursor opens the destination under the cursor. With a query active
 // this is the "Enter on a search result" path: it navigates to the page and
 // leaves the query in place so the user can keep stepping through matches.
+//
+// Without one the arrows have already opened the section, so Enter on the page
+// the detail pane is already showing means the next thing in: the cursor moves
+// into the page's own controls, which is what Tab does from here too.
 func (m *Model) activateCursor() {
 	pages := m.visiblePages()
 	if len(pages) == 0 {
 		return
 	}
 	m.clampCursor()
+	if !m.SearchActive() && pages[m.cursor] == m.Page() && m.hasDetailControls() {
+		m.detailFocus = true
+		m.rowCursor = 0
+		return
+	}
 	// Navigate, rather than moving the router directly: choosing a destination
 	// from the sidebar is the same move as any other, and it owes the page being
 	// left the same teardown — a restored theme preview above all. The query is

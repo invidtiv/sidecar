@@ -347,6 +347,10 @@ type Model struct {
 	config       *configui.Model
 	configActive bool
 	configReturn configReturn
+	// headerGearHovered styles the gear while the pointer is over it. The header
+	// is otherwise geometric and stateless, so this is the whole of its hover
+	// state: one bool for the one control that has a hover look.
+	headerGearHovered bool
 	// startupConfigPage is the destination a launch command asked for. It is
 	// honored once, from Init, so Configuration opens over the ordinary startup
 	// surface rather than replacing it: escape still returns to the app the
@@ -1366,7 +1370,9 @@ func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 	case "open-issue":
 		return nil, m.openIssueInput()
 	case "open-configuration":
-		return m.openConfiguration(configui.DefaultPage), true
+		// No page named: the palette command toggles and resumes where the user
+		// last was, exactly as the gear and `,` do.
+		return m.toggleConfiguration(), true
 	}
 	return nil, false
 }

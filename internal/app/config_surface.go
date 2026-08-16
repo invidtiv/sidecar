@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -38,9 +39,11 @@ type configReturn struct {
 // configOpen reports that the Configuration surface owns the content area.
 func (m Model) configOpen() bool { return m.configActive && m.config != nil }
 
-// openConfiguration takes over the content area on a destination. The gear, the
-// palette command, and `sidecar setup` all pass configui.DefaultPage;
-// Configuration never remembers the last section.
+// openConfiguration takes over the content area on a destination. An empty page
+// means "wherever the user last was" — what the gear, `,`, and the palette
+// command all ask for, so toggling the surface off and on again is not a way to
+// lose your place. A named page — `sidecar setup`, an empty state's prompt — is
+// honored exactly.
 func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	if m.config == nil {
 		m.config = configui.New()
@@ -61,7 +64,11 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 		}
 		m.configActive = true
 	}
-	m.config.Open(page)
+	if page == "" {
+		m.config.Reopen()
+	} else {
+		m.config.Open(page)
+	}
 	m.config.SetHostState(m.configHostState())
 	m.updateContext()
 	// Readiness is answered fresh every time Configuration opens, in a command:
@@ -70,6 +77,17 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	// render path.
 	m.config.SetCheckInput(m.configCheckInput())
 	return m.config.Recheck()
+}
+
+// toggleConfiguration is what every "settings" control does: the gear, the
+// settings key, and the palette command all open the surface when it is away
+// and put it back when it is on screen, rather than re-opening what is already
+// there.
+func (m *Model) toggleConfiguration() tea.Cmd {
+	if m.configOpen() {
+		return m.closeConfiguration()
+	}
+	return m.openConfiguration("")
 }
 
 // refreshConfigContext re-points an open Configuration surface at the project
@@ -156,6 +174,11 @@ func (m *Model) closeConfiguration() tea.Cmd {
 		return nil
 	}
 	m.configActive = false
+	// Where the user was is remembered before the surface is torn down, so the
+	// next unnamed open puts them back on it.
+	if m.config != nil {
+		m.config.Close()
+	}
 	restore := m.configReturn
 	m.configReturn = configReturn{}
 	if !restore.valid {
@@ -212,10 +235,25 @@ func (m *Model) configKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.config.SearchFocused() {
 		return m, nil
 	}
+	key := msg.String()
+	// A key this context binds to close-configuration — esc, q, or whatever a
+	// user rebound them to — answers like esc for someone who is not typing into
+	// anything. The surface has already had its say above, so reaching here
+	// means nothing on screen claimed the key: Search, an editor, a confirmation,
+	// and a child route all consume their own, so a typed q never gets this far.
+	if command, ok := m.keymap.CommandForContextKey(configui.ContextConfig, key); ok && command == "close-configuration" {
+		return m, m.configEscape()
+	}
+	// The key that opened Configuration closes it, exactly as the gear does. It
+	// would otherwise be a silent no-op: the surface it would open is the one
+	// already on screen.
+	if command, ok := m.keymap.CommandForContextKey("global", key); ok && command == "open-configuration" {
+		return m, m.closeConfiguration()
+	}
 	// The only host key that still works here is help. A tab number, a cycle
 	// key, or a refresh would act on a surface the user cannot see, so an
 	// unclaimed key stops rather than falling through.
-	if msg.String() == "?" {
+	if key == "?" {
 		return m.togglePaletteFromConfig()
 	}
 	return m, nil
@@ -355,23 +393,70 @@ func (m *Model) openConfigFile(path string) tea.Cmd {
 	return openPathCmd(path)
 }
 
+// openerFailWindow is how long the opener is given to fail. A desktop opener
+// that has handed the path off exits within milliseconds and a refusal is just
+// as quick, so anything still running past this really did open something.
+const openerFailWindow = 3 * time.Second
+
 // openPathCmd hands a path to the desktop's opener. Sidecar never edits the
 // file itself here; it only makes it easy to reach.
 func openPathCmd(path string) tea.Cmd {
 	return func() tea.Msg {
-		var command *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			command = exec.Command("open", path)
-		case "windows":
-			command = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
-		default:
-			command = exec.Command("xdg-open", path)
-		}
-		if err := command.Start(); err != nil {
-			return ToastMsg{Message: "Could not open " + path, Duration: 3 * time.Second}
+		if err := openPath(path); err != nil {
+			// The opener usually names the path in its own complaint, so it is
+			// only added when the message would otherwise not say what failed.
+			message := "Could not open " + path
+			if detail := err.Error(); strings.Contains(detail, path) {
+				message = "Could not open: " + detail
+			} else {
+				message += ": " + detail
+			}
+			return ToastMsg{Message: message, Duration: 4 * time.Second, IsError: true}
 		}
 		return ToastMsg{Message: "Opened " + path, Duration: 2 * time.Second}
+	}
+}
+
+// openPath runs the desktop's opener and waits for its answer. Starting the
+// process only proves the binary exists — a refused URL, a missing file, or a
+// desktop with no handler all report themselves through the exit status, which
+// is why "Opened …" used to appear for things that never opened.
+//
+// The wait is bounded rather than unlimited: some openers (xdg-open with a
+// handler that does not fork) stay alive for as long as the application they
+// launched, and Sidecar must not kill a browser it opened for the user or block
+// the toast behind it. A child that outlives the window is still reaped by the
+// goroutine that owns the Wait.
+func openPath(path string) error {
+	var command *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		command = exec.Command("open", path)
+	case "windows":
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+	default:
+		command = exec.Command("xdg-open", path)
+	}
+	// The opener must not read from the terminal Sidecar is drawing on.
+	command.Stdin = nil
+	var stderr strings.Builder
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			return nil
+		}
+		if detail := strings.TrimSpace(stderr.String()); detail != "" {
+			return errors.New(detail)
+		}
+		return err
+	case <-time.After(openerFailWindow):
+		return nil
 	}
 }
 

@@ -160,7 +160,7 @@ func TestConfigurationKeysDoNotReachHiddenPlugin(t *testing.T) {
 	}
 }
 
-// The gear is a real hit region beside the selector, at every width.
+// The gear is a real hit region at the header's right edge, at every width.
 func TestHeaderGearBoundsAndClickOpenConfiguration(t *testing.T) {
 	for _, width := range []int{minWidth, 100, 200} {
 		m, _ := scopeBaselineModel(t, "git")
@@ -171,7 +171,7 @@ func TestHeaderGearBoundsAndClickOpenConfiguration(t *testing.T) {
 			t.Fatalf("width=%d gear bounds = %d-%d ok=%v", width, start, end, ok)
 		}
 		selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
-		if !ok || end > selectorStart || selectorEnd != width {
+		if !ok || selectorEnd > start || end != width {
 			t.Fatalf("width=%d gear %d-%d selector %d-%d", width, start, end, selectorStart, selectorEnd)
 		}
 		painted := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(m.renderHeader(), start, ""), end-start, ""))
@@ -509,5 +509,178 @@ func TestCommaOpensConfigurationFromTheGlobalContext(t *testing.T) {
 	m = typeKey(t, m, ",")
 	if !m.configOpen() {
 		t.Fatal("comma did not open Configuration with no plugin context focused")
+	}
+}
+
+// The gear is a toggle, and toggling it is not a way to lose your place: the
+// section the user was reading is where the surface reopens.
+func TestGearTogglesConfigurationAndReopensWhereItClosed(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.width, m.height, m.ready = 160, 40, true
+
+	clickGear := func(m Model) Model {
+		t.Helper()
+		start, _, ok := m.getGearBounds()
+		if !ok {
+			t.Fatal("gear has no hit region")
+		}
+		updated, _ := m.Update(tea.MouseClickMsg{X: start, Y: 0, Button: tea.MouseLeft})
+		return asAppModel(t, updated)
+	}
+
+	m = clickGear(m)
+	if !m.configOpen() {
+		t.Fatal("gear did not open Configuration")
+	}
+	m = typeKey(t, m, "down")
+	page := m.config.Page()
+	if page == configui.DefaultPage {
+		t.Fatal("down did not move off the default destination")
+	}
+
+	m = clickGear(m)
+	if m.configOpen() {
+		t.Fatal("clicking the gear while Configuration was open did not close it")
+	}
+
+	m = clickGear(m)
+	if !m.configOpen() {
+		t.Fatal("gear did not reopen Configuration")
+	}
+	if m.config.Page() != page {
+		t.Fatalf("reopened on %q, want the remembered %q", m.config.Page(), page)
+	}
+}
+
+// A page named by a caller — `sidecar setup`, an empty state's prompt — still
+// wins over the remembered position.
+func TestNamedPageBeatsTheRememberedPosition(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+	m = typeKey(t, m, "down")
+	if m.config.Page() == configui.DefaultPage {
+		t.Fatal("down did not move off the default destination")
+	}
+	m = typeKey(t, m, "esc")
+
+	updated, _ := m.Update(OpenConfigurationMsg{Page: configui.PageAbout})
+	m = asAppModel(t, updated)
+	if m.config.Page() != configui.PageAbout {
+		t.Fatalf("named open landed on %q, want About", m.config.Page())
+	}
+}
+
+// A tab click is a move to a surface the user must be able to see, so it closes
+// Configuration rather than switching behind it.
+func TestHeaderTabClickClosesConfiguration(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.width, m.height, m.ready = 160, 40, true
+	m = typeKey(t, m, ",")
+	if !m.configOpen() {
+		t.Fatal("comma did not open Configuration")
+	}
+
+	var target TabBounds
+	for _, bounds := range m.getTabBounds() {
+		if bounds.Tab != m.activeTab() {
+			target = bounds
+			break
+		}
+	}
+	if target.End <= target.Start {
+		t.Fatal("no inactive tab to click")
+	}
+
+	updated, _ := m.Update(tea.MouseClickMsg{X: target.Start, Y: 0, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+	if m.configOpen() {
+		t.Fatal("tab click left Configuration covering the tab it activated")
+	}
+	if m.activeTab() != target.Tab {
+		t.Fatalf("active tab = %#v, want %#v", m.activeTab(), target.Tab)
+	}
+}
+
+// q answers like esc for a user who is not typing into anything, and is still
+// ordinary text everywhere something owns the keyboard.
+func TestQClosesConfigurationButIsTextInSearch(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+	m = typeKey(t, m, "/")
+	m = typeKey(t, m, "q")
+	if !m.configOpen() {
+		t.Fatal("q typed into Search closed Configuration")
+	}
+	if m.config.Query() != "q" {
+		t.Fatalf("query = %q, want q", m.config.Query())
+	}
+
+	m = typeKey(t, m, "esc") // clears the query
+	m = typeKey(t, m, "esc") // hands the keyboard back to the sidebar
+	m = typeKey(t, m, "q")
+	if m.configOpen() {
+		t.Fatal("q with nothing focused did not close Configuration")
+	}
+}
+
+// The gear is the header's only hover affordance, and the highlight never
+// outlives the pointer being over it.
+func TestGearHoverTracksThePointer(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.width, m.height, m.ready = 160, 40, true
+	start, _, ok := m.getGearBounds()
+	if !ok {
+		t.Fatal("gear has no hit region")
+	}
+
+	updated, _ := m.Update(tea.MouseMotionMsg{X: start, Y: 0})
+	m = asAppModel(t, updated)
+	if !m.headerGearHovered {
+		t.Fatal("motion over the gear did not mark it hovered")
+	}
+	hovered := m.renderHeader()
+
+	updated, _ = m.Update(tea.MouseMotionMsg{X: 0, Y: 0})
+	m = asAppModel(t, updated)
+	if m.headerGearHovered {
+		t.Fatal("motion away from the gear left the hover behind")
+	}
+	if hovered == m.renderHeader() {
+		t.Fatal("the hovered gear paints identically to the idle one")
+	}
+}
+
+// The settings key is a toggle too: mouse and keyboard must not disagree about
+// what the control that opened the surface does while it is open.
+func TestCommaClosesConfigurationWhileItIsOpen(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+	m = typeKey(t, m, ",")
+	if !m.configOpen() {
+		t.Fatal("comma did not open Configuration")
+	}
+	m = typeKey(t, m, ",")
+	if m.configOpen() {
+		t.Fatal("comma while Configuration was open did not close it")
+	}
+	m = typeKey(t, m, ",")
+	if !m.configOpen() {
+		t.Fatal("comma did not reopen Configuration")
+	}
+}
+
+// q closes because the config context binds it to close-configuration, not
+// because the surface hardcodes the letter: rebinding the command moves it.
+func TestCloseConfigurationKeyComesFromTheKeymap(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+	if command, ok := m.keymap.CommandForContextKey("config", "q"); !ok || command != "close-configuration" {
+		t.Fatalf("q is bound to %q ok=%v, want close-configuration", command, ok)
+	}
+
+	m = typeKey(t, m, ",")
+	m = typeKey(t, m, "q")
+	if m.configOpen() {
+		t.Fatal("the bound close key did not close Configuration")
 	}
 }

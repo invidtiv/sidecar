@@ -291,6 +291,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Left-clicks anywhere in that band stay here so they are not rewritten
 		// into plugin-local Y<0 (some surfaces treat that as the first row).
 		mi := msg.Mouse()
+		// The gear is the header's only control with a hover look, so tracking it
+		// is one bool against the same bounds a click is tested with. Motion
+		// anywhere else clears it, which is what keeps the highlight from being
+		// left behind when the pointer leaves the header.
+		if _, isMotion := msg.(tea.MouseMotionMsg); isMotion {
+			hovered := false
+			if mi.Y == 0 && !m.intro.Active {
+				if start, end, ok := m.getGearBounds(); ok && mi.X >= start && mi.X < end {
+					hovered = true
+				}
+			}
+			m.headerGearHovered = hovered
+		}
 		_, isClickPress := msg.(tea.MouseClickMsg)
 		if isClickPress && mi.Button == tea.MouseLeft && mi.Y < headerHeight {
 			if mi.Y == 0 {
@@ -303,10 +316,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.exitOverview()
 				}
 
-				// The gear opens Configuration on Sidecar Setup. It sits between
-				// the tabs and the selector, so it is tested before both.
+				// The gear toggles Configuration: it is the control that opened
+				// the surface, so it is also the one that puts it away, and
+				// reopening returns to the section the user was last on.
 				if start, end, ok := m.getGearBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
-					return m, m.openConfiguration(configui.DefaultPage)
+					return m, m.toggleConfiguration()
 				}
 
 				// The project selector is a stable far-right target in both scopes.
@@ -458,12 +472,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case OpenConfigurationMsg:
 		// One entry: an empty state, a launch command, and the gear all arrive
-		// here, and escape returns to whatever was underneath when they did.
-		page := msg.Page
-		if page == "" {
-			page = configui.DefaultPage
-		}
-		return m, m.openConfiguration(page)
+		// here, and escape returns to whatever was underneath when they did. A
+		// named page is honored exactly; an unnamed one resumes where the user
+		// last was.
+		return m, m.openConfiguration(msg.Page)
 
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
@@ -1649,12 +1661,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// The conventional settings key in a TUI, and free in sidecar's global
 		// context. A context that binds it for itself — the Workspaces diff
 		// leaf cycles target tabs with it — answers first, exactly as `i` does
-		// below. Configuration always opens on Sidecar Setup.
+		// below. Configuration reopens where the user last left it, and comma
+		// closes it again the way the gear does. (An open surface answers comma
+		// in configKey; this branch is the closed case.)
 		if m.contextRebindsKey(",") {
 			break
 		}
 		if !m.hasModal() && !m.consumesTextInput() {
-			return m, m.openConfiguration(configui.DefaultPage)
+			return m, m.toggleConfiguration()
 		}
 		return m, nil
 	case "^":

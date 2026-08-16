@@ -161,6 +161,73 @@ func TestSetupRecheckWorksBeforeChecksComplete(t *testing.T) {
 	}
 }
 
+// Recheck is a control the user can see and click, not only a key that happens
+// to be bound. It also says what it re-checks, so pressing it is not a guess.
+func TestSetupRecheckIsVisibleAndClickable(t *testing.T) {
+	m := seeded(t, PageSetup, problemResults())
+	view := render(m)
+	if !strings.Contains(view, "R  Recheck") {
+		t.Fatalf("Setup painted no Recheck control:\n%s", view)
+	}
+	if !strings.Contains(view, "Looks again at tmux") {
+		t.Fatalf("Setup's Recheck control did not say what it re-checks:\n%s", view)
+	}
+
+	clickable := false
+	for _, region := range m.mouse.HitMap.Regions() {
+		if region.ID == "setup-recheck" && region.Rect.W > 0 {
+			clickable = true
+		}
+	}
+	if !clickable {
+		t.Fatalf("Setup's Recheck control has no mouse target: %#v", m.mouse.HitMap.Regions())
+	}
+	// Clicking that target is what a mouse user does, and it runs the recheck.
+	if cmd := m.runControl(indexOfControl(m, "setup-recheck")); cmd == nil {
+		t.Fatal("the Recheck control raised no command")
+	}
+	if !m.checking {
+		t.Fatal("the Recheck control did not start a check run")
+	}
+}
+
+// The hint shortens to fit, but it never disappears: a bare pill with nothing
+// beside it is the unexplained control this page was fixed to stop showing, and
+// 60 columns is as narrow as the app goes.
+func TestSetupRecheckKeepsItsExplanationAtEveryWidth(t *testing.T) {
+	m := seeded(t, PageSetup, problemResults())
+	for _, width := range []int{160, 120, 100, 80, 70, 60} {
+		view := ansi.Strip(m.View(width, 30))
+		if !strings.Contains(view, "R  Recheck") {
+			t.Fatalf("the Recheck pill was clipped at %d columns:\n%s", width, view)
+		}
+		var line string
+		for _, candidate := range strings.Split(view, "\n") {
+			if strings.Contains(candidate, "R  Recheck") {
+				line = candidate
+			}
+		}
+		// Everything left of the pill, back to the detail pane's own border, so
+		// the sidebar beside it cannot stand in for the hint.
+		left := line[:strings.Index(line, "R  Recheck")]
+		if border := strings.LastIndex(left, "│"); border >= 0 {
+			left = left[border+len("│"):]
+		}
+		if hint := strings.TrimSpace(left); hint == "" {
+			t.Fatalf("the Recheck control lost its explanation at %d columns:\n%s", width, line)
+		}
+	}
+}
+
+func indexOfControl(m *Model, id string) int {
+	for i, c := range m.controls {
+		if c.id == id {
+			return i
+		}
+	}
+	return -1
+}
+
 func TestSetupRowOpensRepairAndBackRestoresTheParent(t *testing.T) {
 	m := seeded(t, PageSetup, problemResults())
 

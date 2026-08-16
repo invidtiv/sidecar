@@ -712,8 +712,13 @@ type headerLayout struct {
 // an icon nobody can render is worse than a small one everybody can.
 const headerGear = "⚙"
 
-// renderHeaderGear paints the gear chip.
-func renderHeaderGear() string {
+// renderHeaderGear paints the gear chip. Hovered, it takes the raised chrome
+// surface the rest of the bar's chips use, so the pointer has something to
+// land on before it clicks.
+func renderHeaderGear(hovered bool) string {
+	if hovered {
+		return styles.ProjectRestore.Background(styles.SurfaceRaised).Render(headerGear)
+	}
 	return styles.ProjectRestore.Render(headerGear)
 }
 
@@ -726,7 +731,8 @@ func (m Model) headerClock() string {
 }
 
 // headerGeometry lays out both stable anchor zones. Global navigation is
-// always part of the left cluster. The selector's right edge is always the
+// always part of the left cluster. The right cluster ends with the project
+// selector followed by the Configuration gear, and its right edge is always the
 // terminal's right edge; project tabs consume only the space between them.
 func (m Model) headerGeometry() headerLayout {
 	width := max(0, m.width)
@@ -782,7 +788,7 @@ func (m Model) headerGeometry() headerLayout {
 	// selector. The gear is small and is the only way into Configuration with a
 	// mouse, so it survives every width; the clock is the first thing dropped
 	// when the header runs out of room.
-	gear := renderHeaderGear()
+	gear := renderHeaderGear(m.headerGearHovered)
 	gearWidth := lipgloss.Width(gear)
 	clock := m.headerClock()
 	clockWidth := lipgloss.Width(clock)
@@ -920,11 +926,11 @@ func (m Model) headerGeometry() headerLayout {
 		right += clock
 		right += " "
 	}
-	gearOffset := lipgloss.Width(right)
-	right += gear
-	right += " "
 	selectorOffset := lipgloss.Width(right)
 	right += selector
+	right += " "
+	gearOffset := lipgloss.Width(right)
+	right += gear
 	rightStart := max(lipgloss.Width(left), width-lipgloss.Width(right))
 	for i := range project {
 		project[i].start += rightStart
@@ -939,19 +945,18 @@ func (m Model) headerGeometry() headerLayout {
 		layout.restoreStart = rightStart + restoreOffset
 		layout.restoreEnd = layout.restoreStart + restoreWidth
 	}
-	layout.gearStart = rightStart + gearOffset
-	layout.gearEnd = min(width, layout.gearStart+gearWidth)
 	layout.selectorStart = rightStart + selectorOffset
 	layout.selectorEnd = min(width, layout.selectorStart+selectorWidth)
+	layout.gearStart = rightStart + gearOffset
+	layout.gearEnd = min(width, layout.gearStart+gearWidth)
 	return layout
 }
 
 // getGearBounds returns the painted geometry of the Configuration gear, which
-// sits immediately left of the right-pinned project selector.
-//
-// Left, not right, of the selector: the selector's right edge is pinned to the
-// terminal edge everywhere in this file and in its tests, and moving it inward
-// to make room would break that invariant for a one-column control.
+// sits immediately right of the project selector, at the terminal's right edge.
+// The gear, not the selector, is what the right cluster now ends with: settings
+// belong at the far corner of the bar, and the selector keeps its stable
+// position by staying the same distance from that corner at every width.
 func (m Model) getGearBounds() (start, end int, ok bool) {
 	layout := m.headerGeometry()
 	if layout.gearEnd <= layout.gearStart {
@@ -993,7 +998,7 @@ func (m Model) getLogoBounds() (start, end int, ok bool) {
 }
 
 // getProjectSelectorBounds returns the exact painted selector geometry in both
-// scopes. Its right edge is pinned to the terminal edge.
+// scopes. It ends one gear's width short of the terminal edge.
 func (m Model) getProjectSelectorBounds() (start, end int, ok bool) {
 	layout := m.headerGeometry()
 	if layout.selectorEnd <= layout.selectorStart {

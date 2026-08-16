@@ -74,6 +74,10 @@ func DefaultBindings() []Binding {
 		{Key: "/", Command: "search", Context: "config"},
 		{Key: "tab", Command: "focus-search", Context: "config"},
 		{Key: "esc", Command: "close-configuration", Context: "config"},
+		// q leaves the surface the way it leaves a pager. It is registered
+		// rather than hardcoded so it is described everywhere esc is and a
+		// rebind of close-configuration takes it with it.
+		{Key: "q", Command: "close-configuration", Context: "config"},
 		// Page-level actions on Sidecar Setup, Diagnostics, and the focused
 		// repair routes. They are registered here so the footer, the help modal,
 		// and the palette all name the same keys the pages print on their pills.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/configchecks"
 )
 
@@ -24,11 +25,16 @@ var setupChecks = []configchecks.ID{
 func (m *Model) buildSetup(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageSetup)), "")
 
-	// Recheck stays reachable from the page without occupying a visible row:
-	// Setup's visible controls are the work, not the diagnostics. It is declared
-	// before anything can return early, so R works while the first run is still
-	// pending — which is exactly when a check that never started needs it.
-	b.declare("setup-recheck", "r", false, func(m *Model) tea.Cmd { return m.Recheck() })
+	// Recheck is a real control, not a hidden key: it sits pinned to the right of
+	// a line that says what it looks at, so it can be seen, clicked, or run with
+	// R. It is declared before anything can return early, so it works while the
+	// first run is still pending — which is exactly when a check that never
+	// started needs it. Like Diagnostics' Recheck it is not a cursor stop: the
+	// row cursor belongs on the work the page is about.
+	b.rightControl(setupRecheckHint(b.inner, m.checking), "setup-recheck", "r", setupRecheckLabel, func(m *Model) tea.Cmd {
+		return m.Recheck()
+	})
+	b.blank()
 
 	if !m.checked {
 		b.lead("Checking your setup…")
@@ -84,8 +90,48 @@ func (m *Model) buildSetup(b *paneBuilder) {
 	if len(problems) > 0 {
 		b.lead("Enter opens a focused repair that explains a change before making it.")
 	} else {
-		b.lead("R rechecks whenever your machine or your projects change.")
+		// The Recheck control at the top already says what R does, so an
+		// all-healthy page does not repeat it.
+		b.lead("Recheck whenever your machine or your projects change.")
 	}
+}
+
+// setupRecheckLabel is the pill's visible label; the shortcut it advertises and
+// the key registered with it are the same letter.
+const setupRecheckLabel = "R  Recheck"
+
+// setupRecheckHint is the explanatory text beside the Recheck pill, in the
+// longest form the pane can hold. The button is the point of the line, so the
+// sentence gives way to it rather than the other way round: a truncated hint is
+// a smaller loss than a Recheck control clipped off the right edge, which is the
+// state this control existed to get out of.
+//
+// The shortest candidate is sized to survive the app's 60-column minimum width,
+// because a bare right-aligned pill with nothing beside it is the unexplained
+// control this page was fixed to stop showing — a smaller window is not a reason
+// to go back to it.
+func setupRecheckHint(inner int, checking bool) string {
+	long := []string{
+		"Looks again at tmux, terminal colors, projects, and agent instructions.",
+		"Looks again at tmux, colors, projects, and instructions.",
+		"Re-runs every setup check.",
+		"Rechecks your setup.",
+	}
+	if checking {
+		long = []string{
+			"Rechecking tmux, terminal colors, projects, and agent instructions…",
+			"Rechecking tmux, colors, projects, and instructions…",
+			"Rechecking…",
+		}
+	}
+	// The gap the pill needs: its own width plus two spaces of breathing room.
+	room := inner - ansi.StringWidth(Button(setupRecheckLabel, false, State{})) - 2
+	for _, text := range long {
+		if ansi.StringWidth(text) <= room {
+			return Muted(text)
+		}
+	}
+	return ""
 }
 
 func setupTitle(result configchecks.Result) string {
