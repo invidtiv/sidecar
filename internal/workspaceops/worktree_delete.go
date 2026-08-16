@@ -114,8 +114,20 @@ func IsDefaultBranch(ctx context.Context, workDir, branch string) bool {
 // known, then the conventional names, then "main". Answers are cached per
 // working directory.
 func DefaultBranch(ctx context.Context, workDir string) string {
+	return DefaultBranchObserved(ctx, workDir, nil)
+}
+
+// DefaultBranchObserved is DefaultBranch with a hook called immediately before
+// each git process it spawns. Hosts that count subprocesses (the startup trace)
+// pass their recorder here so detection is not under-reported as one spawn.
+func DefaultBranchObserved(ctx context.Context, workDir string, onSpawn func()) string {
 	if ctx.Err() != nil {
 		return ""
+	}
+	spawn := func() {
+		if onSpawn != nil {
+			onSpawn()
+		}
 	}
 	defaultBranchCacheMu.RLock()
 	if branch, ok := defaultBranchCache[workDir]; ok {
@@ -124,6 +136,7 @@ func DefaultBranch(ctx context.Context, workDir string) string {
 	}
 	defaultBranchCacheMu.RUnlock()
 
+	spawn()
 	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "refs/remotes/origin/HEAD")
 	cmd.Dir = workDir
 	if output, err := cmd.Output(); err == nil {
@@ -141,6 +154,7 @@ func DefaultBranch(ctx context.Context, workDir string) string {
 		if ctx.Err() != nil {
 			return ""
 		}
+		spawn()
 		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branch)
 		cmd.Dir = workDir
 		if err := cmd.Run(); err == nil {

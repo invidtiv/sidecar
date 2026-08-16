@@ -5,6 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
+
+	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/workspaceops"
+
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/worktreedelete"
@@ -189,5 +194,172 @@ func TestWorktreeDeleteIsDiscoverableForAWorktreeSelection(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("the open confirmation advertises no confirm command")
+	}
+}
+
+// toastFrom walks a command tree for the toast it produced, if any.
+func toastFrom(t *testing.T, cmd tea.Cmd) (appmsg.ToastMsg, bool) {
+	t.Helper()
+	if cmd == nil {
+		return appmsg.ToastMsg{}, false
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if toast, ok := toastFrom(t, sub); ok {
+				return toast, true
+			}
+		}
+		return appmsg.ToastMsg{}, false
+	}
+	toast, ok := msg.(appmsg.ToastMsg)
+	return toast, ok
+}
+
+// mutateWorkspace edits one collected row and reprojects the list from it.
+func mutateWorkspace(m *Model, id string, edit func(*workspaceinventory.Workspace)) {
+	for key, result := range m.results {
+		for i := range result.Workspaces {
+			if result.Workspaces[i].ID == id {
+				edit(&result.Workspaces[i])
+			}
+		}
+		m.results[key] = result
+	}
+	m.syncBoard()
+}
+
+// The global surface refuses exactly what the project surface refuses. A
+// locked worktree is the case that used to get a full destructive confirmation
+// and then fail with git's raw error (td-2af16d, M2).
+func TestALockedWorktreeIsRefusedInsteadOfConfirmed(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	mutateWorkspace(m, "a", func(w *workspaceinventory.Workspace) { w.IsLocked = true })
+	selectWorkspace(t, m, "a")
+
+	handled, cmd := m.WorkspacesKey(key("D"))
+	if !handled {
+		t.Fatal("D was not answered for a locked worktree")
+	}
+	if m.DeleteOpen() {
+		t.Fatal("a locked worktree was offered a delete confirmation")
+	}
+	toast, ok := toastFrom(t, cmd)
+	if !ok || !strings.Contains(toast.Message, "locked") {
+		t.Fatalf("refusal toast = %#v", toast)
+	}
+	if hasCommand(m, "delete-worktree") {
+		t.Fatal("a locked worktree still advertises delete")
+	}
+}
+
+func TestABareOrDetachedWorktreeIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*workspaceinventory.Workspace)
+		want string
+	}{
+		{"bare", func(w *workspaceinventory.Workspace) { w.IsBare = true }, "bare"},
+		{"detached", func(w *workspaceinventory.Workspace) { w.IsDetached = true }, "branch"},
+		{"prunable", func(w *workspaceinventory.Workspace) { w.IsPrunable = true }, "prunable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := previewModel(t)
+			run(t, m, m.SetWorkspacesVisible(true))
+			mutateWorkspace(m, "a", tc.edit)
+			selectWorkspace(t, m, "a")
+
+			_, cmd := m.WorkspacesKey(key("D"))
+			if m.DeleteOpen() {
+				t.Fatalf("a %s worktree was offered a delete confirmation", tc.name)
+			}
+			toast, ok := toastFrom(t, cmd)
+			if !ok || !strings.Contains(toast.Message, tc.want) {
+				t.Fatalf("refusal toast = %#v", toast)
+			}
+		})
+	}
+}
+
+// A worktree whose directory is gone is refused, with the same wording the
+// project surface produces — before my change the global surface offered a
+// full destructive confirmation for it and described a directory that was
+// already gone as one it was about to remove (td-2af16d, M2).
+func TestAMissingWorktreeIsRefusedWithTheSharedWording(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	mutateWorkspace(m, "a", func(w *workspaceinventory.Workspace) { w.IsMissing = true })
+	workspace := selectWorkspace(t, m, "a")
+
+	_, cmd := m.WorkspacesKey(key("D"))
+	if m.DeleteOpen() {
+		t.Fatal("a worktree whose directory is gone was offered a delete confirmation")
+	}
+	want := workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{
+		Path: workspace.Path, Branch: workspace.Branch, IsMissing: true, TrustPath: true,
+	}, workspaceops.WorktreeActionDelete)
+	toast, ok := toastFrom(t, cmd)
+	if !ok || toast.Message != want {
+		t.Fatalf("refusal = %#v, want the shared refusal %q", toast, want)
+	}
+}
+
+// The confirmation is still told what it is deleting, so a target that reaches
+// it missing describes the cleanup rather than a removal.
+func TestTheConfirmationCarriesTheMissingMarker(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	workspace := selectWorkspace(t, m, "a")
+	workspace.IsMissing = true
+	m.deleteOpen, m.deleteWorkspace = true, workspace
+	m.worktreeDelete.Open(worktreedelete.Target{
+		Name: workspace.Name, Branch: workspace.Branch, Path: workspace.Path, IsMissing: workspace.IsMissing,
+	}, false)
+
+	if !m.worktreeDelete.DeleteLocal {
+		t.Fatal("the branch box was not pre-ticked for a worktree whose directory is gone")
+	}
+	view := m.WorkspacesView(120, 24)
+	if !strings.Contains(view, "Directory already removed") {
+		t.Fatalf("the confirmation shows the wrong warning:\n%s", view)
+	}
+	m.closeDelete()
+}
+
+// A probe that finds the main branch hides the branch options, so the intent
+// behind them must go too (L6).
+func TestAMainBranchProbeWithdrawsTheBranchChoices(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	workspace := selectWorkspace(t, m, "a")
+	m.WorkspacesKey(key("D"))
+
+	m.worktreeDelete.DeleteLocal = true
+	m.worktreeDelete.DeleteRemote = true
+	m.applyWorktreeDeleteProbe(globalWorktreeDeleteProbeMsg{Path: workspace.Path, IsMainBranch: true})
+
+	if m.worktreeDelete.DeleteLocal || m.worktreeDelete.DeleteRemote {
+		t.Fatal("branch choices survived the options being withdrawn")
+	}
+	if strings.Contains(m.WorkspacesView(120, 24), "Delete local branch") {
+		t.Fatal("the main branch is still offered branch cleanup")
+	}
+}
+
+// Exactly one confirmation is ever armed (L5).
+func TestOpeningTheShellConfirmationDisarmsTheWorktreeOne(t *testing.T) {
+	m, _ := previewModel(t)
+	run(t, m, m.SetWorkspacesVisible(true))
+	selectWorkspace(t, m, "a")
+	m.WorkspacesKey(key("D"))
+	if !m.DeletingWorktree() {
+		t.Fatal("the worktree confirmation is not armed")
+	}
+
+	selectWorkspace(t, m, "c")
+	m.OpenDeleteSelectedShell()
+	if m.DeletingWorktree() || m.worktreeDelete.Active() {
+		t.Fatal("the shell confirmation left the worktree one armed")
 	}
 }

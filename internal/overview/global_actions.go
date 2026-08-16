@@ -77,7 +77,25 @@ func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
 	m.deleteWorkspace = workspace
 	m.deleteModal = nil
 	m.deleteModalW = 0
+	// Exactly one confirmation is ever armed.
+	m.worktreeDelete.Clear()
 	return nil
+}
+
+// worktreeActionState is the full refusal input for a catalog row. Every
+// marker git reported is carried through the inventory, so this surface
+// refuses exactly the set the project surface refuses — a locked worktree is
+// not offered a confirmation it would then fail to honour (td-2af16d).
+func worktreeActionState(workspace workspaceinventory.Workspace) *workspaceops.WorktreeActionState {
+	return &workspaceops.WorktreeActionState{
+		Path: workspace.Path, Branch: workspace.Branch,
+		IsMain: workspace.IsMain, IsBare: workspace.IsBare,
+		IsDetached: workspace.IsDetached, IsLocked: workspace.IsLocked,
+		IsMissing: workspace.IsMissing, IsPrunable: workspace.IsPrunable,
+		// The inventory has just stat'ed the path; a second stat per frame
+		// would answer the same question the collector already answered.
+		TrustPath: true,
+	}
 }
 
 // deleteRefusal is the shared refusal for deleting the selected worktree —
@@ -86,9 +104,7 @@ func deleteRefusal(workspace workspaceinventory.Workspace) string {
 	if workspace.Kind != workspaceinventory.KindWorktree {
 		return "delete requires a worktree"
 	}
-	return workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{
-		Path: workspace.Path, Branch: workspace.Branch, IsMain: workspace.IsMain, TrustPath: true,
-	}, workspaceops.WorktreeActionDelete)
+	return workspaceops.WorktreeActionRefusal(worktreeActionState(workspace), workspaceops.WorktreeActionDelete)
 }
 
 // OpenDeleteSelectedWorktree raises the shared "Delete Worktree?" confirmation
@@ -110,9 +126,10 @@ func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
 	m.deleteModal = nil
 	m.deleteModalW = 0
 	m.worktreeDelete.Open(worktreedelete.Target{
-		Name:   workspace.Name,
-		Branch: workspace.Branch,
-		Path:   workspace.Path,
+		Name:      workspace.Name,
+		Branch:    workspace.Branch,
+		Path:      workspace.Path,
+		IsMissing: workspace.IsMissing,
 	}, false)
 	return m.probeWorktreeDelete(workspace)
 }
@@ -149,6 +166,12 @@ func (m *Model) applyWorktreeDeleteProbe(msg globalWorktreeDeleteProbeMsg) tea.C
 	}
 	m.worktreeDelete.IsMainBranch = msg.IsMainBranch
 	m.worktreeDelete.HasRemote = msg.HasRemote
+	if msg.IsMainBranch {
+		// The options are no longer on screen, so the intent behind them must
+		// not survive either.
+		m.worktreeDelete.DeleteLocal = false
+		m.worktreeDelete.DeleteRemote = false
+	}
 	m.worktreeDelete.Invalidate()
 	return nil
 }
@@ -327,9 +350,7 @@ func mergeRefusal(workspace workspaceinventory.Workspace) string {
 	if workspace.Kind != workspaceinventory.KindWorktree {
 		return "merge requires a worktree"
 	}
-	return workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{
-		Path: workspace.Path, Branch: workspace.Branch, IsMain: workspace.IsMain, TrustPath: true,
-	}, workspaceops.WorktreeActionMerge)
+	return workspaceops.WorktreeActionRefusal(worktreeActionState(workspace), workspaceops.WorktreeActionMerge)
 }
 
 func (m *Model) StartSelectedMerge() tea.Cmd {

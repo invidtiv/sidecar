@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
@@ -1013,17 +1014,41 @@ func (m *Model) RevealWorkspace(workspace workspaceinventory.Workspace) tea.Cmd 
 	if workspace.ID == "" {
 		return nil
 	}
-	if !m.workspaces.SelectID(workspace.ID) {
-		// An idle worktree the list is currently hiding is still a row the user
-		// just asked for; show the hidden rows rather than silently landing on
-		// someone else's selection.
-		if !m.showIdleWorktrees {
-			m.showIdleWorktrees = true
-			m.syncWorkspaces()
-			m.workspaces.SelectID(workspace.ID)
+	cmds := []tea.Cmd{m.focusList()}
+	if m.workspaces.SelectID(workspace.ID) {
+		return tea.Batch(cmds...)
+	}
+
+	// An idle worktree the list is currently hiding is still a row the user
+	// just asked for; show the hidden rows rather than silently landing on
+	// someone else's selection. The choice is persisted like every other way of
+	// making it, so the fly-out's checkbox tells the truth after a restart.
+	if !m.showIdleWorktrees {
+		m.showIdleWorktrees = true
+		cmds = append(cmds, m.persistIdleAndSync())
+		if m.workspaces.SelectID(workspace.ID) {
+			return tea.Batch(cmds...)
 		}
 	}
-	return m.focusList()
+
+	// A narrowing query is the other reason the row is not on screen. Landing
+	// silently on somebody else's row is the dangerous outcome — D acts on the
+	// selection — so the query goes rather than the request.
+	if m.workspaces.Filter().Active() {
+		m.workspaces.Filter().Reset()
+		m.workspaces.Reproject()
+		if m.workspaces.SelectID(workspace.ID) {
+			return tea.Batch(append(cmds, m.previewSync())...)
+		}
+	}
+
+	// The row is genuinely not here any more. Say so rather than leaving the
+	// previous selection looking like the answer.
+	name := workspace.Name
+	if name == "" {
+		name = workspace.ID
+	}
+	return tea.Batch(append(cmds, appmsg.ShowToast(name+" is no longer in the catalog", 3*time.Second))...)
 }
 
 func (m *Model) View(width, height int) string {

@@ -404,8 +404,9 @@ func detectDefaultBranch(workdir string) string {
 }
 
 func detectDefaultBranchContext(ctx context.Context, workdir string) string {
-	recordGitProcess(ctx, nil)
-	return workspaceops.DefaultBranch(ctx, workdir)
+	// One record per spawn, as when the detection was inlined here: the
+	// startup trace counts processes, and detection can spawn up to three.
+	return workspaceops.DefaultBranchObserved(ctx, workdir, func() { recordGitProcess(ctx, nil) })
 }
 
 // resolveBaseBranch returns the worktree's BaseBranch if set,
