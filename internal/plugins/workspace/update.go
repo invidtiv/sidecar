@@ -572,6 +572,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.deleteConfirm.Invalidate()
 		}
 
+	case WorktreeDirtyCheckedMsg:
+		// Only the confirmation that asked may be updated: the answer is about
+		// one worktree, and a late one must not relabel a different target.
+		if p.viewMode == ViewModeConfirmDelete && p.deleteConfirmWorktree != nil &&
+			p.deleteConfirmWorktree.Path == msg.Path {
+			p.deleteConfirm.Dirty = msg.Dirty
+			p.deleteConfirm.Invalidate()
+		}
+
 	case PushDoneMsg:
 		// Handle push result notification
 		if msg.Err == nil {

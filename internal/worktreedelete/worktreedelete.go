@@ -11,6 +11,7 @@
 package worktreedelete
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // Title is the confirmation's heading. Exported so a host's tests can assert
@@ -58,6 +60,46 @@ const (
 	OutcomeCancel
 )
 
+// Dirtiness is what the host knows about uncommitted work in the target.
+//
+// It is three values rather than a bool because a confirmation opens before
+// git can answer: "we have not asked yet" and "we asked and it is clean" are
+// different sentences, and rendering the second while the first is true would
+// be the same lie as the old unconditional warning, only pointed the other way.
+type Dirtiness int
+
+const (
+	// DirtinessUnknown means no answer has arrived — or git could not give one.
+	DirtinessUnknown Dirtiness = iota
+	// DirtinessClean means git reported nothing to lose.
+	DirtinessClean
+	// DirtinessDirty means git reported uncommitted or untracked work.
+	DirtinessDirty
+)
+
+// ProbeDirtiness asks git whether a worktree holds work a removal would
+// destroy, in the form the confirmation renders.
+//
+// Both hosts call this, off the keypress path, when the confirmation opens —
+// one `git status` for the one worktree the user named, rather than a status
+// per worktree per inventory refresh. An unreadable worktree stays Unknown:
+// telling a user their worktree is clean because git failed is exactly the
+// reassurance this ticket exists to remove. A missing directory is Unknown too;
+// the confirmation already says the directory is gone.
+func ProbeDirtiness(ctx context.Context, path string, missing bool) Dirtiness {
+	if missing || strings.TrimSpace(path) == "" {
+		return DirtinessUnknown
+	}
+	dirty, err := workspaceops.WorktreeIsDirty(ctx, path)
+	if err != nil {
+		return DirtinessUnknown
+	}
+	if dirty {
+		return DirtinessDirty
+	}
+	return DirtinessClean
+}
+
 // State is one open confirmation. The zero value is closed.
 type State struct {
 	target Target
@@ -72,6 +114,10 @@ type State struct {
 	// DeleteLocal and DeleteRemote are the optional branch cleanup choices.
 	DeleteLocal  bool
 	DeleteRemote bool
+
+	// Dirty is what git says about uncommitted work in the target. Hosts
+	// resolve it asynchronously, as they do HasRemote, and call Invalidate.
+	Dirty Dirtiness
 
 	built      *modal.Modal
 	builtWidth int
@@ -88,6 +134,7 @@ func (s *State) Open(target Target, isMainBranch bool) {
 	// up together with its branch, so that box starts ticked.
 	s.DeleteLocal = target.IsMissing
 	s.DeleteRemote = false
+	s.Dirty = DirtinessUnknown
 	s.built = nil
 	s.builtWidth = 0
 }
@@ -190,11 +237,36 @@ func (s *State) warningSection() modal.Section {
 		} else {
 			sb.WriteString(dim("  • Remove the working directory"))
 			sb.WriteString("\n")
-			sb.WriteString(dim("  • Uncommitted changes will be lost"))
+			// The truthful line. This used to read "Uncommitted changes will be
+			// lost" for every worktree, dirty or not, which is how a warning
+			// becomes wallpaper — and since the confirmation now force-removes,
+			// it is the only thing between a keypress and lost work
+			// (td-d37612). It says what git actually reported, and says nothing
+			// reassuring until git has reported.
+			switch s.Dirty {
+			case DirtinessDirty:
+				sb.WriteString(warningStyle.Render("  • " + DirtyLine))
+			case DirtinessClean:
+				sb.WriteString(dim("  • " + CleanLine))
+			default:
+				sb.WriteString(dim("  • " + UnknownDirtinessLine))
+			}
 		}
 		return modal.RenderedSection{Content: sb.String()}
 	}, nil)
 }
+
+// The three things the confirmation can say about uncommitted work. They are
+// exported so each host's tests assert against the shared wording rather than
+// its own copy of it.
+const (
+	// DirtyLine is shown only when git reported work that removal would destroy.
+	DirtyLine = "Uncommitted changes will be lost"
+	// CleanLine is shown when git reported a clean worktree.
+	CleanLine = "No uncommitted changes to lose"
+	// UnknownDirtinessLine is shown until git answers, and if it cannot.
+	UnknownDirtinessLine = "Checking for uncommitted changes…"
+)
 
 func branchHeaderSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {

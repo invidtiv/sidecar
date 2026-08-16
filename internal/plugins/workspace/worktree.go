@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 const maxRefreshConcurrency = 4
@@ -511,6 +512,26 @@ func deleteBranchContext(ctx context.Context, req workspaceops.BranchDeletion) e
 
 func deleteRemoteBranchCmdContext(ctx context.Context, req workspaceops.BranchDeletion) error {
 	return workspaceops.DeleteRemoteBranch(ctx, req)
+}
+
+// checkWorktreeDirty asks git, off the keypress path, whether the worktree the
+// delete confirmation is about holds uncommitted work.
+//
+// It is deliberately the same call the global Workspaces browser makes when its
+// confirmation opens — worktreedelete.ProbeDirtiness — rather than the refresh
+// cycle's cached Changes, so both surfaces show one answer, taken at the same
+// moment in the flow, from the same rule.
+func (p *Plugin) checkWorktreeDirty(wt *Worktree) tea.Cmd {
+	if wt == nil {
+		return nil
+	}
+	path, missing := wt.Path, wt.IsMissing
+	return func() tea.Msg {
+		return WorktreeDirtyCheckedMsg{
+			Path:  path,
+			Dirty: worktreedelete.ProbeDirtiness(context.Background(), path, missing),
+		}
+	}
 }
 
 // checkRemoteBranch returns a command to check if a remote branch exists.

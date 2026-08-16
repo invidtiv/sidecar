@@ -125,8 +125,25 @@ type ProbeFunc func(session string) Verdict
 // A listing also fails honestly — if tmux cannot answer at all, including when
 // no server is running, the verdict is Unknown and no shell is closed.
 func ProbeSession(session string) Verdict {
+	return probeSessionWithin(session, ProbeTimeout)
+}
+
+// probeSessionWithin is ProbeSession with the deadline supplied rather than
+// read from the package constant.
+//
+// The deadline is a parameter so the tests do not have to race the clock. A
+// test that asserts what tmux answered wants a bound it can never reach under
+// load, and a test that asserts the bound itself wants one short enough to hit
+// deliberately; a single constant chosen for production cannot be both, and
+// picking one made the answer tests flake under a parallel suite (td-1546a4).
+// Production has exactly one caller, ProbeSession, so the policy is still one
+// value in one place.
+func probeSessionWithin(session string, timeout time.Duration) Verdict {
 	if strings.TrimSpace(session) == "" {
 		return Unknown
+	}
+	if timeout <= 0 {
+		timeout = ProbeTimeout
 	}
 	// Every other tmux call in this codebase is bounded, and this one must be
 	// too. A wedged server that never answers would otherwise hang the caller's
@@ -134,13 +151,13 @@ func ProbeSession(session string) Verdict {
 	// poll chain, so the row would freeze; in the global browser the throttle
 	// would keep launching replacements that never exit. A deadline reached is
 	// simply no evidence, which is already the safe answer.
-	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
 	// Cancelling kills tmux, but Output() waits on the pipes, and a grandchild
 	// that inherited them keeps them open after its parent dies. Without a wait
 	// delay the deadline is advisory and the call can still hang forever.
-	cmd.WaitDelay = ProbeTimeout
+	cmd.WaitDelay = timeout
 	output, err := cmd.Output()
 	if err != nil {
 		return Unknown

@@ -686,12 +686,16 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
 		p.deleteConfirm.Open(worktreeDeleteTarget(wt), isMainBranch(p.ctx.WorkDir, wt.Branch))
-		if p.deleteConfirm.IsMainBranch {
-			// Main branch is protected: skip branch options
-			return nil
+		// Dirtiness is asked for every target, protected branch or not: the
+		// warning about losing uncommitted work is what the confirmation is
+		// for, and it must not depend on which branch is checked out.
+		cmds := []tea.Cmd{p.checkWorktreeDirty(wt)}
+		if !p.deleteConfirm.IsMainBranch {
+			// Main branch is protected: it gets no branch options, so nothing
+			// asks about the remote.
+			cmds = append(cmds, p.checkRemoteBranch(wt))
 		}
-		// Check for remote branch existence asynchronously
-		return p.checkRemoteBranch(wt)
+		return tea.Batch(cmds...)
 	case "p":
 		if wt := p.selectedWorktree(); wt != nil {
 			if reason := WorktreeActionRefusal(wt, WorktreeActionPush); reason != "" {

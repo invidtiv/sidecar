@@ -26,10 +26,13 @@ func armed(target Target, isMain bool) *State {
 
 func TestConfirmationNamesTheWorktreeAndItsConsequences(t *testing.T) {
 	s := armed(Target{Name: "feature", Branch: "feature-branch", Path: "/tmp/feature"}, false)
+	// The warning is now conditional, so this consequence only appears for a
+	// worktree git reported dirty — see dirtiness_test.go.
+	s.Dirty = DirtinessDirty
 	view := render(t, s)
 
 	for _, want := range []string{Title, "feature", "feature-branch", "/tmp/feature",
-		"This will:", "Remove the working directory", "Uncommitted changes will be lost",
+		"This will:", "Remove the working directory", DirtyLine,
 		"Delete local branch", " Delete ", " Cancel "} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("confirmation is missing %q:\n%s", want, view)

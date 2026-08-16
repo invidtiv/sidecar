@@ -228,14 +228,37 @@ func requireRemovableWorktree(ctx context.Context, req WorktreeRemoval) error {
 	if err := requireCheckoutIdentity(ctx, req.Path, req.Branch, req.ExpectedOID); err != nil {
 		return err
 	}
-	status, err := gitOutput(ctx, req.Path, "status", "--porcelain=v1", "--untracked-files=normal")
+	dirty, err := WorktreeIsDirty(ctx, req.Path)
 	if err != nil {
-		return fmt.Errorf("inspect %q: %w", req.Path, err)
+		return err
 	}
-	if status != "" {
+	if dirty {
 		return fmt.Errorf("%w: %q", ErrWorktreeDirty, req.Path)
 	}
 	return nil
+}
+
+// WorktreeIsDirty reports whether a worktree holds work a removal would
+// destroy: anything `git status` shows, tracked or untracked.
+//
+// This is the one definition of "dirty" in the delete path. The refusal above
+// consults it before a removal nobody forced, and both delete confirmations
+// consult it to decide whether to warn that uncommitted changes will be lost —
+// so the sentence the user reads and the check the code makes cannot disagree.
+//
+// It costs one git process, which is why no caller runs it on a refresh cycle:
+// the confirmations ask when the modal opens, once, for the single worktree the
+// user named. An error is not "clean": callers must treat an unanswerable
+// worktree as unknown rather than reassure the user about it.
+func WorktreeIsDirty(ctx context.Context, path string) (bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return false, fmt.Errorf("worktree path is empty")
+	}
+	status, err := gitOutput(ctx, path, "status", "--porcelain=v1", "--untracked-files=normal")
+	if err != nil {
+		return false, fmt.Errorf("inspect %q: %w", path, err)
+	}
+	return strings.TrimSpace(status) != "", nil
 }
 
 // requireCheckoutIdentity refuses unless path is still the safe checkout of

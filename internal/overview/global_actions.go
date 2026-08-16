@@ -137,29 +137,46 @@ func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
 	return m.probeWorktreeDelete(workspace)
 }
 
-// globalWorktreeDeleteProbeMsg carries the two git answers the confirmation
-// needs but must not block a keypress on: whether the branch is the
-// repository's primary one, and whether origin still carries it.
+// globalWorktreeDeleteProbeMsg carries the git answers the confirmation needs
+// but must not block a keypress on: whether the branch is the repository's
+// primary one, whether origin still carries it, and whether the worktree holds
+// uncommitted work.
 type globalWorktreeDeleteProbeMsg struct {
 	Path         string
 	IsMainBranch bool
 	HasRemote    bool
+	Dirty        worktreedelete.Dirtiness
 }
 
+// probeWorktreeDelete answers the confirmation's open questions in one command.
+//
+// Dirtiness is asked here, when the modal opens, and not carried on
+// workspaceinventory.Workspace beside the porcelain markers. Those markers are
+// free — one `git worktree list --porcelain` already reports every worktree's
+// bare/detached/locked/prunable state — while dirtiness is `git status` per
+// worktree, so putting it in the inventory would add a git spawn per worktree
+// per refresh cycle on a surface that refreshes on a timer. AGENTS.md is
+// explicit that spawns are expensive on machines running endpoint security
+// agents. The user deletes one worktree at a time, so one status call per
+// opened confirmation buys the same truth for a bounded, user-initiated cost —
+// and it is fresher than a cached inventory field would be.
 func (m *Model) probeWorktreeDelete(workspace workspaceinventory.Workspace) tea.Cmd {
 	root := m.projectRootFor(workspace)
-	if root == "" {
-		return nil
-	}
 	path, branch := workspace.Path, workspace.Branch
+	// A worktree whose directory is gone has nothing to lose and nothing to
+	// ask git about; the confirmation says so on its own line already.
+	missing := workspace.IsMissing
 	return func() tea.Msg {
 		ctx := context.Background()
-		isMain := workspaceops.IsDefaultBranch(ctx, root, branch)
-		hasRemote := false
-		if !isMain {
-			hasRemote = workspaceops.RemoteBranchExists(ctx, root, branch)
+		msg := globalWorktreeDeleteProbeMsg{Path: path}
+		if root != "" {
+			msg.IsMainBranch = workspaceops.IsDefaultBranch(ctx, root, branch)
+			if !msg.IsMainBranch {
+				msg.HasRemote = workspaceops.RemoteBranchExists(ctx, root, branch)
+			}
 		}
-		return globalWorktreeDeleteProbeMsg{Path: path, IsMainBranch: isMain, HasRemote: hasRemote}
+		msg.Dirty = worktreedelete.ProbeDirtiness(ctx, path, missing)
+		return msg
 	}
 }
 
@@ -169,6 +186,7 @@ func (m *Model) applyWorktreeDeleteProbe(msg globalWorktreeDeleteProbeMsg) tea.C
 	}
 	m.worktreeDelete.IsMainBranch = msg.IsMainBranch
 	m.worktreeDelete.HasRemote = msg.HasRemote
+	m.worktreeDelete.Dirty = msg.Dirty
 	if msg.IsMainBranch {
 		// The options are no longer on screen, so the intent behind them must
 		// not survive either.
