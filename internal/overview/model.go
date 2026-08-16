@@ -202,6 +202,9 @@ type Model struct {
 	// previewCloseHover is set while the pointer is over a content-pane X.
 	previewCloseHover bool
 	hoverPreviewClose panelayout.Kind
+	// hoverHandleRegion / hoverHandleSplit are the resizable split under the pointer.
+	hoverHandleRegion string
+	hoverHandleSplit  int
 
 	renameOpen       bool
 	renameWorkspace  workspaceinventory.Workspace

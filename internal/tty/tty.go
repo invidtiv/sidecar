@@ -173,6 +173,26 @@ type Model struct {
 	// still coming and swallows every resize after it.
 	resizeRetryPending bool
 
+	// resizeRetryGeneration invalidates an in-flight deferredResizeMsg. A
+	// leftover tick after CancelDeferredResize (divider drop) must not SIGWINCH.
+	resizeRetryGeneration uint64
+
+	// resizeHold is the host's no-SIGWINCH-until-drop flag. While set,
+	// assertDimensions keeps Width/Height as the owed size and does not
+	// ResizeTmuxPane, unless the configured debounce is 0.
+	resizeHold bool
+
+	// resizeOwed is true when Width/Height have been accepted without a tmux
+	// resize (deferred or held). Drop uses it so ResizeAndPollImmediate still
+	// flushes when the last drag size is already stored on the model.
+	resizeOwed bool
+
+	// resizeDebounce is the host-supplied interval for assertDimensions.
+	// resizeDebounceSet distinguishes an explicit 0 (assert now) from unset
+	// (DefaultResizeDebounce).
+	resizeDebounce    time.Duration
+	resizeDebounceSet bool
+
 	// nowFn is the model's clock for the resize debounce. Tests drive a burst
 	// through the window without wall-clock time passing inside it; nil is
 	// time.Now.
@@ -284,6 +304,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	m.visible = true
 	m.modelLive = false
 	m.resizeRetryPending = false
+	m.resizeOwed = false
 	m.recoveryPending = false
 	m.fallbackEstablished = false
 	m.consecutiveRecoveryBlanks = 0
@@ -449,6 +470,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		// later resize behind a message that already came and went.
 		m.resizeRetryPending = false
 		if !m.owns(msg.Scope) {
+			return nil
+		}
+		if msg.Generation != m.resizeRetryGeneration {
 			return nil
 		}
 		return m.assertDimensions()
@@ -1123,14 +1147,14 @@ func (m *Model) schedulePoll(delay time.Duration) tea.Cmd {
 	})
 }
 
-// ResizeDebounce bounds how often a resize is asserted against tmux while a
-// layout is still moving — a window drag delivers one size per frame.
-const ResizeDebounce = 500 * time.Millisecond
+// DefaultResizeDebounce is the shared interval when a host does not pass one.
+// Workspace's plugins.workspace.resizeDebounceMs default matches this.
+const DefaultResizeDebounce = 300 * time.Millisecond
 
 // ResizeWait is how long a host must hold off asserting geometry, given when it
-// last did. Zero means assert now. Every surface that resizes a pane asks here:
-// a second literal budget beside this one is how two surfaces come to answer the
-// same layout change at different rates.
+// last did, using DefaultResizeDebounce. Zero means assert now. Every surface
+// that resizes a pane asks here: a second literal budget beside this one is how
+// two surfaces come to answer the same layout change at different rates.
 //
 // Waiting is not dropping. A caller that gets a positive wait still owes the
 // pane the newest geometry and must schedule exactly one deferred assertion for
@@ -1138,13 +1162,47 @@ const ResizeDebounce = 500 * time.Millisecond
 // chain of resizes spaced a debounce apart, which is what the budget exists to
 // prevent.
 func ResizeWait(last, now time.Time) time.Duration {
-	if last.IsZero() {
+	return ResizeWaitFor(last, now, DefaultResizeDebounce)
+}
+
+// ResizeWaitFor is ResizeWait with a caller-supplied interval. A debounce of
+// 0 or less means assert now — that is the escape hatch, not "unset".
+func ResizeWaitFor(last, now time.Time, debounce time.Duration) time.Duration {
+	if debounce <= 0 || last.IsZero() {
 		return 0
 	}
-	if wait := ResizeDebounce - now.Sub(last); wait > 0 {
+	if wait := debounce - now.Sub(last); wait > 0 {
 		return wait
 	}
 	return 0
+}
+
+// SetResizeDebounce gives this model the host's interval so assertDimensions
+// is not a second clock beside the workspace poll path. 0 means assert now.
+func (m *Model) SetResizeDebounce(d time.Duration) {
+	m.resizeDebounce = d
+	m.resizeDebounceSet = true
+}
+
+// SetResizeHold is the host's no-SIGWINCH-until-drop flag. Last geometry stays
+// owed; assertDimensions does not ResizeTmuxPane while hold is set unless the
+// configured debounce is 0.
+func (m *Model) SetResizeHold(hold bool) {
+	m.resizeHold = hold
+}
+
+// CancelDeferredResize drops an armed retry and invalidates any in-flight
+// deferredResizeMsg. A leftover tick after this is a no-op.
+func (m *Model) CancelDeferredResize() {
+	m.resizeRetryPending = false
+	m.resizeRetryGeneration++
+}
+
+func (m *Model) configuredResizeDebounce() time.Duration {
+	if !m.resizeDebounceSet {
+		return DefaultResizeDebounce
+	}
+	return m.resizeDebounce
 }
 
 // now reads the model's clock.
@@ -1196,7 +1254,13 @@ func (m *Model) assertDimensions() tea.Cmd {
 		return nil
 	}
 
-	if wait := ResizeWait(m.State.LastResizeAt, m.now()); wait > 0 {
+	if m.resizeHold && m.configuredResizeDebounce() != 0 {
+		// Divider drag: keep the owed size, do not SIGWINCH. Drop flushes.
+		m.resizeOwed = true
+		return nil
+	}
+
+	if wait := ResizeWaitFor(m.State.LastResizeAt, m.now(), m.configuredResizeDebounce()); wait > 0 {
 		// One retry stands for the whole burst: it reads the geometry the model
 		// holds when it fires, which is the newest by then. Arming a second would
 		// chain a resize per size the window passed through.
@@ -1204,12 +1268,15 @@ func (m *Model) assertDimensions() tea.Cmd {
 			return nil
 		}
 		m.resizeRetryPending = true
+		m.resizeOwed = true
+		gen := m.resizeRetryGeneration
 		return tea.Tick(wait, func(time.Time) tea.Msg {
-			return deferredResizeMsg{Scope: scope}
+			return deferredResizeMsg{Scope: scope, Generation: gen}
 		})
 	}
 	// Recorded here, where the resize is actually issued: a deferred call that
 	// consumed the budget would push its own retry out of reach.
+	m.resizeOwed = false
 	m.State.LastResizeAt = m.now()
 	width, height := m.Width, m.Height
 
@@ -1240,12 +1307,15 @@ func (m *Model) assertDimensions() tea.Cmd {
 // Unlike SetDimensions, this bypasses debouncing for use with WindowSizeMsg.
 // The resize and poll are batched so the view updates immediately after resize.
 func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
-	if width == m.Width && height == m.Height {
-		return nil
-	}
-
+	// Cancel first so a leftover deferredResizeMsg cannot fire after this flush,
+	// even when the call is otherwise a no-op.
+	m.CancelDeferredResize()
+	same := width == m.Width && height == m.Height
 	m.Width = width
 	m.Height = height
+	if same && !m.resizeOwed {
+		return nil
+	}
 
 	if !m.IsActive() {
 		return nil
@@ -1271,6 +1341,7 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 
 	// Recorded where the resize is issued, so a debounced assertion arriving
 	// behind this one waits on the resize that actually happened.
+	m.resizeOwed = false
 	m.State.LastResizeAt = m.now()
 
 	// Resize command

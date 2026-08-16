@@ -3,17 +3,14 @@ package overview
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -724,16 +721,9 @@ func (m *Model) closePreviewPane(kind panelayout.Kind) tea.Cmd {
 	}
 }
 
-func renderPreviewPaneDivider(divider panelayout.Divider, focused bool) string {
-	style := lipgloss.NewStyle().Foreground(styles.BorderNormal)
-	if focused {
-		style = lipgloss.NewStyle().Foreground(styles.BorderActive)
-	}
+func renderPreviewPaneDivider(divider panelayout.Divider, state ui.HandleState) string {
 	if divider.Axis == panelayout.Rows {
-		return style.Render(strings.Repeat("─", max(divider.Box.W, 0)))
+		return ui.RenderHandle(max(divider.Box.W, 0), false, state)
 	}
-	if divider.Box.H <= 0 {
-		return ""
-	}
-	return style.Render(strings.TrimSuffix(strings.Repeat("│\n", divider.Box.H), "\n"))
+	return ui.RenderHandle(max(divider.Box.H, 0), true, state)
 }

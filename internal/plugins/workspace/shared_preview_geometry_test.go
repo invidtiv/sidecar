@@ -3,7 +3,6 @@ package workspace
 import (
 	"testing"
 
-	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/termpreview"
 )
 
@@ -40,10 +39,7 @@ func paneTrees(t *testing.T) map[string]*PaneNode {
 }
 
 func previewFloors() Floors {
-	return Floors{
-		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
-		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
-	}
+	return paneTreeFloors()
 }
 
 func TestSharedTerminalPresentationAgreesWithLayoutPanes(t *testing.T) {
@@ -59,26 +55,26 @@ func TestSharedTerminalPresentationAgreesWithLayoutPanes(t *testing.T) {
 					p.paneRoot = tree
 					p.paneFocus = 1
 
-					content, ok := p.previewContentBox()
+					peer, ok := p.previewPeerBox()
 					if !ok {
-						t.Fatalf("no preview content box at %dx%d", size.width, size.height)
+						t.Fatalf("no preview peer box at %dx%d", size.width, size.height)
 					}
-					leaves, _, fits := LayoutPanes(p.paneRoot, content, previewFloors())
+					leaves, _, fits := LayoutPanes(p.paneRoot, peer, previewFloors())
 					if !fits {
 						t.Skip("tree does not fit this viewport; floors are panetree_test.go's subject")
 					}
 					var placed Box
 					for _, placement := range leaves {
 						if placement.Node != nil && placement.Node.Kind == PaneTerminal {
-							placed = placement.Box
+							placed = insetPanelChrome(placement.Box)
 						}
 					}
 
-					// 1. The seam every sizer reads returns exactly what LayoutPanes
-					// placed. Nothing beneath it recomputes the box.
+					// 1. The seam every sizer reads returns the INNER of what
+					// LayoutPanes placed. Nothing beneath it recomputes the box.
 					leaf, ok := p.terminalLeafBox()
 					if !ok || leaf != placed {
-						t.Fatalf("terminalLeafBox() = %+v ok=%v, LayoutPanes placed %+v", leaf, ok, placed)
+						t.Fatalf("terminalLeafBox() = %+v ok=%v, LayoutPanes inner %+v", leaf, ok, placed)
 					}
 
 					// 2. The shared layer's surface is that box minus its header row,
@@ -95,9 +91,16 @@ func TestSharedTerminalPresentationAgreesWithLayoutPanes(t *testing.T) {
 					// 3. The size tmux is asked for is the same viewport, so a pane is
 					// never laid out against a box the tree did not give it.
 					previewW, previewH := p.calculatePreviewDimensions()
-					if previewW != shared.Width || previewH != shared.Height {
-						t.Fatalf("calculatePreviewDimensions = %dx%d, shared viewport = %dx%d",
-							previewW, previewH, shared.Width, shared.Height)
+					wantW, wantH := shared.Width, shared.Height
+					if wantW < 20 {
+						wantW = 20
+					}
+					if wantH < 5 {
+						wantH = 5
+					}
+					if previewW != wantW || previewH != wantH {
+						t.Fatalf("calculatePreviewDimensions = %dx%d, shared viewport = %dx%d (floored %dx%d)",
+							previewW, previewH, shared.Width, shared.Height, wantW, wantH)
 					}
 				})
 			}

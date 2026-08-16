@@ -224,6 +224,20 @@ func (p *Plugin) isModalViewMode() bool {
 	}
 }
 
+// isDiffBodyRegion reports the Diff inner hits that cover the leaf body and
+// therefore skip the regionPaneLeaf click arm. Tab chips are not included —
+// they already go through selectDiffTab.
+func isDiffBodyRegion(regionID string) bool {
+	switch regionID {
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
+		regionCommitFileBack, regionCommitFileItem, regionCommitFileDiffPane,
+		regionDiffTabPreviewFile, regionDiffTabFileListPane, regionDiffTabDivider:
+		return true
+	default:
+		return false
+	}
+}
+
 // isBackgroundRegion returns true for regions registered by renderListView()
 // that should not respond to mouse events when a modal is open.
 func isBackgroundRegion(regionID string) bool {
@@ -328,6 +342,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		// in flight belongs to a gesture that is over, and neither activation nor a
 		// forwarded click survives a release the app never saw.
 		p.pointer.Abandon()
+		p.syncTerminalResizeHold()
 		if p.terminalPointerIntent(mouse.ActionHover, "", dragSourceBefore, true) == tty.PointerAbandon &&
 			p.selection.Anchor.Valid() {
 			// A release outside the window never reaches Bubble Tea. Close the local
@@ -336,25 +351,29 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 
+	var cmd tea.Cmd
 	switch action.Type {
 	case mouse.ActionClick:
-		return p.handleMouseClick(action)
+		cmd = p.handleMouseClick(action)
 	case mouse.ActionDoubleClick:
-		return p.handleMouseDoubleClick(action)
+		cmd = p.handleMouseDoubleClick(action)
 	case mouse.ActionTripleClick:
-		return p.handleMouseTripleClick(action)
+		cmd = p.handleMouseTripleClick(action)
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		return p.handleMouseScroll(action)
+		cmd = p.handleMouseScroll(action)
 	case mouse.ActionScrollLeft, mouse.ActionScrollRight:
-		return p.handleMouseHorizontalScroll(action)
+		cmd = p.handleMouseHorizontalScroll(action)
 	case mouse.ActionDrag:
-		return p.handleMouseDrag(action)
+		cmd = p.handleMouseDrag(action)
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd(action)
+		cmd = p.handleMouseDragEnd(action)
 	case mouse.ActionHover:
-		return p.handleMouseHover(action)
+		cmd = p.handleMouseHover(action)
 	}
-	return nil
+	// After click-to-start and after EndDrag, so reconcile in this Update
+	// sees the same hold the drop flush already applied.
+	p.syncTerminalResizeHold()
+	return cmd
 }
 
 func (p *Plugin) handleTaskLinkModalMouse(msg tea.MouseMsg) tea.Cmd {
@@ -727,6 +746,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
 		p.hoverPaneClose = 0
+		p.hoverDividerRegion = ""
+		p.hoverDividerID = 0
 		if action.Region != nil {
 			switch action.Region.ID {
 			case regionKanbanCard:
@@ -741,6 +762,15 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
+			case regionPaneDivider, regionTermPanelDivider, regionDiffTabDivider:
+				p.hoverDividerRegion = action.Region.ID
+				p.clearIssueHover()
+			case regionPaneTreeDivider:
+				p.hoverDividerRegion = action.Region.ID
+				if id, ok := action.Region.Data.(int); ok {
+					p.hoverDividerID = id
+				}
+				p.clearIssueHover()
 			case regionPaneClose:
 				if leafID, ok := action.Region.Data.(int); ok {
 					p.hoverPaneClose = leafID
@@ -823,6 +853,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	}
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
+	}
+
+	// Inner Diff regions win the hit test over regionPaneLeaf, so they must
+	// take pane-tree focus themselves or keys stay on the previous leaf.
+	if isDiffBodyRegion(action.Region.ID) {
+		p.focusActiveDiffLeaf()
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -1650,16 +1686,16 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionPaneTreeDivider:
 		split := FindPane(p.paneRoot, p.paneDragSplitID)
-		content, ok := p.previewContentBox()
+		peer, ok := p.previewPeerBox()
 		if split == nil || split.Split == nil || !ok {
 			return nil
 		}
 		startValue := p.mouseHandler.DragStartValue()
 		newRatio := startValue
-		if split.Split.Axis == SplitRows && content.H > 0 {
-			newRatio += action.DragDY * 100 / content.H
-		} else if split.Split.Axis == SplitCols && content.W > 0 {
-			newRatio += action.DragDX * 100 / content.W
+		if split.Split.Axis == SplitRows && peer.H > 0 {
+			newRatio += action.DragDY * 100 / peer.H
+		} else if split.Split.Axis == SplitCols && peer.W > 0 {
+			newRatio += action.DragDX * 100 / peer.W
 		}
 		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
 	case regionPreviewPane, regionTermPanelContent:
@@ -1702,6 +1738,15 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	dragSource := action.DragStartID
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
+	}
+	if isDividerDragRegion(dragSource) {
+		// Immediate resize on drop. Hold is released first so the flush is not
+		// itself gated, then model and workspace retries are cancelled so a
+		// leftover tick cannot fire a second SIGWINCH.
+		p.setTerminalResizeHold(false)
+		p.cancelDeferredPaneResize()
+		p.resizeFlushImmediate = true
+		defer func() { p.resizeFlushImmediate = false }()
 	}
 	if p.terminalPointerIntent(mouse.ActionDragEnd, "", dragSource, false) == tty.PointerFinish &&
 		(p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {

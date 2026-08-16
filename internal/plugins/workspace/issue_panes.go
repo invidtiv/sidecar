@@ -90,7 +90,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 		return tea.Batch(reopen, load)
 	}
 
-	content, placed := p.previewContentBox()
+	peer, placed := p.previewPeerBox()
 	if !placed {
 		return reopen
 	}
@@ -100,7 +100,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if trialFocus != id {
 		return reopen
 	}
-	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Issue", plan.Axis)
 		p.toastTime = time.Now()
 		return reopen
@@ -343,7 +343,8 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 		if region.ID != regionPaneLeaf {
 			continue
 		}
-		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
+		header := insetPanelChrome(region.Rect)
+		if x >= header.X && x < header.X+header.W && y == header.Y {
 			inIssueHeader = true
 			break
 		}
@@ -629,7 +630,9 @@ func (p *Plugin) issueLeafAt(data any) (*issuePane, *PaneNode) {
 }
 
 func issueViewLocal(actionX, actionY int, box Box) (int, int) {
-	return actionX - box.X, actionY - box.Y - terminalHeaderRows
+	// regionPaneLeaf is the OUTER panel; the viewer lives in the inner box.
+	inner := insetPanelChrome(box)
+	return actionX - inner.X, actionY - inner.Y - terminalHeaderRows
 }
 
 func (p *Plugin) yankFocusedIssue(idOnly bool) tea.Cmd {

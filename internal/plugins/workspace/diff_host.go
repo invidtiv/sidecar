@@ -174,6 +174,7 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 			return p.truncateCache.Truncate(s, w, suffix)
 		},
 		PaintFile: p.paintFileFor(&p.diff),
+		Handle:    p.dividerHandleState(regionDiffTabDivider, 0),
 	})
 }
 

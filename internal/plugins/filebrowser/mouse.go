@@ -309,6 +309,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		p.clearDragState()
 	}
 
+	p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
+
 	// Only track hover for file operation modal buttons
 	if p.fileOpMode == FileOpNone {
 		p.fileOpButtonHover = 0

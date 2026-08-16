@@ -340,8 +340,8 @@ func TestExactlyOneHeaderRowAboveEveryTerminal(t *testing.T) {
 			case "divider":
 				// The bottom child's header sits directly on the split rule; a
 				// second row of chrome would show up as a blank line here.
-				if !strings.Contains(above, "─") {
-					t.Fatalf("row above the header = %q, want the split divider", above)
+				if !strings.Contains(above, "━") {
+					t.Fatalf("row above the header = %q, want the split handle", above)
 				}
 			}
 		})

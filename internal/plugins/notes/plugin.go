@@ -106,6 +106,7 @@ type Plugin struct {
 
 	// Mouse state
 	mouseHandler *mouse.Handler
+	hoverDivider bool
 	selection    ui.SelectionState
 
 	// Task modal state

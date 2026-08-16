@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/docview"
-	"github.com/marcus/sidecar/internal/mouse"
 )
 
 // nestedDocPaneTree builds terminal | (doc / doc): the shallowest tree the
@@ -56,16 +55,24 @@ func TestNestedPaneTreeFillsItsBoxAndNamesEveryLeaf(t *testing.T) {
 		t.Fatalf("nested tree did not draw both document leaves: %q", stripped)
 	}
 
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	if !fits || len(leaves) != 3 || len(dividers) != 2 {
 		t.Fatalf("layout = %d leaves %d dividers fits=%v, want 3/2", len(leaves), len(dividers), fits)
 	}
-	// Each divider row must carry the divider's own rune at the divider's own
-	// column: a block drawn short or long is what walks a nested divider sideways.
+	// Each divider must carry the 1-cell gap at an interior handle cell; the
+	// shared renderer deliberately leaves both endpoints blank.
 	for _, split := range dividers {
-		row := []rune(ansi.Strip(lines[split.Box.Y]))
-		if got := string(row[split.Box.X]); got != "│" && got != "─" {
-			t.Fatalf("divider %d at (%d,%d) drew %q", split.SplitID, split.Box.X, split.Box.Y, got)
+		x, y := split.Box.X, split.Box.Y
+		want := "┃"
+		if split.Axis == SplitRows {
+			want = "━"
+			x++
+		} else {
+			y++
+		}
+		row := []rune(ansi.Strip(lines[y]))
+		if got := string(row[x]); got != want {
+			t.Fatalf("divider %d at (%d,%d) drew %q, want handle %q", split.SplitID, x, y, got, want)
 		}
 	}
 }
@@ -80,11 +87,7 @@ func TestNestedPaneTreeInnermostDividerWinsContestedCell(t *testing.T) {
 	if _, ok := p.renderDocumentSplit(width, height); !ok {
 		t.Fatal("nested pane tree was not rendered")
 	}
-	absolute, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
-	_, dividers, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	_, dividers, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	outer, inner := dividers[0], dividers[1]
 	if outer.SplitID != p.paneRoot.ID || inner.SplitID != p.paneRoot.Split.B.ID {
 		t.Fatalf("dividers = %d then %d, want root %d then nested %d",
@@ -92,8 +95,8 @@ func TestNestedPaneTreeInnermostDividerWinsContestedCell(t *testing.T) {
 	}
 	// The nested divider's first column sits inside the outer divider's
 	// three-cell hit target, so both dividers claim this point.
-	x, y := absolute.X+inner.Box.X, absolute.Y+inner.Box.Y
-	if x > absolute.X+outer.Box.X+dividerHitWidth-2 {
+	x, y := inner.Box.X, inner.Box.Y
+	if x > outer.Box.X+dividerHitWidth-2 {
 		t.Fatalf("dividers do not contest a cell: outer x=%d inner x=%d", outer.Box.X, inner.Box.X)
 	}
 	hit := p.mouseHandler.HitMap.Test(x, y)
@@ -102,7 +105,7 @@ func TestNestedPaneTreeInnermostDividerWinsContestedCell(t *testing.T) {
 	}
 
 	// The outer divider still owns the rows the nested one does not reach.
-	hit = p.mouseHandler.HitMap.Test(absolute.X+outer.Box.X, absolute.Y+outer.Box.Y)
+	hit = p.mouseHandler.HitMap.Test(outer.Box.X, outer.Box.Y)
 	if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != outer.SplitID {
 		t.Fatalf("outer divider row resolves to %#v, want root split %d", hit, outer.SplitID)
 	}
@@ -118,16 +121,12 @@ func TestNestedPaneTreeGivesEveryDocumentLeafItsOwnRegion(t *testing.T) {
 	if _, ok := p.renderDocumentSplit(width, height); !ok {
 		t.Fatal("nested pane tree was not rendered")
 	}
-	absolute, _ := p.previewContentBox()
-	leaves, _, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, _, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	for _, placement := range leaves {
 		if placement.Node.Kind != PaneDoc {
 			continue
 		}
-		want := mouse.Rect{
-			X: absolute.X + placement.Box.X, Y: absolute.Y + placement.Box.Y,
-			W: placement.Box.W, H: placement.Box.H,
-		}
+		want := placement.Box
 		var found bool
 		for _, region := range p.mouseHandler.HitMap.Regions() {
 			if region.ID == regionPaneLeaf && region.Data == placement.Node.ID {

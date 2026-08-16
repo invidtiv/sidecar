@@ -21,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/startuptrace"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const maxRefreshConcurrency = 4
@@ -623,7 +624,6 @@ const sidecarAgentStartFile = ".sidecar-agent-start"
 const sidecarPRFile = "pr"
 const sidecarPRIdentityFile = "pr.json"
 const sidecarBaseFile = "base"
-const sidecarDisplayNameFile = "display-name"
 
 const maxWorktreeSlugRunes = 63
 
@@ -667,19 +667,8 @@ func saveDisplayName(projectRoot, worktreePath, name string) error {
 }
 
 func saveDisplayNameContext(ctx context.Context, projectRoot, worktreePath, name string) error {
-	wtDir, err := projectdir.WorktreeDirContext(ctx, projectRoot, worktreePath)
-	if err != nil {
-		return fmt.Errorf("resolve worktree dir: %w", err)
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	displayPath := filepath.Join(wtDir, sidecarDisplayNameFile)
-	if name == "" {
-		_ = os.Remove(displayPath)
-		return nil
-	}
-	return os.WriteFile(displayPath, []byte(name+"\n"), 0644)
+	_, err := workspaceops.RenameWorktreeDisplayName(ctx, config.StateDir(), projectRoot, worktreePath, name)
+	return err
 }
 
 func loadDisplayName(projectRoot, worktreePath string) string {
@@ -690,15 +679,11 @@ func loadDisplayNameContext(ctx context.Context, projectRoot, worktreePath strin
 	if err := ctx.Err(); err != nil {
 		return ""
 	}
-	wtDir, ok := projectdir.LookupWorktree(projectRoot, worktreePath)
-	if !ok {
-		return ""
-	}
-	content, err := os.ReadFile(filepath.Join(wtDir, sidecarDisplayNameFile))
+	name, err := workspaceops.LookupWorktreeDisplayName(config.StateDir(), projectRoot, worktreePath)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(content))
+	return name
 }
 
 // loadTaskLink reads the linked task ID from the centralized worktree data directory.

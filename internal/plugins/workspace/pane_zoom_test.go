@@ -73,29 +73,30 @@ func TestZoomedLeafOwnsBothTheBoxAndThePixels(t *testing.T) {
 		t.Fatal("document pane was not opened")
 	}
 	p.width = 40
-	content, ok := p.previewContentBox()
+	peer, ok := p.previewPeerBox()
 	if !ok {
-		t.Fatal("narrow preview has no content box")
+		t.Fatal("narrow preview has no peer box")
 	}
-	if _, _, fits := LayoutPanes(p.paneRoot, content, paneTreeFloors()); fits {
-		t.Fatalf("preview content box %+v still fits the tree", content)
+	if _, _, fits := LayoutPanes(p.paneRoot, peer, paneTreeFloors()); fits {
+		t.Fatalf("preview peer box %+v still fits the tree", peer)
 	}
 
 	p.paneFocus = docLeaf.ID
 	if box, ok := p.terminalLeafBox(); ok {
 		t.Fatalf("doc-focused zoom gave the terminal box %+v, want none", box)
 	}
-	rendered, ok := p.renderDocumentSplit(content.W, content.H)
+	rendered, ok := p.renderDocumentSplit(peer.W, peer.H)
 	if !ok || !strings.Contains(rendered, doc.view().Title()) {
 		t.Fatalf("doc-focused zoom rendered ok=%v, want the document full-box", ok)
 	}
 
 	p.paneFocus = terminalLeafID(p.paneRoot)
 	box, ok := p.terminalLeafBox()
-	if !ok || box != content {
-		t.Fatalf("terminal-focused zoom box = %+v ok=%v, want the preview content box %+v", box, ok, content)
+	inner := insetPanelChrome(peer)
+	if !ok || box != inner {
+		t.Fatalf("terminal-focused zoom box = %+v ok=%v, want the peer inner %+v", box, ok, inner)
 	}
-	if _, ok := p.renderDocumentSplit(content.W, content.H); ok {
+	if _, ok := p.renderDocumentSplit(peer.W, peer.H); ok {
 		t.Fatal("terminal-focused zoom rendered the document split instead of the legacy terminal")
 	}
 }

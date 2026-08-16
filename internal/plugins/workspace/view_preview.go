@@ -22,7 +22,16 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 	if content, ok := p.renderDocumentSplit(width, height); ok {
 		return content
 	}
-	return p.renderPreviewContentLegacy(width, height)
+	if !p.docVisible() {
+		return p.renderPreviewContentLegacy(width, height)
+	}
+	// Zoomed terminal: the split renderer yields to the legacy terminal, but
+	// the caller already passed the OUTER peer size. Wrap once here so the
+	// lone leaf still has a complete perimeter.
+	innerW := width - panelOverhead
+	innerH := height - panelBorderWidth
+	body := p.renderPreviewContentLegacy(innerW, innerH)
+	return p.wrapLeafChrome(&PaneNode{ID: terminalLeafID(p.paneRoot), Kind: PaneTerminal}, body, Box{W: width, H: height})
 }
 
 func (p *Plugin) renderPreviewContentLegacy(width, height int) string {

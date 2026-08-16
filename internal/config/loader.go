@@ -108,6 +108,7 @@ type rawWorkspaceConfig struct {
 	Agents                []string                 `json:"agents"`
 	AgentStart            json.RawMessage          `json:"agentStart"`
 	TmuxCaptureMaxBytes   *int                     `json:"tmuxCaptureMaxBytes"`
+	ResizeDebounceMs      *int                     `json:"resizeDebounceMs"`
 	AutoCreateShell       *bool                    `json:"autoCreateShell"`
 	InteractiveExitKey    string                   `json:"interactiveExitKey"`
 	InteractiveAttachKey  string                   `json:"interactiveAttachKey"`
@@ -298,6 +299,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Plugins.Workspace.TmuxCaptureMaxBytes != nil {
 		cfg.Plugins.Workspace.TmuxCaptureMaxBytes = *raw.Plugins.Workspace.TmuxCaptureMaxBytes
+	}
+	if raw.Plugins.Workspace.ResizeDebounceMs != nil {
+		cfg.Plugins.Workspace.ResizeDebounceMs = *raw.Plugins.Workspace.ResizeDebounceMs
 	}
 	if raw.Plugins.Workspace.AutoCreateShell != nil {
 		cfg.Plugins.Workspace.AutoCreateShell = *raw.Plugins.Workspace.AutoCreateShell

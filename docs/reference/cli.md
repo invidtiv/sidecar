@@ -113,9 +113,9 @@ sidecar open --project sidecar README.md
 
 ## `sidecar shell`
 
-Manage the current Sidecar project shell
+Manage the current Sidecar shell context
 
-Manage the current Sidecar project shell.
+Manage the current Sidecar-managed shell or worktree agent context.
 
 ```
 Usage: sidecar shell <command>
@@ -125,9 +125,9 @@ Usage: sidecar shell <command>
 
 Print the current shell's display name
 
-Print the Sidecar display name of the project shell containing this command.
-Reads the registered manifest (authoritative), not $SIDECAR_SHELL_NAME, so it
-works for shells created before that environment cue existed.
+Print the Sidecar display name of the managed shell or worktree agent containing
+this command. Reads registered Sidecar state (authoritative), not the agent SDK
+or $SIDECAR_SHELL_NAME, so reopening another agent in place keeps its context.
 
 Human output is the display name alone, one line, for easy scripting.
 JSON includes the stable tmux session id and display name.
@@ -158,8 +158,9 @@ sidecar shell name --json
 
 Rename the current shell's display name
 
-Rename only the Sidecar project shell containing this command. This changes
-Sidecar's display name; it does not rename the tmux session.
+Rename only the Sidecar-managed shell or worktree agent containing this command.
+This changes Sidecar's display name; it does not rename the tmux session, Git
+branch, or worktree directory.
 
 The current display name is also published as $SIDECAR_SHELL_NAME. "Shell 3"
 is the unset default; a previous task's name is equally stale — rename when

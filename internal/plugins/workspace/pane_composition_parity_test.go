@@ -26,13 +26,13 @@ func (p *Plugin) twoLeafJoinComposition(width, height int, leaves []Placement, d
 		}
 	}
 	if dividers[0].Axis == SplitRows {
-		divider := renderPaneTreeDividerH(width, p.docFocused())
+		divider := ui.RenderHandle(width, false, ui.HandleIdle)
 		if leaves[0].Node.Kind == PaneTerminal {
 			return lipgloss.JoinVertical(lipgloss.Left, terminal, divider, document)
 		}
 		return lipgloss.JoinVertical(lipgloss.Left, document, divider, terminal)
 	}
-	divider := renderPaneTreeDividerV(height, p.docFocused())
+	divider := ui.RenderHandle(height, true, ui.HandleIdle)
 	if leaves[0].Node.Kind == PaneTerminal {
 		return lipgloss.JoinHorizontal(lipgloss.Top, terminal, divider, document)
 	}
@@ -106,7 +106,7 @@ func TestTwoLeafPaneCompositionMatchesTheJoinsItReplaced(t *testing.T) {
 							if !fits || len(leaves) != 2 || len(dividers) != 1 {
 								continue
 							}
-							origin, _ := p.previewContentBox()
+							origin := Box{}
 							measured++
 							where := fmt.Sprintf("%dx%d axis=%v terminalFirst=%v focusDoc=%v",
 								width, height, axis, terminalFirst, focusDoc)

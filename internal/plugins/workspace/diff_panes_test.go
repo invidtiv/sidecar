@@ -9,8 +9,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -41,6 +43,114 @@ func TestDOpensDiffLeafBesideTheTerminal(t *testing.T) {
 	}
 	if view := diff.view(); view == nil || view.Target.Identity() != workspacediff.IdentityWorkingTree {
 		t.Fatalf("active target = %#v, want wt", view)
+	}
+}
+
+// Clicking a Diff body region (file list, hunks, inner divider) must take
+// pane-tree focus the same way Tab / a tab-chip click does. Those inner hits
+// win over regionPaneLeaf, so without an explicit focusLeaf call the previous
+// leaf keeps the keyboard and q opens quit instead of closing the Diff.
+func TestDiffBodyClickFocusesTheDiffLeaf(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, false)
+	if cmd := p.showDiffCmd(); cmd == nil {
+		t.Fatal("show-diff opened nothing")
+	}
+	_, leaf := p.activeDiffPane()
+	if leaf == nil || leaf.Kind != PaneDiff {
+		t.Fatal("no Diff leaf")
+	}
+	view := p.activeDiffView()
+	if view == nil {
+		t.Fatal("no Diff view")
+	}
+
+	termID := terminalLeafID(p.paneRoot)
+	p.focusLeaf(termID)
+	if p.paneFocus != termID {
+		t.Fatalf("premise: paneFocus = %d, want terminal %d", p.paneFocus, termID)
+	}
+
+	// A body click from a live terminal abandons the armed click and leaves
+	// interactive mode, matching selectDiffTab.
+	p.pointer.Arm(tty.ClickForward, 4, 4)
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, TargetPane: "%902", TargetSession: "diff-click"}
+	t.Cleanup(p.stopTerminalModels)
+	view.Focus = DiffTabFocusDiff
+
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionDiffTabFile, Data: 0},
+	})
+	if p.paneFocus != leaf.ID {
+		t.Fatalf("file-row click paneFocus = %d, want Diff leaf %d", p.paneFocus, leaf.ID)
+	}
+	if p.activePane != PanePreview {
+		t.Fatalf("file-row click activePane = %v, want preview", p.activePane)
+	}
+	if p.termPanelFocused {
+		t.Fatal("file-row click left the terminal panel focused")
+	}
+	if view.Focus != DiffTabFocusFileList {
+		t.Fatalf("file-row click inner focus = %v, want file list", view.Focus)
+	}
+	if p.viewMode != ViewModeList {
+		t.Fatalf("file-row click left viewMode = %v, want list", p.viewMode)
+	}
+	if p.pointer.Resolution != tty.ClickNone {
+		t.Fatalf("file-row click left pointer resolution %v", p.pointer.Resolution)
+	}
+
+	p.focusLeaf(termID)
+	view.Focus = DiffTabFocusFileList
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionDiffTabDiffPane},
+	})
+	if p.paneFocus != leaf.ID {
+		t.Fatalf("hunk-pane click paneFocus = %d, want Diff leaf %d", p.paneFocus, leaf.ID)
+	}
+	if p.activePane != PanePreview {
+		t.Fatalf("hunk-pane click activePane = %v, want preview", p.activePane)
+	}
+	if p.termPanelFocused {
+		t.Fatal("hunk-pane click left the terminal panel focused")
+	}
+	if view.Focus != DiffTabFocusDiff {
+		t.Fatalf("hunk-pane click inner focus = %v, want hunks", view.Focus)
+	}
+
+	p.focusLeaf(termID)
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionDiffTabDivider},
+	})
+	if p.paneFocus != leaf.ID {
+		t.Fatalf("divider click paneFocus = %d, want Diff leaf %d", p.paneFocus, leaf.ID)
+	}
+
+	p.focusLeaf(termID)
+	beforeFocus := p.paneFocus
+	p.handleMouseScroll(mouse.MouseAction{
+		Type:   mouse.ActionScrollDown,
+		Delta:  1,
+		Region: &mouse.Region{ID: regionDiffTabFile, Data: 0},
+	})
+	if p.paneFocus != beforeFocus {
+		t.Fatalf("wheel moved paneFocus from %d to %d", beforeFocus, p.paneFocus)
+	}
+
+	p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionDiffTabDiffPane},
+	})
+	handled, cmd := p.handleDiffKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if !handled || cmd == nil {
+		t.Fatalf("q after body click: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if still, _ := p.activeDiffPane(); still != nil || p.paneRoot.Split != nil {
+		t.Fatalf("q after body click left the Diff open: root=%#v", p.paneRoot)
 	}
 }
 

@@ -295,6 +295,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		body = view.Render(box.W, contentHeight, workspacediff.RenderOpts{
 			Truncate: func(s string, w int, _ string) string { return termpreview.TruncateANSI(s, w) },
+			Handle:   m.dividerHandleState(previewDiffDividerKind, 0),
 		})
 	}
 	return header + "\n" + body

@@ -270,6 +270,15 @@ type Plugin struct {
 	// Agent state
 	attachedSession     string // Name of worktree we're attached to (pauses polling)
 	tmuxCaptureMaxBytes int    // Cap for tmux capture output (bytes)
+	// resizeDebounceDur is plugins.workspace.resizeDebounceMs. A nil pointer
+	// means tty.DefaultResizeDebounce; a set 0 is the per-event escape hatch.
+	resizeDebounceDur *time.Duration
+	// resizeGeneration invalidates leftover deferredPaneResizeMsg ticks after
+	// a divider drop so they cannot fire a second SIGWINCH.
+	resizeGeneration uint64
+	// resizeFlushImmediate is set only while constructing divider-drop resize
+	// cmds so owned tty.Models flush via ResizeAndPollImmediate.
+	resizeFlushImmediate bool
 
 	// Timer leak prevention (td-83dc22): generation counters to invalidate stale timers.
 	// When a timer fires, it checks if its captured generation matches the current one.
@@ -463,6 +472,10 @@ type Plugin struct {
 	hoverWorkspacesPlusButton bool
 	// hoverPaneClose is the content leaf whose header X is under the pointer.
 	hoverPaneClose int
+	// hoverDividerRegion / hoverDividerID are the resizable split under the
+	// pointer (tree splits also carry the split id).
+	hoverDividerRegion string
+	hoverDividerID     int
 
 	// Multiple shell sessions (not tied to git worktrees)
 	shells           []*ShellSession // Current workDir shells (top Shells section)
@@ -709,6 +722,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
 	}
+	if ctx.Config != nil {
+		p.setResizeDebounce(time.Duration(ctx.Config.Plugins.Workspace.ResizeDebounceMs) * time.Millisecond)
+	}
+	p.applyResizeDebounceToTerminals()
 
 	// Reset terminal panel state for reinit (sessions are preserved in tmux)
 	p.cleanupTermPanelSession()

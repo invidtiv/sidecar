@@ -13,6 +13,8 @@ import (
 
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // Run dispatches a non-interactive command. handled=false leaves legacy TUI
@@ -81,10 +83,7 @@ func runShellName(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result, err := shellstate.LookupCurrent(env.StateDir, shellstate.Identity{
-		TmuxName:  identity.session,
-		Namespace: identity.socket,
-	})
+	result, err := lookupCurrentShellName(ctx, env.StateDir, identity)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
@@ -142,7 +141,7 @@ func runShellRename(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 1
 	}
-	result, err := shellstate.RenameCurrent(env.StateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+	result, err := renameCurrentShell(ctx, env.StateDir, identity, name)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		if shellstate.IsValidation(err) {
@@ -181,7 +180,7 @@ func cliErrln(w io.Writer, a ...any) {
 	_, _ = fmt.Fprintln(w, a...)
 }
 
-type shellIdentity struct{ session, socket string }
+type shellIdentity struct{ session, socket, path string }
 
 func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
 	if os.Getenv("TMUX") == "" {
@@ -191,22 +190,91 @@ func currentShellIdentity(ctx context.Context) (shellIdentity, error) {
 	if pane == "" {
 		return shellIdentity{}, fmt.Errorf("tmux did not identify the calling pane; run this command directly from a Sidecar project shell")
 	}
-	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", pane, "#{session_name}\t#{socket_path}").Output()
+	out, err := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", pane, "#{session_name}\t#{socket_path}\t#{pane_current_path}").Output()
 	if err != nil {
 		return shellIdentity{}, fmt.Errorf("identify current tmux shell: %w", err)
 	}
 	parts := strings.Split(strings.TrimSpace(string(out)), "\t")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
 		return shellIdentity{}, fmt.Errorf("tmux returned an incomplete current-shell identity")
 	}
-	if !strings.HasPrefix(parts[0], "sidecar-sh-") {
+	if !strings.HasPrefix(parts[0], "sidecar-sh-") && !strings.HasPrefix(parts[0], "sidecar-ws-") {
 		return shellIdentity{}, fmt.Errorf("current tmux session is not a Sidecar project shell")
 	}
 	socket := filepath.Clean(parts[1])
 	if resolved, resolveErr := filepath.EvalSymlinks(socket); resolveErr == nil {
 		socket = filepath.Clean(resolved)
 	}
-	return shellIdentity{session: parts[0], socket: socket}, nil
+	path := ""
+	if len(parts) == 3 {
+		path = filepath.Clean(parts[2])
+	}
+	return shellIdentity{session: parts[0], socket: socket, path: path}, nil
+}
+
+func lookupCurrentShellName(ctx context.Context, stateDir string, identity shellIdentity) (shellstate.LookupResult, error) {
+	if strings.HasPrefix(identity.session, "sidecar-sh-") {
+		return shellstate.LookupCurrent(stateDir, shellstate.Identity{TmuxName: identity.session, Namespace: identity.socket})
+	}
+	projectRoot, worktreeRoot, err := currentManagedWorktree(ctx, stateDir, identity)
+	if err != nil {
+		return shellstate.LookupResult{}, err
+	}
+	name, err := workspaceops.LookupWorktreeDisplayName(stateDir, projectRoot, worktreeRoot)
+	if err != nil {
+		return shellstate.LookupResult{}, err
+	}
+	return shellstate.LookupResult{Shell: identity.session, Name: name}, nil
+}
+
+func renameCurrentShell(ctx context.Context, stateDir string, identity shellIdentity, name string) (shellstate.RenameResult, error) {
+	if strings.HasPrefix(identity.session, "sidecar-sh-") {
+		return shellstate.RenameCurrent(stateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+	}
+	projectRoot, worktreeRoot, err := currentManagedWorktree(ctx, stateDir, identity)
+	if err != nil {
+		return shellstate.RenameResult{}, err
+	}
+	result, err := workspaceops.RenameWorktreeDisplayName(ctx, stateDir, projectRoot, worktreeRoot, name)
+	if err != nil {
+		return shellstate.RenameResult{}, err
+	}
+	if result.Changed {
+		// Persistence is authoritative. The request is a best-effort repaint cue
+		// for already-running Sidecar instances; a restart reads the same value.
+		_, _ = uirequest.WriteRequest(stateDir, uirequest.Request{
+			Action: uirequest.ActionRenameWorktree,
+			Origin: uirequest.Origin{
+				TmuxSession: identity.session,
+				Namespace:   identity.socket,
+				WorkDir:     worktreeRoot,
+				PID:         os.Getpid(),
+			},
+			Target: uirequest.Target{Kind: uirequest.TargetKindWorktree, Value: result.Name},
+		})
+	}
+	return shellstate.RenameResult{Shell: identity.session, OldName: result.OldName, Name: result.Name, Changed: result.Changed}, nil
+}
+
+func currentManagedWorktree(ctx context.Context, stateDir string, identity shellIdentity) (projectRoot, worktreeRoot string, err error) {
+	if identity.path == "" {
+		return "", "", fmt.Errorf("tmux did not identify the managed worktree path")
+	}
+	worktreeRoot = workspaceops.WorktreeRoot(ctx, identity.path)
+	if worktreeRoot == "" {
+		return "", "", fmt.Errorf("current Sidecar worktree session is not inside a Git worktree")
+	}
+	if want := workspaceops.WorktreeSessionName(worktreeRoot, ""); identity.session != want {
+		return "", "", fmt.Errorf("current tmux session does not match its Sidecar worktree identity")
+	}
+	projectRoot = workspaceops.MainWorktreePath(ctx, worktreeRoot)
+	if projectRoot == "" {
+		return "", "", fmt.Errorf("cannot resolve the owning Sidecar project")
+	}
+	if _, lookupErr := workspaceops.LookupWorktreeDisplayName(stateDir, projectRoot, worktreeRoot); lookupErr != nil {
+		return "", "", lookupErr
+	}
+	return projectRoot, worktreeRoot, nil
 }
 
 func isHelp(arg string) bool { return arg == "-h" || arg == "--help" || arg == "help" }

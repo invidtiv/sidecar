@@ -11,16 +11,21 @@ import (
 )
 
 // terminalSelectionGeometry places the terminal surface a pointer gesture is
-// working in. The preview pane's ViewRect is the outer panel, so its content
-// starts inside the border and below the header; the term panel's ViewRect is
-// already the child's content rect, and every surface spends its first content
-// row on its header. An off-screen or empty window yields a geometry that only
-// column mapping can use, so anchoring and dragging refuse it.
+// working in. A multi-leaf terminal sits inside its own chrome — ViewRect is
+// still the whole preview peer — so the live surface is the authority and
+// must not be inset again. A lone terminal's ViewRect is the outer preview
+// panel, and the one inset below lands on its content. An off-screen or empty
+// window yields a geometry that only column mapping can use.
 func (p *Plugin) terminalSelectionGeometry() tty.Geometry {
 	layout, onScreen := p.selectionHitLayout()
 	if !onScreen {
 		layout = p.terminalSelectionViewportLayout()
 		layout.Start, layout.End = 0, 0
+	}
+	if p.docVisible() {
+		if surface := p.terminalSurfaceGeometry(p.effectiveSelectionTermPanel()); surface.OK {
+			return tty.GeometryFor(surface.X, surface.Y, layout, tabStopWidth)
+		}
 	}
 	rect := p.selection.ViewRect
 	left, top := rect.X, rect.Y+terminalHeaderRows

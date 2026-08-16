@@ -285,6 +285,7 @@ func (c *diffContent) View(render Render) string {
 				return s
 			},
 			PaintFile: c.p.paintFileFor(view),
+			Handle:    c.p.dividerHandleState(regionDiffTabDivider, 0),
 		})
 	}
 	return composePaneLeaf(

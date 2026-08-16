@@ -115,49 +115,115 @@ func layoutHeaderChips(chips []string, width, hintFloor int) []headerChipPlaceme
 // box into the header row plus the viewport under it.
 type terminalSurface = termpreview.Surface
 
-// previewContentBox is the preview panel's inner box in plugin-local
-// coordinates. It includes the header row owned by each pane leaf and excludes
-// the preview panel's border and padding. Pane-tree layout starts here so the
-// tree, terminal sizers, renderers, cursor and hit testing share one authority.
-func (p *Plugin) previewContentBox() (Box, bool) {
+// leafGeom is one pane-tree leaf's chrome versus its content. Layout places
+// Outer; tmux, the cursor, and content hits use Inner.
+type leafGeom struct {
+	Outer Box // plugin-local, includes border+padding
+	Inner Box // plugin-local, content / tmux / cursor / content hits
+}
+
+// insetPanelChrome is the content box inside one RenderPanel: two columns of
+// border+padding on each side, one border row on the top and bottom.
+func insetPanelChrome(outer Box) Box {
+	return Box{
+		X: outer.X + previewContentInset,
+		Y: outer.Y + previewBorderRows,
+		W: outer.W - panelOverhead,
+		H: outer.H - panelBorderWidth,
+	}
+}
+
+func leafGeometry(outer Box) leafGeom {
+	return leafGeom{Outer: outer, Inner: insetPanelChrome(outer)}
+}
+
+// previewPeerBox is the outer preview rectangle in plugin-local coordinates —
+// the peer of the sidebar, including the chrome a lone terminal still spends
+// once. Multi-leaf layout starts here so each leaf owns its own 4×2 inset
+// instead of sharing one outer frame.
+func (p *Plugin) previewPeerBox() (Box, bool) {
 	if p.width <= 0 || p.height <= 0 {
 		return Box{}, false
 	}
 	split := p.previewSplit()
 	return Box{
-		X: split.ContentX,
-		Y: p.previewContentY(),
-		W: split.ContentWidth,
-		H: p.height - panelBorderWidth,
+		X: split.PreviewX,
+		Y: 0,
+		W: split.PreviewWidth,
+		H: p.height,
 	}, true
 }
 
-// terminalLeafBox returns the pane-tree box hosting the primary terminal. The
-// box includes its one-row header; the optional terminal panel is nested inside
-// this leaf and therefore does not add pane-tree chrome.
+// previewLayoutBox is the pane-tree canvas for an explicit size. Production
+// passes the live peer's width and height, which makes this previewPeerBox.
+// Tests pass a smaller canvas; the origin is still the peer so placement.Box
+// stays plugin-local OUTER.
+func (p *Plugin) previewLayoutBox(width, height int) Box {
+	if peer, ok := p.previewPeerBox(); ok {
+		return Box{X: peer.X, Y: peer.Y, W: width, H: height}
+	}
+	return Box{W: width, H: height}
+}
+
+// previewContentBox is the 1-leaf inner: inset(previewPeerBox()). A lone
+// terminal still matches today's preview inset. Multi-leaf has no single inner
+// canvas — layout and sizers read previewPeerBox / leafGeometry instead.
+func (p *Plugin) previewContentBox() (Box, bool) {
+	peer, ok := p.previewPeerBox()
+	if !ok {
+		return Box{}, false
+	}
+	return insetPanelChrome(peer), true
+}
+
+// terminalLeafBox returns the terminal leaf's INNER box: header plus viewport,
+// inside that leaf's own chrome. Tmux, the native cursor, and surface hits all
+// read this. The optional terminal panel is nested inside this box and does
+// not add pane-tree chrome.
 //
 // With the feature disabled paneRoot is nil, and the legacy terminal is the
-// preview-content box itself. This keeps the seam load-bearing without changing
-// any rendered bytes in the single-terminal journey.
+// 1-leaf inner itself. This keeps the seam load-bearing without changing any
+// rendered bytes in the single-terminal journey.
 func (p *Plugin) terminalLeafBox() (Box, bool) {
-	content, ok := p.previewContentBox()
-	if !ok || p.paneRoot == nil {
-		return content, ok
+	peer, ok := p.previewPeerBox()
+	if !ok {
+		return Box{}, false
+	}
+	if p.paneRoot == nil {
+		return insetPanelChrome(peer), true
 	}
 
 	// A box too small for the tree is the layout's own answer — the focused leaf
 	// alone in the whole box — so a terminal that is not the zoomed leaf has no
 	// box here, exactly as it has no pixels in the split renderer.
-	layout, ok := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
+	layout, ok := LayoutPaneTree(p.paneRoot, peer, paneTreeFloors(), p.paneFocus)
 	if !ok {
 		return Box{}, false
 	}
 	for _, placement := range layout.Leaves {
 		if placement.Node != nil && placement.Node.Kind == PaneTerminal {
-			return placement.Box, true
+			return insetPanelChrome(placement.Box), true
 		}
 	}
 	return Box{}, false
+}
+
+// leafGeometryFor returns the focused layout's outer/inner pair for one leaf.
+func (p *Plugin) leafGeometryFor(leafID int) (leafGeom, bool) {
+	peer, ok := p.previewPeerBox()
+	if !ok || p.paneRoot == nil {
+		return leafGeom{}, false
+	}
+	layout, laid := LayoutPaneTree(p.paneRoot, peer, paneTreeFloors(), p.paneFocus)
+	if !laid {
+		return leafGeom{}, false
+	}
+	for _, placement := range layout.Leaves {
+		if placement.Node != nil && placement.Node.ID == leafID {
+			return leafGeometry(placement.Box), true
+		}
+	}
+	return leafGeom{}, false
 }
 
 // terminalSurfaceGeometry is the single source of truth for where a terminal

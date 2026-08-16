@@ -142,6 +142,11 @@ type WorkspacePluginConfig struct {
 	AgentStart map[string]string `json:"agentStart,omitempty"`
 	// TmuxCaptureMaxBytes caps tmux pane capture size for the preview pane. Default: 2MB.
 	TmuxCaptureMaxBytes int `json:"tmuxCaptureMaxBytes"`
+	// ResizeDebounceMs is the shared interval for live-pane SIGWINCH during
+	// layout motion (divider drag, interactive correction). Default: 300.
+	// 0 restores per-event paint and poll-driven resize. Negative values
+	// become 300. Unlike TmuxCaptureMaxBytes, 0 is not treated as unset.
+	ResizeDebounceMs int `json:"resizeDebounceMs"`
 	// AutoCreateShell creates a shell session the first time the workspaces tab is
 	// focused in a session, when no shell sessions exist yet. The shell honors
 	// DefaultAgentType; with none set it is a plain shell. Default: false.
@@ -254,6 +259,7 @@ func Default() *Config {
 			Workspace: WorkspacePluginConfig{
 				DirPrefix:             true,
 				TmuxCaptureMaxBytes:   2 * 1024 * 1024,
+				ResizeDebounceMs:      300,
 				OverviewWorktreeScope: OverviewWorktreeScopeProject,
 				WorktreeSetup: WorktreeSetupConfig{
 					CopyEnvFiles: true,
@@ -289,6 +295,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Plugins.Workspace.TmuxCaptureMaxBytes <= 0 {
 		c.Plugins.Workspace.TmuxCaptureMaxBytes = 2 * 1024 * 1024
+	}
+	if c.Plugins.Workspace.ResizeDebounceMs < 0 {
+		c.Plugins.Workspace.ResizeDebounceMs = 300
 	}
 	// An unrecognized (or empty) tasks position falls back to the default
 	// anchor rather than failing the whole config, which is how the rest of

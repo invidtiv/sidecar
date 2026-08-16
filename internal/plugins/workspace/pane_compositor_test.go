@@ -126,20 +126,26 @@ func trimGoldenRows(s string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// assertDividersDrawn requires each divider's own rune in every cell of the box
-// LayoutPanes gave it, on both axes.
+// assertDividersDrawn requires the 1-cell peer gap to hold the shared handle
+// glyph, with vertical handles inset one row from each endpoint.
 func assertDividersDrawn(t *testing.T, rows []string, dividers []Divider) {
 	t.Helper()
 	for _, split := range dividers {
-		want := "│"
+		want := "┃"
 		if split.Axis == SplitRows {
-			want = "─"
+			want = "━"
 		}
 		for y := split.Box.Y; y < split.Box.Y+split.Box.H; y++ {
 			cells := []rune(ansi.Strip(rows[y]))
 			for x := split.Box.X; x < split.Box.X+split.Box.W; x++ {
-				if got := string(cells[x]); got != want {
-					t.Fatalf("split %d drew %q at (%d,%d), want %q", split.SplitID, got, x, y, want)
+				cellWant := want
+				if split.Axis == SplitCols && (y == split.Box.Y || y == split.Box.Y+split.Box.H-1) {
+					cellWant = " "
+				} else if split.Axis == SplitRows && (x == split.Box.X || x == split.Box.X+split.Box.W-1) {
+					cellWant = " "
+				}
+				if got := string(cells[x]); got != cellWant {
+					t.Fatalf("split %d drew %q at (%d,%d), want %q", split.SplitID, got, x, y, cellWant)
 				}
 			}
 		}
@@ -147,14 +153,10 @@ func assertDividersDrawn(t *testing.T, rows []string, dividers []Divider) {
 }
 
 // assertPaneTreeRegions requires every document leaf and every divider to be
-// clickable at exactly the box it was drawn in, offset by the preview content
-// box: pixels and clicks come from one set of placements or they can disagree.
+// clickable at exactly the box it was drawn in. Focus hits the OUTER panel;
+// placements from previewLayoutBox are already plugin-local.
 func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers []Divider) {
 	t.Helper()
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
 	regions := p.mouseHandler.HitMap.Regions()
 	find := func(id string, data int) (mouse.Rect, bool) {
 		for _, region := range regions {
@@ -172,10 +174,7 @@ func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers
 		default:
 			continue
 		}
-		want := mouse.Rect{
-			X: origin.X + placement.Box.X, Y: origin.Y + placement.Box.Y,
-			W: placement.Box.W, H: placement.Box.H,
-		}
+		want := placement.Box
 		got, found := find(region, placement.Node.ID)
 		if !found {
 			t.Fatalf("content leaf %d was drawn without a hit region", placement.Node.ID)
@@ -186,17 +185,7 @@ func assertPaneTreeRegions(t *testing.T, p *Plugin, leaves []Placement, dividers
 		}
 	}
 	for _, split := range dividers {
-		want := mouse.Rect{
-			X: origin.X + split.Box.X, Y: origin.Y + split.Box.Y,
-			W: split.Box.W, H: split.Box.H,
-		}
-		if split.Axis == SplitCols {
-			want.X--
-			want.W = dividerHitWidth
-		} else {
-			want.Y--
-			want.H = dividerHitWidth - 1
-		}
+		want := paneDividerHitBox(split)
 		got, found := find(regionPaneTreeDivider, split.SplitID)
 		if !found {
 			t.Fatalf("split %d was drawn without a hit region", split.SplitID)
@@ -217,7 +206,7 @@ func TestThreeLeafPaneTreeComposesEveryCell(t *testing.T) {
 	rows := composePaneTree(t, p, width, height)
 	assertPaneTreeGolden(t, rows, "pane-tree-three-leaf.txt")
 
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	if !fits || len(leaves) != 3 || len(dividers) != 2 {
 		t.Fatalf("layout = %d leaves %d dividers fits=%v, want 3/2", len(leaves), len(dividers), fits)
 	}
@@ -234,7 +223,7 @@ func TestNestedFourLeafPaneTreeComposesEveryCell(t *testing.T) {
 	rows := composePaneTree(t, p, width, height)
 	assertPaneTreeGolden(t, rows, "pane-tree-four-leaf.txt")
 
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	if !fits || len(leaves) != 4 || len(dividers) != 3 {
 		t.Fatalf("layout = %d leaves %d dividers fits=%v, want 4/3", len(leaves), len(dividers), fits)
 	}
@@ -249,11 +238,7 @@ func TestNestedFourLeafPaneTreeGivesContestedCellsToTheInnerSplit(t *testing.T) 
 
 	const width, height = 100, 24
 	composePaneTree(t, p, width, height)
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
-	_, dividers, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	_, dividers, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	outer := dividers[0]
 	if outer.SplitID != p.paneRoot.ID {
 		t.Fatalf("first divider = split %d, want the root %d", outer.SplitID, p.paneRoot.ID)
@@ -269,14 +254,14 @@ func TestNestedFourLeafPaneTreeGivesContestedCellsToTheInnerSplit(t *testing.T) 
 			t.Fatalf("split %d does not contest a cell with the root: x=%d, root x=%d",
 				inner.SplitID, x, outer.Box.X)
 		}
-		hit := p.mouseHandler.HitMap.Test(origin.X+x, origin.Y+inner.Box.Y)
+		hit := p.mouseHandler.HitMap.Test(x, inner.Box.Y)
 		if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != inner.SplitID {
 			t.Fatalf("contested cell (%d,%d) resolves to %#v, want nested split %d",
 				x, inner.Box.Y, hit, inner.SplitID)
 		}
 	}
 	// The root divider still owns the rows no nested divider reaches.
-	hit := p.mouseHandler.HitMap.Test(origin.X+outer.Box.X, origin.Y+outer.Box.Y)
+	hit := p.mouseHandler.HitMap.Test(outer.Box.X, outer.Box.Y)
 	if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != outer.SplitID {
 		t.Fatalf("root divider row resolves to %#v, want split %d", hit, outer.SplitID)
 	}
@@ -382,11 +367,7 @@ func TestNestedDividerTargetsResolveToTheEnclosedSplit(t *testing.T) {
 
 	const width, height = 160, 30
 	composePaneTree(t, p, width, height)
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
-	_, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	_, dividers, fits := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	if !fits || len(dividers) != 4 {
 		t.Fatalf("layout = %d dividers fits=%v, want 4", len(dividers), fits)
 	}
@@ -407,7 +388,7 @@ func TestNestedDividerTargetsResolveToTheEnclosedSplit(t *testing.T) {
 				t.Fatalf("splits %d and %d contest a cell but neither encloses the other",
 					dividers[outer].SplitID, dividers[inner].SplitID)
 			}
-			hit := p.mouseHandler.HitMap.Test(origin.X+overlap.X, origin.Y+overlap.Y)
+			hit := p.mouseHandler.HitMap.Test(overlap.X, overlap.Y)
 			if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != dividers[inner].SplitID {
 				t.Fatalf("cell (%d,%d) contested by splits %d and %d resolves to %#v, want the enclosed %d",
 					overlap.X, overlap.Y, dividers[outer].SplitID, dividers[inner].SplitID,
@@ -427,10 +408,10 @@ func TestNestedDividerTargetsResolveToTheEnclosedSplit(t *testing.T) {
 // which is the leaf's own box rather than the tree's.
 func paneChipWidthFor(t *testing.T, p *Plugin, leafID, width, height int) int {
 	t.Helper()
-	leaves, _, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, _, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	for _, placement := range leaves {
 		if placement.Node.ID == leafID {
-			return placement.Box.W
+			return leafGeometry(placement.Box).Inner.W
 		}
 	}
 	t.Fatalf("leaf %d is not placed", leafID)
