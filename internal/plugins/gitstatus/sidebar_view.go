@@ -95,8 +95,8 @@ func (p *Plugin) renderThreePaneView() string {
 		// Apply gradient border styles
 		leftPane := styles.RenderPanel(sidebarContent, p.sidebarWidth, paneHeight, sidebarActive)
 
-		// Render visible divider between panes
-		divider := ui.RenderDivider(paneHeight)
+		dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == regionPaneDivider
+		divider := ui.RenderHandle(paneHeight, true, ui.HandleStateFrom(p.hoverDivider, dragging))
 
 		rightPane := styles.RenderPanel(diffContent, p.diffPaneWidth, paneHeight, diffActive)
 

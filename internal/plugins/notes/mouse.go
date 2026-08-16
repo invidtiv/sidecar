@@ -423,7 +423,7 @@ func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
 
 // handleMouseHover handles mouse hover for visual feedback.
 func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
-	// No specific hover behavior needed for now
+	p.hoverDivider = action.Region != nil && action.Region.ID == regionDivider
 	return p, nil
 }
 

@@ -746,6 +746,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
 		p.hoverPaneClose = 0
+		p.hoverDividerRegion = ""
+		p.hoverDividerID = 0
 		if action.Region != nil {
 			switch action.Region.ID {
 			case regionKanbanCard:
@@ -760,6 +762,15 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
+			case regionPaneDivider, regionTermPanelDivider, regionDiffTabDivider:
+				p.hoverDividerRegion = action.Region.ID
+				p.clearIssueHover()
+			case regionPaneTreeDivider:
+				p.hoverDividerRegion = action.Region.ID
+				if id, ok := action.Region.Data.(int); ok {
+					p.hoverDividerID = id
+				}
+				p.clearIssueHover()
 			case regionPaneClose:
 				if leafID, ok := action.Region.Data.(int); ok {
 					p.hoverPaneClose = leafID

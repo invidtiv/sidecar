@@ -63,8 +63,12 @@ func TestNestedPaneTreeFillsItsBoxAndNamesEveryLeaf(t *testing.T) {
 	// a block drawn short or long is what walks a nested divider sideways.
 	for _, split := range dividers {
 		row := []rune(ansi.Strip(lines[split.Box.Y]))
-		if got := string(row[split.Box.X]); got != " " {
-			t.Fatalf("divider %d at (%d,%d) drew %q, want a blank gap", split.SplitID, split.Box.X, split.Box.Y, got)
+		want := "┃"
+		if split.Axis == SplitRows {
+			want = "━"
+		}
+		if got := string(row[split.Box.X]); got != want {
+			t.Fatalf("divider %d at (%d,%d) drew %q, want handle %q", split.SplitID, split.Box.X, split.Box.Y, got, want)
 		}
 	}
 }

@@ -472,6 +472,10 @@ type Plugin struct {
 	hoverWorkspacesPlusButton bool
 	// hoverPaneClose is the content leaf whose header X is under the pointer.
 	hoverPaneClose int
+	// hoverDividerRegion / hoverDividerID are the resizable split under the
+	// pointer (tree splits also carry the split id).
+	hoverDividerRegion string
+	hoverDividerID     int
 
 	// Multiple shell sessions (not tied to git worktrees)
 	shells           []*ShellSession // Current workDir shells (top Shells section)

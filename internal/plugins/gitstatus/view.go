@@ -188,7 +188,8 @@ func (p *Plugin) renderDiffTwoPane() string {
 	// Apply gradient border styles (consistent with renderThreePaneView)
 	leftPane := styles.RenderPanel(sidebarContent, p.sidebarWidth, paneHeight, sidebarActive)
 
-	divider := ui.RenderDivider(paneHeight)
+	dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == regionPaneDivider
+	divider := ui.RenderHandle(paneHeight, true, ui.HandleStateFrom(p.hoverDivider, dragging))
 
 	rightPane := styles.RenderPanel(diffContent, p.diffPaneWidth, paneHeight, diffActive)
 

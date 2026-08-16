@@ -77,9 +77,9 @@ func TestDividerHitMatchesTheDrawnDivider(t *testing.T) {
 
 	out := v.Render(leaf.W, leaf.H, RenderOpts{})
 	first := stripANSI(strings.Split(out, "\n")[0])
-	drawn := strings.IndexRune(first, '│')
+	drawn := strings.IndexRune(first, '┃')
 	if drawn < 0 {
-		t.Fatalf("no divider drawn in %q", first)
+		t.Fatalf("no handle drawn in %q", first)
 	}
 	if drawn != hit.X-leaf.X {
 		t.Fatalf("divider drawn at column %d but hit registered at %d", drawn, hit.X-leaf.X)

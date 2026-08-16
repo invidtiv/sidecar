@@ -126,17 +126,20 @@ func trimGoldenRows(s string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// assertDividersDrawn requires the 1-cell peer gap to be blank in every cell
-// LayoutPanes gave it. td-338cdb owns the handle glyph; this story leaves the
-// cell empty.
+// assertDividersDrawn requires the 1-cell peer gap to hold the shared handle
+// glyph in every cell LayoutPanes gave it.
 func assertDividersDrawn(t *testing.T, rows []string, dividers []Divider) {
 	t.Helper()
 	for _, split := range dividers {
+		want := "┃"
+		if split.Axis == SplitRows {
+			want = "━"
+		}
 		for y := split.Box.Y; y < split.Box.Y+split.Box.H; y++ {
 			cells := []rune(ansi.Strip(rows[y]))
 			for x := split.Box.X; x < split.Box.X+split.Box.W; x++ {
-				if got := string(cells[x]); got != " " {
-					t.Fatalf("split %d drew %q at (%d,%d), want a blank gap", split.SplitID, got, x, y)
+				if got := string(cells[x]); got != want {
+					t.Fatalf("split %d drew %q at (%d,%d), want handle %q", split.SplitID, got, x, y, want)
 				}
 			}
 		}

@@ -264,7 +264,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 
 		leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
 		rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
-		divider := ui.RenderDivider(height)
+		divider := ui.RenderHandle(height, true, m.dividerHandleState(workspacesDividerRegion, 0))
 		// Register the forgiving three-column divider target last, above both pane
 		// regions and any list row that reaches the content edge.
 		m.workspacesMouse.HitMap.AddRect(workspacesDividerRegion, split.SidebarWidth, 0, 3, height, workspacesDividerRegion)
@@ -359,6 +359,35 @@ func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
 	m.registerPreviewDocTabRegions(box)
 	m.registerPreviewIssueTabRegions(box)
 	m.registerPreviewPaneCloseRegions(box)
+}
+
+func (m *Model) setHandleHover(action mouse.MouseAction) {
+	m.hoverHandleRegion = ""
+	m.hoverHandleSplit = 0
+	if action.Region == nil {
+		return
+	}
+	switch action.Region.ID {
+	case workspacesDividerRegion, previewDiffDividerKind:
+		m.hoverHandleRegion = action.Region.ID
+	case previewPaneDividerKind:
+		m.hoverHandleRegion = action.Region.ID
+		if hit, ok := action.Region.Data.(previewPaneDividerHit); ok {
+			m.hoverHandleSplit = int(hit)
+		}
+	}
+}
+
+func (m *Model) dividerHandleState(region string, splitID int) ui.HandleState {
+	dragging := m.workspacesMouse != nil && m.workspacesMouse.IsDragging() && m.workspacesMouse.DragRegion() == region
+	if dragging && region == previewPaneDividerKind && m.preview.paneDragSplitID != 0 && m.preview.paneDragSplitID != splitID {
+		dragging = false
+	}
+	hovering := m.hoverHandleRegion == region
+	if hovering && region == previewPaneDividerKind && m.hoverHandleSplit != splitID {
+		hovering = false
+	}
+	return ui.HandleStateFrom(hovering, dragging)
 }
 
 func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
@@ -753,6 +782,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		// pane can still look like a lost release, and that path must not
 		// swallow the X's hover.
 		m.setPreviewCloseHover(action)
+		m.setHandleHover(action)
 	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.

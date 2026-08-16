@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -1641,23 +1640,23 @@ func (p *Plugin) toggleDocRenderMode() {
 	p.saveSelectionState()
 }
 
-func paneTreeDividerStyle(focused bool) lipgloss.Style {
-	if focused {
-		return lipgloss.NewStyle().Foreground(styles.BorderActive)
+func (p *Plugin) dividerHandleState(region string, splitID int) ui.HandleState {
+	dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == region
+	if dragging && region == regionPaneTreeDivider && p.paneDragSplitID != 0 && p.paneDragSplitID != splitID {
+		dragging = false
 	}
-	return lipgloss.NewStyle().Foreground(styles.BorderNormal)
+	hovering := p.hoverDividerRegion == region
+	if hovering && region == regionPaneTreeDivider && p.hoverDividerID != splitID {
+		hovering = false
+	}
+	return ui.HandleStateFrom(hovering, dragging)
 }
 
-func renderPaneTreeDividerV(height int, focused bool) string {
-	if height <= 0 {
-		return ""
+func (p *Plugin) renderPaneTreeHandle(split Divider) string {
+	if split.Axis == SplitRows {
+		return ui.RenderHandle(split.Box.W, false, p.dividerHandleState(regionPaneTreeDivider, split.SplitID))
 	}
-	return paneTreeDividerStyle(focused).Render(
-		strings.TrimSuffix(strings.Repeat("│\n", height), "\n"))
-}
-
-func renderPaneTreeDividerH(width int, focused bool) string {
-	return paneTreeDividerStyle(focused).Render(strings.Repeat("─", maxInt(width, 0)))
+	return ui.RenderHandle(split.Box.H, true, p.dividerHandleState(regionPaneTreeDivider, split.SplitID))
 }
 
 func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
@@ -1717,7 +1716,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 		blit(placement.Box, p.renderPaneLeafPanel(placement, false))
 	}
 	for _, split := range layout.Dividers {
-		blit(split.Box, renderPaneTreeGap(split))
+		blit(split.Box, p.renderPaneTreeHandle(split))
 	}
 	p.registerPaneTreeRegions(layout.Leaves, layout.Dividers)
 	// Last, because a live search surface is drawn over its leaf and its regions
@@ -1802,22 +1801,7 @@ func (p *Plugin) takePaneSizeCmds() []tea.Cmd {
 }
 
 func (p *Plugin) renderPaneTreeDivider(split Divider) string {
-	if split.Axis == SplitRows {
-		return renderPaneTreeDividerH(split.Box.W, p.previewLeafFocused())
-	}
-	return renderPaneTreeDividerV(split.Box.H, p.previewLeafFocused())
-}
-
-// renderPaneTreeGap is the 1-cell peer gap td-338cdb will put a handle in.
-// This story leaves it blank — no │/─ — so the next one can own the glyph.
-func renderPaneTreeGap(split Divider) string {
-	if split.Axis == SplitRows {
-		return strings.Repeat(" ", maxInt(split.Box.W, 0))
-	}
-	if split.Box.H <= 0 {
-		return ""
-	}
-	return strings.TrimSuffix(strings.Repeat(" \n", split.Box.H), "\n")
+	return p.renderPaneTreeHandle(split)
 }
 
 // registerPaneLeafRegions registers one placed leaf's hit regions, in

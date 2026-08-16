@@ -230,8 +230,7 @@ func (p *Plugin) renderListView(width, height int) string {
 		rightPane = styles.RenderPanel(previewContent, previewW, paneHeight, previewActive)
 	}
 
-	// Render visible divider between panes
-	divider := ui.RenderDivider(paneHeight)
+	divider := ui.RenderHandle(paneHeight, true, p.dividerHandleState(regionPaneDivider, 0))
 
 	// Join horizontally
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)

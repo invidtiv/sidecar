@@ -22,6 +22,8 @@ type RenderOpts struct {
 	// the project host supplies RenderLineDiff / RenderSideBySide /
 	// RenderFullFileSideBySide here. Empty return falls back to renderRaw.
 	PaintFile func(name, raw string, mode ViewMode, width, height, scroll, horiz int) string
+	// Handle is the list/hunk divider's hover/drag state.
+	Handle ui.HandleState
 }
 
 const (
@@ -143,7 +145,7 @@ func (v *View) render(width, height int, opts RenderOpts) string {
 	}
 	leftPane = padToHeight(leftPane, height, listWidth)
 	rightPane = padToHeight(rightPane, height, diffPaneWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, renderDivider(height), rightPane)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, ui.RenderHandle(height, true, opts.Handle), rightPane)
 }
 
 func (v *View) renderCommitRoot(width, height int, opts RenderOpts) string {
@@ -164,7 +166,7 @@ func (v *View) renderCommitRoot(width, height int, opts RenderOpts) string {
 	rightX := opts.ContentBaseX + listWidth + 1
 	leftPane := padToHeight(v.renderCommitFileList(listWidth, height, opts.ContentBaseX, opts.BaseY, opts), height, listWidth)
 	rightPane := padToHeight(v.renderCommitFileDiffPane(diffPaneWidth, height, rightX, opts.BaseY, opts), height, diffPaneWidth)
-	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, renderDivider(height), rightPane)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, ui.RenderHandle(height, true, opts.Handle), rightPane)
 }
 
 func (v *View) rangeLabel() string {
@@ -193,18 +195,6 @@ func (v *View) renderCollapsed(width, height int, opts RenderOpts) string {
 	default:
 		return v.renderFileList(width, height, 0, 0, opts)
 	}
-}
-
-func renderDivider(height int) string {
-	style := lipgloss.NewStyle().Foreground(styles.BorderNormal)
-	var sb strings.Builder
-	for i := 0; i < height; i++ {
-		sb.WriteString(style.Render("│"))
-		if i < height-1 {
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
 }
 
 func (v *View) renderFileList(width, height, baseX, baseY int, opts RenderOpts) string {
