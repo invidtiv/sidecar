@@ -5,7 +5,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/theme"
 )
@@ -176,15 +175,14 @@ func (m *Model) buildThemeScope(b *paneBuilder, state *appearanceState) {
 	globalPill := Button("Global", !state.projectScope, globalState)
 
 	line := strings.Repeat(" ", RowIndent) + globalPill
-	x := b.originX + RowIndent
-	widths := []int{ansi.StringWidth(globalPill)}
+	pills := []string{globalPill}
 	ids := []string{regionScopeGlobal}
 
 	if len(projects) > 0 {
-		projectState := b.declare(regionScopeProject, "", true, func(m *Model) tea.Cmd {
-			m.cycleThemeScopeProject()
-			return nil
-		})
+		options := make([]dropdownOption, 0, len(projects))
+		for _, project := range projects {
+			options = append(options, dropdownOption{id: project.Path, label: project.Name})
+		}
 		label := state.projectPath
 		for _, project := range projects {
 			if project.Path == state.projectPath {
@@ -194,9 +192,13 @@ func (m *Model) buildThemeScope(b *paneBuilder, state *appearanceState) {
 		if label == "" && len(projects) > 0 {
 			label = projects[0].Name
 		}
-		pill := Selector(label, projectState)
+		projectState := b.declare(regionScopeProject, "", true, func(m *Model) tea.Cmd {
+			return m.openDropdown(regionScopeProject, options, m.appearance().projectPath, selectThemeScopeProject)
+		})
+		projectState, arrow := m.dropdownControlState(regionScopeProject, projectState)
+		pill := SelectorArrow(label, arrow, projectState)
 		line += "  " + pill
-		widths = append(widths, ansi.StringWidth(pill))
+		pills = append(pills, pill)
 		ids = append(ids, regionScopeProject)
 		hint := "Select a project to create an override"
 		if state.projectScope {
@@ -209,10 +211,22 @@ func (m *Model) buildThemeScope(b *paneBuilder, state *appearanceState) {
 
 	y := len(b.lines)
 	b.lines = append(b.lines, line)
-	for i, id := range ids {
-		b.m.mouse.HitMap.AddRect(id, x, 1+y, widths[i], 1, nil)
-		x += widths[i] + 2
-	}
+	// The pills are laid out along one line, so the project list hangs from the
+	// column its own pill starts at rather than from the row's left edge.
+	b.pillRegions(y, ids, pills, themeScopeListWidth)
+}
+
+// themeScopeListWidth is how wide the project list opens: project names are
+// longer than the pill that names the selected one, and a list clipped to the
+// pill would hide the very thing it is there to show.
+const themeScopeListWidth = 34
+
+// selectThemeScopeProject moves theme saves to a chosen project. Choosing one is
+// also what enters project scope: a project the user picked is a statement that
+// the override is what they want.
+func selectThemeScopeProject(m *Model, option dropdownOption) tea.Cmd {
+	m.setThemeScope(true, option.id)
+	return nil
 }
 
 // setThemeScope switches which scope a save writes to and re-points the list at

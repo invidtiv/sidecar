@@ -35,6 +35,9 @@ const (
 	inlinePickerRows      = 6
 	completionCandidates  = 6
 	projectFormFieldWidth = 46
+	// openInRememberLabel is what an unset preference is called: the host still
+	// opens the project, in whatever the user reached for last.
+	openInRememberLabel = "Remember the last app used"
 )
 
 // projectForm is the draft. It is deliberately separate from the configuration:
@@ -207,16 +210,17 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 	// Preferred "open in" application. Last-used memory stays the fallback, so
 	// leaving this unset is a real answer rather than a missing one.
 	if len(m.host.OpenInApps) > 0 {
-		b.row(regionFormOpenIn, "", func(m *Model) tea.Cmd {
-			m.cycleFormOpenIn()
-			return nil
-		}, func(s State) string {
-			label := "Remember the last app used"
-			if form.openIn != "" {
-				label = m.openInName(form.openIn)
-			}
-			return FormRow("Open in", Selector(label, s), s)
-		})
+		label := openInRememberLabel
+		if form.openIn != "" {
+			label = m.openInName(form.openIn)
+		}
+		b.selectRowValue(regionFormOpenIn, "Open in", label, projectFormFieldWidth, m.openInOptions(), form.openIn,
+			func(m *Model, option dropdownOption) tea.Cmd {
+				if form := m.addProject; form != nil {
+					form.openIn = option.id
+				}
+				return nil
+			})
 		b.blank()
 	}
 
@@ -419,28 +423,16 @@ func (m *Model) acceptCompletion(index int) {
 	m.requestCompletions()
 }
 
-// cycleFormOpenIn walks the preference: no preference, then each known app.
-func (m *Model) cycleFormOpenIn() {
-	form := m.addProject
-	if form == nil || len(m.host.OpenInApps) == 0 {
-		return
+// openInOptions are the applications the host can open a project in, with "no
+// preference" first: last-used memory stays the fallback, so leaving this unset
+// is a real answer rather than a missing one.
+func (m *Model) openInOptions() []dropdownOption {
+	options := make([]dropdownOption, 0, len(m.host.OpenInApps)+1)
+	options = append(options, dropdownOption{id: "", label: openInRememberLabel})
+	for _, app := range m.host.OpenInApps {
+		options = append(options, dropdownOption{id: app.ID, label: app.Name})
 	}
-	if form.openIn == "" {
-		form.openIn = m.host.OpenInApps[0].ID
-		return
-	}
-	for i, app := range m.host.OpenInApps {
-		if app.ID != form.openIn {
-			continue
-		}
-		if i == len(m.host.OpenInApps)-1 {
-			form.openIn = ""
-			return
-		}
-		form.openIn = m.host.OpenInApps[i+1].ID
-		return
-	}
-	form.openIn = ""
+	return options
 }
 
 // --- inline theme picker (mockup 03b) -----------------------------------

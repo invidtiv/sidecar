@@ -314,7 +314,8 @@ func TestEditProjectSaves(t *testing.T) {
 
 	m.addProject.name.SetValue("alpha-renamed")
 	m.addProject.themeEntry = theme.Entry{Name: "Nord", IsBuiltIn: true, ThemeKey: "nord"}
-	m.cycleFormOpenIn()
+	// The open-in preference is chosen from the form's dropdown.
+	choose(t, m, regionFormOpenIn, "vscode")
 	cmd := m.saveProjectForm()
 	if cmd == nil {
 		t.Fatal("the edit did not save")

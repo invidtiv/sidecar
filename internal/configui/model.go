@@ -95,6 +95,11 @@ type Model struct {
 	host HostState
 	// editor is the field that owns typed characters, if any.
 	editor *editorState
+	// dropdown is the select control's list floating over the page, if any. It
+	// is the innermost thing on screen while it is open: it owns the arrows,
+	// Enter, and Escape, and it is composited over the detail pane rather than
+	// pushing the page around.
+	dropdown *dropdownState
 	// pendingFocus is a control to put the row cursor on as soon as it is
 	// rendered.
 	pendingFocus string
@@ -292,6 +297,9 @@ func (m *Model) resetDetail() {
 	// A restart note answers a change the user just made on the page they made
 	// it on; carrying it somewhere else would be a claim about that page.
 	m.restartNote = ""
+	// A list belongs to the control it hangs from; leaving the page takes it with
+	// it rather than leaving one floating over somewhere else.
+	m.closeDropdown()
 	if state := m.terminalState; state != nil {
 		// A refused value is a complaint about the edit that was open; leaving
 		// the page ends that conversation.
@@ -485,6 +493,13 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// a page shortcut or a global one.
 	if m.editing() {
 		return m.editorKey(msg)
+	}
+
+	// An open dropdown is the innermost thing on screen: it answers every key,
+	// including the ones that would otherwise close Configuration out from under
+	// the list the user is choosing from.
+	if handled, cmd := m.dropdownKey(key); handled {
+		return true, cmd
 	}
 
 	if m.SearchFocused() {
@@ -724,10 +739,37 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			m.hoverID = action.Region.ID
 		}
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		if m.dropdownOpen() {
+			// A list longer than its window scrolls under the wheel exactly as
+			// the theme list does. A notch that misses it is swallowed rather
+			// than passed on: moving the theme list would move the row cursor
+			// off the very control the open list hangs from, leaving two rows
+			// painted as focused.
+			if action.Region != nil {
+				m.scrollDropdown(action.Region.ID, action.Delta)
+			}
+			return nil
+		}
 		m.scrollThemeList(action)
 	case mouse.ActionClick, mouse.ActionDoubleClick:
 		if action.Region == nil {
+			// Clicking away from everything dismisses an open list rather than
+			// leaving it floating over a page the user has moved on from.
+			m.closeDropdown()
 			return nil
+		}
+		if m.dropdownOpen() {
+			if id := action.Region.ID; strings.HasPrefix(id, regionDropdownItem) {
+				return m.clickDropdownItem(id)
+			} else if id == regionDropdownMore {
+				return nil
+			} else if id != m.dropdown.controlID {
+				// The first click outside an open list closes it. It does not
+				// also act on what it landed on: the click the user meant was
+				// "put this list away".
+				m.closeDropdown()
+				return nil
+			}
 		}
 		// A control the page just rendered is clicked as itself: the click
 		// moves the row cursor there and runs it, so mouse and keyboard leave
@@ -815,6 +857,9 @@ func (m *Model) View(width, height int) string {
 	m.width, m.height = width, height
 	m.mouse.Clear()
 	if width < 8 || height < 3 {
+		// Nothing is painted, so nothing can hold an open list: one left behind
+		// here would swallow every key with no way for the user to see why.
+		m.closeDropdown()
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render("")
 	}
 
@@ -841,7 +886,9 @@ func (m *Model) View(width, height int) string {
 	sidebar := styles.RenderPanel(m.renderSidebar(sidebarWidth, height), sidebarWidth, height, m.SearchFocused())
 	if detailWidth < 8 {
 		// Too narrow for two panes: the sidebar is the navigation, so it wins
-		// and the detail pane is dropped rather than clipped into nonsense.
+		// and the detail pane is dropped rather than clipped into nonsense —
+		// and with it any list that was hanging off a control in it.
+		m.closeDropdown()
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(sidebar)
 	}
 	detail := styles.RenderPanelWithGradient(
@@ -970,6 +1017,10 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 		}
 		lines, _ = m.buildDetail(originX, inner, paneHeight)
 	}
+	// The pane has settled, so an open dropdown is painted over it exactly once:
+	// its rows float above the page, and its hit regions are registered last, so
+	// they sit on top of the controls they cover.
+	lines = m.compositeDropdown(lines, originX, inner, paneHeight-2)
 	return clampLines(lines, paneHeight-2, inner)
 }
 
@@ -1097,6 +1148,11 @@ func (m *Model) pageKey(key string) (bool, tea.Cmd) {
 func (m *Model) Escape() bool {
 	if m.editing() {
 		m.cancelEditor()
+		return true
+	}
+	// An open dropdown closes without committing, leaving the setting exactly as
+	// it was — the list is dismissed, not the surface behind it.
+	if m.closeDropdown() {
 		return true
 	}
 	if m.DismissConfirm() {

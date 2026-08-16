@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
 )
 
 // The embedded terminal's capture limit is surfaced twice — plainly on Terminal
@@ -24,8 +27,10 @@ const (
 	CaptureLimitMax = 64 * 1024 * 1024
 )
 
-// CaptureLimitChoices are the values the selector steps through, smallest
-// first. Every one of them is inside the accepted range.
+// CaptureLimitChoices are the values the selector offers, smallest first. Every
+// one of them is inside the accepted range. A configuration may still hold a
+// value between two of them — Advanced accepts a typed size — which the list
+// offers no rung for and the closed control reports as it is stored.
 var CaptureLimitChoices = []int{
 	256 * 1024,
 	512 * 1024,
@@ -100,14 +105,47 @@ func ParseCaptureLimit(value string) int {
 	return ClampCaptureLimit(int(number * float64(multiplier)))
 }
 
-// NextCaptureLimit is the value one step up the ladder, wrapping at the top.
-// Stepping is how both pages change the setting, so both walk the same rungs.
-func NextCaptureLimit(current int) int {
-	current = ClampCaptureLimit(current)
+// NearestCaptureLimit is the rung a stored value sits on or just above: the
+// largest choice no greater than it, or the smallest choice when it is below
+// them all. It is what a list opens on when the configuration holds a size
+// Advanced accepted as free text, so pressing Enter on an off-ladder value can
+// only ever round it down to the next real rung rather than collapse it to the
+// smallest one.
+func NearestCaptureLimit(bytes int) int {
+	bytes = ClampCaptureLimit(bytes)
+	nearest := CaptureLimitChoices[0]
 	for _, choice := range CaptureLimitChoices {
-		if choice > current {
-			return choice
+		if choice <= bytes {
+			nearest = choice
 		}
 	}
-	return CaptureLimitChoices[0]
+	return nearest
+}
+
+// captureLimitOptions are the rungs of the ladder as a select control's
+// choices. The stored value is a byte count, so an option's id is that number
+// written out: what the list offers and what the setting holds are the same
+// thing.
+func captureLimitOptions() []dropdownOption {
+	options := make([]dropdownOption, 0, len(CaptureLimitChoices))
+	for _, choice := range CaptureLimitChoices {
+		options = append(options, dropdownOption{
+			id:    strconv.Itoa(choice),
+			label: FormatCaptureLimit(choice),
+		})
+	}
+	return options
+}
+
+// saveCaptureLimit writes a chosen preview limit.
+func saveCaptureLimit(m *Model, option dropdownOption) tea.Cmd {
+	bytes, err := strconv.Atoi(option.id)
+	if err != nil {
+		return nil
+	}
+	return SaveCmd("Preview limit: "+FormatCaptureLimit(bytes), func() error {
+		return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) {
+			ws.TmuxCaptureMaxBytes = ClampCaptureLimit(bytes)
+		})
+	})
 }

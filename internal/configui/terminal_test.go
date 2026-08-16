@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -120,9 +121,9 @@ func TestCaptureLimitStepsAndClamps(t *testing.T) {
 		cfg.Plugins.Workspace.TmuxCaptureMaxBytes = CaptureLimitMax
 	})
 	m.Open(PageTerminal)
-	activate(t, m, regionCaptureLimit)
+	choose(t, m, regionCaptureLimit, strconv.Itoa(CaptureLimitChoices[0]))
 	if got := loadSaved(t).Plugins.Workspace.TmuxCaptureMaxBytes; got != CaptureLimitChoices[0] {
-		t.Fatalf("stepping past the largest value stored %d", got)
+		t.Fatalf("choosing the smallest value stored %d", got)
 	}
 
 	cases := map[int]int{

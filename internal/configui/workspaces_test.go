@@ -97,7 +97,7 @@ func TestOverviewScopeSelectorRoundTrips(t *testing.T) {
 	m := workspaceFixture(t, nil)
 	m.Open(PageWorkspaces)
 
-	activate(t, m, regionOverviewScope)
+	choose(t, m, regionOverviewScope, config.OverviewWorktreeScopeWorktree)
 	if got := loadSaved(t).Plugins.Workspace.OverviewWorktreeScope; got != config.OverviewWorktreeScopeWorktree {
 		t.Fatalf("Overview location saved %q", got)
 	}
@@ -105,7 +105,7 @@ func TestOverviewScopeSelectorRoundTrips(t *testing.T) {
 		t.Fatalf("the help did not follow the selected value:\n%s", view)
 	}
 
-	activate(t, m, regionOverviewScope)
+	choose(t, m, regionOverviewScope, config.OverviewWorktreeScopeProject)
 	if got := loadSaved(t).Plugins.Workspace.OverviewWorktreeScope; got != config.OverviewWorktreeScopeProject {
 		t.Fatalf("Overview location did not return to project scope: %q", got)
 	}
@@ -119,10 +119,13 @@ func TestDefaultAgentSelectorFollowsAllowlist(t *testing.T) {
 	})
 	m.Open(PageWorkspaces)
 
+	activate(t, m, regionDefaultAgent)
+	if m.dropdown == nil {
+		t.Fatal("the default-agent selector did not open a list")
+	}
 	seen := map[string]bool{}
-	for i := 0; i < 4; i++ {
-		activate(t, m, regionDefaultAgent)
-		seen[loadSaved(t).Plugins.Workspace.DefaultAgentType] = true
+	for _, option := range m.dropdown.options {
+		seen[option.id] = true
 	}
 	want := map[string]bool{"": true, "claude": true, "grok": true}
 	for id := range seen {
@@ -131,7 +134,12 @@ func TestDefaultAgentSelectorFollowsAllowlist(t *testing.T) {
 		}
 	}
 	if len(seen) != len(want) {
-		t.Fatalf("selector walked %v, want %v", seen, want)
+		t.Fatalf("selector offered %v, want %v", seen, want)
+	}
+	// Every choice it offers is one it can save.
+	choose(t, m, regionDefaultAgent, "claude")
+	if got := loadSaved(t).Plugins.Workspace.DefaultAgentType; got != "claude" {
+		t.Fatalf("the selector saved %q", got)
 	}
 }
 

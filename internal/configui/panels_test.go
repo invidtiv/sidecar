@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -366,8 +367,9 @@ func TestPanelInputsPersist(t *testing.T) {
 		t.Fatalf("db path saved as %q", got)
 	}
 
-	activate(t, m, regionPanelTDRefresh)
-	if got := loadSaved(t).Plugins.TDMonitor.RefreshInterval; got != nextRefresh(2000000000) {
+	// The refresh interval is chosen from a list rather than stepped.
+	choose(t, m, regionPanelTDRefresh, (5 * time.Second).String())
+	if got := loadSaved(t).Plugins.TDMonitor.RefreshInterval; got != 5*time.Second {
 		t.Fatalf("refresh interval saved as %v", got)
 	}
 }

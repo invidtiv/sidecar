@@ -223,6 +223,21 @@ func (b *paneBuilder) buttons(specs ...buttonSpec) {
 	}
 }
 
+// pillRegions registers hit regions for controls already rendered along one
+// line at the shared row indent, and hangs any open list from the pill it
+// belongs to. The region and the list read the same accumulated column, so a
+// control that sits mid-line cannot end up with its list under a neighbour.
+// Pills are joined with two spaces, exactly as ButtonRow joins them.
+func (b *paneBuilder) pillRegions(y int, ids, pills []string, listWidth int) {
+	paneX := RowIndent
+	for i, id := range ids {
+		width := ansi.StringWidth(pills[i])
+		b.m.mouse.HitMap.AddRect(id, b.originX+paneX, 1+y, width, 1, nil)
+		b.placeDropdown(id, paneX, y, max(width, listWidth))
+		paneX += width + 2
+	}
+}
+
 // rightControl paints a control pinned to the right of a header line, the way
 // Diagnostics' Recheck and a child route's Back control sit.
 //

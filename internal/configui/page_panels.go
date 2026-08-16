@@ -38,7 +38,7 @@ const (
 	conversationsFlagLabel = "Conversations panel"
 )
 
-// refreshChoices are the poll intervals the refresh selectors step through.
+// refreshChoices are the poll intervals the refresh selectors offer.
 // They are a ladder rather than a free number because the only meaningful
 // choices here are "keep up" and "stay out of the way".
 var refreshChoices = []time.Duration{
@@ -48,16 +48,6 @@ var refreshChoices = []time.Duration{
 	5 * time.Second,
 	15 * time.Second,
 	30 * time.Second,
-}
-
-// nextRefresh steps to the next interval, wrapping at the top.
-func nextRefresh(current time.Duration) time.Duration {
-	for _, choice := range refreshChoices {
-		if choice > current {
-			return choice
-		}
-	}
-	return refreshChoices[0]
 }
 
 func formatRefresh(d time.Duration) string {
@@ -194,14 +184,20 @@ func (m *Model) panelRow(b *paneBuilder, id, title, badge, detail string, on boo
 
 // refreshRow paints a poll-interval selector under its panel.
 func (m *Model) refreshRow(b *paneBuilder, id string, current time.Duration, set func(*config.PluginsConfig, time.Duration)) {
-	b.row(id, "", func(m *Model) tea.Cmd {
-		next := nextRefresh(current)
-		return SaveCmd("Refresh every "+formatRefresh(next), func() error {
-			return config.SavePlugins(func(p *config.PluginsConfig) { set(p, next) })
+	options := make([]dropdownOption, 0, len(refreshChoices))
+	for _, choice := range refreshChoices {
+		options = append(options, dropdownOption{id: choice.String(), label: formatRefresh(choice)})
+	}
+	b.selectRowValue(id, "Refresh", formatRefresh(current), panelInputWidth, options, current.String(),
+		func(m *Model, option dropdownOption) tea.Cmd {
+			next, err := time.ParseDuration(option.id)
+			if err != nil {
+				return nil
+			}
+			return SaveCmd("Refresh every "+formatRefresh(next), func() error {
+				return config.SavePlugins(func(p *config.PluginsConfig) { set(p, next) })
+			})
 		})
-	}, func(s State) string {
-		return FormRow("Refresh", SelectorWidth(formatRefresh(current), b.controlWidth(panelInputWidth), s), s)
-	})
 }
 
 // pathRow paints an editable path under its panel.

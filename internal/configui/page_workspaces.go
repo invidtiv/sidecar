@@ -48,29 +48,23 @@ func (m *Model) defaultAgentLabel() string {
 	return id
 }
 
-// cycleDefaultAgent steps to the next choice creation would offer, wrapping
-// through "no agent" the way the creation picker does.
-func (m *Model) cycleDefaultAgent() tea.Cmd {
+// defaultAgentOptions are the choices creation would offer, with "no agent"
+// first: a plain shell is a real answer, not the absence of one.
+func (m *Model) defaultAgentOptions() []dropdownOption {
 	families := m.offeredAgentFamilies()
-	choices := make([]string, 0, len(families)+1)
-	choices = append(choices, "")
+	options := make([]dropdownOption, 0, len(families)+1)
+	options = append(options, dropdownOption{id: "", label: noneAgentLabel})
 	for _, family := range families {
-		choices = append(choices, family.ID)
+		options = append(options, dropdownOption{id: family.ID, label: family.Short})
 	}
-	current := strings.TrimSpace(m.Config().Plugins.Workspace.DefaultAgentType)
-	next := choices[0]
-	for i, choice := range choices {
-		if choice == current {
-			next = choices[(i+1)%len(choices)]
-			break
-		}
-	}
-	label := noneAgentLabel
-	if family, ok := agentcatalog.Find(next); ok {
-		label = family.Short
-	}
-	return SaveCmd("Default agent: "+label, func() error {
-		return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.DefaultAgentType = next })
+	return options
+}
+
+// saveDefaultAgent writes the agent creation starts a new workspace with.
+func saveDefaultAgent(m *Model, option dropdownOption) tea.Cmd {
+	id := option.id
+	return SaveCmd("Default agent: "+option.label, func() error {
+		return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.DefaultAgentType = id })
 	})
 }
 
@@ -83,11 +77,8 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 
 	b.text(SectionHeader("New workspaces"))
 
-	b.row(regionDefaultAgent, "", func(m *Model) tea.Cmd {
-		return m.cycleDefaultAgent()
-	}, func(s State) string {
-		return FormRow("Default agent", SelectorWidth(m.defaultAgentLabel(), b.controlWidth(controlWidth), s), s)
-	})
+	b.selectRowValue(regionDefaultAgent, "Default agent", m.defaultAgentLabel(), controlWidth,
+		m.defaultAgentOptions(), strings.TrimSpace(ws.DefaultAgentType), saveDefaultAgent)
 
 	b.row(regionAutoShell, "", func(m *Model) tea.Cmd {
 		enabled := !m.Config().Plugins.Workspace.AutoCreateShell
@@ -110,22 +101,8 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 	})
 	b.help("Names a new worktree directory after its repository, so it stays identifiable later.")
 
-	b.row(regionOverviewScope, "", func(m *Model) tea.Cmd {
-		next := config.OverviewWorktreeScopeWorktree
-		label := overviewWorktreeLabel
-		if m.overviewScope() == config.OverviewWorktreeScopeWorktree {
-			next, label = config.OverviewWorktreeScopeProject, overviewProjectLabel
-		}
-		return SaveCmd("Overview location: "+label, func() error {
-			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.OverviewWorktreeScope = next })
-		})
-	}, func(s State) string {
-		label := overviewProjectLabel
-		if m.overviewScope() == config.OverviewWorktreeScopeWorktree {
-			label = overviewWorktreeLabel
-		}
-		return FormRow("Overview location", SelectorWidth(label, b.controlWidth(controlWidth), s), s)
-	})
+	b.selectRow(regionOverviewScope, "Overview location", controlWidth, overviewScopeOptions(),
+		m.overviewScope(), saveOverviewScope)
 	if m.overviewScope() == config.OverviewWorktreeScopeWorktree {
 		b.help("When you select a worktree in Activity, scope Sidecar to that worktree")
 		b.help("instead of its project's main checkout.")
@@ -155,6 +132,23 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 
 	b.blank()
 	b.lead("These are creation defaults: they apply to the next shell or worktree, not to existing ones.")
+}
+
+// overviewScopeOptions are the two places selecting a worktree in Activity can
+// take Sidecar.
+func overviewScopeOptions() []dropdownOption {
+	return []dropdownOption{
+		{id: config.OverviewWorktreeScopeProject, label: overviewProjectLabel},
+		{id: config.OverviewWorktreeScopeWorktree, label: overviewWorktreeLabel},
+	}
+}
+
+// saveOverviewScope writes where activating a worktree scopes Sidecar.
+func saveOverviewScope(m *Model, option dropdownOption) tea.Cmd {
+	scope := option.id
+	return SaveCmd("Overview location: "+option.label, func() error {
+		return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.OverviewWorktreeScope = scope })
+	})
 }
 
 // overviewScope is the configured Overview location, defaulted the way the

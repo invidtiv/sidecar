@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -163,16 +164,12 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 	})
 
 	b.text(SectionHeader("Capture"))
-	b.row(regionCaptureLimit, "", func(m *Model) tea.Cmd {
-		next := NextCaptureLimit(m.Config().Plugins.Workspace.TmuxCaptureMaxBytes)
-		return SaveCmd("Preview limit: "+FormatCaptureLimit(next), func() error {
-			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) {
-				ws.TmuxCaptureMaxBytes = ClampCaptureLimit(next)
-			})
-		})
-	}, func(s State) string {
-		return FormRow("Preview limit", SelectorWidth(FormatCaptureLimit(ws.TmuxCaptureMaxBytes), b.controlWidth(keyFieldWidth), s), s)
-	})
+	// The stored limit need not be a rung of the ladder — Advanced accepts a
+	// typed size — so the closed control reports the configured value rather than
+	// the nearest choice, and the list opens on nothing when it is off-ladder.
+	b.selectRowValue(regionCaptureLimit, "Preview limit", FormatCaptureLimit(ws.TmuxCaptureMaxBytes),
+		keyFieldWidth, captureLimitOptions(), strconv.Itoa(NearestCaptureLimit(ws.TmuxCaptureMaxBytes)),
+		saveCaptureLimit)
 	b.note("Capture limits are advanced controls; Sidecar uses a safe default.")
 
 	b.blank()

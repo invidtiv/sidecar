@@ -207,6 +207,12 @@ func SelectorArrow(value, arrow string, state State) string {
 // SelectorWidth renders a selector that fills a fixed width, so several
 // selectors in a group share one right edge the way the mockups draw them.
 func SelectorWidth(value string, width int, state State) string {
+	return SelectorWidthArrow(value, "▾", width, state)
+}
+
+// SelectorWidthArrow is SelectorWidth with the arrow the control's own state
+// asks for: ▾ while its list is closed, ▴ while it is open over the page.
+func SelectorWidthArrow(value, arrow string, width int, state State) string {
 	style := chipStyle()
 	switch {
 	case state.Disabled:
@@ -216,7 +222,7 @@ func SelectorWidth(value string, width int, state State) string {
 	case state.Hovered:
 		style = style.Background(styles.BgTertiary)
 	}
-	text := value + "  ▾"
+	text := value + "  " + arrow
 	if ansi.StringWidth(text) > width-2 {
 		text = ansi.Truncate(text, max(1, width-3), "…")
 	}
