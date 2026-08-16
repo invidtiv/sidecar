@@ -81,3 +81,14 @@ func TestDirectoriesKeepsTildeNotation(t *testing.T) {
 		}
 	}
 }
+
+// A bare root is a place, not a prefix. Completing it would enumerate a whole
+// directory the user has not typed into, which is the one thing this package
+// promises never to do.
+func TestBareRootDoesNotEnumerate(t *testing.T) {
+	for _, input := range []string{"/", "//", " / ", "~", "~/"} {
+		if got := Directories(input, 20); got != nil {
+			t.Fatalf("input %q enumerated %d directories", input, len(got))
+		}
+	}
+}

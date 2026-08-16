@@ -184,3 +184,52 @@ func TestAgentInstructionsReturnsToAgents(t *testing.T) {
 		t.Fatalf("returning from Diagnostics landed on %q", m.Page())
 	}
 }
+
+// A repair route opened on a check that is already passing is where the user
+// asked to be. Rechecking from it must not close it: only a problem that has
+// just become OK is a resolved repair.
+func TestHealthyRepairRouteSurvivesRecheck(t *testing.T) {
+	healthy := configchecks.Results{{
+		ID:      configchecks.CheckAgentInstructions,
+		Title:   "Agent instructions",
+		OK:      true,
+		Summary: "AGENTS.md connected",
+		Repair:  configchecks.RepairAgentInstructions,
+	}}
+
+	m := workspaceFixture(t, nil)
+	m.ApplyChecks(ChecksMsg{Results: healthy})
+	m.Open(PageAgents)
+	m.OpenAgentInstructions()
+	if m.Route().Child != ChildRepairAgentInstructions {
+		t.Fatalf("the healthy route did not open: %#v", m.Route())
+	}
+
+	m.ApplyChecks(ChecksMsg{Results: healthy})
+	if m.Route().Child != ChildRepairAgentInstructions {
+		t.Fatalf("Recheck closed a route the user opened while healthy: %#v", m.Route())
+	}
+
+	// A route opened on a real problem still closes itself once the problem is
+	// gone, which is the behavior this must not cost.
+	failing := configchecks.Results{{
+		ID:      configchecks.CheckAgentInstructions,
+		Title:   "Agent instructions",
+		Summary: "AGENTS.md needs Sidecar guidance",
+		Repair:  configchecks.RepairAgentInstructions,
+	}}
+	m2 := workspaceFixture(t, nil)
+	m2.ApplyChecks(ChecksMsg{Results: failing})
+	m2.Open(PageAgents)
+	m2.OpenAgentInstructions()
+	if m2.Route().Child != ChildRepairAgentInstructions {
+		t.Fatalf("the failing route did not open: %#v", m2.Route())
+	}
+	m2.ApplyChecks(ChecksMsg{Results: healthy})
+	if m2.Route().IsChild() {
+		t.Fatalf("a resolved repair stayed open: %#v", m2.Route())
+	}
+	if m2.Page() != PageAgents {
+		t.Fatalf("a resolved repair returned to %q", m2.Page())
+	}
+}

@@ -19,14 +19,18 @@ const DefaultLimit = 8
 // Directories returns directory candidates for a typed prefix, formatted the
 // way the user is typing them: a path that began with ~ comes back with ~.
 //
-// The empty input returns nil. So does a bare "~" or "/" with nothing after it:
-// the user has expressed a root, not a prefix to complete.
+// The empty input returns nil. So does a bare "~", "~/" or "/" with nothing
+// after it: the user has expressed a root, not a prefix to complete.
 func Directories(input string, limit int) []string {
 	if limit <= 0 {
 		limit = DefaultLimit
 	}
 	typed := strings.TrimSpace(input)
-	if typed == "" || typed == "~" {
+	// A bare root is a place, not a prefix: "/", "//", "~" and "~/" all name a
+	// directory the user has not started typing into, and completing them would
+	// be the enumeration this package refuses to do. At least one character
+	// beyond the root is required.
+	if typed == "" || typed == "~" || typed == "~/" || strings.Trim(typed, "/") == "" {
 		return nil
 	}
 

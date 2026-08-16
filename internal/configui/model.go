@@ -69,6 +69,11 @@ type Model struct {
 	// showColorSteps expands the terminal-colors repair's instructions.
 	showColorSteps bool
 
+	// repairOpenedOK records that the open repair route's check was already
+	// passing when the route opened, so a later Recheck does not read as "the
+	// problem is resolved" and close a screen the user asked to read.
+	repairOpenedOK bool
+
 	// Environment probe. Like checks, this is a cache filled by a command:
 	// whether an integration's command is on PATH is a fact about the machine,
 	// never something a render looks up.
@@ -107,7 +112,11 @@ type Model struct {
 	advancedState   *advancedState
 	aboutState      *aboutState
 	enable          *enableState
-	addProject      *projectForm
+	// installing is a confirmed install whose route was left while it ran. The
+	// attempt is the user's own, so its outcome is still announced and a
+	// successful one still enables the panel.
+	installing *enableState
+	addProject *projectForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
 
@@ -152,6 +161,10 @@ func (m *Model) Open(page PageID) {
 	if PageTitle(page) == "" {
 		page = DefaultPage
 	}
+	// Re-opening Configuration on top of an abandoned preview would strand the
+	// previewed theme: the page state that knows how to put it back is dropped
+	// below, so the restore happens before anything is dropped.
+	m.restoreActivePreview()
 	m.router = newRouter(page)
 	m.search.SetValue("")
 	m.search.Blur()
@@ -169,7 +182,23 @@ func (m *Model) Open(page PageID) {
 	m.aboutState = nil
 	m.enable = nil
 	m.addProject = nil
+	m.installing = nil
 	m.resetDetail()
+}
+
+// restoreActivePreview puts back the theme in force whenever a picker is still
+// previewing one. It deliberately does not go through activePicker(): a preview
+// is a change to the whole surface, and the picker that made it must be found
+// even after the route or the page it lives on has been left behind. Every path
+// that moves away from a picker calls this, so a preview can never outlive the
+// screen it belongs to.
+func (m *Model) restoreActivePreview() {
+	if state := m.appearanceState; state != nil && state.picker != nil {
+		state.picker.restoreTheme()
+	}
+	if form := m.addProject; form != nil && form.picker != nil {
+		form.picker.restoreTheme()
+	}
 }
 
 // resetDetail returns the detail pane to its opening state: sidebar has the
@@ -180,9 +209,24 @@ func (m *Model) resetDetail() {
 	m.rowCursor = 0
 	m.confirm = nil
 	m.showColorSteps = false
+	// Whatever the route being left knew about its own check goes with it;
+	// OpenRepair records it again for the route it opens.
+	m.repairOpenedOK = false
+	// A live preview belongs to the screen that started it. Moving anywhere else
+	// puts the resolved theme back, so navigation can never leave a previewed
+	// theme applied with nothing on screen able to undo it.
+	m.restoreActivePreview()
 	// An enable route belongs to the child route that opened it; leaving that
 	// route ends the attempt rather than leaving it half-answered underneath.
-	m.enable = nil
+	// A confirmed install already running is the exception: Homebrew does not
+	// stop because the route was left, so the attempt is kept and its outcome is
+	// reported as a notice.
+	if m.enable != nil {
+		if m.enable.phase == installRunning {
+			m.installing = m.enable
+		}
+		m.enable = nil
+	}
 	// A restart note answers a change the user just made on the page they made
 	// it on; carrying it somewhere else would be a claim about that page.
 	m.restartNote = ""
@@ -566,8 +610,11 @@ func (m *Model) activateCursor() {
 		return
 	}
 	m.clampCursor()
-	m.router.navigate(pages[m.cursor])
-	m.results = false
+	// Navigate, rather than moving the router directly: choosing a destination
+	// from the sidebar is the same move as any other, and it owes the page being
+	// left the same teardown — a restored theme preview above all. The query is
+	// deliberately left in place so the user can keep stepping through matches.
+	m.Navigate(pages[m.cursor])
 }
 
 // Mouse handles a mouse event whose coordinates are local to the content area.
@@ -903,6 +950,13 @@ func (m *Model) Escape() bool {
 	}
 	if m.SearchActive() {
 		m.ClearSearch()
+		return true
+	}
+	// Search with nothing typed in it still holds the keyboard. Escape hands it
+	// back to the sidebar rather than closing Configuration out from under a user
+	// who was only leaving the field.
+	if m.SearchFocused() {
+		m.focusSidebarList()
 		return true
 	}
 	if m.Route().IsChild() {

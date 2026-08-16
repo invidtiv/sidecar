@@ -572,8 +572,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// not be registered with the keymap instead: findCommand falls back to the
 		// global context whenever the focused context's binding has no handler, so
 		// a registered global would fire for every context that rebinds its key.
-		if (&m).runHostCommand(msg.CommandID) {
-			return m, nil
+		if cmd, ok := (&m).runHostCommand(msg.CommandID); ok {
+			return m, cmd
 		}
 		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
 			return m, cmd
@@ -1650,7 +1650,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// context. A context that binds it for itself — the Workspaces diff
 		// leaf cycles target tabs with it — answers first, exactly as `i` does
 		// below. Configuration always opens on Sidecar Setup.
-		if _, bound := m.keymap.CommandForContextKey(m.activeContext, ","); bound {
+		if m.contextRebindsKey(",") {
 			break
 		}
 		if !m.hasModal() && !m.consumesTextInput() {
@@ -1670,7 +1670,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// or the binding help advertises could never fire. Workspaces no longer
 		// takes the key — Enter / E / click start typing — so find-TD-task
 		// stays reachable on those lists.
-		if _, bound := m.keymap.CommandForContextKey(m.activeContext, "i"); bound {
+		if m.contextRebindsKey("i") {
 			break
 		}
 		if m.openIssueInput() {
@@ -1901,6 +1901,23 @@ func isTextInputContext(ctx string) bool {
 	default:
 		return false
 	}
+}
+
+// contextRebindsKey reports that the focused context claimed a key for itself,
+// which is what makes a global fallback stand aside for it.
+//
+// The global context is never such a claim. Sidecar's own globals — `,` for
+// Configuration, `i` for the issue input — are registered there so the palette
+// and the help modal can name them, while the work itself lives in this key
+// handler. Treating that registration as a rebind made the key shadow itself:
+// with no plugin context focused, `,` matched its own global binding, stood
+// aside for it, and then found no handler to run.
+func (m *Model) contextRebindsKey(key string) bool {
+	if m.activeContext == "" || m.activeContext == "global" {
+		return false
+	}
+	_, bound := m.keymap.CommandForContextKey(m.activeContext, key)
+	return bound
 }
 
 // isGlobalRefreshContext returns true if 'r' should trigger a global refresh.

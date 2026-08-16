@@ -253,3 +253,79 @@ func TestFieldTypingDoesNotLeakToPageShortcuts(t *testing.T) {
 		t.Fatal("typing raised a confirmation")
 	}
 }
+
+// A preview belongs to the screen that started it. Leaving Appearance by any
+// route — the sidebar, or re-opening Configuration from the gear — puts the
+// resolved theme back, so a preview can never survive as a silent change nobody
+// on screen can undo.
+func TestAppearancePreviewRestoredWhenLeavingThePage(t *testing.T) {
+	previewThen := func(t *testing.T, leave func(m *Model)) {
+		t.Helper()
+		cfg := config.Default()
+		cfg.UI.Theme = config.ThemeConfig{Name: "default"}
+		m, _ := configFixture(t, cfg)
+		m.Open(PageAppearance)
+
+		m.View(160, 45)
+		m.detailFocus = true
+		m.focusPickerList()
+		m.View(160, 45)
+
+		picker := m.activePicker()
+		if picker == nil {
+			t.Fatal("Appearance has no theme picker")
+		}
+		// The live theme is process-wide state, so the baseline is the theme the
+		// page would restore, not whatever a previous test left applied.
+		theme.ApplyResolved(picker.restore)
+		original := styles.GetCurrentThemeName()
+		previewToADifferentTheme(t, picker, original)
+
+		leave(m)
+		if styles.GetCurrentThemeName() != original {
+			t.Fatalf("leaving the page left %q applied, want %q", styles.GetCurrentThemeName(), original)
+		}
+		if picker.previewing {
+			t.Fatal("the picker still claims to be previewing")
+		}
+	}
+
+	t.Run("navigate", func(t *testing.T) {
+		previewThen(t, func(m *Model) { m.Navigate(PageTerminal) })
+	})
+	t.Run("enter on a sidebar destination", func(t *testing.T) {
+		previewThen(t, func(m *Model) {
+			m.focus = focusSidebar
+			m.cursor = indexOfPage(m.visiblePages(), PageTerminal)
+			m.activateCursor()
+			if m.Page() != PageTerminal {
+				t.Fatalf("enter landed on %q", m.Page())
+			}
+		})
+	})
+	t.Run("sidebar click", func(t *testing.T) {
+		previewThen(t, func(m *Model) { m.navigateFromSidebar(PageTerminal) })
+	})
+	t.Run("reopen", func(t *testing.T) {
+		previewThen(t, func(m *Model) { m.Open(PageSetup) })
+	})
+}
+
+// previewToADifferentTheme moves the picker until the live theme actually
+// differs from the baseline, so a test about restoring a preview never passes
+// on a preview that changed nothing.
+func previewToADifferentTheme(t *testing.T, picker *themePicker, original string) {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		if !picker.move(1) {
+			break
+		}
+		if styles.GetCurrentThemeName() != original {
+			if !picker.previewing {
+				t.Fatal("the picker changed the live theme without marking a preview")
+			}
+			return
+		}
+	}
+	t.Fatalf("the picker never previewed a theme other than %q", original)
+}

@@ -66,6 +66,12 @@ type projectForm struct {
 	message string
 }
 
+// isProjectFormRoute reports that the visible route is the project form, which
+// is what makes an open draft the thing the keyboard and the picker answer for.
+func isProjectFormRoute(route Route) bool {
+	return route.IsChild() && (route.Child == ChildAddProject || route.Child == ChildEditProject)
+}
+
 // OpenAddProject opens the Add Project route with Location focused. The
 // diagnostics "no projects" repair and Setup's "Add a project" row both land
 // here, which is why focusing the field is part of opening it.

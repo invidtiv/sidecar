@@ -332,10 +332,14 @@ func Swatch(colors []string) string {
 
 // activePicker is the picker the visible route owns, or nil.
 func (m *Model) activePicker() *themePicker {
-	if m.addProject != nil && m.addProject.picker != nil {
+	route := m.Route()
+	// The form's picker is only the active one while the form is the route on
+	// screen. A draft left behind by a route that was popped without tearing it
+	// down would otherwise answer for a page it is not on.
+	if m.addProject != nil && m.addProject.picker != nil && isProjectFormRoute(route) {
 		return m.addProject.picker
 	}
-	if m.Route().IsChild() {
+	if route.IsChild() {
 		return nil
 	}
 	if m.Page() == PageAppearance {

@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/version"
 )
@@ -467,5 +468,46 @@ func TestConfigurationHostStateCarriesVersionAndUpdateStatus(t *testing.T) {
 	state = m.configHostState()
 	if !state.Update.Checked || !state.Update.Available || state.Update.LatestVersion != "1.3.0" {
 		t.Fatalf("host state update = %#v", state.Update)
+	}
+}
+
+// The palette is a full entry point into Configuration, not a half one: the
+// command it runs must carry the readiness run with it, or Setup opens on
+// checks that never started.
+func TestPaletteOpenConfigurationRunsTheChecks(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+
+	updated, cmd := m.Update(palette.CommandSelectedMsg{CommandID: "open-configuration", Context: "global"})
+	m = asAppModel(t, updated)
+	if !m.configOpen() {
+		t.Fatal("the palette command did not open Configuration")
+	}
+	var checks *configui.ChecksMsg
+	for _, msg := range collectMsgs(cmd) {
+		if typed, ok := msg.(configui.ChecksMsg); ok {
+			checks = &typed
+		}
+	}
+	if checks == nil {
+		t.Fatal("the palette entry produced no readiness run")
+	}
+	updated, _ = m.Update(*checks)
+	m = asAppModel(t, updated)
+	if !m.config.ChecksReady() {
+		t.Fatal("Configuration opened from the palette never received results")
+	}
+}
+
+// Comma is registered globally so the palette and the help modal can name it,
+// which must not make it shadow itself when no plugin context is focused.
+func TestCommaOpensConfigurationFromTheGlobalContext(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+	m.activeContext = "global"
+
+	m = typeKey(t, m, ",")
+	if !m.configOpen() {
+		t.Fatal("comma did not open Configuration with no plugin context focused")
 	}
 }

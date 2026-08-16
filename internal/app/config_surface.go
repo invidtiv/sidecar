@@ -72,6 +72,21 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	return m.config.Recheck()
 }
 
+// refreshConfigContext re-points an open Configuration surface at the project
+// the app has just switched to. Configuration survives a project switch by
+// design, which is exactly why it must be told: its host state, its check input,
+// and its cached readiness answers are all about a working directory that is no
+// longer the current one. Refreshing beats closing — the user is mid-setting,
+// and the settings on screen are still theirs.
+func (m *Model) refreshConfigContext() tea.Cmd {
+	if !m.configOpen() {
+		return nil
+	}
+	m.config.SetHostState(m.configHostState())
+	m.config.SetCheckInput(m.configCheckInput())
+	return m.config.Recheck()
+}
+
 // configHostState describes this Sidecar to Configuration: the configuration it
 // is running with, where it is working, which configured project that is, and
 // the applications it can open a project in. Configuration reads settings from

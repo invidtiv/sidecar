@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 )
 
@@ -387,5 +388,53 @@ func TestInlinePickerTakesTheKeyboardOnOpen(t *testing.T) {
 	view := ansi.Strip(m.View(160, 45))
 	if !strings.Contains(view, m.addProject.themeEntry.Name) {
 		t.Fatalf("the Theme field does not show the chosen theme:\n%s", view)
+	}
+}
+
+// The back control is Escape with a mouse: it must tear the draft down the same
+// way. Leaving the form behind stranded its theme preview and left a stale draft
+// that swallowed the next Escape.
+func TestBackControlAbandonsTheDraftLikeEscape(t *testing.T) {
+	m, _, _ := projectFixture(t)
+	m.OpenAddProject()
+	m.View(160, 45)
+	m.closeEditor()
+	m.toggleInlineThemePicker()
+	m.View(160, 45)
+
+	picker := m.activePicker()
+	if picker == nil {
+		t.Fatal("the inline picker did not open")
+	}
+	// The live theme is process-wide state, so the baseline is what the draft
+	// would restore rather than whatever a previous test left applied.
+	theme.ApplyResolved(picker.restore)
+	original := styles.GetCurrentThemeName()
+	previewToADifferentTheme(t, picker, original)
+
+	index := -1
+	for i, c := range m.controls {
+		if c.id == regionBack {
+			index = i
+		}
+	}
+	if index < 0 {
+		t.Fatal("the form did not render a back control")
+	}
+	m.runControl(index)
+
+	if m.Route().IsChild() {
+		t.Fatalf("the back control did not leave the form: %#v", m.Route())
+	}
+	if m.addProject != nil {
+		t.Fatal("the back control left the draft behind")
+	}
+	if styles.GetCurrentThemeName() != original {
+		t.Fatalf("the back control left %q previewed, want %q", styles.GetCurrentThemeName(), original)
+	}
+	// With nothing left on screen to dismiss, Escape is the host's signal to
+	// close Configuration rather than being swallowed by the stale draft.
+	if m.Escape() {
+		t.Fatal("Escape after the back control was swallowed by a stale draft")
 	}
 }

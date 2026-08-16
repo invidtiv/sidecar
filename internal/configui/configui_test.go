@@ -167,3 +167,29 @@ func TestViewRespectsItsBox(t *testing.T) {
 		}
 	}
 }
+
+// Search holds the keyboard even with nothing typed into it. Escape there means
+// "leave the field", not "close Configuration": the sidebar gets the keyboard
+// back and the surface stays open.
+func TestEscapeFromEmptySearchReturnsToTheSidebar(t *testing.T) {
+	m := New()
+	m.Open(PageSetup)
+	m.Key(tea.KeyPressMsg{Code: '/', Text: "/"})
+	if !m.SearchFocused() {
+		t.Fatal("slash did not focus Search")
+	}
+	if !m.Escape() {
+		t.Fatal("Escape from an empty Search asked the host to close Configuration")
+	}
+	if m.SearchFocused() {
+		t.Fatal("Escape left the keyboard in Search")
+	}
+	if m.FocusContext() != ContextConfig {
+		t.Fatalf("focus context after Escape = %q", m.FocusContext())
+	}
+	// With the sidebar focused and nothing else on screen, the next Escape is
+	// the host's signal to close.
+	if m.Escape() {
+		t.Fatal("the second Escape did not reach the host")
+	}
+}

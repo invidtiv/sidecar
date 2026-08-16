@@ -240,7 +240,12 @@ func (m *Model) startInstall() tea.Cmd {
 func (m *Model) applyInstallResult(msg installResultMsg) tea.Cmd {
 	state := m.enable
 	if state == nil || state.integration.ID != msg.integration.ID {
-		return nil
+		return m.applyDetachedInstallResult(msg)
+	}
+	// The route is back on screen for the same integration, so the attempt kept
+	// when it was left is this one.
+	if m.installing != nil && m.installing.integration.ID == msg.integration.ID {
+		m.installing = nil
 	}
 	if msg.outcome.Err != nil {
 		state.phase = installFailed
@@ -256,6 +261,30 @@ func (m *Model) applyInstallResult(msg installResultMsg) tea.Cmd {
 	}
 	m.probes[msg.integration.Descriptor.Executable] = commandProbe{Found: true}
 	return m.finishEnable(msg.integration)
+}
+
+// applyDetachedInstallResult settles an install whose route was left while it
+// ran. Escape abandons the route, not the package manager: the user confirmed
+// this install, so it is still reported, and a successful one still turns the
+// panel on rather than silently installing a command and leaving the panel off.
+func (m *Model) applyDetachedInstallResult(msg installResultMsg) tea.Cmd {
+	pending := m.installing
+	if pending == nil || pending.integration.ID != msg.integration.ID {
+		return nil
+	}
+	m.installing = nil
+	name := msg.integration.Name
+	if msg.outcome.Err != nil {
+		problem := msg.outcome.Err.Error()
+		return func() tea.Msg {
+			return NoticeMsg{Message: name + " install did not finish: " + problem}
+		}
+	}
+	if m.probes == nil {
+		m.probes = map[string]commandProbe{}
+	}
+	m.probes[msg.integration.Descriptor.Executable] = commandProbe{Found: true}
+	return saveFlagCmd("Installed "+name+" — "+name+" panel on", msg.integration.Flag, true)
 }
 
 // finishEnable turns the panel on and returns to Panels.

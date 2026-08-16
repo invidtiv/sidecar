@@ -38,6 +38,10 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		heading += "  " + BetaBadge()
 	}
 	b.rightControl(heading, regionBack, "", "←  Back to "+m.router.parentLabel(), func(m *Model) tea.Cmd {
+		// The back control means exactly what Escape means here, so it tears the
+		// route down the same way. Leaving a draft behind would strand a form the
+		// user can no longer see — and, with it, its theme preview.
+		m.closeProjectForm()
 		m.Back()
 		return nil
 	})
@@ -78,6 +82,9 @@ func (m *Model) buildConfirm(b *paneBuilder) {
 	b.blank()
 	b.buttons(
 		buttonSpec{id: "confirm-apply", key: "enter", label: "Enter  Apply", primary: true, run: func(m *Model) tea.Cmd {
+			if m.confirm == nil {
+				return nil
+			}
 			apply := m.confirm.apply
 			m.confirm = nil
 			m.rowCursor = 0
@@ -98,8 +105,13 @@ func (m *Model) buildConfirm(b *paneBuilder) {
 			b.text(line)
 		}
 	}
-	// y is the other half of the confirm context's yes/no pair.
+	// y is the other half of the confirm context's yes/no pair. Like every
+	// control, it is answered from a frame that may be one event out of date, so
+	// it asks whether the confirmation is still open rather than assuming it.
 	b.declare("confirm-yes", "y", false, func(m *Model) tea.Cmd {
+		if m.confirm == nil {
+			return nil
+		}
 		apply := m.confirm.apply
 		m.confirm = nil
 		m.rowCursor = 0

@@ -137,8 +137,27 @@ func TestSetupBeforeChecksCompleteSaysItIsChecking(t *testing.T) {
 	if !strings.Contains(view, "Checking your setup") {
 		t.Fatalf("Setup did not show a loading state before results arrived:\n%s", view)
 	}
-	if len(m.controls) != 0 {
-		t.Fatalf("Setup offered controls before it had results: %#v", m.controls)
+	if len(m.cursorControls()) != 0 {
+		t.Fatalf("Setup offered rows to select before it had results: %#v", m.controls)
+	}
+}
+
+// A check run that never completed is exactly when Recheck matters, so R is a
+// control on the loading state too.
+func TestSetupRecheckWorksBeforeChecksComplete(t *testing.T) {
+	m := New()
+	m.Open(PageSetup)
+	render(m)
+
+	handled, cmd := m.Key(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	if !handled {
+		t.Fatal("R was inert while Setup was still checking")
+	}
+	if cmd == nil {
+		t.Fatal("R raised no recheck command while Setup was still checking")
+	}
+	if !m.checking {
+		t.Fatal("R did not start a check run")
 	}
 }
 

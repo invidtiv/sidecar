@@ -119,9 +119,34 @@ func (m *Model) OpenRepair(repair configchecks.RepairID) bool {
 		return false
 	}
 	m.PushChild(child, title)
+	// Whether the check was already passing when the route opened is what makes
+	// a later Recheck meaningful: a route opened on a healthy check — the agent
+	// instructions the Agents page opens to read — is where the user asked to be,
+	// and only a problem that has just become OK closes itself.
+	m.repairOpenedOK = false
+	if id, ok := repairCheckID(child); ok {
+		if found, known := m.checks.Get(id); known && found.OK {
+			m.repairOpenedOK = true
+		}
+	}
 	m.rowCursor = 0
 	m.detailFocus = false
 	return true
+}
+
+// repairCheckID is the check a repair route is about.
+func repairCheckID(child ChildID) (configchecks.ID, bool) {
+	switch child {
+	case ChildRepairTmux:
+		return configchecks.CheckTmux, true
+	case ChildRepairTerminalColors:
+		return configchecks.CheckTerminalColors, true
+	case ChildRepairAgentInstructions:
+		return configchecks.CheckAgentInstructions, true
+	case ChildRepairConfiguration:
+		return configchecks.CheckConfiguration, true
+	}
+	return "", false
 }
 
 // OpenAgentInstructions opens the agent-instructions repair as a child of the
@@ -151,20 +176,17 @@ func (m *Model) closeResolvedRepair() {
 	if !route.IsChild() {
 		return
 	}
-	var id configchecks.ID
-	switch route.Child {
-	case ChildRepairTmux:
-		id = configchecks.CheckTmux
-	case ChildRepairTerminalColors:
-		id = configchecks.CheckTerminalColors
-	case ChildRepairAgentInstructions:
-		id = configchecks.CheckAgentInstructions
-	case ChildRepairConfiguration:
-		id = configchecks.CheckConfiguration
-	default:
+	// A route the user opened on an already-healthy check has nothing to resolve.
+	// Closing it on the next Recheck would take the screen away from a user who
+	// asked for it and then pressed R.
+	if m.repairOpenedOK {
 		return
 	}
-	if found, ok := m.checks.Get(id); ok && found.OK {
+	id, ok := repairCheckID(route.Child)
+	if !ok {
+		return
+	}
+	if found, known := m.checks.Get(id); known && found.OK {
 		m.Back()
 		m.rowCursor = 0
 	}

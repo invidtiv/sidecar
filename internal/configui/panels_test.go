@@ -407,3 +407,67 @@ func TestPanelPathEditorOwnsTypedKeys(t *testing.T) {
 		t.Fatalf("typed characters reached a shortcut instead of the field: %q", got)
 	}
 }
+
+// Escape abandons the route, not the package manager. A confirmed install that
+// is still running is the user's own, so its outcome is still reported and a
+// successful one still turns the panel on.
+func TestInstallLeftRunningStillReportsItsOutcome(t *testing.T) {
+	present := map[string]bool{"brew": true}
+	m := panelsFixture(t, present, nil)
+	runner := &stubRunner{onRun: func() { present["tasks"] = true }}
+	m.SetInstallEnvironment(stubEnvironmentWith(runner, present))
+
+	activate(t, m, regionPanel+panelIDTasks)
+	m.View(160, 45)
+	cmd := runByID(t, m, regionEnableInstall)
+	if m.enable == nil || m.enable.phase != installRunning {
+		t.Fatal("the install did not start")
+	}
+
+	// The user leaves while Homebrew works.
+	if !m.Escape() {
+		t.Fatal("Escape did not leave the enable route")
+	}
+	if m.Route().IsChild() {
+		t.Fatalf("Escape stayed in the route: %#v", m.Route())
+	}
+	if m.installing == nil {
+		t.Fatal("leaving the route abandoned a running install")
+	}
+
+	msg := cmd().(installResultMsg)
+	saveCmd := m.Handle(msg)
+	if saveCmd == nil {
+		t.Fatal("the finished install was never reported")
+	}
+	reload(t, m, saveCmd())
+	if !loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+		t.Fatal("a successful install that outlived its route did not enable the panel")
+	}
+	if m.installing != nil {
+		t.Fatal("the settled install is still pending")
+	}
+}
+
+// The same attempt failing says so rather than vanishing.
+func TestInstallLeftRunningReportsFailure(t *testing.T) {
+	present := map[string]bool{"brew": true}
+	m := panelsFixture(t, present, nil)
+	m.SetInstallEnvironment(stubEnvironmentWith(&stubRunner{err: errors.New("formula not found")}, present))
+
+	activate(t, m, regionPanel+panelIDTasks)
+	m.View(160, 45)
+	cmd := runByID(t, m, regionEnableInstall)
+	m.Escape()
+
+	notice, ok := m.Handle(cmd().(installResultMsg))().(NoticeMsg)
+	if !ok {
+		t.Fatal("a failed install that outlived its route said nothing")
+	}
+	if !strings.Contains(notice.Message, "formula not found") {
+		t.Fatalf("the notice does not say what happened: %q", notice.Message)
+	}
+	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
+		t.Fatal("a failed install enabled the panel anyway")
+	}
+}

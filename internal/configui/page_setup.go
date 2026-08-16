@@ -24,6 +24,12 @@ var setupChecks = []configchecks.ID{
 func (m *Model) buildSetup(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageSetup)), "")
 
+	// Recheck stays reachable from the page without occupying a visible row:
+	// Setup's visible controls are the work, not the diagnostics. It is declared
+	// before anything can return early, so R works while the first run is still
+	// pending — which is exactly when a check that never started needs it.
+	b.declare("setup-recheck", "r", false, func(m *Model) tea.Cmd { return m.Recheck() })
+
 	if !m.checked {
 		b.lead("Checking your setup…")
 		return
@@ -80,9 +86,6 @@ func (m *Model) buildSetup(b *paneBuilder) {
 	} else {
 		b.lead("R rechecks whenever your machine or your projects change.")
 	}
-	// Recheck stays reachable from the page without occupying a visible row:
-	// Setup's visible controls are the work, not the diagnostics.
-	b.declare("setup-recheck", "r", false, func(m *Model) tea.Cmd { return m.Recheck() })
 }
 
 func setupTitle(result configchecks.Result) string {

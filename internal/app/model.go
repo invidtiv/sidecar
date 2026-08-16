@@ -971,6 +971,9 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	// Return batch of start commands plus a toast notification
 	return tea.Batch(
 		tea.Batch(startCmds...),
+		// Configuration stays open across a project switch, so it is told where
+		// it now is rather than left describing the project the user left.
+		m.refreshConfigContext(),
 		titleCmd,
 		inventoryRefresh,
 		overviewFocusCmd,
@@ -1354,17 +1357,18 @@ func (m *Model) openIssueInput() bool {
 }
 
 // runHostCommand runs a command sidecar's own key handler implements, naming it
-// by the ID the default bindings advertise. It reports whether the ID was one of
-// them.
-func (m *Model) runHostCommand(id string) bool {
+// by the ID the default bindings advertise. It returns the command the work
+// raised — opening Configuration starts its readiness run in one — and reports
+// whether the ID was one of them. A caller that dropped the command would open
+// Configuration onto checks that never ran.
+func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 	switch id {
 	case "open-issue":
-		return m.openIssueInput()
+		return nil, m.openIssueInput()
 	case "open-configuration":
-		m.openConfiguration(configui.DefaultPage)
-		return true
+		return m.openConfiguration(configui.DefaultPage), true
 	}
-	return false
+	return nil, false
 }
 
 // runGlobalWorkspacesCommand runs a palette-selected command the global

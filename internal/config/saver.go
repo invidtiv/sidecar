@@ -252,9 +252,6 @@ func SaveLastOpenInApp(projectPath, appID string) error {
 	return Save(cfg)
 }
 
-// SaveUI applies a change to the ui section and writes it. It reloads first, so
-// a setting changed in Configuration never overwrites an edit made to the file
-// since Sidecar started.
 // SaveWorkspace applies a change to the plugins.workspace section and writes
 // it. Like SaveUI it reloads first, so a setting changed in Configuration never
 // overwrites an edit made to the file since Sidecar started.
@@ -270,6 +267,9 @@ func SaveWorkspace(mutate func(*WorkspacePluginConfig)) error {
 	return Save(cfg)
 }
 
+// SaveUI applies a change to the ui section and writes it. It reloads first, so
+// a setting changed in Configuration never overwrites an edit made to the file
+// since Sidecar started.
 func SaveUI(mutate func(*UIConfig)) error {
 	cfg, err := Load()
 	if err != nil {
