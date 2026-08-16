@@ -193,9 +193,9 @@ func TestGlobalWorkspacesRendersTheSameFrameUnderAnyTheme(t *testing.T) {
 	}
 }
 
-func TestGlobalHeaderPinsSelectorAndRemovesClock(t *testing.T) {
+func TestGlobalHeaderPinsSelectorAndHidesClockWhenDisabled(t *testing.T) {
 	m := globalFrameModel(t)
-	m.showClock = true
+	m.showClock = false
 	m.width, m.height, m.ready = 200, 40, true
 	plain := ansi.Strip(m.renderHeader())
 	if strings.Contains(plain, ":") {

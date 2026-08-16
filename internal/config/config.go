@@ -266,7 +266,11 @@ func Default() *Config {
 			Overrides: make(map[string]string),
 		},
 		UI: UIConfig{
-			ShowClock:     true,
+			// Off by default. The header clock has had no renderer for a long
+			// time; now that it has one, defaulting it on would put a clock in
+			// every existing user's header for a setting they never chose.
+			// Appearance is where it gets turned on.
+			ShowClock:     false,
 			TerminalTitle: "{project}{worktree}",
 			Theme: ThemeConfig{
 				Name:      "default",

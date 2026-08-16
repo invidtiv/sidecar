@@ -13,6 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -293,6 +294,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.exitOverview()
 				}
 
+				// The gear opens Configuration on Sidecar Setup. It sits between
+				// the tabs and the selector, so it is tested before both.
+				if start, end, ok := m.getGearBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, m.openConfiguration(configui.DefaultPage)
+				}
+
 				// The project selector is a stable far-right target in both scopes.
 				if start, end, ok := m.getProjectSelectorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
 					m.showProjectSwitcher = true
@@ -312,6 +319,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		if m.configOpen() {
+			cmd := m.config.Mouse(offsetMouseY(msg, -headerHeight))
+			m.updateContext()
+			return m, cmd
 		}
 
 		if m.inGlobalScope() {
@@ -755,6 +768,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, nil
 		case ModalNone:
+			// Configuration answers esc itself: clear the search, then return
+			// from a focused child route, then close and restore the surface it
+			// covered.
+			if m.configOpen() {
+				return m, m.configEscape()
+			}
 			// No modal: Esc leaves the global space and returns to the project
 			// plugin underneath — unless the focused global surface wants esc
 			// itself. The hosted Tasks tab is a real surface whose overlays,
@@ -784,6 +803,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// Configuration covers the content area, so it answers before any of
+	// sidecar's global switches: a tab number, `q`, or a printable key typed
+	// into Search must not reach the plugin hidden underneath.
+	if !m.hasModal() && m.configOpen() {
+		return m.configKey(msg)
 	}
 
 	// The global Workspaces browser answers for its own keys before sidecar's
@@ -1588,6 +1614,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 		}
 		return m, nil
+	case ",":
+		// The conventional settings key in a TUI, and free in sidecar's global
+		// context. A context that binds it for itself — the Workspaces diff
+		// leaf cycles target tabs with it — answers first, exactly as `i` does
+		// below. Configuration always opens on Sidecar Setup.
+		if _, bound := m.keymap.CommandForContextKey(m.activeContext, ","); bound {
+			break
+		}
+		if !m.hasModal() && !m.consumesTextInput() {
+			return m, m.openConfiguration(configui.DefaultPage)
+		}
+		return m, nil
 	case "^":
 		// Toggle Open In modal
 		if !m.hasModal() {
@@ -1640,6 +1678,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateContext() {
 	if ctx, ok := modalFocusContext(m.activeModal()); ok {
 		m.activeContext = ctx
+		return
+	}
+	if m.configOpen() {
+		// "config" for navigation, "config-edit" while an editor has the
+		// keyboard. The edit context is in isTextInputContext, so typing there
+		// can never reach a global shortcut.
+		m.activeContext = m.config.FocusContext()
 		return
 	}
 	if m.inGlobalScope() {
@@ -1816,6 +1861,7 @@ func isTextInputContext(ctx string) bool {
 	switch ctx {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm",
 		"theme-switcher",
+		"config-edit",
 		"global-workspaces-filter",
 		"global-workspaces-rename",
 		"global-workspaces-create",

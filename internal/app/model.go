@@ -12,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -340,6 +341,13 @@ type Model struct {
 	globalTab   GlobalTab
 	globalTasks *globalTasksHost
 
+	// Configuration surface. Like the Tasks host it is app-owned rather than a
+	// registry plugin, so it survives project switches; unlike the global
+	// space it covers whatever surface is active rather than replacing it.
+	config       *configui.Model
+	configActive bool
+	configReturn configReturn
+
 	// UI request watcher for external CLI commands (e.g. sidecar open).
 	// The channel is deliberately not cached here: Init takes the model by
 	// value, so anything it assigns is discarded, and a cached-and-nil channel
@@ -375,6 +383,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		showClock:          cfg.UI.ShowClock,
 		titleTemplate:      cfg.UI.TerminalTitle,
 		palette:            palette.New(),
+		config:             configui.New(),
 		ui:                 ui,
 		ready:              false,
 		applicationFocused: true,
@@ -1349,6 +1358,9 @@ func (m *Model) runHostCommand(id string) bool {
 	switch id {
 	case "open-issue":
 		return m.openIssueInput()
+	case "open-configuration":
+		m.openConfiguration(configui.DefaultPage)
+		return true
 	}
 	return false
 }

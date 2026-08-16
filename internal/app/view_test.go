@@ -291,11 +291,11 @@ func TestRepoNameClick_OutsideBounds(t *testing.T) {
 	}
 }
 
-func TestRenderHeader_RemovesClockRegardlessOfLegacyConfig(t *testing.T) {
+func TestRenderHeader_ClockFollowsConfig(t *testing.T) {
 	now := time.Date(2025, 1, 1, 14, 30, 0, 0, time.UTC)
 	reg := plugin.NewRegistry(nil)
 
-	t.Run("legacy true", func(t *testing.T) {
+	t.Run("enabled", func(t *testing.T) {
 		m := Model{
 			showClock: true,
 			ui:        &UIState{Clock: now},
@@ -304,8 +304,25 @@ func TestRenderHeader_RemovesClockRegardlessOfLegacyConfig(t *testing.T) {
 			intro:     IntroModel{Done: true},
 		}
 		header := m.renderHeader()
-		if strings.Contains(header, "14:30") {
-			t.Error("header should not contain clock when showClock is true")
+		if !strings.Contains(ansi.Strip(header), "14:30") {
+			t.Errorf("header should contain the clock when showClock is true: %q", ansi.Strip(header))
+		}
+	})
+
+	t.Run("narrow drops the clock before anything else", func(t *testing.T) {
+		m := Model{
+			showClock: true,
+			ui:        &UIState{Clock: now},
+			registry:  reg,
+			width:     34,
+			intro:     IntroModel{Done: true},
+		}
+		plain := ansi.Strip(m.renderHeader())
+		if strings.Contains(plain, "14:30") {
+			t.Errorf("narrow header kept the clock: %q", plain)
+		}
+		if !strings.Contains(plain, headerGear) {
+			t.Errorf("narrow header dropped the gear: %q", plain)
 		}
 	})
 

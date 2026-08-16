@@ -73,7 +73,7 @@ func (m Model) View() tea.View {
 func (m Model) preferredMouseMode() tea.MouseMode {
 	// App-level overlays rely on hover motion, regardless of what the covered
 	// plugin prefers.
-	if !m.ready || m.hasModal() {
+	if !m.ready || m.hasModal() || m.configOpen() {
 		return tea.MouseModeAllMotion
 	}
 	// A global terminal being typed into is the same case as a plugin's: cell
@@ -93,6 +93,11 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 func (m Model) pluginCursor() *tea.Cursor {
 	if !m.ready || !m.applicationFocused || m.hasModal() ||
 		m.width < minWidth || m.height < minHeight {
+		return nil
+	}
+	if m.configOpen() {
+		// Configuration's inputs draw their own cursor, like every other
+		// sidecar-owned surface; no native cursor is placed for them.
 		return nil
 	}
 	if m.inGlobalScope() {
@@ -694,6 +699,26 @@ type headerLayout struct {
 	selectorEnd             int
 	restoreStart            int
 	restoreEnd              int
+	gearStart               int
+	gearEnd                 int
+}
+
+// headerGear is the Configuration control. It is a plain Unicode glyph rather
+// than a Nerd Font one: the header's Nerd Font affordances are pill caps, and
+// an icon nobody can render is worse than a small one everybody can.
+const headerGear = "⚙"
+
+// renderHeaderGear paints the gear chip.
+func renderHeaderGear() string {
+	return styles.ProjectRestore.Render(headerGear)
+}
+
+// headerClock renders the optional clock, or "" when it is disabled.
+func (m Model) headerClock() string {
+	if !m.showClock || m.ui == nil {
+		return ""
+	}
+	return styles.BarText.Render(m.ui.Clock.Format("15:04"))
 }
 
 // headerGeometry lays out both stable anchor zones. Global navigation is
@@ -749,6 +774,15 @@ func (m Model) headerGeometry() headerLayout {
 		return ansi.TruncateLeft(fitted, max(0, lipgloss.Width(fitted)-budget), "")
 	}
 
+	// The gear and the clock live inside the same right-cluster budget as the
+	// selector. The gear is small and is the only way into Configuration with a
+	// mouse, so it survives every width; the clock is the first thing dropped
+	// when the header runs out of room.
+	gear := renderHeaderGear()
+	gearWidth := lipgloss.Width(gear)
+	clock := m.headerClock()
+	clockWidth := lipgloss.Width(clock)
+
 	// A fully hidden or partially clipped tab must never retain a hit region.
 	// Fit whole global tabs into the space left of the pinned selector, dropping
 	// inactive tabs from the right at exceptionally narrow widths.
@@ -762,7 +796,7 @@ func (m Model) headerGeometry() headerLayout {
 		}
 		return result
 	}
-	minimumSelectorWidth := lipgloss.Width(renderSelector("", width))
+	minimumSelectorWidth := lipgloss.Width(renderSelector("", width)) + gearWidth + 1
 	for len(layout.globalTabs) > 0 && leftWidth(layout.globalTabs)+minimumSelectorWidth > width {
 		remove := -1
 		for i := len(layout.globalTabs) - 1; i >= 0; i-- {
@@ -790,7 +824,7 @@ func (m Model) headerGeometry() headerLayout {
 	// The left anchor is protected. Fit the selector into exactly the columns
 	// that remain so a long repo or worktree name cannot cover the brand/tabs or
 	// push its arrow beyond the right edge.
-	selectorBudget := max(0, width-lipgloss.Width(left))
+	selectorBudget := max(0, width-lipgloss.Width(left)-gearWidth-1)
 	selector := renderSelector(selectorLabel, selectorBudget)
 	selectorWidth := lipgloss.Width(selector)
 
@@ -799,7 +833,7 @@ func (m Model) headerGeometry() headerLayout {
 		if name := strings.TrimSpace(m.intro.RepoName); name != "" {
 			candidate := styles.ProjectRestore.Render("↖ " + name)
 			fullSelector := renderSelector(selectorLabel, width)
-			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+lipgloss.Width(fullSelector) <= width {
+			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+gearWidth+1+lipgloss.Width(fullSelector) <= width {
 				restore = candidate
 				selector = fullSelector
 				selectorWidth = lipgloss.Width(selector)
@@ -807,9 +841,12 @@ func (m Model) headerGeometry() headerLayout {
 		}
 	}
 	restoreWidth := lipgloss.Width(restore)
-	suffixWidth := selectorWidth
+	suffixWidth := selectorWidth + gearWidth + 1
 	if restoreWidth > 0 {
 		suffixWidth += restoreWidth + 1
+	}
+	if clockWidth > 0 {
+		suffixWidth += clockWidth + 1
 	}
 
 	project := []headerTab(nil)
@@ -836,6 +873,12 @@ func (m Model) headerGeometry() headerLayout {
 			}
 		}
 		return result
+	}
+	// The clock is the first casualty of a narrow header: it is the only piece
+	// of the right cluster nothing depends on.
+	if clockWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
+		suffixWidth -= clockWidth + 1
+		clock, clockWidth = "", 0
 	}
 	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		remove := -1
@@ -869,6 +912,13 @@ func (m Model) headerGeometry() headerLayout {
 		right += restore
 		right += " "
 	}
+	if clock != "" {
+		right += clock
+		right += " "
+	}
+	gearOffset := lipgloss.Width(right)
+	right += gear
+	right += " "
 	selectorOffset := lipgloss.Width(right)
 	right += selector
 	rightStart := max(lipgloss.Width(left), width-lipgloss.Width(right))
@@ -885,9 +935,25 @@ func (m Model) headerGeometry() headerLayout {
 		layout.restoreStart = rightStart + restoreOffset
 		layout.restoreEnd = layout.restoreStart + restoreWidth
 	}
+	layout.gearStart = rightStart + gearOffset
+	layout.gearEnd = min(width, layout.gearStart+gearWidth)
 	layout.selectorStart = rightStart + selectorOffset
 	layout.selectorEnd = min(width, layout.selectorStart+selectorWidth)
 	return layout
+}
+
+// getGearBounds returns the painted geometry of the Configuration gear, which
+// sits immediately left of the right-pinned project selector.
+//
+// Left, not right, of the selector: the selector's right edge is pinned to the
+// terminal edge everywhere in this file and in its tests, and moving it inward
+// to make room would break that invariant for a one-column control.
+func (m Model) getGearBounds() (start, end int, ok bool) {
+	layout := m.headerGeometry()
+	if layout.gearEnd <= layout.gearStart {
+		return 0, 0, false
+	}
+	return layout.gearStart, layout.gearEnd, true
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
@@ -944,6 +1010,9 @@ func (m Model) getProjectRestoreBounds() (start, end int, ok bool) {
 
 // renderContent renders the main content area.
 func (m Model) renderContent(width, height int) string {
+	if m.configOpen() {
+		return m.config.View(width, height)
+	}
 	if m.inGlobalScope() {
 		return m.renderGlobalContent(width, height)
 	}
@@ -1104,6 +1173,10 @@ func (m Model) footerHints() []footerHint {
 	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
 	switch {
+	case m.configOpen():
+		// Derived from the registered config bindings like every other surface,
+		// so a rebound key changes the footer with it.
+		hints = m.commandFooterHints(m.configCommands(), m.activeContext)
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalSessions:
@@ -1161,7 +1234,7 @@ func (m Model) globalFooterHints() []footerHint {
 	// A focused text input has taken the digits: typing "2" into a file
 	// finder's query is a query, not a tab switch. A footer that advertises a
 	// binding the focused surface has claimed is not a hint, it is wrong.
-	if count := len(m.visibleTabs()); count > 1 && !typing {
+	if count := len(m.visibleTabs()); count > 1 && !typing && !m.configOpen() {
 		label := "plugins"
 		if m.inGlobalScope() {
 			label = "tabs"
@@ -1177,7 +1250,12 @@ func (m Model) globalFooterHints() []footerHint {
 	// only key is `?`, drops out entirely rather than promising a key that
 	// types.
 	for _, spec := range specs {
-		key, ok := firstReachableKey(keysByCmd[spec.id], typing)
+		// Configuration owns the keyboard the way a text input does — `q` types
+		// nothing there, but it does not quit either — so quit advertises the
+		// one key that still reaches the host. Help is unaffected: `?` opens
+		// the palette from Configuration.
+		reachable := typing || (m.configOpen() && spec.id == "quit")
+		key, ok := firstReachableKey(keysByCmd[spec.id], reachable)
 		if !ok {
 			continue
 		}
