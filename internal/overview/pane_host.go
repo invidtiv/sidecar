@@ -53,15 +53,16 @@ func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 }
 
 // previewOwnsChrome reports that the preview side should draw its focused leaf
-// as focused. It is PreviewFocused, except when the preview has the tab to
-// itself: with no list beside it there is nothing for a muted border to
-// distinguish the panel from, and this surface has always framed that
-// arrangement as active.
+// as focused. It is PreviewFocused, except when the sidebar is hidden: with no
+// list beside it there is nothing for a muted border to distinguish the panel
+// from, and this surface has always framed that arrangement as active.
+//
+// The narrow full-preview arrangement is deliberately NOT a second clause here.
+// It reaches this code only with the preview focused — focusList clears full —
+// so naming it would add a way for both panels to draw as focused at once if
+// that ever stopped being true.
 func (m *Model) previewOwnsChrome() bool {
-	if m.PreviewFocused() {
-		return true
-	}
-	return !m.sidebarVisible || m.preview.full
+	return m.PreviewFocused() || !m.sidebarVisible
 }
 
 // takePaneSizeCmds empties the queue as it hands it over: a geometry assertion
@@ -113,8 +114,14 @@ func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
 	}
 }
 
+// Close is the leaf's header X. A leaf whose content is gone registers nothing,
+// the same rule Leaf and Tabs follow: a button that closes a pane that is not
+// there is a click that does nothing where something is drawn.
 func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 	if node == nil || node.Split != nil || node.Kind == panelayout.Terminal {
+		return
+	}
+	if r.m.paneContent(node) == nil {
 		return
 	}
 	r.m.registerPreviewCloseRegion(node.Kind, inner)

@@ -152,10 +152,6 @@ func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips [
 	return chips, actionStart, gitIndex
 }
 
-func (m *Model) renderPreviewWithTabs(width, height int) string {
-	return m.renderOutputPreview(width, height)
-}
-
 func (m *Model) renderOutputTerminal(width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
@@ -185,13 +181,6 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: m.decoratePreviewLine,
 	})
-}
-
-// renderOutputPreview draws the terminal leaf's body. Placing and framing the
-// leaves is the shared frame's job — see renderPreviewPeer — so what is left
-// here is one content: the terminal that has always filled this box.
-func (m *Model) renderOutputPreview(width, height int) string {
-	return m.renderOutputTerminal(width, height)
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {

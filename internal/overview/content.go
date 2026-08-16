@@ -83,7 +83,7 @@ func (c *terminalContent) SetSize(size Size) tea.Cmd {
 }
 
 func (c *terminalContent) View(Render) string {
-	return c.m.renderOutputPreview(c.size.Width, c.size.Height)
+	return c.m.renderOutputTerminal(c.size.Width, c.size.Height)
 }
 
 // docContent is the document leaf: the pane's own header row above a document

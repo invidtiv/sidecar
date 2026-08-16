@@ -120,20 +120,41 @@ func TestChromeFloorsBudgetOneBorderPerLeaf(t *testing.T) {
 	}
 }
 
-// The handle is one cell but a pointer is not. A column divider is grabbable
-// from either side; a row divider only from above, because the leaf below it
-// starts with a header row whose tabs and close button must stay clickable.
-func TestDividerHitBoxWidensWithoutMaskingAStackedHeader(t *testing.T) {
+// The handle is one cell but a pointer is not, so both axes widen by one cell
+// on each side — and the cell they take is a neighbouring leaf's border, never
+// its header row, because layout places OUTER boxes with the divider between
+// them.
+func TestDividerHitBoxWidensSymmetricallyOnBothAxes(t *testing.T) {
 	column := DividerHitBox(panelayout.Divider{Axis: panelayout.Columns, Box: Box{X: 20, Y: 3, W: 1, H: 12}})
 	if column != (Box{X: 19, Y: 3, W: 3, H: 12}) {
 		t.Fatalf("column hit = %+v, want one cell either side", column)
 	}
 	row := DividerHitBox(panelayout.Divider{Axis: panelayout.Rows, Box: Box{X: 5, Y: 9, W: 30, H: 1}})
-	if row != (Box{X: 5, Y: 8, W: 30, H: 2}) {
-		t.Fatalf("row hit = %+v, want the divider plus the row above it", row)
+	if row != (Box{X: 5, Y: 8, W: 30, H: 3}) {
+		t.Fatalf("row hit = %+v, want one cell either side", row)
 	}
-	if row.Y+row.H != 10 {
-		t.Fatal("the row divider's target reaches below itself, onto the lower leaf's header")
+}
+
+// The widened target must not reach a leaf's header row, which is where its
+// tabs and close button live. With OUTER boxes the divider is one cell from
+// each leaf's border and two from its header, so one cell of slack is exactly
+// what fits.
+func TestDividerHitBoxStopsAtTheNeighbouringBorders(t *testing.T) {
+	root := twoLeafTree(panelayout.Rows)
+	peer := Box{W: 60, H: 24}
+	layout, ok := panelayout.LayoutTree(root, peer, ChromeFloors(panelayout.Floors{
+		Terminal: panelayout.Floor{Width: 10, Height: 3},
+		Doc:      panelayout.Floor{Width: 10, Height: 3},
+	}), 1)
+	if !ok || len(layout.Dividers) != 1 {
+		t.Fatalf("layout = %+v ok=%v", layout, ok)
+	}
+	hit := DividerHitBox(layout.Dividers[0])
+	for _, placement := range layout.Leaves {
+		header := Inset(placement.Box).Y
+		if header >= hit.Y && header < hit.Y+hit.H {
+			t.Fatalf("divider target %+v covers leaf %+v's header row %d", hit, placement.Box, header)
+		}
 	}
 }
 

@@ -149,19 +149,29 @@ func RenderDividerHandle(divider panelayout.Divider, state ui.HandleState) strin
 }
 
 // DividerHitBox widens a 1-cell divider into the forgiving target a pointer is
-// actually tested against. A column divider claims the cell on each side; a row
-// divider claims only itself and the row above it, deliberately leaving the
-// lower leaf's header row clickable so a stacked leaf's tabs and close button
-// stay reachable.
+// actually tested against: the divider plus one cell of the leaf on each side,
+// on both axes.
+//
+// What that cell is, is why this is safe. Layout places OUTER boxes with the
+// divider in the gap between them, so the cell either side is a leaf's own
+// border — never its header row, which sits one cell further in. A header's
+// tabs and close button are therefore never masked, and the two axes can behave
+// the same way. (They did not always: before every leaf wore its own chrome, a
+// row divider sat directly against the lower leaf's header and could only widen
+// upward.)
+//
+// Tab and close targets are registered after dividers regardless, so even an
+// overlap would resolve to the header. This keeps the pointer from having to be
+// exact in the first place.
 func DividerHitBox(divider panelayout.Divider) Box {
 	hit := divider.Box
 	if divider.Axis == panelayout.Columns {
 		hit.X--
-		hit.W = 3
+		hit.W += 2
 		return hit
 	}
 	hit.Y--
-	hit.H = 2
+	hit.H += 2
 	return hit
 }
 

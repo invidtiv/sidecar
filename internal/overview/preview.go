@@ -703,7 +703,7 @@ func (m *Model) previewSplit(width int) termpreview.Split {
 // The size is the layout's own box, which is the box previewWindow places its
 // surface in; hit testing therefore maps onto the rows drawn here.
 func (m *Model) renderPreview(width, height int) string {
-	return m.renderPreviewWithTabs(width, height)
+	return m.renderOutputTerminal(width, height)
 }
 
 // appendWindowStatus adds the shared facts about the drawn window to the
