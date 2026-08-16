@@ -1,10 +1,13 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
@@ -23,6 +26,9 @@ import (
 //     redraw is the resize.
 //   - On drop: immediate tmux resize and full paint. A leftover
 //     deferredPaneResizeMsg is a no-op so it cannot fire a second resize.
+//   - A tty.Model deferredResizeMsg delivered during the drag must not
+//     ResizeTmuxPane (unless resizeDebounceMs is 0). Drop flushes the last
+//     drag size via ResizeAndPollImmediate; a leftover model tick is a no-op.
 //
 // 0 debounce is today's per-event paint + poll-driven resize. Keyboard +/-
 // and host WindowSizeMsg are not divider drags and stay immediate.
@@ -160,4 +166,146 @@ func TestResizeDebounceDefaultMatchesConfig(t *testing.T) {
 	if p.resizeDebounce() != 0 {
 		t.Fatalf("explicit 0 = %v", p.resizeDebounce())
 	}
+}
+
+func TestModelDeferredResizeDuringDividerDragIssuesNoTmux(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p, model := liveOwnedDividerPlugin(t)
+	clearTmuxLog(t, logPath)
+	deferred := armModelDeferredResize(t, model)
+
+	p.mouseHandler.StartDrag(10, 5, regionPaneTreeDivider, 50)
+	_, cmd := p.Update(deferred)
+	runTeaCmds(cmd)
+
+	if n := countTmuxResizes(readTmuxLog(t, logPath)); n != 0 {
+		t.Fatalf("deferredResizeMsg during divider drag issued %d resize(s): %s", n, readTmuxLog(t, logPath))
+	}
+}
+
+func TestDividerDropFlushesLastDragSizeAndLeftoverModelTickIsNoop(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p, model := liveOwnedDividerPlugin(t)
+	clearTmuxLog(t, logPath)
+	deferred := armModelDeferredResize(t, model)
+
+	p.handleMouseClick(mouse.MouseAction{Region: &mouse.Region{ID: regionPaneTreeDivider, Data: p.paneRoot.ID}, X: 70, Y: 5})
+	if cmd := p.handleMouseDrag(mouse.MouseAction{DragStartID: regionPaneTreeDivider, DragDX: 14}); cmd != nil {
+		t.Fatal("drag motion emitted a resize cmd")
+	}
+	p.syncTerminalResizeHold()
+	for _, cmd := range p.reconcileTerminalModels() {
+		runTeaCmds(cmd)
+	}
+	if n := countTmuxResizes(readTmuxLog(t, logPath)); n != 0 {
+		t.Fatalf("drag/reconcile issued %d resize(s) before drop: %s", n, readTmuxLog(t, logPath))
+	}
+
+	wantW, wantH := p.calculatePreviewDimensions()
+	wantW = p.terminalContentWidth(wantW)
+	flush := p.handleMouseDragEnd(mouse.MouseAction{
+		DragStartID: regionPaneTreeDivider,
+		Region:      &mouse.Region{ID: regionPreviewPane},
+	})
+	if flush == nil {
+		t.Fatal("divider drop did not flush an immediate resize")
+	}
+	runTeaCmds(flush)
+
+	logged := readTmuxLog(t, logPath)
+	if n := countTmuxResizes(logged); n != 1 {
+		t.Fatalf("drop issued %d resize(s), want 1: %s", n, logged)
+	}
+	want := fmt.Sprintf("-x %d", wantW)
+	wantY := fmt.Sprintf("-y %d", wantH)
+	if !strings.Contains(logged, want) || !strings.Contains(logged, wantY) {
+		t.Fatalf("drop resized to something other than last drag size %dx%d: %s", wantW, wantH, logged)
+	}
+
+	if cmd := model.Update(deferred); cmd != nil {
+		t.Fatal("leftover model tick after drop was not a no-op")
+	}
+	if n := countTmuxResizes(readTmuxLog(t, logPath)); n != 1 {
+		t.Fatalf("leftover model tick issued a second resize: %s", readTmuxLog(t, logPath))
+	}
+}
+
+func TestModelDeferredResizeDuringDragHonorsDebounceZero(t *testing.T) {
+	logPath := installSuccessfulFakeTmux(t)
+	p, model := liveOwnedDividerPlugin(t)
+	clearTmuxLog(t, logPath)
+	deferred := armModelDeferredResize(t, model)
+
+	p.setResizeDebounce(0)
+	p.mouseHandler.StartDrag(10, 5, regionPaneTreeDivider, 50)
+	_, cmd := p.Update(deferred)
+	runTeaCmds(cmd)
+
+	if n := countTmuxResizes(readTmuxLog(t, logPath)); n == 0 {
+		t.Fatal("resizeDebounceMs==0 did not let a model tick resize during drag")
+	}
+}
+
+func liveOwnedDividerPlugin(t *testing.T) (*Plugin, *tty.Model) {
+	t.Helper()
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# drag\n")
+	p := interactiveUIRequestTestPlugin(t, root)
+	p.focused = true
+	var saved state.WorkspaceState
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return saved },
+		setWorkspaceState: func(_ string, next state.WorkspaceState) error { saved = next; return nil },
+	}
+	p.openTerminalPath("README.md", 0)
+	// Production always has both models. A nil panel would make
+	// reconcileTerminalModels reset both and Open the primary, which
+	// resizes tmux synchronously.
+	if p.panelTerminal == nil {
+		p.panelTerminal = p.newWorkspaceTerminal()
+	}
+	return p, p.primaryTerminal
+}
+
+func armModelDeferredResize(t *testing.T, model *tty.Model) tea.Msg {
+	t.Helper()
+	model.State.LastResizeAt = time.Now().Add(-10 * time.Millisecond)
+	cmd := model.SetDimensions(model.Width-4, model.Height-1)
+	if cmd == nil {
+		t.Fatal("SetDimensions inside the debounce window armed no retry")
+	}
+	msg := cmd()
+	if !tty.IsTerminalMessage(msg) {
+		t.Fatalf("armed %T, want tty.deferredResizeMsg", msg)
+	}
+	return msg
+}
+
+func runTeaCmds(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			runTeaCmds(child)
+		}
+	}
+}
+
+func clearTmuxLog(t *testing.T, logPath string) {
+	t.Helper()
+	if err := os.WriteFile(logPath, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func countTmuxResizes(logged string) int {
+	n := 0
+	for _, line := range strings.Split(logged, "\n") {
+		if strings.Contains(line, "resize-window") || strings.Contains(line, "resize-pane") {
+			n++
+		}
+	}
+	return n
 }

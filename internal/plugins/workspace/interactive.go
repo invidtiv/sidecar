@@ -438,6 +438,7 @@ func (p *Plugin) resizeDebounce() time.Duration {
 
 func (p *Plugin) setResizeDebounce(d time.Duration) {
 	p.resizeDebounceDur = &d
+	p.applyResizeDebounceToTerminals()
 }
 
 func (p *Plugin) cancelDeferredPaneResize() {
@@ -445,6 +446,25 @@ func (p *Plugin) cancelDeferredPaneResize() {
 	if p.interactiveState != nil {
 		p.interactiveState.ResizeRetryPending = false
 	}
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.CancelDeferredResize()
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.CancelDeferredResize()
+	}
+}
+
+func (p *Plugin) setTerminalResizeHold(hold bool) {
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.SetResizeHold(hold)
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.SetResizeHold(hold)
+	}
+}
+
+func (p *Plugin) syncTerminalResizeHold() {
+	p.setTerminalResizeHold(p.dividerDragBlocksResize())
 }
 
 func isDividerDragRegion(id string) bool {
@@ -480,6 +500,9 @@ func (p *Plugin) resizeThroughTerminal(target string, width, height int) (tea.Cm
 	model := p.terminalModelForTarget(target)
 	if model == nil {
 		return nil, false
+	}
+	if p.resizeFlushImmediate {
+		return model.ResizeAndPollImmediate(width, height), true
 	}
 	return model.SetDimensions(width, height), true
 }

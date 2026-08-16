@@ -342,6 +342,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		// in flight belongs to a gesture that is over, and neither activation nor a
 		// forwarded click survives a release the app never saw.
 		p.pointer.Abandon()
+		p.syncTerminalResizeHold()
 		if p.terminalPointerIntent(mouse.ActionHover, "", dragSourceBefore, true) == tty.PointerAbandon &&
 			p.selection.Anchor.Valid() {
 			// A release outside the window never reaches Bubble Tea. Close the local
@@ -350,25 +351,29 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 
+	var cmd tea.Cmd
 	switch action.Type {
 	case mouse.ActionClick:
-		return p.handleMouseClick(action)
+		cmd = p.handleMouseClick(action)
 	case mouse.ActionDoubleClick:
-		return p.handleMouseDoubleClick(action)
+		cmd = p.handleMouseDoubleClick(action)
 	case mouse.ActionTripleClick:
-		return p.handleMouseTripleClick(action)
+		cmd = p.handleMouseTripleClick(action)
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		return p.handleMouseScroll(action)
+		cmd = p.handleMouseScroll(action)
 	case mouse.ActionScrollLeft, mouse.ActionScrollRight:
-		return p.handleMouseHorizontalScroll(action)
+		cmd = p.handleMouseHorizontalScroll(action)
 	case mouse.ActionDrag:
-		return p.handleMouseDrag(action)
+		cmd = p.handleMouseDrag(action)
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd(action)
+		cmd = p.handleMouseDragEnd(action)
 	case mouse.ActionHover:
-		return p.handleMouseHover(action)
+		cmd = p.handleMouseHover(action)
 	}
-	return nil
+	// After click-to-start and after EndDrag, so reconcile in this Update
+	// sees the same hold the drop flush already applied.
+	p.syncTerminalResizeHold()
+	return cmd
 }
 
 func (p *Plugin) handleTaskLinkModalMouse(msg tea.MouseMsg) tea.Cmd {
@@ -1724,9 +1729,13 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		dragSource = p.lastDragRegion
 	}
 	if isDividerDragRegion(dragSource) {
-		// Immediate resize on drop. A leftover deferred tick must not fire
-		// a second SIGWINCH after this flush.
+		// Immediate resize on drop. Hold is released first so the flush is not
+		// itself gated, then model and workspace retries are cancelled so a
+		// leftover tick cannot fire a second SIGWINCH.
+		p.setTerminalResizeHold(false)
 		p.cancelDeferredPaneResize()
+		p.resizeFlushImmediate = true
+		defer func() { p.resizeFlushImmediate = false }()
 	}
 	if p.terminalPointerIntent(mouse.ActionDragEnd, "", dragSource, false) == tty.PointerFinish &&
 		(p.selection.Anchor.Valid() || p.pointer.Resolution != tty.ClickNone) {

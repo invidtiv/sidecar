@@ -276,6 +276,9 @@ type Plugin struct {
 	// resizeGeneration invalidates leftover deferredPaneResizeMsg ticks after
 	// a divider drop so they cannot fire a second SIGWINCH.
 	resizeGeneration uint64
+	// resizeFlushImmediate is set only while constructing divider-drop resize
+	// cmds so owned tty.Models flush via ResizeAndPollImmediate.
+	resizeFlushImmediate bool
 
 	// Timer leak prevention (td-83dc22): generation counters to invalidate stale timers.
 	// When a timer fires, it checks if its captured generation matches the current one.

@@ -326,3 +326,84 @@ func TestSetResizeDebounceZeroAssertsImmediately(t *testing.T) {
 		t.Fatal("0 debounce deferred instead of asserting")
 	}
 }
+
+func TestResizeHoldSuppressesDeferredAssertion(t *testing.T) {
+	m := debouncedModel(t, 10*time.Millisecond)
+	cmd := m.SetDimensions(60, 20)
+	if cmd == nil {
+		t.Fatal("a resize inside the debounce window armed no retry")
+	}
+	deferred, ok := cmd().(deferredResizeMsg)
+	if !ok {
+		t.Fatalf("armed %T, want deferredResizeMsg", cmd())
+	}
+
+	m.SetResizeHold(true)
+	before := m.State.LastResizeAt
+	if out := m.Update(deferred); out != nil {
+		t.Fatal("held deferredResizeMsg issued a resize")
+	}
+	if !m.State.LastResizeAt.Equal(before) {
+		t.Fatal("held assertion recorded a resize it did not issue")
+	}
+	if m.Width != 60 || m.Height != 20 {
+		t.Fatalf("hold dropped the owed size: %dx%d", m.Width, m.Height)
+	}
+}
+
+func TestResizeHoldDoesNotBlockDebounceZero(t *testing.T) {
+	m := debouncedModel(t, 10*time.Millisecond)
+	m.SetResizeDebounce(0)
+	m.SetResizeHold(true)
+	before := m.State.LastResizeAt
+	if cmd := m.SetDimensions(60, 20); cmd == nil {
+		t.Fatal("hold + 0 debounce dropped the resize")
+	}
+	if !m.State.LastResizeAt.After(before) {
+		t.Fatal("hold + 0 debounce deferred instead of asserting")
+	}
+}
+
+func TestCancelDeferredResizeMakesLeftoverTickNoop(t *testing.T) {
+	m := debouncedModel(t, 10*time.Millisecond)
+	cmd := m.SetDimensions(60, 20)
+	if cmd == nil {
+		t.Fatal("a resize inside the debounce window armed no retry")
+	}
+	deferred, ok := cmd().(deferredResizeMsg)
+	if !ok {
+		t.Fatalf("armed %T, want deferredResizeMsg", cmd())
+	}
+
+	m.CancelDeferredResize()
+	if m.resizeRetryPending {
+		t.Fatal("CancelDeferredResize left the retry pending")
+	}
+	if out := m.Update(deferred); out != nil {
+		t.Fatal("leftover tick after cancel issued a resize")
+	}
+}
+
+func TestResizeAndPollImmediateCancelsPendingAndFlushesOwedSize(t *testing.T) {
+	m := debouncedModel(t, 10*time.Millisecond)
+	cmd := m.SetDimensions(60, 20)
+	if cmd == nil || !m.resizeRetryPending {
+		t.Fatal("expected an owed deferred resize")
+	}
+	leftover, ok := cmd().(deferredResizeMsg)
+	if !ok {
+		t.Fatalf("armed %T, want deferredResizeMsg", cmd())
+	}
+
+	before := m.State.LastResizeAt
+	flush := m.ResizeAndPollImmediate(60, 20)
+	if flush == nil {
+		t.Fatal("immediate flush of an owed same-size geometry issued nothing")
+	}
+	if !m.State.LastResizeAt.After(before) {
+		t.Fatal("immediate flush did not record the resize")
+	}
+	if out := m.Update(leftover); out != nil {
+		t.Fatal("leftover tick after immediate flush issued a second resize")
+	}
+}
