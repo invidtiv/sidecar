@@ -2,6 +2,7 @@ package configui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,18 +38,22 @@ func (m *Model) projectsPage() *projectsState {
 }
 
 // clampProjectCursor keeps the selection inside the configured list, and
-// honours a pending selection request from a child route.
-func (m *Model) clampProjectCursor() {
+// honours a pending selection request from a child route. It reports whether it
+// resolved such a request, which outranks where the row cursor happens to be:
+// a project just added is the project the page should be on.
+func (m *Model) clampProjectCursor() bool {
 	state := m.projectsState
 	if state == nil {
-		return
+		return false
 	}
+	resolved := false
 	list := m.projects()
 	if state.selectPath != "" {
 		for i, project := range list {
 			if project.Path == state.selectPath {
 				state.cursor = i
 				state.selectPath = ""
+				resolved = true
 				break
 			}
 		}
@@ -59,6 +64,24 @@ func (m *Model) clampProjectCursor() {
 	if state.cursor < 0 {
 		state.cursor = 0
 	}
+	return resolved
+}
+
+// syncProjectCursor points the page's selection at the row the pane's cursor is
+// on. The list has one row per project and no window of its own, so the row
+// cursor is the selection — deciding it twice is how arrowing down the list
+// lit up a second row and left the detail block below describing a project the
+// user was no longer on.
+func (m *Model) syncProjectCursor() {
+	state := m.projectsState
+	if state == nil || !strings.HasPrefix(m.focusedID, regionProjectRow) {
+		return
+	}
+	index, err := strconv.Atoi(strings.TrimPrefix(m.focusedID, regionProjectRow))
+	if err != nil || index < 0 || index >= len(m.projects()) {
+		return
+	}
+	state.cursor = index
 }
 
 // selectedProject is the project the page is showing detail for, or nil.
@@ -74,7 +97,13 @@ func (m *Model) selectedProject() *config.ProjectConfig {
 
 func (m *Model) buildProjects(b *paneBuilder) {
 	state := m.projectsPage()
-	m.clampProjectCursor()
+	if m.clampProjectCursor() {
+		// A request from a child route wins, and takes the row cursor with it,
+		// so the two selection sources never end up naming different projects.
+		m.focusControlByID(fmt.Sprintf("%s%d", regionProjectRow, state.cursor))
+	} else {
+		m.syncProjectCursor()
+	}
 	list := m.projects()
 
 	b.text(PaneTitle(PageTitle(PageProjects)), "")
@@ -110,9 +139,6 @@ func (m *Model) buildProjects(b *paneBuilder) {
 			m.projectsPage().cursor = index
 			return nil
 		}, func(s State) string {
-			if index == state.cursor && m.detailOwnsKeys() {
-				s.Focused = true
-			}
 			badge := ""
 			if project.Path == m.host.ProjectPath {
 				badge = "CURRENT"
@@ -267,5 +293,9 @@ func (m *Model) moveSelectedProject(delta int) tea.Cmd {
 	// request would resolve against it and be consumed on the wrong index.
 	state.cursor = next
 	state.selectPath = ""
+	// The row cursor follows the project too. It and the selection are the same
+	// idea, and leaving the cursor on the row the project used to be in would
+	// put the highlight back on the neighbour at the next render.
+	m.focusControlByID(fmt.Sprintf("%s%d", regionProjectRow, next))
 	return SaveCmd("Reordered projects", func() error { return config.MoveProject(path, delta) })
 }

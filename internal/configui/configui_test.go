@@ -342,3 +342,33 @@ func TestReopenAfterClosingMidSearchAgreesWithTheDetailPane(t *testing.T) {
 		t.Fatalf("sidebar highlights %q while the detail pane shows %q", pages[m.cursor], m.Page())
 	}
 }
+
+// Exactly one control on a page is the focused one. declare used to decide that
+// against cursorControl(), which reads the control list as it stands — and
+// mid-build that list ends at the control being declared, so its clamp made
+// every control at or above the cursor answer to it. That is what painted the
+// top of a page, and the whole top of the theme list, as selected at once.
+func TestDeclareFocusesOnlyTheCursorStop(t *testing.T) {
+	m := New()
+	m.detailFocus = true
+	m.rowCursor = 3
+
+	b := m.newPaneBuilder(0, 80, 40)
+	ids := []string{"a", "b", "c", "d", "e"}
+	var focused []string
+	for i, id := range ids {
+		// A control that is not a cursor stop sits between them, the way a
+		// page's right-hand pill does, and must not shift the count.
+		if i == 2 {
+			if state := b.declare(id+"-pill", "", false, nil); state.Focused {
+				t.Fatalf("a control that is not a cursor stop was focused: %q", id+"-pill")
+			}
+		}
+		if state := b.declare(id, "", true, nil); state.Focused {
+			focused = append(focused, id)
+		}
+	}
+	if len(focused) != 1 || focused[0] != "d" {
+		t.Fatalf("controls painted as focused = %v, want exactly [d]", focused)
+	}
+}

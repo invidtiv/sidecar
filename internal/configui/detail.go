@@ -38,11 +38,40 @@ type paneBuilder struct {
 	// content to the bottom knows where the bottom is.
 	height int
 	lines  []string
+	// stops counts the cursor stops declared so far, which is the position the
+	// row cursor is expressed in. Comparing against it is what lets declare
+	// decide focus while the control list is still half-built.
+	stops int
 }
 
 func (m *Model) newPaneBuilder(originX, inner, height int) *paneBuilder {
+	// The cursor's identity has to survive the rebuild: the indices it is
+	// expressed in are about to be thrown away and recreated, and a list that
+	// scrolled or gained a divider since the last frame will not recreate them
+	// in the same order.
+	m.captureFocus()
 	m.controls = m.controls[:0]
 	return &paneBuilder{m: m, originX: originX, inner: inner, height: height}
+}
+
+// captureFocus records, by id, the control the row cursor is on, from the
+// controls the last completed frame declared.
+func (m *Model) captureFocus() {
+	m.focusedID = ""
+	if !m.detailOwnsKeys() {
+		return
+	}
+	if m.pendingFocus != "" {
+		// A control asked for but not yet rendered is where the cursor is
+		// going, so that is the cursor's identity for this frame. A list that
+		// claims the cursor can then paint the right row on the frame that
+		// first shows it, rather than one frame later.
+		m.focusedID = m.pendingFocus
+		return
+	}
+	if index := m.cursorControl(); index >= 0 && index < len(m.controls) {
+		m.focusedID = m.controls[index].id
+	}
 }
 
 // spacer pushes what follows to the bottom of the pane. following is how many
@@ -102,17 +131,51 @@ func (b *paneBuilder) lead(text string) {
 // blank appends an empty line.
 func (b *paneBuilder) blank() { b.lines = append(b.lines, "") }
 
+// moreLine paints a line that is part of a list without being a control — the
+// theme list's "n more above" — and gives it a hit region, so the wheel over it
+// still belongs to the list.
+func (b *paneBuilder) moreLine(id, line string) {
+	y := len(b.lines)
+	b.lines = append(b.lines, line)
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, 1, nil)
+}
+
 // declare registers a control and returns the interaction state its renderer
 // should use. Declaration order is cursor order.
+//
+// This is the only place a control is told it is focused. Focus is decided
+// against the builder's own count of cursor stops rather than against
+// cursorControl(), which reads the finished control list: mid-build that list
+// ends at the control being declared, so its clamp made every control at or
+// above the cursor answer "that is me" — which is what painted the whole top of
+// a page, and the whole top of the theme list, as selected.
 func (b *paneBuilder) declare(id, key string, cursor bool, run func(*Model) tea.Cmd) State {
-	index := len(b.m.controls)
 	b.m.controls = append(b.m.controls, control{id: id, key: key, cursor: cursor, run: run})
 	state := State{Hovered: b.m.hoverID == id}
-	if cursor && b.m.detailOwnsKeys() && b.m.cursorControl() == index {
-		state.Focused = true
-		state.Hovered = false
+	if cursor {
+		stop := b.stops
+		b.stops++
+		if b.m.detailOwnsKeys() && stop == b.m.rowCursor {
+			state.Focused = true
+			state.Hovered = false
+		}
 	}
 	return state
+}
+
+// claimCursor lets a list that keeps its own selection — the theme picker,
+// which scrolls a window over hundreds of themes and moves inside it with its
+// own keys — put the pane's row cursor on the row it has selected, so the two
+// can never name different rows. rowsAhead is how many cursor stops the list is
+// about to declare before the selected one.
+//
+// It does nothing unless the row cursor is already inside the list: a cursor
+// the user has moved out to the rest of the page must not be dragged back in.
+func (b *paneBuilder) claimCursor(prefix string, rowsAhead int) {
+	if !strings.HasPrefix(b.m.focusedID, prefix) {
+		return
+	}
+	b.m.rowCursor = b.stops + rowsAhead
 }
 
 // row declares a control and paints it. render receives the control's state and

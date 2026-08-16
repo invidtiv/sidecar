@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -436,5 +437,49 @@ func TestBackControlAbandonsTheDraftLikeEscape(t *testing.T) {
 	// close Configuration rather than being swallowed by the stale draft.
 	if m.Escape() {
 		t.Fatal("Escape after the back control was swallowed by a stale draft")
+	}
+}
+
+// Arrowing the project list selects one project: the row that looks selected,
+// and the one the detail block below describes. The page used to decide that
+// twice — once from the pane's row cursor and once from its own selection
+// index — which painted two rows as selected and described the wrong one.
+func TestProjectListSelectsExactlyOneRow(t *testing.T) {
+	m, _, second := projectFixture(t)
+	m.Open(PageProjects)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusControlByID(regionProjectRow + "0")
+	m.View(160, 45)
+
+	// Down onto the second project.
+	m.Key(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	view := m.View(160, 45)
+
+	// Each row is judged on the line it painted, found through its own hit
+	// region. Matching against the whole view would credit the detail block
+	// below the list, which paints the selected project's name in the same
+	// style — and so would pass with no row focused at all.
+	focused := titleStyle()
+	lines := strings.Split(view, "\n")
+	var selected []string
+	for i, project := range m.projects() {
+		region := regionFor(t, m, fmt.Sprintf("%s%d", regionProjectRow, i))
+		if region.Rect.Y >= len(lines) {
+			t.Fatalf("row %d claims line %d of a %d-line view", i, region.Rect.Y, len(lines))
+		}
+		line := lines[region.Rect.Y]
+		if !strings.Contains(ansi.Strip(line), project.Name) {
+			t.Fatalf("row %d claims a line that does not hold %q:\n%s", i, project.Name, ansi.Strip(line))
+		}
+		if strings.Contains(line, focused.Render(project.Name)) {
+			selected = append(selected, project.Name)
+		}
+	}
+	if len(selected) != 1 || selected[0] != "beta" {
+		t.Fatalf("rows painted as selected = %v, want exactly [beta]:\n%s", selected, ansi.Strip(view))
+	}
+	if got := m.selectedProject(); got == nil || got.Path != second {
+		t.Fatalf("the detail block follows %#v, want the row the cursor is on", got)
 	}
 }

@@ -27,6 +27,11 @@ const (
 	regionThemeSearch = "config-theme-search"
 	regionThemeRow    = "config-theme-row-"
 	regionThemeGlobal = "config-theme-global"
+	// regionThemeMore covers the "↑ n more above" / "↓ n more below" lines. They
+	// are not controls, but they are part of the list as far as the wheel is
+	// concerned: the first notch pushes "more above" under the pointer, and a
+	// list that stops scrolling there scrolls exactly once.
+	regionThemeMore = "config-theme-more"
 )
 
 // themePicker is the picker's state. A page holds one.
@@ -135,6 +140,48 @@ func (p *themePicker) clamp() {
 	}
 }
 
+// rowsBefore counts the selectable rows between the top of the visible window
+// and index. Dividers are painted but never declared, so this — not the
+// difference of two filtered indices — is how far into the pane's cursor stops
+// a visible row sits.
+func (p *themePicker) rowsBefore(index int) int {
+	rows := 0
+	for i := p.scroll; i < index && i < len(p.filtered); i++ {
+		if !p.filtered[i].IsSeparator {
+			rows++
+		}
+	}
+	return rows
+}
+
+// scrollBy moves the cursor by whole rows, which is what the mouse wheel asks
+// of the list. It reports whether anything moved. The window follows the
+// cursor, so a wheel notch can never scroll the selection out of sight.
+//
+// One notch is three rows, and the preview it ends on is the only one worth
+// applying: previewing each row a flick passes over would recolour the whole
+// application three times for a gesture the user reads as one.
+func (p *themePicker) scrollBy(delta int) bool {
+	if delta == 0 {
+		return false
+	}
+	step := 1
+	if delta < 0 {
+		step, delta = -1, -delta
+	}
+	moved := false
+	for i := 0; i < delta; i++ {
+		if !p.step(step) {
+			break
+		}
+		moved = true
+	}
+	if moved {
+		p.preview()
+	}
+	return moved
+}
+
 // selected is the entry under the picker's cursor.
 func (p *themePicker) selected() theme.Entry {
 	if p.cursor < 0 || p.cursor >= len(p.filtered) {
@@ -147,6 +194,17 @@ func (p *themePicker) selected() theme.Entry {
 // the cursor is already at the end it was asked to move toward, which is the
 // page's signal to move its own cursor out of the list.
 func (p *themePicker) move(delta int) bool {
+	if !p.step(delta) {
+		return false
+	}
+	p.preview()
+	return true
+}
+
+// step moves the cursor without previewing. Preview applies a theme across the
+// whole surface, which is worth doing once for a gesture rather than once per
+// row the gesture crossed.
+func (p *themePicker) step(delta int) bool {
 	if len(p.filtered) == 0 {
 		return false
 	}
@@ -159,7 +217,6 @@ func (p *themePicker) move(delta int) bool {
 	}
 	p.cursor = next
 	p.clamp()
-	p.preview()
 	return true
 }
 
@@ -237,14 +294,25 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 
 	// The list. Only the visible window is declared, so the keyboard can only
 	// reach a row that is on screen; the picker owns movement inside it.
+	//
+	// Because the picker owns movement, it owns the cursor while the cursor is
+	// in it: the row it has selected is the row the pane's cursor is on, and
+	// the pane paints exactly that one. Deciding the highlight twice — once
+	// from the control index, once from the picker's own index into a filtered
+	// list that also holds dividers — is what made a click halfway down the
+	// list light up the rows above it as well.
+	b.claimCursor(regionThemeRow, p.rowsBefore(p.cursor))
 	if p.scroll > 0 {
-		b.text(pad + mutedStyle().Render(fmt.Sprintf("↑ %d more above", p.scroll)))
+		b.moreLine(regionThemeMore, pad+mutedStyle().Render(fmt.Sprintf("↑ %d more above", p.scroll)))
 	}
 	end := min(len(p.filtered), p.scroll+p.rows)
 	for i := p.scroll; i < end; i++ {
 		entry := p.filtered[i]
 		if entry.IsSeparator {
-			b.text(pad + mutedStyle().Render("── "+entry.SeparatorText+" ──"))
+			// A divider is not a control, but it is part of the list under the
+			// wheel: the library divider sits in the middle of the window the
+			// page opens on, and a notch over it must not be dropped.
+			b.moreLine(regionThemeMore, pad+mutedStyle().Render("── "+entry.SeparatorText+" ──"))
 			continue
 		}
 		index := i
@@ -261,14 +329,11 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 			}
 			return picker.selectEntry(m, picker.selected())
 		}, func(state State) string {
-			if index == p.cursor && m.detailOwnsKeys() && !m.editing() {
-				state.Focused = true
-			}
 			return themeRow(entry, p.current, b.inner-indent, state, pad)
 		})
 	}
 	if remaining := len(p.filtered) - end; remaining > 0 {
-		b.text(pad + mutedStyle().Render(fmt.Sprintf("↓ %d more below", remaining)))
+		b.moreLine(regionThemeMore, pad+mutedStyle().Render(fmt.Sprintf("↓ %d more below", remaining)))
 	}
 
 	if p.useGlobal != nil {

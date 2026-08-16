@@ -98,6 +98,11 @@ type Model struct {
 	// pendingFocus is a control to put the row cursor on as soon as it is
 	// rendered.
 	pendingFocus string
+	// focusedID is the id of the control the row cursor was on when the pane
+	// was last rebuilt. It is the cursor's identity across a rebuild, which the
+	// row cursor's index alone is not: a list that scrolls or gains a divider
+	// declares a different control at the same index on the next frame.
+	focusedID string
 	// pending holds commands raised outside a key's own return path — a
 	// completion request started by a keystroke inside a field, above all.
 	pending []tea.Cmd
@@ -227,7 +232,14 @@ func (m *Model) Reopen() {
 
 // Close records the position Reopen restores. The host calls it as the surface
 // goes away, which is the only moment that position is still known.
+//
+// It also puts back a theme the surface was only previewing. A preview belongs
+// to the screen that started it, and closing Configuration is one more way of
+// leaving that screen: Escape restores it, moving to another page restores it,
+// and closing must too, or a theme nobody saved outlives the surface that could
+// have undone it.
 func (m *Model) Close() {
+	m.restoreActivePreview()
 	m.resume = resumeState{
 		page:        m.Page(),
 		rowCursor:   m.rowCursor,
@@ -711,6 +723,8 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if action.Region != nil {
 			m.hoverID = action.Region.ID
 		}
+	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		m.scrollThemeList(action)
 	case mouse.ActionClick, mouse.ActionDoubleClick:
 		if action.Region == nil {
 			return nil
@@ -721,6 +735,15 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		for index, c := range m.controls {
 			if c.id != action.Region.ID {
 				continue
+			}
+			if m.editing() && m.editingID() != c.id {
+				// Clicking something else is leaving the field: the keyboard
+				// goes with the click. Left open, the field would take the row
+				// cursor straight back off the control just clicked, which is
+				// how a clicked theme lit up for one frame and then nothing was
+				// selected at all. The typed value stays — clicking away is not
+				// Escape.
+				m.closeEditor()
 			}
 			if c.cursor {
 				m.detailFocus = true
@@ -740,6 +763,37 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// scrollThemeList answers a wheel notch over the theme list. The list is the
+// one thing in Configuration long enough to need scrolling — hundreds of themes
+// behind an eight-row window — and a list that scrolls under the keyboard but
+// not under the wheel is a list that looks broken.
+//
+// A notch moves the selection rather than the window alone: the picker's window
+// follows its cursor, so scrolling the selection out of sight would only snap
+// back on the next keypress. Moving it is also what previews, which is what the
+// keyboard's ↑/↓ already do.
+func (m *Model) scrollThemeList(action mouse.MouseAction) {
+	picker := m.activePicker()
+	if picker == nil || action.Region == nil {
+		return
+	}
+	if id := action.Region.ID; !strings.HasPrefix(id, regionThemeRow) && id != regionThemeMore {
+		return
+	}
+	if !picker.scrollBy(action.Delta) {
+		return
+	}
+	if m.editing() {
+		// Filtering and then scrolling the results is the obvious next move,
+		// and scrolling is passive: the list moves, but the keyboard stays in
+		// the field the user is still typing into.
+		return
+	}
+	// The wheel is a way of choosing, so the cursor goes where it scrolled to.
+	m.detailFocus = true
+	m.focusPickerList()
 }
 
 // navigateFromSidebar opens a destination the user selected in the navigation
@@ -896,6 +950,33 @@ func (m *Model) renderSidebar(paneWidth, paneHeight int) string {
 func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 	inner := paneContentWidth(paneWidth)
 	originX := offsetX + 2
+
+	// The pane is painted with the row cursor as it stands, and the cursor can
+	// still move while it is being painted: a page that shrank under a stale
+	// cursor clamps it at the end, and a focus request for a control that did
+	// not exist yet resolves there too. Either way the frame in hand was
+	// painted against a cursor that is no longer the cursor, which shows up as
+	// a frame with nothing focused — the resolved repair row, the click that
+	// lands while a filter still holds the keyboard. So paint it again, once,
+	// with the answer. The regions the panes painted before this one are put
+	// back first, so the second pass replaces this pane's hit map rather than
+	// doubling it.
+	outer := m.mouse.HitMap.Regions()
+	lines, settled := m.buildDetail(originX, inner, paneHeight)
+	if !settled {
+		m.mouse.HitMap.Clear()
+		for _, region := range outer {
+			m.mouse.HitMap.Add(region.ID, region.Rect, region.Data)
+		}
+		lines, _ = m.buildDetail(originX, inner, paneHeight)
+	}
+	return clampLines(lines, paneHeight-2, inner)
+}
+
+// buildDetail paints the pane once. It reports whether the row cursor it
+// painted with survived the pass: a false answer means the frame shows a cursor
+// that has since moved, and is worth painting again.
+func (m *Model) buildDetail(originX, inner, paneHeight int) ([]string, bool) {
 	var lines []string
 
 	// Everything below composes through the builder, so a page declares each
@@ -919,7 +1000,7 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 			lines = append(lines, ListRow(entry.Label, inner, state))
 			m.mouse.HitMap.AddRect(id, originX, 1+len(lines)-1, inner, 1, entry.Page)
 		}
-		return clampLines(lines, paneHeight-2, inner)
+		return lines, true
 	}
 
 	route := m.Route()
@@ -955,6 +1036,9 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 		builder.text(pageBody(route.Page, inner)...)
 	}
 	lines = append(lines, builder.lines...)
+	// The cursor the controls above were painted against. A page's own list may
+	// have claimed it mid-build, which is deliberate and already in the paint.
+	painted := m.rowCursor
 	// The row cursor follows the field being typed into, so leaving an editor
 	// puts the cursor back on the control the user was working in; a focus
 	// request for a control that did not exist yet lands here too.
@@ -968,7 +1052,7 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 		m.focusRenderedControl(id)
 	}
 	m.clampRowCursor()
-	return clampLines(lines, paneHeight-2, inner)
+	return lines, m.rowCursor == painted
 }
 
 // clampLines enforces the pane's height contract and keeps every line inside
