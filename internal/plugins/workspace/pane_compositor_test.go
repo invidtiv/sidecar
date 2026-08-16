@@ -127,7 +127,7 @@ func trimGoldenRows(s string) string {
 }
 
 // assertDividersDrawn requires the 1-cell peer gap to hold the shared handle
-// glyph in every cell LayoutPanes gave it.
+// glyph, with vertical handles inset one row from each endpoint.
 func assertDividersDrawn(t *testing.T, rows []string, dividers []Divider) {
 	t.Helper()
 	for _, split := range dividers {
@@ -138,8 +138,14 @@ func assertDividersDrawn(t *testing.T, rows []string, dividers []Divider) {
 		for y := split.Box.Y; y < split.Box.Y+split.Box.H; y++ {
 			cells := []rune(ansi.Strip(rows[y]))
 			for x := split.Box.X; x < split.Box.X+split.Box.W; x++ {
-				if got := string(cells[x]); got != want {
-					t.Fatalf("split %d drew %q at (%d,%d), want handle %q", split.SplitID, got, x, y, want)
+				cellWant := want
+				if split.Axis == SplitCols && (y == split.Box.Y || y == split.Box.Y+split.Box.H-1) {
+					cellWant = " "
+				} else if split.Axis == SplitRows && (x == split.Box.X || x == split.Box.X+split.Box.W-1) {
+					cellWant = " "
+				}
+				if got := string(cells[x]); got != cellWant {
+					t.Fatalf("split %d drew %q at (%d,%d), want %q", split.SplitID, got, x, y, cellWant)
 				}
 			}
 		}

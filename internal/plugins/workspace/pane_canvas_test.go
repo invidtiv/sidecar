@@ -59,16 +59,20 @@ func TestNestedPaneTreeFillsItsBoxAndNamesEveryLeaf(t *testing.T) {
 	if !fits || len(leaves) != 3 || len(dividers) != 2 {
 		t.Fatalf("layout = %d leaves %d dividers fits=%v, want 3/2", len(leaves), len(dividers), fits)
 	}
-	// Each divider row must carry the 1-cell gap at the divider's own column:
-	// a block drawn short or long is what walks a nested divider sideways.
+	// Each divider must carry the 1-cell gap at an interior handle cell; the
+	// shared renderer deliberately leaves both endpoints blank.
 	for _, split := range dividers {
-		row := []rune(ansi.Strip(lines[split.Box.Y]))
+		x, y := split.Box.X, split.Box.Y
 		want := "┃"
 		if split.Axis == SplitRows {
 			want = "━"
+			x++
+		} else {
+			y++
 		}
-		if got := string(row[split.Box.X]); got != want {
-			t.Fatalf("divider %d at (%d,%d) drew %q, want handle %q", split.SplitID, split.Box.X, split.Box.Y, got, want)
+		row := []rune(ansi.Strip(lines[y]))
+		if got := string(row[x]); got != want {
+			t.Fatalf("divider %d at (%d,%d) drew %q, want handle %q", split.SplitID, x, y, got, want)
 		}
 	}
 }

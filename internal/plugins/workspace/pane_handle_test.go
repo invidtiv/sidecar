@@ -113,13 +113,18 @@ func TestSidebarHandleUsesSharedRenderer(t *testing.T) {
 
 func assertColumnIsHandle(t *testing.T, view string, x int) {
 	t.Helper()
-	for i, line := range strings.Split(view, "\n") {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
 		cells := []rune(ansi.Strip(line))
 		if x < 0 || x >= len(cells) {
 			t.Fatalf("row %d has no column %d", i, x)
 		}
-		if got := string(cells[x]); got != "┃" {
-			t.Fatalf("row %d col %d = %q, want handle ┃", i, x, got)
+		want := "┃"
+		if i == 0 || i == len(lines)-1 {
+			want = " "
+		}
+		if got := string(cells[x]); got != want {
+			t.Fatalf("row %d col %d = %q, want %q", i, x, got, want)
 		}
 	}
 }

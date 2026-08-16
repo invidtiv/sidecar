@@ -76,10 +76,14 @@ func TestDividerHitMatchesTheDrawnDivider(t *testing.T) {
 	}
 
 	out := v.Render(leaf.W, leaf.H, RenderOpts{})
-	first := stripANSI(strings.Split(out, "\n")[0])
-	drawn := strings.IndexRune(first, '┃')
+	rows := strings.Split(out, "\n")
+	if strings.ContainsRune(stripANSI(rows[0]), '┃') || strings.ContainsRune(stripANSI(rows[len(rows)-1]), '┃') {
+		t.Fatal("vertical handle was not inset from both endpoints")
+	}
+	interior := stripANSI(rows[1])
+	drawn := strings.IndexRune(interior, '┃')
 	if drawn < 0 {
-		t.Fatalf("no handle drawn in %q", first)
+		t.Fatalf("no handle drawn in interior row %q", interior)
 	}
 	if drawn != hit.X-leaf.X {
 		t.Fatalf("divider drawn at column %d but hit registered at %d", drawn, hit.X-leaf.X)

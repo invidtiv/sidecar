@@ -62,21 +62,18 @@ func TestFilesHandleHoverTracksDividerRegion(t *testing.T) {
 
 func assertFilesHandleColumn(t *testing.T, view string, x int) {
 	t.Helper()
-	found := false
-	for i, line := range strings.Split(view, "\n") {
+	lines := strings.Split(view, "\n")
+	for i, line := range lines {
 		cells := []rune(ansi.Strip(line))
 		if x >= len(cells) {
-			continue
+			t.Fatalf("row %d has no handle column %d", i, x)
 		}
-		if string(cells[x]) == "┃" {
-			found = true
-			continue
+		want := "┃"
+		if i == 0 || i == len(lines)-1 {
+			want = " "
 		}
-		if found && string(cells[x]) != "┃" {
-			t.Fatalf("row %d col %d = %q after handle started", i, x, string(cells[x]))
+		if got := string(cells[x]); got != want {
+			t.Fatalf("row %d col %d = %q, want %q", i, x, got, want)
 		}
-	}
-	if !found {
-		t.Fatalf("no ┃ handle in column %d", x)
 	}
 }

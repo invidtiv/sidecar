@@ -4,26 +4,40 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/styles"
 )
 
-func TestRenderHandleVerticalOccupiesOneCell(t *testing.T) {
+func TestRenderHandleVerticalInsetsVisibleBar(t *testing.T) {
 	got := RenderHandle(5, true, HandleIdle)
 	lines := strings.Split(ansi.Strip(got), "\n")
 	if len(lines) != 5 {
 		t.Fatalf("vertical lines = %d, want 5", len(lines))
 	}
 	for i, line := range lines {
-		if line != handleBarV {
-			t.Fatalf("line %d = %q, want %q", i, line, handleBarV)
+		want := handleBarV
+		if i == 0 || i == len(lines)-1 {
+			want = " "
+		}
+		if line != want {
+			t.Fatalf("line %d = %q, want %q", i, line, want)
 		}
 	}
 }
 
-func TestRenderHandleHorizontalOccupiesOneRow(t *testing.T) {
+func TestRenderHandleHorizontalInsetsVisibleBar(t *testing.T) {
 	got := ansi.Strip(RenderHandle(7, false, HandleIdle))
-	if got != strings.Repeat(handleBarH, 7) {
-		t.Fatalf("horizontal = %q, want seven %q", got, handleBarH)
+	if want := " " + strings.Repeat(handleBarH, 5) + " "; got != want {
+		t.Fatalf("horizontal = %q, want %q", got, want)
+	}
+}
+
+func TestRenderHandleIdleBlendsTowardUnfocusedBorders(t *testing.T) {
+	theme := styles.GetCurrentTheme()
+	want := lipgloss.Color(styles.Blend(theme.Colors.BorderMuted, theme.Colors.BorderNormal, handleIdleBorderMix))
+	if got := handleStyle(HandleIdle).GetForeground(); got != want {
+		t.Fatalf("idle foreground = %v, want blended theme color %v", got, want)
 	}
 }
 
@@ -34,9 +48,33 @@ func TestRenderHandleStatesChangeColor(t *testing.T) {
 	if idle == hover || hover == drag || idle == drag {
 		t.Fatalf("states must render differently\nidle=%q\nhover=%q\ndrag=%q", idle, hover, drag)
 	}
+	want := " \n" + strings.TrimSuffix(strings.Repeat(handleBarV+"\n", 4), "\n") + "\n "
 	for name, got := range map[string]string{"idle": idle, "hover": hover, "drag": drag} {
-		if ansi.Strip(got) != strings.TrimSuffix(strings.Repeat(handleBarV+"\n", 6), "\n") {
+		if ansi.Strip(got) != want {
 			t.Fatalf("%s stripped glyph drifted: %q", name, ansi.Strip(got))
+		}
+	}
+}
+
+func TestRenderHandleShortVerticalLengthsRemainAllocated(t *testing.T) {
+	for _, length := range []int{1, 2} {
+		got := strings.Split(ansi.Strip(RenderHandle(length, true, HandleIdle)), "\n")
+		if len(got) != length {
+			t.Fatalf("length %d rendered %d rows", length, len(got))
+		}
+		for i, line := range got {
+			if line != " " {
+				t.Fatalf("length %d line %d = %q, want blank allocated cell", length, i, line)
+			}
+		}
+	}
+}
+
+func TestRenderHandleShortHorizontalLengthsRemainAllocated(t *testing.T) {
+	for _, length := range []int{1, 2} {
+		got := ansi.Strip(RenderHandle(length, false, HandleIdle))
+		if got != strings.Repeat(" ", length) {
+			t.Fatalf("length %d = %q, want blank allocated cells", length, got)
 		}
 	}
 }
