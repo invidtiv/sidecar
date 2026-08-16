@@ -52,12 +52,14 @@ var settingsIndex = []IndexEntry{
 	{Page: PageWorkspaces, Label: "Start with a shell", Keywords: []string{"shell", "auto", "create", "workspace"}},
 	{Page: PageWorkspaces, Label: "Repository prefix", Keywords: []string{"worktree", "prefix", "naming", "repository"}},
 	{Page: PageWorkspaces, Label: "Overview location", Keywords: []string{"overview", "worktree", "scope", "activity"}},
+	{Page: PageWorkspaces, Label: "Sidebar display", Keywords: []string{"sidebar", "display", "agent", "task", "stats", "prefix", "workspace"}},
 	{Page: PageWorkspaces, Label: "Worktree setup", Keywords: []string{"worktree", "setup", "hook", "env", "copy"}},
 
 	// Agents
 	{Page: PageAgents, Label: "Available agents", Keywords: []string{"agent", "claude", "codex", "opencode", "grok", "enable"}},
 	{Page: PageAgents, Label: "Agent launch command", Keywords: []string{"agent", "command", "launch", "start"}},
 	{Page: PageAgents, Label: "Agent instructions", Keywords: []string{"agents.md", "instructions", "guidance", "repair"}},
+	{Page: PageAgents, Label: "Default launch command", Keywords: []string{"agentstart", "command", "default", "reset", "agent"}},
 
 	// Terminal
 	{Page: PageTerminal, Label: "Exit interactive mode", Keywords: []string{"terminal", "interactive", "exit", "shortcut", "key"}},

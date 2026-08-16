@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -190,62 +191,54 @@ var PrintModeArgs = map[AgentType][]string{
 	AgentAntigravity: {"-p"},        // agy -p: reads prompt from stdin/args, prints to stdout
 }
 
+// The selectable agent families — their order, their names, and the command
+// each launches — come from internal/agentcatalog, so the creation pickers here
+// and the Agents page in Configuration describe the same set. Entries below add
+// only what the catalog deliberately does not carry: the non-agent pseudo-types
+// and a family kept for backward compatibility.
+
 // AgentDisplayNames provides human-readable names for agent types.
-var AgentDisplayNames = map[AgentType]string{
-	AgentNone:        "None (attach only)",
-	AgentClaude:      "Claude Code",
-	AgentCodex:       "Codex CLI",
-	AgentCopilot:     "GitHub Copilot CLI",
-	AgentAntigravity: "Antigravity",
-	AgentCursor:      "Cursor Agent",
-	AgentOpenCode:    "OpenCode",
-	AgentPi:          "Pi Agent",
-	AgentAmp:         "Amp",
-	AgentGrok:        "Grok",
-	AgentShell:       "Project Shell",
-}
+var AgentDisplayNames = buildAgentDisplayNames()
 
 // AgentCommands maps agent types to their CLI commands.
-var AgentCommands = map[AgentType]string{
-	AgentClaude:      "claude",
-	AgentCodex:       "codex",
-	AgentCopilot:     "copilot",
-	AgentAider:       "aider", // Not in UI, but supported for backward compat
-	AgentAntigravity: "agy",
-	AgentCursor:      "cursor-agent",
-	AgentOpenCode:    "opencode",
-	AgentPi:          "pi",
-	AgentAmp:         "amp",
-	AgentGrok:        "grok",
-}
+var AgentCommands = buildAgentCommands()
 
 // AgentTypeOrder defines the order of agents in selection UI.
-var AgentTypeOrder = []AgentType{
-	AgentClaude,
-	AgentCodex,
-	AgentCopilot,
-	AgentAntigravity,
-	AgentCursor,
-	AgentOpenCode,
-	AgentPi,
-	AgentAmp,
-	AgentGrok,
-	AgentNone,
-}
+var AgentTypeOrder = append(catalogAgentTypes(), AgentNone)
 
 // ShellAgentOrder defines agent order for shell creation (None first as default).
 // td-a902fe: shells default to no agent, so "None" is first.
-var ShellAgentOrder = []AgentType{
-	AgentNone,
-	AgentClaude,
-	AgentCodex,
-	AgentCopilot,
-	AgentAntigravity,
-	AgentCursor,
-	AgentOpenCode,
-	AgentPi,
-	AgentAmp,
-	AgentGrok,
+var ShellAgentOrder = append([]AgentType{AgentNone}, catalogAgentTypes()...)
+
+// catalogAgentTypes is the catalog's families as agent types, in picker order.
+func catalogAgentTypes() []AgentType {
+	families := agentcatalog.Families()
+	out := make([]AgentType, 0, len(families))
+	for _, family := range families {
+		out = append(out, AgentType(family.ID))
+	}
+	return out
+}
+
+func buildAgentDisplayNames() map[AgentType]string {
+	names := map[AgentType]string{
+		AgentNone:  "None (attach only)",
+		AgentShell: "Project Shell",
+	}
+	for _, family := range agentcatalog.Families() {
+		names[AgentType(family.ID)] = family.Name
+	}
+	return names
+}
+
+func buildAgentCommands() map[AgentType]string {
+	commands := map[AgentType]string{
+		AgentAider: "aider", // Not in UI, but supported for backward compat
+	}
+	for _, family := range agentcatalog.Families() {
+		commands[AgentType(family.ID)] = family.Command
+	}
+	return commands
 }
 
 // Worktree represents a git worktree with optional agent.

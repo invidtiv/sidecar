@@ -83,6 +83,8 @@ type Model struct {
 	// dropped when Configuration closes.
 	appearanceState *appearanceState
 	projectsState   *projectsState
+	agentsState     *agentsState
+	terminalState   *terminalState
 	addProject      *projectForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
@@ -138,6 +140,8 @@ func (m *Model) Open(page PageID) {
 	m.saved = nil
 	m.appearanceState = nil
 	m.projectsState = nil
+	m.agentsState = nil
+	m.terminalState = nil
 	m.addProject = nil
 	m.resetDetail()
 }
@@ -150,6 +154,11 @@ func (m *Model) resetDetail() {
 	m.rowCursor = 0
 	m.confirm = nil
 	m.showColorSteps = false
+	if state := m.terminalState; state != nil {
+		// A refused value is a complaint about the edit that was open; leaving
+		// the page ends that conversation.
+		state.invalid, state.reason = "", ""
+	}
 	m.closeEditor()
 }
 
@@ -743,6 +752,12 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 		m.buildAppearance(builder)
 	case route.Page == PageProjects:
 		m.buildProjects(builder)
+	case route.Page == PageWorkspaces:
+		m.buildWorkspaces(builder)
+	case route.Page == PageAgents:
+		m.buildAgents(builder)
+	case route.Page == PageTerminal:
+		m.buildTerminal(builder)
 	default:
 		builder.text(pageBody(route.Page, inner)...)
 	}

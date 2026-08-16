@@ -155,6 +155,25 @@ func SelectorArrow(value, arrow string, state State) string {
 	return style.Render(value + "  " + arrow)
 }
 
+// SelectorWidth renders a selector that fills a fixed width, so several
+// selectors in a group share one right edge the way the mockups draw them.
+func SelectorWidth(value string, width int, state State) string {
+	style := chipStyle()
+	switch {
+	case state.Disabled:
+		style = style.Foreground(styles.TextMuted)
+	case state.Focused:
+		style = accentChipStyle()
+	case state.Hovered:
+		style = style.Background(styles.BgTertiary)
+	}
+	text := value + "  ▾"
+	if ansi.StringWidth(text) > width-2 {
+		text = ansi.Truncate(text, max(1, width-3), "…")
+	}
+	return style.Width(width).Render(text)
+}
+
 // Button renders an action pill. primary marks the action the page recommends.
 func Button(label string, primary bool, state State) string {
 	style := chipStyle()
