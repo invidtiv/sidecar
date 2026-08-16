@@ -17,6 +17,24 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
+// assertRightClusterPinned states the header's right-edge invariant in one
+// place: the Configuration gear owns the terminal's right edge and the project
+// selector ends one column short of it, so the selector still sits at a fixed
+// distance from the corner at every width.
+func assertRightClusterPinned(t *testing.T, m Model, selectorEnd int) {
+	t.Helper()
+	gearStart, gearEnd, ok := m.getGearBounds()
+	if !ok {
+		t.Fatalf("gear bounds missing at width %d", m.width)
+	}
+	if gearEnd != m.width {
+		t.Errorf("gear end = %d, want %d", gearEnd, m.width)
+	}
+	if selectorEnd != gearStart-1 {
+		t.Errorf("selector end = %d, want %d (one column left of the gear)", selectorEnd, gearStart-1)
+	}
+}
+
 func TestGetProjectSelectorBounds_EmptyRepoNameUsesFallback(t *testing.T) {
 	m := Model{
 		width: 120,
@@ -26,9 +44,10 @@ func TestGetProjectSelectorBounds_EmptyRepoNameUsesFallback(t *testing.T) {
 	}
 
 	start, end, ok := m.getProjectSelectorBounds()
-	if !ok || end != m.width || start >= end {
+	if !ok || start >= end {
 		t.Errorf("fallback selector bounds = %d-%d ok=%v", start, end, ok)
 	}
+	assertRightClusterPinned(t, m, end)
 }
 
 func TestGetRepoNameBounds_NormalRepoName(t *testing.T) {
@@ -44,16 +63,14 @@ func TestGetRepoNameBounds_NormalRepoName(t *testing.T) {
 		t.Fatal("getRepoNameBounds() with normal repo name should return ok=true")
 	}
 
-	// The selector is pinned to the far-right edge.
+	// The selector is pinned to the right cluster, just inside the gear.
 	if start <= 0 {
 		t.Errorf("start should be > 0, got %d", start)
 	}
 	if end <= start {
 		t.Errorf("end should be > start, got start=%d, end=%d", start, end)
 	}
-	if end != m.width {
-		t.Errorf("selector end = %d, want %d", end, m.width)
-	}
+	assertRightClusterPinned(t, m, end)
 
 	// The width should roughly match the repo name length
 	width := end - start
@@ -102,14 +119,17 @@ func TestProjectSelectorBoundsExistInBothScopes(t *testing.T) {
 		overview: overview.New(workspaceinventory.Collector{}),
 		width:    120,
 	}
-	if start, end, ok := m.getProjectSelectorBounds(); !ok || end != m.width || start >= end {
+	if start, end, ok := m.getProjectSelectorBounds(); !ok || start >= end {
 		t.Fatalf("project selector bounds = %d-%d ok=%v", start, end, ok)
+	} else {
+		assertRightClusterPinned(t, m, end)
 	}
 	m.scope = ScopeGlobal
 	start, end, ok := m.getProjectSelectorBounds()
-	if !ok || end != m.width || end <= start {
+	if !ok || end <= start {
 		t.Fatalf("global selector bounds = %d-%d ok=%v", start, end, ok)
 	}
+	assertRightClusterPinned(t, m, end)
 	header := ansi.Strip(m.renderHeader())
 	if !strings.Contains(header, "Select Project ▾") {
 		t.Fatalf("global header is missing the selector: %q", header)
@@ -291,11 +311,11 @@ func TestRepoNameClick_OutsideBounds(t *testing.T) {
 	}
 }
 
-func TestRenderHeader_RemovesClockRegardlessOfLegacyConfig(t *testing.T) {
+func TestRenderHeader_ClockFollowsConfig(t *testing.T) {
 	now := time.Date(2025, 1, 1, 14, 30, 0, 0, time.UTC)
 	reg := plugin.NewRegistry(nil)
 
-	t.Run("legacy true", func(t *testing.T) {
+	t.Run("enabled", func(t *testing.T) {
 		m := Model{
 			showClock: true,
 			ui:        &UIState{Clock: now},
@@ -304,8 +324,25 @@ func TestRenderHeader_RemovesClockRegardlessOfLegacyConfig(t *testing.T) {
 			intro:     IntroModel{Done: true},
 		}
 		header := m.renderHeader()
-		if strings.Contains(header, "14:30") {
-			t.Error("header should not contain clock when showClock is true")
+		if !strings.Contains(ansi.Strip(header), "14:30") {
+			t.Errorf("header should contain the clock when showClock is true: %q", ansi.Strip(header))
+		}
+	})
+
+	t.Run("narrow drops the clock before anything else", func(t *testing.T) {
+		m := Model{
+			showClock: true,
+			ui:        &UIState{Clock: now},
+			registry:  reg,
+			width:     34,
+			intro:     IntroModel{Done: true},
+		}
+		plain := ansi.Strip(m.renderHeader())
+		if strings.Contains(plain, "14:30") {
+			t.Errorf("narrow header kept the clock: %q", plain)
+		}
+		if !strings.Contains(plain, headerGear) {
+			t.Errorf("narrow header dropped the gear: %q", plain)
 		}
 	})
 
@@ -340,9 +377,10 @@ func TestNarrowHeaderHitRegionsMatchPaintedGeometry(t *testing.T) {
 
 			header := m.renderHeader()
 			selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
-			if !ok || selectorEnd != m.width {
+			if !ok || selectorStart >= selectorEnd {
 				t.Fatalf("pills=%v scope=%v selector=%d-%d ok=%v", pills, scope, selectorStart, selectorEnd, ok)
 			}
+			assertRightClusterPinned(t, m, selectorEnd)
 			if _, _, restoreOK := m.getProjectRestoreBounds(); restoreOK {
 				t.Fatalf("pills=%v scope=%v narrow header retained optional restore control", pills, scope)
 			}
@@ -402,9 +440,10 @@ func TestWideHeaderGlobalRestoreAndSelectorGeometry(t *testing.T) {
 			t.Fatalf("pills=%v restore bounds = %d-%d ok=%v", pills, restoreStart, restoreEnd, ok)
 		}
 		selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
-		if !ok || restoreEnd >= selectorStart || selectorEnd != m.width {
+		if !ok || restoreEnd >= selectorStart {
 			t.Fatalf("pills=%v restore=%d-%d selector=%d-%d", pills, restoreStart, restoreEnd, selectorStart, selectorEnd)
 		}
+		assertRightClusterPinned(t, m, selectorEnd)
 		for _, bounds := range m.getTabBounds() {
 			if bounds.End > restoreStart {
 				t.Fatalf("pills=%v tab %#v overlaps restore %d-%d", pills, bounds, restoreStart, restoreEnd)
@@ -551,9 +590,10 @@ func TestLongProjectSelectorPreservesNarrowLeftAnchorAndExactBounds(t *testing.T
 			}
 
 			selectorStart, selectorEnd, ok := m.getProjectSelectorBounds()
-			if !ok || selectorEnd != minWidth || selectorStart < logoEnd || selectorStart >= selectorEnd {
+			if !ok || selectorStart < logoEnd || selectorStart >= selectorEnd {
 				t.Fatalf("%s pills=%v selector=%d-%d logo=%d-%d", tc.name, pills, selectorStart, selectorEnd, logoStart, logoEnd)
 			}
+			assertRightClusterPinned(t, m, selectorEnd)
 			selectorPaint := ansi.Strip(ansi.Truncate(ansi.TruncateLeft(header, selectorStart, ""), selectorEnd-selectorStart, ""))
 			if !strings.Contains(selectorPaint, "▾") {
 				t.Fatalf("%s pills=%v selector lost right edge/arrow: %q header=%q", tc.name, pills, selectorPaint, plain)

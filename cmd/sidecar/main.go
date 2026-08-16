@@ -31,12 +31,14 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/cli"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/event"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/assembly"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/startupfail"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
@@ -63,10 +65,15 @@ var (
 func main() {
 	// Non-interactive commands dispatch before flag parsing and before any TUI
 	// initialization, logging, state creation, or TMUX environment changes.
-	if handled, code := cli.Run(os.Args[1:], os.Stdout, os.Stderr); handled {
+	args := os.Args[1:]
+	if handled, code := cli.Run(args, os.Stdout, os.Stderr); handled {
 		os.Exit(code)
 	}
-	flag.Parse()
+	// A launch command — `sidecar setup` — is not handled here: it records the
+	// destination the app should open on and leaves the rest of the arguments
+	// for ordinary flag parsing, so `sidecar setup -project /x` behaves like
+	// `sidecar -project /x` that happens to open Configuration.
+	_ = flag.CommandLine.Parse(cli.RemainingArgs(args))
 
 	// Record -config before anything derives a path from it: the config
 	// directory is also where debug.log and state.json live, so pointing the
@@ -79,7 +86,7 @@ func main() {
 	// tree by the time it refuses to run (td-8d18de). CheckStateIsolation needs
 	// nothing from the config file — only the resolved state and config paths.
 	if err := config.CheckStateIsolation(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		startupfail.Print(os.Stderr, startupfail.Isolation(err))
 		os.Exit(1)
 	}
 
@@ -138,7 +145,7 @@ func main() {
 		cfg, err = loadConfig(*configPath)
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
+		startupfail.Print(os.Stderr, startupfail.ConfigLoad(config.ConfigPath(), err))
 		os.Exit(1)
 	}
 
@@ -160,7 +167,7 @@ func main() {
 	// Convert project root to absolute path
 	workDir, err := filepath.Abs(*projectRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to resolve project root: %v\n", err)
+		startupfail.Print(os.Stderr, startupfail.ProjectRoot(*projectRoot, err))
 		os.Exit(1)
 	}
 
@@ -226,14 +233,20 @@ func main() {
 	// Create and run application
 	currentVersion := effectiveVersion(Version)
 	initialPluginID := initialPluginForWorkDir(workDir, projectRootPath)
+	var options []app.Option
+	if page, ok := cli.StartupConfigPage(); ok {
+		// The only caller today is `sidecar setup`. Configuration opens on its
+		// default page unless a caller deliberately named another one.
+		options = append(options, app.WithStartupConfigPage(configui.PageID(page)))
+	}
 	var model app.Model
 	startuptrace.Track("app.New", func() {
-		model = app.New(registry, km, cfg, currentVersion, workDir, projectRootPath, initialPluginID)
+		model = app.New(registry, km, cfg, currentVersion, workDir, projectRootPath, initialPluginID, options...)
 	})
 
 	// Guard against non-interactive terminal (e.g. piped stdout)
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		fmt.Fprintln(os.Stderr, "sidecar requires an interactive terminal")
+		startupfail.Print(os.Stderr, startupfail.NotATerminal())
 		os.Exit(1)
 	}
 	// Bubble Tea clears the window title on exit rather than restoring it, so
@@ -263,7 +276,7 @@ func main() {
 		startuptrace.Report(logger)
 		tty.ReleaseGeometryLeases()
 		restoreTitle()
-		fmt.Fprintf(os.Stderr, "Error running application: %v\n", err)
+		startupfail.Print(os.Stderr, startupfail.Terminal(err))
 		os.Exit(1)
 	}
 	// Hand the shared tmux geometry lease back so the next sidecar — here or on

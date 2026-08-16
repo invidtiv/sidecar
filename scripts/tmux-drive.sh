@@ -17,6 +17,8 @@
 # proof must launch outside this Sidecar checkout.
 # SIDECAR_DRIVE_ARGS is split on whitespace and appended to the sidecar command;
 # it is intended for proof-only flags with no embedded spaces.
+# SIDECAR_DRIVE_COMMAND is a single launch subcommand (e.g. "setup") placed
+# before the flags, where sidecar's command dispatch expects it.
 #
 #   ./scripts/tmux-drive.sh start [COLS] [LINES]  - launch sidecar (default 200x50)
 #   ./scripts/tmux-drive.sh keys <args...>        - tmux send-keys passthrough
@@ -166,7 +168,13 @@ validate_launch_repo() {
 
 start() {
     local cols="${1:-200}" lines="${2:-50}"
-    local -a command_args=(-config "$CONFIG")
+    local -a command_args=()
+    if [ -n "${SIDECAR_DRIVE_COMMAND:-}" ]; then
+        # A launch command has to be argv[1]: sidecar dispatches commands
+        # before it parses flags.
+        command_args+=("$SIDECAR_DRIVE_COMMAND")
+    fi
+    command_args+=(-config "$CONFIG")
     local -a extra_args
     local launch_cmd arg
     if [ -n "${SIDECAR_DRIVE_ARGS:-}" ]; then

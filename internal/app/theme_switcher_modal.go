@@ -6,10 +6,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -18,56 +18,18 @@ const (
 	themeSwitcherItemPrefix = "theme-switcher-item-"
 )
 
-// themeEntry represents a single theme in the unified theme list.
-type themeEntry struct {
-	Name          string // display name
-	IsBuiltIn     bool
-	ThemeKey      string // built-in: theme registry key; community: scheme name
-	IsSeparator   bool   // non-selectable separator line
-	SeparatorText string // e.g. "Community Themes (453)"
-}
+// themeEntry is one theme in the unified list. The list, the filter, and the
+// swatch colors live in internal/theme so this modal and Configuration's theme
+// picker show the same library rather than two hand-maintained copies of it.
+type themeEntry = theme.Entry
 
 // buildUnifiedThemeList returns all themes: built-in first, then community.
-func buildUnifiedThemeList() []themeEntry {
-	builtIn := styles.ListThemes()
-	communityNames := community.ListSchemes()
-	entries := make([]themeEntry, 0, len(builtIn)+len(communityNames))
-	for _, name := range builtIn {
-		displayName := name
-		if t := styles.GetTheme(name); t.DisplayName != "" {
-			displayName = t.DisplayName
-		}
-		entries = append(entries, themeEntry{Name: displayName, IsBuiltIn: true, ThemeKey: name})
-	}
-	if len(communityNames) > 0 {
-		entries = append(entries, themeEntry{
-			IsSeparator:   true,
-			SeparatorText: fmt.Sprintf("Community Themes (%d)", len(communityNames)),
-		})
-	}
-	for _, name := range communityNames {
-		entries = append(entries, themeEntry{Name: name, IsBuiltIn: false, ThemeKey: name})
-	}
-	return entries
-}
+func buildUnifiedThemeList() []themeEntry { return theme.List() }
 
 // filterThemeEntries filters entries by case-insensitive substring match on Name.
 // Separators are included only when unfiltered; they are excluded when a query is active.
 func filterThemeEntries(entries []themeEntry, query string) []themeEntry {
-	if query == "" {
-		return entries
-	}
-	q := strings.ToLower(query)
-	var matches []themeEntry
-	for _, e := range entries {
-		if e.IsSeparator {
-			continue
-		}
-		if strings.Contains(strings.ToLower(e.Name), q) {
-			matches = append(matches, e)
-		}
-	}
-	return matches
+	return theme.Filter(entries, query)
 }
 
 // themeSwitcherItemID returns the ID for a theme item at the given index.
@@ -206,22 +168,11 @@ func (m *Model) themeSwitcherListSection() modal.Section {
 			}
 
 			// Color swatch for all themes
-			if entry.IsBuiltIn {
-				t := styles.GetTheme(entry.ThemeKey)
-				swatchColors := []string{t.Colors.Primary, t.Colors.Success, t.Colors.Secondary, t.Colors.Error}
+			if swatchColors := theme.Swatch(entry); len(swatchColors) > 0 {
 				for _, sc := range swatchColors {
 					sb.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(sc)).Render(" "))
 				}
 				sb.WriteString(" ")
-			} else {
-				scheme := community.GetScheme(entry.ThemeKey)
-				if scheme != nil {
-					swatchColors := []string{scheme.Red, scheme.Green, scheme.Blue, scheme.Purple}
-					for _, sc := range swatchColors {
-						sb.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(sc)).Render(" "))
-					}
-					sb.WriteString(" ")
-				}
 			}
 
 			var nameStyle lipgloss.Style

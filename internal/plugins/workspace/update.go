@@ -1900,6 +1900,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Handle resume from conversations plugin (td-aa4136)
 		return p.handleResumeConversation(msg)
 
+	case app.OpenPrefilledShellMsg:
+		// A host — today, a Configuration repair — asked for an ordinary shell
+		// with a command typed into it. It is the same injection the resume
+		// flow uses: the text lands at the prompt and stays there until the
+		// user presses Enter.
+		if strings.TrimSpace(msg.Command) == "" {
+			return p, nil
+		}
+		return p, p.createShellWithResume(msg.Command)
+
 	case cursorPositionMsg:
 		// Update cached cursor position for interactive mode rendering (td-648af4)
 		if p.interactiveState != nil && p.interactiveState.Active {

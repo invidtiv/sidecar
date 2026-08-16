@@ -45,6 +45,12 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 		return false, 0
 	}
 
+	// A launch command records what the app should do and reports handled=false
+	// so ordinary startup carries on in this same process.
+	if cmd.Launch != nil {
+		return cmd.Launch(env, args[1:])
+	}
+
 	if cmd.Run != nil {
 		return true, cmd.Run(env, args[1:])
 	}

@@ -111,6 +111,45 @@ sidecar open --json --split below README.md
 sidecar open --project sidecar README.md
 ```
 
+## `sidecar setup`
+
+Start Sidecar with Configuration open on Sidecar Setup
+
+Start Sidecar normally, with Configuration open on the Sidecar Setup page.
+Setup lists what is left to do — add a project, install tmux, connect agent
+instructions — and opens a focused repair for each one.
+
+This is a launch route, not a second settings interface: it renders nothing in
+the terminal and changes nothing on its own. Sidecar's ordinary options still
+apply (sidecar setup -project /path). Escape returns to the surface underneath,
+and the header gear reopens Configuration at any time.
+
+If startup fails before Sidecar can draw — a malformed config file, a terminal
+that is not interactive — it exits nonzero with the specific next step and a
+support path that uploads nothing.
+
+```
+Usage: sidecar setup [options]
+```
+
+**Options:**
+
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: Sidecar ran and exited normally
+- `1`: startup failed before the first frame
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar setup
+# that project's Setup
+sidecar setup -project ~/code/myproject
+```
+
 ## `sidecar shell`
 
 Manage the current Sidecar shell context

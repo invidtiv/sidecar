@@ -37,6 +37,7 @@ type ProjectConfig struct {
 	Path          string               `json:"path"`                    // absolute path to project root (supports ~ expansion)
 	Theme         *ThemeConfig         `json:"theme,omitempty"`         // per-project theme (nil = use global)
 	LastOpenInApp string               `json:"lastOpenInApp,omitempty"` // last app used to open this project (e.g. "vscode", "goland")
+	OpenIn        string               `json:"openIn,omitempty"`        // preferred "open in" app for this project; last-used is the fallback
 	WorktreeSetup *WorktreeSetupConfig `json:"worktreeSetup,omitempty"` // optional per-project setup policy
 }
 
@@ -272,7 +273,11 @@ func Default() *Config {
 			Overrides: make(map[string]string),
 		},
 		UI: UIConfig{
-			ShowClock:     true,
+			// Off by default. The header clock has had no renderer for a long
+			// time; now that it has one, defaulting it on would put a clock in
+			// every existing user's header for a setting they never chose.
+			// Appearance is where it gets turned on.
+			ShowClock:     false,
 			TerminalTitle: "{project}{worktree}",
 			Theme: ThemeConfig{
 				Name:      "default",

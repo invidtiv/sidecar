@@ -12,6 +12,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -340,6 +341,22 @@ type Model struct {
 	globalTab   GlobalTab
 	globalTasks *globalTasksHost
 
+	// Configuration surface. Like the Tasks host it is app-owned rather than a
+	// registry plugin, so it survives project switches; unlike the global
+	// space it covers whatever surface is active rather than replacing it.
+	config       *configui.Model
+	configActive bool
+	configReturn configReturn
+	// headerGearHovered styles the gear while the pointer is over it. The header
+	// is otherwise geometric and stateless, so this is the whole of its hover
+	// state: one bool for the one control that has a hover look.
+	headerGearHovered bool
+	// startupConfigPage is the destination a launch command asked for. It is
+	// honored once, from Init, so Configuration opens over the ordinary startup
+	// surface rather than replacing it: escape still returns to the app the
+	// user would have had.
+	startupConfigPage configui.PageID
+
 	// UI request watcher for external CLI commands (e.g. sidecar open).
 	// The channel is deliberately not cached here: Init takes the model by
 	// value, so anything it assigns is discarded, and a cached-and-nil channel
@@ -347,9 +364,22 @@ type Model struct {
 	uiRequestWatcher *uirequest.Watcher
 }
 
+// Option adjusts the model at construction. Options exist for the deliberate,
+// caller-supplied startup choices — where Configuration opens, so far — and are
+// deliberately not a general settings channel: everything else comes from the
+// config file the app was handed.
+type Option func(*Model)
+
+// WithStartupConfigPage opens Configuration on a destination as soon as the app
+// starts. `sidecar setup` is the only caller today; an unknown page falls back
+// to Configuration's own default rather than failing the launch.
+func WithStartupConfigPage(page configui.PageID) Option {
+	return func(m *Model) { m.startupConfigPage = page }
+}
+
 // New creates a new application model.
 // initialPluginID optionally specifies which plugin to focus on startup (empty = first plugin).
-func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentVersion, workDir, projectRoot, initialPluginID string) Model {
+func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentVersion, workDir, projectRoot, initialPluginID string, opts ...Option) Model {
 	repoName := GetRepoName(workDir)
 	ui := NewUIState()
 	ui.WorkDir = workDir
@@ -375,6 +405,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		showClock:          cfg.UI.ShowClock,
 		titleTemplate:      cfg.UI.TerminalTitle,
 		palette:            palette.New(),
+		config:             configui.New(),
 		ui:                 ui,
 		ready:              false,
 		applicationFocused: true,
@@ -405,6 +436,11 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		// Tasks is a global tab, so its host is built here rather than
 		// registered as a project plugin. Constructing it does no I/O.
 		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&m)
+		}
 	}
 	return m
 }
@@ -482,6 +518,13 @@ func (m Model) Init() tea.Cmd {
 	if m.uiRequestWatcher != nil {
 		m.uiRequestWatcher.Start()
 		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
+	}
+
+	// A launch command's destination opens through the same message an empty
+	// state sends, so there is one way into Configuration and one way back out.
+	if m.startupConfigPage != "" {
+		page := m.startupConfigPage
+		cmds = append(cmds, func() tea.Msg { return OpenConfigurationMsg{Page: page} })
 	}
 
 	return tea.Batch(cmds...)
@@ -932,6 +975,9 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	// Return batch of start commands plus a toast notification
 	return tea.Batch(
 		tea.Batch(startCmds...),
+		// Configuration stays open across a project switch, so it is told where
+		// it now is rather than left describing the project the user left.
+		m.refreshConfigContext(),
 		titleCmd,
 		inventoryRefresh,
 		overviewFocusCmd,
@@ -1213,42 +1259,14 @@ func (m *Model) validateProjectAdd() string {
 		return "Name is required"
 	}
 
-	name := strings.TrimSpace(m.projectAdd.nameInput.Value())
-	path := strings.TrimSpace(m.projectAdd.pathInput.Value())
-
-	if name == "" {
-		return "Name is required"
-	}
-	if path == "" {
-		return "Path is required"
-	}
-
-	// Expand path for validation
-	expanded := config.ExpandPath(path)
-
-	// Check path exists and is a directory
-	info, err := os.Stat(expanded)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "Path does not exist"
-		}
-		return "Cannot access path"
-	}
-	if !info.IsDir() {
-		return "Path is not a directory"
-	}
-
-	// Check for duplicate name or path
-	for _, proj := range m.cfg.Projects.List {
-		if strings.EqualFold(proj.Name, name) {
-			return "Project name already exists"
-		}
-		if proj.Path == expanded {
-			return "Project path already configured"
-		}
-	}
-
-	return ""
+	// The rules are shared with Configuration's Add Project route, so the two
+	// add journeys cannot drift into accepting different things.
+	return config.ValidateProject(
+		m.cfg.Projects.List,
+		m.projectAdd.nameInput.Value(),
+		m.projectAdd.pathInput.Value(),
+		-1,
+	)
 }
 
 // saveProjectAdd saves the new project to config and refreshes the list.
@@ -1343,14 +1361,20 @@ func (m *Model) openIssueInput() bool {
 }
 
 // runHostCommand runs a command sidecar's own key handler implements, naming it
-// by the ID the default bindings advertise. It reports whether the ID was one of
-// them.
-func (m *Model) runHostCommand(id string) bool {
+// by the ID the default bindings advertise. It returns the command the work
+// raised — opening Configuration starts its readiness run in one — and reports
+// whether the ID was one of them. A caller that dropped the command would open
+// Configuration onto checks that never ran.
+func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 	switch id {
 	case "open-issue":
-		return m.openIssueInput()
+		return nil, m.openIssueInput()
+	case "open-configuration":
+		// No page named: the palette command toggles and resumes where the user
+		// last was, exactly as the gear and `,` do.
+		return m.toggleConfiguration(), true
 	}
-	return false
+	return nil, false
 }
 
 // runGlobalWorkspacesCommand runs a palette-selected command the global
