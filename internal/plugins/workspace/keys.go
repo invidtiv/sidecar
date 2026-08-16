@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 // handleKeyPress processes key input based on current view mode.
@@ -266,30 +267,11 @@ func (p *Plugin) executeAgentChoice() tea.Cmd {
 
 // handleConfirmDeleteKeys handles keys in delete confirmation modal.
 func (p *Plugin) handleConfirmDeleteKeys(msg tea.KeyPressMsg) tea.Cmd {
-	p.ensureConfirmDeleteModal()
-	if p.deleteConfirmModal == nil {
-		return nil
-	}
-
-	switch msg.String() {
-	case "D":
-		// Power user shortcut - immediate confirm
-		return p.executeDelete()
-	case "esc", "q":
+	outcome, cmd := p.deleteConfirm.HandleKey(p.width, msg)
+	switch outcome {
+	case worktreedelete.OutcomeCancel:
 		return p.cancelDelete()
-	case "j", "down", "l", "right":
-		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-		return nil
-	case "k", "up", "h", "left":
-		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-		return nil
-	}
-
-	action, cmd := p.deleteConfirmModal.HandleKey(msg)
-	switch action {
-	case "cancel", deleteConfirmCancelID:
-		return p.cancelDelete()
-	case deleteConfirmDeleteID:
+	case worktreedelete.OutcomeConfirm:
 		return p.executeDelete()
 	}
 	return cmd
@@ -307,8 +289,8 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	path := wt.Path
 	branch := wt.Branch
 	isMissing := wt.IsMissing
-	deleteLocal := p.deleteLocalBranchOpt
-	deleteRemote := p.deleteRemoteBranchOpt && p.deleteHasRemote
+	deleteLocal := p.deleteConfirm.DeleteLocal
+	deleteRemote := p.deleteConfirm.DeleteRemoteBranch()
 	workDir := p.ctx.WorkDir
 	ctx, scope := p.newLifecycleScope(wt)
 
@@ -363,12 +345,7 @@ func (p *Plugin) cancelDelete() tea.Cmd {
 
 func (p *Plugin) clearConfirmDeleteModal() {
 	p.deleteConfirmWorktree = nil
-	p.deleteLocalBranchOpt = false
-	p.deleteRemoteBranchOpt = false
-	p.deleteHasRemote = false
-	p.deleteIsMainBranch = false
-	p.deleteConfirmModal = nil
-	p.deleteConfirmModalWidth = 0
+	p.deleteConfirm.Clear()
 }
 
 // handleConfirmDeleteShellKeys handles keys in the shell delete confirmation modal.
@@ -685,13 +662,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
-		p.deleteLocalBranchOpt = wt.IsMissing // Default ON when folder already gone
-		p.deleteRemoteBranchOpt = false
-		p.deleteHasRemote = false
-		p.deleteIsMainBranch = isMainBranch(p.ctx.WorkDir, wt.Branch)
-		p.deleteConfirmModal = nil
-		p.deleteConfirmModalWidth = 0
-		if p.deleteIsMainBranch {
+		p.deleteConfirm.Open(worktreeDeleteTarget(wt), isMainBranch(p.ctx.WorkDir, wt.Branch))
+		if p.deleteConfirm.IsMainBranch {
 			// Main branch is protected: skip branch options
 			return nil
 		}

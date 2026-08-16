@@ -1368,6 +1368,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return nil
 	case "delete-shell":
 		return m.overview.OpenDeleteSelectedShell()
+	case "delete-worktree":
+		return m.overview.OpenDeleteSelectedWorktree()
 	case "merge-workflow":
 		return m.overview.StartSelectedMerge()
 	case "new-worktree":

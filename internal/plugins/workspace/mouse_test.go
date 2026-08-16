@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/marcus/sidecar/internal/worktreedelete"
 	"strings"
 	"testing"
 
@@ -55,7 +56,7 @@ func TestIsBackgroundRegion(t *testing.T) {
 
 	modal := []string{
 		agentChoiceConfirmID, agentChoiceCancelID,
-		deleteConfirmDeleteID, deleteConfirmCancelID,
+		worktreedelete.DeleteID, worktreedelete.CancelID,
 		createSubmitID, createCancelID,
 		mergeMethodListID, mergeCleanUpButtonID, mergeSkipButtonID, // Merge modal element IDs
 		typeSelectorListID, typeSelectorConfirmID, typeSelectorCancelID, typeSelectorInputID, // Type selector modal element IDs

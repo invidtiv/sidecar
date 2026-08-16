@@ -528,8 +528,18 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 	switch key {
 	case "D":
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+		// D acts on whatever is selected, as it does on the project surface: a
+		// shell raises the shell confirmation, a worktree raises the shared
+		// "Delete Worktree?" one.
+		workspace, ok := m.SelectedWorkspace()
+		if !ok {
+			return false, nil
+		}
+		switch workspace.Kind {
+		case workspaceinventory.KindShell:
 			return true, m.OpenDeleteSelectedShell()
+		case workspaceinventory.KindWorktree:
+			return true, m.OpenDeleteSelectedWorktree()
 		}
 		return false, nil
 	case "m":

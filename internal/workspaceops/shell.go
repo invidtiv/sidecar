@@ -105,6 +105,20 @@ func DeleteManagedShell(projectRoot, sessionName, namespace string) error {
 	return nil
 }
 
+// ForgetManagedShell drops the durable identity of a shell whose tmux session
+// is already gone. It is DeleteManagedShell without the kill: there is nothing
+// left to close, and issuing kill-session anyway would be one more spawn and
+// one more way to hit the wrong target. Callers must have positive evidence the
+// session is gone (see internal/shellliveness); this operation does not
+// re-check, because the surfaces that call it already asked tmux.
+func ForgetManagedShell(projectRoot, sessionName, namespace string) error {
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return err
+	}
+	return shellstate.RemoveAtPath(filepath.Join(projectDir, "shells.json"), shellstate.Identity{TmuxName: sessionName, Namespace: namespace})
+}
+
 // ShellNames resolves the next generated display and session names from one
 // project's inventory. It tolerates legacy names while never reusing a suffix.
 func ShellNames(projectRoot string, existing []shellstate.Definition) (displayName, sessionName string) {

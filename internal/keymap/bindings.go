@@ -68,7 +68,10 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
+		// D acts on the selection's kind, as it does in the project list: the
+		// footer advertises whichever of the two the selected row answers.
 		{Key: "D", Command: "delete-shell", Context: "global-workspaces"},
+		{Key: "D", Command: "delete-worktree", Context: "global-workspaces"},
 		{Key: "m", Command: "merge-workflow", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},

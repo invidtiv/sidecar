@@ -9,11 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
@@ -396,71 +396,16 @@ func tryGitLogRangeContext(ctx context.Context, workdir, baseRef, headRef string
 	return cmd.Output()
 }
 
-// detectDefaultBranch detects the default branch for a repository.
-// Checks remote HEAD first, then falls back to common names.
-var (
-	defaultBranchCache   = make(map[string]string)
-	defaultBranchCacheMu sync.RWMutex
-)
-
+// detectDefaultBranch detects the default branch for a repository. Detection
+// and its cache live in workspaceops so every surface — and the shared worktree
+// delete path's main-branch guard — agrees on what "main" is here.
 func detectDefaultBranch(workdir string) string {
 	return detectDefaultBranchContext(context.Background(), workdir)
 }
 
 func detectDefaultBranchContext(ctx context.Context, workdir string) string {
-	if ctx.Err() != nil {
-		return ""
-	}
-	defaultBranchCacheMu.RLock()
-	if branch, ok := defaultBranchCache[workdir]; ok {
-		defaultBranchCacheMu.RUnlock()
-		return branch
-	}
-	defaultBranchCacheMu.RUnlock()
-
-	// Try to get the remote HEAD (most reliable)
 	recordGitProcess(ctx, nil)
-	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "refs/remotes/origin/HEAD")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
-	if err == nil {
-		// Output is like "refs/remotes/origin/main"
-		ref := strings.TrimSpace(string(output))
-		if branch, found := strings.CutPrefix(ref, "refs/remotes/origin/"); found {
-			setDefaultBranchCache(workdir, branch)
-			return branch
-		}
-	}
-	if ctx.Err() != nil {
-		return ""
-	}
-
-	// Fallback: check which common branch exists
-	for _, branch := range []string{"main", "master"} {
-		if ctx.Err() != nil {
-			return ""
-		}
-		recordGitProcess(ctx, nil)
-		cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", branch)
-		cmd.Dir = workdir
-		if err := cmd.Run(); err == nil {
-			setDefaultBranchCache(workdir, branch)
-			return branch
-		}
-	}
-
-	// Last resort default
-	if ctx.Err() != nil {
-		return ""
-	}
-	setDefaultBranchCache(workdir, "main")
-	return "main"
-}
-
-func setDefaultBranchCache(workdir, branch string) {
-	defaultBranchCacheMu.Lock()
-	defaultBranchCache[workdir] = branch
-	defaultBranchCacheMu.Unlock()
+	return workspaceops.DefaultBranch(ctx, workdir)
 }
 
 // resolveBaseBranch returns the worktree's BaseBranch if set,

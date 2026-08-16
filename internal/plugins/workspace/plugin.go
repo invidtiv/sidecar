@@ -19,12 +19,14 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 const (
@@ -423,15 +425,13 @@ type Plugin struct {
 	agentConfigModal      *modal.Modal
 	agentConfigModalWidth int
 
-	// Delete confirmation modal state
-	deleteConfirmWorktree   *Worktree // Worktree pending deletion
-	deleteLocalBranchOpt    bool      // Checkbox: delete local branch
-	deleteRemoteBranchOpt   bool      // Checkbox: delete remote branch
-	deleteHasRemote         bool      // Whether remote branch exists
-	deleteIsMainBranch      bool      // Whether the worktree branch is the main branch (protected)
-	deleteConfirmModal      *modal.Modal
-	deleteConfirmModalWidth int
-	deleteWarnings          []string // Warnings from last delete operation (e.g., branch deletion failures)
+	// Delete confirmation state. The confirmation itself — its sections, its
+	// branch cleanup options, and its key/mouse routing — is
+	// internal/worktreedelete, shared with the global Workspaces browser. The
+	// plugin keeps only the lifecycle handle it needs afterwards.
+	deleteConfirmWorktree *Worktree // Worktree pending deletion
+	deleteConfirm         worktreedelete.State
+	deleteWarnings        []string // Warnings from last delete operation (e.g., branch deletion failures)
 
 	// Shell delete confirmation modal state
 	deleteConfirmShell    *ShellSession // Shell pending deletion
@@ -529,9 +529,12 @@ type Plugin struct {
 	shellWatcher         shellManifestWatcher
 	shellWatcherMessages <-chan tea.Msg
 	shellStartupHooks    shellStartupHooks
-	shellStartupEpoch    uint64
-	shellStartupVersion  uint64
-	shellStartupLoading  bool
+	// shellLiveness holds what this surface has observed about each shell's
+	// tmux session, so a dead one closes and a hiccup does not (td-6a4100).
+	shellLiveness       *shellliveness.Tracker
+	shellStartupEpoch   uint64
+	shellStartupVersion uint64
+	shellStartupLoading bool
 
 	// Pending agent UI requests
 	pendingViews map[string]*pendingView
@@ -950,7 +953,7 @@ func (p *Plugin) resetLifecycleState() {
 	p.commitForMergeModal = nil
 	p.linkingWorktree = nil
 	p.deleteConfirmWorktree = nil
-	p.deleteConfirmModal = nil
+	p.deleteConfirm.Clear()
 	p.fetchPRItems = nil
 	p.fetchPRLoading = false
 	p.fetchPRError = ""

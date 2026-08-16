@@ -420,26 +420,11 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 	return wt, nil
 }
 
+// doDeleteWorktreeContext runs the shared deletion path. The git work itself
+// belongs to workspaceops so the project surface and the global Workspaces
+// browser delete a worktree the same way.
 func doDeleteWorktreeContext(ctx context.Context, workDir, path string, isMissing bool) error {
-	if isMissing {
-		return doWorktreePruneContext(ctx, workDir)
-	}
-
-	// First try without force
-	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", path)
-	cmd.Dir = workDir
-	if err := cmd.Run(); err == nil {
-		return nil
-	}
-
-	// If that fails, try with force
-	cmd = exec.CommandContext(ctx, "git", "worktree", "remove", "--force", path)
-	cmd.Dir = workDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-
-	return nil
+	return workspaceops.DeleteWorktree(ctx, workDir, path, isMissing)
 }
 
 // pushSelected returns a command to push the selected worktree's branch.
@@ -492,22 +477,11 @@ func getCurrentBranchContext(ctx context.Context, workdir string) (string, error
 }
 
 func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string) bool {
-	cmd := exec.CommandContext(ctx, "git", "ls-remote", "--heads", "origin", branch)
-	cmd.Dir = workdir
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return len(strings.TrimSpace(string(output))) > 0
+	return workspaceops.RemoteBranchExists(ctx, workdir, branch)
 }
 
 func doWorktreePruneContext(ctx context.Context, workDir string) error {
-	cmd := exec.CommandContext(ctx, "git", "worktree", "prune")
-	cmd.Dir = workDir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree prune: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
+	return workspaceops.PruneWorktrees(ctx, workDir)
 }
 
 // isMainBranch returns true if the given branch is the repository's primary branch
@@ -522,43 +496,11 @@ func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
 }
 
 func deleteBranchContext(ctx context.Context, workdir, branch string) error {
-	if isMainBranchContext(ctx, workdir, branch) {
-		return fmt.Errorf("refusing to delete main branch %q", branch)
-	}
-	// Try safe delete first
-	cmd := exec.CommandContext(ctx, "git", "branch", "-d", branch)
-	cmd.Dir = workdir
-	if err := cmd.Run(); err == nil {
-		return nil
-	}
-
-	// Try force delete
-	cmd = exec.CommandContext(ctx, "git", "branch", "-D", branch)
-	cmd.Dir = workdir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("delete branch: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
+	return workspaceops.DeleteLocalBranch(ctx, workdir, branch)
 }
 
 func deleteRemoteBranchCmdContext(ctx context.Context, workdir, branch string) error {
-	if isMainBranchContext(ctx, workdir, branch) {
-		return fmt.Errorf("refusing to delete remote main branch %q", branch)
-	}
-	cmd := exec.CommandContext(ctx, "git", "push", "origin", "--delete", branch)
-	cmd.Dir = workdir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		outputStr := string(output)
-		// Check if branch was already deleted (GitHub auto-delete)
-		if strings.Contains(outputStr, "remote ref does not exist") ||
-			strings.Contains(outputStr, "unable to delete") ||
-			strings.Contains(outputStr, "couldn't find remote ref") {
-			return nil // Not an error - branch already gone
-		}
-		return fmt.Errorf("delete remote branch: %s", strings.TrimSpace(outputStr))
-	}
-	return nil
+	return workspaceops.DeleteRemoteBranch(ctx, workdir, branch)
 }
 
 // checkRemoteBranch returns a command to check if a remote branch exists.

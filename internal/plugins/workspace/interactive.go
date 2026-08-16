@@ -843,13 +843,31 @@ func (p *Plugin) leaveInteractiveMode() tea.Cmd {
 // under a keystroke or a forwarded click ends the mode by itself, and a mode
 // that ends with no notice reads as a dropped keystroke.
 func (p *Plugin) noteSessionEnded() tea.Cmd {
-	if p.interactiveState == nil {
-		return nil
+	// The embedded terminal is the only thing still watching a model-owned
+	// pane — the shell poll chain is invalidated while the model draws it — so
+	// its notice is also this surface's evidence that the shell may have
+	// exited. Raise it as suspicion; the probe decides (td-6a4100). This
+	// happens whether or not the user was typing: a shell killed from outside
+	// must close too.
+	suspects := make([]tea.Cmd, 0, 2)
+	for _, target := range []workspaceTerminalTarget{p.primaryTerminalTarget, p.panelTerminalTarget} {
+		if target.Source != "shell" {
+			continue
+		}
+		if cmd := p.suspectShellDeath(target.Session); cmd != nil {
+			suspects = append(suspects, cmd)
+		}
 	}
-	cmd := p.leaveInteractiveMode()
+	if p.interactiveState == nil {
+		return tea.Batch(suspects...)
+	}
+	if cmd := p.suspectShellDeath(p.interactiveState.TargetSession); cmd != nil {
+		suspects = append(suspects, cmd)
+	}
+	suspects = append(suspects, p.leaveInteractiveMode())
 	p.toastMessage = "Session ended"
 	p.toastTime = time.Now()
-	return cmd
+	return tea.Batch(suspects...)
 }
 
 // attachFromInteractive is the component's OnAttach hook: leave the embedded

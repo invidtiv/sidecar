@@ -1158,6 +1158,14 @@ func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
 	if err != nil {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: %w", err)
 	}
+	// tmux answers a display-message for a target it cannot resolve with empty
+	// fields and exit 0 rather than an error, so ",,," is how a dead session
+	// looks here. Say what that means in tmux's own words instead of reporting
+	// it as malformed metadata, which reads as a parser bug and is what kept an
+	// exited shell on the list (td-6a4100).
+	if strings.Trim(strings.TrimSpace(string(output)), ",") == "" {
+		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: no current target: %s", target)
+	}
 	fields := strings.Split(strings.TrimSpace(string(output)), ",")
 	if len(fields) < 4 {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: invalid metadata %q", output)

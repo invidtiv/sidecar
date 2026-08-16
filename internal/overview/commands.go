@@ -38,8 +38,12 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "cancel", Name: "Cancel", Description: "Close the create prompt", Context: ctxGlobalWorkspacesCreate, Priority: 2},
 		}
 	case ctxGlobalWorkspacesDelete:
+		subject := "shell"
+		if m.DeletingWorktree() {
+			subject = "worktree"
+		}
 		return []plugin.Command{
-			{ID: "confirm-delete", Name: "Delete", Description: "Delete the selected shell", Context: ctxGlobalWorkspacesDelete, Priority: 1},
+			{ID: "confirm-delete", Name: "Delete", Description: "Delete the selected " + subject, Context: ctxGlobalWorkspacesDelete, Priority: 1},
 			{ID: "cancel", Name: "Cancel", Description: "Close the delete confirmation", Context: ctxGlobalWorkspacesDelete, Priority: 2},
 		}
 	case ctxGlobalWorkspacesTerminal:
@@ -107,6 +111,9 @@ func (m *Model) Commands() []plugin.Command {
 				})
 				if mergeRefusal(workspace) == "" {
 					cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Open the owning project's merge strategy workflow", Context: ctxGlobalWorkspaces, Priority: 9})
+				}
+				if deleteRefusal(workspace) == "" {
+					cmds = append(cmds, plugin.Command{ID: "delete-worktree", Name: "Delete", Description: "Delete the selected worktree", Context: ctxGlobalWorkspaces, Priority: 10})
 				}
 			}
 		}

@@ -453,6 +453,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.overview.Validate(msg)
 
+	case overview.RevealMsg:
+		// An Activity card opens in the global Workspaces browser. The project
+		// underneath is untouched: this is a move between two projections of
+		// the same catalog, not a navigation out of the global space.
+		if m.overview == nil || !m.inGlobalScope() {
+			return m, nil
+		}
+		reveal := m.overview.RevealWorkspace(msg.Workspace)
+		return m, tea.Batch(reveal, m.setGlobalTab(GlobalSessions))
+
 	case overview.ValidationMsg:
 		if !m.globalCatalogNavigable() || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
 			return m, nil
