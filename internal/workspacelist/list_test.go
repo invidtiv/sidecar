@@ -423,8 +423,14 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	if strings.Contains(wide, "/ filter") {
 		t.Fatalf("an unfiltered list drew the filter row:\n%s", wide)
 	}
-	if got := strings.Split(wide, "\n")[1]; !strings.Contains(got, "Needs Attention (1)") {
-		t.Fatalf("the first heading is on row %q, want it directly under the title", got)
+	// One blank line separates the panel's chrome from its content, so the first
+	// heading is the row after it rather than flush under the title.
+	rows := strings.Split(wide, "\n")
+	if strings.TrimSpace(rows[1]) != "" {
+		t.Fatalf("no blank line under the title, got %q", rows[1])
+	}
+	if got := rows[2]; !strings.Contains(got, "Needs Attention (1)") {
+		t.Fatalf("the first heading is on row %q, want it one blank line under the title", got)
 	}
 	m.FocusFilter()
 	filtering := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
@@ -587,9 +593,14 @@ func TestSelectionClampsAtBothEndsAndScrollFollows(t *testing.T) {
 
 func TestRelativeAgeUsesTheBoardsUnits(t *testing.T) {
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	// The sub-minute boundary is pinned deliberately: everything below a minute
+	// reads "now", and the first minute is the first row that shows a number.
 	cases := map[time.Duration]string{
 		0:                "now",
-		20 * time.Second: "20s",
+		20 * time.Second: "now",
+		59 * time.Second: "now",
+		time.Minute:      "1m",
+		61 * time.Second: "1m",
 		5 * time.Minute:  "5m",
 		3 * time.Hour:    "3h",
 		50 * time.Hour:   "2d",
@@ -622,7 +633,7 @@ func TestFilterSeparatesIdenticallyNamedShellsByTmuxName(t *testing.T) {
 	}
 	var m Model
 	for _, row := range rows {
-		rendered := ansi.Strip(strings.Join(m.renderRow(row, false, true, 60, time.Now()), "\n"))
+		rendered := ansi.Strip(strings.Join(m.renderRow(row, false, true, 60, time.Now(), true), "\n"))
 		if strings.Contains(rendered, row.TmuxName) {
 			t.Fatalf("the tmux session name became visible in the row: %q", rendered)
 		}
@@ -637,7 +648,7 @@ func TestGlobalRenderRowIsKindProjectNameAgeThenAgent(t *testing.T) {
 		Provider: "grok", Status: "working", Detail: "td-196c42", Kind: KindWorktree,
 		Marker: RowMarker{Icon: "●", Lane: "working"}, ChangedAt: now.Add(-time.Minute),
 	}
-	lines := m.renderRow(item, false, true, 56, now)
+	lines := m.renderRow(item, false, true, 56, now, true)
 	if len(lines) != 2 {
 		t.Fatalf("lines = %d, want 2:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
@@ -661,12 +672,55 @@ func TestGlobalRenderRowIsKindProjectNameAgeThenAgent(t *testing.T) {
 	shell.Status = "live"
 	shell.Detail = ""
 	shell.Marker = RowMarker{Icon: "◎", Tone: MarkerLive}
-	shellLines := m.renderRow(shell, false, true, 56, now)
+	shellLines := m.renderRow(shell, false, true, 56, now, true)
 	got := ansi.Strip(strings.Join(shellLines, "\n"))
 	if !strings.Contains(ansi.Strip(shellLines[0]), "❯ braid Shell 2") {
 		t.Fatalf("shell row = %q", got)
 	}
 	if strings.Contains(got, "live") {
 		t.Fatalf("shell row repeated status text: %q", got)
+	}
+}
+
+// TestProjectSortDropsTheRedundantProjectFromEachRow pins td-ccd6cd: under
+// Project sort the heading above a run of rows already names their project, so
+// repeating it on every row spends width on a word the reader has just read.
+// Every other sort has no such heading and must keep it.
+func TestProjectSortDropsTheRedundantProjectFromEachRow(t *testing.T) {
+	var m Model
+	m.SetItems(items())
+
+	m.SetSort(SortProject)
+	byProject := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 24, Title: "Workspaces", Focused: true}).View)
+	if !strings.Contains(byProject, "sidecar (2)") {
+		t.Fatalf("project heading missing:\n%s", byProject)
+	}
+	for _, line := range strings.Split(byProject, "\n") {
+		if strings.Contains(line, "sidecar") && !strings.Contains(line, "(") {
+			t.Fatalf("a row still repeats its project heading: %q\n%s", line, byProject)
+		}
+	}
+	if !strings.Contains(byProject, "modal look and feel") {
+		t.Fatalf("the row itself is gone:\n%s", byProject)
+	}
+
+	m.SetSort(SortActivity)
+	byActivity := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 24, Title: "Workspaces", Focused: true}).View)
+	if !strings.Contains(byActivity, "sidecar modal look and feel") {
+		t.Fatalf("a sort with no project heading dropped the project prefix:\n%s", byActivity)
+	}
+}
+
+// TestPinnedRowsKeepTheirProjectUnderProjectSort guards the exception: the
+// Pinned section is not a project section, so its rows are the only ones on
+// screen with no heading to inherit a project from.
+func TestPinnedRowsKeepTheirProjectUnderProjectSort(t *testing.T) {
+	var m Model
+	m.SetItems(items())
+	m.SetSort(SortProject)
+	m.SetPinned([]string{"a"})
+	view := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 24, Title: "Workspaces", Focused: true}).View)
+	if !strings.Contains(view, "sidecar modal look and feel") {
+		t.Fatalf("a pinned row lost the project it has no heading for:\n%s", view)
 	}
 }

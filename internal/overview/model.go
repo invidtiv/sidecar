@@ -1183,29 +1183,15 @@ func isDormant(p agentstatus.Presentation, now time.Time) bool {
 	return now.Sub(p.ChangedAt) > DormantAfter
 }
 
-// relativeAge formats the gap between changedAt and now as the small units
-// the board cards use: "12s", "3m", "1h", "2d". Anything under 5s reads
-// "now"; a zero changedAt renders nothing.
+// relativeAge formats the gap between changedAt and now as the small units the
+// board cards use: "now", "3m", "1h", "2d". A zero changedAt renders nothing.
+//
+// It defers to the shared formatter rather than keeping a second copy of the
+// same ladder: the board and the workspace lists describe the same events, and
+// a card that reads "now" beside a list row that reads "12s" is two answers to
+// one question.
 func relativeAge(changedAt, now time.Time) string {
-	if changedAt.IsZero() {
-		return ""
-	}
-	d := now.Sub(changedAt)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < 5*time.Second:
-		return "now"
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return workspacelist.RelativeAge(changedAt, now)
 }
 
 func (m *Model) renderCompact(width, height int) string {

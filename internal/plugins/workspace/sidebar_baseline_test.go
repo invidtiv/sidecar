@@ -313,10 +313,10 @@ func TestWorkspacesSectionOffersNoSecondCreateButtonWithoutShells(t *testing.T) 
 	}
 }
 
-// The heading wording and the blank line between sections are what a user
+// The heading wording and the blank lines around sections are what a user
 // compares the two Workspaces surfaces by, so the project sidebar pins them
-// here: title, then the first heading with no separator above it, then one
-// blank line before the next section.
+// here: title, one blank line, the first heading with no further separator
+// above it, then one blank line before the next section.
 func TestSidebarHeadingsAndSeparatorPlacement(t *testing.T) {
 	p := sidebarBaselinePlugin(t)
 	lines := strings.Split(ansi.Strip(p.renderSidebarContent(30, 24)), "\n")
@@ -327,16 +327,19 @@ func TestSidebarHeadingsAndSeparatorPlacement(t *testing.T) {
 		t.Fatalf("sidebar rendered %d lines:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 
-	if got, want := strings.TrimSpace(lines[1]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
-		t.Fatalf("first heading = %q, want %q directly under the title", got, want)
+	if lines[1] != "" {
+		t.Fatalf("no blank line under the panel header: %q\n%s", lines[1], strings.Join(lines, "\n"))
 	}
-	if lines[2] == "" {
+	if got, want := strings.TrimSpace(lines[2]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
+		t.Fatalf("first heading = %q, want %q one blank line under the title", got, want)
+	}
+	if lines[3] == "" {
 		t.Fatalf("a separator was drawn above the first section:\n%s", strings.Join(lines, "\n"))
 	}
-	if lines[4] != "" {
-		t.Fatalf("sections are not separated by a blank line: %q\n%s", lines[4], strings.Join(lines, "\n"))
+	if lines[5] != "" {
+		t.Fatalf("sections are not separated by a blank line: %q\n%s", lines[5], strings.Join(lines, "\n"))
 	}
-	if got, want := strings.TrimSpace(lines[5]), workspacelist.SectionTitle("Worktrees", 3); !strings.HasPrefix(got, want) {
+	if got, want := strings.TrimSpace(lines[6]), workspacelist.SectionTitle("Worktrees", 3); !strings.HasPrefix(got, want) {
 		t.Fatalf("second heading = %q, want %q", got, want)
 	}
 }
@@ -367,7 +370,7 @@ func TestSidebarFirstPaintStaysAtTopWhenSelectionFits(t *testing.T) {
 	if p.scrollOffset != 0 {
 		t.Fatalf("scrollOffset = %d, want 0 on first paint of a short list", p.scrollOffset)
 	}
-	if got, want := strings.TrimSpace(lines[1]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
+	if got, want := strings.TrimSpace(lines[2]), workspacelist.SectionTitle("Shells", 2); !strings.HasPrefix(got, want) {
 		t.Fatalf("first body row = %q, want the Shells heading", got)
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "one") {

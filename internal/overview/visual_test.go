@@ -19,9 +19,9 @@ func TestRelativeAgeBoundaries(t *testing.T) {
 	}{
 		{"zero", time.Time{}, ""},
 		{"just now", now.Add(-2 * time.Second), "now"},
-		{"just under now boundary", now.Add(-4999 * time.Millisecond), "now"},
-		{"seconds", now.Add(-12 * time.Second), "12s"},
-		{"just under a minute", now.Add(-59 * time.Second), "59s"},
+		{"seconds", now.Add(-12 * time.Second), "now"},
+		{"just under a minute", now.Add(-59 * time.Second), "now"},
+		{"exactly a minute", now.Add(-time.Minute), "1m"},
 		{"minutes", now.Add(-3 * time.Minute), "3m"},
 		{"just under an hour", now.Add(-59 * time.Minute), "59m"},
 		{"hours", now.Add(-1 * time.Hour), "1h"},

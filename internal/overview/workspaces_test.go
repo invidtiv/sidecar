@@ -751,3 +751,30 @@ func TestSortPillNamesItselfAsASort(t *testing.T) {
 		t.Fatalf("header does not mark its sort control:\n%s", view)
 	}
 }
+
+// The global browser is the second projection of the shared list, so the two
+// polish changes that live in workspacelist have to be visible from here as
+// well: a blank line between the panel's chrome and its first heading
+// (td-a453b5), and no per-row project name under Project sort (td-ccd6cd).
+func TestGlobalListSeparatesChromeAndDropsRepeatedProjectUnderProjectSort(t *testing.T) {
+	m := catalogModel(t)
+	m.WorkspacesView(60, 24)
+
+	lines := strings.Split(ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22)), "\n")
+	if !strings.Contains(lines[0], "Workspaces") {
+		t.Fatalf("row 0 is not the panel header: %q", lines[0])
+	}
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Fatalf("no blank line under the global panel header: %q", lines[1])
+	}
+	if strings.TrimSpace(lines[2]) == "" {
+		t.Fatalf("more than one blank line under the header:\n%s", strings.Join(lines[:5], "\n"))
+	}
+
+	m.workspaces.SetSort(workspacelist.SortProject)
+	for _, line := range strings.Split(ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22)), "\n") {
+		if strings.Contains(line, "sidecar") && !strings.Contains(line, "sidecar (") {
+			t.Fatalf("a row repeats the project its heading already names: %q", line)
+		}
+	}
+}
