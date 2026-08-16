@@ -67,6 +67,23 @@ type Model struct {
 
 	// showColorSteps expands the terminal-colors repair's instructions.
 	showColorSteps bool
+
+	// host is what the running Sidecar told the surface about itself.
+	host HostState
+	// editor is the field that owns typed characters, if any.
+	editor *editorState
+	// pendingFocus is a control to put the row cursor on as soon as it is
+	// rendered.
+	pendingFocus string
+	// pending holds commands raised outside a key's own return path — a
+	// completion request started by a keystroke inside a field, above all.
+	pending []tea.Cmd
+
+	// Page state. Each is built lazily against the running configuration and
+	// dropped when Configuration closes.
+	appearanceState *appearanceState
+	projectsState   *projectsState
+	addProject      *projectForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
 
@@ -119,6 +136,9 @@ func (m *Model) Open(page PageID) {
 	m.hoverID = ""
 	m.cursor = indexOfPage(m.visiblePages(), page)
 	m.saved = nil
+	m.appearanceState = nil
+	m.projectsState = nil
+	m.addProject = nil
 	m.resetDetail()
 }
 
@@ -130,6 +150,7 @@ func (m *Model) resetDetail() {
 	m.rowCursor = 0
 	m.confirm = nil
 	m.showColorSteps = false
+	m.closeEditor()
 }
 
 // Page is the destination the sidebar highlights.
@@ -205,6 +226,10 @@ func (m *Model) FocusContext() string {
 	if m.confirm != nil {
 		return ContextConfigConfirm
 	}
+	// A field on a page owns typed characters exactly as Search does.
+	if m.editing() {
+		return ContextConfigEdit
+	}
 	if m.SearchFocused() {
 		return ContextConfigEdit
 	}
@@ -255,6 +280,12 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "copy-guidance", Name: "Copy", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
 	case "o":
 		return plugin.Command{ID: "open-file", Name: "Open", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
+	case "a":
+		return plugin.Command{ID: "add-project", Name: "Add", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case "d":
+		return plugin.Command{ID: "remove-project", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
+	case "g":
+		return plugin.Command{ID: "use-global-theme", Name: "Use global", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 8}, true
 	}
 	return plugin.Command{}, false
 }
@@ -284,7 +315,30 @@ func indexOfPage(pages []PageID, target PageID) int {
 // Key handles a key press. It reports whether the surface consumed it; the host
 // keeps unconsumed keys away from the plugin hidden underneath.
 func (m *Model) Key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	handled, cmd := m.key(msg)
+	return handled, m.drain(cmd)
+}
+
+// drain batches any command raised while handling an event with the one the
+// handler returned.
+func (m *Model) drain(cmd tea.Cmd) tea.Cmd {
+	if len(m.pending) == 0 {
+		return cmd
+	}
+	cmds := append(m.pending, cmd)
+	m.pending = nil
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+
+	// A field on a page owns every printable key while it is open, so nothing
+	// typed into Name, Location, a theme filter, or a title template can reach
+	// a page shortcut or a global one.
+	if m.editing() {
+		return m.editorKey(msg)
+	}
 
 	if m.SearchFocused() {
 		switch key {
@@ -327,9 +381,20 @@ func (m *Model) Key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 
 	if m.detailOwnsKeys() {
+		// A focused theme list owns the arrows: moving inside it previews, and
+		// running off either end is what hands the cursor back to the page.
+		if m.pickerOwnsKeys() {
+			if handled, cmd := m.pickerKey(key); handled {
+				return true, cmd
+			}
+		}
+		if handled, cmd := m.pageKey(key); handled {
+			return true, cmd
+		}
 		switch key {
 		case "down", "j", "ctrl+n":
 			m.moveRowCursor(1)
+			m.syncPickerCursor()
 			return true, nil
 		case "up", "k", "ctrl+p":
 			if m.rowCursor == 0 && !m.Route().IsChild() {
@@ -339,6 +404,7 @@ func (m *Model) Key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 			m.moveRowCursor(-1)
+			m.syncPickerCursor()
 			return true, nil
 		case "home", "g":
 			m.rowCursor = 0
@@ -449,6 +515,10 @@ func (m *Model) activateCursor() {
 
 // Mouse handles a mouse event whose coordinates are local to the content area.
 func (m *Model) Mouse(msg tea.MouseMsg) tea.Cmd {
+	return m.drain(m.handleMouse(msg))
+}
+
+func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	action := m.mouse.HandleMouse(msg)
 	switch action.Type {
 	case mouse.ActionHover:
@@ -658,16 +728,37 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 
 	route := m.Route()
 	switch {
+	case m.confirm != nil && !route.IsChild():
+		// A confirmation owns the pane wherever it was raised, so a page-level
+		// consequential change looks and answers like a repair's does.
+		builder.text(PaneTitle(m.confirm.title), "")
+		m.buildConfirm(builder)
 	case route.IsChild():
 		m.buildChild(builder, route)
 	case route.Page == PageSetup:
 		m.buildSetup(builder)
 	case route.Page == PageDiagnostics:
 		m.buildDiagnostics(builder)
+	case route.Page == PageAppearance:
+		m.buildAppearance(builder)
+	case route.Page == PageProjects:
+		m.buildProjects(builder)
 	default:
 		builder.text(pageBody(route.Page, inner)...)
 	}
 	lines = append(lines, builder.lines...)
+	// The row cursor follows the field being typed into, so leaving an editor
+	// puts the cursor back on the control the user was working in; a focus
+	// request for a control that did not exist yet lands here too.
+	if m.editor != nil {
+		m.focusControlByID(m.editor.id)
+	} else if id := m.pendingFocus; id != "" {
+		// One retry: a control that still is not on screen is not coming, and a
+		// standing request would later steal the cursor from wherever the user
+		// has moved it.
+		m.pendingFocus = ""
+		m.focusRenderedControl(id)
+	}
 	m.clampRowCursor()
 	return clampLines(lines, paneHeight-2, inner)
 }
@@ -689,4 +780,54 @@ func clampLines(lines []string, height, width int) string {
 		out[i] = line
 	}
 	return strings.Join(out, "\n")
+}
+
+// pageKey answers the keys a page owns beyond its declared controls. Reordering
+// is the only one today: it acts on the selected project, which is a page-level
+// idea rather than a control's.
+func (m *Model) pageKey(key string) (bool, tea.Cmd) {
+	if m.Route().IsChild() || m.Page() != PageProjects {
+		return false, nil
+	}
+	switch key {
+	case "shift+up", "[":
+		return true, m.moveSelectedProject(-1)
+	case "shift+down", "]":
+		return true, m.moveSelectedProject(1)
+	}
+	return false, nil
+}
+
+// Escape answers esc for everything the surface owns, innermost first: the
+// field being typed into, a pending confirmation, an inline picker, the sidebar
+// search, then a focused child route. It reports false when nothing on screen
+// needed dismissing, which is the host's signal to close Configuration.
+func (m *Model) Escape() bool {
+	if m.editing() {
+		m.cancelEditor()
+		return true
+	}
+	if m.DismissConfirm() {
+		return true
+	}
+	// An open inline picker collapses back to its field rather than leaving the
+	// route it belongs to.
+	if m.collapseInlineThemePicker() {
+		return true
+	}
+	// Leaving Appearance without saving puts back the theme that was in force
+	// when the page opened, so a preview can never become a silent change.
+	if picker := m.activePicker(); picker != nil && picker.previewing {
+		picker.restoreTheme()
+		return true
+	}
+	if m.SearchActive() {
+		m.ClearSearch()
+		return true
+	}
+	if m.Route().IsChild() {
+		m.closeProjectForm()
+		return m.Back()
+	}
+	return false
 }

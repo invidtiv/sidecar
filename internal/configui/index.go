@@ -33,13 +33,19 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAppearance, Label: "Nerd Font icons", Keywords: []string{"nerd", "font", "icons", "glyphs", "pills"}},
 	{Page: PageAppearance, Label: "Header clock", Keywords: []string{"clock", "time", "header"}},
 	{Page: PageAppearance, Label: "Terminal title", Keywords: []string{"title", "terminal", "window", "tab"}},
+	{Page: PageAppearance, Label: "Community themes", Keywords: []string{"community", "scheme", "base16", "theme", "search"}},
+	{Page: PageAppearance, Label: "Project theme override", Keywords: []string{"theme", "project", "override", "scope", "per-project"}},
 
 	// Projects
 	{Page: PageProjects, Label: "Add project", Keywords: []string{"project", "add", "path", "location", "new"}},
 	{Page: PageProjects, Label: "Project location", Keywords: []string{"path", "location", "directory", "folder"}},
 	{Page: PageProjects, Label: "Project theme", Keywords: []string{"theme", "project", "override"}},
 	{Page: PageProjects, Label: "Open in application", Keywords: []string{"open in", "editor", "ide", "application"}},
+	{Page: PageProjects, Label: "Edit project", Keywords: []string{"edit", "rename", "project", "change"}},
 	{Page: PageProjects, Label: "Remove project", Keywords: []string{"remove", "delete", "project"}},
+	{Page: PageProjects, Label: "Reorder projects", Keywords: []string{"reorder", "order", "move", "project", "list"}},
+	{Page: PageProjects, Label: "Project name", Keywords: []string{"name", "rename", "project", "label"}},
+	{Page: PageProjects, Label: "Worktree setup override", Keywords: []string{"worktree", "setup", "override", "project"}},
 
 	// Workspaces
 	{Page: PageWorkspaces, Label: "Default agent", Keywords: []string{"agent", "claude", "codex", "default", "workspace"}},

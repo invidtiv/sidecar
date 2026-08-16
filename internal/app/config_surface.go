@@ -13,6 +13,8 @@ import (
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/theme"
 )
 
 // Configuration is an app-level surface, not a modal and not a plugin. It
@@ -59,6 +61,7 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 		m.configActive = true
 	}
 	m.config.Open(page)
+	m.config.SetHostState(m.configHostState())
 	m.updateContext()
 	// Readiness is answered fresh every time Configuration opens, in a command:
 	// PATH, tmux, the config file, and the project's instruction file can all
@@ -66,6 +69,33 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	// render path.
 	m.config.SetCheckInput(m.configCheckInput())
 	return m.config.Recheck()
+}
+
+// configHostState describes this Sidecar to Configuration: the configuration it
+// is running with, where it is working, which configured project that is, and
+// the applications it can open a project in. Configuration reads settings from
+// here rather than keeping a copy of its own.
+func (m *Model) configHostState() configui.HostState {
+	state := configui.HostState{
+		Config:     m.cfg,
+		ProjectDir: m.ui.WorkDir,
+		OpenInApps: openInChoices(),
+	}
+	if project := m.currentProjectConfig(); project != nil {
+		state.ProjectPath = project.Path
+	}
+	return state
+}
+
+// openInChoices names the applications Sidecar knows how to open a project in.
+// It deliberately does not detect installations: naming a preference is a
+// configuration choice, and the Open-in flow still shows only what is present.
+func openInChoices() []configui.OpenInApp {
+	choices := make([]configui.OpenInApp, 0, len(openInRegistry))
+	for _, app := range openInRegistry {
+		choices = append(choices, configui.OpenInApp{ID: app.ID, Name: app.Name})
+	}
+	return choices
 }
 
 // configCheckInput describes this Sidecar to the checks: the configuration the
@@ -119,18 +149,10 @@ func (m *Model) closeConfiguration() tea.Cmd {
 // the surface. That order is the brief's, and it is why esc never surprises a
 // user out of Configuration while something on screen still needs dismissing.
 func (m *Model) configEscape() tea.Cmd {
-	// A pending confirmation is the thing on screen the user is answering, so
-	// esc means "no" before it means anything about navigation.
-	if m.config.DismissConfirm() {
-		m.updateContext()
-		return nil
-	}
-	if m.config.SearchActive() {
-		m.config.ClearSearch()
-		m.updateContext()
-		return nil
-	}
-	if m.config.Back() {
+	// The surface answers for everything it owns — the field being typed into,
+	// a pending confirmation, an inline picker, the search, a child route — and
+	// only when none of those needed dismissing does esc close Configuration.
+	if m.config.Escape() {
 		m.updateContext()
 		return nil
 	}
@@ -211,8 +233,51 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 
 	case configui.OpenFileMsg:
 		return m.openConfigFile(msg.Path), true
+
+	case configui.ConfigSavedMsg:
+		return m.applyConfigSaved(msg), true
+
+	case configui.Msg:
+		// Work the surface started for itself — a directory listing, so far.
+		if m.config == nil {
+			return nil, true
+		}
+		return m.config.Handle(msg), true
 	}
 	return nil, false
+}
+
+// applyConfigSaved reloads after Configuration wrote a setting and reapplies the
+// parts of it the app snapshots at startup, so a saved setting takes effect
+// without a restart wherever that is honest. Configuration never assumes a save
+// worked; the running state comes from the file that was just written.
+func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
+	if msg.Err != "" {
+		return func() tea.Msg {
+			return ToastMsg{Message: "Save failed: " + msg.Err, Duration: 4 * time.Second, IsError: true}
+		}
+	}
+	if cfg, err := config.Load(); err == nil {
+		m.cfg = cfg
+		m.showClock = cfg.UI.ShowClock
+		m.titleTemplate = cfg.UI.TerminalTitle
+		// Nerd Font glyphs are read from one package-level flag at startup;
+		// assigning it here is all "applies immediately" means for it.
+		styles.PillTabsEnabled = cfg.UI.NerdFontsEnabled
+		theme.ApplyResolved(theme.ResolveTheme(cfg, m.ui.WorkDir))
+	}
+	if m.config != nil {
+		m.config.SetHostState(m.configHostState())
+		m.config.SetCheckInput(m.configCheckInput())
+	}
+	cmds := []tea.Cmd{m.syncTerminalTitle(true)}
+	if msg.Notice != "" {
+		cmds = append(cmds, toast(msg.Notice))
+	}
+	if m.config != nil {
+		cmds = append(cmds, m.config.Recheck())
+	}
+	return tea.Batch(cmds...)
 }
 
 // openConfigFile puts a file in front of the user. A file inside the project

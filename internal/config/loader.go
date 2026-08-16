@@ -85,6 +85,7 @@ type rawProjectConfig struct {
 	Path          string               `json:"path"`
 	Theme         *ThemeConfig         `json:"theme,omitempty"`
 	LastOpenInApp string               `json:"lastOpenInApp,omitempty"`
+	OpenIn        string               `json:"openIn,omitempty"`
 	WorktreeSetup *WorktreeSetupConfig `json:"worktreeSetup,omitempty"`
 }
 
@@ -159,9 +160,12 @@ const (
 	envDefaultAgentType          = "SIDECAR_DEFAULT_AGENT_TYPE"
 )
 
-// Load loads configuration from the default location.
+// Load loads configuration from the path Sidecar is actually using — the
+// -config flag's file, a test's fixture, or the default location. Every
+// read-modify-write helper below goes through it, so a save can never merge
+// against a different file than the one it is about to write.
 func Load() (*Config, error) {
-	return LoadFrom("")
+	return LoadFrom(ConfigPath())
 }
 
 // LoadFrom loads configuration from a specific path.

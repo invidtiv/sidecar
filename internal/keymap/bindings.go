@@ -80,6 +80,15 @@ func DefaultBindings() []Binding {
 		{Key: "r", Command: "recheck", Context: "config"},
 		{Key: "c", Command: "copy-guidance", Context: "config"},
 		{Key: "o", Command: "open-file", Context: "config"},
+		// Projects: add, remove, and reorder the configured list.
+		{Key: "a", Command: "add-project", Context: "config"},
+		{Key: "d", Command: "remove-project", Context: "config"},
+		{Key: "shift+up", Command: "move-project-up", Context: "config"},
+		{Key: "shift+down", Command: "move-project-down", Context: "config"},
+		{Key: "[", Command: "move-project-up", Context: "config"},
+		{Key: "]", Command: "move-project-down", Context: "config"},
+		// The theme picker, on Appearance and inline in Add Project.
+		{Key: "g", Command: "use-global-theme", Context: "config"},
 
 		// config-edit: an active editor owns typed characters. Registered in
 		// the app's isTextInputContext, so no global shortcut can steal them.
@@ -87,6 +96,9 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "focus-search", Context: "config-edit"},
 		{Key: "enter", Command: "select", Context: "config-edit"},
 		{Key: "esc", Command: "clear-search", Context: "config-edit"},
+		// A form field: Tab accepts a completion or moves to the next field,
+		// and the arrows walk the candidates under the input.
+		{Key: "tab", Command: "accept-completion", Context: "config-edit"},
 
 		// config-confirm: a consequential change has an explicit path out.
 		{Key: "enter", Command: "confirm", Context: "config-confirm"},

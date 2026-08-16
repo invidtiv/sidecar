@@ -137,6 +137,12 @@ func Toggle(on bool, state State) string {
 
 // Selector renders a value with a disclosure arrow.
 func Selector(value string, state State) string {
+	return SelectorArrow(value, "▾", state)
+}
+
+// SelectorArrow renders a selector whose arrow says which way it opens: ▾ for a
+// closed disclosure, ▴ for one already expanded below the field.
+func SelectorArrow(value, arrow string, state State) string {
 	style := chipStyle()
 	switch {
 	case state.Disabled:
@@ -146,7 +152,7 @@ func Selector(value string, state State) string {
 	case state.Hovered:
 		style = style.Background(styles.BgTertiary)
 	}
-	return style.Render(value + "  ▾")
+	return style.Render(value + "  " + arrow)
 }
 
 // Button renders an action pill. primary marks the action the page recommends.
@@ -301,6 +307,15 @@ func ListRow(text string, width int, state State) string {
 		row += strings.Repeat(" ", pad)
 	}
 	return row
+}
+
+// padRight pushes a right-hand control to the pane's right edge.
+func padRight(left, right string, width int) string {
+	pad := width - ansi.StringWidth(left) - ansi.StringWidth(right)
+	if pad < 1 {
+		pad = 1
+	}
+	return left + strings.Repeat(" ", pad) + right
 }
 
 // BackBar is the top row of a focused child route: the route's own title on the

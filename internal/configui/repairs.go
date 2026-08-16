@@ -42,6 +42,8 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 	}
 
 	switch route.Child {
+	case ChildAddProject, ChildEditProject:
+		m.buildProjectForm(b)
 	case ChildRepairTmux:
 		m.buildTmuxRepair(b)
 	case ChildRepairTerminalColors:

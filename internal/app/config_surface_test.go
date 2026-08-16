@@ -1,14 +1,18 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 func typeKey(t *testing.T, m Model, key string) Model {
@@ -344,4 +348,73 @@ func drain(cmd tea.Cmd) []tea.Msg {
 		return out
 	}
 	return []tea.Msg{msg}
+}
+
+// A field on a Configuration page owns typed characters exactly as Search does:
+// the same global bindings must not fire while Add Project's Location is open.
+func TestConfigurationFieldTypingDoesNotTriggerGlobalShortcuts(t *testing.T) {
+	m, plugins := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+	m.config.OpenAddProject()
+	m.updateContext()
+	if m.activeContext != "config-edit" {
+		t.Fatalf("an open field reported context %q", m.activeContext)
+	}
+
+	for _, key := range []string{"q", "?", "!", "@", "#", "K", "1", "W", "r", ",", "a", "d"} {
+		m = typeKey(t, m, key)
+		if m.hasModal() {
+			t.Fatalf("typing %q opened a modal", key)
+		}
+		if !m.configOpen() {
+			t.Fatalf("typing %q closed Configuration", key)
+		}
+		if m.inGlobalScope() {
+			t.Fatalf("typing %q entered the global space", key)
+		}
+	}
+	if plugins["git"].keyInputs != 0 {
+		t.Fatalf("keys leaked to the covered plugin: %d", plugins["git"].keyInputs)
+	}
+	if route := m.config.Route(); !route.IsChild() {
+		t.Fatalf("typing left the Add Project route: %#v", route)
+	}
+}
+
+// A save reported by the surface is reloaded by the host, which is what makes a
+// setting take effect without a restart.
+func TestHostReloadsAfterConfigurationSave(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	config.SetTestConfigPath(path)
+	t.Cleanup(config.ResetTestConfigPath)
+
+	cfg := config.Default()
+	cfg.UI.ShowClock = true
+	cfg.UI.NerdFontsEnabled = true
+	cfg.UI.TerminalTitle = "{dir}"
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	original := styles.PillTabsEnabled
+	t.Cleanup(func() { styles.PillTabsEnabled = original })
+
+	updated, _ := m.Update(configui.ConfigSavedMsg{Notice: "Header clock on"})
+	m = asAppModel(t, updated)
+	if !m.showClock {
+		t.Fatal("the host did not pick up the saved clock setting")
+	}
+	if m.titleTemplate != "{dir}" {
+		t.Fatalf("title template = %q", m.titleTemplate)
+	}
+	if !styles.PillTabsEnabled {
+		t.Fatal("the host did not apply the saved Nerd Font setting")
+	}
 }

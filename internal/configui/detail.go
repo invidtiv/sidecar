@@ -126,6 +126,21 @@ func (b *paneBuilder) rightControl(left, id, key, label string, run func(*Model)
 	b.m.mouse.HitMap.AddRect(id, b.originX+b.inner-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
 }
 
+// rightControlPrimary is rightControl for an action the page recommends — the
+// Projects page's Add project, which is the point of the page rather than an
+// afterthought, so it is both a cursor stop and a pill with its own key.
+func (b *paneBuilder) rightControlPrimary(left, id, key, label string, run func(*Model) tea.Cmd) {
+	state := b.declare(id, key, true, run)
+	pill := Button(label, true, state)
+	pad := b.inner - ansi.StringWidth(left) - ansi.StringWidth(pill)
+	if pad < 1 {
+		pad = 1
+	}
+	y := len(b.lines)
+	b.lines = append(b.lines, left+strings.Repeat(" ", pad)+pill)
+	b.m.mouse.HitMap.AddRect(id, b.originX+b.inner-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
+}
+
 // cursorControls are the controls the row cursor visits, in order.
 func (m *Model) cursorControls() []int {
 	var out []int

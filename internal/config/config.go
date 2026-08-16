@@ -37,6 +37,7 @@ type ProjectConfig struct {
 	Path          string               `json:"path"`                    // absolute path to project root (supports ~ expansion)
 	Theme         *ThemeConfig         `json:"theme,omitempty"`         // per-project theme (nil = use global)
 	LastOpenInApp string               `json:"lastOpenInApp,omitempty"` // last app used to open this project (e.g. "vscode", "goland")
+	OpenIn        string               `json:"openIn,omitempty"`        // preferred "open in" app for this project; last-used is the fallback
 	WorktreeSetup *WorktreeSetupConfig `json:"worktreeSetup,omitempty"` // optional per-project setup policy
 }
 

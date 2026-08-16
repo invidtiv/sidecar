@@ -1222,42 +1222,14 @@ func (m *Model) validateProjectAdd() string {
 		return "Name is required"
 	}
 
-	name := strings.TrimSpace(m.projectAdd.nameInput.Value())
-	path := strings.TrimSpace(m.projectAdd.pathInput.Value())
-
-	if name == "" {
-		return "Name is required"
-	}
-	if path == "" {
-		return "Path is required"
-	}
-
-	// Expand path for validation
-	expanded := config.ExpandPath(path)
-
-	// Check path exists and is a directory
-	info, err := os.Stat(expanded)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "Path does not exist"
-		}
-		return "Cannot access path"
-	}
-	if !info.IsDir() {
-		return "Path is not a directory"
-	}
-
-	// Check for duplicate name or path
-	for _, proj := range m.cfg.Projects.List {
-		if strings.EqualFold(proj.Name, name) {
-			return "Project name already exists"
-		}
-		if proj.Path == expanded {
-			return "Project path already configured"
-		}
-	}
-
-	return ""
+	// The rules are shared with Configuration's Add Project route, so the two
+	// add journeys cannot drift into accepting different things.
+	return config.ValidateProject(
+		m.cfg.Projects.List,
+		m.projectAdd.nameInput.Value(),
+		m.projectAdd.pathInput.Value(),
+		-1,
+	)
 }
 
 // saveProjectAdd saves the new project to config and refreshes the list.

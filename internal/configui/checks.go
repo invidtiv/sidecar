@@ -127,10 +127,9 @@ func (m *Model) activateRepair(repair configchecks.RepairID) tea.Cmd {
 		return nil
 	}
 	if repair == configchecks.RepairAddProject {
-		// TODO(phase 3): deep-link to Add Project with Location focused. The
-		// Projects page does not host that route yet, so this lands on the page
-		// that will own it rather than inventing a second add flow here.
-		m.Navigate(PageProjects)
+		// The deep link lands on the work itself: Projects' Add Project route,
+		// with Location focused, rather than on the page that hosts it.
+		m.OpenAddProject()
 	}
 	return nil
 }

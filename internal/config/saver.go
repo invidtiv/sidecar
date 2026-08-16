@@ -251,3 +251,15 @@ func SaveLastOpenInApp(projectPath, appID string) error {
 	cfg.UI.LastOpenInApp = appID
 	return Save(cfg)
 }
+
+// SaveUI applies a change to the ui section and writes it. It reloads first, so
+// a setting changed in Configuration never overwrites an edit made to the file
+// since Sidecar started.
+func SaveUI(mutate func(*UIConfig)) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	mutate(&cfg.UI)
+	return Save(cfg)
+}
