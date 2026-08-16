@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
@@ -49,11 +50,38 @@ type Model struct {
 
 	cursor int // index into visiblePages()
 
+	// Detail-pane state. controls is rebuilt on every render, so the keyboard
+	// can only reach what is currently on screen.
+	controls    []control
+	rowCursor   int
+	detailFocus bool
+	// saved is the parent selection each open child route will return to.
+	saved []savedFocus
+
+	// Readiness state. checks is a cache filled by a command; nothing here is
+	// computed while rendering.
+	checkInput configchecks.Input
+	checks     configchecks.Results
+	checked    bool
+	checking   bool
+
+	// showColorSteps expands the terminal-colors repair's instructions.
+	showColorSteps bool
+	// confirm is a consequential change awaiting an explicit yes.
+	confirm *confirmState
+
 	width, height int
 	sidebarWidth  int
 
 	mouse   *mouse.Handler
 	hoverID string
+}
+
+// savedFocus is a parent route's detail-pane selection, kept while a child
+// route is open.
+type savedFocus struct {
+	rowCursor   int
+	detailFocus bool
 }
 
 type focusTarget uint8
@@ -90,6 +118,18 @@ func (m *Model) Open(page PageID) {
 	m.results = false
 	m.hoverID = ""
 	m.cursor = indexOfPage(m.visiblePages(), page)
+	m.saved = nil
+	m.resetDetail()
+}
+
+// resetDetail returns the detail pane to its opening state: sidebar has the
+// keyboard, the row cursor is at the top, and no half-finished repair state
+// survives a move to somewhere else.
+func (m *Model) resetDetail() {
+	m.detailFocus = false
+	m.rowCursor = 0
+	m.confirm = nil
+	m.showColorSteps = false
 }
 
 // Page is the destination the sidebar highlights.
@@ -103,14 +143,42 @@ func (m *Model) Navigate(page PageID) {
 	m.router.navigate(page)
 	m.cursor = indexOfPage(m.visiblePages(), page)
 	m.results = false
+	m.saved = nil
+	m.resetDetail()
 }
 
-// PushChild opens a focused child route with parent-return behavior.
-func (m *Model) PushChild(child ChildID, title string) { m.router.push(child, title) }
+// PushChild opens a focused child route with parent-return behavior. The
+// parent's own selection is remembered here, which is what "returning restores
+// the parent page" means in practice.
+func (m *Model) PushChild(child ChildID, title string) {
+	before := m.router.current()
+	m.router.push(child, title)
+	if m.router.current() == before {
+		return
+	}
+	m.saved = append(m.saved, savedFocus{rowCursor: m.rowCursor, detailFocus: m.detailFocus})
+	m.resetDetail()
+}
 
 // Back returns from a focused child route to its parent. It reports false when
 // there is nothing to return to.
-func (m *Model) Back() bool { return m.router.back() }
+//
+// Returning restores the parent page's own state: the sidebar destination never
+// moved, and the row cursor starts at the top of the page the user came from
+// rather than at whatever index the child happened to leave behind.
+func (m *Model) Back() bool {
+	if !m.router.back() {
+		return false
+	}
+	m.resetDetail()
+	if len(m.saved) > 0 {
+		restore := m.saved[len(m.saved)-1]
+		m.saved = m.saved[:len(m.saved)-1]
+		m.rowCursor = restore.rowCursor
+		m.detailFocus = restore.detailFocus
+	}
+	return true
+}
 
 // SearchFocused reports that Search has the keyboard, so every printable key
 // belongs to it.
@@ -134,6 +202,9 @@ func (m *Model) ClearSearch() {
 
 // FocusContext is the keymap context the surface owns right now.
 func (m *Model) FocusContext() string {
+	if m.confirm != nil {
+		return ContextConfigConfirm
+	}
 	if m.SearchFocused() {
 		return ContextConfigEdit
 	}
@@ -143,7 +214,13 @@ func (m *Model) FocusContext() string {
 // Commands describes what the footer and palette may advertise here. Keys come
 // from the registered bindings, never from this list.
 func (m *Model) Commands() []plugin.Command {
-	return []plugin.Command{
+	if m.confirm != nil {
+		return []plugin.Command{
+			{ID: "confirm", Name: "Apply", Category: plugin.CategoryActions, Context: ContextConfigConfirm, Priority: 1},
+			{ID: "cancel", Name: "Cancel", Category: plugin.CategoryActions, Context: ContextConfigConfirm, Priority: 2},
+		}
+	}
+	commands := []plugin.Command{
 		{ID: "cursor-down", Name: "Sections", Category: plugin.CategoryNavigation, Context: ContextConfig, Priority: 1},
 		{ID: "select", Name: "Change", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 2},
 		{ID: "search", Name: "Search", Category: plugin.CategorySearch, Context: ContextConfig, Priority: 3},
@@ -152,6 +229,34 @@ func (m *Model) Commands() []plugin.Command {
 		{ID: "select", Name: "Open setting", Category: plugin.CategoryActions, Context: ContextConfigEdit, Priority: 2},
 		{ID: "clear-search", Name: "Clear search", Category: plugin.CategorySearch, Context: ContextConfigEdit, Priority: 3},
 	}
+	// The page's own actions are advertised from the controls it just rendered,
+	// so the footer describes what is actually on screen. Keys still come from
+	// the registered bindings.
+	seen := map[string]bool{}
+	for _, c := range m.controls {
+		if seen[c.key] {
+			continue
+		}
+		if command, ok := controlCommand(c.key); ok {
+			seen[c.key] = true
+			commands = append(commands, command)
+		}
+	}
+	return commands
+}
+
+// controlCommand maps a control shortcut onto the command the footer and the
+// palette name it by.
+func controlCommand(key string) (plugin.Command, bool) {
+	switch key {
+	case "r":
+		return plugin.Command{ID: "recheck", Name: "Recheck", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case "c":
+		return plugin.Command{ID: "copy-guidance", Name: "Copy", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
+	case "o":
+		return plugin.Command{ID: "open-file", Name: "Open", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
+	}
+	return plugin.Command{}, false
 }
 
 // visiblePages is the sidebar's current destination list: everything, or only
@@ -202,15 +307,77 @@ func (m *Model) Key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 
+	// A confirmation owns the keyboard: while one is on screen the only two
+	// answers are yes and no, and nothing else may act on the surface behind it.
+	if m.confirm != nil {
+		if handled, cmd := m.runShortcut(key); handled {
+			return true, cmd
+		}
+		return true, nil
+	}
+
+	// Page shortcuts (the mockups' C, R, O) act on the page whether or not the
+	// detail pane holds the cursor: the footer advertises them for the page.
+	// Enter is deliberately not one of them — it means "the thing I am on",
+	// which the detail pane below answers with the focused control.
+	if key != "enter" {
+		if handled, cmd := m.runShortcut(key); handled {
+			return true, cmd
+		}
+	}
+
+	if m.detailOwnsKeys() {
+		switch key {
+		case "down", "j", "ctrl+n":
+			m.moveRowCursor(1)
+			return true, nil
+		case "up", "k", "ctrl+p":
+			if m.rowCursor == 0 && !m.Route().IsChild() {
+				// Leaving the top of a page's list returns to the navigation
+				// the user came from, rather than trapping the cursor.
+				m.detailFocus = false
+				return true, nil
+			}
+			m.moveRowCursor(-1)
+			return true, nil
+		case "home", "g":
+			m.rowCursor = 0
+			return true, nil
+		case "end", "G":
+			m.rowCursor = max(0, len(m.cursorControls())-1)
+			return true, nil
+		case "enter":
+			return true, m.runControl(m.cursorControl())
+		case "left", "h", "shift+tab":
+			if !m.Route().IsChild() {
+				m.detailFocus = false
+				return true, nil
+			}
+		case "tab":
+			m.focusSearch()
+			return true, nil
+		}
+		if m.Route().IsChild() {
+			// A child route is the only thing on screen the user came for;
+			// unclaimed keys stop here rather than moving the sidebar behind it.
+			return true, nil
+		}
+	}
+
 	switch key {
 	case "/":
 		m.focusSearch()
 		return true, nil
-	case "tab":
-		if m.SearchActive() || m.focus == focusSidebar {
-			m.focusSearch()
+	case "tab", "right", "l":
+		// Tab walks the panes the way the footer says it does: navigation, the
+		// page's own controls, then Search.
+		if m.focus == focusSidebar && m.hasDetailControls() {
+			m.detailFocus = true
+			m.rowCursor = 0
 			return true, nil
 		}
+		m.focusSearch()
+		return true, nil
 	case "down", "j", "ctrl+n":
 		pages := m.visiblePages()
 		if m.cursor < len(pages)-1 {
@@ -293,11 +460,22 @@ func (m *Model) Mouse(msg tea.MouseMsg) tea.Cmd {
 		if action.Region == nil {
 			return nil
 		}
+		// A control the page just rendered is clicked as itself: the click
+		// moves the row cursor there and runs it, so mouse and keyboard leave
+		// the surface in the same state.
+		for index, c := range m.controls {
+			if c.id != action.Region.ID {
+				continue
+			}
+			if c.cursor {
+				m.detailFocus = true
+				m.focusControlIndex(index)
+			}
+			return m.runControl(index)
+		}
 		switch id := action.Region.ID; {
 		case id == regionSearch:
 			m.focusSearch()
-		case id == regionBack:
-			m.Back()
 		case strings.HasPrefix(id, regionNavPrefix):
 			page := PageID(strings.TrimPrefix(id, regionNavPrefix))
 			m.focus = focusSidebar
@@ -454,6 +632,12 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 	originX := offsetX + 2
 	var lines []string
 
+	// Everything below composes through the builder, so a page declares each
+	// control once and its look, its hit region, and its key stay in agreement.
+	// Building it here also drops the previous frame's controls, which is what
+	// keeps the keyboard from reaching a row that is no longer on screen.
+	builder := m.newPaneBuilder(originX, inner)
+
 	if m.SearchActive() && m.results {
 		lines = append(lines, PaneTitle("Search results"), "")
 		lines = append(lines, Muted("Use ↓ to move to the first matching setting, or Esc to clear the filter."))
@@ -473,15 +657,18 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 	}
 
 	route := m.Route()
-	if route.IsChild() {
-		state := State{Hovered: m.hoverID == regionBack}
-		lines = append(lines, BackBar(route.Title, m.router.parentLabel(), inner, state), "")
-		m.mouse.HitMap.AddRect(regionBack, originX, 1, inner, 1, nil)
-		lines = append(lines, Muted("This focused repair route arrives in a later phase."))
-		return clampLines(lines, paneHeight-2, inner)
+	switch {
+	case route.IsChild():
+		m.buildChild(builder, route)
+	case route.Page == PageSetup:
+		m.buildSetup(builder)
+	case route.Page == PageDiagnostics:
+		m.buildDiagnostics(builder)
+	default:
+		builder.text(pageBody(route.Page, inner)...)
 	}
-
-	lines = append(lines, pageBody(route.Page, inner)...)
+	lines = append(lines, builder.lines...)
+	m.clampRowCursor()
 	return clampLines(lines, paneHeight-2, inner)
 }
 

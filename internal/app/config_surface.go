@@ -1,7 +1,16 @@
 package app
 
 import (
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -51,7 +60,30 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	}
 	m.config.Open(page)
 	m.updateContext()
-	return nil
+	// Readiness is answered fresh every time Configuration opens, in a command:
+	// PATH, tmux, the config file, and the project's instruction file can all
+	// have changed since the last look, and none of them may be touched on the
+	// render path.
+	m.config.SetCheckInput(m.configCheckInput())
+	return m.config.Recheck()
+}
+
+// configCheckInput describes this Sidecar to the checks: the configuration the
+// app is running with, the file it came from, and the active project.
+func (m *Model) configCheckInput() configchecks.Input {
+	in := configchecks.Input{
+		Config:     m.cfg,
+		ConfigPath: config.ConfigPath(),
+		ProjectDir: m.ui.WorkDir,
+		Env:        configchecks.DefaultEnv(),
+	}
+	if project := m.currentProjectConfig(); project != nil {
+		in.ProjectName = project.Name
+	}
+	if in.ProjectName == "" && m.ui.WorkDir != "" {
+		in.ProjectName = filepath.Base(m.ui.WorkDir)
+	}
+	return in
 }
 
 // closeConfiguration restores the surface Configuration covered.
@@ -87,6 +119,12 @@ func (m *Model) closeConfiguration() tea.Cmd {
 // the surface. That order is the brief's, and it is why esc never surprises a
 // user out of Configuration while something on screen still needs dismissing.
 func (m *Model) configEscape() tea.Cmd {
+	// A pending confirmation is the thing on screen the user is answering, so
+	// esc means "no" before it means anything about navigation.
+	if m.config.DismissConfirm() {
+		m.updateContext()
+		return nil
+	}
 	if m.config.SearchActive() {
 		m.config.ClearSearch()
 		m.updateContext()
@@ -133,6 +171,90 @@ func (m *Model) togglePaletteFromConfig() (tea.Model, tea.Cmd) {
 	m.palette.Open(m.keymap, m.surfacePlugins(), m.activeContext, "global")
 	m.activeContext = "palette"
 	return m, nil
+}
+
+// configSurfaceMsg answers the requests Configuration makes of the host. The
+// surface decides what should happen; the host owns the clipboard, the toast,
+// the shell, and the file browser, so it is the one that does it.
+//
+// It reports whether the message was addressed to Configuration; anything else
+// carries on to the plugins as usual.
+func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case configui.ChecksMsg:
+		if m.config != nil {
+			m.config.ApplyChecks(msg)
+			m.updateContext()
+		}
+		return nil, true
+
+	case configui.NoticeMsg:
+		return toast(msg.Message), true
+
+	case configui.CopyMsg:
+		if err := clipboard.WriteAll(msg.Text); err != nil {
+			return toast("Copy failed: " + err.Error()), true
+		}
+		notice := msg.Notice
+		if notice == "" {
+			notice = "Copied"
+		}
+		return toast(notice), true
+
+	case configui.OpenShellMsg:
+		// The command is typed into a new ordinary shell and left there. Sidecar
+		// does not run it, and the user returns to the repair and rechecks.
+		cmds := []tea.Cmd{m.closeConfiguration(), FocusPlugin("workspace-manager")}
+		command := msg.Command
+		cmds = append(cmds, func() tea.Msg { return OpenPrefilledShellMsg{Command: command} })
+		return tea.Batch(cmds...), true
+
+	case configui.OpenFileMsg:
+		return m.openConfigFile(msg.Path), true
+	}
+	return nil, false
+}
+
+// openConfigFile puts a file in front of the user. A file inside the project
+// opens in Sidecar's own file browser; anything outside it — the config file
+// above all — is handed to the OS opener, because the browser is scoped to the
+// project and would have nowhere to show it.
+func (m *Model) openConfigFile(path string) tea.Cmd {
+	if path == "" {
+		return nil
+	}
+	if relative, err := filepath.Rel(m.ui.WorkDir, path); err == nil && !strings.HasPrefix(relative, "..") {
+		return tea.Batch(
+			m.closeConfiguration(),
+			FocusPlugin("file-browser"),
+			func() tea.Msg { return NavigateToFileMsg{Path: relative} },
+		)
+	}
+	return openPathCmd(path)
+}
+
+// openPathCmd hands a path to the desktop's opener. Sidecar never edits the
+// file itself here; it only makes it easy to reach.
+func openPathCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		var command *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			command = exec.Command("open", path)
+		case "windows":
+			command = exec.Command("rundll32", "url.dll,FileProtocolHandler", path)
+		default:
+			command = exec.Command("xdg-open", path)
+		}
+		if err := command.Start(); err != nil {
+			return ToastMsg{Message: "Could not open " + path, Duration: 3 * time.Second}
+		}
+		return ToastMsg{Message: "Opened " + path, Duration: 2 * time.Second}
+	}
+}
+
+func toast(message string) tea.Cmd {
+	return func() tea.Msg { return ToastMsg{Message: message, Duration: 3 * time.Second} }
 }
 
 // configCommands are the surface's footer/palette commands. The footer derives

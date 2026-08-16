@@ -174,6 +174,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Configuration's own requests are answered before anything else looks at
+	// them: they are addressed to the host, not to a plugin.
+	if cmd, handled := (&m).configSurfaceMsg(msg); handled {
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	switch msg := msg.(type) {
 	case tea.FocusMsg:
 		m.applicationFocused = true

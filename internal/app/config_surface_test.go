@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
 )
@@ -289,4 +290,58 @@ func TestConfigurationSearchFiltersSidebarAndNavigates(t *testing.T) {
 	if !m.config.SearchActive() {
 		t.Fatal("navigating from a result dropped the query")
 	}
+}
+
+// Configuration asks the host for the things it does not own. The host must
+// answer them itself rather than letting them fall through to the plugins.
+func TestHostAnswersConfigurationRequests(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+
+	// A completed run reaches the surface's cache.
+	results := configchecks.Results{{ID: configchecks.CheckTmux, Title: "tmux", OK: true, Summary: "Version 3.5 available"}}
+	updated, _ := m.Update(configui.ChecksMsg{Results: results})
+	m = asAppModel(t, updated)
+	if !m.config.ChecksReady() {
+		t.Fatal("the host did not deliver the completed checks to the surface")
+	}
+	if got, _ := m.config.Checks().Get(configchecks.CheckTmux); !got.OK {
+		t.Fatalf("cached tmux result = %#v", got)
+	}
+
+	// An install shell is an ordinary shell with typed-but-unexecuted text: the
+	// host closes Configuration, focuses Workspaces, and asks for the shell.
+	updated, cmd := m.Update(configui.OpenShellMsg{Command: "brew install tmux"})
+	m = asAppModel(t, updated)
+	if m.configOpen() {
+		t.Fatal("opening an install shell left Configuration covering the screen")
+	}
+	var sawFocus, sawShell bool
+	for _, msg := range drain(cmd) {
+		switch typed := msg.(type) {
+		case FocusPluginByIDMsg:
+			sawFocus = typed.PluginID == "workspace-manager"
+		case OpenPrefilledShellMsg:
+			sawShell = typed.Command == "brew install tmux"
+		}
+	}
+	if !sawFocus || !sawShell {
+		t.Fatalf("install shell request produced focus=%v shell=%v", sawFocus, sawShell)
+	}
+}
+
+// drain runs a command and everything it batches.
+func drain(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		var out []tea.Msg
+		for _, inner := range batch {
+			out = append(out, drain(inner)...)
+		}
+		return out
+	}
+	return []tea.Msg{msg}
 }

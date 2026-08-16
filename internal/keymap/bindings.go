@@ -74,6 +74,12 @@ func DefaultBindings() []Binding {
 		{Key: "/", Command: "search", Context: "config"},
 		{Key: "tab", Command: "focus-search", Context: "config"},
 		{Key: "esc", Command: "close-configuration", Context: "config"},
+		// Page-level actions on Sidecar Setup, Diagnostics, and the focused
+		// repair routes. They are registered here so the footer, the help modal,
+		// and the palette all name the same keys the pages print on their pills.
+		{Key: "r", Command: "recheck", Context: "config"},
+		{Key: "c", Command: "copy-guidance", Context: "config"},
+		{Key: "o", Command: "open-file", Context: "config"},
 
 		// config-edit: an active editor owns typed characters. Registered in
 		// the app's isTextInputContext, so no global shortcut can steal them.

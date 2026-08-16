@@ -87,6 +87,17 @@ type NavigateToFileMsg struct {
 	Line int    // Optional 1-based line to reveal after loading
 }
 
+// OpenPrefilledShellMsg asks the Workspaces plugin for an ordinary new shell
+// with a command typed into it and left unexecuted. Hosts send this rather than
+// importing workspace.
+//
+// Nothing about it is privileged: it is the same shell the user could create by
+// hand, and the command sits at the prompt until the user reads it and presses
+// Enter. Sidecar never runs it, and never sends one that needs sudo.
+type OpenPrefilledShellMsg struct {
+	Command string
+}
+
 // SwitchWorktreeMsg requests switching to a different worktree.
 // Used by the worktree switcher modal and workspace plugin "Open in Git Tab" command.
 type SwitchWorktreeMsg struct {

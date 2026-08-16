@@ -184,8 +184,26 @@ func ButtonRow(buttons ...string) string {
 	return strings.Repeat(" ", RowIndent) + strings.Join(present, "  ")
 }
 
-// StatusRow renders a diagnostic row. A healthy row is quiet confirmation; an
-// actionable one carries a badge and reads as a control.
+// Badge renders a row's action label. A badge on a problem row is the accent
+// call to action; a badge on a healthy row is a quiet way in, so it must not
+// shout at a user who has nothing to fix.
+func Badge(text string, urgent bool) string {
+	if text == "" {
+		return ""
+	}
+	if urgent {
+		return accentChipStyle().Render(text)
+	}
+	return chipStyle().Render(text)
+}
+
+// StatusRow renders a diagnostic row.
+//
+// A healthy row with nothing to do is one quiet line: marker, label, and its
+// detail in the shared control column. A row that offers an action carries a
+// badge at the right edge and moves its detail to a second line, so the badge
+// and the detail never compete for the same run of space. Both forms are one
+// control: the caller registers the whole block.
 func StatusRow(ok bool, label, detail, badge string, width int, state State) string {
 	marker := lipgloss.NewStyle().Foreground(styles.Success).Render("✓")
 	if !ok {
@@ -199,22 +217,71 @@ func StatusRow(ok bool, label, detail, badge string, width int, state State) str
 		labelStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
 	}
 	left := strings.Repeat(" ", RowIndent) + marker + " " + labelStyle.Render(label)
-	if detail != "" {
-		pad := ControlColumn - ansi.StringWidth(left)
-		if pad < 2 {
-			pad = 2
-		}
-		left += strings.Repeat(" ", pad) + mutedStyle().Render(detail)
-	}
 	if badge == "" {
+		if detail != "" {
+			pad := ControlColumn - ansi.StringWidth(left)
+			if pad < 2 {
+				pad = 2
+			}
+			left += strings.Repeat(" ", pad) + mutedStyle().Render(detail)
+		}
 		return left
 	}
-	rendered := accentChipStyle().Render(badge)
+	rendered := Badge(badge, !ok)
 	pad := width - ansi.StringWidth(left) - ansi.StringWidth(rendered)
 	if pad < 1 {
 		pad = 1
 	}
-	return left + strings.Repeat(" ", pad) + rendered
+	row := left + strings.Repeat(" ", pad) + rendered
+	if detail == "" {
+		return row
+	}
+	return row + "\n" + strings.Repeat(" ", RowIndent+2) + mutedStyle().Render(detail)
+}
+
+// RepairRow is Sidecar Setup's actionable row: a leading badge, the work stated
+// as something to do, and a quieter line saying why. The whole two-line block is
+// one control.
+func RepairRow(badge, title, detail string, width int, state State) string {
+	titleStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
+	switch {
+	case state.Focused:
+		titleStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+	case state.Hovered:
+		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).Underline(true)
+	}
+	pill := Badge(badge, true)
+	first := " " + pill + "  " + titleStyle.Render(title)
+	if pad := width - ansi.StringWidth(first); pad > 0 {
+		first += strings.Repeat(" ", pad)
+	}
+	if detail == "" {
+		return first
+	}
+	return first + "\n" + strings.Repeat(" ", RowIndent+5) + mutedStyle().Render(detail)
+}
+
+// Warning states an observed problem in the repair route that fixes it.
+func Warning(text string) string {
+	return lipgloss.NewStyle().Foreground(styles.Warning).Bold(true).Render(text)
+}
+
+// CodeChip renders a command or a literal the user may copy or run.
+func CodeChip(text string) string { return accentChipStyle().Render(text) }
+
+// Indented renders body text at the shared row indent.
+func Indented(text string) string {
+	return strings.Repeat(" ", RowIndent) + bodyStyle().Render(text)
+}
+
+// IndentedRaw places already-styled content at the shared row indent.
+func IndentedRaw(content string) string {
+	return strings.Repeat(" ", RowIndent) + content
+}
+
+// IndentedMuted renders quieter text at the shared row indent.
+func IndentedMuted(text string) string {
+	return strings.Repeat(" ", RowIndent) + mutedStyle().Render(text)
 }
 
 // ListRow renders a focusable row that fills the pane width, so the whole row

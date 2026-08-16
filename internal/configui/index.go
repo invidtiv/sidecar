@@ -23,6 +23,9 @@ var settingsIndex = []IndexEntry{
 	{Page: PageSetup, Label: "tmux availability and repair", Keywords: []string{"tmux", "shell", "workspace", "install", "brew"}},
 	{Page: PageSetup, Label: "Terminal colors", Keywords: []string{"truecolor", "24-bit", "color", "terminal"}},
 	{Page: PageSetup, Label: "Agent instructions", Keywords: []string{"agents.md", "agent", "instructions", "guidance"}},
+	{Page: PageSetup, Label: "Install tmux", Keywords: []string{"tmux", "install", "brew", "homebrew", "shell", "repair"}},
+	{Page: PageSetup, Label: "Terminal color setup steps", Keywords: []string{"truecolor", "24-bit", "colorterm", "iterm", "ghostty", "kitty", "alacritty", "wezterm"}},
+	{Page: PageSetup, Label: "Recheck setup", Keywords: []string{"recheck", "check", "again", "refresh", "readiness"}},
 
 	// Appearance
 	{Page: PageAppearance, Label: "Theme", Keywords: []string{"theme", "colors", "community", "appearance", "dark", "light"}},
@@ -72,6 +75,8 @@ var settingsIndex = []IndexEntry{
 	{Page: PageDiagnostics, Label: "Configuration check", Keywords: []string{"config", "configuration", "valid", "check"}},
 	{Page: PageDiagnostics, Label: "Projects check", Keywords: []string{"projects", "check", "configured"}},
 	{Page: PageDiagnostics, Label: "Agent instructions check", Keywords: []string{"agents.md", "instructions", "check"}},
+	{Page: PageDiagnostics, Label: "Recheck environment", Keywords: []string{"recheck", "refresh", "diagnostics", "again"}},
+	{Page: PageDiagnostics, Label: "Configuration recovery", Keywords: []string{"config", "invalid", "parse", "error", "repair", "recover"}},
 
 	// Advanced
 	{Page: PageAdvanced, Label: "Cross-project Activity", Keywords: []string{"feature", "preview", "activity", "cross project", "flag"}},
