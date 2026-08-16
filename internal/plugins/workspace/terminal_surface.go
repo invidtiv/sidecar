@@ -3,6 +3,7 @@ package workspace
 import (
 	"time"
 
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -116,26 +117,16 @@ func layoutHeaderChips(chips []string, width, hintFloor int) []headerChipPlaceme
 type terminalSurface = termpreview.Surface
 
 // leafGeom is one pane-tree leaf's chrome versus its content. Layout places
-// Outer; tmux, the cursor, and content hits use Inner.
-type leafGeom struct {
-	Outer Box // plugin-local, includes border+padding
-	Inner Box // plugin-local, content / tmux / cursor / content hits
-}
+// Outer; tmux, the cursor, and content hits use Inner. It is the shared frame's
+// type: the global Workspaces browser insets a leaf by the same arithmetic, and
+// a second copy here is how the two surfaces would drift by a cell.
+type leafGeom = paneframe.Geom
 
 // insetPanelChrome is the content box inside one RenderPanel: two columns of
 // border+padding on each side, one border row on the top and bottom.
-func insetPanelChrome(outer Box) Box {
-	return Box{
-		X: outer.X + previewContentInset,
-		Y: outer.Y + previewBorderRows,
-		W: outer.W - panelOverhead,
-		H: outer.H - panelBorderWidth,
-	}
-}
+func insetPanelChrome(outer Box) Box { return paneframe.Inset(outer) }
 
-func leafGeometry(outer Box) leafGeom {
-	return leafGeom{Outer: outer, Inner: insetPanelChrome(outer)}
-}
+func leafGeometry(outer Box) leafGeom { return paneframe.Geometry(outer) }
 
 // previewPeerBox is the outer preview rectangle in plugin-local coordinates —
 // the peer of the sidebar, including the chrome a lone terminal still spends

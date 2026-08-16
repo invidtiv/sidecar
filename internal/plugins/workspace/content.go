@@ -3,31 +3,16 @@ package workspace
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
-// Content is what one pane-tree leaf shows. The tree places boxes and the frame
-// composes them; neither learns what is inside one. A bottom-relative offset, a
-// freeze, a tmux geometry lease are the content's business alone — the
-// structure layer never sees a *tty.Model.
-//
-// The contract is four methods on purpose. Capability beyond it — update,
-// focus, keys, pointers, scrolling, persistence — arrives as an optional
-// interface when its first real implementation does, not before: a document
-// leaf has no native cursor and no transport to gate, and a mandatory method
-// invites a wrong stub.
-type Content interface {
-	// Kind is the stable persistence key and registry key for this content.
-	Kind() string
-	// Title is the content's identity for a header row.
-	Title() string
-	// SetSize gives the content its box. The command is how a content asserts
-	// geometry it owns beyond this process, such as a live tmux pane.
-	SetSize(Size) tea.Cmd
-	// View draws exactly Size.Height rows of exactly Size.Width columns.
-	View(Render) string
-}
+// Content, Size and Render are the shared frame's contract. They are aliased
+// rather than redeclared so a leaf written for this plugin and a leaf written
+// for the global Workspaces browser are the same type, and neither surface can
+// grow a private notion of what a pane is.
+type Content = paneframe.Content
 
 // Content kinds are the keys a leaf is persisted under as well as the keys the
 // adapter is chosen by, so a leaf cannot be written under one name and restored
@@ -39,28 +24,13 @@ const (
 	contentKindDiff     = "diff"
 )
 
-// Size is the box a content draws into. It is the leaf's whole box, header row
-// included: the terminal leaf's header is still drawn by the legacy renderer
-// from inside its box, so each content spends its own header row. M1 absorbs
-// the terminal panel into the tree, and this becomes the box below the row the
-// frame draws.
-type Size struct {
-	Width, Height int
-}
+// Size is the box a content draws into: the leaf's INNER box, header row
+// included. The terminal leaf's header is still drawn by the legacy renderer
+// from inside its box, so each content spends its own header row.
+type Size = paneframe.Size
 
 // Render is what the frame knows about a placed leaf and the content does not.
-// It carries no theme: styles are process-global in internal/styles, so a
-// content reads them there rather than through a copy that can go stale.
-type Render struct {
-	// Focused is true when this leaf owns the preview's keyboard focus.
-	Focused bool
-	// Zoomed is true when the box could not hold the whole tree and this leaf
-	// was given all of it.
-	Zoomed bool
-	// Origin is the leaf's box in plugin-local coordinates, which is what hit
-	// math needs; the size handed to SetSize is content-local.
-	Origin mouse.Rect
-}
+type Render = paneframe.Render
 
 // paneContent adapts a leaf to the content contract. It is the one place that
 // maps a leaf kind to an implementation, so nothing in the render path asks

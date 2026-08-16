@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
@@ -201,18 +202,20 @@ type workspacesLayout struct {
 	// previewDrawn reports that the preview box has room to draw in, and
 	// therefore that box is meaningful. A degenerate size is not an arrangement.
 	previewDrawn bool
-	box          termpreview.Box
-	split        termpreview.Split
+	// peer is the preview panel's OUTER rectangle — the peer of the list,
+	// including the chrome a lone terminal still spends once. The pane tree is
+	// laid out in this box so each leaf owns its own border, exactly as the
+	// project workspace does. Inner geometry is paneframe.Inset(peer).
+	peer  termpreview.Box
+	split termpreview.Split
 }
 
 func (m *Model) workspacesLayout() workspacesLayout {
-	// The panel's top and bottom border rows are not content.
-	height := m.height - 2
-	drawable := m.width >= 1 && height >= 1
+	drawable := m.width >= 1 && m.height-paneframe.BorderWidth >= 1
 	if !m.sidebarVisible || (m.previewNarrow() && m.preview.full) {
 		layout := workspacesLayout{previewOnly: true, previewDrawn: drawable}
 		if drawable {
-			layout.box = termpreview.Box{X: globalContentInset, Y: 1, W: m.width - globalPanelOverhead, H: height}
+			layout.peer = termpreview.Box{X: 0, Y: 0, W: m.width, H: m.height}
 		}
 		return layout
 	}
@@ -222,7 +225,7 @@ func (m *Model) workspacesLayout() workspacesLayout {
 	split := m.previewSplit(m.width)
 	layout := workspacesLayout{previewDrawn: drawable, split: split}
 	if drawable {
-		layout.box = termpreview.Box{X: split.ContentX, Y: 1, W: split.ContentWidth, H: height}
+		layout.peer = termpreview.Box{X: split.PreviewX, Y: 0, W: split.PreviewWidth, H: m.height}
 	}
 	return layout
 }
@@ -249,8 +252,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 	var view string
 	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
-		m.registerPreviewOutputRegions(layout.box)
-		view = styles.RenderPanel(m.renderPreview(layout.box.W, layout.box.H), width, height, true)
+		view = m.renderPreviewPeer(layout.peer)
 	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
 		view = styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
@@ -258,12 +260,10 @@ func (m *Model) WorkspacesView(width, height int) string {
 		split := layout.split
 		m.addSidebarRegion(0, split.SidebarWidth, height)
 		m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-		m.registerPreviewOutputRegions(layout.box)
 		list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
-		preview := m.renderPreview(layout.box.W, layout.box.H)
 
 		leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
-		rightPane := styles.RenderPanel(preview, split.PreviewWidth, height, m.PreviewFocused())
+		rightPane := m.renderPreviewPeer(layout.peer)
 		divider := ui.RenderHandle(height, true, m.dividerHandleState(workspacesDividerRegion, 0))
 		// Register the forgiving three-column divider target last, above both pane
 		// regions and any list row that reaches the content edge.
@@ -330,35 +330,18 @@ func (m *Model) addPreviewRegion(x, width, height int) {
 	m.workspacesMouse.HitMap.AddRect(previewRegionKind, x, 0, width, height, previewRegionKind)
 }
 
-func (m *Model) registerPreviewOutputRegions(box termpreview.Box) {
-	termBox, ok := m.previewPaneBox(panelayout.Terminal, box)
-	if ok {
-		m.registerPreviewActionRegions(termBox)
+// registerPreviewOutputRegions registers this frame's targets from the same
+// placements the canvas drew from, so a click cannot land on geometry the frame
+// did not draw. The ORDER is the shared frame's — leaves, then dividers, then
+// tab strips, then close buttons, then content-owned targets — which is what
+// keeps a click on a stacked leaf's header behaving identically here and in the
+// project workspace.
+func (m *Model) registerPreviewOutputRegions(peer termpreview.Box) {
+	layout, ok := m.layoutPreviewPanes(peer)
+	if !ok {
+		return
 	}
-	m.registerPreviewDocRegions(box)
-	m.registerPreviewIssueRegions(box)
-	m.registerPreviewDiffPaneRegions(box)
-	if layout, ok := m.layoutPreviewPanes(box); ok {
-		for _, divider := range layout.Dividers {
-			hit := divider.Box
-			if divider.Axis == panelayout.Columns {
-				hit.X--
-				hit.W = 3
-			} else {
-				hit.Y--
-				// Do not cover the lower leaf's header. Its issue tab cells
-				// must remain clickable when the issue is below a document.
-				hit.H = 2
-			}
-			m.workspacesMouse.HitMap.AddRect(previewPaneDividerKind, hit.X, hit.Y, hit.W, hit.H, previewPaneDividerHit(divider.SplitID))
-		}
-	}
-	// Exact file/issue tab regions win the one cell where the widened
-	// divider reaches into a stacked header; the divider itself remains
-	// draggable. Pane and body regions are registered first.
-	m.registerPreviewDocTabRegions(box)
-	m.registerPreviewIssueTabRegions(box)
-	m.registerPreviewPaneCloseRegions(box)
+	paneframe.RegisterRegions(paneRegions{m}, layout)
 }
 
 func (m *Model) setHandleHover(action mouse.MouseAction) {
@@ -380,14 +363,11 @@ func (m *Model) setHandleHover(action mouse.MouseAction) {
 
 func (m *Model) dividerHandleState(region string, splitID int) ui.HandleState {
 	dragging := m.workspacesMouse != nil && m.workspacesMouse.IsDragging() && m.workspacesMouse.DragRegion() == region
-	if dragging && region == previewPaneDividerKind && m.preview.paneDragSplitID != 0 && m.preview.paneDragSplitID != splitID {
-		dragging = false
-	}
 	hovering := m.hoverHandleRegion == region
-	if hovering && region == previewPaneDividerKind && m.hoverHandleSplit != splitID {
-		hovering = false
+	if region != previewPaneDividerKind {
+		return ui.HandleStateFrom(hovering, dragging)
 	}
-	return ui.HandleStateFrom(hovering, dragging)
+	return paneframe.HandleStateFor(splitID, dragging, m.preview.paneDragSplitID, hovering, m.hoverHandleSplit)
 }
 
 func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
@@ -445,24 +425,6 @@ func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) boo
 		return view.ScrollAtBoundary(delta, view.Height())
 	default:
 		return true
-	}
-}
-
-func (m *Model) registerPreviewPaneCloseRegions(box termpreview.Box) {
-	if m.preview.doc != nil {
-		if docBox, ok := m.previewPaneBox(panelayout.Document, box); ok {
-			m.registerPreviewCloseRegion(panelayout.Document, docBox)
-		}
-	}
-	if m.preview.issue != nil {
-		if issueBox, ok := m.previewPaneBox(panelayout.Issue, box); ok {
-			m.registerPreviewCloseRegion(panelayout.Issue, issueBox)
-		}
-	}
-	if m.preview.diff != nil {
-		if diffBox, ok := m.previewPaneBox(panelayout.Diff, box); ok {
-			m.registerPreviewCloseRegion(panelayout.Diff, diffBox)
-		}
 	}
 }
 
@@ -807,15 +769,17 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewPaneDividerKind {
 		split := panelayout.Find(m.preview.paneRoot, m.preview.paneDragSplitID)
-		box, ok := m.previewBox()
+		// The ratio is a fraction of the OUTER peer, because that is the box the
+		// tree was laid out in.
+		peer, ok := m.previewPeerBox()
 		if !ok || split == nil || split.Split == nil {
 			return nil
 		}
 		ratio := m.workspacesMouse.DragStartValue()
-		if split.Split.Axis == panelayout.Rows && box.H > 0 {
-			ratio += action.DragDY * 100 / box.H
-		} else if split.Split.Axis == panelayout.Columns && box.W > 0 {
-			ratio += action.DragDX * 100 / box.W
+		if split.Split.Axis == panelayout.Rows && peer.H > 0 {
+			ratio += action.DragDY * 100 / peer.H
+		} else if split.Split.Axis == panelayout.Columns && peer.W > 0 {
+			ratio += action.DragDX * 100 / peer.W
 		}
 		panelayout.SetRatio(m.preview.paneRoot, m.preview.paneDragSplitID, ratio)
 		return m.syncTerminalGeometry()

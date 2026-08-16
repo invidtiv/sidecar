@@ -1,21 +1,17 @@
 // Package termpreview is the presentation layer shared by every Sidecar
 // surface that puts a list beside an embedded terminal.
 //
-// It sits *beneath* the project Workspaces plugin's pane tree, not beside it.
-// The plugin remains the single geometry authority for its own preview region:
-// `previewContentBox` computes the box, `LayoutPanes` divides it, and
-// `terminalLeafBox` names the terminal leaf. What lives here is the arithmetic
-// those functions were doing inline — the outer sidebar/preview split, the one
-// header row above every terminal, and the rendering of a pane's body into that
-// box, captured or live — so a second consumer (the global Workspaces browser)
-// can reuse it without recomputing any of it.
+// It sits *beneath* the pane tree, not beside it. What lives here is the
+// arithmetic the surfaces were doing inline — the outer sidebar/preview split,
+// the one header row above every terminal, and the rendering of a pane's body
+// into a box, captured or live.
 //
-// That distinction is the point. The doc-panes plan names "a second independent
-// geometry computation" as its biggest failure mode, and a cross-project browser
-// that grew its own idea of where a terminal goes is exactly how that failure
-// would have arrived. Global Workspaces therefore does not instantiate a pane
-// tree at all: its right side is one terminal box, and it gets that box from the
-// same functions the plugin's leaf box is built from.
+// "A second independent geometry computation" is the failure mode the doc-panes
+// plan names, and it is guarded structurally rather than by keeping surfaces
+// simple: both the project Workspaces plugin and the global Workspaces browser
+// ("Sessions") instantiate a pane tree, and both place it with
+// internal/panelayout and draw it with internal/paneframe. Nothing computes a
+// pane's chrome, border, handle or hit box for itself.
 //
 // Nothing here reads tmux, owns a buffer, or forwards input. A consumer hands in
 // an immutable Snapshot, or a body some terminal component already rendered, and

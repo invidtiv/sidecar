@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
@@ -318,12 +319,10 @@ func layoutPreviewDiffStrip(group workspacediff.Group, width int, focused bool) 
 	})
 }
 
-func (m *Model) registerPreviewDiffPaneRegions(box termpreview.Box) {
+// registerPreviewDiffRegion covers the Diff leaf's INNER box, which is the
+// lowest-priority target inside it.
+func (m *Model) registerPreviewDiffRegion(diffBox termpreview.Box) {
 	if m.preview.diff == nil {
-		return
-	}
-	diffBox, ok := m.previewPaneBox(panelayout.Diff, box)
-	if !ok {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(
@@ -331,6 +330,12 @@ func (m *Model) registerPreviewDiffPaneRegions(box termpreview.Box) {
 		diffBox.X, diffBox.Y, diffBox.W, diffBox.H,
 		previewDiffRegionKind,
 	)
+}
+
+func (m *Model) registerPreviewDiffTabRegions(diffBox termpreview.Box) {
+	if m.preview.diff == nil {
+		return
+	}
 	focused := m.PreviewFocused() && m.preview.diff.focused
 	for _, tab := range layoutPreviewDiffStrip(m.preview.diff.tabs, ui.ReserveHeaderClose(diffBox.W).TabsWidth, focused).Tabs {
 		m.workspacesMouse.HitMap.AddRect(
@@ -339,16 +344,28 @@ func (m *Model) registerPreviewDiffPaneRegions(box termpreview.Box) {
 			previewDiffTabHit(tab.Index),
 		)
 	}
-	if view := m.preview.diff.view(); view != nil {
-		if body, ok := m.previewDiffLeafBody(); ok {
-			view.SetSize(body.W, body.H)
-			for _, hit := range view.FileHits(body) {
-				m.workspacesMouse.HitMap.AddRect(hit.ID, hit.Rect.X, hit.Rect.Y, hit.Rect.W, hit.Rect.H, hit.Data)
-			}
-			if d := view.DividerHit(body); d.W > 0 && d.H > 0 {
-				m.workspacesMouse.HitMap.AddRect(previewDiffDividerKind, d.X, d.Y, d.W, d.H, previewDiffDividerHit{})
-			}
-		}
+}
+
+// registerPreviewDiffLeafHits registers the targets the diff view owns inside
+// its own body: the file rows and its list/hunk divider.
+func (m *Model) registerPreviewDiffLeafHits(diffBox termpreview.Box) {
+	if m.preview.diff == nil {
+		return
+	}
+	view := m.preview.diff.view()
+	if view == nil {
+		return
+	}
+	body, ok := diffLeafBody(diffBox)
+	if !ok {
+		return
+	}
+	view.SetSize(body.W, body.H)
+	for _, hit := range view.FileHits(body) {
+		m.workspacesMouse.HitMap.AddRect(hit.ID, hit.Rect.X, hit.Rect.Y, hit.Rect.W, hit.Rect.H, hit.Data)
+	}
+	if d := view.DividerHit(body); d.W > 0 && d.H > 0 {
+		m.workspacesMouse.HitMap.AddRect(previewDiffDividerKind, d.X, d.Y, d.W, d.H, previewDiffDividerHit{})
 	}
 }
 
@@ -356,12 +373,20 @@ func (m *Model) previewDiffLeafBody() (mouse.Rect, bool) {
 	if m.preview.diff == nil {
 		return mouse.Rect{}, false
 	}
-	box, ok := m.previewBox()
+	peer, ok := m.previewPeerBox()
 	if !ok {
 		return mouse.Rect{}, false
 	}
-	diffBox, ok := m.previewPaneBox(panelayout.Diff, box)
-	if !ok || diffBox.W < 1 {
+	diffBox, ok := m.previewPaneBox(panelayout.Diff, peer)
+	if !ok {
+		return mouse.Rect{}, false
+	}
+	return diffLeafBody(diffBox)
+}
+
+// diffLeafBody is the Diff leaf's box below its header row.
+func diffLeafBody(diffBox termpreview.Box) (mouse.Rect, bool) {
+	if diffBox.W < 1 {
 		return mouse.Rect{}, false
 	}
 	body := mouse.Rect{
@@ -387,8 +412,8 @@ func (m *Model) previewDiffDragWidth() int {
 	if body, ok := m.previewDiffLeafBody(); ok {
 		return body.W
 	}
-	if box, ok := m.previewBox(); ok {
-		return box.W
+	if peer, ok := m.previewPeerBox(); ok {
+		return paneframe.Inset(peer).W
 	}
 	return m.width
 }

@@ -89,18 +89,33 @@ func TestTreeHandlesOnBothAxesRespondToHoverAndDrag(t *testing.T) {
 	}
 }
 
-func TestPaneDividerHitBoxDoesNotCoverLowerHeader(t *testing.T) {
-	split := Divider{Axis: SplitRows, Box: Box{X: 10, Y: 20, W: 40, H: 1}}
-	hit := paneDividerHitBox(split)
-	if hit.Y+hit.H > split.Box.Y+split.Box.H {
-		t.Fatalf("row hit box %+v reaches below the divider into the next header", hit)
+// A row divider widens onto the border row of the leaf on each side, never onto
+// a header row — that is what keeps a stacked leaf's tabs and close button
+// reachable while the handle stays easy to grab. The property is measured
+// against a real placement, because it is a fact about where layout puts a
+// divider relative to a leaf's chrome, not about the widening rule alone.
+func TestPaneDividerHitBoxDoesNotCoverAStackedHeader(t *testing.T) {
+	root := &PaneNode{ID: 3, Split: &PaneSplit{
+		Axis: SplitRows, Ratio: 50,
+		A: &PaneNode{ID: 1, Kind: PaneTerminal},
+		B: &PaneNode{ID: 2, Kind: PaneDoc},
+	}}
+	leaves, dividers, fits := LayoutPanes(root, Box{W: 120, H: 40}, paneTreeFloors())
+	if !fits || len(dividers) != 1 {
+		t.Fatalf("stacked layout did not fit: leaves=%d dividers=%d", len(leaves), len(dividers))
 	}
-	if hit.H < 1 || hit.W != split.Box.W {
-		t.Fatalf("row hit box %+v lost the divider's own cells", hit)
+	hit := paneDividerHitBox(dividers[0])
+	if hit.W != dividers[0].Box.W {
+		t.Fatalf("row hit box %+v lost the divider's own width", hit)
 	}
-	// Today's widening is still at least two cells (the rule plus one above).
-	if hit.H < dividerHitWidth-1 {
-		t.Fatalf("row hit height = %d, want at least %d", hit.H, dividerHitWidth-1)
+	if hit.H < dividerHitWidth {
+		t.Fatalf("row hit height = %d, want at least %d", hit.H, dividerHitWidth)
+	}
+	for _, placement := range leaves {
+		header := leafGeometry(placement.Box).Inner.Y
+		if header >= hit.Y && header < hit.Y+hit.H {
+			t.Fatalf("row hit box %+v covers leaf %+v's header row %d", hit, placement.Box, header)
+		}
 	}
 }
 

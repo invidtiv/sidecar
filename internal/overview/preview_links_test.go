@@ -174,7 +174,11 @@ func TestGlobalPreviewURLAndIssueActivationStayDistinct(t *testing.T) {
 }
 
 func TestGlobalIssuePreviewRawChildClickUsesRenderedCoordinates(t *testing.T) {
-	for _, width := range []int{80, 120} {
+	// 90 is the narrow case now: every leaf pays for its own border, so a split
+	// needs the terminal's floor plus the issue's floor plus two panel frames.
+	// The project workspace budgets a split the same way and refuses at the same
+	// kind of width — see paneframe.ChromeFloors.
+	for _, width := range []int{90, 120} {
 		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
 			stubPreviewTd(t)
 			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
@@ -292,11 +296,11 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 	m.preview.issue.view().SetSize(30, 4)
 	m.preview.issue.view().Scroll(5)
 	m.WorkspacesView(previewWide, previewTall)
-	box, hasBox := m.previewBox()
+	peer, hasBox := m.previewPeerBox()
 	if !hasBox {
 		t.Fatal("preview box missing")
 	}
-	layout, ok := m.layoutPreviewPanes(box)
+	layout, ok := m.layoutPreviewPanes(peer)
 	if !ok {
 		t.Fatal("stacked layout did not fit")
 	}
@@ -749,11 +753,11 @@ func TestGlobalPreviewLoadFinishesWhileItsWorkspaceIsCached(t *testing.T) {
 
 func visualPreviewDocTabPoint(t *testing.T, m *Model, index int) (x, y int, ok bool) {
 	t.Helper()
-	box, hasBox := m.previewBox()
+	peer, hasBox := m.previewPeerBox()
 	if !hasBox || m.preview.doc == nil {
 		return 0, 0, false
 	}
-	docBox, split := m.previewPaneBox(panelayout.Document, box)
+	docBox, split := m.previewPaneBox(panelayout.Document, peer)
 	if !split {
 		return 0, 0, false
 	}

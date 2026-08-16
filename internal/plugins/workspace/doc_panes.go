@@ -10,9 +10,9 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -140,17 +140,18 @@ func (p *Plugin) activeDocPaneOrNil() *docPane {
 }
 
 func paneTreeFloors() Floors {
-	// Floors are OUTER: each leaf spends panel chrome (4 columns, 2 rows) that
-	// used to be paid once on the preview frame. Inner markdown still never
-	// drops below MinWidthForMarkdown.
-	return Floors{
-		Terminal: PaneFloor{Width: termPanelMinBoxCols + panelOverhead, Height: termPanelMinBoxRows + panelBorderWidth},
-		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown + panelOverhead, Height: termPanelMinBoxRows + panelBorderWidth},
+	// Floors are stated as the INNER minimum each content needs; the shared
+	// frame adds the chrome every leaf spends (4 columns, 2 rows), so this
+	// plugin and the global Workspaces browser budget a border identically.
+	// Inner markdown still never drops below MinWidthForMarkdown.
+	return paneframe.ChromeFloors(Floors{
+		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
+		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		// An issue's body is markdown wrapped by the same renderer, so it needs
 		// the width that renderer stops being markdown below.
-		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown + panelOverhead, Height: termPanelMinBoxRows + panelBorderWidth},
-		Diff:  PaneFloor{Width: markdown.MinWidthForMarkdown + panelOverhead, Height: termPanelMinBoxRows + panelBorderWidth},
-	}
+		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+		Diff:  PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+	})
 }
 
 func (p *Plugin) openDocPane(root, rel string, line int) tea.Cmd {
@@ -1642,21 +1643,15 @@ func (p *Plugin) toggleDocRenderMode() {
 
 func (p *Plugin) dividerHandleState(region string, splitID int) ui.HandleState {
 	dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == region
-	if dragging && region == regionPaneTreeDivider && p.paneDragSplitID != 0 && p.paneDragSplitID != splitID {
-		dragging = false
-	}
 	hovering := p.hoverDividerRegion == region
-	if hovering && region == regionPaneTreeDivider && p.hoverDividerID != splitID {
-		hovering = false
+	if region != regionPaneTreeDivider {
+		return ui.HandleStateFrom(hovering, dragging)
 	}
-	return ui.HandleStateFrom(hovering, dragging)
+	return paneframe.HandleStateFor(splitID, dragging, p.paneDragSplitID, hovering, p.hoverDividerID)
 }
 
 func (p *Plugin) renderPaneTreeHandle(split Divider) string {
-	if split.Axis == SplitRows {
-		return ui.RenderHandle(split.Box.W, false, p.dividerHandleState(regionPaneTreeDivider, split.SplitID))
-	}
-	return ui.RenderHandle(split.Box.H, true, p.dividerHandleState(regionPaneTreeDivider, split.SplitID))
+	return paneframe.RenderDividerHandle(split, p.dividerHandleState(regionPaneTreeDivider, split.SplitID))
 }
 
 func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
@@ -1681,115 +1676,39 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	canvas := ui.NewCanvas(width, height)
-	blit := func(box Box, content string) {
-		canvas.Blit(Box{X: box.X - canvasBox.X, Y: box.Y - canvasBox.Y, W: box.W, H: box.H}, content)
+	// The zoomed leaf is drawn from here only when it is content the preview
+	// owns: a terminal leaf, or a content leaf still holding paneFocus while the
+	// sidebar has the keyboard, is the legacy renderer's box. This is decided
+	// before anything composes, because composing a leaf sizes its content.
+	if layout.Zoomed && !p.previewLeafFocused() {
+		return "", false
 	}
-	if layout.Zoomed {
-		// The zoomed leaf is drawn from here only when it is content the preview
-		// owns: a terminal leaf, or a content leaf still holding paneFocus while
-		// the sidebar has the keyboard, is the legacy renderer's box.
-		if !p.previewLeafFocused() {
-			return "", false
-		}
-		zoomed := layout.Leaves[0]
-		geom := leafGeometry(zoomed.Box)
-		p.registerPaneLeafRegions(zoomed.Node, geom.Outer)
-		p.registerPaneTabRegions(zoomed.Node, geom.Inner)
-		p.registerPaneCloseRegions(zoomed.Node, geom.Inner)
-		// One leaf is still composed, not returned: the clip-and-pad the
-		// compositor guarantees is what makes the leaf's box the leaf's box, and
-		// a lone leaf that keeps its own shape is the one placement nothing
-		// holds to it.
-		blit(geom.Outer, p.renderPaneLeafPanel(zoomed, true))
-		// Last, because the render above is what places a live search surface's
-		// regions and they have to beat the leaf region drawn under them.
-		p.registerDocSearchRegions()
-		return canvas.String(), true
-	}
-
-	// Every leaf and divider is drawn onto the box LayoutPanes gave it. Joining
-	// the blocks back together instead would re-derive that geometry in string
-	// space at every level of nesting, and the levels only have to disagree by a
-	// cell for a divider to walk sideways.
-	for _, placement := range layout.Leaves {
-		blit(placement.Box, p.renderPaneLeafPanel(placement, false))
-	}
-	for _, split := range layout.Dividers {
-		blit(split.Box, p.renderPaneTreeHandle(split))
-	}
-	p.registerPaneTreeRegions(layout.Leaves, layout.Dividers)
+	// One leaf is still composed, not returned: the clip-and-pad the compositor
+	// guarantees is what makes the leaf's box the leaf's box, and a lone leaf
+	// that keeps its own shape is the one placement nothing holds to it.
+	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
+	p.registerPaneTreeRegions(layout)
 	// Last, because a live search surface is drawn over its leaf and its regions
 	// have to beat the leaf's own.
 	p.registerDocSearchRegions()
-	return canvas.String(), true
+	return view, true
 }
 
-// renderPaneLeaf draws one placed leaf through the content contract, so the
-// compose path never asks what kind of leaf it is drawing. A leaf with no
-// content draws nothing and the canvas leaves its box blank, rather than
-// shifting its neighbours into it.
-//
-// origin is the preview content box, which turns the leaf's box into the
-// plugin-local rectangle a pointer is tested against.
-//
-// Sizing inside a frame is what the document viewer already required, and both
-// contents answer nil: a live terminal is resized from the state change that
-// moved its box, not from a render. A content that does answer one is asserting
-// geometry beyond this process, and a render has nothing to dispatch it with, so
-// the frame holds it for the next update rather than dropping it — the earliest
-// a frame-time answer can reach the runtime. The first content that answers one
-// in production moves sizing ahead of the frame entirely.
+// renderPaneLeaf draws one placed leaf's body, with no chrome around it, at an
+// explicit origin. placement.Box is the body's own rectangle.
 func (p *Plugin) renderPaneLeaf(placement Placement, origin Box, zoomed bool) string {
-	content := p.paneContent(placement.Node)
-	if content == nil {
-		return ""
-	}
-	p.sizePaneContent(content, Size{Width: placement.Box.W, Height: placement.Box.H})
-	return content.View(Render{
-		Focused: p.paneFocus == placement.Node.ID,
-		Zoomed:  zoomed,
-		Origin: Box{
-			X: origin.X + placement.Box.X, Y: origin.Y + placement.Box.Y,
-			W: placement.Box.W, H: placement.Box.H,
-		},
-	})
+	return paneframe.RenderContent(paneHost{p}, placement.Node, Box{
+		X: origin.X + placement.Box.X, Y: origin.Y + placement.Box.Y,
+		W: placement.Box.W, H: placement.Box.H,
+	}, zoomed)
 }
 
-// renderPaneLeafPanel draws one leaf's content in its INNER box and wraps the
-// OUTER box in RenderPanel. placement.Box is plugin-local OUTER.
-func (p *Plugin) renderPaneLeafPanel(placement Placement, zoomed bool) string {
-	geom := leafGeometry(placement.Box)
-	body := p.renderPaneLeaf(
-		Placement{Node: placement.Node, Box: Box{W: geom.Inner.W, H: geom.Inner.H}},
-		geom.Inner,
-		zoomed,
-	)
-	return p.wrapLeafChrome(placement.Node, body, geom.Outer)
-}
-
-// wrapLeafChrome is a reader of setFocusTarget: interactive/active on the
-// focused leaf, muted on neighbours. Content bytes are not dimmed.
+// wrapLeafChrome draws one leaf's border. It is a reader of setFocusTarget:
+// interactive/active on the focused leaf, muted on neighbours. Content bytes are
+// not dimmed. The lone-terminal preview frame is drawn through here too, so the
+// zoomed case and the tiled case cannot pick different borders.
 func (p *Plugin) wrapLeafChrome(node *PaneNode, content string, outer Box) string {
-	if node != nil && node.Kind == PaneTerminal && p.viewMode == ViewModeInteractive &&
-		p.activePane == PanePreview && p.paneFocus == node.ID {
-		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetInteractiveGradient())
-	}
-	if node != nil && node.Kind == PaneTerminal && p.previewFlashActive() && p.activePane == PanePreview && p.paneFocus == node.ID {
-		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetFlashGradient())
-	}
-	active := node != nil && p.activePane == PanePreview && p.paneFocus == node.ID
-	return styles.RenderPanel(content, outer.W, outer.H, active)
-}
-
-// sizePaneContent gives a content its box and keeps what it answered. A command
-// here is a content asserting geometry it owns beyond this process, and the
-// render path has no runtime to dispatch one with, so it is queued for the next
-// update instead of discarded.
-func (p *Plugin) sizePaneContent(content Content, size Size) {
-	if cmd := content.SetSize(size); cmd != nil {
-		p.paneSizeCmds = append(p.paneSizeCmds, cmd)
-	}
+	return paneframe.WrapLeaf(content, outer, paneHost{p}.Chrome(node))
 }
 
 // takePaneSizeCmds empties the queue as it hands it over: a geometry assertion
@@ -1867,61 +1786,15 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 
 // registerPaneTreeRegions registers hit regions from the same placements the
 // canvas drew from, so a click cannot land on geometry the frame did not draw.
-func (p *Plugin) registerPaneTreeRegions(leaves []Placement, dividers []Divider) {
-	// placement.Box is already plugin-local OUTER. Focus hits the outer
-	// rectangle; tabs, close, and content hits use the inner.
-	for _, placement := range leaves {
-		p.registerPaneLeafRegions(placement.Node, placement.Box)
-	}
-	// Dividers arrive in LayoutPanes' order, each split before the splits inside
-	// it, and widened hit targets overlap once splits nest. Two targets can
-	// only overlap when one split encloses the other, because sibling subtrees
-	// are held apart by the divider between them — so registering the enclosing
-	// split first is what leaves the enclosed one last, and HitMap.Test's
-	// reverse scan returns it for a point both claim.
-	for _, split := range dividers {
-		hit := paneDividerHitBox(split)
-		p.mouseHandler.HitMap.AddRect(regionPaneTreeDivider,
-			hit.X, hit.Y, hit.W, hit.H, split.SplitID)
-	}
-	// File tabs are last so they win the one cell the column divider reaches
-	// into the document header — the cell a click on the leftmost tab lands on.
-	for _, placement := range leaves {
-		p.registerPaneTabRegions(placement.Node, leafGeometry(placement.Box).Inner)
-	}
-	// Close buttons beat tabs: the X occupies the right edge the strip no
-	// longer claims, and a one-cell miss on a tab must not steal the close.
-	for _, placement := range leaves {
-		p.registerPaneCloseRegions(placement.Node, leafGeometry(placement.Box).Inner)
-	}
-	// Diff list/hunk divider and file-row hits register last from the leaf
-	// box so they win over the tree divider and the pane-leaf body.
-	for _, placement := range leaves {
-		if placement.Node == nil || placement.Node.Kind != PaneDiff {
-			continue
-		}
-		diff := p.diffs[placement.Node.ContentID]
-		if diff == nil {
-			continue
-		}
-		p.registerDiffLeafHits(diff, leafGeometry(placement.Box).Inner)
-	}
+// The ORDER is the shared frame's, which is what keeps a click on a stacked
+// leaf's tab behaving identically here and in the global Workspaces browser.
+func (p *Plugin) registerPaneTreeRegions(layout PaneLayout) {
+	paneframe.RegisterRegions(paneRegions{p}, layout)
 }
 
 // paneDividerHitBox widens a divider's one-cell box into the target a pointer is
 // tested against, in the tree's own coordinates. A divider is a cell wide and a
 // drag has to be startable on it, so the target reaches one cell into the leaf
-// before it.
-func paneDividerHitBox(split Divider) Box {
-	hit := split.Box
-	if split.Axis == SplitCols {
-		hit.W = dividerHitWidth
-		hit.X--
-	} else {
-		// The lower leaf starts with a header row, so only widen upward.
-		// Reaching below the divider would mask an issue's whole header.
-		hit.H = dividerHitWidth - 1
-		hit.Y--
-	}
-	return hit
-}
+// before it — and, on a row split, only upward, because the lower leaf starts
+// with a header row a click has to be able to reach.
+func paneDividerHitBox(split Divider) Box { return paneframe.DividerHitBox(split) }

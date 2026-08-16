@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -486,24 +487,15 @@ func (m *Model) focusPreviewLeaf(leafID int) bool {
 	return true
 }
 
-func previewPaneFloors() panelayout.Floors {
-	return panelayout.Floors{
-		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
-		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
-		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
-		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
-	}
-}
-
-// lastPreviewBoxes is the tiled leaf geometry for the current preview box.
-// PlanOpen reads areas from these boxes; a tree that does not fit (the zoomed
-// LayoutTree case) has no areas to offer.
+// lastPreviewBoxes is the tiled leaf OUTER geometry for the current preview
+// peer. PlanOpen reads areas from these boxes; a tree that does not fit (the
+// zoomed LayoutTree case) has no areas to offer.
 func (m *Model) lastPreviewBoxes() map[int]panelayout.Box {
-	box, ok := m.previewBox()
+	peer, ok := m.previewPeerBox()
 	if !ok {
 		return nil
 	}
-	leaves, _, fits := panelayout.LayoutPanes(m.preview.paneRoot, termpreview.Box{W: box.W, H: box.H}, previewPaneFloors())
+	leaves, _, fits := panelayout.LayoutPanes(m.preview.paneRoot, peer, previewPaneFloors())
 	if !fits {
 		return nil
 	}
@@ -529,7 +521,7 @@ func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.C
 	if plan.Retarget != 0 {
 		return plan.Retarget, nil
 	}
-	box, ok := m.previewBox()
+	peer, ok := m.previewPeerBox()
 	if !ok {
 		return 0, nil
 	}
@@ -539,7 +531,7 @@ func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.C
 	if focus != id {
 		return 0, nil
 	}
-	if _, _, fits := panelayout.LayoutPanes(trial, termpreview.Box{W: box.W, H: box.H}, previewPaneFloors()); !fits {
+	if _, _, fits := panelayout.LayoutPanes(trial, peer, previewPaneFloors()); !fits {
 		dimension := "wider"
 		if plan.Axis == panelayout.Rows {
 			dimension = "taller"
@@ -555,51 +547,49 @@ func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.C
 	return id, nil
 }
 
-func (m *Model) layoutPreviewPanes(box termpreview.Box) (panelayout.Layout, bool) {
+// layoutPreviewPanes places the tree in peer, a surface-local OUTER rectangle.
+// Every placement it returns is therefore OUTER: the box a leaf's own border is
+// drawn on, not the box its content draws in.
+func (m *Model) layoutPreviewPanes(peer termpreview.Box) (panelayout.Layout, bool) {
 	if m.preview.paneRoot == nil {
 		m.resetActivePreviewPanes()
 	}
-	return panelayout.LayoutTree(m.preview.paneRoot, box, previewPaneFloors(), m.preview.paneFocus)
+	return panelayout.LayoutTree(m.preview.paneRoot, peer, previewPaneFloors(), m.preview.paneFocus)
 }
 
-func (m *Model) previewPaneBox(kind panelayout.Kind, box termpreview.Box) (termpreview.Box, bool) {
-	layout, ok := m.layoutPreviewPanes(box)
+// previewPaneBox is a kind's INNER box: what its content draws in, what tmux and
+// the native cursor are sized against, and what its hit regions are tested in.
+func (m *Model) previewPaneBox(kind panelayout.Kind, peer termpreview.Box) (termpreview.Box, bool) {
+	layout, ok := m.layoutPreviewPanes(peer)
 	if !ok {
 		return termpreview.Box{}, false
 	}
 	for _, leaf := range layout.Leaves {
 		if leaf.Node.Kind == kind {
-			return leaf.Box, true
+			return paneframe.Inset(leaf.Box), true
 		}
 	}
 	return termpreview.Box{}, false
 }
 
 func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
-	box, ok := m.previewBox()
+	peer, ok := m.previewPeerBox()
 	if !ok {
 		return termpreview.Box{}, false
 	}
-	return m.previewPaneBox(panelayout.Terminal, box)
+	return m.previewPaneBox(panelayout.Terminal, peer)
 }
 
-func (m *Model) registerPreviewDocRegions(box termpreview.Box) {
+// registerPreviewDocRegion covers the Document leaf's INNER box.
+func (m *Model) registerPreviewDocRegion(docBox termpreview.Box) {
 	if m.preview.doc == nil {
-		return
-	}
-	docBox, split := m.previewPaneBox(panelayout.Document, box)
-	if !split {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(previewDocRegionKind, docBox.X, docBox.Y, docBox.W, docBox.H, previewDocRegionKind)
 }
 
-func (m *Model) registerPreviewDocTabRegions(box termpreview.Box) {
+func (m *Model) registerPreviewDocTabRegions(docBox termpreview.Box) {
 	if m.preview.doc == nil {
-		return
-	}
-	docBox, ok := m.previewPaneBox(panelayout.Document, box)
-	if !ok {
 		return
 	}
 	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, ui.ReserveHeaderClose(docBox.W).TabsWidth, m.PreviewFocused() && m.preview.doc.focused).Tabs {
@@ -719,11 +709,4 @@ func (m *Model) closePreviewPane(kind panelayout.Kind) tea.Cmd {
 	default:
 		return nil
 	}
-}
-
-func renderPreviewPaneDivider(divider panelayout.Divider, state ui.HandleState) string {
-	if divider.Axis == panelayout.Rows {
-		return ui.RenderHandle(max(divider.Box.W, 0), false, state)
-	}
-	return ui.RenderHandle(max(divider.Box.H, 0), true, state)
 }

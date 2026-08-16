@@ -443,10 +443,16 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 // clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	cmd := m.update(msg)
+	// Geometry a pane content asserted from inside the last render, dispatched
+	// on the first update after it. See paneHost.QueueSizeCmd.
+	cmds := append([]tea.Cmd{cmd}, m.takePaneSizeCmds()...)
 	if pulse := m.pulseCmd(); pulse != nil {
-		return tea.Batch(cmd, pulse)
+		cmds = append(cmds, pulse)
 	}
-	return cmd
+	if len(cmds) == 1 {
+		return cmd
+	}
+	return tea.Batch(cmds...)
 }
 
 // workspacePulseTickMsg advances the shared marker animation by one frame.
