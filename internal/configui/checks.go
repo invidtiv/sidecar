@@ -51,7 +51,16 @@ func (m *Model) SetCheckInput(in configchecks.Input) { m.checkInput = in }
 func (m *Model) Recheck() tea.Cmd {
 	in := m.checkInput
 	m.checking = true
-	return func() tea.Msg { return ChecksMsg{Results: configchecks.Run(in)} }
+	// The integration probe rides along with the readiness run: both answer
+	// questions about the machine, both must be off the render path, and both
+	// are stale for exactly the same reasons.
+	return tea.Batch(
+		func() tea.Msg { return ChecksMsg{Results: configchecks.Run(in)} },
+		m.ProbeCmd(),
+		// Install provenance is the same kind of fact — resolved by running
+		// `brew --cellar` — so it rides along and About paints from the cache.
+		m.detectInstallationCmd(),
+	)
 }
 
 // ApplyChecks caches a completed run.

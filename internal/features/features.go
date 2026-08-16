@@ -131,6 +131,13 @@ func IsKnownFeature(name string) bool {
 	return ok
 }
 
+// DefaultEnabled reports a feature's built-in default, ignoring configuration
+// and CLI overrides. It is what a surface editing the config file needs: a flag
+// absent from features.flags is not "off", it is "whatever this build defaults
+// to", and a settings page that showed OFF for a default-on flag would be
+// lying.
+func DefaultEnabled(name string) bool { return getDefault(name) }
+
 // Manager handles feature flag state.
 type Manager struct {
 	mu        sync.RWMutex

@@ -13,8 +13,12 @@ import (
 // text, completions, and nested pickers can align to the control rather than to
 // the pane edge.
 const (
-	// LabelColumn is the width of the fixed left label column.
-	LabelColumn = 24
+	// LabelColumn is the width of the fixed left label column. It is wide
+	// enough for the longest label any page actually uses ("Split workspace
+	// terminal", "Terminal preview capture"): a shared column that truncates a
+	// real setting's name is a broken column, not a page's problem to work
+	// around.
+	LabelColumn = 26
 	// RowIndent is the left inset shared by rows inside a section.
 	RowIndent = 2
 	// ControlColumn is the column every control starts at, measured from the
@@ -133,6 +137,33 @@ func Toggle(on bool, state State) string {
 		style = style.Background(styles.BgTertiary)
 	}
 	return style.Render(label)
+}
+
+// ToggleWidth renders an ON/OFF pill that fills a fixed width, so a group of
+// toggles and selectors shares one right edge the way the mockups draw them.
+func ToggleWidth(on bool, width int, state State) string {
+	label := "OFF"
+	style := lipgloss.NewStyle().
+		Foreground(styles.TextSecondary).
+		Background(styles.SurfaceRaised).
+		Padding(0, 1)
+	if on {
+		label = "ON"
+		style = lipgloss.NewStyle().
+			Foreground(styles.Success).
+			Background(styles.BgTertiary).
+			Padding(0, 1).
+			Bold(true)
+	}
+	switch {
+	case state.Disabled:
+		style = style.Foreground(styles.TextMuted)
+	case state.Focused:
+		style = style.Background(styles.Primary).Foreground(styles.OnPrimaryColor)
+	case state.Hovered:
+		style = style.Background(styles.BgTertiary)
+	}
+	return style.Width(width).Render(label)
 }
 
 // Selector renders a value with a disclosure arrow.
@@ -262,6 +293,54 @@ func StatusRow(ok bool, label, detail, badge string, width int, state State) str
 		return row
 	}
 	return row + "\n" + strings.Repeat(" ", RowIndent+2) + mutedStyle().Render(detail)
+}
+
+// BetaBadge marks an integration Sidecar is still shipping as a preview. It
+// stays on the row after the integration is enabled: turning something on does
+// not make it finished.
+func BetaBadge() string {
+	return lipgloss.NewStyle().
+		Foreground(styles.Warning).
+		Background(styles.BgTertiary).
+		Padding(0, 1).
+		Bold(true).
+		Render("BETA")
+}
+
+// PanelRow is one surface on Panels & Integrations: the whole two-line block is
+// the control, with its ON/OFF state as a distinct pill at the right edge. The
+// name and the pill share a line so the state is legible at a glance; the
+// description sits underneath in the muted column so it never competes with the
+// pill for space.
+func PanelRow(title, badge, detail, control string, width int, state State) string {
+	titleStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
+	switch {
+	case state.Disabled:
+		titleStyle = mutedStyle().Bold(true)
+	case state.Focused:
+		titleStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+	case state.Hovered:
+		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).Underline(true)
+	}
+	left := strings.Repeat(" ", RowIndent) + titleStyle.Render(title)
+	if badge != "" {
+		left += "  " + badge
+	}
+	first := padRight(left, control, width)
+	if detail == "" {
+		return first
+	}
+	return first + "\n" + strings.Repeat(" ", RowIndent) + mutedStyle().Render(detail)
+}
+
+// Centered places already-styled content in the middle of the pane, for the
+// small amount of Configuration that is a signature rather than a control.
+func Centered(content string, width int) string {
+	pad := (width - ansi.StringWidth(content)) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	return strings.Repeat(" ", pad) + content
 }
 
 // RepairRow is Sidecar Setup's actionable row: a leading badge, the work stated

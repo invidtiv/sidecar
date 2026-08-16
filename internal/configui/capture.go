@@ -1,6 +1,10 @@
 package configui
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // The embedded terminal's capture limit is surfaced twice — plainly on Terminal
 // and among the technical controls on Advanced — so its bounds, its clamp, and
@@ -58,6 +62,42 @@ func FormatCaptureLimit(bytes int) string {
 		return fmt.Sprintf("%d MB", bytes/mb)
 	}
 	return fmt.Sprintf("%d KB", bytes/1024)
+}
+
+// CaptureLimitRange writes the accepted range the way the help line states it,
+// so the documented bounds and the enforced ones are the same two numbers.
+func CaptureLimitRange() string {
+	return FormatCaptureLimit(CaptureLimitMin) + " to " + FormatCaptureLimit(CaptureLimitMax)
+}
+
+// ParseCaptureLimit reads a typed capture limit — "4 MB", "512kb", or a plain
+// byte count — and returns a value inside the accepted range. Blank or
+// unreadable input keeps the safe default rather than being refused: this
+// setting has no meaningful "unset", and a technical control should not trap a
+// user in an error state over a typo.
+func ParseCaptureLimit(value string) int {
+	text := strings.ToLower(strings.TrimSpace(value))
+	if text == "" {
+		return CaptureLimitDefault
+	}
+	multiplier := 1
+	switch {
+	case strings.HasSuffix(text, "mb"):
+		multiplier, text = 1024*1024, strings.TrimSuffix(text, "mb")
+	case strings.HasSuffix(text, "kb"):
+		multiplier, text = 1024, strings.TrimSuffix(text, "kb")
+	case strings.HasSuffix(text, "m"):
+		multiplier, text = 1024*1024, strings.TrimSuffix(text, "m")
+	case strings.HasSuffix(text, "k"):
+		multiplier, text = 1024, strings.TrimSuffix(text, "k")
+	case strings.HasSuffix(text, "b"):
+		text = strings.TrimSuffix(text, "b")
+	}
+	number, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	if err != nil || number <= 0 {
+		return CaptureLimitDefault
+	}
+	return ClampCaptureLimit(int(number * float64(multiplier)))
 }
 
 // NextCaptureLimit is the value one step up the ladder, wrapping at the top.

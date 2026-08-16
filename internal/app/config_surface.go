@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/version"
 )
 
 // Configuration is an app-level surface, not a modal and not a plugin. It
@@ -80,11 +81,29 @@ func (m *Model) configHostState() configui.HostState {
 		Config:     m.cfg,
 		ProjectDir: m.ui.WorkDir,
 		OpenInApps: openInChoices(),
+		Version:    m.currentVersion,
+		Update:     m.configUpdateStatus(),
 	}
 	if project := m.currentProjectConfig(); project != nil {
 		state.ProjectPath = project.Path
 	}
 	return state
+}
+
+// configUpdateStatus reports the release check the app already runs from Init.
+// Configuration renders it; it never runs a check of its own, and an unknown
+// answer stays unknown rather than becoming "up to date".
+func (m *Model) configUpdateStatus() configui.UpdateStatus {
+	target := m.productTarget(version.ProductSidecar)
+	if target == nil {
+		return configui.UpdateStatus{}
+	}
+	return configui.UpdateStatus{
+		Checked:       true,
+		Failed:        target.CheckFailed,
+		Available:     target.HasUpdate,
+		LatestVersion: target.LatestVersion,
+	}
 }
 
 // openInChoices names the applications Sidecar knows how to open a project in.
@@ -233,6 +252,29 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 
 	case configui.OpenFileMsg:
 		return m.openConfigFile(msg.Path), true
+
+	case configui.OpenURLMsg:
+		// A documentation link is handed to the desktop's opener; Sidecar owns
+		// no browser and renders no web content.
+		return openPathCmd(msg.URL), true
+
+	case configui.OpenUpdaterMsg:
+		// Configuration hands an available update to the updater that already
+		// exists. It duplicates none of its confirmation, progress, or install
+		// behavior, and Configuration stays open underneath, so closing the
+		// updater returns the user to About.
+		m.openUpdatePreview()
+		m.updateContext()
+		return nil, true
+
+	case configui.CheckUpdatesMsg:
+		cmds := m.productCheckCmds(true)
+		cmds = append(cmds, toast("Checking for updates…"))
+		return tea.Batch(cmds...), true
+
+	case configui.OpenPaletteMsg:
+		_, cmd := m.togglePaletteFromConfig()
+		return cmd, true
 
 	case configui.ConfigSavedMsg:
 		return m.applyConfigSaved(msg), true

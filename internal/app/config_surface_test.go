@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/version"
 )
 
 func typeKey(t *testing.T, m Model, key string) Model {
@@ -416,5 +417,55 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	}
 	if !styles.PillTabsEnabled {
 		t.Fatal("the host did not apply the saved Nerd Font setting")
+	}
+}
+
+// About hands an available update to the updater Sidecar already has, and
+// Configuration stays open underneath so closing the updater restores About.
+func TestConfigurationOpensTheExistingUpdater(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+
+	updated, _ := m.Update(configui.OpenUpdaterMsg{})
+	m = asAppModel(t, updated)
+	if m.updateModalState != UpdateModalPreview {
+		t.Fatalf("update modal state = %v, want the existing preview", m.updateModalState)
+	}
+	if !m.configOpen() {
+		t.Fatal("handing off to the updater closed Configuration, so returning would not restore About")
+	}
+}
+
+// The docs link goes to the desktop opener; Sidecar renders no web content.
+func TestConfigurationOpensDocumentationWithTheOSOpener(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+	_, cmd := m.Update(configui.OpenURLMsg{URL: configui.DocsURL})
+	if cmd == nil {
+		t.Fatal("the documentation link produced no command")
+	}
+}
+
+// About's version and update status come from the running app, not from a copy.
+func TestConfigurationHostStateCarriesVersionAndUpdateStatus(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.currentVersion = "1.2.3"
+	state := m.configHostState()
+	if state.Version != "1.2.3" {
+		t.Fatalf("host state version = %q", state.Version)
+	}
+	if state.Update.Checked {
+		t.Fatal("an unchecked release check was reported as settled")
+	}
+
+	m.setProductStatus(version.ProductStatusMsg{Target: version.Target{
+		Product:        version.ProductSidecar,
+		CurrentVersion: "1.2.3",
+		LatestVersion:  "1.3.0",
+		HasUpdate:      true,
+	}})
+	state = m.configHostState()
+	if !state.Update.Checked || !state.Update.Available || state.Update.LatestVersion != "1.3.0" {
+		t.Fatalf("host state update = %#v", state.Update)
 	}
 }

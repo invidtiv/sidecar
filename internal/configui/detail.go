@@ -34,12 +34,27 @@ type paneBuilder struct {
 	// regions land where the lines are painted.
 	originX int
 	inner   int
-	lines   []string
+	// height is the number of lines the pane can paint, so a page that pins
+	// content to the bottom knows where the bottom is.
+	height int
+	lines  []string
 }
 
-func (m *Model) newPaneBuilder(originX, inner int) *paneBuilder {
+func (m *Model) newPaneBuilder(originX, inner, height int) *paneBuilder {
 	m.controls = m.controls[:0]
-	return &paneBuilder{m: m, originX: originX, inner: inner}
+	return &paneBuilder{m: m, originX: originX, inner: inner, height: height}
+}
+
+// spacer pushes what follows to the bottom of the pane. following is how many
+// lines the caller is about to paint; a two-row margin keeps the last of them
+// clear of the panel's bottom border. On a pane too short to hold both the
+// content and the block it does nothing, so nothing is ever pushed off screen
+// to make room for a signature.
+func (b *paneBuilder) spacer(following int) {
+	const bottomMargin = 2
+	for len(b.lines)+following+bottomMargin < b.height {
+		b.lines = append(b.lines, "")
+	}
 }
 
 // text appends plain lines.

@@ -38,6 +38,8 @@ func configFixture(t *testing.T, cfg *config.Config) (*Model, string) {
 	}
 
 	m := New()
+	// No test ever resolves a real installation or runs a package manager.
+	m.SetInstallEnvironment(stubEnvironment(nil))
 	m.SetHostState(HostState{Config: loaded})
 	return m, path
 }

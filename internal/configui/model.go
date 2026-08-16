@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/version"
 )
 
 // Keymap contexts owned by Configuration. They are registered in
@@ -68,6 +69,23 @@ type Model struct {
 	// showColorSteps expands the terminal-colors repair's instructions.
 	showColorSteps bool
 
+	// Environment probe. Like checks, this is a cache filled by a command:
+	// whether an integration's command is on PATH is a fact about the machine,
+	// never something a render looks up.
+	probes    map[string]commandProbe
+	brewFound bool
+	probed    bool
+
+	// installEnv is the process environment the enable route installs through.
+	// Nil means the real one; a test substitutes it so no test ever runs a
+	// package manager.
+	installEnv *version.Environment
+
+	// restartNote is the inline "takes effect after Sidecar restarts" line a
+	// restart-scoped save leaves behind. It belongs to the page that raised it
+	// and is dropped when the user moves somewhere else.
+	restartNote string
+
 	// host is what the running Sidecar told the surface about itself.
 	host HostState
 	// editor is the field that owns typed characters, if any.
@@ -85,6 +103,10 @@ type Model struct {
 	projectsState   *projectsState
 	agentsState     *agentsState
 	terminalState   *terminalState
+	panelsState     *panelsState
+	advancedState   *advancedState
+	aboutState      *aboutState
+	enable          *enableState
 	addProject      *projectForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
@@ -142,6 +164,10 @@ func (m *Model) Open(page PageID) {
 	m.projectsState = nil
 	m.agentsState = nil
 	m.terminalState = nil
+	m.panelsState = nil
+	m.advancedState = nil
+	m.aboutState = nil
+	m.enable = nil
 	m.addProject = nil
 	m.resetDetail()
 }
@@ -154,6 +180,12 @@ func (m *Model) resetDetail() {
 	m.rowCursor = 0
 	m.confirm = nil
 	m.showColorSteps = false
+	// An enable route belongs to the child route that opened it; leaving that
+	// route ends the attempt rather than leaving it half-answered underneath.
+	m.enable = nil
+	// A restart note answers a change the user just made on the page they made
+	// it on; carrying it somewhere else would be a claim about that page.
+	m.restartNote = ""
 	if state := m.terminalState; state != nil {
 		// A refused value is a complaint about the edit that was open; leaving
 		// the page ends that conversation.
@@ -715,7 +747,7 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 	// control once and its look, its hit region, and its key stay in agreement.
 	// Building it here also drops the previous frame's controls, which is what
 	// keeps the keyboard from reaching a row that is no longer on screen.
-	builder := m.newPaneBuilder(originX, inner)
+	builder := m.newPaneBuilder(originX, inner, paneHeight-2)
 
 	if m.SearchActive() && m.results {
 		lines = append(lines, PaneTitle("Search results"), "")
@@ -758,6 +790,12 @@ func (m *Model) renderDetail(paneWidth, paneHeight, offsetX int) string {
 		m.buildAgents(builder)
 	case route.Page == PageTerminal:
 		m.buildTerminal(builder)
+	case route.Page == PagePanels:
+		m.buildPanels(builder)
+	case route.Page == PageAdvanced:
+		m.buildAdvanced(builder)
+	case route.Page == PageAbout:
+		m.buildAbout(builder)
 	default:
 		builder.text(pageBody(route.Page, inner)...)
 	}

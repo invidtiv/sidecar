@@ -52,6 +52,8 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		m.buildAgentRepair(b)
 	case ChildRepairConfiguration:
 		m.buildConfigRepair(b)
+	case ChildEnableIntegration:
+		m.buildEnableRoute(b)
 	default:
 		b.text(Muted("This focused route arrives in a later phase."))
 	}

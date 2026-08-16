@@ -278,3 +278,21 @@ func SaveUI(mutate func(*UIConfig)) error {
 	mutate(&cfg.UI)
 	return Save(cfg)
 }
+
+// SavePlugins applies a change to the plugins section and writes it. It is the
+// panel-enablement path: which surfaces Sidecar assembles, and the handful of
+// inputs those surfaces read. Like the other helpers it reloads first, so a
+// setting changed in Configuration never overwrites an edit made to the file
+// since Sidecar started, and it validates before writing so an out-of-range
+// interval cannot reach disk.
+func SavePlugins(mutate func(*PluginsConfig)) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	mutate(&cfg.Plugins)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return Save(cfg)
+}

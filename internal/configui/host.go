@@ -27,6 +27,26 @@ type HostState struct {
 	// the user's configured projects — which is exactly when a project-scoped
 	// setting must not be offered.
 	ProjectPath string
+	// Version is the version string the running Sidecar resolved for itself.
+	Version string
+	// Update is the release check the app already runs at startup. Configuration
+	// reports it and hands an available update to the existing updater; it never
+	// checks, downloads, or installs anything itself.
+	Update UpdateStatus
+}
+
+// UpdateStatus is the app's release check as About needs to state it. It
+// deliberately distinguishes "not checked yet" and "the check failed" from "up
+// to date": an unknown answer must never be reported as reassurance.
+type UpdateStatus struct {
+	// Checked is true once a check has settled, successfully or not.
+	Checked bool
+	// Failed marks a check that could not complete.
+	Failed bool
+	// Available marks a real available update.
+	Available bool
+	// LatestVersion is the release a user would move to.
+	LatestVersion string
 }
 
 // OpenInApp is one application in the host's "open in" list.
@@ -98,6 +118,12 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case completionsMsg:
 		m.applyCompletions(msg)
+	case probeMsg:
+		m.applyProbe(msg)
+	case installationMsg:
+		m.applyInstallation(msg)
+	case installResultMsg:
+		return m.applyInstallResult(msg)
 	}
 	return nil
 }

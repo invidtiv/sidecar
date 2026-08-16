@@ -90,6 +90,7 @@ func seeded(t *testing.T, page PageID, results configchecks.Results) *Model {
 	t.Helper()
 	m := New()
 	m.Open(page)
+	m.SetInstallEnvironment(stubEnvironment(nil))
 	m.SetCheckInput(configchecks.Input{Config: &config.Config{}})
 	m.ApplyChecks(ChecksMsg{Results: results})
 	render(m)
@@ -364,12 +365,17 @@ func TestRecheckRunsInACommandAndClosesAResolvedRepair(t *testing.T) {
 	m.OpenRepair(configchecks.RepairTmux)
 	render(m)
 
+	// R runs everything that answers a question about the machine: the checks,
+	// the integration probe, and the install provenance.
 	msgs := collect(key(m, "r"))
-	if len(msgs) != 1 {
-		t.Fatalf("R produced %d messages", len(msgs))
+	var ranChecks bool
+	for _, msg := range msgs {
+		if _, ok := msg.(ChecksMsg); ok {
+			ranChecks = true
+		}
 	}
-	if _, ok := msgs[0].(ChecksMsg); !ok {
-		t.Fatalf("R did not run the checks in a command: %#v", msgs[0])
+	if !ranChecks {
+		t.Fatalf("R did not run the checks in a command: %#v", msgs)
 	}
 
 	// A run that still reports the problem leaves the repair open.

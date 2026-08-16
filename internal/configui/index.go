@@ -76,6 +76,10 @@ var settingsIndex = []IndexEntry{
 	{Page: PagePanels, Label: "Notes panel", Keywords: []string{"notes", "panel", "beta"}},
 	{Page: PagePanels, Label: "Conversations panel", Keywords: []string{"conversations", "history", "sessions", "panel"}},
 	{Page: PagePanels, Label: "Tasks panel", Keywords: []string{"tasks", "panel", "beta"}},
+	{Page: PagePanels, Label: "td database location", Keywords: []string{"td", "database", "dbpath", "issues", "path"}},
+	{Page: PagePanels, Label: "Conversations source directory", Keywords: []string{"conversations", "claude", "directory", "history", "path"}},
+	{Page: PagePanels, Label: "Panel refresh interval", Keywords: []string{"refresh", "interval", "poll", "git", "td"}},
+	{Page: PagePanels, Label: "Install Tasks", Keywords: []string{"tasks", "install", "homebrew", "brew", "beta", "enable"}},
 
 	// Diagnostics
 	{Page: PageDiagnostics, Label: "Terminal color check", Keywords: []string{"truecolor", "color", "check", "diagnostics"}},
@@ -97,6 +101,9 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAbout, Label: "Version", Keywords: []string{"version", "about", "build"}},
 	{Page: PageAbout, Label: "Update status", Keywords: []string{"update", "upgrade", "release", "version"}},
 	{Page: PageAbout, Label: "Documentation", Keywords: []string{"docs", "documentation", "help", "support"}},
+	{Page: PageAbout, Label: "Installation method", Keywords: []string{"homebrew", "go install", "binary", "provenance", "installed"}},
+	{Page: PageAbout, Label: "Open updater", Keywords: []string{"update", "updater", "upgrade", "install", "release"}},
+	{Page: PageAbout, Label: "Command palette", Keywords: []string{"palette", "commands", "shortcuts", "help"}},
 }
 
 // Index returns the full static settings index.
