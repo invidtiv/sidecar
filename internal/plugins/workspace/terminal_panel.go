@@ -9,8 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/state"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -471,23 +471,8 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	return p.renderCapturedTerminal(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
-// renderTermPanelDividerH renders a horizontal divider (for bottom layout).
-func (p *Plugin) renderTermPanelDividerH(width int) string {
-	dividerStyle := lipgloss.NewStyle().Foreground(styles.BorderNormal)
-	return dividerStyle.Render(strings.Repeat("─", width))
-}
-
-// renderTermPanelDividerV renders a vertical divider (for right layout).
-func (p *Plugin) renderTermPanelDividerV(height int) string {
-	dividerStyle := lipgloss.NewStyle().Foreground(styles.BorderNormal)
-	var sb strings.Builder
-	for i := 0; i < height; i++ {
-		sb.WriteString(dividerStyle.Render("│"))
-		if i < height-1 {
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
+func (p *Plugin) renderTermPanelHandle(length int, vertical bool) string {
+	return ui.RenderHandle(length, vertical, p.dividerHandleState(regionTermPanelDivider, 0))
 }
 
 // renderOutputWithTermPanel renders the output content split with the terminal panel.
@@ -520,7 +505,7 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 
 		outputPane := p.renderOutputContent(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
-		divider := p.renderTermPanelDividerV(height)
+		divider := p.renderTermPanelHandle(height, true)
 
 		outputPane = padToHeight(outputPane, height, outputWidth)
 		termPane = padToHeight(termPane, height, termWidth)
@@ -545,7 +530,7 @@ func (p *Plugin) renderOutputWithTermPanel(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
 
 	outputPane := padToHeight(p.renderOutputContent(width, outputHeight), outputHeight, width)
-	divider := p.renderTermPanelDividerH(width)
+	divider := p.renderTermPanelHandle(width, false)
 	termPane := p.renderTermPanelOutput(width, termHeight)
 
 	return outputPane + "\n" + divider + "\n" + termPane
@@ -572,7 +557,7 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 
 		shellPane := p.renderShellOutput(outputWidth, height)
 		termPane := p.renderTermPanelOutput(termWidth, height)
-		divider := p.renderTermPanelDividerV(height)
+		divider := p.renderTermPanelHandle(height, true)
 
 		shellPane = padToHeight(shellPane, height, outputWidth)
 		termPane = padToHeight(termPane, height, termWidth)
@@ -594,7 +579,7 @@ func (p *Plugin) renderShellWithTermPanel(width, height int) string {
 	p.mouseHandler.HitMap.AddRect(regionTermPanelContent, previewContentX, absY+1, width, termHeight, nil)
 
 	shellPane := padToHeight(p.renderShellOutput(width, outputHeight), outputHeight, width)
-	divider := p.renderTermPanelDividerH(width)
+	divider := p.renderTermPanelHandle(width, false)
 	termPane := p.renderTermPanelOutput(width, termHeight)
 
 	return shellPane + "\n" + divider + "\n" + termPane

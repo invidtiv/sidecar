@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 func TestRunDispatch(t *testing.T) {
@@ -22,7 +26,7 @@ func TestRunDispatch(t *testing.T) {
 		{"legacy", []string{"--version"}, false, 0, ""},
 		{"shell help", []string{"shell", "--help"}, true, 0, "sidecar shell <command>"},
 		{"name help", []string{"shell", "name", "--help"}, true, 0, "Print the Sidecar display name"},
-		{"rename help", []string{"shell", "rename", "--help"}, true, 0, "Sidecar project shell containing"},
+		{"rename help", []string{"shell", "rename", "--help"}, true, 0, "Sidecar-managed shell or worktree agent"},
 		{"unknown", []string{"shell", "wat"}, true, 2, "unknown shell command"},
 		{"name positional", []string{"shell", "name", "extra"}, true, 2, "no positional"},
 		{"missing name", []string{"shell", "rename"}, true, 2, "exactly one quoted"},
@@ -93,6 +97,76 @@ func TestRunNameSteelThread(t *testing.T) {
 	}
 }
 
+func TestRunShellCommandsResolveManagedWorktreeAgent(t *testing.T) {
+	stateHome, stateDir, projectRoot, worktreeRoot, session, socket := setupWorktreeCLI(t, "panes")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+
+	var out, errOut bytes.Buffer
+	if handled, code := Run([]string{"shell", "name", "--json"}, &out, &errOut); !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("name = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var lookup shellstate.LookupResult
+	if err := json.Unmarshal(out.Bytes(), &lookup); err != nil {
+		t.Fatalf("name output = %q: %v", out.String(), err)
+	}
+	if lookup.Shell != session || lookup.Name != "panes" {
+		t.Fatalf("lookup = %+v", lookup)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if handled, code := Run([]string{"shell", "rename", "--json", "trim pane handles"}, &out, &errOut); !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("rename = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var renamed shellstate.RenameResult
+	if err := json.Unmarshal(out.Bytes(), &renamed); err != nil {
+		t.Fatalf("rename output = %q: %v", out.String(), err)
+	}
+	if !renamed.Changed || renamed.OldName != "panes" || renamed.Name != "trim pane handles" {
+		t.Fatalf("rename = %+v", renamed)
+	}
+	if got, err := workspaceops.LookupWorktreeDisplayName(stateDir, projectRoot, worktreeRoot); err != nil || got != "trim pane handles" {
+		t.Fatalf("persisted name = %q, %v", got, err)
+	}
+	entries, err := os.ReadDir(filepath.Join(stateDir, "requests"))
+	if err != nil {
+		t.Fatalf("read repaint requests: %v", err)
+	}
+	var repaint uirequest.Request
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-rename-worktree.json") {
+			continue
+		}
+		repaint, err = uirequest.ReadRequest(filepath.Join(stateDir, "requests", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if repaint.Action != uirequest.ActionRenameWorktree || repaint.Origin.WorkDir != worktreeRoot || repaint.Target.Value != "trim pane handles" {
+		t.Fatalf("repaint request = %+v", repaint)
+	}
+}
+
+func TestRunShellNameRejectsLookalikeWorktreeSession(t *testing.T) {
+	stateHome, _, _, _, _, socket := setupWorktreeCLI(t, "panes")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	t.Setenv("FAKE_TMUX_SESSION", "sidecar-ws-lookalike")
+
+	var out, errOut bytes.Buffer
+	if handled, code := Run([]string{"shell", "name"}, &out, &errOut); !handled || code != 1 {
+		t.Fatalf("name = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "does not match its Sidecar worktree identity") {
+		t.Fatalf("unexpected refusal: %q", errOut.String())
+	}
+}
+
 // setupShellCLI installs a fake tmux that reports a fixed session/socket and a
 // matching shells.json under an isolated XDG_STATE_HOME tree.
 func setupShellCLI(t *testing.T, displayName string) (stateHome, socket string) {
@@ -115,6 +189,37 @@ func setupShellCLI(t *testing.T, displayName string) (stateHome, socket string) 
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return stateHome, socket
+}
+
+func setupWorktreeCLI(t *testing.T, displayName string) (stateHome, stateDir, projectRoot, worktreeRoot, session, socket string) {
+	t.Helper()
+	stateHome = t.TempDir()
+	stateDir = filepath.Join(stateHome, "sidecar")
+	projectRoot = t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(projectRoot); err == nil {
+		projectRoot = resolved
+	}
+	worktreeRoot = projectRoot
+	cmd := exec.Command("git", "init", "-q", projectRoot)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s: %v", out, err)
+	}
+	if _, err := projectdir.WorktreeDirWithBase(stateDir, projectRoot, worktreeRoot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workspaceops.RenameWorktreeDisplayName(t.Context(), stateDir, projectRoot, worktreeRoot, displayName); err != nil {
+		t.Fatal(err)
+	}
+	session = workspaceops.WorktreeSessionName(worktreeRoot, "")
+	socket = filepath.Join(t.TempDir(), "tmux.sock")
+	binDir := t.TempDir()
+	tmux := filepath.Join(binDir, "tmux")
+	script := "#!/bin/sh\nprintf '%s\\t%s\\t%s\\n' \"${FAKE_TMUX_SESSION:-" + session + "}\" " + shellQuote(socket) + " " + shellQuote(worktreeRoot) + "\n"
+	if err := os.WriteFile(tmux, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return stateHome, stateDir, projectRoot, worktreeRoot, session, socket
 }
 
 // setupIsolatedCLI points state at a temp tree and clears TMUX so open

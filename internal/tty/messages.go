@@ -59,8 +59,11 @@ type PaneResizedMsg struct {
 // deferredResizeMsg re-runs a resize that arrived inside the debounce window.
 // It carries no dimensions: the model holds the size it owes the pane, so a
 // retry always asserts the newest one rather than a stale request.
+// Generation is the retry generation at arm time; CancelDeferredResize bumps
+// it so a leftover tick after a divider drop is a no-op.
 type deferredResizeMsg struct {
-	Scope MessageScope
+	Scope      MessageScope
+	Generation uint64
 }
 
 // CaptureResultMsg delivers async tmux capture results.

@@ -98,6 +98,7 @@ type Plugin struct {
 	discoveryAdapters map[string]bool
 	focused           bool
 	mouseHandler      *mouse.Handler
+	hoverDivider      bool
 
 	// Current view
 	view View

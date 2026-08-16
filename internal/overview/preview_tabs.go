@@ -216,9 +216,8 @@ func (m *Model) renderOutputPreview(width, height int) string {
 		}
 		canvas.Blit(leaf.Box, content)
 	}
-	focused := m.PreviewFocused() && ((m.preview.doc != nil && m.preview.doc.focused) || (m.preview.issue != nil && m.preview.issue.focused) || (m.preview.diff != nil && m.preview.diff.focused))
 	for _, divider := range layout.Dividers {
-		canvas.Blit(divider.Box, renderPreviewPaneDivider(divider, focused))
+		canvas.Blit(divider.Box, renderPreviewPaneDivider(divider, m.dividerHandleState(previewPaneDividerKind, divider.SplitID)))
 	}
 	return canvas.String()
 }

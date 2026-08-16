@@ -255,6 +255,7 @@ type Plugin struct {
 	fileOpConfirmDelete bool            // True when waiting for delete confirmation
 	fileOpButtonFocus   int             // Button focus: 0=input, 1=confirm, 2=cancel
 	fileOpButtonHover   int             // Button hover: 0=none, 1=confirm, 2=cancel
+	hoverDivider        bool            // Pointer is over the tree/preview handle
 
 	// Line jump state (vim-style :<number>)
 	lineJumpMode   bool

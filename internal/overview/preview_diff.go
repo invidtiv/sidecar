@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -286,7 +287,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := layoutPreviewDiffStrip(diff.tabs, box.W, focused).Row
+	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row, box.W, panelayout.Diff)
 	if contentHeight <= 0 {
 		return header
 	}
@@ -294,6 +295,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		body = view.Render(box.W, contentHeight, workspacediff.RenderOpts{
 			Truncate: func(s string, w int, _ string) string { return termpreview.TruncateANSI(s, w) },
+			Handle:   m.dividerHandleState(previewDiffDividerKind, 0),
 		})
 	}
 	return header + "\n" + body
@@ -330,7 +332,7 @@ func (m *Model) registerPreviewDiffPaneRegions(box termpreview.Box) {
 		previewDiffRegionKind,
 	)
 	focused := m.PreviewFocused() && m.preview.diff.focused
-	for _, tab := range layoutPreviewDiffStrip(m.preview.diff.tabs, diffBox.W, focused).Tabs {
+	for _, tab := range layoutPreviewDiffStrip(m.preview.diff.tabs, ui.ReserveHeaderClose(diffBox.W).TabsWidth, focused).Tabs {
 		m.workspacesMouse.HitMap.AddRect(
 			previewDiffTabKind,
 			diffBox.X+tab.Col, diffBox.Y, tab.Width, 1,

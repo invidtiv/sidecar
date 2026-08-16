@@ -309,8 +309,8 @@ func (p *Plugin) renderNormalPanes() string {
 		rightPane = styles.RenderPanel(previewContent, p.previewWidth, paneHeight, previewActive)
 	}
 
-	// Render visible divider between panes
-	divider := ui.RenderDivider(paneHeight)
+	dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == regionPaneDivider
+	divider := ui.RenderHandle(paneHeight, true, ui.HandleStateFrom(p.hoverDivider, dragging))
 
 	// Join panes horizontally with divider in between
 	panes := lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)

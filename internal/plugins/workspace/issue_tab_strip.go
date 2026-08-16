@@ -9,8 +9,8 @@ type issueTabHit struct {
 	Index  int
 }
 
-// layoutIssueTabStrip is the issue leaf's header: an end-truncated title strip
-// and nothing else. The same strip is what registerIssueTabRegions hit-tests.
+// layoutIssueTabStrip is the issue leaf's tab strip: an end-truncated title
+// strip. The same strip is what registerIssueTabRegions hit-tests.
 func layoutIssueTabStrip(issue *issuePane, width int, focused bool) issueview.TabStrip {
 	var group issueview.Tabs
 	if issue != nil {

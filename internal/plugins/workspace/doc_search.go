@@ -460,6 +460,20 @@ func (p *Plugin) handleDocSearchMouse(doc *docPane, msg tea.MouseMsg) tea.Cmd {
 	// list, which no modal in this app does.
 	if msg != nil {
 		pos := msg.Mouse()
+		// The header X sits above the search modal. It closes the whole leaf,
+		// including a finder-only pane that has no file yet.
+		if _, onClose := p.paneCloseAt(pos.X, pos.Y); onClose {
+			switch msg.(type) {
+			case tea.MouseClickMsg:
+				cmd, _ := p.clickPaneCloseAt(pos.X, pos.Y)
+				return cmd
+			case tea.MouseMotionMsg:
+				p.setPaneCloseHoverAt(pos.X, pos.Y)
+				return nil
+			default:
+				return nil
+			}
+		}
 		if !doc.boxContains(pos.X, pos.Y) {
 			if _, isClick := msg.(tea.MouseClickMsg); isClick {
 				return p.cancelDocSearch(doc)

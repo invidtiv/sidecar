@@ -62,6 +62,7 @@ type saveWorkspaceConfig struct {
 	Agents                []string              `json:"agents,omitempty"`
 	AgentStart            map[string]string     `json:"agentStart,omitempty"`
 	TmuxCaptureMaxBytes   *int                  `json:"tmuxCaptureMaxBytes,omitempty"`
+	ResizeDebounceMs      *int                  `json:"resizeDebounceMs,omitempty"`
 	AutoCreateShell       *bool                 `json:"autoCreateShell,omitempty"`
 	InteractiveExitKey    string                `json:"interactiveExitKey,omitempty"`
 	InteractiveAttachKey  string                `json:"interactiveAttachKey,omitempty"`
@@ -107,6 +108,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 				Agents:                cfg.Plugins.Workspace.Agents,
 				AgentStart:            cfg.Plugins.Workspace.AgentStart,
 				TmuxCaptureMaxBytes:   &cfg.Plugins.Workspace.TmuxCaptureMaxBytes,
+				ResizeDebounceMs:      &cfg.Plugins.Workspace.ResizeDebounceMs,
 				AutoCreateShell:       &cfg.Plugins.Workspace.AutoCreateShell,
 				InteractiveExitKey:    cfg.Plugins.Workspace.InteractiveExitKey,
 				InteractiveAttachKey:  cfg.Plugins.Workspace.InteractiveAttachKey,

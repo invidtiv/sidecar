@@ -138,7 +138,7 @@ func TestClickingATdIssueThenAFileStacksTheRightColumn(t *testing.T) {
 	// The lower document's tab header begins one row below this divider. The
 	// filename-click fallback must not consume the divider press.
 	p.renderListView(p.width, p.height)
-	layout, ok := LayoutPaneTree(p.paneRoot, Box{W: content.W, H: content.H}, paneTreeFloors(), p.paneFocus)
+	layout, ok := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
 	if !ok {
 		t.Fatal("stacked pane layout disappeared before divider drag")
 	}
@@ -149,7 +149,7 @@ func TestClickingATdIssueThenAFileStacksTheRightColumn(t *testing.T) {
 			break
 		}
 	}
-	x, y := content.X+rowDivider.Box.X+rowDivider.Box.W/2, content.Y+rowDivider.Box.Y
+	x, y := rowDivider.Box.X+rowDivider.Box.W/2, rowDivider.Box.Y
 	hit := p.mouseHandler.HitMap.Test(x, y)
 	if hit == nil || hit.ID != regionPaneTreeDivider || hit.Data != stack.ID {
 		t.Fatalf("stack divider at (%d,%d) resolves to %#v", x, y, hit)
@@ -304,11 +304,11 @@ func deliverLoads(t *testing.T, p *Plugin, cmd tea.Cmd) {
 // stacked document and issue, and only the boxes say that.
 func paneLeafBoxes(t *testing.T, p *Plugin) (map[PaneKind]Box, Box) {
 	t.Helper()
-	content, ok := p.previewContentBox()
+	peer, ok := p.previewPeerBox()
 	if !ok {
-		t.Fatal("preview content box is unplaced")
+		t.Fatal("preview peer box is unplaced")
 	}
-	layout, ok := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
+	layout, ok := LayoutPaneTree(p.paneRoot, peer, paneTreeFloors(), p.paneFocus)
 	if !ok || layout.Zoomed {
 		t.Fatalf("layout ok=%v zoomed=%v, want every leaf in a box of its own", ok, layout.Zoomed)
 	}
@@ -319,7 +319,7 @@ func paneLeafBoxes(t *testing.T, p *Plugin) (map[PaneKind]Box, Box) {
 		}
 		boxes[placement.Node.Kind] = placement.Box
 	}
-	return boxes, content
+	return boxes, peer
 }
 
 // TestClickingAFileThenATdIssueBuildsTheSteelThread walks the journey this work
@@ -340,10 +340,10 @@ func TestClickingAFileThenATdIssueBuildsTheSteelThread(t *testing.T) {
 		"superseded by td-9f8e7d",
 	}, "\n") + "\n")
 
-	// Where the journey starts: one terminal leaf holding the whole preview.
+	// Where the journey starts: one terminal leaf holding the whole preview peer.
 	boxes, content := paneLeafBoxes(t, p)
 	if len(boxes) != 1 || boxes[PaneTerminal] != content {
-		t.Fatalf("before the first click the terminal holds %#v, want the whole content box %#v",
+		t.Fatalf("before the first click the terminal holds %#v, want the whole peer box %#v",
 			boxes[PaneTerminal], content)
 	}
 

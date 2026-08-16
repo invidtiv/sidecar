@@ -799,7 +799,11 @@ func TestInteractiveURLBesideExistingDocKeepsTerminalOwnership(t *testing.T) {
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{Active: true, MouseReportingEnabled: true, PaneOnEntry: PanePreview}
 
-	if cmd := p.handleMouseClick(actionAt(10, 4)); cmd == nil {
+	surface := p.terminalSurfaceGeometry(false)
+	if !surface.OK {
+		t.Fatal("terminal surface is unplaced beside the document")
+	}
+	if cmd := p.handleMouseClick(actionAt(10, surface.Y)); cmd == nil {
 		t.Fatal("interactive URL did not activate")
 	}
 	if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||

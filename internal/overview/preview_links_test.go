@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -404,10 +405,11 @@ func TestGlobalIssuePreviewWheelKeyboardAndQClose(t *testing.T) {
 	if strings.Contains(ansi.Strip(view), "q close") {
 		t.Fatalf("issue header still has q close: %q", ansi.Strip(view))
 	}
-	for _, region := range m.workspacesMouse.HitMap.Regions() {
-		if region.ID == "global-preview-issue-close" {
-			t.Fatalf("issue still registered a close chip: %#v", region)
-		}
+	if !strings.Contains(ansi.Strip(view), ui.CloseButtonLabel) {
+		t.Fatalf("issue header has no close button: %q", ansi.Strip(view))
+	}
+	if previewCloseRegion(m, panelayout.Issue) == nil {
+		t.Fatal("issue pane has no close hit region")
 	}
 
 	var body mouse.Region

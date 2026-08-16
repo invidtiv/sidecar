@@ -87,8 +87,8 @@ func (p *Plugin) renderTwoPaneLayout(height int) string {
 	leftPane := styles.RenderPanel(listContent, p.listWidth, paneHeight, listActive)
 	rightPane := styles.RenderPanel(editorContent, editorWidth, paneHeight, editorActive)
 
-	// Render divider
-	divider := ui.RenderDivider(paneHeight)
+	dragging := p.mouseHandler != nil && p.mouseHandler.IsDragging() && p.mouseHandler.DragRegion() == regionDivider
+	divider := ui.RenderHandle(paneHeight, true, ui.HandleStateFrom(p.hoverDivider, dragging))
 
 	// Join panes horizontally
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)

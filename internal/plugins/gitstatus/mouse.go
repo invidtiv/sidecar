@@ -141,6 +141,10 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 	case mouse.ActionDragEnd:
 		return p.handleMouseDragEnd()
+
+	case mouse.ActionHover:
+		p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
+		return p, nil
 	}
 
 	return p, nil

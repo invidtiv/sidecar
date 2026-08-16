@@ -57,6 +57,9 @@ type workspaceTerminalTarget struct {
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// Hold must be on the models before a forwarded deferredResizeMsg can
+	// assert, and again after mouse handling so reconcile sees the drag state.
+	p.syncTerminalResizeHold()
 	// Whatever the last render's leaf sizing answered is dispatched here, the
 	// first update that has a runtime to dispatch it with.
 	cmds := p.takePaneSizeCmds()
@@ -90,6 +93,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if cmd := p.closeUnfocusedDocSearches(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	p.syncTerminalResizeHold()
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
 	return p, tea.Batch(cmds...)
@@ -102,8 +106,19 @@ func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	// tty.New treats an empty AttachKey as "use default". Honour the resolved
 	// empty chord so ctrl+] stays the pane's when full attach is off.
 	model.Config.AttachKey = config.AttachKey
+	model.SetResizeDebounce(p.resizeDebounce())
 	model.SetHooks(p.terminalHooks())
 	return model
+}
+
+func (p *Plugin) applyResizeDebounceToTerminals() {
+	d := p.resizeDebounce()
+	if p.primaryTerminal != nil {
+		p.primaryTerminal.SetResizeDebounce(d)
+	}
+	if p.panelTerminal != nil {
+		p.panelTerminal.SetResizeDebounce(d)
+	}
 }
 
 // terminalHooks is everything this surface owns about a live pane, said once, to

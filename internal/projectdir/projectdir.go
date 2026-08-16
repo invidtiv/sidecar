@@ -51,7 +51,13 @@ func Lookup(projectRoot string) (string, bool) {
 // without creating or migrating state. It is intended for read-only inventory
 // consumers such as diagnostics and the cross-project overview.
 func LookupWorktree(projectRoot, worktreePath string) (string, bool) {
-	projectDir, ok := Lookup(projectRoot)
+	return LookupWorktreeWithBase(config.StateDir(), projectRoot, worktreePath)
+}
+
+// LookupWorktreeWithBase is the read-only, testable form of LookupWorktree.
+// base is the Sidecar state directory containing projects/.
+func LookupWorktreeWithBase(base, projectRoot, worktreePath string) (string, bool) {
+	projectDir, ok := findByMeta(filepath.Join(base, "projects"), projectRoot)
 	if !ok {
 		return "", false
 	}

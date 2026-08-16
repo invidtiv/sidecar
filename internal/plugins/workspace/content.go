@@ -285,6 +285,7 @@ func (c *diffContent) View(render Render) string {
 				return s
 			},
 			PaintFile: c.p.paintFileFor(view),
+			Handle:    c.p.dividerHandleState(regionDiffTabDivider, 0),
 		})
 	}
 	return composePaneLeaf(
@@ -301,4 +302,94 @@ func composePaneLeaf(header, body string) string {
 		return body
 	}
 	return header + "\n" + body
+}
+
+// composeContentHeader is the tab strip plus the shared X that closes the
+// leaf. Tabs are already laid out in the reserved leftover width.
+func (p *Plugin) composeContentHeader(tabsRow string, width int, hovered bool) string {
+	return ui.ComposeHeaderClose(tabsRow, width, hovered)
+}
+
+// registerPaneCloseRegion puts the header X last so it wins the cells it
+// occupies over the tab strip and the leaf body.
+func (p *Plugin) registerPaneCloseRegion(leafID int, box Box) {
+	reserve := ui.ReserveHeaderClose(box.W)
+	if reserve.CloseW < 1 {
+		return
+	}
+	p.mouseHandler.HitMap.AddRect(regionPaneClose, box.X+reserve.CloseCol, box.Y, reserve.CloseW, 1, leafID)
+}
+
+// closeContentPane forgets the clicked content leaf. The X is close, not hide:
+// the split collapses and the remembered tab set goes with it.
+func (p *Plugin) closeContentPane(leafID int) tea.Cmd {
+	leaf := FindPane(p.paneRoot, leafID)
+	if leaf == nil || leaf.Split != nil {
+		return nil
+	}
+	switch leaf.Kind {
+	case PaneDoc:
+		return p.closeDocPaneAt(leafID)
+	case PaneIssue:
+		return p.closeIssuePane(leafID)
+	case PaneDiff:
+		return p.closeDiffPane(leafID)
+	default:
+		return nil
+	}
+}
+
+func (p *Plugin) closeDocPaneAt(leafID int) tea.Cmd {
+	p.closeDocInfo()
+	if !p.closeContentLeaf(leafID) {
+		return nil
+	}
+	p.hiddenPaneLayout = nil
+	p.activePane = PanePreview
+	p.saveSelectionState()
+	return p.resizeDocTerminalCmd()
+}
+
+// clickPaneCloseAt closes the content leaf whose header X contains (x, y).
+// It is checked before tab-row steal so a click on the button cannot become
+// a nearest-tab select.
+func (p *Plugin) clickPaneCloseAt(x, y int) (tea.Cmd, bool) {
+	leafID, ok := p.paneCloseAt(x, y)
+	if !ok {
+		return nil, false
+	}
+	return p.clickPaneClose(leafID), true
+}
+
+func (p *Plugin) clickPaneClose(data any) tea.Cmd {
+	leafID, ok := data.(int)
+	if !ok {
+		return nil
+	}
+	return p.closeContentPane(leafID)
+}
+
+func (p *Plugin) paneCloseAt(x, y int) (leafID int, ok bool) {
+	if p.mouseHandler == nil {
+		return 0, false
+	}
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionPaneClose {
+			continue
+		}
+		if y != region.Rect.Y || x < region.Rect.X || x >= region.Rect.X+region.Rect.W {
+			continue
+		}
+		leafID, ok = region.Data.(int)
+		return leafID, ok
+	}
+	return 0, false
+}
+
+func (p *Plugin) setPaneCloseHoverAt(x, y int) {
+	if leafID, ok := p.paneCloseAt(x, y); ok {
+		p.hoverPaneClose = leafID
+		return
+	}
+	p.hoverPaneClose = 0
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // issuePane is one td issue leaf's tab group. The pane tree points at this,
@@ -89,7 +90,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 		return tea.Batch(reopen, load)
 	}
 
-	content, placed := p.previewContentBox()
+	peer, placed := p.previewPeerBox()
 	if !placed {
 		return reopen
 	}
@@ -99,7 +100,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if trialFocus != id {
 		return reopen
 	}
-	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Issue", plan.Axis)
 		p.toastTime = time.Now()
 		return reopen
@@ -342,7 +343,8 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 		if region.ID != regionPaneLeaf {
 			continue
 		}
-		if x >= region.Rect.X && x < region.Rect.X+region.Rect.W && y == region.Rect.Y {
+		header := insetPanelChrome(region.Rect)
+		if x >= header.X && x < header.X+header.W && y == header.Y {
 			inIssueHeader = true
 			break
 		}
@@ -593,9 +595,9 @@ func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 	return p.resizeDocTerminalCmd()
 }
 
-// issuePaneHeaderRow is the issue leaf's header: the tab strip only.
+// issuePaneHeaderRow is the issue leaf's header: the tab strip plus the shared X.
 func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) string {
-	return layoutIssueTabStrip(issue, width, focused).Row
+	return p.composeContentHeader(layoutIssueTabStrip(issue, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, issue != nil && p.hoverPaneClose == issue.leafID)
 }
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
@@ -603,7 +605,7 @@ func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box)
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
-	for _, tab := range layoutIssueTabStrip(issue, box.W, p.paneFocus == leafID).Tabs {
+	for _, tab := range layoutIssueTabStrip(issue, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+tab.Col, box.Y, tab.Width, 1, issueTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }
@@ -628,7 +630,9 @@ func (p *Plugin) issueLeafAt(data any) (*issuePane, *PaneNode) {
 }
 
 func issueViewLocal(actionX, actionY int, box Box) (int, int) {
-	return actionX - box.X, actionY - box.Y - terminalHeaderRows
+	// regionPaneLeaf is the OUTER panel; the viewer lives in the inner box.
+	inner := insetPanelChrome(box)
+	return actionX - inner.X, actionY - inner.Y - terminalHeaderRows
 }
 
 func (p *Plugin) yankFocusedIssue(idOnly bool) tea.Cmd {

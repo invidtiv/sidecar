@@ -192,6 +192,7 @@ type Plugin struct {
 
 	// Mouse support
 	mouseHandler *mouse.Handler
+	hoverDivider bool
 
 	// Error modal state
 	errorModal       *modal.Modal

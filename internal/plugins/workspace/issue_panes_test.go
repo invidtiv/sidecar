@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // stubTd puts a td on PATH that answers `td show <id> -f json` from its
@@ -91,7 +92,7 @@ func steelThreadPaneTree(t *testing.T, p *Plugin, root string) {
 // cells must be if the compositor placed it.
 func issueLeafBox(t *testing.T, p *Plugin, width, height int) Box {
 	t.Helper()
-	leaves, _, _ := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, _, _ := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	for _, placement := range leaves {
 		if placement.Node.Kind == PaneIssue {
 			return placement.Box
@@ -111,7 +112,7 @@ func TestSteelThreadPaneTreeComposesTheIssueLeafsCells(t *testing.T) {
 	rows := composePaneTree(t, p, width, height)
 	assertPaneTreeGolden(t, rows, "pane-tree-steel-thread.txt")
 
-	leaves, dividers, fits := LayoutPanes(p.paneRoot, Box{W: width, H: height}, paneTreeFloors())
+	leaves, dividers, fits := LayoutPanes(p.paneRoot, p.previewLayoutBox(width, height), paneTreeFloors())
 	if !fits || len(leaves) != 3 || len(dividers) != 2 {
 		t.Fatalf("layout = %d leaves %d dividers fits=%v, want 3/2", len(leaves), len(dividers), fits)
 	}
@@ -121,15 +122,16 @@ func TestSteelThreadPaneTreeComposesTheIssueLeafsCells(t *testing.T) {
 	// The golden holds every cell, but only reading the issue's own box proves
 	// the issue landed in it rather than in the row above or the column beside.
 	box := issueLeafBox(t, p, width, height)
+	inner := insetPanelChrome(box)
 	within := func(row int) string {
-		cells := []rune(ansi.Strip(rows[box.Y+row]))
-		return string(cells[box.X : box.X+box.W])
+		cells := []rune(ansi.Strip(rows[inner.Y+row]))
+		return string(cells[inner.X : inner.X+inner.W])
 	}
 	if header := within(0); !strings.Contains(header, "td-1a2b3c") {
 		t.Fatalf("issue header row = %q, want the issue's identity", header)
 	}
-	body := make([]string, 0, box.H-1)
-	for row := 1; row < box.H; row++ {
+	body := make([]string, 0, inner.H-1)
+	for row := 1; row < inner.H; row++ {
 		body = append(body, within(row))
 	}
 	joined := strings.Join(body, "\n")
@@ -304,9 +306,9 @@ func TestUnresolvableIssueLeafCollapsesWithoutResettingTheLayout(t *testing.T) {
 	}
 }
 
-// The issue leaf answers the wheel over its own box. The header is only the
-// tab strip: there is no close chip and no in-header "q close".
-func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
+// The issue leaf answers the wheel over its own box. The header is the tab
+// strip plus the shared X; there is no in-header "q close".
+func TestIssuePaneAnswersTheWheelAndHasCloseButton(t *testing.T) {
 	stubTd(t)
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
@@ -314,13 +316,10 @@ func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
 
 	const width, height = 100, 24
 	rows := composePaneTree(t, p, width, height)
-	origin, ok := p.previewContentBox()
-	if !ok {
-		t.Fatal("preview content box is unplaced")
-	}
 	box := issueLeafBox(t, p, width, height)
+	inner := insetPanelChrome(box)
 
-	x, y := origin.X+box.X+1, origin.Y+box.Y+box.H-1
+	x, y := inner.X+1, inner.Y+inner.H-1
 	body := p.mouseHandler.HitMap.Test(x, y)
 	if body == nil || body.ID != regionPaneLeaf {
 		t.Fatalf("the issue leaf's body resolves to %#v, want %s", body, regionPaneLeaf)
@@ -331,14 +330,15 @@ func TestIssuePaneAnswersTheWheelAndHasNoCloseChip(t *testing.T) {
 		t.Fatal("a notch over the issue leaf scrolled nothing")
 	}
 
-	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID == "issue-close" {
-			t.Fatal("the issue leaf still registered a close chip")
-		}
+	if paneCloseRegion(p, 3) == nil {
+		t.Fatal("the issue leaf has no close button region")
 	}
-	header := strings.TrimSpace(ansi.Strip(rows[box.Y]))
-	if strings.Contains(header, "q close") || strings.Contains(header, "×") {
-		t.Fatalf("issue header still has chips/hints: %q", header)
+	header := strings.TrimSpace(ansi.Strip(rows[inner.Y]))
+	if strings.Contains(header, "q close") {
+		t.Fatalf("issue header still has q close: %q", header)
+	}
+	if !strings.Contains(header, ui.CloseButtonLabel) {
+		t.Fatalf("issue header has no close button: %q", header)
 	}
 }
 
@@ -382,8 +382,9 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			if pane == nil {
 				t.Fatal("rendered issue has no pane hit region")
 			}
-			x := pane.Rect.X + child.X
-			y := pane.Rect.Y + terminalHeaderRows + child.Y
+			inner := insetPanelChrome(pane.Rect)
+			x := inner.X + child.X
+			y := inner.Y + terminalHeaderRows + child.Y
 			resolved := p.mouseHandler.HitMap.Test(x, y)
 			if resolved == nil || resolved.ID != regionPaneLeaf {
 				t.Fatalf("raw child coordinate (%d,%d) resolves to %#v", x, y, resolved)
@@ -422,7 +423,7 @@ func TestIssueChildRawCoordinateClickLoadsTheChild(t *testing.T) {
 			_ = p.renderListView(width, p.height)
 			parentAtSameCell := false
 			for _, hit := range issue.view().Hits() {
-				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == pane.Rect.X+hit.X {
+				if hit.Kind == issueview.HitParent && hit.Y == child.Y && x == inner.X+hit.X {
 					parentAtSameCell = true
 					break
 				}
@@ -675,12 +676,12 @@ func TestIssueTabClickAndCycleSelectsWithoutDuplicating(t *testing.T) {
 	p.activePane = PanePreview
 
 	view := p.View(p.width, p.height)
-	origin, ok := p.previewContentBox()
+	peer, ok := p.previewPeerBox()
 	if !ok {
-		t.Fatal("preview content box is unplaced")
+		t.Fatal("preview peer box is unplaced")
 	}
-	box := issueLeafBox(t, p, origin.W, origin.H)
-	y := origin.Y + box.Y
+	box := issueLeafBox(t, p, peer.W, peer.H)
+	y := insetPanelChrome(box).Y
 	lines := strings.Split(view, "\n")
 	if y < 0 || y >= len(lines) {
 		t.Fatalf("issue header row %d is outside the view", y)

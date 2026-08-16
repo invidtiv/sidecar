@@ -57,6 +57,31 @@ func TestOverview_UIRequestPendingView(t *testing.T) {
 	}
 }
 
+func TestOverview_WorktreeRenameRepaintsSharedCatalog(t *testing.T) {
+	path := workspaceinventory.CanonicalPath(t.TempDir())
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "sidecar", Path: path}}
+	key := projectKey(m.projects[0])
+	workspace := workspaceinventory.Workspace{
+		ID: key + ":worktree:" + path, ProjectKey: key, ProjectName: "sidecar",
+		Kind: workspaceinventory.KindWorktree, Path: path, Key: path, Name: "panes",
+	}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{workspace}}
+	m.syncBoard()
+
+	m.handleUIRequest(uirequest.Request{
+		Action: uirequest.ActionRenameWorktree,
+		Origin: uirequest.Origin{WorkDir: path},
+		Target: uirequest.Target{Kind: uirequest.TargetKindWorktree, Value: "pane handle polish"},
+	})
+	if got := m.results[key].Workspaces[0].Name; got != "pane handle polish" {
+		t.Fatalf("result name = %q", got)
+	}
+	if got := m.catalog[workspace.ID].Name; got != "pane handle polish" {
+		t.Fatalf("catalog name = %q", got)
+	}
+}
+
 func TestOverview_PendingDiffLastWriteWins(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

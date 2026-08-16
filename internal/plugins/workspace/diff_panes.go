@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -98,7 +99,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 		return tea.Batch(reopen, load)
 	}
 
-	content, placed := p.previewContentBox()
+	peer, placed := p.previewPeerBox()
 	if !placed {
 		return reopen
 	}
@@ -108,7 +109,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 	if trialFocus != id {
 		return reopen
 	}
-	if _, _, fits := LayoutPanes(trial, content, paneTreeFloors()); !fits {
+	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.toastMessage = paneFitMessage("Diff", plan.Axis)
 		p.toastTime = time.Now()
 		return reopen
@@ -365,15 +366,32 @@ func (p *Plugin) closeActiveDiffTab() tea.Cmd {
 	return p.ensureActiveDiffTabLoaded(diff)
 }
 
-func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
-	if diff == nil {
-		return nil
-	}
+// takeDiffLeafFocus is the click path onto a Diff leaf: pane-tree focus plus
+// the same abandon / leave-interactive sequence a tab-chip click already uses.
+func (p *Plugin) takeDiffLeafFocus(leafID int) {
 	p.focusLeaf(leafID)
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}
+}
+
+// focusActiveDiffLeaf resolves the one live Diff leaf and takes focus the way
+// Tab / a tab-chip click does. Inner Diff hits carry a file index, not a leaf
+// id, so they use this rather than inventing a second focus writer.
+func (p *Plugin) focusActiveDiffLeaf() {
+	_, leaf := p.activeDiffPane()
+	if leaf == nil {
+		return
+	}
+	p.takeDiffLeafFocus(leaf.ID)
+}
+
+func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
+	if diff == nil {
+		return nil
+	}
+	p.takeDiffLeafFocus(leafID)
 	if idx == diff.tabs.Active {
 		return p.ensureActiveDiffTabLoaded(diff)
 	}
@@ -586,7 +604,7 @@ func (p *Plugin) closeDiffPane(leafID int) tea.Cmd {
 }
 
 func (p *Plugin) diffPaneHeaderRow(diff *diffPane, width int, focused bool) string {
-	return layoutDiffTabStrip(diff, width, focused).Row
+	return p.composeContentHeader(layoutDiffTabStrip(diff, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, diff != nil && p.hoverPaneClose == diff.leafID)
 }
 
 func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {
@@ -594,7 +612,7 @@ func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDiffTargetTabRegions(diff *diffPane, leafID int, box Box) {
-	for _, tab := range layoutDiffTabStrip(diff, box.W, p.paneFocus == leafID).Tabs {
+	for _, tab := range layoutDiffTabStrip(diff, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
 		p.mouseHandler.HitMap.AddRect(regionDiffTargetTab, box.X+tab.Col, box.Y, tab.Width, 1, diffTabHit{LeafID: leafID, Index: tab.Index})
 	}
 }
@@ -655,20 +673,11 @@ func (p *Plugin) resizeFocusedLeaf(delta int) tea.Cmd {
 }
 
 func (p *Plugin) paneLeafBox(leafID int) (Box, bool) {
-	content, ok := p.previewContentBox()
+	geom, ok := p.leafGeometryFor(leafID)
 	if !ok {
 		return Box{}, false
 	}
-	layout, laid := LayoutPaneTree(p.paneRoot, content, paneTreeFloors(), p.paneFocus)
-	if !laid {
-		return Box{}, false
-	}
-	for _, placement := range layout.Leaves {
-		if placement.Node != nil && placement.Node.ID == leafID {
-			return placement.Box, true
-		}
-	}
-	return Box{}, false
+	return geom.Inner, true
 }
 
 func (p *Plugin) activeDiffView() *workspacediff.View {
