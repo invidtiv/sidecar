@@ -17,6 +17,7 @@
 package shellliveness
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"strings"
@@ -127,7 +128,20 @@ func ProbeSession(session string) Verdict {
 	if strings.TrimSpace(session) == "" {
 		return Unknown
 	}
-	output, err := exec.Command("tmux", "list-sessions", "-F", "#{session_name}").Output()
+	// Every other tmux call in this codebase is bounded, and this one must be
+	// too. A wedged server that never answers would otherwise hang the caller's
+	// command forever: in the project plugin that command is the shell's whole
+	// poll chain, so the row would freeze; in the global browser the throttle
+	// would keep launching replacements that never exit. A deadline reached is
+	// simply no evidence, which is already the safe answer.
+	ctx, cancel := context.WithTimeout(context.Background(), ProbeTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	// Cancelling kills tmux, but Output() waits on the pipes, and a grandchild
+	// that inherited them keeps them open after its parent dies. Without a wait
+	// delay the deadline is advisory and the call can still hang forever.
+	cmd.WaitDelay = ProbeTimeout
+	output, err := cmd.Output()
 	if err != nil {
 		return Unknown
 	}
@@ -138,6 +152,11 @@ func ProbeSession(session string) Verdict {
 	}
 	return Gone
 }
+
+// ProbeTimeout bounds one probe. It is generous relative to a `list-sessions`
+// against a healthy server and short enough that a wedged one cannot pin a poll
+// chain for long.
+const ProbeTimeout = 2 * time.Second
 
 // DefaultProbeInterval throttles repeat probes for one session. The first
 // probe after a suspicion is immediate — that is the one that closes a shell
@@ -157,9 +176,10 @@ const DefaultProbeInterval = 15 * time.Second
 const DefaultConfirmations = 1
 
 type entry struct {
-	seenAlive bool
-	lastProbe time.Time
-	gone      int
+	seenAlive   bool
+	lastProbe   time.Time
+	gone        int
+	incarnation uint64
 }
 
 // Tracker remembers, per tmux session, what a surface has observed. It holds no
@@ -202,6 +222,24 @@ func (t *Tracker) Observe(name string) {
 	e := t.get(name)
 	e.seenAlive = true
 	e.gone = 0
+	// Every sighting starts a new incarnation. tmux names are reused — an
+	// offline row recreated with Enter comes back under exactly its old name —
+	// so a verdict taken before this sighting is about a session that no longer
+	// exists in the sense that matters, and Confirm must refuse it.
+	e.incarnation++
+}
+
+// Incarnation identifies the current life of a tmux name. A caller reads it
+// when it starts confirming a death and hands it back to Confirm, which is what
+// makes a verdict that was overtaken by a resurrection unusable rather than
+// merely late (td-6a4100).
+func (t *Tracker) Incarnation(name string) uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if e, ok := t.state[name]; ok {
+		return e.incarnation
+	}
+	return 0
 }
 
 // SeenAlive reports whether this tracker ever observed the session running.
@@ -217,11 +255,17 @@ func (t *Tracker) SeenAlive(name string) bool {
 	return ok && e.seenAlive
 }
 
-// ShouldProbe reports whether a probe for this session is due, and records the
-// attempt. It only throttles; deciding that a probe is warranted at all belongs
-// to the caller, which knows what it just saw.
+// ShouldProbe reports whether a probe for this session is due: the tracker must
+// have seen the session alive, and no probe may have run inside the throttle
+// window. It records the attempt.
+//
+// The liveness half of that gate is the whole safety property, so it lives here
+// rather than in each surface. The project plugin used to substitute "this row
+// has an Agent", which reads as liveness but is not: the nested sibling
+// projection synthesises an Agent for rows whose tmux server this instance
+// cannot even see. One gate, one meaning, both surfaces.
 func (t *Tracker) ShouldProbe(name string, now time.Time) bool {
-	if name == "" {
+	if name == "" || !t.SeenAlive(name) {
 		return false
 	}
 	interval := t.ProbeInterval
@@ -241,7 +285,7 @@ func (t *Tracker) ShouldProbe(name string, now time.Time) bool {
 // Confirm folds one probe verdict in and reports whether the shell should now
 // be closed. Alive and Unknown both clear the count, so a session that flickers
 // out of reach is never condemned by accumulation.
-func (t *Tracker) Confirm(name string, verdict Verdict) bool {
+func (t *Tracker) Confirm(name string, verdict Verdict, incarnation uint64) bool {
 	if name == "" {
 		return false
 	}
@@ -262,6 +306,13 @@ func (t *Tracker) Confirm(name string, verdict Verdict) bool {
 	if !e.seenAlive {
 		// Nothing this tracker watched ever ran under that name. Refuse to act
 		// on a probe alone.
+		return false
+	}
+	if incarnation != e.incarnation {
+		// The name has been seen alive since this verdict was taken, so the
+		// verdict is about a previous life. Closing on it would delete a shell
+		// that is running right now.
+		e.gone = 0
 		return false
 	}
 	e.gone++

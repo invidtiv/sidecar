@@ -56,6 +56,9 @@ type Workspace struct {
 	Live, Ambiguous bool
 	Presentation    agentstatus.Presentation
 	ObservedAt      time.Time
+	// CreatedAt is the shell manifest's record of when this identity was
+	// written. Empty for worktrees, which have no such record.
+	CreatedAt time.Time
 }
 
 // HasAgent reports durable or detected agent evidence. A worktree earns it
@@ -458,7 +461,7 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 
 	if len(shells) > 0 {
 		for _, shell := range shells {
-			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, ObservedAt: now}
+			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
 			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
 			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
 			result.Workspaces = append(result.Workspaces, workspace)
@@ -612,6 +615,10 @@ type shellDefinition struct {
 	DisplayName string `json:"displayName"`
 	AgentType   string `json:"agentType"`
 	Namespace   string `json:"namespace"`
+	// CreatedAt identifies which incarnation of a reused tmux name this row is.
+	// An auto-close carries it so the removal can be refused if the entry was
+	// replaced while the death was being confirmed (td-6a4100).
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type shellFile struct {

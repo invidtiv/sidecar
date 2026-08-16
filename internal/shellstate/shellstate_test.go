@@ -270,3 +270,62 @@ func TestAddAndRemoveAtPathPreserveSiblingDefinitions(t *testing.T) {
 		t.Fatalf("manifest after remove = %+v", m.Shells)
 	}
 }
+
+// An auto-close decides a shell is dead, then takes a moment to confirm it. A
+// shell can be created under the same tmux name inside that moment, and the
+// removal must not take the new entry with it (td-6a4100). The comparison runs
+// under the same exclusive lock the creating write takes, so these two
+// orderings are the only ones possible.
+func TestRemoveIfUnchangedAtPathRefusesAReplacedEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	observed := time.Now().UTC().Truncate(time.Second)
+	id := Identity{TmuxName: "one", Namespace: "/tmp/socket"}
+
+	// The entry on disk is newer than the one the caller looked at: the shell
+	// was recreated while the death was being confirmed.
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{
+		{TmuxName: "one", DisplayName: "One", Namespace: "/tmp/socket", CreatedAt: observed.Add(time.Second)},
+	}})
+	if err := RemoveIfUnchangedAtPath(path, id, observed); !errors.Is(err, ErrShellChanged) {
+		t.Fatalf("RemoveIfUnchangedAtPath() error = %v, want ErrShellChanged", err)
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 1 {
+		t.Fatal("a shell recreated during confirmation lost its manifest entry")
+	}
+
+	// The entry is the one that was observed, so the removal proceeds.
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{
+		{TmuxName: "one", DisplayName: "One", Namespace: "/tmp/socket", CreatedAt: observed},
+	}})
+	if err := RemoveIfUnchangedAtPath(path, id, observed); err != nil {
+		t.Fatalf("RemoveIfUnchangedAtPath() error = %v", err)
+	}
+	if m, err = readManifest(path); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 0 {
+		t.Fatalf("manifest after remove = %+v", m.Shells)
+	}
+}
+
+// A caller with no incarnation to check gets the unconditional behaviour.
+func TestRemoveIfUnchangedAtPathWithZeroTimeRemovesUnconditionally(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{
+		{TmuxName: "one", Namespace: "/tmp/socket", CreatedAt: time.Now().Add(time.Hour)},
+	}})
+	if err := RemoveIfUnchangedAtPath(path, Identity{TmuxName: "one", Namespace: "/tmp/socket"}, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 0 {
+		t.Fatalf("manifest after unconditional remove = %+v", m.Shells)
+	}
+}

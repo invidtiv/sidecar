@@ -142,6 +142,39 @@ func RemoveAtPath(path string, id Identity) error {
 	})
 }
 
+// ErrShellChanged reports that the entry on disk is not the one the caller
+// looked at, so the removal was refused.
+var ErrShellChanged = errors.New("shell entry was replaced since it was observed")
+
+// RemoveIfUnchangedAtPath forgets one shell only when the entry on disk is
+// still the incarnation the caller observed.
+//
+// An auto-close decides a shell is dead, and then takes a moment to confirm it.
+// A shell can be created under the same tmux name inside that moment — the
+// global browser's create writes a fresh definition — and deleting the entry
+// then would delete a live shell's identity (td-6a4100). The comparison runs
+// inside the same exclusive lock the creating write takes, so the two orderings
+// are the only two possible and both are correct: create-then-remove is
+// refused, remove-then-create leaves the new entry alone.
+//
+// A zero observedAt means the caller has no incarnation to check and accepts an
+// unconditional removal.
+func RemoveIfUnchangedAtPath(path string, id Identity, observedAt time.Time) error {
+	return mutateManifest(path, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				continue
+			}
+			if !observedAt.IsZero() && m.Shells[i].CreatedAt.After(observedAt) {
+				return ErrShellChanged
+			}
+			m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
+			return nil
+		}
+		return nil
+	})
+}
+
 func mutateManifest(path string, apply func(*manifest) error) error {
 	if err := config.AssertIsolatedPath(path); err != nil {
 		return &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}

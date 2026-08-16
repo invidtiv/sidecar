@@ -399,6 +399,9 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	for _, shell := range p.shells {
 		if sync.Running[shell.TmuxName] {
 			p.managedSessions[shell.TmuxName] = true
+			// Running comes from a successful tmux listing, so it is the same
+			// grade of evidence a successful capture gives (td-6a4100).
+			p.noteShellAlive(shell.TmuxName)
 		}
 	}
 

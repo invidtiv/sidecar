@@ -83,14 +83,14 @@ func TestTrackerClosesOnlyAConfirmedDeathOfAShellItSawAlive(t *testing.T) {
 	tracker := NewTracker()
 	const name = "sidecar-sh-demo-1"
 
-	if tracker.Confirm(name, Gone) {
+	if tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("a shell this tracker never saw running was closed on a probe alone")
 	}
 	tracker.Observe(name)
 	if !tracker.SeenAlive(name) {
 		t.Fatal("Observe did not record liveness")
 	}
-	if !tracker.Confirm(name, Gone) {
+	if !tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("a confirmed Gone verdict did not close the shell")
 	}
 }
@@ -100,11 +100,11 @@ func TestTrackerNeverClosesOnUnknown(t *testing.T) {
 	const name = "sidecar-sh-demo-1"
 	tracker.Observe(name)
 	for i := 0; i < 5; i++ {
-		if tracker.Confirm(name, Unknown) {
+		if tracker.Confirm(name, Unknown, tracker.Incarnation(name)) {
 			t.Fatalf("Unknown verdict %d closed the shell", i)
 		}
 	}
-	if tracker.Confirm(name, Alive) {
+	if tracker.Confirm(name, Alive, tracker.Incarnation(name)) {
 		t.Fatal("an Alive verdict closed the shell")
 	}
 }
@@ -115,14 +115,14 @@ func TestTrackerResetsSuspicionWhenTheSessionAnswers(t *testing.T) {
 	tracker := &Tracker{Confirmations: 2}
 	const name = "sidecar-sh-demo-1"
 	tracker.Observe(name)
-	if tracker.Confirm(name, Gone) {
+	if tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("closed after one Gone with two confirmations required")
 	}
 	tracker.Observe(name)
-	if tracker.Confirm(name, Gone) {
+	if tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("an intervening Alive observation did not clear the count")
 	}
-	if !tracker.Confirm(name, Gone) {
+	if !tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("two consecutive Gone verdicts did not close the shell")
 	}
 }
@@ -131,6 +131,7 @@ func TestTrackerThrottlesRepeatProbesButNeverTheFirst(t *testing.T) {
 	tracker := &Tracker{ProbeInterval: time.Minute}
 	const name = "sidecar-sh-demo-1"
 	start := time.Unix(1000, 0)
+	tracker.Observe(name)
 
 	if !tracker.ShouldProbe(name, start) {
 		t.Fatal("the first suspicion did not probe; a shell that just exited must close now")
@@ -151,7 +152,45 @@ func TestForgetLetsAReusedNameStartClean(t *testing.T) {
 	if tracker.SeenAlive(name) {
 		t.Fatal("Forget left liveness behind")
 	}
-	if tracker.Confirm(name, Gone) {
+	if tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
 		t.Fatal("a forgotten name closed on a probe alone")
+	}
+}
+
+// tmux names are reused. Pressing Enter on an offline row recreates the session
+// under exactly its old name, and a verdict taken before that must not be
+// allowed to delete the shell that came back (td-6a4100).
+func TestVerdictAboutAPreviousLifeIsRefused(t *testing.T) {
+	tracker := NewTracker()
+	const name = "sidecar-sh-demo-1"
+	tracker.Observe(name)
+
+	// A probe starts here and reads the incarnation it is asking about.
+	inFlight := tracker.Incarnation(name)
+
+	// While it runs, the session is recreated under the same name.
+	tracker.Observe(name)
+
+	if tracker.Confirm(name, Gone, inFlight) {
+		t.Fatal("a Gone verdict from before the resurrection closed a live shell")
+	}
+	// The current life can still be confirmed dead on its own evidence.
+	if !tracker.Confirm(name, Gone, tracker.Incarnation(name)) {
+		t.Fatal("the resurrected shell can no longer be closed when it does die")
+	}
+}
+
+// The liveness half of the gate lives in ShouldProbe so both surfaces get the
+// same rule; a surface must not be able to probe a name it never saw alive by
+// substituting its own notion of liveness.
+func TestShouldProbeRequiresAnObservation(t *testing.T) {
+	tracker := NewTracker()
+	const name = "sidecar-sh-demo-1"
+	if tracker.ShouldProbe(name, time.Unix(1000, 0)) {
+		t.Fatal("a never-observed shell was probed")
+	}
+	tracker.Observe(name)
+	if !tracker.ShouldProbe(name, time.Unix(1000, 0)) {
+		t.Fatal("an observed shell was not probed")
 	}
 }

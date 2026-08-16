@@ -875,6 +875,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+		// A create — including recreating an offline row under its old tmux
+		// name — starts a new life for that name. Recording it here is what
+		// makes any death verdict still in flight refuse to close the shell
+		// that was just brought back (td-6a4100).
+		p.noteShellAlive(msg.SessionName)
+
 		existingShell := p.findShellByName(msg.SessionName)
 		existingIdx := -1
 		for i, s := range p.shells {
