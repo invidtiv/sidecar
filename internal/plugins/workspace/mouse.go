@@ -224,6 +224,20 @@ func (p *Plugin) isModalViewMode() bool {
 	}
 }
 
+// isDiffBodyRegion reports the Diff inner hits that cover the leaf body and
+// therefore skip the regionPaneLeaf click arm. Tab chips are not included —
+// they already go through selectDiffTab.
+func isDiffBodyRegion(regionID string) bool {
+	switch regionID {
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
+		regionCommitFileBack, regionCommitFileItem, regionCommitFileDiffPane,
+		regionDiffTabPreviewFile, regionDiffTabFileListPane, regionDiffTabDivider:
+		return true
+	default:
+		return false
+	}
+}
+
 // isBackgroundRegion returns true for regions registered by renderListView()
 // that should not respond to mouse events when a modal is open.
 func isBackgroundRegion(regionID string) bool {
@@ -823,6 +837,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	}
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
+	}
+
+	// Inner Diff regions win the hit test over regionPaneLeaf, so they must
+	// take pane-tree focus themselves or keys stay on the previous leaf.
+	if isDiffBodyRegion(action.Region.ID) {
+		p.focusActiveDiffLeaf()
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel

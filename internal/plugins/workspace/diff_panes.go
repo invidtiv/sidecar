@@ -366,15 +366,32 @@ func (p *Plugin) closeActiveDiffTab() tea.Cmd {
 	return p.ensureActiveDiffTabLoaded(diff)
 }
 
-func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
-	if diff == nil {
-		return nil
-	}
+// takeDiffLeafFocus is the click path onto a Diff leaf: pane-tree focus plus
+// the same abandon / leave-interactive sequence a tab-chip click already uses.
+func (p *Plugin) takeDiffLeafFocus(leafID int) {
 	p.focusLeaf(leafID)
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}
+}
+
+// focusActiveDiffLeaf resolves the one live Diff leaf and takes focus the way
+// Tab / a tab-chip click does. Inner Diff hits carry a file index, not a leaf
+// id, so they use this rather than inventing a second focus writer.
+func (p *Plugin) focusActiveDiffLeaf() {
+	_, leaf := p.activeDiffPane()
+	if leaf == nil {
+		return
+	}
+	p.takeDiffLeafFocus(leaf.ID)
+}
+
+func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
+	if diff == nil {
+		return nil
+	}
+	p.takeDiffLeafFocus(leafID)
 	if idx == diff.tabs.Active {
 		return p.ensureActiveDiffTabLoaded(diff)
 	}
