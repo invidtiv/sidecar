@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // The theme picker is one component with two homes: Appearance shows it as the
@@ -27,11 +28,10 @@ const (
 	regionThemeSearch = "config-theme-search"
 	regionThemeRow    = "config-theme-row-"
 	regionThemeGlobal = "config-theme-global"
-	// regionThemeMore covers the "↑ n more above" / "↓ n more below" lines. They
-	// are not controls, but they are part of the list as far as the wheel is
-	// concerned: the first notch pushes "more above" under the pointer, and a
-	// list that stops scrolling there scrolls exactly once.
-	regionThemeMore = "config-theme-more"
+	// regionThemeList is the bordered list as a whole, including its frame and
+	// scrollbar. The wheel answers anywhere over that box so a notch cannot
+	// fall through a divider or the track.
+	regionThemeList = "config-theme-list"
 )
 
 // themePicker is the picker's state. A page holds one.
@@ -154,32 +154,55 @@ func (p *themePicker) rowsBefore(index int) int {
 	return rows
 }
 
-// scrollBy moves the cursor by whole rows, which is what the mouse wheel asks
-// of the list. It reports whether anything moved. The window follows the
-// cursor, so a wheel notch can never scroll the selection out of sight.
+// maxScroll is the last scroll offset that still fills the window.
+func (p *themePicker) maxScroll() int {
+	return max(0, len(p.filtered)-p.rows)
+}
+
+// scrollWindow moves the visible window and keeps the cursor on the same
+// visual row inside it. That is what the wheel asks for: the list scrolls,
+// the highlight stays put, and the theme under it is the one previewed.
 //
 // One notch is three rows, and the preview it ends on is the only one worth
 // applying: previewing each row a flick passes over would recolour the whole
 // application three times for a gesture the user reads as one.
-func (p *themePicker) scrollBy(delta int) bool {
-	if delta == 0 {
+func (p *themePicker) scrollWindow(delta int) bool {
+	if delta == 0 || len(p.filtered) == 0 {
 		return false
 	}
-	step := 1
+	next := p.scroll + delta
+	if next < 0 {
+		next = 0
+	}
+	if maxScroll := p.maxScroll(); next > maxScroll {
+		next = maxScroll
+	}
+	if next == p.scroll {
+		return false
+	}
+	p.scroll = next
+	// The highlight stays at the top of the window so scrolling down and
+	// back up are the same motion, even when a library divider sits there.
+	p.cursor = p.scroll
+	p.skipSeparator(1)
+	if p.cursor >= p.scroll+p.rows {
+		p.cursor = min(p.scroll+p.rows-1, len(p.filtered)-1)
+		p.skipSeparator(-1)
+	}
+	p.preview()
+	return true
+}
+
+// atScrollBoundary reports that a wheel notch in the given direction cannot
+// move the window. delta is negative for up.
+func (p *themePicker) atScrollBoundary(delta int) bool {
+	if len(p.filtered) == 0 {
+		return true
+	}
 	if delta < 0 {
-		step, delta = -1, -delta
+		return p.scroll <= 0
 	}
-	moved := false
-	for i := 0; i < delta; i++ {
-		if !p.step(step) {
-			break
-		}
-		moved = true
-	}
-	if moved {
-		p.preview()
-	}
-	return moved
+	return p.scroll >= p.maxScroll()
 }
 
 // selected is the entry under the picker's cursor.
@@ -292,8 +315,9 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 		return
 	}
 
-	// The list. Only the visible window is declared, so the keyboard can only
-	// reach a row that is on screen; the picker owns movement inside it.
+	// The list is a boxed window with its own scrollbar. Only the visible
+	// window is declared, so the keyboard can only reach a row that is on
+	// screen; the picker owns movement inside it.
 	//
 	// Because the picker owns movement, it owns the cursor while the cursor is
 	// in it: the row it has selected is the row the pane's cursor is on, and
@@ -302,38 +326,43 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 	// list that also holds dividers — is what made a click halfway down the
 	// list light up the rows above it as well.
 	b.claimCursor(regionThemeRow, p.rowsBefore(p.cursor))
-	if p.scroll > 0 {
-		b.moreLine(regionThemeMore, pad+mutedStyle().Render(fmt.Sprintf("↑ %d more above", p.scroll)))
+
+	listWidth := max(12, b.inner-indent)
+	rowWidth := max(8, listWidth-3) // border columns + scrollbar
+	listFocused := m.detailOwnsKeys() && strings.HasPrefix(m.focusedID, regionThemeRow)
+
+	type paintedRow struct {
+		id     string
+		offset int
 	}
+	var hits []paintedRow
+	body := make([]string, 0, p.rows)
 	end := min(len(p.filtered), p.scroll+p.rows)
 	for i := p.scroll; i < end; i++ {
 		entry := p.filtered[i]
+		offset := len(body)
 		if entry.IsSeparator {
-			// A divider is not a control, but it is part of the list under the
-			// wheel: the library divider sits in the middle of the window the
-			// page opens on, and a notch over it must not be dropped.
-			b.moreLine(regionThemeMore, pad+mutedStyle().Render("── "+entry.SeparatorText+" ──"))
+			body = append(body, padDisplay(mutedStyle().Render("── "+entry.SeparatorText+" ──"), rowWidth))
 			continue
 		}
 		index := i
 		id := fmt.Sprintf("%s%d", regionThemeRow, index)
-		b.row(id, "", func(m *Model) tea.Cmd {
-			picker := m.activePicker()
-			if picker == nil {
-				return nil
-			}
-			picker.cursorTo(index)
-			picker.preview()
-			if picker.selectEntry == nil {
-				return nil
-			}
-			return picker.selectEntry(m, picker.selected())
-		}, func(state State) string {
-			return themeRow(entry, p.current, b.inner-indent, state, pad)
+		state := b.declare(id, "", true, func(m *Model) tea.Cmd {
+			return m.clickThemeRow(index)
 		})
+		body = append(body, themeRow(entry, p.current, rowWidth, state))
+		hits = append(hits, paintedRow{id: id, offset: offset})
 	}
-	if remaining := len(p.filtered) - end; remaining > 0 {
-		b.moreLine(regionThemeMore, pad+mutedStyle().Render(fmt.Sprintf("↓ %d more below", remaining)))
+	for len(body) < p.rows {
+		body = append(body, strings.Repeat(" ", rowWidth))
+	}
+
+	box := themeListBox(body, p.scroll, len(p.filtered), p.rows, listWidth, listFocused || b.hovering(regionThemeList))
+	y = len(b.lines)
+	b.lines = append(b.lines, prefixLines(box, pad)...)
+	b.m.mouse.HitMap.AddRect(regionThemeList, b.originX+indent, 1+y, listWidth, len(box), nil)
+	for _, hit := range hits {
+		b.m.mouse.HitMap.AddRect(hit.id, b.originX+indent+1, 1+y+1+hit.offset, rowWidth, 1, nil)
 	}
 
 	if p.useGlobal != nil {
@@ -352,9 +381,81 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 	}
 }
 
+// clickThemeRow is what a mouse click on a painted theme means. On Appearance
+// it previews and waits for Enter to save: clicking used to write immediately,
+// after which Escape had no preview left to restore and closed Configuration
+// instead. The inline picker still commits the draft, because choosing is what
+// that disclosure is for.
+func (m *Model) clickThemeRow(index int) tea.Cmd {
+	picker := m.activePicker()
+	if picker == nil {
+		return nil
+	}
+	picker.cursorTo(index)
+	picker.preview()
+	if picker.inline && picker.selectEntry != nil {
+		return picker.selectEntry(m, picker.selected())
+	}
+	return nil
+}
+
+// themeListBox frames the visible window and hangs a scrollbar on its right
+// edge. The frame is what makes focus and scroll position obvious; it also
+// keeps the list's geometry stable so a "more above" line cannot jump the
+// rows out from under the pointer.
+func themeListBox(rows []string, scroll, total, visible, width int, focused bool) []string {
+	if width < 8 {
+		width = 8
+	}
+	inner := width - 2
+	rowWidth := max(1, inner-1)
+	fitted := make([]string, len(rows))
+	for i, row := range rows {
+		if ansi.StringWidth(row) > rowWidth {
+			fitted[i] = ansi.Truncate(row, rowWidth, "…")
+		} else {
+			fitted[i] = padDisplay(row, rowWidth)
+		}
+	}
+	bar := strings.Split(ui.RenderScrollbar(ui.ScrollbarParams{
+		TotalItems:   total,
+		ScrollOffset: scroll,
+		VisibleItems: visible,
+		TrackHeight:  len(fitted),
+	}), "\n")
+	body := make([]string, len(fitted))
+	for i, row := range fitted {
+		track := " "
+		if i < len(bar) {
+			track = bar[i]
+		}
+		body[i] = row + track
+	}
+	fg := styles.BorderNormal
+	if focused {
+		fg = styles.BorderActive
+	}
+	boxed := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(fg).
+		Render(strings.Join(body, "\n"))
+	return strings.Split(boxed, "\n")
+}
+
+func prefixLines(lines []string, pad string) []string {
+	if pad == "" {
+		return lines
+	}
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = pad + line
+	}
+	return out
+}
+
 // themeRow paints one theme: its four-color swatch, its name, and what the list
 // has to say about it on the right.
-func themeRow(entry, current theme.Entry, width int, state State, pad string) string {
+func themeRow(entry, current theme.Entry, width int, state State) string {
 	name := entry.Name
 	nameStyle := lipgloss.NewStyle().Foreground(styles.TextSecondary)
 	switch {
@@ -369,16 +470,11 @@ func themeRow(entry, current theme.Entry, width int, state State, pad string) st
 	right := theme.Label(entry)
 	rightRendered := mutedStyle().Render(right)
 	if entry.Same(current) {
-		label := "CURRENT"
-		rightRendered = Badge(label, false)
+		rightRendered = Badge("CURRENT", false)
 	}
 
-	left := pad + "  " + Swatch(theme.Swatch(entry)) + "  " + nameStyle.Render(name)
-	gap := width + len(pad) - ansi.StringWidth(left) - ansi.StringWidth(rightRendered)
-	if gap < 1 {
-		gap = 1
-	}
-	return left + strings.Repeat(" ", gap) + rightRendered
+	left := " " + Swatch(theme.Swatch(entry)) + "  " + nameStyle.Render(name)
+	return HighlightRow(padRight(left, rightRendered, width), width, state)
 }
 
 // Swatch renders a theme's four identifying colors as solid blocks.

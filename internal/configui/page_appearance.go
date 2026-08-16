@@ -116,16 +116,14 @@ func (m *Model) buildAppearance(b *paneBuilder) {
 	b.text(SectionHeader("Interface"))
 	cfg := m.Config()
 
-	b.row(regionNerdFont, "", func(m *Model) tea.Cmd {
+	b.toggleRow(regionNerdFont, "Nerd Font icons", cfg.UI.NerdFontsEnabled, func(m *Model) tea.Cmd {
 		enabled := !m.Config().UI.NerdFontsEnabled
 		return SaveCmd(nerdFontNotice(enabled), func() error {
 			return config.SaveUI(func(ui *config.UIConfig) { ui.NerdFontsEnabled = enabled })
 		})
-	}, func(s State) string {
-		return FormRow("Nerd Font icons", Toggle(cfg.UI.NerdFontsEnabled, s), s)
 	})
 
-	b.row(regionClock, "", func(m *Model) tea.Cmd {
+	b.toggleRow(regionClock, "Header clock", cfg.UI.ShowClock, func(m *Model) tea.Cmd {
 		enabled := !m.Config().UI.ShowClock
 		notice := "Header clock off"
 		if enabled {
@@ -134,8 +132,6 @@ func (m *Model) buildAppearance(b *paneBuilder) {
 		return SaveCmd(notice, func() error {
 			return config.SaveUI(func(ui *config.UIConfig) { ui.ShowClock = enabled })
 		})
-	}, func(s State) string {
-		return FormRow("Header clock", Toggle(cfg.UI.ShowClock, s), s)
 	})
 
 	b.row(regionTitle, "", func(m *Model) tea.Cmd {

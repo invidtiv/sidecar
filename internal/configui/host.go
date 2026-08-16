@@ -133,12 +133,31 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 // selected.
 func (m *Model) syncHostState() {
 	m.clampProjectCursor()
-	if state := m.appearanceState; state != nil {
-		// A saved theme is the new baseline: Escape restores what is configured
-		// now, not what was configured before the save.
-		state.picker.current = m.appearanceCurrentEntry()
+	if state := m.appearanceState; state != nil && state.picker != nil {
+		saved := m.appearanceCurrentEntry()
+		state.title.SetValue(m.Config().UI.TerminalTitle)
+		// A theme save is the new baseline. Any other save — the clock, a
+		// nerd-font switch — must leave a live preview alone, or Escape would
+		// close Configuration instead of putting the previous theme back.
+		if state.picker.previewing && !state.picker.selected().Same(saved) {
+			state.picker.current = saved
+			state.picker.preview()
+			return
+		}
+		state.picker.current = saved
 		state.picker.previewing = false
 		state.picker.restore = theme.ResolveTheme(m.Config(), m.host.ProjectDir)
-		state.title.SetValue(m.Config().UI.TerminalTitle)
 	}
+}
+
+// PreviewingTheme reports that a picker has a live preview on screen. The host
+// must not apply the disk theme over it when some other setting is saved.
+func (m *Model) PreviewingTheme() bool {
+	if state := m.appearanceState; state != nil && state.picker != nil && state.picker.previewing {
+		return true
+	}
+	if form := m.addProject; form != nil && form.picker != nil && form.picker.previewing {
+		return true
+	}
+	return false
 }

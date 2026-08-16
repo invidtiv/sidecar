@@ -107,6 +107,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 		m.refreshRow(b, regionPanelGitRefresh, cfg.Plugins.GitStatus.RefreshInterval,
 			func(p *config.PluginsConfig, next time.Duration) { p.GitStatus.RefreshInterval = next })
 	}
+	b.blank()
 
 	// Files ----------------------------------------------------------------
 	m.panelRow(b, panelIDFiles, "Files", "", "Project browser and inline editing",
@@ -117,6 +118,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 				return config.SavePlugins(func(p *config.PluginsConfig) { p.FileBrowser.Enabled = enabled })
 			})
 		})
+	b.blank()
 
 	// td -------------------------------------------------------------------
 	m.panelRow(b, panelIDTD, "td", "", "Issues and task state from the current project",
@@ -139,6 +141,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 		m.refreshRow(b, regionPanelTDRefresh, cfg.Plugins.TDMonitor.RefreshInterval,
 			func(p *config.PluginsConfig, next time.Duration) { p.TDMonitor.RefreshInterval = next })
 	}
+	b.blank()
 
 	// Notes ----------------------------------------------------------------
 	notes := NotesIntegration()
@@ -150,6 +153,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 			m.noteRestart()
 			return saveFlagCmd(toggleNotice("Notes panel", enabled), notes.Flag, enabled)
 		})
+	b.blank()
 
 	// Conversations --------------------------------------------------------
 	m.panelRow(b, panelIDConversations, "Conversations", "", "Session history from supported agent harnesses",
@@ -159,6 +163,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 			func(p *config.PluginsConfig, value string) { p.Conversations.ClaudeDataDir = value })
 		b.help("Where Sidecar looks for agent session history.")
 	}
+	b.blank()
 
 	// Tasks ----------------------------------------------------------------
 	tasks := TasksIntegration()
@@ -175,11 +180,10 @@ func (m *Model) buildPanels(b *paneBuilder) {
 	b.lead("Sidecar decides which panels to build when it starts, so these switches apply on the next launch.")
 }
 
-// panelRow paints one surface as a single full-width control.
+// panelRow paints one surface as a two-line block. The ON/OFF pill is the
+// only click target that toggles; the rest of the row is for focus and hover.
 func (m *Model) panelRow(b *paneBuilder, id, title, badge, detail string, on bool, run func(*Model) tea.Cmd) {
-	b.row(regionPanel+id, "", run, func(s State) string {
-		return PanelRow(title, badge, detail, Toggle(on, s), b.inner, s)
-	})
+	b.panelToggle(regionPanel+id, title, badge, detail, on, run)
 }
 
 // refreshRow paints a poll-interval selector under its panel.

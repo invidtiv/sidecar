@@ -80,24 +80,20 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 	b.selectRowValue(regionDefaultAgent, "Default agent", m.defaultAgentLabel(), controlWidth,
 		m.defaultAgentOptions(), strings.TrimSpace(ws.DefaultAgentType), saveDefaultAgent)
 
-	b.row(regionAutoShell, "", func(m *Model) tea.Cmd {
+	b.toggleRow(regionAutoShell, "Start with a shell", ws.AutoCreateShell, func(m *Model) tea.Cmd {
 		enabled := !m.Config().Plugins.Workspace.AutoCreateShell
 		return SaveCmd(toggleNotice("Start with a shell", enabled), func() error {
 			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.AutoCreateShell = enabled })
 		})
-	}, func(s State) string {
-		return FormRow("Start with a shell", Toggle(ws.AutoCreateShell, s), s)
 	})
 
 	b.text(SectionHeader("Worktree defaults"))
 
-	b.row(regionDirPrefix, "", func(m *Model) tea.Cmd {
+	b.toggleRow(regionDirPrefix, "Repository prefix", ws.DirPrefix, func(m *Model) tea.Cmd {
 		enabled := !m.Config().Plugins.Workspace.DirPrefix
 		return SaveCmd(toggleNotice("Repository prefix", enabled), func() error {
 			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.DirPrefix = enabled })
 		})
-	}, func(s State) string {
-		return FormRow("Repository prefix", Toggle(ws.DirPrefix, s), s)
 	})
 	b.help("Names a new worktree directory after its repository, so it stays identifiable later.")
 
@@ -164,15 +160,13 @@ func (m *Model) overviewScope() string {
 // negative (hide*), the controls are positive: a user turns on what they want
 // to see.
 func (m *Model) sidebarToggle(b *paneBuilder, id, label string, on bool, set func(*config.SidebarDisplayConfig, bool)) {
-	b.row(id, "", func(m *Model) tea.Cmd {
+	b.toggleRow(id, label, on, func(m *Model) tea.Cmd {
 		enabled := !on
 		return SaveCmd(toggleNotice(label, enabled), func() error {
 			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) {
 				set(&ws.SidebarDisplay, enabled)
 			})
 		})
-	}, func(s State) string {
-		return FormRow(label, Toggle(on, s), s)
 	})
 }
 

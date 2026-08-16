@@ -45,6 +45,9 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if !ok {
 		return false
 	}
+	if m.configOpen() {
+		return m.config.WheelAtBoundary(wheel)
+	}
 	if m.inGlobalScope() {
 		// Mirror globalMouse's precedence exactly. Asking a surface that is not
 		// the visible tab would answer for something off screen: once Tasks

@@ -790,10 +790,23 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			if c.cursor {
 				m.detailFocus = true
 				m.focusControlIndex(index)
+			} else if base, ok := strings.CutSuffix(c.id, toggleSuffix); ok {
+				// A click on the pill still puts the keyboard on the row it
+				// belongs to, so the next Enter matches what just happened.
+				m.detailFocus = true
+				m.focusControlByID(base)
+			}
+			if c.clickless {
+				return nil
 			}
 			return m.runControl(index)
 		}
 		switch id := action.Region.ID; {
+		case id == regionThemeList:
+			// A click on the frame or the scrollbar is still a click on the
+			// list: put the keyboard there so Escape restores a preview.
+			m.detailFocus = true
+			m.focusPickerList()
 		case id == regionSearch:
 			m.focusSearch()
 		case strings.HasPrefix(id, regionNavPrefix):
@@ -812,19 +825,18 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 // behind an eight-row window — and a list that scrolls under the keyboard but
 // not under the wheel is a list that looks broken.
 //
-// A notch moves the selection rather than the window alone: the picker's window
-// follows its cursor, so scrolling the selection out of sight would only snap
-// back on the next keypress. Moving it is also what previews, which is what the
-// keyboard's ↑/↓ already do.
+// A notch moves the window and keeps the highlight on the same visual row, so
+// scrolling down and scrolling back up are the same gesture. The theme under
+// that row is previewed once, the way a keyboard step previews once.
 func (m *Model) scrollThemeList(action mouse.MouseAction) {
 	picker := m.activePicker()
 	if picker == nil || action.Region == nil {
 		return
 	}
-	if id := action.Region.ID; !strings.HasPrefix(id, regionThemeRow) && id != regionThemeMore {
+	if id := action.Region.ID; !strings.HasPrefix(id, regionThemeRow) && id != regionThemeList {
 		return
 	}
-	if !picker.scrollBy(action.Delta) {
+	if !picker.scrollWindow(action.Delta) {
 		return
 	}
 	if m.editing() {
@@ -833,9 +845,44 @@ func (m *Model) scrollThemeList(action mouse.MouseAction) {
 		// the field the user is still typing into.
 		return
 	}
-	// The wheel is a way of choosing, so the cursor goes where it scrolled to.
+	// The wheel chose a row; the keyboard should be on it if it was already
+	// in the list, and should move into the list if it was not.
 	m.detailFocus = true
 	m.focusPickerList()
+}
+
+// WheelAtBoundary reports that a wheel event over Configuration cannot change
+// anything currently under the pointer. The theme list and an open dropdown
+// are the surfaces that scroll; everything else is unknown.
+func (m *Model) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	region := m.mouse.HitMap.Test(msg.X, msg.Y)
+	delta := mouse.WheelScrollLines
+	if msg.Button == tea.MouseWheelUp {
+		delta = -mouse.WheelScrollLines
+	}
+	if m.dropdownOpen() {
+		if region == nil {
+			return true
+		}
+		id := region.ID
+		if !strings.HasPrefix(id, regionDropdownItem) && id != regionDropdownMore {
+			// A notch that misses the open list is swallowed rather than
+			// passed on, so it is always a no-op.
+			return true
+		}
+		return m.dropdown.atScrollBoundary(delta)
+	}
+	if region == nil {
+		return false
+	}
+	if id := region.ID; strings.HasPrefix(id, regionThemeRow) || id == regionThemeList {
+		picker := m.activePicker()
+		if picker == nil {
+			return false
+		}
+		return picker.atScrollBoundary(delta)
+	}
+	return false
 }
 
 // navigateFromSidebar opens a destination the user selected in the navigation

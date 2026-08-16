@@ -24,7 +24,11 @@ type control struct {
 	key string
 	// cursor marks a control the row cursor stops on.
 	cursor bool
-	run    func(*Model) tea.Cmd
+	// clickless means a mouse click focuses the control but does not run it.
+	// Enter still runs it. A settings row can be selected without flipping its
+	// toggle; the ON/OFF pill is a separate control that does run on click.
+	clickless bool
+	run       func(*Model) tea.Cmd
 }
 
 // paneBuilder accumulates a detail pane's lines and controls together.
@@ -131,15 +135,6 @@ func (b *paneBuilder) lead(text string) {
 // blank appends an empty line.
 func (b *paneBuilder) blank() { b.lines = append(b.lines, "") }
 
-// moreLine paints a line that is part of a list without being a control — the
-// theme list's "n more above" — and gives it a hit region, so the wheel over it
-// still belongs to the list.
-func (b *paneBuilder) moreLine(id, line string) {
-	y := len(b.lines)
-	b.lines = append(b.lines, line)
-	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, 1, nil)
-}
-
 // declare registers a control and returns the interaction state its renderer
 // should use. Declaration order is cursor order.
 //
@@ -150,7 +145,16 @@ func (b *paneBuilder) moreLine(id, line string) {
 // above the cursor answer "that is me" — which is what painted the whole top of
 // a page, and the whole top of the theme list, as selected.
 func (b *paneBuilder) declare(id, key string, cursor bool, run func(*Model) tea.Cmd) State {
-	b.m.controls = append(b.m.controls, control{id: id, key: key, cursor: cursor, run: run})
+	return b.declareControl(id, key, cursor, false, run)
+}
+
+// declareClickless registers a control the mouse can focus without activating.
+func (b *paneBuilder) declareClickless(id, key string, cursor bool, run func(*Model) tea.Cmd) State {
+	return b.declareControl(id, key, cursor, true, run)
+}
+
+func (b *paneBuilder) declareControl(id, key string, cursor, clickless bool, run func(*Model) tea.Cmd) State {
+	b.m.controls = append(b.m.controls, control{id: id, key: key, cursor: cursor, clickless: clickless, run: run})
 	state := State{Hovered: b.m.hoverID == id}
 	if cursor {
 		stop := b.stops
@@ -161,6 +165,17 @@ func (b *paneBuilder) declare(id, key string, cursor bool, run func(*Model) tea.
 		}
 	}
 	return state
+}
+
+// hovering reports that the pointer is over any of the given regions, so a row
+// and the pills that sit on it can share one hover highlight.
+func (b *paneBuilder) hovering(ids ...string) bool {
+	for _, id := range ids {
+		if b.m.hoverID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // claimCursor lets a list that keeps its own selection — the theme picker,
@@ -183,12 +198,65 @@ func (b *paneBuilder) claimCursor(prefix string, rowsAhead int) {
 // what makes a two-line repair row one control rather than a title with a
 // caption underneath it.
 func (b *paneBuilder) row(id, key string, run func(*Model) tea.Cmd, render func(State) string) {
-	state := b.declare(id, key, true, run)
+	b.paintRow(id, b.declare(id, key, true, run), render)
+}
+
+// focusRow is a row the mouse selects without activating. Enter still runs it.
+func (b *paneBuilder) focusRow(id, key string, run func(*Model) tea.Cmd, render func(State) string) {
+	b.paintRow(id, b.declareClickless(id, key, true, run), render)
+}
+
+func (b *paneBuilder) paintRow(id string, state State, render func(State) string) {
 	block := render(state)
 	lines := strings.Split(block, "\n")
 	y := len(b.lines)
 	b.lines = append(b.lines, lines...)
 	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, len(lines), nil)
+}
+
+const toggleSuffix = "-toggle"
+
+// toggleRow paints a labelled ON/OFF setting. The row is selectable; only the
+// pill itself toggles on click. Enter on the row still toggles.
+func (b *paneBuilder) toggleRow(id, label string, on bool, run func(*Model) tea.Cmd) {
+	toggleID := id + toggleSuffix
+	rowState := b.declareClickless(id, "", true, run)
+	toggleState := b.declare(toggleID, "", false, run)
+	if rowState.Focused {
+		toggleState.Focused = true
+		toggleState.Hovered = false
+	} else if b.hovering(toggleID) {
+		rowState.Hovered = true
+		toggleState.Hovered = true
+	}
+	pill := Toggle(on, toggleState)
+	y := len(b.lines)
+	b.lines = append(b.lines, FormRow(label, pill, rowState))
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, 1, nil)
+	b.m.mouse.HitMap.AddRect(toggleID, b.originX+ControlColumn, 1+y, ansi.StringWidth(pill), 1, nil)
+}
+
+// panelToggle paints a two-line surface switch the way Panels & Integrations
+// does: title and pill on the first line, muted detail underneath. Clicking
+// the row focuses it; clicking the pill toggles.
+func (b *paneBuilder) panelToggle(id, title, badge, detail string, on bool, run func(*Model) tea.Cmd) {
+	toggleID := id + toggleSuffix
+	rowState := b.declareClickless(id, "", true, run)
+	toggleState := b.declare(toggleID, "", false, run)
+	if rowState.Focused {
+		toggleState.Focused = true
+		toggleState.Hovered = false
+	} else if b.hovering(toggleID) {
+		rowState.Hovered = true
+		toggleState.Hovered = true
+	}
+	pill := Toggle(on, toggleState)
+	block := PanelRow(title, badge, detail, pill, b.inner, rowState)
+	lines := strings.Split(block, "\n")
+	y := len(b.lines)
+	b.lines = append(b.lines, lines...)
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, len(lines), nil)
+	b.m.mouse.HitMap.AddRect(toggleID, b.originX+b.inner-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
 }
 
 // buttonSpec is one pill in a button row.

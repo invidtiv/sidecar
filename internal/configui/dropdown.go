@@ -150,6 +150,20 @@ func (d *dropdownState) visibleRows() int {
 	return min(dropdownMaxVisible, max(1, len(d.options)))
 }
 
+func (d *dropdownState) maxScroll() int {
+	return max(0, len(d.options)-d.visibleRows())
+}
+
+func (d *dropdownState) atScrollBoundary(delta int) bool {
+	if len(d.options) == 0 {
+		return true
+	}
+	if delta < 0 {
+		return d.cursor <= 0
+	}
+	return d.cursor >= len(d.options)-1
+}
+
 // move steps the cursor, stopping at either end rather than wrapping: a list is
 // something to read, and a cursor that jumps from the bottom back to the top
 // makes the end of it hard to find.

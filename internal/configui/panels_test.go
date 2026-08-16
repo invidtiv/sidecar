@@ -374,6 +374,30 @@ func TestPanelInputsPersist(t *testing.T) {
 	}
 }
 
+// Clicking a panel row focuses it but does not toggle. Only the ON/OFF pill
+// itself writes the setting.
+func TestPanelRowClickDoesNotToggle(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"td": true}, nil)
+	m.View(160, 45)
+	before := loadSaved(t).Plugins.GitStatus.Enabled
+
+	row := regionFor(t, m, regionPanel+panelIDGit)
+	m.Mouse(tea.MouseClickMsg{X: row.Rect.X + 2, Y: row.Rect.Y, Button: tea.MouseLeft})
+	if loadSaved(t).Plugins.GitStatus.Enabled != before {
+		t.Fatal("clicking the Git row toggled the setting")
+	}
+
+	pill := regionFor(t, m, regionPanel+panelIDGit+toggleSuffix)
+	if cmd := func() tea.Cmd {
+		return m.Mouse(tea.MouseClickMsg{X: pill.Rect.X, Y: pill.Rect.Y, Button: tea.MouseLeft})
+	}(); cmd != nil {
+		reload(t, m, cmd())
+	}
+	if loadSaved(t).Plugins.GitStatus.Enabled == before {
+		t.Fatal("clicking the Git ON/OFF pill did not toggle the setting")
+	}
+}
+
 // runByID runs a control by region ID without asserting a save.
 func runByID(t *testing.T, m *Model, id string) tea.Cmd {
 	t.Helper()

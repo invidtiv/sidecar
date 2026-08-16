@@ -154,13 +154,11 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 	m.keyRow(b, regionPasteKey, "Paste", terminalKey(ws.InteractivePasteKey, defaults.PasteKey),
 		func(ws *config.WorkspacePluginConfig, value string) { ws.InteractivePasteKey = value })
 
-	b.row(regionCopyOnSelect, "", func(m *Model) tea.Cmd {
+	b.toggleRow(regionCopyOnSelect, "Copy on select", ws.CopyOnSelect, func(m *Model) tea.Cmd {
 		enabled := !m.Config().Plugins.Workspace.CopyOnSelect
 		return SaveCmd(toggleNotice("Copy on select", enabled), func() error {
 			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.CopyOnSelect = enabled })
 		})
-	}, func(s State) string {
-		return FormRow("Copy on select", Toggle(ws.CopyOnSelect, s), s)
 	})
 
 	b.text(SectionHeader("Capture"))

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll/scrolltest"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 )
@@ -696,6 +697,161 @@ func TestWheelPreviewsOncePerNotch(t *testing.T) {
 	// The notch left exactly the theme it landed on applied.
 	if got, want := styles.GetCurrentThemeName(), theme.ThemeConfig(picker.selected()).Name; got != want {
 		t.Fatalf("after one notch the applied theme is %q, want the row it landed on (%q)", got, want)
+	}
+}
+
+func TestThemeListWheelAtBoundary(t *testing.T) {
+	cfg := config.Default()
+	m, _ := configFixture(t, cfg)
+	m.Open(PageAppearance)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusPickerList()
+	m.View(160, 45)
+
+	region := regionFor(t, m, regionThemeList)
+	x, y := region.Rect.X+2, region.Rect.Y+2
+	if !m.WheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp}) {
+		t.Fatal("up at the top of the list was not a boundary")
+	}
+	if m.WheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown}) {
+		t.Fatal("down at the top of the list was treated as a boundary")
+	}
+
+	picker := m.activePicker()
+	picker.scroll = picker.maxScroll()
+	picker.cursor = picker.scroll
+	m.View(160, 45)
+	if !m.WheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown}) {
+		t.Fatal("down at the bottom of the list was not a boundary")
+	}
+	if m.WheelAtBoundary(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelUp}) {
+		t.Fatal("up at the bottom of the list was treated as a boundary")
+	}
+
+	picker.scroll = 0
+	picker.cursor = 0
+	m.View(160, 45)
+	scrolltest.Run(t, scrolltest.Tail{
+		Name: "theme list top",
+		X:    x,
+		Y:    y,
+		Down: false,
+		Dropped: func(msg tea.MouseWheelMsg) bool {
+			return m.WheelAtBoundary(msg)
+		},
+	})
+}
+
+func TestThemeListPaintsABorderAndScrollbar(t *testing.T) {
+	cfg := config.Default()
+	m, _ := configFixture(t, cfg)
+	m.Open(PageAppearance)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusPickerList()
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
+		t.Fatalf("the theme list has no frame:\n%s", view)
+	}
+	if regionFor(t, m, regionThemeList).Rect.H < appearancePickerRows {
+		t.Fatal("the theme list box is shorter than the visible window")
+	}
+}
+
+// Clicking a theme previews it. It must not save: a saved theme is the new
+// baseline, and Escape would then close Configuration instead of putting the
+// previous theme back.
+func TestAppearanceClickPreviewsWithoutSaving(t *testing.T) {
+	cfg := config.Default()
+	cfg.UI.Theme = config.ThemeConfig{Name: "default"}
+	m, _ := configFixture(t, cfg)
+	m.Open(PageAppearance)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusPickerList()
+	m.View(160, 45)
+
+	picker := m.activePicker()
+	theme.ApplyResolved(picker.restore)
+	original := styles.GetCurrentThemeName()
+	target := picker.scroll + 3
+	for target < len(picker.filtered) && picker.filtered[target].IsSeparator {
+		target++
+	}
+	if target >= len(picker.filtered) {
+		t.Fatal("no theme below the window to click")
+	}
+	clicked := regionFor(t, m, fmt.Sprintf("%s%d", regionThemeRow, target))
+	m.Mouse(tea.MouseClickMsg{X: clicked.Rect.X + 4, Y: clicked.Rect.Y, Button: tea.MouseLeft})
+	if !picker.previewing {
+		t.Fatal("clicking a theme did not preview")
+	}
+	if loadSaved(t).UI.Theme.Name != "default" {
+		t.Fatalf("clicking a theme wrote %q", loadSaved(t).UI.Theme.Name)
+	}
+	if !m.Escape() {
+		t.Fatal("Escape after a click closed Configuration instead of restoring the theme")
+	}
+	if styles.GetCurrentThemeName() != original {
+		t.Fatalf("Escape left %q applied, want %q", styles.GetCurrentThemeName(), original)
+	}
+}
+
+// A save that is not the theme — the clock, a nerd-font switch — must leave a
+// live preview in place. The host reloads after every save, and that used to
+// treat every reload as a theme commit.
+func TestAppearancePreviewSurvivesANonThemeSave(t *testing.T) {
+	cfg := config.Default()
+	cfg.UI.Theme = config.ThemeConfig{Name: "default"}
+	m, _ := configFixture(t, cfg)
+	m.Open(PageAppearance)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusPickerList()
+	m.View(160, 45)
+
+	picker := m.activePicker()
+	theme.ApplyResolved(picker.restore)
+	original := styles.GetCurrentThemeName()
+	previewToADifferentTheme(t, picker, original)
+	previewed := styles.GetCurrentThemeName()
+
+	saved := loadSaved(t)
+	saved.UI.ShowClock = true
+	m.SetHostState(HostState{Config: saved, ProjectDir: m.host.ProjectDir, ProjectPath: m.host.ProjectPath})
+
+	if !picker.previewing {
+		t.Fatal("a non-theme save cleared the preview")
+	}
+	if styles.GetCurrentThemeName() != previewed {
+		t.Fatalf("a non-theme save applied %q over the preview %q", styles.GetCurrentThemeName(), previewed)
+	}
+	if !m.Escape() {
+		t.Fatal("Escape after a non-theme save closed Configuration instead of restoring the theme")
+	}
+	if styles.GetCurrentThemeName() != original {
+		t.Fatalf("Escape left %q applied, want %q", styles.GetCurrentThemeName(), original)
+	}
+
+	// A theme save is still the new baseline: preview that theme, hand the
+	// host's post-save state back, and Escape should no longer owe a restore.
+	m.Open(PageAppearance)
+	m.View(160, 45)
+	m.detailFocus = true
+	m.focusPickerList()
+	m.View(160, 45)
+	picker = m.activePicker()
+	theme.ApplyResolved(picker.restore)
+	previewToADifferentTheme(t, picker, styles.GetCurrentThemeName())
+	committed := loadSaved(t)
+	committed.UI.Theme = theme.ThemeConfig(picker.selected())
+	m.SetHostState(HostState{Config: committed, ProjectDir: m.host.ProjectDir, ProjectPath: m.host.ProjectPath})
+	if picker.previewing {
+		t.Fatal("a theme save left the picker previewing")
+	}
+	if m.Escape() {
+		t.Fatal("Escape after a theme save still claimed a preview")
 	}
 }
 

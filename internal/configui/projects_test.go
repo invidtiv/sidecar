@@ -54,9 +54,14 @@ func TestProjectsPageListsAndDetails(t *testing.T) {
 	m.Open(PageProjects)
 	view := ansi.Strip(m.View(160, 45))
 
-	for _, want := range []string{"2 configured", "A  Add project", "alpha", "beta", "CURRENT", "Location", "Uses global", "Uses Sidecar default"} {
+	for _, want := range []string{"2 configured", "A  Add project", "alpha", "beta", "CURRENT"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("Projects is missing %q:\n%s", want, view)
+		}
+	}
+	for _, stale := range []string{"Location", "Uses global", "Uses Sidecar default", "Enter  Edit project"} {
+		if strings.Contains(view, stale) {
+			t.Fatalf("Projects still shows the old detail block %q:\n%s", stale, view)
 		}
 	}
 	if strings.Contains(view, "scan") {
@@ -481,6 +486,56 @@ func TestProjectListSelectsExactlyOneRow(t *testing.T) {
 		t.Fatalf("rows painted as selected = %v, want exactly [beta]:\n%s", selected, ansi.Strip(view))
 	}
 	if got := m.selectedProject(); got == nil || got.Path != second {
-		t.Fatalf("the detail block follows %#v, want the row the cursor is on", got)
+		t.Fatalf("the selection follows %#v, want the row the cursor is on", got)
+	}
+}
+
+// The project list is a table: names share a column, paths share a column and
+// keep their end, and the disconnected detail block under the list is gone.
+func TestProjectListIsATableWithoutADetailBlock(t *testing.T) {
+	m, first, _ := projectFixture(t)
+	m.Open(PageProjects)
+	m.View(160, 45)
+
+	alpha := regionFor(t, m, regionProjectRow+"0")
+	beta := regionFor(t, m, regionProjectRow+"1")
+	lines := strings.Split(m.View(160, 45), "\n")
+	if alpha.Rect.Y >= len(lines) || beta.Rect.Y >= len(lines) {
+		t.Fatal("project rows are not on the painted page")
+	}
+	pathCol := func(line, name string) int {
+		stripped := ansi.Strip(line)
+		start := strings.Index(stripped, name)
+		if start < 0 {
+			return -1
+		}
+		i := start + len(name)
+		for i < len(stripped) && stripped[i] == ' ' {
+			i++
+		}
+		return i
+	}
+	alphaLine, betaLine := lines[alpha.Rect.Y], lines[beta.Rect.Y]
+	alphaPath, betaPath := pathCol(alphaLine, "alpha"), pathCol(betaLine, "beta")
+	if alphaPath < 0 || betaPath < 0 {
+		t.Fatalf("rows lost their names:\n%s\n%s", ansi.Strip(alphaLine), ansi.Strip(betaLine))
+	}
+	if alphaPath != betaPath {
+		t.Fatalf("paths are not left-aligned: alpha@%d beta@%d\n%s\n%s", alphaPath, betaPath, ansi.Strip(alphaLine), ansi.Strip(betaLine))
+	}
+	if !strings.Contains(ansi.Strip(alphaLine), first[len(first)-4:]) {
+		t.Fatalf("alpha's path did not keep its end:\n%s", ansi.Strip(alphaLine))
+	}
+	if strings.HasSuffix(strings.TrimRight(ansi.Strip(alphaLine), " "), "…") {
+		t.Fatalf("the row was clipped by the pane instead of fitting the table:\n%s", ansi.Strip(alphaLine))
+	}
+
+	// Hover reveals the actions for that row, and a click on Edit opens it.
+	m.hoverID = regionProjectRow + "0"
+	m.View(160, 45)
+	edit := regionFor(t, m, regionProjectEdit+"-0")
+	m.Mouse(tea.MouseClickMsg{X: edit.Rect.X + 1, Y: edit.Rect.Y, Button: tea.MouseLeft})
+	if !m.Route().IsChild() || m.addProject == nil || !m.addProject.edit {
+		t.Fatalf("Edit Project did not open the form: %#v", m.Route())
 	}
 }

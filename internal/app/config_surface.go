@@ -359,7 +359,11 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		// Nerd Font glyphs are read from one package-level flag at startup;
 		// assigning it here is all "applies immediately" means for it.
 		styles.PillTabsEnabled = cfg.UI.NerdFontsEnabled
-		theme.ApplyResolved(theme.ResolveTheme(cfg, m.ui.WorkDir))
+		// A live theme preview belongs to the picker. Re-applying the disk
+		// theme here would snap it back the moment any other setting saved.
+		if m.config == nil || !m.config.PreviewingTheme() {
+			theme.ApplyResolved(theme.ResolveTheme(cfg, m.ui.WorkDir))
+		}
 	}
 	if m.config != nil {
 		m.config.SetHostState(m.configHostState())

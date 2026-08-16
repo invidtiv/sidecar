@@ -99,6 +99,7 @@ func (m *Model) buildAdvanced(b *paneBuilder) {
 	b.text(SectionHeader("Feature previews"))
 	for _, item := range previews() {
 		m.previewRow(b, item)
+		b.blank()
 	}
 
 	b.text(SectionHeader("Performance"))
@@ -111,10 +112,18 @@ func (m *Model) buildAdvanced(b *paneBuilder) {
 	b.lead("Any setting that needs a reload is called out before it is saved.")
 }
 
-// previewRow paints one flag with its aligned toggle and its explanation.
+// previewRow paints one flag the way Panels paints a surface: title and the
+// same ON/OFF pill on the first line, explanation underneath. Only the pill
+// toggles on click.
 func (m *Model) previewRow(b *paneBuilder, item preview) {
 	enabled := m.flagEnabled(item.flag)
-	b.row(regionAdvancedFlag+item.flag, "", func(m *Model) tea.Cmd {
+	detail := item.help
+	if item.restart {
+		detail = item.help + " Read once when Sidecar starts, so a change takes effect after a restart."
+	} else if item.note != "" {
+		detail = item.help + " " + item.note
+	}
+	b.panelToggle(regionAdvancedFlag+item.flag, item.label, "", detail, enabled, func(m *Model) tea.Cmd {
 		next := !m.flagEnabled(item.flag)
 		// The restart requirement is stated at save time, next to the control
 		// that needs it, and only for the flags that genuinely need it.
@@ -122,15 +131,7 @@ func (m *Model) previewRow(b *paneBuilder, item preview) {
 			m.noteRestart()
 		}
 		return saveFlagCmd(toggleNotice(item.label, next), item.flag, next)
-	}, func(s State) string {
-		return FormRow(item.label, ToggleWidth(enabled, b.controlWidth(advancedControlWidth), s), s)
 	})
-	b.help(item.help)
-	if item.restart {
-		b.help("Read once when Sidecar starts, so a change takes effect after a restart.")
-	} else if item.note != "" {
-		b.help(item.note)
-	}
 }
 
 // captureRow paints the embedded terminal's capture limit. It is the same

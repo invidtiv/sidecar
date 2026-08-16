@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -305,7 +306,7 @@ func StatusRow(ok bool, label, detail, badge string, width int, state State) str
 			}
 			left += strings.Repeat(" ", pad) + mutedStyle().Render(detail)
 		}
-		return left
+		return HighlightRow(left, width, state)
 	}
 	rendered := Badge(badge, !ok)
 	pad := width - ansi.StringWidth(left) - ansi.StringWidth(rendered)
@@ -314,9 +315,9 @@ func StatusRow(ok bool, label, detail, badge string, width int, state State) str
 	}
 	row := left + strings.Repeat(" ", pad) + rendered
 	if detail == "" {
-		return row
+		return HighlightRow(row, width, state)
 	}
-	return row + "\n" + strings.Repeat(" ", RowIndent+2) + mutedStyle().Render(detail)
+	return HighlightBlock(row+"\n"+strings.Repeat(" ", RowIndent+2)+mutedStyle().Render(detail), width, state)
 }
 
 // BetaBadge marks an integration Sidecar is still shipping as a preview. It
@@ -344,17 +345,18 @@ func PanelRow(title, badge, detail, control string, width int, state State) stri
 	case state.Focused:
 		titleStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 	case state.Hovered:
-		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).Underline(true)
+		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
 	}
 	left := strings.Repeat(" ", RowIndent) + titleStyle.Render(title)
 	if badge != "" {
 		left += "  " + badge
 	}
 	first := padRight(left, control, width)
-	if detail == "" {
-		return first
+	block := first
+	if detail != "" {
+		block = first + "\n" + WrapAt(detail, width, RowIndent, Muted)
 	}
-	return first + "\n" + strings.Repeat(" ", RowIndent) + mutedStyle().Render(detail)
+	return HighlightBlock(block, width, state)
 }
 
 // Centered places already-styled content in the middle of the pane, for the
@@ -376,7 +378,7 @@ func RepairRow(badge, title, detail string, width int, state State) string {
 	case state.Focused:
 		titleStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 	case state.Hovered:
-		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).Underline(true)
+		titleStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
 	}
 	pill := Badge(badge, true)
 	first := " " + pill + "  " + titleStyle.Render(title)
@@ -384,9 +386,9 @@ func RepairRow(badge, title, detail string, width int, state State) string {
 		first += strings.Repeat(" ", pad)
 	}
 	if detail == "" {
-		return first
+		return HighlightRow(first, width, state)
 	}
-	return first + "\n" + strings.Repeat(" ", RowIndent+5) + mutedStyle().Render(detail)
+	return HighlightBlock(first+"\n"+strings.Repeat(" ", RowIndent+5)+mutedStyle().Render(detail), width, state)
 }
 
 // Warning states an observed problem in the repair route that fixes it.
@@ -455,11 +457,66 @@ func ListRow(text string, width int, state State) string {
 	case state.Hovered:
 		style = lipgloss.NewStyle().Foreground(styles.TextPrimary)
 	}
-	row := prefix + style.Render(text)
-	if pad := width - ansi.StringWidth(row); pad > 0 {
-		row += strings.Repeat(" ", pad)
+	return HighlightRow(prefix+style.Render(text), width, state)
+}
+
+// HighlightRow fills a list row so selection is the whole line, not just the
+// label. Focused and hovered rows keep their existing text colour and sit on a
+// darker surface, which is what makes the cursor readable on a dark theme.
+func HighlightRow(content string, width int, state State) string {
+	if width < 1 {
+		return content
 	}
-	return row
+	if !state.Focused && !state.Hovered {
+		return padDisplay(content, width)
+	}
+	return styles.FillBackground(content, width, rowFill(state))
+}
+
+// HighlightBlock applies HighlightRow to every line of a multi-line control.
+func HighlightBlock(content string, width int, state State) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = HighlightRow(line, width, state)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func rowFill(state State) color.Color {
+	if state.Focused {
+		return styles.CardSelectedBg
+	}
+	return styles.BgSecondary
+}
+
+// clampStart keeps the beginning of a string and ellipsizes the end.
+func clampStart(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	return ansi.Truncate(s, width, "…")
+}
+
+// clampEnd keeps the end of a string and ellipsizes the start — what a path
+// wants, so the filename stays visible.
+func clampEnd(s string, width int) string {
+	if width < 1 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	return ansi.TruncateLeft(s, width, "…")
+}
+
+func padDisplay(s string, width int) string {
+	if pad := width - ansi.StringWidth(s); pad > 0 {
+		return s + strings.Repeat(" ", pad)
+	}
+	return s
 }
 
 // padRight pushes a right-hand control to the pane's right edge.
