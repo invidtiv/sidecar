@@ -105,7 +105,7 @@ func RenderContent(host Host, node *panelayout.Node, inner Box, zoomed bool) str
 	return content.View(Render{
 		Focused: node != nil && host.Focus() == node.ID,
 		Zoomed:  zoomed,
-		Origin:  mouse.Rect{X: inner.X, Y: inner.Y, W: inner.W, H: inner.H},
+		Origin:  mouse.Rect(inner),
 	})
 }
 

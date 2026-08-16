@@ -239,12 +239,9 @@ func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) str
 	return header + "\n" + body
 }
 
-func (m *Model) registerPreviewIssueRegions(box termpreview.Box) {
+// registerPreviewIssueRegion covers the Issue leaf's INNER box.
+func (m *Model) registerPreviewIssueRegion(issueBox termpreview.Box) {
 	if m.preview.issue == nil {
-		return
-	}
-	issueBox, split := m.previewPaneBox(panelayout.Issue, box)
-	if !split {
 		return
 	}
 	m.workspacesMouse.HitMap.AddRect(
@@ -254,12 +251,8 @@ func (m *Model) registerPreviewIssueRegions(box termpreview.Box) {
 	)
 }
 
-func (m *Model) registerPreviewIssueTabRegions(box termpreview.Box) {
+func (m *Model) registerPreviewIssueTabRegions(issueBox termpreview.Box) {
 	if m.preview.issue == nil {
-		return
-	}
-	issueBox, ok := m.previewPaneBox(panelayout.Issue, box)
-	if !ok {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.issue.focused

@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/paneframe"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -693,12 +694,24 @@ func (m *Model) WorkspacesCursor() *tea.Cursor {
 	return tty.PlaceCursor(window.surface.X+x, window.surface.Y+y)
 }
 
-// previewBox is where the preview panel's content sits inside the tab. It is
-// the box the layout named, so the terminal is sized and the cursor placed
-// against exactly what WorkspacesView drew.
-func (m *Model) previewBox() (termpreview.Box, bool) {
+// previewPeerBox is the preview panel's OUTER rectangle inside the tab — the
+// peer of the list. It is the box the layout named, so the pane tree is placed,
+// the terminal sized, and the cursor put against exactly what WorkspacesView
+// drew. Multi-leaf layout starts here so each leaf owns its own chrome instead
+// of sharing one outer frame.
+func (m *Model) previewPeerBox() (termpreview.Box, bool) {
 	layout := m.workspacesLayout()
-	return layout.box, layout.previewDrawn
+	return layout.peer, layout.previewDrawn
+}
+
+// previewBox is the 1-leaf INNER box: Inset(previewPeerBox()). Multi-leaf has no
+// single inner canvas — callers read previewPeerBox and previewPaneBox instead.
+func (m *Model) previewBox() (termpreview.Box, bool) {
+	peer, ok := m.previewPeerBox()
+	if !ok {
+		return termpreview.Box{}, false
+	}
+	return paneframe.Inset(peer), true
 }
 
 // previewSurface is the terminal viewport inside that box: the box minus the

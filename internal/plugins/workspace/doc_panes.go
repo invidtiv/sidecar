@@ -1694,13 +1694,6 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	return view, true
 }
 
-// renderPaneLeafPanel draws one leaf's content in its INNER box and wraps the
-// OUTER box in this leaf's chrome, through the shared frame. placement.Box is
-// plugin-local OUTER.
-func (p *Plugin) renderPaneLeafPanel(placement Placement, zoomed bool) string {
-	return paneframe.ComposeLeaf(paneHost{p}, placement, zoomed)
-}
-
 // renderPaneLeaf draws one placed leaf's body, with no chrome around it, at an
 // explicit origin. placement.Box is the body's own rectangle.
 func (p *Plugin) renderPaneLeaf(placement Placement, origin Box, zoomed bool) string {

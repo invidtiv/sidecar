@@ -6,12 +6,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
-	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
-	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -189,37 +187,11 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 	})
 }
 
+// renderOutputPreview draws the terminal leaf's body. Placing and framing the
+// leaves is the shared frame's job — see renderPreviewPeer — so what is left
+// here is one content: the terminal that has always filled this box.
 func (m *Model) renderOutputPreview(width, height int) string {
-	box := termpreview.Box{W: width, H: height}
-	layout, ok := m.layoutPreviewPanes(box)
-	if !ok || len(layout.Leaves) == 0 {
-		return m.renderOutputTerminal(width, height)
-	}
-	canvas := ui.NewCanvas(width, height)
-	for _, leaf := range layout.Leaves {
-		var content string
-		switch leaf.Node.Kind {
-		case panelayout.Terminal:
-			content = m.renderOutputTerminal(leaf.Box.W, leaf.Box.H)
-		case panelayout.Document:
-			if m.preview.doc != nil {
-				content = m.renderPreviewDoc(m.preview.doc, leaf.Box)
-			}
-		case panelayout.Issue:
-			if m.preview.issue != nil {
-				content = m.renderPreviewIssue(m.preview.issue, leaf.Box)
-			}
-		case panelayout.Diff:
-			if m.preview.diff != nil {
-				content = m.renderPreviewDiff(m.preview.diff, leaf.Box)
-			}
-		}
-		canvas.Blit(leaf.Box, content)
-	}
-	for _, divider := range layout.Dividers {
-		canvas.Blit(divider.Box, renderPreviewPaneDivider(divider, m.dividerHandleState(previewPaneDividerKind, divider.SplitID)))
-	}
-	return canvas.String()
+	return m.renderOutputTerminal(width, height)
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {

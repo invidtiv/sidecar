@@ -116,6 +116,9 @@ type previewState struct {
 	paneNextID      int
 	paneDragSplitID int
 	paneCache       map[string]previewPaneCache
+	// paneSizeCmds holds geometry a content asserted from inside a render, where
+	// there is no runtime to dispatch it with. See paneHost.QueueSizeCmd.
+	paneSizeCmds []tea.Cmd
 
 	linkMemo previewLinkMemo
 }

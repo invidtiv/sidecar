@@ -27,7 +27,39 @@ Add drag-to-resize support for two-pane plugin layouts (sidebar + main content).
 | FileBrowser | `GetFileBrowserTreeWidth()` / `SetFileBrowserTreeWidth()` | `internal/plugins/filebrowser/mouse.go` |
 | GitStatus | `GetGitStatusSidebarWidth()` / `SetGitStatusSidebarWidth()` | `internal/plugins/gitstatus/mouse.go` |
 | Conversations | `GetConversationsSideWidth()` / `SetConversationsSideWidth()` | `internal/plugins/conversations/mouse.go` |
-| Workspace | `GetWorkspaceSidebarWidth()` / `SetWorkspaceSidebarWidth()` | `internal/plugins/workspace/view_list.go` |
+| Workspace (project) | `GetWorkspaceSidebarWidth()` / `SetWorkspaceSidebarWidth()` | `internal/plugins/workspace/view_list.go` |
+| Sessions (global workspace) | `GetWorkspaceSidebarWidth()` / `SetWorkspaceSidebarWidth()` | `internal/overview/workspaces.go` |
+
+## Windowing parity: project and global workspaces are one feature
+
+The project workspace (`internal/plugins/workspace`) and the global Workspaces
+browser shown as **Sessions** in the navbar (`internal/overview`) are two
+projections of the same windowing model. They are not independent surfaces that
+happen to look similar.
+
+**If a change affects panes, splits, drag handles, pane borders, focus chrome,
+or pane hit regions in one of them, it affects the other.** The rule is
+structural, not a habit to remember:
+
+- `internal/panelayout` owns pane-tree structure and geometry.
+- `internal/paneframe` owns presentation: chrome geometry (`Inset`, `Geometry`),
+  the leaf border states (`Chrome`, `WrapLeaf`), the drag handle
+  (`RenderDividerHandle`, `DividerHitBox`, `HandleStateFor`), the compositor
+  (`Compose`, `ComposeLeaf`, `RenderContent`), the chrome-aware floors
+  (`ChromeFloors`), and the one order hit regions are registered in
+  (`RegisterRegions`).
+- Each surface implements `paneframe.Host` and `paneframe.RegionSink` in exactly
+  one file: `internal/plugins/workspace/pane_host.go` and
+  `internal/overview/pane_host.go`.
+
+**Do not add a second compositor, a second border rule, or a second divider
+renderer.** If a behaviour belongs to windowing, it goes in `paneframe`; if it
+belongs to one surface's content, it goes in that surface's host file. Both
+surfaces then get it at once.
+
+Tests that hold this: `internal/paneframe/paneframe_test.go`,
+`internal/plugins/workspace/pane_peer_chrome_test.go`, and
+`internal/overview/pane_peer_chrome_test.go`.
 
 ## Implementation Steps
 
@@ -188,21 +220,19 @@ func (p *Plugin) renderTwoPane() string {
 
 ### Step 7: Render Visible Divider
 
-```go
-func (p *Plugin) renderDivider(height int) string {
-    dividerStyle := lipgloss.NewStyle().
-        Foreground(styles.BorderNormal).
-        MarginTop(1) // Aligns with pane content (below top border)
+Never hand-roll a divider. Use the shared handle so hover and drag colouring,
+the one-cell inset at each end, and the theme blend are the same everywhere:
 
-    var sb strings.Builder
-    for i := 0; i < height; i++ {
-        sb.WriteString("|")
-        if i < height-1 {
-            sb.WriteString("\n")
-        }
-    }
-    return dividerStyle.Render(sb.String())
-}
+```go
+divider := ui.RenderHandle(paneHeight, true, ui.HandleStateFrom(p.hoverDivider, dragging))
+```
+
+Inside a pane tree, go through the frame instead, which picks the axis and the
+per-split state for you:
+
+```go
+handle := paneframe.RenderDividerHandle(divider, host.HandleState(divider.SplitID))
+hit := paneframe.DividerHitBox(divider)
 ```
 
 ### Step 8: Add State Persistence
@@ -265,7 +295,10 @@ p.mouseHandler.HitMap.AddRect(regionPaneDivider, ...)  // HIGHEST priority (last
 
 ### Rule 4: Divider Hit Width
 
-Use `dividerHitWidth := 3` (wider than the visual 1-character divider) to make clicking easier.
+Use `dividerHitWidth := 3` (wider than the visual 1-character divider) to make
+clicking easier. Inside a pane tree, call `paneframe.DividerHitBox` rather than
+widening by hand: a row divider must widen only *upward*, or it masks the header
+row — tabs and close button — of the leaf stacked below it.
 
 ### Rule 5: Height for Hit Regions
 

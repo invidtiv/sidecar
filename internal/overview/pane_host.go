@@ -1,0 +1,180 @@
+package overview
+
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/ui"
+)
+
+// paneHost binds the global Workspaces browser to the shared frame. It is the
+// counterpart of the project plugin's paneHost, and the two are deliberately
+// the same shape: everything a user can see about windowing — per-leaf borders,
+// focus and interactive chrome, handle colours, the widened divider target, the
+// order hit regions are registered in — is decided in internal/paneframe, and
+// each surface only answers what is in its own leaves.
+//
+// A windowing change that lands in one of these two files and not the other is
+// the parity bug this seam exists to prevent.
+type paneHost struct{ m *Model }
+
+var _ paneframe.Host = paneHost{}
+
+func (h paneHost) Content(node *panelayout.Node) paneframe.Content { return h.m.paneContent(node) }
+
+func (h paneHost) Focus() int { return h.m.preview.paneFocus }
+
+func (h paneHost) HandleState(splitID int) ui.HandleState {
+	return h.m.dividerHandleState(previewPaneDividerKind, splitID)
+}
+
+// QueueSizeCmd holds a content's geometry assertion for the next update. No
+// content on this surface returns one today — the live pane is resized from
+// syncTerminalGeometry, on the state change that moved its box — but a render
+// has no runtime to dispatch one with, so one that appears is kept rather than
+// silently dropped.
+func (h paneHost) QueueSizeCmd(cmd tea.Cmd) {
+	h.m.preview.paneSizeCmds = append(h.m.preview.paneSizeCmds, cmd)
+}
+
+// Chrome is a reader of focus: interactive/active on the focused leaf, muted on
+// neighbours. Content bytes are not dimmed.
+func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
+	m := h.m
+	if node == nil || !m.previewOwnsChrome() || m.preview.paneFocus != node.ID {
+		return paneframe.ChromeIdle
+	}
+	if node.Kind == panelayout.Terminal && m.PreviewInteractive() {
+		return paneframe.ChromeInteractive
+	}
+	return paneframe.ChromeActive
+}
+
+// previewOwnsChrome reports that the preview side should draw its focused leaf
+// as focused. It is PreviewFocused, except when the preview has the tab to
+// itself: with no list beside it there is nothing for a muted border to
+// distinguish the panel from, and this surface has always framed that
+// arrangement as active.
+func (m *Model) previewOwnsChrome() bool {
+	if m.PreviewFocused() {
+		return true
+	}
+	return !m.sidebarVisible || m.preview.full
+}
+
+// takePaneSizeCmds empties the queue as it hands it over: a geometry assertion
+// dispatched on every update after the render that made it is a resize storm.
+func (m *Model) takePaneSizeCmds() []tea.Cmd {
+	cmds := m.preview.paneSizeCmds
+	m.preview.paneSizeCmds = nil
+	return cmds
+}
+
+// paneRegions is this surface's mouse vocabulary for the frame's region order.
+// The frame decides WHEN each target is registered; this decides what it is.
+type paneRegions struct{ m *Model }
+
+var _ paneframe.RegionSink = paneRegions{}
+
+// Leaf covers a whole content leaf, OUTER. The terminal leaf registers nothing
+// here: the preview region already covers the peer, and a leaf region drawn over
+// it would take presses the live pane owns.
+func (r paneRegions) Leaf(node *panelayout.Node, outer paneframe.Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	switch node.Kind {
+	case panelayout.Document:
+		r.m.registerPreviewDocRegion(paneframe.Inset(outer))
+	case panelayout.Issue:
+		r.m.registerPreviewIssueRegion(paneframe.Inset(outer))
+	case panelayout.Diff:
+		r.m.registerPreviewDiffRegion(paneframe.Inset(outer))
+	}
+}
+
+func (r paneRegions) Divider(splitID int, hit paneframe.Box) {
+	r.m.workspacesMouse.HitMap.AddRect(previewPaneDividerKind, hit.X, hit.Y, hit.W, hit.H, previewPaneDividerHit(splitID))
+}
+
+func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	switch node.Kind {
+	case panelayout.Document:
+		r.m.registerPreviewDocTabRegions(inner)
+	case panelayout.Issue:
+		r.m.registerPreviewIssueTabRegions(inner)
+	case panelayout.Diff:
+		r.m.registerPreviewDiffTabRegions(inner)
+	}
+}
+
+func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
+	if node == nil || node.Split != nil || node.Kind == panelayout.Terminal {
+		return
+	}
+	r.m.registerPreviewCloseRegion(node.Kind, inner)
+}
+
+// Body is the terminal leaf's action chips and the diff leaf's own list/hunk
+// divider and file rows — targets a content owns inside its own box, which have
+// to beat the tree divider and the leaf drawn under them.
+func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	switch node.Kind {
+	case panelayout.Terminal:
+		r.m.registerPreviewActionRegions(inner)
+	case panelayout.Diff:
+		r.m.registerPreviewDiffLeafHits(inner)
+	}
+}
+
+// previewPaneFloors is the INNER minimum each content needs. The shared frame
+// adds what a border costs, so this surface and the project plugin budget pane
+// chrome identically.
+func previewPaneFloors() panelayout.Floors {
+	return paneframe.ChromeFloors(panelayout.Floors{
+		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
+		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+	})
+}
+
+// renderPreviewPeer draws the preview panel's OUTER rectangle.
+//
+// A lone leaf keeps the single frame this surface has always drawn. A split tree
+// dissolves that frame and gives every leaf its own, because two leaves inside
+// one outer border cannot show which of them has focus and have no edge between
+// them to grab. This is the same branch the project workspace takes, and it is
+// what the two surfaces have to keep taking together.
+func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
+	layout, laid := m.layoutPreviewPanes(peer)
+	if !laid || len(layout.Leaves) == 0 {
+		// No tree to place: the preview is still one framed box, so a degenerate
+		// layout does not cost the panel its perimeter.
+		inner := paneframe.Inset(peer)
+		return paneframe.WrapLeaf(m.renderPreview(inner.W, inner.H), peer, m.lonePreviewChrome())
+	}
+	m.registerPreviewOutputRegions(peer)
+	if len(layout.Leaves) == 1 {
+		return paneframe.ComposeLeaf(paneHost{m}, layout.Leaves[0], layout.Zoomed)
+	}
+	return paneframe.Compose(paneHost{m}, layout, peer, peer.W, peer.H)
+}
+
+// lonePreviewChrome is the frame around a preview with no placeable tree. The
+// panel is the only thing on that side of the split, so it draws as focused
+// rather than as an unfocused neighbour of nothing.
+func (m *Model) lonePreviewChrome() paneframe.Chrome {
+	if m.PreviewInteractive() {
+		return paneframe.ChromeInteractive
+	}
+	return paneframe.ChromeActive
+}

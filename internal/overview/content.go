@@ -1,0 +1,163 @@
+package overview
+
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/termpreview"
+)
+
+// Content, Size and Render are the shared frame's contract, aliased rather than
+// redeclared so a leaf on this surface and a leaf in the project workspace
+// plugin are the same type.
+type (
+	Content = paneframe.Content
+	Size    = paneframe.Size
+	Render  = paneframe.Render
+)
+
+// Content kinds are the registry keys the adapter is chosen by. They match the
+// project plugin's, because a leaf must not be written under one name on one
+// surface and restored as another on the other.
+const (
+	contentKindTerminal = "terminal"
+	contentKindDoc      = "doc"
+	contentKindIssue    = "issue"
+	contentKindDiff     = "diff"
+)
+
+// paneContent adapts a leaf to the content contract. It is the one place that
+// maps a leaf kind to an implementation, so nothing in the render path asks what
+// kind of leaf it is drawing. A leaf whose content is gone has none, and the
+// canvas leaves its box blank rather than letting a neighbour spread into it.
+func (m *Model) paneContent(node *panelayout.Node) Content {
+	if node == nil || node.Split != nil {
+		return nil
+	}
+	switch node.Kind {
+	case panelayout.Document:
+		if m.preview.doc == nil || m.preview.doc.view() == nil {
+			return nil
+		}
+		return &docContent{m: m, doc: m.preview.doc}
+	case panelayout.Issue:
+		if m.preview.issue == nil || m.preview.issue.view() == nil {
+			return nil
+		}
+		return &issueContent{m: m, issue: m.preview.issue}
+	case panelayout.Diff:
+		if m.preview.diff == nil || m.preview.diff.view() == nil {
+			return nil
+		}
+		return &diffContent{m: m, diff: m.preview.diff}
+	default:
+		return &terminalContent{m: m}
+	}
+}
+
+// terminalContent is the live pane leaf. Its header row is drawn from inside its
+// own body by the shared buffer renderer, exactly as on the project surface.
+type terminalContent struct {
+	m    *Model
+	size Size
+}
+
+func (c *terminalContent) Kind() string { return contentKindTerminal }
+
+// Title is the workspace this pane is showing, which is the name the list chose
+// it by.
+func (c *terminalContent) Title() string {
+	if workspace, ok := c.m.SelectedWorkspace(); ok {
+		return workspace.Name
+	}
+	return ""
+}
+
+// SetSize records the box and nothing else. The live pane is resized from
+// syncTerminalGeometry, on the state change that moved the box; a resize
+// returned here would put a SIGWINCH into the agent on every frame.
+func (c *terminalContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *terminalContent) View(Render) string {
+	return c.m.renderOutputPreview(c.size.Width, c.size.Height)
+}
+
+// docContent is the document leaf: the pane's own header row above a document
+// viewport.
+type docContent struct {
+	m    *Model
+	doc  *previewDoc
+	size Size
+}
+
+func (c *docContent) Kind() string { return contentKindDoc }
+
+func (c *docContent) Title() string {
+	if view := c.doc.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
+
+func (c *docContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *docContent) View(Render) string {
+	return c.m.renderPreviewDoc(c.doc, termpreview.Box{W: c.size.Width, H: c.size.Height})
+}
+
+// issueContent is the td issue leaf.
+type issueContent struct {
+	m     *Model
+	issue *previewIssue
+	size  Size
+}
+
+func (c *issueContent) Kind() string { return contentKindIssue }
+
+func (c *issueContent) Title() string {
+	if view := c.issue.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
+
+func (c *issueContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *issueContent) View(Render) string {
+	return c.m.renderPreviewIssue(c.issue, termpreview.Box{W: c.size.Width, H: c.size.Height})
+}
+
+// diffContent is the Diff leaf.
+type diffContent struct {
+	m    *Model
+	diff *previewDiff
+	size Size
+}
+
+func (c *diffContent) Kind() string { return contentKindDiff }
+
+func (c *diffContent) Title() string {
+	if view := c.diff.view(); view != nil {
+		return view.Target.TabLabel()
+	}
+	return "Diff"
+}
+
+func (c *diffContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *diffContent) View(Render) string {
+	return c.m.renderPreviewDiff(c.diff, termpreview.Box{W: c.size.Width, H: c.size.Height})
+}

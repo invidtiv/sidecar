@@ -69,6 +69,26 @@ Homebrew links or guarantee which `sidecar` wins PATH precedence.
 
 See .claude/skills/ui-features/SKILL.md
 
+## Project and global workspace parity
+
+The project workspace (`internal/plugins/workspace`) and the global Workspaces
+browser shown as **Sessions** in the navbar (`internal/overview`) are two
+projections of one model, not two surfaces that resemble each other. A UI
+change that lands in one and not the other is a bug.
+
+This is enforced by shared code, not by memory:
+
+- `internal/panelayout` — pane-tree structure and geometry.
+- `internal/paneframe` — presentation: chrome geometry, leaf border states, the
+  drag handle and its widened hit box, the compositor, chrome-aware floors, and
+  the order hit regions are registered in.
+
+Each surface binds to the frame in exactly one file — `pane_host.go` — which
+answers only what is in its own leaves. When adding anything to do with panes,
+splits, handles, borders, focus chrome, or pane hit regions, put it in
+`paneframe` and let both surfaces inherit it. Do not add a second compositor,
+border rule, or divider renderer. See `.claude/skills/drag-pane/SKILL.md`.
+
 See td-331dbf19 for diff paging implementation.
 
 ## Startup Latency

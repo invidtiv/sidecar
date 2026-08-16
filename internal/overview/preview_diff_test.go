@@ -28,8 +28,9 @@ func TestOverviewCompositorDiffArmIsNotBlank(t *testing.T) {
 	view.State = workspacediff.LoadStateClean
 	view.ApplySnapshot()
 
-	got := m.renderOutputPreview(previewWide, previewTall)
-	stripped := ansi.Strip(got)
+	// Through the surface's own view, because placing and framing the leaves is
+	// the shared frame's job now, not renderOutputPreview's.
+	stripped := ansi.Strip(m.WorkspacesView(previewWide, previewTall))
 	if !strings.Contains(stripped, "Working Tree") && !strings.Contains(stripped, "Loading diff") {
 		t.Fatalf("Diff compositor arm drew a blank box:\n%s", stripped)
 	}
