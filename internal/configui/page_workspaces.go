@@ -79,14 +79,14 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 	ws := cfg.Plugins.Workspace
 
 	b.text(PaneTitle(PageTitle(PageWorkspaces)), "")
-	b.text(Muted("Defaults used when you create a new workspace."))
+	b.lead("Defaults used when you create a new workspace.")
 
 	b.text(SectionHeader("New workspaces"))
 
 	b.row(regionDefaultAgent, "", func(m *Model) tea.Cmd {
 		return m.cycleDefaultAgent()
 	}, func(s State) string {
-		return FormRow("Default agent", SelectorWidth(m.defaultAgentLabel(), controlWidth, s), s)
+		return FormRow("Default agent", SelectorWidth(m.defaultAgentLabel(), b.controlWidth(controlWidth), s), s)
 	})
 
 	b.row(regionAutoShell, "", func(m *Model) tea.Cmd {
@@ -108,7 +108,7 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 	}, func(s State) string {
 		return FormRow("Repository prefix", Toggle(ws.DirPrefix, s), s)
 	})
-	b.text(HelpLine("Names a new worktree directory after its repository, so it stays identifiable later."))
+	b.help("Names a new worktree directory after its repository, so it stays identifiable later.")
 
 	b.row(regionOverviewScope, "", func(m *Model) tea.Cmd {
 		next := config.OverviewWorktreeScopeWorktree
@@ -124,14 +124,14 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 		if m.overviewScope() == config.OverviewWorktreeScopeWorktree {
 			label = overviewWorktreeLabel
 		}
-		return FormRow("Overview location", SelectorWidth(label, controlWidth, s), s)
+		return FormRow("Overview location", SelectorWidth(label, b.controlWidth(controlWidth), s), s)
 	})
 	if m.overviewScope() == config.OverviewWorktreeScopeWorktree {
-		b.text(HelpLine("When you select a worktree in Activity, scope Sidecar to that worktree"))
-		b.text(HelpLine("instead of its project's main checkout."))
+		b.help("When you select a worktree in Activity, scope Sidecar to that worktree")
+		b.help("instead of its project's main checkout.")
 	} else {
-		b.text(HelpLine("When you select a worktree in Activity, open its project's main"))
-		b.text(HelpLine("checkout instead of that worktree."))
+		b.help("When you select a worktree in Activity, open its project's main")
+		b.help("checkout instead of that worktree.")
 	}
 
 	b.text(SectionHeader("What the workspace sidebar displays"))
@@ -146,15 +146,15 @@ func (m *Model) buildWorkspaces(b *paneBuilder) {
 		func(d *config.SidebarDisplayConfig, on bool) { d.HideStats = !on })
 
 	b.text(SectionHeader("Worktree setup"))
-	b.text(IndentedMuted("Not configurable here yet. Edit plugins.workspace.worktreeSetup in your Sidecar config."))
-	b.text(IndentedMuted("Use copyEnvFiles and envFiles to copy startup files into each new worktree."))
-	b.text(IndentedMuted("Use runHook and hookPath to run a setup script after it is created."))
+	b.note("Not configurable here yet. Edit plugins.workspace.worktreeSetup in your Sidecar config.")
+	b.note("Use copyEnvFiles and envFiles to copy startup files into each new worktree.")
+	b.note("Use runHook and hookPath to run a setup script after it is created.")
 	b.blank()
-	b.text(IndentedMuted(worktreeSetupSummary(ws.WorktreeSetup)))
-	b.text(IndentedMuted("A setup hook is a script from the repository, so running one executes repository-provided code."))
+	b.note(worktreeSetupSummary(ws.WorktreeSetup))
+	b.note("A setup hook is a script from the repository, so running one executes repository-provided code.")
 
 	b.blank()
-	b.text(Muted("These are creation defaults: they apply to the next shell or worktree, not to existing ones."))
+	b.lead("These are creation defaults: they apply to the next shell or worktree, not to existing ones.")
 }
 
 // overviewScope is the configured Overview location, defaulted the way the

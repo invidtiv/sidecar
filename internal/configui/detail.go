@@ -57,9 +57,46 @@ func (b *paneBuilder) spacer(following int) {
 	}
 }
 
-// text appends plain lines.
+// text appends plain lines. A block that carries its own newlines — a section
+// header supplies the blank line above it, and several row renderers return a
+// caption under their first line — becomes one entry per painted row. Every hit
+// region and the pane's height clamp are measured from this index, so an entry
+// that painted two rows while counting as one moved every control below it out
+// from under the mouse.
 func (b *paneBuilder) text(lines ...string) {
-	b.lines = append(b.lines, lines...)
+	for _, line := range lines {
+		if strings.Contains(line, "\n") {
+			b.lines = append(b.lines, strings.Split(line, "\n")...)
+			continue
+		}
+		b.lines = append(b.lines, line)
+	}
+}
+
+// controlWidth is ControlWidth against this pane's writable width, so a page
+// declares the width it wants and the pane decides what it can give.
+func (b *paneBuilder) controlWidth(preferred int) int {
+	return ControlWidth(b.inner, preferred)
+}
+
+// help paints muted help aligned to the control column, wrapped to the pane
+// rather than cut off at its edge. Help that ends in an ellipsis two thirds of
+// the way through its sentence is not help, and a narrow terminal is exactly
+// where a user needs the sentence most.
+func (b *paneBuilder) help(text string) {
+	b.text(WrapAt(text, b.inner, ControlColumn, Muted))
+}
+
+// note paints muted prose indented with the section's rows, wrapped the same
+// way.
+func (b *paneBuilder) note(text string) {
+	b.text(WrapAt(text, b.inner, RowIndent, Muted))
+}
+
+// lead paints a page's introductory or closing prose at the pane's left edge,
+// wrapped rather than truncated.
+func (b *paneBuilder) lead(text string) {
+	b.text(WrapAt(text, b.inner, 0, Muted))
 }
 
 // blank appends an empty line.
@@ -240,6 +277,12 @@ func (m *Model) runControl(index int) tea.Cmd {
 // runShortcut runs the control a key belongs to, if any. Shortcuts stay live
 // whether or not the detail pane holds the cursor: the footer advertises them
 // for the page, not for a focus state the user cannot see.
+// The visible key in a control's label is the mockups' capital — "A  Add
+// project", "R  Recheck", "G  Use global theme" — while the registered shortcut
+// is the lowercase letter the footer advertises. Both must work: a surface that
+// prints A and answers only to a is lying about its own keyboard. An exact
+// match still wins, so a page could bind the two cases separately if it ever
+// needed to.
 func (m *Model) runShortcut(key string) (bool, tea.Cmd) {
 	for i, c := range m.controls {
 		if c.key != "" && c.key == key {
@@ -247,6 +290,16 @@ func (m *Model) runShortcut(key string) (bool, tea.Cmd) {
 				m.focusControlIndex(i)
 			}
 			return true, m.runControl(i)
+		}
+	}
+	if lowered := strings.ToLower(key); lowered != key {
+		for i, c := range m.controls {
+			if c.key != "" && c.key == lowered {
+				if c.cursor {
+					m.focusControlIndex(i)
+				}
+				return true, m.runControl(i)
+			}
 		}
 	}
 	return false, nil

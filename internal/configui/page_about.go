@@ -130,20 +130,20 @@ func (m *Model) buildAbout(b *paneBuilder) {
 	if strings.TrimSpace(versionText) == "" {
 		versionText = "unknown"
 	}
-	b.text(FormRow("Version", StaticField(versionText, aboutControlWidth, State{}), State{}))
+	b.text(FormRow("Version", StaticField(versionText, b.controlWidth(aboutControlWidth), State{}), State{}))
 	if revision := buildRevision(); revision != "" && !strings.Contains(versionText, revision) {
-		b.text(HelpLine("Built from " + revision + "."))
+		b.help("Built from " + revision + ".")
 	}
 
-	b.text(FormRow("Installed with", StaticField(m.installLabel(), aboutControlWidth, State{}), State{}))
+	b.text(FormRow("Installed with", StaticField(m.installLabel(), b.controlWidth(aboutControlWidth), State{}), State{}))
 	if state.loaded && state.install.Detail != "" {
-		b.text(HelpLine(state.install.Detail))
+		b.help(state.install.Detail)
 	}
 
 	// No update channel row: Sidecar has no channel concept, and a selector
 	// that could only ever say "Stable" would be a control over nothing.
 	update := m.host.Update
-	b.text(FormRow("Update status", StaticField(updateStatusLabel(update), aboutControlWidth, State{}), State{}))
+	b.text(FormRow("Update status", StaticField(updateStatusLabel(update), b.controlWidth(aboutControlWidth), State{}), State{}))
 
 	b.blank()
 	if update.Available {
@@ -157,7 +157,7 @@ func (m *Model) buildAbout(b *paneBuilder) {
 			}},
 		)
 		b.blank()
-		b.text(IndentedMuted("Release details and confirmation open in Sidecar's existing updater."))
+		b.note("Release details and confirmation open in Sidecar's existing updater.")
 	} else {
 		b.buttons(
 			buttonSpec{id: regionAboutRecheck, key: "r", label: "R  Check for updates", run: func(m *Model) tea.Cmd {
@@ -175,7 +175,7 @@ func (m *Model) buildAbout(b *paneBuilder) {
 			return func() tea.Msg { return OpenURLMsg{URL: DocsURL} }
 		}},
 	)
-	b.text(IndentedMuted("Diagnostics shows installation details when something needs attention."))
+	b.note("Diagnostics shows installation details when something needs attention.")
 
 	// The signature sits at the bottom of the pane, out of the way of the
 	// settings, and is dropped entirely on a pane too short to hold both.

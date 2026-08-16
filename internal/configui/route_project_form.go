@@ -140,7 +140,7 @@ func (m *Model) closeProjectForm() {
 func (m *Model) buildProjectForm(b *paneBuilder) {
 	form := m.addProject
 	if form == nil {
-		b.text(Muted("This form is no longer open."))
+		b.lead("This form is no longer open.")
 		return
 	}
 
@@ -154,9 +154,9 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 	}, func(s State) string {
 		if m.editingID() == regionFormName {
 			s.Focused = true
-			return FormRow("Name", Field(&form.name, projectFormFieldWidth, s), s)
+			return FormRow("Name", Field(&form.name, b.controlWidth(projectFormFieldWidth), s), s)
 		}
-		return FormRow("Name", StaticField(form.name.Value(), projectFormFieldWidth, s), s)
+		return FormRow("Name", StaticField(form.name.Value(), b.controlWidth(projectFormFieldWidth), s), s)
 	})
 	b.blank()
 
@@ -168,9 +168,9 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 	}, func(s State) string {
 		if m.editingID() == regionFormLocation {
 			s.Focused = true
-			return FormRow("Location", Field(&form.location, projectFormFieldWidth, s), s)
+			return FormRow("Location", Field(&form.location, b.controlWidth(projectFormFieldWidth), s), s)
 		}
-		return FormRow("Location", StaticField(form.location.Value(), projectFormFieldWidth, s), s)
+		return FormRow("Location", StaticField(form.location.Value(), b.controlWidth(projectFormFieldWidth), s), s)
 	})
 	m.buildCompletions(b, form)
 	b.blank()
@@ -194,7 +194,7 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 		b.blank()
 		b.text(strings.Repeat(" ", RowIndent+4) + mutedStyle().Render("Find a theme"))
 		m.buildThemePicker(b, form.picker, RowIndent+4)
-		b.text(IndentedMuted("↑/↓ preview   Enter selects   Esc closes picker"))
+		b.note("↑/↓ preview   Enter selects   Esc closes picker")
 	}
 	b.blank()
 

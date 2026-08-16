@@ -25,7 +25,7 @@ func (m *Model) buildSetup(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageSetup)), "")
 
 	if !m.checked {
-		b.text(Muted("Checking your setup…"))
+		b.lead("Checking your setup…")
 		return
 	}
 
@@ -43,15 +43,11 @@ func (m *Model) buildSetup(b *paneBuilder) {
 	}
 
 	if len(problems) == 0 {
-		b.text(
-			Body("Sidecar is ready to work."),
-			Muted("Nothing needs attention right now. Use the sidebar to adjust anything else."),
-		)
+		b.text(Body("Sidecar is ready to work."))
+		b.lead("Nothing needs attention right now. Use the sidebar to adjust anything else.")
 	} else {
-		b.text(
-			Body("A few things will make Sidecar ready to work for you."),
-			Muted("Choose an item to fix it now, or return whenever your setup changes."),
-		)
+		b.text(Body("A few things will make Sidecar ready to work for you."))
+		b.lead("Choose an item to fix it now, or return whenever your setup changes.")
 	}
 
 	if len(problems) > 0 {
@@ -80,9 +76,9 @@ func (m *Model) buildSetup(b *paneBuilder) {
 
 	b.blank()
 	if len(problems) > 0 {
-		b.text(Muted("Enter opens a focused repair that explains a change before making it."))
+		b.lead("Enter opens a focused repair that explains a change before making it.")
 	} else {
-		b.text(Muted("R rechecks whenever your machine or your projects change."))
+		b.lead("R rechecks whenever your machine or your projects change.")
 	}
 	// Recheck stays reachable from the page without occupying a visible row:
 	// Setup's visible controls are the work, not the diagnostics.

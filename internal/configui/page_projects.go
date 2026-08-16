@@ -91,8 +91,8 @@ func (m *Model) buildProjects(b *paneBuilder) {
 	b.blank()
 
 	if len(list) == 0 {
-		b.text(Muted("Sidecar does not know about any projects yet."))
-		b.text(Muted("Add one to switch between projects, create workspaces, and set per-project themes."))
+		b.lead("Sidecar does not know about any projects yet.")
+		b.lead("Add one to switch between projects, create workspaces, and set per-project themes.")
 		return
 	}
 
@@ -146,7 +146,7 @@ func (m *Model) buildProjects(b *paneBuilder) {
 		}},
 	)
 	b.blank()
-	b.text(Muted("shift+↑/shift+↓ reorders the list. Removing a project leaves the directory untouched."))
+	b.lead("shift+↑/shift+↓ reorders the list. Removing a project leaves the directory untouched.")
 }
 
 // projectRow is one configured project: its name, its path quietly beside it,
@@ -259,7 +259,13 @@ func (m *Model) moveSelectedProject(delta int) tea.Cmd {
 	if next < 0 || next >= len(m.projects()) {
 		return nil
 	}
+	// The selection follows the project, not the row it used to be in: the
+	// detail below the list and the Remove action both act on the selection, so
+	// a reorder that leaves them pointing at the neighbour is how a user
+	// removes the wrong project. selectPath is deliberately not used here — the
+	// frame painted before the save lands still holds the old order, and the
+	// request would resolve against it and be consumed on the wrong index.
 	state.cursor = next
-	state.selectPath = path
+	state.selectPath = ""
 	return SaveCmd("Reordered projects", func() error { return config.MoveProject(path, delta) })
 }

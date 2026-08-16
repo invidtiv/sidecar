@@ -26,6 +26,24 @@ const (
 	ControlColumn = RowIndent + LabelColumn
 )
 
+// ControlWidth is how wide a fixed-width control may actually be drawn: the
+// width the page asked for, or everything the pane has left after the label
+// column, whichever is smaller. A page that insists on its full width in a
+// narrow terminal does not get a wide field — it gets a field with its right
+// half cut off, which is the one thing the brief's narrow-terminal rule rules
+// out.
+func ControlWidth(inner, preferred int) int {
+	available := inner - ControlColumn
+	if available < minControlWidth {
+		available = minControlWidth
+	}
+	return min(preferred, available)
+}
+
+// minControlWidth is the narrowest a control is allowed to become before the
+// pane is simply too small to render the surface at all.
+const minControlWidth = 10
+
 // State is the interaction state of a control. Every control renders rest,
 // focus, and hover distinctly so keyboard and mouse describe the same surface.
 type State struct {
@@ -386,6 +404,37 @@ func IndentedRaw(content string) string {
 // IndentedMuted renders quieter text at the shared row indent.
 func IndentedMuted(text string) string {
 	return strings.Repeat(" ", RowIndent) + mutedStyle().Render(text)
+}
+
+// WrapAt lays a paragraph out inside a pane: every line is indented to the same
+// column and no line runs past the pane's writable width. It returns one string
+// with embedded newlines, which the pane builder splits into painted rows, so
+// wrapped help still counts for hit regions and the height clamp.
+func WrapAt(text string, inner, indent int, style func(string) string) string {
+	width := inner - indent
+	if width < 8 {
+		width = 8
+	}
+	pad := strings.Repeat(" ", indent)
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return pad
+	}
+	var lines []string
+	current := words[0]
+	for _, word := range words[1:] {
+		if ansi.StringWidth(current)+1+ansi.StringWidth(word) > width {
+			lines = append(lines, current)
+			current = word
+			continue
+		}
+		current += " " + word
+	}
+	lines = append(lines, current)
+	for i, line := range lines {
+		lines[i] = pad + style(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ListRow renders a focusable row that fills the pane width, so the whole row

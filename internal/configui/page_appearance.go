@@ -151,9 +151,9 @@ func (m *Model) buildAppearance(b *paneBuilder) {
 		if value == "" {
 			value = "(no title)"
 		}
-		return FormRow("Terminal title", StaticField(value, 40, s), s)
+		return FormRow("Terminal title", StaticField(value, b.controlWidth(40), s), s)
 	})
-	b.text(HelpLine("Variables: {project} {worktree} {plugin} {dir}. Empty leaves the title alone."))
+	b.help("Variables: {project} {worktree} {plugin} {dir}. Empty leaves the title alone.")
 }
 
 func nerdFontNotice(enabled bool) string {

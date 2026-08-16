@@ -95,15 +95,13 @@ func (m *Model) openEnableRoute(integration Integration) {
 func (m *Model) buildEnableRoute(b *paneBuilder) {
 	state := m.enable
 	if state == nil {
-		b.text(Muted("This integration is already enabled."))
+		b.lead("This integration is already enabled.")
 		return
 	}
 	integration := state.integration
 	descriptor := integration.Descriptor
 	found := m.commandFound(descriptor.Executable)
 
-	b.text(IndentedRaw(BetaBadge()))
-	b.blank()
 	if found {
 		b.text(Body(integration.Name + " is installed and ready to enable."))
 	} else {
@@ -119,14 +117,14 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 	case installRunning:
 		b.blank()
 		b.text(Indented("Installing " + integration.Name + " with Homebrew…"))
-		b.text(IndentedMuted(version.InstallCommand(descriptor)))
+		b.note(version.InstallCommand(descriptor))
 		b.blank()
-		b.text(Muted("This runs in the background. Sidecar will say what happened either way."))
+		b.lead("This runs in the background. Sidecar will say what happened either way.")
 		return
 	case installFailed:
 		b.blank()
 		b.text(Warning("The install did not finish"))
-		b.text(IndentedMuted(state.problem))
+		b.note(state.problem)
 		b.blank()
 		b.buttons(
 			buttonSpec{id: regionEnableInstall, key: "enter", label: "Enter  Try the install again", primary: true,
@@ -168,8 +166,8 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 		b.blank()
 		b.text(IndentedRaw(CodeChip(version.InstallCommand(descriptor))))
 		b.blank()
-		b.text(IndentedMuted("Sidecar shows the install action and waits for your confirmation before it runs."))
-		b.text(IndentedMuted("It never installs automatically and never uses sudo."))
+		b.note("Sidecar shows the install action and waits for your confirmation before it runs.")
+		b.note("It never installs automatically and never uses sudo.")
 	default:
 		// No Homebrew: Sidecar has nothing safe to run, so it says exactly what
 		// to do instead of offering an action it cannot honour.
@@ -178,7 +176,7 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 		b.text(Indented("Install it yourself with either of these, then return here:"))
 		b.blank()
 		b.text(IndentedRaw(CodeChip(version.InstallCommand(descriptor))))
-		b.text(IndentedMuted(descriptor.ReleasesURL))
+		b.note(descriptor.ReleasesURL)
 		b.blank()
 		b.buttons(
 			buttonSpec{id: regionEnableCopy, key: "c", label: "C  Copy install command", primary: true,

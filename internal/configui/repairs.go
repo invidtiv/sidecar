@@ -30,7 +30,14 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 	if m.confirm != nil {
 		title = m.confirm.title
 	}
-	b.rightControl(PaneTitle(title), regionBack, "", "←  Back to "+m.router.parentLabel(), func(m *Model) tea.Cmd {
+	// A route that is about a beta integration says so beside its title, the
+	// way the mockup does: a badge stranded on the line below reads as content
+	// rather than as a qualifier on the title.
+	heading := PaneTitle(title)
+	if route.Child == ChildEnableIntegration && m.confirm == nil && m.enable != nil {
+		heading += "  " + BetaBadge()
+	}
+	b.rightControl(heading, regionBack, "", "←  Back to "+m.router.parentLabel(), func(m *Model) tea.Cmd {
 		m.Back()
 		return nil
 	})
@@ -55,7 +62,7 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 	case ChildEnableIntegration:
 		m.buildEnableRoute(b)
 	default:
-		b.text(Muted("This focused route arrives in a later phase."))
+		b.lead("This focused route arrives in a later phase.")
 	}
 }
 
@@ -127,11 +134,11 @@ func (m *Model) buildTmuxRepair(b *paneBuilder) {
 		observed = result.Summary
 	}
 	b.text(Warning(observed))
-	b.text(Muted("Workspaces, shells, and the embedded terminal use tmux to stay reliable."))
+	b.lead("Workspaces, shells, and the embedded terminal use tmux to stay reliable.")
 	if len(result.Evidence) > 0 {
 		b.blank()
 		for _, line := range result.Evidence {
-			b.text(IndentedMuted(line))
+			b.note(line)
 		}
 	}
 
@@ -144,9 +151,20 @@ func (m *Model) buildTmuxRepair(b *paneBuilder) {
 	b.blank()
 	b.text(IndentedRaw(CodeChip(command)))
 	b.blank()
-	b.text(IndentedMuted("The command is prefilled, never run automatically, and never uses sudo."))
+	if prefillable {
+		b.note("The command is prefilled, never run automatically, and never uses sudo.")
+	} else {
+		// Without Homebrew there is nothing to prefill: the recommendation is a
+		// place to read, and saying "prefilled" about it would describe a shell
+		// this route never offers to open.
+		b.note("Sidecar installs nothing for you and never uses sudo.")
+	}
 
 	b.text(SectionHeader("Next step"))
+	copyLabel, copyNotice := "C  Copy command", "Copied install command"
+	if !prefillable {
+		copyLabel, copyNotice = "C  Copy instructions", "Copied install instructions"
+	}
 	var specs []buttonSpec
 	if prefillable {
 		specs = append(specs, buttonSpec{
@@ -157,8 +175,8 @@ func (m *Model) buildTmuxRepair(b *paneBuilder) {
 		})
 	}
 	specs = append(specs,
-		buttonSpec{id: "tmux-copy", key: "c", label: "C  Copy command", run: func(m *Model) tea.Cmd {
-			return copyCmd(command, "Copied install command")
+		buttonSpec{id: "tmux-copy", key: "c", label: copyLabel, run: func(m *Model) tea.Cmd {
+			return copyCmd(command, copyNotice)
 		}},
 		buttonSpec{id: "tmux-recheck", key: "r", label: "R  Recheck", run: func(m *Model) tea.Cmd {
 			return m.Recheck()
@@ -170,7 +188,7 @@ func (m *Model) buildTmuxRepair(b *paneBuilder) {
 	)
 	b.buttons(specs...)
 	b.blank()
-	b.text(Muted("After installing, return here and choose Recheck. Sidecar never infers success from a shell closing."))
+	b.lead("After installing, return here and choose Recheck. Sidecar never infers success from a shell closing.")
 }
 
 // --- terminal colors (mockup 01b) ---------------------------------------
@@ -189,13 +207,13 @@ func (m *Model) buildColorRepair(b *paneBuilder) {
 	if len(result.Evidence) > 0 {
 		b.text(SectionHeader("What Sidecar saw"))
 		for _, line := range result.Evidence {
-			b.text(IndentedMuted(line))
+			b.note(line)
 		}
 	}
 
 	b.text(SectionHeader("What to do"))
 	b.text(Indented("Enable True Color or 24-bit color in your terminal's profile, then restart it."))
-	b.text(IndentedMuted("Sidecar will not change terminal-emulator or shell configuration for you."))
+	b.note("Sidecar will not change terminal-emulator or shell configuration for you.")
 
 	if m.showColorSteps {
 		heading := "Color setup steps"
@@ -204,11 +222,11 @@ func (m *Model) buildColorRepair(b *paneBuilder) {
 		}
 		b.text(SectionHeader(heading))
 		for _, step := range guide.Steps {
-			b.text(IndentedMuted("• " + step))
+			b.note("• " + step)
 		}
 		if !recognized {
 			b.blank()
-			b.text(IndentedMuted("Sidecar does not recognize this terminal, so these are the general steps."))
+			b.note("Sidecar does not recognize this terminal, so these are the general steps.")
 		}
 	}
 
@@ -253,15 +271,15 @@ func (m *Model) buildAgentRepair(b *paneBuilder) {
 
 	if result.OK {
 		b.text(Body(fileName + " already points agents at `sidecar agents` for " + name + "."))
-		b.text(IndentedMuted("Nothing needs to change. Open the file if you want to read or extend it."))
+		b.note("Nothing needs to change. Open the file if you want to read or extend it.")
 	} else {
 		b.text(Warning("Needs attention"))
 		b.text(Indented(fileName + " does not include Sidecar guidance for " + name + "."))
-		b.text(IndentedMuted("Add one line so agents can self-serve current Sidecar guidance."))
+		b.note("Add one line so agents can self-serve current Sidecar guidance.")
 	}
 	if path != "" {
 		b.blank()
-		b.text(IndentedMuted(path))
+		b.note(path)
 	}
 
 	if !result.OK {
@@ -304,7 +322,7 @@ func (m *Model) buildAgentRepair(b *paneBuilder) {
 	b.buttons(specs[split:]...)
 	if !result.OK {
 		b.blank()
-		b.text(Muted("Review preserves existing instructions and requires confirmation before saving."))
+		b.lead("Review preserves existing instructions and requires confirmation before saving.")
 	}
 }
 
@@ -351,12 +369,12 @@ func (m *Model) buildConfigRepair(b *paneBuilder) {
 
 	b.text(Warning("Sidecar could not read your configuration"))
 	b.text(Indented("Sidecar is running on the configuration it loaded at startup."))
-	b.text(IndentedMuted("It will not rewrite the file for you, and it will not save over an error it cannot read."))
+	b.note("It will not rewrite the file for you, and it will not save over an error it cannot read.")
 
 	if len(result.Evidence) > 0 {
 		b.text(SectionHeader("What Sidecar saw"))
 		for _, line := range result.Evidence {
-			b.text(IndentedMuted(line))
+			b.note(line)
 		}
 		if path == "" {
 			path = result.Evidence[0]

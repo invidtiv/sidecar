@@ -421,6 +421,14 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 	}
 
+	// A page's own keys are advertised in the page's own copy ("shift+↑/shift+↓
+	// reorders the list"), which is on screen whether or not the detail pane
+	// holds the cursor. They act on the selection the page is already showing,
+	// so they answer from either pane rather than silently doing nothing.
+	if handled, cmd := m.pageKey(key); handled {
+		return true, cmd
+	}
+
 	if m.detailOwnsKeys() {
 		// A focused theme list owns the arrows: moving inside it previews, and
 		// running off either end is what hands the cursor back to the page.
@@ -428,9 +436,6 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			if handled, cmd := m.pickerKey(key); handled {
 				return true, cmd
 			}
-		}
-		if handled, cmd := m.pageKey(key); handled {
-			return true, cmd
 		}
 		switch key {
 		case "down", "j", "ctrl+n":
@@ -516,19 +521,30 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	return false, nil
 }
 
+// focusSearch and focusSidebarList both hand the keyboard to the navigation
+// pane, which means taking it away from the detail pane. Leaving detailFocus
+// set behind them left the sidebar drawing the cursor while Enter still ran a
+// control the user was no longer on — most visibly, Enter on a search result
+// did nothing at all.
 func (m *Model) focusSearch() {
 	m.focus = focusSearch
+	m.detailFocus = false
 	m.search.Focus()
 	m.results = m.SearchActive()
 }
 
 func (m *Model) focusSidebarList() {
 	m.focus = focusSidebar
+	m.detailFocus = false
 	m.search.Blur()
-	m.clampCursor()
 	if m.SearchActive() {
+		// The results pane says Down moves to the first matching setting, so it
+		// does. Clamping the cursor left over from the unfiltered list would
+		// instead drop the user wherever the shorter list happened to end.
+		m.cursor = 0
 		m.results = true
 	}
+	m.clampCursor()
 }
 
 func (m *Model) clampCursor() {
@@ -588,23 +604,27 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		case id == regionSearch:
 			m.focusSearch()
 		case strings.HasPrefix(id, regionNavPrefix):
-			page := PageID(strings.TrimPrefix(id, regionNavPrefix))
-			m.focus = focusSidebar
-			m.search.Blur()
-			m.cursor = indexOfPage(m.visiblePages(), page)
-			m.router.navigate(page)
-			m.results = false
+			m.navigateFromSidebar(PageID(strings.TrimPrefix(id, regionNavPrefix)))
 		case strings.HasPrefix(id, regionResult):
 			if page, ok := action.Region.Data.(PageID); ok {
-				m.focus = focusSidebar
-				m.search.Blur()
-				m.cursor = indexOfPage(m.visiblePages(), page)
-				m.router.navigate(page)
-				m.results = false
+				m.navigateFromSidebar(page)
 			}
 		}
 	}
 	return nil
+}
+
+// navigateFromSidebar opens a destination the user selected in the navigation
+// pane. It leaves the detail pane unfocused: the click was on navigation, so
+// the arrows and Enter belong to navigation until the user asks otherwise.
+func (m *Model) navigateFromSidebar(page PageID) {
+	m.focus = focusSidebar
+	m.detailFocus = false
+	m.search.Blur()
+	m.cursor = indexOfPage(m.visiblePages(), page)
+	m.router.navigate(page)
+	m.results = false
+	m.resetDetail()
 }
 
 // View renders the whole Configuration content area. It never returns more rows
@@ -616,7 +636,14 @@ func (m *Model) View(width, height int) string {
 		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render("")
 	}
 
+	// The navigation pane keeps its mockup width while the terminal can afford
+	// it, and gives columns back to the detail pane before it clips: a fixed 39
+	// columns is a third of a 100-column terminal, which is what pushed form
+	// fields off the right edge there.
 	sidebarWidth := sidebarPreferredWidth
+	if third := width / 3; sidebarWidth > third {
+		sidebarWidth = max(sidebarMinWidth, third)
+	}
 	if maxSidebar := width / 2; sidebarWidth > maxSidebar {
 		sidebarWidth = maxSidebar
 	}

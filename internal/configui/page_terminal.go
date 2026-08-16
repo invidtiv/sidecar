@@ -112,10 +112,10 @@ func (m *Model) keyRow(b *paneBuilder, id, label, current string, save func(*con
 			s.Focused = true
 			return FormRow(label, Field(m.keyField(id), keyFieldWidth, s), s)
 		}
-		return FormRow(label, StaticField(FormatKeyLabel(current), keyFieldWidth, s), s)
+		return FormRow(label, StaticField(FormatKeyLabel(current), b.controlWidth(keyFieldWidth), s), s)
 	})
 	if state := m.terminal(); state.invalid == id {
-		b.text(HelpLine(Warning(state.reason)))
+		b.help(Warning(state.reason))
 	}
 }
 
@@ -124,7 +124,7 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 	defaults := tty.DefaultConfig()
 
 	b.text(PaneTitle(PageTitle(PageTerminal)), "")
-	b.text(Muted("Set the terminal behavior Sidecar owns."))
+	b.lead("Set the terminal behavior Sidecar owns.")
 
 	b.text(SectionHeader("Interaction"))
 
@@ -140,12 +140,12 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 		// pretending to be editable.
 		state := b.declare(regionAttachKey, "", false, nil)
 		state.Disabled = true
-		b.text(FormRow("Attach to tmux", StaticField("Disabled", keyFieldWidth, state), state))
+		b.text(FormRow("Attach to tmux", StaticField("Disabled", b.controlWidth(keyFieldWidth), state), state))
 	}
-	b.text(HelpLine("Opens the full tmux client instead of Sidecar's embedded terminal."))
-	b.text(HelpLine("Leave this off unless you rely on tmux's own interface and shortcuts."))
+	b.help("Opens the full tmux client instead of Sidecar's embedded terminal.")
+	b.help("Leave this off unless you rely on tmux's own interface and shortcuts.")
 	if !attachAvailable() {
-		b.text(HelpLine("Turn on Full tmux attach under Advanced to configure this chord."))
+		b.help("Turn on Full tmux attach under Advanced to configure this chord.")
 	}
 
 	m.keyRow(b, regionCopyKey, "Copy selection", terminalKey(ws.InteractiveCopyKey, defaults.CopyKey),
@@ -171,10 +171,10 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 			})
 		})
 	}, func(s State) string {
-		return FormRow("Preview limit", SelectorWidth(FormatCaptureLimit(ws.TmuxCaptureMaxBytes), keyFieldWidth, s), s)
+		return FormRow("Preview limit", SelectorWidth(FormatCaptureLimit(ws.TmuxCaptureMaxBytes), b.controlWidth(keyFieldWidth), s), s)
 	})
-	b.text(IndentedMuted("Capture limits are advanced controls; Sidecar uses a safe default."))
+	b.note("Capture limits are advanced controls; Sidecar uses a safe default.")
 
 	b.blank()
-	b.text(Muted("These chords are resolved when a terminal is created, so they apply to the next one you open."))
+	b.lead("These chords are resolved when a terminal is created, so they apply to the next one you open.")
 }

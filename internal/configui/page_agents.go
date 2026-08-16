@@ -164,7 +164,7 @@ func (m *Model) editAgentCommand(id string) {
 
 func (m *Model) buildAgents(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageAgents)), "")
-	b.text(Muted("Choose which agents Sidecar offers when you create work."))
+	b.lead("Choose which agents Sidecar offers when you create work.")
 
 	b.text(SectionHeader("Available agents"))
 	for _, family := range agentcatalog.Families() {
@@ -173,10 +173,10 @@ func (m *Model) buildAgents(b *paneBuilder) {
 
 	if len(m.Config().Plugins.Workspace.Agents) == 0 {
 		b.blank()
-		b.text(IndentedMuted("No allowlist is set, so creation offers every agent. Turn one off to narrow the list."))
+		b.note("No allowlist is set, so creation offers every agent. Turn one off to narrow the list.")
 	}
 	b.blank()
-	b.text(Muted("Enter on a launch command edits it; an empty value restores the default."))
+	b.lead("Enter on a launch command edits it; an empty value restores the default.")
 
 	b.text(SectionHeader("Instructions"))
 	m.buildAgentInstructionsRow(b)
@@ -202,17 +202,26 @@ func (m *Model) buildAgentRow(b *paneBuilder, family agentcatalog.Family) {
 		m.editAgentCommand(family.ID)
 		return nil
 	})
+	// Two controls share this row's control column, so the command field gets
+	// what is left after the toggle rather than the whole column: sizing it as
+	// if it were alone is what pushed the row past the pane's right edge.
+	fieldWidth := min(agentCommandWidth, max(minControlWidth, b.inner-ControlColumn-ansi.StringWidth(toggle)-2))
 	var field string
 	if editing {
 		commandState.Focused = true
-		field = Field(m.commandInput(family.ID), agentCommandWidth, commandState)
+		field = Field(m.commandInput(family.ID), fieldWidth, commandState)
 	} else {
-		field = StaticField(command, agentCommandWidth, commandState)
+		field = StaticField(command, fieldWidth, commandState)
 	}
 
 	line := FormRow(family.Short, toggle+"  "+field, toggleState)
 	if !overridden && !editing {
-		line += "  " + Muted("default")
+		// "default" is a quiet annotation, not part of the control. On a pane
+		// too narrow to hold it, dropping it is honest; letting it run off the
+		// edge would put an ellipsis where the row's own value should be.
+		if suffix := "  " + Muted("default"); ansi.StringWidth(line)+ansi.StringWidth(suffix) <= b.inner {
+			line += suffix
+		}
 	}
 	y := len(b.lines)
 	b.lines = append(b.lines, line)
@@ -223,7 +232,7 @@ func (m *Model) buildAgentRow(b *paneBuilder, family agentcatalog.Family) {
 	b.m.mouse.HitMap.AddRect(commandID, x, 1+y, ansi.StringWidth(field), 1, nil)
 
 	if editing {
-		b.text(HelpLine("Empty resets to the default: " + family.Command))
+		b.help("Empty resets to the default: " + family.Command)
 	}
 }
 
@@ -232,7 +241,7 @@ func (m *Model) buildAgentRow(b *paneBuilder, family agentcatalog.Family) {
 // guidance, the confirmation, and the write have exactly one implementation.
 func (m *Model) buildAgentInstructionsRow(b *paneBuilder) {
 	if !m.ChecksReady() {
-		b.text(IndentedMuted("Checking the project's agent instructions…"))
+		b.note("Checking the project's agent instructions…")
 		return
 	}
 	result := m.result(configchecks.CheckAgentInstructions)

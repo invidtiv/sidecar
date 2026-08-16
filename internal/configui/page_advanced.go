@@ -94,7 +94,7 @@ func (m *Model) advanced() *advancedState {
 
 func (m *Model) buildAdvanced(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageAdvanced)), "")
-	b.text(Muted("Feature previews and technical controls. Most people never need these."))
+	b.lead("Feature previews and technical controls. Most people never need these.")
 
 	b.text(SectionHeader("Feature previews"))
 	for _, item := range previews() {
@@ -106,9 +106,9 @@ func (m *Model) buildAdvanced(b *paneBuilder) {
 
 	b.blank()
 	if m.restartNote != "" {
-		b.text(IndentedMuted(m.restartNote))
+		b.note(m.restartNote)
 	}
-	b.text(Muted("Any setting that needs a reload is called out before it is saved."))
+	b.lead("Any setting that needs a reload is called out before it is saved.")
 }
 
 // previewRow paints one flag with its aligned toggle and its explanation.
@@ -123,13 +123,13 @@ func (m *Model) previewRow(b *paneBuilder, item preview) {
 		}
 		return saveFlagCmd(toggleNotice(item.label, next), item.flag, next)
 	}, func(s State) string {
-		return FormRow(item.label, ToggleWidth(enabled, advancedControlWidth, s), s)
+		return FormRow(item.label, ToggleWidth(enabled, b.controlWidth(advancedControlWidth), s), s)
 	})
-	b.text(HelpLine(item.help))
+	b.help(item.help)
 	if item.restart {
-		b.text(HelpLine("Read once when Sidecar starts, so a change takes effect after a restart."))
+		b.help("Read once when Sidecar starts, so a change takes effect after a restart.")
 	} else if item.note != "" {
-		b.text(HelpLine(item.note))
+		b.help(item.note)
 	}
 }
 
@@ -147,11 +147,11 @@ func (m *Model) captureRow(b *paneBuilder) {
 			s.Focused = true
 			return FormRow("Terminal preview capture", Field(&m.advanced().capture, advancedControlWidth, s), s)
 		}
-		return FormRow("Terminal preview capture", StaticField(FormatCaptureLimit(current), advancedControlWidth, s), s)
+		return FormRow("Terminal preview capture", StaticField(FormatCaptureLimit(current), b.controlWidth(advancedControlWidth), s), s)
 	})
-	b.text(HelpLine("Maximum output Sidecar retains to render terminal previews."))
-	b.text(HelpLine("Accepts " + CaptureLimitRange() + ". Anything outside that is brought inside it,"))
-	b.text(HelpLine("and a blank or unreadable value keeps the safe default of " + FormatCaptureLimit(CaptureLimitDefault) + "."))
+	b.help("Maximum output Sidecar retains to render terminal previews.")
+	b.help("Accepts " + CaptureLimitRange() + ". Anything outside that is brought inside it,")
+	b.help("and a blank or unreadable value keeps the safe default of " + FormatCaptureLimit(CaptureLimitDefault) + ".")
 }
 
 // editCaptureLimit opens the typed field. Whatever is typed is read, clamped,

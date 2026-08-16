@@ -36,7 +36,7 @@ func (m *Model) buildDiagnostics(b *paneBuilder) {
 
 	if !m.checked {
 		b.blank()
-		b.text(Muted("Running checks…"))
+		b.lead("Running checks…")
 		return
 	}
 
@@ -44,7 +44,7 @@ func (m *Model) buildDiagnostics(b *paneBuilder) {
 	m.diagnosticsSection(b, "Data", diagnosticsData)
 
 	b.blank()
-	b.text(Muted("Enter opens a focused repair with clear next steps."))
+	b.lead("Enter opens a focused repair with clear next steps.")
 }
 
 func (m *Model) diagnosticsSection(b *paneBuilder, title string, ids []configchecks.ID) {

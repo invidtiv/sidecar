@@ -101,7 +101,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 	cfg := m.Config()
 
 	b.text(PaneTitle(PageTitle(PagePanels)), "")
-	b.text(Muted("Choose the Sidecar surfaces you want available."))
+	b.lead("Choose the Sidecar surfaces you want available.")
 	b.blank()
 
 	// Git ------------------------------------------------------------------
@@ -140,12 +140,12 @@ func (m *Model) buildPanels(b *paneBuilder) {
 	// A panel whose supporting tool is missing is said out loud rather than
 	// left to render an empty tab the user has to interpret.
 	if m.probed && !m.commandFound(tdCommandName) {
-		b.text(IndentedMuted("td is not on PATH, so the panel can only offer setup guidance."))
+		b.note("td is not on PATH, so the panel can only offer setup guidance.")
 	}
 	if cfg.Plugins.TDMonitor.Enabled {
 		m.pathRow(b, regionPanelTDPath, "Database", cfg.Plugins.TDMonitor.DBPath, ".todos/issues.db",
 			func(p *config.PluginsConfig, value string) { p.TDMonitor.DBPath = value })
-		b.text(HelpLine("Relative paths are resolved inside the current project."))
+		b.help("Relative paths are resolved inside the current project.")
 		m.refreshRow(b, regionPanelTDRefresh, cfg.Plugins.TDMonitor.RefreshInterval,
 			func(p *config.PluginsConfig, next time.Duration) { p.TDMonitor.RefreshInterval = next })
 	}
@@ -167,7 +167,7 @@ func (m *Model) buildPanels(b *paneBuilder) {
 	if m.conversationsOn() {
 		m.pathRow(b, regionPanelConvDir, "Source directory", cfg.Plugins.Conversations.ClaudeDataDir, "~/.claude",
 			func(p *config.PluginsConfig, value string) { p.Conversations.ClaudeDataDir = value })
-		b.text(HelpLine("Where Sidecar looks for agent session history."))
+		b.help("Where Sidecar looks for agent session history.")
 	}
 
 	// Tasks ----------------------------------------------------------------
@@ -175,14 +175,14 @@ func (m *Model) buildPanels(b *paneBuilder) {
 	m.panelRow(b, panelIDTasks, tasks.Name, BetaBadge(), "Embedded Tasks global tab, backed by the Tasks command",
 		m.flagEnabled(tasks.Flag), func(m *Model) tea.Cmd { return m.toggleIntegration(tasks) })
 	if m.flagEnabled(tasks.Flag) && m.probed && !m.commandFound(tasks.Descriptor.Executable) {
-		b.text(IndentedMuted("The tasks command is not on PATH, so the tab will have nothing to show."))
+		b.note("The tasks command is not on PATH, so the tab will have nothing to show.")
 	}
 
 	b.blank()
 	if m.restartNote != "" {
-		b.text(IndentedMuted(m.restartNote))
+		b.note(m.restartNote)
 	}
-	b.text(Muted("Sidecar decides which panels to build when it starts, so these switches apply on the next launch."))
+	b.lead("Sidecar decides which panels to build when it starts, so these switches apply on the next launch.")
 }
 
 // panelRow paints one surface as a single full-width control.
@@ -200,7 +200,7 @@ func (m *Model) refreshRow(b *paneBuilder, id string, current time.Duration, set
 			return config.SavePlugins(func(p *config.PluginsConfig) { set(p, next) })
 		})
 	}, func(s State) string {
-		return FormRow("Refresh", SelectorWidth(formatRefresh(current), panelInputWidth, s), s)
+		return FormRow("Refresh", SelectorWidth(formatRefresh(current), b.controlWidth(panelInputWidth), s), s)
 	})
 }
 
@@ -218,7 +218,7 @@ func (m *Model) pathRow(b *paneBuilder, id, label, current, placeholder string, 
 		if strings.TrimSpace(value) == "" {
 			value = placeholder
 		}
-		return FormRow(label, StaticField(value, panelInputWidth, s), s)
+		return FormRow(label, StaticField(value, b.controlWidth(panelInputWidth), s), s)
 	})
 }
 
