@@ -198,8 +198,9 @@ tab, which is the one surface still naming keys we took.
 pin the exchange.
 
 **Brackets.** `[`/`]` are global Sidecar tab navigation in every ordinary plugin
-context. Local navigation moved to `{`/`}` for File Browser tabs and Git diff
-files, and to `,`/`.` for Diff target tabs while a Diff leaf is focused. A literal bracket typed into a
+context. Local navigation moved to `{`/`}` for tab cycling inside a pane — File
+Browser, document, issue and Diff target tabs alike — and to `,`/`.` for
+stepping between files inside a diff. A literal bracket typed into a
 Tasks prompt, filter, or form still reaches Tasks because level 2 forwards it
 before the host's switch is reached. Pinned by
 `TestBracketsCycleSidecarTabsAcrossPluginContexts`,

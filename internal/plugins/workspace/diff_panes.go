@@ -302,9 +302,9 @@ func (p *Plugin) handleDiffKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.hideDiffPane()
 	case "x":
 		return true, p.closeActiveDiffTab()
-	case ",":
+	case "{":
 		return true, p.cycleActiveDiffTab(-1)
-	case ".":
+	case "}":
 		return true, p.cycleActiveDiffTab(1)
 	case "Y", "shift+y":
 		return true, p.yankFocusedDiff()

@@ -292,8 +292,9 @@ remembered files stays a full-width terminal. Clicking a file while the
 pane is hidden reopens the remembered set and focuses (or appends) that
 path.
 
-`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
-not cycle document tabs. `m` on a focused document does not start a merge.
+`{` / `}` cycle Diff target tabs while a Diff leaf is focused, the same as
+they cycle document tabs on a focused document; `,` / `.` step between the
+files inside the focused Diff target. `m` on a focused document does not start a merge.
 Drag the divider to resize.
 
 `shift`-drag and `alt`-drag remain terminal text-selection gestures; neither
@@ -351,8 +352,9 @@ On the global Workspaces view, `q` / `esc` and last-`x` close the pane
 and forget that row's in-memory set. Switching rows and back restores
 tabs that were still open.
 
-`,` / `.` cycle Diff target tabs only while a Diff leaf is focused; they do
-not cycle issue tabs.
+`{` / `}` cycle Diff target tabs while a Diff leaf is focused, the same as
+they cycle issue tabs on a focused issue; `,` / `.` step between the files
+inside the focused Diff target.
 
 **What you'll see:**
 - Agent initialization and model selection
@@ -365,8 +367,8 @@ not cycle issue tabs.
 
 `d`, the **Diff** header chip, or `sidecar open --diff` opens a working-tree
 Diff leaf beside the terminal. Click a printed hash or `A..B` range to open a
-commit or range tab on the same leaf. `,` / `.` cycle those target tabs while
-the leaf is focused. Click the `×` in the top-right corner to close the pane
+commit or range tab on the same leaf. `{` / `}` cycle those target tabs while
+the leaf is focused, and `,` / `.` step between the files in the active target. Click the `×` in the top-right corner to close the pane
 completely. `q` / `esc` hide it.
 
 `--disable-feature=workspace_doc_panes` disables Diff: there is no pane tree,

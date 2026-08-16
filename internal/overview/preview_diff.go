@@ -428,9 +428,9 @@ func (m *Model) previewDiffPaneKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.closePreviewDiff()
 	case "x":
 		return true, m.closePreviewDiffTab()
-	case ",":
+	case "{":
 		return true, m.cyclePreviewDiffTab(-1)
-	case ".":
+	case "}":
 		return true, m.cyclePreviewDiffTab(1)
 	case "Y", "shift+y":
 		return true, m.yankPreviewDiff()

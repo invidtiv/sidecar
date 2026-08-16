@@ -232,3 +232,81 @@ func TestOverviewRangeTabApplyRefusesSnapshot(t *testing.T) {
 		t.Fatalf("snapshot landed on range tab: snapshot=%v files=%#v", view.Snapshot != nil, view.Files)
 	}
 }
+
+// The global Sessions browser must answer the braces exactly as the project
+// workspace does: { and } cycle Diff target tabs, , and . step files. A key
+// that lands on one surface and not the other is a parity bug.
+func threeTabPreviewDiff(t *testing.T) *Model {
+	t.Helper()
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	if m.preview.diff == nil {
+		t.Fatal("openPreviewDiff attached no Diff leaf")
+	}
+	for _, hash := range []string{"aaaaaaa", "bbbbbbb"} {
+		m.preview.diff.tabs.OpenOrFocus(
+			workspacediff.Target{Kind: workspacediff.TargetCommit, A: hash},
+			&workspacediff.View{},
+		)
+	}
+	if len(m.preview.diff.tabs.Items) != 3 {
+		t.Fatalf("tabs = %d, want 3", len(m.preview.diff.tabs.Items))
+	}
+	m.preview.diff.tabs.Select(0)
+	return m
+}
+
+func TestBracesCycleDiffTargetTabsInGlobalWorkspaces(t *testing.T) {
+	m := threeTabPreviewDiff(t)
+	if !m.diffPaneFocused() {
+		t.Fatal("premise: Diff leaf should own the keyboard")
+	}
+
+	for _, want := range []int{1, 2, 0} { // last step wraps past the end
+		handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '}', Text: "}"})
+		if !handled {
+			t.Fatal("} was not handled by the focused Diff leaf")
+		}
+		if m.preview.diff.tabs.Active != want {
+			t.Fatalf("} -> active %d, want %d", m.preview.diff.tabs.Active, want)
+		}
+	}
+
+	for _, want := range []int{2, 1, 0} { // first step wraps past the start
+		handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '{', Text: "{"})
+		if !handled {
+			t.Fatal("{ was not handled by the focused Diff leaf")
+		}
+		if m.preview.diff.tabs.Active != want {
+			t.Fatalf("{ -> active %d, want %d", m.preview.diff.tabs.Active, want)
+		}
+	}
+}
+
+func TestCommaAndPeriodStepFilesInGlobalWorkspacesDiff(t *testing.T) {
+	m := threeTabPreviewDiff(t)
+	view := m.preview.diff.view()
+	if view == nil {
+		t.Fatal("no active Diff view")
+	}
+	view.State = workspacediff.LoadStateClean
+	view.Files = []workspacediff.File{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}
+	view.Cursor = 0
+
+	before := m.preview.diff.tabs.Active
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '.', Text: "."}); !handled {
+		t.Fatal(". was not handled")
+	}
+	if view.Cursor != 1 {
+		t.Fatalf(". -> cursor %d, want 1", view.Cursor)
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: ',', Text: ","}); !handled {
+		t.Fatal(", was not handled")
+	}
+	if view.Cursor != 0 {
+		t.Fatalf(", -> cursor %d, want 0", view.Cursor)
+	}
+	if m.preview.diff.tabs.Active != before {
+		t.Fatalf("file stepping moved the active tab to %d", m.preview.diff.tabs.Active)
+	}
+}

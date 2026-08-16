@@ -886,10 +886,13 @@ func (p *Plugin) updateDiff(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
-	case "{":
+	// Stepping through files is , / . everywhere a diff is on screen. { and }
+	// mean "cycle tabs" throughout Sidecar; this view has no tabs, so they are
+	// deliberately left unbound rather than made to mean something else here.
+	case ",":
 		return p, p.cycleDiffFile(-1)
 
-	case "}":
+	case ".":
 		return p, p.cycleDiffFile(1)
 
 	case "w":

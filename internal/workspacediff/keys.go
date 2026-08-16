@@ -68,8 +68,8 @@ func (v *View) Commands(context string) []plugin.Command {
 	)
 	if v.FileCount() > 1 {
 		cmds = append(cmds,
-			cmd("next-file", "}", "Next file", 8),
-			cmd("prev-file", "{", "Previous file", 9),
+			cmd("next-file", ".", "Next file", 8),
+			cmd("prev-file", ",", "Previous file", 9),
 		)
 		if v.HasFilePicker {
 			cmds = append(cmds, cmd("file-picker", "Files", "Open file picker", 10))
@@ -139,9 +139,9 @@ func (v *View) handleFileListKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return v.CycleViewMode(), true
 	case "z":
 		return v.CycleScope(), true
-	case "{":
+	case ",":
 		return v.JumpFile(-1), true
-	case "}":
+	case ".":
 		return v.JumpFile(1), true
 	case "ctrl+d", "pgdown":
 		return v.pageFileList(v.PageSize()), true
@@ -198,9 +198,9 @@ func (v *View) handleDiffPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		return v.CycleViewMode(), true
 	case "z":
 		return v.CycleScope(), true
-	case "{":
+	case ",":
 		return v.JumpFile(-1), true
-	case "}":
+	case ".":
 		return v.JumpFile(1), true
 	}
 	return nil, false
@@ -318,7 +318,7 @@ func (v *View) handleCommitDiffKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "N":
 		v.jumpPaintedChange(true)
 		return nil, true
-	case "{":
+	case ",":
 		if v.CommitDetail != nil && v.CommitFileCursor > 0 {
 			v.CommitFileCursor--
 			v.DiffScroll, v.HorizScroll = 0, 0
@@ -326,7 +326,7 @@ func (v *View) handleCommitDiffKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return v.LoadSelectedCommitFile(), true
 		}
 		return nil, true
-	case "}":
+	case ".":
 		if v.CommitDetail != nil && v.CommitFileCursor < len(v.CommitDetail.Files)-1 {
 			v.CommitFileCursor++
 			v.DiffScroll, v.HorizScroll = 0, 0

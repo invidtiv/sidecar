@@ -213,6 +213,23 @@ active tab, and each tab's scroll.
 | `y` | yank-file | Copy file info |
 | `Y` | yank-path | Copy file path |
 
+### Full-Screen Diff (`git-diff`)
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `,` / `.` | prev-file / next-file | Previous / next changed file |
+| `s` / `u` | stage-file / unstage-file | Stage / unstage the file on screen |
+| `v` | toggle-diff-view | Cycle the diff view mode |
+| `w` | toggle-wrap | Toggle line wrap |
+| `y` | yank-diff | Copy the diff |
+| `c` | commit | Open the commit editor |
+| `q` / `esc` | close-diff | Leave the diff |
+
+This view has no tabs, so `{` / `}` are deliberately unbound here rather than
+made to mean "next file" — that would be the one place in Sidecar where a brace
+did something other than cycle tabs, and a silent wrong action is worse than a
+no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
+
 ### Commit List Shortcuts
 
 | Key | Command | Description |
@@ -386,16 +403,31 @@ the pane: `esc` closes it, `enter` loads the hit in the active tab, and
 
 `d` / `show-diff` on the Workspaces list or preview opens a working-tree Diff
 leaf beside the terminal. The leaf is not a root context: `q` / `esc` hide it.
-`{` / `}` stay next/prev file inside the view; `,` / `.` cycle Diff target
-tabs while the leaf is focused.
+`{` / `}` cycle Diff target tabs while the leaf is focused; `,` / `.` step
+next/prev file inside the view.
+
+**One rule everywhere: `{` / `}` is always "cycle the tabs of the thing I am
+looking at."** Document, issue, File Browser and Diff leaves all obey it. The
+Diff pane is the only surface with a second navigation axis — the files inside
+the active target — and that axis gets its own pair, `,` / `.`.
+
+The earlier arrangement was the reverse (`{` / `}` = file, `,` / `.` = tab), on
+the reasoning that in-view file jumping is the more frequent act in a diff and
+so deserved the better-known keys. That reasoning was sound in isolation and
+wrong in aggregate: it made the diff the one place in Sidecar where `}` did not
+mean "next tab", so the cost was paid on every context switch into and out of
+the diff, by everyone, forever — while the benefit accrued only inside the diff.
+Consistency of a key's *meaning* across surfaces beats optimality of its
+*assignment* on one surface. If you are tempted to re-optimise a key for a
+single pane again, that is the trade to weigh.
 
 | Key | Command | Description |
 |-----|---------|-------------|
 | `d` | show-diff | Open working-tree Diff leaf (list and preview) |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 | `x` | close-tab | Close the active tab. Last tab forgets the pane |
-| `,` / `.` | prev-tab / next-tab | Previous / next Diff target tab |
-| `{` / `}` | prev-file / next-file | Previous / next file in this target |
+| `{` / `}` | prev-tab / next-tab | Previous / next Diff target tab |
+| `,` / `.` | prev-file / next-file | Previous / next file in this target |
 | `Y` | yank-id | Copy the target identity (`wt` / `c:…` / `r:…`) |
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and content |
 | `\` | toggle-sidebar | Toggle sidebar visibility |
