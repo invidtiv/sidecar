@@ -76,11 +76,12 @@ type Overlay struct {
 
 // FocusableInfo describes a focusable element within a section.
 type FocusableInfo struct {
-	ID      string // Unique identifier for this element
-	OffsetX int    // X offset relative to section top-left (within content area)
-	OffsetY int    // Y offset relative to section top-left (within content area)
-	Width   int    // Width in characters
-	Height  int    // Height in lines
+	ID        string // Unique identifier for this element
+	OffsetX   int    // X offset relative to section top-left (within content area)
+	OffsetY   int    // Y offset relative to section top-left (within content area)
+	Width     int    // Width in characters
+	Height    int    // Height in lines
+	MouseOnly bool   // Hit-tested but omitted from the Tab / focus order
 }
 
 // --- Text Section ---

@@ -515,6 +515,25 @@ func TestCreateSetupSeparatesStateAndRequiredHookFailures(t *testing.T) {
 	}
 }
 
+func TestProjectCreatePlanLeavesTaskEmpty(t *testing.T) {
+	r := newCreateRepo(t)
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: r.main, ProjectRoot: r.main}
+	p.initCreateModalBase()
+	p.createNameInput.SetValue("feature/auth")
+	p.createBaseBranchInput.SetValue("main")
+	msg := p.resolveCreatePlan()().(CreatePlanResolvedMsg)
+	if msg.Err != nil {
+		t.Fatal(msg.Err)
+	}
+	if msg.Plan == nil {
+		t.Fatal("expected create plan")
+	}
+	if msg.Plan.TaskID != "" || msg.Plan.TaskTitle != "" {
+		t.Fatalf("create plan carried task %q %q", msg.Plan.TaskID, msg.Plan.TaskTitle)
+	}
+}
+
 func TestCreationBusyRejectsDuplicateSubmitAndCancel(t *testing.T) {
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 3}
@@ -539,10 +558,13 @@ func TestCreationConfirmationAndRecoveryAreVisibleAndNoAgentAutostarts(t *testin
 	p.createCopyEnv, p.createRunHook = true, true
 	p.ensureCreateOperationModal()
 	view := ansi.Strip(p.createOperationModal.Render(p.width, p.height, p.mouseHandler))
-	for _, want := range []string{"refs/heads/main", strings.Repeat("a", 40), "/feature/auth", "td-123", ".env.local", setupScriptName, "no remote push"} {
+	for _, want := range []string{"refs/heads/main", strings.Repeat("a", 40), "/feature/auth", ".env.local", setupScriptName, "no remote push"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("confirmation missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Task:") || strings.Contains(view, "td-123") {
+		t.Fatalf("confirm modal should not mention a task:\n%s", view)
 	}
 	wt := &Worktree{Key: "new", Path: "/feature/auth", Branch: "feature/auth", HEADOID: strings.Repeat("b", 40)}
 	result := &CreateSetupResult{Worktree: wt, Outcomes: []CreateSetupOutcome{{Kind: CreateOutcomeHook, Action: "run hook", Required: true, Err: os.ErrPermission}}}

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -262,6 +263,81 @@ func TestViewFlyoutAppliesTheChosenSort(t *testing.T) {
 	}
 	if p.viewFlyoutActive() {
 		t.Fatal("View stayed open after a choice")
+	}
+}
+
+func TestViewFlyoutClickAppliesTheClickedSort(t *testing.T) {
+	p := sortPlugin(t)
+	if p.listSort != workspacelist.SortManual {
+		t.Fatalf("precondition: sort = %s, want Manual", p.listSort.Label())
+	}
+	p.openViewFlyout()
+	clickViewFlyoutSort(t, p, workspacelist.SortActivity)
+	if p.listSort != workspacelist.SortActivity {
+		t.Fatalf("click applied %s, want Activity", p.listSort.Label())
+	}
+	if p.viewFlyoutActive() {
+		t.Fatal("View stayed open after a click")
+	}
+	saved := p.shellStartupHooks.getWorkspaceState(p.ctx.ProjectRoot).ListSort
+	if saved != workspacelist.SortActivity.Label() {
+		t.Fatalf("persisted %q, want Activity", saved)
+	}
+}
+
+func TestViewFlyoutClickOnSelectedSortCloses(t *testing.T) {
+	p := sortPlugin(t)
+	p.openViewFlyout()
+	clickViewFlyoutSort(t, p, workspacelist.SortManual)
+	if p.listSort != workspacelist.SortManual {
+		t.Fatalf("click changed sort to %s", p.listSort.Label())
+	}
+	if p.viewFlyoutActive() {
+		t.Fatal("clicking the current sort left View open")
+	}
+}
+
+func TestViewFlyoutEnterAppliesTheHighlightedSort(t *testing.T) {
+	p := sortPlugin(t)
+	p.openViewFlyout()
+	pressList(p, "j")
+	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd != nil {
+		_ = cmd()
+	}
+	if p.listSort != workspacelist.SortActivity {
+		t.Fatalf("enter applied %s, want Activity", p.listSort.Label())
+	}
+	if p.viewFlyoutActive() {
+		t.Fatal("enter left View open")
+	}
+}
+
+func clickViewFlyoutSort(t *testing.T, p *Plugin, mode workspacelist.Sort) {
+	t.Helper()
+	_ = p.View(p.width, p.height)
+	if p.viewFlyoutMouse == nil {
+		t.Fatal("view flyout has no mouse handler")
+	}
+	id := workspacelist.SortActionID(mode)
+	var region *mouse.Region
+	for _, r := range p.viewFlyoutMouse.HitMap.Regions() {
+		if r.ID == id {
+			copied := r
+			region = &copied
+			break
+		}
+	}
+	if region == nil {
+		t.Fatalf("no hit region for %s", id)
+	}
+	hit := p.viewFlyoutMouse.HitMap.Test(region.Rect.X, region.Rect.Y)
+	if hit == nil || hit.ID != id {
+		t.Fatalf("hit-test on %s = %v, want that row (not the list)", id, hit)
+	}
+	if cmd := p.handleMouse(tea.MouseClickMsg{
+		X: region.Rect.X, Y: region.Rect.Y, Button: tea.MouseLeft,
+	}); cmd != nil {
+		_ = cmd()
 	}
 }
 

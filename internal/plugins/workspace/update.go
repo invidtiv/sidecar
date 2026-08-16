@@ -1491,11 +1491,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.taskSearchScroll = ensureListSelectionVisible(p.taskSearchIdx, p.taskSearchScroll, taskPickerVisibleRows(p.height, p.viewMode == ViewModeTaskLink), len(p.taskSearchFiltered))
 			p.taskLinkModal = nil
-			if p.viewMode == ViewModeCreate {
-				p.rematchCreateTaskIdx()
-				p.createModal = nil
-				p.createModalWidth = 0
-			}
 		}
 
 	case BranchListMsg:

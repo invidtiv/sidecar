@@ -1062,11 +1062,6 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return nil
 	}
 
-	if msg.String() == "backspace" && p.createModal.FocusedID() == createTaskFieldID && p.createTaskID != "" {
-		p.clearCreateTaskSelection()
-		return nil
-	}
-
 	prevAgent := p.createAgentType
 	prevSkip := p.createSkipPermissions
 	action, cmd := p.createModal.HandleKey(msg)
@@ -1091,7 +1086,6 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 	if p.createBusyStep != "" || p.createPlan != nil {
 		return nil
 	}
-	p.syncCreateTaskFromCombo()
 	p.syncCreateAgentFromIdx()
 	name := strings.TrimSpace(p.createNameInput.Value())
 	if name == "" {

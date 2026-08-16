@@ -5,7 +5,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -138,27 +137,29 @@ func (s *listSection) Render(contentWidth int, focusID, hoverID string) Rendered
 		}
 		sb.WriteString(line)
 
-		// Register focusable - in singleFocus mode, only register the list itself (once)
-		if !s.singleFocus {
-			focusables = append(focusables, FocusableInfo{
-				ID:      item.ID,
-				OffsetX: 0,
-				OffsetY: i,
-				Width:   ansi.StringWidth(line),
-				Height:  1,
-			})
-		}
+		// Per-item hit targets: Tab still stops on the list ID in singleFocus,
+		// but a click / hover must resolve to this row's ID.
+		focusables = append(focusables, FocusableInfo{
+			ID:        item.ID,
+			OffsetX:   0,
+			OffsetY:   i,
+			Width:     contentWidth,
+			Height:    1,
+			MouseOnly: s.singleFocus,
+		})
 	}
 
-	// In singleFocus mode, register the list as a single focusable
-	if s.singleFocus && len(focusables) == 0 {
-		focusables = append(focusables, FocusableInfo{
+	// singleFocus: one Tab stop for the list, registered first so later
+	// per-item regions win HitMap.Test.
+	if s.singleFocus {
+		listFocusable := FocusableInfo{
 			ID:      s.id,
 			OffsetX: 0,
 			OffsetY: 0,
 			Width:   contentWidth,
 			Height:  visibleCount,
-		})
+		}
+		focusables = append([]FocusableInfo{listFocusable}, focusables...)
 	}
 
 	// Show scroll indicators if needed
@@ -182,6 +183,10 @@ func (s *listSection) Render(contentWidth int, focusID, hoverID string) Rendered
 }
 
 func (s *listSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
+	if click, ok := msg.(overlayClickMsg); ok {
+		return s.activateItem(click.id)
+	}
+
 	// Check if the list or any of its items are focused
 	isFocused := false
 	if s.singleFocus {
@@ -223,9 +228,8 @@ func (s *listSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 		return "", nil
 
 	case "enter":
-		// Return the selected item's ID as the action
 		if *s.selectedIdx >= 0 && *s.selectedIdx < len(s.items) {
-			return s.items[*s.selectedIdx].ID, nil
+			return s.activateItem(s.items[*s.selectedIdx].ID)
 		}
 		return "", nil
 
@@ -238,5 +242,18 @@ func (s *listSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 		return "", nil
 	}
 
+	return "", nil
+}
+
+func (s *listSection) activateItem(id string) (string, tea.Cmd) {
+	for i, item := range s.items {
+		if item.ID != id {
+			continue
+		}
+		if s.selectedIdx != nil {
+			*s.selectedIdx = i
+		}
+		return item.ID, nil
+	}
 	return "", nil
 }

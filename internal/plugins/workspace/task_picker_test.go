@@ -98,42 +98,6 @@ func TestTaskPickerInputAndListNavigationParity(t *testing.T) {
 	if link.taskSearchIdx != 1 {
 		t.Fatalf("list-focused k index = %d, want 1", link.taskSearchIdx)
 	}
-
-	create := New()
-	create.width, create.height = 80, 42
-	create.viewMode = ViewModeCreate
-	create.createNameInput = textinput.New()
-	create.createBaseBranchInput = textinput.New()
-	create.createAgentInput = textinput.New()
-	create.taskSearchInput = textinput.New()
-	create.taskSearchInput.Prompt = ""
-	create.taskSearchAll = tasks
-	create.taskSearchFiltered = tasks
-	create.ensureCreateModal()
-	create.createModal.Render(80, 42, create.mouseHandler)
-	create.createModal.SetFocus(createTaskFieldID)
-	create.createModal.Render(80, 42, create.mouseHandler)
-	for _, r := range []rune{'j', 'k'} {
-		create.handleCreateKeys(tea.KeyPressMsg{Code: r, Text: string(r)})
-	}
-	if got := create.taskSearchInput.Value(); got != "jk" {
-		t.Fatalf("create input swallowed printable j/k: %q", got)
-	}
-	create.taskSearchInput.SetValue("")
-	create.createTaskIdx = 0
-	create.createModal.SetFocus(createTaskFieldID)
-	create.createModal.Render(80, 42, create.mouseHandler)
-	if got := create.createModal.FocusedID(); got != createTaskFieldID {
-		t.Fatalf("task combo focus = %q", got)
-	}
-	create.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeyDown})
-	afterDown := create.createTaskIdx
-	create.handleCreateKeys(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
-	afterNext := create.createTaskIdx
-	create.handleCreateKeys(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
-	if create.createTaskIdx != 1 {
-		t.Fatalf("create arrow/ctrl navigation indexes = down:%d next:%d prev:%d, want 1,2,1", afterDown, afterNext, create.createTaskIdx)
-	}
 }
 
 func TestTaskSearchAsyncArrivalPreservesSelectionByID(t *testing.T) {

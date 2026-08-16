@@ -1,6 +1,7 @@
 package workspacelist
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -94,6 +95,93 @@ func TestRenderSidebarSeparatesSectionsAndKeepsRegionsOnTheirRows(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func oneLineSidebarRow(id, text string) SidebarRow {
+	return SidebarRow{ID: id, Data: id, Render: func(width int, selected, focused bool) []string {
+		return []string{ApplySelection(" "+text, width, selected, focused)}
+	}}
+}
+
+func numberedSidebarRows(n int) []SidebarRow {
+	rows := make([]SidebarRow, n)
+	for i := range rows {
+		rows[i] = oneLineSidebarRow(fmt.Sprintf("r%d", i), fmt.Sprintf("item-%d", i))
+	}
+	return rows
+}
+
+func TestRenderSidebarKeepsOffsetZeroWhenSelectionFits(t *testing.T) {
+	rows := numberedSidebarRows(12)
+	rendered := RenderSidebar(SidebarOptions{
+		Width: 40, Height: 20, Title: "Workspaces", Focused: true,
+		SelectedID: "r3", ScrollOffset: 0,
+		Sections: []SidebarSection{{Title: "Items", Count: 12, Rows: rows}},
+	})
+	if rendered.ScrollOffset != 0 {
+		t.Fatalf("scroll = %d, want 0 when the selected row fits from the top", rendered.ScrollOffset)
+	}
+	plain := ansi.Strip(rendered.View)
+	if !strings.Contains(plain, "item-0") || !strings.Contains(plain, "item-3") {
+		t.Fatalf("first or selected row missing:\n%s", plain)
+	}
+}
+
+func TestRenderSidebarScrollsTheMinimumToRevealSelection(t *testing.T) {
+	// Title + heading + 6 one-line rows fill height 8. Twenty rows, last selected.
+	const n, height = 20, 8
+	rows := numberedSidebarRows(n)
+	rendered := RenderSidebar(SidebarOptions{
+		Width: 40, Height: height, Title: "Workspaces", Focused: true,
+		SelectedID: fmt.Sprintf("r%d", n-1), ScrollOffset: 0,
+		Sections: []SidebarSection{{Title: "Items", Count: n, Rows: rows}},
+	})
+	// Body is 7 lines: heading + 6 rows. Last page starts at n-6.
+	want := n - 6
+	if rendered.ScrollOffset != want {
+		t.Fatalf("scroll = %d, want the minimum %d (not the selected index %d)", rendered.ScrollOffset, want, n-1)
+	}
+	plain := ansi.Strip(rendered.View)
+	if strings.Contains(plain, "item-0") {
+		t.Fatalf("first item should sit above the fold:\n%s", plain)
+	}
+	if !strings.Contains(plain, fmt.Sprintf("item-%d", n-1)) {
+		t.Fatalf("selected last item is not on screen:\n%s", plain)
+	}
+}
+
+func TestRenderSidebarClampsScrollToFillTheBody(t *testing.T) {
+	rows := numberedSidebarRows(12)
+	rendered := RenderSidebar(SidebarOptions{
+		Width: 40, Height: 20, Title: "Workspaces", Focused: true,
+		SelectedID: "r11", ScrollOffset: 11,
+		Sections: []SidebarSection{{Title: "Items", Count: 12, Rows: rows}},
+	})
+	if rendered.ScrollOffset != 0 {
+		t.Fatalf("scroll = %d, want 0 after the list fits in the taller pane", rendered.ScrollOffset)
+	}
+	plain := ansi.Strip(rendered.View)
+	if !strings.Contains(plain, "item-0") {
+		t.Fatalf("clamp left the first item above the fold:\n%s", plain)
+	}
+	if !strings.Contains(plain, "item-11") {
+		t.Fatalf("clamp lost the selected item:\n%s", plain)
+	}
+}
+
+func TestRenderSidebarStaleOffsetDoesNotHideAFittingSelection(t *testing.T) {
+	rows := numberedSidebarRows(8)
+	rendered := RenderSidebar(SidebarOptions{
+		Width: 40, Height: 20, Title: "Workspaces", Focused: true,
+		SelectedID: "r2", ScrollOffset: 6,
+		Sections: []SidebarSection{{Title: "Items", Count: 8, Rows: rows}},
+	})
+	if rendered.ScrollOffset != 0 {
+		t.Fatalf("scroll = %d, want 0: the selection fits from the top", rendered.ScrollOffset)
+	}
+	if !strings.Contains(ansi.Strip(rendered.View), "item-0") {
+		t.Fatal("first item is still above the fold after a stale offset")
 	}
 }
 

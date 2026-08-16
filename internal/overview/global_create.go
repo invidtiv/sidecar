@@ -8,9 +8,12 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -19,6 +22,7 @@ import (
 const (
 	globalCreateProjectID = "global-create-project"
 	globalCreateKindID    = "global-create-kind"
+	globalCreateAgentID   = "global-create-agent"
 	globalCreateNameID    = "global-create-name"
 	globalCreateSubmitID  = "global-create-submit"
 	globalCreateConfirmID = "global-create-confirm"
@@ -117,6 +121,16 @@ func (m *Model) openCreate(projectKey string, kind int, focusKind bool) tea.Cmd 
 	m.createNameInput.CharLimit = shellstate.MaxNameBytes
 	m.updateCreatePlaceholder()
 	m.createNameInput.SetWidth(30)
+	m.createProjectInput = textinput.New()
+	m.createProjectInput.Prompt = ""
+	m.createProjectInput.CharLimit = 80
+	m.createAgentInput = textinput.New()
+	m.createAgentInput.Prompt = ""
+	m.createAgentInput.CharLimit = 80
+	m.createAgentType = m.defaultCreateAgent()
+	m.rematchCreateAgentIndex()
+	m.prefillCreateProjectInput()
+	m.prefillCreateAgentInput()
 	m.createError = ""
 	m.createWarning = ""
 	m.createBusy = false
@@ -207,10 +221,7 @@ func (m *Model) defaultShellDisplayName(key string) string {
 
 func (m *Model) ensureCreateShellModal() { m.ensureCreateModal() }
 
-func (m *Model) ensureCreateModal() {
-	if !m.createOpen {
-		return
-	}
+func (m *Model) createModalContentWidth() int {
 	modalW := 52
 	if m.width > 0 && modalW > m.width-4 {
 		modalW = m.width - 4
@@ -218,28 +229,86 @@ func (m *Model) ensureCreateModal() {
 	if modalW < 24 {
 		modalW = 24
 	}
+	return modalW
+}
+
+func (m *Model) ensureCreateModal() {
+	if !m.createOpen {
+		return
+	}
+	modalW := m.createModalContentWidth()
+	prevFocus := ""
+	existed := m.createModal != nil
+	if existed {
+		prevFocus = m.createModal.FocusedID()
+	}
 	if m.createModal != nil && m.createModalWidth == modalW {
 		return
 	}
+	m.buildCreateModal(modalW, prevFocus)
+	if existed && prevFocus != "" && m.createModal != nil && m.createPlan == nil {
+		w, h := m.createRenderSize()
+		_ = m.createModal.Render(w, h, m.createMouse)
+		m.createModal.SetFocus(prevFocus)
+	}
+}
+
+func (m *Model) createRenderSize() (int, int) {
+	w, h := m.width, m.height
+	if w < 1 {
+		w = 80
+	}
+	if h < 1 {
+		h = 24
+	}
+	return w, h
+}
+
+func (m *Model) rebuildCreateChooser() {
+	if !m.createOpen || m.createPlan != nil {
+		return
+	}
+	prevFocus := ""
+	if m.createModal != nil {
+		prevFocus = m.createModal.FocusedID()
+	}
+	m.createModal = nil
+	m.createModalWidth = 0
+	m.buildCreateModal(m.createModalContentWidth(), prevFocus)
+	if m.createModal == nil {
+		return
+	}
+	w, h := m.createRenderSize()
+	_ = m.createModal.Render(w, h, m.createMouse)
+	if prevFocus != "" {
+		m.createModal.SetFocus(prevFocus)
+	}
+}
+
+func (m *Model) buildCreateModal(modalW int, prevFocus string) {
 	m.createModalWidth = modalW
 	if m.createPlan != nil {
 		m.ensureCreatePlanModal(modalW)
 		return
 	}
-	items := make([]modal.ListItem, 0, len(m.projects))
-	for _, project := range m.projects {
-		items = append(items, modal.ListItem{ID: "project:" + projectKey(project), Label: project.Name, Data: projectKey(project)})
+	if prevFocus != globalCreateProjectID {
+		m.prefillCreateProjectInput()
 	}
+	if prevFocus != globalCreateAgentID {
+		m.prefillCreateAgentInput()
+	}
+	projectItems := m.createProjectItems()
+	agentItems := m.createAgentItems()
 	sections := []modal.Section{
-		modal.Text("Choose what to create and which project will own it."),
-		modal.List(globalCreateKindID, []modal.ListItem{
-			{ID: "kind:shell", Label: "Shell"},
-			{ID: "kind:worktree", Label: "Worktree"},
-		}, &m.createKindIndex),
+		createKindToggle(globalCreateKindID, &m.createKindIndex),
 		modal.Spacer(),
-		modal.List(globalCreateProjectID, items, &m.createProjectIndex, modal.WithMaxVisible(6)),
-		modal.Spacer(),
-		modal.InputWithLabel(globalCreateNameID, "Name:", &m.createNameInput),
+		modal.Text("Project"),
+		modal.Combo(globalCreateProjectID, &m.createProjectInput, projectItems, &m.createProjectIndex,
+			modal.WithComboFilter(comboExactOrAllFilter(projectItems))),
+		modal.Text("Agent"),
+		modal.Combo(globalCreateAgentID, &m.createAgentInput, agentItems, &m.createAgentIndex,
+			modal.WithComboFilter(comboExactOrAllFilter(agentItems))),
+		modal.InputWithLabel(globalCreateNameID, "Name", &m.createNameInput),
 	}
 	if m.createError != "" {
 		sections = append(sections, modal.Spacer(), modal.Text("Error: "+m.createError))
@@ -254,6 +323,197 @@ func (m *Model) ensureCreateModal() {
 	m.createModal = modal.New("Create Workspace", modal.WithWidth(modalW), modal.WithPrimaryAction(globalCreateSubmitID))
 	for _, section := range sections {
 		m.createModal.AddSection(section)
+	}
+}
+
+func (m *Model) createProjectItems() []modal.DropdownItem {
+	items := make([]modal.DropdownItem, 0, len(m.projects))
+	for _, project := range m.projects {
+		key := projectKey(project)
+		items = append(items, modal.DropdownItem{ID: "project:" + key, Label: project.Name, Value: project.Name, Data: key})
+	}
+	return items
+}
+
+func (m *Model) createAgentTypes() []string {
+	configured := []string(nil)
+	if m.config != nil {
+		configured = m.config.Plugins.Workspace.Agents
+	}
+	return resolveCreateAgents(configured, m.createKindIndex != globalCreateWorktree)
+}
+
+func (m *Model) createAgentItems() []modal.DropdownItem {
+	types := m.createAgentTypes()
+	items := make([]modal.DropdownItem, len(types))
+	for i, at := range types {
+		label := createAgentLabel(at)
+		items[i] = modal.DropdownItem{ID: "agent:" + at, Label: label, Value: label, Data: at}
+	}
+	return items
+}
+
+func (m *Model) defaultCreateAgent() string {
+	agents := m.createAgentTypes()
+	if last := strings.TrimSpace(loadLastCreateAgent()); last != "" && indexOfCreateAgent(agents, last) >= 0 {
+		return last
+	}
+	cfgDefault := ""
+	if m.config != nil {
+		cfgDefault = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
+	}
+	if cfgDefault != "" && indexOfCreateAgent(agents, cfgDefault) >= 0 {
+		return cfgDefault
+	}
+	if m.createKindIndex == globalCreateWorktree {
+		for _, at := range agents {
+			if at != "" {
+				return at
+			}
+		}
+	}
+	return ""
+}
+
+func (m *Model) rematchCreateAgentIndex() {
+	agents := m.createAgentTypes()
+	idx := indexOfCreateAgent(agents, m.createAgentType)
+	if idx < 0 {
+		m.createAgentType = m.defaultCreateAgent()
+		idx = indexOfCreateAgent(agents, m.createAgentType)
+	}
+	if idx < 0 {
+		idx = 0
+		if len(agents) > 0 {
+			m.createAgentType = agents[0]
+		}
+	}
+	m.createAgentIndex = idx
+}
+
+func (m *Model) syncCreateAgentFromIdx() {
+	agents := m.createAgentTypes()
+	if m.createAgentIndex >= 0 && m.createAgentIndex < len(agents) {
+		m.createAgentType = agents[m.createAgentIndex]
+	}
+}
+
+func (m *Model) selectedCreateAgent() string {
+	m.syncCreateAgentFromIdx()
+	return strings.TrimSpace(m.createAgentType)
+}
+
+func (m *Model) prefillCreateProjectInput() {
+	label := ""
+	if project, ok := m.selectedCreateProject(); ok {
+		label = project.Name
+	}
+	if m.createProjectInput.Value() != label {
+		m.createProjectInput.SetValue(label)
+	}
+}
+
+func (m *Model) prefillCreateAgentInput() {
+	label := createAgentLabel(m.createAgentType)
+	if m.createAgentInput.Value() != label {
+		m.createAgentInput.SetValue(label)
+	}
+}
+
+func comboExactOrAllFilter(items []modal.DropdownItem) modal.ComboFilterFunc {
+	return func(query string, item modal.DropdownItem) bool {
+		if query == "" || comboQueryMatchesItemExactly(query, items) {
+			return true
+		}
+		q := strings.ToLower(query)
+		if strings.Contains(strings.ToLower(item.Label), q) {
+			return true
+		}
+		if item.Value != "" && strings.Contains(strings.ToLower(item.Value), q) {
+			return true
+		}
+		if item.Desc != "" && strings.Contains(strings.ToLower(item.Desc), q) {
+			return true
+		}
+		return false
+	}
+}
+
+func comboQueryMatchesItemExactly(query string, items []modal.DropdownItem) bool {
+	for _, it := range items {
+		if query == it.Value || query == it.Label {
+			return true
+		}
+	}
+	return false
+}
+
+func createKindToggle(id string, selected *int) modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		sel := 0
+		if selected != nil {
+			sel = *selected
+		}
+		focused := focusID == id
+		shellStyle, treeStyle := styles.Button, styles.Button
+		if focused {
+			if sel == globalCreateWorktree {
+				treeStyle = styles.ButtonFocused
+			} else {
+				shellStyle = styles.ButtonFocused
+			}
+		} else if sel == globalCreateWorktree {
+			treeStyle = styles.ButtonHover
+		} else {
+			shellStyle = styles.ButtonHover
+		}
+		shell := shellStyle.Render(" Shell ")
+		sep := styles.Muted.Render(" | ")
+		tree := treeStyle.Render(" Worktree ")
+		content := lipgloss.JoinHorizontal(lipgloss.Top, shell, sep, tree)
+		if ansi.StringWidth(content) > contentWidth && contentWidth > 0 {
+			content = ansi.Truncate(content, contentWidth, "…")
+		}
+		return modal.RenderedSection{
+			Content: content,
+			Focusables: []modal.FocusableInfo{{
+				ID: id, OffsetX: 0, OffsetY: 0,
+				Width:  ansi.StringWidth(content),
+				Height: 1,
+			}},
+		}
+	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
+		if focusID != id || selected == nil {
+			return "", nil
+		}
+		key, ok := msg.(tea.KeyPressMsg)
+		if !ok {
+			return "", nil
+		}
+		switch key.String() {
+		case "left", "h", "k":
+			*selected = globalCreateShell
+		case "right", "l", "j":
+			*selected = globalCreateWorktree
+		}
+		return "", nil
+	})
+}
+
+func (m *Model) setCreateKindFromClick(x int) {
+	if m.createMouse == nil {
+		return
+	}
+	for _, region := range m.createMouse.HitMap.Regions() {
+		if region.ID != globalCreateKindID {
+			continue
+		}
+		if x >= region.Rect.X+region.Rect.W/2 {
+			m.createKindIndex = globalCreateWorktree
+		} else {
+			m.createKindIndex = globalCreateShell
+		}
+		return
 	}
 }
 
@@ -355,16 +615,29 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 	before := m.createProjectIndex
 	beforeKind := m.createKindIndex
 	action := m.createModal.HandleMouse(msg, m.createMouse)
+	if action == globalCreateKindID {
+		if click, ok := msg.(tea.MouseClickMsg); ok {
+			m.setCreateKindFromClick(click.X)
+		}
+	}
 	return m.applyCreateAction(action, before, beforeKind)
 }
 
 func (m *Model) applyCreateAction(action string, previousProject, previousKind int) tea.Cmd {
+	// Kind reorder moves None between the ends of the agent list. Syncing the
+	// old index against the new order would rewrite createAgentType (None→claude,
+	// claude→codex). Rematch the chosen type onto the new order instead.
+	if m.createKindIndex != previousKind {
+		m.rematchCreateAgentIndex()
+	} else {
+		m.syncCreateAgentFromIdx()
+	}
 	if m.createProjectIndex != previousProject || m.createKindIndex != previousKind {
 		if project, ok := m.selectedCreateProject(); ok {
 			m.createProjectKey = projectKey(project)
 		}
 		m.updateCreatePlaceholder()
-		m.createModal = nil
+		m.rebuildCreateChooser()
 	}
 	switch action {
 	case "cancel", globalCreateCancelID:
@@ -373,6 +646,7 @@ func (m *Model) applyCreateAction(action string, previousProject, previousKind i
 			// worktree; it must never silently abandon recovery state.
 			return m.openCreatedWorktreeAnyway()
 		}
+		m.clearPendingCreated()
 		m.closeCreateShell()
 		return nil
 	case globalCreateSubmitID:
@@ -407,16 +681,16 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 	}
 	setup := config.WorktreeSetupConfig{}
 	dirPrefix := true
-	agent := ""
 	if m.config != nil {
 		setup = m.config.WorktreeSetupForProject(project.Path)
 		dirPrefix = m.config.Plugins.Workspace.DirPrefix
-		agent = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
 	}
+	agent := m.selectedCreateAgent()
 	m.createBusy = true
 	m.createError = ""
 	m.createModal = nil
 	_ = saveLastGlobalCreateProject(project.Path)
+	_ = saveLastCreateAgent(agent)
 	return func() tea.Msg {
 		plan, err := resolveGlobalWorktree(context.Background(), project.Path, project.Path, name, "HEAD", dirPrefix, setup)
 		if plan != nil {
@@ -566,16 +840,15 @@ func (m *Model) submitCreateShell() tea.Cmd {
 		}
 	}
 	cols, rows := max(20, m.width/2-4), max(5, m.height-4)
-	agent := ""
-	if m.config != nil {
-		agent = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
-	}
+	agent := m.selectedCreateAgent()
 	spec := workspaceops.ManagedShellSpec{ShellSpec: workspaceops.ShellSpec{WorkDir: project.Path, SessionName: session, DisplayName: display, Cols: cols, Rows: rows}, ProjectRoot: project.Path, AgentType: agent}
 	m.createBusy = true
 	m.createError = ""
 	m.createModal = nil
 	m.pendingCreatedTmux = session
+	m.pendingCreatedPath = ""
 	_ = saveLastGlobalCreateProject(project.Path)
+	_ = saveLastCreateAgent(agent)
 	return func() tea.Msg {
 		_, err := createManagedShell(spec)
 		if err == nil && agent != "" {
@@ -642,17 +915,35 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 	m.results[projectKey(msg.Project)] = msg.Result
 	delete(m.projectErrors, projectKey(msg.Project))
 	m.syncBoard()
-	for _, workspace := range msg.Result.Workspaces {
-		createdShell := workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
-		createdWorktree := workspace.Kind == workspaceinventory.KindWorktree && m.pendingCreatedPath != "" && workspace.Path == m.pendingCreatedPath
-		if createdShell || createdWorktree {
-			m.workspaces.SelectID(workspace.ID)
-			break
-		}
-	}
+	return m.previewSync()
+}
+
+func (m *Model) clearPendingCreated() {
 	m.pendingCreatedTmux = ""
 	m.pendingCreatedPath = ""
-	return m.previewSync()
+}
+
+// honorPendingCreated selects a still-pending created workspace once it is
+// present in results and visible. Pending stays set until that happens.
+func (m *Model) honorPendingCreated() bool {
+	if m.pendingCreatedTmux == "" && m.pendingCreatedPath == "" {
+		return false
+	}
+	for _, result := range m.results {
+		for _, workspace := range result.Workspaces {
+			createdShell := m.pendingCreatedTmux != "" && workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
+			createdWorktree := m.pendingCreatedPath != "" && workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == m.pendingCreatedPath
+			if !createdShell && !createdWorktree {
+				continue
+			}
+			if m.workspaces.SelectID(workspace.ID) {
+				m.clearPendingCreated()
+				return true
+			}
+			return false
+		}
+	}
+	return false
 }
 
 func (m *Model) createWheelAtBoundary(msg tea.MouseWheelMsg) bool {

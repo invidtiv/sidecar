@@ -15,11 +15,10 @@ const (
 	taskLinkItemPrefix = "task-link-item-"
 )
 
-// taskPickerSection is the single task-search presentation used by both
-// worktree creation and linking an existing worktree. All geometry is derived
-// from the modal's rendered content width so borders and hit regions cannot
-// disagree at narrow terminal sizes.
-func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected bool, maxVisible int) modal.Section {
+// taskPickerSection is the task-search presentation for linking a task to an
+// existing worktree. All geometry is derived from the modal's rendered content
+// width so borders and hit regions cannot disagree at narrow terminal sizes.
+func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, maxVisible int) modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		maxVisible = min(maxVisible, taskPickerVisibleRows(p.height, fieldID == taskLinkFieldID))
 		lines := []string{label}
@@ -27,9 +26,7 @@ func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected b
 		lineY := 1
 
 		inputFocused := focusID == fieldID || (focusID == "" && fieldID == taskLinkFieldID)
-		if selected {
-			p.taskSearchInput.Blur()
-		} else if inputFocused {
+		if inputFocused {
 			p.taskSearchInput.Focus()
 		} else {
 			p.taskSearchInput.Blur()
@@ -47,16 +44,7 @@ func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected b
 			style = inputFocusedStyle()
 		}
 
-		display := p.taskSearchInput.View()
-		if selected {
-			display = p.createTaskID
-			if p.createTaskTitle != "" {
-				prefix := p.createTaskID + ": "
-				titleWidth := max(0, inputWidth-ansi.StringWidth(prefix))
-				display = prefix + ansi.Truncate(p.createTaskTitle, titleWidth, "…")
-			}
-		}
-		rendered := style.Render(display)
+		rendered := style.Render(p.taskSearchInput.View())
 		renderedLines := strings.Split(rendered, "\n")
 		lines = append(lines, renderedLines...)
 		focusables = append(focusables, modal.FocusableInfo{
@@ -64,11 +52,6 @@ func (p *Plugin) taskPickerSection(fieldID, itemPrefix, label string, selected b
 			Width: min(contentWidth, ansi.StringWidth(rendered)), Height: len(renderedLines),
 		})
 		lineY += len(renderedLines)
-
-		if selected {
-			lines = append(lines, dimText("  Backspace to clear"))
-			return modal.RenderedSection{Content: strings.Join(lines, "\n"), Focusables: focusables}
-		}
 
 		if p.taskSearchLoading {
 			lines = append(lines, dimText("  Loading tasks..."))
