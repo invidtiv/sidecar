@@ -108,9 +108,6 @@ type OpenPrefilledShellMsg struct {
 // destination is honored. Escape returns to whatever sent it.
 type OpenConfigurationMsg struct {
 	Page configui.PageID
-	// AddProject asks for the Add Project route rather than the page itself,
-	// for the case where the missing prerequisite is exactly a project.
-	AddProject bool
 }
 
 // OpenConfiguration returns a command that opens Configuration on a page.

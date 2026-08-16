@@ -1,6 +1,8 @@
 package workspace
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
@@ -32,9 +34,6 @@ var tmuxAvailable = isTmuxInstalled
 type setupPrompt struct {
 	headline string
 	copy     string
-	// addProject asks Configuration for the Add Project route directly, for
-	// the one prerequisite that has a single obvious repair.
-	addProject bool
 }
 
 // regionOpenSetupButton is the pressable pill in the blocked empty state.
@@ -45,9 +44,8 @@ const regionOpenSetupButton = "open-setup-button"
 func (p *Plugin) setupPromptFor() (setupPrompt, bool) {
 	if p.ctx != nil && p.ctx.Config != nil && len(p.ctx.Config.Projects.List) == 0 {
 		return setupPrompt{
-			headline:   "No workspaces yet",
-			copy:       "Add a project in Sidecar Setup so Sidecar knows where your code lives.",
-			addProject: true,
+			headline: "No workspaces yet",
+			copy:     "Start in Sidecar Setup to add a project and finish the parts Sidecar needs.",
 		}, true
 	}
 	if !tmuxAvailable() {
@@ -78,12 +76,15 @@ func (p *Plugin) setupPromptActive() bool {
 // surface and does not render it; it sends the same message the header gear's
 // handler ends up at, and escape returns here.
 func (p *Plugin) openSetupCmd() tea.Cmd {
-	prompt, ok := p.setupPromptFor()
-	if !ok {
+	if _, ok := p.setupPromptFor(); !ok {
 		return nil
 	}
+	// Setup, not a deeper route: the pill says "Open Sidecar Setup", and a
+	// control that lands somewhere other than where it says it will is worse
+	// than one extra keystroke. Setup's first row is the repair for whichever
+	// prerequisite is missing.
 	return func() tea.Msg {
-		return app.OpenConfigurationMsg{Page: configui.PageSetup, AddProject: prompt.addProject}
+		return app.OpenConfigurationMsg{Page: configui.PageSetup}
 	}
 }
 
@@ -94,18 +95,32 @@ func (p *Plugin) openSetupCmd() tea.Cmd {
 func (p *Plugin) setupPromptLines(prompt setupPrompt, width int) (lines []string, actionLine int) {
 	pill := styles.RenderPillWithStyle(setupPillLabel(width), styles.ButtonHover, nil)
 	lines = []string{
-		styles.Title.Render(fitPromptText(prompt.headline, width)),
+		styles.Title.Render(ansi.Truncate(prompt.headline, width, "…")),
 		"",
 	}
-	if copyLine := fitPromptText(prompt.copy, width); copyLine != "" {
-		lines = append(lines, styles.Muted.Render(copyLine), "")
+	for _, line := range wrapPromptText(prompt.copy, width) {
+		lines = append(lines, styles.Muted.Render(line))
 	}
+	lines = append(lines, "")
 	actionLine = len(lines)
 	lines = append(lines, pill)
-	if hint := fitPromptText("Or select the gear in the header.", width); hint != "" {
-		lines = append(lines, "", styles.Muted.Render(hint))
+	lines = append(lines, "")
+	for _, line := range wrapPromptText("Or select the gear in the header.", width) {
+		lines = append(lines, styles.Muted.Render(line))
 	}
 	return lines, actionLine
+}
+
+// wrapPromptText breaks a sentence over the sidebar's width. The prose wraps
+// rather than truncating, because a half sentence is worse than two lines —
+// and drops entirely below the width where even wrapping produces fragments,
+// where the pill above it is still the whole instruction.
+func wrapPromptText(text string, width int) []string {
+	if width < 12 {
+		return nil
+	}
+	wrapped := ansi.Wordwrap(text, width, "")
+	return strings.Split(strings.TrimRight(wrapped, "\n"), "\n")
 }
 
 // setupPillLabel is the action's widest form that fits.
@@ -116,26 +131,4 @@ func setupPillLabel(width int) string {
 		}
 	}
 	return "Setup"
-}
-
-// fitPromptText drops a sentence that cannot be read rather than truncating it
-// into a fragment. The pill above it still says what to press.
-func fitPromptText(text string, width int) string {
-	if ansi.StringWidth(text) <= width {
-		return text
-	}
-	if head, _, ok := cutSentence(text); ok && ansi.StringWidth(head) <= width {
-		return head
-	}
-	return ""
-}
-
-// cutSentence returns the first sentence of a prompt line.
-func cutSentence(text string) (string, string, bool) {
-	for i := 0; i < len(text)-1; i++ {
-		if text[i] == '.' && text[i+1] == ' ' {
-			return text[:i+1], text[i+2:], true
-		}
-	}
-	return text, "", false
 }

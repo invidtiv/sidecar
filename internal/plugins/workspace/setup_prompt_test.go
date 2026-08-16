@@ -80,8 +80,8 @@ func TestEmptyWorkspacesOffersSetupWhenNoProjectIsConfigured(t *testing.T) {
 	if !ok {
 		t.Fatalf("openSetupCmd produced %T, want app.OpenConfigurationMsg", msg)
 	}
-	if request.Page != configui.PageSetup || !request.AddProject {
-		t.Fatalf("request = %+v; want Setup with AddProject", request)
+	if request.Page != configui.PageSetup {
+		t.Fatalf("request = %+v; want Setup", request)
 	}
 }
 
@@ -98,8 +98,8 @@ func TestEmptyWorkspacesOffersSetupWhenTmuxIsMissing(t *testing.T) {
 		t.Fatalf("blocked empty state did not name tmux:\n%s", view)
 	}
 	request := p.openSetupCmd()().(app.OpenConfigurationMsg)
-	if request.Page != configui.PageSetup || request.AddProject {
-		t.Fatalf("request = %+v; want Setup without the Add Project route", request)
+	if request.Page != configui.PageSetup {
+		t.Fatalf("request = %+v; want Setup", request)
 	}
 }
 

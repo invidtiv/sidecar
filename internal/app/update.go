@@ -463,12 +463,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if page == "" {
 			page = configui.DefaultPage
 		}
-		cmd := m.openConfiguration(page)
-		if msg.AddProject && m.config != nil {
-			m.config.OpenAddProject()
-			m.updateContext()
-		}
-		return m, cmd
+		return m, m.openConfiguration(page)
 
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)

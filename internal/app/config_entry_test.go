@@ -70,23 +70,24 @@ func TestStartupConfigPageOpensConfigurationOverTheNormalSurface(t *testing.T) {
 	}
 }
 
-// An empty state's request lands on the same handler, and Add Project is the
-// route for the one prerequisite that has a single obvious repair.
-func TestOpenConfigurationMsgRoutesToAddProject(t *testing.T) {
+// An empty state's request lands on the same handler, and esc from there
+// returns to the surface that sent it.
+func TestOpenConfigurationMsgFromAnEmptyStateReturnsOnEscape(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "workspaces")
+	priorPlugin := m.activePlugin
 
-	updated, _ := m.Update(OpenConfigurationMsg{Page: configui.PageSetup, AddProject: true})
+	updated, _ := m.Update(OpenConfigurationMsg{Page: configui.PageSetup})
 	m = asAppModel(t, updated)
-	if !m.configOpen() {
-		t.Fatal("Configuration did not open")
-	}
-	if m.config.Page() != configui.PageProjects {
-		t.Fatalf("Add Project opened on %q, want Projects", m.config.Page())
+	if !m.configOpen() || m.config.Page() != configui.PageSetup {
+		t.Fatalf("Configuration did not open on Setup: open=%v page=%q", m.configOpen(), m.config.Page())
 	}
 
 	m = typeKey(t, m, "esc")
-	if !m.configOpen() {
-		t.Fatal("esc from the Add Project route must return to Configuration, not leave it")
+	if m.configOpen() {
+		t.Fatal("esc did not close Configuration")
+	}
+	if m.activePlugin != priorPlugin {
+		t.Fatal("esc did not return to the surface that opened Configuration")
 	}
 }
 
