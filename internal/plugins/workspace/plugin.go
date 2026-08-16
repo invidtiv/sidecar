@@ -883,6 +883,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("enter", "open-item", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("O", "open-in-td", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("y", "yank-issue", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")

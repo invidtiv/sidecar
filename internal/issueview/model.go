@@ -111,6 +111,13 @@ type Model struct {
 	// instead of Load retargeting this model. Hosts that tab issues use this
 	// so navigation cannot destroy the issue the user is reading.
 	OpenHandler func(issueID string) tea.Cmd
+
+	// OpenInTDHandler, when set, is what O does: it hands the selected issue
+	// to the host so the host can put it in front of the user in td. The
+	// capability lives here rather than in each host's key switch so every
+	// surface that shows an issue card answers O the same way and advertises
+	// it in the same ACTIONS row.
+	OpenInTDHandler func(issueID string) tea.Cmd
 }
 
 // ActionHint is one key/label pair drawn in the card's ACTIONS row.
@@ -417,6 +424,13 @@ func (m *Model) handleKeyString(key string) (bool, tea.Cmd) {
 	case "G", "end":
 		m.scroll = m.maxScroll()
 		return true, nil
+	case "O":
+		// Answered before the active check: opening the issue in td is about
+		// the card, not about walking the epic, so a focused-but-inactive card
+		// takes it too.
+		if m.OpenInTDHandler != nil {
+			return true, m.OpenInTDHandler(m.SelectedID())
+		}
 	}
 
 	if !m.active {
@@ -634,6 +648,11 @@ func (m *Model) actionHints(width int) string {
 		}
 	} else if m.focused {
 		parts = append(parts, hint("↵", "activate"))
+	}
+	// O sits with the card's own keys because it is one: it is offered exactly
+	// when a host wired the capability, and on every surface that did.
+	if m.OpenInTDHandler != nil && (m.active || m.focused) {
+		parts = append(parts, hint("O", "td"))
 	}
 	for _, h := range m.hints {
 		parts = append(parts, hint(h.Key, h.Label))

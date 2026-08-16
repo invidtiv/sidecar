@@ -181,6 +181,7 @@ row and are not written to disk.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `O` | open-in-td | Open the selected issue in td (same jump as the preview modal's `o`) |
 | `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
 | `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
 | `y` | yank-issue | Copy issue as markdown |
@@ -198,6 +199,7 @@ active tab, and each tab's scroll.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `O` | open-in-td | Open the selected issue in td (same jump as the preview modal's `o`) |
 | `x` | close-tab | Close the active tab. Last tab forgets the pane |
 | `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
 | `y` | yank-issue | Copy issue as markdown |
@@ -259,6 +261,32 @@ active tab, and each tab's scroll.
 | `O` | open-in-file-browser | Open in file browser |
 | `y` | yank-file | Copy file info |
 | `Y` | yank-path | Copy file path |
+
+### Inline Diff Pane (`git-status-diff`)
+
+The right-hand pane of the Git tab, focused with `enter` / `l` from the file
+list.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `j` / `k` | scroll-down / scroll-up | Scroll the diff |
+| `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
+| `g` / `G` | — | Jump to start (also resets the horizontal axis) / end |
+| `h` / `l` | — | Scroll horizontally; `h` at column 0 returns to the sidebar |
+| `\|` | reset-hscroll | Snap the horizontal scroll back to column 0 |
+| `enter` | full-diff | Open the full-screen diff |
+| `s` / `u` | stage-file / unstage-file | Stage / unstage the file |
+| `v` | toggle-diff-view | Cycle unified → split → full-file |
+| `w` | toggle-wrap | Toggle line wrap |
+| `\` | toggle-sidebar | Toggle the sidebar |
+| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the split |
+
+`|` is vim's goto-column key. It reads as the odd choice next to vim's `0`, and
+`0` is what this pane used to bind — but the whole number row belongs to the
+header (see "The header row is one ring"), so `0` never reaches the plugin. It
+was a live handler that had quietly stopped being reachable; `|` is the
+replacement, and unlike `0` it is registered, so it appears in the footer and
+in `?`.
 
 ### Full-Screen Diff (`git-diff`)
 

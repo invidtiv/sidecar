@@ -507,10 +507,12 @@ var (
 	// blue for links. Structure is carried by a seven-step neutral ramp rather
 	// than by saturation.
 	//
-	// The design's most recessive tone (#3c4247) is deliberately not used for
-	// any text role: it lands around 1.8:1 on the canvas, well under the 3.0
-	// floor NormalizePalette holds de-emphasised text to. It appears only as
-	// non-text structure (scrollbar thumb, inactive gradient border).
+	// The design's most recessive tone (#3c4247) is deliberately not used at
+	// all: it lands at 1.86:1 on the canvas, well under the 3.0 floor
+	// NormalizePalette holds de-emphasised text to, so no text role may adopt
+	// it. It is not in this palette under any other role either — the
+	// structural tones it might have covered are the rule (#2f3438), the
+	// hairline (#1c2126) and the scrollbar thumb (#5a6167).
 	SidecarModernTheme = Theme{
 		Name:        "sidecar-modern",
 		DisplayName: "Sidecar Modern",
@@ -524,14 +526,14 @@ var (
 			// Status colors
 			Success: "#5b8f63", // green - done / live
 			Warning: "#c0982f", // gold - attention, P2
-			Error:   "#bd645b", // red - failing, P1, destructive (doc's #b0574f lifted to AA as text)
+			Error:   "#c06c64", // red - failing, P1, destructive (doc's #b0574f lifted to AA as text on every fill, selection included)
 			Info:    "#4a8f8f", // teal - in progress / open
 
 			// Text ramp
 			TextPrimary:   "#cfd3d6",
 			TextSecondary: "#8b9298",
-			TextMuted:     "#858e95", // #7b848c misses 4.5 on SurfaceRaised by a hair
-			TextSubtle:    "#646b71", // one step up from the doc's #5a6167 to clear the 3.0 floor
+			TextMuted:     "#858e95", // the doc's #7b848c reads 3.96 on SurfaceRaised, short of 4.5
+			TextSubtle:    "#697177", // the doc's #5a6167 scrapes 3.01 on the canvas but falls to 2.89 on the bars and 2.75 on selection; this clears 3.0 on all four fills including SurfaceRaised
 			TextSelection: "#ffffff", // selected row title
 
 			// Backgrounds
@@ -575,7 +577,7 @@ var (
 			TabTextInactive:  "#7b848c",
 			Link:             "#4b8fd6", // blue - links and markdown headings
 			ToastSuccessText: "#0f1113",
-			ToastErrorText:   "#0f1113", // canvas ink: black clears 5.1 on the error red, white only 4.1
+			ToastErrorText:   "#0f1113", // canvas ink: black clears 5.0 on the error red, white only 3.8
 
 			// Danger buttons
 			DangerLight:  "#d99a94",
@@ -593,7 +595,7 @@ var (
 			BlameAge1: "#7fae86",
 			BlameAge2: "#5b8f63",
 			BlameAge3: "#c0982f",
-			BlameAge4: "#bd645b",
+			BlameAge4: "#c06c64",
 			BlameAge5: "#7b848c",
 
 			// Third-party themes
@@ -601,7 +603,10 @@ var (
 			MarkdownTheme: "dark",
 
 			// Overview board
-			ProjectHues: []string{"#c0982f", "#4a8f8f", "#5b8f63", "#9a6fb0", "#4b8fd6", "#c97a72"},
+			// The purple is the doc's #9a6fb0 lifted: it reads 4.35 on the
+			// selection fill, and the ramp has to stay AA on every background
+			// a project name can land on.
+			ProjectHues: []string{"#c0982f", "#4a8f8f", "#5b8f63", "#a57fb9", "#4b8fd6", "#c97a72"},
 			// Agent chips are drawn on SurfaceRaised, so these are the palette
 			// hues already nudged to clear 4.5 there — written out rather than
 			// left for NormalizePalette to discover.
@@ -615,7 +620,7 @@ var (
 			},
 			LaneWorking: "#5b8f63", // green - live
 			LaneBlocked: "#c0982f", // gold - wants attention (red is reserved for failing)
-			LaneDone:    "#9a6fb0", // purple - reviewable
+			LaneDone:    "#a57fb9", // purple - reviewable (same lift as ProjectHues[3])
 			LaneIdle:    "#8b9298",
 			LanePaused:  "#7b848c",
 		},

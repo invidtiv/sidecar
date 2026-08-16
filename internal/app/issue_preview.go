@@ -83,6 +83,20 @@ type OpenFullIssueMsg struct {
 	IssueID string
 }
 
+// OpenIssueInTD is the one jump: focus the td plugin and open the issue there.
+// The preview modal, the project Workspaces issue pane, and the global
+// Workspaces issue preview all reach td through this, so "open in td" cannot
+// come to mean three slightly different things.
+func OpenIssueInTD(issueID string) tea.Cmd {
+	if issueID == "" {
+		return nil
+	}
+	return tea.Batch(
+		FocusPlugin("td-monitor"),
+		func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
+	)
+}
+
 // issuePreviewModelID is reserved for the app's preview modal so a workspace
 // issue leaf can never have its load stolen by SetResult identity.
 const issuePreviewModelID = -1

@@ -1,6 +1,7 @@
 package styles
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -50,7 +51,7 @@ func TestSidecarModernReadableWhereNormalizationDoesNotReach(t *testing.T) {
 		min    float64
 	}{
 		{"textPrimary on selection", c.TextPrimary, c.BgTertiary, 4.5},
-		{"textSecondary on selection", c.TextSecondary, c.BgTertiary, 4.0},
+		{"textSecondary on selection", c.TextSecondary, c.BgTertiary, 4.5},
 		{"textMuted on selection", c.TextMuted, c.BgTertiary, 4.5},
 		{"textSelection on selection", c.TextSelection, c.BgTertiary, 4.5},
 		{"primary on canvas", c.Primary, c.BgPrimary, 4.5},
@@ -59,7 +60,7 @@ func TestSidecarModernReadableWhereNormalizationDoesNotReach(t *testing.T) {
 		{"error on canvas", c.Error, c.BgPrimary, 4.5},
 		{"info on canvas", c.Info, c.BgPrimary, 4.5},
 		{"success on bar", c.Success, c.BgSecondary, 4.5},
-		{"error on bar", c.Error, c.BgSecondary, 4.4},
+		{"error on bar", c.Error, c.BgSecondary, 4.5},
 		{"dangerLight on dangerDark", c.DangerLight, c.DangerDark, 4.5},
 		{"textInverse on dangerBright", c.TextInverse, c.DangerBright, 4.5},
 		{"link on selection", c.Link, c.BgTertiary, 4.5},
@@ -76,6 +77,68 @@ func TestSidecarModernReadableWhereNormalizationDoesNotReach(t *testing.T) {
 	for _, role := range []string{c.TextPrimary, c.TextSecondary, c.TextMuted, c.TextSubtle, c.TabTextInactive, c.TextHighlight} {
 		if role == tooRecessive {
 			t.Errorf("%s is below the readable floor on %s; keep it to non-text structure", tooRecessive, c.BgPrimary)
+		}
+	}
+}
+
+// The test above walks the canvas and the bars. This one walks the two fills
+// that were missed first time round and that a muted palette fails on soonest:
+// the selection row (BgTertiary), where every semantic accent can be drawn as
+// text, and SurfaceRaised, where the de-emphasised end of the text ramp lands
+// inside key-hint pills and bar chips.
+//
+// Both were found by review rather than by a test, which is the reason this
+// exists: a colour is only "checked" against the backgrounds it is enumerated
+// against.
+func TestSidecarModernReadableOnSelectionAndRaisedChrome(t *testing.T) {
+	c := NormalizePalette(SidecarModernTheme.Colors)
+
+	// Semantic accents render as text on the selected row exactly as they do
+	// on the canvas, so they are held to the same AA floor there.
+	accents := []struct{ name, hex string }{
+		{"primary", c.Primary},
+		{"secondary", c.Secondary},
+		{"accent", c.Accent},
+		{"success", c.Success},
+		{"warning", c.Warning},
+		{"error", c.Error},
+		{"info", c.Info},
+		{"link", c.Link},
+		{"laneWorking", c.LaneWorking},
+		{"laneBlocked", c.LaneBlocked},
+		{"laneDone", c.LaneDone},
+		{"laneIdle", c.LaneIdle},
+		{"lanePaused", c.LanePaused},
+	}
+	for i, hue := range c.ProjectHues {
+		accents = append(accents, struct{ name, hex string }{fmt.Sprintf("projectHues[%d]", i), hue})
+	}
+	// A project name or a lane label can sit on any of the three fills, so the
+	// worst case across all of them is the number that matters.
+	fills := []string{c.BgPrimary, c.BgSecondary, c.BgTertiary}
+	for _, a := range accents {
+		if ratio := MinContrastRatio(a.hex, fills); ratio < 4.5-0.01 {
+			t.Errorf("%s (%s): %.2f < 4.50 on the worst of canvas/bar/selection", a.name, a.hex, ratio)
+		}
+	}
+
+	// Text drawn on raised chrome. The de-emphasised roles are held to the 3.0
+	// floor NormalizePalette states for them; the roles that carry real content
+	// are held to AA.
+	raised := []struct {
+		name, hex string
+		min       float64
+	}{
+		{"textPrimary", c.TextPrimary, 4.5},
+		{"textSecondary", c.TextSecondary, 4.5},
+		{"textMuted", c.TextMuted, 4.5},
+		{"keyHintFg", c.KeyHintFg, 4.5},
+		{"textSubtle", c.TextSubtle, 3.0},
+		{"tabTextInactive", c.TabTextInactive, 3.0},
+	}
+	for _, r := range raised {
+		if ratio := ContrastRatio(r.hex, c.SurfaceRaised); ratio < r.min-0.01 {
+			t.Errorf("%s on SurfaceRaised (%s): %.2f < %.2f", r.name, r.hex, ratio, r.min)
 		}
 	}
 }

@@ -2,13 +2,9 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/term"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/community"
@@ -480,6 +476,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
 
+	case overview.OpenIssueInTDMsg:
+		// The global issue preview asked for the jump every issue surface
+		// makes. FocusPluginByIDMsg leaves global on its own way through.
+		return m, OpenIssueInTD(msg.IssueID)
+
 	case openInGitSwitchMsg:
 		// Nil inventory, same as navigateFromOverview: resolve ProjectRoot
 		// from the target checkout, not the current project's worktree cache.
@@ -544,29 +545,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case plugin.OpenFileMsg:
-		// Open file in editor using tea.ExecProcess
-		// Most editors support +lineNo syntax for opening at a line
-		args := []string{}
-		if msg.LineNo > 0 {
-			args = append(args, fmt.Sprintf("+%d", msg.LineNo))
-		}
-		args = append(args, msg.Path)
-		c := exec.Command(msg.Editor, args...)
-		termState, _ := term.GetState(int(os.Stdout.Fd()))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			if termState != nil {
-				_ = term.Restore(int(os.Stdout.Fd()), termState)
-			}
-			return EditorReturnedMsg{Err: err}
-		})
+		// The editor runs through the user's login shell so their profile
+		// applies; see editor_launch.go. Most editors support +lineNo syntax
+		// for opening at a line.
+		return m, m.launchEditor(msg)
 
 	case EditorReturnedMsg:
 		// After editor exits, trigger refresh. In v2 mouse mode is declared on
 		// tea.View and the renderer re-asserts it on the next frame after
 		// tea.ExecProcess returns, so no manual mouse re-enable is needed.
+		if retry := editorFallbackCmd(msg); retry != nil {
+			// The profile-loading shell never reached the editor. Fall back to
+			// a direct exec rather than reporting a failure the user did not
+			// cause and cannot see.
+			return m, retry
+		}
 		var cmds []tea.Cmd
 		if msg.Err != nil {
-			cmds = append(cmds, func() tea.Msg { return ErrorMsg(msg) })
+			cmds = append(cmds, func() tea.Msg { return ErrorMsg{Err: msg.Err} })
 		} else {
 			cmds = append(cmds, func() tea.Msg { return RefreshMsg{} })
 		}
@@ -1493,16 +1489,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		switch key {
-		case "o":
+		case "o", "O":
+			// O is the same request the issue panes answer; the modal has
+			// always answered o, so both reach td.
 			if d := m.previewIssueData(); d != nil {
 				issueID := d.ID
 				m.resetIssuePreview()
 				m.resetIssueInput()
 				m.updateContext()
-				return m, tea.Batch(
-					FocusPlugin("td-monitor"),
-					func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-				)
+				return m, OpenIssueInTD(issueID)
 			}
 		case "b":
 			m.backToIssueInput()
@@ -1535,13 +1530,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resetIssuePreview()
 			m.resetIssueInput()
 			m.updateContext()
-			if issueID != "" {
-				return m, tea.Batch(
-					FocusPlugin("td-monitor"),
-					func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-				)
-			}
-			return m, nil
+			return m, OpenIssueInTD(issueID)
 		case "back":
 			m.backToIssueInput()
 			return m, nil
@@ -2645,12 +2634,7 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.resetIssuePreview()
 		m.resetIssueInput()
 		m.updateContext()
-		if issueID != "" {
-			return m, tea.Batch(
-				FocusPlugin("td-monitor"),
-				func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-			)
-		}
+		return m, OpenIssueInTD(issueID)
 	}
 	return m, nil
 }

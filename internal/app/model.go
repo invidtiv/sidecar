@@ -494,6 +494,9 @@ func (m Model) Init() tea.Cmd {
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 	}
 	cmds = append(cmds, m.productCheckCmds(false)...)
+	if cmd := defaultThemeNoticeCmd(m.cfg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 
 	// Mark the startup plugin focused. SetActivePlugin only runs when the user
 	// switches tabs, so without this the initial tab reports itself unfocused —

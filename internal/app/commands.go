@@ -179,6 +179,10 @@ type ChangelogLoadedMsg struct {
 // Used to restore terminal state (mouse support) after returning from vim/etc.
 type EditorReturnedMsg struct {
 	Err error
+	// Fallback is the direct-exec argv to try when the shell that was asked to
+	// load the user's profile never got as far as running the editor. It is
+	// empty once the fallback has been used, so a failure can never loop.
+	Fallback []string
 }
 
 // SwitchToMainWorktreeMsg requests switching to the main worktree.

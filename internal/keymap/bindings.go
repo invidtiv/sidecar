@@ -184,6 +184,7 @@ func DefaultBindings() []Binding {
 		// Focused td issue leaf. Tab keys match global-workspaces-doc;
 		// y/Y match td monitor and the project issue pane.
 		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
+		{Key: "O", Command: "open-in-td", Context: "global-workspaces-issue"},
 		{Key: "y", Command: "yank-issue", Context: "global-workspaces-issue"},
 		{Key: "Y", Command: "yank-issue-key", Context: "global-workspaces-issue"},
 		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
@@ -222,6 +223,7 @@ func DefaultBindings() []Binding {
 
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
+		{Key: "O", Command: "open-in-td", Context: "workspace-issue"},
 		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
 		{Key: "Y", Command: "yank-issue-key", Context: "workspace-issue"},
 		{Key: "q", Command: "close", Context: "workspace-issue"},
@@ -365,6 +367,7 @@ func DefaultBindings() []Binding {
 		{Key: "v", Command: "toggle-diff-view", Context: "git-status-diff"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "git-status-diff"},
 		{Key: "w", Command: "toggle-wrap", Context: "git-status-diff"},
+		{Key: "|", Command: "reset-hscroll", Context: "git-status-diff"},
 		{Key: "+", Command: "resize-pane-grow", Context: "git-status-diff"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "git-status-diff"},
 

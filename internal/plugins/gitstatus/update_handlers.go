@@ -510,8 +510,23 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 			p.diffPaneScroll = 0
 		}
 
-	case "0":
-		// Reset horizontal scroll
+	case "|":
+		// Snap horizontal scroll back to column 0.
+		//
+		// This was `0` — vim's column-zero key — until the header grew its
+		// named global entries (8/9/0 select Sessions/Activity/Tasks), which
+		// the host handles before any plugin sees the key. `0` here was only
+		// ever working by falling through a gap in the host's ladder, and the
+		// number row is deliberately host-owned: keymap.GlobalKeys lists all
+		// ten, on the stated rule that a number meaning one thing in one tab
+		// and something else in another is a key whose meaning depends on
+		// where you happen to be. So the binding moves rather than being
+		// claimed back.
+		//
+		// `|` is vim's goto-column key and sits next to `\` (toggle sidebar)
+		// and near `w` (toggle wrap), the two other horizontal-space keys in
+		// this pane. Unlike the old `0` it is in Commands() and the keymap
+		// registry, so it shows up in the footer and in `?`.
 		p.diffPaneHorizScroll = 0
 
 	case "v":
