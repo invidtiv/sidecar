@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -29,12 +30,13 @@ func inputFocusedStyle() lipgloss.Style {
 		Padding(0, 1)
 }
 
-// Panel dimension constants for consistent width calculations.
-// These must stay in sync with styles.RenderGradientBorder.
+// Panel dimension constants for consistent width calculations. They are read
+// from the shared frame rather than restated, so this plugin and the global
+// Workspaces browser cannot disagree about what a panel border costs.
 const (
-	panelBorderWidth  = 2                                    // Left + right border (1 each)
-	panelPaddingWidth = 2                                    // Left + right padding (1 each)
-	panelOverhead     = panelBorderWidth + panelPaddingWidth // Total overhead: 4
+	panelBorderWidth  = paneframe.BorderWidth  // Left + right border (1 each)
+	panelPaddingWidth = paneframe.PaddingWidth // Left + right padding (1 each)
+	panelOverhead     = paneframe.Overhead     // Total overhead: 4
 )
 
 // View renders the plugin UI.
