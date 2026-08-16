@@ -825,6 +825,15 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
+	// Focus follows the pointer's LEAF before any region handler runs, so the
+	// ring lands on what was pressed whether or not that leaf's kind happens to
+	// own a click-to-focus region. The terminal leaf owns none — its presses are
+	// the live pane's and are forwarded to tmux — which is why hanging focus off
+	// the region handlers left the ring behind on the neighbour. This moves
+	// focus only; the press still reaches the region that claimed it.
+	if tty.PressesTerminal(action.Type) {
+		paneframe.FocusLeafAt(paneHost{m}, action.X, action.Y)
+	}
 	cmd := m.workspacesRegionMouse(action)
 	if !pressAway || secondaryClick {
 		return cmd

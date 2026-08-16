@@ -35,8 +35,8 @@ func (m *Model) setFocusTarget(target panelayout.Target) tea.Cmd {
 	if target.Kind == panelayout.TargetSidebar {
 		return m.focusList()
 	}
-	m.focusPreviewLeaf(target.Leaf)
-	return nil
+	_, cmd := m.focusPreviewLeaf(target.Leaf)
+	return cmd
 }
 
 // cyclePaneFocus moves the keyboard to the next window on screen, wrapping.

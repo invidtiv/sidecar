@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panelayout"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -286,6 +287,13 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 
 	m.preview.focus = focusPreview
 	m.preview.interactive = true
+	// The pane taking the keyboard is the terminal leaf taking focus. Saying so
+	// here is what keeps the ring and the keys one value: without it a handover
+	// that started from a document leaf would type into the shell while the ring
+	// stayed on the document.
+	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal); leaf != nil {
+		m.focusPreviewLeaf(leaf.ID)
+	}
 	if m.previewNarrow() {
 		m.preview.full = true
 	}

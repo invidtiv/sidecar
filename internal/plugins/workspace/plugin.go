@@ -233,9 +233,17 @@ type Plugin struct {
 	// to, and dropping one would swallow the exact signal the content contract
 	// documents as how a content asserts geometry it owns beyond this process.
 	paneSizeCmds []tea.Cmd
-	docs         map[int]*docPane
-	issues       map[int]*issuePane
-	diffs        map[int]*diffPane
+	// paneFrame is the tree exactly as the last frame PLACED it, and paneFrameDrawn
+	// says a frame placed one at all. Both are cleared with the hit regions at the
+	// top of View and re-earned only where the tree is actually composed, so pointer
+	// geometry and click targets can never describe different frames — and a view
+	// that draws no tree (the kanban board, a zoomed terminal, a preview too small
+	// to place) answers no leaf boxes rather than last frame's.
+	paneFrame      PaneLayout
+	paneFrameDrawn bool
+	docs           map[int]*docPane
+	issues         map[int]*issuePane
+	diffs          map[int]*diffPane
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int

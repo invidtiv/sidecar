@@ -47,10 +47,32 @@ structural, not a habit to remember:
   (`RenderDividerHandle`, `DividerHitBox`, `HandleStateFor`), the compositor
   (`Compose`, `ComposeLeaf`, `RenderContent`), the chrome-aware floors
   (`ChromeFloors`), and the one order hit regions are registered in
-  (`RegisterRegions`).
+  (`RegisterRegions`), and click-to-focus (`LeafAt`, `FocusLeafAt`).
 - Each surface implements `paneframe.Host` and `paneframe.RegionSink` in exactly
   one file: `internal/plugins/workspace/pane_host.go` and
   `internal/overview/pane_host.go`.
+
+**Focus is one value, answered from geometry.** `Host.Focus()` draws the ring and
+`Host.SetFocus()` moves it; there is no third place a surface may record who is
+being typed into, so a surface whose live terminal holds the keyboard separately
+gives it up inside its own focus setter (`workspace.setFocusTarget`,
+`overview.focusPreviewLeaf`). A pointer moves focus through
+`paneframe.FocusLeafAt`, which resolves the leaf from its OUTER **box**, not from
+the hit region the press landed on — a terminal leaf owns no click-to-focus
+region, because its presses belong to the live pane and are forwarded to tmux.
+`FocusLeafAt` moves focus and nothing else, so the press still reaches whichever
+region claimed it, and it declines the divider's widened target so a press one
+cell off a handle resizes without also re-focusing. Hanging focus off the region
+handlers instead is td-43db92: one focus call per leaf kind, and the ring drawn
+on a neighbour for the kind nobody remembered.
+
+`Host.Layout()` must answer the tree the surface last **drew**, not one it could
+place. A view that replaces the preview — the kanban board, a modal — draws no
+tree, and geometry that outlives the frame lets a click on whatever is drawn
+there move pane focus instead. The project plugin records the layout beside the
+hit regions it earned (`paneFrame`/`paneFrameDrawn`, cleared with the hit map at
+the top of `View`); the global browser's `previewPeerBox()` already refuses when
+the preview is not drawn.
 
 **Do not add a second compositor, a second border rule, or a second divider
 renderer.** If a behaviour belongs to windowing, it goes in `paneframe`; if it

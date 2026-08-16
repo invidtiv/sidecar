@@ -458,17 +458,28 @@ func (m *Model) focusPreviewPane(kind panelayout.Kind) bool {
 	if leaf == nil {
 		return false
 	}
-	// The leaf path of the setter issues no command; only the sidebar path does.
-	m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leaf.ID})
+	// The setter's leaf path can hand back the live pane's keyboard; the queue is
+	// how that reaches Update from callers that deal in bools rather than
+	// commands. Only the sidebar path issues anything else.
+	m.queuePreviewCmd(m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leaf.ID}))
 	return true
 }
 
 // focusPreviewLeaf keeps the input owner and the layout tree's focused leaf in
 // lockstep. The tree focus also selects the pane rendered in narrow layouts.
-func (m *Model) focusPreviewLeaf(leafID int) bool {
+func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 	leaf := panelayout.Find(m.preview.paneRoot, leafID)
 	if leaf == nil {
-		return false
+		return false, nil
+	}
+	// Typing into the live pane is the terminal leaf holding the keyboard, and
+	// it is only ever legal on the leaf that has focus. Ending it here, rather
+	// than at each site that moves focus, is what keeps the ring honest: a ring
+	// drawn on the document while keys land in the shell is exactly what a
+	// per-site rule leaks the first time a site forgets.
+	var cmd tea.Cmd
+	if leaf.Kind != panelayout.Terminal {
+		cmd = m.exitPreviewInteractive()
 	}
 	m.preview.paneFocus = leaf.ID
 	m.preview.focus = focusPreview
@@ -484,7 +495,7 @@ func (m *Model) focusPreviewLeaf(leafID int) bool {
 	if m.preview.diff != nil {
 		m.preview.diff.focused = leaf.Kind == panelayout.Diff
 	}
-	return true
+	return true, cmd
 }
 
 // lastPreviewBoxes is the tiled leaf OUTER geometry for the current preview

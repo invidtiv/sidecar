@@ -60,6 +60,16 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 	// modal does. Leaving it open would leave a box drawn with a cursor in it
 	// that no keystroke could reach, and none could close.
 	defer p.closeUnfocusedDocSearches()
+	// Interactive mode is a live pane holding the keyboard, and it is only ever
+	// legal on the window that has focus. Ending it HERE, rather than at each
+	// site that moves focus, is what keeps the ring honest: a ring drawn on one
+	// leaf while keys land in another is exactly what a per-site rule leaks the
+	// first time a site forgets. It runs before the writes below because
+	// exitInteractiveMode restores the pane that was focused on entry, which
+	// this call is in the middle of replacing.
+	if p.viewMode == ViewModeInteractive && !p.targetOwnsTerminalKeyboard(t) {
+		p.exitInteractiveMode()
+	}
 	switch t.Kind {
 	case panelayout.TargetSidebar:
 		p.activePane = PaneSidebar
@@ -78,6 +88,22 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 		p.activePane = PanePreview
 		p.paneFocus = t.Leaf
 		p.termPanelFocused = false
+	}
+}
+
+// targetOwnsTerminalKeyboard reports that a focus target is a window a live
+// pane may keep typing into: the terminal panel, or a terminal leaf. Every
+// other window — the sidebar, a document, an issue, a diff — takes the keyboard
+// with it when focus lands on it.
+func (p *Plugin) targetOwnsTerminalKeyboard(t panelayout.Target) bool {
+	switch t.Kind {
+	case panelayout.TargetTermPanel:
+		return true
+	case panelayout.TargetLeaf:
+		leaf := FindPane(p.paneRoot, t.Leaf)
+		return leaf != nil && leaf.Split == nil && leaf.Kind == PaneTerminal
+	default:
+		return false
 	}
 }
 

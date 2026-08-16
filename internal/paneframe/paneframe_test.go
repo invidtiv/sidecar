@@ -40,6 +40,9 @@ type fakeHost struct {
 	chrome   map[int]Chrome
 	handles  map[int]ui.HandleState
 	queued   []tea.Cmd
+	layout   panelayout.Layout
+	laid     bool
+	setFocus []int
 }
 
 func (h *fakeHost) Content(node *panelayout.Node) Content {
@@ -65,6 +68,16 @@ func (h *fakeHost) Chrome(node *panelayout.Node) Chrome {
 func (h *fakeHost) HandleState(splitID int) ui.HandleState { return h.handles[splitID] }
 
 func (h *fakeHost) QueueSizeCmd(cmd tea.Cmd) { h.queued = append(h.queued, cmd) }
+
+func (h *fakeHost) SetFocus(node *panelayout.Node) {
+	if node == nil {
+		return
+	}
+	h.focus = node.ID
+	h.setFocus = append(h.setFocus, node.ID)
+}
+
+func (h *fakeHost) Layout() (panelayout.Layout, bool) { return h.layout, h.laid }
 
 func twoLeafTree(axis panelayout.Axis) *panelayout.Node {
 	return &panelayout.Node{
@@ -350,3 +363,150 @@ func (s boxSink) Divider(int, Box)                {}
 func (s boxSink) Tabs(_ *panelayout.Node, b Box)  { s.tabs(b) }
 func (s boxSink) Close(_ *panelayout.Node, b Box) { s.close(b) }
 func (s boxSink) Body(_ *panelayout.Node, b Box)  { s.body(b) }
+
+// everyKindTree places one leaf of every kind the pane tree knows, so a kind
+// added later fails these tests until it is added here too.
+func everyKindTree() *panelayout.Node {
+	return &panelayout.Node{
+		ID: 10,
+		Split: &panelayout.Split{
+			Axis: panelayout.Columns, Ratio: 50,
+			A: &panelayout.Node{ID: 11, Split: &panelayout.Split{
+				Axis: panelayout.Rows, Ratio: 50,
+				A: &panelayout.Node{ID: 1, Kind: panelayout.Terminal},
+				B: &panelayout.Node{ID: 2, Kind: panelayout.Document},
+			}},
+			B: &panelayout.Node{ID: 12, Split: &panelayout.Split{
+				Axis: panelayout.Rows, Ratio: 50,
+				A: &panelayout.Node{ID: 3, Kind: panelayout.Issue},
+				B: &panelayout.Node{ID: 4, Kind: panelayout.Diff},
+			}},
+		},
+	}
+}
+
+func everyKindLayout(t *testing.T) (panelayout.Layout, Box) {
+	t.Helper()
+	peer := Box{X: 20, Y: 2, W: 100, H: 40}
+	floors := ChromeFloors(panelayout.Floors{
+		Terminal: panelayout.Floor{Width: 10, Height: 3},
+		Doc:      panelayout.Floor{Width: 10, Height: 3},
+		Issue:    panelayout.Floor{Width: 10, Height: 3},
+		Diff:     panelayout.Floor{Width: 10, Height: 3},
+	})
+	layout, ok := panelayout.LayoutTree(everyKindTree(), peer, floors, 1)
+	if !ok || len(layout.Leaves) != 4 {
+		t.Fatalf("layout = %+v ok=%v, want four placed leaves", layout, ok)
+	}
+	return layout, peer
+}
+
+// Focus is answered from a leaf's box, not from the region that consumed the
+// press, so EVERY kind is click-to-focusable — including the terminal, whose
+// presses belong to the live pane and never reach a focus handler. The table is
+// exhaustive on purpose: a leaf kind added later cannot silently miss this.
+func TestFocusLeafAtFocusesEveryLeafKind(t *testing.T) {
+	layout, _ := everyKindLayout(t)
+	for _, placement := range layout.Leaves {
+		node := placement.Node
+		t.Run(fmt.Sprint(node.Kind), func(t *testing.T) {
+			box := placement.Box
+			// The content box, not the outer one: the outer perimeter's cells are
+			// the divider's widened drag target where two leaves meet, and that
+			// cell is the handle's by the order RegisterRegions lays down.
+			inner := Inset(box)
+			points := [][2]int{
+				{inner.X, inner.Y},
+				{inner.X + inner.W - 1, inner.Y + inner.H - 1},
+				{inner.X + inner.W/2, inner.Y + inner.H/2},
+			}
+			for _, point := range points {
+				host := &fakeHost{focus: 999, layout: layout, laid: true}
+				if !FocusLeafAt(host, point[0], point[1]) {
+					t.Fatalf("point %v in leaf %d's box %+v found no leaf", point, node.ID, box)
+				}
+				if host.Focus() != node.ID {
+					t.Fatalf("point %v focused leaf %d, want %d", point, host.Focus(), node.ID)
+				}
+			}
+		})
+	}
+}
+
+// A press that is not on a leaf leaves focus alone: a divider is the drag
+// handle's, and a point off the canvas belongs to whatever is drawn there.
+func TestFocusLeafAtIgnoresPointsOffEveryLeaf(t *testing.T) {
+	layout, peer := everyKindLayout(t)
+	points := map[string][2]int{}
+	for i, divider := range layout.Dividers {
+		points[fmt.Sprintf("divider %d", i)] = [2]int{divider.Box.X, divider.Box.Y}
+	}
+	points["left of the canvas"] = [2]int{peer.X - 1, peer.Y + 1}
+	points["above the canvas"] = [2]int{peer.X + 1, peer.Y - 1}
+	points["past the canvas"] = [2]int{peer.X + peer.W, peer.Y + peer.H}
+	for name, point := range points {
+		t.Run(name, func(t *testing.T) {
+			host := &fakeHost{focus: 4, layout: layout, laid: true}
+			if FocusLeafAt(host, point[0], point[1]) {
+				t.Fatalf("point %v claimed a leaf", point)
+			}
+			if len(host.setFocus) != 0 || host.Focus() != 4 {
+				t.Fatalf("point %v moved focus to %d", point, host.Focus())
+			}
+		})
+	}
+}
+
+// A surface with no placeable tree answers no leaf, and the frame must not
+// write focus on the strength of a layout that was never drawn.
+func TestFocusLeafAtIgnoresASurfaceWithNoLayout(t *testing.T) {
+	host := &fakeHost{focus: 2}
+	if FocusLeafAt(host, 5, 5) || len(host.setFocus) != 0 {
+		t.Fatalf("focus moved without a layout: %v", host.setFocus)
+	}
+	if FocusLeafAt(nil, 5, 5) {
+		t.Fatal("a nil host claimed a leaf")
+	}
+}
+
+// DividerHitBox reaches one cell into the border of the leaf on each side, so
+// the pointer does not have to be exact to grab a handle. Those cells are the
+// handle's, and focus has to agree: a press one cell off the divider must
+// resize the split it is on, not also re-focus the pane it was dragged past.
+// This is the same precedence RegisterRegions gives dividers over leaf bodies.
+func TestFocusLeafAtLeavesTheWidenedDividerTargetToTheHandle(t *testing.T) {
+	layout, _ := everyKindLayout(t)
+	if len(layout.Dividers) == 0 {
+		t.Fatal("the fixture placed no dividers")
+	}
+	for i, divider := range layout.Dividers {
+		hit := DividerHitBox(divider)
+		points := [][2]int{
+			{hit.X, hit.Y},
+			{hit.X + hit.W - 1, hit.Y + hit.H - 1},
+			{hit.X + hit.W/2, hit.Y + hit.H/2},
+		}
+		for _, point := range points {
+			host := &fakeHost{focus: 4, layout: layout, laid: true}
+			if FocusLeafAt(host, point[0], point[1]) {
+				t.Fatalf("divider %d: point %v inside its drag target claimed a leaf", i, point)
+			}
+			if len(host.setFocus) != 0 {
+				t.Fatalf("divider %d: point %v moved focus to %v", i, point, host.setFocus)
+			}
+		}
+	}
+	// The widened margin really does overlap a leaf, so the exclusion above is
+	// load-bearing rather than a tautology.
+	hit := DividerHitBox(layout.Dividers[0])
+	overlapped := false
+	for _, placement := range layout.Leaves {
+		box := placement.Box
+		if hit.X < box.X+box.W && box.X < hit.X+hit.W && hit.Y < box.Y+box.H && box.Y < hit.Y+hit.H {
+			overlapped = true
+		}
+	}
+	if !overlapped {
+		t.Fatal("premise: the widened divider target overlaps its neighbours' boxes")
+	}
+}

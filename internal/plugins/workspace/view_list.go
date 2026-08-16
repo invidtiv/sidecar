@@ -57,6 +57,11 @@ func (p *Plugin) View(width, height int) string {
 
 	// CRITICAL: Clear hit regions at start of each render
 	p.mouseHandler.Clear()
+	// Pane geometry is re-earned with the regions, and for the same reason: a
+	// frame that does not draw the tree — the kanban board, a modal, a preview
+	// that could not place one — must not leave last frame's leaf boxes
+	// answering pointer hits.
+	p.paneFrame, p.paneFrameDrawn = PaneLayout{}, false
 
 	var view string
 	switch p.viewMode {

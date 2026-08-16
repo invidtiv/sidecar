@@ -9,6 +9,7 @@ import (
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
@@ -843,6 +844,18 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	// registered by renderListView(), causing enterInteractiveMode/pane switches.
 	if p.isModalViewMode() && isBackgroundRegion(action.Region.ID) {
 		return nil
+	}
+	// Focus follows the pointer's LEAF before any region handler runs, so the
+	// ring lands on what was clicked whether or not that leaf's kind happens to
+	// own a click-to-focus region. A terminal leaf owns none — its presses are
+	// the live pane's — which is why hanging focus off the region handlers left
+	// the ring behind on the neighbour. Moving focus first also means a handler
+	// that wants something finer (the terminal panel inside the terminal leaf)
+	// still gets the last word. A modal is drawn over the tree and its own
+	// targets are not background regions, so it is excluded explicitly: a click
+	// on a file-picker row is not a click on the pane behind it.
+	if !p.isModalViewMode() {
+		paneframe.FocusLeafAt(paneHost{p}, action.X, action.Y)
 	}
 	p.notePressAwayFromTerminal(action)
 	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
