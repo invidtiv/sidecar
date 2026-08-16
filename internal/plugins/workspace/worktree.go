@@ -338,7 +338,12 @@ func (p *Plugin) deleteNewlyCreatedCmd() tea.Cmd {
 
 func deleteNewlyCreated(ctx context.Context, plan *CreateOperationPlan, expectedOID string, afterRemove func()) CreateRecoveryDeleteResult {
 	result := CreateRecoveryDeleteResult{}
-	if err := removeCleanLifecycleWorktreeContext(ctx, plan.SourceWorktree, plan.Path, plan.Branch, expectedOID); err != nil {
+	// Creation rollback: nobody confirmed a destructive action, so this states
+	// no force and pins the identity it created instead.
+	if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+		RepoPath: plan.SourceWorktree, ProjectRoot: plan.MainWorktree,
+		Path: plan.Path, Branch: plan.Branch, ExpectedOID: expectedOID,
+	}); err != nil {
 		result.Err = err
 		return result
 	}
@@ -423,8 +428,13 @@ func (p *Plugin) doCreateWorktreeContext(ctx context.Context, name, baseBranch, 
 // doDeleteWorktreeContext runs the shared deletion path. The git work itself
 // belongs to workspaceops so the project surface and the global Workspaces
 // browser delete a worktree the same way.
-func doDeleteWorktreeContext(ctx context.Context, workDir, path string, isMissing bool) error {
-	return workspaceops.DeleteWorktree(ctx, workDir, path, isMissing)
+//
+// req.ProjectRoot names the manifest whose shells are rooted in the worktree;
+// they are forgotten and closed as part of the delete (td-f017b9). It is
+// separate from req.RepoPath, which is only the checkout the git commands run
+// from.
+func doDeleteWorktreeContext(ctx context.Context, req workspaceops.WorktreeRemoval) error {
+	return workspaceops.DeleteWorktree(ctx, req)
 }
 
 // pushSelected returns a command to push the selected worktree's branch.
@@ -495,12 +505,12 @@ func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
 	return branch == detectDefaultBranchContext(ctx, workdir)
 }
 
-func deleteBranchContext(ctx context.Context, workdir, branch string) error {
-	return workspaceops.DeleteLocalBranch(ctx, workdir, branch)
+func deleteBranchContext(ctx context.Context, req workspaceops.BranchDeletion) error {
+	return workspaceops.DeleteLocalBranch(ctx, req)
 }
 
-func deleteRemoteBranchCmdContext(ctx context.Context, workdir, branch string) error {
-	return workspaceops.DeleteRemoteBranch(ctx, workdir, branch)
+func deleteRemoteBranchCmdContext(ctx context.Context, req workspaceops.BranchDeletion) error {
+	return workspaceops.DeleteRemoteBranch(ctx, req)
 }
 
 // checkRemoteBranch returns a command to check if a remote branch exists.

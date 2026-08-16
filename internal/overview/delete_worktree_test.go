@@ -116,12 +116,12 @@ func TestConfirmingAWorktreeDeleteRunsTheSharedDeletePath(t *testing.T) {
 	type call struct{ dir, arg string }
 	var deleted, branches []call
 	restoreDelete, restoreBranch := execDeleteWorktree, execDeleteLocalBranch
-	execDeleteWorktree = func(ctx context.Context, workDir, path string, isMissing bool) error {
-		deleted = append(deleted, call{workDir, path})
+	execDeleteWorktree = func(ctx context.Context, req workspaceops.WorktreeRemoval) error {
+		deleted = append(deleted, call{req.RepoPath, req.Path})
 		return nil
 	}
-	execDeleteLocalBranch = func(ctx context.Context, workDir, branch string) error {
-		branches = append(branches, call{workDir, branch})
+	execDeleteLocalBranch = func(ctx context.Context, req workspaceops.BranchDeletion) error {
+		branches = append(branches, call{req.RepoPath, req.Branch})
 		return nil
 	}
 	t.Cleanup(func() { execDeleteWorktree, execDeleteLocalBranch = restoreDelete, restoreBranch })
@@ -387,10 +387,12 @@ func TestGlobalDeleteIsTheSharedWorkspaceopsPath(t *testing.T) {
 	}
 }
 
-// A worktree row carries no shells.json identity — worktree sessions are not
-// manifest shells — so deleting one must not write to any project's manifest.
-// This is the "no stale manifest entry" half of parity: there is no entry to go
-// stale, and the delete must not create one.
+// A worktree row carries no shells.json identity of its own — worktree
+// sessions are not manifest shells — so deleting one must not run the liveness
+// reaper's forget path over unrelated entries. Forgetting the shells *rooted
+// in* the deleted worktree is a separate, deliberate step inside
+// workspaceops.DeleteWorktree (td-f017b9), which is stubbed out here;
+// it is covered by internal/workspaceops/shell_forget_worktree_test.go.
 func TestGlobalWorktreeDeleteLeavesTheShellManifestAlone(t *testing.T) {
 	m, _ := previewModel(t)
 	run(t, m, m.SetWorkspacesVisible(true))
@@ -400,7 +402,7 @@ func TestGlobalWorktreeDeleteLeavesTheShellManifestAlone(t *testing.T) {
 	restoreForget := forgetShell
 	forgetShell = func(string, string, string, time.Time) error { forgotten++; return nil }
 	restoreDelete := execDeleteWorktree
-	execDeleteWorktree = func(context.Context, string, string, bool) error { return nil }
+	execDeleteWorktree = func(context.Context, workspaceops.WorktreeRemoval) error { return nil }
 	t.Cleanup(func() { forgetShell, execDeleteWorktree = restoreForget, restoreDelete })
 
 	if handled, _ := m.WorkspacesKey(key("D")); !handled {

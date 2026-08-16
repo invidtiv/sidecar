@@ -382,7 +382,7 @@ func TestSquashMergeRequiresExplicitForceDeletion(t *testing.T) {
 	if !required {
 		t.Fatal("squash merge did not require an explicit force deletion")
 	}
-	if err := deleteBranchAfterMergeContext(context.Background(), r.main, "feature", false); err == nil {
+	if err := deleteBranchAfterMergeContext(context.Background(), r.main, "feature", reviewed, false); err == nil {
 		t.Fatal("ordinary -d unexpectedly deleted squash-merged branch")
 	}
 	if got := mustGit(t, r.main, "rev-parse", "refs/heads/feature"); got != reviewed {

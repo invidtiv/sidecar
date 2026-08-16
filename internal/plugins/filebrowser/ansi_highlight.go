@@ -38,11 +38,16 @@ func (p *Plugin) highlightMarkdownLineMatches(lineNo int) string {
 	return injectHighlightsIntoANSI(ansiLine, ranges, p.contentSearchCursor)
 }
 
-// Pre-render highlight style prefixes by rendering a known marker and extracting the ANSI prefix.
-var (
-	searchMatchStyle        = styles.SearchMatch.Render
-	searchMatchCurrentStyle = styles.SearchMatchCurrent.Render
-)
+// Highlight style prefixes are produced by rendering a known marker and
+// extracting the ANSI prefix. These must stay functions: styles.SearchMatch
+// and styles.SearchMatchCurrent are package-level variables that ApplyTheme
+// reassigns, so capturing them in a var block would freeze the highlight on
+// the default theme's colours. See internal/themecheck.
+func searchMatchStyle(strs ...string) string { return styles.SearchMatch.Render(strs...) }
+
+func searchMatchCurrentStyle(strs ...string) string {
+	return styles.SearchMatchCurrent.Render(strs...)
+}
 
 // injectHighlightsIntoANSI walks an ANSI-styled string and injects highlight
 // escape sequences at positions corresponding to visible-text byte offsets.

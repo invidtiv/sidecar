@@ -70,7 +70,7 @@ func TestDeleteWorktreeKillsTheWorktreeSession(t *testing.T) {
 	session := WorktreeSessionName(path, "")
 	startThrowawaySession(t, session, path)
 
-	if err := DeleteWorktree(context.Background(), root, path, false); err != nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Force: true}); err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
 	if SessionExists(session) {
@@ -99,7 +99,7 @@ func TestDeleteWorktreeKillsEitherSessionSpelling(t *testing.T) {
 		startThrowawaySession(t, name, path)
 	}
 
-	if err := DeleteWorktree(context.Background(), root, path, false); err != nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Force: true}); err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
 	for _, name := range names {
@@ -117,7 +117,7 @@ func TestDeleteWorktreeWithNoSessionIsNotAnError(t *testing.T) {
 	if SessionExists(WorktreeSessionName(path, "")) {
 		t.Fatal("test precondition: the session must not exist")
 	}
-	if err := DeleteWorktree(context.Background(), root, path, false); err != nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Force: true}); err != nil {
 		t.Fatalf("DeleteWorktree with no session: %v", err)
 	}
 	if got := worktreePaths(t, root); len(got) != 1 {
@@ -138,7 +138,7 @@ func TestDeleteMissingWorktreeStillKillsItsSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := DeleteWorktree(context.Background(), root, path, true); err != nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Missing: true, Force: true}); err != nil {
 		t.Fatalf("DeleteWorktree(isMissing): %v", err)
 	}
 	if SessionExists(session) {
@@ -165,7 +165,7 @@ func TestDeleteWorktreeKillsBeforeRemovingTheDirectory(t *testing.T) {
 	}
 	t.Cleanup(func() { killWorktreeSessions = restore })
 
-	if err := DeleteWorktree(context.Background(), root, path, false); err != nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Force: true}); err != nil {
 		t.Fatalf("DeleteWorktree: %v", err)
 	}
 	if !directoryPresentAtKill {
@@ -182,7 +182,7 @@ func TestDeleteWorktreeStopsWhenTheSessionCannotBeKilled(t *testing.T) {
 	killWorktreeSessions = func(context.Context, string) error { return os.ErrPermission }
 	t.Cleanup(func() { killWorktreeSessions = restore })
 
-	if err := DeleteWorktree(context.Background(), root, path, false); err == nil {
+	if err := DeleteWorktree(context.Background(), WorktreeRemoval{RepoPath: root, Path: path, Force: true}); err == nil {
 		t.Fatal("DeleteWorktree succeeded despite a surviving session")
 	}
 	// Refusing is the point: the directory must not go while something is

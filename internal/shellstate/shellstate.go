@@ -128,6 +128,31 @@ func AddAtPath(path string, def Definition) error {
 	})
 }
 
+// ListAtPath returns every shell definition recorded in the manifest at path.
+//
+// It exists so callers that need to decide *which* shells to act on — the
+// worktree delete, which must forget the shells rooted in the directory it is
+// about to remove — can read the manifest through this package instead of
+// unmarshalling shells.json themselves. A missing manifest is an empty
+// project, not an error.
+//
+// The result is a copy; mutating it does not affect the file. Removal is still
+// one exact Identity at a time, so a caller that lists and then removes must
+// tolerate the manifest changing in between (RemoveAtPath treats an entry that
+// is already gone as success).
+func ListAtPath(path string) ([]Definition, error) {
+	m, err := readManifest(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
+	}
+	out := make([]Definition, len(m.Shells))
+	copy(out, m.Shells)
+	return out, nil
+}
+
 // RemoveAtPath forgets one exact shell identity. A missing entry is already
 // the requested state and therefore succeeds.
 func RemoveAtPath(path string, id Identity) error {

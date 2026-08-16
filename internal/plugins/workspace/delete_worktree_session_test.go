@@ -156,3 +156,74 @@ func TestSharedDeleteResolvesThisPluginsSessionName(t *testing.T) {
 		}
 	}
 }
+
+// td-3df472. Post-merge cleanup used to kill the worktree's tmux session after
+// runCleanupPlan had already removed the directory, which left whatever was
+// running in that session alive with a deleted working directory. The fix is
+// not a re-ordering here: cleanup now removes the worktree through
+// workspaceops.DeleteWorktree, where the kill lives ahead of the git work and
+// no caller can get the order wrong. These tests say cleanup still reaches it.
+func TestMergeCleanupClosesTheWorktreeSessionThroughTheSharedPath(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	r := newLifecycleRepo(t)
+	expectedOID := mustGit(t, r.feature, "rev-parse", "HEAD")
+
+	session := worktreeTmuxSession(&Worktree{Name: "feature", Path: r.feature})
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "-c", r.feature).CombinedOutput(); err != nil {
+		t.Skipf("cannot start an isolated tmux session (%v): %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+	if !workspaceops.SessionExists(session) {
+		t.Fatalf("session %q did not start", session)
+	}
+
+	results := runCleanupPlan(CleanupPlan{
+		RepoPath: r.main, WorktreePath: r.feature, Branch: "feature", ExpectedOID: expectedOID,
+		DeleteWorktree: true,
+	})
+	if len(results.Errors) > 0 {
+		t.Fatalf("cleanup reported %v", results.Errors)
+	}
+	if !results.LocalWorktreeDeleted {
+		t.Fatal("cleanup did not remove the worktree")
+	}
+	if workspaceops.SessionExists(session) {
+		t.Fatalf("session %q survived the cleanup", session)
+	}
+	if _, err := os.Stat(r.feature); !os.IsNotExist(err) {
+		t.Fatalf("the working directory survived: %v", err)
+	}
+}
+
+// The cleanup path states no force, so it keeps the refusal it has always had —
+// and, because the checks run before the kill, a refusal costs no session.
+func TestMergeCleanupRefusesADirtyWorktreeWithoutKillingItsSession(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	r := newLifecycleRepo(t)
+	expectedOID := mustGit(t, r.feature, "rev-parse", "HEAD")
+	mustWrite(t, filepath.Join(r.feature, "valuable.txt"), "irreplaceable untracked work\n")
+
+	session := worktreeTmuxSession(&Worktree{Name: "feature", Path: r.feature})
+	if out, err := exec.Command("tmux", "new-session", "-d", "-s", session, "-c", r.feature).CombinedOutput(); err != nil {
+		t.Skipf("cannot start an isolated tmux session (%v): %s", err, out)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", session).Run() })
+
+	results := runCleanupPlan(CleanupPlan{
+		RepoPath: r.main, WorktreePath: r.feature, Branch: "feature", ExpectedOID: expectedOID,
+		DeleteWorktree: true, DeleteBranch: true,
+	})
+	if len(results.Errors) == 0 || !strings.Contains(strings.Join(results.Errors, "\n"), "dirty") {
+		t.Fatalf("cleanup result = %+v, want a dirty refusal", results)
+	}
+	if results.LocalWorktreeDeleted || results.LocalBranchDeleted {
+		t.Fatalf("a refused cleanup deleted something: %+v", results)
+	}
+	if !workspaceops.SessionExists(session) {
+		t.Fatalf("the refused cleanup killed session %q anyway", session)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceops"
 	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
@@ -291,6 +292,9 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	deleteLocal := p.deleteConfirm.DeleteLocal
 	deleteRemote := p.deleteConfirm.DeleteRemoteBranch()
 	workDir := p.ctx.WorkDir
+	// The owning project, not the current worktree: it is the project's
+	// shells.json that records the shells rooted in the worktree being deleted.
+	projectRoot := p.ctx.ProjectRoot
 	ctx, scope := p.newLifecycleScope(wt)
 
 	// The kill itself belongs to the shared delete path (workspaceops.
@@ -311,22 +315,35 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	return func() tea.Msg {
 		var warnings []string
 
-		// Delete the worktree first
-		err := doDeleteWorktreeContext(ctx, workDir, path, isMissing)
+		// The branch tip is pinned before anything is removed, so the branch
+		// deleted below is the one this confirmation referred to.
+		branchOID := workspaceops.BranchOID(ctx, workDir, branch)
+
+		// Delete the worktree first. Force is stated here and nowhere else:
+		// the person reading "Uncommitted changes will be lost" chose Delete.
+		// See workspaceops.WorktreeRemoval.Force.
+		err := doDeleteWorktreeContext(ctx, workspaceops.WorktreeRemoval{
+			RepoPath: workDir, ProjectRoot: projectRoot,
+			Path: path, Branch: branch, Missing: isMissing, Force: true,
+		})
 		if err != nil {
 			return DeleteDoneMsg{OperationScope: scope, Name: name, Err: err}
 		}
 
 		// Delete local branch if requested
 		if deleteLocal {
-			if branchErr := deleteBranchContext(ctx, workDir, branch); branchErr != nil {
+			if branchErr := deleteBranchContext(ctx, workspaceops.BranchDeletion{
+				RepoPath: workDir, Branch: branch, ExpectedOID: branchOID, Force: true,
+			}); branchErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Local branch: %v", branchErr))
 			}
 		}
 
 		// Delete remote branch if requested
 		if deleteRemote {
-			if remoteErr := deleteRemoteBranchCmdContext(ctx, workDir, branch); remoteErr != nil {
+			if remoteErr := deleteRemoteBranchCmdContext(ctx, workspaceops.BranchDeletion{
+				RepoPath: workDir, Branch: branch,
+			}); remoteErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", remoteErr))
 			}
 		}

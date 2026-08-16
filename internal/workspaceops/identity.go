@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -45,27 +44,29 @@ func PersistWorktreeIdentity(ctx context.Context, plan *WorktreePlan) []SetupOut
 
 // DeleteCreatedWorktree removes only the exact clean identity returned by the
 // creation core, then deletes its local branch. It has no force fallback.
+//
+// It runs the shared removal path (DeleteWorktree) rather than its own git
+// commands, which is what stops a rollback from orphaning the session a host
+// may already have launched into the new worktree: the kill lives inside that
+// path, ahead of the removal, for every caller.
 func DeleteCreatedWorktree(ctx context.Context, plan *WorktreePlan, record *WorktreeRecord) error {
 	if plan == nil || record == nil || record.HEADOID == "" {
 		return fmt.Errorf("creation identity is incomplete")
 	}
-	head, err := gitOutput(ctx, record.Path, "rev-parse", "HEAD")
-	if err != nil || head != record.HEADOID {
-		return fmt.Errorf("created worktree HEAD changed; refusing delete")
+	if err := DeleteWorktree(ctx, WorktreeRemoval{
+		RepoPath:    plan.SourceWorktree,
+		ProjectRoot: plan.MainWorktree,
+		Path:        record.Path,
+		Branch:      record.Branch,
+		ExpectedOID: record.HEADOID,
+	}); err != nil {
+		return fmt.Errorf("remove created worktree: %w", err)
 	}
-	status, err := gitOutput(ctx, record.Path, "status", "--porcelain=v1", "--untracked-files=normal")
-	if err != nil {
-		return err
-	}
-	if status != "" {
-		return fmt.Errorf("created worktree is dirty; refusing delete")
-	}
-	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", record.Path)
-	cmd.Dir = plan.SourceWorktree
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("remove created worktree: %s: %w", strings.TrimSpace(string(out)), err)
-	}
-	if _, err := gitOutput(ctx, plan.SourceWorktree, "branch", "-d", record.Branch); err != nil {
+	if err := DeleteLocalBranch(ctx, BranchDeletion{
+		RepoPath:    plan.SourceWorktree,
+		Branch:      record.Branch,
+		ExpectedOID: record.HEADOID,
+	}); err != nil {
 		return fmt.Errorf("delete created branch: %w", err)
 	}
 	return nil

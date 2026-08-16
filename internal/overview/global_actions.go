@@ -25,6 +25,9 @@ var (
 	// The worktree delete path is the same one the project surface runs.
 	// Indirection is here so tests can execute the flow without touching a
 	// real repository.
+	// DeleteWorktree is the whole teardown: it also forgets and closes the
+	// shells rooted in the worktree (td-f017b9), which is why the removal
+	// carries ProjectRoot as well as RepoPath.
 	execDeleteWorktree     = workspaceops.DeleteWorktree
 	execDeleteLocalBranch  = workspaceops.DeleteLocalBranch
 	execDeleteRemoteBranch = workspaceops.DeleteRemoteBranch
@@ -219,17 +222,30 @@ func (m *Model) executeWorktreeDelete() tea.Cmd {
 
 	return func() tea.Msg {
 		ctx := context.Background()
-		if err := execDeleteWorktree(ctx, project.Path, target.Path, target.IsMissing); err != nil {
+		// The branch tip is pinned before anything is removed, so the branch
+		// deleted below is the one this confirmation referred to.
+		branchOID := workspaceops.BranchOID(ctx, project.Path, target.Branch)
+		// Force: the person reading "Uncommitted changes will be lost" chose
+		// Delete. See workspaceops.WorktreeRemoval.Force.
+		if err := execDeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+			RepoPath: project.Path, ProjectRoot: project.Path,
+			Path: target.Path, Branch: target.Branch,
+			Missing: target.IsMissing, Force: true,
+		}); err != nil {
 			return globalWorktreeDeleteDoneMsg{Project: project, Err: err}
 		}
 		var warnings []string
 		if deleteLocal {
-			if err := execDeleteLocalBranch(ctx, project.Path, target.Branch); err != nil {
+			if err := execDeleteLocalBranch(ctx, workspaceops.BranchDeletion{
+				RepoPath: project.Path, Branch: target.Branch, ExpectedOID: branchOID, Force: true,
+			}); err != nil {
 				warnings = append(warnings, fmt.Sprintf("Local branch: %v", err))
 			}
 		}
 		if deleteRemote {
-			if err := execDeleteRemoteBranch(ctx, project.Path, target.Branch); err != nil {
+			if err := execDeleteRemoteBranch(ctx, workspaceops.BranchDeletion{
+				RepoPath: project.Path, Branch: target.Branch,
+			}); err != nil {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", err))
 			}
 		}

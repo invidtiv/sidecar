@@ -1151,8 +1151,9 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	scope := state.OperationScope
 	ctx := p.operationCtx
 	name, path, branch := wt.Name, wt.Path, wt.Branch
-	// Compute session name before entering closure (consistent with executeDelete)
-	sessionName := worktreeTmuxSession(wt)
+	// No session name is resolved here any more. Closing the worktree's
+	// session belongs to the shared removal path, which is reached through
+	// runCleanupPlan below (td-3df472).
 
 	repoPath := p.ctx.ProjectRoot
 	if p.repoSnapshot != nil {
@@ -1161,6 +1162,10 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	if state.DirectOperation != nil && state.DirectOperation.TargetPath != "" {
 		repoPath = state.DirectOperation.TargetPath
 	}
+	// The owning project, not the checkout the git commands run from: it is
+	// the project's shells.json that records the shells rooted in the worktree
+	// being removed (td-f017b9).
+	projectRoot := p.ctx.ProjectRoot
 	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(path) {
 		return func() tea.Msg {
 			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
@@ -1194,7 +1199,8 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 			}
 		}
 		plan := CleanupPlan{
-			RepoPath: repoPath, WorktreePath: path, Branch: branch, ExpectedOID: expectedOID,
+			RepoPath: repoPath, ProjectRoot: projectRoot,
+			WorktreePath: path, Branch: branch, ExpectedOID: expectedOID,
 			BranchRemote: branchRemote, ExpectedRemoteOID: expectedRemoteOID,
 			BaseRemote: baseRemote, BaseBranch: targetBranch,
 			DeleteWorktree: deleteWorktree, DeleteBranch: deleteBranch,
@@ -1205,10 +1211,11 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 			identity := state.PR
 			plan.PRIdentity = &identity
 		}
+		// No kill here. The session teardown belongs to the shared removal
+		// path, which closes it before the directory goes; killing it
+		// afterwards left whatever was running in that session alive in a
+		// deleted working directory (td-3df472).
 		results := runCleanupPlanContext(ctx, plan)
-		if results.LocalWorktreeDeleted {
-			_ = exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName).Run()
-		}
 		return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: results}
 	}
 }
