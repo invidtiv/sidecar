@@ -347,6 +347,11 @@ type Model struct {
 	config       *configui.Model
 	configActive bool
 	configReturn configReturn
+	// startupConfigPage is the destination a launch command asked for. It is
+	// honored once, from Init, so Configuration opens over the ordinary startup
+	// surface rather than replacing it: escape still returns to the app the
+	// user would have had.
+	startupConfigPage configui.PageID
 
 	// UI request watcher for external CLI commands (e.g. sidecar open).
 	// The channel is deliberately not cached here: Init takes the model by
@@ -355,9 +360,22 @@ type Model struct {
 	uiRequestWatcher *uirequest.Watcher
 }
 
+// Option adjusts the model at construction. Options exist for the deliberate,
+// caller-supplied startup choices — where Configuration opens, so far — and are
+// deliberately not a general settings channel: everything else comes from the
+// config file the app was handed.
+type Option func(*Model)
+
+// WithStartupConfigPage opens Configuration on a destination as soon as the app
+// starts. `sidecar setup` is the only caller today; an unknown page falls back
+// to Configuration's own default rather than failing the launch.
+func WithStartupConfigPage(page configui.PageID) Option {
+	return func(m *Model) { m.startupConfigPage = page }
+}
+
 // New creates a new application model.
 // initialPluginID optionally specifies which plugin to focus on startup (empty = first plugin).
-func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentVersion, workDir, projectRoot, initialPluginID string) Model {
+func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentVersion, workDir, projectRoot, initialPluginID string, opts ...Option) Model {
 	repoName := GetRepoName(workDir)
 	ui := NewUIState()
 	ui.WorkDir = workDir
@@ -414,6 +432,11 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		// Tasks is a global tab, so its host is built here rather than
 		// registered as a project plugin. Constructing it does no I/O.
 		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&m)
+		}
 	}
 	return m
 }
@@ -491,6 +514,13 @@ func (m Model) Init() tea.Cmd {
 	if m.uiRequestWatcher != nil {
 		m.uiRequestWatcher.Start()
 		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
+	}
+
+	// A launch command's destination opens through the same message an empty
+	// state sends, so there is one way into Configuration and one way back out.
+	if m.startupConfigPage != "" {
+		page := m.startupConfigPage
+		cmds = append(cmds, func() tea.Msg { return OpenConfigurationMsg{Page: page} })
 	}
 
 	return tea.Batch(cmds...)

@@ -172,7 +172,41 @@ func RootCommand() *Command {
 		},
 	}
 
-	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, shellCmd}
+	setupCmd := &Command{
+		Name:    "setup",
+		Summary: "Start Sidecar with Configuration open on Sidecar Setup",
+		Usage:   "sidecar setup [options]",
+		Long: "Start Sidecar normally, with Configuration open on the Sidecar Setup page.\n" +
+			"Setup lists what is left to do — add a project, install tmux, connect agent\n" +
+			"instructions — and opens a focused repair for each one.\n\n" +
+			"This is a launch route, not a second settings interface: it renders nothing in\n" +
+			"the terminal and changes nothing on its own. Sidecar's ordinary options still\n" +
+			"apply (sidecar setup -project /path). Escape returns to the surface underneath,\n" +
+			"and the header gear reopens Configuration at any time.\n\n" +
+			"If startup fails before Sidecar can draw — a malformed config file, a terminal\n" +
+			"that is not interactive — it exits nonzero with the specific next step and a\n" +
+			"support path that uploads nothing.",
+		Flags: []Flag{
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "Sidecar ran and exited normally"},
+			{Code: 1, Summary: "startup failed before the first frame"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar setup"},
+			{Command: "sidecar setup -project ~/code/myproject", Description: "that project's Setup"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar setup",
+			Summary:    "Open Sidecar's Configuration on Setup so the user can finish configuring it",
+		},
+		Launch: runSetupLaunch,
+	}
+
+	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, setupCmd, shellCmd}
 	return root
 }
 

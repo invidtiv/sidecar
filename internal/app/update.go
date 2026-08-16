@@ -456,6 +456,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case OpenConfigurationMsg:
+		// One entry: an empty state, a launch command, and the gear all arrive
+		// here, and escape returns to whatever was underneath when they did.
+		page := msg.Page
+		if page == "" {
+			page = configui.DefaultPage
+		}
+		cmd := m.openConfiguration(page)
+		if msg.AddProject && m.config != nil {
+			m.config.OpenAddProject()
+			m.updateContext()
+		}
+		return m, cmd
+
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
 
@@ -821,6 +835,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.configKey(msg)
 	}
 
+	// The placeholder behind an empty global Sessions tab offers the same
+	// contextual route the project sidebar does, and Enter is it.
+	if !m.hasModal() && m.globalWorkspacesPlaceholderVisible() && m.configurationBlocked() && msg.String() == "enter" {
+		return m, OpenConfiguration(configui.PageSetup)
+	}
+
 	// The global Workspaces browser answers for its own keys before sidecar's
 	// global switch runs. It has to be here rather than beside the Agents board
 	// below: while its filter has focus every printable key is query text, and
@@ -1034,6 +1054,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			// No projects configured - handle y for LLM prompt, ctrl+a for add, close on q/@
 			switch msg.String() {
+			case "enter":
+				// The switcher has nothing to switch to, so enter is free for
+				// the route that fixes that. ctrl+a's direct add stays exactly
+				// as it was; this is the way into the rest of Setup.
+				m.resetProjectSwitcher()
+				m.updateContext()
+				return m, OpenConfiguration(configui.PageSetup)
 			case "y":
 				return m, m.copyProjectSetupPrompt()
 			case "ctrl+a":

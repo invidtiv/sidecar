@@ -58,7 +58,13 @@ type SidebarOptions struct {
 	FilterActive  bool
 	Sections      []SidebarSection
 	EmptyLines    []string
-	FooterLines   []string
+	// EmptyActionID names one of EmptyLines as a pressable control and gives
+	// it a hit region. An empty state that offers an action has to be
+	// clickable for the same reason its key has to be advertised: the two
+	// interaction models say the same thing or neither is trustworthy.
+	EmptyActionID   string
+	EmptyActionLine int
+	FooterLines     []string
 }
 
 // SidebarRendered is the exact view, geometry and viewport produced by one
@@ -74,6 +80,7 @@ type SidebarRendered struct {
 const (
 	RegionHeaderAction  RegionKind = "workspacelist-header-action"
 	RegionSectionAction RegionKind = "workspacelist-section-action"
+	RegionEmptyAction   RegionKind = "workspacelist-empty-action"
 )
 
 type sidebarFlatRow struct {
@@ -156,9 +163,12 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		visibleRows++
 	}
 	if len(flat) == 0 {
-		for _, line := range opts.EmptyLines {
+		for i, line := range opts.EmptyLines {
 			if len(lines) >= height-footerRows {
 				break
+			}
+			if opts.EmptyActionID != "" && i == opts.EmptyActionLine {
+				regions = append(regions, Region{Kind: RegionEmptyAction, ID: opts.EmptyActionID, X: 0, Y: len(lines), W: min(ansi.StringWidth(line), rowWidth), H: 1})
 			}
 			lines = append(lines, fit(line, rowWidth))
 		}

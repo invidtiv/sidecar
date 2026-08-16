@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -96,6 +97,25 @@ type NavigateToFileMsg struct {
 // Enter. Sidecar never runs it, and never sends one that needs sudo.
 type OpenPrefilledShellMsg struct {
 	Command string
+}
+
+// OpenConfigurationMsg asks the host to open Configuration on a destination.
+// An empty or unknown Page means Configuration's own default, Sidecar Setup.
+//
+// It is how a surface that is empty because something is not configured yet
+// offers a way out of that state — a plugin sends this rather than importing
+// the Configuration surface — and it is also how a launch command's startup
+// destination is honored. Escape returns to whatever sent it.
+type OpenConfigurationMsg struct {
+	Page configui.PageID
+	// AddProject asks for the Add Project route rather than the page itself,
+	// for the case where the missing prerequisite is exactly a project.
+	AddProject bool
+}
+
+// OpenConfiguration returns a command that opens Configuration on a page.
+func OpenConfiguration(page configui.PageID) tea.Cmd {
+	return func() tea.Msg { return OpenConfigurationMsg{Page: page} }
 }
 
 // SwitchWorktreeMsg requests switching to a different worktree.

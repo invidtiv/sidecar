@@ -61,6 +61,13 @@ type Command struct {
 	Sub       []*Command              `json:"subcommands,omitempty"`
 	Run       func(Env, []string) int `json:"-"`
 
+	// Launch is for a command that does not run non-interactively at all: it
+	// records what the app should do and hands the process back to normal
+	// startup by reporting handled=false. `sidecar setup` is the only one — it
+	// starts Sidecar the ordinary way with Configuration open, rather than
+	// printing a second settings interface into the terminal.
+	Launch func(Env, []string) (handled bool, exitCode int) `json:"-"`
+
 	// Agent is what `sidecar --agents` says about this command: the one line an
 	// agent needs to decide whether to reach for it. Commands without one are
 	// left out of that list, so it stays a short list of things worth doing

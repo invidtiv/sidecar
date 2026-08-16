@@ -350,6 +350,8 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		// No projects configured
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
 			b.WriteString(styles.Muted.Render("No projects configured"))
+			b.WriteString("\n")
+			b.WriteString(styles.Muted.Render("Sidecar Setup walks through adding one."))
 			return modal.RenderedSection{Content: b.String()}
 		}
 
@@ -521,6 +523,8 @@ func (m *Model) projectSwitcherHintsSection() modal.Section {
 
 		// No projects configured
 		if len(allProjects) == 0 && !m.globalScopeAvailable() {
+			b.WriteString(styles.KeyHint.Render("enter"))
+			b.WriteString(styles.Muted.Render(" Sidecar Setup  "))
 			b.WriteString(styles.KeyHint.Render("ctrl+a"))
 			b.WriteString(styles.Muted.Render(" add  "))
 			b.WriteString(styles.KeyHint.Render("y"))
@@ -1055,15 +1059,40 @@ func (m Model) renderGlobalContent(width, height int) string {
 // no cross-project catalog behind the tab at all. With the Overview model
 // present, the tab renders the shared workspace list instead.
 func (m Model) renderGlobalWorkspacesPlaceholder(width, height int) string {
-	message := strings.Join([]string{
+	lines := []string{
 		styles.Title.Render("Workspaces"),
 		"",
 		styles.Muted.Render("Every configured project's shells and worktrees will be browsable here."),
 		styles.Muted.Render("Nothing is being collected for this tab yet."),
 		"",
 		styles.Muted.Render("Use the project Workspaces tab for the current project."),
-	}, "\n")
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, message)
+	}
+	// With no project configured there is nothing this tab could ever collect,
+	// so the placeholder offers the one route that changes that. With projects
+	// configured it stays a plain placeholder: the user is not blocked, this
+	// build simply has no cross-project catalog behind the tab.
+	if m.configurationBlocked() {
+		lines = append(lines,
+			"",
+			styles.Muted.Render("No projects are configured yet."),
+			"",
+			styles.RenderPillWithStyle("Enter  Open Sidecar Setup", styles.ButtonHover, nil),
+		)
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, strings.Join(lines, "\n"))
+}
+
+// configurationBlocked reports the one prerequisite the app itself can answer
+// for cheaply: whether any project is configured. It reads the configuration
+// already in memory and touches nothing on the render path.
+func (m Model) configurationBlocked() bool {
+	return m.cfg == nil || len(m.cfg.Projects.List) == 0
+}
+
+// globalWorkspacesPlaceholderVisible reports that the placeholder — not the
+// cross-project browser — is what the global Sessions tab is showing.
+func (m Model) globalWorkspacesPlaceholderVisible() bool {
+	return m.inGlobalScope() && m.globalTab == GlobalSessions && m.overview == nil
 }
 
 // renderFooter renders the bottom bar with key hints and status.

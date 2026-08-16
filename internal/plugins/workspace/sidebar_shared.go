@@ -272,9 +272,16 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 	selectedID := p.selectedRowID()
 
 	empty := []string(nil)
+	emptyActionID, emptyActionLine := "", 0
 	if rowCount == 0 {
 		if p.filterActive() {
 			empty = []string{workspacelist.NoMatchRow(max(1, width-1), p.listFilter.Query())}
+		} else if prompt, blocked := p.setupPromptFor(); blocked {
+			// Nothing can be created here until a prerequisite is in place, so
+			// the empty state routes to where that is repaired rather than
+			// repeating advice that cannot work.
+			empty, emptyActionLine = p.setupPromptLines(prompt, max(1, width-1))
+			emptyActionID = regionOpenSetupButton
 		} else {
 			// Every project has a main checkout and the list does not offer it,
 			// so counting raw worktrees here left a fresh clone with an empty
@@ -296,6 +303,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "+", Hovered: p.hoverNewButton},
 		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
 		Sections: sections, EmptyLines: empty,
+		EmptyActionID: emptyActionID, EmptyActionLine: emptyActionLine,
 	})
 	p.scrollOffset, p.visibleCount = rendered.ScrollOffset, rendered.VisibleRows
 	for _, region := range rendered.Regions {
@@ -306,7 +314,7 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		// through to the kind left the pill drawn, hit-tested, and wired to a
 		// handler that could never be reached — a button that looks pressable
 		// and does nothing.
-		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction, workspacelist.RegionSort:
+		case workspacelist.RegionHeaderAction, workspacelist.RegionSectionAction, workspacelist.RegionSort, workspacelist.RegionEmptyAction:
 			id = region.ID
 		case workspacelist.RegionRow:
 			id = regionWorktreeItem
