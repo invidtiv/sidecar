@@ -3,7 +3,6 @@ package notes
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	tdnotes "github.com/marcus/td/pkg/notes"
@@ -157,7 +156,9 @@ func (s *Store) Unarchive(id string) error {
 	return s.td.Unarchive(id)
 }
 
-// UpdateContent updates the content of a note, using the first line as title.
+// UpdateContent updates the body of a note and leaves Title unchanged.
+// Title is set at create time (NV query / first line); content-only saves
+// must not clobber a title written via td note edit --title.
 func (s *Store) UpdateContent(id, content string) error {
 	note, err := s.Get(id)
 	if err != nil {
@@ -166,23 +167,42 @@ func (s *Store) UpdateContent(id, content string) error {
 	if note == nil || note.DeletedAt != nil {
 		return fmt.Errorf("note not found: %s", id)
 	}
-	title := ""
-	if lines := strings.SplitN(content, "\n", 2); len(lines) > 0 {
-		title = lines[0]
-	}
-	_, err = s.td.Update(id, title, content)
+	_, err = s.td.Update(id, note.Title, content)
 	return err
 }
 
-// NotePath writes the note to a temp file for an external editor.
+// NotePath writes the note to a unique 0600 temp file for an external editor.
 func (s *Store) NotePath(id string) string {
 	note, err := s.Get(id)
 	if err != nil || note == nil {
 		return ""
 	}
-	tmpFile := filepath.Join(os.TempDir(), "sidecar-note-"+id+".md")
-	if err := os.WriteFile(tmpFile, []byte(note.Content), 0644); err != nil {
+	f, err := os.CreateTemp("", "sidecar-note-*.md")
+	if err != nil {
 		return ""
 	}
-	return tmpFile
+	path := f.Name()
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return ""
+	}
+	if _, err := f.Write([]byte(note.Content)); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return ""
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return ""
+	}
+	return path
+}
+
+// removeNoteExport deletes a temp note export. Missing paths are ignored.
+func removeNoteExport(path string) {
+	if path == "" {
+		return
+	}
+	_ = os.Remove(path)
 }

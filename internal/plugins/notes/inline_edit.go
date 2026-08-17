@@ -62,6 +62,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 
 	return func() tea.Msg {
 		if !tty.EditorAvailable() {
+			removeNoteExport(notePath)
 			return inlineEditUnavailableToast("tmux not found")()
 		}
 
@@ -74,6 +75,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 			CursorAtEnd: true,
 		})
 		if err != nil {
+			removeNoteExport(notePath)
 			return inlineEditUnavailableToast(err.Error())()
 		}
 
@@ -169,6 +171,9 @@ func (p *Plugin) cleanupStaleInlineEditStart(msg InlineEditStartedMsg) tea.Cmd {
 			return nil
 		}
 	}
+	if msg.NotePath != p.inlineEditPath {
+		removeNoteExport(msg.NotePath)
+	}
 	return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
 }
 
@@ -208,6 +213,9 @@ func (p *Plugin) ownsInlineEditMessage(activation, epoch uint64) bool {
 // handleInlineEditExited processes the InlineEditExitedMsg and saves note content.
 func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	if !p.ownsInlineEditMessage(exitMsg.Activation, exitMsg.Epoch) {
+		if exitMsg.NotePath != p.inlineEditPath {
+			removeNoteExport(exitMsg.NotePath)
+		}
 		return nil
 	}
 	noteID := exitMsg.NoteID
@@ -217,6 +225,7 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	p.exitInlineEditMode()
 
 	if noteID == "" || notePath == "" || p.store == nil {
+		removeNoteExport(notePath)
 		return p.loadNotes()
 	}
 
@@ -231,11 +240,12 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 		// Read back the edited content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
+			removeNoteExport(notePath)
 			return NotesLoadedMsg{Err: err, Epoch: epoch}
 		}
 
 		// Clean up temp file
-		_ = os.Remove(notePath)
+		removeNoteExport(notePath)
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
@@ -509,7 +519,9 @@ func (p *Plugin) handleExitConfirmationChoice() (*Plugin, tea.Cmd) {
 
 	case 1: // Exit without saving
 		// Kill session immediately, then process pending action
+		exportPath := p.inlineEditPath
 		p.exitInlineEditMode()
+		removeNoteExport(exportPath)
 		return p.processPendingClickAction()
 
 	case 2: // Cancel
@@ -558,17 +570,19 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 	// Create save command
 	saveCmd := func() tea.Msg {
 		if noteID == "" || notePath == "" || store == nil {
+			removeNoteExport(notePath)
 			return nil
 		}
 
 		// Read back the edited content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
+			removeNoteExport(notePath)
 			return NotesLoadedMsg{Err: err, Epoch: epoch}
 		}
 
 		// Clean up temp file
-		_ = os.Remove(notePath)
+		removeNoteExport(notePath)
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
@@ -704,6 +718,7 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 // Used when detecting session death proactively (e.g., vim :wq exit).
 func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 	if noteID == "" || notePath == "" || p.store == nil {
+		removeNoteExport(notePath)
 		return p.loadNotes()
 	}
 
@@ -718,11 +733,12 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 		// Read back the edited content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
+			removeNoteExport(notePath)
 			return NotesLoadedMsg{Err: err, Epoch: epoch}
 		}
 
 		// Clean up temp file
-		_ = os.Remove(notePath)
+		removeNoteExport(notePath)
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
@@ -746,6 +762,7 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 	activation := p.inlineEditActivation
 
 	if noteID == "" || notePath == "" || store == nil {
+		removeNoteExport(notePath)
 		return nil
 	}
 
@@ -756,11 +773,12 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 		// Read content from temp file
 		content, err := os.ReadFile(notePath)
 		if err != nil {
+			removeNoteExport(notePath)
 			return NoteSavedMsg{Err: err, Epoch: epoch, EditorActivation: activation}
 		}
 
 		// Clean up temp file
-		_ = os.Remove(notePath)
+		removeNoteExport(notePath)
 
 		// Save to database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {

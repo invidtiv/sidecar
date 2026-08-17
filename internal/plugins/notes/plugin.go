@@ -214,10 +214,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Project switches normally call Stop first, but Init is defensive: kill
 	// any surviving editor asynchronously from Start and invalidate its autosave
 	// chain before replacing the store/context.
+	leftoverExport := p.inlineEditPath
+	leftoverPending := p.pendingInlineEditPath
 	if p.inlineEditSession != "" {
 		p.orphanEditSession = p.inlineEditSession
 	}
 	p.resetInlineEditState()
+	removeNoteExport(leftoverExport)
+	removeNoteExport(leftoverPending)
 	p.ctx = ctx
 	p.notes = nil
 	p.cursor = 0
@@ -323,7 +327,13 @@ func (p *Plugin) Stop() {
 		tty.EditorSession{Name: p.orphanEditSession}.Kill()
 		p.orphanEditSession = ""
 	}
+	leftoverExport := p.inlineEditPath
+	leftoverPending := p.pendingInlineEditPath
 	p.exitInlineEditMode()
+	removeNoteExport(leftoverExport)
+	removeNoteExport(leftoverPending)
+	p.pendingInlineEditID = ""
+	p.pendingInlineEditPath = ""
 	if p.store != nil {
 		_ = p.store.Close()
 		p.store = nil
@@ -466,16 +476,31 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case NoteDeletedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: delete failed", "error", msg.Err)
 		} else {
 			return p, p.loadNotes()
 		}
 
-	case NotePinToggledMsg, NoteArchiveToggledMsg:
+	case NotePinToggledMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		return p, p.loadNotes()
+
+	case NoteArchiveToggledMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		return p, p.loadNotes()
 
 	case NoteRestoredMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: restore failed", "error", msg.Err)
 		} else {
@@ -502,13 +527,22 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case TaskCreatedMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: task creation failed", "error", msg.Err)
-		} else {
-			p.ctx.Logger.Debug("notes: task created", "taskID", msg.TaskID, "noteID", msg.NoteID)
-			// Reload notes (in case note was archived)
-			return p, tea.Batch(showTaskCreatedToast(msg.TaskID), p.loadNotes())
+			return p, showTaskCreateFailedToast(msg.Err)
 		}
+		p.ctx.Logger.Debug("notes: task created", "taskID", msg.TaskID, "noteID", msg.NoteID)
+		if msg.ArchiveErr != nil {
+			p.ctx.Logger.Error("notes: archive after task create failed", "error", msg.ArchiveErr)
+			return p, tea.Batch(
+				showTaskCreatedArchiveFailedToast(msg.TaskID, msg.ArchiveErr),
+				p.loadNotes(),
+			)
+		}
+		return p, tea.Batch(showTaskCreatedToast(msg.TaskID), p.loadNotes())
 
 	case AutoSaveTickMsg:
 		// Only auto-save if this tick matches current auto-save ID (debounce)
@@ -549,7 +583,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// comes to consume the pending read-back. Drop it with its temp file
 		// rather than leaving both to outlive the attempt.
 		if p.pendingInlineEditPath != "" {
-			_ = os.Remove(p.pendingInlineEditPath)
+			removeNoteExport(p.pendingInlineEditPath)
 		}
 		p.pendingInlineEditID = ""
 		p.pendingInlineEditPath = ""
@@ -617,9 +651,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		return p.handleMouse(msg)
+
+	case tea.PasteMsg:
+		return p.handlePaste(msg)
 	}
 
-	// Pass through other messages to textarea (for cursor blink, etc.)
+	// Pass through other messages to textarea (for cursor blink, etc.).
+	// tea.PasteMsg is handled above; this path must not mutate content.
 	if p.activePane == PaneEditor && !p.previewMode && p.editorNote != nil {
 		var cmd tea.Cmd
 		p.editorTextarea, cmd = p.editorTextarea.Update(msg)
@@ -629,6 +667,127 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, nil
+}
+
+// handlePaste applies one tea.PasteMsg as a single operation for the focused
+// surface. It never falls through to the textarea catch-all.
+func (p *Plugin) handlePaste(msg tea.PasteMsg) (plugin.Plugin, tea.Cmd) {
+	if p.showExitConfirmation || p.showDeleteModal || p.showInfoModal {
+		return p, nil
+	}
+	if p.showTaskModal {
+		var cmd tea.Cmd
+		p.taskModalTitleInput, cmd = p.taskModalTitleInput.Update(msg)
+		return p, cmd
+	}
+	if p.inlineEditMode {
+		return p, nil
+	}
+	if p.searchMode {
+		p.pasteIntoSearch(msg.Content)
+		return p, nil
+	}
+	if p.activePane == PaneEditor && p.editorNote != nil {
+		if p.viewFilter != FilterActive {
+			return p, readOnlyPasteToast(p.viewFilter)
+		}
+		return p.pasteIntoEditor(msg.Content)
+	}
+	if p.viewFilter != FilterActive {
+		return p, readOnlyPasteToast(p.viewFilter)
+	}
+	return p, p.createNoteFromPaste(msg.Content)
+}
+
+func (p *Plugin) pasteIntoSearch(content string) {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	normalized = strings.ReplaceAll(normalized, "\n", " ")
+	p.searchQuery += normalized
+	p.updateFilteredNotes()
+}
+
+func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
+	var cmds []tea.Cmd
+	oldValue := p.editorTextarea.Value()
+	if p.previewMode {
+		p.previewMode = false
+		p.insertAtPreviewLine(content)
+	} else {
+		p.editorTextarea.InsertString(content)
+	}
+	if !p.editorTextarea.Focused() {
+		cmds = append(cmds, p.editorTextarea.Focus())
+	}
+	p.selection.Clear()
+	p.trackTextareaScroll()
+	if p.editorTextarea.Value() != oldValue {
+		p.editorDirty = true
+		p.syncPreviewFromTextarea()
+		cmds = append(cmds, p.startAutoSaveTimer())
+	}
+	return p, tea.Batch(cmds...)
+}
+
+// insertAtPreviewLine inserts text at the start of the current preview line
+// without walking the textarea cursor (SetValue leaves the cursor at end).
+func (p *Plugin) insertAtPreviewLine(content string) {
+	lines := strings.Split(p.editorTextarea.Value(), "\n")
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	row := p.previewCursorLine
+	if row < 0 {
+		row = 0
+	}
+	if row >= len(lines) {
+		row = len(lines) - 1
+	}
+	lines[row] = content + lines[row]
+	p.editorTextarea.SetValue(strings.Join(lines, "\n"))
+}
+
+func (p *Plugin) createNoteFromPaste(content string) tea.Cmd {
+	if strings.TrimSpace(content) == "" || p.store == nil {
+		return nil
+	}
+	title := firstNonBlankLine(content)
+	epoch := p.ctx.Epoch
+	store := p.store
+	return func() tea.Msg {
+		note, err := store.Create(title, content)
+		if err != nil {
+			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+		}
+		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
+	}
+}
+
+func firstNonBlankLine(content string) string {
+	normalized := strings.ReplaceAll(content, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	for _, line := range strings.Split(normalized, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func readOnlyPasteToast(filter NoteFilter) tea.Cmd {
+	label := "Notes"
+	switch filter {
+	case FilterArchived:
+		label = "Archived notes"
+	case FilterDeleted:
+		label = "Deleted notes"
+	}
+	return func() tea.Msg {
+		return msg.ToastMsg{
+			Message:  label + " are read-only",
+			Duration: 2 * time.Second,
+		}
+	}
 }
 
 func (p *Plugin) isStaleNoteSaveResult(epoch, editorActivation uint64) bool {
@@ -1009,11 +1168,19 @@ func (p *Plugin) setTextareaCursorPosition(row, col int) {
 	current := p.editorTextarea.Line()
 	for current > row {
 		p.editorTextarea.CursorUp()
-		current = p.editorTextarea.Line()
+		next := p.editorTextarea.Line()
+		if next >= current {
+			break
+		}
+		current = next
 	}
 	for current < row {
 		p.editorTextarea.CursorDown()
-		current = p.editorTextarea.Line()
+		next := p.editorTextarea.Line()
+		if next <= current {
+			break
+		}
+		current = next
 	}
 
 	// Set column
@@ -1189,6 +1356,11 @@ func (p *Plugin) openInExternalEditor() tea.Cmd {
 		return nil
 	}
 
+	// Drop a previous unused export so a second E cannot leak the first file.
+	if p.pendingInlineEditPath != "" && p.pendingInlineEditPath != notePath {
+		removeNoteExport(p.pendingInlineEditPath)
+	}
+
 	// Track the note being edited so we can read back changes after editor exits
 	p.pendingInlineEditID = note.ID
 	p.pendingInlineEditPath = notePath
@@ -1229,11 +1401,12 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 		content, err := os.ReadFile(notePath)
 		if err != nil {
 			// Failed to read, just reload notes
+			removeNoteExport(notePath)
 			return NotesLoadedMsg{Err: err, Epoch: epoch}
 		}
 
 		// Clean up temp file
-		_ = os.Remove(notePath)
+		removeNoteExport(notePath)
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
@@ -1346,9 +1519,9 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case "backspace":
-		// Remove last character from query
-		if len(p.searchQuery) > 0 {
-			p.searchQuery = p.searchQuery[:len(p.searchQuery)-1]
+		// Remove last rune from query
+		if q := []rune(p.searchQuery); len(q) > 0 {
+			p.searchQuery = string(q[:len(q)-1])
 			p.updateFilteredNotes()
 		}
 		return p, nil
@@ -1473,9 +1646,10 @@ func (p *Plugin) togglePin() tea.Cmd {
 	}
 	noteID := note.ID
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
-		err := p.store.TogglePin(noteID)
+		err := store.TogglePin(noteID)
 		return NotePinToggledMsg{ID: noteID, Err: err, Epoch: epoch}
 	}
 }
@@ -1498,9 +1672,10 @@ func (p *Plugin) toggleArchive() tea.Cmd {
 
 	noteID := note.ID
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
-		err := p.store.ToggleArchive(noteID)
+		err := store.ToggleArchive(noteID)
 		return NoteArchiveToggledMsg{ID: noteID, Err: err, Epoch: epoch}
 	}
 }
@@ -1731,6 +1906,7 @@ func (p *Plugin) loadNotes() tea.Cmd {
 	}
 	epoch := p.ctx.Epoch
 	filter := p.viewFilter
+	store := p.store
 
 	return func() tea.Msg {
 		var notes []Note
@@ -1738,11 +1914,11 @@ func (p *Plugin) loadNotes() tea.Cmd {
 
 		switch filter {
 		case FilterArchived:
-			notes, err = p.store.ListArchived()
+			notes, err = store.ListArchived()
 		case FilterDeleted:
-			notes, err = p.store.ListDeleted()
+			notes, err = store.ListDeleted()
 		default:
-			notes, err = p.store.List(false)
+			notes, err = store.List(false)
 		}
 
 		return NotesLoadedMsg{
@@ -1814,14 +1990,15 @@ func (p *Plugin) undoLastAction() tea.Cmd {
 	title := action.Title
 	actionType := action.Type
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	return func() tea.Msg {
 		var err error
 		switch actionType {
 		case UndoDelete:
-			err = p.store.Restore(noteID)
+			err = store.Restore(noteID)
 		case UndoArchive:
-			err = p.store.Unarchive(noteID)
+			err = store.Unarchive(noteID)
 		}
 		return NoteRestoredMsg{
 			ID:    noteID,
