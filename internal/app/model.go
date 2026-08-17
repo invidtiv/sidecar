@@ -213,6 +213,7 @@ type Model struct {
 	worktreeSwitcherModalWidth   int
 	worktreeSwitcherMouseHandler *mouse.Handler
 	worktreeCheckCounter         int // Counter for periodic worktree existence check
+	worktreeInventoryCounter     int // Counter for periodic worktree inventory refresh
 
 	// Worktree info cache (avoids git subprocess forks on every View render)
 	cachedWorktreeInfo      *WorktreeInfo

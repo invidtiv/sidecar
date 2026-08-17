@@ -106,6 +106,13 @@ type FileBrowserPluginConfig struct {
 	Enabled bool `json:"enabled"`
 }
 
+// tdMonitorDefaultRefresh is how often the td panel polls. Each poll forks
+// several `git` processes and reads the task database, and it runs whether or
+// not the panel is visible, so this is deliberately slow: a Sidecar left open
+// all day should not be a battery cost for data that changes a few times an
+// hour. Lower it per project with plugins.td-monitor.refreshInterval.
+const tdMonitorDefaultRefresh = 10 * time.Second
+
 // TDMonitorPluginConfig configures the TD monitor plugin.
 type TDMonitorPluginConfig struct {
 	Enabled         bool          `json:"enabled"`
@@ -244,7 +251,7 @@ func Default() *Config {
 			},
 			TDMonitor: TDMonitorPluginConfig{
 				Enabled:         true,
-				RefreshInterval: 2 * time.Second,
+				RefreshInterval: tdMonitorDefaultRefresh,
 				DBPath:          ".todos/issues.db",
 			},
 			FileBrowser: FileBrowserPluginConfig{
@@ -300,7 +307,7 @@ func (c *Config) Validate() error {
 		c.Plugins.GitStatus.RefreshInterval = time.Second
 	}
 	if c.Plugins.TDMonitor.RefreshInterval < 0 {
-		c.Plugins.TDMonitor.RefreshInterval = 2 * time.Second
+		c.Plugins.TDMonitor.RefreshInterval = tdMonitorDefaultRefresh
 	}
 	if c.Plugins.Workspace.TmuxCaptureMaxBytes <= 0 {
 		c.Plugins.Workspace.TmuxCaptureMaxBytes = 2 * 1024 * 1024

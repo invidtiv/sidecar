@@ -134,6 +134,22 @@ func (w *Watcher) Stop() {
 	_ = w.fsWatcher.Close()
 }
 
+// isAttributeOnly reports whether an event carries nothing but an attribute
+// change. Dropping those is what keeps this watcher from driving itself:
+// reading .git/index — exactly what the `git status` this watcher triggers
+// does — touches the index's attributes, and the kqueue backend reports that as
+// CHMOD on the index. Acting on it meant every refresh scheduled the next one,
+// so an idle Sidecar forked three `git` processes about six times a second
+// forever, all day.
+//
+// Nothing observable is lost. Git writes the index by creating index.lock and
+// renaming it into place, which arrives as REMOVE+CREATE on .git/index (and as
+// WRITE on backends that report in-place writes) — none of which is
+// attribute-only.
+func isAttributeOnly(op fsnotify.Op) bool {
+	return op == fsnotify.Chmod
+}
+
 func (w *Watcher) classify(path string) (WatchEvent, bool) {
 	path = filepath.Clean(path)
 	if path == w.indexPath {
@@ -165,6 +181,9 @@ func (w *Watcher) run() {
 		case event, ok := <-w.fsWatcher.Events:
 			if !ok {
 				return
+			}
+			if isAttributeOnly(event.Op) {
+				continue
 			}
 			classified, relevant := w.classify(event.Name)
 			if !relevant {

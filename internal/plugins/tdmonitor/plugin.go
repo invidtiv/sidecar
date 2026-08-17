@@ -21,8 +21,26 @@ const (
 	pluginName = "td"
 	pluginIcon = "T"
 
-	pollInterval = 2 * time.Second
+	// pollInterval is the fallback when no refresh interval is configured. Each
+	// poll costs four `git` forks inside td's monitor (rev-parse HEAD,
+	// rev-parse --abbrev-ref, status --porcelain, rev-parse --show-toplevel) on
+	// top of a task-database read, and it runs whether or not the td panel is
+	// on screen. Two seconds meant ~7000 subprocess spawns an hour in a session
+	// left open all day; task data does not change that fast.
+	pollInterval = 10 * time.Second
 )
+
+// refreshInterval returns the configured td poll interval, falling back to
+// pollInterval when there is no config or the value is unset.
+func (p *Plugin) refreshInterval() time.Duration {
+	if p.ctx == nil || p.ctx.Config == nil {
+		return pollInterval
+	}
+	if d := p.ctx.Config.Plugins.TDMonitor.RefreshInterval; d > 0 {
+		return d
+	}
+	return pollInterval
+}
 
 // Plugin wraps td's monitor TUI as a sidecar plugin.
 // This provides full feature parity with the standalone `td monitor` command.
@@ -137,7 +155,7 @@ func (p *Plugin) Start() tea.Cmd {
 func (p *Plugin) buildMonitor() tea.Cmd {
 	opts := monitor.EmbeddedOptions{
 		BaseDir:       p.ctx.WorkDir,
-		Interval:      pollInterval,
+		Interval:      p.refreshInterval(),
 		Version:       "", // empty for embedded use (not displayed in this context)
 		PanelRenderer: styles.CreateTDPanelRenderer(),
 		ModalRenderer: styles.CreateTDModalRenderer(),

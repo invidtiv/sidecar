@@ -15,6 +15,11 @@ import (
 // heals itself no matter which path clobbered it.
 const titleResyncTicks = 10
 
+// worktreeInventoryTicks is how many one-second ticks pass between background
+// refreshes of the worktree inventory. Anything that changes the inventory from
+// inside sidecar refreshes it directly; this only catches changes made outside.
+const worktreeInventoryTicks = 10
+
 // terminalTitle renders the configured title template against the current
 // project. Empty means "don't touch the terminal title".
 func (m Model) terminalTitle() string {

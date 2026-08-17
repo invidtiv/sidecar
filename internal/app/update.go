@@ -380,8 +380,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ui.UpdateClock()
 		m.ui.ClearExpiredToast()
 		m.ClearToast()
-		// Eagerly refresh worktree cache (must happen in Update, not View, due to value receiver)
-		m.refreshWorktreeCache()
+		// The worktree inventory costs a `git worktree list` fork, so it is
+		// refreshed off the update loop (never inline: this runs on the render
+		// goroutine) and only every worktreeInventoryTicks. A branch switched
+		// outside sidecar reaches the tab label a few seconds later instead of
+		// within one, which is worth ~3500 fewer subprocess spawns an hour on a
+		// session left open all day.
+		m.worktreeInventoryCounter++
+		var inventoryCmd tea.Cmd
+		if m.worktreeInventoryCounter >= worktreeInventoryTicks {
+			m.worktreeInventoryCounter = 0
+			inventoryCmd = refreshWorktreeInventoryCmd(m.ui.WorkDir)
+		}
 		// Resync the tab title against the freshly refreshed worktree cache, so
 		// a branch switched outside sidecar shows up within a second. Every
 		// titleResyncTicks the title is re-asserted even when unchanged, to take
@@ -396,9 +406,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeCheckCounter++
 		if m.worktreeCheckCounter >= 10 {
 			m.worktreeCheckCounter = 0
-			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd)
+			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd, inventoryCmd)
 		}
-		return m, tea.Batch(tickCmd(), titleCmd)
+		return m, tea.Batch(tickCmd(), titleCmd, inventoryCmd)
 
 	case worktreeInventoryRefreshedMsg:
 		current, _ := normalizePath(m.ui.WorkDir)
