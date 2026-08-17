@@ -491,19 +491,11 @@ func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string)
 	return workspaceops.RemoteBranchExists(ctx, workdir, branch)
 }
 
-func doWorktreePruneContext(ctx context.Context, workDir string) error {
-	return workspaceops.PruneWorktrees(ctx, workDir)
-}
-
 // isMainBranch returns true if the given branch is the repository's primary branch
 // (e.g., main, master). This is used as a universal guard to prevent accidental
 // deletion of the main branch.
 func isMainBranch(workdir, branch string) bool {
 	return branch == detectDefaultBranch(workdir)
-}
-
-func isMainBranchContext(ctx context.Context, workdir, branch string) bool {
-	return branch == detectDefaultBranchContext(ctx, workdir)
 }
 
 func deleteBranchContext(ctx context.Context, req workspaceops.BranchDeletion) error {

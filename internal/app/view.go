@@ -888,7 +888,7 @@ func (m Model) headerGeometry() headerLayout {
 	// of the right cluster nothing depends on.
 	if clockWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		suffixWidth -= clockWidth + 1
-		clock, clockWidth = "", 0
+		clock = ""
 	}
 	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		remove := -1

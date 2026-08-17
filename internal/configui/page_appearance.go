@@ -241,32 +241,6 @@ func (m *Model) setThemeScope(project bool, path string) {
 	state.picker.current = m.appearanceCurrentEntry()
 }
 
-// cycleThemeScopeProject chooses the project a project-scoped save writes to.
-// The first press enters project scope; further presses walk the list, so the
-// project is always something the user picked.
-func (m *Model) cycleThemeScopeProject() {
-	projects := m.scopeProjects()
-	if len(projects) == 0 {
-		return
-	}
-	state := m.appearance()
-	if !state.projectScope {
-		if state.projectPath == "" {
-			state.projectPath = projects[0].Path
-		}
-		m.setThemeScope(true, state.projectPath)
-		return
-	}
-	index := 0
-	for i, project := range projects {
-		if project.Path == state.projectPath {
-			index = i
-		}
-	}
-	next := projects[(index+1)%len(projects)]
-	m.setThemeScope(true, next.Path)
-}
-
 // saveAppearanceTheme writes the selected theme at the chosen scope.
 func (m *Model) saveAppearanceTheme(entry theme.Entry) tea.Cmd {
 	if entry.IsZero() {

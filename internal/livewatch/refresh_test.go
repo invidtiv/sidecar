@@ -135,13 +135,17 @@ func TestFingerprintUncomparableNeverRepeats(t *testing.T) {
 	// itself, so a caller that cannot be compared repaints rather than showing
 	// content it has no way to verify is current.
 	v := make(chan int)
-	if Fingerprint(v) == Fingerprint(v) {
+	first := Fingerprint(v)
+	second := Fingerprint(v)
+	if first == second {
 		t.Fatal("an unencodable value fingerprinted stably; stale content would stick")
 	}
 }
 
 func TestFingerprintStringDiscriminates(t *testing.T) {
-	if FingerprintString("hello") != FingerprintString("hello") {
+	first := FingerprintString("hello")
+	second := FingerprintString("hello")
+	if first != second {
 		t.Fatal("equal strings fingerprinted differently")
 	}
 	if FingerprintString("hello") == FingerprintString("hello ") {

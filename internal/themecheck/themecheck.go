@@ -424,8 +424,7 @@ func HasDotImport(root string) (string, bool) {
 func mutableRefs(expr ast.Expr, alias string, mutable map[string]bool) []string {
 	var out []string
 	seen := map[string]bool{}
-	var walk func(ast.Node) bool
-	walk = func(n ast.Node) bool {
+	walk := func(n ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
