@@ -3,8 +3,8 @@ package community
 import "testing"
 
 func TestSchemeCount(t *testing.T) {
-	if got := SchemeCount(); got != 453 {
-		t.Errorf("SchemeCount() = %d, want 453", got)
+	if got := SchemeCount(); got != 601 {
+		t.Errorf("SchemeCount() = %d, want 601", got)
 	}
 }
 

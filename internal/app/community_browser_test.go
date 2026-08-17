@@ -3,37 +3,20 @@ package app
 import (
 	"testing"
 
-	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
 func TestBuildUnifiedThemeList(t *testing.T) {
 	entries := buildUnifiedThemeList()
-	builtInCount := len(styles.ListThemes())
-	communityCount := len(community.ListSchemes())
+	themeCount := len(styles.ListThemes())
 
-	// +1 for separator between built-in and community
-	expectedTotal := builtInCount + 1 + communityCount
-	if len(entries) != expectedTotal {
-		t.Errorf("expected %d entries (inc separator), got %d", expectedTotal, len(entries))
+	if len(entries) != themeCount {
+		t.Errorf("expected %d entries, got %d", themeCount, len(entries))
 	}
 
-	// Built-in themes should come first
-	for i := 0; i < builtInCount; i++ {
+	for i := 0; i < themeCount; i++ {
 		if !entries[i].IsBuiltIn {
 			t.Errorf("entry %d should be built-in", i)
-		}
-	}
-
-	// Separator at boundary
-	if !entries[builtInCount].IsSeparator {
-		t.Error("expected separator between built-in and community themes")
-	}
-
-	// Community themes after separator
-	for i := builtInCount + 1; i < len(entries); i++ {
-		if entries[i].IsBuiltIn || entries[i].IsSeparator {
-			t.Errorf("entry %d should be community, got built-in or separator", i)
 		}
 	}
 }
@@ -41,11 +24,11 @@ func TestBuildUnifiedThemeList(t *testing.T) {
 func TestFilterThemeEntries(t *testing.T) {
 	entries := buildUnifiedThemeList()
 
-	// Filter for a built-in theme
+	// Filter for a theme
 	filtered := filterThemeEntries(entries, "dracula")
 	found := false
 	for _, e := range filtered {
-		if e.IsBuiltIn && e.ThemeKey == "dracula" {
+		if e.ThemeKey == "dracula" {
 			found = true
 		}
 	}
@@ -53,18 +36,10 @@ func TestFilterThemeEntries(t *testing.T) {
 		t.Error("expected to find dracula in filtered results")
 	}
 
-	// Empty query returns all (including separator)
+	// Empty query returns all
 	all := filterThemeEntries(entries, "")
 	if len(all) != len(entries) {
 		t.Errorf("empty filter: expected %d, got %d", len(entries), len(all))
-	}
-
-	// Filtering excludes separators
-	filtered2 := filterThemeEntries(entries, "a")
-	for _, e := range filtered2 {
-		if e.IsSeparator {
-			t.Error("filtered results should not contain separators")
-		}
 	}
 
 	// No matches
@@ -84,20 +59,7 @@ func TestUnifiedThemeCursorNavigation(t *testing.T) {
 		t.Fatal("expected themes to be available")
 	}
 
-	// Verify list has both built-in and community entries
-	hasBuiltIn := false
-	hasCommunity := false
-	for _, e := range m.themeSwitcherFiltered {
-		if e.IsBuiltIn {
-			hasBuiltIn = true
-		} else {
-			hasCommunity = true
-		}
-	}
-	if !hasBuiltIn {
-		t.Error("expected built-in themes in unified list")
-	}
-	if !hasCommunity {
-		t.Error("expected community themes in unified list")
+	if len(m.themeSwitcherFiltered) != len(styles.ListThemes()) {
+		t.Errorf("expected %d themes, got %d", len(styles.ListThemes()), len(m.themeSwitcherFiltered))
 	}
 }

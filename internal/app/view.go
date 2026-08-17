@@ -582,89 +582,45 @@ func (m Model) renderProjectAddThemePickerOverlay(content string) string {
 	cursorStyle := lipgloss.NewStyle().Foreground(styles.Primary)
 	selectedStyle := lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 
-	if m.projectAddCommunityMode {
-		// Community sub-browser
-		b.WriteString(styles.ModalTitle.Render("Community Themes"))
-		b.WriteString("\n\n")
+	// Theme list
+	b.WriteString(styles.ModalTitle.Render("Pick Theme"))
+	b.WriteString("\n\n")
+	b.WriteString(m.projectAddThemeInput.View())
+	b.WriteString("\n\n")
 
-		list := m.projectAddCommunityList
-		visibleCount := len(list)
-		if visibleCount > maxVisible {
-			visibleCount = maxVisible
-		}
-
-		if m.projectAddCommunityScroll > 0 {
-			b.WriteString(styles.Muted.Render("  ↑ more"))
-			b.WriteString("\n")
-		}
-
-		for i := m.projectAddCommunityScroll; i < m.projectAddCommunityScroll+visibleCount && i < len(list); i++ {
-			cursor := "  "
-			nameStyle := styles.Muted
-			if i == m.projectAddCommunityCursor {
-				cursor = cursorStyle.Render("▸ ")
-				nameStyle = selectedStyle
-			}
-			b.WriteString(cursor)
-			b.WriteString(nameStyle.Render(list[i]))
-			b.WriteString("\n")
-		}
-
-		if len(list) > m.projectAddCommunityScroll+visibleCount {
-			b.WriteString(styles.Muted.Render("  ↓ more"))
-			b.WriteString("\n")
-		}
-
-		b.WriteString("\n")
-		b.WriteString(styles.KeyHint.Render("enter"))
-		b.WriteString(styles.Muted.Render(" select  "))
-		b.WriteString(styles.KeyHint.Render("tab"))
-		b.WriteString(styles.Muted.Render(" built-in  "))
-		b.WriteString(styles.KeyHint.Render("esc"))
-		b.WriteString(styles.Muted.Render(" back"))
-	} else {
-		// Built-in theme list
-		b.WriteString(styles.ModalTitle.Render("Pick Theme"))
-		b.WriteString("\n\n")
-		b.WriteString(m.projectAddThemeInput.View())
-		b.WriteString("\n\n")
-
-		list := m.projectAddThemeFiltered
-		visibleCount := len(list)
-		if visibleCount > maxVisible {
-			visibleCount = maxVisible
-		}
-
-		if m.projectAddThemeScroll > 0 {
-			b.WriteString(styles.Muted.Render("  ↑ more"))
-			b.WriteString("\n")
-		}
-
-		for i := m.projectAddThemeScroll; i < m.projectAddThemeScroll+visibleCount && i < len(list); i++ {
-			cursor := "  "
-			nameStyle := styles.Muted
-			if i == m.projectAddThemeCursor {
-				cursor = cursorStyle.Render("▸ ")
-				nameStyle = selectedStyle
-			}
-			b.WriteString(cursor)
-			b.WriteString(nameStyle.Render(list[i]))
-			b.WriteString("\n")
-		}
-
-		if len(list) > m.projectAddThemeScroll+visibleCount {
-			b.WriteString(styles.Muted.Render("  ↓ more"))
-			b.WriteString("\n")
-		}
-
-		b.WriteString("\n")
-		b.WriteString(styles.KeyHint.Render("enter"))
-		b.WriteString(styles.Muted.Render(" select  "))
-		b.WriteString(styles.KeyHint.Render("tab"))
-		b.WriteString(styles.Muted.Render(" community  "))
-		b.WriteString(styles.KeyHint.Render("esc"))
-		b.WriteString(styles.Muted.Render(" back"))
+	list := m.projectAddThemeFiltered
+	visibleCount := len(list)
+	if visibleCount > maxVisible {
+		visibleCount = maxVisible
 	}
+
+	if m.projectAddThemeScroll > 0 {
+		b.WriteString(styles.Muted.Render("  ↑ more"))
+		b.WriteString("\n")
+	}
+
+	for i := m.projectAddThemeScroll; i < m.projectAddThemeScroll+visibleCount && i < len(list); i++ {
+		cursor := "  "
+		nameStyle := styles.Muted
+		if i == m.projectAddThemeCursor {
+			cursor = cursorStyle.Render("▸ ")
+			nameStyle = selectedStyle
+		}
+		b.WriteString(cursor)
+		b.WriteString(nameStyle.Render(list[i]))
+		b.WriteString("\n")
+	}
+
+	if len(list) > m.projectAddThemeScroll+visibleCount {
+		b.WriteString(styles.Muted.Render("  ↓ more"))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(styles.KeyHint.Render("enter"))
+	b.WriteString(styles.Muted.Render(" select  "))
+	b.WriteString(styles.KeyHint.Render("esc"))
+	b.WriteString(styles.Muted.Render(" back"))
 
 	modal := styles.ModalBox.Render(b.String())
 	return ui.OverlayModal(content, modal, m.width, m.height)

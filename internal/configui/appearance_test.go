@@ -74,7 +74,7 @@ func TestThemePickerFilterCountAndSwatch(t *testing.T) {
 		t.Fatalf("theme library only offered %d themes", all)
 	}
 	counts := theme.LibraryCounts()
-	if !strings.Contains(picker.countSummary(), "built-in") {
+	if !strings.Contains(picker.countSummary(), "themes") {
 		t.Fatalf("unfiltered count = %q, want the library summary", picker.countSummary())
 	}
 	if counts.Total() != all {
@@ -563,10 +563,8 @@ func focusedControlIDs(t *testing.T, m *Model, width, height int) []string {
 	return ids
 }
 
-// The wheel over a library divider belongs to the list. Dividers are painted,
-// not declared, so a notch over one used to fall through to nothing — and the
-// page opens with a divider inside the visible window.
-func TestWheelOverADividerScrollsTheList(t *testing.T) {
+// The wheel over the theme list box scrolls the list.
+func TestWheelScrollsTheList(t *testing.T) {
 	cfg := config.Default()
 	m, _ := configFixture(t, cfg)
 	m.Open(PageAppearance)
@@ -576,24 +574,12 @@ func TestWheelOverADividerScrollsTheList(t *testing.T) {
 	m.View(160, 45)
 
 	picker := m.activePicker()
-	divider := -1
-	end := min(len(picker.filtered), picker.scroll+picker.rows)
-	for i := picker.scroll; i < end; i++ {
-		if picker.filtered[i].IsSeparator {
-			divider = i
-		}
-	}
-	if divider < 0 {
-		t.Fatal("the opening window holds no divider to wheel over")
-	}
-	// The divider's region is the one covering its line; find it by walking the
-	// rows around it.
-	above := regionFor(t, m, fmt.Sprintf("%s%d", regionThemeRow, divider-1))
 	before := picker.cursor
-	m.Mouse(tea.MouseWheelMsg{X: above.Rect.X + 4, Y: above.Rect.Y + 1, Button: tea.MouseWheelDown})
+	row0 := regionFor(t, m, fmt.Sprintf("%s%d", regionThemeRow, 0))
+	m.Mouse(tea.MouseWheelMsg{X: row0.Rect.X + 4, Y: row0.Rect.Y + 1, Button: tea.MouseWheelDown})
 	m.View(160, 45)
 	if picker.cursor == before {
-		t.Fatalf("a notch over the divider was dropped: cursor still %d", before)
+		t.Fatalf("a notch over the list was dropped: cursor still %d", before)
 	}
 }
 
@@ -607,7 +593,7 @@ func TestWheelScrollsWhileTheFilterHasTheKeyboard(t *testing.T) {
 	m.detailFocus = true
 	m.focusPickerSearch()
 	m.View(160, 45)
-	for _, r := range "dark" {
+	for _, r := range "a" {
 		m.Key(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 	m.View(160, 45)

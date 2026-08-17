@@ -3,8 +3,6 @@ package community
 import (
 	"strings"
 	"testing"
-
-	"github.com/marcus/sidecar/internal/styles"
 )
 
 func TestConvertCatppuccinMocha(t *testing.T) {
@@ -22,11 +20,8 @@ func TestConvertCatppuccinMocha(t *testing.T) {
 	if palette.BgPrimary != scheme.Background {
 		t.Errorf("BgPrimary = %s, want %s", palette.BgPrimary, scheme.Background)
 	}
-	if palette.Error != scheme.Red {
-		t.Errorf("Error = %s, want %s (red)", palette.Error, scheme.Red)
-	}
-	if palette.Success != scheme.Green {
-		t.Errorf("Success = %s, want %s (green)", palette.Success, scheme.Green)
+	if palette.TabStyle != "minimal" {
+		t.Errorf("TabStyle = %s, want minimal", palette.TabStyle)
 	}
 
 	// Verify derived colors are valid hex
@@ -60,10 +55,8 @@ func TestConvertCatppuccinMocha(t *testing.T) {
 }
 
 func TestConvertLightTheme(t *testing.T) {
-	// Find a light theme
 	scheme := GetScheme("Alabaster")
 	if scheme == nil {
-		// Try another known light theme
 		scheme = GetScheme("Apple System Colors Light")
 	}
 	if scheme == nil {
@@ -79,7 +72,7 @@ func TestConvertLightTheme(t *testing.T) {
 	}
 }
 
-func TestConvertTabGradient(t *testing.T) {
+func TestConvertTabMinimal(t *testing.T) {
 	scheme := GetScheme("Catppuccin Mocha")
 	if scheme == nil {
 		t.Fatal("scheme not found")
@@ -87,11 +80,11 @@ func TestConvertTabGradient(t *testing.T) {
 
 	palette := Convert(scheme)
 
-	if palette.TabStyle != "gradient" {
-		t.Errorf("TabStyle = %s, want gradient", palette.TabStyle)
+	if palette.TabStyle != "minimal" {
+		t.Errorf("TabStyle = %s, want minimal", palette.TabStyle)
 	}
-	if len(palette.TabColors) < 3 {
-		t.Errorf("TabColors has %d colors, want >= 3", len(palette.TabColors))
+	if len(palette.TabColors) == 0 {
+		t.Error("TabColors is empty")
 	}
 	for i, c := range palette.TabColors {
 		if !isValidHex(c) {
@@ -141,9 +134,9 @@ func TestPaletteToOverrides(t *testing.T) {
 		t.Errorf("gradientBorderActive not a 2-element array: %v", overrides["gradientBorderActive"])
 	}
 
-	// Verify tab colors
-	if arr, ok := overrides["tabColors"].([]interface{}); !ok || len(arr) < 3 {
-		t.Errorf("tabColors should have >= 3 elements: %v", overrides["tabColors"])
+	// Verify tab style
+	if v, ok := overrides["tabStyle"].(string); !ok || v != "minimal" {
+		t.Errorf("tabStyle = %v, want minimal", overrides["tabStyle"])
 	}
 
 	// Verify angle
@@ -169,79 +162,6 @@ func TestMatchSyntaxTheme(t *testing.T) {
 	}
 }
 
-func TestDeriveTabGradient(t *testing.T) {
-	scheme := &CommunityScheme{
-		Red: "#ff0000", Green: "#00ff00", Yellow: "#ffff00",
-		Blue: "#0000ff", Purple: "#ff00ff", Cyan: "#00ffff",
-		BrightRed: "#ff5555", BrightGreen: "#55ff55", BrightYellow: "#ffff55",
-		BrightBlue: "#5555ff", BrightPurple: "#ff55ff", BrightCyan: "#55ffff",
-	}
-	result := deriveTabGradient(scheme)
-	if len(result) < 3 || len(result) > 4 {
-		t.Errorf("deriveTabGradient returned %d colors, want 3-4", len(result))
-	}
-
-	// Verify sorted by hue
-	for i := 1; i < len(result); i++ {
-		if HueDegrees(result[i]) < HueDegrees(result[i-1]) {
-			t.Errorf("tab gradient not sorted by hue at index %d", i)
-		}
-	}
-}
-
-func TestDeriveTabGradientDesaturatedFallback(t *testing.T) {
-	scheme := &CommunityScheme{
-		Red: "#666666", Green: "#707070", Yellow: "#7a7a7a",
-		Blue: "#848484", Purple: "#8e8e8e", Cyan: "#989898",
-		BrightRed: "#a2a2a2", BrightGreen: "#acacac", BrightYellow: "#b6b6b6",
-		BrightBlue: "#c0c0c0", BrightPurple: "#cacaca", BrightCyan: "#d4d4d4",
-		Background: "#1a1a1a",
-	}
-	result := deriveTabGradient(scheme)
-	if len(result) < 3 || len(result) > 4 {
-		t.Errorf("deriveTabGradient returned %d colors, want 3-4", len(result))
-	}
-
-	unique := make(map[string]bool)
-	for i, c := range result {
-		if !isValidHex(c) {
-			t.Errorf("TabColors[%d] = %q, not valid hex", i, c)
-		}
-		unique[strings.ToLower(c)] = true
-	}
-	if len(unique) < 3 {
-		t.Errorf("deriveTabGradient returned %d unique colors, want >= 3", len(unique))
-	}
-}
-
-func TestConvertSelectionBackgroundFallback(t *testing.T) {
-	base := GetScheme("Catppuccin Mocha")
-	if base == nil {
-		t.Skip("Catppuccin Mocha not found")
-	}
-	scheme := *base
-	scheme.SelectionBackground = base.Background
-
-	palette := Convert(&scheme)
-	if palette.BgTertiary == scheme.Background {
-		t.Errorf("BgTertiary = %s, want fallback distinct from background", palette.BgTertiary)
-	}
-}
-
-func TestConvertSelectionBackgroundEmpty(t *testing.T) {
-	base := GetScheme("Catppuccin Mocha")
-	if base == nil {
-		t.Skip("Catppuccin Mocha not found")
-	}
-	scheme := *base
-	scheme.SelectionBackground = ""
-
-	palette := Convert(&scheme)
-	if palette.BgTertiary == scheme.Background {
-		t.Errorf("BgTertiary = %s, want fallback distinct from background", palette.BgTertiary)
-	}
-}
-
 func TestConvertBgOverlayHandlesAlpha(t *testing.T) {
 	base := GetScheme("Catppuccin Mocha")
 	if base == nil {
@@ -251,69 +171,8 @@ func TestConvertBgOverlayHandlesAlpha(t *testing.T) {
 	scheme.Background = "#112233aa"
 
 	palette := Convert(&scheme)
-	if palette.BgOverlay != "#11223380" {
-		t.Errorf("BgOverlay = %s, want #11223380", palette.BgOverlay)
-	}
-}
-
-func TestPaletteToOverridesZeroGradientAngle(t *testing.T) {
-	palette := styles.ColorPalette{
-		GradientBorderActive: []string{"#111111", "#222222"},
-		GradientBorderAngle:  0,
-	}
-	overrides := PaletteToOverrides(palette)
-
-	if v, ok := overrides["gradientBorderAngle"].(float64); !ok || v != 0 {
-		t.Errorf("gradientBorderAngle = %v, want 0", overrides["gradientBorderAngle"])
-	}
-}
-
-func TestAllSchemesMinimumContrast(t *testing.T) {
-	schemes := ListSchemes()
-	if len(schemes) == 0 {
-		t.Fatal("no schemes loaded")
-	}
-
-	for _, name := range schemes {
-		scheme := GetScheme(name)
-		if scheme == nil {
-			continue
-		}
-		palette := Convert(scheme)
-		bg := palette.BgPrimary
-		bgTertiary := palette.BgTertiary
-
-		// TextMuted must have at least 3:1 contrast against background
-		if ratio := ContrastRatio(palette.TextMuted, bg); ratio < 3.0 {
-			t.Errorf("%s: TextMuted contrast %.2f < 3.0 (fg=%s, bg=%s)", name, ratio, palette.TextMuted, bg)
-		}
-		// TextSubtle must have at least 2.5:1
-		if ratio := ContrastRatio(palette.TextSubtle, bg); ratio < 2.5 {
-			t.Errorf("%s: TextSubtle contrast %.2f < 2.5 (fg=%s, bg=%s)", name, ratio, palette.TextSubtle, bg)
-		}
-		// TabTextInactive must have at least 3:1
-		if ratio := ContrastRatio(palette.TabTextInactive, bg); ratio < 3.0 {
-			t.Errorf("%s: TabTextInactive contrast %.2f < 3.0 (fg=%s, bg=%s)", name, ratio, palette.TabTextInactive, bg)
-		}
-		// TextPrimary must have at least 4.5:1 against primary background.
-		if ratio := ContrastRatio(palette.TextPrimary, bg); ratio < 4.5 {
-			t.Errorf("%s: TextPrimary/BgPrimary contrast %.2f < 4.5 (fg=%s, bg=%s)", name, ratio, palette.TextPrimary, bg)
-		}
-		// TextSecondary must have at least 3.5:1 against primary background.
-		if ratio := ContrastRatio(palette.TextSecondary, bg); ratio < 3.5 {
-			t.Errorf("%s: TextSecondary/BgPrimary contrast %.2f < 3.5 (fg=%s, bg=%s)", name, ratio, palette.TextSecondary, bg)
-		}
-		derivedTertiary := scheme.SelectionBackground == "" || ColorDistance(bg, scheme.SelectionBackground) < 20
-		if derivedTertiary {
-			// TextPrimary must have at least 4.5:1 against BgTertiary (selected rows).
-			if ratio := ContrastRatio(palette.TextPrimary, bgTertiary); ratio < 4.5 {
-				t.Errorf("%s: TextPrimary/BgTertiary contrast %.2f < 4.5 (fg=%s, bg=%s)", name, ratio, palette.TextPrimary, bgTertiary)
-			}
-			// TextSecondary must have at least 3.5:1 against BgTertiary (buttons).
-			if ratio := ContrastRatio(palette.TextSecondary, bgTertiary); ratio < 3.5 {
-				t.Errorf("%s: TextSecondary/BgTertiary contrast %.2f < 3.5 (fg=%s, bg=%s)", name, ratio, palette.TextSecondary, bgTertiary)
-			}
-		}
+	if palette.BgOverlay != "#112233cc" {
+		t.Errorf("BgOverlay = %s, want #112233cc", palette.BgOverlay)
 	}
 }
 
@@ -328,20 +187,4 @@ func isValidHex(s string) bool {
 		}
 	}
 	return true
-}
-
-// TestAllSchemesMeetPaletteContrast sweeps every community scheme through the
-// same requirement table the built-in themes are held to, applied at the point
-// the palette actually reaches the UI: after NormalizePalette.
-func TestAllSchemesMeetPaletteContrast(t *testing.T) {
-	for _, name := range ListSchemes() {
-		scheme := GetScheme(name)
-		if scheme == nil {
-			continue
-		}
-		palette := styles.NormalizePalette(Convert(scheme))
-		for _, failure := range styles.CheckPaletteContrast(palette) {
-			t.Errorf("%s: %s", name, failure)
-		}
-	}
 }

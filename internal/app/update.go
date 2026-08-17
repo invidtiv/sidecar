@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -2367,10 +2366,6 @@ func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 // handleProjectAddThemePickerKeys handles keys within the theme picker sub-modal.
 func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.projectAddCommunityMode {
-		return m.handleProjectAddCommunityKeys(msg)
-	}
-
 	maxVisible := 6
 	switch msg.String() {
 	case "esc":
@@ -2378,14 +2373,6 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 		// Restore theme
 		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
 		theme.ApplyResolved(resolved)
-		return m, nil
-
-	case "tab":
-		// Switch to community themes
-		m.projectAddCommunityMode = true
-		m.projectAddCommunityList = community.ListSchemes()
-		m.projectAddCommunityCursor = 0
-		m.projectAddCommunityScroll = 0
 		return m, nil
 
 	case "up", "k":
@@ -2448,55 +2435,6 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 	m.projectAddThemeCursor = 0
 	m.projectAddThemeScroll = 0
 	return m, cmd
-}
-
-// handleProjectAddCommunityKeys handles keys in the community sub-browser within add-project.
-func (m *Model) handleProjectAddCommunityKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	maxVisible := 6
-	switch msg.String() {
-	case "esc", "tab":
-		// Back to built-in themes
-		m.projectAddCommunityMode = false
-		// Restore theme
-		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		theme.ApplyResolved(resolved)
-		return m, nil
-
-	case "up", "k":
-		if m.projectAddCommunityCursor > 0 {
-			m.projectAddCommunityCursor--
-			if m.projectAddCommunityCursor < m.projectAddCommunityScroll {
-				m.projectAddCommunityScroll = m.projectAddCommunityCursor
-			}
-			m.previewProjectAddCommunity()
-		}
-		return m, nil
-
-	case "down", "j":
-		if m.projectAddCommunityCursor < len(m.projectAddCommunityList)-1 {
-			m.projectAddCommunityCursor++
-			if m.projectAddCommunityCursor >= m.projectAddCommunityScroll+maxVisible {
-				m.projectAddCommunityScroll = m.projectAddCommunityCursor - maxVisible + 1
-			}
-			m.previewProjectAddCommunity()
-		}
-		return m, nil
-
-	case "enter":
-		if m.projectAddCommunityCursor >= 0 && m.projectAddCommunityCursor < len(m.projectAddCommunityList) {
-			if m.projectAdd != nil {
-				m.projectAdd.themeSelected = m.projectAddCommunityList[m.projectAddCommunityCursor]
-			}
-		}
-		m.projectAddModalWidth = 0 // Force modal rebuild to show new theme
-		m.resetProjectAddThemePicker()
-		// Restore theme
-		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		theme.ApplyResolved(resolved)
-		return m, nil
-	}
-
-	return m, nil
 }
 
 // resolveIssueOpenID picks which issue ID to open from the issue input modal.

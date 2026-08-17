@@ -1,0 +1,1726 @@
+package styles
+
+// Curated modern themes generated from community schemes according to Sidecar Modern standards.
+
+var CuratedThemes = map[string]Theme{
+	"catppuccin-mocha": Theme{
+		Name:        "catppuccin-mocha",
+		DisplayName: "Catppuccin Mocha",
+		Colors: ColorPalette{
+			Primary:   "#89b4fa",
+			Secondary: "#94e2d5",
+			Accent:    "#89b4fa",
+
+			Success: "#a6e3a1",
+			Warning: "#f9e2af",
+			Error:   "#f38ba8",
+			Info:    "#94e2d5",
+
+			TextPrimary:   "#cdd6f4",
+			TextSecondary: "#a1a8c2",
+			TextMuted:     "#a2a6ba",
+			TextSubtle:    "#828598",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#1e1e2e",
+			BgSecondary: "#191926",
+			BgTertiary:  "#30303f",
+			BgOverlay:   "#1e1e2ecc",
+
+			SurfaceRaised: "#393947",
+			KeyHintFg:     "#89b4fa",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#50505c",
+			BorderActive: "#89b4fa",
+			BorderMuted:  "#343443",
+
+			GradientBorderActive: []string{"#89b4fa", "#94e2d5"},
+			GradientBorderNormal: []string{"#50505c", "#343443"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#89b4fa"},
+
+			DiffAddFg:    "#a6e3a1",
+			DiffAddBg:    "#323c3f",
+			DiffRemoveFg: "#f38ba8",
+			DiffRemoveBg: "#3e2e40",
+
+			ButtonHover:      "#343443",
+			TabTextInactive:  "#84879b",
+			Link:             "#89b4fa",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f7aec2",
+			DangerDark:   "#493446",
+			DangerBright: "#f38ba8",
+			DangerHover:  "#cf768f",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#30303f",
+			ScrollbarThumb: "#50505c",
+
+			BlameAge1: "#a6e3a1",
+			BlameAge2: "#94e2d5",
+			BlameAge3: "#f9e2af",
+			BlameAge4: "#f38ba8",
+			BlameAge5: "#a2a6ba",
+
+			SyntaxTheme:   "catppuccin-mocha",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#89b4fa", "#94e2d5", "#a6e3a1", "#f9e2af", "#f5c2e7", "#f38ba8"},
+			AgentColors: map[string]string{
+				"claude":      "#f9e2af",
+				"codex":       "#a1a8c2",
+				"grok":        "#cdd6f4",
+				"antigravity": "#94e2d5",
+				"gemini":      "#89b4fa",
+				"cursor":      "#f5c2e7",
+			},
+			LaneWorking: "#a6e3a1",
+			LaneBlocked: "#f9e2af",
+			LaneDone:    "#f5c2e7",
+			LaneIdle:    "#a1a8c2",
+			LanePaused:  "#a2a6ba",
+		},
+	},
+	"tokyonight-storm": Theme{
+		Name:        "tokyonight-storm",
+		DisplayName: "Tokyo Night Storm",
+		Colors: ColorPalette{
+			Primary:   "#7aa2f7",
+			Secondary: "#7dcfff",
+			Accent:    "#7aa2f7",
+
+			Success: "#9ece6a",
+			Warning: "#e0af68",
+			Error:   "#f77d94",
+			Info:    "#7dcfff",
+
+			TextPrimary:   "#c0caf5",
+			TextSecondary: "#a8afcf",
+			TextMuted:     "#acb1c7",
+			TextSubtle:    "#8b91a9",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#24283b",
+			BgSecondary: "#1e2130",
+			BgTertiary:  "#36394b",
+			BgOverlay:   "#24283bcc",
+
+			SurfaceRaised: "#3e4253",
+			KeyHintFg:     "#8daff7",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#545766",
+			BorderActive: "#7aa2f7",
+			BorderMuted:  "#3a3e4f",
+
+			GradientBorderActive: []string{"#7aa2f7", "#7dcfff"},
+			GradientBorderNormal: []string{"#545766", "#3a3e4f"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#7aa2f7"},
+
+			DiffAddFg:    "#9ece6a",
+			DiffAddBg:    "#364142",
+			DiffRemoveFg: "#f77d94",
+			DiffRemoveBg: "#443548",
+
+			ButtonHover:      "#3a3e4f",
+			TabTextInactive:  "#868ca7",
+			Link:             "#7aa2f7",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f9a4b4",
+			DangerDark:   "#4e394d",
+			DangerBright: "#f77d94",
+			DangerHover:  "#d26a7e",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#36394b",
+			ScrollbarThumb: "#545766",
+
+			BlameAge1: "#9ece6a",
+			BlameAge2: "#7dcfff",
+			BlameAge3: "#e0af68",
+			BlameAge4: "#f77d94",
+			BlameAge5: "#acb1c7",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#7aa2f7", "#7dcfff", "#9ece6a", "#e0af68", "#bb9af7", "#f77d94"},
+			AgentColors: map[string]string{
+				"claude":      "#e0af68",
+				"codex":       "#a8afcf",
+				"grok":        "#c0caf5",
+				"antigravity": "#7dcfff",
+				"gemini":      "#7aa2f7",
+				"cursor":      "#bb9af7",
+			},
+			LaneWorking: "#9ece6a",
+			LaneBlocked: "#e0af68",
+			LaneDone:    "#bb9af7",
+			LaneIdle:    "#a8afcf",
+			LanePaused:  "#acb1c7",
+		},
+	},
+	"gruvbox-dark": Theme{
+		Name:        "gruvbox-dark",
+		DisplayName: "Gruvbox Dark",
+		Colors: ColorPalette{
+			Primary:   "#fabd2f",
+			Secondary: "#84af85",
+			Accent:    "#fabd2f",
+
+			Success: "#abaa44",
+			Warning: "#d79921",
+			Error:   "#e38984",
+			Info:    "#84af85",
+
+			TextPrimary:   "#ebdbb2",
+			TextSecondary: "#baae8f",
+			TextMuted:     "#b7af9e",
+			TextSubtle:    "#928c7c",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#282828",
+			BgSecondary: "#212121",
+			BgTertiary:  "#393939",
+			BgOverlay:   "#282828cc",
+
+			SurfaceRaised: "#424242",
+			KeyHintFg:     "#fabd2f",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#575757",
+			BorderActive: "#fabd2f",
+			BorderMuted:  "#3e3e3e",
+
+			GradientBorderActive: []string{"#fabd2f", "#84af85"},
+			GradientBorderNormal: []string{"#575757", "#3e3e3e"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#fabd2f"},
+
+			DiffAddFg:    "#abaa44",
+			DiffAddBg:    "#3c3c2c",
+			DiffRemoveFg: "#e48f8a",
+			DiffRemoveBg: "#443736",
+
+			ButtonHover:      "#3e3e3e",
+			TabTextInactive:  "#968e7b",
+			Link:             "#fabd2f",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#ebaca9",
+			DangerDark:   "#4d3b3a",
+			DangerBright: "#e38984",
+			DangerHover:  "#c17470",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#393939",
+			ScrollbarThumb: "#575757",
+
+			BlameAge1: "#abaa44",
+			BlameAge2: "#84af85",
+			BlameAge3: "#d79921",
+			BlameAge4: "#e38984",
+			BlameAge5: "#b7af9e",
+
+			SyntaxTheme:   "gruvbox",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#fabd2f", "#84af85", "#abaa44", "#d79921", "#cb96ae", "#e38984"},
+			AgentColors: map[string]string{
+				"claude":      "#d79921",
+				"codex":       "#baae8f",
+				"grok":        "#ebdbb2",
+				"antigravity": "#84af85",
+				"gemini":      "#fabd2f",
+				"cursor":      "#cb96ae",
+			},
+			LaneWorking: "#abaa44",
+			LaneBlocked: "#d79921",
+			LaneDone:    "#cb96ae",
+			LaneIdle:    "#baae8f",
+			LanePaused:  "#b7af9e",
+		},
+	},
+	"dracula": Theme{
+		Name:        "dracula",
+		DisplayName: "Dracula",
+		Colors: ColorPalette{
+			Primary:   "#ff79c6",
+			Secondary: "#8be9fd",
+			Accent:    "#ff79c6",
+
+			Success: "#50fa7b",
+			Warning: "#f1fa8c",
+			Error:   "#ff8383",
+			Info:    "#8be9fd",
+
+			TextPrimary:   "#f8f8f2",
+			TextSecondary: "#c4c4c3",
+			TextMuted:     "#b2b2b3",
+			TextSubtle:    "#929396",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#282a36",
+			BgSecondary: "#21222c",
+			BgTertiary:  "#393b46",
+			BgOverlay:   "#282a36cc",
+
+			SurfaceRaised: "#42444e",
+			KeyHintFg:     "#ff8ccf",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#575962",
+			BorderActive: "#ff79c6",
+			BorderMuted:  "#3e3f4a",
+
+			GradientBorderActive: []string{"#ff79c6", "#8be9fd"},
+			GradientBorderNormal: []string{"#575962", "#3e3f4a"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#ff79c6"},
+
+			DiffAddFg:    "#50fa7b",
+			DiffAddBg:    "#2e4940",
+			DiffRemoveFg: "#ff8383",
+			DiffRemoveBg: "#483742",
+
+			ButtonHover:      "#3e3f4a",
+			TabTextInactive:  "#909194",
+			Link:             "#ff79c6",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#ffa8a8",
+			DangerDark:   "#533c45",
+			DangerBright: "#ff8383",
+			DangerHover:  "#d96f6f",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#393b46",
+			ScrollbarThumb: "#575962",
+
+			BlameAge1: "#50fa7b",
+			BlameAge2: "#8be9fd",
+			BlameAge3: "#f1fa8c",
+			BlameAge4: "#ff8383",
+			BlameAge5: "#b2b2b3",
+
+			SyntaxTheme:   "dracula",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#ff79c6", "#8be9fd", "#50fa7b", "#f1fa8c", "#ff79c6", "#ff8383"},
+			AgentColors: map[string]string{
+				"claude":      "#f1fa8c",
+				"codex":       "#c4c4c3",
+				"grok":        "#f8f8f2",
+				"antigravity": "#8be9fd",
+				"gemini":      "#ff79c6",
+				"cursor":      "#ff79c6",
+			},
+			LaneWorking: "#50fa7b",
+			LaneBlocked: "#f1fa8c",
+			LaneDone:    "#ff79c6",
+			LaneIdle:    "#c4c4c3",
+			LanePaused:  "#b2b2b3",
+		},
+	},
+	"nord": Theme{
+		Name:        "nord",
+		DisplayName: "Nord",
+		Colors: ColorPalette{
+			Primary:   "#9db6d0",
+			Secondary: "#88c0d0",
+			Accent:    "#9db6d0",
+
+			Success: "#a3be8c",
+			Warning: "#ebcb8b",
+			Error:   "#daa5aa",
+			Info:    "#88c0d0",
+
+			TextPrimary:   "#d8dee9",
+			TextSecondary: "#b5bcc5",
+			TextMuted:     "#b8bcc3",
+			TextSubtle:    "#989ca6",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#2e3440",
+			BgSecondary: "#262b34",
+			BgTertiary:  "#3f444f",
+			BgOverlay:   "#2e3440cc",
+
+			SurfaceRaised: "#474c57",
+			KeyHintFg:     "#abc0d6",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#5c616a",
+			BorderActive: "#9db6d0",
+			BorderMuted:  "#434853",
+
+			GradientBorderActive: []string{"#9db6d0", "#88c0d0"},
+			GradientBorderNormal: []string{"#5c616a", "#434853"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#9db6d0"},
+
+			DiffAddFg:    "#a3be8c",
+			DiffAddBg:    "#40494b",
+			DiffRemoveFg: "#dcaaae",
+			DiffRemoveBg: "#484550",
+
+			ButtonHover:      "#434853",
+			TabTextInactive:  "#959aa3",
+			Link:             "#9db6d0",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#e5c0c3",
+			DangerDark:   "#504b55",
+			DangerBright: "#daa5aa",
+			DangerHover:  "#b98c90",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#3f444f",
+			ScrollbarThumb: "#5c616a",
+
+			BlameAge1: "#a3be8c",
+			BlameAge2: "#88c0d0",
+			BlameAge3: "#ebcb8b",
+			BlameAge4: "#daa5aa",
+			BlameAge5: "#b8bcc3",
+
+			SyntaxTheme:   "nord",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#9db6d0", "#88c0d0", "#a3be8c", "#ebcb8b", "#c5a8bf", "#daa5aa"},
+			AgentColors: map[string]string{
+				"claude":      "#ebcb8b",
+				"codex":       "#b5bcc5",
+				"grok":        "#d8dee9",
+				"antigravity": "#88c0d0",
+				"gemini":      "#9db6d0",
+				"cursor":      "#c5a8bf",
+			},
+			LaneWorking: "#a3be8c",
+			LaneBlocked: "#ebcb8b",
+			LaneDone:    "#c5a8bf",
+			LaneIdle:    "#b5bcc5",
+			LanePaused:  "#b8bcc3",
+		},
+	},
+	"atom-one-dark": Theme{
+		Name:        "atom-one-dark",
+		DisplayName: "Atom One Dark",
+		Colors: ColorPalette{
+			Primary:   "#61afef",
+			Secondary: "#56b6c2",
+			Accent:    "#61afef",
+
+			Success: "#98c379",
+			Warning: "#e5c07b",
+			Error:   "#e48189",
+			Info:    "#56b6c2",
+
+			TextPrimary:   "#abb2bf",
+			TextSecondary: "#a8adb5",
+			TextMuted:     "#a8abb2",
+			TextSubtle:    "#8a8d95",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#21252b",
+			BgSecondary: "#1b1e23",
+			BgTertiary:  "#33363c",
+			BgOverlay:   "#21252bcc",
+
+			SurfaceRaised: "#3c3f44",
+			KeyHintFg:     "#69b3f0",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#52555a",
+			BorderActive: "#61afef",
+			BorderMuted:  "#373b40",
+
+			GradientBorderActive: []string{"#61afef", "#56b6c2"},
+			GradientBorderNormal: []string{"#52555a", "#373b40"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#61afef"},
+
+			DiffAddFg:    "#98c379",
+			DiffAddBg:    "#333d37",
+			DiffRemoveFg: "#e5878f",
+			DiffRemoveBg: "#3e3339",
+
+			ButtonHover:      "#373b40",
+			TabTextInactive:  "#898d95",
+			Link:             "#61afef",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#eca7ac",
+			DangerDark:   "#48373e",
+			DangerBright: "#e48189",
+			DangerHover:  "#c26e74",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#33363c",
+			ScrollbarThumb: "#52555a",
+
+			BlameAge1: "#98c379",
+			BlameAge2: "#56b6c2",
+			BlameAge3: "#e5c07b",
+			BlameAge4: "#e48189",
+			BlameAge5: "#a8abb2",
+
+			SyntaxTheme:   "onedark",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#61afef", "#56b6c2", "#98c379", "#e5c07b", "#cc85e1", "#e48189"},
+			AgentColors: map[string]string{
+				"claude":      "#e5c07b",
+				"codex":       "#a8adb5",
+				"grok":        "#abb2bf",
+				"antigravity": "#56b6c2",
+				"gemini":      "#61afef",
+				"cursor":      "#cc85e1",
+			},
+			LaneWorking: "#98c379",
+			LaneBlocked: "#e5c07b",
+			LaneDone:    "#cc85e1",
+			LaneIdle:    "#a8adb5",
+			LanePaused:  "#a8abb2",
+		},
+	},
+	"kanagawa-wave": Theme{
+		Name:        "kanagawa-wave",
+		DisplayName: "Kanagawa Wave",
+		Colors: ColorPalette{
+			Primary:   "#7e9cd8",
+			Secondary: "#7fa49a",
+			Accent:    "#7e9cd8",
+
+			Success: "#8aa37f",
+			Warning: "#c0a36e",
+			Error:   "#d78183",
+			Info:    "#7fa49a",
+
+			TextPrimary:   "#dcd7ba",
+			TextSecondary: "#ada995",
+			TextMuted:     "#aaa79c",
+			TextSubtle:    "#88867f",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#1f1f28",
+			BgSecondary: "#191921",
+			BgTertiary:  "#313139",
+			BgOverlay:   "#1f1f28cc",
+
+			SurfaceRaised: "#3a3a42",
+			KeyHintFg:     "#8aa6dc",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#505057",
+			BorderActive: "#7e9cd8",
+			BorderMuted:  "#35353e",
+
+			GradientBorderActive: []string{"#7e9cd8", "#7fa49a"},
+			GradientBorderNormal: []string{"#505057", "#35353e"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#7e9cd8"},
+
+			DiffAddFg:    "#8aa37f",
+			DiffAddBg:    "#2f3335",
+			DiffRemoveFg: "#d78183",
+			DiffRemoveBg: "#3b2e36",
+
+			ButtonHover:      "#35353e",
+			TabTextInactive:  "#8a887f",
+			Link:             "#7e9cd8",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#e3a7a8",
+			DangerDark:   "#44333a",
+			DangerBright: "#d78183",
+			DangerHover:  "#b76e6f",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#313139",
+			ScrollbarThumb: "#505057",
+
+			BlameAge1: "#8aa37f",
+			BlameAge2: "#7fa49a",
+			BlameAge3: "#c0a36e",
+			BlameAge4: "#d78183",
+			BlameAge5: "#aaa79c",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#7e9cd8", "#7fa49a", "#8aa37f", "#c0a36e", "#a491c2", "#d78183"},
+			AgentColors: map[string]string{
+				"claude":      "#c0a36e",
+				"codex":       "#ada995",
+				"grok":        "#dcd7ba",
+				"antigravity": "#7fa49a",
+				"gemini":      "#7e9cd8",
+				"cursor":      "#a491c2",
+			},
+			LaneWorking: "#8aa37f",
+			LaneBlocked: "#c0a36e",
+			LaneDone:    "#a491c2",
+			LaneIdle:    "#ada995",
+			LanePaused:  "#aaa79c",
+		},
+	},
+	"rose-pine": Theme{
+		Name:        "rose-pine",
+		DisplayName: "Rose Pine",
+		Colors: ColorPalette{
+			Primary:   "#eb6f92",
+			Secondary: "#ebbcba",
+			Accent:    "#eb6f92",
+
+			Success: "#6799ad",
+			Warning: "#f6c177",
+			Error:   "#eb6f92",
+			Info:    "#ebbcba",
+
+			TextPrimary:   "#e0def4",
+			TextSecondary: "#aeacc0",
+			TextMuted:     "#a09eae",
+			TextSubtle:    "#817f8e",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#191724",
+			BgSecondary: "#14131e",
+			BgTertiary:  "#2b2a36",
+			BgOverlay:   "#191724cc",
+
+			SurfaceRaised: "#35333e",
+			KeyHintFg:     "#ed7d9c",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#4c4a54",
+			BorderActive: "#eb6f92",
+			BorderMuted:  "#302e3a",
+
+			GradientBorderActive: []string{"#eb6f92", "#ebbcba"},
+			GradientBorderNormal: []string{"#4c4a54", "#302e3a"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#eb6f92"},
+
+			DiffAddFg:    "#6799ad",
+			DiffAddBg:    "#252a39",
+			DiffRemoveFg: "#eb6f92",
+			DiffRemoveBg: "#382434",
+
+			ButtonHover:      "#302e3a",
+			TabTextInactive:  "#838192",
+			Link:             "#eb6f92",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f19ab3",
+			DangerDark:   "#43293a",
+			DangerBright: "#eb6f92",
+			DangerHover:  "#c85e7c",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#2b2a36",
+			ScrollbarThumb: "#4c4a54",
+
+			BlameAge1: "#6799ad",
+			BlameAge2: "#ebbcba",
+			BlameAge3: "#f6c177",
+			BlameAge4: "#eb6f92",
+			BlameAge5: "#a09eae",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#eb6f92", "#ebbcba", "#6799ad", "#f6c177", "#c4a7e7", "#eb6f92"},
+			AgentColors: map[string]string{
+				"claude":      "#f6c177",
+				"codex":       "#aeacc0",
+				"grok":        "#e0def4",
+				"antigravity": "#ebbcba",
+				"gemini":      "#eb6f92",
+				"cursor":      "#c4a7e7",
+			},
+			LaneWorking: "#6799ad",
+			LaneBlocked: "#f6c177",
+			LaneDone:    "#c4a7e7",
+			LaneIdle:    "#aeacc0",
+			LanePaused:  "#a09eae",
+		},
+	},
+	"everforest-dark": Theme{
+		Name:        "everforest-dark",
+		DisplayName: "Everforest Dark",
+		Colors: ColorPalette{
+			Primary:   "#a7c080",
+			Secondary: "#dbbc7f",
+			Accent:    "#a7c080",
+
+			Success: "#a7c080",
+			Warning: "#dbbc7f",
+			Error:   "#e88a8c",
+			Info:    "#83c092",
+
+			TextPrimary:   "#d3c6aa",
+			TextSecondary: "#b7b1a0",
+			TextMuted:     "#b3b0a5",
+			TextSubtle:    "#929089",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#232a2e",
+			BgSecondary: "#1d2226",
+			BgTertiary:  "#353b3f",
+			BgOverlay:   "#232a2ecc",
+
+			SurfaceRaised: "#3d4447",
+			KeyHintFg:     "#a7c080",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#53595c",
+			BorderActive: "#a7c080",
+			BorderMuted:  "#393f43",
+
+			GradientBorderActive: []string{"#a7c080", "#dbbc7f"},
+			GradientBorderNormal: []string{"#53595c", "#393f43"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#a7c080"},
+
+			DiffAddFg:    "#a7c080",
+			DiffAddBg:    "#37403a",
+			DiffRemoveFg: "#e88a8c",
+			DiffRemoveBg: "#41383c",
+
+			ButtonHover:      "#393f43",
+			TabTextInactive:  "#949187",
+			Link:             "#a7c080",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#efadae",
+			DangerDark:   "#4a3d41",
+			DangerBright: "#e88a8c",
+			DangerHover:  "#c57577",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#353b3f",
+			ScrollbarThumb: "#53595c",
+
+			BlameAge1: "#a7c080",
+			BlameAge2: "#dbbc7f",
+			BlameAge3: "#dbbc7f",
+			BlameAge4: "#e88a8c",
+			BlameAge5: "#b3b0a5",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#a7c080", "#dbbc7f", "#a7c080", "#dbbc7f", "#d699b6", "#e88a8c"},
+			AgentColors: map[string]string{
+				"claude":      "#dbbc7f",
+				"codex":       "#b7b1a0",
+				"grok":        "#d3c6aa",
+				"antigravity": "#dbbc7f",
+				"gemini":      "#a7c080",
+				"cursor":      "#d699b6",
+			},
+			LaneWorking: "#a7c080",
+			LaneBlocked: "#dbbc7f",
+			LaneDone:    "#d699b6",
+			LaneIdle:    "#b7b1a0",
+			LanePaused:  "#b3b0a5",
+		},
+	},
+	"solarized-dark": Theme{
+		Name:        "solarized-dark",
+		DisplayName: "Solarized Dark",
+		Colors: ColorPalette{
+			Primary:   "#b69034",
+			Secondary: "#44a197",
+			Accent:    "#b69034",
+
+			Success: "#6cbe6c",
+			Warning: "#b69034",
+			Error:   "#e27075",
+			Info:    "#44a197",
+
+			TextPrimary:   "#9cc2c3",
+			TextSecondary: "#83a3a6",
+			TextMuted:     "#8fa6aa",
+			TextSubtle:    "#688488",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#001e27",
+			BgSecondary: "#001920",
+			BgTertiary:  "#143038",
+			BgOverlay:   "#001e27cc",
+
+			SurfaceRaised: "#1f3941",
+			KeyHintFg:     "#bd9b48",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#385057",
+			BorderActive: "#b69034",
+			BorderMuted:  "#1a343d",
+
+			GradientBorderActive: []string{"#b69034", "#44a197"},
+			GradientBorderNormal: []string{"#385057", "#1a343d"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#b69034"},
+
+			DiffAddFg:    "#6cbe6c",
+			DiffAddBg:    "#103631",
+			DiffRemoveFg: "#e27075",
+			DiffRemoveBg: "#222a33",
+
+			ButtonHover:      "#1a343d",
+			TabTextInactive:  "#678489",
+			Link:             "#b69034",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#eb9b9e",
+			DangerDark:   "#2d2e37",
+			DangerBright: "#e27075",
+			DangerHover:  "#c05f63",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#143038",
+			ScrollbarThumb: "#385057",
+
+			BlameAge1: "#6cbe6c",
+			BlameAge2: "#44a197",
+			BlameAge3: "#b69034",
+			BlameAge4: "#e27075",
+			BlameAge5: "#8fa6aa",
+
+			SyntaxTheme:   "solarized-dark",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#b69034", "#44a197", "#6cbe6c", "#b69034", "#db70a5", "#e27075"},
+			AgentColors: map[string]string{
+				"claude":      "#b69034",
+				"codex":       "#83a3a6",
+				"grok":        "#9cc2c3",
+				"antigravity": "#44a197",
+				"gemini":      "#b69034",
+				"cursor":      "#db70a5",
+			},
+			LaneWorking: "#6cbe6c",
+			LaneBlocked: "#b69034",
+			LaneDone:    "#db70a5",
+			LaneIdle:    "#83a3a6",
+			LanePaused:  "#8fa6aa",
+		},
+	},
+	"monokai-pro": Theme{
+		Name:        "monokai-pro",
+		DisplayName: "Monokai Pro",
+		Colors: ColorPalette{
+			Primary:   "#ffd866",
+			Secondary: "#a9dc76",
+			Accent:    "#ffd866",
+
+			Success: "#a9dc76",
+			Warning: "#ffd866",
+			Error:   "#ff7e9e",
+			Info:    "#78dce8",
+
+			TextPrimary:   "#fcfcfa",
+			TextSecondary: "#c8c8c7",
+			TextMuted:     "#b5b4b4",
+			TextSubtle:    "#969496",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#2d2a2e",
+			BgSecondary: "#252226",
+			BgTertiary:  "#3e3b3f",
+			BgOverlay:   "#2d2a2ecc",
+
+			SurfaceRaised: "#464447",
+			KeyHintFg:     "#ffd866",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#5b595c",
+			BorderActive: "#ffd866",
+			BorderMuted:  "#423f43",
+
+			GradientBorderActive: []string{"#ffd866", "#a9dc76"},
+			GradientBorderNormal: []string{"#5b595c", "#423f43"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#ffd866"},
+
+			DiffAddFg:    "#a9dc76",
+			DiffAddBg:    "#404539",
+			DiffRemoveFg: "#ff7e9e",
+			DiffRemoveBg: "#4c373f",
+
+			ButtonHover:      "#423f43",
+			TabTextInactive:  "#949394",
+			Link:             "#ffd866",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#ffa5bb",
+			DangerDark:   "#573b44",
+			DangerBright: "#ff7e9e",
+			DangerHover:  "#d96b86",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#3e3b3f",
+			ScrollbarThumb: "#5b595c",
+
+			BlameAge1: "#a9dc76",
+			BlameAge2: "#a9dc76",
+			BlameAge3: "#ffd866",
+			BlameAge4: "#ff7e9e",
+			BlameAge5: "#b5b4b4",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#ffd866", "#a9dc76", "#a9dc76", "#ffd866", "#ab9df2", "#ff7e9e"},
+			AgentColors: map[string]string{
+				"claude":      "#ffd866",
+				"codex":       "#c8c8c7",
+				"grok":        "#fcfcfa",
+				"antigravity": "#a9dc76",
+				"gemini":      "#ffd866",
+				"cursor":      "#ab9df2",
+			},
+			LaneWorking: "#a9dc76",
+			LaneBlocked: "#ffd866",
+			LaneDone:    "#ab9df2",
+			LaneIdle:    "#c8c8c7",
+			LanePaused:  "#b5b4b4",
+		},
+	},
+	"night-owl": Theme{
+		Name:        "night-owl",
+		DisplayName: "Night Owl",
+		Colors: ColorPalette{
+			Primary:   "#82aaff",
+			Secondary: "#21c7a8",
+			Accent:    "#82aaff",
+
+			Success: "#22da6e",
+			Warning: "#addb67",
+			Error:   "#f05c59",
+			Info:    "#21c7a8",
+
+			TextPrimary:   "#d6deeb",
+			TextSecondary: "#a1acba",
+			TextMuted:     "#8d99a7",
+			TextSubtle:    "#707e8b",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#011627",
+			BgSecondary: "#011220",
+			BgTertiary:  "#152938",
+			BgOverlay:   "#011627cc",
+
+			SurfaceRaised: "#1f3241",
+			KeyHintFg:     "#82aaff",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#394957",
+			BorderActive: "#82aaff",
+			BorderMuted:  "#1a2d3d",
+
+			GradientBorderActive: []string{"#82aaff", "#21c7a8"},
+			GradientBorderNormal: []string{"#394957", "#1a2d3d"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#82aaff"},
+
+			DiffAddFg:    "#22da6e",
+			DiffAddBg:    "#063332",
+			DiffRemoveFg: "#f05c59",
+			DiffRemoveBg: "#25202e",
+
+			ButtonHover:      "#1a2d3d",
+			TabTextInactive:  "#6c7a89",
+			Link:             "#82aaff",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f48d8b",
+			DangerDark:   "#312431",
+			DangerBright: "#f05c59",
+			DangerHover:  "#cc4e4c",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#152938",
+			ScrollbarThumb: "#394957",
+
+			BlameAge1: "#22da6e",
+			BlameAge2: "#21c7a8",
+			BlameAge3: "#addb67",
+			BlameAge4: "#f05c59",
+			BlameAge5: "#8d99a7",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#82aaff", "#21c7a8", "#22da6e", "#addb67", "#c792ea", "#f05c59"},
+			AgentColors: map[string]string{
+				"claude":      "#addb67",
+				"codex":       "#a1acba",
+				"grok":        "#d6deeb",
+				"antigravity": "#21c7a8",
+				"gemini":      "#82aaff",
+				"cursor":      "#c792ea",
+			},
+			LaneWorking: "#22da6e",
+			LaneBlocked: "#addb67",
+			LaneDone:    "#c792ea",
+			LaneIdle:    "#a1acba",
+			LanePaused:  "#8d99a7",
+		},
+	},
+	"ayu-mirage": Theme{
+		Name:        "ayu-mirage",
+		DisplayName: "Ayu Mirage",
+		Colors: ColorPalette{
+			Primary:   "#6dcbfa",
+			Secondary: "#90e1c6",
+			Accent:    "#6dcbfa",
+
+			Success: "#87d96c",
+			Warning: "#facc6e",
+			Error:   "#ed8274",
+			Info:    "#90e1c6",
+
+			TextPrimary:   "#cccac2",
+			TextSecondary: "#aaaaa8",
+			TextMuted:     "#abacac",
+			TextSubtle:    "#888a8c",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#1f2430",
+			BgSecondary: "#191e27",
+			BgTertiary:  "#313641",
+			BgOverlay:   "#1f2430cc",
+
+			SurfaceRaised: "#3a3e49",
+			KeyHintFg:     "#6dcbfa",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#50545e",
+			BorderActive: "#6dcbfa",
+			BorderMuted:  "#353a45",
+
+			GradientBorderActive: []string{"#6dcbfa", "#90e1c6"},
+			GradientBorderNormal: []string{"#50545e", "#353a45"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#6dcbfa"},
+
+			DiffAddFg:    "#87d96c",
+			DiffAddBg:    "#2f3f39",
+			DiffRemoveFg: "#ed8274",
+			DiffRemoveBg: "#3e323a",
+
+			ButtonHover:      "#353a45",
+			TabTextInactive:  "#8a8a8c",
+			Link:             "#6dcbfa",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f2a79e",
+			DangerDark:   "#48373e",
+			DangerBright: "#ed8274",
+			DangerHover:  "#c96e63",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#313641",
+			ScrollbarThumb: "#50545e",
+
+			BlameAge1: "#87d96c",
+			BlameAge2: "#90e1c6",
+			BlameAge3: "#facc6e",
+			BlameAge4: "#ed8274",
+			BlameAge5: "#abacac",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#6dcbfa", "#90e1c6", "#87d96c", "#facc6e", "#dabafa", "#ed8274"},
+			AgentColors: map[string]string{
+				"claude":      "#facc6e",
+				"codex":       "#aaaaa8",
+				"grok":        "#cccac2",
+				"antigravity": "#90e1c6",
+				"gemini":      "#6dcbfa",
+				"cursor":      "#dabafa",
+			},
+			LaneWorking: "#87d96c",
+			LaneBlocked: "#facc6e",
+			LaneDone:    "#dabafa",
+			LaneIdle:    "#aaaaa8",
+			LanePaused:  "#abacac",
+		},
+	},
+	"github-dark": Theme{
+		Name:        "github-dark",
+		DisplayName: "GitHub Dark",
+		Colors: ColorPalette{
+			Primary:   "#58a6ff",
+			Secondary: "#39c5cf",
+			Accent:    "#58a6ff",
+
+			Success: "#3fb950",
+			Warning: "#d29922",
+			Error:   "#ff7b72",
+			Info:    "#39c5cf",
+
+			TextPrimary:   "#e6edf3",
+			TextSecondary: "#b0b6bc",
+			TextMuted:     "#8f959b",
+			TextSubtle:    "#767b81",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#0d1117",
+			BgSecondary: "#0b0e13",
+			BgTertiary:  "#20242a",
+			BgOverlay:   "#0d1117cc",
+
+			SurfaceRaised: "#2a2e33",
+			KeyHintFg:     "#58a6ff",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#42454a",
+			BorderActive: "#58a6ff",
+			BorderMuted:  "#25292e",
+
+			GradientBorderActive: []string{"#58a6ff", "#39c5cf"},
+			GradientBorderNormal: []string{"#42454a", "#25292e"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#58a6ff"},
+
+			DiffAddFg:    "#3fb950",
+			DiffAddBg:    "#142a20",
+			DiffRemoveFg: "#ff7b72",
+			DiffRemoveBg: "#312125",
+
+			ButtonHover:      "#25292e",
+			TabTextInactive:  "#7a7f85",
+			Link:             "#58a6ff",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#ffa39c",
+			DangerDark:   "#3d2629",
+			DangerBright: "#ff7b72",
+			DangerHover:  "#d96961",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#20242a",
+			ScrollbarThumb: "#42454a",
+
+			BlameAge1: "#3fb950",
+			BlameAge2: "#39c5cf",
+			BlameAge3: "#d29922",
+			BlameAge4: "#ff7b72",
+			BlameAge5: "#8f959b",
+
+			SyntaxTheme:   "github-dark",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#58a6ff", "#39c5cf", "#3fb950", "#d29922", "#bc8cff", "#ff7b72"},
+			AgentColors: map[string]string{
+				"claude":      "#d29922",
+				"codex":       "#b0b6bc",
+				"grok":        "#e6edf3",
+				"antigravity": "#39c5cf",
+				"gemini":      "#58a6ff",
+				"cursor":      "#bc8cff",
+			},
+			LaneWorking: "#3fb950",
+			LaneBlocked: "#d29922",
+			LaneDone:    "#bc8cff",
+			LaneIdle:    "#b0b6bc",
+			LanePaused:  "#8f959b",
+		},
+	},
+	"synthwave": Theme{
+		Name:        "synthwave",
+		DisplayName: "Synthwave",
+		Colors: ColorPalette{
+			Primary:   "#f97137",
+			Secondary: "#19cde6",
+			Accent:    "#f97137",
+
+			Success: "#1ebb2b",
+			Warning: "#fdf834",
+			Error:   "#f6188f",
+			Info:    "#12c3e2",
+
+			TextPrimary:   "#dad9c7",
+			TextSecondary: "#a3a395",
+			TextMuted:     "#89887e",
+			TextSubtle:    "#6a6a62",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#000000",
+			BgSecondary: "#000000",
+			BgTertiary:  "#141414",
+			BgOverlay:   "#000000cc",
+
+			SurfaceRaised: "#1f1f1f",
+			KeyHintFg:     "#f97137",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#383838",
+			BorderActive: "#f97137",
+			BorderMuted:  "#1a1a1a",
+
+			GradientBorderActive: []string{"#f97137", "#19cde6"},
+			GradientBorderNormal: []string{"#383838", "#1a1a1a"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#f97137"},
+
+			DiffAddFg:    "#1ebb2b",
+			DiffAddBg:    "#041c06",
+			DiffRemoveFg: "#f6188f",
+			DiffRemoveBg: "#250415",
+
+			ButtonHover:      "#1a1a1a",
+			TabTextInactive:  "#6d6c64",
+			Link:             "#f97137",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#ffffff",
+
+			DangerLight:  "#f95db1",
+			DangerDark:   "#31051d",
+			DangerBright: "#f6188f",
+			DangerHover:  "#d1147a",
+			TextInverse:  "#ffffff",
+
+			ScrollbarTrack: "#141414",
+			ScrollbarThumb: "#383838",
+
+			BlameAge1: "#1ebb2b",
+			BlameAge2: "#19cde6",
+			BlameAge3: "#fdf834",
+			BlameAge4: "#f6188f",
+			BlameAge5: "#89887e",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#f97137", "#19cde6", "#1ebb2b", "#fdf834", "#f85a21", "#f6188f"},
+			AgentColors: map[string]string{
+				"claude":      "#fdf834",
+				"codex":       "#a3a395",
+				"grok":        "#dad9c7",
+				"antigravity": "#19cde6",
+				"gemini":      "#f97137",
+				"cursor":      "#f85a21",
+			},
+			LaneWorking: "#1ebb2b",
+			LaneBlocked: "#fdf834",
+			LaneDone:    "#f85a21",
+			LaneIdle:    "#a3a395",
+			LanePaused:  "#89887e",
+		},
+	},
+	"cobalt2": Theme{
+		Name:        "cobalt2",
+		DisplayName: "Cobalt2",
+		Colors: ColorPalette{
+			Primary:   "#ffe50a",
+			Secondary: "#73a0e4",
+			Accent:    "#ffe50a",
+
+			Success: "#38de21",
+			Warning: "#ffe50a",
+			Error:   "#ff7575",
+			Info:    "#00bbbb",
+
+			TextPrimary:   "#ffffff",
+			TextSecondary: "#c4c9cd",
+			TextMuted:     "#a6adb3",
+			TextSubtle:    "#848e97",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#132738",
+			BgSecondary: "#10202e",
+			BgTertiary:  "#263848",
+			BgOverlay:   "#132738cc",
+
+			SurfaceRaised: "#2f4150",
+			KeyHintFg:     "#ffe50a",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#475764",
+			BorderActive: "#ffe50a",
+			BorderMuted:  "#2b3d4c",
+
+			GradientBorderActive: []string{"#ffe50a", "#73a0e4"},
+			GradientBorderNormal: []string{"#475764", "#2b3d4c"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#ffe50a"},
+
+			DiffAddFg:    "#38de21",
+			DiffAddBg:    "#194235",
+			DiffRemoveFg: "#ff7575",
+			DiffRemoveBg: "#363341",
+
+			ButtonHover:      "#2b3d4c",
+			TabTextInactive:  "#89939c",
+			Link:             "#ffe50a",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#ff9e9e",
+			DangerDark:   "#423744",
+			DangerBright: "#ff7575",
+			DangerHover:  "#d96363",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#263848",
+			ScrollbarThumb: "#475764",
+
+			BlameAge1: "#38de21",
+			BlameAge2: "#73a0e4",
+			BlameAge3: "#ffe50a",
+			BlameAge4: "#ff7575",
+			BlameAge5: "#a6adb3",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#ffe50a", "#73a0e4", "#38de21", "#ffe50a", "#ff6ea3", "#ff7575"},
+			AgentColors: map[string]string{
+				"claude":      "#ffe50a",
+				"codex":       "#c4c9cd",
+				"grok":        "#ffffff",
+				"antigravity": "#73a0e4",
+				"gemini":      "#ffe50a",
+				"cursor":      "#ff6ea3",
+			},
+			LaneWorking: "#38de21",
+			LaneBlocked: "#ffe50a",
+			LaneDone:    "#ff6ea3",
+			LaneIdle:    "#c4c9cd",
+			LanePaused:  "#a6adb3",
+		},
+	},
+	"horizon": Theme{
+		Name:        "horizon",
+		DisplayName: "Horizon",
+		Colors: ColorPalette{
+			Primary:   "#ed718e",
+			Secondary: "#59e1e3",
+			Accent:    "#ed718e",
+
+			Success: "#29d398",
+			Warning: "#fab795",
+			Error:   "#ec6e8b",
+			Info:    "#59e1e3",
+
+			TextPrimary:   "#d5d8da",
+			TextSecondary: "#a7aaad",
+			TextMuted:     "#a0a3a6",
+			TextSubtle:    "#84868a",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#1c1e26",
+			BgSecondary: "#17191f",
+			BgTertiary:  "#2e3037",
+			BgOverlay:   "#1c1e26cc",
+
+			SurfaceRaised: "#373940",
+			KeyHintFg:     "#f0859e",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#4e5056",
+			BorderActive: "#ed718e",
+			BorderMuted:  "#33343c",
+
+			GradientBorderActive: []string{"#ed718e", "#59e1e3"},
+			GradientBorderNormal: []string{"#4e5056", "#33343c"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#ed718e"},
+
+			DiffAddFg:    "#29d398",
+			DiffAddBg:    "#1e3937",
+			DiffRemoveFg: "#ec6e8b",
+			DiffRemoveBg: "#3b2a35",
+
+			ButtonHover:      "#33343c",
+			TabTextInactive:  "#85888c",
+			Link:             "#ed718e",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f29aae",
+			DangerDark:   "#462e3a",
+			DangerBright: "#ec6e8b",
+			DangerHover:  "#c95e76",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#2e3037",
+			ScrollbarThumb: "#4e5056",
+
+			BlameAge1: "#29d398",
+			BlameAge2: "#59e1e3",
+			BlameAge3: "#fab795",
+			BlameAge4: "#ec6e8b",
+			BlameAge5: "#a0a3a6",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#ed718e", "#59e1e3", "#29d398", "#fab795", "#ef6cb0", "#ec6e8b"},
+			AgentColors: map[string]string{
+				"claude":      "#fab795",
+				"codex":       "#a7aaad",
+				"grok":        "#d5d8da",
+				"antigravity": "#59e1e3",
+				"gemini":      "#ed718e",
+				"cursor":      "#ef6cb0",
+			},
+			LaneWorking: "#29d398",
+			LaneBlocked: "#fab795",
+			LaneDone:    "#ef6cb0",
+			LaneIdle:    "#a7aaad",
+			LanePaused:  "#a0a3a6",
+		},
+	},
+	"shades-of-purple": Theme{
+		Name:        "shades-of-purple",
+		DisplayName: "Shades Of Purple",
+		Colors: ColorPalette{
+			Primary:   "#ff77ff",
+			Secondary: "#79e8fb",
+			Accent:    "#ff77ff",
+
+			Success: "#3ad900",
+			Warning: "#ffe700",
+			Error:   "#e9778b",
+			Info:    "#00c5c7",
+
+			TextPrimary:   "#ffffff",
+			TextSecondary: "#c7c6cf",
+			TextMuted:     "#a5a5b3",
+			TextSubtle:    "#838396",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#1e1d40",
+			BgSecondary: "#191834",
+			BgTertiary:  "#302f4f",
+			BgOverlay:   "#1e1d40cc",
+
+			SurfaceRaised: "#393857",
+			KeyHintFg:     "#ff77ff",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#504f6a",
+			BorderActive: "#ff77ff",
+			BorderMuted:  "#343453",
+
+			GradientBorderActive: []string{"#ff77ff", "#79e8fb"},
+			GradientBorderNormal: []string{"#504f6a", "#343453"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#ff77ff"},
+
+			DiffAddFg:    "#3ad900",
+			DiffAddBg:    "#223936",
+			DiffRemoveFg: "#e9778b",
+			DiffRemoveBg: "#3c2a4b",
+
+			ButtonHover:      "#343453",
+			TabTextInactive:  "#8e8ea0",
+			Link:             "#ff77ff",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f0a0ae",
+			DangerDark:   "#472f4f",
+			DangerBright: "#e9778b",
+			DangerHover:  "#c66576",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#302f4f",
+			ScrollbarThumb: "#504f6a",
+
+			BlameAge1: "#3ad900",
+			BlameAge2: "#79e8fb",
+			BlameAge3: "#ffe700",
+			BlameAge4: "#e9778b",
+			BlameAge5: "#a5a5b3",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#ff77ff", "#79e8fb", "#3ad900", "#ffe700", "#ff6496", "#e9778b"},
+			AgentColors: map[string]string{
+				"claude":      "#ffe700",
+				"codex":       "#c7c6cf",
+				"grok":        "#ffffff",
+				"antigravity": "#79e8fb",
+				"gemini":      "#ff77ff",
+				"cursor":      "#ff6496",
+			},
+			LaneWorking: "#3ad900",
+			LaneBlocked: "#ffe700",
+			LaneDone:    "#ff6496",
+			LaneIdle:    "#c7c6cf",
+			LanePaused:  "#a5a5b3",
+		},
+	},
+	"spacegray-eighties": Theme{
+		Name:        "spacegray-eighties",
+		DisplayName: "Spacegray Eighties",
+		Colors: ColorPalette{
+			Primary:   "#7ba1cf",
+			Secondary: "#57c2c1",
+			Accent:    "#7ba1cf",
+
+			Success: "#81a764",
+			Warning: "#fec254",
+			Error:   "#f07d84",
+			Info:    "#57c2c1",
+
+			TextPrimary:   "#bdbaae",
+			TextSecondary: "#aaa8a0",
+			TextMuted:     "#aaaaa5",
+			TextSubtle:    "#8a8984",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#222222",
+			BgSecondary: "#1c1c1c",
+			BgTertiary:  "#343434",
+			BgOverlay:   "#222222cc",
+
+			SurfaceRaised: "#3d3d3d",
+			KeyHintFg:     "#88aad3",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#535353",
+			BorderActive: "#7ba1cf",
+			BorderMuted:  "#383838",
+
+			GradientBorderActive: []string{"#7ba1cf", "#57c2c1"},
+			GradientBorderNormal: []string{"#535353", "#383838"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#7ba1cf"},
+
+			DiffAddFg:    "#81a764",
+			DiffAddBg:    "#30362c",
+			DiffRemoveFg: "#f07d84",
+			DiffRemoveBg: "#413031",
+
+			ButtonHover:      "#383838",
+			TabTextInactive:  "#8a8984",
+			Link:             "#7ba1cf",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#f4a4a9",
+			DangerDark:   "#4b3436",
+			DangerBright: "#f07d84",
+			DangerHover:  "#cc6a70",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#343434",
+			ScrollbarThumb: "#535353",
+
+			BlameAge1: "#81a764",
+			BlameAge2: "#57c2c1",
+			BlameAge3: "#fec254",
+			BlameAge4: "#f07d84",
+			BlameAge5: "#aaaaa5",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#7ba1cf", "#57c2c1", "#81a764", "#fec254", "#c289c4", "#f07d84"},
+			AgentColors: map[string]string{
+				"claude":      "#fec254",
+				"codex":       "#aaa8a0",
+				"grok":        "#bdbaae",
+				"antigravity": "#57c2c1",
+				"gemini":      "#7ba1cf",
+				"cursor":      "#c289c4",
+			},
+			LaneWorking: "#81a764",
+			LaneBlocked: "#fec254",
+			LaneDone:    "#c289c4",
+			LaneIdle:    "#aaa8a0",
+			LanePaused:  "#aaaaa5",
+		},
+	},
+	"zenburn": Theme{
+		Name:        "zenburn",
+		DisplayName: "Zenburn",
+		Colors: ColorPalette{
+			Primary:   "#90cbae",
+			Secondary: "#f0dfaf",
+			Accent:    "#90cbae",
+
+			Success: "#90cbae",
+			Warning: "#f0dfaf",
+			Error:   "#c9bcbc",
+			Info:    "#8cd0d3",
+
+			TextPrimary:   "#dcdccc",
+			TextSecondary: "#cbcbc2",
+			TextMuted:     "#cdcdc8",
+			TextSubtle:    "#a6a6a0",
+			TextSelection: "#ffffff",
+			TextHighlight: "#ffffff",
+
+			BgPrimary:   "#3f3f3f",
+			BgSecondary: "#343434",
+			BgTertiary:  "#4e4e4e",
+			BgOverlay:   "#3f3f3fcc",
+
+			SurfaceRaised: "#565656",
+			KeyHintFg:     "#aad6c0",
+			OnPrimary:     "#11111b",
+			OnWarning:     "#11111b",
+
+			BorderNormal: "#696969",
+			BorderActive: "#90cbae",
+			BorderMuted:  "#525252",
+
+			GradientBorderActive: []string{"#90cbae", "#f0dfaf"},
+			GradientBorderNormal: []string{"#696969", "#525252"},
+			GradientBorderAngle:  30.0,
+
+			TabStyle:  "minimal",
+			TabColors: []string{"#90cbae"},
+
+			DiffAddFg:    "#9bd0b6",
+			DiffAddBg:    "#4b5450",
+			DiffRemoveFg: "#cfc2c2",
+			DiffRemoveBg: "#545252",
+
+			ButtonHover:      "#525252",
+			TabTextInactive:  "#a8a8a1",
+			Link:             "#90cbae",
+			ToastSuccessText: "#11111b",
+			ToastErrorText:   "#11111b",
+
+			DangerLight:  "#d9d0d0",
+			DangerDark:   "#5b5858",
+			DangerBright: "#c9bcbc",
+			DangerHover:  "#aba0a0",
+			TextInverse:  "#11111b",
+
+			ScrollbarTrack: "#4e4e4e",
+			ScrollbarThumb: "#696969",
+
+			BlameAge1: "#90cbae",
+			BlameAge2: "#f0dfaf",
+			BlameAge3: "#f0dfaf",
+			BlameAge4: "#c9bcbc",
+			BlameAge5: "#cdcdc8",
+
+			SyntaxTheme:   "monokai",
+			MarkdownTheme: "dark",
+
+			ProjectHues: []string{"#90cbae", "#f0dfaf", "#90cbae", "#f0dfaf", "#e6aed5", "#c9bcbc"},
+			AgentColors: map[string]string{
+				"claude":      "#f0dfaf",
+				"codex":       "#cbcbc2",
+				"grok":        "#dcdccc",
+				"antigravity": "#f0dfaf",
+				"gemini":      "#90cbae",
+				"cursor":      "#e6aed5",
+			},
+			LaneWorking: "#90cbae",
+			LaneBlocked: "#f0dfaf",
+			LaneDone:    "#e6aed5",
+			LaneIdle:    "#cbcbc2",
+			LanePaused:  "#cdcdc8",
+		},
+	},
+}

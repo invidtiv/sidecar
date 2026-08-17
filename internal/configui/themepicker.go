@@ -467,13 +467,17 @@ func themeRow(entry, current theme.Entry, width int, state State) string {
 		nameStyle = lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 	}
 
-	right := theme.Label(entry)
-	rightRendered := mutedStyle().Render(right)
+	var rightRendered string
 	if entry.Same(current) {
 		rightRendered = Badge("CURRENT", false)
+	} else if right := theme.Label(entry); right != "" {
+		rightRendered = mutedStyle().Render(right)
 	}
 
 	left := " " + Swatch(theme.Swatch(entry)) + "  " + nameStyle.Render(name)
+	if rightRendered == "" {
+		return HighlightRow(padDisplay(left, width), width, state)
+	}
 	return HighlightRow(padRight(left, rightRendered, width), width, state)
 }
 

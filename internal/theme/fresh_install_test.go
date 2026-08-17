@@ -108,8 +108,8 @@ func TestFreshInstallThemeIsRegisteredAndListedAsBuiltIn(t *testing.T) {
 	if found.Name != "Sidecar Modern" {
 		t.Errorf("display name = %q, want %q", found.Name, "Sidecar Modern")
 	}
-	if Label(found) != "Built-in" {
-		t.Errorf("label = %q, want Built-in", Label(found))
+	if Label(found) != "" {
+		t.Errorf("label = %q, want empty string", Label(found))
 	}
 	if len(Filter(List(), "sidecar")) == 0 {
 		t.Error(`searching the picker for "sidecar" finds nothing`)

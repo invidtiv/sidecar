@@ -34,12 +34,29 @@ Themes are configured in `~/.config/sidecar/config.json`:
 
 ## Available Base Themes
 
-- **default** - Dark theme with purple/blue accents
-- **dracula** - Dracula-inspired dark theme with vibrant colors
-- **molokai** - Vibrant, high-contrast dark theme
-- **nord** - Arctic, north-bluish color palette
-- **solarized-dark** - Precision color scheme for reduced blue light
-- **tokyo-night** - Clean dark theme celebrating Downtown Tokyo
+Sidecar ships with 21 modern, contrast-compliant themes designed around a 7-step neutral ramp and single signature chrome accent:
+
+- **sidecar-modern** - Modern default with signature gold accent (`#c0982f`) and dark neutral ramp
+- **catppuccin-mocha** - Soothing lavender/blue (`#89b4fa`) with dark mantle
+- **tokyonight-storm** - Tokyo neon night blue (`#7aa2f7`)
+- **gruvbox-dark** - Retro warm gold (`#fabd2f`) & aqua (`#8ec07c`)
+- **dracula** - Refined vampire violet (`#bd93f9`)
+- **nord** - Arctic frost cyan (`#88c0d0`)
+- **atom-one-dark** - Balanced editor cyan/blue (`#61afef`)
+- **kanagawa-wave** - Woodblock print wave blue (`#7e9cd8`)
+- **rose-pine** - Soho rose (`#eb6f92`) & pine cyan (`#9ccfd8`)
+- **everforest-dark** - Earthy forest green (`#a7c080`) & warm amber (`#dbbc7f`)
+- **solarized-dark** - Precision amber/yellow (`#b58900`) & cyan (`#2aa198`)
+- **monokai-pro** - Crisp gold (`#ffd866`) & green (`#a6e22e`)
+- **night-owl** - Deep navy blue (`#82aaff`)
+- **ayu-mirage** - Warm sunset gold (`#6dcbfa`) on slate
+- **github-dark** - Crisp GitHub cobalt (`#58a6ff`)
+- **synthwave** - 80s retrowave fuchsia (`#ff77ff`)
+- **cobalt2** - High-contrast Wes Bos cobalt yellow (`#ffe50a`)
+- **horizon** - Cyberpunk apricot/red (`#ed718e`)
+- **shades-of-purple** - High-contrast magenta/violet (`#ff77ff`)
+- **spacegray-eighties** - Muted classic warm gray & blue (`#7ba1cf`)
+- **zenburn** - Low-contrast soft green (`#90cbae`)
 
 ## Creating a Custom Theme
 
@@ -161,7 +178,7 @@ When `nerdFontsEnabled` is true: pill-shaped tabs (Powerline chars), pill-shaped
 
 ## Community Themes
 
-Press `#` to open theme switcher, then `Tab` to browse 453 community color schemes. Supports search, live preview, color swatches. Press `Enter` to save.
+Press `#` to open theme switcher, then `Tab` to browse 601 community color schemes. Supports search, live preview, color swatches. Press `Enter` to save.
 
 Community themes are converted from iTerm2 color schemes. Stored by scheme name:
 ```json
@@ -200,7 +217,7 @@ Each project can have its own theme. When switching with `@`, theme changes auto
 
 Set per-project: press `#`, then `ctrl+s` to toggle scope to "Set for this project".
 
-Resolution order: project theme > global `ui.theme` > `"default"`.
+Resolution order: project theme > global `ui.theme` > `"sidecar-modern"`.
 
 ## Programmatic Theme Registration
 
@@ -239,9 +256,31 @@ resolved := theme.ResolveTheme(cfg, "/path/to/project")
 theme.ApplyResolved(resolved)
 ```
 
-## Design Tips
+## Modern Theme Architecture (`Sidecar Modern` Standard)
 
-1. **Contrast**: Ensure text colors have sufficient contrast against backgrounds
-2. **Consistency**: Use related colors from the same palette (Tailwind, Material, etc.)
-3. **Diff visibility**: Diff backgrounds should be subtle but visible
-4. **Toast readability**: Toast text colors should contrast with success/error backgrounds
+Modern Sidecar themes (`sidecar-modern`, `catppuccin-mocha`) follow a refined, disciplined design system:
+
+1. **Single Chrome Accent**: Exactly *one* primary accent hue (e.g. Gold `#c0982f` in `sidecar-modern`, Blue `#89b4fa` in `catppuccin-mocha`). Used for cursor `❯`, active tab highlight, footer key glyphs (`keyHintFg`), and active border. Chrome does not use multi-color rainbow gradients.
+2. **Structural Neutral Ramp**: Geometry and hierarchy are carried by neutral lightness steps, not saturation:
+   - `BgPrimary`: Canvas background
+   - `BgSecondary`: Header / footer bar fills
+   - `BgTertiary`: Selected row background
+   - `SurfaceRaised`: Raised pills (key hints, bar chips) sitting subtly above canvas/bars
+   - `BorderNormal` / `BorderMuted`: Rules and hairlines
+   - `TextPrimary` → `TextSecondary` → `TextMuted` → `TextSubtle`: Typography ramp
+3. **Tab Style**: Default to `"minimal"` with single accent underline/highlight.
+4. **Semantics-Driven Colors**: Colors other than the single chrome accent are strictly earned by meaning (Done = Green, Open/ID = Teal, Destructive/Error = Red, Warning/P2 = Yellow/Gold, Links/Headings = Blue/Sapphire).
+
+### Contrast Rules (Strict AA Standard)
+
+When authoring or converting themes, check contrast against **all** surfaces:
+
+1. **Multi-Fill Validation (>= 4.5:1)**:
+   - `TextPrimary`, `TextSecondary`, `TextMuted`, and `TextSelection` must clear 4.5:1 on ALL three background fills: `BgPrimary`, `BgSecondary`, and `BgTertiary` (selected row).
+   - All semantic accents (`Primary`, `Secondary`, `Success`, `Warning`, `Error`, `Info`, `Link`, `LaneWorking`, `LaneBlocked`, `LaneDone`, `LaneIdle`, `LanePaused`, `ProjectHues[*]`) must clear >= 4.5:1 on `BgPrimary`, `BgSecondary`, and `BgTertiary`.
+2. **Raised Chrome (`SurfaceRaised`)**:
+   - `TextPrimary`, `TextSecondary`, `TextMuted`, and `KeyHintFg` must clear >= 4.5:1 on `SurfaceRaised`.
+   - `TextSubtle` and `TabTextInactive` must clear >= 3.0:1 on `SurfaceRaised`.
+3. **Ink on Bright Fills**:
+   - For bright or pastel status/danger backgrounds (e.g. `DangerBright`, `ToastSuccess`, `ToastError`), use dark canvas ink (`#0f1113` or `#181825`) for `TextInverse` / `Toast*Text`, as white (`#ffffff`) fails contrast on light reds/yellows.
+   - `DangerLight` must clear >= 4.5:1 on `DangerDark`.

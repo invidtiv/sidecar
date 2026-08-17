@@ -10,7 +10,6 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
-	"github.com/marcus/sidecar/internal/community"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
@@ -197,15 +196,11 @@ type Model struct {
 	projectAddMouseHandler *mouse.Handler
 
 	// Theme picker within add-project flow
-	projectAddThemeMode       bool // is theme picker sub-modal open?
-	projectAddThemeCursor     int
-	projectAddThemeScroll     int
-	projectAddThemeInput      textinput.Model
-	projectAddThemeFiltered   []string // filtered built-in theme list
-	projectAddCommunityMode   bool     // in community sub-browser?
-	projectAddCommunityList   []string // filtered community scheme names
-	projectAddCommunityCursor int
-	projectAddCommunityScroll int
+	projectAddThemeMode     bool // is theme picker sub-modal open?
+	projectAddThemeCursor   int
+	projectAddThemeScroll   int
+	projectAddThemeInput    textinput.Model
+	projectAddThemeFiltered []string // filtered theme list
 
 	// Worktree switcher modal
 	showWorktreeSwitcher         bool
@@ -1225,20 +1220,16 @@ func (m *Model) initProjectAddThemePicker() {
 	m.projectAddThemeFiltered = append([]string{"(use global)"}, styles.ListThemes()...)
 	m.projectAddThemeCursor = 0
 	m.projectAddThemeScroll = 0
-	m.projectAddCommunityMode = false
 }
 
 // resetProjectAddThemePicker closes the theme picker sub-modal.
 func (m *Model) resetProjectAddThemePicker() {
 	m.projectAddThemeMode = false
-	m.projectAddCommunityMode = false
 	m.projectAddThemeCursor = 0
 	m.projectAddThemeScroll = 0
-	m.projectAddCommunityCursor = 0
-	m.projectAddCommunityScroll = 0
 }
 
-// previewProjectAddTheme previews the currently-selected built-in theme.
+// previewProjectAddTheme previews the currently-selected theme.
 func (m *Model) previewProjectAddTheme() {
 	if m.projectAddThemeCursor >= 0 && m.projectAddThemeCursor < len(m.projectAddThemeFiltered) {
 		name := m.projectAddThemeFiltered[m.projectAddThemeCursor]
@@ -1248,14 +1239,6 @@ func (m *Model) previewProjectAddTheme() {
 		} else {
 			theme.ApplyResolved(theme.ResolvedTheme{BaseName: name})
 		}
-	}
-}
-
-// previewProjectAddCommunity previews the currently-selected community theme.
-func (m *Model) previewProjectAddCommunity() {
-	if m.projectAddCommunityCursor >= 0 && m.projectAddCommunityCursor < len(m.projectAddCommunityList) {
-		name := m.projectAddCommunityList[m.projectAddCommunityCursor]
-		theme.ApplyResolved(theme.ResolvedTheme{BaseName: "default", CommunityName: name})
 	}
 }
 
@@ -1295,15 +1278,8 @@ func (m *Model) saveProjectAdd() tea.Cmd {
 
 	// Add theme if user selected one
 	if m.projectAdd.themeSelected != "" && m.projectAdd.themeSelected != "(use global)" {
-		if community.GetScheme(m.projectAdd.themeSelected) != nil {
-			proj.Theme = &config.ThemeConfig{
-				Name:      "default",
-				Community: m.projectAdd.themeSelected,
-			}
-		} else {
-			proj.Theme = &config.ThemeConfig{
-				Name: m.projectAdd.themeSelected,
-			}
+		proj.Theme = &config.ThemeConfig{
+			Name: m.projectAdd.themeSelected,
 		}
 	}
 
