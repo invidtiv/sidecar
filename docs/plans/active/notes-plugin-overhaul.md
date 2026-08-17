@@ -90,9 +90,18 @@ Concretely:
   happens there. View mode is for reading and scrolling only — mouse interaction with
   rendered glamour output is limited to scroll. This deliberately trades one predictable,
   user-initiated style shift on click-in for never having to map selections through
-  styled, re-wrapped rendered text. The block-level line map softens the shift: the
-  source view opens scrolled to the block that was clicked, not the top of the note.
-  `Enter`/`i` from the list enter the same edit mode for keyboard-first use.
+  styled, re-wrapped rendered text. `Enter`/`i` from the list enter the same edit mode
+  for keyboard-first use.
+- **Click-in lands where you clicked, precisely.** This matters most on a scrolled
+  note: the mapping is screen row + view scroll offset → rendered line → source line
+  (via the line map) → cursor placed there, with the edit view scrolled so that source
+  line sits on (or near) the same screen row the click happened on. Block-level anchors
+  are the floor, not the target: within a plain paragraph the rendered-to-source line
+  offset is computable from wrap math, so most clicks can land on the exact line and an
+  approximate column; only inside constructs glamour reshapes heavily (tables, deep
+  nesting) do we degrade to top-of-block. Today this is "okay, not great" — make it a
+  tested contract: given a note, a scroll offset, and a click point, the resulting
+  cursor position is asserted in unit tests, not eyeballed.
 - Within edit mode, selection must **not** switch renderers — it overlays the source
   renderer (see §3).
 - **Edit mode shows syntax-highlighted markdown source** — not WYSIWYG, not glamour:
@@ -182,6 +191,10 @@ exactly. Improve mechanics:
   remember per-note scroll position for the session.
 - Unify the wheel contract across view/edit/inline so boundary passthrough is
   consistent.
+- **Scrollbars.** Add scrollbars to the note list, the rendered view, and the edit
+  view using the existing shared `ui.RenderScrollbar` (`internal/ui/scrollbar.go`) —
+  reuse, not new machinery. All three must draw from the same viewport math as the
+  unified layout function so the thumb position is honest across mode switches.
 - Fix `TaskCreatedMsg` dropping `Epoch` on the error path (`task_modal.go:236`).
 
 ## Phasing
@@ -219,5 +232,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
   can't style spans). This is the largest single piece of new machinery; budget for it
   explicitly in phases 1/3 rather than discovering it mid-way. Keep the highlighter a
   pure `line -> spans` function, testable without the UI.
-- **Line-map fidelity.** Accept block-level anchoring; chasing exact line mapping
-  through glamour re-wrapping is not worth it.
+- **Line-map fidelity.** Block anchors plus wrap math give exact-line landing for
+  ordinary prose and lists; accept top-of-block degradation only inside heavily
+  reshaped constructs (tables, deep nesting). Chasing exact columns through those is
+  not worth it — but the common case (clicking a paragraph in a scrolled note) must be
+  exact-line, covered by tests.
