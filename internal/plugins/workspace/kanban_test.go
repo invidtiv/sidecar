@@ -256,6 +256,7 @@ func TestKanbanDoubleClickActivatesExactWorktree(t *testing.T) {
 			{Name: "target", Status: StatusWaiting, Agent: &Agent{TmuxSession: "target-session"}},
 		},
 	}
+	p.SetFocused(true)
 	p.syncKanbanComponent()
 	action := mouse.MouseAction{Type: mouse.ActionDoubleClick, Region: &mouse.Region{
 		ID: regionKanbanCard, Data: boardkanban.HitRegion{Kind: boardkanban.RegionCard, Column: 2, Row: 0, CardID: "worktree:target"},

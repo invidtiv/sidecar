@@ -2,6 +2,7 @@ package tty
 
 import (
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -115,8 +116,14 @@ type Model struct {
 	Config Config
 	State  *State
 
-	ownerID                   uint64
-	runGeneration             uint64
+	ownerID       uint64
+	runGeneration uint64
+	// activeGeneration is the execution-time lease for commands that can
+	// mutate pane geometry. Close clears it synchronously, so a resize closure
+	// already returned to Bubble Tea cannot resize a pane after its surface is
+	// hidden even though its eventual result would be scope-rejected.
+	activeGeneration          atomic.Uint64
+	activationMu              sync.RWMutex
 	scopeTarget               string
 	control                   terminalControlSource
 	subscription              terminalControlSubscription
@@ -267,18 +274,25 @@ func New(config *Config) *Model {
 			cfg.ScrollbackLines = config.ScrollbackLines
 		}
 	}
-	return &Model{
+	m := &Model{
 		Config:  cfg,
 		ownerID: nextModelID.Add(1),
 		control: sharedTerminalControl,
 		visible: true,
 		focused: true,
-		input:   defaultTerminalInputSender{},
 		capture: defaultTerminalCaptureSource{},
 	}
+	m.input = defaultTerminalInputSender{model: m}
+	return m
 }
 
 var nextModelID atomic.Uint64
+
+var (
+	terminalQueryPaneSize = QueryPaneSize
+	terminalResizePane    = ResizeTmuxPane
+	terminalBeforeClose   func()
+)
 
 // IsActive returns whether interactive mode is currently active.
 func (m *Model) IsActive() bool {
@@ -313,6 +327,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	if m.scopeTarget == "" {
 		m.scopeTarget = sessionName
 	}
+	m.activeGeneration.Store(m.runGeneration)
 	m.mailbox = &terminalMailbox{events: make(chan terminalControlEvent, terminalMailboxCapacity)}
 	m.mailboxDone = make(chan struct{})
 
@@ -322,14 +337,18 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 		target = sessionName
 	}
 	if target != "" && m.Width > 0 && m.Height > 0 {
-		ResizeTmuxPane(target, m.Width, m.Height)
+		scope := m.Scope()
+		_ = m.withActivationError(scope, func() error {
+			terminalResizePane(target, m.Width, m.Height)
+			return nil
+		})
 	}
 
 	cmds := []tea.Cmd{m.schedulePoll(0), m.listenControl()}
 	if paneID != "" {
 		m.startControl()
 	} else {
-		cmds = append(cmds, resolvePaneCmd(m.Scope(), sessionName))
+		cmds = append(cmds, m.resolvePaneCmd(m.Scope(), sessionName))
 	}
 	return tea.Batch(cmds...)
 }
@@ -362,8 +381,44 @@ func (m *Model) owns(scope MessageScope) bool {
 		scope.Generation == current.Generation
 }
 
+func (m *Model) withActivationError(scope MessageScope, run func() error) error {
+	m.activationMu.RLock()
+	defer m.activationMu.RUnlock()
+	if m.activeGeneration.Load() != scope.Generation {
+		return nil
+	}
+	return run()
+}
+
+func (m *Model) withActivationMessage(scope MessageScope, run func() tea.Msg) tea.Msg {
+	m.activationMu.RLock()
+	defer m.activationMu.RUnlock()
+	if m.activeGeneration.Load() != scope.Generation {
+		return nil
+	}
+	return run()
+}
+
+func (m *Model) guardActiveCommand(scope MessageScope, cmd tea.Cmd) tea.Cmd {
+	if cmd == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if m.activeGeneration.Load() != scope.Generation {
+			return nil
+		}
+		return cmd()
+	}
+}
+
 // Exit exits interactive mode.
 func (m *Model) Exit() {
+	if terminalBeforeClose != nil {
+		terminalBeforeClose()
+	}
+	m.activationMu.Lock()
+	defer m.activationMu.Unlock()
+	m.activeGeneration.Store(0)
 	if m.subscription != nil {
 		m.subscription.Close()
 		m.subscription = nil
@@ -791,7 +846,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	// Paste key
 	if msg.String() == m.Config.PasteKey {
 		m.State.LastKeyTime = time.Now()
-		return m.input.PasteClipboard(m.Scope(), m.inputTarget())
+		scope := m.Scope()
+		return m.guardActiveCommand(scope, m.input.PasteClipboard(scope, m.inputTarget()))
 	}
 
 	// Update last key time
@@ -804,9 +860,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 		text := msg.Text
 		scope := m.Scope()
 		if pendingEscape {
-			cmds = append(cmds, m.input.SendEscapePaste(scope, target, text))
+			cmds = append(cmds, m.guardActiveCommand(scope, m.input.SendEscapePaste(scope, target, text)))
 		} else {
-			cmds = append(cmds, m.input.SendPaste(scope, target, text))
+			cmds = append(cmds, m.guardActiveCommand(scope, m.input.SendPaste(scope, target, text)))
 		}
 		cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		return tea.Batch(cmds...)
@@ -816,7 +872,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 	key, useLiteral := MapKeyToTmux(msg)
 	if key == "" {
 		if pendingEscape {
-			cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{"Escape", false}))
+			scope := m.Scope()
+			cmds = append(cmds, m.guardActiveCommand(scope, m.input.SendKeys(scope, target, KeySpec{"Escape", false})))
 			cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
 		}
 		return tea.Batch(cmds...)
@@ -824,12 +881,14 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	// Send keys
 	if pendingEscape {
-		cmds = append(cmds, m.input.SendKeys(m.Scope(), target,
+		scope := m.Scope()
+		cmds = append(cmds, m.guardActiveCommand(scope, m.input.SendKeys(scope, target,
 			KeySpec{"Escape", false},
 			KeySpec{key, useLiteral},
-		))
+		)))
 	} else {
-		cmds = append(cmds, m.input.SendKeys(m.Scope(), target, KeySpec{key, useLiteral}))
+		scope := m.Scope()
+		cmds = append(cmds, m.guardActiveCommand(scope, m.input.SendKeys(scope, target, KeySpec{key, useLiteral})))
 	}
 
 	cmds = append(cmds, m.schedulePoll(KeystrokeDebounce))
@@ -857,8 +916,9 @@ func (m *Model) SendUnknownSequence(msg tea.Msg) tea.Cmd {
 		return nil
 	}
 	m.State.LastKeyTime = time.Now()
+	scope := m.Scope()
 	return tea.Batch(
-		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{Value: csiu, Literal: true}),
+		m.guardActiveCommand(scope, m.input.SendKeys(scope, m.inputTarget(), KeySpec{Value: csiu, Literal: true})),
 		m.schedulePoll(KeystrokeDebounce),
 	)
 }
@@ -870,8 +930,9 @@ func (m *Model) handlePaste(content string) tea.Cmd {
 		return nil
 	}
 	m.State.LastKeyTime = time.Now()
+	scope := m.Scope()
 	cmds := []tea.Cmd{
-		m.input.SendPaste(m.Scope(), m.inputTarget(), content),
+		m.guardActiveCommand(scope, m.input.SendPaste(scope, m.inputTarget(), content)),
 		m.schedulePoll(KeystrokeDebounce),
 	}
 	return tea.Batch(cmds...)
@@ -962,8 +1023,9 @@ func (m *Model) SendClick(col, row int) tea.Cmd {
 		return nil
 	}
 	m.State.LastKeyTime = time.Now()
+	scope := m.Scope()
 	return tea.Batch(
-		m.input.SendMouse(m.Scope(), m.inputTarget(), col, row),
+		m.guardActiveCommand(scope, m.input.SendMouse(scope, m.inputTarget(), col, row)),
 		m.schedulePoll(0),
 	)
 }
@@ -978,8 +1040,9 @@ func (m *Model) SendWheelNotches(up bool, col, row, notches int) tea.Cmd {
 		return nil
 	}
 	m.State.LastKeyTime = time.Now()
+	scope := m.Scope()
 	return tea.Batch(
-		m.input.SendWheel(m.Scope(), m.inputTarget(), up, col, row, notches),
+		m.guardActiveCommand(scope, m.input.SendWheel(scope, m.inputTarget(), up, col, row, notches)),
 		m.schedulePoll(0),
 	)
 }
@@ -999,9 +1062,10 @@ func (m *Model) handleEscapeTimer() tea.Cmd {
 	// Timer fired with pending Escape: forward it to tmux
 	m.State.EscapePressed = false
 	m.State.LastKeyTime = time.Now()
+	scope := m.Scope()
 
 	return tea.Batch(
-		m.input.SendKeys(m.Scope(), m.inputTarget(), KeySpec{"Escape", false}),
+		m.guardActiveCommand(scope, m.input.SendKeys(scope, m.inputTarget(), KeySpec{"Escape", false})),
 		m.schedulePoll(0),
 	)
 }
@@ -1100,28 +1164,30 @@ func (m *Model) handlePollTick(msg PollTickMsg) tea.Cmd {
 	scope := msg.Scope
 	pollGeneration := msg.Generation
 	return func() tea.Msg {
-		output, state, err := m.capture.Capture(target, m.Config.ScrollbackLines)
-		if err != nil {
+		return m.withActivationMessage(scope, func() tea.Msg {
+			output, state, err := m.capture.Capture(target, m.Config.ScrollbackLines)
+			if err != nil {
+				return CaptureResultMsg{
+					Scope:          scope,
+					PollGeneration: pollGeneration,
+					Target:         target,
+					Err:            err,
+				}
+			}
+
 			return CaptureResultMsg{
 				Scope:          scope,
 				PollGeneration: pollGeneration,
 				Target:         target,
-				Err:            err,
+				Output:         output,
+				CursorRow:      state.CursorRow,
+				CursorCol:      state.CursorCol,
+				CursorVisible:  state.CursorVisible,
+				PaneHeight:     state.PaneHeight,
+				PaneWidth:      state.PaneWidth,
+				MouseReporting: state.MouseReporting,
 			}
-		}
-
-		return CaptureResultMsg{
-			Scope:          scope,
-			PollGeneration: pollGeneration,
-			Target:         target,
-			Output:         output,
-			CursorRow:      state.CursorRow,
-			CursorCol:      state.CursorCol,
-			CursorVisible:  state.CursorVisible,
-			PaneHeight:     state.PaneHeight,
-			PaneWidth:      state.PaneWidth,
-			MouseReporting: state.MouseReporting,
-		}
+		})
 	}
 }
 
@@ -1289,13 +1355,15 @@ func (m *Model) assertDimensions() tea.Cmd {
 	}
 
 	resize := func() tea.Msg {
-		// Check if resize is needed
-		actualWidth, actualHeight, ok := QueryPaneSize(target)
-		if ok && actualWidth == width && actualHeight == height {
-			return nil
-		}
-		ResizeTmuxPane(target, width, height)
-		return PaneResizedMsg{Scope: scope}
+		return m.withActivationMessage(scope, func() tea.Msg {
+			// Check if resize is needed
+			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+			if ok && actualWidth == width && actualHeight == height {
+				return nil
+			}
+			terminalResizePane(target, width, height)
+			return PaneResizedMsg{Scope: scope}
+		})
 	}
 	if restart == nil {
 		return resize
@@ -1346,12 +1414,14 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 
 	// Resize command
 	resizeCmd := func() tea.Msg {
-		actualWidth, actualHeight, ok := QueryPaneSize(target)
-		if ok && actualWidth == width && actualHeight == height {
-			return nil
-		}
-		ResizeTmuxPane(target, width, height)
-		return PaneResizedMsg{Scope: scope}
+		return m.withActivationMessage(scope, func() tea.Msg {
+			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+			if ok && actualWidth == width && actualHeight == height {
+				return nil
+			}
+			terminalResizePane(target, width, height)
+			return PaneResizedMsg{Scope: scope}
+		})
 	}
 
 	if controlOwned {

@@ -679,6 +679,7 @@ func visibleByID(m *Model) map[string]workspacelist.Item {
 // breathing while their row is selected — a selected agent is still working.
 func TestGlobalWorkspaceMarkersPulseIncludingWhenSelected(t *testing.T) {
 	m := catalogModel(t)
+	m.preview.visible = true
 	m.collector.Now = func() time.Time { return time.Now() }
 	m.workspaces.SelectID("b1")
 
@@ -695,6 +696,26 @@ func TestGlobalWorkspaceMarkersPulseIncludingWhenSelected(t *testing.T) {
 	}
 	if len(frames) < 3 {
 		t.Fatalf("selected working row barely animates: %d distinct frames", len(frames))
+	}
+}
+
+func TestOverviewStopInvalidatesPulseAndKeepsItStopped(t *testing.T) {
+	m := catalogModel(t)
+	m.preview.visible = true
+	cmd := m.Update(struct{}{})
+	if cmd == nil || !m.pulseScheduled {
+		t.Fatal("test premise: visible working catalog did not arm pulse")
+	}
+	staleGeneration := m.pulseGeneration
+	frame := m.pulseFrame
+
+	m.Stop()
+	if m.preview.visible || m.pulseScheduled {
+		t.Fatal("Stop retained visible terminal/pulse ownership")
+	}
+	m.Update(workspacePulseTickMsg{generation: staleGeneration})
+	if m.pulseFrame != frame || m.pulseScheduled {
+		t.Fatal("stale pulse advanced or re-armed after Stop")
 	}
 }
 

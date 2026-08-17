@@ -4,7 +4,9 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
@@ -316,6 +318,285 @@ func TestTerminalContractVisibilityFocusAndResize(t *testing.T) {
 	}
 	if got := source.requests[2]; got.Width != 100 || got.Height != 40 {
 		t.Fatalf("replacement geometry = %dx%d", got.Width, got.Height)
+	}
+}
+
+func TestTerminalResizeCommandRevalidatesActivationAfterClose(t *testing.T) {
+	m := New(nil)
+	m.Open(Target{Session: "editor", Pane: "%93"})
+	cmd := m.SetDimensions(100, 40)
+	if cmd == nil {
+		t.Fatal("active terminal did not construct resize command")
+	}
+	m.Close()
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		if _, resized := msg.(PaneResizedMsg); resized {
+			t.Fatal("stale resize ran after Close")
+		}
+		return
+	}
+	for _, child := range batch {
+		if _, resized := child().(PaneResizedMsg); resized {
+			t.Fatal("stale resize ran after Close")
+		}
+	}
+}
+
+func TestTerminalCloseDrainsPaneResolutionAndRejectsQueuedStaleResolve(t *testing.T) {
+	originalResolve := terminalResolvePane
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var resolves atomic.Int32
+	terminalResolvePane = func(string) (string, error) {
+		if resolves.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return "%97", nil
+	}
+	t.Cleanup(func() { terminalResolvePane = originalResolve })
+
+	m := New(nil)
+	m.Open(Target{Session: "resolve-session"})
+	scope := m.Scope()
+	inFlight := m.resolvePaneCmd(scope, "resolve-session")
+	stale := m.resolvePaneCmd(scope, "resolve-session")
+	resolveDone := make(chan tea.Msg, 1)
+	go func() { resolveDone <- inFlight() }()
+	<-started
+	originalBeforeClose := terminalBeforeClose
+	closeEntered := make(chan struct{})
+	terminalBeforeClose = func() { close(closeEntered) }
+	t.Cleanup(func() { terminalBeforeClose = originalBeforeClose })
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	<-closeEntered
+	select {
+	case <-closed:
+		t.Fatal("Close returned while pane resolution held activation")
+	default:
+	}
+	close(release)
+	select {
+	case <-resolveDone:
+	case <-time.After(time.Second):
+		t.Fatal("pane resolution did not drain")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after pane resolution drained")
+	}
+	if msg := stale(); msg != nil {
+		t.Fatalf("stale pane resolution returned %T after Close", msg)
+	}
+	if resolves.Load() != 1 {
+		t.Fatalf("stale pane resolution began after Close: resolves=%d", resolves.Load())
+	}
+}
+
+func TestTerminalCloseDrainsInFlightResizeAndExcludesStaleResize(t *testing.T) {
+	originalQuery := terminalQueryPaneSize
+	originalResize := terminalResizePane
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var queries atomic.Int32
+	var resizes atomic.Int32
+	terminalQueryPaneSize = func(string) (int, int, bool) {
+		if queries.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return 1, 1, true
+	}
+	terminalResizePane = func(string, int, int) { resizes.Add(1) }
+	t.Cleanup(func() {
+		terminalQueryPaneSize = originalQuery
+		terminalResizePane = originalResize
+	})
+
+	m := New(nil)
+	m.SetResizeDebounce(0)
+	m.Open(Target{Session: "editor", Pane: "%93-resize-drain"})
+	// The control replacement is not part of this lease proof; leave only the
+	// direct geometry command so its effect boundary is deterministic.
+	m.subscription = nil
+	inFlight := m.SetDimensions(100, 40)
+	stale := m.SetDimensions(101, 41)
+	if inFlight == nil || stale == nil {
+		t.Fatal("active terminal did not construct resize commands")
+	}
+	resizeDone := make(chan tea.Msg, 1)
+	go func() { resizeDone <- inFlight() }()
+	<-started
+	originalBeforeClose := terminalBeforeClose
+	closeEntered := make(chan struct{})
+	terminalBeforeClose = func() { close(closeEntered) }
+	t.Cleanup(func() { terminalBeforeClose = originalBeforeClose })
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	<-closeEntered
+	select {
+	case <-closed:
+		t.Fatal("Close returned while an old-scope resize effect was in flight")
+	default:
+	}
+	close(release)
+	select {
+	case <-resizeDone:
+	case <-time.After(time.Second):
+		t.Fatal("in-flight resize did not drain")
+	}
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after resize drained")
+	}
+	if got := stale(); got != nil {
+		t.Fatalf("stale resize returned %T after Close", got)
+	}
+	if queries.Load() != 1 || resizes.Load() != 1 {
+		t.Fatalf("geometry effects after Close: queries=%d resizes=%d", queries.Load(), resizes.Load())
+	}
+}
+
+func TestTerminalInputQueuedBeforeCloseRevalidatesInsideOrderedJob(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	originalSendKeys := terminalSendKeys
+	var sends atomic.Int32
+	terminalSendKeys = func(string, ...KeySpec) error {
+		sends.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { terminalSendKeys = originalSendKeys })
+
+	target := "%94-queued-close"
+	blockerEntered := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	_ = SendOrdered(target, func() error {
+		close(blockerEntered)
+		<-releaseBlocker
+		return nil
+	})
+	<-blockerEntered
+
+	m := New(nil)
+	m.Open(Target{Session: "editor", Pane: target})
+	cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if cmd == nil {
+		t.Fatal("active terminal did not construct input command")
+	}
+	m.Close()
+	close(releaseBlocker)
+	WaitForPendingSends()
+	if sends.Load() != 0 {
+		t.Fatalf("queued stale input began %d tmux effect(s) after Close", sends.Load())
+	}
+}
+
+func TestTerminalCloseDrainsInFlightInputAndExcludesOldScopeAfterReturn(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	originalSendKeys := terminalSendKeys
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var sends atomic.Int32
+	terminalSendKeys = func(string, ...KeySpec) error {
+		if sends.Add(1) == 1 {
+			close(started)
+			<-release
+		}
+		return nil
+	}
+	t.Cleanup(func() { terminalSendKeys = originalSendKeys })
+
+	target := "%95-in-flight-close"
+	m := New(nil)
+	m.Open(Target{Session: "editor", Pane: target})
+	oldScope := m.Scope()
+	if cmd := m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"}); cmd == nil {
+		t.Fatal("active terminal did not enqueue input")
+	}
+	<-started
+	originalBeforeClose := terminalBeforeClose
+	closeEntered := make(chan struct{})
+	terminalBeforeClose = func() { close(closeEntered) }
+	t.Cleanup(func() { terminalBeforeClose = originalBeforeClose })
+	closed := make(chan struct{})
+	go func() {
+		m.Close()
+		close(closed)
+	}()
+	<-closeEntered
+	select {
+	case <-closed:
+		t.Fatal("Close returned while an old-scope input effect was in flight")
+	default:
+	}
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not return after the input effect drained")
+	}
+
+	// A sender already holding the old scope may still enqueue after Close, but
+	// the ordered job must fail its lease check before the tmux effect begins.
+	_ = defaultTerminalInputSender{model: m}.SendKeys(oldScope, target, KeySpec{"y", true})
+	WaitForPendingSends()
+	if sends.Load() != 1 {
+		t.Fatalf("old scope began a tmux effect after Close returned: sends=%d", sends.Load())
+	}
+}
+
+func TestTerminalOldScopeSkipsEveryQueuedInputEffect(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	originalPaste := terminalSendPaste
+	originalKey := terminalSendKey
+	originalRawPaste := terminalSendPasteRaw
+	originalMouse := terminalSendMouse
+	originalWheel := terminalSendWheel
+	originalClipboard := terminalReadClipboard
+	var effects atomic.Int32
+	terminalSendPaste = func(string, string) error { effects.Add(1); return nil }
+	terminalSendKey = func(string, string) error { effects.Add(1); return nil }
+	terminalSendPasteRaw = func(string, string) error { effects.Add(1); return nil }
+	terminalSendMouse = func(string, int, int, int, bool) error { effects.Add(1); return nil }
+	terminalSendWheel = func(string, bool, int, int, int) error { effects.Add(1); return nil }
+	terminalReadClipboard = func() (string, error) { effects.Add(1); return "clipboard", nil }
+	t.Cleanup(func() {
+		terminalSendPaste = originalPaste
+		terminalSendKey = originalKey
+		terminalSendPasteRaw = originalRawPaste
+		terminalSendMouse = originalMouse
+		terminalSendWheel = originalWheel
+		terminalReadClipboard = originalClipboard
+	})
+
+	m := New(nil)
+	target := "%96-all-input"
+	m.Open(Target{Session: "editor", Pane: target})
+	oldScope := m.Scope()
+	m.Close()
+	sender := defaultTerminalInputSender{model: m}
+	_ = sender.SendPaste(oldScope, target, "paste")
+	_ = sender.SendEscapePaste(oldScope, target, "escape paste")
+	_ = sender.PasteClipboard(oldScope, target)
+	_ = sender.SendMouse(oldScope, target, 2, 3)
+	_ = sender.SendWheel(oldScope, target, true, 2, 3, 1)
+	WaitForPendingSends()
+	if effects.Load() != 0 {
+		t.Fatalf("old scope reached %d paste/clipboard/mouse effects", effects.Load())
 	}
 }
 

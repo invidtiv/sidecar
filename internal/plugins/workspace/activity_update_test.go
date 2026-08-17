@@ -16,9 +16,15 @@ func currentPollGeneration(p *Plugin, name string) int {
 	return p.pollScheduler.Current(agentPollKey(name))
 }
 
+func visibleActivityPlugin(p *Plugin) *Plugin {
+	p.applicationFocused = true
+	p.SetFocused(true)
+	return p
+}
+
 func TestActivityTitleOnlyUnchangedPollUpdatesWorktree(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateIdle, Seen: true}}
-	p := &Plugin{worktrees: []*Worktree{{Name: "w", Agent: agent}}, selectedIdx: -1}
+	p := visibleActivityPlugin(&Plugin{worktrees: []*Worktree{{Name: "w", Agent: agent}}, selectedIdx: -1})
 	p.update(AgentPollUnchangedMsg{
 		WorkspaceName: "w",
 		Activity:      agentactivity.Result{State: agentactivity.StateWorking, Evidence: "codex.title.working"},
@@ -31,7 +37,7 @@ func TestActivityTitleOnlyUnchangedPollUpdatesWorktree(t *testing.T) {
 
 func TestUnchangedPollSwitchesLiveProviderBeforeApplyingActivity(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
-	p := &Plugin{worktrees: []*Worktree{{Name: "FABLE", Agent: agent}}, selectedIdx: -1}
+	p := visibleActivityPlugin(&Plugin{worktrees: []*Worktree{{Name: "FABLE", Agent: agent}}, selectedIdx: -1})
 	p.update(AgentPollUnchangedMsg{
 		WorkspaceName: "FABLE",
 		AgentType:     AgentClaude,
@@ -48,7 +54,7 @@ func TestUnchangedPollSwitchesLiveProviderBeforeApplyingActivity(t *testing.T) {
 func TestUnchangedPollReturningToShellClearsStaleProviderState(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 	wt := &Worktree{Name: "FABLE", Status: StatusActive, Agent: agent}
-	p := &Plugin{worktrees: []*Worktree{wt}, selectedIdx: -1}
+	p := visibleActivityPlugin(&Plugin{worktrees: []*Worktree{wt}, selectedIdx: -1})
 	p.update(AgentPollUnchangedMsg{WorkspaceName: "FABLE", AgentType: AgentShell, CurrentStatus: StatusActive})
 	if agent.Type != AgentShell || agent.Activity.State != agentactivity.StateUnknown || wt.Status != StatusPaused {
 		t.Fatalf("returned shell = type %q activity %q status %v", agent.Type, agent.Activity.State, wt.Status)
@@ -71,7 +77,7 @@ func TestShellNeedsIdentityScreenForSharedRuntimes(t *testing.T) {
 func TestShellOutputSwitchesLiveProviderWithoutChangingLaunchPreference(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 	shell := &ShellSession{Name: "FABLE", TmuxName: "sidecar-sh-fable", ChosenAgent: AgentCodex, Agent: agent}
-	p := &Plugin{shells: []*ShellSession{shell}, selectedShellIdx: -1}
+	p := visibleActivityPlugin(&Plugin{shells: []*ShellSession{shell}, selectedShellIdx: -1})
 	p.update(ShellOutputMsg{
 		TmuxName:  shell.TmuxName,
 		AgentType: AgentClaude,
@@ -92,7 +98,7 @@ func TestSupportedProviderPollStatusIsProjectedOnlyFromSemanticActivity(t *testi
 	for _, agentType := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp} {
 		t.Run(string(agentType), func(t *testing.T) {
 			agent := &Agent{Type: agentType, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
-			p := &Plugin{worktrees: []*Worktree{{Name: "w", Status: StatusActive, Agent: agent}}, selectedIdx: -1}
+			p := visibleActivityPlugin(&Plugin{worktrees: []*Worktree{{Name: "w", Status: StatusActive, Agent: agent}}, selectedIdx: -1})
 			p.update(AgentOutputMsg{
 				WorkspaceName: "w", Generation: currentPollGeneration(p, "w"),
 				Status: StatusError, WaitingFor: "legacy override",
@@ -107,7 +113,7 @@ func TestSupportedProviderPollStatusIsProjectedOnlyFromSemanticActivity(t *testi
 
 func TestUnsupportedProviderRetainsLegacyPollStatus(t *testing.T) {
 	agent := &Agent{Type: AgentCustom}
-	p := &Plugin{worktrees: []*Worktree{{Name: "w", Status: StatusActive, Agent: agent}}, selectedIdx: -1}
+	p := visibleActivityPlugin(&Plugin{worktrees: []*Worktree{{Name: "w", Status: StatusActive, Agent: agent}}, selectedIdx: -1})
 	p.update(AgentPollUnchangedMsg{
 		WorkspaceName: "w", Generation: currentPollGeneration(p, "w"), CurrentStatus: StatusError,
 		Activity: agentactivity.Result{State: agentactivity.StateWorking, Evidence: "must-not-apply"},
@@ -201,10 +207,11 @@ func TestFreshSkipCaptureCannotReuseRetainedBlockerForAttention(t *testing.T) {
 
 func TestBackgroundedWorktreeDoesNotAcknowledgeCompletion(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
-	p := &Plugin{
+	p := visibleActivityPlugin(&Plugin{
 		worktrees: []*Worktree{{Name: "w", Agent: agent}}, selectedIdx: 0,
-		viewMode: ViewModeList, focused: false,
-	}
+		viewMode: ViewModeList,
+	})
+	p.applicationFocused = false
 	idle := AgentOutputMsg{WorkspaceName: "w", Activity: agentactivity.Result{State: agentactivity.StateIdle, Evidence: "codex.screen.idle"}}
 	p.update(idle)
 	time.Sleep(agentactivity.IdleDebounce)
@@ -218,10 +225,11 @@ func TestBackgroundedWorktreeDoesNotAcknowledgeCompletion(t *testing.T) {
 func TestBackgroundedShellDoesNotAcknowledgeCompletion(t *testing.T) {
 	agent := &Agent{Type: AgentCodex, OutputBuf: nil, Activity: agentactivity.Tracker{State: agentactivity.StateWorking}}
 	shell := &ShellSession{Name: "s", TmuxName: "sidecar-sh-test", ChosenAgent: AgentCodex, Agent: agent}
-	p := &Plugin{
+	p := visibleActivityPlugin(&Plugin{
 		shells: []*ShellSession{shell}, shellSelected: true, selectedShellIdx: 0,
-		viewMode: ViewModeList, focused: false,
-	}
+		viewMode: ViewModeList,
+	})
+	p.applicationFocused = false
 	idle := ShellOutputMsg{TmuxName: shell.TmuxName, Activity: agentactivity.Result{State: agentactivity.StateIdle, Evidence: "codex.screen.idle"}}
 	p.update(idle)
 	time.Sleep(agentactivity.IdleDebounce)
@@ -234,10 +242,10 @@ func TestBackgroundedShellDoesNotAcknowledgeCompletion(t *testing.T) {
 
 func TestVisibleFocusedEntriesAcknowledgeIdle(t *testing.T) {
 	worktreeAgent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateIdle}}
-	p := &Plugin{
+	p := visibleActivityPlugin(&Plugin{
 		worktrees: []*Worktree{{Name: "w", Agent: worktreeAgent}}, selectedIdx: 0,
-		viewMode: ViewModeList, focused: true,
-	}
+		viewMode: ViewModeList,
+	})
 	p.update(AgentPollUnchangedMsg{WorkspaceName: "w", Activity: agentactivity.Result{State: agentactivity.StateIdle, Evidence: "idle"}})
 	if got := worktreeAgent.Activity.DisplayState(); got != "idle" {
 		t.Fatalf("visible worktree displays %q", got)
@@ -245,7 +253,7 @@ func TestVisibleFocusedEntriesAcknowledgeIdle(t *testing.T) {
 
 	shellAgent := &Agent{Type: AgentCodex, Activity: agentactivity.Tracker{State: agentactivity.StateIdle}}
 	shell := &ShellSession{TmuxName: "sidecar-sh-test", ChosenAgent: AgentCodex, Agent: shellAgent}
-	p = &Plugin{shells: []*ShellSession{shell}, shellSelected: true, selectedShellIdx: 0, viewMode: ViewModeList, focused: true}
+	p = visibleActivityPlugin(&Plugin{shells: []*ShellSession{shell}, shellSelected: true, selectedShellIdx: 0, viewMode: ViewModeList})
 	p.update(ShellOutputMsg{TmuxName: shell.TmuxName, Activity: agentactivity.Result{State: agentactivity.StateIdle, Evidence: "idle"}})
 	if got := shellAgent.Activity.DisplayState(); got != "idle" {
 		t.Fatalf("visible shell displays %q", got)

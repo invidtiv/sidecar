@@ -35,6 +35,7 @@ func newSelectionTestPlugin() *Plugin {
 	}
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 10))
 	p.selection.Clear() // initialize sentinels
+	p.SetFocused(true)
 	return p
 }
 

@@ -87,9 +87,9 @@ func TestTerminalCaptureTraceIsOptInAndMetadataOnly(t *testing.T) {
 
 func newTerminalEmbeddingTestPlugin() *Plugin {
 	p := New()
-	p.focused = true
 	p.applicationFocused = true
 	p.viewMode = ViewModeList
+	p.SetFocused(true)
 	p.primaryTerminal = p.newWorkspaceTerminal()
 	p.panelTerminal = p.newWorkspaceTerminal()
 	return p

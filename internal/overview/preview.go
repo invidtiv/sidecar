@@ -51,6 +51,9 @@ const (
 	globalContentInset             = 2 // left border plus left padding
 )
 
+// Test barrier at the ownership revocation boundary. Nil in production.
+var previewBeforeDeactivate func()
+
 // previewFocus is which of the two panes owns the keyboard.
 type previewFocus uint8
 
@@ -182,9 +185,17 @@ func (m *Model) now() time.Time {
 // hidden closes that model and its control subscription.
 func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 	if m.preview.visible == visible {
+		if visible && m.currentPreviewOwnership() == 0 {
+			m.activatePreviewOwnership()
+		}
 		return nil
 	}
 	m.preview.visible = visible
+	if visible {
+		m.activatePreviewOwnership()
+	} else {
+		m.deactivatePreviewOwnership()
+	}
 	// Moving between the catalog's two projections supersedes any activation
 	// still being validated. Agents and Workspaces share one cache, one
 	// generation, and one poll, so nothing else here marks the moment the user
@@ -193,10 +204,69 @@ func (m *Model) SetWorkspacesVisible(visible bool) tea.Cmd {
 	// machinery exists to prevent.
 	m.requestID++
 	if !visible {
+		m.pulseGeneration++
+		m.pulseScheduled = false
 		m.releasePreview()
 		return nil
 	}
 	return m.previewSelect()
+}
+
+func (m *Model) currentPreviewOwnership() uint64 {
+	lease := m.ensurePreviewOwnership()
+	lease.mu.RLock()
+	defer lease.mu.RUnlock()
+	if !lease.active {
+		return 0
+	}
+	return lease.generation
+}
+
+func (m *Model) ownsPreviewOwnership(generation uint64) bool {
+	release, ok := m.acquirePreviewOwnership(generation)
+	if ok {
+		release()
+	}
+	return ok
+}
+
+func (m *Model) ensurePreviewOwnership() *previewOwnershipLease {
+	if m.previewOwnership == nil {
+		m.previewOwnership = &previewOwnershipLease{}
+	}
+	return m.previewOwnership
+}
+
+func (m *Model) activatePreviewOwnership() {
+	lease := m.ensurePreviewOwnership()
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	lease.generation++
+	lease.active = true
+}
+
+func (m *Model) deactivatePreviewOwnership() {
+	lease := m.ensurePreviewOwnership()
+	if previewBeforeDeactivate != nil {
+		previewBeforeDeactivate()
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	lease.active = false
+	lease.generation++
+}
+
+func (m *Model) acquirePreviewOwnership(generation uint64) (func(), bool) {
+	lease := m.ensurePreviewOwnership()
+	if generation == 0 {
+		return nil, false
+	}
+	lease.mu.RLock()
+	if !lease.active || lease.generation != generation {
+		lease.mu.RUnlock()
+		return nil, false
+	}
+	return lease.mu.RUnlock, true
 }
 
 // releasePreview closes the selected terminal and forgets its memory-only state.

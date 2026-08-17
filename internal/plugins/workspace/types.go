@@ -408,10 +408,11 @@ type WorktreeChanges struct {
 type CommitStatusInfo = workspacediff.CommitInfo
 
 // validateManagedSessionsMsg triggers periodic validation of managedSessions.
-type validateManagedSessionsMsg struct{}
+type validateManagedSessionsMsg struct{ Generation uint64 }
 
 // validateManagedSessionsResultMsg delivers validation results.
 type validateManagedSessionsResultMsg struct {
+	Generation       uint64
 	ExistingSessions map[string]bool // Set of actually existing tmux sessions
 }
 

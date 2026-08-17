@@ -193,6 +193,7 @@ func TestShellStartup_UpdateAssignsWatcherAndStartsShellPolling(t *testing.T) {
 	watcher := newStartupTestWatcher()
 	manifestPath := filepath.Join(t.TempDir(), "shells.json")
 	p := newShellStartupTestPlugin(t, 21, startupTestHooks(counts, watcher, manifestPath))
+	p.SetFocused(true)
 
 	result, ok := p.loadShellStartup()().(shellStartupResultMsg)
 	if !ok {

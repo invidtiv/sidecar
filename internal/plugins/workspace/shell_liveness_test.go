@@ -39,6 +39,7 @@ func shellDeathPlugin(t *testing.T) (*Plugin, string) {
 	}
 
 	p := New()
+	p.SetFocused(true)
 	p.ctx = &plugin.Context{WorkDir: workDir, ProjectRoot: workDir}
 	p.viewMode = ViewModeList
 	p.shellManifest = manifest

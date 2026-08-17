@@ -854,7 +854,36 @@ func (p *Plugin) pollShellSessionByName(tmuxName string) tea.Cmd {
 	return p.scheduleShellPollByName(tmuxName, 0)
 }
 
+// pollAllShellStatusesNow restores the visible surface's semantic observation
+// chains after a scope handoff invalidated them. Presentation still comes from
+// the one selected tty.Model; these polls keep activity and liveness metadata
+// current for the list without giving a hidden surface any terminal work.
+func (p *Plugin) pollAllShellStatusesNow() tea.Cmd {
+	var cmds []tea.Cmd
+	seen := make(map[string]bool)
+	appendShell := func(shell *ShellSession) {
+		if shell == nil || shell.Agent == nil || shell.TmuxName == "" || seen[shell.TmuxName] {
+			return
+		}
+		seen[shell.TmuxName] = true
+		cmds = append(cmds, p.pollShellSessionByName(shell.TmuxName))
+	}
+	for _, shell := range p.shells {
+		appendShell(shell)
+	}
+	for _, shells := range p.nestedByWorkDir {
+		for _, shell := range shells {
+			appendShell(shell)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
 func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.Cmd {
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	// Find the shell by TmuxName across both the current worktree's top-level
 	// shells and sibling-worktree shells nested in the workspace list.
 	shell := p.findShellByName(tmuxName)
@@ -908,6 +937,11 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	}
 
 	return func() tea.Msg {
+		release, ok := p.acquireTerminalOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer release()
 		if ctx != nil {
 			traceTerminalCapture(ctx.Logger, "workspace", "shell", "semantic_activity", generation)
 		}
@@ -943,12 +977,12 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := workspaceQueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				workspaceResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			} else {
 				// Already the right size; still tick the geometry lease so a
 				// settled owner does not go stale (td-ee222a).
-				tty.TouchGeometryLease(resizeTarget)
+				workspaceTouchGeometryLease(resizeTarget)
 			}
 		}
 
@@ -1027,6 +1061,9 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 // scheduleShellPollByName schedules a poll for a specific shell's output by name.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when shells are removed.
 func (p *Plugin) scheduleShellPollByName(tmuxName string, delay time.Duration) tea.Cmd {
+	if p.currentTerminalOwnership() == 0 {
+		return nil
+	}
 	return p.pollScheduler.Schedule(shellPollKey(tmuxName), delay, func(gen int) tea.Msg {
 		return pollShellByNameMsg{TmuxName: tmuxName, Generation: gen}
 	})

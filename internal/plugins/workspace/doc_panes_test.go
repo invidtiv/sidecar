@@ -30,6 +30,7 @@ func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
 	p.sidebarVisible = false
 	p.activePane = PanePreview
 	p.viewMode = ViewModeList
+	p.SetFocused(true)
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus = 1
 	p.paneNextID = 2

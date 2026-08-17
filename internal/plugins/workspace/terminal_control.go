@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +14,25 @@ import (
 )
 
 const terminalTraceEnv = "SIDECAR_TERMINAL_TRACE"
+
+type terminalOwnershipLease struct {
+	mu         sync.RWMutex
+	generation atomic.Uint64
+	active     atomic.Bool
+}
+
+// These seams keep lifecycle barrier tests on the production command paths
+// while replacing only the final tmux geometry/capture effect.
+var (
+	workspaceQueryPaneSize       = tty.QueryPaneSize
+	workspaceResizeTmuxPane      = tty.ResizeTmuxPane
+	workspaceTouchGeometryLease  = tty.TouchGeometryLease
+	workspaceHoldGeometryLease   = tty.HoldGeometryLease
+	workspaceReleaseGeometryHold = tty.ReleaseGeometryHold
+	workspaceCapturePaneRange    = tty.CapturePaneRange
+	workspaceSendSGRWheel        = tty.SendSGRWheel
+	workspaceBeforeDeactivate    func()
+)
 
 // traceTerminalCapture records transport metadata only. It deliberately omits
 // terminal content, commands, paths, titles, and provider payloads.
@@ -177,6 +198,111 @@ func (p *Plugin) stopTerminalModels() {
 	}
 	p.primaryTerminalTarget = workspaceTerminalTarget{}
 	p.panelTerminalTarget = workspaceTerminalTarget{}
+}
+
+func (p *Plugin) activateTerminalOwnership() {
+	lease := p.ensureTerminalOwnershipLease()
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	lease.generation.Add(1)
+	lease.active.Store(true)
+}
+
+func (p *Plugin) deactivateTerminalOwnership() {
+	// Publish revocation before closing models or invalidating queues so a
+	// concurrently starting command cannot slip a capture/resize through the
+	// synchronous project-to-global handoff.
+	if lease := p.terminalOwnership; lease != nil {
+		if workspaceBeforeDeactivate != nil {
+			workspaceBeforeDeactivate()
+		}
+		lease.mu.Lock()
+		lease.active.Store(false)
+		lease.generation.Add(1)
+		lease.mu.Unlock()
+	}
+	p.pollScheduler.Reset()
+	p.sessionValidationGeneration++
+	p.sessionValidationScheduled = false
+	p.cancelDeferredPaneResize()
+	p.cancelAllTerminalHistoryLoads()
+	p.stopTerminalModels()
+}
+
+func (p *Plugin) currentTerminalOwnership() uint64 {
+	lease := p.ensureTerminalOwnershipLease()
+	lease.mu.RLock()
+	if !lease.active.Load() {
+		lease.mu.RUnlock()
+		// A few construction paths (and lightweight host/test embeddings) set the
+		// established Plugin focus bit before the first reconciliation rather than
+		// calling SetFocused. Adopt that visible state once. Hide publishes
+		// focused=false before revocation, so stale async work cannot use this path
+		// to resurrect a covered surface.
+		if !p.focused {
+			return 0
+		}
+		lease.mu.Lock()
+		defer lease.mu.Unlock()
+		if lease.active.Load() {
+			return lease.generation.Load()
+		}
+		lease.generation.Add(1)
+		lease.active.Store(true)
+		return lease.generation.Load()
+	}
+	generation := lease.generation.Load()
+	lease.mu.RUnlock()
+	return generation
+}
+
+func (p *Plugin) ownsTerminalOwnership(generation uint64) bool {
+	lease := p.terminalOwnership
+	if lease == nil || generation == 0 {
+		return false
+	}
+	lease.mu.RLock()
+	defer lease.mu.RUnlock()
+	return lease.active.Load() && lease.generation.Load() == generation
+}
+
+func (p *Plugin) withTerminalOwnership(generation uint64, run func() tea.Msg) tea.Msg {
+	release, ok := p.acquireTerminalOwnership(generation)
+	if !ok {
+		return nil
+	}
+	defer release()
+	return run()
+}
+
+func (p *Plugin) acquireTerminalOwnership(generation uint64) (func(), bool) {
+	lease := p.terminalOwnership
+	if lease == nil || generation == 0 {
+		return nil, false
+	}
+	lease.mu.RLock()
+	if !lease.active.Load() || lease.generation.Load() != generation {
+		lease.mu.RUnlock()
+		return nil, false
+	}
+	return lease.mu.RUnlock, true
+}
+
+func (p *Plugin) ensureTerminalOwnershipLease() *terminalOwnershipLease {
+	if p.terminalOwnership == nil {
+		p.terminalOwnership = &terminalOwnershipLease{}
+	}
+	return p.terminalOwnership
+}
+
+func (p *Plugin) terminalOwnershipIsActive() bool {
+	lease := p.terminalOwnership
+	if lease == nil {
+		return false
+	}
+	lease.mu.RLock()
+	defer lease.mu.RUnlock()
+	return lease.active.Load()
 }
 
 // noteTerminalMouseActivity records a mouse event against both terminal

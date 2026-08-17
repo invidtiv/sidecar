@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -54,48 +55,93 @@ func (defaultTerminalCaptureSource) Capture(target string, scrollback int) (stri
 	return CapturePaneWithState(target, scrollback)
 }
 
-type defaultTerminalInputSender struct{}
+type defaultTerminalInputSender struct{ model *Model }
 
-func (defaultTerminalInputSender) SendKeys(scope MessageScope, target string, keys ...KeySpec) tea.Cmd {
-	return SendKeysCmd(scope, target, keys...)
+// These seams keep the ordered actor and activation lease production-real in
+// concurrency tests while replacing only the final tmux/clipboard effect.
+var (
+	terminalSendKeys      = SendKeys
+	terminalSendPaste     = SendPasteInput
+	terminalSendKey       = SendKeyToTmux
+	terminalSendPasteRaw  = SendPasteToTmux
+	terminalSendMouse     = SendSGRMouse
+	terminalSendWheel     = SendSGRWheel
+	terminalReadClipboard = clipboard.ReadAll
+)
+
+func (s defaultTerminalInputSender) SendKeys(scope MessageScope, target string, keys ...KeySpec) tea.Cmd {
+	return awaitOrderedSend(scope, SendOrdered(target, func() error {
+		return s.model.withActivationError(scope, func() error { return terminalSendKeys(target, keys...) })
+	}))
 }
 
-func (defaultTerminalInputSender) SendPaste(scope MessageScope, target, text string) tea.Cmd {
-	return SendPasteInputCmd(scope, target, text)
+func (s defaultTerminalInputSender) SendPaste(scope MessageScope, target, text string) tea.Cmd {
+	return awaitOrderedSend(scope, SendOrdered(target, func() error {
+		return s.model.withActivationError(scope, func() error { return terminalSendPaste(target, text) })
+	}))
 }
 
-func (defaultTerminalInputSender) SendEscapePaste(scope MessageScope, target, text string) tea.Cmd {
+func (s defaultTerminalInputSender) SendEscapePaste(scope MessageScope, target, text string) tea.Cmd {
+	return awaitOrderedSend(scope, SendOrdered(target, func() error {
+		return s.model.withActivationError(scope, func() error {
+			if err := terminalSendKey(target, "Escape"); err != nil {
+				return err
+			}
+			return terminalSendPasteRaw(target, text)
+		})
+	}))
+}
+
+func (s defaultTerminalInputSender) PasteClipboard(scope MessageScope, target string) tea.Cmd {
+	var result PasteResultMsg
+	done := SendOrdered(target, func() error {
+		return s.model.withActivationError(scope, func() error {
+			result.Scope = scope
+			text, err := terminalReadClipboard()
+			if err != nil {
+				result.Err = err
+				return nil
+			}
+			if text == "" {
+				result.Empty = true
+				return nil
+			}
+			if err := terminalSendPasteRaw(target, text); err != nil {
+				result.Err = err
+				result.SessionDead = IsSessionDeadError(err)
+			}
+			return nil
+		})
+	})
 	return func() tea.Msg {
-		if err := SendKeyToTmux(target, "Escape"); err != nil && IsSessionDeadError(err) {
-			return SessionDeadMsg{Scope: scope}
+		<-done
+		if result.Scope.Owner == 0 {
+			return nil
 		}
-		if err := SendPasteToTmux(target, text); err != nil && IsSessionDeadError(err) {
-			return SessionDeadMsg{Scope: scope}
-		}
-		return nil
+		return result
 	}
-}
-
-func (defaultTerminalInputSender) PasteClipboard(scope MessageScope, target string) tea.Cmd {
-	return PasteClipboardToTmuxCmd(scope, target)
 }
 
 // Pointer reports are queued at call time, like keystrokes, so a click or a
 // notch keeps its place relative to the keys around it. Bubble Tea runs each Cmd
 // concurrently, so ordering established inside the returned Cmd would be no
 // ordering at all (td-8fcd2e).
-func (defaultTerminalInputSender) SendMouse(scope MessageScope, target string, col, row int) tea.Cmd {
+func (s defaultTerminalInputSender) SendMouse(scope MessageScope, target string, col, row int) tea.Cmd {
 	return awaitOrderedSend(scope, SendOrdered(target, func() error {
-		if err := SendSGRMouse(target, 0, col, row, false); err != nil {
-			return err
-		}
-		return SendSGRMouse(target, 0, col, row, true)
+		return s.model.withActivationError(scope, func() error {
+			if err := terminalSendMouse(target, 0, col, row, false); err != nil {
+				return err
+			}
+			return terminalSendMouse(target, 0, col, row, true)
+		})
 	}))
 }
 
-func (defaultTerminalInputSender) SendWheel(scope MessageScope, target string, up bool, col, row, notches int) tea.Cmd {
+func (s defaultTerminalInputSender) SendWheel(scope MessageScope, target string, up bool, col, row, notches int) tea.Cmd {
 	return awaitOrderedSend(scope, SendOrdered(target, func() error {
-		return SendSGRWheel(target, up, col, row, notches)
+		return s.model.withActivationError(scope, func() error {
+			return terminalSendWheel(target, up, col, row, notches)
+		})
 	}))
 }
 
@@ -155,17 +201,24 @@ type terminalControlRetryMsg struct {
 	Gen   uint64
 }
 
-func resolvePaneCmd(scope MessageScope, target string) tea.Cmd {
+var terminalResolvePane = func(target string) (string, error) {
+	out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_id}").Output()
+	pane := strings.TrimSpace(string(out))
+	if err == nil && !controlPanePattern.MatchString(pane) {
+		err = fmt.Errorf("tmux terminal: invalid resolved pane %q", pane)
+	}
+	return pane, err
+}
+
+func (m *Model) resolvePaneCmd(scope MessageScope, target string) tea.Cmd {
 	return func() tea.Msg {
-		if target == "" {
-			return paneResolvedMsg{Scope: scope, Err: fmt.Errorf("tmux terminal: empty target")}
-		}
-		out, err := exec.Command("tmux", "display-message", "-p", "-t", target, "#{pane_id}").Output()
-		pane := strings.TrimSpace(string(out))
-		if err == nil && !controlPanePattern.MatchString(pane) {
-			err = fmt.Errorf("tmux terminal: invalid resolved pane %q", pane)
-		}
-		return paneResolvedMsg{Scope: scope, Pane: pane, Err: err}
+		return m.withActivationMessage(scope, func() tea.Msg {
+			if target == "" {
+				return paneResolvedMsg{Scope: scope, Err: fmt.Errorf("tmux terminal: empty target")}
+			}
+			pane, err := terminalResolvePane(target)
+			return paneResolvedMsg{Scope: scope, Pane: pane, Err: err}
+		})
 	}
 }
 

@@ -104,6 +104,10 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 	if !ok {
 		return nil
 	}
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	// A reader can reach the bound before any capture has recorded a reach for
 	// this pane, and the request state is what remembers that they did.
 	if p.terminalHistory == nil {
@@ -121,13 +125,15 @@ func (p *Plugin) loadOlderTerminalHistory(termPanel bool, scrollLines int) tea.C
 		return nil
 	}
 	return func() tea.Msg {
-		capture, err := tty.CapturePaneRange(source.Target, request.Start, request.End)
-		return terminalHistoryLoadedMsg{
-			Source:     source,
-			Capture:    capture,
-			RequestGen: request.Generation,
-			Err:        err,
-		}
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			capture, err := workspaceCapturePaneRange(source.Target, request.Start, request.End)
+			return terminalHistoryLoadedMsg{
+				Source:     source,
+				Capture:    capture,
+				RequestGen: request.Generation,
+				Err:        err,
+			}
+		})
 	}
 }
 
@@ -237,6 +243,13 @@ func (p *Plugin) cancelTerminalHistoryIntentByKey(key string) {
 	state := p.terminalHistory[key]
 	state.Cancel()
 	p.terminalHistory[key] = state
+}
+
+func (p *Plugin) cancelAllTerminalHistoryLoads() {
+	for key, state := range p.terminalHistory {
+		state.Cancel()
+		p.terminalHistory[key] = state
+	}
 }
 
 // terminalHistorySummary reports the buffer's absolute base, the total number

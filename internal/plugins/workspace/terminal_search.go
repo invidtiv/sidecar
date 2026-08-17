@@ -101,6 +101,10 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	if p.terminalSearch.SourceKey != source.Key {
 		p.cancelTerminalHistoryIntentByKey(p.terminalSearch.SourceKey)
 		p.terminalSearch.Query = ""
@@ -128,14 +132,16 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	}
 	p.terminalHistory[source.Key] = state
 	return func() tea.Msg {
-		capture, err := tty.CapturePaneRange(source.Target, request.Start, request.End)
-		return terminalSearchHistoryLoadedMsg{
-			Source:     source,
-			Capture:    capture,
-			RequestGen: request.Generation,
-			SearchGen:  searchGen,
-			Err:        err,
-		}
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			capture, err := workspaceCapturePaneRange(source.Target, request.Start, request.End)
+			return terminalSearchHistoryLoadedMsg{
+				Source:     source,
+				Capture:    capture,
+				RequestGen: request.Generation,
+				SearchGen:  searchGen,
+				Err:        err,
+			}
+		})
 	}
 }
 

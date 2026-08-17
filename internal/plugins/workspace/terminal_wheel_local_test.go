@@ -27,6 +27,7 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	})
 
 	p := New()
+	p.SetFocused(true)
 	p.width, p.height = 120, 40
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList

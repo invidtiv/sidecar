@@ -45,6 +45,7 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 	p.primaryTerminalTarget = workspaceTerminalTarget{
 		Session: "sidecar-sh-one", Pane: "%7", Source: "shell", SourceID: "sidecar-sh-one",
 	}
+	p.SetFocused(true)
 	if p.viewMode == ViewModeInteractive || p.interactiveState != nil {
 		t.Fatal("test premise: the fixture must be watched, not live")
 	}

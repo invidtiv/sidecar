@@ -113,12 +113,16 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case app.PluginFocusedMsg:
 		if p.focused {
-			focusCmds := []tea.Cmd{p.maybeAutoCreateShell(), p.startActivityAnimation()}
-			// Poll shell or selected agent when plugin gains focus
-			if shell := p.getSelectedShell(); shell != nil {
-				focusCmds = append(focusCmds, p.pollShellSessionByName(shell.TmuxName))
-			} else {
-				focusCmds = append(focusCmds, p.pollSelectedAgentNowIfVisible())
+			focusCmds := []tea.Cmd{
+				// A global Workspaces mutation updates the shared catalog while this
+				// project projection is covered. Refreshing on focus updates only the
+				// project the user returned to and also covers external mutations.
+				func() tea.Msg { return RefreshMsg{} },
+				p.maybeAutoCreateShell(),
+				p.startActivityAnimation(),
+				p.scheduleSessionValidation(60 * time.Second),
+				p.pollAllAgentStatusesNow(),
+				p.pollAllShellStatusesNow(),
 			}
 			return p, tea.Batch(focusCmds...)
 		}
@@ -225,11 +229,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 
-			// Reconnect to existing tmux sessions after initial worktree load
-			if !p.initialReconnectDone {
-				p.initialReconnectDone = true
-				cmds = append(cmds, p.reconnectAgents())
-			}
+			// Reconcile unbound deterministic sessions after every successful
+			// inventory refresh. reconnectAgents only observes existing tmux state;
+			// it never creates, restarts, or kills a session.
+			startValidation := !p.initialReconnectDone
+			ownership := p.currentTerminalOwnership()
+			cmds = append(cmds, p.reconnectAgents(msg.OperationScope, startValidation, ownership))
 		}
 
 	case ConflictsDetectedMsg:
@@ -637,7 +642,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the worktree was removed or reset since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+		if p.currentTerminalOwnership() == 0 || !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Skip polling while user is attached to session
@@ -649,7 +654,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.handlePollAgent(msg.WorkspaceName, msg.Generation)
 
 	case AgentOutputMsg:
-		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+		if p.currentTerminalOwnership() == 0 || !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
 			return p, nil
 		}
 		// Ownership is checked before the async capture mutates UI state.
@@ -778,7 +783,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case AgentPollUnchangedMsg:
-		if !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
+		if p.currentTerminalOwnership() == 0 || !p.pollScheduler.IsCurrent(agentPollKey(msg.WorkspaceName), msg.Generation) {
 			return p, nil
 		}
 		// Track unchanged poll for throttle reset (td-018f25)
@@ -1052,7 +1057,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case deferredPaneResizeMsg:
 		// The window has closed; assert the geometry the surface holds now against
 		// the pane size last observed with the output.
-		if p.interactiveState == nil {
+		if p.currentTerminalOwnership() == 0 || p.interactiveState == nil {
 			return p, nil
 		}
 		if msg.Generation != p.resizeGeneration {
@@ -1070,6 +1075,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.maybeResizeInteractivePane(p.interactiveState.PaneWidth, p.interactiveState.PaneHeight)
 
 	case paneResizedMsg:
+		if p.currentTerminalOwnership() == 0 || (msg.Ownership != 0 && !p.ownsTerminalOwnership(msg.Ownership)) {
+			return p, nil
+		}
 		// Pane was resized to match preview dimensions - trigger fresh poll so
 		// captured content reflects the new width/wrapping.
 		// Skip in interactive mode: it manages its own polling chain.
@@ -1263,7 +1271,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(cmds...)
 
 	case ShellOutputMsg:
-		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+		if p.currentTerminalOwnership() == 0 || !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil
 		}
 		if msg.Err != nil {
@@ -1420,7 +1428,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Timer leak prevention (td-83dc22): ignore stale poll messages.
 		// If the shell was removed since this timer was scheduled,
 		// the generation won't match and we drop the message.
-		if !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
+		if p.currentTerminalOwnership() == 0 || !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil // Stale timer, ignore
 		}
 		// Poll specific shell session for output by name
@@ -1898,10 +1906,13 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case reconnectedAgentsMsg:
+		if !p.ownsTerminalOwnership(msg.Ownership) || msg.OperationID != p.refreshOperationID {
+			return p, nil
+		}
 		var pollingCmds []tea.Cmd
 		for _, result := range msg.Agents {
 			wt := p.findWorktree(result.WorktreeKey)
-			if wt == nil || result.Agent == nil {
+			if wt == nil || result.Agent == nil || wt.Agent != nil {
 				continue
 			}
 			wt.Agent = result.Agent
@@ -1913,14 +1924,24 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// (worktrees with .sidecar-agent file but no tmux session)
 		p.detectOrphanedWorktrees()
 		// Start periodic session validation to prevent memory leaks (td-41695b)
-		pollingCmds = append(pollingCmds, p.scheduleSessionValidation(60*time.Second))
+		if msg.StartValidation && !p.initialReconnectDone {
+			p.initialReconnectDone = true
+			pollingCmds = append(pollingCmds, p.scheduleSessionValidation(60*time.Second))
+		}
 		return p, tea.Batch(pollingCmds...)
 
 	case validateManagedSessionsMsg:
+		if p.currentTerminalOwnership() == 0 || msg.Generation != p.sessionValidationGeneration {
+			return p, nil
+		}
+		p.sessionValidationScheduled = false
 		// Trigger validation of managedSessions against actual tmux sessions
-		return p, p.validateManagedSessions()
+		return p, p.validateManagedSessions(msg.Generation, p.currentTerminalOwnership())
 
 	case validateManagedSessionsResultMsg:
+		if p.currentTerminalOwnership() == 0 || msg.Generation != p.sessionValidationGeneration {
+			return p, nil
+		}
 		// Prune managedSessions entries that no longer exist in tmux (td-41695b)
 		for session := range p.managedSessions {
 			if !msg.ExistingSessions[session] {

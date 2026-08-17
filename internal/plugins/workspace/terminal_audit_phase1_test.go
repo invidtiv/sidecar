@@ -333,7 +333,7 @@ func TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation(t *testing.T) 
 }
 
 func newInteractiveInputTestPlugin() *Plugin {
-	return &Plugin{
+	p := &Plugin{
 		viewMode: ViewModeInteractive,
 		interactiveState: &InteractiveState{
 			Active:        true,
@@ -341,6 +341,8 @@ func newInteractiveInputTestPlugin() *Plugin {
 			LastKeyTime:   time.Now(),
 		},
 	}
+	p.SetFocused(true)
+	return p
 }
 
 // attachLiveTerminal gives the plugin the terminal component interactive mode

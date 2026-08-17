@@ -479,6 +479,7 @@ func TestDelayedTaskAndBranchResultsCannotMutateSwitchedProject(t *testing.T) {
 func TestAgentOutputRoutesInteractiveCursorByStableKey(t *testing.T) {
 	agent := &Agent{OutputBuf: tty.NewOutputBuffer(outputBufferCap)}
 	p := New()
+	p.SetFocused(true)
 	p.ctx = &plugin.Context{Epoch: 1}
 	p.worktrees = []*Worktree{{Key: "stable-key", Name: "feature/auth", Agent: agent}}
 	p.selectedIdx = 0
