@@ -324,7 +324,7 @@ Regions tested in reverse order. Add general regions first, specific regions las
 
 ### Coordinate system
 
-App offsets Y by 2 (header height) before forwarding to plugins. Plugins operate in local coords where Y=0 is plugin content top.
+App offsets Y by `headerHeight` (the single painted header row) before forwarding to plugins. Plugins operate in local coords where Y=0 is plugin content top.
 
 ### Common patterns
 

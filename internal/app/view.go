@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	headerHeight = 2 // header line + spacing
+	headerHeight = 1 // single painted header row
 	footerHeight = 1
 	minWidth     = 60
 	minHeight    = 24
@@ -167,7 +167,6 @@ func (m Model) viewContent() string {
 	// Header
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
-	b.WriteString("\n") // spacing between header and content
 
 	// Main content
 	content := m.renderContent(m.width, contentHeight)

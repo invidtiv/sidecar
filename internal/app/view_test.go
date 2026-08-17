@@ -514,10 +514,10 @@ func TestHeaderControlsOnlyActivateOnPaintedRow(t *testing.T) {
 
 		for _, target := range regions {
 			t.Run(target.name, func(t *testing.T) {
-				spacerModel, _ := m.Update(tea.MouseClickMsg{X: target.x, Y: 1, Button: tea.MouseLeft})
-				spacer := asAppModel(t, spacerModel)
-				if spacer.scope != m.scope || spacer.globalTab != m.globalTab || spacer.activePlugin != m.activePlugin || spacer.showProjectSwitcher {
-					t.Fatalf("scope=%v %s activated from blank spacer: scope=%v tab=%v plugin=%d switcher=%v", scope, target.name, spacer.scope, spacer.globalTab, spacer.activePlugin, spacer.showProjectSwitcher)
+				belowModel, _ := m.Update(tea.MouseClickMsg{X: target.x, Y: 1, Button: tea.MouseLeft})
+				below := asAppModel(t, belowModel)
+				if below.scope != m.scope || below.globalTab != m.globalTab || below.activePlugin != m.activePlugin || below.showProjectSwitcher {
+					t.Fatalf("scope=%v %s activated from the first content row: scope=%v tab=%v plugin=%d switcher=%v", scope, target.name, below.scope, below.globalTab, below.activePlugin, below.showProjectSwitcher)
 				}
 
 				paintedModel, _ := m.Update(tea.MouseClickMsg{X: target.x, Y: 0, Button: tea.MouseLeft})
@@ -530,16 +530,16 @@ func TestHeaderControlsOnlyActivateOnPaintedRow(t *testing.T) {
 	}
 }
 
-func TestHeaderSpacerClicksDoNotReachPlugins(t *testing.T) {
+func TestHeaderClicksDoNotReachPlugins(t *testing.T) {
 	m, plugins := scopeBaselineModel(t, "git")
 	m.scope = ScopeProject
 	m.width, m.height, m.ready = 160, 40, true
 	git := plugins["git"]
 	before := git.mouseClicks
 
-	_, _ = m.Update(tea.MouseClickMsg{X: 20, Y: 1, Button: tea.MouseLeft})
+	_, _ = m.Update(tea.MouseClickMsg{X: 20, Y: 0, Button: tea.MouseLeft})
 	if git.mouseClicks != before {
-		t.Fatalf("spacer click reached the project plugin: clicks=%d", git.mouseClicks)
+		t.Fatalf("header click reached the project plugin: clicks=%d", git.mouseClicks)
 	}
 
 	_, _ = m.Update(tea.MouseClickMsg{X: 20, Y: headerHeight, Button: tea.MouseLeft})

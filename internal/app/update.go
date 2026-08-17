@@ -281,10 +281,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleIssuePreviewMouse(msg)
 		}
 
-		// Only row 0 is painted header chrome. Row 1 is intentional breathing
-		// room and must remain inert even though both rows make up headerHeight.
-		// Left-clicks anywhere in that band stay here so they are not rewritten
-		// into plugin-local Y<0 (some surfaces treat that as the first row).
+		// Only row 0 is painted header chrome. Left-clicks on that row stay
+		// here so they are not rewritten into plugin-local Y<0 (some surfaces
+		// treat that as the first row).
 		mi := msg.Mouse()
 		// The gear is the header's only control with a hover look, so tracking it
 		// is one bool against the same bounds a click is tested with. Motion
@@ -351,7 +350,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-		// Forward mouse events to active plugin with Y offset for app header (2 lines)
+		// Forward mouse events to active plugin with Y offset for the app header.
 		if p := m.ActivePlugin(); p != nil {
 			adjusted := offsetMouseY(msg, -headerHeight) // Offset for app header
 			newPlugin, cmd := p.Update(adjusted)

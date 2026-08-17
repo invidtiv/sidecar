@@ -196,7 +196,7 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	}
 	lines := strings.Split(view, "\n")
 	first := ansi.Strip(lines[0])
-	if !strings.Contains(first, "Sidecar") || !strings.Contains(first, "Activity") || !strings.Contains(first, "Select Project") || lines[1] != "" || !strings.Contains(ansi.Strip(lines[len(lines)-1]), "Open") {
+	if !strings.Contains(first, "Sidecar") || !strings.Contains(first, "Activity") || !strings.Contains(first, "Select Project") || !strings.Contains(ansi.Strip(lines[len(lines)-1]), "Open") {
 		t.Fatalf("compact viewport hid app chrome: first=%q last=%q", lines[0], lines[len(lines)-1])
 	}
 	if got := lipgloss.Width(lines[0]); got != 72 {
@@ -223,16 +223,16 @@ func TestCompactOverviewKeepsAppHeaderAndFooterAt72x30(t *testing.T) {
 	if header := ansi.Strip(wide.renderHeader()); !strings.Contains(header, "workspaces") || len(wide.getTabBounds()) != 7 {
 		t.Fatalf("wide header changed existing full-tab layout: %q bounds=%#v", header, wide.getTabBounds())
 	}
-	if !strings.Contains(ansi.Strip(lines[2]), "Agent Overview") {
-		t.Fatalf("content did not begin at global row 2: %q", lines[2])
+	if !strings.Contains(ansi.Strip(lines[1]), "Agent Overview") {
+		t.Fatalf("content did not begin at global row 1: %q", lines[1])
 	}
-	// App mouse routing subtracts the one header row plus explicit spacing row;
-	// local compact card row 1 therefore begins at global row 3.
-	adjusted := offsetMouseY(tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft}, -headerHeight)
+	// App mouse routing subtracts the one header row; local compact card row 1
+	// therefore begins at global row 2.
+	adjusted := offsetMouseY(tea.MouseClickMsg{X: 1, Y: 2, Button: tea.MouseLeft}, -headerHeight)
 	if got := adjusted.Mouse().Y; got != 1 {
 		t.Fatalf("compact content mouse local Y = %d, want 1", got)
 	}
-	updatedModel, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 3, Button: tea.MouseLeft})
+	updatedModel, _ := m.Update(tea.MouseClickMsg{X: 1, Y: 2, Button: tea.MouseLeft})
 	if !updatedModel.(Model).inGlobalScope() {
 		t.Fatal("content-row click was misrouted as wrapped header")
 	}
