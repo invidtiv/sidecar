@@ -1,7 +1,8 @@
 # Notes Plugin Overhaul
 
-**Status:** Draft
+**Status:** Phase 1 shipped (2026-08-17) — later phases still open
 **Created:** 2026-08-17
+**Phase 1:** td-71789d (`e312ddd4`, `055d9f7e`, `cc907480`)
 
 ## Goal
 
