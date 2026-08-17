@@ -10,7 +10,6 @@ import "strings"
 // the automated path applies them itself.
 var cgoQuietWarnings = []string{
 	"-Wno-nullability-completeness",
-	"-Wno-expansion-to-defined",
 }
 
 // GoCommandEnv returns the environment an automated `go install` runs with,
