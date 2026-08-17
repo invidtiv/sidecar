@@ -1,0 +1,67 @@
+.figure {
+  margin: 0;
+}
+
+.caption {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-top: 14px;
+  min-height: 2.6em;
+}
+
+.hint {
+  flex: none;
+  font-family: var(--sc-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sc-accent);
+  border: 1px solid color-mix(in oklab, var(--sc-accent) 40%, transparent);
+  padding: 3px 8px;
+}
+
+.text {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--sc-text-2);
+  max-width: 62ch;
+  animation: caption 320ms ease both;
+}
+
+@keyframes caption {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .text {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .caption {
+    flex-direction: column;
+    gap: 8px;
+  }
+}
+
+/* Narrow screens pan the terminal rather than shrink it past reading size.
+   The caption stays outside this box so it wraps to the real viewport. */
+@media (max-width: 720px) {
+  .pan {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .pan > * {
+    min-width: 680px;
+  }
+}

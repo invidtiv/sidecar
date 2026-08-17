@@ -1,135 +1,144 @@
-import React, {useEffect, useState, useRef} from 'react';
+import React, {useCallback, useEffect, useRef, useState} from 'react';
+import {THEMES, DEFAULT_THEME, findTheme} from './Tui/theme';
 
-const THEMES = [
-  {id: 'molokai', label: 'Molokai', color: '#a6e22e'},
-  {id: 'nord', label: 'Nord', color: '#88C0D0'},
-  {id: 'solarized-dark', label: 'Solarized', color: '#2AA198'},
-  {id: 'tokyo-night', label: 'Tokyo', color: '#7AA2F7'},
-];
+const STORAGE_KEY = 'sidecar-theme';
+
+/**
+ * The site's accent follows whichever of the app's 21 themes you pick, the same
+ * way pressing `#` recolours the terminal. Backgrounds stay put — the page is
+ * not pretending to be the app, it is wearing its palette.
+ */
+function applyTheme(name) {
+  const t = findTheme(name);
+  const root = document.documentElement;
+  root.setAttribute('data-sidecar-theme', t.name);
+  root.style.setProperty('--sc-accent', t.colors.Primary);
+  root.style.setProperty('--sc-accent-dim', t.colors.TextSecondary);
+  root.style.setProperty('--sc-green', t.colors.Success);
+  root.style.setProperty('--sc-teal', t.colors.Info);
+  root.style.setProperty('--sc-blue', t.colors.Link || t.colors.Info);
+  root.style.setProperty('--sc-pink', t.colors.LaneDone || t.colors.Error);
+  root.style.setProperty('--ifm-color-primary', t.colors.Primary);
+  root.style.setProperty('--ifm-link-color', t.colors.Primary);
+}
 
 export default function ThemeSwitcherNavbarItem() {
-  const [theme, setTheme] = useState('molokai');
-  const [isOpen, setIsOpen] = useState(false);
-  const dropdownRef = useRef(null);
+  const [theme, setTheme] = useState(DEFAULT_THEME);
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem('sidecar-theme') || 'molokai';
-    setTheme(stored);
-    document.documentElement.setAttribute('data-custom-theme', stored);
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const initial = stored && findTheme(stored).name === stored ? stored : DEFAULT_THEME;
+    setTheme(initial);
+    applyTheme(initial);
 
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setIsOpen(false);
-      }
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    const onKey = (e) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
   }, []);
 
-  const handleThemeChange = (newTheme) => {
-    setTheme(newTheme);
-    localStorage.setItem('sidecar-theme', newTheme);
-    document.documentElement.setAttribute('data-custom-theme', newTheme);
-    setIsOpen(false);
-  };
+  const choose = useCallback((name) => {
+    setTheme(name);
+    localStorage.setItem(STORAGE_KEY, name);
+    applyTheme(name);
+    setOpen(false);
+  }, []);
 
-  const currentThemeObj = THEMES.find(t => t.id === theme) || THEMES[0];
+  const current = findTheme(theme);
 
   return (
-    <div
-      className="navbar__item dropdown"
-      ref={dropdownRef}
-    >
+    <div className="navbar__item dropdown" ref={ref}>
       <button
+        type="button"
         className="navbar__link"
-        onClick={(e) => {
-          e.preventDefault();
-          setIsOpen(!isOpen);
-        }}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          fontFamily: 'var(--ifm-font-family-monospace)',
-          fontSize: '13px',
+          gap: 8,
+          fontFamily: 'var(--sc-mono)',
+          fontSize: 12.5,
           background: 'none',
-          border: 'none',
+          border: 0,
           cursor: 'pointer',
-          padding: 'var(--ifm-navbar-item-padding-vertical) var(--ifm-navbar-item-padding-horizontal)',
           color: 'var(--ifm-navbar-link-color)',
-          pointerEvents: 'auto',
-        }}
-      >
-        <div
-          style={{
-            width: '10px',
-            height: '10px',
-            borderRadius: '50%',
-            backgroundColor: currentThemeObj.color,
-            boxShadow: `0 0 6px ${currentThemeObj.color}66`
-          }}
-        />
-        <span>{currentThemeObj.label}</span>
+          padding: '0 12px',
+        }}>
+        <Swatch colors={current.colors} />
+        <span>{current.displayName}</span>
+        <span style={{opacity: 0.5}}>▾</span>
       </button>
-      
-      <ul
-        className={`dropdown__menu ${isOpen ? 'dropdown__menu--show' : ''}`}
-        style={{
-          position: 'absolute',
-          top: 'calc(100% - 4px)',
-          right: 0,
-          left: 'auto',
-          zIndex: 100,
-          display: isOpen ? 'block' : 'none',
-          opacity: isOpen ? 1 : 0,
-          visibility: isOpen ? 'visible' : 'hidden',
-          minWidth: '160px',
-          padding: '12px 0 8px',
-          margin: 0,
-          listStyle: 'none',
-          background: 'var(--sc-panel-2, #1b1f26)',
-          border: '1px solid var(--sc-border, rgba(255,255,255,0.08))',
-          borderRadius: '8px',
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)',
-          pointerEvents: 'auto',
-        }}
-      >
-        {THEMES.map((t) => (
-          <li key={t.id}>
-            <button
-              className={`dropdown__link ${theme === t.id ? 'dropdown__link--active' : ''}`}
-              onClick={(e) => {
-                e.preventDefault();
-                handleThemeChange(t.id);
-              }}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '10px',
-                fontFamily: 'var(--ifm-font-family-monospace)',
-                fontSize: '12px',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                width: '100%',
-                textAlign: 'left',
-                pointerEvents: 'auto',
-              }}
-            >
-              <div
+
+      {open ? (
+        <div
+          className="themeSwatchGrid"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% - 6px)',
+            right: 0,
+            zIndex: 200,
+            width: 340,
+          }}>
+          {THEMES.map((t) => {
+            const active = t.name === theme;
+            return (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => choose(t.name)}
+                aria-pressed={active}
                 style={{
-                  width: '8px',
-                  height: '8px',
-                  borderRadius: '50%',
-                  backgroundColor: t.color,
-                }}
-              />
-              {t.label}
-            </button>
-          </li>
-        ))}
-      </ul>
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 9,
+                  padding: '8px 11px',
+                  border: 0,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  fontFamily: 'var(--sc-mono)',
+                  fontSize: 12,
+                  background: active ? 'var(--sc-panel)' : 'var(--sc-canvas-2)',
+                  color: active ? 'var(--sc-text)' : 'var(--sc-text-3)',
+                  boxShadow: active ? `inset 2px 0 0 ${t.colors.Primary}` : 'none',
+                }}>
+                <Swatch colors={t.colors} />
+                {t.displayName}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function Swatch({colors}) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'flex',
+        flex: 'none',
+        width: 26,
+        height: 10,
+        outline: '1px solid rgba(255,255,255,.12)',
+      }}>
+      <span style={{flex: 1, background: colors.Primary}} />
+      <span style={{flex: 1, background: colors.Info}} />
+      <span style={{flex: 1, background: colors.Success}} />
+      <span style={{flex: 1, background: colors.Error}} />
+    </span>
   );
 }

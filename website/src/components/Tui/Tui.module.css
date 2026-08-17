@@ -1,0 +1,592 @@
+/*
+ * Sidecar TUI mockups.
+ *
+ * These re-create the real terminal chrome in the browser: the header row with
+ * its two tab scopes, gradient hairline pane borders, the drag handle between
+ * panes, and the footer key bar. Every colour is a CSS variable so a single
+ * theme swap recolours the whole mockup the way the app's `#` switcher does.
+ *
+ * Measurements come from the app at 200x52 (scripts/tmux-drive.sh), where one
+ * cell is 1ch wide and rows are 1.5em tall.
+ */
+
+.window {
+  --row: 1.5;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--tui-bg);
+  color: var(--tui-text);
+  font-family: var(--sc-mono);
+  font-size: var(--tui-size, 12px);
+  line-height: var(--row);
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+  -webkit-font-smoothing: antialiased;
+  border: 1px solid var(--tui-chrome-edge);
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+/* ---------------------------------------------------------------- titlebar */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--tui-titlebar);
+  border-bottom: 1px solid var(--tui-chrome-edge);
+  flex: none;
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.titlebarLabel {
+  margin-left: 6px;
+  color: var(--tui-muted);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
+
+.titlebarRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--tui-subtle);
+  font-size: 11px;
+}
+
+/* ------------------------------------------------------------------ header */
+
+.header {
+  display: flex;
+  align-items: stretch;
+  height: calc(var(--row) * 1em);
+  background: var(--tui-bar);
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5ch;
+  padding: 0 1ch;
+  font-weight: 700;
+  color: var(--tui-primary);
+  background: var(--tui-bar);
+}
+
+.headerRule {
+  display: flex;
+  align-items: center;
+  color: var(--tui-muted);
+  padding: 0 0.5ch;
+}
+
+.tabGroup {
+  display: flex;
+  align-items: stretch;
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  line-height: inherit;
+  color: var(--tui-tab-inactive);
+  padding: 0 2.5ch;
+  cursor: pointer;
+  position: relative;
+  transition: color 120ms ease;
+}
+
+.tab:hover {
+  color: var(--tui-text);
+}
+
+.tab.tabActive {
+  color: var(--tui-primary);
+  font-weight: 700;
+}
+
+/* The app underlines the active tab. Animating the underline's position is the
+   one liberty taken over the terminal: it makes the click legible. */
+.tab.tabActive::after {
+  content: '';
+  position: absolute;
+  left: 2.5ch;
+  right: 2.5ch;
+  bottom: 2px;
+  height: 1px;
+  background: var(--tui-primary);
+  animation: underline 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes underline {
+  from {
+    transform: scaleX(0.2);
+    opacity: 0;
+  }
+  to {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+}
+
+.headerSpacer {
+  flex: 1;
+  min-width: 1ch;
+}
+
+.projectChip {
+  display: flex;
+  align-items: center;
+  padding: 0 1ch;
+  margin: 0 1ch;
+  background: var(--tui-raised);
+  color: var(--tui-primary);
+  font-weight: 700;
+}
+
+.gear {
+  display: flex;
+  align-items: center;
+  padding-right: 1ch;
+  color: var(--tui-muted);
+}
+
+/* ------------------------------------------------------------------- panes */
+
+.panes {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  background: var(--tui-bg);
+  padding: 0 1px 0 0;
+}
+
+/* A terminal draws its border as a row of box-drawing glyphs; on the web a 1px
+   gradient hairline reads the same and stays crisp at any zoom. */
+.pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 5px;
+  padding: 1px;
+  background: linear-gradient(30deg, var(--pane-edge-a), var(--pane-edge-b));
+  --pane-edge-a: var(--tui-border-a);
+  --pane-edge-b: var(--tui-border-b);
+}
+
+.paneFocused {
+  --pane-edge-a: var(--tui-border-active-a);
+  --pane-edge-b: var(--tui-border-active-b);
+}
+
+.paneInner {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 4px;
+  background: var(--tui-bg);
+  overflow: hidden;
+}
+
+.paneHeader {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  padding: 0 1ch;
+  flex: none;
+  white-space: nowrap;
+}
+
+.paneTitle {
+  font-weight: 700;
+  color: var(--tui-text-bright);
+}
+
+.paneTitleDim {
+  font-weight: 400;
+  color: var(--tui-muted);
+}
+
+.paneChips {
+  margin-left: auto;
+  display: flex;
+  gap: 1ch;
+}
+
+.chip {
+  background: var(--tui-bg-tertiary);
+  color: var(--tui-muted);
+  padding: 0 1ch;
+}
+
+.paneBody {
+  flex: 1;
+  min-height: 0;
+  padding: 0 1ch;
+  overflow: hidden;
+}
+
+/* The vertical drag handle Sidecar puts between sibling panes. */
+.handle {
+  flex: none;
+  width: 7px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  color: var(--tui-border-a);
+}
+
+.handle::before {
+  content: '';
+  width: 1px;
+  height: 42%;
+  background: currentColor;
+  border-radius: 1px;
+  transition: background 150ms ease, height 150ms ease;
+}
+
+.handle:hover::before {
+  background: var(--tui-primary);
+  height: 62%;
+}
+
+/* ------------------------------------------------------------------ footer */
+
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 1ch;
+  height: calc(var(--row) * 1em);
+  padding: 0 1ch;
+  background: var(--tui-bar);
+  color: var(--tui-muted);
+  flex: none;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.key {
+  display: inline-flex;
+  align-items: center;
+  gap: 1ch;
+  flex: none;
+}
+
+.keyCap {
+  background: var(--tui-raised);
+  color: var(--tui-key);
+  padding: 0 1ch;
+}
+
+.clock {
+  margin-left: auto;
+  color: var(--tui-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.5ch;
+}
+
+/* --------------------------------------------------------------- row atoms */
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
+  white-space: nowrap;
+  padding: 0 1ch;
+  margin: 0 -1ch;
+}
+
+.rowSelected {
+  background: var(--tui-bg-tertiary);
+  color: var(--tui-text-selected);
+}
+
+.rowClickable {
+  cursor: pointer;
+}
+
+.rowClickable:hover:not(.rowSelected) {
+  background: var(--tui-bg-secondary);
+}
+
+.spacerCol {
+  flex: 1;
+  min-width: 1ch;
+}
+
+.dim {
+  color: var(--tui-muted);
+}
+
+.subtle {
+  color: var(--tui-subtle);
+}
+
+.bright {
+  color: var(--tui-text-bright);
+}
+
+.gold {
+  color: var(--tui-primary);
+}
+
+.teal {
+  color: var(--tui-info);
+}
+
+.green {
+  color: var(--tui-success);
+}
+
+.red {
+  color: var(--tui-error);
+}
+
+.purple {
+  color: var(--tui-done);
+}
+
+.rule {
+  color: var(--tui-border-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.sectionLabel {
+  color: var(--tui-muted);
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* The cursor block the app paints, and the pulse it uses for a live agent. */
+.cursor {
+  display: inline-block;
+  width: 1ch;
+  background: var(--tui-primary);
+  animation: blink 1.06s steps(1, end) infinite;
+}
+
+@keyframes blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.live {
+  animation: pulse 2.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.42;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor,
+  .live,
+  .tab.tabActive::after {
+    animation: none;
+  }
+}
+
+/* ------------------------------------------------------------------ kanban */
+
+.lanes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  height: 100%;
+}
+
+.lane {
+  min-width: 0;
+  padding-right: 1ch;
+  border-right: 1px solid var(--tui-border-muted);
+}
+
+.lane:last-child {
+  border-right: 0;
+}
+
+.laneHead {
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--tui-border-muted);
+  margin-bottom: 0.4em;
+}
+
+.card {
+  padding: 0 1ch;
+  margin: 0 0 0.5em;
+  border-left: 2px solid var(--card-accent, var(--tui-border-a));
+  background: var(--tui-bg-secondary);
+  min-width: 0;
+  cursor: default;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.card:hover {
+  background: var(--tui-bg-tertiary);
+  transform: translateX(1px);
+}
+
+/* --------------------------------------------------------------- diff text */
+
+.add {
+  color: var(--tui-diff-add-fg);
+  background: var(--tui-diff-add-bg);
+  display: block;
+  padding: 0 1ch;
+  margin: 0 -1ch;
+}
+
+.del {
+  color: var(--tui-diff-del-fg);
+  background: var(--tui-diff-del-bg);
+  display: block;
+  padding: 0 1ch;
+  margin: 0 -1ch;
+}
+
+/* Below the readable width a terminal mockup stops being a mockup, so it
+   scales down as a unit rather than reflowing into something the app is not. */
+@container (max-width: 900px) {
+  .window {
+    --tui-size: 10.5px;
+  }
+}
+
+@container (max-width: 620px) {
+  .window {
+    --tui-size: 9px;
+  }
+}
+
+/* ------------------------------------------------------------------ modal */
+
+/* Sidecar's declarative modals: a dimmed backdrop, one raised box, and a key
+   row along the bottom. The border is the theme's active edge. */
+.modalHost {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--tui-bg) 62%, transparent);
+  z-index: 3;
+}
+
+.modal {
+  width: min(58ch, 86%);
+  padding: 1px;
+  border-radius: 5px;
+  background: linear-gradient(
+    30deg,
+    var(--tui-border-active-a),
+    var(--tui-border-active-b)
+  );
+  box-shadow: 0 24px 48px -18px rgba(0, 0, 0, 0.85);
+  animation: modalIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.modalInner {
+  border-radius: 4px;
+  background: var(--tui-bg-secondary);
+  padding: 0.6em 0;
+}
+
+.modalTitle {
+  padding: 0 2ch 0.4em;
+  color: var(--tui-primary);
+  font-weight: 700;
+}
+
+.field {
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
+  padding: 0 2ch;
+}
+
+.fieldLabel {
+  width: 10ch;
+  flex: none;
+  color: var(--tui-muted);
+}
+
+.fieldBox {
+  flex: 1;
+  min-width: 0;
+  padding: 0 1ch;
+  background: var(--tui-bg);
+  border: 1px solid var(--tui-border-a);
+  color: var(--tui-text);
+}
+
+.fieldBoxActive {
+  border-color: var(--tui-primary);
+}
+
+.modalKeys {
+  display: flex;
+  gap: 2ch;
+  padding: 0.5em 2ch 0;
+  color: var(--tui-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal {
+    animation: none;
+  }
+}

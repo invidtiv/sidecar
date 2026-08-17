@@ -64,11 +64,7 @@ const config = {
 
   stylesheets: [
     {
-      href: 'https://fonts.googleapis.com/css2?family=Google+Sans+Code:ital,wght@0,300..800;1,300..800&family=JetBrains+Mono:wght@400;500;600;700&display=swap',
-      type: 'text/css',
-    },
-    {
-      href: 'https://cdn.jsdelivr.net/npm/lucide-static@latest/font/lucide.css',
+      href: 'https://fonts.googleapis.com/css2?family=Archivo:wght@400..800&family=JetBrains+Mono:wght@300..600&display=swap',
       type: 'text/css',
     },
   ],
@@ -114,11 +110,10 @@ const config = {
         respectPrefersColorScheme: false,
       },
       navbar: {
-        title: '',
-        logo: {
-          alt: 'Sidecar Logo',
-          src: 'img/sidecar-logo.png',
-        },
+        // The wordmark is type, not an image: `sidecar` in the mono face with
+        // the accent-coloured cursor the app draws. See .navbar__title in
+        // custom.css.
+        title: 'sidecar',
         items: [
           {
             type: 'docSidebar',
@@ -139,6 +134,12 @@ const config = {
             href: 'https://github.com/marcus/sidecar',
             label: 'GitHub',
             position: 'right',
+          },
+          {
+            href: 'https://github.com/marcus/sidecar#quick-install',
+            label: 'Install',
+            position: 'right',
+            className: 'navbarInstall',
           },
         ],
       },
@@ -177,6 +178,13 @@ const config = {
                 label: 'Releases',
                 href: 'https://github.com/marcus/sidecar/releases',
               },
+            ],
+          },
+          {
+            title: 'Sister projects',
+            items: [
+              {label: 'td', href: 'https://github.com/marcus/td'},
+              {label: 'Haplab', href: 'https://haplab.com'},
             ],
           },
         ],
