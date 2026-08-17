@@ -4,6 +4,35 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.0.1] - 2026-08-17
+
+A performance and install-reliability patch on top of 1.0, plus a smoother
+shell-rename flow.
+
+### Performance
+
+- **An idle Sidecar no longer burns a quarter of a core.** The git watcher was
+  driving itself: the `git status` a refresh runs touches the index's attributes,
+  which kqueue reported back as a change on `.git/index`, scheduling the next
+  refresh forever. Attribute-only events are dropped now; real index writes
+  (which arrive as a rename) still land in the panel within a second or two. On
+  top of that, `git worktree list` no longer runs inline on the render goroutine
+  every tick, and td's monitor honors `plugins.td-monitor.refreshInterval` — a
+  setting that existed, was validated, and was never read — now defaulting to
+  10s instead of polling every 2s. Idle subprocess spawns went from 1259/min to
+  30/min and idle CPU from ~24% to unmeasurable.
+
+### Bug Fixes
+
+- **The in-app updater's `go install` now matches the manual one.** It inherited
+  Sidecar's environment, so from a checkout with an active `go.work` it picked up
+  local `replace` directives, and it carried whatever `CGO_CFLAGS` the machine
+  had — either of which could fail the cgo build. It now runs with `GOWORK=off`
+  and appends the warning suppressions to the user's own `CGO_CFLAGS`, and the
+  manual command shown on screen reflects the same environment.
+- **Renaming a shell applies live** rather than waiting for a restart, and the
+  agent instruction copy describing it was updated to match.
+
 ## [v1.0.0] - 2026-08-17
 
 Sidecar 1.0. The surfaces that were converging over the 0.9x series — the
