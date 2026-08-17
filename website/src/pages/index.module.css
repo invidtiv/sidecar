@@ -1,23 +1,728 @@
-/**
- * CSS files with the .module.css suffix will be treated as CSS modules
- * and scoped locally.
- */
+/* Homepage. Sections are separated by a hairline and nothing else. */
 
-.heroBanner {
-  padding: 4rem 0;
-  text-align: center;
-  position: relative;
-  overflow: hidden;
+.page {
+  --pad: var(--sc-gutter);
 }
 
-@media screen and (max-width: 996px) {
-  .heroBanner {
-    padding: 2rem;
-  }
+.wrap {
+  max-width: var(--sc-measure);
+  margin: 0 auto;
 }
 
-.buttons {
+.wrapNarrow {
+  max-width: 1000px;
+  margin: 0 auto;
+}
+
+.grid {
+  background-image: linear-gradient(#1a1d23 1px, transparent 1px),
+    linear-gradient(90deg, #1a1d23 1px, transparent 1px);
+  background-size: var(--sc-grid) var(--sc-grid);
+}
+
+.section {
+  padding: 88px var(--pad);
+  border-top: 1px solid var(--sc-line);
+}
+
+.sectionTint {
+  background: var(--sc-canvas-2);
+}
+
+/* --------------------------------------------------------------- eyebrows */
+
+.eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 400 11.5px/1 var(--sc-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--sc-text-3);
+}
+
+.eyebrowDot {
+  width: 6px;
+  height: 6px;
+  background: var(--sc-green);
+  flex: none;
+}
+
+.kicker {
+  font: 400 11.5px/1 var(--sc-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--kicker-color, var(--sc-accent));
+}
+
+/* ------------------------------------------------------------------- hero */
+
+.hero {
+  padding: 92px var(--pad) 0;
+}
+
+.h1 {
+  margin: 26px 0 0;
+  font: 600 clamp(40px, 6.2vw, 78px) / 1 var(--sc-display);
+  letter-spacing: -0.042em;
+  color: var(--sc-text);
+  text-wrap: balance;
+}
+
+.h1 em {
+  font-style: normal;
+  color: var(--sc-accent);
+}
+
+.lede {
+  margin: 28px 0 0;
+  max-width: 62ch;
+  font-size: 17.5px;
+  line-height: 1.62;
+  color: var(--sc-text-2);
+  text-wrap: pretty;
+}
+
+.lede code {
+  font: 400 15.5px var(--sc-mono);
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.07);
+  color: oklch(0.82 0.13 82);
+  border: 0;
+}
+
+/* --------------------------------------------------------- install command */
+
+.install {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  margin-top: 40px;
+  max-width: 100%;
+}
+
+.installBox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 15px 17px;
+  background: var(--sc-panel-2);
+  border: 1px solid var(--sc-line-2);
+  font: 400 14px var(--sc-mono);
+  color: #e9e6e0;
+  overflow-x: auto;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.installBox::-webkit-scrollbar {
+  display: none;
+}
+
+.installPrompt {
+  color: var(--sc-green);
+  flex: none;
+}
+
+.copyBtn {
   display: flex;
   align-items: center;
   justify-content: center;
+  min-width: 46px;
+  padding: 0 15px;
+  background: var(--sc-panel-2);
+  border: 1px solid var(--sc-line-2);
+  color: var(--sc-text-3);
+  font: 400 12px var(--sc-mono);
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease;
+}
+
+.copyBtn:hover {
+  color: var(--sc-text);
+  border-color: var(--sc-line-3);
+}
+
+.copyBtnDone {
+  color: var(--sc-green);
+  border-color: color-mix(in oklab, var(--sc-green) 50%, transparent);
+}
+
+.installAlt {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  margin-top: 18px;
+  font: 400 12.5px var(--sc-mono);
+  color: var(--sc-text-3);
+  flex-wrap: wrap;
+}
+
+.installAlt a {
+  color: var(--sc-text-3);
+  text-decoration: none;
+  border-bottom: 1px solid var(--sc-line-3);
+}
+
+.installAlt a:hover {
+  color: var(--sc-text);
+  border-bottom-color: var(--sc-accent);
+}
+
+/* --------------------------------------------------------- the demo block */
+
+.demoBlock {
+  padding: 56px var(--pad) 88px;
+}
+
+.demoHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+  max-width: var(--sc-measure);
+  margin: 0 auto 20px;
+  font: 400 12.5px var(--sc-mono);
+  color: var(--sc-text-3);
+  flex-wrap: wrap;
+}
+
+.demoShell {
+  max-width: var(--sc-measure);
+  margin: 0 auto;
+  box-shadow: 0 36px 70px -24px rgba(0, 0, 0, 0.8);
+}
+
+/* Narrow screens pan the mockup rather than shrink it past reading size. */
+@media (max-width: 720px) {
+  .scrollMock {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .scrollMock > * {
+    min-width: 680px;
+  }
+}
+
+/* -------------------------------------------------------- feature layouts */
+
+.split {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 56px;
+  align-items: start;
+}
+
+.splitReverse {
+  grid-template-columns: 1fr 400px;
+}
+
+.h2 {
+  margin: 0;
+  font: 600 clamp(28px, 3.4vw, 40px) / 1.1 var(--sc-display);
+  letter-spacing: -0.03em;
+  color: var(--sc-text);
+  text-wrap: balance;
+}
+
+.h3 {
+  margin: 14px 0 0;
+  font: 600 clamp(24px, 2.8vw, 34px) / 1.12 var(--sc-display);
+  letter-spacing: -0.03em;
+  color: var(--sc-text);
+  text-wrap: balance;
+}
+
+.body {
+  margin: 16px 0 0;
+  font-size: 15.5px;
+  line-height: 1.62;
+  color: var(--sc-text-2);
+  text-wrap: pretty;
+}
+
+.points {
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--sc-text-2);
+}
+
+.point {
+  display: flex;
+  gap: 10px;
+}
+
+.point::before {
+  content: '·';
+  color: var(--point-color, var(--sc-accent));
+  flex: none;
+}
+
+/* ------------------------------------------------------------ hairline grids */
+
+.cells {
+  display: grid;
+  gap: 1px;
+  margin-top: 40px;
+  background: var(--sc-line);
+  border: 1px solid var(--sc-line);
+}
+
+.cells4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.cells3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.cell {
+  background: var(--sc-canvas-2);
+  padding: 26px 24px 30px;
+}
+
+.sectionTint .cell {
+  background: var(--sc-canvas-2);
+}
+
+.cellStep {
+  font: 400 12px var(--sc-mono);
+  color: var(--step-color, var(--sc-accent));
+}
+
+.cellTitle {
+  font: 500 14.5px var(--sc-display);
+  color: var(--sc-text);
+}
+
+.cellBody {
+  margin: 12px 0 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--sc-text-2);
+}
+
+.cellNote {
+  margin: 5px 0 0;
+  font-size: 13px;
+  color: var(--sc-text-3);
+}
+
+/* -------------------------------------------------------------- flat grid */
+
+.flatGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 36px 48px;
+  margin-top: 44px;
+}
+
+.flatTitle {
+  font: 500 15px var(--sc-display);
+  color: var(--sc-text);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.flatKey {
+  font: 400 11px var(--sc-mono);
+  color: var(--sc-accent);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+}
+
+.flatBody {
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--sc-text-2);
+}
+
+/* ----------------------------------------------------------- theme picker */
+
+.themeSection {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 56px;
+  align-items: start;
+}
+
+.themeList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 1px;
+  background: var(--sc-line);
+  border: 1px solid var(--sc-line);
+  margin-top: 24px;
+}
+
+.themeBtn {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  background: var(--sc-canvas-2);
+  border: 0;
+  font: 400 12.5px var(--sc-mono);
+  color: var(--sc-text-3);
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.themeBtn:hover {
+  background: var(--sc-panel);
+  color: var(--sc-text);
+}
+
+.themeBtnActive {
+  background: var(--sc-panel);
+  color: var(--sc-text);
+  box-shadow: inset 2px 0 0 var(--swatch, var(--sc-accent));
+}
+
+.swatch {
+  display: flex;
+  flex: none;
+  width: 26px;
+  height: 10px;
+  outline: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.swatch span {
+  flex: 1;
+}
+
+/* ----------------------------------------------------------------- agents */
+
+.agentCell {
+  background: var(--sc-canvas-2);
+  padding: 20px 22px;
+}
+
+.agentName {
+  font: 500 14.5px var(--sc-display);
+  color: var(--sc-text);
+}
+
+.agentDesc {
+  margin-top: 5px;
+  font-size: 13px;
+  color: var(--sc-text-3);
+}
+
+/* -------------------------------------------------------------------- cta */
+
+.cta {
+  padding: 96px var(--pad);
+  border-top: 1px solid var(--sc-line);
+  text-align: center;
+}
+
+.ctaInstall {
+  display: flex;
+  justify-content: center;
+  margin-top: 34px;
+}
+
+.ctaNote {
+  margin-top: 20px;
+  font: 400 12.5px var(--sc-mono);
+  color: var(--sc-text-3);
+}
+
+/* ------------------------------------------------------------ responsive */
+
+@media (max-width: 996px) {
+  .split,
+  .splitReverse,
+  .themeSection {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+
+  /* Keep the mockup under the prose it explains, never above it. */
+  .splitReverse > :first-child {
+    order: 2;
+  }
+
+  .cells4 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .flatGrid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 28px 32px;
+  }
+
+  .section,
+  .cta {
+    padding-top: 64px;
+    padding-bottom: 64px;
+  }
+}
+
+@media (max-width: 640px) {
+  .cells4,
+  .cells3,
+  .flatGrid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Keep the command and its copy button on one line; the command scrolls. */
+  .installBox {
+    padding: 13px 14px;
+    font-size: 12.5px;
+  }
+
+  .copyBtn {
+    min-width: 40px;
+    padding: 0 10px;
+  }
+
+  .demoHead > :last-child {
+    display: none;
+  }
+}
+
+/* Full-width feature: heading and its paragraph share a row, the mockup gets
+   the whole measure, the points sit under it in columns. */
+.wideHead {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 56px;
+  align-items: end;
+}
+
+.widePoints {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+  margin-top: 28px;
+  font-size: 14px;
+  color: var(--sc-text-2);
+  align-items: start;
+}
+
+.widePoints .point {
+  align-items: baseline;
+}
+
+@media (max-width: 996px) {
+  .wideHead {
+    grid-template-columns: 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+
+  .widePoints {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .widePoints {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+
+/* ------------------------------------------------------------ hero top row */
+
+.heroTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+/* The release badge. Deliberately not monospace: it is the site talking, not
+   the terminal. The two numbers are the whole point — they say this has been
+   built for a while. */
+.milestone {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 11px 18px 12px;
+  border: 1px solid var(--sc-line-2);
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--sc-accent) 9%, var(--sc-panel-2)),
+    var(--sc-panel-2) 62%
+  );
+  color: var(--sc-text);
+  text-decoration: none;
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+/* Two soft accent spotlights sweeping behind the text on different periods, so
+   the badge never repeats the same frame. Bright enough to catch the eye at the
+   edge of vision, soft enough that the words never fight them. */
+.milestone::before,
+.milestone::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  translate: 0 -50%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--sc-accent) 85%, transparent),
+    transparent 68%
+  );
+}
+
+.milestone::before {
+  width: 150px;
+  height: 150px;
+  left: -46px;
+  filter: blur(19px);
+  animation: spotA 9s ease-in-out infinite;
+}
+
+.milestone::after {
+  width: 112px;
+  height: 112px;
+  right: -34px;
+  filter: blur(16px);
+  animation: spotB 12.5s ease-in-out infinite;
+}
+
+@keyframes spotA {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.18;
+  }
+  50% {
+    transform: translateX(235px);
+    opacity: 0.46;
+  }
+}
+
+@keyframes spotB {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateX(-250px);
+    opacity: 0.14;
+  }
+}
+
+.milestone:hover {
+  border-color: color-mix(in oklab, var(--sc-accent) 55%, transparent);
+  color: var(--sc-text);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.milestone > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.milestone strong {
+  font: 600 15.5px/1.15 var(--sc-display);
+  letter-spacing: -0.012em;
+}
+
+.milestoneMeta {
+  font: 400 13.5px/1.15 var(--sc-display);
+  color: var(--sc-text-3);
+}
+
+/* A slow beacon rather than a blinking dot: present, not urgent. */
+.milestoneMark {
+  position: relative;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sc-accent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--sc-accent) 55%, transparent);
+}
+
+.milestoneMark::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--sc-accent);
+  opacity: 0;
+  animation: beacon 3.8s ease-out infinite;
+}
+
+@keyframes beacon {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.55;
+  }
+  55%,
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- shimmer */
+
+.shimmer {
+  display: inline-block;
+  white-space: pre;
+}
+
+.shimmer > span {
+  display: inline-block;
+  color: var(--sc-text-3);
+  animation: shimmer 6.5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 60ms);
+  will-change: color;
+}
+
+@keyframes shimmer {
+  0%,
+  9%,
+  100% {
+    color: var(--sc-text-3);
+    text-shadow: none;
+  }
+  4% {
+    color: color-mix(in oklab, var(--sc-accent) 78%, var(--sc-text-3));
+    text-shadow: 0 0 7px color-mix(in oklab, var(--sc-accent) 22%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer > span,
+  .milestoneMark::after,
+  .milestone::before,
+  .milestone::after {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .heroTop {
+    gap: 16px;
+  }
+
+  .milestone {
+    width: 100%;
+  }
 }
