@@ -1,8 +1,11 @@
 package notes
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -166,7 +169,9 @@ type Plugin struct {
 	inlineLastSavedContent string // Last saved content for change detection
 
 	// Auto-save state
-	autoSaveID int // Incremented on each edit to identify debounce timer
+	autoSaveID int        // Incremented on each edit to identify debounce timer
+	saveMu     sync.Mutex // Serializes persist vs in-flight UpdateContent
+	saveSeq    int        // Bumped on persist so a stale write is skipped
 
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
@@ -257,10 +262,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Project switches normally call Stop first, but Init is defensive: kill
 	// any surviving editor asynchronously from Start and invalidate its autosave
 	// chain before replacing the store/context.
-	if p.store != nil {
-		_ = p.persistDirtyEditor()
-		p.autoSaveID++
+	if err := p.persistDirtyEditorErr(); err != nil {
+		return fmt.Errorf("unsaved note could not be saved: %w", err)
 	}
+	p.autoSaveID++
 	leftoverExport := p.inlineEditPath
 	leftoverPending := p.pendingInlineEditPath
 	if p.inlineEditSession != "" {
@@ -356,8 +361,14 @@ func (p *Plugin) Stop() {
 	removeNoteExport(leftoverPending)
 	p.pendingInlineEditID = ""
 	p.pendingInlineEditPath = ""
+	if err := p.persistDirtyEditorErr(); err != nil {
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Error("notes: stop left a dirty note unsaved", "error", err)
+		}
+		p.autoSaveID++
+		return
+	}
 	if p.store != nil {
-		_ = p.persistDirtyEditor()
 		p.autoSaveID++
 		_ = p.store.Close()
 		p.store = nil
@@ -540,32 +551,45 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
 			return p, nil
 		}
-		if msg.EditorActivation == 0 {
+		if msg.Skipped {
+			return p, nil
+		}
+		if msg.External {
+			if msg.Err != nil {
+				if p.ctx != nil && p.ctx.Logger != nil {
+					p.ctx.Logger.Error("notes: external editor save failed", "error", msg.Err)
+				}
+				return p, showSaveFailedToast(msg.Err)
+			}
+			// Reload so the list follows $EDITOR. A dirty built-in buffer is
+			// not overlaid (NotesLoaded skips pendingEditorSync when dirty).
+			return p, tea.Batch(showSavedToast(), p.loadNotes())
+		}
+		if msg.EditorActivation != 0 {
 			if msg.Err != nil {
 				if p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
 				}
-				return p, showSaveFailedToast(msg.Err)
-			}
-			if !p.ownsBuiltInContentSave(msg) {
 				return p, nil
 			}
-			p.editorDirty = false
-			if p.ctx != nil && p.ctx.Logger != nil {
-				p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
-			}
+			// Inline/tmux save owns the export, not the built-in textarea.
+			// Clearing editorDirty here would drop typing that happened after :wq.
 			return p, tea.Batch(showSavedToast(), p.loadNotes())
 		}
 		if msg.Err != nil {
-			p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
+			if p.ctx != nil && p.ctx.Logger != nil {
+				p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
+			}
+			return p, showSaveFailedToast(msg.Err)
+		}
+		if !p.ownsBuiltInContentSave(msg) {
 			return p, nil
 		}
 		p.editorDirty = false
-		p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
-		return p, tea.Batch(
-			showSavedToast(),
-			p.loadNotes(),
-		)
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
+		}
+		return p, tea.Batch(showSavedToast(), p.loadNotes())
 
 	case TaskCreatedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1513,6 +1537,9 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
 	noteID := p.editorNote.ID
 	generation := p.autoSaveID
+	p.saveMu.Lock()
+	seq := p.saveSeq
+	p.saveMu.Unlock()
 	var epoch uint64
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
@@ -1520,6 +1547,17 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	store := p.store
 
 	return func() tea.Msg {
+		p.saveMu.Lock()
+		defer p.saveMu.Unlock()
+		if p.saveSeq != seq {
+			return NoteContentSavedMsg{
+				ID:         noteID,
+				Epoch:      epoch,
+				Generation: generation,
+				Content:    content,
+				Skipped:    true,
+			}
+		}
 		err := store.UpdateContent(noteID, content)
 		return NoteContentSavedMsg{
 			ID:         noteID,
@@ -1532,21 +1570,34 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 }
 
 // persistDirtyEditor writes the current dirty built-in buffer synchronously.
-// On success it clears dirty and retires the debounce generation so an older
-// in-flight save cannot claim the buffer. On failure it leaves dirty set and
-// returns an error toast. Callers that would replace or abandon the buffer
-// must not proceed when this returns a command.
+// On success it clears dirty, retires the debounce generation, and invalidates
+// in-flight UpdateContent writes. On failure it leaves dirty set and returns
+// an error toast. Callers that would replace or abandon the buffer must not
+// proceed when this returns a command.
 func (p *Plugin) persistDirtyEditor() tea.Cmd {
-	if !p.editorDirty || p.editorNote == nil || p.store == nil {
+	if err := p.persistDirtyEditorErr(); err != nil {
+		return showSaveFailedToast(err)
+	}
+	return nil
+}
+
+func (p *Plugin) persistDirtyEditorErr() error {
+	if !p.editorDirty || p.editorNote == nil {
 		return nil
 	}
+	if p.store == nil {
+		return errors.New("notes store unavailable")
+	}
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
 	content := p.editorTextarea.Value()
 	if err := p.store.UpdateContent(p.editorNote.ID, content); err != nil {
 		if p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Error("notes: persist dirty editor failed", "error", err)
 		}
-		return showSaveFailedToast(err)
+		return err
 	}
+	p.saveSeq++
 	p.editorNote.Content = content
 	p.editorDirty = false
 	p.autoSaveID++
@@ -1625,10 +1676,10 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 
 		// Update note content in database
 		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+			return NoteContentSavedMsg{ID: noteID, Err: err, Epoch: epoch, External: true}
 		}
 
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
+		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, External: true}
 	}
 }
 

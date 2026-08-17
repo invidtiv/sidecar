@@ -223,6 +223,117 @@ func TestFilterChangePersistsDirtyNote(t *testing.T) {
 	}
 }
 
+func TestInlineExitSaveDoesNotClearBuiltInDirty(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.editorTextarea.SetValue("typed after vim :wq")
+	p.editorDirty = true
+	p.autoSaveID = 11
+	p.inlineEditActivation = 8
+
+	_, cmd := p.Update(NoteContentSavedMsg{
+		ID: a.ID, Epoch: 1, EditorActivation: 8,
+	})
+	if !p.editorDirty {
+		t.Fatal("inline-exit save cleared newer built-in dirty state")
+	}
+	if got := p.editorTextarea.Value(); got != "typed after vim :wq" {
+		t.Fatalf("buffer = %q", got)
+	}
+	if cmd == nil {
+		t.Fatal("inline save should still reload notes")
+	}
+}
+
+func TestExternalReadBackStillReloads(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.editorTextarea.SetValue("body-a")
+	p.editorDirty = false
+
+	_, cmd := p.Update(NoteContentSavedMsg{
+		ID: a.ID, Epoch: 1, External: true,
+	})
+	if cmd == nil {
+		t.Fatal("$EDITOR read-back produced no reload")
+	}
+	if p.editorDirty {
+		t.Fatal("clean $EDITOR read-back marked the buffer dirty")
+	}
+}
+
+func TestInFlightSaveDoesNotClobberPersist(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.editorTextarea.SetValue("first")
+	p.editorDirty = true
+	p.autoSaveID = 7
+
+	pending := p.saveEditorContent()
+	if pending == nil {
+		t.Fatal("saveEditorContent returned nil")
+	}
+
+	p.editorTextarea.SetValue("second")
+	p.editorDirty = true
+	p.autoSaveID = 8
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		t.Fatal("persist failed")
+	}
+
+	result := pending()
+	saved, ok := result.(NoteContentSavedMsg)
+	if !ok {
+		t.Fatalf("got %T", result)
+	}
+	if !saved.Skipped {
+		t.Fatal("in-flight save wrote after persist")
+	}
+	got, err := p.store.Get(a.ID)
+	if err != nil || got == nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Content != "second" {
+		t.Fatalf("store = %q, want persist winner second", got.Content)
+	}
+}
+
+func TestStopPersistFailureKeepsDirtyBuffer(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.editorTextarea.SetValue("keep-me")
+	p.editorDirty = true
+	_ = p.store.Close()
+
+	p.Stop()
+	if !p.editorDirty {
+		t.Fatal("failed Stop persist cleared dirty")
+	}
+	if p.editorNote == nil || p.editorNote.ID != a.ID {
+		t.Fatal("failed Stop persist dropped the editor note")
+	}
+	if got := p.editorTextarea.Value(); got != "keep-me" {
+		t.Fatalf("buffer = %q", got)
+	}
+	if p.store == nil {
+		t.Fatal("failed Stop persist closed away the only store")
+	}
+
+	err := p.Init(&plugin.Context{
+		Epoch: 2, ProjectRoot: t.TempDir(),
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err == nil {
+		t.Fatal("Init wiped a dirty buffer after persist failure")
+	}
+	if !p.editorDirty {
+		t.Fatal("failed Init persist cleared dirty")
+	}
+	if got := p.editorTextarea.Value(); got != "keep-me" {
+		t.Fatalf("Init dropped buffer: %q", got)
+	}
+}
+
 func TestStopPersistsDirtyNote(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewTestStore(dir, "test")
