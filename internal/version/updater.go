@@ -343,6 +343,35 @@ func Apply(ctx context.Context, env *Environment, t Target) Result {
 	return Result{Target: t, Status: StatusUpdated, Version: t.LatestVersion, Output: output.String()}
 }
 
+// FailureDetail returns the diagnostic lines to show for a failed result: the
+// error itself, followed by the tail of the failing command's combined output.
+//
+// The output is the part that matters and it used to be discarded entirely, so
+// a failed update reported only the command and "exit status 1" — enough to see
+// that `go install` failed, never enough to see why. The tail is what carries
+// the compiler or toolchain message; earlier lines are download progress.
+//
+// State-free so the exact reported lines are testable without a UI.
+func FailureDetail(r Result, maxOutputLines int) []string {
+	var lines []string
+	if r.Err != nil {
+		lines = append(lines, r.Err.Error())
+	}
+	if maxOutputLines <= 0 {
+		return lines
+	}
+	var out []string
+	for _, line := range strings.Split(r.Output, "\n") {
+		if trimmed := strings.TrimRight(line, " \t\r"); strings.TrimSpace(trimmed) != "" {
+			out = append(out, strings.TrimSpace(trimmed))
+		}
+	}
+	if len(out) > maxOutputLines {
+		out = out[len(out)-maxOutputLines:]
+	}
+	return append(lines, out...)
+}
+
 func brewReportsNoop(out string) bool {
 	lower := strings.ToLower(out)
 	return strings.Contains(lower, "already installed") || strings.Contains(lower, "already up-to-date")

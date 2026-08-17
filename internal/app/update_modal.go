@@ -472,8 +472,12 @@ func (m *Model) ensureUpdateErrorModal() {
 		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
 			styles.Muted.Render(resultLabel(r)))
 		if r.Status == version.StatusFailed {
-			if r.Err != nil {
-				row += "\n" + errorStyle.Render("      "+truncateLine(r.Err.Error(), modalW-12))
+			// Show why it failed, not just that it did: the error plus the tail of
+			// the command's own output, wrapped rather than cut off at one line.
+			for _, detail := range version.FailureDetail(r, 6) {
+				for _, wrapped := range wrapDetailLine(detail, modalW-12) {
+					row += "\n" + errorStyle.Render("      "+wrapped)
+				}
 			}
 			if cmd := r.Target.Install.ManualCommand; cmd != "" {
 				row += "\n" + styles.Muted.Render("      manual fix: "+cmd)
@@ -516,6 +520,43 @@ func truncateLine(s string, width int) string {
 	}
 	return string(runes) + "…"
 }
+
+// wrapDetailLine wraps one diagnostic line to the modal width instead of
+// truncating it. A toolchain error puts the useful part at the end of the line,
+// so cutting it off is the same as not showing it. Capped at maxDetailWrapLines
+// so one pathological line cannot push the modal past the viewport.
+func wrapDetailLine(s string, width int) []string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\t", " ")
+	if width < 20 {
+		width = 20
+	}
+	var out []string
+	for s != "" {
+		if lipgloss.Width(s) <= width {
+			out = append(out, s)
+			break
+		}
+		if len(out) == maxDetailWrapLines-1 {
+			out = append(out, truncateLine(s, width))
+			break
+		}
+		runes := []rune(s)
+		cut := width
+		// Prefer a space so paths and flags stay readable.
+		for i := cut; i > width/2; i-- {
+			if runes[i] == ' ' {
+				cut = i
+				break
+			}
+		}
+		out = append(out, strings.TrimSpace(string(runes[:cut])))
+		s = strings.TrimSpace(string(runes[cut:]))
+	}
+	return out
+}
+
+// maxDetailWrapLines bounds how many lines a single diagnostic line may occupy.
+const maxDetailWrapLines = 3
 
 // renderUpdateErrorModal renders the error state.
 func (m *Model) renderUpdateErrorModal() string {
