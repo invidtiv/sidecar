@@ -235,7 +235,7 @@ function ThemeGallery() {
     <Reveal className={styles.themeSection}>
       <div>
         <div className={styles.kicker}>themes</div>
-        <h3 className={styles.h3}>Twenty-one themes, all of them finished</h3>
+        <h3 className={styles.h3}>Twenty-one themes</h3>
         <p className={styles.body}>
           Not a light mode and a dark mode. Twenty-one full palettes, each one
           contrast-checked against every surface — tabs, diffs, key hints, kanban
@@ -575,7 +575,7 @@ export default function Home() {
         <section className={`${styles.cta} ${styles.grid}`}>
           <div className={styles.wrapNarrow}>
             <h2 className={styles.h2} style={{fontSize: 'clamp(32px, 5vw, 52px)'}}>
-              Start it in the repo you are already in
+              Set up takes less than a minute
             </h2>
             <div className={styles.ctaInstall}>
               <CopyCommand command={BREW_COMMAND} />

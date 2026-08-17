@@ -371,12 +371,6 @@ const TASKS = [
   {p: 'P3', title: 'Move the standing desk cable run', tag: '@house'},
 ];
 
-const TASK_AGENDA = [
-  ['09:30', 'Standup', 'var(--tui-info)'],
-  ['13:00', 'Launch review with Nina', 'var(--tui-primary)'],
-  ['16:30', 'Collect the spare keys', 'var(--tui-idle)'],
-];
-
 const P_COLOR = {P1: 'var(--tui-error)', P2: 'var(--tui-warning)', P3: 'var(--tui-idle)'};
 
 export function TasksScreen() {
@@ -409,10 +403,6 @@ export function TasksScreen() {
           <span className={tui.dim}> </span>
           <span>Journal</span>
         </Row>
-        <Row>
-          <span className={tui.dim}> </span>
-          <span>Agenda</span>
-        </Row>
       </TuiPane>
       <TuiHandle />
       <TuiPane title="Today" titleDim="5 open · 1 done" focused chips={['+ Add']}>
@@ -437,16 +427,6 @@ export function TasksScreen() {
         ))}
         <Row>&nbsp;</Row>
         <Rule />
-        <Row>&nbsp;</Row>
-        <Row>
-          <span className={tui.subtle}>AGENDA</span>
-        </Row>
-        {TASK_AGENDA.map(([time, what, color]) => (
-          <Row key={time}>
-            <span style={{color}}>{time}</span>
-            <span className={tui.dim}>{what}</span>
-          </Row>
-        ))}
         <Row>&nbsp;</Row>
         <Row>
           <span className={tui.subtle}>HANDED TO AGENTS</span>
