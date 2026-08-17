@@ -67,6 +67,8 @@ type NoteContentSavedMsg struct {
 	Err              error
 	Epoch            uint64
 	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
+	Generation       int    // Built-in autosave generation captured at save start.
+	Content          string // Bytes this save wrote; empty for inline/export paths.
 }
 
 // GetEpoch returns the epoch for staleness detection.

@@ -166,8 +166,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		}
 		p.cursor = idx
 		p.activePane = PaneList
-		p.loadNoteIntoEditor()
-		return p, nil
+		return p, p.loadNoteIntoEditor()
 
 	case regionListPane:
 		p.activePane = PaneList
@@ -234,9 +233,8 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 			return p, nil
 		}
 		p.cursor = idx
-		p.loadNoteIntoEditor()
 		p.activePane = PaneEditor
-		return p, nil
+		return p, p.loadNoteIntoEditor()
 
 	case regionEditorLine:
 		if lineIdx, ok := action.Region.Data.(int); ok {
@@ -280,8 +278,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 			return p, nil
 		}
 		p.cursor = cursor
-		p.loadNoteIntoEditor()
-		return p, nil
+		return p, p.loadNoteIntoEditor()
 	}
 
 	// Scroll editor pane

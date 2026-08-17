@@ -111,8 +111,12 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	}
 	// The session below reads the note from the store; an unsaved buffer has to
 	// land first or it is overwritten by what vim reads and writes back.
-	p.flushPendingEditorSave()
-	p.loadNoteIntoEditor()
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		return cmd
+	}
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		return cmd
+	}
 	return p.enterInlineEditMode(note.ID)
 }
 
@@ -548,7 +552,7 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 		if idx, ok := data.(int); ok {
 			p.cursor = idx
 			p.activePane = PaneList
-			p.loadNoteIntoEditor()
+			return p, p.loadNoteIntoEditor()
 		}
 		return p, nil
 	case regionListPane:

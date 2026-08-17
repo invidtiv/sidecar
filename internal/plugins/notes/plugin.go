@@ -257,6 +257,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Project switches normally call Stop first, but Init is defensive: kill
 	// any surviving editor asynchronously from Start and invalidate its autosave
 	// chain before replacing the store/context.
+	if p.store != nil {
+		_ = p.persistDirtyEditor()
+		p.autoSaveID++
+	}
 	leftoverExport := p.inlineEditPath
 	leftoverPending := p.pendingInlineEditPath
 	if p.inlineEditSession != "" {
@@ -353,6 +357,8 @@ func (p *Plugin) Stop() {
 	p.pendingInlineEditID = ""
 	p.pendingInlineEditPath = ""
 	if p.store != nil {
+		_ = p.persistDirtyEditor()
+		p.autoSaveID++
 		_ = p.store.Close()
 		p.store = nil
 	}
@@ -446,10 +452,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				for i, n := range p.notes {
 					if n.ID == p.pendingEditID {
 						p.cursor = i
-						p.loadNoteIntoEditorAtEnd()
 						p.activePane = PaneEditor
 						p.previewMode = false
-						break
+						p.pendingEditID = ""
+						return p, p.loadNoteIntoEditorAtEnd()
 					}
 				}
 				p.pendingEditID = ""
@@ -461,7 +467,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 						// Update editorNote reference to get latest content
 						p.editorNote = &p.notes[i]
 						// Out-of-band editor writes bypass textarea state, so force one sync.
-						if p.pendingEditorSyncID == n.ID {
+						// A dirty built-in buffer owns the textarea; never overlay it.
+						if p.pendingEditorSyncID == n.ID && !p.editorDirty {
 							p.syncEditorFromNote(p.editorNote)
 							p.pendingEditorSyncID = ""
 						}
@@ -475,7 +482,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				if p.cursor >= len(p.notes) {
 					p.cursor = 0
 				}
-				p.loadNoteIntoEditor()
+				return p, p.loadNoteIntoEditor()
 			}
 		}
 
@@ -533,16 +540,32 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
 			return p, nil
 		}
+		if msg.EditorActivation == 0 {
+			if msg.Err != nil {
+				if p.ctx != nil && p.ctx.Logger != nil {
+					p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
+				}
+				return p, showSaveFailedToast(msg.Err)
+			}
+			if !p.ownsBuiltInContentSave(msg) {
+				return p, nil
+			}
+			p.editorDirty = false
+			if p.ctx != nil && p.ctx.Logger != nil {
+				p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
+			}
+			return p, tea.Batch(showSavedToast(), p.loadNotes())
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: content save failed", "error", msg.Err)
-		} else {
-			p.editorDirty = false
-			p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
-			return p, tea.Batch(
-				showSavedToast(),
-				p.loadNotes(),
-			)
+			return p, nil
 		}
+		p.editorDirty = false
+		p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
+		return p, tea.Batch(
+			showSavedToast(),
+			p.loadNotes(),
+		)
 
 	case TaskCreatedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -563,8 +586,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, tea.Batch(showTaskCreatedToast(msg.TaskID), p.loadNotes())
 
 	case AutoSaveTickMsg:
-		// Only auto-save if this tick matches current auto-save ID (debounce)
-		if msg.ID == p.autoSaveID && p.editorDirty && p.activePane == PaneEditor {
+		// Debounce identity is the generation, not the focused pane. Tab/Esc
+		// must not drop a pending save; the tick still owns this buffer.
+		if msg.ID == p.autoSaveID && p.editorDirty {
 			return p, p.saveEditorContent()
 		}
 
@@ -786,6 +810,9 @@ func (p *Plugin) createNoteFromPaste(content string) tea.Cmd {
 	if strings.TrimSpace(content) == "" || p.store == nil {
 		return nil
 	}
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		return cmd
+	}
 	title := firstNonBlankLine(content)
 	epoch := p.ctx.Epoch
 	store := p.store
@@ -830,6 +857,19 @@ func (p *Plugin) isStaleNoteSaveResult(epoch, editorActivation uint64) bool {
 		return true
 	}
 	return editorActivation != 0 && editorActivation != p.inlineEditActivation
+}
+
+// ownsBuiltInContentSave reports whether a built-in editor save completion
+// still owns the current note and buffer generation. An older in-flight save
+// must not clear newer dirty state.
+func (p *Plugin) ownsBuiltInContentSave(msg NoteContentSavedMsg) bool {
+	if p.editorNote == nil || msg.ID != p.editorNote.ID {
+		return false
+	}
+	if msg.Generation != p.autoSaveID {
+		return false
+	}
+	return p.editorTextarea.Value() == msg.Content
 }
 
 // handleKey processes keyboard input.
@@ -885,18 +925,12 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		p.captureEditPlace()
 		p.activePane = PaneList
 		p.editorTextarea.Blur()
-		return p, nil
+		return p, p.persistDirtyEditor()
 	}
 
 	// Esc returns to Active view from Archived/Deleted views
 	if key == "esc" && p.viewFilter != FilterActive {
-		p.viewFilter = FilterActive
-		p.cursor = 0
-		p.scrollOff = 0
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return p, p.loadNotes()
+		return p, p.switchViewFilter(FilterActive)
 	}
 
 	// Get the notes list to navigate (filtered or all)
@@ -920,21 +954,19 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if p.cursor < len(notesList)-1 {
 			p.cursor++
 		}
-		// Auto-load note content in editor
-		p.loadNoteIntoEditor()
+		return p, p.loadNoteIntoEditor()
 	case "k", "up":
 		if p.cursor > 0 {
 			p.cursor--
 		}
-		// Auto-load note content in editor
-		p.loadNoteIntoEditor()
+		return p, p.loadNoteIntoEditor()
 	case "g":
 		// Start g g sequence
 		p.pendingG = true
 	case "G":
 		// Jump to bottom
 		p.cursor = len(notesList) - 1
-		p.loadNoteIntoEditor()
+		return p, p.loadNoteIntoEditor()
 	case "n":
 		// Create new note (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -948,14 +980,7 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, nil
 	case "x":
-		// Show deleted notes view
-		p.viewFilter = FilterDeleted
-		p.cursor = 0
-		p.scrollOff = 0
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return p, p.loadNotes()
+		return p, p.switchViewFilter(FilterDeleted)
 	case "p":
 		// Toggle pin (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -969,14 +994,7 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, nil
 	case "a":
-		// Show archived notes view
-		p.viewFilter = FilterArchived
-		p.cursor = 0
-		p.scrollOff = 0
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return p, p.loadNotes()
+		return p, p.switchViewFilter(FilterArchived)
 	case "r":
 		// Refresh
 		return p, p.loadNotes()
@@ -985,7 +1003,9 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// external editor on E, so neither can capture the default path.
 		note := p.getSelectedNote()
 		if note != nil {
-			p.loadNoteIntoEditor()
+			if cmd := p.loadNoteIntoEditor(); cmd != nil {
+				return p, cmd
+			}
 			p.activePane = PaneEditor
 			if p.viewFilter != FilterActive {
 				p.previewMode = true
@@ -1047,13 +1067,13 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		p.captureEditPlace()
 		p.activePane = PaneList
 		p.editorTextarea.Blur()
-		return p, nil
+		return p, p.persistDirtyEditor()
 
 	case "esc":
 		p.captureEditPlace()
 		p.activePane = PaneList
 		p.editorTextarea.Blur()
-		return p, nil
+		return p, p.persistDirtyEditor()
 
 	case "ctrl+s":
 		p.autoSaveID++
@@ -1387,26 +1407,21 @@ func (p *Plugin) syncEditorFromNote(note *Note) {
 
 // loadNoteIntoEditor loads the currently selected note into the editor pane
 // and restores this session's remembered place (start of note if none).
-func (p *Plugin) loadNoteIntoEditor() {
+// A dirty buffer is persisted first; on failure the buffer stays and a toast
+// is returned so the edit cannot be silently dropped.
+func (p *Plugin) loadNoteIntoEditor() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil {
-		if p.editorNote != nil {
-			p.rememberCurrentPlace()
-		}
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return
+		return p.abandonEditor()
 	}
 
-	// Don't reload if already editing this note
-	if p.editorNote != nil && p.editorNote.ID == note.ID && !p.editorDirty {
-		return
+	if p.editorNote != nil && p.editorNote.ID == note.ID {
+		return nil
 	}
 
-	// If dirty, don't auto-reload (user needs to save or discard)
-	if p.editorDirty {
-		return
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		p.revertCursorToEditorNote()
+		return cmd
 	}
 
 	p.rememberCurrentPlace()
@@ -1420,20 +1435,20 @@ func (p *Plugin) loadNoteIntoEditor() {
 	p.restorePlace(note.ID)
 	p.previewMode = true
 	p.editorTextarea.Blur()
+	return nil
 }
 
 // loadNoteIntoEditorAtEnd loads the currently selected note into the editor pane
 // with cursor positioned at the end of the content. Used for new notes.
-func (p *Plugin) loadNoteIntoEditorAtEnd() {
+func (p *Plugin) loadNoteIntoEditorAtEnd() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil {
-		if p.editorNote != nil {
-			p.rememberCurrentPlace()
-		}
-		p.editorNote = nil
-		p.previewLines = nil
-		p.editorDirty = false
-		return
+		return p.abandonEditor()
+	}
+
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		p.revertCursorToEditorNote()
+		return cmd
 	}
 
 	p.rememberCurrentPlace()
@@ -1450,6 +1465,34 @@ func (p *Plugin) loadNoteIntoEditorAtEnd() {
 	p.previewCursorLine = p.editorTextarea.Line()
 	p.trackTextareaScroll()
 	p.editorTextarea.Focus()
+	return nil
+}
+
+func (p *Plugin) revertCursorToEditorNote() {
+	if p.editorNote == nil {
+		return
+	}
+	for i, n := range p.getDisplayNotes() {
+		if n.ID == p.editorNote.ID {
+			p.cursor = i
+			return
+		}
+	}
+}
+
+// abandonEditor persists a dirty buffer then clears the editor surface.
+// On persist failure the dirty buffer is left in place.
+func (p *Plugin) abandonEditor() tea.Cmd {
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		return cmd
+	}
+	if p.editorNote != nil {
+		p.rememberCurrentPlace()
+	}
+	p.editorNote = nil
+	p.previewLines = nil
+	p.editorDirty = false
+	return nil
 }
 
 // startAutoSaveTimer starts a 1-second debounce timer for auto-save.
@@ -1469,34 +1512,45 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 
 	content := p.editorTextarea.Value()
 	noteID := p.editorNote.ID
-	epoch := p.ctx.Epoch
+	generation := p.autoSaveID
+	var epoch uint64
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+	}
 	store := p.store
 
 	return func() tea.Msg {
 		err := store.UpdateContent(noteID, content)
-		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
+		return NoteContentSavedMsg{
+			ID:         noteID,
+			Err:        err,
+			Epoch:      epoch,
+			Generation: generation,
+			Content:    content,
 		}
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch}
 	}
 }
 
-// flushPendingEditorSave writes an unsaved built-in-editor buffer to the store
-// synchronously. Both other editors materialise the note through NotePath, which
-// reads the store — so a debounced autosave still in flight would hand them
-// stale content and then write it back over the newer buffer. Leaving the
-// editor does not save (see the tab/esc cases), so this window is a keystroke
-// wide and the edit is simply lost.
-func (p *Plugin) flushPendingEditorSave() {
+// persistDirtyEditor writes the current dirty built-in buffer synchronously.
+// On success it clears dirty and retires the debounce generation so an older
+// in-flight save cannot claim the buffer. On failure it leaves dirty set and
+// returns an error toast. Callers that would replace or abandon the buffer
+// must not proceed when this returns a command.
+func (p *Plugin) persistDirtyEditor() tea.Cmd {
 	if !p.editorDirty || p.editorNote == nil || p.store == nil {
-		return
+		return nil
 	}
-	if err := p.store.UpdateContent(p.editorNote.ID, p.editorTextarea.Value()); err != nil {
-		return
+	content := p.editorTextarea.Value()
+	if err := p.store.UpdateContent(p.editorNote.ID, content); err != nil {
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Error("notes: persist dirty editor failed", "error", err)
+		}
+		return showSaveFailedToast(err)
 	}
+	p.editorNote.Content = content
 	p.editorDirty = false
-	// Retire the pending autosave tick; its content is now the older copy.
 	p.autoSaveID++
+	return nil
 }
 
 // openInExternalEditor opens the current note in $EDITOR. This is the one notes
@@ -1507,7 +1561,9 @@ func (p *Plugin) openInExternalEditor() tea.Cmd {
 		return nil
 	}
 
-	p.flushPendingEditorSave()
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		return cmd
+	}
 
 	// Get path to note file (creates temp file with note content)
 	notePath := p.store.NotePath(note.ID)
@@ -1606,7 +1662,9 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.searchQuery = ""
 				p.filteredNotes = nil
 				p.scrollOff = 0
-				p.loadNoteIntoEditor()
+				if cmd := p.loadNoteIntoEditor(); cmd != nil {
+					return p, cmd
+				}
 				p.activePane = PaneEditor
 				if p.viewFilter != FilterActive {
 					p.previewMode = true
@@ -1634,7 +1692,9 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.searchQuery = ""
 				p.filteredNotes = nil
 				p.scrollOff = 0
-				p.loadNoteIntoEditor()
+				if cmd := p.loadNoteIntoEditor(); cmd != nil {
+					return p, cmd
+				}
 				p.activePane = PaneEditor
 				if p.viewFilter != FilterActive {
 					p.previewMode = true
@@ -1784,6 +1844,9 @@ func (p *Plugin) createNote() tea.Cmd {
 // createNoteWithTitle returns a command that creates a new note with the given title.
 // The title becomes the first line of the note content.
 func (p *Plugin) createNoteWithTitle(title string) tea.Cmd {
+	if cmd := p.persistDirtyEditor(); cmd != nil {
+		return cmd
+	}
 	if p.store == nil {
 		return nil
 	}
@@ -2096,6 +2159,31 @@ func (p *Plugin) loadNotes() tea.Cmd {
 // showSavedToast shows a toast notification for note save.
 func showSavedToast() tea.Cmd {
 	return msg.ShowToast("Saved", 2*time.Second)
+}
+
+func showSaveFailedToast(err error) tea.Cmd {
+	text := "Save failed"
+	if err != nil {
+		text = "Save failed: " + err.Error()
+	}
+	return func() tea.Msg {
+		return msg.ToastMsg{
+			Message:  text,
+			Duration: 4 * time.Second,
+			IsError:  true,
+		}
+	}
+}
+
+// switchViewFilter persists a dirty buffer, then swaps the list filter.
+func (p *Plugin) switchViewFilter(filter NoteFilter) tea.Cmd {
+	if cmd := p.abandonEditor(); cmd != nil {
+		return cmd
+	}
+	p.viewFilter = filter
+	p.cursor = 0
+	p.scrollOff = 0
+	return p.loadNotes()
 }
 
 // showRestoredToast shows a toast notification for undo/restore.
