@@ -547,10 +547,13 @@
    the terminal. The two numbers are the whole point — they say this has been
    built for a while. */
 .milestone {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 9px 15px 10px;
+  gap: 13px;
+  padding: 11px 18px 12px;
   border: 1px solid var(--sc-line-2);
   background: linear-gradient(
     100deg,
@@ -560,6 +563,65 @@
   color: var(--sc-text);
   text-decoration: none;
   transition: border-color 180ms ease, transform 180ms ease;
+}
+
+/* Two soft accent spotlights sweeping behind the text on different periods, so
+   the badge never repeats the same frame. Bright enough to catch the eye at the
+   edge of vision, soft enough that the words never fight them. */
+.milestone::before,
+.milestone::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 50%;
+  translate: 0 -50%;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--sc-accent) 85%, transparent),
+    transparent 68%
+  );
+}
+
+.milestone::before {
+  width: 150px;
+  height: 150px;
+  left: -46px;
+  filter: blur(19px);
+  animation: spotA 9s ease-in-out infinite;
+}
+
+.milestone::after {
+  width: 112px;
+  height: 112px;
+  right: -34px;
+  filter: blur(16px);
+  animation: spotB 12.5s ease-in-out infinite;
+}
+
+@keyframes spotA {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.18;
+  }
+  50% {
+    transform: translateX(235px);
+    opacity: 0.46;
+  }
+}
+
+@keyframes spotB {
+  0%,
+  100% {
+    transform: translateX(0);
+    opacity: 0.4;
+  }
+  50% {
+    transform: translateX(-250px);
+    opacity: 0.14;
+  }
 }
 
 .milestone:hover {
@@ -576,12 +638,12 @@
 }
 
 .milestone strong {
-  font: 600 13.5px/1.15 var(--sc-display);
-  letter-spacing: -0.01em;
+  font: 600 15.5px/1.15 var(--sc-display);
+  letter-spacing: -0.012em;
 }
 
 .milestoneMeta {
-  font: 400 12px/1.15 var(--sc-display);
+  font: 400 13.5px/1.15 var(--sc-display);
   color: var(--sc-text-3);
 }
 
@@ -589,10 +651,11 @@
 .milestoneMark {
   position: relative;
   flex: none;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: var(--sc-accent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--sc-accent) 55%, transparent);
 }
 
 .milestoneMark::after {
@@ -647,7 +710,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .shimmer > span,
-  .milestoneMark::after {
+  .milestoneMark::after,
+  .milestone::before,
+  .milestone::after {
     animation: none;
   }
 }
