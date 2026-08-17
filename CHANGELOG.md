@@ -4,6 +4,23 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.0.2] - 2026-08-17
+
+### Bug Fixes
+
+- **A failed update now says why.** The failure modal rendered only the error,
+  truncated to a single line, and discarded the failing command's output
+  entirely — so a failed `go install` showed the command and nothing else, with
+  even `exit status 1` cut off. A toolchain error, a network failure, and a
+  checksum mismatch were indistinguishable. The modal now shows the error plus
+  the tail of the command's output, where the compiler or toolchain message
+  lives, wrapped to the modal width rather than truncated.
+
+  Note for anyone updating from v1.0.0: the `go install` environment fix in
+  v1.0.1 is run *by* the newer binary, so the v1.0.0 → v1.0.1 update could still
+  fail. Install v1.0.1 or later once by hand and automated updates work from
+  there on.
+
 ## [v1.0.1] - 2026-08-17
 
 A performance and install-reliability patch on top of 1.0, plus a smoother
