@@ -222,14 +222,6 @@ func (m *Model) currentPreviewOwnership() uint64 {
 	return lease.generation
 }
 
-func (m *Model) ownsPreviewOwnership(generation uint64) bool {
-	release, ok := m.acquirePreviewOwnership(generation)
-	if ok {
-		release()
-	}
-	return ok
-}
-
 func (m *Model) ensurePreviewOwnership() *previewOwnershipLease {
 	if m.previewOwnership == nil {
 		m.previewOwnership = &previewOwnershipLease{}
