@@ -82,6 +82,31 @@ func TestOverview_WorktreeRenameRepaintsSharedCatalog(t *testing.T) {
 	}
 }
 
+func TestOverview_ShellRenameRepaintsSharedCatalog(t *testing.T) {
+	path := workspaceinventory.CanonicalPath(t.TempDir())
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "sidecar", Path: path}}
+	key := projectKey(m.projects[0])
+	workspace := workspaceinventory.Workspace{
+		ID: key + ":shell:sidecar-sh-sidecar-1", ProjectKey: key, ProjectName: "sidecar",
+		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-1", Name: "stale shell",
+	}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{workspace}}
+	m.syncBoard()
+
+	m.handleUIRequest(uirequest.Request{
+		Action: uirequest.ActionRenameShell,
+		Origin: uirequest.Origin{TmuxSession: "sidecar-sh-sidecar-1"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindShell, Value: "active task context"},
+	})
+	if got := m.results[key].Workspaces[0].Name; got != "active task context" {
+		t.Fatalf("result name = %q", got)
+	}
+	if got := m.catalog[workspace.ID].Name; got != "active task context" {
+		t.Fatalf("catalog name = %q", got)
+	}
+}
+
 func TestOverview_PendingDiffLastWriteWins(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

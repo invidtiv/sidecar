@@ -28,6 +28,10 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		m.applyWorktreeRenameRequest(req)
 		return nil
 	}
+	if req.Action == uirequest.ActionRenameShell {
+		m.applyShellRenameRequest(req)
+		return nil
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -136,6 +140,30 @@ func (m *Model) applyWorktreeRenameRequest(req uirequest.Request) {
 		for i := range result.Workspaces {
 			workspace := &result.Workspaces[i]
 			if workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == targetPath {
+				workspace.Name = req.Target.Value
+				resultChanged = true
+			}
+		}
+		if resultChanged {
+			m.results[key] = result
+			changed = true
+		}
+	}
+	if changed {
+		m.syncBoard()
+	}
+}
+
+func (m *Model) applyShellRenameRequest(req uirequest.Request) {
+	if req.Target.Kind != uirequest.TargetKindShell || req.Origin.TmuxSession == "" || req.Target.Value == "" {
+		return
+	}
+	changed := false
+	for key, result := range m.results {
+		resultChanged := false
+		for i := range result.Workspaces {
+			workspace := &result.Workspaces[i]
+			if workspace.TmuxName == req.Origin.TmuxSession {
 				workspace.Name = req.Target.Value
 				resultChanged = true
 			}

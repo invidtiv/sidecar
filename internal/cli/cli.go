@@ -235,7 +235,25 @@ func lookupCurrentShellName(ctx context.Context, stateDir string, identity shell
 
 func renameCurrentShell(ctx context.Context, stateDir string, identity shellIdentity, name string) (shellstate.RenameResult, error) {
 	if strings.HasPrefix(identity.session, "sidecar-sh-") {
-		return shellstate.RenameCurrent(stateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+		result, err := shellstate.RenameCurrent(stateDir, shellstate.RenameRequest{TmuxName: identity.session, Namespace: identity.socket, Name: name})
+		if err != nil {
+			return shellstate.RenameResult{}, err
+		}
+		if result.Changed {
+			origin, _ := shellstate.LookupOrigin(stateDir, shellstate.Identity{TmuxName: identity.session, Namespace: identity.socket})
+			_, _ = uirequest.WriteRequest(stateDir, uirequest.Request{
+				Action: uirequest.ActionRenameShell,
+				Origin: uirequest.Origin{
+					TmuxSession: identity.session,
+					Namespace:   identity.socket,
+					ProjectKey:  origin.ProjectKey,
+					WorkDir:     origin.WorkDir,
+					PID:         os.Getpid(),
+				},
+				Target: uirequest.Target{Kind: uirequest.TargetKindShell, Value: result.Name},
+			})
+		}
+		return result, nil
 	}
 	projectRoot, worktreeRoot, err := currentManagedWorktree(ctx, stateDir, identity)
 	if err != nil {

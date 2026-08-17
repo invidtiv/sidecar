@@ -92,6 +92,32 @@ func TestUIRequests_WorktreeRenameRepaintsLiveList(t *testing.T) {
 	}
 }
 
+func TestUIRequests_ShellRenameRepaintsLiveList(t *testing.T) {
+	p := &Plugin{
+		shells: []*ShellSession{{Name: "Shell 1", TmuxName: "sidecar-sh-sidecar-1"}},
+		nestedByWorkDir: map[string][]*ShellSession{
+			"/tmp/other": {{Name: "Nested 1", TmuxName: "sidecar-sh-sidecar-2"}},
+		},
+	}
+	p.handleUIRequest(uirequest.Request{
+		Action: uirequest.ActionRenameShell,
+		Origin: uirequest.Origin{TmuxSession: "sidecar-sh-sidecar-1"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindShell, Value: "active task"},
+	})
+	if got := p.shells[0].Name; got != "active task" {
+		t.Fatalf("live shell name = %q", got)
+	}
+
+	p.handleUIRequest(uirequest.Request{
+		Action: uirequest.ActionRenameShell,
+		Origin: uirequest.Origin{TmuxSession: "sidecar-sh-sidecar-2"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindShell, Value: "nested task"},
+	})
+	if got := p.nestedByWorkDir["/tmp/other"][0].Name; got != "nested task" {
+		t.Fatalf("nested shell name = %q", got)
+	}
+}
+
 func TestUIRequests_RefusedInteractiveSplitEmitsNoGeometryAssertion(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

@@ -31,6 +31,10 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		p.applyWorktreeRenameRequest(req)
 		return nil
 	}
+	if req.Action == uirequest.ActionRenameShell {
+		p.applyShellRenameRequest(req)
+		return nil
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -91,6 +95,28 @@ func (p *Plugin) applyWorktreeRenameRequest(req uirequest.Request) {
 		if sameCanonicalPath(wt.Path, req.Origin.WorkDir) {
 			wt.Name = req.Target.Value
 			return
+		}
+	}
+}
+
+func (p *Plugin) applyShellRenameRequest(req uirequest.Request) {
+	if req.Target.Kind != uirequest.TargetKindShell || req.Origin.TmuxSession == "" || req.Target.Value == "" {
+		return
+	}
+	for _, shell := range p.shells {
+		if shell.TmuxName == req.Origin.TmuxSession {
+			shell.Name = req.Target.Value
+			p.saveSelectionState()
+			return
+		}
+	}
+	for _, shells := range p.nestedByWorkDir {
+		for _, shell := range shells {
+			if shell.TmuxName == req.Origin.TmuxSession {
+				shell.Name = req.Target.Value
+				p.saveSelectionState()
+				return
+			}
 		}
 	}
 }

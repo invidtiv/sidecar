@@ -8,6 +8,7 @@ type Action string
 const (
 	ActionOpen           Action = "open"
 	ActionRenameWorktree Action = "rename-worktree"
+	ActionRenameShell    Action = "rename-shell"
 )
 
 // TargetKind identifies the type of object affected by a UI request.
@@ -18,6 +19,7 @@ const (
 	TargetKindIssue    TargetKind = "issue"
 	TargetKindDiff     TargetKind = "diff"
 	TargetKindWorktree TargetKind = "worktree"
+	TargetKindShell    TargetKind = "shell"
 )
 
 // Status describes the host's response to a UI request.

@@ -64,6 +64,26 @@ func TestRunRenameJSONSteelThread(t *testing.T) {
 	if !result.Changed || result.OldName != "stale" || result.Name != "current work" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
+	stateDir := filepath.Join(stateHome, "sidecar")
+	entries, err := os.ReadDir(filepath.Join(stateDir, "requests"))
+	if err != nil {
+		t.Fatalf("read repaint requests: %v", err)
+	}
+	var repaint uirequest.Request
+	found := false
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-rename-shell.json") {
+			continue
+		}
+		repaint, err = uirequest.ReadRequest(filepath.Join(stateDir, "requests", entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		found = true
+	}
+	if !found || repaint.Action != uirequest.ActionRenameShell || repaint.Origin.TmuxSession != "sidecar-sh-sidecar-1" || repaint.Target.Value != "current work" {
+		t.Fatalf("repaint request = %+v", repaint)
+	}
 }
 
 func TestRunNameSteelThread(t *testing.T) {

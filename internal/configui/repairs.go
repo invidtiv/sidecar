@@ -282,7 +282,7 @@ func (m *Model) buildAgentRepair(b *paneBuilder) {
 	}
 
 	if result.OK {
-		b.text(Body(fileName + " already points agents at `sidecar agents` for " + name + "."))
+		b.text(Body(fileName + " already points agents at `sidecar --agents` for " + name + "."))
 		b.note("Nothing needs to change. Open the file if you want to read or extend it.")
 	} else {
 		b.text(Warning("Needs attention"))
@@ -355,7 +355,7 @@ func (m *Model) reviewAgentInstructions(path, fileName string) {
 			IndentedMuted("frontmatter and the file's own heading. Nothing else is changed."),
 		},
 		footer: []string{
-			Muted("`sidecar agents` stays the single source of current guidance, so the file points at it."),
+			Muted("`sidecar --agents` stays the single source of current guidance, so the file points at it."),
 		},
 		apply: func(m *Model) tea.Cmd {
 			return tea.Batch(writeAgentInstructionsCmd(path), m.Recheck())

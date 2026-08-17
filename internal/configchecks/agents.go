@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// AgentInstructionLine is the entire recommended addition. `sidecar agents` is
+// AgentInstructionLine is the entire recommended addition. `sidecar --agents` is
 // the canonical, always-current reference, so the project file points at it
 // rather than duplicating guidance that would go stale in every repository that
 // copied it.
-const AgentInstructionLine = "For Sidecar capabilities, run sidecar agents."
+const AgentInstructionLine = "Always check if you are running in Sidecar: run sidecar --agents for capabilities."
 
 // agentInstructionMarkers are what detection looks for. They match any phrasing
 // that already sends an agent to the command — including the `--agents` flag
@@ -47,7 +47,7 @@ func AgentInstructionsFile(env Env, dir string) string {
 }
 
 // HasAgentInstructions reports whether a file already points agents at
-// `sidecar agents`.
+// `sidecar --agents`.
 func HasAgentInstructions(env Env, path string) bool {
 	env = env.withDefaults()
 	content, err := env.ReadFile(path)
@@ -163,7 +163,7 @@ func checkAgentInstructions(in Input) Result {
 	if HasAgentInstructions(env, path) {
 		result.OK = true
 		result.Summary = base + " connected"
-		result.Evidence = []string{path + " already points agents at `sidecar agents`."}
+		result.Evidence = []string{path + " already points agents at `sidecar --agents`."}
 		result.Badge = BadgeOpen
 		return result
 	}
@@ -172,7 +172,7 @@ func checkAgentInstructions(in Input) Result {
 		result.Evidence = []string{"No AGENTS.md or CLAUDE.md in " + in.ProjectDir + "."}
 	} else {
 		result.Summary = base + " needs Sidecar guidance"
-		result.Evidence = []string{path + " does not mention `sidecar agents`."}
+		result.Evidence = []string{path + " does not mention `sidecar --agents`."}
 	}
 	result.Action = "Connect agent instructions"
 	result.ActionDetail = "Add one line so agents can self-serve Sidecar guidance"

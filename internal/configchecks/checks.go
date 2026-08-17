@@ -31,7 +31,7 @@ const (
 	// CheckTerminalColors is 24-bit color capability.
 	CheckTerminalColors ID = "terminal-colors"
 	// CheckAgentInstructions is whether the active project's agent file points
-	// agents at `sidecar agents`.
+	// agents at `sidecar --agents`.
 	CheckAgentInstructions ID = "agent-instructions"
 	// CheckConfiguration is whether the config file on disk still reads.
 	CheckConfiguration ID = "configuration"
