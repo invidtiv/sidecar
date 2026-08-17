@@ -1,8 +1,37 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 1 shipped (2026-08-17) — later phases still open
+**Status:** Phase 1 implemented on `notes-overhaul`; review changes requested — Phase 2 blocked
 **Created:** 2026-08-17
-**Phase 1:** td-71789d (`e312ddd4`, `055d9f7e`, `cc907480`)
+**Phase 1:** td-71789d (`e312ddd4`, `055d9f7e`, `cc907480`); blocker td-244d0b
+
+## Implementation status (reviewed 2026-08-17)
+
+Phase 1 is present on the `notes-overhaul` worktree at implementation head `e983d041`,
+but it is not on `main` and is not approved for merge yet. Review confirmed the title,
+paste, Unicode search/backspace, stale-epoch, task-error, secure-temp-file, shared-layout,
+place-carry, no-renderer-swap, scrollbar, and wheel changes through code inspection and
+`go test ./internal/plugins/notes/`. An isolated `tmux-drive.sh` pass also confirmed the
+wide and narrow Notes surfaces without touching the default tmux server or live Sidecar
+state.
+
+One Phase 1 data-loss blocker remains, so td-71789d has been reopened:
+
+- **td-244d0b — dirty built-in edits can be lost.** `AutoSaveTickMsg` saves only while
+  the editor pane owns focus. Type, press `Tab` before the one-second debounce, and the
+  tick is ignored; note/filter/project transitions can then replace the textarea and
+  clear `editorDirty`. The isolated proof showed the new text in Sidecar while
+  `td note show` still returned the old body after the tick. An older in-flight save can
+  also clear `editorDirty` after newer typing because `NoteContentSavedMsg` carries no
+  note/buffer generation. Fix both ownership paths, surface save failures, and cover
+  leave-before-debounce, navigation-before-debounce, and overlapping-save tests before
+  closing Phase 1.
+
+**Phase 2 gate:** not green yet. Close and independently review td-244d0b, sync the
+worktree's one dependency-only commit from `main`, then rerun the focused and integrated
+gates. The remaining preview-wrap mismatch is Phase 2 work rather than a reason to widen
+the save fix: with the shared line-wrap preference off, raw preview truncates while the
+textarea wraps, so the rendered/raw/edit transition still reflows long lines. Phase 2's
+mapping steel thread must choose one visual-row policy and add a real transition test.
 
 ## Goal
 
@@ -17,7 +46,10 @@ Rendered markdown and raw source cannot be visually identical; the contract is s
 geometry and place, not a pixel-identical mode switch. The tmux/$EDITOR path remains an
 explicit power-user escape hatch, not a second implementation of built-in editing behavior.
 
-## Where we are (findings from code exploration)
+## Baseline before Phase 1 (findings from code exploration)
+
+This section records the pre-implementation state that motivated the plan. The status
+section above is authoritative for what Phase 1 has already changed and what remains.
 
 The storage boundary is already in good shape and should remain td-owned: notes live in
 td's per-project SQLite through Sidecar's `store.go` adapter over `td/pkg/notes`, shared
@@ -281,7 +313,8 @@ exactly. Improve mechanics:
 
 Each phase is shippable alone and ordered so later phases build on earlier seams.
 
-1. **Correctness + one layout contract.** Fix paste persistence, rune-safe search/delete
+1. **Correctness + one layout contract — implemented, review blocked by td-244d0b.**
+   Fix paste persistence, rune-safe search/delete
    and truncation, title preservation, async staleness/capture, and user-visible task
    errors first. Introduce one layout value (wrap column, margins, content height,
    scrollbar) used by view and edit; carry cursor/scroll across the mode switch; mouse
@@ -335,7 +368,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 
 - Focused tests cover layout geometry, source↔render mapping, Unicode search/backspace,
   paste as one dirty/undo/debounce operation, selection across wraps and resize, stale
-  epochs, title preservation, and optimistic-update conflicts.
+  epochs, title preservation, autosave generation/transition ownership, and
+  optimistic-update conflicts.
 - `go test ./...` and `go build ./...` pass with `GOWORK=off` against the released td
   version as well as in the local workspace when §4 changes dependencies.
 - Real-app proof uses `./scripts/tmux-drive.sh paths` first and its isolated tmux socket

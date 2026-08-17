@@ -3,8 +3,10 @@ package notes
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -259,5 +261,44 @@ func TestPreviewHasNoGutter(t *testing.T) {
 	first := strings.Split(out, "\n")[0]
 	if strings.HasPrefix(strings.TrimLeft(first, " "), "1 ") {
 		t.Fatalf("preview still draws a line-number gutter: %q", first)
+	}
+}
+
+func TestEditorStatusHeaderKeepsSaveStateAtNarrowWidths(t *testing.T) {
+	p := layoutTestPlugin(t, "body")
+	p.editorNote.CreatedAt = time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC)
+	p.editorNote.UpdatedAt = p.editorNote.CreatedAt
+	p.previewMode = true
+
+	for _, width := range []int{12, 24, 40} {
+		got := p.renderEditorStatusHeader(width)
+		plain := ansi.Strip(got)
+		if !strings.Contains(plain, "Saved") {
+			t.Fatalf("width %d lost save state: %q", width, plain)
+		}
+		if gotWidth := ansi.StringWidth(got); gotWidth != width {
+			t.Fatalf("width %d rendered %d cells: %q", width, gotWidth, plain)
+		}
+	}
+
+	p.editorDirty = true
+	got := ansi.Strip(p.renderEditorStatusHeader(12))
+	if !strings.Contains(got, "Unsaved") {
+		t.Fatalf("narrow dirty header lost unsaved state: %q", got)
+	}
+}
+
+func TestNoteRowUnicodeTitleIsCellSafe(t *testing.T) {
+	p := layoutTestPlugin(t, "body")
+	note := Note{Title: strings.Repeat("世界", 40)}
+
+	for _, selected := range []bool{false, true} {
+		got := p.renderNoteRow(note, selected, 24)
+		if !utf8.ValidString(got) {
+			t.Fatalf("selected=%v produced invalid UTF-8: %q", selected, got)
+		}
+		if width := ansi.StringWidth(got); width > 24 {
+			t.Fatalf("selected=%v rendered %d cells, want <= 24: %q", selected, width, got)
+		}
 	}
 }

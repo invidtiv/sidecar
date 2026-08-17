@@ -376,19 +376,15 @@ func (p *Plugin) wrapEditorLine(line string, width int) []string {
 }
 
 // renderEditorStatusHeader renders the persistent status header line.
-// Left: save state indicator, Right: created/updated timestamps
-// Uses lipgloss.PlaceHorizontal for proper width handling with styled strings.
+// Left: save state indicator, Right: created/updated timestamps. Timestamp
+// detail degrades before the actionable save state when the pane narrows.
 func (p *Plugin) renderEditorStatusHeader(width int) string {
 	if p.editorNote == nil {
 		return ""
 	}
-
-	// Right side: timestamps (never truncated)
-	createdStr := p.editorNote.CreatedAt.Format("Jan 2, 2006")
-	updatedStr := p.editorNote.UpdatedAt.Format("Jan 2, 2006")
-	rightText := fmt.Sprintf("Created: %s | Updated: %s", createdStr, updatedStr)
-	rightPart := styles.Muted.Render(rightText)
-	rightWidth := lipgloss.Width(rightPart)
+	if width <= 0 {
+		return ""
+	}
 
 	// Left side: save state + optional preview indicator
 	var leftText string
@@ -401,57 +397,30 @@ func (p *Plugin) renderEditorStatusHeader(width int) string {
 		leftText += " [preview]"
 	}
 
-	// Calculate available space for left part (minimum 1 space between)
-	minSpacer := 1
-	maxLeftWidth := width - rightWidth - minSpacer
-	if maxLeftWidth < 0 {
-		maxLeftWidth = 0
-	}
-
-	// Truncate left part if needed
-	leftRunes := []rune(leftText)
-	if len(leftRunes) > maxLeftWidth {
-		if maxLeftWidth > 3 {
-			leftText = string(leftRunes[:maxLeftWidth-3]) + "..."
-		} else if maxLeftWidth > 0 {
-			leftText = string(leftRunes[:maxLeftWidth])
-		} else {
-			leftText = ""
-		}
-	}
-
-	// Render left part with appropriate style
-	var leftPart string
+	leftText = ansi.Truncate(leftText, width, "...")
+	leftPart := styles.Muted.Render(leftText)
 	if p.editorDirty {
-		// Re-apply styling after truncation
-		if strings.HasPrefix(leftText, "Unsaved") {
-			leftPart = styles.StatusModified.Render(leftText)
-		} else {
-			leftPart = styles.Muted.Render(leftText)
-		}
-	} else {
-		leftPart = styles.Muted.Render(leftText)
+		leftPart = styles.StatusModified.Render(leftText)
 	}
-
-	// Use lipgloss.PlaceHorizontal to properly position the right part,
-	// ensuring correct width handling with ANSI-styled strings.
-	// This avoids manual spacer calculation which can have off-by-one errors.
-	if width <= 0 {
-		return ""
-	}
-	rightAligned := lipgloss.PlaceHorizontal(width, lipgloss.Right, rightPart)
-
-	// Overlay the left part at the beginning of the right-aligned line.
-	// PlaceHorizontal pads with spaces, so we replace the leading spaces with our left content.
 	leftWidth := lipgloss.Width(leftPart)
-	rightRunes := []rune(rightAligned)
-	if leftWidth > 0 && leftWidth < len(rightRunes) {
-		// Replace the first leftWidth runes (spaces) with our styled left part
-		result := leftPart + string(rightRunes[leftWidth:])
-		return result
+
+	createdStr := p.editorNote.CreatedAt.Format("Jan 2, 2006")
+	updatedStr := p.editorNote.UpdatedAt.Format("Jan 2, 2006")
+	rightCandidates := []string{
+		fmt.Sprintf("Created: %s | Updated: %s", createdStr, updatedStr),
+		fmt.Sprintf("Updated: %s", updatedStr),
+	}
+	for _, rightText := range rightCandidates {
+		rightPart := styles.Muted.Render(rightText)
+		rightWidth := lipgloss.Width(rightPart)
+		if leftWidth+1+rightWidth > width {
+			continue
+		}
+		return leftPart + strings.Repeat(" ", width-leftWidth-rightWidth) + rightPart
 	}
 
-	return rightAligned
+	// Save state is actionable; retain it when timestamp metadata cannot fit.
+	return padToWidth(leftPart, width)
 }
 
 // renderEditorPlaceholder shows when no note is selected.
@@ -622,15 +591,13 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		}
 	}
 
-	// Truncate title to max length
-	if len(title) > maxTitleLength {
-		title = title[:maxTitleLength-3] + "..."
+	// Truncate by terminal cells; byte slicing can split Unicode titles.
+	if ansi.StringWidth(title) > maxTitleLength {
+		title = ansi.Truncate(title, maxTitleLength, "...")
 	}
 
-	// Truncate title if needed (rune-safe)
-	runes := []rune(title)
-	if len(runes) > titleWidth {
-		title = string(runes[:titleWidth-3]) + "..."
+	if ansi.StringWidth(title) > titleWidth {
+		title = ansi.Truncate(title, titleWidth, "...")
 	}
 
 	// Style based on selection
@@ -650,10 +617,7 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		}
 		plainRow += title
 
-		// Pad to full width for proper background
-		if len(plainRow) < maxWidth {
-			plainRow += strings.Repeat(" ", maxWidth-len(plainRow))
-		}
+		plainRow = padToWidth(plainRow, maxWidth)
 		return styles.ListItemSelected.Render(plainRow)
 	}
 
