@@ -4,16 +4,100 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.0.0] - 2026-08-17
+
+Sidecar 1.0. The surfaces that were converging over the 0.9x series — the
+project workspace and the global Sessions browser, the pane frame under both,
+the CLI agents reach Sidecar through — are now one model with one set of rules,
+and the configuration you needed a text editor for lives in the app.
+
+### Features
+
+- **Configuration, in the app.** A full Configuration surface with its own
+  chrome, navigation, and search: Sidecar Setup, Diagnostics, Appearance,
+  Projects, Workspaces, Agents, Terminal, Panels & Integrations, Advanced, and
+  About. Readiness checks sit behind Setup and Diagnostics, each with a focused
+  repair. Controls are real dropdowns rather than values that cycle, the theme
+  picker previews live, and startup recovery routes a broken install to the page
+  that fixes it.
+- **Themes unified.** Sidecar Modern is the default, alongside 20 curated
+  palettes. The theme system is one registry the app, the picker, and the
+  website all read.
+- **Global Workspaces reaches parity with the project view.** Create project
+  shells and worktrees from the global browser, delete and merge from it, reveal
+  from it, and get the same launch lifecycle, shell-liveness handling, and
+  refusal rules. Both sidebars share one header (`[sort] [+]`), one age
+  formatter, and a sort — by activity, recency, or name — that is remembered per
+  project and reachable from the keyboard with `v`.
+- **One pane frame under both surfaces.** `internal/panelayout` and
+  `internal/paneframe` own pane structure, geometry, chrome, borders, the
+  compositor, and hit regions; each surface binds to them in a single file. Drag
+  handles work on every resizable split, live panes debounce their resize until
+  the divider drops, and a unified focus ring follows the pointer and takes the
+  keyboard.
+- **Panes hold content, not modes.** Diff, Task, issue, and file leaves open
+  beside the live terminal instead of replacing it, each with its own tab strip:
+  click a tab, `{` / `}` to cycle, `x` to close. Project tabs persist per
+  terminal surface; global tabs stay in memory for the selected row.
+- **`sidecar open` works from anywhere.** Outside a Sidecar shell, against the
+  workspace root, for multiple requests in one run, and into a Diff leaf
+  (`--diff`, or by clicking an underlined git hash or range). It reports when an
+  open was retargeted into an existing pane. `sidecar --agents` documents the
+  whole surface for agents.
+- **Live panes refresh themselves.** `internal/livewatch` keeps issue, document,
+  and diff panes current without a keypress.
+- **The file finder and project search moved into shared packages** and are now
+  available inside workspace file panes, sized to the widths a real pane gives
+  them.
+- **Diff viewing grew up:** an extracted `workspacediff` viewer with its own keys
+  and paging, commit-as-root tabs, section line totals, and a total commit count
+  in Git.
+- **Conversations gained a Grok adapter** for sessions and resume.
+- **Notes runs on td's public `pkg/notes` API** rather than its own database
+  handling.
+- **A new homepage.** The marketing site is rebuilt around the app it is
+  selling, with Sidecar's real chrome re-created as browser components and all
+  21 themes live from the same data the binary uses.
+
 ### Changed
 
 - Create New Worktree is a stable form: type a natural name, press Enter. Base
   branch, task, and agent are one-line Combo fields that overlay instead of
-  stretching the modal. Git uses a slug of the display name.
+  stretching the modal. Git uses a slug of the display name, kept separate from
+  the display name you typed.
+- The header's hierarchy was redesigned, and cycling now works across the whole
+  header.
+- Inertial wheel scrolling has exact boundary answers on every surface and every
+  modal kind, instead of forwarding past the edge.
+
+### Bug Fixes
+
+- Worktree tmux sessions key on path identity, so renaming a worktree no longer
+  strands its session.
+- Workspace terminal ownership is synchronized, closing a race that let a stale
+  pane paint over a live one.
+- Shell liveness is hardened against resurrection and wedged tmux.
+- Clicked git specs resolve so a click and the CLI land on the same tab.
+- Stale full-file paint is cleared on scope and file change; Diff tabs repaint
+  through the host adapter.
+- Files keeps its preview modes when closing tabs for a path, and closes the
+  right ones.
+- Worktree removal has one path, with force as an explicit caller intent, and
+  probe deadlines are deterministic.
 
 ### Removed
 
 - Prompt templates and the prompt picker. Task-linked agent launch still injects
   task context automatically.
+- The worktree Output / Diff / Task tab row. Diff and Task are header action
+  chips that insert a leaf; `d`, the chip, and `sidecar open --diff` are the
+  paths into Diff.
+- Link Task from the Create Worktree modal.
+
+### Dependencies
+
+- `github.com/marcus/td` v0.58.0 (public `pkg/notes` API)
+- `github.com/marcus/tasks` v1.8.3
 
 ## [v0.99.1] - 2026-08-14
 
