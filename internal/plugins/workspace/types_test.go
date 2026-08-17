@@ -207,10 +207,16 @@ func TestFormatRelativeTime(t *testing.T) {
 			t.Errorf("at %s: project sidebar says %q, global list says %q", age, got, want)
 		}
 	}
-	// The seconds count is the point: a workspace that just moved should say so
-	// rather than flattening into "now" for a whole minute.
-	if got := formatRelativeTime(time.Now().Add(-42 * time.Second)); got != "42s" {
-		t.Errorf("42s ago = %q, want %q", got, "42s")
+	// Sub-minute ages read "now" on this surface too. A live seconds countdown
+	// advertised precision the underlying last-interaction data does not have,
+	// and redrew every row that had just moved once a second.
+	for _, age := range []time.Duration{0, 42 * time.Second, 59 * time.Second} {
+		if got := formatRelativeTime(time.Now().Add(-age)); got != "now" {
+			t.Errorf("%s ago = %q, want %q", age, got, "now")
+		}
+	}
+	if got := formatRelativeTime(time.Now().Add(-90 * time.Second)); got != "1m" {
+		t.Errorf("90s ago = %q, want %q", got, "1m")
 	}
 }
 

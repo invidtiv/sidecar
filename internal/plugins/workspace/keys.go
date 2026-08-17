@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -14,6 +13,8 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 // handleKeyPress processes key input based on current view mode.
@@ -266,30 +267,11 @@ func (p *Plugin) executeAgentChoice() tea.Cmd {
 
 // handleConfirmDeleteKeys handles keys in delete confirmation modal.
 func (p *Plugin) handleConfirmDeleteKeys(msg tea.KeyPressMsg) tea.Cmd {
-	p.ensureConfirmDeleteModal()
-	if p.deleteConfirmModal == nil {
-		return nil
-	}
-
-	switch msg.String() {
-	case "D":
-		// Power user shortcut - immediate confirm
-		return p.executeDelete()
-	case "esc", "q":
+	outcome, cmd := p.deleteConfirm.HandleKey(p.width, msg)
+	switch outcome {
+	case worktreedelete.OutcomeCancel:
 		return p.cancelDelete()
-	case "j", "down", "l", "right":
-		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
-		return nil
-	case "k", "up", "h", "left":
-		p.deleteConfirmModal.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
-		return nil
-	}
-
-	action, cmd := p.deleteConfirmModal.HandleKey(msg)
-	switch action {
-	case "cancel", deleteConfirmCancelID:
-		return p.cancelDelete()
-	case deleteConfirmDeleteID:
+	case worktreedelete.OutcomeConfirm:
 		return p.executeDelete()
 	}
 	return cmd
@@ -307,16 +289,19 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	path := wt.Path
 	branch := wt.Branch
 	isMissing := wt.IsMissing
-	deleteLocal := p.deleteLocalBranchOpt
-	deleteRemote := p.deleteRemoteBranchOpt && p.deleteHasRemote
+	deleteLocal := p.deleteConfirm.DeleteLocal
+	deleteRemote := p.deleteConfirm.DeleteRemoteBranch()
 	workDir := p.ctx.WorkDir
+	// The owning project, not the current worktree: it is the project's
+	// shells.json that records the shells rooted in the worktree being deleted.
+	projectRoot := p.ctx.ProjectRoot
 	ctx, scope := p.newLifecycleScope(wt)
 
-	// Kill tmux session if it exists (before deleting worktree)
+	// The kill itself belongs to the shared delete path (workspaceops.
+	// DeleteWorktree kills the session before it removes the directory), so
+	// this surface only drops the state that is its own: the managed-session
+	// record and the cached pane.
 	sessionName := worktreeTmuxSession(wt)
-	if sessionExists(sessionName) {
-		_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
-	}
 	delete(p.managedSessions, sessionName)
 	globalPaneCache.remove(sessionName)
 
@@ -330,22 +315,35 @@ func (p *Plugin) executeDelete() tea.Cmd {
 	return func() tea.Msg {
 		var warnings []string
 
-		// Delete the worktree first
-		err := doDeleteWorktreeContext(ctx, workDir, path, isMissing)
+		// The branch tip is pinned before anything is removed, so the branch
+		// deleted below is the one this confirmation referred to.
+		branchOID := workspaceops.BranchOID(ctx, workDir, branch)
+
+		// Delete the worktree first. Force is stated here and nowhere else:
+		// the person reading "Uncommitted changes will be lost" chose Delete.
+		// See workspaceops.WorktreeRemoval.Force.
+		err := doDeleteWorktreeContext(ctx, workspaceops.WorktreeRemoval{
+			RepoPath: workDir, ProjectRoot: projectRoot,
+			Path: path, Branch: branch, Missing: isMissing, Force: true,
+		})
 		if err != nil {
 			return DeleteDoneMsg{OperationScope: scope, Name: name, Err: err}
 		}
 
 		// Delete local branch if requested
 		if deleteLocal {
-			if branchErr := deleteBranchContext(ctx, workDir, branch); branchErr != nil {
+			if branchErr := deleteBranchContext(ctx, workspaceops.BranchDeletion{
+				RepoPath: workDir, Branch: branch, ExpectedOID: branchOID, Force: true,
+			}); branchErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Local branch: %v", branchErr))
 			}
 		}
 
 		// Delete remote branch if requested
 		if deleteRemote {
-			if remoteErr := deleteRemoteBranchCmdContext(ctx, workDir, branch); remoteErr != nil {
+			if remoteErr := deleteRemoteBranchCmdContext(ctx, workspaceops.BranchDeletion{
+				RepoPath: workDir, Branch: branch,
+			}); remoteErr != nil {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", remoteErr))
 			}
 		}
@@ -363,12 +361,7 @@ func (p *Plugin) cancelDelete() tea.Cmd {
 
 func (p *Plugin) clearConfirmDeleteModal() {
 	p.deleteConfirmWorktree = nil
-	p.deleteLocalBranchOpt = false
-	p.deleteRemoteBranchOpt = false
-	p.deleteHasRemote = false
-	p.deleteIsMainBranch = false
-	p.deleteConfirmModal = nil
-	p.deleteConfirmModalWidth = 0
+	p.deleteConfirm.Clear()
 }
 
 // handleConfirmDeleteShellKeys handles keys in the shell delete confirmation modal.
@@ -692,18 +685,17 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
-		p.deleteLocalBranchOpt = wt.IsMissing // Default ON when folder already gone
-		p.deleteRemoteBranchOpt = false
-		p.deleteHasRemote = false
-		p.deleteIsMainBranch = isMainBranch(p.ctx.WorkDir, wt.Branch)
-		p.deleteConfirmModal = nil
-		p.deleteConfirmModalWidth = 0
-		if p.deleteIsMainBranch {
-			// Main branch is protected: skip branch options
-			return nil
+		p.deleteConfirm.Open(worktreeDeleteTarget(wt), isMainBranch(p.ctx.WorkDir, wt.Branch))
+		// Dirtiness is asked for every target, protected branch or not: the
+		// warning about losing uncommitted work is what the confirmation is
+		// for, and it must not depend on which branch is checked out.
+		cmds := []tea.Cmd{p.checkWorktreeDirty(wt)}
+		if !p.deleteConfirm.IsMainBranch {
+			// Main branch is protected: it gets no branch options, so nothing
+			// asks about the remote.
+			cmds = append(cmds, p.checkRemoteBranch(wt))
 		}
-		// Check for remote branch existence asynchronously
-		return p.checkRemoteBranch(wt)
+		return tea.Batch(cmds...)
 	case "p":
 		if wt := p.selectedWorktree(); wt != nil {
 			if reason := WorktreeActionRefusal(wt, WorktreeActionPush); reason != "" {

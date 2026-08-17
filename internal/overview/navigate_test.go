@@ -321,7 +321,7 @@ func TestGlobalBrowserListOffersSharedCreationMutations(t *testing.T) {
 	// The discoverable command set — what help and the palette offer for this
 	// tab — carries the same boundary as the keys below. rename-shell and
 	// rename-worktree are display-name writes, not create/destroy.
-	allowed := map[string]bool{"rename-shell": true, "rename-worktree": true, "open-in-git": true, "new-shell": true, "new-worktree": true, "delete-shell": true, "merge-workflow": true}
+	allowed := map[string]bool{"rename-shell": true, "rename-worktree": true, "open-in-git": true, "new-shell": true, "new-worktree": true, "delete-shell": true, "delete-worktree": true, "merge-workflow": true}
 	var registered int
 	for _, binding := range keymap.DefaultBindings() {
 		if binding.Context != "global-workspaces" && binding.Context != "global-workspaces-filter" {
@@ -343,8 +343,11 @@ func TestGlobalBrowserListOffersSharedCreationMutations(t *testing.T) {
 
 	// The project plugin's mutating keys are not the browser's to answer.
 	// R on a worktree or shell is a display-name write (tested separately).
+	// D is answered — it acts on the selection's kind, raising the shared
+	// worktree confirmation or the shell one (td-2af16d), and is proved in
+	// delete_worktree_test.go.
 	before := m.workspaces.SelectedID()
-	for _, k := range []string{"D", "a", "c", "x", "N"} {
+	for _, k := range []string{"a", "c", "x", "N"} {
 		if handled, cmd := m.WorkspacesKey(key(k)); handled {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/shellliveness"
 )
 
 // HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
@@ -75,15 +76,16 @@ func SetSessionEnv(sessionName, key, value string) error {
 }
 
 // IsSessionDeadError checks if an error indicates the tmux session/pane is gone.
+//
+// The list this used to carry omitted the one message tmux actually prints when
+// a whole session is gone — "can't find session: NAME" — so a shell the user
+// exited kept its embedded terminal polling a target that would never answer,
+// and the mode never ended (td-6a4100). The vocabulary now lives with the rest
+// of the tmux-evidence rules in internal/shellliveness, and it deliberately
+// still refuses server-wide failures like "no server running": those say
+// nothing about one session.
 func IsSessionDeadError(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return strings.Contains(errStr, "can't find pane") ||
-		strings.Contains(errStr, "no such session") ||
-		strings.Contains(errStr, "session not found") ||
-		strings.Contains(errStr, "pane not found")
+	return shellliveness.SuspectsDeathErr(err)
 }
 
 // SendKeyToTmux sends a key to a tmux pane using send-keys.

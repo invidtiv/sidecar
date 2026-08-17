@@ -539,3 +539,33 @@ func TestProjectListIsATableWithoutADetailBlock(t *testing.T) {
 		t.Fatalf("Edit Project did not open the form: %#v", m.Route())
 	}
 }
+
+// A project with no theme of its own inherits the global one, so its picker
+// must open on the theme the user is actually looking at. For a user who has
+// never opened Configuration there is no recorded global choice, and the naive
+// EntryForConfig answers "inherits from the level above" — a zero entry, which
+// puts the cursor on nothing. GlobalEntry resolves it to the fresh-install
+// theme instead.
+func TestProjectFormPickerOpensOnTheInheritedThemeWithNoRecordedChoice(t *testing.T) {
+	m, _, _ := projectFixture(t)
+	cfg := m.Config()
+	cfg.UI.Theme = config.ThemeConfig{}
+	m.SetHostState(HostState{Config: cfg, ProjectDir: m.host.ProjectDir, ProjectPath: m.host.ProjectPath})
+
+	m.OpenAddProject()
+	m.View(160, 45)
+	m.closeEditor()
+	m.toggleInlineThemePicker()
+	m.View(160, 45)
+
+	picker := m.activePicker()
+	if picker == nil {
+		t.Fatal("no picker after expanding the theme disclosure")
+	}
+	if picker.current.IsZero() {
+		t.Fatal("the picker opened on the zero entry, so the cursor is on nothing")
+	}
+	if got := picker.selected().ThemeKey; got != styles.FreshInstallTheme {
+		t.Errorf("picker opened on %q, want the inherited fresh-install theme %q", got, styles.FreshInstallTheme)
+	}
+}

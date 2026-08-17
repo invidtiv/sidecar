@@ -14,9 +14,10 @@ Complete shortcut listings and context reference. For implementation patterns, s
 | `ctrl+u` | page-up | Page up |
 | `enter` | select | Select item |
 | `esc` | back | Go back / close |
-| `` ` `` | next-plugin | Next plugin |
-| `~` | prev-plugin | Previous plugin |
-| `1-5` | focus-plugin-N | Focus plugin by number |
+| `` ` `` / `]` | next-plugin | Next header entry (wraps the whole header row) |
+| `~` / `[` | prev-plugin | Previous header entry |
+| `1`-`7` | focus-plugin-N | Focus the Nth project tab (positional; stops at 7) |
+| `8` / `9` / `0` | focus-sessions / focus-activity / focus-tasks | Sessions / Activity / Tasks |
 | `?` | toggle-palette | Command palette |
 | `!` | toggle-diagnostics | Diagnostics overlay |
 | `@` | switch-project | Project switcher |

@@ -150,10 +150,6 @@ func (d *dropdownState) visibleRows() int {
 	return min(dropdownMaxVisible, max(1, len(d.options)))
 }
 
-func (d *dropdownState) maxScroll() int {
-	return max(0, len(d.options)-d.visibleRows())
-}
-
 func (d *dropdownState) atScrollBoundary(delta int) bool {
 	if len(d.options) == 0 {
 		return true

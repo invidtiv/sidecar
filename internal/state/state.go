@@ -61,6 +61,16 @@ type State struct {
 	// AgentAutoApprove is the last auto-approve checkbox value per agent type.
 	// A missing key is treated as false.
 	AgentAutoApprove map[string]bool `json:"agentAutoApprove,omitempty"`
+
+	// SeenDefaultThemeNotice records that the one-time "the default theme
+	// changed" toast has been shown.
+	//
+	// It lives here and not in config.json on purpose. Sidecar only writes
+	// config.json when a setting changes, and an absent ui.theme block is
+	// exactly the signal that identifies a user who is being restyled. Writing
+	// the flag into the config would record a theme choice as a side effect and
+	// disarm the very mechanism it is flagging.
+	SeenDefaultThemeNotice bool `json:"seenDefaultThemeNotice,omitempty"`
 }
 
 // FileBrowserTabState holds persistent tab state for the file browser.
@@ -785,6 +795,29 @@ func SetShowIdleWorktrees(show bool) error {
 		current = &State{}
 	}
 	current.ShowIdleWorktrees = show
+	mu.Unlock()
+	return Save()
+}
+
+// GetSeenDefaultThemeNotice reports whether the one-time new-default-theme
+// toast has already been shown. Fresh state has not seen it.
+func GetSeenDefaultThemeNotice() bool {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return false
+	}
+	return current.SeenDefaultThemeNotice
+}
+
+// SetSeenDefaultThemeNotice records that the notice has been shown, so it never
+// appears again.
+func SetSeenDefaultThemeNotice(seen bool) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.SeenDefaultThemeNotice = seen
 	mu.Unlock()
 	return Save()
 }

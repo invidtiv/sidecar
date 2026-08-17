@@ -78,8 +78,10 @@ func TestRenderSidebarSeparatesSectionsAndKeepsRegionsOnTheirRows(t *testing.T) 
 			for i, line := range lines {
 				trimmed[i] = strings.TrimRight(line, " ")
 			}
-			if trimmed[1] != "/ filter…" || trimmed[2] != "Shells (2)" {
-				t.Fatalf("first heading does not sit flush under the filter row:\n%s", strings.Join(trimmed[:5], "\n"))
+			// Chrome, then one blank line, then content: the filter row stays
+			// with the header and the first heading starts the list.
+			if trimmed[1] != "/ filter…" || trimmed[2] != "" || trimmed[3] != "Shells (2)" {
+				t.Fatalf("chrome is not separated from the first heading by one blank line:\n%s", strings.Join(trimmed[:5], "\n"))
 			}
 			workspaces := indexOfLine(trimmed, "Workspaces (1)")
 			if workspaces < 2 || trimmed[workspaces-1] != "" || trimmed[workspaces-2] == "" {
@@ -129,7 +131,8 @@ func TestRenderSidebarKeepsOffsetZeroWhenSelectionFits(t *testing.T) {
 }
 
 func TestRenderSidebarScrollsTheMinimumToRevealSelection(t *testing.T) {
-	// Title + heading + 6 one-line rows fill height 8. Twenty rows, last selected.
+	// Title + blank + heading + 5 one-line rows fill height 8. Twenty rows, last
+	// selected.
 	const n, height = 20, 8
 	rows := numberedSidebarRows(n)
 	rendered := RenderSidebar(SidebarOptions{
@@ -137,8 +140,8 @@ func TestRenderSidebarScrollsTheMinimumToRevealSelection(t *testing.T) {
 		SelectedID: fmt.Sprintf("r%d", n-1), ScrollOffset: 0,
 		Sections: []SidebarSection{{Title: "Items", Count: n, Rows: rows}},
 	})
-	// Body is 7 lines: heading + 6 rows. Last page starts at n-6.
-	want := n - 6
+	// Body is 6 lines: heading + 5 rows. Last page starts at n-5.
+	want := n - 5
 	if rendered.ScrollOffset != want {
 		t.Fatalf("scroll = %d, want the minimum %d (not the selected index %d)", rendered.ScrollOffset, want, n-1)
 	}
@@ -304,6 +307,88 @@ func TestHeaderRegionsSitUnderTheirControls(t *testing.T) {
 		case RegionHeaderAction:
 			if !strings.Contains(under, "+") {
 				t.Fatalf("create region covers %q, not the create button", under)
+			}
+		}
+	}
+}
+
+// TestHeaderSpacerSeparatesChromeFromContentOnBothSurfaces pins td-a453b5. The
+// panel header's "+" and the first section heading's "+" used to sit on
+// adjacent rows and read as one two-button cluster; one blank line tells the
+// chrome and the list apart. Both surfaces render through this function, so
+// both inherit it — the project shape below is the plugin's configuration and
+// the global shape is the Model's.
+func TestHeaderSpacerSeparatesChromeFromContentOnBothSurfaces(t *testing.T) {
+	sections := []SidebarSection{
+		{Title: "Shells", Count: 2, Action: &SidebarAction{ID: "new-shell", Label: "+"}, Rows: []SidebarRow{
+			oneLineSidebarRow("shell:a", "alpha"), oneLineSidebarRow("shell:b", "beta"),
+		}},
+	}
+	for name, opts := range map[string]SidebarOptions{
+		"project": {HeaderAction: &SidebarAction{ID: "new", Label: "+"}, HeaderMeta: &SidebarAction{ID: "sort", Label: SortPillLabel(SortManual)}},
+		"global":  {HeaderMeta: &SidebarAction{ID: "sort", Label: SortPillLabel(SortActivity)}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			opts.Width, opts.Height, opts.Title, opts.Focused, opts.Sections = 40, 20, "Workspaces", true, sections
+			lines := strings.Split(ansi.Strip(RenderSidebar(opts).View), "\n")
+			if !strings.Contains(lines[0], "Workspaces") {
+				t.Fatalf("row 0 is not the header: %q", lines[0])
+			}
+			if strings.TrimSpace(lines[1]) != "" {
+				t.Fatalf("no blank line under the header: %q", lines[1])
+			}
+			if !strings.Contains(lines[2], "Shells (2)") {
+				t.Fatalf("first heading = %q, want it one blank line under the header", lines[2])
+			}
+		})
+	}
+}
+
+// TestHeaderSpacerIsDroppedRatherThanClippingAShortPane guards the height
+// budget: air is worth a row in an ordinary pane and is not worth the only rows
+// a very short one has. Whatever it decides, the view still fits exactly.
+func TestHeaderSpacerIsDroppedRatherThanClippingAShortPane(t *testing.T) {
+	rows := numberedSidebarRows(6)
+	for height := 1; height <= 12; height++ {
+		opts := SidebarOptions{
+			Width: 40, Height: height, Title: "Workspaces", Focused: true, SelectedID: "r0",
+			HeaderAction: &SidebarAction{ID: "new", Label: "+"},
+			Sections:     []SidebarSection{{Title: "Items", Count: 6, Rows: rows}},
+		}
+		view := RenderSidebar(opts).View
+		lines := strings.Split(ansi.Strip(view), "\n")
+		if len(lines) != height {
+			t.Fatalf("height %d rendered %d lines", height, len(lines))
+		}
+		if !strings.Contains(lines[0], "Workspaces") {
+			t.Fatalf("height %d pushed the header off the top: %q", height, lines[0])
+		}
+		// Where the list is drawn at all, the heading is on row 1 when the pane
+		// could not afford the blank line and on row 2 when it could. An empty
+		// body pads with blanks, so the heading's row — not a blank row — is what
+		// says whether the spacer was spent.
+		heading := -1
+		for i, line := range lines {
+			if strings.Contains(line, "Items (6)") {
+				heading = i
+				break
+			}
+		}
+		switch {
+		case heading < 0:
+			if height > headerSpacerMinBody+1 {
+				t.Fatalf("height %d drew no list at all:\n%s", height, strings.Join(lines, "\n"))
+			}
+		case height > headerSpacerMinBody+1:
+			if heading != 2 {
+				t.Fatalf("height %d has room for the spacer; heading is on row %d:\n%s", height, heading, strings.Join(lines, "\n"))
+			}
+			if !strings.Contains(ansi.Strip(view), "item-0") {
+				t.Fatalf("height %d clipped the list away:\n%s", height, strings.Join(lines, "\n"))
+			}
+		default:
+			if heading != 1 {
+				t.Fatalf("height %d spent a row on the spacer; heading is on row %d:\n%s", height, heading, strings.Join(lines, "\n"))
 			}
 		}
 	}

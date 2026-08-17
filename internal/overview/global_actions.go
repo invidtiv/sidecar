@@ -1,13 +1,18 @@
 package overview
 
 import (
+	"context"
 	"fmt"
+	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 const (
@@ -15,7 +20,18 @@ const (
 	globalDeleteCancelID  = "global-delete-cancel"
 )
 
-var deleteManagedShell = workspaceops.DeleteManagedShell
+var (
+	deleteManagedShell = workspaceops.DeleteManagedShell
+	// The worktree delete path is the same one the project surface runs.
+	// Indirection is here so tests can execute the flow without touching a
+	// real repository.
+	// DeleteWorktree is the whole teardown: it also forgets and closes the
+	// shells rooted in the worktree (td-f017b9), which is why the removal
+	// carries ProjectRoot as well as RepoPath.
+	execDeleteWorktree     = workspaceops.DeleteWorktree
+	execDeleteLocalBranch  = workspaceops.DeleteLocalBranch
+	execDeleteRemoteBranch = workspaceops.DeleteRemoteBranch
+)
 
 type globalShellDeletedMsg struct {
 	Project Project
@@ -24,8 +40,23 @@ type globalShellDeletedMsg struct {
 
 func (m *Model) DeleteOpen() bool { return m.deleteOpen }
 
+// DeletingWorktree reports that the open confirmation is the shared
+// "Delete Worktree?" one rather than this surface's shell confirmation.
+func (m *Model) DeletingWorktree() bool {
+	return m.deleteOpen && m.deleteWorkspace.Kind == workspaceinventory.KindWorktree
+}
+
 func (m *Model) RunDeleteCommand(id string) tea.Cmd {
 	if !m.deleteOpen {
+		return nil
+	}
+	if m.DeletingWorktree() {
+		switch id {
+		case "confirm-delete":
+			return m.applyWorktreeDeleteOutcome(worktreedelete.OutcomeConfirm)
+		case "cancel":
+			return m.applyWorktreeDeleteOutcome(worktreedelete.OutcomeCancel)
+		}
 		return nil
 	}
 	switch id {
@@ -49,7 +80,206 @@ func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
 	m.deleteWorkspace = workspace
 	m.deleteModal = nil
 	m.deleteModalW = 0
+	// Exactly one confirmation is ever armed.
+	m.worktreeDelete.Clear()
 	return nil
+}
+
+// worktreeActionState is the full refusal input for a catalog row. Every
+// marker git reported is carried through the inventory, so this surface
+// refuses exactly the set the project surface refuses — a locked worktree is
+// not offered a confirmation it would then fail to honour (td-2af16d).
+func worktreeActionState(workspace workspaceinventory.Workspace) *workspaceops.WorktreeActionState {
+	return &workspaceops.WorktreeActionState{
+		Path: workspace.Path, Branch: workspace.Branch,
+		IsMain: workspace.IsMain, IsBare: workspace.IsBare,
+		IsDetached: workspace.IsDetached, IsLocked: workspace.IsLocked,
+		IsMissing: workspace.IsMissing, IsPrunable: workspace.IsPrunable,
+		// The inventory has just stat'ed the path; a second stat per frame
+		// would answer the same question the collector already answered.
+		TrustPath: true,
+	}
+}
+
+// deleteRefusal is the shared refusal for deleting the selected worktree —
+// the same presentation-neutral rules the project surface applies.
+func deleteRefusal(workspace workspaceinventory.Workspace) string {
+	if workspace.Kind != workspaceinventory.KindWorktree {
+		return "delete requires a worktree"
+	}
+	return workspaceops.WorktreeActionRefusal(worktreeActionState(workspace), workspaceops.WorktreeActionDelete)
+}
+
+// OpenDeleteSelectedWorktree raises the shared "Delete Worktree?" confirmation
+// for the selected worktree. The modal, its branch cleanup options, and its
+// input routing are internal/worktreedelete — the project surface's modal,
+// not a copy of it.
+func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.Kind != workspaceinventory.KindWorktree {
+		return nil
+	}
+	if reason := deleteRefusal(workspace); reason != "" {
+		return appmsg.ShowToast(reason, 3*time.Second)
+	}
+	m.deleteOpen = true
+	m.deleteBusy = false
+	m.deleteError = ""
+	m.deleteWorkspace = workspace
+	m.deleteModal = nil
+	m.deleteModalW = 0
+	m.worktreeDelete.Open(worktreedelete.Target{
+		Name:      workspace.Name,
+		Branch:    workspace.Branch,
+		Path:      workspace.Path,
+		IsMissing: workspace.IsMissing,
+	}, false)
+	return m.probeWorktreeDelete(workspace)
+}
+
+// globalWorktreeDeleteProbeMsg carries the git answers the confirmation needs
+// but must not block a keypress on: whether the branch is the repository's
+// primary one, whether origin still carries it, and whether the worktree holds
+// uncommitted work.
+type globalWorktreeDeleteProbeMsg struct {
+	Path         string
+	IsMainBranch bool
+	HasRemote    bool
+	Dirty        worktreedelete.Dirtiness
+}
+
+// probeWorktreeDelete answers the confirmation's open questions in one command.
+//
+// Dirtiness is asked here, when the modal opens, and not carried on
+// workspaceinventory.Workspace beside the porcelain markers. Those markers are
+// free — one `git worktree list --porcelain` already reports every worktree's
+// bare/detached/locked/prunable state — while dirtiness is `git status` per
+// worktree, so putting it in the inventory would add a git spawn per worktree
+// per refresh cycle on a surface that refreshes on a timer. AGENTS.md is
+// explicit that spawns are expensive on machines running endpoint security
+// agents. The user deletes one worktree at a time, so one status call per
+// opened confirmation buys the same truth for a bounded, user-initiated cost —
+// and it is fresher than a cached inventory field would be.
+func (m *Model) probeWorktreeDelete(workspace workspaceinventory.Workspace) tea.Cmd {
+	root := m.projectRootFor(workspace)
+	path, branch := workspace.Path, workspace.Branch
+	// A worktree whose directory is gone has nothing to lose and nothing to
+	// ask git about; the confirmation says so on its own line already.
+	missing := workspace.IsMissing
+	return func() tea.Msg {
+		ctx := context.Background()
+		msg := globalWorktreeDeleteProbeMsg{Path: path}
+		if root != "" {
+			msg.IsMainBranch = workspaceops.IsDefaultBranch(ctx, root, branch)
+			if !msg.IsMainBranch {
+				msg.HasRemote = workspaceops.RemoteBranchExists(ctx, root, branch)
+			}
+		}
+		msg.Dirty = worktreedelete.ProbeDirtiness(ctx, path, missing)
+		return msg
+	}
+}
+
+func (m *Model) applyWorktreeDeleteProbe(msg globalWorktreeDeleteProbeMsg) tea.Cmd {
+	if !m.DeletingWorktree() || m.worktreeDelete.Target().Path != msg.Path {
+		return nil
+	}
+	m.worktreeDelete.IsMainBranch = msg.IsMainBranch
+	m.worktreeDelete.HasRemote = msg.HasRemote
+	m.worktreeDelete.Dirty = msg.Dirty
+	if msg.IsMainBranch {
+		// The options are no longer on screen, so the intent behind them must
+		// not survive either.
+		m.worktreeDelete.DeleteLocal = false
+		m.worktreeDelete.DeleteRemote = false
+	}
+	m.worktreeDelete.Invalidate()
+	return nil
+}
+
+// projectRootFor is the repository the worktree belongs to — the working
+// directory every git call in the delete path runs in.
+func (m *Model) projectRootFor(workspace workspaceinventory.Workspace) string {
+	if idx := m.projectIndex(workspace.ProjectKey); idx >= 0 {
+		return m.projects[idx].Path
+	}
+	return workspace.ProjectRoot
+}
+
+type globalWorktreeDeleteDoneMsg struct {
+	Project  Project
+	Warnings []string
+	Err      error
+}
+
+func (m *Model) applyWorktreeDeleteOutcome(outcome worktreedelete.Outcome) tea.Cmd {
+	switch outcome {
+	case worktreedelete.OutcomeCancel:
+		m.closeDelete()
+	case worktreedelete.OutcomeConfirm:
+		return m.executeWorktreeDelete()
+	}
+	return nil
+}
+
+// executeWorktreeDelete runs the shared workspaceops delete path. The
+// confirmation closes first, as it does on the project surface: the list is the
+// rest state, and the result arrives as a toast.
+func (m *Model) executeWorktreeDelete() tea.Cmd {
+	workspace := m.deleteWorkspace
+	idx := m.projectIndex(workspace.ProjectKey)
+	if idx < 0 {
+		m.closeDelete()
+		return appmsg.ShowToast("Owning project is no longer configured", 3*time.Second)
+	}
+	project := m.projects[idx]
+	target := m.worktreeDelete.Target()
+	deleteLocal := m.worktreeDelete.DeleteLocal
+	deleteRemote := m.worktreeDelete.DeleteRemoteBranch()
+	m.closeDelete()
+
+	return func() tea.Msg {
+		ctx := context.Background()
+		// The branch tip is pinned before anything is removed, so the branch
+		// deleted below is the one this confirmation referred to.
+		branchOID := workspaceops.BranchOID(ctx, project.Path, target.Branch)
+		// Force: the person reading "Uncommitted changes will be lost" chose
+		// Delete. See workspaceops.WorktreeRemoval.Force.
+		if err := execDeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+			RepoPath: project.Path, ProjectRoot: project.Path,
+			Path: target.Path, Branch: target.Branch,
+			Missing: target.IsMissing, Force: true,
+		}); err != nil {
+			return globalWorktreeDeleteDoneMsg{Project: project, Err: err}
+		}
+		var warnings []string
+		if deleteLocal {
+			if err := execDeleteLocalBranch(ctx, workspaceops.BranchDeletion{
+				RepoPath: project.Path, Branch: target.Branch, ExpectedOID: branchOID, Force: true,
+			}); err != nil {
+				warnings = append(warnings, fmt.Sprintf("Local branch: %v", err))
+			}
+		}
+		if deleteRemote {
+			if err := execDeleteRemoteBranch(ctx, workspaceops.BranchDeletion{
+				RepoPath: project.Path, Branch: target.Branch,
+			}); err != nil {
+				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", err))
+			}
+		}
+		return globalWorktreeDeleteDoneMsg{Project: project, Warnings: warnings}
+	}
+}
+
+func (m *Model) applyWorktreeDeleteDone(msg globalWorktreeDeleteDoneMsg) tea.Cmd {
+	if msg.Err != nil {
+		return appmsg.ShowToast("Delete failed: "+msg.Err.Error(), 4*time.Second)
+	}
+	cmds := []tea.Cmd{m.refreshProjectAfterMutation(msg.Project)}
+	if len(msg.Warnings) > 0 {
+		cmds = append(cmds, appmsg.ShowToast(strings.Join(msg.Warnings, "; "), 4*time.Second))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) ensureDeleteModal() {
@@ -82,6 +312,13 @@ func (m *Model) ensureDeleteModal() {
 }
 
 func (m *Model) overlayDelete(background string, width, height int) string {
+	if m.DeletingWorktree() {
+		built := m.worktreeDelete.Modal(m.width)
+		if built == nil {
+			return background
+		}
+		return ui.OverlayModal(background, built.Render(width, height, m.deleteMouse), width, height)
+	}
 	m.ensureDeleteModal()
 	if m.deleteModal == nil {
 		return background
@@ -94,9 +331,14 @@ func (m *Model) closeDelete() {
 	m.deleteError = ""
 	m.deleteModal = nil
 	m.deleteModalW = 0
+	m.worktreeDelete.Clear()
 }
 
 func (m *Model) handleDeleteKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if m.DeletingWorktree() {
+		outcome, cmd := m.worktreeDelete.HandleKey(m.width, msg)
+		return true, tea.Batch(cmd, m.applyWorktreeDeleteOutcome(outcome))
+	}
 	m.ensureDeleteModal()
 	if m.deleteModal == nil || m.deleteBusy {
 		return true, nil
@@ -106,6 +348,9 @@ func (m *Model) handleDeleteKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) handleDeleteMouse(msg tea.MouseMsg) tea.Cmd {
+	if m.DeletingWorktree() {
+		return m.applyWorktreeDeleteOutcome(m.worktreeDelete.HandleMouse(m.width, msg, m.deleteMouse))
+	}
 	m.ensureDeleteModal()
 	if m.deleteModal == nil || m.deleteBusy {
 		return nil
@@ -139,9 +384,7 @@ func mergeRefusal(workspace workspaceinventory.Workspace) string {
 	if workspace.Kind != workspaceinventory.KindWorktree {
 		return "merge requires a worktree"
 	}
-	return workspaceops.WorktreeActionRefusal(&workspaceops.WorktreeActionState{
-		Path: workspace.Path, Branch: workspace.Branch, IsMain: workspace.IsMain, TrustPath: true,
-	}, workspaceops.WorktreeActionMerge)
+	return workspaceops.WorktreeActionRefusal(worktreeActionState(workspace), workspaceops.WorktreeActionMerge)
 }
 
 func (m *Model) StartSelectedMerge() tea.Cmd {

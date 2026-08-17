@@ -12,49 +12,70 @@ import (
 // Fits "shift+tab" (9 chars) + KeyHint padding (2) + 1 buffer.
 const keyColumnWidth = 12
 
-// Palette-specific styles
-var (
-	paletteBox = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(styles.Primary).
-			Background(styles.BgSecondary).
-			Padding(1, 2)
+// Palette-specific styles.
+//
+// These are functions, not package-level vars: a var block is evaluated at
+// package init, which snapshots whatever colours styles happened to hold before
+// any theme was applied. That froze the command palette on the built-in default
+// purple no matter which theme was active. Building the style per render costs
+// nothing at this size and keeps the palette in the theme.
 
-	layerHeaderCurrent = lipgloss.NewStyle().
-				Foreground(styles.Primary).
-				Bold(true).
-				PaddingLeft(1).
-				MarginTop(1)
+func paletteBox() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(styles.Primary).
+		Background(styles.BgSecondary).
+		Padding(1, 2)
+}
 
-	layerHeaderPlugin = lipgloss.NewStyle().
-				Foreground(styles.Secondary).
-				Bold(true).
-				PaddingLeft(1).
-				MarginTop(1)
+func layerHeaderCurrent() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Primary).
+		Bold(true).
+		PaddingLeft(1).
+		MarginTop(1)
+}
 
-	layerHeaderGlobal = lipgloss.NewStyle().
-				Foreground(styles.TextSubtle).
-				PaddingLeft(1).
-				MarginTop(1)
+func layerHeaderPlugin() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Secondary).
+		Bold(true).
+		PaddingLeft(1).
+		MarginTop(1)
+}
 
-	entryNormal = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary)
+func layerHeaderGlobal() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.TextSubtle).
+		PaddingLeft(1).
+		MarginTop(1)
+}
 
-	entrySelected = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary).
-			Background(styles.BgTertiary)
+func entryNormal() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.TextPrimary)
+}
 
-	entryName = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary).
-			Width(20)
+func entrySelected() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.TextSelectionColor).
+		Background(styles.BgTertiary)
+}
 
-	entryDesc = lipgloss.NewStyle().
-			Foreground(styles.TextSecondary)
+func entryName() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.TextPrimary).
+		Width(20)
+}
 
-	matchHighlight = lipgloss.NewStyle().
-			Foreground(styles.Primary).
-			Bold(true)
-)
+func entryDesc() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.TextSecondary)
+}
+
+func matchHighlight() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Primary).
+		Bold(true)
+}
 
 // renderItem represents a single line in the palette (header or entry).
 type renderItem struct {
@@ -166,7 +187,7 @@ func (m Model) View() string {
 
 	// Wrap in box
 	content := strings.TrimRight(b.String(), "\n")
-	box := paletteBox.Width(width).Render(content)
+	box := paletteBox().Width(width).Render(content)
 
 	return box
 }
@@ -234,13 +255,13 @@ func (m Model) renderLayerHeader(layer Layer, count int) string {
 
 	switch layer {
 	case LayerCurrentMode:
-		style = layerHeaderCurrent
+		style = layerHeaderCurrent()
 		name = strings.ToUpper(m.activeContext)
 	case LayerPlugin:
-		style = layerHeaderPlugin
+		style = layerHeaderPlugin()
 		name = strings.ToUpper(m.pluginContext)
 	case LayerGlobal:
-		style = layerHeaderGlobal
+		style = layerHeaderGlobal()
 		name = "GLOBAL"
 	}
 
@@ -266,7 +287,7 @@ func (m Model) renderEntry(entry PaletteEntry, selected bool, maxWidth int) stri
 
 	// Name with match highlighting
 	nameStr := m.highlightMatches(entry.Name, entry.MatchRanges)
-	nameStr = entryName.Render(nameStr)
+	nameStr = entryName().Render(nameStr)
 
 	// Description (truncate if needed)
 	// Account for: 2 leading spaces + keyColumnWidth + 1 space + 20 name + 1 space
@@ -281,7 +302,7 @@ func (m Model) renderEntry(entry PaletteEntry, selected bool, maxWidth int) stri
 	if descWidth > 3 && len(desc) > descWidth {
 		desc = desc[:descWidth-3] + "..."
 	}
-	descStr := entryDesc.Render(desc)
+	descStr := entryDesc().Render(desc)
 
 	line := fmt.Sprintf("  %s %s %s", keyStr, nameStr, descStr)
 
@@ -289,9 +310,9 @@ func (m Model) renderEntry(entry PaletteEntry, selected bool, maxWidth int) stri
 	paddedLine := lipgloss.NewStyle().Width(maxWidth).Render(line)
 
 	if selected {
-		return entrySelected.Width(maxWidth).Render(paddedLine)
+		return entrySelected().Width(maxWidth).Render(paddedLine)
 	}
-	return entryNormal.Render(paddedLine)
+	return entryNormal().Render(paddedLine)
 }
 
 // highlightMatches applies highlighting to matched characters.
@@ -310,7 +331,7 @@ func (m Model) highlightMatches(text string, ranges []MatchRange) string {
 		}
 		// Add matched part with highlighting
 		if r.End <= len(text) {
-			result.WriteString(matchHighlight.Render(text[r.Start:r.End]))
+			result.WriteString(matchHighlight().Render(text[r.Start:r.End]))
 		}
 		lastEnd = r.End
 	}

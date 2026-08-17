@@ -83,6 +83,20 @@ type OpenFullIssueMsg struct {
 	IssueID string
 }
 
+// OpenIssueInTD is the one jump: focus the td plugin and open the issue there.
+// The preview modal, the project Workspaces issue pane, and the global
+// Workspaces issue preview all reach td through this, so "open in td" cannot
+// come to mean three slightly different things.
+func OpenIssueInTD(issueID string) tea.Cmd {
+	if issueID == "" {
+		return nil
+	}
+	return tea.Batch(
+		FocusPlugin("td-monitor"),
+		func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
+	)
+}
+
 // issuePreviewModelID is reserved for the app's preview modal so a workspace
 // issue leaf can never have its load stolen by SetResult identity.
 const issuePreviewModelID = -1
@@ -99,7 +113,18 @@ func (m *Model) claimIssuePreviewLoad(msg issueview.LoadedMsg) bool {
 		return false
 	}
 	if !m.issuePreviewView.SetResult(msg) {
-		return false
+		// A refresh that found nothing new returns false here, and must still be
+		// claimed: it was this modal's own result, and letting it fall through
+		// would offer a card the plugins have no reason to see. Claiming it
+		// without touching the modal is exactly the no-repaint behaviour.
+		return msg.Refresh && msg.ModelID == issuePreviewModelID
+	}
+	if msg.Refresh {
+		// The refresh changed the card in place. Only the cached modal has to be
+		// rebuilt; the surrounding loading and error state is already correct.
+		m.issuePreviewData = m.issuePreviewView.Data()
+		m.invalidateIssuePreviewModal()
+		return true
 	}
 	m.applyIssuePreviewData(m.issuePreviewView.Data(), msg.Error)
 	return true

@@ -48,11 +48,14 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `ctrl+u` | page-up | Page up |
 | `enter` | select | Select item |
 | `esc` | back | Go back / close |
-| `` ` `` | next-plugin | Next plugin |
-| `~` | prev-plugin | Previous plugin |
-| `]` | next-plugin | Next plugin |
-| `[` | prev-plugin | Previous plugin |
-| `1-5` | focus-plugin-N | Focus plugin by number |
+| `` ` `` | next-plugin | Next header entry |
+| `~` | prev-plugin | Previous header entry |
+| `]` | next-plugin | Next header entry |
+| `[` | prev-plugin | Previous header entry |
+| `1`-`7` | focus-plugin-N | Focus the Nth project tab (positional; stops at 7) |
+| `8` | focus-sessions | Sessions (global) |
+| `9` | focus-activity | Activity (global) |
+| `0` | focus-tasks | Tasks (global; no-op when the Tasks host is disabled) |
 | `?` | toggle-palette | Command palette |
 | `!` | toggle-diagnostics | Diagnostics overlay |
 | `@` | switch-project | Project switcher |
@@ -63,6 +66,30 @@ TD shortcuts are dynamically exported from TD itself via `ExportBindings()` and 
 | `r` | refresh | Refresh |
 | `q` | quit | Quit (root contexts only) |
 | `ctrl+c` | quit | Force quit |
+
+### The header row is one ring
+
+Sidecar's header is a single row of entries: the global ones in the left cluster
+(Sessions, Activity, and Tasks when its feature is on) followed by the project's
+plugin tabs on the right.
+
+`[` / `]` (and their `~` / `` ` `` aliases) wrap through **all** of it, in that
+order, and the ring is identical from either scope — the project tabs are
+painted only in project scope, but they stay in the ring from the global space
+so the cycle is never a trap and `]` then `[` is always the identity. Tasks is
+absent from the ring whenever its feature is off.
+
+The number row addresses the same row, but by two different rules:
+
+- `1`-`7` are **positional** project tabs. They stop at 7. An eighth plugin tab
+  is reached with `[` / `]` or from the command palette.
+- `8` / `9` / `0` are **named** global entries — Sessions, Activity, Tasks — and
+  mean the same thing in every scope. A key whose entry is disabled (`0` with
+  the Tasks host off) does nothing at all, silently; it never falls through to a
+  plugin tab.
+
+All ten digits and the four cycling keys are in `keymap.GlobalKeys`, so no
+plugin may claim them, and all of them yield to a focused text input.
 
 ## Configuration (`config` / `config-edit` / `config-confirm` contexts)
 
@@ -154,6 +181,7 @@ row and are not written to disk.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `O` | open-in-td | Open the selected issue in td (same jump as the preview modal's `o`) |
 | `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
 | `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
 | `y` | yank-issue | Copy issue as markdown |
@@ -171,6 +199,7 @@ active tab, and each tab's scroll.
 | Key | Command | Description |
 |-----|---------|-------------|
 | `enter` | open-item | Open or focus the selected parent or subtask as a tab |
+| `O` | open-in-td | Open the selected issue in td (same jump as the preview modal's `o`) |
 | `x` | close-tab | Close the active tab. Last tab forgets the pane |
 | `{` / `}` | prev-tab / next-tab | Previous / next issue tab |
 | `y` | yank-issue | Copy issue as markdown |
@@ -232,6 +261,49 @@ active tab, and each tab's scroll.
 | `O` | open-in-file-browser | Open in file browser |
 | `y` | yank-file | Copy file info |
 | `Y` | yank-path | Copy file path |
+
+### Inline Diff Pane (`git-status-diff`)
+
+The right-hand pane of the Git tab, focused with `enter` / `l` from the file
+list.
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `j` / `k` | scroll-down / scroll-up | Scroll the diff |
+| `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
+| `g` / `G` | — | Jump to start (also resets the horizontal axis) / end |
+| `h` / `l` | — | Scroll horizontally; `h` at column 0 returns to the sidebar |
+| `\|` | reset-hscroll | Snap the horizontal scroll back to column 0 |
+| `enter` | full-diff | Open the full-screen diff |
+| `s` / `u` | stage-file / unstage-file | Stage / unstage the file |
+| `v` | toggle-diff-view | Cycle unified → split → full-file |
+| `w` | toggle-wrap | Toggle line wrap |
+| `\` | toggle-sidebar | Toggle the sidebar |
+| `+` / `-` | resize-pane-grow / resize-pane-shrink | Resize the split |
+
+`|` is vim's goto-column key. It reads as the odd choice next to vim's `0`, and
+`0` is what this pane used to bind — but the whole number row belongs to the
+header (see "The header row is one ring"), so `0` never reaches the plugin. It
+was a live handler that had quietly stopped being reachable; `|` is the
+replacement, and unlike `0` it is registered, so it appears in the footer and
+in `?`.
+
+### Full-Screen Diff (`git-diff`)
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `,` / `.` | prev-file / next-file | Previous / next changed file |
+| `s` / `u` | stage-file / unstage-file | Stage / unstage the file on screen |
+| `v` | toggle-diff-view | Cycle the diff view mode |
+| `w` | toggle-wrap | Toggle line wrap |
+| `y` | yank-diff | Copy the diff |
+| `c` | commit | Open the commit editor |
+| `q` / `esc` | close-diff | Leave the diff |
+
+This view has no tabs, so `{` / `}` are deliberately unbound here rather than
+made to mean "next file" — that would be the one place in Sidecar where a brace
+did something other than cycle tabs, and a silent wrong action is worse than a
+no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 
 ### Commit List Shortcuts
 
@@ -349,6 +421,14 @@ active tab, and each tab's scroll.
 | `P` | fetch-pr | Fetch a remote PR as a workspace |
 
 
+### Preview Shortcuts
+
+`g` / `G` jump to the top / bottom of the preview's scrollback. `0` is
+deliberately **not** bound here: it is the header's global Tasks shortcut, and a
+context-local binding would make the same key mean two different things one tab
+apart. (It previously carried a `reset-scroll` command that had no handler
+anywhere in the tree.)
+
 ### Interactive Mode
 
 | Key | Command |
@@ -406,16 +486,31 @@ the pane: `esc` closes it, `enter` loads the hit in the active tab, and
 
 `d` / `show-diff` on the Workspaces list or preview opens a working-tree Diff
 leaf beside the terminal. The leaf is not a root context: `q` / `esc` hide it.
-`{` / `}` stay next/prev file inside the view; `,` / `.` cycle Diff target
-tabs while the leaf is focused.
+`{` / `}` cycle Diff target tabs while the leaf is focused; `,` / `.` step
+next/prev file inside the view.
+
+**One rule everywhere: `{` / `}` is always "cycle the tabs of the thing I am
+looking at."** Document, issue, File Browser and Diff leaves all obey it. The
+Diff pane is the only surface with a second navigation axis — the files inside
+the active target — and that axis gets its own pair, `,` / `.`.
+
+The earlier arrangement was the reverse (`{` / `}` = file, `,` / `.` = tab), on
+the reasoning that in-view file jumping is the more frequent act in a diff and
+so deserved the better-known keys. That reasoning was sound in isolation and
+wrong in aggregate: it made the diff the one place in Sidecar where `}` did not
+mean "next tab", so the cost was paid on every context switch into and out of
+the diff, by everyone, forever — while the benefit accrued only inside the diff.
+Consistency of a key's *meaning* across surfaces beats optimality of its
+*assignment* on one surface. If you are tempted to re-optimise a key for a
+single pane again, that is the trade to weigh.
 
 | Key | Command | Description |
 |-----|---------|-------------|
 | `d` | show-diff | Open working-tree Diff leaf (list and preview) |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 | `x` | close-tab | Close the active tab. Last tab forgets the pane |
-| `,` / `.` | prev-tab / next-tab | Previous / next Diff target tab |
-| `{` / `}` | prev-file / next-file | Previous / next file in this target |
+| `{` / `}` | prev-tab / next-tab | Previous / next Diff target tab |
+| `,` / `.` | prev-file / next-file | Previous / next file in this target |
 | `Y` | yank-id | Copy the target identity (`wt` / `c:…` / `r:…`) |
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, and content |
 | `\` | toggle-sidebar | Toggle sidebar visibility |

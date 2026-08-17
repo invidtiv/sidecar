@@ -13,18 +13,21 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 const (
@@ -233,9 +236,36 @@ type Plugin struct {
 	// to, and dropping one would swallow the exact signal the content contract
 	// documents as how a content asserts geometry it owns beyond this process.
 	paneSizeCmds []tea.Cmd
-	docs         map[int]*docPane
-	issues       map[int]*issuePane
-	diffs        map[int]*diffPane
+	// paneFrame is the tree exactly as the last frame PLACED it, and paneFrameDrawn
+	// says a frame placed one at all. Both are cleared with the hit regions at the
+	// top of View and re-earned only where the tree is actually composed, so pointer
+	// geometry and click targets can never describe different frames — and a view
+	// that draws no tree (the kanban board, a zoomed terminal, a preview too small
+	// to place) answers no leaf boxes rather than last frame's.
+	paneFrame      PaneLayout
+	paneFrameDrawn bool
+	docs           map[int]*docPane
+	issues         map[int]*issuePane
+	diffs          map[int]*diffPane
+
+	// Live refresh: one filesystem watcher per content-pane kind, created the
+	// first time a pane of that kind opens and released in Stop. See
+	// live_panes.go.
+	issueWatcher       *livewatch.PathWatcher
+	issueWatchStarting bool
+	docWatcher         *livewatch.PathWatcher
+	docWatchStarting   bool
+	diffWatcher        *livewatch.PathWatcher
+	diffWatchStarting  bool
+	// diffAdminTargets caches git's administrative paths per worktree, because
+	// resolving them costs five `git rev-parse` calls and they never move for
+	// the life of a worktree.
+	diffAdminTargets   map[string][]livewatch.Target
+	diffAdminResolving map[string]bool
+	// tdStoreTargets caches where td keeps its store per worktree. Resolving it
+	// walks parents and can shell out to git, so it must not happen inline.
+	tdStoreTargets   map[string][]livewatch.Target
+	tdStoreResolving map[string]bool
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
@@ -415,15 +445,13 @@ type Plugin struct {
 	agentConfigModal      *modal.Modal
 	agentConfigModalWidth int
 
-	// Delete confirmation modal state
-	deleteConfirmWorktree   *Worktree // Worktree pending deletion
-	deleteLocalBranchOpt    bool      // Checkbox: delete local branch
-	deleteRemoteBranchOpt   bool      // Checkbox: delete remote branch
-	deleteHasRemote         bool      // Whether remote branch exists
-	deleteIsMainBranch      bool      // Whether the worktree branch is the main branch (protected)
-	deleteConfirmModal      *modal.Modal
-	deleteConfirmModalWidth int
-	deleteWarnings          []string // Warnings from last delete operation (e.g., branch deletion failures)
+	// Delete confirmation state. The confirmation itself — its sections, its
+	// branch cleanup options, and its key/mouse routing — is
+	// internal/worktreedelete, shared with the global Workspaces browser. The
+	// plugin keeps only the lifecycle handle it needs afterwards.
+	deleteConfirmWorktree *Worktree // Worktree pending deletion
+	deleteConfirm         worktreedelete.State
+	deleteWarnings        []string // Warnings from last delete operation (e.g., branch deletion failures)
 
 	// Shell delete confirmation modal state
 	deleteConfirmShell    *ShellSession // Shell pending deletion
@@ -521,9 +549,12 @@ type Plugin struct {
 	shellWatcher         shellManifestWatcher
 	shellWatcherMessages <-chan tea.Msg
 	shellStartupHooks    shellStartupHooks
-	shellStartupEpoch    uint64
-	shellStartupVersion  uint64
-	shellStartupLoading  bool
+	// shellLiveness holds what this surface has observed about each shell's
+	// tmux session, so a dead one closes and a hiccup does not (td-6a4100).
+	shellLiveness       *shellliveness.Tracker
+	shellStartupEpoch   uint64
+	shellStartupVersion uint64
+	shellStartupLoading bool
 
 	// Pending agent UI requests
 	pendingViews map[string]*pendingView
@@ -685,6 +716,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activityAnimationFrame = 0
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
+	p.stopLiveWatchers()
 	p.stopTerminalModels()
 	p.reuseHeldWheelViewOnce = false
 	p.wheelViewCacheOK = false
@@ -851,6 +883,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("enter", "open-item", "workspace-issue")
+		ctx.Keymap.RegisterPluginBinding("O", "open-in-td", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("y", "yank-issue", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
@@ -859,10 +892,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-diff")
-		ctx.Keymap.RegisterPluginBinding(",", "prev-tab", "workspace-diff")
-		ctx.Keymap.RegisterPluginBinding(".", "next-tab", "workspace-diff")
-		ctx.Keymap.RegisterPluginBinding("{", "prev-file", "workspace-diff")
-		ctx.Keymap.RegisterPluginBinding("}", "next-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(",", "prev-file", "workspace-diff")
+		ctx.Keymap.RegisterPluginBinding(".", "next-file", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-id", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-diff")
@@ -942,7 +975,7 @@ func (p *Plugin) resetLifecycleState() {
 	p.commitForMergeModal = nil
 	p.linkingWorktree = nil
 	p.deleteConfirmWorktree = nil
-	p.deleteConfirmModal = nil
+	p.deleteConfirm.Clear()
 	p.fetchPRItems = nil
 	p.fetchPRLoading = false
 	p.fetchPRError = ""

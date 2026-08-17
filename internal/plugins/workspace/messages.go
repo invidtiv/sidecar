@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 // RefreshMsg triggers a worktree list refresh.
@@ -196,6 +197,15 @@ type RemoteCheckDoneMsg struct {
 	WorkspaceName string
 	Branch        string
 	Exists        bool
+}
+
+// WorktreeDirtyCheckedMsg carries git's answer about uncommitted work in the
+// worktree an open delete confirmation refers to. It is asked once, when the
+// confirmation opens, so the warning can tell the truth without putting a
+// `git status` on every refresh cycle (td-d37612).
+type WorktreeDirtyCheckedMsg struct {
+	Path  string
+	Dirty worktreedelete.Dirtiness
 }
 
 // PushMsg requests pushing a worktree branch.

@@ -21,7 +21,9 @@ import (
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
@@ -30,6 +32,7 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 	"github.com/marcus/sidecar/internal/workspaceops"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 const (
@@ -68,6 +71,15 @@ type ValidationMsg struct {
 	RequestID  uint64
 	Err        error
 }
+
+// RevealMsg asks the host to show the global Workspaces (Sessions) tab with
+// this workspace selected. Activating an Activity card stays in the global
+// space: the board and the list are two projections of one catalog, so the card
+// names a row the global browser already has, not a project to switch to.
+type RevealMsg struct {
+	Workspace workspaceinventory.Workspace
+}
+
 type panesMsg struct {
 	Generation int
 	Projects   []Project
@@ -87,6 +99,12 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	if IsSharedDiffMessage(msg) {
 		return true
 	}
+	// Live-refresh results are background work by definition: a watcher signal
+	// is not a user gesture, and a preview left stale because a modal happened
+	// to own focus is the defect this exists to fix.
+	if isLiveWatchMessage(msg) {
+		return true
+	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
@@ -96,7 +114,11 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		return true
 	case globalWorktreePlannedMsg, globalWorktreeCreatedMsg, globalWorktreeDeletedMsg, globalWorkspaceLaunchedMsg:
 		return true
-	case globalShellDeletedMsg:
+	case globalShellDeletedMsg, globalWorktreeDeleteProbeMsg, globalWorktreeDeleteDoneMsg:
+		return true
+	case shellProbedMsg, shellForgottenMsg:
+		// Auto-close of a dead shell is background work; it must land whether
+		// or not this browser is the visible surface (td-6a4100).
 		return true
 	default:
 		return false
@@ -178,6 +200,10 @@ type Model struct {
 	pulseScheduled  bool
 	pulseGeneration uint64
 
+	// shellLiveness holds what this surface has observed about each shell's
+	// tmux session, so a dead one closes and a hiccup does not (td-6a4100).
+	shellLiveness *shellliveness.Tracker
+
 	// A coalesced terminal wheel event that was held changed no visible state.
 	// Reuse the preceding Workspaces frame once rather than rebuilding it.
 	reuseWorkspacesViewOnce bool
@@ -241,6 +267,10 @@ type Model struct {
 	deleteModal     *modal.Modal
 	deleteModalW    int
 	deleteMouse     *mouse.Handler
+	// worktreeDelete is the shared "Delete Worktree?" confirmation
+	// (internal/worktreedelete) — the same construction the project surface
+	// raises. Only the shell confirmation above is this surface's own.
+	worktreeDelete worktreedelete.State
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -378,6 +408,7 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 }
 
 func (m *Model) Stop() {
+	m.stopLiveWatchers()
 	if m.cancel != nil {
 		if m.pollScheduled {
 			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
@@ -442,10 +473,22 @@ func (m *Model) Validate(msg NavigateMsg) tea.Cmd {
 // a refresh, a filter keystroke, scrolling, opening the tab — re-checks the
 // clock instead of leaving the row frozen until the next refresh.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
-	cmd := m.update(msg)
+	// Live-refresh messages are handled instead of the product update — a
+	// watcher signal is not a gesture and must not be interpreted as one — but
+	// they still fall through to the tail below, so queued pane geometry and the
+	// pulse are not dropped just because a watcher happened to fire.
+	cmd, handled := m.handleLiveWatchMsg(msg)
+	if !handled {
+		cmd = m.update(msg)
+	}
 	// Geometry a pane content asserted from inside the last render, dispatched
 	// on the first update after it. See paneHost.QueueSizeCmd.
 	cmds := append([]tea.Cmd{cmd}, m.takePaneSizeCmds()...)
+	// Swept once per update: preview panes open, retarget and close from too
+	// many places to trust each of them to say so. See live_preview.go.
+	if sync := m.reconcileLiveWatches(); sync != nil {
+		cmds = append(cmds, sync)
+	}
 	if pulse := m.pulseCmd(); pulse != nil {
 		cmds = append(cmds, pulse)
 	}
@@ -644,6 +687,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)
+	case globalWorktreeDeleteProbeMsg:
+		return m.applyWorktreeDeleteProbe(msg)
+	case globalWorktreeDeleteDoneMsg:
+		return m.applyWorktreeDeleteDone(msg)
 	case globalShellDeletedMsg:
 		m.deleteBusy = false
 		if msg.Err != nil {
@@ -655,6 +702,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.refreshProjectAfterMutation(msg.Project)
 	case projectMutationRefreshMsg:
 		return m.applyProjectMutationRefresh(msg)
+	case shellProbedMsg:
+		return m.applyShellProbe(msg)
+	case shellForgottenMsg:
+		return m.applyShellForgotten(msg)
 	case uirequest.RequestMsg:
 		return m.handleUIRequest(msg.Request)
 	case pollMsg:
@@ -822,8 +873,12 @@ func (m *Model) finishPhase() tea.Cmd {
 	m.persistActivity()
 	metrics := m.refreshCollector.Metrics()
 	m.tracef("cycle generation=%d complete_ms=%d project_ops=%d captures=%d max_project_concurrency=%d max_capture_concurrency=%d", m.generation, time.Since(m.cycleStart).Milliseconds(), metrics.ProjectOps, metrics.Captures, m.maxActive, metrics.MaxCaptures)
+	// A completed cycle is the one moment this surface holds a coherent tmux
+	// inventory beside the shells the manifests claim, which is exactly what
+	// deciding a shell has died requires (td-6a4100).
+	reap := m.reapDeadShells()
 	m.syncBoard()
-	return m.pollCmd()
+	return tea.Batch(m.pollCmd(), reap)
 }
 
 func (m *Model) applyInventoryIncrement(project Project, result workspaceinventory.ProjectResult) {
@@ -960,7 +1015,59 @@ func (m *Model) activate() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return m.RequestNavigation(workspace)
+	return m.RequestReveal(workspace)
+}
+
+// RequestReveal asks the host to open the selected card in the global
+// Workspaces browser. Bumping the request ID supersedes any activation still
+// being validated, exactly as a navigation request does.
+func (m *Model) RequestReveal(workspace workspaceinventory.Workspace) tea.Cmd {
+	m.requestID++
+	return func() tea.Msg { return RevealMsg{Workspace: workspace} }
+}
+
+// RevealWorkspace selects a workspace in the global Workspaces list. It is the
+// host's half of a RevealMsg and runs before the tab becomes visible, so the
+// preview binds to the revealed row rather than the previously selected one.
+func (m *Model) RevealWorkspace(workspace workspaceinventory.Workspace) tea.Cmd {
+	if workspace.ID == "" {
+		return nil
+	}
+	cmds := []tea.Cmd{m.focusList()}
+	if m.workspaces.SelectID(workspace.ID) {
+		return tea.Batch(cmds...)
+	}
+
+	// An idle worktree the list is currently hiding is still a row the user
+	// just asked for; show the hidden rows rather than silently landing on
+	// someone else's selection. The choice is persisted like every other way of
+	// making it, so the fly-out's checkbox tells the truth after a restart.
+	if !m.showIdleWorktrees {
+		m.showIdleWorktrees = true
+		cmds = append(cmds, m.persistIdleAndSync())
+		if m.workspaces.SelectID(workspace.ID) {
+			return tea.Batch(cmds...)
+		}
+	}
+
+	// A narrowing query is the other reason the row is not on screen. Landing
+	// silently on somebody else's row is the dangerous outcome — D acts on the
+	// selection — so the query goes rather than the request.
+	if m.workspaces.Filter().Active() {
+		m.workspaces.Filter().Reset()
+		m.workspaces.Reproject()
+		if m.workspaces.SelectID(workspace.ID) {
+			return tea.Batch(append(cmds, m.previewSync())...)
+		}
+	}
+
+	// The row is genuinely not here any more. Say so rather than leaving the
+	// previous selection looking like the answer.
+	name := workspace.Name
+	if name == "" {
+		name = workspace.ID
+	}
+	return tea.Batch(append(cmds, appmsg.ShowToast(name+" is no longer in the catalog", 3*time.Second))...)
 }
 
 func (m *Model) View(width, height int) string {
@@ -1183,29 +1290,15 @@ func isDormant(p agentstatus.Presentation, now time.Time) bool {
 	return now.Sub(p.ChangedAt) > DormantAfter
 }
 
-// relativeAge formats the gap between changedAt and now as the small units
-// the board cards use: "12s", "3m", "1h", "2d". Anything under 5s reads
-// "now"; a zero changedAt renders nothing.
+// relativeAge formats the gap between changedAt and now as the small units the
+// board cards use: "now", "3m", "1h", "2d". A zero changedAt renders nothing.
+//
+// It defers to the shared formatter rather than keeping a second copy of the
+// same ladder: the board and the workspace lists describe the same events, and
+// a card that reads "now" beside a list row that reads "12s" is two answers to
+// one question.
 func relativeAge(changedAt, now time.Time) string {
-	if changedAt.IsZero() {
-		return ""
-	}
-	d := now.Sub(changedAt)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < 5*time.Second:
-		return "now"
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return workspacelist.RelativeAge(changedAt, now)
 }
 
 func (m *Model) renderCompact(width, height int) string {

@@ -37,6 +37,11 @@ type EditorSessionOptions struct {
 	CursorAtEnd bool
 }
 
+// fallbackEditor is what the precedence chain lands on when the environment
+// names none. The shell wrapper recognises it and lets the profile resolve the
+// editor instead; see editor_launch.go.
+const fallbackEditor = "vim"
+
 // ResolveEditor returns the configured editor, preserving the established
 // EDITOR > VISUAL > vim precedence.
 func ResolveEditor() string {
@@ -46,7 +51,7 @@ func ResolveEditor() string {
 	if editor := os.Getenv("VISUAL"); editor != "" {
 		return editor
 	}
-	return "vim"
+	return fallbackEditor
 }
 
 // EditorAvailable reports whether tmux can host an embedded editor.
@@ -75,11 +80,14 @@ func StartEditorSession(opts EditorSessionOptions) (EditorSession, error) {
 		Name:   fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()),
 		Editor: editor,
 	}
-	editorArgs := []string{editor}
+	// The pane runs the editor through the user's profile, exactly as the
+	// suspend-into-$EDITOR path does, so the in-pane editor and the external
+	// one are provably the same program with the same configuration.
+	line := 0
 	if opts.Line > 0 {
-		editorArgs = append(editorArgs, fmt.Sprintf("+%d", opts.Line+1))
+		line = opts.Line + 1
 	}
-	editorArgs = append(editorArgs, opts.Path)
+	editorArgs, _ := EditorArgv(editor, line, opts.Path)
 	tmuxArgs := []string{
 		"new-session", "-d", "-s", session.Name,
 		"-x", strconv.Itoa(width), "-y", strconv.Itoa(height),

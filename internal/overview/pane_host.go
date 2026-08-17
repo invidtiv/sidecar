@@ -26,6 +26,49 @@ func (h paneHost) Content(node *panelayout.Node) paneframe.Content { return h.m.
 
 func (h paneHost) Focus() int { return h.m.preview.paneFocus }
 
+// SetFocus is the write half of Focus, and it routes through the same setter
+// every keyboard cycle uses. focusPreviewLeaf moves paneFocus, the panel's own
+// focus flag, the per-content focused bools and the live pane's keyboard in one
+// act, so a pointer cannot leave the ring on one leaf and the keys on another.
+func (h paneHost) SetFocus(node *panelayout.Node) {
+	m := h.m
+	if node == nil || node.Split != nil {
+		return
+	}
+	// A button going down on the terminal leaf moves the ring's leaf but does
+	// not, by itself, take the keyboard off the list. This surface has no
+	// "focused but not typing" preview: a press there may still become a
+	// drag-selection, and activation is the release. paneFocus moves anyway, so
+	// when the release does hand the pane its keyboard the ring is on the leaf
+	// the pointer chose rather than on whichever neighbour held it last.
+	//
+	// The condition is previewOwnsChrome, not PreviewFocused, because that is
+	// what DRAWS the ring. With the sidebar hidden the preview owns the chrome
+	// while the list still owns the keyboard, and deferring there would light an
+	// active border on the terminal while j/k moved the list — this ticket's own
+	// bug in a narrower case.
+	if node.Kind == panelayout.Terminal && !m.previewOwnsChrome() {
+		m.preview.paneFocus = node.ID
+		return
+	}
+	m.queuePreviewCmd(m.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: node.ID}))
+}
+
+// Layout is the tree as this frame places it now. It is the same call
+// renderPreviewPeer composes from and registerPreviewOutputRegions registers
+// from, so the boxes a pointer is tested against are the boxes that were drawn.
+func (h paneHost) Layout() (panelayout.Layout, bool) {
+	m := h.m
+	if m.preview.paneRoot == nil {
+		return panelayout.Layout{}, false
+	}
+	peer, ok := m.previewPeerBox()
+	if !ok {
+		return panelayout.Layout{}, false
+	}
+	return m.layoutPreviewPanes(peer)
+}
+
 func (h paneHost) HandleState(splitID int) ui.HandleState {
 	return h.m.dividerHandleState(previewPaneDividerKind, splitID)
 }
@@ -35,8 +78,17 @@ func (h paneHost) HandleState(splitID int) ui.HandleState {
 // syncTerminalGeometry, on the state change that moved its box — but a render
 // has no runtime to dispatch one with, so one that appears is kept rather than
 // silently dropped.
-func (h paneHost) QueueSizeCmd(cmd tea.Cmd) {
-	h.m.preview.paneSizeCmds = append(h.m.preview.paneSizeCmds, cmd)
+func (h paneHost) QueueSizeCmd(cmd tea.Cmd) { h.m.queuePreviewCmd(cmd) }
+
+// queuePreviewCmd keeps a command produced somewhere with no way to return one:
+// a render, or a focus change made inside a setter whose callers do not deal in
+// commands. Model.Update drains the queue, so the command is deferred by one
+// update rather than dropped.
+func (m *Model) queuePreviewCmd(cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	m.preview.paneSizeCmds = append(m.preview.paneSizeCmds, cmd)
 }
 
 // Chrome is a reader of focus: interactive/active on the focused leaf, muted on

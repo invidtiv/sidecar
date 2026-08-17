@@ -14,7 +14,12 @@ type ResolvedTheme struct {
 }
 
 // ResolveTheme determines the effective theme for a project path.
-// Priority: project.Theme > global UI.Theme > "default".
+// Priority: project.Theme > global UI.Theme > styles.FreshInstallTheme.
+//
+// The last step is what makes the launch theme a fresh-install default rather
+// than an upgrade: a recorded name — including "default" — is used as written,
+// and only an empty one, which is what a config with no ui.theme block loads
+// as, falls through.
 func ResolveTheme(cfg *config.Config, projectPath string) ResolvedTheme {
 	resolved := ResolvedTheme{
 		BaseName:      cfg.UI.Theme.Name,
@@ -32,7 +37,7 @@ func ResolveTheme(cfg *config.Config, projectPath string) ResolvedTheme {
 	}
 
 	if resolved.BaseName == "" {
-		resolved.BaseName = "default"
+		resolved.BaseName = styles.FreshInstallTheme
 	}
 
 	return resolved

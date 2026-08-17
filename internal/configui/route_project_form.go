@@ -477,7 +477,14 @@ func (m *Model) toggleInlineThemePicker() {
 	}
 	current := form.themeEntry
 	if current.IsZero() {
-		current = theme.EntryForConfig(m.Config().UI.Theme)
+		// The project has no theme of its own, so the picker opens on what the
+		// project inherits — the global choice. GlobalEntry, not
+		// EntryForConfig: a user who has never opened Configuration has no
+		// recorded global theme, and EntryForConfig would answer "inherits
+		// from the level above" (the zero entry) for a scope that has no level
+		// above it, leaving the cursor on nothing instead of on the theme
+		// actually on screen.
+		current = theme.GlobalEntry(m.Config().UI.Theme)
 	}
 	picker.open(current, form.restore)
 	form.picker = picker

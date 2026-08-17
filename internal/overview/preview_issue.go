@@ -21,6 +21,12 @@ func isPreviewIssueRegion(kind string) bool {
 // previewIssueTabHit is the tab stored on the issue header region.
 type previewIssueTabHit int
 
+// OpenIssueInTDMsg asks the app to leave global and open this issue in td.
+// The jump itself belongs to the app — this surface only names the issue.
+type OpenIssueInTDMsg struct {
+	IssueID string
+}
+
 // previewIssue is the memory-only issue pane beside the selected terminal.
 // The shared issue group lives here; this wrapper still owns root, workspace
 // surface, focus, epoch, and model-ID allocation. paneCache[workspaceID] is
@@ -97,6 +103,15 @@ func (m *Model) newPreviewIssueModel(issue *previewIssue) *issueview.Model {
 			return nil
 		}
 		return m.openOrFocusPreviewIssue(issue, id)
+	}
+	// O asks the app for the same jump the project issue pane and the preview
+	// modal make. This surface cannot reach the app's plugins itself, so it
+	// raises the request and the app performs the one jump.
+	view.OpenInTDHandler = func(id string) tea.Cmd {
+		if id == "" {
+			return nil
+		}
+		return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} }
 	}
 	return view
 }

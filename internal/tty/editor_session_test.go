@@ -77,6 +77,10 @@ func TestEditorSessionEmptyLifecycleIsSafe(t *testing.T) {
 func TestStartEditorSessionPreparesHistoryAndBuildsEditorCommand(t *testing.T) {
 	logPath := installFakeTmux(t)
 	t.Setenv("TERM", "")
+	// A named editor and a known login shell, so the argv the pane runs is the
+	// profile-loading one and does not vary with the developer's own $SHELL.
+	t.Setenv("EDITOR", "nvim")
+	t.Setenv("SHELL", "/bin/sh")
 	session, err := StartEditorSession(EditorSessionOptions{
 		NamePrefix:  "test-editor-",
 		Editor:      "nvim",
@@ -99,7 +103,9 @@ func TestStartEditorSessionPreparesHistoryAndBuildsEditorCommand(t *testing.T) {
 	if history < 0 || create < 0 || history > create {
 		t.Fatalf("history was not prepared before session creation:\n%s", log)
 	}
-	if !strings.Contains(log, "-e TERM=xterm-256color nvim +4 /tmp/file with spaces.md") {
+	// The pane runs the editor through the login shell, and the path arrives as
+	// a positional parameter rather than as shell text.
+	if !strings.Contains(log, `-e TERM=xterm-256color /bin/sh -l -i -c exec "$@" sidecar-editor nvim +4 /tmp/file with spaces.md`) {
 		t.Fatalf("editor argv missing line/path/TERM:\n%s", log)
 	}
 	if !strings.Contains(log, "send-keys -t "+session.Name+" G") ||

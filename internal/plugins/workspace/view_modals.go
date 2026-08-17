@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/worktreedelete"
 )
 
 // renderCreateModal renders the new worktree modal with dimmed background.
@@ -58,131 +59,26 @@ func (p *Plugin) ensureTaskLinkModal() {
 	p.taskLinkModal.SetFocus(taskLinkFieldID)
 }
 
-// renderConfirmDeleteModal renders the delete confirmation modal.
+// renderConfirmDeleteModal renders the delete confirmation modal. The modal is
+// built by internal/worktreedelete, the one construction the global Workspaces
+// browser raises too.
 func (p *Plugin) renderConfirmDeleteModal(width, height int) string {
-	// Render the background (list view)
 	background := p.renderListView(width, height)
 
-	p.ensureConfirmDeleteModal()
-	if p.deleteConfirmModal == nil {
+	built := p.deleteConfirm.Modal(p.width)
+	if built == nil {
 		return background
 	}
-
-	modalContent := p.deleteConfirmModal.Render(width, height, p.mouseHandler)
-	return ui.OverlayModal(background, modalContent, width, height)
+	return ui.OverlayModal(background, built.Render(width, height, p.mouseHandler), width, height)
 }
 
-const (
-	deleteConfirmLocalID  = "delete-confirm-local-branch"
-	deleteConfirmRemoteID = "delete-confirm-remote-branch"
-	deleteConfirmDeleteID = "delete-confirm-delete"
-	deleteConfirmCancelID = "delete-confirm-cancel"
-)
-
-// ensureConfirmDeleteModal builds/rebuilds the delete confirmation modal.
-func (p *Plugin) ensureConfirmDeleteModal() {
-	if p.deleteConfirmWorktree == nil {
-		return
+// worktreeDeleteTarget projects a plugin worktree onto the shared
+// confirmation's presentation-neutral target.
+func worktreeDeleteTarget(wt *Worktree) worktreedelete.Target {
+	if wt == nil {
+		return worktreedelete.Target{}
 	}
-
-	modalW := 58
-	if modalW > p.width-4 {
-		modalW = p.width - 4
-	}
-	if modalW < 20 {
-		modalW = 20
-	}
-
-	if p.deleteConfirmModal != nil && p.deleteConfirmModalWidth == modalW {
-		return
-	}
-	p.deleteConfirmModalWidth = modalW
-
-	p.deleteConfirmModal = modal.New("Delete Worktree?",
-		modal.WithWidth(modalW),
-		modal.WithVariant(modal.VariantDanger),
-		modal.WithHints(false),
-	).
-		AddSection(p.deleteConfirmInfoSection()).
-		AddSection(modal.Spacer()).
-		AddSection(p.deleteConfirmWarningSection()).
-		AddSection(modal.Spacer()).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch }, p.deleteConfirmBranchHeaderSection())).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch }, modal.Checkbox(deleteConfirmLocalID, "Delete local branch", &p.deleteLocalBranchOpt))).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch }, p.deleteConfirmLocalHintSection())).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch && p.deleteHasRemote }, modal.Checkbox(deleteConfirmRemoteID, "Delete remote branch", &p.deleteRemoteBranchOpt))).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch && p.deleteHasRemote }, p.deleteConfirmRemoteHintSection())).
-		AddSection(modal.When(func() bool { return !p.deleteIsMainBranch }, modal.Spacer())).
-		AddSection(modal.Buttons(
-			modal.Btn(" Delete ", deleteConfirmDeleteID, modal.BtnDanger()),
-			modal.Btn(" Cancel ", deleteConfirmCancelID),
-		))
-}
-
-func (p *Plugin) deleteConfirmInfoSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.deleteConfirmWorktree == nil {
-			return modal.RenderedSection{}
-		}
-
-		wt := p.deleteConfirmWorktree
-		var sb strings.Builder
-		fmt.Fprintf(&sb, "Name:   %s\n", lipgloss.NewStyle().Bold(true).Render(wt.Name))
-		fmt.Fprintf(&sb, "Branch: %s\n", wt.Branch)
-		fmt.Fprintf(&sb, "Path:   %s", dimText(wt.Path))
-
-		return modal.RenderedSection{Content: sb.String()}
-	}, nil)
-}
-
-func (p *Plugin) deleteConfirmWarningSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		warningStyle := lipgloss.NewStyle().Foreground(styles.Warning)
-
-		var sb strings.Builder
-		if p.deleteConfirmWorktree != nil && p.deleteConfirmWorktree.IsMissing {
-			sb.WriteString(warningStyle.Render("This will:"))
-			sb.WriteString("\n")
-			sb.WriteString(dimText("  • Directory already removed"))
-			sb.WriteString("\n")
-			sb.WriteString(dimText("  • Clean up git worktree metadata"))
-		} else {
-			sb.WriteString(warningStyle.Render("This will:"))
-			sb.WriteString("\n")
-			sb.WriteString(dimText("  • Remove the working directory"))
-			sb.WriteString("\n")
-			sb.WriteString(dimText("  • Uncommitted changes will be lost"))
-		}
-
-		return modal.RenderedSection{Content: sb.String()}
-	}, nil)
-}
-
-func (p *Plugin) deleteConfirmBranchHeaderSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		content := lipgloss.NewStyle().Bold(true).Render("Branch Cleanup (Optional)")
-		return modal.RenderedSection{Content: content}
-	}, nil)
-}
-
-func (p *Plugin) deleteConfirmLocalHintSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.deleteConfirmWorktree == nil {
-			return modal.RenderedSection{}
-		}
-		wt := p.deleteConfirmWorktree
-		return modal.RenderedSection{Content: dimText("  Removes '" + wt.Branch + "' locally")}
-	}, nil)
-}
-
-func (p *Plugin) deleteConfirmRemoteHintSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.deleteConfirmWorktree == nil {
-			return modal.RenderedSection{}
-		}
-		wt := p.deleteConfirmWorktree
-		return modal.RenderedSection{Content: dimText("  Removes 'origin/" + wt.Branch + "'")}
-	}, nil)
+	return worktreedelete.Target{Name: wt.Name, Branch: wt.Branch, Path: wt.Path, IsMissing: wt.IsMissing}
 }
 
 const (

@@ -25,6 +25,21 @@ type Host interface {
 	Chrome(node *panelayout.Node) Chrome
 	// Focus is the leaf ID that owns the surface's keyboard focus.
 	Focus() int
+	// SetFocus gives one leaf the surface's keyboard focus. It is the write half
+	// of Focus, and it exists so the two halves cannot be different values: the
+	// ring is drawn from Focus, a pointer moves it through SetFocus, and a
+	// surface has no third place to record "who is being typed into". A surface
+	// whose live terminal holds the keyboard separately must give it up here —
+	// focus that has moved off a leaf and keys that have not is precisely the
+	// divergence this pair is for.
+	SetFocus(node *panelayout.Node)
+	// Layout is the pane tree as the surface last DREW it — the same placement
+	// Compose and RegisterRegions were driven with — so the frame can answer
+	// which leaf a screen point belongs to. It must be false whenever the tree
+	// is not what is on screen. Answering geometry the surface could place but
+	// did not draw hands out phantom leaf boxes to whatever replaced the tree,
+	// and a pointer then focuses panes the user cannot see.
+	Layout() (panelayout.Layout, bool)
 	// HandleState is the pointer state of one split's drag handle.
 	HandleState(splitID int) ui.HandleState
 	// QueueSizeCmd takes a command a content returned from SetSize. A render has
@@ -107,6 +122,68 @@ func RenderContent(host Host, node *panelayout.Node, inner Box, zoomed bool) str
 		Zoomed:  zoomed,
 		Origin:  mouse.Rect(inner),
 	})
+}
+
+// LeafAt is the leaf whose OUTER box contains a surface-local point, or nil for
+// a point on a divider's drag target, outside the canvas, or on nothing the tree
+// placed.
+//
+// Placement boxes never overlap, so at most one leaf can answer a point and the
+// first match is the only match. Dividers are subtracted first because
+// DividerHitBox deliberately reaches one cell into the leaf's border on each
+// side, and that cell belongs to the handle: this is the same precedence
+// RegisterRegions gives it by registering dividers after leaf bodies, said once
+// so a pointer cannot resize past a pane and re-focus it in the same press.
+func LeafAt(layout panelayout.Layout, x, y int) *panelayout.Node {
+	for _, divider := range layout.Dividers {
+		if boxContains(DividerHitBox(divider), x, y) {
+			return nil
+		}
+	}
+	for _, placement := range layout.Leaves {
+		if placement.Node == nil {
+			continue
+		}
+		if boxContains(placement.Box, x, y) {
+			return placement.Node
+		}
+	}
+	return nil
+}
+
+func boxContains(box Box, x, y int) bool {
+	if box.W <= 0 || box.H <= 0 {
+		return false
+	}
+	return x >= box.X && x < box.X+box.W && y >= box.Y && y < box.Y+box.H
+}
+
+// FocusLeafAt moves the surface's keyboard focus to the leaf under a pointer,
+// and reports whether a leaf was there. It moves focus and nothing else: the
+// event carries on to whichever region claimed it, so a press inside a terminal
+// leaf still reaches the live pane and a press on a file row still selects it.
+//
+// Focus is answered from GEOMETRY rather than from the region a press landed
+// on, and that is the whole point. Which region consumes a press belongs to the
+// content — a terminal leaf's presses are claimed by the live pane and
+// forwarded to tmux, a diff leaf's by its file rows — so a surface that hung
+// focus off those handlers needed one focus call per leaf kind and got the ring
+// wrong for the kind nobody remembered. A leaf's box, by contrast, is something
+// every leaf has, including kinds that do not exist yet.
+func FocusLeafAt(host Host, x, y int) bool {
+	if host == nil {
+		return false
+	}
+	layout, ok := host.Layout()
+	if !ok {
+		return false
+	}
+	node := LeafAt(layout, x, y)
+	if node == nil {
+		return false
+	}
+	host.SetFocus(node)
+	return true
 }
 
 // RegionSink is where a surface puts the hit regions one composed frame earns.

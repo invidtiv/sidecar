@@ -359,10 +359,11 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 			copy := *action
 			s.Action = &copy
 		}
+		showProject := m.showsProjectInRow(section)
 		for _, item := range section.Items {
 			item := item
 			s.Rows = append(s.Rows, SidebarRow{ID: item.ID, Data: item.Data, Render: func(width int, selected, focused bool) []string {
-				return m.renderRow(item, selected, focused, width, now)
+				return m.renderRow(item, selected, focused, width, now, showProject)
 			}})
 		}
 		sidebarSections = append(sidebarSections, s)
@@ -420,9 +421,19 @@ func (m *Model) failureLines(rows, width int) []string {
 // project + name with relative age, then kind glyph + agent. Status lives in
 // the gutter marker and is not repeated as text. Project colour reinforces
 // the project word but is never the only differentiator.
-func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time) []string {
+// showsProjectInRow decides whether rows in a section still need to name their
+// project. Under Project sort the heading above them already does, and the
+// repeat costs the row width it needs for the name and its detail. The Pinned
+// section is the exception: it is not a project section, so its rows keep the
+// prefix even under Project sort or they would be the only rows on screen with
+// no project at all.
+func (m *Model) showsProjectInRow(section Section) bool {
+	return m.sortMode != SortProject || section.Key == ""
+}
+
+func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time, showProject bool) []string {
 	namePrefix := RowField{}
-	if item.Project != "" {
+	if showProject && item.Project != "" {
 		namePrefix = RowField{
 			Text:     item.Project + " ",
 			Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project) + " ",
@@ -471,6 +482,13 @@ func fit(line string, width int) string {
 
 // RelativeAge formats freshness in the same small units the Agents board uses,
 // so one item does not read "3m" on one tab and "3 minutes" on the other.
+//
+// Everything under a minute reads "now". A second-level countdown is a claim to
+// precision this data cannot back: last-interaction time is inferred from tmux
+// and session files and is routinely off by more than the digits it is showing.
+// It also churned — every row that had just moved redrew its number once a
+// second, so the weakest number on the surface was also the one drawing the eye.
+// "now" is the honest form of the same fact and it holds still.
 func RelativeAge(changedAt, now time.Time) string {
 	if changedAt.IsZero() {
 		return ""
@@ -480,10 +498,8 @@ func RelativeAge(changedAt, now time.Time) string {
 		d = 0
 	}
 	switch {
-	case d < 5*time.Second:
-		return "now"
 	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
+		return "now"
 	case d < time.Hour:
 		return fmt.Sprintf("%dm", int(d.Minutes()))
 	case d < 24*time.Hour:

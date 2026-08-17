@@ -38,8 +38,12 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "cancel", Name: "Cancel", Description: "Close the create prompt", Context: ctxGlobalWorkspacesCreate, Priority: 2},
 		}
 	case ctxGlobalWorkspacesDelete:
+		subject := "shell"
+		if m.DeletingWorktree() {
+			subject = "worktree"
+		}
 		return []plugin.Command{
-			{ID: "confirm-delete", Name: "Delete", Description: "Delete the selected shell", Context: ctxGlobalWorkspacesDelete, Priority: 1},
+			{ID: "confirm-delete", Name: "Delete", Description: "Delete the selected " + subject, Context: ctxGlobalWorkspacesDelete, Priority: 1},
 			{ID: "cancel", Name: "Cancel", Description: "Close the delete confirmation", Context: ctxGlobalWorkspacesDelete, Priority: 2},
 		}
 	case ctxGlobalWorkspacesTerminal:
@@ -73,12 +77,13 @@ func (m *Model) Commands() []plugin.Command {
 	case ctxGlobalWorkspacesIssue:
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: ctxGlobalWorkspacesIssue, Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close the active issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 4},
-			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 5},
-			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 6},
-			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 7},
+			{ID: "open-in-td", Name: "TD", Description: "Open the selected issue in td", Context: ctxGlobalWorkspacesIssue, Priority: 2},
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 3},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 4},
+			{ID: "next-tab", Name: "Tab→", Description: "Next issue tab", Context: ctxGlobalWorkspacesIssue, Priority: 5},
+			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 6},
+			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 7},
+			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 8},
 		}
 	default:
 		cmds := []plugin.Command{
@@ -107,6 +112,9 @@ func (m *Model) Commands() []plugin.Command {
 				})
 				if mergeRefusal(workspace) == "" {
 					cmds = append(cmds, plugin.Command{ID: "merge-workflow", Name: "Merge", Description: "Open the owning project's merge strategy workflow", Context: ctxGlobalWorkspaces, Priority: 9})
+				}
+				if deleteRefusal(workspace) == "" {
+					cmds = append(cmds, plugin.Command{ID: "delete-worktree", Name: "Delete", Description: "Delete the selected worktree", Context: ctxGlobalWorkspaces, Priority: 10})
 				}
 			}
 		}

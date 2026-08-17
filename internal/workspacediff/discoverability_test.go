@@ -26,7 +26,7 @@ func TestEveryViewerKeyIsRegistered(t *testing.T) {
 		"l", "right", "enter", "h", "left",
 		"v", "z", "f", "n", "N",
 		"ctrl+d", "ctrl+u", "pgup", "pgdown",
-		"{", "}",
+		",", ".",
 	}
 	for _, context := range diffContexts {
 		bound := map[string]bool{}
@@ -90,6 +90,46 @@ func TestNavigationLeadsTheFooter(t *testing.T) {
 	for _, id := range []string{"diff-open", "diff-down", "diff-up"} {
 		if p, ok := byID[id]; !ok || p > 5 {
 			t.Fatalf("%s priority = %d (present %v), want a leading hint", id, p, ok)
+		}
+	}
+}
+
+// One rule everywhere: wherever { and } are bound at all, they cycle tabs.
+// The Diff pane was the exception until they were swapped with , / . — this is
+// what stops the exception coming back.
+func TestBracesAlwaysMeanTabCycling(t *testing.T) {
+	for _, b := range keymap.DefaultBindings() {
+		switch b.Key {
+		case "{":
+			if b.Command != "prev-tab" {
+				t.Errorf("%s: { is bound to %q, want prev-tab", b.Context, b.Command)
+			}
+		case "}":
+			if b.Command != "next-tab" {
+				t.Errorf("%s: } is bound to %q, want next-tab", b.Context, b.Command)
+			}
+		}
+	}
+}
+
+// Both Diff surfaces answer the same keys with the same commands. A binding
+// that lands on one and not the other is a parity bug.
+func TestDiffNavigationKeysMatchAcrossBothSurfaces(t *testing.T) {
+	want := map[string]string{
+		"{": "prev-tab", "}": "next-tab",
+		",": "prev-file", ".": "next-file",
+	}
+	for _, context := range diffContexts {
+		got := map[string]string{}
+		for _, b := range bindingsFor(context) {
+			if _, interesting := want[b.Key]; interesting {
+				got[b.Key] = b.Command
+			}
+		}
+		for key, command := range want {
+			if got[key] != command {
+				t.Errorf("%s: %q is bound to %q, want %q", context, key, got[key], command)
+			}
 		}
 	}
 }

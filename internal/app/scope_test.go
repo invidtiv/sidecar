@@ -93,8 +93,11 @@ func TestScopeTransitionsNeverReinitializeTheProject(t *testing.T) {
 		msg  tea.Msg
 	}{
 		{"enter global", tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}},
-		{"global tab 2", tea.KeyPressMsg{Code: '2', Text: "2"}},
-		{"cycle global", tea.KeyPressMsg{Code: '`', Text: "`"}},
+		{"global tab Activity", tea.KeyPressMsg{Code: '9', Text: "9"}},
+		// Backwards, so the step stays inside the global entries: the header
+		// ring runs Sessions, Activity, then the project tabs, and this test is
+		// about what a scope change costs, not about where the ring goes next.
+		{"cycle global", tea.KeyPressMsg{Code: '[', Text: "["}},
 		{"back to project", tea.KeyPressMsg{Code: tea.KeyEsc}},
 		{"enter global again", tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift}},
 		{"escape to project", tea.KeyPressMsg{Code: tea.KeyEsc}},
@@ -197,9 +200,9 @@ func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 
 	updated, _ := m.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
 	m = asAppModel(t, updated)
-	updated, _ = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
 	m = asAppModel(t, updated)
-	updated, _ = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '8', Text: "8"})
 	m = asAppModel(t, updated)
 	if m.globalTab != GlobalSessions {
 		t.Fatalf("setup: tab = %v, want Sessions", m.globalTab)
@@ -376,11 +379,11 @@ func TestTasksIsAGlobalTabOutsideTheProjectRegistry(t *testing.T) {
 		t.Fatalf("global tabs = %#v, want Agents/Workspaces/Tasks", tabs)
 	}
 
-	// Number 3 selects it, and it then owns keys, footer status, and context.
-	updated, _ := m.Update(tea.KeyPressMsg{Code: '3', Text: "3"})
+	// `0` selects it, and it then owns keys, footer status, and context.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: '0', Text: "0"})
 	m = asAppModel(t, updated)
 	if !m.globalTasksFocused() {
-		t.Fatalf("3 did not select the Tasks tab: tab=%v", m.globalTab)
+		t.Fatalf("0 did not select the Tasks tab: tab=%v", m.globalTab)
 	}
 	if m.activeContext != "tasks-list" {
 		t.Fatalf("activeContext = %q, want the hosted surface's own", m.activeContext)
@@ -577,14 +580,16 @@ func TestGlobalScopeOwnsFooterAndHelp(t *testing.T) {
 	keymap.RegisterDefaults(m.keymap)
 
 	projectHints := m.footerHints()
-	if !hasHint(projectHints, "1-4", "plugins") {
-		t.Fatalf("project footer lost its plugin range: %#v", projectHints)
+	if !hasHint(projectHints, "1-4", "plugins") || !hasHint(projectHints, "8/9/0", "global") {
+		t.Fatalf("project footer lost its tab hints: %#v", projectHints)
 	}
 
 	m.scope = ScopeGlobal
 	m.updateContext()
 	globalHints := m.footerHints()
-	if !hasHint(globalHints, "1-3", "tabs") {
+	// The number row addresses the whole header from either scope, so the
+	// global space advertises the same two hints the project space does.
+	if !hasHint(globalHints, "1-4", "plugins") || !hasHint(globalHints, "8/9/0", "global") {
 		t.Fatalf("global footer advertises the wrong tab range: %#v", globalHints)
 	}
 	if !hasHint(globalHints, "q", "quit") {
@@ -780,7 +785,7 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 		t.Fatal("the Sessions tab did not wake its preview")
 	}
 
-	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
 	m = asAppModel(t, updated)
 	if cmd != nil {
 		cmd()
@@ -791,7 +796,7 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 
 	// Another global tab, and leaving the space entirely, both put it back to
 	// sleep — cancelling the in-flight capture and dropping what it captured.
-	updated, cmd = m.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '8', Text: "8"})
 	m = asAppModel(t, updated)
 	if cmd != nil {
 		cmd()
@@ -800,7 +805,7 @@ func TestOnlyTheVisibleWorkspacesTabDrivesTheSelectedPreview(t *testing.T) {
 		t.Fatal("switching back to Sessions did not wake its preview")
 	}
 
-	updated, cmd = m.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
+	updated, cmd = m.Update(tea.KeyPressMsg{Code: '9', Text: "9"})
 	m = asAppModel(t, updated)
 	if cmd != nil {
 		cmd()

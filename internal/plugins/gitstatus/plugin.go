@@ -3,7 +3,6 @@ package gitstatus
 import (
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -1216,6 +1216,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		// git-status-diff context (inline diff pane)
 		{ID: "toggle-diff-view", Name: "View", Description: "Toggle unified/split diff view", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 2},
 		{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
+		{ID: "reset-hscroll", Name: "Col 0", Description: "Snap horizontal scroll back to column 0", Category: plugin.CategoryNavigation, Context: "git-status-diff", Priority: 4},
 		{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Category: plugin.CategoryView, Context: "git-status-diff", Priority: 3},
 		// git-diff context
 		{ID: "close-diff", Name: "Close", Description: "Close diff view", Category: plugin.CategoryView, Context: "git-diff", Priority: 1},
@@ -1409,10 +1410,9 @@ func (p *Plugin) listenForWatchEvents() tea.Cmd {
 // openFile opens a file in the default editor.
 func (p *Plugin) openFile(path string) tea.Cmd {
 	return func() tea.Msg {
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			editor = "vim"
-		}
+		// Shared resolution: git status honours VISUAL and the rest of the
+		// chain exactly as the other launch sites do.
+		editor := tty.ResolveEditor()
 		fullPath := filepath.Join(p.repoRoot, path)
 		return plugin.OpenFileMsg{Editor: editor, Path: fullPath}
 	}

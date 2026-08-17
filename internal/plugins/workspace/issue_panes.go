@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
@@ -147,6 +148,9 @@ func (p *Plugin) newIssueModel(pane *issuePane) *issueview.Model {
 		}
 		return p.openOrFocusIssue(pane, id)
 	}
+	// O leaves the pane for td, through the same jump the issue preview modal
+	// uses. Nothing about the jump is restated here.
+	view.OpenInTDHandler = app.OpenIssueInTD
 	return view
 }
 

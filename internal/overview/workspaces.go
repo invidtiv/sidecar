@@ -528,8 +528,18 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 	switch key {
 	case "D":
-		if workspace, ok := m.SelectedWorkspace(); ok && workspace.Kind == workspaceinventory.KindShell {
+		// D acts on whatever is selected, as it does on the project surface: a
+		// shell raises the shell confirmation, a worktree raises the shared
+		// "Delete Worktree?" one.
+		workspace, ok := m.SelectedWorkspace()
+		if !ok {
+			return false, nil
+		}
+		switch workspace.Kind {
+		case workspaceinventory.KindShell:
 			return true, m.OpenDeleteSelectedShell()
+		case workspaceinventory.KindWorktree:
+			return true, m.OpenDeleteSelectedWorktree()
 		}
 		return false, nil
 	case "m":
@@ -824,6 +834,15 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
+	}
+	// Focus follows the pointer's LEAF before any region handler runs, so the
+	// ring lands on what was pressed whether or not that leaf's kind happens to
+	// own a click-to-focus region. The terminal leaf owns none — its presses are
+	// the live pane's and are forwarded to tmux — which is why hanging focus off
+	// the region handlers left the ring behind on the neighbour. This moves
+	// focus only; the press still reaches the region that claimed it.
+	if tty.PressesTerminal(action.Type) {
+		paneframe.FocusLeafAt(paneHost{m}, action.X, action.Y)
 	}
 	cmd := m.workspacesRegionMouse(action)
 	if !pressAway || secondaryClick {

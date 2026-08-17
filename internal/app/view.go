@@ -888,7 +888,7 @@ func (m Model) headerGeometry() headerLayout {
 	// of the right cluster nothing depends on.
 	if clockWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		suffixWidth -= clockWidth + 1
-		clock, clockWidth = "", 0
+		clock = ""
 	}
 	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		remove := -1
@@ -1261,19 +1261,28 @@ func (m Model) globalFooterHints() []footerHint {
 
 	typing := m.textInputFocused()
 
-	// Tab switching hints (consolidated for brevity). The advertised range is
-	// the active scope's own tab count, so the global space never promises a
-	// number that would reach a project plugin.
+	// Tab switching hints (consolidated for brevity). The number row addresses
+	// the whole header from either scope, so the same two hints are correct in
+	// both: 1-N for the project's plugin tabs, and the 8/9/0 keys for whichever
+	// global entries actually exist. A disabled Tasks tab drops `0` from the
+	// hint rather than renumbering anything.
 	//
 	// A focused text input has taken the digits: typing "2" into a file
 	// finder's query is a query, not a tab switch. A footer that advertises a
 	// binding the focused surface has claimed is not a hint, it is wrong.
-	if count := len(m.visibleTabs()); count > 1 && !typing && !m.configOpen() {
-		label := "plugins"
-		if m.inGlobalScope() {
-			label = "tabs"
+	if !typing && !m.configOpen() {
+		if count := m.numberedProjectTabs(); count > 1 {
+			hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", count), label: "plugins"})
 		}
-		hints = append(hints, footerHint{keys: fmt.Sprintf("1-%d", min(count, 9)), label: label})
+		var globalKeys []string
+		for _, tab := range m.globalTabsVisible() {
+			if key := globalTabKey(tab); key != "" {
+				globalKeys = append(globalKeys, key)
+			}
+		}
+		if len(globalKeys) > 0 {
+			hints = append(hints, footerHint{keys: strings.Join(globalKeys, "/"), label: "global"})
+		}
 	}
 
 	// The digits are not the only global binding a text input takes. `q` types

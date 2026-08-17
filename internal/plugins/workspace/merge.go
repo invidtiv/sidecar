@@ -175,7 +175,12 @@ type UncommittedChangesCheckMsg struct {
 	StagedCount    int
 	ModifiedCount  int
 	UntrackedCount int
-	Err            error
+	// Changes and Stats are the live porcelain result used to make this
+	// decision. The update handler writes them back onto the worktree so the
+	// shared snapshot matches what merge just saw.
+	Changes *WorktreeChanges
+	Stats   *GitStats
+	Err     error
 }
 
 // MergeCommitDoneMsg signals that the commit before merge completed.
@@ -255,42 +260,51 @@ type PullAfterMergeMsg struct {
 	Err           error
 }
 
-// checkUncommittedChanges checks if a worktree has uncommitted changes.
+// checkUncommittedChanges refreshes this worktree's shared porcelain snapshot
+// and reports whether anything is still uncommitted. The last workspace
+// refresh can lag the live diff pane, so merge cannot trust it.
 func (p *Plugin) checkUncommittedChanges(wt *Worktree) tea.Cmd {
 	scope := p.lifecycleScope(wt)
 	name := wt.Name
-	var stagedCount, modifiedCount, untrackedCount int
-	var statusErr error
-	if wt.Changes == nil || wt.Changes.State == LoadStateLoading || wt.Changes.State == LoadStateUnknown {
-		statusErr = fmt.Errorf("shared git status is not loaded; refresh the workspace and retry")
-	} else if wt.Changes.Err != nil || wt.Changes.State == LoadStateError {
-		statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry")
-		if wt.Changes.Err != nil {
-			statusErr = fmt.Errorf("shared git status failed; refresh the workspace and retry: %w", wt.Changes.Err)
-		}
-	} else {
-		stagedCount = len(wt.Changes.Staged)
-		modifiedCount = len(wt.Changes.Unstaged)
-		untrackedCount = len(wt.Changes.Untracked)
+	path := wt.Path
+	ctx := p.operationCtx
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	return func() tea.Msg {
-		if statusErr != nil {
+		if path == "" {
 			return UncommittedChangesCheckMsg{
 				OperationScope: scope,
 				WorkspaceName:  name,
-				HasChanges:     false,
-				Err:            statusErr,
+				Err:            fmt.Errorf("worktree path is unavailable"),
 			}
 		}
-		hasChanges := stagedCount > 0 || modifiedCount > 0 || untrackedCount > 0
-
+		changes, stats := collectWorktreeChanges(ctx, path, nil)
+		if changes.Err != nil || changes.State == LoadStateError {
+			err := changes.Err
+			if err == nil {
+				err = fmt.Errorf("git status failed")
+			}
+			return UncommittedChangesCheckMsg{
+				OperationScope: scope,
+				WorkspaceName:  name,
+				Changes:        changes,
+				Stats:          stats,
+				Err:            err,
+			}
+		}
+		stagedCount := len(changes.Staged)
+		modifiedCount := len(changes.Unstaged)
+		untrackedCount := len(changes.Untracked)
 		return UncommittedChangesCheckMsg{
 			OperationScope: scope,
 			WorkspaceName:  name,
-			HasChanges:     hasChanges,
+			HasChanges:     stagedCount > 0 || modifiedCount > 0 || untrackedCount > 0,
 			StagedCount:    stagedCount,
 			ModifiedCount:  modifiedCount,
 			UntrackedCount: untrackedCount,
+			Changes:        changes,
+			Stats:          stats,
 		}
 	}
 }
@@ -349,11 +363,9 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 			}
 		}
 
-		// The modal's counts come from the shared status snapshot, which can be
-		// stale (an agent may have committed since the last refresh). If nothing
-		// is staged after `git add -A`, there is genuinely nothing to commit;
-		// treat that as success so the merge/PR workflow can continue instead of
-		// dead-ending on git's "nothing to commit" error.
+		// An agent may commit while the modal is open. If nothing is staged
+		// after `git add -A`, treat that as success so merge can continue
+		// instead of dead-ending on git's "nothing to commit" error.
 		if clean, cerr := indexMatchesHEAD(ctx, path); cerr == nil && clean {
 			return MergeCommitDoneMsg{
 				OperationScope:  scope,
@@ -381,14 +393,14 @@ func (p *Plugin) stageAllAndCommit(wt *Worktree, message string) tea.Cmd {
 }
 
 // startMergeWorkflow initializes the merge workflow for a worktree.
-// It first checks for uncommitted changes and shows a commit modal if needed.
+// It first refreshes this worktree's porcelain status and shows a commit
+// modal if anything is still uncommitted.
 func (p *Plugin) startMergeWorkflow(wt *Worktree) tea.Cmd {
 	if wt == nil {
 		return nil
 	}
 
 	p.newLifecycleScope(wt)
-	// Check for uncommitted changes before proceeding
 	return p.checkUncommittedChanges(wt)
 }
 
@@ -1151,8 +1163,9 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	scope := state.OperationScope
 	ctx := p.operationCtx
 	name, path, branch := wt.Name, wt.Path, wt.Branch
-	// Compute session name before entering closure (consistent with executeDelete)
-	sessionName := worktreeTmuxSession(wt)
+	// No session name is resolved here any more. Closing the worktree's
+	// session belongs to the shared removal path, which is reached through
+	// runCleanupPlan below (td-3df472).
 
 	repoPath := p.ctx.ProjectRoot
 	if p.repoSnapshot != nil {
@@ -1161,6 +1174,10 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 	if state.DirectOperation != nil && state.DirectOperation.TargetPath != "" {
 		repoPath = state.DirectOperation.TargetPath
 	}
+	// The owning project, not the checkout the git commands run from: it is
+	// the project's shells.json that records the shells rooted in the worktree
+	// being removed (td-f017b9).
+	projectRoot := p.ctx.ProjectRoot
 	if repoPath == "" || filepath.Clean(repoPath) == filepath.Clean(path) {
 		return func() tea.Msg {
 			return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: &CleanupResults{Errors: []string{"Cleanup: no surviving repository path is available"}}}
@@ -1194,7 +1211,8 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 			}
 		}
 		plan := CleanupPlan{
-			RepoPath: repoPath, WorktreePath: path, Branch: branch, ExpectedOID: expectedOID,
+			RepoPath: repoPath, ProjectRoot: projectRoot,
+			WorktreePath: path, Branch: branch, ExpectedOID: expectedOID,
 			BranchRemote: branchRemote, ExpectedRemoteOID: expectedRemoteOID,
 			BaseRemote: baseRemote, BaseBranch: targetBranch,
 			DeleteWorktree: deleteWorktree, DeleteBranch: deleteBranch,
@@ -1205,10 +1223,11 @@ func (p *Plugin) performSelectedCleanup(wt *Worktree, state *MergeWorkflowState)
 			identity := state.PR
 			plan.PRIdentity = &identity
 		}
+		// No kill here. The session teardown belongs to the shared removal
+		// path, which closes it before the directory goes; killing it
+		// afterwards left whatever was running in that session alive in a
+		// deleted working directory (td-3df472).
 		results := runCleanupPlanContext(ctx, plan)
-		if results.LocalWorktreeDeleted {
-			_ = exec.CommandContext(ctx, "tmux", "kill-session", "-t", sessionName).Run()
-		}
 		return CleanupDoneMsg{OperationScope: scope, WorkspaceName: name, Results: results}
 	}
 }

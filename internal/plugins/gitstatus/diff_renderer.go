@@ -19,31 +19,43 @@ const (
 	DiffViewFullFile                       // Full-file side-by-side view (like VS Code diff)
 )
 
-// Additional styles for enhanced diff rendering
-var (
-	wordDiffAddStyle = lipgloss.NewStyle().
-				Foreground(styles.Success).
-				Background(styles.DiffAddBg).
-				Bold(true)
+// Additional styles for enhanced diff rendering.
+//
+// Functions rather than a var block: package-level vars are evaluated at init,
+// before any theme is applied, which froze these on the built-in default
+// palette regardless of the active theme.
 
-	wordDiffRemoveStyle = lipgloss.NewStyle().
-				Foreground(styles.Error).
-				Background(styles.DiffRemoveBg).
-				Bold(true)
+func wordDiffAddStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Success).
+		Background(styles.DiffAddBg).
+		Bold(true)
+}
 
-	hunkHeaderStyle = lipgloss.NewStyle().
-			Foreground(styles.Info).
-			Background(styles.BgSecondary).
-			Bold(true)
+func wordDiffRemoveStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Error).
+		Background(styles.DiffRemoveBg).
+		Bold(true)
+}
 
-	sideBySideBorder = lipgloss.NewStyle().
-				Foreground(styles.BorderNormal)
+func hunkHeaderStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Info).
+		Background(styles.BgSecondary).
+		Bold(true)
+}
 
-	fileHeaderStyle = lipgloss.NewStyle().
-			Foreground(styles.TextPrimary).
-			Background(styles.BgTertiary).
-			Bold(true)
-)
+func sideBySideBorder() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.BorderNormal)
+}
+
+func fileHeaderStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.TextPrimary).
+		Background(styles.BgTertiary).
+		Bold(true)
+}
 
 // RenderLineDiff renders a parsed diff in unified line-by-line format with line numbers.
 // horizontalOffset scrolls the content horizontally (0 = no scroll).
@@ -89,7 +101,7 @@ func RenderLineDiff(diff *ParsedDiff, width, startLine, maxLines, horizontalOffs
 				// Render hunk header
 				header := truncateLine(fmt.Sprintf("@@ -%d,%d +%d,%d @@%s",
 					hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount, hunk.Header), contentWidth)
-				sb.WriteString(hunkHeaderStyle.Render(header))
+				sb.WriteString(hunkHeaderStyle().Render(header))
 				sb.WriteString("\n")
 				rendered++
 				isFirstHunk = false
@@ -103,7 +115,7 @@ func RenderLineDiff(diff *ParsedDiff, width, startLine, maxLines, horizontalOffs
 			// Render hunk header
 			header := truncateLine(fmt.Sprintf("@@ -%d,%d +%d,%d @@%s",
 				hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount, hunk.Header), contentWidth)
-			sb.WriteString(hunkHeaderStyle.Render(header))
+			sb.WriteString(hunkHeaderStyle().Render(header))
 			sb.WriteString("\n")
 			rendered++
 			isFirstHunk = false
@@ -217,7 +229,7 @@ func RenderSideBySide(diff *ParsedDiff, width, startLine, maxLines, horizontalOf
 			}
 			header := fmt.Sprintf("@@ -%d,%d +%d,%d @@",
 				hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount)
-			sb.WriteString(hunkHeaderStyle.Render(padRight(header, width-1)))
+			sb.WriteString(hunkHeaderStyle().Render(padRight(header, width-1)))
 			sb.WriteString("\n")
 			rendered++
 			isFirstHunk = false
@@ -294,7 +306,7 @@ func RenderSideBySide(diff *ParsedDiff, width, startLine, maxLines, horizontalOf
 					maxH = len(rightLines)
 				}
 				lineNoPad := strings.Repeat(" ", lineNoWidth)
-				sep := sideBySideBorder.Render(" │ ")
+				sep := sideBySideBorder().Render(" │ ")
 				for vi := 0; vi < maxH; vi++ {
 					if rendered >= maxLines {
 						break
@@ -334,7 +346,7 @@ func RenderSideBySide(diff *ParsedDiff, width, startLine, maxLines, horizontalOf
 					rightRendered)
 
 				sb.WriteString(leftPanel)
-				sb.WriteString(sideBySideBorder.Render(" │ "))
+				sb.WriteString(sideBySideBorder().Render(" │ "))
 				sb.WriteString(rightPanel)
 				sb.WriteString("\n")
 				rendered++
@@ -367,7 +379,7 @@ func RenderFullFileSideBySide(fullDiff *FullFileDiff, width, startLine, maxLines
 		Width(lineNoWidth).
 		Align(lipgloss.Right)
 
-	sep := sideBySideBorder.Render(" │ ")
+	sep := sideBySideBorder().Render(" │ ")
 
 	for i, fl := range fullDiff.Lines {
 		if i < startLine {
@@ -708,9 +720,9 @@ func renderDiffContent(line DiffLine, maxWidth int, highlighter *SyntaxHighlight
 		for _, segment := range line.WordDiff {
 			if segment.IsChange {
 				if line.Type == LineAdd {
-					sb.WriteString(wordDiffAddStyle.Render(segment.Text))
+					sb.WriteString(wordDiffAddStyle().Render(segment.Text))
 				} else {
-					sb.WriteString(wordDiffRemoveStyle.Render(segment.Text))
+					sb.WriteString(wordDiffRemoveStyle().Render(segment.Text))
 				}
 			} else {
 				sb.WriteString(baseStyle.Render(segment.Text))
@@ -961,7 +973,7 @@ func RenderFileHeader(filename, stats string, width int) string {
 	fill := strings.Repeat("─", fillWidth)
 
 	header := prefix + filename + suffix + fill
-	return fileHeaderStyle.Width(width).Render(header)
+	return fileHeaderStyle().Width(width).Render(header)
 }
 
 // RenderMultiFileDiff renders a multi-file diff with file headers.

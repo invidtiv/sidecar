@@ -48,6 +48,13 @@ type Workspace struct {
 	// IsMain is explicit inventory identity, resolved while collecting Git's
 	// worktree list. Presentation callers must not guess it from a name.
 	IsMain bool
+	// The remaining worktree state git reports. They exist so a presentation
+	// surface can refuse an action for the same reasons the project surface
+	// refuses it: a locked worktree cannot be removed, a bare or detached one
+	// has no branch to act on, and a prunable or missing one is only
+	// metadata. IsMissing means the directory is gone, whether git has noticed
+	// (prunable) or not.
+	IsBare, IsDetached, IsLocked, IsPrunable, IsMissing bool
 	// Live and Ambiguous describe session health, which is not the same
 	// question as agent activity: a plain shell or an agentless worktree can
 	// own a live pane while having no agent semantics at all. Keeping them
@@ -56,6 +63,9 @@ type Workspace struct {
 	Live, Ambiguous bool
 	Presentation    agentstatus.Presentation
 	ObservedAt      time.Time
+	// CreatedAt is the shell manifest's record of when this identity was
+	// written. Empty for worktrees, which have no such record.
+	CreatedAt time.Time
 }
 
 // HasAgent reports durable or detected agent evidence. A worktree earns it
@@ -448,6 +458,12 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 			itemName = displayName
 		}
 		workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindWorktree, Key: canonical(wt.Path), Name: itemName, Path: canonical(wt.Path), Branch: wt.Branch, TaskID: taskID, Provider: provider, IsMain: canonical(wt.Path) == result.ProjectKey, ObservedAt: now}
+		workspace.IsBare, workspace.IsDetached = wt.Bare, wt.Detached
+		workspace.IsLocked, workspace.IsPrunable = wt.Locked, wt.Prunable
+		// A directory git has not yet marked prunable can still be gone; the
+		// project surface answers the same way (repo_snapshot.go).
+		_, statErr := os.Stat(wt.Path)
+		workspace.IsMissing = wt.Prunable || os.IsNotExist(statErr)
 		workspace.ID = workspace.ProjectKey + ":worktree:" + workspace.Key
 		workspace.Plain = provider == ""
 		if workspace.HasAgent() {
@@ -458,7 +474,7 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 
 	if len(shells) > 0 {
 		for _, shell := range shells {
-			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, ObservedAt: now}
+			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
 			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
 			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
 			result.Workspaces = append(result.Workspaces, workspace)
@@ -588,7 +604,14 @@ func (c Collector) capturePane(ctx context.Context, paneID string, lines int) (s
 	return c.Capture(paneID, lines)
 }
 
-type gitWorktree struct{ Path, Branch string }
+// gitWorktree carries git's porcelain record of one worktree, including the
+// state markers that decide whether an action may run against it at all. The
+// markers are not decoration: a locked or prunable worktree must be refused,
+// and a surface that never collected them cannot refuse it (td-2af16d).
+type gitWorktree struct {
+	Path, Branch                     string
+	Bare, Detached, Locked, Prunable bool
+}
 
 func parseWorktrees(text string) []gitWorktree {
 	var result []gitWorktree
@@ -600,8 +623,18 @@ func parseWorktrees(text string) []gitWorktree {
 		case strings.HasPrefix(line, "worktree "):
 			result = append(result, gitWorktree{Path: strings.TrimPrefix(line, "worktree ")})
 			current = &result[len(result)-1]
-		case current != nil && strings.HasPrefix(line, "branch refs/heads/"):
+		case current == nil:
+		case strings.HasPrefix(line, "branch refs/heads/"):
 			current.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "bare":
+			current.Bare = true
+		case line == "detached":
+			current.Detached = true
+		case line == "locked" || strings.HasPrefix(line, "locked "):
+			// git appends an optional reason after the marker.
+			current.Locked = true
+		case line == "prunable" || strings.HasPrefix(line, "prunable "):
+			current.Prunable = true
 		}
 	}
 	return result
@@ -612,6 +645,10 @@ type shellDefinition struct {
 	DisplayName string `json:"displayName"`
 	AgentType   string `json:"agentType"`
 	Namespace   string `json:"namespace"`
+	// CreatedAt identifies which incarnation of a reused tmux name this row is.
+	// An auto-close carries it so the removal can be refused if the entry was
+	// replaced while the death was being confirmed (td-6a4100).
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 type shellFile struct {

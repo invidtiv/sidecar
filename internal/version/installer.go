@@ -22,7 +22,7 @@ import (
 var ErrNoFormula = errors.New("no Homebrew formula for this product")
 
 // ErrNoHomebrew reports that Homebrew is not available on this machine.
-var ErrNoHomebrew = errors.New("Homebrew is not installed")
+var ErrNoHomebrew = errors.New("homebrew is not installed")
 
 // InstallOutcome is the settled result of one confirmed install attempt.
 type InstallOutcome struct {

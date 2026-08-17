@@ -12,7 +12,14 @@ import (
 // DimStyle applies a dim gray color to background content behind modals.
 // We strip existing ANSI codes and apply gray because SGR 2 (faint) doesn't
 // reliably combine with existing color codes in most terminals.
-var DimStyle = lipgloss.NewStyle().Foreground(styles.TextMuted)
+//
+// This is a function, not a var: styles.TextMuted is a package-level variable
+// that ApplyTheme reassigns, so a var here would be evaluated at init — before
+// any theme is applied — and every modal backdrop would keep dimming in the
+// default theme's grey no matter which theme is active. See internal/themecheck.
+func DimStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(styles.TextMuted)
+}
 
 // DimSequence and ResetSequence are the raw ANSI codes used by DimStyle.
 // Exported for testing.
@@ -75,13 +82,14 @@ func maxLineWidth(lines []string) int {
 
 // dimLine strips ANSI codes and applies dim gray styling.
 func dimLine(s string, width int) string {
-	return DimStyle.Render(normalizeOverlayLine(ansi.Strip(s), width))
+	return DimStyle().Render(normalizeOverlayLine(ansi.Strip(s), width))
 }
 
 // compositeRow overlays modalLine onto bgLine at position modalStartX.
 // Returns: dimmed-left-segment + modalLine + dimmed-right-segment
 func compositeRow(bgLine, modalLine string, modalStartX, modalWidth, totalWidth int) string {
 	var result strings.Builder
+	dim := DimStyle()
 
 	// Expand tabs before measuring or slicing. Background styling is stripped
 	// for consistent dimming; modal styling is retained.
@@ -94,7 +102,7 @@ func compositeRow(bgLine, modalLine string, modalStartX, modalWidth, totalWidth 
 		// Use ansi.Truncate to get visual-width-based substring
 		leftSeg := ansi.Truncate(stripped, modalStartX, "")
 		leftWidth := ansi.StringWidth(leftSeg)
-		result.WriteString(DimStyle.Render(leftSeg))
+		result.WriteString(dim.Render(leftSeg))
 		// Pad if background is shorter than modal position
 		if leftWidth < modalStartX {
 			result.WriteString(strings.Repeat(" ", modalStartX-leftWidth))
@@ -109,7 +117,7 @@ func compositeRow(bgLine, modalLine string, modalStartX, modalWidth, totalWidth 
 	if rightStartX < totalWidth && bgWidth > rightStartX {
 		// Use ansi.Cut to get visual-width-based substring from position
 		rightSeg := ansi.Cut(stripped, rightStartX, bgWidth)
-		result.WriteString(DimStyle.Render(rightSeg))
+		result.WriteString(dim.Render(rightSeg))
 	}
 
 	return normalizeOverlayLine(result.String(), totalWidth)

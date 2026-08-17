@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -398,6 +399,9 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	for _, shell := range p.shells {
 		if sync.Running[shell.TmuxName] {
 			p.managedSessions[shell.TmuxName] = true
+			// Running comes from a successful tmux listing, so it is the same
+			// grade of evidence a successful capture gives (td-6a4100).
+			p.noteShellAlive(shell.TmuxName)
 		}
 	}
 
@@ -910,6 +914,12 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		if modelPresentation && !semanticScreen {
 			capture, err := capturePaneEvidence(tmuxName)
 			if err != nil {
+				// A model-presented shell never reaches the capture below, so
+				// without this branch a shell that exited under an owned
+				// terminal stayed on the list forever (td-6a4100).
+				if shellliveness.SuspectsDeathErr(err) {
+					return shellDeathSuspectedMsg{TmuxName: tmuxName, Generation: generation}
+				}
 				return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}
 			}
 			// Shared runtimes (agent/node) cannot be identified from the
@@ -956,14 +966,14 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 			output, capture, err = capturePaneDirectWithJoinMetadata(tmuxName, joinWrapped)
 		}
 		if err != nil {
-			// Capture error - check error message to determine if session is dead
-			// Avoid synchronous sessionExists() call which would block (td-c2961e)
-			errStr := err.Error()
-			if strings.Contains(errStr, "can't find") ||
-				strings.Contains(errStr, "no server") ||
-				strings.Contains(errStr, "no such session") ||
-				strings.Contains(errStr, "session not found") {
-				return ShellSessionDeadMsg{TmuxName: tmuxName, Generation: generation}
+			// A capture failure is suspicion, never proof. "no server running"
+			// used to land here as death and would have deleted every shell
+			// entry through a tmux server restart; now it is Unknown and the
+			// probe decides on the shells it can actually speak for (td-6a4100).
+			// Avoid a synchronous sessionExists() call, which would block
+			// (td-c2961e) — the probe runs in its own command.
+			if shellliveness.SuspectsDeathErr(err) {
+				return shellDeathSuspectedMsg{TmuxName: tmuxName, Generation: generation}
 			}
 			// Other errors (timeout, etc.) - return empty output and schedule retry
 			return ShellOutputMsg{TmuxName: tmuxName, Generation: generation, Err: err}

@@ -20,6 +20,27 @@ func (h paneHost) Content(node *panelayout.Node) paneframe.Content { return h.p.
 
 func (h paneHost) Focus() int { return h.p.paneFocus }
 
+// SetFocus is the write half of Focus, and it is deliberately the same setter
+// every keyboard cycle uses: setFocusTarget moves activePane, paneFocus,
+// termPanelFocused and the live terminal's keyboard together, so a pointer
+// cannot leave the ring on one leaf and the keys on another.
+func (h paneHost) SetFocus(node *panelayout.Node) {
+	if node == nil || node.Split != nil {
+		return
+	}
+	h.p.focusLeaf(node.ID)
+}
+
+// Layout is the tree the last frame DREW, not a tree this state could place.
+// Answering the second would hand out phantom geometry from any view that
+// replaces the preview — the kanban board is the one that bit us: a click on a
+// card sitting over a document leaf's old box moved pane focus the user never
+// asked to move. Recording it where the tree composes means every reason
+// renderDocumentSplit declines a frame is honoured here for free.
+func (h paneHost) Layout() (panelayout.Layout, bool) {
+	return h.p.paneFrame, h.p.paneFrameDrawn
+}
+
 func (h paneHost) HandleState(splitID int) ui.HandleState {
 	return h.p.dividerHandleState(regionPaneTreeDivider, splitID)
 }

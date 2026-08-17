@@ -2,13 +2,9 @@ package app
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/term"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/community"
@@ -480,6 +476,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
 
+	case overview.OpenIssueInTDMsg:
+		// The global issue preview asked for the jump every issue surface
+		// makes. FocusPluginByIDMsg leaves global on its own way through.
+		return m, OpenIssueInTD(msg.IssueID)
+
 	case openInGitSwitchMsg:
 		// Nil inventory, same as navigateFromOverview: resolve ProjectRoot
 		// from the target checkout, not the current project's worktree cache.
@@ -495,6 +496,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.overview.Validate(msg)
+
+	case overview.RevealMsg:
+		// An Activity card opens in the global Workspaces browser. The project
+		// underneath is untouched: this is a move between two projections of
+		// the same catalog, not a navigation out of the global space.
+		if m.overview == nil || !m.inGlobalScope() {
+			return m, nil
+		}
+		reveal := m.overview.RevealWorkspace(msg.Workspace)
+		return m, tea.Batch(reveal, m.setGlobalTab(GlobalSessions))
 
 	case overview.ValidationMsg:
 		if !m.globalCatalogNavigable() || !m.overview.ConsumeValidation(msg.Generation, msg.RequestID) {
@@ -534,29 +545,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case plugin.OpenFileMsg:
-		// Open file in editor using tea.ExecProcess
-		// Most editors support +lineNo syntax for opening at a line
-		args := []string{}
-		if msg.LineNo > 0 {
-			args = append(args, fmt.Sprintf("+%d", msg.LineNo))
-		}
-		args = append(args, msg.Path)
-		c := exec.Command(msg.Editor, args...)
-		termState, _ := term.GetState(int(os.Stdout.Fd()))
-		return m, tea.ExecProcess(c, func(err error) tea.Msg {
-			if termState != nil {
-				_ = term.Restore(int(os.Stdout.Fd()), termState)
-			}
-			return EditorReturnedMsg{Err: err}
-		})
+		// The editor runs through the user's login shell so their profile
+		// applies; see editor_launch.go. Most editors support +lineNo syntax
+		// for opening at a line.
+		return m, m.launchEditor(msg)
 
 	case EditorReturnedMsg:
 		// After editor exits, trigger refresh. In v2 mouse mode is declared on
 		// tea.View and the renderer re-asserts it on the next frame after
 		// tea.ExecProcess returns, so no manual mouse re-enable is needed.
+		if retry := editorFallbackCmd(msg); retry != nil {
+			// The profile-loading shell never reached the editor. Fall back to
+			// a direct exec rather than reporting a failure the user did not
+			// cause and cannot see.
+			return m, retry
+		}
 		var cmds []tea.Cmd
 		if msg.Err != nil {
-			cmds = append(cmds, func() tea.Msg { return ErrorMsg(msg) })
+			cmds = append(cmds, func() tea.Msg { return ErrorMsg{Err: msg.Err} })
 		} else {
 			cmds = append(cmds, func() tea.Msg { return RefreshMsg{} })
 		}
@@ -611,6 +617,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case IssuePreviewResultMsg:
 		m.applyIssuePreviewData(msg.Data, msg.Error)
 		return m, nil
+
+	case issuePreviewWatchStartedMsg:
+		return m, m.handleIssuePreviewWatchStarted(msg)
+
+	case issuePreviewStoreChangedMsg:
+		return m, m.handleIssuePreviewStoreChanged()
 
 	case issueview.LoadedMsg:
 		// The modal is one host of issueview. A workspace issue pane is
@@ -1477,16 +1489,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 		switch key {
-		case "o":
+		case "o", "O":
+			// O is the same request the issue panes answer; the modal has
+			// always answered o, so both reach td.
 			if d := m.previewIssueData(); d != nil {
 				issueID := d.ID
 				m.resetIssuePreview()
 				m.resetIssueInput()
 				m.updateContext()
-				return m, tea.Batch(
-					FocusPlugin("td-monitor"),
-					func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-				)
+				return m, OpenIssueInTD(issueID)
 			}
 		case "b":
 			m.backToIssueInput()
@@ -1519,13 +1530,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resetIssuePreview()
 			m.resetIssueInput()
 			m.updateContext()
-			if issueID != "" {
-				return m, tea.Batch(
-					FocusPlugin("td-monitor"),
-					func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-				)
-			}
-			return m, nil
+			return m, OpenIssueInTD(issueID)
 		case "back":
 			m.backToIssueInput()
 			return m, nil
@@ -1553,30 +1558,48 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Tab switching. Cycling and the number row move between the tabs of the
-	// active scope only: in the global space they step across Agents /
-	// Workspaces / Tasks, in project space across the plugin tabs. Neither
-	// silently crosses the boundary — K, q, and the brand are the toggle.
+	// Tab switching. The header is one row of entries — the global ones the
+	// left cluster paints (Sessions / Activity / Tasks) followed by the
+	// project's plugin tabs — and these keys address that one row.
+	//
+	// Cycling wraps through all of it, in both scopes, so `]` from the last
+	// plugin tab lands on Sessions and `[` brings it back. The number row is
+	// positional for the project tabs (1-7) and named for the global entries
+	// (8/9/0), which is what makes 8 mean Sessions everywhere rather than
+	// "the eighth thing in whichever list you happen to be looking at".
 	switch msg.String() {
 	case "`", "]":
-		// Backtick cycles to the next tab (except in text input contexts)
+		// Next header entry (except in text input contexts).
 		if m.consumesTextInput() {
 			break
 		}
 		return m, m.cycleTabs(1)
 	case "~", "[":
-		// Tilde cycles to the previous tab (except in text input contexts)
+		// Previous header entry. `~` is kept as the long-standing alias for
+		// `[`, exactly as `` ` `` is for `]`; retiring it would break muscle
+		// memory for nothing.
 		if m.consumesTextInput() {
 			break
 		}
 		return m, m.cycleTabs(-1)
-	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		// Number keys for direct tab switching.
+	case "1", "2", "3", "4", "5", "6", "7":
+		// Positional project tabs.
 		// Block in text input contexts (user is typing numbers)
 		if m.consumesTextInput() {
 			break
 		}
-		return m, m.selectTabByNumber(int([]rune(msg.Text)[0] - '1'))
+		return m, m.selectProjectTabByNumber(int([]rune(msg.String())[0] - '1'))
+	case "8", "9", "0":
+		// The header's global entries, addressed by name. A key whose entry is
+		// disabled does nothing rather than falling through to a plugin tab.
+		if m.consumesTextInput() {
+			break
+		}
+		tab, ok := globalTabForKey(msg.String())
+		if !ok {
+			break
+		}
+		return m, m.selectGlobalTab(tab)
 	}
 
 	// Toggles
@@ -2521,7 +2544,10 @@ func (m *Model) issueInputSubmit() (tea.Model, tea.Cmd) {
 		workDir = m.ui.WorkDir
 	}
 	m.issuePreviewView = issueview.New(nil)
-	return m, m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0)
+	return m, tea.Batch(
+		m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0),
+		m.startIssuePreviewWatch(workDir, issueID),
+	)
 }
 
 // handleIssueInputMouse handles mouse events for the issue input modal.
@@ -2608,12 +2634,7 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.resetIssuePreview()
 		m.resetIssueInput()
 		m.updateContext()
-		if issueID != "" {
-			return m, tea.Batch(
-				FocusPlugin("td-monitor"),
-				func() tea.Msg { return OpenFullIssueMsg{IssueID: issueID} },
-			)
-		}
+		return m, OpenIssueInTD(issueID)
 	}
 	return m, nil
 }

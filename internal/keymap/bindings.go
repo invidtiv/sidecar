@@ -29,8 +29,13 @@ func DefaultBindings() []Binding {
 		{Key: "5", Command: "focus-plugin-5", Context: "global"},
 		{Key: "6", Command: "focus-plugin-6", Context: "global"},
 		{Key: "7", Command: "focus-plugin-7", Context: "global"},
-		{Key: "8", Command: "focus-plugin-8", Context: "global"},
-		{Key: "9", Command: "focus-plugin-9", Context: "global"},
+		// 8/9/0 address the header's global entries by name. They are not
+		// positional tab shortcuts: the project tabs stop at 7 so that Sessions,
+		// Activity and Tasks keep one meaning in every scope, and so a disabled
+		// Tasks tab cannot slide another entry onto `0`.
+		{Key: "8", Command: "focus-sessions", Context: "global"},
+		{Key: "9", Command: "focus-activity", Context: "global"},
+		{Key: "0", Command: "focus-tasks", Context: "global"},
 
 		// Navigation (Global defaults)
 		{Key: "j", Command: "cursor-down", Context: "global"},
@@ -120,7 +125,10 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
 		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
+		// D acts on the selection's kind, as it does in the project list: the
+		// footer advertises whichever of the two the selected row answers.
 		{Key: "D", Command: "delete-shell", Context: "global-workspaces"},
+		{Key: "D", Command: "delete-worktree", Context: "global-workspaces"},
 		{Key: "m", Command: "merge-workflow", Context: "global-workspaces"},
 		{Key: "/", Command: "filter", Context: "global-workspaces"},
 		{Key: "s", Command: "sort", Context: "global-workspaces"},
@@ -176,6 +184,7 @@ func DefaultBindings() []Binding {
 		// Focused td issue leaf. Tab keys match global-workspaces-doc;
 		// y/Y match td monitor and the project issue pane.
 		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
+		{Key: "O", Command: "open-in-td", Context: "global-workspaces-issue"},
 		{Key: "y", Command: "yank-issue", Context: "global-workspaces-issue"},
 		{Key: "Y", Command: "yank-issue-key", Context: "global-workspaces-issue"},
 		{Key: "q", Command: "close", Context: "global-workspaces-issue"},
@@ -202,10 +211,10 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "x", Command: "close-tab", Context: "global-workspaces-diff"},
-		{Key: ",", Command: "prev-tab", Context: "global-workspaces-diff"},
-		{Key: ".", Command: "next-tab", Context: "global-workspaces-diff"},
-		{Key: "{", Command: "prev-file", Context: "global-workspaces-diff"},
-		{Key: "}", Command: "next-file", Context: "global-workspaces-diff"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-diff"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-diff"},
+		{Key: ",", Command: "prev-file", Context: "global-workspaces-diff"},
+		{Key: ".", Command: "next-file", Context: "global-workspaces-diff"},
 		{Key: "Y", Command: "yank-id", Context: "global-workspaces-diff"},
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-diff"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-diff"},
@@ -214,6 +223,7 @@ func DefaultBindings() []Binding {
 
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
+		{Key: "O", Command: "open-in-td", Context: "workspace-issue"},
 		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
 		{Key: "Y", Command: "yank-issue-key", Context: "workspace-issue"},
 		{Key: "q", Command: "close", Context: "workspace-issue"},
@@ -229,10 +239,10 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close", Context: "workspace-diff"},
 		{Key: "esc", Command: "close", Context: "workspace-diff"},
 		{Key: "x", Command: "close-tab", Context: "workspace-diff"},
-		{Key: ",", Command: "prev-tab", Context: "workspace-diff"},
-		{Key: ".", Command: "next-tab", Context: "workspace-diff"},
-		{Key: "{", Command: "prev-file", Context: "workspace-diff"},
-		{Key: "}", Command: "next-file", Context: "workspace-diff"},
+		{Key: "{", Command: "prev-tab", Context: "workspace-diff"},
+		{Key: "}", Command: "next-tab", Context: "workspace-diff"},
+		{Key: ",", Command: "prev-file", Context: "workspace-diff"},
+		{Key: ".", Command: "next-file", Context: "workspace-diff"},
 		{Key: "Y", Command: "yank-id", Context: "workspace-diff"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-diff"},
 		{Key: "tab", Command: "next-pane", Context: "workspace-diff"},
@@ -357,6 +367,7 @@ func DefaultBindings() []Binding {
 		{Key: "v", Command: "toggle-diff-view", Context: "git-status-diff"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "git-status-diff"},
 		{Key: "w", Command: "toggle-wrap", Context: "git-status-diff"},
+		{Key: "|", Command: "reset-hscroll", Context: "git-status-diff"},
 		{Key: "+", Command: "resize-pane-grow", Context: "git-status-diff"},
 		{Key: "-", Command: "resize-pane-shrink", Context: "git-status-diff"},
 
@@ -384,8 +395,8 @@ func DefaultBindings() []Binding {
 		{Key: "ctrl+u", Command: "page-up", Context: "git-diff"},
 		{Key: "s", Command: "stage-file", Context: "git-diff"},
 		{Key: "u", Command: "unstage-file", Context: "git-diff"},
-		{Key: "{", Command: "prev-file", Context: "git-diff"},
-		{Key: "}", Command: "next-file", Context: "git-diff"},
+		{Key: ",", Command: "prev-file", Context: "git-diff"},
+		{Key: ".", Command: "next-file", Context: "git-diff"},
 		{Key: "y", Command: "yank-diff", Context: "git-diff"},
 		{Key: "c", Command: "commit", Context: "git-diff"},
 		{Key: "v", Command: "toggle-diff-view", Context: "git-diff"},
@@ -656,7 +667,12 @@ func DefaultBindings() []Binding {
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
-		{Key: "0", Command: "reset-scroll", Context: "workspace-preview"},
+		// `0` deliberately has no workspace-preview binding. It is the header's
+		// Tasks shortcut now, and a context-local binding that shadowed it here
+		// would make the same key mean two different things one tab apart. The
+		// binding it replaces cost nothing: `reset-scroll` had no handler
+		// anywhere in the tree, and the preview already jumps to the top of its
+		// scrollback with `g`.
 		{Key: "tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "workspace-preview"},
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-preview"},

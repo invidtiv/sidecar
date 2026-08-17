@@ -83,6 +83,32 @@ const (
 	RegionEmptyAction   RegionKind = "workspacelist-empty-action"
 )
 
+// headerSpacerMinBody is how many body rows must survive the blank line under
+// the panel header for that line to be worth spending. A heading plus two rows
+// is the smallest list that still reads as a list; below that the spacer is
+// costing the user content to buy air, so it is dropped.
+const headerSpacerMinBody = 3
+
+// headerSpacerFits reports whether a short pane can afford the blank line
+// between the panel's chrome and its first content row. The panel header and
+// the section heading beneath it both carry a "+" that creates a workspace, and
+// flush against each other they read as one two-button cluster rather than as
+// chrome and content. One blank line separates them — but not at the cost of
+// clipping the list on a small terminal, which is why the body is measured
+// first.
+//
+// It sits below the filter row rather than directly under the title because the
+// filter is part of the header's chrome, not the first thing in the list: the
+// separator belongs between chrome and content wherever the chrome ends.
+func headerSpacerFits(opts SidebarOptions) bool {
+	chrome := 1 + len(opts.PrefixLines)
+	if opts.FilterActive {
+		chrome++
+	}
+	chrome += min(len(opts.FooterLines), max(0, opts.Height-chrome))
+	return opts.Height-chrome > headerSpacerMinBody
+}
+
 type sidebarFlatRow struct {
 	section int
 	row     SidebarRow
@@ -113,6 +139,12 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		y := len(lines)
 		lines = append(lines, fit(opts.FilterLine, width))
 		regions = append(regions, Region{Kind: RegionFilter, X: 0, Y: y, W: width, H: 1})
+	}
+	if headerSpacerFits(opts) {
+		// Padded rather than empty: this line is chrome, so unlike the body's
+		// section separators it is never widened by the scrollbar join and would
+		// otherwise leave a zero-width line inside a fixed-width box.
+		lines = append(lines, strings.Repeat(" ", width))
 	}
 
 	footerRows := min(len(opts.FooterLines), max(0, height-len(lines)))

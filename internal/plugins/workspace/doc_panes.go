@@ -1688,6 +1688,10 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// that keeps its own shape is the one placement nothing holds to it.
 	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
 	p.registerPaneTreeRegions(layout)
+	// The frame a pointer is tested against is THIS frame, recorded beside the
+	// regions it earned rather than re-derived later from state that does not
+	// know whether a tree was drawn.
+	p.paneFrame, p.paneFrameDrawn = layout, true
 	// Last, because a live search surface is drawn over its leaf and its regions
 	// have to beat the leaf's own.
 	p.registerDocSearchRegions()

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/filepreview"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/ui"
@@ -23,6 +24,11 @@ type LoadedMsg struct {
 	Epoch             uint64
 	Path              string
 	Result            filepreview.PreviewResult
+
+	// Refresh marks a result produced by Model.Refresh rather than Model.Load:
+	// an in-place re-read that preserves scroll and is discarded when the file
+	// came back unchanged. See live.go.
+	Refresh bool
 }
 
 // GetEpoch allows callers to apply the normal plugin epoch checks if desired.
@@ -35,6 +41,7 @@ type Model struct {
 	modelID           int
 	requestGeneration uint64
 	epoch             uint64
+	root              string
 	path              string
 	targetLine        int
 
@@ -49,6 +56,11 @@ type Model struct {
 	rendered bool
 	wrap     bool
 	result   filepreview.PreviewResult
+
+	// live sequences in-place re-reads driven by a write to the previewed file,
+	// and holds the fingerprint that keeps an unchanged re-read off the screen.
+	// See live.go.
+	live livewatch.Refresher
 
 	renderWidth   int
 	renderedLines []string
@@ -77,6 +89,7 @@ func New(renderer *markdown.Renderer) *Model {
 // Load retargets the model and returns a command that wraps the existing file
 // browser loader. Only the docview-owned LoadedMsg is broadcast.
 func (m *Model) Load(modelID int, rootDir, relPath string, line int, epoch uint64) tea.Cmd {
+	m.root = rootDir
 	return m.load(modelID, relPath, line, epoch, filepreview.LoadPreview(rootDir, relPath, epoch))
 }
 
@@ -96,6 +109,9 @@ func (m *Model) load(modelID int, relPath string, line int, epoch uint64, load t
 	m.loading = true
 	m.rendered = line <= 0
 	m.result = filepreview.PreviewResult{}
+	// A retarget invalidates the refresh gate: a re-read owed for the previous
+	// document must not fire against this one.
+	m.live.Reset()
 	m.invalidateRender()
 
 	generation := m.requestGeneration
@@ -123,6 +139,13 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 		msg.Path != m.path {
 		return false
 	}
+	if msg.Refresh {
+		return m.applyRefresh(msg)
+	}
+	// A fresh load defines what is on screen, so the refresh gate measures from
+	// here rather than reporting the first watcher signal as a change.
+	m.live.Reset()
+	m.live.Adopt(fingerprintResult(msg.Result))
 
 	m.loading = false
 	m.result = msg.Result

@@ -335,10 +335,11 @@ func TestScopeOwnsTheHeaderTabRow(t *testing.T) {
 	}
 }
 
-// Slice 1 replaces the recorded baseline: tab clicks, the number row, and
-// backtick/bracket cycling now move between the tabs of the space the user is
-// in, and never cross the scope boundary.
-func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
+// td-b61760 revises Slice 1's rule. Tab clicks still land exactly where they
+// were painted, but the keyboard now treats the header as one row: [ and ]
+// wrap through every entry in it, and the number row is positional for the
+// project tabs (1-7) and named for the global entries (8/9/0).
+func TestHeaderKeysAddressTheWholeHeaderRow(t *testing.T) {
 	t.Run("tab click", func(t *testing.T) {
 		m, plugins := scopeBaselineModel(t, "git")
 		m.scope = ScopeGlobal
@@ -361,81 +362,204 @@ func TestTabClickNumberAndCycleKeysStayInsideTheActiveScope(t *testing.T) {
 		}
 	})
 
-	// In the global space the number row addresses global tabs; a number with
-	// no tab behind it does nothing rather than reaching a project plugin.
-	globalNumbers := map[string]struct {
-		tab    GlobalTab
-		global bool
-	}{
-		"1": {GlobalSessions, true},
-		"2": {GlobalActivity, true},
-		"3": {GlobalSessions, true}, // no third tab: starting tab is unchanged
+	// The header ring, in the order the header paints it: the global entries in
+	// the left cluster, then the project's plugin tabs on the right. Tasks is
+	// off in this fixture, so the ring is six entries long.
+	t.Run("ring order", func(t *testing.T) {
+		m, _ := scopeBaselineModel(t, "git")
+		want := []tabRef{
+			globalTabRef(GlobalSessions), globalTabRef(GlobalActivity),
+			projectTabRef(0), projectTabRef(1), projectTabRef(2), projectTabRef(3),
+		}
+		got := m.headerEntries()
+		if len(got) != len(want) {
+			t.Fatalf("project scope ring = %#v, want %#v", got, want)
+		}
+		for i := range want {
+			if !got[i].same(want[i]) {
+				t.Fatalf("project scope ring[%d] = %#v, want %#v", i, got[i], want[i])
+			}
+		}
+		// The ring is the same from the global space. It has to be: the ring
+		// you can step into has to be the ring you can step out of.
+		m.scope = ScopeGlobal
+		m.updateContext()
+		global := m.headerEntries()
+		if len(global) != len(want) {
+			t.Fatalf("global scope ring = %#v, want the same ring as project scope", global)
+		}
+		for i := range want {
+			if !global[i].same(want[i]) {
+				t.Fatalf("global scope ring[%d] = %#v, want %#v", i, global[i], want[i])
+			}
+		}
+	})
+
+	// Pressing ] six times from the first entry visits every entry once and
+	// comes back, and [ retraces it exactly. Same ring, either direction,
+	// crossing the scope boundary in both.
+	t.Run("cycling wraps through every entry", func(t *testing.T) {
+		for _, key := range []struct {
+			name  string
+			press string
+			delta int
+		}{{"]", "]", 1}, {"`", "`", 1}, {"[", "[", -1}, {"~", "~", -1}} {
+			t.Run(key.name, func(t *testing.T) {
+				m, _ := scopeBaselineModel(t, "git")
+				m.scope = ScopeGlobal
+				m.globalTab = GlobalSessions
+				m.updateContext()
+				ring := m.headerEntries()
+				at := 0
+				for step := 1; step <= len(ring); step++ {
+					updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key.press[0]), Text: key.press})
+					m = asAppModel(t, updated)
+					at = ((at+key.delta)%len(ring) + len(ring)) % len(ring)
+					if !m.activeTab().same(ring[at]) {
+						t.Fatalf("%s step %d: active=%#v, want %#v", key.name, step, m.activeTab(), ring[at])
+					}
+				}
+				if !m.activeTab().same(ring[0]) {
+					t.Fatalf("%s did not wrap back to the first entry: %#v", key.name, m.activeTab())
+				}
+			})
+		}
+	})
+
+	// Starting in project scope: ] off the last plugin tab wraps onto the first
+	// header entry, and [ off the first plugin tab steps back onto the last
+	// global one. This is the crossing the old rule refused.
+	t.Run("project scope crosses into the global entries", func(t *testing.T) {
+		m, _ := scopeBaselineModel(t, "notes") // notes is the last of four tabs
+		if m.inGlobalScope() || m.activePlugin != 3 {
+			t.Fatalf("setup: global=%v plugin=%d", m.inGlobalScope(), m.activePlugin)
+		}
+		updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+		forward := asAppModel(t, updated)
+		if !forward.inGlobalScope() || forward.globalTab != GlobalSessions {
+			t.Fatalf("] off the last plugin tab: global=%v tab=%v, want Sessions",
+				forward.inGlobalScope(), forward.globalTab)
+		}
+
+		m, _ = scopeBaselineModel(t, "files") // files is the first of four tabs
+		updated, _ = m.Update(tea.KeyPressMsg{Code: '[', Text: "["})
+		back := asAppModel(t, updated)
+		if !back.inGlobalScope() || back.globalTab != GlobalActivity {
+			t.Fatalf("[ off the first plugin tab: global=%v tab=%v, want Activity",
+				back.inGlobalScope(), back.globalTab)
+		}
+	})
+
+	// Tasks is skipped when its feature is off, and joins the ring between
+	// Activity and the first plugin tab when it is on.
+	t.Run("tasks joins and leaves the ring with its feature", func(t *testing.T) {
+		m, _ := scopeBaselineModel(t, "git")
+		for _, ref := range m.headerEntries() {
+			if ref.scope == ScopeGlobal && ref.global == GlobalTasks {
+				t.Fatal("a disabled Tasks tab is in the ring")
+			}
+		}
+		m.globalTasks = &globalTasksHost{plugin: &hostedTestPlugin{}}
+		ring := m.headerEntries()
+		if len(ring) != 7 || !ring[2].same(globalTabRef(GlobalTasks)) {
+			t.Fatalf("ring with Tasks on = %#v, want Tasks third", ring)
+		}
+		// And cycling reaches it: ] from Activity lands on Tasks, not on the
+		// first plugin tab.
+		m.scope = ScopeGlobal
+		m.globalTab = GlobalActivity
+		m.updateContext()
+		updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+		pressed := asAppModel(t, updated)
+		if !pressed.inGlobalScope() || pressed.globalTab != GlobalTasks {
+			t.Fatalf("] from Activity: global=%v tab=%v, want Tasks", pressed.inGlobalScope(), pressed.globalTab)
+		}
+	})
+
+	// 1-7 are the project tabs, from either scope. 8 and 9 are Sessions and
+	// Activity, from either scope. 0 is Tasks, and with Tasks off it does
+	// nothing at all rather than landing somewhere else.
+	numbers := map[string]func(t *testing.T, m Model){
+		"1": func(t *testing.T, m Model) {
+			if m.inGlobalScope() || m.activePlugin != 0 {
+				t.Fatalf("1: global=%v plugin=%d, want project tab 1", m.inGlobalScope(), m.activePlugin)
+			}
+		},
+		"3": func(t *testing.T, m Model) {
+			if m.inGlobalScope() || m.activePlugin != 2 {
+				t.Fatalf("3: global=%v plugin=%d, want project tab 3", m.inGlobalScope(), m.activePlugin)
+			}
+		},
+		"4": func(t *testing.T, m Model) {
+			if m.inGlobalScope() || m.activePlugin != 3 {
+				t.Fatalf("4: global=%v plugin=%d, want project tab 4", m.inGlobalScope(), m.activePlugin)
+			}
+		},
+		"7": func(t *testing.T, m Model) {
+			// Only four plugins in this fixture, so 7 addresses nothing.
+			if m.inGlobalScope() || m.activePlugin != 2 {
+				t.Fatalf("7: global=%v plugin=%d, want no movement", m.inGlobalScope(), m.activePlugin)
+			}
+		},
+		"8": func(t *testing.T, m Model) {
+			if !m.inGlobalScope() || m.globalTab != GlobalSessions {
+				t.Fatalf("8: global=%v tab=%v, want Sessions", m.inGlobalScope(), m.globalTab)
+			}
+		},
+		"9": func(t *testing.T, m Model) {
+			if !m.inGlobalScope() || m.globalTab != GlobalActivity {
+				t.Fatalf("9: global=%v tab=%v, want Activity", m.inGlobalScope(), m.globalTab)
+			}
+		},
+		"0": func(t *testing.T, m Model) {
+			if m.inGlobalScope() || m.activePlugin != 2 {
+				t.Fatalf("0 with Tasks disabled moved somewhere: global=%v plugin=%d",
+					m.inGlobalScope(), m.activePlugin)
+			}
+		},
 	}
-	for key, want := range globalNumbers {
+	for key, check := range numbers {
+		t.Run("project number "+key, func(t *testing.T) {
+			m, _ := scopeBaselineModel(t, "git")
+			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			check(t, asAppModel(t, updated))
+		})
+	}
+
+	// The same keys mean the same things from the global space, including the
+	// ones that walk back into the project.
+	globalNumbers := map[string]func(t *testing.T, m Model){
+		"1": func(t *testing.T, m Model) {
+			if m.inGlobalScope() || m.activePlugin != 0 {
+				t.Fatalf("1 from the global space: global=%v plugin=%d, want project tab 1",
+					m.inGlobalScope(), m.activePlugin)
+			}
+		},
+		"9": func(t *testing.T, m Model) {
+			if !m.inGlobalScope() || m.globalTab != GlobalActivity {
+				t.Fatalf("9 from the global space: global=%v tab=%v, want Activity",
+					m.inGlobalScope(), m.globalTab)
+			}
+		},
+		"0": func(t *testing.T, m Model) {
+			if !m.inGlobalScope() || m.globalTab != GlobalSessions {
+				t.Fatalf("0 with Tasks disabled moved somewhere: global=%v tab=%v",
+					m.inGlobalScope(), m.globalTab)
+			}
+		},
+	}
+	for key, check := range globalNumbers {
 		t.Run("global number "+key, func(t *testing.T) {
 			m, plugins := scopeBaselineModel(t, "git")
 			m.scope = ScopeGlobal
+			m.globalTab = GlobalSessions
 			m.updateContext()
 			inits := totalInits(plugins)
 			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
 			pressed := asAppModel(t, updated)
-			if pressed.inGlobalScope() != want.global || pressed.globalTab != want.tab {
-				t.Fatalf("%s: global=%v tab=%v, want %v/%v",
-					key, pressed.inGlobalScope(), pressed.globalTab, want.global, want.tab)
-			}
-			if pressed.activePlugin != 2 || totalInits(plugins) != inits {
-				t.Fatalf("%s disturbed the project: plugin=%d inits=%d", key, pressed.activePlugin, totalInits(plugins))
-			}
-		})
-	}
-
-	// In project space the number row keeps addressing plugin tabs.
-	projectNumbers := map[string]int{"1": 0, "3": 2, "4": 3}
-	for key, want := range projectNumbers {
-		t.Run("project number "+key, func(t *testing.T) {
-			m, _ := scopeBaselineModel(t, "git")
-			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
-			pressed := asAppModel(t, updated)
-			if pressed.inGlobalScope() || pressed.activePlugin != want {
-				t.Fatalf("%s: global=%v plugin=%d, want project space on %d",
-					key, pressed.inGlobalScope(), pressed.activePlugin, want)
-			}
-		})
-	}
-
-	globalCycles := map[string]GlobalTab{"`": GlobalActivity, "]": GlobalActivity, "~": GlobalActivity, "[": GlobalActivity}
-	for key, want := range globalCycles {
-		t.Run("global cycle "+key, func(t *testing.T) {
-			m, _ := scopeBaselineModel(t, "notes")
-			m.scope = ScopeGlobal
-			m.updateContext()
-			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
-			pressed := asAppModel(t, updated)
-			if !pressed.inGlobalScope() {
-				t.Fatalf("%s left the global space", key)
-			}
-			if pressed.globalTab != want {
-				t.Fatalf("%s: tab = %v, want %v", key, pressed.globalTab, want)
-			}
-			if pressed.activePlugin != 3 {
-				t.Fatalf("%s moved the project plugin to %d", key, pressed.activePlugin)
-			}
-		})
-	}
-
-	projectCycles := map[string]int{"`": 0, "]": 0, "~": 2, "[": 2}
-	for key, want := range projectCycles {
-		t.Run("project cycle "+key, func(t *testing.T) {
-			// Start on the last plugin so forward cycling wraps visibly and
-			// backward cycling steps to its neighbour.
-			m, _ := scopeBaselineModel(t, "notes")
-			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
-			pressed := asAppModel(t, updated)
-			if pressed.inGlobalScope() {
-				t.Fatalf("%s entered the global space", key)
-			}
-			if pressed.activePlugin != want {
-				t.Fatalf("%s: plugin = %d, want %d", key, pressed.activePlugin, want)
+			check(t, pressed)
+			if totalInits(plugins) != inits {
+				t.Fatalf("%s reinitialized the project (%d inits)", key, totalInits(plugins))
 			}
 		})
 	}
@@ -487,5 +611,95 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	}
 	if m.activePlugin != 2 || m.activeContext != "git" {
 		t.Fatalf("project destination changed the plugin: plugin=%d context=%q", m.activePlugin, m.activeContext)
+	}
+}
+
+// wideScopeBaselineModel is scopeBaselineModel with nine plugin tabs, which is
+// more than the number row can address. It exists to prove the cap.
+func wideScopeBaselineModel(t *testing.T) Model {
+	t.Helper()
+	isolateAppState(t)
+	cfg := config.Default()
+	features.Init(cfg)
+	t.Cleanup(func() { features.Init(config.Default()) })
+	cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+
+	registry := plugin.NewRegistry(nil)
+	names := []string{"p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"}
+	for _, name := range names {
+		if err := registry.Register(&navigationPlugin{id: name}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "p1")
+	m.overview = overview.New(workspaceinventory.Collector{Runner: &countingOverviewRunner{}})
+	m.intro.Active, m.intro.Done = false, true
+	m.intro.RepoName = "one"
+	m.width, m.height, m.ready = 200, 40, true
+	m.updateContext()
+	return m
+}
+
+// The positional shortcuts stop at 7 even when there are more plugins than
+// that. 8 and 9 belong to Sessions and Activity now, and an eighth or ninth
+// plugin tab is reached with [ / ] or from the palette instead.
+func TestPositionalTabShortcutsStopAtSeven(t *testing.T) {
+	t.Run("7 still selects the seventh plugin", func(t *testing.T) {
+		m := wideScopeBaselineModel(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '7', Text: "7"})
+		pressed := asAppModel(t, updated)
+		if pressed.inGlobalScope() || pressed.activePlugin != 6 {
+			t.Fatalf("7: global=%v plugin=%d, want project tab 7", pressed.inGlobalScope(), pressed.activePlugin)
+		}
+	})
+
+	for key, want := range map[string]GlobalTab{"8": GlobalSessions, "9": GlobalActivity} {
+		t.Run(key+" is a global entry, not the nth plugin", func(t *testing.T) {
+			m := wideScopeBaselineModel(t)
+			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			pressed := asAppModel(t, updated)
+			if !pressed.inGlobalScope() || pressed.globalTab != want {
+				t.Fatalf("%s: global=%v tab=%v, want %v", key, pressed.inGlobalScope(), pressed.globalTab, want)
+			}
+			if pressed.activePlugin != 0 {
+				t.Fatalf("%s selected plugin %d instead of a global entry", key, pressed.activePlugin)
+			}
+		})
+	}
+
+	// The eighth tab is still reachable — the cap costs a keystroke, not access.
+	t.Run("the eighth tab is still reachable by cycling", func(t *testing.T) {
+		m := wideScopeBaselineModel(t)
+		updated, _ := m.Update(tea.KeyPressMsg{Code: '7', Text: "7"})
+		m = asAppModel(t, updated)
+		updated, _ = m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+		m = asAppModel(t, updated)
+		if m.inGlobalScope() || m.activePlugin != 7 {
+			t.Fatalf("] from tab 7: global=%v plugin=%d, want the eighth tab", m.inGlobalScope(), m.activePlugin)
+		}
+	})
+}
+
+// The text-input guard covers the new keys exactly as it covered the old ones:
+// a digit typed into a focused query is a digit, and so is a bracket.
+func TestHeaderKeysYieldToAFocusedTextInput(t *testing.T) {
+	for _, key := range []string{"1", "7", "8", "9", "0", "[", "]", "`", "~"} {
+		t.Run(key, func(t *testing.T) {
+			m, _ := scopeBaselineModel(t, "git")
+			m.scope = ScopeGlobal
+			m.globalTab = GlobalSessions
+			// A context sidecar itself classifies as text input, so the guard
+			// is exercised without depending on a plugin's own routing.
+			m.activeContext = "issue-input"
+			if !m.consumesTextInput() {
+				t.Fatal("test premise: the fixture context does not consume text input")
+			}
+			updated, _ := m.Update(tea.KeyPressMsg{Code: rune(key[0]), Text: key})
+			pressed := asAppModel(t, updated)
+			if !pressed.inGlobalScope() || pressed.globalTab != GlobalSessions || pressed.activePlugin != 2 {
+				t.Fatalf("%s moved the header while a text input had the keyboard: global=%v tab=%v plugin=%d",
+					key, pressed.inGlobalScope(), pressed.globalTab, pressed.activePlugin)
+			}
+		})
 	}
 }

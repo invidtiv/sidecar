@@ -62,7 +62,7 @@ func TestOverviewIncrementalPartialErrorAndCompactStates(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Enter did not activate selected live card")
 	}
-	if got, ok := cmd().(NavigateMsg); !ok || got.Workspace.ID != workspace.ID {
+	if got, ok := cmd().(RevealMsg); !ok || got.Workspace.ID != workspace.ID {
 		t.Fatalf("activation = %#v", cmd())
 	}
 }
@@ -134,7 +134,7 @@ func TestOverviewCompactViewportRetainsKeyboardAndMouseActivation(t *testing.T) 
 	m := compactOverviewModel(12)
 	m.board.Select(kanban.Selection{Column: 0, Row: 11})
 	m.View(72, 5)
-	if cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || cmd().(NavigateMsg).Workspace.ID != "card-11" {
+	if cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter}); cmd == nil || cmd().(RevealMsg).Workspace.ID != "card-11" {
 		t.Fatal("compact keyboard activation did not preserve selected card")
 	}
 	regions := m.mouse.HitMap.Regions()
@@ -144,7 +144,7 @@ func TestOverviewCompactViewportRetainsKeyboardAndMouseActivation(t *testing.T) 
 		t.Fatal("compact single click unexpectedly activated")
 	}
 	cmd := m.Update(click)
-	if cmd == nil || cmd().(NavigateMsg).Workspace.ID != region.Data.(kanban.HitRegion).CardID {
+	if cmd == nil || cmd().(RevealMsg).Workspace.ID != region.Data.(kanban.HitRegion).CardID {
 		t.Fatal("compact double click did not activate visible card")
 	}
 }
@@ -628,9 +628,9 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("double click did not activate card")
 	}
-	got, ok := cmd().(NavigateMsg)
+	got, ok := cmd().(RevealMsg)
 	if !ok || got.Workspace.ID != workspace.ID || got.Workspace.Path != workspace.Path {
-		t.Fatalf("double-click navigation = %#v", cmd())
+		t.Fatalf("double-click reveal = %#v", cmd())
 	}
 }
 

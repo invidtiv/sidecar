@@ -201,11 +201,6 @@ func (b *paneBuilder) row(id, key string, run func(*Model) tea.Cmd, render func(
 	b.paintRow(id, b.declare(id, key, true, run), render)
 }
 
-// focusRow is a row the mouse selects without activating. Enter still runs it.
-func (b *paneBuilder) focusRow(id, key string, run func(*Model) tea.Cmd, render func(State) string) {
-	b.paintRow(id, b.declareClickless(id, key, true, run), render)
-}
-
 func (b *paneBuilder) paintRow(id string, state State, render func(State) string) {
 	block := render(state)
 	lines := strings.Split(block, "\n")
@@ -273,10 +268,8 @@ type buttonSpec struct {
 // string, so the mockup's footer and the keyboard cannot disagree.
 func (b *paneBuilder) buttons(specs ...buttonSpec) {
 	rendered := make([]string, 0, len(specs))
-	states := make([]State, 0, len(specs))
 	for _, spec := range specs {
 		state := b.declare(spec.id, spec.key, true, spec.run)
-		states = append(states, state)
 		rendered = append(rendered, Button(spec.label, spec.primary, state))
 	}
 	line := ButtonRow(rendered...)

@@ -80,9 +80,18 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.updateTerminalModels(msg)...)
 	}
 
-	_, cmd := p.update(msg)
-	if cmd != nil {
-		cmds = append(cmds, cmd)
+	// Live-refresh messages are handled before the product update so a watcher
+	// signal cannot be mistaken for anything else, and so the refresh commands
+	// they produce batch with the rest of this tick.
+	if cmd, handled := p.handleLiveWatchMsg(msg); handled {
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	} else {
+		_, cmd := p.update(msg)
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	// The rule a pane search lives by, swept once per update rather than trusted
 	// to each of the dozen places that write focus: the surface belongs to the
@@ -96,6 +105,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	p.syncTerminalResizeHold()
 	cmds = append(cmds, p.reconcileTerminalModels()...)
 	p.syncTerminalModels()
+	// Swept once per update for the same reason as the focus rule above: the
+	// watch set must match the open pane set, and there are too many places that
+	// open, close, retarget or restore a pane to trust each of them to say so.
+	if cmd := p.reconcileLiveWatches(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return p, tea.Batch(cmds...)
 }
 

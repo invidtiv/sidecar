@@ -181,6 +181,79 @@ func (m Model) visibleTabs() []tabRef {
 	return refs
 }
 
+// maxNumberedProjectTabs caps the positional number row at 1-7.
+//
+// The header is one row of entries, and the number row addresses it as one row:
+// 1-7 are the project's plugin tabs, 8/9/0 are the global entries the left
+// cluster paints (Sessions / Activity / Tasks). Capping the positional keys is
+// what buys those three a stable, scope-independent meaning — pressing 8 always
+// means Sessions, never "whatever the eighth plugin happens to be".
+//
+// The design direction is exactly seven project tabs, so the cap costs nothing
+// today; an eighth tab is still reachable with [ / ] and from the palette.
+const maxNumberedProjectTabs = 7
+
+// headerEntries returns every entry the header row can activate, in the order
+// the header paints them: the global entries in the left cluster (Sessions,
+// Activity, and Tasks when its feature is on), then the project's plugin tabs
+// in the right cluster.
+//
+// This is the ring `[` and `]` walk, and it is deliberately the SAME ring in
+// both scopes. The project tabs are painted only while project scope is active,
+// but they stay in the ring from the global space: a cycle you can step into
+// and never step out of is a trap, and `]` followed by `[` has to be the
+// identity wherever the user is standing.
+func (m Model) headerEntries() []tabRef {
+	global := m.globalTabsVisible()
+	entries := make([]tabRef, 0, len(global)+8)
+	for _, tab := range global {
+		entries = append(entries, globalTabRef(tab))
+	}
+	if m.registry != nil {
+		for i := range m.registry.Plugins() {
+			entries = append(entries, projectTabRef(i))
+		}
+	}
+	return entries
+}
+
+// numberedProjectTabs is how many project tabs the number row can actually
+// reach: one per plugin, never more than maxNumberedProjectTabs.
+func (m Model) numberedProjectTabs() int {
+	if m.registry == nil {
+		return 0
+	}
+	return min(len(m.registry.Plugins()), maxNumberedProjectTabs)
+}
+
+// globalTabKey is the number-row key that jumps straight to a global entry.
+// It is a property of the entry, not of its position, so a disabled Tasks tab
+// does not slide Activity onto `0`.
+func globalTabKey(tab GlobalTab) string {
+	switch tab {
+	case GlobalSessions:
+		return "8"
+	case GlobalActivity:
+		return "9"
+	case GlobalTasks:
+		return "0"
+	}
+	return ""
+}
+
+// globalTabForKey maps 8/9/0 back to the entry they address.
+func globalTabForKey(key string) (GlobalTab, bool) {
+	switch key {
+	case "8":
+		return GlobalSessions, true
+	case "9":
+		return GlobalActivity, true
+	case "0":
+		return GlobalTasks, true
+	}
+	return 0, false
+}
+
 // tabLabel is the text painted in the header for a tab.
 func (m Model) tabLabel(ref tabRef) string {
 	if ref.scope == ScopeGlobal {
@@ -320,34 +393,61 @@ func (m Model) globalWorkspacesPreviewFocused() bool {
 	return m.globalWorkspacesVisible() && m.overview.PreviewFocused()
 }
 
-// cycleTabs moves forward (+1) or backward (-1) through the active scope's own
-// tabs. It never crosses the scope boundary.
+// cycleTabs moves forward (+1) or backward (-1) through the whole header row —
+// the global entries and the project's plugin tabs — wrapping at both ends.
+//
+// It used to stop at the scope boundary, which made the header two rings the
+// user had to know about: `]` walked the plugin tabs and quietly refused to
+// reach Sessions, even though Sessions was painted in the same bar three
+// columns to the left. One bar, one ring.
 func (m *Model) cycleTabs(delta int) tea.Cmd {
-	tabs := m.visibleTabs()
-	if len(tabs) == 0 {
+	entries := m.headerEntries()
+	if len(entries) == 0 {
 		return nil
 	}
 	current := 0
 	active := m.activeTab()
-	for i, ref := range tabs {
+	for i, ref := range entries {
 		if ref.same(active) {
 			current = i
 			break
 		}
 	}
-	next := ((current+delta)%len(tabs) + len(tabs)) % len(tabs)
-	return m.activateTab(tabs[next])
+	next := ((current+delta)%len(entries) + len(entries)) % len(entries)
+	return m.activateTab(entries[next])
 }
 
-// selectTabByNumber activates the nth visible tab of the active scope. A number
-// with no tab behind it does nothing rather than falling through to the other
-// scope's list.
-func (m *Model) selectTabByNumber(index int) tea.Cmd {
-	tabs := m.visibleTabs()
-	if index < 0 || index >= len(tabs) {
+// selectProjectTabByNumber activates the nth project plugin tab (0-based) for
+// keys 1-7, entering project scope from the global space if that is where the
+// user pressed it. A number with no plugin behind it does nothing — it must
+// never slide onto a global entry, which is the whole reason 8/9/0 are named
+// rather than positional.
+func (m *Model) selectProjectTabByNumber(index int) tea.Cmd {
+	if index < 0 || index >= maxNumberedProjectTabs {
 		return nil
 	}
-	return m.activateTab(tabs[index])
+	if m.registry == nil || index >= len(m.registry.Plugins()) {
+		return nil
+	}
+	return m.activateTab(projectTabRef(index))
+}
+
+// selectGlobalTab activates a global header entry directly (8/9/0), from either
+// scope.
+//
+// A tab whose feature is disabled does nothing at all: silently, and above all
+// without falling through to anything else. `0` with the Tasks host off is a
+// key that addresses an entry the header is not painting, and the honest
+// response to that is no response — the same one 1-7 give for a plugin index
+// that does not exist. A toast would be noise on a key the user can see has
+// nothing behind it.
+func (m *Model) selectGlobalTab(tab GlobalTab) tea.Cmd {
+	for _, candidate := range m.globalTabsVisible() {
+		if candidate == tab {
+			return m.activateTab(globalTabRef(tab))
+		}
+	}
+	return nil
 }
 
 // globalTasksHost owns the embedded Tasks surface.

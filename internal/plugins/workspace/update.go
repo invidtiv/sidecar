@@ -568,7 +568,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// Update delete modal with remote branch existence info
 		if p.viewMode == ViewModeConfirmDelete && p.deleteConfirmWorktree != nil &&
 			p.deleteConfirmWorktree.Name == msg.WorkspaceName {
-			p.deleteHasRemote = msg.Exists
+			p.deleteConfirm.HasRemote = msg.Exists
+			p.deleteConfirm.Invalidate()
+		}
+
+	case WorktreeDirtyCheckedMsg:
+		// Only the confirmation that asked may be updated: the answer is about
+		// one worktree, and a late one must not relabel a different target.
+		if p.viewMode == ViewModeConfirmDelete && p.deleteConfirmWorktree != nil &&
+			p.deleteConfirmWorktree.Path == msg.Path {
+			p.deleteConfirm.Dirty = msg.Dirty
+			p.deleteConfirm.Invalidate()
 		}
 
 	case PushDoneMsg:
@@ -874,6 +884,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+		// A create — including recreating an offline row under its old tmux
+		// name — starts a new life for that name. Recording it here is what
+		// makes any death verdict still in flight refuse to close the shell
+		// that was just brought back (td-6a4100).
+		p.noteShellAlive(msg.SessionName)
+
 		existingShell := p.findShellByName(msg.SessionName)
 		existingIdx := -1
 		for i, s := range p.shells {
@@ -1003,7 +1019,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if sessionExists(shell.TmuxName) {
 				cmds = append(cmds, p.scheduleShellPollByName(shell.TmuxName, 0))
 			} else {
-				cmds = append(cmds, func() tea.Msg { return ShellSessionDeadMsg{TmuxName: shell.TmuxName} })
+				// has-session failing is not proof on its own — a server that
+				// is down fails the same way — so confirm before closing.
+				cmds = append(cmds, p.suspectShellDeath(shell.TmuxName))
 			}
 		}
 
@@ -1145,9 +1163,23 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 
+	case shellDeathSuspectedMsg:
+		return p, p.handleShellDeathSuspected(msg)
+
+	case shellDeathProbedMsg:
+		return p, p.handleShellDeathProbed(msg)
+
 	case ShellSessionDeadMsg:
 		if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 			return p, nil
+		}
+		p.shellLivenessTracker().Forget(msg.TmuxName)
+		// Typing `exit` is the common way a shell dies, so the surface that
+		// dies with it is usually the interactive one. Leave it rather than
+		// stranding the user on a pane that is gone (td-6a4100).
+		if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active &&
+			p.interactiveState.TargetSession == msg.TmuxName {
+			p.exitInteractiveMode()
 		}
 		// Timer leak prevention (td-83dc22): increment generation to invalidate pending timers
 		p.pollScheduler.Invalidate(shellPollKey(msg.TmuxName))
@@ -1238,6 +1270,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Preserve the last good screen and retry under a fresh owner.
 			return p, p.scheduleShellPollByName(msg.TmuxName, pollIntervalActive)
 		}
+		// A capture that answered is the positive liveness evidence a later
+		// probe needs before it may close this shell (td-6a4100).
+		p.noteShellAlive(msg.TmuxName)
 		changed := false
 		// Update last output time if content changed
 		shell := p.findShellByName(msg.TmuxName)
@@ -1526,12 +1561,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case UncommittedChangesCheckMsg:
+		wt := p.findWorktree(msg.WorkspaceName)
+		if wt != nil && msg.Changes != nil {
+			wt.Changes = msg.Changes
+			wt.Stats = msg.Stats
+			p.conflicts = detectConflictsFromChanges(p.worktrees)
+		}
 		if msg.Err != nil {
 			// Error checking changes - cancel merge and return to list
 			p.viewMode = ViewModeList
 		} else if msg.HasChanges {
 			// Show commit modal
-			wt := p.findWorktree(msg.WorkspaceName)
 			if wt != nil {
 				p.mergeCommitState = &MergeCommitState{
 					Worktree:       wt,
@@ -1545,12 +1585,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeCommitMessageInput.CharLimit = 200
 				p.viewMode = ViewModeCommitForMerge
 			}
-		} else {
+		} else if wt != nil {
 			// No uncommitted changes, proceed to merge
-			wt := p.findWorktree(msg.WorkspaceName)
-			if wt != nil {
-				cmds = append(cmds, p.proceedToMergeWorkflow(wt))
-			}
+			cmds = append(cmds, p.proceedToMergeWorkflow(wt))
 		}
 
 	case MergeCommitDoneMsg:
@@ -1923,10 +1960,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.exitInteractiveMode()
 		p.toastMessage = "Session ended"
 		p.toastTime = time.Now()
-		// Auto-remove dead shell from list (td-b6904e)
+		// Auto-remove dead shell from list (td-b6904e), once tmux confirms it
+		// really is gone rather than merely unreachable (td-6a4100).
 		if p.shellSelected {
 			if shell := p.getSelectedShell(); shell != nil {
-				cmds = append(cmds, func() tea.Msg { return ShellSessionDeadMsg{TmuxName: shell.TmuxName} })
+				cmds = append(cmds, p.suspectShellDeath(shell.TmuxName))
 			}
 		}
 

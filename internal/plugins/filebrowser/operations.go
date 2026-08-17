@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // openFile returns a command to open a file in the user's editor.
@@ -25,13 +26,9 @@ func (p *Plugin) openFile(path string) tea.Cmd {
 // openFileAtLine returns a command to open a file in the user's editor at a specific line.
 func (p *Plugin) openFileAtLine(path string, lineNo int) tea.Cmd {
 	return func() tea.Msg {
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			editor = os.Getenv("VISUAL")
-		}
-		if editor == "" {
-			editor = "vim"
-		}
+		// One resolution for every $EDITOR launch in Sidecar, so the file
+		// browser cannot drift from notes or git status.
+		editor := tty.ResolveEditor()
 		fullPath := filepath.Join(p.ctx.WorkDir, path)
 		return plugin.OpenFileMsg{Editor: editor, Path: fullPath, LineNo: lineNo}
 	}

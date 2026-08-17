@@ -128,6 +128,31 @@ func AddAtPath(path string, def Definition) error {
 	})
 }
 
+// ListAtPath returns every shell definition recorded in the manifest at path.
+//
+// It exists so callers that need to decide *which* shells to act on — the
+// worktree delete, which must forget the shells rooted in the directory it is
+// about to remove — can read the manifest through this package instead of
+// unmarshalling shells.json themselves. A missing manifest is an empty
+// project, not an error.
+//
+// The result is a copy; mutating it does not affect the file. Removal is still
+// one exact Identity at a time, so a caller that lists and then removes must
+// tolerate the manifest changing in between (RemoveAtPath treats an entry that
+// is already gone as success).
+func ListAtPath(path string) ([]Definition, error) {
+	m, err := readManifest(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
+	}
+	out := make([]Definition, len(m.Shells))
+	copy(out, m.Shells)
+	return out, nil
+}
+
 // RemoveAtPath forgets one exact shell identity. A missing entry is already
 // the requested state and therefore succeeds.
 func RemoveAtPath(path string, id Identity) error {
@@ -137,6 +162,39 @@ func RemoveAtPath(path string, id Identity) error {
 				m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
 				return nil
 			}
+		}
+		return nil
+	})
+}
+
+// ErrShellChanged reports that the entry on disk is not the one the caller
+// looked at, so the removal was refused.
+var ErrShellChanged = errors.New("shell entry was replaced since it was observed")
+
+// RemoveIfUnchangedAtPath forgets one shell only when the entry on disk is
+// still the incarnation the caller observed.
+//
+// An auto-close decides a shell is dead, and then takes a moment to confirm it.
+// A shell can be created under the same tmux name inside that moment — the
+// global browser's create writes a fresh definition — and deleting the entry
+// then would delete a live shell's identity (td-6a4100). The comparison runs
+// inside the same exclusive lock the creating write takes, so the two orderings
+// are the only two possible and both are correct: create-then-remove is
+// refused, remove-then-create leaves the new entry alone.
+//
+// A zero observedAt means the caller has no incarnation to check and accepts an
+// unconditional removal.
+func RemoveIfUnchangedAtPath(path string, id Identity, observedAt time.Time) error {
+	return mutateManifest(path, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				continue
+			}
+			if !observedAt.IsZero() && m.Shells[i].CreatedAt.After(observedAt) {
+				return ErrShellChanged
+			}
+			m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
+			return nil
 		}
 		return nil
 	})

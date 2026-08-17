@@ -635,7 +635,11 @@ func updateCheckedOutBaseWithBeforePullContext(ctx context.Context, repoPath, br
 
 // CleanupPlan is captured before cleanup starts and executed in order.
 type CleanupPlan struct {
-	RepoPath          string
+	RepoPath string
+	// ProjectRoot is the owning project, whose manifest records the shells
+	// rooted in the worktree. It is not RepoPath, which is only a surviving
+	// checkout the git commands run from.
+	ProjectRoot       string
 	WorktreePath      string
 	Branch            string
 	ExpectedOID       string
@@ -706,8 +710,17 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 		}
 	}
 	// Every command below runs from RepoPath, which must be a surviving checkout.
+	//
+	// The removal is the shared workspaceops path, stating no force: nobody
+	// confirmed a destructive action here, so a worktree that has acquired
+	// uncommitted work since the merge was reviewed is a reason to stop. It is
+	// also what closes the session before the directory goes (td-3df472); this
+	// path must not kill anything itself.
 	if plan.DeleteWorktree {
-		if err := removeCleanLifecycleWorktreeContext(ctx, plan.RepoPath, plan.WorktreePath, plan.Branch, plan.ExpectedOID); err != nil {
+		if err := workspaceops.DeleteWorktree(ctx, workspaceops.WorktreeRemoval{
+			RepoPath: plan.RepoPath, ProjectRoot: plan.ProjectRoot,
+			Path: plan.WorktreePath, Branch: plan.Branch, ExpectedOID: plan.ExpectedOID,
+		}); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Workspace: %v", err))
 			return results
 		} else {
@@ -717,7 +730,7 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 	if plan.DeleteBranch {
 		if !results.LocalWorktreeDeleted && plan.DeleteWorktree {
 			results.Errors = append(results.Errors, "Branch: skipped because worktree deletion failed")
-		} else if err := deleteBranchAfterMergeContext(ctx, plan.RepoPath, plan.Branch, plan.ForceDeleteBranch); err != nil {
+		} else if err := deleteBranchAfterMergeContext(ctx, plan.RepoPath, plan.Branch, plan.ExpectedOID, plan.ForceDeleteBranch); err != nil {
 			results.Errors = append(results.Errors, fmt.Sprintf("Branch: %v", err))
 		} else {
 			results.LocalBranchDeleted = true
@@ -740,45 +753,13 @@ func runCleanupPlanContext(ctx context.Context, plan CleanupPlan) *CleanupResult
 	return results
 }
 
-func deleteBranchAfterMergeContext(ctx context.Context, repoPath, branch string, force bool) error {
-	if isMainBranchContext(ctx, repoPath, branch) {
-		return fmt.Errorf("refusing to delete main branch %q", branch)
-	}
-	flag := "-d"
-	if force {
-		flag = "-D"
-	}
-	_, err := gitOutputContext(ctx, repoPath, "branch", flag, branch)
-	return err
-}
-
-func removeCleanLifecycleWorktreeContext(ctx context.Context, repoPath, worktreePath, branch, expectedOID string) error {
-	if expectedOID == "" {
-		return fmt.Errorf("cleanup identity has no expected HEAD OID")
-	}
-	if state := gitOperationStateContext(ctx, worktreePath); state != "clean" {
-		return fmt.Errorf("worktree has a Git operation in progress: %s", state)
-	}
-	if err := requireCheckoutIdentityContext(ctx, worktreePath, branch, expectedOID); err != nil {
-		return err
-	}
-	if err := requireCleanContext(ctx, worktreePath); err != nil {
-		return err
-	}
-	// This lifecycle path deliberately has no --force fallback. The identity
-	// and clean checks are immediately adjacent to the destructive command.
-	cmd := exec.CommandContext(ctx, "git", "worktree", "remove", worktreePath)
-	cmd.Dir = repoPath
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git worktree remove: %s: %w", strings.TrimSpace(string(output)), err)
-	}
-	return nil
+func deleteBranchAfterMergeContext(ctx context.Context, repoPath, branch, expectedOID string, force bool) error {
+	return workspaceops.DeleteLocalBranch(ctx, workspaceops.BranchDeletion{
+		RepoPath: repoPath, Branch: branch, ExpectedOID: expectedOID, Force: force,
+	})
 }
 
 func deleteRemoteBranchFromContext(ctx context.Context, repoPath, remote, branch, expectedOID string) error {
-	if isMainBranchContext(ctx, repoPath, branch) {
-		return fmt.Errorf("refusing to delete remote main branch %q", branch)
-	}
 	if remote == "" {
 		var err error
 		remote, err = resolveBranchRemoteContext(ctx, repoPath, branch)
@@ -786,12 +767,9 @@ func deleteRemoteBranchFromContext(ctx context.Context, repoPath, remote, branch
 			return err
 		}
 	}
-	lease := "--force-with-lease=refs/heads/" + branch + ":" + expectedOID
-	_, err := gitOutputContext(ctx, repoPath, "push", lease, remote, "--delete", branch)
-	if err != nil && (strings.Contains(err.Error(), "remote ref does not exist") || strings.Contains(err.Error(), "couldn't find remote ref")) {
-		return nil
-	}
-	return err
+	return workspaceops.DeleteRemoteBranch(ctx, workspaceops.BranchDeletion{
+		RepoPath: repoPath, Branch: branch, Remote: remote, ExpectedOID: expectedOID,
+	})
 }
 
 func remoteBranchOID(repoPath, remote, branch string) (string, error) {

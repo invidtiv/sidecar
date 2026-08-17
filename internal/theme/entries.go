@@ -160,6 +160,18 @@ func EntryForConfig(tc config.ThemeConfig) Entry {
 	return Entry{Name: display, IsBuiltIn: true, ThemeKey: tc.Name}
 }
 
+// GlobalEntry is the entry the global scope shows as current. Unlike
+// EntryForConfig, an empty configuration is not "inherits from the level
+// above" here — there is no level above the global scope — so it resolves to
+// the same fresh-install theme ResolveTheme would apply, and the picker opens
+// with its cursor on the theme actually on screen.
+func GlobalEntry(tc config.ThemeConfig) Entry {
+	if tc.Community == "" && tc.Name == "" {
+		tc.Name = styles.FreshInstallTheme
+	}
+	return EntryForConfig(tc)
+}
+
 // Resolved is the theme an entry previews as. A preview deliberately carries no
 // user overrides: the point of moving through the list is to see the theme
 // itself, not another theme's customizations.

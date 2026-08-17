@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overview"
@@ -268,6 +269,9 @@ type Model struct {
 	issuePreviewModalWidth   int
 	issuePreviewModalHeight  int
 	issuePreviewMouseHandler *mouse.Handler
+	// issuePreviewWatcher keeps the modal's card in step with the td store. It
+	// lives exactly as long as the modal. See issue_preview_live.go.
+	issuePreviewWatcher *livewatch.PathWatcher
 
 	// Header/footer
 	ui *UIState
@@ -490,6 +494,9 @@ func (m Model) Init() tea.Cmd {
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 	}
 	cmds = append(cmds, m.productCheckCmds(false)...)
+	if cmd := defaultThemeNoticeCmd(m.cfg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 
 	// Mark the startup plugin focused. SetActivePlugin only runs when the user
 	// switches tabs, so without this the initial tab reports itself unfocused —
@@ -1392,6 +1399,8 @@ func (m *Model) runGlobalWorkspacesCommand(id string) tea.Cmd {
 		return nil
 	case "delete-shell":
 		return m.overview.OpenDeleteSelectedShell()
+	case "delete-worktree":
+		return m.overview.OpenDeleteSelectedWorktree()
 	case "merge-workflow":
 		return m.overview.StartSelectedMerge()
 	case "new-worktree":
@@ -1444,6 +1453,7 @@ func (m *Model) resetIssueInput() {
 
 // resetIssuePreview resets the issue preview modal state.
 func (m *Model) resetIssuePreview() {
+	m.stopIssuePreviewWatch()
 	m.showIssuePreview = false
 	m.issuePreviewView = nil
 	m.issuePreviewData = nil
@@ -1487,7 +1497,13 @@ func (m *Model) initThemeSwitcher() {
 	m.clearThemeSwitcherModal()
 
 	// Determine original theme from config
-	m.themeSwitcherOriginal = themeEntry{Name: "default", IsBuiltIn: true, ThemeKey: "default"}
+	// With no recorded choice the running theme is the fresh-install one, so
+	// that is what the switcher must open on.
+	m.themeSwitcherOriginal = themeEntry{
+		Name:      styles.GetTheme(styles.FreshInstallTheme).DisplayName,
+		IsBuiltIn: true,
+		ThemeKey:  styles.FreshInstallTheme,
+	}
 	if freshCfg, err := config.Load(); err == nil {
 		if freshCfg.UI.Theme.Community != "" {
 			// Current theme is a community theme

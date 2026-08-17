@@ -86,7 +86,7 @@ func (m *Model) appearanceCurrentEntry() theme.Entry {
 		}
 		return theme.Entry{}
 	}
-	return theme.EntryForConfig(cfg.UI.Theme)
+	return theme.GlobalEntry(cfg.UI.Theme)
 }
 
 // scopeProjects are the projects a theme override can be saved to. The scope
@@ -239,32 +239,6 @@ func (m *Model) setThemeScope(project bool, path string) {
 		}
 	}
 	state.picker.current = m.appearanceCurrentEntry()
-}
-
-// cycleThemeScopeProject chooses the project a project-scoped save writes to.
-// The first press enters project scope; further presses walk the list, so the
-// project is always something the user picked.
-func (m *Model) cycleThemeScopeProject() {
-	projects := m.scopeProjects()
-	if len(projects) == 0 {
-		return
-	}
-	state := m.appearance()
-	if !state.projectScope {
-		if state.projectPath == "" {
-			state.projectPath = projects[0].Path
-		}
-		m.setThemeScope(true, state.projectPath)
-		return
-	}
-	index := 0
-	for i, project := range projects {
-		if project.Path == state.projectPath {
-			index = i
-		}
-	}
-	next := projects[(index+1)%len(projects)]
-	m.setThemeScope(true, next.Path)
 }
 
 // saveAppearanceTheme writes the selected theme at the chosen scope.

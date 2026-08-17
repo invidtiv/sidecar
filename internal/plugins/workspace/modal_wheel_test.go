@@ -105,8 +105,8 @@ func workspaceModalFamilies() map[string]func(p *Plugin) *modal.Modal {
 		"delete worktree": func(p *Plugin) *modal.Modal {
 			p.viewMode = ViewModeConfirmDelete
 			p.deleteConfirmWorktree = wt()
-			p.ensureConfirmDeleteModal()
-			return p.deleteConfirmModal
+			p.deleteConfirm.Open(worktreeDeleteTarget(wt()), false)
+			return p.deleteConfirm.Modal(p.width)
 		},
 		"delete shell": func(p *Plugin) *modal.Modal {
 			p.viewMode = ViewModeConfirmDeleteShell

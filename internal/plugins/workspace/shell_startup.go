@@ -414,6 +414,9 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	}
 	for sessionName := range result.managedSessions {
 		p.managedSessions[sessionName] = true
+		// Discovery listed this session, which is the positive liveness a later
+		// probe requires before it may close the shell (td-6a4100).
+		p.noteShellAlive(sessionName)
 	}
 
 	var commands []tea.Cmd
