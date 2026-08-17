@@ -8,7 +8,7 @@ import styles from './index.module.css';
 
 // Real numbers, so the badge is a fact rather than a flourish. Refresh with
 // `git rev-list --count HEAD` and `git log --reverse --format=%ad --date=short`.
-const COMMIT_COUNT = 1934;
+const COMMIT_COUNT = 1942;
 const FIRST_COMMIT_MONTH = 'December 2025';
 
 const BREW_COMMAND = 'brew install marcus/tap/sidecar';
