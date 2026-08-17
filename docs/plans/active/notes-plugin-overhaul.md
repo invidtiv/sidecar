@@ -86,8 +86,25 @@ Concretely:
   to the line you were editing. Glamour output is not 1:1 with source; the map can be
   approximate (per-block anchors from goldmark's AST positions are enough — exact
   per-line fidelity is not required to eliminate the *jump*, only the *teleport*).
-- Selection must **not** switch renderers. Selection state overlays whichever renderer
-  is active (see §3).
+- **Clicking into the note body switches to edit mode** (raw source), and all selection
+  happens there. View mode is for reading and scrolling only — mouse interaction with
+  rendered glamour output is limited to scroll. This deliberately trades one predictable,
+  user-initiated style shift on click-in for never having to map selections through
+  styled, re-wrapped rendered text. The block-level line map softens the shift: the
+  source view opens scrolled to the block that was clicked, not the top of the note.
+  `Enter`/`i` from the list enter the same edit mode for keyboard-first use.
+- Within edit mode, selection must **not** switch renderers — it overlays the source
+  renderer (see §3).
+- **Edit mode shows syntax-highlighted markdown source** — not WYSIWYG, not glamour:
+  the buffer is exactly the note's bytes, one source line per logical line, so cursor,
+  selection, and copy math stay plain-text. Line-level cues (heading color/bold, dimmed
+  code-fence interiors, colored list/quote markers) come from a cheap per-line
+  classifier; inline spans (`**bold**`, `` `code` ``, links) from a small per-visible-line
+  scanner. Selection is applied as an overlay *after* syntax color using the existing
+  column-range injection machinery, so the two compose. Implementation note: bubbles'
+  textarea cannot style spans of its own content, so edit mode uses the textarea as the
+  editing engine but renders through our own line renderer — the same wrapper the
+  selection work (§3) needs anyway.
 - The tmux/vim inline editor stays as the power-user escape hatch (`e`), unchanged in
   role. It already exports to a temp `.md` and diffs back.
 - Ship markdown-by-default behind a feature flag for one release
@@ -120,8 +137,9 @@ Build on the existing `ui.SelectionState` machinery rather than inventing a new 
   layer; if bubbles' textarea can't express it, wrap it — do not fork the render path.
 - **Actions on selection:** `y`/copy (exists), `d`/`x`/backspace/delete = cut or delete,
   `p` replaces selection, typing replaces selection (standard editor contract).
-- **Mouse selection stays**, still auto-copies, but no longer swaps renderers; in edit
-  mode it sets the same selection state the keyboard uses, so drag-then-delete works.
+- **Mouse selection stays**, still auto-copies. In view mode, a click enters edit mode
+  first (§1) and a click-drag begins a selection there; within edit mode it sets the
+  same selection state the keyboard uses, so drag-then-delete works.
 - **Select-all** (`ctrl+a` in edit mode or `ggVG` chords are both fine; pick `ctrl+a`).
 - Text-edit **undo**: once selections can delete text, accidental data loss gets easy.
   Add a simple content-snapshot undo ring (per note, in-memory, coalesced with the
@@ -193,11 +211,13 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 
 ## Risks
 
-- **Glamour vs. selection/mouse math.** Rendered lines carry ANSI styling; the
-  column-precise `InjectCharacterRangeBackground` selection assumes plain text. Phase 2
-  should scope view-mode mouse selection to "copy the underlying source block," not
-  per-character rendered-text selection — trying for the latter first is a tar pit.
-- **Textarea selection support.** If bubbles' textarea fights keyboard selection, the
-  wrapper grows; budget for that in phase 3 rather than discovering it mid-way.
+- **Glamour vs. selection/mouse math — resolved by design.** View mode is read/scroll
+  only; any click into the body drops to source edit mode, where selection operates on
+  plain text. No selection ever maps through rendered glamour output.
+- **Custom edit-mode renderer.** Syntax highlighting and selection both require
+  rendering the textarea's content through our own line renderer (bubbles' textarea
+  can't style spans). This is the largest single piece of new machinery; budget for it
+  explicitly in phases 1/3 rather than discovering it mid-way. Keep the highlighter a
+  pure `line -> spans` function, testable without the UI.
 - **Line-map fidelity.** Accept block-level anchoring; chasing exact line mapping
   through glamour re-wrapping is not worth it.
