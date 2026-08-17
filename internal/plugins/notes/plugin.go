@@ -104,6 +104,9 @@ type Plugin struct {
 	previewScrollOff   int      // Scroll offset for preview mode
 	previewWrapEnabled bool     // true = wrap long lines, false = truncate
 
+	// Per-note view/edit place for this session (not persisted).
+	notePlaces map[string]notePlace
+
 	// Mouse state
 	mouseHandler *mouse.Handler
 	hoverDivider bool
@@ -175,6 +178,44 @@ type Plugin struct {
 	pendingClickData     interface{} // Data associated with the click
 }
 
+// notePlace is the session-only view/edit position for one note.
+type notePlace struct {
+	previewScrollOff  int
+	previewCursorLine int
+	editRow           int
+	editCol           int
+	editScrollOff     int
+	hasEdit           bool
+}
+
+// newEditorTextarea builds the built-in editor with the same chrome as preview:
+// no line-number gutter and no '~' end-of-buffer filler.
+func newEditorTextarea() textarea.Model {
+	ta := textarea.New()
+	ta.ShowLineNumbers = false
+	ta.CharLimit = 0
+	ta.MaxHeight = 0
+	ta.Prompt = ""
+	ta.EndOfBufferCharacter = ' '
+	focusedStyle := textarea.StyleState{
+		Base:             lipgloss.NewStyle(),
+		CursorLine:       lipgloss.NewStyle(),
+		CursorLineNumber: styles.Muted,
+		EndOfBuffer:      styles.Muted,
+		LineNumber:       styles.Muted,
+		Placeholder:      styles.Muted,
+		Prompt:           lipgloss.NewStyle(),
+		Text:             lipgloss.NewStyle(),
+	}
+	taStyles := ta.Styles()
+	taStyles.Focused = focusedStyle
+	taStyles.Blurred = focusedStyle
+	ta.SetStyles(taStyles)
+	ta.KeyMap.CapitalizeWordForward = key.NewBinding(key.WithDisabled())
+	ta.Blur()
+	return ta
+}
+
 // UndoActionType represents the type of undoable action.
 type UndoActionType string
 
@@ -195,6 +236,8 @@ func New() *Plugin {
 	p := &Plugin{
 		mouseHandler: mouse.NewHandler(),
 		inlineEditor: tty.New(nil),
+		previewMode:  true,
+		notePlaces:   make(map[string]notePlace),
 	}
 	p.clearInlineEditorAttachKey()
 	return p
@@ -258,38 +301,13 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.previewCursorLine = 0
 	p.previewScrollOff = 0
 	p.previewWrapEnabled = state.GetLineWrapEnabled()
+	p.notePlaces = make(map[string]notePlace)
 	p.pendingInlineEditID = ""
 	p.pendingInlineEditPath = ""
 	p.pendingEditorSyncID = ""
 	p.clearInlineEditorAttachKey()
 
-	// Initialize textarea
-	ta := textarea.New()
-	ta.ShowLineNumbers = true
-	ta.CharLimit = 0
-	ta.MaxHeight = 0
-	ta.Prompt = ""
-	ta.EndOfBufferCharacter = '~'
-	// v2: styling moved under .Styles (StyleState per focus state), accessed via
-	// Styles()/SetStyles(). Preserve the default Cursor style by getting first.
-	focusedStyle := textarea.StyleState{
-		Base:             lipgloss.NewStyle(),
-		CursorLine:       lipgloss.NewStyle(),
-		CursorLineNumber: styles.Muted,
-		EndOfBuffer:      styles.Muted,
-		LineNumber:       styles.Muted,
-		Placeholder:      styles.Muted,
-		Prompt:           lipgloss.NewStyle(),
-		Text:             lipgloss.NewStyle(),
-	}
-	taStyles := ta.Styles()
-	taStyles.Focused = focusedStyle
-	taStyles.Blurred = focusedStyle
-	ta.SetStyles(taStyles)
-	// Unbind alt+c (CapitalizeWordForward) - we use it for clipboard copy
-	ta.KeyMap.CapitalizeWordForward = key.NewBinding(key.WithDisabled())
-	ta.Blur()
-	p.editorTextarea = ta
+	p.editorTextarea = newEditorTextarea()
 
 	// Open the project's td database through pkg/notes.
 	store, err := NewStore(ctx.ProjectRoot, "")
@@ -711,13 +729,17 @@ func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 	oldValue := p.editorTextarea.Value()
 	if p.previewMode {
-		p.previewMode = false
+		row := p.previewCursorLine
 		p.insertAtPreviewLine(content)
+		newRow, newCol := pasteInsertPlace(row, content)
+		if cmd := p.enterEditAt(newRow, newCol); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	} else {
 		p.editorTextarea.InsertString(content)
-	}
-	if !p.editorTextarea.Focused() {
-		cmds = append(cmds, p.editorTextarea.Focus())
+		if !p.editorTextarea.Focused() {
+			cmds = append(cmds, p.editorTextarea.Focus())
+		}
 	}
 	p.selection.Clear()
 	p.trackTextareaScroll()
@@ -730,7 +752,8 @@ func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
 }
 
 // insertAtPreviewLine inserts text at the start of the current preview line
-// without walking the textarea cursor (SetValue leaves the cursor at end).
+// via SetValue. The caller must place the cursor at the insert point —
+// SetValue leaves it at EOF.
 func (p *Plugin) insertAtPreviewLine(content string) {
 	lines := strings.Split(p.editorTextarea.Value(), "\n")
 	if len(lines) == 0 {
@@ -745,6 +768,18 @@ func (p *Plugin) insertAtPreviewLine(content string) {
 	}
 	lines[row] = content + lines[row]
 	p.editorTextarea.SetValue(strings.Join(lines, "\n"))
+}
+
+// pasteInsertPlace is the (row, col) after prepending content at startRow.
+func pasteInsertPlace(startRow int, content string) (row, col int) {
+	if startRow < 0 {
+		startRow = 0
+	}
+	parts := strings.Split(content, "\n")
+	if len(parts) == 1 {
+		return startRow, len([]rune(parts[0]))
+	}
+	return startRow + len(parts) - 1, len([]rune(parts[len(parts)-1]))
 }
 
 func (p *Plugin) createNoteFromPaste(content string) tea.Cmd {
@@ -840,17 +875,16 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if key == "tab" && p.editorNote != nil {
 		if p.activePane == PaneList {
 			p.activePane = PaneEditor
-			// Edit mode only allowed in Active filter view
-			p.previewMode = p.viewFilter != FilterActive
-			if !p.previewMode {
-				cmd := p.editorTextarea.Focus()
-				return p, cmd
+			if p.viewFilter != FilterActive {
+				p.previewMode = true
+				p.editorTextarea.Blur()
+				return p, nil
 			}
-			p.editorTextarea.Blur()
-		} else {
-			p.activePane = PaneList
-			p.editorTextarea.Blur()
+			return p, p.enterEditAtPreviewPlace()
 		}
+		p.captureEditPlace()
+		p.activePane = PaneList
+		p.editorTextarea.Blur()
 		return p, nil
 	}
 
@@ -953,11 +987,11 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if note != nil {
 			p.loadNoteIntoEditor()
 			p.activePane = PaneEditor
-			// Editing is only offered in the Active view; archived notes read.
-			p.previewMode = p.viewFilter != FilterActive
-			if !p.previewMode {
-				p.editorTextarea.Focus()
+			if p.viewFilter != FilterActive {
+				p.previewMode = true
+				return p, nil
 			}
+			return p, p.enterEditAtPreviewPlace()
 		}
 		return p, nil
 	case "e":
@@ -1006,19 +1040,18 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p.handleEditorPreviewKey(msg)
 	}
 
-	// Clear any mouse selection when typing (returns to textarea rendering)
 	p.selection.Clear()
 
 	switch key {
 	case "tab":
+		p.captureEditPlace()
 		p.activePane = PaneList
-		p.syncPreviewFromTextarea()
 		p.editorTextarea.Blur()
 		return p, nil
 
 	case "esc":
+		p.captureEditPlace()
 		p.activePane = PaneList
-		p.syncPreviewFromTextarea()
 		p.editorTextarea.Blur()
 		return p, nil
 
@@ -1074,10 +1107,8 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		return p, nil
 
 	case "enter", "i":
-		// Drop into the simple editor, same as Enter from the list.
 		if p.viewFilter == FilterActive {
-			p.previewMode = false
-			return p, p.editorTextarea.Focus()
+			return p, p.enterEditAtPreviewPlace()
 		}
 		return p, nil
 
@@ -1134,24 +1165,9 @@ func (p *Plugin) ensurePreviewCursorVisible() {
 	p.ensurePreviewCursorVisibleWithHeight(height, width)
 }
 
-// trackTextareaScroll updates previewScrollOff to approximate the textarea's viewport
-// scroll position. Call after textarea cursor movement so mouse regions stay accurate.
-func (p *Plugin) trackTextareaScroll() {
-	cursorLine := p.editorTextarea.Line()
-	height := p.height - 2 - 1 // borders - status header
-	if height < 1 {
-		height = 1
-	}
-	if cursorLine < p.previewScrollOff {
-		p.previewScrollOff = cursorLine
-	}
-	if cursorLine >= p.previewScrollOff+height {
-		p.previewScrollOff = cursorLine - height + 1
-	}
-}
-
 // setTextareaCursorPosition navigates the textarea cursor to the specified row and column.
-// Uses CursorUp/CursorDown since textarea has no SetRow API.
+// Uses CursorUp/CursorDown since textarea has no SetRow API. Soft-wrapped visual
+// rows keep the same Line(), so the walk continues through those instead of stopping.
 func (p *Plugin) setTextareaCursorPosition(row, col int) {
 	lineCount := p.editorTextarea.LineCount()
 	if lineCount == 0 {
@@ -1164,27 +1180,164 @@ func (p *Plugin) setTextareaCursorPosition(row, col int) {
 		row = lineCount - 1
 	}
 
-	// Navigate to target row
 	current := p.editorTextarea.Line()
-	for current > row {
+	guard := 0
+	maxGuard := lineCount * 8
+	if maxGuard < 8 {
+		maxGuard = 8
+	}
+	for current > row && guard < maxGuard {
 		p.editorTextarea.CursorUp()
 		next := p.editorTextarea.Line()
-		if next >= current {
+		if next > current {
 			break
 		}
 		current = next
+		guard++
 	}
-	for current < row {
+	guard = 0
+	for current < row && guard < maxGuard {
 		p.editorTextarea.CursorDown()
 		next := p.editorTextarea.Line()
-		if next <= current {
+		if next < current {
 			break
 		}
 		current = next
+		guard++
 	}
 
-	// Set column
 	p.editorTextarea.SetCursorColumn(col)
+}
+
+// setTextareaCursorAndScroll places the cursor on a source line and walks the
+// textarea so that line sits on (or near) the same screen row as scrollOff.
+func (p *Plugin) setTextareaCursorAndScroll(row, col, scrollOff int) {
+	p.updateTextareaDimensions()
+	lineCount := p.editorTextarea.LineCount()
+	if lineCount == 0 {
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	if row >= lineCount {
+		row = lineCount - 1
+	}
+	l := p.editorLayout()
+	height := l.contentHeight
+	if height < 1 {
+		height = 1
+	}
+	maxScroll := p.previewMaxScroll(height, l.wrapColumn)
+	if scrollOff < 0 {
+		scrollOff = 0
+	}
+	if scrollOff > maxScroll {
+		scrollOff = maxScroll
+	}
+	if row < scrollOff {
+		scrollOff = row
+	}
+	if row >= scrollOff+height {
+		scrollOff = row - height + 1
+		if scrollOff < 0 {
+			scrollOff = 0
+		}
+	}
+
+	p.editorTextarea.MoveToBegin()
+	if scrollOff > 0 {
+		force := scrollOff + height - 1
+		if force >= lineCount {
+			force = lineCount - 1
+		}
+		p.setTextareaCursorPosition(force, 0)
+	}
+	p.setTextareaCursorPosition(row, col)
+	p.previewCursorLine = row
+	p.previewScrollOff = scrollOff
+}
+
+// enterEditAtPreviewPlace drops into the textarea on the preview source line
+// and keeps that line on (or near) the same screen row.
+func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
+	if p.viewFilter != FilterActive || p.editorNote == nil {
+		return nil
+	}
+	if !p.previewMode {
+		if !p.editorTextarea.Focused() {
+			return p.editorTextarea.Focus()
+		}
+		return nil
+	}
+	return p.enterEditAt(p.previewCursorLine, 0)
+}
+
+// enterEditAt switches to edit mode at a source line/column without changing
+// the current preview scroll offset more than needed to keep that line visible.
+func (p *Plugin) enterEditAt(row, col int) tea.Cmd {
+	p.previewMode = false
+	p.setTextareaCursorAndScroll(row, col, p.previewScrollOff)
+	if !p.editorTextarea.Focused() {
+		return p.editorTextarea.Focus()
+	}
+	return nil
+}
+
+// captureEditPlace writes the textarea cursor/viewport back onto the preview
+// place and the per-note session memory.
+func (p *Plugin) captureEditPlace() {
+	if p.editorNote == nil {
+		return
+	}
+	p.syncPreviewFromTextarea()
+	if !p.previewMode {
+		p.previewCursorLine = p.editorTextarea.Line()
+		p.trackTextareaScroll()
+	}
+	p.rememberCurrentPlace()
+}
+
+func (p *Plugin) rememberCurrentPlace() {
+	if p.editorNote == nil {
+		return
+	}
+	if p.notePlaces == nil {
+		p.notePlaces = make(map[string]notePlace)
+	}
+	place := p.notePlaces[p.editorNote.ID]
+	place.previewScrollOff = p.previewScrollOff
+	place.previewCursorLine = p.previewCursorLine
+	if !p.previewMode {
+		place.editRow = p.editorTextarea.Line()
+		place.editCol = p.editorTextarea.Column()
+		place.editScrollOff = p.previewScrollOff
+		place.hasEdit = true
+		place.previewCursorLine = place.editRow
+		place.previewScrollOff = place.editScrollOff
+	}
+	p.notePlaces[p.editorNote.ID] = place
+}
+
+func (p *Plugin) restorePlace(noteID string) {
+	place, ok := p.notePlaces[noteID]
+	if !ok {
+		p.previewCursorLine = 0
+		p.previewScrollOff = 0
+		p.setTextareaCursorAndScroll(0, 0, 0)
+		p.ensurePreviewCursorVisible()
+		return
+	}
+	p.previewCursorLine = place.previewCursorLine
+	p.previewScrollOff = place.previewScrollOff
+	if place.hasEdit {
+		p.setTextareaCursorAndScroll(place.editRow, place.editCol, place.editScrollOff)
+	} else {
+		p.setTextareaCursorAndScroll(place.previewCursorLine, 0, place.previewScrollOff)
+	}
+	p.previewCursorLine = place.previewCursorLine
+	p.previewScrollOff = place.previewScrollOff
+	p.ensurePreviewCursorVisible()
 }
 
 // syncPreviewFromTextarea updates previewLines from the current textarea content.
@@ -1217,11 +1370,14 @@ func (p *Plugin) syncEditorFromNote(note *Note) {
 	p.editorDirty = false
 }
 
-// loadNoteIntoEditor loads the currently selected note into the editor pane.
-// Cursor is positioned at the end of the content.
+// loadNoteIntoEditor loads the currently selected note into the editor pane
+// and restores this session's remembered place (start of note if none).
 func (p *Plugin) loadNoteIntoEditor() {
 	note := p.getSelectedNote()
 	if note == nil {
+		if p.editorNote != nil {
+			p.rememberCurrentPlace()
+		}
 		p.editorNote = nil
 		p.previewLines = nil
 		p.editorDirty = false
@@ -1238,16 +1394,16 @@ func (p *Plugin) loadNoteIntoEditor() {
 		return
 	}
 
+	p.rememberCurrentPlace()
 	p.editorNote = note
 	p.editorTextarea.SetValue(note.Content)
 	p.previewLines = strings.Split(note.Content, "\n")
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
-	p.previewCursorLine = len(p.previewLines) - 1
-	p.previewScrollOff = 0
 	p.editorDirty = false
-	p.previewMode = true // Load in preview mode, Enter/Tab to edit
+	p.restorePlace(note.ID)
+	p.previewMode = true
 	p.editorTextarea.Blur()
 }
 
@@ -1256,41 +1412,29 @@ func (p *Plugin) loadNoteIntoEditor() {
 func (p *Plugin) loadNoteIntoEditorAtEnd() {
 	note := p.getSelectedNote()
 	if note == nil {
+		if p.editorNote != nil {
+			p.rememberCurrentPlace()
+		}
 		p.editorNote = nil
 		p.previewLines = nil
 		p.editorDirty = false
 		return
 	}
 
+	p.rememberCurrentPlace()
 	p.editorNote = note
 	p.editorTextarea.SetValue(note.Content)
 	p.previewLines = strings.Split(note.Content, "\n")
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
-	p.previewCursorLine = 0
-	p.previewScrollOff = 0
 	p.editorDirty = false
-	p.previewMode = false // Immediately in edit mode for new notes
+	p.previewMode = false
+	p.updateTextareaDimensions()
+	p.editorTextarea.MoveToEnd()
+	p.previewCursorLine = p.editorTextarea.Line()
+	p.trackTextareaScroll()
 	p.editorTextarea.Focus()
-}
-
-// updateTextareaDimensions updates the textarea dimensions based on current layout.
-func (p *Plugin) updateTextareaDimensions() {
-	if p.width == 0 || p.height == 0 {
-		return
-	}
-	p.calculatePaneWidths()
-	editorWidth := p.width - p.listWidth - dividerWidth - 4 // borders + padding
-	contentHeight := p.height - 2 - 1                       // borders - status header
-	if editorWidth < 1 {
-		editorWidth = 1
-	}
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-	p.editorTextarea.SetWidth(editorWidth)
-	p.editorTextarea.SetHeight(contentHeight)
 }
 
 // startAutoSaveTimer starts a 1-second debounce timer for auto-save.
@@ -1449,9 +1593,10 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.scrollOff = 0
 				p.loadNoteIntoEditor()
 				p.activePane = PaneEditor
-				p.previewMode = p.viewFilter != FilterActive
-				if !p.previewMode {
-					p.editorTextarea.Focus()
+				if p.viewFilter != FilterActive {
+					p.previewMode = true
+				} else {
+					return p, p.enterEditAtPreviewPlace()
 				}
 				if p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Debug("notes: exact match selected", "id", exactMatch.ID)
@@ -1476,9 +1621,13 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.scrollOff = 0
 				p.loadNoteIntoEditor()
 				p.activePane = PaneEditor
-				p.previewMode = p.viewFilter != FilterActive
-				if !p.previewMode {
-					p.editorTextarea.Focus()
+				if p.viewFilter != FilterActive {
+					p.previewMode = true
+				} else if note != nil {
+					if p.ctx != nil && p.ctx.Logger != nil {
+						p.ctx.Logger.Debug("notes: filtered match selected", "id", note.ID)
+					}
+					return p, p.enterEditAtPreviewPlace()
 				}
 				if note != nil && p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Debug("notes: filtered match selected", "id", note.ID)

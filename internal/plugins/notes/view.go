@@ -159,22 +159,32 @@ func (p *Plugin) renderListPane(height int) string {
 		end = noteCount
 	}
 
-	// Content width for truncation
-	contentWidth := p.listWidth - 6 // Account for cursor prefix, padding, border
-	if contentWidth < 10 {
-		contentWidth = 10
+	listInner := p.listWidth - paneChromeX
+	if listInner < 1 {
+		listInner = 1
+	}
+	bodyWidth := listInner - scrollbarWidth
+	if bodyWidth < 10 {
+		bodyWidth = 10
 	}
 
-	// Render visible notes
+	var body strings.Builder
 	for i := start; i < end; i++ {
 		note := displayNotes[i]
 		isSelected := i == p.cursor
-		sb.WriteString(p.renderNoteRow(note, isSelected, contentWidth))
+		body.WriteString(p.renderNoteRow(note, isSelected, bodyWidth))
 		if i < end-1 {
-			sb.WriteString("\n")
+			body.WriteString("\n")
 		}
 	}
 
+	bar := ui.RenderScrollbar(ui.ScrollbarParams{
+		TotalItems:   noteCount,
+		ScrollOffset: p.scrollOff,
+		VisibleItems: contentHeight,
+		TrackHeight:  contentHeight,
+	})
+	sb.WriteString(attachScrollbar(body.String(), bar, bodyWidth, contentHeight))
 	return sb.String()
 }
 
@@ -192,36 +202,29 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 
 	var sb strings.Builder
 
-	// Status header line
-	sb.WriteString(p.renderEditorStatusHeader(width))
+	l := p.editorLayout()
+	sb.WriteString(p.renderEditorStatusHeader(l.innerWidth))
 	sb.WriteString("\n")
 
-	headerLines := 1
-	contentHeight := height - headerLines
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-
-	if !p.previewMode {
-		if p.selection.HasSelection() {
-			// Show selection with preview-style rendering (has highlight support)
-			p.syncPreviewFromTextarea()
-			sb.WriteString(p.renderPreviewContent(contentHeight, width))
-		} else {
-			// Normal textarea rendering
-			p.editorTextarea.SetWidth(width)
-			p.editorTextarea.SetHeight(contentHeight)
-			sb.WriteString(p.editorTextarea.View())
-		}
+	bar := p.editorScrollbar(l)
+	if p.previewMode {
+		body := p.renderPreviewContent(l.contentHeight, l.wrapColumn)
+		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	} else {
-		// Preview mode: custom rendering with previewLines
-		sb.WriteString(p.renderPreviewContent(contentHeight, width))
+		p.editorTextarea.SetWidth(l.wrapColumn)
+		p.editorTextarea.SetHeight(l.contentHeight)
+		body := p.editorTextarea.View()
+		if p.selection.HasSelection() {
+			body = p.overlaySelectionOnEditor(body)
+		}
+		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	}
 
 	return sb.String()
 }
 
-// renderPreviewContent renders the preview mode content with line numbers and optional wrapping.
+// renderPreviewContent renders raw source lines with no gutter and no '~' filler.
+// width is the wrap/truncate column from editorLayout.
 func (p *Plugin) renderPreviewContent(height, width int) string {
 	var sb strings.Builder
 
@@ -230,47 +233,30 @@ func (p *Plugin) renderPreviewContent(height, width int) string {
 		lines = []string{""}
 	}
 
-	// Ensure preview cursor is visible
 	p.ensurePreviewCursorVisibleWithHeight(height, width)
 
-	// Calculate visible range
 	start := p.previewScrollOff
 	end := start + height
 	if end > len(lines) {
 		end = len(lines)
 	}
 
-	// Line number width
-	lineNumWidth := len(fmt.Sprintf("%d", len(lines)))
-	if lineNumWidth < 2 {
-		lineNumWidth = 2
+	wrapWidth := width
+	if wrapWidth < 1 {
+		wrapWidth = 1
 	}
 
-	maxLineWidth := width - lineNumWidth - 3
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
-	}
-
-	lineNumPad := strings.Repeat(" ", lineNumWidth+1)
 	visualLinesRendered := 0
 
 	for i := start; i < end && visualLinesRendered < height; i++ {
 		line := lines[i]
 
 		if p.previewWrapEnabled {
-			wrappedLines := p.wrapEditorLine(line, maxLineWidth)
+			wrappedLines := p.wrapEditorLine(line, wrapWidth)
 			for wi, wl := range wrappedLines {
 				if visualLinesRendered >= height {
 					break
 				}
-				if wi == 0 {
-					lineNum := fmt.Sprintf("%*d", lineNumWidth, i+1)
-					sb.WriteString(styles.Muted.Render(lineNum + " "))
-				} else {
-					sb.WriteString(lineNumPad)
-				}
-
-				// Check if this line has selection
 				if p.selection.IsLineSelected(i) {
 					startCol, endCol := p.selection.GetLineSelectionCols(i)
 					segStart := 0
@@ -302,39 +288,56 @@ func (p *Plugin) renderPreviewContent(height, width int) string {
 				}
 				visualLinesRendered++
 			}
-		} else {
-			lineNum := fmt.Sprintf("%*d", lineNumWidth, i+1)
-			sb.WriteString(styles.Muted.Render(lineNum + " "))
-
-			displayLine := line
-			if len(displayLine) > maxLineWidth {
-				displayLine = displayLine[:maxLineWidth-1] + ">"
-			}
-
-			if p.selection.IsLineSelected(i) {
-				startCol, endCol := p.selection.GetLineSelectionCols(i)
-				displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
-				sb.WriteString(displayLine)
-			} else {
-				sb.WriteString(styles.Body.Render(displayLine))
-			}
-
-			if visualLinesRendered < height-1 {
-				sb.WriteString("\n")
-			}
-			visualLinesRendered++
+			continue
 		}
-	}
 
-	// Fill remaining height
-	for visualLinesRendered < height {
-		sb.WriteString("\n")
-		lineNum := fmt.Sprintf("%*s", lineNumWidth, "~")
-		sb.WriteString(styles.Muted.Render(lineNum + " "))
+		displayLine := truncatePreviewLine(line, wrapWidth)
+		if p.selection.IsLineSelected(i) {
+			startCol, endCol := p.selection.GetLineSelectionCols(i)
+			displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
+			sb.WriteString(displayLine)
+		} else {
+			sb.WriteString(styles.Body.Render(displayLine))
+		}
+
+		if visualLinesRendered < height-1 {
+			sb.WriteString("\n")
+		}
 		visualLinesRendered++
 	}
 
 	return sb.String()
+}
+
+// truncatePreviewLine cuts to wrapWidth cells without splitting a rune.
+func truncatePreviewLine(line string, wrapWidth int) string {
+	if wrapWidth < 1 {
+		return ""
+	}
+	if ansi.StringWidth(line) <= wrapWidth {
+		return line
+	}
+	return ansi.Truncate(line, wrapWidth, ">")
+}
+
+// overlaySelectionOnEditor paints the current selection onto the textarea
+// surface already showing. Visual rows map 1:1 to source lines from the
+// textarea viewport (Phase 2 will remap through glamour).
+func (p *Plugin) overlaySelectionOnEditor(view string) string {
+	if !p.selection.HasSelection() {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	first := p.editorTextarea.ScrollYOffset()
+	for i, line := range lines {
+		src := first + i
+		if !p.selection.IsLineSelected(src) {
+			continue
+		}
+		startCol, endCol := p.selection.GetLineSelectionCols(src)
+		lines[i] = ui.InjectCharacterRangeBackground(line, startCol, endCol)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // wrapEditorLine wraps a single line to width using plain-text breakpoints,
@@ -464,47 +467,22 @@ func (p *Plugin) renderEditorPlaceholder(height int) string {
 	return sb.String()
 }
 
-// previewViewport returns the content height and width of the preview pane as
-// renderTwoPaneLayout builds them. Boundary queries, wheel movement, and the
-// renderer's clamp all measure the same box through this one helper.
-func (p *Plugin) previewViewport() (height, width int) {
-	paneHeight := p.height
-	if paneHeight < 4 {
-		paneHeight = 4
-	}
-	innerHeight := paneHeight - 2
-	if innerHeight < 1 {
-		innerHeight = 1
-	}
-	height = innerHeight - 1 // status header line
-	if height < 1 {
-		height = 1
-	}
-	width = p.width - p.listWidth - dividerWidth - 4 // borders (2) + padding (2)
-	return height, width
-}
-
 // previewMaxScroll returns the largest previewScrollOff that still fills the
 // viewport, measured from the same wrapped lines renderPreviewContent draws.
-// With wrapping on, trailing lines occupy more than one row, so the logical
-// maximum is smaller than len(previewLines)-height.
+// viewWidth is the wrap column from editorLayout.
 func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 	lines := p.previewLines
 	if len(lines) == 0 || viewHeight < 1 {
 		return 0
 	}
-	lineNumWidth := len(fmt.Sprintf("%d", len(lines)))
-	if lineNumWidth < 2 {
-		lineNumWidth = 2
-	}
-	maxLineWidth := viewWidth - lineNumWidth - 3
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
+	wrapWidth := viewWidth
+	if wrapWidth < 1 {
+		wrapWidth = 1
 	}
 	rows := 0
 	for i := len(lines) - 1; i >= 0; i-- {
 		if p.previewWrapEnabled {
-			rows += len(p.wrapEditorLine(lines[i], maxLineWidth))
+			rows += len(p.wrapEditorLine(lines[i], wrapWidth))
 		} else {
 			rows++
 		}

@@ -215,6 +215,7 @@ func TestNotesWheelUnknownSurfaces(t *testing.T) {
 		setup func(p *Plugin)
 		x     int
 	}{
+		// Textarea edit mode cannot honestly report a viewport boundary.
 		{name: "textarea edit mode", setup: func(p *Plugin) { p.previewMode = false }, x: editorX},
 		{name: "inline tmux editor", setup: func(p *Plugin) { p.inlineEditMode = true }, x: editorX},
 		{name: "inline tmux editor over list", setup: func(p *Plugin) { p.inlineEditMode = true }, x: listX},
@@ -244,5 +245,36 @@ func TestNotesWheelPlaceholderPaneIsBounded(t *testing.T) {
 		if !p.WheelAtBoundary(wheelMsg(editorX, 5, up)) {
 			t.Fatalf("placeholder pane should be bounded (up=%v)", up)
 		}
+	}
+}
+
+func TestNotesWheelEditAtBoundaryDoesNoWork(t *testing.T) {
+	p := wheelTestPlugin(t, 1)
+	p.previewMode = false
+	p.editorNote = &p.notes[0]
+	p.editorTextarea.SetValue("a\nb\nc")
+	p.editorTextarea.MoveToBegin()
+	p.updateTextareaDimensions()
+
+	beforeLine := p.editorTextarea.Line()
+	beforeMode := p.previewMode
+	beforeFocus := p.editorTextarea.Focused()
+
+	p2, _ := p.handleMouseScroll(p.mouseHandler.HandleMouse(wheelMsg(editorX, 5, true)))
+	if p2.editorTextarea.Line() != beforeLine {
+		t.Fatalf("wheel up at first line moved cursor to %d", p2.editorTextarea.Line())
+	}
+	if p2.previewMode != beforeMode {
+		t.Fatal("edit-mode wheel flipped previewMode")
+	}
+	if p2.editorTextarea.Focused() != beforeFocus {
+		t.Fatal("edit-mode wheel changed focus")
+	}
+
+	p.editorTextarea.MoveToEnd()
+	last := p.editorTextarea.Line()
+	p3, _ := p.handleMouseScroll(p.mouseHandler.HandleMouse(wheelMsg(editorX, 5, false)))
+	if p3.editorTextarea.Line() != last {
+		t.Fatalf("wheel down at last line moved cursor to %d", p3.editorTextarea.Line())
 	}
 }

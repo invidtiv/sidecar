@@ -84,6 +84,12 @@ func TestViewPasteEntersEditAtReadingPosition(t *testing.T) {
 	if got == "line0\nline1\nline2IN" {
 		t.Fatal("view paste appended at end of the note")
 	}
+	if p.editorTextarea.Line() != 0 {
+		t.Fatalf("cursor line = %d, want 0 (insert point, not EOF)", p.editorTextarea.Line())
+	}
+	if p.editorTextarea.Column() != len([]rune("IN")) {
+		t.Fatalf("cursor col = %d, want %d (after inserted text)", p.editorTextarea.Column(), len([]rune("IN")))
+	}
 }
 
 func TestListPasteCreatesNoteFromNonBlankText(t *testing.T) {

@@ -28,10 +28,12 @@ func (p *Plugin) previewBounds() sharedscroll.Bounds {
 // and markdown preview. It mirrors handleMouseScroll's routing without moving
 // the cursor, loading a note, or rendering.
 //
-// Textarea edit mode and the inline tmux editor stay unknown: the textarea
-// exposes no exact viewport boundary, and the inline editor's wheel belongs to
-// the embedded application. Open modals are answered by the modal itself, in
-// the same precedence Update uses, and never by the panes underneath.
+// Textarea edit mode stays unknown: ScrollYOffset is readable but the last
+// reachable offset is not a public contract, so inventing a boundary would
+// mis-report. Keep this false rather than guessing. The inline tmux editor's
+// wheel belongs to the embedded application and is not translated into
+// textarea rules. Open modals are answered by the modal itself, in the same
+// precedence Update uses, and never by the panes underneath.
 func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if p == nil || p.mouseHandler == nil || p.store == nil || p.loading || p.loadErr != nil {
 		return false
@@ -69,7 +71,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return true
 	}
 	if !p.previewMode {
-		// The textarea owns its viewport; do not guess.
+		// See WheelAtBoundary doc: textarea cannot honestly report a boundary.
 		return false
 	}
 	if len(p.previewLines) == 0 {
