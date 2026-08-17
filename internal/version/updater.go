@@ -64,9 +64,15 @@ type Runner interface {
 // ExecRunner is the real process runner.
 type ExecRunner struct{}
 
-// Run executes name with args and returns combined output.
+// Run executes name with args and returns combined output. `go` invocations get
+// the adjusted environment from GoCommandEnv so an automated update is not
+// broken by an active workspace or by SDK header warnings.
 func (ExecRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
-	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	if filepath.Base(name) == "go" {
+		cmd.Env = GoCommandEnv(os.Environ())
+	}
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
@@ -230,7 +236,9 @@ func SelectPlan(targets []Target) []Target {
 func goInstallCommandStrings(d Descriptor, version string) []string {
 	var out []string
 	for _, cmd := range goInstallCommands(d, version) {
-		out = append(out, strings.Join(cmd, " "))
+		// Show the same environment the automated path uses, so a copied command
+		// behaves identically to the in-app update.
+		out = append(out, "GOWORK=off "+strings.Join(cmd, " "))
 	}
 	return out
 }
