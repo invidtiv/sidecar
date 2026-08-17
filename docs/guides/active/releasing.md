@@ -13,9 +13,16 @@ release, and updates `marcus/homebrew-tap` from a rendered formula template.
 3. Make sure `main` is clean, reviewed, tested, pushed, and identical to
    `origin/main`. `check-release-state.sh` now checks Go CI's status for that
    commit itself (via `gh run list --workflow=go-ci.yml`) and fails closed if
-   it is red, still running, or hasn't started — this used to be a manual
-   checklist item, and main sat red for a day across two merges before a
-   release caught it. Fix red CI yourself before retrying; don't bypass.
+   it is red — this used to be a manual checklist item, and main sat red for a
+   day across two merges before a release caught it. Fix red CI yourself before
+   retrying; don't bypass.
+
+   It no longer fails on CI that is merely *pending*. A release head is usually
+   a docs-only changelog commit, which `go-ci.yml`'s path filters skip, so the
+   gate would find no run at all; it now dispatches one (the workflow carries a
+   `workflow_dispatch` trigger for this) and waits for whichever run matches the
+   commit. `RELEASE_CI_TIMEOUT` bounds the wait (default 1800s) and
+   `RELEASE_CI_WAIT=0` restores the old fail-fast behavior.
 4. Confirm GitHub CLI authentication can read `marcus/sidecar` and push
    `marcus/homebrew-tap` (needed for verification and for local tap resume).
 5. Install `curl`, `gh`, `git`, `goreleaser`, `jq`, and optionally `ruby`.

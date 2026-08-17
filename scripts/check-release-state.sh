@@ -54,16 +54,48 @@ if command -v gh >/dev/null 2>&1 && gh repo view >/dev/null 2>&1; then
     --json headSha,status,conclusion -q \
     "[.[] | select(.headSha == \"$remote_head\")]" 2>/dev/null || echo '[]')
   ci_count=$(jq 'length' <<<"$ci_runs")
+
+  # A release head is usually a docs-only commit — the changelog entry — which
+  # go-ci.yml's path filters skip, so the gate would find nothing to check and
+  # fail closed. The workflow has a workflow_dispatch trigger for exactly this,
+  # but leaving it to the operator to remember is the friction it was meant to
+  # remove: dispatch it here and wait. Set RELEASE_CI_WAIT=0 to fail fast
+  # instead (the old behavior).
+  ci_wait=${RELEASE_CI_WAIT:-1}
   if [[ $ci_count == 0 ]]; then
-    echo "Error: no Go CI run found for $remote_head yet; wait for it to start" >&2
-    exit 1
+    if [[ $ci_wait == 0 ]]; then
+      echo "Error: no Go CI run found for $remote_head yet; wait for it to start" >&2
+      exit 1
+    fi
+    echo "No Go CI run for $remote_head (path filters skip docs-only commits); dispatching one..." >&2
+    if ! gh workflow run go-ci.yml --ref main >/dev/null 2>&1; then
+      echo "Error: could not dispatch Go CI for $remote_head; run it manually and retry" >&2
+      exit 1
+    fi
   fi
-  ci_status=$(jq -r '.[0].status' <<<"$ci_runs")
-  ci_conclusion=$(jq -r '.[0].conclusion' <<<"$ci_runs")
-  if [[ $ci_status != completed ]]; then
-    echo "Error: Go CI is still $ci_status on $remote_head; wait for it to finish" >&2
-    exit 1
-  fi
+
+  # Poll until the run for this exact commit completes.
+  ci_deadline=$((SECONDS + ${RELEASE_CI_TIMEOUT:-1800}))
+  while :; do
+    ci_runs=$(gh run list --workflow=go-ci.yml --branch main --limit 20 \
+      --json headSha,status,conclusion -q \
+      "[.[] | select(.headSha == \"$remote_head\")]" 2>/dev/null || echo '[]')
+    ci_status=$(jq -r '.[0].status // "missing"' <<<"$ci_runs")
+    ci_conclusion=$(jq -r '.[0].conclusion // ""' <<<"$ci_runs")
+    if [[ $ci_status == completed ]]; then
+      break
+    fi
+    if [[ $ci_wait == 0 ]]; then
+      echo "Error: Go CI is still $ci_status on $remote_head; wait for it to finish" >&2
+      exit 1
+    fi
+    if ((SECONDS >= ci_deadline)); then
+      echo "Error: timed out waiting for Go CI on $remote_head (last status: $ci_status)" >&2
+      exit 1
+    fi
+    echo "  Go CI on $remote_head is $ci_status; waiting..." >&2
+    sleep 20
+  done
   if [[ $ci_conclusion != success ]]; then
     echo "Error: Go CI is $ci_conclusion on $remote_head; fix it before releasing" >&2
     exit 1
