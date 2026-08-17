@@ -88,6 +88,9 @@ func TestModeSwitchCarriesSourceLine(t *testing.T) {
 	if got := p.editorTextarea.Line(); got != 12 {
 		t.Fatalf("edit cursor line %d, want 12", got)
 	}
+	if got := p.editorTextarea.ScrollYOffset(); got < 6 || got > 10 {
+		t.Fatalf("enter edit YOffset=%d, want near previewScrollOff=8", got)
+	}
 
 	p.editorTextarea.MoveToBegin()
 	p.setTextareaCursorPosition(15, 0)
@@ -102,6 +105,26 @@ func TestModeSwitchCarriesSourceLine(t *testing.T) {
 	visibleEnd := p.previewScrollOff + l.contentHeight
 	if p.previewCursorLine < p.previewScrollOff || p.previewCursorLine >= visibleEnd {
 		t.Fatalf("preview scroll %d does not show edit line 15 (height %d)", p.previewScrollOff, l.contentHeight)
+	}
+}
+
+func TestEnterEditDeepScrollKeepsCursorOnScreen(t *testing.T) {
+	p := layoutTestPlugin(t, numberedContent(80))
+	p.previewMode = true
+	p.previewCursorLine = 40
+	p.previewScrollOff = 35
+
+	_ = p.enterEditAtPreviewPlace()
+	if got := p.editorTextarea.Line(); got != 40 {
+		t.Fatalf("edit cursor line %d, want 40", got)
+	}
+	l := p.editorLayout()
+	off := p.editorTextarea.ScrollYOffset()
+	if off == 0 {
+		t.Fatal("enter edit left YOffset=0; preview row was 5, not the top of the note")
+	}
+	if got := p.editorTextarea.Line(); got < off || got >= off+l.contentHeight {
+		t.Fatalf("cursor line 40 not visible after enter (YOffset=%d height=%d)", off, l.contentHeight)
 	}
 }
 
@@ -169,9 +192,18 @@ func TestSelectionDoesNotSwapRenderer(t *testing.T) {
 		t.Fatal("expected an active selection")
 	}
 
-	_ = p.renderEditorPane(p.height-2, 80)
+	// Desync previewLines so a renderer swap would be visible in the output.
+	p.previewLines = []string{"XXX", "YYY", "ZZZ"}
+	out := p.renderEditorPane(p.height-2, 80)
 	if p.previewMode {
 		t.Fatal("selection flipped previewMode on")
+	}
+	if strings.Contains(out, "XXX") {
+		t.Fatalf("selection swapped to preview renderer: %q", out)
+	}
+	// "alpha" is split by the selection overlay; an unselected line is intact.
+	if !strings.Contains(out, "beta") {
+		t.Fatalf("edit+selection did not draw textarea: %q", out)
 	}
 	if p.editorTextarea.Width() != beforeW || p.editorTextarea.Height() != beforeH {
 		t.Fatalf("textarea geometry changed: %dx%d -> %dx%d",

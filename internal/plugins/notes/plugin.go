@@ -1209,10 +1209,26 @@ func (p *Plugin) setTextareaCursorPosition(row, col int) {
 	p.editorTextarea.SetCursorColumn(col)
 }
 
+// textareaViewportSeedMsg is a no-op Update so bubbles can SetContent
+// on the real viewport. textarea.View is a value receiver and does not
+// persist that, and repositionView cannot scroll an empty viewport.
+type textareaViewportSeedMsg struct{}
+
+func (p *Plugin) seedTextareaViewport() {
+	if p.editorTextarea.LineCount() == 0 {
+		return
+	}
+	if !p.editorTextarea.Focused() {
+		_ = p.editorTextarea.Focus()
+	}
+	p.editorTextarea, _ = p.editorTextarea.Update(textareaViewportSeedMsg{})
+}
+
 // setTextareaCursorAndScroll places the cursor on a source line and walks the
 // textarea so that line sits on (or near) the same screen row as scrollOff.
 func (p *Plugin) setTextareaCursorAndScroll(row, col, scrollOff int) {
 	p.updateTextareaDimensions()
+	p.seedTextareaViewport()
 	lineCount := p.editorTextarea.LineCount()
 	if lineCount == 0 {
 		return
@@ -1278,10 +1294,9 @@ func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 func (p *Plugin) enterEditAt(row, col int) tea.Cmd {
 	p.previewMode = false
 	p.setTextareaCursorAndScroll(row, col, p.previewScrollOff)
-	if !p.editorTextarea.Focused() {
-		return p.editorTextarea.Focus()
-	}
-	return nil
+	// Always return Focus so the blink cmd is not lost if seedTextareaViewport
+	// already focused the textarea to populate its viewport.
+	return p.editorTextarea.Focus()
 }
 
 // captureEditPlace writes the textarea cursor/viewport back onto the preview
