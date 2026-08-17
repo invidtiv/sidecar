@@ -146,5 +146,7 @@ release-tap:
 # Install pre-commit hooks
 install-hooks:
 	@chmod +x scripts/pre-commit.sh
-	@ln -sf ../../scripts/pre-commit.sh .git/hooks/pre-commit
-	@echo "✅ pre-commit hook installed"
+	@hooks_dir="$$(git rev-parse --git-path hooks)"; \
+	mkdir -p "$$hooks_dir"; \
+	ln -sf "$$(pwd)/scripts/pre-commit.sh" "$$hooks_dir/pre-commit" || cp scripts/pre-commit.sh "$$hooks_dir/pre-commit"; \
+	echo "✅ pre-commit hook installed to $$hooks_dir/pre-commit"
