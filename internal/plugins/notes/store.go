@@ -1,365 +1,119 @@
 package notes
 
 import (
-	"crypto/rand"
-	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
-	_ "modernc.org/sqlite"
+	tdnotes "github.com/marcus/td/pkg/notes"
 
 	"github.com/marcus/sidecar/internal/tdroot"
 )
 
-// Note represents a single note.
-type Note struct {
-	ID        string     `json:"id"`
-	Title     string     `json:"title"`
-	Content   string     `json:"content"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Pinned    bool       `json:"pinned"`
-	Archived  bool       `json:"archived"`
-	DeletedAt *time.Time `json:"deleted_at,omitempty"`
-}
+const maxTitleLength = 80
 
-// ActionType represents the type of action performed.
-type ActionType string
+// Note is the plugin's view of a td note.
+type Note = tdnotes.Note
 
-const (
-	ActionCreate ActionType = "create"
-	ActionUpdate ActionType = "update"
-	ActionDelete ActionType = "delete"
-
-	// maxTitleLength is the maximum length for note titles (truncated when displaying)
-	maxTitleLength = 80
-)
-
-// Store handles SQLite operations for notes.
+// Store is a thin adapter over td's public notes API.
 type Store struct {
-	db        *sql.DB
-	dbPath    string
-	sessionID string
+	td *tdnotes.Store
 }
 
-// NewStore creates a new Store with the given database path and session ID.
-// If sessionID is empty, it checks TD_SESSION_ID env var, then falls back to "sidecar".
-//
-// The opener must match td's OpenSQLite policy (modernc, WAL, busy_timeout,
-// MaxOpenConns=1) and take .todos/db.lock around writes. Sidecar previously
-// used mattn/go-sqlite3 against the same WAL file without the lock; mixing
-// those engines corrupted sidecar's issues.db (td-95b98a).
-func NewStore(dbPath, sessionID string) (*Store, error) {
-	// _time_format=sqlite matches td/internal/db.OpenSQLite: without it,
-	// modernc writes time.Time with a monotonic suffix that will not parse.
-	db, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite")
+// NewStore opens the project's td database for notes.
+// baseDir is the project root (not the issues.db path). If sessionID is empty,
+// TD_SESSION_ID or "sidecar" is recorded only for local attribution; writes
+// themselves go through td/pkg/notes.
+func NewStore(baseDir, sessionID string) (*Store, error) {
+	s, err := tdnotes.Open(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("open database: %w", err)
-	}
-	db.SetMaxOpenConns(1)
-
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set busy timeout: %w", err)
-	}
-
-	// Resolve session ID: param > TD_SESSION_ID env > "sidecar" default
-	if sessionID == "" {
-		sessionID = os.Getenv("TD_SESSION_ID")
-	}
-	if sessionID == "" {
-		sessionID = "sidecar"
-	}
-
-	store := &Store{
-		db:        db,
-		dbPath:    dbPath,
-		sessionID: sessionID,
-	}
-
-	// Pragmas match td OpenSQLite and do not take db.lock — td doesn't either.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("enable WAL mode: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("set synchronous: %w", err)
-	}
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
-	}
-
-	if err := store.withWriteLock(func() error {
-		if err := store.initSchema(); err != nil {
-			return fmt.Errorf("init schema: %w", err)
-		}
-		return nil
-	}); err != nil {
-		_ = db.Close()
 		return nil, err
 	}
+	return &Store{td: s}, nil
+}
 
-	return store, nil
+// NewTestStore creates an isolated td database for tests.
+func NewTestStore(baseDir, sessionID string) (*Store, error) {
+	s, err := tdnotes.Init(baseDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{td: s}, nil
 }
 
 // DefaultDBPath returns the default database path for a given workdir.
-// It checks for .td-root link file first, which points to a shared td root.
 func DefaultDBPath(workDir string) string {
 	return tdroot.ResolveDBPath(workDir)
 }
 
-// Close closes the database connection.
+// Close closes the underlying td store.
 func (s *Store) Close() error {
-	if s.db == nil {
+	if s == nil || s.td == nil {
 		return nil
 	}
-	// PASSIVE matches td: flush what we can without stalling other writers.
-	_, _ = s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
-	return s.db.Close()
+	return s.td.Close()
 }
 
-// initSchema creates the notes table and indexes if they don't exist.
-// NOTE: The notes table is created in td's database (.todos/issues.db) intentionally.
-// This co-location enables notes to sync via td's existing sync infrastructure
-// (action_log replication). The tradeoff is schema coupling - notes schema
-// changes require coordination with td version compatibility.
-func (s *Store) initSchema() error {
-	schema := `
-CREATE TABLE IF NOT EXISTS notes (
-    id TEXT PRIMARY KEY,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    pinned INTEGER DEFAULT 0,
-    archived INTEGER DEFAULT 0,
-    deleted_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notes_deleted ON notes(deleted_at);
-`
-	_, err := s.db.Exec(schema)
+// Create inserts a new note.
+func (s *Store) Create(title, content string) (*Note, error) {
+	return s.td.Create(title, content)
+}
+
+// Update writes title and content. Pin/archive changes should use TogglePin /
+// ToggleArchive — td's Update does not touch those flags.
+func (s *Store) Update(note *Note) error {
+	_, err := s.td.Update(note.ID, note.Title, note.Content)
 	return err
 }
 
-// generateID creates a new note ID with "nt-" prefix and 8 hex chars.
-func generateID() (string, error) {
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return "nt-" + hex.EncodeToString(b), nil
+// Delete soft-deletes a note.
+func (s *Store) Delete(id string) error {
+	return s.td.Delete(id)
 }
 
-// Create inserts a new note and logs the action.
-func (s *Store) Create(title, content string) (*Note, error) {
-	id, err := generateID()
+// Get retrieves a note by ID, including soft-deleted rows.
+// Missing notes return (nil, nil) to match the previous store contract.
+func (s *Store) Get(id string) (*Note, error) {
+	n, err := s.td.GetAny(id)
 	if err != nil {
-		return nil, fmt.Errorf("generate ID: %w", err)
-	}
-
-	now := time.Now().UTC()
-	note := &Note{
-		ID:        id,
-		Title:     title,
-		Content:   content,
-		CreatedAt: now,
-		UpdatedAt: now,
-		Pinned:    false,
-		Archived:  false,
-	}
-
-	err = s.withWriteLock(func() error {
-		_, err = s.db.Exec(`
-			INSERT INTO notes (id, title, content, created_at, updated_at, pinned, archived)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-		`, note.ID, note.Title, note.Content,
-			note.CreatedAt.Format(time.RFC3339),
-			note.UpdatedAt.Format(time.RFC3339),
-			boolToInt(note.Pinned),
-			boolToInt(note.Archived))
-		if err != nil {
-			return fmt.Errorf("insert note: %w", err)
+		if strings.Contains(err.Error(), "not found") {
+			return nil, nil
 		}
-		if err := s.logAction(ActionCreate, note.ID, nil, note); err != nil {
-			return fmt.Errorf("log action: %w", err)
-		}
-		return nil
-	})
+		return nil, err
+	}
+	return n, nil
+}
+
+// List retrieves non-deleted notes. includeArchived includes archived ones.
+func (s *Store) List(includeArchived bool) ([]Note, error) {
+	opts := tdnotes.ListOptions{}
+	if !includeArchived {
+		f := false
+		opts.Archived = &f
+	}
+	return s.td.List(opts)
+}
+
+// ListArchived retrieves archived, non-deleted notes.
+func (s *Store) ListArchived() ([]Note, error) {
+	t := true
+	return s.td.List(tdnotes.ListOptions{Archived: &t})
+}
+
+// ListDeleted retrieves soft-deleted notes.
+func (s *Store) ListDeleted() ([]Note, error) {
+	all, err := s.td.List(tdnotes.ListOptions{IncludeDeleted: true})
 	if err != nil {
 		return nil, err
 	}
-
-	return note, nil
-}
-
-// Update modifies an existing note and logs the action.
-func (s *Store) Update(note *Note) error {
-	return s.withWriteLock(func() error {
-		prev, err := s.Get(note.ID)
-		if err != nil {
-			return fmt.Errorf("get previous state: %w", err)
+	out := make([]Note, 0, len(all))
+	for _, n := range all {
+		if n.DeletedAt != nil {
+			out = append(out, n)
 		}
-		if prev == nil {
-			return fmt.Errorf("note not found: %s", note.ID)
-		}
-
-		note.UpdatedAt = time.Now().UTC()
-		_, err = s.db.Exec(`
-			UPDATE notes SET title = ?, content = ?, updated_at = ?, pinned = ?, archived = ?
-			WHERE id = ? AND deleted_at IS NULL
-		`, note.Title, note.Content,
-			note.UpdatedAt.Format(time.RFC3339),
-			boolToInt(note.Pinned),
-			boolToInt(note.Archived),
-			note.ID)
-		if err != nil {
-			return fmt.Errorf("update note: %w", err)
-		}
-		if err := s.logAction(ActionUpdate, note.ID, prev, note); err != nil {
-			return fmt.Errorf("log action: %w", err)
-		}
-		return nil
-	})
-}
-
-// Delete performs a soft delete and logs the action.
-func (s *Store) Delete(id string) error {
-	return s.withWriteLock(func() error {
-		prev, err := s.Get(id)
-		if err != nil {
-			return fmt.Errorf("get previous state: %w", err)
-		}
-		if prev == nil {
-			return fmt.Errorf("note not found: %s", id)
-		}
-
-		now := time.Now().UTC()
-		_, err = s.db.Exec(`
-			UPDATE notes SET deleted_at = ?, updated_at = ?
-			WHERE id = ? AND deleted_at IS NULL
-		`, now.Format(time.RFC3339), now.Format(time.RFC3339), id)
-		if err != nil {
-			return fmt.Errorf("soft delete note: %w", err)
-		}
-		newNote := *prev
-		newNote.DeletedAt = &now
-		newNote.UpdatedAt = now
-		if err := s.logAction(ActionDelete, id, prev, &newNote); err != nil {
-			return fmt.Errorf("log action: %w", err)
-		}
-		return nil
-	})
-}
-
-// Get retrieves a note by ID (excluding soft-deleted).
-func (s *Store) Get(id string) (*Note, error) {
-	var note Note
-	var createdAt, updatedAt string
-	var deletedAt sql.NullString
-	var pinned, archived int
-
-	err := s.db.QueryRow(`
-		SELECT id, title, content, created_at, updated_at, pinned, archived, deleted_at
-		FROM notes WHERE id = ?
-	`, id).Scan(&note.ID, &note.Title, &note.Content,
-		&createdAt, &updatedAt, &pinned, &archived, &deletedAt)
-	if err == sql.ErrNoRows {
-		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("query note: %w", err)
-	}
-
-	note.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	note.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-	note.Pinned = pinned == 1
-	note.Archived = archived == 1
-	if deletedAt.Valid {
-		t, _ := time.Parse(time.RFC3339, deletedAt.String)
-		note.DeletedAt = &t
-	}
-
-	return &note, nil
-}
-
-// List retrieves all non-deleted notes, ordered by pinned then updated_at.
-func (s *Store) List(includeArchived bool) ([]Note, error) {
-	query := `
-		SELECT id, title, content, created_at, updated_at, pinned, archived, deleted_at
-		FROM notes
-		WHERE deleted_at IS NULL`
-	if !includeArchived {
-		query += ` AND archived = 0`
-	}
-	query += ` ORDER BY pinned DESC, updated_at DESC`
-
-	return s.queryNotes(query)
-}
-
-// ListArchived retrieves only archived notes (not deleted), ordered by updated_at.
-func (s *Store) ListArchived() ([]Note, error) {
-	query := `
-		SELECT id, title, content, created_at, updated_at, pinned, archived, deleted_at
-		FROM notes
-		WHERE deleted_at IS NULL AND archived = 1
-		ORDER BY pinned DESC, updated_at DESC`
-
-	return s.queryNotes(query)
-}
-
-// ListDeleted retrieves only soft-deleted notes, ordered by deleted_at (most recent first).
-func (s *Store) ListDeleted() ([]Note, error) {
-	query := `
-		SELECT id, title, content, created_at, updated_at, pinned, archived, deleted_at
-		FROM notes
-		WHERE deleted_at IS NOT NULL
-		ORDER BY deleted_at DESC`
-
-	return s.queryNotes(query)
-}
-
-// queryNotes executes a query and returns notes.
-func (s *Store) queryNotes(query string) ([]Note, error) {
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, fmt.Errorf("query notes: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var notes []Note
-	for rows.Next() {
-		var note Note
-		var createdAt, updatedAt string
-		var deletedAt sql.NullString
-		var pinned, archived int
-
-		err := rows.Scan(&note.ID, &note.Title, &note.Content,
-			&createdAt, &updatedAt, &pinned, &archived, &deletedAt)
-		if err != nil {
-			return nil, fmt.Errorf("scan note: %w", err)
-		}
-
-		note.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		note.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-		note.Pinned = pinned == 1
-		note.Archived = archived == 1
-		if deletedAt.Valid {
-			t, _ := time.Parse(time.RFC3339, deletedAt.String)
-			note.DeletedAt = &t
-		}
-
-		notes = append(notes, note)
-	}
-
-	return notes, rows.Err()
+	return out, nil
 }
 
 // TogglePin toggles the pinned state of a note.
@@ -371,9 +125,10 @@ func (s *Store) TogglePin(id string) error {
 	if note == nil || note.DeletedAt != nil {
 		return fmt.Errorf("note not found: %s", id)
 	}
-
-	note.Pinned = !note.Pinned
-	return s.Update(note)
+	if note.Pinned {
+		return s.td.Unpin(id)
+	}
+	return s.td.Pin(id)
 }
 
 // ToggleArchive toggles the archived state of a note.
@@ -385,61 +140,24 @@ func (s *Store) ToggleArchive(id string) error {
 	if note == nil || note.DeletedAt != nil {
 		return fmt.Errorf("note not found: %s", id)
 	}
-
-	note.Archived = !note.Archived
-	return s.Update(note)
+	if note.Archived {
+		return s.td.Unarchive(id)
+	}
+	return s.td.Archive(id)
 }
 
-// Restore undoes a soft delete by clearing deleted_at.
+// Restore undeletes a note.
 func (s *Store) Restore(id string) error {
-	return s.withWriteLock(func() error {
-		prev, err := s.Get(id)
-		if err != nil {
-			return fmt.Errorf("get previous state: %w", err)
-		}
-		if prev == nil {
-			return fmt.Errorf("note not found: %s", id)
-		}
-		if prev.DeletedAt == nil {
-			return fmt.Errorf("note not deleted: %s", id)
-		}
-
-		now := time.Now().UTC()
-		_, err = s.db.Exec(`
-			UPDATE notes SET deleted_at = NULL, updated_at = ?
-			WHERE id = ?
-		`, now.Format(time.RFC3339), id)
-		if err != nil {
-			return fmt.Errorf("restore note: %w", err)
-		}
-		newNote := *prev
-		newNote.DeletedAt = nil
-		newNote.UpdatedAt = now
-		if err := s.logAction(ActionUpdate, id, prev, &newNote); err != nil {
-			return fmt.Errorf("log action: %w", err)
-		}
-		return nil
-	})
+	_, err := s.td.Restore(id)
+	return err
 }
 
 // Unarchive sets archived=false for a note.
 func (s *Store) Unarchive(id string) error {
-	note, err := s.Get(id)
-	if err != nil {
-		return err
-	}
-	if note == nil || note.DeletedAt != nil {
-		return fmt.Errorf("note not found: %s", id)
-	}
-	if !note.Archived {
-		return nil // Already unarchived
-	}
-
-	note.Archived = false
-	return s.Update(note)
+	return s.td.Unarchive(id)
 }
 
-// UpdateContent updates the content of a note.
+// UpdateContent updates the content of a note, using the first line as title.
 func (s *Store) UpdateContent(id, content string) error {
 	note, err := s.Get(id)
 	if err != nil {
@@ -448,89 +166,23 @@ func (s *Store) UpdateContent(id, content string) error {
 	if note == nil || note.DeletedAt != nil {
 		return fmt.Errorf("note not found: %s", id)
 	}
-
-	// Extract title from first line of content
 	title := ""
-	if lines := splitFirst(content, "\n"); len(lines) > 0 {
+	if lines := strings.SplitN(content, "\n", 2); len(lines) > 0 {
 		title = lines[0]
 	}
-
-	note.Title = title
-	note.Content = content
-	return s.Update(note)
+	_, err = s.td.Update(id, title, content)
+	return err
 }
 
-// NotePath returns the path to the note file for external editor.
-// Since notes are stored in SQLite, this creates a temporary file.
-// Returns empty string if note doesn't exist or on error.
+// NotePath writes the note to a temp file for an external editor.
 func (s *Store) NotePath(id string) string {
 	note, err := s.Get(id)
 	if err != nil || note == nil {
 		return ""
 	}
-
-	// Create temp file with note content
-	tmpDir := os.TempDir()
-	tmpFile := filepath.Join(tmpDir, "sidecar-note-"+id+".md")
-
-	err = os.WriteFile(tmpFile, []byte(note.Content), 0644)
-	if err != nil {
+	tmpFile := filepath.Join(os.TempDir(), "sidecar-note-"+id+".md")
+	if err := os.WriteFile(tmpFile, []byte(note.Content), 0644); err != nil {
 		return ""
 	}
-
 	return tmpFile
-}
-
-// splitFirst splits a string on the first occurrence of sep.
-func splitFirst(s, sep string) []string {
-	return strings.SplitN(s, sep, 2)
-}
-
-// logAction writes an entry to the action_log table for sync.
-// Uses td's action_log schema (TEXT PRIMARY KEY with "al-" prefix IDs).
-// Session ID is resolved via: explicit param > TD_SESSION_ID env > "sidecar" default.
-func (s *Store) logAction(actionType ActionType, entityID string, prev, new interface{}) error {
-	var prevData, newData string
-
-	if prev != nil {
-		b, err := json.Marshal(prev)
-		if err != nil {
-			return fmt.Errorf("marshal previous data: %w", err)
-		}
-		prevData = string(b)
-	}
-
-	if new != nil {
-		b, err := json.Marshal(new)
-		if err != nil {
-			return fmt.Errorf("marshal new data: %w", err)
-		}
-		newData = string(b)
-	}
-
-	// Generate action ID with "al-" prefix (matches td's generateActionID format)
-	// td's action_log.id is TEXT PRIMARY KEY after migration v15, requiring explicit IDs
-	b := make([]byte, 4)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Errorf("generate action ID: %w", err)
-	}
-	actionID := "al-" + hex.EncodeToString(b)
-
-	_, err := s.db.Exec(`
-		INSERT INTO action_log (id, session_id, action_type, entity_type, entity_id, previous_data, new_data, timestamp, undone)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-	`, actionID, s.sessionID, string(actionType), "notes", entityID, prevData, newData, time.Now().UTC().Format(time.RFC3339))
-	if err != nil {
-		return fmt.Errorf("insert action log: %w", err)
-	}
-
-	return nil
-}
-
-// boolToInt converts a bool to an int for SQLite.
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

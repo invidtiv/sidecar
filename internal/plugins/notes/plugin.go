@@ -287,10 +287,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	ta.Blur()
 	p.editorTextarea = ta
 
-	// Initialize store - session ID resolved by store from TD_SESSION_ID env var
-	// or falls back to "sidecar" if not set
-	dbPath := DefaultDBPath(ctx.ProjectRoot)
-	store, err := NewStore(dbPath, "")
+	// Open the project's td database through pkg/notes.
+	store, err := NewStore(ctx.ProjectRoot, "")
 	if err != nil {
 		// Store initialization may fail if .todos directory doesn't exist
 		// This is OK - plugin will show appropriate message

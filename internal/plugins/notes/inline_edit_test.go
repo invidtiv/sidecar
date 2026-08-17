@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -177,15 +176,15 @@ func TestInlineAutoSaveSnapshotsOwningStoreAndAppliesStateOnlyInUpdate(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	newNote, err := newStore.Get(noteID)
+	newNotes, err := newStore.List(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if oldNote.Content != "stale project content" {
 		t.Fatalf("owning store content = %q, want queued edit", oldNote.Content)
 	}
-	if newNote.Content != "new project content" {
-		t.Fatalf("replacement store was overwritten: %q", newNote.Content)
+	if len(newNotes) != 1 || newNotes[0].Content != "new project content" {
+		t.Fatalf("replacement store was overwritten: %+v", newNotes)
 	}
 	if p.inlineLastSavedContent != "new project tracker" {
 		t.Fatalf("tea.Cmd mutated plugin state: %q", p.inlineLastSavedContent)
@@ -259,15 +258,15 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newNote, err := newStore.Get(noteID)
+	newNotes, err := newStore.List(false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if oldNote.Content != "old editor exit content" {
 		t.Fatalf("owning store content = %q, want exit edit", oldNote.Content)
 	}
-	if newNote.Content != "new project content" {
-		t.Fatalf("exit save overwrote replacement store: %q", newNote.Content)
+	if len(newNotes) != 1 || newNotes[0].Content != "new project content" {
+		t.Fatalf("exit save overwrote replacement store: %+v", newNotes)
 	}
 	_, followup := p.Update(result)
 	if followup != nil {
@@ -295,11 +294,11 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 
 func makeInlineSaveStores(t *testing.T) (*Store, *Store, string) {
 	t.Helper()
-	oldStore, err := NewStore(filepath.Join(t.TempDir(), "old.db"), "test")
+	oldStore, err := NewTestStore(t.TempDir(), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	newStore, err := NewStore(filepath.Join(t.TempDir(), "new.db"), "test")
+	newStore, err := NewTestStore(t.TempDir(), "test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,27 +306,14 @@ func makeInlineSaveStores(t *testing.T) (*Store, *Store, string) {
 		_ = oldStore.Close()
 		_ = newStore.Close()
 	})
-	const actionLogSchema = `CREATE TABLE action_log (
-		id TEXT PRIMARY KEY, session_id TEXT, action_type TEXT, entity_type TEXT,
-		entity_id TEXT, previous_data TEXT, new_data TEXT, timestamp TEXT, undone INTEGER
-	)`
-	const noteID = "nt-shared"
-	for _, item := range []struct {
-		store   *Store
-		content string
-	}{{oldStore, "old project content"}, {newStore, "new project content"}} {
-		if _, err := item.store.db.Exec(actionLogSchema); err != nil {
-			t.Fatal(err)
-		}
-		now := time.Now().UTC().Format(time.RFC3339)
-		if _, err := item.store.db.Exec(`
-			INSERT INTO notes (id, title, content, created_at, updated_at, pinned, archived)
-			VALUES (?, ?, ?, ?, ?, 0, 0)
-		`, noteID, "note", item.content, now, now); err != nil {
-			t.Fatal(err)
-		}
+	oldNote, err := oldStore.Create("note", "old project content")
+	if err != nil {
+		t.Fatal(err)
 	}
-	return oldStore, newStore, noteID
+	if _, err := newStore.Create("note", "new project content"); err != nil {
+		t.Fatal(err)
+	}
+	return oldStore, newStore, oldNote.ID
 }
 
 func TestCalculateInlineEditorHeight(t *testing.T) {
@@ -639,9 +625,11 @@ func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
 func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
 	logPath := installNotesFakeTmux(t)
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".todos"), 0o755); err != nil {
+	seed, err := NewTestStore(root, "test")
+	if err != nil {
 		t.Fatal(err)
 	}
+	_ = seed.Close()
 	p := New()
 	p.inlineEditMode = true
 	p.inlineEditSession = "old-project-editor"
