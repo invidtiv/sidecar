@@ -532,3 +532,132 @@
     gap: 10px;
   }
 }
+
+/* ------------------------------------------------------------ hero top row */
+
+.heroTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+/* The release badge. Deliberately not monospace: it is the site talking, not
+   the terminal. The two numbers are the whole point — they say this has been
+   built for a while. */
+.milestone {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 15px 10px;
+  border: 1px solid var(--sc-line-2);
+  background: linear-gradient(
+    100deg,
+    color-mix(in oklab, var(--sc-accent) 9%, var(--sc-panel-2)),
+    var(--sc-panel-2) 62%
+  );
+  color: var(--sc-text);
+  text-decoration: none;
+  transition: border-color 180ms ease, transform 180ms ease;
+}
+
+.milestone:hover {
+  border-color: color-mix(in oklab, var(--sc-accent) 55%, transparent);
+  color: var(--sc-text);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.milestone > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.milestone strong {
+  font: 600 13.5px/1.15 var(--sc-display);
+  letter-spacing: -0.01em;
+}
+
+.milestoneMeta {
+  font: 400 12px/1.15 var(--sc-display);
+  color: var(--sc-text-3);
+}
+
+/* A slow beacon rather than a blinking dot: present, not urgent. */
+.milestoneMark {
+  position: relative;
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sc-accent);
+}
+
+.milestoneMark::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--sc-accent);
+  opacity: 0;
+  animation: beacon 3.8s ease-out infinite;
+}
+
+@keyframes beacon {
+  0% {
+    transform: scale(0.55);
+    opacity: 0.55;
+  }
+  55%,
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+
+/* ---------------------------------------------------------------- shimmer */
+
+.shimmer {
+  display: inline-block;
+  white-space: pre;
+}
+
+.shimmer > span {
+  display: inline-block;
+  color: var(--sc-text-3);
+  animation: shimmer 6.5s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 60ms);
+  will-change: color;
+}
+
+@keyframes shimmer {
+  0%,
+  9%,
+  100% {
+    color: var(--sc-text-3);
+    text-shadow: none;
+  }
+  4% {
+    color: color-mix(in oklab, var(--sc-accent) 78%, var(--sc-text-3));
+    text-shadow: 0 0 7px color-mix(in oklab, var(--sc-accent) 22%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer > span,
+  .milestoneMark::after {
+    animation: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .heroTop {
+    gap: 16px;
+  }
+
+  .milestone {
+    width: 100%;
+  }
+}

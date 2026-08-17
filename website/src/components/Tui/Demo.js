@@ -145,9 +145,6 @@ export default function SidecarDemo({theme = 'sidecar-modern', clock = '21:02'})
         </TuiWindow>
       </div>
       <figcaption className={demo.caption}>
-        <span className={demo.hint} aria-hidden="true">
-          click a tab
-        </span>
         <span key={active} className={demo.text}>
           {CAPTIONS[active]}
         </span>

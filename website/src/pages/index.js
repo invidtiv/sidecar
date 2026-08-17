@@ -6,6 +6,11 @@ import SidecarDemo, {SidecarStill} from '@site/src/components/Tui/Demo';
 import {THEMES} from '@site/src/components/Tui/theme';
 import styles from './index.module.css';
 
+// Real numbers, so the badge is a fact rather than a flourish. Refresh with
+// `git rev-list --count HEAD` and `git log --reverse --format=%ad --date=short`.
+const COMMIT_COUNT = 1934;
+const FIRST_COMMIT_MONTH = 'December 2025';
+
 const BREW_COMMAND = 'brew install marcus/tap/sidecar';
 const CURL_COMMAND =
   'curl -fsSL https://raw.githubusercontent.com/marcus/sidecar/main/scripts/setup.sh | bash';
@@ -38,6 +43,27 @@ function CopyCommand({command, prompt = '$'}) {
         {copied ? '✓' : '⧉'}
       </button>
     </div>
+  );
+}
+
+/**
+ * Text whose letters catch the accent one after another every few seconds —
+ * a wave slow and low-contrast enough to read as an invitation rather than an
+ * alert. It is the only thing telling you the demo above is clickable.
+ */
+function Shimmer({children}) {
+  return (
+    <span className={styles.shimmer} aria-label={children}>
+      {Array.from(children).map((ch, i) => (
+        <span
+          // eslint-disable-next-line react/no-array-index-key
+          key={i}
+          aria-hidden="true"
+          style={{'--i': i}}>
+          {ch === ' ' ? ' ' : ch}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -260,9 +286,23 @@ export default function Home() {
         <div className={styles.grid}>
           <section className={styles.hero}>
             <div className={styles.wrap}>
-              <div className={styles.eyebrow}>
-                <span className={styles.eyebrowDot} />
-                Free &amp; open source (MIT) · macOS &amp; Linux
+              <div className={styles.heroTop}>
+                <div className={styles.eyebrow}>
+                  <span className={styles.eyebrowDot} />
+                  Free &amp; open source (MIT) · macOS &amp; Linux
+                </div>
+                <Link
+                  className={styles.milestone}
+                  to="https://github.com/marcus/sidecar/releases">
+                  <span className={styles.milestoneMark} aria-hidden="true" />
+                  <span>
+                    <strong>Sidecar is reaching 1.0</strong>
+                    <span className={styles.milestoneMeta}>
+                      {COMMIT_COUNT.toLocaleString('en-US')} commits since{' '}
+                      {FIRST_COMMIT_MONTH}
+                    </span>
+                  </span>
+                </Link>
               </div>
               <h1 className={styles.h1}>
                 You might never open
@@ -286,7 +326,7 @@ export default function Home() {
 
           <section className={styles.demoBlock}>
             <div className={styles.demoHead}>
-              <span>The whole app, in the page. Try the tabs.</span>
+              <Shimmer>Try the tabs</Shimmer>
               <span style={{color: 'var(--sc-text-4)'}}>
                 single binary · starts in milliseconds · no telemetry
               </span>
