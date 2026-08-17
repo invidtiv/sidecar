@@ -11,6 +11,7 @@ import (
 
 func terminalSearchPlugin(content string, base int) *Plugin {
 	p := New()
+	p.SetFocused(true)
 	p.width = 100
 	p.height = 30
 	p.activePane = PanePreview

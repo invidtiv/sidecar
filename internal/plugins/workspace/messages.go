@@ -307,7 +307,7 @@ type cursorPositionMsg struct {
 
 // paneResizedMsg signals that a tmux pane was resized to match preview dimensions.
 // Triggers a fresh poll so captured content reflects the new width/wrapping.
-type paneResizedMsg struct{}
+type paneResizedMsg struct{ Ownership uint64 }
 
 // deferredPaneResizeMsg re-asserts a pane's geometry once the shared resize
 // budget has recovered. A resize that arrived inside the window is owed, not

@@ -37,6 +37,10 @@ func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
 	if !m.previewTerminalActive() || buffer == nil {
 		return nil
 	}
+	ownership := m.currentPreviewOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	// The pane's own report of how much history it holds is the origin the
 	// relative coordinates of a capture are measured from, so it is read at the
 	// moment of the request rather than remembered from an older frame.
@@ -57,6 +61,11 @@ func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
+		release, ok := m.acquirePreviewOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer release()
 		capture, err := capturePreviewHistory(pane, request.Start, request.End)
 		return previewHistoryLoadedMsg{
 			Target:     target,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -98,6 +99,56 @@ func TestAWatchedGlobalPreviewReachesTmuxsOldestLine(t *testing.T) {
 	}
 }
 
+func TestOverviewStopDrainsInFlightPreviewHistoryCapture(t *testing.T) {
+	m, _, _ := watchedHistoryModel(t)
+	started := make(chan struct{})
+	releaseCapture := make(chan struct{})
+	originalCapture := capturePreviewHistory
+	capturePreviewHistory = func(string, int, int) (tty.CaptureRange, error) {
+		close(started)
+		<-releaseCapture
+		return tty.CaptureRange{Output: "older", HistorySize: 1200, StartLine: 0, EndLine: 0}, nil
+	}
+	t.Cleanup(func() { capturePreviewHistory = originalCapture })
+
+	cmd := m.reachOlderPreviewHistory(20)
+	if cmd == nil {
+		t.Fatal("visible preview did not construct history capture")
+	}
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-started
+	originalBoundary := previewBeforeDeactivate
+	stopEntered := make(chan struct{})
+	previewBeforeDeactivate = func() { close(stopEntered) }
+	t.Cleanup(func() { previewBeforeDeactivate = originalBoundary })
+	stopped := make(chan struct{})
+	go func() {
+		m.Stop()
+		close(stopped)
+	}()
+	<-stopEntered
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while preview history capture held ownership")
+	default:
+	}
+	close(releaseCapture)
+	select {
+	case <-result:
+	case <-time.After(time.Second):
+		t.Fatal("history capture did not drain")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("Stop did not return after history capture drained")
+	}
+	if m.currentPreviewOwnership() != 0 || m.previewTerminalActive() {
+		t.Fatal("Stop left preview ownership or terminal active")
+	}
+}
+
 // At tmux's oldest line there is nothing left to read, and the reader is told
 // so rather than left pushing against a window that silently stops moving. It is
 // said once, and it is a fact about the pane: the project surface says it in the
@@ -148,6 +199,22 @@ func TestASupersededPreviewReadIsRefused(t *testing.T) {
 	}
 	if m.preview.offset != 0 {
 		t.Fatalf("a superseded read moved the window to %d", m.preview.offset)
+	}
+}
+
+func TestOverviewStopCancelsQueuedHistoryCapture(t *testing.T) {
+	m, _, reads := watchedHistoryModel(t)
+	m.jumpPreviewWindow(m.previewMaxOffset())
+	cmd := m.reachOlderPreviewHistory(20)
+	if cmd == nil {
+		t.Fatal("test premise: history read was not queued")
+	}
+	m.Stop()
+	if msg := cmd(); msg != nil {
+		t.Fatalf("queued history capture completed after Stop: %T", msg)
+	}
+	if len(*reads) != 0 {
+		t.Fatalf("Stop allowed %d hidden history capture(s)", len(*reads))
 	}
 }
 

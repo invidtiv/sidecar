@@ -563,6 +563,10 @@ func (m Model) ActivePlugin() plugin.Plugin {
 // SetActivePlugin sets the active plugin by index and returns a command
 // to notify the plugin it has been focused.
 func (m *Model) SetActivePlugin(idx int) tea.Cmd {
+	return m.setActivePlugin(idx, true)
+}
+
+func (m *Model) setActivePlugin(idx int, notify bool) tea.Cmd {
 	plugins := m.registry.Plugins()
 	if idx >= 0 && idx < len(plugins) {
 		// Unfocus current
@@ -574,7 +578,9 @@ func (m *Model) SetActivePlugin(idx int) tea.Cmd {
 		if next := m.ActivePlugin(); next != nil {
 			next.SetFocused(true)
 			m.updateContext()
-			return PluginFocused()
+			if notify {
+				return PluginFocused()
+			}
 		}
 	}
 	return nil
@@ -611,6 +617,20 @@ func (m *Model) FocusPluginByID(id string) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// focusPluginByIDWithoutNotice restores focus-owned resources after registry
+// Reinit without broadcasting PluginFocusedMsg. Reinit already ran Start for
+// every plugin; broadcasting the ordinary return-to-project notice here would
+// make Workspaces start a second concurrent inventory refresh.
+func (m *Model) focusPluginByIDWithoutNotice(id string) {
+	plugins := m.registry.Plugins()
+	for i, p := range plugins {
+		if p.ID() == id {
+			m.setActivePlugin(i, false)
+			return
+		}
+	}
 }
 
 // ShowToast displays a temporary status message.
@@ -956,15 +976,21 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		}
 	}
 
-	// Restore active plugin for the new project root if saved, otherwise keep current
-	newActivePluginID := state.GetActivePluginForWorkDir(targetPath, newProjectRoot)
-	if newActivePluginID != "" {
-		m.FocusPluginByID(newActivePluginID)
+	// Reinit deliberately clears every plugin's focus-owned resources. Always
+	// hand focus back explicitly, including on a project's first visit where no
+	// saved plugin exists yet. Resolve the destination first and focus once so a
+	// pending global-Workspaces navigation cannot start two notice/poll chains.
+	focusPluginID := ""
+	if active := m.ActivePlugin(); active != nil {
+		focusPluginID = active.ID()
 	}
-	var overviewFocusCmd tea.Cmd
+	if saved := state.GetActivePluginForWorkDir(targetPath, newProjectRoot); saved != "" && m.registry.Get(saved) != nil {
+		focusPluginID = saved
+	}
 	if pending != nil {
-		overviewFocusCmd = m.FocusPluginByID(workspacePluginID)
+		focusPluginID = workspacePluginID
 	}
+	m.focusPluginByIDWithoutNotice(focusPluginID)
 
 	// Retitle the terminal now rather than waiting for the next tick, so the
 	// tab label changes at the same moment the UI does.
@@ -982,7 +1008,6 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		m.refreshConfigContext(),
 		titleCmd,
 		inventoryRefresh,
-		overviewFocusCmd,
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
 		func() tea.Msg {
 			return ToastMsg{

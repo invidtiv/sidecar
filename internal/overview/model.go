@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -141,6 +142,12 @@ func IsSharedDiffMessage(msg tea.Msg) bool {
 	}
 }
 
+type previewOwnershipLease struct {
+	mu         sync.RWMutex
+	generation uint64
+	active     bool
+}
+
 type Model struct {
 	collector           workspaceinventory.Collector
 	refreshCollector    workspaceinventory.Collector
@@ -187,6 +194,7 @@ type Model struct {
 	sidebarVisible      bool
 	catalog             map[string]workspaceinventory.Workspace
 	preview             previewState
+	previewOwnership    *previewOwnershipLease
 	diff                workspacediff.View
 	terminalConfig      tty.Config
 	config              *config.Config
@@ -303,7 +311,7 @@ func New(collector workspaceinventory.Collector) *Model {
 	if path := ActivityStorePath(); path != "" {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
-	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees()}
+	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees(), previewOwnership: &previewOwnershipLease{}}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
@@ -408,6 +416,9 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 }
 
 func (m *Model) Stop() {
+	m.deactivatePreviewOwnership()
+	m.pulseGeneration++
+	m.pulseScheduled = false
 	m.stopLiveWatchers()
 	if m.cancel != nil {
 		if m.pollScheduled {
@@ -502,7 +513,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 type workspacePulseTickMsg struct{ generation uint64 }
 
 func (m *Model) pulseCmd() tea.Cmd {
-	if m.pulseScheduled || !m.workspaces.NeedsPulse() {
+	if !m.preview.visible || m.pulseScheduled || !m.workspaces.NeedsPulse() {
 		return nil
 	}
 	m.pulseScheduled = true

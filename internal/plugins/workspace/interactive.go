@@ -1,7 +1,9 @@
 package workspace
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"time"
@@ -14,6 +16,67 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 	"golang.org/x/term"
 )
+
+var errAttachOwnershipSuperseded = errors.New("workspace attach ownership superseded")
+
+var (
+	workspaceExec             = tea.Exec
+	newWorkspaceAttachCommand = func(cmd *exec.Cmd) tea.ExecCommand {
+		return &workspaceOSExecCommand{cmd: cmd}
+	}
+)
+
+type workspaceOSExecCommand struct{ cmd *exec.Cmd }
+
+func (c *workspaceOSExecCommand) Run() error            { return c.cmd.Run() }
+func (c *workspaceOSExecCommand) SetStdin(r io.Reader)  { c.cmd.Stdin = r }
+func (c *workspaceOSExecCommand) SetStdout(w io.Writer) { c.cmd.Stdout = w }
+func (c *workspaceOSExecCommand) SetStderr(w io.Writer) { c.cmd.Stderr = w }
+
+type leasedWorkspaceAttachCommand struct {
+	p           *Plugin
+	inner       tea.ExecCommand
+	ownership   uint64
+	target      string
+	displayName string
+	stdout      io.Writer
+}
+
+func (c *leasedWorkspaceAttachCommand) SetStdin(r io.Reader)  { c.inner.SetStdin(r) }
+func (c *leasedWorkspaceAttachCommand) SetStderr(w io.Writer) { c.inner.SetStderr(w) }
+func (c *leasedWorkspaceAttachCommand) SetStdout(w io.Writer) {
+	c.stdout = w
+	c.inner.SetStdout(w)
+}
+
+func (c *leasedWorkspaceAttachCommand) Run() error {
+	release, ok := c.p.acquireTerminalOwnership(c.ownership)
+	if !ok {
+		return errAttachOwnershipSuperseded
+	}
+	defer release()
+
+	termState, _ := term.GetState(int(os.Stdout.Fd()))
+	if termState != nil {
+		defer func() { _ = term.Restore(int(os.Stdout.Fd()), termState) }()
+	}
+	w, h, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || w <= 0 || h <= 0 {
+		w, h = c.p.width, c.p.height
+	}
+	if w > 0 && h > 0 {
+		workspaceHoldGeometryLease(c.target)
+		defer workspaceReleaseGeometryHold(c.target)
+		workspaceResizeTmuxPane(c.target, w, h)
+	}
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	<-timer.C
+	if c.stdout != nil {
+		_, _ = fmt.Fprintf(c.stdout, "\nAttaching to %s. Press %s d to return to sidecar.\n", c.displayName, getTmuxPrefix())
+	}
+	return c.inner.Run()
+}
 
 // Interactive mode constants
 const (
@@ -150,15 +213,19 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
 		}
 		previewWidth = p.terminalContentWidth(previewWidth)
-		tty.SetWindowSizeManual(sessionName)
-		// Entering interactive mode is an explicit local action; the user is
-		// here, so this instance's geometry wins (td-ee222a).
-		tty.ClaimGeometryLease(target)
-		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
-		// Verify and retry once if resize didn't take effect
-		if w, h, ok := tty.QueryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
-			tty.ResizeTmuxPane(target, previewWidth, previewHeight)
-		}
+		ownership := p.currentTerminalOwnership()
+		p.withTerminalOwnership(ownership, func() tea.Msg {
+			tty.SetWindowSizeManual(sessionName)
+			// Entering interactive mode is an explicit local action; the user is
+			// here, so this instance's geometry wins (td-ee222a).
+			tty.ClaimGeometryLease(target)
+			workspaceResizeTmuxPane(target, previewWidth, previewHeight)
+			// Verify and retry once if resize didn't take effect
+			if w, h, ok := workspaceQueryPaneSize(target); ok && (w != previewWidth || h != previewHeight) {
+				workspaceResizeTmuxPane(target, previewWidth, previewHeight)
+			}
+			return nil
+		})
 	}
 	// Initialize interactive state
 	p.interactiveState = &InteractiveState{
@@ -229,14 +296,18 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	}
 
 	w = p.terminalContentWidth(w)
-	tty.SetWindowSizeManual(sessionName)
-	// Explicit local action: claim the terminal panel session outright rather
-	// than render it at another machine's geometry (td-ee222a).
-	tty.ClaimGeometryLease(target)
-	tty.ResizeTmuxPane(target, w, h)
-	if aw, ah, ok := tty.QueryPaneSize(target); ok && (aw != w || ah != h) {
-		tty.ResizeTmuxPane(target, w, h)
-	}
+	ownership := p.currentTerminalOwnership()
+	p.withTerminalOwnership(ownership, func() tea.Msg {
+		tty.SetWindowSizeManual(sessionName)
+		// Explicit local action: claim the terminal panel session outright rather
+		// than render it at another machine's geometry (td-ee222a).
+		tty.ClaimGeometryLease(target)
+		workspaceResizeTmuxPane(target, w, h)
+		if aw, ah, ok := workspaceQueryPaneSize(target); ok && (aw != w || ah != h) {
+			workspaceResizeTmuxPane(target, w, h)
+		}
+		return nil
+	})
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
 	p.releaseTermPanelWindowPin()
@@ -310,6 +381,10 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	if target == "" {
 		return nil
 	}
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 
 	// Determine dimensions: terminal panel target gets terminal panel dims,
 	// agent target gets split-aware dims, or full dims if no panel.
@@ -332,25 +407,31 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 		return cmd
 	}
 	return func() tea.Msg {
-		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
-			if actualWidth == previewWidth && actualHeight == previewHeight {
-				// Nothing to assert, but we are still the instance driving this
-				// pane's geometry — keep the lease from going stale under us.
-				tty.TouchGeometryLease(target)
-				return nil
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			if actualWidth, actualHeight, ok := workspaceQueryPaneSize(target); ok {
+				if actualWidth == previewWidth && actualHeight == previewHeight {
+					// Nothing to assert, but we are still the instance driving this
+					// pane's geometry — keep the lease from going stale under us.
+					workspaceTouchGeometryLease(target)
+					return nil
+				}
 			}
-		}
-		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
-		if actualWidth, actualHeight, ok := tty.QueryPaneSize(target); ok {
-			if actualWidth != previewWidth || actualHeight != previewHeight {
-				tty.ResizeTmuxPane(target, previewWidth, previewHeight)
+			workspaceResizeTmuxPane(target, previewWidth, previewHeight)
+			if actualWidth, actualHeight, ok := workspaceQueryPaneSize(target); ok {
+				if actualWidth != previewWidth || actualHeight != previewHeight {
+					workspaceResizeTmuxPane(target, previewWidth, previewHeight)
+				}
 			}
-		}
-		return paneResizedMsg{}
+			return paneResizedMsg{Ownership: ownership}
+		})
 	}
 }
 
 func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return nil
 	}
@@ -385,8 +466,10 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	// abandoned to another machine, which would hand ownership back and forth
 	// every staleness budget (td-ee222a).
 	touch := func() tea.Msg {
-		tty.TouchGeometryLease(target)
-		return nil
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			workspaceTouchGeometryLease(target)
+			return nil
+		})
 	}
 	if paneWidth == previewWidth && paneHeight == previewHeight {
 		return touch
@@ -412,8 +495,10 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	// skip exactly the resize that fixes it. The size comes from the capture,
 	// which observed it atomically with the output.
 	return func() tea.Msg {
-		tty.ResizeTmuxPane(target, previewWidth, previewHeight)
-		return paneResizedMsg{}
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			workspaceResizeTmuxPane(target, previewWidth, previewHeight)
+			return paneResizedMsg{Ownership: ownership}
+		})
 	}
 }
 
@@ -534,6 +619,10 @@ func (p *Plugin) terminalContentWidth(width int) int {
 // whose own answer to "this is already the size I asked for" is what the drift
 // contradicts.
 func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int, termPanel bool) tea.Cmd {
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	if target == "" || paneWidth <= 0 || paneHeight <= 0 {
 		return nil
 	}
@@ -557,8 +646,10 @@ func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int
 		return nil
 	}
 	return func() tea.Msg {
-		tty.ResizeTmuxPane(target, width, height)
-		return paneResizedMsg{}
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			workspaceResizeTmuxPane(target, width, height)
+			return paneResizedMsg{Ownership: ownership}
+		})
 	}
 }
 
@@ -595,55 +686,30 @@ func (p *Plugin) resizeSelectedPaneCmd() tea.Cmd {
 	return p.resizeTmuxTargetCmd(p.previewResizeTarget())
 }
 
-// resizeForAttachCmd resizes the tmux pane to the full terminal size before
-// attaching, so the user gets the full available space without dot borders.
-func (p *Plugin) resizeForAttachCmd(target string) tea.Cmd {
-	if target == "" {
-		return nil
-	}
-	return func() tea.Msg {
-		w, h, err := term.GetSize(int(os.Stdout.Fd()))
-		if err != nil || w <= 0 || h <= 0 {
-			// Fallback to plugin dimensions
-			w, h = p.width, p.height
-		}
-		if w <= 0 || h <= 0 {
-			return nil
-		}
-		// Attaching is proof the user is at this machine, so it outranks another
-		// instance's geometry lease. The hold, not the claim, is what makes it
-		// stick: the TUI is suspended for the whole attach, so nothing here ticks
-		// the lease and a peer would otherwise reclaim the session the user is
-		// sitting in a few seconds in (td-ee222a). attachWithResize releases it.
-		tty.HoldGeometryLease(target)
-		tty.ResizeTmuxPane(target, w, h)
-		return nil
-	}
-}
-
-// attachWithResize resizes the tmux pane to full terminal, waits briefly for
-// tmux to process, then attaches. Centralizes resize-before-attach logic.
+// attachWithResize hands one lease-aware ExecCommand to Bubble Tea. Ownership
+// is revalidated in Run — the actual launch boundary — and held across resize,
+// the short tmux settle delay, and the attach itself. A queued command that
+// reaches Run after hide therefore cannot launch, and every acquired geometry
+// hold is released before the event loop resumes.
 func (p *Plugin) attachWithResize(target, sessionName, displayName string, onComplete func(error) tea.Msg) tea.Cmd {
 	if !fullTmuxAttachEnabled() {
 		return nil
 	}
-	c := exec.Command("tmux", "attach-session", "-t", sessionName)
-	termState, _ := term.GetState(int(os.Stdout.Fd()))
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
+	command := &leasedWorkspaceAttachCommand{
+		p: p, inner: newWorkspaceAttachCommand(exec.Command("tmux", "attach-session", "-t", sessionName)),
+		ownership: ownership, target: target, displayName: displayName,
+	}
 	wrappedOnComplete := func(err error) tea.Msg {
-		// The event loop is running again, so the geometry loop takes the lease
-		// back over from the background refresher resizeForAttachCmd started.
-		tty.ReleaseGeometryHold(target)
-		if termState != nil {
-			_ = term.Restore(int(os.Stdout.Fd()), termState)
+		if errors.Is(err, errAttachOwnershipSuperseded) {
+			return nil
 		}
 		return onComplete(err)
 	}
-	return tea.Sequence(
-		p.resizeForAttachCmd(target),
-		tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg { return nil }),
-		tea.Printf("\nAttaching to %s. Press %s d to return to sidecar.\n", displayName, getTmuxPrefix()),
-		tea.ExecProcess(c, wrappedOnComplete),
-	)
+	return workspaceExec(command, wrappedOnComplete)
 }
 
 // previewResizeTarget returns the tmux target for the currently selected pane.
@@ -1041,10 +1107,20 @@ func (p *Plugin) sendTerminalWheelNotches(termPanel bool, up bool, col, row, not
 		return nil
 	}
 	target := source.Target
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
+	done := tty.SendOrdered(target, func() error {
+		release, ok := p.acquireTerminalOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer release()
+		return workspaceSendSGRWheel(target, up, col, row, notches)
+	})
 	return func() tea.Msg {
-		<-tty.SendOrdered(target, func() error {
-			return tty.SendSGRWheel(target, up, col, row, notches)
-		})
+		<-done
 		return nil
 	}
 }

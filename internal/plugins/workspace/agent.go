@@ -324,7 +324,10 @@ type pollAgentMsg struct {
 
 // reconnectedAgentsMsg delivers reconnected agents from startup.
 type reconnectedAgentsMsg struct {
-	Agents []reconnectedAgent
+	OperationScope
+	Agents          []reconnectedAgent
+	StartValidation bool
+	Ownership       uint64
 }
 
 type reconnectedAgent struct {
@@ -793,6 +796,9 @@ func staggerOffset(name string) time.Duration {
 // Adds stagger offset based on worktree name to prevent simultaneous polls.
 // Uses generation tracking (td-83dc22) to invalidate stale timers when worktrees are removed.
 func (p *Plugin) scheduleAgentPoll(worktreeName string, delay time.Duration) tea.Cmd {
+	if p.currentTerminalOwnership() == 0 {
+		return nil
+	}
 	// This is the semantic activity cadence even while tty.Model owns display.
 	// It intentionally continues to observe provider files and tmux evidence;
 	// Update keeps its capture from overwriting the model-owned buffer.
@@ -844,6 +850,10 @@ type AgentPollUnchangedMsg struct {
 // handlePollAgent captures output from a tmux session asynchronously.
 // Uses a goroutine to avoid blocking the UI thread on tmux subprocess calls (td-c2961e).
 func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	wt := p.findWorktree(worktreeName)
 	if wt == nil || wt.Agent == nil {
 		return func() tea.Msg {
@@ -910,18 +920,31 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	}
 
 	// Return a tea.Cmd that spawns a goroutine for async capture
-	return func() tea.Msg {
+	return func() (result tea.Msg) {
+		release, ok := p.acquireTerminalOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer func() {
+			release()
+			if _, retry := result.(pollAgentMsg); retry {
+				time.Sleep(pollIntervalActive)
+				if !p.ownsTerminalOwnership(ownership) {
+					result = nil
+				}
+			}
+		}()
 		if ctx != nil {
 			traceTerminalCapture(ctx.Logger, "workspace", "agent", "semantic_activity", generation)
 		}
 		// Ensure pane is at preview width before capturing (avoids race with async resize)
 		if directCapture && resizeTarget != "" {
-			if w, h, ok := tty.QueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
-				tty.ResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
+			if w, h, ok := workspaceQueryPaneSize(resizeTarget); !ok || w != previewWidth || h != previewHeight {
+				workspaceResizeTmuxPane(resizeTarget, previewWidth, previewHeight)
 			} else {
 				// Already the right size; still tick the geometry lease so a
 				// settled owner does not go stale (td-ee222a).
-				tty.TouchGeometryLease(resizeTarget)
+				workspaceTouchGeometryLease(resizeTarget)
 			}
 		}
 
@@ -943,8 +966,8 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 				strings.Contains(err.Error(), "no server") {
 				return AgentStoppedMsg{WorkspaceName: worktreeName, Generation: generation}
 			}
-			// Schedule retry on other errors (with delay to prevent busy-loop)
-			time.Sleep(pollIntervalActive)
+			// Schedule retry on other errors. The delay happens after releasing
+			// terminal ownership so hiding the surface never waits on backoff.
 			return pollAgentMsg{WorkspaceName: worktreeName, Generation: generation}
 		}
 
@@ -1734,35 +1757,63 @@ func (p *Plugin) detectOrphanedWorktrees() {
 }
 
 // reconnectAgents finds and reconnects to existing tmux sessions on startup.
-func (p *Plugin) reconnectAgents() tea.Cmd {
+func (p *Plugin) reconnectAgents(scope OperationScope, startValidation bool, ownership uint64) tea.Cmd {
+	if ownership == 0 {
+		return nil
+	}
 	type candidate struct {
 		key       string
 		agentType AgentType
+		eligible  bool
+		rank      int
 	}
 	candidates := make(map[string]candidate, len(p.worktrees))
 	ambiguous := make(map[string]bool)
+	worktreeOrder := make([]string, 0, len(p.worktrees))
 	for _, wt := range p.worktrees {
-		name := worktreeSessionSuffix(wt)
-		if ambiguous[name] {
-			continue
+		// Every worktree reserves its aliases, including one already bound to an
+		// Agent. Otherwise an unbound same-basename worktree could claim that live
+		// session a second time. Eligibility is separate from identity reservation:
+		// incremental reconciliation never replaces an existing Agent object.
+		baseCandidate := candidate{
+			key: wt.IdentityKey(), agentType: p.resolveWorktreeAgentType(wt), eligible: wt.Agent == nil,
 		}
-		if _, duplicate := candidates[name]; duplicate {
-			delete(candidates, name) // ambiguous presentation cannot route a session
-			ambiguous[name] = true
-			continue
+		if baseCandidate.eligible {
+			worktreeOrder = append(worktreeOrder, baseCandidate.key)
 		}
-		candidates[name] = candidate{key: wt.IdentityKey(), agentType: p.resolveWorktreeAgentType(wt)}
+		for rank, name := range workspaceops.WorktreeSessionNames(wt.Path, wt.Name) {
+			candidate := baseCandidate
+			candidate.rank = rank
+			if ambiguous[name] {
+				continue
+			}
+			if existing, duplicate := candidates[name]; duplicate && existing.key != candidate.key {
+				delete(candidates, name) // ambiguous identity cannot route a session
+				ambiguous[name] = true
+				continue
+			}
+			candidates[name] = candidate
+		}
 	}
 	return func() tea.Msg {
+		release, ok := p.acquireTerminalOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer release()
 		// Find existing sidecar-ws-* tmux sessions
 		cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 		output, err := cmd.Output()
 		if err != nil {
 			// No tmux server running, that's fine
-			return reconnectedAgentsMsg{}
+			return reconnectedAgentsMsg{OperationScope: scope, StartValidation: startValidation, Ownership: ownership}
 		}
 
-		var agents []reconnectedAgent
+		type match struct {
+			candidate candidate
+			session   string
+		}
+		matches := make(map[string]match, len(worktreeOrder))
 		sessions := strings.Split(string(output), "\n")
 
 		for _, session := range sessions {
@@ -1776,30 +1827,41 @@ func (p *Plugin) reconnectAgents() tea.Cmd {
 				continue
 			}
 
-			sanitizedName := strings.TrimPrefix(session, tmuxSessionPrefix)
-
 			// Check if we have a matching worktree
-			// Session suffix is the path slug, not the display name.
-			candidate, ok := candidates[sanitizedName]
-			if !ok {
+			candidate, ok := candidates[session]
+			if !ok || !candidate.eligible {
 				// Session exists but no worktree - orphaned, skip
 				continue
 			}
 
-			// Create agent record
-			paneID := getPaneID(session)
+			// A worktree may have both its canonical global/CLI spelling and its
+			// older project spelling alive. WorktreeSessionNames ranks canonical
+			// first, so tmux list order cannot make us attach the stale alias.
+			if existing, found := matches[candidate.key]; found && existing.candidate.rank <= candidate.rank {
+				continue
+			}
+			matches[candidate.key] = match{candidate: candidate, session: session}
+		}
+
+		agents := make([]reconnectedAgent, 0, len(matches))
+		for _, key := range worktreeOrder {
+			matched, ok := matches[key]
+			if !ok {
+				continue
+			}
+			paneID := getPaneID(matched.session)
 			agent := &Agent{
-				Type:        candidate.agentType,
-				TmuxSession: session,
+				Type:        matched.candidate.agentType,
+				TmuxSession: matched.session,
 				TmuxPane:    paneID,     // Capture pane ID for interactive mode
 				StartedAt:   time.Now(), // Unknown actual start
 				OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
 			}
 
-			agents = append(agents, reconnectedAgent{WorktreeKey: candidate.key, Agent: agent})
+			agents = append(agents, reconnectedAgent{WorktreeKey: key, Agent: agent})
 		}
 
-		return reconnectedAgentsMsg{Agents: agents}
+		return reconnectedAgentsMsg{OperationScope: scope, Agents: agents, StartValidation: startValidation, Ownership: ownership}
 	}
 }
 
@@ -1853,8 +1915,13 @@ func (p *Plugin) CleanupOrphanedSessions() error {
 
 // validateManagedSessions checks managedSessions against actual tmux sessions
 // and returns a command that will deliver the result.
-func (p *Plugin) validateManagedSessions() tea.Cmd {
+func (p *Plugin) validateManagedSessions(generation, ownership uint64) tea.Cmd {
 	return func() tea.Msg {
+		release, ok := p.acquireTerminalOwnership(ownership)
+		if !ok {
+			return nil
+		}
+		defer release()
 		existing := make(map[string]bool)
 
 		// List all tmux sessions
@@ -1862,7 +1929,7 @@ func (p *Plugin) validateManagedSessions() tea.Cmd {
 		output, err := cmd.Output()
 		if err != nil {
 			// No tmux server, all sessions are gone
-			return validateManagedSessionsResultMsg{ExistingSessions: existing}
+			return validateManagedSessionsResultMsg{Generation: generation, ExistingSessions: existing}
 		}
 
 		// Build set of existing sessions
@@ -1873,14 +1940,19 @@ func (p *Plugin) validateManagedSessions() tea.Cmd {
 			}
 		}
 
-		return validateManagedSessionsResultMsg{ExistingSessions: existing}
+		return validateManagedSessionsResultMsg{Generation: generation, ExistingSessions: existing}
 	}
 }
 
 // scheduleSessionValidation schedules the next session validation.
 func (p *Plugin) scheduleSessionValidation(delay time.Duration) tea.Cmd {
+	if p.currentTerminalOwnership() == 0 || p.sessionValidationScheduled {
+		return nil
+	}
+	p.sessionValidationScheduled = true
+	generation := p.sessionValidationGeneration
 	return tea.Tick(delay, func(t time.Time) tea.Msg {
-		return validateManagedSessionsMsg{}
+		return validateManagedSessionsMsg{Generation: generation}
 	})
 }
 

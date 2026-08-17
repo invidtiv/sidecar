@@ -314,6 +314,13 @@ type Plugin struct {
 	// When a timer fires, it checks if its captured generation matches the current one.
 	// If not, the timer is stale (worktree/shell was removed) and the msg is ignored.
 	pollScheduler tty.KeyedScheduler // Namespaced agent/shell/panel poll generations
+	// terminalOwnership is the visibility epoch for this project projection.
+	// It is deliberately separate from applicationFocused: app blur changes input
+	// policy, while losing project-surface visibility revokes every terminal side
+	// effect already queued for the old owner.
+	terminalOwnership           *terminalOwnershipLease
+	sessionValidationGeneration uint64
+	sessionValidationScheduled  bool
 
 	// Truncation cache to eliminate ANSI parser allocation churn
 	truncateCache *ui.TruncateCache
@@ -587,6 +594,7 @@ func New() *Plugin {
 		shellSelected:       false, // Start with first worktree selected, not shell
 		typeSelectorIdx:     1,     // Default to Worktree option
 		applicationFocused:  true,
+		terminalOwnership:   &terminalOwnershipLease{},
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
 }
@@ -605,6 +613,12 @@ func (p *Plugin) IsFocused() bool { return p.focused }
 
 // SetFocused sets the focus state.
 func (p *Plugin) SetFocused(f bool) {
+	if f && p.focused && p.terminalOwnershipIsActive() {
+		return
+	}
+	if !f && !p.focused && !p.terminalOwnershipIsActive() {
+		return
+	}
 	// Exit interactive mode when plugin loses focus (user switched tabs) (td-efd736)
 	if !f && p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
@@ -615,12 +629,13 @@ func (p *Plugin) SetFocused(f bool) {
 	// global model opens; waiting for another Update leaves both models able to
 	// resize and consume frames for the same pane.
 	if !f {
-		p.stopTerminalModels()
+		p.focused = false
+		p.deactivateTerminalOwnership()
+		return
 	}
-	p.focused = f
-	if f {
-		p.setTerminalFocus(p.applicationFocused)
-	}
+	p.focused = true
+	p.activateTerminalOwnership()
+	p.setTerminalFocus(p.applicationFocused)
 }
 
 func (p *Plugin) SetPendingWorkspaceSelection(selection plugin.PendingWorkspaceSelection) {
@@ -717,7 +732,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activityAnimationScheduled = false
 	p.invalidateShellStartup()
 	p.stopLiveWatchers()
-	p.stopTerminalModels()
+	p.focused = false
+	p.deactivateTerminalOwnership()
 	p.reuseHeldWheelViewOnce = false
 	p.wheelViewCacheOK = false
 	p.ctx = ctx
@@ -959,7 +975,8 @@ func (p *Plugin) Stop() {
 		p.operationCancel = nil
 	}
 	p.invalidateShellStartup()
-	p.stopTerminalModels()
+	p.focused = false
+	p.deactivateTerminalOwnership()
 	// Clean up terminal panel tmux session
 	p.cleanupTermPanelSession()
 }
@@ -1432,9 +1449,10 @@ func (p *Plugin) dwellSatisfied(now time.Time) bool {
 	return now.Sub(p.selectionSince) >= AckDwell
 }
 
-// outputVisibleFor returns true when a worktree's output is on-screen AND plugin is focused.
+// outputVisibleFor returns true when a worktree's output is actually being
+// viewed. App blur keeps observation alive but must not acknowledge activity.
 func (p *Plugin) outputVisibleFor(worktreeName string) bool {
-	if !p.focused {
+	if !p.focused || !p.applicationFocused {
 		return false
 	}
 	return p.outputVisibleForUnfocused(worktreeName)
@@ -1456,7 +1474,7 @@ func (p *Plugin) outputVisibleForUnfocused(worktreeName string) bool {
 // shellOutputVisibleFor reports whether a shell's live output is actually being
 // viewed. Selection alone is insufficient while another plugin is focused.
 func (p *Plugin) shellOutputVisibleFor(tmuxName string) bool {
-	if !p.focused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) {
+	if !p.focused || !p.applicationFocused || (p.viewMode != ViewModeList && p.viewMode != ViewModeInteractive) {
 		return false
 	}
 	shell := p.getSelectedShell()

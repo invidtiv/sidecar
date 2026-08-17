@@ -31,6 +31,7 @@ func watchedReachPlugin(t *testing.T) *Plugin {
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 
 	p := New()
+	p.SetFocused(true)
 	p.width, p.height = 120, 40
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
@@ -140,6 +141,7 @@ func TestApplyTerminalHistoryPrependsAndReplaysPendingScroll(t *testing.T) {
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 	p := New()
+	p.SetFocused(true)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
 		TmuxName: "shell-1",
@@ -255,6 +257,7 @@ func TestTerminalHistoryAccumulatesScrollIntentWhileLoading(t *testing.T) {
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 	p := New()
+	p.SetFocused(true)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
 		TmuxName: "shell-1",
@@ -293,6 +296,7 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 	buffer := tty.NewOutputBuffer(outputBufferCap)
 	buffer.UpdateSnapshot(numberedTerminalLines(600, 620), 600)
 	p := New()
+	p.SetFocused(true)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{
 		TmuxName: "shell-1",

@@ -415,6 +415,10 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 	if p.termPanelSession == "" || !p.termPanelVisible {
 		return nil
 	}
+	ownership := p.currentTerminalOwnership()
+	if ownership == 0 {
+		return nil
+	}
 	target := p.termPanelPaneID
 	if target == "" {
 		target = p.termPanelSession
@@ -429,8 +433,10 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 		return cmd
 	}
 	return func() tea.Msg {
-		tty.ResizeTmuxPane(target, w, h)
-		return nil
+		return p.withTerminalOwnership(ownership, func() tea.Msg {
+			workspaceResizeTmuxPane(target, w, h)
+			return nil
+		})
 	}
 }
 

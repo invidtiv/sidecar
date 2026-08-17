@@ -17,6 +17,7 @@ func TestAgentCaptureResultRejectedAfterSchedulerReset(t *testing.T) {
 			Agent:  &Agent{OutputBuf: buffer},
 		}},
 	}
+	p.SetFocused(true)
 	oldGeneration := p.pollScheduler.Invalidate(agentPollKey("shared"))
 	p.pollScheduler.Reset()
 
@@ -45,6 +46,7 @@ func TestAgentRetryRejectedAfterInvalidation(t *testing.T) {
 			Agent: &Agent{OutputBuf: tty.NewOutputBuffer(10)},
 		}},
 	}
+	p.SetFocused(true)
 	scheduled := p.scheduleAgentPoll("work", 0)
 	retry := scheduled().(pollAgentMsg)
 	if retry.Generation == 0 {
@@ -66,6 +68,7 @@ func TestStaleShellCaptureCannotMutateOrContinue(t *testing.T) {
 		Agent:    &Agent{OutputBuf: buffer},
 	}
 	p := &Plugin{shells: []*ShellSession{shell}}
+	p.SetFocused(true)
 	oldGeneration := p.pollScheduler.Invalidate(shellPollKey("shared"))
 	p.pollScheduler.Invalidate(shellPollKey("shared"))
 
@@ -91,6 +94,7 @@ func TestTransientShellCaptureErrorPreservesLastGoodOutput(t *testing.T) {
 		Agent:    &Agent{OutputBuf: buffer},
 	}
 	p := &Plugin{shells: []*ShellSession{shell}}
+	p.SetFocused(true)
 	generation := p.pollScheduler.Invalidate(shellPollKey("shell"))
 
 	_, cmd := p.Update(ShellOutputMsg{

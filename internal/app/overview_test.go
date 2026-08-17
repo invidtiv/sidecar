@@ -32,20 +32,31 @@ type navigationPlugin struct {
 	pending   *plugin.PendingWorkspaceSelection
 	// terminal lifecycle counters model a project Workspaces Output surface:
 	// focus owns the terminal; background size/messages must not reach it.
-	terminalOpen    bool
-	terminalResizes int
-	terminalMsgs    int
-	mouseClicks     int
-	focusChanges    []bool
-	focusNotices    int
+	terminalOpen     bool
+	terminalResizes  int
+	terminalMsgs     int
+	mouseClicks      int
+	focusChanges     []bool
+	focusNotices     int
+	refreshes        int
+	clearFocusOnInit bool
 }
 
-func (p *navigationPlugin) ID() string                 { return p.id }
-func (p *navigationPlugin) Name() string               { return p.id }
-func (p *navigationPlugin) Icon() string               { return "" }
-func (p *navigationPlugin) Init(*plugin.Context) error { p.inits++; return nil }
-func (p *navigationPlugin) Start() tea.Cmd             { return nil }
-func (p *navigationPlugin) Stop()                      {}
+func (p *navigationPlugin) ID() string   { return p.id }
+func (p *navigationPlugin) Name() string { return p.id }
+func (p *navigationPlugin) Icon() string { return "" }
+func (p *navigationPlugin) Init(*plugin.Context) error {
+	p.inits++
+	if p.clearFocusOnInit {
+		p.SetFocused(false)
+	}
+	return nil
+}
+func (p *navigationPlugin) Start() tea.Cmd {
+	p.refreshes++
+	return nil
+}
+func (p *navigationPlugin) Stop() {}
 func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(tea.MouseClickMsg); ok {
 		p.mouseClicks++
@@ -56,6 +67,7 @@ func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(plugin.PluginFocusedMsg); ok {
 		p.focusNotices++
 		if p.focused {
+			p.refreshes++
 			p.terminalOpen = true
 		}
 	}
@@ -457,6 +469,79 @@ func TestOverviewShellNavigationLeavesLinkedWorktreeScope(t *testing.T) {
 	}
 	if workspacePlugin.pending == nil || workspacePlugin.pending.Kind != plugin.WorkspaceSelectionShell || workspacePlugin.pending.Key != "shell" {
 		t.Fatalf("pending shell selection = %#v", workspacePlugin.pending)
+	}
+}
+
+func TestFirstVisitProjectSwitchRefocusesActiveWorkspacesAfterReinit(t *testing.T) {
+	source := newOverviewGitRepo(t, "source")
+	target := newOverviewGitRepo(t, "target")
+	isolateAppState(t)
+
+	cfg := config.Default()
+	km := keymap.NewRegistry()
+	ctx := &plugin.Context{WorkDir: source, ProjectRoot: source, Config: cfg, Keymap: km}
+	reg := plugin.NewRegistry(ctx)
+	files := &navigationPlugin{id: "files", clearFocusOnInit: true}
+	workspaces := &navigationPlugin{id: workspacePluginID, clearFocusOnInit: true}
+	for _, p := range []*navigationPlugin{files, workspaces} {
+		if err := reg.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(reg, km, cfg, "", source, source, workspacePluginID)
+	workspaces.SetFocused(true)
+	before := len(workspaces.focusChanges)
+	beforeRefreshes := workspaces.refreshes
+
+	cmd := m.switchProjectWithInventory(target, nil)
+	if cmd == nil {
+		t.Fatal("project switch returned no lifecycle commands")
+	}
+	if m.ActivePlugin() != workspaces || !workspaces.focused {
+		t.Fatalf("first target visit left active Workspaces hidden: active=%T focused=%v", m.ActivePlugin(), workspaces.focused)
+	}
+	trueTransitions := 0
+	for _, focused := range workspaces.focusChanges[before:] {
+		if focused {
+			trueTransitions++
+		}
+	}
+	if trueTransitions != 1 {
+		t.Fatalf("project switch focus activations = %d, want exactly one; transitions=%v", trueTransitions, workspaces.focusChanges[before:])
+	}
+	for _, msg := range collectMsgs(cmd) {
+		updated, _ := m.Update(msg)
+		m = asAppModel(t, updated)
+	}
+	if got := workspaces.refreshes - beforeRefreshes; got != 1 {
+		t.Fatalf("reinit workspace refreshes = %d, want registry.Start only", got)
+	}
+}
+
+func TestProjectSwitchFallsBackToActivePluginWhenSavedPluginNoLongerExists(t *testing.T) {
+	source := newOverviewGitRepo(t, "source")
+	target := newOverviewGitRepo(t, "target")
+	isolateAppState(t)
+	if err := state.SetActivePlugin(target, "removed-plugin"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	km := keymap.NewRegistry()
+	ctx := &plugin.Context{WorkDir: source, ProjectRoot: source, Config: cfg, Keymap: km}
+	reg := plugin.NewRegistry(ctx)
+	files := &navigationPlugin{id: "files", clearFocusOnInit: true}
+	workspaces := &navigationPlugin{id: workspacePluginID, clearFocusOnInit: true}
+	for _, p := range []*navigationPlugin{files, workspaces} {
+		if err := reg.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := New(reg, km, cfg, "", source, source, workspacePluginID)
+	workspaces.SetFocused(true)
+	m.switchProjectWithInventory(target, nil)
+	if m.ActivePlugin() != workspaces || !workspaces.focused {
+		t.Fatalf("invalid saved plugin left no focused fallback: active=%T focused=%v", m.ActivePlugin(), workspaces.focused)
 	}
 }
 
