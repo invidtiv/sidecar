@@ -16,13 +16,19 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/td v0.57.0
+	github.com/marcus/td v0.58.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/rivo/uniseg v0.4.7
 	golang.org/x/term v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.41.0
+)
+
+require (
+	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/spf13/cobra v1.10.2 // indirect
+	github.com/spf13/pflag v1.0.10 // indirect
 )
 
 require (
