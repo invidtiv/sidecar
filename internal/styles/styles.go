@@ -759,8 +759,6 @@ func renderSolidTab(label string, isActive bool, isPreview bool) string {
 
 // renderMinimalTab renders a tab with no background, using underline for active.
 func renderMinimalTab(label string, isActive bool, isPreview bool) string {
-	padded := "  " + label + "  "
-
 	var style lipgloss.Style
 	if isActive {
 		style = lipgloss.NewStyle().Foreground(Primary).Bold(true).Underline(true)
@@ -771,7 +769,7 @@ func renderMinimalTab(label string, isActive bool, isPreview bool) string {
 		style = style.Italic(true)
 	}
 
-	return style.Render(padded)
+	return "  " + style.Render(label) + "  "
 }
 
 // interpolateColors returns RGB for a position 0.0-1.0 across the color array

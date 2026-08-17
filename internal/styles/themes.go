@@ -551,14 +551,13 @@ var (
 			OnWarning:     "#0f1113",
 
 			// Borders: hairline, rule, and the one gold active edge
-			BorderNormal: "#2f3438",
+			BorderNormal: "#3d444a",
 			BorderActive: "#c0982f",
-			BorderMuted:  "#1c2126",
+			BorderMuted:  "#272d32",
 
-			// Gradient borders stay inside the gold/neutral discipline: the
-			// design has no second chrome accent to gradient toward.
-			GradientBorderActive: []string{"#c0982f", "#7a6220"},
-			GradientBorderNormal: []string{"#2f3438", "#1c2126"},
+			// Gradient borders: gold to warm orange/red
+			GradientBorderActive: []string{"#c0982f", "#b85d3b"},
+			GradientBorderNormal: []string{"#3d444a", "#272d32"},
 			GradientBorderAngle:  30.0,
 
 			// Tab strip, not pills: gold bold active, muted inactive.
