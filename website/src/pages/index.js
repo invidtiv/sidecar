@@ -296,7 +296,7 @@ export default function Home() {
                   to="https://github.com/marcus/sidecar/releases">
                   <span className={styles.milestoneMark} aria-hidden="true" />
                   <span>
-                    <strong>Sidecar is reaching 1.0</strong>
+                    <strong>Sidecar 1.0 is here</strong>
                     <span className={styles.milestoneMeta}>
                       {COMMIT_COUNT.toLocaleString('en-US')} commits since{' '}
                       {FIRST_COMMIT_MONTH}
