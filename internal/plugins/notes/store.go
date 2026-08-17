@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 
 	"github.com/marcus/sidecar/internal/tdroot"
 )
@@ -43,15 +43,29 @@ const (
 // Store handles SQLite operations for notes.
 type Store struct {
 	db        *sql.DB
+	dbPath    string
 	sessionID string
 }
 
 // NewStore creates a new Store with the given database path and session ID.
 // If sessionID is empty, it checks TD_SESSION_ID env var, then falls back to "sidecar".
+//
+// The opener must match td's OpenSQLite policy (modernc, WAL, busy_timeout,
+// MaxOpenConns=1) and take .todos/db.lock around writes. Sidecar previously
+// used mattn/go-sqlite3 against the same WAL file without the lock; mixing
+// those engines corrupted sidecar's issues.db (td-95b98a).
 func NewStore(dbPath, sessionID string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_busy_timeout=5000&_journal_mode=WAL")
+	// _time_format=sqlite matches td/internal/db.OpenSQLite: without it,
+	// modernc writes time.Time with a monotonic suffix that will not parse.
+	db, err := sql.Open("sqlite", dbPath+"?_time_format=sqlite")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+
+	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
 
 	// Resolve session ID: param > TD_SESSION_ID env > "sidecar" default
@@ -64,12 +78,32 @@ func NewStore(dbPath, sessionID string) (*Store, error) {
 
 	store := &Store{
 		db:        db,
+		dbPath:    dbPath,
 		sessionID: sessionID,
 	}
 
-	if err := store.initSchema(); err != nil {
+	// Pragmas match td OpenSQLite and do not take db.lock — td doesn't either.
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("init schema: %w", err)
+		return nil, fmt.Errorf("enable WAL mode: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA synchronous=NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("set synchronous: %w", err)
+	}
+	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+
+	if err := store.withWriteLock(func() error {
+		if err := store.initSchema(); err != nil {
+			return fmt.Errorf("init schema: %w", err)
+		}
+		return nil
+	}); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 
 	return store, nil
@@ -83,10 +117,12 @@ func DefaultDBPath(workDir string) string {
 
 // Close closes the database connection.
 func (s *Store) Close() error {
-	if s.db != nil {
-		return s.db.Close()
+	if s.db == nil {
+		return nil
 	}
-	return nil
+	// PASSIVE matches td: flush what we can without stalling other writers.
+	_, _ = s.db.Exec("PRAGMA wal_checkpoint(PASSIVE)")
+	return s.db.Close()
 }
 
 // initSchema creates the notes table and indexes if they don't exist.
@@ -140,21 +176,25 @@ func (s *Store) Create(title, content string) (*Note, error) {
 		Archived:  false,
 	}
 
-	_, err = s.db.Exec(`
-		INSERT INTO notes (id, title, content, created_at, updated_at, pinned, archived)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, note.ID, note.Title, note.Content,
-		note.CreatedAt.Format(time.RFC3339),
-		note.UpdatedAt.Format(time.RFC3339),
-		boolToInt(note.Pinned),
-		boolToInt(note.Archived))
+	err = s.withWriteLock(func() error {
+		_, err = s.db.Exec(`
+			INSERT INTO notes (id, title, content, created_at, updated_at, pinned, archived)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`, note.ID, note.Title, note.Content,
+			note.CreatedAt.Format(time.RFC3339),
+			note.UpdatedAt.Format(time.RFC3339),
+			boolToInt(note.Pinned),
+			boolToInt(note.Archived))
+		if err != nil {
+			return fmt.Errorf("insert note: %w", err)
+		}
+		if err := s.logAction(ActionCreate, note.ID, nil, note); err != nil {
+			return fmt.Errorf("log action: %w", err)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("insert note: %w", err)
-	}
-
-	// Log action for sync - propagate errors
-	if err := s.logAction(ActionCreate, note.ID, nil, note); err != nil {
-		return nil, fmt.Errorf("log action: %w", err)
+		return nil, err
 	}
 
 	return note, nil
@@ -162,68 +202,61 @@ func (s *Store) Create(title, content string) (*Note, error) {
 
 // Update modifies an existing note and logs the action.
 func (s *Store) Update(note *Note) error {
-	// Get previous state for action log
-	prev, err := s.Get(note.ID)
-	if err != nil {
-		return fmt.Errorf("get previous state: %w", err)
-	}
-	if prev == nil {
-		return fmt.Errorf("note not found: %s", note.ID)
-	}
+	return s.withWriteLock(func() error {
+		prev, err := s.Get(note.ID)
+		if err != nil {
+			return fmt.Errorf("get previous state: %w", err)
+		}
+		if prev == nil {
+			return fmt.Errorf("note not found: %s", note.ID)
+		}
 
-	note.UpdatedAt = time.Now().UTC()
-
-	_, err = s.db.Exec(`
-		UPDATE notes SET title = ?, content = ?, updated_at = ?, pinned = ?, archived = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`, note.Title, note.Content,
-		note.UpdatedAt.Format(time.RFC3339),
-		boolToInt(note.Pinned),
-		boolToInt(note.Archived),
-		note.ID)
-	if err != nil {
-		return fmt.Errorf("update note: %w", err)
-	}
-
-	// Log action for sync - propagate errors
-	if err := s.logAction(ActionUpdate, note.ID, prev, note); err != nil {
-		return fmt.Errorf("log action: %w", err)
-	}
-
-	return nil
+		note.UpdatedAt = time.Now().UTC()
+		_, err = s.db.Exec(`
+			UPDATE notes SET title = ?, content = ?, updated_at = ?, pinned = ?, archived = ?
+			WHERE id = ? AND deleted_at IS NULL
+		`, note.Title, note.Content,
+			note.UpdatedAt.Format(time.RFC3339),
+			boolToInt(note.Pinned),
+			boolToInt(note.Archived),
+			note.ID)
+		if err != nil {
+			return fmt.Errorf("update note: %w", err)
+		}
+		if err := s.logAction(ActionUpdate, note.ID, prev, note); err != nil {
+			return fmt.Errorf("log action: %w", err)
+		}
+		return nil
+	})
 }
 
 // Delete performs a soft delete and logs the action.
 func (s *Store) Delete(id string) error {
-	// Get previous state for action log
-	prev, err := s.Get(id)
-	if err != nil {
-		return fmt.Errorf("get previous state: %w", err)
-	}
-	if prev == nil {
-		return fmt.Errorf("note not found: %s", id)
-	}
+	return s.withWriteLock(func() error {
+		prev, err := s.Get(id)
+		if err != nil {
+			return fmt.Errorf("get previous state: %w", err)
+		}
+		if prev == nil {
+			return fmt.Errorf("note not found: %s", id)
+		}
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(`
-		UPDATE notes SET deleted_at = ?, updated_at = ?
-		WHERE id = ? AND deleted_at IS NULL
-	`, now.Format(time.RFC3339), now.Format(time.RFC3339), id)
-	if err != nil {
-		return fmt.Errorf("soft delete note: %w", err)
-	}
-
-	// Create new state with deleted_at set
-	newNote := *prev
-	newNote.DeletedAt = &now
-	newNote.UpdatedAt = now
-
-	// Log action for sync - propagate errors
-	if err := s.logAction(ActionDelete, id, prev, &newNote); err != nil {
-		return fmt.Errorf("log action: %w", err)
-	}
-
-	return nil
+		now := time.Now().UTC()
+		_, err = s.db.Exec(`
+			UPDATE notes SET deleted_at = ?, updated_at = ?
+			WHERE id = ? AND deleted_at IS NULL
+		`, now.Format(time.RFC3339), now.Format(time.RFC3339), id)
+		if err != nil {
+			return fmt.Errorf("soft delete note: %w", err)
+		}
+		newNote := *prev
+		newNote.DeletedAt = &now
+		newNote.UpdatedAt = now
+		if err := s.logAction(ActionDelete, id, prev, &newNote); err != nil {
+			return fmt.Errorf("log action: %w", err)
+		}
+		return nil
+	})
 }
 
 // Get retrieves a note by ID (excluding soft-deleted).
@@ -359,38 +392,34 @@ func (s *Store) ToggleArchive(id string) error {
 
 // Restore undoes a soft delete by clearing deleted_at.
 func (s *Store) Restore(id string) error {
-	// Get current state for action log
-	prev, err := s.Get(id)
-	if err != nil {
-		return fmt.Errorf("get previous state: %w", err)
-	}
-	if prev == nil {
-		return fmt.Errorf("note not found: %s", id)
-	}
-	if prev.DeletedAt == nil {
-		return fmt.Errorf("note not deleted: %s", id)
-	}
+	return s.withWriteLock(func() error {
+		prev, err := s.Get(id)
+		if err != nil {
+			return fmt.Errorf("get previous state: %w", err)
+		}
+		if prev == nil {
+			return fmt.Errorf("note not found: %s", id)
+		}
+		if prev.DeletedAt == nil {
+			return fmt.Errorf("note not deleted: %s", id)
+		}
 
-	now := time.Now().UTC()
-	_, err = s.db.Exec(`
-		UPDATE notes SET deleted_at = NULL, updated_at = ?
-		WHERE id = ?
-	`, now.Format(time.RFC3339), id)
-	if err != nil {
-		return fmt.Errorf("restore note: %w", err)
-	}
-
-	// Create new state with deleted_at cleared
-	newNote := *prev
-	newNote.DeletedAt = nil
-	newNote.UpdatedAt = now
-
-	// Log action for sync
-	if err := s.logAction(ActionUpdate, id, prev, &newNote); err != nil {
-		return fmt.Errorf("log action: %w", err)
-	}
-
-	return nil
+		now := time.Now().UTC()
+		_, err = s.db.Exec(`
+			UPDATE notes SET deleted_at = NULL, updated_at = ?
+			WHERE id = ?
+		`, now.Format(time.RFC3339), id)
+		if err != nil {
+			return fmt.Errorf("restore note: %w", err)
+		}
+		newNote := *prev
+		newNote.DeletedAt = nil
+		newNote.UpdatedAt = now
+		if err := s.logAction(ActionUpdate, id, prev, &newNote); err != nil {
+			return fmt.Errorf("log action: %w", err)
+		}
+		return nil
+	})
 }
 
 // Unarchive sets archived=false for a note.
