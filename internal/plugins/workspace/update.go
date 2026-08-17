@@ -1561,12 +1561,17 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case UncommittedChangesCheckMsg:
+		wt := p.findWorktree(msg.WorkspaceName)
+		if wt != nil && msg.Changes != nil {
+			wt.Changes = msg.Changes
+			wt.Stats = msg.Stats
+			p.conflicts = detectConflictsFromChanges(p.worktrees)
+		}
 		if msg.Err != nil {
 			// Error checking changes - cancel merge and return to list
 			p.viewMode = ViewModeList
 		} else if msg.HasChanges {
 			// Show commit modal
-			wt := p.findWorktree(msg.WorkspaceName)
 			if wt != nil {
 				p.mergeCommitState = &MergeCommitState{
 					Worktree:       wt,
@@ -1580,12 +1585,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeCommitMessageInput.CharLimit = 200
 				p.viewMode = ViewModeCommitForMerge
 			}
-		} else {
+		} else if wt != nil {
 			// No uncommitted changes, proceed to merge
-			wt := p.findWorktree(msg.WorkspaceName)
-			if wt != nil {
-				cmds = append(cmds, p.proceedToMergeWorkflow(wt))
-			}
+			cmds = append(cmds, p.proceedToMergeWorkflow(wt))
 		}
 
 	case MergeCommitDoneMsg:

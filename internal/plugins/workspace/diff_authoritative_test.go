@@ -416,31 +416,49 @@ func TestStaleRefreshResultCannotReplaceCurrentStatus(t *testing.T) {
 	}
 }
 
-func TestMergeDirtyCheckUsesSharedStatus(t *testing.T) {
-	binDir := t.TempDir()
-	marker := filepath.Join(t.TempDir(), "unexpected-git")
-	git := filepath.Join(binDir, "git")
-	if err := os.WriteFile(git, []byte("#!/bin/sh\ntouch \"$SIDECAR_TEST_MARKER\"\nexit 99\n"), 0o755); err != nil {
+func TestMergeDirtyCheckRefreshesSharedStatus(t *testing.T) {
+	dir := t.TempDir()
+	runGitOutput(t, dir, "init", "-b", "main")
+	runGitOutput(t, dir, "config", "user.name", "Sidecar Test")
+	runGitOutput(t, dir, "config", "user.email", "sidecar@example.test")
+	if err := os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("SIDECAR_TEST_MARKER", marker)
+	runGitOutput(t, dir, "add", ".")
+	runGitOutput(t, dir, "commit", "-m", "base")
+
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 1}
 	p.operationCtx = context.Background()
-	wt := &Worktree{Key: "wt", Name: "wt", Changes: &WorktreeChanges{State: LoadStateReady,
-		Staged: []string{"a"}, Unstaged: []string{"b"}, Untracked: []string{"c"}}}
+	wt := &Worktree{
+		Key: "wt", Name: "wt", Path: dir,
+		Changes: &WorktreeChanges{State: LoadStateReady, Unstaged: []string{"stale.go", "also.go"}},
+	}
+
 	msg := p.checkUncommittedChanges(wt)().(UncommittedChangesCheckMsg)
-	if msg.Err != nil || !msg.HasChanges || msg.StagedCount != 1 || msg.ModifiedCount != 1 || msg.UntrackedCount != 1 {
-		t.Fatalf("msg = %+v", msg)
+	if msg.Err != nil || msg.HasChanges || msg.ModifiedCount != 0 {
+		t.Fatalf("stale dirty snapshot on a clean tree: %+v", msg)
 	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatal("merge dirty gating spawned duplicate git status")
+	if msg.Changes == nil || msg.Changes.State != LoadStateClean {
+		t.Fatalf("fresh changes = %+v", msg.Changes)
 	}
-	wt.Changes = &WorktreeChanges{State: LoadStateError, Err: os.ErrPermission}
+
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("untracked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wt.Changes = &WorktreeChanges{State: LoadStateClean}
+
 	msg = p.checkUncommittedChanges(wt)().(UncommittedChangesCheckMsg)
-	if msg.Err == nil || !strings.Contains(msg.Err.Error(), "shared git status") {
-		t.Fatalf("error msg = %+v", msg)
+	if msg.Err != nil || !msg.HasChanges || msg.UntrackedCount != 1 {
+		t.Fatalf("stale clean snapshot on a dirty tree: %+v", msg)
+	}
+	if msg.Changes == nil || !containsPath(msg.Changes.Untracked, "new.txt") {
+		t.Fatalf("fresh untracked = %+v", msg.Changes)
+	}
+
+	msg = p.checkUncommittedChanges(&Worktree{Key: "missing", Name: "missing"})().(UncommittedChangesCheckMsg)
+	if msg.Err == nil || !strings.Contains(msg.Err.Error(), "unavailable") {
+		t.Fatalf("missing path msg = %+v", msg)
 	}
 }
 
