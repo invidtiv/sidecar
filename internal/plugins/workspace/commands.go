@@ -3,6 +3,7 @@ package workspace
 import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 )
 
@@ -57,6 +58,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 10},
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 11},
 		}
+	}
+	if p.viewMode == ViewModeList && p.resourceFocused() {
+		return resourcePaneCommands()
 	}
 	if p.viewMode == ViewModeList && p.diffFocused() {
 		// Priorities leave 2..11 to the viewer's own navigation (see
@@ -464,6 +468,13 @@ func (p *Plugin) FocusContext() string {
 		if p.diffFocused() {
 			return "workspace-diff"
 		}
+		// A focused Resource leaf is its own context for the same reason a
+		// focused issue leaf is: falling through to workspace-preview would
+		// hand the terminal's keys — and the host's root-context `q` quits
+		// Sidecar — to a pane drawn as focused.
+		if p.resourceFocused() {
+			return "workspace-resource"
+		}
 		if p.filterFocused() && p.activePane == PaneSidebar {
 			// A dedicated text-input context: while the query has focus, app
 			// shortcuts must not take printable characters or pastes from it.
@@ -512,4 +523,25 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 		return true
 	}
 	return p.viewMode != ViewModeList && p.viewMode != ViewModeKanban && p.viewMode != ViewModeInteractive
+}
+
+// resourcePaneCommands is the footer vocabulary of a focused Resource leaf.
+// The list itself is resourceview's, so the two workspace projections cannot
+// advertise different keys for the same pane; what is added here is only the
+// surface's own way out of the leaf and its place in the focus ring.
+func resourcePaneCommands() []plugin.Command {
+	cmds := []plugin.Command{
+		{ID: "close", Name: "Close", Description: "Hide resource pane", Context: "workspace-resource", Priority: 1},
+	}
+	for i, cmd := range resourceview.Commands() {
+		cmds = append(cmds, plugin.Command{
+			ID: cmd.ID, Name: cmd.Name, Description: cmd.Name + " resource",
+			Context: "workspace-resource", Priority: i + 2,
+		})
+	}
+	return append(cmds,
+		plugin.Command{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-resource", Priority: 10},
+		plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-resource", Priority: 11},
+		plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-resource", Priority: 12},
+	)
 }

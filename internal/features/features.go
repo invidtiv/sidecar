@@ -92,6 +92,18 @@ var (
 	// requested while the pane tree is off.
 	WorkspaceDocPanesDisabledDiff = "Document panes are disabled; Diff needs the workspace pane tree"
 
+	// TerminalResourceProviders gates external terminal resource providers:
+	// the matchers they declare, the panes they open, and the describe pass
+	// that asks them what they are. Off by default until the whole journey is
+	// proven, and deliberately a flag rather than "is anything configured":
+	// a user should be able to write the configuration and turn it on
+	// separately, and turning it off should stop every provider process.
+	TerminalResourceProviders = Feature{
+		Name:        "terminal_resource_providers",
+		Default:     false,
+		Description: "Recognize and open resources from configured external terminal resource providers",
+	}
+
 	// CrossProjectOverview gates the cross-project agent overview.
 	CrossProjectOverview = Feature{
 		Name:        "cross_project_overview",
@@ -112,6 +124,7 @@ var allFeatures = []Feature{
 	WorkspaceDocPanes,
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
+	TerminalResourceProviders,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

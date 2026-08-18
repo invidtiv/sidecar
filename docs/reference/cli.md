@@ -53,11 +53,13 @@ sidecar help --json
 
 ## `sidecar open`
 
-Show a file, a td issue, or a git diff in a split pane
+Show a file, a td issue, a git diff, or a provider resource in a split pane
 
-Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.
-From a Sidecar shell this targets that shell. Otherwise it targets the unique running
-instance, or a specific --shell / --project. --diff with no spec is the working tree.
+Show a file, a td issue, a git diff, or an external provider resource to the user as a
+split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
+Otherwise it targets the unique running instance, or a specific --shell / --project.
+--diff with no spec is the working tree. --provider names a configured terminal resource
+provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
 
 ```
@@ -70,11 +72,13 @@ Usage: sidecar open [options] [<target>]
 - `td-xxxxxx`: A td issue id
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
+- `locator`: With --provider, a resource key such as CASH-1245
 
 **Options:**
 
 - `--line N`: Line to reveal (alternative to "path:line")
 - `--diff`: Open a Diff leaf (working tree if no spec)
+- `--provider ID`: Open a locator through a configured terminal resource provider
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--split auto|right|below`: Where to place a new pane (default auto)
@@ -105,6 +109,8 @@ sidecar open --diff
 sidecar open --diff HEAD
 # commit, unless a file of that name exists
 sidecar open abc1234
+# resource pane for that provider's locator
+sidecar open --provider jira-work CASH-1245
 # structured result for the agent
 sidecar open --json --split below README.md
 # from any terminal, that project's Workspaces surface
@@ -224,5 +230,97 @@ Usage: sidecar shell rename [--json] <display-name>
 
 ```bash
 sidecar shell rename "shell rename implementation"
+```
+
+## `sidecar terminal-links`
+
+Inspect terminal resource providers
+
+Inspect the external executables that teach Sidecar to recognize resource keys in
+terminal output. This is a protocol and administration surface, not a replacement
+for a provider's own CLI.
+
+```
+Usage: sidecar terminal-links <command>
+```
+
+### `sidecar terminal-links check`
+
+Check one terminal resource provider instance
+
+Check one configured provider instance: that it is enabled, that its command
+resolves, and that its describe method answers the protocol. The child runs with
+the exact working directory, base environment, passEnv policy, and timeout Sidecar
+uses in the TUI, so this is the authoritative host-environment proof.
+
+--resolve is separate and explicit because it can perform network access and print
+private resource data. Without it, nothing is resolved.
+
+The provider's stderr is drained and discarded, never printed: reproduce provider
+failures by running the provider's own CLI deliberately.
+
+```
+Usage: sidecar terminal-links check [--resolve LOCATOR] [--json] [--config PATH] <instance>
+```
+
+**Options:**
+
+- `--resolve LOCATOR`: Also resolve one locator (may hit the network and print private data)
+- `--json`: Write one structured result object to stdout
+- `--config PATH`: Read a specific config file
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: the instance checked out
+- `1`: the command, describe, or resolve failed
+- `2`: usage error
+- `3`: no provider instance with that id is configured
+
+**Examples:**
+
+```bash
+sidecar terminal-links check jira-work
+sidecar terminal-links check jira-work --json
+sidecar terminal-links check jira-work --resolve CASH-1245 --json
+```
+
+### `sidecar terminal-links list`
+
+List configured terminal resource providers
+
+List the terminal resource providers configured under "terminalResources".
+By default this reads configuration and resolves each command on PATH; it starts
+no process. --describe additionally asks each enabled provider to describe itself,
+which is local and non-interactive but does spawn one child per instance.
+
+passEnv is reported by name and presence only. A passed value is never printed.
+
+Enabling a provider trusts that executable with your full OS privileges: a process
+boundary is crash isolation, not a sandbox.
+
+```
+Usage: sidecar terminal-links list [--describe] [--json] [--config PATH]
+```
+
+**Options:**
+
+- `--describe`: Also run each enabled provider's describe method
+- `--json`: Write one structured result object to stdout
+- `--config PATH`: Read a specific config file
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: configuration could not be read
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar terminal-links list
+sidecar terminal-links list --json
+sidecar terminal-links list --describe --json
 ```
 

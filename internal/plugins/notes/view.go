@@ -6,7 +6,6 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/cellbuf"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
@@ -292,41 +291,6 @@ func (p *Plugin) overlaySelectionOnEditor(view string) string {
 	start, end := orderSrc(srcFromPoint(p.selection.Start), srcFromPoint(p.selection.End))
 	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), p.editorLayout().wrapColumn)
 	return overlayExclusiveOnView(view, raw, start, end, p.editorTextarea.Value(), p.editorTextarea.ScrollYOffset())
-}
-
-// wrapEditorLine wraps a single line to width using plain-text breakpoints,
-// preserving ANSI styling on the wrapped segments.
-func (p *Plugin) wrapEditorLine(line string, width int) []string {
-	if width < 1 {
-		return []string{""}
-	}
-
-	expanded := ui.ExpandTabs(line, 8)
-	plain := ansi.Strip(expanded)
-
-	// If line fits, return as-is
-	if ansi.StringWidth(plain) <= width {
-		return []string{expanded}
-	}
-
-	wrappedPlain := cellbuf.Wrap(plain, width, "")
-	plainSegments := strings.Split(wrappedPlain, "\n")
-
-	wrapped := make([]string, 0, len(plainSegments))
-	offset := 0
-	for _, seg := range plainSegments {
-		segWidth := ansi.StringWidth(seg)
-		if segWidth == 0 {
-			wrapped = append(wrapped, "")
-			continue
-		}
-		slice := ansi.TruncateLeft(expanded, offset, "")
-		slice = ansi.Truncate(slice, segWidth, "")
-		wrapped = append(wrapped, slice)
-		offset += segWidth
-	}
-
-	return wrapped
 }
 
 // renderEditorStatusHeader renders the persistent status header line.

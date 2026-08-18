@@ -20,8 +20,10 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -119,6 +121,7 @@ const (
 	regionPaneLeaf        = "pane-leaf"
 	regionDocTab          = "doc-tab"
 	regionIssueTab        = "issue-tab"
+	regionResourceTab     = "resource-tab"
 	regionDiffTargetTab   = "diff-target-tab"
 	regionPaneClose       = "pane-close"
 	regionPaneTreeDivider = "pane-tree-divider"
@@ -247,6 +250,18 @@ type Plugin struct {
 	docs           map[int]*docPane
 	issues         map[int]*issuePane
 	diffs          map[int]*diffPane
+	// resources are the external-provider leaves. One map for every provider:
+	// the extension point is which resource is recognized, not which windows
+	// exist, so a Jira ticket and a CI build are tabs in one kind of leaf.
+	resources map[int]*resourcePane
+	// resourceMatchers is the live matcher snapshot the scanner may run,
+	// injected by the host. Empty — the default — means no provider is ready,
+	// which must read as ordinary terminal text.
+	resourceMatchers []terminallink.ResourceMatcher
+	// resolveResource turns a reference into a document. The manager, process,
+	// timeout and cancellation are all the host's; this plugin only decides
+	// when to ask.
+	resolveResource resourceview.Resolver
 
 	// Live refresh: one filesystem watcher per content-pane kind, created the
 	// first time a pane of that kind opens and released in Stop. See
@@ -758,6 +773,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
+	p.resources = make(map[int]*resourcePane)
 	p.issueModelNextID = 0
 	p.docFinderCaches = nil
 	p.closeDocInfo()

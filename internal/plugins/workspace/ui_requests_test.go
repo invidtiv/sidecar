@@ -3,15 +3,75 @@ package workspace
 import (
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
+
+func TestUIRequests_ProviderResourceUsesLiveMatcherWithoutTerminalRitual(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	config.SetTestStateDir(filepath.Join(stateHome, "sidecar"))
+	t.Cleanup(config.ResetTestConfigPath)
+	stubTd(t)
+	root := t.TempDir()
+	p := interactiveUIRequestTestPlugin(t, root)
+	p.SetResourceMatchers([]terminallink.ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}})
+	p.SetResourceResolver((&resourceStub{}).resolve)
+
+	cmd := p.handleUIRequest(uirequest.Request{
+		ID: "provider-open", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{TmuxSession: "test-shell"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindResource, Provider: "jira-work", Value: "CASH-1245"},
+	})
+	if cmd == nil {
+		t.Fatal("resource request did not open")
+	}
+	res, _ := p.activeResourcePane()
+	if res == nil || res.tabs.Find(resourceview.TabKey(resourceview.Ref{Instance: "jira-work", Matcher: "issue-key", Locator: "CASH-1245"})) < 0 {
+		t.Fatal("resource request did not use the claiming live matcher")
+	}
+	if p.viewMode == ViewModeInteractive || (p.interactiveState != nil && p.interactiveState.Active) {
+		t.Fatal("resource leaf took focus without releasing terminal input")
+	}
+}
+
+func TestUIRequests_ProviderResourceDeclinesUnclaimedLocator(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	config.SetTestStateDir(filepath.Join(stateHome, "sidecar"))
+	t.Cleanup(config.ResetTestConfigPath)
+	stubTd(t)
+	root := t.TempDir()
+	p := interactiveUIRequestTestPlugin(t, root)
+	p.SetResourceMatchers([]terminallink.ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}})
+	req := uirequest.Request{
+		ID: "provider-decline", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{TmuxSession: "test-shell"},
+		Target: uirequest.Target{Kind: uirequest.TargetKindResource, Provider: "jira-work", Value: "NOPE-1"},
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("unclaimed locator emitted an open command")
+	}
+	acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusDeclined || acks[0].Reason == "" {
+		t.Fatalf("decline ack = %+v err=%v", acks, err)
+	}
+}
 
 // This is the live `sidecar open` journey: the request arrives while the shell
 // owns interactive input, mutates the pane tree without exiting that mode, and

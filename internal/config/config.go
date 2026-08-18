@@ -17,6 +17,10 @@ type Config struct {
 	Keymap   KeymapConfig   `json:"keymap"`
 	UI       UIConfig       `json:"ui"`
 	Features FeaturesConfig `json:"features"`
+	// TerminalResources configures external terminal resource providers. It is
+	// app-level rather than per-plugin because providers serve both workspace
+	// projections and are not project-tab plugins.
+	TerminalResources TerminalResourcesConfig `json:"terminalResources"`
 }
 
 // FeaturesConfig holds feature flag settings.
@@ -323,5 +327,5 @@ func (c *Config) Validate() error {
 	default:
 		c.Plugins.Tasks.Position = TasksPositionAfterWorkspaces
 	}
-	return nil
+	return validateTerminalResources(&c.TerminalResources)
 }

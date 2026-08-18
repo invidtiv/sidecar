@@ -229,3 +229,65 @@ func initGitRepo(t *testing.T) (dir, oid string) {
 	}
 	return dir, strings.TrimSpace(string(out))
 }
+
+func TestResolveResourceTargetRequiresBothParts(t *testing.T) {
+	if _, err := ResolveResourceTarget("", "CASH-1"); err == nil {
+		t.Error("a locator with no provider instance must be refused, not guessed at")
+	}
+	if _, err := ResolveResourceTarget("jira-work", ""); err == nil {
+		t.Error("a provider with no locator must be refused")
+	}
+}
+
+func TestResolveResourceTargetCarriesTheProviderAndLocator(t *testing.T) {
+	got, err := ResolveResourceTarget("jira-work", "  CASH-1245  ")
+	if err != nil {
+		t.Fatalf("ResolveResourceTarget: %v", err)
+	}
+	if got.Kind != TargetKindResource {
+		t.Errorf("kind = %q, want %q", got.Kind, TargetKindResource)
+	}
+	if got.Provider != "jira-work" || got.Value != "CASH-1245" {
+		t.Errorf("target = %+v, want provider jira-work and locator CASH-1245", got)
+	}
+	// The matcher is deliberately absent: only the running app has a live
+	// snapshot to choose one, and the CLI must start no provider.
+}
+
+func TestResolveResourceTargetBoundsAndRejectsControls(t *testing.T) {
+	long := strings.Repeat("x", 400)
+	if _, err := ResolveResourceTarget("jira-work", long); err == nil {
+		t.Error("an oversize locator must be refused")
+	}
+	if _, err := ResolveResourceTarget(long, "CASH-1"); err == nil {
+		t.Error("an oversize provider instance must be refused")
+	}
+	if _, err := ResolveResourceTarget("jira-work", "CASH\x07-1"); err == nil {
+		t.Error("a locator with a control byte must be refused")
+	}
+}
+
+func TestProviderOptionWinsBeforeTheFilesystemIsConsulted(t *testing.T) {
+	// A locator that also names a real file must still be a resource: the
+	// explicit flag is the user's statement of intent.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "CASH-1"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ResolveTarget(dir, "CASH-1", 0, ResolveOptions{Provider: "jira-work"})
+	if err != nil {
+		t.Fatalf("ResolveTarget: %v", err)
+	}
+	if got.Kind != TargetKindResource {
+		t.Fatalf("kind = %q, want a resource even though a file of that name exists", got.Kind)
+	}
+}
+
+func TestWithoutProviderALocatorIsNotAResource(t *testing.T) {
+	// v1 is deliberately explicit: a bare key must not start provider
+	// discovery or guess among instances in a short-lived CLI process.
+	_, err := ResolveTarget(t.TempDir(), "CASH-1245", 0, ResolveOptions{})
+	if err == nil {
+		t.Error("a bare locator should not resolve to anything without --provider")
+	}
+}

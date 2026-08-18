@@ -61,6 +61,7 @@ func ChromeFloors(content panelayout.Floors) panelayout.Floors {
 		Doc:      grow(content.Doc),
 		Issue:    grow(content.Issue),
 		Diff:     grow(content.Diff),
+		Resource: grow(content.Resource),
 	}
 }
 

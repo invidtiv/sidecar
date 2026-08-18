@@ -12,6 +12,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -78,16 +79,23 @@ func (m *Model) previewResolveRoot() string {
 
 func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 	root := m.previewResolveRoot()
+	// Matchers go through on every scan, including the rootless one: an
+	// external resource key is recognized from the line alone, and an empty
+	// matcher list — no provider ready — leaves the line as plain text.
 	if root == "" {
-		return terminallink.Scan(line, nil, nil)
+		return terminallink.ScanWith(line, terminallink.Options{Matchers: m.resourceMatchers})
 	}
-	return terminallink.Scan(line, func(raw string) (string, terminallink.Extra, bool) {
-		display, _, ok := terminallink.ResolveFile(root, raw)
-		if !ok {
-			return "", terminallink.Extra{}, false
-		}
-		return display, terminallink.Extra{Raw: raw}, true
-	}, m.previewDiffResolver(root))
+	return terminallink.ScanWith(line, terminallink.Options{
+		Resolve: func(raw string) (string, terminallink.Extra, bool) {
+			display, _, ok := terminallink.ResolveFile(root, raw)
+			if !ok {
+				return "", terminallink.Extra{}, false
+			}
+			return display, terminallink.Extra{Raw: raw}, true
+		},
+		ResolveDiff: m.previewDiffResolver(root),
+		Matchers:    m.resourceMatchers,
+	})
 }
 
 func (m *Model) previewDiffResolver(root string) terminallink.DiffResolver {
@@ -145,12 +153,15 @@ func (m *Model) decoratePreviewLine(line string, _ int) string {
 	return terminallink.Decorate(line, m.decoratedPreviewSpans(line))
 }
 
-// decoratedPreviewSpans keeps exactly the kinds this surface activates.
+// decoratedPreviewSpans keeps exactly the kinds this surface activates. The
+// answer is terminallink's rather than a list restated here, because the two
+// hand-written copies of it — one for drawing, one for hit testing — were one
+// new kind away from disagreeing about what is clickable.
 func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
 	spans := m.previewLinkSpans(line)
 	bound := make([]terminallink.Span, 0, len(spans))
 	for _, span := range spans {
-		if span.Kind == terminallink.KindURL || span.Kind == terminallink.KindFile || span.Kind == terminallink.KindIssue || span.Kind == terminallink.KindDiff {
+		if terminallink.Activatable(span.Kind) {
 			bound = append(bound, span)
 		}
 	}
@@ -173,7 +184,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
 	for _, span := range m.previewLinkSpans(line) {
-		if span.Kind != terminallink.KindURL && span.Kind != terminallink.KindFile && span.Kind != terminallink.KindIssue && span.Kind != terminallink.KindDiff {
+		if !terminallink.Activatable(span.Kind) {
 			continue
 		}
 		if cell.Col >= span.StartCol && cell.Col <= span.EndCol {
@@ -211,6 +222,17 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		return cmd, true
 	case terminallink.KindDiff:
 		cmd := m.activatePreviewDiff(span)
+		if cmd == nil {
+			return nil, false
+		}
+		m.clearPreviewSelection()
+		return cmd, true
+	case terminallink.KindResource:
+		cmd := m.activatePreviewResource(resourceview.Ref{
+			Instance: span.Extra.Provider,
+			Matcher:  span.Extra.Matcher,
+			Locator:  span.Value,
+		})
 		if cmd == nil {
 			return nil, false
 		}
@@ -447,6 +469,10 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 		m.focusPreviewPane(panelayout.Diff)
 		return m.syncTerminalGeometry()
 	}
+	if m.preview.resource != nil {
+		m.focusPreviewPane(panelayout.Resource)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
@@ -494,6 +520,9 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 	}
 	if m.preview.diff != nil {
 		m.preview.diff.focused = leaf.Kind == panelayout.Diff
+	}
+	if m.preview.resource != nil {
+		m.preview.resource.focused = leaf.Kind == panelayout.Resource
 	}
 	return true, cmd
 }
@@ -717,6 +746,8 @@ func (m *Model) closePreviewPane(kind panelayout.Kind) tea.Cmd {
 		return m.closePreviewIssue()
 	case panelayout.Diff:
 		return m.closePreviewDiff()
+	case panelayout.Resource:
+		return m.closePreviewResource()
 	default:
 		return nil
 	}

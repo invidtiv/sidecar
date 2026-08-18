@@ -671,18 +671,6 @@ func (p *Plugin) editorContentStartY() int {
 	return 1 + p.editorLayout().statusRow + editorStatusRows
 }
 
-// screenYToEditorLine converts a screen Y coordinate to a logical source line
-// through the textarea's soft-wrapped visual surface.
-func (p *Plugin) screenYToEditorLine(y int) int {
-	editorContentY := p.editorContentStartY()
-	visualRow := y - editorContentY
-	if visualRow < 0 {
-		visualRow = 0
-	}
-	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), p.editorLayout().wrapColumn)
-	return raw.At(p.editorTextarea.ScrollYOffset() + visualRow).SourceLine
-}
-
 // screenXToEditorCol converts a screen X coordinate to a column in editor content.
 // Preview and edit share editorLayout: pane border+padding, then leftMargin.
 func (p *Plugin) screenXToEditorCol(x int) int {

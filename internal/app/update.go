@@ -474,6 +474,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case ResourceProvidersDescribedMsg:
+		// Recording the outcome is metadata — instance, state, matcher count —
+		// never a locator, a title, or provider output.
+		logResourceProviderStatuses(msg)
+		// A describe pass is the only moment the matcher snapshot can change,
+		// so it is the only moment either surface needs republishing. Until
+		// this runs both surfaces hold an empty matcher set, which is why a
+		// resource key is ordinary text before a provider is ready.
+		m.publishResourceProviders()
+		return m, nil
+
 	case OpenConfigurationMsg:
 		// One entry: an empty state, a launch command, and the gear all arrive
 		// here, and escape returns to whatever was underneath when they did. A
