@@ -65,14 +65,9 @@ func (p *Plugin) shellFilterFields(shell *ShellSession) []string {
 	if shell == nil {
 		return nil
 	}
-	provider := ""
-	if shell.Agent != nil {
-		provider = string(shell.Agent.Type)
-	}
-	if provider == "" || provider == string(AgentShell) {
-		if shell.ChosenAgent != "" && shell.ChosenAgent != AgentNone {
-			provider = string(shell.ChosenAgent)
-		}
+	provider := string(liveShellProvider(shell))
+	if provider == "" && shell.IsOrphaned && shell.ChosenAgent != "" && shell.ChosenAgent != AgentNone {
+		provider = string(shell.ChosenAgent)
 	}
 	status := "no session"
 	switch {

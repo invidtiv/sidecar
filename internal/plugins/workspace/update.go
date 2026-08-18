@@ -915,8 +915,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		displayAgentType := AgentShell
 		if msg.AgentType != AgentNone && msg.AgentType != "" {
 			displayAgentType = msg.AgentType
-		} else if existingShell != nil && existingShell.ChosenAgent != AgentNone {
-			displayAgentType = existingShell.ChosenAgent
 		}
 
 		switch {

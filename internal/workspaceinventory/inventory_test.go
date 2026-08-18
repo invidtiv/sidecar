@@ -208,6 +208,57 @@ func TestStatusPollDiscoversAgentStartedAfterUntypedShellWasPlain(t *testing.T) 
 	}
 }
 
+func TestLiveShellProcessClearsLaunchPreferenceProvider(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"typed-cursor","displayName":"what happens if...","namespace":"` + tmuxenv.Namespace() + `","agentType":"cursor"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{git: map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"}}
+	output := "ctrl+c to stop\nwill you check the cursor shell detection?"
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		return output, tty.PaneState{}, nil
+	}}.WithDefaults()
+	inventory := collector.CollectProjectInventory(context.Background(), "sidecar", root)
+	status := collector.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory})).
+		RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{
+			{ID: "%1", Session: "typed-cursor", Path: root, Command: "zsh"},
+		})
+	got, ok := shellNamed(status, "typed-cursor")
+	if !ok || got.Provider != "" {
+		t.Fatalf("live zsh kept launch-preference provider: %#v", got)
+	}
+
+	output = "Would you like to run the following command?\n› 1. Yes, proceed (y)"
+	codex := collector.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory})).
+		RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{
+			{ID: "%1", Session: "typed-cursor", Path: root, Command: "node"},
+		})
+	got, ok = shellNamed(codex, "typed-cursor")
+	if !ok || got.Provider != "codex" {
+		t.Fatalf("Codex-as-node was not identified: %#v", got)
+	}
+
+	output = "Enter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts"
+	// Grok's process name is usually grok, but the footer must also win on node
+	// so a shared runtime cannot be stolen by the cursor default.
+	grok := collector.ForRefresh(1, BuildShellClaims([]ProjectResult{inventory})).
+		RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{
+			{ID: "%1", Session: "typed-cursor", Path: root, Command: "node"},
+		})
+	got, ok = shellNamed(grok, "typed-cursor")
+	if !ok || got.Provider != "grok" {
+		t.Fatalf("Grok chrome on node was not identified: %#v", got)
+	}
+}
+
 func TestAmbiguousWorktreePanesAreUnavailableAndNotCaptured(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)

@@ -1,8 +1,11 @@
 package agentactivity
 
 import (
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Cursor Agent CLI activity evidence.
@@ -14,10 +17,10 @@ import (
 //
 // Cursor's launcher is a bash wrapper that re-execs its bundled node with
 // `exec -a "$0"`, so pane_current_command is typically `cursor-agent` (or
-// `agent` when that is the install name / symlink). Bare `agent` is also
-// used by other tools (e.g. Grok), so Identify only accepts it with Cursor
-// screen chrome, and DetectCursor only accepts shared runtimes when the
-// observation is already labeled cursor.
+// `agent` when that is the install name / symlink). Identity follows Herdr:
+// process name or a resolved `agent` → cursor-agent symlink, not screen
+// phrases. DetectCursor still requires the observation to already be labeled
+// cursor, and does not treat `node` as a Cursor process (that's Codex).
 //
 // Status authority is the live bottom buffer. Session hooks report identity
 // only (Herdr's model); do not reintroduce SQLite mtime as activity.
@@ -35,15 +38,15 @@ var (
 	cursorBackgroundWorking = regexp.MustCompile(`(?i)\(\s*background\s*\)`)
 	// Approval prompts. Herdr's write/command rules plus additional 2026.08.04
 	// operations (delete, web, MCP, edit, mode switch, decision, sudo).
-	cursorWriteBlocked = regexp.MustCompile(`(?is)write to this file\?.*(proceed \(y\)|reject & propose changes|esc or n or p|add write\(|add to allowlist)`)
+	cursorWriteBlocked  = regexp.MustCompile(`(?is)write to this file\?.*(proceed \(y\)|reject & propose changes|esc or n or p|add write\(|add to allowlist)`)
 	cursorDeleteBlocked = regexp.MustCompile(`(?is)delete this file\?.*(delete \(y\)|keep \(n\)|reject & propose|esc or n)`)
 	// Shell/MCP body: prompt phrase near action chrome. Kept separate from
 	// line-anchored `(y)` forms so "Run Everything" menu chrome cannot win
 	// (Herdr fae0b236).
-	cursorShellBlocked = regexp.MustCompile(`(?is)(waiting for approval|run this command(?: outside the sandbox)?\?|run this mcp tool\?).{0,240}(run \(once\)|run outside sandbox \(once\)|skip \(esc or n\)|skip & tell the agent|reject & propose|allowlist)`)
+	cursorShellBlocked     = regexp.MustCompile(`(?is)(waiting for approval|run this command(?: outside the sandbox)?\?|run this mcp tool\?).{0,240}(run \(once\)|run outside sandbox \(once\)|skip \(esc or n\)|skip & tell the agent|reject & propose|allowlist)`)
 	cursorShellBlockedLine = regexp.MustCompile(`(?im)^\s*(?:→\s*)?run .*\(y\)|^\s*allow .*\(y\)|\(y\) \(enter\)|keep \(n\)|skip \(esc or n\)`)
-	cursorWebBlocked = regexp.MustCompile(`(?is)(allow this web (?:search|fetch)\?|proceed with this edit\?).{0,160}(allow search|fetch \(y\)|proceed \(y\)|skip \(esc or n\)|reject)`)
-	cursorDecisionBlocked = regexp.MustCompile(`(?im)waiting for decision \(y/n/p\)|approve mode switch \(y/n\)|waiting for confirmation|enter password\.\.\.`)
+	cursorWebBlocked       = regexp.MustCompile(`(?is)(allow this web (?:search|fetch)\?|proceed with this edit\?).{0,160}(allow search|fetch \(y\)|proceed \(y\)|skip \(esc or n\)|reject)`)
+	cursorDecisionBlocked  = regexp.MustCompile(`(?im)waiting for decision \(y/n/p\)|approve mode switch \(y/n\)|waiting for confirmation|enter password\.\.\.`)
 )
 
 var cursorRules = []Rule{
@@ -76,11 +79,39 @@ var cursorRules = []Rule{
 	{ID: "cursor.screen.activity-working", State: StateWorking, Region: RegionCurrent, LastN: 10, Regexp: cursorScreenWorking},
 }
 
-// cursorScreenIdentity is distinctive live chrome, not session-file residue.
-// Used only when the process name is a shared runtime (node/agent). Keep this
-// stricter than activity rules: a false identity steals the pane from another
-// tool that also uses `agent` or `node`.
-var cursorScreenIdentity = regexp.MustCompile(`(?is)(Cursor Agent|Plan, search, build anything|Add a follow-up|Reject & propose changes|Write to this file\?|Delete this file\?|ctrl\+c to stop|Waiting for decision \(y/n/p\)|Waiting for approval|Run this command\?|Run this MCP tool\?|Allow this web (?:search|fetch)\?|Proceed with this edit\?)`)
+// cursorScreenIdentity is a last-resort claim for the `agent` comm name
+// when PATH does not resolve the binary. Herdr identifies Cursor from the
+// process / symlink target only (never from screen). These phrases are the
+// header/tagline, not activity hints that Codex and Grok also print.
+var cursorScreenIdentity = regexp.MustCompile(`(?is)(Cursor Agent|Plan, search, build anything)`)
+
+// lookUpAgentAlias reports the provider for a bare `agent` comm name by
+// resolving $PATH once, matching Herdr's cursor-agent symlink test. Empty
+// means "not Cursor." Tests replace this so Identify is not host-dependent.
+var lookUpAgentAlias = lookupCursorAgentAlias
+
+var (
+	agentAliasOnce sync.Once
+	agentAliasID   string
+)
+
+func lookupCursorAgentAlias() string {
+	agentAliasOnce.Do(func() {
+		path, err := exec.LookPath("agent")
+		if err != nil {
+			return
+		}
+		resolved, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			resolved = path
+		}
+		switch strings.ToLower(filepath.Base(resolved)) {
+		case "cursor-agent", "cursor-agent.cmd", "cursor":
+			agentAliasID = "cursor"
+		}
+	})
+	return agentAliasID
+}
 
 func DetectCursor(ob Observation) Result {
 	if ob.Agent != "cursor" || !cursorProcess(ob.CurrentCommand) {
@@ -95,7 +126,7 @@ func DetectCursor(ob Observation) Result {
 
 func cursorProcess(command string) bool {
 	switch strings.ToLower(strings.TrimSpace(command)) {
-	case "cursor-agent", "cursor", "cursor-agent.cmd", "agent", "node":
+	case "cursor-agent", "cursor", "cursor-agent.cmd", "agent":
 		return true
 	default:
 		return false

@@ -94,6 +94,45 @@ func TestShellOutputSwitchesLiveProviderWithoutChangingLaunchPreference(t *testi
 	}
 }
 
+func TestLiveShellDoesNotPaintLaunchPreferenceAsProvider(t *testing.T) {
+	p := &Plugin{ctx: &plugin.Context{}}
+	shell := &ShellSession{
+		Name: "what happens if...", ChosenAgent: AgentCursor,
+		Agent: &Agent{Type: AgentShell},
+	}
+	list := ansi.Strip(p.renderShellEntryForSession(shell, false, 40))
+	if strings.Contains(list, "cursor") {
+		t.Fatalf("list painted launch preference as live: %q", list)
+	}
+	if !strings.Contains(list, "shell") || !strings.Contains(list, "live") {
+		t.Fatalf("list should read as a live shell: %q", list)
+	}
+	kanban := ansi.Strip(p.renderKanbanShellCardLine(shell, 1, 32, false))
+	if strings.Contains(kanban, "cursor") {
+		t.Fatalf("kanban painted launch preference as live: %q", kanban)
+	}
+	if !strings.Contains(kanban, "shell") || !strings.Contains(kanban, "live") {
+		t.Fatalf("kanban should read as a live shell: %q", kanban)
+	}
+	fields := p.shellFilterFields(shell)
+	for _, field := range fields {
+		if field == "cursor" {
+			t.Fatalf("filter fields included launch preference: %q", fields)
+		}
+	}
+}
+
+func TestAttachAgentToShellDoesNotSeedLiveTypeFromLaunchPreference(t *testing.T) {
+	shell := &ShellSession{Name: "Shell 32", ChosenAgent: AgentCursor}
+	attachAgentToShell(shell, ShellDefinition{TmuxName: "sidecar-sh-sidecar-32", AgentType: "cursor"}, func(string) string { return "%1" })
+	if shell.Agent == nil || shell.Agent.Type != AgentShell {
+		t.Fatalf("live type = %v, want shell until Identify runs", shell.Agent)
+	}
+	if shell.ChosenAgent != AgentCursor {
+		t.Fatalf("launch preference = %q, want cursor", shell.ChosenAgent)
+	}
+}
+
 func TestSupportedProviderPollStatusIsProjectedOnlyFromSemanticActivity(t *testing.T) {
 	for _, agentType := range []AgentType{AgentCodex, AgentClaude, AgentGrok, AgentAntigravity, AgentPi, AgentCopilot, AgentCursor, AgentOpenCode, AgentAmp} {
 		t.Run(string(agentType), func(t *testing.T) {

@@ -454,10 +454,7 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 	case resolvedStatus.Health:
 		provider, status = shell.ChosenAgent, "offline"
 	case shell.Agent != nil:
-		provider = shell.Agent.Type
-		if provider == AgentShell || provider == AgentNone || provider == "" {
-			provider = shell.ChosenAgent
-		}
+		provider = liveShellProvider(shell)
 		if hasActivity {
 			status = activityText
 		} else {

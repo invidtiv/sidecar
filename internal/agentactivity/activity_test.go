@@ -21,6 +21,10 @@ func TestCodexPrecedenceAndProcessGate(t *testing.T) {
 }
 
 func TestIdentifyLivePaneOwner(t *testing.T) {
+	orig := lookUpAgentAlias
+	lookUpAgentAlias = func() string { return "" }
+	t.Cleanup(func() { lookUpAgentAlias = orig })
+
 	tests := []struct {
 		name    string
 		command string
@@ -35,13 +39,20 @@ func TestIdentifyLivePaneOwner(t *testing.T) {
 		{"shared runtime ANSI Claude UI", "node", "\x1b[2m────────────────\x1b[0m\n\x1b[36m❯ \x1b[0m\n────────────────\n  ⏸ manual mode on · ? for shortcuts", "claude"},
 		{"shared runtime Codex UI", "node", "• Working (2s • esc to interrupt)\n› edit the file", "codex"},
 		{"agent alias with Cursor chrome", "agent", "Cursor Agent\n~/proj · main\nPlan, search, build anything", "cursor"},
-		{"agent alias with follow-up composer", "agent", "→ Add a follow-up\nctrl+c to stop", "cursor"},
 		{"agent alias without Cursor chrome is not Cursor", "agent", "ordinary output", ""},
-		{"node with Cursor approval chrome", "node", "Write to this file?\nProceed (y)\nreject & propose changes", "cursor"},
-		{"node with Cursor Agent header", "node", "Cursor Agent\n~/proj · main\n→ Plan, search, build anything", "cursor"},
+		{"agent follow-up composer is not identity", "agent", "→ Add a follow-up\nctrl+c to stop", ""},
+		{"node with Cursor approval chrome is not Cursor", "node", "Write to this file?\nProceed (y)\nreject & propose changes", ""},
+		{"node with Cursor Agent header is not Cursor", "node", "Cursor Agent\n~/proj · main\n→ Plan, search, build anything", ""},
 		{"prompt glyphs in transcript are not identity", "node", "example output:\n❯ \nthen later:\n› ", ""},
 		{"provider mention is not identity", "node", "I recommend OpenAI Codex here", ""},
 		{"shared runtime ambiguous", "node", "ordinary output", ""},
+		{"stop hint alone is not Cursor", "node", "ctrl+c to stop\nmore output", ""},
+		{"follow-up alone is not Cursor", "agent", "→ Add a follow-up", ""},
+		{"write-file question alone is not Cursor", "node", "Should I write to this file?", ""},
+		{"Codex approval is Codex not Cursor", "node", "Would you like to run the following command?\n› 1. Yes, proceed (y)", "codex"},
+		{"Grok footer on shared runtime is Grok", "node", "Run /doctor for details and fixes.\nEnter:send  │  Shift+Tab:mode  │  Ctrl+x:shortcuts", "grok"},
+		{"Grok footer on agent alias is Grok not Cursor", "agent", "Enter:send | Shift+Tab:mode | Ctrl+x:shortcuts", "grok"},
+		{"conversation about Cursor is not Cursor", "node", "will you check the cursor shell detection?\nRun this command? maybe", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,6 +60,18 @@ func TestIdentifyLivePaneOwner(t *testing.T) {
 				t.Fatalf("Identify() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestIdentifyAgentAliasResolvesLikeHerdrSymlink(t *testing.T) {
+	orig := lookUpAgentAlias
+	lookUpAgentAlias = func() string { return "cursor" }
+	t.Cleanup(func() { lookUpAgentAlias = orig })
+	if got := Identify(Observation{CurrentCommand: "agent", Screen: "ordinary output"}); got != "cursor" {
+		t.Fatalf("Identify() = %q, want cursor from resolved agent alias", got)
+	}
+	if got := Identify(Observation{CurrentCommand: "node", Screen: "ordinary output"}); got != "" {
+		t.Fatalf("Identify(node) = %q, resolved alias must not leak onto node", got)
 	}
 }
 
