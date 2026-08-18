@@ -1,10 +1,10 @@
 # Plan: Deliver Sidecar themes to the embedded td monitor
 
-**Status:** plan — blocked on the td producer work and release
+**Status:** complete
 **Research snapshot:** 2026-08-17
 **Scope:** Sidecar portion only
 **Canonical full plan:** `~/code/td/docs/plans/active/sidecar-theme-parity.md`
-**Related td issue:** `td-d52201`
+**Related td issue:** `td-8d698b`
 
 ## Outcome
 

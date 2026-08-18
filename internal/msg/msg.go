@@ -22,3 +22,15 @@ func ShowToast(message string, duration time.Duration) tea.Cmd {
 		}
 	}
 }
+
+// ThemeChangedMsg is sent when the active theme palette has changed (via preview,
+// restore, confirmation, or project switch).
+type ThemeChangedMsg struct{}
+
+// ThemeChanged returns a command that sends ThemeChangedMsg.
+func ThemeChanged() tea.Cmd {
+	return func() tea.Msg {
+		return ThemeChangedMsg{}
+	}
+}
+

@@ -159,7 +159,7 @@ func (p *Plugin) buildMonitor() tea.Cmd {
 		Version:       "", // empty for embedded use (not displayed in this context)
 		PanelRenderer: styles.CreateTDPanelRenderer(),
 		ModalRenderer: styles.CreateTDModalRenderer(),
-		MarkdownTheme: buildMarkdownTheme(),
+		Theme:         buildTheme(),
 	}
 
 	var epoch uint64
@@ -211,6 +211,10 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 
 	p.model = msg.Model
 
+	// Ensure the adopted monitor has the latest resolved palette in case a
+	// theme change occurred while loading.
+	_ = p.model.SetTheme(buildTheme())
+
 	// Use sidecar's clipboard (atotto/clipboard) instead of td's built-in one.
 	// td's copyToClipboard doesn't handle WSL (tries xclip/xsel only);
 	// atotto/clipboard falls through to clip.exe on WSL.
@@ -258,6 +262,14 @@ func (p *Plugin) Stop() {
 
 // Update handles messages by delegating to the embedded monitor.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	// Handle live theme changes
+	if _, ok := msg.(app.ThemeChangedMsg); ok {
+		if p.model != nil {
+			_ = p.model.SetTheme(buildTheme())
+		}
+		return p, nil
+	}
+
 	// Handle the async monitor build kicked off by Start()
 	if ready, ok := msg.(MonitorReadyMsg); ok {
 		if plugin.IsStale(p.ctx, ready) || !p.loadingModel {
@@ -600,28 +612,4 @@ func renderConflictView(width int) string {
 				"Then restart sidecar.")
 
 	return lipgloss.JoinVertical(lipgloss.Left, "", title, "", body)
-}
-
-// buildMarkdownTheme creates a MarkdownThemeConfig from the current sidecar theme.
-// This shares sidecar's color palette with td's markdown renderer.
-func buildMarkdownTheme() *monitor.MarkdownThemeConfig {
-	theme := styles.GetCurrentTheme()
-	c := theme.Colors
-
-	return &monitor.MarkdownThemeConfig{
-		// Use the theme's Chroma syntax theme (e.g., "monokai", "dracula")
-		SyntaxTheme:   c.SyntaxTheme,
-		MarkdownTheme: c.MarkdownTheme,
-		// Also provide explicit colors for full theme consistency
-		Colors: &monitor.MarkdownColorPalette{
-			Primary:   c.Primary,
-			Secondary: c.Secondary,
-			Success:   c.Success,
-			Warning:   c.Warning,
-			Error:     c.Error,
-			Muted:     c.TextMuted,
-			Text:      c.TextPrimary,
-			BgCode:    c.BgTertiary,
-		},
-	}
 }

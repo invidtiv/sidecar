@@ -15,6 +15,12 @@ type ToastMsg = msg.ToastMsg
 // ShowToast is re-exported from msg package for backward compatibility.
 var ShowToast = msg.ShowToast
 
+// ThemeChangedMsg is re-exported from msg package for backward compatibility.
+type ThemeChangedMsg = msg.ThemeChangedMsg
+
+// ThemeChanged is re-exported from msg package for backward compatibility.
+var ThemeChanged = msg.ThemeChanged
+
 // Message types for tea.Cmd
 type (
 	// TickMsg is sent on each clock tick.

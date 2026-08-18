@@ -178,6 +178,7 @@ func (m *Model) closeConfiguration() tea.Cmd {
 	// next unnamed open puts them back on it.
 	if m.config != nil {
 		m.config.Close()
+		m.notifyThemeChanged()
 	}
 	restore := m.configReturn
 	m.configReturn = configReturn{}
@@ -211,6 +212,7 @@ func (m *Model) configEscape() tea.Cmd {
 	// only when none of those needed dismissing does esc close Configuration.
 	if m.config.Escape() {
 		m.updateContext()
+		m.notifyThemeChanged()
 		return nil
 	}
 	return m.closeConfiguration()
@@ -230,6 +232,7 @@ func (m *Model) configKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	handled, cmd := m.config.Key(msg)
 	if handled {
 		m.updateContext()
+		m.notifyThemeChanged()
 		return m, cmd
 	}
 	if m.config.SearchFocused() {
@@ -362,7 +365,7 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		// A live theme preview belongs to the picker. Re-applying the disk
 		// theme here would snap it back the moment any other setting saved.
 		if m.config == nil || !m.config.PreviewingTheme() {
-			theme.ApplyResolved(theme.ResolveTheme(cfg, m.ui.WorkDir))
+			m.applyResolvedTheme(theme.ResolveTheme(cfg, m.ui.WorkDir))
 		}
 	}
 	if m.config != nil {

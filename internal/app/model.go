@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -667,7 +668,7 @@ func (m *Model) resetProjectSwitcher() {
 	m.resetProjectAdd()
 	// Restore current project's theme (undo any live preview)
 	resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-	theme.ApplyResolved(resolved)
+	m.applyResolvedTheme(resolved)
 }
 
 // clearProjectSwitcherModal clears the modal cache.
@@ -955,7 +956,7 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 
 	// Apply project-specific theme (or global fallback)
 	resolved := theme.ResolveTheme(m.cfg, targetPath)
-	theme.ApplyResolved(resolved)
+	m.applyResolvedTheme(resolved)
 
 	// Reinitialize all plugins with the new working directory and project root
 	// This stops all plugins, updates the context, and starts them again
@@ -1097,10 +1098,10 @@ func (m *Model) previewProjectTheme() {
 	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(destinations) {
 		destination := destinations[m.projectSwitcherCursor]
 		if destination.Kind == destinationOverview {
-			theme.ApplyResolved(theme.ResolveTheme(m.cfg, ""))
+			m.applyResolvedTheme(theme.ResolveTheme(m.cfg, ""))
 			return
 		}
-		theme.ApplyResolved(theme.ResolveTheme(m.cfg, destination.Path))
+		m.applyResolvedTheme(theme.ResolveTheme(m.cfg, destination.Path))
 	}
 }
 
@@ -1146,6 +1147,7 @@ func (m *Model) confirmThemeSelection(tc config.ThemeConfig, displayName string)
 	}
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		m.applyResolvedTheme(theme.ResolveTheme(m.cfg, m.ui.WorkDir))
 	}
 
 	m.resetThemeSwitcher()
@@ -1269,9 +1271,9 @@ func (m *Model) previewProjectAddTheme() {
 		name := m.projectAddThemeFiltered[m.projectAddThemeCursor]
 		if name == "(use global)" {
 			resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-			theme.ApplyResolved(resolved)
+			m.applyResolvedTheme(resolved)
 		} else {
-			theme.ApplyResolved(theme.ResolvedTheme{BaseName: name})
+			m.applyResolvedTheme(theme.ResolvedTheme{BaseName: name})
 		}
 	}
 }
@@ -1543,7 +1545,7 @@ func (m *Model) previewThemeEntry(entry themeEntry) {
 	if entry.IsBuiltIn {
 		m.applyThemeFromConfig(entry.ThemeKey)
 	} else {
-		theme.ApplyResolved(theme.ResolvedTheme{
+		m.applyResolvedTheme(theme.ResolvedTheme{
 			BaseName:      "default",
 			CommunityName: entry.ThemeKey,
 		})
@@ -1558,12 +1560,39 @@ func (m *Model) applyThemeFromConfig(themeName string) {
 	freshCfg, err := config.Load()
 	if err == nil && freshCfg.UI.Theme.Name == themeName {
 		// Apply the saved theme with its full config (community + overrides)
-		theme.ApplyResolved(theme.ResolvedTheme{
+		m.applyResolvedTheme(theme.ResolvedTheme{
 			BaseName:      themeName,
 			CommunityName: freshCfg.UI.Theme.Community,
 			Overrides:     freshCfg.UI.Theme.Overrides,
 		})
 	} else {
-		styles.ApplyTheme(themeName)
+		m.applyThemeName(themeName)
 	}
 }
+
+// applyResolvedTheme applies a resolved theme to the styles system and notifies plugins.
+func (m *Model) applyResolvedTheme(resolved theme.ResolvedTheme) {
+	theme.ApplyResolved(resolved)
+	m.notifyThemeChanged()
+}
+
+// applyThemeName applies a theme by name to the styles system and notifies plugins.
+func (m *Model) applyThemeName(name string) {
+	styles.ApplyTheme(name)
+	m.notifyThemeChanged()
+}
+
+// notifyThemeChanged synchronously delivers msg.ThemeChangedMsg to all plugins
+// and the global tasks host so immediate frames and inactive tabs are up to date.
+func (m *Model) notifyThemeChanged() {
+	themeMsg := msg.ThemeChangedMsg{}
+	if m.registry != nil {
+		for i, p := range m.registry.Plugins() {
+			newPlugin, _ := p.Update(themeMsg)
+			m.registry.Plugins()[i] = newPlugin
+		}
+	}
+	_ = m.globalTasks.update(themeMsg)
+}
+
+

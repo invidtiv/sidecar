@@ -2392,7 +2392,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 		m.resetProjectAddThemePicker()
 		// Restore theme
 		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		theme.ApplyResolved(resolved)
+		m.applyResolvedTheme(resolved)
 		return m, nil
 
 	case "up", "k":
@@ -2425,7 +2425,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 		m.resetProjectAddThemePicker()
 		// Restore theme
 		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		theme.ApplyResolved(resolved)
+		m.applyResolvedTheme(resolved)
 		return m, nil
 	}
 

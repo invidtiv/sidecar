@@ -22,6 +22,18 @@ func CreateTDModalRenderer() monitor.ModalRenderer {
 	}
 }
 
+// deriveSemanticGradientStops creates a 2-stop gradient from a base semantic color,
+// blending with the contrast pole of the theme's background so the gradient works
+// across dark, light, and custom themes without hardcoded color constants.
+func deriveSemanticGradientStops(base, bg string) []string {
+	if base == "" {
+		base = "#888888"
+	}
+	pole := MaxContrastPole([]string{bg})
+	stop2 := Blend(base, pole, 0.25)
+	return []string{base, stop2}
+}
+
 // getTDPanelGradient returns the appropriate gradient for a panel state.
 func getTDPanelGradient(state monitor.PanelState) Gradient {
 	theme := GetCurrentTheme()
@@ -45,26 +57,31 @@ func getTDPanelGradient(state monitor.PanelState) Gradient {
 		if len(colors) < 2 {
 			colors = []string{theme.Colors.BorderNormal, theme.Colors.BorderNormal}
 		}
-		// Lighten colors by blending with white
+		pole := MaxContrastPole([]string{theme.Colors.BgPrimary})
 		lightened := make([]string, len(colors))
 		for i, c := range colors {
-			rgb := HexToRGB(c)
-			// Blend 30% toward white
-			lighter := LerpRGB(rgb, RGB{255, 255, 255}, 0.3)
-			lightened[i] = RGBToHex(lighter)
+			lightened[i] = Blend(c, pole, 0.3)
 		}
 		return NewGradient(lightened, angle)
 
 	case monitor.PanelStateDividerHover:
-		// Divider hover: cyan gradient
-		return NewGradient([]string{"#00BCD4", "#26C6DA"}, angle)
+		// Divider hover: derived from theme's Info / Secondary
+		base := theme.Colors.Info
+		if base == "" {
+			base = theme.Colors.Secondary
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 
 	case monitor.PanelStateDividerActive:
-		// Divider active (dragging): orange gradient
-		return NewGradient([]string{"#FF9800", "#FFB74D"}, angle)
+		// Divider active (dragging): derived from theme's Warning
+		base := theme.Colors.Warning
+		if base == "" {
+			base = theme.Colors.Primary
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 
 	default:
-		// Normal panel: use theme's normal gradient (dark gray)
+		// Normal panel: use theme's normal gradient
 		colors := theme.Colors.GradientBorderNormal
 		if len(colors) < 2 {
 			colors = []string{theme.Colors.BorderNormal, theme.Colors.BorderNormal}
@@ -84,18 +101,26 @@ func getTDModalGradient(modalType monitor.ModalType, depth int) Gradient {
 	// Check for special modal types first
 	switch modalType {
 	case monitor.ModalTypeHandoffs:
-		// Handoffs: green gradient
-		return NewGradient([]string{"#10B981", "#34D399"}, angle)
+		// Handoffs: derived from theme's Success
+		base := theme.Colors.Success
+		if base == "" {
+			base = "#5b8f63"
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 
 	case monitor.ModalTypeConfirmation:
-		// Confirmation: red gradient
-		return NewGradient([]string{"#EF4444", "#F87171"}, angle)
+		// Confirmation: derived from theme's Error
+		base := theme.Colors.Error
+		if base == "" {
+			base = "#c06c64"
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 	}
 
 	// For other types, use depth-based coloring
 	switch depth {
 	case 1:
-		// Depth 1: active gradient (purple→blue)
+		// Depth 1: active gradient
 		colors := theme.Colors.GradientBorderActive
 		if len(colors) < 2 {
 			colors = []string{theme.Colors.BorderActive, theme.Colors.BorderActive}
@@ -103,11 +128,20 @@ func getTDModalGradient(modalType monitor.ModalType, depth int) Gradient {
 		return NewGradient(colors, angle)
 
 	case 2:
-		// Depth 2: cyan gradient
-		return NewGradient([]string{"#00BCD4", "#26C6DA"}, angle)
+		// Depth 2: derived from theme's Info / Secondary
+		base := theme.Colors.Info
+		if base == "" {
+			base = theme.Colors.Secondary
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 
 	default:
-		// Depth 3+: orange gradient
-		return NewGradient([]string{"#FF9800", "#FFB74D"}, angle)
+		// Depth 3+: derived from theme's Warning / Accent
+		base := theme.Colors.Warning
+		if base == "" {
+			base = theme.Colors.Accent
+		}
+		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
 	}
 }
+
