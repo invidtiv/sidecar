@@ -246,16 +246,25 @@ func TestReconcileRunsPrepareForEveryKind(t *testing.T) {
 	}
 }
 
-// stopped reports whether a watcher has been stopped, by observing that its
-// signal channel is closed. Stop runs detached, so this waits for it.
+// stopped reports whether a watcher has been stopped by somebody else, by
+// waiting for its signal channel to close.
+//
+// It deliberately does not call Stop itself. A helper that stops the watcher it
+// is about to inspect answers "is it stopped now", which is trivially yes — and
+// a leak test that cannot distinguish "stopped by the code under test" from
+// "stopped by the assertion" passes against an implementation that never stops
+// anything. Set.Stop and adopt both stop detached, so this waits rather than
+// checking once.
 func stopped(w *livewatch.PathWatcher) bool {
 	if w == nil {
 		return false
 	}
-	// Stop is idempotent, so calling it here is safe and makes the wait bounded.
-	w.Stop()
-	_, open := <-w.Signals()
-	return !open
+	select {
+	case _, open := <-w.Signals():
+		return !open
+	case <-time.After(2 * time.Second):
+		return false
+	}
 }
 
 // The double-start path a project switch produces: Stop, Init, Start can leave
@@ -305,7 +314,9 @@ func TestRepeatedOpenAndCloseDoesNotLeakRegistrations(t *testing.T) {
 			t.Fatalf("WatchedDirs() = %v, want one", w.WatchedDirs())
 		}
 		f.set.Stop()
-		w.Stop()
+		if !stopped(w) {
+			t.Fatal("Set.Stop did not release the watcher")
+		}
 		if got := w.WatchedDirs(); len(got) != 0 {
 			t.Fatalf("WatchedDirs() = %v after teardown, want none", got)
 		}

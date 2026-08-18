@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/livepanes"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // place records a frame that put these content leaves on screen, which is what
@@ -280,5 +281,50 @@ func TestAChangeVetoedByAnOverlayLandsWhenTheVetoLifts(t *testing.T) {
 
 	if got := docPaneText(t, p); !strings.Contains(got, "WRITTEN UNDER THE VETO") {
 		t.Fatalf("the owed change never landed after the veto lifted; pane shows:\n%s", got)
+	}
+}
+
+// The legacy diff view is constructed for every session and stays
+// LoadStateUnknown for anyone who never opens the non-pane Diff surface. It can
+// never re-read, so it must never accept a change as owed: a host asks whether a
+// refresh is owed in order to retry it, and a permanently owed re-read is a
+// permanent retry — half a dozen git subprocesses on every single update, for as
+// long as a diff pane is visible.
+func TestAViewThatCanNeverRereadIsNeverOwedARefresh(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "notes.md", "# notes\n")
+	p := docPaneForLiveTest(t, root, "notes.md")
+	t.Cleanup(p.stopLiveWatchers)
+
+	if p.diff.State != workspacediff.LoadStateUnknown {
+		t.Fatalf("diff.State = %v, want the never-opened legacy view this test is about", p.diff.State)
+	}
+
+	// The refresh path runs, as it does on every watcher signal.
+	p.refreshDiffPanes()
+	p.refreshDiffPanes()
+
+	if p.diffRefreshOwed() {
+		t.Fatal("a view that can never re-read reported a refresh owed; the reconcile would retry it forever")
+	}
+	if p.issueRefreshOwed() {
+		t.Fatal("an issue pane with nothing loaded reported a refresh owed")
+	}
+}
+
+// The same property from the reconcile's side: repeated ordinary updates with
+// nothing changing must not spend a single re-read.
+func TestRepeatedReconcilesDoNotRefreshAnythingWhenNothingChanged(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "notes.md", "# notes\n")
+	p := docPaneForLiveTest(t, root, "notes.md")
+	t.Cleanup(p.stopLiveWatchers)
+	runLive(t, p, p.reconcileLiveWatches())
+
+	for range 50 {
+		cmd := p.reconcileLiveWatches()
+		if cmd != nil {
+			t.Fatal("an idle reconcile produced work; a per-update refresh loop is exactly the cost this design exists to avoid")
+		}
 	}
 }

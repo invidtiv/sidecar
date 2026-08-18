@@ -135,8 +135,19 @@ type AdminTargetsMsg struct {
 func (m AdminTargetsMsg) GetEpoch() uint64 { return m.Epoch }
 
 // Observe records that the repository may have moved.
+//
+// A view that can never re-read declines to be owed one. A commit or range diff
+// is immutable, and a view that has not loaded is owned by the host's own load
+// path — for either, [View.Refresh] refuses before it reaches the refresher, so
+// accepting the change here would leave a dirty flag nothing can ever clear.
+// That matters because a host asks whether a refresh is owed in order to retry
+// it: a permanently owed re-read is a permanent retry, which for this view is
+// half a dozen git subprocesses on every update.
 func (v *View) Observe() {
-	if v == nil {
+	if v == nil || v.Target.Kind != TargetWorkingTree {
+		return
+	}
+	if v.State == LoadStateUnknown {
 		return
 	}
 	v.live.Observe()

@@ -41,8 +41,15 @@ func StoreTargets(workDir string) []livewatch.Target {
 
 // Observe records that the td store moved. It is cheap and idempotent: a burst
 // of signals owes exactly one re-read.
+//
+// A card that can never re-read declines to be owed one. A card with no issue,
+// or one that has never loaded, is owned by the host's own load path, and
+// [Model.Refresh] refuses before it reaches the refresher — so accepting the
+// change here would leave a dirty flag nothing can clear. A host asks whether a
+// refresh is owed in order to retry it, and a permanently owed re-read is a
+// permanent retry: three `td` subprocesses per sibling tab, every update.
 func (m *Model) Observe() {
-	if m == nil {
+	if m == nil || m.issueID == "" || m.requestGeneration == 0 {
 		return
 	}
 	m.live.Observe()

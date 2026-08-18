@@ -62,20 +62,35 @@ func TestUnplaceablePreviewPaneIsNotWatched(t *testing.T) {
 		t.Fatalf("previewDocTargets() = %v for a placed preview, want one", got)
 	}
 
-	// Focus the terminal leaf and shrink the window below the layout floor:
-	// LayoutTree then places the focused leaf alone and the document is gone.
+	// Two ways a preview pane stops being on screen, and they are easy to
+	// conflate. First: a window too narrow to show a preview at all, where the
+	// list takes the full width.
+	m.WorkspacesView(40, 10)
+	if m.previewPaneVisible(panelayout.Document) {
+		t.Fatal("a document was reported visible at a width that draws no preview")
+	}
+	if got := m.previewDocTargets(); len(got) != 0 {
+		t.Fatalf("previewDocTargets() = %v at a width that draws no preview, want none", got)
+	}
+
+	// Second: the preview is drawn, but the tree does not fit its peer box, so
+	// LayoutTree zooms to the focused leaf and every other leaf is gone. This is
+	// the branch the leaf walk answers, and it is reached only at a size where
+	// the preview itself is still drawn.
 	terminal := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
 	if terminal == nil {
 		t.Fatal("the preview tree has no terminal leaf to zoom to")
 	}
 	m.preview.paneFocus = terminal.ID
-	m.WorkspacesView(40, 10)
-
+	m.WorkspacesView(80, 20)
+	if _, drawn := m.previewPeerBox(); !drawn {
+		t.Fatal("the preview is not drawn at this size; this test no longer covers the zoom branch")
+	}
 	if m.previewPaneVisible(panelayout.Document) {
-		t.Fatal("a document the layout could not place was reported as visible")
+		t.Fatal("a document the layout zoomed past was reported as visible")
 	}
 	if got := m.previewDocTargets(); len(got) != 0 {
-		t.Fatalf("previewDocTargets() = %v for a pane the layout did not place, want none", got)
+		t.Fatalf("previewDocTargets() = %v for a leaf the layout zoomed past, want none", got)
 	}
 }
 

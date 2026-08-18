@@ -49,8 +49,12 @@ func (m *Model) SetRoot(root string) {
 }
 
 // Observe records that the document's file changed on disk.
+//
+// A document that has never loaded declines to be owed a re-read: the host's own
+// load path owns it, [Model.Refresh] refuses before it reaches the refresher,
+// and a dirty flag nothing can clear reads to a host as a refresh owed forever.
 func (m *Model) Observe() {
-	if m == nil {
+	if m == nil || m.requestGeneration == 0 {
 		return
 	}
 	m.live.Observe()
