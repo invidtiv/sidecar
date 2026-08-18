@@ -20,6 +20,11 @@ const (
 	TargetKindDiff     TargetKind = "diff"
 	TargetKindWorktree TargetKind = "worktree"
 	TargetKindShell    TargetKind = "shell"
+	// TargetKindResource is an external terminal resource provider's locator.
+	// Provider names the configured instance; the running app decides which of
+	// that instance's matchers claims the locator, because only it has a live
+	// matcher snapshot. The short-lived CLI process starts no provider.
+	TargetKindResource TargetKind = "resource"
 )
 
 // Status describes the host's response to a UI request.
@@ -48,6 +53,11 @@ type Target struct {
 	Kind  TargetKind `json:"kind"`
 	Value string     `json:"value"`
 	Line  int        `json:"line"`
+	// Provider is the configured provider instance for TargetKindResource and
+	// is empty for every other kind. It is required rather than guessed: a
+	// bare locator must not make the CLI start provider discovery or choose
+	// among instances.
+	Provider string `json:"provider,omitempty"`
 }
 
 // Options specifies optional placement flags. There is deliberately no focus

@@ -53,11 +53,13 @@ sidecar help --json
 
 ## `sidecar open`
 
-Show a file, a td issue, or a git diff in a split pane
+Show a file, a td issue, a git diff, or a provider resource in a split pane
 
-Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.
-From a Sidecar shell this targets that shell. Otherwise it targets the unique running
-instance, or a specific --shell / --project. --diff with no spec is the working tree.
+Show a file, a td issue, a git diff, or an external provider resource to the user as a
+split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
+Otherwise it targets the unique running instance, or a specific --shell / --project.
+--diff with no spec is the working tree. --provider names a configured terminal resource
+provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
 
 ```
@@ -70,11 +72,13 @@ Usage: sidecar open [options] [<target>]
 - `td-xxxxxx`: A td issue id
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
+- `locator`: With --provider, a resource key such as CASH-1245
 
 **Options:**
 
 - `--line N`: Line to reveal (alternative to "path:line")
 - `--diff`: Open a Diff leaf (working tree if no spec)
+- `--provider ID`: Open a locator through a configured terminal resource provider
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--split auto|right|below`: Where to place a new pane (default auto)
@@ -105,6 +109,8 @@ sidecar open --diff
 sidecar open --diff HEAD
 # commit, unless a file of that name exists
 sidecar open abc1234
+# resource pane for that provider's locator
+sidecar open --provider jira-work CASH-1245
 # structured result for the agent
 sidecar open --json --split below README.md
 # from any terminal, that project's Workspaces surface

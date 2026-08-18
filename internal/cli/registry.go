@@ -108,21 +108,25 @@ func RootCommand() *Command {
 
 	openCmd := &Command{
 		Name:    "open",
-		Summary: "Show a file, a td issue, or a git diff in a split pane",
+		Summary: "Show a file, a td issue, a git diff, or a provider resource in a split pane",
 		Usage:   "sidecar open [options] [<target>]",
-		Long: "Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.\n" +
-			"From a Sidecar shell this targets that shell. Otherwise it targets the unique running\n" +
-			"instance, or a specific --shell / --project. --diff with no spec is the working tree.\n" +
+		Long: "Show a file, a td issue, a git diff, or an external provider resource to the user as a\n" +
+			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
+			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
+			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
+			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
 			"--split only overrides the split axis; it never halves a live terminal after content is open.",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
 			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
+			{Target: "locator", Summary: "With --provider, a resource key such as CASH-1245"},
 		},
 		Flags: []Flag{
 			{Name: "--line", Arg: "N", Summary: "Line to reveal (alternative to \"path:line\")"},
 			{Name: "--diff", Summary: "Open a Diff leaf (working tree if no spec)", Bool: true},
+			{Name: "--provider", Arg: "ID", Summary: "Open a locator through a configured terminal resource provider"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
@@ -145,12 +149,13 @@ func RootCommand() *Command {
 			{Command: "sidecar open --diff", Description: "working-tree Diff leaf"},
 			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
+			{Command: "sidecar open --provider jira-work CASH-1245", Description: "resource pane for that provider's locator"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec]",
-			Summary:    "Put a file, a td issue, or a git diff in front of the user",
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec] | --provider ID <locator>",
+			Summary:    "Put a file, a td issue, a git diff, or a provider resource in front of the user",
 		},
 		Run: runOpen,
 	}
