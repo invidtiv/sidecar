@@ -189,15 +189,11 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		cmd = p.openDiffPaneForSurface(root, surface, spec)
 		opened = p.diffPaneShows(spec)
 	case uirequest.TargetKindResource:
-		ref, ok := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
-		if !ok {
-			reason := "provider " + req.Target.Provider + " has no live matchers"
-			if resourceview.ProviderHasMatchers(p.resourceMatchers, req.Target.Provider) {
-				reason = "provider " + req.Target.Provider + " has no live matcher that recognizes " + req.Target.Value
-			}
+		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
+		if refusal != "" {
 			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 				Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-				Status: uirequest.StatusDeclined, Reason: reason, Surface: surface, At: time.Now().UTC(),
+				Status: uirequest.StatusDeclined, Reason: refusal, Surface: surface, At: time.Now().UTC(),
 			})
 			return nil
 		}
@@ -316,8 +312,8 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 	case uirequest.TargetKindDiff:
 		return p.openDiffPaneForSurface(root, surface, uirequest.DiffTarget(root, pv.Target.Value))
 	case uirequest.TargetKindResource:
-		ref, ok := resourceview.ReferenceForLocator(p.resourceMatchers, pv.Target.Provider, pv.Target.Value)
-		if !ok {
+		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, pv.Target.Provider, pv.Target.Value)
+		if refusal != "" {
 			return nil
 		}
 		return p.openRequestedResourcePaneForSurface(root, surface, ref)

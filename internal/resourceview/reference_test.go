@@ -14,18 +14,18 @@ func TestReferenceForLocatorUsesFirstWholeLiveProviderMatch(t *testing.T) {
 		{Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`)},
 		{Provider: "jira-work", ID: "later", Re: regexp.MustCompile(`.*`)},
 	}
-	ref, ok := ReferenceForLocator(matchers, "jira-work", "CASH-1245")
-	if !ok || ref.Instance != "jira-work" || ref.Matcher != "issue-key" || ref.Locator != "CASH-1245" {
-		t.Fatalf("reference = %#v ok=%v", ref, ok)
+	ref, refusal := ReferenceForLocator(matchers, "jira-work", "CASH-1245")
+	if refusal != "" || ref.Instance != "jira-work" || ref.Matcher != "issue-key" || ref.Locator != "CASH-1245" {
+		t.Fatalf("reference = %#v refusal=%q", ref, refusal)
 	}
 }
 
 func TestReferenceForLocatorDeclinesUnclaimedLocator(t *testing.T) {
 	matchers := []terminallink.ResourceMatcher{{Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`)}}
-	if _, ok := ReferenceForLocator(matchers, "jira-work", "prefix CASH-1245"); ok {
+	if _, refusal := ReferenceForLocator(matchers, "jira-work", "prefix CASH-1245"); refusal == "" {
 		t.Fatal("a partial match claimed the locator")
 	}
-	if !ProviderHasMatchers(matchers, "jira-work") || ProviderHasMatchers(matchers, "missing") {
-		t.Fatal("provider readiness did not follow the usable live snapshot")
+	if _, refusal := ReferenceForLocator(matchers, "missing", "CASH-1245"); refusal != "provider missing has no live matchers" {
+		t.Fatalf("missing-provider refusal = %q", refusal)
 	}
 }

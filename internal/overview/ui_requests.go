@@ -79,15 +79,11 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 			retargeted = m.willRetargetPreviewPane(panelayout.Diff)
 			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))
 		case uirequest.TargetKindResource:
-			ref, ok := resourceview.ReferenceForLocator(m.resourceMatchers, req.Target.Provider, req.Target.Value)
-			if !ok {
-				reason := "provider " + req.Target.Provider + " has no live matchers"
-				if resourceview.ProviderHasMatchers(m.resourceMatchers, req.Target.Provider) {
-					reason = "provider " + req.Target.Provider + " has no live matcher that recognizes " + req.Target.Value
-				}
+			ref, refusal := resourceview.ReferenceForLocator(m.resourceMatchers, req.Target.Provider, req.Target.Value)
+			if refusal != "" {
 				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-					Status: uirequest.StatusDeclined, Reason: reason,
+					Status: uirequest.StatusDeclined, Reason: refusal,
 					Surface: "shell:" + targetWorkspace.TmuxName, At: time.Now().UTC(),
 				})
 				return nil
@@ -244,8 +240,8 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 		}
 		return m.openPreviewDiff(uirequest.DiffTarget(root, pv.Target.Value))
 	case uirequest.TargetKindResource:
-		ref, ok := resourceview.ReferenceForLocator(m.resourceMatchers, pv.Target.Provider, pv.Target.Value)
-		if !ok {
+		ref, refusal := resourceview.ReferenceForLocator(m.resourceMatchers, pv.Target.Provider, pv.Target.Value)
+		if refusal != "" {
 			return nil
 		}
 		return m.OpenPreviewResource(ref)
