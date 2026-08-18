@@ -354,7 +354,7 @@ func TestStopPersistsDirtyNote(t *testing.T) {
 
 	p.Stop()
 
-	peer, err := NewStore(dir, "peer")
+	peer, err := newInProcessStore(dir, "peer")
 	if err != nil {
 		t.Fatal(err)
 	}
