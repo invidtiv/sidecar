@@ -6,11 +6,11 @@ You might never open your editor again.
 
 [Documentation](https://marcus.github.io/sidecar/) · [Getting Started](https://marcus.github.io/sidecar/docs/intro) · [Comprehensive List of Features](docs/features.md)
 
-![Git Status](docs/screenshots/sidecar-git.png)
+![Sidecar Workspace](docs/screenshots/sidecar-workspaces.png)
 
 ## Overview
 
-Sidecar puts your entire development workflow in one shell: plan tasks with [td](https://github.com/marcus/td), chat with AI agents, review diffs, stage commits, and manage workspaces—all without leaving Sidecar. (Optional: multi-agent session history via the Conversations plugin.)
+Sidecar puts your entire development workflow in one shell: run AI coding agents in embedded interactive terminals, open [td](https://github.com/marcus/td) task issues, files, git diffs, and Jira resources in split panes beside your terminal, monitor agent sessions across all projects, review diffs, stage commits, and manage workspaces—all without leaving Sidecar.
 
 ## Quick Install
 
@@ -33,7 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/marcus/sidecar/main/scripts/setup.s
 ## Requirements
 
 - macOS, Linux, or WSL
-- Go 1.21+ (only if building from source)
+- Go 1.26+ (only if building from source)
 
 ## Quick Start
 
@@ -45,30 +45,16 @@ sidecar
 
 ## Suggested Use
 
-Split your terminal horizontally: run your coding agent (Claude Code, Cursor, etc.) on the left and sidecar on the right.
+Run your coding agent (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi, etc.) directly inside Sidecar's embedded terminal in **Workspaces**. Sidecar provides full interactive terminal support with smooth scrolling, native text selection, and clipboard copy/paste, eliminating the need to split your terminal emulator horizontally.
 
-```
-┌─────────────────────────────┬─────────────────────┐
-│                             │                     │
-│   Claude Code / Cursor      │      Sidecar        │
-│                             │                     │
-│   $ claude                  │   [Git] [Files]     │
-│   > fix the auth bug...     │   [Tasks] [Workspaces]│
-│                             │                     │
-└─────────────────────────────┴─────────────────────┘
-```
+As the agent works, you or the agent can:
 
-**Tip:** You can run two sidecar instances side-by-side to create a dashboard view. For example, keep one on the [Tasks] plugin and the other on [Git] or [Workspaces] to monitor everything at once.
-
-As the agent works, you can:
-
+- Open task tracking issues (`td-xxxxxx`), files (`path:line`), diffs, or Jira resources in split panes right beside the terminal via `sidecar open`
 - Watch tasks move through the workflow in TD Monitor
-- See files change in real-time in the Git plugin
-- Browse and edit code yourself in the File Browser
-- Optionally browse multi-agent session history (Conversations plugin; opt-in feature flag)
-- Switch between built-in and community themes with live previews
-
-This setup gives you visibility into what the agent is doing without interrupting your workflow. The entire dev loop—planning, monitoring, reviewing, committing—happens in the terminal while agents write the code.
+- See files change in real-time and review syntax-highlighted diffs in the Git plugin
+- Browse project code in the File Browser
+- Monitor agent status across every project in the **Sessions** screen
+- Adjust any setting with live feedback in the in-app **Configuration** UI
 
 ## Usage
 
@@ -78,6 +64,15 @@ sidecar
 
 # Specify project root
 sidecar --project /path/to/project
+
+# Open in-app Configuration directly on Setup
+sidecar setup
+
+# Open a file, td issue, git diff, or provider resource in a split pane
+sidecar open internal/cli/cli.go:88
+sidecar open td-b922d8
+sidecar open --diff
+sidecar open --provider jira-work PROJ-123
 
 # Enable debug logging
 sidecar --debug
@@ -90,7 +85,35 @@ sidecar --version
 
 Sidecar checks for updates on startup. When a new version is available, a toast notification appears. Press `!` to open the diagnostics modal and see the update command.
 
-## Plugins
+## Core Features & Plugins
+
+### Workspaces & Split Panes
+
+Run agent shells and manage git worktrees in an integrated workspace. Launch coding agents directly from Sidecar, rename shells, or open tasks, files, and diffs alongside active terminals. [Full documentation →](https://marcus.github.io/sidecar/docs/workspaces-plugin)
+
+![Workspaces](docs/screenshots/sidecar-workspaces.png)
+
+**Features:**
+
+- Embedded terminal with full tmux integration, mouse scrolling, and seamless copy-paste
+- Open TD issues, project files, diffs, and Jira tickets beside the terminal with `sidecar open <target>`
+- Create, rename, and manage interactive shells (`ctrl+n`) and worktree workspaces (`n`/`D`)
+- Launch coding agents (Claude, Codex, Gemini, Cursor, OpenCode, Pi) with `a`
+- Integrated merge workflow: commit, push, create PR, and cleanup with `m`
+- Drag-and-drop and keyboard-resizable pane splits
+
+### Sessions Screen
+
+Press `8` or navigate to **Sessions** in the navbar to monitor and manage all active agent sessions, shells, and git worktrees across every configured project in one centralized screen.
+
+![Sessions](docs/screenshots/sidecar-sessions.png)
+
+**Features:**
+
+- Cross-project session overview categorized by status (Needs Attention, Working, Live, Idle)
+- Live preview pane showing real-time agent output, activity, and diffs
+- Fast filtering (`/`), sorting, and instant project/session switching (`Enter`)
+- Seamless transition between global session overview and project workspaces
 
 ### Git Status
 
@@ -106,46 +129,18 @@ View staged, modified, and untracked files with a split-pane interface. The side
 - Browse commit history and view commit diffs
 - Auto-refresh on file system changes
 
-### Conversations (opt-in)
-
-Browse session history from multiple AI coding agents with message content, token usage, and search. Supports Amp Code, Claude Code, Codex, Cursor CLI, Gemini CLI, GitHub Copilot CLI, Kiro, OpenCode, Pi Agent, and Warp. [Full documentation →](https://marcus.github.io/sidecar/docs/conversations-plugin)
-
-**Off by default.** Enable the `conversations_plugin` feature flag:
-
-```json
-{
-  "features": {
-    "flags": {
-      "conversations_plugin": true
-    }
-  }
-}
-```
-
-Or: `sidecar --enable-feature=conversations_plugin`. When disabled, Sidecar does not load history adapters or read agent session stores.
-
-![Conversations](docs/screenshots/sidecar-conversations.png)
-
-**Features:**
-
-- Unified view across all supported agents
-- View all sessions grouped by date
-- Search sessions with `/`
-- Expand messages to see full content
-- Track token usage per session
-
 ### TD Monitor
 
-Integration with [TD](https://github.com/marcus/td), a task management system designed for AI agents working across context windows. TD helps agents track work, log progress, and maintain context across sessions—essential for AI-assisted development where context windows reset between conversations. [Full documentation →](https://marcus.github.io/sidecar/docs/td)
+Integration with [TD](https://github.com/marcus/td), a task management system designed for AI agents working across context windows. TD helps agents track work, log progress, and maintain context across sessions. [Full documentation →](https://marcus.github.io/sidecar/docs/td)
 
 ![TD Monitor](docs/screenshots/sidecar-td.png)
 
 **Features:**
 
 - Current focused task display
-- Scrollable task list with status indicators
+- Scrollable task list with status indicators and priority badges
 - Activity log with session context
-- Quick review submission with `r`
+- Quick review submission with `r` and approval with `a`
 
 See the [TD repository](https://github.com/marcus/td) for installation and CLI usage.
 
@@ -160,27 +155,28 @@ Navigate project files with a tree view and syntax-highlighted preview. [Full do
 - Collapsible directory tree
 - Code preview with syntax highlighting
 - Auto-refresh on file changes
+- Quick file opening into workspace splits
 
-### Workspaces
+## In-App Configuration
 
-Manage workspaces for parallel development with integrated agent support. Create isolated branches as sibling directories, link tasks from TD, and launch coding agents directly from sidecar. [Full documentation →](https://marcus.github.io/sidecar/docs/workspaces-plugin)
+Press `,` (comma) or run `sidecar setup` to open the full in-app Configuration interface. Adjust project settings, appearance, terminal behavior, agent integrations, and view system diagnostic checks with live feedback.
 
-![Workspaces](docs/screenshots/sidecar-workspaces.png)
+![Configuration](docs/screenshots/sidecar-config.png)
 
-**Features:**
+**Configuration Pages:**
 
-- Create and delete workspaces with `n`/`D`
-- Link TD tasks to workspaces for context tracking
-- Launch coding agents (Claude, Codex, Gemini, Cursor, OpenCode, Pi) with `a`
-- Merge workflow: commit, push, create PR, and cleanup with `m`
-- Auto-adds sidecar state files to .gitignore
-- Preview diffs and task details in split-pane view
+- **Sidecar Setup**: System readiness checks (tmux version, truecolor support, project roots, `AGENTS.md` instructions) with one-key guided repairs
+- **Appearance**: Live theme selection, swatches, and custom color overrides
+- **Projects**: Add, remove, and manage configured projects and paths
+- **Workspaces & Terminal**: Customize default agents, shell creation, terminal scrollback, and tmux settings
+- **Panels & Integrations**: Configure external terminal resource providers (e.g., Jira issue link matchers)
+- **Diagnostics & About**: System info, update checks, and troubleshooting tools
 
 ## Project Switcher
 
 Press `@` to switch between configured projects without restarting sidecar.
 
-1. Add projects to `~/.config/sidecar/config.json`:
+1. Add projects to `~/.config/sidecar/config.json` or using the in-app Configuration UI:
 
 ```json
 {
@@ -203,7 +199,7 @@ All plugins reinitialize with the new project context. State (active plugin, cur
 
 Press `W` to switch between git worktrees within the current repository. When you switch away from a project and return later, sidecar remembers which worktree you were working in and restores it automatically.
 
-Opening a worktree from the cross-project Overview keeps Sidecar scoped to the project root
+Opening a worktree from the cross-project Sessions screen keeps Sidecar scoped to the project root
 by default, while selecting that worktree in Workspaces and its preview. To instead enter the
 selected worktree's scope, set:
 
@@ -219,9 +215,9 @@ selected worktree's scope, set:
 
 ## Themes
 
-Press `#` to open the theme switcher. Choose from built-in themes (default, dracula) or press `Tab` to browse 453 community color schemes derived from iTerm2-Color-Schemes.
+Press `#` to open the theme switcher or navigate to **Appearance** in Configuration. Choose from 21 curated built-in themes (including Sidecar Modern, Dracula, Catppuccin Mocha, Tokyo Night Storm, Gruvbox Dark, Nord, Kanagawa Wave, Rose Pine, Everforest Dark, Solarized Dark, Monokai Pro, and more) with instant live preview.
 
-The community browser supports search filtering, live preview as you navigate, and color swatches for each scheme. Press `Enter` to save a scheme as your active theme.
+Custom color overrides and theme preferences can be set in `~/.config/sidecar/config.json` or directly in the in-app Configuration UI.
 
 See [Theme Creation Skill](.claude/skills/create-theme/SKILL.md) for custom theme creation and color palette reference.
 
@@ -233,16 +229,32 @@ See [Theme Creation Skill](.claude/skills/create-theme/SKILL.md) for custom them
 | `@`                 | Open project switcher            |
 | `W`                 | Open worktree switcher           |
 | `#`                 | Open theme switcher              |
-| `i`                 | Open issue                       |
+| `,`                 | Open in-app Configuration        |
+| `8`                 | Open Sessions screen (global)    |
+| `9`                 | Open Activity overview (global)  |
+| `1-7`               | Focus project plugin by number   |
+| `[` / `]`           | Cycle header tabs                |
 | `tab` / `shift+tab` | Navigate plugins                 |
-| `1-9`               | Focus plugin by number           |
 | `j/k`, `↓/↑`        | Navigate items                   |
 | `ctrl+d/u`          | Page down/up in scrollable views |
 | `g/G`               | Jump to top/bottom               |
 | `enter`             | Select                           |
-| `esc`               | Back/close                       |
+| `esc`               | Back / close modal or pane       |
 | `r`                 | Refresh                          |
-| `?`                 | Toggle help                      |
+| `?`                 | Toggle help / command palette    |
+
+### Workspace Shortcuts
+
+| Key      | Action                              |
+| -------- | ----------------------------------- |
+| `ctrl+n` | Create new shell                    |
+| `n`      | Create new worktree workspace       |
+| `D`      | Delete workspace                    |
+| `a`      | Launch/attach agent                 |
+| `R`      | Rename shell                        |
+| `m`      | Start merge workflow                |
+| `p`      | Push branch                         |
+| `\`      | Toggle sidebar                      |
 
 ### Git Status Shortcuts
 
@@ -255,35 +267,17 @@ See [Theme Creation Skill](.claude/skills/create-theme/SKILL.md) for custom them
 | `h/l` | Switch sidebar/diff focus |
 | `c`   | Commit staged changes     |
 
-### Workspace Shortcuts
-
-| Key | Action                  |
-| --- | ----------------------- |
-| `n` | Create new workspace     |
-| `D` | Delete workspace         |
-| `a` | Launch/attach agent     |
-| `t` | Link/unlink TD task     |
-| `m` | Start merge workflow    |
-| `p` | Push branch             |
-| `o` | Open in finder/terminal |
-
 ## Configuration
 
-Config file: `~/.config/sidecar/config.json`
+Config file: `~/.config/sidecar/config.json` (or configure interactively via `,` / `sidecar setup`)
 
 ```json
 {
   "plugins": {
     "git-status": { "enabled": true, "refreshInterval": "1s" },
     "td-monitor": { "enabled": true, "refreshInterval": "2s" },
-    "conversations": { "enabled": true },
     "file-browser": { "enabled": true },
-    "workspaces": { "enabled": true }
-  },
-  "features": {
-    "flags": {
-      "conversations_plugin": false
-    }
+    "workspace": { "enabled": true }
   },
   "ui": {
     "showClock": true,
@@ -345,3 +339,4 @@ Sidecar runs locally and makes no telemetry, analytics, or tracking requests. Th
 ## License
 
 MIT
+
