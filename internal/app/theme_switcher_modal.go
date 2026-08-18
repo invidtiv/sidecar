@@ -231,7 +231,7 @@ func (m *Model) themeSwitcherListUpdate(msg tea.Msg, focusID string) (string, te
 			}
 			m.themeSwitcherModalWidth = 0
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return "", m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 		}
 		return "", nil
@@ -245,7 +245,7 @@ func (m *Model) themeSwitcherListUpdate(msg tea.Msg, focusID string) (string, te
 			}
 			m.themeSwitcherModalWidth = 0
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return "", m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 		}
 		return "", nil

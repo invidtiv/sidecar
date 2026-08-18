@@ -130,6 +130,34 @@ func TestRegistry_StartStopPanic(t *testing.T) {
 	r.Stop()
 }
 
+func TestRegistry_ReplacePersistsNewValue(t *testing.T) {
+	r := NewRegistry(nil)
+	original := mockPlugin{id: "orig"}
+	if err := r.Register(&original); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	replacement := &mockPlugin{id: "replaced"}
+	r.Replace(0, replacement)
+
+	got := r.Get("replaced")
+	if got == nil {
+		t.Fatal("Replace did not persist the new plugin")
+	}
+	if r.Get("orig") != nil {
+		t.Fatal("original plugin still in registry after Replace")
+	}
+	if got != replacement {
+		t.Error("Get returned a different instance than Replace stored")
+	}
+
+	r.Replace(-1, &mockPlugin{id: "ignored"})
+	r.Replace(3, &mockPlugin{id: "ignored"})
+	if r.Get("ignored") != nil {
+		t.Fatal("out-of-range Replace stored a plugin")
+	}
+}
+
 func TestRegistry_Get(t *testing.T) {
 	r := NewRegistry(nil)
 

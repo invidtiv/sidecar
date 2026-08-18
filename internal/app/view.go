@@ -494,7 +494,7 @@ func (m *Model) projectSwitcherListUpdate(msg tea.Msg, focusID string) (string, 
 			m.projectSwitcherCursor--
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
 			m.projectSwitcherModalWidth = 0 // Force modal rebuild for scroll
-			m.previewProjectTheme()
+			return "", m.previewProjectTheme()
 		}
 		return "", nil
 
@@ -503,7 +503,7 @@ func (m *Model) projectSwitcherListUpdate(msg tea.Msg, focusID string) (string, 
 			m.projectSwitcherCursor++
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
 			m.projectSwitcherModalWidth = 0 // Force modal rebuild for scroll
-			m.previewProjectTheme()
+			return "", m.previewProjectTheme()
 		}
 		return "", nil
 

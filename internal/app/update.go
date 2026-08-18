@@ -341,7 +341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.configOpen() {
 			cmd := m.config.Mouse(offsetMouseY(msg, -headerHeight))
 			m.updateContext()
-			return m, cmd
+			return m, tea.Batch(cmd, m.notifyThemeChanged())
 		}
 
 		if m.inGlobalScope() {
@@ -788,9 +788,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.projectSwitcherScroll = 0
 				return m, nil
 			}
-			m.resetProjectSwitcher()
+			cmd := m.resetProjectSwitcher()
 			m.updateContext()
-			return m, nil
+			return m, cmd
 		case ModalWorktreeSwitcher:
 			// Esc: clear filter if set, otherwise close
 			if m.worktreeSwitcherInput.Value() != "" {
@@ -824,10 +824,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.themeSwitcherSelectedIdx = 0
 				return m, nil
 			}
-			m.previewThemeEntry(m.themeSwitcherOriginal)
+			cmd := m.previewThemeEntry(m.themeSwitcherOriginal)
 			m.resetThemeSwitcher()
 			m.updateContext()
-			return m, nil
+			return m, cmd
 		case ModalNone:
 			// Configuration answers esc itself: clear the search, then return
 			// from a focused child route, then close and restore the surface it
@@ -1096,17 +1096,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				// The switcher has nothing to switch to, so enter is free for
 				// the route that fixes that. ctrl+a's direct add stays exactly
 				// as it was; this is the way into the rest of Setup.
-				m.resetProjectSwitcher()
+				resetCmd := m.resetProjectSwitcher()
 				m.updateContext()
-				return m, OpenConfiguration(configui.PageSetup)
+				return m, tea.Batch(resetCmd, OpenConfiguration(configui.PageSetup))
 			case "y":
 				return m, m.copyProjectSetupPrompt()
 			case "ctrl+a":
 				m.initProjectAdd()
 				return m, nil
 			case "q", "@":
-				m.resetProjectSwitcher()
+				cmd := m.resetProjectSwitcher()
 				m.updateContext()
+				return m, cmd
 			}
 			return m, nil
 		}
@@ -1160,8 +1161,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.projectSwitcherCursor = 0
 			}
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
-			m.previewProjectTheme()
-			return m, nil
+			return m, m.previewProjectTheme()
 
 		case tea.KeyDown:
 			m.projectSwitcherCursor++
@@ -1172,8 +1172,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.projectSwitcherCursor = 0
 			}
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
-			m.previewProjectTheme()
-			return m, nil
+			return m, m.previewProjectTheme()
 		}
 
 		// Handle non-text shortcuts
@@ -1187,8 +1186,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.projectSwitcherCursor = 0
 			}
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
-			m.previewProjectTheme()
-			return m, nil
+			return m, m.previewProjectTheme()
 
 		case "ctrl+p":
 			m.projectSwitcherCursor--
@@ -1196,8 +1194,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.projectSwitcherCursor = 0
 			}
 			m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
-			m.previewProjectTheme()
-			return m, nil
+			return m, m.previewProjectTheme()
 
 		case "ctrl+a":
 			m.initProjectAdd()
@@ -1205,9 +1202,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		case "@":
 			// Close modal
-			m.resetProjectSwitcher()
+			cmd := m.resetProjectSwitcher()
 			m.updateContext()
-			return m, nil
+			return m, cmd
 		}
 
 		// Filter out unparsed mouse escape sequences
@@ -1246,8 +1243,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				} else {
 					tc = config.ThemeConfig{Name: "default", Community: entry.ThemeKey}
 				}
-				m.previewThemeEntry(entry)
-				return m, m.confirmThemeSelection(tc, entry.Name)
+				return m, tea.Batch(m.previewThemeEntry(entry), m.confirmThemeSelection(tc, entry.Name))
 			}
 			return m, nil
 
@@ -1261,7 +1257,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.themeSwitcherSelectedIdx--
 			}
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 			return m, nil
 
@@ -1278,7 +1274,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.themeSwitcherSelectedIdx++
 			}
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 			return m, nil
 		}
@@ -1297,7 +1293,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.themeSwitcherSelectedIdx++
 			}
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 			return m, nil
 
@@ -1310,16 +1306,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.themeSwitcherSelectedIdx--
 			}
 			if m.themeSwitcherSelectedIdx < len(themes) && !themes[m.themeSwitcherSelectedIdx].IsSeparator {
-				m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
 			}
 			return m, nil
 
 		case "#":
 			// Close modal and restore original
-			m.previewThemeEntry(m.themeSwitcherOriginal)
+			cmd := m.previewThemeEntry(m.themeSwitcherOriginal)
 			m.resetThemeSwitcher()
 			m.updateContext()
-			return m, nil
+			return m, cmd
 		}
 
 		// Filter out unparsed mouse escape sequences
@@ -1343,7 +1339,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 		// Live preview current selection (skip separators)
 		if m.themeSwitcherSelectedIdx >= 0 && m.themeSwitcherSelectedIdx < len(m.themeSwitcherFiltered) && !m.themeSwitcherFiltered[m.themeSwitcherSelectedIdx].IsSeparator {
-			m.previewThemeEntry(m.themeSwitcherFiltered[m.themeSwitcherSelectedIdx])
+			cmd = tea.Batch(cmd, m.previewThemeEntry(m.themeSwitcherFiltered[m.themeSwitcherSelectedIdx]))
 		}
 
 		return m, cmd
@@ -1657,8 +1653,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.activeContext = "project-switcher"
 			m.initProjectSwitcher()
 		} else {
-			m.resetProjectSwitcher()
+			cmd := m.resetProjectSwitcher()
 			m.updateContext()
+			return m, cmd
 		}
 		return m, nil
 	case "K":
@@ -1694,9 +1691,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.activeContext = "theme-switcher"
 			m.initThemeSwitcher()
 		} else {
-			m.previewThemeEntry(m.themeSwitcherOriginal)
+			cmd := m.previewThemeEntry(m.themeSwitcherOriginal)
 			m.resetThemeSwitcher()
 			m.updateContext()
+			return m, cmd
 		}
 		return m, nil
 	case ",":
@@ -2035,8 +2033,7 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(
 			m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
 		m.clearProjectSwitcherModal()
-		m.previewProjectTheme()
-		return m, nil
+		return m, m.previewProjectTheme()
 	case tea.MouseWheelDown:
 		projects := m.projectSwitcherFiltered
 		m.projectSwitcherCursor++
@@ -2049,8 +2046,7 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(
 			m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
 		m.clearProjectSwitcherModal()
-		m.previewProjectTheme()
-		return m, nil
+		return m, m.previewProjectTheme()
 	}
 
 	action := m.projectSwitcherModal.HandleMouse(msg, m.projectSwitcherMouseHandler)
@@ -2074,9 +2070,9 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		m.initProjectAdd()
 		return m, nil
 	case "cancel":
-		m.resetProjectSwitcher()
+		cmd := m.resetProjectSwitcher()
 		m.updateContext()
-		return m, nil
+		return m, cmd
 	case "select":
 		projects := m.projectSwitcherFiltered
 		if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(projects) {
@@ -2104,14 +2100,14 @@ func (m *Model) handleThemeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 		themes := m.themeSwitcherFiltered
 		if m.themeSwitcherSelectedIdx >= 0 && m.themeSwitcherSelectedIdx < len(themes) {
 			entry := themes[m.themeSwitcherSelectedIdx]
-			m.previewThemeEntry(entry)
+			themeCmd := m.previewThemeEntry(entry)
 			var tc config.ThemeConfig
 			if entry.IsBuiltIn {
 				tc = config.ThemeConfig{Name: entry.ThemeKey}
 			} else {
 				tc = config.ThemeConfig{Name: "default", Community: entry.ThemeKey}
 			}
-			return m, m.confirmThemeSelection(tc, entry.Name)
+			return m, tea.Batch(themeCmd, m.confirmThemeSelection(tc, entry.Name))
 		}
 	}
 	return m, nil
@@ -2392,8 +2388,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 		m.resetProjectAddThemePicker()
 		// Restore theme
 		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		m.applyResolvedTheme(resolved)
-		return m, nil
+		return m, m.applyResolvedTheme(resolved)
 
 	case "up", "k":
 		if m.projectAddThemeCursor > 0 {
@@ -2401,7 +2396,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 			if m.projectAddThemeCursor < m.projectAddThemeScroll {
 				m.projectAddThemeScroll = m.projectAddThemeCursor
 			}
-			m.previewProjectAddTheme()
+			return m, m.previewProjectAddTheme()
 		}
 		return m, nil
 
@@ -2411,7 +2406,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 			if m.projectAddThemeCursor >= m.projectAddThemeScroll+maxVisible {
 				m.projectAddThemeScroll = m.projectAddThemeCursor - maxVisible + 1
 			}
-			m.previewProjectAddTheme()
+			return m, m.previewProjectAddTheme()
 		}
 		return m, nil
 
@@ -2425,8 +2420,7 @@ func (m *Model) handleProjectAddThemePickerKeys(msg tea.KeyPressMsg) (tea.Model,
 		m.resetProjectAddThemePicker()
 		// Restore theme
 		resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-		m.applyResolvedTheme(resolved)
-		return m, nil
+		return m, m.applyResolvedTheme(resolved)
 	}
 
 	// Filter out unparsed mouse escape sequences

@@ -91,3 +91,40 @@ func TestTDModalRendererDerivesFromActiveTheme(t *testing.T) {
 		t.Error("expected depth 1 modal gradient to update when theme changes")
 	}
 }
+
+func TestTDModalEmptySemanticFallbacksUseNeutralGray(t *testing.T) {
+	t.Cleanup(func() {
+		ApplyTheme("sidecar-modern")
+	})
+
+	blank := GetCurrentTheme()
+	blank.Name = "td-empty-semantic"
+	blank.Colors.Success = ""
+	blank.Colors.Error = ""
+	RegisterTheme(blank)
+	ApplyTheme("td-empty-semantic")
+
+	handoffs := getTDModalGradient(monitor.ModalTypeHandoffs, 1)
+	if len(handoffs.Stops) == 0 {
+		t.Fatal("handoffs gradient has no stops")
+	}
+	got := RGBToHex(handoffs.Stops[0].Color)
+	if got != "#888888" {
+		t.Errorf("empty Success fallback = %s, want #888888", got)
+	}
+	if got == "#5b8f63" {
+		t.Error("empty Success still uses the hardcoded dark-theme green")
+	}
+
+	confirm := getTDModalGradient(monitor.ModalTypeConfirmation, 1)
+	if len(confirm.Stops) == 0 {
+		t.Fatal("confirmation gradient has no stops")
+	}
+	got = RGBToHex(confirm.Stops[0].Color)
+	if got != "#888888" {
+		t.Errorf("empty Error fallback = %s, want #888888", got)
+	}
+	if got == "#c06c64" {
+		t.Error("empty Error still uses the hardcoded dark-theme red")
+	}
+}

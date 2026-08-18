@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -13,10 +14,11 @@ import (
 )
 
 type themeTestPlugin struct {
-	id             string
-	focused        bool
-	themeNotices   int
+	id              string
+	focused         bool
+	themeNotices    int
 	lastReceivedMsg tea.Msg
+	lastTheme       string
 }
 
 func (p *themeTestPlugin) ID() string   { return p.id }
@@ -29,6 +31,7 @@ func (p *themeTestPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	p.lastReceivedMsg = msg
 	if _, ok := msg.(ThemeChangedMsg); ok {
 		p.themeNotices++
+		p.lastTheme = styles.GetCurrentTheme().Name
 	}
 	return p, nil
 }
@@ -92,6 +95,7 @@ func TestThemeSwitcherLivePreviewAndEscapeRestore(t *testing.T) {
 	if plug.themeNotices <= initialNotices {
 		t.Errorf("expected plugin to receive ThemeChangedMsg on preview, got notices=%d", plug.themeNotices)
 	}
+	previewNotices := plug.themeNotices
 
 	// Escape restores original theme
 	m.handleKeyMsg(tea.KeyPressMsg{Code: tea.KeyEsc})
@@ -101,6 +105,12 @@ func TestThemeSwitcherLivePreviewAndEscapeRestore(t *testing.T) {
 	}
 	if styles.GetCurrentTheme().Name != "sidecar-modern" {
 		t.Errorf("restored theme = %q, want sidecar-modern", styles.GetCurrentTheme().Name)
+	}
+	if plug.themeNotices != previewNotices+1 {
+		t.Errorf("expected a second ThemeChangedMsg on Esc restore, notices=%d want %d", plug.themeNotices, previewNotices+1)
+	}
+	if plug.lastTheme != "sidecar-modern" {
+		t.Errorf("plugin last theme = %q, want sidecar-modern", plug.lastTheme)
 	}
 }
 
@@ -206,6 +216,140 @@ func TestProjectAddThemePreviewAndRestore(t *testing.T) {
 
 	if styles.GetCurrentTheme().Name != "sidecar-modern" {
 		t.Errorf("restored theme = %q, want sidecar-modern", styles.GetCurrentTheme().Name)
+	}
+}
+
+func TestNotifyThemeChangedSkipsUnchangedPalette(t *testing.T) {
+	t.Cleanup(func() {
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	p := &themeTestPlugin{id: "td-monitor"}
+	m := newTestThemeModel(p)
+
+	m.applyResolvedTheme(theme.ResolvedTheme{BaseName: "sidecar-modern"})
+	notices := p.themeNotices
+	if notices == 0 {
+		t.Fatal("expected an initial theme notification")
+	}
+
+	if cmd := m.notifyThemeChanged(); cmd != nil {
+		t.Error("notifyThemeChanged returned a cmd for an unchanged palette")
+	}
+	if p.themeNotices != notices {
+		t.Errorf("unchanged palette re-notified: notices=%d want %d", p.themeNotices, notices)
+	}
+
+	m.applyResolvedTheme(theme.ResolvedTheme{BaseName: "dracula"})
+	if p.themeNotices != notices+1 {
+		t.Errorf("palette change notices=%d, want %d", p.themeNotices, notices+1)
+	}
+}
+
+func TestConfigKeyDoesNotNotifyWhenPaletteUnchanged(t *testing.T) {
+	t.Cleanup(func() {
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	p := &themeTestPlugin{id: "td-monitor"}
+	m := newTestThemeModel(p)
+	m.openConfiguration(configui.PageAbout)
+	m.notifyThemeChanged()
+	notices := p.themeNotices
+
+	_, _ = m.configKey(tea.KeyPressMsg{Code: '/'})
+	_, _ = m.configKey(tea.KeyPressMsg{Text: "z", Code: 'z'})
+	if p.themeNotices != notices {
+		t.Errorf("search typing re-notified theme: notices=%d want %d", p.themeNotices, notices)
+	}
+}
+
+func TestConfigMousePathNotifiesOnLivePaletteChange(t *testing.T) {
+	t.Cleanup(func() {
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	p := &themeTestPlugin{id: "td-monitor"}
+	m := newTestThemeModel(p)
+	m.openConfiguration(configui.PageAppearance)
+	m.notifyThemeChanged()
+	notices := p.themeNotices
+
+	theme.Preview(theme.Entry{Name: "Dracula", IsBuiltIn: true, ThemeKey: "dracula"})
+	if p.themeNotices != notices {
+		t.Fatalf("Preview itself notified plugins; notices=%d want %d", p.themeNotices, notices)
+	}
+
+	next, _ := m.Update(tea.MouseMotionMsg{X: 1, Y: headerHeight + 1})
+	updated := next.(Model)
+	m = &updated
+	if p.themeNotices != notices+1 {
+		t.Errorf("mouse path did not notify after palette change: notices=%d want %d", p.themeNotices, notices+1)
+	}
+	if p.lastTheme != "dracula" {
+		t.Errorf("plugin last theme = %q, want dracula", p.lastTheme)
+	}
+
+	// A later motion with the same palette must not notify again.
+	next, _ = m.Update(tea.MouseMotionMsg{X: 2, Y: headerHeight + 2})
+	updated = next.(Model)
+	m = &updated
+	if p.themeNotices != notices+1 {
+		t.Errorf("unchanged mouse path re-notified: notices=%d want %d", p.themeNotices, notices+1)
+	}
+}
+
+type valueThemePlugin struct {
+	id  string
+	gen int
+}
+
+type themeCmdSentinel struct{}
+
+func (p valueThemePlugin) ID() string                       { return p.id }
+func (p valueThemePlugin) Name() string                     { return p.id }
+func (p valueThemePlugin) Icon() string                     { return "" }
+func (p valueThemePlugin) Init(*plugin.Context) error       { return nil }
+func (p valueThemePlugin) Start() tea.Cmd                   { return nil }
+func (p valueThemePlugin) Stop()                            {}
+func (p valueThemePlugin) View(int, int) string             { return "" }
+func (p valueThemePlugin) IsFocused() bool                  { return false }
+func (p valueThemePlugin) SetFocused(bool)                  {}
+func (p valueThemePlugin) Commands() []plugin.Command       { return nil }
+func (p valueThemePlugin) FocusContext() string             { return "" }
+func (p valueThemePlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, ok := msg.(ThemeChangedMsg); ok {
+		p.gen++
+		return p, func() tea.Msg { return themeCmdSentinel{} }
+	}
+	return p, nil
+}
+
+func TestNotifyThemeChangedPersistsReplacementAndBatchesCmds(t *testing.T) {
+	t.Cleanup(func() {
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	m := newTestThemeModel(valueThemePlugin{id: "value"})
+	cmd := m.notifyThemeChanged()
+	if cmd == nil {
+		t.Fatal("expected batched cmd from value plugin Update")
+	}
+	if _, ok := cmd().(themeCmdSentinel); !ok {
+		t.Fatal("notifyThemeChanged did not return the plugin Update cmd")
+	}
+
+	got := m.registry.Get("value")
+	vp, ok := got.(valueThemePlugin)
+	if !ok {
+		t.Fatalf("registry stored %T, want valueThemePlugin", got)
+	}
+	if vp.gen != 1 {
+		t.Errorf("replacement gen = %d, want 1 (write into Plugins() copy was discarded)", vp.gen)
 	}
 }
 

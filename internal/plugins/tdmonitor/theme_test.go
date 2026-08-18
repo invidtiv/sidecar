@@ -3,11 +3,13 @@ package tdmonitor
 import (
 	"log/slog"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/td/pkg/monitor"
 )
 
 func TestBuildThemeMapping(t *testing.T) {
@@ -94,6 +96,20 @@ func assertSlot(t *testing.T, field, got, want string) {
 	}
 }
 
+// adoptedThemePrimary reads the live monitor model's adopted palette. td does
+// not export Theme(), so the test inspects the field SetTheme writes.
+func adoptedThemePrimary(t *testing.T, m *monitor.Model) string {
+	t.Helper()
+	if m == nil {
+		t.Fatal("nil monitor model")
+	}
+	field := reflect.ValueOf(m).Elem().FieldByName("theme").FieldByName("Primary")
+	if !field.IsValid() {
+		t.Fatal("monitor.Model.theme.Primary is missing")
+	}
+	return field.String()
+}
+
 func TestLiveThemeChangePreservesModelAndUpdatesPalette(t *testing.T) {
 	styles.ApplyTheme("sidecar-modern")
 	t.Cleanup(func() {
@@ -135,10 +151,9 @@ func TestLiveThemeChangePreservesModelAndUpdatesPalette(t *testing.T) {
 		t.Errorf("p.model pointer changed: got %p, want %p", p.model, initialModel)
 	}
 
-	// The monitor model should now reflect dracula theme colors
-	draculaTheme := buildTheme()
-	if draculaTheme.Primary != styles.GetTheme("dracula").Colors.Primary {
-		t.Errorf("buildTheme primary = %q, want %q", draculaTheme.Primary, styles.GetTheme("dracula").Colors.Primary)
+	wantPrimary := cleanColor(styles.GetTheme("dracula").Colors.Primary)
+	if got := adoptedThemePrimary(t, p.model); got != wantPrimary {
+		t.Errorf("adopted model primary = %q, want dracula %q", got, wantPrimary)
 	}
 }
 
@@ -186,5 +201,9 @@ func TestThemeChangeWhileLoadingAppliesOnAdoption(t *testing.T) {
 
 	if p.model == nil {
 		t.Fatal("expected non-nil model after adoption")
+	}
+	wantPrimary := cleanColor(styles.GetTheme("dracula").Colors.Primary)
+	if got := adoptedThemePrimary(t, p.model); got != wantPrimary {
+		t.Errorf("adopted model primary = %q, want dracula %q", got, wantPrimary)
 	}
 }

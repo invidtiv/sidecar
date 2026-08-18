@@ -48,7 +48,7 @@ func getTDPanelGradient(state monitor.PanelState) Gradient {
 
 	switch state {
 	case monitor.PanelStateActive:
-		// Active panel: use theme's active gradient (purple→blue)
+		// Active panel: use theme's active gradient
 		colors := theme.Colors.GradientBorderActive
 		if len(colors) < 2 {
 			colors = []string{theme.Colors.BorderActive, theme.Colors.BorderActive}
@@ -106,19 +106,11 @@ func getTDModalGradient(modalType monitor.ModalType, depth int) Gradient {
 	switch modalType {
 	case monitor.ModalTypeHandoffs:
 		// Handoffs: derived from theme's Success
-		base := theme.Colors.Success
-		if base == "" {
-			base = "#5b8f63"
-		}
-		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
+		return NewGradient(deriveSemanticGradientStops(theme.Colors.Success, theme.Colors.BgPrimary), angle)
 
 	case monitor.ModalTypeConfirmation:
 		// Confirmation: derived from theme's Error
-		base := theme.Colors.Error
-		if base == "" {
-			base = "#c06c64"
-		}
-		return NewGradient(deriveSemanticGradientStops(base, theme.Colors.BgPrimary), angle)
+		return NewGradient(deriveSemanticGradientStops(theme.Colors.Error, theme.Colors.BgPrimary), angle)
 	}
 
 	// For other types, use depth-based coloring
