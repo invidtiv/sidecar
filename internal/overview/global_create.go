@@ -93,6 +93,9 @@ type projectMutationRefreshMsg struct {
 	// Its failures must stay silent: raising the create modal's error on a
 	// project the user never touched would be an alert about nothing.
 	Background bool
+	// DispatchedAt dates the durable state this result was built from, so a
+	// background refresh that has been overtaken can be recognised and dropped.
+	DispatchedAt time.Time
 }
 
 func (m *Model) CreateOpen() bool { return m.createOpen }
@@ -908,6 +911,7 @@ func (m *Model) refreshOneProjectWithPanes(project Project, background bool, pan
 	// command below runs on its own, and ranging over m.results from there would
 	// race every write the next cycle makes.
 	key := projectKey(project)
+	dispatchedAt := time.Now()
 	others := make([]workspaceinventory.ProjectResult, 0, len(m.results))
 	for existingKey, existing := range m.results {
 		if existingKey != key {
@@ -918,19 +922,19 @@ func (m *Model) refreshOneProjectWithPanes(project Project, background bool, pan
 		ctx := context.Background()
 		inventory := collector.CollectProjectInventory(ctx, project.Name, project.Path)
 		if inventory.Err != nil {
-			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: inventory.Err, Background: background}
+			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: inventory.Err, Background: background, DispatchedAt: dispatchedAt}
 		}
 		claimsInputs := append(others, inventory)
 		collector = collector.WithShellClaims(workspaceinventory.BuildShellClaims(claimsInputs))
 		if panes == nil {
 			collected, err := collector.ListPanes(ctx)
 			if err != nil {
-				return projectMutationRefreshMsg{Project: project, Result: inventory, Err: err, Background: background}
+				return projectMutationRefreshMsg{Project: project, Result: inventory, Err: err, Background: background, DispatchedAt: dispatchedAt}
 			}
 			panes = collected
 		}
 		result := collector.RefreshProjectStatus(ctx, inventory, roots, panes)
-		return projectMutationRefreshMsg{Project: project, Result: withProjectIdentity(result, project), Err: result.Err, Background: background}
+		return projectMutationRefreshMsg{Project: project, Result: withProjectIdentity(result, project), Err: result.Err, Background: background, DispatchedAt: dispatchedAt}
 	}
 }
 
@@ -949,8 +953,25 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 		m.createModal = nil
 		return nil
 	}
-	m.results[projectKey(msg.Project)] = msg.Result
-	delete(m.projectErrors, projectKey(msg.Project))
+	key := projectKey(msg.Project)
+	// A background result replaces the whole project, so one that has been
+	// overtaken does not merely show stale data — it removes workspaces a newer
+	// read had already found. That does not heal: the live-only poll re-observes
+	// the membership it is given and never re-reads durable state, and the
+	// manifest digest already matches, so the watcher will not fire again. The
+	// project would stay wrong until its next sweep rotation, which is minutes
+	// on a large set. Dropping the superseded result is the whole fix.
+	//
+	// Dated rather than generation-fenced on purpose: m.generation advances on
+	// every poll, so fencing on it would discard the watcher refreshes this
+	// feature exists to deliver.
+	if msg.Background && msg.DispatchedAt.Before(m.inventoryStamp[key]) {
+		m.tracef("background refresh project=%s superseded — dropping", key)
+		return nil
+	}
+	m.results[key] = msg.Result
+	m.markInventoryFresh(key)
+	delete(m.projectErrors, key)
 	m.syncBoard()
 	return m.previewSync()
 }

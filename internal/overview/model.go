@@ -238,6 +238,14 @@ type Model struct {
 	shellManifestDigests   map[string]string
 	shellManifestResolving bool
 	sweepCursor            int
+	// lastFullInventory is when durable state was last re-read for every
+	// project, as opposed to the tmux-only evidence the poll refreshes.
+	lastFullInventory time.Time
+	// inventoryStamp dates each project's newest durable read, so a background
+	// refresh built from an older one can be recognised as superseded. Only
+	// reads that actually touched disk stamp it: a live-only poll re-observes
+	// the membership it was given and learns nothing new about it.
+	inventoryStamp map[string]time.Time
 
 	// A coalesced terminal wheel event that was held changed no visible state.
 	// Reuse the preceding Workspaces frame once rather than rebuilding it.
@@ -382,17 +390,29 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 // and the other reuses its results, its trackers, and its poll. A second
 // collector here would double every project's tmux and Git fan-out for a view
 // that already has the data.
-// Opening the tab is also the gesture a user makes when they suspect the board
-// is stale, so entry re-reads durable state rather than resuming a poll that
-// only refreshes tmux evidence. Only an in-flight cycle suppresses it, which is
-// what keeps the two global tabs from starting two cycles when both call this
-// during one entry: start marks the model loading synchronously, so the second
-// call sees it.
+// Ensure starts collection when the shared catalog has nothing live behind it,
+// and otherwise refreshes only when what it holds could actually be stale.
+//
+// Opening the tab is the gesture a user makes when they suspect the board is
+// out of date, and the poll it would otherwise resume re-reads tmux evidence
+// and no durable state at all — so a cold start, a changed project set, or a
+// catalog whose last full inventory has aged out all re-read from disk.
+//
+// What must not trigger one is moving between the two global tabs. They are two
+// projections of one catalog and deliberately do not stop collection when
+// switching, so refreshing on every toggle would reintroduce exactly the
+// duplicated fan-out that sharing the collector exists to avoid.
 func (m *Model) Ensure(projects []Project) tea.Cmd {
 	if m.loading {
 		return nil
 	}
-	return m.start(projects, "refresh")
+	if m.cancel == nil || !sameConfiguredProjects(m.configuredPaths, projects) {
+		return m.start(projects, "refresh")
+	}
+	if m.lastFullInventory.IsZero() || time.Since(m.lastFullInventory) >= inventorySweepEvery {
+		return m.start(projects, "refresh")
+	}
+	return nil
 }
 
 func sameConfiguredProjects(paths []string, projects []Project) bool {
@@ -423,6 +443,15 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
 	m.loading, m.tmuxErr = true, nil
 	m.completed = make(map[int]bool)
+	if reason != "poll" {
+		// Manifest paths are resolved once and then reused, so a project that had
+		// no state directory when they were resolved would never be watched — and
+		// creating the very first shell in a project is what creates that
+		// directory, which is exactly the case this watcher exists to catch. A
+		// full cycle is infrequent and user-driven, so it is the right moment to
+		// pay for a rescan. Until then such a project degrades to the sweep.
+		m.invalidateShellManifestPaths()
+	}
 	// Keep last-good cards on screen during a poll/refresh cycle. Relative age
 	// already communicates freshness; a full-board "refreshing…" rewrite was
 	// too noisy on the 5s live poll.
@@ -922,6 +951,9 @@ func (m *Model) finishPhase() tea.Cmd {
 		}
 	}
 	m.loading = false
+	if !m.liveOnly {
+		m.lastFullInventory = time.Now()
+	}
 	m.refreshCollector.CommitTrackers()
 	m.persistActivity()
 	metrics := m.refreshCollector.Metrics()
@@ -962,6 +994,15 @@ func withProjectIdentity(result workspaceinventory.ProjectResult, project Projec
 	return result
 }
 
+// markInventoryFresh records that this project's durable state was just read
+// from disk. See Model.inventoryStamp.
+func (m *Model) markInventoryFresh(key string) {
+	if m.inventoryStamp == nil {
+		m.inventoryStamp = make(map[string]time.Time)
+	}
+	m.inventoryStamp[key] = time.Now()
+}
+
 func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
 	key := result.ProjectKey
 	if m.tmuxErr != nil {
@@ -971,6 +1012,10 @@ func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
 	if result.Err != nil {
 		m.applyFailure(key, result, result.Err)
 		return
+	}
+	if !m.liveOnly {
+		// A full cycle's status pass carries the inventory phase's fresh read.
+		m.markInventoryFresh(key)
 	}
 	m.results[key] = result
 	delete(m.projectErrors, key)

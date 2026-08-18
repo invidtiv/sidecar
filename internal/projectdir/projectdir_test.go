@@ -341,3 +341,79 @@ func checkMeta(t *testing.T, dir, expectedPath string) {
 		t.Errorf("meta.Path in %s = %q, want %q", dir, meta.Path, expectedPath)
 	}
 }
+
+// LookupAll exists so a caller needing the whole configured set pays one
+// directory scan instead of one per root. It must agree with the Lookup it
+// replaces on every case that matters — a difference here would silently point
+// a caller at the wrong project's state.
+func TestLookupAllWithBase_AgreesWithFindByMeta(t *testing.T) {
+	base := t.TempDir()
+	projectsDir := filepath.Join(base, "projects")
+	register := func(slug, root string) {
+		t.Helper()
+		dir := filepath.Join(projectsDir, slug)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(projectMeta{Path: root})
+		if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	alpha := "/Users/erin/code/alpha"
+	beta := "/Users/erin/code/beta"
+	register("alpha", alpha)
+	register("beta-7", beta)
+	// Noise the scan has to skip: a registration for a root nobody asked about,
+	// a directory with no meta.json, and a plain file.
+	register("gamma", "/Users/erin/code/gamma")
+	if err := os.MkdirAll(filepath.Join(projectsDir, "orphan"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectsDir, "stray.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	missing := "/Users/erin/code/never-opened"
+	found := LookupAllWithBase(base, []string{alpha, beta, missing})
+	if len(found) != 2 {
+		t.Fatalf("resolved %d roots, want 2: %#v", len(found), found)
+	}
+	if _, ok := found[missing]; ok {
+		t.Fatal("an unregistered root must be absent, not mapped to an empty path")
+	}
+	for _, root := range []string{alpha, beta} {
+		want, ok := findByMeta(projectsDir, root)
+		if !ok {
+			t.Fatalf("findByMeta could not resolve %s", root)
+		}
+		if found[root] != want {
+			t.Errorf("LookupAllWithBase(%s) = %q, findByMeta = %q", root, found[root], want)
+		}
+	}
+
+	// Two directories claiming one root: both must pick the same winner, or the
+	// batched form would watch a different manifest than the rest of the app
+	// reads. ReadDir is sorted, so first-registered-by-name wins in both.
+	register("alpha-duplicate", alpha)
+	if got, want := LookupAllWithBase(base, []string{alpha})[alpha], mustFind(t, projectsDir, alpha); got != want {
+		t.Errorf("duplicate meta: LookupAllWithBase = %q, findByMeta = %q", got, want)
+	}
+
+	if got := LookupAllWithBase(base, nil); got != nil {
+		t.Errorf("no roots = %#v, want nil", got)
+	}
+	if got := LookupAllWithBase(filepath.Join(base, "absent"), []string{alpha}); len(got) != 0 {
+		t.Errorf("missing projects dir = %#v, want empty", got)
+	}
+}
+
+func mustFind(t *testing.T, projectsDir, root string) string {
+	t.Helper()
+	dir, ok := findByMeta(projectsDir, root)
+	if !ok {
+		t.Fatalf("findByMeta could not resolve %s", root)
+	}
+	return dir
+}

@@ -45,10 +45,17 @@ import (
 // covers worktrees at a latency the creating gesture can absorb.
 
 const (
-	// inventorySweepEvery is how long a full pass over every configured
-	// project's durable state should take. It is a staleness target, not a
-	// timer: the sweep rides the existing poll, refreshing a slice of projects
-	// per tick sized so the rotation completes within roughly this long.
+	// inventorySweepEvery is the staleness the sweep aims for, not a guarantee
+	// and not a timer. The sweep rides the existing poll, refreshing a slice of
+	// projects per tick sized so the rotation would complete within roughly this
+	// long — but the slice is capped at maxProjects, so a large enough project
+	// set or a quiet enough cadence takes proportionally longer. Twenty projects
+	// at the ready cadence come around in about 50s; the same twenty on an
+	// all-paused board polling every 30s take about 150s.
+	//
+	// That ceiling is deliberate. This rides a path the live-only poll keeps
+	// cheap on purpose, and letting the batch grow with project count would
+	// reintroduce the fan-out that path exists to avoid.
 	inventorySweepEvery = 60 * time.Second
 
 	// maxWatchedManifests bounds the manifest watch set.
@@ -110,6 +117,13 @@ func (m *Model) handleShellWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		m.shellManifestResolving = false
 		m.shellManifestPaths = msg.Paths
+		if len(msg.Paths) < len(m.projects) {
+			// Not an error: a project Sidecar has never opened has no state
+			// directory to watch. Traced because the consequence — that project
+			// refreshes on the sweep rather than instantly — is otherwise
+			// invisible.
+			m.tracef("shell watch resolved %d of %d manifests; the rest refresh on the sweep", len(msg.Paths), len(m.projects))
+		}
 		// The first digest read establishes the baseline. Without it the first
 		// signal would report every project as changed and re-inventory the
 		// whole set at once — the burst this design exists to avoid.
@@ -180,7 +194,15 @@ func (m *Model) shellManifestTargets() []livewatch.Target {
 // changes from more than one place, and reconciling in one of them makes the
 // invariant hold by construction.
 func (m *Model) reconcileShellWatch() tea.Cmd {
-	if len(m.projects) == 0 {
+	// A stopped surface must stay stopped. This runs at the tail of every
+	// Update, including the ones a stopped model still receives — cancelling the
+	// context releases the parked poll immediately, and that pollMsg is routed
+	// here even though the cycle it belonged to is gone. Without this gate the
+	// watcher rebuilt itself on the way out of Stop and then held its
+	// descriptors, and ran Git for every manifest change, behind a tab nobody
+	// was looking at. m.projects is not cleared by Stop, so it cannot serve as
+	// the liveness signal; the collection context can.
+	if m.cancel == nil || len(m.projects) == 0 {
 		if m.shellWatcher != nil {
 			m.shellWatcher.Watch()
 		}
@@ -188,7 +210,12 @@ func (m *Model) reconcileShellWatch() tea.Cmd {
 	}
 
 	var cmds []tea.Cmd
-	if m.shellManifestPaths == nil && !m.shellManifestResolving {
+	// Resolution reads the project set once and reuses the answer, so it has to
+	// see the whole set. m.projects is built incrementally — the identity phase
+	// appends to it — so resolving mid-cycle answers for whichever projects had
+	// landed by then and never asks again, leaving the rest unwatched. Waiting
+	// for the cycle to finish costs one frame and makes the set complete.
+	if m.shellManifestPaths == nil && !m.shellManifestResolving && !m.loading {
 		m.shellManifestResolving = true
 		generation := m.shellWatchGeneration
 		roots := make([]string, 0, len(m.projects))
@@ -301,6 +328,20 @@ func (m *Model) applyShellDigests(digests map[string]string) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// invalidateShellManifestPaths forces the next reconcile to resolve manifest
+// paths again, picking up projects whose state directory has appeared since.
+//
+// The digest baseline is deliberately kept: it is keyed by project, so a
+// manifest that changed while the paths were stale is still reported as changed
+// rather than silently re-baselined.
+func (m *Model) invalidateShellManifestPaths() {
+	if m.shellManifestResolving {
+		// A resolve is already in flight and will land with fresh paths.
+		return
+	}
+	m.shellManifestPaths = nil
+}
+
 // stopShellWatch releases the manifest watcher and forgets what it observed, so
 // a surface that starts again re-establishes its baseline rather than comparing
 // against fingerprints from before it was away.
@@ -322,14 +363,20 @@ func (m *Model) stopShellWatch() {
 // ---------------------------------------------------------------------------
 
 // sweepCmd re-inventories a slice of the configured projects, rotating through
-// the set so every project's durable state is re-read within roughly
-// inventorySweepEvery.
+// the set so every project's durable state comes around in bounded time.
 //
 // It runs only after a live-only poll, because a full cycle has just re-read
 // everything the sweep would. Rotating rather than refreshing the whole set at
 // once is what keeps the per-tick cost flat as project count grows: 20 projects
 // cost the same few subprocess spawns per tick as 5 do, they just take more
 // ticks to come around.
+//
+// This is not free, and it is worth being precise about what it adds to a path
+// AGENTS.md calls out as spawn-sensitive. Each swept project costs one
+// `git worktree list` plus a status pass that can capture panes, and the batch
+// is a budget separate from the cycle's own fan-out — so peak project
+// concurrency during a sweeping tick is up to twice maxProjects. The tmux
+// inventory is the one spawn it avoids, by reusing the cycle's.
 func (m *Model) sweepCmd() tea.Cmd {
 	if !m.liveOnly || len(m.projects) == 0 {
 		return nil
@@ -350,8 +397,9 @@ func (m *Model) sweepCmd() tea.Cmd {
 }
 
 // sweepBatchSize spreads a full rotation across the poll ticks that fit in
-// inventorySweepEvery, bounded by the same concurrency ceiling the main cycle
-// fans out under.
+// inventorySweepEvery, bounded by maxProjects. The bound wins when the two
+// disagree: a project set too large to come around inside the window takes
+// longer rather than costing more per tick.
 func (m *Model) sweepBatchSize() int {
 	interval := m.pollInterval()
 	if interval <= 0 {
