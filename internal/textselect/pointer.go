@@ -1,4 +1,4 @@
-package tty
+package textselect
 
 import (
 	"github.com/charmbracelet/x/ansi"
@@ -6,44 +6,49 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-// DefaultTabWidth is the tab stop every terminal surface expands against.
+// DefaultTabWidth is the tab stop every selectable surface expands against.
 const DefaultTabWidth = 8
 
-// Cell is a position in a captured terminal buffer: a line index in whichever
-// coordinate space that buffer keeps, and a visual column after tab expansion.
+// Buffer is the lines a gesture reads, in whichever coordinate space their
+// owner keeps. A terminal's captured output numbers its lines absolutely so
+// they stay put as the pane produces more; a plain list of rendered rows is its
+// own coordinate space and says so by reporting no absolute range.
+//
+// Every method must tolerate a nil receiver: hosts hand their buffer over
+// whether or not they currently have one, and a typed nil arriving through this
+// interface is not the nil the callers below test for.
+type Buffer interface {
+	// LineCount is how many lines the buffer holds.
+	LineCount() int
+	// LinesRange returns the lines in [start, end) of the buffer's own indices.
+	LinesRange(start, end int) []string
+	// LinesAbsoluteRange returns the lines in [start, end) of absolute
+	// coordinates, and nothing for a buffer that keeps none.
+	LinesAbsoluteRange(start, end int) []string
+	// AbsoluteRange is the half-open absolute range the buffer covers. ok is
+	// false for a buffer whose indices are its own coordinate space.
+	AbsoluteRange() (start, end int, ok bool)
+}
+
+// Cell is a position in a buffer: a line index in whichever coordinate space
+// that buffer keeps, and a visual column after tab expansion.
 type Cell struct {
 	Line int
 	Col  int
 }
 
-// Geometry places a terminal surface's drawn content on the screen, which is
-// everything hit testing needs to know about it. Content is the absolute rect of
-// the content area, so the first text cell sits at its origin — a host with
-// chrome (a border, a header) subtracts that before building one. Start and End
-// are the buffer lines drawn in it, and ColOffset is the pane column drawn at
-// Content.X when a pane wider than the viewport is clipped.
+// Geometry places a surface's drawn content on the screen, which is everything
+// hit testing needs to know about it. Content is the absolute rect of the
+// content area, so the first text cell sits at its origin — a host with chrome
+// (a border, a header) subtracts that before building one. Start and End are the
+// buffer lines drawn in it, and ColOffset is the content column drawn at
+// Content.X when content wider than the viewport is clipped.
 type Geometry struct {
 	Content   mouse.Rect
 	Start     int
 	End       int
 	ColOffset int
 	TabWidth  int
-}
-
-// GeometryFor places a drawn window on screen. The origin is the host's — it
-// alone knows where its chrome ends — and everything else is the layout's, so a
-// surface cannot hit-test against a window different from the one it drew.
-func GeometryFor(x, y int, layout Viewport, tabWidth int) Geometry {
-	if tabWidth <= 0 {
-		tabWidth = DefaultTabWidth
-	}
-	return Geometry{
-		Content:   mouse.Rect{X: x, Y: y, W: layout.DisplayWidth, H: layout.DisplayHeight},
-		Start:     layout.Start,
-		End:       layout.End,
-		ColOffset: layout.Fit.ColOffset,
-		TabWidth:  tabWidth,
-	}
 }
 
 // Rows is the number of buffer lines the surface currently draws.
@@ -69,7 +74,7 @@ func OutputRowAt(g Geometry, y int) int {
 
 // AbsoluteLine lifts a window-relative line index into the buffer's absolute
 // coordinates when it keeps any.
-func AbsoluteLine(buf *OutputBuffer, lineIdx int) int {
+func AbsoluteLine(buf Buffer, lineIdx int) int {
 	if buf == nil {
 		return lineIdx
 	}
@@ -87,7 +92,7 @@ func AbsoluteLine(buf *OutputBuffer, lineIdx int) int {
 // about the base draws every highlight short by exactly it — off screen
 // entirely once a pane has any scrollback. A relative buffer's own indices are
 // already its coordinate space, so its base is zero.
-func BufferBase(buf *OutputBuffer) (base, total int) {
+func BufferBase(buf Buffer) (base, total int) {
 	if buf == nil {
 		return 0, 0
 	}
@@ -100,7 +105,7 @@ func BufferBase(buf *OutputBuffer) (base, total int) {
 
 // BufferAbsolute reports that a buffer numbers its lines in absolute pane
 // coordinates, which stay put as the pane produces more output.
-func BufferAbsolute(buf *OutputBuffer) bool {
+func BufferAbsolute(buf Buffer) bool {
 	if buf == nil {
 		return false
 	}
@@ -115,7 +120,7 @@ func BufferAbsolute(buf *OutputBuffer) bool {
 // moves, so scrolling away from it and back must leave it where the user made
 // it. A buffer without them renumbers its lines as it grows, so the same anchor
 // would come to cover rows the user never picked.
-func ScrollKeepsSelection(buf *OutputBuffer) bool {
+func ScrollKeepsSelection(buf Buffer) bool {
 	return BufferAbsolute(buf)
 }
 
@@ -124,7 +129,7 @@ func ScrollKeepsSelection(buf *OutputBuffer) bool {
 // multi-width chars). It reports false only for positions left of the content;
 // a line that cannot be read still yields column zero, because a pointer there
 // is over the surface.
-func ColAt(g Geometry, buf *OutputBuffer, x, lineIdx int) (int, bool) {
+func ColAt(g Geometry, buf Buffer, x, lineIdx int) (int, bool) {
 	relX := x - g.Content.X
 	if relX < 0 {
 		return 0, false
@@ -142,7 +147,7 @@ func ColAt(g Geometry, buf *OutputBuffer, x, lineIdx int) (int, bool) {
 
 // LineIndexAt maps a screen row to the absolute buffer line drawn there, or
 // false when the row is outside the output area.
-func LineIndexAt(g Geometry, buf *OutputBuffer, y int) (int, bool) {
+func LineIndexAt(g Geometry, buf Buffer, y int) (int, bool) {
 	if !g.Valid() {
 		return 0, false
 	}
@@ -159,7 +164,7 @@ func LineIndexAt(g Geometry, buf *OutputBuffer, y int) (int, bool) {
 
 // CellAt maps screen coordinates to a buffer cell, refusing positions outside
 // the output area: a click on the header or on padding is not a click on text.
-func CellAt(g Geometry, buf *OutputBuffer, x, y int) (Cell, bool) {
+func CellAt(g Geometry, buf Buffer, x, y int) (Cell, bool) {
 	lineIdx, ok := LineIndexAt(g, buf, y)
 	if !ok {
 		return Cell{}, false
@@ -175,7 +180,7 @@ func CellAt(g Geometry, buf *OutputBuffer, x, y int) (Cell, bool) {
 // refusing positions outside the output area. A held pointer routinely leaves
 // the pane mid-gesture — below the last row, left of the content, out over the
 // sidebar — and a selection that stops tracking there reads as broken.
-func ClampedCellAt(g Geometry, buf *OutputBuffer, x, y int) (Cell, bool) {
+func ClampedCellAt(g Geometry, buf Buffer, x, y int) (Cell, bool) {
 	if !g.Valid() {
 		return Cell{}, false
 	}
@@ -206,7 +211,7 @@ func EdgeScrollRows(outputRow, rows, limit int) int {
 
 // LineTextAt reads one line of a buffer, in whichever coordinate space that
 // buffer keeps.
-func LineTextAt(buf *OutputBuffer, lineIdx int) (string, bool) {
+func LineTextAt(buf Buffer, lineIdx int) (string, bool) {
 	if buf == nil {
 		return "", false
 	}
@@ -302,7 +307,7 @@ func UnitSpanAt(unit SelectionUnit, line string, lineIdx, col, tabWidth int) (ui
 
 // SelectAllSpan returns the span covering every line a buffer holds, in
 // whichever coordinate space it keeps.
-func SelectAllSpan(buf *OutputBuffer, tabWidth int) (ui.SelectionPoint, ui.SelectionPoint, bool) {
+func SelectAllSpan(buf Buffer, tabWidth int) (ui.SelectionPoint, ui.SelectionPoint, bool) {
 	if buf == nil || buf.LineCount() == 0 {
 		return ui.SelectionPoint{}, ui.SelectionPoint{}, false
 	}
@@ -324,7 +329,7 @@ func SelectAllSpan(buf *OutputBuffer, tabWidth int) (ui.SelectionPoint, ui.Selec
 
 // SelectedLines is the text a selection covers, clipped to the lines the buffer
 // still holds.
-func SelectedLines(buf *OutputBuffer, sel *ui.SelectionState, tabWidth int) []string {
+func SelectedLines(buf Buffer, sel *ui.SelectionState, tabWidth int) []string {
 	if sel == nil || !sel.HasSelection() || buf == nil || buf.LineCount() == 0 {
 		return nil
 	}

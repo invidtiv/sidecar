@@ -1,4 +1,4 @@
-package tty
+package textselect
 
 import (
 	"time"
@@ -168,7 +168,7 @@ func (pt *Pointer) NoteDragMotion(x, y int) {
 
 // Press arms a gesture at the pointer. Selection only activates on actual drag
 // motion, so a press over text prepares a drag rather than starting a selection.
-func (pt *Pointer) Press(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, ev PressEvent) {
+func (pt *Pointer) Press(g Geometry, buf Buffer, sel *ui.SelectionState, ev PressEvent) {
 	canExtend := ev.Shift && sel.HasSelection() && ev.SameSource
 	pt.Arm(ev.Want, ev.X, ev.Y)
 	pt.Begin()
@@ -209,7 +209,7 @@ func (pt *Pointer) Press(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, 
 // is unambiguously a selection by the time it is moving, so anchor it at the
 // nearest cell to where the button actually went down rather than letting the
 // whole drag do nothing.
-func (pt *Pointer) AnchorFrom(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, originX, originY int, rectangular bool) bool {
+func (pt *Pointer) AnchorFrom(g Geometry, buf Buffer, sel *ui.SelectionState, originX, originY int, rectangular bool) bool {
 	cell, ok := ClampedCellAt(g, buf, originX, originY)
 	if !ok {
 		return false
@@ -220,7 +220,7 @@ func (pt *Pointer) AnchorFrom(g Geometry, buf *OutputBuffer, sel *ui.SelectionSt
 
 // DragTo moves the live selection to the cell nearest the pointer, snapped to
 // the gesture's unit.
-func (pt *Pointer) DragTo(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, x, y int) bool {
+func (pt *Pointer) DragTo(g Geometry, buf Buffer, sel *ui.SelectionState, x, y int) bool {
 	cell, ok := ClampedCellAt(g, buf, x, y)
 	if !ok {
 		return false
@@ -233,7 +233,7 @@ func (pt *Pointer) DragTo(g Geometry, buf *OutputBuffer, sel *ui.SelectionState,
 
 // ExtendTo grows an existing selection to a cell, snapped to the gesture's unit
 // when one is in flight.
-func (pt *Pointer) ExtendTo(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, cell Cell) {
+func (pt *Pointer) ExtendTo(g Geometry, buf Buffer, sel *ui.SelectionState, cell Cell) {
 	if pt.ExtendToUnit(g, buf, sel, cell) {
 		return
 	}
@@ -244,7 +244,7 @@ func (pt *Pointer) ExtendTo(g Geometry, buf *OutputBuffer, sel *ui.SelectionStat
 // anchor unit stays whole in either direction: dragging backwards pins the far
 // edge of the anchor, which is what makes word-drag feel like a terminal rather
 // than a character drag that happens to start on a word.
-func (pt *Pointer) ExtendToUnit(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, cell Cell) bool {
+func (pt *Pointer) ExtendToUnit(g Geometry, buf Buffer, sel *ui.SelectionState, cell Cell) bool {
 	if pt.unit == SelectUnitChar || !pt.unitStart.Valid() || !pt.unitEnd.Valid() {
 		return false
 	}
@@ -271,7 +271,7 @@ func (pt *Pointer) ExtendToUnit(g Geometry, buf *OutputBuffer, sel *ui.Selection
 // gesture asked for the terminal, or for the app's click; a double or triple
 // click withdraws that, or the release would fire it under the selection the
 // user just made.
-func (pt *Pointer) SelectUnitAt(g Geometry, buf *OutputBuffer, sel *ui.SelectionState, x, y int, unit SelectionUnit) bool {
+func (pt *Pointer) SelectUnitAt(g Geometry, buf Buffer, sel *ui.SelectionState, x, y int, unit SelectionUnit) bool {
 	cell, ok := CellAt(g, buf, x, y)
 	if !ok {
 		return false
@@ -363,7 +363,7 @@ func (pt *Pointer) ConsumeAutoScrollTick() bool {
 // the step has to be read again.
 type AutoScrollTarget struct {
 	Geometry  func() Geometry
-	Buffer    func() *OutputBuffer
+	Buffer    func() Buffer
 	Selection *ui.SelectionState
 
 	// Scroll moves the window by delta rendered rows, positive downwards, and

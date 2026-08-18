@@ -381,7 +381,15 @@ func (b *OutputBuffer) Lines() []string {
 
 // LinesRange returns a copy of lines in the specified range [start, end).
 // This is more efficient than Lines() when only a portion is needed.
+//
+// It answers for a nil buffer, as do the other three methods of
+// [textselect.Buffer]: a host with no terminal open hands its buffer to the
+// selection engine anyway, and a nil *OutputBuffer inside that interface is not
+// a nil interface for the engine to test.
 func (b *OutputBuffer) LinesRange(start, end int) []string {
+	if b == nil {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if start < 0 {
@@ -400,6 +408,9 @@ func (b *OutputBuffer) LinesRange(start, end int) []string {
 
 // LinesAbsoluteRange returns a copy of absolute lines in [start, end).
 func (b *OutputBuffer) LinesAbsoluteRange(start, end int) []string {
+	if b == nil {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.absolute {
@@ -424,6 +435,9 @@ func (b *OutputBuffer) LinesAbsoluteRange(start, end int) []string {
 // AbsoluteRange reports the half-open absolute line range represented by the
 // buffer. ok is false until the buffer has received an absolute snapshot.
 func (b *OutputBuffer) AbsoluteRange() (start, end int, ok bool) {
+	if b == nil {
+		return 0, 0, false
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !b.absolute {
@@ -447,6 +461,9 @@ func (b *OutputBuffer) PaneWindow() (lineCount, paneTop int, ok bool) {
 
 // LineCount returns the number of lines without copying.
 func (b *OutputBuffer) LineCount() int {
+	if b == nil {
+		return 0
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.lines)

@@ -1,17 +1,32 @@
-package tty
+package textselect
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-func testBuffer(lines ...string) *OutputBuffer {
-	buf := NewOutputBuffer(max(len(lines), 1))
-	buf.ApplySnapshot(PaneSnapshot{Output: strings.Join(lines, "\n"), PaneRows: len(lines)})
-	return buf
+// sliceBuffer is a Buffer over a plain list of rows, in its own coordinate
+// space — the shape every non-terminal surface has.
+type sliceBuffer struct{ lines []string }
+
+func (b *sliceBuffer) LineCount() int { return len(b.lines) }
+
+func (b *sliceBuffer) LinesRange(start, end int) []string {
+	start, end = max(start, 0), min(end, len(b.lines))
+	if start >= end {
+		return nil
+	}
+	return append([]string(nil), b.lines[start:end]...)
+}
+
+func (b *sliceBuffer) LinesAbsoluteRange(int, int) []string { return nil }
+
+func (b *sliceBuffer) AbsoluteRange() (int, int, bool) { return 0, 0, false }
+
+func testBuffer(lines ...string) Buffer {
+	return &sliceBuffer{lines: lines}
 }
 
 // testGeometry places a surface whose content starts at (2, 1), the way a host

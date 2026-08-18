@@ -105,7 +105,7 @@ func (p *Plugin) advanceSelectionAutoScroll(msg selectionAutoScrollTickMsg) tea.
 func (p *Plugin) selectionAutoScrollTarget() tty.AutoScrollTarget {
 	return tty.AutoScrollTarget{
 		Geometry:  p.terminalSelectionGeometry,
-		Buffer:    p.interactiveOutputBuffer,
+		Buffer:    func() tty.Buffer { return p.interactiveOutputBuffer() },
 		Selection: &p.selection,
 		Scroll: func(delta int) bool {
 			before := p.terminalSelectionViewportLayout().Start

@@ -526,7 +526,7 @@ func (m *Model) advancePreviewAutoScroll(msg previewAutoScrollTickMsg) tea.Cmd {
 func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 	return tty.AutoScrollTarget{
 		Geometry:  func() tty.Geometry { geometry, _ := m.previewGeometry(); return geometry },
-		Buffer:    m.previewBuffer,
+		Buffer:    func() tty.Buffer { return m.previewBuffer() },
 		Selection: &m.preview.selection,
 		Scroll: func(delta int) bool {
 			before := m.previewScrollAnchor()
