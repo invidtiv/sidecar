@@ -2,9 +2,58 @@
 
 All notable changes to sidecar are documented here.
 
-## [Unreleased]
+## [v1.0.3] - 2026-08-18
 
-### Notes
+Mostly internal groundwork — the embedded td monitor, the global Workspaces
+browser, and the Notes editor — plus the fixes that fell out of it.
+
+### Features
+
+- **The embedded td monitor wears Sidecar's theme** (td-8d698b). The td tab used
+  to render in td's own colors regardless of the active Sidecar theme. It now
+  takes the host theme across every surface — lists, kanban and swimlanes,
+  modals, forms, markdown, and the select filters — and follows a theme change
+  live, without losing selection, scroll position, or filter text. Requires td
+  v0.59.0.
+
+### Bug Fixes
+
+- **Shells another Sidecar created now appear on their own.** The global
+  Workspaces poll is deliberately live-only: it refreshes tmux evidence for
+  workspaces it already knows about and reads no durable state. A second Sidecar
+  on the same host — a session over SSH or mosh — writes into the same state
+  tree, so its shells simply did not show up until something forced a full
+  cycle. Same host means same filesystem, so each configured project's
+  `shells.json` is now watched rather than polled, and a signal re-fingerprints
+  the manifests by content so only projects that actually changed are re-read.
+- **Clicking a diff pane in global Workspaces no longer hands the keyboard
+  back.** The click-away rule enumerated which leaf kinds count as a click
+  *inside* the preview, and that list named only the doc and issue leaves. A
+  press on a diff or resource leaf moved the focus ring onto it and was then
+  treated as a click away: the diff drew idle, the list drew focused, and `j`/`k`
+  moved rows. Tab-cycling never went through that path, so only the mouse was
+  affected. The rule now asks the drawn pane tree — a press inside any
+  non-terminal leaf belongs to that leaf — which cannot fall behind a leaf kind
+  added later, the way this regressed twice before.
+- **Shells are no longer mislabeled as Cursor.** Identification followed
+  activity phrases rather than identity, and Codex's npm launcher is `node`, so
+  prompts like "ctrl+c to stop" stole those panes. `defaultAgentType=cursor`
+  compounded it: a plain zsh or a Grok session still read as Cursor. Live chips
+  and Overview now show what the process actually is; the launch preference
+  stays the restart default.
+- **Terminal resource providers work on a fresh install.** A provider child was
+  spawned with the Sidecar config directory as its cwd — a directory that is
+  read but never created, so before config had been saved once it did not exist.
+  A process whose cwd is missing does not fail diagnosably; it fails to spawn at
+  all, so every terminal resource provider was silently dead. It now falls back
+  to the system temp directory, which is equally neutral and always present.
+- **A wrapped click in Notes' view mode lands on the word clicked.** Glamour's
+  wrap breakpoints are not the textarea's, so adding the visual column to the
+  wrap-segment start could put the caret on a different token. Paragraphs and
+  headings now snap to the clicked word; fences stay at the top of the block and
+  raw view is unchanged (td-28409a).
+
+### Notes plugin
 
 - **The built-in editor now has real selection and undo.** Shift-arrows (and
   `alt+s` when the terminal swallows shift) extend a source-coordinate
