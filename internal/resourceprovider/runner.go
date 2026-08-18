@@ -26,9 +26,9 @@ type RunSpec struct {
 	// drained past the bound so the child cannot block on a full pipe; the
 	// excess is counted and discarded.
 	//
-	// There is no stderr equivalent: stderr is never retained at all, and
-	// stopping its drain at a byte bound would deadlock a chatty provider
-	// against a full pipe. See resource.MaxStderrBytes.
+	// There is no stderr equivalent, and that is the contract, not an
+	// omission: stderr is never retained at all, and stopping its drain at a
+	// byte bound would deadlock a chatty provider against a full pipe.
 	MaxStdout int
 }
 

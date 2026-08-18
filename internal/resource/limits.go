@@ -15,10 +15,6 @@ const (
 	MaxResponseBytes = 256 * 1024
 	// MaxBodyBytes caps the sanitized body text.
 	MaxBodyBytes = 64 * 1024
-	// MaxStderrBytes is how much stderr is drained before the rest is
-	// discarded. The content is never retained — only the byte count.
-	MaxStderrBytes = 8 * 1024
-
 	// MaxFields caps the ordered label/value grid.
 	MaxFields = 24
 	// MaxFieldLabelChars and MaxFieldValueChars bound one grid cell.
