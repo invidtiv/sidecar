@@ -4,23 +4,28 @@ import (
 	"github.com/marcus/td/pkg/monitor"
 )
 
-// CreateTDPanelRenderer creates a PanelRenderer that uses sidecar's gradient borders.
+// CreateTDPanelRenderer creates a PanelRenderer that uses sidecar's gradient borders
+// and fills background cells with the theme canvas color.
 // Maps td monitor PanelState values to appropriate gradients from the current theme.
 func CreateTDPanelRenderer() monitor.PanelRenderer {
 	return func(content string, width, height int, state monitor.PanelState) string {
+		theme := GetCurrentTheme()
 		gradient := getTDPanelGradient(state)
-		return RenderGradientBorder(content, width, height, gradient, 1)
+		return RenderGradientBorderWithBg(content, width, height, gradient, 1, theme.Colors.BgPrimary)
 	}
 }
 
-// CreateTDModalRenderer creates a ModalRenderer that uses sidecar's gradient borders.
+// CreateTDModalRenderer creates a ModalRenderer that uses sidecar's gradient borders
+// and fills the entire modal surface (including padding and trailing lines) with the theme surface color.
 // Maps td monitor ModalType and depth values to appropriate gradients from the current theme.
 func CreateTDModalRenderer() monitor.ModalRenderer {
 	return func(content string, width, height int, modalType monitor.ModalType, depth int) string {
+		theme := GetCurrentTheme()
 		gradient := getTDModalGradient(modalType, depth)
-		return RenderGradientBorder(content, width, height, gradient, 1)
+		return RenderGradientBorderWithBg(content, width, height, gradient, 1, theme.Colors.BgSecondary)
 	}
 }
+
 
 // deriveSemanticGradientStops creates a 2-stop gradient from a base semantic color,
 // blending with the contrast pole of the theme's background so the gradient works

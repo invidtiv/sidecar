@@ -1,6 +1,9 @@
 package styles
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTruncateString(t *testing.T) {
 	tests := []struct {
@@ -186,3 +189,29 @@ func TestRuneWidth(t *testing.T) {
 		})
 	}
 }
+
+func TestRenderGradientBorderWithBgFillsEmptyLines(t *testing.T) {
+	grad := NewGradient([]string{"#ff0000", "#00ff00"}, 30)
+	bg := "#202020"
+	content := "Short line 1\nShort line 2"
+
+	// Request a box of 40x10 (innerHeight = 8, content has only 2 lines, so 6 trailing lines)
+	out := RenderGradientBorderWithBg(content, 40, 10, grad, 1, bg)
+
+	bgANSI := HexToRGB(bg).ToANSIBg()
+	if !strings.Contains(out, bgANSI) {
+		t.Errorf("expected output to contain bg ANSI code %q, got %q", bgANSI, out)
+	}
+
+	lines := strings.Split(out, "\n")
+	if len(lines) != 10 {
+		t.Fatalf("expected 10 lines, got %d", len(lines))
+	}
+
+	// Check that a trailing empty line (e.g. line 6) contains the bgANSI sequence
+	trailingLine := lines[6]
+	if !strings.Contains(trailingLine, bgANSI) {
+		t.Errorf("expected trailing line %q to contain background ANSI code %q", trailingLine, bgANSI)
+	}
+}
+

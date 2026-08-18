@@ -25,9 +25,12 @@ type Gradient struct {
 // DefaultGradientAngle is the default angle for gradient borders (30 degrees).
 const DefaultGradientAngle = 30.0
 
-// HexToRGB converts a hex color string (#RRGGBB) to RGB.
+// HexToRGB converts a hex color string (#RRGGBB or #RRGGBBAA) to RGB.
 func HexToRGB(hex string) RGB {
 	hex = strings.TrimPrefix(hex, "#")
+	if len(hex) == 8 {
+		hex = hex[:6]
+	}
 	if len(hex) != 6 {
 		return RGB{128, 128, 128} // fallback gray
 	}
@@ -46,6 +49,7 @@ func HexToRGB(hex string) RGB {
 	}
 	return RGB{float64(r), float64(g), float64(b)}
 }
+
 
 // hexToByte converts a 2-character hex string to a byte.
 func hexToByte(s string) uint8 {
@@ -103,6 +107,15 @@ func (c RGB) ToANSI() string {
 	// Build ANSI escape sequence without fmt.Sprintf
 	return "\x1b[38;2;" + itoa(int(r)) + ";" + itoa(int(g)) + ";" + itoa(int(b)) + "m"
 }
+
+// ToANSIBg returns raw ANSI escape code for background color.
+func (c RGB) ToANSIBg() string {
+	r := clampByte(c.R)
+	g := clampByte(c.G)
+	b := clampByte(c.B)
+	return "\x1b[48;2;" + itoa(int(r)) + ";" + itoa(int(g)) + ";" + itoa(int(b)) + "m"
+}
+
 
 // ANSIReset is the ANSI escape code to reset formatting.
 const ANSIReset = "\x1b[0m"
