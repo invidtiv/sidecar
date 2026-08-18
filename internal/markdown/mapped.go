@@ -6,7 +6,8 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/cellbuf"
+	rw "github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -152,21 +153,81 @@ func wrapSegments(line string, width int) []wrapSeg {
 		return []wrapSeg{{text: line, col: 0}}
 	}
 	plain := line
-	if ansi.StringWidth(plain) <= width {
+	if ansi.StringWidth(plain) < width {
 		return []wrapSeg{{text: plain, col: 0}}
 	}
-	wrapped := cellbuf.Wrap(plain, width, "")
-	parts := strings.Split(wrapped, "\n")
+	parts := textareaWrap([]rune(plain), width)
+	// Bubbles adds one synthetic trailing space so cursor navigation has an
+	// edge after the final rune. It participates in row calculation but is not
+	// source content and must not advance our source-column anchors.
+	last := len(parts) - 1
+	if last >= 0 && len(parts[last]) > 0 {
+		parts[last] = parts[last][:len(parts[last])-1]
+	}
 	out := make([]wrapSeg, 0, len(parts))
 	col := 0
 	for _, part := range parts {
-		out = append(out, wrapSeg{text: part, col: col})
-		col += len([]rune(part))
+		out = append(out, wrapSeg{text: string(part), col: col})
+		col += len(part)
 	}
 	if len(out) == 0 {
 		return []wrapSeg{{text: "", col: 0}}
 	}
 	return out
+}
+
+// textareaWrap mirrors charm.land/bubbles/v2/textarea's soft-wrap policy.
+// Notes raw view and its source anchors must use the editor's exact visual-row
+// boundaries; a generic terminal wrapper differs at word boundaries. The
+// parity regression in the Notes package protects this dependency when
+// Bubbles is upgraded.
+func textareaWrap(runes []rune, width int) [][]rune {
+	lines := [][]rune{{}}
+	word := []rune{}
+	row := 0
+	spaces := 0
+
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+			}
+			lines[row] = append(lines[row], word...)
+			lines[row] = append(lines[row], []rune(strings.Repeat(" ", spaces))...)
+			spaces = 0
+			word = nil
+		} else {
+			lastCharWidth := rw.RuneWidth(word[len(word)-1])
+			if uniseg.StringWidth(string(word))+lastCharWidth > width {
+				if len(lines[row]) > 0 {
+					row++
+					lines = append(lines, []rune{})
+				}
+				lines[row] = append(lines[row], word...)
+				word = nil
+			}
+		}
+	}
+
+	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+		lines = append(lines, []rune{})
+		lines[row+1] = append(lines[row+1], word...)
+		spaces++
+		lines[row+1] = append(lines[row+1], []rune(strings.Repeat(" ", spaces))...)
+	} else {
+		lines[row] = append(lines[row], word...)
+		spaces++
+		lines[row] = append(lines[row], []rune(strings.Repeat(" ", spaces))...)
+	}
+
+	return lines
 }
 
 type srcBlock struct {
@@ -271,8 +332,8 @@ func assignBlockRows(anchors []Anchor, rendered []string, start, end int, b srcB
 	}
 	var segs []segRef
 	for line := b.startLine; line <= b.endLine && line < len(srcLines); line++ {
-		for _, seg := range wordWrapStarts(srcLines[line], width) {
-			segs = append(segs, segRef{line: line, col: seg})
+		for _, seg := range wrapSegments(srcLines[line], width) {
+			segs = append(segs, segRef{line: line, col: seg.col})
 		}
 	}
 	if len(segs) == 0 {
@@ -448,60 +509,4 @@ func countNonEmpty(lines []string) int {
 		}
 	}
 	return n
-}
-
-// wordWrapStarts returns the starting rune offset of each word-wrapped visual
-// row of s. This matches glamour's wrap policy more closely than hard cell
-// wrapping: words stay whole until they themselves exceed width.
-func wordWrapStarts(s string, width int) []int {
-	if width < 1 {
-		return []int{0}
-	}
-	if ansi.StringWidth(s) <= width {
-		return []int{0}
-	}
-	type word struct {
-		start int
-		width int
-		space int
-	}
-	var words []word
-	runes := []rune(s)
-	i := 0
-	for i < len(runes) {
-		for i < len(runes) && unicode.IsSpace(runes[i]) {
-			i++
-		}
-		if i >= len(runes) {
-			break
-		}
-		start := i
-		w := 0
-		for i < len(runes) && !unicode.IsSpace(runes[i]) {
-			w += ansi.StringWidth(string(runes[i]))
-			i++
-		}
-		space := 0
-		for i < len(runes) && unicode.IsSpace(runes[i]) {
-			space += ansi.StringWidth(string(runes[i]))
-			i++
-		}
-		words = append(words, word{start: start, width: w, space: space})
-	}
-	if len(words) == 0 {
-		return []int{0}
-	}
-	starts := []int{words[0].start}
-	lineW := words[0].width
-	for _, w := range words[1:] {
-		// The space before this word belongs on the current line if the word fits.
-		need := 1 + w.width
-		if lineW+need <= width {
-			lineW += need
-			continue
-		}
-		starts = append(starts, w.start)
-		lineW = w.width
-	}
-	return starts
 }

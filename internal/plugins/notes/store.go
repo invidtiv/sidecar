@@ -30,17 +30,13 @@ type Store struct {
 	td *tdnotes.Store
 }
 
-// NewStore returns a CLI-backed store rooted at the project directory.
-// baseDir is the project root (not the issues.db path). sessionID, when
-// non-empty, is exported as TD_SESSION_ID for attribution.
+// NewStore returns a lazy CLI-backed store rooted at the project directory.
+// It deliberately does no PATH or database I/O: plugin Init runs before the
+// first frame, while the first List call runs in a tea.Cmd and reports any
+// missing td binary/database asynchronously. baseDir is the project root (not
+// the issues.db path). sessionID, when non-empty, is exported as TD_SESSION_ID
+// for attribution.
 func NewStore(baseDir, sessionID string) (*Store, error) {
-	if _, err := exec.LookPath("td"); err != nil {
-		return nil, fmt.Errorf("td binary not found in PATH: %w", err)
-	}
-	dbPath := tdroot.ResolveDBPath(baseDir)
-	if _, err := os.Stat(dbPath); err != nil {
-		return nil, fmt.Errorf("td database not found at %s: %w", dbPath, err)
-	}
 	return &Store{baseDir: baseDir, sessionID: sessionID}, nil
 }
 

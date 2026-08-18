@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -402,9 +403,7 @@ func (p *Plugin) renderEditorPlaceholder(height int) string {
 }
 
 // previewMaxScroll returns the largest previewScrollOff that still fills the
-// viewport. In view mode that is a visual-row offset of the mapped surface;
-// in edit mode it stays a source-line offset so the textarea scrollbar is
-// honest against LineCount.
+// viewport. Both modes use soft-wrapped visual-row offsets.
 func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 	if viewHeight < 1 {
 		return 0
@@ -417,22 +416,11 @@ func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 		}
 		return n - viewHeight
 	}
-	lines := p.previewLines
-	if len(lines) == 0 {
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), viewWidth)
+	if len(raw.Lines) <= viewHeight {
 		return 0
 	}
-	wrapWidth := viewWidth
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
-	rows := 0
-	for i := len(lines) - 1; i >= 0; i-- {
-		rows += len(p.wrapEditorLine(lines[i], wrapWidth))
-		if rows >= viewHeight {
-			return i
-		}
-	}
-	return 0
+	return len(raw.Lines) - viewHeight
 }
 
 // clampPreviewScroll keeps the view offset in range without moving it to
