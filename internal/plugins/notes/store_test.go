@@ -3,7 +3,9 @@ package notes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	tdnotes "github.com/marcus/td/pkg/notes"
 )
@@ -183,4 +185,57 @@ func TestNewStoreDefersValidationUntilFirstCommand(t *testing.T) {
 		t.Fatal("first command on an uninitialized project should report the td error")
 	}
 	_ = store.Close()
+}
+
+func TestProductionSaveContentUsesOneEditCommand(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls.log")
+	tdPath := filepath.Join(dir, "td")
+	script := `#!/bin/sh
+printf '%s\n' "$*" >> "$TD_TEST_LOG"
+printf '%s\n' '{"note":{"id":"nt-one","title":"kept","content":"new body","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:01Z","pinned":false,"archived":false}}'
+`
+	if err := os.WriteFile(tdPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TD_TEST_LOG", logPath)
+	store, err := NewStore(dir, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	note, err := store.SaveContent("nt-one", "new body")
+	if err != nil || note == nil || note.Content != "new body" {
+		t.Fatalf("SaveContent = %+v, %v", note, err)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.FieldsFunc(strings.TrimSpace(string(data)), func(r rune) bool { return r == '\n' })
+	if len(lines) != 1 || !strings.Contains(lines[0], "note edit nt-one") || strings.Contains(lines[0], "show") {
+		t.Fatalf("td calls = %q, want one edit and no show", string(data))
+	}
+}
+
+func TestProductionTDCommandTimesOut(t *testing.T) {
+	dir := t.TempDir()
+	tdPath := filepath.Join(dir, "td")
+	if err := os.WriteFile(tdPath, []byte("#!/bin/sh\nexec sleep 5\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	store, err := NewStore(dir, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.timeout = 40 * time.Millisecond
+	started := time.Now()
+	_, err = store.List(false)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("List error = %v, want visible timeout", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("timeout took %s", elapsed)
+	}
 }

@@ -1,12 +1,15 @@
 package notes
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"unicode"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
+	rw "github.com/mattn/go-runewidth"
 )
 
 func wrappingParagraph() string {
@@ -292,6 +295,271 @@ func TestLeaveEditReturnsToRenderedView(t *testing.T) {
 	}
 	if !p.markdownView {
 		t.Fatal("leave edit dropped out of glamour view")
+	}
+}
+
+func uniqueWrappedWords() string {
+	words := make([]string, 0, 80)
+	for i := 0; i < 80; i++ {
+		words = append(words, fmt.Sprintf("tok%02d", i))
+	}
+	return strings.Join(words, " ")
+}
+
+func clickWordInView(t *testing.T, p *Plugin, word string) (clickX, clickY, viewRow int) {
+	t.Helper()
+	p.ensureViewSurface()
+	originX := p.listWidth + dividerWidth + 2 + p.editorLayout().leftMargin
+	for i, line := range p.viewSurface.Lines {
+		plain := []rune(ansi.Strip(line))
+		idx := indexToken(plain, word)
+		if idx < 0 {
+			continue
+		}
+		col := 0
+		for _, r := range plain[:idx] {
+			w := rw.RuneWidth(r)
+			if w < 1 {
+				w = 1
+			}
+			col += w
+		}
+		viewRow = i - p.previewScrollOff
+		if viewRow < 0 {
+			p.previewScrollOff = i
+			viewRow = 0
+		}
+		return originX + col, p.editorContentStartY() + viewRow, viewRow
+	}
+	t.Fatalf("word %q not found in view surface", word)
+	return 0, 0, 0
+}
+
+func indexToken(plain []rune, word string) int {
+	wr := []rune(word)
+	for i := 0; i+len(wr) <= len(plain); i++ {
+		if string(plain[i:i+len(wr)]) != word {
+			continue
+		}
+		if i > 0 && (unicode.IsLetter(plain[i-1]) || unicode.IsDigit(plain[i-1]) || plain[i-1] == '_') {
+			continue
+		}
+		end := i + len(wr)
+		if end < len(plain) && (unicode.IsLetter(plain[end]) || unicode.IsDigit(plain[end]) || plain[end] == '_') {
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func TestClickWrappedRenderedWordLandsOnThatWord(t *testing.T) {
+	content := uniqueWrappedWords()
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	const word = "tok37"
+	if strings.Index(content, word) < p.editorLayout().wrapColumn {
+		t.Fatalf("%s is still on the first wrap; need a later-row token", word)
+	}
+	clickX, clickY, _ := clickWordInView(t, p, word)
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	_ = p.enterEditAt(srcLine, srcCol)
+
+	got := p.editorTextarea.Value()
+	runes := []rune(got)
+	if srcLine != 0 {
+		t.Fatalf("source line %d, want 0", srcLine)
+	}
+	if srcCol < 0 || srcCol > len(runes) {
+		t.Fatalf("source col %d out of range", srcCol)
+	}
+	window := runes[srcCol:]
+	if !strings.HasPrefix(string(window), word) {
+		gotWord := string(window)
+		if len(gotWord) > 20 {
+			gotWord = gotWord[:20]
+		}
+		t.Fatalf("cursor at line=%d col=%d is %q, want %s", srcLine, srcCol, gotWord, word)
+	}
+}
+
+func TestClickWrappedRenderedWordKeepsIntraOffset(t *testing.T) {
+	content := uniqueWrappedWords()
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	const word = "tok37"
+	clickX, clickY, _ := clickWordInView(t, p, word)
+	// Click the '3' (third rune) of tok37.
+	clickX += rw.StringWidth("tok")
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	_ = p.enterEditAt(srcLine, srcCol)
+	got := []rune(p.editorTextarea.Value())
+	if srcCol < 3 || srcCol > len(got) || !strings.HasPrefix(string(got[srcCol-3:]), word) {
+		t.Fatalf("mid-word click landed at col %d, want inside %s", srcCol, word)
+	}
+	if string(got[srcCol:])[0] != '3' {
+		t.Fatalf("mid-word click col %d is %q, want the '3' in %s", srcCol, string(got[srcCol:min(srcCol+5, len(got))]), word)
+	}
+}
+
+func TestClickWrappedHeadingWordLandsOnThatWord(t *testing.T) {
+	content := "# " + uniqueWrappedWords()
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	const word = "tok37"
+	clickX, clickY, _ := clickWordInView(t, p, word)
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	_ = p.enterEditAt(srcLine, srcCol)
+	got := []rune(p.editorTextarea.Value())
+	if srcLine != 0 {
+		t.Fatalf("heading click source line %d, want 0", srcLine)
+	}
+	if srcCol < 0 || srcCol > len(got) || !strings.HasPrefix(string(got[srcCol:]), word) {
+		t.Fatalf("heading click landed at col %d, want %s", srcCol, word)
+	}
+}
+
+func TestClickFenceStaysAtBlockStart(t *testing.T) {
+	content := "```\n" + uniqueWrappedWords() + "\n```"
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	// Any click inside a fence is top-of-block, not a wrap-math walk.
+	originX := p.listWidth + dividerWidth + 2 + p.editorLayout().leftMargin
+	var visual int
+	for i, line := range p.viewSurface.Lines {
+		if strings.Contains(ansi.Strip(line), "tok10") {
+			visual = i
+			break
+		}
+	}
+	p.previewScrollOff = 0
+	clickY := p.editorContentStartY() + visual
+	srcLine, srcCol := p.clickToSource(originX+8, clickY)
+	a := p.viewSurface.At(visual)
+	if a.Precise {
+		t.Fatal("fence row should not be Precise")
+	}
+	if srcLine != a.SourceLine || srcCol != a.SourceCol {
+		t.Fatalf("fence click = (%d,%d), want top-of-block (%d,%d)", srcLine, srcCol, a.SourceLine, a.SourceCol)
+	}
+}
+
+func TestClickHardWrappedParagraphWordLandsOnThatWord(t *testing.T) {
+	// Two source lines that glamour reflows into one paragraph. Wrap-count
+	// disagreement used to mark the block !Precise and skip word snap.
+	line0 := strings.TrimSpace(strings.Repeat("alpha ", 9))
+	line1 := strings.TrimSpace(strings.Repeat("bravo ", 9)) + " TARGET"
+	content := line0 + "\n" + line1
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	clickX, clickY, _ := clickWordInView(t, p, "TARGET")
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	_ = p.enterEditAt(srcLine, srcCol)
+	if srcLine != 1 {
+		t.Fatalf("TARGET source line %d, want 1", srcLine)
+	}
+	if !sourceHasPrefix(p.editorTextarea.Value(), srcLine, srcCol, "TARGET") {
+		t.Fatalf("hard-wrapped click landed at %d:%d, want TARGET", srcLine, srcCol)
+	}
+}
+
+func sourceHasPrefix(content string, line, col int, word string) bool {
+	lines := strings.Split(content, "\n")
+	if line < 0 || line >= len(lines) {
+		return false
+	}
+	runes := []rune(lines[line])
+	if col < 0 || col > len(runes) {
+		return false
+	}
+	return strings.HasPrefix(string(runes[col:]), word)
+}
+
+func TestClickDoesNotLandInsideSuperstring(t *testing.T) {
+	content := strings.TrimSpace(strings.Repeat("word ", 40)) + " cat category " + strings.TrimSpace(strings.Repeat("word ", 40))
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = true
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	clickX, clickY, _ := clickWordInView(t, p, "cat")
+	_, srcCol := p.clickToSource(clickX, clickY)
+	got := []rune(p.editorTextarea.Value())
+	if srcCol < 0 || srcCol > len(got) || !strings.HasPrefix(string(got[srcCol:]), "cat") {
+		t.Fatalf("cat click landed at col %d", srcCol)
+	}
+	// Must be the standalone token, not the prefix of "category".
+	after := got[srcCol+len([]rune("cat")):]
+	if len(after) > 0 && (after[0] == 'e' || unicode.IsLetter(after[0])) {
+		t.Fatalf("cat click landed inside %q", string(got[srcCol:min(srcCol+10, len(got))]))
+	}
+}
+
+func TestClickWrappedRawWordLandsOnThatWord(t *testing.T) {
+	content := uniqueWrappedWords()
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
+	p.markdownView = false
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+
+	const word = "tok37"
+	clickX, clickY, _ := clickWordInView(t, p, word)
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	_ = p.enterEditAt(srcLine, srcCol)
+
+	got := []rune(p.editorTextarea.Value())
+	if srcCol < 0 || srcCol > len(got) || !strings.HasPrefix(string(got[srcCol:]), word) {
+		t.Fatalf("raw click landed at col %d, want %s", srcCol, word)
 	}
 }
 

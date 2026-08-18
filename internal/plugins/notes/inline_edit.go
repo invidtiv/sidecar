@@ -40,12 +40,12 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.inlineEditMode && p.inlineEditNoteID == noteID && p.inlineEditor != nil && p.inlineEditor.IsActive() {
 		return nil
 	}
-
-	// Get note path (creates temp file with content)
-	notePath := p.store.NotePath(noteID)
-	if notePath == "" {
-		return inlineEditUnavailableToast("note file unavailable")
+	// Vim owns undo from here. Drop the built-in ring so a later sync
+	// cannot ctrl+z the pre-vim buffer over the file.
+	if p.editHistories != nil && noteID != "" {
+		delete(p.editHistories, noteID)
 	}
+	p.clearEditSelection()
 
 	editor := tty.ResolveEditor()
 
@@ -59,8 +59,15 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
 	}
+	store := p.store
 
 	return func() tea.Msg {
+		// NotePath reads through td in production; keep it in the command with
+		// tmux startup so neither slow operation can stall Bubble Tea Update.
+		notePath := store.NotePath(noteID)
+		if notePath == "" {
+			return inlineEditUnavailableToast("note file unavailable")()
+		}
 		if !tty.EditorAvailable() {
 			removeNoteExport(notePath)
 			return inlineEditUnavailableToast("tmux not found")()
@@ -111,8 +118,12 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	}
 	// The session below reads the note from the store; an unsaved buffer has to
 	// land first or it is overwritten by what vim reads and writes back.
-	if cmd := p.persistDirtyEditor(); cmd != nil {
-		return cmd
+	if p.editorDirty {
+		noteID := note.ID
+		return p.saveBefore(func() tea.Cmd {
+			p.moveCursorToNote(noteID)
+			return p.editSelectedNote()
+		})
 	}
 	if cmd := p.loadNoteIntoEditor(); cmd != nil {
 		return cmd
@@ -236,28 +247,7 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	// Inline editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
 
-	epoch := p.ctx.Epoch
-	activation := p.inlineEditActivation
-	store := p.store
-
-	return func() tea.Msg {
-		// Read back the edited content from temp file
-		content, err := os.ReadFile(notePath)
-		if err != nil {
-			removeNoteExport(notePath)
-			return NotesLoadedMsg{Err: err, Epoch: epoch}
-		}
-
-		// Clean up temp file
-		removeNoteExport(notePath)
-
-		// Update note content in database
-		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
-		}
-
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
-	}
+	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
 }
 
 // calculateInlineEditorWidth returns the content width for the inline editor.
@@ -567,34 +557,7 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 
 // processPendingClickActionWithSave handles the click and saves note content.
 func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Plugin, tea.Cmd) {
-	epoch := p.ctx.Epoch
-	activation := p.inlineEditActivation
-	store := p.store
-
-	// Create save command
-	saveCmd := func() tea.Msg {
-		if noteID == "" || notePath == "" || store == nil {
-			removeNoteExport(notePath)
-			return nil
-		}
-
-		// Read back the edited content from temp file
-		content, err := os.ReadFile(notePath)
-		if err != nil {
-			removeNoteExport(notePath)
-			return NotesLoadedMsg{Err: err, Epoch: epoch}
-		}
-
-		// Clean up temp file
-		removeNoteExport(notePath)
-
-		// Update note content in database
-		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
-		}
-
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
-	}
+	saveCmd := p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
 
 	// Process the pending click
 	p2, _ := p.processPendingClickAction()
@@ -689,6 +652,9 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 	generation := p.inlineAutoSaveGen
 	store := p.store
 	lastSavedContent := p.inlineLastSavedContent
+	projectRoot := p.ctx.ProjectRoot
+	startedAt := time.Now().UnixNano()
+	sequence := p.nextWriteSequence(noteID)
 
 	return func() tea.Msg {
 		// Read current content from temp file
@@ -707,13 +673,17 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 		}
 
 		// Content changed - save to database
-		if err := store.UpdateContent(noteID, contentStr); err != nil {
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation}
+		_, err, skipped := p.persistOrdered(store, projectRoot, noteID, contentStr, startedAt, sequence)
+		if err != nil {
+			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation, Sequence: sequence}
+		}
+		if skipped {
+			return InlineAutoSaveResultMsg{Epoch: epoch, Activation: activation, Generation: generation, Sequence: sequence, Skipped: true}
 		}
 
 		return InlineAutoSaveResultMsg{
 			Epoch: epoch, Activation: activation, Generation: generation,
-			Content: contentStr, Saved: true,
+			Content: contentStr, Saved: true, Sequence: sequence,
 		}
 	}
 }
@@ -729,28 +699,7 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 	// Inline editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
 
-	epoch := p.ctx.Epoch
-	activation := p.inlineEditActivation
-	store := p.store
-
-	return func() tea.Msg {
-		// Read back the edited content from temp file
-		content, err := os.ReadFile(notePath)
-		if err != nil {
-			removeNoteExport(notePath)
-			return NotesLoadedMsg{Err: err, Epoch: epoch}
-		}
-
-		// Clean up temp file
-		removeNoteExport(notePath)
-
-		// Update note content in database
-		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch, EditorActivation: activation}
-		}
-
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
-	}
+	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
 }
 
 // saveAndExitInlineEditMode saves current content and exits inline edit mode.
@@ -758,37 +707,13 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 	noteID := p.inlineEditNoteID
 	notePath := p.inlineEditPath
-	epoch := p.ctx.Epoch
-	store := p.store
-
 	// Exit inline edit mode (kills tmux session)
 	p.exitInlineEditMode()
-	activation := p.inlineEditActivation
 
-	if noteID == "" || notePath == "" || store == nil {
+	if noteID == "" || notePath == "" || p.store == nil {
 		removeNoteExport(notePath)
 		return nil
 	}
 
-	// Inline editor writes bypass textarea state; sync buffers on the next reload.
-	p.pendingEditorSyncID = noteID
-
-	return func() tea.Msg {
-		// Read content from temp file
-		content, err := os.ReadFile(notePath)
-		if err != nil {
-			removeNoteExport(notePath)
-			return NoteSavedMsg{Err: err, Epoch: epoch, EditorActivation: activation}
-		}
-
-		// Clean up temp file
-		removeNoteExport(notePath)
-
-		// Save to database
-		if err := store.UpdateContent(noteID, string(content)); err != nil {
-			return NoteSavedMsg{Err: err, Epoch: epoch, EditorActivation: activation}
-		}
-
-		return NoteContentSavedMsg{ID: noteID, Err: nil, Epoch: epoch, EditorActivation: activation}
-	}
+	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
 }

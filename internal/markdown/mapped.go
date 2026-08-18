@@ -372,7 +372,7 @@ func assignBlockRows(anchors []Anchor, rendered []string, start, end int, b srcB
 	}
 
 	si := 0
-	last := Anchor{SourceLine: b.startLine, BlockStart: b.startLine, Precise: precise}
+	last := Anchor{SourceLine: b.startLine, BlockStart: b.startLine, Precise: true}
 	for i := start; i < end; i++ {
 		if si < len(nonEmpty) && i == nonEmpty[si] {
 			s := segFor(si)
@@ -380,7 +380,9 @@ func assignBlockRows(anchors []Anchor, rendered []string, start, end int, b srcB
 				SourceLine: s.line,
 				SourceCol:  s.col,
 				BlockStart: b.startLine,
-				Precise:    precise || b.startLine == b.endLine,
+				// Paragraphs and headings stay word-landable even when
+				// glamour's wrap count disagrees with wrapSegments.
+				Precise: true,
 			}
 			si++
 		}

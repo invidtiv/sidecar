@@ -3,6 +3,8 @@ package notes
 import (
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
@@ -11,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	rw "github.com/mattn/go-runewidth"
 )
 
 // dragForwardThrottle is the minimum interval between forwarding mouse drag
@@ -238,17 +241,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 		return p, p.loadNoteIntoEditor()
 
 	case regionEditorLine:
-		if lineIdx, ok := action.Region.Data.(int); ok {
-			p.activePane = PaneEditor
-			if !p.previewMode {
-				// Edit mode: position textarea cursor at double-click location
-				col := p.screenXToEditorCol(action.X)
-				p.setTextareaCursorPosition(lineIdx, col)
-				p.trackTextareaScroll()
-			} else {
-				// Preview mode: position preview cursor
-				p.previewCursorLine = lineIdx
-			}
+		p.activePane = PaneEditor
+		if !p.previewMode {
+			srcLine, srcCol := p.clickToSource(action.X, action.Y)
+			p.setTextareaCursorPosition(srcLine, srcCol)
+			p.trackTextareaScroll()
+		} else if lineIdx, ok := action.Region.Data.(int); ok {
+			p.previewCursorLine = lineIdx
 		}
 		return p, nil
 	}
@@ -373,25 +372,29 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 		return p, nil
 	}
 
-	// Get line count based on mode
-	var lineCount int
-	if p.previewMode {
-		p.ensureViewSurface()
-		lineCount = len(p.viewSurface.Lines)
-	} else {
-		lineCount = p.editorTextarea.LineCount()
-		// Keep previewLines synced for getSelectedText
+	if !p.previewMode {
+		// Edit mode: convert the click and the pointer (inclusive character
+		// carets) into an exclusive source range so backward drags keep both
+		// endpoint characters.
+		line, col := p.clickToSource(action.X, action.Y)
+		click := srcFromPoint(p.selection.Anchor)
+		if !p.selection.Anchor.Valid() {
+			click = srcPos{line: line, col: col}
+		}
+		start, end := mouseExclusiveRange(click, srcPos{line: line, col: col}, p.editorTextarea.Value())
+		p.selection.SelectRange(start.point(), end.point(), false)
+		p.selection.Anchor = click.point()
 		p.syncPreviewFromTextarea()
+		return p, nil
 	}
+
+	p.ensureViewSurface()
+	lineCount := len(p.viewSurface.Lines)
 	if lineCount == 0 {
 		return p, nil
 	}
 
-	// Calculate Y offset to editor content
-	editorContentStartY := p.editorContentStartY()
-	currentLine := (action.Y - editorContentStartY) + p.previewScrollOff
-
-	// Clamp to valid range
+	currentLine := (action.Y - p.editorContentStartY()) + p.previewScrollOff
 	if currentLine < 0 {
 		currentLine = 0
 	}
@@ -399,18 +402,8 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 	if currentLine > maxLine {
 		currentLine = maxLine
 	}
-
-	// Map X to character column (mode-aware)
-	var col int
-	if p.previewMode {
-		col = p.editorColAtScreenX(action.X, currentLine)
-	} else {
-		col = p.screenXToEditorCol(action.X)
-	}
-
-	// Update selection
+	col := p.editorColAtScreenX(action.X, currentLine)
 	p.selection.HandleDrag(currentLine, col)
-
 	return p, nil
 }
 
@@ -458,12 +451,27 @@ func (p *Plugin) clickToSource(x, y int) (line, col int) {
 	return sourceAtVisualRow(raw, visual, colInRow, p.editorTextarea.Value())
 }
 
-// sourceAtVisualRow adds the horizontal click to a wrap anchor without
-// allowing it to spill into the following visual row. Source columns are rune
-// offsets; cell-perfect Unicode placement remains the textarea's concern.
+// sourceAtVisualRow maps a visual-row click to a source caret. Precise
+// paragraphs/headings snap to the clicked word (or the closest occurrence
+// near the wrap-math guess) so glamour wrap breakpoints do not land the
+// cursor on a different token. Tables and fences stay at the top of the
+// block. The fallback is wrap-segment start plus the rune offset in the
+// visual row, clamped so a horizontal click cannot spill into the next
+// wrap segment.
 func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, source string) (line, col int) {
 	a := surface.At(visual)
-	line, col = a.SourceLine, a.SourceCol+max(0, colInRow)
+	if !a.Precise {
+		return a.SourceLine, a.SourceCol
+	}
+	visualText := ""
+	if visual >= 0 && visual < len(surface.Lines) {
+		visualText = ansi.Strip(surface.Lines[visual])
+	}
+	runeInRow := visualColToRuneOffset(visualText, colInRow)
+	if line, col, ok := landOnClickedWord(source, a, visualText, runeInRow); ok {
+		return line, col
+	}
+	line, col = a.SourceLine, a.SourceCol+max(0, runeInRow)
 	if visual+1 < len(surface.Anchors) {
 		next := surface.At(visual + 1)
 		if next.SourceLine == line && next.SourceCol > a.SourceCol && col >= next.SourceCol {
@@ -472,12 +480,141 @@ func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, sour
 	}
 	sourceLines := strings.Split(source, "\n")
 	if line >= 0 && line < len(sourceLines) {
-		col = min(col, len([]rune(sourceLines[line])))
+		col = min(col, utf8.RuneCountInString(sourceLines[line]))
 	}
 	if col < 0 {
 		col = 0
 	}
 	return line, col
+}
+
+func visualColToRuneOffset(s string, col int) int {
+	if col <= 0 || s == "" {
+		return 0
+	}
+	runes := []rune(s)
+	cell := 0
+	for i, r := range runes {
+		w := rw.RuneWidth(r)
+		if w < 1 {
+			w = 1
+		}
+		if cell+w > col {
+			return i
+		}
+		cell += w
+		if cell == col {
+			return i + 1
+		}
+	}
+	return len(runes)
+}
+
+func wordAt(s string, runeOff int) (word string, intra int) {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return "", 0
+	}
+	if runeOff < 0 {
+		runeOff = 0
+	}
+	if runeOff >= len(runes) {
+		runeOff = len(runes) - 1
+	}
+	if unicode.IsSpace(runes[runeOff]) {
+		return "", 0
+	}
+	start, end := runeOff, runeOff+1
+	for start > 0 && !unicode.IsSpace(runes[start-1]) {
+		start--
+	}
+	for end < len(runes) && !unicode.IsSpace(runes[end]) {
+		end++
+	}
+	return string(runes[start:end]), runeOff - start
+}
+
+func landOnClickedWord(source string, a markdown.Anchor, visualText string, runeInRow int) (line, col int, ok bool) {
+	word, intra := wordAt(visualText, runeInRow)
+	if word == "" {
+		return 0, 0, false
+	}
+	lines := strings.Split(source, "\n")
+	if len(lines) == 0 {
+		return 0, 0, false
+	}
+	guess := a.SourceCol + max(0, runeInRow)
+	bestLine, bestCol, bestDist := -1, 0, int(^uint(0)>>1)
+	wr := []rune(word)
+	consider := func(lineIdx int) {
+		if lineIdx < 0 || lineIdx >= len(lines) {
+			return
+		}
+		src := []rune(lines[lineIdx])
+		for i := 0; i+len(wr) <= len(src); i++ {
+			if string(src[i:i+len(wr)]) != word {
+				continue
+			}
+			if !tokenBounded(src, i, i+len(wr)) {
+				continue
+			}
+			dist := i - guess
+			if dist < 0 {
+				dist = -dist
+			}
+			// Prefer the anchored line, then nearby lines, then column distance.
+			linePenalty := lineIdx - a.SourceLine
+			if linePenalty < 0 {
+				linePenalty = -linePenalty
+			}
+			dist += linePenalty * 1_000_000
+			if dist < bestDist {
+				bestDist = dist
+				bestLine = lineIdx
+				bestCol = i + intra
+				if bestCol > i+len(wr) {
+					bestCol = i + len(wr)
+				}
+			}
+		}
+	}
+	consider(a.SourceLine)
+	if bestLine >= 0 {
+		return bestLine, bestCol, true
+	}
+	start := a.BlockStart
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(lines); i++ {
+		if i == a.SourceLine {
+			continue
+		}
+		consider(i)
+		// Stay inside the block: a later blank line is a cheap stop once
+		// we have walked a bit past the anchor.
+		if i > a.SourceLine && strings.TrimSpace(lines[i]) == "" && bestLine >= 0 {
+			break
+		}
+	}
+	if bestLine < 0 {
+		return 0, 0, false
+	}
+	return bestLine, bestCol, true
+}
+
+func tokenBounded(src []rune, start, end int) bool {
+	if start > 0 && isWordRune(src[start-1]) {
+		return false
+	}
+	if end < len(src) && isWordRune(src[end]) {
+		return false
+	}
+	return true
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 func (p *Plugin) screenYToVisualRow(y int) int {
@@ -571,35 +708,37 @@ func (p *Plugin) copySelectionCmd() tea.Cmd {
 
 // getSelectedText returns the selected text lines.
 func (p *Plugin) getSelectedText() []string {
-	if !p.selection.HasSelection() || p.editorNote == nil {
+	if p.editorNote == nil {
+		return nil
+	}
+	if !p.previewMode {
+		if !p.hasEditSelection() {
+			return nil
+		}
+		start, end := orderSrc(srcFromPoint(p.selection.Start), srcFromPoint(p.selection.End))
+		text := extractExclusive(sourceLines(p.editorTextarea.Value()), start, end)
+		if text == "" {
+			return nil
+		}
+		return strings.Split(text, "\n")
+	}
+	if !p.selection.HasSelection() {
 		return nil
 	}
 
 	startLine := p.selection.Start.Line
 	endLine := p.selection.End.Line
 
-	// Get lines based on mode
-	var allLines []string
-	if p.previewMode {
-		p.ensureViewSurface()
-		allLines = p.viewSurface.Lines
-	} else {
-		// In edit mode, split textarea content into lines
-		allLines = strings.Split(p.editorTextarea.Value(), "\n")
-	}
-
+	p.ensureViewSurface()
+	allLines := p.viewSurface.Lines
 	if startLine < 0 || endLine >= len(allLines) {
 		return nil
 	}
-
-	// Get the lines in selection range
 	lines := allLines[startLine : endLine+1]
 	if len(lines) == 0 {
 		return nil
 	}
-
-	// Use shared selection API to extract with column precision
-	return p.selection.SelectedText(lines, startLine, 8) // tabWidth=8
+	return p.selection.SelectedText(lines, startLine, 8)
 }
 
 // registerMouseRegions registers hit regions for mouse interaction.

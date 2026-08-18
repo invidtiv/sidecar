@@ -75,6 +75,13 @@ func (p *Plugin) openDeleteModal() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	if p.editorDirty {
+		noteID := note.ID
+		return p.saveBefore(func() tea.Cmd {
+			p.moveCursorToNote(noteID)
+			return p.openDeleteModal()
+		})
+	}
 
 	// Store reference to note being deleted
 	p.deleteModalNote = note

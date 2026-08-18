@@ -1,10 +1,13 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 2 merged to `main` at `49829599`; review fixes are on
-`notes-overhaul` and Phase 3 is gated on independent approval of td-2f6d46
+**Status:** Phase 3 is merge-ready on `notes-overhaul` through `f67be1b5`;
+td-4baaa6 and the inherited Phase 2 wrapped-click fix (td-2f6d46) are independently
+approved and closed. The branch has not been merged to `main`; Phase 4 remains deferred.
 **Created:** 2026-08-17
 **Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
 **Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c
+**Phase 3:** td-178efc + merge-readiness follow-up td-4baaa6 — source selection,
+replacement, overlay-through-wrap, content undo/redo, and nonblocking durable saves
 
 The Phase 2 commits mention td-caca7d, td-2a63f0, and td-6f24d9, but those records
 are absent from the current td store. Commit hashes above are the durable implementation
@@ -34,8 +37,43 @@ exact clicked screen row, including after scroll. td-4b3a5c also makes
 the production td CLI store lazy so Notes `Init()` performs no PATH/database I/O before
 the first frame. Focused markdown/Notes/keymap tests, `go test ./...`, `go build ./...`, a
 production `td --json note` add/edit/list/delete/restore round trip, and an isolated
-80×24 real-app render/raw/edit/save journey are green. Phase 3 remains on hold only until
-the non-minor wrapped-click fix receives independent review and the review commit is merged.
+80×24 real-app render/raw/edit/save journey are green.
+
+**Phase 3 (td-178efc):** the built-in editor stores selection as exclusive source
+carets (line + rune). Shift-arrows / shift-home/end and `alt+s` extend it;
+`alt+a` selects all; `alt+c` copies the range or the whole note; `alt+x` cuts;
+backspace, delete, typing, and paste replace the range. Overlay maps those
+carets through the textarea wrap policy. A per-note snapshot ring groups
+typing bursts and treats paste/cut/delete-selection as one unit, capped by
+entry count and retained bytes. `ctrl+z` / `ctrl+y` / `ctrl+shift+z` undo and
+redo. Syntax spans remain deferred.
+
+**Phase 3 merge readiness (td-4baaa6):** interactive autosave, Ctrl-S, Tab/Esc,
+note navigation, filters, editor handoff, initial/background load, and project shutdown
+no longer run td or SQLite work on Bubble Tea's update loop. One in-flight save owns an
+immutable note/content/epoch/request tuple; newer typing stays dirty, buffer-replacing
+actions wait for the exact latest content, failures remain visible in the footer and can
+be retried with Ctrl-S from edit, preview, list, or search. Content saves use one
+`td note edit` process (the redundant Sidecar-side `show` is gone), apply td's canonical
+updated note to the local sorted cache, and do not reload the whole list. Every td note
+subprocess has an eight-second timeout. Stop atomically checkpoints a dirty buffer in a
+0600 recovery draft (with a cache fallback), returns without waiting on SQLite, and flushes
+it in the background. Recovery is serialized, validates the draft's durable/in-flight base,
+refuses to overwrite a newer external edit, and is retired by a later canonical save.
+Desired content remains owned when undo matches the old durable value while another save is
+in flight. Same-project list loads and external-editor preparations have request generations,
+so out-of-order completions cannot regress the cache or open an older note. Built-in saves,
+periodic inline autosaves, final editor exports, and shutdown flushes share one per-note
+ordered write lane. Multiple editor exits queue in intent order; every export remains on
+disk after save failure and Ctrl-S retries the same content intent without promoting it
+above newer queued or acknowledged content, with successful acknowledgment as the cleanup
+boundary. Newer canonical acknowledgments retire obsolete exports, and slow final/retry
+exports share the visible saving footer with built-in saves. Coalesced typing/deletion undo
+bursts also copy one full-note snapshot per undo unit rather than per keystroke. The branch includes
+`origin/main` as of `bfebfbe2` via merge `7e7dbd7c`; deterministic ownership probes and the Notes race suite are green,
+as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated
+real-app edit/save/navigation proof. Independent review is complete, and Phase 3 is
+merge-ready on the feature branch.
 
 ## Goal
 
@@ -328,14 +366,16 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
    scrollbar) used by view and edit; carry cursor/scroll across the mode switch; mouse
    selection no longer swaps renderers. This removes existing data-loss paths before
    expanding the editor.
-2. **Markdown view steel thread — merged; review fix pending independent approval.**
+2. **Markdown view steel thread — merged; review fix independently approved and closed.**
    The mapping-capable render result, glamour default, shared wrapping, and `m` toggle are
    implemented. td-2f6d46 closes the wrapped-click acceptance hole found in review;
    td-4b3a5c removes synchronous store validation from startup.
-3. **Selection + undo/redo — hold until td-2f6d46 is approved and merged.** Add
-   source-coordinate keyboard/mouse selection, replacement
-   semantics, selection overlay, and bounded operation-based history. Add syntax spans
-   only after the authoritative editor layout can support them without a shadow renderer.
+3. **Selection + undo/redo — implementation, ownership-race fix cycle, and independent
+   merge-readiness review complete (td-178efc, td-4baaa6); Phase 3 is merge-ready.** Source-coordinate
+   keyboard/mouse selection, replacement semantics, wrap-aware overlay, and a
+   bounded per-note operation-based history, plus nonblocking durable save/transition
+   ownership and crash-recovery checkpointing. Syntax spans stay deferred until the
+   authoritative editor layout can support them without a shadow renderer.
 4. **td integration, dependency ordered.** (a) td shared core plus structured CLI commands,
    note↔issue relation, queries, and optimistic note update; (b) td release and Sidecar dependency bump;
    (c) Sidecar task/link UI and livewatch refresh/conflict journey.
@@ -345,7 +385,9 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 ## Explicit non-goals
 
 - No live-WYSIWYG markdown editing (rendered-while-typing).
-- No Sidecar-owned note database or metadata sidecar. td's SQLite and shared core/CLI stay
+- No Sidecar-owned note database or metadata sidecar. The transient 0600 shutdown draft
+  is a delivery checkpoint removed after td accepts the content, not a second source of
+  truth. td's SQLite and shared core/CLI stay
   the source of truth; Sidecar reaches them through the production td adapter. The deliberate
   note↔issue relation and optimistic-update contract are td-owned schema/API changes.
 - No notes CLI surface: sidecar is a presentation layer here; the owning CLI is `td
@@ -378,7 +420,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 
 - Focused tests cover layout geometry, source↔render mapping, Unicode search/backspace,
   paste as one dirty/undo/debounce operation, selection across wraps and resize, stale
-  epochs, title preservation, autosave generation/transition ownership, and
+  epochs, title preservation, autosave request/transition ownership, slow save/load UI
+  responsiveness, failure/retry and shutdown recovery, bounded td subprocesses, and
   optimistic-update conflicts.
 - `go test ./...` and `go build ./...` pass with `GOWORK=off` against the released td
   version as well as in the local workspace when §4 changes dependencies.

@@ -338,3 +338,39 @@ func TestDefaultBindings_NotesEditorPaneKeepsPrintableKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultBindings_NotesEditorSelectionUsesCombinedModifiers(t *testing.T) {
+	// Bindings must match the actual KeyPressMsg.String() of combined
+	// modifiers, not a hand-written fixture that could drift.
+	want := map[string]string{
+		tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}.String():         "select-up",
+		tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}.String():       "select-down",
+		tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModShift}.String():       "select-left",
+		tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift}.String():      "select-right",
+		tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModShift}.String():       "select-line-start",
+		tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModShift}.String():        "select-line-end",
+		tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt}.String():                 "select-toggle",
+		tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt}.String():                 "select-all",
+		tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt}.String():                 "cut",
+		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}.String():                "undo-edit",
+		tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}.String():                "redo-edit",
+		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl | tea.ModShift}.String(): "redo-edit",
+	}
+	got := map[string]string{}
+	for _, b := range DefaultBindings() {
+		if b.Context != "notes-editor" {
+			continue
+		}
+		if _, ok := want[b.Key]; ok {
+			got[b.Key] = b.Command
+		}
+	}
+	for key, cmd := range want {
+		if key == "" {
+			t.Fatal("combined-modifier KeyPressMsg.String() was empty")
+		}
+		if got[key] != cmd {
+			t.Errorf("%q = %q, want %q", key, got[key], cmd)
+		}
+	}
+}

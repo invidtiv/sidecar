@@ -101,6 +101,13 @@ func (p *Plugin) openTaskModal() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	if p.editorDirty {
+		noteID := note.ID
+		return p.saveBefore(func() tea.Cmd {
+			p.moveCursorToNote(noteID)
+			return p.openTaskModal()
+		})
+	}
 
 	// Store reference to note being converted
 	p.taskModalNote = note

@@ -226,10 +226,7 @@ func TestNoteExportCleanupOnErrorMsg(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("openInExternalEditor returned nil")
 	}
-	open, ok := cmd().(plugin.OpenFileMsg)
-	if !ok {
-		t.Fatalf("got %T", cmd())
-	}
+	open := prepareExternalEditor(t, p, cmd)
 	if _, err := os.Stat(open.Path); err != nil {
 		t.Fatalf("export missing: %v", err)
 	}
