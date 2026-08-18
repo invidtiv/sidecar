@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/tabs"
 )
 
 // MaxTabs bounds one Resource leaf. Clicking keys forever must cost bounded
@@ -12,22 +13,28 @@ import (
 // dropped rather than refusing the user's click.
 const MaxTabs = 16
 
+// TabKey is the stable identity of one tab before a resolve: the provider
+// instance, the matcher, and the exact matched locator. The same locator from
+// two providers is two resources, so the instance is part of the key.
+func TabKey(ref resource.Reference) string {
+	return ref.Instance + "\x00" + ref.Matcher + "\x00" + ref.Locator
+}
+
 // Tabs is the tabbed set of resource references in one Resource leaf.
 //
-// Tab identity before a resolve is {instance, matcher, locator}. After a
-// resolve supplies a provider-stable identity the tab is re-keyed, and if that
-// collides with an already-open tab the two merge rather than leaving the user
-// with two tabs for one ticket.
+// Ordering, cycling, close semantics and the overflow window come from
+// tabs.Group, the same generic the file and issue strips use. What this type
+// adds is only what is specific to resources: keys built from references,
+// arming without resolving, routing an answer to the tab that asked, and the
+// canonical re-key that merges two tabs naming one resource.
 type Tabs struct {
+	tabs.Group[*Model]
+
 	renderer *markdown.Renderer
 	resolve  Resolver
 
-	models []*Model
-	active int
-
-	// nextModelID hands each model a distinct identity so a late answer can
-	// be matched to the tab that asked, even after tabs are closed and the
-	// slice indices shift.
+	// nextModelID hands each model a distinct identity so a late answer can be
+	// matched to the tab that asked even after tabs close and indices shift.
 	nextModelID int
 
 	width, height int
@@ -43,38 +50,45 @@ func NewTabs(renderer *markdown.Renderer, resolve Resolver) *Tabs {
 }
 
 // Len reports how many tabs are open.
-func (t *Tabs) Len() int { return len(t.models) }
+func (t *Tabs) Len() int { return len(t.Items) }
 
 // Empty reports whether the leaf has nothing left in it.
-func (t *Tabs) Empty() bool { return len(t.models) == 0 }
+func (t *Tabs) Empty() bool { return len(t.Items) == 0 }
 
-// Active returns the focused tab, or nil when there are none.
+// Active returns the focused tab, or nil.
 func (t *Tabs) Active() *Model {
-	if t.active < 0 || t.active >= len(t.models) {
+	item, ok := t.ActiveItem()
+	if !ok {
 		return nil
 	}
-	return t.models[t.active]
+	return item.Value
 }
 
 // ActiveIndex is the focused tab's position, which the host persists.
-func (t *Tabs) ActiveIndex() int { return t.active }
+func (t *Tabs) ActiveIndex() int { return t.Group.Active }
 
 // At returns the tab at index, or nil.
 func (t *Tabs) At(i int) *Model {
-	if i < 0 || i >= len(t.models) {
+	if i < 0 || i >= len(t.Items) {
 		return nil
 	}
-	return t.models[i]
+	return t.Items[i].Value
 }
 
-// All returns the tabs in strip order.
-func (t *Tabs) All() []*Model { return t.models }
+// All returns the models in strip order.
+func (t *Tabs) All() []*Model {
+	out := make([]*Model, 0, len(t.Items))
+	for _, item := range t.Items {
+		out = append(out, item.Value)
+	}
+	return out
+}
 
 // Labels is the tab strip's text, in order.
 func (t *Tabs) Labels() []string {
-	out := make([]string, 0, len(t.models))
-	for _, m := range t.models {
-		out = append(out, m.TabLabel())
+	out := make([]string, 0, len(t.Items))
+	for _, item := range t.Items {
+		out = append(out, item.Value.TabLabel())
 	}
 	return out
 }
@@ -86,70 +100,70 @@ func (t *Tabs) SetEpoch(epoch uint64) { t.epoch = epoch }
 // box it will be drawn into.
 func (t *Tabs) SetSize(width, height int) {
 	t.width, t.height = width, height
-	for _, m := range t.models {
-		m.SetSize(width, height)
+	for _, item := range t.Items {
+		item.Value.SetSize(width, height)
 	}
 }
 
 // Open focuses an existing tab for ref, or appends a new one and resolves it.
 // It is the single entry point for a terminal click, a restored tab being
-// selected, and a `sidecar open --provider` request, so all three produce the
-// same tab behavior.
+// selected, and `sidecar open --provider`, so all three behave identically.
 func (t *Tabs) Open(ref resource.Reference) tea.Cmd {
-	if i, ok := t.indexOf(ref); ok {
-		t.active = i
+	if i := t.Find(TabKey(ref)); i >= 0 {
+		t.Select(i)
 		// A tab that was armed rather than resolved starts now.
-		return t.models[i].Resolve()
+		return t.Items[i].Value.Resolve()
 	}
 	t.evictIfFull()
-	m := New(t.renderer, t.resolve)
-	m.SetSize(t.width, t.height)
-	t.nextModelID++
-	t.models = append(t.models, m)
-	t.active = len(t.models) - 1
+	m := t.newModel()
+	t.Append(TabKey(ref), m)
 	return m.Load(t.nextModelID, ref, t.epoch)
 }
 
 // Arm appends a tab without resolving it. Restore uses this so relaunch does
-// not fan out one process per remembered tab; the active tab is resolved by
-// the host calling ResolveActive.
+// not fan out one process per remembered tab.
 func (t *Tabs) Arm(ref resource.Reference, scroll int) *Model {
-	if i, ok := t.indexOf(ref); ok {
-		return t.models[i]
+	if i := t.Find(TabKey(ref)); i >= 0 {
+		return t.Items[i].Value
 	}
 	t.evictIfFull()
+	m := t.newModel()
+	m.Arm(t.nextModelID, ref, t.epoch)
+	m.SetPendingScroll(scroll)
+	t.Append(TabKey(ref), m)
+	return m
+}
+
+func (t *Tabs) newModel() *Model {
 	m := New(t.renderer, t.resolve)
 	m.SetSize(t.width, t.height)
 	t.nextModelID++
-	m.Arm(t.nextModelID, ref, t.epoch)
-	m.SetPendingScroll(scroll)
-	t.models = append(t.models, m)
 	return m
 }
 
 // SetActive focuses a tab by index and resolves it if it is still armed.
+// Selecting is what turns a restored reference into a request, which is the
+// behavior both hosts need and neither should re-derive.
 func (t *Tabs) SetActive(i int) tea.Cmd {
-	if i < 0 || i >= len(t.models) {
+	if i < 0 || i >= len(t.Items) {
 		return nil
 	}
-	t.active = i
-	return t.models[i].Resolve()
+	t.Select(i)
+	return t.Items[i].Value.Resolve()
 }
 
-// Next and Prev cycle the strip, wrapping. Selecting an armed tab resolves it.
-func (t *Tabs) Next() tea.Cmd {
-	if len(t.models) == 0 {
+// Cycle moves by delta and resolves the tab that lands, wrapping.
+func (t *Tabs) Cycle(delta int) tea.Cmd {
+	if len(t.Items) < 2 {
 		return nil
 	}
-	return t.SetActive((t.active + 1) % len(t.models))
+	t.Group.Cycle(delta)
+	return t.ResolveActive()
 }
 
-func (t *Tabs) Prev() tea.Cmd {
-	if len(t.models) == 0 {
-		return nil
-	}
-	return t.SetActive((t.active - 1 + len(t.models)) % len(t.models))
-}
+// Next and Prev are the documented { and } bindings.
+func (t *Tabs) Next() tea.Cmd { return t.Cycle(1) }
+func (t *Tabs) Prev() tea.Cmd { return t.Cycle(-1) }
 
 // ResolveActive starts the active tab's resolve if it is still armed.
 func (t *Tabs) ResolveActive() tea.Cmd {
@@ -168,24 +182,16 @@ func (t *Tabs) RefreshActive() tea.Cmd {
 }
 
 // Close removes the tab at index and reports whether the leaf is now empty.
-// Closing is the user's explicit act and is the only thing besides a confirmed
-// cleanup that may drop a reference.
+// Closing is the user's explicit act, and with a confirmed cleanup it is the
+// only thing that may drop a reference.
 func (t *Tabs) Close(i int) (empty bool) {
-	if i < 0 || i >= len(t.models) {
-		return len(t.models) == 0
-	}
-	t.models = append(t.models[:i], t.models[i+1:]...)
-	if t.active > i || t.active >= len(t.models) {
-		t.active--
-	}
-	if t.active < 0 {
-		t.active = 0
-	}
-	return len(t.models) == 0
+	return t.CloseAt(i).Empty
 }
 
 // CloseActive removes the focused tab.
-func (t *Tabs) CloseActive() (empty bool) { return t.Close(t.active) }
+func (t *Tabs) CloseActive() (empty bool) {
+	return t.Group.CloseActive().Empty
+}
 
 // Apply routes a resolve result to the tab that asked for it, applies any
 // canonical re-key, and merges a tab that has just become a duplicate.
@@ -193,11 +199,11 @@ func (t *Tabs) CloseActive() (empty bool) { return t.Close(t.active) }
 // It returns false when no open tab owns the message, which is the correct
 // outcome for a result arriving after its tab was closed.
 func (t *Tabs) Apply(msg ResolvedMsg) bool {
-	for i, m := range t.models {
-		if !m.Accepts(msg) {
+	for i, item := range t.Items {
+		if !item.Value.Accepts(msg) {
 			continue
 		}
-		if !m.Apply(msg) {
+		if !item.Value.Apply(msg) {
 			return false
 		}
 		if msg.Err == nil {
@@ -209,56 +215,40 @@ func (t *Tabs) Apply(msg ResolvedMsg) bool {
 }
 
 // rekeyAndMerge adopts the provider's canonical identity for the tab at i. If
-// another tab already holds that identity, the two are merged: the resolved
-// one wins and the duplicate is dropped, so clicking a key and then its
-// canonical form does not leave two tabs for one resource.
+// another tab already holds that identity the two are merged: the resolved one
+// wins, so clicking a key and then its canonical form leaves one tab.
 func (t *Tabs) rekeyAndMerge(i int, identity string) {
-	if identity == "" || i < 0 || i >= len(t.models) {
+	if identity == "" || i < 0 || i >= len(t.Items) {
 		return
 	}
-	m := t.models[i]
+	m := t.Items[i].Value
 	before := m.Reference()
 	m.Rekey(identity)
 	after := m.Reference()
 	if after == before {
 		return
 	}
-	for j := len(t.models) - 1; j >= 0; j-- {
-		if j == i || t.models[j].Reference() != after {
-			continue
-		}
-		// Drop the duplicate. The resolved tab is the one with content, so
-		// it is the one that survives.
-		t.models = append(t.models[:j], t.models[j+1:]...)
-		if j < i {
-			i--
-		}
-		if t.active == j {
-			t.active = i
-		} else if t.active > j {
-			t.active--
-		}
+	key := TabKey(after)
+	t.Items[i].Key = key
+	// Drop any other tab that now names the same resource. The resolved tab
+	// is the one with content, so it is the one that survives.
+	survivor := t.Items[i].Value
+	t.CloseMatching(func(item tabs.Item[*Model]) bool {
+		return item.Key == key && item.Value != survivor
+	})
+	if j := t.Find(key); j >= 0 {
+		t.Select(j)
 	}
-}
-
-// indexOf finds an open tab for ref.
-func (t *Tabs) indexOf(ref resource.Reference) (int, bool) {
-	for i, m := range t.models {
-		if m.Reference() == ref {
-			return i, true
-		}
-	}
-	return -1, false
 }
 
 // evictIfFull drops the oldest tab that is not focused once the bound is hit.
 func (t *Tabs) evictIfFull() {
-	for len(t.models) >= MaxTabs {
+	for len(t.Items) >= MaxTabs {
 		victim := 0
-		if victim == t.active && len(t.models) > 1 {
+		if victim == t.Group.Active && len(t.Items) > 1 {
 			victim = 1
 		}
-		t.Close(victim)
+		t.CloseAt(victim)
 	}
 }
 
@@ -266,22 +256,22 @@ func (t *Tabs) evictIfFull() {
 // no title, field, body, error, URL, or auth state, by construction rather
 // than by remembering to strip them.
 func (t *Tabs) References() []PersistedTab {
-	out := make([]PersistedTab, 0, len(t.models))
-	for _, m := range t.models {
-		ref := m.Reference()
+	out := make([]PersistedTab, 0, len(t.Items))
+	for _, item := range t.Items {
+		ref := item.Value.Reference()
 		out = append(out, PersistedTab{
 			Provider: ref.Instance,
 			Matcher:  ref.Matcher,
 			Locator:  ref.Locator,
-			Scroll:   m.Scroll(),
+			Scroll:   item.Value.Scroll(),
 		})
 	}
 	return out
 }
 
-// PersistedTab is one reference plus its scroll. It mirrors the state package's
-// JSON shape without this package depending on state, so the view layer stays
-// free of persistence concerns.
+// PersistedTab is one reference plus its scroll. It mirrors the state
+// package's JSON shape without this package depending on state, so the view
+// layer stays free of persistence concerns.
 type PersistedTab struct {
 	Provider string
 	Matcher  string

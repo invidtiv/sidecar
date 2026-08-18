@@ -322,3 +322,14 @@ func TestBodyLinksAreNeverActivatable(t *testing.T) {
 		t.Errorf("a link destination must not survive into the rendered body:\n%q", view)
 	}
 }
+
+func docWithURL(identity, url string) resource.Document {
+	return resource.Document{Identity: identity, Title: identity, SourceURL: url}
+}
+
+func longDoc(identity string) resource.Document {
+	return resource.Document{
+		Identity: identity, Title: identity,
+		Body: &resource.Body{Format: resource.FormatText, Text: strings.Repeat("line\n", 200)},
+	}
+}

@@ -7,6 +7,11 @@ import (
 	"github.com/marcus/sidecar/internal/resource"
 )
 
+// Ref is the resource reference a tab points at. It is aliased rather than
+// redeclared so a reference built by the scanner, restored from disk, or
+// parsed from a CLI request is the same type everywhere.
+type Ref = resource.Reference
+
 // State is what the view is showing right now.
 type State int
 

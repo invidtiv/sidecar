@@ -1,0 +1,239 @@
+package resourceview
+
+import (
+	tea "charm.land/bubbletea/v2"
+)
+
+// Host is everything a Resource leaf needs from the surface showing it, and
+// deliberately nothing more. Each method is a place the project Workspace and
+// the global Workspaces browser genuinely differ:
+//
+//   - the project has a pane tree with leaf IDs; the global has one preview
+//     slot;
+//   - the project persists references to disk; the global is memory-only by
+//     design, matching its document/issue/diff lifetime;
+//   - only the project has a live tmux pane to abandon and an interactive
+//     input mode to leave.
+//
+// Everything that does NOT differ lives on Pane below, so neither surface can
+// answer a resource key differently from the other by accident.
+type Host interface {
+	// FocusLeaf moves focus to the leaf holding this pane. It is called on
+	// every activation, including one that only focuses an existing tab.
+	FocusLeaf()
+
+	// EnterFromTerminal is the ritual a click in terminal output owes before
+	// a new leaf appears: clear the selection, leave interactive input, and
+	// freeze the terminal viewport so the pre-click context survives the
+	// tmux resize. A surface with no live terminal implements it as a no-op.
+	EnterFromTerminal()
+
+	// Persist records reference-only tab state. The global surface implements
+	// it as a no-op; that difference is the intended one.
+	Persist()
+
+	// OpenURL puts a validated http(s) URL in front of the user through the
+	// host's own confirmed path.
+	OpenURL(url string) tea.Cmd
+}
+
+// Pane is the host-independent behavior of one Resource leaf: what a click
+// does, what the documented keys do, and when state is persisted.
+//
+// Both surfaces own a Pane and implement Host. A binding that reimplements one
+// of these methods instead of calling it is the drift this type exists to
+// prevent.
+type Pane struct {
+	Tabs *Tabs
+	host Host
+}
+
+// NewPane binds a tab set to a surface.
+func NewPane(tabs *Tabs, host Host) *Pane {
+	return &Pane{Tabs: tabs, host: host}
+}
+
+// ActivateFromTerminal is the click journey: the terminal ritual first, then
+// focus, then open-or-focus the tab, then persist. The order matters — the
+// viewport must be frozen before the new leaf resizes tmux — and getting it
+// right once here is the point.
+func (p *Pane) ActivateFromTerminal(ref Ref) tea.Cmd {
+	if p == nil || p.Tabs == nil {
+		return nil
+	}
+	if p.host != nil {
+		p.host.EnterFromTerminal()
+		p.host.FocusLeaf()
+	}
+	cmd := p.Tabs.Open(ref)
+	p.persist()
+	return cmd
+}
+
+// Activate opens or focuses a tab without the terminal ritual. This is the
+// `sidecar open --provider` path: there was no click in terminal output, so
+// there is no selection to clear and no viewport to freeze.
+func (p *Pane) Activate(ref Ref) tea.Cmd {
+	if p == nil || p.Tabs == nil {
+		return nil
+	}
+	if p.host != nil {
+		p.host.FocusLeaf()
+	}
+	cmd := p.Tabs.Open(ref)
+	p.persist()
+	return cmd
+}
+
+// SelectTab focuses a tab by index, resolving it if it was only armed.
+func (p *Pane) SelectTab(i int) tea.Cmd {
+	if p == nil || p.Tabs == nil {
+		return nil
+	}
+	if p.host != nil {
+		p.host.FocusLeaf()
+	}
+	cmd := p.Tabs.SetActive(i)
+	p.persist()
+	return cmd
+}
+
+// CycleTab moves through the strip, wrapping.
+func (p *Pane) CycleTab(delta int) tea.Cmd {
+	if p == nil || p.Tabs == nil {
+		return nil
+	}
+	cmd := p.Tabs.Cycle(delta)
+	p.persist()
+	return cmd
+}
+
+// CloseActiveTab closes the focused tab and reports whether the leaf is now
+// empty, which is the host's cue to collapse the split.
+func (p *Pane) CloseActiveTab() (empty bool, cmd tea.Cmd) {
+	if p == nil || p.Tabs == nil {
+		return true, nil
+	}
+	empty = p.Tabs.CloseActive()
+	p.persist()
+	return empty, nil
+}
+
+// Refresh re-resolves the active tab, bypassing cache freshness.
+func (p *Pane) Refresh() tea.Cmd {
+	if p == nil || p.Tabs == nil {
+		return nil
+	}
+	return p.Tabs.RefreshActive()
+}
+
+// OpenSource opens the active document's validated source URL. A document
+// without one, or a tab that has not resolved, does nothing.
+func (p *Pane) OpenSource() tea.Cmd {
+	if p == nil || p.Tabs == nil || p.host == nil {
+		return nil
+	}
+	m := p.Tabs.Active()
+	if m == nil {
+		return nil
+	}
+	url := m.SourceURL()
+	if url == "" {
+		return nil
+	}
+	return p.host.OpenURL(url)
+}
+
+// Apply routes a resolve result and persists the outcome, since a canonical
+// re-key changes what should be on disk.
+func (p *Pane) Apply(msg ResolvedMsg) bool {
+	if p == nil || p.Tabs == nil {
+		return false
+	}
+	if !p.Tabs.Apply(msg) {
+		return false
+	}
+	p.persist()
+	return true
+}
+
+// Scroll moves the active tab's viewport and reports whether it moved.
+func (p *Pane) Scroll(delta int) bool {
+	if p == nil || p.Tabs == nil {
+		return false
+	}
+	m := p.Tabs.Active()
+	if m == nil {
+		return false
+	}
+	moved := m.ScrollBy(delta)
+	if moved {
+		p.persist()
+	}
+	return moved
+}
+
+// HandleKey answers the documented Resource-pane keys. It deliberately does
+// NOT claim q or esc: those follow each surface's existing content-pane
+// close/hide rule, which is the one key behavior that legitimately differs.
+//
+// handled=false means the host should keep looking.
+func (p *Pane) HandleKey(key string) (handled bool, cmd tea.Cmd) {
+	if p == nil || p.Tabs == nil || p.Tabs.Empty() {
+		return false, nil
+	}
+	switch key {
+	case "r":
+		return true, p.Refresh()
+	case "o":
+		return true, p.OpenSource()
+	case "}":
+		return true, p.CycleTab(1)
+	case "{":
+		return true, p.CycleTab(-1)
+	case "up", "k":
+		p.Scroll(-1)
+		return true, nil
+	case "down", "j":
+		p.Scroll(1)
+		return true, nil
+	case "pgup":
+		p.Scroll(-p.pageStep())
+		return true, nil
+	case "pgdown":
+		p.Scroll(p.pageStep())
+		return true, nil
+	}
+	return false, nil
+}
+
+func (p *Pane) pageStep() int {
+	if m := p.Tabs.Active(); m != nil && m.Height() > 1 {
+		return m.Height() - 1
+	}
+	return 1
+}
+
+func (p *Pane) persist() {
+	if p.host != nil {
+		p.host.Persist()
+	}
+}
+
+// Commands is the footer vocabulary for a focused Resource leaf. Both hosts
+// register exactly this, so the two surfaces cannot advertise different keys
+// for the same pane. Names are one word to keep the footer from wrapping.
+func Commands() []Command {
+	return []Command{
+		{Key: "r", Name: "Refresh"},
+		{Key: "o", Name: "Open"},
+		{Key: "{/}", Name: "Tabs"},
+		{Key: "x", Name: "Close"},
+	}
+}
+
+// Command is one footer hint.
+type Command struct {
+	Key  string
+	Name string
+}
