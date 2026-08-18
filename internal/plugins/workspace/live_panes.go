@@ -60,12 +60,14 @@ func (p *Plugin) newLiveSet() *livepanes.Set {
 			Prepare: p.resolveTDStores,
 			Targets: p.issueWatchTargets,
 			Refresh: p.refreshIssuePanes,
+			Owed:    p.issueRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind:    liveDocs,
 			Config:  livewatch.Config{Ignore: isEditorScratchPath},
 			Targets: p.docWatchTargets,
 			Refresh: p.refreshDocPanes,
+			Owed:    p.docRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind: liveDiffs,
@@ -77,6 +79,7 @@ func (p *Plugin) newLiveSet() *livepanes.Set {
 			Prepare: p.resolveDiffAdminTargets,
 			Targets: p.diffWatchTargets,
 			Refresh: p.refreshDiffPanes,
+			Owed:    p.diffRefreshOwed,
 		},
 	)
 }
@@ -139,7 +142,12 @@ func (p *Plugin) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
 // frame placed exactly one, so both fall out of this without a special case.
 func (p *Plugin) visibleContentLeaves() map[int]bool {
 	visible := make(map[int]bool)
-	if !p.paneFrameDrawn {
+	// Focus is this surface's visibility contract — see SetFocused. A plugin the
+	// user has switched away from is not repainted, so its recorded frame stays
+	// frozen at whatever it last drew; without this, a diff pane on a tab nobody
+	// is looking at would keep spending six git subprocesses per burst, which is
+	// exactly the cost watching only visible panes exists to avoid.
+	if !p.focused || !p.paneFrameDrawn {
 		return visible
 	}
 	for _, placement := range p.paneFrame.Leaves {
@@ -251,6 +259,23 @@ func (p *Plugin) refreshIssuePanes() []tea.Cmd {
 	return cmds
 }
 
+// issueRefreshOwed reports whether a visible card is holding a change it was
+// vetoed from applying, so the reconcile can retry it once the veto lifts.
+func (p *Plugin) issueRefreshOwed() bool {
+	visible := p.visibleContentLeaves()
+	for id, pane := range p.issues {
+		if pane == nil || !visible[id] {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			if item.Value != nil && item.Value.RefreshPending() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // issueRefreshSuppressed vetoes an issue re-read while a modal owns the screen.
 //
 // The card underneath is not visible, so refreshing it buys nothing and costs
@@ -313,6 +338,25 @@ func (p *Plugin) refreshDocPanes() []tea.Cmd {
 		}
 	}
 	return cmds
+}
+
+// docRefreshOwed reports whether a visible document is holding a change it was
+// vetoed from applying.
+//
+// This is the one that matters most in practice: the file picker, the info
+// overlay and a pane search all veto while leaving the pane drawn, so the change
+// is not re-driven by the pane going away and coming back.
+func (p *Plugin) docRefreshOwed() bool {
+	visible := p.visibleContentLeaves()
+	for id, pane := range p.docs {
+		if pane == nil || !visible[id] {
+			continue
+		}
+		if view := pane.view(); view != nil && view.RefreshPending() {
+			return true
+		}
+	}
+	return false
 }
 
 // docRefreshSuppressed vetoes a document re-read while something else owns the
@@ -475,6 +519,27 @@ func (p *Plugin) refreshDiffPanes() []tea.Cmd {
 		}
 	}
 	return cmds
+}
+
+// diffRefreshOwed reports whether a visible diff is holding a change it was
+// vetoed from applying — the usual case being a signal that arrived while a
+// stage, discard or commit was still writing.
+func (p *Plugin) diffRefreshOwed() bool {
+	if p.diff.RefreshPending() {
+		return true
+	}
+	visible := p.visibleContentLeaves()
+	for id, pane := range p.diffs {
+		if pane == nil || !visible[id] {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			if item.Value != nil && item.Value.RefreshPending() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // diffRefreshSuppressed vetoes a diff re-run while a modal owns the screen or a

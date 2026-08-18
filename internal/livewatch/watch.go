@@ -243,9 +243,26 @@ func (w *PathWatcher) reconcileLocked() {
 	}
 }
 
+// isWatchedDir reports whether path is one of the directories this watcher is
+// registered on.
+func (w *PathWatcher) isWatchedDir(path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.watched[filepath.Clean(abs)]
+}
+
 // rereconcile re-checks the registrations against the kernel. It is what the
-// event loop calls when a remove or rename may have taken a watched directory
-// with it.
+// event loop calls when a remove or rename has taken a watched directory with
+// it.
+//
+// A directory removed and immediately recreated is usually still gone at this
+// point, so the re-add here fails and the recovery is recorded rather than
+// completed: the host's next reconcile finishes it, and the re-add reports the
+// change nobody was watching for.
 func (w *PathWatcher) rereconcile() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -361,13 +378,16 @@ func (w *PathWatcher) run() {
 			if ev.Op == fsnotify.Chmod {
 				continue
 			}
-			// A removed or renamed path may be a directory this watcher is
-			// registered on, in which case the backend has just dropped the
-			// registration. Re-reconcile immediately rather than waiting for the
-			// host's next Watch call: the recreated directory is usually back
-			// within milliseconds, and anything written into it before the
-			// re-add is a change nobody ever reports.
-			if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+			// A removed or renamed directory this watcher is registered on has
+			// just had its registration dropped by the backend. Notice it here
+			// rather than only on the host's next Watch call.
+			//
+			// Narrowed to the registered directory itself on purpose: a checkout
+			// or rebase deletes hundreds of files inside a watched directory, and
+			// reconciling on each of them would put a WatchList and two map
+			// builds — and, where a re-add succeeds, a directory read — inline on
+			// the goroutine that has to keep draining fsnotify's events.
+			if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 && w.isWatchedDir(ev.Name) {
 				w.rereconcile()
 			}
 			if !w.matches(ev.Name) {

@@ -74,20 +74,37 @@ type Binding struct {
 	// carrying the results. The host owns the suppression veto: a refresh it
 	// declines must stay owed, not be dropped.
 	Refresh func() []tea.Cmd
+
+	// Owed, when set, reports whether any pane of this kind has a re-read it
+	// has not performed — a change that arrived while the host was vetoing
+	// refreshes. It is what makes "the change lands as soon as the veto lifts"
+	// true rather than aspirational: without it, a signal that arrives while a
+	// modal, an overlay or a pane search owns the screen is remembered by the
+	// pane and then never driven again, and the pane stays wrong until some
+	// later write happens to arrive.
+	//
+	// Reconcile retries an owed refresh on every pass. That is cheap because a
+	// still-vetoed refresh declines without reading anything.
+	Owed func() bool
 }
 
 // WatchStartedMsg carries a watcher created off the update goroutine back to
 // the Set that asked for it.
+//
+// It must always reach [Set.Handle], including for a project the user has since
+// switched away from. It deliberately does not implement the hosts' stale-epoch
+// interface: a host that dropped it would leak the watcher it carries — nothing
+// else holds a reference to stop it — and wedge the kind, since the flag that
+// says a start is in flight is cleared only by handling this. Handle already
+// stops a watcher nobody wants, which is the right answer to a stale one; Epoch
+// is here so a host can tell which project it belongs to, not so it can be
+// discarded.
 type WatchStartedMsg struct {
 	Owner   string
 	Kind    string
 	Epoch   uint64
 	Watcher *livewatch.PathWatcher
 }
-
-// GetEpoch lets a host's ordinary stale-message check drop a watcher started
-// for a project the user has since switched away from.
-func (m WatchStartedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // ChangedMsg says the targets of one kind moved and its panes should re-read.
 type ChangedMsg struct {
@@ -219,7 +236,17 @@ func (s *Set) sync(b *binding) tea.Cmd {
 	if b.watcher != nil {
 		fresh := b.appeared(targets)
 		b.watcher.Watch(targets...)
-		if !fresh || b.Refresh == nil {
+		if b.Refresh == nil {
+			return nil
+		}
+		if !fresh {
+			if b.Owed != nil && b.Owed() {
+				// A change that arrived under a veto. Retried here rather than
+				// from wherever the veto lifts, because a modal, an overlay and a
+				// pane search each close from several places and one of them
+				// would eventually forget.
+				return tea.Batch(b.Refresh()...)
+			}
 			return nil
 		}
 		// Something is on screen that was not being watched a moment ago: a tab
@@ -259,12 +286,27 @@ func (s *Set) Handle(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return s.adopt(m), true
 	case ChangedMsg:
-		if m.Owner != s.owner {
+		if m.Owner != s.owner || s.find(m.Kind) == nil {
 			return nil, false
 		}
 		return s.changed(m.Kind), true
 	}
 	return nil, false
+}
+
+// Kinds lists the registered kinds in registration order. It is what a parity
+// test asserts against: claiming a message is not the same as having a binding
+// to answer it with, and a test that checks only the former passes against a
+// surface that quietly stopped refreshing one of its panes.
+func (s *Set) Kinds() []string {
+	if s == nil {
+		return nil
+	}
+	kinds := make([]string, 0, len(s.bindings))
+	for _, b := range s.bindings {
+		kinds = append(kinds, b.Kind)
+	}
+	return kinds
 }
 
 // adopt installs a watcher created off the update goroutine, stopping it
@@ -337,12 +379,17 @@ func (s *Set) Stop() {
 		return
 	}
 	for _, b := range s.bindings {
+		// Cleared for every binding, watcher or not. A start still in flight has
+		// no watcher to release, and leaving its flag set would tell every later
+		// reconcile that one is already coming — turning a teardown into a kind
+		// that never watches anything again.
+		b.starting = false
+		b.watching = nil
 		if b.watcher == nil {
 			continue
 		}
 		w := b.watcher
 		b.watcher = nil
-		b.starting = false
 		go w.Stop()
 	}
 }

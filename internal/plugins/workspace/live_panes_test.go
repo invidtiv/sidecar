@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/livepanes"
@@ -86,7 +87,9 @@ func docPaneText(t *testing.T, p *Plugin) string {
 		t.Fatal("no document pane")
 	}
 	doc.view().SetSize(80, 20)
-	return doc.view().View()
+	// Stripped: the renderer splits a line across style runs, so a raw View
+	// contains escape sequences in the middle of the words a test looks for.
+	return ansi.Strip(doc.view().View())
 }
 
 // The motivating case: an agent writes a file the user is reading beside it.
@@ -193,15 +196,89 @@ func TestReconcileDoesNothingWithoutAPluginContext(t *testing.T) {
 
 // Parity, checked rather than remembered: an issue card, a document and a diff
 // are reachable from this surface and from the global browser, and both must
-// refresh. This asserts the project half registers all three kinds; the global
-// half is asserted in internal/overview.
+// refresh. Asserted against the registered bindings rather than against Handle
+// claiming a message: claiming is decided by owner alone, so a surface that
+// dropped a binding would still claim every message for it and refresh nothing.
 func TestProjectSurfaceRegistersEveryLiveKind(t *testing.T) {
 	p := docPaneTestPlugin(t, t.TempDir(), true)
 	p.live = p.newLiveSet()
 	t.Cleanup(p.stopLiveWatchers)
-	for _, kind := range []string{liveIssues, liveDocs, liveDiffs} {
-		if _, handled := p.live.Handle(livepanes.ChangedMsg{Owner: liveOwner, Kind: kind}); !handled {
-			t.Errorf("the %q kind is not registered on the project surface", kind)
+
+	got := map[string]bool{}
+	for _, kind := range p.live.Kinds() {
+		got[kind] = true
+	}
+	for _, want := range []string{liveIssues, liveDocs, liveDiffs} {
+		if !got[want] {
+			t.Errorf("the %q kind is not registered on the project surface", want)
 		}
+	}
+	if _, handled := p.live.Handle(livepanes.ChangedMsg{Owner: liveOwner, Kind: "not-a-kind"}); handled {
+		t.Error("the set claimed a message for a kind it has no binding for")
+	}
+}
+
+// A plugin the user has switched away from is not repainted, so its recorded
+// frame stays frozen at whatever it last drew. Without focus in the visibility
+// answer, a diff pane on a tab nobody is looking at would keep spending six git
+// subprocesses per burst.
+func TestAPluginTheUserSwitchedAwayFromWatchesNothing(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "notes.md", "# notes\n")
+	p := docPaneForLiveTest(t, root, "notes.md")
+	t.Cleanup(p.stopLiveWatchers)
+
+	if got := p.docWatchTargets(); len(got) != 1 {
+		t.Fatalf("docWatchTargets() = %v while the plugin is on screen, want one", got)
+	}
+
+	p.SetFocused(false)
+	if !p.paneFrameDrawn {
+		t.Fatal("switching away repainted the plugin; this test no longer covers the frozen-frame case")
+	}
+	if got := p.docWatchTargets(); len(got) != 0 {
+		t.Fatalf("docWatchTargets() = %v for a plugin the user switched away from, want none", got)
+	}
+}
+
+// A change that arrives while a refresh is vetoed must land when the veto
+// lifts. The file picker, the info overlay and a pane search all veto while
+// leaving the pane drawn, so nothing about the pane's visibility re-drives it.
+func TestAChangeVetoedByAnOverlayLandsWhenTheVetoLifts(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "notes.md", "# notes\n\nBEFORE\n")
+	p := docPaneForLiveTest(t, root, "notes.md")
+	t.Cleanup(p.stopLiveWatchers)
+	runLive(t, p, p.reconcileLiveWatches())
+
+	watcher := p.live.Watcher(liveDocs)
+	if watcher == nil {
+		t.Fatal("a visible document pane started no watcher")
+	}
+
+	// Something else owns the screen when the write lands.
+	p.viewMode = ViewModeCreate
+	writeDocPaneFixture(t, root, "notes.md", "# notes\n\nWRITTEN UNDER THE VETO\n")
+	select {
+	case <-watcher.Signals():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the changed file produced no signal")
+	}
+	changed, _ := p.live.Handle(livepanes.ChangedMsg{Owner: liveOwner, Kind: liveDocs})
+	runLive(t, p, changed)
+
+	if got := docPaneText(t, p); strings.Contains(got, "WRITTEN UNDER THE VETO") {
+		t.Fatal("the refresh was not vetoed; this test no longer covers the owed case")
+	}
+	if !p.docRefreshOwed() {
+		t.Fatal("a vetoed refresh was dropped rather than left owed")
+	}
+
+	// The veto lifts. Nothing else changes: same pane, same targets.
+	p.viewMode = ViewModeList
+	runLive(t, p, p.reconcileLiveWatches())
+
+	if got := docPaneText(t, p); !strings.Contains(got, "WRITTEN UNDER THE VETO") {
+		t.Fatalf("the owed change never landed after the veto lifted; pane shows:\n%s", got)
 	}
 }

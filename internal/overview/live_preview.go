@@ -68,12 +68,14 @@ func (m *Model) newLiveSet() *livepanes.Set {
 			Prepare: m.resolvePreviewTDStore,
 			Targets: m.previewIssueTargets,
 			Refresh: m.refreshPreviewIssues,
+			Owed:    m.previewIssueRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind:    livePreviewDocs,
 			Config:  livewatch.Config{Ignore: isPreviewEditorScratchPath},
 			Targets: m.previewDocTargets,
 			Refresh: m.refreshPreviewDocs,
+			Owed:    m.previewDocRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind:    livePreviewDiffs,
@@ -81,6 +83,7 @@ func (m *Model) newLiveSet() *livepanes.Set {
 			Prepare: m.resolvePreviewDiffAdmin,
 			Targets: m.previewDiffTargets,
 			Refresh: m.refreshPreviewDiffs,
+			Owed:    m.previewDiffRefreshOwed,
 		},
 	)
 }
@@ -128,11 +131,15 @@ func (m *Model) reconcileLiveWatches() tea.Cmd {
 // previewPaneVisible reports whether the preview's leaf of this kind is one the
 // layout actually places.
 //
-// A preview that exists but could not be placed — the window is too narrow for
-// the tree, so LayoutTree zooms to the focused leaf alone — is not on screen and
-// is not worth a registration. Before the first render there is no peer box to
-// lay out in; an existing preview counts as visible then, because it is about to
-// be drawn and the alternative is a pane that never arms its watcher.
+// A preview that exists but could not be placed is not on screen and is not
+// worth a registration. There are two such cases and they are easy to conflate:
+// the window is too narrow to show a preview at all, so the list takes the full
+// width; or the tree does not fit its peer box, so LayoutTree zooms to the
+// focused leaf alone and every other leaf is gone.
+//
+// Only one case is genuinely unknown: before anything has been sized there is no
+// peer box to lay out in. An existing preview counts as visible then, because it
+// is about to be drawn and the alternative is a pane that never arms its watcher.
 func (m *Model) previewPaneVisible(kind panelayout.Kind) bool {
 	// Answered without laying anything out, because layoutPreviewPanes builds a
 	// default tree when there is none — a reasonable thing for a renderer to do
@@ -140,9 +147,13 @@ func (m *Model) previewPaneVisible(kind panelayout.Kind) bool {
 	if m.preview.paneRoot == nil {
 		return false
 	}
+	if m.width == 0 || m.height == 0 {
+		return true
+	}
 	peer, drawn := m.previewPeerBox()
 	if !drawn {
-		return true
+		// Sized, and the preview is not on screen at this size.
+		return false
 	}
 	layout, ok := m.layoutPreviewPanes(peer)
 	if !ok {
@@ -174,6 +185,13 @@ func (m *Model) previewIssueTargets() []livewatch.Target {
 func (m *Model) resolvePreviewTDStore() tea.Cmd {
 	issue := m.preview.issue
 	if issue == nil || issue.root == "" || len(issue.tabs.Items) == 0 {
+		return nil
+	}
+	// Gated on visibility for the same reason the targets are: resolving this
+	// walks parent directories and can shell out to git, and a preview the
+	// layout could not place is not worth it. The project surface gates the same
+	// way; an asymmetry here is a cost one surface pays and the other does not.
+	if !m.previewPaneVisible(panelayout.Issue) {
 		return nil
 	}
 	if _, done := m.preview.tdStoreTargets[issue.root]; done {
@@ -295,6 +313,10 @@ func (m *Model) resolvePreviewDiffAdmin() tea.Cmd {
 	if diff == nil || diff.root == "" || len(diff.tabs.Items) == 0 {
 		return nil
 	}
+	// Five `git rev-parse` calls. Not spent on a pane that is not on screen.
+	if !m.previewPaneVisible(panelayout.Diff) {
+		return nil
+	}
 	if _, done := m.preview.diffAdminTargets[diff.root]; done {
 		return nil
 	}
@@ -328,4 +350,50 @@ func (m *Model) refreshPreviewDiffs() []tea.Cmd {
 		}
 	}
 	return cmds
+}
+
+// ---------------------------------------------------------------------------
+// Owed refreshes
+// ---------------------------------------------------------------------------
+
+// A change that arrived while a refresh was vetoed is remembered by the pane
+// and has to be re-driven, or it lands only when some later write happens to
+// arrive. This surface passes false for every veto today, so these report only
+// the in-flight-collision case — but the contract is the same one the project
+// surface relies on, and a veto added here later must not silently lose a
+// change.
+
+func (m *Model) previewIssueRefreshOwed() bool {
+	issue := m.preview.issue
+	if issue == nil {
+		return false
+	}
+	for _, item := range issue.tabs.Items {
+		if item.Value != nil && item.Value.RefreshPending() {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) previewDocRefreshOwed() bool {
+	doc := m.preview.doc
+	if doc == nil {
+		return false
+	}
+	view := doc.tabs.ActiveView()
+	return view != nil && view.RefreshPending()
+}
+
+func (m *Model) previewDiffRefreshOwed() bool {
+	diff := m.preview.diff
+	if diff == nil {
+		return false
+	}
+	for _, item := range diff.tabs.Items {
+		if item.Value != nil && item.Value.RefreshPending() {
+			return true
+		}
+	}
+	return false
 }

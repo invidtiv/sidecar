@@ -49,20 +49,30 @@ func TestPreviewDocPaneRereadsWhenTheFileChanges(t *testing.T) {
 }
 
 // A preview the layout could not place is not on screen, and is not worth a
-// registration.
+// registration — nor the parent-walking and git calls its targets need.
 func TestUnplaceablePreviewPaneIsNotWatched(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindShell)
 	t.Cleanup(m.stopLiveWatchers)
 	runLive(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 
+	if !m.previewPaneVisible(panelayout.Document) {
+		t.Fatal("a freshly opened preview document is not visible")
+	}
 	if got := m.previewDocTargets(); len(got) != 1 {
 		t.Fatalf("previewDocTargets() = %v for a placed preview, want one", got)
 	}
 
-	// A window too narrow to lay the tree out zooms to the focused leaf alone.
-	m.WorkspacesView(10, 6)
+	// Focus the terminal leaf and shrink the window below the layout floor:
+	// LayoutTree then places the focused leaf alone and the document is gone.
+	terminal := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
+	if terminal == nil {
+		t.Fatal("the preview tree has no terminal leaf to zoom to")
+	}
+	m.preview.paneFocus = terminal.ID
+	m.WorkspacesView(40, 10)
+
 	if m.previewPaneVisible(panelayout.Document) {
-		return // the document is the focused leaf; nothing to assert
+		t.Fatal("a document the layout could not place was reported as visible")
 	}
 	if got := m.previewDocTargets(); len(got) != 0 {
 		t.Fatalf("previewDocTargets() = %v for a pane the layout did not place, want none", got)
@@ -70,16 +80,27 @@ func TestUnplaceablePreviewPaneIsNotWatched(t *testing.T) {
 }
 
 // Parity, checked rather than remembered: the global browser must register the
-// same live kinds the project surface does. Its half is asserted in
+// same live kinds the project surface does. Asserted against the registered
+// bindings rather than against Handle claiming a message: claiming is decided by
+// owner alone, so a surface that dropped a binding would still claim every
+// message for it and refresh nothing. Its half is asserted in
 // internal/plugins/workspace.
 func TestGlobalSurfaceRegistersEveryLiveKind(t *testing.T) {
 	m, _ := previewModel(t)
 	m.preview.live = m.newLiveSet()
 	t.Cleanup(m.stopLiveWatchers)
-	for _, kind := range []string{livePreviewIssues, livePreviewDocs, livePreviewDiffs} {
-		if _, handled := m.preview.live.Handle(livepanes.ChangedMsg{Owner: livePreviewOwner, Kind: kind}); !handled {
-			t.Errorf("the %q kind is not registered on the global surface", kind)
+
+	got := map[string]bool{}
+	for _, kind := range m.preview.live.Kinds() {
+		got[kind] = true
+	}
+	for _, want := range []string{livePreviewIssues, livePreviewDocs, livePreviewDiffs} {
+		if !got[want] {
+			t.Errorf("the %q kind is not registered on the global surface", want)
 		}
+	}
+	if _, handled := m.preview.live.Handle(livepanes.ChangedMsg{Owner: livePreviewOwner, Kind: "not-a-kind"}); handled {
+		t.Error("the set claimed a message for a kind it has no binding for")
 	}
 }
 

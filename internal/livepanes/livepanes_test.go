@@ -55,10 +55,6 @@ func (f *fixture) start(t *testing.T) {
 func TestSetWatchesOnlyWhatABindingReportsAsVisible(t *testing.T) {
 	dir := t.TempDir()
 	visible := filepath.Join(dir, "visible.md")
-	hidden := filepath.Join(dir, "..", "hidden")
-	if err := os.MkdirAll(hidden, 0o755); err != nil {
-		t.Fatal(err)
-	}
 
 	f := newFixture(t)
 	f.targets = []livewatch.Target{livewatch.File(visible)}
@@ -260,4 +256,105 @@ func stopped(w *livewatch.PathWatcher) bool {
 	w.Stop()
 	_, open := <-w.Signals()
 	return !open
+}
+
+// The double-start path a project switch produces: Stop, Init, Start can leave
+// two watchers in flight for one kind. The second must replace the first AND
+// stop it, or the loser's goroutine and descriptors live for the rest of the
+// process.
+func TestAdoptingASecondWatcherStopsTheFirst(t *testing.T) {
+	dir := t.TempDir()
+	f := newFixture(t)
+	f.targets = []livewatch.Target{livewatch.File(filepath.Join(dir, "notes.md"))}
+
+	first := f.set.Reconcile()().(WatchStartedMsg)
+	f.set.Handle(first)
+	if f.set.Watcher("doc") != first.Watcher {
+		t.Fatal("the first watcher was not adopted")
+	}
+
+	// A second start lands — the one begun before the switch.
+	second, err := livewatch.NewPathWatcher(livewatch.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.set.Handle(WatchStartedMsg{Owner: "test", Kind: "doc", Epoch: 7, Watcher: second})
+
+	if f.set.Watcher("doc") != second {
+		t.Fatal("the incoming watcher was not installed")
+	}
+	if !stopped(first.Watcher) {
+		t.Fatal("the replaced watcher was leaked instead of stopped")
+	}
+	if got := second.WatchedDirs(); len(got) != 1 {
+		t.Fatalf("WatchedDirs() = %v on the adopted watcher, want the current targets", got)
+	}
+}
+
+// Repeated open and close must give every descriptor back. WatchedDirs is the
+// observable proxy: on macOS each registration holds a descriptor per file in
+// the directory, so a registration that outlives its pane is a leak.
+func TestRepeatedOpenAndCloseDoesNotLeakRegistrations(t *testing.T) {
+	dir := t.TempDir()
+	for range 20 {
+		f := newFixture(t)
+		f.targets = []livewatch.Target{livewatch.File(filepath.Join(dir, "notes.md"))}
+		f.start(t)
+		w := f.set.Watcher("doc")
+		if len(w.WatchedDirs()) != 1 {
+			t.Fatalf("WatchedDirs() = %v, want one", w.WatchedDirs())
+		}
+		f.set.Stop()
+		w.Stop()
+		if got := w.WatchedDirs(); len(got) != 0 {
+			t.Fatalf("WatchedDirs() = %v after teardown, want none", got)
+		}
+	}
+}
+
+// Stop must clear the in-flight flag as well as the watcher. A start that was
+// still in flight has no watcher to release, and a flag left set tells every
+// later reconcile that one is already coming — turning a teardown into a kind
+// that never watches anything again.
+func TestStopUnwedgesAKindWhoseStartWasInFlight(t *testing.T) {
+	dir := t.TempDir()
+	f := newFixture(t)
+	f.targets = []livewatch.Target{livewatch.File(filepath.Join(dir, "notes.md"))}
+
+	started := f.set.Reconcile()().(WatchStartedMsg)
+	// The teardown happens before the start lands.
+	f.set.Stop()
+	go started.Watcher.Stop()
+
+	if cmd := f.set.Reconcile(); cmd == nil {
+		t.Fatal("the kind was wedged off: no watcher, and no new start")
+	}
+}
+
+// A change that arrives while the host is vetoing refreshes must be retried,
+// not remembered and forgotten.
+func TestReconcileRetriesAnOwedRefresh(t *testing.T) {
+	owed := false
+	refreshed := 0
+	dir := t.TempDir()
+	targets := []livewatch.Target{livewatch.File(filepath.Join(dir, "notes.md"))}
+	set := NewSet("test", nil, Binding{
+		Kind:    "doc",
+		Targets: func() []livewatch.Target { return targets },
+		Refresh: func() []tea.Cmd { refreshed++; return nil },
+		Owed:    func() bool { return owed },
+	})
+	defer set.Stop()
+	set.Handle(set.Reconcile()().(WatchStartedMsg))
+
+	set.Reconcile()
+	if refreshed != 0 {
+		t.Fatalf("an unchanged, unowed reconcile refreshed %d times, want 0", refreshed)
+	}
+
+	owed = true
+	set.Reconcile()
+	if refreshed != 1 {
+		t.Fatalf("an owed refresh was retried %d times, want 1", refreshed)
+	}
 }
