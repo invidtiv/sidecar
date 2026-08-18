@@ -16,15 +16,27 @@
 package testenv
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 )
+
+// teardownCommandTimeout bounds the tmux calls teardown makes.
+//
+// The server teardown is trying to reach may be wedged rather than healthy —
+// an fd-starved tmux accepts a connection and immediately drops it, which is
+// the exact condition this package exists to stop causing. An unbounded
+// kill-server against one of those hangs TestMain after m.Run has returned, so
+// `go test ./...` never finishes and the run cannot be interrupted either.
+const teardownCommandTimeout = 5 * time.Second
 
 // SocketPath is where tmux puts its default socket under a given TMUX_TMPDIR.
 func SocketPath(tmuxTmpDir string) string {
@@ -39,6 +51,9 @@ func SocketPath(tmuxTmpDir string) string {
 // pointing somewhere private; if anything has disturbed TMUX_TMPDIR by then it
 // destroys the developer's own server and every session on it. -S names the
 // file we created, so the blast radius cannot leave this temp dir.
+//
+// The returned teardown is safe to call more than once and from more than one
+// goroutine.
 func IsolateTmux() (socket string, teardown func(), err error) {
 	dir, err := os.MkdirTemp("", "sidecar-tmux-test")
 	if err != nil {
@@ -68,30 +83,38 @@ func IsolateTmux() (socket string, teardown func(), err error) {
 // place on purpose so the server stays addressable and `make reap-test-tmux`
 // can still find it.
 func teardownFor(dir string) func() {
-	var once bool
+	var once sync.Once
 	return func() {
-		if once {
-			return
-		}
-		once = true
-		socket := SocketPath(dir)
-		if _, err := os.Stat(socket); os.IsNotExist(err) {
-			// No server was ever started under this dir.
-			_ = os.RemoveAll(dir)
-			return
-		}
-		if err := exec.Command("tmux", "-S", socket, "kill-server").Run(); err != nil {
-			// A server that was never started, or already gone, reports an
-			// error too. Distinguish by whether the socket still answers.
-			if exec.Command("tmux", "-S", socket, "has-session").Run() == nil {
-				fmt.Fprintf(os.Stderr,
-					"tmux isolation: could not kill test server at %s; leaving it addressable for `make reap-test-tmux`\n",
-					socket)
+		once.Do(func() {
+			socket := SocketPath(dir)
+			if _, err := os.Stat(socket); os.IsNotExist(err) {
+				// No server was ever started under this dir.
+				_ = os.RemoveAll(dir)
 				return
 			}
-		}
-		_ = os.RemoveAll(dir)
+			if err := runTmux(socket, "kill-server"); err != nil {
+				// A server that was never started, or already gone, reports an
+				// error too. Distinguish by whether the socket still answers.
+				// A wedged server that answers neither is treated as alive:
+				// retaining the directory is the conservative choice, because
+				// removing it is the irreversible one.
+				if runTmux(socket, "has-session") == nil {
+					fmt.Fprintf(os.Stderr,
+						"tmux isolation: could not kill test server at %s; leaving it addressable for `make reap-test-tmux`\n",
+						socket)
+					return
+				}
+			}
+			_ = os.RemoveAll(dir)
+		})
 	}
+}
+
+// runTmux runs one socket-scoped tmux command under a timeout.
+func runTmux(socket string, args ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), teardownCommandTimeout)
+	defer cancel()
+	return exec.CommandContext(ctx, "tmux", append([]string{"-S", socket}, args...)...).Run()
 }
 
 // Main runs m with tmux isolated, tears down, and returns the exit code.
@@ -102,27 +125,38 @@ func teardownFor(dir string) func() {
 // Teardown also runs on SIGINT/SIGTERM, so an interrupted run does not leak.
 // It cannot run when the binary dies by panic or by `go test` timeout — Go
 // exits those paths without unwinding TestMain — which is why teardown leaves a
-// reachable socket behind rather than an orphan with no path.
+// reachable socket behind rather than an orphan with no path, and why
+// `make reap-test-tmux` exists.
 func Main(m *testing.M) int {
 	_, teardown, err := IsolateTmux()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	stop := onSignal(func() { teardown() })
+	stop := OnSignal(teardown)
 	code := m.Run()
 	stop()
 	teardown()
 	return code
 }
 
-// onSignal runs fn if the process is interrupted, then restores the default
+// OnSignal runs fn if the process is interrupted, then restores the default
 // disposition and re-raises so the exit status still reflects the signal.
-func onSignal(fn func()) (stop func()) {
+//
+// Packages that drive TestMain themselves — because they isolate a second axis
+// as well — should call this alongside IsolateTmux, so an interrupted run gets
+// the same cleanup Main provides.
+//
+// The returned stop waits for an in-flight handler to finish, so a signal
+// arriving exactly as m.Run returns cannot leave teardown running concurrently
+// with the caller's own teardown call.
+func OnSignal(fn func()) (stop func()) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	done := make(chan struct{})
+	finished := make(chan struct{})
 	go func() {
+		defer close(finished)
 		select {
 		case sig := <-ch:
 			fn()
@@ -136,5 +170,6 @@ func onSignal(fn func()) (stop func()) {
 	return func() {
 		close(done)
 		signal.Stop(ch)
+		<-finished
 	}
 }

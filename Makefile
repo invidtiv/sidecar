@@ -52,9 +52,15 @@ test:
 test-v:
 	go test -v ./...
 
-# Reap tmux servers left behind by a test run that died by panic, timeout, or
-# SIGKILL, where TestMain's teardown could not run. Never touches the
-# developer's own server; see scripts/reap-test-tmux.sh and td-4d99ae.
+# List tmux servers left behind by a test run that died by panic, timeout, or
+# SIGKILL, where TestMain's teardown could not run.
+reap-test-tmux-list:
+	./scripts/reap-test-tmux.sh
+
+# Reap them. Never touches the developer's own server, and skips directories
+# younger than an hour so a running suite cannot lose its TMUX_TMPDIR — but do
+# not run this concurrently with `make test`. See scripts/reap-test-tmux.sh
+# and td-4d99ae.
 reap-test-tmux:
 	./scripts/reap-test-tmux.sh --kill
 

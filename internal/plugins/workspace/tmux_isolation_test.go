@@ -77,8 +77,9 @@ func TestMain(m *testing.M) {
 		exitUnisolated(dir, err.Error())
 	}
 
+	stop := testenv.OnSignal(teardownTmux)
 	code := m.Run()
-
+	stop()
 	teardownTmux()
 	os.Exit(code)
 }

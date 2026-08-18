@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -184,8 +185,15 @@ var sharedTerminalControl terminalControlSource = controlManagerSource{manager: 
 // directly, so they never reach this.
 type inertControlSource struct{}
 
+// ErrInertControlTransport is what an inert transport reports. A test that
+// meant to exercise control mode and sees this in a fallback has not found a
+// broken transport — it has found that it never opted in. Callers that care can
+// tell the two apart with errors.Is rather than passing vacuously.
+var ErrInertControlTransport = errors.New(
+	"tmux control: inert transport under test; call tty.UseRealControlTransport to opt in")
+
 func (inertControlSource) Subscribe(ControlRequest) (terminalControlSubscription, error) {
-	return nil, fmt.Errorf("tmux control: no transport in tests; see defaultControlSource")
+	return nil, ErrInertControlTransport
 }
 
 // realControlUnderTest lets a test opt back in to the real transport.
