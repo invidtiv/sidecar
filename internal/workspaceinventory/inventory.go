@@ -554,9 +554,17 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 			default:
 			}
 			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, CapturedAt: now}
-			if identified := agentactivity.Identify(ob); identified != "" && identified != "shell" {
-				workspace.Provider, ob.Agent = identified, identified
-				input.ProviderSupported = supported(identified)
+			if identified := agentactivity.Identify(ob); identified != "" {
+				if identified == "shell" {
+					// A live shell process is not the launch-preference agent.
+					// Keeping manifest agentType here is how defaultAgentType=
+					// cursor painted every zsh pane as Cursor.
+					workspace.Provider, ob.Agent = "", ""
+					input.ProviderSupported = false
+				} else {
+					workspace.Provider, ob.Agent = identified, identified
+					input.ProviderSupported = supported(identified)
+				}
 			}
 			c.trackers.mu.Lock()
 			select {

@@ -62,7 +62,10 @@ type Result struct {
 var (
 	semanticVersionCommand = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 	claudeScreenIdentity   = regexp.MustCompile(`(?ms)(^─{8,}\s*$\n^❯.*$\n^─{8,}\s*$|manual mode on · \? for shortcuts)`)
-	codexScreenIdentity    = regexp.MustCompile(`(?im)(^OpenAI Codex \(v[^)]+\)\s*$|^• Working \(.*esc to interrupt\)\s*$|^\s*\d+\. No, and tell Codex what to do differently.*$|^› Write tests for @filename\s*$|^/ T R A N S C R I P T /\s*$)`)
+	// Codex-as-node is the common npm launcher. Identity has to survive the
+	// startup header scrolling off: working/approval chrome is enough.
+	// The composer glyph alone is not — other TUIs use ›.
+	codexScreenIdentity = regexp.MustCompile(`(?is)(OpenAI Codex \(v[^)]+\)|• Working \(.*esc to interrupt\)|No, and tell Codex what to do differently|Would you like to run the following command\?|/ T R A N S C R I P T /|Allow command\?)`)
 )
 
 // Identify returns the live program owning an agent pane when the existing
@@ -95,11 +98,15 @@ func Identify(ob Observation) string {
 		return "shell"
 	}
 
-	// Shared process names need live UI chrome. Cursor's official install is
-	// often `agent` (and the launcher re-execs bundled node with argv0
-	// preserved or not depending on host/tmux). Bare `agent` is also other
-	// tools (e.g. Grok), so only claim cursor when the bottom buffer is its
-	// TUI. Empty Identify lets callers retain a prior positive identity.
+	// Shared process names need live UI chrome or a resolved argv0. Herdr
+	// never claims Cursor from screen text: `node` is unknown unless argv
+	// names a known agent, and `agent` is Cursor only when it resolves to
+	// cursor-agent. We have pane_current_command, not the job, so Codex /
+	// Claude / Grok may still be claimed from distinctive chrome, but
+	// Cursor is process-or-alias only (plus the Cursor Agent header as a
+	// last resort when the comm name is the unresolvable `agent` alias).
+	// Empty Identify lets callers retain a prior *positive* live identity
+	// — not a launch preference.
 	if command == "agent" || command == "node" || command == "bun" {
 		current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
 		if command != "agent" {
@@ -110,8 +117,16 @@ func Identify(ob Observation) string {
 				return "codex"
 			}
 		}
-		if cursorScreenIdentity.MatchString(current) {
-			return "cursor"
+		if grokScreenIdentity.MatchString(current) {
+			return "grok"
+		}
+		if command == "agent" {
+			if lookUpAgentAlias() == "cursor" {
+				return "cursor"
+			}
+			if cursorScreenIdentity.MatchString(current) {
+				return "cursor"
+			}
 		}
 	}
 	return ""
@@ -278,11 +293,11 @@ func containsAll(folded string, literals []string) bool {
 
 // Tracker owns transition policy while Evaluate remains state-free.
 type Tracker struct {
-	State           State
-	Evidence        string
-	ChangedAt       time.Time
-	Seen            bool
-	VisibleBlocker  bool
+	State          State
+	Evidence       string
+	ChangedAt      time.Time
+	Seen           bool
+	VisibleBlocker bool
 	// IdleInferred records that the current idle state came from the absence
 	// of activity rather than an explicit completion marker. Providers without
 	// a completion signal can never assert "done", and views use this to say so

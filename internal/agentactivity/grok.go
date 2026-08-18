@@ -37,7 +37,7 @@ var (
 	// Also accept Thinking… and Waiting on… from current Grok Build chrome.
 	grokSpinnerStop = regexp.MustCompile(`(?im)(^\s*[\x{2801}-\x{28FF}]\s.*\[stop\]\s*$|Thinking…|Waiting on |background tasks?:\s*[1-9])`)
 	// Working footer: cancel hint together with shortcuts (Ctrl+x live; Ctrl+. in Herdr).
-	grokFooterWorking = regexp.MustCompile(`(?is)(?:esc:cancel|esc to (?:interrupt|cancel)).*(?:ctrl\+[x.]:shortcuts)|(?:ctrl\+[x.]:shortcuts).*(?:esc:cancel|esc to (?:interrupt|cancel))`)
+	grokFooterWorking   = regexp.MustCompile(`(?is)(?:esc:cancel|esc to (?:interrupt|cancel)).*(?:ctrl\+[x.]:shortcuts)|(?:ctrl\+[x.]:shortcuts).*(?:esc:cancel|esc to (?:interrupt|cancel))`)
 	grokFooterShortcuts = regexp.MustCompile(`(?i)ctrl\+[x.]:shortcuts`)
 	grokFooterCancel    = regexp.MustCompile(`(?i)(esc:cancel|esc to (?:interrupt|cancel)|ctrl\+c:cancel)`)
 	// Prompt box alone (older captures / interrupted fixtures).
@@ -51,6 +51,9 @@ var (
 	grokOptionDialog = regexp.MustCompile(`(?m)^\s*┃\s+[0-9a-z]+\s+\([●○]\)\s`)
 	// Legacy pre-0.2 tool wait chrome.
 	grokLegacyToolWorking = regexp.MustCompile(`(?im)(ctrl\+c:cancel.*ctrl\+enter:interject|ctrl\+enter:interject.*ctrl\+c:cancel|^\s*[\x{2801}-\x{28FF}]\s+(Run|Read|Search|List)\b)`)
+	// Distinctive footer/composer chrome. Used when pane_current_command is
+	// a shared runtime (node/agent) so Grok cannot be stolen by Cursor.
+	grokScreenIdentity = regexp.MustCompile(`(?is)(Ctrl\+x:shortcuts|Enter:send.{0,60}Shift\+Tab:mode|Esc:cancel.{0,60}Ctrl\+x:shortcuts)`)
 )
 
 // Blocked, overlay, and background-work outrank title/footer idle.

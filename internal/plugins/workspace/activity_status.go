@@ -7,6 +7,22 @@ import (
 	"github.com/marcus/sidecar/internal/agentactivity"
 )
 
+// liveShellProvider is the agent actually running in the pane. ChosenAgent is
+// launch preference only: painting it as the live chip makes every shell
+// created with defaultAgentType=cursor look like Cursor, including a plain
+// zsh and a Grok/Codex session whose process is briefly a shell.
+func liveShellProvider(shell *ShellSession) AgentType {
+	if shell == nil || shell.Agent == nil {
+		return AgentNone
+	}
+	switch shell.Agent.Type {
+	case AgentNone, AgentShell:
+		return AgentNone
+	default:
+		return shell.Agent.Type
+	}
+}
+
 // applyObservedAgentType updates only the live pane identity. Launch preference
 // remains in ChosenAgentType/ChosenAgent, so exiting an agent does not rewrite
 // how a future Sidecar-created session starts. A provider transition resets its

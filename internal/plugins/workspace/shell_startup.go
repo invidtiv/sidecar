@@ -350,16 +350,16 @@ func shellSessionFromDefinition(
 // requires. It is shared by first construction and by revival during a manifest
 // sync, so a shell that comes back is as usable as one that never left.
 func attachAgentToShell(shell *ShellSession, definition ShellDefinition, paneID func(string) string) {
-	displayType := AgentShell
-	if shell.ChosenAgent != AgentNone {
-		displayType = shell.ChosenAgent
-	}
+	// Live type starts as a shell. ChosenAgent is launch preference; seeding
+	// Type from it makes every defaultAgentType=cursor session look like
+	// Cursor until Identify proves otherwise — and empty Identify retains
+	// that seed forever. The first poll fills in the real owner.
 	startedAt := definition.CreatedAt
 	if startedAt.IsZero() {
 		startedAt = shell.CreatedAt
 	}
 	shell.Agent = &Agent{
-		Type:        displayType,
+		Type:        AgentShell,
 		TmuxSession: definition.TmuxName,
 		TmuxPane:    paneID(definition.TmuxName),
 		OutputBuf:   tty.NewOutputBuffer(outputBufferCap),
