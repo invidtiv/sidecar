@@ -325,3 +325,35 @@ func TestClosingTheLastResourceTabCollapsesTheLeaf(t *testing.T) {
 		t.Fatalf("%d Resource panes left behind", len(p.resources))
 	}
 }
+
+// The underline is the whole visible half of the feature: without it there is
+// nothing to click. The negative case above was tested and the positive one
+// was not, which is how a decoration path that never sees the matchers got
+// this far.
+func TestAReadyProviderUnderlinesTheKey(t *testing.T) {
+	p, _, _ := resourceTestPlugin(t)
+
+	const line = "agent: see CASH-1245 for the failing capture"
+	context := p.terminalLinkSurfaceContext(false)
+	if !context.ok {
+		t.Fatal("the selected terminal surface has no link context")
+	}
+
+	found := false
+	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
+		if link.Kind == terminalResourceLink {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a ready provider produced no resource link")
+	}
+
+	got := decorateTerminalLinks(line, p.terminalLinkResolver(false, p.terminalOutputBuffer(false)))
+	if got == line {
+		t.Fatalf("decorated line is unchanged, so the key was never underlined: %q", got)
+	}
+	if !strings.Contains(got, "\x1b[4m") {
+		t.Errorf("decorated = %q, want an underline around the key", got)
+	}
+}
