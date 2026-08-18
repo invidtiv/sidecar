@@ -56,19 +56,29 @@ func SanitizeLine(s string, maxChars int) string {
 	return truncateRunes(s, maxChars)
 }
 
-// SanitizeBody prepares multi-line provider text: OSC removed, invalid UTF-8
-// replaced, CRLF normalized, every control character except newline and tab
-// stripped, and the result bounded to maxBytes bytes on a rune boundary.
+// SanitizeBody prepares multi-line provider text and discards the truncation
+// flag. Use SanitizeBodyText when the caller needs to tell the user the body
+// was cut.
 func SanitizeBody(s string, maxBytes int) string {
+	out, _ := SanitizeBodyText(s, maxBytes)
+	return out
+}
+
+// SanitizeBodyText prepares multi-line provider text: OSC removed, invalid
+// UTF-8 replaced, CRLF normalized, every control character except newline and
+// tab stripped, and the result bounded to maxBytes bytes on a rune boundary.
+// It reports whether anything was cut.
+func SanitizeBodyText(s string, maxBytes int) (string, bool) {
 	if s == "" {
-		return ""
+		return "", false
 	}
 	s = StripOSC(s)
 	s = strings.ToValidUTF8(s, replacementRune)
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 	s = stripControls(s, true)
-	return truncateBytes(s, maxBytes)
+	out := truncateBytes(s, maxBytes)
+	return out, len(out) < len(s)
 }
 
 // stripControls removes C0 controls, DEL, and C1 controls. When keepWhitespace

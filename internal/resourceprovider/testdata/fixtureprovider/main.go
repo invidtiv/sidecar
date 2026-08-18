@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -28,10 +29,11 @@ import (
 const protocol = "sidecar.terminal-resource/v1"
 
 type request struct {
-	Protocol string `json:"protocol"`
-	Method   string `json:"method"`
-	Instance string `json:"instance"`
-	Host     *struct {
+	Protocol   string `json:"protocol"`
+	Method     string `json:"method"`
+	Instance   string `json:"instance"`
+	DeadlineMs int64  `json:"deadlineMs"`
+	Host       *struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"host,omitempty"`
@@ -62,6 +64,7 @@ type status struct {
 type field struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
+	Kind  string `json:"kind,omitempty"`
 }
 
 type body struct {
@@ -110,10 +113,14 @@ func main() {
 		return
 	}
 
+	// Keep the raw request bytes as well as the decoded form: request-echo
+	// hands them back so a host test can assert the envelope the host actually
+	// wrote, rather than trusting the host's own encoder.
+	rawRequest, _ := io.ReadAll(os.Stdin)
 	var req request
 	// A missing or unreadable request is not fatal: some modes are about what
 	// the host does with the output regardless of the request.
-	_ = json.NewDecoder(os.Stdin).Decode(&req)
+	_ = json.Unmarshal(rawRequest, &req)
 
 	effective := *mode
 	locator := ""
@@ -126,10 +133,27 @@ func main() {
 		locator = tail
 	}
 
-	run(effective, req, locator, *pidfile)
+	run(effective, req, rawRequest, locator, *pidfile)
 }
 
-func run(mode string, req request, locator, pidfile string) {
+// resolveOnlyModes misbehave on resolve but describe normally, which is what a
+// real provider that is correctly installed and returns a bad document looks
+// like. Without this a host test aimed at resolve would never get past describe.
+var resolveOnlyModes = map[string]bool{
+	"no-identity":         true,
+	"no-title":            true,
+	"empty-response":      true,
+	"over-limit-document": true,
+	"hostile-document":    true,
+	"request-echo":        true,
+	"env-report":          true,
+}
+
+func run(mode string, req request, rawRequest []byte, locator, pidfile string) {
+	if req.Method == "describe" && resolveOnlyModes[mode] {
+		emit(describeResponse())
+		return
+	}
 	switch mode {
 	case "malformed":
 		fmt.Print(`{"protocol":"sidecar.terminal-resource/v1", "resource": {`)
@@ -224,6 +248,27 @@ func run(mode string, req request, locator, pidfile string) {
 	case "hostile-document":
 		emit(hostileDocument())
 		return
+	case "no-identity":
+		emit(response{Protocol: protocol, Resource: &document{Title: "has a title, no identity"}})
+		return
+	case "no-title":
+		emit(response{Protocol: protocol, Resource: &document{Identity: "CASH-1"}})
+		return
+	case "empty-response":
+		emit(response{Protocol: protocol})
+		return
+	case "describe-shaped-resolve":
+		emit(describeResponse())
+		return
+	case "resolve-shaped-describe":
+		emit(resolveResponse("CASH-1"))
+		return
+	case "over-limit-document":
+		emit(overLimitDocument())
+		return
+	case "request-echo":
+		emit(requestEcho(rawRequest))
+		return
 	case "env-report":
 		emit(envReport())
 		return
@@ -284,8 +329,10 @@ func resolveResponse(locator string) response {
 			Status:   &status{Label: "IN PROGRESS", Tone: "info"},
 			Fields: []field{
 				{Label: "Project", Value: project},
-				{Label: "Assignee", Value: "Fixture User"},
+				{Label: "Assignee", Value: "Fixture User", Kind: "user"},
 				{Label: "Priority", Value: "High"},
+				{Label: "Created", Value: "2026-08-01T09:00:00Z", Kind: "timestamp"},
+				{Label: "Component", Value: "billing", Kind: "not-a-real-kind"},
 			},
 			Body: &body{
 				Format: "markdown",
@@ -330,6 +377,42 @@ func hostileFields() []field {
 		})
 	}
 	return out
+}
+
+// overLimitDocument is a well-formed document that is merely too big in every
+// dimension the host truncates. It must render, not fail.
+func overLimitDocument() response {
+	fields := make([]field, 0, 40)
+	for i := 0; i < 40; i++ {
+		fields = append(fields, field{
+			Label: fmt.Sprintf("f%d-%s", i, strings.Repeat("L", 120)),
+			Value: strings.Repeat("V", 900),
+		})
+	}
+	return response{
+		Protocol: protocol,
+		Resource: &document{
+			Identity: "CASH-1",
+			Title:    strings.Repeat("T", 500),
+			Subtitle: strings.Repeat("S", 300),
+			Status:   &status{Label: strings.Repeat("P", 200), Tone: "warning"},
+			Fields:   fields,
+			Body:     &body{Format: "text", Text: strings.Repeat("é", 60*1024)},
+		},
+	}
+}
+
+// requestEcho returns the request the host actually sent, so a host test can
+// assert the envelope from the outside rather than trusting its own encoder.
+func requestEcho(rawRequest []byte) response {
+	return response{
+		Protocol: protocol,
+		Resource: &document{
+			Identity: "request-echo",
+			Title:    "request",
+			Body:     &body{Format: "text", Text: string(rawRequest)},
+		},
+	}
 }
 
 // envReport returns the child's own execution environment as a document, so

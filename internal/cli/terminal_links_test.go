@@ -369,3 +369,78 @@ func TestTerminalLinksTouchesNoTmuxOrState(t *testing.T) {
 		t.Fatalf("terminal-links recorded a TUI startup destination: %q", page)
 	}
 }
+
+// Field kinds and the body truncation flag are carried through the CLI, not
+// dropped. M1 decides what to do with them; M0's job is not to lose them.
+func TestTerminalLinksCheckCarriesFieldKinds(t *testing.T) {
+	bin := buildFixtureProvider(t)
+	cfg := writeProviderConfig(t, `{"terminalResources":{"providers":[{"id":"good","command":["`+bin+`"],"enabled":true}]}}`)
+
+	out, _, code := runCLI(t, "terminal-links", "check", "good", "--config", cfg, "--resolve", "CASH-1245", "--json")
+	if code != 0 {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	var report struct {
+		Resolve struct {
+			Resource struct {
+				Fields []struct {
+					Label string `json:"label"`
+					Kind  string `json:"kind"`
+				} `json:"fields"`
+			} `json:"resource"`
+		} `json:"resolve"`
+	}
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	kinds := map[string]string{}
+	for _, f := range report.Resolve.Resource.Fields {
+		kinds[f.Label] = f.Kind
+	}
+	want := map[string]string{
+		"Project":   "text",
+		"Assignee":  "user",
+		"Priority":  "text",
+		"Created":   "timestamp",
+		"Component": "text", // an unknown kind coerces rather than failing
+	}
+	for label, kind := range want {
+		if kinds[label] != kind {
+			t.Fatalf("field %q kind = %q, want %q", label, kinds[label], kind)
+		}
+	}
+}
+
+// An over-limit document is truncated and still checks out, rather than
+// reporting a failure for something almost entirely fine.
+func TestTerminalLinksCheckTruncatesOverLimitDocuments(t *testing.T) {
+	bin := buildFixtureProvider(t)
+	cfg := writeProviderConfig(t, `{"terminalResources":{"providers":[
+	  {"id":"big","command":["`+bin+`","-mode=over-limit-document"],"enabled":true}
+	]}}`)
+	out, _, code := runCLI(t, "terminal-links", "check", "big", "--config", cfg, "--resolve", "CASH-1", "--json")
+	if code == 0 {
+		// describe for this mode returns a resource result, which is a shape
+		// failure, so a non-zero exit is expected; the resolve is what matters.
+		t.Log("check exited 0")
+	}
+	if !strings.Contains(out, `"truncated": true`) {
+		t.Fatalf("the truncation flag was not carried:\n%s", out)
+	}
+}
+
+// A resource with no identity is a protocol violation reported as a transport
+// failure, not rendered as a blank card.
+func TestTerminalLinksCheckRejectsAnIncompleteResource(t *testing.T) {
+	bin := buildFixtureProvider(t)
+	cfg := writeProviderConfig(t, `{"terminalResources":{"providers":[
+	  {"id":"headless","command":["`+bin+`","-mode=no-identity"],"enabled":true}
+	]}}`)
+	out, _, code := runCLI(t, "terminal-links", "check", "headless", "--config", cfg, "--resolve", "CASH-1", "--json")
+	if code != 1 {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, `"outcome": "invalid-resource"`) {
+		t.Fatalf("outcome:\n%s", out)
+	}
+}

@@ -169,11 +169,13 @@ type statusReport struct {
 type fieldReport struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
+	Kind  string `json:"kind"`
 }
 
 type bodyReport struct {
-	Format string `json:"format"`
-	Text   string `json:"text"`
+	Format    string `json:"format"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 type listReport struct {
@@ -442,7 +444,7 @@ func stateFromDescribe(p config.TerminalResourceProviderConfig, d *describeRepor
 		return string(resourceprovider.StateReady)
 	}
 	switch d.Outcome {
-	case "protocol", "invalid-describe", "spawn", "invalid_config":
+	case "protocol", "invalid-describe", "spawn", "shape", "invalid_config", "invalid_request":
 		return string(resourceprovider.StateIncompatible)
 	default:
 		return string(resourceprovider.StateTemporarilyFailed)
@@ -467,10 +469,10 @@ func toDocumentReport(doc resource.Document) *documentReport {
 		out.Status = &statusReport{Label: doc.Status.Label, Tone: string(doc.Status.Tone)}
 	}
 	for _, f := range doc.Fields {
-		out.Fields = append(out.Fields, fieldReport{Label: f.Label, Value: f.Value})
+		out.Fields = append(out.Fields, fieldReport{Label: f.Label, Value: f.Value, Kind: string(f.Kind)})
 	}
 	if doc.Body != nil {
-		out.Body = &bodyReport{Format: string(doc.Body.Format), Text: doc.Body.Text}
+		out.Body = &bodyReport{Format: string(doc.Body.Format), Text: doc.Body.Text, Truncated: doc.Body.Truncated}
 	}
 	if !doc.UpdatedAt.IsZero() {
 		out.UpdatedAt = doc.UpdatedAt.Format(time.RFC3339)
@@ -562,7 +564,14 @@ func writeProviderText(env Env, p providerReport) {
 				_, _ = fmt.Fprintf(env.Stdout, "            status %s (%s)\n", doc.Status.Label, doc.Status.Tone)
 			}
 			for _, f := range doc.Fields {
-				_, _ = fmt.Fprintf(env.Stdout, "            %-16s %s\n", f.Label, f.Value)
+				kind := ""
+				if f.Kind != "" && f.Kind != string(resource.FieldKindText) {
+					kind = "  (" + f.Kind + ")"
+				}
+				_, _ = fmt.Fprintf(env.Stdout, "            %-16s %s%s\n", f.Label, f.Value, kind)
+			}
+			if doc.Body != nil && doc.Body.Truncated {
+				_, _ = fmt.Fprintln(env.Stdout, "            body was truncated to the host limit")
 			}
 			if doc.SourceURL != "" {
 				_, _ = fmt.Fprintf(env.Stdout, "            source %s\n", doc.SourceURL)

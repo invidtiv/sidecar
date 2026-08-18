@@ -376,3 +376,186 @@ func TestManagerRejectsUnknownAndInvalidReferences(t *testing.T) {
 		t.Fatal("an empty reference must not resolve")
 	}
 }
+
+// The normative describe-failure authority table, one row at a time.
+//
+// The distinction is who has authority over the answer, not whether the call
+// went well: a typed error is the provider saying it has no matchers, while a
+// transport failure means the host simply has no new answer and must not invent
+// an empty one on the provider's behalf.
+func TestManagerDescribeAuthorityTable(t *testing.T) {
+	live := Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}
+
+	cases := []struct {
+		name      string
+		second    Description
+		secondErr error
+		wantLive  int
+		wantState State
+	}{
+		{
+			name:      "success replaces",
+			second:    Description{Matchers: []Matcher{{ID: "m", Pattern: "B-[0-9]+"}, {ID: "n", Pattern: "C-[0-9]+"}}},
+			wantLive:  2,
+			wantState: StateReady,
+		},
+		{
+			name:      "typed error drops",
+			secondErr: &resource.Error{Code: resource.CodeInvalidConfig, Message: "not set up"},
+			wantLive:  0,
+			wantState: StateIncompatible,
+		},
+		{
+			name:      "typed unavailable also drops",
+			secondErr: &resource.Error{Code: resource.CodeUnavailable},
+			wantLive:  0,
+			wantState: StateTemporarilyFailed,
+		},
+		{
+			name:      "timeout keeps",
+			secondErr: &TransportError{Reason: ReasonTimeout},
+			wantLive:  1,
+			wantState: StateTemporarilyFailed,
+		},
+		{
+			name:      "crash keeps",
+			secondErr: &TransportError{Reason: ReasonExit},
+			wantLive:  1,
+			wantState: StateTemporarilyFailed,
+		},
+		{
+			name:      "failed validation keeps",
+			secondErr: &TransportError{Reason: ReasonInvalidDescribe},
+			wantLive:  1,
+			wantState: StateIncompatible,
+		},
+		{
+			name:      "protocol mismatch keeps",
+			secondErr: &TransportError{Reason: ReasonProtocol},
+			wantLive:  1,
+			wantState: StateIncompatible,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{instance: "p", desc: live}
+			m := NewManager(ManagerOptions{})
+			m.SetProviders([]Provider{p}, nil)
+			m.DescribeAll(context.Background())
+			if m.Snapshot().Len() != 1 {
+				t.Fatal("the first describe did not publish")
+			}
+
+			p.desc, p.descErr = tc.second, tc.secondErr
+			statuses := m.DescribeAll(context.Background())
+
+			if got := m.Snapshot().Len(); got != tc.wantLive {
+				t.Fatalf("live matchers = %d, want %d", got, tc.wantLive)
+			}
+			if statuses[0].State != tc.wantState {
+				t.Fatalf("state = %q, want %q", statuses[0].State, tc.wantState)
+			}
+			if statuses[0].MatcherCount != tc.wantLive {
+				t.Fatalf("reported matcher count = %d, want %d", statuses[0].MatcherCount, tc.wantLive)
+			}
+		})
+	}
+}
+
+// One provider failing non-authoritatively must not disturb another's matchers,
+// which is why the retained set is kept per instance rather than read back out
+// of the snapshot.
+func TestManagerOneProviderFailingDoesNotDisturbAnother(t *testing.T) {
+	a := &fakeProvider{instance: "a", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}}
+	b := &fakeProvider{instance: "b", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "B-[0-9]+"}}}}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{a, b}, nil)
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 2 {
+		t.Fatal("both providers should be live")
+	}
+
+	a.descErr = &TransportError{Reason: ReasonTimeout}
+	b.desc = Description{Matchers: []Matcher{{ID: "m", Pattern: "B2-[0-9]+"}, {ID: "n", Pattern: "B3-[0-9]+"}}}
+	m.DescribeAll(context.Background())
+
+	got := ids(m.Snapshot().Matchers())
+	// a's matcher is retained; b's set is replaced. Configured order holds.
+	want := []string{"a/m", "b/m", "b/n"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("live matchers = %v, want %v", got, want)
+	}
+	am, ok := m.Snapshot().Lookup("a", "m")
+	if !ok || am.Pattern != "A-[0-9]+" {
+		t.Fatalf("a's retained matcher changed: %+v", am)
+	}
+}
+
+// A retained set recovers as soon as the provider answers again.
+func TestManagerRetainedMatchersRecoverOnTheNextSuccess(t *testing.T) {
+	p := &fakeProvider{instance: "p", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+
+	p.descErr = &TransportError{Reason: ReasonTimeout}
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 1 {
+		t.Fatal("the retained set was dropped")
+	}
+
+	p.descErr = nil
+	p.desc = Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}, {ID: "n", Pattern: "Z-[0-9]+"}}}
+	statuses := m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 2 || statuses[0].State != StateReady {
+		t.Fatalf("recovery failed: %d matchers, state %q", m.Snapshot().Len(), statuses[0].State)
+	}
+}
+
+// Disabling is authoritative, and re-enabling must not resurrect the old set
+// before a fresh describe lands.
+func TestManagerDisablingDropsMatchersAndDoesNotResurrectThem(t *testing.T) {
+	p := &fakeProvider{instance: "p", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+
+	m.SetProviders(nil, []string{"p"})
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 0 {
+		t.Fatalf("a disabled provider still contributes %d matchers", m.Snapshot().Len())
+	}
+	st, _ := m.Status("p")
+	if st.State != StateDisabled || st.MatcherCount != 0 {
+		t.Fatalf("status = %+v", st)
+	}
+
+	// Re-enable but make describe fail non-authoritatively. There is no
+	// retained set to fall back on, so nothing comes back.
+	p.descErr = &TransportError{Reason: ReasonTimeout}
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 0 {
+		t.Fatal("re-enabling resurrected a stale matcher set")
+	}
+}
+
+// Removing a config entry is authoritative too, and the instance keeps a status
+// so a diagnostic surface can still explain an armed reference.
+func TestManagerRemovalDropsMatchersButKeepsStatus(t *testing.T) {
+	p := &fakeProvider{instance: "p", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+
+	m.SetProviders(nil, nil)
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 0 {
+		t.Fatal("a removed provider still contributes matchers")
+	}
+	st, ok := m.Status("p")
+	if !ok || st.State != StateRemoved {
+		t.Fatalf("status = %+v ok=%v", st, ok)
+	}
+}

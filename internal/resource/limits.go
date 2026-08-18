@@ -45,9 +45,9 @@ const (
 	MaxProviders           = 16
 )
 
-// Bounds the Limits table does not name but the host still has to pick. They
-// are deliberately generous relative to what a card can show, and are listed
-// here rather than inline so a v1 freeze can adopt or override them.
+// The rest of the Limits table. These were host choices during the draft and
+// are now published values the protocol document points back at, so changing
+// one changes the contract.
 const (
 	// MaxStatusLabelChars bounds status.label, which renders as one pill.
 	MaxStatusLabelChars = 64
@@ -76,10 +76,12 @@ const (
 	MaxResolveTimeout     = 60 * time.Second
 )
 
-// Freshness clamps for the provider's freshForSeconds hint. Zero means "no
-// hint", which the manager reads as DefaultFreshFor.
+// Freshness clamps for the provider's freshForSeconds hint. Absent or zero
+// means "no hint" and takes the default; anything else is clamped into
+// [MinFreshFor, MaxFreshFor].
 const (
 	DefaultFreshFor = 60 * time.Second
+	MinFreshFor     = 10 * time.Second
 	MaxFreshFor     = 15 * time.Minute
 )
 
@@ -106,8 +108,12 @@ func ClampFreshFor(seconds float64) time.Duration {
 		return DefaultFreshFor
 	}
 	d := time.Duration(seconds * float64(time.Second))
-	if d > MaxFreshFor {
+	switch {
+	case d < MinFreshFor:
+		return MinFreshFor
+	case d > MaxFreshFor:
 		return MaxFreshFor
+	default:
+		return d
 	}
-	return d
 }

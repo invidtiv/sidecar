@@ -2,6 +2,7 @@
   "protocol": "sidecar.terminal-resource/v1",
   "method": "resolve",
   "instance": "jira-work",
+  "deadlineMs": 10000,
   "params": {
     "matcher": "issue-key",
     "locator": "CASH-1245"

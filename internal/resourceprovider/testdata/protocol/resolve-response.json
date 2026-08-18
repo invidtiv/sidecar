@@ -5,13 +5,19 @@
     "title": "Refund totals differ after partial capture",
     "subtitle": "Bug",
     "status": {
-      "label": "IN PROGRESS",
+      "label": "In Progress",
       "tone": "info"
     },
     "fields": [
-      {"label": "Assignee", "value": "Marcus"},
-      {"label": "Priority", "value": "High"},
-      {"label": "Updated", "value": "2026-08-17T17:31:00Z"}
+      {
+        "label": "Assignee",
+        "value": "Marcus Vorwaller",
+        "kind": "user"
+      },
+      {
+        "label": "Priority",
+        "value": "High"
+      }
     ],
     "body": {
       "format": "markdown",

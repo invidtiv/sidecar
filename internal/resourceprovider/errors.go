@@ -35,6 +35,12 @@ const (
 	ReasonInvalidDescribe TransportReason = "invalid-describe"
 	// ReasonInvalidRequest is a request the host refused to send.
 	ReasonInvalidRequest TransportReason = "invalid-request"
+	// ReasonShape is a response that is not exactly one of the three permitted
+	// shapes: a describe result, a resource result, or a typed error.
+	ReasonShape TransportReason = "shape"
+	// ReasonInvalidResource is a resource object the host cannot render and
+	// cannot truncate its way out of — one with no identity or no title.
+	ReasonInvalidResource TransportReason = "invalid-resource"
 )
 
 // TransportError is a failure of the process boundary rather than of the
@@ -94,7 +100,7 @@ func (e *TransportError) ResourceError() *resource.Error {
 		}
 	case ReasonInvalidRequest:
 		return &resource.Error{
-			Code:      resource.CodeInternal,
+			Code:      resource.CodeInvalidRequest,
 			Message:   "Sidecar refused to send this request.",
 			Retryable: false,
 		}

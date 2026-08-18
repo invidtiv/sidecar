@@ -93,9 +93,10 @@ func (p *CommandProvider) ResolveTimeout() time.Duration { return p.resolveTimeo
 // Describe runs the describe method and validates the result.
 func (p *CommandProvider) Describe(ctx context.Context) (Description, error) {
 	req := Request{
-		Protocol: resource.Protocol,
-		Method:   MethodDescribe,
-		Instance: p.instance,
+		Protocol:   resource.Protocol,
+		Method:     MethodDescribe,
+		Instance:   p.instance,
+		DeadlineMs: p.describeTimeout.Milliseconds(),
 	}
 	if p.host.Name != "" || p.host.Version != "" {
 		host := p.host
@@ -106,7 +107,17 @@ func (p *CommandProvider) Describe(ctx context.Context) (Description, error) {
 		return Description{}, err
 	}
 	if resp.Error != nil {
+		// A typed error is authoritative: the provider is telling the host it
+		// has no matchers right now.
 		return Description{}, resource.SanitizeError(resp.Error)
+	}
+	if resp.Resource != nil {
+		return Description{}, &TransportError{
+			Instance: p.instance,
+			Method:   MethodDescribe,
+			Reason:   ReasonShape,
+			Detail:   "describe returned a resource result",
+		}
 	}
 	return ValidateDescription(p.instance, resp.Provider, resp.Matchers)
 }
@@ -122,10 +133,11 @@ func (p *CommandProvider) Resolve(ctx context.Context, ref resource.Reference) (
 		}
 	}
 	req := Request{
-		Protocol: resource.Protocol,
-		Method:   MethodResolve,
-		Instance: p.instance,
-		Params:   &ResolveParams{Matcher: ref.Matcher, Locator: ref.Locator},
+		Protocol:   resource.Protocol,
+		Method:     MethodResolve,
+		Instance:   p.instance,
+		DeadlineMs: p.resolveTimeout.Milliseconds(),
+		Params:     &ResolveParams{Matcher: ref.Matcher, Locator: ref.Locator},
 	}
 	resp, err := p.invoke(ctx, MethodResolve, req, p.resolveTimeout)
 	if err != nil {
@@ -134,9 +146,25 @@ func (p *CommandProvider) Resolve(ctx context.Context, ref resource.Reference) (
 	if resp.Error != nil {
 		return resource.Document{}, resource.SanitizeError(resp.Error)
 	}
-	doc, rerr := resource.SanitizeDocument(resp.Resource)
-	if rerr != nil {
-		return resource.Document{}, rerr
+	if resp.hasDescribeShape() {
+		return resource.Document{}, &TransportError{
+			Instance: p.instance,
+			Method:   MethodResolve,
+			Reason:   ReasonShape,
+			Detail:   "resolve returned a describe result",
+		}
+	}
+	// A resource the host cannot key or label is a protocol violation, not a
+	// blank card. Everything else about a document is truncated, never refused.
+	doc, structural := resource.SanitizeDocument(resp.Resource)
+	if structural != nil {
+		return resource.Document{}, &TransportError{
+			Instance: p.instance,
+			Method:   MethodResolve,
+			Reason:   ReasonInvalidResource,
+			Detail:   structural.Detail,
+			Err:      structural,
+		}
 	}
 	return doc, nil
 }

@@ -17,6 +17,7 @@ func TestBuildEnvIsAnAllowlist(t *testing.T) {
 		"XDG_CONFIG_HOME=/home/test/.config",
 		"XDG_CACHE_HOME=/home/test/.cache",
 		"XDG_STATE_HOME=/home/test/.local/state",
+		"XDG_DATA_HOME=/home/test/.local/share",
 		"HTTP_PROXY=http://p:1",
 		"HTTPS_PROXY=http://p:2",
 		"NO_PROXY=localhost",
@@ -31,8 +32,12 @@ func TestBuildEnvIsAnAllowlist(t *testing.T) {
 		"TERM=xterm-256color",
 		"SHELL=/bin/zsh",
 		"USER=marcus",
-		"XDG_DATA_HOME=/home/test/.local/share",
 		"http_proxy=http://lowercase:3",
+		"https_proxy=http://lowercase:4",
+		"no_proxy=lowercase.localhost",
+		"LOGNAME=marcus",
+		"XDG_RUNTIME_DIR=/run/user/501",
+		"SSH_AUTH_SOCK=/tmp/ssh-agent.sock",
 	}
 	got := BuildEnv(nil, host)
 
@@ -41,6 +46,7 @@ func TestBuildEnvIsAnAllowlist(t *testing.T) {
 		"LC_ALL=C", "LC_TIME=en_GB.UTF-8",
 		"XDG_CONFIG_HOME=/home/test/.config", "XDG_CACHE_HOME=/home/test/.cache",
 		"XDG_STATE_HOME=/home/test/.local/state",
+		"XDG_DATA_HOME=/home/test/.local/share",
 		"HTTP_PROXY=http://p:1", "HTTPS_PROXY=http://p:2", "NO_PROXY=localhost",
 		"SSL_CERT_FILE=/certs/ca.pem", "SSL_CERT_DIR=/certs", "GIT_SSL_CAINFO=/certs/git.pem",
 	} {
@@ -48,7 +54,12 @@ func TestBuildEnvIsAnAllowlist(t *testing.T) {
 			t.Errorf("base environment missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "TMUX", "TMUX_PANE", "TERM", "SHELL", "USER", "XDG_DATA_HOME", "http_proxy"} {
+	// The exclusions are deliberate and documented: a provider is not running
+	// in a terminal and must not infer one.
+	for _, forbidden := range []string{
+		"AWS_SECRET_ACCESS_KEY", "GITHUB_TOKEN", "TMUX", "TMUX_PANE",
+		"TERM", "SHELL", "USER", "LOGNAME", "XDG_RUNTIME_DIR", "SSH_AUTH_SOCK",
+	} {
 		for _, kv := range got {
 			if strings.HasPrefix(kv, forbidden+"=") {
 				t.Errorf("environment inherited %q", kv)
@@ -90,5 +101,26 @@ func TestBuildEnvIsDeterministic(t *testing.T) {
 	}
 	if !slices.IsSorted(a) {
 		t.Fatalf("BuildEnv output is not sorted: %v", a)
+	}
+}
+
+// The base set wins on conflict: naming PATH in passEnv cannot change the
+// child's PATH, so a provider instance cannot quietly redirect which binaries
+// its own subprocesses resolve to.
+func TestBuildEnvBaseWinsOverPassEnv(t *testing.T) {
+	host := []string{"PATH=/real/bin", "HOME=/real/home", "EVIL_PATH=/evil/bin"}
+	got := BuildEnv([]string{"PATH", "HOME"}, host)
+	if !slices.Contains(got, "PATH=/real/bin") || !slices.Contains(got, "HOME=/real/home") {
+		t.Fatalf("base values were not preserved: %v", got)
+	}
+	// One entry each, not two.
+	count := 0
+	for _, kv := range got {
+		if strings.HasPrefix(kv, "PATH=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("PATH appears %d times: %v", count, got)
 	}
 }

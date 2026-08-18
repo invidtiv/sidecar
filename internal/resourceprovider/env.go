@@ -6,8 +6,10 @@ import (
 )
 
 // baseEnvNames is the exact allowlist the protocol document specifies. Nothing
-// else is inherited: not SHELL, not USER, not TERM, not TMUX, not the agent
-// harness's variables, and never a secret Sidecar was not told to pass.
+// else is inherited: not TERM, SHELL, USER, LOGNAME, XDG_RUNTIME_DIR,
+// SSH_AUTH_SOCK, TMUX, the agent harness's variables, or any secret Sidecar was
+// not told to pass. Those exclusions are deliberate and documented: a provider
+// is not running in a terminal and must not infer one.
 var baseEnvNames = []string{
 	"PATH",
 	"HOME",
@@ -16,9 +18,16 @@ var baseEnvNames = []string{
 	"XDG_CONFIG_HOME",
 	"XDG_CACHE_HOME",
 	"XDG_STATE_HOME",
+	"XDG_DATA_HOME",
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"NO_PROXY",
+	// The lowercase spellings are the more common ones on Unix and are honored
+	// by most HTTP clients, so a provider that respects only one casing still
+	// gets the user's proxy either way.
+	"http_proxy",
+	"https_proxy",
+	"no_proxy",
 	"SSL_CERT_FILE",
 	"SSL_CERT_DIR",
 	"GIT_SSL_CAINFO",
@@ -37,6 +46,10 @@ const localePrefix = "LC_"
 // A passEnv entry is a name only. Sidecar never accepts an inline secret value
 // in configuration, never logs a passed value, and never renders one — which is
 // also why an entry containing "=" is refused rather than split.
+//
+// The base set wins on conflict: naming PATH in passEnv cannot change the
+// child's PATH. That falls out of adding the base first and add() being
+// first-write-wins, which is the documented rule.
 func BuildEnv(passEnv []string, host []string) []string {
 	values := make(map[string]string, len(host))
 	order := make([]string, 0, len(host))

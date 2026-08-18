@@ -2,6 +2,7 @@
   "protocol": "sidecar.terminal-resource/v1",
   "method": "describe",
   "instance": "jira-work",
+  "deadlineMs": 5000,
   "host": {
     "name": "sidecar",
     "version": "0.0.0"

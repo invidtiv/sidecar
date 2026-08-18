@@ -56,6 +56,11 @@ type Manager struct {
 	disabled  map[string]bool
 	statuses  map[string]*Status
 	order     []string
+	// lastGood is the newest matcher set each instance authoritatively
+	// declared. It is what a non-authoritative describe failure falls back to,
+	// which is why it is kept per instance rather than read back out of the
+	// snapshot: one provider timing out must not disturb another's.
+	lastGood map[string][]Matcher
 
 	snapshots *SnapshotStore
 
@@ -112,6 +117,7 @@ func NewManager(opts ManagerOptions) *Manager {
 	return &Manager{
 		disabled:  make(map[string]bool),
 		statuses:  make(map[string]*Status),
+		lastGood:  make(map[string][]Matcher),
 		snapshots: NewSnapshotStore(),
 		cache:     make(map[cacheKey]cacheEntry),
 		alias:     make(map[cacheKey]string),
@@ -156,11 +162,19 @@ func (m *Manager) SetProviders(providers []Provider, disabled []string) {
 			m.statuses[id] = &Status{Instance: id}
 		}
 		m.statuses[id].State = StateDisabled
+		m.statuses[id].MatcherCount = 0
+		// Disabling is authoritative: the instance has no matchers until it is
+		// re-enabled and describes itself again. Keeping the old set around
+		// would let re-enabling resurrect a stale one before the fresh describe
+		// lands.
+		delete(m.lastGood, id)
 		m.order = append(m.order, id)
 	}
 	for id, st := range m.statuses {
 		if !present[id] {
 			st.State = StateRemoved
+			st.MatcherCount = 0
+			delete(m.lastGood, id)
 			m.order = append(m.order, id)
 		}
 	}
@@ -208,6 +222,17 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 	}
 	wg.Wait()
 
+	// What happens to a provider's live matchers depends on who has authority
+	// over the answer, not on whether the call went well:
+	//
+	//   success                      -> replace them
+	//   typed error response         -> drop them; the provider said it has none
+	//   transport or validation fail -> keep them; the host has no new answer
+	//
+	// The third row is the one worth stating out loud. Dropping a working
+	// matcher set because a describe timed out would make terminal output stop
+	// recognizing links for a reason the user never sees, so a non-authoritative
+	// failure changes the reported state and nothing else.
 	var sets []DescribedSet
 	m.mu.Lock()
 	for _, r := range results {
@@ -219,22 +244,37 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 		st.LastChecked = m.now()
 		st.Duration = r.took
 		st.LastOutcome = OutcomeCode(r.err)
+
 		if r.err != nil {
 			st.State = stateForDescribeError(r.err)
 			st.LastError = AsResourceError(r.err)
-			st.MatcherCount = 0
+
+			if authoritativeDescribeFailure(r.err) {
+				delete(m.lastGood, r.instance)
+				st.MatcherCount = 0
+				continue
+			}
+			kept := m.lastGood[r.instance]
+			st.MatcherCount = len(kept)
+			if len(kept) > 0 {
+				sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: kept})
+			}
 			continue
 		}
+
 		st.State = StateReady
 		st.LastError = nil
 		st.Info = r.desc.Info
 		st.MatcherCount = len(r.desc.Matchers)
+		m.lastGood[r.instance] = r.desc.Matchers
 		sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: r.desc.Matchers})
 	}
 	m.mu.Unlock()
 
-	// A failed replacement keeps the previous snapshot; the error is reported
-	// through SnapshotError rather than by discarding working matchers.
+	// A refused replacement keeps the previous snapshot whole; the error is
+	// reported through SnapshotError rather than by discarding working matchers.
+	// Everything reaching here has already passed per-provider validation, so
+	// this is a belt-and-braces guard rather than the usual path.
 	_ = m.snapshots.Replace(sets)
 
 	if m.log != nil {

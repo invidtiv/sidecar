@@ -49,6 +49,31 @@ func CoerceFormat(v string) Format {
 	return FormatText
 }
 
+// FieldKind tells the host how to present a field value. It never changes
+// validation: a timestamp that does not parse is still shown as the text the
+// provider sent, because the alternative is silently hiding a value the user
+// can see in the service itself.
+type FieldKind string
+
+// Stable v1 field kinds. Anything else coerces to FieldKindText.
+const (
+	FieldKindText      FieldKind = "text"
+	FieldKindTimestamp FieldKind = "timestamp"
+	FieldKindUser      FieldKind = "user"
+)
+
+// CoerceFieldKind maps an arbitrary provider string onto a known kind.
+func CoerceFieldKind(v string) FieldKind {
+	switch FieldKind(v) {
+	case FieldKindTimestamp:
+		return FieldKindTimestamp
+	case FieldKindUser:
+		return FieldKindUser
+	default:
+		return FieldKindText
+	}
+}
+
 // Status is the optional single-line state of a resource.
 type Status struct {
 	Label string
@@ -59,12 +84,19 @@ type Status struct {
 type Field struct {
 	Label string
 	Value string
+	// Kind is a presentation hint. M1 owns what it does with it; M0's job is
+	// only to carry and bound it, never to lose it.
+	Kind FieldKind
 }
 
 // Body is the optional long-form text of a resource.
 type Body struct {
 	Format Format
 	Text   string
+	// Truncated reports that the provider's body exceeded MaxBodyBytes and was
+	// cut at a rune boundary. The host shows the user what it kept and says so;
+	// it does not refuse a document for being long.
+	Truncated bool
 }
 
 // Document is the whole of what a provider may put on screen. Every string in

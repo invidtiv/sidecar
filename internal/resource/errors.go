@@ -13,8 +13,14 @@ const (
 	CodeForbidden     Code = "forbidden"
 	CodeRateLimited   Code = "rate_limited"
 	CodeInvalidConfig Code = "invalid_config"
-	CodeUnavailable   Code = "unavailable"
-	CodeInternal      Code = "internal"
+	// CodeInvalidRequest is the host having sent something this provider cannot
+	// process: an unsupported protocol, an unknown method, missing or malformed
+	// params, an unknown matcher id. It stays distinct from CodeInternal
+	// because it is the host's fault, not the provider's, and no retry of the
+	// same request will ever work.
+	CodeInvalidRequest Code = "invalid_request"
+	CodeUnavailable    Code = "unavailable"
+	CodeInternal       Code = "internal"
 )
 
 // CoerceCode maps an arbitrary provider string onto a known code. An empty or
@@ -32,6 +38,8 @@ func CoerceCode(v string) Code {
 		return CodeRateLimited
 	case CodeInvalidConfig:
 		return CodeInvalidConfig
+	case CodeInvalidRequest:
+		return CodeInvalidRequest
 	case CodeUnavailable:
 		return CodeUnavailable
 	default:
@@ -39,8 +47,9 @@ func CoerceCode(v string) Code {
 	}
 }
 
-// DefaultRetryable is what the protocol document's table says a code typically
-// means. It is the fallback when a provider omits `retryable`.
+// DefaultRetryable is the protocol table's default for a code. It is only ever
+// a fallback: a response's own `retryable` field is authoritative, and the host
+// must not infer retryability from the code when the provider stated it.
 func DefaultRetryable(code Code) bool {
 	switch code {
 	case CodeRateLimited, CodeUnavailable, CodeInternal:
@@ -69,6 +78,24 @@ func (e *Error) Error() string {
 		return string(e.Code)
 	}
 	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// StructuralError is a response that violates the protocol's shape rules —
+// something the host can neither render nor truncate its way out of, such as a
+// resource with no identity or no title.
+//
+// It is deliberately not a *Error: the protocol classifies these as transport
+// failures attributed to the provider's implementation, not as typed service
+// failures the user can act on. The transport layer wraps it.
+type StructuralError struct {
+	Detail string
+}
+
+func (e *StructuralError) Error() string {
+	if e == nil {
+		return "<nil structural error>"
+	}
+	return e.Detail
 }
 
 // Errorf builds a host-synthesized typed error with the code's default

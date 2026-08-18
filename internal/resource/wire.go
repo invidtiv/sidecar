@@ -17,10 +17,11 @@ type WireStatus struct {
 	Tone  string `json:"tone,omitempty"`
 }
 
-// WireField is one `{label, value}` pair.
+// WireField is one `{label, value, kind}` triple.
 type WireField struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
+	Kind  string `json:"kind,omitempty"`
 }
 
 // WireBody is `{format, text}`.
@@ -72,12 +73,19 @@ func SanitizeError(w *WireError) *Error {
 }
 
 // SanitizeDocument enforces every bound in the Limits table and returns a
-// document safe to hand to view state. The only failures are the two required
-// fields: a resource with no identity or no title cannot be keyed or labelled,
-// so it is a typed internal error rather than a blank card.
-func SanitizeDocument(w *WireDocument) (Document, *Error) {
+// document safe to hand to view state.
+//
+// It truncates rather than refusing. A provider is not required to pre-truncate
+// to the host's numbers, and the numbers are deliberately not sent in the
+// request, so a slightly-too-long document still shows the user their ticket:
+// body text is cut at a rune boundary and marked truncated, fields past the
+// count limit are dropped, and over-long single-line strings are cut.
+//
+// The only failures are structural: a resource with no identity or no title
+// cannot be keyed or labelled, and no amount of truncation fixes that.
+func SanitizeDocument(w *WireDocument) (Document, *StructuralError) {
 	if w == nil {
-		return Document{}, Errorf(CodeInternal, "provider returned an empty resource")
+		return Document{}, &StructuralError{Detail: "response carried no resource object"}
 	}
 
 	doc := Document{
@@ -88,10 +96,10 @@ func SanitizeDocument(w *WireDocument) (Document, *Error) {
 		FreshFor:  ClampFreshFor(w.FreshForSeconds),
 	}
 	if doc.Identity == "" {
-		return Document{}, Errorf(CodeInternal, "provider returned a resource without an identity")
+		return Document{}, &StructuralError{Detail: "resource has no identity"}
 	}
 	if doc.Title == "" {
-		return Document{}, Errorf(CodeInternal, "provider returned a resource without a title")
+		return Document{}, &StructuralError{Detail: "resource has no title"}
 	}
 
 	if w.Status != nil {
@@ -112,7 +120,7 @@ func SanitizeDocument(w *WireDocument) (Document, *Error) {
 			if label == "" && value == "" {
 				continue
 			}
-			fields = append(fields, Field{Label: label, Value: value})
+			fields = append(fields, Field{Label: label, Value: value, Kind: CoerceFieldKind(f.Kind)})
 		}
 		if len(fields) > 0 {
 			doc.Fields = fields
@@ -120,9 +128,9 @@ func SanitizeDocument(w *WireDocument) (Document, *Error) {
 	}
 
 	if w.Body != nil {
-		text := SanitizeBody(w.Body.Text, MaxBodyBytes)
+		text, truncated := SanitizeBodyText(w.Body.Text, MaxBodyBytes)
 		if text != "" {
-			doc.Body = &Body{Format: CoerceFormat(w.Body.Format), Text: text}
+			doc.Body = &Body{Format: CoerceFormat(w.Body.Format), Text: text, Truncated: truncated}
 		}
 	}
 

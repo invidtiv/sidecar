@@ -23,12 +23,19 @@ type HostInfo struct {
 }
 
 // Request is the single JSON object written to a provider's stdin.
+//
+// DeadlineMs is advisory but accurate: it is exactly the timeout the host is
+// about to enforce. A provider that budgets its own I/O inside it can return a
+// typed `unavailable` — which gives the user a real error card and a working
+// Retry — instead of being SIGKILLed, which gives them an opaque transport
+// failure.
 type Request struct {
-	Protocol string         `json:"protocol"`
-	Method   string         `json:"method"`
-	Instance string         `json:"instance"`
-	Host     *HostInfo      `json:"host,omitempty"`
-	Params   *ResolveParams `json:"params,omitempty"`
+	Protocol   string         `json:"protocol"`
+	Method     string         `json:"method"`
+	Instance   string         `json:"instance"`
+	DeadlineMs int64          `json:"deadlineMs"`
+	Host       *HostInfo      `json:"host,omitempty"`
+	Params     *ResolveParams `json:"params,omitempty"`
 }
 
 // ResolveParams is the whole of what a resolve request carries. Widening it
@@ -76,4 +83,11 @@ func decodeResponse(stdout []byte) (*Response, TransportReason, string) {
 		return nil, ReasonProtocol, "response protocol is not " + resource.Protocol
 	}
 	return &resp, "", ""
+}
+
+// hasDescribeShape reports whether the response carries a describe result. A
+// provider block with no matchers is legitimate — a provider can be ready and
+// currently recognize nothing.
+func (r *Response) hasDescribeShape() bool {
+	return r.Provider != nil || len(r.Matchers) > 0
 }

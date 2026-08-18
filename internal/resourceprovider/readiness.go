@@ -1,5 +1,11 @@
 package resourceprovider
 
+import (
+	"errors"
+
+	"github.com/marcus/sidecar/internal/resource"
+)
+
 // State is a provider instance's readiness. It is explicit rather than
 // inferred, because "describe has not returned yet" and "this matcher was
 // deleted" must never be the same value: restore has to be able to keep an
@@ -29,15 +35,32 @@ const (
 // preserving whatever is already saved.
 func (s State) Live() bool { return s == StateReady }
 
+// authoritativeDescribeFailure reports whether a failed describe is the
+// provider authoritatively saying it has no matchers.
+//
+// A typed error response is authoritative: the provider ran, understood the
+// request, and answered. A transport failure — a crash, a timeout, output the
+// host could not parse, a matcher set that failed validation — is not: the host
+// simply has no new answer, and the protocol says it must keep the old one
+// rather than invent an empty answer on the provider's behalf.
+func authoritativeDescribeFailure(err error) bool {
+	var terr *TransportError
+	if errors.As(err, &terr) {
+		return false
+	}
+	var rerr *resource.Error
+	return errors.As(err, &rerr)
+}
+
 // stateForDescribeError classifies a failed describe. A provider that cannot
 // be started, does not speak the protocol, or sent an unpublishable describe
 // result is incompatible — a state the user has to act on. Anything else is
 // temporary and worth rechecking.
 func stateForDescribeError(err error) State {
 	switch OutcomeCode(err) {
-	case string(ReasonProtocol), string(ReasonInvalidDescribe), string(ReasonSpawn):
+	case string(ReasonProtocol), string(ReasonInvalidDescribe), string(ReasonSpawn), string(ReasonShape):
 		return StateIncompatible
-	case "invalid_config":
+	case string(resource.CodeInvalidConfig), string(resource.CodeInvalidRequest):
 		return StateIncompatible
 	default:
 		return StateTemporarilyFailed

@@ -1,6 +1,7 @@
 package resourceprovider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,11 @@ func TestCommandProviderHostileCases(t *testing.T) {
 		{name: "invalid re2", args: []string{"-mode=invalid-re2"}, method: "describe", reason: ReasonInvalidDescribe},
 		{name: "too many matchers", args: []string{"-mode=too-many-matchers"}, method: "describe", reason: ReasonInvalidDescribe},
 		{name: "hang past the timeout", args: []string{"-mode=hang"}, method: "describe", reason: ReasonTimeout, timeout: 400 * time.Millisecond},
+		{name: "resource with no identity", args: []string{"-mode=no-identity"}, method: "resolve", reason: ReasonInvalidResource},
+		{name: "resource with no title", args: []string{"-mode=no-title"}, method: "resolve", reason: ReasonInvalidResource},
+		{name: "response with no shape at all", args: []string{"-mode=empty-response"}, method: "resolve", reason: ReasonInvalidResource},
+		{name: "describe result from resolve", args: []string{"-mode=describe-shaped-resolve"}, method: "resolve", reason: ReasonShape},
+		{name: "resource result from describe", args: []string{"-mode=resolve-shaped-describe"}, method: "describe", reason: ReasonShape},
 		{name: "missing command", args: nil, method: "describe", reason: ReasonSpawn},
 	}
 
@@ -330,20 +336,22 @@ func TestCommandProviderExecutionEnvironment(t *testing.T) {
 func TestProtocolGoldens(t *testing.T) {
 	t.Run("describe request", func(t *testing.T) {
 		req := Request{
-			Protocol: resource.Protocol,
-			Method:   MethodDescribe,
-			Instance: "jira-work",
-			Host:     &HostInfo{Name: "sidecar", Version: "0.0.0"},
+			Protocol:   resource.Protocol,
+			Method:     MethodDescribe,
+			Instance:   "jira-work",
+			DeadlineMs: resource.DescribeTimeout.Milliseconds(),
+			Host:       &HostInfo{Name: "sidecar", Version: "0.0.0"},
 		}
 		assertMatchesGolden(t, "describe-request.json", req)
 	})
 
 	t.Run("resolve request", func(t *testing.T) {
 		req := Request{
-			Protocol: resource.Protocol,
-			Method:   MethodResolve,
-			Instance: "jira-work",
-			Params:   &ResolveParams{Matcher: "issue-key", Locator: "CASH-1245"},
+			Protocol:   resource.Protocol,
+			Method:     MethodResolve,
+			Instance:   "jira-work",
+			DeadlineMs: resource.DefaultResolveTimeout.Milliseconds(),
+			Params:     &ResolveParams{Matcher: "issue-key", Locator: "CASH-1245"},
 		}
 		assertMatchesGolden(t, "resolve-request.json", req)
 	})
@@ -365,8 +373,14 @@ func TestProtocolGoldens(t *testing.T) {
 		if rerr != nil {
 			t.Fatalf("SanitizeDocument: %v", rerr)
 		}
-		if doc.Identity != "CASH-1245" || doc.Status.Tone != resource.ToneInfo || len(doc.Fields) != 3 {
+		if doc.Identity != "CASH-1245" || doc.Status.Tone != resource.ToneInfo || len(doc.Fields) != 2 {
 			t.Fatalf("document = %+v", doc)
+		}
+		if doc.Fields[0].Kind != resource.FieldKindUser {
+			t.Fatalf("field kind = %q", doc.Fields[0].Kind)
+		}
+		if doc.Fields[1].Kind != resource.FieldKindText {
+			t.Fatalf("an omitted kind should default to text, got %q", doc.Fields[1].Kind)
 		}
 	})
 
@@ -413,5 +427,135 @@ func assertMatchesGolden(t *testing.T, name string, value any) {
 	gotJSON, _ := json.MarshalIndent(got, "", "  ")
 	if string(wantJSON) != string(gotJSON) {
 		t.Fatalf("request does not match %s:\nwant %s\ngot  %s", name, wantJSON, gotJSON)
+	}
+}
+
+// The request envelope, asserted through a real child rather than through the
+// host's own encoder. deadlineMs must be exactly the timeout about to be
+// enforced, so a provider can budget inside it and return a typed unavailable
+// instead of being SIGKILLed.
+func TestCommandProviderSendsTheRequestEnvelope(t *testing.T) {
+	p, err := NewCommandProvider(CommandConfig{
+		Instance:       "fixture",
+		Argv:           []string{fixtureBin, "-mode=request-echo"},
+		Dir:            t.TempDir(),
+		HostEnv:        os.Environ(),
+		ResolveTimeout: 7 * time.Second,
+		Host:           HostInfo{Name: "sidecar", Version: "0.0.0"},
+	})
+	if err != nil {
+		t.Fatalf("NewCommandProvider: %v", err)
+	}
+
+	doc, err := p.Resolve(context.Background(), resource.Reference{Instance: "fixture", Matcher: "issue-key", Locator: "CASH-1245"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(doc.Body.Text), &got); err != nil {
+		t.Fatalf("echoed request is not JSON: %v\n%s", err, doc.Body.Text)
+	}
+	if got["protocol"] != resource.Protocol || got["method"] != MethodResolve || got["instance"] != "fixture" {
+		t.Fatalf("resolve envelope = %v", got)
+	}
+	if got["deadlineMs"] != float64(7000) {
+		t.Fatalf("resolve deadlineMs = %v, want 7000", got["deadlineMs"])
+	}
+	// host is describe-only.
+	if _, present := got["host"]; present {
+		t.Fatalf("resolve carried a host block: %v", got)
+	}
+	params, _ := got["params"].(map[string]any)
+	if params["matcher"] != "issue-key" || params["locator"] != "CASH-1245" {
+		t.Fatalf("params = %v", params)
+	}
+	// Nothing else may be in the request: no terminal line, no repository, no
+	// environment, no tmux target.
+	for key := range got {
+		switch key {
+		case "protocol", "method", "instance", "deadlineMs", "params":
+		default:
+			t.Fatalf("resolve request carried an unexpected field %q", key)
+		}
+	}
+}
+
+func TestCommandProviderDescribeEnvelope(t *testing.T) {
+	runner := &recordingRunner{stdout: []byte(`{"protocol":"sidecar.terminal-resource/v1","provider":{"kind":"x"}}`)}
+	p, err := NewCommandProvider(CommandConfig{
+		Instance: "inst",
+		Argv:     []string{"unused"},
+		Runner:   runner,
+		Host:     HostInfo{Name: "sidecar", Version: "9.9.9"},
+	})
+	if err != nil {
+		t.Fatalf("NewCommandProvider: %v", err)
+	}
+	if _, err := p.Describe(context.Background()); err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(runner.stdin, &got); err != nil {
+		t.Fatalf("request is not JSON: %v", err)
+	}
+	if got["method"] != MethodDescribe {
+		t.Fatalf("method = %v", got["method"])
+	}
+	if got["deadlineMs"] != float64(resource.DescribeTimeout.Milliseconds()) {
+		t.Fatalf("describe deadlineMs = %v", got["deadlineMs"])
+	}
+	host, _ := got["host"].(map[string]any)
+	if host["name"] != "sidecar" || host["version"] != "9.9.9" {
+		t.Fatalf("host = %v", host)
+	}
+	// Exactly one JSON object on stdin, then EOF.
+	if bytes.Count(bytes.TrimSpace(runner.stdin), []byte("\n")) != 0 {
+		t.Fatalf("stdin carried more than one line: %q", runner.stdin)
+	}
+}
+
+// recordingRunner substitutes for the process adapter so a test can assert the
+// exact bytes the host writes to stdin.
+type recordingRunner struct {
+	stdin  []byte
+	stdout []byte
+}
+
+func (r *recordingRunner) Run(_ context.Context, spec RunSpec) (RunResult, error) {
+	r.stdin = append([]byte(nil), spec.Stdin...)
+	return RunResult{Stdout: r.stdout, StdoutBytes: len(r.stdout)}, nil
+}
+
+// An over-limit but otherwise well-formed document renders, truncated.
+func TestCommandProviderTruncatesRatherThanRefusing(t *testing.T) {
+	p := newFixtureProvider(t, "fixture", "-mode=over-limit-document")
+	doc, err := p.Resolve(context.Background(), resource.Reference{Instance: "fixture", Matcher: "issue-key", Locator: "CASH-1"})
+	if err != nil {
+		t.Fatalf("an over-limit document must still render: %v", err)
+	}
+	if doc.Identity != "CASH-1" {
+		t.Fatalf("identity = %q", doc.Identity)
+	}
+	if len(doc.Fields) != resource.MaxFields {
+		t.Fatalf("fields = %d", len(doc.Fields))
+	}
+	if doc.Body == nil || !doc.Body.Truncated {
+		t.Fatalf("body = %+v", doc.Body)
+	}
+	if len(doc.Body.Text) > resource.MaxBodyBytes {
+		t.Fatalf("body = %d bytes", len(doc.Body.Text))
+	}
+}
+
+// A typed error the host synthesizes for its own refusal is invalid_request,
+// which stays distinct from internal.
+func TestTransportInvalidRequestMapsToInvalidRequest(t *testing.T) {
+	terr := &TransportError{Instance: "i", Method: MethodResolve, Reason: ReasonInvalidRequest}
+	rerr := terr.ResourceError()
+	if rerr.Code != resource.CodeInvalidRequest {
+		t.Fatalf("code = %q", rerr.Code)
+	}
+	if rerr.Retryable {
+		t.Fatal("invalid_request must not be retryable")
 	}
 }
