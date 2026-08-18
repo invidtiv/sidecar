@@ -122,7 +122,7 @@ func TestSaveOverlapWithNewTypingKeepsDirty(t *testing.T) {
 	if saved.Err != nil {
 		t.Fatal(saved.Err)
 	}
-	_, cmd = p.Update(saved)
+	_, _ = p.Update(saved)
 	if p.editorDirty {
 		t.Fatal("matching save left dirty set")
 	}

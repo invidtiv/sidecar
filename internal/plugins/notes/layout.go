@@ -104,7 +104,7 @@ func (p *Plugin) editorScrollbar(l editorLayout) string {
 	if visible < 1 {
 		visible = 1
 	}
-	total := len(p.previewLines)
+	var total int
 	if p.previewMode {
 		p.ensureViewSurface()
 		total = len(p.viewSurface.Lines)
