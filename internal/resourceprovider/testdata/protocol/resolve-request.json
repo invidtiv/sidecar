@@ -1,0 +1,9 @@
+{
+  "protocol": "sidecar.terminal-resource/v1",
+  "method": "resolve",
+  "instance": "jira-work",
+  "params": {
+    "matcher": "issue-key",
+    "locator": "CASH-1245"
+  }
+}

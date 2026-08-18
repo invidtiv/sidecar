@@ -1,0 +1,16 @@
+{
+  "protocol": "sidecar.terminal-resource/v1",
+  "provider": {
+    "kind": "jira",
+    "name": "Jira",
+    "version": "1.2.0",
+    "docsUrl": "https://example.test/sidecar-jira/setup"
+  },
+  "matchers": [
+    {
+      "id": "issue-key",
+      "pattern": "\\b(?:CASH|GRES|AVATAXUI)-[1-9][0-9]*\\b",
+      "priority": 100
+    }
+  ]
+}

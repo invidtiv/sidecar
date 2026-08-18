@@ -1,0 +1,9 @@
+{
+  "protocol": "sidecar.terminal-resource/v1",
+  "method": "describe",
+  "instance": "jira-work",
+  "host": {
+    "name": "sidecar",
+    "version": "0.0.0"
+  }
+}
