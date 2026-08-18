@@ -420,7 +420,7 @@ func TestStopPreservesUndoAgainstOlderInflightSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer peer.Close()
+	t.Cleanup(func() { _ = peer.Close() })
 	assertStoredContent(t, peer, a.ID, "body-a")
 }
 
@@ -853,7 +853,7 @@ func TestNewerBuiltInAcknowledgmentRetiresSkippedExportBeforeStopRecovery(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer peer.Close()
+	t.Cleanup(func() { _ = peer.Close() })
 	if err := recoverNoteDrafts(root, peer); err != nil {
 		t.Fatal(err)
 	}

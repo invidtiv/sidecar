@@ -378,7 +378,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.mouseHandler = mouse.NewHandler()
 	}
 	p.selection.Clear()
-	p.selAnchor = ui.SelectionPoint{-1, -1}
+	p.selAnchor = ui.SelectionPoint{Line: -1, Col: -1}
 	p.selExtend = false
 	p.editHistories = make(map[string]*editHistory)
 	p.lastSavedContent = ""

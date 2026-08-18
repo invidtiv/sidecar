@@ -72,7 +72,7 @@ func (p *Plugin) hasEditSelection() bool {
 
 func (p *Plugin) clearEditSelection() {
 	p.selection.Clear()
-	p.selAnchor = ui.SelectionPoint{-1, -1}
+	p.selAnchor = ui.SelectionPoint{Line: -1, Col: -1}
 	p.selExtend = false
 }
 
