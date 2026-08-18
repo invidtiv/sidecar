@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
@@ -155,48 +153,9 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 	if p.paneRoot == nil || p.ctx == nil || !ref.Valid() {
 		return nil
 	}
-	reopen := p.reopenHiddenResourcePane()
-	plan, ok := p.planOpen(PaneResource)
-	if !ok {
-		return reopen
-	}
-	if plan.Retarget != 0 {
-		leaf := FindPane(p.paneRoot, plan.Retarget)
-		if leaf == nil || leaf.Split != nil {
-			return reopen
-		}
-		open := p.attachResourcePane(leaf.ContentID, root, surface, ref, fromTerminal)
-		if p.resources[leaf.ContentID] == nil {
-			return reopen
-		}
-		return tea.Batch(reopen, open)
-	}
-
-	peer, placed := p.previewPeerBox()
-	if !placed {
-		return reopen
-	}
-	id := p.paneNextID
-	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis,
-		&PaneNode{ID: id, Kind: PaneResource, ContentID: id})
-	if trialFocus != id {
-		return reopen
-	}
-	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
-		p.toastMessage = paneFitMessage("Resource", plan.Axis)
-		p.toastTime = time.Now()
-		return reopen
-	}
-
-	newLeaf := &PaneNode{ID: id, Kind: PaneResource, ContentID: id}
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
-	if focus != newLeaf.ID {
-		return reopen
-	}
-	p.paneRoot, p.paneFocus = treeRoot, focus
-	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
-	open := p.attachResourcePane(newLeaf.ContentID, root, surface, ref, fromTerminal)
-	return tea.Batch(reopen, open, p.resizeDocTerminalCmd())
+	return p.openContentPane(contentPaneOpen{kind: PaneResource, name: "Resource", reopen: p.reopenHiddenResourcePane,
+		attach:   func(id int) tea.Cmd { return p.attachResourcePane(id, root, surface, ref, fromTerminal) },
+		attached: func(id int) bool { return p.resources[id] != nil }})
 }
 
 // attachResourcePane points the content behind leafID at ref. Focus, the
@@ -332,17 +291,7 @@ func (p *Plugin) hideResourcePane() tea.Cmd {
 	if res == nil || leaf == nil {
 		return nil
 	}
-	root, surface, ok := p.selectedTerminalSurface()
-	if ok {
-		p.rememberHiddenPaneLayout(root, surface)
-	}
-	if !p.closeContentLeaf(leaf.ID) {
-		p.hiddenPaneLayout = nil
-		return nil
-	}
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.hideContentPane(leaf.ID)
 }
 
 // closeResourcePane removes the Resource leaf and gives its box back to its
@@ -360,22 +309,8 @@ func (p *Plugin) closeResourcePane(leafID int) tea.Cmd {
 // reopenHiddenResourcePane rebuilds a hidden split at the last ratio so a
 // resource click can focus or append against the remembered set.
 func (p *Plugin) reopenHiddenResourcePane() tea.Cmd {
-	if res, _ := p.activeResourcePane(); res != nil {
-		return nil
-	}
-	_, surface, ok := p.selectedTerminalSurface()
-	if !ok {
-		return nil
-	}
-	layout := p.hiddenLayoutFor(surface)
-	if layout == nil || !paneLayoutHasResourceTabs(layout) {
-		return nil
-	}
-	if p.liveContentBesides(PaneResource) {
-		return p.reinsertHiddenResourceLeaf(layout)
-	}
-	p.hiddenPaneLayout = nil
-	return p.restorePaneLayout(layout)
+	res, _ := p.activeResourcePane()
+	return p.reopenHiddenContentPane(PaneResource, res != nil, paneLayoutHasResourceTabs, contentKindResource, "Resource")
 }
 
 func (p *Plugin) reinsertHiddenResourceLeaf(layout *state.PaneLayoutJSON) tea.Cmd {

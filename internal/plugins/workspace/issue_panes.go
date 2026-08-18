@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -71,53 +69,9 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
 		return nil
 	}
-	reopen := p.reopenHiddenIssuePane()
-	plan, ok := p.planOpen(PaneIssue)
-	if !ok {
-		return reopen
-	}
-	if plan.Retarget != 0 {
-		leaf := FindPane(p.paneRoot, plan.Retarget)
-		if leaf == nil || leaf.Split != nil {
-			return reopen
-		}
-		load := p.attachIssuePane(leaf.ContentID, root, surface, issueID)
-		if p.issues[leaf.ContentID] == nil || p.issues[leaf.ContentID].view() == nil {
-			return reopen
-		}
-		p.paneFocus = leaf.ID
-		p.activePane = PanePreview
-		p.saveSelectionState()
-		return tea.Batch(reopen, load)
-	}
-
-	peer, placed := p.previewPeerBox()
-	if !placed {
-		return reopen
-	}
-	id := p.paneNextID
-	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis,
-		&PaneNode{ID: id, Kind: PaneIssue, ContentID: id})
-	if trialFocus != id {
-		return reopen
-	}
-	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
-		p.toastMessage = paneFitMessage("Issue", plan.Axis)
-		p.toastTime = time.Now()
-		return reopen
-	}
-
-	newLeaf := &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
-	if focus != newLeaf.ID {
-		return reopen
-	}
-	p.paneRoot, p.paneFocus = treeRoot, focus
-	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
-	p.activePane = PanePreview
-	load := p.attachIssuePane(newLeaf.ContentID, root, surface, issueID)
-	p.saveSelectionState()
-	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
+	return p.openContentPane(contentPaneOpen{kind: PaneIssue, name: "Issue", reopen: p.reopenHiddenIssuePane,
+		attach:   func(id int) tea.Cmd { return p.attachIssuePane(id, root, surface, issueID) },
+		attached: func(id int) bool { return p.issues[id] != nil && p.issues[id].view() != nil }})
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its
@@ -389,38 +343,14 @@ func (p *Plugin) hideIssuePane() tea.Cmd {
 	if issue == nil || leaf == nil {
 		return nil
 	}
-	root, surface, ok := p.selectedTerminalSurface()
-	if ok {
-		p.rememberHiddenPaneLayout(root, surface)
-	}
-	if !p.closeContentLeaf(leaf.ID) {
-		p.hiddenPaneLayout = nil
-		return nil
-	}
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.hideContentPane(leaf.ID)
 }
 
 // reopenHiddenIssuePane rebuilds a hidden split at the last ratio so an issue
 // click can focus or append against the remembered set.
 func (p *Plugin) reopenHiddenIssuePane() tea.Cmd {
-	if issue, _ := p.activeIssuePane(); issue != nil {
-		return nil
-	}
-	_, surface, ok := p.selectedTerminalSurface()
-	if !ok {
-		return nil
-	}
-	layout := p.hiddenLayoutFor(surface)
-	if layout == nil || !paneLayoutHasIssueTabs(layout) {
-		return nil
-	}
-	if p.liveContentBesides(PaneIssue) {
-		return p.reinsertHiddenIssueLeaf(layout)
-	}
-	p.hiddenPaneLayout = nil
-	return p.restorePaneLayout(layout)
+	issue, _ := p.activeIssuePane()
+	return p.reopenHiddenContentPane(PaneIssue, issue != nil, paneLayoutHasIssueTabs, contentKindIssue, "Issue")
 }
 
 func (p *Plugin) reinsertHiddenIssueLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
