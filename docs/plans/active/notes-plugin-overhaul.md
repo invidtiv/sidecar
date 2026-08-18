@@ -69,8 +69,8 @@ disk after save failure and Ctrl-S retries the same content intent without promo
 above newer queued or acknowledged content, with successful acknowledgment as the cleanup
 boundary. Newer canonical acknowledgments retire obsolete exports, and slow final/retry
 exports share the visible saving footer with built-in saves. Coalesced typing/deletion undo
-bursts also copy one full-note snapshot per undo unit rather than per keystroke. The branch includes current
-`main` as of `f44d2689`; deterministic ownership probes and the Notes race suite are green,
+bursts also copy one full-note snapshot per undo unit rather than per keystroke. The branch includes
+`origin/main` as of `bfebfbe2` via merge `7e7dbd7c`; deterministic ownership probes and the Notes race suite are green,
 as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated
 real-app edit/save/navigation proof. Independent review is complete, and Phase 3 is
 merge-ready on the feature branch.
