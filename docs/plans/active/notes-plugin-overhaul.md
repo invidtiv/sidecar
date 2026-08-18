@@ -1,8 +1,8 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 3 implementation and merge-readiness fixes are complete on
-`notes-overhaul`; td-4baaa6 and the inherited Phase 2 wrapped-click fix
-(td-2f6d46) are awaiting independent approval before merge to `main`
+**Status:** Phase 3 implementation and the td-4baaa6 ownership-race fix cycle are
+complete on `notes-overhaul`; td-4baaa6 and the inherited Phase 2 wrapped-click
+fix (td-2f6d46) require independent approval before merge to `main`
 **Created:** 2026-08-17
 **Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
 **Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c
@@ -57,12 +57,18 @@ be retried with Ctrl-S from edit, preview, list, or search. Content saves use on
 `td note edit` process (the redundant Sidecar-side `show` is gone), apply td's canonical
 updated note to the local sorted cache, and do not reload the whole list. Every td note
 subprocess has an eight-second timeout. Stop atomically checkpoints a dirty buffer in a
-0600 recovery draft next to td's store, returns without waiting on SQLite, and flushes it
-in the background; a draft left by process exit is replayed asynchronously before the
-next list load. Coalesced typing/deletion undo bursts also copy one full-note snapshot per
-undo unit rather than per keystroke. The branch includes current `main` as of
-`f44d2689`; focused race coverage, full tests/build, and an isolated real-app
-edit/save/navigation journey are green pending independent review.
+0600 recovery draft (with a cache fallback), returns without waiting on SQLite, and flushes
+it in the background. Recovery is serialized, validates the draft's durable/in-flight base,
+refuses to overwrite a newer external edit, and is retired by a later canonical save.
+Desired content remains owned when undo matches the old durable value while another save is
+in flight. Same-project list loads and external-editor preparations have request generations,
+so out-of-order completions cannot regress the cache or open an older note. External and
+inline editor exports remain on disk after save failure and Ctrl-S retries them; successful
+acknowledgment is the cleanup boundary. Coalesced typing/deletion undo bursts also copy one
+full-note snapshot per undo unit rather than per keystroke. The branch includes current
+`main` as of `f44d2689`; deterministic ownership probes and the Notes race suite are green,
+as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated
+real-app edit/save/navigation proof. Independent re-review is the remaining merge gate.
 
 ## Goal
 
@@ -359,8 +365,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
    The mapping-capable render result, glamour default, shared wrapping, and `m` toggle are
    implemented. td-2f6d46 closes the wrapped-click acceptance hole found in review;
    td-4b3a5c removes synchronous store validation from startup.
-3. **Selection + undo/redo — implementation complete; independent merge-readiness
-   review pending (td-178efc, td-4baaa6).** Source-coordinate
+3. **Selection + undo/redo — implementation and ownership-race fix cycle complete;
+   independent merge-readiness review pending (td-178efc, td-4baaa6).** Source-coordinate
    keyboard/mouse selection, replacement semantics, wrap-aware overlay, and a
    bounded per-note operation-based history, plus nonblocking durable save/transition
    ownership and crash-recovery checkpointing. Syntax spans stay deferred until the

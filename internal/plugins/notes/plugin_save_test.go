@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -388,6 +389,237 @@ func TestStopFailureRetainsRecoverableDraft(t *testing.T) {
 	}
 }
 
+func TestStopPreservesUndoAgainstOlderInflightSave(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("intermediate")
+	p.editorDirty = true
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	cmd := p.saveEditorContent()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+
+	p.editorTextarea.SetValue("body-a") // user undoes while the older write owns td
+	_ = p.afterContentChange()
+	if !p.editorDirty {
+		t.Fatal("undo matched the old durable value but ignored the conflicting in-flight write")
+	}
+	started := time.Now()
+	p.Stop()
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatal("Stop blocked on the in-flight save")
+	}
+	close(blocked.release)
+	<-result
+	<-blocked.closed
+
+	peer, err := newInProcessStore(p.ctx.ProjectRoot, "undo-peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	assertStoredContent(t, peer, a.ID, "body-a")
+}
+
+func TestOlderInflightCompletionCannotRetireNewerCheckpoint(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("intermediate")
+	p.editorDirty = true
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	cmd := p.saveEditorContent()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+
+	draft := noteDraft{ID: a.ID, Content: "final-intent", BaseContent: "body-a", InFlightContent: "intermediate"}
+	path, err := writeNoteDraftState(p.ctx.ProjectRoot, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(blocked.release)
+	<-result
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("older successful save retired a checkpoint written after it began")
+	}
+}
+
+func TestSuccessfulSaveRetiresOlderRecoveryDraft(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	draft := noteDraft{ID: a.ID, Content: "old-recovery", BaseContent: "body-a"}
+	path, err := writeNoteDraftState(p.ctx.ProjectRoot, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing := &alwaysFailStore{noteStore: p.store, err: errors.New("offline"), closed: make(chan struct{})}
+	if err := recoverNoteDrafts(p.ctx.ProjectRoot, failing); err == nil {
+		t.Fatal("recovery unexpectedly succeeded")
+	}
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("newer-save")
+	p.editorDirty = true
+	drainNotesCmd(t, p, p.saveEditorContent())
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("successful canonical save retained a superseded recovery draft")
+	}
+	if err := recoverNoteDrafts(p.ctx.ProjectRoot, p.store); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredContent(t, p.store, a.ID, "newer-save")
+}
+
+func TestRecoveryRefusesToOverwriteExternalChange(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	draft := noteDraft{ID: a.ID, Content: "recovered", BaseContent: "body-a"}
+	path, err := writeNoteDraftState(p.ctx.ProjectRoot, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.store.SaveContent(a.ID, "external-newer"); err != nil {
+		t.Fatal(err)
+	}
+	if err := recoverNoteDrafts(p.ctx.ProjectRoot, p.store); err == nil {
+		t.Fatal("recovery overwrote a note that no longer matched its safe base")
+	}
+	assertStoredContent(t, p.store, a.ID, "external-newer")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("conflicting recovery draft was not retained for manual resolution")
+	}
+}
+
+func TestOlderListSnapshotCannotRegressSuccessfulSave(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	snapshot := &snapshotBlockingStore{noteStore: p.store, captured: make(chan struct{}), release: make(chan struct{})}
+	p.store = snapshot
+	load := p.loadNotes()
+	loaded := make(chan tea.Msg, 1)
+	go func() { loaded <- load() }()
+	<-snapshot.captured
+
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("canonical-new")
+	p.editorDirty = true
+	drainNotesCmd(t, p, p.saveEditorContent())
+	close(snapshot.release)
+	_, _ = p.Update(<-loaded)
+	for _, n := range p.notes {
+		if n.ID == a.ID && n.Content != "canonical-new" {
+			t.Fatalf("stale list snapshot regressed saved cache to %q", n.Content)
+		}
+	}
+}
+
+func TestFailedExportSaveRetainsFileAndCtrlSRetry(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	failing := &failOnceSaveStore{noteStore: p.store, err: errors.New("busy")}
+	p.store = failing
+	path := filepath.Join(t.TempDir(), "edited.md")
+	if err := os.WriteFile(path, []byte("external-final"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	drainNotesCmd(t, p, p.saveRetainedExport(a.ID, path, 0))
+	if _, err := os.Stat(path); err != nil || p.pendingInlineEditPath != path {
+		t.Fatalf("failed export was not retained: stat=%v pending=%q", err, p.pendingInlineEditPath)
+	}
+	_, retry := p.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if retry == nil {
+		t.Fatal("Ctrl-S did not retry the retained export")
+	}
+	drainNotesCmd(t, p, retry)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("successful retry did not remove the acknowledged export")
+	}
+	assertStoredContent(t, p.store, a.ID, "external-final")
+}
+
+func TestStaleExternalPreparationCannotOpenOlderNote(t *testing.T) {
+	p, a, b := newTwoNoteSavePlugin(t)
+	oldPath := filepath.Join(t.TempDir(), "old.md")
+	newPath := filepath.Join(t.TempDir(), "new.md")
+	if err := os.WriteFile(oldPath, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.externalPrepareID = 2
+	_, cmd := p.Update(ExternalEditorPreparedMsg{ID: a.ID, Path: oldPath, Epoch: 1, RequestID: 1})
+	if cmd != nil {
+		t.Fatal("stale external preparation opened an editor")
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Fatal("stale external export was not cleaned up")
+	}
+	_, cmd = p.Update(ExternalEditorPreparedMsg{ID: b.ID, Path: newPath, Epoch: 1, RequestID: 2})
+	if cmd == nil {
+		t.Fatal("latest external preparation did not open")
+	}
+}
+
+func TestQueuedSaveDoesNotToastUntilLatestContentIsDurable(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("first")
+	p.editorDirty = true
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	first := p.saveEditorContent()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- first() }()
+	<-blocked.started
+	p.editorTextarea.SetValue("second")
+	p.editorDirty = true
+	if cmd := p.saveEditorContent(); cmd != nil {
+		t.Fatal("overlap started a second concurrent write")
+	}
+	close(blocked.release)
+	_, next := p.Update(<-result)
+	if next == nil {
+		t.Fatal("latest content was not queued after the first write")
+	}
+	if _, ok := next().(NoteContentSavedMsg); !ok {
+		t.Fatal("intermediate completion emitted a toast/batch before latest content was durable")
+	}
+}
+
+func TestStopUsesFallbackDraftWithoutBlockingTd(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	badRoot := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(badRoot, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.ctx.ProjectRoot = badRoot
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("fallback-final")
+	p.editorDirty = true
+	failing := &alwaysFailStore{noteStore: p.store, err: errors.New("td blocked"), closed: make(chan struct{})}
+	p.store = failing
+	started := time.Now()
+	p.Stop()
+	if time.Since(started) > 100*time.Millisecond {
+		t.Fatal("Stop synchronously called td after the primary checkpoint failed")
+	}
+	path, err := fallbackDraftPath(badRoot, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("fallback recovery draft missing: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	closeStoreEventually := failing.closed
+	<-closeStoreEventually
+}
+
 type blockingStore struct {
 	noteStore
 	started   chan struct{}
@@ -397,6 +629,34 @@ type blockingStore struct {
 	saveCalls int
 	closed    chan struct{}
 	closeOnce sync.Once
+}
+
+type snapshotBlockingStore struct {
+	noteStore
+	captured chan struct{}
+	release  chan struct{}
+}
+
+func (s *snapshotBlockingStore) List(includeArchived bool) ([]Note, error) {
+	notes, err := s.noteStore.List(includeArchived)
+	close(s.captured)
+	<-s.release
+	return notes, err
+}
+
+type failOnceSaveStore struct {
+	noteStore
+	err  error
+	once sync.Once
+}
+
+func (s *failOnceSaveStore) SaveContent(id, content string) (*Note, error) {
+	failed := false
+	s.once.Do(func() { failed = true })
+	if failed {
+		return nil, s.err
+	}
+	return s.noteStore.SaveContent(id, content)
 }
 
 func newBlockingStore(store noteStore) *blockingStore {

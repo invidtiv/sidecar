@@ -114,7 +114,8 @@ func (p *Plugin) afterContentChange() tea.Cmd {
 	p.syncPreviewFromTextarea()
 	p.invalidateViewSurface()
 	p.trackTextareaScroll()
-	if p.editorNote != nil && p.editorTextarea.Value() == p.lastSavedContent {
+	if p.editorNote != nil && p.editorTextarea.Value() == p.lastSavedContent &&
+		(!p.saveInFlight || p.activeSaveID != p.editorNote.ID || p.activeSaveContent == p.editorTextarea.Value()) {
 		p.editorDirty = false
 		return nil
 	}

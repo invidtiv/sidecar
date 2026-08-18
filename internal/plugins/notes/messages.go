@@ -6,6 +6,8 @@ type NotesLoadedMsg struct {
 	Err         error
 	RecoveryErr error
 	Epoch       uint64
+	RequestID   uint64
+	Filter      NoteFilter
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -75,6 +77,8 @@ type NoteContentSavedMsg struct {
 	Note             *Note  // Canonical note returned by td when available.
 	External         bool   // $EDITOR read-back; not a built-in buffer save.
 	Skipped          bool   // In-flight write skipped because a newer persist won.
+	ExportPath       string // Retained until an external/inline save is acknowledged.
+	ExportRequestID  uint64 // Owns the retained export save attempt.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -91,10 +95,11 @@ type AutoSaveTickMsg struct {
 // ExternalEditorPreparedMsg carries an asynchronously-created note export.
 // NotePath may invoke td, so preparing it must never run on Bubble Tea Update.
 type ExternalEditorPreparedMsg struct {
-	ID    string
-	Path  string
-	Err   error
-	Epoch uint64
+	ID        string
+	Path      string
+	Err       error
+	Epoch     uint64
+	RequestID uint64
 }
 
 func (m ExternalEditorPreparedMsg) GetEpoch() uint64 { return m.Epoch }

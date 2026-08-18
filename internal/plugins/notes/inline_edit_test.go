@@ -1087,6 +1087,8 @@ func TestExternalEditorWriteBack(t *testing.T) {
 	}
 	if got := back(); got == nil {
 		t.Fatal("read-back produced no message")
+	} else {
+		_, _ = p.Update(got)
 	}
 
 	note, err := p.store.Get(noteID)
