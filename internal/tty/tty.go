@@ -277,7 +277,7 @@ func New(config *Config) *Model {
 	m := &Model{
 		Config:  cfg,
 		ownerID: nextModelID.Add(1),
-		control: sharedTerminalControl,
+		control: defaultControlSource(),
 		visible: true,
 		focused: true,
 		capture: defaultTerminalCaptureSource{},

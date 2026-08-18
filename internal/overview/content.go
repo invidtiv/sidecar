@@ -25,6 +25,9 @@ const (
 	contentKindDoc      = "doc"
 	contentKindIssue    = "issue"
 	contentKindDiff     = "diff"
+	// One key for every external provider. A leaf is a Resource leaf; which
+	// provider filled it is the tab's business, not the layout's.
+	contentKindResource = "resource"
 )
 
 // paneContent adapts a leaf to the content contract. It is the one place that
@@ -51,6 +54,11 @@ func (m *Model) paneContent(node *panelayout.Node) Content {
 			return nil
 		}
 		return &diffContent{m: m, diff: m.preview.diff}
+	case panelayout.Resource:
+		if m.preview.resource == nil || m.preview.resource.view() == nil {
+			return nil
+		}
+		return &resourceContent{m: m, res: m.preview.resource}
 	default:
 		return &terminalContent{m: m}
 	}
@@ -160,4 +168,30 @@ func (c *diffContent) SetSize(size Size) tea.Cmd {
 
 func (c *diffContent) View(Render) string {
 	return c.m.renderPreviewDiff(c.diff, termpreview.Box{W: c.size.Width, H: c.size.Height})
+}
+
+// resourceContent is the external-resource leaf: one Resource pane per surface,
+// whatever provider answered for the tabs inside it.
+type resourceContent struct {
+	m    *Model
+	res  *previewResource
+	size Size
+}
+
+func (c *resourceContent) Kind() string { return contentKindResource }
+
+func (c *resourceContent) Title() string {
+	if view := c.res.view(); view != nil {
+		return view.Title()
+	}
+	return "Resource"
+}
+
+func (c *resourceContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *resourceContent) View(Render) string {
+	return c.m.renderPreviewResource(c.res, termpreview.Box{W: c.size.Width, H: c.size.Height})
 }

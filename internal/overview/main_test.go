@@ -6,12 +6,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/testenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
 // TestMain keeps activity persistence inside the test's own directory. The
 // store path is resolved from the user's state dir in production, and no test
 // should write there.
+//
+// It also isolates tmux, for the same reason: this package builds workspace
+// models that reach internal/tty and shell out to tmux (td-4d99ae).
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "overview-activity-")
 	if err != nil {
@@ -31,7 +35,7 @@ func TestMain(m *testing.M) {
 	saveLastGlobalCreateProject = func(string) error { return nil }
 	loadLastCreateAgent = func() string { return "" }
 	saveLastCreateAgent = func(string) error { return nil }
-	code := m.Run()
+	code := testenv.Main(m)
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
