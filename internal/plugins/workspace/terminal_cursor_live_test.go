@@ -45,6 +45,12 @@ func startLiveTerminalPane(t *testing.T, width, height int) *liveTerminalPane {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
+	// These tests are the exception that wants a real tmux control transport:
+	// the whole point is to compare the tty.Model's view against tmux's own
+	// answers. Every other test gets an inert transport so it cannot spawn a
+	// tmux child by accident (td-4d99ae). Safe here because TestMain has already
+	// pointed TMUX_TMPDIR at a throwaway server.
+	t.Cleanup(tty.UseRealControlTransport())
 	// TestMain points TMUX_TMPDIR at a throwaway server, so a bare tmux command
 	// here cannot reach the developer's sessions.
 	session := fmt.Sprintf("sidecar-cursor-%d", time.Now().UnixNano())

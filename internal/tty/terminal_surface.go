@@ -1,10 +1,12 @@
 package tty
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -165,6 +167,62 @@ func (s controlManagerSource) Subscribe(r ControlRequest) (terminalControlSubscr
 }
 
 var sharedTerminalControl terminalControlSource = controlManagerSource{manager: NewControlManager()}
+
+// inertControlSource is the transport a model gets under `go test` unless a
+// test asks for a real one.
+//
+// The shared source spawns `tmux -C attach-session` as a child process, and
+// nothing in Enter's contract tells a caller that. A unit test that only wanted
+// to assert key routing — `m := New(nil); m.Enter("session", "%1")` — was
+// therefore starting a real tmux client per test, against whatever server
+// TMUX_TMPDIR resolved to. The client outlives the test binary, so `go test`
+// left a growing population of orphans behind on the developer's own server
+// (td-4d99ae). Subscribing to nothing is the honest default for a unit test:
+// the transport is exactly the part it is not exercising.
+//
+// Tests that do exercise the transport build their own ControlManager over an
+// explicit socket (newProcessControlChannelForSocket) and call Subscribe on it
+// directly, so they never reach this.
+type inertControlSource struct{}
+
+// ErrInertControlTransport is what an inert transport reports. A test that
+// meant to exercise control mode and sees this in a fallback has not found a
+// broken transport — it has found that it never opted in. Callers that care can
+// tell the two apart with errors.Is rather than passing vacuously.
+var ErrInertControlTransport = errors.New(
+	"tmux control: inert transport under test; call tty.UseRealControlTransport to opt in")
+
+func (inertControlSource) Subscribe(ControlRequest) (terminalControlSubscription, error) {
+	return nil, ErrInertControlTransport
+}
+
+// realControlUnderTest lets a test opt back in to the real transport.
+var realControlUnderTest atomic.Bool
+
+// UseRealControlTransport restores the real tmux control transport for tests
+// that genuinely exercise it — the live-terminal tests that drive a real pane
+// through the seed-and-stream path and assert against tmux's own answers.
+//
+// Those tests must already have isolated tmux (see internal/testenv), because
+// this is the switch that lets a test spawn real `tmux -C attach-session`
+// children. It is deliberately explicit: opting in is a statement that the test
+// owns a private server and will let its panes be torn down with it.
+func UseRealControlTransport() (restore func()) {
+	previous := realControlUnderTest.Swap(true)
+	return func() { realControlUnderTest.Store(previous) }
+}
+
+// defaultControlSource picks the transport a new Model starts with.
+//
+// Under `go test` the default is inert, because the overwhelming majority of
+// tests that construct a Model are asserting on key routing or rendering and
+// never wanted a tmux child process at all — see inertControlSource.
+func defaultControlSource() terminalControlSource {
+	if testing.Testing() && !realControlUnderTest.Load() {
+		return inertControlSource{}
+	}
+	return sharedTerminalControl
+}
 
 type terminalControlEventKind uint8
 
