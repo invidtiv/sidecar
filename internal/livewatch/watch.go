@@ -96,8 +96,10 @@ type PathWatcher struct {
 	mu      sync.Mutex
 	closed  bool
 	targets []Target
-	// watched is the set of directories currently registered with fsnotify,
-	// which is not the target set: a file target registers its parent.
+	// watched is the set of directories this watcher believes are registered
+	// with fsnotify, which is not the target set: a file target registers its
+	// parent. It is a belief rather than the truth, which is why
+	// reconcileLocked checks it against the kernel rather than trusting it.
 	watched map[string]bool
 }
 
@@ -159,6 +161,14 @@ func (w *PathWatcher) Watch(targets ...Target) {
 // A directory target registers itself; a file target registers its parent,
 // because a watch on a file alone misses the create-and-rename dance most
 // editors and every atomic writer use.
+//
+// The registration a watcher holds is not the registration it asked for. A
+// watched directory that is removed and recreated — a checkout across a branch
+// without it, a worktree rebuild, a tool that replaces a folder rather than its
+// contents — is dropped by the backend, and a `watched` map consulted as if it
+// were the truth would then skip re-adding it forever, leaving every pane
+// underneath permanently stale with nothing to show for it. So the live set is
+// read back from fsnotify on each pass and the belief is corrected from it.
 func (w *PathWatcher) reconcileLocked() {
 	desired := make(map[string]bool, len(w.targets))
 	for _, t := range w.targets {
@@ -172,7 +182,21 @@ func (w *PathWatcher) reconcileLocked() {
 		desired[filepath.Dir(t.Path)] = true
 	}
 
+	// What the backend actually holds, which is the only thing worth diffing
+	// against. WatchList returns the paths as they were added, and Watch has
+	// already cleaned and absolutized every target, so the two agree.
+	live := make(map[string]bool)
+	for _, dir := range w.fsw.WatchList() {
+		live[dir] = true
+	}
 	for dir := range w.watched {
+		if !live[dir] {
+			// The registration died under us. Forget it so the add below runs.
+			delete(w.watched, dir)
+		}
+	}
+
+	for dir := range live {
 		if !desired[dir] {
 			_ = w.fsw.Remove(dir)
 			delete(w.watched, dir)
@@ -190,6 +214,18 @@ func (w *PathWatcher) reconcileLocked() {
 		}
 		w.watched[dir] = true
 	}
+}
+
+// rereconcile re-checks the registrations against the kernel. It is what the
+// event loop calls when a remove or rename may have taken a watched directory
+// with it.
+func (w *PathWatcher) rereconcile() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	w.reconcileLocked()
 }
 
 // matches reports whether a raw event path is one of the targets.
@@ -297,6 +333,15 @@ func (w *PathWatcher) run() {
 			// pane renders.
 			if ev.Op == fsnotify.Chmod {
 				continue
+			}
+			// A removed or renamed path may be a directory this watcher is
+			// registered on, in which case the backend has just dropped the
+			// registration. Re-reconcile immediately rather than waiting for the
+			// host's next Watch call: the recreated directory is usually back
+			// within milliseconds, and anything written into it before the
+			// re-add is a change nobody ever reports.
+			if ev.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				w.rereconcile()
 			}
 			if !w.matches(ev.Name) {
 				continue
