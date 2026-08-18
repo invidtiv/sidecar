@@ -1,7 +1,24 @@
 # Notes Plugin Overhaul
 
-**Status:** Draft
+**Status:** Phase 2 implemented on `notes-overhaul` (td-caca7d)
 **Created:** 2026-08-17
+**Phase 1:** td-71789d; save-ownership follow-up td-244d0b
+**Phase 2:** td-caca7d (td-2a63f0 mapping, td-6f24d9 glamour view)
+
+## Implementation status (reviewed 2026-08-17)
+
+Phase 1 is present on the `notes-overhaul` worktree. Review confirmed the title,
+paste, Unicode search/backspace, stale-epoch, task-error, secure-temp-file, shared-layout,
+place-carry, no-renderer-swap, scrollbar, and wheel changes. td-244d0b closed the
+leave-before-debounce / overlapping-save holes.
+
+**Phase 2 (this work):** glamour is the default Notes view. `internal/markdown.RenderMapped`
+returns lines plus goldmark/wrap-math source anchors without changing `RenderContent`.
+An ordinary wrapping paragraph has a tested click/scroll → source cursor journey.
+`m` on `notes-preview` toggles rendered/raw. Rendered, raw, and edit always wrap at
+`editorLayout.wrapColumn` — the wrap-off truncate path is gone. Tab from the list
+focuses the resting view (so `m` and j/k are reachable); Enter/i/click enter edit
+at the mapped source line and keep that line on the clicked screen row.
 
 ## Goal
 
@@ -16,7 +33,10 @@ Rendered markdown and raw source cannot be visually identical; the contract is s
 geometry and place, not a pixel-identical mode switch. The tmux/$EDITOR path remains an
 explicit power-user escape hatch, not a second implementation of built-in editing behavior.
 
-## Where we are (findings from code exploration)
+## Baseline before Phase 1 (findings from code exploration)
+
+This section records the pre-implementation state that motivated the plan. The status
+section above is authoritative for what Phase 1 has already changed and what remains.
 
 The storage boundary is already in good shape and should remain td-owned: notes live in
 td's per-project SQLite through Sidecar's `store.go` adapter over `td/pkg/notes`, shared
@@ -280,7 +300,8 @@ exactly. Improve mechanics:
 
 Each phase is shippable alone and ordered so later phases build on earlier seams.
 
-1. **Correctness + one layout contract.** Fix paste persistence, rune-safe search/delete
+1. **Correctness + one layout contract — implemented, review blocked by td-244d0b.**
+   Fix paste persistence, rune-safe search/delete
    and truncation, title preservation, async staleness/capture, and user-visible task
    errors first. Introduce one layout value (wrap column, margins, content height,
    scrollbar) used by view and edit; carry cursor/scroll across the mode switch; mouse
@@ -334,7 +355,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 
 - Focused tests cover layout geometry, source↔render mapping, Unicode search/backspace,
   paste as one dirty/undo/debounce operation, selection across wraps and resize, stale
-  epochs, title preservation, and optimistic-update conflicts.
+  epochs, title preservation, autosave generation/transition ownership, and
+  optimistic-update conflicts.
 - `go test ./...` and `go build ./...` pass with `GOWORK=off` against the released td
   version as well as in the local workspace when §4 changes dependencies.
 - Real-app proof uses `./scripts/tmux-drive.sh paths` first and its isolated tmux socket

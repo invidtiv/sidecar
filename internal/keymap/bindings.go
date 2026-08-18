@@ -740,6 +740,7 @@ func DefaultBindings() []Binding {
 		{Key: "i", Command: "edit-note", Context: "notes-preview"},
 		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
 		{Key: "E", Command: "external-editor", Context: "notes-preview"},
+		{Key: "m", Command: "toggle-markdown", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},

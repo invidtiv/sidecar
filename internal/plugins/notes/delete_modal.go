@@ -159,6 +159,7 @@ func (p *Plugin) confirmDeleteNote() tea.Cmd {
 
 	noteID := p.deleteModalNote.ID
 	epoch := p.ctx.Epoch
+	store := p.store
 
 	// Push undo before delete
 	p.pushUndo(UndoAction{
@@ -171,7 +172,7 @@ func (p *Plugin) confirmDeleteNote() tea.Cmd {
 	p.closeDeleteModal()
 
 	return func() tea.Msg {
-		err := p.store.Delete(noteID)
+		err := store.Delete(noteID)
 		return NoteDeletedMsg{ID: noteID, Err: err, Epoch: epoch}
 	}
 }

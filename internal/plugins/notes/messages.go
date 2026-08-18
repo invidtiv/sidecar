@@ -67,6 +67,10 @@ type NoteContentSavedMsg struct {
 	Err              error
 	Epoch            uint64
 	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
+	Generation       int    // Built-in autosave generation captured at save start.
+	Content          string // Bytes this save wrote; empty for inline/export paths.
+	External         bool   // $EDITOR read-back; not a built-in buffer save.
+	Skipped          bool   // In-flight write skipped because a newer persist won.
 }
 
 // GetEpoch returns the epoch for staleness detection.

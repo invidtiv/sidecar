@@ -22,10 +22,11 @@ var priorityLevels = []string{"P0", "P1", "P2", "P3"}
 
 // TaskCreatedMsg is sent when a task is created from a note.
 type TaskCreatedMsg struct {
-	TaskID string
-	NoteID string
-	Err    error
-	Epoch  uint64
+	TaskID     string
+	NoteID     string
+	Err        error
+	ArchiveErr error
+	Epoch      uint64
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -217,7 +218,13 @@ func (p *Plugin) createTaskFromNote() tea.Cmd {
 	// Store note ID for archive option
 	noteID := p.taskModalNote.ID
 	shouldArchive := p.taskModalArchiveNote
-	epoch := p.ctx.Epoch
+	var epoch uint64
+	var workDir string
+	if p.ctx != nil {
+		epoch = p.ctx.Epoch
+		workDir = p.ctx.WorkDir
+	}
+	store := p.store
 
 	// Close modal
 	p.closeTaskModal()
@@ -233,21 +240,26 @@ func (p *Plugin) createTaskFromNote() tea.Cmd {
 		}
 
 		cmd := exec.Command("td", args...)
-		cmd.Dir = p.ctx.WorkDir
+		cmd.Dir = workDir
 		output, err := cmd.CombinedOutput()
 		if err != nil {
-			return TaskCreatedMsg{TaskID: "", NoteID: noteID, Err: fmt.Errorf("td create failed: %s", string(output))}
+			return TaskCreatedMsg{
+				TaskID: "",
+				NoteID: noteID,
+				Err:    fmt.Errorf("td create failed: %s", string(output)),
+				Epoch:  epoch,
+			}
 		}
 
 		// Parse task ID from output (format: "Created td-xxxxxxxx")
 		taskID := parseTaskID(string(output))
 
-		// Archive note if requested
-		if shouldArchive && p.store != nil {
-			_ = p.store.ToggleArchive(noteID)
+		var archiveErr error
+		if shouldArchive && store != nil {
+			archiveErr = store.ToggleArchive(noteID)
 		}
 
-		return TaskCreatedMsg{TaskID: taskID, NoteID: noteID, Err: nil, Epoch: epoch}
+		return TaskCreatedMsg{TaskID: taskID, NoteID: noteID, Err: nil, ArchiveErr: archiveErr, Epoch: epoch}
 	}
 }
 
@@ -273,9 +285,41 @@ func parseTaskID(output string) string {
 
 // showTaskCreatedToast shows a toast notification for task creation.
 func showTaskCreatedToast(taskID string) tea.Cmd {
-	msg := "Task created"
+	text := "Task created"
 	if taskID != "" {
-		msg = fmt.Sprintf("Created %s", taskID)
+		text = fmt.Sprintf("Created %s", taskID)
 	}
-	return appmsg.ShowToast(msg, 3*time.Second)
+	return appmsg.ShowToast(text, 3*time.Second)
+}
+
+func showTaskCreateFailedToast(err error) tea.Cmd {
+	text := "Task creation failed"
+	if err != nil {
+		text = "Task creation failed: " + err.Error()
+	}
+	return func() tea.Msg {
+		return appmsg.ToastMsg{
+			Message:  text,
+			Duration: 4 * time.Second,
+			IsError:  true,
+		}
+	}
+}
+
+func showTaskCreatedArchiveFailedToast(taskID string, archiveErr error) tea.Cmd {
+	created := "Task created"
+	if taskID != "" {
+		created = fmt.Sprintf("Created %s", taskID)
+	}
+	text := created + "; archive failed"
+	if archiveErr != nil {
+		text = created + "; archive failed: " + archiveErr.Error()
+	}
+	return func() tea.Msg {
+		return appmsg.ToastMsg{
+			Message:  text,
+			Duration: 4 * time.Second,
+			IsError:  true,
+		}
+	}
 }

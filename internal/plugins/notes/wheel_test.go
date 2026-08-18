@@ -128,6 +128,7 @@ func previewPlugin(t *testing.T, lines []string, wrap bool) *Plugin {
 	t.Helper()
 	p := wheelTestPlugin(t, 3)
 	p.previewMode = true
+	p.markdownView = false
 	p.previewWrapEnabled = wrap
 	p.editorNote = &p.notes[0]
 	p.previewLines = lines
@@ -173,38 +174,44 @@ func TestNotesWheelAtBoundaryPreview(t *testing.T) {
 	}
 }
 
-// With wrapping on, a start line fills the viewport with fewer logical lines,
-// so the exact maximum offset is larger than len(lines)-height. The renderer
-// clamp and the boundary query must both use the wrapped maximum, or the last
-// lines are unreachable.
+// Long source lines always wrap. The renderer clamp and the boundary query
+// must both use the visual-row maximum, or the last wrap segments are
+// unreachable. The wrap-off truncate path is gone: rendered, raw, and edit
+// share one wrap column.
 func TestNotesPreviewWrappedMaximumIsSharedWithRenderer(t *testing.T) {
 	lines := make([]string, 40)
 	for i := range lines {
 		lines[i] = strings.Repeat("word ", 40)
 	}
-	wrapped := previewPlugin(t, lines, true)
-	plain := previewPlugin(t, lines, false)
-	height, width := wrapped.previewViewport()
-
-	wrappedMax := wrapped.previewMaxScroll(height, width)
-	plainMax := plain.previewMaxScroll(height, width)
-	if wrappedMax <= plainMax {
-		t.Fatalf("wrapped max %d should exceed unwrapped max %d", wrappedMax, plainMax)
+	p := previewPlugin(t, lines, true)
+	height, width := p.previewViewport()
+	p.ensureViewSurface()
+	visual := len(p.viewSurface.Lines)
+	if visual <= len(lines) {
+		t.Fatalf("expected wrap to add visual rows, got %d visual for %d source", visual, len(lines))
 	}
 
-	// The renderer clamps to the same maximum the boundary query uses.
-	wrapped.previewScrollOff = wrappedMax + 5
-	wrapped.previewCursorLine = len(lines) - 1
-	wrapped.ensurePreviewCursorVisibleWithHeight(height, width)
-	if wrapped.previewScrollOff != wrappedMax {
-		t.Fatalf("renderer clamped to %d, want %d", wrapped.previewScrollOff, wrappedMax)
+	wantMax := visual - height
+	if wantMax < 0 {
+		wantMax = 0
+	}
+	gotMax := p.previewMaxScroll(height, width)
+	if gotMax != wantMax {
+		t.Fatalf("previewMaxScroll %d, want visual-row max %d", gotMax, wantMax)
 	}
 
-	wrapped.previewScrollOff = wrappedMax
-	if !wrapped.WheelAtBoundary(wheelMsg(editorX, 5, false)) {
+	p.previewScrollOff = gotMax + 5
+	p.previewCursorLine = visual - 1
+	p.ensurePreviewCursorVisibleWithHeight(height, width)
+	if p.previewScrollOff != gotMax {
+		t.Fatalf("renderer clamped to %d, want %d", p.previewScrollOff, gotMax)
+	}
+
+	p.previewScrollOff = gotMax
+	if !p.WheelAtBoundary(wheelMsg(editorX, 5, false)) {
 		t.Fatal("expected bottom boundary at the wrapped maximum")
 	}
-	if wrapped.WheelAtBoundary(wheelMsg(editorX, 5, true)) {
+	if p.WheelAtBoundary(wheelMsg(editorX, 5, true)) {
 		t.Fatal("reverse event after boundary must be movable")
 	}
 }
@@ -215,6 +222,7 @@ func TestNotesWheelUnknownSurfaces(t *testing.T) {
 		setup func(p *Plugin)
 		x     int
 	}{
+		// Textarea edit mode cannot honestly report a viewport boundary.
 		{name: "textarea edit mode", setup: func(p *Plugin) { p.previewMode = false }, x: editorX},
 		{name: "inline tmux editor", setup: func(p *Plugin) { p.inlineEditMode = true }, x: editorX},
 		{name: "inline tmux editor over list", setup: func(p *Plugin) { p.inlineEditMode = true }, x: listX},
@@ -244,5 +252,36 @@ func TestNotesWheelPlaceholderPaneIsBounded(t *testing.T) {
 		if !p.WheelAtBoundary(wheelMsg(editorX, 5, up)) {
 			t.Fatalf("placeholder pane should be bounded (up=%v)", up)
 		}
+	}
+}
+
+func TestNotesWheelEditAtBoundaryDoesNoWork(t *testing.T) {
+	p := wheelTestPlugin(t, 1)
+	p.previewMode = false
+	p.editorNote = &p.notes[0]
+	p.editorTextarea.SetValue("a\nb\nc")
+	p.editorTextarea.MoveToBegin()
+	p.updateTextareaDimensions()
+
+	beforeLine := p.editorTextarea.Line()
+	beforeMode := p.previewMode
+	beforeFocus := p.editorTextarea.Focused()
+
+	p2, _ := p.handleMouseScroll(p.mouseHandler.HandleMouse(wheelMsg(editorX, 5, true)))
+	if p2.editorTextarea.Line() != beforeLine {
+		t.Fatalf("wheel up at first line moved cursor to %d", p2.editorTextarea.Line())
+	}
+	if p2.previewMode != beforeMode {
+		t.Fatal("edit-mode wheel flipped previewMode")
+	}
+	if p2.editorTextarea.Focused() != beforeFocus {
+		t.Fatal("edit-mode wheel changed focus")
+	}
+
+	p.editorTextarea.MoveToEnd()
+	last := p.editorTextarea.Line()
+	p3, _ := p.handleMouseScroll(p.mouseHandler.HandleMouse(wheelMsg(editorX, 5, false)))
+	if p3.editorTextarea.Line() != last {
+		t.Fatalf("wheel down at last line moved cursor to %d", p3.editorTextarea.Line())
 	}
 }
