@@ -79,6 +79,7 @@ type NoteContentSavedMsg struct {
 	Skipped          bool   // In-flight write skipped because a newer persist won.
 	ExportPath       string // Retained until an external/inline save is acknowledged.
 	ExportRequestID  uint64 // Owns the retained export save attempt.
+	WriteSequence    uint64 // Orders all content writes for this note.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -131,6 +132,8 @@ type InlineAutoSaveResultMsg struct {
 	Generation int
 	Content    string
 	Saved      bool
+	Skipped    bool
+	Sequence   uint64
 }
 
 // GetEpoch returns the epoch for staleness detection.

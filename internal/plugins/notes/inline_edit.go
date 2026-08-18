@@ -652,6 +652,9 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 	generation := p.inlineAutoSaveGen
 	store := p.store
 	lastSavedContent := p.inlineLastSavedContent
+	projectRoot := p.ctx.ProjectRoot
+	startedAt := time.Now().UnixNano()
+	sequence := p.nextWriteSequence(noteID)
 
 	return func() tea.Msg {
 		// Read current content from temp file
@@ -670,13 +673,17 @@ func (p *Plugin) performInlineAutoSave() tea.Cmd {
 		}
 
 		// Content changed - save to database
-		if err := store.UpdateContent(noteID, contentStr); err != nil {
-			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation}
+		_, err, skipped := p.persistOrdered(store, projectRoot, noteID, contentStr, startedAt, sequence)
+		if err != nil {
+			return InlineAutoSaveResultMsg{Err: err, Epoch: epoch, Activation: activation, Generation: generation, Sequence: sequence}
+		}
+		if skipped {
+			return InlineAutoSaveResultMsg{Epoch: epoch, Activation: activation, Generation: generation, Sequence: sequence, Skipped: true}
 		}
 
 		return InlineAutoSaveResultMsg{
 			Epoch: epoch, Activation: activation, Generation: generation,
-			Content: contentStr, Saved: true,
+			Content: contentStr, Saved: true, Sequence: sequence,
 		}
 	}
 }

@@ -620,6 +620,137 @@ func TestStopUsesFallbackDraftWithoutBlockingTd(t *testing.T) {
 	<-closeStoreEventually
 }
 
+func TestOlderInlineAutosaveCannotOverwriteFinalExitSave(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	path := filepath.Join(t.TempDir(), "inline.md")
+	if err := os.WriteFile(path, []byte("autosave-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	p.inlineEditMode = true
+	p.inlineEditNoteID = a.ID
+	p.inlineEditPath = path
+	p.inlineEditActivation = 4
+	p.inlineAutoSaveGen = 9
+	p.inlineLastSavedContent = "body-a"
+	autosave := p.performInlineAutoSave()
+	autoResult := make(chan tea.Msg, 1)
+	go func() { autoResult <- autosave() }()
+	<-blocked.started
+
+	if err := os.WriteFile(path, []byte("final-exit-A2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p.exitInlineEditMode()
+	finalSave := p.saveRetainedExport(a.ID, path, 0)
+	if finalSave == nil {
+		t.Fatal("final exit export was not adopted while periodic save was slow")
+	}
+	finalResult := make(chan tea.Msg, 1)
+	go func() { finalResult <- finalSave() }()
+	close(blocked.release)
+	<-autoResult
+	drainNotesMsg(t, p, <-finalResult)
+	assertStoredContent(t, p.store, a.ID, "final-exit-A2")
+}
+
+func TestSecondRetainedExportQueuesBehindFirst(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	firstPath := filepath.Join(t.TempDir(), "first.md")
+	secondPath := filepath.Join(t.TempDir(), "second.md")
+	if err := os.WriteFile(firstPath, []byte("export-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("export-A2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	first := p.saveRetainedExport(a.ID, firstPath, 0)
+	firstResult := make(chan tea.Msg, 1)
+	go func() { firstResult <- first() }()
+	<-blocked.started
+
+	if cmd := p.saveRetainedExport(a.ID, secondPath, 0); cmd != nil {
+		t.Fatal("second export started concurrently instead of joining the ordered queue")
+	}
+	if len(p.exportQueue) != 1 || p.exportQueue[0].Path != secondPath {
+		t.Fatalf("second export is unowned: queue=%+v", p.exportQueue)
+	}
+	close(blocked.release)
+	_, next := p.Update(<-firstResult)
+	if next == nil {
+		t.Fatal("first completion did not start the queued final export")
+	}
+	drainNotesCmd(t, p, next)
+	assertStoredContent(t, p.store, a.ID, "export-A2")
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("acknowledged export was not removed: %s", path)
+		}
+	}
+}
+
+func TestStopCheckpointsEveryQueuedExportWithLatestIntentLast(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	firstPath := filepath.Join(t.TempDir(), "first-stop.md")
+	secondPath := filepath.Join(t.TempDir(), "second-stop.md")
+	if err := os.WriteFile(firstPath, []byte("queued-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("queued-A2-final"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if cmd := p.saveRetainedExport(a.ID, firstPath, 0); cmd == nil {
+		t.Fatal("first export was not adopted")
+	}
+	if cmd := p.saveRetainedExport(a.ID, secondPath, 0); cmd != nil {
+		t.Fatal("second export did not queue")
+	}
+	p.Stop()
+	draft, err := readNoteDraft(draftPath(p.ctx.ProjectRoot, a.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Content != "queued-A2-final" || draft.InFlightContent != "queued-A1" {
+		t.Fatalf("queued stop draft = %+v", draft)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("checkpointed export was not removed: %s", path)
+		}
+	}
+}
+
+func TestNewerQueuedExportSupersedesFailedOlderExit(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.store = &failOnceSaveStore{noteStore: p.store, err: errors.New("first exit busy")}
+	firstPath := filepath.Join(t.TempDir(), "failed-first.md")
+	secondPath := filepath.Join(t.TempDir(), "final-second.md")
+	if err := os.WriteFile(firstPath, []byte("failed-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("final-A2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstResult := p.saveRetainedExport(a.ID, firstPath, 0)()
+	if cmd := p.saveRetainedExport(a.ID, secondPath, 0); cmd != nil {
+		t.Fatal("newer export did not queue behind the first attempt")
+	}
+	_, next := p.Update(firstResult)
+	if next == nil {
+		t.Fatal("failed older exit did not advance to the newer queued export")
+	}
+	drainNotesCmd(t, p, next)
+	assertStoredContent(t, p.store, a.ID, "final-A2")
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("superseded export was not cleaned after final success: %s", path)
+		}
+	}
+}
+
 type blockingStore struct {
 	noteStore
 	started   chan struct{}

@@ -62,9 +62,11 @@ it in the background. Recovery is serialized, validates the draft's durable/in-f
 refuses to overwrite a newer external edit, and is retired by a later canonical save.
 Desired content remains owned when undo matches the old durable value while another save is
 in flight. Same-project list loads and external-editor preparations have request generations,
-so out-of-order completions cannot regress the cache or open an older note. External and
-inline editor exports remain on disk after save failure and Ctrl-S retries them; successful
-acknowledgment is the cleanup boundary. Coalesced typing/deletion undo bursts also copy one
+so out-of-order completions cannot regress the cache or open an older note. Built-in saves,
+periodic inline autosaves, final editor exports, and shutdown flushes share one per-note
+ordered write lane. Multiple editor exits queue in intent order; every export remains on
+disk after save failure and Ctrl-S retries it, with successful acknowledgment as the cleanup
+boundary. Coalesced typing/deletion undo bursts also copy one
 full-note snapshot per undo unit rather than per keystroke. The branch includes current
 `main` as of `f44d2689`; deterministic ownership probes and the Notes race suite are green,
 as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated

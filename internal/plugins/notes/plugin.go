@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -26,6 +27,17 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
+
+type retainedExport struct {
+	ID          string
+	Path        string
+	RequestID   uint64
+	Epoch       uint64
+	ProjectRoot string
+	Store       noteStore
+	StartedAt   int64
+	Sequence    uint64
+}
 
 const (
 	pluginID   = "notes"
@@ -172,6 +184,9 @@ type Plugin struct {
 	exportSaveRequestID    uint64 // Latest retained export persistence attempt.
 	exportSaveInFlight     bool
 	exportCheckpointFailed bool // Stop could not hand a retained export to a draft.
+	activeExport           retainedExport
+	exportQueue            []retainedExport
+	supersededExports      []retainedExport
 
 	// One-shot sync after out-of-band editor saves
 	pendingEditorSyncID string
@@ -197,13 +212,16 @@ type Plugin struct {
 	// Auto-save state
 	autoSaveID        int        // Incremented on each edit to identify debounce timer
 	saveMu            sync.Mutex // Serializes background writes with lifecycle's last-chance flush.
-	saveActivation    uint64     // Invalidates completions across Stop/Init.
-	saveRequestID     uint64     // Identifies the single built-in save in flight.
+	writeSequence     atomic.Uint64
+	latestWriteByNote sync.Map // note id -> uint64; read by async persistence commands.
+	saveActivation    uint64   // Invalidates completions across Stop/Init.
+	saveRequestID     uint64   // Identifies the single built-in save in flight.
 	saveInFlight      bool
 	activeSaveID      string
 	activeSaveContent string
 	lastWriteRequest  uint64 // Guarded by saveMu; lets Stop reuse a completed in-flight write.
 	lastWriteErr      error  // Guarded by saveMu.
+	lastWriteSkipped  bool   // Guarded by saveMu.
 	saveQueued        bool
 	saveErr           error
 	pendingAfterSave  func() tea.Cmd // Latest buffer-replacing action waiting on durable content.
@@ -319,6 +337,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.exportSaveRequestID++
 	p.exportSaveInFlight = false
 	p.exportCheckpointFailed = false
+	p.activeExport = retainedExport{}
+	p.exportQueue = nil
+	p.supersededExports = nil
 	p.autoSaveID++
 	leftoverExport := p.inlineEditPath
 	leftoverPending := p.pendingInlineEditPath
@@ -421,19 +442,54 @@ func (p *Plugin) Stop() {
 	leftoverPending := p.pendingInlineEditPath
 	leftoverPendingID := p.pendingInlineEditID
 	p.exitInlineEditMode()
-	exportCheckpointed := p.checkpointStoppedExport(leftoverExportID, leftoverExport, leftoverExportBase)
-	pendingCheckpointed := true
-	if leftoverPending != leftoverExport {
-		pendingCheckpointed = p.checkpointStoppedExport(leftoverPendingID, leftoverPending, "")
+	seenExports := make(map[string]bool)
+	var failedExports []retainedExport
+	activeExportContent := ""
+	if p.activeExport.Path != "" {
+		if content, err := os.ReadFile(p.activeExport.Path); err == nil {
+			activeExportContent = string(content)
+		}
 	}
-	if exportCheckpointed && pendingCheckpointed {
+	checkpoint := func(noteID, path, inFlightContent string) bool {
+		if path == "" || seenExports[path] {
+			return true
+		}
+		seenExports[path] = true
+		ok := p.checkpointStoppedExport(noteID, path, inFlightContent)
+		if !ok {
+			failedExports = append(failedExports, retainedExport{ID: noteID, Path: path})
+		}
+		return ok
+	}
+	allExportsCheckpointed := checkpoint(leftoverExportID, leftoverExport, leftoverExportBase)
+	allExportsCheckpointed = checkpoint(leftoverPendingID, leftoverPending, "") && allExportsCheckpointed
+	for _, export := range p.supersededExports {
+		allExportsCheckpointed = checkpoint(export.ID, export.Path, "") && allExportsCheckpointed
+	}
+	allExportsCheckpointed = checkpoint(p.activeExport.ID, p.activeExport.Path, "") && allExportsCheckpointed
+	for _, export := range p.exportQueue {
+		inFlightContent := ""
+		if export.ID == p.activeExport.ID {
+			inFlightContent = activeExportContent
+		}
+		allExportsCheckpointed = checkpoint(export.ID, export.Path, inFlightContent) && allExportsCheckpointed
+	}
+	if allExportsCheckpointed {
 		p.pendingInlineEditID = ""
 		p.pendingInlineEditPath = ""
-	} else if !exportCheckpointed {
-		p.pendingInlineEditID = leftoverExportID
-		p.pendingInlineEditPath = leftoverExport
+		p.activeExport = retainedExport{}
+		p.exportQueue = nil
+		p.supersededExports = nil
+	} else {
+		p.activeExport = retainedExport{}
+		p.exportQueue = failedExports
+		p.supersededExports = nil
+		if len(failedExports) > 0 {
+			p.pendingInlineEditID = failedExports[0].ID
+			p.pendingInlineEditPath = failedExports[0].Path
+		}
 	}
-	p.exportCheckpointFailed = !exportCheckpointed || !pendingCheckpointed
+	p.exportCheckpointFailed = !allExportsCheckpointed
 	if p.needsEditorCheckpoint() {
 		root := ""
 		var logger *slog.Logger
@@ -471,7 +527,8 @@ func (p *Plugin) Stop() {
 			p.editorDirty = false
 			p.saveErr = nil
 			p.store = nil
-			go p.flushStoppedDraft(store, path, draft, requestID, activeID, activeContent, logger)
+			stopSequence := p.nextWriteSequence(draft.ID)
+			go p.flushStoppedDraft(store, path, draft, requestID, activeID, activeContent, stopSequence, logger)
 		}
 	}
 	p.saveActivation++
@@ -520,14 +577,14 @@ func (p *Plugin) checkpointStoppedExport(noteID, path, inFlightContent string) b
 	return false
 }
 
-func (p *Plugin) flushStoppedDraft(store noteStore, path string, draft noteDraft, requestID uint64, activeID, activeContent string, logger *slog.Logger) {
+func (p *Plugin) flushStoppedDraft(store noteStore, path string, draft noteDraft, requestID uint64, activeID, activeContent string, sequence uint64, logger *slog.Logger) {
 	if store == nil {
 		return
 	}
 	p.saveMu.Lock()
 	err := error(nil)
-	if activeID != draft.ID || activeContent != draft.Content || p.lastWriteRequest != requestID || p.lastWriteErr != nil {
-		_, err = saveContentAndRetire("", store, draft.ID, draft.Content, 0)
+	if activeID != draft.ID || activeContent != draft.Content || p.lastWriteRequest != requestID || p.lastWriteErr != nil || p.lastWriteSkipped {
+		_, err, _ = p.persistOrderedLocked(store, "", draft.ID, draft.Content, 0, sequence)
 	}
 	p.saveMu.Unlock()
 	if err == nil {
@@ -545,6 +602,31 @@ func (p *Plugin) needsEditorCheckpoint() bool {
 	desired := p.editorTextarea.Value()
 	return desired != p.lastSavedContent ||
 		(p.saveInFlight && p.activeSaveID == p.editorNote.ID && p.activeSaveContent != desired)
+}
+
+func (p *Plugin) nextWriteSequence(noteID string) uint64 {
+	sequence := p.writeSequence.Add(1)
+	p.latestWriteByNote.Store(noteID, sequence)
+	return sequence
+}
+
+func (p *Plugin) writeIsLatest(noteID string, sequence uint64) bool {
+	latest, ok := p.latestWriteByNote.Load(noteID)
+	return !ok || latest.(uint64) == sequence
+}
+
+func (p *Plugin) persistOrdered(store noteStore, projectRoot, noteID, content string, startedAt int64, sequence uint64) (*Note, error, bool) {
+	p.saveMu.Lock()
+	defer p.saveMu.Unlock()
+	return p.persistOrderedLocked(store, projectRoot, noteID, content, startedAt, sequence)
+}
+
+func (p *Plugin) persistOrderedLocked(store noteStore, projectRoot, noteID, content string, startedAt int64, sequence uint64) (*Note, error, bool) {
+	if !p.writeIsLatest(noteID, sequence) {
+		return nil, nil, true
+	}
+	note, err := saveContentAndRetire(projectRoot, store, noteID, content, startedAt)
+	return note, err, false
 }
 
 // Update handles messages.
@@ -747,20 +829,34 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
 			return p, nil
 		}
-		if msg.Skipped {
-			return p, nil
-		}
 		if msg.External {
-			if msg.ExportRequestID != p.exportSaveRequestID {
+			if msg.ExportRequestID != p.activeExport.RequestID || msg.ExportPath != p.activeExport.Path {
 				return p, nil
 			}
 			p.exportSaveInFlight = false
 			if msg.Err != nil {
+				if p.hasQueuedExportForNote(p.activeExport.ID) {
+					p.supersededExports = append(p.supersededExports, p.activeExport)
+					p.activeExport = retainedExport{}
+					p.saveErr = nil
+					return p, p.startNextRetainedExport()
+				}
 				p.saveErr = msg.Err
+				p.pendingInlineEditID = p.activeExport.ID
+				p.pendingInlineEditPath = p.activeExport.Path
 				if p.ctx != nil && p.ctx.Logger != nil {
 					p.ctx.Logger.Error("notes: external editor save failed", "error", msg.Err)
 				}
 				return p, showSaveFailedToast(msg.Err)
+			}
+			finished := p.activeExport
+			p.activeExport = retainedExport{}
+			if msg.Skipped {
+				p.supersededExports = append(p.supersededExports, finished)
+				if next := p.startNextRetainedExport(); next != nil {
+					return p, next
+				}
+				return p, nil
 			}
 			p.saveErr = nil
 			removeNoteExport(msg.ExportPath)
@@ -768,9 +864,19 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.pendingInlineEditID = ""
 				p.pendingInlineEditPath = ""
 			}
+			p.cleanupSupersededExports(msg.ID, msg.WriteSequence)
+			if next := p.startNextRetainedExport(); next != nil {
+				return p, next
+			}
 			// Reload so the list follows $EDITOR. A dirty built-in buffer is
 			// not overlaid (NotesLoaded skips pendingEditorSync when dirty).
 			return p, tea.Batch(showSavedToast(), p.loadNotes())
+		}
+		if msg.Skipped {
+			if msg.SaveActivation == p.saveActivation && msg.RequestID == p.saveRequestID {
+				p.saveInFlight = false
+			}
+			return p, nil
 		}
 		if msg.EditorActivation != 0 {
 			if msg.Err != nil {
@@ -1171,6 +1277,9 @@ func (p *Plugin) FooterStatus() (string, bool) {
 // handleKey processes keyboard input.
 func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
+	if key == "ctrl+s" && p.activeExport.Path != "" && !p.exportSaveInFlight {
+		return p, p.retryActiveExport()
+	}
 	if key == "ctrl+s" && p.pendingInlineEditID != "" && p.pendingInlineEditPath != "" {
 		return p, p.readBackInlineEdit()
 	}
@@ -1997,13 +2106,15 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	p.activeSaveContent = content
 	p.saveErr = nil
 	startedAt := time.Now().UnixNano()
+	writeSequence := p.nextWriteSequence(noteID)
 
 	return func() tea.Msg {
 		p.saveMu.Lock()
 		defer p.saveMu.Unlock()
-		note, err := saveContentAndRetire(projectRoot, store, noteID, content, startedAt)
+		note, err, skipped := p.persistOrderedLocked(store, projectRoot, noteID, content, startedAt, writeSequence)
 		p.lastWriteRequest = requestID
 		p.lastWriteErr = err
+		p.lastWriteSkipped = skipped
 		return NoteContentSavedMsg{
 			ID:             noteID,
 			Err:            err,
@@ -2013,6 +2124,8 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 			RequestID:      requestID,
 			Content:        content,
 			Note:           note,
+			Skipped:        skipped,
+			WriteSequence:  writeSequence,
 		}
 	}
 }
@@ -2035,39 +2148,6 @@ func (p *Plugin) runPendingAfterSave() tea.Cmd {
 	after := p.pendingAfterSave
 	p.pendingAfterSave = nil
 	return after()
-}
-
-// persistDirtyEditorErr is the lifecycle-only last-chance flush. Interactive
-// paths use saveBefore/saveEditorContent and never invoke td from Update.
-func (p *Plugin) persistDirtyEditorErr() error {
-	if !p.editorDirty || p.editorNote == nil {
-		return nil
-	}
-	if p.store == nil {
-		return errors.New("notes store unavailable")
-	}
-	p.saveMu.Lock()
-	defer p.saveMu.Unlock()
-	content := p.editorTextarea.Value()
-	if p.saveInFlight && p.activeSaveID == p.editorNote.ID && p.activeSaveContent == content &&
-		p.lastWriteRequest == p.saveRequestID && p.lastWriteErr == nil {
-		p.editorNote.Content = content
-		p.editorDirty = false
-		p.autoSaveID++
-		p.saveErr = nil
-		return nil
-	}
-	if err := p.store.UpdateContent(p.editorNote.ID, content); err != nil {
-		if p.ctx != nil && p.ctx.Logger != nil {
-			p.ctx.Logger.Error("notes: persist dirty editor failed", "error", err)
-		}
-		return err
-	}
-	p.editorNote.Content = content
-	p.editorDirty = false
-	p.autoSaveID++
-	p.saveErr = nil
-	return nil
 }
 
 // openInExternalEditor opens the current note in $EDITOR. This is the one notes
@@ -2110,6 +2190,9 @@ func (p *Plugin) readBackInlineEdit() tea.Cmd {
 	if noteID == "" || notePath == "" || p.store == nil || p.ctx == nil {
 		return p.loadNotes()
 	}
+	if p.activeExport.Path == notePath {
+		return p.retryActiveExport()
+	}
 	return p.saveRetainedExport(noteID, notePath, 0)
 }
 
@@ -2120,28 +2203,84 @@ func (p *Plugin) saveRetainedExport(noteID, notePath string, _ uint64) tea.Cmd {
 	if noteID == "" || notePath == "" || p.store == nil || p.ctx == nil {
 		return nil
 	}
-	if p.exportSaveInFlight {
-		return nil
-	}
-	p.pendingInlineEditID = noteID
-	p.pendingInlineEditPath = notePath
-	p.pendingEditorSyncID = noteID
 	p.exportSaveRequestID++
-	requestID := p.exportSaveRequestID
+	intent := retainedExport{
+		ID: noteID, Path: notePath, RequestID: p.exportSaveRequestID,
+		Epoch: p.ctx.Epoch, ProjectRoot: p.ctx.ProjectRoot, Store: p.store,
+		StartedAt: time.Now().UnixNano(), Sequence: p.nextWriteSequence(noteID),
+	}
+	if p.pendingInlineEditPath == notePath {
+		p.pendingInlineEditID = ""
+		p.pendingInlineEditPath = ""
+	}
+	p.pendingEditorSyncID = noteID
+	if p.activeExport.Path != "" {
+		p.exportQueue = append(p.exportQueue, intent)
+		if p.exportSaveInFlight {
+			return nil
+		}
+		return p.retryActiveExport()
+	}
+	return p.startRetainedExport(intent)
+}
+
+func (p *Plugin) startRetainedExport(intent retainedExport) tea.Cmd {
+	p.activeExport = intent
 	p.exportSaveInFlight = true
 	p.saveErr = nil
-	epoch := p.ctx.Epoch
-	projectRoot := p.ctx.ProjectRoot
-	store := p.store
-	startedAt := time.Now().UnixNano()
 	return func() tea.Msg {
-		content, err := os.ReadFile(notePath)
+		content, err := os.ReadFile(intent.Path)
 		if err != nil {
-			return NoteContentSavedMsg{ID: noteID, Err: err, Epoch: epoch, External: true, ExportPath: notePath, ExportRequestID: requestID}
+			return NoteContentSavedMsg{ID: intent.ID, Err: err, Epoch: intent.Epoch, External: true, ExportPath: intent.Path, ExportRequestID: intent.RequestID, WriteSequence: intent.Sequence}
 		}
-		note, err := saveContentAndRetire(projectRoot, store, noteID, string(content), startedAt)
-		return NoteContentSavedMsg{ID: noteID, Err: err, Epoch: epoch, Content: string(content), Note: note, External: true, ExportPath: notePath, ExportRequestID: requestID}
+		note, err, skipped := p.persistOrdered(intent.Store, intent.ProjectRoot, intent.ID, string(content), intent.StartedAt, intent.Sequence)
+		return NoteContentSavedMsg{ID: intent.ID, Err: err, Epoch: intent.Epoch, Content: string(content), Note: note, External: true, ExportPath: intent.Path, ExportRequestID: intent.RequestID, WriteSequence: intent.Sequence, Skipped: skipped}
 	}
+}
+
+func (p *Plugin) retryActiveExport() tea.Cmd {
+	if p.activeExport.Path == "" || p.exportSaveInFlight || p.ctx == nil || p.store == nil {
+		return nil
+	}
+	intent := p.activeExport
+	p.exportSaveRequestID++
+	intent.RequestID = p.exportSaveRequestID
+	intent.Epoch = p.ctx.Epoch
+	intent.ProjectRoot = p.ctx.ProjectRoot
+	intent.Store = p.store
+	intent.StartedAt = time.Now().UnixNano()
+	intent.Sequence = p.nextWriteSequence(intent.ID)
+	return p.startRetainedExport(intent)
+}
+
+func (p *Plugin) startNextRetainedExport() tea.Cmd {
+	if len(p.exportQueue) == 0 {
+		return nil
+	}
+	next := p.exportQueue[0]
+	p.exportQueue = p.exportQueue[1:]
+	return p.startRetainedExport(next)
+}
+
+func (p *Plugin) hasQueuedExportForNote(noteID string) bool {
+	for _, export := range p.exportQueue {
+		if export.ID == noteID {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Plugin) cleanupSupersededExports(noteID string, throughSequence uint64) {
+	kept := p.supersededExports[:0]
+	for _, export := range p.supersededExports {
+		if export.ID == noteID && export.Sequence <= throughSequence {
+			removeNoteExport(export.Path)
+			continue
+		}
+		kept = append(kept, export)
+	}
+	p.supersededExports = kept
 }
 
 // handleSearchKey processes keyboard input in search mode.
