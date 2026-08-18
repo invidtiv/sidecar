@@ -12,7 +12,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
 )
@@ -88,7 +88,7 @@ func YankPath(path string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(path); err != nil {
+		if err := clip.WriteAll(path); err != nil {
 			return msg.ToastMsg{Message: "Failed to copy path", Duration: 2 * time.Second, IsError: true}
 		}
 		return msg.ToastMsg{Message: "Copied: " + path, Duration: 2 * time.Second}
@@ -106,7 +106,7 @@ func YankContents(root, path string) tea.Cmd {
 			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
 		}
 		text := string(data)
-		if err := clipboard.WriteAll(text); err != nil {
+		if err := clip.WriteAll(text); err != nil {
 			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		n := strings.Count(text, "\n")

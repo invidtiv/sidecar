@@ -9,9 +9,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/styles"
@@ -192,7 +192,7 @@ func (p *Plugin) copyInlineEditorOutputCmd() tea.Cmd {
 			stripped = append(stripped, ansi.Strip(line))
 		}
 		text := strings.Join(stripped, "\n")
-		if err := clipboard.WriteAll(text); err != nil {
+		if err := clip.WriteAll(text); err != nil {
 			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return app.ToastMsg{Message: fmt.Sprintf("Copied %d line(s)", len(stripped)), Duration: 2 * time.Second}

@@ -17,6 +17,11 @@ type saveConfig struct {
 	Features FeaturesConfig     `json:"features,omitempty"`
 	// TerminalResources is written only when it has content; see Save.
 	TerminalResources saveTerminalResourcesConfig `json:"terminalResources,omitempty"`
+	Selection         saveSelectionConfig         `json:"selection"`
+}
+
+type saveSelectionConfig struct {
+	CopyOnSelect *bool `json:"copyOnSelect,omitempty"`
 }
 
 type saveTerminalResourcesConfig struct {
@@ -138,6 +143,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 		UI:                cfg.UI,
 		Features:          cfg.Features,
 		TerminalResources: toSaveTerminalResources(cfg.TerminalResources),
+		Selection:         saveSelectionConfig{CopyOnSelect: &cfg.Selection.CopyOnSelect},
 	}
 }
 
@@ -182,10 +188,11 @@ func Save(cfg *Config) error {
 	// Marshal each known field into the map
 	sc := toSaveConfig(cfg)
 	fields := map[string]interface{}{
-		"projects": sc.Projects,
-		"plugins":  sc.Plugins,
-		"keymap":   sc.Keymap,
-		"ui":       sc.UI,
+		"projects":  sc.Projects,
+		"plugins":   sc.Plugins,
+		"keymap":    sc.Keymap,
+		"ui":        sc.UI,
+		"selection": sc.Selection,
 	}
 	if len(sc.Features.Flags) > 0 {
 		fields["features"] = sc.Features

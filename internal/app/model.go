@@ -10,7 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
@@ -1205,7 +1205,7 @@ Rules:
 
 My code is located at: [TELL ME WHERE YOUR CODE DIRECTORIES ARE]`
 
-	if err := clipboard.WriteAll(prompt); err != nil {
+	if err := clip.WriteAll(prompt); err != nil {
 		return func() tea.Msg {
 			return ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second}
 		}
@@ -1613,5 +1613,3 @@ func (m *Model) notifyThemeChanged() tea.Cmd {
 	}
 	return tea.Batch(cmds...)
 }
-
-

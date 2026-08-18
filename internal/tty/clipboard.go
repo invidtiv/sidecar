@@ -6,8 +6,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // SuperCopyKey is the platform copy chord — Cmd+C on macOS, Super+C elsewhere.
@@ -40,7 +40,11 @@ func (c Config) IsSelectAllChord(msg tea.KeyPressMsg) bool {
 // why none did. Hosts phrase their own notification from it.
 type CopyResult struct {
 	Lines int
-	Err   error
+	// NativeErr is the system clipboard write's failure. It does not mean the
+	// copy failed: the OSC 52 write to the terminal still happened, and over
+	// SSH it is the half that was ever going to work — so the notice names the
+	// terminal clipboard rather than claiming both or claiming failure.
+	NativeErr error
 	// Empty reports a copy asked for with nothing selected. A copy chord with no
 	// selection must not replace the clipboard with a screen dump — cmd+c is
 	// reflex, and the clipboard may hold something the user still needs.
@@ -69,43 +73,35 @@ func (c Config) Notice(r CopyResult) CopyNotice {
 	switch {
 	case r.Empty:
 		notice.Message = "Nothing selected — " + c.SelectAllKey + " selects all output"
-	case r.Err != nil:
-		notice.Message = "Copy failed: " + r.Err.Error()
-		notice.IsError = true
+	case r.NativeErr != nil:
+		notice.Message = fmt.Sprintf("Copied %d line(s) to the terminal clipboard", r.Lines)
 	default:
 		notice.Message = fmt.Sprintf("Copied %d line(s)", r.Lines)
 	}
 	return notice
 }
 
-// CopySelectionNotice copies selected terminal lines and phrases the outcome, so
-// a host needs only its own notification type to report a copy.
-func (c Config) CopySelectionNotice(lines []string) CopyNotice {
-	return c.Notice(CopySelection(lines))
-}
-
-// CopySelectionCmd copies selected terminal lines and reports the outcome as
-// the host's own notification. wrap is the only part of a copy a surface owns:
-// which toast type carries the notice. A host that phrased the notice itself
-// would be a second wording of the same three outcomes.
+// CopySelectionCmd copies selected terminal lines to every clipboard within
+// reach — the system clipboard natively, the terminal's over OSC 52 — and
+// reports the outcome as the host's own notification. wrap is the only part of
+// a copy a surface owns: which toast type carries the notice. A host that
+// phrased the notice itself would be a second wording of the same outcomes.
 func (c Config) CopySelectionCmd(lines []string, wrap func(CopyNotice) tea.Msg) tea.Cmd {
-	return func() tea.Msg {
-		return wrap(c.CopySelectionNotice(lines))
+	if len(lines) == 0 {
+		return func() tea.Msg { return wrap(c.Notice(CopyResult{Empty: true})) }
 	}
+	return clip.Copy(SelectionText(lines), func(r clip.Result) tea.Msg {
+		return wrap(c.Notice(CopyResult{Lines: len(lines), NativeErr: r.NativeErr}))
+	})
 }
 
-// CopySelection writes selected terminal lines to the system clipboard, without
-// the styling they were drawn with.
-func CopySelection(lines []string) CopyResult {
-	if len(lines) == 0 {
-		return CopyResult{Empty: true}
-	}
+// SelectionText is what selected terminal lines read as off the screen: the
+// styling they were drawn with removed, joined the way they were stacked. It is
+// exactly what lands on the clipboard.
+func SelectionText(lines []string) string {
 	stripped := make([]string, 0, len(lines))
 	for _, line := range lines {
 		stripped = append(stripped, ansi.Strip(line))
 	}
-	if err := clipboard.WriteAll(strings.Join(stripped, "\n")); err != nil {
-		return CopyResult{Err: err}
-	}
-	return CopyResult{Lines: len(stripped)}
+	return strings.Join(stripped, "\n")
 }

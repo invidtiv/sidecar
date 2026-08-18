@@ -6,9 +6,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // yankSessionDetails copies session summary to clipboard.
@@ -20,7 +20,7 @@ func (p *Plugin) yankSessionDetails() tea.Cmd {
 
 	md := formatSessionSummary(session)
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(md); err != nil {
+		if err := clip.WriteAll(md); err != nil {
 			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return app.ToastMsg{Message: "Yanked session details", Duration: 2 * time.Second}
@@ -36,7 +36,7 @@ func (p *Plugin) yankTurnContent() tea.Cmd {
 
 	md := formatTurnAsMarkdown(turn)
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(md); err != nil {
+		if err := clip.WriteAll(md); err != nil {
 			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return app.ToastMsg{Message: "Yanked turn content", Duration: 2 * time.Second}
@@ -73,7 +73,7 @@ func (p *Plugin) yankResumeCommand() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(cmd); err != nil {
+		if err := clip.WriteAll(cmd); err != nil {
 			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return app.ToastMsg{Message: "Yanked: " + cmd, Duration: 2 * time.Second}

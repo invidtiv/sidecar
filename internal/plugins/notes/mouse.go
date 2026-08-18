@@ -7,9 +7,9 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
@@ -414,9 +414,8 @@ func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
 		// Save the current list width to state
 		_ = state.SetNotesListWidth(p.listWidth)
 	case regionEditorLine:
-		// Selection complete - finalize drag and copy to clipboard
 		p.selection.FinishDrag()
-		if p.selection.HasSelection() {
+		if p.copyOnSelect() && p.selection.HasSelection() {
 			return p, p.copySelectionCmd()
 		}
 	}
@@ -683,27 +682,33 @@ func (p *Plugin) screenXToEditorCol(x int) int {
 	return relX
 }
 
-// copySelectionCmd returns a command that copies the selection to clipboard.
+// copyOnSelect reports whether finishing a selection copies it. Off unless
+// configured: a drag that silently replaces the clipboard surprises more people
+// than it serves.
+func (p *Plugin) copyOnSelect() bool {
+	return p.ctx != nil && p.ctx.Config != nil && p.ctx.Config.Selection.CopyOnSelect
+}
+
+// copySelectionCmd returns a command that copies the selection to every
+// clipboard within reach — the system clipboard and, over OSC 52, the
+// terminal's.
 func (p *Plugin) copySelectionCmd() tea.Cmd {
-	return func() tea.Msg {
-		lines := p.getSelectedText()
-		if len(lines) == 0 {
-			return nil
-		}
-
-		// Strip ANSI codes and join
-		stripped := make([]string, 0, len(lines))
-		for _, line := range lines {
-			stripped = append(stripped, ansi.Strip(line))
-		}
-		text := strings.Join(stripped, "\n")
-
-		if err := clipboard.WriteAll(text); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-
-		return app.ToastMsg{Message: "Copied to clipboard", Duration: 2 * time.Second}
+	lines := p.getSelectedText()
+	if len(lines) == 0 {
+		return nil
 	}
+	stripped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		stripped = append(stripped, ansi.Strip(line))
+	}
+	return clip.Copy(strings.Join(stripped, "\n"), func(r clip.Result) tea.Msg {
+		// A failed native write is not a failed copy: the OSC 52 half still
+		// ran, so the toast claims only the clipboard it can vouch for.
+		if r.NativeErr != nil {
+			return app.ToastMsg{Message: "Copied to the terminal clipboard", Duration: 2 * time.Second}
+		}
+		return app.ToastMsg{Message: "Copied to clipboard", Duration: 2 * time.Second}
+	})
 }
 
 // getSelectedText returns the selected text lines.

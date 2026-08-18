@@ -9,8 +9,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/msg"
@@ -908,41 +908,46 @@ func (p *Plugin) navigateToFile(path string) (plugin.Plugin, tea.Cmd) {
 	return p, p.openTab(path, TabOpenNew)
 }
 
-// copySelectedTextToClipboard copies the selected text to the system clipboard
-// with character-level precision using the shared ui.SelectionState.
+// copySelectedTextToClipboard copies the selected text to every clipboard
+// within reach — the system clipboard and, over OSC 52, the terminal's — with
+// character-level precision using the shared ui.SelectionState.
 func (p *Plugin) copySelectedTextToClipboard() tea.Cmd {
-	return func() tea.Msg {
-		if !p.selection.HasSelection() {
-			return nil
-		}
-		startLine := p.selection.Start.Line
-		endLine := p.selection.End.Line
-		if startLine > endLine {
-			startLine, endLine = endLine, startLine
-		}
-		if startLine < 0 {
-			startLine = 0
-		}
-		if endLine >= len(p.previewLines) {
-			endLine = len(p.previewLines) - 1
-		}
-		if endLine < startLine {
-			return nil
-		}
-
-		lines := p.previewLines[startLine : endLine+1]
-		result := p.selection.SelectedText(lines, startLine, 8)
-		if len(result) == 0 {
-			return nil
-		}
-
-		text := strings.Join(result, "\n")
-		if err := clipboard.WriteAll(text); err != nil {
-			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		lineCount := endLine - startLine + 1
-		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d line(s)", lineCount), Duration: 2 * time.Second}
+	if !p.selection.HasSelection() {
+		return nil
 	}
+	startLine := p.selection.Start.Line
+	endLine := p.selection.End.Line
+	if startLine > endLine {
+		startLine, endLine = endLine, startLine
+	}
+	if startLine < 0 {
+		startLine = 0
+	}
+	if endLine >= len(p.previewLines) {
+		endLine = len(p.previewLines) - 1
+	}
+	if endLine < startLine {
+		return nil
+	}
+
+	lines := p.previewLines[startLine : endLine+1]
+	result := p.selection.SelectedText(lines, startLine, 8)
+	if len(result) == 0 {
+		return nil
+	}
+
+	lineCount := endLine - startLine + 1
+	return clip.Copy(strings.Join(result, "\n"), func(r clip.Result) tea.Msg {
+		// A failed native write is not a failed copy: the OSC 52 half still
+		// ran, so the toast claims only the clipboard it can vouch for.
+		if r.NativeErr != nil {
+			return msg.ToastMsg{
+				Message:  fmt.Sprintf("Copied %d line(s) to the terminal clipboard", lineCount),
+				Duration: 2 * time.Second,
+			}
+		}
+		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d line(s)", lineCount), Duration: 2 * time.Second}
+	})
 }
 
 // copyFileContentsToClipboard copies the entire file contents to the system clipboard.
@@ -955,7 +960,7 @@ func (p *Plugin) copyFileContentsToClipboard() tea.Cmd {
 			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
 		}
 		text := strings.Join(p.previewLines, "\n")
-		if err := clipboard.WriteAll(text); err != nil {
+		if err := clip.WriteAll(text); err != nil {
 			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d lines", len(p.previewLines)), Duration: 2 * time.Second}

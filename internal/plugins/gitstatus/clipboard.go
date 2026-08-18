@@ -6,7 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/msg"
 )
 
@@ -17,7 +17,7 @@ func (p *Plugin) copyCommitIDToClipboard() tea.Cmd {
 		return nil
 	}
 
-	if err := clipboard.WriteAll(commit.ShortHash); err != nil {
+	if err := clip.WriteAll(commit.ShortHash); err != nil {
 		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
 	}
 	return msg.ShowToast("Yanked: "+commit.ShortHash, 2*time.Second)
@@ -31,7 +31,7 @@ func (p *Plugin) copyCommitToClipboard() tea.Cmd {
 	}
 
 	markdown := formatCommitAsMarkdown(commit)
-	if err := clipboard.WriteAll(markdown); err != nil {
+	if err := clip.WriteAll(markdown); err != nil {
 		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
 	}
 	return msg.ShowToast("Yanked commit details", 2*time.Second)

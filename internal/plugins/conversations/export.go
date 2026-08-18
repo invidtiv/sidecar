@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // ExportSessionAsMarkdown converts a session and its messages to markdown format.
@@ -95,7 +95,7 @@ func ExportSessionAsMarkdown(session *adapter.Session, messages []adapter.Messag
 
 // CopyToClipboard copies content to the system clipboard.
 func CopyToClipboard(content string) error {
-	return clipboard.WriteAll(content)
+	return clip.WriteAll(content)
 }
 
 // ExportSessionToFile writes a session to a markdown file.

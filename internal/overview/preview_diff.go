@@ -4,7 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -466,7 +466,7 @@ func (m *Model) yankPreviewDiff() tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(ident); err != nil {
+		if err := clip.WriteAll(ident); err != nil {
 			return appmsg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return appmsg.ToastMsg{Message: "Yanked: " + ident, Duration: 2 * time.Second}

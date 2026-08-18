@@ -9,7 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
@@ -288,7 +288,7 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return toast(msg.Message), true
 
 	case configui.CopyMsg:
-		if err := clipboard.WriteAll(msg.Text); err != nil {
+		if err := clip.WriteAll(msg.Text); err != nil {
 			return toast("Copy failed: " + err.Error()), true
 		}
 		notice := msg.Notice

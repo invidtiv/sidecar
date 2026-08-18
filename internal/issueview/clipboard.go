@@ -4,7 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/msg"
 )
 
@@ -29,7 +29,7 @@ func copyText(text, ok string) tea.Cmd {
 		return nil
 	}
 	return func() tea.Msg {
-		if err := clipboard.WriteAll(text); err != nil {
+		if err := clip.WriteAll(text); err != nil {
 			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
 		}
 		return msg.ToastMsg{Message: ok, Duration: 2 * time.Second}

@@ -67,6 +67,11 @@ type rawConfig struct {
 	// from an explicitly empty one; both leave the default (no providers) in
 	// place, but only the first is silent about it.
 	TerminalResources *rawTerminalResourcesConfig `json:"terminalResources"`
+	Selection         rawSelectionConfig          `json:"selection"`
+}
+
+type rawSelectionConfig struct {
+	CopyOnSelect *bool `json:"copyOnSelect"`
 }
 
 type rawTerminalResourcesConfig struct {
@@ -436,6 +441,11 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 			providers = append(providers, p)
 		}
 		cfg.TerminalResources.Providers = providers
+	}
+
+	// Selection
+	if raw.Selection.CopyOnSelect != nil {
+		cfg.Selection.CopyOnSelect = *raw.Selection.CopyOnSelect
 	}
 
 	// Features

@@ -13,7 +13,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 )
@@ -1466,7 +1466,7 @@ func (p *Plugin) yankMergeErrorToClipboard() tea.Cmd {
 	if p.mergeState == nil || p.mergeState.ErrorDetail == "" {
 		return nil
 	}
-	if err := clipboard.WriteAll(p.mergeState.ErrorDetail); err != nil {
+	if err := clip.WriteAll(p.mergeState.ErrorDetail); err != nil {
 		return appmsg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
 	}
 	return appmsg.ShowToast("Copied error to clipboard", 2*time.Second)
@@ -1477,7 +1477,7 @@ func (p *Plugin) yankPRURLToClipboard() tea.Cmd {
 	if p.mergeState == nil || p.mergeState.PRURL == "" {
 		return nil
 	}
-	if err := clipboard.WriteAll(p.mergeState.PRURL); err != nil {
+	if err := clip.WriteAll(p.mergeState.PRURL); err != nil {
 		return appmsg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
 	}
 	return appmsg.ShowToast("Copied PR URL to clipboard", 2*time.Second)
