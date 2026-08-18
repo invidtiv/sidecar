@@ -474,6 +474,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.leaveOverview(false)
 		return m, m.FocusPluginByID(msg.PluginID)
 
+	case ResourceProvidersDescribedMsg:
+		// M0 is diagnostics only: the matcher snapshot is published on the
+		// manager and nothing in the TUI changes shape yet. Recording the
+		// outcome is metadata — instance, state, matcher count — never a
+		// locator, a title, or provider output.
+		logResourceProviderStatuses(msg)
+		return m, nil
+
 	case OpenConfigurationMsg:
 		// One entry: an empty state, a launch command, and the gear all arrive
 		// here, and escape returns to whatever was underneath when they did. A

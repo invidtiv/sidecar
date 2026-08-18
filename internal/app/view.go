@@ -51,7 +51,13 @@ func projectSwitcherItemID(idx int) string {
 // (alt-screen, mouse) that were previously NewProgram options in v1.
 func (m Model) View() tea.View {
 	if m.ready {
-		firstReadyFrame.Do(func() { startuptrace.Mark("first ready frame") })
+		firstReadyFrame.Do(func() {
+			startuptrace.Mark("first ready frame")
+			// Same branch, same moment: anything that must not run before the
+			// user has a usable UI waits on this latch rather than on Bubble
+			// Tea's command scheduling. See resourceproviders.go.
+			firstReadyFrameLatch.close()
+		})
 	} else {
 		firstFrame.Do(func() { startuptrace.Mark("first frame (loading)") })
 	}

@@ -18,6 +18,11 @@ const (
 	Document
 	Issue
 	Diff
+	// Resource is the single leaf kind every external terminal resource
+	// provider shares. The extension point is which resource is recognized
+	// and resolved, not which windows exist, so a Jira ticket and a CI build
+	// become tabs in one leaf rather than two pane kinds.
+	Resource
 )
 
 type Axis int
@@ -60,6 +65,7 @@ type Floors struct {
 	Doc      Floor
 	Issue    Floor
 	Diff     Floor
+	Resource Floor
 }
 
 type Layout struct {
@@ -129,6 +135,8 @@ func paneMinimum(node *Node, floors Floors) Floor {
 			floor = floors.Issue
 		case Diff:
 			floor = floors.Diff
+		case Resource:
+			floor = floors.Resource
 		}
 		return Floor{Width: max(floor.Width, 0), Height: max(floor.Height, 0)}
 	}

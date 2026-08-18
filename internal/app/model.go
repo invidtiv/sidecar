@@ -523,6 +523,14 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 	}
 
+	// Terminal resource providers describe themselves asynchronously. The
+	// command waits on the first-ready-frame latch before it touches a
+	// provider, so returning it from Init is safe even though an Init command
+	// can start before the first render.
+	if cmd := describeResourceProvidersCmd(m.cfg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
 	// A launch command's destination opens through the same message an empty
 	// state sends, so there is one way into Configuration and one way back out.
 	if m.startupConfigPage != "" {

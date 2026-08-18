@@ -120,7 +120,10 @@ type PaneLayoutJSON struct {
 	Tabs      []PaneDocTabJSON   `json:"tabs,omitempty"`
 	IssueTabs []PaneIssueTabJSON `json:"issueTabs,omitempty"`
 	DiffTabs  []PaneDiffTabJSON  `json:"diffTabs,omitempty"`
-	Active    int                `json:"active,omitempty"`
+	// ResourceTabs are external provider references. One list serves every
+	// provider, so a new integration adds no field here.
+	ResourceTabs []PaneResourceTabJSON `json:"resourceTabs,omitempty"`
+	Active       int                   `json:"active,omitempty"`
 	// Open is true when restore should rebuild the split. False means this
 	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
 	// record that still has a split is treated as open by MigratePaneLayouts.
@@ -146,6 +149,20 @@ type PaneDiffTabJSON struct {
 	Scope  string `json:"scope,omitempty"`
 	Mode   string `json:"mode,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
+}
+
+// PaneResourceTabJSON is one persisted external resource reference. It is
+// deliberately provider-neutral and deliberately reference-only: Sidecar
+// re-resolves on restore and never writes a returned title, field, body,
+// error, URL, or any auth state to disk.
+//
+// A reference necessarily includes the non-secret locator, such as CASH-1245,
+// because that is the minimum needed to restore the pane the user had open.
+type PaneResourceTabJSON struct {
+	Provider string `json:"provider"`
+	Matcher  string `json:"matcher"`
+	Locator  string `json:"locator"`
+	Scroll   int    `json:"scroll,omitempty"`
 }
 
 // MigratePaneLayouts copies a legacy single-slot PaneLayout into PaneLayouts

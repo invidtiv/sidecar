@@ -1,0 +1,9 @@
+{
+  "protocol": "sidecar.terminal-resource/v1",
+  "error": {
+    "code": "unauthorized",
+    "message": "Jira credentials are missing or expired",
+    "retryable": false,
+    "setupHint": "Run sidecar-jira configure --profile work"
+  }
+}

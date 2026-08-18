@@ -1,0 +1,30 @@
+{
+  "protocol": "sidecar.terminal-resource/v1",
+  "resource": {
+    "identity": "CASH-1245",
+    "title": "Refund totals differ after partial capture",
+    "subtitle": "Bug",
+    "status": {
+      "label": "In Progress",
+      "tone": "info"
+    },
+    "fields": [
+      {
+        "label": "Assignee",
+        "value": "Marcus Vorwaller",
+        "kind": "user"
+      },
+      {
+        "label": "Priority",
+        "value": "High"
+      }
+    ],
+    "body": {
+      "format": "markdown",
+      "text": "Ticket description..."
+    },
+    "sourceUrl": "https://jira.example.test/browse/CASH-1245",
+    "updatedAt": "2026-08-17T17:31:00Z",
+    "freshForSeconds": 60
+  }
+}
