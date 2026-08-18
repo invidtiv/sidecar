@@ -89,8 +89,8 @@ github.com/makeworld-the-better-one/dither/v2 v2.4.0 h1:Az/dYXiTcwcRSe59Hzw4RI1r
 github.com/makeworld-the-better-one/dither/v2 v2.4.0/go.mod h1:VBtN8DXO7SNtyGmLiGA7IsFeKrBkQPze1/iAeM95arc=
 github.com/marcus/tasks v1.9.0 h1:kaSjMeqXx9Sz4lTrfuhEJiNtn/1l9AYHh4MnqmiFNOU=
 github.com/marcus/tasks v1.9.0/go.mod h1:ZmOWjlf13Po87sw11nIISU3oPpWgD20BzFdkShYPg74=
-github.com/marcus/td v0.58.1-0.20260818065534-1a0312001c3e h1:MVUL5VhS4wD+z30KAc8sLOPYGuQbgbbrt1xJjHlNpCU=
-github.com/marcus/td v0.58.1-0.20260818065534-1a0312001c3e/go.mod h1:HI17rCBsF7yvTAdTJkH7j/sPrwOp6j3yRR+hGxeWMOY=
+github.com/marcus/td v0.59.0 h1:PjQ2UpdoVxnrOiJigMI2jo7Ui5N0541cTmMgv11YtyE=
+github.com/marcus/td v0.59.0/go.mod h1:HI17rCBsF7yvTAdTJkH7j/sPrwOp6j3yRR+hGxeWMOY=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mattn/go-runewidth v0.0.23 h1:7ykA0T0jkPpzSvMS5i9uoNn2Xy3R383f9HDx3RybWcw=
