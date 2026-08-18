@@ -25,6 +25,13 @@ func colorChar(char string, color RGB) string {
 // The gradient flows at the specified angle (typically 30 degrees).
 // width and height are the outer dimensions including borders.
 func RenderGradientBorder(content string, width, height int, gradient Gradient, padding int) string {
+	return RenderGradientBorderWithBg(content, width, height, gradient, padding, "")
+}
+
+// RenderGradientBorderWithBg renders content inside a box with gradient-colored borders
+// and fills the inner box area (padding, short lines, empty trailing lines) with the given
+// background color (or unstyled when bg is empty).
+func RenderGradientBorderWithBg(content string, width, height int, gradient Gradient, padding int, bg string) string {
 	if width < 3 || height < 3 {
 		return content
 	}
@@ -36,19 +43,41 @@ func RenderGradientBorder(content string, width, height int, gradient Gradient, 
 	// Split content into lines
 	lines := strings.Split(content, "\n")
 
-	// Pad or truncate lines to fit inner width with padding
-	paddedLines := make([]string, innerHeight)
-	paddingStr := strings.Repeat(" ", padding)
+	var bgANSI string
+	if bg != "" {
+		bgANSI = HexToRGB(bg).ToANSIBg()
+	}
+
 	contentWidth := innerWidth - (padding * 2)
 	if contentWidth < 0 {
 		contentWidth = 0
 	}
 
+	paddingStr := strings.Repeat(" ", padding)
+	var leftPadStr, rightPadMarginStr string
+	if bgANSI != "" && padding > 0 {
+		leftPadStr = bgANSI + paddingStr + ANSIReset
+		rightPadMarginStr = bgANSI + paddingStr + ANSIReset
+	} else {
+		leftPadStr = paddingStr
+		rightPadMarginStr = paddingStr
+	}
+
+	// Pad or truncate lines to fit inner width with padding
+	paddedLines := make([]string, innerHeight)
+
 	for i := 0; i < innerHeight; i++ {
-		var line string
-		if i < len(lines) {
-			line = lines[i]
+		if i >= len(lines) {
+			// Empty line below content: fill the entire inner width with background
+			if bgANSI != "" {
+				paddedLines[i] = bgANSI + strings.Repeat(" ", innerWidth) + ANSIReset
+			} else {
+				paddedLines[i] = strings.Repeat(" ", innerWidth)
+			}
+			continue
 		}
+
+		line := lines[i]
 
 		// Get visual width and truncate/pad as needed
 		lineWidth := lipgloss.Width(line)
@@ -62,7 +91,17 @@ func RenderGradientBorder(content string, width, height int, gradient Gradient, 
 		if rightPad < 0 {
 			rightPad = 0
 		}
-		paddedLines[i] = paddingStr + line + strings.Repeat(" ", rightPad) + paddingStr
+
+		var rightPadContentStr string
+		if rightPad > 0 {
+			if bgANSI != "" {
+				rightPadContentStr = bgANSI + strings.Repeat(" ", rightPad) + ANSIReset
+			} else {
+				rightPadContentStr = strings.Repeat(" ", rightPad)
+			}
+		}
+
+		paddedLines[i] = leftPadStr + line + rightPadContentStr + rightPadMarginStr
 	}
 
 	var result strings.Builder
@@ -91,6 +130,7 @@ func RenderGradientBorder(content string, width, height int, gradient Gradient, 
 
 	return result.String()
 }
+
 
 // renderGradientBorderTop renders the top border line with gradient colors.
 func renderGradientBorderTop(width, height int, g Gradient) string {

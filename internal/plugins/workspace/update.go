@@ -899,7 +899,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// that was just brought back (td-6a4100).
 		p.noteShellAlive(msg.SessionName)
 
-		existingShell := p.findShellByName(msg.SessionName)
 		existingIdx := -1
 		for i, s := range p.shells {
 			if s.TmuxName == msg.SessionName {
@@ -940,12 +939,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.saveSelectionState()
 			}
 		case existingIdx >= 0:
-			existingShell = p.shells[existingIdx]
-			existingShell.IsOrphaned = false
-			if existingShell.WorkDir == "" && p.ctx != nil {
-				existingShell.WorkDir = p.ctx.WorkDir
+			revivedShell := p.shells[existingIdx]
+			revivedShell.IsOrphaned = false
+			if revivedShell.WorkDir == "" && p.ctx != nil {
+				revivedShell.WorkDir = p.ctx.WorkDir
 			}
-			existingShell.Agent = &Agent{
+			revivedShell.Agent = &Agent{
 				Type:        displayAgentType,
 				TmuxSession: msg.SessionName,
 				TmuxPane:    msg.PaneID,
@@ -954,7 +953,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.managedSessions[msg.SessionName] = true
 			if p.shellManifest != nil {
-				_ = p.shellManifest.UpdateShell(shellToDefinition(existingShell))
+				_ = p.shellManifest.UpdateShell(shellToDefinition(revivedShell))
 			}
 			if !msg.KeepSelection {
 				p.selectTopShellAt(existingIdx)

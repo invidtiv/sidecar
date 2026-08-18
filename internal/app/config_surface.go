@@ -176,14 +176,16 @@ func (m *Model) closeConfiguration() tea.Cmd {
 	m.configActive = false
 	// Where the user was is remembered before the surface is torn down, so the
 	// next unnamed open puts them back on it.
+	var themeCmd tea.Cmd
 	if m.config != nil {
 		m.config.Close()
+		themeCmd = m.notifyThemeChanged()
 	}
 	restore := m.configReturn
 	m.configReturn = configReturn{}
 	if !restore.valid {
 		m.updateContext()
-		return nil
+		return themeCmd
 	}
 	m.scope = restore.scope
 	m.globalTab = restore.globalTab
@@ -198,7 +200,7 @@ func (m *Model) closeConfiguration() tea.Cmd {
 		}
 	}
 	m.updateContext()
-	return cmd
+	return tea.Batch(themeCmd, cmd)
 }
 
 // configEscape answers esc while Configuration is open: it clears an active
@@ -211,7 +213,7 @@ func (m *Model) configEscape() tea.Cmd {
 	// only when none of those needed dismissing does esc close Configuration.
 	if m.config.Escape() {
 		m.updateContext()
-		return nil
+		return m.notifyThemeChanged()
 	}
 	return m.closeConfiguration()
 }
@@ -230,7 +232,7 @@ func (m *Model) configKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	handled, cmd := m.config.Key(msg)
 	if handled {
 		m.updateContext()
-		return m, cmd
+		return m, tea.Batch(cmd, m.notifyThemeChanged())
 	}
 	if m.config.SearchFocused() {
 		return m, nil
@@ -352,6 +354,7 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 			return ToastMsg{Message: "Save failed: " + msg.Err, Duration: 4 * time.Second, IsError: true}
 		}
 	}
+	var themeCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
 		m.showClock = cfg.UI.ShowClock
@@ -362,14 +365,14 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		// A live theme preview belongs to the picker. Re-applying the disk
 		// theme here would snap it back the moment any other setting saved.
 		if m.config == nil || !m.config.PreviewingTheme() {
-			theme.ApplyResolved(theme.ResolveTheme(cfg, m.ui.WorkDir))
+			themeCmd = m.applyResolvedTheme(theme.ResolveTheme(cfg, m.ui.WorkDir))
 		}
 	}
 	if m.config != nil {
 		m.config.SetHostState(m.configHostState())
 		m.config.SetCheckInput(m.configCheckInput())
 	}
-	cmds := []tea.Cmd{m.syncTerminalTitle(true)}
+	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd}
 	if msg.Notice != "" {
 		cmds = append(cmds, toast(msg.Notice))
 	}

@@ -114,6 +114,19 @@ func (r *Registry) Plugins() []Plugin {
 	return result
 }
 
+// Replace stores p at index i in the live registry. Plugins() returns a copy,
+// so a caller that received a new value from Update must persist it here.
+func (r *Registry) Replace(i int, p Plugin) {
+	if r == nil || p == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if i >= 0 && i < len(r.plugins) {
+		r.plugins[i] = p
+	}
+}
+
 // Get returns a plugin by ID, or nil if not found.
 func (r *Registry) Get(id string) Plugin {
 	r.mu.RLock()

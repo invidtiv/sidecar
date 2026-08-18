@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -356,6 +358,10 @@ type Model struct {
 	// surface rather than replacing it: escape still returns to the app the
 	// user would have had.
 	startupConfigPage configui.PageID
+	// lastNotifiedTheme is the last styles palette delivered to plugins. Theme
+	// notifications compare against it so search typing and other Configuration
+	// input do not rebuild plugin styles when the resolved colors did not change.
+	lastNotifiedTheme styles.Theme
 
 	// UI request watcher for external CLI commands (e.g. sidecar open).
 	// The channel is deliberately not cached here: Init takes the model by
@@ -657,7 +663,7 @@ func (m *Model) ClearToast() {
 }
 
 // resetProjectSwitcher resets the project switcher modal state.
-func (m *Model) resetProjectSwitcher() {
+func (m *Model) resetProjectSwitcher() tea.Cmd {
 	m.showProjectSwitcher = false
 	m.projectSwitcherCursor = 0
 	m.projectSwitcherScroll = 0
@@ -667,7 +673,7 @@ func (m *Model) resetProjectSwitcher() {
 	m.resetProjectAdd()
 	// Restore current project's theme (undo any live preview)
 	resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-	theme.ApplyResolved(resolved)
+	return m.applyResolvedTheme(resolved)
 }
 
 // clearProjectSwitcherModal clears the modal cache.
@@ -757,9 +763,7 @@ func (m *Model) updateProjectSwitcherFilter(msg tea.Msg) tea.Cmd {
 		m.projectSwitcherCursor = 0
 	}
 	m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, 0, 8)
-	m.previewProjectTheme()
-
-	return cmd
+	return tea.Batch(cmd, m.previewProjectTheme())
 }
 
 // projectSwitcherEnsureCursorVisible adjusts scroll to keep cursor in view.
@@ -955,11 +959,14 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 
 	// Apply project-specific theme (or global fallback)
 	resolved := theme.ResolveTheme(m.cfg, targetPath)
-	theme.ApplyResolved(resolved)
+	themeCmd := m.applyResolvedTheme(resolved)
 
 	// Reinitialize all plugins with the new working directory and project root
 	// This stops all plugins, updates the context, and starts them again
 	startCmds := m.registry.Reinit(targetPath, newProjectRoot)
+	if themeCmd != nil {
+		startCmds = append(startCmds, themeCmd)
+	}
 	if pending != nil {
 		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
 			selector.SetPendingWorkspaceSelection(*pending)
@@ -1092,16 +1099,16 @@ func (m *Model) navigateFromOverviewAction(workspace workspaceinventory.Workspac
 }
 
 // previewProjectTheme applies the theme for the currently selected project in the switcher.
-func (m *Model) previewProjectTheme() {
+func (m *Model) previewProjectTheme() tea.Cmd {
 	destinations := m.projectSwitcherFiltered
 	if m.projectSwitcherCursor >= 0 && m.projectSwitcherCursor < len(destinations) {
 		destination := destinations[m.projectSwitcherCursor]
 		if destination.Kind == destinationOverview {
-			theme.ApplyResolved(theme.ResolveTheme(m.cfg, ""))
-			return
+			return m.applyResolvedTheme(theme.ResolveTheme(m.cfg, ""))
 		}
-		theme.ApplyResolved(theme.ResolveTheme(m.cfg, destination.Path))
+		return m.applyResolvedTheme(theme.ResolveTheme(m.cfg, destination.Path))
 	}
+	return nil
 }
 
 // currentProjectConfig returns the ProjectConfig for the current workdir, or nil.
@@ -1144,8 +1151,10 @@ func (m *Model) confirmThemeSelection(tc config.ThemeConfig, displayName string)
 			return ToastMsg{Message: "Theme applied (save failed)", Duration: 3 * time.Second, IsError: true}
 		}
 	}
+	var themeCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		themeCmd = m.applyResolvedTheme(theme.ResolveTheme(m.cfg, m.ui.WorkDir))
 	}
 
 	m.resetThemeSwitcher()
@@ -1157,9 +1166,9 @@ func (m *Model) confirmThemeSelection(tc config.ThemeConfig, displayName string)
 	} else {
 		toastMsg += " (global)"
 	}
-	return func() tea.Msg {
+	return tea.Batch(themeCmd, func() tea.Msg {
 		return ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
-	}
+	})
 }
 
 // saveTheme persists a ThemeConfig based on scope.
@@ -1264,16 +1273,16 @@ func (m *Model) resetProjectAddThemePicker() {
 }
 
 // previewProjectAddTheme previews the currently-selected theme.
-func (m *Model) previewProjectAddTheme() {
+func (m *Model) previewProjectAddTheme() tea.Cmd {
 	if m.projectAddThemeCursor >= 0 && m.projectAddThemeCursor < len(m.projectAddThemeFiltered) {
 		name := m.projectAddThemeFiltered[m.projectAddThemeCursor]
 		if name == "(use global)" {
 			resolved := theme.ResolveTheme(m.cfg, m.ui.WorkDir)
-			theme.ApplyResolved(resolved)
-		} else {
-			theme.ApplyResolved(theme.ResolvedTheme{BaseName: name})
+			return m.applyResolvedTheme(resolved)
 		}
+		return m.applyResolvedTheme(theme.ResolvedTheme{BaseName: name})
 	}
+	return nil
 }
 
 // validateProjectAdd validates the project add form inputs.
@@ -1539,31 +1548,70 @@ func (m *Model) initThemeSwitcher() {
 }
 
 // previewThemeEntry applies the given theme entry for live preview.
-func (m *Model) previewThemeEntry(entry themeEntry) {
+func (m *Model) previewThemeEntry(entry themeEntry) tea.Cmd {
 	if entry.IsBuiltIn {
-		m.applyThemeFromConfig(entry.ThemeKey)
-	} else {
-		theme.ApplyResolved(theme.ResolvedTheme{
-			BaseName:      "default",
-			CommunityName: entry.ThemeKey,
-		})
+		return m.applyThemeFromConfig(entry.ThemeKey)
 	}
+	return m.applyResolvedTheme(theme.ResolvedTheme{
+		BaseName:      "default",
+		CommunityName: entry.ThemeKey,
+	})
 }
 
 // applyThemeFromConfig applies a theme, using config overrides only if the
 // saved config has that theme selected. This means live preview of other themes
 // won't include user customizations (which is intentional - you want to see the
 // base theme, not your customizations for a different theme).
-func (m *Model) applyThemeFromConfig(themeName string) {
+func (m *Model) applyThemeFromConfig(themeName string) tea.Cmd {
 	freshCfg, err := config.Load()
 	if err == nil && freshCfg.UI.Theme.Name == themeName {
 		// Apply the saved theme with its full config (community + overrides)
-		theme.ApplyResolved(theme.ResolvedTheme{
+		return m.applyResolvedTheme(theme.ResolvedTheme{
 			BaseName:      themeName,
 			CommunityName: freshCfg.UI.Theme.Community,
 			Overrides:     freshCfg.UI.Theme.Overrides,
 		})
-	} else {
-		styles.ApplyTheme(themeName)
 	}
+	return m.applyThemeName(themeName)
 }
+
+// applyResolvedTheme applies a resolved theme to the styles system and notifies plugins.
+func (m *Model) applyResolvedTheme(resolved theme.ResolvedTheme) tea.Cmd {
+	theme.ApplyResolved(resolved)
+	return m.notifyThemeChanged()
+}
+
+// applyThemeName applies a theme by name to the styles system and notifies plugins.
+func (m *Model) applyThemeName(name string) tea.Cmd {
+	styles.ApplyTheme(name)
+	return m.notifyThemeChanged()
+}
+
+// notifyThemeChanged synchronously delivers msg.ThemeChangedMsg to all plugins
+// and the global tasks host so immediate frames and inactive tabs are up to date.
+// It is a no-op when the resolved styles snapshot has not changed.
+func (m *Model) notifyThemeChanged() tea.Cmd {
+	current := styles.GetCurrentTheme()
+	if reflect.DeepEqual(m.lastNotifiedTheme, current) {
+		return nil
+	}
+	m.lastNotifiedTheme = current
+
+	themeMsg := msg.ThemeChangedMsg{}
+	var cmds []tea.Cmd
+	if m.registry != nil {
+		for i, p := range m.registry.Plugins() {
+			newPlugin, cmd := p.Update(themeMsg)
+			m.registry.Replace(i, newPlugin)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	if cmd := m.globalTasks.update(themeMsg); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+

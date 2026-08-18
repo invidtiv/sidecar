@@ -710,6 +710,15 @@ func TestEveryReservedKeyIsAKeyTheHostHandles(t *testing.T) {
 	}
 }
 
+func hasKeyMsg(msgs []tea.Msg, want tea.KeyPressMsg) bool {
+	for _, m := range msgs {
+		if k, ok := m.(tea.KeyPressMsg); ok && k.String() == want.String() {
+			return true
+		}
+	}
+	return false
+}
+
 // TestGlobalKeysAreTheOnesTheHostActuallyHandles pins keymap.GlobalKeys against
 // the real key handler, so the list a plugin reasons about cannot drift from
 // the switch statement it describes.
@@ -735,7 +744,7 @@ func TestGlobalKeysAreTheOnesTheHostActuallyHandles(t *testing.T) {
 			if key == "ctrl+c" {
 				msg = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
 			}
-			if p := press(t, msg); len(p.seen) != 0 {
+			if p := press(t, msg); hasKeyMsg(p.seen, msg) {
 				t.Fatalf("%q is listed as a sidecar global but was forwarded to the plugin", key)
 			}
 		})
@@ -751,12 +760,13 @@ func TestGlobalKeysAreTheOnesTheHostActuallyHandles(t *testing.T) {
 				t.Fatalf("test premise: %q is on the global list", key)
 			}
 			p := press(t, tea.KeyPressMsg{Code: rune(key[0]), Text: key})
-			if len(p.seen) == 0 {
+			if !hasKeyMsg(p.seen, tea.KeyPressMsg{Code: rune(key[0]), Text: key}) {
 				t.Fatalf("%q is not a sidecar global but never reached the plugin", key)
 			}
 		})
 	}
 }
+
 
 // TestAUserOverrideOutranksAPluginClaim makes the escape hatch plan § 1.4
 // documents actually exist: "change the mapping through Sidecar's keymap
