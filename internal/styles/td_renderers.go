@@ -4,16 +4,15 @@ import (
 	"github.com/marcus/td/pkg/monitor"
 )
 
-// CreateTDPanelRenderer creates a PanelRenderer that uses sidecar's gradient borders
-// and fills background cells with the theme canvas color.
+// CreateTDPanelRenderer creates a PanelRenderer that uses sidecar's gradient borders.
 // Maps td monitor PanelState values to appropriate gradients from the current theme.
 func CreateTDPanelRenderer() monitor.PanelRenderer {
 	return func(content string, width, height int, state monitor.PanelState) string {
-		theme := GetCurrentTheme()
 		gradient := getTDPanelGradient(state)
-		return RenderGradientBorderWithBg(content, width, height, gradient, 1, theme.Colors.BgPrimary)
+		return RenderGradientBorder(content, width, height, gradient, 1)
 	}
 }
+
 
 // CreateTDModalRenderer creates a ModalRenderer that uses sidecar's gradient borders
 // and fills the entire modal surface (including padding and trailing lines) with the theme surface color.
