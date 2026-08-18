@@ -899,7 +899,6 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// that was just brought back (td-6a4100).
 		p.noteShellAlive(msg.SessionName)
 
-		existingShell := p.findShellByName(msg.SessionName)
 		existingIdx := -1
 		for i, s := range p.shells {
 			if s.TmuxName == msg.SessionName {
