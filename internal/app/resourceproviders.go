@@ -9,7 +9,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceprovider"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/startuptrace"
 )
 
@@ -52,6 +54,8 @@ var resourceProviderHost struct {
 	mu      sync.Mutex
 	manager *resourceprovider.Manager
 	cancel  context.CancelFunc
+	// ctx is the lifetime resolves hang off, so shutdown cancels them.
+	ctx context.Context
 }
 
 // ResourceProvidersDescribedMsg reports the outcome of a describe pass. In M0
@@ -79,6 +83,7 @@ func ShutdownResourceProviders() {
 	resourceProviderHost.mu.Lock()
 	cancel := resourceProviderHost.cancel
 	resourceProviderHost.cancel = nil
+	resourceProviderHost.ctx = nil
 	resourceProviderHost.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -113,6 +118,7 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 			prev()
 		}
 		resourceProviderHost.cancel = cancel
+		resourceProviderHost.ctx = ctx
 		resourceProviderHost.mu.Unlock()
 
 		select {
@@ -145,6 +151,80 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 		}
 		return ResourceProvidersDescribedMsg{Statuses: statuses, SnapshotError: manager.SnapshotError()}
 	}
+}
+
+// publishResourceProviders hands every surface the live matcher snapshot and a
+// resolver over the manager. It is called after a describe pass, which is the
+// only moment either can change.
+//
+// Matchers are published even when empty: a provider that stopped declaring a
+// matcher must stop underlining it, and an empty snapshot is how ordinary
+// terminal output goes back to being ordinary text.
+func (m *Model) publishResourceProviders() {
+	manager := ResourceProviderManager()
+	if manager == nil {
+		return
+	}
+	matchers := manager.Snapshot().TerminalMatchers()
+	resolve := resourceResolver(manager)
+
+	for _, surface := range m.resourceSurfaces() {
+		surface.SetResourceMatchers(matchers)
+		surface.SetResourceResolver(resolve)
+	}
+}
+
+// resourceSurfaces is every surface currently able to show a resource pane.
+func (m *Model) resourceSurfaces() []resourceview.Surface {
+	var out []resourceview.Surface
+	if m.registry != nil {
+		for _, p := range m.registry.Plugins() {
+			if surface, ok := p.(resourceview.Surface); ok {
+				out = append(out, surface)
+			}
+		}
+	}
+	if m.overview != nil {
+		out = append(out, m.overview)
+	}
+	return out
+}
+
+// resourceResolver turns a reference into a command that resolves it through
+// the manager. The manager owns dedupe, caching, concurrency limits, the
+// per-provider timeout, and the process group; this only carries the identity
+// fields back so a late answer can be matched to the tab that asked.
+//
+// The work happens inside the returned command, never in Update or View: that
+// is what keeps an external process off the render path.
+func resourceResolver(manager *resourceprovider.Manager) resourceview.Resolver {
+	return func(modelID int, generation, epoch uint64, ref resource.Reference, refresh bool) tea.Cmd {
+		return func() tea.Msg {
+			msg := resourceview.ResolvedMsg{
+				ModelID: modelID, Generation: generation, Epoch: epoch,
+				Ref: ref, Refresh: refresh,
+			}
+			ctx := resourceProviderContext()
+			doc, err := manager.Resolve(ctx, ref, refresh)
+			if err != nil {
+				msg.Err = err
+				return msg
+			}
+			msg.Document = doc
+			return msg
+		}
+	}
+}
+
+// resourceProviderContext is the lifetime every resolve hangs off, so app
+// shutdown cancels in-flight provider work rather than leaving a child behind.
+func resourceProviderContext() context.Context {
+	resourceProviderHost.mu.Lock()
+	defer resourceProviderHost.mu.Unlock()
+	if resourceProviderHost.ctx != nil {
+		return resourceProviderHost.ctx
+	}
+	return context.Background()
 }
 
 // logResourceProviderStatuses records one metadata-only line per instance.

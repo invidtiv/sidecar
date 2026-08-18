@@ -32,7 +32,7 @@ type fakeResolver struct {
 	err   error
 }
 
-func (f *fakeResolver) resolve(modelID int, generation uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
+func (f *fakeResolver) resolve(modelID int, generation, epoch uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
 	f.mu.Lock()
 	f.calls = append(f.calls, ref)
 	err := f.err

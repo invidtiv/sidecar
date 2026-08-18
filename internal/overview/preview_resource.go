@@ -114,6 +114,11 @@ type previewResourceResolvedMsg struct {
 	WorkspaceID string
 }
 
+// The app injects provider state through this interface. Asserting it here
+// makes a signature drift a build error rather than a pane that silently never
+// appears.
+var _ resourceview.Surface = (*Model)(nil)
+
 // SetResourceResolver supplies the provider-backed resolver. Until the app
 // wires one, opening a tab degrades to a typed error card rather than a
 // spinner that never ends.
@@ -182,7 +187,10 @@ func (m *Model) ensurePreviewResource(workspaceID string) *previewResource {
 // signature does not carry either — the view checks only model ID and
 // generation — so the host stamps them on the way back.
 func (m *Model) previewResourceResolver(workspaceID string, epoch uint64) resourceview.Resolver {
-	return func(modelID int, generation uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
+	// The model's own epoch is ignored: this surface scopes by the epoch and
+	// workspace row captured when the resolver was built, which is what a row
+	// switch invalidates.
+	return func(modelID int, generation, _ uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
 		resolve := m.resolveResource
 		if resolve == nil {
 			return func() tea.Msg {
@@ -197,7 +205,7 @@ func (m *Model) previewResourceResolver(workspaceID string, epoch uint64) resour
 				}
 			}
 		}
-		cmd := resolve(modelID, generation, ref, refresh)
+		cmd := resolve(modelID, generation, epoch, ref, refresh)
 		if cmd == nil {
 			return nil
 		}

@@ -33,7 +33,7 @@ func (s *resourceStub) matchers() []terminallink.ResourceMatcher {
 	}}
 }
 
-func (s *resourceStub) resolve(modelID int, generation uint64, ref resource.Reference, _ bool) tea.Cmd {
+func (s *resourceStub) resolve(modelID int, generation, epoch uint64, ref resource.Reference, _ bool) tea.Cmd {
 	s.calls++
 	s.last = func() tea.Msg {
 		return resourceview.ResolvedMsg{

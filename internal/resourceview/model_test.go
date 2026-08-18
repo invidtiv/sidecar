@@ -26,7 +26,7 @@ type recorder struct {
 }
 
 func (r *recorder) resolver() Resolver {
-	return func(modelID int, generation uint64, rf resource.Reference, refresh bool) tea.Cmd {
+	return func(modelID int, generation, epoch uint64, rf resource.Reference, refresh bool) tea.Cmd {
 		r.calls = append(r.calls, struct {
 			modelID    int
 			generation uint64

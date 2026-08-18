@@ -34,7 +34,10 @@ const (
 //
 // refresh bypasses cache freshness. The returned command must eventually
 // produce a ResolvedMsg carrying the same identity fields it was given.
-type Resolver func(modelID int, generation uint64, ref resource.Reference, refresh bool) tea.Cmd
+//
+// epoch is the host's own scoping value, passed through so the model stamps it
+// rather than every host wrapping the resolver to do the same thing.
+type Resolver func(modelID int, generation, epoch uint64, ref resource.Reference, refresh bool) tea.Cmd
 
 // ResolvedMsg is the result of one resolve. Its identity fields are what stop
 // a late answer from landing in a closed, retargeted, or foreign tab: the host
@@ -212,7 +215,7 @@ func (m *Model) request(refresh bool) tea.Cmd {
 			"this resource reference is not something Sidecar can resolve"))
 		return nil
 	}
-	return m.resolve(m.modelID, m.generation, m.ref, refresh)
+	return m.resolve(m.modelID, m.generation, m.epoch, m.ref, refresh)
 }
 
 // Accepts reports whether a result belongs to this model's current request.

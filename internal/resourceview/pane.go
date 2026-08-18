@@ -2,7 +2,26 @@ package resourceview
 
 import (
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/terminallink"
 )
+
+// Surface is what the app injects provider state into. It is declared here
+// rather than in the app so each surface can assert it at compile time:
+//
+//	var _ resourceview.Surface = (*Plugin)(nil)
+//
+// The app reaches surfaces through a type assertion, and an assertion that
+// quietly fails is a surface that never receives a matcher — the pane would
+// simply never appear, with nothing to debug. The assertion in each package is
+// what turns that into a build error.
+type Surface interface {
+	// SetResourceMatchers publishes the live matcher snapshot. An empty slice
+	// is meaningful: it is how output goes back to being ordinary text.
+	SetResourceMatchers([]terminallink.ResourceMatcher)
+	// SetResourceResolver injects how a reference becomes a document.
+	SetResourceResolver(Resolver)
+}
 
 // Host is everything a Resource leaf needs from the surface showing it, and
 // deliberately nothing more. Each method is a place the project Workspace and

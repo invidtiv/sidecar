@@ -475,11 +475,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.FocusPluginByID(msg.PluginID)
 
 	case ResourceProvidersDescribedMsg:
-		// M0 is diagnostics only: the matcher snapshot is published on the
-		// manager and nothing in the TUI changes shape yet. Recording the
-		// outcome is metadata — instance, state, matcher count — never a
-		// locator, a title, or provider output.
+		// Recording the outcome is metadata — instance, state, matcher count —
+		// never a locator, a title, or provider output.
 		logResourceProviderStatuses(msg)
+		// A describe pass is the only moment the matcher snapshot can change,
+		// so it is the only moment either surface needs republishing. Until
+		// this runs both surfaces hold an empty matcher set, which is why a
+		// resource key is ordinary text before a provider is ready.
+		m.publishResourceProviders()
 		return m, nil
 
 	case OpenConfigurationMsg:

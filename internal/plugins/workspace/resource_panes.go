@@ -66,6 +66,11 @@ func (h resourceHost) Persist() { h.p.saveSelectionState() }
 // takes. A provider names a URL; it never opens one.
 func (h resourceHost) OpenURL(url string) tea.Cmd { return openInBrowser(url) }
 
+// The app injects provider state through this interface. Asserting it here
+// makes a signature drift a build error rather than a pane that silently never
+// appears.
+var _ resourceview.Surface = (*Plugin)(nil)
+
 // SetResourceMatchers publishes the live external matcher snapshot the scanner
 // may run. The default is empty on purpose: no ready provider means no
 // underline and no click target, which is what keeps ordinary terminal output
