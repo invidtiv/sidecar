@@ -3,6 +3,8 @@ package notes
 import (
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/atotto/clipboard"
@@ -11,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	rw "github.com/mattn/go-runewidth"
 )
 
 // dragForwardThrottle is the minimum interval between forwarding mouse drag
@@ -448,12 +451,27 @@ func (p *Plugin) clickToSource(x, y int) (line, col int) {
 	return sourceAtVisualRow(raw, visual, colInRow, p.editorTextarea.Value())
 }
 
-// sourceAtVisualRow adds the horizontal click to a wrap anchor without
-// allowing it to spill into the following visual row. Source columns are rune
-// offsets; cell-perfect Unicode placement remains the textarea's concern.
+// sourceAtVisualRow maps a visual-row click to a source caret. Precise
+// paragraphs/headings snap to the clicked word (or the closest occurrence
+// near the wrap-math guess) so glamour wrap breakpoints do not land the
+// cursor on a different token. Tables and fences stay at the top of the
+// block. The fallback is wrap-segment start plus the rune offset in the
+// visual row, clamped so a horizontal click cannot spill into the next
+// wrap segment.
 func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, source string) (line, col int) {
 	a := surface.At(visual)
-	line, col = a.SourceLine, a.SourceCol+max(0, colInRow)
+	if !a.Precise {
+		return a.SourceLine, a.SourceCol
+	}
+	visualText := ""
+	if visual >= 0 && visual < len(surface.Lines) {
+		visualText = ansi.Strip(surface.Lines[visual])
+	}
+	runeInRow := visualColToRuneOffset(visualText, colInRow)
+	if line, col, ok := landOnClickedWord(source, a, visualText, runeInRow); ok {
+		return line, col
+	}
+	line, col = a.SourceLine, a.SourceCol+max(0, runeInRow)
 	if visual+1 < len(surface.Anchors) {
 		next := surface.At(visual + 1)
 		if next.SourceLine == line && next.SourceCol > a.SourceCol && col >= next.SourceCol {
@@ -462,12 +480,141 @@ func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, sour
 	}
 	sourceLines := strings.Split(source, "\n")
 	if line >= 0 && line < len(sourceLines) {
-		col = min(col, len([]rune(sourceLines[line])))
+		col = min(col, utf8.RuneCountInString(sourceLines[line]))
 	}
 	if col < 0 {
 		col = 0
 	}
 	return line, col
+}
+
+func visualColToRuneOffset(s string, col int) int {
+	if col <= 0 || s == "" {
+		return 0
+	}
+	runes := []rune(s)
+	cell := 0
+	for i, r := range runes {
+		w := rw.RuneWidth(r)
+		if w < 1 {
+			w = 1
+		}
+		if cell+w > col {
+			return i
+		}
+		cell += w
+		if cell == col {
+			return i + 1
+		}
+	}
+	return len(runes)
+}
+
+func wordAt(s string, runeOff int) (word string, intra int) {
+	runes := []rune(s)
+	if len(runes) == 0 {
+		return "", 0
+	}
+	if runeOff < 0 {
+		runeOff = 0
+	}
+	if runeOff >= len(runes) {
+		runeOff = len(runes) - 1
+	}
+	if unicode.IsSpace(runes[runeOff]) {
+		return "", 0
+	}
+	start, end := runeOff, runeOff+1
+	for start > 0 && !unicode.IsSpace(runes[start-1]) {
+		start--
+	}
+	for end < len(runes) && !unicode.IsSpace(runes[end]) {
+		end++
+	}
+	return string(runes[start:end]), runeOff - start
+}
+
+func landOnClickedWord(source string, a markdown.Anchor, visualText string, runeInRow int) (line, col int, ok bool) {
+	word, intra := wordAt(visualText, runeInRow)
+	if word == "" {
+		return 0, 0, false
+	}
+	lines := strings.Split(source, "\n")
+	if len(lines) == 0 {
+		return 0, 0, false
+	}
+	guess := a.SourceCol + max(0, runeInRow)
+	bestLine, bestCol, bestDist := -1, 0, int(^uint(0)>>1)
+	wr := []rune(word)
+	consider := func(lineIdx int) {
+		if lineIdx < 0 || lineIdx >= len(lines) {
+			return
+		}
+		src := []rune(lines[lineIdx])
+		for i := 0; i+len(wr) <= len(src); i++ {
+			if string(src[i:i+len(wr)]) != word {
+				continue
+			}
+			if !tokenBounded(src, i, i+len(wr)) {
+				continue
+			}
+			dist := i - guess
+			if dist < 0 {
+				dist = -dist
+			}
+			// Prefer the anchored line, then nearby lines, then column distance.
+			linePenalty := lineIdx - a.SourceLine
+			if linePenalty < 0 {
+				linePenalty = -linePenalty
+			}
+			dist += linePenalty * 1_000_000
+			if dist < bestDist {
+				bestDist = dist
+				bestLine = lineIdx
+				bestCol = i + intra
+				if bestCol > i+len(wr) {
+					bestCol = i + len(wr)
+				}
+			}
+		}
+	}
+	consider(a.SourceLine)
+	if bestLine >= 0 {
+		return bestLine, bestCol, true
+	}
+	start := a.BlockStart
+	if start < 0 {
+		start = 0
+	}
+	for i := start; i < len(lines); i++ {
+		if i == a.SourceLine {
+			continue
+		}
+		consider(i)
+		// Stay inside the block: a later blank line is a cheap stop once
+		// we have walked a bit past the anchor.
+		if i > a.SourceLine && strings.TrimSpace(lines[i]) == "" && bestLine >= 0 {
+			break
+		}
+	}
+	if bestLine < 0 {
+		return 0, 0, false
+	}
+	return bestLine, bestCol, true
+}
+
+func tokenBounded(src []rune, start, end int) bool {
+	if start > 0 && isWordRune(src[start-1]) {
+		return false
+	}
+	if end < len(src) && isWordRune(src[end]) {
+		return false
+	}
+	return true
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
 }
 
 func (p *Plugin) screenYToVisualRow(y int) int {
