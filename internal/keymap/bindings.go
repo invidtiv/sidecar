@@ -195,6 +195,20 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		// Focused external-resource leaf. The command IDs after close are
+		// resourceview's own key vocabulary, which both terminal surfaces
+		// register, so the footer cannot advertise different keys for the
+		// same pane. q/esc are this surface's content-pane rule, as above.
+		{Key: "q", Command: "close", Context: "global-workspaces-resource"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-resource"},
+		{Key: "r", Command: "resource-r", Context: "global-workspaces-resource"},
+		{Key: "o", Command: "resource-o", Context: "global-workspaces-resource"},
+		{Key: "{", Command: "resource-{/}", Context: "global-workspaces-resource"},
+		{Key: "}", Command: "resource-{/}", Context: "global-workspaces-resource"},
+		{Key: "x", Command: "resource-x", Context: "global-workspaces-resource"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-resource"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-resource"},
+
 		// The two search surfaces a focused document pane can open on itself.
 		// Both are rooted at the pane's own directory; the rest of the pane's
 		// keys are registered by the plugin.

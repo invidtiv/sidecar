@@ -2,6 +2,7 @@ package overview
 
 import (
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -15,6 +16,7 @@ const (
 	ctxGlobalWorkspacesDoc      = "global-workspaces-doc"
 	ctxGlobalWorkspacesIssue    = "global-workspaces-issue"
 	ctxGlobalWorkspacesDiff     = "global-workspaces-diff"
+	ctxGlobalWorkspacesResource = "global-workspaces-resource"
 )
 
 // Commands is the footer and palette metadata for the active
@@ -74,6 +76,22 @@ func (m *Model) Commands() []plugin.Command {
 			cmds = append(cmds, m.preview.diff.view().Commands(ctxGlobalWorkspacesDiff)...)
 		}
 		return cmds
+	case ctxGlobalWorkspacesResource:
+		// The vocabulary is resourceview's, not this surface's: both hosts
+		// register exactly this list, so a Resource pane cannot advertise one
+		// set of keys in the project workspace and another here. Close is the
+		// one addition, because hiding a content pane is each surface's own
+		// rule rather than the pane's.
+		cmds := []plugin.Command{
+			{ID: "close", Name: "Close", Description: "Hide the resource pane", Context: ctxGlobalWorkspacesResource, Priority: 1},
+		}
+		for i, c := range resourceview.Commands() {
+			cmds = append(cmds, plugin.Command{
+				ID: "resource-" + c.Key, Name: c.Name, Description: resourceCommandDescription(c.Key),
+				Context: ctxGlobalWorkspacesResource, Priority: i + 2,
+			})
+		}
+		return cmds
 	case ctxGlobalWorkspacesIssue:
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: ctxGlobalWorkspacesIssue, Priority: 1},
@@ -125,5 +143,23 @@ func (m *Model) Commands() []plugin.Command {
 			})
 		}
 		return cmds
+	}
+}
+
+// resourceCommandDescription is the sentence for a shared Resource key. The
+// keys and their footer names come from resourceview so the two surfaces
+// cannot drift; only the longer help text is written here.
+func resourceCommandDescription(key string) string {
+	switch key {
+	case "r":
+		return "Re-resolve the active resource"
+	case "o":
+		return "Open the resource in a browser"
+	case "{/}":
+		return "Previous or next resource tab"
+	case "x":
+		return "Close the active resource tab"
+	default:
+		return ""
 	}
 }

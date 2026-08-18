@@ -239,6 +239,10 @@ func (m *Model) closePreviewDiff() tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return m.syncTerminalGeometry()
 	}
+	if m.preview.resource != nil {
+		m.focusPreviewPane(panelayout.Resource)
+		return m.syncTerminalGeometry()
+	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 

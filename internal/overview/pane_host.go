@@ -145,6 +145,8 @@ func (r paneRegions) Leaf(node *panelayout.Node, outer paneframe.Box) {
 		r.m.registerPreviewIssueRegion(paneframe.Inset(outer))
 	case panelayout.Diff:
 		r.m.registerPreviewDiffRegion(paneframe.Inset(outer))
+	case panelayout.Resource:
+		r.m.registerPreviewResourceRegion(paneframe.Inset(outer))
 	}
 }
 
@@ -163,6 +165,8 @@ func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
 		r.m.registerPreviewIssueTabRegions(inner)
 	case panelayout.Diff:
 		r.m.registerPreviewDiffTabRegions(inner)
+	case panelayout.Resource:
+		r.m.registerPreviewResourceTabRegions(inner)
 	}
 }
 
@@ -203,6 +207,7 @@ func previewPaneFloors() panelayout.Floors {
 		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Resource: panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 	})
 }
 
