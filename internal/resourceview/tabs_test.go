@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/resource"
 )
 
@@ -31,6 +32,20 @@ func TestOpenDistinguishesProviderAndMatcher(t *testing.T) {
 	tabs.Open(resource.Reference{Instance: "b", Matcher: "m", Locator: "X-1"})
 	if tabs.Len() != 2 {
 		t.Fatalf("the same locator from two providers is two resources, got %d tabs", tabs.Len())
+	}
+}
+
+func TestSetResolverRebindsExistingArmedTabs(t *testing.T) {
+	var called bool
+	tabs := NewTabs(nil, nil)
+	tabs.Arm(ref("CASH-1"), 0)
+	tabs.SetResolver(func(modelID int, generation, epoch uint64, got Ref, refresh bool) tea.Cmd {
+		called = true
+		return nil
+	})
+	tabs.ResolveActive()
+	if !called {
+		t.Fatal("existing tab kept the resolver bound at construction")
 	}
 }
 

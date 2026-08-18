@@ -84,11 +84,15 @@ func (p *Plugin) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 
 // SetResourceResolver injects how a reference becomes a document. The host
 // owns the manager, the process and the timeout; this plugin only says when to
-// ask. A nil resolver is a valid state — the card shows a typed error rather
-// than spinning — and must be set before the first Resource tab exists, since
-// a tab set binds the resolver it was created with.
+// ask. A nil resolver is valid, and existing panes are rebound because provider
+// setup may complete after restored tabs have been constructed.
 func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) {
 	p.resolveResource = resolve
+	for _, res := range p.resources {
+		if res != nil {
+			res.tabs.SetResolver(resolve)
+		}
+	}
 }
 
 func (p *Plugin) newResourcePane(leafID int, root, surface string) *resourcePane {
@@ -137,6 +141,17 @@ func (p *Plugin) activateResourceLink(ref resourceview.Ref) (tea.Cmd, bool) {
 // box that cannot hold the result leaves the terminal at the size it already
 // has rather than reflowing an agent for a pane that will not be drawn.
 func (p *Plugin) openResourcePaneForSurface(root, surface string, ref resourceview.Ref) tea.Cmd {
+	return p.openResourcePaneForSurfaceMode(root, surface, ref, true)
+}
+
+// openRequestedResourcePaneForSurface is the sidecar-open journey. It shares
+// placement with terminal activation but deliberately skips the terminal
+// selection/freeze/interactive-exit ritual.
+func (p *Plugin) openRequestedResourcePaneForSurface(root, surface string, ref resourceview.Ref) tea.Cmd {
+	return p.openResourcePaneForSurfaceMode(root, surface, ref, false)
+}
+
+func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resourceview.Ref, fromTerminal bool) tea.Cmd {
 	if p.paneRoot == nil || p.ctx == nil || !ref.Valid() {
 		return nil
 	}
@@ -150,7 +165,7 @@ func (p *Plugin) openResourcePaneForSurface(root, surface string, ref resourcevi
 		if leaf == nil || leaf.Split != nil {
 			return reopen
 		}
-		open := p.attachResourcePane(leaf.ContentID, root, surface, ref)
+		open := p.attachResourcePane(leaf.ContentID, root, surface, ref, fromTerminal)
 		if p.resources[leaf.ContentID] == nil {
 			return reopen
 		}
@@ -180,14 +195,14 @@ func (p *Plugin) openResourcePaneForSurface(root, surface string, ref resourcevi
 	}
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
-	open := p.attachResourcePane(newLeaf.ContentID, root, surface, ref)
+	open := p.attachResourcePane(newLeaf.ContentID, root, surface, ref, fromTerminal)
 	return tea.Batch(reopen, open, p.resizeDocTerminalCmd())
 }
 
 // attachResourcePane points the content behind leafID at ref. Focus, the
 // open-or-focus decision and the persist all belong to the shared pane, so
 // this host cannot answer a second click differently from the first.
-func (p *Plugin) attachResourcePane(leafID int, root, surface string, ref resourceview.Ref) tea.Cmd {
+func (p *Plugin) attachResourcePane(leafID int, root, surface string, ref resourceview.Ref, fromTerminal bool) tea.Cmd {
 	if p.ctx == nil || !ref.Valid() {
 		return nil
 	}
@@ -200,7 +215,10 @@ func (p *Plugin) attachResourcePane(leafID int, root, surface string, ref resour
 		p.resources[leafID] = res
 	}
 	res.root, res.surface = root, surface
-	return res.pane.ActivateFromTerminal(ref)
+	if fromTerminal {
+		return res.pane.ActivateFromTerminal(ref)
+	}
+	return res.pane.Activate(ref)
 }
 
 // applyResourceResolved delivers a resolve to the tab that asked for it. The

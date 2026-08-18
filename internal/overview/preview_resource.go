@@ -122,7 +122,18 @@ var _ resourceview.Surface = (*Model)(nil)
 // SetResourceResolver supplies the provider-backed resolver. Until the app
 // wires one, opening a tab degrades to a typed error card rather than a
 // spinner that never ends.
-func (m *Model) SetResourceResolver(resolve resourceview.Resolver) { m.resolveResource = resolve }
+func (m *Model) SetResourceResolver(resolve resourceview.Resolver) {
+	m.resolveResource = resolve
+	if res := m.preview.resource; res != nil {
+		res.tabs.SetResolver(m.previewResourceResolver(res.surface, res.epoch))
+	}
+	for workspaceID, cached := range m.preview.paneCache {
+		if cached.resource == nil || cached.resource == m.preview.resource {
+			continue
+		}
+		cached.resource.tabs.SetResolver(m.previewResourceResolver(workspaceID, cached.resource.epoch))
+	}
+}
 
 // SetResourceMatchers replaces the compiled external matchers the scanner may
 // run, in precedence order. Empty — the default — means no provider is ready,
@@ -292,12 +303,9 @@ func (m *Model) clickPreviewResourceTab(index int) tea.Cmd {
 	if res == nil {
 		return nil
 	}
-	if index == res.tabs.ActiveIndex() {
-		m.focusPreviewPane(panelayout.Resource)
-		return nil
-	}
-	// SelectTab focuses the leaf itself and resolves a tab that was only
-	// armed, which is why the click does not do either of those here.
+	// SelectTab owns focus and resolves an armed tab even when it is already
+	// selected. Skipping it for the active index stranded re-armed tabs after
+	// a workspace-row switch.
 	return res.pane.SelectTab(index)
 }
 

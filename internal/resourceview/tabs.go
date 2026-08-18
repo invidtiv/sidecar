@@ -49,6 +49,19 @@ func NewTabs(renderer *markdown.Renderer, resolve Resolver) *Tabs {
 	return &Tabs{renderer: renderer, resolve: resolve}
 }
 
+// SetResolver replaces the resolver for this set and every existing tab.
+// Provider setup is asynchronous, so resolver injection must not depend on
+// whether a restored or clicked tab happened to be constructed first.
+func (t *Tabs) SetResolver(resolve Resolver) {
+	if t == nil {
+		return
+	}
+	t.resolve = resolve
+	for _, item := range t.Items {
+		item.Value.SetResolver(resolve)
+	}
+}
+
 // Len reports how many tabs are open.
 func (t *Tabs) Len() int { return len(t.Items) }
 

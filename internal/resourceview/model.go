@@ -101,6 +101,14 @@ func New(renderer *markdown.Renderer, resolve Resolver) *Model {
 	return &Model{renderer: renderer, resolve: resolve, bodyForW: -1}
 }
 
+// SetResolver replaces the host resolver used by subsequent loads. Existing
+// armed tabs must observe provider setup that finishes after pane construction.
+func (m *Model) SetResolver(resolve Resolver) {
+	if m != nil {
+		m.resolve = resolve
+	}
+}
+
 // Reference is what this tab points at.
 func (m *Model) Reference() resource.Reference { return m.ref }
 

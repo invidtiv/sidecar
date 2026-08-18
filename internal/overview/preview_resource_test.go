@@ -284,6 +284,34 @@ func TestGlobalResourceTabsAreMemoryOnly(t *testing.T) {
 	}
 }
 
+func TestGlobalResourceRowSwitchReArmsDiscardedPendingTab(t *testing.T) {
+	m := resourcePreviewModel(t)
+	m.SetResourceMatchers(jiraMatchers())
+	m.SetResourceResolver((&fakeResolver{}).resolve)
+
+	cmd := m.activatePreviewResource(resourceview.Ref{
+		Instance: "jira-work", Matcher: "project-key", Locator: "CASH-1245",
+	})
+	if cmd == nil || m.preview.resource == nil || m.preview.resource.view().State() != resourceview.StateLoading {
+		t.Fatal("resource tab did not enter loading state")
+	}
+	opened := m.preview.resource
+	m.workspaces.SelectID("b")
+	run(t, m, m.previewSync())
+	if opened.view().State() != resourceview.StateArmed {
+		t.Fatalf("cached tab state = %v, want armed after its result became unroutable", opened.view().State())
+	}
+
+	// The stale answer remains discarded, and clicking the already-selected
+	// tab after returning starts a fresh generation instead of doing nothing.
+	run(t, m, cmd)
+	m.workspaces.SelectID("a")
+	run(t, m, m.previewSync())
+	if next := m.clickPreviewResourceTab(opened.tabs.ActiveIndex()); next == nil {
+		t.Fatal("clicking the active re-armed tab did not resolve it")
+	}
+}
+
 func TestGlobalResourcePaneClosesAndForgets(t *testing.T) {
 	m := resourcePreviewModel(t)
 	m.SetResourceMatchers(jiraMatchers())

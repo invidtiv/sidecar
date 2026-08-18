@@ -308,6 +308,12 @@ func (m *Model) stashPreviewPanes() {
 	if m.preview.workspaceID == "" || m.preview.paneRoot == nil {
 		return
 	}
+	// Resource answers are deliberately scoped to the selected row and are
+	// discarded after a switch. Return pending tabs to an armed state before
+	// caching the pane so revisiting the row can resolve them again.
+	if res := m.preview.resource; res != nil {
+		res.pane.ReArmPending()
+	}
 	if m.preview.paneCache == nil {
 		m.preview.paneCache = make(map[string]previewPaneCache)
 	}
