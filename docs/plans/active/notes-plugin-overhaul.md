@@ -1,8 +1,8 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 3 implementation and the td-4baaa6 ownership-race fix cycle are
-complete on `notes-overhaul`; td-4baaa6 and the inherited Phase 2 wrapped-click
-fix (td-2f6d46) require independent approval before merge to `main`
+**Status:** Phase 3 is merge-ready on `notes-overhaul` through `f67be1b5`;
+td-4baaa6 and the inherited Phase 2 wrapped-click fix (td-2f6d46) are independently
+approved and closed. The branch has not been merged to `main`; Phase 4 remains deferred.
 **Created:** 2026-08-17
 **Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
 **Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c
@@ -72,7 +72,8 @@ exports share the visible saving footer with built-in saves. Coalesced typing/de
 bursts also copy one full-note snapshot per undo unit rather than per keystroke. The branch includes current
 `main` as of `f44d2689`; deterministic ownership probes and the Notes race suite are green,
 as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated
-real-app edit/save/navigation proof. Independent re-review is the remaining merge gate.
+real-app edit/save/navigation proof. Independent review is complete, and Phase 3 is
+merge-ready on the feature branch.
 
 ## Goal
 
@@ -365,12 +366,12 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
    scrollbar) used by view and edit; carry cursor/scroll across the mode switch; mouse
    selection no longer swaps renderers. This removes existing data-loss paths before
    expanding the editor.
-2. **Markdown view steel thread — merged; review fix pending independent approval.**
+2. **Markdown view steel thread — merged; review fix independently approved and closed.**
    The mapping-capable render result, glamour default, shared wrapping, and `m` toggle are
    implemented. td-2f6d46 closes the wrapped-click acceptance hole found in review;
    td-4b3a5c removes synchronous store validation from startup.
-3. **Selection + undo/redo — implementation and ownership-race fix cycle complete;
-   independent merge-readiness review pending (td-178efc, td-4baaa6).** Source-coordinate
+3. **Selection + undo/redo — implementation, ownership-race fix cycle, and independent
+   merge-readiness review complete (td-178efc, td-4baaa6); Phase 3 is merge-ready.** Source-coordinate
    keyboard/mouse selection, replacement semantics, wrap-aware overlay, and a
    bounded per-note operation-based history, plus nonblocking durable save/transition
    ownership and crash-recovery checkpointing. Syntax spans stay deferred until the
