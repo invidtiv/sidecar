@@ -210,22 +210,23 @@ type Plugin struct {
 	inlineLastSavedContent string // Last saved content for change detection
 
 	// Auto-save state
-	autoSaveID        int        // Incremented on each edit to identify debounce timer
-	saveMu            sync.Mutex // Serializes background writes with lifecycle's last-chance flush.
-	writeSequence     atomic.Uint64
-	latestWriteByNote sync.Map // note id -> uint64; read by async persistence commands.
-	saveActivation    uint64   // Invalidates completions across Stop/Init.
-	saveRequestID     uint64   // Identifies the single built-in save in flight.
-	saveInFlight      bool
-	activeSaveID      string
-	activeSaveContent string
-	lastWriteRequest  uint64 // Guarded by saveMu; lets Stop reuse a completed in-flight write.
-	lastWriteErr      error  // Guarded by saveMu.
-	lastWriteSkipped  bool   // Guarded by saveMu.
-	saveQueued        bool
-	saveErr           error
-	pendingAfterSave  func() tea.Cmd // Latest buffer-replacing action waiting on durable content.
-	loadRequestID     uint64         // Latest list snapshot allowed to replace the local cache.
+	autoSaveID         int        // Incremented on each edit to identify debounce timer
+	saveMu             sync.Mutex // Serializes background writes with lifecycle's last-chance flush.
+	writeSequence      atomic.Uint64
+	latestWriteByNote  sync.Map // note id -> uint64; read by async persistence commands.
+	durableWriteByNote sync.Map // note id -> uint64; canonical acknowledgments only.
+	saveActivation     uint64   // Invalidates completions across Stop/Init.
+	saveRequestID      uint64   // Identifies the single built-in save in flight.
+	saveInFlight       bool
+	activeSaveID       string
+	activeSaveContent  string
+	lastWriteRequest   uint64 // Guarded by saveMu; lets Stop reuse a completed in-flight write.
+	lastWriteErr       error  // Guarded by saveMu.
+	lastWriteSkipped   bool   // Guarded by saveMu.
+	saveQueued         bool
+	saveErr            error
+	pendingAfterSave   func() tea.Cmd // Latest buffer-replacing action waiting on durable content.
+	loadRequestID      uint64         // Latest list snapshot allowed to replace the local cache.
 
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
@@ -444,6 +445,12 @@ func (p *Plugin) Stop() {
 	p.exitInlineEditMode()
 	seenExports := make(map[string]bool)
 	var failedExports []retainedExport
+	ownedSequences := make(map[string]uint64)
+	for _, export := range append(append([]retainedExport{p.activeExport}, p.exportQueue...), p.supersededExports...) {
+		if export.Path != "" && ownedSequences[export.Path] < export.Sequence {
+			ownedSequences[export.Path] = export.Sequence
+		}
+	}
 	activeExportContent := ""
 	if p.activeExport.Path != "" {
 		if content, err := os.ReadFile(p.activeExport.Path); err == nil {
@@ -455,6 +462,10 @@ func (p *Plugin) Stop() {
 			return true
 		}
 		seenExports[path] = true
+		if p.writeIsDurablySuperseded(noteID, ownedSequences[path]) {
+			removeNoteExport(path)
+			return true
+		}
 		ok := p.checkpointStoppedExport(noteID, path, inFlightContent)
 		if !ok {
 			failedExports = append(failedExports, retainedExport{ID: noteID, Path: path})
@@ -615,6 +626,25 @@ func (p *Plugin) writeIsLatest(noteID string, sequence uint64) bool {
 	return !ok || latest.(uint64) == sequence
 }
 
+func (p *Plugin) acknowledgeWrite(noteID string, sequence uint64) {
+	if noteID == "" || sequence == 0 {
+		return
+	}
+	current, ok := p.durableWriteByNote.Load(noteID)
+	if !ok || current.(uint64) < sequence {
+		p.durableWriteByNote.Store(noteID, sequence)
+	}
+	p.cleanupSupersededExports(noteID, sequence)
+}
+
+func (p *Plugin) writeIsDurablySuperseded(noteID string, sequence uint64) bool {
+	if sequence == 0 {
+		return false
+	}
+	durable, ok := p.durableWriteByNote.Load(noteID)
+	return ok && durable.(uint64) >= sequence
+}
+
 func (p *Plugin) persistOrdered(store noteStore, projectRoot, noteID, content string, startedAt int64, sequence uint64) (*Note, error, bool) {
 	p.saveMu.Lock()
 	defer p.saveMu.Unlock()
@@ -685,7 +715,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case ExternalEditorPreparedMsg:
 		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.externalPrepareID {
-			removeNoteExport(msg.Path)
+			p.removeExportIfUnowned(msg.Path)
 			return p, nil
 		}
 		if msg.Err != nil || msg.Path == "" {
@@ -695,7 +725,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, showSaveFailedToast(msg.Err)
 		}
 		if p.pendingInlineEditPath != "" && p.pendingInlineEditPath != msg.Path {
-			removeNoteExport(p.pendingInlineEditPath)
+			p.removeExportIfUnowned(p.pendingInlineEditPath)
 		}
 		p.pendingInlineEditID = msg.ID
 		p.pendingInlineEditPath = msg.Path
@@ -852,7 +882,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			finished := p.activeExport
 			p.activeExport = retainedExport{}
 			if msg.Skipped {
-				p.supersededExports = append(p.supersededExports, finished)
+				if p.writeIsDurablySuperseded(finished.ID, finished.Sequence) {
+					removeNoteExport(finished.Path)
+				} else {
+					p.supersededExports = append(p.supersededExports, finished)
+				}
 				if next := p.startNextRetainedExport(); next != nil {
 					return p, next
 				}
@@ -860,11 +894,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 			p.saveErr = nil
 			removeNoteExport(msg.ExportPath)
+			p.acknowledgeWrite(msg.ID, msg.WriteSequence)
 			if p.pendingInlineEditPath == msg.ExportPath {
 				p.pendingInlineEditID = ""
 				p.pendingInlineEditPath = ""
 			}
-			p.cleanupSupersededExports(msg.ID, msg.WriteSequence)
 			if next := p.startNextRetainedExport(); next != nil {
 				return p, next
 			}
@@ -910,6 +944,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		p.saveErr = nil
 		p.applySavedContent(msg)
+		p.acknowledgeWrite(msg.ID, msg.WriteSequence)
 		p.loadRequestID++ // any older list snapshot predates this canonical write
 		if p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
@@ -960,6 +995,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.Err == nil && msg.Saved {
 			p.inlineLastSavedContent = msg.Content
+			p.acknowledgeWrite(p.inlineEditNoteID, msg.Sequence)
 		}
 		// Auto-save completed silently (no toast) - schedule next tick
 		if p.inlineEditMode {
@@ -979,7 +1015,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// comes to consume the pending read-back. Drop it with its temp file
 		// rather than leaving both to outlive the attempt.
 		if p.pendingInlineEditPath != "" {
-			removeNoteExport(p.pendingInlineEditPath)
+			p.removeExportIfUnowned(p.pendingInlineEditPath)
 		}
 		p.pendingInlineEditID = ""
 		p.pendingInlineEditPath = ""
@@ -1268,7 +1304,7 @@ func (p *Plugin) FooterStatus() (string, bool) {
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
-	if p.saveInFlight {
+	if p.saveInFlight || p.exportSaveInFlight {
 		return "notes: saving…", false
 	}
 	return "", false
@@ -2281,6 +2317,29 @@ func (p *Plugin) cleanupSupersededExports(noteID string, throughSequence uint64)
 		kept = append(kept, export)
 	}
 	p.supersededExports = kept
+}
+
+func (p *Plugin) exportPathOwned(path string) bool {
+	if path == "" {
+		return false
+	}
+	if p.activeExport.Path == path {
+		return true
+	}
+	for _, exports := range [][]retainedExport{p.exportQueue, p.supersededExports} {
+		for _, export := range exports {
+			if export.Path == path {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *Plugin) removeExportIfUnowned(path string) {
+	if !p.exportPathOwned(path) {
+		removeNoteExport(path)
+	}
 }
 
 // handleSearchKey processes keyboard input in search mode.

@@ -751,6 +751,94 @@ func TestNewerQueuedExportSupersedesFailedOlderExit(t *testing.T) {
 	}
 }
 
+func TestNewerBuiltInAcknowledgmentRetiresSkippedExportBeforeStopRecovery(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	exportPath := filepath.Join(t.TempDir(), "older-external.md")
+	if err := os.WriteFile(exportPath, []byte("older-external-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	olderExport := p.saveRetainedExport(a.ID, exportPath, 0)
+	if olderExport == nil {
+		t.Fatal("older export was not adopted")
+	}
+
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("newer-built-in-A2")
+	p.editorDirty = true
+	drainNotesCmd(t, p, p.saveEditorContent())
+	result := olderExport().(NoteContentSavedMsg)
+	if !result.Skipped {
+		t.Fatal("older delayed export was not skipped after newer canonical save")
+	}
+	_, _ = p.Update(result)
+	if len(p.supersededExports) != 0 {
+		t.Fatal("durably obsolete export remained eligible for Stop checkpointing")
+	}
+	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+		t.Fatal("durably obsolete export file was not retired")
+	}
+	root := p.ctx.ProjectRoot
+	p.Stop()
+	peer, err := newInProcessStore(root, "post-stop-recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	if err := recoverNoteDrafts(root, peer); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredContent(t, peer, a.ID, "newer-built-in-A2")
+}
+
+func TestNewExternalPreparationPreservesFailedActiveExport(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.store = &alwaysFailStore{noteStore: p.store, err: errors.New("busy"), closed: make(chan struct{})}
+	failedPath := filepath.Join(t.TempDir(), "failed.md")
+	newPath := filepath.Join(t.TempDir(), "new.md")
+	if err := os.WriteFile(failedPath, []byte("only-recoverable-copy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newPath, []byte("new editor"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	drainNotesCmd(t, p, p.saveRetainedExport(a.ID, failedPath, 0))
+	if p.activeExport.Path != failedPath || p.pendingInlineEditPath != failedPath {
+		t.Fatal("failed export did not remain active and retryable")
+	}
+	p.externalPrepareID = 7
+	_, open := p.Update(ExternalEditorPreparedMsg{ID: a.ID, Path: newPath, Epoch: p.ctx.Epoch, RequestID: 7})
+	if open == nil {
+		t.Fatal("new external editor preparation did not open")
+	}
+	if _, err := os.Stat(failedPath); err != nil {
+		t.Fatalf("new preparation deleted the failed export's only copy: %v", err)
+	}
+	if p.activeExport.Path != failedPath || p.pendingInlineEditPath != newPath {
+		t.Fatalf("ownership after preparation: active=%q pending=%q", p.activeExport.Path, p.pendingInlineEditPath)
+	}
+}
+
+func TestSlowRetainedExportShowsSavingFooter(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	path := filepath.Join(t.TempDir(), "slow-export.md")
+	if err := os.WriteFile(path, []byte("slow-final"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := p.saveRetainedExport(a.ID, path, 0)
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+	status, isErr := p.FooterStatus()
+	if isErr || !strings.Contains(status, "saving") {
+		t.Fatalf("slow export footer = %q error=%v", status, isErr)
+	}
+	close(blocked.release)
+	drainNotesMsg(t, p, <-result)
+}
+
 type blockingStore struct {
 	noteStore
 	started   chan struct{}
