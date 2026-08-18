@@ -15,6 +15,20 @@ type saveConfig struct {
 	Keymap   KeymapConfig       `json:"keymap"`
 	UI       UIConfig           `json:"ui"`
 	Features FeaturesConfig     `json:"features,omitempty"`
+	// TerminalResources is written only when it has content; see Save.
+	TerminalResources saveTerminalResourcesConfig `json:"terminalResources,omitempty"`
+}
+
+type saveTerminalResourcesConfig struct {
+	Providers []saveTerminalResourceProviderConfig `json:"providers,omitempty"`
+}
+
+type saveTerminalResourceProviderConfig struct {
+	ID      string   `json:"id"`
+	Command []string `json:"command"`
+	PassEnv []string `json:"passEnv,omitempty"`
+	Enabled bool     `json:"enabled"`
+	Timeout string   `json:"timeout,omitempty"`
 }
 
 type saveProjectsConfig struct {
@@ -120,10 +134,28 @@ func toSaveConfig(cfg *Config) saveConfig {
 				SidebarDisplay:        &cfg.Plugins.Workspace.SidebarDisplay,
 			},
 		},
-		Keymap:   cfg.Keymap,
-		UI:       cfg.UI,
-		Features: cfg.Features,
+		Keymap:            cfg.Keymap,
+		UI:                cfg.UI,
+		Features:          cfg.Features,
+		TerminalResources: toSaveTerminalResources(cfg.TerminalResources),
 	}
+}
+
+func toSaveTerminalResources(cfg TerminalResourcesConfig) saveTerminalResourcesConfig {
+	out := saveTerminalResourcesConfig{}
+	for _, p := range cfg.Providers {
+		sp := saveTerminalResourceProviderConfig{
+			ID:      p.ID,
+			Command: append([]string(nil), p.Command...),
+			PassEnv: append([]string(nil), p.PassEnv...),
+			Enabled: p.Enabled,
+		}
+		if p.Timeout > 0 {
+			sp.Timeout = p.Timeout.String()
+		}
+		out.Providers = append(out.Providers, sp)
+	}
+	return out
 }
 
 // Save writes the config to ~/.config/sidecar/config.json, preserving
@@ -157,6 +189,19 @@ func Save(cfg *Config) error {
 	}
 	if len(sc.Features.Flags) > 0 {
 		fields["features"] = sc.Features
+	}
+	// terminalResources is a managed key: written when providers are
+	// configured, removed when the last one goes. Writing an empty section into
+	// every config file would be noise, but leaving the key untouched when it
+	// empties would resurrect a provider the user just deleted, because Save's
+	// unknown-key preservation would carry the old section forward.
+	//
+	// Every read-modify-write helper reloads before saving, so "empty" here
+	// always means the user emptied it, never that the caller never read it.
+	if len(sc.TerminalResources.Providers) > 0 {
+		fields["terminalResources"] = sc.TerminalResources
+	} else {
+		delete(raw, "terminalResources")
 	}
 	for key, val := range fields {
 		b, err := json.Marshal(val)
