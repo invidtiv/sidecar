@@ -47,6 +47,58 @@ func Lookup(projectRoot string) (string, bool) {
 	return findByMeta(filepath.Join(config.StateDir(), "projects"), projectRoot)
 }
 
+// LookupAll resolves many project roots in one pass over projects/.
+//
+// Lookup rescans and re-reads every registered project's meta.json on each
+// call, so resolving N roots with it costs N full scans — and a long-lived
+// install accumulates hundreds of registered projects. Callers that need the
+// whole configured set at once use this instead: one ReadDir, one meta.json
+// read per candidate, regardless of how many roots are asked for.
+//
+// Roots with no registered directory are absent from the result rather than
+// mapped to an empty string, so a caller can tell "never registered" from
+// "registered at the empty path".
+func LookupAll(projectRoots []string) map[string]string {
+	return LookupAllWithBase(config.StateDir(), projectRoots)
+}
+
+// LookupAllWithBase is the testable form of LookupAll. base is the Sidecar
+// state directory containing projects/.
+func LookupAllWithBase(base string, projectRoots []string) map[string]string {
+	if len(projectRoots) == 0 {
+		return nil
+	}
+	wanted := make(map[string]bool, len(projectRoots))
+	for _, root := range projectRoots {
+		if root != "" {
+			wanted[root] = true
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(base, "projects"))
+	if err != nil {
+		return nil
+	}
+	found := make(map[string]string, len(wanted))
+	for _, e := range entries {
+		if len(found) == len(wanted) {
+			break
+		}
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(base, "projects", e.Name())
+		meta, err := readMeta(dir)
+		if err != nil || !wanted[meta.Path] {
+			continue
+		}
+		// First registration wins, matching findByMeta's scan order semantics.
+		if _, seen := found[meta.Path]; !seen {
+			found[meta.Path] = dir
+		}
+	}
+	return found
+}
+
 // LookupWorktree returns the already-registered data directory for worktreePath
 // without creating or migrating state. It is intended for read-only inventory
 // consumers such as diagnostics and the cross-project overview.

@@ -548,6 +548,51 @@ func TestOverviewAdaptivePollCadence(t *testing.T) {
 	}
 }
 
+// firstMsgOf runs cmd and returns the first message of type T, descending into
+// nested tea.Batch results.
+//
+// Update batches background work — the manifest watch reconcile — alongside the
+// product result, so a test that wants the result has to look for it rather
+// than assume it arrived on its own.
+func firstMsgOf[T tea.Msg](t *testing.T, cmd tea.Cmd) T {
+	t.Helper()
+	got, ok := findMsgOf[T](cmd)
+	if !ok {
+		var zero T
+		t.Fatalf("no %T in command result", zero)
+	}
+	return got
+}
+
+// findMsgOf runs cmd and reports the first message of type T, descending into
+// nested tea.Batch results.
+func findMsgOf[T tea.Msg](cmd tea.Cmd) (T, bool) {
+	var zero T
+	if cmd == nil {
+		return zero, false
+	}
+	var find func(tea.Msg) (T, bool)
+	find = func(msg tea.Msg) (T, bool) {
+		if got, ok := msg.(T); ok {
+			return got, true
+		}
+		batch, ok := msg.(tea.BatchMsg)
+		if !ok {
+			return zero, false
+		}
+		for _, inner := range batch {
+			if inner == nil {
+				continue
+			}
+			if got, ok := find(inner()); ok {
+				return got, true
+			}
+		}
+		return zero, false
+	}
+	return find(cmd())
+}
+
 func TestOverviewPollReusesFailedInventoryWithoutStatOrGit(t *testing.T) {
 	runner := &stageRunner{}
 	m := New(workspaceinventory.Collector{Runner: runner})
@@ -557,8 +602,7 @@ func TestOverviewPollReusesFailedInventoryWithoutStatOrGit(t *testing.T) {
 	m.roots = []string{root}
 	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, ProjectName: "missing", ProjectRoot: root, Err: errors.New("configured project missing")}
 	panes := m.start(m.projects, "poll")().(panesMsg)
-	cmd := m.Update(panes)
-	result := cmd().(projectMsg)
+	result := firstMsgOf[projectMsg](t, m.Update(panes))
 	if result.Result.Err == nil || runner.tmuxCalls.Load() != 1 || runner.gitCalls.Load() != 0 || m.refreshCollector.Metrics().ProjectOps != 0 {
 		t.Fatalf("failed poll result=%#v tmux=%d git=%d metrics=%#v", result.Result, runner.tmuxCalls.Load(), runner.gitCalls.Load(), m.refreshCollector.Metrics())
 	}
@@ -621,16 +665,15 @@ func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 		t.Fatalf("card hit region missing: %#v", regions)
 	}
 	click := tea.MouseClickMsg{X: cardX, Y: cardY, Button: tea.MouseLeft}
-	if cmd := m.Update(click); cmd != nil {
+	// Asserted on the reveal rather than on the command being nil: Update also
+	// carries background work, so a non-nil command no longer means the card
+	// was activated.
+	if _, revealed := findMsgOf[RevealMsg](m.Update(click)); revealed {
 		t.Fatal("single click unexpectedly activated card")
 	}
-	cmd := m.Update(click)
-	if cmd == nil {
-		t.Fatal("double click did not activate card")
-	}
-	got, ok := cmd().(RevealMsg)
-	if !ok || got.Workspace.ID != workspace.ID || got.Workspace.Path != workspace.Path {
-		t.Fatalf("double-click reveal = %#v", cmd())
+	got := firstMsgOf[RevealMsg](t, m.Update(click))
+	if got.Workspace.ID != workspace.ID || got.Workspace.Path != workspace.Path {
+		t.Fatalf("double-click reveal = %#v", got)
 	}
 }
 

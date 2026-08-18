@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -106,6 +107,12 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	// is not a user gesture, and a preview left stale because a modal happened
 	// to own focus is the defect this exists to fix.
 	if isLiveWatchMessage(msg) {
+		return true
+	}
+	// Manifest-watch results are background work for the same reason: a shell
+	// another Sidecar created must land whether or not this browser is the
+	// visible surface. See live_shells.go.
+	if isShellWatchMessage(msg) {
 		return true
 	}
 	switch msg.(type) {
@@ -220,6 +227,17 @@ type Model struct {
 	// shellLiveness holds what this surface has observed about each shell's
 	// tmux session, so a dead one closes and a hiccup does not (td-6a4100).
 	shellLiveness *shellliveness.Tracker
+
+	// Cross-instance freshness. The manifest watcher reports shells another
+	// Sidecar on this host created; the sweep cursor rotates a slow
+	// re-inventory across the configured projects. See live_shells.go.
+	shellWatcher           *livewatch.PathWatcher
+	shellWatchStarting     bool
+	shellWatchGeneration   uint64
+	shellManifestPaths     map[string]string
+	shellManifestDigests   map[string]string
+	shellManifestResolving bool
+	sweepCursor            int
 
 	// A coalesced terminal wheel event that was held changed no visible state.
 	// Reuse the preceding Workspaces frame once rather than rebuilding it.
@@ -364,11 +382,14 @@ func (m *Model) Start(projects []Project) tea.Cmd {
 // and the other reuses its results, its trackers, and its poll. A second
 // collector here would double every project's tmux and Git fan-out for a view
 // that already has the data.
+// Opening the tab is also the gesture a user makes when they suspect the board
+// is stale, so entry re-reads durable state rather than resuming a poll that
+// only refreshes tmux evidence. Only an in-flight cycle suppresses it, which is
+// what keeps the two global tabs from starting two cycles when both call this
+// during one entry: start marks the model loading synchronously, so the second
+// call sees it.
 func (m *Model) Ensure(projects []Project) tea.Cmd {
-	if m.cancel == nil || !sameConfiguredProjects(m.configuredPaths, projects) {
-		return m.start(projects, "refresh")
-	}
-	if m.loading || m.pollScheduled {
+	if m.loading {
 		return nil
 	}
 	return m.start(projects, "refresh")
@@ -429,6 +450,7 @@ func (m *Model) Stop() {
 	m.pulseGeneration++
 	m.pulseScheduled = false
 	m.stopLiveWatchers()
+	m.stopShellWatch()
 	if m.cancel != nil {
 		if m.pollScheduled {
 			m.tracef("cycle generation=%d poll_cancel_requested", m.generation)
@@ -499,6 +521,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	// pulse are not dropped just because a watcher happened to fire.
 	cmd, handled := m.handleLiveWatchMsg(msg)
 	if !handled {
+		cmd, handled = m.handleShellWatchMsg(msg)
+	}
+	if !handled {
 		cmd = m.update(msg)
 	}
 	// Geometry a pane content asserted from inside the last render, dispatched
@@ -507,6 +532,11 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	// Swept once per update: preview panes open, retarget and close from too
 	// many places to trust each of them to say so. See live_preview.go.
 	if sync := m.reconcileLiveWatches(); sync != nil {
+		cmds = append(cmds, sync)
+	}
+	// Swept alongside the preview watchers, and for the same reason: the
+	// configured project set changes from more than one place.
+	if sync := m.reconcileShellWatch(); sync != nil {
 		cmds = append(cmds, sync)
 	}
 	if pulse := m.pulseCmd(); pulse != nil {
@@ -901,7 +931,7 @@ func (m *Model) finishPhase() tea.Cmd {
 	// deciding a shell has died requires (td-6a4100).
 	reap := m.reapDeadShells()
 	m.syncBoard()
-	return tea.Batch(m.pollCmd(), reap)
+	return tea.Batch(m.pollCmd(), reap, m.sweepCmd())
 }
 
 func (m *Model) applyInventoryIncrement(project Project, result workspaceinventory.ProjectResult) {

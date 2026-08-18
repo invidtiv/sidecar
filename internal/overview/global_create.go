@@ -88,6 +88,11 @@ type projectMutationRefreshMsg struct {
 	Project Project
 	Result  workspaceinventory.ProjectResult
 	Err     error
+	// Background marks a refresh nobody asked for — a manifest watcher signal or
+	// a sweep tick rather than a create or delete this surface just performed.
+	// Its failures must stay silent: raising the create modal's error on a
+	// project the user never touched would be an alert about nothing.
+	Background bool
 }
 
 func (m *Model) CreateOpen() bool { return m.createOpen }
@@ -879,32 +884,64 @@ func withGlobalShellNaming(command, agent string) string {
 }
 
 func (m *Model) refreshProjectAfterMutation(project Project) tea.Cmd {
+	return m.refreshOneProject(project, false)
+}
+
+// refreshOneProject re-inventories exactly one project and folds the result
+// back into the board. This is the cheap path — one Git worktree listing and
+// one tmux inventory — as opposed to a full cycle's fan-out across every
+// configured project, and it is what both a local mutation and a cross-instance
+// manifest change use.
+func (m *Model) refreshOneProject(project Project, background bool) tea.Cmd {
+	return m.refreshOneProjectWithPanes(project, background, nil)
+}
+
+// refreshOneProjectWithPanes is refreshOneProject with the tmux inventory
+// supplied. A nil panes slice means "collect a fresh one", which is what a
+// mutation needs: a shell created a moment ago is not in any inventory taken
+// before it. A caller holding panes from a just-completed cycle passes them
+// instead, saving a subprocess spawn per project.
+func (m *Model) refreshOneProjectWithPanes(project Project, background bool, panes []workspaceinventory.Pane) tea.Cmd {
 	collector := m.collector.ForRefresh(maxCaptures, m.shellClaims)
 	roots := append([]string(nil), m.roots...)
+	// Snapshot the other projects' results here, on the update goroutine. The
+	// command below runs on its own, and ranging over m.results from there would
+	// race every write the next cycle makes.
+	key := projectKey(project)
+	others := make([]workspaceinventory.ProjectResult, 0, len(m.results))
+	for existingKey, existing := range m.results {
+		if existingKey != key {
+			others = append(others, existing)
+		}
+	}
 	return func() tea.Msg {
 		ctx := context.Background()
 		inventory := collector.CollectProjectInventory(ctx, project.Name, project.Path)
 		if inventory.Err != nil {
-			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: inventory.Err}
+			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: inventory.Err, Background: background}
 		}
-		claimsInputs := make([]workspaceinventory.ProjectResult, 0, len(m.results)+1)
-		for key, existing := range m.results {
-			if key != projectKey(project) {
-				claimsInputs = append(claimsInputs, existing)
-			}
-		}
-		claimsInputs = append(claimsInputs, inventory)
+		claimsInputs := append(others, inventory)
 		collector = collector.WithShellClaims(workspaceinventory.BuildShellClaims(claimsInputs))
-		panes, err := collector.ListPanes(ctx)
-		if err != nil {
-			return projectMutationRefreshMsg{Project: project, Result: inventory, Err: err}
+		if panes == nil {
+			collected, err := collector.ListPanes(ctx)
+			if err != nil {
+				return projectMutationRefreshMsg{Project: project, Result: inventory, Err: err, Background: background}
+			}
+			panes = collected
 		}
 		result := collector.RefreshProjectStatus(ctx, inventory, roots, panes)
-		return projectMutationRefreshMsg{Project: project, Result: withProjectIdentity(result, project), Err: result.Err}
+		return projectMutationRefreshMsg{Project: project, Result: withProjectIdentity(result, project), Err: result.Err, Background: background}
 	}
 }
 
 func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.Cmd {
+	if msg.Err != nil && msg.Background {
+		// A background refresh that failed leaves the last good cards alone. The
+		// next sweep tick retries, and the full cycle behind it still reports a
+		// project that has genuinely gone away.
+		m.tracef("background refresh project=%s failed: %v", projectKey(msg.Project), msg.Err)
+		return nil
+	}
 	if msg.Err != nil {
 		m.createError = msg.Err.Error()
 		m.createOpen = true

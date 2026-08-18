@@ -35,6 +35,11 @@ func TestMain(m *testing.M) {
 	saveLastGlobalCreateProject = func(string) error { return nil }
 	loadLastCreateAgent = func() string { return "" }
 	saveLastCreateAgent = func(string) error { return nil }
+	// Manifest resolution scans the state dir's projects/ tree. Left at its
+	// production default it would read the developer's real one, making every
+	// test that runs an Update depend on which projects happen to be registered
+	// on this machine.
+	lookupProjectDirs = func([]string) map[string]string { return nil }
 	code := testenv.Main(m)
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
