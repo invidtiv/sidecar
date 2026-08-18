@@ -166,3 +166,27 @@ func TestShutdownBeforeTheFirstFrameStartsNothing(t *testing.T) {
 		t.Fatal("a provider ran after shutdown")
 	}
 }
+
+// A provider child is spawned with providerWorkingDir as its cwd, and a process
+// whose cwd does not exist does not start at all. On a fresh install the config
+// directory has not been created yet, so a working directory that is merely
+// "where config would live" silently disables every provider on exactly the
+// machines least able to diagnose it. The directory handed out must always
+// exist.
+func TestProviderWorkingDirExistsWithoutAConfigDirectory(t *testing.T) {
+	// A home with no Sidecar config directory in it: the fresh-install case.
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "absent"))
+
+	dir := providerWorkingDir()
+	if dir == "" {
+		t.Fatal("no working directory was chosen, so the child inherits Sidecar's cwd — the selected repository")
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("provider working directory %q does not exist, so no provider can spawn: %v", dir, err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("provider working directory %q is not a directory", dir)
+	}
+}

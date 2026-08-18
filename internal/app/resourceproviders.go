@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -252,13 +253,23 @@ func logResourceProviderStatuses(msg ResourceProvidersDescribedMsg) {
 
 // providerWorkingDir is the neutral directory every provider child runs in: the
 // Sidecar config directory, never the selected repository. It is read, not
-// created — a child whose cwd does not exist fails to spawn, which is a
-// diagnosable configuration problem, not a reason to make directories from a
-// background command.
+// created — making directories from a background command is not this command's
+// job.
+//
+// But "not created" cannot mean "not usable". Until config has been saved at
+// least once the config directory does not exist yet, and a child whose cwd is
+// missing does not merely report a problem — it fails to spawn at all, which
+// would silently disable every provider on a fresh install. So a missing
+// directory falls back to the system temp directory, which is equally neutral,
+// is never the selected repository, and always exists.
 func providerWorkingDir() string {
 	path := config.ConfigPath()
 	if path == "" {
-		return ""
+		return os.TempDir()
 	}
-	return filepath.Dir(path)
+	dir := filepath.Dir(path)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return os.TempDir()
+	}
+	return dir
 }
