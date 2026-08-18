@@ -1,11 +1,45 @@
 # Notes Plugin Overhaul
 
-**Status:** Draft
+**Status:** Phase 2 merged to `main` at `49829599`; review fixes are on
+`notes-overhaul` and Phase 3 is gated on independent approval of td-2f6d46
 **Created:** 2026-08-17
+**Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
+**Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c
+
+The Phase 2 commits mention td-caca7d, td-2a63f0, and td-6f24d9, but those records
+are absent from the current td store. Commit hashes above are the durable implementation
+references; the review findings use live task IDs.
+
+## Implementation status (reviewed 2026-08-17)
+
+Phase 1 is merged. Review confirmed the title,
+paste, Unicode search/backspace, stale-epoch, task-error, secure-temp-file, shared-layout,
+place-carry, no-renderer-swap, scrollbar, and wheel changes. Independent review closed
+td-244d0b after tracing leave-before-debounce, overlapping-save, Stop, Init, and
+buffer-replacement ownership; td-71789d then auto-closed.
+
+**Phase 2 (merged):** glamour is the default Notes view. `internal/markdown.RenderMapped`
+returns lines plus goldmark/wrap-math source anchors without changing `RenderContent`.
+`m` on `notes-preview` toggles rendered/raw. Rendered, raw, and edit always wrap at
+`editorLayout.wrapColumn` — the wrap-off truncate path is gone. Tab from the list
+focuses the resting view (so `m` and j/k are reachable); Enter/i/click enter edit
+at the mapped source position.
+
+**Phase 2 review:** the original wrapped-click test compared logical `Line()` with the
+textarea's visual-row `ScrollYOffset`, so a one-line paragraph could pass while clicks on
+later soft-wrapped rows jumped. td-2f6d46 maps rendered and already-editing clicks through
+visual-row anchors, prevents a horizontal click from spilling into the next wrap segment,
+uses the textarea-compatible word-wrap policy for raw/source anchors, and preserves the
+exact clicked screen row, including after scroll. td-4b3a5c also makes
+the production td CLI store lazy so Notes `Init()` performs no PATH/database I/O before
+the first frame. Focused markdown/Notes/keymap tests, `go test ./...`, `go build ./...`, a
+production `td --json note` add/edit/list/delete/restore round trip, and an isolated
+80×24 real-app render/raw/edit/save journey are green. Phase 3 remains on hold only until
+the non-minor wrapped-click fix receives independent review and the review commit is merged.
 
 ## Goal
 
-Bring the notes plugin up to the quality bar the rest of sidecar sets. Today it is
+Bring the notes plugin up to the quality bar the rest of sidecar sets. At the start it was
 functional but rough: the right pane visibly jumps between viewing and editing, selection
 is mouse-only and read-only, paste works only in one of three editor modes (and only by
 accident), notes render as raw text despite glamour being vendored, and the td
@@ -16,11 +50,17 @@ Rendered markdown and raw source cannot be visually identical; the contract is s
 geometry and place, not a pixel-identical mode switch. The tmux/$EDITOR path remains an
 explicit power-user escape hatch, not a second implementation of built-in editing behavior.
 
-## Where we are (findings from code exploration)
+## Baseline before Phase 1 (findings from code exploration)
 
-The storage boundary is already in good shape and should remain td-owned: notes live in
-td's per-project SQLite through Sidecar's `store.go` adapter over `td/pkg/notes`, shared
-with the `td note` CLI. One contract mismatch does need resolving: td stores `Title` and
+This section records the pre-implementation state that motivated the plan. The status
+section above is authoritative for what Phase 1 has already changed and what remains.
+
+The storage boundary was already td-owned at baseline: notes lived in td's per-project
+SQLite through Sidecar's `store.go` adapter over `td/pkg/notes`, shared with the `td note`
+CLI. Phase 2 superseded that transport after the second long-lived SQLite connection proved
+unsafe: production Sidecar now uses the structured `td --json note` CLI through the same
+adapter, while isolated tests may use `td/pkg/notes`. One contract mismatch did need
+resolving: td stores `Title` and
 `Content` separately and its CLI can edit them independently, while Sidecar creates the
 title as the first content line and `UpdateContent` silently rewrites the title from that
 line on every built-in save. Most problems are in presentation and interaction, but title
@@ -204,12 +244,12 @@ Every new chord must be registered in `internal/keymap/bindings.go`, exposed thr
 `notes-editor` context. Modifier tests must include combined modifiers, not just key
 string fixtures.
 
-### 4. td integration: use the library, keep the link
+### 4. td integration: extend the owning core and CLI, keep the link
 
-- **Task creation API:** replace `exec.Command("td", "create", ...)` and stdout scraping
-  with a narrow public td application package that owns the same validation, defaults,
-  session attribution, and logged write path as `td create`. `td/pkg/notes` does not
-  expose task creation today; Sidecar must not import td internals or recreate CLI rules.
+- **Task creation API:** replace ad-hoc human-output scraping with a typed `td --json`
+  command result through the Sidecar td adapter. Validation, defaults, session attribution,
+  and the logged write path stay in td's shared application core; Sidecar must not import td
+  internals, recreate CLI rules, or open `issues.db` as a second long-lived writer.
 - **Persist a first-class link:** td notes have no metadata field today. Add a td-owned
   note↔issue relation and expose it through td's public package and CLI; do not hide a
   `task: td-…` convention inside body text. The relation must be queryable in both
@@ -217,19 +257,20 @@ string fixtures.
   linked-task status in the header/info modal and uses the established
   `app.OpenIssueInTD(taskID)` path to open it.
 - **External-change signal:** reuse `internal/livewatch` and a shared td-store target
-  helper instead of polling. SQLite writes commonly land in `issues.db-wal`, so watch
-  the resolved database directory as `issueview.StoreTargets` already does, coalesce the
-  burst, and re-read asynchronously only while Notes is focused. Do not resolve paths or
-  start watchers in `Init()`/the synchronous part of `Start()`.
+  helper instead of polling. td currently uses SQLite `TRUNCATE` journal mode, but journal
+  and replacement-file activity still makes the resolved database directory the stable
+  watch target, as `issueview.StoreTargets` already demonstrates. Coalesce each burst and
+  re-read asynchronously only while Notes is focused. Do not resolve paths or start
+  watchers in `Init()`/the synchronous part of `Start()`.
 - **External-change conflict:** record the editor's base `UpdatedAt` when loading a note.
   A clean buffer adopts changed content while preserving its reading/edit position. A
   dirty buffer shows a persistent "Changed outside Sidecar" state with Reload and Keep
   Mine/compare choices; it is never overwritten silently. Watch notification alone is
   not enough because auto-save can race an external write: add an atomic
-  update-if-unchanged operation in td's notes API (or an equivalent revision contract)
-  and surface a conflict outcome instead of last-writer-wins data loss.
+  update-if-unchanged operation in td's core and structured CLI (or an equivalent revision
+  contract) and surface a conflict outcome instead of last-writer-wins data loss.
 
-This is dependency-ordered cross-repository work: land and release the td application API,
+This is dependency-ordered cross-repository work: land and release the td core/CLI contract,
 relation migration, agent-facing commands, and optimistic update contract before bumping
 Sidecar to consume them. A local `go.work` proof is useful but is not release proof.
 
@@ -280,20 +321,23 @@ exactly. Improve mechanics:
 
 Each phase is shippable alone and ordered so later phases build on earlier seams.
 
-1. **Correctness + one layout contract.** Fix paste persistence, rune-safe search/delete
+1. **Correctness + one layout contract — merged, reviewed, and closed.**
+   Fix paste persistence, rune-safe search/delete
    and truncation, title preservation, async staleness/capture, and user-visible task
    errors first. Introduce one layout value (wrap column, margins, content height,
    scrollbar) used by view and edit; carry cursor/scroll across the mode switch; mouse
    selection no longer swaps renderers. This removes existing data-loss paths before
    expanding the editor.
-2. **Markdown view steel thread.** Add a mapping-capable render result, prove one ordinary
-   paragraph click/scroll → source cursor journey, then make glamour the default view.
-   Add the `m` raw/render toggle and only add a feature flag if rollout needs it.
-3. **Selection + undo/redo.** Add source-coordinate keyboard/mouse selection, replacement
+2. **Markdown view steel thread — merged; review fix pending independent approval.**
+   The mapping-capable render result, glamour default, shared wrapping, and `m` toggle are
+   implemented. td-2f6d46 closes the wrapped-click acceptance hole found in review;
+   td-4b3a5c removes synchronous store validation from startup.
+3. **Selection + undo/redo — hold until td-2f6d46 is approved and merged.** Add
+   source-coordinate keyboard/mouse selection, replacement
    semantics, selection overlay, and bounded operation-based history. Add syntax spans
    only after the authoritative editor layout can support them without a shadow renderer.
-4. **td integration, dependency ordered.** (a) td public task service, note↔issue relation,
-   CLI queries, and optimistic note update; (b) td release and Sidecar dependency bump;
+4. **td integration, dependency ordered.** (a) td shared core plus structured CLI commands,
+   note↔issue relation, queries, and optimistic note update; (b) td release and Sidecar dependency bump;
    (c) Sidecar task/link UI and livewatch refresh/conflict journey.
 5. **Search polish.** Rune/case-folded matcher with spans, deterministic recency scoring,
    normalized-text cache, and measured performance.
@@ -301,9 +345,9 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 ## Explicit non-goals
 
 - No live-WYSIWYG markdown editing (rendered-while-typing).
-- No Sidecar-owned note database or metadata sidecar. td's SQLite and public packages stay
-  the source of truth; the deliberate note↔issue relation and optimistic-update contract
-  are td-owned schema/API changes.
+- No Sidecar-owned note database or metadata sidecar. td's SQLite and shared core/CLI stay
+  the source of truth; Sidecar reaches them through the production td adapter. The deliberate
+  note↔issue relation and optimistic-update contract are td-owned schema/API changes.
 - No notes CLI surface: sidecar is a presentation layer here; the owning CLI is `td
   note`, which agents already use. New owned capabilities such as linking and conflict
   refusal ship through td's deterministic CLI/public core as well as Sidecar's UI.
@@ -321,8 +365,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
   one reusable editor component whose buffer and visual layout are the source of truth.
   Keep the highlighter itself a pure `line -> spans` function.
 - **Line-map fidelity.** Block anchors plus wrap math give exact-line landing for
-  ordinary prose and lists; accept top-of-block degradation only inside heavily
-  reshaped constructs (tables, deep nesting). Chasing exact columns through those is
+  ordinary prose and headings; accept top-of-block degradation inside reshaped
+  constructs (lists, tables, deep nesting). Chasing exact columns through those is
   not worth it — but the common case (clicking a paragraph in a scrolled note) must be
   exact-line, covered by tests.
 - **External edits vs. auto-save.** A filesystem watch is notification, not concurrency
@@ -334,7 +378,8 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
 
 - Focused tests cover layout geometry, source↔render mapping, Unicode search/backspace,
   paste as one dirty/undo/debounce operation, selection across wraps and resize, stale
-  epochs, title preservation, and optimistic-update conflicts.
+  epochs, title preservation, autosave generation/transition ownership, and
+  optimistic-update conflicts.
 - `go test ./...` and `go build ./...` pass with `GOWORK=off` against the released td
   version as well as in the local workspace when §4 changes dependencies.
 - Real-app proof uses `./scripts/tmux-drive.sh paths` first and its isolated tmux socket

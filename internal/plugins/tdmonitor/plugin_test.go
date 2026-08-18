@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	tdnotes "github.com/marcus/td/pkg/notes"
+
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tdroot"
 )
@@ -125,35 +127,25 @@ func TestInitWithNonExistentDatabase(t *testing.T) {
 	}
 }
 
-// findProjectRootWithDB walks up from cwd to find a directory whose resolved
-// td database path (following .td-root) actually exists. Returns the clean
-// project root or calls t.Skip if no usable database is found.
+// findProjectRootWithDB returns a temp project root holding a freshly
+// initialized td database. It must NEVER resolve to the real repository:
+// the plugin boots td's embedded monitor, whose read-write connection on
+// the developer's live .todos/issues.db is exactly the concurrent-access
+// pattern that corrupted it (td-adbf16).
 func findProjectRootWithDB(t *testing.T) string {
 	t.Helper()
-	cwd, err := os.Getwd()
+	dir := t.TempDir()
+	store, err := tdnotes.Init(dir)
 	if err != nil {
-		t.Skip("couldn't get working directory")
+		t.Fatalf("initialize isolated td database: %v", err)
 	}
-
-	// Walk up to find a directory with .todos/issues.db
-	projectRoot := cwd
-	for i := 0; i < 5; i++ {
-		if _, err := os.Stat(projectRoot + "/.todos/issues.db"); err == nil {
-			break
-		}
-		projectRoot = projectRoot + "/.."
+	if err := store.Close(); err != nil {
+		t.Fatalf("close isolated td database: %v", err)
 	}
-	projectRoot = filepath.Clean(projectRoot)
-
-	// Verify the *resolved* database path exists. The monitor follows .td-root
-	// which may redirect to a different directory (e.g., a worktree root on
-	// another machine). Skip if the resolved path is unreachable.
-	resolvedDBPath := tdroot.ResolveDBPath(projectRoot)
-	if _, err := os.Stat(resolvedDBPath); err != nil {
-		t.Skipf("resolved td database not accessible: %s", resolvedDBPath)
+	if _, err := os.Stat(tdroot.ResolveDBPath(dir)); err != nil {
+		t.Fatalf("isolated td database missing: %v", err)
 	}
-
-	return projectRoot
+	return dir
 }
 
 func TestInitWithValidDatabase(t *testing.T) {

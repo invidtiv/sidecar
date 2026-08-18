@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/cellbuf"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -159,22 +160,32 @@ func (p *Plugin) renderListPane(height int) string {
 		end = noteCount
 	}
 
-	// Content width for truncation
-	contentWidth := p.listWidth - 6 // Account for cursor prefix, padding, border
-	if contentWidth < 10 {
-		contentWidth = 10
+	listInner := p.listWidth - paneChromeX
+	if listInner < 1 {
+		listInner = 1
+	}
+	bodyWidth := listInner - scrollbarWidth
+	if bodyWidth < 10 {
+		bodyWidth = 10
 	}
 
-	// Render visible notes
+	var body strings.Builder
 	for i := start; i < end; i++ {
 		note := displayNotes[i]
 		isSelected := i == p.cursor
-		sb.WriteString(p.renderNoteRow(note, isSelected, contentWidth))
+		body.WriteString(p.renderNoteRow(note, isSelected, bodyWidth))
 		if i < end-1 {
-			sb.WriteString("\n")
+			body.WriteString("\n")
 		}
 	}
 
+	bar := ui.RenderScrollbar(ui.ScrollbarParams{
+		TotalItems:   noteCount,
+		ScrollOffset: p.scrollOff,
+		VisibleItems: contentHeight,
+		TrackHeight:  contentHeight,
+	})
+	sb.WriteString(attachScrollbar(body.String(), bar, bodyWidth, contentHeight))
 	return sb.String()
 }
 
@@ -192,149 +203,103 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 
 	var sb strings.Builder
 
-	// Status header line
-	sb.WriteString(p.renderEditorStatusHeader(width))
+	l := p.editorLayout()
+	sb.WriteString(p.renderEditorStatusHeader(l.innerWidth))
 	sb.WriteString("\n")
 
-	headerLines := 1
-	contentHeight := height - headerLines
-	if contentHeight < 1 {
-		contentHeight = 1
-	}
-
-	if !p.previewMode {
-		if p.selection.HasSelection() {
-			// Show selection with preview-style rendering (has highlight support)
-			p.syncPreviewFromTextarea()
-			sb.WriteString(p.renderPreviewContent(contentHeight, width))
-		} else {
-			// Normal textarea rendering
-			p.editorTextarea.SetWidth(width)
-			p.editorTextarea.SetHeight(contentHeight)
-			sb.WriteString(p.editorTextarea.View())
-		}
+	bar := p.editorScrollbar(l)
+	if p.previewMode {
+		body := p.renderViewSurface(l.contentHeight)
+		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	} else {
-		// Preview mode: custom rendering with previewLines
-		sb.WriteString(p.renderPreviewContent(contentHeight, width))
+		p.editorTextarea.SetWidth(l.wrapColumn)
+		p.editorTextarea.SetHeight(l.contentHeight)
+		body := p.editorTextarea.View()
+		if p.selection.HasSelection() {
+			body = p.overlaySelectionOnEditor(body)
+		}
+		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	}
 
 	return sb.String()
 }
 
-// renderPreviewContent renders the preview mode content with line numbers and optional wrapping.
-func (p *Plugin) renderPreviewContent(height, width int) string {
-	var sb strings.Builder
+// renderViewSurface draws the current mapped view (glamour or wrapped raw)
+// with no gutter and no '~' filler. Height is the content-row count from
+// editorLayout. Visual rows are already wrapped to wrapColumn.
+func (p *Plugin) renderViewSurface(height int) string {
+	p.ensureViewSurface()
+	p.clampPreviewScroll()
 
-	lines := p.previewLines
+	lines := p.viewSurface.Lines
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
 
-	// Ensure preview cursor is visible
-	p.ensurePreviewCursorVisibleWithHeight(height, width)
-
-	// Calculate visible range
 	start := p.previewScrollOff
+	if start < 0 {
+		start = 0
+	}
 	end := start + height
 	if end > len(lines) {
 		end = len(lines)
 	}
 
-	// Line number width
-	lineNumWidth := len(fmt.Sprintf("%d", len(lines)))
-	if lineNumWidth < 2 {
-		lineNumWidth = 2
-	}
-
-	maxLineWidth := width - lineNumWidth - 3
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
-	}
-
-	lineNumPad := strings.Repeat(" ", lineNumWidth+1)
-	visualLinesRendered := 0
-
-	for i := start; i < end && visualLinesRendered < height; i++ {
+	var sb strings.Builder
+	for i := start; i < end; i++ {
 		line := lines[i]
-
-		if p.previewWrapEnabled {
-			wrappedLines := p.wrapEditorLine(line, maxLineWidth)
-			for wi, wl := range wrappedLines {
-				if visualLinesRendered >= height {
-					break
-				}
-				if wi == 0 {
-					lineNum := fmt.Sprintf("%*d", lineNumWidth, i+1)
-					sb.WriteString(styles.Muted.Render(lineNum + " "))
-				} else {
-					sb.WriteString(lineNumPad)
-				}
-
-				// Check if this line has selection
-				if p.selection.IsLineSelected(i) {
-					startCol, endCol := p.selection.GetLineSelectionCols(i)
-					segStart := 0
-					for j := 0; j < wi; j++ {
-						segStart += ansi.StringWidth(wrappedLines[j])
-					}
-					localStart := startCol - segStart
-					localEnd := endCol
-					if localEnd != -1 {
-						localEnd = endCol - segStart
-					}
-					segWidth := ansi.StringWidth(wl)
-					if localStart < segWidth && (localEnd == -1 || localEnd > 0) {
-						if localStart < 0 {
-							localStart = 0
-						}
-						if localEnd != -1 && localEnd > segWidth {
-							localEnd = segWidth
-						}
-						wl = ui.InjectCharacterRangeBackground(wl, localStart, localEnd)
-					}
-					sb.WriteString(wl)
-				} else {
-					sb.WriteString(styles.Body.Render(wl))
-				}
-
-				if visualLinesRendered < height-1 {
-					sb.WriteString("\n")
-				}
-				visualLinesRendered++
-			}
+		if p.selection.HasSelection() && p.selection.IsLineSelected(i) {
+			startCol, endCol := p.selection.GetLineSelectionCols(i)
+			line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
+			sb.WriteString(line)
+		} else if p.markdownView {
+			sb.WriteString(line)
 		} else {
-			lineNum := fmt.Sprintf("%*d", lineNumWidth, i+1)
-			sb.WriteString(styles.Muted.Render(lineNum + " "))
-
-			displayLine := line
-			if len(displayLine) > maxLineWidth {
-				displayLine = displayLine[:maxLineWidth-1] + ">"
-			}
-
-			if p.selection.IsLineSelected(i) {
-				startCol, endCol := p.selection.GetLineSelectionCols(i)
-				displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
-				sb.WriteString(displayLine)
-			} else {
-				sb.WriteString(styles.Body.Render(displayLine))
-			}
-
-			if visualLinesRendered < height-1 {
-				sb.WriteString("\n")
-			}
-			visualLinesRendered++
+			sb.WriteString(styles.Body.Render(line))
+		}
+		if i < end-1 {
+			sb.WriteString("\n")
 		}
 	}
-
-	// Fill remaining height
-	for visualLinesRendered < height {
-		sb.WriteString("\n")
-		lineNum := fmt.Sprintf("%*s", lineNumWidth, "~")
-		sb.WriteString(styles.Muted.Render(lineNum + " "))
-		visualLinesRendered++
-	}
-
 	return sb.String()
+}
+
+// renderPreviewContent draws the current view surface. Tests that want a
+// specific wrap/render mode should set markdownView / previewLines first.
+func (p *Plugin) renderPreviewContent(height, width int) string {
+	_ = width
+	return p.renderViewSurface(height)
+}
+
+// truncatePreviewLine cuts to wrapWidth cells without splitting a rune.
+func truncatePreviewLine(line string, wrapWidth int) string {
+	if wrapWidth < 1 {
+		return ""
+	}
+	if ansi.StringWidth(line) <= wrapWidth {
+		return line
+	}
+	return ansi.Truncate(line, wrapWidth, ">")
+}
+
+// overlaySelectionOnEditor paints the current selection onto the textarea
+// surface already showing. Visual rows map 1:1 to source lines from the
+// textarea viewport (Phase 2 will remap through glamour).
+func (p *Plugin) overlaySelectionOnEditor(view string) string {
+	if !p.selection.HasSelection() {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	first := p.editorTextarea.ScrollYOffset()
+	for i, line := range lines {
+		src := first + i
+		if !p.selection.IsLineSelected(src) {
+			continue
+		}
+		startCol, endCol := p.selection.GetLineSelectionCols(src)
+		lines[i] = ui.InjectCharacterRangeBackground(line, startCol, endCol)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // wrapEditorLine wraps a single line to width using plain-text breakpoints,
@@ -373,19 +338,15 @@ func (p *Plugin) wrapEditorLine(line string, width int) []string {
 }
 
 // renderEditorStatusHeader renders the persistent status header line.
-// Left: save state indicator, Right: created/updated timestamps
-// Uses lipgloss.PlaceHorizontal for proper width handling with styled strings.
+// Left: save state indicator, Right: created/updated timestamps. Timestamp
+// detail degrades before the actionable save state when the pane narrows.
 func (p *Plugin) renderEditorStatusHeader(width int) string {
 	if p.editorNote == nil {
 		return ""
 	}
-
-	// Right side: timestamps (never truncated)
-	createdStr := p.editorNote.CreatedAt.Format("Jan 2, 2006")
-	updatedStr := p.editorNote.UpdatedAt.Format("Jan 2, 2006")
-	rightText := fmt.Sprintf("Created: %s | Updated: %s", createdStr, updatedStr)
-	rightPart := styles.Muted.Render(rightText)
-	rightWidth := lipgloss.Width(rightPart)
+	if width <= 0 {
+		return ""
+	}
 
 	// Left side: save state + optional preview indicator
 	var leftText string
@@ -395,60 +356,37 @@ func (p *Plugin) renderEditorStatusHeader(width int) string {
 		leftText = "Saved"
 	}
 	if p.previewMode {
-		leftText += " [preview]"
-	}
-
-	// Calculate available space for left part (minimum 1 space between)
-	minSpacer := 1
-	maxLeftWidth := width - rightWidth - minSpacer
-	if maxLeftWidth < 0 {
-		maxLeftWidth = 0
-	}
-
-	// Truncate left part if needed
-	leftRunes := []rune(leftText)
-	if len(leftRunes) > maxLeftWidth {
-		if maxLeftWidth > 3 {
-			leftText = string(leftRunes[:maxLeftWidth-3]) + "..."
-		} else if maxLeftWidth > 0 {
-			leftText = string(leftRunes[:maxLeftWidth])
+		if p.markdownView {
+			leftText += " [md]"
 		} else {
-			leftText = ""
+			leftText += " [raw]"
 		}
 	}
 
-	// Render left part with appropriate style
-	var leftPart string
+	leftText = ansi.Truncate(leftText, width, "...")
+	leftPart := styles.Muted.Render(leftText)
 	if p.editorDirty {
-		// Re-apply styling after truncation
-		if strings.HasPrefix(leftText, "Unsaved") {
-			leftPart = styles.StatusModified.Render(leftText)
-		} else {
-			leftPart = styles.Muted.Render(leftText)
-		}
-	} else {
-		leftPart = styles.Muted.Render(leftText)
+		leftPart = styles.StatusModified.Render(leftText)
 	}
-
-	// Use lipgloss.PlaceHorizontal to properly position the right part,
-	// ensuring correct width handling with ANSI-styled strings.
-	// This avoids manual spacer calculation which can have off-by-one errors.
-	if width <= 0 {
-		return ""
-	}
-	rightAligned := lipgloss.PlaceHorizontal(width, lipgloss.Right, rightPart)
-
-	// Overlay the left part at the beginning of the right-aligned line.
-	// PlaceHorizontal pads with spaces, so we replace the leading spaces with our left content.
 	leftWidth := lipgloss.Width(leftPart)
-	rightRunes := []rune(rightAligned)
-	if leftWidth > 0 && leftWidth < len(rightRunes) {
-		// Replace the first leftWidth runes (spaces) with our styled left part
-		result := leftPart + string(rightRunes[leftWidth:])
-		return result
+
+	createdStr := p.editorNote.CreatedAt.Format("Jan 2, 2006")
+	updatedStr := p.editorNote.UpdatedAt.Format("Jan 2, 2006")
+	rightCandidates := []string{
+		fmt.Sprintf("Created: %s | Updated: %s", createdStr, updatedStr),
+		fmt.Sprintf("Updated: %s", updatedStr),
+	}
+	for _, rightText := range rightCandidates {
+		rightPart := styles.Muted.Render(rightText)
+		rightWidth := lipgloss.Width(rightPart)
+		if leftWidth+1+rightWidth > width {
+			continue
+		}
+		return leftPart + strings.Repeat(" ", width-leftWidth-rightWidth) + rightPart
 	}
 
-	return rightAligned
+	// Save state is actionable; retain it when timestamp metadata cannot fit.
+	return padToWidth(leftPart, width)
 }
 
 // renderEditorPlaceholder shows when no note is selected.
@@ -464,68 +402,89 @@ func (p *Plugin) renderEditorPlaceholder(height int) string {
 	return sb.String()
 }
 
-// previewViewport returns the content height and width of the preview pane as
-// renderTwoPaneLayout builds them. Boundary queries, wheel movement, and the
-// renderer's clamp all measure the same box through this one helper.
-func (p *Plugin) previewViewport() (height, width int) {
-	paneHeight := p.height
-	if paneHeight < 4 {
-		paneHeight = 4
+// previewMaxScroll returns the largest previewScrollOff that still fills the
+// viewport. Both modes use soft-wrapped visual-row offsets.
+func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
+	if viewHeight < 1 {
+		return 0
 	}
-	innerHeight := paneHeight - 2
-	if innerHeight < 1 {
-		innerHeight = 1
+	if p.previewMode {
+		p.ensureViewSurface()
+		n := len(p.viewSurface.Lines)
+		if n <= viewHeight {
+			return 0
+		}
+		return n - viewHeight
 	}
-	height = innerHeight - 1 // status header line
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), viewWidth)
+	if len(raw.Lines) <= viewHeight {
+		return 0
+	}
+	return len(raw.Lines) - viewHeight
+}
+
+// clampPreviewScroll keeps the view offset in range without moving it to
+// follow the reading cursor. Paint and wheel must use this; snapping to
+// the cursor here would undo a wheel that did not also move the cursor.
+func (p *Plugin) clampPreviewScroll() {
+	height, width := p.previewViewport()
+	if p.previewScrollOff < 0 {
+		p.previewScrollOff = 0
+	}
+	maxScroll := p.previewMaxScroll(height, width)
+	if p.previewScrollOff > maxScroll {
+		p.previewScrollOff = maxScroll
+	}
+}
+
+// keepPreviewCursorInView moves the reading cursor into the current
+// viewport. Wheel uses this so Enter/i/paste stay tied to what is on
+// screen, without pulling the viewport back to an old cursor.
+func (p *Plugin) keepPreviewCursorInView() {
+	height, _ := p.previewViewport()
 	if height < 1 {
 		height = 1
 	}
-	width = p.width - p.listWidth - dividerWidth - 4 // borders (2) + padding (2)
-	return height, width
-}
-
-// previewMaxScroll returns the largest previewScrollOff that still fills the
-// viewport, measured from the same wrapped lines renderPreviewContent draws.
-// With wrapping on, trailing lines occupy more than one row, so the logical
-// maximum is smaller than len(previewLines)-height.
-func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
-	lines := p.previewLines
-	if len(lines) == 0 || viewHeight < 1 {
-		return 0
+	n := len(p.previewLines)
+	if p.previewMode {
+		p.ensureViewSurface()
+		n = len(p.viewSurface.Lines)
 	}
-	lineNumWidth := len(fmt.Sprintf("%d", len(lines)))
-	if lineNumWidth < 2 {
-		lineNumWidth = 2
+	if n < 1 {
+		p.previewCursorLine = 0
+		return
 	}
-	maxLineWidth := viewWidth - lineNumWidth - 3
-	if maxLineWidth < 1 {
-		maxLineWidth = 1
+	if p.previewCursorLine < p.previewScrollOff {
+		p.previewCursorLine = p.previewScrollOff
 	}
-	rows := 0
-	for i := len(lines) - 1; i >= 0; i-- {
-		if p.previewWrapEnabled {
-			rows += len(p.wrapEditorLine(lines[i], maxLineWidth))
-		} else {
-			rows++
-		}
-		if rows >= viewHeight {
-			return i
-		}
+	last := p.previewScrollOff + height - 1
+	if last >= n {
+		last = n - 1
 	}
-	return 0
+	if p.previewCursorLine > last {
+		p.previewCursorLine = last
+	}
+	if p.previewCursorLine < 0 {
+		p.previewCursorLine = 0
+	}
 }
 
 // ensurePreviewCursorVisibleWithHeight adjusts preview scroll offset for given
 // viewport dimensions.
 func (p *Plugin) ensurePreviewCursorVisibleWithHeight(viewHeight, viewWidth int) {
-	if len(p.previewLines) == 0 {
+	n := len(p.previewLines)
+	if p.previewMode {
+		p.ensureViewSurface()
+		n = len(p.viewSurface.Lines)
+	}
+	if n == 0 {
 		return
 	}
 	if p.previewCursorLine < 0 {
 		p.previewCursorLine = 0
 	}
-	if p.previewCursorLine >= len(p.previewLines) {
-		p.previewCursorLine = len(p.previewLines) - 1
+	if p.previewCursorLine >= n {
+		p.previewCursorLine = n - 1
 	}
 	if p.previewCursorLine < p.previewScrollOff {
 		p.previewScrollOff = p.previewCursorLine
@@ -644,15 +603,13 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		}
 	}
 
-	// Truncate title to max length
-	if len(title) > maxTitleLength {
-		title = title[:maxTitleLength-3] + "..."
+	// Truncate by terminal cells; byte slicing can split Unicode titles.
+	if ansi.StringWidth(title) > maxTitleLength {
+		title = ansi.Truncate(title, maxTitleLength, "...")
 	}
 
-	// Truncate title if needed (rune-safe)
-	runes := []rune(title)
-	if len(runes) > titleWidth {
-		title = string(runes[:titleWidth-3]) + "..."
+	if ansi.StringWidth(title) > titleWidth {
+		title = ansi.Truncate(title, titleWidth, "...")
 	}
 
 	// Style based on selection
@@ -672,10 +629,7 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		}
 		plainRow += title
 
-		// Pad to full width for proper background
-		if len(plainRow) < maxWidth {
-			plainRow += strings.Repeat(" ", maxWidth-len(plainRow))
-		}
+		plainRow = padToWidth(plainRow, maxWidth)
 		return styles.ListItemSelected.Render(plainRow)
 	}
 

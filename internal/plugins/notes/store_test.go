@@ -1,6 +1,8 @@
 package notes
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	tdnotes "github.com/marcus/td/pkg/notes"
@@ -97,17 +99,88 @@ func TestStoreNoteVisibleViaTDPackage(t *testing.T) {
 	}
 }
 
-func TestNewStoreOpensProjectRoot(t *testing.T) {
+func TestStoreUpdateContentPreservesTitle(t *testing.T) {
+	store := openTestStore(t)
+
+	note, err := store.Create("td-set title", "original body")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	note.Title = "renamed by td"
+	if err := store.Update(note); err != nil {
+		t.Fatalf("Update title: %v", err)
+	}
+
+	if err := store.UpdateContent(note.ID, "new first line\nrest of body"); err != nil {
+		t.Fatalf("UpdateContent: %v", err)
+	}
+
+	got, err := store.Get(note.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get returned nil")
+	}
+	if got.Title != "renamed by td" {
+		t.Fatalf("title = %q, want td-set title to survive UpdateContent", got.Title)
+	}
+	if got.Content != "new first line\nrest of body" {
+		t.Fatalf("content = %q, want updated body", got.Content)
+	}
+}
+
+func TestStoreNotePathCreatesUniqueSecureTemp(t *testing.T) {
+	store := openTestStore(t)
+	note, err := store.Create("title", "exported body")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	path1 := store.NotePath(note.ID)
+	if path1 == "" {
+		t.Fatal("NotePath returned empty")
+	}
+	t.Cleanup(func() { removeNoteExport(path1) })
+	path2 := store.NotePath(note.ID)
+	if path2 == "" {
+		t.Fatal("second NotePath returned empty")
+	}
+	t.Cleanup(func() { removeNoteExport(path2) })
+
+	if path1 == path2 {
+		t.Fatalf("NotePath reused %q", path1)
+	}
+	if path1 == filepath.Join(os.TempDir(), "sidecar-note-"+note.ID+".md") {
+		t.Fatal("NotePath used the predictable sidecar-note-<id>.md name")
+	}
+
+	for _, path := range []string{path1, path2} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("Stat %s: %v", path, err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %o, want 0600", path, info.Mode().Perm())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != "exported body" {
+			t.Fatalf("%s content = %q", path, data)
+		}
+	}
+}
+
+func TestNewStoreDefersValidationUntilFirstCommand(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := NewStore(dir, "test"); err == nil {
-		t.Fatal("NewStore on empty dir should fail without td init")
-	}
-	if _, err := NewTestStore(dir, "test"); err != nil {
-		t.Fatalf("NewTestStore: %v", err)
-	}
 	store, err := NewStore(dir, "test")
 	if err != nil {
-		t.Fatalf("NewStore after init: %v", err)
+		t.Fatalf("NewStore should not perform startup I/O: %v", err)
+	}
+	if _, err := store.List(false); err == nil {
+		t.Fatal("first command on an uninitialized project should report the td error")
 	}
 	_ = store.Close()
 }

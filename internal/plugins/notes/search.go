@@ -35,14 +35,15 @@ func FuzzyMatchNote(query string, note Note) int {
 		}
 	}
 
-	// Score title match
-	titleScore := fuzzyScore(queryLower, strings.ToLower(title))
+	// Score title match. fuzzyScore case-folds; pass original text so
+	// camelCase bonuses still see the real case.
+	titleScore := fuzzyScore(queryLower, title)
 	if titleScore > 0 {
 		titleScore += 50 // Big bonus for title match
 	}
 
 	// Score content match
-	contentScore := fuzzyScore(queryLower, strings.ToLower(note.Content))
+	contentScore := fuzzyScore(queryLower, note.Content)
 
 	// Return the best score
 	if titleScore > contentScore {
@@ -51,14 +52,20 @@ func FuzzyMatchNote(query string, note Note) int {
 	return contentScore
 }
 
-// fuzzyScore computes fuzzy match score between query and target.
+// fuzzyScore computes a rune-wise fuzzy match score between query and target.
+// query and target are case-folded for matching; original target case is used
+// for camelCase bonuses. Consecutive, word-start, and camelCase bonuses match
+// the previous byte-wise scorer.
 func fuzzyScore(query, target string) int {
-	qi := 0 // query index
+	q := []rune(strings.ToLower(query))
+	orig := []rune(target)
+	t := []rune(strings.ToLower(target))
+	qi := 0
 	score := 0
 	consecutive := 0
 
-	for ti := 0; ti < len(target) && qi < len(query); ti++ {
-		if target[ti] == query[qi] {
+	for ti := 0; ti < len(t) && qi < len(q); ti++ {
+		if t[ti] == q[qi] {
 			qi++
 			consecutive++
 
@@ -66,12 +73,12 @@ func fuzzyScore(query, target string) int {
 			score += 1 + consecutive
 
 			// Word start bonus (after separator or at start)
-			if ti == 0 || isWordSeparator(rune(target[ti-1])) {
+			if ti == 0 || isWordSeparator(orig[ti-1]) {
 				score += 10
 			}
 
 			// Capital letter bonus (camelCase boundary)
-			if ti > 0 && unicode.IsUpper(rune(target[ti])) && unicode.IsLower(rune(target[ti-1])) {
+			if ti > 0 && unicode.IsUpper(orig[ti]) && unicode.IsLower(orig[ti-1]) {
 				score += 5
 			}
 		} else {
@@ -80,12 +87,12 @@ func fuzzyScore(query, target string) int {
 	}
 
 	// Did we match all query characters?
-	if qi < len(query) {
+	if qi < len(q) {
 		return 0 // Incomplete match
 	}
 
 	// Bonus for shorter targets (prefer more concise matches)
-	score += 20 / (len(target) + 1)
+	score += 20 / (len(t) + 1)
 
 	return score
 }

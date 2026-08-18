@@ -73,8 +73,12 @@ func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
 	}
 	p.inlineEditActivation = 12
 
+	stalePath := filepath.Join(t.TempDir(), "old.md")
+	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	_, cmd := p.Update(InlineEditStartedMsg{
-		SessionName: "old-note-editor", NoteID: "old", NotePath: "/tmp/old",
+		SessionName: "old-note-editor", NoteID: "old", NotePath: stalePath,
 		Editor: "nvim", Activation: 11, Epoch: 6,
 	})
 	if cmd == nil {
@@ -83,6 +87,9 @@ func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
 	_ = cmd()
 	if p.inlineEditMode || p.inlineEditor.IsActive() {
 		t.Fatal("stale editor start activated the new project")
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatal("stale editor start left the export file behind")
 	}
 
 	p.inlineEditMode = true

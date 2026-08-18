@@ -301,6 +301,7 @@ func TestDefaultBindings_NotesEditorsEachHaveTheirOwnKey(t *testing.T) {
 		"notes-preview:i":     "edit-note",
 		"notes-preview:e":     "vim-edit",
 		"notes-preview:E":     "external-editor",
+		"notes-preview:m":     "toggle-markdown",
 	}
 	got := map[string]string{}
 	for _, b := range DefaultBindings() {
@@ -308,7 +309,7 @@ func TestDefaultBindings_NotesEditorsEachHaveTheirOwnKey(t *testing.T) {
 			continue
 		}
 		switch b.Command {
-		case "edit-note", "vim-edit", "external-editor":
+		case "edit-note", "vim-edit", "external-editor", "toggle-markdown":
 			got[b.Context+":"+b.Key] = b.Command
 		}
 	}

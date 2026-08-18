@@ -21,16 +21,18 @@ const (
 
 // Renderer wraps Glamour for markdown rendering with caching.
 type Renderer struct {
-	mu        sync.RWMutex
-	renderer  *glamour.TermRenderer
-	lastWidth int
-	cache     map[uint64][]string
+	mu          sync.RWMutex
+	renderer    *glamour.TermRenderer
+	lastWidth   int
+	cache       map[uint64][]string
+	mappedCache map[uint64]MappedRender
 }
 
 // NewRenderer creates a new markdown renderer instance.
 func NewRenderer() (*Renderer, error) {
 	return &Renderer{
-		cache: make(map[uint64][]string),
+		cache:       make(map[uint64][]string),
+		mappedCache: make(map[uint64]MappedRender),
 	}, nil
 }
 
@@ -117,6 +119,7 @@ func (r *Renderer) getOrCreateRenderer(width int) (*glamour.TermRenderer, error)
 	r.renderer = renderer
 	r.lastWidth = width
 	r.cache = make(map[uint64][]string) // Clear cache on width change
+	r.mappedCache = make(map[uint64]MappedRender)
 
 	return renderer, nil
 }
