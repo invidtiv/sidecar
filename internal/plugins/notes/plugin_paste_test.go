@@ -166,5 +166,6 @@ func newPastePlugin(t *testing.T) *Plugin {
 	p.listWidth = 30
 	p.editorTextarea = textarea.New()
 	p.editorTextarea.SetValue(note.Content)
+	p.markdownView = false
 	return p
 }

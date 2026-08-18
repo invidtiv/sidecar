@@ -208,7 +208,7 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 
 	bar := p.editorScrollbar(l)
 	if p.previewMode {
-		body := p.renderPreviewContent(l.contentHeight, l.wrapColumn)
+		body := p.renderViewSurface(l.contentHeight)
 		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	} else {
 		p.editorTextarea.SetWidth(l.wrapColumn)
@@ -223,90 +223,51 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 	return sb.String()
 }
 
-// renderPreviewContent renders raw source lines with no gutter and no '~' filler.
-// width is the wrap/truncate column from editorLayout.
-func (p *Plugin) renderPreviewContent(height, width int) string {
-	var sb strings.Builder
+// renderViewSurface draws the current mapped view (glamour or wrapped raw)
+// with no gutter and no '~' filler. Height is the content-row count from
+// editorLayout. Visual rows are already wrapped to wrapColumn.
+func (p *Plugin) renderViewSurface(height int) string {
+	p.ensureViewSurface()
+	p.ensurePreviewCursorVisible()
 
-	lines := p.previewLines
+	lines := p.viewSurface.Lines
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
 
-	p.ensurePreviewCursorVisibleWithHeight(height, width)
-
 	start := p.previewScrollOff
+	if start < 0 {
+		start = 0
+	}
 	end := start + height
 	if end > len(lines) {
 		end = len(lines)
 	}
 
-	wrapWidth := width
-	if wrapWidth < 1 {
-		wrapWidth = 1
-	}
-
-	visualLinesRendered := 0
-
-	for i := start; i < end && visualLinesRendered < height; i++ {
+	var sb strings.Builder
+	for i := start; i < end; i++ {
 		line := lines[i]
-
-		if p.previewWrapEnabled {
-			wrappedLines := p.wrapEditorLine(line, wrapWidth)
-			for wi, wl := range wrappedLines {
-				if visualLinesRendered >= height {
-					break
-				}
-				if p.selection.IsLineSelected(i) {
-					startCol, endCol := p.selection.GetLineSelectionCols(i)
-					segStart := 0
-					for j := 0; j < wi; j++ {
-						segStart += ansi.StringWidth(wrappedLines[j])
-					}
-					localStart := startCol - segStart
-					localEnd := endCol
-					if localEnd != -1 {
-						localEnd = endCol - segStart
-					}
-					segWidth := ansi.StringWidth(wl)
-					if localStart < segWidth && (localEnd == -1 || localEnd > 0) {
-						if localStart < 0 {
-							localStart = 0
-						}
-						if localEnd != -1 && localEnd > segWidth {
-							localEnd = segWidth
-						}
-						wl = ui.InjectCharacterRangeBackground(wl, localStart, localEnd)
-					}
-					sb.WriteString(wl)
-				} else {
-					sb.WriteString(styles.Body.Render(wl))
-				}
-
-				if visualLinesRendered < height-1 {
-					sb.WriteString("\n")
-				}
-				visualLinesRendered++
-			}
-			continue
-		}
-
-		displayLine := truncatePreviewLine(line, wrapWidth)
-		if p.selection.IsLineSelected(i) {
+		if p.selection.HasSelection() && p.selection.IsLineSelected(i) {
 			startCol, endCol := p.selection.GetLineSelectionCols(i)
-			displayLine = ui.InjectCharacterRangeBackground(displayLine, startCol, endCol)
-			sb.WriteString(displayLine)
+			line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
+			sb.WriteString(line)
+		} else if p.markdownView {
+			sb.WriteString(line)
 		} else {
-			sb.WriteString(styles.Body.Render(displayLine))
+			sb.WriteString(styles.Body.Render(line))
 		}
-
-		if visualLinesRendered < height-1 {
+		if i < end-1 {
 			sb.WriteString("\n")
 		}
-		visualLinesRendered++
 	}
-
 	return sb.String()
+}
+
+// renderPreviewContent draws the current view surface. Tests that want a
+// specific wrap/render mode should set markdownView / previewLines first.
+func (p *Plugin) renderPreviewContent(height, width int) string {
+	_ = width
+	return p.renderViewSurface(height)
 }
 
 // truncatePreviewLine cuts to wrapWidth cells without splitting a rune.
@@ -394,7 +355,11 @@ func (p *Plugin) renderEditorStatusHeader(width int) string {
 		leftText = "Saved"
 	}
 	if p.previewMode {
-		leftText += " [preview]"
+		if p.markdownView {
+			leftText += " [md]"
+		} else {
+			leftText += " [raw]"
+		}
 	}
 
 	leftText = ansi.Truncate(leftText, width, "...")
@@ -437,11 +402,23 @@ func (p *Plugin) renderEditorPlaceholder(height int) string {
 }
 
 // previewMaxScroll returns the largest previewScrollOff that still fills the
-// viewport, measured from the same wrapped lines renderPreviewContent draws.
-// viewWidth is the wrap column from editorLayout.
+// viewport. In view mode that is a visual-row offset of the mapped surface;
+// in edit mode it stays a source-line offset so the textarea scrollbar is
+// honest against LineCount.
 func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
+	if viewHeight < 1 {
+		return 0
+	}
+	if p.previewMode {
+		p.ensureViewSurface()
+		n := len(p.viewSurface.Lines)
+		if n <= viewHeight {
+			return 0
+		}
+		return n - viewHeight
+	}
 	lines := p.previewLines
-	if len(lines) == 0 || viewHeight < 1 {
+	if len(lines) == 0 {
 		return 0
 	}
 	wrapWidth := viewWidth
@@ -450,11 +427,7 @@ func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 	}
 	rows := 0
 	for i := len(lines) - 1; i >= 0; i-- {
-		if p.previewWrapEnabled {
-			rows += len(p.wrapEditorLine(lines[i], wrapWidth))
-		} else {
-			rows++
-		}
+		rows += len(p.wrapEditorLine(lines[i], wrapWidth))
 		if rows >= viewHeight {
 			return i
 		}
@@ -465,14 +438,19 @@ func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 // ensurePreviewCursorVisibleWithHeight adjusts preview scroll offset for given
 // viewport dimensions.
 func (p *Plugin) ensurePreviewCursorVisibleWithHeight(viewHeight, viewWidth int) {
-	if len(p.previewLines) == 0 {
+	n := len(p.previewLines)
+	if p.previewMode {
+		p.ensureViewSurface()
+		n = len(p.viewSurface.Lines)
+	}
+	if n == 0 {
 		return
 	}
 	if p.previewCursorLine < 0 {
 		p.previewCursorLine = 0
 	}
-	if p.previewCursorLine >= len(p.previewLines) {
-		p.previewCursorLine = len(p.previewLines) - 1
+	if p.previewCursorLine >= n {
+		p.previewCursorLine = n - 1
 	}
 	if p.previewCursorLine < p.previewScrollOff {
 		p.previewScrollOff = p.previewCursorLine

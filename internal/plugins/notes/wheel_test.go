@@ -128,6 +128,7 @@ func previewPlugin(t *testing.T, lines []string, wrap bool) *Plugin {
 	t.Helper()
 	p := wheelTestPlugin(t, 3)
 	p.previewMode = true
+	p.markdownView = false
 	p.previewWrapEnabled = wrap
 	p.editorNote = &p.notes[0]
 	p.previewLines = lines
@@ -173,38 +174,44 @@ func TestNotesWheelAtBoundaryPreview(t *testing.T) {
 	}
 }
 
-// With wrapping on, a start line fills the viewport with fewer logical lines,
-// so the exact maximum offset is larger than len(lines)-height. The renderer
-// clamp and the boundary query must both use the wrapped maximum, or the last
-// lines are unreachable.
+// Long source lines always wrap. The renderer clamp and the boundary query
+// must both use the visual-row maximum, or the last wrap segments are
+// unreachable. The wrap-off truncate path is gone: rendered, raw, and edit
+// share one wrap column.
 func TestNotesPreviewWrappedMaximumIsSharedWithRenderer(t *testing.T) {
 	lines := make([]string, 40)
 	for i := range lines {
 		lines[i] = strings.Repeat("word ", 40)
 	}
-	wrapped := previewPlugin(t, lines, true)
-	plain := previewPlugin(t, lines, false)
-	height, width := wrapped.previewViewport()
-
-	wrappedMax := wrapped.previewMaxScroll(height, width)
-	plainMax := plain.previewMaxScroll(height, width)
-	if wrappedMax <= plainMax {
-		t.Fatalf("wrapped max %d should exceed unwrapped max %d", wrappedMax, plainMax)
+	p := previewPlugin(t, lines, true)
+	height, width := p.previewViewport()
+	p.ensureViewSurface()
+	visual := len(p.viewSurface.Lines)
+	if visual <= len(lines) {
+		t.Fatalf("expected wrap to add visual rows, got %d visual for %d source", visual, len(lines))
 	}
 
-	// The renderer clamps to the same maximum the boundary query uses.
-	wrapped.previewScrollOff = wrappedMax + 5
-	wrapped.previewCursorLine = len(lines) - 1
-	wrapped.ensurePreviewCursorVisibleWithHeight(height, width)
-	if wrapped.previewScrollOff != wrappedMax {
-		t.Fatalf("renderer clamped to %d, want %d", wrapped.previewScrollOff, wrappedMax)
+	wantMax := visual - height
+	if wantMax < 0 {
+		wantMax = 0
+	}
+	gotMax := p.previewMaxScroll(height, width)
+	if gotMax != wantMax {
+		t.Fatalf("previewMaxScroll %d, want visual-row max %d", gotMax, wantMax)
 	}
 
-	wrapped.previewScrollOff = wrappedMax
-	if !wrapped.WheelAtBoundary(wheelMsg(editorX, 5, false)) {
+	p.previewScrollOff = gotMax + 5
+	p.previewCursorLine = visual - 1
+	p.ensurePreviewCursorVisibleWithHeight(height, width)
+	if p.previewScrollOff != gotMax {
+		t.Fatalf("renderer clamped to %d, want %d", p.previewScrollOff, gotMax)
+	}
+
+	p.previewScrollOff = gotMax
+	if !p.WheelAtBoundary(wheelMsg(editorX, 5, false)) {
 		t.Fatal("expected bottom boundary at the wrapped maximum")
 	}
-	if wrapped.WheelAtBoundary(wheelMsg(editorX, 5, true)) {
+	if p.WheelAtBoundary(wheelMsg(editorX, 5, true)) {
 		t.Fatal("reverse event after boundary must be movable")
 	}
 }

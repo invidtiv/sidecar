@@ -19,6 +19,7 @@ func layoutTestPlugin(t *testing.T, contents ...string) *Plugin {
 	p.listWidth = 30
 	p.notePlaces = make(map[string]notePlace)
 	p.previewMode = true
+	p.markdownView = false
 	p.notes = make([]Note, len(contents))
 	for i, content := range contents {
 		p.notes[i] = Note{ID: string(rune('a' + i)), Content: content}
@@ -237,8 +238,10 @@ func TestPreviewTruncationIsRuneSafe(t *testing.T) {
 
 	p := layoutTestPlugin(t, line)
 	p.previewMode = true
+	p.markdownView = false
 	p.previewWrapEnabled = false
 	p.previewLines = []string{line}
+	p.invalidateViewSurface()
 	out := p.renderPreviewContent(4, 3)
 	if !utf8.ValidString(out) {
 		t.Fatalf("preview render is not valid UTF-8: %q", out)
@@ -251,8 +254,10 @@ func TestPreviewTruncationIsRuneSafe(t *testing.T) {
 func TestPreviewHasNoGutter(t *testing.T) {
 	p := layoutTestPlugin(t, "hello")
 	p.previewMode = true
+	p.markdownView = false
 	p.previewWrapEnabled = false
 	p.previewLines = []string{"hello"}
+	p.invalidateViewSurface()
 	out := p.renderPreviewContent(3, 20)
 	if strings.Contains(out, "~") {
 		t.Fatalf("preview still draws ~ filler: %q", out)

@@ -1,37 +1,24 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 1 implemented on `notes-overhaul`; review changes requested — Phase 2 blocked
+**Status:** Phase 2 implemented on `notes-overhaul` (td-caca7d)
 **Created:** 2026-08-17
-**Phase 1:** td-71789d (`e312ddd4`, `055d9f7e`, `cc907480`); blocker td-244d0b
+**Phase 1:** td-71789d; save-ownership follow-up td-244d0b
+**Phase 2:** td-caca7d (td-2a63f0 mapping, td-6f24d9 glamour view)
 
 ## Implementation status (reviewed 2026-08-17)
 
-Phase 1 is present on the `notes-overhaul` worktree at implementation head `e983d041`,
-but it is not on `main` and is not approved for merge yet. Review confirmed the title,
+Phase 1 is present on the `notes-overhaul` worktree. Review confirmed the title,
 paste, Unicode search/backspace, stale-epoch, task-error, secure-temp-file, shared-layout,
-place-carry, no-renderer-swap, scrollbar, and wheel changes through code inspection and
-`go test ./internal/plugins/notes/`. An isolated `tmux-drive.sh` pass also confirmed the
-wide and narrow Notes surfaces without touching the default tmux server or live Sidecar
-state.
+place-carry, no-renderer-swap, scrollbar, and wheel changes. td-244d0b closed the
+leave-before-debounce / overlapping-save holes.
 
-One Phase 1 data-loss blocker remains, so td-71789d has been reopened:
-
-- **td-244d0b — dirty built-in edits can be lost.** `AutoSaveTickMsg` saves only while
-  the editor pane owns focus. Type, press `Tab` before the one-second debounce, and the
-  tick is ignored; note/filter/project transitions can then replace the textarea and
-  clear `editorDirty`. The isolated proof showed the new text in Sidecar while
-  `td note show` still returned the old body after the tick. An older in-flight save can
-  also clear `editorDirty` after newer typing because `NoteContentSavedMsg` carries no
-  note/buffer generation. Fix both ownership paths, surface save failures, and cover
-  leave-before-debounce, navigation-before-debounce, and overlapping-save tests before
-  closing Phase 1.
-
-**Phase 2 gate:** not green yet. Close and independently review td-244d0b, sync the
-worktree's one dependency-only commit from `main`, then rerun the focused and integrated
-gates. The remaining preview-wrap mismatch is Phase 2 work rather than a reason to widen
-the save fix: with the shared line-wrap preference off, raw preview truncates while the
-textarea wraps, so the rendered/raw/edit transition still reflows long lines. Phase 2's
-mapping steel thread must choose one visual-row policy and add a real transition test.
+**Phase 2 (this work):** glamour is the default Notes view. `internal/markdown.RenderMapped`
+returns lines plus goldmark/wrap-math source anchors without changing `RenderContent`.
+An ordinary wrapping paragraph has a tested click/scroll → source cursor journey.
+`m` on `notes-preview` toggles rendered/raw. Rendered, raw, and edit always wrap at
+`editorLayout.wrapColumn` — the wrap-off truncate path is gone. Tab from the list
+focuses the resting view (so `m` and j/k are reachable); Enter/i/click enter edit
+at the mapped source line and keep that line on the clicked screen row.
 
 ## Goal
 

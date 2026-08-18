@@ -20,6 +20,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/rivo/uniseg v0.4.7
+	github.com/yuin/goldmark v1.7.8
 	golang.org/x/term v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.41.0
@@ -59,7 +60,6 @@ require (
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/soniakeys/quant v1.0.0 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	github.com/yuin/goldmark v1.7.8 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/image v0.32.0 // indirect

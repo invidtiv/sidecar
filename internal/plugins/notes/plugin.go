@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
@@ -102,10 +103,19 @@ type Plugin struct {
 	previewMode    bool           // true = read-only preview, false = editing
 
 	// Preview mode state (read-only navigation)
-	previewLines       []string // Lines for preview mode rendering
-	previewCursorLine  int      // Cursor line for preview mode navigation
-	previewScrollOff   int      // Scroll offset for preview mode
-	previewWrapEnabled bool     // true = wrap long lines, false = truncate
+	previewLines       []string // Source lines; the view surface is derived from these
+	previewCursorLine  int      // Visual row in view mode; source line in edit mode
+	previewScrollOff   int      // Visual row offset in view mode; source offset in edit
+	previewWrapEnabled bool     // retained for state compat; view/edit always wrap
+
+	// markdownView is the resting Notes body: glamour-rendered markdown.
+	// false is the raw source view (`m`). Both wrap at editorLayout.wrapColumn.
+	markdownView     bool
+	md               *markdown.Renderer
+	viewSurface      markdown.MappedRender
+	viewSurfaceSrc   string
+	viewSurfaceWidth int
+	viewSurfaceMD    bool
 
 	// Per-note view/edit place for this session (not persisted).
 	notePlaces map[string]notePlace
@@ -184,9 +194,12 @@ type Plugin struct {
 }
 
 // notePlace is the session-only view/edit position for one note.
+// previewScrollOff / previewCursorLine are stored as source lines so they
+// survive rendered/raw toggles and width changes.
 type notePlace struct {
 	previewScrollOff  int
 	previewCursorLine int
+	sourceCol         int
 	editRow           int
 	editCol           int
 	editScrollOff     int
@@ -238,10 +251,13 @@ type UndoAction struct {
 
 // New creates a new Notes plugin.
 func New() *Plugin {
+	md, _ := markdown.NewRenderer()
 	p := &Plugin{
 		mouseHandler: mouse.NewHandler(),
 		inlineEditor: tty.New(nil),
 		previewMode:  true,
+		markdownView: true,
+		md:           md,
 		notePlaces:   make(map[string]notePlace),
 	}
 	p.clearInlineEditorAttachKey()
@@ -309,7 +325,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.previewLines = nil
 	p.previewCursorLine = 0
 	p.previewScrollOff = 0
-	p.previewWrapEnabled = state.GetLineWrapEnabled()
+	p.previewWrapEnabled = true
+	p.markdownView = true
+	p.invalidateViewSurface()
 	p.notePlaces = make(map[string]notePlace)
 	p.pendingInlineEditID = ""
 	p.pendingInlineEditPath = ""
@@ -777,9 +795,10 @@ func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
 	oldValue := p.editorTextarea.Value()
 	if p.previewMode {
-		row := p.previewCursorLine
-		p.insertAtPreviewLine(content)
-		newRow, newCol := pasteInsertPlace(row, content)
+		p.ensureViewSurface()
+		a := p.viewSurface.At(p.previewCursorLine)
+		p.insertAtSourceLine(a.SourceLine, content)
+		newRow, newCol := pasteInsertPlace(a.SourceLine, content)
 		if cmd := p.enterEditAt(newRow, newCol); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -799,15 +818,14 @@ func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
 	return p, tea.Batch(cmds...)
 }
 
-// insertAtPreviewLine inserts text at the start of the current preview line
+// insertAtSourceLine inserts text at the start of the given source line
 // via SetValue. The caller must place the cursor at the insert point —
 // SetValue leaves it at EOF.
-func (p *Plugin) insertAtPreviewLine(content string) {
+func (p *Plugin) insertAtSourceLine(row int, content string) {
 	lines := strings.Split(p.editorTextarea.Value(), "\n")
 	if len(lines) == 0 {
 		lines = []string{""}
 	}
-	row := p.previewCursorLine
 	if row < 0 {
 		row = 0
 	}
@@ -816,6 +834,7 @@ func (p *Plugin) insertAtPreviewLine(content string) {
 	}
 	lines[row] = content + lines[row]
 	p.editorTextarea.SetValue(strings.Join(lines, "\n"))
+	p.invalidateViewSurface()
 }
 
 // pasteInsertPlace is the (row, col) after prepending content at startRow.
@@ -935,20 +954,22 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 	}
 
-	// Tab switches between panes (only if editor has a note open)
+	// Tab switches between panes (only if editor has a note open).
+	// Landing on the body focuses the resting view so `m` and j/k work;
+	// Enter/i/click are what enter edit.
 	if key == "tab" && p.editorNote != nil {
 		if p.activePane == PaneList {
 			p.activePane = PaneEditor
-			if p.viewFilter != FilterActive {
-				p.previewMode = true
-				p.editorTextarea.Blur()
-				return p, nil
+			if !p.previewMode {
+				p.leaveEditToView()
 			}
-			return p, p.enterEditAtPreviewPlace()
+			p.editorTextarea.Blur()
+			return p, nil
 		}
-		p.captureEditPlace()
+		if !p.previewMode {
+			p.leaveEditToView()
+		}
 		p.activePane = PaneList
-		p.editorTextarea.Blur()
 		return p, p.persistDirtyEditor()
 	}
 
@@ -1088,15 +1109,13 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	switch key {
 	case "tab":
-		p.captureEditPlace()
+		p.leaveEditToView()
 		p.activePane = PaneList
-		p.editorTextarea.Blur()
 		return p, p.persistDirtyEditor()
 
 	case "esc":
-		p.captureEditPlace()
+		p.leaveEditToView()
 		p.activePane = PaneList
-		p.editorTextarea.Blur()
 		return p, p.persistDirtyEditor()
 
 	case "ctrl+s":
@@ -1126,11 +1145,7 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	newValue := p.editorTextarea.Value()
 	if newValue != oldValue {
 		p.editorDirty = true
-		// Update preview lines for when we switch to preview
-		p.previewLines = strings.Split(newValue, "\n")
-		if len(p.previewLines) == 0 {
-			p.previewLines = []string{""}
-		}
+		p.syncPreviewFromTextarea()
 		return p, tea.Batch(cmd, p.startAutoSaveTimer())
 	}
 
@@ -1172,7 +1187,8 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		return p, p.copyEditorContent()
 
 	case "j", "down", "ctrl+n":
-		if p.previewCursorLine < len(p.previewLines)-1 {
+		p.ensureViewSurface()
+		if p.previewCursorLine < len(p.viewSurface.Lines)-1 {
 			p.previewCursorLine++
 		}
 		p.ensurePreviewCursorVisible()
@@ -1188,15 +1204,14 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		p.previewScrollOff = 0
 
 	case "G":
-		if len(p.previewLines) > 0 {
-			p.previewCursorLine = len(p.previewLines) - 1
+		p.ensureViewSurface()
+		if len(p.viewSurface.Lines) > 0 {
+			p.previewCursorLine = len(p.viewSurface.Lines) - 1
 		}
 		p.ensurePreviewCursorVisible()
 
-	case "w":
-		p.previewWrapEnabled = !p.previewWrapEnabled
-		_ = state.SetLineWrapEnabled(p.previewWrapEnabled)
-		p.previewScrollOff = 0
+	case "m":
+		p.toggleMarkdownView()
 	}
 
 	return p, nil
@@ -1318,7 +1333,7 @@ func (p *Plugin) setTextareaCursorAndScroll(row, col, scrollOff int) {
 	p.previewScrollOff = scrollOff
 }
 
-// enterEditAtPreviewPlace drops into the textarea on the preview source line
+// enterEditAtPreviewPlace drops into the textarea on the mapped source line
 // and keeps that line on (or near) the same screen row.
 func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 	if p.viewFilter != FilterActive || p.editorNote == nil {
@@ -1330,17 +1345,52 @@ func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 		}
 		return nil
 	}
-	return p.enterEditAt(p.previewCursorLine, 0)
+	p.ensureViewSurface()
+	a := p.viewSurface.At(p.previewCursorLine)
+	return p.enterEditAt(a.SourceLine, a.SourceCol)
 }
 
-// enterEditAt switches to edit mode at a source line/column without changing
-// the current preview scroll offset more than needed to keep that line visible.
+// enterEditAt switches to edit mode at a source line/column. The current
+// visual screen row (previewCursorLine - previewScrollOff) is preserved so
+// the source line sits on (or near) the same row the user was looking at.
 func (p *Plugin) enterEditAt(row, col int) tea.Cmd {
+	screenRow := p.previewCursorLine - p.previewScrollOff
+	if screenRow < 0 {
+		screenRow = 0
+	}
 	p.previewMode = false
-	p.setTextareaCursorAndScroll(row, col, p.previewScrollOff)
+	editScroll := row - screenRow
+	if editScroll < 0 {
+		editScroll = 0
+	}
+	p.setTextareaCursorAndScroll(row, col, editScroll)
 	// Always return Focus so the blink cmd is not lost if seedTextareaViewport
 	// already focused the textarea to populate its viewport.
 	return p.editorTextarea.Focus()
+}
+
+// leaveEditToView returns the body to the resting rendered/raw view, mapping
+// the textarea cursor back to a visual row on the same screen row.
+func (p *Plugin) leaveEditToView() {
+	if p.editorNote == nil {
+		p.previewMode = true
+		return
+	}
+	srcLine := p.editorTextarea.Line()
+	srcCol := p.editorTextarea.Column()
+	screenRow := srcLine - p.previewScrollOff
+	if screenRow < 0 {
+		screenRow = 0
+	}
+	p.syncPreviewFromTextarea()
+	p.previewMode = true
+	p.ensureViewSurface()
+	visual := p.viewSurface.VisualRowForSource(srcLine, srcCol)
+	p.previewCursorLine = visual
+	p.previewScrollOff = visual - screenRow
+	p.ensurePreviewCursorVisible()
+	p.editorTextarea.Blur()
+	p.rememberCurrentPlace()
 }
 
 // captureEditPlace writes the textarea cursor/viewport back onto the preview
@@ -1365,21 +1415,28 @@ func (p *Plugin) rememberCurrentPlace() {
 		p.notePlaces = make(map[string]notePlace)
 	}
 	place := p.notePlaces[p.editorNote.ID]
-	place.previewScrollOff = p.previewScrollOff
-	place.previewCursorLine = p.previewCursorLine
-	if !p.previewMode {
+	if p.previewMode {
+		p.ensureViewSurface()
+		cursor := p.viewSurface.At(p.previewCursorLine)
+		scroll := p.viewSurface.At(p.previewScrollOff)
+		place.previewCursorLine = cursor.SourceLine
+		place.previewScrollOff = scroll.SourceLine
+		place.sourceCol = cursor.SourceCol
+	} else {
 		place.editRow = p.editorTextarea.Line()
 		place.editCol = p.editorTextarea.Column()
 		place.editScrollOff = p.previewScrollOff
 		place.hasEdit = true
 		place.previewCursorLine = place.editRow
 		place.previewScrollOff = place.editScrollOff
+		place.sourceCol = place.editCol
 	}
 	p.notePlaces[p.editorNote.ID] = place
 }
 
 func (p *Plugin) restorePlace(noteID string) {
 	place, ok := p.notePlaces[noteID]
+	p.ensureViewSurface()
 	if !ok {
 		p.previewCursorLine = 0
 		p.previewScrollOff = 0
@@ -1387,15 +1444,18 @@ func (p *Plugin) restorePlace(noteID string) {
 		p.ensurePreviewCursorVisible()
 		return
 	}
-	p.previewCursorLine = place.previewCursorLine
-	p.previewScrollOff = place.previewScrollOff
 	if place.hasEdit {
 		p.setTextareaCursorAndScroll(place.editRow, place.editCol, place.editScrollOff)
 	} else {
-		p.setTextareaCursorAndScroll(place.previewCursorLine, 0, place.previewScrollOff)
+		p.setTextareaCursorAndScroll(place.previewCursorLine, place.sourceCol, place.previewScrollOff)
 	}
-	p.previewCursorLine = place.previewCursorLine
-	p.previewScrollOff = place.previewScrollOff
+	if p.previewMode {
+		p.previewCursorLine = p.viewSurface.VisualRowForSource(place.previewCursorLine, place.sourceCol)
+		p.previewScrollOff = p.viewSurface.VisualRowForSource(place.previewScrollOff, 0)
+	} else {
+		p.previewCursorLine = place.previewCursorLine
+		p.previewScrollOff = place.previewScrollOff
+	}
 	p.ensurePreviewCursorVisible()
 }
 
@@ -1407,6 +1467,60 @@ func (p *Plugin) syncPreviewFromTextarea() {
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
+	p.invalidateViewSurface()
+}
+
+func (p *Plugin) invalidateViewSurface() {
+	p.viewSurfaceSrc = ""
+	p.viewSurfaceWidth = 0
+	p.viewSurface = markdown.MappedRender{}
+}
+
+func (p *Plugin) ensureViewSurface() {
+	src := strings.Join(p.previewLines, "\n")
+	if len(p.previewLines) == 0 {
+		src = ""
+	}
+	width := 1
+	if p.width > 0 && p.height > 0 {
+		width = p.editorLayout().wrapColumn
+	}
+	if width < 1 {
+		width = 1
+	}
+	if p.viewSurfaceSrc == src && p.viewSurfaceWidth == width && p.viewSurfaceMD == p.markdownView && len(p.viewSurface.Lines) > 0 {
+		return
+	}
+	if p.markdownView && p.md != nil {
+		p.viewSurface = p.md.RenderMapped(src, width)
+	} else {
+		p.viewSurface = markdown.MapWrappedSource(src, width)
+	}
+	if len(p.viewSurface.Lines) == 0 {
+		p.viewSurface = markdown.MappedRender{
+			Lines:   []string{""},
+			Anchors: []markdown.Anchor{{Precise: true}},
+		}
+	}
+	p.viewSurfaceSrc = src
+	p.viewSurfaceWidth = width
+	p.viewSurfaceMD = p.markdownView
+}
+
+func (p *Plugin) toggleMarkdownView() {
+	if !p.previewMode {
+		return
+	}
+	p.ensureViewSurface()
+	a := p.viewSurface.At(p.previewCursorLine)
+	screenRow := p.previewCursorLine - p.previewScrollOff
+	p.markdownView = !p.markdownView
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+	visual := p.viewSurface.VisualRowForSource(a.SourceLine, a.SourceCol)
+	p.previewCursorLine = visual
+	p.previewScrollOff = visual - screenRow
+	p.ensurePreviewCursorVisible()
 }
 
 // syncEditorFromNote refreshes editor/preview buffers from the note content.
@@ -1419,11 +1533,9 @@ func (p *Plugin) syncEditorFromNote(note *Note) {
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
+	p.invalidateViewSurface()
 	if p.previewCursorLine < 0 {
 		p.previewCursorLine = 0
-	}
-	if p.previewCursorLine >= len(p.previewLines) {
-		p.previewCursorLine = len(p.previewLines) - 1
 	}
 	p.ensurePreviewCursorVisible()
 	p.editorDirty = false
@@ -1455,9 +1567,10 @@ func (p *Plugin) loadNoteIntoEditor() tea.Cmd {
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
+	p.invalidateViewSurface()
 	p.editorDirty = false
-	p.restorePlace(note.ID)
 	p.previewMode = true
+	p.restorePlace(note.ID)
 	p.editorTextarea.Blur()
 	return nil
 }
@@ -1482,6 +1595,7 @@ func (p *Plugin) loadNoteIntoEditorAtEnd() tea.Cmd {
 	if len(p.previewLines) == 0 {
 		p.previewLines = []string{""}
 	}
+	p.invalidateViewSurface()
 	p.editorDirty = false
 	p.previewMode = false
 	p.updateTextareaDimensions()
@@ -2066,6 +2180,22 @@ func (p *Plugin) Commands() []plugin.Command {
 					plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
 				)
 			}
+			renderName := "Raw"
+			if !p.markdownView {
+				renderName = "Render"
+			}
+			cmds = append(cmds, plugin.Command{
+				ID:          "toggle-markdown",
+				Name:        renderName,
+				Description: "Toggle rendered/raw markdown",
+				Category:    plugin.CategoryView,
+				Context:     "notes-preview",
+				Priority:    5,
+				Handler: func() tea.Cmd {
+					p.toggleMarkdownView()
+					return nil
+				},
+			})
 			return cmds
 		}
 		cmds := []plugin.Command{

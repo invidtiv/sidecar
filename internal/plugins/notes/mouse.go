@@ -181,12 +181,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		// for. With no note loaded the pane is a placeholder — focusing a
 		// textarea over it would show a caret that the list keys then ignore.
 		if p.viewFilter == FilterActive && p.editorNote != nil {
-			clickedRow := p.screenYToEditorLine(action.Y)
-			clickedCol := p.screenXToEditorCol(action.X)
-			p.previewCursorLine = clickedRow
-			cmd := p.enterEditAt(clickedRow, clickedCol)
+			srcLine, srcCol := p.clickToSource(action.X, action.Y)
+			cmd := p.enterEditAt(srcLine, srcCol)
 			// Prepare drag-to-select (use regionEditorLine for drag dispatch)
-			p.selection.PrepareDrag(clickedRow, clickedCol, action.Region.Rect)
+			p.selection.PrepareDrag(srcLine, srcCol, action.Region.Rect)
 			p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, 0)
 			return p, cmd
 		}
@@ -196,14 +194,16 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		if lineIdx, ok := action.Region.Data.(int); ok {
 			p.activePane = PaneEditor
 			if p.viewFilter == FilterActive {
-				col := p.screenXToEditorCol(action.X)
-				p.previewCursorLine = lineIdx
-				cmd := p.enterEditAt(lineIdx, col)
-				p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
-				p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, lineIdx)
+				srcLine, srcCol := p.clickToSource(action.X, action.Y)
+				if p.previewMode {
+					p.previewCursorLine = lineIdx
+				}
+				cmd := p.enterEditAt(srcLine, srcCol)
+				p.selection.PrepareDrag(srcLine, srcCol, action.Region.Rect)
+				p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, srcLine)
 				return p, cmd
 			}
-			// Preview mode: position cursor and prepare selection
+			// Archived/deleted: read-only. Position the view cursor only.
 			p.previewCursorLine = lineIdx
 			col := p.editorColAtScreenX(action.X, lineIdx)
 			p.selection.PrepareDrag(lineIdx, col, action.Region.Rect)
@@ -373,7 +373,8 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 	// Get line count based on mode
 	var lineCount int
 	if p.previewMode {
-		lineCount = len(p.previewLines)
+		p.ensureViewSurface()
+		lineCount = len(p.viewSurface.Lines)
 	} else {
 		lineCount = p.editorTextarea.LineCount()
 		// Keep previewLines synced for getSelectedText
@@ -432,10 +433,62 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	return p, nil
 }
 
+// clickToSource maps a click in the editor body to a source line/column.
+// In view mode the row is a visual row of the mapped surface; in edit mode
+// it is a textarea source line. Sets previewCursorLine to the visual row
+// so enterEditAt can keep the clicked screen row.
+func (p *Plugin) clickToSource(x, y int) (line, col int) {
+	if p.previewMode {
+		visual := p.screenYToVisualRow(y)
+		p.previewCursorLine = visual
+		p.ensureViewSurface()
+		a := p.viewSurface.At(visual)
+		colInRow := p.screenXToEditorCol(x)
+		col = a.SourceCol + colInRow
+		if col < 0 {
+			col = 0
+		}
+		return a.SourceLine, col
+	}
+	return p.screenYToEditorLine(y), p.screenXToEditorCol(x)
+}
+
+func (p *Plugin) screenYToVisualRow(y int) int {
+	visualRow := y - p.editorContentStartY()
+	if visualRow < 0 {
+		visualRow = 0
+	}
+	row := p.previewScrollOff + visualRow
+	p.ensureViewSurface()
+	n := len(p.viewSurface.Lines)
+	if n == 0 {
+		return 0
+	}
+	if row >= n {
+		row = n - 1
+	}
+	if row < 0 {
+		row = 0
+	}
+	return row
+}
+
 // editorColAtScreenX maps a screen X coordinate to a visual column within
 // the editor content for the given line index.
 func (p *Plugin) editorColAtScreenX(x, lineIdx int) int {
 	relX := p.screenXToEditorCol(x)
+
+	if p.previewMode {
+		p.ensureViewSurface()
+		if lineIdx < 0 || lineIdx >= len(p.viewSurface.Lines) {
+			return 0
+		}
+		line := p.viewSurface.Lines[lineIdx]
+		if relX > len([]rune(line)) {
+			return len([]rune(line))
+		}
+		return relX
+	}
 
 	if lineIdx < 0 || lineIdx >= len(p.previewLines) {
 		return 0
@@ -524,7 +577,8 @@ func (p *Plugin) getSelectedText() []string {
 	// Get lines based on mode
 	var allLines []string
 	if p.previewMode {
-		allLines = p.previewLines
+		p.ensureViewSurface()
+		allLines = p.viewSurface.Lines
 	} else {
 		// In edit mode, split textarea content into lines
 		allLines = strings.Split(p.editorTextarea.Value(), "\n")
@@ -625,7 +679,8 @@ func (p *Plugin) registerEditorLineRegions() {
 	// Determine line count based on mode
 	var lineCount int
 	if p.previewMode {
-		lineCount = len(p.previewLines)
+		p.ensureViewSurface()
+		lineCount = len(p.viewSurface.Lines)
 	} else {
 		lineCount = p.editorTextarea.LineCount()
 	}

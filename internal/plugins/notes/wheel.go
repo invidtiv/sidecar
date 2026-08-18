@@ -74,7 +74,8 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		// See WheelAtBoundary doc: textarea cannot honestly report a boundary.
 		return false
 	}
-	if len(p.previewLines) == 0 {
+	p.ensureViewSurface()
+	if len(p.viewSurface.Lines) == 0 && len(p.previewLines) == 0 {
 		return true
 	}
 	return p.previewBounds().AtBoundary(delta)
