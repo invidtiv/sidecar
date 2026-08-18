@@ -528,9 +528,17 @@ func TestFailedExportSaveRetainsFileAndCtrlSRetry(t *testing.T) {
 	if _, err := os.Stat(path); err != nil || p.pendingInlineEditPath != path {
 		t.Fatalf("failed export was not retained: stat=%v pending=%q", err, p.pendingInlineEditPath)
 	}
+	intentSequence := p.activeExport.Sequence
+	requestID := p.activeExport.RequestID
 	_, retry := p.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if retry == nil {
 		t.Fatal("Ctrl-S did not retry the retained export")
+	}
+	if p.activeExport.Sequence != intentSequence {
+		t.Fatalf("retry promoted content intent sequence from %d to %d", intentSequence, p.activeExport.Sequence)
+	}
+	if p.activeExport.RequestID == requestID {
+		t.Fatal("retry did not allocate a new attempt request ID")
 	}
 	drainNotesCmd(t, p, retry)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -748,6 +756,67 @@ func TestNewerQueuedExportSupersedesFailedOlderExit(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("superseded export was not cleaned after final success: %s", path)
 		}
+	}
+}
+
+func TestQueuedExportAfterObservedFailureSupersedesOlderRetry(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.store = &failOnceSaveStore{noteStore: p.store, err: errors.New("first exit busy")}
+	firstPath := filepath.Join(t.TempDir(), "failed-first.md")
+	secondPath := filepath.Join(t.TempDir(), "final-second.md")
+	if err := os.WriteFile(firstPath, []byte("failed-old-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondPath, []byte("new-final-A2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	drainNotesCmd(t, p, p.saveRetainedExport(a.ID, firstPath, 0))
+	if p.activeExport.Path != firstPath || p.exportSaveInFlight {
+		t.Fatal("failed older export did not remain available for retry")
+	}
+
+	next := p.saveRetainedExport(a.ID, secondPath, 0)
+	if next == nil {
+		t.Fatal("newer export did not supersede the observed failed export")
+	}
+	drainNotesCmd(t, p, next)
+	assertStoredContent(t, p.store, a.ID, "new-final-A2")
+	for _, path := range []string{firstPath, secondPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("acknowledged or superseded export was not removed: %s", path)
+		}
+	}
+}
+
+func TestBuiltInAcknowledgmentRefusesStaleFailedExportRetry(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	p.store = &failOnceSaveStore{noteStore: p.store, err: errors.New("first exit busy")}
+	exportPath := filepath.Join(t.TempDir(), "failed-old.md")
+	if err := os.WriteFile(exportPath, []byte("failed-old-A1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	drainNotesCmd(t, p, p.saveRetainedExport(a.ID, exportPath, 0))
+	if p.activeExport.Path != exportPath {
+		t.Fatal("failed export was not retained for the retry check")
+	}
+
+	p.editorNote = a
+	p.lastSavedContent = "body-a"
+	p.editorTextarea.SetValue("newer-built-in-A2")
+	p.editorDirty = true
+	drainNotesCmd(t, p, p.saveEditorContent())
+	assertStoredContent(t, p.store, a.ID, "newer-built-in-A2")
+
+	_, retry := p.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if retry != nil {
+		t.Fatal("durably superseded failed export was retried")
+	}
+	assertStoredContent(t, p.store, a.ID, "newer-built-in-A2")
+	if p.activeExport.Path != "" {
+		t.Fatal("durably superseded export remained active")
+	}
+	if _, err := os.Stat(exportPath); !os.IsNotExist(err) {
+		t.Fatal("durably superseded failed export was not retired")
 	}
 }
 

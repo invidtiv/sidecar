@@ -65,10 +65,11 @@ in flight. Same-project list loads and external-editor preparations have request
 so out-of-order completions cannot regress the cache or open an older note. Built-in saves,
 periodic inline autosaves, final editor exports, and shutdown flushes share one per-note
 ordered write lane. Multiple editor exits queue in intent order; every export remains on
-disk after save failure and Ctrl-S retries it, with successful acknowledgment as the cleanup
+disk after save failure and Ctrl-S retries the same content intent without promoting it
+above newer queued or acknowledged content, with successful acknowledgment as the cleanup
 boundary. Newer canonical acknowledgments retire obsolete exports, and slow final/retry
-exports share the visible saving footer with built-in saves. Coalesced typing/deletion undo bursts also copy one
-full-note snapshot per undo unit rather than per keystroke. The branch includes current
+exports share the visible saving footer with built-in saves. Coalesced typing/deletion undo
+bursts also copy one full-note snapshot per undo unit rather than per keystroke. The branch includes current
 `main` as of `f44d2689`; deterministic ownership probes and the Notes race suite are green,
 as are focused markdown/keymap tests, `go test ./...`, `go build ./...`, and an isolated
 real-app edit/save/navigation proof. Independent re-review is the remaining merge gate.

@@ -2278,6 +2278,26 @@ func (p *Plugin) retryActiveExport() tea.Cmd {
 	if p.activeExport.Path == "" || p.exportSaveInFlight || p.ctx == nil || p.store == nil {
 		return nil
 	}
+	// A retry is another attempt to persist the same content intent, not a new
+	// edit. If a newer intent exists, do not promote this older file above it.
+	// Keep it recoverable until the newer intent is durable, or remove it now
+	// when a canonical acknowledgment has already superseded it.
+	if !p.writeIsLatest(p.activeExport.ID, p.activeExport.Sequence) ||
+		p.writeIsDurablySuperseded(p.activeExport.ID, p.activeExport.Sequence) {
+		finished := p.activeExport
+		p.activeExport = retainedExport{}
+		p.saveErr = nil
+		if p.pendingInlineEditPath == finished.Path {
+			p.pendingInlineEditID = ""
+			p.pendingInlineEditPath = ""
+		}
+		if p.writeIsDurablySuperseded(finished.ID, finished.Sequence) {
+			removeNoteExport(finished.Path)
+		} else {
+			p.supersededExports = append(p.supersededExports, finished)
+		}
+		return p.startNextRetainedExport()
+	}
 	intent := p.activeExport
 	p.exportSaveRequestID++
 	intent.RequestID = p.exportSaveRequestID
@@ -2285,7 +2305,6 @@ func (p *Plugin) retryActiveExport() tea.Cmd {
 	intent.ProjectRoot = p.ctx.ProjectRoot
 	intent.Store = p.store
 	intent.StartedAt = time.Now().UnixNano()
-	intent.Sequence = p.nextWriteSequence(intent.ID)
 	return p.startRetainedExport(intent)
 }
 
