@@ -106,12 +106,21 @@ func TestPathWatcherCoalescesABurst(t *testing.T) {
 	target := filepath.Join(dir, "doc.md")
 	write(t, target, "one")
 
-	// This test is about the quiet period, so the latency cap is set far out of
-	// reach. With a cap the burst could outrun, a loaded machine flushes
-	// mid-burst and the remaining writes land as a second, legitimate signal —
-	// which looks exactly like a coalescing failure. TestPathWatcherMaxLatency
-	// covers the cap itself.
-	w := newTestWatcher(t, Config{Quiet: 20 * time.Millisecond, MaxLatency: time.Minute})
+	// Neither timer may fire *during* the burst, or this reports a failure that
+	// is really correct behavior. The signal channel holds one slot, so a
+	// mid-burst flush leaves a signal already pending: awaitSignal then returns
+	// instantly on that stale one, and the flush for the tail of the burst
+	// arrives afterwards as a "second" signal inside the window below.
+	//
+	// That is what reddened CI. Quiet was 20ms, and 12 open/write/close cycles
+	// on a loaded Linux runner do not fit in 20ms, so the batch flushed
+	// mid-burst — while on a fast machine the whole burst beat the timer and the
+	// test passed. MaxLatency has to clear the whole burst for the same reason.
+	//
+	// A second is far more than 12 small writes need and still well under
+	// awaitSignal's timeout. TestPathWatcherMaxLatencyReportsUnderContinuousWrites
+	// covers the cap on purpose.
+	w := newTestWatcher(t, Config{Quiet: time.Second, MaxLatency: time.Minute})
 	w.Watch(File(target))
 
 	for i := range 12 {
