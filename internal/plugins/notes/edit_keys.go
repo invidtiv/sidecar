@@ -101,7 +101,7 @@ func (p *Plugin) snapshot() editSnapshot {
 }
 
 func (p *Plugin) prepareEdit(kind editOpKind) {
-	p.historyForCurrent().prepare(kind, p.snapshot(), time.Now())
+	p.historyForCurrent().prepareLazy(kind, p.snapshot, time.Now())
 }
 
 func (p *Plugin) restoreSnapshot(snap editSnapshot) {

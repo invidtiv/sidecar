@@ -709,6 +709,7 @@ func DefaultBindings() []Binding {
 		{Key: "a", Command: "show-archived", Context: "notes-list"},
 		{Key: "u", Command: "undo", Context: "notes-list"},
 		{Key: "r", Command: "refresh", Context: "notes-list"},
+		{Key: "ctrl+s", Command: "save", Context: "notes-list"},
 		// enter is the built-in editor; e is vim in the right pane; E leaves
 		// for $EDITOR. Three editors, three explicit keys — nothing infers one
 		// from a config value.
@@ -733,6 +734,7 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "cursor-up", Context: "notes-search"},
 		{Key: "ctrl+n", Command: "cursor-down", Context: "notes-search"},
 		{Key: "ctrl+p", Command: "cursor-up", Context: "notes-search"},
+		{Key: "ctrl+s", Command: "save", Context: "notes-search"},
 
 		// Notes preview context (read-only view)
 		{Key: "alt+c", Command: "copy-note", Context: "notes-preview"},
@@ -741,6 +743,7 @@ func DefaultBindings() []Binding {
 		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
 		{Key: "E", Command: "external-editor", Context: "notes-preview"},
 		{Key: "m", Command: "toggle-markdown", Context: "notes-preview"},
+		{Key: "ctrl+s", Command: "save", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},

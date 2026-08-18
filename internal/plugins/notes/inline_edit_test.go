@@ -838,9 +838,7 @@ func TestCapitalEOpensExternalEditor(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("E returned no command")
 	}
-	if _, ok := cmd().(plugin.OpenFileMsg); !ok {
-		t.Fatalf("E produced %T, want plugin.OpenFileMsg", cmd())
-	}
+	_ = prepareExternalEditor(t, p, cmd)
 }
 
 // TestCapitalEIsTypableInTheSimpleEditor is the regression that kept E out of
@@ -972,7 +970,8 @@ func TestUnsavedBufferSurvivesHandoffToTheOtherEditors(t *testing.T) {
 			p.editorNote = &p.notes[0]
 			p.editorTextarea.SetValue("edited but not yet autosaved")
 			p.editorDirty = true
-			p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			_, save := p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			drainNotesCmd(t, p, save)
 
 			p.Update(tc.key)
 
@@ -1072,10 +1071,7 @@ func TestExternalEditorWriteBack(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("openInExternalEditor returned no command")
 	}
-	open, ok := cmd().(plugin.OpenFileMsg)
-	if !ok {
-		t.Fatalf("openInExternalEditor produced %T, want plugin.OpenFileMsg", cmd())
-	}
+	open := prepareExternalEditor(t, p, cmd)
 	if p.pendingInlineEditID != noteID {
 		t.Fatalf("pendingInlineEditID = %q, want %q", p.pendingInlineEditID, noteID)
 	}

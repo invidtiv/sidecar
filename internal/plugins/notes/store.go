@@ -2,21 +2,47 @@ package notes
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	tdnotes "github.com/marcus/td/pkg/notes"
 
 	"github.com/marcus/sidecar/internal/tdroot"
 )
 
-const maxTitleLength = 80
+const (
+	maxTitleLength       = 80
+	tdNoteCommandTimeout = 8 * time.Second
+)
 
 // Note is the plugin's view of a td note.
 type Note = tdnotes.Note
+
+// noteStore is the persistence seam consumed by the plugin. Production uses
+// the td CLI-backed Store; tests can delay individual operations without
+// sleeping inside Bubble Tea's update loop.
+type noteStore interface {
+	Close() error
+	Create(title, content string) (*Note, error)
+	Delete(id string) error
+	Get(id string) (*Note, error)
+	List(includeArchived bool) ([]Note, error)
+	ListArchived() ([]Note, error)
+	ListDeleted() ([]Note, error)
+	TogglePin(id string) error
+	ToggleArchive(id string) error
+	Restore(id string) error
+	Unarchive(id string) error
+	SaveContent(id, content string) (*Note, error)
+	UpdateContent(id, content string) error
+	NotePath(id string) string
+}
 
 // Store persists notes through the td CLI. Sidecar must never open
 // .todos/issues.db itself — a second long-lived SQLite writer alongside
@@ -25,6 +51,7 @@ type Note = tdnotes.Note
 type Store struct {
 	baseDir   string
 	sessionID string
+	timeout   time.Duration
 
 	// td is set only by NewTestStore; when non-nil it replaces the CLI.
 	td *tdnotes.Store
@@ -37,7 +64,7 @@ type Store struct {
 // the issues.db path). sessionID, when non-empty, is exported as TD_SESSION_ID
 // for attribution.
 func NewStore(baseDir, sessionID string) (*Store, error) {
-	return &Store{baseDir: baseDir, sessionID: sessionID}, nil
+	return &Store{baseDir: baseDir, sessionID: sessionID, timeout: tdNoteCommandTimeout}, nil
 }
 
 // newInProcessStore opens an existing test database via td's in-process API.
@@ -47,7 +74,7 @@ func newInProcessStore(baseDir, sessionID string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{baseDir: baseDir, sessionID: sessionID, td: s}, nil
+	return &Store{baseDir: baseDir, sessionID: sessionID, timeout: tdNoteCommandTimeout, td: s}, nil
 }
 
 // NewTestStore creates an isolated in-process td database for tests.
@@ -56,7 +83,7 @@ func NewTestStore(baseDir, sessionID string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{baseDir: baseDir, sessionID: sessionID, td: s}, nil
+	return &Store{baseDir: baseDir, sessionID: sessionID, timeout: tdNoteCommandTimeout, td: s}, nil
 }
 
 // DefaultDBPath returns the default database path for a given workdir.
@@ -74,7 +101,13 @@ func (s *Store) Close() error {
 
 // run executes a td note subcommand and returns its stdout.
 func (s *Store) run(args ...string) ([]byte, error) {
-	cmd := exec.Command("td", append([]string{"-w", s.baseDir, "--json", "note"}, args...)...)
+	timeout := s.timeout
+	if timeout <= 0 {
+		timeout = tdNoteCommandTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "td", append([]string{"-w", s.baseDir, "--json", "note"}, args...)...)
 	cmd.Env = os.Environ()
 	if s.sessionID != "" {
 		cmd.Env = append(cmd.Env, "TD_SESSION_ID="+s.sessionID)
@@ -83,6 +116,9 @@ func (s *Store) run(args ...string) ([]byte, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("td note %s timed out after %s", args[0], timeout)
+		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = strings.TrimSpace(stdout.String())
@@ -288,19 +324,26 @@ func (s *Store) Unarchive(id string) error {
 // Title is set at create time (NV query / first line); content-only saves
 // must not clobber a title written via td note edit --title.
 func (s *Store) UpdateContent(id, content string) error {
+	_, err := s.SaveContent(id, content)
+	return err
+}
+
+// SaveContent updates only the body and returns td's canonical updated note.
+// Production deliberately performs one td invocation: `td note edit` already
+// validates that the note exists and is live. The in-process test adapter must
+// read the current title because the package API takes title and content.
+func (s *Store) SaveContent(id, content string) (*Note, error) {
+	if s.td == nil {
+		return s.runNote("edit", id, "--content", content)
+	}
 	note, err := s.Get(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if note == nil || note.DeletedAt != nil {
-		return fmt.Errorf("note not found: %s", id)
+		return nil, fmt.Errorf("note not found: %s", id)
 	}
-	if s.td != nil {
-		_, err = s.td.Update(id, note.Title, content)
-		return err
-	}
-	_, err = s.runNote("edit", id, "--content", content)
-	return err
+	return s.td.Update(id, note.Title, content)
 }
 
 // NotePath writes the note to a unique 0600 temp file for an external editor.

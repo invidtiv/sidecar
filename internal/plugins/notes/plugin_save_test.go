@@ -4,8 +4,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
@@ -13,7 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
-func TestLeaveBeforeDebounceStillSaves(t *testing.T) {
+func TestLeaveBeforeDebounceStartsNonblockingSave(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
 	p.activePane = PaneEditor
 	p.previewMode = false
@@ -23,314 +26,273 @@ func TestLeaveBeforeDebounceStillSaves(t *testing.T) {
 	p.autoSaveID = 4
 
 	_, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyTab})
-	if p.activePane != PaneList {
-		t.Fatal("tab did not leave the editor pane")
+	if p.activePane != PaneList || cmd == nil || !p.saveInFlight {
+		t.Fatalf("tab state: pane=%v cmd=%v saving=%v", p.activePane, cmd != nil, p.saveInFlight)
 	}
-	if cmd != nil {
-		t.Fatal("successful persist on tab should be silent")
+	if !p.editorDirty {
+		t.Fatal("tab declared the buffer clean before td completed")
 	}
-	if p.editorDirty {
-		t.Fatal("tab left the buffer dirty")
+	drainNotesCmd(t, p, cmd)
+	if p.editorDirty || p.saveInFlight {
+		t.Fatalf("completed save: dirty=%v saving=%v", p.editorDirty, p.saveInFlight)
 	}
-	got, err := p.store.Get(a.ID)
-	if err != nil || got == nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Content != "UNSAVED-leave" {
-		t.Fatalf("store = %q, want persisted on tab", got.Content)
-	}
-
-	// A matching tick after leaving the pane must still save if something
-	// left the buffer dirty (the generation is the owner, not the pane).
-	p.editorTextarea.SetValue("UNSAVED-tick")
-	p.editorDirty = true
-	p.autoSaveID = 5
-	p.activePane = PaneList
-	_, cmd = p.Update(AutoSaveTickMsg{ID: 5})
-	if cmd == nil {
-		t.Fatal("tick ignored because the list pane was focused")
-	}
-	saved, ok := cmd().(NoteContentSavedMsg)
-	if !ok {
-		t.Fatalf("tick produced %T, want NoteContentSavedMsg", cmd())
-	}
-	if saved.Err != nil || saved.Generation != 5 || saved.Content != "UNSAVED-tick" {
-		t.Fatalf("tick save = %+v", saved)
-	}
+	assertStoredContent(t, p.store, a.ID, "UNSAVED-leave")
 }
 
-func TestNavigateBeforeDebouncePersistsDirtyNote(t *testing.T) {
+func TestNavigateWaitsForSaveWithoutBlockingUpdate(t *testing.T) {
 	p, a, b := newTwoNoteSavePlugin(t)
-	p.activePane = PaneList
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
 	p.editorNote = a
-	p.cursor = 0
 	p.editorTextarea.SetValue("from-A")
 	p.editorDirty = true
-
 	p.cursor = 1
+
 	cmd := p.loadNoteIntoEditor()
-	if cmd != nil {
-		t.Fatal("persist on navigate returned an error toast")
+	if cmd == nil || p.editorNote.ID != a.ID {
+		t.Fatal("navigation should wait with A visible while its save is pending")
 	}
-	if p.editorDirty {
-		t.Fatal("navigate left the previous note dirty")
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = p.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Bubble Tea Update blocked behind slow note save")
 	}
+
+	close(blocked.release)
+	drainNotesMsg(t, p, <-result)
 	if p.editorNote == nil || p.editorNote.ID != b.ID {
-		t.Fatalf("editor note = %+v, want B", p.editorNote)
+		t.Fatalf("editor note = %+v, want B after save", p.editorNote)
 	}
-	got, err := p.store.Get(a.ID)
-	if err != nil || got == nil {
-		t.Fatalf("get A: %v", err)
-	}
-	if got.Content != "from-A" {
-		t.Fatalf("A content = %q, want persisted before loading B", got.Content)
-	}
+	assertStoredContent(t, p.store, a.ID, "from-A")
 }
 
-func TestSaveOverlapWithNewTypingKeepsDirty(t *testing.T) {
+func TestAutosaveOverlapKeepsNewTypingDirty(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
 	p.editorNote = a
 	p.editorTextarea.SetValue("first")
 	p.editorDirty = true
 	p.autoSaveID = 7
-
 	pending := p.saveEditorContent()
-	if pending == nil {
-		t.Fatal("saveEditorContent returned nil")
-	}
 
 	p.editorTextarea.SetValue("second")
 	p.editorDirty = true
 	p.autoSaveID = 8
-
-	_, cmd := p.Update(pending())
-	if cmd != nil {
-		t.Fatal("older save completion scheduled work")
-	}
-	if !p.editorDirty {
-		t.Fatal("older save completion cleared newer dirty state")
-	}
-	if got := p.editorTextarea.Value(); got != "second" {
-		t.Fatalf("buffer = %q, want second", got)
+	drainNotesCmd(t, p, pending)
+	if !p.editorDirty || p.lastSavedContent != "first" {
+		t.Fatalf("older completion: dirty=%v baseline=%q", p.editorDirty, p.lastSavedContent)
 	}
 
-	_, cmd = p.Update(AutoSaveTickMsg{ID: 8})
+	_, cmd := p.Update(AutoSaveTickMsg{ID: 8})
 	if cmd == nil {
-		t.Fatal("newer generation did not save")
+		t.Fatal("new debounce generation did not save")
 	}
-	saved := cmd().(NoteContentSavedMsg)
-	if saved.Err != nil {
-		t.Fatal(saved.Err)
-	}
-	_, cmd = p.Update(saved)
+	drainNotesCmd(t, p, cmd)
 	if p.editorDirty {
-		t.Fatal("matching save left dirty set")
+		t.Fatal("matching completion left dirty set")
 	}
-	got, err := p.store.Get(a.ID)
-	if err != nil || got == nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Content != "second" {
-		t.Fatalf("store = %q, want second", got.Content)
-	}
+	assertStoredContent(t, p.store, a.ID, "second")
 }
 
-func TestStaleSaveResultDoesNotClearDirty(t *testing.T) {
+func TestNavigationQueuesLatestBufferBehindInflightSave(t *testing.T) {
 	p, a, b := newTwoNoteSavePlugin(t)
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
 	p.editorNote = a
-	p.editorTextarea.SetValue("mine")
+	p.editorTextarea.SetValue("first")
 	p.editorDirty = true
-	p.autoSaveID = 3
+	p.autoSaveID = 1
+	first := p.saveEditorContent()
+	firstResult := make(chan tea.Msg, 1)
+	go func() { firstResult <- first() }()
+	<-blocked.started
 
-	stale := []NoteContentSavedMsg{
-		{ID: a.ID, Epoch: 99, Generation: 3, Content: "mine"},
-		{ID: b.ID, Epoch: 1, Generation: 3, Content: "mine"},
-		{ID: a.ID, Epoch: 1, Generation: 2, Content: "mine"},
-		{ID: a.ID, Epoch: 1, Generation: 3, Content: "other"},
+	p.editorTextarea.SetValue("latest")
+	p.editorDirty = true
+	p.autoSaveID = 2
+	p.cursor = 1
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		t.Fatal("navigation should join the in-flight save, not launch another")
 	}
-	for _, m := range stale {
-		_, cmd := p.Update(m)
-		if cmd != nil {
-			t.Fatalf("stale %+v scheduled work", m)
-		}
-		if !p.editorDirty {
-			t.Fatalf("stale %+v cleared dirty", m)
-		}
+	if !p.saveQueued {
+		t.Fatal("latest buffer was not queued behind in-flight save")
+	}
+
+	close(blocked.release)
+	msg := <-firstResult
+	_, next := p.Update(msg)
+	if next == nil || !p.saveInFlight {
+		t.Fatal("first completion did not start the queued latest save")
+	}
+	drainNotesCmd(t, p, next)
+	if p.editorNote == nil || p.editorNote.ID != b.ID {
+		t.Fatalf("editor note = %+v, want B", p.editorNote)
+	}
+	assertStoredContent(t, p.store, a.ID, "latest")
+}
+
+func TestPendingNavigationCanReturnToCurrentNote(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	p.editorNote = a
+	p.editorTextarea.SetValue("dirty")
+	p.editorDirty = true
+	p.cursor = 1
+	cmd := p.loadNoteIntoEditor()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+	p.cursor = 0
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		t.Fatal("returning to the current note launched another save")
+	}
+	close(blocked.release)
+	drainNotesMsg(t, p, <-result)
+	if p.editorNote == nil || p.editorNote.ID != a.ID {
+		t.Fatalf("stale pending navigation won: editor=%+v", p.editorNote)
 	}
 }
 
-func TestSaveFailureIsVisibleAndKeepsDirty(t *testing.T) {
-	p, a, _ := newTwoNoteSavePlugin(t)
+func TestSaveFailureStaysVisibleRetryableAndKeepsTransition(t *testing.T) {
+	p, a, b := newTwoNoteSavePlugin(t)
+	failing := &failOnceStore{noteStore: p.store, err: errors.New("database busy")}
+	p.store = failing
 	p.editorNote = a
 	p.editorTextarea.SetValue("keep-me")
 	p.editorDirty = true
 	p.autoSaveID = 1
-
-	_, cmd := p.Update(NoteContentSavedMsg{
-		ID: a.ID, Epoch: 1, Generation: 1, Content: "keep-me",
-		Err: errors.New("disk full"),
-	})
-	if !p.editorDirty {
-		t.Fatal("save error cleared dirty")
-	}
-	if got := p.editorTextarea.Value(); got != "keep-me" {
-		t.Fatalf("buffer = %q", got)
-	}
-	toast, ok := cmd().(msg.ToastMsg)
-	if !ok || !toast.IsError || !strings.Contains(toast.Message, "Save failed") {
-		t.Fatalf("toast = %T %+v", cmd(), cmd)
-	}
-
-	_ = p.store.Close()
-	p.editorDirty = true
 	p.cursor = 1
-	if cmd = p.loadNoteIntoEditor(); cmd == nil {
-		t.Fatal("failed persist on navigate produced no toast")
+
+	cmd := p.loadNoteIntoEditor()
+	failed := cmd().(NoteContentSavedMsg)
+	_, toastCmd := p.Update(failed)
+	if !p.editorDirty || p.editorNote.ID != a.ID || p.cursor != 0 {
+		t.Fatalf("failed save lost ownership: dirty=%v note=%v cursor=%d", p.editorDirty, p.editorNote.ID, p.cursor)
 	}
-	if !p.editorDirty {
-		t.Fatal("failed persist dropped the dirty buffer")
+	status, isErr := p.FooterStatus()
+	if !isErr || !strings.Contains(status, "Ctrl-S") {
+		t.Fatalf("footer status = %q error=%v", status, isErr)
 	}
-	if p.editorNote == nil || p.editorNote.ID != a.ID {
-		t.Fatal("failed persist still switched notes")
+	toast, ok := toastCmd().(msg.ToastMsg)
+	if !ok || !toast.IsError {
+		t.Fatalf("failure toast = %T %+v", toastCmd(), toast)
 	}
-	if p.cursor != 0 {
-		t.Fatalf("cursor = %d, want reverted to dirty note", p.cursor)
+
+	_, retry := p.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	if retry == nil {
+		t.Fatal("Ctrl-S from the list did not retry the failed save")
 	}
+	drainNotesCmd(t, p, retry)
+	if p.editorDirty || p.editorNote == nil || p.editorNote.ID != b.ID {
+		t.Fatalf("retry did not resume transition: dirty=%v note=%+v", p.editorDirty, p.editorNote)
+	}
+	assertStoredContent(t, p.store, a.ID, "keep-me")
 }
 
-func TestFilterChangePersistsDirtyNote(t *testing.T) {
+func TestFilterChangeRunsAfterDirtySave(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
 	p.editorNote = a
 	p.editorTextarea.SetValue("before-archive-view")
 	p.editorDirty = true
 
 	_, cmd := p.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
-	if p.editorDirty {
-		t.Fatal("filter change left dirty set")
+	if cmd == nil || p.viewFilter != FilterActive || p.editorNote == nil {
+		t.Fatal("filter changed before dirty content was durable")
 	}
-	if p.editorNote != nil {
-		t.Fatal("filter change did not abandon the editor")
+	drainNotesCmd(t, p, cmd)
+	if p.viewFilter != FilterArchived || p.editorNote != nil {
+		t.Fatalf("filter transition did not finish: filter=%v note=%+v", p.viewFilter, p.editorNote)
 	}
-	if cmd == nil {
-		t.Fatal("filter change should reload notes")
+	assertStoredContent(t, p.store, a.ID, "before-archive-view")
+}
+
+func TestContentSaveUpdatesCacheWithoutListReload(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	counting := &countingStore{noteStore: p.store}
+	p.store = counting
+	p.editorNote = &p.notes[0]
+	p.editorTextarea.SetValue("new body")
+	p.editorDirty = true
+	p.autoSaveID = 3
+
+	drainNotesCmd(t, p, p.saveEditorContent())
+	if counting.listCalls != 0 {
+		t.Fatalf("content save made %d avoidable list calls", counting.listCalls)
 	}
-	got, err := p.store.Get(a.ID)
-	if err != nil || got == nil {
-		t.Fatalf("get: %v", err)
+	if p.notes[0].Content != "new body" || p.editorNote.Content != "new body" {
+		t.Fatalf("cache not updated: note=%q editor=%q", p.notes[0].Content, p.editorNote.Content)
 	}
-	if got.Content != "before-archive-view" {
-		t.Fatalf("store = %q, want persisted on filter change", got.Content)
+	assertStoredContent(t, p.store, a.ID, "new body")
+}
+
+func TestSlowInitialLoadDoesNotBlockUpdate(t *testing.T) {
+	p, _, _ := newTwoNoteSavePlugin(t)
+	blocked := newBlockingStore(p.store)
+	blocked.blockList = true
+	p.store = blocked
+	p.notes = nil
+	cmd := p.loadNotes()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = p.Update(tea.WindowSizeMsg{Width: 90, Height: 22})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("Bubble Tea Update blocked behind slow note load")
+	}
+	close(blocked.release)
+	drainNotesMsg(t, p, <-result)
+}
+
+func TestRecoveryFailureKeepsNotesVisibleAndRetryable(t *testing.T) {
+	p, _, _ := newTwoNoteSavePlugin(t)
+	if _, err := writeNoteDraft(p.ctx.ProjectRoot, "nt-missing", "recover me"); err != nil {
+		t.Fatal(err)
+	}
+	p.notes = nil
+	loaded := p.loadNotes()().(NotesLoadedMsg)
+	if loaded.Err != nil || loaded.RecoveryErr == nil || len(loaded.Notes) != 2 {
+		t.Fatalf("load = notes:%d err:%v recovery:%v", len(loaded.Notes), loaded.Err, loaded.RecoveryErr)
+	}
+	_, _ = p.Update(loaded)
+	if len(p.notes) != 2 {
+		t.Fatal("recovery failure hid the ordinary notes list")
+	}
+	status, isErr := p.FooterStatus()
+	if !isErr || !strings.Contains(status, "r to retry") {
+		t.Fatalf("footer status = %q error=%v", status, isErr)
 	}
 }
 
-func TestInlineExitSaveDoesNotClearBuiltInDirty(t *testing.T) {
+func TestInlineAndExternalCompletionsDoNotClearBuiltInDirty(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
 	p.editorNote = a
-	p.editorTextarea.SetValue("typed after vim :wq")
+	p.editorTextarea.SetValue("typed after editor")
 	p.editorDirty = true
-	p.autoSaveID = 11
 	p.inlineEditActivation = 8
 
-	_, cmd := p.Update(NoteContentSavedMsg{
-		ID: a.ID, Epoch: 1, EditorActivation: 8,
-	})
-	if !p.editorDirty {
-		t.Fatal("inline-exit save cleared newer built-in dirty state")
+	_, cmd := p.Update(NoteContentSavedMsg{ID: a.ID, Epoch: 1, EditorActivation: 8})
+	if !p.editorDirty || cmd == nil {
+		t.Fatal("inline completion cleared newer built-in content or skipped refresh")
 	}
-	if got := p.editorTextarea.Value(); got != "typed after vim :wq" {
-		t.Fatalf("buffer = %q", got)
-	}
-	if cmd == nil {
-		t.Fatal("inline save should still reload notes")
-	}
-}
-
-func TestExternalReadBackStillReloads(t *testing.T) {
-	p, a, _ := newTwoNoteSavePlugin(t)
-	p.editorNote = a
-	p.editorTextarea.SetValue("body-a")
-	p.editorDirty = false
-
-	_, cmd := p.Update(NoteContentSavedMsg{
-		ID: a.ID, Epoch: 1, External: true,
-	})
-	if cmd == nil {
-		t.Fatal("$EDITOR read-back produced no reload")
-	}
-	if p.editorDirty {
-		t.Fatal("clean $EDITOR read-back marked the buffer dirty")
-	}
-}
-
-func TestInFlightSaveDoesNotClobberPersist(t *testing.T) {
-	p, a, _ := newTwoNoteSavePlugin(t)
-	p.editorNote = a
-	p.editorTextarea.SetValue("first")
-	p.editorDirty = true
-	p.autoSaveID = 7
-
-	pending := p.saveEditorContent()
-	if pending == nil {
-		t.Fatal("saveEditorContent returned nil")
-	}
-
-	p.editorTextarea.SetValue("second")
-	p.editorDirty = true
-	p.autoSaveID = 8
-	if cmd := p.persistDirtyEditor(); cmd != nil {
-		t.Fatal("persist failed")
-	}
-
-	result := pending()
-	saved, ok := result.(NoteContentSavedMsg)
-	if !ok {
-		t.Fatalf("got %T", result)
-	}
-	if !saved.Skipped {
-		t.Fatal("in-flight save wrote after persist")
-	}
-	got, err := p.store.Get(a.ID)
-	if err != nil || got == nil {
-		t.Fatalf("get: %v", err)
-	}
-	if got.Content != "second" {
-		t.Fatalf("store = %q, want persist winner second", got.Content)
-	}
-}
-
-func TestStopPersistFailureKeepsDirtyBuffer(t *testing.T) {
-	p, a, _ := newTwoNoteSavePlugin(t)
-	p.editorNote = a
-	p.editorTextarea.SetValue("keep-me")
-	p.editorDirty = true
-	_ = p.store.Close()
-
-	p.Stop()
-	if !p.editorDirty {
-		t.Fatal("failed Stop persist cleared dirty")
-	}
-	if p.editorNote == nil || p.editorNote.ID != a.ID {
-		t.Fatal("failed Stop persist dropped the editor note")
-	}
-	if got := p.editorTextarea.Value(); got != "keep-me" {
-		t.Fatalf("buffer = %q", got)
-	}
-	if p.store == nil {
-		t.Fatal("failed Stop persist closed away the only store")
-	}
-
-	err := p.Init(&plugin.Context{
-		Epoch: 2, ProjectRoot: t.TempDir(),
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	})
-	if err == nil {
-		t.Fatal("Init wiped a dirty buffer after persist failure")
-	}
-	if !p.editorDirty {
-		t.Fatal("failed Init persist cleared dirty")
-	}
-	if got := p.editorTextarea.Value(); got != "keep-me" {
-		t.Fatalf("Init dropped buffer: %q", got)
+	_, cmd = p.Update(NoteContentSavedMsg{ID: a.ID, Epoch: 1, External: true})
+	if !p.editorDirty || cmd == nil {
+		t.Fatal("external completion cleared newer built-in content or skipped refresh")
 	}
 }
 
@@ -345,32 +307,229 @@ func TestStopPersistsDirtyNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := New()
-	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.ctx = &plugin.Context{Epoch: 1, Logger: discardLogger()}
 	p.store = store
 	p.editorNote = a
 	p.editorTextarea = textarea.New()
 	p.editorTextarea.SetValue("across-stop")
 	p.editorDirty = true
-
 	p.Stop()
+	waitFor(t, time.Second, func() bool {
+		_, err := os.Stat(draftPath(dir, a.ID))
+		return os.IsNotExist(err)
+	})
 
 	peer, err := newInProcessStore(dir, "peer")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = peer.Close() })
-	got, err := peer.Get(a.ID)
+	assertStoredContent(t, peer, a.ID, "across-stop")
+}
+
+func TestStopReusesMatchingInflightWrite(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	blocked := newBlockingStore(p.store)
+	p.store = blocked
+	p.editorNote = a
+	p.editorTextarea.SetValue("already-in-flight")
+	p.editorDirty = true
+	cmd := p.saveEditorContent()
+	result := make(chan tea.Msg, 1)
+	go func() { result <- cmd() }()
+	<-blocked.started
+	startedStop := time.Now()
+	p.Stop()
+	if elapsed := time.Since(startedStop); elapsed > 100*time.Millisecond {
+		t.Fatalf("Stop waited %s for td instead of checkpointing", elapsed)
+	}
+	close(blocked.release)
+	saved := (<-result).(NoteContentSavedMsg)
+	<-blocked.closed
+	if blocked.saveCalls != 1 {
+		t.Fatalf("Stop wrote the same content %d times, want one", blocked.saveCalls)
+	}
+	if p.editorDirty {
+		t.Fatal("matching in-flight write left the stopped buffer dirty")
+	}
+	if saved.Err != nil || saved.Note == nil || saved.Note.Content != "already-in-flight" {
+		t.Fatalf("in-flight result = %+v", saved)
+	}
+}
+
+func TestStopFailureRetainsRecoverableDraft(t *testing.T) {
+	p, a, _ := newTwoNoteSavePlugin(t)
+	failing := &alwaysFailStore{noteStore: p.store, err: errors.New("disk full"), closed: make(chan struct{})}
+	p.store = failing
+	p.editorNote = a
+	p.editorTextarea.SetValue("keep-me")
+	p.editorDirty = true
+	p.Stop()
+	<-failing.closed
+	path := draftPath(p.ctx.ProjectRoot, a.ID)
+	waitFor(t, time.Second, func() bool {
+		_, err := os.Stat(path)
+		return err == nil
+	})
+	if p.editorDirty || p.store != nil {
+		t.Fatal("Stop did not hand ownership to the durable recovery draft")
+	}
+	peer, err := newInProcessStore(p.ctx.ProjectRoot, "recovery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = peer.Close() })
+	if err := recoverNoteDrafts(p.ctx.ProjectRoot, peer); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredContent(t, peer, a.ID, "keep-me")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("successful recovery retained its draft")
+	}
+}
+
+type blockingStore struct {
+	noteStore
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+	blockList bool
+	saveCalls int
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func newBlockingStore(store noteStore) *blockingStore {
+	return &blockingStore{noteStore: store, started: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+}
+
+func (s *blockingStore) wait() {
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.release
+}
+
+func (s *blockingStore) SaveContent(id, content string) (*Note, error) {
+	s.wait()
+	s.saveCalls++
+	return s.noteStore.SaveContent(id, content)
+}
+
+func (s *blockingStore) List(includeArchived bool) ([]Note, error) {
+	if s.blockList {
+		s.wait()
+	}
+	return s.noteStore.List(includeArchived)
+}
+
+func (s *blockingStore) Close() error {
+	err := s.noteStore.Close()
+	s.closeOnce.Do(func() { close(s.closed) })
+	return err
+}
+
+type failOnceStore struct {
+	noteStore
+	err error
+}
+
+func (s *failOnceStore) SaveContent(id, content string) (*Note, error) {
+	if s.err != nil {
+		err := s.err
+		s.err = nil
+		return nil, err
+	}
+	return s.noteStore.SaveContent(id, content)
+}
+
+type alwaysFailStore struct {
+	noteStore
+	err       error
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+func (s *alwaysFailStore) SaveContent(string, string) (*Note, error) { return nil, s.err }
+func (s *alwaysFailStore) UpdateContent(string, string) error        { return s.err }
+func (s *alwaysFailStore) Close() error {
+	err := s.noteStore.Close()
+	s.closeOnce.Do(func() { close(s.closed) })
+	return err
+}
+
+type countingStore struct {
+	noteStore
+	listCalls int
+}
+
+func (s *countingStore) List(includeArchived bool) ([]Note, error) {
+	s.listCalls++
+	return s.noteStore.List(includeArchived)
+}
+
+func drainNotesCmd(t *testing.T, p *Plugin, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	drainNotesMsg(t, p, cmd())
+}
+
+func prepareExternalEditor(t *testing.T, p *Plugin, cmd tea.Cmd) plugin.OpenFileMsg {
+	t.Helper()
+	result := cmd()
+	prepared, ok := result.(ExternalEditorPreparedMsg)
+	if !ok {
+		t.Fatalf("external prepare produced %T", result)
+	}
+	_, openCmd := p.Update(prepared)
+	if openCmd == nil {
+		t.Fatal("external prepare produced no open command")
+	}
+	result = openCmd()
+	open, ok := result.(plugin.OpenFileMsg)
+	if !ok {
+		t.Fatalf("external open produced %T", result)
+	}
+	return open
+}
+
+func drainNotesMsg(t *testing.T, p *Plugin, m tea.Msg) {
+	t.Helper()
+	if batch, ok := m.(tea.BatchMsg); ok {
+		for _, cmd := range batch {
+			drainNotesCmd(t, p, cmd)
+		}
+		return
+	}
+	_, cmd := p.Update(m)
+	if cmd != nil {
+		drainNotesCmd(t, p, cmd)
+	}
+}
+
+func assertStoredContent(t *testing.T, store noteStore, id, want string) {
+	t.Helper()
+	got, err := store.Get(id)
 	if err != nil || got == nil {
-		t.Fatalf("get after stop: %v %+v", err, got)
+		t.Fatalf("Get(%s): note=%+v err=%v", id, got, err)
 	}
-	if got.Content != "across-stop" {
-		t.Fatalf("store = %q, want persisted on Stop", got.Content)
+	if got.Content != want {
+		t.Fatalf("stored content = %q, want %q", got.Content, want)
 	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func newTwoNoteSavePlugin(t *testing.T) (*Plugin, *Note, *Note) {
 	t.Helper()
-	store := openTestStore(t)
+	dir := t.TempDir()
+	store, err := NewTestStore(dir, "test-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
 	a, err := store.Create("A", "body-a")
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +539,7 @@ func newTwoNoteSavePlugin(t *testing.T) (*Plugin, *Note, *Note) {
 		t.Fatal(err)
 	}
 	p := New()
-	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	p.ctx = &plugin.Context{Epoch: 1, ProjectRoot: dir, Logger: discardLogger()}
 	p.store = store
 	p.notes = []Note{*a, *b}
 	p.cursor = 0
@@ -392,4 +551,16 @@ func newTwoNoteSavePlugin(t *testing.T) (*Plugin, *Note, *Note) {
 	p.editorTextarea.SetValue(a.Content)
 	p.previewLines = []string{a.Content}
 	return p, a, b
+}
+
+func waitFor(t *testing.T, timeout time.Duration, ready func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if ready() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition did not become ready")
 }

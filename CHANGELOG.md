@@ -13,6 +13,10 @@ All notable changes to sidecar are documented here.
   backspace replace the range as one undo unit. `ctrl+z` undoes and
   `ctrl+y` / `ctrl+shift+z` redo; short typing bursts coalesce. Bare `v` and
   `u` still type. The tmux editor keeps vim's own undo.
+- **Saving no longer freezes Notes.** Autosave, leaving edit, navigation, and
+  editor handoffs keep the UI responsive while td is busy. Slow and failed
+  saves stay visible and retryable, content saves use one td command without a
+  full-list reload, and shutdown checkpoints unsaved text before flushing it.
 
 ## [v1.0.2] - 2026-08-17
 

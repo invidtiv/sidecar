@@ -589,7 +589,7 @@ The built-in editor is modeless: printable keys type. Selection and undo use mod
 | backspace / delete / type / paste | — | Replace the selection (one undo unit) |
 | `ctrl+z` | undo-edit | Undo the last edit unit |
 | `ctrl+y` / `ctrl+shift+z` | redo-edit | Redo |
-| `ctrl+s` | save | Save now |
+| `ctrl+s` | save | Save now; after leaving edit, retry a failed save from list, preview, or search |
 | `esc` / `tab` | back / switch-pane | Leave edit and persist |
 
 The tmux/`$EDITOR` pane (`e`) keeps vim's own undo and selection.

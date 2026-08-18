@@ -36,6 +36,12 @@ type editHistory struct {
 }
 
 func (h *editHistory) prepare(kind editOpKind, snap editSnapshot, now time.Time) {
+	h.prepareLazy(kind, func() editSnapshot { return snap }, now)
+}
+
+// prepareLazy avoids copying the entire note for every key in a coalesced
+// typing/delete burst. Large notes pay once per undo unit, not per character.
+func (h *editHistory) prepareLazy(kind editOpKind, snapshot func() editSnapshot, now time.Time) {
 	if kind == editOpNone {
 		return
 	}
@@ -47,6 +53,7 @@ func (h *editHistory) prepare(kind editOpKind, snap editSnapshot, now time.Time)
 		h.lastAt = now
 		return
 	}
+	snap := snapshot()
 	if n := len(h.undo); n > 0 && h.undo[n-1].content == snap.content {
 		h.lastKind = kind
 		h.lastAt = now

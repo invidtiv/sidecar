@@ -2,9 +2,10 @@ package notes
 
 // NotesLoadedMsg is sent when notes are loaded from the database.
 type NotesLoadedMsg struct {
-	Notes []Note
-	Err   error
-	Epoch uint64
+	Notes       []Note
+	Err         error
+	RecoveryErr error
+	Epoch       uint64
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -68,7 +69,10 @@ type NoteContentSavedMsg struct {
 	Epoch            uint64
 	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
 	Generation       int    // Built-in autosave generation captured at save start.
+	SaveActivation   uint64 // Built-in save lifecycle captured at save start.
+	RequestID        uint64 // Built-in request identity; only one may own completion.
 	Content          string // Bytes this save wrote; empty for inline/export paths.
+	Note             *Note  // Canonical note returned by td when available.
 	External         bool   // $EDITOR read-back; not a built-in buffer save.
 	Skipped          bool   // In-flight write skipped because a newer persist won.
 }
@@ -83,6 +87,17 @@ type AutoSaveTickMsg struct {
 	// ID identifies which auto-save timer this is (for debounce check)
 	ID int
 }
+
+// ExternalEditorPreparedMsg carries an asynchronously-created note export.
+// NotePath may invoke td, so preparing it must never run on Bubble Tea Update.
+type ExternalEditorPreparedMsg struct {
+	ID    string
+	Path  string
+	Err   error
+	Epoch uint64
+}
+
+func (m ExternalEditorPreparedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // NoteRestoredMsg is sent when a note is restored (undo delete/archive).
 type NoteRestoredMsg struct {

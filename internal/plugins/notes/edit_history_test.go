@@ -20,6 +20,22 @@ func TestEditHistoryTypingBurstIsOneUnit(t *testing.T) {
 	}
 }
 
+func TestEditHistoryTypingBurstCopiesOneSnapshot(t *testing.T) {
+	h := &editHistory{}
+	now := time.Now()
+	calls := 0
+	snapshot := func() editSnapshot {
+		calls++
+		return editSnapshot{content: strings.Repeat("large note", 1000)}
+	}
+	h.prepareLazy(editOpTyping, snapshot, now)
+	h.prepareLazy(editOpTyping, snapshot, now.Add(100*time.Millisecond))
+	h.prepareLazy(editOpTyping, snapshot, now.Add(200*time.Millisecond))
+	if calls != 1 {
+		t.Fatalf("snapshot copies = %d, want one per typing burst", calls)
+	}
+}
+
 func TestEditHistoryPasteIsOwnUnit(t *testing.T) {
 	h := &editHistory{}
 	now := time.Now()

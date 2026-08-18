@@ -47,12 +47,6 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	}
 	p.clearEditSelection()
 
-	// Get note path (creates temp file with content)
-	notePath := p.store.NotePath(noteID)
-	if notePath == "" {
-		return inlineEditUnavailableToast("note file unavailable")
-	}
-
 	editor := tty.ResolveEditor()
 
 	// Size the session to the viewport it will be rendered into rather than the
@@ -65,8 +59,15 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
 	}
+	store := p.store
 
 	return func() tea.Msg {
+		// NotePath reads through td in production; keep it in the command with
+		// tmux startup so neither slow operation can stall Bubble Tea Update.
+		notePath := store.NotePath(noteID)
+		if notePath == "" {
+			return inlineEditUnavailableToast("note file unavailable")()
+		}
 		if !tty.EditorAvailable() {
 			removeNoteExport(notePath)
 			return inlineEditUnavailableToast("tmux not found")()
@@ -117,8 +118,12 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	}
 	// The session below reads the note from the store; an unsaved buffer has to
 	// land first or it is overwritten by what vim reads and writes back.
-	if cmd := p.persistDirtyEditor(); cmd != nil {
-		return cmd
+	if p.editorDirty {
+		noteID := note.ID
+		return p.saveBefore(func() tea.Cmd {
+			p.moveCursorToNote(noteID)
+			return p.editSelectedNote()
+		})
 	}
 	if cmd := p.loadNoteIntoEditor(); cmd != nil {
 		return cmd
