@@ -154,7 +154,7 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 		return nil
 	}
 	return p.openContentPane(contentPaneOpen{kind: PaneResource, name: "Resource", reopen: p.reopenHiddenResourcePane,
-		attach:   func(id int) tea.Cmd { return p.attachResourcePane(id, root, surface, ref, fromTerminal) },
+		attach:   func(id int, _ bool) tea.Cmd { return p.attachResourcePane(id, root, surface, ref, fromTerminal) },
 		attached: func(id int) bool { return p.resources[id] != nil }})
 }
 
@@ -297,13 +297,7 @@ func (p *Plugin) hideResourcePane() tea.Cmd {
 // closeResourcePane removes the Resource leaf and gives its box back to its
 // sibling.
 func (p *Plugin) closeResourcePane(leafID int) tea.Cmd {
-	if !p.closeContentLeaf(leafID) {
-		return nil
-	}
-	p.hiddenPaneLayout = nil
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(leafID)
 }
 
 // reopenHiddenResourcePane rebuilds a hidden split at the last ratio so a
@@ -311,10 +305,6 @@ func (p *Plugin) closeResourcePane(leafID int) tea.Cmd {
 func (p *Plugin) reopenHiddenResourcePane() tea.Cmd {
 	res, _ := p.activeResourcePane()
 	return p.reopenHiddenContentPane(PaneResource, res != nil, paneLayoutHasResourceTabs, contentKindResource, "Resource")
-}
-
-func (p *Plugin) reinsertHiddenResourceLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
-	return p.reinsertHiddenContentLeaf(PaneResource, firstLayoutLeafOfKind(layout, contentKindResource), "Resource")
 }
 
 // encodeResourceTabs is the reference-only projection this surface writes.

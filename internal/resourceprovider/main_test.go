@@ -19,7 +19,7 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "resourceprovider tests: temp dir:", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	fixtureBin = filepath.Join(dir, "fixtureprovider")
 	build := exec.Command("go", "build", "-o", fixtureBin, "./testdata/fixtureprovider")
@@ -27,12 +27,12 @@ func TestMain(m *testing.M) {
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "resourceprovider tests: building the fixture provider:", err)
-		os.RemoveAll(dir)
+		_ = os.RemoveAll(dir)
 		os.Exit(1)
 	}
 
 	code := m.Run()
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 	os.Exit(code)
 }
 

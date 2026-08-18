@@ -70,7 +70,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 		return nil
 	}
 	return p.openContentPane(contentPaneOpen{kind: PaneIssue, name: "Issue", reopen: p.reopenHiddenIssuePane,
-		attach:   func(id int) tea.Cmd { return p.attachIssuePane(id, root, surface, issueID) },
+		attach:   func(id int, _ bool) tea.Cmd { return p.attachIssuePane(id, root, surface, issueID) },
 		attached: func(id int) bool { return p.issues[id] != nil && p.issues[id].view() != nil }})
 }
 
@@ -351,10 +351,6 @@ func (p *Plugin) hideIssuePane() tea.Cmd {
 func (p *Plugin) reopenHiddenIssuePane() tea.Cmd {
 	issue, _ := p.activeIssuePane()
 	return p.reopenHiddenContentPane(PaneIssue, issue != nil, paneLayoutHasIssueTabs, contentKindIssue, "Issue")
-}
-
-func (p *Plugin) reinsertHiddenIssueLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
-	return p.reinsertHiddenContentLeaf(PaneIssue, firstLayoutLeafOfKind(layout, contentKindIssue), "Issue")
 }
 
 func (p *Plugin) ensureActiveIssueTabLoaded(issue *issuePane) tea.Cmd {

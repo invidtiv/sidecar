@@ -111,10 +111,7 @@ func validateTerminalResources(c *TerminalResourcesConfig) error {
 		}
 		seen[p.ID] = true
 
-		argv := make([]string, 0, len(p.Command))
-		for _, arg := range p.Command {
-			argv = append(argv, arg)
-		}
+		argv := append(make([]string, 0, len(p.Command)), p.Command...)
 		if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 			return fmt.Errorf("terminalResources: provider %q has no command", p.ID)
 		}

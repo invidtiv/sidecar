@@ -179,68 +179,47 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	if rel == "" || rel == "." {
 		return nil
 	}
-	reopen := p.reopenHiddenDocPane()
-	epoch := p.ctx.Epoch
-	plan, planned := p.planOpen(PaneDoc)
-	if !planned {
-		return reopen
-	}
-	if plan.Retarget != 0 {
-		leaf := FindPane(p.paneRoot, plan.Retarget)
-		if leaf == nil {
-			return reopen
-		}
-		doc := p.docs[leaf.ContentID]
-		if doc == nil {
-			return reopen
-		}
-		doc.root = root
-		doc.surface = surface
-		p.paneFocus = leaf.ID
-		p.activePane = PanePreview
-		cmd, consumed := p.docPaneLoadTab(doc, leaf.ContentID, rel, line, file, false)
-		if consumed {
-			file = nil
-		}
-		p.saveSelectionState()
-		return tea.Batch(reopen, cmd)
-	}
+	// The open dance itself is the shared helper's; what stays here is the one
+	// thing no other kind has — ownership of an already-opened *os.File. The
+	// attach callback clears the captured handle the moment a load takes it, so
+	// the deferred close above cannot double-close a file docview now owns.
+	return p.openContentPane(contentPaneOpen{kind: PaneDoc, name: "Document", reopen: p.reopenHiddenDocPane,
+		attach: func(id int, fresh bool) tea.Cmd {
+			cmd, consumed := p.attachDocPane(id, root, surface, rel, line, file, fresh)
+			if consumed {
+				file = nil
+			}
+			return cmd
+		},
+		attached: func(id int) bool { return p.docs[id] != nil && p.docs[id].view() != nil }})
+}
 
-	docID := p.paneNextID
-	newLeaf := &PaneNode{ID: docID, Kind: PaneDoc, ContentID: docID}
-	trial := clonePaneTree(p.paneRoot)
-	trialDoc := &PaneNode{ID: docID, Kind: PaneDoc, ContentID: docID}
-	trial, trialFocus := SplitLeaf(trial, plan.Split, plan.Axis, trialDoc)
-	if trialFocus != trialDoc.ID {
-		return reopen
+// attachDocPane points the content behind leafID at rel and reports whether it
+// consumed file. A fresh leaf gets a new pane; a retarget onto a leaf whose
+// pane is gone attaches nothing, so the shared helper leaves the tree alone.
+func (p *Plugin) attachDocPane(leafID int, root, surface, rel string, line int, file *os.File, fresh bool) (tea.Cmd, bool) {
+	if p.ctx == nil {
+		return nil, false
 	}
-	if peer, ok := p.previewPeerBox(); !ok {
-		return reopen
-	} else if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
-		p.toastMessage = paneFitMessage("Document", plan.Axis)
-		p.toastTime = time.Now()
-		return reopen
+	doc := p.docs[leafID]
+	if doc == nil {
+		if !fresh {
+			return nil, false
+		}
+		if p.docs == nil {
+			p.docs = make(map[int]*docPane)
+		}
+		doc = newDocPane(leafID, root, surface, nil)
+		p.docs[leafID] = doc
 	}
-
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
-	if focus != newLeaf.ID {
-		return reopen
+	doc.root, doc.surface = root, surface
+	cmd, consumed := p.docPaneLoadTab(doc, leafID, rel, line, file, false)
+	if fresh && doc.view() == nil {
+		// Nothing landed in a pane that did not exist a moment ago; leaving it
+		// registered would give the tree a document leaf with no document.
+		delete(p.docs, leafID)
 	}
-	p.paneRoot, p.paneFocus = treeRoot, focus
-	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
-	viewer := docview.New(nil)
-	var load tea.Cmd
-	if file != nil {
-		load = viewer.LoadFile(docID, file, rel, line, epoch)
-		file = nil
-	} else {
-		load = viewer.Load(docID, root, rel, line, epoch)
-	}
-	applyDocRenderMode(viewer, rel, line)
-	p.docs[docID] = newDocPane(p.paneFocus, root, surface, viewer)
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
+	return cmd, consumed
 }
 
 // docPaneLoadTab puts rel at line into an existing pane and reports whether it
@@ -493,13 +472,11 @@ func terminalLeafID(root *PaneNode) int {
 
 func (p *Plugin) closeDocPane() tea.Cmd {
 	p.closeDocInfo()
-	if !p.closeDocPaneState() {
+	doc, _ := p.activeDocPane()
+	if doc == nil {
 		return nil
 	}
-	p.hiddenPaneLayout = nil
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(doc.leafID)
 }
 
 // hideDocPane collapses the live split and remembers the tab set. q/esc hide;
@@ -510,41 +487,20 @@ func (p *Plugin) hideDocPane() tea.Cmd {
 	if doc == nil {
 		return nil
 	}
-	root, surface, ok := p.selectedTerminalSurface()
-	if ok {
-		p.rememberHiddenPaneLayout(root, surface)
-	}
-	if !p.closeDocPaneState() {
-		p.hiddenPaneLayout = nil
-		return nil
-	}
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.hideContentPane(doc.leafID)
 }
 
 // reopenHiddenDocPane rebuilds a hidden split at the last ratio so a file
 // click can focus or append against the remembered set.
+//
+// The document is the one kind whose whole-layout restore does not require its
+// own tabs in the snapshot: a q-hidden terminal-plus-issue surface comes back
+// whole on a file click, and the fresh document lands in it.
 func (p *Plugin) reopenHiddenDocPane() tea.Cmd {
-	if p.activeDocPaneOrNil() != nil {
-		return nil
-	}
-	_, surface, ok := p.selectedTerminalSurface()
-	if !ok {
-		return nil
-	}
-	layout := p.hiddenLayoutFor(surface)
-	if layout == nil {
-		return nil
-	}
-	if p.liveContentBesides(PaneDoc) {
-		if !paneLayoutHasDocTabs(layout) {
-			return nil
-		}
-		return p.reinsertHiddenDocLeaf(layout)
-	}
-	p.hiddenPaneLayout = nil
-	return p.restorePaneLayout(layout)
+	return p.reopenHiddenContentPane(PaneDoc, p.activeDocPaneOrNil() != nil,
+		func(layout *state.PaneLayoutJSON) bool {
+			return !p.liveContentBesides(PaneDoc) || paneLayoutHasDocTabs(layout)
+		}, contentKindDoc, "Document")
 }
 
 func (p *Plugin) hiddenLayoutFor(surface string) *state.PaneLayoutJSON {
@@ -838,10 +794,6 @@ func (p *Plugin) liveContentBesides(kind PaneKind) bool {
 	return false
 }
 
-func (p *Plugin) reinsertHiddenDocLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
-	return p.reinsertHiddenContentLeaf(PaneDoc, firstLayoutLeafOfKind(layout, contentKindDoc), "Document")
-}
-
 func (p *Plugin) reinsertHiddenContentLeaf(kind PaneKind, saved *state.PaneLayoutJSON, name string) tea.Cmd {
 	if saved == nil || p.paneRoot == nil || p.ctx == nil {
 		return nil
@@ -909,14 +861,6 @@ func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) 
 	p.paneRoot, p.paneFocus = treeRoot, focus
 	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
 	return true
-}
-
-func (p *Plugin) closeDocPaneState() bool {
-	doc, _ := p.activeDocPane()
-	if doc == nil {
-		return false
-	}
-	return p.closeContentLeaf(doc.leafID)
 }
 
 // closeContentLeaf drops one content leaf's state and collapses its box into

@@ -71,61 +71,20 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 	if target.Identity() == "" {
 		target = workspacediff.WorkingTreeTarget()
 	}
-	reopen := p.reopenHiddenDiffPane()
-	plan, ok := p.planOpen(PaneDiff)
-	if !ok {
-		return reopen
-	}
-	if p.ctx.Logger != nil {
-		kind := "split"
-		if plan.Retarget != 0 {
-			kind = "retarget"
-		}
-		p.ctx.Logger.Debug("openDiffPaneForSurface",
-			"surface", surface, "target", target.Identity(), "plan", kind)
-	}
-	if plan.Retarget != 0 {
-		leaf := FindPane(p.paneRoot, plan.Retarget)
-		if leaf == nil || leaf.Split != nil {
-			return reopen
-		}
-		load := p.attachDiffPane(leaf.ContentID, root, surface, target)
-		if p.diffs[leaf.ContentID] == nil || p.diffs[leaf.ContentID].view() == nil {
-			return reopen
-		}
-		p.paneFocus = leaf.ID
-		p.activePane = PanePreview
-		p.saveSelectionState()
-		return tea.Batch(reopen, load)
-	}
-
-	peer, placed := p.previewPeerBox()
-	if !placed {
-		return reopen
-	}
-	id := p.paneNextID
-	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis,
-		&PaneNode{ID: id, Kind: PaneDiff, ContentID: id})
-	if trialFocus != id {
-		return reopen
-	}
-	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
-		p.toastMessage = paneFitMessage("Diff", plan.Axis)
-		p.toastTime = time.Now()
-		return reopen
-	}
-
-	newLeaf := &PaneNode{ID: id, Kind: PaneDiff, ContentID: id}
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, newLeaf)
-	if focus != newLeaf.ID {
-		return reopen
-	}
-	p.paneRoot, p.paneFocus = treeRoot, focus
-	p.paneNextID = maxInt(p.paneNextID, maxPaneID(p.paneRoot)+1)
-	p.activePane = PanePreview
-	load := p.attachDiffPane(newLeaf.ContentID, root, surface, target)
-	p.saveSelectionState()
-	return tea.Batch(reopen, load, p.resizeDocTerminalCmd())
+	return p.openContentPane(contentPaneOpen{kind: PaneDiff, name: "Diff", reopen: p.reopenHiddenDiffPane,
+		attach:   func(id int, _ bool) tea.Cmd { return p.attachDiffPane(id, root, surface, target) },
+		attached: func(id int) bool { return p.diffs[id] != nil && p.diffs[id].view() != nil },
+		planned: func(plan paneOpen) {
+			if p.ctx.Logger == nil {
+				return
+			}
+			kind := "split"
+			if plan.Retarget != 0 {
+				kind = "retarget"
+			}
+			p.ctx.Logger.Debug("openDiffPaneForSurface",
+				"surface", surface, "target", target.Identity(), "plan", kind)
+		}})
 }
 
 // attachDiffPane points the content behind leafID at target and returns its
@@ -421,40 +380,12 @@ func (p *Plugin) hideDiffPane() tea.Cmd {
 	if diff == nil || leaf == nil {
 		return nil
 	}
-	root, surface, ok := p.selectedTerminalSurface()
-	if ok {
-		p.rememberHiddenPaneLayout(root, surface)
-	}
-	if !p.closeContentLeaf(leaf.ID) {
-		p.hiddenPaneLayout = nil
-		return nil
-	}
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.hideContentPane(leaf.ID)
 }
 
 func (p *Plugin) reopenHiddenDiffPane() tea.Cmd {
-	if diff, _ := p.activeDiffPane(); diff != nil {
-		return nil
-	}
-	_, surface, ok := p.selectedTerminalSurface()
-	if !ok {
-		return nil
-	}
-	layout := p.hiddenLayoutFor(surface)
-	if layout == nil || !paneLayoutHasDiffTabs(layout) {
-		return nil
-	}
-	if p.liveContentBesides(PaneDiff) {
-		return p.reinsertHiddenDiffLeaf(layout)
-	}
-	p.hiddenPaneLayout = nil
-	return p.restorePaneLayout(layout)
-}
-
-func (p *Plugin) reinsertHiddenDiffLeaf(layout *state.PaneLayoutJSON) tea.Cmd {
-	return p.reinsertHiddenContentLeaf(PaneDiff, firstLayoutLeafOfKind(layout, contentKindDiff), "Diff")
+	diff, _ := p.activeDiffPane()
+	return p.reopenHiddenContentPane(PaneDiff, diff != nil, paneLayoutHasDiffTabs, contentKindDiff, "Diff")
 }
 
 func (p *Plugin) ensureActiveDiffTabLoaded(diff *diffPane) tea.Cmd {
@@ -594,13 +525,7 @@ func (p *Plugin) decodeDiffLeaf(saved *state.PaneLayoutJSON, root string, loads 
 }
 
 func (p *Plugin) closeDiffPane(leafID int) tea.Cmd {
-	if !p.closeContentLeaf(leafID) {
-		return nil
-	}
-	p.hiddenPaneLayout = nil
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(leafID)
 }
 
 func (p *Plugin) diffPaneHeaderRow(diff *diffPane, width int, focused bool) string {
