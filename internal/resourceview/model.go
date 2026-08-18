@@ -137,6 +137,31 @@ func (m *Model) SetPendingScroll(scroll int) {
 	m.hasPendingScroll = true
 }
 
+// ReArm returns a tab that is waiting on an answer nobody will deliver to the
+// armed state, and reports whether it changed anything.
+//
+// A host discards a result whose surface, workspace row, or project epoch no
+// longer matches. That is correct — but without this the tab it belonged to
+// sits on a loading card forever, because the answer that would have cleared
+// it was thrown away. Re-arming bumps the generation, so the discarded answer
+// can never land afterwards either, and the card goes back to saying the tab
+// is remembered and can be resolved with r.
+func (m *Model) ReArm() bool {
+	if m.state != StateLoading && !m.refreshing {
+		return false
+	}
+	m.generation++
+	m.refreshing = false
+	if m.hasDoc {
+		// A refresh that will never answer leaves the document it was
+		// refreshing, which is what a failed refresh does too.
+		m.state = StateReady
+		return true
+	}
+	m.state = StateArmed
+	return true
+}
+
 // Load resolves the reference, replacing whatever the model was showing. It
 // bumps the generation, so any answer already in flight is stale on arrival.
 func (m *Model) Load(modelID int, ref resource.Reference, epoch uint64) tea.Cmd {

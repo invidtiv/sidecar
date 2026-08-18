@@ -157,6 +157,28 @@ func (p *Pane) Apply(msg ResolvedMsg) bool {
 	return true
 }
 
+// ReArmPending is the counterpart to a host discarding results in bulk. Call
+// it wherever results stop being routed — a workspace row switch, a project
+// change — so a tab is never stranded on a loading card.
+func (p *Pane) ReArmPending() int {
+	if p == nil || p.Tabs == nil {
+		return 0
+	}
+	return p.Tabs.ReArmPending()
+}
+
+// ScrollAtBoundary reports whether a scroll of delta would move the active tab.
+func (p *Pane) ScrollAtBoundary(delta int) bool {
+	if p == nil || p.Tabs == nil {
+		return true
+	}
+	m := p.Tabs.Active()
+	if m == nil {
+		return true
+	}
+	return m.ScrollAtBoundary(delta)
+}
+
 // Scroll moves the active tab's viewport and reports whether it moved.
 func (p *Pane) Scroll(delta int) bool {
 	if p == nil || p.Tabs == nil {

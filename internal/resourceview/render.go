@@ -41,6 +41,20 @@ func (m *Model) ScrollBy(delta int) bool {
 	return m.scroll != before
 }
 
+// ScrollAtBoundary reports whether a scroll of delta would move nothing,
+// which is how a host decides to hand a wheel event to whatever is underneath
+// instead of swallowing it. The doc, issue and diff viewers all answer this;
+// without it a host has to probe by scrolling and undoing.
+func (m *Model) ScrollAtBoundary(delta int) bool {
+	if delta < 0 {
+		return m.scroll <= 0
+	}
+	if delta > 0 {
+		return m.scroll >= m.maxScroll()
+	}
+	return true
+}
+
 // ScrollTo jumps to an absolute offset.
 func (m *Model) ScrollTo(offset int) bool {
 	before := m.scroll

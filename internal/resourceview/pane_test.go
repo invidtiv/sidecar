@@ -196,3 +196,70 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+func TestReArmRescuesATabWhoseAnswerWasDiscarded(t *testing.T) {
+	pane, _, rec := newPane()
+	pane.ActivateFromTerminal(ref("CASH-1"))
+	staleID, staleGen, _ := rec.last()
+
+	// The host switches workspace rows and stops routing results. Without a
+	// re-arm the tab waits on an answer nobody will deliver.
+	if n := pane.ReArmPending(); n != 1 {
+		t.Fatalf("re-armed %d tabs, want 1", n)
+	}
+	m := pane.Tabs.Active()
+	if m.State() != StateArmed {
+		t.Fatalf("state = %v, want armed rather than stuck loading", m.State())
+	}
+
+	// The discarded answer must not be able to land afterwards either.
+	if m.Apply(ResolvedMsg{ModelID: staleID, Generation: staleGen, Document: doc("CASH-1", "late")}) {
+		t.Error("an answer from before the re-arm must not apply")
+	}
+
+	// And r still works.
+	before := len(rec.calls)
+	if handled, _ := pane.HandleKey("r"); !handled {
+		t.Fatal("r should still resolve a re-armed tab")
+	}
+	if len(rec.calls) != before+1 {
+		t.Error("r should have started a fresh resolve")
+	}
+}
+
+func TestReArmKeepsAnExistingDocumentWhenARefreshIsAbandoned(t *testing.T) {
+	pane, _, rec := newPane()
+	pane.ActivateFromTerminal(ref("CASH-1"))
+	id, gen, _ := rec.last()
+	pane.Apply(ResolvedMsg{ModelID: id, Generation: gen, Document: doc("CASH-1", "Kept")})
+
+	pane.Refresh()
+	pane.ReArmPending()
+
+	m := pane.Tabs.Active()
+	if m.State() != StateReady {
+		t.Fatalf("state = %v, want the document kept", m.State())
+	}
+	if got, ok := m.Document(); !ok || got.Title != "Kept" {
+		t.Errorf("document = %+v ok=%v, want the last good one", got, ok)
+	}
+}
+
+func TestScrollAtBoundaryReportsBothEnds(t *testing.T) {
+	pane, _, rec := newPane()
+	pane.ActivateFromTerminal(ref("CASH-1"))
+	id, gen, _ := rec.last()
+	pane.Apply(ResolvedMsg{ModelID: id, Generation: gen, Document: longDoc("CASH-1")})
+
+	if !pane.ScrollAtBoundary(-1) {
+		t.Error("at the top, scrolling up moves nothing")
+	}
+	if pane.ScrollAtBoundary(1) {
+		t.Error("at the top of a long document, scrolling down should move")
+	}
+	for pane.Scroll(10) {
+	}
+	if !pane.ScrollAtBoundary(1) {
+		t.Error("at the bottom, scrolling down moves nothing")
+	}
+}

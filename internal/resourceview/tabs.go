@@ -181,6 +181,20 @@ func (t *Tabs) RefreshActive() tea.Cmd {
 	return nil
 }
 
+// ReArmPending returns every tab waiting on an answer the host has decided to
+// discard back to a resolvable state, and reports how many changed. A host
+// calls this when it drops results wholesale — a workspace row switch, a
+// project change — so no tab is left on a loading card forever.
+func (t *Tabs) ReArmPending() int {
+	n := 0
+	for _, item := range t.Items {
+		if item.Value.ReArm() {
+			n++
+		}
+	}
+	return n
+}
+
 // Close removes the tab at index and reports whether the leaf is now empty.
 // Closing is the user's explicit act, and with a confirmed cleanup it is the
 // only thing that may drop a reference.
