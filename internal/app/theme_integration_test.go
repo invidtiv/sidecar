@@ -51,7 +51,9 @@ func newTestThemeModel(plugins ...plugin.Plugin) *Model {
 	}
 	reg := plugin.NewRegistry(pCtx)
 	for _, p := range plugins {
-		reg.Register(p)
+		if err := reg.Register(p); err != nil {
+			panic(err)
+		}
 	}
 
 	cfg := &config.Config{
@@ -294,9 +296,7 @@ func TestConfigMousePathNotifiesOnLivePaletteChange(t *testing.T) {
 	}
 
 	// A later motion with the same palette must not notify again.
-	next, _ = m.Update(tea.MouseMotionMsg{X: 2, Y: headerHeight + 2})
-	updated = next.(Model)
-	m = &updated
+	_, _ = m.Update(tea.MouseMotionMsg{X: 2, Y: headerHeight + 2})
 	if p.themeNotices != notices+1 {
 		t.Errorf("unchanged mouse path re-notified: notices=%d want %d", p.themeNotices, notices+1)
 	}
