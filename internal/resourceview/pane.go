@@ -242,20 +242,37 @@ func (p *Pane) persist() {
 	}
 }
 
+// Stable command IDs for a Resource leaf. They are declared here, not derived
+// per host, because the footer resolves a hint's key through the keymap by ID:
+// two hosts inventing their own IDs is two surfaces advertising different keys
+// for one pane. They follow the vocabulary the other panes already use —
+// prev-tab/next-tab rather than one combined "{/}" command, which is a rule
+// TestBracesAlwaysMeanTabCycling enforces repo-wide.
+const (
+	CommandRefresh    = "refresh"
+	CommandOpenSource = "open-source"
+	CommandPrevTab    = "prev-tab"
+	CommandNextTab    = "next-tab"
+	CommandCloseTab   = "close-tab"
+)
+
 // Commands is the footer vocabulary for a focused Resource leaf. Both hosts
 // register exactly this, so the two surfaces cannot advertise different keys
 // for the same pane. Names are one word to keep the footer from wrapping.
 func Commands() []Command {
 	return []Command{
-		{Key: "r", Name: "Refresh"},
-		{Key: "o", Name: "Open"},
-		{Key: "{/}", Name: "Tabs"},
-		{Key: "x", Name: "Close"},
+		{ID: CommandRefresh, Key: "r", Name: "Refresh"},
+		{ID: CommandOpenSource, Key: "o", Name: "Open"},
+		{ID: CommandNextTab, Key: "}", Name: "Next"},
+		{ID: CommandPrevTab, Key: "{", Name: "Prev"},
+		{ID: CommandCloseTab, Key: "x", Name: "Close"},
 	}
 }
 
-// Command is one footer hint.
+// Command is one footer hint. ID is the keymap command the host registers
+// under; Key is the default binding it documents.
 type Command struct {
+	ID   string
 	Key  string
 	Name string
 }

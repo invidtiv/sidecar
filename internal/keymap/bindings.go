@@ -201,11 +201,11 @@ func DefaultBindings() []Binding {
 		// same pane. q/esc are this surface's content-pane rule, as above.
 		{Key: "q", Command: "close", Context: "global-workspaces-resource"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-resource"},
-		{Key: "r", Command: "resource-r", Context: "global-workspaces-resource"},
-		{Key: "o", Command: "resource-o", Context: "global-workspaces-resource"},
-		{Key: "{", Command: "resource-{/}", Context: "global-workspaces-resource"},
-		{Key: "}", Command: "resource-{/}", Context: "global-workspaces-resource"},
-		{Key: "x", Command: "resource-x", Context: "global-workspaces-resource"},
+		{Key: "r", Command: "refresh", Context: "global-workspaces-resource"},
+		{Key: "o", Command: "open-source", Context: "global-workspaces-resource"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-resource"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-resource"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-resource"},
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-resource"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-resource"},
 
@@ -248,6 +248,22 @@ func DefaultBindings() []Binding {
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-issue"},
 		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
+
+		// The Resource leaf answers the same keys on this surface as it does
+		// in the global Workspaces browser. The two blocks are siblings on
+		// purpose: a key bound in one and not the other is the parity bug the
+		// shared resourceview.Pane exists to prevent, and the footer renders
+		// nothing for a command with no bound key.
+		{Key: "q", Command: "close", Context: "workspace-resource"},
+		{Key: "esc", Command: "close", Context: "workspace-resource"},
+		{Key: "r", Command: "refresh", Context: "workspace-resource"},
+		{Key: "o", Command: "open-source", Context: "workspace-resource"},
+		{Key: "x", Command: "close-tab", Context: "workspace-resource"},
+		{Key: "{", Command: "prev-tab", Context: "workspace-resource"},
+		{Key: "}", Command: "next-tab", Context: "workspace-resource"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-resource"},
+		{Key: "tab", Command: "next-pane", Context: "workspace-resource"},
+		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-resource"},
 
 		// Focused project Workspaces Diff leaf. q hides; not a root context.
 		{Key: "q", Command: "close", Context: "workspace-diff"},

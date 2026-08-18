@@ -365,18 +365,14 @@ func (m *Model) handlePreviewResourceMouse(action mouse.MouseAction) tea.Cmd {
 	return nil
 }
 
-// resourceScrollAtBoundary reports whether a wheel notch would move the card,
-// without leaving it moved. resourceview has no boundary predicate of its own,
-// and probing is exact where guessing is not: the bottom edge depends on the
-// rendered height, which the host does not know.
+// resourceScrollAtBoundary reports whether a wheel notch would move the card.
+// The predicate belongs to resourceview so both surfaces answer a wheel over a
+// Resource pane identically; this wrapper only handles the missing view.
 func resourceScrollAtBoundary(view *resourceview.Model, delta int) bool {
 	if view == nil {
 		return true
 	}
-	before := view.Scroll()
-	moved := view.ScrollBy(delta)
-	view.ScrollTo(before)
-	return !moved
+	return view.ScrollAtBoundary(delta)
 }
 
 func (m *Model) previewResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {

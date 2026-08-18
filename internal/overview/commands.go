@@ -87,7 +87,7 @@ func (m *Model) Commands() []plugin.Command {
 		}
 		for i, c := range resourceview.Commands() {
 			cmds = append(cmds, plugin.Command{
-				ID: "resource-" + c.Key, Name: c.Name, Description: resourceCommandDescription(c.Key),
+				ID: c.ID, Name: c.Name, Description: resourceCommandDescription(c.ID),
 				Context: ctxGlobalWorkspacesResource, Priority: i + 2,
 			})
 		}
@@ -146,18 +146,20 @@ func (m *Model) Commands() []plugin.Command {
 	}
 }
 
-// resourceCommandDescription is the sentence for a shared Resource key. The
-// keys and their footer names come from resourceview so the two surfaces
+// resourceCommandDescription is the sentence for a shared Resource command.
+// The IDs, keys and footer names come from resourceview so the two surfaces
 // cannot drift; only the longer help text is written here.
-func resourceCommandDescription(key string) string {
-	switch key {
-	case "r":
+func resourceCommandDescription(id string) string {
+	switch id {
+	case resourceview.CommandRefresh:
 		return "Re-resolve the active resource"
-	case "o":
+	case resourceview.CommandOpenSource:
 		return "Open the resource in a browser"
-	case "{/}":
-		return "Previous or next resource tab"
-	case "x":
+	case resourceview.CommandPrevTab:
+		return "Previous resource tab"
+	case resourceview.CommandNextTab:
+		return "Next resource tab"
+	case resourceview.CommandCloseTab:
 		return "Close the active resource tab"
 	default:
 		return ""

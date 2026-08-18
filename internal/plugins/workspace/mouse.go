@@ -126,10 +126,8 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			view := p.activeDiffView()
 			return view.ScrollAtBoundary(action.Delta, view.Height())
 		case PaneResource:
-			// The card keeps the notch. resourceview does not yet expose a
-			// boundary predicate, and answering "at boundary" would send a
-			// wheel over a scrollable card to the window behind it.
-			return false
+			res := p.resources[leaf.ContentID]
+			return res == nil || res.pane == nil || res.pane.ScrollAtBoundary(action.Delta)
 		default:
 			return false
 		}

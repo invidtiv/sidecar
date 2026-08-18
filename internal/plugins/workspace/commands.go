@@ -534,12 +534,8 @@ func resourcePaneCommands() []plugin.Command {
 		{ID: "close", Name: "Close", Description: "Hide resource pane", Context: "workspace-resource", Priority: 1},
 	}
 	for i, cmd := range resourceview.Commands() {
-		id := resourceCommandIDs[cmd.Key]
-		if id == "" {
-			continue
-		}
 		cmds = append(cmds, plugin.Command{
-			ID: id, Name: cmd.Name, Description: cmd.Name + " resource",
+			ID: cmd.ID, Name: cmd.Name, Description: cmd.Name + " resource",
 			Context: "workspace-resource", Priority: i + 2,
 		})
 	}
@@ -548,14 +544,4 @@ func resourcePaneCommands() []plugin.Command {
 		plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-resource", Priority: 11},
 		plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-resource", Priority: 12},
 	)
-}
-
-// resourceCommandIDs maps the shared pane's documented keys onto this host's
-// command IDs, which is what binds a footer hint to a keymap binding. The keys
-// are the shared component's; only the naming is the host's.
-var resourceCommandIDs = map[string]string{
-	"r":   "refresh",
-	"o":   "open-source",
-	"{/}": "cycle-tab",
-	"x":   "close-tab",
 }
