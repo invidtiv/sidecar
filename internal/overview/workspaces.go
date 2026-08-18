@@ -844,10 +844,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if region, ok := action.Region.Data.(workspacelist.Region); ok && region.Kind == workspacelist.RegionRow {
 		kind = string(region.Kind)
 	}
-	_, docTab := action.Region.Data.(previewDocTabHit)
-	_, issueTab := action.Region.Data.(previewIssueTabHit)
-	_, closeHit := action.Region.Data.(previewPaneCloseHit)
-	secondaryClick := isPreviewDocRegion(kind) || isPreviewIssueRegion(kind) || docTab || issueTab || closeHit
+	secondaryClick := m.pressInSecondaryLeaf(action)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
 	if pressAway {
 		m.preview.pointer.Abandon()
@@ -869,6 +866,30 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	// sort header, chrome — reconciles the producer to the selection this same
 	// event moved rather than to the one it is leaving.
 	return tea.Batch(cmd, m.focusList())
+}
+
+// pressInSecondaryLeaf reports that a press landed inside a non-terminal leaf of
+// the preview's own pane tree — a document, issue, diff, resource, its header
+// tabs or its close button. Such a press is that leaf's; it must NOT hand the
+// keyboard back to the list, or the leaf the pointer just focused would draw
+// idle while the sidebar took the arrow keys.
+//
+// This asks the DRAWN tree rather than enumerating region kinds. The
+// enumeration it replaces listed doc and issue only, so every leaf kind added
+// after it — diff, resource — clicked to focus and then immediately lost the
+// keyboard again (td-43db92's bug, in the kinds its fix did not name). A
+// geometric answer cannot fall behind a new kind that way.
+//
+// The terminal leaf is deliberately excluded: its presses belong to the live
+// pane and may still become a drag-selection, so whether they take the keyboard
+// is decided by tty.PressLeavesTerminal on the region, as before.
+func (m *Model) pressInSecondaryLeaf(action mouse.MouseAction) bool {
+	layout, ok := paneHost{m}.Layout()
+	if !ok {
+		return false
+	}
+	node := paneframe.LeafAt(layout, action.X, action.Y)
+	return node != nil && node.Kind != panelayout.Terminal
 }
 
 // WorkspacesWheelAtBoundary mirrors WorkspacesMouse's wheel routing without

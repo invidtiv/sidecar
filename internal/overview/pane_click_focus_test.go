@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -113,6 +114,44 @@ func TestGlobalClickInsideAnyLeafFocusesThatLeaf(t *testing.T) {
 		}
 		run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: point[0], Y: point[1], Button: tea.MouseLeft}))
 		m.WorkspacesView(focusWide, focusTall)
+	}
+}
+
+// Focusing a leaf means the KEYBOARD, not just the ring. The click-away rule
+// that hands the arrow keys back to the list named doc and issue regions
+// explicitly, so a press on a diff — a leaf kind added after it — moved the ring
+// and then immediately gave the keyboard to the sidebar: the diff drew idle,
+// the list drew focused, and j/k moved rows. Tab-cycling was unaffected, which
+// is why this only ever looked like a mouse bug.
+func TestGlobalClickInsideALeafKeepsTheKeyboardOnThePreview(t *testing.T) {
+	stubPreviewTd(t)
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	everyKindPreviewTree(t, m)
+	points := previewClickPoints(t, m)
+
+	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff} {
+		t.Run(kindName(kind), func(t *testing.T) {
+			run(t, m, m.focusList())
+			m.WorkspacesView(focusWide, focusTall)
+			leaf := panelayout.FirstOfKind(m.preview.paneRoot, kind)
+			point := points[kind]
+			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: point[0], Y: point[1], Button: tea.MouseLeft}))
+			run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: point[0], Y: point[1], Button: tea.MouseLeft}))
+
+			if m.preview.paneFocus != leaf.ID {
+				t.Fatalf("click at %v left the ring on leaf %d, want the %s leaf %d",
+					point, m.preview.paneFocus, kindName(kind), leaf.ID)
+			}
+			if !m.PreviewFocused() {
+				t.Fatalf("click at %v drew the ring on the %s leaf but left the keyboard on the list",
+					point, kindName(kind))
+			}
+			got := paneHost{m}.Chrome(leaf)
+			if got != paneframe.ChromeActive {
+				t.Fatalf("the clicked %s leaf draws %v, want active chrome", kindName(kind), got)
+			}
+			m.WorkspacesView(focusWide, focusTall)
+		})
 	}
 }
 
