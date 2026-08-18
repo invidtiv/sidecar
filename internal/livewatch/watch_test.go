@@ -36,12 +36,12 @@ func awaitSignal(t *testing.T, w *PathWatcher) {
 	}
 }
 
-func expectNoSignal(t *testing.T, w *PathWatcher, within time.Duration) {
+func expectNoSignal(t *testing.T, w *PathWatcher, within time.Duration, reason string) {
 	t.Helper()
 	select {
 	case _, ok := <-w.Signals():
 		if ok {
-			t.Fatal("got a change signal for a path that is not a target")
+			t.Fatalf("got a change signal: %s", reason)
 		}
 	case <-time.After(within):
 	}
@@ -79,7 +79,7 @@ func TestPathWatcherIgnoresOtherFilesInTheSameDirectory(t *testing.T) {
 	// watcher sees this event. It must not report it: a preview pane open on one
 	// document should not re-read because a sibling changed.
 	write(t, other, "noise")
-	expectNoSignal(t, w, 250*time.Millisecond)
+	expectNoSignal(t, w, 250*time.Millisecond, "a sibling of the target changed")
 
 	write(t, target, "two")
 	awaitSignal(t, w)
@@ -106,7 +106,12 @@ func TestPathWatcherCoalescesABurst(t *testing.T) {
 	target := filepath.Join(dir, "doc.md")
 	write(t, target, "one")
 
-	w := newTestWatcher(t, fastConfig())
+	// This test is about the quiet period, so the latency cap is set far out of
+	// reach. With a cap the burst could outrun, a loaded machine flushes
+	// mid-burst and the remaining writes land as a second, legitimate signal —
+	// which looks exactly like a coalescing failure. TestPathWatcherMaxLatency
+	// covers the cap itself.
+	w := newTestWatcher(t, Config{Quiet: 20 * time.Millisecond, MaxLatency: time.Minute})
 	w.Watch(File(target))
 
 	for i := range 12 {
@@ -116,7 +121,39 @@ func TestPathWatcherCoalescesABurst(t *testing.T) {
 
 	// One burst, one signal. A second would mean an agent's rewrite loop costs a
 	// re-read per write.
-	expectNoSignal(t, w, 250*time.Millisecond)
+	expectNoSignal(t, w, 250*time.Millisecond, "one burst of writes must coalesce into one signal")
+}
+
+// TestPathWatcherMaxLatencyReportsUnderContinuousWrites covers the cap that
+// TestPathWatcherCoalescesABurst deliberately keeps out of reach: a target that
+// never goes quiet must still report, or a pane watching a file under a
+// sustained rewrite loop would never refresh.
+func TestPathWatcherMaxLatencyReportsUnderContinuousWrites(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "doc.md")
+	write(t, target, "one")
+
+	// The quiet period is long enough that it cannot be what reports here; only
+	// the cap can.
+	w := newTestWatcher(t, Config{Quiet: 30 * time.Second, MaxLatency: 100 * time.Millisecond})
+	w.Watch(File(target))
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			case <-time.After(10 * time.Millisecond):
+				// The watcher outlives this goroutine's last write, so ignore the
+				// error a torn-down TempDir produces during cleanup.
+				_ = os.WriteFile(target, []byte(strings.Repeat("x", i+1)), 0o644)
+			}
+		}
+	}()
+
+	awaitSignal(t, w)
 }
 
 func TestPathWatcherReportsCreateOfAMissingTarget(t *testing.T) {
@@ -145,7 +182,7 @@ func TestPathWatcherIgnoreFilter(t *testing.T) {
 	w.Watch(File(target))
 
 	write(t, target, "two")
-	expectNoSignal(t, w, 250*time.Millisecond)
+	expectNoSignal(t, w, 250*time.Millisecond, "the target is excluded by the Ignore filter")
 }
 
 func TestPathWatcherWatchReplacesTheTargetSet(t *testing.T) {
@@ -162,7 +199,7 @@ func TestPathWatcherWatchReplacesTheTargetSet(t *testing.T) {
 	// Navigating from one document to another must stop reporting the old one,
 	// or a closed tab keeps waking the pane up.
 	write(t, first, "changed")
-	expectNoSignal(t, w, 250*time.Millisecond)
+	expectNoSignal(t, w, 250*time.Millisecond, "the first target was replaced by the second")
 
 	write(t, second, "changed")
 	awaitSignal(t, w)
