@@ -82,12 +82,24 @@ This is enforced by shared code, not by memory:
 - `internal/paneframe` — presentation: chrome geometry, leaf border states, the
   drag handle and its widened hit box, the compositor, chrome-aware floors, and
   the order hit regions are registered in.
+- `internal/livepanes` — live refresh: the watcher lifecycle, watching only the
+  panes that are on screen, and re-reading a pane when it comes back into view.
+  `internal/livewatch` underneath it owns the filesystem signal and the
+  no-change gate.
 
 Each surface binds to the frame in exactly one file — `pane_host.go` — which
 answers only what is in its own leaves. When adding anything to do with panes,
 splits, handles, borders, focus chrome, or pane hit regions, put it in
 `paneframe` and let both surfaces inherit it. Do not add a second compositor,
 border rule, or divider renderer. See `.claude/skills/drag-pane/SKILL.md`.
+
+Live refresh binds in exactly one file per surface too —
+`internal/plugins/workspace/live_panes.go` and
+`internal/overview/live_preview.go` — and a new content-pane kind is one
+`livepanes.Binding` entry in each. A pane kind that reads something it does not
+own and has no binding is a pane that quietly stops being true while an agent
+works; that is what the `Resource` leaf is today, deliberately, because its
+content is not on the filesystem.
 
 See td-331dbf19 for diff paging implementation.
 

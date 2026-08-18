@@ -101,6 +101,11 @@ type PathWatcher struct {
 	// parent. It is a belief rather than the truth, which is why
 	// reconcileLocked checks it against the kernel rather than trusting it.
 	watched map[string]bool
+	// lost names directories that are still wanted but whose registration went
+	// away underneath us. Re-registering one is an admission that this watcher
+	// was blind for a moment, so the re-add reports a change whether or not one
+	// was observed.
+	lost map[string]bool
 }
 
 // NewPathWatcher starts a watcher with no targets. Nothing is observed, and no
@@ -191,8 +196,16 @@ func (w *PathWatcher) reconcileLocked() {
 	}
 	for dir := range w.watched {
 		if !live[dir] {
-			// The registration died under us. Forget it so the add below runs.
+			// The registration died under us. Forget it so the add below runs,
+			// and remember that it was lost: whatever was written between the
+			// death and the re-add produced no event anyone saw.
 			delete(w.watched, dir)
+			if desired[dir] {
+				if w.lost == nil {
+					w.lost = make(map[string]bool)
+				}
+				w.lost[dir] = true
+			}
 		}
 	}
 
@@ -200,8 +213,10 @@ func (w *PathWatcher) reconcileLocked() {
 		if !desired[dir] {
 			_ = w.fsw.Remove(dir)
 			delete(w.watched, dir)
+			delete(w.lost, dir)
 		}
 	}
+	recovered := false
 	for dir := range desired {
 		if w.watched[dir] {
 			continue
@@ -213,6 +228,18 @@ func (w *PathWatcher) reconcileLocked() {
 			continue
 		}
 		w.watched[dir] = true
+		if w.lost[dir] {
+			delete(w.lost, dir)
+			recovered = true
+		}
+	}
+	if recovered {
+		// Report unconditionally. A directory that came back almost always came
+		// back with different contents, and the consumer's answer to a signal is
+		// to re-read and compare — so a signal that turns out to be nothing costs
+		// one read and no repaint, while a missed one leaves the pane wrong with
+		// no second chance.
+		w.emit()
 	}
 }
 

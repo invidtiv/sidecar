@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -264,14 +265,10 @@ type Plugin struct {
 	resolveResource resourceview.Resolver
 
 	// Live refresh: one filesystem watcher per content-pane kind, created the
-	// first time a pane of that kind opens and released in Stop. See
-	// live_panes.go.
-	issueWatcher       *livewatch.PathWatcher
-	issueWatchStarting bool
-	docWatcher         *livewatch.PathWatcher
-	docWatchStarting   bool
-	diffWatcher        *livewatch.PathWatcher
-	diffWatchStarting  bool
+	// first time a pane of that kind is on screen and released in Stop. The
+	// lifecycle is livepanes'; what this plugin owns is which panes are visible
+	// and how each kind re-reads itself. See live_panes.go.
+	live *livepanes.Set
 	// diffAdminTargets caches git's administrative paths per worktree, because
 	// resolving them costs five `git rev-parse` calls and they never move for
 	// the life of a worktree.

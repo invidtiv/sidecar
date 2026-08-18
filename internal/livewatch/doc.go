@@ -38,6 +38,12 @@
 // file by path rather than by index, since a positional cursor silently
 // re-points at a different file when the list above it changes.
 //
+// The lifecycle around those bindings — start a watcher lazily, adopt it across
+// a project switch, re-arm the one-shot listener, hand every descriptor back —
+// is identical for every kind and belongs to [github.com/marcus/sidecar/internal/livepanes],
+// which is also where "watch only what is on screen, and re-read a pane that
+// comes back into view" is decided once for every surface.
+//
 // # Startup
 //
 // Nothing here runs on the startup path. A PathWatcher is created when a pane

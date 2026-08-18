@@ -8,141 +8,167 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
-// Live refresh for the workspace plugin's three content panes.
+// Live refresh for the workspace plugin's content panes.
+//
+// The lifecycle — start a watcher lazily, adopt it across a project switch,
+// re-arm the listener, release every descriptor — belongs to [livepanes] and is
+// shared with the global browser, so what is left here is only what this
+// surface answers differently: which of its panes are on screen, and how each
+// kind re-reads itself.
 //
 // One watcher per kind, not one per pane. The panes of a kind almost always
 // want the same signal — every issue card reads the same td store, every diff
 // reads the same repository — and on macOS each registration costs a descriptor
-// per file in the watched directory, so a watcher per tab would be expensive
-// for no benefit. A single watcher with a reconciled target set gives the same
-// answer at a fraction of the cost, and there is exactly one thing to stop.
+// per file in the watched directory, so a watcher per tab would be expensive for
+// no benefit.
 //
-// All three are created lazily, from inside a tea.Cmd, the first time a pane of
-// that kind opens. A session that never opens an issue card never opens a
-// descriptor for one, and nothing here touches the startup path.
+// Only visible panes are watched. A background tab in a directory nobody is
+// looking at is a registration paid for a frame nobody sees; [livepanes] re-reads
+// a pane when it comes back into view, and the no-change gate means an unchanged
+// file costs one read and no repaint.
 
-// Messages for the live-refresh loop. Each kind has a started message carrying
-// the watcher, and a signal message that means "your targets moved, go look".
-type (
-	issueWatchStartedMsg struct {
-		Epoch   uint64
-		Watcher *livewatch.PathWatcher
-	}
-	issueStoreChangedMsg struct{}
-
-	docWatchStartedMsg struct {
-		Epoch   uint64
-		Watcher *livewatch.PathWatcher
-	}
-	docFileChangedMsg struct{}
-
-	diffWatchStartedMsg struct {
-		Epoch   uint64
-		Watcher *livewatch.PathWatcher
-	}
-	diffRepoChangedMsg struct{}
+// The kinds this surface registers. They name the messages the set produces, so
+// they are constants rather than literals scattered through the file.
+const (
+	liveIssues = "issues"
+	liveDocs   = "docs"
+	liveDiffs  = "diffs"
 )
 
-// GetEpoch lets the plugin's normal stale-message check drop watchers started
-// for a project the user has since switched away from.
-func (m issueWatchStartedMsg) GetEpoch() uint64 { return m.Epoch }
-func (m docWatchStartedMsg) GetEpoch() uint64   { return m.Epoch }
-func (m diffWatchStartedMsg) GetEpoch() uint64  { return m.Epoch }
+// liveOwner distinguishes this surface's live-refresh messages from the global
+// browser's. Both are hosted in one process and read the same bus.
+const liveOwner = "workspace"
 
-// stopLiveWatchers releases every descriptor the live-refresh loop holds.
+// newLiveSet registers the pane kinds this surface refreshes.
 //
-// Stop blocks until the watcher goroutine has drained, so this runs detached.
-// Plugin.Stop is both the quit and the project-switch boundary, and stalling it
-// would stall the switch.
-func (p *Plugin) stopLiveWatchers() {
-	for _, w := range []**livewatch.PathWatcher{&p.issueWatcher, &p.docWatcher, &p.diffWatcher} {
-		if *w == nil {
-			continue
-		}
-		watcher := *w
-		*w = nil
-		go watcher.Stop()
-	}
+// Adding a kind is one entry here. That is the whole reason the lifecycle moved
+// out: a new content pane that forgets to refresh is a defect nobody sees until
+// they are watching an agent work and the pane quietly stops being true.
+func (p *Plugin) newLiveSet() *livepanes.Set {
+	return livepanes.NewSet(liveOwner, p.liveEpoch,
+		livepanes.Binding{
+			Kind: liveIssues,
+			// The td store moves whenever any issue anywhere changes, and a single
+			// `td` command can write several times. A longer settle than the
+			// default turns a burst into one re-read.
+			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
+			Prepare: p.resolveTDStores,
+			Targets: p.issueWatchTargets,
+			Refresh: p.refreshIssuePanes,
+		},
+		livepanes.Binding{
+			Kind:    liveDocs,
+			Config:  livewatch.Config{Ignore: isEditorScratchPath},
+			Targets: p.docWatchTargets,
+			Refresh: p.refreshDocPanes,
+		},
+		livepanes.Binding{
+			Kind: liveDiffs,
+			// A repository under rebase or checkout writes hundreds of ref files
+			// in a burst, and each re-read is roughly half a dozen git
+			// subprocesses. Settle generously: a diff that lands a second late is
+			// invisible, a diff re-run fifty times is not.
+			Config:  livewatch.Config{Quiet: 500 * time.Millisecond, MaxLatency: 3 * time.Second},
+			Prepare: p.resolveDiffAdminTargets,
+			Targets: p.diffWatchTargets,
+			Refresh: p.refreshDiffPanes,
+		},
+	)
 }
 
-// adoptWatcher installs a watcher created off the update goroutine, stopping it
-// instead if the plugin no longer wants one.
+func (p *Plugin) liveEpoch() uint64 {
+	if p.ctx == nil {
+		return 0
+	}
+	return p.ctx.Epoch
+}
+
+// reconcileLiveWatches brings every watch set in line with the panes that are
+// actually on screen.
 //
-// A project switch runs Stop then Init then Start, so a watcher started before
-// the switch can still land afterwards. Whichever watcher is not adopted has to
-// be stopped, or its goroutine and its descriptors live for the rest of the
-// process.
-func adoptWatcher(slot **livewatch.PathWatcher, incoming *livewatch.PathWatcher, wanted bool) bool {
-	if incoming == nil {
-		return false
+// It is called from the plugin's Update loop rather than from each of the two
+// dozen places that create, close, retarget or restore a pane. Those call sites
+// are spread across pane creation, tab selection, layout decode, leaf close and
+// project switch, and missing one would show up as either a pane that never
+// updates or a watcher that outlives its pane — both silent.
+//
+// It is cheap enough to run per message: the target lists are built from cached
+// per-worktree resolutions and the visible tabs' own paths, and the watcher
+// diffs the result, touching the kernel only for registrations that changed.
+func (p *Plugin) reconcileLiveWatches() tea.Cmd {
+	if p.ctx == nil {
+		return nil
 	}
-	if !wanted {
-		go incoming.Stop()
-		return false
+	if p.live == nil {
+		p.live = p.newLiveSet()
 	}
-	if *slot != nil && *slot != incoming {
-		old := *slot
-		go old.Stop()
+	return p.live.Reconcile()
+}
+
+// stopLiveWatchers releases every descriptor the live-refresh loop holds.
+func (p *Plugin) stopLiveWatchers() { p.live.Stop() }
+
+// handleLiveWatchMsg handles the live-refresh messages, reporting whether msg
+// was one of them.
+func (p *Plugin) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
+	switch msg := msg.(type) {
+	case tdStoreResolvedMsg:
+		return p.handleTDStoreResolved(msg), true
+	case workspacediff.AdminTargetsMsg:
+		return p.handleDiffAdminTargets(msg), true
 	}
-	*slot = incoming
-	return true
+	return p.live.Handle(msg)
+}
+
+// ---------------------------------------------------------------------------
+// Visibility
+// ---------------------------------------------------------------------------
+
+// visibleContentLeaves is the set of content leaves the last painted frame
+// actually placed.
+//
+// It reads the recorded frame rather than re-deriving a layout, for the same
+// reason pointer hits do: what is on screen is what was composed, not what the
+// tree would compose if asked again. A frame that drew no tree — the kanban
+// board, a modal, a preview too small to place — placed no leaves, and a zoomed
+// frame placed exactly one, so both fall out of this without a special case.
+func (p *Plugin) visibleContentLeaves() map[int]bool {
+	visible := make(map[int]bool)
+	if !p.paneFrameDrawn {
+		return visible
+	}
+	for _, placement := range p.paneFrame.Leaves {
+		if placement.Node == nil || placement.Node.Kind == PaneTerminal {
+			continue
+		}
+		visible[placement.Node.ContentID] = true
+	}
+	return visible
 }
 
 // ---------------------------------------------------------------------------
 // Issue cards (td-312e4e)
 // ---------------------------------------------------------------------------
 
-// syncIssueWatch points the td-store watcher at the store behind the open issue
-// panes, starting it on first use and releasing it when the last card closes.
-func (p *Plugin) syncIssueWatch() tea.Cmd {
-	targets := p.issueWatchTargets()
-	if len(targets) == 0 {
-		if p.issueWatcher != nil {
-			p.issueWatcher.Watch()
-		}
-		return nil
-	}
-	if p.issueWatcher != nil {
-		p.issueWatcher.Watch(targets...)
-		return nil
-	}
-	if p.issueWatchStarting {
-		return nil
-	}
-	p.issueWatchStarting = true
-	epoch := p.ctx.Epoch
-	return livewatch.Start(livewatch.Config{
-		// The td store moves whenever any issue anywhere changes, and a single
-		// `td` command can write several times. A longer settle than the default
-		// turns a burst into one re-read; the ticket asks for a second or two,
-		// not for sub-second.
-		Quiet:      400 * time.Millisecond,
-		MaxLatency: 2 * time.Second,
-	}, targets, func(w *livewatch.PathWatcher, err error) tea.Msg {
-		if err != nil {
-			return issueWatchStartedMsg{Epoch: epoch}
-		}
-		return issueWatchStartedMsg{Epoch: epoch, Watcher: w}
-	})
-}
-
-// issueWatchTargets is the td store behind any open issue pane, or nil when
-// none is open.
+// issueWatchTargets is the td store behind any visible issue pane, or nil when
+// none is on screen.
 //
-// Resolution is cached per worktree and never done here. Finding the td root
-// can walk parent directories and shell out to git, and this runs on the update
+// Resolution is cached per worktree and never done here. Finding the td root can
+// walk parent directories and shell out to git, and this runs on the update
 // goroutine every time the pane set is reconciled; doing the real work inline
-// would be exactly the kind of hidden filesystem cost the startup rules exist
-// to prevent.
+// would be exactly the kind of hidden filesystem cost the startup rules exist to
+// prevent.
 func (p *Plugin) issueWatchTargets() []livewatch.Target {
+	visible := p.visibleContentLeaves()
 	seen := make(map[string]bool)
 	var targets []livewatch.Target
-	for _, pane := range p.issues {
-		if pane == nil || len(pane.tabs.Items) == 0 || pane.root == "" {
+	for id, pane := range p.issues {
+		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 || pane.root == "" {
 			continue
 		}
 		for _, t := range p.tdStoreTargets[pane.root] {
@@ -156,12 +182,13 @@ func (p *Plugin) issueWatchTargets() []livewatch.Target {
 	return targets
 }
 
-// resolveTDStores returns commands resolving the td store for any open issue
+// resolveTDStores returns commands resolving the td store for any visible issue
 // pane whose worktree has not been resolved yet.
 func (p *Plugin) resolveTDStores() tea.Cmd {
+	visible := p.visibleContentLeaves()
 	var cmds []tea.Cmd
-	for _, pane := range p.issues {
-		if pane == nil || pane.root == "" || len(pane.tabs.Items) == 0 {
+	for id, pane := range p.issues {
+		if pane == nil || !visible[id] || pane.root == "" || len(pane.tabs.Items) == 0 {
 			continue
 		}
 		if _, done := p.tdStoreTargets[pane.root]; done {
@@ -174,7 +201,7 @@ func (p *Plugin) resolveTDStores() tea.Cmd {
 			p.tdStoreResolving = make(map[string]bool)
 		}
 		p.tdStoreResolving[pane.root] = true
-		root, epoch := pane.root, p.ctx.Epoch
+		root, epoch := pane.root, p.liveEpoch()
 		cmds = append(cmds, func() tea.Msg {
 			return tdStoreResolvedMsg{Epoch: epoch, Root: root, Targets: issueview.StoreTargets(root)}
 		})
@@ -198,25 +225,16 @@ func (p *Plugin) handleTDStoreResolved(msg tdStoreResolvedMsg) tea.Cmd {
 		p.tdStoreTargets = make(map[string][]livewatch.Target)
 	}
 	p.tdStoreTargets[msg.Root] = msg.Targets
-	return p.syncIssueWatch()
+	return p.reconcileLiveWatches()
 }
 
-// handleIssueWatchStarted adopts the td-store watcher and begins listening.
-func (p *Plugin) handleIssueWatchStarted(msg issueWatchStartedMsg) tea.Cmd {
-	p.issueWatchStarting = false
-	if !adoptWatcher(&p.issueWatcher, msg.Watcher, len(p.issues) > 0) {
-		return nil
-	}
-	p.issueWatcher.Watch(p.issueWatchTargets()...)
-	return livewatch.Listen(p.issueWatcher, issueStoreChangedMsg{})
-}
-
-// handleIssueStoreChanged re-reads every open issue card and re-arms the
-// listener.
-func (p *Plugin) handleIssueStoreChanged() tea.Cmd {
-	cmds := []tea.Cmd{livewatch.Listen(p.issueWatcher, issueStoreChangedMsg{})}
-	for _, pane := range p.issues {
-		if pane == nil {
+// refreshIssuePanes re-reads every visible issue card.
+func (p *Plugin) refreshIssuePanes() []tea.Cmd {
+	visible := p.visibleContentLeaves()
+	suppressed := p.issueRefreshSuppressed()
+	var cmds []tea.Cmd
+	for id, pane := range p.issues {
+		if pane == nil || !visible[id] {
 			continue
 		}
 		for _, item := range pane.tabs.Items {
@@ -225,12 +243,12 @@ func (p *Plugin) handleIssueStoreChanged() tea.Cmd {
 				continue
 			}
 			view.Observe()
-			if cmd := view.Refresh(p.issueRefreshSuppressed()); cmd != nil {
+			if cmd := view.Refresh(suppressed); cmd != nil {
 				cmds = append(cmds, cmd)
 			}
 		}
 	}
-	return tea.Batch(cmds...)
+	return cmds
 }
 
 // issueRefreshSuppressed vetoes an issue re-read while a modal owns the screen.
@@ -246,91 +264,55 @@ func (p *Plugin) issueRefreshSuppressed() bool {
 // Document panes (td-03c21c)
 // ---------------------------------------------------------------------------
 
-// syncDocWatch points the document watcher at exactly the files the open doc
-// tabs are showing.
+// docWatchTargets is the file behind every visible document pane's active tab.
 //
-// Every open tab is watched, not just the active one. A background tab whose
-// file changed and is then selected should already be current; re-reading on
-// selection would show the user a stale frame first.
-func (p *Plugin) syncDocWatch() tea.Cmd {
-	targets := p.docWatchTargets()
-	if len(targets) == 0 {
-		if p.docWatcher != nil {
-			p.docWatcher.Watch()
-		}
-		return nil
-	}
-	if p.docWatcher != nil {
-		p.docWatcher.Watch(targets...)
-		return nil
-	}
-	if p.docWatchStarting {
-		return nil
-	}
-	p.docWatchStarting = true
-	epoch := p.ctx.Epoch
-	return livewatch.Start(livewatch.Config{
-		Ignore: isEditorScratchPath,
-	}, targets, func(w *livewatch.PathWatcher, err error) tea.Msg {
-		if err != nil {
-			return docWatchStartedMsg{Epoch: epoch}
-		}
-		return docWatchStartedMsg{Epoch: epoch, Watcher: w}
-	})
-}
-
+// The active tab only. A background tab is not on screen, and its registration
+// would cost a descriptor per file in its directory for a frame nobody sees;
+// selecting it brings it into the watch set, which is what makes [livepanes]
+// re-read it.
 func (p *Plugin) docWatchTargets() []livewatch.Target {
+	visible := p.visibleContentLeaves()
 	var targets []livewatch.Target
 	seen := make(map[string]bool)
-	for _, pane := range p.docs {
-		if pane == nil {
+	for id, pane := range p.docs {
+		if pane == nil || !visible[id] {
 			continue
 		}
-		for _, item := range pane.tabs.Items {
-			view := item.View
-			if view == nil {
-				continue
-			}
-			view.SetRoot(pane.root)
-			t := view.WatchTarget()
-			if t.Path == "" || seen[t.Path] {
-				continue
-			}
-			seen[t.Path] = true
-			targets = append(targets, t)
+		view := pane.view()
+		if view == nil {
+			continue
 		}
+		// The pane may have been opened by file descriptor, in which case the
+		// model never learned where the file lives and has no path to re-read.
+		view.SetRoot(pane.root)
+		t := view.WatchTarget()
+		if t.Path == "" || seen[t.Path] {
+			continue
+		}
+		seen[t.Path] = true
+		targets = append(targets, t)
 	}
 	return targets
 }
 
-func (p *Plugin) handleDocWatchStarted(msg docWatchStartedMsg) tea.Cmd {
-	p.docWatchStarting = false
-	if !adoptWatcher(&p.docWatcher, msg.Watcher, len(p.docs) > 0) {
-		return nil
-	}
-	p.docWatcher.Watch(p.docWatchTargets()...)
-	return livewatch.Listen(p.docWatcher, docFileChangedMsg{})
-}
-
-func (p *Plugin) handleDocFileChanged() tea.Cmd {
-	cmds := []tea.Cmd{livewatch.Listen(p.docWatcher, docFileChangedMsg{})}
-	for _, pane := range p.docs {
-		if pane == nil {
+// refreshDocPanes re-reads the active tab of every visible document pane.
+func (p *Plugin) refreshDocPanes() []tea.Cmd {
+	visible := p.visibleContentLeaves()
+	var cmds []tea.Cmd
+	for id, pane := range p.docs {
+		if pane == nil || !visible[id] {
 			continue
 		}
-		suppressed := p.docRefreshSuppressed(pane)
-		for _, item := range pane.tabs.Items {
-			view := item.View
-			if view == nil {
-				continue
-			}
-			view.Observe()
-			if cmd := view.Refresh(suppressed); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+		view := pane.view()
+		if view == nil {
+			continue
+		}
+		view.Observe()
+		if cmd := view.Refresh(p.docRefreshSuppressed(pane)); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	return tea.Batch(cmds...)
+	return cmds
 }
 
 // docRefreshSuppressed vetoes a document re-read while something else owns the
@@ -368,69 +350,18 @@ func isEditorScratchPath(path string) bool {
 // Diff panes (td-e9a275)
 // ---------------------------------------------------------------------------
 
-// syncDiffWatch points the repository watcher at git's administrative files
-// plus the files currently under review.
-//
-// The admin paths have to be resolved by running git, which is why they are
-// resolved once per worktree and cached: this is called every time the diff's
-// file list changes, and re-running `git rev-parse` five times on each of those
-// would be exactly the per-change subprocess cost the ticket rules out.
-func (p *Plugin) syncDiffWatch() tea.Cmd {
-	root := p.diffWatchRoot()
-	if root == "" {
-		if p.diffWatcher != nil {
-			p.diffWatcher.Watch()
-		}
-		return nil
-	}
-
-	var cmds []tea.Cmd
-	admin, resolved := p.diffAdminTargets[root]
-	if !resolved {
-		if !p.diffAdminResolving[root] {
-			if p.diffAdminResolving == nil {
-				p.diffAdminResolving = make(map[string]bool)
-			}
-			p.diffAdminResolving[root] = true
-			cmds = append(cmds, workspacediff.ResolveAdminTargets(root, "", p.ctx.Epoch))
-		}
-		// Watch the files under review now; the admin paths join when they land.
-	}
-
-	targets := p.diffWatchTargets(root, admin)
-	switch {
-	case p.diffWatcher != nil:
-		p.diffWatcher.Watch(targets...)
-	case !p.diffWatchStarting:
-		p.diffWatchStarting = true
-		epoch := p.ctx.Epoch
-		cmds = append(cmds, livewatch.Start(livewatch.Config{
-			// A repository under rebase or checkout writes hundreds of ref files
-			// in a burst, and each re-read is roughly half a dozen git
-			// subprocesses. Settle generously: a diff that lands a second late is
-			// invisible, a diff re-run fifty times is not.
-			Quiet:      500 * time.Millisecond,
-			MaxLatency: 3 * time.Second,
-		}, targets, func(w *livewatch.PathWatcher, err error) tea.Msg {
-			if err != nil {
-				return diffWatchStartedMsg{Epoch: epoch}
-			}
-			return diffWatchStartedMsg{Epoch: epoch, Watcher: w}
-		}))
-	}
-	return tea.Batch(cmds...)
-}
-
-// diffWatchRoot is the worktree the diff surfaces belong to, or "" when none is
-// showing a diff. Diff views in one plugin instance always share a worktree.
+// diffWatchRoot is the worktree the visible diff surfaces belong to, or "" when
+// none is showing a diff. Diff views in one plugin instance always share a
+// worktree.
 //
 // The legacy view counts only once it has actually loaded. It is constructed
 // eagerly for every session, so keying off its existence would start a
 // repository watcher — and hold its descriptors — for users who never open the
 // Diff surface at all.
 func (p *Plugin) diffWatchRoot() string {
-	for _, pane := range p.diffs {
-		if pane != nil && pane.root != "" && len(pane.tabs.Items) > 0 {
+	visible := p.visibleContentLeaves()
+	for id, pane := range p.diffs {
+		if pane != nil && visible[id] && pane.root != "" && len(pane.tabs.Items) > 0 {
 			return pane.root
 		}
 	}
@@ -440,7 +371,39 @@ func (p *Plugin) diffWatchRoot() string {
 	return ""
 }
 
-func (p *Plugin) diffWatchTargets(root string, admin []livewatch.Target) []livewatch.Target {
+// resolveDiffAdminTargets resolves git's administrative paths for the worktree
+// under review, once per worktree.
+//
+// They have to be resolved by running git, which is why they are cached: this
+// runs every time the pane set is reconciled, and re-running `git rev-parse`
+// five times on each of those is exactly the per-change subprocess cost the
+// startup rules exist to prevent.
+func (p *Plugin) resolveDiffAdminTargets() tea.Cmd {
+	root := p.diffWatchRoot()
+	if root == "" {
+		return nil
+	}
+	if _, resolved := p.diffAdminTargets[root]; resolved {
+		return nil
+	}
+	if p.diffAdminResolving[root] {
+		return nil
+	}
+	if p.diffAdminResolving == nil {
+		p.diffAdminResolving = make(map[string]bool)
+	}
+	p.diffAdminResolving[root] = true
+	return workspacediff.ResolveAdminTargets(root, "", p.liveEpoch())
+}
+
+// diffWatchTargets is git's administrative files plus the files currently under
+// review in a visible diff pane.
+func (p *Plugin) diffWatchTargets() []livewatch.Target {
+	root := p.diffWatchRoot()
+	if root == "" {
+		return nil
+	}
+	visible := p.visibleContentLeaves()
 	seen := make(map[string]bool)
 	var targets []livewatch.Target
 	add := func(list []livewatch.Target) {
@@ -456,13 +419,9 @@ func (p *Plugin) diffWatchTargets(root string, admin []livewatch.Target) []livew
 			targets = append(targets, t)
 		}
 	}
-	add(admin)
-	// Only the visible tab's files. A background diff tab is not on screen, and
-	// walking every tab's file list on every reconcile would put an O(files)
-	// cost on the update loop for panes nobody is looking at. Selecting the tab
-	// reconciles the watch set, and the tab's own load path covers the gap.
-	for _, pane := range p.diffs {
-		if pane == nil || pane.root != root {
+	add(p.diffAdminTargets[root])
+	for id, pane := range p.diffs {
+		if pane == nil || !visible[id] || pane.root != root {
 			continue
 		}
 		if view := pane.tabs.ActiveView(); view != nil {
@@ -485,21 +444,14 @@ func (p *Plugin) handleDiffAdminTargets(msg workspacediff.AdminTargetsMsg) tea.C
 		p.diffAdminTargets = make(map[string][]livewatch.Target)
 	}
 	p.diffAdminTargets[msg.WorkDir] = msg.Targets
-	return p.syncDiffWatch()
+	return p.reconcileLiveWatches()
 }
 
-func (p *Plugin) handleDiffWatchStarted(msg diffWatchStartedMsg) tea.Cmd {
-	p.diffWatchStarting = false
-	if !adoptWatcher(&p.diffWatcher, msg.Watcher, p.diffWatchRoot() != "") {
-		return nil
-	}
-	p.diffWatcher.Watch(p.diffWatchTargets(p.diffWatchRoot(), p.diffAdminTargets[p.diffWatchRoot()])...)
-	return livewatch.Listen(p.diffWatcher, diffRepoChangedMsg{})
-}
-
-func (p *Plugin) handleDiffRepoChanged() tea.Cmd {
-	cmds := []tea.Cmd{livewatch.Listen(p.diffWatcher, diffRepoChangedMsg{})}
+// refreshDiffPanes re-runs every visible diff.
+func (p *Plugin) refreshDiffPanes() []tea.Cmd {
+	visible := p.visibleContentLeaves()
 	suppressed := p.diffRefreshSuppressed()
+	var cmds []tea.Cmd
 	// The plugin's own diff view, which predates panes and is still what the
 	// non-pane Diff surface renders. It is a diff pane by any other name and
 	// goes stale the same way.
@@ -507,8 +459,8 @@ func (p *Plugin) handleDiffRepoChanged() tea.Cmd {
 	if cmd := p.diff.Refresh(p.diff.WorkDir, p.selectedDiffBaseRef(), p.diff.WorkspaceID, suppressed); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	for _, pane := range p.diffs {
-		if pane == nil {
+	for id, pane := range p.diffs {
+		if pane == nil || !visible[id] {
 			continue
 		}
 		for _, item := range pane.tabs.Items {
@@ -522,7 +474,7 @@ func (p *Plugin) handleDiffRepoChanged() tea.Cmd {
 			}
 		}
 	}
-	return tea.Batch(cmds...)
+	return cmds
 }
 
 // diffRefreshSuppressed vetoes a diff re-run while a modal owns the screen or a
@@ -534,59 +486,4 @@ func (p *Plugin) handleDiffRepoChanged() tea.Cmd {
 // owed signal lands harmlessly after that with nothing new to show.
 func (p *Plugin) diffRefreshSuppressed() bool {
 	return p.viewMode != ViewModeList || p.activeLifecycleOperationID != ""
-}
-
-// ---------------------------------------------------------------------------
-// Reconciliation
-// ---------------------------------------------------------------------------
-
-// reconcileLiveWatches brings all three watch sets in line with the panes that
-// are actually open.
-//
-// It is called from the plugin's Update loop rather than from each of the two
-// dozen places that create, close, retarget or restore a pane. Those call sites
-// are spread across pane creation, tab selection, layout decode, leaf close and
-// project switch, and missing one would show up as either a pane that never
-// updates or a watcher that outlives its pane — both silent. Reconciling from
-// one place makes the invariant "the watch set matches the pane set" hold by
-// construction.
-//
-// It is cheap enough to run per message: the target lists are built from cached
-// per-worktree resolutions and the open tabs' own paths, and PathWatcher.Watch
-// diffs the result, touching the kernel only for registrations that actually
-// changed.
-func (p *Plugin) reconcileLiveWatches() tea.Cmd {
-	if p.ctx == nil {
-		return nil
-	}
-	return tea.Batch(
-		p.resolveTDStores(),
-		p.syncIssueWatch(),
-		p.syncDocWatch(),
-		p.syncDiffWatch(),
-	)
-}
-
-// handleLiveWatchMsg handles the live-refresh messages, reporting whether msg
-// was one of them.
-func (p *Plugin) handleLiveWatchMsg(msg tea.Msg) (tea.Cmd, bool) {
-	switch msg := msg.(type) {
-	case tdStoreResolvedMsg:
-		return p.handleTDStoreResolved(msg), true
-	case issueWatchStartedMsg:
-		return p.handleIssueWatchStarted(msg), true
-	case issueStoreChangedMsg:
-		return p.handleIssueStoreChanged(), true
-	case docWatchStartedMsg:
-		return p.handleDocWatchStarted(msg), true
-	case docFileChangedMsg:
-		return p.handleDocFileChanged(), true
-	case diffWatchStartedMsg:
-		return p.handleDiffWatchStarted(msg), true
-	case diffRepoChangedMsg:
-		return p.handleDiffRepoChanged(), true
-	case workspacediff.AdminTargetsMsg:
-		return p.handleDiffAdminTargets(msg), true
-	}
-	return nil, false
 }

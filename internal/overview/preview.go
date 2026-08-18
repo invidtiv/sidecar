@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -126,13 +127,10 @@ type previewState struct {
 	paneSizeCmds []tea.Cmd
 
 	// Live refresh: one filesystem watcher per preview-pane kind, created when
-	// the pane opens and released when it closes. See live_preview.go.
-	issueWatcher       *livewatch.PathWatcher
-	issueWatchStarting bool
-	docWatcher         *livewatch.PathWatcher
-	docWatchStarting   bool
-	diffWatcher        *livewatch.PathWatcher
-	diffWatchStarting  bool
+	// the pane is on screen and released when it closes. The lifecycle is
+	// livepanes'; what this surface owns is which previews are visible and how
+	// each kind re-reads itself. See live_preview.go.
+	live *livepanes.Set
 	// Resolving either of these runs git or walks parents, so both are cached
 	// per worktree rather than recomputed on each reconcile.
 	tdStoreTargets     map[string][]livewatch.Target
