@@ -64,9 +64,12 @@ func TestToggleMarkdownRemapsPlace(t *testing.T) {
 	}
 }
 
-func TestClickRenderedParagraphLandsOnSourceLine(t *testing.T) {
-	content := wrappingParagraph()
+func TestClickRenderedParagraphPreservesWrappedScreenRow(t *testing.T) {
+	content := strings.TrimSpace(strings.Repeat("word ", 120))
 	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.updateTextareaDimensions()
 	p.markdownView = true
 	p.previewMode = true
 	p.activePane = PaneEditor
@@ -79,15 +82,19 @@ func TestClickRenderedParagraphLandsOnSourceLine(t *testing.T) {
 	}
 	// Scroll so the clicked row is not at the top of the note.
 	p.previewScrollOff = nonEmpty[1]
-	p.previewCursorLine = nonEmpty[2]
+	p.previewCursorLine = nonEmpty[len(nonEmpty)-2]
 	viewRow := p.previewCursorLine - p.previewScrollOff
 	if viewRow < 1 {
 		t.Fatalf("click is not below the first visible row: cursor=%d scroll=%d",
 			p.previewCursorLine, p.previewScrollOff)
 	}
 
+	originX := p.listWidth + dividerWidth + 2 + p.editorLayout().leftMargin
+	clickX := originX + p.editorLayout().wrapColumn - 1
+	clickY := p.editorContentStartY() + viewRow
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
 	a := p.viewSurface.Click(p.previewScrollOff, viewRow)
-	_ = p.enterEditAt(a.SourceLine, a.SourceCol)
+	_ = p.enterEditAt(srcLine, srcCol)
 
 	if p.previewMode {
 		t.Fatal("click left preview mode on")
@@ -103,10 +110,48 @@ func TestClickRenderedParagraphLandsOnSourceLine(t *testing.T) {
 	}
 
 	off := p.editorTextarea.ScrollYOffset()
-	screenRow := p.editorTextarea.Line() - off
-	if screenRow != viewRow && screenRow != viewRow-1 && screenRow != viewRow+1 {
-		t.Fatalf("edit screen row %d (YOffset=%d line=%d), want near clicked view row %d",
-			screenRow, off, p.editorTextarea.Line(), viewRow)
+	// ScrollYOffset and LineInfo.RowOffset are visual-row coordinates. Line()
+	// is only a logical source row, so it cannot detect a jump between soft-
+	// wrapped rows of the same paragraph.
+	screenRow := p.editorTextarea.LineInfo().RowOffset - off
+	if screenRow != viewRow {
+		t.Fatalf("edit screen row %d (YOffset=%d line=%d rowOffset=%d), want clicked view row %d",
+			screenRow, off, p.editorTextarea.Line(), p.editorTextarea.LineInfo().RowOffset, viewRow)
+	}
+}
+
+func TestClickWrappedTextareaRowUsesVisualAnchor(t *testing.T) {
+	content := strings.TrimSpace(strings.Repeat("word ", 400))
+	p := layoutTestPlugin(t, content)
+	p.width = 72
+	p.listWidth = 18
+	p.previewMode = false
+	p.updateTextareaDimensions()
+	raw := markdown.MapWrappedSource(content, p.editorLayout().wrapColumn)
+	p.setTextareaCursorAndScroll(0, raw.At(32).SourceCol, 8)
+	if p.editorTextarea.ScrollYOffset() == 0 {
+		t.Fatal("fixture did not create a scrolled textarea")
+	}
+
+	const viewRow = 6
+	originX := p.listWidth + dividerWidth + 2 + p.editorLayout().leftMargin
+	clickX := originX + 8
+	clickY := p.editorContentStartY() + viewRow
+	wantAnchor := raw.At(p.editorTextarea.ScrollYOffset() + viewRow)
+
+	srcLine, srcCol := p.clickToSource(clickX, clickY)
+	if srcLine != wantAnchor.SourceLine {
+		t.Fatalf("wrapped edit click source line %d, want %d", srcLine, wantAnchor.SourceLine)
+	}
+	if srcCol < wantAnchor.SourceCol {
+		t.Fatalf("wrapped edit click source col %d, want at or after row anchor %d", srcCol, wantAnchor.SourceCol)
+	}
+	_ = p.enterEditAt(srcLine, srcCol)
+
+	screenRow := raw.VisualRowForSource(p.editorTextarea.Line(), p.editorTextarea.Column()) - p.editorTextarea.ScrollYOffset()
+	if screenRow != viewRow {
+		t.Fatalf("wrapped edit click moved to screen row %d, want %d (line=%d col=%d offset=%d)",
+			screenRow, viewRow, p.editorTextarea.Line(), p.editorTextarea.Column(), p.editorTextarea.ScrollYOffset())
 	}
 }
 
@@ -133,6 +178,30 @@ func TestRawAndEditShareWrapPolicy(t *testing.T) {
 	}
 	if visual == 1 {
 		t.Fatal("raw view truncated instead of wrapping")
+	}
+}
+
+func TestRawAnchorsMatchTextareaSoftWrapRows(t *testing.T) {
+	contents := []string{
+		strings.TrimSpace(strings.Repeat("word ", 80)),
+		strings.Repeat("abcdefghij", 24),
+		strings.Repeat("x", 46), // exact-width line has Bubbles' cursor-edge row
+		strings.TrimSpace(strings.Repeat("naïve café 世界 ", 40)),
+	}
+	for _, content := range contents {
+		p := layoutTestPlugin(t, content)
+		p.width = 72
+		p.listWidth = 18
+		p.previewMode = false
+		p.updateTextareaDimensions()
+		raw := markdown.MapWrappedSource(content, p.editorLayout().wrapColumn)
+		for visual, a := range raw.Anchors {
+			p.editorTextarea.SetCursorColumn(a.SourceCol)
+			if got := p.editorTextarea.LineInfo().RowOffset; got != visual {
+				t.Fatalf("raw anchor row %d col %d maps to textarea row %d (wrap=%d, content=%q)",
+					visual, a.SourceCol, got, p.editorLayout().wrapColumn, content[:min(40, len(content))])
+			}
+		}
 	}
 }
 

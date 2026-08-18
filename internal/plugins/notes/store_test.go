@@ -173,17 +173,14 @@ func TestStoreNotePathCreatesUniqueSecureTemp(t *testing.T) {
 	}
 }
 
-func TestNewStoreOpensProjectRoot(t *testing.T) {
+func TestNewStoreDefersValidationUntilFirstCommand(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := NewStore(dir, "test"); err == nil {
-		t.Fatal("NewStore on empty dir should fail without td init")
-	}
-	if _, err := NewTestStore(dir, "test"); err != nil {
-		t.Fatalf("NewTestStore: %v", err)
-	}
 	store, err := NewStore(dir, "test")
 	if err != nil {
-		t.Fatalf("NewStore after init: %v", err)
+		t.Fatalf("NewStore should not perform startup I/O: %v", err)
+	}
+	if _, err := store.List(false); err == nil {
+		t.Fatal("first command on an uninitialized project should report the td error")
 	}
 	_ = store.Close()
 }

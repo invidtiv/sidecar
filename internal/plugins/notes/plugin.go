@@ -336,7 +336,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 
 	p.editorTextarea = newEditorTextarea()
 
-	// Open the project's td database through pkg/notes.
+	// Construct the lazy td CLI adapter. The first load runs asynchronously.
 	store, err := NewStore(ctx.ProjectRoot, "")
 	if err != nil {
 		// Store initialization may fail if .todos directory doesn't exist
@@ -1283,8 +1283,9 @@ func (p *Plugin) seedTextareaViewport() {
 	p.editorTextarea, _ = p.editorTextarea.Update(textareaViewportSeedMsg{})
 }
 
-// setTextareaCursorAndScroll places the cursor on a source line and walks the
-// textarea so that line sits on (or near) the same screen row as scrollOff.
+// setTextareaCursorAndScroll places the cursor on a source line and restores a
+// visual-row viewport offset. Bubbles' ScrollYOffset is measured after soft
+// wrapping, not in logical source lines.
 func (p *Plugin) setTextareaCursorAndScroll(row, col, scrollOff int) {
 	p.updateTextareaDimensions()
 	p.seedTextareaViewport()
@@ -1303,34 +1304,29 @@ func (p *Plugin) setTextareaCursorAndScroll(row, col, scrollOff int) {
 	if height < 1 {
 		height = 1
 	}
-	maxScroll := p.previewMaxScroll(height, l.wrapColumn)
 	if scrollOff < 0 {
 		scrollOff = 0
 	}
-	if scrollOff > maxScroll {
-		scrollOff = maxScroll
-	}
-	if row < scrollOff {
-		scrollOff = row
-	}
-	if row >= scrollOff+height {
-		scrollOff = row - height + 1
-		if scrollOff < 0 {
-			scrollOff = 0
-		}
-	}
 
+	// There is no public SetScrollYOffset on textarea. Walk a temporary cursor
+	// to the bottom of the desired viewport so its normal repositioning lands
+	// on scrollOff, then put the real cursor back inside that viewport.
 	p.editorTextarea.MoveToBegin()
-	if scrollOff > 0 {
-		force := scrollOff + height - 1
-		if force >= lineCount {
-			force = lineCount - 1
+	forceVisual := scrollOff + height - 1
+	for visual := 0; visual < forceVisual; visual++ {
+		beforeLine := p.editorTextarea.Line()
+		beforeCol := p.editorTextarea.Column()
+		p.editorTextarea.CursorDown()
+		if p.editorTextarea.Line() == beforeLine && p.editorTextarea.Column() == beforeCol {
+			break
 		}
-		p.setTextareaCursorPosition(force, 0)
 	}
 	p.setTextareaCursorPosition(row, col)
+	// SetCursorColumn does not reposition the viewport. A no-op update does,
+	// after the target cursor has been restored.
+	p.editorTextarea, _ = p.editorTextarea.Update(textareaViewportSeedMsg{})
 	p.previewCursorLine = row
-	p.previewScrollOff = scrollOff
+	p.previewScrollOff = p.editorTextarea.ScrollYOffset()
 }
 
 // enterEditAtPreviewPlace drops into the textarea on the mapped source line
@@ -1351,15 +1347,17 @@ func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 }
 
 // enterEditAt switches to edit mode at a source line/column. The current
-// visual screen row (previewCursorLine - previewScrollOff) is preserved so
-// the source line sits on (or near) the same row the user was looking at.
+// visual screen row is preserved across rendered/raw and textarea wrapping.
 func (p *Plugin) enterEditAt(row, col int) tea.Cmd {
 	screenRow := p.previewCursorLine - p.previewScrollOff
 	if screenRow < 0 {
 		screenRow = 0
 	}
 	p.previewMode = false
-	editScroll := row - screenRow
+	l := p.editorLayout()
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), l.wrapColumn)
+	editVisual := raw.VisualRowForSource(row, col)
+	editScroll := editVisual - screenRow
 	if editScroll < 0 {
 		editScroll = 0
 	}
@@ -1378,7 +1376,9 @@ func (p *Plugin) leaveEditToView() {
 	}
 	srcLine := p.editorTextarea.Line()
 	srcCol := p.editorTextarea.Column()
-	screenRow := srcLine - p.previewScrollOff
+	l := p.editorLayout()
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), l.wrapColumn)
+	screenRow := raw.VisualRowForSource(srcLine, srcCol) - p.editorTextarea.ScrollYOffset()
 	if screenRow < 0 {
 		screenRow = 0
 	}

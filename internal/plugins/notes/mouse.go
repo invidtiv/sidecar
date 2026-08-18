@@ -8,6 +8,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
 )
@@ -436,23 +437,47 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 }
 
 // clickToSource maps a click in the editor body to a source line/column.
-// In view mode the row is a visual row of the mapped surface; in edit mode
-// it is a textarea source line. Sets previewCursorLine to the visual row
-// so enterEditAt can keep the clicked screen row.
+// Both rendered/raw view and textarea edit mode map through soft-wrapped visual
+// rows. Sets previewCursorLine to that visual row so enterEditAt can keep the
+// clicked screen row.
 func (p *Plugin) clickToSource(x, y int) (line, col int) {
+	visualInView := y - p.editorContentStartY()
+	if visualInView < 0 {
+		visualInView = 0
+	}
+	colInRow := p.screenXToEditorCol(x)
 	if p.previewMode {
 		visual := p.screenYToVisualRow(y)
 		p.previewCursorLine = visual
 		p.ensureViewSurface()
-		a := p.viewSurface.At(visual)
-		colInRow := p.screenXToEditorCol(x)
-		col = a.SourceCol + colInRow
-		if col < 0 {
-			col = 0
-		}
-		return a.SourceLine, col
+		return sourceAtVisualRow(p.viewSurface, visual, colInRow, p.editorTextarea.Value())
 	}
-	return p.screenYToEditorLine(y), p.screenXToEditorCol(x)
+	visual := p.editorTextarea.ScrollYOffset() + visualInView
+	p.previewCursorLine = visual
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), p.editorLayout().wrapColumn)
+	return sourceAtVisualRow(raw, visual, colInRow, p.editorTextarea.Value())
+}
+
+// sourceAtVisualRow adds the horizontal click to a wrap anchor without
+// allowing it to spill into the following visual row. Source columns are rune
+// offsets; cell-perfect Unicode placement remains the textarea's concern.
+func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, source string) (line, col int) {
+	a := surface.At(visual)
+	line, col = a.SourceLine, a.SourceCol+max(0, colInRow)
+	if visual+1 < len(surface.Anchors) {
+		next := surface.At(visual + 1)
+		if next.SourceLine == line && next.SourceCol > a.SourceCol && col >= next.SourceCol {
+			col = next.SourceCol - 1
+		}
+	}
+	sourceLines := strings.Split(source, "\n")
+	if line >= 0 && line < len(sourceLines) {
+		col = min(col, len([]rune(sourceLines[line])))
+	}
+	if col < 0 {
+		col = 0
+	}
+	return line, col
 }
 
 func (p *Plugin) screenYToVisualRow(y int) int {
@@ -509,27 +534,16 @@ func (p *Plugin) editorContentStartY() int {
 	return 1 + p.editorLayout().statusRow + editorStatusRows
 }
 
-// screenYToEditorLine converts a screen Y coordinate to an editor line index.
-// Uses previewScrollOff which is kept in sync with the textarea viewport
-// via trackTextareaScroll().
+// screenYToEditorLine converts a screen Y coordinate to a logical source line
+// through the textarea's soft-wrapped visual surface.
 func (p *Plugin) screenYToEditorLine(y int) int {
 	editorContentY := p.editorContentStartY()
 	visualRow := y - editorContentY
 	if visualRow < 0 {
 		visualRow = 0
 	}
-	line := p.previewScrollOff + visualRow
-	lineCount := p.editorTextarea.LineCount()
-	if lineCount == 0 {
-		return 0
-	}
-	if line >= lineCount {
-		line = lineCount - 1
-	}
-	if line < 0 {
-		line = 0
-	}
-	return line
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), p.editorLayout().wrapColumn)
+	return raw.At(p.editorTextarea.ScrollYOffset() + visualRow).SourceLine
 }
 
 // screenXToEditorCol converts a screen X coordinate to a column in editor content.

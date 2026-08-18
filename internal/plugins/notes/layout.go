@@ -5,6 +5,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -87,28 +88,13 @@ func (p *Plugin) updateTextareaDimensions() {
 	p.editorTextarea.SetHeight(l.contentHeight)
 }
 
-// trackTextareaScroll keeps previewScrollOff in the same source-line
-// viewport editorLayout describes, so mouse regions and the scrollbar
-// stay honest while the textarea has focus.
+// trackTextareaScroll mirrors the textarea's soft-wrapped visual-row offset so
+// mouse mapping and the scrollbar use the same coordinate space as Bubbles.
 func (p *Plugin) trackTextareaScroll() {
 	if p.width == 0 || p.height == 0 {
 		return
 	}
-	l := p.editorLayout()
-	height := l.contentHeight
-	if height < 1 {
-		height = 1
-	}
-	cursorLine := p.editorTextarea.Line()
-	if cursorLine < p.previewScrollOff {
-		p.previewScrollOff = cursorLine
-	}
-	if cursorLine >= p.previewScrollOff+height {
-		p.previewScrollOff = cursorLine - height + 1
-	}
-	if p.previewScrollOff < 0 {
-		p.previewScrollOff = 0
-	}
+	p.previewScrollOff = p.editorTextarea.ScrollYOffset()
 }
 
 // editorScrollbar draws the shared body scrollbar from the same
@@ -122,6 +108,8 @@ func (p *Plugin) editorScrollbar(l editorLayout) string {
 	if p.previewMode {
 		p.ensureViewSurface()
 		total = len(p.viewSurface.Lines)
+	} else {
+		total = len(markdown.MapWrappedSource(p.editorTextarea.Value(), l.wrapColumn).Lines)
 	}
 	if total < 1 {
 		total = 1
