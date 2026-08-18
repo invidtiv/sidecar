@@ -505,6 +505,15 @@ func TestWorktreeRemovalHasExactlyOneImplementation(t *testing.T) {
 			if name := d.Name(); name == ".git" || name == "node_modules" || name == "vendor" {
 				return filepath.SkipDir
 			}
+			// A nested checkout — an agent worktree under .claude/worktrees, a
+			// vendored example — carries its own go.mod and its own copy of this
+			// file. It is not part of what `go test ./...` builds, so scanning it
+			// reports the shared implementation as an offender against itself.
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
