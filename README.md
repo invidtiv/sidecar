@@ -6,7 +6,7 @@ You might never open your editor again.
 
 [Documentation](https://marcus.github.io/sidecar/) · [Getting Started](https://marcus.github.io/sidecar/docs/intro) · [Comprehensive List of Features](docs/features.md)
 
-![Sidecar Workspace](docs/screenshots/sidecar-workspaces.png)
+![Sidecar](docs/screenshots/sidecar-hero.png)
 
 ## Overview
 
