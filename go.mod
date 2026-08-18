@@ -16,7 +16,7 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/td v0.58.1-0.20260818010851-1ef0847f4097
+	github.com/marcus/td v0.58.1-0.20260818065534-1a0312001c3e
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/rivo/uniseg v0.4.7
@@ -71,5 +71,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/marcus/td => ../td
