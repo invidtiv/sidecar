@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -18,7 +20,39 @@ type ResolveOptions struct {
 	// Diff is sidecar open --diff. A missing positional becomes the working
 	// tree (wt). A positional is a git spec, including HEAD and branch names.
 	Diff bool
+	// Provider is sidecar open --provider <instance>. It short-circuits every
+	// other classification: with it, the positional is a provider locator and
+	// nothing else, so a ticket key that happens to name a file cannot be
+	// silently reinterpreted.
+	Provider string
 }
+
+// ResolveResourceTarget validates a --provider request without contacting
+// anything. Matching the locator to a matcher is the running app's job: it
+// holds the live snapshot, and a short-lived CLI process must never start a
+// provider to answer `sidecar open`.
+func ResolveResourceTarget(provider, raw string) (Target, error) {
+	provider = strings.TrimSpace(provider)
+	raw = strings.TrimSpace(raw)
+	if provider == "" {
+		return Target{}, fmt.Errorf("a provider instance is required")
+	}
+	if raw == "" {
+		return Target{}, fmt.Errorf("a resource locator is required")
+	}
+	if utf8.RuneCountInString(provider) > resource.MaxInstanceIDChars {
+		return Target{}, fmt.Errorf("provider instance is longer than %d characters", resource.MaxInstanceIDChars)
+	}
+	if utf8.RuneCountInString(raw) > resource.MaxLocatorChars {
+		return Target{}, fmt.Errorf("locator is longer than %d characters", resource.MaxLocatorChars)
+	}
+	if strings.ContainsFunc(raw, isControl) || strings.ContainsFunc(provider, isControl) {
+		return Target{}, fmt.Errorf("provider instance and locator cannot contain control characters")
+	}
+	return Target{Kind: TargetKindResource, Value: raw, Provider: provider}, nil
+}
+
+func isControl(r rune) bool { return r < 0x20 || r == 0x7f }
 
 // ResolveTarget parses and validates a target string against the shell's workspace root.
 //
@@ -31,6 +65,11 @@ type ResolveOptions struct {
 //  6. Usage error (a missing file is not fatal until hash resolution also fails)
 func ResolveTarget(workDir, raw string, explicitLine int, opts ResolveOptions) (Target, error) {
 	raw = strings.TrimSpace(raw)
+	// --provider is explicit and wins before anything else looks at the
+	// filesystem, so CASH-1245 cannot become a file or a git spec.
+	if opts.Provider != "" {
+		return ResolveResourceTarget(opts.Provider, raw)
+	}
 	if raw == "" {
 		if opts.Diff {
 			return Target{Kind: TargetKindDiff, Value: workspacediff.IdentityWorkingTree}, nil

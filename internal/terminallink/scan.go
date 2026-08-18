@@ -16,7 +16,24 @@ const (
 	KindFile  Kind = "file"
 	KindIssue Kind = "issue"
 	KindDiff  Kind = "diff"
+	// KindResource is the one generic kind every external provider shares.
+	// Which provider and matcher produced it lives in Extra, so adding a
+	// provider never adds a kind.
+	KindResource Kind = "resource"
 )
+
+// Activatable reports whether a kind is one a host can act on, and so one
+// that may be underlined. Both terminal surfaces asked this question with
+// their own copy of the same switch; a new kind must not be able to reach one
+// surface's decoration and miss the other's hit testing.
+func Activatable(k Kind) bool {
+	switch k {
+	case KindURL, KindFile, KindIssue, KindDiff, KindResource:
+		return true
+	default:
+		return false
+	}
+}
 
 // MaxNewDiffResolves is the host budget for new git existence checks per
 // (surface, buffer revision). Further unique spec tokens stay plain text
@@ -25,10 +42,14 @@ const MaxNewDiffResolves = 16
 
 // Extra holds kind-specific fields. Line is 1-based and zero when the token
 // has no :line suffix. Raw is the original file or git-spec token when Value
-// is rewritten by a Resolver.
+// is rewritten by a Resolver. Provider and Matcher are set only for
+// KindResource and, with the span's Value as the locator, form the resource
+// reference a host activates.
 type Extra struct {
-	Line int
-	Raw  string
+	Line     int
+	Raw      string
+	Provider string
+	Matcher  string
 }
 
 // Span is one non-overlapping match in visual columns of the stripped line.
@@ -81,25 +102,50 @@ func IssueID(value string) bool {
 	return issueIDPattern.MatchString(value)
 }
 
-// Scan finds URL, file, issue, and git-spec spans in a terminal line.
+// Options collects everything a scan may consult. The zero value scans only
+// the kinds that need no host callback and no configuration.
+type Options struct {
+	// Resolve existence-gates file tokens. Nil skips bare-file spans.
+	Resolve Resolver
+	// ResolveDiff existence-gates git specs. Nil emits no git-spec spans.
+	ResolveDiff DiffResolver
+	// Matchers are the live external matchers in precedence order. Empty
+	// means no provider is ready, which must read as ordinary text.
+	Matchers []ResourceMatcher
+}
+
+// Scan finds URL, file, issue, and git-spec spans in a terminal line. It is
+// ScanWith without external matchers, which is what callers that have no
+// provider snapshot want.
+func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
+	return ScanWith(line, Options{Resolve: resolve, ResolveDiff: resolveDiff})
+}
+
+// ScanWith finds every span kind in a terminal line.
 //
 // line may still contain ANSI; it is stripped before matching. Overlaps are
 // resolved first-kind-wins in this order: url, path:line, resolved bare
-// files, issue, git spec. File tokens need a suffix. Bare files (and, when a
-// Resolver is supplied, path:line) are existence-gated. Git specs are
-// existence-gated by resolveDiff and scanned dotted → commit-word → rev.
-func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
+// files, issue, git spec, external resource. File tokens need a suffix. Bare
+// files (and, when a Resolver is supplied, path:line) are existence-gated.
+// Git specs are existence-gated by resolveDiff and scanned dotted →
+// commit-word → rev.
+//
+// External matchers run last so built-in precedence cannot be bid away by a
+// provider's priority, and matching stays pure: no process starts and no I/O
+// happens here.
+func ScanWith(line string, opts Options) []Span {
 	plain := ansi.Strip(line)
 	var spans []Span
 	spans = append(spans, scanURLs(plain)...)
-	spans = append(spans, scanPathLines(plain, spans, resolve)...)
-	if resolve != nil {
-		spans = append(spans, scanBareFiles(plain, spans, resolve)...)
+	spans = append(spans, scanPathLines(plain, spans, opts.Resolve)...)
+	if opts.Resolve != nil {
+		spans = append(spans, scanBareFiles(plain, spans, opts.Resolve)...)
 	}
 	spans = append(spans, scanIssues(plain, spans)...)
-	if resolveDiff != nil {
-		spans = append(spans, scanGitSpecs(plain, spans, resolveDiff)...)
+	if opts.ResolveDiff != nil {
+		spans = append(spans, scanGitSpecs(plain, spans, opts.ResolveDiff)...)
 	}
+	spans = append(spans, scanResources(plain, spans, opts.Matchers)...)
 	return spans
 }
 

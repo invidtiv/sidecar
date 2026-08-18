@@ -246,6 +246,7 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	paneTarget := p.paneRoot != nil &&
 		(link.Kind == terminalIssueLink ||
 			link.Kind == terminalDiffLink ||
+			link.Kind == terminalResourceLink ||
 			(link.Kind == terminalPathLink && docPaneTarget(link.Value)))
 	// Preserve the exact live window containing the link before opening the
 	// document changes pane geometry. Claude commonly moves that transcript
@@ -289,6 +290,9 @@ func (p *Plugin) openedPaneLeaf(kind terminalLinkKind) *PaneNode {
 		return leaf
 	case terminalDiffLink:
 		_, leaf := p.activeDiffPane()
+		return leaf
+	case terminalResourceLink:
+		_, leaf := p.activeResourcePane()
 		return leaf
 	default:
 		_, leaf := p.activeDocPane()

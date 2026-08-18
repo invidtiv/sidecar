@@ -14,6 +14,7 @@ const (
 	PaneDoc      = panelayout.Document
 	PaneIssue    = panelayout.Issue
 	PaneDiff     = panelayout.Diff
+	PaneResource = panelayout.Resource
 )
 
 type SplitAxis = panelayout.Axis

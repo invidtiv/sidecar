@@ -115,6 +115,7 @@ type previewState struct {
 	doc             *previewDoc
 	issue           *previewIssue
 	diff            *previewDiff
+	resource        *previewResource
 	paneRoot        *panelayout.Node
 	paneFocus       int
 	paneNextID      int
@@ -156,12 +157,13 @@ type previewSpecResolution struct {
 }
 
 type previewPaneCache struct {
-	root   *panelayout.Node
-	focus  int
-	nextID int
-	doc    *previewDoc
-	issue  *previewIssue
-	diff   *previewDiff
+	root     *panelayout.Node
+	focus    int
+	nextID   int
+	doc      *previewDoc
+	issue    *previewIssue
+	diff     *previewDiff
+	resource *previewResource
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -290,6 +292,7 @@ func (m *Model) resetActivePreviewPanes() {
 	m.preview.doc = nil
 	m.preview.issue = nil
 	m.preview.diff = nil
+	m.preview.resource = nil
 	m.preview.paneRoot = &panelayout.Node{ID: 1, Kind: panelayout.Terminal}
 	m.preview.paneFocus = 1
 	m.preview.paneNextID = 2
@@ -305,12 +308,19 @@ func (m *Model) stashPreviewPanes() {
 	if m.preview.workspaceID == "" || m.preview.paneRoot == nil {
 		return
 	}
+	// Resource answers are deliberately scoped to the selected row and are
+	// discarded after a switch. Return pending tabs to an armed state before
+	// caching the pane so revisiting the row can resolve them again.
+	if res := m.preview.resource; res != nil {
+		res.pane.ReArmPending()
+	}
 	if m.preview.paneCache == nil {
 		m.preview.paneCache = make(map[string]previewPaneCache)
 	}
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
 		doc: m.preview.doc, issue: m.preview.issue, diff: m.preview.diff,
+		resource: m.preview.resource,
 	}
 }
 
@@ -318,6 +328,7 @@ func (m *Model) restorePreviewPanes(workspaceID string) {
 	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
 		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
 		m.preview.doc, m.preview.issue, m.preview.diff = cached.doc, cached.issue, cached.diff
+		m.preview.resource = cached.resource
 		m.preview.paneDragSplitID = 0
 		return
 	}
@@ -429,6 +440,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.forwardToTerminal(msg)
 	}
 	if handled, cmd := m.previewIssueKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.previewResourceKey(msg); handled {
 		return true, cmd
 	}
 	if handled, cmd := m.previewDiffPaneKey(msg); handled {

@@ -2,12 +2,40 @@ package overview
 
 import (
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
+
+func TestOverview_UIRequestProviderResourceUsesLiveMatcher(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	m := resourcePreviewModel(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	m.SetResourceMatchers([]terminallink.ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}})
+	m.SetResourceResolver((&fakeResolver{}).resolve)
+	req := uirequest.Request{
+		ID: "overview-provider-open", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin: uirequest.Origin{TmuxSession: selected.TmuxName},
+		Target: uirequest.Target{Kind: uirequest.TargetKindResource, Provider: "jira-work", Value: "CASH-1245"},
+	}
+	if cmd := m.handleUIRequest(req); cmd == nil {
+		t.Fatal("resource request did not open")
+	}
+	if got := resourceTabLocators(m.preview.resource); len(got) != 1 || got[0] != "CASH-1245" {
+		t.Fatalf("resource tabs = %v", got)
+	}
+}
 
 func TestOverview_UIRequestPendingView(t *testing.T) {
 	stateHome := t.TempDir()

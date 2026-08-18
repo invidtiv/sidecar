@@ -24,9 +24,11 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -108,7 +110,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
-		previewDocLoadedMsg, previewIssueLoadedMsg, previewHistoryLoadedMsg,
+		previewDocLoadedMsg, previewIssueLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg,
 		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
@@ -201,6 +203,13 @@ type Model struct {
 	width               int
 	height              int
 	previewSpecResolver func(string, string) (string, bool)
+
+	// External terminal resource providers. Both default to nothing, which is
+	// the state a Sidecar with no configured provider must stay in: no
+	// matchers means no underline, and no resolver means an opened tab says so
+	// instead of spinning. The app supplies both once a provider reports ready.
+	resourceMatchers []terminallink.ResourceMatcher
+	resolveResource  resourceview.Resolver
 
 	// Working/blocked markers breathe on their own clock, independent of the
 	// refresh poll. The generation lets a tick in flight be discarded.
@@ -605,6 +614,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case previewIssueLoadedMsg:
 		m.applyPreviewIssueLoaded(msg)
+		return nil
+	case previewResourceResolvedMsg:
+		m.applyPreviewResourceResolved(msg)
 		return nil
 	case previewHistoryLoadedMsg:
 		return m.applyPreviewHistory(msg)

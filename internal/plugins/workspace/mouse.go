@@ -97,7 +97,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -105,6 +105,8 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case docTabHit:
 			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case resourceTabHit:
 			leafID = data.LeafID
 		case diffTabHit:
 			leafID = data.LeafID
@@ -123,6 +125,9 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case PaneDiff:
 			view := p.activeDiffView()
 			return view.ScrollAtBoundary(action.Delta, view.Height())
+		case PaneResource:
+			res := p.resources[leaf.ContentID]
+			return res == nil || res.pane == nil || res.pane.ScrollAtBoundary(action.Delta)
 		default:
 			return false
 		}
@@ -953,6 +958,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
 		return p.clickIssueTab(action.Region.Data)
+	case regionResourceTab:
+		return p.clickResourceTab(action.Region.Data)
 	case regionDiffTargetTab:
 		return p.clickDiffTab(action.Region.Data)
 	case regionPaneLeaf:
@@ -1403,7 +1410,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1411,6 +1418,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case docTabHit:
 			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case resourceTabHit:
 			leafID = data.LeafID
 		case diffTabHit:
 			leafID = data.LeafID
@@ -1446,6 +1455,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case PaneDiff:
 			if view := p.activeDiffView(); view != nil {
 				view.ScrollContent(delta, view.Height())
+			}
+		case PaneResource:
+			// The shared pane scrolls and persists together, so a notch and
+			// the arrow keys leave the same offset behind.
+			if res := p.resources[leaf.ContentID]; res != nil {
+				res.pane.Scroll(delta)
 			}
 		}
 		return nil

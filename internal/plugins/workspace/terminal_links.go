@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -22,6 +23,7 @@ const (
 	terminalPathLink
 	terminalIssueLink
 	terminalDiffLink
+	terminalResourceLink
 )
 
 type terminalLink struct {
@@ -32,6 +34,8 @@ type terminalLink struct {
 	Line     int
 	Root     string // canonical selected surface root for resolved bare paths
 	Raw      string // original candidate, revalidated on activation
+	Provider string // resource links only: the configured provider instance
+	Matcher  string // resource links only: the provider-stable matcher ID
 }
 
 type terminalLinkMemo struct {
@@ -131,6 +135,21 @@ func activatableTerminalLinks(spans []terminallink.Span, leaves bool) []terminal
 				EndCol:   span.EndCol,
 				Value:    span.Value,
 			})
+		case terminallink.KindResource:
+			// A resource span opens a leaf of the pane tree, so without a tree
+			// there is nothing to open and an underline would promise a click
+			// that goes nowhere.
+			if !leaves {
+				continue
+			}
+			links = append(links, terminalLink{
+				Kind:     terminalResourceLink,
+				StartCol: span.StartCol,
+				EndCol:   span.EndCol,
+				Value:    span.Value,
+				Provider: span.Extra.Provider,
+				Matcher:  span.Extra.Matcher,
+			})
 		case terminallink.KindDiff:
 			if !leaves {
 				continue
@@ -177,6 +196,9 @@ func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
 		case terminalDiffLink:
 			span.Kind = terminallink.KindDiff
 			span.Extra = terminallink.Extra{Raw: link.Raw}
+		case terminalResourceLink:
+			span.Kind = terminallink.KindResource
+			span.Extra = terminallink.Extra{Provider: link.Provider, Matcher: link.Matcher}
 		default:
 			continue
 		}
@@ -270,35 +292,43 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 	if p.terminalPathResolver != nil {
 		resolver = p.terminalPathResolver
 	}
-	links := activatableTerminalLinks(terminallink.Scan(line, func(raw string) (string, terminallink.Extra, bool) {
-		resolution, found := memo.paths[raw]
-		if !found {
-			rel, _, ok := resolver(context.root, raw)
-			resolution = terminalLinkResolution{rel: rel, ok: ok}
-			memo.paths[raw] = resolution
-		}
-		if !resolution.ok {
-			return "", terminallink.Extra{}, false
-		}
-		return resolution.rel, terminallink.Extra{Raw: raw}, true
-	}, func(raw string) (string, terminallink.Extra, bool) {
-		resolution, found := memo.specs[raw]
-		if !found {
-			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
+	// Matchers are the live provider snapshot, and they are the whole of what
+	// makes a resource key clickable: an empty set is a scan that finds none,
+	// so an unready, failed, disabled or unconfigured provider leaves its keys
+	// as ordinary text. Matching stays pure — no process starts here.
+	links := activatableTerminalLinks(terminallink.ScanWith(line, terminallink.Options{
+		Resolve: func(raw string) (string, terminallink.Extra, bool) {
+			resolution, found := memo.paths[raw]
+			if !found {
+				rel, _, ok := resolver(context.root, raw)
+				resolution = terminalLinkResolution{rel: rel, ok: ok}
+				memo.paths[raw] = resolution
+			}
+			if !resolution.ok {
 				return "", terminallink.Extra{}, false
 			}
-			memo.newSpecs++
-			value, ok := p.resolveTerminalSpec(context.root, raw)
-			resolution = terminalLinkResolution{rel: value, ok: ok}
-			memo.specs[raw] = resolution
-		}
-		if !resolution.ok {
-			return "", terminallink.Extra{}, false
-		}
-		if resolution.rel == "" {
-			return raw, terminallink.Extra{Raw: raw}, true
-		}
-		return resolution.rel, terminallink.Extra{Raw: raw}, true
+			return resolution.rel, terminallink.Extra{Raw: raw}, true
+		},
+		ResolveDiff: func(raw string) (string, terminallink.Extra, bool) {
+			resolution, found := memo.specs[raw]
+			if !found {
+				if memo.newSpecs >= terminallink.MaxNewDiffResolves {
+					return "", terminallink.Extra{}, false
+				}
+				memo.newSpecs++
+				value, ok := p.resolveTerminalSpec(context.root, raw)
+				resolution = terminalLinkResolution{rel: value, ok: ok}
+				memo.specs[raw] = resolution
+			}
+			if !resolution.ok {
+				return "", terminallink.Extra{}, false
+			}
+			if resolution.rel == "" {
+				return raw, terminallink.Extra{Raw: raw}, true
+			}
+			return resolution.rel, terminallink.Extra{Raw: raw}, true
+		},
+		Matchers: p.resourceMatchers,
 	}), true)
 	for i := range links {
 		if links[i].Kind == terminalPathLink && links[i].Raw != "" {
@@ -344,6 +374,13 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 	}
 	if link.Kind == terminalIssueLink {
 		return p.activateIssueLink(link.Value)
+	}
+	if link.Kind == terminalResourceLink {
+		return p.activateResourceLink(resourceview.Ref{
+			Instance: link.Provider,
+			Matcher:  link.Matcher,
+			Locator:  link.Value,
+		})
 	}
 	if link.Kind == terminalDiffLink {
 		raw := link.Raw

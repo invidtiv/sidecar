@@ -399,6 +399,10 @@ func (m *Model) scrollPreviewClose(kind panelayout.Kind, delta int) tea.Cmd {
 		if view := m.preview.diff.view(); view != nil {
 			view.ScrollContent(delta, view.Height())
 		}
+	case panelayout.Resource:
+		if m.preview.resource != nil {
+			m.preview.resource.pane.Scroll(delta)
+		}
 	}
 	return nil
 }
@@ -423,6 +427,11 @@ func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) boo
 			return true
 		}
 		return view.ScrollAtBoundary(delta, view.Height())
+	case panelayout.Resource:
+		if m.preview.resource == nil {
+			return true
+		}
+		return resourceScrollAtBoundary(m.preview.resource.view(), delta)
 	default:
 		return true
 	}
@@ -623,6 +632,9 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.diffPaneFocused() {
 		return ctxGlobalWorkspacesDiff
 	}
+	if m.resourcePaneFocused() {
+		return ctxGlobalWorkspacesResource
+	}
 	if m.docPaneFocused() {
 		return "global-workspaces-doc"
 	}
@@ -642,6 +654,11 @@ func (m *Model) docPaneFocused() bool {
 func (m *Model) diffPaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.diff != nil && m.preview.diff.focused
+}
+
+func (m *Model) resourcePaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.resource != nil && m.preview.resource.focused
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -885,6 +902,10 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		view := m.preview.issue.view()
 		return view == nil || view.ScrollAtBoundary(action.Delta)
 	}
+	if _, ok := action.Region.Data.(previewResourceTabHit); ok {
+		return m.preview.resource == nil ||
+			resourceScrollAtBoundary(m.preview.resource.view(), action.Delta)
+	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch {
 		case kind == workspacesSidebarRegion:
@@ -895,6 +916,9 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case isPreviewIssueRegion(kind):
 			view := m.preview.issue.view()
 			return view == nil || view.ScrollAtBoundary(action.Delta)
+		case isPreviewResourceRegion(kind):
+			return m.preview.resource == nil ||
+				resourceScrollAtBoundary(m.preview.resource.view(), action.Delta)
 		case kind == previewDiffRegionKind:
 			view := m.preview.diff.view()
 			if view == nil {
@@ -997,11 +1021,17 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
 		return m.handlePreviewIssueMouse(action)
 	}
+	if _, ok := action.Region.Data.(previewResourceTabHit); ok {
+		return m.handlePreviewResourceMouse(action)
+	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewDocRegion(kind) {
 		return m.handlePreviewDocMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewIssueRegion(kind) {
 		return m.handlePreviewIssueMouse(action)
+	}
+	if kind, ok := action.Region.Data.(string); ok && isPreviewResourceRegion(kind) {
+		return m.handlePreviewResourceMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch kind {

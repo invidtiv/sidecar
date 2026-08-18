@@ -63,6 +63,24 @@ type rawConfig struct {
 	Keymap   KeymapConfig      `json:"keymap"`
 	UI       rawUIConfig       `json:"ui"`
 	Features FeaturesConfig    `json:"features"`
+	// TerminalResources is a pointer so an absent section is distinguishable
+	// from an explicitly empty one; both leave the default (no providers) in
+	// place, but only the first is silent about it.
+	TerminalResources *rawTerminalResourcesConfig `json:"terminalResources"`
+}
+
+type rawTerminalResourcesConfig struct {
+	Providers []rawTerminalResourceProviderConfig `json:"providers"`
+}
+
+type rawTerminalResourceProviderConfig struct {
+	ID      string   `json:"id"`
+	Command []string `json:"command"`
+	PassEnv []string `json:"passEnv"`
+	// Enabled is a pointer because a configured instance is on unless it says
+	// otherwise; an omitted field must not read as "disabled".
+	Enabled *bool  `json:"enabled"`
+	Timeout string `json:"timeout"`
 }
 
 type rawUIConfig struct {
@@ -395,6 +413,29 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 				cfg.UI.Theme.Overrides = nil
 			}
 		}
+	}
+
+	// Terminal resources
+	if raw.TerminalResources != nil {
+		providers := make([]TerminalResourceProviderConfig, 0, len(raw.TerminalResources.Providers))
+		for _, rp := range raw.TerminalResources.Providers {
+			p := TerminalResourceProviderConfig{
+				ID:      rp.ID,
+				Command: append([]string(nil), rp.Command...),
+				PassEnv: append([]string(nil), rp.PassEnv...),
+				Enabled: true,
+			}
+			if rp.Enabled != nil {
+				p.Enabled = *rp.Enabled
+			}
+			if rp.Timeout != "" {
+				if d, err := time.ParseDuration(rp.Timeout); err == nil {
+					p.Timeout = d
+				}
+			}
+			providers = append(providers, p)
+		}
+		cfg.TerminalResources.Providers = providers
 	}
 
 	// Features

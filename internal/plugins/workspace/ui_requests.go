@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -187,6 +188,19 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		spec := uirequest.DiffTarget(root, req.Target.Value)
 		cmd = p.openDiffPaneForSurface(root, surface, spec)
 		opened = p.diffPaneShows(spec)
+	case uirequest.TargetKindResource:
+		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
+		if refusal != "" {
+			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+				Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
+				Status: uirequest.StatusDeclined, Reason: refusal, Surface: surface, At: time.Now().UTC(),
+			})
+			return nil
+		}
+		retargeted = p.willRetargetPane(PaneResource)
+		cmd = p.openRequestedResourcePaneForSurface(root, surface, ref)
+		res, _ := p.activeResourcePane()
+		opened = res != nil && res.tabs.Find(resourceview.TabKey(ref)) >= 0
 	}
 
 	// Nothing on screen: the split did not fit, or the target could not be
@@ -297,6 +311,12 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 		return p.openIssuePaneForSurface(root, surface, pv.Target.Value)
 	case uirequest.TargetKindDiff:
 		return p.openDiffPaneForSurface(root, surface, uirequest.DiffTarget(root, pv.Target.Value))
+	case uirequest.TargetKindResource:
+		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, pv.Target.Provider, pv.Target.Value)
+		if refusal != "" {
+			return nil
+		}
+		return p.openRequestedResourcePaneForSurface(root, surface, ref)
 	}
 	return nil
 }

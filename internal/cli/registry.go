@@ -108,21 +108,25 @@ func RootCommand() *Command {
 
 	openCmd := &Command{
 		Name:    "open",
-		Summary: "Show a file, a td issue, or a git diff in a split pane",
+		Summary: "Show a file, a td issue, a git diff, or a provider resource in a split pane",
 		Usage:   "sidecar open [options] [<target>]",
-		Long: "Show a file, a td issue, or a git diff to the user as a split pane in a Sidecar workspace.\n" +
-			"From a Sidecar shell this targets that shell. Otherwise it targets the unique running\n" +
-			"instance, or a specific --shell / --project. --diff with no spec is the working tree.\n" +
+		Long: "Show a file, a td issue, a git diff, or an external provider resource to the user as a\n" +
+			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
+			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
+			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
+			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
 			"--split only overrides the split axis; it never halves a live terminal after content is open.",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
 			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
+			{Target: "locator", Summary: "With --provider, a resource key such as CASH-1245"},
 		},
 		Flags: []Flag{
 			{Name: "--line", Arg: "N", Summary: "Line to reveal (alternative to \"path:line\")"},
 			{Name: "--diff", Summary: "Open a Diff leaf (working tree if no spec)", Bool: true},
+			{Name: "--provider", Arg: "ID", Summary: "Open a locator through a configured terminal resource provider"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
@@ -145,12 +149,13 @@ func RootCommand() *Command {
 			{Command: "sidecar open --diff", Description: "working-tree Diff leaf"},
 			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
+			{Command: "sidecar open --provider jira-work CASH-1245", Description: "resource pane for that provider's locator"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec]",
-			Summary:    "Put a file, a td issue, or a git diff in front of the user",
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec] | --provider ID <locator>",
+			Summary:    "Put a file, a td issue, a git diff, or a provider resource in front of the user",
 		},
 		Run: runOpen,
 	}
@@ -207,8 +212,98 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, setupCmd, shellCmd}
+	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
+}
+
+// terminalLinksCommand is the protocol/admin surface for terminal resource
+// providers. It deliberately does not describe or resolve anything the user did
+// not ask for: `list` reads configuration, `check` adds one describe, and
+// `--resolve` is a separate explicit flag because it can reach the network and
+// print private resource data.
+func terminalLinksCommand() *Command {
+	listCmd := &Command{
+		Name:    "list",
+		Summary: "List configured terminal resource providers",
+		Usage:   "sidecar terminal-links list [--describe] [--json] [--config PATH]",
+		Long: "List the terminal resource providers configured under \"terminalResources\".\n" +
+			"By default this reads configuration and resolves each command on PATH; it starts\n" +
+			"no process. --describe additionally asks each enabled provider to describe itself,\n" +
+			"which is local and non-interactive but does spawn one child per instance.\n\n" +
+			"passEnv is reported by name and presence only. A passed value is never printed.\n\n" +
+			"Enabling a provider trusts that executable with your full OS privileges: a process\n" +
+			"boundary is crash isolation, not a sandbox.",
+		Flags: []Flag{
+			{Name: "--describe", Summary: "Also run each enabled provider's describe method", Bool: true},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--config", Arg: "PATH", Summary: "Read a specific config file"},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+			{Code: 1, Summary: "configuration could not be read"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar terminal-links list"},
+			{Command: "sidecar terminal-links list --json"},
+			{Command: "sidecar terminal-links list --describe --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar terminal-links list --json",
+			Summary:    "See which terminal resource providers are configured and whether their commands resolve",
+		},
+		Run: runTerminalLinksList,
+	}
+
+	checkCmd := &Command{
+		Name:    "check",
+		Summary: "Check one terminal resource provider instance",
+		Usage:   "sidecar terminal-links check [--resolve LOCATOR] [--json] [--config PATH] <instance>",
+		Long: "Check one configured provider instance: that it is enabled, that its command\n" +
+			"resolves, and that its describe method answers the protocol. The child runs with\n" +
+			"the exact working directory, base environment, passEnv policy, and timeout Sidecar\n" +
+			"uses in the TUI, so this is the authoritative host-environment proof.\n\n" +
+			"--resolve is separate and explicit because it can perform network access and print\n" +
+			"private resource data. Without it, nothing is resolved.\n\n" +
+			"The provider's stderr is drained and discarded, never printed: reproduce provider\n" +
+			"failures by running the provider's own CLI deliberately.",
+		Flags: []Flag{
+			{Name: "--resolve", Arg: "LOCATOR", Summary: "Also resolve one locator (may hit the network and print private data)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--config", Arg: "PATH", Summary: "Read a specific config file"},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "The provider instance id from configuration"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "the instance checked out"},
+			{Code: 1, Summary: "the command, describe, or resolve failed"},
+			{Code: 2, Summary: "usage error"},
+			{Code: 3, Summary: "no provider instance with that id is configured"},
+		},
+		Examples: []Example{
+			{Command: "sidecar terminal-links check jira-work"},
+			{Command: "sidecar terminal-links check jira-work --json"},
+			{Command: "sidecar terminal-links check jira-work --resolve CASH-1245 --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar terminal-links check <instance> --json",
+			Summary:    "Prove a terminal resource provider is configured and speaking the protocol",
+		},
+		Run: runTerminalLinksCheck,
+	}
+
+	return &Command{
+		Name:    "terminal-links",
+		Summary: "Inspect terminal resource providers",
+		Usage:   "sidecar terminal-links <command>",
+		Long: "Inspect the external executables that teach Sidecar to recognize resource keys in\n" +
+			"terminal output. This is a protocol and administration surface, not a replacement\n" +
+			"for a provider's own CLI.",
+		Sub: []*Command{checkCmd, listCmd},
+		Run: runTerminalLinksRoot,
+	}
 }
 
 func runHelpCommand(env Env, args []string) int {

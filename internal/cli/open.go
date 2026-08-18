@@ -22,6 +22,7 @@ func runOpen(env Env, args []string) int {
 	lineNo := 0
 	shellFlag := ""
 	projectFlag := ""
+	providerFlag := ""
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -34,6 +35,23 @@ func runOpen(env Env, args []string) int {
 			jsonOutput = true
 		case arg == "--diff":
 			wantDiff = true
+		case arg == "--provider":
+			if i+1 >= len(args) {
+				cliErrf(env.Stderr, "--provider requires a provider instance id\n\n%s", openHelp)
+				return 2
+			}
+			i++
+			providerFlag = args[i]
+			if providerFlag == "" {
+				cliErrf(env.Stderr, "--provider requires a provider instance id\n\n%s", openHelp)
+				return 2
+			}
+		case strings.HasPrefix(arg, "--provider="):
+			providerFlag = strings.TrimPrefix(arg, "--provider=")
+			if providerFlag == "" {
+				cliErrf(env.Stderr, "--provider requires a provider instance id\n\n%s", openHelp)
+				return 2
+			}
 		case arg == "--shell":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--shell requires a shell name\n\n%s", openHelp)
@@ -134,6 +152,15 @@ func runOpen(env Env, args []string) int {
 		}
 	}
 
+	if providerFlag != "" && wantDiff {
+		cliErrf(env.Stderr, "--provider and --diff name different kinds of target\n\n%s", openHelp)
+		return 2
+	}
+	if providerFlag != "" && lineNo > 0 {
+		cliErrf(env.Stderr, "--line does not apply to a provider resource\n\n%s", openHelp)
+		return 2
+	}
+
 	if wantDiff {
 		if len(positional) > 1 {
 			cliErrf(env.Stderr, "open accepts at most one target\n\n%s", openHelp)
@@ -164,7 +191,7 @@ func runOpen(env Env, args []string) int {
 			dest.Origin.WorkDir = workDir
 		}
 	}
-	target, err := uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff})
+	target, err := uirequest.ResolveTarget(dest.Origin.WorkDir, raw, lineNo, uirequest.ResolveOptions{Diff: wantDiff, Provider: providerFlag})
 	if err != nil {
 		cliErrf(env.Stderr, "validation error: %v\n\n%s", err, openHelp)
 		return 2
