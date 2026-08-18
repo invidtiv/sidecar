@@ -2,19 +2,13 @@ package workspace
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/testenv"
 )
-
-// socketPath is where tmux puts its default socket under a given TMUX_TMPDIR.
-func socketPath(tmpDir string) string {
-	return filepath.Join(tmpDir, "tmux-"+strconv.Itoa(os.Getuid()), "default")
-}
 
 // TestMain isolates this package on BOTH axes: the tmux server it talks to and
 // the Sidecar state tree it persists to. Isolating either one alone is not
@@ -36,24 +30,17 @@ func socketPath(tmpDir string) string {
 // server for this process and every tmux child it spawns. Nothing the suite
 // does can reach the developer's sessions, whatever WorkDir a future test picks.
 func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "sidecar-tmux-test")
+	// Axis 1 now lives in internal/testenv so every package that touches tmux
+	// gets the same guarantee, and so the teardown order is fixed in one place:
+	// kill the server BEFORE removing the temp dir. This file used to do it the
+	// other way round, which unlinked the socket out from under any server that
+	// survived teardown and left it permanently unaddressable (td-4d99ae).
+	socket, teardownTmux, err := testenv.IsolateTmux()
 	if err != nil {
-		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
 		os.Exit(1)
 	}
-	if err := os.Setenv("TMUX_TMPDIR", dir); err != nil {
-		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
-		_ = os.RemoveAll(dir)
-		os.Exit(1)
-	}
-	// TMUX is set when the tests are themselves run from inside tmux. Left in
-	// place, tmux treats commands as coming from that client and can resolve a
-	// bare target against the outer server instead of the private one.
-	if err := os.Unsetenv("TMUX"); err != nil {
-		_, _ = os.Stderr.WriteString("tmux isolation: " + err.Error() + "\n")
-		_ = os.RemoveAll(dir)
-		os.Exit(1)
-	}
+	dir := filepath.Dir(filepath.Dir(socket))
 	// launchedInsideTmux was derived from TMUX before this ran, at package
 	// initialisation, and it reaches rendered cells: the detach hint doubles the
 	// prefix key inside tmux. Clearing it here is what keeps a golden from
@@ -92,13 +79,7 @@ func TestMain(m *testing.M) {
 
 	code := m.Run()
 
-	// Tear down by explicit socket path rather than a bare `tmux kill-server`.
-	// A bare kill-server trusts the environment to still be pointing somewhere
-	// private; if anything has disturbed TMUX_TMPDIR by now it destroys the
-	// developer's own server and every session on it. -S names the file we
-	// created, so the blast radius cannot leave this temp dir.
-	_ = exec.Command("tmux", "-S", socketPath(dir), "kill-server").Run()
-	_ = os.RemoveAll(dir)
+	teardownTmux()
 	os.Exit(code)
 }
 

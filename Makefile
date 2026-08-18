@@ -1,4 +1,4 @@
-.PHONY: build install install-dev install-local install-worktree use-homebrew \
+.PHONY: build install install-dev install-local install-worktree use-homebrew reap-test-tmux \
 	install-status test-dev-install test test-v clean check-clean tag \
 	release-snapshot check-release-state release release-tap \
 	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks
@@ -51,6 +51,12 @@ test:
 # Run tests with verbose output
 test-v:
 	go test -v ./...
+
+# Reap tmux servers left behind by a test run that died by panic, timeout, or
+# SIGKILL, where TestMain's teardown could not run. Never touches the
+# developer's own server; see scripts/reap-test-tmux.sh and td-4d99ae.
+reap-test-tmux:
+	./scripts/reap-test-tmux.sh --kill
 
 # Clean build artifacts
 clean:
