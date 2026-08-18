@@ -166,3 +166,42 @@ func TestValidateDescriptionRefusesUnstorableMatcherID(t *testing.T) {
 		t.Fatal("expected a rewritten matcher id to be refused")
 	}
 }
+
+func TestSnapshotTerminalMatchersPreserveOrderAndCompiledExpressions(t *testing.T) {
+	store := NewSnapshotStore()
+	err := store.Replace([]DescribedSet{
+		{Instance: "second", Order: 1, Matchers: []Matcher{{ID: "b", Pattern: `B-[0-9]+`}}},
+		{Instance: "first", Order: 0, Matchers: []Matcher{
+			{ID: "low", Pattern: `L-[0-9]+`, Priority: 1},
+			{ID: "high", Pattern: `H-[0-9]+`, Priority: 100},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	got := store.Current().TerminalMatchers()
+	want := []struct{ provider, id string }{
+		{"first", "high"}, {"first", "low"}, {"second", "b"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d matchers, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Provider != w.provider || got[i].ID != w.id {
+			t.Errorf("matcher %d = {%q,%q}, want {%q,%q}", i, got[i].Provider, got[i].ID, w.provider, w.id)
+		}
+		if got[i].Re == nil {
+			t.Errorf("matcher %d has no compiled expression", i)
+		}
+	}
+	if !got[0].Re.MatchString("H-12") {
+		t.Error("compiled expression does not match what it declared")
+	}
+}
+
+func TestNilSnapshotYieldsNoTerminalMatchers(t *testing.T) {
+	var s *Snapshot
+	if got := s.TerminalMatchers(); got != nil {
+		t.Fatalf("a nil snapshot must contribute nothing, got %+v", got)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 // CompiledMatcher is one live external matcher. It is immutable once built and
@@ -63,6 +64,25 @@ func (s *Snapshot) Len() int {
 		return 0
 	}
 	return len(s.matchers)
+}
+
+// TerminalMatchers adapts the snapshot into the scanner's vocabulary, already
+// in precedence order. It is the only crossing between provider machinery and
+// the scanner: terminallink learns a pattern and a reference, never a process,
+// a document, or this package.
+func (s *Snapshot) TerminalMatchers() []terminallink.ResourceMatcher {
+	if s == nil || len(s.matchers) == 0 {
+		return nil
+	}
+	out := make([]terminallink.ResourceMatcher, 0, len(s.matchers))
+	for _, m := range s.matchers {
+		out = append(out, terminallink.ResourceMatcher{
+			Provider: m.Instance,
+			ID:       m.ID,
+			Re:       m.re,
+		})
+	}
+	return out
 }
 
 // Lookup finds a matcher by instance and ID.
