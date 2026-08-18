@@ -287,10 +287,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 	}
 
 	if p.previewMode {
-		if len(p.previewLines) == 0 {
+		p.ensureViewSurface()
+		if len(p.viewSurface.Lines) == 0 && len(p.previewLines) == 0 {
 			return p, nil
 		}
 		p.previewScrollOff, _ = p.previewBounds().Move(delta)
+		p.keepPreviewCursorInView()
 		return p, nil
 	}
 

@@ -228,7 +228,7 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 // editorLayout. Visual rows are already wrapped to wrapColumn.
 func (p *Plugin) renderViewSurface(height int) string {
 	p.ensureViewSurface()
-	p.ensurePreviewCursorVisible()
+	p.clampPreviewScroll()
 
 	lines := p.viewSurface.Lines
 	if len(lines) == 0 {
@@ -433,6 +433,52 @@ func (p *Plugin) previewMaxScroll(viewHeight, viewWidth int) int {
 		}
 	}
 	return 0
+}
+
+// clampPreviewScroll keeps the view offset in range without moving it to
+// follow the reading cursor. Paint and wheel must use this; snapping to
+// the cursor here would undo a wheel that did not also move the cursor.
+func (p *Plugin) clampPreviewScroll() {
+	height, width := p.previewViewport()
+	if p.previewScrollOff < 0 {
+		p.previewScrollOff = 0
+	}
+	maxScroll := p.previewMaxScroll(height, width)
+	if p.previewScrollOff > maxScroll {
+		p.previewScrollOff = maxScroll
+	}
+}
+
+// keepPreviewCursorInView moves the reading cursor into the current
+// viewport. Wheel uses this so Enter/i/paste stay tied to what is on
+// screen, without pulling the viewport back to an old cursor.
+func (p *Plugin) keepPreviewCursorInView() {
+	height, _ := p.previewViewport()
+	if height < 1 {
+		height = 1
+	}
+	n := len(p.previewLines)
+	if p.previewMode {
+		p.ensureViewSurface()
+		n = len(p.viewSurface.Lines)
+	}
+	if n < 1 {
+		p.previewCursorLine = 0
+		return
+	}
+	if p.previewCursorLine < p.previewScrollOff {
+		p.previewCursorLine = p.previewScrollOff
+	}
+	last := p.previewScrollOff + height - 1
+	if last >= n {
+		last = n - 1
+	}
+	if p.previewCursorLine > last {
+		p.previewCursorLine = last
+	}
+	if p.previewCursorLine < 0 {
+		p.previewCursorLine = 0
+	}
 }
 
 // ensurePreviewCursorVisibleWithHeight adjusts preview scroll offset for given

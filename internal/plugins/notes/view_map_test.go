@@ -155,6 +155,35 @@ func TestViewPasteMapsThroughRender(t *testing.T) {
 	}
 }
 
+func TestWheelScrollSurvivesPaint(t *testing.T) {
+	lines := make([]string, 80)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	p := layoutTestPlugin(t, strings.Join(lines, "\n"))
+	p.markdownView = false
+	p.previewMode = true
+	p.activePane = PaneEditor
+	p.invalidateViewSurface()
+	p.ensureViewSurface()
+	p.previewCursorLine = 0
+	p.previewScrollOff = 0
+
+	before := p.previewScrollOff
+	_, _ = p.handleMouseScroll(p.mouseHandler.HandleMouse(wheelMsg(editorX, 8, false)))
+	if p.previewScrollOff <= before {
+		t.Fatalf("wheel did not advance scroll: %d", p.previewScrollOff)
+	}
+	scrolled := p.previewScrollOff
+	_ = p.renderViewSurface(p.editorLayout().contentHeight)
+	if p.previewScrollOff != scrolled {
+		t.Fatalf("paint reset wheel scroll %d -> %d", scrolled, p.previewScrollOff)
+	}
+	if p.previewCursorLine < p.previewScrollOff {
+		t.Fatalf("reading cursor %d left above viewport %d", p.previewCursorLine, p.previewScrollOff)
+	}
+}
+
 func TestTabFromListFocusesPreviewNotEdit(t *testing.T) {
 	p := layoutTestPlugin(t, wrappingParagraph())
 	p.markdownView = true
