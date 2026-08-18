@@ -238,17 +238,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 		return p, p.loadNoteIntoEditor()
 
 	case regionEditorLine:
-		if lineIdx, ok := action.Region.Data.(int); ok {
-			p.activePane = PaneEditor
-			if !p.previewMode {
-				// Edit mode: position textarea cursor at double-click location
-				col := p.screenXToEditorCol(action.X)
-				p.setTextareaCursorPosition(lineIdx, col)
-				p.trackTextareaScroll()
-			} else {
-				// Preview mode: position preview cursor
-				p.previewCursorLine = lineIdx
-			}
+		p.activePane = PaneEditor
+		if !p.previewMode {
+			srcLine, srcCol := p.clickToSource(action.X, action.Y)
+			p.setTextareaCursorPosition(srcLine, srcCol)
+			p.trackTextareaScroll()
+		} else if lineIdx, ok := action.Region.Data.(int); ok {
+			p.previewCursorLine = lineIdx
 		}
 		return p, nil
 	}
@@ -373,25 +369,29 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 		return p, nil
 	}
 
-	// Get line count based on mode
-	var lineCount int
-	if p.previewMode {
-		p.ensureViewSurface()
-		lineCount = len(p.viewSurface.Lines)
-	} else {
-		lineCount = p.editorTextarea.LineCount()
-		// Keep previewLines synced for getSelectedText
+	if !p.previewMode {
+		// Edit mode: convert the click and the pointer (inclusive character
+		// carets) into an exclusive source range so backward drags keep both
+		// endpoint characters.
+		line, col := p.clickToSource(action.X, action.Y)
+		click := srcFromPoint(p.selection.Anchor)
+		if !p.selection.Anchor.Valid() {
+			click = srcPos{line: line, col: col}
+		}
+		start, end := mouseExclusiveRange(click, srcPos{line: line, col: col}, p.editorTextarea.Value())
+		p.selection.SelectRange(start.point(), end.point(), false)
+		p.selection.Anchor = click.point()
 		p.syncPreviewFromTextarea()
+		return p, nil
 	}
+
+	p.ensureViewSurface()
+	lineCount := len(p.viewSurface.Lines)
 	if lineCount == 0 {
 		return p, nil
 	}
 
-	// Calculate Y offset to editor content
-	editorContentStartY := p.editorContentStartY()
-	currentLine := (action.Y - editorContentStartY) + p.previewScrollOff
-
-	// Clamp to valid range
+	currentLine := (action.Y - p.editorContentStartY()) + p.previewScrollOff
 	if currentLine < 0 {
 		currentLine = 0
 	}
@@ -399,18 +399,8 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 	if currentLine > maxLine {
 		currentLine = maxLine
 	}
-
-	// Map X to character column (mode-aware)
-	var col int
-	if p.previewMode {
-		col = p.editorColAtScreenX(action.X, currentLine)
-	} else {
-		col = p.screenXToEditorCol(action.X)
-	}
-
-	// Update selection
+	col := p.editorColAtScreenX(action.X, currentLine)
 	p.selection.HandleDrag(currentLine, col)
-
 	return p, nil
 }
 
@@ -583,35 +573,37 @@ func (p *Plugin) copySelectionCmd() tea.Cmd {
 
 // getSelectedText returns the selected text lines.
 func (p *Plugin) getSelectedText() []string {
-	if !p.selection.HasSelection() || p.editorNote == nil {
+	if p.editorNote == nil {
+		return nil
+	}
+	if !p.previewMode {
+		if !p.hasEditSelection() {
+			return nil
+		}
+		start, end := orderSrc(srcFromPoint(p.selection.Start), srcFromPoint(p.selection.End))
+		text := extractExclusive(sourceLines(p.editorTextarea.Value()), start, end)
+		if text == "" {
+			return nil
+		}
+		return strings.Split(text, "\n")
+	}
+	if !p.selection.HasSelection() {
 		return nil
 	}
 
 	startLine := p.selection.Start.Line
 	endLine := p.selection.End.Line
 
-	// Get lines based on mode
-	var allLines []string
-	if p.previewMode {
-		p.ensureViewSurface()
-		allLines = p.viewSurface.Lines
-	} else {
-		// In edit mode, split textarea content into lines
-		allLines = strings.Split(p.editorTextarea.Value(), "\n")
-	}
-
+	p.ensureViewSurface()
+	allLines := p.viewSurface.Lines
 	if startLine < 0 || endLine >= len(allLines) {
 		return nil
 	}
-
-	// Get the lines in selection range
 	lines := allLines[startLine : endLine+1]
 	if len(lines) == 0 {
 		return nil
 	}
-
-	// Use shared selection API to extract with column precision
-	return p.selection.SelectedText(lines, startLine, 8) // tabWidth=8
+	return p.selection.SelectedText(lines, startLine, 8)
 }
 
 // registerMouseRegions registers hit regions for mouse interaction.

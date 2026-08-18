@@ -757,6 +757,18 @@ func DefaultBindings() []Binding {
 		{Key: "end", Command: "line-end", Context: "notes-editor"},
 		{Key: "ctrl+a", Command: "line-start", Context: "notes-editor"},
 		{Key: "ctrl+e", Command: "line-end", Context: "notes-editor"},
+		{Key: "shift+up", Command: "select-up", Context: "notes-editor"},
+		{Key: "shift+down", Command: "select-down", Context: "notes-editor"},
+		{Key: "shift+left", Command: "select-left", Context: "notes-editor"},
+		{Key: "shift+right", Command: "select-right", Context: "notes-editor"},
+		{Key: "shift+home", Command: "select-line-start", Context: "notes-editor"},
+		{Key: "shift+end", Command: "select-line-end", Context: "notes-editor"},
+		{Key: "alt+s", Command: "select-toggle", Context: "notes-editor"},
+		{Key: "alt+a", Command: "select-all", Context: "notes-editor"},
+		{Key: "alt+x", Command: "cut", Context: "notes-editor"},
+		{Key: "ctrl+z", Command: "undo-edit", Context: "notes-editor"},
+		{Key: "ctrl+y", Command: "redo-edit", Context: "notes-editor"},
+		{Key: "ctrl+shift+z", Command: "redo-edit", Context: "notes-editor"},
 
 		// Notes task modal context
 		{Key: "enter", Command: "create-task", Context: "notes-task-modal"},

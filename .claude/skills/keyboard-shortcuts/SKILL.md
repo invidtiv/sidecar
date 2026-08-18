@@ -571,6 +571,29 @@ tabs keep the ID visible and truncate the headline.
 | `tab` / `shift+tab` | next-pane / prev-pane | Move focus between sidebar, terminal, document, and issue |
 | `q` / `esc` | close | Hide the pane. Tabs stay remembered for this surface |
 
+## Notes Plugin
+
+Contexts: `notes-list` (root), `notes-preview`, `notes-editor`, `notes-search`, `notes-info`, `notes-task-modal`, `notes-delete-modal`, `notes-inline-edit`.
+
+The built-in editor is modeless: printable keys type. Selection and undo use modifier chords so `v`, `u`, `y`, `d`, `x`, and `p` stay letters.
+
+### Built-in editor (`notes-editor`)
+
+| Key | Command | Description |
+|-----|---------|-------------|
+| `shift+arrows` / `shift+home` / `shift+end` | select-* | Extend a source-coordinate selection |
+| `alt+s` | select-toggle | Set or clear the selection anchor; ordinary movement then extends |
+| `alt+a` | select-all | Select the whole note |
+| `alt+c` | copy-note | Copy the selection, or the whole note if none |
+| `alt+x` | cut | Cut the selection |
+| backspace / delete / type / paste | — | Replace the selection (one undo unit) |
+| `ctrl+z` | undo-edit | Undo the last edit unit |
+| `ctrl+y` / `ctrl+shift+z` | redo-edit | Redo |
+| `ctrl+s` | save | Save now |
+| `esc` / `tab` | back / switch-pane | Leave edit and persist |
+
+The tmux/`$EDITOR` pane (`e`) keeps vim's own undo and selection.
+
 ## TD Monitor Plugin
 
 Contexts: `td-monitor` (root), `td-modal`, `td-stats`, `td-search`, `td-confirm`, `td-epic-tasks`, `td-parent-epic`, `td-handoffs`.

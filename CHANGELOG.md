@@ -4,6 +4,16 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Notes
+
+- **The built-in editor now has real selection and undo.** Shift-arrows (and
+  `alt+s` when the terminal swallows shift) extend a source-coordinate
+  selection that survives wrap and resize. `alt+a` selects all, `alt+c` copies
+  the selection or the whole note, `alt+x` cuts, and typing, paste, or
+  backspace replace the range as one undo unit. `ctrl+z` undoes and
+  `ctrl+y` / `ctrl+shift+z` redo; short typing bursts coalesce. Bare `v` and
+  `u` still type. The tmux editor keeps vim's own undo.
+
 ## [v1.0.2] - 2026-08-17
 
 ### Bug Fixes

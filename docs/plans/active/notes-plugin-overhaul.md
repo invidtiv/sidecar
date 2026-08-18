@@ -1,10 +1,11 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 2 merged to `main` at `49829599`; review fixes are on
-`notes-overhaul` and Phase 3 is gated on independent approval of td-2f6d46
+**Status:** Phase 3 implemented on `notes-overhaul` as td-178efc; Phase 2
+wrapped-click review (td-2f6d46) is still awaiting independent approval
 **Created:** 2026-08-17
 **Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
 **Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c
+**Phase 3:** td-178efc — source selection, replacement, overlay-through-wrap, content undo/redo
 
 The Phase 2 commits mention td-caca7d, td-2a63f0, and td-6f24d9, but those records
 are absent from the current td store. Commit hashes above are the durable implementation
@@ -34,8 +35,16 @@ exact clicked screen row, including after scroll. td-4b3a5c also makes
 the production td CLI store lazy so Notes `Init()` performs no PATH/database I/O before
 the first frame. Focused markdown/Notes/keymap tests, `go test ./...`, `go build ./...`, a
 production `td --json note` add/edit/list/delete/restore round trip, and an isolated
-80×24 real-app render/raw/edit/save journey are green. Phase 3 remains on hold only until
-the non-minor wrapped-click fix receives independent review and the review commit is merged.
+80×24 real-app render/raw/edit/save journey are green.
+
+**Phase 3 (td-178efc):** the built-in editor stores selection as exclusive source
+carets (line + rune). Shift-arrows / shift-home/end and `alt+s` extend it;
+`alt+a` selects all; `alt+c` copies the range or the whole note; `alt+x` cuts;
+backspace, delete, typing, and paste replace the range. Overlay maps those
+carets through the textarea wrap policy. A per-note snapshot ring groups
+typing bursts and treats paste/cut/delete-selection as one unit, capped by
+entry count and retained bytes. `ctrl+z` / `ctrl+y` / `ctrl+shift+z` undo and
+redo. Syntax spans remain deferred.
 
 ## Goal
 
@@ -332,10 +341,10 @@ Each phase is shippable alone and ordered so later phases build on earlier seams
    The mapping-capable render result, glamour default, shared wrapping, and `m` toggle are
    implemented. td-2f6d46 closes the wrapped-click acceptance hole found in review;
    td-4b3a5c removes synchronous store validation from startup.
-3. **Selection + undo/redo — hold until td-2f6d46 is approved and merged.** Add
-   source-coordinate keyboard/mouse selection, replacement
-   semantics, selection overlay, and bounded operation-based history. Add syntax spans
-   only after the authoritative editor layout can support them without a shadow renderer.
+3. **Selection + undo/redo — implemented (td-178efc).** Source-coordinate
+   keyboard/mouse selection, replacement semantics, wrap-aware overlay, and a
+   bounded per-note operation-based history. Syntax spans stay deferred until
+   the authoritative editor layout can support them without a shadow renderer.
 4. **td integration, dependency ordered.** (a) td shared core plus structured CLI commands,
    note↔issue relation, queries, and optimistic note update; (b) td release and Sidecar dependency bump;
    (c) Sidecar task/link UI and livewatch refresh/conflict journey.

@@ -123,7 +123,17 @@ type Plugin struct {
 	// Mouse state
 	mouseHandler *mouse.Handler
 	hoverDivider bool
-	selection    ui.SelectionState
+	// selection stores exclusive [Start, End) source carets in edit mode
+	// (logical line + rune offset). View-mode (archived/deleted) selection
+	// still uses visual rows for copy-only drags.
+	selection ui.SelectionState
+	selAnchor ui.SelectionPoint // keyboard/mouse extend origin
+	selExtend bool              // alt+s: ordinary movement extends
+
+	// Per-note content undo/redo for the built-in editor. The list's
+	// delete/archive stack is separate (undoStack).
+	editHistories    map[string]*editHistory
+	lastSavedContent string
 
 	// Task modal state
 	showTaskModal         bool
@@ -253,12 +263,13 @@ type UndoAction struct {
 func New() *Plugin {
 	md, _ := markdown.NewRenderer()
 	p := &Plugin{
-		mouseHandler: mouse.NewHandler(),
-		inlineEditor: tty.New(nil),
-		previewMode:  true,
-		markdownView: true,
-		md:           md,
-		notePlaces:   make(map[string]notePlace),
+		mouseHandler:  mouse.NewHandler(),
+		inlineEditor:  tty.New(nil),
+		previewMode:   true,
+		markdownView:  true,
+		md:            md,
+		notePlaces:    make(map[string]notePlace),
+		editHistories: make(map[string]*editHistory),
 	}
 	p.clearInlineEditorAttachKey()
 	return p
@@ -317,6 +328,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.mouseHandler = mouse.NewHandler()
 	}
 	p.selection.Clear()
+	p.selAnchor = ui.SelectionPoint{-1, -1}
+	p.selExtend = false
+	p.editHistories = make(map[string]*editHistory)
+	p.lastSavedContent = ""
 
 	// Editor state
 	p.editorNote = nil
@@ -604,6 +619,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		p.editorDirty = false
+		p.lastSavedContent = msg.Content
 		if p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Debug("notes: content saved", "id", msg.ID)
 		}
@@ -793,28 +809,30 @@ func (p *Plugin) pasteIntoSearch(content string) {
 
 func (p *Plugin) pasteIntoEditor(content string) (plugin.Plugin, tea.Cmd) {
 	var cmds []tea.Cmd
-	oldValue := p.editorTextarea.Value()
 	if p.previewMode {
 		p.ensureViewSurface()
 		a := p.viewSurface.At(p.previewCursorLine)
+		p.prepareEdit(editOpPaste)
 		p.insertAtSourceLine(a.SourceLine, content)
 		newRow, newCol := pasteInsertPlace(a.SourceLine, content)
 		if cmd := p.enterEditAt(newRow, newCol); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-	} else {
-		p.editorTextarea.InsertString(content)
-		if !p.editorTextarea.Focused() {
-			cmds = append(cmds, p.editorTextarea.Focus())
-		}
+		p.clearEditSelection()
+		cmds = append(cmds, p.afterContentChange())
+		return p, tea.Batch(cmds...)
 	}
-	p.selection.Clear()
+	if p.hasEditSelection() {
+		return p.replaceEditorSelection(content, editOpPaste)
+	}
+	p.prepareEdit(editOpPaste)
+	p.editorTextarea.InsertString(content)
+	if !p.editorTextarea.Focused() {
+		cmds = append(cmds, p.editorTextarea.Focus())
+	}
+	p.clearEditSelection()
 	p.trackTextareaScroll()
-	if p.editorTextarea.Value() != oldValue {
-		p.editorDirty = true
-		p.syncPreviewFromTextarea()
-		cmds = append(cmds, p.startAutoSaveTimer())
-	}
+	cmds = append(cmds, p.afterContentChange())
 	return p, tea.Batch(cmds...)
 }
 
@@ -1105,15 +1123,9 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p.handleEditorPreviewKey(msg)
 	}
 
-	p.selection.Clear()
-
 	switch key {
-	case "tab":
-		p.leaveEditToView()
-		p.activePane = PaneList
-		return p, p.persistDirtyEditor()
-
-	case "esc":
+	case "tab", "esc":
+		p.clearEditSelection()
 		p.leaveEditToView()
 		p.activePane = PaneList
 		return p, p.persistDirtyEditor()
@@ -1122,33 +1134,67 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		p.autoSaveID++
 		return p, p.saveEditorContent()
 
+	case "ctrl+z":
+		return p.undoEditorEdit()
+
+	case "ctrl+y", "ctrl+shift+z":
+		return p.redoEditorEdit()
+
+	case "alt+s":
+		return p.toggleSelectAnchor()
+
+	case "alt+a":
+		return p.selectAllEditor()
+
 	// Deliberately no "E" here. Before the notes rework this handler claimed
 	// it for the external editor, which meant a capital E could never be typed
 	// into a note. E reaches $EDITOR from the list and from preview; inside the
 	// simple editor every printable key belongs to the textarea.
 
 	case "alt+c":
-		return p, p.copyEditorContent()
+		return p, p.copyEditorOrSelection()
+
+	case "alt+x":
+		return p.cutEditorSelection()
 	}
 
-	// Detect content change for auto-save
-	oldValue := p.editorTextarea.Value()
+	if isShiftMotion(msg) || (p.selExtend && isMotionKey(msg)) {
+		return p.extendSelectionByMotion(msg)
+	}
 
-	// Delegate to textarea
+	if p.hasEditSelection() && isDeleteKey(msg) {
+		return p.deleteEditorSelection(editOpReplace)
+	}
+	if p.hasEditSelection() && isInsertKey(msg) {
+		text := msg.Text
+		if key == "enter" || key == "ctrl+m" {
+			text = "\n"
+		}
+		return p.replaceEditorSelection(text, editOpReplace)
+	}
+
+	if p.hasEditSelection() && isMotionKey(msg) {
+		p.clearEditSelection()
+	}
+
+	oldValue := p.editorTextarea.Value()
+	kind := editOpNone
+	if isInsertKey(msg) {
+		kind = editOpTyping
+	} else if isDeleteKey(msg) {
+		kind = editOpDelete
+	}
+	if kind != editOpNone {
+		p.prepareEdit(kind)
+	}
+
 	var cmd tea.Cmd
 	p.editorTextarea, cmd = p.editorTextarea.Update(msg)
-
-	// Track scroll position for mouse region registration
 	p.trackTextareaScroll()
 
-	// Check if content changed
-	newValue := p.editorTextarea.Value()
-	if newValue != oldValue {
-		p.editorDirty = true
-		p.syncPreviewFromTextarea()
-		return p, tea.Batch(cmd, p.startAutoSaveTimer())
+	if p.editorTextarea.Value() != oldValue {
+		return p, tea.Batch(cmd, p.afterContentChange())
 	}
-
 	return p, cmd
 }
 
@@ -1391,6 +1437,7 @@ func (p *Plugin) leaveEditToView() {
 	p.ensurePreviewCursorVisible()
 	p.editorTextarea.Blur()
 	p.rememberCurrentPlace()
+	p.clearEditSelection()
 }
 
 // captureEditPlace writes the textarea cursor/viewport back onto the preview
@@ -1539,6 +1586,11 @@ func (p *Plugin) syncEditorFromNote(note *Note) {
 	}
 	p.ensurePreviewCursorVisible()
 	p.editorDirty = false
+	p.lastSavedContent = note.Content
+	p.clearEditSelection()
+	if p.editHistories != nil && note.ID != "" {
+		delete(p.editHistories, note.ID)
+	}
 }
 
 // loadNoteIntoEditor loads the currently selected note into the editor pane
@@ -1569,9 +1621,11 @@ func (p *Plugin) loadNoteIntoEditor() tea.Cmd {
 	}
 	p.invalidateViewSurface()
 	p.editorDirty = false
+	p.lastSavedContent = note.Content
 	p.previewMode = true
 	p.restorePlace(note.ID)
 	p.editorTextarea.Blur()
+	p.clearEditSelection()
 	return nil
 }
 
@@ -1597,12 +1651,14 @@ func (p *Plugin) loadNoteIntoEditorAtEnd() tea.Cmd {
 	}
 	p.invalidateViewSurface()
 	p.editorDirty = false
+	p.lastSavedContent = note.Content
 	p.previewMode = false
 	p.updateTextareaDimensions()
 	p.editorTextarea.MoveToEnd()
 	p.previewCursorLine = p.editorTextarea.Line()
 	p.trackTextareaScroll()
 	p.editorTextarea.Focus()
+	p.clearEditSelection()
 	return nil
 }
 
@@ -2204,6 +2260,26 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		if p.editorDirty {
 			cmds[1].Name = "Save*"
+		}
+		cmds = append(cmds,
+			plugin.Command{ID: "copy-note", Name: "Copy", Description: "Copy selection or note", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 4},
+			plugin.Command{ID: "select-all", Name: "All", Description: "Select all", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
+			plugin.Command{ID: "select-toggle", Name: "Select", Description: "Set or clear the selection anchor", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 6},
+		)
+		if p.hasEditSelection() {
+			cmds = append(cmds, plugin.Command{ID: "cut", Name: "Cut", Description: "Cut selection", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 3})
+		}
+		if p.historyForCurrent().canUndo() {
+			cmds = append(cmds, plugin.Command{
+				ID: "undo-edit", Name: "Undo", Description: "Undo last edit", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 3,
+				Handler: func() tea.Cmd { _, cmd := p.undoEditorEdit(); return cmd },
+			})
+		}
+		if p.historyForCurrent().canRedo() {
+			cmds = append(cmds, plugin.Command{
+				ID: "redo-edit", Name: "Redo", Description: "Redo last undone edit", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 4,
+				Handler: func() tea.Cmd { _, cmd := p.redoEditorEdit(); return cmd },
+			})
 		}
 		return cmds
 	}

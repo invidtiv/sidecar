@@ -282,24 +282,16 @@ func truncatePreviewLine(line string, wrapWidth int) string {
 	return ansi.Truncate(line, wrapWidth, ">")
 }
 
-// overlaySelectionOnEditor paints the current selection onto the textarea
-// surface already showing. Visual rows map 1:1 to source lines from the
-// textarea viewport (Phase 2 will remap through glamour).
+// overlaySelectionOnEditor paints the current exclusive source selection
+// onto the textarea surface. Visual rows are remapped through the same
+// wrap policy the textarea uses; syntax spans stay deferred.
 func (p *Plugin) overlaySelectionOnEditor(view string) string {
-	if !p.selection.HasSelection() {
+	if !p.hasEditSelection() {
 		return view
 	}
-	lines := strings.Split(view, "\n")
-	first := p.editorTextarea.ScrollYOffset()
-	for i, line := range lines {
-		src := first + i
-		if !p.selection.IsLineSelected(src) {
-			continue
-		}
-		startCol, endCol := p.selection.GetLineSelectionCols(src)
-		lines[i] = ui.InjectCharacterRangeBackground(line, startCol, endCol)
-	}
-	return strings.Join(lines, "\n")
+	start, end := orderSrc(srcFromPoint(p.selection.Start), srcFromPoint(p.selection.End))
+	raw := markdown.MapWrappedSource(p.editorTextarea.Value(), p.editorLayout().wrapColumn)
+	return overlayExclusiveOnView(view, raw, start, end, p.editorTextarea.Value(), p.editorTextarea.ScrollYOffset())
 }
 
 // wrapEditorLine wraps a single line to width using plain-text breakpoints,

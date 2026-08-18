@@ -40,6 +40,12 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.inlineEditMode && p.inlineEditNoteID == noteID && p.inlineEditor != nil && p.inlineEditor.IsActive() {
 		return nil
 	}
+	// Vim owns undo from here. Drop the built-in ring so a later sync
+	// cannot ctrl+z the pre-vim buffer over the file.
+	if p.editHistories != nil && noteID != "" {
+		delete(p.editHistories, noteID)
+	}
+	p.clearEditSelection()
 
 	// Get note path (creates temp file with content)
 	notePath := p.store.NotePath(noteID)
