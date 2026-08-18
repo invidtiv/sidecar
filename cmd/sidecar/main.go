@@ -270,7 +270,11 @@ func main() {
 		defer startuptrace.Report(logger)
 		time.AfterFunc(startuptrace.ReportDelay(), func() { startuptrace.Report(logger) })
 	}
+	// Provider work is the only thing the app starts that outlives a frame and
+	// owns a child process, so it gets an explicit stop on both exit paths.
+	defer app.ShutdownResourceProviders()
 	if _, err := p.Run(); err != nil {
+		app.ShutdownResourceProviders()
 		// Report before exiting: os.Exit skips deferred calls, and a trace of a
 		// run that died is exactly the one worth having.
 		startuptrace.Report(logger)
