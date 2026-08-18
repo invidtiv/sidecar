@@ -151,6 +151,9 @@ func paneTreeFloors() Floors {
 		// the width that renderer stops being markdown below.
 		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		Diff:  PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+		// A resource card is a field grid over a markdown body rendered by
+		// that same renderer, so it needs the same width and the same rows.
+		Resource: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 	})
 }
 
@@ -601,9 +604,11 @@ func paneLayoutHasDiffTabs(layout *state.PaneLayoutJSON) bool {
 }
 
 // paneLayoutHasRetainedTabs is the hide/reopen predicate: a q-hidden surface
-// keeps document tabs, issue tabs, Diff tabs, or a legacy issue leaf.
+// keeps document tabs, issue tabs, Diff tabs, resource references, or a legacy
+// issue leaf.
 func paneLayoutHasRetainedTabs(layout *state.PaneLayoutJSON) bool {
-	return paneLayoutHasDocTabs(layout) || paneLayoutHasIssueTabs(layout) || paneLayoutHasDiffTabs(layout)
+	return paneLayoutHasDocTabs(layout) || paneLayoutHasIssueTabs(layout) ||
+		paneLayoutHasDiffTabs(layout) || paneLayoutHasResourceTabs(layout)
 }
 
 // rememberHiddenPaneLayout merges the live tree into the surface's hidden
@@ -634,7 +639,7 @@ func mergeHiddenPaneLayout(existing, live *state.PaneLayoutJSON) *state.PaneLayo
 	if live == nil {
 		return clonePaneLayout(existing)
 	}
-	kinds := []string{contentKindDoc, contentKindIssue, contentKindDiff}
+	kinds := []string{contentKindDoc, contentKindIssue, contentKindDiff, contentKindResource}
 	var contents []*state.PaneLayoutJSON
 	for _, kind := range kinds {
 		leaf := firstLayoutLeafOfKind(live, kind)
@@ -740,6 +745,9 @@ func clonePaneLayout(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
 	if src.DiffTabs != nil {
 		out.DiffTabs = append([]state.PaneDiffTabJSON(nil), src.DiffTabs...)
 	}
+	if src.ResourceTabs != nil {
+		out.ResourceTabs = append([]state.PaneResourceTabJSON(nil), src.ResourceTabs...)
+	}
 	if src.Split != nil {
 		split := *src.Split
 		split.A = clonePaneLayout(src.Split.A)
@@ -765,6 +773,9 @@ func copyContentLeaf(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
 	}
 	if src.DiffTabs != nil {
 		out.DiffTabs = append([]state.PaneDiffTabJSON(nil), src.DiffTabs...)
+	}
+	if src.ResourceTabs != nil {
+		out.ResourceTabs = append([]state.PaneResourceTabJSON(nil), src.ResourceTabs...)
 	}
 	return out
 }
@@ -810,6 +821,11 @@ func replaceLayoutLeaf(tree *state.PaneLayoutJSON, kind string, leaf *state.Pane
 	} else {
 		target.DiffTabs = nil
 	}
+	if leaf.ResourceTabs != nil {
+		target.ResourceTabs = append([]state.PaneResourceTabJSON(nil), leaf.ResourceTabs...)
+	} else {
+		target.ResourceTabs = nil
+	}
 }
 
 func (p *Plugin) liveContentBesides(kind PaneKind) bool {
@@ -847,6 +863,8 @@ func (p *Plugin) reinsertHiddenContentLeaf(kind PaneKind, saved *state.PaneLayou
 		node = p.decodeIssueLeaf(saved, root, &loads)
 	case PaneDiff:
 		node = p.decodeDiffLeaf(saved, root, &loads)
+	case PaneResource:
+		node = p.decodeResourceLeaf(saved, root, &loads)
 	}
 	if node == nil {
 		return nil
@@ -859,6 +877,8 @@ func (p *Plugin) reinsertHiddenContentLeaf(kind PaneKind, saved *state.PaneLayou
 			delete(p.issues, node.ContentID)
 		case PaneDiff:
 			delete(p.diffs, node.ContentID)
+		case PaneResource:
+			delete(p.resources, node.ContentID)
 		}
 		return nil
 	}
@@ -919,6 +939,8 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 		delete(p.issues, leaf.ContentID)
 	case PaneDiff:
 		delete(p.diffs, leaf.ContentID)
+	case PaneResource:
+		delete(p.resources, leaf.ContentID)
 	default:
 		return false
 	}
@@ -987,6 +1009,10 @@ func (p *Plugin) contentLeafSurface(leafID int) (root, surface string, ok bool) 
 	case PaneDiff:
 		if diff := p.diffs[leaf.ContentID]; diff != nil {
 			return diff.root, diff.surface, true
+		}
+	case PaneResource:
+		if res := p.resources[leaf.ContentID]; res != nil {
+			return res.root, res.surface, true
 		}
 	}
 	return "", "", false
@@ -1412,6 +1438,13 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		}
 		return &state.PaneLayoutJSON{Kind: contentKindDiff, DiffTabs: tabs, Active: active}
 	}
+	if node.Kind == PaneResource {
+		tabs, active := encodeResourceTabs(p.resources[node.ContentID])
+		if len(tabs) == 0 {
+			return nil
+		}
+		return &state.PaneLayoutJSON{Kind: contentKindResource, ResourceTabs: tabs, Active: active}
+	}
 	doc := p.docs[node.ContentID]
 	tabs, active := encodeDocTabs(doc)
 	if len(tabs) == 0 {
@@ -1459,6 +1492,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
+	p.resources = make(map[int]*resourcePane)
 	p.paneNextID = 1
 	terminalCount := 0
 	var loads []tea.Cmd
@@ -1488,7 +1522,7 @@ func supportedPaneTree(root *PaneNode) bool {
 	}
 	if root.Split == nil {
 		switch root.Kind {
-		case PaneTerminal, PaneDoc, PaneIssue, PaneDiff:
+		case PaneTerminal, PaneDoc, PaneIssue, PaneDiff, PaneResource:
 			return true
 		default:
 			return false
@@ -1535,6 +1569,8 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		return p.decodeIssueLeaf(saved, root, loads)
 	case contentKindDiff:
 		return p.decodeDiffLeaf(saved, root, loads)
+	case contentKindResource:
+		return p.decodeResourceLeaf(saved, root, loads)
 	}
 	return nil
 }
@@ -1618,6 +1654,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
+	p.resources = make(map[int]*resourcePane)
 	p.hiddenPaneLayout = nil
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
@@ -1752,6 +1789,10 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 		if diff := p.diffs[node.ContentID]; diff != nil {
 			p.registerDiffPaneRegions(diff, node.ID, box)
 		}
+	case PaneResource:
+		if res := p.resources[node.ContentID]; res != nil {
+			p.registerResourcePaneRegions(res, node.ID, box)
+		}
 	}
 }
 
@@ -1772,6 +1813,10 @@ func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
 		if diff := p.diffs[node.ContentID]; diff != nil {
 			p.registerDiffTargetTabRegions(diff, node.ID, box)
 		}
+	case PaneResource:
+		if res := p.resources[node.ContentID]; res != nil {
+			p.registerResourceTabRegions(res, node.ID, box)
+		}
 	}
 }
 
@@ -1780,7 +1825,7 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 		return
 	}
 	switch node.Kind {
-	case PaneDoc, PaneIssue, PaneDiff:
+	case PaneDoc, PaneIssue, PaneDiff, PaneResource:
 		if p.paneContent(node) == nil {
 			return
 		}

@@ -16,6 +16,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -79,6 +80,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 2*time.Second)
 	case issueview.LoadedMsg:
 		p.applyIssueLoaded(msg)
+		return p, nil
+	case resourceview.ResolvedMsg:
+		p.applyResourceResolved(msg)
 		return p, nil
 
 	case tea.WindowSizeMsg:

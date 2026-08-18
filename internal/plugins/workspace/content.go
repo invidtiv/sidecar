@@ -22,6 +22,9 @@ const (
 	contentKindDoc      = "doc"
 	contentKindIssue    = "issue"
 	contentKindDiff     = "diff"
+	// contentKindResource is the one key every external provider persists
+	// under, so installing another integration adds no kind here.
+	contentKindResource = "resource"
 )
 
 // Size is the box a content draws into: the leaf's INNER box, header row
@@ -62,6 +65,12 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 			return nil
 		}
 		return &diffContent{p: p, diff: diff}
+	case PaneResource:
+		res := p.resources[node.ContentID]
+		if res == nil || res.view() == nil {
+			return nil
+		}
+		return &resourceContent{p: p, res: res}
 	default:
 		return &terminalContent{p: p}
 	}
@@ -263,6 +272,48 @@ func (c *diffContent) View(render Render) string {
 		body)
 }
 
+// resourceContent is the Resource leaf: the pane's own header row above the
+// shared resource card. It spends its box exactly as the document, issue and
+// diff leaves do, because the row the frame draws is the pane's rather than
+// the viewer's, and two leaves side by side must put their bodies on the same
+// relative row.
+type resourceContent struct {
+	p    *Plugin
+	res  *resourcePane
+	size Size
+}
+
+func (c *resourceContent) Kind() string { return contentKindResource }
+
+// Title is the active tab's headline, which is its locator until the resolve
+// lands.
+func (c *resourceContent) Title() string {
+	if view := c.res.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
+
+func (c *resourceContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	// Every tab is sized, not only the active one: a tab selected later must
+	// already know the box it will be drawn into.
+	if c.res.tabs != nil {
+		c.res.tabs.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
+	return nil
+}
+
+func (c *resourceContent) View(render Render) string {
+	body := ""
+	if c.res.tabs != nil {
+		body = c.res.tabs.View()
+	}
+	return composePaneLeaf(
+		c.p.resourcePaneHeaderRow(c.res, c.size.Width, render.Focused),
+		body)
+}
+
 // composePaneLeaf joins a leaf's header row to the body under it. An empty
 // header is a leaf that owes no header row; an empty body still costs the join
 // its newline, because a leaf with no box left under its header has spent that
@@ -304,6 +355,8 @@ func (p *Plugin) closeContentPane(leafID int) tea.Cmd {
 		return p.closeIssuePane(leafID)
 	case PaneDiff:
 		return p.closeDiffPane(leafID)
+	case PaneResource:
+		return p.closeResourcePane(leafID)
 	default:
 		return nil
 	}
