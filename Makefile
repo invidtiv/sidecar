@@ -1,7 +1,7 @@
 .PHONY: build install install-dev install-local install-worktree worktree-init use-homebrew reap-test-tmux \
 	install-status test-dev-install test test-v clean check-clean tag \
 	release-snapshot check-release-state release release-tap \
-	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks
+	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks sync-deps
 
 # Default target
 all: build
@@ -143,6 +143,11 @@ build-all:
 # Test GoReleaser locally (creates snapshot build without publishing)
 release-snapshot goreleaser-snapshot:
 	goreleaser release --snapshot --clean
+
+# Pin sibling modules (td, tasks, …) to their newest published release.
+# The release preflight refuses to tag when these drift, so this is the fix.
+sync-deps:
+	./scripts/sync-sibling-deps.sh
 
 check-release-state:
 	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
