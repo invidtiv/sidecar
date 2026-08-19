@@ -63,6 +63,17 @@ func (d *previewDoc) editor() *inlineedit.Session {
 
 func (d *previewDoc) editing() bool { return d != nil && d.edit != nil && d.edit.Active }
 
+// releaseEdit kills this pane's session, if it has one. The guards ask first on
+// the routes that can; this covers the ones that drop the pane outright (a
+// selection change, a pane rebuilt for another workspace), where an unreleased
+// session would be an orphan editor holding the file.
+func (d *previewDoc) releaseEdit() {
+	if d == nil || d.edit == nil {
+		return
+	}
+	d.edit.Exit()
+}
+
 func (d *previewDoc) editorPath() (abs, rel string, ok bool) {
 	view := d.view()
 	if d == nil || view == nil {

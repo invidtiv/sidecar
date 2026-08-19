@@ -114,3 +114,20 @@ func TestDocEditConfirmationOwnsTheKeyboard(t *testing.T) {
 		t.Fatalf("selection = %d, want 1", doc.editor().ConfirmSelection)
 	}
 }
+
+// A leaf dropped by a route that cannot ask first (a click on the X, a shell
+// switch, a reset) still owns a tmux session, and must release it rather than
+// leave an editor holding the file with nothing on screen.
+func TestClosingADocLeafReleasesItsEditor(t *testing.T) {
+	p, _ := docSearchPlugin(t, true)
+	doc := p.focusedDocPane()
+	markEditing(doc, "README.md")
+	session := doc.editor()
+
+	if !p.closeContentLeaf(doc.leafID) {
+		t.Fatal("the doc leaf did not close")
+	}
+	if session.Active {
+		t.Fatal("the leaf was dropped with its editor still live")
+	}
+}

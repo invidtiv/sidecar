@@ -271,7 +271,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// A live pane editor takes the pointer before anything else in the split:
 	// inside its body the pointer is vim's, and a click outside it is a request
 	// to leave a session that has not been saved yet.
-	if doc := p.editingDocPane(); doc != nil {
+	if doc := p.pointerDocEdit(msg); doc != nil {
 		if handled, cmd := p.handleDocEditMouse(doc, msg); handled {
 			return cmd
 		}

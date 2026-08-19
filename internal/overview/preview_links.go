@@ -305,6 +305,8 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 	}
 	wasInteractive := m.PreviewInteractive()
 	if m.preview.doc == nil || m.preview.doc.surface != workspace.ID {
+		// The pane being replaced may hold a session; it goes with the pane.
+		m.preview.doc.releaseEdit()
 		m.preview.doc = &previewDoc{epoch: m.nextPreviewContentEpoch()}
 	}
 	m.preview.doc.root = root

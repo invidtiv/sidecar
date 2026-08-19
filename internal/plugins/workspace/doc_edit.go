@@ -71,6 +71,24 @@ func (d *docPane) editor() *inlineedit.Session {
 // editing reports that this leaf is hosting a live editor.
 func (d *docPane) editing() bool { return d != nil && d.edit != nil && d.edit.Active }
 
+// releaseEdit kills this leaf's session, if it has one. It is what a teardown
+// that drops the leaf outright owes the editor: the confirmation-raising guards
+// cover the routes that can ask, and this covers the ones that cannot.
+func (d *docPane) releaseEdit() {
+	if d == nil || d.edit == nil {
+		return
+	}
+	d.edit.Exit()
+}
+
+// releaseAllDocEdits kills every live pane editor. Callers that replace p.docs
+// wholesale (a layout restore, a reset to a bare terminal) use it first.
+func (p *Plugin) releaseAllDocEdits() {
+	for _, doc := range p.docs {
+		doc.releaseEdit()
+	}
+}
+
 // editorPath is the absolute file the leaf's active tab is showing, or "".
 func (d *docPane) editorPath() (abs, rel string, ok bool) {
 	view := d.view()
@@ -97,12 +115,35 @@ func (d *docPane) editorPath() (abs, rel string, ok bool) {
 // editingDocPane is the leaf whose editor is live, focused or not. Only one
 // pane's editor takes keys, but every one of them owns tmux messages.
 func (p *Plugin) editingDocPane() *docPane {
+	var found *docPane
 	for _, doc := range p.docs {
-		if doc.editing() {
+		if !doc.editing() {
+			continue
+		}
+		// p.docs is a map: pick the lowest leaf so the answer does not change
+		// between two identical states.
+		if found == nil || doc.leafID < found.leafID {
+			found = doc
+		}
+	}
+	return found
+}
+
+// pointerDocEdit is the editor a pointer event belongs to when more than one
+// leaf holds a session: the one whose body the pointer is in, and otherwise the
+// focused one. p.docs is a map, so picking "any editing leaf" would route a
+// click by iteration order.
+func (p *Plugin) pointerDocEdit(msg tea.MouseMsg) *docPane {
+	point := msg.Mouse()
+	for _, doc := range p.docs {
+		if doc.editing() && docEditPointInBody(doc.editor(), point.X, point.Y) {
 			return doc
 		}
 	}
-	return nil
+	if doc := p.focusedDocEdit(); doc != nil {
+		return doc
+	}
+	return p.editingDocPane()
 }
 
 // focusedDocEdit is the editor that owns the keyboard: the focused document

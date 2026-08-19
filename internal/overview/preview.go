@@ -287,6 +287,7 @@ func (m *Model) resetPreviewContent() {
 }
 
 func (m *Model) resetActivePreviewPanes() {
+	m.preview.doc.releaseEdit()
 	m.preview.doc = nil
 	m.preview.issue = nil
 	m.preview.diff = nil

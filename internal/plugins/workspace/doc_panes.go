@@ -897,6 +897,10 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 		// unclosed project search leaves rg running to its 30s timeout.
 		if doc := p.docs[leaf.ContentID]; doc != nil {
 			doc.mode.Close()
+			// A leaf dropped by a route that did not ask first (a click on the
+			// X, a shell switch) still owns a tmux session; releasing the leaf
+			// without it leaves an orphan editor holding the file.
+			doc.releaseEdit()
 		}
 		delete(p.docs, leaf.ContentID)
 	case PaneIssue:
@@ -1480,6 +1484,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if !ok || filepath.Clean(layout.Root) != root || layout.Surface != surface {
 		return nil
 	}
+	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
@@ -1642,6 +1647,7 @@ func (p *Plugin) nextPaneID() int {
 
 func (p *Plugin) resetPaneTreeToTerminal() {
 	p.closeDocInfo()
+	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
