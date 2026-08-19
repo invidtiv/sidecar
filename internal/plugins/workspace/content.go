@@ -151,7 +151,10 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 	if view := c.doc.view(); view != nil {
 		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
 	}
-	return nil
+	// A live editor is sized from the same box, on the same call: a drag
+	// handle, a window resize and +/- all move the leaf through here, so the
+	// PTY follows the pane instead of being clipped by it.
+	return c.doc.resizeDocEditCmd()
 }
 
 // View draws the tab strip above the viewer. Focus is the frame's answer, so
@@ -168,6 +171,15 @@ func (c *docContent) View(render Render) string {
 	// Where the box is, not only how big it is: a click-away test needs the
 	// origin whether or not a surface is up when the click arrives.
 	c.doc.boxX, c.doc.boxY = render.Origin.X, render.Origin.Y
+	// A leaf hosting an editor spends its box the same way: one header row
+	// saying which file has the keyboard, and the editor's pixels below it.
+	if c.doc.editing() {
+		bodyH := maxInt(c.size.Height-terminalHeaderRows, 0)
+		return composePaneLeaf(
+			c.p.docEditHeaderRow(c.doc, c.size.Width),
+			c.p.renderDocEditBody(c.doc, c.size.Width, bodyH),
+		)
+	}
 	body := ""
 	if view := c.doc.view(); view != nil {
 		c.p.bindDocSelection(view, render.Origin)

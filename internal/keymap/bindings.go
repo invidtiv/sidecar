@@ -232,6 +232,13 @@ func DefaultBindings() []Binding {
 		{Key: "ctrl+p", Command: "find-file", Context: "global-workspaces-doc"},
 		{Key: "f", Command: "search-project", Context: "global-workspaces-doc"},
 
+		// Inline edit (`e`) is the Files plugin's key for the same act, and both
+		// pane surfaces answer it. While a session is live every key belongs to
+		// the editor, so the edit contexts register nothing: the ways out are
+		// tmux's own (ctrl+\, esc esc).
+		{Key: "e", Command: "edit", Context: "workspace-doc"},
+		{Key: "e", Command: "edit", Context: "global-workspaces-doc"},
+
 		{Key: "enter", Command: "confirm", Context: "workspace-doc-find"},
 		{Key: "n", Command: "next-match", Context: "workspace-doc-find"},
 		{Key: "N", Command: "prev-match", Context: "workspace-doc-find"},

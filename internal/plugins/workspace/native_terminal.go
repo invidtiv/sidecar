@@ -8,6 +8,12 @@ import (
 // Cursor exposes the active embedded terminal's native cursor in plugin-local
 // coordinates. App-level focus, modal, and bounds checks are applied later.
 func (p *Plugin) Cursor() *tea.Cursor {
+	// A document leaf hosting an inline editor draws the same kind of native
+	// cursor the terminal does, and answers first: the two are never live at
+	// once, and the editor is the one with the keyboard when it is.
+	if cursor := p.docEditCursor(); cursor != nil {
+		return cursor
+	}
 	if !p.nativeTerminalActive() || !p.interactiveState.CursorVisible {
 		return nil
 	}
@@ -42,6 +48,9 @@ func (p *Plugin) nativeTerminalActive() bool {
 // workspace views and requests cell motion only while a child terminal owns
 // interactive input.
 func (p *Plugin) PreferredMouseMode() tea.MouseMode {
+	if p.docEditNativeActive() {
+		return p.focusedDocEdit().edit.PreferredMouseMode(true)
+	}
 	if p.nativeTerminalActive() {
 		return tea.MouseModeCellMotion
 	}

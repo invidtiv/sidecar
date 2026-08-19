@@ -430,6 +430,12 @@ func (m *Model) PreviewFocused() bool { return m.preview.focus == focusPreview }
 // restore the list, or start typing. There is no watched-preview keyboard mode.
 func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+	if m.previewDocEditing() {
+		// A live editor is the document pane's version of the same fact, and
+		// answers first: it is the pane with the keyboard.
+		handled, cmd := m.previewDocKey(msg)
+		return handled, cmd
+	}
 	if m.PreviewInteractive() {
 		// Every live key goes to the component, exit chords and this surface's own
 		// chords included: it consults them through OnKey before anything becomes

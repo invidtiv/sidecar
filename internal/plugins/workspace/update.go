@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -37,7 +38,19 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 	}
 
+	// An embedded terminal's messages are scope-tagged, so every live pane
+	// editor is offered each one and the session that owns the scope acts.
+	if tty.IsTerminalMessage(msg) {
+		if cmd := p.routeDocEditMsg(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	switch msg := msg.(type) {
+	case inlineedit.StartedMsg:
+		return p, p.applyDocEditStarted(msg)
+	case inlineedit.ExitedMsg:
+		return p, p.applyDocEditExited(msg)
 	case activityAnimationTickMsg:
 		if msg.generation != p.activityAnimationGeneration {
 			return p, nil

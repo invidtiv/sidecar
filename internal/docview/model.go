@@ -338,6 +338,38 @@ func (m *Model) ToggleWrap() {
 // Title returns the document's relative path.
 func (m *Model) Title() string { return m.path }
 
+// Root reports the directory the relative path is resolved against. It is what
+// a host needs to hand the file to something outside docview — an editor, a
+// reveal, a yank — without keeping a second copy of the pane's root.
+func (m *Model) Root() string {
+	if m == nil {
+		return ""
+	}
+	return m.root
+}
+
+// TopSourceLine reports the 1-indexed source line at the top of the viewport,
+// or 0 when the rows on screen do not map onto source lines (rendered markdown,
+// a placeholder, an empty document). Hosts use it to open an editor where the
+// reader was looking.
+func (m *Model) TopSourceLine() int {
+	if m == nil {
+		return 0
+	}
+	starts := m.display().starts
+	if len(starts) == 0 {
+		return 0
+	}
+	line := 0
+	for i, row := range starts {
+		if row > m.scroll {
+			break
+		}
+		line = i + 1
+	}
+	return line
+}
+
 // displayRows is one render pass worth of visual rows plus the mapping back to
 // source lines. starts[n-1] is the row index where source line n begins, so
 // scrolling and ApplyLine stay expressible in source-line terms even when wrap

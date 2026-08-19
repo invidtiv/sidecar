@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -55,6 +56,14 @@ type previewDoc struct {
 	// nil; modeRegions are the hit regions its last render earned.
 	mode        *panesearch.Mode
 	modeRegions []mouse.Region
+	// edit is this pane's inline editor, created on the first `e`, and box is
+	// the rectangle its last render placed it in — the editor's dimension
+	// contract answers from it. See preview_doc_edit.go.
+	edit         *inlineedit.Session
+	box          termpreview.Box
+	editW, editH int
+	// pendingEdit is the action an exit confirmation is holding.
+	pendingEdit func() tea.Cmd
 }
 
 func (d *previewDoc) view() *docview.Model {
@@ -388,6 +397,10 @@ func (m *Model) closePreviewDocTab() tea.Cmd {
 	if m.preview.doc == nil {
 		return nil
 	}
+	// Closing the tab takes the file the editor is holding away; ask first.
+	if m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDocTab() }) {
+		return nil
+	}
 	if len(m.preview.doc.tabs.Items) <= 1 {
 		return m.closePreviewDoc()
 	}
@@ -460,6 +473,10 @@ func applyPreviewDocRenderMode(view *docview.Model, path string, line int) {
 
 func (m *Model) closePreviewDoc() tea.Cmd {
 	if m.preview.doc == nil {
+		return nil
+	}
+	// Closing the pane leaves a live editor with nowhere to draw; ask first.
+	if m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDoc() }) {
 		return nil
 	}
 	m.preview.doc = nil
@@ -680,7 +697,15 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 }
 
 func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.preview.doc == nil || m.PreviewInteractive() {
+	if m.preview.doc == nil {
+		return false, nil
+	}
+	// A live editor owns the pane outright, before the search surfaces and
+	// before the document's own keys: every key in it is on its way to vim.
+	if m.preview.doc.editing() {
+		return m.handlePreviewDocEditKey(msg)
+	}
+	if m.PreviewInteractive() {
 		return false, nil
 	}
 	key := msg.String()
@@ -717,6 +742,8 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				view.StartSearch()
 			}
 			return true, nil
+		case "e":
+			return true, m.enterPreviewDocEdit()
 		case "ctrl+p":
 			return true, m.openPreviewDocFinder()
 		case "f":
@@ -754,6 +781,15 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
+	// Where the box is, not only how big it is: the editor's origin and the PTY
+	// size are both read back from it.
+	doc.box = box
+	if cmd := doc.resizePreviewDocEdit(); cmd != nil {
+		m.queuePreviewCmd(cmd)
+	}
+	if doc.editing() {
+		return m.renderPreviewDocEdit(doc, box)
+	}
 	view := doc.view()
 	contentHeight := max(box.H-termpreview.HeaderRows, 0)
 	if view != nil {

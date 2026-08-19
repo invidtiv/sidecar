@@ -477,7 +477,9 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// A live pane owns the keyboard outright, before the filter and before any
 	// of the browser's own keys: while the user is typing into a terminal, "/"
 	// is a slash, "q" is a q, and ctrl+c interrupts what is running there.
-	if m.PreviewInteractive() {
+	// A live pane owns the keyboard outright, whether it is a terminal being
+	// typed into or a document being edited.
+	if m.PreviewOwnsKeyboard() {
 		return m.previewKey(msg)
 	}
 	if m.renameOpen {
@@ -785,6 +787,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	// is, so a click inside it cannot reach the document under it.
 	if m.previewDocSearchActive() {
 		return m.handlePreviewDocSearchMouse(mouseMsg)
+	}
+	// A live pane editor takes the pointer before the browser does: inside its
+	// body the pointer is vim's, and a click outside it is a request to leave a
+	// session that has not been saved yet.
+	if m.previewDocEditing() {
+		if handled, cmd := m.handlePreviewDocEditMouse(mouseMsg); handled {
+			return cmd
+		}
 	}
 	// Every mouse event counts as mouse activity for the live pane, whether or
 	// not it is routed there: the terminal component's bare-"[" gate reads a

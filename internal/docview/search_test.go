@@ -461,3 +461,16 @@ func TestSearchStyleIsReadThroughTheThemeEveryTime(t *testing.T) {
 		t.Error("the match style did not follow a change to styles.SearchMatch")
 	}
 }
+
+// TestTopSourceLineFollowsScroll is the number a host opens an editor at: the
+// source line the reader is looking at, not the visual row it landed on.
+func TestTopSourceLineFollowsScroll(t *testing.T) {
+	m := newSearchModel(t, 40, 4, "one", "two", "three", "four", "five", "six")
+	if got := m.TopSourceLine(); got != 1 {
+		t.Fatalf("unscrolled: got %d, want 1", got)
+	}
+	m.Scroll(2)
+	if got := m.TopSourceLine(); got != 3 {
+		t.Fatalf("after two rows: got %d, want 3", got)
+	}
+}

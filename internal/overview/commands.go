@@ -71,13 +71,14 @@ func (m *Model) Commands() []plugin.Command {
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide the document pane", Context: ctxGlobalWorkspacesDoc, Priority: 1},
 			{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Context: ctxGlobalWorkspacesDoc, Priority: 2},
-			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 3},
-			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 4},
-			{ID: "close-tab", Name: "Tab×", Description: "Close the active file tab", Context: ctxGlobalWorkspacesDoc, Priority: 5},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: ctxGlobalWorkspacesDoc, Priority: 6},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: ctxGlobalWorkspacesDoc, Priority: 7},
-			{ID: "render", Name: "Raw", Description: "Toggle rendered and raw markdown", Context: ctxGlobalWorkspacesDoc, Priority: 8},
-			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 9},
+			{ID: "edit", Name: "Edit", Description: "Edit this file inline", Context: ctxGlobalWorkspacesDoc, Priority: 3},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 4},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 5},
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active file tab", Context: ctxGlobalWorkspacesDoc, Priority: 6},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: ctxGlobalWorkspacesDoc, Priority: 7},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: ctxGlobalWorkspacesDoc, Priority: 8},
+			{ID: "render", Name: "Raw", Description: "Toggle rendered and raw markdown", Context: ctxGlobalWorkspacesDoc, Priority: 9},
+			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 10},
 		}
 		return cmds
 	case ctxGlobalWorkspacesDiff:

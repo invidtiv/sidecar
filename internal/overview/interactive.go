@@ -651,10 +651,16 @@ func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 // them to this surface and to the plugins alike and each activation keeps only
 // its own.
 func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
-	if !m.previewTerminalActive() || !tty.IsTerminalMessage(msg) {
+	if !tty.IsTerminalMessage(msg) {
 		return nil
 	}
-	return m.preview.terminal.Update(msg)
+	// A live pane editor is the surface's second embedded terminal, and its
+	// messages arrive on the same bus, scope-tagged the same way.
+	edit := m.PreviewDocEditMsg(msg)
+	if !m.previewTerminalActive() {
+		return edit
+	}
+	return tea.Batch(edit, m.preview.terminal.Update(msg))
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
@@ -686,6 +692,12 @@ func (m *Model) WorkspacesTerminalPaste(content string) (bool, tea.Cmd) {
 // It is nil for every other state: a watched pane has no cursor to place, and
 // drawing one would invite typing into something that forwards nothing.
 func (m *Model) WorkspacesCursor() *tea.Cursor {
+	// A document pane hosting an inline editor draws the same kind of native
+	// cursor a live terminal does, and answers first: the two are never live at
+	// once, and the editor is the one with the keyboard when it is.
+	if cursor := m.previewDocEditCursor(); cursor != nil {
+		return cursor
+	}
 	if !m.PreviewInteractive() {
 		return nil
 	}

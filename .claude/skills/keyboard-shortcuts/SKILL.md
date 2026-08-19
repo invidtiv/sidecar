@@ -399,6 +399,7 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 | `workspace-doc` | File tabs beside the terminal (hide with `q`) |
 | `workspace-doc-search` | A pane's file finder / project search (owns the keyboard) |
 | `workspace-doc-find` | A pane's in-file search bar (owns the keyboard) |
+| `workspace-doc-edit` | A pane's inline editor (owns every key, ctrl+c included) |
 | `workspace-issue` | Issue tabs beside the terminal (hide with `q`; last `x` forgets) |
 | `workspace-diff` | Diff tabs beside the terminal (hide with `q`; last `x` forgets) |
 | `workspace-create` | Create worktree input |
@@ -473,6 +474,7 @@ tabs only while a Diff leaf is focused; they do not cycle document tabs.
 | `ctrl+d` / `ctrl+u` | page-down / page-up | Scroll half a page |
 | `g` / `G` | cursor-top / cursor-bottom | Jump to start / end |
 | `/` | search-content | Search within this file (in-pane bar; same feature as the Files plugin's `/`) |
+| `e` | edit | Edit this file inline (tmux PTY editor in the pane body; `features.tmux_inline_edit`) |
 | `ctrl+p` | find-file | Find a file by name in this pane (modal scoped to the pane) |
 | `f` | search-project | Search the project in this pane (modal scoped to the pane) |
 | `x` | close-tab | Close the active tab. Last tab closes the pane and forgets the set |
@@ -489,6 +491,12 @@ tabs only while a Diff leaf is focused; they do not cycle document tabs.
 While a pane search is open (`workspace-doc-search`) it owns every key in
 the pane: `esc` closes it, `enter` loads the hit in the active tab, and
 `shift+enter` opens it in a new tab.
+
+Inline edit (`e`) opens the same tmux-PTY editor the Files plugin uses, sized
+to the pane body, on both pane surfaces (`workspace-doc-edit` and the global
+browser's document pane). While a session is live every key is the editor's —
+`ctrl+\` or `esc esc` exit it — and clicking outside the pane raises the
+save / discard / cancel confirmation instead of leaving the buffer behind.
 
 In-file search (`/`) is a third surface, drawn by `internal/docview` as one
 row inside the pane, and it owns every key while it is up

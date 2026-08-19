@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
@@ -679,6 +680,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(m.finishPhase(), preview)
 	case previewAutoScrollTickMsg:
 		return m.advancePreviewAutoScroll(msg)
+	case inlineedit.StartedMsg:
+		return m.applyPreviewDocEditStarted(msg)
+	case inlineedit.ExitedMsg:
+		return m.applyPreviewDocEditExited(msg)
 	case previewDocLoadedMsg:
 		m.applyPreviewDocLoaded(msg)
 		return nil
