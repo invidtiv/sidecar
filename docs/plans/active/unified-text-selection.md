@@ -182,6 +182,13 @@ This is the crush belt-and-suspenders pattern and fixes a real gap (sidecar over
 currently cannot copy at all). It ships in Phase 1 because every later phase's "did it
 work" test is "text landed on the clipboard."
 
+**Landed in Phase 1:** every copy path in the tree writes both clipboards, through
+`clip.Copy` (text in hand) or `clip.CopyFrom` (text the command produces), and phrases its
+notice with `clip.Result.Message` so a native-only failure reads the same everywhere. The
+one exception is the embedded td monitor (`tdmonitor/plugin.go`): td's model takes a
+writer, not a command, so there is no way back into the program loop to emit OSC 52, and
+that yank stays native-only until td offers a command-shaped hook.
+
 ### 3.3 One selection at a time, app-wide
 
 Like a native app: starting a selection anywhere clears the previous selection anywhere
@@ -199,6 +206,12 @@ key `selection.copyOnSelect` (default `false`); when true, drag-end copies with 
 usual notice. Notes migrates to the shared default — its current behavior remains
 available via the flag. (Research: unconditional copy-on-select is crush's
 most-complained-about behavior.)
+
+**Landed in Phase 1:** one key and one control. Configuration → Terminal's existing "Copy
+on select" toggle now writes `selection.copyOnSelect`, the terminal's older
+`plugins.workspace.copyOnSelect` is folded into it at load and cleared on the next save,
+and `app.TerminalConfig` honours either. Surfaces read the setting from the config they
+were built with, so it applies from the next run — the same as the chords beside it.
 
 ### 3.5 Escape hatches
 

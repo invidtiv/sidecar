@@ -110,8 +110,26 @@ func TestCopyOnSelectPersists(t *testing.T) {
 	m := workspaceFixture(t, nil)
 	m.Open(PageTerminal)
 	activate(t, m, regionCopyOnSelect)
-	if !loadSaved(t).Plugins.Workspace.CopyOnSelect {
+	if !loadSaved(t).Selection.CopyOnSelect {
 		t.Fatal("copy on select did not persist")
+	}
+}
+
+// A config written before copy-on-select applied to every surface holds it under
+// the terminal's own key. The control answers for that key too, and turning the
+// setting off has to retire it, or the next load turns it back on.
+func TestCopyOnSelectTurnsOffTheKeyItUsedToLiveUnder(t *testing.T) {
+	features.Init(config.Default())
+	m := workspaceFixture(t, func(cfg *config.Config) { cfg.Plugins.Workspace.CopyOnSelect = true })
+	m.Open(PageTerminal)
+	if !copyOnSelect(m.Config()) {
+		t.Fatal("the terminal's own copy-on-select key did not reach the control")
+	}
+	activate(t, m, regionCopyOnSelect)
+	saved := loadSaved(t)
+	if saved.Selection.CopyOnSelect || saved.Plugins.Workspace.CopyOnSelect {
+		t.Fatalf("copy on select survived being turned off: selection=%v terminal=%v",
+			saved.Selection.CopyOnSelect, saved.Plugins.Workspace.CopyOnSelect)
 	}
 }
 

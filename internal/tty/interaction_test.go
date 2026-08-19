@@ -8,35 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestResolveClickCoversEverySurfaceState(t *testing.T) {
-	tests := []struct {
-		name string
-		in   ClickIntent
-		want ClickResolution
-	}{
-		{"a passive terminal activates", ClickIntent{}, ClickActivate},
-		{"a live terminal with no mouse reporting does nothing",
-			ClickIntent{Live: true}, ClickNone},
-		{"a live terminal whose app tracks the mouse forwards",
-			ClickIntent{Live: true, MouseReporting: true}, ClickForward},
-		{"a modified click is a selection gesture, never an activation",
-			ClickIntent{Modified: true}, ClickNone},
-		{"a modified click is not the app's either",
-			ClickIntent{Live: true, MouseReporting: true, Modified: true}, ClickNone},
-		{"a link outranks the application",
-			ClickIntent{Live: true, MouseReporting: true, LinkClaimed: true}, ClickNone},
-		{"a link outranks activation",
-			ClickIntent{LinkClaimed: true}, ClickNone},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := ResolveClick(tt.in); got != tt.want {
-				t.Errorf("ResolveClick(%+v) = %v, want %v", tt.in, got, tt.want)
-			}
-		})
-	}
-}
-
 // A terminal surface reserves the scrollbar's column whatever it is drawing, and
 // never reports a width no pane could be sized to.
 func TestContentWidthReservesTheScrollbarColumn(t *testing.T) {
@@ -279,12 +250,12 @@ func TestWheelBurstCoalescesAFlickWithoutLosingDistance(t *testing.T) {
 
 func TestCopyNoticeSaysTheSameThingOnEverySurface(t *testing.T) {
 	empty := DefaultConfig().Notice(CopyResult{Empty: true})
-	if empty.Message != "Nothing selected — ctrl+a selects all output" || empty.IsError {
+	if empty.Message != "Nothing selected — ctrl+a selects everything" || empty.IsError {
 		t.Errorf("empty copy notice = %+v", empty)
 	}
-	failed := DefaultConfig().Notice(CopyResult{Err: errors.New("clipboard unavailable")})
-	if failed.Message != "Copy failed: clipboard unavailable" || !failed.IsError {
-		t.Errorf("failed copy notice = %+v", failed)
+	remote := DefaultConfig().Notice(CopyResult{Lines: 3, NativeErr: errors.New("clipboard unavailable")})
+	if remote.Message != "Copied 3 line(s) — sent to the terminal clipboard" || remote.IsError {
+		t.Errorf("native-failure copy notice = %+v", remote)
 	}
 	copied := DefaultConfig().Notice(CopyResult{Lines: 3})
 	if copied.Message != "Copied 3 line(s)" || copied.IsError {

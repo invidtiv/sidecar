@@ -1,6 +1,12 @@
-package tty
+package textselect
 
 import "github.com/marcus/sidecar/internal/mouse"
+
+// The vocabulary here is the embedded terminal's, because that is the surface
+// these rules were proven on and its hosts name them. Nothing in them is
+// terminal-specific: a surface with no pane behind it reads "terminal" as "the
+// content it is selecting", and answers ClickActivate for the click its rows
+// already respond to. [Surface] does exactly that.
 
 // ClickIntent is everything a host knows about a mouse-down over a terminal
 // surface at the moment it has to say what a release without motion will mean.
@@ -54,23 +60,6 @@ func PressLeavesTerminal(region string, terminalRegions ...string) bool {
 		}
 	}
 	return true
-}
-
-// ContentWidth is the columns a terminal surface can actually render into: the
-// surface minus the column the scrollbar reserves.
-//
-// The scrollbar's column is stable viewport chrome — reserved even while all
-// output fits and RenderScrollbar draws only a spacer. Making the reservation
-// depend on the current history length creates a one-frame geometry race: a new
-// frame can make the scrollbar visible before the asynchronous tmux resize has
-// taken effect, clipping the application's final column and reflowing it on the
-// next repaint (td-0818ef). A surface with no room to give one up keeps what it
-// has rather than reporting a width no pane could be sized to.
-func ContentWidth(surfaceWidth int) int {
-	if surfaceWidth <= 1 {
-		return surfaceWidth
-	}
-	return surfaceWidth - 1
 }
 
 // PointerIntent is what a pointer action over a terminal means, independent of

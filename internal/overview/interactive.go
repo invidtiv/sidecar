@@ -361,6 +361,9 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 	if !ok || action.Region == nil {
 		return nil
 	}
+	// A document pane is drawn beside the terminal, so its highlight is one of
+	// the selections a gesture starting here takes over from.
+	m.clearPreviewDocSelections(nil)
 
 	modified := action.Shift || action.Alt
 	linkCmd, claimed := m.activatePreviewLinkAt(action, modified)
@@ -526,7 +529,7 @@ func (m *Model) advancePreviewAutoScroll(msg previewAutoScrollTickMsg) tea.Cmd {
 func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 	return tty.AutoScrollTarget{
 		Geometry:  func() tty.Geometry { geometry, _ := m.previewGeometry(); return geometry },
-		Buffer:    m.previewBuffer,
+		Buffer:    func() tty.Buffer { return m.previewBuffer() },
 		Selection: &m.preview.selection,
 		Scroll: func(delta int) bool {
 			before := m.previewScrollAnchor()

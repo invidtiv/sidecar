@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/adapter"
 )
 
@@ -91,11 +90,6 @@ func ExportSessionAsMarkdown(session *adapter.Session, messages []adapter.Messag
 	}
 
 	return sb.String()
-}
-
-// CopyToClipboard copies content to the system clipboard.
-func CopyToClipboard(content string) error {
-	return clipboard.WriteAll(content)
 }
 
 // ExportSessionToFile writes a session to a markdown file.

@@ -4,7 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -157,8 +157,7 @@ func (p *Plugin) yankErrorToClipboard() tea.Cmd {
 	if p.errorDetail == "" {
 		return nil
 	}
-	if err := clipboard.WriteAll(p.errorDetail); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Yanked error output", 2*time.Second)
+	return clip.Copy(p.errorDetail, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Yanked error output"), Duration: 2 * time.Second}
+	})
 }

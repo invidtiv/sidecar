@@ -281,3 +281,37 @@ func TestSave_OverviewWorktreeScopeRoundTrip(t *testing.T) {
 		t.Fatalf("OverviewWorktreeScope = %q, want %q", loaded.Plugins.Workspace.OverviewWorktreeScope, OverviewWorktreeScopeWorktree)
 	}
 }
+
+func TestSave_RoundTripsSelectionCopyOnSelect(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	SetTestConfigPath(path)
+	defer ResetTestConfigPath()
+
+	cfg := Default()
+	cfg.Selection.CopyOnSelect = true
+	if err := Save(cfg); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	saved, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	if !saved.Selection.CopyOnSelect {
+		t.Error("Selection.CopyOnSelect did not survive a save")
+	}
+
+	// Turning it back off must write the key, not leave the old value behind
+	// through Save's unknown-key preservation.
+	saved.Selection.CopyOnSelect = false
+	if err := Save(saved); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom failed: %v", err)
+	}
+	if reloaded.Selection.CopyOnSelect {
+		t.Error("Selection.CopyOnSelect stayed on after being turned off")
+	}
+}

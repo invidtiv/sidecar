@@ -27,6 +27,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#191926",
 			BgTertiary:  "#30303f",
 			BgOverlay:   "#1e1e2ecc",
+			SelectionBg: "#30303f",
 
 			SurfaceRaised: "#393947",
 			KeyHintFg:     "#89b4fa",

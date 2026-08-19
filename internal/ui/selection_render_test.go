@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 // Apps that paint each row with their own background — grok's panel styling is
@@ -97,6 +99,19 @@ func TestInjectCharacterRangeBackground_RestoresLineBackground(t *testing.T) {
 }
 
 // A plain line — the search-match highlight's usual input — is unchanged.
+func TestGetSelectionBgANSIUsesThemeSelectionBg(t *testing.T) {
+	prev := styles.GetCurrentTheme()
+	t.Cleanup(func() { styles.ApplyTheme(prev.Name) })
+
+	styles.ApplyThemeWithOverrides("sidecar-modern", map[string]string{
+		"selectionBg": "#2f3438",
+	})
+	got := GetSelectionBgANSI()
+	if want := "\x1b[48;2;47;52;56m"; got != want {
+		t.Errorf("sidecar-modern selection highlight = %q, want %q", got, want)
+	}
+}
+
 func TestInjectCharacterRangeBackground_PlainLine(t *testing.T) {
 	selBg := GetSelectionBgANSI()
 

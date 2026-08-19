@@ -10,8 +10,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // The callback side of ControlManager is intentionally hidden here. The
@@ -68,7 +68,7 @@ var (
 	terminalSendPasteRaw  = SendPasteToTmux
 	terminalSendMouse     = SendSGRMouse
 	terminalSendWheel     = SendSGRWheel
-	terminalReadClipboard = clipboard.ReadAll
+	terminalReadClipboard = clip.ReadAll
 )
 
 func (s defaultTerminalInputSender) SendKeys(scope MessageScope, target string, keys ...KeySpec) tea.Cmd {

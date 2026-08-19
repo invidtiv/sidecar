@@ -17,10 +17,23 @@ type Config struct {
 	Keymap   KeymapConfig   `json:"keymap"`
 	UI       UIConfig       `json:"ui"`
 	Features FeaturesConfig `json:"features"`
+	// Selection configures text selection wherever it is offered. It is
+	// app-level because selection is one behaviour projected onto every
+	// surface, not a per-plugin setting.
+	Selection SelectionConfig `json:"selection"`
 	// TerminalResources configures external terminal resource providers. It is
 	// app-level rather than per-plugin because providers serve both workspace
 	// projections and are not project-tab plugins.
 	TerminalResources TerminalResourcesConfig `json:"terminalResources"`
+}
+
+// SelectionConfig configures text selection across surfaces.
+type SelectionConfig struct {
+	// CopyOnSelect copies a finished selection without a copy chord.
+	// Default: false — a selection that silently replaces the clipboard is the
+	// single most complained-about behaviour in the editors that ship it, so
+	// selecting and copying stay separate acts unless asked otherwise.
+	CopyOnSelect bool `json:"copyOnSelect,omitempty"`
 }
 
 // FeaturesConfig holds feature flag settings.

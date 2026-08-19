@@ -147,7 +147,7 @@ All colors use hex format (`#RRGGBB`). Key categories:
 - **Brand**: `primary`, `secondary`, `accent`
 - **Status**: `success`, `warning`, `error`, `info`
 - **Text**: `textPrimary`, `textSecondary`, `textMuted`, `textSubtle`, `textHighlight`, `textSelection`, `textInverse`
-- **Background**: `bgPrimary`, `bgSecondary`, `bgTertiary`, `bgOverlay`
+- **Background**: `bgPrimary`, `bgSecondary`, `bgTertiary`, `bgOverlay`, `selectionBg`
 - **Border**: `borderNormal`, `borderActive`, `borderMuted`
 - **Gradient border**: `gradientBorderActive`, `gradientBorderNormal` (arrays), `gradientBorderAngle` (number)
 - **Tab**: `tabStyle`, `tabColors` (array)

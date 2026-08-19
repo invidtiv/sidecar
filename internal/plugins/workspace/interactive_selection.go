@@ -105,7 +105,7 @@ func (p *Plugin) advanceSelectionAutoScroll(msg selectionAutoScrollTickMsg) tea.
 func (p *Plugin) selectionAutoScrollTarget() tty.AutoScrollTarget {
 	return tty.AutoScrollTarget{
 		Geometry:  p.terminalSelectionGeometry,
-		Buffer:    p.interactiveOutputBuffer,
+		Buffer:    func() tty.Buffer { return p.interactiveOutputBuffer() },
 		Selection: &p.selection,
 		Scroll: func(delta int) bool {
 			before := p.terminalSelectionViewportLayout().Start
@@ -169,6 +169,9 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction, want tty.Click
 // surface. Coordinates and a terminal panel's frozen viewport are source-local,
 // so every selection entry point must cross this boundary before hit-testing.
 func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
+	// A document pane is drawn beside the terminal, so its highlight is one of
+	// the selections a gesture starting here takes over from.
+	p.clearDocSelectionsExcept(nil)
 	if p.selectionTermPanel != termPanel {
 		p.selection.Clear()
 		// The anchor unit's span is in the old surface's coordinates.

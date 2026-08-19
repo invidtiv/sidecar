@@ -13,7 +13,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 )
@@ -1466,10 +1466,9 @@ func (p *Plugin) yankMergeErrorToClipboard() tea.Cmd {
 	if p.mergeState == nil || p.mergeState.ErrorDetail == "" {
 		return nil
 	}
-	if err := clipboard.WriteAll(p.mergeState.ErrorDetail); err != nil {
-		return appmsg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return appmsg.ShowToast("Copied error to clipboard", 2*time.Second)
+	return clip.Copy(p.mergeState.ErrorDetail, func(r clip.Result) tea.Msg {
+		return appmsg.ToastMsg{Message: r.Message("Copied error to clipboard"), Duration: 2 * time.Second}
+	})
 }
 
 // yankPRURLToClipboard copies the PR URL to the system clipboard.
@@ -1477,10 +1476,9 @@ func (p *Plugin) yankPRURLToClipboard() tea.Cmd {
 	if p.mergeState == nil || p.mergeState.PRURL == "" {
 		return nil
 	}
-	if err := clipboard.WriteAll(p.mergeState.PRURL); err != nil {
-		return appmsg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return appmsg.ShowToast("Copied PR URL to clipboard", 2*time.Second)
+	return clip.Copy(p.mergeState.PRURL, func(r clip.Result) tea.Msg {
+		return appmsg.ToastMsg{Message: r.Message("Copied PR URL to clipboard"), Duration: 2 * time.Second}
+	})
 }
 
 // checkCleanupComplete decrements pending ops counter and advances to done step when all complete.

@@ -596,3 +596,46 @@ func TestLoadFrom_TerminalTitle(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadFrom_SelectionCopyOnSelect(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"absent section", `{}`, false},
+		{"empty section", `{"selection":{}}`, false},
+		{"explicitly off", `{"selection":{"copyOnSelect":false}}`, false},
+		{"opted in", `{"selection":{"copyOnSelect":true}}`, true},
+		{"the terminal's own key from before there was a general one",
+			`{"plugins":{"workspace":{"copyOnSelect":true}}}`, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+			if cfg.Selection.CopyOnSelect != tt.want {
+				t.Errorf("Selection.CopyOnSelect = %v, want %v", cfg.Selection.CopyOnSelect, tt.want)
+			}
+			// The folded key is cleared so the next save retires it; leaving it
+			// set would turn the setting back on after it was turned off.
+			if cfg.Plugins.Workspace.CopyOnSelect {
+				t.Error("Plugins.Workspace.CopyOnSelect survived the fold into the general key")
+			}
+		})
+	}
+}
+
+func TestDefault_SelectionCopyOnSelectOff(t *testing.T) {
+	if Default().Selection.CopyOnSelect {
+		t.Error("Selection.CopyOnSelect = true, want a selection that does not touch the clipboard by default")
+	}
+}

@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 	"github.com/marcus/sidecar/internal/styles"
@@ -218,7 +218,12 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 	// Use sidecar's clipboard (atotto/clipboard) instead of td's built-in one.
 	// td's copyToClipboard doesn't handle WSL (tries xclip/xsel only);
 	// atotto/clipboard falls through to clip.exe on WSL.
-	p.model.ClipboardFn = clipboard.WriteAll
+	//
+	// This is the one copy in Sidecar that reaches only the system clipboard:
+	// td's monitor owns the call and takes a writer, not a command, so there is
+	// no way back into the program loop to emit the OSC 52 half. A td yank over
+	// SSH copies nothing, exactly as it did before Sidecar embedded it.
+	p.model.ClipboardFn = clip.WriteAll
 
 	// Register TD bindings with sidecar's keymap (single source of truth)
 	if p.ctx.Keymap != nil && p.model.Keymap != nil {

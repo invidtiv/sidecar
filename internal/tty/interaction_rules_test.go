@@ -5,6 +5,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // The base a buffer keeps is what a viewport has to be told, or a highlight
@@ -184,5 +186,40 @@ func TestASplitMouseReportNeverReachesThePane(t *testing.T) {
 		if len(input.calls) != 0 {
 			t.Fatalf("split at %d reached the pane: %#v", split, input.calls)
 		}
+	}
+}
+
+// Hosts hand the engine whatever buffer they have, and a host with no terminal
+// open has a nil *OutputBuffer — which arrives inside the Buffer interface as a
+// typed nil, not as the nil the engine's own guards test for. Every entry point
+// the hosts reach has to answer it rather than dereference it.
+func TestATypedNilBufferAnswersEveryEntryPoint(t *testing.T) {
+	// Not the same value as a nil Buffer: this one carries a type, so every
+	// `buf == nil` guard in the engine answers false for it.
+	var buf Buffer = (*OutputBuffer)(nil)
+
+	if count := buf.LineCount(); count != 0 {
+		t.Errorf("line count = %d, want 0", count)
+	}
+	if base, total := BufferBase(buf); base != 0 || total != 0 {
+		t.Errorf("buffer base = %d, total = %d, want 0 and 0", base, total)
+	}
+	if BufferAbsolute(buf) || ScrollKeepsSelection(buf) {
+		t.Error("a buffer that holds nothing claimed absolute coordinates")
+	}
+	if text, ok := LineTextAt(buf, 0); ok || text != "" {
+		t.Errorf("line text = %q, ok = %v, want nothing", text, ok)
+	}
+	if _, _, ok := SelectAllSpan(buf, DefaultTabWidth); ok {
+		t.Error("select-all spanned a buffer with no lines")
+	}
+	selection := &ui.SelectionState{}
+	selection.SelectRange(ui.SelectionPoint{Line: 0, Col: 0}, ui.SelectionPoint{Line: 2, Col: 3}, false)
+	if lines := SelectedLines(buf, selection, DefaultTabWidth); lines != nil {
+		t.Errorf("selected lines = %q, want none", lines)
+	}
+	geometry := Geometry{Content: mouse.Rect{X: 0, Y: 0, W: 20, H: 3}, Start: 0, End: 3, TabWidth: DefaultTabWidth}
+	if cell, ok := ClampedCellAt(geometry, buf, 4, 1); !ok || cell.Line != 1 || cell.Col != 0 {
+		t.Errorf("clamped cell = %+v, ok = %v, want the drawn row at column 0", cell, ok)
 	}
 }

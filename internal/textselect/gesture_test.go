@@ -1,4 +1,4 @@
-package tty
+package textselect
 
 import (
 	"testing"
@@ -9,7 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-func pressAt(pt *Pointer, g Geometry, buf *OutputBuffer, sel *ui.SelectionState, x, y int, want ClickResolution) {
+func pressAt(pt *Pointer, g Geometry, buf Buffer, sel *ui.SelectionState, x, y int, want ClickResolution) {
 	pt.Press(g, buf, sel, PressEvent{X: x, Y: y, Rect: g.Content, Want: want, SameSource: true})
 }
 
