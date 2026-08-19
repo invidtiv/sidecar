@@ -1,6 +1,7 @@
 package tty
 
 import (
+	"errors"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -34,11 +35,45 @@ func TestCopyAndPasteChords(t *testing.T) {
 }
 
 func TestCopySelectionRefusesAnEmptySelection(t *testing.T) {
-	result := CopySelection(nil)
-	if !result.Empty {
-		t.Error("a copy with nothing selected did not report itself empty")
+	var notice CopyNotice
+	cmd := DefaultConfig().CopySelectionCmd(nil, func(n CopyNotice) tea.Msg {
+		notice = n
+		return nil
+	})
+	if cmd == nil {
+		t.Fatal("an empty copy said nothing at all")
 	}
-	if result.Lines != 0 || result.Err != nil {
-		t.Errorf("result = %+v, want an untouched clipboard", result)
+	cmd()
+	if notice.Message != "Nothing selected — ctrl+a selects everything" {
+		t.Errorf("empty copy notice = %+v, want an untouched clipboard", notice)
+	}
+}
+
+func TestSelectionTextIsWhatTheScreenReads(t *testing.T) {
+	text := SelectionText([]string{"\x1b[31mred\x1b[0m", "plain"})
+	if text != "red\nplain" {
+		t.Errorf("selection text = %q, want the lines without their styling", text)
+	}
+}
+
+func TestCopyNoticeNamesTheClipboardItReached(t *testing.T) {
+	native := DefaultConfig().Notice(CopyResult{Lines: 3})
+	if native.Message != "Copied 3 line(s)" || native.IsError {
+		t.Errorf("successful copy notice = %+v", native)
+	}
+	// A failed native write is not a failed copy: OSC 52 still ran, so the
+	// notice names where the text went rather than reporting a failure.
+	remote := DefaultConfig().Notice(CopyResult{Lines: 3, NativeErr: errors.New("clipboard unavailable")})
+	if remote.Message != "Copied 3 line(s) — sent to the terminal clipboard" || remote.IsError {
+		t.Errorf("native-failure copy notice = %+v", remote)
+	}
+}
+
+// A surface may bind nothing but the platform copy chord, and then the empty
+// notice has no select-all key to name.
+func TestEmptyCopyNoticeWithoutASelectAllKey(t *testing.T) {
+	notice := Config{}.Notice(CopyResult{Empty: true})
+	if notice.Message != "Nothing selected" {
+		t.Errorf("empty copy notice = %q, want no key named", notice.Message)
 	}
 }

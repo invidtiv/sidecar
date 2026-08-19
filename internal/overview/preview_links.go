@@ -655,9 +655,11 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	switch action.Type {
-	case mouse.ActionClick, mouse.ActionDoubleClick:
+	case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
 		m.focusPreviewPane(panelayout.Document)
-		return nil
+		// A press over the document's text arms a selection; word by double
+		// click, line by triple, as the terminal beside it answers them.
+		return m.pressPreviewDocSelection(action)
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		if view := m.preview.doc.view(); view != nil {
 			view.Scroll(action.Delta)
@@ -672,6 +674,11 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	key := msg.String()
 	if m.preview.doc.focused {
+		// Before the pane's own keys: esc clears a selection rather than closing
+		// the pane out from under it.
+		if cmd, handled := m.handlePreviewDocSelectionKey(msg); handled {
+			return true, cmd
+		}
 		switch key {
 		case "q", "esc":
 			return true, m.closePreviewDoc()
@@ -714,6 +721,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	header := m.composePreviewHeader(docview.LayoutTabStrip(doc.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, m.PreviewFocused() && doc.focused).Row, box.W, panelayout.Document)
 	body := ""
 	if view != nil {
+		m.bindPreviewDocSelection(view, box)
 		body = view.View()
 	}
 	if contentHeight <= 0 {

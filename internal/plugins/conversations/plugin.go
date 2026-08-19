@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/adapter"
 	"github.com/marcus/sidecar/internal/adapter/tieredwatcher"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -1419,13 +1420,16 @@ func (p *Plugin) copySessionToClipboard() tea.Cmd {
 	session := p.findSelectedSession()
 	messages := p.messages
 
-	return func() tea.Msg {
-		md := ExportSessionAsMarkdown(session, messages)
-		if err := CopyToClipboard(md); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return app.ToastMsg{Message: "Session copied to clipboard", Duration: 2 * time.Second}
-	}
+	return clip.CopyFrom(
+		func() (string, tea.Msg) {
+			return ExportSessionAsMarkdown(session, messages), app.ToastMsg{
+				Message: "No session to copy", Duration: 2 * time.Second,
+			}
+		},
+		func(r clip.Result, _ string) tea.Msg {
+			return app.ToastMsg{Message: r.Message("Session copied to clipboard"), Duration: 2 * time.Second}
+		},
+	)
 }
 
 // exportSessionToFile exports the current session to a markdown file.

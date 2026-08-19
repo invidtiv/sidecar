@@ -63,6 +63,10 @@ func NormalizePalette(c ColorPalette) ColorPalette {
 	c.TextHighlight = EnsureContrastOn(c.TextHighlight, chrome, targetBodyText)
 	c.Link = EnsureContrastOn(c.Link, chrome, targetBodyText)
 
+	if c.SelectionBg == "" {
+		c.SelectionBg = c.BgTertiary
+	}
+
 	if c.BgTertiary != "" {
 		selection := c.TextSelection
 		if selection == "" {

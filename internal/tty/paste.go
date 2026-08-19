@@ -9,7 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/atotto/clipboard"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // IsPasteInput detects if a key message is actually a paste operation.
@@ -112,7 +112,7 @@ func sendPasteToTmuxSocket(socket, sessionName, text string) error {
 // Returns a PasteResultMsg with the result.
 func PasteClipboardToTmuxCmd(scope MessageScope, sessionName string) tea.Cmd {
 	return func() tea.Msg {
-		text, err := clipboard.ReadAll()
+		text, err := clip.ReadAll()
 		if err != nil {
 			return PasteResultMsg{Scope: scope, Err: err}
 		}

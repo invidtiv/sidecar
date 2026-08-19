@@ -30,6 +30,16 @@ const (
 	keyFieldWidth = 24
 )
 
+// copyOnSelect reads the one behaviour out of the two keys that can hold it:
+// the general selection setting, and the terminal-only key configs written
+// before it still carry.
+func copyOnSelect(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	return cfg.Selection.CopyOnSelect || cfg.Plugins.Workspace.CopyOnSelect
+}
+
 // terminalState is the page's editors and the last validation complaint.
 type terminalState struct {
 	fields map[string]*textinput.Model
@@ -154,12 +164,18 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 	m.keyRow(b, regionPasteKey, "Paste", terminalKey(ws.InteractivePasteKey, defaults.PasteKey),
 		func(ws *config.WorkspacePluginConfig, value string) { ws.InteractivePasteKey = value })
 
-	b.toggleRow(regionCopyOnSelect, "Copy on select", ws.CopyOnSelect, func(m *Model) tea.Cmd {
-		enabled := !m.Config().Plugins.Workspace.CopyOnSelect
+	// One control for one behaviour: finishing a selection copies it, in the
+	// terminal and in every other surface that offers selection. It writes the
+	// general key; the terminal's own predates it and is cleared on the way
+	// through so turning this off cannot leave the old key holding it on.
+	b.toggleRow(regionCopyOnSelect, "Copy on select", copyOnSelect(m.Config()), func(m *Model) tea.Cmd {
+		enabled := !copyOnSelect(m.Config())
 		return SaveCmd(toggleNotice("Copy on select", enabled), func() error {
-			return config.SaveWorkspace(func(ws *config.WorkspacePluginConfig) { ws.CopyOnSelect = enabled })
+			return config.SaveSelection(func(s *config.SelectionConfig) { s.CopyOnSelect = enabled })
 		})
 	})
+	b.help("A finished drag goes straight to the clipboard, in the terminal and in notes.")
+	b.help("Surfaces read this setting when Sidecar starts, so it applies from the next run.")
 
 	b.text(SectionHeader("Capture"))
 	// The stored limit need not be a rung of the ladder — Advanced accepts a

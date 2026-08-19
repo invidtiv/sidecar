@@ -249,8 +249,12 @@ type Plugin struct {
 	paneFrame      PaneLayout
 	paneFrameDrawn bool
 	docs           map[int]*docPane
-	issues         map[int]*issuePane
-	diffs          map[int]*diffPane
+	// docSelectLeaf is the document leaf a live text-selection drag started in.
+	// A drag is answered by where it began, never by where the pointer has since
+	// travelled, and the shared pane-leaf region cannot say which leaf that was.
+	docSelectLeaf int
+	issues        map[int]*issuePane
+	diffs         map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
 	// exist, so a Jira ticket and a CI build are tabs in one kind of leaf.

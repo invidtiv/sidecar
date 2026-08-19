@@ -31,13 +31,18 @@ type ColorPalette struct {
 	TextSecondary string `json:"textSecondary"`
 	TextMuted     string `json:"textMuted"`
 	TextSubtle    string `json:"textSubtle"`
-	TextSelection string `json:"textSelection"` // Text on selection backgrounds (BgTertiary)
+	TextSelection string `json:"textSelection"` // Text on selected-row fills (BgTertiary)
 
 	// Background colors
 	BgPrimary   string `json:"bgPrimary"`
 	BgSecondary string `json:"bgSecondary"`
 	BgTertiary  string `json:"bgTertiary"`
 	BgOverlay   string `json:"bgOverlay"`
+
+	// SelectionBg is the highlight painted over selected text. Distinct from
+	// BgTertiary, which is the selected-row fill and is often too close to the
+	// canvas to read as a span highlight. Empty falls back to BgTertiary.
+	SelectionBg string `json:"selectionBg"`
 
 	// SurfaceRaised backs small chrome that sits on top of a bar — key hint
 	// pills, palette keys, bar chips. Derived from BgPrimary by
@@ -162,6 +167,10 @@ var (
 			BgSecondary: "#131619", // header / footer bars
 			BgTertiary:  "#171b1f", // selected row
 			BgOverlay:   "#0b0d0ecc",
+			// Text-selection highlight: the section-rule / button-hover tone —
+			// a visible lift off the canvas that still leaves body text dark
+			// enough that the highlight does not invert the foreground.
+			SelectionBg: "#2f3438",
 
 			// Raised chrome (key-hint pills, bar chips)
 			SurfaceRaised: "#22272c",
@@ -485,6 +494,8 @@ func applySingleOverride(palette *ColorPalette, key, value string) {
 		palette.BgTertiary = value
 	case "bgOverlay":
 		palette.BgOverlay = value
+	case "selectionBg":
+		palette.SelectionBg = value
 	case "surfaceRaised":
 		palette.SurfaceRaised = value
 	case "keyHintFg":

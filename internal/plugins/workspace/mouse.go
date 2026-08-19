@@ -345,6 +345,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// The mouse handler cancels that stale drag on the next button-less motion;
 	// cancel the paired click-to-activate intent at the same boundary.
 	if action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging() {
+		if dragSourceBefore == regionPaneLeaf {
+			p.abandonDocSelection()
+		}
 		// Drop what the press armed and end the gesture: an edge scroll tick still
 		// in flight belongs to a gesture that is over, and neither activation nor a
 		// forwarded click survives a release the app never saw.
@@ -972,6 +975,11 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			return nil
 		}
 		p.focusLeaf(leafID)
+		if leaf.Kind == PaneDoc {
+			// A press over the document's text arms a selection; a release
+			// without motion is still the click that just focused the pane.
+			return p.pressDocSelection(leafID, action)
+		}
 		if leaf.Kind == PaneDiff {
 			return nil
 		}
@@ -1329,6 +1337,12 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			}
 		}
 	case regionPaneLeaf:
+		if leafID, ok := action.Region.Data.(int); ok && p.docSelectionView(leafID) != nil {
+			// Word by double click, line by triple, exactly as the terminal
+			// beside it answers the same gesture.
+			p.focusLeaf(leafID)
+			return p.pressDocSelection(leafID, action)
+		}
 		if _, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
 			p.focusLeaf(leaf.ID)
 			// Bubble Tea emits the first click and then a double-click event at
@@ -1714,6 +1728,10 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			newRatio += action.DragDX * 100 / peer.W
 		}
 		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
+	case regionPaneLeaf:
+		// A document selection. The leaf the gesture started in answers it,
+		// wherever the pointer has since travelled.
+		return p.dragDocSelection(action)
 	case regionPreviewPane, regionTermPanelContent:
 		if p.terminalPointerIntent(mouse.ActionDrag, "", dragRegion, false) != tty.PointerDrag {
 			return nil
@@ -1748,12 +1766,21 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// the same boundary where the auto-scroll tick abandons its gesture.
 	if p.isModalViewMode() {
 		p.pointer.Resolution = tty.ClickNone
+		// A document gesture is left holding a live drag at the same boundary,
+		// and nothing else ends it: the handler has already closed the drag, so
+		// the lost-release path never fires either.
+		p.abandonDocSelection()
 		return nil
 	}
 
 	dragSource := action.DragStartID
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
+	}
+	if dragSource == regionPaneLeaf {
+		// A document selection ends here rather than in the width-persisting
+		// switch below: nothing about a pane leaf is a divider.
+		return p.finishDocSelection(action)
 	}
 	if isDividerDragRegion(dragSource) {
 		// Immediate resize on drop. Hold is released first so the flush is not
