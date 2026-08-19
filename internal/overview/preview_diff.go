@@ -443,9 +443,9 @@ func (m *Model) previewDiffPaneKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if view == nil {
 		return true, nil
 	}
-	cmd, _ := view.HandleKey(msg)
+	cmd, handled := view.HandleKey(msg)
 	m.persistDiffViewModeFrom(view)
-	return true, cmd
+	return handled, cmd
 }
 
 func (m *Model) persistDiffViewModeFrom(view *workspacediff.View) {
@@ -478,15 +478,43 @@ func (m *Model) handlePreviewDiffMouse(action mouse.MouseAction) tea.Cmd {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.clickPreviewDiffTab(int(tab))
 		}
+		if action.Type == mouse.ActionScrollUp || action.Type == mouse.ActionScrollDown {
+			if view := m.preview.diff.view(); view != nil {
+				view.ScrollContent(action.Delta, view.Height())
+			}
+		}
+		return nil
+	}
+	if m.preview.diff == nil {
+		return nil
+	}
+	if workspacediff.IsBodyRegion(action.Region.ID) {
+		m.focusPreviewPane(panelayout.Diff)
+		view := m.preview.diff.view()
+		if view == nil {
+			return nil
+		}
+		switch action.Type {
+		case mouse.ActionClick:
+			return view.HandleClick(action.Region.ID, action.Region.Data)
+		case mouse.ActionDoubleClick:
+			return view.HandleDoubleClick(action.Region.ID, action.Region.Data)
+		case mouse.ActionScrollUp, mouse.ActionScrollDown:
+			return view.HandleWheel(action.Region.ID, action.Delta)
+		}
 		return nil
 	}
 	kind, _ := regionKind(action.Region)
-	if kind != previewDiffRegionKind || m.preview.diff == nil {
+	if kind != previewDiffRegionKind {
 		return nil
 	}
 	switch action.Type {
 	case mouse.ActionClick, mouse.ActionDoubleClick:
 		m.focusPreviewPane(panelayout.Diff)
+	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		if view := m.preview.diff.view(); view != nil {
+			view.ScrollContent(action.Delta, view.Height())
+		}
 	}
 	return nil
 }

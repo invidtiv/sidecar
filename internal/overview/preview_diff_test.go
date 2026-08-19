@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -308,5 +309,134 @@ func TestCommaAndPeriodStepFilesInGlobalWorkspacesDiff(t *testing.T) {
 	}
 	if m.preview.diff.tabs.Active != before {
 		t.Fatalf("file stepping moved the active tab to %d", m.preview.diff.tabs.Active)
+	}
+}
+
+func TestOverviewDiffFileClickSelectsTheRow(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	view := m.preview.diff.view()
+	if view == nil {
+		t.Fatal("no leaf view")
+	}
+	view.State = workspacediff.LoadStateReady
+	view.Files = []workspacediff.File{{Path: "a.go"}, {Path: "b.go"}, {Path: "c.go"}}
+	view.Cursor = 0
+	view.Focus = workspacediff.FocusDiff
+	view.SetListWidth(40)
+
+	const wide = 450
+	m.WorkspacesView(wide, previewTall)
+
+	var fileHit *mouse.Region
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if region.ID != workspacediff.RegionFile {
+			continue
+		}
+		idx, ok := region.Data.(int)
+		if ok && idx == 1 {
+			copy := region
+			fileHit = &copy
+		}
+	}
+	if fileHit == nil {
+		t.Fatal("file row 1 was not registered")
+	}
+
+	m.WorkspacesMouse(tea.MouseClickMsg{
+		X: fileHit.Rect.X + 1, Y: fileHit.Rect.Y, Button: tea.MouseLeft,
+	})
+	if view.Cursor != 1 {
+		t.Fatalf("click selected cursor %d, want 1", view.Cursor)
+	}
+	if view.Focus != workspacediff.FocusFileList {
+		t.Fatalf("click focus = %v, want file list", view.Focus)
+	}
+}
+
+// WorkspacesKey runs before sidecar's global switch. A focused content leaf
+// that claims every leftover key makes @ / ? / digits a no-op. List actions
+// (n, D, …) must stay off so they cannot fire under the leaf.
+func TestFocusedContentLeavesPassHostGlobals(t *testing.T) {
+	stubPreviewTd(t)
+
+	t.Run("diff", func(t *testing.T) {
+		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+		run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+		if !m.diffPaneFocused() {
+			t.Fatal("premise: Diff leaf should own the keyboard")
+		}
+		assertHostGlobalsPassThrough(t, m)
+		if handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'E', Text: "E"}); !handled || cmd != nil {
+			t.Fatalf("E should be swallowed (handled=%v cmd=%v), not start typing", handled, cmd != nil)
+		}
+		if m.PreviewInteractive() {
+			t.Fatal("E on a focused Diff entered the terminal")
+		}
+	})
+	t.Run("issue", func(t *testing.T) {
+		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+		run(t, m, m.openPreviewIssue("td-196c42"))
+		if !m.issuePaneFocused() {
+			t.Fatal("premise: issue leaf should own the keyboard")
+		}
+		assertHostGlobalsPassThrough(t, m)
+		if handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: 'E', Text: "E"}); !handled || cmd != nil {
+			t.Fatalf("E should be swallowed (handled=%v cmd=%v), not start typing", handled, cmd != nil)
+		}
+		if m.PreviewInteractive() || !m.issuePaneFocused() {
+			t.Fatal("E on a focused issue entered the terminal or left the leaf")
+		}
+	})
+	t.Run("document", func(t *testing.T) {
+		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+		run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "README.md"}))
+		if !m.docPaneFocused() {
+			t.Fatal("premise: document leaf should own the keyboard")
+		}
+		assertHostGlobalsPassThrough(t, m)
+	})
+}
+
+func assertHostGlobalsPassThrough(t *testing.T, m *Model) {
+	t.Helper()
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: '@', Text: "@"})
+	if handled {
+		t.Fatal("@ was swallowed; the project switcher cannot open")
+	}
+	if cmd != nil {
+		t.Fatal("@ returned a cmd; the host should open the project switcher")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '?', Text: "?"}); handled {
+		t.Fatal("? was swallowed; the command palette cannot open")
+	}
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'n', Text: "n"}); !handled {
+		t.Fatal("n should stay with the leaf so it cannot create a worktree")
+	}
+	if m.CreateOpen() {
+		t.Fatal("n on a focused content leaf opened the create flow")
+	}
+}
+
+func TestFocusedDiffDoesNotStartTypingOnEnter(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	view := m.preview.diff.view()
+	if view == nil {
+		t.Fatal("no Diff view")
+	}
+	view.State = workspacediff.LoadStateReady
+	view.Files = []workspacediff.File{{Path: "a.go"}}
+	view.Focus = workspacediff.FocusDiff
+
+	handled, cmd := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled || cmd != nil {
+		t.Fatalf("enter on hunks: handled=%v cmd=%v; want swallowed", handled, cmd != nil)
+	}
+	if m.PreviewInteractive() {
+		t.Fatal("enter on the Diff hunks entered the terminal")
+	}
+	if !m.diffPaneFocused() {
+		t.Fatal("enter moved focus off the Diff leaf")
 	}
 }

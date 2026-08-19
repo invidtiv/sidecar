@@ -133,19 +133,10 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		}
 	case regionTermPanelContent:
 		return p.terminalWheelAtBoundary(true, action)
-	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane, regionDiffTabPreviewFile:
-		view := p.activeDiffView()
-		return (sharedscroll.Bounds{Position: view.Cursor, Maximum: view.TotalItems() - 1}).AtBoundary(action.Delta)
-	case regionDiffTabDiffPane, regionDiffTabMinimap, regionCommitFileDiffPane:
-		view := p.activeDiffView()
-		return view.ScrollAtBoundary(action.Delta, view.Height())
-	case regionCommitFileItem, regionCommitFileBack:
-		view := p.activeDiffView()
-		maximum := -1
-		if view.CommitDetail != nil {
-			maximum = len(view.CommitDetail.Files) - 1
-		}
-		return (sharedscroll.Bounds{Position: view.CommitFileCursor, Maximum: maximum}).AtBoundary(action.Delta)
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane, regionDiffTabPreviewFile,
+		regionDiffTabDiffPane, regionDiffTabMinimap, regionCommitFileDiffPane,
+		regionCommitFileItem, regionCommitFileBack:
+		return p.activeDiffView().WheelAtBoundary(action.Region.ID, action.Delta)
 	case regionPreviewPane:
 		if p.previewShowsTerminal() {
 			return p.terminalWheelAtBoundary(false, action)
@@ -235,14 +226,7 @@ func (p *Plugin) isModalViewMode() bool {
 // therefore skip the regionPaneLeaf click arm. Tab chips are not included —
 // they already go through selectDiffTab.
 func isDiffBodyRegion(regionID string) bool {
-	switch regionID {
-	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
-		regionCommitFileBack, regionCommitFileItem, regionCommitFileDiffPane,
-		regionDiffTabPreviewFile, regionDiffTabFileListPane, regionDiffTabDivider:
-		return true
-	default:
-		return false
-	}
+	return workspacediff.IsBodyRegion(regionID)
 }
 
 // isBackgroundRegion returns true for regions registered by renderListView()
@@ -1088,48 +1072,16 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.syncListToKanban()
 			}
 		}
-	case regionDiffTabFile:
-		// Click on file in diff tab file list
-		if idx, ok := action.Region.Data.(int); ok {
-			view := p.activeDiffView()
-			p.activePane = PanePreview
-			view.Focus = DiffTabFocusFileList
-			if idx != view.Cursor {
-				oldCursor := view.Cursor
-				view.Cursor = idx
-				return view.OnCursorChanged(oldCursor)
-			}
-		}
-	case regionDiffTabCommit:
-		// Click on commit in diff tab
-		if idx, ok := action.Region.Data.(int); ok {
-			view := p.activeDiffView()
-			p.activePane = PanePreview
-			view.Focus = DiffTabFocusFileList
-			if idx != view.Cursor {
-				oldCursor := view.Cursor
-				view.Cursor = idx
-				return view.OnCursorChanged(oldCursor)
-			}
-		}
-	case regionDiffTabDiffPane:
-		// Click in diff pane - focus it
-		view := p.activeDiffView()
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
+		regionCommitFileBack, regionCommitFileItem, regionCommitFileDiffPane,
+		regionDiffTabPreviewFile, regionDiffTabFileListPane:
 		p.activePane = PanePreview
-		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
-			view.Focus = DiffTabFocusCommitDiff
-		} else {
-			view.Focus = DiffTabFocusDiff
-		}
-	case regionDiffTabMinimap:
 		view := p.activeDiffView()
-		p.activePane = PanePreview
-		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
-			view.Focus = DiffTabFocusCommitDiff
-		} else {
-			view.Focus = DiffTabFocusDiff
+		if view == nil {
+			return nil
 		}
-		if p.fullFileDiff != nil {
+		cmd := view.HandleClick(action.Region.ID, action.Region.Data)
+		if action.Region.ID == regionDiffTabMinimap && p.fullFileDiff != nil {
 			clickRow := action.Y - action.Region.Rect.Y
 			totalLines := p.fullFileDiff.TotalLines()
 			contentHeight := view.Height()
@@ -1142,55 +1094,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			}
 			view.DiffScroll = gitstatus.MinimapScrollTarget(clickRow, mmH, totalLines, contentHeight)
 		}
-	case regionCommitFileBack:
-		// Click on back button in commit drill-down
-		view := p.activeDiffView()
-		p.activePane = PanePreview
-		view.Focus = DiffTabFocusFileList
-		view.CommitDetail = nil
-		view.CommitFileDiffRaw = ""
-	case regionCommitFileItem:
-		// Click on file in commit file list
-		if idx, ok := action.Region.Data.(int); ok {
-			view := p.activeDiffView()
-			p.activePane = PanePreview
-			view.Focus = DiffTabFocusCommitFiles
-			if idx != view.CommitFileCursor {
-				view.CommitFileCursor = idx
-				view.CommitFileDiffRaw = ""
-				return view.LoadSelectedCommitFile()
-			}
-		}
-	case regionCommitFileDiffPane:
-		// Click in commit file diff pane - focus it
-		view := p.activeDiffView()
-		p.activePane = PanePreview
-		view.Focus = DiffTabFocusCommitDiff
-	case regionDiffTabPreviewFile:
-		// Click on file in commit preview (right pane) — drill into commit files view
-		if idx, ok := action.Region.Data.(int); ok {
-			view := p.activeDiffView()
-			p.activePane = PanePreview
-			commitIdx := view.Cursor - view.FileCount()
-			if commitIdx >= 0 && commitIdx < len(view.Commits) {
-				commit := view.Commits[commitIdx]
-				view.Focus = DiffTabFocusCommitFiles
-				view.CommitDetail = nil
-				view.CommitFileCursor = idx
-				view.CommitFileScroll = 0
-				view.CommitFileDiffRaw = ""
-				return view.LoadCommit(commit.Hash)
-			}
-		}
-	case regionDiffTabFileListPane:
-		// Click on empty space in the left pane — switch focus to file list
-		view := p.activeDiffView()
-		p.activePane = PanePreview
-		if view.Focus == DiffTabFocusCommitFiles || view.Focus == DiffTabFocusCommitDiff {
-			view.Focus = DiffTabFocusCommitFiles
-		} else {
-			view.Focus = DiffTabFocusFileList
-		}
+		return cmd
 	case regionTaskLinkDropdown:
 		// Click on task link dropdown item
 		if idx, ok := action.Region.Data.(int); ok {
@@ -1271,63 +1175,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 				p.activePane = PanePreview
 			}
 		}
-	case regionDiffTabFile:
-		// Double-click on file - drill into diff pane
-		if idx, ok := action.Region.Data.(int); ok {
-			p.activePane = PanePreview
-			oldCursor := p.diff.Cursor
-			p.diff.Cursor = idx
-			p.diff.Focus = DiffTabFocusDiff
-			p.diff.DiffScroll = 0
-			p.diff.HorizScroll = 0
-			if idx != oldCursor {
-				return p.onDiffTabCursorChanged(oldCursor)
-			}
+	case regionDiffTabFile, regionDiffTabCommit, regionCommitFileItem, regionDiffTabPreviewFile:
+		p.activePane = PanePreview
+		view := p.activeDiffView()
+		if view == nil {
+			return nil
 		}
-	case regionDiffTabCommit:
-		// Double-click on commit - drill into commit files
-		if idx, ok := action.Region.Data.(int); ok {
-			p.activePane = PanePreview
-			oldCursor := p.diff.Cursor
-			p.diff.Cursor = idx
-			commitIdx := idx - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.diff.Commits) {
-				commit := p.diff.Commits[commitIdx]
-				p.diff.Focus = DiffTabFocusCommitFiles
-				p.diff.CommitDetail = nil
-				p.diff.CommitFileCursor = 0
-				p.diff.CommitFileScroll = 0
-				p.diff.CommitFileDiffRaw = ""
-				_ = oldCursor // cursor change handled by loading commit detail
-				return p.loadCommitDetail(commit.Hash)
-			}
-		}
-	case regionCommitFileItem:
-		// Double-click on commit file - drill into its diff
-		if idx, ok := action.Region.Data.(int); ok {
-			p.activePane = PanePreview
-			p.diff.CommitFileCursor = idx
-			p.diff.Focus = DiffTabFocusCommitDiff
-			p.diff.DiffScroll = 0
-			p.diff.HorizScroll = 0
-			p.diff.CommitFileDiffRaw = ""
-			return p.loadSelectedCommitFileDiff()
-		}
-	case regionDiffTabPreviewFile:
-		// Double-click on preview file — same as single-click (drill into commit)
-		if idx, ok := action.Region.Data.(int); ok {
-			p.activePane = PanePreview
-			commitIdx := p.diff.Cursor - p.diffTabFileCount()
-			if commitIdx >= 0 && commitIdx < len(p.diff.Commits) {
-				commit := p.diff.Commits[commitIdx]
-				p.diff.Focus = DiffTabFocusCommitFiles
-				p.diff.CommitDetail = nil
-				p.diff.CommitFileCursor = idx
-				p.diff.CommitFileScroll = 0
-				p.diff.CommitFileDiffRaw = ""
-				return p.loadCommitDetail(commit.Hash)
-			}
-		}
+		return view.HandleDoubleClick(action.Region.ID, action.Region.Data)
 	case regionPaneLeaf:
 		if _, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
 			p.focusLeaf(leaf.ID)
@@ -1470,25 +1324,11 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		// the shared rule's answer, and it is the same answer here as when the
 		// panel holds the keyboard.
 		return p.wheelTerminal(true, action, delta)
-	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane:
-		// Scroll file/commit list in diff tab
-		return p.scrollDiffTabFileList(delta)
-	case regionDiffTabPreviewFile:
-		// Scroll in commit preview — scroll the file list cursor
-		return p.scrollDiffTabFileList(delta)
-	case regionDiffTabDiffPane, regionDiffTabMinimap:
-		// Scroll diff content
+	case regionDiffTabFile, regionDiffTabCommit, regionDiffTabFileListPane,
+		regionDiffTabPreviewFile, regionDiffTabDiffPane, regionDiffTabMinimap,
+		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane:
 		if view := p.activeDiffView(); view != nil {
-			view.ScrollContent(delta, view.Height())
-		}
-		return nil
-	case regionCommitFileItem, regionCommitFileBack:
-		// Scroll commit file list
-		return p.scrollDiffTabCommitFileList(delta)
-	case regionCommitFileDiffPane:
-		// Scroll commit file diff content
-		if view := p.activeDiffView(); view != nil {
-			view.ScrollContent(delta, view.Height())
+			return view.HandleWheel(regionID, delta)
 		}
 		return nil
 	case regionPreviewPane:
@@ -1564,58 +1404,6 @@ func (p *Plugin) handleMouseHorizontalScroll(action mouse.MouseAction) tea.Cmd {
 		if p.diff.HorizScroll < 0 {
 			p.diff.HorizScroll = 0
 		}
-	}
-	return nil
-}
-
-// scrollDiffTabFileList scrolls the file+commit list in the diff tab by moving the cursor.
-// Uses lightweight sync updates only — no expensive async loads (prevents scroll freeze).
-func (p *Plugin) scrollDiffTabFileList(delta int) tea.Cmd {
-	totalItems := p.diffTabTotalItems()
-	if totalItems == 0 {
-		return nil
-	}
-	newCursor := p.diff.Cursor + delta
-	if newCursor < 0 {
-		newCursor = 0
-	}
-	if newCursor >= totalItems {
-		newCursor = totalItems - 1
-	}
-	if newCursor != p.diff.Cursor {
-		p.diff.Cursor = newCursor
-		p.diff.DiffScroll = 0
-		p.diff.HorizScroll = 0
-
-		fileCount := p.diffTabFileCount()
-		// Cursor on a commit — just clear the stale state reset above, no
-		// async load. Only a cursor on a file needs work here.
-		if p.diff.Cursor < fileCount {
-			// Cursor on a file — sync update the parsed diff (cheap)
-			p.diff.CommitDetail = nil
-		}
-	}
-	return nil
-}
-
-// scrollDiffTabCommitFileList scrolls the commit file list by moving the cursor.
-// Uses lightweight sync updates only — no expensive async loads (prevents scroll freeze).
-func (p *Plugin) scrollDiffTabCommitFileList(delta int) tea.Cmd {
-	if p.diff.CommitDetail == nil || len(p.diff.CommitDetail.Files) == 0 {
-		return nil
-	}
-	fileCount := len(p.diff.CommitDetail.Files)
-	newCursor := p.diff.CommitFileCursor + delta
-	if newCursor < 0 {
-		newCursor = 0
-	}
-	if newCursor >= fileCount {
-		newCursor = fileCount - 1
-	}
-	if newCursor != p.diff.CommitFileCursor {
-		p.diff.CommitFileCursor = newCursor
-		// Clear stale diff state — the diff will load on click or enter
-		p.diff.CommitFileDiffRaw = ""
 	}
 	return nil
 }

@@ -408,7 +408,7 @@ func (m *Model) previewResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "x":
 		return true, m.closePreviewResourceTab()
 	}
-	// A focused Resource leaf is its own input context. Do not let an unowned
-	// key navigate or type into the terminal behind the visible card.
-	return true, nil
+	// Unclaimed keys fall through to WorkspacesKey, which lets host globals
+	// through and swallows the rest so they cannot drive the list.
+	return false, nil
 }

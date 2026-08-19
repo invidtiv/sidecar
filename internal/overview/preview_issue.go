@@ -357,9 +357,9 @@ func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled {
 		return true, cmd
 	}
-	// A focused issue is its own input context. Do not let an unowned key
-	// refresh, navigate, or type into the terminal behind the visible card.
-	return true, nil
+	// Unclaimed keys fall through to WorkspacesKey, which lets host globals
+	// through and swallows the rest so they cannot drive the list.
+	return false, nil
 }
 
 func (m *Model) yankPreviewIssue(idOnly bool) tea.Cmd {

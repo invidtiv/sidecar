@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
@@ -18,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -533,6 +535,18 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if handled, cmd := m.previewKey(msg); handled {
 			return true, cmd
 		}
+		// A focused content leaf swallowed what it owns. Remaining keys are
+		// either the host's globals (@, ?, digits, …) or noise: list actions
+		// stay off, and unclaimed letters must not leak into the hidden
+		// project plugin. This surface answers before sidecar's global
+		// switch, which is why a leaf that always returns handled=true
+		// made @ a no-op.
+		if m.contentLeafFocused() {
+			if keymap.GlobalKeys[key] {
+				return false, nil
+			}
+			return true, nil
+		}
 	}
 
 	switch key {
@@ -659,6 +673,11 @@ func (m *Model) diffPaneFocused() bool {
 func (m *Model) resourcePaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.resource != nil && m.preview.resource.focused
+}
+
+func (m *Model) contentLeafFocused() bool {
+	return m.issuePaneFocused() || m.diffPaneFocused() ||
+		m.resourcePaneFocused() || m.docPaneFocused()
 }
 
 func (m *Model) WorkspaceSidebarVisible() bool { return m.sidebarVisible }
@@ -927,6 +946,13 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return m.preview.resource == nil ||
 			resourceScrollAtBoundary(m.preview.resource.view(), action.Delta)
 	}
+	if workspacediff.IsBodyRegion(action.Region.ID) {
+		view := m.preview.diff.view()
+		if view == nil {
+			return true
+		}
+		return view.WheelAtBoundary(action.Region.ID, action.Delta)
+	}
 	if kind, ok := action.Region.Data.(string); ok {
 		switch {
 		case kind == workspacesSidebarRegion:
@@ -999,6 +1025,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	if _, ok := action.Region.Data.(previewDiffTabHit); ok {
+		return m.handlePreviewDiffMouse(action)
+	}
+	if action.Region != nil && workspacediff.IsBodyRegion(action.Region.ID) {
 		return m.handlePreviewDiffMouse(action)
 	}
 	if kind, _ := regionKind(action.Region); kind == previewDiffRegionKind {

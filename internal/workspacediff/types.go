@@ -2,8 +2,10 @@
 //
 // The project Workspaces plugin and the global Workspaces preview both draw
 // the same working-tree + commits view. This package owns snapshot load,
-// first-commit load (short vs full hash), and that render. Neither surface
-// constructs the other.
+// first-commit load (short vs full hash), that render, and the inner pointer
+// rules (HandleClick / HandleWheel). A host that registers FileHits must
+// dispatch those hits here rather than re-implementing selection. Neither
+// surface constructs the other.
 package workspacediff
 
 import "strings"

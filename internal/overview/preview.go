@@ -449,8 +449,12 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if handled, cmd := m.previewDocKey(msg); handled {
 		return true, cmd
 	}
-	if handled, cmd := m.previewDiffPaneKey(msg); handled {
-		return true, cmd
+	// A focused content leaf declined this key. Stop here so enter/E cannot
+	// start typing in the terminal behind the card, and so h/left cannot
+	// steal the keyboard back to the list. WorkspacesKey then lets host
+	// globals (@, ?, digits) through and swallows everything else.
+	if m.contentLeafFocused() {
+		return false, nil
 	}
 	// The same acts on the terminal surface the live pane routes through OnKey.
 	// The selection they act on exists in both states, so a watched pane answers
