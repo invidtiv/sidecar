@@ -1,4 +1,4 @@
-.PHONY: build install install-dev install-local install-worktree use-homebrew reap-test-tmux \
+.PHONY: build install install-dev install-local install-worktree worktree-init use-homebrew reap-test-tmux \
 	install-status test-dev-install test test-v clean check-clean tag \
 	release-snapshot check-release-state release release-tap \
 	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks
@@ -31,6 +31,9 @@ install-local:
 
 install-worktree:
 	./scripts/dev-install.sh install-worktree
+
+worktree-init:
+	./scripts/worktree-init.sh
 
 use-homebrew:
 	./scripts/dev-install.sh use-homebrew

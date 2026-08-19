@@ -49,6 +49,11 @@ make install-local
 # Deliberately activate the current branch/worktree
 make install-worktree
 
+# First command in any git worktree: shadow the main checkout's go.work
+# (without this, every go command in a worktree fails with "directory ...
+# does not contain modules listed in go.work"; idempotent, safe everywhere)
+make worktree-init
+
 # Inspect the managed link and actual shell resolution
 make install-status
 
