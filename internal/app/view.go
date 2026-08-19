@@ -181,6 +181,14 @@ func (m Model) viewContent() string {
 	// right edge rather than the terminal's, so it never lands under the panel.
 	contentWidth := m.contentWidth()
 	content := m.renderContent(contentWidth, contentHeight)
+	// The centre is drawn beside the content, never over it: the shell hands
+	// the surfaces a narrower box and spends the difference here.
+	if panel := m.renderNotificationCentre(contentHeight); panel != "" {
+		content = lipgloss.JoinHorizontal(lipgloss.Top,
+			lipgloss.NewStyle().Width(contentWidth).MaxWidth(contentWidth).
+				Height(contentHeight).MaxHeight(contentHeight).Render(content),
+			panel)
+	}
 	b.WriteString(content)
 
 	// Footer
@@ -1247,6 +1255,11 @@ func (m Model) footerHints() []footerHint {
 	// Surface-specific hints first - they're more contextually relevant
 	var hints []footerHint
 	switch {
+	case m.notificationCentreOwnsKeys():
+		// The panel is the focused surface, so the host footer describes it —
+		// derived from its Commands plus the registered bindings, exactly like
+		// a plugin's. The panel renders no footer of its own.
+		hints = m.commandFooterHints(m.notificationCentreCommands(), notificationCentreContext)
 	case m.configOpen():
 		// Derived from the registered config bindings like every other surface,
 		// so a rebound key changes the footer with it.
@@ -1521,6 +1534,9 @@ func (m *Model) helpPluginSection() modal.Section {
 // helpSurface names the surface help should document and the keymap context it
 // reads its bindings from.
 func (m *Model) helpSurface() (title, context string) {
+	if m.notificationCentreOwnsKeys() {
+		return "Notifications", notificationCentreContext
+	}
 	if m.inGlobalScope() {
 		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
 			return host.Name(), host.FocusContext()

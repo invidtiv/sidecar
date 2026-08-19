@@ -215,34 +215,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showDiagnostics {
 			m.diagnosticsModalWidth = 0
 		}
-		// Forward adjusted WindowSizeMsg to all plugins
-		// Plugins receive the content area size (minus header and footer)
-		// Must match the height passed to Plugin.View() in view.go
-		adjustedHeight := msg.Height - headerHeight - footerHeight
-		adjustedMsg := tea.WindowSizeMsg{
-			Width:  msg.Width,
-			Height: adjustedHeight,
-		}
-		plugins := m.registry.Plugins()
-		var cmds []tea.Cmd
-		for i, p := range plugins {
-			newPlugin, cmd := p.Update(adjustedMsg)
-			plugins[i] = newPlugin
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		// The global Tasks host lays out against the same content box.
-		if cmd := m.globalTasks.update(adjustedMsg); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		// So does the Workspaces browser, whose live pane is sized against the
-		// box the new geometry gives it.
-		if m.overview != nil {
-			if cmd := m.overview.WorkspacesResize(msg.Width, adjustedHeight); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
+		// Forward the content box to every surface. It is the terminal minus the
+		// header, the footer, and any column the notification centre has
+		// reserved — so a resize while the panel is open keeps handing out the
+		// narrowed width rather than resetting to the full terminal.
+		cmds := (&m).emitContentSize()
 		// First real frame: name the terminal after the project.
 		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -344,6 +321,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		// The reserved right column belongs to the notification centre: its
+		// close affordance, its list rows, and its resize rail. Anything it
+		// does not claim falls through to the content below — and a press that
+		// lands in the content returns focus there without closing the panel.
+		if handled, cmd := (&m).notificationCentreMouseEvent(msg); handled {
+			return m, cmd
+		}
+		if isClickPress && mi.X < m.contentWidth() {
+			(&m).blurNotificationCentre()
 		}
 
 		if m.configOpen() {
@@ -860,6 +848,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, cmd
 		case ModalNone:
+			// The notification centre is the focused surface when it has the
+			// keyboard, and esc is its explicit close — the only kind of close
+			// there is. It answers before Configuration and before the global
+			// space, because focus, not layering, decides who owns esc.
+			if m.notificationCentreOwnsKeys() {
+				return m, m.closeNotificationCentre()
+			}
 			// Configuration answers esc itself: clear the search, then return
 			// from a focused child route, then close and restore the surface it
 			// covered.
@@ -895,6 +890,17 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// The notification centre owns the keyboard while it is focused, so it
+	// answers before every surface below — including Configuration, which it
+	// sits beside rather than under. It claims only its own list keys: tab
+	// numbers, the project selector, and quit keep working underneath, which is
+	// what makes it a panel and not a modal.
+	if !m.hasModal() && m.notificationCentreOwnsKeys() {
+		if handled, cmd := m.notificationCentreKey(msg); handled {
+			return m, cmd
+		}
 	}
 
 	// Configuration covers the content area, so it answers before any of
@@ -1814,6 +1820,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateContext() {
 	if ctx, ok := modalFocusContext(m.activeModal()); ok {
 		m.activeContext = ctx
+		return
+	}
+	// A modal takes the keyboard from the panel while it is up, and the panel
+	// takes it back when the modal closes — without ever having closed itself.
+	if m.notificationCentreOwnsKeys() {
+		m.activeContext = notificationCentreContext
 		return
 	}
 	if m.configOpen() {

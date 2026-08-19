@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -56,17 +57,103 @@ func (m Model) contentWidth() int {
 }
 
 // reservedRightWidth is the width of the right-hand column reserved by the
-// notification centre. It is 0 until the panel lands.
+// notification centre: the panel plus the one column its resize handle owns.
+// It is 0 whenever the panel is closed, and 0 for a terminal with no room to
+// give — a panel that would leave the content unusable yields rather than
+// shrinking it below notificationCentreMinContent.
 func (m Model) reservedRightWidth() int {
-	return 0
+	panel := m.notificationCentrePanelWidth()
+	if panel <= 0 {
+		return 0
+	}
+	return panel + notificationCentreHandleWidth
+}
+
+// contentSize is the box every plugin lays out against: the content region's
+// width (the terminal minus any reserved right column) and the height left
+// between the header and the footer. Both the resize path and the render path
+// read it, so a plugin can never be sized against a box it is not drawn in.
+func (m Model) contentSize() tea.WindowSizeMsg {
+	return tea.WindowSizeMsg{
+		Width:  m.contentWidth(),
+		Height: max(0, m.height-headerHeight-footerHeight),
+	}
+}
+
+// emitContentSize re-announces the content box to every surface that lays out
+// against it. Opening, closing, or dragging the notification centre changes
+// that box exactly as a terminal resize does, so it is delivered exactly as a
+// terminal resize is — there is no second, panel-specific notification and no
+// plugin that has to know the panel exists.
+//
+// Every path that rebuilds or re-sizes the surfaces goes through here: the
+// WindowSizeMsg handler, the project/worktree switch that calls Reinit, and
+// the panel's own open/close/resize.
+func (m *Model) emitContentSize() []tea.Cmd {
+	size := m.contentSize()
+	var cmds []tea.Cmd
+	if m.registry == nil {
+		return nil
+	}
+	plugins := m.registry.Plugins()
+	for i, p := range plugins {
+		newPlugin, cmd := p.Update(size)
+		plugins[i] = newPlugin
+		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	// The global Tasks host is not in the registry, and the Workspaces browser
+	// sizes a live pane; both lay out against the same box.
+	if cmd := m.globalTasks.update(size); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if m.overview != nil {
+		if cmd := m.overview.WorkspacesResize(size.Width, size.Height); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
 }
 
 // toggleNotificationCentre is the single app-level entry point for opening and
 // closing the centre. The header indicator's click and its shortcut both come
 // through here, so the panel has one way to be opened however it was asked for.
+// Opening reserves the right-hand column and gives the panel the keyboard;
+// closing hands the column and the keyboard back. Either way the content is
+// re-sized before the next frame.
 func (m *Model) toggleNotificationCentre() tea.Cmd {
 	m.notificationCentreOpen = !m.notificationCentreOpen
-	return nil
+	m.notificationCentreFocused = m.notificationCentreOpen
+	if m.notificationCentreOpen {
+		m.notificationCentreCursor = 0
+		m.notificationCentreScroll = 0
+		// Resolve the persisted preference once, on the way in, rather than
+		// reading the state file on every frame. It is stored unclamped: a
+		// terminal too narrow to honour it must not quietly rewrite it.
+		if m.notificationCentreWidth <= 0 {
+			if saved := state.GetNotificationCentreWidth(); saved > 0 {
+				m.notificationCentreWidth = saved
+			} else {
+				m.notificationCentreWidth = notificationCentreDefaultWidth
+			}
+		}
+	}
+	m.updateContext()
+	return tea.Batch(m.emitContentSize()...)
+}
+
+// closeNotificationCentre is the explicit close — esc with the panel focused,
+// the close affordance, or the indicator toggle. Nothing else may call it: the
+// panel survives every navigation until the user asks for it to go.
+func (m *Model) closeNotificationCentre() tea.Cmd {
+	if !m.notificationCentreOpen {
+		return nil
+	}
+	m.notificationCentreOpen = false
+	m.notificationCentreFocused = false
+	m.updateContext()
+	return tea.Batch(m.emitContentSize()...)
 }
 
 // Notifications returns the current snapshot, newest first.

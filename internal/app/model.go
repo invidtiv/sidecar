@@ -373,6 +373,23 @@ type Model struct {
 	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
 	// the centre stays open across every navigation until the user closes it.
 	notificationCentreOpen bool
+	// notificationCentreWidth is the panel's own width in columns, persisted in
+	// internal/state. Zero means "not resolved yet"; the first frame reads the
+	// saved preference and falls back to the default.
+	notificationCentreWidth int
+	// notificationCentreFocused says the panel owns the keyboard. It is not the
+	// same as open: clicking back into content returns focus without closing.
+	notificationCentreFocused bool
+	// notificationCentreCursor selects a row in the flat, source-grouped list.
+	notificationCentreCursor int
+	// notificationCentreScroll is the first body row drawn.
+	notificationCentreScroll int
+	// Pointer state for the panel: the shared drag machinery (internal/mouse
+	// hit regions plus ui.RenderHandle) resizes it, exactly as a plugin's pane
+	// divider does.
+	notificationCentreMouse       *mouse.Handler
+	notificationCentreHoverHandle bool
+	notificationCentreHoverClose  bool
 }
 
 // Option adjusts the model at construction. Options exist for the deliberate,
@@ -428,6 +445,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
+	m.notificationCentreMouse = mouse.NewHandler()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
 	}
@@ -572,6 +590,9 @@ func (m *Model) initQuitModal() {
 
 // ActivePlugin returns the currently active plugin.
 func (m Model) ActivePlugin() plugin.Plugin {
+	if m.registry == nil {
+		return nil
+	}
 	plugins := m.registry.Plugins()
 	if len(plugins) == 0 {
 		return nil
@@ -997,19 +1018,16 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		}
 	}
 
-	// Send WindowSizeMsg to all plugins so they recalculate layout/bounds.
+	// Send the content box to all plugins so they recalculate layout/bounds.
 	// Without this, plugins like td-monitor lose mouse interactivity because
 	// their panel bounds are only calculated on WindowSizeMsg receipt.
-	adjustedHeight := m.height - headerHeight - footerHeight
-	sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: adjustedHeight}
-	plugins := m.registry.Plugins()
-	for i, p := range plugins {
-		newPlugin, cmd := p.Update(sizeMsg)
-		plugins[i] = newPlugin
-		if cmd != nil {
-			startCmds = append(startCmds, cmd)
-		}
-	}
+	//
+	// Reinit rebuilds every plugin, so a plugin that came back would otherwise
+	// lay out against the full terminal and paint underneath an open
+	// notification centre. emitContentSize restores the reservation here,
+	// before the next frame — this is the project/worktree-switch half of the
+	// promise that the panel survives all navigation.
+	startCmds = append(startCmds, m.emitContentSize()...)
 
 	// Reinit deliberately clears every plugin's focus-owned resources. Always
 	// hand focus back explicitly, including on a project's first visit where no

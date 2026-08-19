@@ -104,6 +104,18 @@ func DefaultBindings() []Binding {
 		// The theme picker, on Appearance and inline in Add Project.
 		{Key: "g", Command: "use-global-theme", Context: "config"},
 
+		// notification-centre: the app-level right panel. Its keys are answered
+		// by the app before keymap dispatch (it is the focused surface, not a
+		// plugin); they are registered here so help, the palette, and the
+		// footer describe it from one source and a user override can rebind it.
+		{Key: "j", Command: "cursor-down", Context: "notification-centre"},
+		{Key: "down", Command: "cursor-down", Context: "notification-centre"},
+		{Key: "k", Command: "cursor-up", Context: "notification-centre"},
+		{Key: "up", Command: "cursor-up", Context: "notification-centre"},
+		{Key: "d", Command: "dismiss", Context: "notification-centre"},
+		{Key: "D", Command: "dismiss-group", Context: "notification-centre"},
+		{Key: "esc", Command: "close-notification-centre", Context: "notification-centre"},
+
 		// config-edit: an active editor owns typed characters. Registered in
 		// the app's isTextInputContext, so no global shortcut can steal them.
 		{Key: "down", Command: "first-result", Context: "config-edit"},
