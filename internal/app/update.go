@@ -1695,12 +1695,20 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
-	case "N":
+	case "N", "alt+n":
 		// The notification centre. Bare `n` is taken several times over
 		// (new-worktree, new-note, next-match); `N` is free in the global
 		// context, and the search/diff contexts that bind it are answered at
 		// precedence level 3 before this switch runs.
-		if m.consumesTextInput() || m.contextRebindsKey("N") {
+		//
+		// `alt+n` is the guaranteed route (`ctrl+n` is cursor-down everywhere). `N` is genuinely taken in some
+		// plugins — git binds it to prev-match, which is worth more there than
+		// this toggle — and the centre has no navbar tab, so without a key that
+		// no context rebinds it would be reachable only by mouse on those tabs.
+		if m.consumesTextInput() {
+			break
+		}
+		if msg.String() == "N" && m.contextRebindsKey("N") {
 			break
 		}
 		// Open but not focused — the user navigated away with a tab key — means

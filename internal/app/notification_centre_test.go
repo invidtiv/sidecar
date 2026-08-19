@@ -483,6 +483,7 @@ func TestSelectingAndExpiringMarkNotificationsRead(t *testing.T) {
 	if m.UnreadNotifications() != 1 {
 		t.Fatalf("a fresh notification should be unread")
 	}
+	m.sweepNotifications(third.CreatedAt.Add(time.Second)) // a tick with the toast on screen
 	m.sweepNotifications(third.ExpiresAt.Add(time.Second))
 	if n, _ := m.findNotification(third.ID); !n.Read() {
 		t.Fatal("an expired toast stayed unread, so it would toast again at the next start")
@@ -494,4 +495,44 @@ func TestSelectingAndExpiringMarkNotificationsRead(t *testing.T) {
 		t.Fatal("reading must not remove anything from the centre")
 	}
 	_ = first
+}
+
+// A notification posted while sidecar was closed arrives already past its
+// countdown. Expiry alone would read it on the first heartbeat, so it would
+// never announce itself — the whole point of the CLI's offline fallback.
+func TestExpiredWhileClosedStaysUnread(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	stale, err := m.notifications.Post(notify.Notification{
+		Source:    notify.SourceAgent,
+		Title:     "build failed",
+		CreatedAt: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.refreshNotifications()
+
+	m.sweepNotifications(time.Now())
+	if n, _ := m.findNotification(stale.ID); n.Read() {
+		t.Fatal("a notification whose toast was never painted was marked read")
+	}
+	if m.UnreadNotifications() != 1 {
+		t.Fatalf("unread = %d, want 1: the user has still not seen it", m.UnreadNotifications())
+	}
+}
+
+// The centre is reachable by keyboard on every tab. `N` yields to plugins that
+// bind it (git's prev-match), so alt+n is the route that always works.
+func TestAltNOpensTheCentreEvenWhereNIsBound(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	m.activeContext = "git-status-commits" // binds N to prev-match
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'N', Text: "N", Mod: tea.ModShift})
+	if m.notificationCentreOpen {
+		t.Fatal("N must yield to a context that rebinds it")
+	}
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'n', Mod: tea.ModAlt})
+	if !m.notificationCentreOpen {
+		t.Fatal("alt+n did not open the centre")
+	}
 }

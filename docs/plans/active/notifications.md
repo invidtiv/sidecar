@@ -206,8 +206,18 @@ Landed in commits a7bcbe9f, f6540456, 5c3020c2 plus a review/proof fix pass.
 Everything in the steel thread above is implemented. What follows is what a
 later phase needs to know that the plan above does not already say.
 
+**Read state.** A notification is marked read when it is selected in the centre,
+or when a toast that was *actually painted* expires. The "actually painted" gate
+matters: expiry alone silently reads what the user never saw — a notification an
+agent posted while sidecar was closed arrives already past its countdown, and
+with one toast slot a burst would read everything queued behind the newest.
+
 **Keys** (the plan gave the implementing agent autonomy here):
 
+- **`alt+n` always toggles the notification centre.** `N` also does, but it
+  yields to any context that rebinds it — git's `N` is prev-match and is worth
+  more there than this toggle. Since the centre has no navbar tab, `alt+n` is
+  what guarantees a keyboard route on every tab.
 - **`N` toggles the notification centre**, as the plan expected. It is also the
   way *back* into an open panel: with the panel open but blurred, `N` refocuses
   it; pressing it again closes. Nothing was rebound to make room.

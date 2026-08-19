@@ -429,6 +429,12 @@ func notificationCentreReleasesFocus(key string) bool {
 // header counter climbing forever, and what stops an unexpired notification
 // toasting again after a restart.
 func (m *Model) readSelectedNotification() {
+	// Only what is actually on screen counts as read: on a terminal too narrow
+	// to honour the panel it stays open but paints nothing, and reading a row
+	// nobody can see is the same bug as reading a toast that never rendered.
+	if !m.notificationCentreVisible() {
+		return
+	}
 	items := m.notificationCentreItems()
 	selected, ok := m.selectedNotification(items)
 	if !ok || selected.Read() {

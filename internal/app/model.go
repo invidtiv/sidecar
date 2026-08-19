@@ -370,6 +370,9 @@ type Model struct {
 	// worktree switches, and is the single writer for this process.
 	notifications     notify.Store
 	notificationCache []notify.Notification
+	// toastPainted records notification ids a toast was actually drawn for, so
+	// the expiry sweep only marks read what the user had a chance to see.
+	toastPainted map[string]bool
 	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
 	// the centre stays open across every navigation until the user closes it.
 	notificationCentreOpen bool

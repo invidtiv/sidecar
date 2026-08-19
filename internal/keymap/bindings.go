@@ -24,6 +24,9 @@ func DefaultBindings() []Binding {
 		// it answer before the global switch. Handled in handleKeyMsg; the
 		// binding is registered so the palette and help can find it.
 		{Key: "N", Command: "toggle-notifications", Context: "global"},
+		// `N` yields to plugins that bind it (git's prev-match), and the centre
+		// has no navbar tab, so alt+n is the route that works on every tab.
+		{Key: "alt+n", Command: "toggle-notifications", Context: "global"},
 		// Comma is the conventional settings key and is otherwise unbound.
 		{Key: ",", Command: "open-configuration", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},

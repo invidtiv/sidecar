@@ -233,20 +233,34 @@ func (m *Model) sweepNotifications(now time.Time) {
 	if m.notifications == nil {
 		return
 	}
-	// A toast whose countdown has run out has had its moment on screen: it is
-	// read. Without this nothing ever marks anything read — every legacy toast
-	// is a notification now, so the header would climb to `●40` in an ordinary
-	// session, and every unexpired notification would toast again at the next
-	// start. Sticky notifications have no countdown and stay unread until the
-	// user answers them, which is the point of sticky.
+	// Record what is on screen right now. A toast whose countdown then runs out
+	// has had its moment and is read — without this nothing ever marks anything
+	// read, so the header would climb to `●40` in an ordinary session and every
+	// unexpired notification would toast again at the next start.
+	//
+	// The gate on "was actually painted" is the whole point: expiry alone would
+	// silently read things the user never saw — a notification an agent posted
+	// while sidecar was closed arrives already past its countdown, and with one
+	// toast slot a burst reads everything queued behind the newest. Sticky
+	// notifications have no countdown and stay unread until the user answers
+	// them, which is what sticky is for.
+	if !m.hasModal() {
+		if n, ok := m.visibleToast(now); ok {
+			if m.toastPainted == nil {
+				m.toastPainted = make(map[string]bool)
+			}
+			m.toastPainted[n.ID] = true
+		}
+	}
 	for _, n := range m.notificationCache {
-		if n.Read() || n.Dismissed() {
+		if n.Read() || n.Dismissed() || !m.toastPainted[n.ID] {
 			continue
 		}
 		if notify.ToastExpired(n, now) {
 			if err := m.notifications.MarkRead(n.ID); err != nil {
 				slog.Debug("notify: mark read on toast expiry failed", "id", n.ID, "err", err)
 			}
+			delete(m.toastPainted, n.ID)
 		}
 	}
 
