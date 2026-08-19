@@ -1,5 +1,10 @@
 # Doc-pane search and inline edit
 
+**Status: shipped.** All five phases landed on `edit-files`, and the
+integration pass below verified them in the real app. Phase 5 shipped in the
+reduced form its own section describes; the remaining filebrowser duplication
+is listed there and is the only deliberate carry-over.
+
 Bring file (doc) panes in workspaces — both the project workspace plugin
 (`internal/plugins/workspace`) and the global Workspaces browser
 (`internal/overview`) — toward parity with the files plugin's file viewer:
@@ -246,6 +251,40 @@ rewrite, not a search change, and belongs in its own plan.
   - Filebrowser and notes inline edit still work post-extraction.
 - Keyboard-shortcuts skill table updated for the new `workspace-doc` /
   overview bindings.
+
+### Result of the integration pass
+
+`go build ./... && go test ./...` green from a clean tree.
+
+Proof run on an isolated tmux server and state tree
+(`./scripts/tmux-drive.sh paths` confirmed nothing resolved under
+`~/.local/state/sidecar` or `~/.config/sidecar`; the run root was
+`/private/tmp/sidecar-drive-501`). The global browser needed a `projects.list`
+entry written into the isolated config before it had any workspace to preview —
+worth knowing for the next proof, since without it the browser correctly says
+"No shells or worktrees found in the configured projects".
+
+- **`/` in a project-workspace doc pane** — the bar renders as docview's own
+  last row (`/ Overview█ (1/5)`), matches highlight, `enter` commits to
+  `(1/5) [n/N]`, `n` steps to `(3/5)`, `N` back to `(2/5)`, `esc` closes and
+  the pane's bottom border returns.
+- **`/` in an overview preview doc pane** — identical bar, counts and
+  `n`/`N`/`esc` behaviour, from the same docview code.
+- **`ctrl+p` and `f` in an overview doc pane** — both open, pane-scoped
+  ("⌕ Find" quick-open, "⌕ Search <query>" project search).
+- **`e` on both surfaces** — editor opens in the pane body (`nvim` at exactly
+  the leaf's 55x45), typing lands, `:wq` persists to disk *and* the pane live
+  refreshes to the new content, `:q!` discards, and clicking outside the pane
+  with a live session raises the save / discard / cancel confirmation on both
+  surfaces.
+- **Filebrowser and notes inline edit post-extraction** — filebrowser `e` +
+  `:wq` wrote to disk; notes `e` opened the note in the PTY editor and
+  `ctrl+\` returned to the viewer.
+
+One proof-only trap: killing an `nvim` session leaves a swap file under the
+isolated `state/nvim/swap`, and the next `e` on the same path opens read-only
+(`E45: 'readonly' option is set`). That is nvim, not Sidecar; clear the swap
+between runs.
 
 ## Risks
 
