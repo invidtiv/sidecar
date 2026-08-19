@@ -217,7 +217,7 @@ var (
 			BlameAge5: "#7b848c",
 
 			// Third-party themes
-			SyntaxTheme:   "gruvbox",
+			SyntaxTheme:   "sidecar-modern",
 			MarkdownTheme: "dark",
 
 			// Overview board
