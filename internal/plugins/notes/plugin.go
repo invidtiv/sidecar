@@ -658,18 +658,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 			switch keyMsg.String() {
 			case "j", "down":
-				p.edit.ConfirmSelection = (p.edit.ConfirmSelection + 1) % 3
+				p.edit.MoveConfirmSelection(1)
 				return p, nil
 			case "k", "up":
-				p.edit.ConfirmSelection = (p.edit.ConfirmSelection + 2) % 3
+				p.edit.MoveConfirmSelection(-1)
 				return p, nil
 			case "enter":
 				return p.handleExitConfirmationChoice()
 			case "esc", "q":
 				// Cancel - return to editing
 				p.edit.ShowExitConfirm = false
-				p.edit.PendingClickRegion = ""
-				p.edit.PendingClickData = nil
+				p.edit.ClearPendingClick()
 				return p, nil
 			}
 		}

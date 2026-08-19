@@ -315,8 +315,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 }
 
 func (p *Plugin) inlineEditorNativeActive() bool {
-	return p.focused && p.activePane == PaneEditor && p.edit.Active &&
-		p.edit.Model != nil && p.edit.Model.IsActive() && !p.edit.ShowExitConfirm &&
+	return p.focused && p.activePane == PaneEditor && p.edit.NativeActive() &&
 		!p.showInfoModal && !p.showDeleteModal && !p.showTaskModal
 }
 
