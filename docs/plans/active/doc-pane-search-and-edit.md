@@ -41,7 +41,12 @@ workspace panes, overview panes) for free, or the design is wrong.
   work, not later. That is what keeps the three surfaces improving together,
   and it is the only real test that the extraction is right.
 - **Feature flag:** pane editing ships behind the existing
-  `features.TmuxInlineEdit` gate, same as filebrowser.
+  `features.TmuxInlineEdit` gate, same as filebrowser. The gate is a *host*
+  concern, not a package one: `internal/inlineedit` must not check the flag
+  itself, because notes' inline edit is deliberately ungated today
+  (`features.TmuxInlineEdit` appears only in
+  `filebrowser/inline_edit.go:43,337`) and the extraction must not silently
+  switch notes off.
 - **`/` and `e` are free** in both `workspace-doc` and the overview doc-pane
   key space today; use `/` for search, `e` for edit (matching filebrowser).
 
@@ -52,9 +57,18 @@ workspace panes, overview panes) for free, or the design is wrong.
   note it in the parity backlog if not taken.
 - Whether the search UI in panes is a pane-scoped modal bar (like the
   workspace `docSearchMode` overlay via `internal/panemodal`) or an in-pane
-  bottom bar. Recommendation: a one-row bar inside the pane body rendered by
-  docview itself, so overview inherits it with zero surface code; decide at
+  bottom bar. Recommendation: split the two concerns rather than pick one —
+  a one-row bar inside the pane body rendered by docview itself (so overview
+  inherits it with zero surface code), but *key ownership* modelled on the
+  existing `doc.mode` precedence (`doc_panes.go:1062-1065`), where a live
+  search surface owns every key in the pane and esc closes it. Decide at
   Phase 2 start.
+- `docSearchMode` is currently the workspace's file-finder / project-search
+  overlay, not in-file search. Confirm at Phase 2 start whether in-file search
+  becomes a third mode on that type or a sibling — the name is already taken
+  and the plan's `workspace-doc-search` keymap context
+  (`bindings.go:221-223`) belongs to the existing overlay, so the new context
+  needs a distinct name (e.g. `workspace-doc-find`).
 
 ## Phases
 
@@ -84,9 +98,18 @@ New file `internal/docview/search.go` (mirror `select.go`'s shape):
   active (`/ query█ (3/17) [n/N]`), so every host gets it for free.
 - Live refresh: recompute matches when the model reloads (docview `live.go`
   gate), matching `filebrowser/live_preview.go:114-115`.
+- **Wrap mode** (`docview/wrap.go`): a source line becomes several visual rows,
+  so a match's byte span can straddle a wrap boundary and one match can paint
+  on two rows. Highlighting and scroll-to-match must both go through
+  `starts[]` per visual row rather than assuming one row per match; toggling
+  `w` while a search is committed must keep the cursor on the same match.
+- **Selection coexistence**: search decoration and `select.go`'s selection
+  decoration land on the same rows. Decide the precedence once in docview
+  (selection over match, current match over other matches) rather than per
+  host.
 
 Tests: match computation, phase transitions, wrap-around, highlight of
-tab-expanded and ANSI rows.
+tab-expanded, wrapped, and ANSI rows, and a match under an active selection.
 
 ### Phase 2 — bind search in both pane surfaces
 
@@ -100,7 +123,12 @@ tab-expanded and ANSI rows.
   (`internal/overview/preview_links.go:671-712`). Overview keys don't flow
   through `activeContext` — `WorkspacesKey` must consume all keys while
   search is typing (mind step 2 of the app ladder,
-  `internal/app/update.go:885-891`).
+  `internal/app/update.go:885-891`). Ordering is already in our favour: a
+  focused preview routes through `previewKey` at `workspaces.go:481`, which
+  reaches `previewDocKey` (`preview.go:449`) before the list's own `/` filter
+  case (`workspaces.go:583`), so `/` in a focused doc pane does not collide
+  with workspace filtering. Keep that ordering — a `/` handled after the
+  filter case is the bug to watch for.
 - Keybindings registered in `internal/keymap/bindings.go` for `workspace-doc`
   and the overview doc context; footer command entries on both surfaces.
 - Search dismisses on pane focus loss (same rule as `closeUnfocusedDocSearches`).
