@@ -33,7 +33,7 @@ import (
 // so the pane catches up as soon as it is safe.
 func (p *Plugin) previewRefreshSuppressed() bool {
 	// The inline editor owns the pane and is itself the thing writing the file.
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return true
 	}
 	// An overlay is drawn over the preview; reloading behind it buys nothing and

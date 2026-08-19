@@ -19,12 +19,14 @@ import (
 	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
@@ -210,6 +212,10 @@ type Model struct {
 	width               int
 	height              int
 	previewSpecResolver func(string, string) (string, bool)
+
+	// docFinderCaches holds one file list per pane root, so the file finder a
+	// document pane opens walks a tree once rather than once per ctrl+p.
+	docFinderCaches panesearch.Caches
 
 	// External terminal resource providers. Both default to nothing, which is
 	// the state a Sidecar with no configured provider must stay in: no
@@ -674,9 +680,15 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return tea.Batch(m.finishPhase(), preview)
 	case previewAutoScrollTickMsg:
 		return m.advancePreviewAutoScroll(msg)
+	case inlineedit.StartedMsg:
+		return m.applyPreviewDocEditStarted(msg)
+	case inlineedit.ExitedMsg:
+		return m.applyPreviewDocEditExited(msg)
 	case previewDocLoadedMsg:
 		m.applyPreviewDocLoaded(msg)
 		return nil
+	case previewDocSearchMsg:
+		return m.applyPreviewDocSearchMsg(msg)
 	case previewIssueLoadedMsg:
 		m.applyPreviewIssueLoaded(msg)
 		return nil

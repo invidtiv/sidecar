@@ -8,9 +8,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -28,11 +30,21 @@ type docPane struct {
 	// mode is the search surface this pane is showing over its document, or nil.
 	// It is rooted at this pane's own root, which is what makes the same code
 	// serve project and global Workspaces.
-	mode *docSearchMode
+	mode *panesearch.Mode
 	// modeRegions are the surface's hit regions from the last render, already at
 	// their true positions. They are registered after the pane tree's own, so a
 	// click inside the modal is not taken by the leaf drawn under it.
 	modeRegions []mouse.Region
+	// edit is this leaf's inline editor, created on the first `e`. It is per
+	// leaf rather than per plugin: two document panes may hold sessions at
+	// once, and only the focused one takes keys. See doc_edit.go.
+	edit *inlineedit.Session
+	// editW and editH are the viewport the live session was last sized to, so
+	// a resize is sent when the box moves and not on every frame.
+	editW, editH int
+	// pendingEdit is the action an exit confirmation is holding, run once the
+	// user says whether to save.
+	pendingEdit func() tea.Cmd
 	// boxW and boxH are the box the leaf was last given, so a surface that sizes
 	// itself on input rather than on render has an answer before the first frame.
 	// boxX and boxY place that box, which is what a click-away test needs.
@@ -303,6 +315,10 @@ func (p *Plugin) closeActiveDocTab() tea.Cmd {
 	if doc == nil {
 		return nil
 	}
+	// Closing the tab takes the file the editor is holding away; ask first.
+	if p.guardDocEdit(doc, func() tea.Cmd { return p.closeActiveDocTab() }) {
+		return nil
+	}
 	if len(doc.tabs.Items) <= 1 {
 		return p.closeDocPane()
 	}
@@ -485,6 +501,10 @@ func (p *Plugin) hideDocPane() tea.Cmd {
 	p.closeDocInfo()
 	doc, _ := p.activeDocPane()
 	if doc == nil {
+		return nil
+	}
+	// Hiding the split leaves a live editor with no pane to draw in.
+	if p.guardDocEdit(doc, func() tea.Cmd { return p.hideDocPane() }) {
 		return nil
 	}
 	return p.hideContentPane(doc.leafID)
@@ -876,7 +896,11 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 		// A pane closed with a search up takes the search's work with it: an
 		// unclosed project search leaves rg running to its 30s timeout.
 		if doc := p.docs[leaf.ContentID]; doc != nil {
-			doc.mode.close()
+			doc.mode.Close()
+			// A leaf dropped by a route that did not ask first (a click on the
+			// X, a shell switch) still owns a tmux session; releasing the leaf
+			// without it leaves an orphan editor holding the file.
+			doc.releaseEdit()
 		}
 		delete(p.docs, leaf.ContentID)
 	case PaneIssue:
@@ -1057,11 +1081,25 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if doc == nil {
 		return false, nil
 	}
+	// A live editor owns the pane outright, before the search surfaces and
+	// before the document's own keys: every key in it is on its way to vim.
+	if doc.editing() {
+		return p.handleDocEditKey(doc, msg)
+	}
 	// A live search surface owns every key in the pane, exactly as the document
 	// under it owns every key it is handed: esc closes it, and nothing it does
 	// not use reaches the workspace behind the pane.
 	if doc.mode != nil {
 		return true, p.handleDocSearchKey(doc, msg)
+	}
+	// In-file search is the same rule one level down: while its bar is up it
+	// owns every key in the pane, and only esc/enter give the document back.
+	// docview answers handled=false when no search is running, so this costs
+	// the ordinary key path nothing.
+	if view := doc.view(); view != nil {
+		if handled, cmd := view.HandleSearchKey(msg); handled {
+			return true, cmd
+		}
 	}
 	// Before the pane's own keys: esc clears a selection rather than hiding the
 	// pane out from under it, and the copy chord must not fall through to a
@@ -1070,6 +1108,13 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 	switch msg.String() {
+	case "/":
+		if view := doc.view(); view != nil {
+			view.StartSearch()
+		}
+		return true, nil
+	case "e":
+		return true, p.enterDocEdit(doc)
 	case "ctrl+p":
 		return true, p.openDocFinder(doc)
 	case "f":
@@ -1439,6 +1484,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if !ok || filepath.Clean(layout.Root) != root || layout.Surface != surface {
 		return nil
 	}
+	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
@@ -1601,6 +1647,7 @@ func (p *Plugin) nextPaneID() int {
 
 func (p *Plugin) resetPaneTreeToTerminal() {
 	p.closeDocInfo()
+	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)

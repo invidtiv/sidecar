@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -290,7 +291,7 @@ type Plugin struct {
 	// docFinderCaches holds one file list per pane root, so the file finder
 	// walks a directory tree once for every pane rooted there rather than once
 	// per ctrl+p. Dropped on Init: a project switch invalidates every root.
-	docFinderCaches map[string]*docFinderCache
+	docFinderCaches panesearch.Caches
 
 	// One shared, demand-driven frame clock animates semantic agent activity.
 	// Ordinary running shells never enter this clock.
@@ -776,7 +777,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.issueModelNextID = 0
-	p.docFinderCaches = nil
+	p.docFinderCaches = panesearch.Caches{}
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
 	if features.IsEnabled(features.WorkspaceDocPanes.Name) {

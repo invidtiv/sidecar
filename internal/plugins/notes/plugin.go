@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -191,19 +192,13 @@ type Plugin struct {
 	// One-shot sync after out-of-band editor saves
 	pendingEditorSyncID string
 
-	// Inline tty editor state (for true inline editing)
-	inlineEditor         *tty.Model
-	inlineEditMode       bool
-	inlineEditSession    string
-	inlineEditNoteID     string
-	inlineEditPath       string
-	inlineEditEditor     string
-	inlineEditActivation uint64 // Scopes async editor start/exit to the current project activation
-	orphanEditSession    string // Defensive re-init cleanup, executed asynchronously in Start
-
-	// Inline editor mouse drag state (for text selection forwarding)
-	inlineEditorDragging bool      // True when mouse is being dragged in editor (for text selection)
-	lastDragForwardTime  time.Time // Throttle: last time a drag event was forwarded to tmux
+	// Inline tty editor state. Session lifecycle, mouse and cursor mapping,
+	// and the exit confirmation live in internal/inlineedit; only
+	// notes-specific state stays here.
+	edit                inlineedit.Session
+	inlineEditNoteID    string
+	orphanEditSession   string    // Defensive re-init cleanup, executed asynchronously in Start
+	lastDragForwardTime time.Time // Throttle: last time a drag event was forwarded to tmux
 
 	// Inline auto-save state (for periodic saving during inline edit)
 	inlineAutoSaveGen      int    // Generation for staleness check
@@ -231,11 +226,6 @@ type Plugin struct {
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
 
-	// Exit confirmation state (when clicking away from editor)
-	showExitConfirmation bool        // True when confirmation dialog is shown
-	exitConfirmSelection int         // 0=Save&Exit, 1=Exit without saving, 2=Cancel
-	pendingClickRegion   string      // Region that was clicked
-	pendingClickData     interface{} // Data associated with the click
 }
 
 // notePlace is the session-only view/edit position for one note.
@@ -299,7 +289,6 @@ func New() *Plugin {
 	md, _ := markdown.NewRenderer()
 	p := &Plugin{
 		mouseHandler:   mouse.NewHandler(),
-		inlineEditor:   tty.New(nil),
 		previewMode:    true,
 		markdownView:   true,
 		md:             md,
@@ -307,6 +296,8 @@ func New() *Plugin {
 		editHistories:  make(map[string]*editHistory),
 		saveActivation: 1,
 	}
+	p.edit.Model = tty.New(nil)
+	p.edit.Host = p
 	p.clearInlineEditorAttachKey()
 	return p
 }
@@ -328,6 +319,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	if p.editorDirty || p.exportCheckpointFailed {
 		return errors.New("unsaved note or editor export remains after the previous project stopped")
 	}
+	p.edit.Host = p
 	p.saveActivation++
 	p.saveInFlight = false
 	p.saveQueued = false
@@ -342,10 +334,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.exportQueue = nil
 	p.supersededExports = nil
 	p.autoSaveID++
-	leftoverExport := p.inlineEditPath
+	leftoverExport := p.edit.Path
 	leftoverPending := p.pendingInlineEditPath
-	if p.inlineEditSession != "" {
-		p.orphanEditSession = p.inlineEditSession
+	if p.edit.Name != "" {
+		p.orphanEditSession = p.edit.Name
 	}
 	p.resetInlineEditState()
 	removeNoteExport(leftoverExport)
@@ -437,7 +429,7 @@ func (p *Plugin) Stop() {
 		tty.EditorSession{Name: p.orphanEditSession}.Kill()
 		p.orphanEditSession = ""
 	}
-	leftoverExport := p.inlineEditPath
+	leftoverExport := p.edit.Path
 	leftoverExportID := p.inlineEditNoteID
 	leftoverExportBase := p.inlineLastSavedContent
 	leftoverPending := p.pendingInlineEditPath
@@ -662,22 +654,21 @@ func (p *Plugin) persistOrderedLocked(store noteStore, projectRoot, noteID, cont
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog first
-	if p.showExitConfirmation {
+	if p.edit.ShowExitConfirm {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 			switch keyMsg.String() {
 			case "j", "down":
-				p.exitConfirmSelection = (p.exitConfirmSelection + 1) % 3
+				p.edit.MoveConfirmSelection(1)
 				return p, nil
 			case "k", "up":
-				p.exitConfirmSelection = (p.exitConfirmSelection + 2) % 3
+				p.edit.MoveConfirmSelection(-1)
 				return p, nil
 			case "enter":
 				return p.handleExitConfirmationChoice()
 			case "esc", "q":
 				// Cancel - return to editing
-				p.showExitConfirmation = false
-				p.pendingClickRegion = ""
-				p.pendingClickData = nil
+				p.edit.ShowExitConfirm = false
+				p.edit.ClearPendingClick()
 				return p, nil
 			}
 		}
@@ -685,12 +676,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	// Handle inline editor messages first when in inline edit mode
-	if p.inlineEditMode && p.inlineEditor != nil {
+	if p.edit.Active && p.edit.Model != nil {
 		// Check if editor became inactive or tmux session died
 		// This proactively handles :wq exit before SessionDeadMsg arrives
-		if !p.inlineEditor.IsActive() || !p.isInlineEditSessionAlive() {
+		if !p.edit.Model.IsActive() || !p.isInlineEditSessionAlive() {
 			noteID := p.inlineEditNoteID
-			notePath := p.inlineEditPath
+			notePath := p.edit.Path
 			p.exitInlineEditMode()
 			return p, p.saveNoteAfterInlineExit(noteID, notePath)
 		}
@@ -740,10 +731,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.updateTextareaDimensions()
 		// Resize through the shared terminal lifecycle so control-backed targets
 		// invalidate their old grid and reseed before regaining authority.
-		if p.inlineEditMode && p.inlineEditor != nil {
+		if p.edit.Active && p.edit.Model != nil {
 			width := p.calculateInlineEditorWidth()
 			height := p.calculateInlineEditorHeight()
-			if cmd := p.inlineEditor.Resize(width, height); cmd != nil {
+			if cmd := p.edit.Model.Resize(width, height); cmd != nil {
 				return p, cmd
 			}
 		}
@@ -983,7 +974,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case InlineAutoSaveTickMsg:
 		// Handle periodic auto-save during inline edit mode
-		if p.inlineEditMode && msg.Generation == p.inlineAutoSaveGen {
+		if p.edit.Active && msg.Generation == p.inlineAutoSaveGen {
 			return p, p.performInlineAutoSave()
 		}
 
@@ -998,7 +989,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.acknowledgeWrite(p.inlineEditNoteID, msg.Sequence)
 		}
 		// Auto-save completed silently (no toast) - schedule next tick
-		if p.inlineEditMode {
+		if p.edit.Active {
 			return p, p.scheduleInlineAutoSave()
 		}
 
@@ -1023,7 +1014,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		// Handle inline editor first if in inline edit mode
-		if p.inlineEditMode {
+		if p.edit.Active {
 			handled, cmd := p.handleInlineEditorKey(msg)
 			if handled {
 				return p, cmd
@@ -1104,7 +1095,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 // handlePaste applies one tea.PasteMsg as a single operation for the focused
 // surface. It never falls through to the textarea catch-all.
 func (p *Plugin) handlePaste(msg tea.PasteMsg) (plugin.Plugin, tea.Cmd) {
-	if p.showExitConfirmation || p.showDeleteModal || p.showInfoModal {
+	if p.edit.ShowExitConfirm || p.showDeleteModal || p.showInfoModal {
 		return p, nil
 	}
 	if p.showTaskModal {
@@ -1112,7 +1103,7 @@ func (p *Plugin) handlePaste(msg tea.PasteMsg) (plugin.Plugin, tea.Cmd) {
 		p.taskModalTitleInput, cmd = p.taskModalTitleInput.Update(msg)
 		return p, cmd
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return p, nil
 	}
 	if p.searchMode {
@@ -1249,7 +1240,7 @@ func (p *Plugin) isStaleNoteSaveResult(epoch, editorActivation uint64) bool {
 	if p.ctx == nil || epoch != p.ctx.Epoch {
 		return true
 	}
-	return editorActivation != 0 && editorActivation != p.inlineEditActivation
+	return editorActivation != 0 && editorActivation != p.edit.Activation
 }
 
 // applySavedContent updates the cached note without paying for a full list
@@ -2709,8 +2700,8 @@ func (p *Plugin) IsFocused() bool { return p.focused }
 // SetFocused sets the focus state.
 func (p *Plugin) SetFocused(f bool) {
 	p.focused = f
-	if p.inlineEditor != nil {
-		p.inlineEditor.SetFocused(f)
+	if p.edit.Model != nil {
+		p.edit.Model.SetFocused(f)
 	}
 }
 
@@ -2746,7 +2737,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		return cmds
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return nil
 	}
 	if p.activePane == PaneEditor && p.editorNote != nil {
@@ -2882,7 +2873,7 @@ func (p *Plugin) FocusContext() string {
 	if p.showTaskModal {
 		return "notes-task-modal"
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return "notes-inline-edit"
 	}
 	if p.searchMode {
@@ -2900,7 +2891,7 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether notes currently has an active text-entry
 // surface and should receive printable keys directly.
 func (p *Plugin) ConsumesTextInput() bool {
-	if p.searchMode || p.showTaskModal || p.inlineEditMode {
+	if p.searchMode || p.showTaskModal || p.edit.Active {
 		return true
 	}
 	return p.activePane == PaneEditor && p.editorNote != nil && !p.previewMode

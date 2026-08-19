@@ -7,11 +7,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -50,6 +52,18 @@ type previewDoc struct {
 	focused bool
 	nextID  int
 	epoch   uint64
+	// mode is the search surface this pane is showing over its document, or
+	// nil; modeRegions are the hit regions its last render earned.
+	mode        *panesearch.Mode
+	modeRegions []mouse.Region
+	// edit is this pane's inline editor, created on the first `e`, and box is
+	// the rectangle its last render placed it in — the editor's dimension
+	// contract answers from it. See preview_doc_edit.go.
+	edit         *inlineedit.Session
+	box          termpreview.Box
+	editW, editH int
+	// pendingEdit is the action an exit confirmation is holding.
+	pendingEdit func() tea.Cmd
 }
 
 func (d *previewDoc) view() *docview.Model {
@@ -291,6 +305,8 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 	}
 	wasInteractive := m.PreviewInteractive()
 	if m.preview.doc == nil || m.preview.doc.surface != workspace.ID {
+		// The pane being replaced may hold a session; it goes with the pane.
+		m.preview.doc.releaseEdit()
 		m.preview.doc = &previewDoc{epoch: m.nextPreviewContentEpoch()}
 	}
 	m.preview.doc.root = root
@@ -383,6 +399,10 @@ func (m *Model) closePreviewDocTab() tea.Cmd {
 	if m.preview.doc == nil {
 		return nil
 	}
+	// Closing the tab takes the file the editor is holding away; ask first.
+	if m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDocTab() }) {
+		return nil
+	}
 	if len(m.preview.doc.tabs.Items) <= 1 {
 		return m.closePreviewDoc()
 	}
@@ -457,6 +477,10 @@ func (m *Model) closePreviewDoc() tea.Cmd {
 	if m.preview.doc == nil {
 		return nil
 	}
+	// Closing the pane leaves a live editor with nowhere to draw; ask first.
+	if m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDoc() }) {
+		return nil
+	}
 	m.preview.doc = nil
 	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document); leaf != nil {
 		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
@@ -511,6 +535,12 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 	m.preview.focus = focusPreview
 	if m.preview.doc != nil {
 		m.preview.doc.focused = leaf.Kind == panelayout.Document
+	}
+	// A pane that has lost the keyboard drops whatever search it was showing,
+	// enforced at the single focus writer so every gesture that moves focus
+	// obeys it without having to remember to.
+	if cmd2 := m.closeUnfocusedPreviewDocSearch(); cmd2 != nil {
+		cmd = tea.Batch(cmd, cmd2)
 	}
 	if m.preview.issue != nil {
 		m.preview.issue.focused = leaf.Kind == panelayout.Issue
@@ -669,17 +699,57 @@ func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 }
 
 func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if m.preview.doc == nil || m.PreviewInteractive() {
+	if m.preview.doc == nil {
+		return false, nil
+	}
+	// A live editor owns the pane outright, before the search surfaces and
+	// before the document's own keys: every key in it is on its way to vim.
+	if m.preview.doc.editing() {
+		return m.handlePreviewDocEditKey(msg)
+	}
+	if m.PreviewInteractive() {
 		return false, nil
 	}
 	key := msg.String()
 	if m.preview.doc.focused {
+		// ctrl+c is the host's, even mid-query — the same rule the focused
+		// filter states above. This browser answers before internal/app's
+		// text-input level, which is where every other surface's ctrl+c is
+		// intercepted, so a search here must hand it back itself or it is the
+		// one place the quit confirmation is unreachable.
+		if key == "ctrl+c" && (m.preview.doc.mode != nil || m.previewDocFindActive()) {
+			return false, nil
+		}
+		// A live pane search surface owns every key in the pane, before the
+		// document's own keys and before the browser's: `/` here is a query
+		// character, `q` is a q.
+		if m.preview.doc.mode != nil {
+			return true, m.handlePreviewDocSearchKey(msg)
+		}
+		// In-file search is the same rule one level down, and docview answers
+		// handled=false when no search is running.
+		if view := m.preview.doc.view(); view != nil {
+			if handled, cmd := view.HandleSearchKey(msg); handled {
+				return true, cmd
+			}
+		}
 		// Before the pane's own keys: esc clears a selection rather than closing
 		// the pane out from under it.
 		if cmd, handled := m.handlePreviewDocSelectionKey(msg); handled {
 			return true, cmd
 		}
 		switch key {
+		case "/":
+			if view := m.preview.doc.view(); view != nil {
+				view.StartSearch()
+			}
+			return true, nil
+		case "e":
+			return true, m.enterPreviewDocEdit()
+		case "ctrl+p":
+			return true, m.openPreviewDocFinder()
+		case "f":
+			return true, m.openPreviewDocProjectSearch()
 		case "q", "esc":
 			return true, m.closePreviewDoc()
 		case "m":
@@ -713,12 +783,29 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 }
 
 func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
+	// Where the box is, not only how big it is: the editor's origin and the PTY
+	// size are both read back from it.
+	doc.box = box
+	if cmd := doc.resizePreviewDocEdit(); cmd != nil {
+		m.queuePreviewCmd(cmd)
+	}
+	if doc.editing() {
+		return m.renderPreviewDocEdit(doc, box)
+	}
 	view := doc.view()
 	contentHeight := max(box.H-termpreview.HeaderRows, 0)
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := m.composePreviewHeader(docview.LayoutTabStrip(doc.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, m.PreviewFocused() && doc.focused).Row, box.W, panelayout.Document)
+	tabsWidth := ui.ReserveHeaderClose(box.W).TabsWidth
+	focused := m.PreviewFocused() && doc.focused
+	strip := docview.LayoutTabStrip(doc.tabs, tabsWidth, focused)
+	if doc.mode != nil {
+		// A pane taking search keystrokes says so where it says which file it
+		// holds, exactly as the project workspace does.
+		strip = docview.LayoutSearchTabStrip(doc.tabs, doc.mode.HeaderLabel(), tabsWidth, focused)
+	}
+	header := m.composePreviewHeader(strip.Row, box.W, panelayout.Document)
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)
@@ -726,6 +813,14 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	}
 	if contentHeight <= 0 {
 		return header
+	}
+	// A live search surface is composited over the body as a modal scoped to
+	// that box, leaving the pane's own header row uncovered: it is where the
+	// pane says it is in Find or Search mode.
+	if doc.mode != nil {
+		body = m.renderPreviewDocSearchOverlay(doc, body, termpreview.Box{
+			X: box.X, Y: box.Y + termpreview.HeaderRows, W: box.W, H: contentHeight,
+		})
 	}
 	return header + "\n" + body
 }

@@ -369,7 +369,10 @@ func (p *Plugin) docRefreshSuppressed(pane *docPane) bool {
 	if p.docInfo != nil {
 		return true
 	}
-	return pane != nil && pane.mode != nil
+	// An editor holding the file is writing it: vim's own swap and backup churn
+	// is filtered by isEditorScratchPath, but a re-read would still rebuild the
+	// pane under a live session.
+	return pane != nil && (pane.mode != nil || pane.editing())
 }
 
 // isEditorScratchPath reports whether a path is a file an editor leaves beside

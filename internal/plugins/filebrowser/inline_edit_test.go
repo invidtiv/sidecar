@@ -19,7 +19,7 @@ func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
 	logPath := installFilebrowserFakeTmux(t)
 	p := New()
 	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 9, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	p.inlineEditActivation = 4
+	p.edit.Activation = 4
 
 	_, cmd := p.Update(InlineEditStartedMsg{
 		SessionName: "stale-editor", FilePath: "old.md", Editor: "nvim",
@@ -29,7 +29,7 @@ func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
 		t.Fatal("stale editor start did not schedule orphan cleanup")
 	}
 	_ = cmd()
-	if p.inlineEditMode || p.inlineEditor.IsActive() {
+	if p.edit.Active || p.edit.Model.IsActive() {
 		t.Fatal("stale editor start activated the current file browser")
 	}
 	data, err := os.ReadFile(logPath)
@@ -44,14 +44,14 @@ func TestInlineEditStartedRejectsStaleProjectActivation(t *testing.T) {
 func TestAttachToInlineEditSessionGatedByFullAttachFlag(t *testing.T) {
 	installFilebrowserFakeTmux(t)
 	p := New()
-	p.inlineEditSession = "sidecar-edit-test"
-	if p.inlineEditor.Config.AttachKey != "" {
-		t.Fatalf("inline editor AttachKey = %q, want empty by default", p.inlineEditor.Config.AttachKey)
+	p.edit.Name = "sidecar-edit-test"
+	if p.edit.Model.Config.AttachKey != "" {
+		t.Fatalf("inline editor AttachKey = %q, want empty by default", p.edit.Model.Config.AttachKey)
 	}
 	if cmd := p.attachToInlineEditSession(); cmd != nil {
 		t.Fatal("attachToInlineEditSession ran with tmux_full_attach off")
 	}
-	if p.inlineEditSession != "sidecar-edit-test" {
+	if p.edit.Name != "sidecar-edit-test" {
 		t.Fatal("gated attach exited the editor")
 	}
 
@@ -60,7 +60,7 @@ func TestAttachToInlineEditSessionGatedByFullAttachFlag(t *testing.T) {
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
 	p.applyInlineEditorAttachKey()
-	if p.inlineEditor.Config.AttachKey == "" {
+	if p.edit.Model.Config.AttachKey == "" {
 		t.Fatal("inline editor AttachKey stayed empty with tmux_full_attach on")
 	}
 	if cmd := p.attachToInlineEditSession(); cmd == nil {
@@ -72,12 +72,12 @@ func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
 	logPath := installFilebrowserFakeTmux(t)
 	p := New()
 	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	p.inlineEditActivation = 9
-	p.inlineEditMode = true
-	p.inlineEditSession = "current-editor"
-	p.inlineEditFile = "current.md"
-	p.inlineEditEditor = "nvim"
-	p.inlineEditor.Open(tty.Target{Session: "current-editor"})
+	p.edit.Activation = 9
+	p.edit.Active = true
+	p.edit.Name = "current-editor"
+	p.edit.Path = "current.md"
+	p.edit.EditorCmd = "nvim"
+	p.edit.Model.Open(tty.Target{Session: "current-editor"})
 
 	_, cmd := p.Update(InlineEditStartedMsg{
 		SessionName: "current-editor", FilePath: "old.md", Editor: "nvim",
@@ -93,7 +93,7 @@ func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
 	if strings.Contains(string(data), "kill-session -t current-editor") {
 		t.Fatalf("stale start killed the current active editor; log:\n%s", data)
 	}
-	if !p.inlineEditor.IsActive() || p.inlineEditSession != "current-editor" {
+	if !p.edit.Model.IsActive() || p.edit.Name != "current-editor" {
 		t.Fatal("stale start disturbed current editor state")
 	}
 }
@@ -104,23 +104,23 @@ func TestInlineEditorTabReentryUsesFreshModelScope(t *testing.T) {
 	p.ctx = &plugin.Context{WorkDir: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.tabs = []FileTab{{Path: "note.md", EditSession: "editor", EditEditor: "nvim"}}
 	p.activeTab = 0
-	p.inlineEditMode = true
-	p.inlineEditSession = "editor"
-	p.inlineEditFile = "note.md"
-	p.inlineEditEditor = "nvim"
-	p.inlineEditor.Enter("editor", "")
-	oldScope := p.inlineEditor.Scope()
+	p.edit.Active = true
+	p.edit.Name = "editor"
+	p.edit.Path = "note.md"
+	p.edit.EditorCmd = "nvim"
+	p.edit.Model.Enter("editor", "")
+	oldScope := p.edit.Model.Scope()
 
 	p.saveEditStateToTab()
 	p.clearPluginEditState()
-	if p.inlineEditor.IsActive() {
+	if p.edit.Model.IsActive() {
 		t.Fatal("inactive tab retained terminal authority")
 	}
 	if !p.restoreEditStateFromTab() {
 		t.Fatal("live editor session was not restored")
 	}
 	_ = p.reattachInlineEditSession()
-	newScope := p.inlineEditor.Scope()
+	newScope := p.edit.Model.Scope()
 	if newScope.Generation == oldScope.Generation {
 		t.Fatalf("reattach reused model generation %d", newScope.Generation)
 	}
@@ -130,7 +130,7 @@ func TestInlineEditorTabReentryUsesFreshModelScope(t *testing.T) {
 		Scope: oldScope, Target: "editor", Output: "STALE FRAME",
 		PollGeneration: 1, PaneWidth: 80, PaneHeight: 20,
 	})
-	if got := p.inlineEditor.View(); strings.Contains(got, "STALE FRAME") {
+	if got := p.edit.Model.View(); strings.Contains(got, "STALE FRAME") {
 		t.Fatalf("stale inactive-tab frame reached reattached editor: %q", got)
 	}
 }
@@ -416,17 +416,17 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 // wrong character (td-73fa86).
 func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 	p := &Plugin{width: 80, height: 24}
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-edit", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-edit", "")
 	// Another instance resized the shared session: the pane is wider and taller
 	// than this viewport, with the cursor near its bottom-right.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width + 40
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height + 10
-	p.inlineEditor.State.CursorCol = p.inlineEditor.State.PaneWidth - 1
-	p.inlineEditor.State.CursorRow = p.inlineEditor.State.PaneHeight - 1
-	p.inlineEditor.State.CursorVisible = true
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width + 40
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height + 10
+	p.edit.Model.State.CursorCol = p.edit.Model.State.PaneWidth - 1
+	p.edit.Model.State.CursorRow = p.edit.Model.State.PaneHeight - 1
+	p.edit.Model.State.CursorVisible = true
 
 	col, row, ok := p.calculateInlineEditorMouseCoords(2, 2)
 	if !ok {
@@ -442,24 +442,24 @@ func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 // raw mapping and forwarding a coordinate outside the pane (td-73fa86).
 func TestCalculateInlineEditorMouseCoordsRejectsLetterboxPadding(t *testing.T) {
 	p := &Plugin{width: 100, height: 30}
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-edit", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-edit", "")
 	// Another instance on a smaller terminal drives the shared session.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width - 10
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height - 5
 
 	// Inside the pane: mapped normally.
 	if col, row, ok := p.calculateInlineEditorMouseCoords(2, 2); !ok || col != 1 || row != 1 {
 		t.Fatalf("in-pane coords = (%d,%d,%v), want (1,1,true)", col, row, ok)
 	}
 	// Past the pane's right edge but inside the editor viewport.
-	if col, row, ok := p.calculateInlineEditorMouseCoords(2+p.inlineEditor.State.PaneWidth, 2); ok {
+	if col, row, ok := p.calculateInlineEditorMouseCoords(2+p.edit.Model.State.PaneWidth, 2); ok {
 		t.Fatalf("click in horizontal letterbox padding = (%d,%d,true), want no hit", col, row)
 	}
 	// Past the pane's bottom edge but inside the editor viewport.
-	if col, row, ok := p.calculateInlineEditorMouseCoords(2, 2+p.inlineEditor.State.PaneHeight); ok {
+	if col, row, ok := p.calculateInlineEditorMouseCoords(2, 2+p.edit.Model.State.PaneHeight); ok {
 		t.Fatalf("click in vertical letterbox padding = (%d,%d,true), want no hit", col, row)
 	}
 }
@@ -515,15 +515,15 @@ func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
 	p.activePane = PanePreview
 	p.treeVisible = true
 	p.treeWidth = 30
-	p.inlineEditMode = true
-	p.inlineEditor.Enter("editor", "")
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.State.OutputBuf.Write("one\ntwo")
-	p.inlineEditor.State.CursorVisible = true
-	p.inlineEditor.State.CursorRow = 1
-	p.inlineEditor.State.CursorCol = 3
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height
+	p.edit.Active = true
+	p.edit.Model.Enter("editor", "")
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.State.OutputBuf.Write("one\ntwo")
+	p.edit.Model.State.CursorVisible = true
+	p.edit.Model.State.CursorRow = 1
+	p.edit.Model.State.CursorCol = 3
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height
 
 	cursor := p.Cursor()
 	if cursor == nil || cursor.X != 36 || cursor.Y != 3 {
@@ -533,7 +533,7 @@ func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
 		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
 	}
 
-	p.showExitConfirmation = true
+	p.edit.ShowExitConfirm = true
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("confirmation-covered Cursor() = %#v, want nil", cursor)
 	}
@@ -550,15 +550,15 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	p := New()
 	p.width, p.height = 100, 30
 	p.treeWidth, p.previewWidth = 30, 60
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-edit", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-edit", "")
 	// Another instance on a smaller terminal drives the shared session.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
-	p.inlineEditor.State.MouseReportingEnabled = true
-	p.inlineEditMode = true
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width - 10
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height - 5
+	p.edit.Model.State.MouseReportingEnabled = true
+	p.edit.Active = true
 
 	// Find the pane's left edge, then step one column past its right edge.
 	padY := 10
@@ -572,7 +572,7 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	if originX < 0 {
 		t.Fatal("no in-pane column found on the test row")
 	}
-	padX := originX + p.inlineEditor.State.PaneWidth
+	padX := originX + p.edit.Model.State.PaneWidth
 	if _, _, ok := p.calculateInlineEditorMouseCoords(padX, padY); ok {
 		t.Fatalf("(%d,%d) is inside the pane; pick a padding cell", padX, padY)
 	}
@@ -584,7 +584,7 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("press on letterbox padding produced a command; it must be dropped, not forwarded to tmux")
 	}
-	if p.inlineEditorDragging {
+	if p.edit.Dragging {
 		t.Fatal("press on letterbox padding started a drag")
 	}
 }

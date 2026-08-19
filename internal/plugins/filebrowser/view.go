@@ -303,7 +303,7 @@ func (p *Plugin) renderNormalPanes() string {
 
 	// Use interactive gradient when in inline edit mode
 	var rightPane string
-	if p.inlineEditMode && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		rightPane = styles.RenderPanelWithGradient(previewContent, p.previewWidth, paneHeight, styles.GetInteractiveGradient())
 	} else {
 		rightPane = styles.RenderPanel(previewContent, p.previewWidth, paneHeight, previewActive)
@@ -853,7 +853,7 @@ func (p *Plugin) renderTreeNode(node *FileNode, selected bool, maxWidth int) str
 // renderPreviewPane renders the file preview in the right pane.
 func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 	// Handle inline edit mode - render editor within preview pane
-	if p.inlineEditMode && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return p.renderInlineEditorContent(visibleHeight)
 	}
 

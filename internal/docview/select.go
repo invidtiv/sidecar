@@ -174,7 +174,7 @@ func (s selectionSource) ContentRect() mouse.Rect {
 		X: m.originX + m.display().gutterWidth,
 		Y: m.originY,
 		W: s.contentWidth(),
-		H: m.height,
+		H: m.contentHeight(),
 	}
 }
 

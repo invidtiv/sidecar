@@ -227,10 +227,19 @@ func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
 		return paneframe.WrapLeaf(m.renderPreview(inner.W, inner.H), peer, m.lonePreviewChrome())
 	}
 	m.registerPreviewOutputRegions(peer)
+	// Regions are re-earned every frame: a pane this frame does not draw must
+	// not leave last frame's modal regions on screen.
+	m.clearPreviewDocSearchRegions()
+	view := ""
 	if len(layout.Leaves) == 1 {
-		return paneframe.ComposeLeaf(paneHost{m}, layout.Leaves[0], layout.Zoomed)
+		view = paneframe.ComposeLeaf(paneHost{m}, layout.Leaves[0], layout.Zoomed)
+	} else {
+		view = paneframe.Compose(paneHost{m}, layout, peer, peer.W, peer.H)
 	}
-	return paneframe.Compose(paneHost{m}, layout, peer, peer.W, peer.H)
+	// Last, because a live search surface is drawn over its leaf and its regions
+	// have to beat the leaf's own.
+	m.registerPreviewDocSearchRegions()
+	return view
 }
 
 // lonePreviewChrome is the frame around a preview with no placeable tree. The

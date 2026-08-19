@@ -191,7 +191,7 @@ func (p *Plugin) renderListPane(height int) string {
 // renderEditorPane renders the editor pane content (without borders).
 func (p *Plugin) renderEditorPane(height, width int) string {
 	// Render inline editor if active
-	if p.inlineEditMode && p.inlineEditor != nil {
+	if p.edit.Active && p.edit.Model != nil {
 		return p.renderInlineEditorContent(height)
 	}
 
