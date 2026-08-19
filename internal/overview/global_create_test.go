@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -835,6 +836,70 @@ func TestNewerCreateReplacesPendingTmux(t *testing.T) {
 	if m.pendingCreatedPath != "" {
 		t.Fatalf("newer shell create left stale path %q", m.pendingCreatedPath)
 	}
+}
+
+func TestMutationRefreshClaimsTheCreatedShell(t *testing.T) {
+	m := catalogModel(t)
+	project := m.projects[0]
+	result := m.results[projectKey(project)]
+	result.Workspaces = append(result.Workspaces, workspaceinventory.Workspace{
+		ID: "created", ProjectKey: projectKey(project), ProjectRoot: project.Path,
+		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-9", Name: "Shell 9", Live: true,
+	})
+	m.applyProjectMutationRefresh(projectMutationRefreshMsg{Project: project, Result: result})
+	if !m.shellClaims.Sessions["sidecar-sh-sidecar-9"] || m.shellClaims.Owners["sidecar-sh-sidecar-9"] != projectKey(project) {
+		t.Fatalf("created shell missing from claims: %#v", m.shellClaims)
+	}
+}
+
+func TestLiveOnlyStatusDoesNotDropAJustCreatedShell(t *testing.T) {
+	m := catalogModel(t)
+	project := m.projects[0]
+	key := projectKey(project)
+	m.liveOnly = true
+	m.cycleStart = time.Now().Add(-time.Second)
+	created := m.results[key]
+	created.Workspaces = append(created.Workspaces, workspaceinventory.Workspace{
+		ID: "created", ProjectKey: key, ProjectRoot: project.Path,
+		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-9", Name: "Shell 9", Live: true, PaneID: "%9",
+	})
+	m.results[key] = created
+	m.markInventoryFresh(key)
+
+	stale := created
+	stale.Workspaces = append([]workspaceinventory.Workspace(nil), created.Workspaces[:len(created.Workspaces)-1]...)
+	m.applyStatusResult(stale)
+	if _, ok := workspaceNamed(m.results[key], "sidecar-sh-sidecar-9"); !ok {
+		t.Fatal("live-only status dropped a shell created after this cycle started")
+	}
+}
+
+func TestLiveOnlyStatusStillAppliesWhenInventoryIsOlder(t *testing.T) {
+	m := catalogModel(t)
+	project := m.projects[0]
+	key := projectKey(project)
+	m.liveOnly = true
+	m.markInventoryFresh(key)
+	m.cycleStart = time.Now().Add(time.Second)
+	incoming := workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{
+		{ID: "only", ProjectKey: key, Kind: workspaceinventory.KindShell, TmuxName: "only", Live: true},
+	}}
+	m.applyStatusResult(incoming)
+	if _, ok := workspaceNamed(m.results[key], "only"); !ok {
+		t.Fatal("live-only status with older inventory was skipped")
+	}
+	if _, ok := workspaceNamed(m.results[key], "sidecar-sh-1"); ok {
+		t.Fatal("live-only status did not replace older membership")
+	}
+}
+
+func workspaceNamed(result workspaceinventory.ProjectResult, tmuxName string) (workspaceinventory.Workspace, bool) {
+	for _, workspace := range result.Workspaces {
+		if workspace.TmuxName == tmuxName {
+			return workspace, true
+		}
+	}
+	return workspaceinventory.Workspace{}, false
 }
 
 func TestCancelCreateClearsPending(t *testing.T) {

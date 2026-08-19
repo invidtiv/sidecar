@@ -688,20 +688,27 @@ func readRegularFile(path string) ([]byte, error) {
 
 func panesForOwnedSession(name, projectRoot string, roots []string, panes []Pane, owners ...map[string]string) []Pane {
 	var out []Pane
+	projectRoot = canonical(projectRoot)
+	// Claims reserve sessions the last full inventory already knew about.
+	// A session that is not in the map is not a collision — it is a shell
+	// created since that inventory, and path ownership is the only evidence
+	// this pass has. Treating "unclaimed" as "not ours" is what made a
+	// newly created global shell look dead on the next live-only poll.
 	if len(owners) > 0 && owners[0] != nil {
-		owner, claimed := owners[0][name]
-		if !claimed || owner == "" || owner != canonical(projectRoot) {
-			return nil
-		}
-		for _, pane := range panes {
-			if pane.Session == name {
-				out = append(out, pane)
+		if owner, claimed := owners[0][name]; claimed {
+			if owner == "" || owner != projectRoot {
+				return nil
 			}
+			for _, pane := range panes {
+				if pane.Session == name {
+					out = append(out, pane)
+				}
+			}
+			return out
 		}
-		return out
 	}
 	for _, pane := range panes {
-		if pane.Session == name && canonicalOwner(pane.Path, roots) == canonical(projectRoot) {
+		if pane.Session == name && canonicalOwner(pane.Path, roots) == projectRoot {
 			out = append(out, pane)
 		}
 	}

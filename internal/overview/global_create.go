@@ -972,6 +972,10 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 	m.results[key] = msg.Result
 	m.markInventoryFresh(key)
 	delete(m.projectErrors, key)
+	// The live-only poll keys shell liveness off this map. Without a rebuild
+	// here the next pass treats the shell we just created as unclaimed and
+	// paints it dead (td-ecb0b8).
+	m.syncShellClaims()
 	m.syncBoard()
 	return m.previewSync()
 }

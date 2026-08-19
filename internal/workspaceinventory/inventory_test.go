@@ -596,6 +596,44 @@ func TestShellSessionCollisionRequiresExactProjectPathOwnership(t *testing.T) {
 	if got := panesForOwnedSession("shared", one, []string{one, two}, panes, ambiguous); len(got) != 0 {
 		t.Fatalf("ambiguous shell claim = %#v", got)
 	}
+	// A live-only poll's claims were built before this session existed.
+	// Unclaimed is not a collision: the pane still belongs to the project
+	// whose tree it is sitting in (td-ecb0b8).
+	stale := map[string]string{"sidecar-sh-one-1": canonical(one)}
+	fresh := []Pane{{ID: "%3", Session: "sidecar-sh-one-2", Path: one}}
+	if got := panesForOwnedSession("sidecar-sh-one-2", one, []string{one, two}, fresh, stale); len(got) != 1 {
+		t.Fatalf("unclaimed new shell should match by path, got %#v", got)
+	}
+	if got := panesForOwnedSession("sidecar-sh-one-2", two, []string{one, two}, fresh, stale); len(got) != 0 {
+		t.Fatalf("unclaimed shell claimed by the wrong project = %#v", got)
+	}
+}
+
+func TestRefreshKeepsUnclaimedNewShellLive(t *testing.T) {
+	root := t.TempDir()
+	previous := ProjectResult{
+		ProjectKey:  canonical(root),
+		ProjectRoot: canonical(root),
+		Workspaces: []Workspace{{
+			Kind: KindShell, Key: "sidecar-sh-new-1", TmuxName: "sidecar-sh-new-1",
+			ProjectRoot: canonical(root), Namespace: tmuxenv.Namespace(), Path: canonical(root),
+		}},
+	}
+	// Claims from the last full cycle, before this shell existed.
+	stale := ShellClaims{
+		Sessions: map[string]bool{"sidecar-sh-old-1": true},
+		Owners:   map[string]string{"sidecar-sh-old-1": canonical(root)},
+	}
+	result := Collector{
+		Capture: func(string, int) (string, tty.PaneState, error) { return "$ ", tty.PaneState{}, nil },
+	}.ForRefresh(1, stale).RefreshProjectStatus(
+		context.Background(), previous, []string{root},
+		[]Pane{{ID: "%9", Session: "sidecar-sh-new-1", Path: root, Command: "zsh"}},
+	)
+	got, ok := shellNamed(result, "sidecar-sh-new-1")
+	if !ok || !got.Live || got.PaneID != "%9" {
+		t.Fatalf("new shell marked dead under stale claims: %#v", got)
+	}
 }
 
 func TestAgentShellClaimsRefuseDuplicateDurableOwners(t *testing.T) {

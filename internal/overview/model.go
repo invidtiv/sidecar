@@ -613,6 +613,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		if msg.LiveOnly {
 			m.phase = phaseStatus
 			m.pending = indexedProjects(msg.Projects)
+			// Membership can change between full cycles — a shell created from
+			// this surface, or one another instance wrote to shells.json.
+			// Rebuilding from the results we already hold is what lets the
+			// live-only pass recognise those sessions instead of marking them
+			// orphaned (td-ecb0b8).
+			m.syncShellClaims()
 			m.refreshCollector = m.collector.ForRefresh(maxCaptures, m.shellClaims)
 		} else {
 			m.phase = phaseIdentity
@@ -1016,10 +1022,33 @@ func (m *Model) applyStatusResult(result workspaceinventory.ProjectResult) {
 	if !m.liveOnly {
 		// A full cycle's status pass carries the inventory phase's fresh read.
 		m.markInventoryFresh(key)
+	} else if !m.cycleStart.IsZero() {
+		// Live-only status is a liveness pass over the membership this cycle
+		// snapshotted. A mutation or watcher that re-read the project after
+		// that snapshot already holds newer membership; applying this result
+		// would drop a shell created a moment ago, or restore one just
+		// deleted (td-ecb0b8).
+		if stamped, ok := m.inventoryStamp[key]; ok && stamped.After(m.cycleStart) {
+			m.tracef("live-only status project=%s skipped — inventory newer than cycle", key)
+			return
+		}
 	}
 	m.results[key] = result
 	delete(m.projectErrors, key)
 	delete(m.stale, key)
+}
+
+// syncShellClaims rebuilds the reserved-session map from the results we
+// currently hold. Call it whenever membership changes outside a full inventory
+// phase — create, delete, a watcher refresh — so the next live-only poll can
+// still find those sessions.
+func (m *Model) syncShellClaims() {
+	inputs := make([]workspaceinventory.ProjectResult, 0, len(m.results))
+	for _, result := range m.results {
+		inputs = append(inputs, result)
+	}
+	m.shellClaims = workspaceinventory.BuildShellClaims(inputs)
+	m.refreshCollector = m.refreshCollector.WithShellClaims(m.shellClaims)
 }
 
 func (m *Model) applyFailure(key string, result workspaceinventory.ProjectResult, err error) {
