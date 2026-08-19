@@ -38,17 +38,14 @@ func (m *Model) previewDocSelectionView() *docview.Model {
 	return m.preview.doc.view()
 }
 
-// clearPreviewDocSelections keeps one selection alive at a time: starting one
-// drops whatever a background tab still holds.
+// clearPreviewDocSelections drops every document selection this surface holds
+// but keep's. It is what a terminal gesture calls, with nothing to keep, to take
+// the one live selection for itself.
 func (m *Model) clearPreviewDocSelections(keep *docview.Model) {
 	if m.preview.doc == nil {
 		return
 	}
-	for _, item := range m.preview.doc.tabs.Items {
-		if item.View != nil && item.View != keep {
-			item.View.ClearSelection()
-		}
-	}
+	m.preview.doc.tabs.ClearSelectionsExcept(keep)
 }
 
 // pressPreviewDocSelection arms a selection gesture over the document's text.
@@ -60,6 +57,9 @@ func (m *Model) pressPreviewDocSelection(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	m.clearPreviewDocSelections(view)
+	// One selection at a time means one on this whole surface: the terminal is
+	// drawn beside this pane, so its highlight goes with the rest.
+	m.clearPreviewSelection()
 	result := view.HandleSelectionMouse(action)
 	if !result.Handled {
 		return nil
@@ -97,16 +97,13 @@ func (m *Model) handlePreviewDocGesture(action mouse.MouseAction, wasDragging bo
 	return nil, false
 }
 
-// handlePreviewDocSelectionKey answers the chords that act on the selection.
-// Escape clears it, which is why it is asked before the pane's own esc.
+// handlePreviewDocSelectionKey answers the chords that act on the selection —
+// including escape, which the viewer answers so it clears a selection before the
+// pane's own esc can mean anything else.
 func (m *Model) handlePreviewDocSelectionKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	view := m.previewDocSelectionView()
 	if view == nil {
 		return nil, false
-	}
-	if msg.String() == "esc" && view.HasSelection() {
-		view.ClearSelection()
-		return nil, true
 	}
 	result := view.HandleSelectionKey(msg)
 	if !result.Handled {
@@ -116,12 +113,10 @@ func (m *Model) handlePreviewDocSelectionKey(msg tea.KeyPressMsg) (tea.Cmd, bool
 }
 
 // previewDocSelectionResult is what this surface owes the engine's answer: a
-// copy, phrased and delivered as this surface's own toast.
+// copy, delivered as this surface's own toast. Nothing persists this pane's
+// scroll offset, so a drag that scrolled it leaves nothing to save.
 func (m *Model) previewDocSelectionResult(view *docview.Model, result textselect.Result) tea.Cmd {
-	if !result.CopyAsked {
-		return nil
-	}
-	return view.SelectionKeys().CopySelectionCmd(result.Copy, func(notice textselect.CopyNotice) tea.Msg {
+	return view.SelectionCopyCmd(result, func(notice textselect.CopyNotice) tea.Msg {
 		return appmsg.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}

@@ -150,6 +150,34 @@ func TestSelectionRunsOverWrappedRowsAsDrawn(t *testing.T) {
 	}
 }
 
+func TestSelectionStopsAtTheEdgeOfWhatIsDrawn(t *testing.T) {
+	// Wrap is off, so a line longer than the pane keeps its whole text in the
+	// layout and is cut at the pane's edge on the way to the screen. A drag over
+	// the pane beside this one must not reach the cut-off columns.
+	long := strings.Repeat("abcdefghij", 10)
+	m := newSelectableModel(t, 40, 2, long, long)
+	drawn := m.width - m.display().gutterWidth
+
+	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
+	m.HandleSelectionMouse(selectDrag(m.contentX(drawn+25), selectionOriginY+1))
+	m.HandleSelectionMouse(selectRelease(m.contentX(drawn+25), selectionOriginY+1))
+
+	text := m.SelectionText()
+	if len(text) != 2 {
+		t.Fatalf("selected %#v, want both rows", text)
+	}
+	for i, line := range text {
+		if got := ansi.StringWidth(line); got != drawn {
+			t.Errorf("row %d copied %d columns, want the %d that were drawn: %q", i, got, drawn, line)
+		}
+	}
+	for i, row := range strings.Split(m.View(), "\n") {
+		if highlightColumn(row) != m.display().gutterWidth {
+			t.Errorf("row %d was highlighted from column %d, want the whole drawn row", i, highlightColumn(row))
+		}
+	}
+}
+
 func TestSelectionInRenderedMarkdownHasNoGutter(t *testing.T) {
 	m := newTestModel(t)
 	m.loading = false
@@ -274,7 +302,7 @@ func TestSelectionChordsCopyAndSelectAll(t *testing.T) {
 
 func TestCopyOnSelectCopiesWhenTheDragEnds(t *testing.T) {
 	m := newSelectableModel(t, 40, 2, "alpha beta", "second line")
-	m.SetSelection(m.SelectionKeys(), true)
+	m.SetSelection(textselect.Keys{Copy: "alt+c", SelectAll: "ctrl+a"}, true)
 
 	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
 	m.HandleSelectionMouse(selectDrag(m.contentX(4), selectionOriginY))
@@ -294,5 +322,56 @@ func TestDragPastTheBottomScrollsTheDocument(t *testing.T) {
 	}
 	if m.ScrollOffset() != result.AutoScroll {
 		t.Errorf("scroll offset = %d, want the %d rows the drag asked for", m.ScrollOffset(), result.AutoScroll)
+	}
+
+	// Nothing left to reveal: the drag keeps asking, the document does not move,
+	// and a host that persists the offset is told there is nothing to save.
+	m.Scroll(len(m.display().rows))
+	again := m.HandleSelectionMouse(selectDrag(m.contentX(0), selectionOriginY+4))
+	if again.AutoScroll != 0 {
+		t.Errorf("a drag at the last row reported %d rows of scroll, want the 0 it applied", again.AutoScroll)
+	}
+}
+
+func TestEscapeClearsTheSelectionAndNothingElse(t *testing.T) {
+	m := newSelectableModel(t, 40, 2, "alpha beta", "second line")
+	esc := tea.KeyPressMsg{Code: tea.KeyEscape}
+
+	if result := m.HandleSelectionKey(esc); result.Handled {
+		t.Error("escape was answered with nothing selected; the pane's own escape must still reach it")
+	}
+
+	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
+	m.HandleSelectionMouse(selectDrag(m.contentX(4), selectionOriginY))
+	m.HandleSelectionMouse(selectRelease(m.contentX(4), selectionOriginY))
+	if !m.HasSelection() {
+		t.Fatal("the drag selected nothing")
+	}
+	if result := m.HandleSelectionKey(esc); !result.Handled {
+		t.Fatal("escape did not answer a live selection")
+	}
+	if m.HasSelection() {
+		t.Error("escape left the selection behind")
+	}
+}
+
+func TestClearSelectionsExceptKeepsOneAlive(t *testing.T) {
+	kept := newSelectableModel(t, 40, 2, "alpha beta", "second line")
+	dropped := newSelectableModel(t, 40, 2, "alpha beta", "second line")
+	for _, m := range []*Model{kept, dropped} {
+		m.HandleSelectionKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+		if !m.HasSelection() {
+			t.Fatal("select-all selected nothing")
+		}
+	}
+
+	tabs := Tabs{Items: []Item{{View: kept}, {View: dropped}, {View: nil}}}
+	tabs.ClearSelectionsExcept(kept)
+
+	if !kept.HasSelection() {
+		t.Error("the document the gesture belongs to lost its selection")
+	}
+	if dropped.HasSelection() {
+		t.Error("a second document kept a selection; only one is ever alive")
 	}
 }

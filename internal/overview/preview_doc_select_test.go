@@ -8,8 +8,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -79,6 +81,71 @@ func TestPreviewDocClickWithoutDragStaysAClick(t *testing.T) {
 	}
 }
 
+func TestPreviewDocDoubleClickSelectsTheWord(t *testing.T) {
+	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
+
+	x, y := previewDocTextCell(t, m, 2, 7, 0)
+	for range 2 {
+		previewMouse(m, tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+		previewMouse(m, tea.MouseReleaseMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	}
+
+	if got := m.preview.doc.view().SelectionText(); len(got) != 1 || got[0] != "beta" {
+		t.Fatalf("double click selected %#v, want the word under the pointer", got)
+	}
+}
+
+func TestPreviewDocSelectionIsExclusiveAcrossTabs(t *testing.T) {
+	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
+	path := filepath.Join(m.catalog["a"].Path, "other.go")
+	if err := os.WriteFile(path, []byte("other content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "other.go"}))
+	if len(m.preview.doc.tabs.Items) != 2 {
+		t.Fatalf("the pane holds %d tabs, want the two files opened in it", len(m.preview.doc.tabs.Items))
+	}
+	m.WorkspacesView(previewWide, previewTall)
+
+	background := m.preview.doc.tabs.Items[0].View
+	background.HandleSelectionKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if !background.HasSelection() {
+		t.Fatal("select-all in the background tab selected nothing")
+	}
+
+	x, y := previewDocTextCell(t, m, 1, 0, 0)
+	previewMouse(m, tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	previewMouse(m, tea.MouseMotionMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseLeft}))
+	previewMouse(m, tea.MouseReleaseMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseLeft}))
+
+	if !m.preview.doc.view().HasSelection() {
+		t.Fatal("the drag selected nothing")
+	}
+	if background.HasSelection() {
+		t.Error("a selection in one tab left another tab's selection up")
+	}
+}
+
+func TestPreviewDocLostReleaseEndsTheGesture(t *testing.T) {
+	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
+
+	x, y := previewDocTextCell(t, m, 2, 0, 0)
+	previewMouse(m, tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	previewMouse(m, tea.MouseMotionMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseLeft}))
+
+	// The release never arrives: the pointer comes back over the window with no
+	// button down, which is where the handler drops the drag.
+	previewMouse(m, tea.MouseMotionMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseNone}))
+
+	view := m.preview.doc.view()
+	if view.AbandonSelection().Handled {
+		t.Error("the lost release left the pane holding a live gesture")
+	}
+	if got := view.SelectionText(); len(got) != 1 || got[0] != "alpha" {
+		t.Errorf("selected text = %#v, want the selection the gesture had made when it was lost", got)
+	}
+}
+
 func TestPreviewDocEscapeClearsTheSelectionBeforeClosingThePane(t *testing.T) {
 	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
 
@@ -117,4 +184,46 @@ func TestPreviewDocCopyChordCopiesTheSelection(t *testing.T) {
 	if got := m.preview.doc.view().SelectionText(); len(got) != 1 || got[0] != "alpha" {
 		t.Fatalf("copy dropped the selection: %#v", got)
 	}
+}
+
+func TestPreviewDocSelectionIsExclusiveWithTheTerminal(t *testing.T) {
+	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
+
+	// A terminal selection is up in the box beside the document.
+	m.preview.selection.SelectRange(
+		ui.SelectionPoint{Line: 0, Col: 0}, ui.SelectionPoint{Line: 0, Col: 4}, false)
+
+	x, y := previewDocTextCell(t, m, 2, 0, 0)
+	previewMouse(m, tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	previewMouse(m, tea.MouseMotionMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseLeft}))
+	previewMouse(m, tea.MouseReleaseMsg(tea.Mouse{X: x + 4, Y: y, Button: tea.MouseLeft}))
+	if !m.preview.doc.view().HasSelection() {
+		t.Fatal("the drag selected nothing")
+	}
+	if m.preview.selection.HasSelection() {
+		t.Error("a document selection left the terminal's highlight up beside it")
+	}
+
+	// And the other way: a gesture over the terminal takes the one live
+	// selection back from the document.
+	m.pressPreview(previewTerminalPress(t, m))
+	if m.preview.doc.view().HasSelection() {
+		t.Error("a terminal gesture left the document's highlight up beside it")
+	}
+}
+
+// previewTerminalPress is a press on the terminal box beside the document pane.
+func previewTerminalPress(t *testing.T, m *Model) mouse.MouseAction {
+	t.Helper()
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if kind, ok := region.Data.(string); !ok || kind != previewRegionKind {
+			continue
+		}
+		return mouse.MouseAction{
+			Type: mouse.ActionClick, X: region.Rect.X + 1, Y: region.Rect.Y + 1,
+			Region: &region,
+		}
+	}
+	t.Fatal("the preview terminal registered no hit region")
+	return mouse.MouseAction{}
 }

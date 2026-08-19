@@ -1,11 +1,15 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // docSelectFixture opens README.md raw in a document leaf and draws the frame,
@@ -159,7 +163,11 @@ func TestDocPaneSelectionIsExclusiveAcrossLeaves(t *testing.T) {
 	other := docview.New(nil)
 	other.SetSize(40, 2)
 	other.SetOrigin(0, 0)
+	other.SetSelection(p.terminalConfig().SelectionKeys(), false)
 	other.HandleSelectionKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if !other.HasSelection() {
+		t.Fatal("select-all in the other document selected nothing")
+	}
 	p.docs[99] = &docPane{leafID: 99}
 	p.docs[99].tabs.Append(other)
 
@@ -173,5 +181,75 @@ func TestDocPaneSelectionIsExclusiveAcrossLeaves(t *testing.T) {
 	}
 	if other.HasSelection() {
 		t.Error("a selection in one document left another document's selection up")
+	}
+}
+
+func TestDocPaneSelectionIsExclusiveWithTheTerminal(t *testing.T) {
+	p, doc, _ := docSelectFixture(t, "alpha beta\nsecond line\n")
+
+	// A terminal selection is up in the pane beside the document.
+	p.selection.SelectRange(
+		ui.SelectionPoint{Line: 0, Col: 0}, ui.SelectionPoint{Line: 0, Col: 4}, false)
+
+	x, y := docTextCell(t, p, 2, 0, 0)
+	docPress(p, x, y)
+	docDrag(p, x+4, y)
+	docRelease(p, x+4, y)
+	if !doc.view().HasSelection() {
+		t.Fatal("the drag selected nothing")
+	}
+	if p.selection.HasSelection() {
+		t.Error("a document selection left the terminal's highlight up beside it")
+	}
+
+	// And the other way: a gesture over the terminal takes the one live
+	// selection back from the document.
+	p.prepareTerminalClickOrDrag(mouse.MouseAction{
+		Type: mouse.ActionClick, X: 1, Y: 3,
+		Region: &mouse.Region{ID: regionPreviewPane, Rect: mouse.Rect{X: 0, Y: 2, W: 40, H: 10}},
+	})
+	if doc.view().HasSelection() {
+		t.Error("a terminal gesture left the document's highlight up beside it")
+	}
+}
+
+func TestDocPaneModalDuringADragEndsTheGesture(t *testing.T) {
+	p, doc, leaf := docSelectFixture(t, "alpha beta\nsecond line\n")
+
+	x, y := docTextCell(t, p, 2, 0, 0)
+	docPress(p, x, y)
+	docDrag(p, x+4, y)
+	if p.docSelectLeaf != leaf.ID {
+		t.Fatalf("the drag is held by leaf %d, want %d", p.docSelectLeaf, leaf.ID)
+	}
+
+	// A modal swallows the release, so nothing else ever ends this gesture.
+	p.viewMode = ViewModeCreate
+	p.handleMouseDragEnd(mouse.MouseAction{Type: mouse.ActionDragEnd, DragStartID: regionPaneLeaf})
+
+	if p.docSelectLeaf != 0 {
+		t.Errorf("leaf %d is still named as the gesture's, after the release was swallowed", p.docSelectLeaf)
+	}
+	if doc.view().AbandonSelection().Handled {
+		t.Error("the document is still holding a live gesture")
+	}
+}
+
+func TestDocPaneDragPastTheBottomPersistsTheScroll(t *testing.T) {
+	p, doc, _ := docSelectFixture(t, strings.Repeat("a line of text\n", 200))
+	saves := 0
+	p.shellStartupHooks = shellStartupHooks{
+		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
+		setWorkspaceState: func(string, state.WorkspaceState) error { saves++; return nil },
+	}
+
+	x, y := docTextCell(t, p, 200, 0, 0)
+	docPress(p, x, y)
+	docDrag(p, x, y+p.height)
+	if doc.view().ScrollOffset() == 0 {
+		t.Fatal("a drag past the bottom of the pane did not scroll the document")
+	}
+	if saves == 0 {
+		t.Error("the drag moved the pane's offset without persisting it, unlike every other scroll of it")
 	}
 }

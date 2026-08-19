@@ -45,18 +45,15 @@ func (p *Plugin) docSelectionView(leafID int) *docview.Model {
 	return doc.view()
 }
 
-// clearDocSelectionsExcept keeps one selection alive at a time, the way a
-// native app does: starting one anywhere drops the one before it.
+// clearDocSelectionsExcept drops every document selection this surface holds
+// but view's. It is what a terminal gesture calls, with no document to keep, to
+// take the one live selection for itself.
 func (p *Plugin) clearDocSelectionsExcept(view *docview.Model) {
 	for _, doc := range p.docs {
 		if doc == nil {
 			continue
 		}
-		for _, item := range doc.tabs.Items {
-			if item.View != nil && item.View != view {
-				item.View.ClearSelection()
-			}
-		}
+		doc.tabs.ClearSelectionsExcept(view)
 	}
 }
 
@@ -72,6 +69,9 @@ func (p *Plugin) pressDocSelection(leafID int, action mouse.MouseAction) tea.Cmd
 		return nil
 	}
 	p.clearDocSelectionsExcept(view)
+	// One selection at a time means one on this whole surface: the terminal is
+	// drawn beside this pane, so its highlight goes with the rest.
+	p.clearTerminalSelection()
 	result := view.HandleSelectionMouse(action)
 	if !result.Handled {
 		// The press landed on the header, the gutter or the padding: not a
@@ -113,15 +113,12 @@ func (p *Plugin) abandonDocSelection() {
 	p.docSelectLeaf = 0
 }
 
-// handleDocSelectionKey answers the chords that act on a document's selection.
-// Escape clears it, which is why it is asked before the pane's own esc.
+// handleDocSelectionKey answers the chords that act on a document's selection —
+// including escape, which the viewer answers so it clears a selection before the
+// pane's own esc can mean anything else.
 func (p *Plugin) handleDocSelectionKey(view *docview.Model, msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if view == nil {
 		return nil, false
-	}
-	if msg.String() == "esc" && view.HasSelection() {
-		view.ClearSelection()
-		return nil, true
 	}
 	result := view.HandleSelectionKey(msg)
 	if !result.Handled {
@@ -131,12 +128,13 @@ func (p *Plugin) handleDocSelectionKey(view *docview.Model, msg tea.KeyPressMsg)
 }
 
 // docSelectionResult is what this surface owes the engine's answer: a copy,
-// phrased and delivered as this plugin's own toast.
+// delivered as this plugin's own toast, and a drag that scrolled the document
+// persisted the way every other scroll of it is.
 func (p *Plugin) docSelectionResult(view *docview.Model, result textselect.Result) tea.Cmd {
-	if !result.CopyAsked {
-		return nil
+	if result.AutoScroll != 0 {
+		p.saveSelectionState()
 	}
-	return view.SelectionKeys().CopySelectionCmd(result.Copy, func(notice textselect.CopyNotice) tea.Msg {
+	return view.SelectionCopyCmd(result, func(notice textselect.CopyNotice) tea.Msg {
 		return app.ToastMsg{
 			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
 		}

@@ -1766,6 +1766,10 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// the same boundary where the auto-scroll tick abandons its gesture.
 	if p.isModalViewMode() {
 		p.pointer.Resolution = tty.ClickNone
+		// A document gesture is left holding a live drag at the same boundary,
+		// and nothing else ends it: the handler has already closed the drag, so
+		// the lost-release path never fires either.
+		p.abandonDocSelection()
 		return nil
 	}
 

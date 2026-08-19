@@ -2,6 +2,7 @@ package docview
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/textselect"
@@ -43,15 +44,6 @@ func (m *Model) SetOrigin(x, y int) {
 	m.originX, m.originY = x, y
 }
 
-// SelectionKeys are the chords this document answers, for a host phrasing the
-// copy its own notification type carries.
-func (m *Model) SelectionKeys() textselect.Keys {
-	if m == nil {
-		return textselect.Keys{}
-	}
-	return m.selection.Keys
-}
-
 // HasSelection reports whether anything in this document is selected. It is
 // asked by hosts outside a render — a key, a click elsewhere — so it settles the
 // expiry itself rather than reporting a selection the next frame will drop.
@@ -69,6 +61,17 @@ func (m *Model) ClearSelection() {
 		return
 	}
 	m.selection.Clear()
+}
+
+// ClearSelectionsExcept drops every selection in this group but keep's, which
+// is what makes one selection at a time the rule: starting one anywhere drops
+// the one before it. A nil keep drops them all.
+func (t Tabs) ClearSelectionsExcept(keep *Model) {
+	for _, item := range t.Items {
+		if item.View != keep {
+			item.View.ClearSelection()
+		}
+	}
 }
 
 // AbandonSelection ends a gesture whose release never arrived — the pointer left
@@ -97,26 +100,48 @@ func (m *Model) SelectionText() []string {
 // the window it is asking for is this model's own, and a host that moved it
 // would be the second place that knows how far a document can scroll. The rows
 // it reveals are selected by the next motion event, as the engine's contract
-// says, and the applied delta is reported so a host that persists its scroll
-// offset can see that it moved.
+// says. AutoScroll is reported back as the rows that were actually applied — a
+// document already at its last row moves nothing — so a host that persists the
+// offset saves exactly when a drag changed it.
 func (m *Model) HandleSelectionMouse(action mouse.MouseAction) textselect.Result {
 	if m == nil {
 		return textselect.Result{}
 	}
 	result := m.selection.HandleMouse(action, selectionSource{m})
 	if result.AutoScroll != 0 {
+		before := m.scroll
 		m.Scroll(result.AutoScroll)
+		result.AutoScroll = m.scroll - before
 	}
 	return result
 }
 
-// HandleSelectionKey answers the chords that act on the selection: copy, and
-// select-all.
+// HandleSelectionKey answers the chords that act on the selection: copy,
+// select-all, and escape.
+//
+// Escape belongs here rather than in each host: what it means to a live
+// selection is the selection's business, and a host that wrote the rule itself
+// would be a host the other surface has to remember to match.
 func (m *Model) HandleSelectionKey(msg tea.KeyMsg) textselect.Result {
 	if m == nil {
 		return textselect.Result{}
 	}
+	if press, ok := msg.(tea.KeyPressMsg); ok && press.String() == "esc" && m.HasSelection() {
+		m.ClearSelection()
+		return textselect.Result{Handled: true, Changed: true}
+	}
 	return m.selection.HandleKey(msg, selectionSource{m})
+}
+
+// SelectionCopyCmd delivers the copy an engine result asked for, phrased by the
+// shared pipeline and wrapped in whatever notification type the host uses. A
+// result that asked for nothing produces no command, so a host can hand every
+// result it gets straight here.
+func (m *Model) SelectionCopyCmd(result textselect.Result, wrap func(textselect.CopyNotice) tea.Msg) tea.Cmd {
+	if m == nil || !result.CopyAsked {
+		return nil
+	}
+	return m.selection.Keys.CopySelectionCmd(result.Copy, wrap)
 }
 
 // expireSelection drops a selection whose rows are about to be replaced.
@@ -145,21 +170,32 @@ var _ textselect.Source = selectionSource{}
 // entirely and stays the host's ordinary click.
 func (s selectionSource) ContentRect() mouse.Rect {
 	m := s.m
-	gutter := m.display().gutterWidth
 	return mouse.Rect{
-		X: m.originX + gutter,
+		X: m.originX + m.display().gutterWidth,
 		Y: m.originY,
-		W: max(m.width-gutter, 0),
+		W: s.contentWidth(),
 		H: m.height,
 	}
 }
 
+// Line is the row as it reaches the screen, not as the layout holds it: with
+// wrap off a long line keeps its whole text and is truncated on the way out
+// (fitLine), and the columns past the pane's edge were never drawn. Cutting the
+// row to the drawn width here is what stops a drag over the pane beside this one
+// from copying text nobody could see, on the row it started on and on every
+// whole row a multi-row selection covers.
 func (s selectionSource) Line(i int) string {
 	rows := s.m.display().rows
 	if i < 0 || i >= len(rows) {
 		return ""
 	}
-	return rows[i]
+	return ansi.Truncate(rows[i], s.contentWidth(), "")
+}
+
+// contentWidth is how many columns of a row the pane draws, which is its width
+// less the gutter in front of it.
+func (s selectionSource) contentWidth() int {
+	return max(s.m.width-s.m.display().gutterWidth, 0)
 }
 
 func (s selectionSource) LineCount() int { return len(s.m.display().rows) }

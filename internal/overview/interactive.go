@@ -361,6 +361,9 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 	if !ok || action.Region == nil {
 		return nil
 	}
+	// A document pane is drawn beside the terminal, so its highlight is one of
+	// the selections a gesture starting here takes over from.
+	m.clearPreviewDocSelections(nil)
 
 	modified := action.Shift || action.Alt
 	linkCmd, claimed := m.activatePreviewLinkAt(action, modified)
