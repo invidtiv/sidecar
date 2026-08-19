@@ -86,6 +86,10 @@ type Model struct {
 	// a new file, a re-read, wrap, a width change — leaves it pointing at rows
 	// that are no longer the ones the user picked.
 	selectionKey layoutKey
+
+	// search is this document's in-file search: its query, its matches and the
+	// layout they were found in. See search.go.
+	search searchState
 }
 
 // New creates an empty document viewer. A nil renderer uses the default
@@ -241,20 +245,36 @@ func (m *Model) View() string {
 	}
 
 	display := m.display()
-	rows := make([]string, m.height)
-	for i := range rows {
+	body := m.contentHeight()
+	rows := make([]string, 0, m.height)
+	for i := 0; i < body; i++ {
 		lineIndex := m.scroll + i
 		line := ""
 		if lineIndex < len(display.rows) {
 			// The highlight is painted onto the row on its way to the screen,
 			// never into the cached layout: it belongs to this frame, and the
 			// gutter cell in front of it is not selectable content.
-			line = display.gutters[lineIndex] +
-				m.selection.DecorateRow(display.rows[lineIndex], lineIndex)
+			line = display.gutters[lineIndex] + m.decorateRow(display.rows[lineIndex], lineIndex)
 		}
-		rows[i] = fitLine(line, m.width)
+		rows = append(rows, fitLine(line, m.width))
+	}
+	if m.searchActive() {
+		rows = append(rows, fitLine(m.searchBar(), m.width))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// contentHeight is how many rows of the document the pane draws, which is its
+// height less any chrome docview itself owns — today the search bar. Scrolling,
+// clamping and the selection's hit box all measure the document through this
+// rather than through height, so opening search cannot leave the last row
+// selectable but undrawn.
+func (m *Model) contentHeight() int {
+	h := m.height
+	if m.searchActive() {
+		h--
+	}
+	return max(h, 0)
 }
 
 // HandleKey applies document scrolling keys.
@@ -265,9 +285,9 @@ func (m *Model) HandleKey(k tea.KeyMsg) bool {
 	case "k", "up":
 		m.Scroll(-1)
 	case "ctrl+d", "pgdown":
-		m.Scroll(max(m.height/2, 1))
+		m.Scroll(max(m.contentHeight()/2, 1))
 	case "ctrl+u", "pgup":
-		m.Scroll(-max(m.height/2, 1))
+		m.Scroll(-max(m.contentHeight()/2, 1))
 	case "g", "home":
 		m.scroll = 0
 	case "G", "end":
@@ -333,6 +353,13 @@ type displayRows struct {
 	rows        []string
 	starts      []int
 	gutterWidth int
+
+	// lineStarts maps every content line — banner rows included, which starts
+	// does not — to the first visual row it occupies, with a final sentinel
+	// equal to len(rows). lineStarts[i+1]-lineStarts[i] is therefore how many
+	// rows line i wrapped onto, which is what lets search paint a match that
+	// straddles a wrap boundary on both of the rows it lands on. See search.go.
+	lineStarts []int
 }
 
 // docContent is the document's text before layout. banner counts leading rows
@@ -397,6 +424,7 @@ func (m *Model) layOutContent(content docContent) displayRows {
 		gutterWidth: gutter.Width(),
 	}
 	for i, line := range content.lines {
+		out.lineStarts = append(out.lineStarts, len(out.rows))
 		first, cont := gutter.Blank(), gutter.Blank()
 		if i >= content.banner {
 			first = gutter.Number(i - content.banner + 1)
@@ -414,6 +442,7 @@ func (m *Model) layOutContent(content docContent) displayRows {
 			out.add(prefix, segment)
 		}
 	}
+	out.lineStarts = append(out.lineStarts, len(out.rows))
 	return out
 }
 
@@ -509,7 +538,7 @@ func (m *Model) invalidateRender() {
 }
 
 func (m *Model) maxScroll() int {
-	return max(len(m.display().rows)-m.height, 0)
+	return max(len(m.display().rows)-m.contentHeight(), 0)
 }
 
 func (m *Model) clampScroll() {
