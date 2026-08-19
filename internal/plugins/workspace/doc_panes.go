@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -28,7 +29,7 @@ type docPane struct {
 	// mode is the search surface this pane is showing over its document, or nil.
 	// It is rooted at this pane's own root, which is what makes the same code
 	// serve project and global Workspaces.
-	mode *docSearchMode
+	mode *panesearch.Mode
 	// modeRegions are the surface's hit regions from the last render, already at
 	// their true positions. They are registered after the pane tree's own, so a
 	// click inside the modal is not taken by the leaf drawn under it.
@@ -876,7 +877,7 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 		// A pane closed with a search up takes the search's work with it: an
 		// unclosed project search leaves rg running to its 30s timeout.
 		if doc := p.docs[leaf.ContentID]; doc != nil {
-			doc.mode.close()
+			doc.mode.Close()
 		}
 		delete(p.docs, leaf.ContentID)
 	case PaneIssue:
@@ -1063,6 +1064,15 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if doc.mode != nil {
 		return true, p.handleDocSearchKey(doc, msg)
 	}
+	// In-file search is the same rule one level down: while its bar is up it
+	// owns every key in the pane, and only esc/enter give the document back.
+	// docview answers handled=false when no search is running, so this costs
+	// the ordinary key path nothing.
+	if view := doc.view(); view != nil {
+		if handled, cmd := view.HandleSearchKey(msg); handled {
+			return true, cmd
+		}
+	}
 	// Before the pane's own keys: esc clears a selection rather than hiding the
 	// pane out from under it, and the copy chord must not fall through to a
 	// document key that happens to share it.
@@ -1070,6 +1080,11 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, cmd
 	}
 	switch msg.String() {
+	case "/":
+		if view := doc.view(); view != nil {
+			view.StartSearch()
+		}
+		return true, nil
 	case "ctrl+p":
 		return true, p.openDocFinder(doc)
 	case "f":

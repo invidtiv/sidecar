@@ -12,6 +12,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -50,6 +51,10 @@ type previewDoc struct {
 	focused bool
 	nextID  int
 	epoch   uint64
+	// mode is the search surface this pane is showing over its document, or
+	// nil; modeRegions are the hit regions its last render earned.
+	mode        *panesearch.Mode
+	modeRegions []mouse.Region
 }
 
 func (d *previewDoc) view() *docview.Model {
@@ -512,6 +517,12 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 	if m.preview.doc != nil {
 		m.preview.doc.focused = leaf.Kind == panelayout.Document
 	}
+	// A pane that has lost the keyboard drops whatever search it was showing,
+	// enforced at the single focus writer so every gesture that moves focus
+	// obeys it without having to remember to.
+	if cmd2 := m.closeUnfocusedPreviewDocSearch(); cmd2 != nil {
+		cmd = tea.Batch(cmd, cmd2)
+	}
 	if m.preview.issue != nil {
 		m.preview.issue.focused = leaf.Kind == panelayout.Issue
 		if view := m.preview.issue.view(); view != nil {
@@ -674,12 +685,34 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	key := msg.String()
 	if m.preview.doc.focused {
+		// A live pane search surface owns every key in the pane, before the
+		// document's own keys and before the browser's: `/` here is a query
+		// character, `q` is a q.
+		if m.preview.doc.mode != nil {
+			return true, m.handlePreviewDocSearchKey(msg)
+		}
+		// In-file search is the same rule one level down, and docview answers
+		// handled=false when no search is running.
+		if view := m.preview.doc.view(); view != nil {
+			if handled, cmd := view.HandleSearchKey(msg); handled {
+				return true, cmd
+			}
+		}
 		// Before the pane's own keys: esc clears a selection rather than closing
 		// the pane out from under it.
 		if cmd, handled := m.handlePreviewDocSelectionKey(msg); handled {
 			return true, cmd
 		}
 		switch key {
+		case "/":
+			if view := m.preview.doc.view(); view != nil {
+				view.StartSearch()
+			}
+			return true, nil
+		case "ctrl+p":
+			return true, m.openPreviewDocFinder()
+		case "f":
+			return true, m.openPreviewDocProjectSearch()
 		case "q", "esc":
 			return true, m.closePreviewDoc()
 		case "m":
@@ -718,7 +751,15 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := m.composePreviewHeader(docview.LayoutTabStrip(doc.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, m.PreviewFocused() && doc.focused).Row, box.W, panelayout.Document)
+	tabsWidth := ui.ReserveHeaderClose(box.W).TabsWidth
+	focused := m.PreviewFocused() && doc.focused
+	strip := docview.LayoutTabStrip(doc.tabs, tabsWidth, focused)
+	if doc.mode != nil {
+		// A pane taking search keystrokes says so where it says which file it
+		// holds, exactly as the project workspace does.
+		strip = docview.LayoutSearchTabStrip(doc.tabs, doc.mode.HeaderLabel(), tabsWidth, focused)
+	}
+	header := m.composePreviewHeader(strip.Row, box.W, panelayout.Document)
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)
@@ -726,6 +767,14 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	}
 	if contentHeight <= 0 {
 		return header
+	}
+	// A live search surface is composited over the body as a modal scoped to
+	// that box, leaving the pane's own header row uncovered: it is where the
+	// pane says it is in Find or Search mode.
+	if doc.mode != nil {
+		body = m.renderPreviewDocSearchOverlay(doc, body, termpreview.Box{
+			X: box.X, Y: box.Y + termpreview.HeaderRows, W: box.W, H: contentHeight,
+		})
 	}
 	return header + "\n" + body
 }

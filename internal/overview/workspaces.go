@@ -649,6 +649,12 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.resourcePaneFocused() {
 		return ctxGlobalWorkspacesResource
 	}
+	if m.previewDocSearchActive() {
+		return ctxGlobalWorkspacesDocSearch
+	}
+	if m.previewDocFindActive() {
+		return ctxGlobalWorkspacesDocFind
+	}
 	if m.docPaneFocused() {
 		return "global-workspaces-doc"
 	}
@@ -773,6 +779,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	if m.workspacesMouse == nil {
 		return nil
+	}
+	// A pane-scoped search surface takes the pointer the way a modal does: it
+	// hit-tests its own regions, which panemodal placed where the pane actually
+	// is, so a click inside it cannot reach the document under it.
+	if m.previewDocSearchActive() {
+		return m.handlePreviewDocSearchMouse(mouseMsg)
 	}
 	// Every mouse event counts as mouse activity for the live pane, whether or
 	// not it is routed there: the terminal component's bare-"[" gate reads a

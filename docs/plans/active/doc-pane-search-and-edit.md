@@ -58,21 +58,24 @@ workspace panes, overview panes) for free, or the design is wrong.
 
 ## Unresolved questions
 
-*(The `ctrl+p` / `f` question is settled — see below.)*
-- Whether the search UI in panes is a pane-scoped modal bar (like the
-  workspace `docSearchMode` overlay via `internal/panemodal`) or an in-pane
-  bottom bar. Recommendation: split the two concerns rather than pick one —
-  a one-row bar inside the pane body rendered by docview itself (so overview
-  inherits it with zero surface code), but *key ownership* modelled on the
-  existing `doc.mode` precedence (`doc_panes.go:1062-1065`), where a live
-  search surface owns every key in the pane and esc closes it. Decide at
-  Phase 2 start.
-- `docSearchMode` is currently the workspace's file-finder / project-search
-  overlay, not in-file search. Confirm at Phase 2 start whether in-file search
-  becomes a third mode on that type or a sibling — the name is already taken
-  and the plan's `workspace-doc-search` keymap context
-  (`bindings.go:221-223`) belongs to the existing overlay, so the new context
-  needs a distinct name (e.g. `workspace-doc-find`).
+*(All of the questions below were settled in Phases 1 and 2. Kept as the
+record of what was decided.)*
+- **Settled (Phase 1):** the search UI in panes is a one-row bar inside the
+  pane body, rendered by `docview.Model.View()` itself, so both surfaces
+  inherit it with no rendering code. Key ownership is modelled on the existing
+  `doc.mode` precedence: a live search owns every key in the pane and esc
+  closes it.
+- **Settled (Phase 2):** in-file search is a *sibling* of the finder /
+  project-search overlay, not a third mode on it. The overlay keeps
+  `workspace-doc-search`; the in-file bar is `workspace-doc-find` on the
+  project surface and `global-workspaces-doc-find` in the browser. Command IDs
+  are the Files plugin's own (`search-content`, `confirm`, `next-match`,
+  `prev-match`, `cancel`) so one feature has one vocabulary everywhere.
+- **Settled (Phase 2):** the finder / project-search overlay moved out of the
+  workspace plugin into `internal/panesearch` (`Mode`, `Outcome`, `Caches`).
+  Binding `ctrl+p` / `f` in the browser by copying 250 lines would have been
+  the seam failure the plan warns about; extracting it made the browser's host
+  file the only new per-surface code.
 
 ## Phases
 

@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -73,10 +74,10 @@ func TestDocPaneSearchOpensInBothScopes(t *testing.T) {
 			if !handled {
 				t.Fatal("ctrl+p was not handled by the focused document pane")
 			}
-			if doc.mode == nil || doc.mode.kind != docSearchFinder {
+			if doc.mode == nil || doc.mode.Kind() != panesearch.KindFinder {
 				t.Fatalf("ctrl+p left mode %#v, want the file finder", doc.mode)
 			}
-			if got := doc.mode.finder.Root(); got != doc.root {
+			if got := doc.mode.Finder().Root(); got != doc.root {
 				t.Fatalf("finder root = %q, want the pane's own root %q", got, doc.root)
 			}
 			if p.FocusContext() != "workspace-doc-search" {
@@ -93,10 +94,10 @@ func TestDocPaneSearchOpensInBothScopes(t *testing.T) {
 			}
 
 			handled, _ = p.handleDocKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
-			if !handled || doc.mode == nil || doc.mode.kind != docSearchProject {
+			if !handled || doc.mode == nil || doc.mode.Kind() != panesearch.KindProject {
 				t.Fatalf("f left mode %#v, want the project search", doc.mode)
 			}
-			if got := doc.mode.search.Root(); got != doc.root {
+			if got := doc.mode.Search().Root(); got != doc.root {
 				t.Fatalf("project search root = %q, want the pane's own root %q", got, doc.root)
 			}
 			p.handleDocSearchKey(doc, tea.KeyPressMsg{Code: tea.KeyEsc})
@@ -133,7 +134,7 @@ func TestDocPaneSearchAbsorbsEveryKey(t *testing.T) {
 	if p.activeDocPaneOrNil() == nil {
 		t.Fatal("q while searching hid the pane")
 	}
-	if got := doc.mode.finder.Query(); got != "qxw" {
+	if got := doc.mode.Finder().Query(); got != "qxw" {
 		t.Fatalf("finder query = %q, want the typed text %q", got, "qxw")
 	}
 	if len(doc.tabs.Items) != 1 {
@@ -161,7 +162,7 @@ func TestDocPaneSearchOwnsTab(t *testing.T) {
 	if doc.mode == nil {
 		t.Fatal("tab dropped the search instead of moving focus inside it")
 	}
-	if got := doc.mode.finder.Query(); got != "g" {
+	if got := doc.mode.Finder().Query(); got != "g" {
 		t.Fatalf("finder query after tab = %q, want %q", got, "g")
 	}
 	// The surface still has the keyboard, so esc still closes it.
@@ -173,7 +174,7 @@ func TestDocPaneSearchOwnsTab(t *testing.T) {
 	// The project search uses tab for its own query ↔ results focus, and must
 	// get it for the same reason.
 	p.handleDocKey(tea.KeyPressMsg{Code: 'f', Text: "f"})
-	if doc.mode == nil || doc.mode.kind != docSearchProject {
+	if doc.mode == nil || doc.mode.Kind() != panesearch.KindProject {
 		t.Fatalf("f left mode %#v, want the project search", doc.mode)
 	}
 	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
@@ -232,7 +233,7 @@ func TestDocPaneSearchOpensResultInTheActiveTabAndInANewTab(t *testing.T) {
 	composePaneTree(t, p, 120, 30)
 	doc := p.focusedDocPane()
 
-	cmd := p.applyDocSearchOutcome(doc, docSearchOutcome{Open: true, Path: "docs/guide.md", Line: 200}, nil)
+	cmd := p.applyDocSearchOutcome(doc, panesearch.Outcome{Open: true, Path: "docs/guide.md", Line: 200}, nil)
 	applyDocOpen(t, p, cmd)
 	if len(doc.tabs.Items) != 1 {
 		t.Fatalf("a plain pick opened %d tabs, want the active one replaced", len(doc.tabs.Items))
@@ -245,7 +246,7 @@ func TestDocPaneSearchOpensResultInTheActiveTabAndInANewTab(t *testing.T) {
 		t.Fatalf("jump to line 200 left the document at offset %d", view.ScrollOffset())
 	}
 
-	cmd = p.applyDocSearchOutcome(doc, docSearchOutcome{Open: true, Path: "cmd/main.go", NewTab: true}, nil)
+	cmd = p.applyDocSearchOutcome(doc, panesearch.Outcome{Open: true, Path: "cmd/main.go", NewTab: true}, nil)
 	applyDocOpen(t, p, cmd)
 	if len(doc.tabs.Items) != 2 {
 		t.Fatalf("shift+enter opened %d tabs, want a second one", len(doc.tabs.Items))
@@ -255,7 +256,7 @@ func TestDocPaneSearchOpensResultInTheActiveTabAndInANewTab(t *testing.T) {
 	}
 
 	// An already-open file is focused rather than opened twice.
-	cmd = p.applyDocSearchOutcome(doc, docSearchOutcome{Open: true, Path: "docs/guide.md"}, nil)
+	cmd = p.applyDocSearchOutcome(doc, panesearch.Outcome{Open: true, Path: "docs/guide.md"}, nil)
 	applyDocOpen(t, p, cmd)
 	if len(doc.tabs.Items) != 2 {
 		t.Fatalf("reopening an open file made %d tabs", len(doc.tabs.Items))
@@ -273,7 +274,7 @@ func TestDocPaneFinderEnterLoadsTheMatch(t *testing.T) {
 	scanFinder(t, p, p.openDocFinder(doc))
 
 	typeDocSearch(p, "guide")
-	if len(doc.mode.finder.Matches()) == 0 {
+	if len(doc.mode.Finder().Matches()) == 0 {
 		t.Fatal("typing produced no matches to open")
 	}
 	cmd := p.handleDocSearchKey(doc, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -324,7 +325,7 @@ func TestDocPaneSearchClickHitsTheModal(t *testing.T) {
 	doc := p.focusedDocPane()
 	scanFinder(t, p, p.openDocFinder(doc))
 	typeDocSearch(p, "g")
-	if len(doc.mode.finder.Matches()) == 0 {
+	if len(doc.mode.Finder().Matches()) == 0 {
 		t.Fatal("no matches, so no rows to click")
 	}
 
@@ -403,7 +404,7 @@ func TestListFOpensAFinderPane(t *testing.T) {
 	if doc == nil {
 		t.Fatal("F opened no document pane")
 	}
-	if doc.mode == nil || doc.mode.kind != docSearchFinder {
+	if doc.mode == nil || doc.mode.Kind() != panesearch.KindFinder {
 		t.Fatalf("F left mode %#v, want the file finder", doc.mode)
 	}
 	// The update that opened it also sweeps searches off unfocused panes; the
@@ -559,16 +560,16 @@ func TestDocPaneSearchMouseRouting(t *testing.T) {
 	if len(rows) < 2 {
 		t.Fatalf("the finder registered %d row regions, want at least two to click between", len(rows))
 	}
-	if doc.mode.finder.Cursor() != 0 {
-		t.Fatalf("finder cursor starts at %d, want the first row", doc.mode.finder.Cursor())
+	if doc.mode.Finder().Cursor() != 0 {
+		t.Fatalf("finder cursor starts at %d, want the first row", doc.mode.Finder().Cursor())
 	}
 	second := rows[1]
 	p.handleMouse(clickAt(second.Rect.X+1, second.Rect.Y))
 	if doc.mode == nil {
 		t.Fatal("a click on a row dismissed the finder")
 	}
-	if doc.mode.finder.Cursor() != 1 {
-		t.Fatalf("a click on the second row left the cursor at %d", doc.mode.finder.Cursor())
+	if doc.mode.Finder().Cursor() != 1 {
+		t.Fatalf("a click on the second row left the cursor at %d", doc.mode.Finder().Cursor())
 	}
 
 	p.handleMouse(clickAt(0, 0))
@@ -725,10 +726,10 @@ func TestDocPaneFinderRowsAnswerTheMouse(t *testing.T) {
 	doc := p.focusedDocPane()
 	scanFinder(t, p, p.openDocFinder(doc))
 	typeDocSearch(p, "g")
-	if len(doc.mode.finder.Matches()) < 2 {
-		t.Fatalf("need two matches to tell a click apart, got %d", len(doc.mode.finder.Matches()))
+	if len(doc.mode.Finder().Matches()) < 2 {
+		t.Fatalf("need two matches to tell a click apart, got %d", len(doc.mode.Finder().Matches()))
 	}
-	second := doc.mode.finder.Matches()[1].Path
+	second := doc.mode.Finder().Matches()[1].Path
 
 	p.View(width, height)
 	x, y, ok := drawnRowCell(p.View(width, height), second)
@@ -740,7 +741,7 @@ func TestDocPaneFinderRowsAnswerTheMouse(t *testing.T) {
 	if doc.mode == nil {
 		t.Fatal("a click on a row dismissed the finder")
 	}
-	if got := doc.mode.finder.Cursor(); got != 1 {
+	if got := doc.mode.Finder().Cursor(); got != 1 {
 		t.Fatalf("a click on the second row left the cursor at %d, want 1", got)
 	}
 

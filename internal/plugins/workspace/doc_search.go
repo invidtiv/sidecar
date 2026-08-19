@@ -4,19 +4,19 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panemodal"
-	"github.com/marcus/sidecar/internal/projectsearch"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
 // A document pane can host the same two search surfaces the Files plugin has:
-// the fuzzy file finder (ctrl+p) and the project-wide ripgrep search (f). Both
-// are rooted at the pane's own doc.root, which is what makes this work
-// unchanged in project and global Workspaces — a pane carries the workspace or
-// shell directory it was opened against, and neither surface asks anything else
-// about the host.
+// the fuzzy file finder (ctrl+p) and the project-wide ripgrep search (f). What
+// they are lives in internal/panesearch, which the global Workspaces browser
+// binds too; what is left here is where they are drawn and what happens to the
+// file they pick. Both are rooted at the pane's own doc.root — a pane carries
+// the workspace or shell directory it was opened against, and neither surface
+// asks anything else about the host.
 //
 // The surface is drawn as a modal scoped to the pane's box (internal/panemodal),
 // below the pane's header row: sized to its own content and centred with the
@@ -26,203 +26,6 @@ import (
 // never a bare inline widget stranded in a large pane. The header row is never
 // covered either way, so a pane always says both which file it holds and what
 // it is doing.
-
-// docSearchKind names which surface a pane is showing.
-type docSearchKind int
-
-const (
-	docSearchFinder docSearchKind = iota + 1
-	docSearchProject
-)
-
-// docSearchMode is one pane's live search surface. Exactly one of finder and
-// search is set; the host talks to it through the small vocabulary below so
-// neither the key path nor the render path asks which surface it is driving.
-type docSearchMode struct {
-	kind   docSearchKind
-	finder *filefind.Finder
-	search *projectsearch.Search
-}
-
-// docSearchOutcome is the two surfaces' Result narrowed to what this host can
-// act on: drop the mode, or load a file into the pane.
-type docSearchOutcome struct {
-	Cancelled bool
-	Open      bool
-	Path      string
-	Line      int
-	NewTab    bool
-}
-
-func (m *docSearchMode) name() string {
-	if m != nil && m.kind == docSearchProject {
-		return "Search"
-	}
-	return "Find"
-}
-
-// query is what the user has typed, for the pane header.
-func (m *docSearchMode) query() string {
-	if m == nil {
-		return ""
-	}
-	if m.kind == docSearchProject {
-		if m.search != nil && m.search.State != nil {
-			return m.search.State.Query
-		}
-		return ""
-	}
-	if m.finder != nil {
-		return m.finder.Query()
-	}
-	return ""
-}
-
-// headerLabel is the mode's identity in the pane header: the surface's name and
-// the query so far, so a pane in search mode never reads as a pane showing a
-// file.
-func (m *docSearchMode) headerLabel() string {
-	if m == nil {
-		return ""
-	}
-	label := "⌕ " + m.name()
-	if q := m.query(); q != "" {
-		label += " " + q
-	}
-	return label
-}
-
-// close releases whatever the surface still owns. The finder owns nothing (its
-// file list belongs to the plugin's per-root cache); the project search owns a
-// running ripgrep process, which would otherwise keep going to its timeout.
-func (m *docSearchMode) close() {
-	if m == nil {
-		return
-	}
-	if m.kind == docSearchProject {
-		m.search.Close()
-	}
-}
-
-func (m *docSearchMode) setSize(width, height int) {
-	if m == nil || m.kind != docSearchProject || m.search == nil {
-		return
-	}
-	if width > 0 && height > 0 {
-		m.search.SetSize(width, height)
-	}
-}
-
-// view draws the surface at the given size. fill is panemodal's answer to
-// whether the box has room to show the pane around the modal; passing it
-// through is what makes the tight case a modal that owns the pane rather than a
-// small box floating on an empty field.
-func (m *docSearchMode) view(width, height int, fill bool, handler *mouse.Handler) string {
-	if m == nil {
-		return ""
-	}
-	if m.kind == docSearchProject {
-		if m.search == nil {
-			return ""
-		}
-		m.search.SetFill(fill)
-		return m.search.View(width, height, handler)
-	}
-	if m.finder == nil {
-		return ""
-	}
-	m.finder.SetFill(fill)
-	return m.finder.View(width, height, handler)
-}
-
-func (m *docSearchMode) handleKey(msg tea.KeyPressMsg) (docSearchOutcome, tea.Cmd) {
-	if m == nil {
-		return docSearchOutcome{Cancelled: true}, nil
-	}
-	if m.kind == docSearchProject {
-		if m.search == nil {
-			return docSearchOutcome{Cancelled: true}, nil
-		}
-		res, cmd := m.search.HandleKey(msg)
-		return projectSearchOutcome(res), cmd
-	}
-	if m.finder == nil {
-		return docSearchOutcome{Cancelled: true}, nil
-	}
-	// The finder has no "beside what I am looking at" key of its own: it reports
-	// NewTab only because hosts that have tabs need somewhere to put the answer.
-	// shift+enter is that key here, matching the project search's.
-	if msg.String() == "shift+enter" {
-		matches := m.finder.Matches()
-		if cursor := m.finder.Cursor(); cursor >= 0 && cursor < len(matches) {
-			path := matches[cursor].Path
-			m.finder.Reset()
-			return docSearchOutcome{Open: true, Path: path, NewTab: true}, nil
-		}
-		return docSearchOutcome{}, nil
-	}
-	res, cmd := m.finder.HandleKey(msg)
-	return finderOutcome(res), cmd
-}
-
-func (m *docSearchMode) handleMouse(msg tea.MouseMsg, handler *mouse.Handler) (docSearchOutcome, tea.Cmd) {
-	if m == nil {
-		return docSearchOutcome{}, nil
-	}
-	if m.kind == docSearchProject {
-		if m.search == nil {
-			return docSearchOutcome{}, nil
-		}
-		res, cmd := m.search.HandleMouse(msg, handler)
-		return projectSearchOutcome(res), cmd
-	}
-	if m.finder == nil {
-		return docSearchOutcome{}, nil
-	}
-	res, cmd := m.finder.HandleMouse(msg, handler)
-	return finderOutcome(res), cmd
-}
-
-// update feeds the surface its own async traffic. Both surfaces drop messages
-// stamped with an epoch other than the one they were opened at.
-func (m *docSearchMode) update(msg tea.Msg) tea.Cmd {
-	if m == nil {
-		return nil
-	}
-	if m.kind == docSearchProject {
-		if m.search == nil {
-			return nil
-		}
-		return m.search.Update(msg)
-	}
-	if m.finder == nil {
-		return nil
-	}
-	return m.finder.Update(msg)
-}
-
-func finderOutcome(res filefind.Result) docSearchOutcome {
-	switch res.Outcome {
-	case filefind.OutcomeCancelled:
-		return docSearchOutcome{Cancelled: true}
-	case filefind.OutcomeOpen:
-		return docSearchOutcome{Open: true, Path: res.Path, Line: res.Line, NewTab: res.NewTab}
-	}
-	return docSearchOutcome{}
-}
-
-func projectSearchOutcome(res projectsearch.Result) docSearchOutcome {
-	switch res.Outcome {
-	case projectsearch.OutcomeCancelled:
-		return docSearchOutcome{Cancelled: true}
-	// A pane has no external editor to hand a hit to, and the gestures that
-	// produce it — ctrl+e, a double-click on a row — are the user asking for the
-	// hit rather than for an editor. They open it in the pane.
-	case projectsearch.OutcomeOpen, projectsearch.OutcomeOpenExternal:
-		return docSearchOutcome{Open: true, Path: res.Path, Line: res.Line, NewTab: res.NewTab}
-	}
-	return docSearchOutcome{}
-}
 
 // docSearchMsg wraps one search surface's own async message on its way back to
 // the pane that issued it. The surfaces' messages are broadcast types the Files
@@ -279,6 +82,19 @@ func (p *Plugin) docSearchActive() bool {
 	return p.docSearchPane() != nil
 }
 
+// docFindActive reports whether the focused document is running an in-file
+// search (`/`). It is a different surface from docSearchActive's finder overlay
+// — the bar belongs to docview and is drawn inside the document — but it makes
+// the same claim on the keyboard, so the focus context and the text-input gate
+// read it the same way.
+func (p *Plugin) docFindActive() bool {
+	doc := p.focusedDocPane()
+	if doc == nil || doc.mode != nil {
+		return false
+	}
+	return doc.view().SearchActive()
+}
+
 // docPaneByLeaf finds a pane by its tree leaf, which is how a wrapped async
 // message names the pane that issued it.
 func (p *Plugin) docPaneByLeaf(leafID int) *docPane {
@@ -290,64 +106,14 @@ func (p *Plugin) docPaneByLeaf(leafID int) *docPane {
 	return nil
 }
 
-// docFinderCacheTTL is how long a pane's file list is trusted without a rescan.
-//
-// The Files plugin has a filesystem watcher and marks its cache dirty the moment
-// the tree moves; Workspaces has no such signal — its only watcher is on the
-// shell manifest — so there is nothing here to invalidate the list precisely.
-// A short lifetime is the honest substitute: the second ctrl+p in a working
-// session costs nothing, and a finder opened minutes later still sees files
-// created since.
-const docFinderCacheTTL = 30 * time.Second
-
-// docFinderCache is one root's file list plus when its last scan was started.
-type docFinderCache struct {
-	cache   *filefind.Cache
-	scanned time.Time
-}
-
-// finderCache returns the file list for root, shared by every pane rooted
-// there. Panes on one root are looking at one directory tree, so they walk it
-// once between them rather than once per ctrl+p: a fresh cache per open meant
-// every open paid a full ScanPaths walk (up to 50k files), and open/esc/open
-// spawned walks whose results were then thrown away.
-func (p *Plugin) finderCache(root string) *filefind.Cache {
-	if p.docFinderCaches == nil {
-		p.docFinderCaches = make(map[string]*docFinderCache)
-	}
-	entry := p.docFinderCaches[root]
-	if entry == nil {
-		entry = &docFinderCache{cache: &filefind.Cache{}}
-		p.docFinderCaches[root] = entry
-	}
-	if !entry.scanned.IsZero() && time.Since(entry.scanned) > docFinderCacheTTL {
-		entry.cache.MarkDirty()
-	}
-	return entry.cache
-}
-
-// noteFinderScan records that a scan of root has just been issued. Only a scan
-// that actually started moves the clock, so a cache that answered from memory
-// keeps the age of the walk it is still showing.
-func (p *Plugin) noteFinderScan(root string, started bool) {
-	if !started {
-		return
-	}
-	if entry := p.docFinderCaches[root]; entry != nil {
-		entry.scanned = time.Now()
-	}
-}
-
 // openDocFinder opens the fuzzy file finder in the focused document pane,
 // rooted at that pane's directory.
 func (p *Plugin) openDocFinder(doc *docPane) tea.Cmd {
 	if doc == nil || p.ctx == nil {
 		return nil
 	}
-	finder := filefind.NewFinder(p.finderCache(doc.root), doc.root, p.ctx.Epoch)
-	doc.mode = &docSearchMode{kind: docSearchFinder, finder: finder}
-	scan := finder.Open()
-	p.noteFinderScan(doc.root, scan != nil)
+	mode, scan := panesearch.NewFinder(&p.docFinderCaches, doc.root, p.ctx.Epoch)
+	doc.mode = mode
 	return docSearchCmd(doc.leafID, scan)
 }
 
@@ -357,9 +123,8 @@ func (p *Plugin) openDocProjectSearch(doc *docPane) tea.Cmd {
 	if doc == nil || p.ctx == nil {
 		return nil
 	}
-	search := projectsearch.New(doc.root, p.ctx.Epoch)
-	mode := &docSearchMode{kind: docSearchProject, search: search}
-	mode.setSize(doc.boxW, doc.boxH)
+	mode := panesearch.NewProject(doc.root, p.ctx.Epoch)
+	mode.SetSize(doc.boxW, doc.boxH)
 	doc.mode = mode
 	return nil
 }
@@ -369,7 +134,7 @@ func (p *Plugin) closeDocSearch(doc *docPane) {
 	if doc == nil {
 		return
 	}
-	doc.mode.close()
+	doc.mode.Close()
 	doc.mode = nil
 	doc.modeRegions = nil
 }
@@ -417,7 +182,15 @@ func (p *Plugin) closeUnfocusedDocSearches() tea.Cmd {
 	focused := p.focusedDocPane()
 	var cmds []tea.Cmd
 	for _, doc := range p.docs {
-		if doc == nil || doc.mode == nil || doc == focused {
+		if doc == nil || doc == focused {
+			continue
+		}
+		// In-file search is dismissed by the same rule, for the same reason: a
+		// pane that lost the keyboard must not keep a live search bar drawn.
+		for _, item := range doc.tabs.Items {
+			item.View.CloseSearch()
+		}
+		if doc.mode == nil {
 			continue
 		}
 		if cmd := p.cancelDocSearch(doc); cmd != nil {
@@ -437,8 +210,8 @@ func (p *Plugin) handleDocSearchKey(doc *docPane, msg tea.KeyPressMsg) tea.Cmd {
 	if doc == nil || doc.mode == nil {
 		return nil
 	}
-	doc.mode.setSize(doc.boxW, doc.boxH)
-	out, cmd := doc.mode.handleKey(msg)
+	doc.mode.SetSize(doc.boxW, doc.boxH)
+	out, cmd := doc.mode.HandleKey(msg)
 	return p.applyDocSearchOutcome(doc, out, cmd)
 }
 
@@ -481,11 +254,11 @@ func (p *Plugin) handleDocSearchMouse(doc *docPane, msg tea.MouseMsg) tea.Cmd {
 			return nil
 		}
 	}
-	out, cmd := doc.mode.handleMouse(msg, p.mouseHandler)
+	out, cmd := doc.mode.HandleMouse(msg, p.mouseHandler)
 	return p.applyDocSearchOutcome(doc, out, cmd)
 }
 
-func (p *Plugin) applyDocSearchOutcome(doc *docPane, out docSearchOutcome, cmd tea.Cmd) tea.Cmd {
+func (p *Plugin) applyDocSearchOutcome(doc *docPane, out panesearch.Outcome, cmd tea.Cmd) tea.Cmd {
 	wrapped := docSearchCmd(doc.leafID, cmd)
 	switch {
 	case out.Cancelled:
@@ -500,7 +273,7 @@ func (p *Plugin) applyDocSearchOutcome(doc *docPane, out docSearchOutcome, cmd t
 // loadDocSearchResult puts the chosen file into the pane through the pane's own
 // tab machinery: an already-open file is focused (and jumps to the line), a
 // plain pick replaces the active tab, and shift+enter opens a new one.
-func (p *Plugin) loadDocSearchResult(doc *docPane, out docSearchOutcome) tea.Cmd {
+func (p *Plugin) loadDocSearchResult(doc *docPane, out panesearch.Outcome) tea.Cmd {
 	if doc == nil {
 		return nil
 	}
@@ -523,7 +296,7 @@ func (p *Plugin) applyDocSearchMsg(msg docSearchMsg) tea.Cmd {
 	if doc == nil || doc.mode == nil {
 		return nil
 	}
-	return docSearchCmd(doc.leafID, doc.mode.update(msg.Msg))
+	return docSearchCmd(doc.leafID, doc.mode.Update(msg.Msg))
 }
 
 // renderDocSearchOverlay composites the live surface over the pane's own
@@ -541,7 +314,7 @@ func (p *Plugin) renderDocSearchOverlay(doc *docPane, background string, origin 
 	}
 	box := panemodal.Box{X: origin.X, Y: origin.Y, W: size.Width, H: size.Height}
 	scratch := mouse.NewHandler()
-	out := panemodal.RenderFunc(box, ui.FitBlock(background, size.Width, size.Height), scratch, doc.mode.view)
+	out := panemodal.RenderFunc(box, ui.FitBlock(background, size.Width, size.Height), scratch, doc.mode.View)
 	doc.modeRegions = scratch.HitMap.Regions()
 	return out
 }

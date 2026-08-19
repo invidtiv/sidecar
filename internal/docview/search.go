@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -542,4 +543,18 @@ func ansiPrefix(render func(...string) string) string {
 		return ""
 	}
 	return prefix
+}
+
+// SearchCommands is the footer vocabulary of a live in-file search, in one
+// place so the project workspace and the global Workspaces browser cannot
+// advertise different keys for the same bar. The caller supplies its own focus
+// context; the IDs are what internal/keymap registers the bindings under, and they are
+// the Files plugin's own so one feature has one vocabulary everywhere.
+func SearchCommands(context string) []plugin.Command {
+	return []plugin.Command{
+		{ID: "confirm", Name: "Go", Description: "Jump to match", Context: context, Priority: 1},
+		{ID: "next-match", Name: "Next", Description: "Next match", Context: context, Priority: 2},
+		{ID: "prev-match", Name: "Prev", Description: "Previous match", Context: context, Priority: 3},
+		{ID: "cancel", Name: "Cancel", Description: "Cancel search", Context: context, Priority: 4},
+	}
 }

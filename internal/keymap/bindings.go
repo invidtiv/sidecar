@@ -222,6 +222,31 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "search-open", Context: "workspace-doc-search"},
 		{Key: "shift+enter", Command: "search-open-tab", Context: "workspace-doc-search"},
 
+		// In-file search (`/`) is the third search a document pane can run, and
+		// the only one that stays inside the document: its bar is docview's, so
+		// both pane surfaces answer the same keys. workspace-doc-find and
+		// global-workspaces-doc-find are the two hosts' names for that one bar,
+		// which is why they register identically.
+		{Key: "/", Command: "search-content", Context: "workspace-doc"},
+		{Key: "/", Command: "search-content", Context: "global-workspaces-doc"},
+		{Key: "ctrl+p", Command: "find-file", Context: "global-workspaces-doc"},
+		{Key: "f", Command: "search-project", Context: "global-workspaces-doc"},
+
+		{Key: "enter", Command: "confirm", Context: "workspace-doc-find"},
+		{Key: "n", Command: "next-match", Context: "workspace-doc-find"},
+		{Key: "N", Command: "prev-match", Context: "workspace-doc-find"},
+		{Key: "esc", Command: "cancel", Context: "workspace-doc-find"},
+		{Key: "enter", Command: "confirm", Context: "global-workspaces-doc-find"},
+		{Key: "n", Command: "next-match", Context: "global-workspaces-doc-find"},
+		{Key: "N", Command: "prev-match", Context: "global-workspaces-doc-find"},
+		{Key: "esc", Command: "cancel", Context: "global-workspaces-doc-find"},
+
+		// The finder and project search a global-Workspaces document pane can
+		// open on itself, matching workspace-doc-search above.
+		{Key: "esc", Command: "search-cancel", Context: "global-workspaces-doc-search"},
+		{Key: "enter", Command: "search-open", Context: "global-workspaces-doc-search"},
+		{Key: "shift+enter", Command: "search-open-tab", Context: "global-workspaces-doc-search"},
+
 		{Key: "q", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "x", Command: "close-tab", Context: "global-workspaces-diff"},

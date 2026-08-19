@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -16,31 +17,35 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "search-cancel", Name: "Cancel", Description: "Close the search and return to the document", Context: "workspace-doc-search", Priority: 3},
 		}
 	}
+	if p.viewMode == ViewModeList && p.docFindActive() {
+		return docview.SearchCommands("workspace-doc-find")
+	}
 	if p.viewMode == ViewModeList && p.docFocused() {
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 2},
-			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 3},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 4},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 5},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 6},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 7},
+			{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Context: "workspace-doc", Priority: 2},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 3},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 4},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 5},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 6},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 7},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 8},
 		}
 		if doc, _ := p.activeDocPane(); doc != nil && doc.view() != nil && terminallink.Markdown(doc.view().Title()) {
 			renderName := "Raw"
 			if !doc.view().Rendered() {
 				renderName = "Render"
 			}
-			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 8})
+			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 9})
 		}
 		cmds = append(cmds,
-			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 9},
-			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 10},
-			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 11},
-			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 12},
-			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 13},
-			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 14},
-			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 15},
+			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 10},
+			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 11},
+			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 12},
+			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 14},
+			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 15},
+			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 16},
 		)
 		return cmds
 	}
@@ -456,6 +461,9 @@ func (p *Plugin) FocusContext() string {
 		if p.docSearchActive() {
 			return "workspace-doc-search"
 		}
+		if p.docFindActive() {
+			return "workspace-doc-find"
+		}
 		if p.docFocused() {
 			return "workspace-doc"
 		}
@@ -490,7 +498,7 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether the workspace plugin is currently in a
 // mode that expects typed text input.
 func (p *Plugin) ConsumesTextInput() bool {
-	if p.docSearchActive() {
+	if p.docSearchActive() || p.docFindActive() {
 		return true
 	}
 	if p.filterFocused() && p.activePane == PaneSidebar && !p.docFocused() {

@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectsearch"
 )
@@ -27,7 +28,7 @@ func TestDocPaneFinderReusesTheScanPerRoot(t *testing.T) {
 		t.Fatal("the first ctrl+p issued no scan")
 	}
 	scanFinder(t, p, first)
-	files := doc.mode.finder.Matches()
+	files := doc.mode.Finder().Matches()
 	if len(files) == 0 {
 		t.Fatal("the scan found no files to reuse")
 	}
@@ -36,7 +37,7 @@ func TestDocPaneFinderReusesTheScanPerRoot(t *testing.T) {
 	if cmd := p.openDocFinder(doc); cmd != nil {
 		t.Fatal("the second ctrl+p walked the project again")
 	}
-	if got := len(doc.mode.finder.Matches()); got != len(files) {
+	if got := len(doc.mode.Finder().Matches()); got != len(files) {
 		t.Fatalf("the reopened finder shows %d files, want the %d the cached scan holds", got, len(files))
 	}
 }
@@ -53,7 +54,7 @@ func TestDocPaneFindersShareOneCachePerRoot(t *testing.T) {
 	if cmd := p.openDocFinder(other); cmd != nil {
 		t.Fatal("a second pane on the same root walked the tree again")
 	}
-	if len(other.mode.finder.Matches()) != len(first.mode.finder.Matches()) {
+	if len(other.mode.Finder().Matches()) != len(first.mode.Finder().Matches()) {
 		t.Fatal("the second pane did not see the first pane's file list")
 	}
 
@@ -74,18 +75,17 @@ func TestDocPaneFinderCacheAgesOut(t *testing.T) {
 	scanFinder(t, p, p.openDocFinder(doc))
 	p.closeDocSearch(doc)
 
-	entry := p.docFinderCaches[doc.root]
-	if entry == nil {
+	if p.docFinderCaches.Scanned(doc.root).IsZero() {
 		t.Fatal("the finder scan cached nothing for the pane's root")
 	}
-	entry.scanned = time.Now().Add(-docFinderCacheTTL - time.Second)
+	p.docFinderCaches.SetScanned(doc.root, time.Now().Add(-panesearch.CacheTTL-time.Second))
 
 	cmd := p.openDocFinder(doc)
 	if cmd == nil {
 		t.Fatal("a cache older than its lifetime was not rescanned")
 	}
 	scanFinder(t, p, cmd)
-	if time.Since(p.docFinderCaches[doc.root].scanned) > time.Minute {
+	if time.Since(p.docFinderCaches.Scanned(doc.root)) > time.Minute {
 		t.Fatal("the rescan did not reset the cache's age")
 	}
 }
@@ -95,7 +95,7 @@ func TestDocPaneFinderCacheAgesOut(t *testing.T) {
 func TestInitDropsTheFinderCaches(t *testing.T) {
 	p, root := docSearchPlugin(t, true)
 	scanFinder(t, p, p.openDocFinder(p.focusedDocPane()))
-	if len(p.docFinderCaches) == 0 {
+	if p.docFinderCaches.Len() == 0 {
 		t.Fatal("nothing was cached to drop")
 	}
 
@@ -104,8 +104,8 @@ func TestInitDropsTheFinderCaches(t *testing.T) {
 	if err := p.Init(&plugin.Context{WorkDir: root, ProjectRoot: root, Config: config.Default(), Keymap: registry, Epoch: 18}); err != nil {
 		t.Fatal(err)
 	}
-	if p.docFinderCaches != nil {
-		t.Fatalf("a project switch kept %d cached file lists", len(p.docFinderCaches))
+	if p.docFinderCaches.Len() != 0 {
+		t.Fatalf("a project switch kept %d cached file lists", p.docFinderCaches.Len())
 	}
 }
 
@@ -140,7 +140,7 @@ func TestDocPaneProjectSearchOpensTheHit(t *testing.T) {
 	doc := p.focusedDocPane()
 
 	docPaneProjectSearchResults(t, p, doc, "guide", guideResults())
-	state := doc.mode.search.State
+	state := doc.mode.Search().State
 	if state.Query != "guide" {
 		t.Fatalf("typed query landed as %q", state.Query)
 	}
@@ -231,11 +231,11 @@ func TestDocSearchResultsLandInTheirOwnPane(t *testing.T) {
 		Results: guideResults(),
 	}})
 
-	if len(second.mode.search.State.Results) != 1 {
-		t.Fatalf("the addressed pane holds %#v", second.mode.search.State.Results)
+	if len(second.mode.Search().State.Results) != 1 {
+		t.Fatalf("the addressed pane holds %#v", second.mode.Search().State.Results)
 	}
-	if len(first.mode.search.State.Results) != 0 {
-		t.Fatalf("the other pane's search took the result: %#v", first.mode.search.State.Results)
+	if len(first.mode.Search().State.Results) != 0 {
+		t.Fatalf("the other pane's search took the result: %#v", first.mode.Search().State.Results)
 	}
 
 	// A message for a leaf no pane owns is dropped rather than applied to the
@@ -246,7 +246,7 @@ func TestDocSearchResultsLandInTheirOwnPane(t *testing.T) {
 	}}); cmd != nil {
 		t.Fatal("a message for an unknown pane produced work")
 	}
-	if len(first.mode.search.State.Results) != 0 {
+	if len(first.mode.Search().State.Results) != 0 {
 		t.Fatal("a message for an unknown pane landed in a live pane")
 	}
 }
@@ -304,16 +304,16 @@ func TestDocPaneSearchIgnoresEventsOutsideThePane(t *testing.T) {
 	scanFinder(t, p, p.openDocFinder(doc))
 	typeDocSearch(p, "e")
 	composePaneTree(t, p, width, height)
-	if len(doc.mode.finder.Matches()) < 2 {
+	if len(doc.mode.Finder().Matches()) < 2 {
 		t.Fatalf("need at least two matches to move a cursor between")
 	}
 
-	before := doc.mode.finder.Cursor()
+	before := doc.mode.Finder().Cursor()
 	p.handleMouse(tea.MouseWheelMsg{X: 0, Y: 0, Button: tea.MouseWheelDown})
 	if doc.mode == nil {
 		t.Fatal("the wheel outside the pane dismissed the search")
 	}
-	if got := doc.mode.finder.Cursor(); got != before {
+	if got := doc.mode.Finder().Cursor(); got != before {
 		t.Fatalf("the wheel outside the pane moved the finder cursor to %d", got)
 	}
 
@@ -324,7 +324,7 @@ func TestDocPaneSearchIgnoresEventsOutsideThePane(t *testing.T) {
 
 	// Inside the pane the wheel is still the list's.
 	p.handleMouse(tea.MouseWheelMsg{X: doc.boxX + 2, Y: doc.boxY + 2, Button: tea.MouseWheelDown})
-	if doc.mode.finder.Cursor() == before {
+	if doc.mode.Finder().Cursor() == before {
 		t.Fatal("the wheel inside the pane did not reach the finder")
 	}
 }
