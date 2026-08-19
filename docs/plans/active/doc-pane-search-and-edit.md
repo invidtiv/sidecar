@@ -49,12 +49,16 @@ workspace panes, overview panes) for free, or the design is wrong.
   switch notes off.
 - **`/` and `e` are free** in both `workspace-doc` and the overview doc-pane
   key space today; use `/` for search, `e` for edit (matching filebrowser).
+- **`ctrl+p` / `f` in overview doc panes: yes.** The project workspace already
+  answers both on a focused doc pane (`doc_panes.go:1072-1075` — `openDocFinder`
+  and `openDocProjectSearch`); overview does not. That is exactly the
+  one-surface-only bug the parity rule forbids, so closing it is in scope here
+  rather than deferred to a backlog. Phase 2 carries it, since it is the same
+  routing work as `/`.
 
 ## Unresolved questions
 
-- Whether overview doc panes should also gain `ctrl+p` / `f` (pane file
-  finder and project search) while we're closing gaps. Out of scope here;
-  note it in the parity backlog if not taken.
+*(The `ctrl+p` / `f` question is settled — see below.)*
 - Whether the search UI in panes is a pane-scoped modal bar (like the
   workspace `docSearchMode` overlay via `internal/panemodal`) or an in-pane
   bottom bar. Recommendation: split the two concerns rather than pick one —
@@ -131,6 +135,9 @@ tab-expanded, wrapped, and ANSI rows, and a match under an active selection.
   filter case is the bug to watch for.
 - Keybindings registered in `internal/keymap/bindings.go` for `workspace-doc`
   and the overview doc context; footer command entries on both surfaces.
+- **Also in this phase**: give overview doc panes `ctrl+p` and `f`, routed to
+  the same finder / project-search core the workspace uses. Same routing seam
+  as `/`, so it costs little here and closes a standing parity gap.
 - Search dismisses on pane focus loss (same rule as `closeUnfocusedDocSearches`).
 
 ### Phase 3 — extract `internal/inlineedit`
