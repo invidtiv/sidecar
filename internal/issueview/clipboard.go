@@ -28,10 +28,7 @@ func copyText(text, ok string) tea.Cmd {
 	if text == "" {
 		return nil
 	}
-	return func() tea.Msg {
-		if err := clip.WriteAll(text); err != nil {
-			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return msg.ToastMsg{Message: ok, Duration: 2 * time.Second}
-	}
+	return clip.Copy(text, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message(ok), Duration: 2 * time.Second}
+	})
 }

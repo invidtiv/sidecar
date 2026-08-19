@@ -1204,11 +1204,10 @@ func (p *Plugin) handleBlameKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	case "y":
 		// Copy commit hash to clipboard
 		if len(p.blameState.Lines) > 0 && p.blameState.Cursor < len(p.blameState.Lines) {
-			line := p.blameState.Lines[p.blameState.Cursor]
-			if err := clip.WriteAll(line.CommitHash); err != nil {
-				return p, appmsg.ShowToast(fmt.Sprintf("Copy failed: %v", err), 3*time.Second)
-			}
-			return p, appmsg.ShowToast("Copied: "+line.CommitHash, 2*time.Second)
+			hash := p.blameState.Lines[p.blameState.Cursor].CommitHash
+			return p, clip.Copy(hash, func(r clip.Result) tea.Msg {
+				return appmsg.ToastMsg{Message: r.Message("Copied: " + hash), Duration: 2 * time.Second}
+			})
 		}
 
 	case "enter":

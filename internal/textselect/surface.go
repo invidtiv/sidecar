@@ -107,12 +107,28 @@ func (s *Surface) Clear() {
 	s.dragging = false
 }
 
+// Abandon ends a gesture whose release never arrived — the pointer left the
+// window, a modal opened, focus moved. A host detects it the way the terminal
+// hosts do, by noticing that its mouse handler has stopped dragging without
+// having reported a [mouse.ActionDragEnd], and says so here: a surface left
+// holding a live gesture answers the next unrelated drag anywhere on screen as
+// an extension of a selection the user finished long ago.
+func (s *Surface) Abandon() Result {
+	if !s.dragging {
+		return Result{}
+	}
+	s.pointer.Abandon()
+	s.dragging = false
+	return Result{Handled: true}
+}
+
 // HandleMouse advances the gesture over src and reports what the host owes.
 //
 // The host is expected to have started a drag on the press (mouse.Handler's
 // StartDrag), because that is what turns the release into a
 // [mouse.ActionDragEnd] this can resolve; without it a press arms a gesture no
-// release ever ends.
+// release ever ends. A release that is lost rather than late is [Surface.Abandon]'s;
+// nothing in a mouse action says one happened.
 func (s *Surface) HandleMouse(action mouse.MouseAction, src Source) Result {
 	if src == nil {
 		return Result{}
@@ -169,11 +185,6 @@ func (s *Surface) HandleMouse(action mouse.MouseAction, src Source) Result {
 			result.Copy, result.CopyAsked = s.SelectedText(src), true
 		}
 		return result
-
-	case PointerAbandon:
-		s.pointer.Abandon()
-		s.dragging = false
-		return Result{Handled: true}
 	}
 	return Result{}
 }

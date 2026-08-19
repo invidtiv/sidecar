@@ -25,7 +25,10 @@ func TerminalConfig(cfg *config.Config) tty.Config {
 		if workspace.InteractivePasteKey != "" {
 			terminal.PasteKey = workspace.InteractivePasteKey
 		}
-		terminal.CopyOnSelect = workspace.CopyOnSelect
+		// Either key turns it on: selection.copyOnSelect is the general setting
+		// every selectable surface reads, and the terminal's own key is what
+		// configs written before it existed still carry.
+		terminal.CopyOnSelect = workspace.CopyOnSelect || cfg.Selection.CopyOnSelect
 	}
 	// Empty AttachKey is the pane's chord. tty.New treats empty as "use default",
 	// so hosts that honour this resolution must assign the field after New.

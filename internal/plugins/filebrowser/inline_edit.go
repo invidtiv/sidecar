@@ -179,24 +179,24 @@ func (p *Plugin) getInlineEditPasteKey() string {
 
 // copyInlineEditorOutputCmd copies the inline editor output to the clipboard.
 func (p *Plugin) copyInlineEditorOutputCmd() tea.Cmd {
-	return func() tea.Msg {
-		if p.inlineEditor == nil || p.inlineEditor.State == nil || p.inlineEditor.State.OutputBuf == nil {
-			return app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
-		}
-		lines := p.inlineEditor.State.OutputBuf.Lines()
-		if len(lines) == 0 {
-			return app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
-		}
-		stripped := make([]string, 0, len(lines))
-		for _, line := range lines {
-			stripped = append(stripped, ansi.Strip(line))
-		}
-		text := strings.Join(stripped, "\n")
-		if err := clip.WriteAll(text); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return app.ToastMsg{Message: fmt.Sprintf("Copied %d line(s)", len(stripped)), Duration: 2 * time.Second}
-	}
+	empty := app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
+	return clip.CopyFrom(
+		func() (string, tea.Msg) {
+			if p.inlineEditor == nil || p.inlineEditor.State == nil || p.inlineEditor.State.OutputBuf == nil {
+				return "", empty
+			}
+			lines := p.inlineEditor.State.OutputBuf.Lines()
+			stripped := make([]string, 0, len(lines))
+			for _, line := range lines {
+				stripped = append(stripped, ansi.Strip(line))
+			}
+			return strings.Join(stripped, "\n"), empty
+		},
+		func(r clip.Result, text string) tea.Msg {
+			count := strings.Count(text, "\n") + 1
+			return app.ToastMsg{Message: r.Message(fmt.Sprintf("Copied %d line(s)", count)), Duration: 2 * time.Second}
+		},
+	)
 }
 
 // reattachInlineEditSession re-attaches to an existing tmux session after tab switch.

@@ -2661,10 +2661,9 @@ func (p *Plugin) yankNoteContent() tea.Cmd {
 	if p.editorNote != nil && p.editorNote.ID == note.ID && p.editorDirty {
 		content = p.editorTextarea.Value()
 	}
-	if err := clip.WriteAll(content); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Copied note content", 2*time.Second)
+	return clip.Copy(content, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied note content"), Duration: 2 * time.Second}
+	})
 }
 
 // yankNoteTitle copies the note title (first line) to the system clipboard.
@@ -2687,10 +2686,9 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 		return msg.ShowToast("No title to copy", 2*time.Second)
 	}
 
-	if err := clip.WriteAll(title); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Copied: "+title, 2*time.Second)
+	return clip.Copy(title, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied: " + title), Duration: 2 * time.Second}
+	})
 }
 
 // copyEditorContent copies the current editor content to clipboard.
@@ -2700,10 +2698,9 @@ func (p *Plugin) copyEditorContent() tea.Cmd {
 		return msg.ShowToast("No content to copy", 2*time.Second)
 	}
 
-	if err := clip.WriteAll(content); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Copied to clipboard", 2*time.Second)
+	return clip.Copy(content, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied to clipboard"), Duration: 2 * time.Second}
+	})
 }
 
 // IsFocused returns whether the plugin is focused.

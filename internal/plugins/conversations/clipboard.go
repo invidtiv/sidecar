@@ -19,12 +19,9 @@ func (p *Plugin) yankSessionDetails() tea.Cmd {
 	}
 
 	md := formatSessionSummary(session)
-	return func() tea.Msg {
-		if err := clip.WriteAll(md); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return app.ToastMsg{Message: "Yanked session details", Duration: 2 * time.Second}
-	}
+	return clip.Copy(md, func(r clip.Result) tea.Msg {
+		return app.ToastMsg{Message: r.Message("Yanked session details"), Duration: 2 * time.Second}
+	})
 }
 
 // yankTurnContent copies the current turn's content to clipboard.
@@ -35,12 +32,9 @@ func (p *Plugin) yankTurnContent() tea.Cmd {
 	}
 
 	md := formatTurnAsMarkdown(turn)
-	return func() tea.Msg {
-		if err := clip.WriteAll(md); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return app.ToastMsg{Message: "Yanked turn content", Duration: 2 * time.Second}
-	}
+	return clip.Copy(md, func(r clip.Result) tea.Msg {
+		return app.ToastMsg{Message: r.Message("Yanked turn content"), Duration: 2 * time.Second}
+	})
 }
 
 // yankResumeCommand copies the CLI resume command to clipboard.
@@ -72,12 +66,9 @@ func (p *Plugin) yankResumeCommand() tea.Cmd {
 		return nil
 	}
 
-	return func() tea.Msg {
-		if err := clip.WriteAll(cmd); err != nil {
-			return app.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return app.ToastMsg{Message: "Yanked: " + cmd, Duration: 2 * time.Second}
-	}
+	return clip.Copy(cmd, func(r clip.Result) tea.Msg {
+		return app.ToastMsg{Message: r.Message("Yanked: " + cmd), Duration: 2 * time.Second}
+	})
 }
 
 // getSelectedSession returns the session under cursor based on current view mode.

@@ -44,7 +44,7 @@ func TestCopySelectionRefusesAnEmptySelection(t *testing.T) {
 		t.Fatal("an empty copy said nothing at all")
 	}
 	cmd()
-	if notice.Message != "Nothing selected — ctrl+a selects all output" {
+	if notice.Message != "Nothing selected — ctrl+a selects everything" {
 		t.Errorf("empty copy notice = %+v, want an untouched clipboard", notice)
 	}
 }
@@ -62,9 +62,18 @@ func TestCopyNoticeNamesTheClipboardItReached(t *testing.T) {
 		t.Errorf("successful copy notice = %+v", native)
 	}
 	// A failed native write is not a failed copy: OSC 52 still ran, so the
-	// notice claims only the clipboard it can vouch for.
+	// notice names where the text went rather than reporting a failure.
 	remote := DefaultConfig().Notice(CopyResult{Lines: 3, NativeErr: errors.New("clipboard unavailable")})
-	if remote.Message != "Copied 3 line(s) to the terminal clipboard" || remote.IsError {
+	if remote.Message != "Copied 3 line(s) — sent to the terminal clipboard" || remote.IsError {
 		t.Errorf("native-failure copy notice = %+v", remote)
+	}
+}
+
+// A surface may bind nothing but the platform copy chord, and then the empty
+// notice has no select-all key to name.
+func TestEmptyCopyNoticeWithoutASelectAllKey(t *testing.T) {
+	notice := Config{}.Notice(CopyResult{Empty: true})
+	if notice.Message != "Nothing selected" {
+		t.Errorf("empty copy notice = %q, want no key named", notice.Message)
 	}
 }

@@ -111,3 +111,58 @@ func TestCopyWithoutANoticeStillWrites(t *testing.T) {
 		t.Errorf("messages = %#v, want an OSC 52 write of the text", msgs)
 	}
 }
+
+func TestMessageNamesTheClipboardAReachableCopyLanded(t *testing.T) {
+	if got := (Result{}).Message("Yanked: td-1"); got != "Yanked: td-1" {
+		t.Errorf("message = %q, want the caller's own wording", got)
+	}
+	// The native write is the half that can fail; the OSC 52 half still went
+	// out, so the wording says where the text was sent rather than that the
+	// copy failed.
+	got := Result{NativeErr: errors.New("no clipboard utilities available")}.Message("Yanked: td-1")
+	if got != "Yanked: td-1 — sent to the terminal clipboard" {
+		t.Errorf("message = %q, want the terminal clipboard named", got)
+	}
+}
+
+func TestCopyFromProducesTheTextWhenTheCommandRuns(t *testing.T) {
+	written := stubNative(t, nil)
+	produced := 0
+
+	cmd := CopyFrom(
+		func() (string, tea.Msg) {
+			produced++
+			return "read off disk", nil
+		},
+		func(r Result, text string) tea.Msg { return noticeMsg{result: r} },
+	)
+	if produced != 0 {
+		t.Fatal("the text was produced before the command ran")
+	}
+
+	msgs := drain(cmd)
+	if *written != "read off disk" {
+		t.Errorf("native clipboard = %q, want the produced text", *written)
+	}
+	if !osc52Wrote(msgs, "read off disk") {
+		t.Errorf("messages = %#v, want an OSC 52 write of the produced text", msgs)
+	}
+	notice(t, msgs)
+}
+
+func TestCopyFromShowsTheHostsOwnMessageWhenThereIsNothingToCopy(t *testing.T) {
+	written := stubNative(t, nil)
+	empty := noticeMsg{}
+
+	msgs := drain(CopyFrom(
+		func() (string, tea.Msg) { return "", empty },
+		func(Result, string) tea.Msg { return nil },
+	))
+
+	if *written != "" {
+		t.Errorf("native clipboard = %q, want an untouched clipboard", *written)
+	}
+	if len(msgs) != 1 || msgs[0] != tea.Msg(empty) {
+		t.Errorf("messages = %#v, want only the host's own message", msgs)
+	}
+}

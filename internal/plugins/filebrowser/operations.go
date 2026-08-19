@@ -938,15 +938,10 @@ func (p *Plugin) copySelectedTextToClipboard() tea.Cmd {
 
 	lineCount := endLine - startLine + 1
 	return clip.Copy(strings.Join(result, "\n"), func(r clip.Result) tea.Msg {
-		// A failed native write is not a failed copy: the OSC 52 half still
-		// ran, so the toast claims only the clipboard it can vouch for.
-		if r.NativeErr != nil {
-			return msg.ToastMsg{
-				Message:  fmt.Sprintf("Copied %d line(s) to the terminal clipboard", lineCount),
-				Duration: 2 * time.Second,
-			}
+		return msg.ToastMsg{
+			Message:  r.Message(fmt.Sprintf("Copied %d line(s)", lineCount)),
+			Duration: 2 * time.Second,
 		}
-		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d line(s)", lineCount), Duration: 2 * time.Second}
 	})
 }
 
@@ -955,16 +950,18 @@ func (p *Plugin) copyFileContentsToClipboard() tea.Cmd {
 	if p.ctx != nil && p.previewFile != "" {
 		return docview.YankContents(p.ctx.WorkDir, p.previewFile)
 	}
-	return func() tea.Msg {
-		if len(p.previewLines) == 0 {
+	if len(p.previewLines) == 0 {
+		return func() tea.Msg {
 			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
 		}
-		text := strings.Join(p.previewLines, "\n")
-		if err := clip.WriteAll(text); err != nil {
-			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d lines", len(p.previewLines)), Duration: 2 * time.Second}
 	}
+	lineCount := len(p.previewLines)
+	return clip.Copy(strings.Join(p.previewLines, "\n"), func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{
+			Message:  r.Message(fmt.Sprintf("Copied %d lines", lineCount)),
+			Duration: 2 * time.Second,
+		}
+	})
 }
 
 // isMarkdownFile returns true if the current preview file is a markdown file.

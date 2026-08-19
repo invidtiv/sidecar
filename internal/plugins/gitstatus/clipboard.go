@@ -17,10 +17,10 @@ func (p *Plugin) copyCommitIDToClipboard() tea.Cmd {
 		return nil
 	}
 
-	if err := clip.WriteAll(commit.ShortHash); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Yanked: "+commit.ShortHash, 2*time.Second)
+	hash := commit.ShortHash
+	return clip.Copy(hash, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Yanked: " + hash), Duration: 2 * time.Second}
+	})
 }
 
 // copyCommitToClipboard copies full commit details as markdown to clipboard.
@@ -31,10 +31,9 @@ func (p *Plugin) copyCommitToClipboard() tea.Cmd {
 	}
 
 	markdown := formatCommitAsMarkdown(commit)
-	if err := clip.WriteAll(markdown); err != nil {
-		return msg.ShowToast("Copy failed: "+err.Error(), 2*time.Second)
-	}
-	return msg.ShowToast("Yanked commit details", 2*time.Second)
+	return clip.Copy(markdown, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Yanked commit details"), Duration: 2 * time.Second}
+	})
 }
 
 // getCurrentCommit returns the commit under cursor based on current view mode.

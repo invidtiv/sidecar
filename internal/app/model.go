@@ -1205,14 +1205,9 @@ Rules:
 
 My code is located at: [TELL ME WHERE YOUR CODE DIRECTORIES ARE]`
 
-	if err := clip.WriteAll(prompt); err != nil {
-		return func() tea.Msg {
-			return ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second}
-		}
-	}
-	return func() tea.Msg {
-		return ToastMsg{Message: "Copied LLM setup prompt", Duration: 2 * time.Second}
-	}
+	return clip.Copy(prompt, func(r clip.Result) tea.Msg {
+		return ToastMsg{Message: r.Message("Copied LLM setup prompt"), Duration: 2 * time.Second}
+	})
 }
 
 // initProjectAdd initializes the project add sub-mode.

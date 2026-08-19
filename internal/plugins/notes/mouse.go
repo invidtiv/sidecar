@@ -702,12 +702,7 @@ func (p *Plugin) copySelectionCmd() tea.Cmd {
 		stripped = append(stripped, ansi.Strip(line))
 	}
 	return clip.Copy(strings.Join(stripped, "\n"), func(r clip.Result) tea.Msg {
-		// A failed native write is not a failed copy: the OSC 52 half still
-		// ran, so the toast claims only the clipboard it can vouch for.
-		if r.NativeErr != nil {
-			return app.ToastMsg{Message: "Copied to the terminal clipboard", Duration: 2 * time.Second}
-		}
-		return app.ToastMsg{Message: "Copied to clipboard", Duration: 2 * time.Second}
+		return app.ToastMsg{Message: r.Message("Copied to clipboard"), Duration: 2 * time.Second}
 	})
 }
 

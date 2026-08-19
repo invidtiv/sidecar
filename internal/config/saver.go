@@ -321,6 +321,22 @@ func SaveWorkspace(mutate func(*WorkspacePluginConfig)) error {
 	return Save(cfg)
 }
 
+// SaveSelection applies a change to the selection section — how text selection
+// behaves in every surface that offers it — and writes it. Like the others it
+// reloads first, so a setting changed in Configuration never overwrites an edit
+// made to the file since Sidecar started.
+func SaveSelection(mutate func(*SelectionConfig)) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	mutate(&cfg.Selection)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return Save(cfg)
+}
+
 // SaveUI applies a change to the ui section and writes it. It reloads first, so
 // a setting changed in Configuration never overwrites an edit made to the file
 // since Sidecar started.

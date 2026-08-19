@@ -151,3 +151,67 @@ func TestSurfaceSelectAllAndCopyChords(t *testing.T) {
 		t.Errorf("copy with nothing selected = %+v, want the request with no text: the notice says so", empty)
 	}
 }
+
+func TestSurfaceCopyOnSelectCopiesWhatTheDragFinished(t *testing.T) {
+	src := newSource()
+	surface := Surface{CopyOnSelect: true}
+
+	surface.HandleMouse(press(2+6, 1), src)
+	surface.HandleMouse(drag(2+5, 1+1), src)
+	result := surface.HandleMouse(release(2+5, 1+1), src)
+
+	if !result.CopyAsked {
+		t.Fatalf("drag end = %+v, want copy-on-select to have asked for a copy", result)
+	}
+	if got := SelectionText(result.Copy); got != "beta gamma\nsecond" {
+		t.Errorf("copied text = %q, want the selection the drag finished", got)
+	}
+}
+
+func TestSurfaceWithoutCopyOnSelectLeavesTheClipboardAlone(t *testing.T) {
+	src := newSource()
+	var surface Surface
+
+	surface.HandleMouse(press(2+6, 1), src)
+	surface.HandleMouse(drag(2+5, 1+1), src)
+
+	if result := surface.HandleMouse(release(2+5, 1+1), src); result.CopyAsked || result.Copy != nil {
+		t.Errorf("drag end = %+v, want a selection that copies nothing unasked", result)
+	}
+}
+
+func TestSurfaceCopyOnSelectIgnoresAClickThatSelectedNothing(t *testing.T) {
+	src := newSource()
+	surface := Surface{CopyOnSelect: true}
+
+	surface.HandleMouse(press(2+3, 1+1), src)
+
+	if result := surface.HandleMouse(release(2+3, 1+1), src); result.CopyAsked {
+		t.Errorf("click = %+v, want no copy: a click selects nothing", result)
+	}
+}
+
+// A release can be lost — the pointer leaves the window, a modal opens. The
+// surface must be told, or it answers the next drag anywhere on screen as an
+// extension of the selection it is still holding open.
+func TestSurfaceAbandonEndsAGestureNoReleaseEnded(t *testing.T) {
+	src := newSource()
+	var surface Surface
+
+	surface.HandleMouse(press(2+6, 1), src)
+	surface.HandleMouse(drag(2+5, 1+1), src)
+	if result := surface.Abandon(); !result.Handled {
+		t.Fatalf("abandon = %+v, want the gesture ended", result)
+	}
+
+	before := surface.SelectedText(src)
+	if result := surface.HandleMouse(drag(2+9, 1+2), src); result.Handled {
+		t.Errorf("drag after an abandoned gesture = %+v, want it left alone", result)
+	}
+	if after := surface.SelectedText(src); len(after) != len(before) {
+		t.Errorf("selection = %q, want the abandoned one untouched at %q", after, before)
+	}
+	if result := surface.Abandon(); result.Handled {
+		t.Errorf("abandon with no gesture in flight = %+v, want nothing claimed", result)
+	}
+}

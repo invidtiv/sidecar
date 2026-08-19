@@ -87,12 +87,9 @@ func YankPath(path string) tea.Cmd {
 	if path == "" {
 		return nil
 	}
-	return func() tea.Msg {
-		if err := clip.WriteAll(path); err != nil {
-			return msg.ToastMsg{Message: "Failed to copy path", Duration: 2 * time.Second, IsError: true}
-		}
-		return msg.ToastMsg{Message: "Copied: " + path, Duration: 2 * time.Second}
-	}
+	return clip.Copy(path, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied: " + path), Duration: 2 * time.Second}
+	})
 }
 
 // YankContents copies the file at root/path to the clipboard.
@@ -100,24 +97,23 @@ func YankContents(root, path string) tea.Cmd {
 	if path == "" {
 		return nil
 	}
-	return func() tea.Msg {
-		data, err := os.ReadFile(resolvePath(root, path))
-		if err != nil {
-			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
-		}
-		text := string(data)
-		if err := clip.WriteAll(text); err != nil {
-			return msg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		n := strings.Count(text, "\n")
-		if !strings.HasSuffix(text, "\n") && len(text) > 0 {
-			n++
-		}
-		if n == 0 && len(text) == 0 {
-			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
-		}
-		return msg.ToastMsg{Message: fmt.Sprintf("Copied %d lines", n), Duration: 2 * time.Second}
-	}
+	empty := msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
+	return clip.CopyFrom(
+		func() (string, tea.Msg) {
+			data, err := os.ReadFile(resolvePath(root, path))
+			if err != nil {
+				return "", empty
+			}
+			return string(data), empty
+		},
+		func(r clip.Result, text string) tea.Msg {
+			lines := strings.Count(text, "\n")
+			if !strings.HasSuffix(text, "\n") {
+				lines++
+			}
+			return msg.ToastMsg{Message: r.Message(fmt.Sprintf("Copied %d lines", lines)), Duration: 2 * time.Second}
+		},
+	)
 }
 
 // FetchGitInfo retrieves git status and last commit for a root-relative path.

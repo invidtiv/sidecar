@@ -46,8 +46,8 @@ type CopyResult struct {
 	Lines int
 	// NativeErr is the system clipboard write's failure. It does not mean the
 	// copy failed: the OSC 52 write to the terminal still happened, and over
-	// SSH it is the half that was ever going to work — so the notice names the
-	// terminal clipboard rather than claiming both or claiming failure.
+	// SSH it is the half that was ever going to work — so the notice names
+	// where the text was sent rather than claiming a failure.
 	NativeErr error
 	// Empty reports a copy asked for with nothing selected. A copy chord with no
 	// selection must not replace the clipboard with a screen dump — cmd+c is
@@ -69,16 +69,20 @@ type CopyNotice struct {
 	Duration time.Duration
 }
 
-// Notice phrases a copy result.
+// Notice phrases a copy result. The empty-selection half names the select-all
+// key only when the surface binds one — a surface that answers just the platform
+// copy chord would otherwise point at a key that does nothing — and the wording
+// is a pane's rather than a terminal's, because every selectable surface shows
+// it.
 func (k Keys) Notice(r CopyResult) CopyNotice {
 	notice := CopyNotice{Duration: CopyNoticeDuration}
 	switch {
+	case r.Empty && k.SelectAll != "":
+		notice.Message = "Nothing selected — " + k.SelectAll + " selects everything"
 	case r.Empty:
-		notice.Message = "Nothing selected — " + k.SelectAll + " selects all output"
-	case r.NativeErr != nil:
-		notice.Message = fmt.Sprintf("Copied %d line(s) to the terminal clipboard", r.Lines)
+		notice.Message = "Nothing selected"
 	default:
-		notice.Message = fmt.Sprintf("Copied %d line(s)", r.Lines)
+		notice.Message = clip.Result{NativeErr: r.NativeErr}.Message(fmt.Sprintf("Copied %d line(s)", r.Lines))
 	}
 	return notice
 }

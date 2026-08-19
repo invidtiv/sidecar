@@ -447,6 +447,14 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	if raw.Selection.CopyOnSelect != nil {
 		cfg.Selection.CopyOnSelect = *raw.Selection.CopyOnSelect
 	}
+	// Copy-on-select was the embedded terminal's setting before it was every
+	// surface's. The old key is folded into the general one and cleared, so
+	// there is one answer to "does finishing a selection copy it" and the next
+	// save retires the key that used to hold it.
+	if cfg.Plugins.Workspace.CopyOnSelect {
+		cfg.Selection.CopyOnSelect = true
+		cfg.Plugins.Workspace.CopyOnSelect = false
+	}
 
 	// Features
 	if raw.Features.Flags != nil {

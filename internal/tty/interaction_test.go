@@ -250,11 +250,11 @@ func TestWheelBurstCoalescesAFlickWithoutLosingDistance(t *testing.T) {
 
 func TestCopyNoticeSaysTheSameThingOnEverySurface(t *testing.T) {
 	empty := DefaultConfig().Notice(CopyResult{Empty: true})
-	if empty.Message != "Nothing selected — ctrl+a selects all output" || empty.IsError {
+	if empty.Message != "Nothing selected — ctrl+a selects everything" || empty.IsError {
 		t.Errorf("empty copy notice = %+v", empty)
 	}
 	remote := DefaultConfig().Notice(CopyResult{Lines: 3, NativeErr: errors.New("clipboard unavailable")})
-	if remote.Message != "Copied 3 line(s) to the terminal clipboard" || remote.IsError {
+	if remote.Message != "Copied 3 line(s) — sent to the terminal clipboard" || remote.IsError {
 		t.Errorf("native-failure copy notice = %+v", remote)
 	}
 	copied := DefaultConfig().Notice(CopyResult{Lines: 3})

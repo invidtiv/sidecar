@@ -571,12 +571,9 @@ func (p *Plugin) yankFocusedDiff() tea.Cmd {
 	if ident == "" {
 		return nil
 	}
-	return func() tea.Msg {
-		if err := clip.WriteAll(ident); err != nil {
-			return appmsg.ToastMsg{Message: "Copy failed: " + err.Error(), Duration: 2 * time.Second, IsError: true}
-		}
-		return appmsg.ToastMsg{Message: "Yanked: " + ident, Duration: 2 * time.Second}
-	}
+	return clip.Copy(ident, func(r clip.Result) tea.Msg {
+		return appmsg.ToastMsg{Message: r.Message("Yanked: " + ident), Duration: 2 * time.Second}
+	})
 }
 
 func (p *Plugin) resizeFocusedLeaf(delta int) tea.Cmd {
