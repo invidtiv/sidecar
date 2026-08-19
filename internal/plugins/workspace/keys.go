@@ -684,7 +684,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if reason := WorktreeActionRefusal(wt, WorktreeActionDelete); reason != "" {
-			return appmsg.ShowToast(reason, 3*time.Second)
+			return appmsg.Blocked(reason)
 		}
 		p.viewMode = ViewModeConfirmDelete
 		p.deleteConfirmWorktree = wt
@@ -702,7 +702,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case "p":
 		if wt := p.selectedWorktree(); wt != nil {
 			if reason := WorktreeActionRefusal(wt, WorktreeActionPush); reason != "" {
-				return appmsg.ShowToast(reason, 3*time.Second)
+				return appmsg.Blocked(reason)
 			}
 		}
 		return p.pushSelected()
@@ -968,7 +968,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		wt := p.selectedWorktree()
 		if wt != nil {
 			if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
-				return appmsg.ShowToast(reason, 3*time.Second)
+				return appmsg.Blocked(reason)
 			}
 			return p.startMergeWorkflow(wt)
 		}
@@ -1014,7 +1014,8 @@ func (p *Plugin) toggleSidebarCmd() tea.Cmd {
 		resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
 	}
 	if !p.sidebarVisible {
-		resizeCmds = append(resizeCmds, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+		// A toggle the user just performed and can see: flash it.
+		resizeCmds = append(resizeCmds, appmsg.ShowFlash("Sidebar hidden (\\ to restore)"))
 	}
 	return tea.Batch(resizeCmds...)
 }

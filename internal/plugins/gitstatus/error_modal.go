@@ -1,8 +1,6 @@
 package gitstatus
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/modal"
@@ -158,6 +156,6 @@ func (p *Plugin) yankErrorToClipboard() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(p.errorDetail, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Yanked error output"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Yanked error output")}
 	})
 }

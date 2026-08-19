@@ -293,8 +293,10 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		if notice == "" {
 			notice = "Copied"
 		}
+		// A copy is self-evident and instant: flash it, do not file it
+		// (audit row 5).
 		return clip.Copy(msg.Text, func(r clip.Result) tea.Msg {
-			return ToastMsg{Message: r.Message(notice), Duration: 3 * time.Second}
+			return FlashMsg{Text: r.Message(notice)}
 		}), true
 
 	case configui.OpenShellMsg:
@@ -423,7 +425,8 @@ func openPathCmd(path string) tea.Cmd {
 			}
 			return ToastMsg{Message: message, Duration: 4 * time.Second, IsError: true}
 		}
-		return ToastMsg{Message: "Opened " + path, Duration: 2 * time.Second}
+		// The app opening is the confirmation (audit row 8).
+		return FlashMsg{Text: "Opened " + path}
 	}
 }
 

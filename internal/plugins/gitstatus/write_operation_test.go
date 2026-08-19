@@ -11,6 +11,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -125,10 +126,14 @@ func TestWriteBusyRefusesSecondOperation(t *testing.T) {
 	tree.Modified = []*FileEntry{{Path: "a", Unstaged: true}}
 	p := &Plugin{ctx: &plugin.Context{}, repoRoot: tree.workDir, hasRepo: true, tree: tree, activeOperation: &operationRequest{ID: 1}}
 
+	// The refusal speaks as the waiting source: the user has to act on it.
 	_, cmd := p.updateStatus(tea.KeyPressMsg{Code: 's', Text: "s"})
-	msg, ok := cmd().(app.ToastMsg)
-	if !ok || !strings.Contains(msg.Message, "already in progress") {
-		t.Fatalf("busy result = %#v", msg)
+	post, ok := cmd().(notify.PostMsg)
+	if !ok || !strings.Contains(post.Notification.Title, "already in progress") {
+		t.Fatalf("busy result = %#v", cmd())
+	}
+	if post.Notification.Source != notify.SourceWaiting {
+		t.Fatalf("busy refusal source = %q", post.Notification.Source)
 	}
 }
 
@@ -147,7 +152,7 @@ func TestWriteBusyRefusesStatusMutationEntryPoints(t *testing.T) {
 				t.Fatal("mutation was not refused")
 			}
 			msg := cmd()
-			if _, ok := msg.(app.ToastMsg); !ok {
+			if _, ok := msg.(notify.PostMsg); !ok {
 				t.Fatalf("refusal returned %T", msg)
 			}
 			if p.viewMode != ViewModeStatus {
@@ -165,7 +170,7 @@ func TestWriteBusyRefusesRelevantModalAndHelperFlows(t *testing.T) {
 			t.Fatalf("%s returned nil", name)
 		}
 		msg := cmd()
-		if _, ok := msg.(app.ToastMsg); !ok {
+		if _, ok := msg.(notify.PostMsg); !ok {
 			t.Fatalf("%s returned %T", name, msg)
 		}
 	}
@@ -187,7 +192,7 @@ func TestWriteBusyRefusesRemoteActionBoundariesAndAbort(t *testing.T) {
 		if result != p || cmd == nil {
 			t.Fatal("action boundary did not return a refusal")
 		}
-		if _, ok := cmd().(app.ToastMsg); !ok {
+		if _, ok := cmd().(notify.PostMsg); !ok {
 			t.Fatalf("refusal returned %T", cmd())
 		}
 		if p.viewMode != wantMode {

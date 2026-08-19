@@ -702,7 +702,7 @@ func (p *Plugin) copySelectionCmd() tea.Cmd {
 		stripped = append(stripped, ansi.Strip(line))
 	}
 	return clip.Copy(strings.Join(stripped, "\n"), func(r clip.Result) tea.Msg {
-		return app.ToastMsg{Message: r.Message("Copied to clipboard"), Duration: 2 * time.Second}
+		return app.FlashMsg{Text: r.Message("Copied to clipboard")}
 	})
 }
 

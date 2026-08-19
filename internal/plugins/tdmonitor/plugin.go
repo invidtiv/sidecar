@@ -9,6 +9,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 	"github.com/marcus/sidecar/internal/styles"
@@ -298,13 +300,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	// Handle setup error - show error toast
 	if errMsg, ok := msg.(SetupErrorMsg); ok {
-		return p, func() tea.Msg {
-			return app.ToastMsg{
-				Message:  errMsg.Error,
-				Duration: 5 * time.Second,
-				IsError:  true,
-			}
-		}
+		return p, appmsg.Alert(notify.SourceTD, notify.SeverityError, errMsg.Error)
 	}
 
 	// Handle setup skip - show not-installed view
@@ -363,13 +359,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle issue preview "Open in TD" request
 	if fullMsg, ok := msg.(app.OpenFullIssueMsg); ok {
 		if p.model == nil {
-			return p, func() tea.Msg {
-				return app.ToastMsg{
-					Message:  "TD not initialized",
-					Duration: 2 * time.Second,
-					IsError:  true,
-				}
-			}
+			return p, appmsg.Alert(notify.SourceTD, notify.SeverityError, "TD not initialized")
 		}
 		newModel, cmd := p.model.Update(monitor.OpenIssueByIDMsg{
 			IssueID: fullMsg.IssueID,
@@ -407,19 +397,17 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, cmd)
 	}
 
-	// Check for StatusMessage changes and emit ToastMsg
+	// td's own status line is mixed: a failure is worth keeping, and the
+	// routine confirmations behind it are not (audit row 75).
 	if p.model != nil && p.model.StatusMessage != "" &&
 		p.model.StatusMessage != p.lastStatusMessage {
 		p.lastStatusMessage = p.model.StatusMessage
 		message := p.model.StatusMessage
-		isError := p.model.StatusIsError
-		cmds = append(cmds, func() tea.Msg {
-			return app.ToastMsg{
-				Message:  message,
-				Duration: 2 * time.Second,
-				IsError:  isError,
-			}
-		})
+		if p.model.StatusIsError {
+			cmds = append(cmds, appmsg.Alert(notify.SourceTD, notify.SeverityError, message))
+		} else {
+			cmds = append(cmds, appmsg.ShowFlashFrom(string(notify.SourceTD), message))
+		}
 	} else if p.model != nil && p.model.StatusMessage == "" {
 		p.lastStatusMessage = ""
 	}

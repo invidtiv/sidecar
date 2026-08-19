@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -147,7 +146,8 @@ func (p *Plugin) noteTerminalHistoryEnd(key string) tea.Cmd {
 	if !told {
 		return nil
 	}
-	return appmsg.ShowToast(tty.HistoryExhaustedNotice, 3*time.Second)
+	// A scroll boundary is worth saying and not worth keeping (audit row 41).
+	return appmsg.ShowFlash(tty.HistoryExhaustedNotice)
 }
 
 func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {

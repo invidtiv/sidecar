@@ -901,7 +901,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) (*Plugin, tea.Cmd)
 		// Show copy hint on first selection
 		if p.selection.HasSelection() && !p.selectionCopyHintShown {
 			p.selectionCopyHintShown = true
-			return p, msg.ShowToast("Press alt+c or y to copy selection", 3*time.Second)
+			return p, msg.ShowFlash("Press alt+c or y to copy selection")
 		}
 	case regionTreeItem:
 		return p.commitTreeItemDrop(action)
@@ -930,7 +930,7 @@ func (p *Plugin) commitTreeItemDrop(action mouse.MouseAction) (*Plugin, tea.Cmd)
 		// indistinguishable from a dropped event, so say why when there is
 		// something to say.
 		if reason != "" {
-			return p, msg.ShowToast(reason, 3*time.Second)
+			return p, msg.Blocked(reason)
 		}
 		return p, nil
 	}

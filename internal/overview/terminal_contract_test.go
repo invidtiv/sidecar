@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -90,7 +89,7 @@ func toastText(t *testing.T, m *Model, cmd tea.Cmd) string {
 			}
 			return
 		}
-		if toast, ok := msg.(appmsg.ToastMsg); ok {
+		if toast, ok := noticeAsToast(msg); ok {
 			found = toast.Message
 		}
 	}

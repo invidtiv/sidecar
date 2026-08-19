@@ -28,14 +28,16 @@ func isolateNoticeState(t *testing.T, priorInstall bool) {
 	t.Cleanup(func() { _ = state.InitWithDir(t.TempDir()) })
 }
 
-func noticeToast(t *testing.T, cfg *config.Config) (ToastMsg, bool) {
+// The notice is a status flash, not a stored notification: it is a one-time
+// cosmetic heads-up, not something to find again in the centre.
+func noticeToast(t *testing.T, cfg *config.Config) (FlashMsg, bool) {
 	t.Helper()
 	cmd := defaultThemeNoticeCmd(cfg)
 	if cmd == nil {
-		return ToastMsg{}, false
+		return FlashMsg{}, false
 	}
-	toast, ok := cmd().(ToastMsg)
-	return toast, ok
+	flash, ok := cmd().(FlashMsg)
+	return flash, ok
 }
 
 // A long-time user with no recorded theme is the one being restyled, so they
@@ -49,8 +51,8 @@ func TestDefaultThemeNoticeFiresForARestyledUser(t *testing.T) {
 	if !ok {
 		t.Fatal("no toast for a user with no recorded theme choice")
 	}
-	if toast.Message == "" {
-		t.Error("the toast carries no message")
+	if toast.Text == "" {
+		t.Error("the notice carries no message")
 	}
 
 	// Once, ever — and the flag is in state.json, never in config.json.

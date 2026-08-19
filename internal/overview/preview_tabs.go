@@ -1,8 +1,6 @@
 package overview
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -58,7 +56,7 @@ func (m *Model) clickPreviewAction(hit previewActionHit) tea.Cmd {
 		_ = m.exitPreviewInteractive()
 	}
 	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
-		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {

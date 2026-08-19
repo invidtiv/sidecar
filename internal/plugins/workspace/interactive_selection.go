@@ -634,8 +634,10 @@ func (p *Plugin) copyOnSelectEnabled() bool {
 // notification type is this surface's.
 func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
 	return p.terminalConfig().CopySelectionCmd(p.interactiveSelectionLines(), func(notice tty.CopyNotice) tea.Msg {
-		return app.ToastMsg{
-			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		// A copy that worked is a flash; one that failed is a notification.
+		if notice.IsError {
+			return app.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
 		}
+		return app.FlashMsg{Text: notice.Message}
 	})
 }

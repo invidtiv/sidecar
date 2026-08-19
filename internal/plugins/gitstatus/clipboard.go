@@ -3,7 +3,6 @@ package gitstatus
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
@@ -19,7 +18,7 @@ func (p *Plugin) copyCommitIDToClipboard() tea.Cmd {
 
 	hash := commit.ShortHash
 	return clip.Copy(hash, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Yanked: " + hash), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Yanked: " + hash)}
 	})
 }
 
@@ -32,7 +31,7 @@ func (p *Plugin) copyCommitToClipboard() tea.Cmd {
 
 	markdown := formatCommitAsMarkdown(commit)
 	return clip.Copy(markdown, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Yanked commit details"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Yanked commit details")}
 	})
 }
 

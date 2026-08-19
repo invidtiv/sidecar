@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -117,7 +117,9 @@ func (p *Plugin) beginWrite(kind operationKind, args []string, selection selecti
 
 func (p *Plugin) writeBusyToast() tea.Cmd {
 	return func() tea.Msg {
-		return app.ToastMsg{Message: "Git write already in progress", IsError: true}
+		// A refused keypress, from the source that means "you have to act"
+		// rather than generic app chrome (audit row 72).
+		return notify.Alert(notify.SourceWaiting, notify.SeverityWarning, "Git write already in progress")
 	}
 }
 

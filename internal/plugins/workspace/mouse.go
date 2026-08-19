@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
@@ -48,7 +46,7 @@ func (p *Plugin) clickPreviewAction(data any) tea.Cmd {
 		p.exitInteractiveMode()
 	}
 	if p.paneRoot == nil {
-		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {

@@ -1759,10 +1759,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Only enable if we're in a git repo with worktrees
 		worktrees := m.worktreeInventory()
 		if len(worktrees) <= 1 {
-			// No worktrees or only main repo - show toast
-			return m, func() tea.Msg {
-				return ToastMsg{Message: "No worktrees found", Duration: 2 * time.Second}
-			}
+			// No worktrees or only main repo. Why the key did nothing is worth
+			// saying once, but not worth keeping (audit row 14).
+			return m, ShowFlash("No worktrees found")
 		}
 		m.showWorktreeSwitcher = !m.showWorktreeSwitcher
 		if m.showWorktreeSwitcher {

@@ -134,12 +134,8 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	// Show copy/paste hint toast on first entry
 	if !p.inlineEditCopyPasteHintShown {
 		p.inlineEditCopyPasteHintShown = true
-		hintCmd := func() tea.Msg {
-			return app.ToastMsg{
-				Message:  fmt.Sprintf("Copy/paste: %s / %s", p.getInlineEditCopyKey(), p.getInlineEditPasteKey()),
-				Duration: 3 * time.Second,
-			}
-		}
+		// A one-time key hint, not an event to keep.
+		hintCmd := app.ShowFlash(fmt.Sprintf("Copy/paste: %s / %s", p.getInlineEditCopyKey(), p.getInlineEditPasteKey()))
 		return tea.Batch(enterCmd, hintCmd)
 	}
 	return enterCmd
@@ -179,7 +175,7 @@ func (p *Plugin) getInlineEditPasteKey() string {
 
 // copyInlineEditorOutputCmd copies the inline editor output to the clipboard.
 func (p *Plugin) copyInlineEditorOutputCmd() tea.Cmd {
-	empty := app.ToastMsg{Message: "No output to copy", Duration: 2 * time.Second}
+	empty := app.FlashMsg{Text: "No output to copy"}
 	return clip.CopyFrom(
 		func() (string, tea.Msg) {
 			if p.inlineEditor == nil || p.inlineEditor.State == nil || p.inlineEditor.State.OutputBuf == nil {
@@ -194,7 +190,7 @@ func (p *Plugin) copyInlineEditorOutputCmd() tea.Cmd {
 		},
 		func(r clip.Result, text string) tea.Msg {
 			count := strings.Count(text, "\n") + 1
-			return app.ToastMsg{Message: r.Message(fmt.Sprintf("Copied %d line(s)", count)), Duration: 2 * time.Second}
+			return app.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d line(s)", count))}
 		},
 	)
 }

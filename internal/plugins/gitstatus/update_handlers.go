@@ -3,7 +3,6 @@ package gitstatus
 import (
 	"log/slog"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -154,7 +153,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "s":
@@ -614,7 +613,7 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "d":

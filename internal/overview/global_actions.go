@@ -120,7 +120,7 @@ func (m *Model) OpenDeleteSelectedWorktree() tea.Cmd {
 		return nil
 	}
 	if reason := deleteRefusal(workspace); reason != "" {
-		return appmsg.ShowToast(reason, 3*time.Second)
+		return appmsg.Blocked(reason)
 	}
 	m.deleteOpen = true
 	m.deleteBusy = false

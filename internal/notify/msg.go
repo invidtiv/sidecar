@@ -26,3 +26,16 @@ type DismissMsg struct {
 type PostedMsg struct {
 	Notification Notification
 }
+
+// Alert builds a PostMsg for a source-specific notification. It exists so a
+// producer that needs more than the generic `system` toast — a blocked action,
+// a merge that unwound itself, an agent that fell back — can say which source
+// it is speaking as without assembling a Notification by hand. Expiry is left
+// to the store, which asks ExpiryFor for the source's configured lease.
+func Alert(source SourceID, severity Severity, title string) PostMsg {
+	return PostMsg{Notification: Notification{
+		Source:   source,
+		Severity: severity,
+		Title:    title,
+	}}
+}

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -971,10 +972,16 @@ func containsToast(t *testing.T, cmd tea.Cmd, want string) bool {
 	return toastFound(cmd(), want)
 }
 
+// toastFound asks whether the user was told something, whichever tier said it:
+// a notification, a source-specific alert, or a status flash.
 func toastFound(m tea.Msg, want string) bool {
 	switch v := m.(type) {
 	case appmsg.ToastMsg:
 		return strings.Contains(v.Message, want)
+	case appmsg.FlashMsg:
+		return strings.Contains(v.Text, want)
+	case notify.PostMsg:
+		return strings.Contains(v.Notification.Title, want)
 	case tea.BatchMsg:
 		for _, c := range v {
 			if c == nil {

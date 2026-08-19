@@ -3215,16 +3215,17 @@ func TestLargeSessionWarning(t *testing.T) {
 			t.Fatal("expected warning command for large session")
 		}
 
-		// Execute and check message
+		// A session that is only slow is a flash: worth saying, not worth
+		// keeping in the centre (audit row 57).
 		msg := cmd()
-		toast, ok := msg.(app.ToastMsg)
+		flash, ok := msg.(app.FlashMsg)
 		if !ok {
-			t.Fatalf("expected ToastMsg, got %T", msg)
+			t.Fatalf("expected FlashMsg, got %T", msg)
 		}
-		if !strings.Contains(toast.Message, "large") {
-			t.Errorf("expected slug in message, got: %s", toast.Message)
+		if !strings.Contains(flash.Text, "large") {
+			t.Errorf("expected slug in message, got: %s", flash.Text)
 		}
-		if toast.IsError {
+		if flash.IsError {
 			t.Error("large (100MB) warning should not be error")
 		}
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -719,7 +718,7 @@ func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
 		return m.focusList()
 	}
 	m.preview.full = true
-	return tea.Batch(m.syncTerminalGeometry(), appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second))
+	return tea.Batch(m.syncTerminalGeometry(), appmsg.ShowFlash("Sidebar hidden (\\ to restore)"))
 }
 
 // WorkspacesResize adopts a new tab size ahead of the frame that will use it,

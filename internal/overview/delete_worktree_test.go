@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/workspaceops"
 
 	"github.com/marcus/sidecar/internal/mouse"
@@ -199,6 +200,25 @@ func TestWorktreeDeleteIsDiscoverableForAWorktreeSelection(t *testing.T) {
 	}
 }
 
+// noticeAsToast reads whatever tier a notice arrived in — a notification, a
+// source-specific alert, or a status flash — as the toast shape these tests
+// were written against. What matters to them is that the user was told, and
+// what they were told.
+func noticeAsToast(m tea.Msg) (appmsg.ToastMsg, bool) {
+	switch v := m.(type) {
+	case appmsg.ToastMsg:
+		return v, true
+	case appmsg.FlashMsg:
+		return appmsg.ToastMsg{Message: v.Text, IsError: v.IsError}, true
+	case notify.PostMsg:
+		return appmsg.ToastMsg{
+			Message: v.Notification.Title,
+			IsError: v.Notification.Severity == notify.SeverityError,
+		}, true
+	}
+	return appmsg.ToastMsg{}, false
+}
+
 // toastFrom walks a command tree for the toast it produced, if any.
 func toastFrom(t *testing.T, cmd tea.Cmd) (appmsg.ToastMsg, bool) {
 	t.Helper()
@@ -214,8 +234,7 @@ func toastFrom(t *testing.T, cmd tea.Cmd) (appmsg.ToastMsg, bool) {
 		}
 		return appmsg.ToastMsg{}, false
 	}
-	toast, ok := msg.(appmsg.ToastMsg)
-	return toast, ok
+	return noticeAsToast(msg)
 }
 
 // mutateWorkspace edits one collected row and reprojects the list from it.

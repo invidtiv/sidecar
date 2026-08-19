@@ -858,9 +858,9 @@ func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDe
 	// and keep the useful notice without adding a second command beside the one
 	// PluginFocused reconciliation the return requires.
 	if m.inGlobalScope() && destination.Kind == destinationProject && destination.Path == m.ui.WorkDir {
-		focus := m.exitOverview()
-		m.ShowToast("Already on this project", 2*time.Second)
-		return focus
+		// No notice: the user is already looking at the project they picked, so
+		// saying nothing changed adds nothing (audit row 4).
+		return m.exitOverview()
 	}
 	m.leaveOverview(false)
 	m.updateContext()
@@ -943,11 +943,10 @@ func (m *Model) switchProjectWithInventory(projectPath string, inventory []Workt
 }
 
 func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection, restoreLastWorktree bool) tea.Cmd {
-	// Skip if already on this project
+	// Skip if already on this project. Silently: the user is looking at it
+	// (audit row 17).
 	if projectPath == m.ui.WorkDir {
-		return func() tea.Msg {
-			return ToastMsg{Message: "Already on this project", Duration: 2 * time.Second}
-		}
+		return nil
 	}
 
 	// Save the active plugin state for the old project root
@@ -1085,12 +1084,9 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		titleCmd,
 		inventoryRefresh,
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
-		func() tea.Msg {
-			return ToastMsg{
-				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),
-				Duration: 3 * time.Second,
-			}
-		},
+		// Routine confirmation of a switch the user just made and can see:
+		// a flash, not a stored notification (audit row 18).
+		ShowFlash(fmt.Sprintf("Switched to %s", GetRepoName(targetPath))),
 	)
 }
 
@@ -1226,9 +1222,9 @@ func (m *Model) confirmThemeSelection(tc config.ThemeConfig, displayName string)
 	} else {
 		toastMsg += " (global)"
 	}
-	return tea.Batch(themeCmd, func() tea.Msg {
-		return ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
-	})
+	// The theme change is the confirmation; only the save-failed branch above
+	// is worth keeping (audit row 21).
+	return tea.Batch(themeCmd, ShowFlash(toastMsg))
 }
 
 // saveTheme persists a ThemeConfig based on scope.
@@ -1266,7 +1262,7 @@ Rules:
 My code is located at: [TELL ME WHERE YOUR CODE DIRECTORIES ARE]`
 
 	return clip.Copy(prompt, func(r clip.Result) tea.Msg {
-		return ToastMsg{Message: r.Message("Copied LLM setup prompt"), Duration: 2 * time.Second}
+		return FlashMsg{Text: r.Message("Copied LLM setup prompt")}
 	})
 }
 
@@ -1405,9 +1401,8 @@ func (m *Model) saveProjectAdd() tea.Cmd {
 	// Refresh the filtered list
 	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 
-	return func() tea.Msg {
-		return ToastMsg{Message: fmt.Sprintf("Added project: %s", name), Duration: 3 * time.Second}
-	}
+	// The new row in the switcher is the confirmation (audit row 26).
+	return ShowFlash(fmt.Sprintf("Added project: %s", name))
 }
 
 // resetThemeSwitcher resets the theme switcher modal state.

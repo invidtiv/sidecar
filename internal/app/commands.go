@@ -25,6 +25,13 @@ var (
 	ShowFlashFrom = msg.ShowFlashFrom
 )
 
+// Alert and Blocked are re-exported: the source-aware notification path, for
+// events that should not speak as generic `system` chrome.
+var (
+	Alert   = msg.Alert
+	Blocked = msg.Blocked
+)
+
 // ThemeChangedMsg is re-exported from msg package for backward compatibility.
 type ThemeChangedMsg = msg.ThemeChangedMsg
 

@@ -397,9 +397,8 @@ func (m *Model) switchWorktree(worktreePath string) tea.Cmd {
 	normalizedPath, _ := normalizePath(worktreePath)
 	normalizedWorkDir, _ := normalizePath(m.ui.WorkDir)
 	if normalizedPath == normalizedWorkDir {
-		return func() tea.Msg {
-			return ToastMsg{Message: "Already on this worktree", Duration: 2 * time.Second}
-		}
+		// The user is already on it; saying so adds nothing (audit row 10).
+		return nil
 	}
 
 	// Validate that the worktree still exists before switching

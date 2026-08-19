@@ -117,8 +117,10 @@ func (m *Model) handlePreviewDocSelectionKey(msg tea.KeyPressMsg) (tea.Cmd, bool
 // scroll offset, so a drag that scrolled it leaves nothing to save.
 func (m *Model) previewDocSelectionResult(view *docview.Model, result textselect.Result) tea.Cmd {
 	return view.SelectionCopyCmd(result, func(notice textselect.CopyNotice) tea.Msg {
-		return appmsg.ToastMsg{
-			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		// A copy that worked is a flash; one that failed is a notification.
+		if notice.IsError {
+			return appmsg.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
 		}
+		return appmsg.FlashMsg{Text: notice.Message}
 	})
 }

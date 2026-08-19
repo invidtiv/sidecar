@@ -884,12 +884,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		default:
 			toastMsg = "Stash popped"
 		}
-		return p, tea.Batch(
-			p.refresh(),
-			func() tea.Msg {
-				return app.ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
-			},
-		)
+		// The status view shows the result; the confirmation is a flash.
+		return p, tea.Batch(p.refresh(), app.ShowFlash(toastMsg))
 
 	case BranchListLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {

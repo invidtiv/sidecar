@@ -708,7 +708,7 @@ func (p *Plugin) queuePendingOverviewAction(action string, wt *Worktree) {
 		return
 	}
 	if reason := WorktreeActionRefusal(wt, WorktreeActionMerge); reason != "" {
-		p.pendingOverviewAction = appmsg.ShowToast(reason, 3*time.Second)
+		p.pendingOverviewAction = appmsg.Blocked(reason)
 		return
 	}
 	p.pendingOverviewAction = p.startMergeWorkflow(wt)
