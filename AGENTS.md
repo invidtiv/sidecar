@@ -51,7 +51,8 @@ make install-worktree
 
 # First command in any git worktree: shadow the main checkout's go.work
 # (without this, every go command in a worktree fails with "directory ...
-# does not contain modules listed in go.work"; idempotent, safe everywhere)
+# does not contain modules listed in go.work"; idempotent, safe everywhere).
+# Worktrees created through Sidecar run this automatically via .worktree-setup.sh.
 make worktree-init
 
 # Inspect the managed link and actual shell resolution
