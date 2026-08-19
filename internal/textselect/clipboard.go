@@ -104,10 +104,17 @@ func (k Keys) CopySelectionCmd(lines []string, wrap func(CopyNotice) tea.Msg) te
 // SelectionText is what selected lines read as off the screen: the styling they
 // were drawn with removed, joined the way they were stacked. It is exactly what
 // lands on the clipboard.
+//
+// Trailing whitespace does not survive the trip. Every surface that draws into a
+// pane pads its rows out to the pane's width — a glamour-rendered document most
+// visibly — so a multi-row copy that kept the padding would paste ragged lines
+// the user never saw a single column of. Leading and interior spacing is another
+// matter entirely: it is the indentation and alignment of the text itself, and
+// is kept exactly as drawn.
 func SelectionText(lines []string) string {
 	stripped := make([]string, 0, len(lines))
 	for _, line := range lines {
-		stripped = append(stripped, ansi.Strip(line))
+		stripped = append(stripped, strings.TrimRight(ansi.Strip(line), " \t"))
 	}
 	return strings.Join(stripped, "\n")
 }

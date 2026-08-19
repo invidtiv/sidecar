@@ -198,6 +198,88 @@ func TestSelectionInRenderedMarkdownHasNoGutter(t *testing.T) {
 	}
 }
 
+// TestCopiedRenderedRowsCarryNoInvisiblePadding is the glamour case: rendered
+// rows are padded out to the pane's width, so a select-all used to paste lines
+// trailing spaces the user never saw a column of. The indentation glamour draws
+// in front of the text is not padding and stays.
+func TestCopiedRenderedRowsCarryNoInvisiblePadding(t *testing.T) {
+	m := newTestModel(t)
+	m.loading = false
+	m.result.Content = "## Working with td\n\nbody text\n"
+	m.SetSize(40, 8)
+	m.SetOrigin(selectionOriginX, selectionOriginY)
+	m.SetSelection(textselect.Keys{Copy: "alt+c", SelectAll: "ctrl+a"}, false)
+	if !m.Rendered() {
+		t.Fatal("the document is not in rendered mode; the padding this covers is glamour's")
+	}
+	padded := false
+	for _, row := range m.display().rows {
+		if strings.HasSuffix(ansi.Strip(row), " ") {
+			padded = true
+		}
+	}
+	if !padded {
+		t.Fatal("no rendered row is padded; the test would pass without the trim")
+	}
+
+	if all := m.HandleSelectionKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}); !all.Changed {
+		t.Fatal("select-all selected nothing")
+	}
+	copied := m.HandleSelectionKey(tea.KeyPressMsg{Code: 'c', Mod: tea.ModAlt})
+	if !copied.CopyAsked {
+		t.Fatal("the copy chord asked for no copy")
+	}
+
+	clipboard := textselect.SelectionText(copied.Copy)
+	heading := ""
+	for _, line := range strings.Split(clipboard, "\n") {
+		if strings.HasSuffix(line, " ") || strings.HasSuffix(line, "\t") {
+			t.Errorf("copied line %q keeps trailing whitespace nobody could see", line)
+		}
+		if strings.Contains(line, "Working with td") {
+			heading = line
+		}
+	}
+	if heading == "" {
+		t.Fatal("the heading never reached the clipboard")
+	}
+	if !strings.HasPrefix(heading, "  ") {
+		t.Errorf("copied heading %q lost the indentation it was drawn with", heading)
+	}
+}
+
+// TestBlankRowsInsideASelectionAreStillHighlighted covers the striped look: a
+// selection running over a blank line used to leave that row unpainted, so a
+// multi-paragraph selection read as separate blocks.
+func TestBlankRowsInsideASelectionAreStillHighlighted(t *testing.T) {
+	m := newSelectableModel(t, 40, 3, "first para", "", "second para")
+	if got := ansi.StringWidth(m.display().rows[1]); got != 0 {
+		t.Fatalf("the middle row is %d columns wide, want the blank row this covers", got)
+	}
+
+	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
+	m.HandleSelectionMouse(selectDrag(m.contentX(6), selectionOriginY+2))
+	m.HandleSelectionMouse(selectRelease(m.contentX(6), selectionOriginY+2))
+
+	rows := strings.Split(m.View(), "\n")
+	for i, row := range rows {
+		if highlightColumn(row) < 0 {
+			t.Errorf("row %d (%q) carries no highlight; the selection reads as striped", i, ansi.Strip(row))
+		}
+	}
+	if got := highlightColumn(rows[1]); got != m.display().gutterWidth {
+		t.Errorf("the blank row's highlight opens at column %d, want %d — where its text would start",
+			got, m.display().gutterWidth)
+	}
+
+	// The blank line is still blank on the clipboard: the highlight is a frame,
+	// not content.
+	text := m.SelectionText()
+	if len(text) != 3 || text[1] != "" {
+		t.Fatalf("copied %#v, want the blank line copied as empty", text)
+	}
+}
+
 func TestSelectionSurvivesScrolling(t *testing.T) {
 	m := newSelectableModel(t, 40, 2, "one", "two", "three", "four", "five")
 	m.Scroll(2)

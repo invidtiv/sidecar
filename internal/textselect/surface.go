@@ -17,6 +17,8 @@ package textselect
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -237,6 +239,18 @@ func (s *Surface) DecorateRow(row string, visualRow int) string {
 	startCol, endCol := s.selection.GetLineSelectionCols(visualRow)
 	if startCol < 0 {
 		return row
+	}
+	if ansi.StringWidth(row) == 0 {
+		// A row with no characters takes no highlight from a range paint, so a
+		// selection spanning paragraphs came out striped — highlighted text with
+		// unhighlighted gaps between it — where a native selection reads as one
+		// continuous block. One highlighted cell closes the gap. It goes at the
+		// selection's start column clamped to the row's width, which for a row
+		// with no characters is column 0; anything the row does carry is styling,
+		// so it is kept in front. Only what is drawn changes: the row still
+		// copies as the empty line it is, because the copy reads the buffer
+		// rather than the frame.
+		return row + ui.InjectCharacterRangeBackground(" ", 0, 0)
 	}
 	return ui.InjectCharacterRangeBackground(row, startCol, endCol)
 }
