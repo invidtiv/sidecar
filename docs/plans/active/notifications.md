@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done**; Phases 2–7 planned, not started
+**Status:** Phase 1 (steel thread) **done** (see "Phase 1 as built"); Phase 1.5 planned next; Phases 2–7 planned, not started
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -287,6 +287,79 @@ content region the panel leaves behind.
 storm: every drag frame re-sizes every plugin, and live panes re-read on each.
 Phase 3 already owns the fix ("suppress-while-pane-resizing guard") and the
 config toggle for it (1g); it is not worth a second mechanism here.
+
+## Phase 1.5 — two-tier notifications and centre polish
+
+Driven by first real use of Phase 1 and by the call-site audit at
+`docs/reference/audits/notification-inventory.md` (85 toast call sites:
+24 keep, 15 consider, 46 remove). All decisions below are settled with Marcus
+(2026-08-19).
+
+**1. Two tiers: notifications and status flashes.**
+
+- **Notification** — the Phase 1 artifact, unchanged in kind: bordered toast,
+  lands in the centre, counts in the header. For agent events, real errors,
+  blocked actions with a reason, and surprising state changes.
+- **Status flash** — new, lightweight, **not stored**: a single line at the
+  top-right of the content region (same corner as toasts, for spatial
+  consistency), starting with a colored source glyph, fading in and out. No
+  centre entry, no history, no unread count. This is the home for routine
+  confirmations — "Saved", yank/copy, sidebar toggles — that deserve feedback
+  but not persistence.
+- Call sites choose the tier explicitly: keep `msg.ShowToast` → notification,
+  add a parallel flash message/helper. The flash path never touches the store.
+- **Flashes replace, never queue:** a new flash immediately supersedes the one
+  on screen. (Notification stacking/queueing — max 3 vertical then queue,
+  macOS-style — is Phase 3's spec and is not pulled forward.)
+- **Fade** is real color interpolation: 2–3 luminance steps in and out using
+  theme colors, driven by a tagged tick; degrade to plain appear/disappear on
+  dumb/slow terminals. If it proves too costly it can be backed out to
+  appear/disappear, but start with the interpolation.
+
+**2. Re-tier the audited call sites.** Work from the audit doc's tables:
+
+- **REMOVE rows (46):** pure no-ops are deleted outright — "Already on this
+  project/worktree", "Nothing to undo", "No title/content to copy",
+  "Showing all/X sessions", "Nothing to commit". Every other REMOVE row
+  (yank/copy confirmations, "Saved", sidebar toggles, "Opened …", move
+  success) becomes a status flash.
+- **KEEP rows (24):** stay full notifications. Route the blocked-action and
+  merge/commit-lifecycle rows (audit rows 32–35, 72, 79) through more specific
+  sources than `system` so hue/priority distinguishes "act on this" from FYI.
+- **CONSIDER rows (15):** resolve during implementation by reading the actual
+  dynamic strings at each site, per the questions in the audit doc; split
+  mixed sites (error branch → notification, routine branch → flash or delete).
+
+**3. Centre polish.**
+
+- Gradient border on the centre panel, matching every other content pane
+  (shared border styling, not a second border rule).
+- Centre entries go to **two lines** (title + body) so the CTA isn't lost.
+- **Re-show as detail view:** `enter` on a centre entry re-presents that
+  notification as a toast — this is the "view details" action and gives
+  `enter` a job before Phase 5 rebinds it to target activation (digit keys
+  and target jumps remain Phase 5; re-show stays as a secondary key then).
+- **Shared symbol logic:** one helper renders a source's glyph + hue, used by
+  toast, flash, and centre alike, so an item looks the same everywhere.
+
+**4. Toast presentation tweaks.**
+
+- Countdown made less prominent: dimmer/smaller cells, same tick behaviour.
+- Default expiries lengthened: 12s for `agent`, 10s for `system` / `session` /
+  `td` / `tasks`; `waiting` stays sticky. **These live in `internal/config`
+  from day one** (a minimal `Notifications` section with per-source expiry),
+  not as constants — no configui page yet, but the values must be
+  user-editable in the config file, ahead of the full Phase 4 page which
+  will render them.
+
+**5. Simplify toast interaction.** Drop the focusable-toast model: toasts are
+**click to dismiss** plus the global `d` fallback where the focused context
+allows it (not while an interactive terminal or editor owns keys — the
+existing `contextRebindsKey` yielding already encodes this). No toast focus
+state to route around.
+
+**6. Housekeeping.** Commit `docs/reference/audits/notification-inventory.md`
+alongside this plan so the phase references a stable document.
 
 ## Enhancements
 
