@@ -383,3 +383,26 @@ func runGitTest(t *testing.T, dir string, args ...string) string {
 	}
 	return string(out)
 }
+
+// A refusal fires from every mutation key while a write is in flight, so it
+// must carry a lease. The `waiting` source is sticky by default: without an
+// explicit expiry each impatient keypress would leave a permanent unread entry
+// in the notification centre.
+func TestWriteBusyNoticeIsLeasedNotSticky(t *testing.T) {
+	p := &Plugin{}
+	cmd := p.writeBusyToast()
+	if cmd == nil {
+		t.Fatal("writeBusyToast returned no command")
+	}
+	post, ok := cmd().(notify.PostMsg)
+	if !ok {
+		t.Fatalf("want notify.PostMsg, got %T", cmd())
+	}
+	n := post.Notification
+	if n.Source != notify.SourceWaiting || n.Severity != notify.SeverityWarning {
+		t.Fatalf("want a waiting warning, got %s/%s", n.Source, n.Severity)
+	}
+	if n.Sticky || n.ExpiresAt == nil {
+		t.Fatalf("refusal must expire on its own: sticky=%v expires=%v", n.Sticky, n.ExpiresAt)
+	}
+}

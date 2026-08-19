@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done** (see "Phase 1 as built"); Phase 1.5 planned next; Phases 2–7 planned, not started
+**Status:** Phase 1 (steel thread) **done** (see "Phase 1 as built"); Phase 1.5 **done** (see "Phase 1.5 as built"); Phases 2–7 planned, not started
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -364,6 +364,88 @@ remains the deliberate, user-initiated route to interact further.)
 
 **6. Housekeeping.** Commit `docs/reference/audits/notification-inventory.md`
 alongside this plan so the phase references a stable document.
+
+## Phase 1.5 as built — decisions and deviations
+
+Landed in commits 1fe1497b (flash tier, config expiries, shared glyph),
+73871d81 (centre polish, quieter countdown, click-to-dismiss) and 6bb0d44c
+(re-tiering every audited call site), plus a review fix pass. All six items are
+implemented. What follows is what a later phase needs and the plan above does
+not say.
+
+**The flash tier.** `msg.FlashMsg` / `msg.ShowFlash` / `msg.ShowFlashFrom`,
+re-exported as `app.FlashMsg` / `app.ShowFlash` / `app.ShowFlashFrom`. All flash
+state and rendering is `internal/app/flash.go`: one slot, replace-never-queue,
+tagged `flashTickMsg{seq}` so a burst cannot leave two animations fighting over
+the line. It never touches `notify.Store` — no centre entry, no unread count.
+Fade is real sRGB interpolation (3 steps in, ~2s hold, 3 out) at a 90ms cadence,
+composited by `internal/overlay` against the *content region*, so the centre
+narrowing content moves it too. `flashAnimated()` is the degraded-terminal check
+(`TERM` empty/`dumb`, or `SIDECAR_NO_ANIMATION`), resolved once via `sync.Once`;
+Phase 3's `internal/reveal` should move that helper somewhere shared rather than
+adding a second one.
+
+- **Deviation:** the flash sits one row *below* a toast when both are painted
+  rather than in the same cell. The spec's "same corner" is honoured; overlap
+  would be unreadable.
+
+**Source-aware notifications.** `notify.Alert(source, severity, title)` builds
+the `PostMsg`; `msg.Alert(...)` is the `tea.Cmd`, and `msg.Blocked(reason)` is
+the refusal shape — a `waiting`/warning with an explicit 6s lease. Use `Blocked`
+for every refusal: `waiting` is sticky by default, so a bare waiting alert on a
+keypress-frequency refusal leaves one permanent unread entry per keystroke.
+(That was the one real defect the review pass found, in gitstatus'
+`writeBusyToast`.)
+
+**Config.** `config.NotificationsConfig{Sources: {id: {Expiry}}}`; `"sticky"` /
+`"never"` / `0` mean no countdown; an unparseable value is warned and skipped,
+never a load failure. `notify.ApplyConfig` binds it — called in `app.New` before
+the store opens, on the config-screen save, and in `runNotifyPost` so the CLI's
+fallback path completes records the same way. `notify.ExpiryFor` is now the only
+correct way to ask how long a source toasts for; `Source.DefaultExpiry` is the
+built-in floor. `config.Save` does not manage the `notifications` key, so it
+survives on its unknown-key preservation path. Phase 4's configui page renders
+over this struct — extend it, do not add a parallel one.
+
+**Centre.** Panel body goes through `styles.RenderPanel` (the shared gradient
+pane border, active while the panel is focused), which costs 2 rows and 4
+columns — hence `notificationCentreDefaultWidth` 34 → 38 (min/max unchanged) and
+the interior geometry shift the hit regions follow. Entries are two rows (title +
+`TextSubtle` body) carrying the same item index, so the cursor spans both and a
+click on either selects the entry; an entry with no body stays one row. `enter`
+= "view details": `reshowNotification` re-presents the selection as a toast.
+That is presentation only — a copy with a fresh countdown, no re-post, no
+un-dismiss, no unread change — and a sticky re-show gets a `system`-length lease
+so the slot is never held forever. When Phase 5 rebinds `enter` to target
+activation, move re-show to a secondary key and update both
+`keymap/bindings.go` and `notificationCentreCommands`.
+
+**Toasts.** Countdown cells are `▪`/`▫` at `TextSubtle`/`BorderNormal` (tick
+math unchanged). There was **no focusable-toast model to remove** — Phase 1 never
+gave toasts a focus or keymap context — so item 5 reduced to adding the missing
+click route (`regionToast`, registered and cleared inside `renderToastOverlay`,
+tested after the centre's column and before content) and dropping the `enter
+open` hint that nothing ever honoured. The key row is now `click or d dismiss`.
+
+**Re-tiering.** Sources chosen for the KEEP rows: "Reviewed source changed" →
+`waiting`/warning (sticky — a stale review is a correctness risk); every other
+refusal → `msg.Blocked`; agent fallback → `agent`/warning; merge aborted,
+catalog drift, session ended → `session`; terminal errors → `session`/error; td
+setup/status failures → `td`/error; task created → `td`/info. The routine half
+of every mixed site became a flash, and the enumerated pure no-ops ("Already on
+this project/worktree", "Nothing to undo", "No title to copy", "Nothing to
+commit", filter confirmations) were deleted outright.
+
+- **Deviations worth Marcus's eye:** the once-ever default-theme notice (row 27)
+  is now a flash and leaves no trace — a one-line revert if that reads wrong.
+  Notes' "Archived/Deleted notes are read-only" is a flash rather than a
+  `Blocked` because it fires on every keystroke into a read-only buffer.
+  `docview`/`filebrowser` still flash "No content to copy" where notes deletes
+  it (rows 43/44): silence on a copy key that did nothing reads as a broken
+  key, and a flash costs nothing persistent.
+- `internal/msg` now imports `internal/notify`, and `internal/notify` imports
+  `internal/config` — both leaves, no cycle — so every plugin can post a
+  source-specific notification without importing `internal/app`.
 
 ## Enhancements
 
