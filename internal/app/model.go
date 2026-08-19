@@ -275,11 +275,6 @@ type Model struct {
 	// Header/footer
 	ui *UIState
 
-	// Status/toast messages
-	statusMsg     string
-	statusExpiry  time.Time
-	statusIsError bool
-
 	// Error handling
 	lastError error
 
@@ -375,6 +370,9 @@ type Model struct {
 	// worktree switches, and is the single writer for this process.
 	notifications     notify.Store
 	notificationCache []notify.Notification
+	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
+	// the centre stays open across every navigation until the user closes it.
+	notificationCentreOpen bool
 }
 
 // Option adjusts the model at construction. Options exist for the deliberate,
@@ -657,18 +655,30 @@ func (m *Model) focusPluginByIDWithoutNotice(id string) {
 	}
 }
 
-// ShowToast displays a temporary status message.
-func (m *Model) ShowToast(msg string, duration time.Duration) {
-	m.statusMsg = msg
-	m.statusExpiry = time.Now().Add(duration)
+// ShowToast files a transient message as a `system` notification. It keeps the
+// old name and signature because dozens of callers use it, but there is no
+// footer toast behind it any more: the message becomes a real notification, so
+// it floats as a toast for `duration` and then stays in the centre instead of
+// vanishing unseen.
+func (m *Model) ShowToast(message string, duration time.Duration) {
+	m.showToastWithSeverity(message, duration, false)
 }
 
-// ClearToast clears any expired toast message.
-func (m *Model) ClearToast() {
-	if m.statusMsg != "" && time.Now().After(m.statusExpiry) {
-		m.statusMsg = ""
-		m.statusIsError = false
+func (m *Model) showToastWithSeverity(message string, duration time.Duration, isError bool) {
+	severity := notify.SeverityInfo
+	if isError {
+		severity = notify.SeverityError
 	}
+	n := notify.Notification{
+		Source:   notify.SourceSystem,
+		Severity: severity,
+		Title:    message,
+	}
+	if duration > 0 {
+		expires := time.Now().UTC().Add(duration)
+		n.ExpiresAt = &expires
+	}
+	m.postNotification(n)
 }
 
 // resetProjectSwitcher resets the project switcher modal state.

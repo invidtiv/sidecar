@@ -311,6 +311,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.exitOverview()
 				}
 
+				// The unread indicator is the centre's only pointer route in —
+				// the centre has no navbar tab — and toggles it the same way
+				// the shortcut does.
+				if start, end, ok := m.getNotificationIndicatorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, (&m).toggleNotificationCentre()
+				}
+
 				// The gear toggles Configuration: it is the control that opened
 				// the surface, so it is also the one that puts it away, and
 				// reopening returns to the section the user was last on.
@@ -379,8 +386,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		m.ui.UpdateClock()
-		m.ui.ClearExpiredToast()
-		m.ClearToast()
 		// Notification expiry rides the existing heartbeat rather than a timer
 		// per toast: a countdown ticks one cell a second, which is exactly the
 		// resolution this tick already has.
@@ -424,8 +429,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ToastMsg:
-		m.ShowToast(msg.Message, msg.Duration)
-		m.statusIsError = msg.IsError
+		// Every legacy toast is a notification now: same call sites, same
+		// message, but it lands in the store, floats as a bordered toast, and
+		// stays in the centre afterwards.
+		(&m).showToastWithSeverity(msg.Message, msg.Duration, msg.IsError)
 		return m, nil
 
 	case notify.PostMsg:
@@ -1682,6 +1689,26 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case "N":
+		// The notification centre. Bare `n` is taken several times over
+		// (new-worktree, new-note, next-match); `N` is free in the global
+		// context, and the search/diff contexts that bind it are answered at
+		// precedence level 3 before this switch runs.
+		if m.consumesTextInput() || m.contextRebindsKey("N") {
+			break
+		}
+		return m, m.toggleNotificationCentre()
+	case "d":
+		// `d` dismisses the toast on screen, exactly as the toast's own key row
+		// says. A plugin that binds `d` for itself has already answered at
+		// precedence level 3, so this only fires where `d` was otherwise free —
+		// and only while a toast is actually up.
+		if m.hasModal() || m.consumesTextInput() {
+			break
+		}
+		if m.dismissVisibleToast() {
+			return m, nil
+		}
 	case "K":
 		// Toggle cross-project Overview (Kanban). Blocked in text-input contexts
 		// above. Workspace shell delete is D (with confirm); this stays global.

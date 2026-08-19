@@ -45,6 +45,30 @@ func openNotificationStore() notify.Store {
 	return store
 }
 
+// contentWidth is the width of the content region: the terminal minus any
+// column the app shell has reserved on the right. It is the single place that
+// answers "how wide is the content", so the toast host and the plugin host
+// cannot disagree about where the content's right edge is. The notification
+// centre panel (steel-thread step 6) reserves its width here; until it does,
+// the content region is the whole terminal.
+func (m Model) contentWidth() int {
+	return max(0, m.width-m.reservedRightWidth())
+}
+
+// reservedRightWidth is the width of the right-hand column reserved by the
+// notification centre. It is 0 until the panel lands.
+func (m Model) reservedRightWidth() int {
+	return 0
+}
+
+// toggleNotificationCentre is the single app-level entry point for opening and
+// closing the centre. The header indicator's click and its shortcut both come
+// through here, so the panel has one way to be opened however it was asked for.
+func (m *Model) toggleNotificationCentre() tea.Cmd {
+	m.notificationCentreOpen = !m.notificationCentreOpen
+	return nil
+}
+
 // Notifications returns the current snapshot, newest first.
 func (m *Model) Notifications() []notify.Notification {
 	if m.notifications == nil {

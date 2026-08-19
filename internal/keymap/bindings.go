@@ -19,6 +19,11 @@ func DefaultBindings() []Binding {
 		// K: Overview (Kanban board). Bare O is taken by open-in. Shell delete is D.
 		{Key: "K", Command: "toggle-overview", Context: "global"},
 		{Key: "i", Command: "open-issue", Context: "global"},
+		// N: the notification centre. Bare n is taken (new-worktree, new-note,
+		// next-match); N is free globally — the search/diff contexts that bind
+		// it answer before the global switch. Handled in handleKeyMsg; the
+		// binding is registered so the palette and help can find it.
+		{Key: "N", Command: "toggle-notifications", Context: "global"},
 		// Comma is the conventional settings key and is otherwise unbound.
 		{Key: ",", Command: "open-configuration", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},

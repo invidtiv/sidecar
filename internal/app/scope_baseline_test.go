@@ -269,8 +269,8 @@ func TestSelectingTheCoveredProjectFromGlobalRestoresItsTerminalOnce(t *testing.
 		t.Fatalf("terminal restoration: open=%v notices=%d want=%d",
 			project.terminalOpen, project.focusNotices, beforeNotices+1)
 	}
-	if m.statusMsg != "Already on this project" {
-		t.Fatalf("same-project notice = %q", m.statusMsg)
+	if !hasSystemNotification(m, "Already on this project") {
+		t.Fatalf("same-project notice missing from the notifications: %#v", m.Notifications())
 	}
 	if got := totalInits(plugins); got != inits {
 		t.Fatalf("same-project return reinitialized plugins: %d -> %d", inits, got)
@@ -606,7 +606,7 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	if _, ok := cmd().(plugin.PluginFocusedMsg); !ok {
 		t.Fatal("switching to the current project should restore focus, not re-switch")
 	}
-	if m.statusMsg != "Already on this project" {
+	if !hasSystemNotification(m, "Already on this project") {
 		t.Fatal("switching to the current project lost its notice")
 	}
 	if m.activePlugin != 2 || m.activeContext != "git" {
@@ -702,4 +702,15 @@ func TestHeaderKeysYieldToAFocusedTextInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hasSystemNotification reports whether the model filed a notice with this
+// title. Notices used to be a footer string; they are notifications now.
+func hasSystemNotification(m Model, title string) bool {
+	for _, n := range m.Notifications() {
+		if n.Title == title {
+			return true
+		}
+	}
+	return false
 }

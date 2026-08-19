@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/styles"
@@ -174,16 +176,23 @@ func (m Model) viewContent() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
-	// Main content
-	content := m.renderContent(m.width, contentHeight)
+	// Main content. contentWidth is what a reserved right-hand column (the
+	// notification centre) narrows; the toast is placed against this region's
+	// right edge rather than the terminal's, so it never lands under the panel.
+	contentWidth := m.contentWidth()
+	content := m.renderContent(contentWidth, contentHeight)
 	b.WriteString(content)
 
 	// Footer
 	b.WriteString("\n")
 	b.WriteString(m.renderFooter())
 
-	// Overlay modals (priority order via activeModal)
 	bg := b.String()
+	// Toasts float over the content region, under any modal: a modal has the
+	// user's attention already, and a block drawn over it would be unreadable.
+	bg = m.renderToastOverlay(bg, 0, headerHeight, contentWidth, contentHeight)
+
+	// Overlay modals (priority order via activeModal)
 	switch m.activeModal() {
 	case ModalPalette:
 		return m.renderPaletteOverlay(bg)
@@ -666,6 +675,34 @@ type headerLayout struct {
 	restoreEnd              int
 	gearStart               int
 	gearEnd                 int
+	indicatorStart          int
+	indicatorEnd            int
+}
+
+// headerIndicatorMaxWidth is design 1d's budget: `·`, `●3`, `?12`, `●99+`,
+// `◌4` — never more than five cells.
+const headerIndicatorMaxWidth = 5
+
+// renderHeaderIndicator paints the unread indicator that sits next to the
+// gear (design 1d). Its colour carries the loudest unread source, and it is
+// inverted while the notification centre is open, so the control that opened
+// the panel also shows that the panel is what is open.
+func (m Model) renderHeaderIndicator() string {
+	unread := m.UnreadNotifications()
+	hue, any := notify.LoudestHue(m.notificationCache)
+	text := "·"
+	if any && unread > 0 {
+		count := "99+"
+		if unread <= 99 {
+			count = strconv.Itoa(unread)
+		}
+		text = "●" + count
+	}
+	style := lipgloss.NewStyle().Foreground(notify.ResolveHue(hue))
+	if m.notificationCentreOpen {
+		style = lipgloss.NewStyle().Foreground(styles.BgPrimary).Background(notify.ResolveHue(hue))
+	}
+	return style.Render(text)
 }
 
 // headerGear is the Configuration control. It is a plain Unicode glyph rather
@@ -753,6 +790,15 @@ func (m Model) headerGeometry() headerLayout {
 	gearWidth := lipgloss.Width(gear)
 	clock := m.headerClock()
 	clockWidth := lipgloss.Width(clock)
+	// The notification indicator sits immediately left of the gear and is
+	// budgeted with it: it outlives the clock (it is the only place an unread
+	// count is visible at all) and is given up before the gear, which is the
+	// sole mouse route into Configuration.
+	indicator := m.renderHeaderIndicator()
+	indicatorWidth := min(headerIndicatorMaxWidth, lipgloss.Width(indicator))
+	// trailing is what the right cluster always ends with: indicator, space,
+	// gear. Every budget below reserves it.
+	trailing := indicatorWidth + 1 + gearWidth
 
 	// A fully hidden or partially clipped tab must never retain a hit region.
 	// Fit whole global tabs into the space left of the pinned selector, dropping
@@ -767,7 +813,7 @@ func (m Model) headerGeometry() headerLayout {
 		}
 		return result
 	}
-	minimumSelectorWidth := lipgloss.Width(renderSelector("", width)) + gearWidth + 1
+	minimumSelectorWidth := lipgloss.Width(renderSelector("", width)) + trailing + 1
 	for len(layout.globalTabs) > 0 && leftWidth(layout.globalTabs)+minimumSelectorWidth > width {
 		remove := -1
 		for i := len(layout.globalTabs) - 1; i >= 0; i-- {
@@ -792,10 +838,29 @@ func (m Model) headerGeometry() headerLayout {
 		layout.globalTabs[i].end = lipgloss.Width(left)
 	}
 
+	// The right cluster's optional pieces go before the selector's label is
+	// truncated: a header that has to abbreviate the project name has no room
+	// for decoration. The clock goes first, then the indicator — the indicator
+	// outlives it because it is the only place an unread count is visible.
+	squeezed := func() bool {
+		need := lipgloss.Width(left) + lipgloss.Width(renderSelector(selectorLabel, width)) + trailing + 1
+		if clockWidth > 0 {
+			need += clockWidth + 1
+		}
+		return need > width
+	}
+	if clockWidth > 0 && squeezed() {
+		clock, clockWidth = "", 0
+	}
+	if indicatorWidth > 0 && squeezed() {
+		indicator, indicatorWidth = "", 0
+		trailing = gearWidth
+	}
+
 	// The left anchor is protected. Fit the selector into exactly the columns
 	// that remain so a long repo or worktree name cannot cover the brand/tabs or
 	// push its arrow beyond the right edge.
-	selectorBudget := max(0, width-lipgloss.Width(left)-gearWidth-1)
+	selectorBudget := max(0, width-lipgloss.Width(left)-trailing-1)
 	selector := renderSelector(selectorLabel, selectorBudget)
 	selectorWidth := lipgloss.Width(selector)
 
@@ -804,7 +869,7 @@ func (m Model) headerGeometry() headerLayout {
 		if name := strings.TrimSpace(m.intro.RepoName); name != "" {
 			candidate := styles.ProjectRestore.Render("↖ " + name)
 			fullSelector := renderSelector(selectorLabel, width)
-			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+gearWidth+1+lipgloss.Width(fullSelector) <= width {
+			if lipgloss.Width(left)+lipgloss.Width(candidate)+1+trailing+1+lipgloss.Width(fullSelector) <= width {
 				restore = candidate
 				selector = fullSelector
 				selectorWidth = lipgloss.Width(selector)
@@ -812,7 +877,7 @@ func (m Model) headerGeometry() headerLayout {
 		}
 	}
 	restoreWidth := lipgloss.Width(restore)
-	suffixWidth := selectorWidth + gearWidth + 1
+	suffixWidth := selectorWidth + trailing + 1
 	if restoreWidth > 0 {
 		suffixWidth += restoreWidth + 1
 	}
@@ -850,6 +915,14 @@ func (m Model) headerGeometry() headerLayout {
 	if clockWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		suffixWidth -= clockWidth + 1
 		clock = ""
+	}
+	// Next casualty after the clock: the unread indicator. It goes before any
+	// project tab is dropped only in the sense that it is cheaper — the gear
+	// never goes, because it is the only pointer route into Configuration.
+	if indicatorWidth > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
+		suffixWidth -= indicatorWidth + 1
+		indicator = ""
+		indicatorWidth = 0
 	}
 	for len(project) > 0 && lipgloss.Width(left)+clusterWidth(project) > width {
 		remove := -1
@@ -890,6 +963,11 @@ func (m Model) headerGeometry() headerLayout {
 	selectorOffset := lipgloss.Width(right)
 	right += selector
 	right += " "
+	indicatorOffset := lipgloss.Width(right)
+	if indicator != "" {
+		right += indicator
+		right += " "
+	}
 	gearOffset := lipgloss.Width(right)
 	right += gear
 	rightStart := max(lipgloss.Width(left), width-lipgloss.Width(right))
@@ -908,6 +986,10 @@ func (m Model) headerGeometry() headerLayout {
 	}
 	layout.selectorStart = rightStart + selectorOffset
 	layout.selectorEnd = min(width, layout.selectorStart+selectorWidth)
+	if indicator != "" {
+		layout.indicatorStart = rightStart + indicatorOffset
+		layout.indicatorEnd = min(width, layout.indicatorStart+indicatorWidth)
+	}
 	layout.gearStart = rightStart + gearOffset
 	layout.gearEnd = min(width, layout.gearStart+gearWidth)
 	return layout
@@ -924,6 +1006,18 @@ func (m Model) getGearBounds() (start, end int, ok bool) {
 		return 0, 0, false
 	}
 	return layout.gearStart, layout.gearEnd, true
+}
+
+// getNotificationIndicatorBounds returns the painted geometry of the unread
+// indicator, or ok=false at widths where it was dropped. Clicking it toggles
+// the notification centre, which is — with its shortcut — the only way in:
+// the centre has no navbar tab.
+func (m Model) getNotificationIndicatorBounds() (start, end int, ok bool) {
+	layout := m.headerGeometry()
+	if layout.indicatorEnd <= layout.indicatorStart {
+		return 0, 0, false
+	}
+	return layout.indicatorStart, layout.indicatorEnd, true
 }
 
 // getTabBounds calculates the X position bounds for each tab in the header.
@@ -1063,35 +1157,20 @@ func (m Model) globalWorkspacesPlaceholderVisible() bool {
 
 // renderFooter renders the bottom bar with key hints and status.
 func (m Model) renderFooter() string {
-	// Toast/status message, in order of who would lose most by being silent.
-	//
-	// A toast wins. It is the only surface sidecar has for something that just
-	// happened and will not be repeated — "Update installed — restart
-	// required", a failed action, a copied path — and it times itself out, so
-	// it borrows the slot rather than taking it. Ranking it below the plugin
-	// meant that while the Tasks store was unreadable (a condition that can
-	// last for days) every sidecar toast on that tab was dropped silently.
-	//
-	// A plugin condition still outranks statusMsg: statusMsg describes the last
-	// action, while "this plugin cannot read its data" stays true until someone
-	// fixes it, and the Tasks tab has no other always-on surface for it — it
-	// suppresses its own hint row, and its store-read banner is inside a pane
-	// the user may not be looking at. It reappears the moment the toast expires.
+	// The footer no longer carries toasts. Every transient message is a
+	// notification now (internal/notify): it floats over the content region as
+	// a bordered toast and stays in the centre afterwards, so nothing that just
+	// happened depends on the user watching one line at the bottom of the
+	// screen. What remains here is the *standing* plugin condition — "this
+	// plugin cannot read its data" — which is true until someone fixes it and
+	// has no other always-on surface.
 	var status string
-	if m.ui.HasToast() {
-		status = styles.StatusModified.Render(m.ui.ToastMessage)
-	} else if text, isError := m.pluginFooterStatus(); text != "" {
+	if text, isError := m.pluginFooterStatus(); text != "" {
 		style := styles.ToastSuccess
 		if isError {
 			style = styles.ToastError
 		}
 		status = style.Render(text)
-	} else if m.statusMsg != "" {
-		toastStyle := styles.ToastSuccess
-		if m.statusIsError {
-			toastStyle = styles.ToastError
-		}
-		status = toastStyle.Render(m.statusMsg)
 	}
 
 	// Last refresh

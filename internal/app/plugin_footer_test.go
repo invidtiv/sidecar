@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -122,35 +123,36 @@ func TestPluginFooterStatusIsRendered(t *testing.T) {
 	}
 }
 
-// A transient toast outranks a standing plugin condition, and gets the slot
-// back when it expires.
+// A toast no longer competes with the plugin's standing condition for the
+// footer slot: it is a notification, drawn as a floating block over the content
+// region, so the plugin's condition keeps the footer while the toast is up.
 //
-// The plugin condition is true until someone fixes it, so it can wait a couple
-// of seconds. A toast cannot: it is sidecar's only surface for something that
-// just happened ("Update installed — restart required"), and ranking it below
-// the plugin meant every toast raised on the Tasks tab was dropped silently for
-// as long as the Tasks store stayed unreadable.
-func TestAToastOutranksAPluginFooterStatus(t *testing.T) {
+// This is what makes the two survivable together. Ranking the toast below the
+// plugin used to mean every toast raised on the Tasks tab was dropped silently
+// for as long as the Tasks store stayed unreadable; now neither is dropped.
+func TestAToastDoesNotDisplaceAPluginFooterStatus(t *testing.T) {
 	p := &footerStatusPlugin{status: "tasks: cannot read the task store", isError: true}
 	p.context = "tasks-list"
 	p.claims = map[string]bool{}
 	m := routerTestModel(t, p)
-	m.ui.ToastMessage = "saved"
-	m.ui.ToastExpiry = time.Now().Add(time.Minute)
-	if !m.ui.HasToast() {
-		t.Fatal("test setup: no live toast")
+	m.notifications = notify.NewMemStore()
+	m.ShowToast("saved", time.Minute)
+	if len(m.ToastableNotifications(time.Now())) != 1 {
+		t.Fatal("test setup: the toast did not become a notification")
 	}
 
 	footer := ansi.Strip(m.renderFooter())
-	if !strings.Contains(footer, "saved") {
-		t.Fatalf("the plugin's standing condition swallowed a live toast:\n%s", footer)
+	if !strings.Contains(footer, "cannot read the task store") {
+		t.Fatalf("a toast displaced the plugin's standing condition:\n%s", footer)
+	}
+	if strings.Contains(footer, "saved") {
+		t.Fatalf("the footer is still rendering toasts:\n%s", footer)
 	}
 
-	// And the standing condition comes back the moment the toast expires.
-	m.ui.ToastExpiry = time.Now().Add(-time.Minute)
-	footer = ansi.Strip(m.renderFooter())
-	if !strings.Contains(footer, "cannot read the task store") {
-		t.Fatalf("the plugin's condition did not return after the toast expired:\n%s", footer)
+	// And it is on screen where toasts now live: over the content region.
+	screen := ansi.Strip(m.renderToastOverlay(strings.Repeat(strings.Repeat(" ", m.width)+"\n", m.height), 0, headerHeight, m.width, m.height-headerHeight-footerHeight))
+	if !strings.Contains(screen, "saved") {
+		t.Fatalf("the toast is not drawn over the content region:\n%s", screen)
 	}
 }
 
@@ -160,10 +162,9 @@ func TestSilentPluginFooterStatusChangesNothing(t *testing.T) {
 	p.context = "tasks-list"
 	p.claims = map[string]bool{}
 	m := routerTestModel(t, p)
-	m.statusMsg = "committed"
 
 	footer := ansi.Strip(m.renderFooter())
-	if !strings.Contains(footer, "committed") {
-		t.Fatalf("an empty plugin status must not displace the host's own:\n%s", footer)
+	if strings.Contains(footer, "cannot read") {
+		t.Fatalf("a healthy plugin put a condition in the footer:\n%s", footer)
 	}
 }
