@@ -357,18 +357,31 @@ func (m Model) notificationCentreCommands() []plugin.Command {
 func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	items := m.notificationCentreItems()
 	m.clampNotificationCentreCursor(len(items))
-	switch msg.String() {
+	key := msg.String()
+	if notificationCentreReleasesFocus(key) {
+		// A navigation key means the user is going somewhere else. Hand the
+		// keyboard back to the content and let the key run its ordinary course —
+		// without closing the panel, which stays open until it is closed. Mouse
+		// was the only way back before this, which trapped a keyboard-only user
+		// on a panel whose j/k/d kept driving a list they had navigated away
+		// from. `N` brings focus back (see the global key handler).
+		m.blurNotificationCentre()
+		return false, nil
+	}
+	switch key {
 	case "esc":
 		return true, m.closeNotificationCentre()
 	case "j", "down":
 		if m.notificationCentreCursor < len(items)-1 {
 			m.notificationCentreCursor++
 		}
+		m.readSelectedNotification()
 		return true, nil
 	case "k", "up":
 		if m.notificationCentreCursor > 0 {
 			m.notificationCentreCursor--
 		}
+		m.readSelectedNotification()
 		return true, nil
 	case "d":
 		if selected, ok := m.selectedNotification(items); ok {
@@ -395,6 +408,33 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// notificationCentreReleasesFocus names the keys that move the user somewhere
+// else in the shell. The panel is not a modal, so these keep working while it
+// has focus — but working means the surface they select gets the keyboard, not
+// just the screen.
+func notificationCentreReleasesFocus(key string) bool {
+	switch key {
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+		"[", "]", "`", "~", "tab", "shift+tab",
+		"K", "@", "W", "^", "?", ",":
+		return true
+	}
+	return false
+}
+
+// readSelectedNotification marks the item under the cursor read. Selecting a
+// notification in the centre is the user seeing it — which is what stops the
+// header counter climbing forever, and what stops an unexpired notification
+// toasting again after a restart.
+func (m *Model) readSelectedNotification() {
+	items := m.notificationCentreItems()
+	selected, ok := m.selectedNotification(items)
+	if !ok || selected.Read() {
+		return
+	}
+	m.readNotification(selected.ID)
 }
 
 func (m *Model) clampNotificationCentreCursor(count int) {
@@ -469,6 +509,7 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 				m.notificationCentreCursor = index
 			}
 			m.focusNotificationCentre()
+			m.readSelectedNotification()
 			return true, nil
 		case action.Region.ID == regionNotificationCentre:
 			m.focusNotificationCentre()

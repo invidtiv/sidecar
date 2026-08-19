@@ -214,11 +214,7 @@ func runNotifyDismiss(env Env, args []string) int {
 		return 4
 	}
 
-	delivered := notifyDeliver(env, uirequest.Request{
-		Origin: originForRequest(target.Origin),
-		Action: uirequest.ActionNotify,
-		Target: uirequest.Target{Kind: uirequest.TargetKindNotification, Value: id},
-	})
+	delivered := notifyDeliver(env, notifyDismissRequest(caller, id))
 
 	if !delivered {
 		store, err := notify.Open(env.StateDir)
@@ -312,6 +308,20 @@ func runNotifyList(env Env, args []string) int {
 		_, _ = fmt.Fprintln(env.Stdout, line)
 	}
 	return 0
+}
+
+// notifyDismissRequest builds the dismissal the app answers. The request
+// carries the *caller's* origin, never the target's: sending the target's made
+// the host compare the record against itself, so MayDismiss passed
+// unconditionally and anything able to write a request file could dismiss
+// anyone's notification. The id travels in Target.Value, which is what the host
+// resolves the record from.
+func notifyDismissRequest(caller notify.Origin, id string) uirequest.Request {
+	return uirequest.Request{
+		Origin: originForRequest(caller),
+		Action: uirequest.ActionNotify,
+		Target: uirequest.Target{Kind: uirequest.TargetKindNotification, Value: id},
+	}
 }
 
 // notifyResult is the --json shape for post and dismiss.

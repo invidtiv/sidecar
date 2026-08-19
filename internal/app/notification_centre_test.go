@@ -390,3 +390,108 @@ func TestCentreAgeMetaColumn(t *testing.T) {
 		}
 	}
 }
+
+// A toast on screen must not shadow a plugin's own `d`. Precedence level 3
+// covers plugin.KeyRouter implementations only — git status and the workspace
+// list bind `d` at level 5, after the global switch — so the global toast
+// dismissal is gated on the focused context not having claimed the key.
+func TestToastDismissDoesNotStealAPluginsDKey(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "git"})
+	posted := postCentreNotification(t, &m, notify.SourceAgent, "staged main.go")
+	if len(m.ToastableNotifications(time.Now())) != 1 {
+		t.Fatal("expected a toast to be up")
+	}
+
+	for _, ctx := range []string{"git-status", "workspace-list", "workspace-preview"} {
+		m.activeContext = ctx
+		m.handleKeyMsg(tea.KeyPressMsg{Code: 'd', Text: "d"})
+		if n, ok := m.findNotification(posted.ID); !ok || n.Dismissed() {
+			t.Fatalf("context %q: the toast swallowed the plugin's d key", ctx)
+		}
+	}
+
+	// Where `d` really is free, it still dismisses the toast.
+	m.activeContext = "global"
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if n, ok := m.findNotification(posted.ID); !ok || !n.Dismissed() {
+		t.Fatal("d did not dismiss the toast where the key was free")
+	}
+}
+
+// Keyboard-only users must be able to leave the panel without closing it: a
+// navigation key hands the keyboard back to the content, and `N` brings it back.
+func TestNavigationKeysReleaseCentreFocusWithoutClosingIt(t *testing.T) {
+	first := &sizingPlugin{id: "files"}
+	second := &sizingPlugin{id: "git"}
+	m := centreTestModel(t, first, second)
+	postCentreNotification(t, &m, notify.SourceTasks, "task one")
+	m.toggleNotificationCentre()
+	if !m.notificationCentreOwnsKeys() {
+		t.Fatal("opening should focus the panel")
+	}
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: '2', Text: "2"})
+	if !m.notificationCentreOpen {
+		t.Fatal("a tab switch closed the panel")
+	}
+	if m.notificationCentreOwnsKeys() {
+		t.Fatal("the panel kept the keyboard after the user navigated away")
+	}
+	if m.activeContext == notificationCentreContext {
+		t.Fatalf("activeContext = %q, want the content's context", m.activeContext)
+	}
+
+	// `N` from there is a request to go back to the panel, not to close it.
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'N', Text: "N", Mod: tea.ModShift})
+	if !m.notificationCentreOpen || !m.notificationCentreOwnsKeys() {
+		t.Fatal("N did not return focus to the open panel")
+	}
+	// And again closes, as the toggle always has.
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'N', Text: "N", Mod: tea.ModShift})
+	if m.notificationCentreOpen {
+		t.Fatal("N did not close the focused panel")
+	}
+}
+
+// Nothing marked anything read before: ReadAt stayed nil forever, the header
+// counter only climbed, and every unexpired notification toasted again at the
+// next start.
+func TestSelectingAndExpiringMarkNotificationsRead(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	first := postCentreNotification(t, &m, notify.SourceTasks, "task one")
+	postCentreNotification(t, &m, notify.SourceTasks, "task two")
+
+	m.toggleNotificationCentre()
+	if n, _ := m.findNotification(m.notificationCentreItems()[0].ID); !n.Read() {
+		t.Fatal("opening the centre on an item did not mark it read")
+	}
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	if n, _ := m.findNotification(m.notificationCentreItems()[1].ID); !n.Read() {
+		t.Fatal("moving the cursor onto an item did not mark it read")
+	}
+	if m.UnreadNotifications() != 0 {
+		t.Fatalf("unread = %d after selecting both, want 0", m.UnreadNotifications())
+	}
+
+	// A toast whose countdown runs out has had its moment: the sweep reads it.
+	m.closeNotificationCentre()
+	third, err := m.notifications.Post(notify.Notification{Source: notify.SourceAgent, Title: "agent done"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.refreshNotifications()
+	if m.UnreadNotifications() != 1 {
+		t.Fatalf("a fresh notification should be unread")
+	}
+	m.sweepNotifications(third.ExpiresAt.Add(time.Second))
+	if n, _ := m.findNotification(third.ID); !n.Read() {
+		t.Fatal("an expired toast stayed unread, so it would toast again at the next start")
+	}
+	if len(m.ToastableNotifications(time.Now())) != 0 {
+		t.Fatal("a read notification must not toast again")
+	}
+	if len(notify.Active(m.Notifications())) != 3 {
+		t.Fatal("reading must not remove anything from the centre")
+	}
+	_ = first
+}

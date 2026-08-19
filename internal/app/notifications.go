@@ -138,6 +138,8 @@ func (m *Model) toggleNotificationCentre() tea.Cmd {
 				m.notificationCentreWidth = notificationCentreDefaultWidth
 			}
 		}
+		// Opening the centre on an item is seeing it.
+		m.readSelectedNotification()
 	}
 	m.updateContext()
 	return tea.Batch(m.emitContentSize()...)
@@ -231,14 +233,31 @@ func (m *Model) sweepNotifications(now time.Time) {
 	if m.notifications == nil {
 		return
 	}
-	removed, err := m.notifications.Sweep(now)
-	if err != nil {
+	// A toast whose countdown has run out has had its moment on screen: it is
+	// read. Without this nothing ever marks anything read — every legacy toast
+	// is a notification now, so the header would climb to `●40` in an ordinary
+	// session, and every unexpired notification would toast again at the next
+	// start. Sticky notifications have no countdown and stay unread until the
+	// user answers them, which is the point of sticky.
+	for _, n := range m.notificationCache {
+		if n.Read() || n.Dismissed() {
+			continue
+		}
+		if notify.ToastExpired(n, now) {
+			if err := m.notifications.MarkRead(n.ID); err != nil {
+				slog.Debug("notify: mark read on toast expiry failed", "id", n.ID, "err", err)
+			}
+		}
+	}
+
+	if _, err := m.notifications.Sweep(now); err != nil {
 		slog.Debug("notify: sweep failed", "err", err)
 		return
 	}
-	if removed > 0 {
-		m.refreshNotifications()
-	}
+	// Always refresh, not only when something was pruned: Sweep is also where
+	// the store re-reads the log, so this is where records another process
+	// appended become visible.
+	m.refreshNotifications()
 }
 
 // handleNotifyRequest answers a `notify` request from the file-RPC bus: the
@@ -295,6 +314,10 @@ func (m *Model) handleNotifyRequest(req uirequest.Request) tea.Cmd {
 // ownsNotifyRequest reports whether this instance is the one the request is
 // addressed to. A request with no project or working directory is unaddressed
 // and every instance takes it.
+//
+// req.Origin is always the *caller's* origin — for a post it is also the
+// poster's, for a dismiss it is deliberately not the target's — so routing and
+// the dismissal check read the same field and mean the same thing by it.
 func (m *Model) ownsNotifyRequest(req uirequest.Request) bool {
 	origin := req.Origin
 	if origin.WorkDir == "" && origin.ProjectKey == "" {

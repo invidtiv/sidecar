@@ -178,3 +178,24 @@ func TestNotifyRootDispatches(t *testing.T) {
 		t.Fatalf("notify list via root = %d", code)
 	}
 }
+
+// The app re-applies the origin check on its own side, so the request has to
+// name the caller. Naming the target's origin made the host compare the record
+// against itself and pass every time.
+func TestNotifyDismissRequestCarriesTheCallersOrigin(t *testing.T) {
+	caller := notify.Origin{TmuxSession: "sidecar-sh-caller", WorkDir: "/tmp/caller"}
+	req := notifyDismissRequest(caller, "ntf-123")
+
+	if req.Origin.TmuxSession != caller.TmuxSession || req.Origin.WorkDir != caller.WorkDir {
+		t.Fatalf("request origin = %+v, want the caller's", req.Origin)
+	}
+	if req.Target.Value != "ntf-123" {
+		t.Fatalf("target value = %q, want the notification id", req.Target.Value)
+	}
+	// The record's own origin must be nowhere in the request: it is exactly
+	// what the host would then be checking against itself.
+	poster := notify.Origin{TmuxSession: "sidecar-sh-poster"}
+	if req.Origin.TmuxSession == poster.TmuxSession {
+		t.Fatal("the request must not carry the poster's origin")
+	}
+}

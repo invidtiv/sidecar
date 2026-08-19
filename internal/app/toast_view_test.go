@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
 )
@@ -137,5 +138,57 @@ func TestIndicatorHitRegionTogglesTheCentre(t *testing.T) {
 	m.toggleNotificationCentre()
 	if m.notificationCentreOpen {
 		t.Fatal("the toggle did not close the centre")
+	}
+}
+
+// The source-hued rule under the title used to be rendered two cells wider than
+// the toast's interior, which wrapped a `──` stub onto the row below it in every
+// toast. Every row of the block is exactly the block's width, and the interior
+// is exactly outerWidth-4.
+func TestToastRowsFitTheBlockInterior(t *testing.T) {
+	n := notify.Normalize(notify.Notification{
+		Source: notify.SourceAgent,
+		Title:  "Agent finished",
+		Body:   "review the diff",
+	}, time.Now())
+
+	for _, outer := range []int{toastMinWidth, 32, toastMaxWidth} {
+		block := renderToastBlock(n, outer, time.Now())
+		if got := lipgloss.Width(block); got != outer {
+			t.Fatalf("outer=%d: block width = %d", outer, got)
+		}
+		lines := strings.Split(block, "\n")
+		for i, line := range lines {
+			if got := lipgloss.Width(line); got != outer {
+				t.Fatalf("outer=%d: row %d width = %d, want %d (%q)", outer, i, got, outer, line)
+			}
+		}
+		// Row 1 is the rule; it fills the interior exactly, and no stub of it
+		// survives onto row 2.
+		wantRule := strings.Repeat("─", outer-4)
+		if !strings.Contains(lines[2], wantRule) {
+			t.Fatalf("outer=%d: rule row does not carry a %d-cell rule: %q", outer, outer-4, lines[2])
+		}
+		if strings.Contains(ansi.Strip(lines[3]), "──") {
+			t.Fatalf("outer=%d: the rule overflowed onto the next row: %q", outer, lines[3])
+		}
+	}
+}
+
+func TestCountdownLabelAboveAMinute(t *testing.T) {
+	cases := []struct {
+		remaining time.Duration
+		want      string
+	}{
+		{4 * time.Second, "4s"},
+		{59 * time.Second, "59s"},
+		{90 * time.Second, "2m"},
+		{290 * time.Second, "5m"},
+		{2 * time.Hour, "2h"},
+	}
+	for _, tc := range cases {
+		if got := toastRemaining(tc.remaining); got != tc.want {
+			t.Fatalf("toastRemaining(%v) = %q, want %q", tc.remaining, got, tc.want)
+		}
 	}
 }

@@ -310,3 +310,63 @@ func writeEvents(t *testing.T, path string, ns ...Notification) {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
+
+// TestConcurrentStoresDoNotClobber reproduces the loss that folding once at
+// Open and re-emitting only memory used to cause: the CLI's direct append is
+// invisible to a running TUI, and the TUI's next pruning sweep deletes it.
+func TestConcurrentStoresDoNotClobber(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+
+	tui, err := OpenPath(path)
+	if err != nil {
+		t.Fatalf("OpenPath (tui): %v", err)
+	}
+	// Something old and dismissed, so the sweep below actually prunes and
+	// therefore actually rewrites the file.
+	stale, err := tui.Post(Notification{Source: SourceSystem, Title: "stale"})
+	if err != nil {
+		t.Fatalf("Post stale: %v", err)
+	}
+	if err := tui.Dismiss(stale.ID); err != nil {
+		t.Fatalf("Dismiss: %v", err)
+	}
+
+	// A second process — `sidecar notify post` with no instance listening —
+	// appends straight to the same log.
+	cli, err := OpenPath(path)
+	if err != nil {
+		t.Fatalf("OpenPath (cli): %v", err)
+	}
+	posted, err := cli.Post(Notification{Source: SourceAgent, Title: "from the CLI"})
+	if err != nil {
+		t.Fatalf("Post from cli: %v", err)
+	}
+
+	// The TUI's 1s heartbeat sweeps, which prunes the stale record and rewrites.
+	if _, err := tui.Sweep(time.Now().Add(2 * Retention)); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	for name, store := range map[string]*JSONLStore{"tui": tui, "cli": cli} {
+		all, err := store.List()
+		if err != nil {
+			t.Fatalf("List (%s): %v", name, err)
+		}
+		if name == "cli" {
+			// The CLI store has not re-read; the file is the assertion that
+			// matters for it.
+			continue
+		}
+		if len(all) != 1 || all[0].ID != posted.ID {
+			t.Fatalf("%s lost the CLI's notification: %+v", name, all)
+		}
+	}
+
+	onDisk, err := ReadAll(path)
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(onDisk) != 1 || onDisk[0].ID != posted.ID {
+		t.Fatalf("sweep clobbered the log: %+v", onDisk)
+	}
+}

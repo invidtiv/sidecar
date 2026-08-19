@@ -121,7 +121,12 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 		BorderForeground(hue).
 		Background(styles.BgSecondary).
 		Padding(0, 1).
-		Width(inner + 2). // lipgloss counts padding inside Width
+		// lipgloss counts the border *and* the padding inside Width, so this is
+		// the block's outer width and the text area it leaves is exactly
+		// outerWidth-4 == inner. Passing inner+2 here left a 38-cell interior for
+		// 40-cell rows, which is what wrapped a `──` stub off the rule line onto
+		// the next row of every toast.
+		Width(outerWidth).
 		Render(strings.Join(lines, "\n"))
 }
 
@@ -160,10 +165,24 @@ func toastCountdown(n notify.Notification, now time.Time) string {
 		filled++
 	}
 	filled = max(1, min(toastCountdownCells, filled))
-	seconds := int((remaining + time.Second - 1) / time.Second)
 	meter := lipgloss.NewStyle().Foreground(styles.TextSecondary).Render(strings.Repeat(toastCellFull, filled)) +
 		lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled))
-	return meter + styles.Muted.Render(fmt.Sprintf(" %ds", seconds))
+	return meter + styles.Muted.Render(" "+toastRemaining(remaining))
+}
+
+// toastRemaining is the countdown's label. Design 1a shows seconds because its
+// toasts live seconds; a `--expiry 5m` toast showed `290s`, which is a duration
+// nobody reads at a glance. Seconds up to a minute, then minutes, then hours —
+// always rounded up, so the label never reads 0.
+func toastRemaining(remaining time.Duration) string {
+	switch {
+	case remaining < time.Minute:
+		return fmt.Sprintf("%ds", int((remaining+time.Second-1)/time.Second))
+	case remaining < time.Hour:
+		return fmt.Sprintf("%dm", int((remaining+time.Minute-1)/time.Minute))
+	default:
+		return fmt.Sprintf("%dh", int((remaining+time.Hour-1)/time.Hour))
+	}
 }
 
 // dismissVisibleToast answers `d` while a toast is on screen. It dismisses the

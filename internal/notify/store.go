@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
@@ -90,7 +91,7 @@ func Open(stateDir string) (*JSONLStore, error) {
 		path:    Path(stateDir),
 		records: map[string]Notification{},
 	}
-	if err := s.load(time.Now().UTC()); err != nil {
+	if err := s.openLoad(time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -106,7 +107,7 @@ func OpenPath(path string) (*JSONLStore, error) {
 		return nil, err
 	}
 	s := &JSONLStore{path: path, records: map[string]Notification{}}
-	if err := s.load(time.Now().UTC()); err != nil {
+	if err := s.openLoad(time.Now().UTC()); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -115,7 +116,33 @@ func OpenPath(path string) (*JSONLStore, error) {
 // Path returns the file this store writes.
 func (s *JSONLStore) Path() string { return s.path }
 
-func (s *JSONLStore) load(now time.Time) error {
+// openLoad folds and compacts the log at open time, under the same exclusive
+// lock every other write takes.
+func (s *JSONLStore) openLoad(now time.Time) error {
+	return s.withFileLock(func() error {
+		if err := s.reload(); err != nil {
+			return err
+		}
+		pruned := s.prune(now)
+		// Compaction on load: rewrite whenever the log carries more lines than
+		// surviving records, so a long-lived install does not accumulate an
+		// unbounded read/dismiss tail.
+		if pruned > 0 || s.events > len(s.order) {
+			return s.rewrite()
+		}
+		return nil
+	})
+}
+
+// reload discards the in-memory fold and rebuilds it from the file. The file is
+// the authority, not this process's memory: every writer appends, so re-folding
+// before a write (and before a rewrite) is what stops two processes sharing one
+// log from erasing each other's records. Callers hold the file lock.
+func (s *JSONLStore) reload() error {
+	s.order = nil
+	s.records = map[string]Notification{}
+	s.events = 0
+
 	f, err := os.Open(s.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -146,15 +173,44 @@ func (s *JSONLStore) load(now time.Time) error {
 		return err
 	}
 	s.events = lines
-
-	pruned := s.prune(now)
-	// Compaction on load: rewrite whenever the log carries more lines than
-	// surviving records, so a long-lived install does not accumulate an
-	// unbounded read/dismiss tail.
-	if pruned > 0 || s.events > len(s.order) {
-		return s.rewrite()
-	}
 	return nil
+}
+
+// lockTimeout bounds how long a writer waits for the log. It matches
+// internal/shellstate's manifest lock, which is the same shape of problem: a
+// small JSON(L) file several sidecar processes append to.
+const lockTimeout = 5 * time.Second
+
+// withFileLock runs fn holding an exclusive flock on <path>.lock. Every read
+// that precedes a write, and every rewrite, runs inside one, so a fold can never
+// be built from a file another process is midway through replacing.
+func (s *JSONLStore) withFileLock(fn func() error) error {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
+	}
+	lock, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}()
+	deadline := time.Now().Add(lockTimeout)
+	for {
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("notify: lock acquisition timeout after %v", lockTimeout)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return fn()
 }
 
 func (s *JSONLStore) apply(ev event) {
@@ -276,16 +332,31 @@ func (s *JSONLStore) Post(n Notification) (Notification, error) {
 	defer s.mu.Unlock()
 
 	n = Normalize(n, time.Now())
-	if existing, ok := s.records[n.ID]; ok {
-		return existing, nil
-	}
-	rec := n
-	if err := s.append(event{Event: eventPosted, At: n.CreatedAt, ID: n.ID, Notification: &rec}); err != nil {
+	var out Notification
+	err := s.withFileLock(func() error {
+		// Re-fold first: another process may have posted since this store last
+		// looked, and a dedupe decision made against a stale memory is how a
+		// record gets filed twice.
+		if err := s.reload(); err != nil {
+			return err
+		}
+		if existing, ok := s.records[n.ID]; ok {
+			out = existing
+			return nil
+		}
+		rec := n
+		if err := s.append(event{Event: eventPosted, At: n.CreatedAt, ID: n.ID, Notification: &rec}); err != nil {
+			return err
+		}
+		s.order = append(s.order, n.ID)
+		s.records[n.ID] = n
+		out = n
+		return nil
+	})
+	if err != nil {
 		return Notification{}, err
 	}
-	s.order = append(s.order, n.ID)
-	s.records[n.ID] = n
-	return n, nil
+	return out, nil
 }
 
 // MarkRead implements Store.
@@ -302,33 +373,38 @@ func (s *JSONLStore) mark(id string, kind eventKind) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	n, ok := s.records[id]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrNotFound, id)
-	}
-	if kind == eventRead && n.ReadAt != nil {
-		return nil
-	}
-	if kind == eventDismissed && n.DismissedAt != nil {
-		return nil
-	}
-	at := time.Now().UTC()
-	if err := s.append(event{Event: kind, At: at, ID: id}); err != nil {
-		return err
-	}
-	switch kind {
-	case eventRead:
-		n.ReadAt = &at
-	case eventDismissed:
-		n.DismissedAt = &at
-		// Dismissing implies seen: an unread counter that keeps counting a
-		// notification the user has thrown away is a bug, not a feature.
-		if n.ReadAt == nil {
-			n.ReadAt = &at
+	return s.withFileLock(func() error {
+		if err := s.reload(); err != nil {
+			return err
 		}
-	}
-	s.records[id] = n
-	return nil
+		n, ok := s.records[id]
+		if !ok {
+			return fmt.Errorf("%w: %s", ErrNotFound, id)
+		}
+		if kind == eventRead && n.ReadAt != nil {
+			return nil
+		}
+		if kind == eventDismissed && n.DismissedAt != nil {
+			return nil
+		}
+		at := time.Now().UTC()
+		if err := s.append(event{Event: kind, At: at, ID: id}); err != nil {
+			return err
+		}
+		switch kind {
+		case eventRead:
+			n.ReadAt = &at
+		case eventDismissed:
+			n.DismissedAt = &at
+			// Dismissing implies seen: an unread counter that keeps counting a
+			// notification the user has thrown away is a bug, not a feature.
+			if n.ReadAt == nil {
+				n.ReadAt = &at
+			}
+		}
+		s.records[id] = n
+		return nil
+	})
 }
 
 // Get returns one record.
@@ -357,15 +433,24 @@ func (s *JSONLStore) snapshot() []Notification {
 	return out
 }
 
-// Sweep implements Store.
+// Sweep implements Store. It is also this store's cross-process read point: it
+// re-folds the file first, so records another process appended since the last
+// sweep become visible here instead of being overwritten by the rewrite.
 func (s *JSONLStore) Sweep(now time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	removed := s.prune(now)
-	if removed == 0 {
-		return 0, nil
-	}
-	return removed, s.rewrite()
+	removed := 0
+	err := s.withFileLock(func() error {
+		if err := s.reload(); err != nil {
+			return err
+		}
+		removed = s.prune(now)
+		if removed == 0 {
+			return nil
+		}
+		return s.rewrite()
+	})
+	return removed, err
 }
 
 // Close implements Store. The log is written through on every call, so there

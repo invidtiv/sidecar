@@ -1703,13 +1703,23 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.consumesTextInput() || m.contextRebindsKey("N") {
 			break
 		}
+		// Open but not focused — the user navigated away with a tab key — means
+		// `N` is a request to go back to it, not to close something they are not
+		// looking at. Pressing it again from there closes, as it always has.
+		if m.notificationCentreVisible() && !m.notificationCentreFocused {
+			m.focusNotificationCentre()
+			m.readSelectedNotification()
+			return m, nil
+		}
 		return m, m.toggleNotificationCentre()
 	case "d":
 		// `d` dismisses the toast on screen, exactly as the toast's own key row
-		// says. A plugin that binds `d` for itself has already answered at
-		// precedence level 3, so this only fires where `d` was otherwise free —
-		// and only while a toast is actually up.
-		if m.hasModal() || m.consumesTextInput() {
+		// says — but only where `d` is otherwise free. Precedence level 3 covers
+		// plugins implementing plugin.KeyRouter, which is `tasks` alone; git
+		// status and the workspace list bind `d` at level 5, *after* this switch,
+		// so without the contextRebindsKey guard a toast on screen would swallow
+		// their diff key for the length of its countdown.
+		if m.hasModal() || m.consumesTextInput() || m.contextRebindsKey("d") {
 			break
 		}
 		if m.dismissVisibleToast() {

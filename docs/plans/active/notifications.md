@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** planned, not started
+**Status:** Phase 1 (steel thread) **done**; Phases 2–7 planned, not started
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -199,6 +199,84 @@ until dismissed.**
 8. Proof run via `scripts/tmux-drive.sh` (isolated state — see AGENTS.md):
    post from a second shell, snap the toast, the indicator, the open panel on
    at least three different plugins, dismiss, restart, verify persistence.
+
+## Phase 1 as built — decisions and deviations
+
+Landed in commits a7bcbe9f, f6540456, 5c3020c2 plus a review/proof fix pass.
+Everything in the steel thread above is implemented. What follows is what a
+later phase needs to know that the plan above does not already say.
+
+**Keys** (the plan gave the implementing agent autonomy here):
+
+- **`N` toggles the notification centre**, as the plan expected. It is also the
+  way *back* into an open panel: with the panel open but blurred, `N` refocuses
+  it; pressing it again closes. Nothing was rebound to make room.
+- **`d` dismisses the toast on screen** — design 1a's key row, and the same key
+  the centre uses, so one key means one thing. It is a global fallback and
+  yields to any focused context that binds `d` for itself (`git-status`,
+  `workspace-list`, `workspace-preview`, `config`, …) via
+  `contextRebindsKey`. Precedence level 3 was *not* enough on its own: it only
+  covers plugins implementing `plugin.KeyRouter`, which is `tasks` alone, and
+  the rest bind `d` after the global switch.
+- **The `notification-centre` keymap context** owns `j/k`, `d`, `D`, `enter`
+  (inert until Phase 5) and `esc`, registered in `internal/keymap/bindings.go`
+  like every other context. Navigation keys — the tab digits, `[`/`]`,
+  `` ` ``/`~`, `tab`, `K`, `@`, `W`, `^`, `?`, `,` — are deliberately *not*
+  claimed: they blur the panel and run normally, so a keyboard-only user can
+  leave the panel without closing it. The panel still closes only on `esc`,
+  the close affordance, or the toggle.
+
+**Read semantics.** A notification is marked read when it is selected in the
+centre (on open, on cursor move, on click) and when its toast countdown runs
+out. Sticky notifications have no countdown and stay unread until answered.
+Without this nothing ever set `ReadAt`, the header climbed all session now that
+every `ShowToast` is a notification, and unexpired notifications toasted again
+after a restart.
+
+**Store concurrency.** `JSONLStore` re-folds the file from disk under an
+exclusive `flock` (the same shape as `internal/shellstate`'s manifest lock)
+before every write and before every rewrite. Folding once at open and re-emitting
+memory silently deleted anything another process had appended — the CLI's
+no-instance fallback, or a second Sidecar sharing the global state dir. `Sweep`
+(the 1s heartbeat) is also the cross-process read point: a record another
+process appended becomes visible to a running instance within a second.
+
+**Cross-project posts — decided.** The store and the centre are **global in
+Phase 1, deliberately**. `notify` requests are still routed by the caller's
+origin, but that check answers "which instance acknowledges this request" and
+"who may dismiss this record", *not* "who may see it". A post from a project no
+running instance is showing is declined on the bus, falls back to the direct
+JSONL append, and — since `Sweep` re-folds — surfaces in every running instance
+on the next heartbeat rather than being delivered nowhere until a restart. That
+is the smallest honest behaviour for a global store with no per-project filter
+in the centre. `Origin.ProjectKey` is recorded on every record, so per-project
+filtering (or a "this project / everything" toggle) is a later view change, not
+a data migration. Revisit alongside the Phase 4 config page.
+
+**Dismissal origin.** `sidecar notify dismiss` sends the *caller's* origin in
+`Request.Origin` with the target id in `Target.Value`. It used to send the
+target's origin, which made the host's `MayDismiss` compare the record against
+itself and pass unconditionally — anything able to write a request file could
+dismiss anyone's notification.
+
+**`-config` before a subcommand.** `internal/cli.Run` now strips leading global
+flags (`-config`, `-project`, `-debug`, `-enable-feature`, `-disable-feature`,
+either spelling) before matching a command, and applies `-config`. Without it
+`sidecar -config <path> notify post` fell through to TUI startup and died with
+"Sidecar requires an interactive terminal" — which is exactly the invocation an
+isolated proof run needs.
+
+**Other deviations.** The toast's countdown renders minutes and hours above 60s
+rather than raw seconds (`5m`, not `290s`). The toast block's lipgloss `Width`
+is its outer width — passing the interior width left every toast's title rule
+two cells too wide, wrapping a `──` stub onto the next row. `internal/termpreview`
+took a narrow-width fix so the workspace preview lays out correctly inside the
+content region the panel leaves behind.
+
+**Deferred from Phase 1.** Dragging the panel's resize rail emits a resize
+storm: every drag frame re-sizes every plugin, and live panes re-read on each.
+Phase 3 already owns the fix ("suppress-while-pane-resizing guard") and the
+config toggle for it (1g); it is not worth a second mechanism here.
 
 ## Enhancements
 
