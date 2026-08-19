@@ -199,6 +199,9 @@ func (m Model) viewContent() string {
 	// Toasts float over the content region, under any modal: a modal has the
 	// user's attention already, and a block drawn over it would be unreadable.
 	bg = m.renderToastOverlay(bg, 0, headerHeight, contentWidth, contentHeight)
+	// The flash shares that corner, one row below any toast: same region, same
+	// margins, so both tiers move together when the centre narrows the content.
+	bg = m.renderFlashOverlay(bg, 0, headerHeight, contentWidth, contentHeight)
 
 	// Overlay modals (priority order via activeModal)
 	switch m.activeModal() {

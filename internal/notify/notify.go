@@ -81,6 +81,8 @@ type Source struct {
 	Priority int
 	// DefaultExpiry is how long a toast from this source stays on screen when
 	// the poster names no expiry. Zero means the source is sticky by default.
+	// It is the built-in value: ExpiryFor applies the user's configuration on
+	// top of it, and everything that completes a notification asks ExpiryFor.
 	DefaultExpiry time.Duration
 }
 
@@ -89,11 +91,11 @@ type Source struct {
 // adding one later a data change instead of a code change.
 var sources = []Source{
 	{ID: SourceWaiting, Label: "WAITING", Glyph: "?", Hue: HueWarning, Priority: 60, DefaultExpiry: 0},
-	{ID: SourceAgent, Label: "AGENTS", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 8 * time.Second},
-	{ID: SourceSession, Label: "SESSIONS", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 8 * time.Second},
-	{ID: SourceTD, Label: "TD", Glyph: "■", Hue: HueSecondary, Priority: 30, DefaultExpiry: 8 * time.Second},
-	{ID: SourceTasks, Label: "TASKS", Glyph: "○", Hue: HueInfo, Priority: 20, DefaultExpiry: 8 * time.Second},
-	{ID: SourceSystem, Label: "SYSTEM", Glyph: "●", Hue: HueMuted, Priority: 10, DefaultExpiry: 5 * time.Second},
+	{ID: SourceAgent, Label: "AGENTS", Glyph: "◆", Hue: HuePrimary, Priority: 50, DefaultExpiry: 12 * time.Second},
+	{ID: SourceSession, Label: "SESSIONS", Glyph: "✓", Hue: HueSuccess, Priority: 40, DefaultExpiry: 10 * time.Second},
+	{ID: SourceTD, Label: "TD", Glyph: "■", Hue: HueSecondary, Priority: 30, DefaultExpiry: 10 * time.Second},
+	{ID: SourceTasks, Label: "TASKS", Glyph: "○", Hue: HueInfo, Priority: 20, DefaultExpiry: 10 * time.Second},
+	{ID: SourceSystem, Label: "SYSTEM", Glyph: "●", Hue: HueMuted, Priority: 10, DefaultExpiry: 10 * time.Second},
 }
 
 // Sources returns the registered sources, loudest first.
@@ -251,7 +253,7 @@ func Normalize(n Notification, now time.Time) Notification {
 		n.CreatedAt = n.CreatedAt.UTC()
 	}
 	if n.ExpiresAt == nil && !n.Sticky {
-		if d := SourceOf(n.Source).DefaultExpiry; d > 0 {
+		if d := ExpiryFor(n.Source); d > 0 {
 			exp := n.CreatedAt.Add(d)
 			n.ExpiresAt = &exp
 		} else {

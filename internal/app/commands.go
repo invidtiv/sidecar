@@ -15,6 +15,16 @@ type ToastMsg = msg.ToastMsg
 // ShowToast is re-exported from msg package for backward compatibility.
 var ShowToast = msg.ShowToast
 
+// FlashMsg is re-exported from the msg package: the status-flash tier beside
+// ToastMsg. A flash is transient feedback, never a stored notification.
+type FlashMsg = msg.FlashMsg
+
+// ShowFlash and ShowFlashFrom are re-exported for symmetry with ShowToast.
+var (
+	ShowFlash     = msg.ShowFlash
+	ShowFlashFrom = msg.ShowFlashFrom
+)
+
 // ThemeChangedMsg is re-exported from msg package for backward compatibility.
 type ThemeChangedMsg = msg.ThemeChangedMsg
 

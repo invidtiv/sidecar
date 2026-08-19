@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
@@ -356,6 +357,9 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 	var themeCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		// Saving the config screen is the moment an edited expiry takes
+		// effect; notifications posted afterwards use the new value.
+		notify.ApplyConfig(cfg.Notifications)
 		m.showClock = cfg.UI.ShowClock
 		m.titleTemplate = cfg.UI.TerminalTitle
 		// Nerd Font glyphs are read from one package-level flag at startup;

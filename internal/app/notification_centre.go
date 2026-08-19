@@ -150,8 +150,8 @@ func (m Model) notificationCentreBody(inner int, now time.Time) []centreRow {
 // notificationSectionRule draws design 1c's section header: the source glyph
 // and label in the source hue, then a rule that fills the row.
 func notificationSectionRule(group notify.Group, inner int) string {
-	hue := notify.ResolveHue(group.Source.Hue)
-	label := group.Source.Glyph + " " + group.Source.Label
+	hue := notify.ChromeColor(group.Source.ID, notify.SeverityInfo)
+	label := notify.Glyph(group.Source.ID) + " " + group.Source.Label
 	styled := lipgloss.NewStyle().Foreground(hue).Bold(true).Render(label)
 	rest := inner - lipgloss.Width(styled) - 1
 	if rest < 1 {
@@ -166,7 +166,7 @@ func (m Model) notificationCentreItemLine(n notify.Notification, inner, index in
 	meta := notificationAge(n.CreatedAt, now)
 	mark := "  "
 	if !n.Read() {
-		mark = lipgloss.NewStyle().Foreground(notify.SourceColor(n.Source)).Render("●") + " "
+		mark = lipgloss.NewStyle().Foreground(notify.ChromeColor(n.Source, n.Severity)).Render("●") + " "
 	}
 	title := strings.TrimSpace(n.Title)
 	if title == "" {

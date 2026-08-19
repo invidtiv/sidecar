@@ -79,10 +79,9 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 		return ""
 	}
 	source := n.SourceInfo()
-	hue := notify.SourceColor(n.Source)
-	if n.Severity == notify.SeverityError {
-		hue = notify.ResolveHue(notify.HueError)
-	}
+	// One helper answers "what does this source look like" for the toast, the
+	// status flash, and the centre, so an error looks like an error everywhere.
+	hue := notify.ChromeColor(n.Source, n.Severity)
 	// Border (2) plus one column of padding either side.
 	inner := outerWidth - 4
 	if inner < 1 {
@@ -94,7 +93,7 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 	if title == "" {
 		title = source.Label
 	}
-	glyph := lipgloss.NewStyle().Foreground(hue).Render(source.Glyph)
+	glyph := notify.RenderGlyph(n.Source, n.Severity)
 	lines = append(lines,
 		glyph+" "+lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).
 			Render(ansi.Truncate(title, max(0, inner-2), "…")))

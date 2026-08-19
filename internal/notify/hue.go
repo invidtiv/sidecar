@@ -35,7 +35,9 @@ func ResolveHue(h Hue) color.Color {
 }
 
 // SourceColor is the colour of a notification's source chrome: its border, its
-// glyph, and its section rule in the centre.
+// glyph, and its section rule in the centre. It is ChromeColor without a
+// severity — the shorthand for the places that mark a source rather than a
+// particular notification.
 func SourceColor(id SourceID) color.Color {
-	return ResolveHue(SourceOf(id).Hue)
+	return ChromeColor(id, SeverityInfo)
 }

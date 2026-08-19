@@ -393,6 +393,10 @@ type Model struct {
 	notificationCentreMouse       *mouse.Handler
 	notificationCentreHoverHandle bool
 	notificationCentreHoverClose  bool
+
+	// flash is the status-flash tier: one transient line in the content
+	// region's top-right, never stored and never counted. See flash.go.
+	flash flashState
 }
 
 // Option adjusts the model at construction. Options exist for the deliberate,
@@ -446,6 +450,10 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
 		m.uiRequestWatcher = watcher
 	}
+	// Bind the `notifications` config section before the store opens: the
+	// store completes every record it is handed, and completion is where a
+	// per-source expiry is applied.
+	notify.ApplyConfig(cfg.Notifications)
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
 	m.notificationCentreMouse = mouse.NewHandler()

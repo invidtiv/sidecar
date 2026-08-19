@@ -423,6 +423,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		(&m).showToastWithSeverity(msg.Message, msg.Duration, msg.IsError)
 		return m, nil
 
+	case FlashMsg:
+		// The flash tier never touches the store: it is feedback, not a
+		// record. A new flash replaces whatever is on screen.
+		return m, (&m).showFlash(msg)
+
+	case flashTickMsg:
+		return m, (&m).advanceFlash(msg)
+
 	case notify.PostMsg:
 		// The store is the app's, so posting is answered here and the result
 		// broadcast: whoever draws toasts reacts to PostedMsg rather than

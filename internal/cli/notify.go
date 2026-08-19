@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -123,6 +124,12 @@ func runNotifyPost(env Env, args []string) int {
 		}
 		exp := time.Now().UTC().Add(d)
 		n.ExpiresAt = &exp
+	}
+	// The user's per-source expiries live in config, and this process is the
+	// one completing the record — without this a `sidecar notify post` would
+	// carry the built-in default while the TUI used the configured one.
+	if cfg, err := config.Load(); err == nil {
+		notify.ApplyConfig(cfg.Notifications)
 	}
 	n = notify.Normalize(n, time.Now())
 
