@@ -102,8 +102,18 @@ Consequences the implementing agents must take seriously:
   closes it. Focus routing follows the existing key-precedence rules
   (`plugin.KeyRouter` docs); while the panel has focus it consumes list keys,
   and clicking back into content returns focus without closing the panel.
-- The panel can stay open indefinitely; unread state updates live (the store
-  is in the app model, no polling needed).
+- **The panel stays open until the user closes it — across all navigation.**
+  Switching plugins/tabs, opening files, changing projects or worktrees,
+  entering and leaving modals: none of these close the panel. It is app-shell
+  state (like the header), not per-plugin state, and its open/width state
+  survives plugin `Reinit` on project/worktree switches. This is a real
+  integration cost — every navigation path must re-emit the narrowed size
+  rather than resetting to full width, and transitions that rebuild the
+  plugin registry must restore the reservation before the next frame — and
+  it is part of the plan, not an edge case. Only an explicit close (`esc`
+  with panel focus, the close affordance, or the indicator toggle) dismisses
+  it. Unread state updates live (the store is in the app model, no polling
+  needed).
 
 ## Architecture
 
@@ -182,7 +192,9 @@ until dismissed.**
    width; centre content as a flat list grouped by source with unread `●`,
    `j/k`, `d` dismiss, `D` dismiss group, close via `esc`/click. `enter` is
    a no-op for now. This step is the bulk of Phase 1; verify every plugin
-   (td, git, files, notes, workspaces, kanban/task views) at narrow widths.
+   (td, git, files, notes, workspaces, kanban/task views) at narrow widths,
+   and verify the panel stays open (and correctly sized) across tab
+   switches, project/worktree switches, and modal open/close.
 7. Route `ToastMsg` through the new system and delete the footer toast path.
 8. Proof run via `scripts/tmux-drive.sh` (isolated state — see AGENTS.md):
    post from a second shell, snap the toast, the indicator, the open panel on
