@@ -41,7 +41,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if bounded, ok := p.modalWheelAtBoundary(msg); ok {
 		return bounded
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return false
 	}
 	action := p.mouseHandler.HandleMouse(msg)
@@ -87,7 +87,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 // open, which lets the ordinary panes answer.
 func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
 	switch {
-	case p.showExitConfirmation:
+	case p.edit.ShowExitConfirm:
 		// A fixed three-option dialog that absorbs every mouse event without
 		// scroll state of its own.
 		return true, true

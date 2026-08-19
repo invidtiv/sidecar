@@ -193,7 +193,7 @@ func TestNotesModalHorizontalWheelIsUnknown(t *testing.T) {
 func TestNotesExitConfirmationIsAbsorbed(t *testing.T) {
 	p := wheelTestPlugin(t, 20)
 	p.cursor = 5
-	p.showExitConfirmation = true
+	p.edit.ShowExitConfirm = true
 	for _, x := range []int{listX, editorX} {
 		for _, up := range []bool{true, false} {
 			if !p.WheelAtBoundary(wheelMsg(x, 5, up)) {

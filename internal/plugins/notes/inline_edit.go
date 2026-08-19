@@ -8,8 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/msg"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -37,7 +37,7 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.store == nil {
 		return nil
 	}
-	if p.inlineEditMode && p.inlineEditNoteID == noteID && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+	if p.edit.Active && p.inlineEditNoteID == noteID && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return nil
 	}
 	// Vim owns undo from here. Drop the built-in ring so a later sync
@@ -53,8 +53,8 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	// whole plugin rect, so the editor's bottom rows stay visible (td-a87445).
 	editorWidth := p.calculateInlineEditorWidth()
 	editorHeight := p.calculateInlineEditorHeight()
-	p.inlineEditActivation++
-	activation := p.inlineEditActivation
+	p.edit.Activation++
+	activation := p.edit.Activation
 	var epoch uint64
 	if p.ctx != nil {
 		epoch = p.ctx.Epoch
@@ -136,12 +136,8 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 	if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
 		return p.cleanupStaleInlineEditStart(msg)
 	}
-	p.inlineEditMode = true
 	p.activePane = PaneEditor
-	p.inlineEditSession = msg.SessionName
 	p.inlineEditNoteID = msg.NoteID
-	p.inlineEditPath = msg.NotePath
-	p.inlineEditEditor = msg.Editor
 
 	// Initialize auto-save state - read initial content for change detection
 	if content, err := os.ReadFile(msg.NotePath); err == nil {
@@ -163,38 +159,31 @@ func (p *Plugin) handleInlineEditStarted(msg InlineEditStartedMsg) tea.Cmd {
 			}
 		}
 	}
-	p.inlineEditor.OnExit = exit
-	p.inlineEditor.OnSessionEnded = exit
+	p.edit.Model.OnExit = exit
+	p.edit.Model.OnSessionEnded = exit
 	p.clearInlineEditorAttachKey()
-	p.inlineEditor.OnAttach = nil
+	p.edit.Model.OnAttach = nil
 
-	// Enter interactive mode on the tty model
-	width := p.calculateInlineEditorWidth()
-	height := p.calculateInlineEditorHeight()
-	p.inlineEditor.Resize(width, height)
-
-	// Return batch: enter tty mode + start auto-save timer
-	return tea.Batch(
-		p.inlineEditor.Open(tty.Target{Session: msg.SessionName}),
-		p.scheduleInlineAutoSave(),
-	)
+	// Enter interactive mode on the tty model, sized to the host viewport,
+	// and start the auto-save timer.
+	enterCmd := p.editor().Begin(msg.SessionName, msg.Editor, msg.NotePath)
+	return tea.Batch(enterCmd, p.scheduleInlineAutoSave())
 }
 
 func (p *Plugin) cleanupStaleInlineEditStart(msg InlineEditStartedMsg) tea.Cmd {
-	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
-		if p.inlineEditSession == msg.SessionName || p.inlineEditor.GetTarget() == msg.SessionName {
-			return nil
-		}
+	cmd := p.edit.CleanupStale(msg.SessionName, msg.Editor)
+	if cmd == nil {
+		return nil
 	}
-	if msg.NotePath != p.inlineEditPath {
+	if msg.NotePath != p.edit.Path {
 		removeNoteExport(msg.NotePath)
 	}
-	return (tty.EditorSession{Name: msg.SessionName, Editor: msg.Editor}).KillCmd()
+	return cmd
 }
 
 // exitInlineEditMode cleans up inline edit state and kills the tmux session.
 func (p *Plugin) exitInlineEditMode() {
-	tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}.Kill()
+	p.edit.Target().Kill()
 	p.resetInlineEditState()
 }
 
@@ -202,19 +191,10 @@ func (p *Plugin) exitInlineEditMode() {
 // the note store. Stop uses it before closing a project store so an old timer
 // can never operate on the next project's store.
 func (p *Plugin) resetInlineEditState() {
-	p.inlineEditActivation++
-	p.inlineEditMode = false
-	p.inlineEditSession = ""
+	p.edit.Reset()
 	p.inlineEditNoteID = ""
-	p.inlineEditPath = ""
-	p.inlineEditEditor = ""
-	p.inlineEditorDragging = false
-	p.showExitConfirmation = false
-	p.pendingClickRegion = ""
-	p.pendingClickData = nil
-	if p.inlineEditor != nil {
-		p.inlineEditor.Close()
-	}
+	p.edit.ShowExitConfirm = false
+	p.edit.ClearPendingClick()
 
 	// Reset auto-save state
 	p.inlineAutoSaveGen++
@@ -222,13 +202,13 @@ func (p *Plugin) resetInlineEditState() {
 }
 
 func (p *Plugin) ownsInlineEditMessage(activation, epoch uint64) bool {
-	return p.ctx != nil && activation == p.inlineEditActivation && epoch == p.ctx.Epoch
+	return p.ctx != nil && p.edit.OwnsMessage(activation, epoch, p.ctx.Epoch)
 }
 
 // handleInlineEditExited processes the InlineEditExitedMsg and saves note content.
 func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	if !p.ownsInlineEditMessage(exitMsg.Activation, exitMsg.Epoch) {
-		if exitMsg.NotePath != p.inlineEditPath {
+		if exitMsg.NotePath != p.edit.Path {
 			removeNoteExport(exitMsg.NotePath)
 		}
 		return nil
@@ -247,7 +227,27 @@ func (p *Plugin) handleInlineEditExited(exitMsg InlineEditExitedMsg) tea.Cmd {
 	// Inline editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
 
-	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
+	return p.saveRetainedExport(noteID, notePath, p.edit.Activation)
+}
+
+// editor returns the shared inline-edit session, binding the host contract on
+// first use so a plugin built without New() still maps coordinates correctly.
+func (p *Plugin) editor() *inlineedit.Session {
+	if p.edit.Host == nil {
+		p.edit.Host = p
+	}
+	return &p.edit
+}
+
+// EditorViewport implements inlineedit.Host: the PTY's content box.
+func (p *Plugin) EditorViewport() (width, height int) {
+	return p.calculateInlineEditorWidth(), p.calculateInlineEditorHeight()
+}
+
+// EditorOrigin implements inlineedit.Host: the top-left content cell in
+// plugin-local coordinates.
+func (p *Plugin) EditorOrigin() (x, y int, ok bool) {
+	return p.inlineEditorOrigin()
 }
 
 // calculateInlineEditorWidth returns the content width for the inline editor.
@@ -277,40 +277,10 @@ func (p *Plugin) calculateInlineEditorHeight() int {
 	return contentHeight
 }
 
-// calculateInlineEditorMouseCoords converts screen coordinates to editor-relative coordinates.
-// Returns (col, row, ok) where col and row are 1-indexed for SGR mouse protocol.
-// Returns ok=false if the coordinates are outside the editor content area.
+// calculateInlineEditorMouseCoords converts screen coordinates to editor-relative
+// coordinates. Returns (col, row, ok) 1-indexed for the SGR mouse protocol.
 func (p *Plugin) calculateInlineEditorMouseCoords(x, y int) (col, row int, ok bool) {
-	contentX, contentY, ok := p.inlineEditorOrigin()
-	if !ok {
-		return 0, 0, false
-	}
-	relX := x - contentX
-	relY := y - contentY
-
-	if relX < 0 || relY < 0 {
-		return 0, 0, false
-	}
-
-	// Validate bounds against editor dimensions
-	editorWidth := p.calculateInlineEditorWidth()
-	editorHeight := p.calculateInlineEditorHeight()
-
-	if relX >= editorWidth || relY >= editorHeight {
-		return 0, 0, false
-	}
-
-	// SGR mouse protocol uses 1-indexed coordinates, and the editor renders the
-	// pane at its observed size — clipped and scrolled when it is larger than
-	// this viewport — so map through the fit rather than assuming they line up
-	// (td-73fa86).
-	// A miss from an active editor means the click landed outside the pane —
-	// letterbox padding around a pane smaller than the viewport — so it must not
-	// fall back to the raw mapping and forward a cell the pane does not have.
-	if p.inlineEditor != nil && p.inlineEditor.IsActive() {
-		return p.inlineEditor.PaneCoords(relX+1, relY+1)
-	}
-	return relX + 1, relY + 1, true
+	return p.editor().MouseCoords(x, y)
 }
 
 func (p *Plugin) inlineEditorOrigin() (x, y int, ok bool) {
@@ -341,84 +311,43 @@ func (p *Plugin) Cursor() *tea.Cursor {
 	if !p.inlineEditorNativeActive() {
 		return nil
 	}
-	cursor := p.inlineEditor.Cursor()
-	if cursor == nil {
-		return nil
-	}
-	x, y, ok := p.inlineEditorOrigin()
-	if !ok {
-		return nil
-	}
-	copy := *cursor
-	copy.X += x
-	copy.Y += y
-	if copy.X < 0 || copy.X >= p.width || copy.Y < 0 || copy.Y >= p.height {
-		return nil
-	}
-	return &copy
+	return p.editor().Cursor(p.width, p.height)
 }
 
 func (p *Plugin) inlineEditorNativeActive() bool {
-	return p.focused && p.activePane == PaneEditor && p.inlineEditMode &&
-		p.inlineEditor != nil && p.inlineEditor.IsActive() && !p.showExitConfirmation &&
+	return p.focused && p.activePane == PaneEditor && p.edit.Active &&
+		p.edit.Model != nil && p.edit.Model.IsActive() && !p.edit.ShowExitConfirm &&
 		!p.showInfoModal && !p.showDeleteModal && !p.showTaskModal
 }
 
 // PreferredMouseMode reduces idle hover traffic only while the inline terminal
 // owns input. Modal and ordinary notes views retain all-motion hover.
 func (p *Plugin) PreferredMouseMode() tea.MouseMode {
-	if p.inlineEditorNativeActive() {
-		return p.inlineEditor.PreferredMouseMode()
-	}
-	return tea.MouseModeAllMotion
+	return p.edit.PreferredMouseMode(p.inlineEditorNativeActive())
 }
 
 // forwardMousePressToInlineEditor sends a mouse press event to the inline editor.
 // col and row are 1-indexed coordinates relative to the editor content area.
 func (p *Plugin) forwardMousePressToInlineEditor(col, row int) tea.Cmd {
-	if p.inlineEditor == nil || !p.inlineEditor.IsActive() {
-		return nil
-	}
-	if p.inlineEditSession == "" {
-		return nil
-	}
-
-	scope := p.inlineEditor.Scope()
-	return (tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}).MouseCmd(scope, 0, col, row, false)
+	return p.edit.ForwardMousePress(col, row)
 }
 
 // forwardMouseDragToInlineEditor sends a mouse drag/motion event to the inline editor.
 // col and row are 1-indexed coordinates relative to the editor content area.
 func (p *Plugin) forwardMouseDragToInlineEditor(col, row int) tea.Cmd {
-	if p.inlineEditor == nil || !p.inlineEditor.IsActive() {
-		return nil
-	}
-	if p.inlineEditSession == "" {
-		return nil
-	}
-
-	scope := p.inlineEditor.Scope()
-	return (tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}).MouseCmd(scope, 32, col, row, false)
+	return p.edit.ForwardMouseDrag(col, row)
 }
 
 // forwardMouseReleaseToInlineEditor sends a mouse release event to the inline editor.
 // col and row are 1-indexed coordinates relative to the editor content area.
 func (p *Plugin) forwardMouseReleaseToInlineEditor(col, row int) tea.Cmd {
-	if p.inlineEditor == nil || !p.inlineEditor.IsActive() {
-		return nil
-	}
-	if p.inlineEditSession == "" {
-		return nil
-	}
-
-	scope := p.inlineEditor.Scope()
-	return (tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}).MouseCmd(scope, 0, col, row, true)
+	return p.edit.ForwardMouseRelease(col, row)
 }
 
 // renderInlineEditorContent renders the inline editor within the editor pane area.
 func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 	// If showing exit confirmation, render that instead
-	if p.showExitConfirmation {
+	if p.edit.ShowExitConfirm {
 		return p.renderExitConfirmation(visibleHeight)
 	}
 
@@ -433,26 +362,18 @@ func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 			noteTitle = "Untitled"
 		}
 	}
-	header := fmt.Sprintf("Editing: %s", noteTitle)
-	sb.WriteString(styles.Title.Render(header))
-	sb.WriteString("  ")
-	sb.WriteString(styles.Muted.Render("(Ctrl+\\ or ESC ESC to exit)"))
 	// The tmux pane can be larger than this viewport when another sidecar
-	// instance drives the same session; say what is hidden (td-73fa86).
-	if p.inlineEditor != nil {
-		if indicator := p.inlineEditor.SizeIndicator(); indicator != "" {
-			sb.WriteString("  ")
-			sb.WriteString(styles.Muted.Render(indicator))
-		}
-	}
+	// instance drives the same session; the shared header says what is hidden
+	// (td-73fa86).
+	sb.WriteString(p.edit.EditingHeader(noteTitle))
 	sb.WriteString("\n")
 
 	// Calculate content height (account for header)
 	contentHeight := visibleHeight - 1 // header line only
 
 	// Render terminal content from tty model
-	if p.inlineEditor != nil {
-		content := p.inlineEditor.View()
+	if p.edit.Model != nil {
+		content := p.edit.Model.View()
 		lines := strings.Split(content, "\n")
 
 		// Limit to content height
@@ -469,43 +390,21 @@ func (p *Plugin) renderInlineEditorContent(visibleHeight int) string {
 
 // renderExitConfirmation renders the exit confirmation dialog overlay.
 func (p *Plugin) renderExitConfirmation(visibleHeight int) string {
-	options := []string{"Save & Exit", "Exit without saving", "Cancel"}
-
-	var sb strings.Builder
-
-	sb.WriteString(styles.Title.Render("Exit editor?"))
-	sb.WriteString("\n\n")
-
-	for i, opt := range options {
-		if i == p.exitConfirmSelection {
-			sb.WriteString(styles.ListItemSelected.Render("> " + opt))
-		} else {
-			sb.WriteString("  " + opt)
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString("\n")
-	sb.WriteString(styles.Muted.Render("[j/k to select, Enter to confirm, Esc to cancel]"))
-
-	return sb.String()
+	return p.edit.RenderExitConfirm()
 }
 
 // handleExitConfirmationChoice processes the user's selection in the exit confirmation dialog.
 func (p *Plugin) handleExitConfirmationChoice() (*Plugin, tea.Cmd) {
-	p.showExitConfirmation = false
+	p.edit.ShowExitConfirm = false
 
-	switch p.exitConfirmSelection {
+	switch p.edit.ConfirmSelection {
 	case 0: // Save & Exit
-		target := p.inlineEditSession
-		editor := p.inlineEditEditor
-
 		// Try to send editor-specific save-and-quit commands
-		tty.EditorSession{Name: target, Editor: editor}.SaveAndQuit()
+		p.edit.SaveAndQuit()
 
 		// Exit inline edit mode and save note content
 		noteID := p.inlineEditNoteID
-		notePath := p.inlineEditPath
+		notePath := p.edit.Path
 		p.exitInlineEditMode()
 
 		// Process pending click and save note
@@ -513,14 +412,13 @@ func (p *Plugin) handleExitConfirmationChoice() (*Plugin, tea.Cmd) {
 
 	case 1: // Exit without saving
 		// Kill session immediately, then process pending action
-		exportPath := p.inlineEditPath
+		exportPath := p.edit.Path
 		p.exitInlineEditMode()
 		removeNoteExport(exportPath)
 		return p.processPendingClickAction()
 
 	case 2: // Cancel
-		p.pendingClickRegion = ""
-		p.pendingClickData = nil
+		p.edit.ClearPendingClick()
 		return p, nil
 	}
 
@@ -529,12 +427,7 @@ func (p *Plugin) handleExitConfirmationChoice() (*Plugin, tea.Cmd) {
 
 // processPendingClickAction handles the click that triggered exit confirmation.
 func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
-	region := p.pendingClickRegion
-	data := p.pendingClickData
-
-	// Clear pending state
-	p.pendingClickRegion = ""
-	p.pendingClickData = nil
+	region, data := p.edit.TakePendingClick()
 
 	switch region {
 	case regionNoteItem:
@@ -557,7 +450,7 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 
 // processPendingClickActionWithSave handles the click and saves note content.
 func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Plugin, tea.Cmd) {
-	saveCmd := p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
+	saveCmd := p.saveRetainedExport(noteID, notePath, p.edit.Activation)
 
 	// Process the pending click
 	p2, _ := p.processPendingClickAction()
@@ -569,34 +462,31 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 // has no full-screen tmux experience: the embedded pane is the whole editor,
 // so there is nothing to hand a suspended Sidecar off to.
 func (p *Plugin) clearInlineEditorAttachKey() {
-	if p.inlineEditor == nil {
+	if p.edit.Model == nil {
 		return
 	}
-	p.inlineEditor.Config.AttachKey = ""
+	p.edit.Model.Config.AttachKey = ""
 }
 
 // isInlineEditSessionAlive checks if the tmux session for inline editing still exists.
 func (p *Plugin) isInlineEditSessionAlive() bool {
-	if p.inlineEditSession == "" {
-		return false
-	}
-	return (tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}).IsAlive()
+	return p.edit.IsAlive()
 }
 
 // handleInlineEditorKey processes keyboard input when inline editor is active.
 func (p *Plugin) handleInlineEditorKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	if !p.inlineEditMode || p.inlineEditor == nil {
+	if !p.edit.Active || p.edit.Model == nil {
 		return false, nil
 	}
 
 	// Delegate to tty model
-	cmd := p.inlineEditor.Update(msg)
+	cmd := p.edit.Model.Update(msg)
 	return true, cmd
 }
 
 // handleTtyMessages processes tty-related messages.
 func (p *Plugin) handleTtyMessages(msg tea.Msg) (bool, tea.Cmd) {
-	if !p.inlineEditMode || p.inlineEditor == nil {
+	if !p.edit.Active || p.edit.Model == nil {
 		return false, nil
 	}
 
@@ -606,7 +496,7 @@ func (p *Plugin) handleTtyMessages(msg tea.Msg) (bool, tea.Cmd) {
 		// here swallowed the press and left :wq / click-away hanging (td-bb475e).
 		return false, nil
 	case tty.EscapeTimerMsg, tty.CaptureResultMsg, tty.PollTickMsg, tty.PaneResizedMsg, tty.SessionDeadMsg, tty.PasteResultMsg:
-		cmd := p.inlineEditor.Update(msg)
+		cmd := p.edit.Model.Update(msg)
 		return true, cmd
 	case InlineEditStartedMsg:
 		return true, p.handleInlineEditStarted(msg)
@@ -617,7 +507,7 @@ func (p *Plugin) handleTtyMessages(msg tea.Msg) (bool, tea.Cmd) {
 	// Let it identify and consume them instead of duplicating transport cases in
 	// this plugin. A nil command means the message was either synchronous or not
 	// terminal-owned and should continue through normal Notes routing.
-	if cmd := p.inlineEditor.Update(msg); cmd != nil {
+	if cmd := p.edit.Model.Update(msg); cmd != nil {
 		return true, cmd
 	}
 
@@ -629,7 +519,7 @@ const inlineAutoSaveInterval = 2 * time.Second
 
 // scheduleInlineAutoSave schedules the next auto-save tick.
 func (p *Plugin) scheduleInlineAutoSave() tea.Cmd {
-	if !p.inlineEditMode {
+	if !p.edit.Active {
 		return nil
 	}
 	p.inlineAutoSaveGen++
@@ -641,14 +531,14 @@ func (p *Plugin) scheduleInlineAutoSave() tea.Cmd {
 
 // performInlineAutoSave reads the temp file and saves if content changed.
 func (p *Plugin) performInlineAutoSave() tea.Cmd {
-	if !p.inlineEditMode || p.inlineEditPath == "" || p.store == nil {
+	if !p.edit.Active || p.edit.Path == "" || p.store == nil {
 		return p.scheduleInlineAutoSave()
 	}
 
 	noteID := p.inlineEditNoteID
-	notePath := p.inlineEditPath
+	notePath := p.edit.Path
 	epoch := p.ctx.Epoch
-	activation := p.inlineEditActivation
+	activation := p.edit.Activation
 	generation := p.inlineAutoSaveGen
 	store := p.store
 	lastSavedContent := p.inlineLastSavedContent
@@ -699,14 +589,14 @@ func (p *Plugin) saveNoteAfterInlineExit(noteID, notePath string) tea.Cmd {
 	// Inline editor writes bypass textarea state; sync buffers on the next reload.
 	p.pendingEditorSyncID = noteID
 
-	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
+	return p.saveRetainedExport(noteID, notePath, p.edit.Activation)
 }
 
 // saveAndExitInlineEditMode saves current content and exits inline edit mode.
 // Used for click-away auto-save behavior.
 func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 	noteID := p.inlineEditNoteID
-	notePath := p.inlineEditPath
+	notePath := p.edit.Path
 	// Exit inline edit mode (kills tmux session)
 	p.exitInlineEditMode()
 
@@ -715,5 +605,5 @@ func (p *Plugin) saveAndExitInlineEditMode() tea.Cmd {
 		return nil
 	}
 
-	return p.saveRetainedExport(noteID, notePath, p.inlineEditActivation)
+	return p.saveRetainedExport(noteID, notePath, p.edit.Activation)
 }

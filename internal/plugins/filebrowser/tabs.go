@@ -235,7 +235,7 @@ func (p *Plugin) closeTab(index int) tea.Cmd {
 	p.killTabEditSession(index)
 
 	// If closing the active tab that's currently in edit mode, clean up plugin state
-	if index == p.activeTab && p.inlineEditMode {
+	if index == p.activeTab && p.edit.Active {
 		p.clearPluginEditState()
 	}
 
@@ -454,26 +454,26 @@ func (p *Plugin) saveEditStateToTab() {
 	if len(p.tabs) == 0 || p.activeTab < 0 || p.activeTab >= len(p.tabs) {
 		return
 	}
-	if !p.inlineEditMode || p.inlineEditSession == "" {
+	if !p.edit.Active || p.edit.Name == "" {
 		return
 	}
 	tab := &p.tabs[p.activeTab]
-	tab.EditSession = p.inlineEditSession
+	tab.EditSession = p.edit.Name
 	tab.EditOrigMtime = p.inlineEditOrigMtime
-	tab.EditEditor = p.inlineEditEditor
+	tab.EditEditor = p.edit.EditorCmd
 }
 
 // clearPluginEditState clears plugin-level edit state without killing the tmux session.
 // Used when detaching from editor (session keeps running in background).
 func (p *Plugin) clearPluginEditState() {
-	p.inlineEditMode = false
-	p.inlineEditSession = ""
-	p.inlineEditFile = ""
+	p.edit.Active = false
+	p.edit.Name = ""
+	p.edit.Path = ""
 	p.inlineEditOrigMtime = time.Time{}
-	p.inlineEditEditor = ""
-	p.inlineEditActivation++
-	p.inlineEditorDragging = false
-	p.inlineEditor.Close()
+	p.edit.EditorCmd = ""
+	p.edit.Activation++
+	p.edit.Dragging = false
+	p.edit.Model.Close()
 }
 
 // restoreEditStateFromTab restores plugin-level edit state from the active tab.
@@ -495,11 +495,11 @@ func (p *Plugin) restoreEditStateFromTab() bool {
 		return false
 	}
 	// Restore to plugin-level state
-	p.inlineEditMode = true
-	p.inlineEditSession = tab.EditSession
-	p.inlineEditFile = tab.Path
+	p.edit.Active = true
+	p.edit.Name = tab.EditSession
+	p.edit.Path = tab.Path
 	p.inlineEditOrigMtime = tab.EditOrigMtime
-	p.inlineEditEditor = tab.EditEditor
+	p.edit.EditorCmd = tab.EditEditor
 	return true
 }
 
@@ -543,7 +543,7 @@ func (p *Plugin) closeTabsForPath(deletedPath string) tea.Cmd {
 	for _, item := range result.Removed {
 		killFileTabEditSession(item.Value)
 	}
-	if result.ActiveRemoved && p.inlineEditMode {
+	if result.ActiveRemoved && p.edit.Active {
 		p.clearPluginEditState()
 	}
 	p.applyTabGroup(g)
@@ -649,9 +649,9 @@ func (p *Plugin) invalidateTabsInDirs(dirs []string) {
 func (p *Plugin) cleanupAllEditSessions() {
 	killed := make(map[string]struct{})
 	// Clean up current plugin-level edit state
-	if p.inlineEditMode && p.inlineEditSession != "" {
-		killed[p.inlineEditSession] = struct{}{}
-		tty.EditorSession{Name: p.inlineEditSession, Editor: p.inlineEditEditor}.Kill()
+	if p.edit.Active && p.edit.Name != "" {
+		killed[p.edit.Name] = struct{}{}
+		tty.EditorSession{Name: p.edit.Name, Editor: p.edit.EditorCmd}.Kill()
 		p.clearPluginEditState()
 	}
 	// Clean up any backgrounded sessions in tabs

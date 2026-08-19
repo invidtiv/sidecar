@@ -63,11 +63,11 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 // overlay owns the wheel, which lets the ordinary panes answer.
 func (p *Plugin) overlayWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
 	switch {
-	case p.showExitConfirmation:
+	case p.edit.ShowExitConfirm:
 		// handleExitConfirmationMouse consumes every mouse event without
 		// touching state: the whole wheel stream is a known no-op.
 		return true, true
-	case p.inlineEditMode:
+	case p.edit.Active:
 		// The embedded editor owns the wheel.
 		return false, true
 	case p.projectSearchMode:
@@ -109,27 +109,27 @@ const (
 // handleMouse processes mouse events and dispatches to appropriate handlers.
 func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog if active
-	if p.showExitConfirmation {
+	if p.edit.ShowExitConfirm {
 		p.clearDragState()
 		return p.handleExitConfirmationMouse(msg)
 	}
 
 	// Handle inline edit mode - mouse events for editor and click-away detection
-	if p.inlineEditMode && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		p.clearDragState()
 		action := p.mouseHandler.HandleMouse(msg)
 
 		// Helper to handle click-away: save edit state to tab and detach
 		// The tmux session keeps running in background; returning to the tab restores it
 		handleClickAway := func(regionID string, regionData interface{}) (*Plugin, tea.Cmd) {
-			p.inlineEditorDragging = false // Cancel any drag in progress
+			p.edit.Dragging = false // Cancel any drag in progress
 
 			// Check if the editor session is still alive
 			if !p.isInlineEditSessionAlive() {
 				// Session is dead - just clean up and process click
 				p.exitInlineEditMode()
-				p.pendingClickRegion = regionID
-				p.pendingClickData = regionData
+				p.edit.PendingClickRegion = regionID
+				p.edit.PendingClickData = regionData
 				return p.processPendingClickAction()
 			}
 
@@ -138,8 +138,8 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 			p.clearPluginEditState()
 
 			// Process the click directly
-			p.pendingClickRegion = regionID
-			p.pendingClickData = regionData
+			p.edit.PendingClickRegion = regionID
+			p.edit.PendingClickData = regionData
 			return p.processPendingClickAction()
 		}
 
@@ -195,7 +195,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 					// Forward mouse press to vim and start tracking drag
 					col, row, ok := p.calculateInlineEditorMouseCoords(action.X, action.Y)
 					if ok {
-						p.inlineEditorDragging = true
+						p.edit.Dragging = true
 						p.lastDragForwardTime = time.Time{}
 						return p, p.forwardMousePressToInlineEditor(col, row)
 					}
@@ -215,7 +215,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 		// Handle mouse motion/hover - forward drag events to vim for text selection.
 		// Throttled to ~60fps to prevent subprocess spam (each forward spawns tmux send-keys).
-		if action.Type == mouse.ActionHover && p.inlineEditorDragging {
+		if action.Type == mouse.ActionHover && p.edit.Dragging {
 			now := time.Now()
 			if now.Sub(p.lastDragForwardTime) < dragForwardThrottle {
 				return p, nil
@@ -229,8 +229,8 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 		// Handle mouse release - end drag
 		if rel, ok := msg.(tea.MouseReleaseMsg); ok {
-			if p.inlineEditorDragging {
-				p.inlineEditorDragging = false
+			if p.edit.Dragging {
+				p.edit.Dragging = false
 				p.lastDragForwardTime = time.Time{}
 				rm := rel.Mouse()
 				col, row, ok := p.calculateInlineEditorMouseCoords(rm.X, rm.Y)
@@ -242,7 +242,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		}
 
 		// Forward other mouse events to tty model
-		cmd := p.inlineEditor.Update(msg)
+		cmd := p.edit.Model.Update(msg)
 		return p, cmd
 	}
 

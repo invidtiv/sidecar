@@ -251,14 +251,14 @@ func TestFilesProjectSearchCursorBounds(t *testing.T) {
 }
 
 func TestFilesExitConfirmationAbsorbsWheelAndEditorStaysUnknown(t *testing.T) {
-	p := fbModalPlugin(t, func(p *Plugin) { p.showExitConfirmation = true }, 40)
+	p := fbModalPlugin(t, func(p *Plugin) { p.edit.ShowExitConfirm = true }, 40)
 	for _, up := range []bool{true, false} {
 		if !p.WheelAtBoundary(fbWheel(2, 5, up)) {
 			t.Errorf("exit confirmation wheel (up=%v) was not absorbed", up)
 		}
 	}
 
-	p = fbModalPlugin(t, func(p *Plugin) { p.inlineEditMode = true }, 40)
+	p = fbModalPlugin(t, func(p *Plugin) { p.edit.Active = true }, 40)
 	if p.WheelAtBoundary(fbWheel(60, 5, false)) {
 		t.Error("the inline editor owns its wheel and must stay unknown")
 	}

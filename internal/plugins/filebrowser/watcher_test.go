@@ -774,7 +774,7 @@ func TestPlugin_WatchEventDeferredWhileSearching(t *testing.T) {
 func TestPlugin_WatchEventDeferredWhileInlineEditing(t *testing.T) {
 	tmpDir := t.TempDir()
 	p := createRefreshTestPlugin(t, tmpDir, "a.txt")
-	p.inlineEditMode = true // No inlineEditor: only the deferral is under test
+	p.edit.Active = true // No inlineEditor: only the deferral is under test
 
 	p.Update(WatchEventMsg{TreeChanged: true})
 	if !p.pendingAutoRefresh {
@@ -841,12 +841,12 @@ func expectWatchListenerArmed(t *testing.T, dir string, cmd tea.Cmd) {
 // update() would kill auto-refresh for the rest of the session.
 func TestPlugin_WatchEventAlwaysRearmsListener(t *testing.T) {
 	states := map[string]func(*Plugin){
-		"exit confirmation": func(p *Plugin) { p.showExitConfirmation = true },
+		"exit confirmation": func(p *Plugin) { p.edit.ShowExitConfirm = true },
 		"inline editing": func(p *Plugin) {
 			// An inactive editor makes update() take its "vim exited" branch,
 			// which returns before reaching any message handling.
-			p.inlineEditMode = true
-			p.inlineEditor = tty.New(nil)
+			p.edit.Active = true
+			p.edit.Model = tty.New(nil)
 		},
 		"blame modal": func(p *Plugin) { p.blameMode = true },
 	}
