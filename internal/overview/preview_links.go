@@ -685,6 +685,14 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	}
 	key := msg.String()
 	if m.preview.doc.focused {
+		// ctrl+c is the host's, even mid-query — the same rule the focused
+		// filter states above. This browser answers before internal/app's
+		// text-input level, which is where every other surface's ctrl+c is
+		// intercepted, so a search here must hand it back itself or it is the
+		// one place the quit confirmation is unreachable.
+		if key == "ctrl+c" && (m.preview.doc.mode != nil || m.previewDocFindActive()) {
+			return false, nil
+		}
 		// A live pane search surface owns every key in the pane, before the
 		// document's own keys and before the browser's: `/` here is a query
 		// character, `q` is a q.

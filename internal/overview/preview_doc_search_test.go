@@ -150,6 +150,27 @@ func TestPreviewDocSearchBindingsMatchTheProjectSurface(t *testing.T) {
 	}
 }
 
+// ctrl+c stays the host's while a pane search owns the keyboard. This browser
+// answers before internal/app's text-input level, which is where every other
+// surface's ctrl+c is intercepted, so a search that swallowed it would make the
+// quit confirmation unreachable — the rule the focused list filter already
+// states for itself.
+func TestPreviewDocSearchHandsBackCtrlC(t *testing.T) {
+	ctrlC := tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+
+	m := focusedDocPreview(t)
+	pressWorkspaces(t, m, tea.KeyPressMsg{Code: '/', Text: "/"})
+	if handled, _ := m.WorkspacesKey(ctrlC); handled {
+		t.Fatal("the in-file search swallowed ctrl+c")
+	}
+
+	m = focusedDocPreview(t)
+	pressWorkspaces(t, m, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if handled, _ := m.WorkspacesKey(ctrlC); handled {
+		t.Fatal("the file finder swallowed ctrl+c")
+	}
+}
+
 // Losing the keyboard dismisses both searches: the modal, and the in-file bar.
 func TestPreviewDocSearchClosesOnFocusLoss(t *testing.T) {
 	m := focusedDocPreview(t)
