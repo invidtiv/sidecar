@@ -352,11 +352,15 @@ Driven by first real use of Phase 1 and by the call-site audit at
   user-editable in the config file, ahead of the full Phase 4 page which
   will render them.
 
-**5. Simplify toast interaction.** Drop the focusable-toast model: toasts are
-**click to dismiss** plus the global `d` fallback where the focused context
-allows it (not while an interactive terminal or editor owns keys — the
-existing `contextRebindsKey` yielding already encodes this). No toast focus
-state to route around.
+**5. Simplify toast interaction — toasts never take focus.** Drop the
+focusable-toast model entirely: toasts have **no focus context** and must
+never steal focus from whatever the user is doing, including at the moment
+they appear. The only interactions are **click to dismiss** and the global
+`d` fallback where the focused context allows it (not while an interactive
+terminal or editor owns keys — the existing `contextRebindsKey` yielding
+already encodes this). A toast appearing must not change key routing, cursor
+position, or the focused context in any way. (`alt+n`/`N` opening the centre
+remains the deliberate, user-initiated route to interact further.)
 
 **6. Housekeeping.** Commit `docs/reference/audits/notification-inventory.md`
 alongside this plan so the phase references a stable document.
