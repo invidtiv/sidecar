@@ -2,6 +2,65 @@
 
 All notable changes to sidecar are documented here.
 
+## [v1.1.0] - 2026-08-18
+
+Text you can see is now text you can select and copy — on every surface, into
+every clipboard — and the machinery behind panes gained two shared seams so
+project and global workspaces stay one model rather than two lookalikes.
+
+### Features
+
+- **Text in a document pane is selectable on both surfaces.** A file pane could
+  be read but not copied from. It is one `docview.Model` in two places — the
+  project workspace and the global Workspaces browser — so the selection binds
+  to the viewer once and both surfaces inherit it, the way live refresh already
+  does. Rows are wrapped and tab-expanded at layout time, in the column space
+  they are actually drawn in, so the columns a selection names are the columns
+  on screen and the selection engine never sees wrapping. The line-number
+  gutter is kept beside the text rather than inside it, so it can never be
+  selected or copied.
+- **Copies reach both clipboards, and copy-on-select is a choice.** Every copy
+  used to end in a local clipboard utility, which does not exist over SSH or
+  inside the tmux control-mode sessions the workspace surfaces run on — so
+  copying put the text nowhere and reported success anyway. `internal/clip` is
+  now the single path text takes: the system clipboard natively, and the
+  terminal's own over OSC 52. Copy-on-select is a setting rather than an
+  assumption, and one control owns it.
+- **A `sidecar-modern` Chroma syntax theme**, with red keywords and teal types,
+  plus easier-to-see text selection in that theme.
+
+### Bug Fixes
+
+- **The global Diff pane accepts file clicks and host shortcuts** (td-efbaa9).
+  The Sessions Diff leaf registered file-row hits but never dispatched them,
+  and always claimed leftover keys, so `@` never reached the project switcher.
+  Click and wheel rules moved onto the shared `workspacediff.View`, and host
+  globals now pass through when a content leaf is focused.
+- **A shell created from the global browser stays live.** Creating one wrote
+  the session and manifest, then the next live-only poll treated it as
+  unclaimed and painted the preview "session ended" while tmux was still
+  running (td-ecb0b8). Unclaimed sessions now fall through to path ownership,
+  and an in-flight status pass cannot drop a project re-inventoried mid-cycle.
+- **Live watches the kernel drops are re-added**, and a view that can never
+  perform a re-read is no longer owed one.
+
+### Internal
+
+- `internal/livepanes` owns the live-refresh watcher lifecycle that had been
+  written out once per pane kind per surface — six near-identical copies, and
+  six chances for a new pane kind to silently never refresh. Adding a kind is
+  now one `Binding` entry per surface.
+- The selection engine lives outside the terminal package, so surfaces that are
+  not a PTY can use it.
+- `make worktree-init` lets any harness make a git worktree Go-buildable, and
+  Sidecar-created worktrees run it automatically.
+
+### Dependencies
+
+- td v0.59.0 → **v0.60.0**. The embedded monitor's list, board, and swimlane
+  panes now share one row layout, so keys and columns line up and selecting a
+  row no longer shifts it.
+
 ## [v1.0.3] - 2026-08-18
 
 Mostly internal groundwork — the embedded td monitor, the global Workspaces
