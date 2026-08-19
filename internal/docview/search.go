@@ -476,6 +476,10 @@ func injectHighlights(row string, ranges []matchRange, current int) string {
 
 	visible, next := 0, 0
 	open := false
+	// active is the row's own styling that is in force at this point: closing a
+	// highlight resets everything, so whatever the row had opened has to be
+	// re-emitted or the rest of a syntax-highlighted line loses its colour.
+	active := ""
 	for i := 0; i < len(row); {
 		// ANSI escape sequences pass through and count as no visible bytes.
 		if row[i] == '\x1b' && i+1 < len(row) && row[i+1] == '[' {
@@ -486,16 +490,30 @@ func injectHighlights(row string, ranges []matchRange, current int) string {
 			if j < len(row) {
 				j++
 			}
-			out.WriteString(row[i:j])
+			seq := row[i:j]
+			if seq == "\x1b[0m" || seq == "\x1b[m" {
+				active = ""
+			} else {
+				active += seq
+			}
+			out.WriteString(seq)
 			i = j
 			continue
 		}
 		if open && next < len(ranges) && visible >= ranges[next].end {
 			out.WriteString("\x1b[0m")
+			out.WriteString(active)
 			open = false
 			next++
 		}
-		if !open && next < len(ranges) && visible == ranges[next].start {
+		// Skip any range this column is already past — an overlapped match whose
+		// whole span fell inside the one just closed.
+		for !open && next < len(ranges) && visible >= ranges[next].end {
+			next++
+		}
+		// A match may start inside the one before it ("aa" twice in "aaa"), so
+		// the test is >=, not ==: the later match still gets painted from here.
+		if !open && next < len(ranges) && visible >= ranges[next].start {
 			open = true
 			if ranges[next].index == current {
 				out.WriteString(searchMatchCurrentPrefix())

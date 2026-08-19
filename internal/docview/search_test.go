@@ -298,6 +298,42 @@ func TestSearchHighlightPreservesExistingANSIStyling(t *testing.T) {
 	}
 }
 
+func TestSearchHighlightRestoresTheRowsStylingAfterAMatch(t *testing.T) {
+	// The highlight is closed with a full reset, so whatever colour the row had
+	// open before the match has to be put back or the tail of a syntax
+	// highlighted line goes plain.
+	styled := "\x1b[31mred needle red\x1b[0m"
+	m := newSearchModel(t, 40, 4, styled)
+	typeSearch(m, "needle")
+
+	row := strings.Split(m.View(), "\n")[0]
+	after := row[strings.Index(row, searchMatchCurrentPrefix())+len(searchMatchCurrentPrefix()):]
+	reset := strings.Index(after, "\x1b[0m")
+	if reset < 0 {
+		t.Fatalf("row = %q, want the highlight closed", row)
+	}
+	if !strings.HasPrefix(after[reset+len("\x1b[0m"):], "\x1b[31m") {
+		t.Errorf("after the highlight = %q, want the row's own colour restored", after[reset:])
+	}
+}
+
+func TestSearchHighlightsOverlappingMatches(t *testing.T) {
+	m := newSearchModel(t, 40, 4, "aaa")
+	typeSearch(m, "aa")
+	if got := len(m.SearchMatches()); got != 2 {
+		t.Fatalf("matches = %d, want 2 overlapping hits", got)
+	}
+	row := strings.Split(m.View(), "\n")[0]
+	// Both matches paint: the current one from column 0, the second one picking
+	// up where the first closed rather than being dropped.
+	if got := len(searchHighlightColumns(row, searchMatchCurrentPrefix())); got != 1 {
+		t.Errorf("current-match highlights = %d, want 1 (row %q)", got, row)
+	}
+	if got := len(searchHighlightColumns(row, searchMatchPrefix())); got != 1 {
+		t.Errorf("second-match highlights = %d, want the overlapped match still painted (row %q)", got, row)
+	}
+}
+
 func TestSearchCurrentMatchIsStyledDifferentlyFromTheRest(t *testing.T) {
 	m := newSearchModel(t, 40, 4, "hit and hit")
 	typeSearch(m, "hit")
