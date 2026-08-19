@@ -180,8 +180,6 @@ func (p *Plugin) renderDiffContent(width, height int) string {
 
 func (p *Plugin) diffTabFileCount() int { return p.diff.FileCount() }
 
-func (p *Plugin) diffTabTotalItems() int { return p.diff.TotalItems() }
-
 func (p *Plugin) applyDiffScope() {
 	p.diff.ApplySnapshot()
 }
@@ -199,16 +197,6 @@ func (p *Plugin) loadSelectedDiffTabCommit() tea.Cmd {
 func (p *Plugin) onDiffTabCursorChanged(oldCursor int) tea.Cmd {
 	p.bindDiffView()
 	return p.diff.OnCursorChanged(oldCursor)
-}
-
-func (p *Plugin) loadSelectedCommitFileDiff() tea.Cmd {
-	p.bindDiffView()
-	return p.diff.LoadSelectedCommitFile()
-}
-
-func (p *Plugin) loadCommitDetail(hash string) tea.Cmd {
-	p.bindDiffView()
-	return p.diff.LoadCommit(hash)
 }
 
 // paintFileFor is the PaintFile hook bound to one view, so the painter can tell
