@@ -51,6 +51,122 @@ sidecar help open
 sidecar help --json
 ```
 
+## `sidecar notify`
+
+Post, dismiss, and list Sidecar notifications
+
+Sidecar's notification surface: a toast in the running instance, an entry in the
+notification centre, and a count in the header until the user reads it.
+
+```
+Usage: sidecar notify <command>
+```
+
+### `sidecar notify dismiss`
+
+Dismiss a notification you posted
+
+Dismiss one notification. A caller may only dismiss notifications it posted:
+identity is the Sidecar shell you are in, or failing that the working directory,
+so the notification you posted a moment ago is dismissible and the user's own
+and other agents' are not.
+
+```
+Usage: sidecar notify dismiss [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: dismissed
+- `1`: state failure
+- `2`: usage error
+- `3`: no notification with that id
+- `4`: that notification was posted by someone else
+
+**Examples:**
+
+```bash
+sidecar notify dismiss ntf-06215f4b1a2c3-9f1e2d3c
+```
+
+### `sidecar notify list`
+
+List notifications
+
+List notifications, newest first. This reads Sidecar's notification log directly,
+so it answers whether or not Sidecar is running and never changes anything.
+
+By default dismissed notifications are left out; --all includes them.
+
+```
+Usage: sidecar notify list [--all] [--unread] [--json]
+```
+
+**Options:**
+
+- `--all`: Include dismissed notifications
+- `--unread`: Only notifications the user has not seen
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: the notification log could not be read
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar notify list
+sidecar notify list --unread --json
+```
+
+### `sidecar notify post`
+
+Post a notification the user sees in Sidecar
+
+Post a notification. It appears as a toast in the running Sidecar instance for
+this shell's project and stays in the notification centre until dismissed.
+
+With no instance running the notification is written to Sidecar's notification
+log and appears at the next start; nothing is lost.
+
+--expiry sets how long the toast stays on screen — a duration such as 10s, or
+"never" for one that waits for the user. Expiry never removes the notification
+from the centre.
+
+```
+Usage: sidecar notify post [options] <title>
+```
+
+**Options:**
+
+- `--body TEXT`: Detail line shown under the title
+- `--source ID`: Source: agent, waiting, session, tasks, td, system (default agent)
+- `--expiry DURATION`: Toast lifetime (e.g. 10s), or "never" (default: the source's)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: posted, or stored for the next start
+- `1`: state failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar notify post "Tests are green"
+sidecar notify post "Need a decision" --source waiting --expiry never
+sidecar notify post "Build failed" --body "go test ./internal/app" --json
+```
+
 ## `sidecar open`
 
 Show a file, a td issue, a git diff, or a provider resource in a split pane

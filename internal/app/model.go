@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -368,6 +369,12 @@ type Model struct {
 	// value, so anything it assigns is discarded, and a cached-and-nil channel
 	// silently stops the listener re-arming after the first request.
 	uiRequestWatcher *uirequest.Watcher
+
+	// Notification store and its render-side snapshot. The store is app-shell
+	// state, like the header: it outlives every plugin, survives project and
+	// worktree switches, and is the single writer for this process.
+	notifications     notify.Store
+	notificationCache []notify.Notification
 }
 
 // Option adjusts the model at construction. Options exist for the deliberate,
@@ -421,6 +428,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
 		m.uiRequestWatcher = watcher
 	}
+	m.notifications = openNotificationStore()
+	m.refreshNotifications()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
 	}

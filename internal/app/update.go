@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -380,6 +381,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ui.UpdateClock()
 		m.ui.ClearExpiredToast()
 		m.ClearToast()
+		// Notification expiry rides the existing heartbeat rather than a timer
+		// per toast: a countdown ticks one cell a second, which is exactly the
+		// resolution this tick already has.
+		(&m).sweepNotifications(time.Now())
 		// The worktree inventory costs a `git worktree list` fork, so it is
 		// refreshed off the update loop (never inline: this runs on the render
 		// goroutine) and only every worktreeInventoryTicks. A branch switched
@@ -421,6 +426,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ToastMsg:
 		m.ShowToast(msg.Message, msg.Duration)
 		m.statusIsError = msg.IsError
+		return m, nil
+
+	case notify.PostMsg:
+		// The store is the app's, so posting is answered here and the result
+		// broadcast: whoever draws toasts reacts to PostedMsg rather than
+		// reaching into the store.
+		return m, (&m).postNotification(msg.Notification)
+
+	case notify.DismissMsg:
+		(&m).dismissNotification(msg.ID)
+		return m, nil
+
+	case notify.ReadMsg:
+		(&m).readNotification(msg.ID)
 		return m, nil
 
 	case RefreshMsg:
@@ -670,6 +689,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case uirequest.RequestMsg:
+		if msg.Request.Action == uirequest.ActionNotify {
+			if cmd := (&m).handleNotifyRequest(msg.Request); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}

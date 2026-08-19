@@ -1,6 +1,9 @@
 package uirequest
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Action identifies the requested UI presentation mutation.
 type Action string
@@ -9,6 +12,10 @@ const (
 	ActionOpen           Action = "open"
 	ActionRenameWorktree Action = "rename-worktree"
 	ActionRenameShell    Action = "rename-shell"
+	// ActionNotify posts (or dismisses) a notification in a running instance.
+	// Its payload is a notification record rather than a target, because the
+	// object it names does not exist until the request lands.
+	ActionNotify Action = "notify"
 )
 
 // TargetKind identifies the type of object affected by a UI request.
@@ -25,6 +32,9 @@ const (
 	// that instance's matchers claims the locator, because only it has a live
 	// matcher snapshot. The short-lived CLI process starts no provider.
 	TargetKindResource TargetKind = "resource"
+	// TargetKindNotification is a notification id. Its Value is empty on a
+	// post (the id travels in the payload) and set on a dismiss.
+	TargetKindNotification TargetKind = "notification"
 )
 
 // Status describes the host's response to a UI request.
@@ -76,6 +86,11 @@ type Request struct {
 	Action    Action    `json:"action"`
 	Target    Target    `json:"target"`
 	Options   Options   `json:"options,omitempty"`
+	// Payload carries an action-specific record for actions whose object is
+	// not addressable as a Target — a posted notification, so far. It is raw
+	// JSON so uirequest stays a transport and does not import the packages
+	// that own these records.
+	Payload json.RawMessage `json:"payload,omitempty"`
 }
 
 // Ack is the acknowledgement written by each Sidecar instance handling a request.
