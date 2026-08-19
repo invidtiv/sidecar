@@ -116,8 +116,12 @@ func (c *docContent) SetSize(size Size) tea.Cmd {
 	return nil
 }
 
-func (c *docContent) View(Render) string {
-	return c.m.renderPreviewDoc(c.doc, termpreview.Box{W: c.size.Width, H: c.size.Height})
+// View draws the leaf at its own origin. Where the box is, not only how big it
+// is: a pointer gesture over the document's text is hit-tested against it.
+func (c *docContent) View(render Render) string {
+	return c.m.renderPreviewDoc(c.doc, termpreview.Box{
+		X: render.Origin.X, Y: render.Origin.Y, W: c.size.Width, H: c.size.Height,
+	})
 }
 
 // issueContent is the td issue leaf.

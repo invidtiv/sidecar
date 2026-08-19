@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
+	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -75,6 +76,16 @@ type Model struct {
 	layoutValid  bool
 	contentGen   uint64
 	layoutBuilds int // test-visible count of full layout passes
+
+	// selection is this document's text selection, and originX/originY where the
+	// host last drew the content box it is made in. See select.go.
+	selection        textselect.Surface
+	originX, originY int
+	// selectionKey is the layout the live selection was made against. A
+	// selection names visual rows, so anything that re-lays the document out —
+	// a new file, a re-read, wrap, a width change — leaves it pointing at rows
+	// that are no longer the ones the user picked.
+	selectionKey layoutKey
 }
 
 // New creates an empty document viewer. A nil renderer uses the default
@@ -235,7 +246,11 @@ func (m *Model) View() string {
 		lineIndex := m.scroll + i
 		line := ""
 		if lineIndex < len(display.rows) {
-			line = display.rows[lineIndex]
+			// The highlight is painted onto the row on its way to the screen,
+			// never into the cached layout: it belongs to this frame, and the
+			// gutter cell in front of it is not selectable content.
+			line = display.gutters[lineIndex] +
+				m.selection.DecorateRow(display.rows[lineIndex], lineIndex)
 		}
 		rows[i] = fitLine(line, m.width)
 	}
@@ -307,9 +322,17 @@ func (m *Model) Title() string { return m.path }
 // source lines. starts[n-1] is the row index where source line n begins, so
 // scrolling and ApplyLine stay expressible in source-line terms even when wrap
 // turns one source line into several rows.
+//
+// A row is kept split at the gutter because the two halves are not the same kind
+// of thing: rows is the document's own text, in the column space a selection
+// names it in, and gutters is the chrome drawn in front of it — never selected,
+// never copied, and never highlighted. gutterWidth is what the pair costs on
+// screen, which is what places the selectable content.
 type displayRows struct {
-	rows   []string
-	starts []int
+	gutters     []string
+	rows        []string
+	starts      []int
+	gutterWidth int
 }
 
 // docContent is the document's text before layout. banner counts leading rows
@@ -336,6 +359,7 @@ func (m *Model) currentLayoutKey() layoutKey {
 }
 
 func (m *Model) display() displayRows {
+	m.expireSelection()
 	// A placeholder is a handful of lines that depend on transient state the
 	// cache key does not track - whether a load is in flight, which path was
 	// armed, what the error said. It is cheap enough to lay out every time, and
@@ -367,7 +391,11 @@ func (m *Model) layOutContent(content docContent) displayRows {
 	}
 	textWidth := m.width - gutter.Width()
 
-	out := displayRows{rows: make([]string, 0, len(content.lines))}
+	out := displayRows{
+		gutters:     make([]string, 0, len(content.lines)),
+		rows:        make([]string, 0, len(content.lines)),
+		gutterWidth: gutter.Width(),
+	}
 	for i, line := range content.lines {
 		first, cont := gutter.Blank(), gutter.Blank()
 		if i >= content.banner {
@@ -375,7 +403,7 @@ func (m *Model) layOutContent(content docContent) displayRows {
 			out.starts = append(out.starts, len(out.rows))
 		}
 		if !m.wrap || textWidth <= 0 {
-			out.rows = append(out.rows, first+line)
+			out.add(first, line)
 			continue
 		}
 		for wi, segment := range wrapLine(line, textWidth) {
@@ -383,10 +411,24 @@ func (m *Model) layOutContent(content docContent) displayRows {
 			if wi == 0 {
 				prefix = first
 			}
-			out.rows = append(out.rows, prefix+segment)
+			out.add(prefix, segment)
 		}
 	}
 	return out
+}
+
+// add records one visual row, tab-expanded in the column space it is actually
+// drawn in.
+//
+// Expanding here rather than at render time is what makes a selection's columns
+// the screen's columns: a tab stop is measured from the left edge of the row, so
+// the gutter in front of the text moves every stop in it, and fitLine's own
+// expansion of the same string is then a no-op. A gutter cell holds no tabs, so
+// the expansion leaves its bytes alone and the split survives it.
+func (d *displayRows) add(gutter, text string) {
+	expanded := ui.ExpandTabs(gutter+text, tabStopWidth)
+	d.gutters = append(d.gutters, expanded[:len(gutter)])
+	d.rows = append(d.rows, expanded[len(gutter):])
 }
 
 // displayRowForLine maps a 1-based source line to the row that shows it.

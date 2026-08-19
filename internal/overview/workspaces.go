@@ -783,6 +783,12 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	case tty.PointerFinish:
 		return m.finishPreviewGesture()
 	}
+	// A document selection's motion and release, which are the drag's rather
+	// than whatever region the pointer has since travelled over — including no
+	// region at all, which the early return below would drop.
+	if cmd, handled := m.handlePreviewDocGesture(action, wasDragging, dragSourceBefore); handled {
+		return cmd
+	}
 	// A drag moves the preview box, and a live pane is sized against that box.
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
