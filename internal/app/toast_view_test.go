@@ -5,10 +5,15 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
 )
+
+func clickAt(x, y int) tea.MouseMsg {
+	return tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+}
 
 func blankScreen(w, h int) string {
 	return strings.TrimRight(strings.Repeat(strings.Repeat(" ", w)+"\n", h), "\n")
@@ -38,7 +43,7 @@ func TestToastIsDrawnTopRightOfTheContentRegion(t *testing.T) {
 	if strings.Contains(lines[0], "Agent finished") {
 		t.Fatal("the toast painted over the header row")
 	}
-	for _, want := range []string{"Agent finished", "sidecar: tests green", "dismiss", "▰"} {
+	for _, want := range []string{"Agent finished", "sidecar: tests green", "dismiss", toastCellFull} {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("the toast is missing %q:\n%s", want, screen)
 		}
@@ -63,7 +68,7 @@ func TestStickyToastHasNoCountdown(t *testing.T) {
 		t.Fatalf("the waiting source should be sticky by default")
 	}
 	block := ansi.Strip(renderToastBlock(n, 40, time.Now()))
-	if strings.Contains(block, "▰") || strings.Contains(block, "▱") {
+	if strings.Contains(block, toastCellFull) || strings.Contains(block, toastCellEmpty) {
 		t.Fatalf("a sticky toast drew a countdown:\n%s", block)
 	}
 }
@@ -190,5 +195,63 @@ func TestCountdownLabelAboveAMinute(t *testing.T) {
 		if got := toastRemaining(tc.remaining); got != tc.want {
 			t.Fatalf("toastRemaining(%v) = %q, want %q", tc.remaining, got, tc.want)
 		}
+	}
+}
+
+// Plan 1.5 item 5: a toast is click-to-dismiss. The whole block is the target,
+// because a toast has no focus and nothing else a click could mean.
+func TestClickingAToastDismissesIt(t *testing.T) {
+	m := notifyModel()
+	m.width, m.height, m.ready = 100, 30, true
+	m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "Agent finished"})
+	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
+
+	region := m.toastMouse.HitMap.Test(96, headerHeight)
+	if region == nil || region.ID != regionToast {
+		t.Fatalf("no toast hit region under the block's top-right corner: %v", region)
+	}
+	if !m.toastMouseEvent(clickAt(96, headerHeight)) {
+		t.Fatal("a click on the toast did not dismiss it")
+	}
+	if len(m.ToastableNotifications(time.Now())) != 0 {
+		t.Fatal("the toast survived the click")
+	}
+	// A frame that draws no toast leaves no clickable hole behind it.
+	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
+	if m.toastMouse.HitMap.Test(96, headerHeight) != nil {
+		t.Fatal("the hit region outlived the toast")
+	}
+	if m.toastMouseEvent(clickAt(96, headerHeight)) {
+		t.Fatal("a click claimed a toast that is not on screen")
+	}
+}
+
+// A click anywhere else is not the toast's business: it falls through to the
+// content untouched.
+func TestClickingBesideAToastIsNotClaimed(t *testing.T) {
+	m := notifyModel()
+	m.width, m.height, m.ready = 100, 30, true
+	m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "Agent finished"})
+	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
+	if m.toastMouseEvent(clickAt(2, 20)) {
+		t.Fatal("the toast claimed a click in the content")
+	}
+	if len(m.ToastableNotifications(time.Now())) != 1 {
+		t.Fatal("a click in the content dismissed the toast")
+	}
+}
+
+// A toast must never change key routing: it has no focus context, so the
+// focused surface before and after a post is the same one.
+func TestAToastNeverTakesFocus(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	before := m.activeContext
+	m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "Agent finished"})
+	m.updateContext()
+	if m.activeContext != before {
+		t.Fatalf("posting a toast moved focus: %q -> %q", before, m.activeContext)
+	}
+	if m.notificationCentreFocused || m.notificationCentreOpen {
+		t.Fatal("posting a toast opened or focused the centre")
 	}
 }

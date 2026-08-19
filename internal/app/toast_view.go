@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
@@ -29,16 +30,31 @@ const (
 	// content region.
 	toastMarginX = 1
 	toastMarginY = 0
-	// toastCountdownCells is the width of the `▰▰▰▱▱` meter in design 1a.
+	// toastCountdownCells is the width of the meter in design 1a. The cells are
+	// deliberately the small `▪`/`▫` pair rather than the design's full-height
+	// `▰`/`▱`: with a dim hue they read as a receding progress hint instead of
+	// competing with the title for attention (plan 1.5 item 4). The tick
+	// behaviour behind them is unchanged — one cell per slice of the lifetime,
+	// off the same 1s heartbeat.
 	toastCountdownCells = 5
-	toastCellFull       = "▰"
-	toastCellEmpty      = "▱"
+	toastCellFull       = "▪"
+	toastCellEmpty      = "▫"
+
+	// regionToast is the toast's whole block as a pointer target. Toasts are
+	// click-to-dismiss: they take no focus, so the pointer route is the only
+	// direct one, with the global `d` as the keyboard fallback.
+	regionToast = "toast"
 )
 
 // visibleToast is the notification a toast is currently drawn for, if any.
 // Newest wins: without stacking there is one slot, and the thing that just
 // happened is the thing worth showing.
 func (m Model) visibleToast(now time.Time) (notify.Notification, bool) {
+	// A re-show wins the slot: the user asked for this one specifically, which
+	// is a newer intent than whatever the store last posted.
+	if n, ok := m.reshownToast(now); ok {
+		return n, true
+	}
 	toastable := m.ToastableNotifications(now)
 	if len(toastable) == 0 {
 		return notify.Notification{}, false
@@ -52,6 +68,7 @@ func (m Model) visibleToast(now time.Time) (notify.Notification, bool) {
 // notification centre reserves a right-hand column the toast follows the
 // content's right edge inward instead of hiding underneath the panel.
 func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) string {
+	m.clearToastRegion()
 	if width < toastMinWidth+2*toastMarginX || height <= 0 {
 		return screen
 	}
@@ -68,7 +85,43 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 	if x < x0 {
 		x = x0
 	}
-	return overlay.Composite(screen, block, x, y0+toastMarginY)
+	y := y0 + toastMarginY
+	m.registerToastRegion(x, y, blockWidth, lipgloss.Height(block))
+	return overlay.Composite(screen, block, x, y)
+}
+
+// clearToastRegion retires the pointer target. A frame that draws no toast
+// must leave no clickable hole behind it.
+func (m Model) clearToastRegion() {
+	if m.toastMouse != nil {
+		m.toastMouse.HitMap.Clear()
+	}
+}
+
+func (m Model) registerToastRegion(x, y, width, height int) {
+	if m.toastMouse == nil || width <= 0 || height <= 0 {
+		return
+	}
+	m.toastMouse.HitMap.AddRect(regionToast, x, y, width, height, nil)
+}
+
+// toastMouseEvent answers a press that landed on the toast. The whole block is
+// one target and one action — dismiss — because a toast that takes no focus
+// has nothing else it could mean, and a click that misses falls through to the
+// content untouched.
+func (m *Model) toastMouseEvent(msg tea.MouseMsg) bool {
+	if m.toastMouse == nil {
+		return false
+	}
+	click, ok := msg.(tea.MouseClickMsg)
+	if !ok || click.Mouse().Button != tea.MouseLeft {
+		return false
+	}
+	mi := click.Mouse()
+	if region := m.toastMouse.HitMap.Test(mi.X, mi.Y); region == nil || region.ID != regionToast {
+		return false
+	}
+	return m.dismissVisibleToast()
 }
 
 // renderToastBlock draws one toast at the given outer width: source-hued
@@ -129,11 +182,15 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 		Render(strings.Join(lines, "\n"))
 }
 
-// toastKeyRow is design 1a's footer row. Snooze is deliberately absent: it is
-// deferred to Phase 6, and tasks own their own snoozing.
+// toastKeyRow is design 1a's footer row, minus the keys a toast cannot honour.
+// Snooze is deferred to Phase 6 (tasks own their own snoozing), and `enter
+// open` is gone because a toast has no focus context: nothing routes `enter` to
+// it, so advertising it was a promise the toast could not keep. What is left is
+// what actually works — click the block, or press `d` where the focused context
+// has not claimed it. Targets get their keyboard route through the centre in
+// Phase 5.
 func toastKeyRow(inner int) string {
-	row := styles.KeyHint.Render("enter") + styles.Muted.Render(" open") +
-		styles.Muted.Render(" · ") +
+	row := styles.Muted.Render("click") + styles.Muted.Render(" or ") +
 		styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
 	if lipgloss.Width(row) > inner {
 		row = styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
@@ -164,9 +221,12 @@ func toastCountdown(n notify.Notification, now time.Time) string {
 		filled++
 	}
 	filled = max(1, min(toastCountdownCells, filled))
-	meter := lipgloss.NewStyle().Foreground(styles.TextSecondary).Render(strings.Repeat(toastCellFull, filled)) +
-		lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled))
-	return meter + styles.Muted.Render(" "+toastRemaining(remaining))
+	// Both halves sit below the body text in weight: the countdown is a hint
+	// about how long the block will linger, not information the user has to
+	// read (plan 1.5 item 4).
+	meter := lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellFull, filled)) +
+		lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled))
+	return meter + lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(" "+toastRemaining(remaining))
 }
 
 // toastRemaining is the countdown's label. Design 1a shows seconds because its
@@ -192,6 +252,48 @@ func (m *Model) dismissVisibleToast() bool {
 	if !ok {
 		return false
 	}
+	m.clearToastReshow()
 	m.dismissNotification(n.ID)
 	return true
+}
+
+// reshownToast is the "view details" slot: the notification the user selected
+// `enter` on in the centre, re-presented as a toast for one countdown. It is a
+// copy, not a store record — re-showing a dismissed notification shows it
+// again without un-dismissing it, and re-showing a read one does not make it
+// unread.
+func (m Model) reshownToast(now time.Time) (notify.Notification, bool) {
+	if m.toastReshow == nil || !now.UTC().Before(m.toastReshowUntil) {
+		return notify.Notification{}, false
+	}
+	return *m.toastReshow, true
+}
+
+// reshowNotification puts a notification back on screen as a toast. The copy
+// gets a fresh created/expires pair so the countdown starts over; sticky
+// notifications re-show sticky, exactly as they toasted the first time.
+func (m *Model) reshowNotification(n notify.Notification, now time.Time) {
+	copyOf := n
+	copyOf.CreatedAt = now.UTC()
+	copyOf.DismissedAt = nil
+	if n.Sticky {
+		copyOf.ExpiresAt = nil
+		// A sticky re-show still has to end: the user can dismiss it, but the
+		// slot must not be held forever by a presentation-only copy.
+		m.toastReshowUntil = now.UTC().Add(notify.ExpiryFor(notify.SourceSystem))
+	} else {
+		expiry := notify.ExpiryFor(n.Source)
+		if expiry <= 0 {
+			expiry = notify.ExpiryFor(notify.SourceSystem)
+		}
+		expires := copyOf.CreatedAt.Add(expiry)
+		copyOf.ExpiresAt = &expires
+		m.toastReshowUntil = expires
+	}
+	m.toastReshow = &copyOf
+}
+
+func (m *Model) clearToastReshow() {
+	m.toastReshow = nil
+	m.toastReshowUntil = time.Time{}
 }

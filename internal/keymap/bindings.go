@@ -115,6 +115,10 @@ func DefaultBindings() []Binding {
 		{Key: "down", Command: "cursor-down", Context: "notification-centre"},
 		{Key: "k", Command: "cursor-up", Context: "notification-centre"},
 		{Key: "up", Command: "cursor-up", Context: "notification-centre"},
+		// enter re-presents the selected notification as a toast ("view
+		// details"), which is what it means until Phase 5 gives it target
+		// activation.
+		{Key: "enter", Command: "select", Context: "notification-centre"},
 		{Key: "d", Command: "dismiss", Context: "notification-centre"},
 		{Key: "D", Command: "dismiss-group", Context: "notification-centre"},
 		{Key: "esc", Command: "close-notification-centre", Context: "notification-centre"},

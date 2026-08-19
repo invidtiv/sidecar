@@ -62,6 +62,7 @@ func centreTestModel(t *testing.T, plugins ...*sizingPlugin) Model {
 		cfg:                     config.Default(),
 		notifications:           notify.NewMemStore(),
 		notificationCentreMouse: mouse.NewHandler(),
+		toastMouse:              mouse.NewHandler(),
 	}
 	m.updateContext()
 	return m
@@ -284,19 +285,112 @@ func TestCentreListKeysMoveDismissAndGroupDismiss(t *testing.T) {
 	}
 }
 
-// enter is deliberately inert in Phase 1, and consumed so it cannot mean
-// something else by accident.
-func TestCentreEnterIsANoOp(t *testing.T) {
+// enter is "view details": the selected notification comes back as a toast,
+// without the store learning anything about it.
+func TestCentreEnterReshowsTheSelectionAsAToast(t *testing.T) {
 	m := centreTestModel(t, &sizingPlugin{id: "files"})
-	postCentreNotification(t, &m, notify.SourceTasks, "task one")
+	posted := postCentreNotification(t, &m, notify.SourceTasks, "task one")
 	m.toggleNotificationCentre()
+	// Mark it read, as selecting it in the centre does, so nothing would be
+	// toasting on its own.
+	m.readNotification(posted.ID)
+	m.notificationCentreCursor = 0
+
 	before := len(m.notificationCentreItems())
 	handled, cmd := m.notificationCentreKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 	if !handled || cmd != nil {
-		t.Fatalf("enter handled=%v cmd=%v, want consumed and inert", handled, cmd != nil)
+		t.Fatalf("enter handled=%v cmd=%v, want consumed and command-free", handled, cmd != nil)
 	}
 	if got := len(m.notificationCentreItems()); got != before {
 		t.Fatalf("enter changed the list: %d -> %d", before, got)
+	}
+	if !m.notificationCentreOpen || !m.notificationCentreFocused {
+		t.Fatal("enter closed or blurred the panel; it is a detail view, not a navigation")
+	}
+	shown, ok := m.visibleToast(time.Now())
+	if !ok || shown.ID != posted.ID {
+		t.Fatalf("visibleToast after enter = %+v (ok=%v), want the selection", shown, ok)
+	}
+	if shown.CreatedAt.Equal(posted.CreatedAt) {
+		t.Fatal("the re-shown copy did not get a fresh countdown")
+	}
+	// The record itself is untouched: a re-show is presentation only.
+	stored, ok := m.findNotification(posted.ID)
+	if !ok || !stored.CreatedAt.Equal(posted.CreatedAt) || stored.Dismissed() {
+		t.Fatalf("enter rewrote the stored record: %+v", stored)
+	}
+	if got := len(notify.Toastable(m.notificationCache, time.Now())); got != 0 {
+		t.Fatalf("the store thinks %d notifications should be toasting; a re-show must not re-post", got)
+	}
+}
+
+// The panel is a content pane and wears the shell's shared gradient border,
+// not a border rule of its own.
+func TestCentreWearsTheSharedPaneBorder(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	postCentreNotification(t, &m, notify.SourceTasks, "a due task")
+	m.toggleNotificationCentre()
+
+	panel := m.renderNotificationCentre(m.height - headerHeight - footerHeight)
+	lines := strings.Split(panel, "\n")
+	if len(lines) < 3 {
+		t.Fatalf("panel rendered %d lines", len(lines))
+	}
+	if !strings.Contains(lines[0], "╭") || !strings.Contains(lines[0], "╮") {
+		t.Fatalf("panel has no top border: %q", lines[0])
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(last, "╰") || !strings.Contains(last, "╯") {
+		t.Fatalf("panel has no bottom border: %q", last)
+	}
+	for _, line := range lines {
+		if got := lipgloss.Width(line); got != m.reservedRightWidth() {
+			t.Fatalf("panel row width = %d, want %d (%q)", got, m.reservedRightWidth(), line)
+		}
+	}
+}
+
+// An entry is two lines — title and body — so a call to action is not lost to
+// a truncated title. A notification with no body stays one line.
+func TestCentreEntriesAreTwoLines(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	if _, err := m.notifications.Post(notify.Notification{
+		Source: notify.SourceTD, Title: "review requested", Body: "td-4c1f9a needs a reviewer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	postCentreNotification(t, &m, notify.SourceTasks, "bare title")
+	m.refreshNotifications()
+	m.toggleNotificationCentre()
+
+	rows := m.notificationCentreBody(notificationCentreDefaultWidth-4, time.Now())
+	counts := map[int]int{}
+	var bodyRow string
+	for _, row := range rows {
+		if row.item < 0 {
+			continue
+		}
+		counts[row.item]++
+		if strings.Contains(row.text, "needs a reviewer") {
+			bodyRow = row.text
+		}
+	}
+	if bodyRow == "" {
+		t.Fatal("the body never got a row of its own")
+	}
+	if strings.Contains(bodyRow, "review requested") {
+		t.Fatalf("title and body share a row: %q", bodyRow)
+	}
+	withBody, withoutBody := 0, 0
+	for _, n := range counts {
+		if n == 2 {
+			withBody++
+		}
+		if n == 1 {
+			withoutBody++
+		}
+	}
+	if withBody != 1 || withoutBody != 1 {
+		t.Fatalf("row counts per entry = %v, want one two-row and one one-row entry", counts)
 	}
 }
 

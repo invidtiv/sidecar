@@ -35,9 +35,11 @@ const (
 	notificationCentreContext = "notification-centre"
 
 	// notificationCentreDefaultWidth is the panel's width before the user has
-	// ever dragged it. It fits a title, a source section rule, and a meta
-	// column without crowding a 120-column terminal's content.
-	notificationCentreDefaultWidth = 34
+	// ever dragged it. It fits a title, a source section rule, a meta column,
+	// and the body line of a two-line entry without crowding a 120-column
+	// terminal's content — four columns wider than Phase 1's panel, which is
+	// exactly what the gradient border and its padding take back.
+	notificationCentreDefaultWidth = 38
 	notificationCentreMinWidth     = 24
 	notificationCentreMaxWidth     = 60
 	// notificationCentreMinContent is the narrowest content region the panel is
@@ -106,7 +108,10 @@ func (m Model) notificationCentreOwnsKeys() bool {
 }
 
 // centreRow is one body line of the panel. Section headers, spacers, and the
-// empty state carry item = -1; only item rows are selectable.
+// empty state carry item = -1; only item rows are selectable. An entry is two
+// rows — title and body — that both carry the same item index, so the cursor
+// highlight covers the pair and a click on either selects the same
+// notification.
 type centreRow struct {
 	text string
 	item int
@@ -137,10 +142,9 @@ func (m Model) notificationCentreBody(inner int, now time.Time) []centreRow {
 		}
 		rows = append(rows, centreRow{text: notificationSectionRule(group, inner), item: -1})
 		for _, n := range group.Items {
-			rows = append(rows, centreRow{
-				text: m.notificationCentreItemLine(n, inner, index, now),
-				item: index,
-			})
+			for _, line := range m.notificationCentreItemLines(n, inner, index, now) {
+				rows = append(rows, centreRow{text: line, item: index})
+			}
 			index++
 		}
 	}
@@ -160,9 +164,37 @@ func notificationSectionRule(group notify.Group, inner int) string {
 	return styled + " " + lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", rest))
 }
 
-// notificationCentreItemLine is one notification: the unread dot, the title,
-// and its age in the meta column on the right.
-func (m Model) notificationCentreItemLine(n notify.Notification, inner, index int, now time.Time) string {
+// notificationCentreItemLines is one notification as the two rows plan 1.5
+// asks for: the unread dot, the title and its age in the meta column, then the
+// body indented underneath. The body row is what keeps a call to action from
+// being lost to a truncated title — a notification whose whole content is its
+// title still renders as a single row, so a list of short items stays dense.
+func (m Model) notificationCentreItemLines(n notify.Notification, inner, index int, now time.Time) []string {
+	lines := []string{m.notificationCentreTitleLine(n, inner, index, now)}
+	body := strings.Join(strings.Fields(strings.TrimSpace(n.Body)), " ")
+	if body == "" {
+		return lines
+	}
+	// The body aligns under the title, past the two columns the unread dot
+	// occupies, so the two rows read as one entry.
+	const indent = "  "
+	bodyWidth := max(1, inner-len(indent))
+	row := indent + lipgloss.NewStyle().Foreground(styles.TextSubtle).
+		Render(ansi.Truncate(body, bodyWidth, "…"))
+	return append(lines, m.styleCentreRow(row, inner, index))
+}
+
+// styleCentreRow applies the cursor highlight to a row of the selected entry.
+func (m Model) styleCentreRow(row string, inner, index int) string {
+	if m.notificationCentreOwnsKeys() && index == m.notificationCentreCursor {
+		return lipgloss.NewStyle().Background(styles.SurfaceRaised).
+			Render(padNotificationRow(row, inner))
+	}
+	return row
+}
+
+// notificationCentreTitleLine is an entry's first row.
+func (m Model) notificationCentreTitleLine(n notify.Notification, inner, index int, now time.Time) string {
 	meta := notificationAge(n.CreatedAt, now)
 	mark := "  "
 	if !n.Read() {
@@ -183,10 +215,7 @@ func (m Model) notificationCentreItemLine(n notify.Notification, inner, index in
 		gap = 1
 	}
 	row := mark + body + strings.Repeat(" ", gap) + styles.Muted.Render(meta)
-	if m.notificationCentreOwnsKeys() && index == m.notificationCentreCursor {
-		return lipgloss.NewStyle().Background(styles.SurfaceRaised).Render(ansi.Truncate(row, inner, ""))
-	}
-	return row
+	return m.styleCentreRow(row, inner, index)
 }
 
 // notificationAge is the compact meta column of design 1c: "now", "4m", "3h",
@@ -213,10 +242,17 @@ func notificationAge(created, now time.Time) string {
 // press without a second geometry.
 func (m Model) renderNotificationCentre(height int) string {
 	panelWidth := m.notificationCentrePanelWidth()
-	if panelWidth <= 0 || height <= 0 {
+	// Three rows is the least a bordered pane can be drawn in; below that the
+	// panel yields rather than degrading into a borderless one.
+	if panelWidth <= 0 || height < 3 {
 		return ""
 	}
-	inner := max(1, panelWidth-2)
+	// The panel wears the same gradient border every other content pane wears
+	// (styles.RenderPanel), so it reads as a pane of the shell rather than a
+	// second kind of surface. That border costs two columns and two rows, and
+	// its one column of padding either side costs two more columns — the
+	// interior is what is left.
+	inner := max(1, panelWidth-4)
 	now := time.Now()
 
 	handle := ui.RenderHandle(height, true,
@@ -231,29 +267,35 @@ func (m Model) renderNotificationCentre(height int) string {
 	// Two header rows (title, rule), a spacer, and the footnote sit outside the
 	// scrolled body.
 	footnote := styles.Muted.Render(ansi.Truncate(notificationCentreFootnote, inner, "…"))
+	// The border takes the outermost row top and bottom; everything below is
+	// laid out against the interior.
+	interiorHeight := max(0, height-2)
 	lines := []string{titleRow, lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat("─", inner))}
-	bodyHeight := max(0, height-4)
+	// Title, rule, and — where there is room — a spacer and the footnote sit
+	// outside the scrolled body.
+	bodyHeight := max(0, interiorHeight-4)
 
 	rows := m.notificationCentreBody(inner, now)
 	scroll := m.notificationCentreScrollFor(rows, bodyHeight)
 	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
 		lines = append(lines, rows[i].text)
 	}
-	for len(lines) < max(0, height-2) {
+	for len(lines) < max(0, interiorHeight-2) {
 		lines = append(lines, "")
 	}
-	if height >= 4 {
+	if interiorHeight >= 4 {
 		lines = append(lines, "", footnote)
 	}
-	if len(lines) > height {
-		lines = lines[:height]
+	if len(lines) > interiorHeight {
+		lines = lines[:interiorHeight]
 	}
 
 	body := make([]string, 0, len(lines))
 	for _, line := range lines {
-		body = append(body, " "+padNotificationRow(line, inner)+" ")
+		body = append(body, padNotificationRow(line, inner))
 	}
-	panel := strings.Join(body, "\n")
+	panel := styles.RenderPanel(strings.Join(body, "\n"), panelWidth, height,
+		m.notificationCentreFocused)
 
 	m.registerNotificationCentreRegions(height, rows, scroll, bodyHeight, reserve)
 	return lipgloss.JoinHorizontal(lipgloss.Top, handle, panel)
@@ -267,12 +309,18 @@ func (m Model) notificationCentreScrollFor(rows []centreRow, bodyHeight int) int
 	}
 	scroll := min(m.notificationCentreScroll, len(rows)-bodyHeight)
 	scroll = max(0, scroll)
-	cursorRow := -1
+	// An entry is two rows, so the cursor occupies a span: scroll to bring the
+	// first row into view going up, and the last one going down, so an entry's
+	// body is never the half that falls off the edge.
+	cursorRow, cursorEnd := -1, -1
 	for i, row := range rows {
-		if row.item == m.notificationCentreCursor {
-			cursorRow = i
-			break
+		if row.item != m.notificationCentreCursor {
+			continue
 		}
+		if cursorRow < 0 {
+			cursorRow = i
+		}
+		cursorEnd = i
 	}
 	if cursorRow < 0 {
 		return scroll
@@ -280,8 +328,8 @@ func (m Model) notificationCentreScrollFor(rows []centreRow, bodyHeight int) int
 	if cursorRow < scroll {
 		return cursorRow
 	}
-	if cursorRow >= scroll+bodyHeight {
-		return min(cursorRow-bodyHeight+1, len(rows)-bodyHeight)
+	if cursorEnd >= scroll+bodyHeight {
+		return min(cursorEnd-bodyHeight+1, len(rows)-bodyHeight)
 	}
 	return scroll
 }
@@ -302,19 +350,21 @@ func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, s
 
 	hits.AddRect(regionNotificationCentre, panelX, headerHeight, panelWidth, height, nil)
 
-	// Body rows start after the title row and its rule, and are inset by the
-	// panel's one column of padding.
+	// The interior starts one row down and two columns in: the gradient border
+	// takes a row and a column, the panel's padding another column. Body rows
+	// then start after the title row and its rule. Both rows of a two-line
+	// entry carry the same item id, so clicking either selects the entry.
 	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
 		if rows[i].item < 0 {
 			continue
 		}
-		y := headerHeight + 2 + (i - scroll)
+		y := headerHeight + 1 + 2 + (i - scroll)
 		hits.AddRect(fmt.Sprintf("%s%d", regionNotificationCentreItem, rows[i].item),
 			panelX, y, panelWidth, 1, nil)
 	}
 
 	if reserve.CloseW > 0 {
-		hits.AddRect(regionNotificationCentreClose, panelX+1+reserve.CloseCol, headerHeight, reserve.CloseW, 1, nil)
+		hits.AddRect(regionNotificationCentreClose, panelX+2+reserve.CloseCol, headerHeight+1, reserve.CloseW, 1, nil)
 	}
 
 	hitX := max(0, handleX-(notificationCentreHandleHit-1)/2)
@@ -344,9 +394,10 @@ func padNotificationRow(row string, width int) string {
 func (m Model) notificationCentreCommands() []plugin.Command {
 	return []plugin.Command{
 		{ID: "cursor-down", Name: "Move", Context: notificationCentreContext, Priority: 1},
-		{ID: "dismiss", Name: "Dismiss", Context: notificationCentreContext, Priority: 2},
-		{ID: "dismiss-group", Name: "Group", Context: notificationCentreContext, Priority: 3},
-		{ID: "close-notification-centre", Name: "Close", Context: notificationCentreContext, Priority: 4},
+		{ID: "select", Name: "Details", Context: notificationCentreContext, Priority: 2},
+		{ID: "dismiss", Name: "Dismiss", Context: notificationCentreContext, Priority: 3},
+		{ID: "dismiss-group", Name: "Group", Context: notificationCentreContext, Priority: 4},
+		{ID: "close-notification-centre", Name: "Close", Context: notificationCentreContext, Priority: 5},
 	}
 }
 
@@ -402,9 +453,15 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, nil
 	case "enter":
-		// Deliberately a no-op in Phase 1: the targets a notification carries
-		// are stored but not yet activated (plan Phase 5). The key is consumed
-		// so it cannot mean something else here by accident.
+		// "View details": re-present the selected notification as a toast, so
+		// the body and key row the centre's two lines truncate can be read in
+		// full. It is presentation only — no re-post, no un-dismiss — and the
+		// centre stays open and focused behind it. Phase 5 rebinds `enter` to
+		// target activation and re-show moves to a secondary key.
+		if selected, ok := m.selectedNotification(items); ok {
+			m.reshowNotification(selected, time.Now())
+			m.readSelectedNotification()
+		}
 		return true, nil
 	}
 	return false, nil

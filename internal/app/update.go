@@ -330,6 +330,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled, cmd := (&m).notificationCentreMouseEvent(msg); handled {
 			return m, cmd
 		}
+		// A toast floats over the content and is click-to-dismiss. It is tested
+		// after the panel (which owns its own column) and before the content, so
+		// the only clicks it takes are the ones that landed on the block itself.
+		if (&m).toastMouseEvent(msg) {
+			return m, nil
+		}
 		if isClickPress && mi.X < m.contentWidth() {
 			(&m).blurNotificationCentre()
 		}

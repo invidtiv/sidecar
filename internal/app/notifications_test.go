@@ -6,12 +6,13 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 func notifyModel() *Model {
-	m := &Model{notifications: notify.NewMemStore()}
+	m := &Model{notifications: notify.NewMemStore(), toastMouse: mouse.NewHandler()}
 	m.ui = NewUIState()
 	return m
 }

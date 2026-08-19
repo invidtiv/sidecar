@@ -373,6 +373,17 @@ type Model struct {
 	// toastPainted records notification ids a toast was actually drawn for, so
 	// the expiry sweep only marks read what the user had a chance to see.
 	toastPainted map[string]bool
+	// toastMouse carries the toast's one pointer target. A toast has no focus
+	// context and never takes the keyboard (plan 1.5 item 5): click-to-dismiss
+	// and the global `d` fallback are its whole interaction surface, so a hit
+	// map is all the pointer state it needs.
+	toastMouse *mouse.Handler
+	// toastReshow is a notification the user asked to see again from the
+	// centre (`enter` = view details). It is a presentation-only copy with its
+	// own countdown: re-showing must not re-post, un-dismiss, or reorder
+	// anything in the store.
+	toastReshow      *notify.Notification
+	toastReshowUntil time.Time
 	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
 	// the centre stays open across every navigation until the user closes it.
 	notificationCentreOpen bool
@@ -457,6 +468,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
 	m.notificationCentreMouse = mouse.NewHandler()
+	m.toastMouse = mouse.NewHandler()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
 	}
