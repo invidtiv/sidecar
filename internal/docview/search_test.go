@@ -474,3 +474,27 @@ func TestTopSourceLineFollowsScroll(t *testing.T) {
 		t.Fatalf("after two rows: got %d, want 3", got)
 	}
 }
+
+// InjectHighlights is exported for hosts whose renderer is not a docview.Model
+// (the files plugin's preview pane), so it is worth one test that pins the
+// exported shape independently of Model.
+func TestInjectHighlightsIsUsableWithoutAModel(t *testing.T) {
+	row := "\x1b[31mfoo\x1b[0m bar foo"
+	out := InjectHighlights(row, []MatchRange{
+		{Index: 0, Start: 0, End: 3},
+		{Index: 1, Start: 8, End: 11},
+	}, 1)
+
+	if !strings.Contains(out, "\x1b[31m") {
+		t.Error("the row's own styling should survive injection")
+	}
+	if strings.Count(out, "\x1b[0m") < 2 {
+		t.Errorf("expected a reset per highlighted range, got %q", out)
+	}
+	if ansi.Strip(out) != ansi.Strip(row) {
+		t.Errorf("visible text changed: %q vs %q", ansi.Strip(out), ansi.Strip(row))
+	}
+	if InjectHighlights(row, nil, 0) != row {
+		t.Error("no ranges should return the row unchanged")
+	}
+}

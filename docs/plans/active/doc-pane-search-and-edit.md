@@ -186,13 +186,54 @@ tab-expanded, wrapped, and ANSI rows, and a match under an active selection.
 
 ### Phase 5 — migrate filebrowser content search onto docview search
 
-Optional but strongly preferred once Phases 1–2 are proven: replace
-filebrowser's `contentSearch*` state, `updateContentMatches`,
-`highlightLineMatches`, and `renderContentSearchBar` with the docview
-facility. If filebrowser's renderer can't adopt it yet (its preview
-rendering is not docview), keep its implementation but delete the duplicated
-ANSI-highlight helper in favor of the shared one, and record the remaining
-duplication here.
+**Landed: the reduced version.** The full migration was not attempted, and
+the plan's own escape hatch is why: filebrowser's preview pane is not a
+`docview.Model` and does not render through one. It paints rows itself in
+`view.go` out of three parallel slices (`previewLines`,
+`previewHighlighted`, `markdownRendered`), with its own wrap
+(`wrapPreviewLine`), its own scroll offset, its own gutter call, and its own
+selection-background injection — none of which docview knows about. Docview's
+search facility is defined over docview's `starts[]` visual-row map and is
+painted through `DecorateRow`; there is no seam in filebrowser to hand it. A
+"migration" today would mean writing an adapter that fakes a docview display
+model over those slices, which is more code than the duplication it removes.
+
+What landed instead:
+
+- `docview.InjectHighlights` / `docview.MatchRange` are now exported (they
+  were `injectHighlights` / `matchRange`), and
+  `filebrowser/ansi_highlight.go` shrank from 127 lines to a single method
+  that builds `[]docview.MatchRange` and calls the shared walker. The
+  filebrowser copies of `injectHighlightsIntoANSI`, `isANSITerminator`,
+  `extractANSIPrefix` and the two style-prefix helpers are gone, along with
+  their unit tests (docview's `search_test.go` covers the walker, plus one
+  new test pinning the exported shape).
+- Behaviour is unchanged for the user, and slightly better on one edge:
+  docview's walker re-emits the row's own styling after closing a highlight,
+  so a match in the middle of a Glamour-rendered line no longer drops the
+  rest of that line's colour. The old filebrowser walker reset to plain.
+
+Duplication that remains in `internal/plugins/filebrowser`:
+
+- Search state on `Plugin` (`contentSearchMode`, `contentSearchCommitted`,
+  `contentSearchQuery`, `contentSearchMatches`, `contentSearchCursor`) —
+  parallel to `docview.searchState`.
+- `handlers.go:889-983` `handleContentSearchKey` — parallel to
+  `docview.Model.HandleSearchKey`.
+- `operations.go:579-610` `updateContentMatches` and `scrollToContentMatch` —
+  parallel to `computeMatches` / `scrollToMatch`.
+- `view.go:403` `renderContentSearchBar` — parallel to `docview.searchBar`.
+- `view.go:1268` `highlightLineMatches` — the *plain-text* row painter.
+  Unlike the markdown path it rebuilds the line from raw source and so drops
+  syntax highlighting on any matched line; docview's walker would preserve
+  it. Fixing that is a small independent improvement, deliberately not taken
+  here because it changes what the user sees.
+
+What full migration would require: make the preview pane render through a
+`docview.Model` (or extract docview's display-row model — `starts[]`, wrap,
+`rowText`/`rowLine` — into something filebrowser's three slices can
+implement), then delete all five items above. That is a preview-renderer
+rewrite, not a search change, and belongs in its own plan.
 
 ## Acceptance evidence
 

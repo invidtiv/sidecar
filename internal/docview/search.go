@@ -333,7 +333,7 @@ func (m *Model) highlightRow(row string, visualRow int) string {
 	}
 	width := len(display.rowText(visualRow))
 
-	var ranges []matchRange
+	var ranges []MatchRange
 	for i, match := range m.search.matches {
 		if match.Line != line {
 			continue
@@ -342,16 +342,16 @@ func (m *Model) highlightRow(row string, visualRow int) string {
 		if end <= 0 || start >= width {
 			continue
 		}
-		ranges = append(ranges, matchRange{
-			index: i,
-			start: max(start, 0),
-			end:   min(end, width),
+		ranges = append(ranges, MatchRange{
+			Index: i,
+			Start: max(start, 0),
+			End:   min(end, width),
 		})
 	}
 	if len(ranges) == 0 {
 		return row
 	}
-	return injectHighlights(row, ranges, m.search.cursor)
+	return InjectHighlights(row, ranges, m.search.cursor)
 }
 
 // searchBar is the one row docview owns when search is live: `/ query█ (3/17)
@@ -450,11 +450,14 @@ func (d displayRows) rowLine(row int) (int, int) {
 	return line, offset
 }
 
-// matchRange is a highlight to inject, in plain-text byte offsets into one row.
-type matchRange struct {
-	index int // position in the match list, so the current match can be told apart
-	start int
-	end   int
+// MatchRange is a highlight to inject, in plain-text byte offsets into one row.
+// It is exported because hosts whose renderer is not a docview.Model — the
+// files plugin's preview pane — paint their own rows through
+// InjectHighlights rather than carrying a second copy of this logic.
+type MatchRange struct {
+	Index int // position in the match list, so the current match can be told apart
+	Start int
+	End   int
 }
 
 // Highlight style prefixes must be read through functions, never captured in a
@@ -465,10 +468,11 @@ func searchMatchPrefix() string { return ansiPrefix(styles.SearchMatch.Render) }
 
 func searchMatchCurrentPrefix() string { return ansiPrefix(styles.SearchMatchCurrent.Render) }
 
-// injectHighlights walks an ANSI-styled row and opens/closes highlight
+// InjectHighlights walks an ANSI-styled row and opens/closes highlight
 // sequences at the given plain-text byte offsets, leaving the row's own styling
-// in place.
-func injectHighlights(row string, ranges []matchRange, current int) string {
+// in place. Ranges must be sorted by Start; current is the index of the match
+// that gets the "current match" styling.
+func InjectHighlights(row string, ranges []MatchRange, current int) string {
 	if len(ranges) == 0 {
 		return row
 	}
@@ -501,7 +505,7 @@ func injectHighlights(row string, ranges []matchRange, current int) string {
 			i = j
 			continue
 		}
-		if open && next < len(ranges) && visible >= ranges[next].end {
+		if open && next < len(ranges) && visible >= ranges[next].End {
 			out.WriteString("\x1b[0m")
 			out.WriteString(active)
 			open = false
@@ -509,14 +513,14 @@ func injectHighlights(row string, ranges []matchRange, current int) string {
 		}
 		// Skip any range this column is already past — an overlapped match whose
 		// whole span fell inside the one just closed.
-		for !open && next < len(ranges) && visible >= ranges[next].end {
+		for !open && next < len(ranges) && visible >= ranges[next].End {
 			next++
 		}
 		// A match may start inside the one before it ("aa" twice in "aaa"), so
 		// the test is >=, not ==: the later match still gets painted from here.
-		if !open && next < len(ranges) && visible >= ranges[next].start {
+		if !open && next < len(ranges) && visible >= ranges[next].Start {
 			open = true
-			if ranges[next].index == current {
+			if ranges[next].Index == current {
 				out.WriteString(searchMatchCurrentPrefix())
 			} else {
 				out.WriteString(searchMatchPrefix())
