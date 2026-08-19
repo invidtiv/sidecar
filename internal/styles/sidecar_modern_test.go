@@ -54,6 +54,7 @@ func TestSidecarModernReadableWhereNormalizationDoesNotReach(t *testing.T) {
 		{"textSecondary on selection", c.TextSecondary, c.BgTertiary, 4.5},
 		{"textMuted on selection", c.TextMuted, c.BgTertiary, 4.5},
 		{"textSelection on selection", c.TextSelection, c.BgTertiary, 4.5},
+		{"textPrimary on text-selection highlight", c.TextPrimary, c.SelectionBg, 4.5},
 		{"primary on canvas", c.Primary, c.BgPrimary, 4.5},
 		{"secondary on canvas", c.Secondary, c.BgPrimary, 4.5},
 		{"success on canvas", c.Success, c.BgPrimary, 4.5},
@@ -140,5 +141,26 @@ func TestSidecarModernReadableOnSelectionAndRaisedChrome(t *testing.T) {
 		if ratio := ContrastRatio(r.hex, c.SurfaceRaised); ratio < r.min-0.01 {
 			t.Errorf("%s on SurfaceRaised (%s): %.2f < %.2f", r.name, r.hex, ratio, r.min)
 		}
+	}
+}
+
+// Text-selection highlight has to lift off the canvas enough to find, without
+// walking so far toward mid-grey that body text would need to invert.
+func TestSidecarModernTextSelectionHighlightIsVisibleWithoutInvertingInk(t *testing.T) {
+	c := NormalizePalette(SidecarModernTheme.Colors)
+	if c.SelectionBg == c.BgTertiary {
+		t.Fatalf("SelectionBg reused BgTertiary (%s); the selected-row fill is too close to the canvas to mark a span", c.BgTertiary)
+	}
+	if ContrastRatio(c.SelectionBg, c.BgPrimary) < 1.4 {
+		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want a visible lift (>= 1.4)",
+			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary))
+	}
+	if Luminance(c.SelectionBg) <= Luminance(c.BgPrimary) {
+		t.Errorf("SelectionBg %s is not lighter than the canvas %s", c.SelectionBg, c.BgPrimary)
+	}
+	// Inversion would be required if the better pole on the highlight were
+	// the opposite of the canvas pole. Stay on the same side.
+	if MaxContrastPole([]string{c.SelectionBg}) != MaxContrastPole([]string{c.BgPrimary}) {
+		t.Errorf("SelectionBg %s wants the opposite ink pole from the canvas; that forces inverted selection text", c.SelectionBg)
 	}
 }

@@ -69,6 +69,18 @@ func TestNormalizePaletteIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestNormalizePaletteDefaultsSelectionBgToBgTertiary(t *testing.T) {
+	p := NormalizePalette(ColorPalette{
+		BgPrimary:   "#000000",
+		BgSecondary: "#0a0a0a",
+		BgTertiary:  "#1a1a1a",
+		TextPrimary: "#ffffff",
+	})
+	if p.SelectionBg != "#1a1a1a" {
+		t.Errorf("empty SelectionBg defaulted to %q, want BgTertiary", p.SelectionBg)
+	}
+}
+
 func TestNormalizePaletteLeavesCompliantColorsAlone(t *testing.T) {
 	p := NormalizePalette(ColorPalette{
 		BgPrimary:   "#000000",

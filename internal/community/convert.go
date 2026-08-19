@@ -124,6 +124,7 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 		BgSecondary: bgSecondary,
 		BgTertiary:  bgTertiary,
 		BgOverlay:   WithAlpha(bg, "cc"),
+		SelectionBg: bgTertiary,
 
 		SurfaceRaised: surfaceRaised,
 		KeyHintFg:     keyHintFg,
@@ -255,6 +256,7 @@ func PaletteToOverrides(p styles.ColorPalette) map[string]interface{} {
 		"bgSecondary":      p.BgSecondary,
 		"bgTertiary":       p.BgTertiary,
 		"bgOverlay":        p.BgOverlay,
+		"selectionBg":      p.SelectionBg,
 		"surfaceRaised":    p.SurfaceRaised,
 		"keyHintFg":        p.KeyHintFg,
 		"onPrimary":        p.OnPrimary,

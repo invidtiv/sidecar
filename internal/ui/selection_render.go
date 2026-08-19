@@ -14,13 +14,16 @@ import (
 var AnsiResetRe = regexp.MustCompile(`\x1b\[0?m`)
 
 // GetSelectionBgANSI returns the ANSI 24-bit background code for selection highlight
-// based on the current theme's BgTertiary color.
+// based on the current theme's SelectionBg (falling back to BgTertiary).
 func GetSelectionBgANSI() string {
 	theme := styles.GetCurrentTheme()
-	hex := theme.Colors.BgTertiary
+	hex := theme.Colors.SelectionBg
+	if hex == "" {
+		hex = theme.Colors.BgTertiary
+	}
 	var r, g, b int
 	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
-		r, g, b = 55, 65, 81
+		r, g, b = 47, 52, 56
 	}
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
 }
