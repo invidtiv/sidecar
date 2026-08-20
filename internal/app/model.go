@@ -330,6 +330,7 @@ type Model struct {
 	changelogMouseHandler      *mouse.Handler
 	changelogRenderedLines     []string // Cached rendered changelog lines
 	changelogMaxVisibleLines   int      // Max lines visible in viewport
+	changelogModalStyleKey     string   // Markdown style identity the modal was rendered under
 
 	// Intro animation
 	intro IntroModel
