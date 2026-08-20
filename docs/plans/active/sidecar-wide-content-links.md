@@ -665,6 +665,25 @@ limitation. Final implementation gates are focused repeated/race tests, full
 `go test ./...`, `go vet ./...`, `go build ./...`, repository lint, gofmt, and
 `git diff --check`, followed by independent review of the integrated candidate.
 
+### Completed proof evidence
+
+Candidate `9021d6c9` completed the pragmatic proof matrix. Real isolated UI
+captures show Files as flat peers at `200x50` and `120x40`, exact non-mutating
+fit refusal, retained Document search focus, canonical `~/` file activation,
+Git staged/unstaged identity and Issue interaction, valid and missing Notes
+internal-link outcomes, td/Tasks focus and input ownership, and default-on plus
+explicit-disable behavior. The exact artifacts and private driver paths are
+recorded on `td-a0fa62` and the reviewed milestone tasks that produced them;
+every driver was stopped and no default tmux or real Sidecar state was used.
+
+Focused model tests provide the assertions a screenshot cannot prove reliably:
+all four passive target kinds, click-versus-drag arbitration, Document edit
+lifecycle, hide/reopen/close, plugin/project switching, persistence and cached
+async results, live-watch ownership, Git no-mutation and held-result staging
+identity, Notes missing-target non-mutation, Workspace host parity, and nil
+unsafe td/Tasks link zones. The final full-repository gates remain owned by
+`td-1ac6af`; they are intentionally not duplicated as proof ceremony here.
+
 ## Risks and controls
 
 | Risk | Control |
