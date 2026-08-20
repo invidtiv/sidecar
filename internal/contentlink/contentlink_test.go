@@ -40,7 +40,7 @@ func TestParseInternalURIStrictCanonicalForm(t *testing.T) {
 
 	for _, raw := range []string{
 		"SIDECAR://note/nt-1", "sidecar://Note/nt-1", "sidecar://note/", "sidecar:///nt-1",
-		"sidecar://note/a/b", "sidecar://note/%2Fetc", "sidecar://note/a%5Cb",
+		"sidecar://note/a/b", "sidecar://note/%2Fetc", "sidecar://note/a%2Fb", "sidecar://note/a%5Cb",
 		"sidecar://note/nt-1#fragment", "sidecar://user@note/nt-1", "sidecar://note:7/nt-1",
 		"sidecar://note/nt-%ZZ", "sidecar://note/nt-%00", "sidecar://note/nt-1?view=full",
 	} {
@@ -150,6 +150,34 @@ func TestScanFrameExplicitHTTPIsResynthesizedButForeignAndMalformedAreInert(t *t
 	}
 	if plain := ansi.Strip(got.Output); plain != "web bad unterminated" {
 		t.Fatalf("visible labels changed: %q", plain)
+	}
+}
+
+func TestInvalidExplicitOSCClaimsValidLookingLabelInert(t *testing.T) {
+	const httpPrefix = "https://example.test/"
+	wrap := func(uri, label string) string {
+		return "\x1b]8;;" + uri + "\x1b\\" + label + "\x1b]8;;\x1b\\"
+	}
+	validLooking := "sidecar://note/nt-4jdj4e https://example.test td-abcd"
+	registered := map[string]URIOptions{"note": {ValidateID: func(id string) bool { return id == "nt-4jdj4e" }}}
+	for _, tc := range []struct {
+		name string
+		uri  string
+	}{
+		{name: "unknown namespace", uri: "sidecar://unknown/nt-4jdj4e"},
+		{name: "malformed destination", uri: "https:///missing-host"},
+		{name: "one byte over destination boundary", uri: httpPrefix + strings.Repeat("x", MaxExplicitDestinationBytes-len(httpPrefix)+1)},
+		{name: "javascript destination", uri: "javascript:alert(1)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ScanFrame(wrap(tc.uri, validLooking), FrameOptions{Decorate: true, InternalNamespaces: registered})
+			if got.Output != validLooking {
+				t.Fatalf("visible label changed: %q", got.Output)
+			}
+			if len(got.Spans) != 0 || len(got.Pending) != 0 {
+				t.Fatalf("invalid wrapper label became active: spans=%+v pending=%+v", got.Spans, got.Pending)
+			}
+		})
 	}
 }
 

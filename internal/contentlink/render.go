@@ -32,19 +32,23 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 	var result FrameResult
 	output := make([]string, len(lines))
 	for row, line := range lines {
-		clean, explicit := extractExplicit(line, opts.InternalNamespaces)
+		clean, claimed := extractExplicit(line, opts.InternalNamespaces)
 		if containsSourceOSCIntroducer(clean) {
-			clean, explicit = "", nil
+			clean, claimed = "", nil
 		}
 		if ansi.StringWidth(clean) > MaxRenderedColumns {
 			clean = ansi.Truncate(clean, MaxRenderedColumns, "")
-			kept := explicit[:0]
-			for _, span := range explicit {
-				if span.EndCol < MaxRenderedColumns {
-					kept = append(kept, span)
+			kept := claimed[:0]
+			for _, span := range claimed {
+				if span.StartCol >= MaxRenderedColumns {
+					continue
 				}
+				if span.EndCol >= MaxRenderedColumns {
+					span.EndCol = MaxRenderedColumns - 1
+				}
+				kept = append(kept, span)
 			}
-			explicit = kept
+			claimed = kept
 		}
 		plain := ansi.Strip(clean)
 		pending := []Pending(nil)
@@ -69,8 +73,8 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 				return resolve(KindDiff, raw)
 			},
 		}
-		internal := scanInternalURIs(plain, explicit, opts.InternalNamespaces)
-		spans := scanPlain(plain, append(explicit, internal...), autoOpts, &pending)
+		internal := scanInternalURIs(plain, claimed, opts.InternalNamespaces)
+		spans := activatableSpans(scanPlain(plain, append(claimed, internal...), autoOpts, &pending))
 		for i := range spans {
 			spans[i].Row = row
 		}
@@ -88,9 +92,20 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 	return result
 }
 
+func activatableSpans(spans []Span) []Span {
+	out := spans[:0]
+	for _, span := range spans {
+		if Activatable(span.Kind) {
+			out = append(out, span)
+		}
+	}
+	return out
+}
+
 type explicitTarget struct {
-	ref Ref
-	ok  bool
+	ref   Ref
+	ok    bool
+	claim bool
 }
 
 func extractExplicit(line string, namespaces map[string]URIOptions) (string, []Span) {
@@ -98,17 +113,22 @@ func extractExplicit(line string, namespaces map[string]URIOptions) (string, []S
 	var spans []Span
 	var active explicitTarget
 	startByte := 0
-	closeActive := func(commit bool) {
-		if !active.ok {
+	closeActive := func(validClose bool) {
+		if !active.claim {
 			return
 		}
-		if commit {
-			text := out.String()
-			startCol, endCol := ansi.StringWidth(text[:startByte]), ansi.StringWidth(text)-1
-			if endCol >= startCol && endCol-startCol+1 <= MaxExplicitLabelColumns {
+		text := out.String()
+		startCol, endCol := ansi.StringWidth(text[:startByte]), ansi.StringWidth(text)-1
+		if endCol >= startCol {
+			if validClose && active.ok && endCol-startCol+1 <= MaxExplicitLabelColumns {
 				span := SpanForRef(active.ref)
 				span.StartCol, span.EndCol, span.Explicit = startCol, endCol, true
 				spans = append(spans, span)
+			} else {
+				// Invalid and unterminated explicit destinations still own their
+				// visible label cells. This inert claim prevents automatic scanners
+				// from turning a valid-looking label into a different action.
+				spans = append(spans, Span{StartCol: startCol, EndCol: endCol})
 			}
 		}
 		active = explicitTarget{}
@@ -165,24 +185,24 @@ func parseOSC8(payload string, namespaces map[string]URIOptions) (explicitTarget
 	rest := payload[2:]
 	semi := strings.IndexByte(rest, ';')
 	if semi < 0 || semi > 256 {
-		return explicitTarget{}, true, false
+		return explicitTarget{claim: true}, true, false
 	}
 	uri := rest[semi+1:]
 	if uri == "" {
 		return explicitTarget{}, true, true
 	}
 	if len(uri) > MaxExplicitDestinationBytes {
-		return explicitTarget{}, true, false
+		return explicitTarget{claim: true}, true, false
 	}
 	if parsedURL, err := url.ParseRequestURI(uri); err == nil && parsedURL.Scheme == "sidecar" {
 		if policy, registered := namespaces[parsedURL.Host]; registered {
 			if parsed, err := ParseInternalURIWith(uri, policy); err == nil {
-				return explicitTarget{ref: parsed.Ref, ok: true}, true, false
+				return explicitTarget{ref: parsed.Ref, ok: true, claim: true}, true, false
 			}
 		}
 	}
 	if safe, ok := SafeHTTPURL(uri); ok && safe == uri {
-		return explicitTarget{ref: Ref{Kind: KindURL, Value: safe}, ok: true}, true, false
+		return explicitTarget{ref: Ref{Kind: KindURL, Value: safe}, ok: true, claim: true}, true, false
 	}
-	return explicitTarget{}, true, false
+	return explicitTarget{claim: true}, true, false
 }

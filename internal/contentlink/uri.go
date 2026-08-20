@@ -46,7 +46,7 @@ func ParseInternalURIWith(raw string, opts URIOptions) (InternalURI, error) {
 	}
 	id, err := url.PathUnescape(escapedPath[1:])
 	if err != nil || id == "" || !utf8.ValidString(id) || utf8.RuneCountInString(id) > MaxInternalIDRunes ||
-		containsControl(id) || strings.HasPrefix(id, "/") || strings.Contains(id, "\\") ||
+		containsControl(id) || strings.Contains(id, "/") || strings.Contains(id, "\\") ||
 		(opts.ValidateID != nil && !opts.ValidateID(id)) {
 		return InternalURI{}, fmt.Errorf("invalid sidecar id")
 	}

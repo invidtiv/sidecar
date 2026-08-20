@@ -112,12 +112,13 @@ func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
 
 func TestAppContentDeckStripsUnknownInternalOSCWithoutActivation(t *testing.T) {
 	root := t.TempDir()
-	frame := "\x1b]8;;sidecar://unknown/nt-4jdj4e\x1b\\visible label\x1b]8;;\x1b\\"
+	label := "sidecar://note/nt-4jdj4e"
+	frame := "\x1b]8;;sidecar://unknown/nt-4jdj4e\x1b\\" + label + "\x1b]8;;\x1b\\"
 	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: frame}
 	m := appDeckTestModel(t, root, p)
 	rendered := m.renderContent(120, 30)
 	h := m.currentContentDeck()
-	if strings.Contains(rendered, "sidecar://") || strings.Contains(rendered, "\x1b]8;") || !strings.Contains(rendered, "visible label") {
+	if strings.Contains(rendered, "\x1b]8;") || !strings.Contains(rendered, label) {
 		t.Fatalf("unknown OSC sanitization = %q", rendered)
 	}
 	if h == nil || len(h.links) != 0 {
