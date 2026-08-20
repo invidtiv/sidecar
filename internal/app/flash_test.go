@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/reveal"
 )
 
 // A flash is a single line in the top-right of the content region, and it
@@ -56,6 +57,7 @@ func TestFlashIsOneLineAndIsNeverStored(t *testing.T) {
 // A new flash replaces the one on screen instead of queueing behind it, and
 // the old flash's ticks stop applying.
 func TestANewFlashReplacesTheOneOnScreen(t *testing.T) {
+	t.Cleanup(reveal.SetAnimatedForTests(true))
 	m := notifyModel()
 	m.width, m.height, m.ready = 100, 30, true
 
