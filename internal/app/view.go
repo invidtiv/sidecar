@@ -180,7 +180,16 @@ func (m Model) viewContent() string {
 	// notification centre) narrows; the toast is placed against this region's
 	// right edge rather than the terminal's, so it never lands under the panel.
 	contentWidth := m.contentWidth()
+	// Exactly one pane is drawn focused, app-wide. The centre is a focus stop
+	// that is not a pane, so the surface underneath cannot see that it lost the
+	// keyboard; the shell says so once, at the shared border rule, for the
+	// duration of this content render. Every surface inherits it — see
+	// internal/styles/focus.go. Attention (toasts, pane flash) deliberately does
+	// not set it, and the centre panel, toasts and modals are all drawn after the
+	// signal is cleared, so their own chrome is untouched.
+	styles.SetFocusHeldOutsidePanes(m.notificationCentreOwnsKeys())
 	content := m.renderContent(contentWidth, contentHeight)
+	styles.SetFocusHeldOutsidePanes(false)
 	// The centre is drawn beside the content, never over it: the shell hands
 	// the surfaces a narrower box and spends the difference here.
 	if panel := m.renderNotificationCentre(contentHeight); panel != "" {

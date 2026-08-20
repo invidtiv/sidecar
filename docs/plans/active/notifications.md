@@ -745,6 +745,46 @@ found, no code changed.
   board cursor, and a synthetic SGR click on the *second* stacked block
   dismissed that block and no other.
 
+### Live-use fix: focus exclusivity (2026-08-19)
+
+Reported from a real session: on the global Workspaces browser with the centre
+open, focusing the centre (`tab` or `alt+n`) lit the centre's border **while the
+previously focused pane — a file pane, and the same for diff panes — kept its
+own focused border**. Two panes read as focused at once.
+
+Root cause is structural, not per-pane: a surface's focus chrome answers "which
+of MY panes has the keyboard" and has no way to learn that something outside it
+took the keyboard. The centre is the app's first focus stop that is not a pane,
+so nothing told the surface underneath.
+
+The fix is one signal at the lowest shared seam — **`internal/styles/focus.go`**,
+next to the border rule every bordered pane in the app is painted by. The shell
+sets `styles.SetFocusHeldOutsidePanes(m.notificationCentreOwnsKeys())` around the
+content render in `internal/app/view.go` and clears it immediately after; while
+it is set, `styles.RenderPanel` and `styles.RenderPanelWithGradient` draw the
+normal border in place of the active, interactive or flash one.
+
+- **Every surface inherits it**, not just the parity pair: the project workspace,
+  the global browser, file browser, git status, notes, conversations, tasks. A
+  surface added later inherits it without knowing the centre exists.
+- `paneframe.EffectiveChrome` / `SetFocusHeldOutsidePanes` remain as the pane
+  tree's reading of the same signal (delegating, not a second flag), so
+  `WrapLeaf` still resolves a leaf to `ChromeIdle` and anything reasoning about
+  drawn pane chrome reads the rule the renderer used.
+- **No surface state is touched**, so when focus returns the surface's focused
+  pane re-lights exactly where it was — asserted in the tests.
+- **Attention never sets it.** Toasts and the pane flash leave focus chrome
+  alone; an open-but-unfocused centre does too. The centre panel, toasts, the
+  flash block and modals are all drawn *after* the signal is cleared, so their
+  own chrome is never downgraded.
+- Regression tests: `internal/styles/focus_test.go` (the rule),
+  `internal/paneframe/focus_test.go` (the pane tree's reading),
+  `internal/app/focus_exclusivity_test.go` (the shell sets it for exactly the
+  span a surface renders in, and attention does not), and the surface twins
+  `internal/overview/focus_exclusivity_test.go` +
+  `internal/plugins/workspace/focus_exclusivity_test.go` (border chrome changes,
+  content bytes do not, and it restores).
+
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still
