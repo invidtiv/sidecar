@@ -70,20 +70,6 @@ func TestActivateMalformedTargetIsRefusedOutLoud(t *testing.T) {
 	}
 }
 
-func TestActivateOtherProjectIsRefusedForNow(t *testing.T) {
-	m := activationModel(t.TempDir())
-	msgs := collect(m.activateTarget(ActivateTargetMsg{
-		Target:  uirequest.Target{Kind: uirequest.TargetKindFile, Value: "main.go"},
-		Project: "some-other-project",
-	}))
-	if len(msgs) != 1 {
-		t.Fatalf("expected one message, got %d", len(msgs))
-	}
-	if _, ok := msgs[0].(notify.PostMsg); !ok {
-		t.Fatalf("expected a notification, got %T", msgs[0])
-	}
-}
-
 func TestTargetProjectIsCurrentAcceptsPathAndBaseName(t *testing.T) {
 	dir := t.TempDir()
 	m := activationModel(dir)

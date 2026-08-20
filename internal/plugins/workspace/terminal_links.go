@@ -430,12 +430,12 @@ func (p *Plugin) openResolvedFilePreview(root, surface, display, abs string, lin
 	}
 	if p.paneRoot == nil {
 		_ = file.Close()
-		return p.openFileBrowserIfCurrentProject(root, display, line)
+		return p.activateFileForRoot(root, display, line)
 	}
 	return p.openDocPaneFileForSurface(root, surface, display, line, file)
 }
 
-func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int) tea.Cmd {
+func (p *Plugin) activateFileForRoot(root, display string, line int) tea.Cmd {
 	if p.ctx == nil || display == "" || filepath.IsAbs(filepath.FromSlash(display)) {
 		return nil
 	}
@@ -447,18 +447,20 @@ func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int)
 	if err != nil {
 		return nil
 	}
+	// Which root the terminal was scanned against is this host's knowledge, and
+	// it is the whole of what the shell needs: a path outside the current
+	// project is a cross-project jump, which the shell can now make. It used to
+	// be a silent no-op — the last place a link named something real and
+	// nothing happened.
+	project := ""
 	if filepath.Clean(rootResolved) != filepath.Clean(ctxResolved) {
-		return nil
+		project = root
 	}
-	// The shell owns this dispatch: focusing a plugin and revealing a
-	// project-relative path is one route for every surface, not a second copy
-	// living here. The guard above stays because it is this host's knowledge —
-	// which root the terminal was scanned against.
-	return app.ActivateTarget(uirequest.Target{
+	return app.ActivateTargetIn(uirequest.Target{
 		Kind:  uirequest.TargetKindFile,
 		Value: filepath.ToSlash(display),
 		Line:  line,
-	})
+	}, project)
 }
 
 func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {

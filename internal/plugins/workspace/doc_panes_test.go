@@ -882,6 +882,40 @@ func TestFeatureDisabledMarkdownKeepsFileBrowserRoute(t *testing.T) {
 	}
 }
 
+// TestForeignRootFileLinkAsksForACrossProjectJump: a terminal scanned against
+// another checkout used to resolve the path and then silently do nothing. The
+// host still owns the one thing the shell cannot know — which root the terminal
+// was scanned against — but now says so instead of swallowing the jump.
+func TestForeignRootFileLinkAsksForACrossProjectJump(t *testing.T) {
+	root := t.TempDir()
+	other := t.TempDir()
+	p := New()
+	p.ctx = &plugin.Context{WorkDir: root}
+
+	cmd := p.activateFileForRoot(other, "README.md", 7)
+	if cmd == nil {
+		t.Fatal("foreign-root link returned no command")
+	}
+	activation, ok := cmd().(app.ActivateTargetMsg)
+	if !ok {
+		t.Fatalf("foreign-root route = %T, want an activation request", cmd())
+	}
+	if activation.Project != other {
+		t.Fatalf("activation project = %q, want %q", activation.Project, other)
+	}
+	if activation.Target.Value != "README.md" || activation.Target.Line != 7 {
+		t.Fatalf("activation target = %+v", activation.Target)
+	}
+
+	sameRoot := p.activateFileForRoot(root, "README.md", 7)
+	if sameRoot == nil {
+		t.Fatal("same-root link returned no command")
+	}
+	if got := sameRoot().(app.ActivateTargetMsg); got.Project != "" {
+		t.Fatalf("same-root activation carried a project qualifier: %q", got.Project)
+	}
+}
+
 func TestSelectionChangeClosesDocWithoutStealingSidebarFocus(t *testing.T) {
 	first := t.TempDir()
 	second := t.TempDir()

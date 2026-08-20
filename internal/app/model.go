@@ -160,6 +160,10 @@ type Model struct {
 	keymap        *keymap.Registry
 	activeContext string
 
+	// pendingActivation is the single hand-off across a project switch — a
+	// target to land or a workspace selection to apply. See pending_target.go.
+	pendingActivation *pendingActivation
+
 	// UI state
 	width, height           int
 	showHelp                bool
@@ -690,6 +694,10 @@ func (m *Model) PrevPlugin() tea.Cmd {
 
 // FocusPluginByID switches to a plugin by its ID.
 func (m *Model) FocusPluginByID(id string) tea.Cmd {
+	// Deliberate navigation. Anything still parked for a switch is stale: the
+	// user asked for somewhere else. (A landing takes the slot before it emits
+	// its own focus, so this never eats the jump it is part of.)
+	m.clearPendingActivation()
 	plugins := m.registry.Plugins()
 	for i, p := range plugins {
 		if p.ID() == id {
@@ -862,6 +870,8 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
 	m.resetProjectSwitcher()
+	// The user picked a destination by hand, which outranks any parked jump.
+	m.clearPendingActivation()
 	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
 	}
@@ -963,6 +973,13 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		return nil
 	}
 
+	// A caller-supplied selection is a hand-off like any other, so it goes
+	// through the one slot rather than beside it. It supersedes a target parked
+	// by an earlier jump: this switch is the newer request.
+	if pending != nil {
+		m.setPendingActivation(pendingActivation{selection: pending})
+	}
+
 	// Save the active plugin state for the old project root
 	oldWorkDir := m.ui.WorkDir
 	if activePlugin := m.ActivePlugin(); activePlugin != nil {
@@ -1043,16 +1060,9 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	if themeCmd != nil {
 		startCmds = append(startCmds, themeCmd)
 	}
-	if pending != nil {
-		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
-			selector.SetPendingWorkspaceSelection(*pending)
-		}
-		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
-			if cmd := provider.TakePendingWorkspaceAction(); cmd != nil {
-				startCmds = append(startCmds, cmd)
-			}
-		}
-	}
+	// One hand-off slot, one apply site: a workspace selection this call was
+	// given, or a target a cross-project jump parked before switching.
+	startCmds = append(startCmds, m.applyPendingActivation()...)
 
 	// Send the content box to all plugins so they recalculate layout/bounds.
 	// Without this, plugins like td-monitor lose mouse interactivity because
@@ -1152,15 +1162,14 @@ func (m *Model) navigateFromOverviewAction(workspace workspaceinventory.Workspac
 	}
 	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path, Action: action}
 	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) {
-		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
-			selector.SetPendingWorkspaceSelection(pending)
-		}
+		// No switch, so no Reinit to wait for — but the hand-off still goes
+		// through the one slot, applied immediately, so the selection has a
+		// single apply site whether or not a project switch is involved.
+		m.setPendingActivation(pendingActivation{selection: &pending})
+		applyCmds := m.applyPendingActivation()
 		m.updateContext()
-		var actionCmd tea.Cmd
-		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
-			actionCmd = provider.TakePendingWorkspaceAction()
-		}
-		return tea.Batch(m.FocusPluginByID(workspacePluginID), actionCmd)
+		// FocusPluginByID clears the slot; it is already empty by here.
+		return tea.Batch(append(applyCmds, m.FocusPluginByID(workspacePluginID))...)
 	}
 	// Worktree cards name an exact destination, so the remembered worktree must
 	// not override it. Shells are project-scoped and still open in whichever

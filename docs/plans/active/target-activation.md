@@ -1,7 +1,7 @@
 # Unified target activation — one jump service for every surface
 
-**Status:** Sequence steps 1–2 **done** — see the "as built" sections;
-steps 3–4 planned, not started
+**Status:** Sequence steps 1–3 **done** — see the "as built" sections;
+step 4 (regression proof) planned, not started
 **Created:** 2026-08-19
 **Depended on by:** `notifications.md` Phase 5 (calls to action) — that phase
 assumes everything here is done. This plan is pure architecture: no new
@@ -203,3 +203,61 @@ seam) and `TestPublicPaneMessagesOpenTheSamePanesAsAClick` plus the attach gate
 test (the workspace handlers). `go build ./... && go vet ./... && go test ./...`
 green; no proof run, because nothing user-visible changed and tmux was not
 touched.
+
+## Step 3 as built
+
+Cross-project jumps land, and there is now exactly one hand-off across a
+project switch.
+
+- **The slot** (`internal/app/pending_target.go`): `Model.pendingActivation`,
+  one nullable `pendingActivation{target, selection}`, with
+  `setPendingActivation` (newest wins, no queue), `clearPendingActivation`,
+  `takePendingActivation` and the single apply site `applyPendingActivation()
+  []tea.Cmd`. `switchProjectWithSelection` no longer applies anything itself: a
+  caller-supplied `PendingWorkspaceSelection` is *stored in the slot* at the top
+  of the switch and applied — with the target, if any — where the old inline
+  block was, right after `registry.Reinit`. The same-project branch of
+  `navigateFromOverviewAction` also goes through the slot (set, then apply
+  immediately), so the workspace pending-selection pair is a client of the slot
+  everywhere and no parallel mechanism remains. A target is *re-emitted* as an
+  `ActivateTargetMsg` (with `Project` cleared) rather than executed inline, so
+  the landing goes back through the ordinary activation route and its guards,
+  against the rebuilt registry.
+- **Cross-project activation** (`activateTargetInOtherProject`): validate the
+  target *before* switching (a malformed target refuses where the user is,
+  rather than after tearing down their plugins), resolve the project, park the
+  jump, switch, land. `resolveProjectPath` matches configured projects by exact
+  path, normalized path, name (case-insensitive) or base name, and accepts an
+  unconfigured but real absolute checkout; anything else is declined out loud
+  with `msg.Blocked`, never dropped. It also reports whether the qualifier named
+  a *checkout* (a path) or a *project* (a name): a path is an exact destination,
+  so the remembered last worktree must not override it — the same rule worktree
+  cards already follow, and the one that keeps a relative file target resolving
+  where it was meant to.
+- **Guards.** A plan naming a plugin the (possibly just rebuilt) registry lacks
+  is refused out loud instead of focusing nothing. `FocusPluginByID` and
+  `activateProjectSwitcherDestination` clear the slot: a user who navigated by
+  hand is not waiting for a jump they no longer asked for. A landing takes the
+  slot before it emits its own focus, so it never eats itself. A second jump
+  arriving before the first lands overwrites the slot. A qualifier that resolves
+  to where the user already is (or a switch that declines) activates
+  immediately rather than parking a hand-off nothing would apply.
+
+Deviation worth naming: **the workspace guard's silent no-op became a jump.**
+`openFileBrowserIfCurrentProject` is now `activateFileForRoot` and sends
+`app.ActivateTargetIn(target, root)` when the terminal's scanned root is not the
+current project, instead of returning nil. This is the one user-visible change
+in the whole plan, and it is the point of step 3: that guard was the last place
+a link named something real and nothing happened. The host still owns the only
+thing the shell cannot know (which root the terminal was scanned against); it
+just stopped swallowing the answer.
+
+Tests (`internal/app/pending_target_test.go`): apply-once-and-clear, newest
+wins, cleared by navigation, selection delivered through the slot, unresolvable
+project declined out loud, malformed cross-project target refused *before* any
+switch, absent plugin declined, current-project qualifier lands immediately, and
+path-vs-name resolution. Plus
+`TestForeignRootFileLinkAsksForACrossProjectJump` (workspace). The stale
+`TestActivateOtherProjectIsRefusedForNow` is deleted — that refusal is what this
+step replaced. `go build ./... && go vet ./... && go test ./...` green; no proof
+run yet (step 4 owns it) and tmux was not touched.

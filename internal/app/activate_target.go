@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -15,15 +16,22 @@ import (
 // state-free; the shell is here only because it is the one component that can
 // focus plugins and (later) switch projects.
 //
-// Cross-project landing is not implemented yet: a target naming another project
-// is refused out loud rather than activated against the wrong one.
+// A target naming another project switches projects first and lands afterwards,
+// through the pending-target slot (see pending_target.go). A project that no
+// longer resolves is declined out loud, never dropped silently.
 func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 	if !m.targetProjectIsCurrent(req.Project) {
-		return msg.Blocked("Cannot jump to " + req.Project + " yet: cross-project activation is not wired up")
+		return m.activateTargetInOtherProject(req)
 	}
 	plan, err := targetactivation.Resolve(req.Target)
 	if err != nil {
 		return msg.Blocked(err.Error())
+	}
+	// The plugin a plan names can be absent — a project whose registry was just
+	// rebuilt without it, or a build where it is compiled out. Say so rather
+	// than focusing nothing and looking broken.
+	if plan.PluginID != "" && m.registry != nil && m.registry.Get(plan.PluginID) == nil {
+		return msg.Blocked("Cannot open that here: " + plan.PluginID + " is not available in this project")
 	}
 	switch plan.Kind {
 	case targetactivation.PlanOpenFile:
@@ -52,6 +60,81 @@ func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 	default:
 		return nil
 	}
+}
+
+// activateTargetInOtherProject parks the jump, switches project, and lets the
+// pending-target slot re-emit it against the rebuilt registry.
+func (m *Model) activateTargetInOtherProject(req ActivateTargetMsg) tea.Cmd {
+	// Validate before switching. A malformed target should refuse where the
+	// user is, not after tearing down every plugin in the project they were in.
+	if _, err := targetactivation.Resolve(req.Target); err != nil {
+		return msg.Blocked(err.Error())
+	}
+	destination, exact, ok := m.resolveProjectPath(req.Project)
+	if !ok {
+		return msg.Blocked("Cannot jump to " + strings.TrimSpace(req.Project) + ": that project is no longer available")
+	}
+	landing := req
+	landing.Project = ""
+	if destination == m.ui.WorkDir {
+		// Named another way round but already here; switchProject would no-op
+		// and strand the slot.
+		return m.activateTarget(landing)
+	}
+	m.setPendingActivation(pendingActivation{target: &landing})
+	// A qualifier given as a path names an exact checkout, and a relative target
+	// only resolves there — so the remembered worktree must not override it. A
+	// qualifier given as a project name names no worktree, so the remembered one
+	// still wins, exactly as a shell selection does.
+	switchCmd := m.switchProjectWithSelection(destination, nil, nil, !exact)
+	if switchCmd == nil {
+		// The switch declined, so nothing will ever apply the slot.
+		m.clearPendingActivation()
+		return m.activateTarget(landing)
+	}
+	return switchCmd
+}
+
+// resolveProjectPath turns a target's project qualifier — a path or a name —
+// into a project path this instance can switch to. State-free resolution stops
+// at the vocabulary; which projects exist is the shell's knowledge.
+//
+// exact reports that the qualifier named a checkout rather than a project, in
+// which case the destination is a precise one the last-worktree memory must not
+// override.
+func (m *Model) resolveProjectPath(project string) (path string, exact bool, ok bool) {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return m.ui.WorkDir, true, true
+	}
+	normalizedProject, projectErr := normalizePath(project)
+	isPath := filepath.IsAbs(project)
+	if m.cfg != nil {
+		for _, candidate := range m.cfg.Projects.List {
+			if candidate.Path == "" {
+				continue
+			}
+			if candidate.Path == project {
+				return candidate.Path, true, true
+			}
+			if projectErr == nil && isPath {
+				if normalizedCandidate, err := normalizePath(candidate.Path); err == nil && normalizedCandidate == normalizedProject {
+					return candidate.Path, true, true
+				}
+			}
+			if strings.EqualFold(candidate.Name, project) || filepath.Base(candidate.Path) == project {
+				return candidate.Path, false, true
+			}
+		}
+	}
+	// An unconfigured but real checkout is still somewhere the user can be sent;
+	// a name that resolves to nothing on disk is not.
+	if projectErr == nil && isPath {
+		if info, err := os.Stat(normalizedProject); err == nil && info.IsDir() {
+			return project, true, true
+		}
+	}
+	return "", false, false
 }
 
 // targetProjectIsCurrent reports whether a target's project qualifier names the

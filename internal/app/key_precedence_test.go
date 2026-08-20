@@ -767,7 +767,6 @@ func TestGlobalKeysAreTheOnesTheHostActuallyHandles(t *testing.T) {
 	}
 }
 
-
 // TestAUserOverrideOutranksAPluginClaim makes the escape hatch plan § 1.4
 // documents actually exist: "change the mapping through Sidecar's keymap
 // override rather than forking the Tasks registry".
