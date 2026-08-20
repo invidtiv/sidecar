@@ -315,3 +315,22 @@ func TestSave_RoundTripsSelectionCopyOnSelect(t *testing.T) {
 		t.Error("Selection.CopyOnSelect stayed on after being turned off")
 	}
 }
+
+func TestSave_RoundTripsNotesDefaultEditor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	SetTestConfigPath(path)
+	t.Cleanup(ResetTestConfigPath)
+
+	cfg := Default()
+	cfg.Plugins.Notes.DefaultEditor = NotesEditorPane
+	if err := Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.Plugins.Notes.DefaultEditor; got != NotesEditorPane {
+		t.Fatalf("default editor = %q, want %q", got, NotesEditorPane)
+	}
+}

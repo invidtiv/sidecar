@@ -356,6 +356,9 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 	var themeCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		if m.registry != nil && m.registry.Context() != nil {
+			m.registry.Context().Config = cfg
+		}
 		m.showClock = cfg.UI.ShowClock
 		m.titleTemplate = cfg.UI.TerminalTitle
 		// Nerd Font glyphs are read from one package-level flag at startup;

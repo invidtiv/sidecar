@@ -290,14 +290,15 @@ func TestDefaultBindings_KeepApprovalKeysOutOfWorkspaces(t *testing.T) {
 	}
 }
 
-func TestDefaultBindings_NotesEditorsEachHaveTheirOwnKey(t *testing.T) {
-	// Three editors, three keys. The bug this pins was Enter inferring vim from
-	// a config value, which is why the simple editor became unreachable.
+func TestDefaultBindings_NotesDefaultAndExplicitEditorsStayReachable(t *testing.T) {
+	// Enter is preference-driven; i/e/E remain deterministic paths to all
+	// three editors regardless of that preference.
 	want := map[string]string{
-		"notes-list:enter":    "edit-note",
+		"notes-list:enter":    "open-note",
+		"notes-list:i":        "edit-note",
 		"notes-list:e":        "vim-edit",
 		"notes-list:E":        "external-editor",
-		"notes-preview:enter": "edit-note",
+		"notes-preview:enter": "open-note",
 		"notes-preview:i":     "edit-note",
 		"notes-preview:e":     "vim-edit",
 		"notes-preview:E":     "external-editor",
@@ -309,7 +310,7 @@ func TestDefaultBindings_NotesEditorsEachHaveTheirOwnKey(t *testing.T) {
 			continue
 		}
 		switch b.Command {
-		case "edit-note", "vim-edit", "external-editor", "toggle-markdown":
+		case "open-note", "edit-note", "vim-edit", "external-editor", "toggle-markdown":
 			got[b.Context+":"+b.Key] = b.Command
 		}
 	}
@@ -343,18 +344,23 @@ func TestDefaultBindings_NotesEditorSelectionUsesCombinedModifiers(t *testing.T)
 	// Bindings must match the actual KeyPressMsg.String() of combined
 	// modifiers, not a hand-written fixture that could drift.
 	want := map[string]string{
-		tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}.String():         "select-up",
-		tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}.String():       "select-down",
-		tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModShift}.String():       "select-left",
-		tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift}.String():      "select-right",
-		tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModShift}.String():       "select-line-start",
-		tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModShift}.String():        "select-line-end",
-		tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt}.String():                 "select-toggle",
-		tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt}.String():                 "select-all",
-		tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt}.String():                 "cut",
-		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}.String():                "undo-edit",
-		tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}.String():                "redo-edit",
-		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl | tea.ModShift}.String(): "redo-edit",
+		tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModShift}.String():                  "select-up",
+		tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModShift}.String():                "select-down",
+		tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModShift}.String():                "select-left",
+		tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModShift}.String():               "select-right",
+		tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModShift}.String():                "select-line-start",
+		tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModShift}.String():                 "select-line-end",
+		tea.KeyPressMsg{Code: 's', Mod: tea.ModAlt}.String():                          "select-toggle",
+		tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt}.String():                          "select-all",
+		tea.KeyPressMsg{Code: 'a', Mod: tea.ModSuper}.String():                        "select-all",
+		tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModSuper}.String():                  "note-start",
+		tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModSuper}.String():                "note-end",
+		tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModSuper | tea.ModShift}.String():   "select-note-start",
+		tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModSuper | tea.ModShift}.String(): "select-note-end",
+		tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt}.String():                          "cut",
+		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}.String():                         "undo-edit",
+		tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}.String():                         "redo-edit",
+		tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl | tea.ModShift}.String():          "redo-edit",
 	}
 	got := map[string]string{}
 	for _, b := range DefaultBindings() {
@@ -371,6 +377,27 @@ func TestDefaultBindings_NotesEditorSelectionUsesCombinedModifiers(t *testing.T)
 		}
 		if got[key] != cmd {
 			t.Errorf("%q = %q, want %q", key, got[key], cmd)
+		}
+	}
+}
+
+func TestDefaultBindings_NotesCtrlYIsContextSpecific(t *testing.T) {
+	want := map[string]string{
+		"notes-list":        "yank-id",
+		"notes-preview":     "yank-id",
+		"notes-editor":      "redo-edit",
+		"notes-inline-edit": "",
+	}
+	for context, command := range want {
+		got := ""
+		for _, binding := range DefaultBindings() {
+			if binding.Context == context && binding.Key == "ctrl+y" {
+				got = binding.Command
+				break
+			}
+		}
+		if got != command {
+			t.Errorf("%s ctrl+y = %q, want %q", context, got, command)
 		}
 	}
 }

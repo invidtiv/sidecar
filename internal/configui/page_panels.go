@@ -26,6 +26,7 @@ const (
 	regionPanelTDPath      = "config-panel-td-path"
 	regionPanelTDRefresh   = "config-panel-td-refresh"
 	regionPanelConvDir     = "config-panel-conversations-dir"
+	regionPanelNotesEditor = "config-panel-notes-editor"
 	panelInputWidth        = 40
 	panelRestartNote       = "Takes effect after Sidecar restarts."
 	panelIDGit             = "git"
@@ -157,6 +158,17 @@ func (m *Model) buildPanels(b *paneBuilder) {
 			m.noteRestart()
 			return saveFlagCmd(toggleNotice("Notes panel", enabled), notes.Flag, enabled)
 		})
+	b.selectRow(regionPanelNotesEditor, "Default editor", panelInputWidth, []dropdownOption{
+		{id: config.NotesEditorBuiltin, label: "Built-in"},
+		{id: config.NotesEditorPane, label: "$EDITOR in pane"},
+	}, cfg.Plugins.Notes.DefaultEditor, func(m *Model, option dropdownOption) tea.Cmd {
+		return SaveCmd("Notes editor: "+option.label, func() error {
+			return config.SavePlugins(func(p *config.PluginsConfig) {
+				p.Notes.DefaultEditor = option.id
+			})
+		})
+	})
+	b.help("Enter and note-body clicks use this editor; i, e, and E remain explicit choices.")
 	b.blank()
 
 	// Conversations --------------------------------------------------------

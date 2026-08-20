@@ -772,10 +772,10 @@ func DefaultBindings() []Binding {
 		{Key: "u", Command: "undo", Context: "notes-list"},
 		{Key: "r", Command: "refresh", Context: "notes-list"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-list"},
-		// enter is the built-in editor; e is vim in the right pane; E leaves
-		// for $EDITOR. Three editors, three explicit keys — nothing infers one
-		// from a config value.
-		{Key: "enter", Command: "edit-note", Context: "notes-list"},
+		// Enter follows the Notes preference. i/e/E keep every editor path
+		// explicit and reachable regardless of that preference.
+		{Key: "enter", Command: "open-note", Context: "notes-list"},
+		{Key: "i", Command: "edit-note", Context: "notes-list"},
 		{Key: "e", Command: "vim-edit", Context: "notes-list"},
 		{Key: "E", Command: "external-editor", Context: "notes-list"},
 		{Key: "/", Command: "search", Context: "notes-list"},
@@ -783,6 +783,7 @@ func DefaultBindings() []Binding {
 		{Key: "I", Command: "show-info", Context: "notes-list"},
 		{Key: "y", Command: "yank-content", Context: "notes-list"},
 		{Key: "Y", Command: "yank-title", Context: "notes-list"},
+		{Key: "ctrl+y", Command: "yank-id", Context: "notes-list"},
 		{Key: "esc", Command: "back-to-active", Context: "notes-list"},
 
 		// Notes info modal context
@@ -800,12 +801,13 @@ func DefaultBindings() []Binding {
 
 		// Notes preview context (read-only view)
 		{Key: "alt+c", Command: "copy-note", Context: "notes-preview"},
-		{Key: "enter", Command: "edit-note", Context: "notes-preview"},
+		{Key: "enter", Command: "open-note", Context: "notes-preview"},
 		{Key: "i", Command: "edit-note", Context: "notes-preview"},
 		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
 		{Key: "E", Command: "external-editor", Context: "notes-preview"},
 		{Key: "m", Command: "toggle-markdown", Context: "notes-preview"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-preview"},
+		{Key: "ctrl+y", Command: "yank-id", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},
@@ -830,6 +832,11 @@ func DefaultBindings() []Binding {
 		{Key: "shift+end", Command: "select-line-end", Context: "notes-editor"},
 		{Key: "alt+s", Command: "select-toggle", Context: "notes-editor"},
 		{Key: "alt+a", Command: "select-all", Context: "notes-editor"},
+		{Key: "super+a", Command: "select-all", Context: "notes-editor"},
+		{Key: "super+up", Command: "note-start", Context: "notes-editor"},
+		{Key: "super+down", Command: "note-end", Context: "notes-editor"},
+		{Key: "shift+super+up", Command: "select-note-start", Context: "notes-editor"},
+		{Key: "shift+super+down", Command: "select-note-end", Context: "notes-editor"},
 		{Key: "alt+x", Command: "cut", Context: "notes-editor"},
 		{Key: "ctrl+z", Command: "undo-edit", Context: "notes-editor"},
 		{Key: "ctrl+y", Command: "redo-edit", Context: "notes-editor"},

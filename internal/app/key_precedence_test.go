@@ -113,6 +113,18 @@ func TestWorkspaceInteractiveKeepsBareBackslashForTheTerminal(t *testing.T) {
 	wantOnlyPluginKey(t, p, "\\")
 }
 
+func TestNotesInlineEditorKeepsCtrlYForTheTerminal(t *testing.T) {
+	p := newRouterPlugin()
+	p.id = "notes"
+	p.context = "notes-inline-edit"
+	m := routerTestModel(t, p)
+	keymap.RegisterDefaults(m.keymap)
+	m.updateContext()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	wantOnlyPluginKey(t, p, "ctrl+y")
+}
+
 // TestKeyPrecedence walks every level of the documented precedence order and
 // every row of the Tasks key-conflict table.
 func TestKeyPrecedence(t *testing.T) {
@@ -766,7 +778,6 @@ func TestGlobalKeysAreTheOnesTheHostActuallyHandles(t *testing.T) {
 		})
 	}
 }
-
 
 // TestAUserOverrideOutranksAPluginClaim makes the escape hatch plan § 1.4
 // documents actually exist: "change the mapping through Sidecar's keymap

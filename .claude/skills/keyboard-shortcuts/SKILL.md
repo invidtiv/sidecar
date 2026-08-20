@@ -605,6 +605,9 @@ The built-in editor is modeless: printable keys type. Selection and undo use mod
 | `shift+arrows` / `shift+home` / `shift+end` | select-* | Extend a source-coordinate selection |
 | `alt+s` | select-toggle | Set or clear the selection anchor; ordinary movement then extends |
 | `alt+a` | select-all | Select the whole note |
+| `super+a` | select-all | Select the whole note when the terminal delivers Cmd; `alt+a` is the portable advertised fallback |
+| `super+up` / `super+down` | note-start / note-end | Move to the start / end of the note when delivered |
+| `shift+super+up` / `shift+super+down` | select-note-start / select-note-end | Extend selection to the start / end of the note when delivered |
 | `alt+c` | copy-note | Copy the selection, or the whole note if none |
 | `alt+x` | cut | Cut the selection |
 | backspace / delete / type / paste | — | Replace the selection (one undo unit) |
@@ -614,6 +617,11 @@ The built-in editor is modeless: printable keys type. Selection and undo use mod
 | `esc` / `tab` | back / switch-pane | Leave edit and persist |
 
 The tmux/`$EDITOR` pane (`e`) keeps vim's own undo and selection.
+
+In the list and read-only preview, `ctrl+y` copies the selected note ID. In the
+built-in editor it remains redo, and in the tmux/`$EDITOR` pane it is forwarded
+unchanged. Enter and note-body clicks follow `plugins.notes.defaultEditor`;
+`i`, `e`, and `E` remain explicit built-in, in-pane, and external editor paths.
 
 ## TD Monitor Plugin
 

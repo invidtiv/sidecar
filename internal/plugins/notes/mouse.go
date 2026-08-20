@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
@@ -186,11 +187,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	case regionEditorPane:
 		p.activePane = PaneEditor
 		p.selection.Clear()
-		// Clicking into the note opens the built-in editor, never the in-pane
-		// $EDITOR: a click is the default gesture, and e is what the other is
-		// for. With no note loaded the pane is a placeholder — focusing a
-		// textarea over it would show a caret that the list keys then ignore.
+		// Clicking into the note follows the default-editor preference. With no
+		// note loaded the pane is a placeholder — focusing an editor over it
+		// would show input that the list keys then ignore.
 		if p.viewFilter == FilterActive && p.editorNote != nil {
+			if p.previewMode && p.ctx != nil && p.ctx.Config != nil && p.ctx.Config.Plugins.Notes.DefaultEditor == config.NotesEditorPane {
+				return p, p.editSelectedNote()
+			}
 			srcLine, srcCol := p.clickToSource(action.X, action.Y)
 			cmd := p.enterEditAt(srcLine, srcCol)
 			// Prepare drag-to-select (use regionEditorLine for drag dispatch)
@@ -204,6 +207,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		if lineIdx, ok := action.Region.Data.(int); ok {
 			p.activePane = PaneEditor
 			if p.viewFilter == FilterActive {
+				if p.previewMode && p.ctx != nil && p.ctx.Config != nil && p.ctx.Config.Plugins.Notes.DefaultEditor == config.NotesEditorPane {
+					return p, p.editSelectedNote()
+				}
 				srcLine, srcCol := p.clickToSource(action.X, action.Y)
 				if p.previewMode {
 					p.previewCursorLine = lineIdx

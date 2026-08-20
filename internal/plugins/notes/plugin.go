@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -1536,8 +1537,8 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Refresh
 		return p, p.loadNotes()
 	case "enter":
-		// The simple editor is what a plain Enter opens. Vim is on e and the
-		// external editor on E, so neither can capture the default path.
+		// Enter is the configurable default gesture. Archived/deleted notes still
+		// open only as a read-only preview.
 		note := p.getSelectedNote()
 		if note != nil {
 			if cmd := p.loadNoteIntoEditor(); cmd != nil {
@@ -1548,6 +1549,16 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.previewMode = true
 				return p, nil
 			}
+			return p, p.openDefaultEditor()
+		}
+		return p, nil
+	case "i":
+		// Built-in editor, regardless of the default preference.
+		if p.viewFilter == FilterActive {
+			if cmd := p.loadNoteIntoEditor(); cmd != nil {
+				return p, cmd
+			}
+			p.activePane = PaneEditor
 			return p, p.enterEditAtPreviewPlace()
 		}
 		return p, nil
@@ -1578,6 +1589,8 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	case "Y":
 		// Yank note title to clipboard
 		return p, p.yankNoteTitle()
+	case "ctrl+y":
+		return p, p.yankNoteID()
 	case "u":
 		// Undo last delete/archive (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -1630,6 +1643,18 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	case "alt+x":
 		return p.cutEditorSelection()
+	}
+
+	// Command-key delivery depends on the terminal. Match modifier bits
+	// directly so a populated Text field cannot hide ModSuper, and require an
+	// exact chord so Ctrl/Alt combinations remain owned by the textarea.
+	actionMods := msg.Mod &^ (tea.ModCapsLock | tea.ModNumLock)
+	if msg.Code == 'a' && actionMods == tea.ModSuper {
+		return p.selectAllEditor()
+	}
+	if (msg.Code == tea.KeyUp || msg.Code == tea.KeyDown) &&
+		(actionMods == tea.ModSuper || actionMods == tea.ModSuper|tea.ModShift) {
+		return p.moveEditorToNoteBoundary(msg.Code == tea.KeyDown, actionMods.Contains(tea.ModShift))
 	}
 
 	if isShiftMotion(msg) || (p.selExtend && isMotionKey(msg)) {
@@ -1692,7 +1717,13 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		p.activePane = PaneList
 		return p, nil
 
-	case "enter", "i":
+	case "enter":
+		if p.viewFilter == FilterActive {
+			return p, p.openDefaultEditor()
+		}
+		return p, nil
+
+	case "i":
 		if p.viewFilter == FilterActive {
 			return p, p.enterEditAtPreviewPlace()
 		}
@@ -1712,6 +1743,9 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 	case "alt+c":
 		return p, p.copyEditorContent()
+
+	case "ctrl+y":
+		return p, p.yankNoteID()
 
 	case "j", "down", "ctrl+n":
 		p.ensureViewSurface()
@@ -1871,6 +1905,19 @@ func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 	p.ensureViewSurface()
 	a := p.viewSurface.At(p.previewCursorLine)
 	return p.enterEditAt(a.SourceLine, a.SourceCol)
+}
+
+// openDefaultEditor applies the configured default only to the default Enter
+// and body-click journey. Explicit i/e/E commands never call this helper.
+func (p *Plugin) openDefaultEditor() tea.Cmd {
+	if p.viewFilter != FilterActive || p.editorNote == nil {
+		return nil
+	}
+	if p.ctx != nil && p.ctx.Config != nil &&
+		p.ctx.Config.Plugins.Notes.DefaultEditor == config.NotesEditorPane {
+		return p.editSelectedNote()
+	}
+	return p.enterEditAtPreviewPlace()
 }
 
 // enterEditAt switches to edit mode at a source line/column. The current
@@ -2784,6 +2831,19 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 	})
 }
 
+// yankNoteID copies the stable td note identity. It is reachable only from
+// notes-list and the read-only notes-preview context; edit contexts keep their
+// own Ctrl-Y semantics.
+func (p *Plugin) yankNoteID() tea.Cmd {
+	note := p.selectedNote()
+	if note == nil || note.ID == "" {
+		return nil
+	}
+	return clip.Copy(note.ID, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied note ID: " + note.ID), Duration: 2 * time.Second}
+	})
+}
+
 // copyEditorContent copies the current editor content to clipboard.
 func (p *Plugin) copyEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
@@ -2851,11 +2911,13 @@ func (p *Plugin) Commands() []plugin.Command {
 			// return nil there. Advertising them promises what the key will not do.
 			if p.viewFilter == FilterActive {
 				cmds = append(cmds,
-					plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+					plugin.Command{ID: "open-note", Name: "Open", Description: "Open with the default Notes editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+					plugin.Command{ID: "edit-note", Name: "Built-in", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 2},
 					plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 3},
 					plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
 				)
 			}
+			cmds = append(cmds, plugin.Command{ID: "yank-id", Name: "ID", Description: "Copy note ID", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 6})
 			if p.editorDirty || p.saveErr != nil {
 				cmds = append(cmds, plugin.Command{ID: "save", Name: "Retry", Description: "Retry saving note", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1})
 			}
@@ -2886,8 +2948,12 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		cmds = append(cmds,
 			plugin.Command{ID: "copy-note", Name: "Copy", Description: "Copy selection or note", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 4},
-			plugin.Command{ID: "select-all", Name: "All", Description: "Select all", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
+			plugin.Command{ID: "select-all", Name: "All", Description: "Select all (Alt-A; Cmd-A when delivered)", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
 			plugin.Command{ID: "select-toggle", Name: "Select", Description: "Set or clear the selection anchor", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 6},
+			plugin.Command{ID: "note-start", Name: "Start", Description: "Move to note start (Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 7},
+			plugin.Command{ID: "note-end", Name: "End", Description: "Move to note end (Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 8},
+			plugin.Command{ID: "select-note-start", Name: "SelStart", Description: "Select to note start (Shift-Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 9},
+			plugin.Command{ID: "select-note-end", Name: "SelEnd", Description: "Select to note end (Shift-Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 10},
 		)
 		if p.hasEditSelection() {
 			cmds = append(cmds, plugin.Command{ID: "cut", Name: "Cut", Description: "Cut selection", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 3})
@@ -2940,9 +3006,10 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Full editing commands only in Active view
 		cmds = append(cmds,
 			plugin.Command{ID: "new-note", Name: "New", Description: "Create new note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 4},
-			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
-			plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
-			plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
+			plugin.Command{ID: "open-note", Name: "Open", Description: "Open with the default Notes editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
+			plugin.Command{ID: "edit-note", Name: "Built-in", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
+			plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
+			plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "delete-note", Name: "Delete", Description: "Delete selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "toggle-pin", Name: "Pin", Description: "Toggle pin on note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 9},
 			plugin.Command{ID: "archive-note", Name: "Archive", Description: "Archive selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 10},
@@ -2967,7 +3034,8 @@ func (p *Plugin) Commands() []plugin.Command {
 	cmds = append(cmds,
 		plugin.Command{ID: "yank-content", Name: "Yank", Description: "Copy note content", Category: plugin.CategoryActions, Context: "notes-list", Priority: 13},
 		plugin.Command{ID: "yank-title", Name: "YankTitle", Description: "Copy note title", Category: plugin.CategoryActions, Context: "notes-list", Priority: 14},
-		plugin.Command{ID: "refresh", Name: "Refresh", Description: "Reload notes", Category: plugin.CategoryActions, Context: "notes-list", Priority: 15},
+		plugin.Command{ID: "yank-id", Name: "ID", Description: "Copy note ID", Category: plugin.CategoryActions, Context: "notes-list", Priority: 15},
+		plugin.Command{ID: "refresh", Name: "Refresh", Description: "Reload notes", Category: plugin.CategoryActions, Context: "notes-list", Priority: 16},
 	)
 
 	return cmds

@@ -159,6 +159,23 @@ func TestFocusNotesPreferenceTargetsExistingToggle(t *testing.T) {
 	}
 }
 
+func TestNotesDefaultEditorSelectorPersistsBothChoices(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"td": true}, nil)
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "Default editor") || !strings.Contains(view, "Built-in") {
+		t.Fatalf("Notes editor selector is missing:\n%s", view)
+	}
+
+	choose(t, m, regionPanelNotesEditor, config.NotesEditorPane)
+	if got := loadSaved(t).Plugins.Notes.DefaultEditor; got != config.NotesEditorPane {
+		t.Fatalf("pane choice saved %q", got)
+	}
+	choose(t, m, regionPanelNotesEditor, config.NotesEditorBuiltin)
+	if got := loadSaved(t).Plugins.Notes.DefaultEditor; got != config.NotesEditorBuiltin {
+		t.Fatalf("built-in choice saved %q", got)
+	}
+}
+
 // Conversations is two switches behind one control, and both have to agree.
 func TestConversationsToggleKeepsBothSwitchesConsistent(t *testing.T) {
 	m := panelsFixture(t, nil, nil)
