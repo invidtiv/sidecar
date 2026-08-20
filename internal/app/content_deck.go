@@ -971,13 +971,25 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		h.deck.CloseActive()
 		h.syncInnerFocus()
 	case "prev-tab":
-		return h.deck.CycleTab(-1)
+		cmd := h.deck.CycleTab(-1)
+		m.persistAppContentDeck(h)
+		m.updateContext()
+		return cmd
 	case "next-tab":
-		return h.deck.CycleTab(1)
+		cmd := h.deck.CycleTab(1)
+		m.persistAppContentDeck(h)
+		m.updateContext()
+		return cmd
 	case "next-pane":
-		return h.cycleCombinedFocus(false)
+		cmd := h.cycleCombinedFocus(false)
+		m.persistAppContentDeck(h)
+		m.updateContext()
+		return cmd
 	case "prev-pane":
-		return h.cycleCombinedFocus(true)
+		cmd := h.cycleCombinedFocus(true)
+		m.persistAppContentDeck(h)
+		m.updateContext()
+		return cmd
 	default:
 		return nil
 	}
