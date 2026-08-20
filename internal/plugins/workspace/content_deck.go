@@ -44,13 +44,6 @@ func (p *Plugin) configureDeckViewer(kind panelayout.Kind, model any) {
 	}
 }
 
-func (p *Plugin) newWorkspaceDeck(ctx contentpanes.SurfaceContext) *contentpanes.Deck {
-	return contentpanes.New(ctx, contentpanes.Config{
-		Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource,
-		ConfigureViewer: p.configureDeckViewer,
-	})
-}
-
 func (p *Plugin) ensureWorkspaceDeck(root, surface string) *contentpanes.Deck {
 	ctx := p.workspaceDeckContext(root, surface)
 	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
@@ -254,7 +247,7 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 				res = p.newResourcePane(leafID, root, surface)
 			}
 			res.leafID, res.root, res.surface = leafID, root, surface
-			res.tabs.Group.Items = nil
+			res.tabs.Items = nil
 			res.tabs.SetResolver(p.resolveResource)
 			for _, item := range items {
 				if view, ok := item.Viewer.(*resourceview.Model); ok {

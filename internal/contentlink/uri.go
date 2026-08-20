@@ -76,9 +76,16 @@ func validNamespace(namespace string) bool {
 	}
 	for i := range len(namespace) {
 		c := namespace[i]
-		if i == 0 && (c < 'a' || c > 'z') || i > 0 && !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			return false
+		if i == 0 {
+			if c < 'a' || c > 'z' {
+				return false
+			}
+			continue
 		}
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+			continue
+		}
+		return false
 	}
 	return namespace[len(namespace)-1] != '-'
 }

@@ -199,7 +199,7 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 				res = &previewResource{tabs: resourceview.NewTabs(nil, m.previewResourceResolver(ctx.Surface, ctx.Epoch))}
 			}
 			res.surface, res.epoch = ctx.Surface, ctx.Epoch
-			res.tabs.Group.Items = nil
+			res.tabs.Items = nil
 			res.tabs.SetResolver(m.previewResourceResolver(ctx.Surface, ctx.Epoch))
 			res.tabs.SetEpoch(ctx.Epoch)
 			for _, item := range items {

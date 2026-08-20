@@ -251,9 +251,10 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	var primaryPlacement, docPlacement paneframe.Box
 	var docNode *panelayout.Node
 	for _, placement := range h.layout.Leaves {
-		if placement.Node.Kind == panelayout.Primary {
+		switch placement.Node.Kind {
+		case panelayout.Primary:
 			primaryPlacement = placement.Box
-		} else if placement.Node.Kind == panelayout.Document {
+		case panelayout.Document:
 			docPlacement = placement.Box
 			docNode = placement.Node
 		}
@@ -391,9 +392,10 @@ func TestAppContentDeckClickRetainsDocumentKeyboardContextThroughUpdate(t *testi
 			docID := h.deck.Leaf(panelayout.Document)
 			var primary, doc paneframe.Box
 			for _, placement := range h.layout.Leaves {
-				if placement.Node.Kind == panelayout.Primary {
+				switch placement.Node.Kind {
+				case panelayout.Primary:
 					primary = placement.Box
-				} else if placement.Node.Kind == panelayout.Document {
+				case panelayout.Document:
 					doc = paneframe.GeometryForChrome(placement.Box, appDeckHost{h}.Chrome(placement.Node)).Inner
 				}
 			}
