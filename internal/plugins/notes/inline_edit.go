@@ -429,6 +429,9 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 	region, data := p.edit.TakePendingClick()
 
 	switch region {
+	case regionListFilter:
+		p.activePane = PaneList
+		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
 	case regionNoteItem:
 		// User clicked a note item - select it
 		if idx, ok := data.(int); ok {
@@ -452,9 +455,9 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 	saveCmd := p.saveRetainedExport(noteID, notePath, p.edit.Activation)
 
 	// Process the pending click
-	p2, _ := p.processPendingClickAction()
+	p2, actionCmd := p.processPendingClickAction()
 
-	return p2, saveCmd
+	return p2, tea.Batch(saveCmd, actionCmd)
 }
 
 // clearInlineEditorAttachKey makes ctrl+] inert in the notes vim pane. Notes

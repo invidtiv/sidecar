@@ -1184,6 +1184,83 @@ func TestClickAwayLeavesInlineEditor(t *testing.T) {
 	assertNotOpenFileMsg(t, "click-away", cmd)
 }
 
+func TestInlineEditorFilterPillClickSavesExitsAndLoadsNextFilter(t *testing.T) {
+	installNotesFakeTmux(t)
+	p, noteID := newNotesEditorHarness(t)
+
+	// Enter through the production `e` journey rather than manufacturing an
+	// already-active session; the regression lived where that mode composes
+	// with the newly clickable list header.
+	_, startCmd := p.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	if startCmd == nil {
+		t.Fatal("e returned no inline-editor start command")
+	}
+	startResult := startCmd()
+	started, ok := startResult.(InlineEditStartedMsg)
+	if !ok {
+		t.Fatalf("e produced %T, want InlineEditStartedMsg", startResult)
+	}
+	_, _ = p.Update(started)
+	if !p.edit.Active || !p.edit.Model.IsActive() {
+		t.Fatal("production start journey did not activate the in-pane editor")
+	}
+	if err := os.WriteFile(started.NotePath, []byte("saved before filter load"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = p.View(p.width, p.height)
+	var filterRegion *mouse.Region
+	for _, candidate := range p.mouseHandler.HitMap.Regions() {
+		if candidate.ID == regionListFilter {
+			copy := candidate
+			filterRegion = &copy
+			break
+		}
+	}
+	if filterRegion == nil {
+		t.Fatal("active inline-editor view registered no filter pill")
+	}
+	beforeLoad := p.loadRequestID
+	click := tea.MouseClickMsg(tea.Mouse{
+		X:      filterRegion.Rect.X + filterRegion.Rect.W/2,
+		Y:      filterRegion.Rect.Y,
+		Button: tea.MouseLeft,
+	})
+	if hit := p.mouseHandler.HitMap.Test(click.Mouse().X, click.Mouse().Y); hit == nil || hit.ID != regionListFilter {
+		t.Fatalf("filter pill test click hit %+v, want %s at %+v", hit, regionListFilter, filterRegion.Rect)
+	}
+	_, cmd := p.Update(click)
+	if p.edit.Active || p.edit.Model.IsActive() {
+		t.Fatal("filter pill click left the in-pane editor active")
+	}
+	if p.viewFilter != FilterArchived {
+		t.Fatalf("filter pill click selected %s, want Archived", p.viewFilter)
+	}
+	if p.loadRequestID <= beforeLoad {
+		t.Fatal("filter pill click did not schedule the Archived load")
+	}
+	if cmd == nil {
+		t.Fatal("filter pill click dropped save/load commands")
+	}
+	result := cmd()
+	batch, ok := result.(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("filter pill click produced %T with %d commands, want save+load batch", result, len(batch))
+	}
+	drainNotesMsg(t, p, batch)
+
+	saved, err := p.store.Get(noteID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Content != "saved before filter load" {
+		t.Fatalf("saved content = %q, want in-pane editor content", saved.Content)
+	}
+	if p.viewFilter != FilterArchived || p.loading || len(p.notes) != 0 {
+		t.Fatalf("filter load did not settle: filter=%s loading=%v notes=%d", p.viewFilter, p.loading, len(p.notes))
+	}
+}
+
 func TestCtrlTIsNoOpInNotes(t *testing.T) {
 	p, _ := newNotesEditorHarness(t)
 	_, cmd := p.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})

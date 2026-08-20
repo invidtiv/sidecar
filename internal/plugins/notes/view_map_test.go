@@ -344,6 +344,11 @@ func TestClickRenderedParagraphPreservesWrappedScreenRow(t *testing.T) {
 	content := strings.TrimSpace(strings.Repeat("word ", 120))
 	p := layoutTestPlugin(t, content)
 	p.width = 72
+	// Keep the rendered paragraph taller than the body viewport. A manually
+	// forced preview offset on content shorter than the viewport is not a state
+	// the real renderer can produce, and the new breathing rows make that old
+	// fixture cross a wrap boundary.
+	p.height = 12
 	p.listWidth = 18
 	p.updateTextareaDimensions()
 	p.markdownView = true
@@ -358,7 +363,8 @@ func TestClickRenderedParagraphPreservesWrappedScreenRow(t *testing.T) {
 	}
 	// Scroll so the clicked row is not at the top of the note.
 	p.previewScrollOff = nonEmpty[1]
-	p.previewCursorLine = nonEmpty[len(nonEmpty)-2]
+	lastVisible := p.previewScrollOff + p.editorLayout().contentHeight - 2
+	p.previewCursorLine = min(nonEmpty[len(nonEmpty)-2], lastVisible)
 	viewRow := p.previewCursorLine - p.previewScrollOff
 	if viewRow < 1 {
 		t.Fatalf("click is not below the first visible row: cursor=%d scroll=%d",

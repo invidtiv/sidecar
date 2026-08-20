@@ -26,6 +26,7 @@ const (
 	regionListPane   = "list-pane"   // Overall list pane for scroll targeting
 	regionEditorPane = "editor-pane" // Overall editor pane for scroll targeting
 	regionDivider    = "divider"     // Border between list and editor
+	regionListFilter = "list-filter" // Active/Archived/Deleted header control
 	regionNoteItem   = "note-item"   // Individual note in list (Data: visible index)
 	regionEditorLine = "editor-line" // Individual editor line (Data: line index)
 )
@@ -55,24 +56,25 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 			}
 
 			// Session is alive - auto-save and exit (no confirmation needed)
-			// Store pending click info to process after save
-			p.edit.PendingClickRegion = regionID
-			p.edit.PendingClickData = regionData
-
 			// Save current content and exit
 			saveCmd := p.saveAndExitInlineEditMode()
+			// Exiting resets the inline session, including any pending click.
+			// Record the action afterward so the visible click survives teardown.
+			p.edit.SetPendingClick(regionID, regionData)
 
-			// Process the click action immediately
-			p2, _ := p.processPendingClickAction()
+			// Process the click action immediately. Some click-away targets (the
+			// filter pill) also schedule work, so preserve that command alongside
+			// the retained-export save.
+			p2, actionCmd := p.processPendingClickAction()
 
-			return p2, saveCmd
+			return p2, tea.Batch(saveCmd, actionCmd)
 		}
 
 		// Handle click (mouse press) - start potential drag
 		if action.Type == mouse.ActionClick {
 			if action.Region != nil {
 				switch action.Region.ID {
-				case regionNoteItem, regionListPane:
+				case regionNoteItem, regionListPane, regionListFilter:
 					// Click in list pane - auto-save and switch
 					return handleClickAway(action.Region.ID, action.Region.Data)
 				case regionEditorPane, regionEditorLine:
@@ -163,6 +165,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	}
 
 	switch action.Region.ID {
+	case regionListFilter:
+		p.activePane = PaneList
+		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
+
 	case regionNoteItem:
 		idx, ok := action.Region.Data.(int)
 		if !ok {
@@ -259,7 +265,7 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	inListPane := false
 	if action.Region != nil {
-		inListPane = action.Region.ID == regionListPane || action.Region.ID == regionNoteItem
+		inListPane = action.Region.ID == regionListPane || action.Region.ID == regionNoteItem || action.Region.ID == regionListFilter
 	} else {
 		inListPane = action.X < p.listWidth
 	}
@@ -666,8 +672,8 @@ func (p *Plugin) editorColAtScreenX(x, lineIdx int) int {
 
 // editorContentStartY returns the Y coordinate where editor content begins.
 func (p *Plugin) editorContentStartY() int {
-	// Pane top border, then the status row from editorLayout.
-	return 1 + p.editorLayout().statusRow + editorStatusRows
+	// Pane top border, then the shared layout's body start row.
+	return 1 + p.editorLayout().contentRow
 }
 
 // screenXToEditorCol converts a screen X coordinate to a column in editor content.
@@ -771,6 +777,22 @@ func (p *Plugin) registerMouseRegions() {
 
 	// Editor line regions (higher priority)
 	p.registerEditorLineRegions()
+
+	// Header control is last so it wins over the general list-pane region.
+	p.registerListFilterRegion()
+}
+
+func (p *Plugin) registerListFilterRegion() {
+	listInner := p.listWidth - paneChromeX
+	if listInner < 1 {
+		return
+	}
+	header := p.listHeader(listInner, len(p.getDisplayNotes()))
+	if header.filterWidth < 1 {
+		return
+	}
+	// RenderPanel content begins after the left border and its one-cell padding.
+	p.mouseHandler.HitMap.AddRect(regionListFilter, 2+header.filterX, 1, header.filterWidth, 1, nil)
 }
 
 // registerListItemRegions registers click regions for visible note items.
@@ -781,9 +803,9 @@ func (p *Plugin) registerListItemRegions() {
 	}
 
 	// Calculate visible range
-	headerLines := 1 // "Notes (count)"
+	headerLines := 2 // title + blank breathing row
 	if p.searchMode || p.searchQuery != "" {
-		headerLines = 2 // + search input
+		headerLines++ // + search input
 	}
 	contentHeight := p.height - 2 - headerLines // -2 for borders
 	if contentHeight < 1 {
@@ -849,7 +871,7 @@ func (p *Plugin) registerEditorLineRegions() {
 	for i := start; i < end; i++ {
 		row := i - start
 		rect := mouse.Rect{
-			X: editorX + 1, // +1 for border
+			X: editorX + 2 + l.leftMargin, // border + panel padding + body inset
 			Y: yOffset + row,
 			W: editorWidth,
 			H: 1,

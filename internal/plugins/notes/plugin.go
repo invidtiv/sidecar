@@ -271,7 +271,7 @@ func newEditorTextarea() textarea.Model {
 		LineNumber:       styles.Muted,
 		Placeholder:      styles.Muted,
 		Prompt:           lipgloss.NewStyle(),
-		Text:             lipgloss.NewStyle(),
+		Text:             styles.Body,
 	}
 	taStyles := ta.Styles()
 	taStyles.Focused = focusedStyle
@@ -280,6 +280,13 @@ func newEditorTextarea() textarea.Model {
 	ta.KeyMap.CapitalizeWordForward = key.NewBinding(key.WithDisabled())
 	ta.Blur()
 	return ta
+}
+
+func (p *Plugin) applyEditorTextTheme() {
+	taStyles := p.editorTextarea.Styles()
+	taStyles.Focused.Text = styles.Body
+	taStyles.Blurred.Text = styles.Body
+	p.editorTextarea.SetStyles(taStyles)
 }
 
 // UndoActionType represents the type of undoable action.
@@ -676,6 +683,10 @@ func (p *Plugin) persistOrderedLocked(store noteStore, projectRoot, noteID, cont
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, ok := msg.(app.ThemeChangedMsg); ok {
+		p.applyEditorTextTheme()
+		return p, nil
+	}
 	// Handle exit confirmation dialog first
 	if p.edit.ShowExitConfirm {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
@@ -1453,6 +1464,15 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if key == "esc" && p.viewFilter != FilterActive {
 		return p, p.switchViewFilter(FilterActive)
 	}
+	// The filter shortcuts are toggles: pressing the shortcut for the current
+	// archived/deleted view returns to Active. Handle these before the empty-list
+	// guard so an empty filter is never a keyboard trap.
+	if key == "a" {
+		return p, p.switchViewFilter(toggleNoteFilter(p.viewFilter, FilterArchived))
+	}
+	if key == "x" {
+		return p, p.switchViewFilter(toggleNoteFilter(p.viewFilter, FilterDeleted))
+	}
 
 	// Get the notes list to navigate (filtered or all)
 	notesList := p.getDisplayNotes()
@@ -1500,8 +1520,6 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			return p, p.openDeleteModal()
 		}
 		return p, nil
-	case "x":
-		return p, p.switchViewFilter(FilterDeleted)
 	case "p":
 		// Toggle pin (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -1514,8 +1532,6 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			return p, p.toggleArchive()
 		}
 		return p, nil
-	case "a":
-		return p, p.switchViewFilter(FilterArchived)
 	case "r":
 		// Refresh
 		return p, p.loadNotes()
@@ -2898,13 +2914,22 @@ func (p *Plugin) Commands() []plugin.Command {
 		cmds = append(cmds, plugin.Command{ID: "save", Name: "Retry", Description: "Retry saving note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 1})
 	}
 
-	// Show view switching commands
-	if p.viewFilter == FilterActive {
-		cmds = append(cmds,
-			plugin.Command{ID: "show-archived", Name: "Archived", Description: "Show archived notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 2},
-			plugin.Command{ID: "show-deleted", Name: "Deleted", Description: "Show deleted notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 3},
-		)
-	} else {
+	// Keep both a/x filter bindings advertised in every list state. The shortcut
+	// matching the current state is labeled Active because pressing it toggles
+	// back; the other still switches directly to its state.
+	archiveName := "Archived"
+	deleteName := "Deleted"
+	if p.viewFilter == FilterArchived {
+		archiveName = "Active"
+	}
+	if p.viewFilter == FilterDeleted {
+		deleteName = "Active"
+	}
+	cmds = append(cmds,
+		plugin.Command{ID: "show-archived", Name: archiveName, Description: "Toggle archived notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 2},
+		plugin.Command{ID: "show-deleted", Name: deleteName, Description: "Toggle deleted notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 3},
+	)
+	if p.viewFilter != FilterActive {
 		// Add "Back" command when in Archived or Deleted view
 		cmds = append(cmds,
 			plugin.Command{ID: "back-to-active", Name: "Active", Description: "Return to active notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 0},
@@ -3072,6 +3097,24 @@ func (p *Plugin) switchViewFilter(filter NoteFilter) tea.Cmd {
 	p.cursor = 0
 	p.scrollOff = 0
 	return p.loadNotes()
+}
+
+func toggleNoteFilter(current, target NoteFilter) NoteFilter {
+	if current == target {
+		return FilterActive
+	}
+	return target
+}
+
+func nextNoteFilter(current NoteFilter) NoteFilter {
+	switch current {
+	case FilterActive:
+		return FilterArchived
+	case FilterArchived:
+		return FilterDeleted
+	default:
+		return FilterActive
+	}
 }
 
 // showRestoredToast shows a toast notification for undo/restore.

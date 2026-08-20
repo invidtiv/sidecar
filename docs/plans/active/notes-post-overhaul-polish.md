@@ -1,6 +1,6 @@
 # Notes post-overhaul polish
 
-**Status:** Active. `td-cdc3ba` and `td-42cd0f` are complete; `td-8c2abd` is next.
+**Status:** Active. `td-cdc3ba`, `td-42cd0f`, and `td-8c2abd` are complete; `td-982583` is next.
 **Source:** td note `nt-22509205`, items 3 and 7-25 only.
 **Epic:** `td-8ca977`
 
