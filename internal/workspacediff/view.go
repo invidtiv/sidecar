@@ -113,7 +113,7 @@ func (v *View) Width() int  { return v.width }
 func (v *View) Height() int { return v.height }
 
 func (v *View) accepts(epoch, binding uint64, workspaceID, identity string) bool {
-	if binding != 0 && v.Binding != 0 && binding != v.Binding {
+	if v.Binding != 0 && binding != v.Binding {
 		return false
 	}
 	if workspaceID != "" && v.WorkspaceID != "" && workspaceID != v.WorkspaceID {

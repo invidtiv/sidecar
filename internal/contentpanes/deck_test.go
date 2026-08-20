@@ -198,6 +198,33 @@ func TestDeckDiffRejectsRawBroadcastFromReusedSurfaceEpochAfterRebind(t *testing
 	}
 }
 
+func TestDeckDiffDirectOpenRebindRejectsOldAndZeroBindingBroadcasts(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	first := d.Open(ctx, diffRef("wt"), testPlacement())
+	before := d.Viewer(first.LeafID).(*workspacediff.View)
+	stale := workspacediff.SnapshotMsg{
+		Epoch: ctx.Epoch, Binding: before.Binding, WorkspaceID: ctx.Surface,
+		Identity: workspacediff.IdentityWorkingTree,
+	}
+	other := ctx
+	other.Root = t.TempDir()
+	other.BaseRef = "release"
+	reopened := d.Open(other, diffRef("wt"), testPlacement())
+	after := d.Viewer(first.LeafID).(*workspacediff.View)
+	if reopened.Command == nil || after.Binding == before.Binding {
+		t.Fatalf("direct Open did not rebind/reload: outcome=%#v before=%d after=%d", reopened, before.Binding, after.Binding)
+	}
+	for _, msg := range []workspacediff.SnapshotMsg{stale, {
+		Epoch: other.Epoch, WorkspaceID: other.Surface, Identity: workspacediff.IdentityWorkingTree,
+	}} {
+		after.ApplySnapshotMsg(msg, other.Root, other.Surface)
+		if after.State != workspacediff.LoadStateLoading {
+			t.Fatalf("stale/zero-binding raw snapshot changed rebound state to %v: %#v", after.State, msg)
+		}
+	}
+}
+
 func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})

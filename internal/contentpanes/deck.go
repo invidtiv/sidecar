@@ -157,17 +157,24 @@ func (d *Deck) SetContext(ctx SurfaceContext) {
 	d.ctx = ctx
 	for _, p := range d.panesAndHidden() {
 		for _, t := range p.tabs {
-			state := t.view.snapshot(t.ref)
-			d.nextTabID++
-			t.id = d.nextTabID
-			t.view = newViewer(d.cfg, p.kind)
-			t.view.arm(ctx, t.ref, int(t.id), state)
-			t.ctx = ctx
-			// A fresh tab/model identity rejects old raw viewer broadcasts as
-			// well as Deck Results, even when surface and epoch are reused.
-			t.generation = 0
+			d.rebindTab(t, p.kind, ctx)
 		}
 	}
+}
+
+func (d *Deck) rebindTab(t *tab, kind panelayout.Kind, ctx SurfaceContext) {
+	if d == nil || t == nil {
+		return
+	}
+	state := t.view.snapshot(t.ref)
+	d.nextTabID++
+	t.id = d.nextTabID
+	t.view = newViewer(d.cfg, kind)
+	t.view.arm(ctx, t.ref, int(t.id), state)
+	t.ctx = ctx
+	// A fresh tab/model identity rejects old raw viewer broadcasts as well as
+	// Deck Results, even when surface and epoch are reused.
+	t.generation = 0
 }
 
 // Tree returns a detached layout tree so hosts cannot mutate deck ownership.
@@ -307,10 +314,9 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 		t.ref = ref
 		var cmd tea.Cmd
 		if !sameContext(t.ctx, d.ctx) {
-			state := t.view.snapshot(t.ref)
-			t.view.arm(d.ctx, ref, int(t.id), state)
+			d.rebindTab(t, p.kind, d.ctx)
+			t.ref = ref
 			cmd = t.view.load(d.ctx, ref, int(t.id))
-			t.ctx = d.ctx
 		} else {
 			cmd = t.view.focus(d.ctx, ref, int(t.id))
 		}
