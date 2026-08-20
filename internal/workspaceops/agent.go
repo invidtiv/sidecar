@@ -26,6 +26,13 @@ var agentSkipFlags = map[string]string{
 	"antigravity": "--dangerously-skip-permissions", "cursor": "-f", "amp": "--dangerously-allow-all", "grok": "--always-approve",
 }
 
+// AgentSkipFlag returns the CLI flag that opts this agent into auto-approve,
+// or "" if the agent has no such flag. Creation forms use this to decide
+// whether to show the auto-approve checkbox; do not copy this map elsewhere.
+func AgentSkipFlag(agentType string) string {
+	return agentSkipFlags[agentType]
+}
+
 var openCodeRunPrefix = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
 
 func ResolveAgentCommand(worktreePath, agentType string, configured map[string]string, skipPerms bool) string {

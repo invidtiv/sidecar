@@ -89,3 +89,39 @@ func Resolve(allowlist []string) []Family {
 	}
 	return out
 }
+
+// ResolvePicker is the creation-picker list: Resolve's allowlist, then None
+// (empty string) placed first for shells and last for worktrees.
+//
+// Empty and unrecognized allowlists follow Resolve: every catalog family.
+func ResolvePicker(allowlist []string, shellMode bool) []string {
+	families := Resolve(allowlist)
+	out := make([]string, 0, len(families)+1)
+	if shellMode {
+		out = append(out, "")
+	}
+	for _, family := range families {
+		out = append(out, family.ID)
+	}
+	if !shellMode {
+		out = append(out, "")
+	}
+	return out
+}
+
+// Label is the picker display name for an agent id.
+//
+// "" is "None (attach only)". Catalog IDs use Family.Name. "shell" is
+// "Project Shell". Unknown IDs pass through.
+func Label(id string) string {
+	switch id {
+	case "":
+		return "None (attach only)"
+	case "shell":
+		return "Project Shell"
+	}
+	if family, ok := Find(id); ok {
+		return family.Name
+	}
+	return id
+}

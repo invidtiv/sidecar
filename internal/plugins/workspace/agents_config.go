@@ -7,14 +7,14 @@ import "github.com/marcus/sidecar/internal/agentcatalog"
 // Config is an ordered allowlist of real agent IDs; unknown IDs are skipped.
 // AgentNone is always appended last when not already present.
 func (p *Plugin) selectableAgentTypes() []AgentType {
-	return resolveSelectableAgents(p.configAgents(), AgentTypeOrder, false)
+	return resolveSelectableAgents(p.configAgents(), false)
 }
 
 // selectableShellAgentTypes returns the ordered agent list for shell create.
 // Empty config = ShellAgentOrder (None first). With config, None is forced first
 // then allowlisted agents in config order.
 func (p *Plugin) selectableShellAgentTypes() []AgentType {
-	return resolveSelectableAgents(p.configAgents(), ShellAgentOrder, true)
+	return resolveSelectableAgents(p.configAgents(), true)
 }
 
 func (p *Plugin) configAgents() []string {
@@ -26,39 +26,12 @@ func (p *Plugin) configAgents() []string {
 
 // resolveSelectableAgents builds the picker list.
 // shellMode=true forces None first; shellMode=false forces None last (worktree style).
-func resolveSelectableAgents(configAgents []string, defaultOrder []AgentType, shellMode bool) []AgentType {
-	if len(configAgents) == 0 {
-		// Return a copy so callers can index safely without mutating globals.
-		out := make([]AgentType, len(defaultOrder))
-		copy(out, defaultOrder)
-		return out
+func resolveSelectableAgents(configAgents []string, shellMode bool) []AgentType {
+	ids := agentcatalog.ResolvePicker(configAgents, shellMode)
+	out := make([]AgentType, len(ids))
+	for i, id := range ids {
+		out[i] = AgentType(id)
 	}
-
-	// The allowlist rule itself lives in internal/agentcatalog, so Configuration's
-	// Agents page and these pickers cannot disagree about what a saved allowlist
-	// means. None is placed by the shellMode rules below, never by config.
-	resolved := agentcatalog.Resolve(configAgents)
-	real := make([]AgentType, 0, len(resolved))
-	for _, family := range resolved {
-		real = append(real, AgentType(family.ID))
-	}
-
-	// If nothing valid remains, fall back to default order.
-	if len(real) == 0 {
-		out := make([]AgentType, len(defaultOrder))
-		copy(out, defaultOrder)
-		return out
-	}
-
-	if shellMode {
-		out := make([]AgentType, 0, len(real)+1)
-		out = append(out, AgentNone)
-		out = append(out, real...)
-		return out
-	}
-	out := make([]AgentType, 0, len(real)+1)
-	out = append(out, real...)
-	out = append(out, AgentNone)
 	return out
 }
 

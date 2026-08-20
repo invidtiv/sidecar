@@ -1,0 +1,441 @@
+package workspacecreate
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentcatalog"
+	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/workspaceops"
+)
+
+func TestMain(m *testing.M) {
+	loadLastCreateAgent = func() string { return "" }
+	saveLastCreateAgent = func(string) error { return nil }
+	loadAgentAutoApprove = func(string) bool { return false }
+	saveAgentAutoApprove = func(string, bool) error { return nil }
+	os.Exit(m.Run())
+}
+
+type memState struct {
+	last      string
+	auto      map[string]bool
+	savedLast []string
+}
+
+func useMemState(t *testing.T, s *memState) {
+	t.Helper()
+	if s.auto == nil {
+		s.auto = map[string]bool{}
+	}
+	loadLastCreateAgent = func() string { return s.last }
+	saveLastCreateAgent = func(a string) error {
+		s.last = a
+		s.savedLast = append(s.savedLast, a)
+		return nil
+	}
+	loadAgentAutoApprove = func(a string) bool { return s.auto[a] }
+	saveAgentAutoApprove = func(a string, on bool) error {
+		s.auto[a] = on
+		return nil
+	}
+	t.Cleanup(func() {
+		loadLastCreateAgent = func() string { return "" }
+		saveLastCreateAgent = func(string) error { return nil }
+		loadAgentAutoApprove = func(string) bool { return false }
+		saveAgentAutoApprove = func(string, bool) error { return nil }
+	})
+}
+
+func testOpts(kind Kind) OpenOpts {
+	return OpenOpts{
+		Kind:        kind,
+		ShowProject: true,
+		ProjectKey:  "one",
+		Projects: []ProjectItem{
+			{Key: "one", Label: "one"},
+			{Key: "two", Label: "two"},
+		},
+		NextShell: "Shell 3",
+		Branches:  []string{"main", "dev"},
+	}
+}
+
+func renderForm(t *testing.T, f *Form) string {
+	t.Helper()
+	m := f.Build(52)
+	if m == nil {
+		t.Fatal("Build returned nil")
+	}
+	view := m.Render(80, 40, mouse.NewHandler())
+	f.RestoreFocus()
+	return view
+}
+
+func focusable(t *testing.T, f *Form, id string) bool {
+	t.Helper()
+	m := f.Build(52)
+	m.Render(80, 40, mouse.NewHandler())
+	before := m.FocusedID()
+	m.SetFocus(id)
+	ok := m.FocusedID() == id
+	if before != "" {
+		m.SetFocus(before)
+	}
+	return ok
+}
+
+func TestKindSwitchFieldVisibility(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	view := renderForm(t, f)
+	if !strings.Contains(view, "Base Branch") {
+		t.Fatalf("worktree form missing Base Branch:\n%s", view)
+	}
+	if !strings.Contains(view, "Create Workspace") {
+		t.Fatalf("missing title:\n%s", view)
+	}
+	if !focusable(t, f, FieldBase) {
+		t.Fatal("worktree Base Branch should be focusable")
+	}
+
+	f.SetKind(KindShell)
+	view = renderForm(t, f)
+	if strings.Contains(view, "Base Branch") {
+		t.Fatalf("shell form still shows Base Branch:\n%s", view)
+	}
+	if focusable(t, f, FieldBase) {
+		t.Fatal("shell Base Branch should not be focusable")
+	}
+	if f.nameInput.Placeholder != "Shell 3" {
+		t.Fatalf("shell placeholder = %q, want Shell 3", f.nameInput.Placeholder)
+	}
+
+	f.SetKind(KindWorktree)
+	if f.nameInput.Placeholder != worktreeNamePlaceholder {
+		t.Fatalf("worktree placeholder = %q", f.nameInput.Placeholder)
+	}
+	view = renderForm(t, f)
+	if !strings.Contains(view, "Base Branch") {
+		t.Fatalf("worktree after toggle missing Base Branch:\n%s", view)
+	}
+}
+
+func TestKindSwitchKeepsNameAndAgent(t *testing.T) {
+	st := &memState{last: "codex"}
+	useMemState(t, st)
+	f := Open(testOpts(KindWorktree))
+	f.nameInput.SetValue("my-feature")
+	if f.Agent() != "codex" {
+		t.Fatalf("agent = %q, want codex", f.Agent())
+	}
+	f.SetKind(KindShell)
+	if f.Name() != "my-feature" {
+		t.Fatalf("name dropped on kind switch: %q", f.Name())
+	}
+	if f.Agent() != "codex" {
+		t.Fatalf("agent dropped on kind switch: %q", f.Agent())
+	}
+}
+
+func TestNoneOrderByKind(t *testing.T) {
+	shell := Open(testOpts(KindShell)).AgentItems()
+	if len(shell) == 0 || shell[0].Data != "" {
+		t.Fatalf("shell None first: %+v", shell)
+	}
+	worktree := Open(testOpts(KindWorktree)).AgentItems()
+	if len(worktree) == 0 || worktree[len(worktree)-1].Data != "" {
+		t.Fatalf("worktree None last: %+v", worktree)
+	}
+
+	f := Open(testOpts(KindWorktree))
+	ids := make([]string, len(f.AgentItems()))
+	for i, item := range f.AgentItems() {
+		id, _ := item.Data.(string)
+		ids[i] = id
+	}
+	want := agentcatalog.ResolvePicker(nil, false)
+	if len(ids) != len(want) {
+		t.Fatalf("worktree picker %v, catalog %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("worktree picker %v, catalog %v", ids, want)
+		}
+	}
+}
+
+func TestSkipCheckboxShownHidden(t *testing.T) {
+	st := &memState{last: "claude"}
+	useMemState(t, st)
+	f := Open(testOpts(KindWorktree))
+	view := renderForm(t, f)
+	if !f.ShowSkip() {
+		t.Fatal("claude should show skip")
+	}
+	if !strings.Contains(view, "Auto-approve all actions") {
+		t.Fatalf("missing auto-approve:\n%s", view)
+	}
+	if !strings.Contains(view, workspaceops.AgentSkipFlag("claude")) {
+		t.Fatalf("missing skip flag hint:\n%s", view)
+	}
+	if !focusable(t, f, FieldSkip) {
+		t.Fatal("skip checkbox should be focusable for claude")
+	}
+
+	f.agentIndex = indexOfString(f.agentIDs(), "")
+	f.SyncAfterInput()
+	view = renderForm(t, f)
+	if f.ShowSkip() {
+		t.Fatal("None should hide skip")
+	}
+	if strings.Contains(view, "Auto-approve all actions") {
+		t.Fatalf("None still shows auto-approve:\n%s", view)
+	}
+	if focusable(t, f, FieldSkip) {
+		t.Fatal("skip checkbox should not be focusable for None")
+	}
+
+	f.agentIndex = indexOfString(f.agentIDs(), "copilot")
+	f.SyncAfterInput()
+	if f.ShowSkip() {
+		t.Fatal("copilot has no skip flag")
+	}
+}
+
+func TestNameRequiredVsOptional(t *testing.T) {
+	worktree := Open(testOpts(KindWorktree))
+	if got := worktree.Validate(); got != "Name is required" {
+		t.Fatalf("empty worktree name: %q", got)
+	}
+	worktree.nameInput.SetValue("   ")
+	if got := worktree.Validate(); got != "Name is required" {
+		t.Fatalf("blank worktree name: %q", got)
+	}
+	worktree.nameInput.SetValue("???")
+	if got := worktree.Validate(); got != "Name does not produce a valid git branch" {
+		t.Fatalf("unslugable worktree name: %q", got)
+	}
+	worktree.nameInput.SetValue("Auth Refresh")
+	if got := worktree.Validate(); got != "" {
+		t.Fatalf("valid worktree name: %q", got)
+	}
+
+	shell := Open(testOpts(KindShell))
+	if got := shell.Validate(); got != "" {
+		t.Fatalf("empty shell name should be optional: %q", got)
+	}
+	shell.nameInput.SetValue("custom")
+	if got := shell.Validate(); got != "" {
+		t.Fatalf("named shell: %q", got)
+	}
+}
+
+func TestLastAgentPrefillAndNoPersistOnOpen(t *testing.T) {
+	st := &memState{last: "codex", auto: map[string]bool{"codex": true}}
+	useMemState(t, st)
+	f := Open(testOpts(KindWorktree))
+	if f.Agent() != "codex" {
+		t.Fatalf("agent = %q, want codex", f.Agent())
+	}
+	if !f.SkipPerms() {
+		t.Fatal("expected persisted auto-approve for last agent")
+	}
+	if len(st.savedLast) != 0 {
+		t.Fatalf("Open persisted last agent: %v", st.savedLast)
+	}
+	f.PersistLastAgent()
+	if len(st.savedLast) != 1 || st.savedLast[0] != "codex" {
+		t.Fatalf("PersistLastAgent = %v", st.savedLast)
+	}
+}
+
+func TestLastAgentFallbackChain(t *testing.T) {
+	st := &memState{last: "claude"}
+	useMemState(t, st)
+
+	f := Open(OpenOpts{Kind: KindWorktree, Agents: []string{"grok", "codex"}, PreferredAgent: "codex"})
+	if f.Agent() != "codex" {
+		t.Fatalf("preferred fallback = %q, want codex", f.Agent())
+	}
+
+	f = Open(OpenOpts{Kind: KindWorktree, Agents: []string{"grok", "codex"}, DefaultAgent: "codex"})
+	if f.Agent() != "codex" {
+		t.Fatalf("default fallback = %q, want codex", f.Agent())
+	}
+
+	f = Open(OpenOpts{Kind: KindWorktree, Agents: []string{"grok", "codex"}})
+	if f.Agent() != "grok" {
+		t.Fatalf("first-real fallback = %q, want grok", f.Agent())
+	}
+
+	f = Open(OpenOpts{Kind: KindShell, Agents: []string{"grok", "codex"}})
+	if f.Agent() != "" {
+		t.Fatalf("shell fallback = %q, want None", f.Agent())
+	}
+}
+
+func TestAutoApproveLoadOnAgentChangeAndPersistOnToggle(t *testing.T) {
+	st := &memState{
+		last: "claude",
+		auto: map[string]bool{"claude": false, "codex": true},
+	}
+	useMemState(t, st)
+	f := Open(testOpts(KindWorktree))
+	if f.SkipPerms() {
+		t.Fatal("claude auto-approve should start false")
+	}
+
+	f.agentIndex = indexOfString(f.agentIDs(), "codex")
+	f.SyncAfterInput()
+	if f.Agent() != "codex" {
+		t.Fatalf("agent = %q after change", f.Agent())
+	}
+	if !f.SkipPerms() {
+		t.Fatal("expected codex auto-approve after agent change")
+	}
+
+	f.skip = false
+	f.SyncAfterInput()
+	if st.auto["codex"] {
+		t.Fatal("toggle off should persist immediately")
+	}
+
+	f.skip = true
+	f.SyncAfterInput()
+	if !st.auto["codex"] {
+		t.Fatal("toggle on should persist immediately")
+	}
+}
+
+func TestFocusKindVsFocusName(t *testing.T) {
+	name := Open(testOpts(KindWorktree))
+	if name.InitialFocusID() != FieldName {
+		t.Fatalf("default focus = %q, want %s", name.InitialFocusID(), FieldName)
+	}
+	renderForm(t, name)
+	if name.Modal().FocusedID() != FieldName {
+		t.Fatalf("rendered default focus = %q, want %s", name.Modal().FocusedID(), FieldName)
+	}
+
+	kind := Open(OpenOpts{Kind: KindWorktree, FocusKind: true, ShowProject: true, Projects: testOpts(KindWorktree).Projects})
+	if kind.InitialFocusID() != FieldKind {
+		t.Fatalf("FocusKind = %q, want %s", kind.InitialFocusID(), FieldKind)
+	}
+	renderForm(t, kind)
+	if kind.Modal().FocusedID() != FieldKind {
+		t.Fatalf("rendered FocusKind = %q, want %s", kind.Modal().FocusedID(), FieldKind)
+	}
+}
+
+func TestShowProjectHidesProjectCombo(t *testing.T) {
+	shown := Open(testOpts(KindWorktree))
+	view := renderForm(t, shown)
+	if !strings.Contains(view, "Project") {
+		t.Fatalf("ShowProject true missing Project:\n%s", view)
+	}
+	if !focusable(t, shown, FieldProject) {
+		t.Fatal("project combo should be focusable when shown")
+	}
+
+	hidden := Open(OpenOpts{Kind: KindWorktree, ShowProject: false, ProjectKey: "one"})
+	if focusable(t, hidden, FieldProject) {
+		t.Fatal("project combo should not be focusable when hidden")
+	}
+	if hidden.ProjectKey() != "one" {
+		t.Fatalf("hidden project still keeps key = %q", hidden.ProjectKey())
+	}
+}
+
+func TestSetBranchesPrefillsCurrentWithoutClobberingTypedValue(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	f.SetBranches([]string{"main", "dev"}, "main")
+	if f.BaseBranch() != "main" {
+		t.Fatalf("prefill current = %q, want main", f.BaseBranch())
+	}
+
+	f.SetBranches([]string{"main", "dev", "feat"}, "feat")
+	if f.BaseBranch() != "main" {
+		t.Fatalf("typed value still in list was clobbered: %q", f.BaseBranch())
+	}
+
+	f.SetBranches([]string{"dev", "feat"}, "feat")
+	if f.BaseBranch() != "feat" {
+		t.Fatalf("typed value gone should reset to current = %q, want feat", f.BaseBranch())
+	}
+}
+
+func TestComboDoesNotOverwriteFocusedFilterOnRebuild(t *testing.T) {
+	st := &memState{last: "claude"}
+	useMemState(t, st)
+	f := Open(testOpts(KindWorktree))
+	m := f.Build(52)
+	m.Render(80, 40, mouse.NewHandler())
+	m.SetFocus(FieldAgent)
+	f.pendingFocus = FieldAgent
+	f.agentInput.SetValue("c")
+
+	f.SetKind(KindShell)
+	_ = f.Build(52)
+	if got := f.agentInput.Value(); got != "c" {
+		t.Fatalf("agent combo query = %q, want c (prefill must not overwrite incremental search)", got)
+	}
+}
+
+func TestKindFromClickX(t *testing.T) {
+	if got := KindFromClickX(9, 0, 20); got != KindShell {
+		t.Fatalf("left half = %v, want Shell", got)
+	}
+	if got := KindFromClickX(10, 0, 20); got != KindWorktree {
+		t.Fatalf("right half = %v, want Worktree", got)
+	}
+	f := Open(testOpts(KindShell))
+	f.SetKindFromClickX(15, 0, 20)
+	if f.Kind() != KindWorktree {
+		t.Fatalf("click right = %v, want Worktree", f.Kind())
+	}
+}
+
+func TestKindToggleKeys(t *testing.T) {
+	f := Open(OpenOpts{Kind: KindWorktree, FocusKind: true})
+	m := f.Build(52)
+	m.Render(80, 40, mouse.NewHandler())
+	f.RestoreFocus()
+	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyLeft})
+	if f.Kind() != KindShell {
+		t.Fatalf("left on kind = %v, want Shell", f.Kind())
+	}
+	view := renderForm(t, f)
+	if strings.Contains(view, "Base Branch") {
+		t.Fatalf("after left, still shows Base Branch:\n%s", view)
+	}
+}
+
+func TestSlugHintWhenDisplayDiffers(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	f.nameInput.SetValue("auth-refresh")
+	view := renderForm(t, f)
+	if strings.Contains(view, "git: ") {
+		t.Fatalf("slug hint shown when slug equals name:\n%s", view)
+	}
+	f.nameInput.SetValue("Auth Refresh")
+	view = renderForm(t, f)
+	if !strings.Contains(view, "git: auth-refresh") {
+		t.Fatalf("expected slug hint:\n%s", view)
+	}
+	f.SetKind(KindShell)
+	view = renderForm(t, f)
+	if strings.Contains(view, "git: ") {
+		t.Fatalf("slug hint on shell:\n%s", view)
+	}
+}
+
+func TestErrorSection(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	f.SetError("Name is required")
+	view := renderForm(t, f)
+	if !strings.Contains(view, "Error: Name is required") {
+		t.Fatalf("missing error:\n%s", view)
+	}
+}

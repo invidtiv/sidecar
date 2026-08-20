@@ -51,7 +51,7 @@ func TestAllowlistResolutionMatchesCatalog(t *testing.T) {
 	}
 	for _, allowlist := range cases {
 		want := agentcatalog.Resolve(allowlist)
-		got := resolveSelectableAgents(allowlist, AgentTypeOrder, false)
+		got := resolveSelectableAgents(allowlist, false)
 		if len(got) != len(want)+1 {
 			t.Fatalf("allowlist %v resolved to %v, catalog says %v", allowlist, got, want)
 		}
