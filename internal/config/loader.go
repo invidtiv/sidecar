@@ -473,7 +473,7 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 			cfg.Notifications.Sources = make(map[string]NotificationSourceConfig, len(raw.Notifications.Sources))
 		}
 		for id, src := range raw.Notifications.Sources {
-			cfg.Notifications.Sources[id] = NotificationSourceConfig{Expiry: src.Expiry}
+			cfg.Notifications.Sources[id] = NotificationSourceConfig(src)
 		}
 	}
 
