@@ -180,9 +180,11 @@ func TestConvertSelectionBgLiftsOffCanvas(t *testing.T) {
 		t.Errorf("SelectionBg %s flipped the canvas ink pole (scheme selection was %s)",
 			palette.SelectionBg, scheme.SelectionBackground)
 	}
-	if ratio := styles.ContrastRatio(palette.SelectionBg, palette.BgPrimary); ratio < 2.2-0.01 {
-		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want >= 2.2",
-			palette.SelectionBg, palette.BgPrimary, ratio)
+	if ratio := styles.ContrastRatio(palette.SelectionBg, palette.BgPrimary); ratio < styles.TargetSelectionSeparation-0.01 {
+		if styles.ContrastRatio(palette.TextPrimary, palette.SelectionBg) > 4.5+0.15 {
+			t.Errorf("SelectionBg %s vs canvas %s is %.2f (want >= %.2f) with text headroom still left",
+				palette.SelectionBg, palette.BgPrimary, ratio, styles.TargetSelectionSeparation)
+		}
 	}
 	if ratio := styles.ContrastRatio(palette.TextPrimary, palette.SelectionBg); ratio < 4.5-0.01 {
 		t.Errorf("TextPrimary on SelectionBg is %.2f; want >= 4.5", ratio)
@@ -197,7 +199,7 @@ func TestConvertKeepsSamePoleSchemeSelection(t *testing.T) {
 	palette := Convert(scheme)
 	// Dracula's scheme selection is a same-pole lift of the canvas, so the
 	// converter should keep that hue rather than replacing it with a
-	// canvas-grey. Lightness may still move to meet the 2.2 floor.
+	// canvas-grey. Lightness may still move to meet the contrast target.
 	_, seedS, _ := HexToHSL(scheme.SelectionBackground)
 	_, gotS, _ := HexToHSL(palette.SelectionBg)
 	if seedS > 0.05 && gotS < seedS/2 {

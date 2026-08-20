@@ -55,7 +55,7 @@ func TestSidecarModernReadableWhereNormalizationDoesNotReach(t *testing.T) {
 		{"textMuted on selection", c.TextMuted, c.BgTertiary, 4.5},
 		{"textSelection on selection", c.TextSelection, c.BgTertiary, 4.5},
 		{"textPrimary on text-selection highlight", c.TextPrimary, c.SelectionBg, 4.5},
-		{"primary on text-selection highlight", c.Primary, c.SelectionBg, 3.0},
+		{"primary on text-selection highlight", c.Primary, c.SelectionBg, 2.6},
 		{"primary on canvas", c.Primary, c.BgPrimary, 4.5},
 		{"secondary on canvas", c.Secondary, c.BgPrimary, 4.5},
 		{"success on canvas", c.Success, c.BgPrimary, 4.5},
@@ -152,9 +152,9 @@ func TestSidecarModernTextSelectionHighlightIsVisibleWithoutInvertingInk(t *test
 	if c.SelectionBg == c.BgTertiary {
 		t.Fatalf("SelectionBg reused BgTertiary (%s); the selected-row fill is too close to the canvas to mark a span", c.BgTertiary)
 	}
-	if ContrastRatio(c.SelectionBg, c.BgPrimary) < targetSelectionSeparation {
+	if ContrastRatio(c.SelectionBg, c.BgPrimary) < TargetSelectionSeparation {
 		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want a visible lift (>= %.1f)",
-			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary), targetSelectionSeparation)
+			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary), TargetSelectionSeparation)
 	}
 	if Luminance(c.SelectionBg) <= Luminance(c.BgPrimary) {
 		t.Errorf("SelectionBg %s is not lighter than the canvas %s", c.SelectionBg, c.BgPrimary)

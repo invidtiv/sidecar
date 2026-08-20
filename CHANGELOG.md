@@ -9,7 +9,7 @@ All notable changes to sidecar are documented here.
 - **Text selection is easier to find against the canvas.** The highlight sat
   at 1.2–1.5:1 on every theme — a selected-row fill, not a span — so a drag
   in Notes, Files, or a document pane disappeared into the shell background.
-  Selection now lifts to at least 2.2:1 against the canvas and stays on the
+  Selection now lifts to at least 2.65:1 against the canvas and stays on the
   same ink pole, so body text, headings, and syntax colours are not inverted
   or washed out.
 

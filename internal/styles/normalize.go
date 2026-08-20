@@ -20,17 +20,18 @@ const (
 // shape rather than dissolving into the bar.
 const surfaceSeparation = 1.12
 
-// targetSelectionSeparation is the contrast a text-selection highlight aims
-// for against the canvas. BgTertiary (and the previous sidecar-modern value)
-// sits at 1.2–1.5:1, which reads as a selected-row fill, not a span. 2.2 is a
-// visible lift that still leaves body text on the canvas's ink pole, so the
-// highlight does not invert or wash out markdown and syntax colours.
+// TargetSelectionSeparation is the contrast a text-selection highlight aims
+// for against the canvas. BgTertiary sits at 1.2–1.5:1, which reads as a
+// selected-row fill, not a span. This target is a visible lift that still
+// leaves body text on the canvas's ink pole, so the highlight does not invert
+// or wash out markdown and syntax colours.
 //
 // Themes whose body text has no headroom (a grey foreground on a grey
-// canvas) cannot hit 2.2 without washing that text out. SelectionSeparationFloor
-// is the CheckPaletteContrast minimum; deriveSelectionBg still aims at 2.2.
+// canvas) cannot hit the target without washing that text out.
+// SelectionSeparationFloor is the CheckPaletteContrast minimum;
+// deriveSelectionBg still aims at TargetSelectionSeparation.
 const (
-	targetSelectionSeparation = 2.2
+	TargetSelectionSeparation = 2.65
 	SelectionSeparationFloor  = 1.5
 )
 
@@ -220,7 +221,7 @@ func deriveSelectionBg(seed, canvas, textPrimary string) string {
 	pole := MaxContrastPole([]string{canvas})
 
 	if selectionHighlightUsable(seed, text, pole) &&
-		ContrastRatio(seed, canvas) >= targetSelectionSeparation-0.01 {
+		ContrastRatio(seed, canvas) >= TargetSelectionSeparation-0.01 {
 		return seed
 	}
 
@@ -249,43 +250,53 @@ func deriveSelectionBg(seed, canvas, textPrimary string) string {
 			if !selectionHighlightUsable(cand, text, pole) {
 				continue
 			}
-			if ContrastRatio(cand, canvas) >= targetSelectionSeparation-0.01 {
+			if ContrastRatio(cand, canvas) >= TargetSelectionSeparation-0.01 {
 				return cand
 			}
 		}
 	}
 
-	// 2.2 is out of reach without washing out body text. Keep a seed that
-	// already clears the floor so re-normalization cannot shuffle it; otherwise
-	// take the strongest conventional-direction lift that stays usable.
-	if selectionHighlightUsable(seed, text, pole) &&
-		ContrastRatio(seed, canvas) >= SelectionSeparationFloor-0.01 {
-		return seed
+	// The target is out of reach without washing out body text. Prefer the
+	// conventional-direction lift (lighten dark canvases, darken light ones)
+	// so a mid-grey theme does not collapse to black. Keep the seed when it
+	// is already that lift, or already as light as body text allows, so
+	// re-normalization cannot shuffle it.
+	conv := selectionBestAcrossHues(hues, canvasL, canvas, text, pole, conventionalLighter)
+	flip := selectionBestAcrossHues(hues, canvasL, canvas, text, pole, !conventionalLighter)
+	best := conv
+	if conv == "" || (ContrastRatio(conv, canvas) < SelectionSeparationFloor-0.01 &&
+		flip != "" && ContrastRatio(flip, canvas) > ContrastRatio(conv, canvas)) {
+		best = flip
 	}
-	best, bestSep := "", -1.0
-	for _, lighter := range []bool{conventionalLighter, !conventionalLighter} {
-		for _, hue := range hues {
-			cand := selectionBestInDirection(hue[0], hue[1], canvasL, canvas, text, pole, lighter)
-			if cand == "" {
-				continue
-			}
-			sep := ContrastRatio(cand, canvas)
-			if sep >= SelectionSeparationFloor-0.01 {
-				return cand
-			}
-			if sep > bestSep {
-				best, bestSep = cand, sep
-			}
+	if best == "" {
+		return canvas
+	}
+	bestSep := ContrastRatio(best, canvas)
+	if selectionHighlightUsable(seed, text, pole) {
+		seedSep := ContrastRatio(seed, canvas)
+		if seedSep >= bestSep-0.01 || ContrastRatio(text, seed) <= targetBodyText+0.2 {
+			return seed
 		}
 	}
-	if best != "" {
-		return best
+	return best
+}
+
+func selectionBestAcrossHues(hues [][2]float64, canvasL float64, canvas, text, pole string, lighter bool) string {
+	best, bestSep := "", -1.0
+	for _, hue := range hues {
+		cand := selectionBestInDirection(hue[0], hue[1], canvasL, canvas, text, pole, lighter)
+		if cand == "" {
+			continue
+		}
+		if sep := ContrastRatio(cand, canvas); sep > bestSep {
+			best, bestSep = cand, sep
+		}
 	}
-	return canvas
+	return best
 }
 
 // selectionWalk returns the closest lightness step from canvasL in one
-// direction that meets the 2.2 floor without washing out text. An empty
+// direction that meets TargetSelectionSeparation without washing out text. An empty
 // string means that direction cannot hit the floor.
 func selectionWalk(h, s, canvasL float64, canvas, text, pole string, lighter bool) string {
 	for step := lightnessStep; step <= 1.0; step += lightnessStep {
@@ -297,7 +308,7 @@ func selectionWalk(h, s, canvasL float64, canvas, text, pole string, lighter boo
 		if !selectionHighlightUsable(cand, text, pole) {
 			continue
 		}
-		if ContrastRatio(cand, canvas) >= targetSelectionSeparation-0.01 {
+		if ContrastRatio(cand, canvas) >= TargetSelectionSeparation-0.01 {
 			return cand
 		}
 	}
@@ -305,7 +316,7 @@ func selectionWalk(h, s, canvasL float64, canvas, text, pole string, lighter boo
 }
 
 // selectionBestInDirection returns the usable candidate in one lightness
-// direction with the most canvas contrast. Used when 2.2 is unreachable
+// direction with the most canvas contrast. Used when the target is unreachable
 // without inverting ink.
 func selectionBestInDirection(h, s, canvasL float64, canvas, text, pole string, lighter bool) string {
 	best, bestSep := "", -1.0

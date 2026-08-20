@@ -119,9 +119,12 @@ func TestCatppuccinMochaTextSelectionHighlightIsVisibleWithoutInvertingInk(t *te
 	if c.SelectionBg == c.BgTertiary {
 		t.Fatalf("SelectionBg reused BgTertiary (%s); the selected-row fill is too close to the canvas to mark a span", c.BgTertiary)
 	}
-	if ContrastRatio(c.SelectionBg, c.BgPrimary) < targetSelectionSeparation {
-		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want a visible lift (>= %.1f)",
-			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary), targetSelectionSeparation)
+	sep := ContrastRatio(c.SelectionBg, c.BgPrimary)
+	if sep < TargetSelectionSeparation {
+		if ContrastRatio(c.TextPrimary, c.SelectionBg) > targetBodyText+0.15 {
+			t.Errorf("SelectionBg %s vs canvas %s is %.2f (want >= %.2f) with text headroom still left (%.2f)",
+				c.SelectionBg, c.BgPrimary, sep, TargetSelectionSeparation, ContrastRatio(c.TextPrimary, c.SelectionBg))
+		}
 	}
 	if Luminance(c.SelectionBg) <= Luminance(c.BgPrimary) {
 		t.Errorf("SelectionBg %s is not lighter than the canvas %s", c.SelectionBg, c.BgPrimary)

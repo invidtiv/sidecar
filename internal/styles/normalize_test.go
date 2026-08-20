@@ -79,8 +79,8 @@ func TestNormalizePaletteLiftsWeakSelectionBg(t *testing.T) {
 	if p.SelectionBg == "" || p.SelectionBg == "#1a1a1a" {
 		t.Errorf("weak SelectionBg stayed %q; want a lift off the canvas", p.SelectionBg)
 	}
-	if ratio := ContrastRatio(p.SelectionBg, p.BgPrimary); ratio < targetSelectionSeparation-0.01 {
-		t.Errorf("SelectionBg %s vs canvas is %.2f; want >= %.1f", p.SelectionBg, ratio, targetSelectionSeparation)
+	if ratio := ContrastRatio(p.SelectionBg, p.BgPrimary); ratio < TargetSelectionSeparation-0.01 {
+		t.Errorf("SelectionBg %s vs canvas is %.2f; want >= %.1f", p.SelectionBg, ratio, TargetSelectionSeparation)
 	}
 	if ratio := ContrastRatio(p.TextPrimary, p.SelectionBg); ratio < targetBodyText-0.01 {
 		t.Errorf("TextPrimary on SelectionBg is %.2f; want >= %.1f", ratio, targetBodyText)
@@ -91,7 +91,7 @@ func TestNormalizePaletteLiftsWeakSelectionBg(t *testing.T) {
 }
 
 func TestDeriveSelectionBgKeepsCompliantSeed(t *testing.T) {
-	seed := "#454e57"
+	seed := "#4f5964"
 	got := DeriveSelectionBg(seed, "#0f1113", "#cfd3d6")
 	if got != seed {
 		t.Errorf("compliant seed rewritten: %s -> %s", seed, got)
@@ -107,8 +107,10 @@ func TestDeriveSelectionBgRejectsInvertedInk(t *testing.T) {
 	if ContrastRatio("#cdd6f4", got) < targetBodyText-0.01 {
 		t.Errorf("inverted seed produced %s, which washes out body text (%.2f)", got, ContrastRatio("#cdd6f4", got))
 	}
-	if ContrastRatio(got, "#1e1e2e") < targetSelectionSeparation-0.01 {
-		t.Errorf("inverted seed produced %s, only %.2f against the canvas", got, ContrastRatio(got, "#1e1e2e"))
+	if sep := ContrastRatio(got, "#1e1e2e"); sep < TargetSelectionSeparation-0.01 {
+		if ContrastRatio("#cdd6f4", got) > targetBodyText+0.15 {
+			t.Errorf("inverted seed produced %s, only %.2f against the canvas with text headroom still left", got, sep)
+		}
 	}
 }
 
@@ -127,7 +129,7 @@ func TestDeriveSelectionBgLiftsLightThemeHighlight(t *testing.T) {
 	canvas := "#f7f7f7"
 	text := "#111111"
 	got := DeriveSelectionBg(canvas, canvas, text)
-	if ContrastRatio(got, canvas) < targetSelectionSeparation-0.01 {
+	if ContrastRatio(got, canvas) < TargetSelectionSeparation-0.01 {
 		t.Errorf("light-theme highlight %s is only %.2f against the canvas", got, ContrastRatio(got, canvas))
 	}
 	if Luminance(got) >= Luminance(canvas) {

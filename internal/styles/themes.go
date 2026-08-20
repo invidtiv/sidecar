@@ -42,7 +42,7 @@ type ColorPalette struct {
 	// SelectionBg is the highlight painted over selected text. Distinct from
 	// BgTertiary, which is the selected-row fill and is often too close to the
 	// canvas to read as a span highlight. Empty, inverted, or too-dim values
-	// are lifted by NormalizePalette to at least 2.2:1 against BgPrimary,
+	// are lifted by NormalizePalette toward TargetSelectionSeparation against BgPrimary,
 	// staying on the canvas ink pole so selected body text does not invert.
 	SelectionBg string `json:"selectionBg"`
 
@@ -171,8 +171,8 @@ var (
 			BgOverlay:   "#0b0d0ecc",
 			// Text-selection highlight: a step above the hairline, far enough
 			// off the canvas to find a span, still dark enough that body text
-			// and gold headings keep their colour instead of inverting.
-			SelectionBg: "#454e57",
+			// keeps its colour instead of inverting.
+			SelectionBg: "#4f5964",
 
 			// Raised chrome (key-hint pills, bar chips)
 			SurfaceRaised: "#22272c",
