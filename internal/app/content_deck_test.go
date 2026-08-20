@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,7 @@ type deckHostTestPlugin struct {
 	wheelX        int
 	linkRect      mouse.Rect
 	linkKinds     contentlink.KindSet
+	zeroLinkKinds bool
 }
 
 type queuedAppDeckTestMsg struct{}
@@ -77,7 +79,7 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 		rect = mouse.Rect{W: len(p.frame), H: 1}
 	}
 	kinds := p.linkKinds
-	if kinds == nil {
+	if kinds == nil && !p.zeroLinkKinds {
 		kinds = contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal)
 	}
 	return []contentlink.Surface{{
@@ -85,6 +87,26 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
 		Kinds: kinds,
 	}}
+}
+
+func TestAppContentDeckZeroValueSurfaceAllowsNoKinds(t *testing.T) {
+	root := t.TempDir()
+	frame := "sidecar-ws-alpha td-abcd missing.go abc1234 https://example.test RES-1 sidecar://note/nt-1"
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: frame, zeroLinkKinds: true}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(160, 40)
+	h := m.currentContentDeck()
+	if h == nil {
+		t.Fatal("content deck was not created")
+	}
+	h.SetResourceMatchers([]contentlink.ResourceMatcher{{Provider: "p", ID: "r", Re: regexp.MustCompile(`RES-[0-9]+`)}})
+	rendered := m.renderContent(160, 40)
+	if strings.Contains(rendered, "\x1b[4m") || strings.Contains(rendered, "\x1b]8;") {
+		t.Fatalf("zero-value surface decorated a link: %q", rendered)
+	}
+	if len(h.links) != 0 || len(h.pending) != 0 {
+		t.Fatalf("zero-value surface activated or queued resolution: links=%+v pending=%+v", h.links, h.pending)
+	}
 }
 
 func TestAppContentDeckOnlyDecoratesAndRegistersSurfaceKinds(t *testing.T) {

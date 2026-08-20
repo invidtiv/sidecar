@@ -445,8 +445,15 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 		for row := 0; row < surface.Rect.H && surface.Rect.Y+row < len(lines); row++ {
 			y := surface.Rect.Y + row
 			segment := ansi.Cut(lines[y], surface.Rect.X, surface.Rect.X+surface.Rect.W)
+			allowedKinds := surface.Kinds
+			if allowedKinds == nil {
+				// Surface.KindSet's zero value is allow-none. ScanFrame keeps nil
+				// as allow-all for direct compatibility callers, so adapt the two
+				// contracts explicitly at this boundary.
+				allowedKinds = contentlink.KindSet{}
+			}
 			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.Snapshot(), Matchers: h.resourceMatchers,
-				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: surface.Kinds, Decorate: true})
+				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: allowedKinds, Decorate: true})
 			for _, span := range result.Spans {
 				h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: span.Ref(), Rect: mouse.Rect{
 					X: origin.X + surface.Rect.X + span.StartCol, Y: origin.Y + y, W: span.EndCol - span.StartCol + 1, H: 1,
