@@ -503,6 +503,35 @@ From live use (Marcus, 2026-08-19, nt-9519f6). Runs after
 - An `×` at the right of each group header clears the group (same action
   as `D`): `◆ SYSTEM ───────────── ×`.
 
+#### Centre interactions as built (2026-08-19)
+
+- **`enter` is now one function, `activateSelectedNotification`**
+  (`internal/app/notification_centre.go`), and the double-click calls it. The
+  key case is a one-liner over it, so when Phase 5 rebinds `enter` to target
+  activation the pointer follows by construction — there is no second action
+  to keep in step. Single click is unchanged: select + mark read, no toast.
+- **Double-click detection is `internal/mouse`'s existing one.** The handler
+  already counts successive clicks at a cell and `HandleMouse` already returns
+  `ActionDoubleClick` (the file browser is the precedent); the centre's mouse
+  switch already listed that action alongside `ActionClick`, so this was a
+  branch inside the item case, not a new mechanism or a timer.
+- **`D` is now `dismissNotificationGroup(source)`**, and the header `×` runs
+  it with the group it was drawn on — so the control clears its own group
+  regardless of where the cursor sits.
+- **The `×`'s column is decided once**, by `notificationGroupClearCol(inner)`:
+  the renderer reserves that cell at the end of the rule and
+  `registerNotificationCentreRegions` puts a 1×1 region
+  (`notification-centre-group-<source id>`) on exactly it. Below six interior
+  columns it returns -1 and the header is a plain rule again. Header rows now
+  carry their source in `centreRow.group`, which is also what keeps them out
+  of the item-region loop.
+- **Known, pre-existing:** the resize rail's widened hit box overlaps the
+  panel's first column, so a press on the leftmost cell of a row is a drag,
+  not a select. The tests click a few columns in. Unchanged by this slice.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated on both
+  axes, `paths` checked, stopped after): the centre draws
+  `◆ AGENTS ─────────────────────── ×`.
+
 **Selected-row background consistency (general fix, scoped).** Selected rows
 in the notes list and the centre render inconsistent backgrounds depending on
 the row's text — pre-styled spans (hues, links) punch holes in the selection

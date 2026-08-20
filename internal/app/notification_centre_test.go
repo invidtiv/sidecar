@@ -637,3 +637,115 @@ func TestAltNOpensTheCentreEvenWhereNIsBound(t *testing.T) {
 		t.Fatal("alt+n did not open the centre")
 	}
 }
+
+// centreRegion finds a registered panel region by exact id.
+func centreRegion(t *testing.T, m *Model, id string) mouse.Region {
+	t.Helper()
+	for _, r := range m.notificationCentreMouse.HitMap.Regions() {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("no region %q in %+v", id, m.notificationCentreMouse.HitMap.Regions())
+	return mouse.Region{}
+}
+
+// A single click selects and marks read; a double-click is `enter` — today
+// "view details", and whatever enter means after Phase 5, because both run
+// activateSelectedNotification.
+func TestCentreDoubleClickOnAnEntryDoesWhatEnterDoes(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	first := postCentreNotification(t, &m, notify.SourceTasks, "task one")
+	second := postCentreNotification(t, &m, notify.SourceTasks, "task two")
+	m.toggleNotificationCentre()
+	// Both read, so nothing is toasting on its own and any toast the test sees
+	// is the one the pointer asked for.
+	m.readNotification(first.ID)
+	m.readNotification(second.ID)
+	m.View() // registers the panel's hit regions
+
+	// The list is source-grouped and newest-first, so name the target by index
+	// rather than by which of the two was posted first.
+	target := m.notificationCentreItems()[1]
+	region := centreRegion(t, &m, regionNotificationCentreItem+"1")
+	// A few columns in from the panel edge: the resize rail's widened hit box
+	// overlaps the panel's first column, and that is the rail's to keep.
+	click := tea.MouseClickMsg{Button: tea.MouseLeft, X: region.Rect.X + 3, Y: region.Rect.Y}
+
+	// First click: selection only, no toast.
+	if handled, _ := m.notificationCentreMouseEvent(click); !handled {
+		t.Fatal("a click on an entry was not handled by the panel")
+	}
+	if m.notificationCentreCursor != 1 {
+		t.Fatalf("cursor after click = %d, want 1", m.notificationCentreCursor)
+	}
+	if _, ok := m.visibleToast(); ok {
+		t.Fatal("a single click re-showed the entry; it must only select")
+	}
+
+	// Second click at the same cell inside the double-click window.
+	before := len(m.notificationCentreItems())
+	if handled, _ := m.notificationCentreMouseEvent(click); !handled {
+		t.Fatal("a double-click on an entry was not handled by the panel")
+	}
+	shown, ok := m.visibleToast()
+	if !ok || shown.ID != target.ID {
+		t.Fatalf("visibleToast after double-click = %+v (ok=%v), want the clicked entry", shown, ok)
+	}
+	if got := len(m.notificationCentreItems()); got != before {
+		t.Fatalf("double-click changed the list: %d -> %d", before, got)
+	}
+	if !m.notificationCentreOpen || !m.notificationCentreFocused {
+		t.Fatal("double-click closed or blurred the panel")
+	}
+	stored, ok := m.findNotification(target.ID)
+	if !ok || !stored.CreatedAt.Equal(target.CreatedAt) || stored.Dismissed() {
+		t.Fatalf("double-click rewrote the stored record: %+v", stored)
+	}
+}
+
+// Every group header carries a clear control at its right end, and clicking it
+// is `D` for that group — whatever the cursor happens to be on.
+func TestCentreGroupHeaderClearClearsItsOwnGroup(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	postCentreNotification(t, &m, notify.SourceTasks, "task one")
+	postCentreNotification(t, &m, notify.SourceTasks, "task two")
+	agent := postCentreNotification(t, &m, notify.SourceAgent, "agent one")
+	m.toggleNotificationCentre()
+	m.View()
+
+	panel := m.renderNotificationCentre(m.height - headerHeight - footerHeight)
+	if !strings.Contains(panel, notificationGroupClear) {
+		t.Fatal("no group clear control in the rendered panel")
+	}
+
+	// The cursor sits on the first entry; the control clears the group it is
+	// drawn on, not the selection's.
+	m.notificationCentreCursor = 0
+	source := notify.SourceOf(agent.Source).ID
+	region := centreRegion(t, &m, regionNotificationCentreGroup+string(source))
+	if got := m.notificationCentreMouse.HitMap.Test(region.Rect.X, region.Rect.Y); got == nil || got.ID != region.ID {
+		t.Fatalf("the group × is covered by another region: %v", got)
+	}
+	// It is the last interior cell of the header row, where the rule ends.
+	inner := m.notificationCentrePanelWidth() - 4
+	wantX := m.width - m.notificationCentrePanelWidth() + 2 + notificationGroupClearCol(inner)
+	if region.Rect.X != wantX || region.Rect.W != 1 {
+		t.Fatalf("group × region = %+v, want x=%d w=1", region.Rect, wantX)
+	}
+
+	handled, _ := m.notificationCentreMouseEvent(
+		tea.MouseClickMsg{Button: tea.MouseLeft, X: region.Rect.X, Y: region.Rect.Y})
+	if !handled {
+		t.Fatal("a click on the group × was not handled")
+	}
+	left := m.notificationCentreItems()
+	if len(left) != 2 {
+		t.Fatalf("items after the group × = %d, want 2", len(left))
+	}
+	for _, n := range left {
+		if notify.SourceOf(n.Source).ID == source {
+			t.Fatalf("the group × left %q behind", n.Title)
+		}
+	}
+}

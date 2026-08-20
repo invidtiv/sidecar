@@ -58,6 +58,9 @@ const (
 	regionNotificationCentreHandle = "notification-centre-handle"
 	regionNotificationCentreClose  = "notification-centre-close"
 	regionNotificationCentreItem   = "notification-centre-item-"
+	// regionNotificationCentreGroup is the group header's clear control, one
+	// region per source: "notification-centre-group-<source id>".
+	regionNotificationCentreGroup = "notification-centre-group-"
 
 	// notificationCentreFootnote describes notify.Retention. It is a sentence
 	// about that constant, not a second rule.
@@ -115,7 +118,16 @@ func (m Model) notificationCentreOwnsKeys() bool {
 type centreRow struct {
 	text string
 	item int
+	// group names the source whose header this row is, empty on every other
+	// row. It is what lets the header's clear control get a hit region without
+	// a second walk of the grouping.
+	group string
 }
+
+// notificationGroupClear is the glyph at the right end of a group header. It
+// clears the group — the same action as `D` — and is the only thing on a
+// header row that is a target.
+const notificationGroupClear = "×"
 
 // notificationCentreItems is the flat, source-grouped list the panel shows:
 // the same order the section rules are drawn in, so an index into it is an
@@ -140,7 +152,11 @@ func (m Model) notificationCentreBody(inner int, now time.Time) []centreRow {
 		if i > 0 {
 			rows = append(rows, centreRow{text: "", item: -1})
 		}
-		rows = append(rows, centreRow{text: notificationSectionRule(group, inner), item: -1})
+		rows = append(rows, centreRow{
+			text:  notificationSectionRule(group, inner),
+			item:  -1,
+			group: string(group.Source.ID),
+		})
 		for _, n := range group.Items {
 			for _, line := range m.notificationCentreItemLines(n, inner, index, now) {
 				rows = append(rows, centreRow{text: line, item: index})
@@ -152,16 +168,38 @@ func (m Model) notificationCentreBody(inner int, now time.Time) []centreRow {
 }
 
 // notificationSectionRule draws design 1c's section header: the source glyph
-// and label in the source hue, then a rule that fills the row.
+// and label in the source hue, then a rule that fills the row, then the clear
+// control at the right end — "◆ SYSTEM ───────── ×". The control is the same
+// action as `D`; its hit region is registered against this row's group by
+// notificationGroupClearCol, which is the only place the column is decided.
 func notificationSectionRule(group notify.Group, inner int) string {
 	hue := notify.ChromeColor(group.Source.ID, notify.SeverityInfo)
 	label := notify.Glyph(group.Source.ID) + " " + group.Source.Label
 	styled := lipgloss.NewStyle().Foreground(hue).Bold(true).Render(label)
-	rest := inner - lipgloss.Width(styled) - 1
+	clear := ""
+	reserved := 0
+	if col := notificationGroupClearCol(inner); col >= 0 {
+		clear = " " + lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(notificationGroupClear)
+		reserved = lipgloss.Width(clear)
+	}
+	rest := inner - lipgloss.Width(styled) - 1 - reserved
 	if rest < 1 {
 		return ansi.Truncate(styled, inner, "")
 	}
-	return styled + " " + lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", rest))
+	return styled + " " +
+		lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", rest)) + clear
+}
+
+// notificationGroupClearCol is the interior column the group header's clear
+// control occupies, or -1 when the panel is too narrow to spend the cell. The
+// renderer and the hit map both read it, so the glyph and its target cannot
+// drift apart.
+func notificationGroupClearCol(inner int) int {
+	// The label, a space, at least one rule cell, a space, and the glyph.
+	if inner < 6 {
+		return -1
+	}
+	return inner - 1
 }
 
 // notificationCentreItemLines is one notification as the two rows plan 1.5
@@ -354,11 +392,22 @@ func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, s
 	// takes a row and a column, the panel's padding another column. Body rows
 	// then start after the title row and its rule. Both rows of a two-line
 	// entry carry the same item id, so clicking either selects the entry.
+	inner := max(1, panelWidth-4)
+	clearCol := notificationGroupClearCol(inner)
 	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
+		y := headerHeight + 1 + 2 + (i - scroll)
+		if rows[i].group != "" {
+			// A header row is not selectable; only its clear control is a
+			// target, and it is exactly the cell the rule reserved.
+			if clearCol >= 0 {
+				hits.AddRect(regionNotificationCentreGroup+rows[i].group,
+					panelX+2+clearCol, y, 1, 1, nil)
+			}
+			continue
+		}
 		if rows[i].item < 0 {
 			continue
 		}
-		y := headerHeight + 1 + 2 + (i - scroll)
 		hits.AddRect(fmt.Sprintf("%s%d", regionNotificationCentreItem, rows[i].item),
 			panelX, y, panelWidth, 1, nil)
 	}
@@ -450,30 +499,45 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	case "D":
 		if selected, ok := m.selectedNotification(items); ok {
-			source := notify.SourceOf(selected.Source).ID
-			for _, n := range items {
-				if notify.SourceOf(n.Source).ID == source {
-					m.dismissNotification(n.ID)
-				}
-			}
-			m.notificationCentreCursor = 0
-			m.clampNotificationCentreCursor(len(m.notificationCentreItems()))
+			m.dismissNotificationGroup(notify.SourceOf(selected.Source).ID)
 		}
 		return true, nil
 	case "enter":
-		// "View details": re-present the selected notification as a toast, so
-		// the body and key row the centre's two lines truncate can be read in
-		// full. It is presentation only — no re-post, no un-dismiss — and the
-		// centre stays open and focused behind it. Phase 5 rebinds `enter` to
-		// target activation and re-show moves to a secondary key.
-		if selected, ok := m.selectedNotification(items); ok {
-			m.reshowNotification(selected, time.Now())
-			m.readSelectedNotification()
-			return true, m.syncToastReveal(time.Now())
-		}
-		return true, nil
+		return true, m.activateSelectedNotification()
 	}
 	return false, nil
+}
+
+// dismissNotificationGroup clears every active notification of one source. It
+// is the whole of `D`, and the group header's `×` runs it unchanged — one
+// action, two ways in.
+func (m *Model) dismissNotificationGroup(source notify.SourceID) {
+	for _, n := range m.notificationCentreItems() {
+		if notify.SourceOf(n.Source).ID == source {
+			m.dismissNotification(n.ID)
+		}
+	}
+	m.notificationCentreCursor = 0
+	m.clampNotificationCentreCursor(len(m.notificationCentreItems()))
+}
+
+// activateSelectedNotification is what `enter` means on the centre — today
+// "view details": re-present the selection as a toast so the body the centre's
+// two lines truncate can be read in full. It is presentation only: no re-post,
+// no un-dismiss, and the centre stays open and focused behind it.
+//
+// Double-clicking an entry calls this same function, so it follows `enter`
+// automatically. When Phase 5 rebinds `enter` to target activation, change
+// this body (and move re-show to its own key) — do not give the pointer a
+// second action of its own.
+func (m *Model) activateSelectedNotification() tea.Cmd {
+	selected, ok := m.selectedNotification(m.notificationCentreItems())
+	if !ok {
+		return nil
+	}
+	m.reshowNotification(selected, time.Now())
+	m.readSelectedNotification()
+	return m.syncToastReveal(time.Now())
 }
 
 // notificationCentreReleasesFocus names the keys that move the user somewhere
@@ -578,6 +642,12 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 			return true, nil
 		case action.Region.ID == regionNotificationCentreClose:
 			return true, m.closeNotificationCentre()
+		case strings.HasPrefix(action.Region.ID, regionNotificationCentreGroup):
+			// The header's `×` is `D` for that group, whatever the cursor is on.
+			m.focusNotificationCentre()
+			m.dismissNotificationGroup(
+				notify.SourceID(strings.TrimPrefix(action.Region.ID, regionNotificationCentreGroup)))
+			return true, nil
 		case strings.HasPrefix(action.Region.ID, regionNotificationCentreItem):
 			var index int
 			if _, err := fmt.Sscanf(action.Region.ID, regionNotificationCentreItem+"%d", &index); err == nil {
@@ -585,6 +655,11 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 			}
 			m.focusNotificationCentre()
 			m.readSelectedNotification()
+			if action.Type == mouse.ActionDoubleClick {
+				// A double-click is `enter` on the row it landed on — the same
+				// function the key runs, so it follows whatever enter means.
+				return true, m.activateSelectedNotification()
+			}
 			return true, nil
 		case action.Region.ID == regionNotificationCentre:
 			m.focusNotificationCentre()
