@@ -11,7 +11,8 @@ import (
 
 // editorLayout is the one geometry contract for the built-in note body.
 // Preview and textarea consume the same numbers so entering edit changes
-// the cursor, not the frame.
+// the cursor, not the frame. Notes markdown is rendered with CompactDocument
+// so Glamour's document chrome is this inset, not extra space inside wrapColumn.
 type editorLayout struct {
 	wrapColumn    int // cells of note text
 	leftMargin    int // reserved columns before note text
@@ -27,10 +28,12 @@ const (
 	paneChromeX      = 4 // left/right border + padding
 	paneChromeY      = 2 // top/bottom border
 	editorStatusRows = 1
-	editorTopRows    = 1
+	// Status gap plus the row Glamour used as Document.BlockPrefix.
+	editorTopRows    = 2
 	editorBottomRows = 1
-	editorSideCols   = 1
-	scrollbarWidth   = 1
+	// Pane breathing room plus Glamour's former Document.Margin (2).
+	editorSideCols = 3
+	scrollbarWidth = 1
 )
 
 // editorLayout returns the built-in editor geometry for the current pane size.

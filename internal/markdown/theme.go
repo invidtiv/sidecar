@@ -256,6 +256,16 @@ func applyPalette(cfg ansi.StyleConfig, c styles.ColorPalette, chromaTheme strin
 	return cfg
 }
 
+// compactDocumentStyle zeros Glamour's document-level inset. Block and list
+// chrome is left intact; only the frame around the whole body is removed.
+func compactDocumentStyle(cfg ansi.StyleConfig) ansi.StyleConfig {
+	zero := uint(0)
+	cfg.Document.Margin = &zero
+	cfg.Document.BlockPrefix = ""
+	cfg.Document.BlockSuffix = ""
+	return cfg
+}
+
 // pick returns a pointer to the first non-empty candidate, or nil.
 func pick(candidates ...string) *string {
 	for _, v := range candidates {

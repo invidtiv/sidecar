@@ -77,15 +77,97 @@ func TestEditorLayoutGeometryParity(t *testing.T) {
 	if viewLay.scrollbarCol != viewLay.innerWidth-viewLay.rightMargin-1 {
 		t.Fatalf("scrollbar col %d does not leave right margin %+v", viewLay.scrollbarCol, viewLay)
 	}
-	if viewLay.leftMargin != 1 || viewLay.rightMargin != 1 {
-		t.Fatalf("body margins = (%d,%d), want one cell each", viewLay.leftMargin, viewLay.rightMargin)
+	if viewLay.leftMargin != editorSideCols || viewLay.rightMargin != editorSideCols {
+		t.Fatalf("body margins = (%d,%d), want %d each", viewLay.leftMargin, viewLay.rightMargin, editorSideCols)
 	}
 	if viewLay.statusRow != 0 {
 		t.Fatalf("status row %d, want 0", viewLay.statusRow)
 	}
-	if viewLay.contentRow != 2 {
-		t.Fatalf("content row %d, want one blank row below status", viewLay.contentRow)
+	if viewLay.contentRow != editorStatusRows+editorTopRows {
+		t.Fatalf("content row %d, want %d (status + %d blank rows)", viewLay.contentRow, editorStatusRows+editorTopRows, editorTopRows)
 	}
+}
+
+func firstBodyGlyph(pane string) (row, col int) {
+	lines := strings.Split(pane, "\n")
+	for i := 1; i < len(lines); i++ {
+		for j, r := range lines[i] {
+			if r != ' ' {
+				return i, j
+			}
+		}
+	}
+	return -1, -1
+}
+
+func TestMarkdownAndEditShareBodyOrigin(t *testing.T) {
+	p := layoutTestPlugin(t, "Hello notes body")
+	p.markdownView = true
+	l := p.editorLayout()
+
+	p.previewMode = true
+	p.invalidateViewSurface()
+	mdRow, mdCol := firstBodyGlyph(ansi.Strip(p.renderEditorPane(p.height-2, l.innerWidth)))
+
+	p.previewMode = false
+	p.updateTextareaDimensions()
+	edRow, edCol := firstBodyGlyph(ansi.Strip(p.renderEditorPane(p.height-2, l.innerWidth)))
+
+	if mdRow < 0 || edRow < 0 {
+		t.Fatalf("missing body glyph markdown=(%d,%d) edit=(%d,%d)", mdRow, mdCol, edRow, edCol)
+	}
+	if mdRow != edRow || mdCol != edCol {
+		t.Fatalf("body origin markdown=(%d,%d) edit=(%d,%d)", mdRow, mdCol, edRow, edCol)
+	}
+	if mdCol != l.leftMargin {
+		t.Fatalf("body col %d, want leftMargin %d", mdCol, l.leftMargin)
+	}
+	if mdRow != l.contentRow {
+		t.Fatalf("body row %d, want contentRow %d", mdRow, l.contentRow)
+	}
+}
+
+func TestMarkdownAndEditShareWrapWidth(t *testing.T) {
+	p := layoutTestPlugin(t, strings.Repeat("wrapme ", 48))
+	p.markdownView = true
+	l := p.editorLayout()
+
+	p.previewMode = true
+	p.invalidateViewSurface()
+	mdMax := maxBodyLineWidth(ansi.Strip(p.renderEditorPane(p.height-2, l.innerWidth)), l)
+
+	p.previewMode = false
+	p.updateTextareaDimensions()
+	edMax := maxBodyLineWidth(ansi.Strip(p.renderEditorPane(p.height-2, l.innerWidth)), l)
+
+	if mdMax != edMax {
+		t.Fatalf("wrap width markdown=%d edit=%d", mdMax, edMax)
+	}
+	if mdMax < 1 || mdMax > l.wrapColumn {
+		t.Fatalf("shared wrap width %d outside wrapColumn %d", mdMax, l.wrapColumn)
+	}
+}
+
+func maxBodyLineWidth(pane string, l editorLayout) int {
+	lines := strings.Split(pane, "\n")
+	maxWidth := 0
+	end := l.contentRow + l.contentHeight
+	if end > len(lines) {
+		end = len(lines)
+	}
+	for i := l.contentRow; i < end; i++ {
+		line := lines[i]
+		if l.leftMargin < len(line) {
+			line = line[l.leftMargin:]
+		}
+		if ansi.StringWidth(line) > l.wrapColumn {
+			line = ansi.Truncate(line, l.wrapColumn, "")
+		}
+		if w := ansi.StringWidth(strings.TrimRight(line, " ")); w > maxWidth {
+			maxWidth = w
+		}
+	}
+	return maxWidth
 }
 
 func TestEditorPaneAppliesSharedBreathingRoom(t *testing.T) {
@@ -99,10 +181,13 @@ func TestEditorPaneAppliesSharedBreathingRoom(t *testing.T) {
 		if len(lines) != p.height-paneChromeY {
 			t.Fatalf("preview=%v rendered %d inner rows, want %d", preview, len(lines), p.height-paneChromeY)
 		}
-		if strings.TrimSpace(lines[1]) != "" {
-			t.Fatalf("preview=%v row below status is not blank: %q", preview, lines[1])
+		for row := 1; row < l.contentRow; row++ {
+			if strings.TrimSpace(lines[row]) != "" {
+				t.Fatalf("preview=%v row %d above body is not blank: %q", preview, row, lines[row])
+			}
 		}
-		if !strings.HasPrefix(lines[l.contentRow], " body") {
+		wantPrefix := strings.Repeat(" ", l.leftMargin) + "body"
+		if !strings.HasPrefix(lines[l.contentRow], wantPrefix) {
 			t.Fatalf("preview=%v body lacks left inset at row %d: %q", preview, l.contentRow, lines[l.contentRow])
 		}
 		if ansi.StringWidth(lines[l.contentRow]) != l.innerWidth {

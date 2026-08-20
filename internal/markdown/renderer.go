@@ -20,26 +20,50 @@ const (
 
 // Renderer wraps Glamour for markdown rendering with caching.
 type Renderer struct {
-	mu          sync.RWMutex
-	renderer    *glamour.TermRenderer
-	lastWidth   int
-	styleKey    string
-	cache       map[uint64][]string
-	mappedCache map[uint64]MappedRender
+	mu              sync.RWMutex
+	renderer        *glamour.TermRenderer
+	lastWidth       int
+	styleKey        string
+	cache           map[uint64][]string
+	mappedCache     map[uint64]MappedRender
+	compactDocument bool
+}
+
+// RendererOption configures a Renderer at construction. Options are applied
+// once; the resulting renderer is safe for concurrent use.
+type RendererOption func(*Renderer)
+
+// CompactDocument drops Glamour's document margin and block prefix/suffix.
+// Hosts that already pad the pane (Notes) use this so the body origin matches
+// a plain wrap of the same width — entering edit then changes the cursor,
+// not the frame.
+func CompactDocument(r *Renderer) {
+	r.compactDocument = true
 }
 
 // NewRenderer creates a new markdown renderer instance.
-func NewRenderer() (*Renderer, error) {
-	return &Renderer{
+func NewRenderer(opts ...RendererOption) (*Renderer, error) {
+	r := &Renderer{
 		cache:       make(map[uint64][]string),
 		mappedCache: make(map[uint64]MappedRender),
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r, nil
 }
 
 // StyleKey returns the style key of the current theme snapshot. Consumers that
 // keep their own caches above this renderer should record it as a dependency.
 func (r *Renderer) StyleKey() string {
-	return CurrentThemeSnapshot().StyleKey()
+	return r.effectiveStyleKey(CurrentThemeSnapshot().StyleKey())
+}
+
+func (r *Renderer) effectiveStyleKey(base string) string {
+	if r.compactDocument {
+		return base + "|compact-doc"
+	}
+	return base
 }
 
 // RenderContent renders markdown content to styled lines using the current
@@ -59,7 +83,7 @@ func (r *Renderer) renderContent(content string, width int, snapshot ThemeSnapsh
 		return []string{}
 	}
 
-	styleKey := snapshot.StyleKey()
+	styleKey := r.effectiveStyleKey(snapshot.StyleKey())
 	key := r.cacheKey(content, width, styleKey)
 
 	// Check cache first (read lock)
@@ -125,6 +149,9 @@ func (r *Renderer) getOrCreateRenderer(width int, snapshot ThemeSnapshot, styleK
 
 	// Width or theme changed (or first use) - rebuild and clear caches
 	style, _ := BuildStyle(snapshot)
+	if r.compactDocument {
+		style = compactDocumentStyle(style)
+	}
 	renderer, err := glamour.NewTermRenderer(
 		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),

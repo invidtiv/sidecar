@@ -83,7 +83,7 @@ func (r *Renderer) RenderMapped(content string, width int) MappedRender {
 	}
 
 	snapshot := CurrentThemeSnapshot()
-	key := r.cacheKey(content, width, snapshot.StyleKey())
+	key := r.cacheKey(content, width, r.effectiveStyleKey(snapshot.StyleKey()))
 
 	r.mu.RLock()
 	if cached, ok := r.mappedCache[key]; ok {

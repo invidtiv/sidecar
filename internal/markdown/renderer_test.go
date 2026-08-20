@@ -4,6 +4,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestRenderer_Basic(t *testing.T) {
@@ -192,6 +194,61 @@ func TestRenderer_WidthZero(t *testing.T) {
 	// Should not panic and should return something
 	if lines == nil {
 		t.Error("Width 0 returned nil")
+	}
+}
+
+func TestCompactDocumentDropsChrome(t *testing.T) {
+	plain, err := NewRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact, err := NewRenderer(CompactDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const content = "Hello padding"
+	const width = 60
+	plainLines := plain.RenderContent(content, width)
+	compactLines := compact.RenderContent(content, width)
+	if len(plainLines) == 0 || len(compactLines) == 0 {
+		t.Fatalf("empty render plain=%d compact=%d", len(plainLines), len(compactLines))
+	}
+
+	if strings.TrimSpace(ansi.Strip(plainLines[0])) != "" {
+		t.Fatalf("default render should start with BlockPrefix blank, got %q", ansi.Strip(plainLines[0]))
+	}
+
+	first := -1
+	for i, line := range compactLines {
+		if strings.TrimSpace(ansi.Strip(line)) != "" {
+			first = i
+			break
+		}
+	}
+	if first != 0 {
+		t.Fatalf("compact body starts at row %d, want 0", first)
+	}
+	stripped := ansi.Strip(compactLines[0])
+	if strings.HasPrefix(stripped, "  Hello") {
+		t.Fatalf("compact render kept document margin: %q", stripped)
+	}
+	if !strings.HasPrefix(strings.TrimLeft(stripped, " "), "Hello") {
+		t.Fatalf("compact missing body: %q", stripped)
+	}
+	if plain.StyleKey() == compact.StyleKey() {
+		t.Fatal("compact renderer must not share the default style key")
+	}
+
+	mapped := compact.RenderMapped(content, width)
+	if len(mapped.Lines) == 0 {
+		t.Fatal("compact RenderMapped returned no lines")
+	}
+	if strings.TrimSpace(ansi.Strip(mapped.Lines[0])) == "" {
+		t.Fatalf("compact RenderMapped kept BlockPrefix: %q", ansi.Strip(mapped.Lines[0]))
+	}
+	if strings.HasPrefix(ansi.Strip(mapped.Lines[0]), "  Hello") {
+		t.Fatalf("compact RenderMapped kept document margin: %q", ansi.Strip(mapped.Lines[0]))
 	}
 }
 

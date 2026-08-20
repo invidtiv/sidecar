@@ -319,7 +319,7 @@ type UndoAction struct {
 
 // New creates a new Notes plugin.
 func New() *Plugin {
-	md, _ := markdown.NewRenderer()
+	md, _ := markdown.NewRenderer(markdown.CompactDocument)
 	p := &Plugin{
 		mouseHandler:   mouse.NewHandler(),
 		previewMode:    true,
