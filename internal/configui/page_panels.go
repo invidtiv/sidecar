@@ -26,6 +26,7 @@ const (
 	regionPanelTDPath      = "config-panel-td-path"
 	regionPanelTDRefresh   = "config-panel-td-refresh"
 	regionPanelConvDir     = "config-panel-conversations-dir"
+	regionPanelNotesEditor = "config-panel-notes-editor"
 	panelInputWidth        = 40
 	panelRestartNote       = "Takes effect after Sidecar restarts."
 	panelIDGit             = "git"
@@ -145,7 +146,11 @@ func (m *Model) buildPanels(b *paneBuilder) {
 
 	// Notes ----------------------------------------------------------------
 	notes := NotesIntegration()
-	m.panelRow(b, panelIDNotes, notes.Name, BetaBadge(), "Project notes, kept inside Sidecar",
+	notesDetail := "Project notes, kept inside Sidecar"
+	if !cfg.Plugins.TDMonitor.Enabled {
+		notesDetail += "; available when the td panel is on"
+	}
+	m.panelRow(b, panelIDNotes, notes.Name, "", notesDetail,
 		m.flagEnabled(notes.Flag), func(m *Model) tea.Cmd {
 			// Notes ships inside Sidecar: there is no command to look for and
 			// nothing to install, so the toggle is the whole story.
@@ -153,6 +158,17 @@ func (m *Model) buildPanels(b *paneBuilder) {
 			m.noteRestart()
 			return saveFlagCmd(toggleNotice("Notes panel", enabled), notes.Flag, enabled)
 		})
+	b.selectRow(regionPanelNotesEditor, "Default editor", panelInputWidth, []dropdownOption{
+		{id: config.NotesEditorBuiltin, label: "Built-in"},
+		{id: config.NotesEditorPane, label: "$EDITOR in pane"},
+	}, cfg.Plugins.Notes.DefaultEditor, func(m *Model, option dropdownOption) tea.Cmd {
+		return SaveCmd("Notes editor: "+option.label, func() error {
+			return config.SavePlugins(func(p *config.PluginsConfig) {
+				p.Notes.DefaultEditor = option.id
+			})
+		})
+	})
+	b.help("Enter and note-body clicks use this editor; i, e, and E remain explicit choices.")
 	b.blank()
 
 	// Conversations --------------------------------------------------------
@@ -178,6 +194,15 @@ func (m *Model) buildPanels(b *paneBuilder) {
 		b.note(m.restartNote)
 	}
 	b.lead("Sidecar decides which panels to build when it starts, so these switches apply on the next launch.")
+}
+
+// FocusNotesPreference opens the page that owns Notes enablement and puts the
+// detail cursor on its existing toggle. Setup surfaces use this rather than
+// inventing a second Notes setting.
+func (m *Model) FocusNotesPreference() {
+	m.Navigate(PagePanels)
+	m.detailFocus = true
+	m.focusControlByID(regionPanel + panelIDNotes)
 }
 
 // panelRow paints one surface as a two-line block. The ON/OFF pill is the

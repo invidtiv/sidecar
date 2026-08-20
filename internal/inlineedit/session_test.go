@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -39,6 +40,36 @@ func TestMouseCoordsMissesWithoutOrigin(t *testing.T) {
 	s := &Session{Host: fakeHost{w: 20, h: 10}}
 	if _, _, ok := s.MouseCoords(0, 0); ok {
 		t.Fatal("host without an origin must not map coordinates")
+	}
+}
+
+// Every document editor host (Notes, Files, project Workspace, and global
+// Sessions) forwards through Session. Keep the pane's terminal mode as the one
+// shared ownership gate so none of those hosts can inject SGR bytes into an
+// editor that did not request them.
+func TestMouseForwardingRequiresPaneMouseReporting(t *testing.T) {
+	s := &Session{Model: tty.New(nil), Active: true, Name: "editor"}
+	s.Model.Enter("editor", "")
+	s.Model.State.PaneWidth = 20
+	s.Model.State.PaneHeight = 10
+
+	for name, forward := range map[string]func() tea.Cmd{
+		"press": func() tea.Cmd { return s.ForwardMousePress(2, 3) },
+		"drag":  func() tea.Cmd { return s.ForwardMouseDrag(4, 5) },
+		"release": func() tea.Cmd {
+			return s.ForwardMouseRelease(4, 5)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s.Model.State.MouseReportingEnabled = false
+			if cmd := forward(); cmd != nil {
+				t.Fatalf("mouse-reporting off returned %T, want nil", cmd)
+			}
+			s.Model.State.MouseReportingEnabled = true
+			if cmd := forward(); cmd == nil {
+				t.Fatal("mouse-reporting on returned nil")
+			}
+		})
 	}
 }
 

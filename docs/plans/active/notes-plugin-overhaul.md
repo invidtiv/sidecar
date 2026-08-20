@@ -1,8 +1,9 @@
 # Notes Plugin Overhaul
 
-**Status:** Phase 3 is merge-ready on `notes-overhaul` through `f67be1b5`;
-td-4baaa6 and the inherited Phase 2 wrapped-click fix (td-2f6d46) are independently
-approved and closed. The branch has not been merged to `main`; Phase 4 remains deferred.
+**Status:** Phases 1-3 are merged to `main` through PR #289. td-4baaa6 and
+the inherited Phase 2 wrapped-click fix (td-2f6d46) are independently approved
+and closed. Phase 4 remains deferred; completed post-overhaul interaction and
+presentation work is recorded in `docs/plans/implemented/notes-post-overhaul-polish.md`.
 **Created:** 2026-08-17
 **Phase 1:** td-71789d and save-ownership follow-up td-244d0b — closed
 **Phase 2:** `5cd9719f` + `2d59bfdc`; review follow-ups td-2f6d46 and td-4b3a5c

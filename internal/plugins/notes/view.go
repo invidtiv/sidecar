@@ -36,6 +36,9 @@ func (p *Plugin) renderView() string {
 	if p.store == nil {
 		return p.renderInitMessage()
 	}
+	if p.setupNeeded {
+		return p.renderInitMessage()
+	}
 	if p.loading {
 		return p.renderLoading()
 	}
@@ -98,27 +101,20 @@ func (p *Plugin) renderTwoPaneLayout(height int) string {
 func (p *Plugin) renderListPane(height int) string {
 	var sb strings.Builder
 
-	// Get display notes (filtered or all)
+	listInner := p.listWidth - paneChromeX
+	if listInner < 1 {
+		listInner = 1
+	}
+
+	// Get display notes (filtered or all).
 	displayNotes := p.getDisplayNotes()
 	noteCount := len(displayNotes)
-	totalCount := len(p.notes)
 
-	// Header: "Notes (filter)" with count
-	sb.WriteString(styles.Title.Render("Notes"))
-
-	// Show filter indicator
-	filterLabel := p.viewFilter.String()
-	sb.WriteString(styles.Muted.Render(" [" + filterLabel + "]"))
-
-	// Show count
-	if p.searchQuery != "" {
-		sb.WriteString(styles.Muted.Render(fmt.Sprintf(" (%d/%d)", noteCount, totalCount)))
-	} else {
-		sb.WriteString(styles.Muted.Render(fmt.Sprintf(" (%d)", noteCount)))
-	}
+	// One aligned header row: title at left, count and state control at right.
+	sb.WriteString(p.listHeader(listInner, noteCount).view)
 	sb.WriteString("\n")
 
-	headerLines := 1
+	headerLines := 2 // title row + requested blank row
 
 	// Search input line (if in search mode or has query)
 	if p.searchMode || p.searchQuery != "" {
@@ -126,6 +122,8 @@ func (p *Plugin) renderListPane(height int) string {
 		sb.WriteString("\n")
 		headerLines++
 	}
+	// Keep one breathing row between the list chrome and note rows.
+	sb.WriteString("\n")
 
 	contentHeight := height - headerLines
 	if contentHeight < 1 {
@@ -136,14 +134,12 @@ func (p *Plugin) renderListPane(height int) string {
 	if noteCount == 0 {
 		if p.searchQuery != "" {
 			// No matches for search - show create prompt
-			sb.WriteString("\n")
 			sb.WriteString(styles.Muted.Render("No matches"))
 			sb.WriteString("\n\n")
 			sb.WriteString(styles.Subtle.Render("Press "))
 			sb.WriteString(styles.Code.Render("Enter"))
 			sb.WriteString(styles.Subtle.Render(" to create"))
 		} else {
-			sb.WriteString("\n")
 			sb.WriteString(styles.Muted.Render("No notes"))
 			sb.WriteString("\n")
 			sb.WriteString(styles.Subtle.Render("n=new"))
@@ -159,10 +155,6 @@ func (p *Plugin) renderListPane(height int) string {
 		end = noteCount
 	}
 
-	listInner := p.listWidth - paneChromeX
-	if listInner < 1 {
-		listInner = 1
-	}
 	bodyWidth := listInner - scrollbarWidth
 	if bodyWidth < 10 {
 		bodyWidth = 10
@@ -188,6 +180,74 @@ func (p *Plugin) renderListPane(height int) string {
 	return sb.String()
 }
 
+type notesListHeader struct {
+	view        string
+	filterX     int
+	filterWidth int
+}
+
+// listHeader is shared by paint and hit testing so the state pill cannot drift
+// away from its mouse target as the count, filter, or Nerd Font setting changes.
+func (p *Plugin) listHeader(width, noteCount int) notesListHeader {
+	if width < 1 {
+		return notesListHeader{}
+	}
+	count := fmt.Sprintf("%d", noteCount)
+	if p.searchQuery != "" {
+		count = fmt.Sprintf("%d/%d", noteCount, len(p.notes))
+	}
+	count = styles.Muted.Render(count)
+	pill := p.renderFilterPill()
+	pillWidth := ansi.StringWidth(pill)
+	right := count + " " + pill
+	rightWidth := ansi.StringWidth(right)
+	if rightWidth > width {
+		right = pill
+		rightWidth = pillWidth
+	}
+	if rightWidth > width {
+		right = ansi.Truncate(right, width, "")
+		rightWidth = ansi.StringWidth(right)
+		pillWidth = rightWidth
+	}
+
+	leftWidth := width - rightWidth
+	left := ""
+	if leftWidth > 0 {
+		titleWidth := leftWidth
+		if rightWidth > 0 {
+			titleWidth-- // one separating cell before the right-aligned control
+		}
+		if titleWidth > 0 {
+			left = styles.Title.Render(ansi.Truncate("Notes", titleWidth, ""))
+		}
+	}
+	leftCells := ansi.StringWidth(left)
+	view := left + strings.Repeat(" ", width-leftCells-rightWidth) + right
+	return notesListHeader{
+		view:        view,
+		filterX:     width - pillWidth,
+		filterWidth: pillWidth,
+	}
+}
+
+func (p *Plugin) renderFilterPill() string {
+	return styles.RenderPillWithStyle(p.viewFilter.String(), p.noteFilterStyle(), nil)
+}
+
+func (p *Plugin) noteFilterStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Background(styles.BgTertiary).Padding(0, 1).Bold(true)
+	switch p.viewFilter {
+	case FilterArchived:
+		style = style.Foreground(styles.Info)
+	case FilterDeleted:
+		style = style.Foreground(styles.Error)
+	default:
+		style = style.Foreground(styles.Success)
+	}
+	return style
+}
+
 // renderEditorPane renders the editor pane content (without borders).
 func (p *Plugin) renderEditorPane(height, width int) string {
 	// Render inline editor if active
@@ -200,27 +260,29 @@ func (p *Plugin) renderEditorPane(height, width int) string {
 		return p.renderEditorPlaceholder(height)
 	}
 
-	var sb strings.Builder
-
 	l := p.editorLayout()
-	sb.WriteString(p.renderEditorStatusHeader(l.innerWidth))
-	sb.WriteString("\n")
-
 	bar := p.editorScrollbar(l)
+	var body string
 	if p.previewMode {
-		body := p.renderViewSurface(l.contentHeight)
-		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
+		body = p.renderViewSurface(l.contentHeight)
 	} else {
 		p.editorTextarea.SetWidth(l.wrapColumn)
 		p.editorTextarea.SetHeight(l.contentHeight)
-		body := p.editorTextarea.View()
+		body = p.editorTextarea.View()
 		if p.selection.HasSelection() {
 			body = p.overlaySelectionOnEditor(body)
 		}
-		sb.WriteString(attachScrollbar(body, bar, l.wrapColumn, l.contentHeight))
 	}
 
-	return sb.String()
+	lines := []string{p.renderEditorStatusHeader(l.innerWidth)}
+	for i := 0; i < editorTopRows; i++ {
+		lines = append(lines, "")
+	}
+	lines = append(lines, strings.Split(insetEditorBody(body, bar, l), "\n")...)
+	for i := 0; i < editorBottomRows; i++ {
+		lines = append(lines, "")
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderViewSurface draws the current mapped view (glamour or wrapped raw)
@@ -294,8 +356,8 @@ func (p *Plugin) overlaySelectionOnEditor(view string) string {
 }
 
 // renderEditorStatusHeader renders the persistent status header line.
-// Left: save state indicator, Right: created/updated timestamps. Timestamp
-// detail degrades before the actionable save state when the pane narrows.
+// Right: the best date detail that fits followed by the actionable save-state
+// symbol. Date and view-mode detail degrade before the symbol on narrow panes.
 func (p *Plugin) renderEditorStatusHeader(width int) string {
 	if p.editorNote == nil {
 		return ""
@@ -304,45 +366,48 @@ func (p *Plugin) renderEditorStatusHeader(width int) string {
 		return ""
 	}
 
-	// Left side: save state + optional preview indicator
-	var leftText string
-	if p.editorDirty {
-		leftText = "Unsaved*"
-	} else {
-		leftText = "Saved"
-	}
+	leftText := ""
 	if p.previewMode {
 		if p.markdownView {
-			leftText += " [md]"
+			leftText = "[md]"
 		} else {
-			leftText += " [raw]"
+			leftText = "[raw]"
 		}
 	}
-
-	leftText = ansi.Truncate(leftText, width, "...")
 	leftPart := styles.Muted.Render(leftText)
-	if p.editorDirty {
-		leftPart = styles.StatusModified.Render(leftText)
-	}
 	leftWidth := lipgloss.Width(leftPart)
 
 	createdStr := p.editorNote.CreatedAt.Format("Jan 2, 2006")
 	updatedStr := p.editorNote.UpdatedAt.Format("Jan 2, 2006")
-	rightCandidates := []string{
+	dateCandidates := []string{
 		fmt.Sprintf("Created: %s | Updated: %s", createdStr, updatedStr),
 		fmt.Sprintf("Updated: %s", updatedStr),
+		updatedStr,
+		"",
 	}
-	for _, rightText := range rightCandidates {
-		rightPart := styles.Muted.Render(rightText)
+	stateSymbol, stateStyle := "•", styles.StatusStaged
+	if p.saveErr != nil {
+		stateSymbol, stateStyle = "!", styles.StatusDeleted
+	} else if p.editorDirty || p.saveInFlight || p.exportSaveInFlight {
+		stateSymbol, stateStyle = "*", styles.StatusModified
+	}
+	statePart := stateStyle.Render(stateSymbol)
+	for _, dateText := range dateCandidates {
+		rightPart := statePart
+		if dateText != "" {
+			rightPart = styles.Muted.Render(dateText) + " " + statePart
+		}
 		rightWidth := lipgloss.Width(rightPart)
-		if leftWidth+1+rightWidth > width {
+		if rightWidth > width {
 			continue
 		}
-		return leftPart + strings.Repeat(" ", width-leftWidth-rightWidth) + rightPart
+		if leftWidth > 0 && leftWidth+1+rightWidth <= width {
+			return leftPart + strings.Repeat(" ", width-leftWidth-rightWidth) + rightPart
+		}
+		return strings.Repeat(" ", width-rightWidth) + rightPart
 	}
 
-	// Save state is actionable; retain it when timestamp metadata cannot fit.
-	return padToWidth(leftPart, width)
+	return ""
 }
 
 // renderEditorPlaceholder shows when no note is selected.
@@ -462,9 +527,9 @@ func (p *Plugin) renderInitMessage() string {
 	var sb strings.Builder
 	sb.WriteString(styles.Title.Render("Notes"))
 	sb.WriteString("\n\n")
-	sb.WriteString(styles.Muted.Render("Notes plugin requires td initialization."))
+	sb.WriteString(styles.Muted.Render("Notes uses td storage, and this project is not initialized yet."))
 	sb.WriteString("\n")
-	sb.WriteString(styles.Code.Render("Run 'td init' in this project."))
+	sb.WriteString(styles.Code.Render("Press Enter to set up td, or r to check again."))
 	return sb.String()
 }
 

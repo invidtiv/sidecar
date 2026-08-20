@@ -83,7 +83,7 @@ func TestConversationsWanted(t *testing.T) {
 func TestPlan_DefaultOmitsConversations(t *testing.T) {
 	initFeatures(t, nil)
 	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,workspace-manager"
+	want := "td-monitor,git-status,file-browser,workspace-manager,notes"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -95,7 +95,7 @@ func TestPlan_DefaultOmitsConversations(t *testing.T) {
 func TestPlan_ConversationsWhenFlagOn(t *testing.T) {
 	initFeatures(t, map[string]bool{features.ConversationsPlugin.Name: true})
 	got := join(Plan(config.Default()))
-	want := "td-monitor,git-status,file-browser,conversations,workspace-manager"
+	want := "td-monitor,git-status,file-browser,conversations,workspace-manager,notes"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
@@ -106,10 +106,46 @@ func TestPlan_ConversationsFlagOnConfigOff(t *testing.T) {
 	cfg := config.Default()
 	cfg.Plugins.Conversations.Enabled = false
 	got := join(Plan(cfg))
-	want := "td-monitor,git-status,file-browser,workspace-manager"
+	want := "td-monitor,git-status,file-browser,workspace-manager,notes"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
+}
+
+func TestNotesWantedRequiresFeatureAndTDPanel(t *testing.T) {
+	t.Run("defaults on with td", func(t *testing.T) {
+		initFeatures(t, nil)
+		if !NotesWanted(config.Default()) {
+			t.Fatal("default configuration did not include stable Notes")
+		}
+	})
+
+	t.Run("explicit notes opt out wins", func(t *testing.T) {
+		initFeatures(t, map[string]bool{features.NotesPlugin.Name: false})
+		if NotesWanted(config.Default()) {
+			t.Fatal("explicit Notes false was ignored")
+		}
+	})
+
+	t.Run("td off hides without rewriting notes", func(t *testing.T) {
+		initFeatures(t, map[string]bool{features.NotesPlugin.Name: true})
+		cfg := config.Default()
+		cfg.Plugins.TDMonitor.Enabled = false
+		if NotesWanted(cfg) {
+			t.Fatal("Notes remained visible with td disabled")
+		}
+		if !features.IsEnabled(features.NotesPlugin.Name) {
+			t.Fatal("td gating rewrote the Notes preference")
+		}
+	})
+
+	t.Run("cli override still wins", func(t *testing.T) {
+		initFeatures(t, nil)
+		features.SetOverride(features.NotesPlugin.Name, false)
+		if NotesWanted(config.Default()) {
+			t.Fatal("CLI disable was ignored")
+		}
+	})
 }
 
 // Tasks is a global tab owned by the app shell, not a project plugin: no
@@ -161,16 +197,15 @@ func TestPlan_TabIndexIsDerived(t *testing.T) {
 
 	initFeatures(t, map[string]bool{features.NotesPlugin.Name: true})
 	cfg := config.Default()
-	cfg.Plugins.TDMonitor.Enabled = false
 	cfg.Plugins.GitStatus.Enabled = false
 	cfg.Plugins.FileBrowser.Enabled = false
 	cfg.Plugins.Conversations.Enabled = false
 	trimmed := Plan(cfg)
-	if got := join(trimmed); got != "workspace-manager,notes" {
+	if got := join(trimmed); got != "td-monitor,workspace-manager,notes" {
 		t.Fatalf("trimmed plan = %q", got)
 	}
-	if got := indexOf(trimmed, IDNotes); got != 1 {
-		t.Errorf("notes index with plugins disabled = %d, want 1", got)
+	if got := indexOf(trimmed, IDNotes); got != 2 {
+		t.Errorf("notes index with plugins disabled = %d, want 2", got)
 	}
 }
 

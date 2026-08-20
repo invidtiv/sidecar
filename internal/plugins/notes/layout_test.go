@@ -1,12 +1,19 @@
 package notes
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -67,14 +74,43 @@ func TestEditorLayoutGeometryParity(t *testing.T) {
 	if p.editorTextarea.Height() != viewLay.contentHeight {
 		t.Fatalf("textarea height %d, want content height %d", p.editorTextarea.Height(), viewLay.contentHeight)
 	}
-	if viewLay.scrollbarCol != viewLay.innerWidth-1 {
-		t.Fatalf("scrollbar col %d, want innerWidth-1=%d", viewLay.scrollbarCol, viewLay.innerWidth-1)
+	if viewLay.scrollbarCol != viewLay.innerWidth-viewLay.rightMargin-1 {
+		t.Fatalf("scrollbar col %d does not leave right margin %+v", viewLay.scrollbarCol, viewLay)
 	}
-	if viewLay.leftMargin != 0 {
-		t.Fatalf("left margin %d, want 0 (no gutter)", viewLay.leftMargin)
+	if viewLay.leftMargin != 1 || viewLay.rightMargin != 1 {
+		t.Fatalf("body margins = (%d,%d), want one cell each", viewLay.leftMargin, viewLay.rightMargin)
 	}
 	if viewLay.statusRow != 0 {
 		t.Fatalf("status row %d, want 0", viewLay.statusRow)
+	}
+	if viewLay.contentRow != 2 {
+		t.Fatalf("content row %d, want one blank row below status", viewLay.contentRow)
+	}
+}
+
+func TestEditorPaneAppliesSharedBreathingRoom(t *testing.T) {
+	p := layoutTestPlugin(t, "body")
+	l := p.editorLayout()
+
+	for _, preview := range []bool{true, false} {
+		p.previewMode = preview
+		got := ansi.Strip(p.renderEditorPane(p.height-2, l.innerWidth))
+		lines := strings.Split(got, "\n")
+		if len(lines) != p.height-paneChromeY {
+			t.Fatalf("preview=%v rendered %d inner rows, want %d", preview, len(lines), p.height-paneChromeY)
+		}
+		if strings.TrimSpace(lines[1]) != "" {
+			t.Fatalf("preview=%v row below status is not blank: %q", preview, lines[1])
+		}
+		if !strings.HasPrefix(lines[l.contentRow], " body") {
+			t.Fatalf("preview=%v body lacks left inset at row %d: %q", preview, l.contentRow, lines[l.contentRow])
+		}
+		if ansi.StringWidth(lines[l.contentRow]) != l.innerWidth {
+			t.Fatalf("preview=%v body row width %d, want %d: %q", preview, ansi.StringWidth(lines[l.contentRow]), l.innerWidth, lines[l.contentRow])
+		}
+		if strings.TrimSpace(lines[len(lines)-1]) != "" {
+			t.Fatalf("preview=%v bottom row is not blank: %q", preview, lines[len(lines)-1])
+		}
 	}
 }
 
@@ -278,8 +314,8 @@ func TestEditorStatusHeaderKeepsSaveStateAtNarrowWidths(t *testing.T) {
 	for _, width := range []int{12, 24, 40} {
 		got := p.renderEditorStatusHeader(width)
 		plain := ansi.Strip(got)
-		if !strings.Contains(plain, "Saved") {
-			t.Fatalf("width %d lost save state: %q", width, plain)
+		if !strings.HasSuffix(plain, "•") {
+			t.Fatalf("width %d lost saved symbol: %q", width, plain)
 		}
 		if gotWidth := ansi.StringWidth(got); gotWidth != width {
 			t.Fatalf("width %d rendered %d cells: %q", width, gotWidth, plain)
@@ -287,9 +323,145 @@ func TestEditorStatusHeaderKeepsSaveStateAtNarrowWidths(t *testing.T) {
 	}
 
 	p.editorDirty = true
-	got := ansi.Strip(p.renderEditorStatusHeader(12))
-	if !strings.Contains(got, "Unsaved") {
-		t.Fatalf("narrow dirty header lost unsaved state: %q", got)
+	got := ansi.Strip(p.renderEditorStatusHeader(1))
+	if got != "*" {
+		t.Fatalf("one-cell dirty header = %q, want unsaved star", got)
+	}
+	p.saveErr = errors.New("disk full")
+	got = ansi.Strip(p.renderEditorStatusHeader(1))
+	if got != "!" {
+		t.Fatalf("one-cell failed header = %q, want failure mark", got)
+	}
+}
+
+func TestListHeaderCountFilterAndSpacing(t *testing.T) {
+	p := layoutTestPlugin(t)
+	p.notes = make([]Note, 14)
+	for i := range p.notes {
+		p.notes[i] = Note{ID: fmt.Sprintf("n-%d", i), Title: fmt.Sprintf("note %d", i)}
+	}
+	p.viewFilter = FilterActive
+
+	plain := strings.Split(ansi.Strip(p.renderListPane(10)), "\n")
+	fields := strings.Fields(plain[0])
+	if !strings.HasPrefix(plain[0], "Notes") || len(fields) < 3 || fields[len(fields)-2] != "14" || fields[len(fields)-1] != "Active" {
+		t.Fatalf("header is not title-left/count+state-right: %q", plain[0])
+	}
+	if strings.Contains(plain[0], "(14)") {
+		t.Fatalf("count retained parentheses: %q", plain[0])
+	}
+	if plain[1] != "" {
+		t.Fatalf("row below title is not blank: %q", plain[1])
+	}
+
+	p.searchQuery = "note 1"
+	p.updateFilteredNotes()
+	header := ansi.Strip(p.listHeader(p.listWidth-paneChromeX, len(p.getDisplayNotes())).view)
+	if !strings.Contains(header, fmt.Sprintf("%d/14", len(p.getDisplayNotes()))) {
+		t.Fatalf("search count is ambiguous: %q", header)
+	}
+}
+
+func TestFilterPillColorsFollowThemeRoles(t *testing.T) {
+	p := layoutTestPlugin(t)
+	want := map[NoteFilter]any{
+		FilterActive:   styles.Success,
+		FilterArchived: styles.Info,
+		FilterDeleted:  styles.Error,
+	}
+	for filter, color := range want {
+		p.viewFilter = filter
+		if got := fmt.Sprint(p.noteFilterStyle().GetForeground()); got != fmt.Sprint(color) {
+			t.Fatalf("%s pill color = %s, want %v", filter, got, color)
+		}
+	}
+	textStyle := p.editorTextarea.Styles().Focused.Text
+	if got, want := fmt.Sprint(textStyle.GetForeground()), fmt.Sprint(styles.Body.GetForeground()); got != want {
+		t.Fatalf("built-in editor text color = %s, preview body = %s", got, want)
+	}
+
+	originalTheme := styles.GetCurrentThemeName()
+	t.Cleanup(func() { styles.ApplyTheme(originalTheme) })
+	styles.ApplyTheme("dracula")
+	_, _ = p.Update(app.ThemeChangedMsg{})
+	textStyle = p.editorTextarea.Styles().Focused.Text
+	if got, want := fmt.Sprint(textStyle.GetForeground()), fmt.Sprint(styles.Body.GetForeground()); got != want {
+		t.Fatalf("theme change left editor text at %s, preview body moved to %s", got, want)
+	}
+}
+
+func TestFilterShortcutsToggleAndPillCycles(t *testing.T) {
+	p := layoutTestPlugin(t)
+	p.ctx = &plugin.Context{Epoch: 1, ProjectRoot: t.TempDir()}
+	p.notes = []Note{} // exercise shortcuts even when the current filter is empty
+
+	p.viewFilter = FilterArchived
+	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	if p.viewFilter != FilterActive {
+		t.Fatalf("a from Archived selected %s, want Active", p.viewFilter)
+	}
+	p.viewFilter = FilterDeleted
+	_, _ = p.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if p.viewFilter != FilterActive {
+		t.Fatalf("x from Deleted selected %s, want Active", p.viewFilter)
+	}
+
+	p.viewFilter = FilterActive
+	p.registerMouseRegions()
+	var region *mouse.Region
+	for _, candidate := range p.mouseHandler.HitMap.Regions() {
+		if candidate.ID == regionListFilter {
+			copy := candidate
+			region = &copy
+			break
+		}
+	}
+	if region == nil {
+		t.Fatal("state pill has no mouse hit region")
+	}
+	header := p.listHeader(p.listWidth-paneChromeX, len(p.getDisplayNotes()))
+	if region.Rect.X != 2+header.filterX || region.Rect.Y != 1 || region.Rect.W != header.filterWidth {
+		t.Fatalf("pill hit region %+v does not match painted header %+v", region.Rect, header)
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{Region: region})
+	if p.viewFilter != FilterArchived {
+		t.Fatalf("first pill click selected %s, want Archived", p.viewFilter)
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{Region: region})
+	if p.viewFilter != FilterDeleted {
+		t.Fatalf("second pill click selected %s, want Deleted", p.viewFilter)
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{Region: region})
+	if p.viewFilter != FilterActive {
+		t.Fatalf("third pill click selected %s, want Active", p.viewFilter)
+	}
+}
+
+func TestFilterCommandsAdvertiseToggleBindings(t *testing.T) {
+	p := layoutTestPlugin(t)
+	p.activePane = PaneList
+	for _, tc := range []struct {
+		filter NoteFilter
+		id     string
+		name   string
+	}{
+		{FilterActive, "show-archived", "Archived"},
+		{FilterArchived, "show-archived", "Active"},
+		{FilterDeleted, "show-deleted", "Active"},
+	} {
+		p.viewFilter = tc.filter
+		found := false
+		for _, command := range p.Commands() {
+			if command.ID == tc.id {
+				found = true
+				if command.Name != tc.name || command.Context != "notes-list" {
+					t.Fatalf("filter=%s command=%s got name/context %q/%q", tc.filter, tc.id, command.Name, command.Context)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("filter=%s did not advertise %s", tc.filter, tc.id)
+		}
 	}
 }
 

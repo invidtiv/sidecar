@@ -160,6 +160,76 @@ func TestSelectAllAndAltSExtend(t *testing.T) {
 	}
 }
 
+func TestMacEditorChordsUseDeliveredSuperAndExactModifiers(t *testing.T) {
+	p := newEditPlugin(t, "ab\ncd")
+
+	// Some terminals populate Text even for a modified chord. ModSuper still
+	// owns the action and must not type a literal a.
+	typeKey(p, tea.KeyPressMsg{Code: 'a', Text: "a", Mod: tea.ModSuper})
+	if got := strings.Join(p.getSelectedText(), "\n"); got != "ab\ncd" {
+		t.Fatalf("super+a selection = %q", got)
+	}
+	if got := p.editorTextarea.Value(); got != "ab\ncd" {
+		t.Fatalf("super+a typed into note: %q", got)
+	}
+	p.clearEditSelection()
+	typeKey(p, tea.KeyPressMsg{Code: 'a', Text: "a", Mod: tea.ModSuper | tea.ModCapsLock})
+	if !p.hasEditSelection() {
+		t.Fatal("caps lock prevented an otherwise exact super+a chord")
+	}
+
+	p.clearEditSelection()
+	p.setTextareaCursorPosition(1, 1)
+	typeKey(p, tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModSuper})
+	if row, col := p.editorTextarea.Line(), p.editorTextarea.Column(); row != 0 || col != 0 {
+		t.Fatalf("super+up caret = %d:%d, want 0:0", row, col)
+	}
+	typeKey(p, tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModSuper})
+	if row, col := p.editorTextarea.Line(), p.editorTextarea.Column(); row != 1 || col != 2 {
+		t.Fatalf("super+down caret = %d:%d, want 1:2", row, col)
+	}
+
+	p.setTextareaCursorPosition(1, 1)
+	typeKey(p, tea.KeyPressMsg{Code: tea.KeyUp, Mod: tea.ModSuper | tea.ModShift})
+	if got := strings.Join(p.getSelectedText(), "\n"); got != "ab\nc" {
+		t.Fatalf("shift+super+up selection = %q, want %q", got, "ab\nc")
+	}
+
+	p.clearEditSelection()
+	p.setTextareaCursorPosition(0, 1)
+	typeKey(p, tea.KeyPressMsg{Code: tea.KeyDown, Mod: tea.ModSuper | tea.ModShift})
+	if got := strings.Join(p.getSelectedText(), "\n"); got != "b\ncd" {
+		t.Fatalf("shift+super+down selection = %q, want %q", got, "b\ncd")
+	}
+
+	p.clearEditSelection()
+	typeKey(p, tea.KeyPressMsg{Code: 'a', Text: "a", Mod: tea.ModSuper | tea.ModAlt})
+	if p.hasEditSelection() {
+		t.Fatal("super+alt+a was mistaken for exact super+a")
+	}
+}
+
+func TestEmacsLineAndVerticalMotionsRemainBuiltInEditorOwned(t *testing.T) {
+	p := newEditPlugin(t, "abc\ndef")
+	p.setTextareaCursorPosition(0, 2)
+	typeKey(p, tea.KeyPressMsg{Code: 'e', Mod: tea.ModCtrl})
+	if got := p.editorTextarea.Column(); got != 3 {
+		t.Fatalf("ctrl+e column = %d, want 3", got)
+	}
+	typeKey(p, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if got := p.editorTextarea.Column(); got != 0 {
+		t.Fatalf("ctrl+a column = %d, want 0", got)
+	}
+	typeKey(p, tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl})
+	if got := p.editorTextarea.Line(); got != 1 {
+		t.Fatalf("ctrl+n line = %d, want 1", got)
+	}
+	typeKey(p, tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if got := p.editorTextarea.Line(); got != 0 {
+		t.Fatalf("ctrl+p line = %d, want 0", got)
+	}
+}
+
 func TestWrappedSelectionOverlayAndResize(t *testing.T) {
 	content := strings.Repeat("word ", 40)
 	p := newEditPlugin(t, content)

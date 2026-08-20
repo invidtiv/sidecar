@@ -535,6 +535,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// last was.
 		return m, m.openConfiguration(msg.Page)
 
+	case OpenNotesPreferencesMsg:
+		cmd := m.openConfiguration(configui.PagePanels)
+		m.config.FocusNotesPreference()
+		m.updateContext()
+		return m, cmd
+
 	case overview.OpenInGitMsg:
 		return m, m.openInGitFromOverview(msg.Path)
 

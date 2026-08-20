@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/palette"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/version"
 )
@@ -388,6 +389,8 @@ func TestConfigurationFieldTypingDoesNotTriggerGlobalShortcuts(t *testing.T) {
 func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	m = typeKey(t, m, ",")
+	liveContext := &plugin.Context{Config: config.Default()}
+	m.registry = plugin.NewRegistry(liveContext)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
@@ -401,6 +404,7 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	cfg.UI.ShowClock = true
 	cfg.UI.NerdFontsEnabled = true
 	cfg.UI.TerminalTitle = "{dir}"
+	cfg.Plugins.Notes.DefaultEditor = config.NotesEditorPane
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -418,6 +422,9 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	}
 	if !styles.PillTabsEnabled {
 		t.Fatal("the host did not apply the saved Nerd Font setting")
+	}
+	if liveContext.Config == nil || liveContext.Config.Plugins.Notes.DefaultEditor != config.NotesEditorPane {
+		t.Fatal("the host did not refresh the live plugin configuration")
 	}
 }
 

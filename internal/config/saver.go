@@ -48,7 +48,12 @@ type savePluginsConfig struct {
 	FileBrowser   saveFileBrowserConfig   `json:"file-browser,omitempty"`
 	Conversations saveConversationsConfig `json:"conversations,omitempty"`
 	Workspace     saveWorkspaceConfig     `json:"workspace,omitempty"`
+	Notes         saveNotesConfig         `json:"notes,omitempty"`
 	Tasks         saveTasksConfig         `json:"tasks,omitempty"`
+}
+
+type saveNotesConfig struct {
+	DefaultEditor string `json:"defaultEditor,omitempty"`
 }
 
 type saveTasksConfig struct {
@@ -120,6 +125,9 @@ func toSaveConfig(cfg *Config) saveConfig {
 			},
 			Tasks: saveTasksConfig{
 				Position: cfg.Plugins.Tasks.Position,
+			},
+			Notes: saveNotesConfig{
+				DefaultEditor: cfg.Plugins.Notes.DefaultEditor,
 			},
 			Workspace: saveWorkspaceConfig{
 				DirPrefix:             &cfg.Plugins.Workspace.DirPrefix,

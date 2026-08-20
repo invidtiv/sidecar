@@ -359,6 +359,9 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 	var themeCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		if m.registry != nil && m.registry.Context() != nil {
+			m.registry.Context().Config = cfg
+		}
 		// Saving the config screen is the moment an edited expiry takes
 		// effect; notifications posted afterwards use the new value.
 		notify.ApplyConfig(cfg.Notifications)

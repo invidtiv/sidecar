@@ -102,6 +102,9 @@ func (p *Plugin) openTaskModal() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
+	}
 	if p.editorDirty {
 		noteID := note.ID
 		return p.saveBefore(func() tea.Cmd {
@@ -209,6 +212,9 @@ func (p *Plugin) handleTaskModalMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 func (p *Plugin) createTaskFromNote() tea.Cmd {
 	if p.taskModalNote == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(p.taskModalNote.ID); ok {
+		return blocked
 	}
 
 	// Get values from form

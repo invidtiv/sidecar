@@ -204,9 +204,18 @@ type OpenConfigurationMsg struct {
 	Page configui.PageID
 }
 
+// OpenNotesPreferencesMsg asks the host to open the one existing Notes
+// enablement control and focus it. It is separate from the generic page route
+// so a setup dialog does not need to know Configuration's private control ID.
+type OpenNotesPreferencesMsg struct{}
+
 // OpenConfiguration returns a command that opens Configuration on a page.
 func OpenConfiguration(page configui.PageID) tea.Cmd {
 	return func() tea.Msg { return OpenConfigurationMsg{Page: page} }
+}
+
+func OpenNotesPreferences() tea.Cmd {
+	return func() tea.Msg { return OpenNotesPreferencesMsg{} }
 }
 
 // SwitchWorktreeMsg requests switching to a different worktree.

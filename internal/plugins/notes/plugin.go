@@ -17,6 +17,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -25,6 +26,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tdsetup"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -103,6 +105,18 @@ type Plugin struct {
 	loadErr     error
 	recoveryErr error
 
+	// td setup is offered only after the first asynchronous store probe says
+	// this project has no .todos environment. Nothing here is touched by Init
+	// or View until that command has settled.
+	setupNeeded       bool
+	showSetupModal    bool
+	setupModal        *modal.Modal
+	setupModalWidth   int
+	setupMouseHandler *mouse.Handler
+	setupErr          error
+	setupInitializing bool
+	setupDismissed    bool
+
 	// g key state for g g sequence
 	pendingG bool
 
@@ -145,6 +159,7 @@ type Plugin struct {
 	// (logical line + rune offset). View-mode (archived/deleted) selection
 	// still uses visual rows for copy-only drags.
 	selection ui.SelectionState
+	pointer   tty.Pointer       // shared character/word/line mouse gesture state
 	selAnchor ui.SelectionPoint // keyboard/mouse extend origin
 	selExtend bool              // alt+s: ordinary movement extends
 
@@ -178,8 +193,12 @@ type Plugin struct {
 	infoModalNote         *Note
 	infoModalMouseHandler *mouse.Handler
 
-	// Pending edit state (for auto-edit on new note)
-	pendingEditID string
+	// Structural create/delete state. All list snapshots reconcile through
+	// this one optimistic owner while td persists the mutation.
+	mutation       *noteMutation
+	nextMutationID uint64
+	mutationErr    error
+	mutationAction string
 
 	// External editor state (for reading back content after $EDITOR exits)
 	pendingInlineEditID    string // Note ID being edited
@@ -202,6 +221,7 @@ type Plugin struct {
 	inlineEditNoteID    string
 	orphanEditSession   string    // Defensive re-init cleanup, executed asynchronously in Start
 	lastDragForwardTime time.Time // Throttle: last time a drag event was forwarded to tmux
+	inlineWheel         tty.WheelBurst
 
 	// Inline auto-save state (for periodic saving during inline edit)
 	inlineAutoSaveGen      int    // Generation for staleness check
@@ -228,7 +248,7 @@ type Plugin struct {
 
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
-
+	undoErr   error
 }
 
 // notePlace is the session-only view/edit position for one note.
@@ -261,7 +281,7 @@ func newEditorTextarea() textarea.Model {
 		LineNumber:       styles.Muted,
 		Placeholder:      styles.Muted,
 		Prompt:           lipgloss.NewStyle(),
-		Text:             lipgloss.NewStyle(),
+		Text:             styles.Body,
 	}
 	taStyles := ta.Styles()
 	taStyles.Focused = focusedStyle
@@ -270,6 +290,13 @@ func newEditorTextarea() textarea.Model {
 	ta.KeyMap.CapitalizeWordForward = key.NewBinding(key.WithDisabled())
 	ta.Blur()
 	return ta
+}
+
+func (p *Plugin) applyEditorTextTheme() {
+	taStyles := p.editorTextarea.Styles()
+	taStyles.Focused.Text = styles.Body
+	taStyles.Blurred.Text = styles.Body
+	p.editorTextarea.SetStyles(taStyles)
 }
 
 // UndoActionType represents the type of undoable action.
@@ -352,10 +379,24 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.loading = false
 	p.loadErr = nil
 	p.recoveryErr = nil
+	p.setupNeeded = false
+	p.showSetupModal = false
+	p.setupModal = nil
+	p.setupModalWidth = 0
+	p.setupErr = nil
+	p.setupInitializing = false
+	p.setupDismissed = false
+	if p.setupMouseHandler == nil {
+		p.setupMouseHandler = mouse.NewHandler()
+	}
 	p.pendingG = false
 	p.searchMode = false
 	p.searchQuery = ""
 	p.filteredNotes = nil
+	p.mutation = nil
+	p.nextMutationID = 0
+	p.mutationErr = nil
+	p.mutationAction = ""
 
 	// Pane state
 	p.activePane = PaneList
@@ -377,6 +418,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.selExtend = false
 	p.editHistories = make(map[string]*editHistory)
 	p.lastSavedContent = ""
+	p.undoErr = nil
 
 	// Editor state
 	p.editorNote = nil
@@ -496,7 +538,11 @@ func (p *Plugin) Stop() {
 		}
 	}
 	p.exportCheckpointFailed = !allExportsCheckpointed
-	if p.needsEditorCheckpoint() {
+	// A pending create has no td identity yet. Its content save is deliberately
+	// queued for the Create result; lifecycle teardown must not turn that queue
+	// into SaveContent(local-note-N).
+	checkpointPendingCreate := p.editorNote != nil && p.pendingCreateID(p.editorNote.ID)
+	if p.needsEditorCheckpoint() && !checkpointPendingCreate {
 		root := ""
 		var logger *slog.Logger
 		if p.ctx != nil {
@@ -656,6 +702,10 @@ func (p *Plugin) persistOrderedLocked(store noteStore, projectRoot, noteID, cont
 
 // Update handles messages.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if _, ok := msg.(app.ThemeChangedMsg); ok {
+		p.applyEditorTextTheme()
+		return p, nil
+	}
 	// Handle exit confirmation dialog first
 	if p.edit.ShowExitConfirm {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
@@ -752,27 +802,25 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.RecoveryErr != nil && p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Error("notes: unsaved draft recovery failed", "error", msg.RecoveryErr)
 		}
-		if msg.Err != nil {
+		if errors.Is(msg.Err, tdsetup.ErrNotInitialized) {
+			p.setupNeeded = true
+			p.loadErr = nil
+			p.setupErr = nil
+			if !p.setupDismissed {
+				p.showSetupModal = true
+				p.clearSetupModal()
+			}
+		} else if msg.Err != nil {
 			p.loadErr = msg.Err
 			p.ctx.Logger.Error("notes: load failed", "error", msg.Err)
 		} else {
-			p.notes = msg.Notes
+			p.setupNeeded = false
+			p.showSetupModal = false
+			p.setupDismissed = false
+			p.notes = p.reconcileMutation(msg.Notes)
 			p.loadErr = nil
 
-			// Auto-edit mode: a note we just created opens in the simple editor
-			// with the cursor at the end, ready to type into.
-			if p.pendingEditID != "" {
-				for i, n := range p.notes {
-					if n.ID == p.pendingEditID {
-						p.cursor = i
-						p.activePane = PaneEditor
-						p.previewMode = false
-						p.pendingEditID = ""
-						return p, p.loadNoteIntoEditorAtEnd()
-					}
-				}
-				p.pendingEditID = ""
-			} else if p.editorNote != nil {
+			if p.editorNote != nil {
 				// Follow the edited note if it moved position (due to updated_at sort)
 				for i, n := range p.notes {
 					if n.ID == p.editorNote.ID {
@@ -803,19 +851,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
 			return p, nil
 		}
+		if msg.MutationID != 0 {
+			return p, p.finishOptimisticCreate(msg)
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: save failed", "error", msg.Err)
 		} else {
-			// Track new note ID for auto-edit mode
-			if msg.Note != nil && p.pendingEditID == "" {
-				p.pendingEditID = msg.Note.ID
-			}
 			return p, p.loadNotes()
 		}
 
 	case NoteDeletedMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
+		}
+		if msg.MutationID != 0 {
+			return p, p.finishOptimisticDelete(msg)
 		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: delete failed", "error", msg.Err)
@@ -840,8 +890,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err != nil {
+			if msg.Action.Type != "" {
+				p.pushUndo(msg.Action)
+			}
+			p.undoErr = msg.Err
 			p.ctx.Logger.Error("notes: restore failed", "error", msg.Err)
+			return p, showRestoreFailedToast(msg.Err)
 		} else {
+			p.undoErr = nil
 			p.ctx.Logger.Debug("notes: restored", "id", msg.ID)
 			return p, tea.Batch(
 				showRestoredToast(msg.Title),
@@ -1004,6 +1060,27 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.loadNotes()
 
+	case tdsetup.ResultMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.Err != nil {
+			if msg.Origin == tdsetup.OriginNotes {
+				p.setupInitializing = false
+				p.setupErr = msg.Err
+				p.showSetupModal = true
+				p.clearSetupModal()
+			}
+			return p, nil
+		}
+		p.setupInitializing = false
+		p.setupErr = nil
+		p.setupNeeded = false
+		p.showSetupModal = false
+		p.setupDismissed = false
+		p.clearSetupModal()
+		return p, p.loadNotes()
+
 	case app.ErrorMsg:
 		// $EDITOR never launched, so only the error arrives and no refresh ever
 		// comes to consume the pending read-back. Drop it with its temp file
@@ -1016,6 +1093,25 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case tea.KeyPressMsg:
+		if p.showSetupModal {
+			cmd, handled := p.handleSetupModalKey(msg)
+			if handled {
+				return p, cmd
+			}
+		}
+		if p.setupNeeded {
+			switch msg.String() {
+			case "enter":
+				p.showSetupModal = true
+				p.setupDismissed = false
+				p.clearSetupModal()
+				return p, nil
+			case "r":
+				p.setupDismissed = false
+				return p, p.loadNotes()
+			}
+			return p, nil
+		}
 		// Handle inline editor first if in inline edit mode
 		if p.edit.Active {
 			handled, cmd := p.handleInlineEditorKey(msg)
@@ -1050,6 +1146,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p.handleKey(msg)
 
 	case tea.MouseMsg:
+		if p.showSetupModal {
+			cmd, handled := p.handleSetupModalMouse(msg)
+			if handled {
+				return p, cmd
+			}
+		}
 		// Inline-edit click-away is handled in handleMouse. Do not forward
 		// presses to the tty model first — that hid list clicks (td-bb475e).
 		// Handle info modal first if open
@@ -1098,7 +1200,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 // handlePaste applies one tea.PasteMsg as a single operation for the focused
 // surface. It never falls through to the textarea catch-all.
 func (p *Plugin) handlePaste(msg tea.PasteMsg) (plugin.Plugin, tea.Cmd) {
-	if p.edit.ShowExitConfirm || p.showDeleteModal || p.showInfoModal {
+	if p.showSetupModal || p.edit.ShowExitConfirm || p.showDeleteModal || p.showInfoModal {
 		return p, nil
 	}
 	if p.showTaskModal {
@@ -1200,16 +1302,7 @@ func (p *Plugin) createNoteFromPaste(content string) tea.Cmd {
 	if p.editorDirty {
 		return p.saveBefore(func() tea.Cmd { return p.createNoteFromPaste(content) })
 	}
-	title := firstNonBlankLine(content)
-	epoch := p.ctx.Epoch
-	store := p.store
-	return func() tea.Msg {
-		note, err := store.Create(title, content)
-		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
-		}
-		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
-	}
+	return p.beginOptimisticCreate(firstNonBlankLine(content), content)
 }
 
 func firstNonBlankLine(content string) string {
@@ -1291,11 +1384,23 @@ func (p *Plugin) applySavedContent(msg NoteContentSavedMsg) {
 
 // FooterStatus keeps slow/failed saves visible after the transient toast.
 func (p *Plugin) FooterStatus() (string, bool) {
+	if p.mutationErr != nil {
+		return "notes: " + p.mutationAction + " failed — retry the action", true
+	}
 	if p.saveErr != nil {
 		return "notes: save failed — Ctrl-S to retry", true
 	}
+	if p.undoErr != nil {
+		return "notes: undo failed — u to retry", true
+	}
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
+	}
+	if p.mutation != nil {
+		if p.mutation.kind == noteMutationDelete {
+			return "notes: deleting…", false
+		}
+		return "notes: creating…", false
 	}
 	// An in-flight save is routine and self-resolving: no status line.
 	return "", false
@@ -1365,6 +1470,15 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	if key == "esc" && p.viewFilter != FilterActive {
 		return p, p.switchViewFilter(FilterActive)
 	}
+	// The filter shortcuts are toggles: pressing the shortcut for the current
+	// archived/deleted view returns to Active. Handle these before the empty-list
+	// guard so an empty filter is never a keyboard trap.
+	if key == "a" {
+		return p, p.switchViewFilter(toggleNoteFilter(p.viewFilter, FilterArchived))
+	}
+	if key == "x" {
+		return p, p.switchViewFilter(toggleNoteFilter(p.viewFilter, FilterDeleted))
+	}
 
 	// Get the notes list to navigate (filtered or all)
 	notesList := p.getDisplayNotes()
@@ -1412,8 +1526,6 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			return p, p.openDeleteModal()
 		}
 		return p, nil
-	case "x":
-		return p, p.switchViewFilter(FilterDeleted)
 	case "p":
 		// Toggle pin (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -1426,14 +1538,12 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			return p, p.toggleArchive()
 		}
 		return p, nil
-	case "a":
-		return p, p.switchViewFilter(FilterArchived)
 	case "r":
 		// Refresh
 		return p, p.loadNotes()
 	case "enter":
-		// The simple editor is what a plain Enter opens. Vim is on e and the
-		// external editor on E, so neither can capture the default path.
+		// Enter is the configurable default gesture. Archived/deleted notes still
+		// open only as a read-only preview.
 		note := p.getSelectedNote()
 		if note != nil {
 			if cmd := p.loadNoteIntoEditor(); cmd != nil {
@@ -1444,6 +1554,16 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 				p.previewMode = true
 				return p, nil
 			}
+			return p, p.openDefaultEditor()
+		}
+		return p, nil
+	case "i":
+		// Built-in editor, regardless of the default preference.
+		if p.viewFilter == FilterActive {
+			if cmd := p.loadNoteIntoEditor(); cmd != nil {
+				return p, cmd
+			}
+			p.activePane = PaneEditor
 			return p, p.enterEditAtPreviewPlace()
 		}
 		return p, nil
@@ -1474,6 +1594,8 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	case "Y":
 		// Yank note title to clipboard
 		return p, p.yankNoteTitle()
+	case "ctrl+y":
+		return p, p.yankNoteID()
 	case "u":
 		// Undo last delete/archive (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -1526,6 +1648,18 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	case "alt+x":
 		return p.cutEditorSelection()
+	}
+
+	// Command-key delivery depends on the terminal. Match modifier bits
+	// directly so a populated Text field cannot hide ModSuper, and require an
+	// exact chord so Ctrl/Alt combinations remain owned by the textarea.
+	actionMods := msg.Mod &^ (tea.ModCapsLock | tea.ModNumLock)
+	if msg.Code == 'a' && actionMods == tea.ModSuper {
+		return p.selectAllEditor()
+	}
+	if (msg.Code == tea.KeyUp || msg.Code == tea.KeyDown) &&
+		(actionMods == tea.ModSuper || actionMods == tea.ModSuper|tea.ModShift) {
+		return p.moveEditorToNoteBoundary(msg.Code == tea.KeyDown, actionMods.Contains(tea.ModShift))
 	}
 
 	if isShiftMotion(msg) || (p.selExtend && isMotionKey(msg)) {
@@ -1588,7 +1722,13 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		p.activePane = PaneList
 		return p, nil
 
-	case "enter", "i":
+	case "enter":
+		if p.viewFilter == FilterActive {
+			return p, p.openDefaultEditor()
+		}
+		return p, nil
+
+	case "i":
 		if p.viewFilter == FilterActive {
 			return p, p.enterEditAtPreviewPlace()
 		}
@@ -1608,6 +1748,9 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 	case "alt+c":
 		return p, p.copyEditorContent()
+
+	case "ctrl+y":
+		return p, p.yankNoteID()
 
 	case "j", "down", "ctrl+n":
 		p.ensureViewSurface()
@@ -1767,6 +1910,19 @@ func (p *Plugin) enterEditAtPreviewPlace() tea.Cmd {
 	p.ensureViewSurface()
 	a := p.viewSurface.At(p.previewCursorLine)
 	return p.enterEditAt(a.SourceLine, a.SourceCol)
+}
+
+// openDefaultEditor applies the configured default only to the default Enter
+// and body-click journey. Explicit i/e/E commands never call this helper.
+func (p *Plugin) openDefaultEditor() tea.Cmd {
+	if p.viewFilter != FilterActive || p.editorNote == nil {
+		return nil
+	}
+	if p.ctx != nil && p.ctx.Config != nil &&
+		p.ctx.Config.Plugins.Notes.DefaultEditor == config.NotesEditorPane {
+		return p.editSelectedNote()
+	}
+	return p.enterEditAtPreviewPlace()
 }
 
 // enterEditAt switches to edit mode at a source line/column. The current
@@ -1937,7 +2093,7 @@ func (p *Plugin) ensureViewSurface() {
 		screenRow = p.previewCursorLine - p.previewScrollOff
 	}
 	if p.markdownView && p.md != nil {
-		p.viewSurface = p.md.RenderMapped(src, width)
+		p.viewSurface = renderNotesMarkdown(p.md, src, width)
 	} else {
 		p.viewSurface = markdown.MapWrappedSource(src, width)
 	}
@@ -2130,6 +2286,10 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	if p.editorNote == nil || p.store == nil || (!p.editorDirty && !p.needsEditorCheckpoint()) {
 		return p.runPendingAfterSave()
 	}
+	if p.pendingCreateID(p.editorNote.ID) {
+		p.saveQueued = true
+		return nil
+	}
 	if p.saveInFlight {
 		p.saveQueued = true
 		return nil
@@ -2205,6 +2365,9 @@ func (p *Plugin) openInExternalEditor() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -2546,6 +2709,12 @@ func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
 
+	if p.showSetupModal {
+		p.ensureSetupModal()
+		content := p.renderSetupModal()
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	}
+
 	// Info modal takes precedence
 	if p.showInfoModal {
 		p.ensureInfoModal()
@@ -2592,19 +2761,8 @@ func (p *Plugin) createNoteWithTitle(title string) tea.Cmd {
 	if p.store == nil {
 		return nil
 	}
-	epoch := p.ctx.Epoch
-	store := p.store
-
 	// Use title as initial content (first line) so cursor can be positioned after it
-	content := title
-
-	return func() tea.Msg {
-		note, err := store.Create(title, content)
-		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
-		}
-		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
-	}
+	return p.beginOptimisticCreate(title, title)
 }
 
 // togglePin returns a command that toggles the pinned state of the selected note.
@@ -2612,6 +2770,9 @@ func (p *Plugin) togglePin() tea.Cmd {
 	note := p.selectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -2635,6 +2796,9 @@ func (p *Plugin) toggleArchive() tea.Cmd {
 	note := p.selectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -2702,6 +2866,19 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 
 	return clip.Copy(title, func(r clip.Result) tea.Msg {
 		return msg.FlashMsg{Text: r.Message("Copied: " + title)}
+	})
+}
+
+// yankNoteID copies the stable td note identity. It is reachable only from
+// notes-list and the read-only notes-preview context; edit contexts keep their
+// own Ctrl-Y semantics.
+func (p *Plugin) yankNoteID() tea.Cmd {
+	note := p.selectedNote()
+	if note == nil || note.ID == "" {
+		return nil
+	}
+	return clip.Copy(note.ID, func(r clip.Result) tea.Msg {
+		return msg.ToastMsg{Message: r.Message("Copied note ID: " + note.ID), Duration: 2 * time.Second}
 	})
 }
 
@@ -2773,11 +2950,13 @@ func (p *Plugin) Commands() []plugin.Command {
 			// return nil there. Advertising them promises what the key will not do.
 			if p.viewFilter == FilterActive {
 				cmds = append(cmds,
-					plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+					plugin.Command{ID: "open-note", Name: "Open", Description: "Open with the default Notes editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1},
+					plugin.Command{ID: "edit-note", Name: "Built-in", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 2},
 					plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 3},
 					plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 4},
 				)
 			}
+			cmds = append(cmds, plugin.Command{ID: "yank-id", Name: "ID", Description: "Copy note ID", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 6})
 			if p.editorDirty || p.saveErr != nil {
 				cmds = append(cmds, plugin.Command{ID: "save", Name: "Retry", Description: "Retry saving note", Category: plugin.CategoryActions, Context: "notes-preview", Priority: 1})
 			}
@@ -2808,8 +2987,12 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		cmds = append(cmds,
 			plugin.Command{ID: "copy-note", Name: "Copy", Description: "Copy selection or note", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 4},
-			plugin.Command{ID: "select-all", Name: "All", Description: "Select all", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
+			plugin.Command{ID: "select-all", Name: "All", Description: "Select all (Alt-A; Cmd-A when delivered)", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
 			plugin.Command{ID: "select-toggle", Name: "Select", Description: "Set or clear the selection anchor", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 6},
+			plugin.Command{ID: "note-start", Name: "Start", Description: "Move to note start (Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 7},
+			plugin.Command{ID: "note-end", Name: "End", Description: "Move to note end (Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 8},
+			plugin.Command{ID: "select-note-start", Name: "SelStart", Description: "Select to note start (Shift-Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 9},
+			plugin.Command{ID: "select-note-end", Name: "SelEnd", Description: "Select to note end (Shift-Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 10},
 		)
 		if p.hasEditSelection() {
 			cmds = append(cmds, plugin.Command{ID: "cut", Name: "Cut", Description: "Cut selection", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 3})
@@ -2836,13 +3019,22 @@ func (p *Plugin) Commands() []plugin.Command {
 		cmds = append(cmds, plugin.Command{ID: "save", Name: "Retry", Description: "Retry saving note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 1})
 	}
 
-	// Show view switching commands
-	if p.viewFilter == FilterActive {
-		cmds = append(cmds,
-			plugin.Command{ID: "show-archived", Name: "Archived", Description: "Show archived notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 2},
-			plugin.Command{ID: "show-deleted", Name: "Deleted", Description: "Show deleted notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 3},
-		)
-	} else {
+	// Keep both a/x filter bindings advertised in every list state. The shortcut
+	// matching the current state is labeled Active because pressing it toggles
+	// back; the other still switches directly to its state.
+	archiveName := "Archived"
+	deleteName := "Deleted"
+	if p.viewFilter == FilterArchived {
+		archiveName = "Active"
+	}
+	if p.viewFilter == FilterDeleted {
+		deleteName = "Active"
+	}
+	cmds = append(cmds,
+		plugin.Command{ID: "show-archived", Name: archiveName, Description: "Toggle archived notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 2},
+		plugin.Command{ID: "show-deleted", Name: deleteName, Description: "Toggle deleted notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 3},
+	)
+	if p.viewFilter != FilterActive {
 		// Add "Back" command when in Archived or Deleted view
 		cmds = append(cmds,
 			plugin.Command{ID: "back-to-active", Name: "Active", Description: "Return to active notes", Category: plugin.CategoryNavigation, Context: "notes-list", Priority: 0},
@@ -2853,9 +3045,10 @@ func (p *Plugin) Commands() []plugin.Command {
 		// Full editing commands only in Active view
 		cmds = append(cmds,
 			plugin.Command{ID: "new-note", Name: "New", Description: "Create new note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 4},
-			plugin.Command{ID: "edit-note", Name: "Edit", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
-			plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
-			plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
+			plugin.Command{ID: "open-note", Name: "Open", Description: "Open with the default Notes editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 5},
+			plugin.Command{ID: "edit-note", Name: "Built-in", Description: "Edit in the built-in editor", Category: plugin.CategoryActions, Context: "notes-list", Priority: 6},
+			plugin.Command{ID: "vim-edit", Name: "Pane", Description: "Edit with $EDITOR in the right pane", Category: plugin.CategoryActions, Context: "notes-list", Priority: 7},
+			plugin.Command{ID: "external-editor", Name: "Ext", Description: "Open in external $EDITOR", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "delete-note", Name: "Delete", Description: "Delete selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 8},
 			plugin.Command{ID: "toggle-pin", Name: "Pin", Description: "Toggle pin on note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 9},
 			plugin.Command{ID: "archive-note", Name: "Archive", Description: "Archive selected note", Category: plugin.CategoryActions, Context: "notes-list", Priority: 10},
@@ -2880,7 +3073,8 @@ func (p *Plugin) Commands() []plugin.Command {
 	cmds = append(cmds,
 		plugin.Command{ID: "yank-content", Name: "Yank", Description: "Copy note content", Category: plugin.CategoryActions, Context: "notes-list", Priority: 13},
 		plugin.Command{ID: "yank-title", Name: "YankTitle", Description: "Copy note title", Category: plugin.CategoryActions, Context: "notes-list", Priority: 14},
-		plugin.Command{ID: "refresh", Name: "Refresh", Description: "Reload notes", Category: plugin.CategoryActions, Context: "notes-list", Priority: 15},
+		plugin.Command{ID: "yank-id", Name: "ID", Description: "Copy note ID", Category: plugin.CategoryActions, Context: "notes-list", Priority: 15},
+		plugin.Command{ID: "refresh", Name: "Refresh", Description: "Reload notes", Category: plugin.CategoryActions, Context: "notes-list", Priority: 16},
 	)
 
 	return cmds
@@ -2888,6 +3082,9 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
+	if p.showSetupModal {
+		return "notes-setup-modal"
+	}
 	if p.showInfoModal {
 		return "notes-info"
 	}
@@ -2923,7 +3120,7 @@ func (p *Plugin) ConsumesTextInput() bool {
 
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
-	return p.showInfoModal || p.showDeleteModal || p.showTaskModal
+	return p.showSetupModal || p.showInfoModal || p.showDeleteModal || p.showTaskModal
 }
 
 // loadNotes returns a command that loads notes from the store.
@@ -2944,6 +3141,16 @@ func (p *Plugin) loadNotes() tea.Cmd {
 	requestID := p.loadRequestID
 
 	return func() tea.Msg {
+		if checker, ok := store.(interface{ SetupStatus() error }); ok {
+			if err := checker.SetupStatus(); err != nil {
+				return NotesLoadedMsg{
+					Err:       err,
+					Epoch:     epoch,
+					RequestID: requestID,
+					Filter:    filter,
+				}
+			}
+		}
 		recoveryErr := recoverNoteDrafts(projectRoot, store)
 		var notes []Note
 		var err error
@@ -3001,6 +3208,24 @@ func (p *Plugin) switchViewFilter(filter NoteFilter) tea.Cmd {
 	return p.loadNotes()
 }
 
+func toggleNoteFilter(current, target NoteFilter) NoteFilter {
+	if current == target {
+		return FilterActive
+	}
+	return target
+}
+
+func nextNoteFilter(current NoteFilter) NoteFilter {
+	switch current {
+	case FilterActive:
+		return FilterArchived
+	case FilterArchived:
+		return FilterDeleted
+	default:
+		return FilterActive
+	}
+}
+
 // showRestoredToast shows a toast notification for undo/restore.
 func showRestoredToast(title string) tea.Cmd {
 	displayTitle := truncateTitle(title, 30)
@@ -3048,11 +3273,19 @@ func (p *Plugin) hasUndo() bool {
 
 // undoLastAction undoes the last delete or archive action.
 func (p *Plugin) undoLastAction() tea.Cmd {
-	action := p.popUndo()
-	if action == nil || p.store == nil {
+	if p.store == nil || !p.hasUndo() {
 		// Nothing to undo is nothing to report (audit row 47).
 		return nil
 	}
+	latest := p.undoStack[len(p.undoStack)-1]
+	if blocked, ok := p.guardPendingCreateDurableAction(latest.NoteID); ok {
+		return blocked
+	}
+	action := p.popUndo()
+	if action == nil {
+		return nil
+	}
+	p.undoErr = nil
 
 	noteID := action.NoteID
 	title := action.Title
@@ -3069,10 +3302,21 @@ func (p *Plugin) undoLastAction() tea.Cmd {
 			err = store.Unarchive(noteID)
 		}
 		return NoteRestoredMsg{
-			ID:    noteID,
-			Title: title,
-			Err:   err,
-			Epoch: epoch,
+			ID:     noteID,
+			Title:  title,
+			Err:    err,
+			Epoch:  epoch,
+			Action: *action,
 		}
+	}
+}
+
+func showRestoreFailedToast(err error) tea.Cmd {
+	text := "Undo failed"
+	if err != nil {
+		text += ": " + err.Error()
+	}
+	return func() tea.Msg {
+		return msg.ToastMsg{Message: text, Duration: 4 * time.Second, IsError: true}
 	}
 }
