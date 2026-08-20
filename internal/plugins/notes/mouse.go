@@ -33,31 +33,31 @@ const (
 // handleMouse processes mouse events and dispatches to appropriate handlers.
 func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 	// Handle exit confirmation dialog if active
-	if p.showExitConfirmation {
+	if p.edit.ShowExitConfirm {
 		return p.handleExitConfirmationMouse(msg)
 	}
 
 	// Handle inline edit mode - detect click-away and forward mouse events for text selection
-	if p.inlineEditMode && p.inlineEditor != nil && p.inlineEditor.IsActive() {
+	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		action := p.mouseHandler.HandleMouse(msg)
 
 		// Helper to handle click-away: auto-save and switch to clicked note
 		handleClickAway := func(regionID string, regionData interface{}) (*Plugin, tea.Cmd) {
-			p.inlineEditorDragging = false // Cancel any drag in progress
+			p.edit.Dragging = false // Cancel any drag in progress
 
 			// Check if the editor session is still alive
 			if !p.isInlineEditSessionAlive() {
 				// Session is dead - just clean up and process click
 				p.exitInlineEditMode()
-				p.pendingClickRegion = regionID
-				p.pendingClickData = regionData
+				p.edit.PendingClickRegion = regionID
+				p.edit.PendingClickData = regionData
 				return p.processPendingClickAction()
 			}
 
 			// Session is alive - auto-save and exit (no confirmation needed)
 			// Store pending click info to process after save
-			p.pendingClickRegion = regionID
-			p.pendingClickData = regionData
+			p.edit.PendingClickRegion = regionID
+			p.edit.PendingClickData = regionData
 
 			// Save current content and exit
 			saveCmd := p.saveAndExitInlineEditMode()
@@ -79,7 +79,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 					// Forward mouse press to vim and start tracking drag
 					col, row, ok := p.calculateInlineEditorMouseCoords(action.X, action.Y)
 					if ok {
-						p.inlineEditorDragging = true
+						p.edit.Dragging = true
 						p.lastDragForwardTime = time.Time{}
 						return p, p.forwardMousePressToInlineEditor(col, row)
 					}
@@ -99,7 +99,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 		// Handle mouse motion/hover - forward drag events to vim for text selection.
 		// Throttled to ~60fps to prevent subprocess spam (each forward spawns tmux send-keys).
-		if action.Type == mouse.ActionHover && p.inlineEditorDragging {
+		if action.Type == mouse.ActionHover && p.edit.Dragging {
 			now := time.Now()
 			if now.Sub(p.lastDragForwardTime) < dragForwardThrottle {
 				return p, nil
@@ -113,8 +113,8 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 		// Handle mouse release - end drag
 		if rel, ok := msg.(tea.MouseReleaseMsg); ok {
-			if p.inlineEditorDragging {
-				p.inlineEditorDragging = false
+			if p.edit.Dragging {
+				p.edit.Dragging = false
 				p.lastDragForwardTime = time.Time{}
 				rm := rel.Mouse()
 				col, row, ok := p.calculateInlineEditorMouseCoords(rm.X, rm.Y)
@@ -126,7 +126,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		}
 
 		// Forward other mouse events to tty model
-		cmd := p.inlineEditor.Update(msg)
+		cmd := p.edit.Model.Update(msg)
 		return p, cmd
 	}
 

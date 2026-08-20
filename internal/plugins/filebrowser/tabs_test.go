@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -612,7 +613,7 @@ exit 0
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	p := &Plugin{
-		inlineEditor: tty.New(nil),
+		edit: inlineedit.Session{Model: tty.New(nil)},
 		tabs: []FileTab{{
 			Path:        "note.md",
 			EditSession: "editor-session",
@@ -623,15 +624,15 @@ exit 0
 	if !p.restoreEditStateFromTab() {
 		t.Fatal("live tab editor was not restored")
 	}
-	if !p.inlineEditMode || p.inlineEditSession != "editor-session" || p.inlineEditEditor != "nvim" {
+	if !p.edit.Active || p.edit.Name != "editor-session" || p.edit.EditorCmd != "nvim" {
 		t.Fatalf("restored editor state = mode:%v session:%q editor:%q",
-			p.inlineEditMode, p.inlineEditSession, p.inlineEditEditor)
+			p.edit.Active, p.edit.Name, p.edit.EditorCmd)
 	}
 
 	p.cleanupAllEditSessions()
-	if p.inlineEditMode || p.inlineEditSession != "" || p.tabs[0].EditSession != "" {
+	if p.edit.Active || p.edit.Name != "" || p.tabs[0].EditSession != "" {
 		t.Fatalf("cleanup retained editor state: mode:%v session:%q tab:%q",
-			p.inlineEditMode, p.inlineEditSession, p.tabs[0].EditSession)
+			p.edit.Active, p.edit.Name, p.tabs[0].EditSession)
 	}
 	data, err := os.ReadFile(logPath)
 	if err != nil {
@@ -1035,7 +1036,7 @@ exit 0
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	p := createTabTestPlugin(t, t.TempDir())
-	p.inlineEditor = tty.New(nil)
+	p.edit.Model = tty.New(nil)
 	p.tabs = []FileTab{
 		{
 			Path:        "src/helper.go",
@@ -1055,19 +1056,19 @@ exit 0
 	}
 	p.activeTab = 0
 	p.previewFile = "src/helper.go"
-	p.inlineEditMode = true
-	p.inlineEditSession = "editor-src-helper"
-	p.inlineEditFile = "src/helper.go"
-	p.inlineEditEditor = "nvim"
+	p.edit.Active = true
+	p.edit.Name = "editor-src-helper"
+	p.edit.Path = "src/helper.go"
+	p.edit.EditorCmd = "nvim"
 
 	_ = p.closeTabsForPath("src")
 
 	if got := tabPaths(p.tabs); strings.Join(got, ",") != "README.md" {
 		t.Fatalf("tabs = %v", got)
 	}
-	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditFile != "" {
+	if p.edit.Active || p.edit.Name != "" || p.edit.Path != "" {
 		t.Fatalf("plugin edit state retained: mode:%v session:%q file:%q",
-			p.inlineEditMode, p.inlineEditSession, p.inlineEditFile)
+			p.edit.Active, p.edit.Name, p.edit.Path)
 	}
 	if p.previewFile != "README.md" {
 		t.Errorf("previewFile = %q, want README.md", p.previewFile)

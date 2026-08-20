@@ -432,6 +432,12 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		_, cmd := p.handleViewFlyoutKey(msg)
 		return cmd
 	}
+	// A live pane editor owns every key in the split, Tab included: the ring
+	// must not move focus out from under a session the user is typing into.
+	if doc := p.focusedDocEdit(); doc != nil {
+		_, cmd := p.handleDocEditKey(doc, msg)
+		return cmd
+	}
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
 	// Tab walks every window on screen — sidebar, tree leaves, terminal panel —

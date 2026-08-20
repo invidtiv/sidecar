@@ -177,7 +177,7 @@ func TestFilesPreviewBoundaryUsesRenderedContentHeight(t *testing.T) {
 	if !p.WheelAtBoundary(up) {
 		t.Fatal("short preview at top did not drop upward inertia")
 	}
-	p.inlineEditMode = true
+	p.edit.Active = true
 	if p.WheelAtBoundary(up) {
 		t.Fatal("inline editor wheel was classified using the ordinary preview")
 	}

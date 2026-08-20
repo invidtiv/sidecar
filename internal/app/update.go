@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -711,6 +712,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.issueInputModalWidth = 0
 		return m, nil
 
+	case inlineedit.StartedMsg, inlineedit.ExitedMsg:
+		// A pane editor's lifecycle messages are surface-tagged and reach both
+		// workspace projections: the plugins get them from the broadcast below,
+		// and the global browser is not a plugin, so it is offered them here.
+		if m.overview != nil {
+			if cmd := m.overview.Update(msg); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+
 	case uirequest.RequestMsg:
 		if msg.Request.Action == uirequest.ActionNotify {
 			if cmd := (&m).handleNotifyRequest(msg.Request); cmd != nil {
@@ -975,7 +986,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// A global view covers the plugin pane and owns keyboard focus, so a plugin
 	// left in interactive/text-input mode underneath it must not swallow keys.
 	if !m.hasModal() && !m.globalOverlayOwnsKeys() &&
-		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" || m.activeContext == "notes-inline-edit") {
+		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" ||
+			m.activeContext == "notes-inline-edit" || m.activeContext == "workspace-doc-edit") {
 		// Forward ALL keys to plugin (exit keys and ctrl+c handled by plugin)
 		return m.forwardKeyToPlugin(msg)
 	}

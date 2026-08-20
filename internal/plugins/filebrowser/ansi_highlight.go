@@ -1,32 +1,28 @@
 package filebrowser
 
 import (
-	"strings"
-
-	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/docview"
 )
 
-// matchRange represents a highlight range in visible (ANSI-stripped) text coordinates.
-type matchRange struct {
-	matchIdx int // index in contentSearchMatches (for current match detection)
-	start    int // byte offset in stripped text
-	end      int // byte offset in stripped text
-}
-
-// highlightMarkdownLineMatches injects search highlighting into a Glamour-rendered ANSI line.
+// highlightMarkdownLineMatches injects search highlighting into a
+// Glamour-rendered ANSI line. The injection itself lives in
+// internal/docview — this plugin's preview renderer is not a docview.Model,
+// so it keeps its own search state and row painting, but it must not keep a
+// second copy of the ANSI walker. See the Phase 5 note in
+// docs/plans/active/doc-pane-search-and-edit.md.
 func (p *Plugin) highlightMarkdownLineMatches(lineNo int) string {
 	if lineNo >= len(p.markdownRendered) {
 		return ""
 	}
 	ansiLine := p.markdownRendered[lineNo]
 
-	var ranges []matchRange
+	var ranges []docview.MatchRange
 	for i, m := range p.contentSearchMatches {
 		if m.LineNo == lineNo {
-			ranges = append(ranges, matchRange{
-				matchIdx: i,
-				start:    m.StartCol,
-				end:      m.EndCol,
+			ranges = append(ranges, docview.MatchRange{
+				Index: i,
+				Start: m.StartCol,
+				End:   m.EndCol,
 			})
 		}
 	}
@@ -35,93 +31,5 @@ func (p *Plugin) highlightMarkdownLineMatches(lineNo int) string {
 		return ansiLine
 	}
 
-	return injectHighlightsIntoANSI(ansiLine, ranges, p.contentSearchCursor)
-}
-
-// Highlight style prefixes are produced by rendering a known marker and
-// extracting the ANSI prefix. These must stay functions: styles.SearchMatch
-// and styles.SearchMatchCurrent are package-level variables that ApplyTheme
-// reassigns, so capturing them in a var block would freeze the highlight on
-// the default theme's colours. See internal/themecheck.
-func searchMatchStyle(strs ...string) string { return styles.SearchMatch.Render(strs...) }
-
-func searchMatchCurrentStyle(strs ...string) string {
-	return styles.SearchMatchCurrent.Render(strs...)
-}
-
-// injectHighlightsIntoANSI walks an ANSI-styled string and injects highlight
-// escape sequences at positions corresponding to visible-text byte offsets.
-func injectHighlightsIntoANSI(s string, matches []matchRange, currentMatchIdx int) string {
-	if len(matches) == 0 {
-		return s
-	}
-
-	var result strings.Builder
-	result.Grow(len(s) + len(matches)*20)
-
-	visiblePos := 0 // byte offset in stripped/visible text
-	matchIdx := 0   // index into matches slice
-	inHighlight := false
-
-	i := 0
-	for i < len(s) {
-		// Pass through ANSI escape sequences without counting as visible
-		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
-			j := i + 2
-			for j < len(s) && !isANSITerminator(s[j]) {
-				j++
-			}
-			if j < len(s) {
-				j++ // include terminator
-			}
-			result.WriteString(s[i:j])
-			i = j
-			continue
-		}
-
-		// Check: end current highlight before starting a new one
-		if inHighlight && matchIdx < len(matches) && visiblePos >= matches[matchIdx].end {
-			result.WriteString("\x1b[0m")
-			inHighlight = false
-			matchIdx++
-		}
-
-		// Check: start highlight
-		if !inHighlight && matchIdx < len(matches) && visiblePos == matches[matchIdx].start {
-			inHighlight = true
-			if matches[matchIdx].matchIdx == currentMatchIdx {
-				result.WriteString(extractANSIPrefix(searchMatchCurrentStyle))
-			} else {
-				result.WriteString(extractANSIPrefix(searchMatchStyle))
-			}
-		}
-
-		result.WriteByte(s[i])
-		visiblePos++
-		i++
-	}
-
-	// Close unclosed highlight
-	if inHighlight {
-		result.WriteString("\x1b[0m")
-	}
-
-	return result.String()
-}
-
-// isANSITerminator returns true for bytes that terminate an ANSI CSI sequence.
-func isANSITerminator(b byte) bool {
-	return b >= 0x40 && b <= 0x7E
-}
-
-// extractANSIPrefix renders a space through a lipgloss style function and
-// returns just the ANSI prefix codes (everything before the content).
-func extractANSIPrefix(styleFn func(strs ...string) string) string {
-	const marker = "\x00"
-	rendered := styleFn(marker)
-	prefix, _, found := strings.Cut(rendered, marker)
-	if !found {
-		return ""
-	}
-	return prefix
+	return docview.InjectHighlights(ansiLine, ranges, p.contentSearchCursor)
 }

@@ -6,8 +6,14 @@ release, and updates `marcus/homebrew-tap` from a rendered formula template.
 
 ## Prepare
 
-1. Update the td dependency when appropriate (`GOWORK=off go get …`, tidy, and
-   smoke the td tab if td moved).
+1. Pin the sibling modules (`td`, `tasks`) to their newest published releases:
+   `make sync-deps`, then commit `go.mod`/`go.sum`. `check-release-state.sh`
+   refuses to tag when any `github.com/marcus/*` requirement is behind its
+   latest tag — v1.1.0 shipped against `tasks` v1.9.0 while v1.11.0 was already
+   out because nothing checked, and `go.work` hides the drift by resolving those
+   imports to the local checkouts. Both the gate and `sync-deps` run with
+   `GOWORK=off` for that reason. If a sibling jumped several minors, decide
+   deliberately and smoke its tab in the app.
 2. Add a dated entry to `CHANGELOG.md` for the **v-prefixed** version
    (`## [vX.Y.Z] - YYYY-MM-DD`).
 3. Make sure `main` is clean, reviewed, tested, pushed, and identical to

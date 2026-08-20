@@ -43,6 +43,34 @@ if grep -E '^\s*replace\s' go.mod >/dev/null 2>&1; then
   exit 1
 fi
 
+# Sibling modules (td, tasks, …) must be pinned to their newest published tag.
+# v1.1.0 shipped against tasks v1.9.0 while v1.11.0 was already out, because
+# nothing checked. Skipped when the module proxy is unreachable so an offline
+# or synthetic-repo run does not fail closed.
+sibling_mods=$(GOWORK=off go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all 2>/dev/null |
+  awk '$1 ~ /^github\.com\/marcus\// {print}' || true)
+if [[ -n $sibling_mods ]]; then
+  stale=""
+  while read -r mod cur; do
+    [[ -z $mod ]] && continue
+    latest=$(GOWORK=off go list -m -f '{{.Version}}' "$mod@latest" 2>/dev/null || true)
+    if [[ -z $latest ]]; then
+      echo "Warning: could not resolve latest version of $mod; skipping pin check" >&2
+      continue
+    fi
+    if [[ $cur != "$latest" ]]; then
+      stale="$stale  $mod $cur -> $latest
+"
+    fi
+  done <<<"$sibling_mods"
+  if [[ -n $stale ]]; then
+    echo "Error: sibling dependencies are not pinned to their newest release:" >&2
+    printf '%s' "$stale" >&2
+    echo "Run 'make sync-deps' (then commit go.mod/go.sum) and retry." >&2
+    exit 1
+  fi
+fi
+
 # Go CI (tests + golangci-lint) must be green on the commit being released.
 # This used to be a manual checklist item ("confirm Go CI is green") and main
 # sat red for a full day across two merges before a release caught it.

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/filefind"
 	"github.com/marcus/sidecar/internal/image"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
@@ -303,22 +304,12 @@ type Plugin struct {
 	// State restoration flag
 	stateRestored bool
 
-	// Inline editor state (tmux-based editing)
-	inlineEditor         *tty.Model // Embeddable tty model for inline editing
-	inlineEditMode       bool       // True when inline editing is active
-	inlineEditSession    string     // Tmux session name for editor
-	inlineEditFile       string     // Path of file being edited
-	inlineEditOrigMtime  time.Time  // Original file mtime (to detect changes)
-	inlineEditEditor     string     // Editor command used (vim, nano, emacs, etc.)
-	inlineEditActivation uint64     // Scopes async editor start/exit to the current project/tab activation
-	inlineEditorDragging bool       // True when mouse is being dragged in editor (for text selection)
-	lastDragForwardTime  time.Time  // Throttle: last time a drag event was forwarded to tmux
-
-	// Exit confirmation state (when clicking away from editor)
-	showExitConfirmation bool        // True when confirmation dialog is shown
-	pendingClickRegion   string      // Region that was clicked (regionTreePane, etc)
-	pendingClickData     interface{} // Data associated with the click
-	exitConfirmSelection int         // 0=Save&Exit, 1=Exit without saving, 2=Cancel
+	// Inline editor state (tmux-based editing). Session lifecycle, mouse and
+	// cursor mapping, and the exit confirmation live in internal/inlineedit;
+	// only filebrowser-specific state stays here.
+	edit                inlineedit.Session
+	inlineEditOrigMtime time.Time // Original file mtime (to detect changes)
+	lastDragForwardTime time.Time // Throttle: last time a drag event was forwarded to tmux
 
 	// Inline edit copy/paste hint state
 	inlineEditCopyPasteHintShown bool // True after showing copy/paste hint toast
@@ -365,13 +356,14 @@ type Plugin struct {
 func New() *Plugin {
 	p := &Plugin{
 		mouseHandler:  mouse.NewHandler(),
-		imageRenderer: image.New(),  // Detect terminal graphics protocol once
-		treeVisible:   true,         // Tree pane visible by default
-		showIgnored:   true,         // Show git-ignored files by default
-		inlineEditor:  tty.New(nil), // Initialize inline editor with default config
+		imageRenderer: image.New(), // Detect terminal graphics protocol once
+		treeVisible:   true,        // Tree pane visible by default
+		showIgnored:   true,        // Show git-ignored files by default
 		dragDropIdx:   -1,
 		dragHoverIdx:  -1,
 	}
+	p.edit.Model = tty.New(nil) // Inline editor with default config
+	p.edit.Host = p
 	p.applyInlineEditorAttachKey()
 	return p
 }
@@ -388,14 +380,15 @@ func (p *Plugin) Icon() string { return pluginIcon }
 // Init initializes the plugin with context.
 func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Reject editor start/exit messages still queued from the previous project.
-	p.inlineEditActivation++
+	p.edit.Activation++
 	p.treePreviewGen++
 	p.wheelBursts = tty.WheelBursts{}
 	p.reuseViewOnce = false
 	p.viewCacheOK = false
-	if p.inlineEditor != nil {
-		p.inlineEditor.Close()
+	if p.edit.Model != nil {
+		p.edit.Model.Close()
 	}
+	p.edit.Host = p
 	p.ctx = ctx
 	p.tree = NewFileTree(ctx.WorkDir)
 
@@ -643,7 +636,7 @@ func (p *Plugin) autoRefreshBlocked() bool {
 	return p.ConsumesTextInput() ||
 		p.infoMode ||
 		p.blameMode ||
-		p.showExitConfirmation
+		p.edit.ShowExitConfirm
 }
 
 // requestAutoRefresh refreshes the tree, or defers it until the user is done.
@@ -809,22 +802,21 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	// Handle exit confirmation dialog first
-	if p.showExitConfirmation {
+	if p.edit.ShowExitConfirm {
 		if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
 			switch keyMsg.String() {
 			case "j", "down":
-				p.exitConfirmSelection = (p.exitConfirmSelection + 1) % 3
+				p.edit.MoveConfirmSelection(1)
 				return p, nil
 			case "k", "up":
-				p.exitConfirmSelection = (p.exitConfirmSelection + 2) % 3
+				p.edit.MoveConfirmSelection(-1)
 				return p, nil
 			case "enter":
 				return p.handleExitConfirmationChoice()
 			case "esc", "q":
 				// Cancel - return to editing
-				p.showExitConfirmation = false
-				p.pendingClickRegion = ""
-				p.pendingClickData = nil
+				p.edit.ShowExitConfirm = false
+				p.edit.ClearPendingClick()
 				return p, nil
 			}
 		}
@@ -832,11 +824,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	// Handle inline edit mode - delegate most messages to tty model
-	if p.inlineEditMode && p.inlineEditor != nil {
+	if p.edit.Active && p.edit.Model != nil {
 		// Check if editor became inactive (vim exited normally)
 		// Also check if tmux session died (handles :wq case before SessionDeadMsg arrives)
-		if !p.inlineEditor.IsActive() || !p.isInlineEditSessionAlive() {
-			editedFile := p.inlineEditFile // Save before exitInlineEditMode clears it
+		if !p.edit.Model.IsActive() || !p.isInlineEditSessionAlive() {
+			editedFile := p.edit.Path // Save before exitInlineEditMode clears it
 			p.exitInlineEditMode()
 			// Refresh preview to show updated file
 			if editedFile != "" {
@@ -849,7 +841,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		case tea.WindowSizeMsg:
 			p.width = msg.Width
 			p.height = msg.Height
-			return p, p.inlineEditor.Resize(p.calculateInlineEditorWidth(), p.calculateInlineEditorHeight())
+			return p, p.edit.Model.Resize(p.calculateInlineEditorWidth(), p.calculateInlineEditorHeight())
 
 		case tea.MouseMsg:
 			// Route mouse through handleMouse for click-away detection
@@ -860,9 +852,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if msg.String() == p.getInlineEditCopyKey() {
 				return p, p.copyInlineEditorOutputCmd()
 			}
-			cmd := p.inlineEditor.Update(msg)
+			cmd := p.edit.Model.Update(msg)
 			// Check if editor exited
-			if !p.inlineEditor.IsActive() {
+			if !p.edit.Model.IsActive() {
 				p.exitInlineEditMode()
 				return p, tea.Batch(cmd, p.refresh())
 			}
@@ -870,9 +862,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 		case tty.EscapeTimerMsg, tty.CaptureResultMsg,
 			tty.PollTickMsg, tty.PaneResizedMsg, tty.SessionDeadMsg, tty.PasteResultMsg:
-			cmd := p.inlineEditor.Update(msg)
+			cmd := p.edit.Model.Update(msg)
 			// Check if editor exited
-			if !p.inlineEditor.IsActive() {
+			if !p.edit.Model.IsActive() {
 				p.exitInlineEditMode()
 				return p, tea.Batch(cmd, p.refresh())
 			}
@@ -882,7 +874,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// The shared terminal component owns its model/control listener
 			// messages. Route unknown messages through it so plugins do not need
 			// transport-specific branches as that private protocol evolves.
-			if cmd := p.inlineEditor.Update(msg); cmd != nil {
+			if cmd := p.edit.Model.Update(msg); cmd != nil {
 				return p, cmd
 			}
 		}
@@ -1219,7 +1211,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		// Check if there was a pending click action (from Save & Exit)
-		if p.pendingClickRegion != "" {
+		if p.edit.PendingClickRegion != "" {
 			return p.processPendingClickAction()
 		}
 		// Normal exit - refresh preview after editing
@@ -1266,8 +1258,8 @@ func (p *Plugin) SetFocused(f bool) {
 		p.clearDragState()
 	}
 	p.focused = f
-	if p.inlineEditor != nil {
-		p.inlineEditor.SetFocused(f)
+	if p.edit.Model != nil {
+		p.edit.Model.SetFocused(f)
 	}
 }
 
@@ -1350,7 +1342,7 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
-	if p.inlineEditMode {
+	if p.edit.Active {
 		return "file-browser-inline-edit"
 	}
 	if p.projectSearchMode {
@@ -1392,7 +1384,7 @@ func (p *Plugin) ConsumesTextInput() bool {
 		p.projectSearchMode ||
 		p.fileOpMode != FileOpNone ||
 		p.lineJumpMode ||
-		p.inlineEditMode
+		p.edit.Active
 }
 
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.

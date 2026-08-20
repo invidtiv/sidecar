@@ -1,5 +1,7 @@
 # Sidecar
 
+Always check if you are running in Sidecar: run `sidecar --agents` for capabilities.
+
 You might never open your editor again.
 
 **Status: Ready for daily use.** Please [report any issues](https://github.com/marcus/sidecar/issues) you encounter.

@@ -74,7 +74,7 @@ func TestFileBrowserSubModesKeepTab(t *testing.T) {
 		{"file op modal", func(p *Plugin) { p.fileOpMode = FileOpRename }},
 		{"blame", func(p *Plugin) { p.blameMode = true }},
 		{"info", func(p *Plugin) { p.infoMode = true }},
-		{"inline edit", func(p *Plugin) { p.inlineEditMode = true }},
+		{"inline edit", func(p *Plugin) { p.edit.Active = true }},
 		{"line jump", func(p *Plugin) { p.lineJumpMode = true }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

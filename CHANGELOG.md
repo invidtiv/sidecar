@@ -2,6 +2,28 @@
 
 All notable changes to sidecar are documented here.
 
+## [v1.1.1] - 2026-08-19
+
+### Dependencies
+
+- **`tasks` moved to v1.11.0**, two releases on from the v1.9.0 v1.1.0 shipped
+  against. It brings three-part delegation (mode and note) through the data
+  model, the CLI, the HTTP surface, and a delegate modal; a user-configurable
+  delegation vocabulary; approving and completing a proposal in one step; and
+  expanded relative date input.
+
+### Fixes
+
+- **A release can no longer ship against a stale sibling module.** v1.1.0 was
+  cut with `tasks` pinned two minors behind and nothing noticed, because
+  `go.work` resolves `td` and `tasks` to the local checkouts — so the pins in
+  `go.mod` are the one thing a local build never exercises. The release
+  preflight now reads those requirements with `GOWORK=off`, compares each
+  `github.com/marcus/*` module against its newest published tag, and refuses to
+  tag when any of them is behind. `make sync-deps` is the fix it points at: it
+  pins every sibling to its latest release and tidies, so the correction is one
+  command rather than a per-module `go get` the operator has to remember.
+
 ## [v1.1.0] - 2026-08-18
 
 Text you can see is now text you can select and copy — on every surface, into

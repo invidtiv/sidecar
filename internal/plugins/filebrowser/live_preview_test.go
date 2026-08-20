@@ -140,7 +140,7 @@ func TestPreviewRefreshClampsScrollWhenTheFileShrinks(t *testing.T) {
 // writes a probe, a swap file and a backup on every save.
 func TestInlineEditSuppressesTheRefresh(t *testing.T) {
 	p, path := livePreviewPlugin(t, body(30))
-	p.inlineEditMode = true
+	p.edit.Active = true
 
 	if err := os.WriteFile(path, []byte(body(30)+"saved from vim\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -154,7 +154,7 @@ func TestInlineEditSuppressesTheRefresh(t *testing.T) {
 
 	// Leaving the editor lets the deferred change land, with the editor's own
 	// saved content — never a buffer the editor still owns.
-	p.inlineEditMode = false
+	p.edit.Active = false
 	if !runRefreshOnce(t, p) {
 		t.Fatal("the deferred refresh did not land after the editor exited")
 	}

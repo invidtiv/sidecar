@@ -285,7 +285,7 @@ func TestInlineAndExternalCompletionsDoNotClearBuiltInDirty(t *testing.T) {
 	p.editorNote = a
 	p.editorTextarea.SetValue("typed after editor")
 	p.editorDirty = true
-	p.inlineEditActivation = 8
+	p.edit.Activation = 8
 
 	_, cmd := p.Update(NoteContentSavedMsg{ID: a.ID, Epoch: 1, EditorActivation: 8})
 	if !p.editorDirty || cmd == nil {
@@ -636,10 +636,10 @@ func TestOlderInlineAutosaveCannotOverwriteFinalExitSave(t *testing.T) {
 	}
 	blocked := newBlockingStore(p.store)
 	p.store = blocked
-	p.inlineEditMode = true
+	p.edit.Active = true
 	p.inlineEditNoteID = a.ID
-	p.inlineEditPath = path
-	p.inlineEditActivation = 4
+	p.edit.Path = path
+	p.edit.Activation = 4
 	p.inlineAutoSaveGen = 9
 	p.inlineLastSavedContent = "body-a"
 	autosave := p.performInlineAutoSave()

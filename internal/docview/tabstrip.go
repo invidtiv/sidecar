@@ -38,3 +38,37 @@ func tabLabels(group Tabs) []tabs.Label {
 func LayoutTabStrip(group Tabs, width int, focused bool) TabStrip {
 	return tabs.LayoutStrip(tabLabels(group), group.Active, width, focused, fitDocLabel)
 }
+
+// LayoutSearchTabStrip is the same strip with the active tab renamed to a live
+// search surface and its query, so a pane taking search keystrokes never reads
+// as a pane showing a file. A pane opened straight into the finder has no tabs
+// yet, and the label is the whole strip.
+//
+// It lives here rather than in a host because both pane surfaces draw the same
+// strip for the same surfaces.
+func LayoutSearchTabStrip(group Tabs, label string, width int, focused bool) TabStrip {
+	labels := make([]tabs.Label, 0, len(group.Items)+1)
+	for _, item := range group.Items {
+		text := ""
+		if item.View != nil {
+			text = item.View.Title()
+		}
+		labels = append(labels, tabs.Label{Text: text})
+	}
+	active := group.Active
+	if len(labels) == 0 {
+		labels = append(labels, tabs.Label{})
+		active = 0
+	}
+	if active < 0 || active >= len(labels) {
+		active = 0
+	}
+	labels[active] = tabs.Label{Text: label}
+	return tabs.LayoutStrip(labels, active, width, focused, fitSearchLabel)
+}
+
+// fitSearchLabel truncates from the start, the way a document tab's path does,
+// so the end of the query stays visible as it is typed.
+func fitSearchLabel(text string, _, _, maxWidth int, _ bool) string {
+	return ui.TruncateStart(text, maxWidth)
+}

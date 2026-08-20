@@ -167,7 +167,7 @@ func TestFinderBehavesTheSameInBothHosts(t *testing.T) {
 		sendToFiles(t, files, tea.KeyPressMsg{Code: r, Text: string(r)})
 		pane.handleDocSearchKey(doc, tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
-	if got := len(doc.mode.finder.Matches()); got < 3 {
+	if got := len(doc.mode.Finder().Matches()); got < 3 {
 		t.Fatalf("the navigation query matched %d files; it needs several", got)
 	}
 	for range 2 {

@@ -71,7 +71,7 @@ func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
 		WorkDir: root, ProjectRoot: root, Epoch: 7,
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
-	p.inlineEditActivation = 12
+	p.edit.Activation = 12
 
 	stalePath := filepath.Join(t.TempDir(), "old.md")
 	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {
@@ -85,26 +85,26 @@ func TestInlineEditMessagesRejectPreviousProjectActivation(t *testing.T) {
 		t.Fatal("stale editor start did not schedule orphan cleanup")
 	}
 	_ = cmd()
-	if p.inlineEditMode || p.inlineEditor.IsActive() {
+	if p.edit.Active || p.edit.Model.IsActive() {
 		t.Fatal("stale editor start activated the new project")
 	}
 	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
 		t.Fatal("stale editor start left the export file behind")
 	}
 
-	p.inlineEditMode = true
-	p.inlineEditSession = "current-note-editor"
+	p.edit.Active = true
+	p.edit.Name = "current-note-editor"
 	p.inlineEditNoteID = "current"
-	p.inlineEditPath = "/tmp/current"
-	p.inlineEditEditor = "nvim"
-	p.inlineEditor.Enter("current-note-editor", "")
+	p.edit.Path = "/tmp/current"
+	p.edit.EditorCmd = "nvim"
+	p.edit.Model.Enter("current-note-editor", "")
 	_, cmd = p.Update(InlineEditExitedMsg{
 		NoteID: "old", NotePath: "/tmp/old", Activation: 11, Epoch: 6,
 	})
 	if cmd != nil {
 		t.Fatal("stale editor exit scheduled work against the new project")
 	}
-	if !p.inlineEditMode || p.inlineEditNoteID != "current" {
+	if !p.edit.Active || p.inlineEditNoteID != "current" {
 		t.Fatal("stale editor exit cleared the current project editor")
 	}
 
@@ -121,13 +121,13 @@ func TestStaleInlineEditStartNeverKillsCurrentSameNamedSession(t *testing.T) {
 	logPath := installNotesFakeTmux(t)
 	p := New()
 	p.ctx = &plugin.Context{WorkDir: t.TempDir(), ProjectRoot: t.TempDir(), Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	p.inlineEditActivation = 9
-	p.inlineEditMode = true
-	p.inlineEditSession = "current-editor"
+	p.edit.Activation = 9
+	p.edit.Active = true
+	p.edit.Name = "current-editor"
 	p.inlineEditNoteID = "current"
-	p.inlineEditPath = "/tmp/current"
-	p.inlineEditEditor = "nvim"
-	p.inlineEditor.Open(tty.Target{Session: "current-editor"})
+	p.edit.Path = "/tmp/current"
+	p.edit.EditorCmd = "nvim"
+	p.edit.Model.Open(tty.Target{Session: "current-editor"})
 
 	_, cmd := p.Update(InlineEditStartedMsg{
 		SessionName: "current-editor", NoteID: "old", NotePath: "/tmp/old",
@@ -156,11 +156,11 @@ func TestInlineAutoSaveSnapshotsOwningStoreAndAppliesStateOnlyInUpdate(t *testin
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.store = oldStore
-	p.inlineEditMode = true
-	p.inlineEditSession = "old-editor"
+	p.edit.Active = true
+	p.edit.Name = "old-editor"
 	p.inlineEditNoteID = noteID
-	p.inlineEditPath = notePath
-	p.inlineEditActivation = 4
+	p.edit.Path = notePath
+	p.edit.Activation = 4
 	p.inlineAutoSaveGen = 6
 	p.inlineLastSavedContent = "old project content"
 	cmd := p.performInlineAutoSave()
@@ -171,7 +171,7 @@ func TestInlineAutoSaveSnapshotsOwningStoreAndAppliesStateOnlyInUpdate(t *testin
 	// Simulate project replacement before the queued command runs.
 	p.store = newStore
 	p.ctx = &plugin.Context{Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	p.inlineEditActivation = 5
+	p.edit.Activation = 5
 	p.inlineAutoSaveGen = 7
 	p.inlineLastSavedContent = "new project tracker"
 	result, ok := cmd().(InlineAutoSaveResultMsg)
@@ -197,9 +197,9 @@ func TestInlineAutoSaveSnapshotsOwningStoreAndAppliesStateOnlyInUpdate(t *testin
 		t.Fatalf("tea.Cmd mutated plugin state: %q", p.inlineLastSavedContent)
 	}
 
-	p.inlineEditMode = true
-	p.inlineEditSession = "new-editor"
-	p.inlineEditor.Open(tty.Target{Session: "new-editor"})
+	p.edit.Active = true
+	p.edit.Name = "new-editor"
+	p.edit.Model.Open(tty.Target{Session: "new-editor"})
 	_, next := p.Update(result)
 	if next != nil || p.inlineLastSavedContent != "new project tracker" {
 		t.Fatal("stale autosave result reached the replacement project")
@@ -216,14 +216,14 @@ func TestInlineAutoSaveUpdatesTrackerOnlyAfterScopedResult(t *testing.T) {
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.store = store
-	p.inlineEditMode = true
-	p.inlineEditSession = "editor"
+	p.edit.Active = true
+	p.edit.Name = "editor"
 	p.inlineEditNoteID = noteID
-	p.inlineEditPath = notePath
-	p.inlineEditActivation = 8
+	p.edit.Path = notePath
+	p.edit.Activation = 8
 	p.inlineAutoSaveGen = 10
 	p.inlineLastSavedContent = "previous edit"
-	p.inlineEditor.Open(tty.Target{Session: "editor"})
+	p.edit.Model.Open(tty.Target{Session: "editor"})
 
 	result, ok := p.performInlineAutoSave()().(InlineAutoSaveResultMsg)
 	if !ok {
@@ -250,11 +250,11 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 1, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.store = oldStore
-	p.inlineEditActivation = 4
+	p.edit.Activation = 4
 	cmd := p.saveNoteAfterInlineExit(noteID, notePath)
 	p.store = newStore
 	p.ctx = &plugin.Context{Epoch: 2, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	p.inlineEditActivation = 5
+	p.edit.Activation = 5
 	p.editorDirty = true
 	result, ok := cmd().(NoteContentSavedMsg)
 	if !ok {
@@ -478,17 +478,17 @@ func TestCalculateInlineEditorMouseCoords(t *testing.T) {
 // wrong character (td-73fa86).
 func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 	p := &Plugin{width: 100, height: 24, listWidth: 30}
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-note", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-note", "")
 	// Another instance resized the shared session: the pane is wider and taller
 	// than this viewport, with the cursor near its bottom-right.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width + 40
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height + 10
-	p.inlineEditor.State.CursorCol = p.inlineEditor.State.PaneWidth - 1
-	p.inlineEditor.State.CursorRow = p.inlineEditor.State.PaneHeight - 1
-	p.inlineEditor.State.CursorVisible = true
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width + 40
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height + 10
+	p.edit.Model.State.CursorCol = p.edit.Model.State.PaneWidth - 1
+	p.edit.Model.State.CursorRow = p.edit.Model.State.PaneHeight - 1
+	p.edit.Model.State.CursorVisible = true
 
 	col, row, ok := p.calculateInlineEditorMouseCoords(33, 2)
 	if !ok {
@@ -504,21 +504,21 @@ func TestCalculateInlineEditorMouseCoordsFollowsClippedPane(t *testing.T) {
 // raw mapping and forwarding a coordinate outside the pane (td-73fa86).
 func TestCalculateInlineEditorMouseCoordsRejectsLetterboxPadding(t *testing.T) {
 	p := &Plugin{width: 100, height: 30, listWidth: 30}
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-note", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-note", "")
 	// Another instance on a smaller terminal drives the shared session.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width - 10
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height - 5
 
 	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2); !ok || col != 1 || row != 1 {
 		t.Fatalf("in-pane coords = (%d,%d,%v), want (1,1,true)", col, row, ok)
 	}
-	if col, row, ok := p.calculateInlineEditorMouseCoords(33+p.inlineEditor.State.PaneWidth, 2); ok {
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33+p.edit.Model.State.PaneWidth, 2); ok {
 		t.Fatalf("click in horizontal letterbox padding = (%d,%d,true), want no hit", col, row)
 	}
-	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2+p.inlineEditor.State.PaneHeight); ok {
+	if col, row, ok := p.calculateInlineEditorMouseCoords(33, 2+p.edit.Model.State.PaneHeight); ok {
 		t.Fatalf("click in vertical letterbox padding = (%d,%d,true), want no hit", col, row)
 	}
 }
@@ -568,15 +568,15 @@ func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
 	p.focused = true
 	p.activePane = PaneEditor
 	p.listWidth = 30
-	p.inlineEditMode = true
-	p.inlineEditor.Enter("editor", "")
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.State.OutputBuf.Write("one\ntwo")
-	p.inlineEditor.State.CursorVisible = true
-	p.inlineEditor.State.CursorRow = 1
-	p.inlineEditor.State.CursorCol = 3
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height
+	p.edit.Active = true
+	p.edit.Model.Enter("editor", "")
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.State.OutputBuf.Write("one\ntwo")
+	p.edit.Model.State.CursorVisible = true
+	p.edit.Model.State.CursorRow = 1
+	p.edit.Model.State.CursorCol = 3
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height
 
 	cursor := p.Cursor()
 	if cursor == nil || cursor.X != 36 || cursor.Y != 3 {
@@ -586,7 +586,7 @@ func TestInlineEditorNativeCursorAndMouseMode(t *testing.T) {
 		t.Fatalf("PreferredMouseMode() = %v, want cell motion", mode)
 	}
 
-	p.showExitConfirmation = true
+	p.edit.ShowExitConfirm = true
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("confirmation-covered Cursor() = %#v, want nil", cursor)
 	}
@@ -599,19 +599,19 @@ func TestStopInvalidatesInlineEditorBeforeProjectSwitch(t *testing.T) {
 	logPath := installNotesFakeTmux(t)
 
 	p := New()
-	p.inlineEditMode = true
-	p.inlineEditSession = "old-project-editor"
+	p.edit.Active = true
+	p.edit.Name = "old-project-editor"
 	p.inlineEditNoteID = "old-note"
-	p.inlineEditPath = "/tmp/old-note"
-	p.inlineEditEditor = "nvim"
+	p.edit.Path = "/tmp/old-note"
+	p.edit.EditorCmd = "nvim"
 	p.inlineLastSavedContent = "old"
 	p.inlineAutoSaveGen = 7
 	oldGeneration := p.inlineAutoSaveGen
 
 	p.Stop()
 
-	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" ||
-		p.inlineEditPath != "" || p.inlineEditEditor != "" || p.inlineLastSavedContent != "" {
+	if p.edit.Active || p.edit.Name != "" || p.inlineEditNoteID != "" ||
+		p.edit.Path != "" || p.edit.EditorCmd != "" || p.inlineLastSavedContent != "" {
 		t.Fatalf("Stop retained old-project inline state: %+v", p)
 	}
 	if p.inlineAutoSaveGen <= oldGeneration {
@@ -638,11 +638,11 @@ func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
 	}
 	_ = seed.Close()
 	p := New()
-	p.inlineEditMode = true
-	p.inlineEditSession = "old-project-editor"
+	p.edit.Active = true
+	p.edit.Name = "old-project-editor"
 	p.inlineEditNoteID = "old-note"
-	p.inlineEditPath = "/tmp/old-note"
-	p.inlineEditEditor = "vim"
+	p.edit.Path = "/tmp/old-note"
+	p.edit.EditorCmd = "vim"
 	p.inlineAutoSaveGen = 11
 	oldGeneration := p.inlineAutoSaveGen
 	ctx := &plugin.Context{
@@ -658,7 +658,7 @@ func TestInitRejectsOldAutosaveTickAgainstNewProjectStore(t *testing.T) {
 	if p.store == nil {
 		t.Fatal("new project store was not initialized")
 	}
-	if p.inlineEditMode || p.inlineEditSession != "" || p.inlineEditNoteID != "" || p.inlineEditPath != "" {
+	if p.edit.Active || p.edit.Name != "" || p.inlineEditNoteID != "" || p.edit.Path != "" {
 		t.Fatal("Init retained old-project inline editor state")
 	}
 	if p.inlineAutoSaveGen <= oldGeneration {
@@ -725,15 +725,15 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	p := New()
 	p.width, p.height = 100, 30
 	p.listWidth = 30
-	p.inlineEditor = tty.New(nil)
-	p.inlineEditor.Width = p.calculateInlineEditorWidth()
-	p.inlineEditor.Height = p.calculateInlineEditorHeight()
-	p.inlineEditor.Enter("sidecar-note", "")
+	p.edit.Model = tty.New(nil)
+	p.edit.Model.Width = p.calculateInlineEditorWidth()
+	p.edit.Model.Height = p.calculateInlineEditorHeight()
+	p.edit.Model.Enter("sidecar-note", "")
 	// Another instance on a smaller terminal drives the shared session.
-	p.inlineEditor.State.PaneWidth = p.inlineEditor.Width - 10
-	p.inlineEditor.State.PaneHeight = p.inlineEditor.Height - 5
-	p.inlineEditor.State.MouseReportingEnabled = true
-	p.inlineEditMode = true
+	p.edit.Model.State.PaneWidth = p.edit.Model.Width - 10
+	p.edit.Model.State.PaneHeight = p.edit.Model.Height - 5
+	p.edit.Model.State.MouseReportingEnabled = true
+	p.edit.Active = true
 
 	// Find the pane's left edge, then step one column past its right edge.
 	padY := 10
@@ -747,7 +747,7 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	if originX < 0 {
 		t.Fatal("no in-pane column found on the test row")
 	}
-	padX := originX + p.inlineEditor.State.PaneWidth
+	padX := originX + p.edit.Model.State.PaneWidth
 	if _, _, ok := p.calculateInlineEditorMouseCoords(padX, padY); ok {
 		t.Fatalf("(%d,%d) is inside the pane; pick a padding cell", padX, padY)
 	}
@@ -759,7 +759,7 @@ func TestInlineEditorPressInLetterboxPaddingIsDropped(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("press on letterbox padding produced a command; it must be dropped, not forwarded to tmux")
 	}
-	if p.inlineEditorDragging {
+	if p.edit.Dragging {
 		t.Fatal("press on letterbox padding started a drag")
 	}
 }
@@ -797,7 +797,7 @@ func TestEnterOpensTheSimpleEditor(t *testing.T) {
 			t.Fatalf("enter started vim (%s), want the built-in editor", started.NoteID)
 		}
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		t.Fatal("enter entered inline vim mode")
 	}
 	if p.previewMode {
@@ -820,7 +820,7 @@ func TestClickOpensTheSimpleEditor(t *testing.T) {
 		X: 40, Y: 3,
 		Region: &mouse.Region{ID: regionEditorPane, Rect: mouse.Rect{X: 30, Y: 1, W: 40, H: 20}},
 	})
-	if p2.inlineEditMode {
+	if p2.edit.Active {
 		t.Fatal("clicking the note started vim, want the built-in editor")
 	}
 	if p2.previewMode {
@@ -922,7 +922,7 @@ func TestUnavailableEditorToastsInsteadOfOpenFile(t *testing.T) {
 	if _, ok := got.(msg.ToastMsg); !ok {
 		t.Fatalf("missing tmux produced %T, want toast", got)
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		t.Fatal("failed start left notes in inline edit mode")
 	}
 }
@@ -1004,8 +1004,8 @@ func TestNotesAttachKeyAlwaysEmpty(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 
 	p, noteID := newNotesEditorHarness(t)
-	if p.inlineEditor.Config.AttachKey != "" {
-		t.Fatalf("inline editor AttachKey = %q, want empty", p.inlineEditor.Config.AttachKey)
+	if p.edit.Model.Config.AttachKey != "" {
+		t.Fatalf("inline editor AttachKey = %q, want empty", p.edit.Model.Config.AttachKey)
 	}
 
 	// Drive the one place OnAttach is wired, rather than asserting on a bare
@@ -1019,14 +1019,14 @@ func TestNotesAttachKeyAlwaysEmpty(t *testing.T) {
 		NoteID:      noteID,
 		NotePath:    notePath,
 		Editor:      "vim",
-		Activation:  p.inlineEditActivation,
+		Activation:  p.edit.Activation,
 		Epoch:       p.ctx.Epoch,
 	})
 
-	if p.inlineEditor.Config.AttachKey != "" {
-		t.Fatalf("tmux_full_attach revived the notes attach chord: %q", p.inlineEditor.Config.AttachKey)
+	if p.edit.Model.Config.AttachKey != "" {
+		t.Fatalf("tmux_full_attach revived the notes attach chord: %q", p.edit.Model.Config.AttachKey)
 	}
-	if p.inlineEditor.OnAttach != nil {
+	if p.edit.Model.OnAttach != nil {
 		t.Fatal("notes inline editor wired an OnAttach hook; notes has no full-screen path")
 	}
 }
@@ -1116,15 +1116,15 @@ func TestSessionDeathLeavesEditorAndSaves(t *testing.T) {
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 3, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	p.store = store
-	p.inlineEditMode = true
-	p.inlineEditSession = "dying-editor"
+	p.edit.Active = true
+	p.edit.Name = "dying-editor"
 	p.inlineEditNoteID = noteID
-	p.inlineEditPath = notePath
-	p.inlineEditActivation = 8
-	p.inlineEditor.Close()
+	p.edit.Path = notePath
+	p.edit.Activation = 8
+	p.edit.Model.Close()
 
 	_, cmd := p.Update(tty.PollTickMsg{})
-	if p.inlineEditMode {
+	if p.edit.Active {
 		t.Fatal(":wq / session death left inline edit mode active")
 	}
 	if cmd == nil {
@@ -1149,19 +1149,19 @@ func TestSessionDeathLeavesEditorAndSaves(t *testing.T) {
 func TestClickAwayLeavesInlineEditor(t *testing.T) {
 	installNotesFakeTmux(t)
 	p, noteID := newNotesEditorHarness(t)
-	p.inlineEditMode = true
-	p.inlineEditSession = "live-editor"
+	p.edit.Active = true
+	p.edit.Name = "live-editor"
 	p.inlineEditNoteID = noteID
-	p.inlineEditPath = filepath.Join(t.TempDir(), "note.md")
-	if err := os.WriteFile(p.inlineEditPath, []byte("click away save"), 0o644); err != nil {
+	p.edit.Path = filepath.Join(t.TempDir(), "note.md")
+	if err := os.WriteFile(p.edit.Path, []byte("click away save"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	p.inlineEditor.Enter("live-editor", "")
+	p.edit.Model.Enter("live-editor", "")
 	p.notes = []Note{{ID: noteID, Title: "note", Content: "old project content"}}
 	_ = p.View(p.width, p.height)
 
 	_, cmd := p.Update(tea.MouseClickMsg(tea.Mouse{X: 2, Y: 2, Button: tea.MouseLeft}))
-	if p.inlineEditMode {
+	if p.edit.Active {
 		t.Fatal("clicking another note left the editor hanging")
 	}
 	if cmd == nil {
@@ -1176,7 +1176,7 @@ func TestCtrlTIsNoOpInNotes(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("ctrl+t produced %T, want no-op", cmd())
 	}
-	if p.inlineEditMode {
+	if p.edit.Active {
 		t.Fatal("ctrl+t started an editor")
 	}
 }

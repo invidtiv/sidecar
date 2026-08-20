@@ -86,7 +86,7 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	}
 	// A global terminal being typed into is the same case as a plugin's: cell
 	// motion, so the pane's own application gets clean clicks.
-	if m.globalWorkspacesVisible() && m.overview.PreviewInteractive() {
+	if m.globalWorkspacesVisible() && m.overview.PreviewOwnsKeyboard() {
 		return tea.MouseModeCellMotion
 	}
 	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {

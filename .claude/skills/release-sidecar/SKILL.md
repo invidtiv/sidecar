@@ -41,16 +41,17 @@ git tag -l 'v*' | sort -V | tail -1
 
 SemVer: major / minor / patch as usual.
 
-### 2. td dependency
+### 2. Sibling dependencies (td, tasks)
 
 ```bash
-GOWORK=off go get github.com/marcus/td@latest
-GOWORK=off go mod tidy
+make sync-deps   # pins every github.com/marcus/* requirement to its latest tag
 ```
 
-If td jumped several minors, decide deliberately (pin for a focused release vs
-take latest and note it under Dependencies). Launch the app and open the td tab
-when td moved.
+`check-release-state.sh` enforces this and refuses to tag when one is behind.
+`go.work` resolves those imports to the local checkouts, so drift is invisible
+locally — both the gate and `sync-deps` use `GOWORK=off`. If a sibling jumped
+several minors, decide deliberately (pin for a focused release vs take latest
+and note it under Dependencies) and smoke its tab in the app.
 
 ### 3. CHANGELOG
 

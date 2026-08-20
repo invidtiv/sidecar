@@ -76,7 +76,7 @@ func TestNotesSubModesKeepTab(t *testing.T) {
 	}{
 		{"editing", func(p *Plugin) { p.activePane = PaneEditor; p.previewMode = false }},
 		{"search", func(p *Plugin) { p.searchMode = true }},
-		{"inline edit", func(p *Plugin) { p.inlineEditMode = true }},
+		{"inline edit", func(p *Plugin) { p.edit.Active = true }},
 		{"info modal", func(p *Plugin) { p.showInfoModal = true }},
 		{"delete modal", func(p *Plugin) { p.showDeleteModal = true }},
 		{"task modal", func(p *Plugin) { p.showTaskModal = true }},

@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -14,9 +15,15 @@ const (
 	ctxGlobalWorkspacesDelete   = "global-workspaces-delete"
 	ctxGlobalWorkspacesTerminal = "global-workspaces-terminal"
 	ctxGlobalWorkspacesDoc      = "global-workspaces-doc"
-	ctxGlobalWorkspacesIssue    = "global-workspaces-issue"
-	ctxGlobalWorkspacesDiff     = "global-workspaces-diff"
-	ctxGlobalWorkspacesResource = "global-workspaces-resource"
+	// The two claims a focused document pane can make on the keyboard: the
+	// finder / project-search modal scoped to the pane, and docview's in-file
+	// search bar. Both mirror the project workspace's workspace-doc-search and
+	// workspace-doc-find.
+	ctxGlobalWorkspacesDocSearch = "global-workspaces-doc-search"
+	ctxGlobalWorkspacesDocFind   = "global-workspaces-doc-find"
+	ctxGlobalWorkspacesIssue     = "global-workspaces-issue"
+	ctxGlobalWorkspacesDiff      = "global-workspaces-diff"
+	ctxGlobalWorkspacesResource  = "global-workspaces-resource"
 )
 
 // Commands is the footer and palette metadata for the active
@@ -52,14 +59,26 @@ func (m *Model) Commands() []plugin.Command {
 		return []plugin.Command{
 			{ID: "exit-interactive", Name: "Stop", Description: "Stop typing and return to the list", Context: ctxGlobalWorkspacesTerminal, Priority: 1},
 		}
+	case ctxGlobalWorkspacesDocSearch:
+		return []plugin.Command{
+			{ID: "search-open", Name: "Open", Description: "Open the selected file in this pane", Context: ctxGlobalWorkspacesDocSearch, Priority: 1},
+			{ID: "search-open-tab", Name: "Tab+", Description: "Open the selected file in a new tab", Context: ctxGlobalWorkspacesDocSearch, Priority: 2},
+			{ID: "search-cancel", Name: "Cancel", Description: "Close the search and return to the document", Context: ctxGlobalWorkspacesDocSearch, Priority: 3},
+		}
+	case ctxGlobalWorkspacesDocFind:
+		return docview.SearchCommands(ctxGlobalWorkspacesDocFind)
 	case ctxGlobalWorkspacesDoc:
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide the document pane", Context: ctxGlobalWorkspacesDoc, Priority: 1},
-			{ID: "close-tab", Name: "Tab×", Description: "Close the active file tab", Context: ctxGlobalWorkspacesDoc, Priority: 2},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: ctxGlobalWorkspacesDoc, Priority: 3},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: ctxGlobalWorkspacesDoc, Priority: 4},
-			{ID: "render", Name: "Raw", Description: "Toggle rendered and raw markdown", Context: ctxGlobalWorkspacesDoc, Priority: 5},
-			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 6},
+			{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Context: ctxGlobalWorkspacesDoc, Priority: 2},
+			{ID: "edit", Name: "Edit", Description: "Edit this file inline", Context: ctxGlobalWorkspacesDoc, Priority: 3},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 4},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: ctxGlobalWorkspacesDoc, Priority: 5},
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active file tab", Context: ctxGlobalWorkspacesDoc, Priority: 6},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: ctxGlobalWorkspacesDoc, Priority: 7},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: ctxGlobalWorkspacesDoc, Priority: 8},
+			{ID: "render", Name: "Raw", Description: "Toggle rendered and raw markdown", Context: ctxGlobalWorkspacesDoc, Priority: 9},
+			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 10},
 		}
 		return cmds
 	case ctxGlobalWorkspacesDiff:

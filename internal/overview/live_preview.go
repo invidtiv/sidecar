@@ -269,7 +269,9 @@ func (m *Model) refreshPreviewDocs() []tea.Cmd {
 		return nil
 	}
 	view.Observe()
-	if cmd := wrapPreviewDocLoad(view.Refresh(false), doc.surface); cmd != nil {
+	// An editor holding the file is writing it: a re-read would rebuild the
+	// pane under a live session.
+	if cmd := wrapPreviewDocLoad(view.Refresh(doc.editing()), doc.surface); cmd != nil {
 		return []tea.Cmd{cmd}
 	}
 	return nil
