@@ -122,6 +122,11 @@ func DefaultBindings() []Binding {
 		{Key: "d", Command: "dismiss", Context: "notification-centre"},
 		{Key: "D", Command: "dismiss-group", Context: "notification-centre"},
 		{Key: "esc", Command: "close-notification-centre", Context: "notification-centre"},
+		// The panel is a stop on the focus cycle, so tab moves on from it the
+		// way it moves on from any pane — back to the surface underneath,
+		// leaving the panel open.
+		{Key: "tab", Command: "focus-content", Context: "notification-centre"},
+		{Key: "shift+tab", Command: "focus-content", Context: "notification-centre"},
 
 		// config-edit: an active editor owns typed characters. Registered in
 		// the app's isTextInputContext, so no global shortcut can steal them.

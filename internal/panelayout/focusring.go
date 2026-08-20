@@ -72,3 +72,42 @@ func CycleTarget(ring []Target, current Target, reverse bool) Target {
 	}
 	return ring[(index+1)%len(ring)]
 }
+
+// AtRingEnd reports that current is the last stop of the ring in the direction
+// a cycle is about to move: the final entry going forward, the first one going
+// back. It is the question a shell-owned stop has to ask before it can join a
+// surface's Tab cycle — the notification centre uses it to insert itself
+// between a surface's last window and its first, without either side growing a
+// second cycle. A current target the ring does not contain is not at the end:
+// the cycle has not started yet.
+func AtRingEnd(ring []Target, current Target, reverse bool) bool {
+	if len(ring) == 0 {
+		return false
+	}
+	index := -1
+	for i, target := range ring {
+		if target == current {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return false
+	}
+	if reverse {
+		return index == 0
+	}
+	return index == len(ring)-1
+}
+
+// RingStart is the entry a cycle resumes at when focus comes back to a surface
+// from a shell-owned stop: the first window going forward, the last going back.
+func RingStart(ring []Target, reverse bool) (Target, bool) {
+	if len(ring) == 0 {
+		return Target{}, false
+	}
+	if reverse {
+		return ring[len(ring)-1], true
+	}
+	return ring[0], true
+}

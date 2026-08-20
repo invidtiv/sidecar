@@ -101,6 +101,26 @@ type PendingWorkspaceSelection struct {
 	Action string
 }
 
+// FocusCycler is an optional capability for surfaces whose Tab cycle the shell
+// may extend with a stop of its own. The notification centre is that stop: when
+// it is open it joins the cycle between a surface's last window and its first,
+// rather than running a second cycle beside it.
+//
+// A surface that does not implement this keeps Tab exactly as it always had it;
+// the shell then only offers Tab to the centre when nothing else has claimed
+// the key in the focused context.
+type FocusCycler interface {
+	// AtFocusCycleEnd reports that focus is on the last window of the surface's
+	// ring in the direction the cycle is about to move, so the next Tab would
+	// wrap. That is where a shell-owned stop belongs.
+	AtFocusCycleEnd(reverse bool) bool
+
+	// FocusCycleStart puts focus back on the window the cycle resumes at — the
+	// first going forward, the last going back — when the shell hands the
+	// keyboard back to the surface.
+	FocusCycleStart(reverse bool) tea.Cmd
+}
+
 type PendingWorkspaceSelector interface {
 	SetPendingWorkspaceSelection(PendingWorkspaceSelection)
 }

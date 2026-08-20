@@ -917,6 +917,16 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// With the panel open it is also a stop on the focus cycle: the focused
+	// surface keeps cycling its own panes, and the press that would have
+	// wrapped its ring lands here instead. This has to run before the surfaces
+	// below see the key, and it declines every context that owns tab for
+	// something of its own — see notificationCentreTabKey.
+	if handled, cmd := m.notificationCentreTabKey(msg); handled {
+		m.updateContext()
+		return m, cmd
+	}
+
 	// Configuration covers the content area, so it answers before any of
 	// sidecar's global switches: a tab number, `q`, or a printable key typed
 	// into Search must not reach the plugin hidden underneath.

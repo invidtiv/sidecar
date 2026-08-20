@@ -1,6 +1,14 @@
 package workspace
 
-import "github.com/marcus/sidecar/internal/panelayout"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/plugin"
+)
+
+// The project surface extends its Tab ring with the shell's notification centre.
+var _ plugin.FocusCycler = (*Plugin)(nil)
 
 // paneTreeShowing reports whether the pane tree is what the preview is drawing.
 // Worktree terminals are terminals: the tree is on screen whenever it exists.
@@ -129,4 +137,25 @@ func (p *Plugin) focusTermPanel() {
 // focusLeaf is the click path's shorthand for the leaf a region carries.
 func (p *Plugin) focusLeaf(leafID int) {
 	p.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leafID})
+}
+
+// AtFocusCycleEnd and FocusCycleStart implement plugin.FocusCycler, which is
+// how the shell's notification centre becomes a stop on this surface's Tab
+// cycle instead of a cycle of its own. Both read the same ring cyclePaneFocus
+// walks, so the stop lands exactly where the wrap would have been.
+func (p *Plugin) AtFocusCycleEnd(reverse bool) bool {
+	// A live pane search still owns Tab — the surface uses it to leave the
+	// input and move focus, and a shell stop taking the key would leave a
+	// search box drawn, cursor and all, over a pane that no longer takes keys.
+	if p.docSearchActive() || p.terminalSearch.InputActive {
+		return false
+	}
+	return panelayout.AtRingEnd(p.focusRing(), p.currentFocusTarget(), reverse)
+}
+
+func (p *Plugin) FocusCycleStart(reverse bool) tea.Cmd {
+	if target, ok := panelayout.RingStart(p.focusRing(), reverse); ok {
+		p.setFocusTarget(target)
+	}
+	return nil
 }

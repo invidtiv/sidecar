@@ -398,6 +398,7 @@ func (m Model) notificationCentreCommands() []plugin.Command {
 		{ID: "dismiss", Name: "Dismiss", Context: notificationCentreContext, Priority: 3},
 		{ID: "dismiss-group", Name: "Group", Context: notificationCentreContext, Priority: 4},
 		{ID: "close-notification-centre", Name: "Close", Context: notificationCentreContext, Priority: 5},
+		{ID: "focus-content", Name: "Content", Description: "Move focus on to the content", Context: notificationCentreContext, Priority: 6},
 	}
 }
 
@@ -409,6 +410,13 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	items := m.notificationCentreItems()
 	m.clampNotificationCentreCursor(len(items))
 	key := msg.String()
+	if key == "tab" || key == "shift+tab" {
+		// The centre is a stop on the shell's focus cycle, so tab out of it is
+		// the cycle moving on — not a key the surface underneath should also
+		// act on. Consuming it here is what makes the stop symmetric with tab
+		// in: one press per stop. See notificationCentreTabKey for the way in.
+		return true, m.leaveNotificationCentreFocus(key == "shift+tab")
+	}
 	if notificationCentreReleasesFocus(key) {
 		// A navigation key means the user is going somewhere else. Hand the
 		// keyboard back to the content and let the key run its ordinary course —
@@ -474,7 +482,10 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func notificationCentreReleasesFocus(key string) bool {
 	switch key {
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-		"[", "]", "`", "~", "tab", "shift+tab",
+		// tab and shift+tab are not here: the centre is a stop on the focus
+		// cycle and answers them itself (notificationCentreKey), rather than
+		// releasing them to run twice.
+		"[", "]", "`", "~",
 		"K", "@", "W", "^", "?", ",":
 		return true
 	}
@@ -598,4 +609,99 @@ func (m *Model) blurNotificationCentre() {
 	}
 	m.notificationCentreFocused = false
 	m.updateContext()
+}
+
+// The centre as a focus-cycle stop
+//
+// With the panel open, `tab` treats it as one more window of the shell: the
+// surface underneath cycles its own panes as it always has, and when the next
+// press would wrap that surface's ring, the centre takes the keyboard instead.
+// A further `tab` hands it back to the window the ring resumes at. There is no
+// second cycle and no second key-routing scheme — the surface answers "am I at
+// my ring's end?" through plugin.FocusCycler, and shift+tab runs the same rule
+// in reverse. When the panel is closed (or open on a terminal too narrow to
+// draw it) nothing here fires and tab is exactly what it was.
+//
+// A surface that does not implement FocusCycler keeps `tab` whenever its
+// context binds the key; the centre only joins where the key is otherwise
+// unclaimed. `alt+n`, `N`, and clicking remain the direct routes in from
+// anywhere.
+
+// notificationCentreFocusCycler is the surface whose Tab ring the centre is
+// currently extending, or nil when the focused surface owns Tab outright.
+func (m *Model) notificationCentreFocusCycler() plugin.FocusCycler {
+	if m.configOpen() {
+		return nil
+	}
+	if m.inGlobalScope() {
+		if m.globalWorkspacesVisible() {
+			if cycler, ok := any(m.overview).(plugin.FocusCycler); ok {
+				return cycler
+			}
+		}
+		return nil
+	}
+	if p := m.ActivePlugin(); p != nil {
+		if cycler, ok := p.(plugin.FocusCycler); ok {
+			return cycler
+		}
+	}
+	return nil
+}
+
+// notificationCentreTabKey answers `tab` on the way *into* the panel. It
+// reports whether the key was consumed, and must run before the focused
+// surface sees the key.
+func (m *Model) notificationCentreTabKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	key := msg.String()
+	if key != "tab" && key != "shift+tab" {
+		return false, nil
+	}
+	if m.hasModal() || !m.notificationCentreVisible() || m.notificationCentreFocused {
+		return false, nil
+	}
+	// Anything typing, or any surface holding the whole keyboard, keeps tab:
+	// a completion or a field cycle is not a focus cycle.
+	if m.consumesTextInput() || m.pluginBlocksGlobalKeys() || isTextInputContext(m.activeContext) {
+		return false, nil
+	}
+	switch m.activeContext {
+	case "workspace-interactive", "file-browser-inline-edit", "notes-inline-edit":
+		return false, nil
+	}
+	// A context that has bound tab to something that is not a pane cycle —
+	// accepting a completion, moving to the next field, toggling a search
+	// option — owns the key outright, ring or no ring.
+	if cmd, bound := m.keymap.CommandForContextKey(m.activeContext, key); bound &&
+		cmd != "next-pane" && cmd != "switch-pane" {
+		return false, nil
+	}
+	reverse := key == "shift+tab"
+	if cycler := m.notificationCentreFocusCycler(); cycler != nil {
+		if !cycler.AtFocusCycleEnd(reverse) {
+			return false, nil
+		}
+		m.focusNotificationCentre()
+		m.readSelectedNotification()
+		return true, nil
+	}
+	// No ring to extend: the centre takes tab only where the focused context
+	// has not bound it to something of its own.
+	if m.contextRebindsKey(key) || m.pluginClaimsKey(key) {
+		return false, nil
+	}
+	m.focusNotificationCentre()
+	m.readSelectedNotification()
+	return true, nil
+}
+
+// leaveNotificationCentreFocus is the other half: tab out of the panel returns
+// the keyboard to the window the surface's ring resumes at, leaving the panel
+// open exactly where it was.
+func (m *Model) leaveNotificationCentreFocus(reverse bool) tea.Cmd {
+	m.blurNotificationCentre()
+	if cycler := m.notificationCentreFocusCycler(); cycler != nil {
+		return cycler.FocusCycleStart(reverse)
+	}
+	return nil
 }

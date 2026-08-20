@@ -177,3 +177,32 @@ func TestCycleTargetWalksWholeRing(t *testing.T) {
 		}
 	}
 }
+
+func TestAtRingEndAndRingStart(t *testing.T) {
+	ring := []Target{{Kind: TargetSidebar}, {Kind: TargetLeaf, Leaf: 1}, {Kind: TargetLeaf, Leaf: 2}}
+	if AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 1}, false) {
+		t.Fatal("a middle window reported the end of the ring")
+	}
+	if !AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 2}, false) {
+		t.Fatal("the last window did not report the end of the ring")
+	}
+	if !AtRingEnd(ring, Target{Kind: TargetSidebar}, true) {
+		t.Fatal("the first window is the end going backwards")
+	}
+	if AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 9}, false) {
+		t.Fatal("a target the ring does not contain is not at its end")
+	}
+	if AtRingEnd(nil, Target{Kind: TargetSidebar}, false) {
+		t.Fatal("an empty ring has no end")
+	}
+
+	if start, ok := RingStart(ring, false); !ok || start != ring[0] {
+		t.Fatalf("RingStart forward = %v (%v), want %v", start, ok, ring[0])
+	}
+	if start, ok := RingStart(ring, true); !ok || start != ring[len(ring)-1] {
+		t.Fatalf("RingStart reverse = %v (%v), want %v", start, ok, ring[len(ring)-1])
+	}
+	if _, ok := RingStart(nil, false); ok {
+		t.Fatal("an empty ring has no start")
+	}
+}

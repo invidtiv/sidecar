@@ -229,12 +229,15 @@ with one toast slot a burst would read everything queued behind the newest.
   covers plugins implementing `plugin.KeyRouter`, which is `tasks` alone, and
   the rest bind `d` after the global switch.
 - **The `notification-centre` keymap context** owns `j/k`, `d`, `D`, `enter`
-  (inert until Phase 5) and `esc`, registered in `internal/keymap/bindings.go`
-  like every other context. Navigation keys — the tab digits, `[`/`]`,
-  `` ` ``/`~`, `tab`, `K`, `@`, `W`, `^`, `?`, `,` — are deliberately *not*
-  claimed: they blur the panel and run normally, so a keyboard-only user can
-  leave the panel without closing it. The panel still closes only on `esc`,
-  the close affordance, or the toggle.
+  (inert until Phase 5), `esc` and — since Phase 2 — `tab`/`shift+tab`,
+  registered in `internal/keymap/bindings.go` like every other context.
+  Navigation keys — the tab digits, `[`/`]`, `` ` ``/`~`, `K`, `@`, `W`, `^`,
+  `?`, `,` — are deliberately *not* claimed: they blur the panel and run
+  normally, so a keyboard-only user can leave the panel without closing it.
+  `tab` was on that list in Phase 1.5 and no longer is: it is now the focus
+  cycle's move onward and is consumed rather than released (see Phase 2 as
+  built). The panel still closes only on `esc`, the close affordance, or the
+  toggle.
 
 **Read semantics.** A notification is marked read when it is selected in the
 centre (on open, on cursor move, on click) and when its toast countdown runs
@@ -456,13 +459,62 @@ transitions: agent finished (`✓ SESSION`, pass/fail colour), agent waiting
 (`? WAITING`, sticky — no countdown, "stays"), session died. Debounce so a
 flapping status doesn't spam. Workspace list icons are untouched; the
 per-source config (Phase 4) is the off-switch for users who don't want both.
-Also in Phase 2 (decided 2026-08-19): **`tab` cycles focus through the open
-centre like any other pane.** With the centre open, the app-level focus cycle
+Also in Phase 2 (decided 2026-08-19, **built** — see "Phase 2 as built: tab as
+a focus stop"): **`tab` cycles focus through the open centre like any other
+pane.** With the centre open, the app-level focus cycle
 includes it as a stop — tab into it, tab onward back into content — exactly as
 other panes participate. This replaces the Phase 1 decision to leave `tab`
 unclaimed; `alt+n`/`N`/click remain as direct routes. (When a collapsed toast
 is on screen, its `tab expand` (1b) must not fight the focus cycle — prefer a
 different expand key if both can be live at once.)
+
+
+### Phase 2 as built: tab as a focus stop
+
+Only the tab item; the agentstatus triggers are still to do.
+
+- **The mechanism is the surfaces' own ring, extended — not a second cycle.**
+  `plugin.FocusCycler` (`internal/plugin/plugin.go`) is a new optional
+  capability with `AtFocusCycleEnd(reverse) bool` and
+  `FocusCycleStart(reverse) tea.Cmd`. A surface that implements it keeps
+  cycling its panes exactly as before; the press that *would have wrapped* its
+  ring goes to the centre instead, and the next press hands focus back to the
+  window the ring resumes at. `panelayout.AtRingEnd` / `panelayout.RingStart`
+  answer both questions from the same ring `CycleTarget` walks, so the stop
+  can only land where the wrap was.
+- **Implemented for the parity pair**: `internal/plugins/workspace`
+  (`focus.go`) and `internal/overview` (`focus.go`), each in the one file that
+  already owned focus, with a compile-time `var _ plugin.FocusCycler`
+  assertion. Workspace declines while a doc or terminal search input is live —
+  that surface uses `tab` to leave the input, and a shell stop taking the key
+  would strand a drawn search box.
+- **Everything else**: `notificationCentreTabKey` (`internal/app/notification_centre.go`)
+  runs in `handleKeyMsg` right after the panel's own key block and before any
+  surface sees the key. With no `FocusCycler` it takes `tab` only where the
+  focused context has not bound it (`contextRebindsKey` / `pluginClaimsKey`),
+  and it always stands aside for text input, blocking overlays, interactive
+  panes, and any context that binds `tab` to something that is not
+  `next-pane`/`switch-pane`.
+  **Known limit, deliberate:** on surfaces that own `tab` for a two-pane
+  toggle rather than a ring (`git-status`, `notes`, `file-browser`,
+  `conversations`, the hosted `td` tab) the centre is *not* a tab stop — those
+  toggles have no wrap point to insert into. `alt+n`, `N` and the pointer are
+  the routes there. Turning those toggles into rings is a follow-up, and it is
+  one `FocusCycler` implementation each, no shell change.
+- Leaving is symmetric and consumed: `notificationCentreKey` answers
+  `tab`/`shift+tab` itself (`leaveNotificationCentreFocus`) instead of
+  releasing them, so one press = one stop and the surface underneath does not
+  also act on the key. The panel is never closed by `tab`; `esc`/close/toggle
+  are still the only closes. Focusing by tab is the same focused state as a
+  click — gradient border active, list keys live, selection marked read.
+- Footer/help: `focus-content` is a real command on the panel
+  (`notificationCentreCommands`) bound to `tab`/`shift+tab` in
+  `keymap/bindings.go`, so the hint row reads `… esc Close · tab, shift+tab
+  Content` and the binding is reboundable like any other.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated tmux +
+  state): on Workspaces, `tab` walks sidebar → preview → **centre** → sidebar
+  with the panel staying open throughout; on the hosted td tab `tab` still
+  drives td's own panels, as designed.
 
 **Phase 3 — stacking + reveal.** Max 3 toasts on screen, newest on top;
 posts beyond 3 **queue** (macOS-style, decided 2026-08-19) and surface as
