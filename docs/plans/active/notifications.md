@@ -705,6 +705,46 @@ retention and the user can dismiss it. The fix is a deterministic per-workspace
 id for the waiting record, which needs a rule for re-posting after a dismissal
 and is not worth inventing here.
 
+### Phases 2–3 proof run (2026-08-19)
+
+A headless real-app run under `scripts/tmux-drive.sh` (isolated tmux socket
+*and* isolated state tree; `paths` confirmed nothing resolved under
+`~/.local/state/sidecar` or `~/.config/sidecar`), driving a 200×50 Sidecar with
+notifications posted from a second shell through the `sidecar notify` CLI
+against the same isolated `XDG_STATE_HOME`. All five checks passed; no defects
+found, no code changed.
+
+- **Tab as a focus stop.** In a ring surface (Workspaces) `tab` cycles the
+  surface's own stops and then the centre; the centre's border turns from grey
+  `#3d434a` to the active gold and `j`/`k` move its cursor row. `tab` from the
+  centre returns to the content. In a ringless surface (td, Files, Git) `tab`
+  stays with the plugin, exactly as the review pass decided — and the centre is
+  still keyboard-reachable there because `alt+n` on an *open but unfocused*
+  centre **refocuses** it rather than closing it. That is the property that
+  keeps the ringless-surface limit a limit and not a trap; it should stay true.
+- **Triggers.** A real lane transition needs a live agent in a tmux shell and is
+  not drivable headlessly, so the contract was exercised at the seam instead
+  (`notify.LaneTracker` directly, with a throwaway test deleted afterwards):
+  first sight baselines silently; settled working→blocked posts
+  `source=waiting sticky=true severity=warning "Shell 2 needs input"`; settled
+  blocked→done posts `source=session "Shell 2 finished"` **and** withdraws the
+  waiting id in the same `LaneEvents`. The adapter that carries this into the
+  app is one call from the single `Plugin.Update` seam
+  (`terminal_control.go:137` → `notifyAgentTransitions`).
+- **Stacking.** Five posts from five sources drew three blocks; admission was
+  FCFS by oldest and display newest-on-top, so the two newest queued. Dismissing
+  a visible block let a queued one take the freed slot on the next sweep, twice
+  in a row. A same-source burst collapsed to `◆ Burst agent ×2` with the
+  `▾ 1 more ·  alt+e  expand` peek line, and `alt+e` listed the hidden member —
+  the key the peek line prints is the key that works.
+- **Reveal.** Frame-by-frame `capture-pane` sampling (~4ms/frame) caught the
+  entry as six distinct frames: top border, title, rule, body, spacer, key row,
+  bottom border. Relaunched with `SIDECAR_NO_ANIMATION=1`, 900 sampled frames
+  contained no partial block — the toast appears whole.
+- **No focus stealing.** With three toasts on screen, `j` still moved the td
+  board cursor, and a synthetic SGR click on the *second* stacked block
+  dismissed that block and no other.
+
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still
