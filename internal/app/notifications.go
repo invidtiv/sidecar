@@ -108,6 +108,13 @@ func (m *Model) emitContentSize() []tea.Cmd {
 	}
 	plugins := m.registry.Plugins()
 	for i, p := range plugins {
+		if !m.inGlobalScope() && i == m.activePlugin && m.contentDeckEligible(p) {
+			// The deck's frame owns this plugin's actual primary inner box. Its
+			// SetSize path updates the plugin during composition; sending the full
+			// app box here would briefly resize watchers/terminals to geometry they
+			// are not drawn in.
+			continue
+		}
 		newPlugin, cmd := p.Update(size)
 		plugins[i] = newPlugin
 		if cmd != nil {

@@ -650,6 +650,11 @@ func (m *Model) shutdown() {
 	if activePlugin := m.ActivePlugin(); activePlugin != nil {
 		_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 	}
+	for _, h := range m.contentDecks {
+		if h.live != nil {
+			h.live.Stop()
+		}
+	}
 	m.registry.Stop()
 	m.globalTasks.stop()
 	if m.overview != nil {

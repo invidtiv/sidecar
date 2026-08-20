@@ -150,9 +150,11 @@ type Plugin struct {
 	focused bool
 
 	// Pane state
-	activePane  FocusPane
-	treeVisible bool // Toggle tree pane visibility with \
-	showIgnored bool // Toggle git-ignored file visibility with H
+	activePane       FocusPane
+	treeVisible      bool // Toggle tree pane visibility with \
+	showIgnored      bool // Toggle git-ignored file visibility with H
+	paneFocusManaged bool // Set once an outer deck composes Files' pane focus.
+	paneFocusActive  bool // Whether Files' inner active border should be drawn.
 
 	// Tree state
 	treeCursor    int

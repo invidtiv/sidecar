@@ -9,6 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -16,12 +18,15 @@ import (
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // isMouseEscapeSequence returns true if the key message appears to be
@@ -149,12 +154,62 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	// only, exactly as keys are routed. Broadcasting it instead dropped the same
 	// text into every background plugin's text input — a paste into a workspace
 	// terminal also landed in the Tasks prompt.
+	if h := m.currentContentDeck(); h != nil && h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+		return m, nil
+	}
 	return m.forwardKeyToPlugin(msg)
 }
 
 // Update handles all messages and returns the updated model and commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	for _, h := range m.contentDecks {
+		if h.live != nil {
+			if cmd, handled := h.live.Handle(msg); handled && cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	updated, cmd := m.update(msg)
+	cmds = append(cmds, cmd)
+	var decks map[string]*appContentDeck
+	switch model := updated.(type) {
+	case Model:
+		decks = model.contentDecks
+	case *Model:
+		decks = model.contentDecks
+	}
+	for _, h := range decks {
+		cmds = append(cmds, h.takeQueued())
+	}
+	return updated, tea.Batch(cmds...)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	if result, ok := msg.(contentpanes.Result); ok {
+		if cmd := (&m).applyAppContentResult(result); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+	switch msg := msg.(type) {
+	case appContentResolvedMsg:
+		if h := m.contentDecks[msg.Key]; h != nil {
+			delete(h.pending, msg.Candidate)
+			if h.resolution.Put(msg.Candidate, msg.Ref, msg.Found) {
+				h.generation++
+				h.links = nil
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg,
+		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
+		resourceview.ResolvedMsg:
+		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if m.overview != nil && overview.IsAsyncMessage(msg) {
 		cmd := m.overview.Update(msg)
 		// A workspacediff result is not the global browser's alone. A project
@@ -358,6 +413,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Forward mouse events to active plugin with Y offset for the app header.
 		if p := m.ActivePlugin(); p != nil {
 			adjusted := offsetMouseY(msg, -headerHeight) // Offset for app header
+			if cmd, handled := (&m).appContentMouse(adjusted); handled {
+				m.updateContext()
+				return m, cmd
+			}
 			newPlugin, cmd := p.Update(adjusted)
 			plugins := m.registry.Plugins()
 			if m.activePlugin < len(plugins) {
@@ -731,6 +790,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}
+		if cmd, handled := (&m).handleAppContentUIRequest(msg.Request); handled {
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
+		}
 		if m.overview != nil {
 			if cmd := m.overview.Update(msg); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -1007,6 +1070,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Forward everything else to plugin (esc, alt+enter handled by plugin)
 		return m.forwardKeyToPlugin(msg)
+	}
+
+	// Once passive content exists, the app owns the combined inner+outer focus
+	// ring and passive-leaf keys. Inputs and blocking overlays above retain Tab.
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() {
+		if cmd, handled := m.handleAppContentKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
 	}
 
 	// Precedence level 3: an active plugin contextual binding beats sidecar's
@@ -1715,9 +1787,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				pluginCtx = p.ID()
 			}
 			m.palette.SetSize(m.width, m.height)
-			// surfacePlugins includes the global Tasks host, so its commands
-			// stay reachable now that it is not a registry plugin.
-			m.palette.Open(m.keymap, m.surfacePlugins(), m.activeContext, pluginCtx)
+			// surfacePlugins includes the global Tasks host. A passive app-owned
+			// leaf contributes its own command projection without changing the
+			// underlying plugin's mandatory interface.
+			surfaces := m.surfacePlugins()
+			if commands := m.appContentCommands(); len(commands) > 0 {
+				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.ActivePlugin(), commands: commands})
+			}
+			m.palette.Open(m.keymap, surfaces, m.activeContext, pluginCtx)
 			m.activeContext = "palette"
 		} else {
 			m.updateContext()
@@ -1931,7 +2008,11 @@ func (m *Model) updateContext() {
 		return
 	}
 	if p := m.ActivePlugin(); p != nil {
-		m.activeContext = p.FocusContext()
+		if ctx, ok := m.appContentContext(); ok {
+			m.activeContext = ctx
+		} else {
+			m.activeContext = p.FocusContext()
+		}
 	} else {
 		m.activeContext = "global"
 	}
@@ -1940,6 +2021,11 @@ func (m *Model) updateContext() {
 // pluginCommandHandler finds a plugin command handler for a palette selection.
 // A handler declared for the selected context wins over one declared elsewhere.
 func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
+	for _, cmd := range m.appContentCommands() {
+		if cmd.ID == commandID && cmd.Context == context && cmd.Handler != nil {
+			return cmd.Handler
+		}
+	}
 	var fallback func() tea.Cmd
 	for _, p := range m.surfacePlugins() {
 		for _, cmd := range p.Commands() {

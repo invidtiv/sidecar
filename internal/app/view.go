@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/styles"
@@ -89,6 +90,9 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	if m.globalWorkspacesVisible() && m.overview.PreviewOwnsKeyboard() {
 		return tea.MouseModeCellMotion
 	}
+	if h := m.currentContentDeck(); h != nil && h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+		return tea.MouseModeAllMotion
+	}
 	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {
 		switch mode := provider.PreferredMouseMode(); mode {
 		case tea.MouseModeCellMotion, tea.MouseModeAllMotion:
@@ -115,11 +119,31 @@ func (m Model) pluginCursor() *tea.Cursor {
 	if active == nil || !active.IsFocused() {
 		return nil
 	}
+	if h := m.currentContentDeck(); h != nil {
+		if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+			return nil
+		}
+		cursor := providerCursor(active)
+		if cursor == nil {
+			return nil
+		}
+		cursor.X += h.primaryInner.X
+		cursor.Y += h.primaryInner.Y
+		return m.placeContentCursor(cursor)
+	}
 	provider, ok := active.(plugin.CursorProvider)
 	if !ok {
 		return nil
 	}
 	return m.placeContentCursor(provider.Cursor())
+}
+
+func providerCursor(p plugin.Plugin) *tea.Cursor {
+	provider, ok := p.(plugin.CursorProvider)
+	if !ok {
+		return nil
+	}
+	return provider.Cursor()
 }
 
 // globalCursor is the only cursor the global space draws: the Workspaces
@@ -1093,7 +1117,7 @@ func (m Model) getProjectRestoreBounds() (start, end int, ok bool) {
 }
 
 // renderContent renders the main content area.
-func (m Model) renderContent(width, height int) string {
+func (m *Model) renderContent(width, height int) string {
 	if m.configOpen() {
 		return m.config.View(width, height)
 	}
@@ -1104,6 +1128,9 @@ func (m Model) renderContent(width, height int) string {
 	if p == nil {
 		msg := "No plugins loaded"
 		return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, styles.Muted.Render(msg))
+	}
+	if h := m.activeContentDeck(); h != nil {
+		return m.renderContentDeck(h, width, height)
 	}
 
 	content := p.View(width, height)
@@ -1293,7 +1320,9 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "esc", label: "Close"},
 		)
 	case !m.inGlobalScope():
-		if p := m.ActivePlugin(); p != nil {
+		if commands := (&m).appContentCommands(); len(commands) > 0 {
+			hints = m.commandFooterHints(commands, m.activeContext)
+		} else if p := m.ActivePlugin(); p != nil {
 			hints = m.pluginFooterHints(p, m.activeContext)
 		}
 	}
@@ -1559,6 +1588,9 @@ func (m *Model) helpSurface() (title, context string) {
 		return m.globalTab.Name(), m.globalTab.context()
 	}
 	if p := m.ActivePlugin(); p != nil {
+		if _, ok := m.appContentContext(); ok {
+			return p.Name() + " content", m.activeContext
+		}
 		return p.Name(), p.FocusContext()
 	}
 	return "", ""

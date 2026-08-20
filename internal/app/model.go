@@ -155,6 +155,7 @@ type Model struct {
 	// Plugin management
 	registry     *plugin.Registry
 	activePlugin int
+	contentDecks map[string]*appContentDeck
 
 	// Keymap
 	keymap        *keymap.Registry
@@ -465,6 +466,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		registry:           reg,
 		keymap:             km,
 		activePlugin:       activeIdx,
+		contentDecks:       make(map[string]*appContentDeck),
 		activeContext:      "global",
 		showClock:          cfg.UI.ShowClock,
 		titleTemplate:      cfg.UI.TerminalTitle,

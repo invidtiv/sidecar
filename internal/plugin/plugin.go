@@ -1,6 +1,10 @@
 package plugin
 
-import tea "charm.land/bubbletea/v2"
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/contentlink"
+)
 
 // Plugin defines the interface for all sidecar plugins.
 type Plugin interface {
@@ -16,6 +20,29 @@ type Plugin interface {
 	SetFocused(bool)
 	Commands() []Command
 	FocusContext() string
+}
+
+// PaneFocusStop names one directly focusable window inside a plugin. IDs are
+// stable while visual order is expressed by the provider's returned slice.
+type PaneFocusStop struct {
+	ID string
+}
+
+// PaneFocusProvider is an optional capability for plugins whose own panes join
+// an app-owned focus ring. Implementations project existing focus state rather
+// than introducing a second focus model.
+type PaneFocusProvider interface {
+	PaneFocusStops() []PaneFocusStop
+	PaneFocus() string
+	SetPaneFocus(id string) tea.Cmd
+	SetPaneFocusActive(active bool)
+}
+
+// ContentLinkProvider is an optional capability for plugins that expose exact
+// read-only rendered text rectangles for app-owned content-link decoration.
+// Hosts read it after View so its geometry describes the frame just rendered.
+type ContentLinkProvider interface {
+	ContentLinkSurfaces() []contentlink.Surface
 }
 
 // TextInputConsumer is an optional capability for plugins that need

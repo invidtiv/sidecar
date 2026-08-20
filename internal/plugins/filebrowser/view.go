@@ -250,9 +250,10 @@ func (p *Plugin) renderNormalPanes() string {
 		if previewWidth < 40 {
 			previewWidth = 40
 		}
+		p.previewWidth = previewWidth
 
 		previewContent := p.renderPreviewPane(innerHeight)
-		rightPane := styles.RenderPanel(previewContent, previewWidth, paneHeight, true)
+		rightPane := styles.RenderPanel(previewContent, previewWidth, paneHeight, p.innerPaneFocusActive())
 
 		// Build final layout
 		var parts []string
@@ -292,8 +293,9 @@ func (p *Plugin) renderNormalPanes() string {
 
 	// Determine if panes are active based on focus
 	// Content search mode focuses the preview pane since we're searching file content
-	treeActive := p.activePane == PaneTree && !p.searchMode && !p.contentSearchMode
-	previewActive := p.activePane == PanePreview && !p.searchMode || p.contentSearchMode
+	innerFocusActive := p.innerPaneFocusActive()
+	treeActive := innerFocusActive && p.activePane == PaneTree && !p.searchMode && !p.contentSearchMode
+	previewActive := innerFocusActive && (p.activePane == PanePreview && !p.searchMode || p.contentSearchMode)
 
 	treeContent := p.renderTreePane(treeRows)
 	previewContent := p.renderPreviewPane(innerHeight)
@@ -856,6 +858,10 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return p.renderInlineEditorContent(visibleHeight)
 	}
+	// The caller passes the panel's full inner height. Source rows begin only
+	// after this view's two header rows, so use the same capacity exported to
+	// the content-link host instead of relying on the panel to clip overflow.
+	visibleHeight = p.previewSourceRowCapacity()
 
 	var sb strings.Builder
 
@@ -947,10 +953,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 	if !showLineNumbers {
 		gutter = docview.Gutter{}
 	}
-	maxLineWidth := p.previewWidth - gutter.Width() - 4
-	if maxLineWidth < 10 {
-		maxLineWidth = 10
-	}
+	_, maxLineWidth := p.previewTextWidths()
 
 	// Style for truncating lines with ANSI codes
 	lineStyle := lipgloss.NewStyle().MaxWidth(maxLineWidth)

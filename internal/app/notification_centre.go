@@ -723,6 +723,9 @@ func (m *Model) notificationCentreFocusCycler() plugin.FocusCycler {
 		}
 		return nil
 	}
+	if h := m.currentContentDeck(); h != nil {
+		return appDeckFocusCycler{h: h}
+	}
 	if p := m.ActivePlugin(); p != nil {
 		if cycler, ok := p.(plugin.FocusCycler); ok {
 			return cycler

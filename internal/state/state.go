@@ -33,6 +33,9 @@ type State struct {
 	Workspace    map[string]WorkspaceState   `json:"workspace,omitempty"`
 	Notes        map[string]NotesState       `json:"notes,omitempty"`
 	ActivePlugin map[string]string           `json:"activePlugin,omitempty"`
+	// ContentDeck stores reference-only app-owned passive pane state by
+	// working-directory and plugin ID. Loaded bodies never cross this boundary.
+	ContentDeck map[string]json.RawMessage `json:"contentDeck,omitempty"`
 
 	// Worktree state: maps main repo path -> last active worktree path
 	LastWorktreePath map[string]string `json:"lastWorktreePath,omitempty"`
@@ -701,6 +704,35 @@ func SetWorkspaceState(workdir string, wtState WorkspaceState) error {
 		current.Workspace = make(map[string]WorkspaceState)
 	}
 	current.Workspace[workdir] = wtState
+	mu.Unlock()
+	return Save()
+}
+
+func contentDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
+
+func GetContentDeck(workdir, pluginID string) json.RawMessage {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || current.ContentDeck == nil {
+		return nil
+	}
+	return append(json.RawMessage(nil), current.ContentDeck[contentDeckKey(workdir, pluginID)]...)
+}
+
+func SetContentDeck(workdir, pluginID string, raw json.RawMessage) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if current.ContentDeck == nil {
+		current.ContentDeck = make(map[string]json.RawMessage)
+	}
+	key := contentDeckKey(workdir, pluginID)
+	if len(raw) == 0 {
+		delete(current.ContentDeck, key)
+	} else {
+		current.ContentDeck[key] = append(json.RawMessage(nil), raw...)
+	}
 	mu.Unlock()
 	return Save()
 }

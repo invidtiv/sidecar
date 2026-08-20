@@ -5,7 +5,11 @@
 // work for a later command rather than resolved during rendering.
 package contentlink
 
-import "regexp"
+import (
+	"regexp"
+
+	"github.com/marcus/sidecar/internal/mouse"
+)
 
 // Kind classifies an activatable reference.
 type Kind string
@@ -29,6 +33,36 @@ type Ref struct {
 	Provider  string
 	Matcher   string
 	Namespace string
+}
+
+// KindSet bounds the reference kinds a rendered surface allows the host to
+// recognize. The zero value allows none.
+type KindSet map[Kind]struct{}
+
+// NewKindSet constructs a set containing kinds.
+func NewKindSet(kinds ...Kind) KindSet {
+	set := make(KindSet, len(kinds))
+	for _, kind := range kinds {
+		set[kind] = struct{}{}
+	}
+	return set
+}
+
+// Allows reports whether kind may be activated from the surface.
+func (s KindSet) Allows(kind Kind) bool {
+	_, ok := s[kind]
+	return ok
+}
+
+// Surface describes one exact, already-rendered text rectangle that a host may
+// scan for content links. Rect uses plugin-local coordinates.
+type Surface struct {
+	ID          string
+	Rect        mouse.Rect
+	WorkDir     string
+	ProjectRoot string
+	Kinds       KindSet
+	ReadOnly    bool
 }
 
 // Extra preserves the terminal-link scanner's original public shape while
