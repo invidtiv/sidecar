@@ -12,7 +12,13 @@ type FrameOptions struct {
 	Ready              ResolutionSnapshot
 	Matchers           []ResourceMatcher
 	InternalNamespaces map[string]URIOptions
-	Decorate           bool
+	// AllowedKinds bounds the kinds returned, decorated, and queued for
+	// resolution. Nil preserves the scanner's all-kinds default; a non-nil
+	// empty set allows none. Explicit OSC labels still claim their cells when
+	// their destination kind is excluded, so automatic matching cannot turn a
+	// disallowed explicit destination into a different action.
+	AllowedKinds KindSet
+	Decorate     bool
 }
 
 type FrameResult struct {
@@ -53,6 +59,9 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 		plain := ansi.Strip(clean)
 		pending := []Pending(nil)
 		resolve := func(kind Kind, raw string) (string, Extra, bool) {
+			if !frameKindAllowed(opts.AllowedKinds, kind) {
+				return "", Extra{}, false
+			}
 			ref, found, ready := opts.Ready.Lookup(kind, raw)
 			if !ready {
 				pending = appendPending(pending, Pending{Kind: kind, Raw: raw})
@@ -74,7 +83,10 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 			},
 		}
 		internal := scanInternalURIs(plain, claimed, opts.InternalNamespaces)
-		spans := activatableSpans(scanPlain(plain, append(claimed, internal...), autoOpts, &pending))
+		spans := allowedActivatableSpans(
+			scanPlain(plain, append(claimed, internal...), autoOpts, &pending),
+			opts.AllowedKinds,
+		)
 		for i := range spans {
 			spans[i].Row = row
 		}
@@ -92,14 +104,18 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 	return result
 }
 
-func activatableSpans(spans []Span) []Span {
+func allowedActivatableSpans(spans []Span, allowed KindSet) []Span {
 	out := spans[:0]
 	for _, span := range spans {
-		if Activatable(span.Kind) {
+		if Activatable(span.Kind) && frameKindAllowed(allowed, span.Kind) {
 			out = append(out, span)
 		}
 	}
 	return out
+}
+
+func frameKindAllowed(allowed KindSet, kind Kind) bool {
+	return allowed == nil || allowed.Allows(kind)
 }
 
 type explicitTarget struct {

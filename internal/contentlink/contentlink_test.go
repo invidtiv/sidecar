@@ -130,6 +130,56 @@ func TestScanFrameExplicitInternalWinsAndPreservesRenderedCoordinates(t *testing
 	}
 }
 
+func TestScanFrameAllowedKindsOwnSpansDecorationAndPending(t *testing.T) {
+	frame := "sidecar-ws-alpha td-abcd README.md abc1234 https://example.test RES-1 sidecar://note/nt-1"
+	got := ScanFrame(frame, FrameOptions{
+		AllowedKinds:       NewKindSet(KindIssue),
+		Matchers:           []ResourceMatcher{{Provider: "p", ID: "r", Re: regexp.MustCompile(`RES-[0-9]+`)}},
+		InternalNamespaces: map[string]URIOptions{"note": {}},
+		Decorate:           true,
+	})
+	if len(got.Spans) != 1 || got.Spans[0].Kind != KindIssue || got.Spans[0].Value != "td-abcd" {
+		t.Fatalf("allowed spans = %+v", got.Spans)
+	}
+	if len(got.Pending) != 0 {
+		t.Fatalf("excluded file/diff kinds queued work: %+v", got.Pending)
+	}
+	if strings.Count(got.Output, "\x1b[4m") != 1 {
+		t.Fatalf("excluded kinds were decorated: %q", got.Output)
+	}
+
+	allowedSession := ScanFrame("sidecar-ws-alpha", FrameOptions{
+		AllowedKinds: NewKindSet(KindSession),
+		Decorate:     true,
+	})
+	if len(allowedSession.Spans) != 1 || allowedSession.Spans[0].Kind != KindSession ||
+		!strings.Contains(allowedSession.Output, "\x1b[4m") {
+		t.Fatalf("allowed session = %+v output=%q", allowedSession.Spans, allowedSession.Output)
+	}
+
+	allowNone := ScanFrame("sidecar-ws-alpha td-abcd README.md abc1234", FrameOptions{
+		AllowedKinds: KindSet{},
+		Decorate:     true,
+	})
+	if len(allowNone.Spans) != 0 || len(allowNone.Pending) != 0 || strings.Contains(allowNone.Output, "\x1b[4m") {
+		t.Fatalf("non-nil empty allowlist activated content: %+v", allowNone)
+	}
+}
+
+func TestScanFrameDisallowedExplicitDestinationStaysInertAndClaimsLabel(t *testing.T) {
+	frame := "\x1b]8;;https://example.test/x\x1b\\td-abcd\x1b]8;;\x1b\\"
+	got := ScanFrame(frame, FrameOptions{
+		AllowedKinds: NewKindSet(KindIssue),
+		Decorate:     true,
+	})
+	if got.Output != "td-abcd" || len(got.Spans) != 0 || len(got.Pending) != 0 {
+		t.Fatalf("disallowed explicit URL label changed action: %+v", got)
+	}
+	if strings.Contains(got.Output, "\x1b]8;") || strings.Contains(got.Output, "\x1b[4m") {
+		t.Fatalf("disallowed explicit destination escaped or decorated: %q", got.Output)
+	}
+}
+
 func TestScanFrameExplicitHTTPIsResynthesizedButForeignAndMalformedAreInert(t *testing.T) {
 	osc := func(uri, label, close string) string {
 		return "\x1b]8;;" + uri + "\x1b\\" + label + close

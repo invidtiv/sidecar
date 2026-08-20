@@ -40,6 +40,7 @@ type deckHostTestPlugin struct {
 	wheelBoundary bool
 	wheelX        int
 	linkRect      mouse.Rect
+	linkKinds     contentlink.KindSet
 }
 
 type queuedAppDeckTestMsg struct{}
@@ -75,11 +76,39 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 	if rect == (mouse.Rect{}) {
 		rect = mouse.Rect{W: len(p.frame), H: 1}
 	}
+	kinds := p.linkKinds
+	if kinds == nil {
+		kinds = contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal)
+	}
 	return []contentlink.Surface{{
 		ID: "preview", Rect: rect,
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
-		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal),
+		Kinds: kinds,
 	}}
+}
+
+func TestAppContentDeckOnlyDecoratesAndRegistersSurfaceKinds(t *testing.T) {
+	root := t.TempDir()
+	const session = "sidecar-ws-alpha"
+
+	disallowed := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: session}
+	m := appDeckTestModel(t, root, disallowed)
+	frame := m.renderContent(120, 30)
+	h := m.currentContentDeck()
+	if strings.Contains(frame, "\x1b[4m") || len(h.links) != 0 {
+		t.Fatalf("omitted session kind looked active: frame=%q links=%+v", frame, h.links)
+	}
+
+	allowed := &deckHostTestPlugin{
+		id: "file-browser", focus: "preview", frame: session,
+		linkKinds: contentlink.NewKindSet(contentlink.KindSession),
+	}
+	m = appDeckTestModel(t, root, allowed)
+	frame = m.renderContent(120, 30)
+	h = m.currentContentDeck()
+	if !strings.Contains(frame, "\x1b[4m") || len(h.links) != 1 || h.links[0].Ref != (contentlink.Ref{Kind: contentlink.KindSession, Value: session}) {
+		t.Fatalf("allowed session kind was not active: frame=%q links=%+v", frame, h.links)
+	}
 }
 
 func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
