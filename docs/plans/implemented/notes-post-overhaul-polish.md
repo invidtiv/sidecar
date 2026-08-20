@@ -1,6 +1,6 @@
 # Notes post-overhaul polish
 
-**Status:** Active. `td-cdc3ba`, `td-42cd0f`, `td-8c2abd`, `td-982583`, and `td-43b82d` are complete; `td-889d49` is next.
+**Status:** Implemented. All delivery stories and epic `td-8ca977` are independently reviewed and closed; integrated tests, build, diff checks, race coverage, and isolated real-app proofs pass.
 **Source:** td note `nt-22509205`, items 3 and 7-25 only.
 **Epic:** `td-8ca977`
 
