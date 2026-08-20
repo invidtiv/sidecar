@@ -69,15 +69,100 @@ func TestNormalizePaletteIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestNormalizePaletteDefaultsSelectionBgToBgTertiary(t *testing.T) {
+func TestNormalizePaletteLiftsWeakSelectionBg(t *testing.T) {
 	p := NormalizePalette(ColorPalette{
 		BgPrimary:   "#000000",
 		BgSecondary: "#0a0a0a",
 		BgTertiary:  "#1a1a1a",
 		TextPrimary: "#ffffff",
 	})
-	if p.SelectionBg != "#1a1a1a" {
-		t.Errorf("empty SelectionBg defaulted to %q, want BgTertiary", p.SelectionBg)
+	if p.SelectionBg == "" || p.SelectionBg == "#1a1a1a" {
+		t.Errorf("weak SelectionBg stayed %q; want a lift off the canvas", p.SelectionBg)
+	}
+	if ratio := ContrastRatio(p.SelectionBg, p.BgPrimary); ratio < targetSelectionSeparation-0.01 {
+		t.Errorf("SelectionBg %s vs canvas is %.2f; want >= %.1f", p.SelectionBg, ratio, targetSelectionSeparation)
+	}
+	if ratio := ContrastRatio(p.TextPrimary, p.SelectionBg); ratio < targetBodyText-0.01 {
+		t.Errorf("TextPrimary on SelectionBg is %.2f; want >= %.1f", ratio, targetBodyText)
+	}
+	if MaxContrastPole([]string{p.SelectionBg}) != MaxContrastPole([]string{p.BgPrimary}) {
+		t.Errorf("SelectionBg %s flipped the canvas ink pole", p.SelectionBg)
+	}
+}
+
+func TestDeriveSelectionBgKeepsCompliantSeed(t *testing.T) {
+	seed := "#454e57"
+	got := DeriveSelectionBg(seed, "#0f1113", "#cfd3d6")
+	if got != seed {
+		t.Errorf("compliant seed rewritten: %s -> %s", seed, got)
+	}
+}
+
+func TestDeriveSelectionBgRejectsInvertedInk(t *testing.T) {
+	// Catppuccin Mocha's iTerm selection is rosewater — reverse-video.
+	got := DeriveSelectionBg("#f5e0dc", "#1e1e2e", "#cdd6f4")
+	if MaxContrastPole([]string{got}) != MaxContrastPole([]string{"#1e1e2e"}) {
+		t.Errorf("inverted seed produced %s, which still wants the opposite ink pole", got)
+	}
+	if ContrastRatio("#cdd6f4", got) < targetBodyText-0.01 {
+		t.Errorf("inverted seed produced %s, which washes out body text (%.2f)", got, ContrastRatio("#cdd6f4", got))
+	}
+	if ContrastRatio(got, "#1e1e2e") < targetSelectionSeparation-0.01 {
+		t.Errorf("inverted seed produced %s, only %.2f against the canvas", got, ContrastRatio(got, "#1e1e2e"))
+	}
+}
+
+func TestDeriveSelectionBgPullsBackWashedOutHighlight(t *testing.T) {
+	// Same pole as a dark canvas, but so light that body text fails AA.
+	got := DeriveSelectionBg("#6a6b6c", "#0f1113", "#cfd3d6")
+	if ContrastRatio("#cfd3d6", got) < targetBodyText-0.01 {
+		t.Errorf("washed-out seed stayed unreadable: %s (text %.2f)", got, ContrastRatio("#cfd3d6", got))
+	}
+	if MaxContrastPole([]string{got}) != MaxContrastPole([]string{"#0f1113"}) {
+		t.Errorf("pull-back flipped the ink pole: %s", got)
+	}
+}
+
+func TestDeriveSelectionBgLiftsLightThemeHighlight(t *testing.T) {
+	canvas := "#f7f7f7"
+	text := "#111111"
+	got := DeriveSelectionBg(canvas, canvas, text)
+	if ContrastRatio(got, canvas) < targetSelectionSeparation-0.01 {
+		t.Errorf("light-theme highlight %s is only %.2f against the canvas", got, ContrastRatio(got, canvas))
+	}
+	if Luminance(got) >= Luminance(canvas) {
+		t.Errorf("light-theme highlight %s is not darker than the canvas", got)
+	}
+	if ContrastRatio(text, got) < targetBodyText-0.01 {
+		t.Errorf("light-theme highlight %s washes out body text (%.2f)", got, ContrastRatio(text, got))
+	}
+}
+
+func TestDeriveSelectionBgIsIdempotent(t *testing.T) {
+	cases := []struct{ seed, canvas, text string }{
+		{"#1a1a1a", "#000000", "#ffffff"},
+		{"#f5e0dc", "#1e1e2e", "#cdd6f4"},
+		{"#6a6b6c", "#0f1113", "#cfd3d6"},
+		{"#f7f7f7", "#f7f7f7", "#111111"},
+		{"#4e4e4e", "#3f3f3f", "#dcdccc"},
+		{"#33363c", "#21252b", "#abb2bf"},
+	}
+	for _, tc := range cases {
+		once := DeriveSelectionBg(tc.seed, tc.canvas, tc.text)
+		twice := DeriveSelectionBg(once, tc.canvas, tc.text)
+		if once != twice {
+			t.Errorf("seed %s canvas %s: %s -> %s", tc.seed, tc.canvas, once, twice)
+		}
+	}
+}
+
+func TestDeriveSelectionBgDoesNotCollapseZenburnToBlack(t *testing.T) {
+	got := DeriveSelectionBg("#4e4e4e", "#3f3f3f", "#dcdccc")
+	if got == "#000000" {
+		t.Fatal("zenburn-like canvas collapsed to black")
+	}
+	if Luminance(got) < Luminance("#3f3f3f") {
+		t.Errorf("expected a conventional lighten, got darker %s", got)
 	}
 }
 

@@ -3,6 +3,8 @@ package community
 import (
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 func TestConvertCatppuccinMocha(t *testing.T) {
@@ -159,6 +161,76 @@ func TestMatchSyntaxTheme(t *testing.T) {
 	got = matchSyntaxTheme("#ffffff")
 	if got != "github" && got != "vs" {
 		t.Errorf("matchSyntaxTheme(#ffffff) = %s, want github or vs", got)
+	}
+}
+
+func TestConvertSelectionBgLiftsOffCanvas(t *testing.T) {
+	scheme := GetScheme("Catppuccin Mocha")
+	if scheme == nil {
+		t.Fatal("Catppuccin Mocha not found")
+	}
+	palette := Convert(scheme)
+	if palette.SelectionBg == "" {
+		t.Fatal("SelectionBg is empty")
+	}
+	if palette.SelectionBg == palette.BgTertiary {
+		t.Errorf("SelectionBg reused BgTertiary %s; the selected-row fill is too close to the canvas", palette.BgTertiary)
+	}
+	if styles.MaxContrastPole([]string{palette.SelectionBg}) != styles.MaxContrastPole([]string{palette.BgPrimary}) {
+		t.Errorf("SelectionBg %s flipped the canvas ink pole (scheme selection was %s)",
+			palette.SelectionBg, scheme.SelectionBackground)
+	}
+	if ratio := styles.ContrastRatio(palette.SelectionBg, palette.BgPrimary); ratio < 2.2-0.01 {
+		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want >= 2.2",
+			palette.SelectionBg, palette.BgPrimary, ratio)
+	}
+	if ratio := styles.ContrastRatio(palette.TextPrimary, palette.SelectionBg); ratio < 4.5-0.01 {
+		t.Errorf("TextPrimary on SelectionBg is %.2f; want >= 4.5", ratio)
+	}
+}
+
+func TestConvertKeepsSamePoleSchemeSelection(t *testing.T) {
+	scheme := GetScheme("Dracula")
+	if scheme == nil {
+		t.Fatal("Dracula not found")
+	}
+	palette := Convert(scheme)
+	// Dracula's scheme selection is a same-pole lift of the canvas, so the
+	// converter should keep that hue rather than replacing it with a
+	// canvas-grey. Lightness may still move to meet the 2.2 floor.
+	_, seedS, _ := HexToHSL(scheme.SelectionBackground)
+	_, gotS, _ := HexToHSL(palette.SelectionBg)
+	if seedS > 0.05 && gotS < seedS/2 {
+		t.Errorf("same-pole scheme selection %s lost its hue (got %s, sat %.2f -> %.2f)",
+			scheme.SelectionBackground, palette.SelectionBg, seedS, gotS)
+	}
+}
+
+func TestCommunityConversionsHaveVisibleSelectionHighlight(t *testing.T) {
+	names := ListSchemes()
+	if len(names) == 0 {
+		t.Fatal("no community schemes embedded")
+	}
+	for _, name := range names {
+		scheme := GetScheme(name)
+		if scheme == nil {
+			t.Errorf("community scheme %q missing from map", name)
+			continue
+		}
+		p := styles.NormalizePalette(Convert(scheme))
+		if p.SelectionBg == "" {
+			t.Errorf("%s: SelectionBg is empty", name)
+			continue
+		}
+		if styles.MaxContrastPole([]string{p.SelectionBg}) != styles.MaxContrastPole([]string{p.BgPrimary}) {
+			t.Errorf("%s: SelectionBg %s flipped the canvas ink pole", name, p.SelectionBg)
+		}
+		if ratio := styles.ContrastRatio(p.TextPrimary, p.SelectionBg); ratio < 4.5-0.01 {
+			t.Errorf("%s: TextPrimary on SelectionBg is %.2f", name, ratio)
+		}
+		if p.BgPrimary != "" && p.SelectionBg == p.BgPrimary {
+			t.Errorf("%s: SelectionBg reused the canvas %s", name, p.BgPrimary)
+		}
 	}
 }
 

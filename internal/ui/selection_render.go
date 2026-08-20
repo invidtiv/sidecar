@@ -23,7 +23,7 @@ func GetSelectionBgANSI() string {
 	}
 	var r, g, b int
 	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
-		r, g, b = 47, 52, 56
+		r, g, b = 69, 78, 87
 	}
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
 }

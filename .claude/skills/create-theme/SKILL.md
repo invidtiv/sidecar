@@ -315,6 +315,7 @@ Modern Sidecar themes (`sidecar-modern`, `catppuccin-mocha`) follow a refined, d
    - `BgPrimary`: Canvas background
    - `BgSecondary`: Header / footer bar fills
    - `BgTertiary`: Selected row background
+   - `SelectionBg`: Text-selection highlight; must lift off the canvas (≥ 2.2:1) without leaving the canvas ink pole
    - `SurfaceRaised`: Raised pills (key hints, bar chips) sitting subtly above canvas/bars
    - `BorderNormal` / `BorderMuted`: Rules and hairlines
    - `TextPrimary` → `TextSecondary` → `TextMuted` → `TextSubtle`: Typography ramp
@@ -334,3 +335,7 @@ When authoring or converting themes, check contrast against **all** surfaces:
 3. **Ink on Bright Fills**:
    - For bright or pastel status/danger backgrounds (e.g. `DangerBright`, `ToastSuccess`, `ToastError`), use dark canvas ink (`#0f1113` or `#181825`) for `TextInverse` / `Toast*Text`, as white (`#ffffff`) fails contrast on light reds/yellows.
    - `DangerLight` must clear >= 4.5:1 on `DangerDark`.
+4. **Text-selection highlight (`SelectionBg`)**:
+   - Must clear >= 2.2:1 against `BgPrimary` so a selected span is findable against the shell canvas. `BgTertiary` (the selected-row fill) is not enough.
+   - Must stay on the same ink pole as `BgPrimary`, and `TextPrimary` must still clear >= 4.5:1 on it. Do not invert selected text or lighten the highlight until headings and syntax wash out.
+   - `NormalizePalette` lifts empty, inverted, or too-dim values; author the role deliberately on curated themes.

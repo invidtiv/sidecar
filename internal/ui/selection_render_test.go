@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -104,11 +105,20 @@ func TestGetSelectionBgANSIUsesThemeSelectionBg(t *testing.T) {
 	t.Cleanup(func() { styles.ApplyTheme(prev.Name) })
 
 	styles.ApplyThemeWithOverrides("sidecar-modern", map[string]string{
-		"selectionBg": "#2f3438",
+		"selectionBg": "#3b5070",
 	})
+	hex := styles.GetCurrentTheme().Colors.SelectionBg
+	var r, g, b int
+	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
+		t.Fatalf("current SelectionBg %q is not hex: %v", hex, err)
+	}
 	got := GetSelectionBgANSI()
-	if want := "\x1b[48;2;47;52;56m"; got != want {
-		t.Errorf("sidecar-modern selection highlight = %q, want %q", got, want)
+	want := fmt.Sprintf("\x1b[48;2;%d;%d;%dm", r, g, b)
+	if got != want {
+		t.Errorf("selection highlight = %q, want %q (from SelectionBg %s)", got, want, hex)
+	}
+	if hex == styles.GetCurrentTheme().Colors.BgTertiary {
+		t.Errorf("SelectionBg fell back to BgTertiary %s", hex)
 	}
 }
 

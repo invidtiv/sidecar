@@ -20,8 +20,22 @@ const (
 // shape rather than dissolving into the bar.
 const surfaceSeparation = 1.12
 
+// targetSelectionSeparation is the contrast a text-selection highlight aims
+// for against the canvas. BgTertiary (and the previous sidecar-modern value)
+// sits at 1.2–1.5:1, which reads as a selected-row fill, not a span. 2.2 is a
+// visible lift that still leaves body text on the canvas's ink pole, so the
+// highlight does not invert or wash out markdown and syntax colours.
+//
+// Themes whose body text has no headroom (a grey foreground on a grey
+// canvas) cannot hit 2.2 without washing that text out. SelectionSeparationFloor
+// is the CheckPaletteContrast minimum; deriveSelectionBg still aims at 2.2.
+const (
+	targetSelectionSeparation = 2.2
+	SelectionSeparationFloor  = 1.5
+)
+
 // NormalizePalette enforces the contrast guarantees the UI relies on and fills
-// in the derived roles (SurfaceRaised, KeyHintFg, OnPrimary).
+// in the derived roles (SurfaceRaised, SelectionBg, KeyHintFg, OnPrimary).
 //
 // It runs on every palette on its way into the style system — built-in themes,
 // community conversions, and user overrides alike — because contrast is a
@@ -63,9 +77,11 @@ func NormalizePalette(c ColorPalette) ColorPalette {
 	c.TextHighlight = EnsureContrastOn(c.TextHighlight, chrome, targetBodyText)
 	c.Link = EnsureContrastOn(c.Link, chrome, targetBodyText)
 
-	if c.SelectionBg == "" {
-		c.SelectionBg = c.BgTertiary
+	seed := c.SelectionBg
+	if seed == "" {
+		seed = c.BgTertiary
 	}
+	c.SelectionBg = deriveSelectionBg(seed, c.BgPrimary, fallback(c.TextPrimary, c.TextSelection))
 
 	if c.BgTertiary != "" {
 		selection := c.TextSelection
@@ -167,11 +183,159 @@ func onColor(fg, bg string) string {
 	return EnsureContrastOn(MaxContrastPole([]string{bg}), []string{bg}, targetBodyText)
 }
 
+// DeriveSelectionBg returns a text-selection highlight that lifts off canvas
+// enough to find, without leaving the canvas ink pole or washing out text.
+// Exported for theme converters that want to build the role themselves rather
+// than leave it to NormalizePalette.
+func DeriveSelectionBg(seed, canvas, textPrimary string) string {
+	return deriveSelectionBg(seed, canvas, textPrimary)
+}
+
 // DeriveSurfaceRaised returns the neutral raised-chrome surface for a pair of
 // backgrounds. Exported for theme converters that want to build the role
 // themselves rather than leave it to NormalizePalette.
 func DeriveSurfaceRaised(bgPrimary, bgSecondary string) string {
 	return deriveSurfaceRaised(bgPrimary, bgSecondary)
+}
+
+// deriveSelectionBg walks lightness away from the canvas until the highlight
+// separates, then falls back to a luminance blend if lightness cannot get
+// there (the same saturated-yellow case deriveSurfaceRaised hits).
+//
+// The walk starts at the canvas, not the seed, so the result does not depend
+// on whether we were handed BgTertiary or a previous derivation. Conventional
+// direction (lighten a dark canvas, darken a light one) is tried first so a
+// mid-grey theme does not collapse to black. Candidates that flip the canvas
+// ink pole or drop body text below AA are skipped, so a scheme whose
+// "selection" is the foreground colour is replaced with a same-pole lift
+// rather than reverse-video.
+func deriveSelectionBg(seed, canvas, textPrimary string) string {
+	if canvas == "" {
+		return seed
+	}
+	text := textPrimary
+	if text == "" {
+		text = MaxContrastPole([]string{canvas})
+	}
+	pole := MaxContrastPole([]string{canvas})
+
+	if selectionHighlightUsable(seed, text, pole) &&
+		ContrastRatio(seed, canvas) >= targetSelectionSeparation-0.01 {
+		return seed
+	}
+
+	canvasH, canvasS, canvasL := HexToHSL(canvas)
+	hues := [][2]float64{{canvasH, canvasS}}
+	if seed != "" && IsValidHexColor(seed) && MaxContrastPole([]string{seed}) == pole {
+		sh, ss, _ := HexToHSL(seed)
+		hues = [][2]float64{{sh, ss}, {canvasH, canvasS}}
+	}
+
+	conventionalLighter := IsDarkBackground(canvas)
+	for _, hue := range hues {
+		if hit := selectionWalk(hue[0], hue[1], canvasL, canvas, text, pole, conventionalLighter); hit != "" {
+			return hit
+		}
+	}
+	for _, hue := range hues {
+		if hit := selectionWalk(hue[0], hue[1], canvasL, canvas, text, pole, !conventionalLighter); hit != "" {
+			return hit
+		}
+	}
+
+	for _, toward := range []string{"#ffffff", "#000000"} {
+		for t := 0.04; t <= 0.6; t += 0.04 {
+			cand := Blend(canvas, toward, t)
+			if !selectionHighlightUsable(cand, text, pole) {
+				continue
+			}
+			if ContrastRatio(cand, canvas) >= targetSelectionSeparation-0.01 {
+				return cand
+			}
+		}
+	}
+
+	// 2.2 is out of reach without washing out body text. Keep a seed that
+	// already clears the floor so re-normalization cannot shuffle it; otherwise
+	// take the strongest conventional-direction lift that stays usable.
+	if selectionHighlightUsable(seed, text, pole) &&
+		ContrastRatio(seed, canvas) >= SelectionSeparationFloor-0.01 {
+		return seed
+	}
+	best, bestSep := "", -1.0
+	for _, lighter := range []bool{conventionalLighter, !conventionalLighter} {
+		for _, hue := range hues {
+			cand := selectionBestInDirection(hue[0], hue[1], canvasL, canvas, text, pole, lighter)
+			if cand == "" {
+				continue
+			}
+			sep := ContrastRatio(cand, canvas)
+			if sep >= SelectionSeparationFloor-0.01 {
+				return cand
+			}
+			if sep > bestSep {
+				best, bestSep = cand, sep
+			}
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return canvas
+}
+
+// selectionWalk returns the closest lightness step from canvasL in one
+// direction that meets the 2.2 floor without washing out text. An empty
+// string means that direction cannot hit the floor.
+func selectionWalk(h, s, canvasL float64, canvas, text, pole string, lighter bool) string {
+	for step := lightnessStep; step <= 1.0; step += lightnessStep {
+		l := canvasL - step
+		if lighter {
+			l = canvasL + step
+		}
+		cand := HSLToHex(h, s, clampUnit(l))
+		if !selectionHighlightUsable(cand, text, pole) {
+			continue
+		}
+		if ContrastRatio(cand, canvas) >= targetSelectionSeparation-0.01 {
+			return cand
+		}
+	}
+	return ""
+}
+
+// selectionBestInDirection returns the usable candidate in one lightness
+// direction with the most canvas contrast. Used when 2.2 is unreachable
+// without inverting ink.
+func selectionBestInDirection(h, s, canvasL float64, canvas, text, pole string, lighter bool) string {
+	best, bestSep := "", -1.0
+	for step := lightnessStep; step <= 1.0; step += lightnessStep {
+		l := canvasL - step
+		if lighter {
+			l = canvasL + step
+		}
+		hex := HSLToHex(h, s, clampUnit(l))
+		if !selectionHighlightUsable(hex, text, pole) {
+			continue
+		}
+		if sep := ContrastRatio(hex, canvas); sep > bestSep {
+			best, bestSep = hex, sep
+		}
+	}
+	return best
+}
+
+func selectionHighlightUsable(sel, text, pole string) bool {
+	if sel == "" || !IsValidHexColor(sel) {
+		return false
+	}
+	if MaxContrastPole([]string{sel}) != pole {
+		return false
+	}
+	if text != "" && ContrastRatio(text, sel) < targetBodyText-0.01 {
+		return false
+	}
+	return true
 }
 
 // deriveSurfaceRaised steps a neutral surface away from the base background
@@ -335,6 +499,12 @@ var paletteRequirements = []contrastRequirement{
 	{"textSelection on bgTertiary", targetBodyText,
 		func(p ColorPalette) string { return p.TextSelection },
 		func(p ColorPalette) string { return p.BgTertiary }},
+	{"textPrimary on selectionBg", targetBodyText,
+		func(p ColorPalette) string { return p.TextPrimary },
+		func(p ColorPalette) string { return p.SelectionBg }},
+	{"selectionBg against bgPrimary", SelectionSeparationFloor,
+		func(p ColorPalette) string { return p.SelectionBg },
+		func(p ColorPalette) string { return p.BgPrimary }},
 	{"onPrimary on primary", targetBodyText,
 		func(p ColorPalette) string { return p.OnPrimary },
 		func(p ColorPalette) string { return p.Primary }},

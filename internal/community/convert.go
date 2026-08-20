@@ -66,6 +66,25 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 	textHighlight := EnsureContrastOn(maxContrast, fills, 4.5)
 	textSelection := textHighlight
 
+	// Text-selection highlight. Many iTerm schemes store reverse-video (the
+	// foreground colour, or a near-white rose/snow) in SelectionBackground;
+	// those invert body text, so they are replaced with a same-pole lift.
+	// A same-pole scheme colour is kept as the seed so a blue or gold
+	// selection stays that hue while NormalizePalette / DeriveSelectionBg
+	// guarantees it actually lifts off the canvas.
+	selectionBg := scheme.SelectionBackground
+	schemeSelOK := selectionBg != "" && styles.IsValidHexColor(selectionBg) &&
+		styles.MaxContrastPole([]string{selectionBg}) == styles.MaxContrastPole([]string{bg}) &&
+		styles.ContrastRatio(selectionBg, bg) >= styles.SelectionSeparationFloor
+	if !schemeSelOK {
+		if isDark {
+			selectionBg = Lighten(bg, 0.24)
+		} else {
+			selectionBg = Darken(bg, 0.24)
+		}
+	}
+	selectionBg = styles.DeriveSelectionBg(selectionBg, bg, textPrimary)
+
 	keyHintFg := EnsureContrastOn(primary, []string{surfaceRaised}, 4.5)
 
 	// Inking on fills
@@ -124,7 +143,7 @@ func Convert(scheme *CommunityScheme) styles.ColorPalette {
 		BgSecondary: bgSecondary,
 		BgTertiary:  bgTertiary,
 		BgOverlay:   WithAlpha(bg, "cc"),
-		SelectionBg: bgTertiary,
+		SelectionBg: selectionBg,
 
 		SurfaceRaised: surfaceRaised,
 		KeyHintFg:     keyHintFg,
