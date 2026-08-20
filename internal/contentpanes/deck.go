@@ -151,8 +151,22 @@ func (d *Deck) Context() SurfaceContext {
 // SetContext changes the deck's async scope without starting work. Results
 // from the old epoch or surface are subsequently stale.
 func (d *Deck) SetContext(ctx SurfaceContext) {
-	if d != nil {
-		d.ctx = ctx
+	if d == nil || sameContext(d.ctx, ctx) {
+		return
+	}
+	d.ctx = ctx
+	for _, p := range d.panesAndHidden() {
+		for _, t := range p.tabs {
+			state := t.view.snapshot(t.ref)
+			d.nextTabID++
+			t.id = d.nextTabID
+			t.view = newViewer(d.cfg, p.kind)
+			t.view.arm(ctx, t.ref, int(t.id), state)
+			t.ctx = ctx
+			// A fresh tab/model identity rejects old raw viewer broadcasts as
+			// well as Deck Results, even when surface and epoch are reused.
+			t.generation = 0
+		}
 	}
 }
 

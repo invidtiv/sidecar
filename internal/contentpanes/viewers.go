@@ -183,6 +183,7 @@ func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, _ int, state T
 	target, _ := workspacediff.ParseSpec(ref.Value)
 	v.view.Target = target
 	v.view.Bind(ctx.Root, ctx.Surface, ctx.Epoch)
+	v.view.State = workspacediff.LoadStateUnknown
 	v.view.Scope = workspacediff.ParseScope(state.Scope)
 	v.view.ViewMode = workspacediff.ParseViewMode(state.Mode)
 	v.view.DiffScroll = max(state.Scroll, 0)

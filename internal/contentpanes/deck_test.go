@@ -8,9 +8,11 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -128,6 +130,48 @@ func TestDeckSameIdentityReloadsWhenSurfaceContextChanges(t *testing.T) {
 	result := got.Command().(Result)
 	if result.ID.Surface != other.Surface || result.ID.Epoch != other.Epoch {
 		t.Fatalf("reload identity = %#v, want surface %q epoch %d", result.ID, other.Surface, other.Epoch)
+	}
+}
+
+func TestDeckSetContextRearmsEveryKindAndSelectRestartsLoad(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{ResourceResolver: func(_ int, _, _ uint64, _ resource.Reference, _ bool) tea.Cmd {
+		return func() tea.Msg { return nil }
+	}})
+	place := testPlacement()
+	place.Box = panelayout.Box{W: 400, H: 120}
+	refs := []contentlink.Ref{
+		fileRef("README.md"), issueRef("td-1a2b3c"), diffRef("wt"), resourceRefForTest("ENG-42"),
+	}
+	for _, ref := range refs {
+		if out := d.Open(ctx, ref, place); out.Command == nil {
+			t.Fatalf("initial Open(%s) did not start work", ref.Kind)
+		}
+	}
+
+	// Reusing Surface and Epoch is intentional: a root/base change alone must
+	// invalidate results and viewers from the old context.
+	other := ctx
+	other.Root = t.TempDir()
+	other.BaseRef = "release"
+	d.SetContext(other)
+	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
+		leaf := panelayout.FirstOfKind(d.root, kind)
+		if leaf == nil {
+			t.Fatalf("kind %d leaf disappeared", kind)
+		}
+		leafID := leaf.ID
+		p := d.panes[leafID]
+		if p == nil || len(p.tabs) != 1 || !sameContext(p.tabs[0].ctx, other) {
+			t.Fatalf("kind %d tab was not rebound: %#v", kind, p)
+		}
+		if cmd := d.SelectTab(leafID, 0); cmd == nil {
+			t.Fatalf("selecting rebound kind %d did not restart its load", kind)
+		}
 	}
 }
 
