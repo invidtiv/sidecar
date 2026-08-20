@@ -1,10 +1,11 @@
 # Plan: One Create Workspace modal
 
-**Status:** Agreed — ready to implement
+**Status:** Implemented on `worktree-modals` (td-7dc867), 2026-08-20
 **Created:** 2026-08-20
 **Scope:** Replace every project and global workspace-creation **form** with one modal. Add auto-approve on both Shell and Worktree. Add base-branch selection for worktrees on the global surface. Delete the old type-selector and worktree-only form paths. Instant-create shortcuts stay instant.
-**Out of scope:** the visual-language rebuild in [modal-redesign.md](modal-redesign.md); Fetch PR (`F`); agent-config / resume / rename / delete; changing `ctrl+n`, Shells `[+]`, or `autoCreateShell`.
-**Related:** [create-worktree-modal.md](../implemented/create-worktree-modal.md), [workspaces-cross-project-completion.md](../implemented/workspaces-cross-project-completion.md), [workspace-create-extraction.md](../implemented/workspace-create-extraction.md)
+**Out of scope:** the visual-language rebuild in [modal-redesign.md](../active/modal-redesign.md); Fetch PR (`F`); agent-config / resume / rename / delete; changing `ctrl+n`, Shells `[+]`, or `autoCreateShell`.
+**Related:** [create-worktree-modal.md](create-worktree-modal.md), [workspaces-cross-project-completion.md](workspaces-cross-project-completion.md), [workspace-create-extraction.md](workspace-create-extraction.md)
+**Shipped:** `6c0fbbae`..`1863f2f1`. Isolated proof td-185db8.
 
 ---
 
