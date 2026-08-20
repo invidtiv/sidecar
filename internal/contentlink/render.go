@@ -170,6 +170,9 @@ func parseOSC8(payload string, namespaces map[string]URIOptions) (explicitTarget
 	if uri == "" {
 		return explicitTarget{}, true, true
 	}
+	if len(uri) > MaxExplicitDestinationBytes {
+		return explicitTarget{}, true, false
+	}
 	if parsedURL, err := url.ParseRequestURI(uri); err == nil && parsedURL.Scheme == "sidecar" {
 		if policy, registered := namespaces[parsedURL.Host]; registered {
 			if parsed, err := ParseInternalURIWith(uri, policy); err == nil {

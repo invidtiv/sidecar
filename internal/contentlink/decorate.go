@@ -21,6 +21,9 @@ func Decorate(line string, spans []Span) string {
 	for _, span := range active {
 		open, close := "\x1b[4m", "\x1b[24m"
 		if span.Kind == KindURL {
+			if span.Explicit && len(span.Value) > MaxExplicitDestinationBytes {
+				continue
+			}
 			if safe, ok := SafeHTTPURL(span.Value); ok {
 				open = "\x1b]8;;" + safe + "\x1b\\\x1b[4m"
 				close = "\x1b[24m\x1b]8;;\x1b\\"

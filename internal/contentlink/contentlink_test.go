@@ -121,6 +121,46 @@ func TestScanFrameExplicitHTTPIsResynthesizedButForeignAndMalformedAreInert(t *t
 	}
 }
 
+func TestExplicitHTTPDestinationByteBound(t *testing.T) {
+	const prefix = "https://example.test/"
+	osc := func(uri string) string {
+		return "\x1b]8;;" + uri + "\x1b\\x\x1b]8;;\x1b\\"
+	}
+
+	boundary := prefix + strings.Repeat("x", MaxExplicitDestinationBytes-len(prefix))
+	got := ScanFrame(osc(boundary), FrameOptions{Decorate: true})
+	if len(got.Spans) != 1 || !got.Spans[0].Explicit || got.Spans[0].Value != boundary {
+		t.Fatalf("boundary destination was not retained: spans=%+v", got.Spans)
+	}
+	if !strings.Contains(got.Output, boundary) {
+		t.Fatal("boundary destination was not resynthesized")
+	}
+
+	for name, uri := range map[string]string{
+		"one byte over":                prefix + strings.Repeat("x", MaxExplicitDestinationBytes-len(prefix)+1),
+		"4KiB tiny label reproduction": prefix + strings.Repeat("x", 4096),
+		"malformed":                    "https:///missing-host",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := ScanFrame(osc(uri), FrameOptions{Decorate: true})
+			if len(got.Spans) != 0 {
+				t.Fatalf("destination became active: %+v", got.Spans)
+			}
+			if got.Output != "x" {
+				t.Fatalf("output retained destination/control bytes: len=%d output=%q", len(got.Output), got.Output)
+			}
+		})
+	}
+}
+
+func TestDecorateRefusesOversizeExplicitHTTPSpan(t *testing.T) {
+	uri := "https://example.test/" + strings.Repeat("x", MaxExplicitDestinationBytes)
+	got := Decorate("x", []Span{{Kind: KindURL, Value: uri, StartCol: 0, EndCol: 0, Explicit: true}})
+	if got != "x" {
+		t.Fatalf("Decorate resynthesized oversize explicit destination: len=%d", len(got))
+	}
+}
+
 func TestScanFrameReadyOnlyResolutionReturnsBoundedPendingWork(t *testing.T) {
 	frame := "open README.md at main.go:12 from abc1234; issue td-abcd"
 	first := ScanFrame(frame, FrameOptions{})

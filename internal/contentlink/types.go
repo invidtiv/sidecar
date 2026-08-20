@@ -111,4 +111,9 @@ const (
 	MaxInternalQueryKeyBytes   = 32
 	MaxInternalQueryValueRunes = 256
 	MaxExplicitLabelColumns    = 4096
+	// MaxExplicitDestinationBytes bounds a source-supplied OSC-8 URI before
+	// contentlink retains it in a Span or resynthesizes it into rendered output.
+	// The destination is zero-width terminal control data, so the rendered
+	// column limit cannot bound it.
+	MaxExplicitDestinationBytes = 2048
 )
