@@ -15,7 +15,7 @@ The Workspaces plugin turns git worktrees into managed development environments.
 
 **Key capabilities:**
 
-- **Create workspaces** with one command: name + branch + task + agent
+- **Create workspaces** from one form: Kind, Name, Base Branch (worktree), Agent, Auto-approve
 - **Launch AI agents** into isolated environments, with task context when a task is linked
 - **Stream real-time output** from any supported agent (Claude, Codex, Gemini, Cursor, OpenCode, Pi)
 - **Monitor multiple agents** via Kanban board or list view with live status
@@ -63,7 +63,7 @@ Install agents as needed. The plugin gracefully handles missing CLIs—only inst
 
 ## Quick Start
 
-Press `n` to create your first workspace. Type a name, confirm the base branch, optionally link a task, and choose an agent. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
+Press `n` to open Create Workspace. Kind is Worktree. Type a name, confirm the base branch, choose an agent, and optionally enable Auto-approve. Press Enter. The agent starts immediately in an isolated tmux session. Press `enter` to type in the pane, or watch output stream live in the preview.
 
 When done, press `m` to review the diff, create a GitHub PR, and clean up branches—all in one flow.
 
@@ -437,7 +437,7 @@ Approval keys work with agents in "Waiting" status. The plugin detects common ap
 
 ### Skip Permissions Mode
 
-When creating a workspace, enable "Skip perms" to auto-approve agent actions. Each agent has a corresponding flag:
+When creating a workspace, enable Auto-approve to skip agent permission prompts. Each agent has a corresponding flag:
 
 | Agent | Flag |
 |-------|------|
@@ -454,9 +454,9 @@ Shells are standalone tmux sessions created for direct terminal access without a
 
 ### Creating Shells
 
-Press `ctrl+n` to create a shell immediately, or press `n` and select "Shell" from the type selector modal when you want to name it or attach an agent. Each shell is created with an auto-numbered display name (e.g., "Shell 1", "Shell 2") and a stable tmux session name for state persistence.
+Press `ctrl+n` to create a shell immediately. Press `n` to open the Create Workspace form (Worktree selected); toggle Kind to Shell for a named shell or one that starts with an agent and auto-approve. Each shell is created with an auto-numbered display name (e.g., "Shell 1", "Shell 2") unless you type a name, and a stable tmux session name for state persistence.
 
-`ctrl+n` uses `plugins.workspace.defaultAgentType` when one is configured; with no default set it creates a plain shell. It never passes an agent's skip-permissions flag — use the `n` modal for that.
+`ctrl+n` uses `plugins.workspace.defaultAgentType` when one is configured; with no default set it creates a plain shell. It never passes an agent's skip-permissions flag — use the Create Workspace form (Kind: Shell) for that.
 
 ### Automatic Shells
 
@@ -500,7 +500,7 @@ Press `D` to delete a shell session. This terminates the underlying tmux session
 | Operation | Key | Description |
 |-----------|-----|-------------|
 | Create shell | `ctrl+n` | Create new terminal session immediately |
-| Create shell (options) | `n` + select Shell | Create with a custom name or agent |
+| Create shell (form) | `n` then Kind: Shell | Create with a custom name, agent, and auto-approve |
 | Rename shell | `R` | Change display name (50 char limit) |
 | Delete shell | `D` | Terminate tmux session (confirm) |
 | Interactive mode | `enter` | Enter interactive mode for typing |
@@ -510,15 +510,15 @@ Press `D` to delete a shell session. This terminates the underlying tmux session
 
 ### Creating Workspaces
 
-Press `n` to open the create modal:
+Press `n` to open the Create Workspace form. Kind is Worktree; toggle to Shell for a named or agent shell. Header `[+]` opens the same form with Worktree selected and Kind focused. Project `ctrl+n` does not open the form — it creates a shell immediately.
 
 | Field | Description |
 |-------|-------------|
-| **Name** | Display name (spaces allowed; git branch and directory use a slug) |
-| **Base branch** | Branch to create from (pre-filled with the current branch) |
-| **Task** | Link to TD task for context (optional) |
-| **Agent** | AI agent to launch (Claude Code, Cursor, etc.) |
-| **Skip perms** | Auto-approve agent actions (dangerous, see warning above) |
+| **Kind** | Shell or Worktree |
+| **Name** | Display name (spaces allowed; for worktrees, git branch and directory use a slug). Optional for shells (placeholder is the next "Shell N"); required for worktrees |
+| **Base Branch** | Worktree only. Branch to create from (pre-filled with the current branch) |
+| **Agent** | AI agent to launch (Claude Code, Cursor, etc.). None is first for shells and last for worktrees |
+| **Auto-approve** | Auto-approve agent actions when the selected agent has a skip flag (dangerous, see warning above) |
 
 **What happens on creation:**
 
@@ -539,6 +539,18 @@ Modal navigation:
 | `k`, `↑` | Navigate dropdowns |
 | `enter` | Select or confirm |
 | `esc` | Cancel |
+
+### Global Sessions
+
+The same Create Workspace form is on the global Sessions browser (`8`, or the Sessions header entry). Auto-approve and Base Branch exist there too.
+
+| Entry | What opens |
+|-------|------------|
+| `n` | Create Workspace, Worktree selected, focus on Name |
+| Header `+` | Same form, Worktree selected, Kind focused |
+| `ctrl+n` | Same form, Shell selected, focus on Name (a modal, not instant create) |
+
+The Project field is shown on this surface. Base Branch appears when Kind is Worktree; Auto-approve appears when the selected agent has a skip flag. Fetch PR is a separate project-surface action (`P`), not a form kind.
 
 ### Deleting Workspaces
 
@@ -592,7 +604,7 @@ Here's a typical workspace lifecycle from creation to merge:
 
 **1. Create a workspace for a new feature:**
 
-Press `n`, enter name "feature auth", confirm base branch "main", link task "td-abc123", choose agent "Claude Code", enable "Skip perms" for autonomy. Press Enter.
+Press `n`, enter name "feature auth", confirm base branch "main", choose agent "Claude Code", enable Auto-approve for autonomy. Press Enter. Link a TD task afterwards with `T` if you want the agent to have that context.
 
 **2. Agent works autonomously:**
 
@@ -705,7 +717,7 @@ This means you can close sidecar, continue working with Claude Code directly, th
 - Use kebab-case for consistency with git conventions
 
 **Agent usage:**
-- Start with "Skip perms" disabled for safety—enable only for trusted, sandboxed work
+- Start with Auto-approve disabled for safety—enable only for trusted, sandboxed work
 - Link tasks to workspaces for context—the agent receives the task title and description
 - Monitor "Waiting" status agents regularly—they need approval to continue
 

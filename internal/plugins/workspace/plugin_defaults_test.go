@@ -146,8 +146,8 @@ func TestInitCreateModalBase_UsesConfiguredDefaultAgent(t *testing.T) {
 	}
 
 	p.initCreateModalBase()
-	if p.createAgentType != AgentPi {
-		t.Errorf("createAgentType = %q, want %q", p.createAgentType, AgentPi)
+	if p.createForm.Agent() != string(AgentPi) {
+		t.Errorf("create agent = %q, want %q", p.createForm.Agent(), AgentPi)
 	}
 }
 

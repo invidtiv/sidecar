@@ -568,19 +568,8 @@ func (p *Plugin) createNewShell(customName string) tea.Cmd {
 	return p.createShell(shellCreateOpts{CustomName: customName})
 }
 
-// createShellWithAgent creates a new shell session with optional agent startup.
-// td-16b2b5: Captures agent info from type selector state, creates shell, and includes
-// agent info in the message so the handler can start the agent after shell creation.
-func (p *Plugin) createShellWithAgent() tea.Cmd {
-	return p.createShell(shellCreateOpts{
-		CustomName: p.typeSelectorNameInput.Value(),
-		AgentType:  p.typeSelectorAgentType,
-		SkipPerms:  p.typeSelectorSkipPerms,
-	})
-}
-
 // resolveShellAgentType returns the agent to launch in a shell created outside
-// the type-selector modal. Unlike worktrees, a shell with no configured default
+// the create form. Unlike worktrees, a shell with no configured default
 // stays a plain shell rather than falling back to Claude.
 func (p *Plugin) resolveShellAgentType() AgentType {
 	if p == nil || p.ctx == nil || p.ctx.Config == nil {
@@ -618,9 +607,9 @@ func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
 // createDefaultShell creates a shell using the configured default agent. Used by
 // the ctrl+n binding and by auto-create on first focus.
 func (p *Plugin) createDefaultShell(keepSelection bool) tea.Cmd {
-	// SkipPerms stays false: the type-selector modal defaults it off, and a shell
-	// the user did not explicitly configure should not launch an agent with
-	// permission prompts disabled.
+	// SkipPerms stays false: instant create does not read the form's auto-approve
+	// pref. A shell the user did not explicitly configure should not launch an
+	// agent with permission prompts disabled.
 	return p.createShell(shellCreateOpts{
 		AgentType:     p.resolveShellAgentType(),
 		KeepSelection: keepSelection,

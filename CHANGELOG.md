@@ -12,6 +12,11 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Features
 
+- **One Create Workspace form on both surfaces.** Project Workspaces and
+  global Sessions share the same Shell | Worktree modal, with auto-approve
+  and base branch on global as well as project. Instant-create shortcuts are
+  unchanged: project `ctrl+n`, Shells `[+]`, and `autoCreateShell` still skip
+  the form.
 - **A notification system instead of a one-line footer echo.** Toasts are
   bordered blocks in the top-right of the content region: they stack, collapse
   by source, reveal a row at a time, and dismiss on click or `d`. The centre is
@@ -59,6 +64,12 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Bug Fixes
 
+- **`make install-worktree` / `make install-local` make `sidecar` on PATH
+  run the build they just activated.** Homebrew is still the managed
+  link; copies that win PATH (typically `~/go/bin` from unmanaged
+  `make install`) are pointed at the same artifact so
+  `make install-worktree && sidecar` is one build. `make install-status`
+  still reports resolution without mutating it.
 - **Unsafe internal link labels stay inert**, and only rectangles that are
   actually rendered as links are decorated — so a label that looks like a path
   or a td id inside chrome, search, or an editor is not clickable.
@@ -75,6 +86,9 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Internal
 
+- `make lint` is the GitHub lint job: full codebase, `GOOS=linux`,
+  `GOWORK=off`, golangci-lint v2.12.2. The old `--new-from-merge-base`
+  gate missed unused leftovers whose function bodies were not edited.
 - `internal/contentlink` owns link recognition and `sidecar://` routing;
   `internal/passivedeck` owns the app-level content deck both plugin hosts and
   the workspace surfaces bind to. There is still one compositor and one pane

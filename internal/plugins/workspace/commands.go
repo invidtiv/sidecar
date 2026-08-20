@@ -449,8 +449,6 @@ func (p *Plugin) FocusContext() string {
 		return "workspace-rename-shell"
 	case ViewModeRenameWorktree:
 		return "workspace-rename-worktree"
-	case ViewModeTypeSelector:
-		return "workspace-type-selector"
 	case ViewModeFetchPR:
 		return "workspace-fetch-pr"
 	case ViewModeFilePicker:
@@ -518,7 +516,6 @@ func (p *Plugin) ConsumesTextInput() bool {
 		ViewModeCommitForMerge,
 		ViewModeRenameShell,
 		ViewModeRenameWorktree,
-		ViewModeTypeSelector,
 		ViewModeFetchPR:
 		return true
 	case ViewModeMerge:

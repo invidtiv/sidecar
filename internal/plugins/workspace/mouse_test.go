@@ -26,7 +26,6 @@ func TestIsModalViewMode(t *testing.T) {
 		{ViewModeConfirmDelete, true},
 		{ViewModeConfirmDeleteShell, true},
 		{ViewModeCommitForMerge, true},
-		{ViewModeTypeSelector, true},
 		{ViewModeRenameShell, true},
 		{ViewModeRenameWorktree, true},
 		{ViewModeFilePicker, true},
@@ -59,7 +58,6 @@ func TestIsBackgroundRegion(t *testing.T) {
 		worktreedelete.DeleteID, worktreedelete.CancelID,
 		createSubmitID, createCancelID,
 		mergeMethodListID, mergeCleanUpButtonID, mergeSkipButtonID, // Merge modal element IDs
-		typeSelectorListID, typeSelectorConfirmID, typeSelectorCancelID, typeSelectorInputID, // Type selector modal element IDs
 	}
 	for _, id := range modal {
 		if isBackgroundRegion(id) {
@@ -72,7 +70,7 @@ func TestModalClickGuard(t *testing.T) {
 	modalModes := []ViewMode{
 		ViewModeCreate, ViewModeMerge, ViewModeAgentChoice,
 		ViewModeConfirmDelete, ViewModeConfirmDeleteShell,
-		ViewModeRenameShell, ViewModeRenameWorktree, ViewModeTypeSelector,
+		ViewModeRenameShell, ViewModeRenameWorktree,
 		ViewModeTaskLink,
 		ViewModeCommitForMerge, ViewModeFilePicker,
 	}

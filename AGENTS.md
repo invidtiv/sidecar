@@ -49,6 +49,10 @@ make install-local
 # Deliberately activate the current branch/worktree
 make install-worktree
 
+# Managed installs link Homebrew and retarget any other `sidecar` that
+# wins PATH (typically ~/go/bin from unmanaged `make install`) so
+# `make install-worktree && sidecar` runs this build.
+
 # First command in any git worktree: shadow the main checkout's go.work
 # (without this, every go command in a worktree fails with "directory ...
 # does not contain modules listed in go.work"; idempotent, safe everywhere).

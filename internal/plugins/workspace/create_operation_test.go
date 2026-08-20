@@ -519,9 +519,8 @@ func TestProjectCreatePlanLeavesTaskEmpty(t *testing.T) {
 	r := newCreateRepo(t)
 	p := New()
 	p.ctx = &plugin.Context{Epoch: 1, WorkDir: r.main, ProjectRoot: r.main}
-	p.initCreateModalBase()
-	p.createNameInput.SetValue("feature/auth")
-	p.createBaseBranchInput.SetValue("main")
+	p.initCreateModalNamed("feature/auth")
+	p.createForm.SetBranches([]string{"main"}, "main")
 	msg := p.resolveCreatePlan()().(CreatePlanResolvedMsg)
 	if msg.Err != nil {
 		t.Fatal(msg.Err)

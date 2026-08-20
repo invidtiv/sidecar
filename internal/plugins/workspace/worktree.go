@@ -246,10 +246,7 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 // returned plan is shown verbatim before beginCreateWorktree can mutate Git.
 func (p *Plugin) resolveCreatePlan() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
-	name := p.createNameInput.Value()
-	baseBranch := p.createBaseBranchInput.Value()
-	agentType := p.createAgentType
-	skipPerms := p.createSkipPermissions
+	name, baseBranch, agentType, skipPerms := p.createFormValues()
 
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
@@ -272,9 +269,7 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 // preflight/add/setup state machine above.
 func (p *Plugin) createWorktree() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
-	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
-	agentType := p.createAgentType
-	skipPerms := p.createSkipPermissions
+	name, base, agentType, skipPerms := p.createFormValues()
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	if base == "" {
 		base = "HEAD"
@@ -478,13 +473,7 @@ func getCurrentBranch(workdir string) (string, error) {
 }
 
 func getCurrentBranchContext(ctx context.Context, workdir string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = workdir
-	output, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(output)), nil
+	return workspaceops.CurrentBranch(ctx, workdir)
 }
 
 func checkRemoteBranchExistsContext(ctx context.Context, workdir, branch string) bool {
@@ -546,37 +535,12 @@ func (p *Plugin) loadBranches() tea.Cmd {
 	ctx, scope := p.newContextScope(nil)
 	workDir := p.ctx.WorkDir
 	return func() tea.Msg {
-		cmd := exec.CommandContext(ctx, "git", "branch", "--format=%(refname:short)")
-		cmd.Dir = workDir
-		output, err := cmd.Output()
+		branches, err := workspaceops.ListLocalBranches(ctx, workDir)
 		if err != nil {
-			return BranchListMsg{OperationScope: scope, Err: fmt.Errorf("git branch: %w", err)}
-		}
-
-		var branches []string
-		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-			if line != "" {
-				branches = append(branches, line)
-			}
+			return BranchListMsg{OperationScope: scope, Err: err}
 		}
 		return BranchListMsg{OperationScope: scope, Branches: branches}
 	}
-}
-
-// filterBranches filters branches based on a search query.
-func filterBranches(query string, allBranches []string) []string {
-	if query == "" {
-		return allBranches
-	}
-
-	query = strings.ToLower(query)
-	var matches []string
-	for _, branch := range allBranches {
-		if strings.Contains(strings.ToLower(branch), query) {
-			matches = append(matches, branch)
-		}
-	}
-	return matches
 }
 
 const sidecarTaskFile = "task"

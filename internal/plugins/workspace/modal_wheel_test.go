@@ -75,7 +75,7 @@ func workspaceModalFamilies() map[string]func(p *Plugin) *modal.Modal {
 		"create": func(p *Plugin) *modal.Modal {
 			p.initCreateModalBase()
 			p.ensureCreateModal()
-			return p.createModal
+			return p.createFormModal()
 		},
 		"create operation": func(p *Plugin) *modal.Modal {
 			p.initCreateModalBase()
@@ -113,12 +113,6 @@ func workspaceModalFamilies() map[string]func(p *Plugin) *modal.Modal {
 			p.deleteConfirmShell = &ShellSession{Name: "Shell 1", TmuxName: "sh-1"}
 			p.ensureConfirmDeleteShellModal()
 			return p.deleteShellModal
-		},
-		"type selector": func(p *Plugin) *modal.Modal {
-			p.viewMode = ViewModeTypeSelector
-			p.typeSelectorNameInput = textinput.New()
-			p.ensureTypeSelectorModal()
-			return p.typeSelectorModal
 		},
 		"agent choice": func(p *Plugin) *modal.Modal {
 			p.viewMode = ViewModeAgentChoice

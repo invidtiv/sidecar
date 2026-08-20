@@ -100,3 +100,21 @@ func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 		t.Fatalf("resolved command = %q", got)
 	}
 }
+
+func TestAgentSkipFlag(t *testing.T) {
+	if got := AgentSkipFlag("codex"); got != "--dangerously-bypass-approvals-and-sandbox" {
+		t.Fatalf("codex skip flag = %q", got)
+	}
+	if got := AgentSkipFlag("claude"); got != "--dangerously-skip-permissions" {
+		t.Fatalf("claude skip flag = %q", got)
+	}
+	if got := AgentSkipFlag("copilot"); got != "" {
+		t.Fatalf("copilot skip flag = %q, want empty", got)
+	}
+	if got := AgentSkipFlag(""); got != "" {
+		t.Fatalf("empty agent skip flag = %q, want empty", got)
+	}
+	if got := AgentSkipFlag("nonesuch"); got != "" {
+		t.Fatalf("unknown agent skip flag = %q, want empty", got)
+	}
+}

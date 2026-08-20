@@ -112,17 +112,24 @@ printf 'sidecar version current-shell\n'
 EOF
 chmod +x "$fake_bin/sidecar"
 
-cat >"$fake_bin/zsh" <<'EOF'
+cat >"$fake_bin/zsh" <<EOF
 #!/bin/sh
-case "${1:-}" in
+set -eu
+case "\${1:-}" in
   -lic)
-    printf '/fake/interactive/sidecar\nsidecar version interactive-login\n'
+    path=$brew_prefix/bin/sidecar
+    [ -z "\${FAKE_LOGIN_SIDECAR:-}" ] || path=\$FAKE_LOGIN_SIDECAR
     ;;
   -lc)
-    printf '/fake/non-interactive/sidecar\nsidecar version non-interactive-login\n'
+    path=$brew_prefix/bin/sidecar
+    [ -z "\${FAKE_NLOGIN_SIDECAR:-}" ] || path=\$FAKE_NLOGIN_SIDECAR
     ;;
   *) exit 2 ;;
 esac
+printf 'SIDECAR_DEV_INSTALL_PATH=%s\\n' "\$path"
+if [ -x "\$path" ]; then
+  "\$path" --version
+fi
 EOF
 chmod +x "$fake_bin/zsh"
 
@@ -134,9 +141,15 @@ chmod +x "$brew_prefix/Cellar/sidecar/1.0.0/bin/sidecar"
 
 run() {
   active_repo=${SIDECAR_TEST_REPO:-$test_repo}
-  env PATH="$fake_bin:$PATH" \
+  path="$brew_prefix/bin:$fake_bin:$PATH"
+  if [ -n "${SIDECAR_TEST_PATH_PREFIX:-}" ]; then
+    path="$SIDECAR_TEST_PATH_PREFIX:$path"
+  fi
+  env PATH="$path" \
     FAKE_BREW_PREFIX="$brew_prefix" \
     FAKE_BREW_STATE="$brew_state" \
+    FAKE_LOGIN_SIDECAR="${FAKE_LOGIN_SIDECAR:-}" \
+    FAKE_NLOGIN_SIDECAR="${FAKE_NLOGIN_SIDECAR:-}" \
     SIDECAR_REPO_ROOT="$active_repo" \
     SIDECAR_DEV_STATE="$dev_state" \
     SIDECAR_BREW_PREFIX="$brew_prefix" \
@@ -148,6 +161,7 @@ run() {
 # Missing -> canonical main install, with inspectable clean metadata.
 output=$(run install-local)
 assert_contains "$output" 'activated local Sidecar build'
+assert_contains "$output" 'verified: sidecar on PATH is this build'
 assert_contains "$output" 'branch=main'
 assert_contains "$output" 'dirty=false'
 assert_kind local
@@ -289,13 +303,65 @@ assert_contains "$output" 'link state: local'
 assert_contains "$output" "raw target: $before"
 assert_contains "$output" 'activation version: sidecar version devel+'
 assert_contains "$output" "current shell resolves:
+  $brew_prefix/bin/sidecar"
+assert_contains "$output" "interactive login shell resolves:
+  $brew_prefix/bin/sidecar"
+assert_contains "$output" "non-interactive login shell resolves:
+  $brew_prefix/bin/sidecar"
+
+# Status remains read-only and still reports PATH disagreement.
+mkdir -p "$temporary/interactive" "$temporary/nlogin"
+printf '#!/bin/sh\nprintf "sidecar version interactive-login\\n"\n' >"$temporary/interactive/sidecar"
+printf '#!/bin/sh\nprintf "sidecar version non-interactive-login\\n"\n' >"$temporary/nlogin/sidecar"
+chmod +x "$temporary/interactive/sidecar" "$temporary/nlogin/sidecar"
+SIDECAR_TEST_PATH_PREFIX=$fake_bin
+FAKE_LOGIN_SIDECAR=$temporary/interactive/sidecar
+FAKE_NLOGIN_SIDECAR=$temporary/nlogin/sidecar
+export SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+output=$(run status)
+unset SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+assert_contains "$output" "current shell resolves:
   $fake_bin/sidecar
   sidecar version current-shell"
 assert_contains "$output" "interactive login shell resolves:
-  /fake/interactive/sidecar
+  $temporary/interactive/sidecar
   sidecar version interactive-login"
 assert_contains "$output" "non-interactive login shell resolves:
-  /fake/non-interactive/sidecar
+  $temporary/nlogin/sidecar
   sidecar version non-interactive-login"
+
+# A sidecar earlier on PATH is pointed at the activated artifact so
+# `install-worktree && sidecar` runs this build.
+shadow=$temporary/shadow
+mkdir -p "$shadow"
+printf '#!/bin/sh\nprintf "sidecar version shadowed\\n"\n' >"$shadow/sidecar"
+chmod +x "$shadow/sidecar"
+SIDECAR_TEST_PATH_PREFIX=$shadow
+FAKE_LOGIN_SIDECAR=$shadow/sidecar
+FAKE_NLOGIN_SIDECAR=$shadow/sidecar
+export SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+output=$(run install-worktree)
+unset SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+assert_contains "$output" "pointed $shadow/sidecar at the activated build"
+assert_contains "$output" 'verified: sidecar on PATH is this build'
+[ -L "$shadow/sidecar" ] || fail 'PATH winner was not replaced with a symlink'
+shadow_resolved=$(realpath -q "$shadow/sidecar")
+brew_resolved=$(realpath -q "$brew_prefix/bin/sidecar")
+[ "$shadow_resolved" = "$brew_resolved" ] ||
+  fail "PATH winner resolves to $shadow_resolved, want $brew_resolved"
+assert_kind local
+
+# Login-shell PATH winners are retargeted even when the current shell already matches.
+login_shadow=$temporary/login-shadow
+mkdir -p "$login_shadow"
+printf '#!/bin/sh\nprintf "sidecar version login-shadowed\\n"\n' >"$login_shadow/sidecar"
+chmod +x "$login_shadow/sidecar"
+FAKE_LOGIN_SIDECAR=$login_shadow/sidecar
+export FAKE_LOGIN_SIDECAR
+output=$(run install-worktree)
+unset FAKE_LOGIN_SIDECAR
+assert_contains "$output" "pointed $login_shadow/sidecar at the activated build"
+assert_contains "$output" 'verified: sidecar on PATH is this build'
+[ -L "$login_shadow/sidecar" ] || fail 'login PATH winner was not replaced with a symlink'
 
 printf 'dev-install tests passed\n'

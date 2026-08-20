@@ -9,11 +9,11 @@ import (
 )
 
 func TestResolveSelectableAgents_EmptyConfigUsesDefault(t *testing.T) {
-	got := resolveSelectableAgents(nil, AgentTypeOrder, false)
+	got := resolveSelectableAgents(nil, false)
 	if !reflect.DeepEqual(got, AgentTypeOrder) {
 		t.Fatalf("empty config worktree = %v, want AgentTypeOrder", got)
 	}
-	gotShell := resolveSelectableAgents(nil, ShellAgentOrder, true)
+	gotShell := resolveSelectableAgents(nil, true)
 	if !reflect.DeepEqual(gotShell, ShellAgentOrder) {
 		t.Fatalf("empty config shell = %v, want ShellAgentOrder", gotShell)
 	}
@@ -21,12 +21,12 @@ func TestResolveSelectableAgents_EmptyConfigUsesDefault(t *testing.T) {
 
 func TestResolveSelectableAgents_AllowlistOrder(t *testing.T) {
 	cfg := []string{"grok", "claude", "not-a-real-agent", "grok", "  codex  "}
-	got := resolveSelectableAgents(cfg, AgentTypeOrder, false)
+	got := resolveSelectableAgents(cfg, false)
 	want := []AgentType{AgentGrok, AgentClaude, AgentCodex, AgentNone}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("worktree allowlist = %v, want %v", got, want)
 	}
-	gotShell := resolveSelectableAgents(cfg, ShellAgentOrder, true)
+	gotShell := resolveSelectableAgents(cfg, true)
 	wantShell := []AgentType{AgentNone, AgentGrok, AgentClaude, AgentCodex}
 	if !reflect.DeepEqual(gotShell, wantShell) {
 		t.Fatalf("shell allowlist = %v, want %v", gotShell, wantShell)
@@ -34,7 +34,7 @@ func TestResolveSelectableAgents_AllowlistOrder(t *testing.T) {
 }
 
 func TestResolveSelectableAgents_AllUnknownFallsBack(t *testing.T) {
-	got := resolveSelectableAgents([]string{"nope", "also-no"}, AgentTypeOrder, false)
+	got := resolveSelectableAgents([]string{"nope", "also-no"}, false)
 	if !reflect.DeepEqual(got, AgentTypeOrder) {
 		t.Fatalf("all-unknown should fall back to default, got %v", got)
 	}

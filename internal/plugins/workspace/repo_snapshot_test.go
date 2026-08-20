@@ -340,11 +340,10 @@ func TestCreatePostAddInventoryCancelledWithPartialResult(t *testing.T) {
 			if err := p.Init(&plugin.Context{Epoch: 40, WorkDir: oldDir, ProjectRoot: oldDir}); err != nil {
 				t.Fatal(err)
 			}
-			p.initCreateModalBase()
+			p.initCreateModalNamed("feature")
 			if err := os.WriteFile(count, []byte("0"), 0644); err != nil {
 				t.Fatal(err)
 			}
-			p.createNameInput.SetValue("feature")
 			cmd := p.createWorktree()
 			done := make(chan CreateDoneMsg, 1)
 			go func() { done <- cmd().(CreateDoneMsg) }()

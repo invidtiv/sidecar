@@ -6,36 +6,23 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/shellstate"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
-	globalCreateProjectID = "global-create-project"
-	globalCreateKindID    = "global-create-kind"
-	globalCreateAgentID   = "global-create-agent"
-	globalCreateNameID    = "global-create-name"
-	globalCreateSubmitID  = "global-create-submit"
 	globalCreateConfirmID = "global-create-confirm"
 	globalCreateRetryID   = "global-create-retry"
 	globalCreateOpenID    = "global-create-open"
 	globalCreateDeleteID  = "global-create-delete"
 	globalCreateCancelID  = "global-create-cancel"
 	globalCreateActionID  = "global-create-shell"
-)
-
-const (
-	globalCreateShell = iota
-	globalCreateWorktree
 )
 
 var (
@@ -49,6 +36,9 @@ var (
 	deleteGlobalWorktree  = workspaceops.DeleteCreatedWorktree
 	launchGlobalSession   = workspaceops.LaunchWorktreeSession
 	startGlobalShellAgent = workspaceops.StartAgentInShell
+	listCreateBranches    = workspaceops.ListLocalBranches
+	currentCreateBranch   = workspaceops.CurrentBranch
+	resolveGlobalAgentCmd = workspaceops.ResolveAgentCommand
 )
 
 type globalShellCreatedMsg struct {
@@ -98,47 +88,52 @@ type projectMutationRefreshMsg struct {
 	DispatchedAt time.Time
 }
 
+type globalCreateBranchesMsg struct {
+	ProjectKey string
+	Branches   []string
+	Current    string
+}
+
 func (m *Model) CreateOpen() bool { return m.createOpen }
 
 func (m *Model) OpenCreateShell(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, globalCreateShell, false)
+	return m.openCreate(projectKey, workspacecreate.KindShell, false)
 }
 
 func (m *Model) OpenCreateWorktree(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, globalCreateWorktree, false)
+	return m.openCreate(projectKey, workspacecreate.KindWorktree, false)
 }
 
 // OpenCreate opens the shared chooser used by header and section + actions.
 // A section supplies the project answer but leaves the capability choice live.
 func (m *Model) OpenCreate(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, globalCreateShell, true)
+	return m.openCreate(projectKey, workspacecreate.KindWorktree, true)
 }
 
-func (m *Model) openCreate(projectKey string, kind int, focusKind bool) tea.Cmd {
+func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKind bool) tea.Cmd {
 	if m.PreviewInteractive() || len(m.projects) == 0 {
 		return nil
 	}
 	m.closeViewFlyout()
 	m.closeRenameShell()
+	key := m.normalizedCreateProjectKey(projectKey)
+	agents := []string(nil)
+	defaultAgent := ""
+	if m.config != nil {
+		agents = m.config.Plugins.Workspace.Agents
+		defaultAgent = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
+	}
+	m.createForm = workspacecreate.Open(workspacecreate.OpenOpts{
+		Kind:         kind,
+		FocusKind:    focusKind,
+		ShowProject:  true,
+		ProjectKey:   key,
+		Projects:     m.createProjectItems(),
+		Agents:       agents,
+		NextShell:    m.defaultShellDisplayName(key),
+		DefaultAgent: defaultAgent,
+	})
 	m.createOpen = true
-	m.createProjectKey = m.defaultCreateProject(projectKey)
-	m.createProjectIndex = m.projectIndex(m.createProjectKey)
-	m.createKindIndex = kind
-	m.createNameInput = textinput.New()
-	m.createNameInput.Prompt = ""
-	m.createNameInput.CharLimit = shellstate.MaxNameBytes
-	m.updateCreatePlaceholder()
-	m.createNameInput.SetWidth(30)
-	m.createProjectInput = textinput.New()
-	m.createProjectInput.Prompt = ""
-	m.createProjectInput.CharLimit = 80
-	m.createAgentInput = textinput.New()
-	m.createAgentInput.Prompt = ""
-	m.createAgentInput.CharLimit = 80
-	m.createAgentType = m.defaultCreateAgent()
-	m.rematchCreateAgentIndex()
-	m.prefillCreateProjectInput()
-	m.prefillCreateAgentInput()
 	m.createError = ""
 	m.createWarning = ""
 	m.createBusy = false
@@ -146,32 +141,15 @@ func (m *Model) openCreate(projectKey string, kind int, focusKind bool) tea.Cmd 
 	m.createRecord = nil
 	m.createModal = nil
 	m.createModalWidth = 0
-	m.ensureCreateModal()
-	if m.createModal != nil {
-		w, h := m.width, m.height
-		if w < 1 {
-			w = 80
-		}
-		if h < 1 {
-			h = 24
-		}
-		_ = m.createModal.Render(w, h, m.createMouse)
-		m.createModal.Reset()
-		focus := globalCreateProjectID
-		if focusKind {
-			focus = globalCreateKindID
-		}
-		m.createModal.SetFocus(focus)
-	}
-	return nil
+	return m.loadCreateBranches()
 }
 
-func (m *Model) updateCreatePlaceholder() {
-	if m.createKindIndex == globalCreateWorktree {
-		m.createNameInput.Placeholder = "feature-name"
-		return
+func (m *Model) normalizedCreateProjectKey(explicit string) string {
+	key := m.defaultCreateProject(explicit)
+	if idx := m.projectIndex(key); idx >= 0 {
+		return projectKey(m.projects[idx])
 	}
-	m.createNameInput.Placeholder = m.defaultShellDisplayName(m.createProjectKey)
+	return key
 }
 
 func (m *Model) defaultCreateProject(explicit string) string {
@@ -200,10 +178,14 @@ func (m *Model) projectIndex(key string) int {
 }
 
 func (m *Model) selectedCreateProject() (Project, bool) {
-	if m.createProjectIndex < 0 || m.createProjectIndex >= len(m.projects) {
+	if m.createForm == nil {
 		return Project{}, false
 	}
-	return m.projects[m.createProjectIndex], true
+	idx := m.projectIndex(m.createForm.ProjectKey())
+	if idx < 0 {
+		return Project{}, false
+	}
+	return m.projects[idx], true
 }
 
 func (m *Model) shellDefinitions(key string) []shellstate.Definition {
@@ -245,20 +227,31 @@ func (m *Model) ensureCreateModal() {
 		return
 	}
 	modalW := m.createModalContentWidth()
-	prevFocus := ""
-	existed := m.createModal != nil
-	if existed {
-		prevFocus = m.createModal.FocusedID()
-	}
-	if m.createModal != nil && m.createModalWidth == modalW {
+	if m.createPlan != nil {
+		if m.createModal != nil && m.createModalWidth == modalW {
+			return
+		}
+		m.createModalWidth = modalW
+		m.ensureCreatePlanModal(modalW)
 		return
 	}
-	m.buildCreateModal(modalW, prevFocus)
-	if existed && prevFocus != "" && m.createModal != nil && m.createPlan == nil {
-		w, h := m.createRenderSize()
-		_ = m.createModal.Render(w, h, m.createMouse)
-		m.createModal.SetFocus(prevFocus)
+	if m.createForm == nil {
+		return
 	}
+	m.createForm.Build(modalW)
+	if m.createError != "" {
+		m.createForm.SetError(m.createError)
+	}
+}
+
+func (m *Model) activeCreateModal() *modal.Modal {
+	if m.createPlan != nil {
+		return m.createModal
+	}
+	if m.createForm != nil {
+		return m.createForm.Modal()
+	}
+	return m.createModal
 }
 
 func (m *Model) createRenderSize() (int, int) {
@@ -272,257 +265,59 @@ func (m *Model) createRenderSize() (int, int) {
 	return w, h
 }
 
-func (m *Model) rebuildCreateChooser() {
-	if !m.createOpen || m.createPlan != nil {
-		return
-	}
-	prevFocus := ""
-	if m.createModal != nil {
-		prevFocus = m.createModal.FocusedID()
-	}
-	m.createModal = nil
-	m.createModalWidth = 0
-	m.buildCreateModal(m.createModalContentWidth(), prevFocus)
-	if m.createModal == nil {
-		return
-	}
-	w, h := m.createRenderSize()
-	_ = m.createModal.Render(w, h, m.createMouse)
-	if prevFocus != "" {
-		m.createModal.SetFocus(prevFocus)
-	}
-}
-
-func (m *Model) buildCreateModal(modalW int, prevFocus string) {
-	m.createModalWidth = modalW
-	if m.createPlan != nil {
-		m.ensureCreatePlanModal(modalW)
-		return
-	}
-	if prevFocus != globalCreateProjectID {
-		m.prefillCreateProjectInput()
-	}
-	if prevFocus != globalCreateAgentID {
-		m.prefillCreateAgentInput()
-	}
-	projectItems := m.createProjectItems()
-	agentItems := m.createAgentItems()
-	sections := []modal.Section{
-		createKindToggle(globalCreateKindID, &m.createKindIndex),
-		modal.Spacer(),
-		modal.Text("Project"),
-		modal.Combo(globalCreateProjectID, &m.createProjectInput, projectItems, &m.createProjectIndex,
-			modal.WithComboFilter(comboExactOrAllFilter(projectItems))),
-		modal.Text("Agent"),
-		modal.Combo(globalCreateAgentID, &m.createAgentInput, agentItems, &m.createAgentIndex,
-			modal.WithComboFilter(comboExactOrAllFilter(agentItems))),
-		modal.InputWithLabel(globalCreateNameID, "Name", &m.createNameInput),
-	}
-	if m.createError != "" {
-		sections = append(sections, modal.Spacer(), modal.Text("Error: "+m.createError))
-	}
-	if m.createBusy {
-		sections = append(sections, modal.Spacer(), modal.Text("Preparing…"))
-	}
-	sections = append(sections, modal.Spacer(), modal.Buttons(
-		modal.Btn(" Create ", globalCreateSubmitID, modal.BtnPrimary()),
-		modal.Btn(" Cancel ", globalCreateCancelID),
-	))
-	m.createModal = modal.New("Create Workspace", modal.WithWidth(modalW), modal.WithPrimaryAction(globalCreateSubmitID))
-	for _, section := range sections {
-		m.createModal.AddSection(section)
-	}
-}
-
-func (m *Model) createProjectItems() []modal.DropdownItem {
-	items := make([]modal.DropdownItem, 0, len(m.projects))
+func (m *Model) createProjectItems() []workspacecreate.ProjectItem {
+	items := make([]workspacecreate.ProjectItem, 0, len(m.projects))
 	for _, project := range m.projects {
-		key := projectKey(project)
-		items = append(items, modal.DropdownItem{ID: "project:" + key, Label: project.Name, Value: project.Name, Data: key})
+		items = append(items, workspacecreate.ProjectItem{Key: projectKey(project), Label: project.Name})
 	}
 	return items
-}
-
-func (m *Model) createAgentTypes() []string {
-	configured := []string(nil)
-	if m.config != nil {
-		configured = m.config.Plugins.Workspace.Agents
-	}
-	return resolveCreateAgents(configured, m.createKindIndex != globalCreateWorktree)
-}
-
-func (m *Model) createAgentItems() []modal.DropdownItem {
-	types := m.createAgentTypes()
-	items := make([]modal.DropdownItem, len(types))
-	for i, at := range types {
-		label := createAgentLabel(at)
-		items[i] = modal.DropdownItem{ID: "agent:" + at, Label: label, Value: label, Data: at}
-	}
-	return items
-}
-
-func (m *Model) defaultCreateAgent() string {
-	agents := m.createAgentTypes()
-	if last := strings.TrimSpace(loadLastCreateAgent()); last != "" && indexOfCreateAgent(agents, last) >= 0 {
-		return last
-	}
-	cfgDefault := ""
-	if m.config != nil {
-		cfgDefault = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
-	}
-	if cfgDefault != "" && indexOfCreateAgent(agents, cfgDefault) >= 0 {
-		return cfgDefault
-	}
-	if m.createKindIndex == globalCreateWorktree {
-		for _, at := range agents {
-			if at != "" {
-				return at
-			}
-		}
-	}
-	return ""
-}
-
-func (m *Model) rematchCreateAgentIndex() {
-	agents := m.createAgentTypes()
-	idx := indexOfCreateAgent(agents, m.createAgentType)
-	if idx < 0 {
-		m.createAgentType = m.defaultCreateAgent()
-		idx = indexOfCreateAgent(agents, m.createAgentType)
-	}
-	if idx < 0 {
-		idx = 0
-		if len(agents) > 0 {
-			m.createAgentType = agents[0]
-		}
-	}
-	m.createAgentIndex = idx
-}
-
-func (m *Model) syncCreateAgentFromIdx() {
-	agents := m.createAgentTypes()
-	if m.createAgentIndex >= 0 && m.createAgentIndex < len(agents) {
-		m.createAgentType = agents[m.createAgentIndex]
-	}
-}
-
-func (m *Model) selectedCreateAgent() string {
-	m.syncCreateAgentFromIdx()
-	return strings.TrimSpace(m.createAgentType)
-}
-
-func (m *Model) prefillCreateProjectInput() {
-	label := ""
-	if project, ok := m.selectedCreateProject(); ok {
-		label = project.Name
-	}
-	if m.createProjectInput.Value() != label {
-		m.createProjectInput.SetValue(label)
-	}
-}
-
-func (m *Model) prefillCreateAgentInput() {
-	label := createAgentLabel(m.createAgentType)
-	if m.createAgentInput.Value() != label {
-		m.createAgentInput.SetValue(label)
-	}
-}
-
-func comboExactOrAllFilter(items []modal.DropdownItem) modal.ComboFilterFunc {
-	return func(query string, item modal.DropdownItem) bool {
-		if query == "" || comboQueryMatchesItemExactly(query, items) {
-			return true
-		}
-		q := strings.ToLower(query)
-		if strings.Contains(strings.ToLower(item.Label), q) {
-			return true
-		}
-		if item.Value != "" && strings.Contains(strings.ToLower(item.Value), q) {
-			return true
-		}
-		if item.Desc != "" && strings.Contains(strings.ToLower(item.Desc), q) {
-			return true
-		}
-		return false
-	}
-}
-
-func comboQueryMatchesItemExactly(query string, items []modal.DropdownItem) bool {
-	for _, it := range items {
-		if query == it.Value || query == it.Label {
-			return true
-		}
-	}
-	return false
-}
-
-func createKindToggle(id string, selected *int) modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		sel := 0
-		if selected != nil {
-			sel = *selected
-		}
-		focused := focusID == id
-		shellStyle, treeStyle := styles.Button, styles.Button
-		if focused {
-			if sel == globalCreateWorktree {
-				treeStyle = styles.ButtonFocused
-			} else {
-				shellStyle = styles.ButtonFocused
-			}
-		} else if sel == globalCreateWorktree {
-			treeStyle = styles.ButtonHover
-		} else {
-			shellStyle = styles.ButtonHover
-		}
-		shell := shellStyle.Render(" Shell ")
-		sep := styles.Muted.Render(" | ")
-		tree := treeStyle.Render(" Worktree ")
-		content := lipgloss.JoinHorizontal(lipgloss.Top, shell, sep, tree)
-		if ansi.StringWidth(content) > contentWidth && contentWidth > 0 {
-			content = ansi.Truncate(content, contentWidth, "…")
-		}
-		return modal.RenderedSection{
-			Content: content,
-			Focusables: []modal.FocusableInfo{{
-				ID: id, OffsetX: 0, OffsetY: 0,
-				Width:  ansi.StringWidth(content),
-				Height: 1,
-			}},
-		}
-	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
-		if focusID != id || selected == nil {
-			return "", nil
-		}
-		key, ok := msg.(tea.KeyPressMsg)
-		if !ok {
-			return "", nil
-		}
-		switch key.String() {
-		case "left", "h", "k":
-			*selected = globalCreateShell
-		case "right", "l", "j":
-			*selected = globalCreateWorktree
-		}
-		return "", nil
-	})
 }
 
 func (m *Model) setCreateKindFromClick(x int) {
-	if m.createMouse == nil {
+	if m.createForm == nil || m.createMouse == nil {
 		return
 	}
 	for _, region := range m.createMouse.HitMap.Regions() {
-		if region.ID != globalCreateKindID {
+		if region.ID != workspacecreate.FieldKind {
 			continue
 		}
-		if x >= region.Rect.X+region.Rect.W/2 {
-			m.createKindIndex = globalCreateWorktree
-		} else {
-			m.createKindIndex = globalCreateShell
-		}
+		m.createForm.SetKindFromClickX(x, region.Rect.X, region.Rect.W)
 		return
 	}
+}
+
+func (m *Model) setCreateError(msg string) {
+	m.createError = msg
+	if m.createForm != nil && m.createPlan == nil {
+		m.createForm.SetError(msg)
+	}
+}
+
+func (m *Model) loadCreateBranches() tea.Cmd {
+	project, ok := m.selectedCreateProject()
+	if !ok {
+		return nil
+	}
+	key := projectKey(project)
+	dir := project.Path
+	return func() tea.Msg {
+		branches, err := listCreateBranches(context.Background(), dir)
+		if err != nil {
+			branches = nil
+		}
+		current, _ := currentCreateBranch(context.Background(), dir)
+		if current == "HEAD" {
+			current = ""
+		}
+		return globalCreateBranchesMsg{ProjectKey: key, Branches: branches, Current: current}
+	}
+}
+
+func (m *Model) applyCreateBranches(msg globalCreateBranchesMsg) {
+	if m.createForm == nil || m.createForm.ProjectKey() != msg.ProjectKey {
+		return
+	}
+	m.createForm.SetBranches(msg.Branches, msg.Current)
 }
 
 func (m *Model) ensureCreatePlanModal(modalW int) {
@@ -570,10 +365,14 @@ func shortCreateOID(oid string) string {
 
 func (m *Model) overlayCreateShell(background string, width, height int) string {
 	m.ensureCreateShellModal()
-	if m.createModal == nil {
+	md := m.activeCreateModal()
+	if md == nil {
 		return background
 	}
-	rendered := m.createModal.Render(width, height, m.createMouse)
+	rendered := md.Render(width, height, m.createMouse)
+	if m.createPlan == nil && m.createForm != nil {
+		m.createForm.RestoreFocus()
+	}
 	return ui.OverlayModal(background, rendered, width, height)
 }
 
@@ -582,6 +381,7 @@ func (m *Model) closeCreateShell() {
 	m.createBusy = false
 	m.createError = ""
 	m.createWarning = ""
+	m.createForm = nil
 	m.createModal = nil
 	m.createModalWidth = 0
 	m.createPlan = nil
@@ -589,66 +389,103 @@ func (m *Model) closeCreateShell() {
 }
 
 func (m *Model) CreatePaste(value string) bool {
-	if !m.createOpen || m.createBusy || m.createPlan != nil {
+	if !m.createOpen || m.createBusy || m.createPlan != nil || m.createForm == nil {
 		return false
 	}
-	m.createNameInput.SetValue(m.createNameInput.Value() + value)
-	m.createError = ""
-	m.createModal = nil
+	m.ensureCreateModal()
+	md := m.createForm.Modal()
+	if md == nil {
+		return false
+	}
+	w, h := m.createRenderSize()
+	_ = md.Render(w, h, m.createMouse)
+	m.createForm.RestoreFocus()
+	prev := md.FocusedID()
+	md.SetFocus(workspacecreate.FieldName)
+	for _, r := range value {
+		_, _ = md.HandleKey(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	if prev != "" && prev != workspacecreate.FieldName {
+		md.SetFocus(prev)
+	}
+	m.createForm.SyncAfterInput()
+	m.setCreateError("")
 	return true
 }
 
 func (m *Model) handleCreateShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	m.ensureCreateShellModal()
-	if m.createModal == nil {
+	if m.createBusy {
 		return true, nil
 	}
-	if m.createBusy {
-		if msg.String() == "esc" {
+	if m.createPlan != nil {
+		if m.createModal == nil {
 			return true, nil
 		}
+		action, cmd := m.createModal.HandleKey(msg)
+		return true, tea.Batch(cmd, m.applyCreateAction(action))
+	}
+	md := m.activeCreateModal()
+	if md == nil {
 		return true, nil
 	}
-	before := m.createProjectIndex
-	beforeKind := m.createKindIndex
-	action, cmd := m.createModal.HandleKey(msg)
-	return true, tea.Batch(cmd, m.applyCreateAction(action, before, beforeKind))
+	prevProject := ""
+	if m.createForm != nil {
+		prevProject = m.createForm.ProjectKey()
+	}
+	action, cmd := md.HandleKey(msg)
+	return true, tea.Batch(cmd, m.finishCreateInput(action, prevProject))
 }
 
 func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 	m.ensureCreateShellModal()
-	if m.createModal == nil || m.createBusy {
+	if m.createBusy {
 		return nil
 	}
-	before := m.createProjectIndex
-	beforeKind := m.createKindIndex
-	action := m.createModal.HandleMouse(msg, m.createMouse)
-	if action == globalCreateKindID {
+	if m.createPlan != nil {
+		if m.createModal == nil {
+			return nil
+		}
+		action := m.createModal.HandleMouse(msg, m.createMouse)
+		return m.applyCreateAction(action)
+	}
+	md := m.activeCreateModal()
+	if md == nil {
+		return nil
+	}
+	prevProject := ""
+	if m.createForm != nil {
+		prevProject = m.createForm.ProjectKey()
+	}
+	action := md.HandleMouse(msg, m.createMouse)
+	if action == workspacecreate.FieldKind {
 		if click, ok := msg.(tea.MouseClickMsg); ok {
 			m.setCreateKindFromClick(click.X)
 		}
 	}
-	return m.applyCreateAction(action, before, beforeKind)
+	if action == workspacecreate.FieldSkip {
+		_, _ = md.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	}
+	return m.finishCreateInput(action, prevProject)
 }
 
-func (m *Model) applyCreateAction(action string, previousProject, previousKind int) tea.Cmd {
-	// Kind reorder moves None between the ends of the agent list. Syncing the
-	// old index against the new order would rewrite createAgentType (None→claude,
-	// claude→codex). Rematch the chosen type onto the new order instead.
-	if m.createKindIndex != previousKind {
-		m.rematchCreateAgentIndex()
-	} else {
-		m.syncCreateAgentFromIdx()
+func (m *Model) finishCreateInput(action, previousProject string) tea.Cmd {
+	if m.createForm != nil {
+		m.createForm.SyncAfterInput()
 	}
-	if m.createProjectIndex != previousProject || m.createKindIndex != previousKind {
-		if project, ok := m.selectedCreateProject(); ok {
-			m.createProjectKey = projectKey(project)
-		}
-		m.updateCreatePlaceholder()
-		m.rebuildCreateChooser()
+	var reload tea.Cmd
+	if m.createForm != nil && m.createForm.ProjectKey() != previousProject {
+		reload = m.loadCreateBranches()
 	}
+	if action == "" {
+		m.setCreateError("")
+	}
+	return tea.Batch(reload, m.applyCreateAction(action))
+}
+
+func (m *Model) applyCreateAction(action string) tea.Cmd {
 	switch action {
-	case "cancel", globalCreateCancelID:
+	case "cancel", workspacecreate.ActionCancel, globalCreateCancelID:
 		if m.createRecord != nil {
 			// Once Git has mutated, escape/cancel means retain the usable
 			// worktree; it must never silently abandon recovery state.
@@ -657,8 +494,8 @@ func (m *Model) applyCreateAction(action string, previousProject, previousKind i
 		m.clearPendingCreated()
 		m.closeCreateShell()
 		return nil
-	case globalCreateSubmitID:
-		if m.createKindIndex == globalCreateWorktree {
+	case workspacecreate.ActionCreate:
+		if m.createForm != nil && m.createForm.Kind() == workspacecreate.KindWorktree {
 			return m.planCreateWorktree()
 		}
 		return m.submitCreateShell()
@@ -677,14 +514,14 @@ func (m *Model) applyCreateAction(action string, previousProject, previousKind i
 func (m *Model) planCreateWorktree() tea.Cmd {
 	project, ok := m.selectedCreateProject()
 	if !ok {
-		m.createError = "Choose a project"
-		m.createModal = nil
+		m.setCreateError("Choose a project")
 		return nil
 	}
-	name := strings.TrimSpace(m.createNameInput.Value())
-	if name == "" {
-		m.createError = "Workspace name is required"
-		m.createModal = nil
+	if m.createForm == nil {
+		return nil
+	}
+	if err := m.createForm.Validate(); err != "" {
+		m.setCreateError(err)
 		return nil
 	}
 	setup := config.WorktreeSetupConfig{}
@@ -693,18 +530,22 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 		setup = m.config.WorktreeSetupForProject(project.Path)
 		dirPrefix = m.config.Plugins.Workspace.DirPrefix
 	}
-	agent := m.selectedCreateAgent()
+	name := strings.TrimSpace(m.createForm.Name())
+	base := m.createForm.BaseBranch()
+	agent := m.createForm.Agent()
+	skip := m.createForm.SkipPerms()
 	m.createBusy = true
-	m.createError = ""
+	m.setCreateError("")
 	m.createModal = nil
 	_ = saveLastGlobalCreateProject(project.Path)
-	_ = saveLastCreateAgent(agent)
+	m.createForm.PersistLastAgent()
 	return func() tea.Msg {
-		plan, err := resolveGlobalWorktree(context.Background(), project.Path, project.Path, name, "HEAD", dirPrefix, setup)
+		plan, err := resolveGlobalWorktree(context.Background(), project.Path, project.Path, name, base, dirPrefix, setup)
 		if plan != nil {
 			plan.RepoKey = projectKey(project)
 			plan.OperationID = fmt.Sprintf("global-%d", time.Now().UnixNano())
 			plan.AgentType = agent
+			plan.SkipPerms = skip
 		}
 		return globalWorktreePlannedMsg{Project: project, Plan: plan, Err: err}
 	}
@@ -781,6 +622,7 @@ func (m *Model) openCreatedWorktreeAnyway() tea.Cmd {
 	if err := removeGlobalJournal(m.createPlan); err != nil {
 		m.createError = "finalize pending creation journal before opening: " + err.Error()
 		m.createModal = nil
+		m.setCreateError(m.createError)
 		return nil
 	}
 	return m.launchCreatedWorktree(project, m.createPlan, m.createRecord)
@@ -797,7 +639,7 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	startAgent := plan.AgentType != ""
 	command := ""
 	if startAgent {
-		command = workspaceops.ResolveAgentCommand(record.Path, plan.AgentType, configured, plan.SkipPerms)
+		command = resolveGlobalAgentCmd(record.Path, plan.AgentType, configured, plan.SkipPerms)
 	}
 	spec := workspaceops.AgentLaunchSpec{
 		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
@@ -832,31 +674,45 @@ func (m *Model) deleteCreatedWorktree() tea.Cmd {
 func (m *Model) submitCreateShell() tea.Cmd {
 	project, ok := m.selectedCreateProject()
 	if !ok {
-		m.createError = "Choose a project"
-		m.createModal = nil
+		m.setCreateError("Choose a project")
 		return nil
 	}
 	key := projectKey(project)
 	display, session := workspaceops.ShellNames(project.Path, m.shellDefinitions(key))
-	if custom := strings.TrimSpace(m.createNameInput.Value()); custom != "" {
+	custom := ""
+	if m.createForm != nil {
+		custom = strings.TrimSpace(m.createForm.Name())
+	}
+	if custom != "" {
 		var err error
 		display, err = shellstate.NormalizeName(custom)
 		if err != nil {
-			m.createError = err.Error()
-			m.createModal = nil
+			m.setCreateError(err.Error())
 			return nil
 		}
 	}
 	cols, rows := max(20, m.width/2-4), max(5, m.height-4)
-	agent := m.selectedCreateAgent()
-	spec := workspaceops.ManagedShellSpec{ShellSpec: workspaceops.ShellSpec{WorkDir: project.Path, SessionName: session, DisplayName: display, Cols: cols, Rows: rows}, ProjectRoot: project.Path, AgentType: agent}
+	agent := ""
+	skip := false
+	if m.createForm != nil {
+		agent = m.createForm.Agent()
+		skip = m.createForm.SkipPerms()
+	}
+	spec := workspaceops.ManagedShellSpec{
+		ShellSpec:   workspaceops.ShellSpec{WorkDir: project.Path, SessionName: session, DisplayName: display, Cols: cols, Rows: rows},
+		ProjectRoot: project.Path,
+		AgentType:   agent,
+		SkipPerms:   skip,
+	}
 	m.createBusy = true
-	m.createError = ""
+	m.setCreateError("")
 	m.createModal = nil
 	m.pendingCreatedTmux = session
 	m.pendingCreatedPath = ""
 	_ = saveLastGlobalCreateProject(project.Path)
-	_ = saveLastCreateAgent(agent)
+	if m.createForm != nil {
+		m.createForm.PersistLastAgent()
+	}
 	return func() tea.Msg {
 		_, err := createManagedShell(spec)
 		if err == nil && agent != "" {
@@ -864,7 +720,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 			if m.config != nil {
 				configured = m.config.Plugins.Workspace.AgentStart
 			}
-			command := workspaceops.ResolveAgentCommand(project.Path, agent, configured, false)
+			command := resolveGlobalAgentCmd(project.Path, agent, configured, skip)
 			command = withGlobalShellNaming(command, agent)
 			err = startGlobalShellAgent(context.Background(), session, command)
 		}
@@ -947,10 +803,10 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 		return nil
 	}
 	if msg.Err != nil {
-		m.createError = msg.Err.Error()
 		m.createOpen = true
 		m.createBusy = false
 		m.createModal = nil
+		m.setCreateError(msg.Err.Error())
 		return nil
 	}
 	key := projectKey(msg.Project)
@@ -1009,10 +865,14 @@ func (m *Model) honorPendingCreated() bool {
 }
 
 func (m *Model) createWheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	if !m.createOpen || m.createModal == nil {
+	if !m.createOpen {
 		return false
 	}
-	return m.createModal.WheelAtBoundary(msg, m.createMouse)
+	md := m.activeCreateModal()
+	if md == nil {
+		return false
+	}
+	return md.WheelAtBoundary(msg, m.createMouse)
 }
 
 func createProjectKeyFromAction(id string) string {

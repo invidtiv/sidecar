@@ -13,6 +13,7 @@ import (
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspacelist"
 	"github.com/marcus/sidecar/internal/worktreedelete"
@@ -183,7 +184,8 @@ func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) 
 		if p.createPlan != nil {
 			return p.createOperationModal != nil && p.createOperationModal.WheelAtBoundary(msg, p.mouseHandler), true
 		}
-		return p.createModal != nil && p.createModal.WheelAtBoundary(msg, p.mouseHandler), true
+		m := p.createFormModal()
+		return m != nil && m.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeTaskLink:
 		return p.taskLinkModal != nil && p.taskLinkModal.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeRenameShell:
@@ -194,8 +196,6 @@ func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) 
 		return p.deleteConfirm.WheelAtBoundary(p.width, msg, p.mouseHandler), true
 	case ViewModeConfirmDeleteShell:
 		return p.deleteShellModal != nil && p.deleteShellModal.WheelAtBoundary(msg, p.mouseHandler), true
-	case ViewModeTypeSelector:
-		return p.typeSelectorModal != nil && p.typeSelectorModal.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeAgentConfig:
 		return p.agentConfigModal != nil && p.agentConfigModal.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeAgentChoice:
@@ -303,10 +303,6 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	if p.viewMode == ViewModeConfirmDeleteShell {
 		return p.handleConfirmDeleteShellModalMouse(msg)
-	}
-
-	if p.viewMode == ViewModeTypeSelector {
-		return p.handleTypeSelectorModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeAgentConfig {
@@ -420,27 +416,31 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.handleCreateOperationAction(action)
 	}
 	p.ensureCreateModal()
-	if p.createModal == nil {
+	m := p.createFormModal()
+	if m == nil {
 		return nil
 	}
 
-	prevAgent := p.createAgentType
-	prevSkip := p.createSkipPermissions
-	action := p.createModal.HandleMouse(msg, p.mouseHandler)
-	p.applyCreateModalAfterInput(prevAgent, prevSkip)
+	action := m.HandleMouse(msg, p.mouseHandler)
+	if action == workspacecreate.FieldKind {
+		if click, ok := msg.(tea.MouseClickMsg); ok {
+			p.setCreateKindFromClick(click.X)
+		}
+	}
+	if action == workspacecreate.FieldSkip {
+		// Checkbox clicks return the ID without toggling; Space is the toggle.
+		_, _ = m.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	}
+	p.syncCreateFormAfterInput()
 
 	switch action {
 	case "":
 		return nil
 	case createSubmitID:
-		return p.validateAndCreateWorktree()
+		return p.submitCreateForm()
 	case createCancelID, "cancel":
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
-		return nil
-	case createSkipPermissionsID:
-		p.createSkipPermissions = !p.createSkipPermissions
-		p.persistCreateAutoApprove()
 		return nil
 	}
 
@@ -511,35 +511,6 @@ func (p *Plugin) handleConfirmDeleteShellModalMouse(msg tea.MouseMsg) tea.Cmd {
 		return p.cancelShellDelete()
 	case deleteShellConfirmDeleteID:
 		return p.executeShellDelete()
-	}
-	return nil
-}
-
-func (p *Plugin) handleTypeSelectorModalMouse(msg tea.MouseMsg) tea.Cmd {
-	p.ensureTypeSelectorModal()
-	if p.typeSelectorModal == nil {
-		return nil
-	}
-
-	// Track selection before to detect changes
-	prevIdx := p.typeSelectorIdx
-
-	action := p.typeSelectorModal.HandleMouse(msg, p.mouseHandler)
-
-	// Modal width depends on selection - rebuild if changed
-	if p.typeSelectorIdx != prevIdx {
-		p.typeSelectorModalWidth = 0 // Force rebuild
-	}
-
-	switch action {
-	case "":
-		return nil
-	case "cancel", typeSelectorCancelID:
-		p.viewMode = ViewModeList
-		p.clearTypeSelectorModal()
-		return nil
-	case typeSelectorConfirmID, "type-shell", "type-workspace":
-		return p.executeTypeSelectorConfirm()
 	}
 	return nil
 }
@@ -720,9 +691,6 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 	case ViewModeCommitForMerge:
 		// Modal library handles hover state internally
 		return nil
-	case ViewModeTypeSelector:
-		// Modal library handles hover state internally
-		return nil
 	default:
 		p.kanban.ClearHover()
 		// Handle sidebar header button hover
@@ -896,8 +864,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		p.openViewFlyout()
 		return nil
 	case regionCreateWorktreeButton:
-		// Click on the header [+] - open type selector modal
-		return p.openCreateModal()
+		// Header [+] opens the form with Worktree selected and kind focused.
+		return p.openCreateModalFocusKind()
 	case regionOpenSetupButton:
 		// The blocked empty state's pill: the mouse path for the Enter above it.
 		return p.openSetupCmd()
@@ -905,7 +873,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// Click on Shells [+] button - immediately create a new shell
 		return p.createNewShell("")
 	case regionWorkspacesPlusButton:
-		// Click on Worktrees [+] button - open new worktree modal directly
+		// Worktrees [+] opens the form with Worktree selected and Name focused.
 		return p.openCreateModal()
 	case regionSidebar:
 		p.focusSidebar()

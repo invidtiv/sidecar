@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/testenv"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -33,8 +34,9 @@ func TestMain(m *testing.M) {
 	saveWorkspaceListSort = func(string) error { return nil }
 	loadLastGlobalCreateProject = func() string { return "" }
 	saveLastGlobalCreateProject = func(string) error { return nil }
-	loadLastCreateAgent = func() string { return "" }
-	saveLastCreateAgent = func(string) error { return nil }
+	if err := state.InitWithDir(dir); err != nil {
+		panic(err)
+	}
 	// Manifest resolution scans the state dir's projects/ tree. Left at its
 	// production default it would read the developer's real one, making every
 	// test that runs an Update depend on which projects happen to be registered
