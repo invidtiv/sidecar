@@ -167,7 +167,9 @@ func TestInlineEditorMouseRequiresReportingAndWheelUsesTerminalRoute(t *testing.
 	// The non-reporting wheel above intentionally entered the shared burst
 	// state. Start a fresh gesture now that the pane owns mouse input so this
 	// assertion does not depend on how quickly the fake tmux commands ran.
-	p.inlineWheel.Reset()
+	// Reset retains the last flush time for production cooldown accounting, so
+	// use a new burst value to give this distinct synthetic gesture a new clock.
+	p.inlineWheel = tty.WheelBurst{}
 	_, wheel := p.Update(tea.MouseWheelMsg{X: x, Y: y, Button: tea.MouseWheelDown})
 	if wheel == nil {
 		t.Fatal("reporting editor received no wheel command")
