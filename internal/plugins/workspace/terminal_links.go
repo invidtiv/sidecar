@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -16,18 +17,13 @@ import (
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
-type terminalLinkKind int
-
-const (
-	terminalURLLink terminalLinkKind = iota + 1
-	terminalPathLink
-	terminalIssueLink
-	terminalDiffLink
-	terminalResourceLink
-)
-
+// terminalLink is a scanned span plus the one thing the scanner cannot know:
+// the canonical root this host resolved it against. The kind is
+// terminallink's own — this host used to keep a parallel kind enum and two
+// translations to and from it, and that private vocabulary is exactly what
+// stopped a third surface from activating anything.
 type terminalLink struct {
-	Kind     terminalLinkKind
+	Kind     terminallink.Kind
 	StartCol int
 	EndCol   int
 	Value    string
@@ -36,6 +32,23 @@ type terminalLink struct {
 	Raw      string // original candidate, revalidated on activation
 	Provider string // resource links only: the configured provider instance
 	Matcher  string // resource links only: the provider-stable matcher ID
+}
+
+// span rebuilds the scanned span this link came from, so activation can speak
+// the shared span→target→plan path rather than a local switch.
+func (l terminalLink) span() terminallink.Span {
+	return terminallink.Span{
+		Kind:     l.Kind,
+		StartCol: l.StartCol,
+		EndCol:   l.EndCol,
+		Value:    l.Value,
+		Extra: terminallink.Extra{
+			Line:     l.Line,
+			Raw:      l.Raw,
+			Provider: l.Provider,
+			Matcher:  l.Matcher,
+		},
+	}
 }
 
 type terminalLinkMemo struct {
@@ -108,66 +121,41 @@ func detectTerminalLinks(line string) []terminalLink {
 func activatableTerminalLinks(spans []terminallink.Span, leaves bool) []terminalLink {
 	links := make([]terminalLink, 0, len(spans))
 	for _, span := range spans {
-		switch span.Kind {
-		case terminallink.KindURL:
-			links = append(links, terminalLink{
-				Kind:     terminalURLLink,
-				StartCol: span.StartCol,
-				EndCol:   span.EndCol,
-				Value:    span.Value,
-			})
-		case terminallink.KindFile:
-			links = append(links, terminalLink{
-				Kind:     terminalPathLink,
-				StartCol: span.StartCol,
-				EndCol:   span.EndCol,
-				Value:    span.Value,
-				Line:     span.Extra.Line,
-				Raw:      span.Extra.Raw,
-			})
-		case terminallink.KindIssue:
-			if !leaves {
-				continue
-			}
-			links = append(links, terminalLink{
-				Kind:     terminalIssueLink,
-				StartCol: span.StartCol,
-				EndCol:   span.EndCol,
-				Value:    span.Value,
-			})
-		case terminallink.KindResource:
-			// A resource span opens a leaf of the pane tree, so without a tree
-			// there is nothing to open and an underline would promise a click
-			// that goes nowhere.
-			if !leaves {
-				continue
-			}
-			links = append(links, terminalLink{
-				Kind:     terminalResourceLink,
-				StartCol: span.StartCol,
-				EndCol:   span.EndCol,
-				Value:    span.Value,
-				Provider: span.Extra.Provider,
-				Matcher:  span.Extra.Matcher,
-			})
-		case terminallink.KindDiff:
-			if !leaves {
-				continue
-			}
-			raw := span.Extra.Raw
-			if raw == "" {
-				raw = span.Value
-			}
-			links = append(links, terminalLink{
-				Kind:     terminalDiffLink,
-				StartCol: span.StartCol,
-				EndCol:   span.EndCol,
-				Value:    span.Value,
-				Raw:      raw,
-			})
+		if !terminallink.Activatable(span.Kind) {
+			continue
 		}
+		if !leaves && requiresPaneLeaf(span.Kind) {
+			continue
+		}
+		raw := span.Extra.Raw
+		if span.Kind == terminallink.KindDiff && raw == "" {
+			raw = span.Value
+		}
+		links = append(links, terminalLink{
+			Kind:     span.Kind,
+			StartCol: span.StartCol,
+			EndCol:   span.EndCol,
+			Value:    span.Value,
+			Line:     span.Extra.Line,
+			Raw:      raw,
+			Provider: span.Extra.Provider,
+			Matcher:  span.Extra.Matcher,
+		})
 	}
 	return links
+}
+
+// requiresPaneLeaf reports the kinds that can only open a leaf of the pane
+// tree. Without a tree there is nothing to open, and an underline would promise
+// a click that goes nowhere. The issue-preview modal is not this host's route
+// and never was.
+func requiresPaneLeaf(kind terminallink.Kind) bool {
+	switch kind {
+	case terminallink.KindIssue, terminallink.KindDiff, terminallink.KindResource:
+		return true
+	default:
+		return false
+	}
 }
 
 func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) string {
@@ -184,25 +172,7 @@ func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) stri
 func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
 	spans := make([]terminallink.Span, 0, len(links))
 	for _, link := range links {
-		span := terminallink.Span{StartCol: link.StartCol, EndCol: link.EndCol, Value: link.Value}
-		switch link.Kind {
-		case terminalURLLink:
-			span.Kind = terminallink.KindURL
-		case terminalPathLink:
-			span.Kind = terminallink.KindFile
-			span.Extra = terminallink.Extra{Line: link.Line, Raw: link.Raw}
-		case terminalIssueLink:
-			span.Kind = terminallink.KindIssue
-		case terminalDiffLink:
-			span.Kind = terminallink.KindDiff
-			span.Extra = terminallink.Extra{Raw: link.Raw}
-		case terminalResourceLink:
-			span.Kind = terminallink.KindResource
-			span.Extra = terminallink.Extra{Provider: link.Provider, Matcher: link.Matcher}
-		default:
-			continue
-		}
-		spans = append(spans, span)
+		spans = append(spans, link.span())
 	}
 	return spans
 }
@@ -331,7 +301,7 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 		Matchers: p.resourceMatchers,
 	}), true)
 	for i := range links {
-		if links[i].Kind == terminalPathLink && links[i].Raw != "" {
+		if links[i].Kind == terminallink.KindFile && links[i].Raw != "" {
 			links[i].Root = context.root
 		}
 	}
@@ -367,35 +337,63 @@ func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) 
 	return p.activateResolvedTerminalLink(link, context, termPanel)
 }
 
+// activateResolvedTerminalLink executes the plan the shared service resolves
+// for this link. The decision — is this well formed, what does it open, is the
+// URL safe — belongs to targetactivation, which every surface shares; only the
+// execution below is this host's, because only it owns these panes.
 func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context terminalLinkSurfaceContext, termPanel bool) (tea.Cmd, bool) {
-	if link.Kind == terminalURLLink {
-		p.clearTerminalSelection()
-		return openInBrowser(link.Value), true
-	}
-	if link.Kind == terminalIssueLink {
-		return p.activateIssueLink(link.Value)
-	}
-	if link.Kind == terminalResourceLink {
-		return p.activateResourceLink(resourceview.Ref{
-			Instance: link.Provider,
-			Matcher:  link.Matcher,
-			Locator:  link.Value,
-		})
-	}
-	if link.Kind == terminalDiffLink {
-		raw := link.Raw
-		if raw == "" {
-			raw = link.Value
-		}
-		return p.activateDiffLink(raw)
-	}
-	if link.Kind != terminalPathLink {
+	plan, err := targetactivation.PlanForSpan(link.span())
+	if err != nil {
 		return nil, false
 	}
-	raw := link.Raw
-	if raw == "" {
-		raw = link.Value
+	switch plan.Kind {
+	case targetactivation.PlanOpenURL:
+		p.clearTerminalSelection()
+		return openInBrowser(plan.URL), true
+	case targetactivation.PlanOpenIssue:
+		return p.activateIssueLink(plan.Issue)
+	case targetactivation.PlanOpenResource:
+		return p.activateResourceLink(resourceview.Ref{
+			Instance: plan.Provider,
+			Matcher:  plan.Matcher,
+			Locator:  plan.Locator,
+		})
+	case targetactivation.PlanOpenDiff:
+		return p.activateDiffLink(plan.Spec)
+	case targetactivation.PlanOpenFile:
+		return p.activateFilePlan(plan, link, context, termPanel)
+	case targetactivation.PlanAttachSession:
+		// The same lookup the public AttachSessionMsg does, and the same gate:
+		// a name matching no shell and no worktree agent attaches nothing.
+		if cmd := p.attachSessionMsg(app.AttachSessionMsg{Session: plan.Session}); cmd != nil {
+			p.clearTerminalSelection()
+			return cmd, true
+		}
+		return nil, false
+	default:
+		return nil, false
 	}
+}
+
+// terminalHandlesPlanKind is the parity assertion's other half: every plan kind
+// a scanned span can produce must be dispatched above. Its twin lives on the
+// global workspaces surface (internal/overview).
+func terminalHandlesPlanKind(kind targetactivation.PlanKind) bool {
+	switch kind {
+	case targetactivation.PlanOpenURL, targetactivation.PlanOpenFile,
+		targetactivation.PlanOpenIssue, targetactivation.PlanOpenDiff,
+		targetactivation.PlanOpenResource, targetactivation.PlanAttachSession:
+		return true
+	default:
+		return false
+	}
+}
+
+// activateFilePlan re-resolves the file token against this surface's own root:
+// the plan carries the token as the text wrote it, and a terminal's root is not
+// the project's.
+func (p *Plugin) activateFilePlan(plan targetactivation.Plan, link terminalLink, context terminalLinkSurfaceContext, termPanel bool) (tea.Cmd, bool) {
+	raw := plan.Path
 	root := link.Root
 	if root == "" {
 		root = context.root
@@ -409,7 +407,7 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 		root = fresh.root
 	}
 	if root == "" {
-		cmd := p.openTerminalPath(raw, link.Line)
+		cmd := p.openTerminalPath(raw, plan.Line)
 		if cmd != nil {
 			p.clearTerminalSelection()
 		}
@@ -420,7 +418,7 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 		return nil, false
 	}
 	surface := strings.TrimSuffix(context.surface, ":panel")
-	cmd := p.openResolvedFilePreview(root, surface, display, abs, link.Line)
+	cmd := p.openResolvedFilePreview(root, surface, display, abs, plan.Line)
 	if cmd != nil {
 		p.clearTerminalSelection()
 	}
@@ -440,12 +438,12 @@ func (p *Plugin) openResolvedFilePreview(root, surface, display, abs string, lin
 	}
 	if p.paneRoot == nil {
 		_ = file.Close()
-		return p.openFileBrowserIfCurrentProject(root, display, line)
+		return p.activateFileForRoot(root, display, line)
 	}
 	return p.openDocPaneFileForSurface(root, surface, display, line, file)
 }
 
-func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int) tea.Cmd {
+func (p *Plugin) activateFileForRoot(root, display string, line int) tea.Cmd {
 	if p.ctx == nil || display == "" || filepath.IsAbs(filepath.FromSlash(display)) {
 		return nil
 	}
@@ -457,12 +455,20 @@ func (p *Plugin) openFileBrowserIfCurrentProject(root, display string, line int)
 	if err != nil {
 		return nil
 	}
+	// Which root the terminal was scanned against is this host's knowledge, and
+	// it is the whole of what the shell needs: a path outside the current
+	// project is a cross-project jump, which the shell can now make. It used to
+	// be a silent no-op — the last place a link named something real and
+	// nothing happened.
+	project := ""
 	if filepath.Clean(rootResolved) != filepath.Clean(ctxResolved) {
-		return nil
+		project = root
 	}
-	return tea.Batch(app.FocusPlugin("file-browser"), func() tea.Msg {
-		return app.NavigateToFileMsg{Path: filepath.ToSlash(display), Line: line}
-	})
+	return app.ActivateTargetIn(uirequest.Target{
+		Kind:  uirequest.TargetKindFile,
+		Value: filepath.ToSlash(display),
+		Line:  line,
+	}, project)
 }
 
 func (p *Plugin) openTerminalPath(raw string, line int) tea.Cmd {

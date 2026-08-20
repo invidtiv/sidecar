@@ -87,7 +87,8 @@ const (
 type renderCacheKey struct {
 	messageID string
 	width     int
-	expanded  bool // whether content is expanded (affects render)
+	expanded  bool   // whether content is expanded (affects render)
+	styleKey  string // active markdown theme identity (td-031c89)
 }
 
 // Plugin implements the conversations plugin.
@@ -1422,12 +1423,10 @@ func (p *Plugin) copySessionToClipboard() tea.Cmd {
 
 	return clip.CopyFrom(
 		func() (string, tea.Msg) {
-			return ExportSessionAsMarkdown(session, messages), app.ToastMsg{
-				Message: "No session to copy", Duration: 2 * time.Second,
-			}
+			return ExportSessionAsMarkdown(session, messages), app.FlashMsg{Text: "No session to copy"}
 		},
 		func(r clip.Result, _ string) tea.Msg {
-			return app.ToastMsg{Message: r.Message("Session copied to clipboard"), Duration: 2 * time.Second}
+			return app.FlashMsg{Text: r.Message("Session copied to clipboard")}
 		},
 	)
 }
@@ -1557,6 +1556,7 @@ func (p *Plugin) checkLargeSessionWarnings() tea.Cmd {
 		sizeMB := s.SizeMB()
 		var msg string
 		var isError bool
+		var slow bool
 		switch level {
 		case 2: // Huge (500MB+)
 			msg = fmt.Sprintf("⚠ Session %s (%.0fMB) - auto-reload disabled", s.Slug, sizeMB)
@@ -1564,11 +1564,17 @@ func (p *Plugin) checkLargeSessionWarnings() tea.Cmd {
 		case 1: // Large (100MB+)
 			msg = fmt.Sprintf("Session %s (%.0fMB) - may be slow", s.Slug, sizeMB)
 			isError = false
+			// A slow-but-working session is a heads-up, not a record.
+			slow = true
 		}
 		if msg != "" {
-			cmds = append(cmds, func() tea.Msg {
-				return app.ToastMsg{Message: msg, Duration: 4 * time.Second, IsError: isError}
-			})
+			if slow {
+				cmds = append(cmds, app.ShowFlash(msg))
+			} else {
+				cmds = append(cmds, func() tea.Msg {
+					return app.ToastMsg{Message: msg, Duration: 4 * time.Second, IsError: isError}
+				})
+			}
 		}
 	}
 	if len(cmds) == 0 {
@@ -1586,12 +1592,8 @@ func (p *Plugin) checkPiDiscoveryToast() tea.Cmd {
 	for _, s := range p.sessions {
 		if s.AdapterID == "pi" {
 			p.piDiscoveryToastShown = true
-			return func() tea.Msg {
-				return app.ToastMsg{
-					Message:  "Pi sessions found — press C to filter by category",
-					Duration: 4 * time.Second,
-				}
-			}
+			// A one-time hint about a key, not an event to keep.
+			return app.ShowFlash("Pi sessions found — press C to filter by category")
 		}
 	}
 	return nil

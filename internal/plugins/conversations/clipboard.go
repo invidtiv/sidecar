@@ -20,7 +20,7 @@ func (p *Plugin) yankSessionDetails() tea.Cmd {
 
 	md := formatSessionSummary(session)
 	return clip.Copy(md, func(r clip.Result) tea.Msg {
-		return app.ToastMsg{Message: r.Message("Yanked session details"), Duration: 2 * time.Second}
+		return app.FlashMsg{Text: r.Message("Yanked session details")}
 	})
 }
 
@@ -33,7 +33,7 @@ func (p *Plugin) yankTurnContent() tea.Cmd {
 
 	md := formatTurnAsMarkdown(turn)
 	return clip.Copy(md, func(r clip.Result) tea.Msg {
-		return app.ToastMsg{Message: r.Message("Yanked turn content"), Duration: 2 * time.Second}
+		return app.FlashMsg{Text: r.Message("Yanked turn content")}
 	})
 }
 
@@ -67,7 +67,7 @@ func (p *Plugin) yankResumeCommand() tea.Cmd {
 	}
 
 	return clip.Copy(cmd, func(r clip.Result) tea.Msg {
-		return app.ToastMsg{Message: r.Message("Yanked: " + cmd), Duration: 2 * time.Second}
+		return app.FlashMsg{Text: r.Message("Yanked: " + cmd)}
 	})
 }
 

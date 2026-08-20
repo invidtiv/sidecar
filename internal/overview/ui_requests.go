@@ -8,7 +8,6 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
-	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -63,15 +62,9 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		switch req.Target.Kind {
 		case uirequest.TargetKindFile:
 			retargeted = m.willRetargetPreviewPane(panelayout.Document)
-			span := terminallink.Span{
-				Kind:  terminallink.KindFile,
-				Value: req.Target.Value,
-				Extra: terminallink.Extra{
-					Line: req.Target.Line,
-					Raw:  req.Target.Value,
-				},
-			}
-			cmd = m.openPreviewDoc(span)
+			// The request already carries a uirequest.Target; the pane opener
+			// takes one directly, so nothing is re-wrapped as a span here.
+			cmd = m.openPreviewDocTarget(req.Target)
 		case uirequest.TargetKindIssue:
 			retargeted = m.willRetargetPreviewPane(panelayout.Issue)
 			cmd = m.openPreviewIssue(req.Target.Value)
@@ -222,15 +215,7 @@ func (m *Model) consumePendingView(tmuxName string) tea.Cmd {
 
 	switch pv.Target.Kind {
 	case uirequest.TargetKindFile:
-		span := terminallink.Span{
-			Kind:  terminallink.KindFile,
-			Value: pv.Target.Value,
-			Extra: terminallink.Extra{
-				Line: pv.Target.Line,
-				Raw:  pv.Target.Value,
-			},
-		}
-		return m.openPreviewDoc(span)
+		return m.openPreviewDocTarget(pv.Target)
 	case uirequest.TargetKindIssue:
 		return m.openPreviewIssue(pv.Target.Value)
 	case uirequest.TargetKindDiff:

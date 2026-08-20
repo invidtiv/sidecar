@@ -101,6 +101,41 @@ type PendingWorkspaceSelection struct {
 	Action string
 }
 
+// FocusCycler is an optional capability for surfaces whose Tab cycle the shell
+// may extend with a stop of its own. The notification centre is that stop: when
+// it is open it joins the cycle between a surface's last window and its first,
+// rather than running a second cycle beside it.
+//
+// A surface that does not implement this keeps Tab exactly as it always had it;
+// the shell then only offers Tab to the centre when nothing else has claimed
+// the key in the focused context.
+type FocusCycler interface {
+	// AtFocusCycleEnd reports that focus is on the last window of the surface's
+	// ring in the direction the cycle is about to move, so the next Tab would
+	// wrap. That is where a shell-owned stop belongs.
+	AtFocusCycleEnd(reverse bool) bool
+
+	// FocusCycleStart puts focus back on the window the cycle resumes at — the
+	// first going forward, the last going back — when the shell hands the
+	// keyboard back to the surface.
+	FocusCycleStart(reverse bool) tea.Cmd
+}
+
+// ResizeDragReporter is implemented by a surface whose panes are resized by
+// dragging a rail. While that drag is live the shell suppresses the floating
+// tiers — toasts and status flashes — because every drag frame re-lays out the
+// whole content region and a block composited on top of it both flickers and
+// pays for a second full-screen composite on the frame that is already the
+// expensive one (design 1g's "suppress while resizing", and the resize storm
+// deferred from notifications Phase 1).
+//
+// Nothing is lost by the suppression: the notification is already in the store,
+// the centre and the header count, and it paints on the frame after the drop.
+type ResizeDragReporter interface {
+	// ResizeDragActive reports that a pane rail is currently being dragged.
+	ResizeDragActive() bool
+}
+
 type PendingWorkspaceSelector interface {
 	SetPendingWorkspaceSelection(PendingWorkspaceSelection)
 }

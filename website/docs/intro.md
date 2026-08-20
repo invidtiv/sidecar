@@ -265,6 +265,11 @@ Sidecar ships with built-in themes plus a community theme browser with live prev
 - Press `tab` to toggle between built-in and community themes
 - Press `enter` to apply the highlighted theme
 
+Themes cover rendered Markdown too. Headings, links, inline code, quotes, rules,
+and tables come from the theme's semantic colors, and fenced code blocks use the
+same `syntaxTheme` as file previews and diffs. Documents already on screen
+repaint as you preview a theme — no reopening or resizing.
+
 ## Configuration
 
 Press `,` or select the gear in the header to open Configuration in the app. It opens on

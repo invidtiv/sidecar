@@ -30,8 +30,16 @@ func assertRightClusterPinned(t *testing.T, m Model, selectorEnd int) {
 	if gearEnd != m.width {
 		t.Errorf("gear end = %d, want %d", gearEnd, m.width)
 	}
-	if selectorEnd != gearStart-1 {
-		t.Errorf("selector end = %d, want %d (one column left of the gear)", selectorEnd, gearStart-1)
+	// The unread indicator, when the width allows one, sits between them.
+	want := gearStart - 1
+	if start, end, ok := m.getNotificationIndicatorBounds(); ok {
+		if end != gearStart-1 {
+			t.Errorf("indicator end = %d, want %d (one column left of the gear)", end, gearStart-1)
+		}
+		want = start - 1
+	}
+	if selectorEnd != want {
+		t.Errorf("selector end = %d, want %d (one column left of the gear)", selectorEnd, want)
 	}
 }
 

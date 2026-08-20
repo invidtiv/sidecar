@@ -177,17 +177,16 @@ func firstToast(cmd tea.Cmd) (appmsg.ToastMsg, bool) {
 	if cmd == nil {
 		return appmsg.ToastMsg{}, false
 	}
-	switch msg := cmd().(type) {
-	case appmsg.ToastMsg:
-		return msg, true
-	case tea.BatchMsg:
-		for _, sub := range msg {
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, sub := range batch {
 			if toast, ok := firstToast(sub); ok {
 				return toast, true
 			}
 		}
+		return appmsg.ToastMsg{}, false
 	}
-	return appmsg.ToastMsg{}, false
+	return noticeAsToast(msg)
 }
 
 // tmux writes a background once and lets the rows below inherit it. A surface

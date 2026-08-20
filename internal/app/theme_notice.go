@@ -2,18 +2,12 @@ package app
 
 import (
 	"os"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/theme"
 )
-
-// defaultThemeNoticeDuration is longer than an ordinary confirmation toast:
-// this one is the only notice the user will ever get that their editor looks
-// different on purpose, and it has to survive being glanced at.
-const defaultThemeNoticeDuration = 8 * time.Second
 
 // defaultThemeNoticeCmd announces, once ever, that the fresh-install default
 // theme changed — but only to the users the change actually restyled.
@@ -39,7 +33,9 @@ func defaultThemeNoticeCmd(cfg *config.Config) tea.Cmd {
 		// quit while it is on screen still spends the one showing. A notice
 		// that can repeat is worse than one that can be missed.
 		_ = state.SetSeenDefaultThemeNotice(true)
-		return ToastMsg{Message: theme.DefaultThemeNotice, Duration: defaultThemeNoticeDuration}
+		// A one-time cosmetic notice, not an event worth keeping in the
+		// centre (audit row 27).
+		return FlashMsg{Text: theme.DefaultThemeNotice}
 	}
 }
 

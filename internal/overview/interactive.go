@@ -1,12 +1,11 @@
 package overview
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
@@ -198,7 +197,7 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 			m.preview.terminalTarget = tty.Target{}
 			m.preview.reason = "The session for this workspace has ended"
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList(),
-				appmsg.ShowToast("Session ended", 3*time.Second))
+				appmsg.Alert(notify.SourceSession, notify.SeverityInfo, "Session ended"))
 		},
 		// Watching continues after keyboard ownership ends, exactly as in the
 		// project Workspaces preview.
@@ -278,7 +277,7 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	}
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
-		return appmsg.ShowToast(reason, 3*time.Second)
+		return appmsg.Blocked(reason)
 	}
 	open := m.syncPreviewTerminal()
 	if !m.previewTerminalActive() {
@@ -309,7 +308,7 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	m.tracef("preview interactive enter workspace=%s pane=%s", workspace.ID, workspace.PaneID)
 	if !m.preview.interactiveHintShown {
 		m.preview.interactiveHintShown = true
-		cmds = append(cmds, appmsg.ShowToast("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop", 3*time.Second))
+		cmds = append(cmds, appmsg.ShowFlash("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop"))
 	}
 	return tea.Batch(cmds...)
 }
@@ -643,7 +642,7 @@ func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 	if !m.preview.history.NoteEnd() {
 		return nil
 	}
-	return appmsg.ShowToast(tty.HistoryExhaustedNotice, 3*time.Second)
+	return appmsg.ShowFlash(tty.HistoryExhaustedNotice)
 }
 
 // WorkspacesTerminalMsg offers the browser's terminal one of the terminal

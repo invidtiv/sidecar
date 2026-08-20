@@ -1,8 +1,6 @@
 package gitstatus
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/modal"
@@ -126,9 +124,6 @@ func (p *Plugin) dismissErrorModal() (plugin.Plugin, tea.Cmd) {
 	p.errorModalWidth = 0
 	p.errorModalHeight = 0
 	p.errorOfferPull = false
-	p.pushError = ""
-	p.fetchError = ""
-	p.pullError = ""
 	return p, nil
 }
 
@@ -140,9 +135,6 @@ func (p *Plugin) errorModalToPullMenu() (plugin.Plugin, tea.Cmd) {
 	p.errorModal = nil
 	p.errorModalWidth = 0
 	p.errorModalHeight = 0
-	p.pushError = ""
-	p.fetchError = ""
-	p.pullError = ""
 	p.errorOfferPull = false
 	// Open pull menu
 	p.pullMenuReturnMode = ViewModeStatus
@@ -158,6 +150,6 @@ func (p *Plugin) yankErrorToClipboard() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(p.errorDetail, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Yanked error output"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Yanked error output")}
 	})
 }

@@ -19,6 +19,20 @@ func DefaultBindings() []Binding {
 		// K: Overview (Kanban board). Bare O is taken by open-in. Shell delete is D.
 		{Key: "K", Command: "toggle-overview", Context: "global"},
 		{Key: "i", Command: "open-issue", Context: "global"},
+		// N: the notification centre. Bare n is taken (new-worktree, new-note,
+		// next-match); N is free globally — the search/diff contexts that bind
+		// it answer before the global switch. Handled in handleKeyMsg; the
+		// binding is registered so the palette and help can find it.
+		{Key: "N", Command: "toggle-notifications", Context: "global"},
+		// `N` yields to plugins that bind it (git's prev-match), and the centre
+		// has no navbar tab, so alt+n is the route that works on every tab.
+		{Key: "alt+n", Command: "toggle-notifications", Context: "global"},
+		// alt+e opens a collapsed toast stack (design 1b's peek line). The
+		// design's key was tab, which the centre's focus cycle now owns; alt+e
+		// keeps the expand affordance in the same family as alt+n and out of
+		// every plugin's way. Handled in handleKeyMsg; registered so the
+		// palette, help and rebinding find it.
+		{Key: "alt+e", Command: "expand-toast", Context: "global"},
 		// Comma is the conventional settings key and is otherwise unbound.
 		{Key: ",", Command: "open-configuration", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},
@@ -98,6 +112,35 @@ func DefaultBindings() []Binding {
 		{Key: "]", Command: "move-project-down", Context: "config"},
 		// The theme picker, on Appearance and inline in Add Project.
 		{Key: "g", Command: "use-global-theme", Context: "config"},
+
+		// notification-centre: the app-level right panel. Its keys are answered
+		// by the app before keymap dispatch (it is the focused surface, not a
+		// plugin); they are registered here so help, the palette, and the
+		// footer describe it from one source and a user override can rebind it.
+		{Key: "j", Command: "cursor-down", Context: "notification-centre"},
+		{Key: "down", Command: "cursor-down", Context: "notification-centre"},
+		{Key: "k", Command: "cursor-up", Context: "notification-centre"},
+		{Key: "up", Command: "cursor-up", Context: "notification-centre"},
+		// enter activates the selected notification's first call to action —
+		// the jump the notification is about (Phase 5). On an entry with no
+		// target it falls back to the detail re-show, which `v` is now the
+		// dedicated key for.
+		{Key: "enter", Command: "select", Context: "notification-centre"},
+		{Key: "v", Command: "show-details", Context: "notification-centre"},
+		// Digits 1-9 jump to the numbered target of the selected entry. Only
+		// "1" is registered: the panel answers the whole range itself (as the
+		// shell does for its own globals), and registering nine rows would say
+		// nine things in help about one behaviour. A digit with no target of
+		// that number is left alone and stays the project tab it is elsewhere.
+		{Key: "1", Command: "jump-target", Context: "notification-centre"},
+		{Key: "d", Command: "dismiss", Context: "notification-centre"},
+		{Key: "D", Command: "dismiss-group", Context: "notification-centre"},
+		{Key: "esc", Command: "close-notification-centre", Context: "notification-centre"},
+		// The panel is a stop on the focus cycle, so tab moves on from it the
+		// way it moves on from any pane — back to the surface underneath,
+		// leaving the panel open.
+		{Key: "tab", Command: "focus-content", Context: "notification-centre"},
+		{Key: "shift+tab", Command: "focus-content", Context: "notification-centre"},
 
 		// config-edit: an active editor owns typed characters. Registered in
 		// the app's isTextInputContext, so no global shortcut can steal them.
@@ -516,6 +559,11 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close-detail", Context: "git-commit-detail"},
 
 		// Conversations sidebar context (two-pane mode, left pane focused)
+		// Content search expands every session on alt+e. The key is handled in
+		// the plugin, but it has to be registered: the global alt+e (expand a
+		// collapsed toast stack) stands aside only for a context that has
+		// claimed the key, and an unregistered claim is invisible to that rule.
+		{Key: "alt+e", Command: "expand-all", Context: "conversations-content-search"},
 		{Key: "tab", Command: "switch-pane", Context: "conversations-sidebar"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "conversations-sidebar"},
 		{Key: "a", Command: "new-session", Context: "conversations-sidebar"},

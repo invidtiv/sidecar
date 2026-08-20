@@ -3,6 +3,8 @@ package overview
 import (
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -15,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -216,52 +219,96 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 	if !ok {
 		return nil, false
 	}
-	switch span.Kind {
-	case terminallink.KindURL:
+	plan, err := targetactivation.PlanForSpan(span)
+	if err != nil {
+		return nil, false
+	}
+	return m.activatePreviewPlan(plan)
+}
+
+// activatePreviewPlan executes what the shared service resolved. The decision —
+// what this text names, whether the URL is safe — is targetactivation's and is
+// identical on the workspace surface; only the panes below are this surface's
+// own, so a kind that activates here activates there.
+func (m *Model) activatePreviewPlan(plan targetactivation.Plan) (tea.Cmd, bool) {
+	var cmd tea.Cmd
+	switch plan.Kind {
+	case targetactivation.PlanOpenURL:
 		m.clearPreviewSelection()
-		return terminallink.OpenHTTP(span.Value), true
-	case terminallink.KindFile:
-		cmd := m.openPreviewDoc(span)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindIssue:
-		cmd := m.openPreviewIssue(span.Value)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindDiff:
-		cmd := m.activatePreviewDiff(span)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindResource:
-		cmd := m.activatePreviewResource(resourceview.Ref{
-			Instance: span.Extra.Provider,
-			Matcher:  span.Extra.Matcher,
-			Locator:  span.Value,
+		return terminallink.OpenHTTP(plan.URL), true
+	case targetactivation.PlanOpenFile:
+		cmd = m.openPreviewDocTarget(uirequest.Target{
+			Kind:  uirequest.TargetKindFile,
+			Value: plan.Path,
+			Line:  plan.Line,
 		})
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
+	case targetactivation.PlanOpenIssue:
+		cmd = m.openPreviewIssue(plan.Issue)
+	case targetactivation.PlanOpenDiff:
+		cmd = m.activatePreviewDiff(plan.Spec)
+	case targetactivation.PlanAttachSession:
+		cmd = m.attachPreviewSession(plan.Session)
+	case targetactivation.PlanOpenResource:
+		cmd = m.activatePreviewResource(resourceview.Ref{
+			Instance: plan.Provider,
+			Matcher:  plan.Matcher,
+			Locator:  plan.Locator,
+		})
 	default:
 		return nil, false
 	}
+	if cmd == nil {
+		return nil, false
+	}
+	m.clearPreviewSelection()
+	return cmd, true
 }
 
-func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
-	raw := span.Extra.Raw
-	if raw == "" {
-		raw = span.Value
+// previewHandlesPlanKind is the parity assertion's other half: every plan kind
+// a scanned span can produce must be dispatched above. Its twin lives on the
+// workspace surface.
+func previewHandlesPlanKind(kind targetactivation.PlanKind) bool {
+	switch kind {
+	case targetactivation.PlanOpenURL, targetactivation.PlanOpenFile,
+		targetactivation.PlanOpenIssue, targetactivation.PlanOpenDiff,
+		targetactivation.PlanOpenResource, targetactivation.PlanAttachSession:
+		return true
+	default:
+		return false
 	}
+}
+
+// attachPreviewSession is this surface's version of "attach": select the
+// workspace running that tmux session and hand it the keyboard. The project
+// workspace attaches by opening the session in its own terminal; here the
+// live pane is already on screen, so attaching means typing into it. Same
+// decision (targetactivation), surface-local execution — the rule every kind
+// on these two surfaces already follows.
+//
+// A session no row is running is not attachable, and the caller treats a nil
+// command as "this click did nothing", which is what an unknown session is.
+func (m *Model) attachPreviewSession(session string) tea.Cmd {
+	if strings.TrimSpace(session) == "" {
+		return nil
+	}
+	ids := make([]string, 0, len(m.catalog))
+	for id := range m.catalog {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if m.catalog[id].TmuxName != session {
+			continue
+		}
+		if !m.workspaces.SelectID(id) {
+			return nil
+		}
+		return tea.Batch(m.focusList(), m.previewSync(), m.enterPreviewInteractive())
+	}
+	return nil
+}
+
+func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
@@ -273,17 +320,16 @@ func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
 	return m.openPreviewDiff(target)
 }
 
-func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
+// openPreviewDocTarget opens a file target in the preview document pane. The
+// target's Value is the token as the text wrote it; it is re-resolved against
+// this surface's own root, so a target that names nothing here opens nothing.
+func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
 	}
 	root := workspace.Path
-	raw := span.Extra.Raw
-	if raw == "" {
-		raw = span.Value
-	}
-	display, abs, ok := terminallink.ResolveFile(root, raw)
+	display, abs, ok := terminallink.ResolveFile(root, target.Value)
 	if !ok {
 		return nil
 	}
@@ -315,13 +361,13 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 
 	var load tea.Cmd
 	if idx := m.preview.doc.tabs.IndexOf(display); idx >= 0 {
-		load = m.selectPreviewDocTab(idx, span.Extra.Line, file)
+		load = m.selectPreviewDocTab(idx, target.Line, file)
 		file = nil
 	} else {
 		viewer := docview.New(nil)
-		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, span.Extra.Line, m.preview.doc.epoch)
+		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, target.Line, m.preview.doc.epoch)
 		file = nil
-		applyPreviewDocRenderMode(viewer, display, span.Extra.Line)
+		applyPreviewDocRenderMode(viewer, display, target.Line)
 		m.preview.doc.tabs.Append(viewer)
 	}
 

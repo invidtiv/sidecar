@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // ToastMsg is re-exported from msg package for backward compatibility.
@@ -14,6 +15,23 @@ type ToastMsg = msg.ToastMsg
 
 // ShowToast is re-exported from msg package for backward compatibility.
 var ShowToast = msg.ShowToast
+
+// FlashMsg is re-exported from the msg package: the status-flash tier beside
+// ToastMsg. A flash is transient feedback, never a stored notification.
+type FlashMsg = msg.FlashMsg
+
+// ShowFlash and ShowFlashFrom are re-exported for symmetry with ShowToast.
+var (
+	ShowFlash     = msg.ShowFlash
+	ShowFlashFrom = msg.ShowFlashFrom
+)
+
+// Alert and Blocked are re-exported: the source-aware notification path, for
+// events that should not speak as generic `system` chrome.
+var (
+	Alert   = msg.Alert
+	Blocked = msg.Blocked
+)
 
 // ThemeChangedMsg is re-exported from msg package for backward compatibility.
 type ThemeChangedMsg = msg.ThemeChangedMsg
@@ -92,6 +110,76 @@ type FocusPluginByIDMsg struct {
 type NavigateToFileMsg struct {
 	Path string // Relative path from workdir
 	Line int    // Optional 1-based line to reveal after loading
+}
+
+// ActivateTargetMsg is the one route for "jump to the thing this text names".
+// Every surface — a terminal link, the notification centre, a future CLI action
+// — sends this rather than reaching into a plugin, because only the app shell
+// can both focus plugins and switch projects.
+//
+// Target is the cross-surface vocabulary (uirequest.Target). Project is an
+// optional qualifier — a project path or its base name — and empty means the
+// project the user is already in.
+type ActivateTargetMsg struct {
+	Target  uirequest.Target
+	Project string
+}
+
+// OpenIssuePaneMsg, OpenDiffPaneMsg, OpenResourcePaneMsg and AttachSessionMsg
+// are the public entries for what used to be reachable only through
+// workspace-plugin-private methods. They are the surface-parity seam: any
+// plugin, the notification centre, or a future CLI action can send them, and
+// hosts send them rather than importing workspace.
+//
+// Each opens against the plugin's currently selected surface, exactly as a
+// click on the same link in that surface's terminal does.
+type (
+	// OpenIssuePaneMsg opens an issue id in an issue pane.
+	OpenIssuePaneMsg struct{ Issue string }
+	// OpenDiffPaneMsg opens a git spec in a diff pane. The host re-resolves the
+	// spec in its own checkout, so a crafted spec cannot skip rev-parse.
+	OpenDiffPaneMsg struct{ Spec string }
+	// OpenResourcePaneMsg opens an external provider's locator in a resource
+	// pane. Matcher may be empty; the host's live matcher snapshot then decides
+	// which matcher claims the locator, and refuses when none does.
+	OpenResourcePaneMsg struct{ Provider, Matcher, Locator string }
+	// AttachSessionMsg attaches a tmux session by name. The host honours the
+	// same full-attach feature gate as every other attach path.
+	AttachSessionMsg struct{ Session string }
+)
+
+// OpenIssuePane returns a command that opens an issue in an issue pane.
+func OpenIssuePane(issue string) tea.Cmd {
+	return func() tea.Msg { return OpenIssuePaneMsg{Issue: issue} }
+}
+
+// OpenDiffPane returns a command that opens a git spec in a diff pane.
+func OpenDiffPane(spec string) tea.Cmd {
+	return func() tea.Msg { return OpenDiffPaneMsg{Spec: spec} }
+}
+
+// OpenResourcePane returns a command that opens a provider locator in a
+// resource pane.
+func OpenResourcePane(provider, matcher, locator string) tea.Cmd {
+	return func() tea.Msg {
+		return OpenResourcePaneMsg{Provider: provider, Matcher: matcher, Locator: locator}
+	}
+}
+
+// AttachSession returns a command that attaches a tmux session by name.
+func AttachSession(session string) tea.Cmd {
+	return func() tea.Msg { return AttachSessionMsg{Session: session} }
+}
+
+// ActivateTarget returns a command that activates a target in the current
+// project. Use ActivateTargetIn for a cross-project jump.
+func ActivateTarget(target uirequest.Target) tea.Cmd {
+	return ActivateTargetIn(target, "")
+}
+
+// ActivateTargetIn returns a command that activates a target in a named project.
+func ActivateTargetIn(target uirequest.Target, project string) tea.Cmd {
+	return func() tea.Msg { return ActivateTargetMsg{Target: target, Project: project} }
 }
 
 // OpenPrefilledShellMsg asks the Workspaces plugin for an ordinary new shell

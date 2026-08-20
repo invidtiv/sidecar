@@ -54,7 +54,7 @@ func TestWorkspaceFocusContextFollowsTheFocusedLeaf(t *testing.T) {
 		t.Fatalf("issue Commands() leaked the list: %#v", m.Commands())
 	}
 
-	run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "README.md"}))
+	run(t, m, openPreviewDocSpan(m, terminallink.Span{Kind: terminallink.KindFile, Value: "README.md"}))
 	if got := m.WorkspaceFocusContext(); got != ctxGlobalWorkspacesDoc {
 		t.Fatalf("focused document context = %q", got)
 	}

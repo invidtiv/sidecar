@@ -21,12 +21,12 @@ type themeTestPlugin struct {
 	lastTheme       string
 }
 
-func (p *themeTestPlugin) ID() string   { return p.id }
-func (p *themeTestPlugin) Name() string { return p.id }
-func (p *themeTestPlugin) Icon() string { return "" }
+func (p *themeTestPlugin) ID() string                 { return p.id }
+func (p *themeTestPlugin) Name() string               { return p.id }
+func (p *themeTestPlugin) Icon() string               { return "" }
 func (p *themeTestPlugin) Init(*plugin.Context) error { return nil }
-func (p *themeTestPlugin) Start() tea.Cmd { return nil }
-func (p *themeTestPlugin) Stop() {}
+func (p *themeTestPlugin) Start() tea.Cmd             { return nil }
+func (p *themeTestPlugin) Stop()                      {}
 func (p *themeTestPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	p.lastReceivedMsg = msg
 	if _, ok := msg.(ThemeChangedMsg); ok {
@@ -35,11 +35,11 @@ func (p *themeTestPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 	return p, nil
 }
-func (p *themeTestPlugin) View(int, int) string { return "" }
-func (p *themeTestPlugin) IsFocused() bool      { return p.focused }
-func (p *themeTestPlugin) SetFocused(f bool)    { p.focused = f }
+func (p *themeTestPlugin) View(int, int) string       { return "" }
+func (p *themeTestPlugin) IsFocused() bool            { return p.focused }
+func (p *themeTestPlugin) SetFocused(f bool)          { p.focused = f }
 func (p *themeTestPlugin) Commands() []plugin.Command { return nil }
-func (p *themeTestPlugin) FocusContext() string { return "" }
+func (p *themeTestPlugin) FocusContext() string       { return "" }
 
 func newTestThemeModel(plugins ...plugin.Plugin) *Model {
 	km := keymap.NewRegistry()
@@ -309,17 +309,17 @@ type valueThemePlugin struct {
 
 type themeCmdSentinel struct{}
 
-func (p valueThemePlugin) ID() string                       { return p.id }
-func (p valueThemePlugin) Name() string                     { return p.id }
-func (p valueThemePlugin) Icon() string                     { return "" }
-func (p valueThemePlugin) Init(*plugin.Context) error       { return nil }
-func (p valueThemePlugin) Start() tea.Cmd                   { return nil }
-func (p valueThemePlugin) Stop()                            {}
-func (p valueThemePlugin) View(int, int) string             { return "" }
-func (p valueThemePlugin) IsFocused() bool                  { return false }
-func (p valueThemePlugin) SetFocused(bool)                  {}
-func (p valueThemePlugin) Commands() []plugin.Command       { return nil }
-func (p valueThemePlugin) FocusContext() string             { return "" }
+func (p valueThemePlugin) ID() string                 { return p.id }
+func (p valueThemePlugin) Name() string               { return p.id }
+func (p valueThemePlugin) Icon() string               { return "" }
+func (p valueThemePlugin) Init(*plugin.Context) error { return nil }
+func (p valueThemePlugin) Start() tea.Cmd             { return nil }
+func (p valueThemePlugin) Stop()                      {}
+func (p valueThemePlugin) View(int, int) string       { return "" }
+func (p valueThemePlugin) IsFocused() bool            { return false }
+func (p valueThemePlugin) SetFocused(bool)            {}
+func (p valueThemePlugin) Commands() []plugin.Command { return nil }
+func (p valueThemePlugin) FocusContext() string       { return "" }
 func (p valueThemePlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if _, ok := msg.(ThemeChangedMsg); ok {
 		p.gen++
@@ -352,4 +352,3 @@ func TestNotifyThemeChangedPersistsReplacementAndBatchesCmds(t *testing.T) {
 		t.Errorf("replacement gen = %d, want 1 (write into Plugins() copy was discarded)", vp.gen)
 	}
 }
-

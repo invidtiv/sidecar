@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"github.com/marcus/sidecar/internal/terminallink"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -247,10 +248,10 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 		return nil, false
 	}
 	paneTarget := p.paneRoot != nil &&
-		(link.Kind == terminalIssueLink ||
-			link.Kind == terminalDiffLink ||
-			link.Kind == terminalResourceLink ||
-			(link.Kind == terminalPathLink && docPaneTarget(link.Value)))
+		(link.Kind == terminallink.KindIssue ||
+			link.Kind == terminallink.KindDiff ||
+			link.Kind == terminallink.KindResource ||
+			(link.Kind == terminallink.KindFile && docPaneTarget(link.Value)))
 	// Preserve the exact live window containing the link before opening the
 	// document changes pane geometry. Claude commonly moves that transcript
 	// into history and publishes a sparse live grid after the resize; leaving
@@ -286,15 +287,15 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 // openedPaneLeaf returns the leaf a link of this kind opens into, so the click
 // path can hand it focus without asking a second time what kind of content it
 // just opened.
-func (p *Plugin) openedPaneLeaf(kind terminalLinkKind) *PaneNode {
+func (p *Plugin) openedPaneLeaf(kind terminallink.Kind) *PaneNode {
 	switch kind {
-	case terminalIssueLink:
+	case terminallink.KindIssue:
 		_, leaf := p.activeIssuePane()
 		return leaf
-	case terminalDiffLink:
+	case terminallink.KindDiff:
 		_, leaf := p.activeDiffPane()
 		return leaf
-	case terminalResourceLink:
+	case terminallink.KindResource:
 		_, leaf := p.activeResourcePane()
 		return leaf
 	default:
@@ -634,8 +635,10 @@ func (p *Plugin) copyOnSelectEnabled() bool {
 // notification type is this surface's.
 func (p *Plugin) copyInteractiveSelectionCmd() tea.Cmd {
 	return p.terminalConfig().CopySelectionCmd(p.interactiveSelectionLines(), func(notice tty.CopyNotice) tea.Msg {
-		return app.ToastMsg{
-			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		// A copy that worked is a flash; one that failed is a notification.
+		if notice.IsError {
+			return app.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
 		}
+		return app.FlashMsg{Text: notice.Message}
 	})
 }

@@ -20,7 +20,7 @@ import (
 func TestPreviewDocPaneRereadsWhenTheFileChanges(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindShell)
 	t.Cleanup(m.stopLiveWatchers)
-	runLive(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	runLive(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	if m.preview.doc == nil {
 		t.Fatal("the file link opened no preview document")
 	}
@@ -53,7 +53,7 @@ func TestPreviewDocPaneRereadsWhenTheFileChanges(t *testing.T) {
 func TestUnplaceablePreviewPaneIsNotWatched(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindShell)
 	t.Cleanup(m.stopLiveWatchers)
-	runLive(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	runLive(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 
 	if !m.previewPaneVisible(panelayout.Document) {
 		t.Fatal("a freshly opened preview document is not visible")

@@ -1,8 +1,6 @@
 package overview
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/features"
@@ -48,7 +46,7 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 		target = workspacediff.WorkingTreeTarget()
 	}
 	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
-		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	leafID, refusal := m.ensurePreviewPane(panelayout.Diff, "Diff")
 	if refusal != nil {
@@ -466,7 +464,7 @@ func (m *Model) yankPreviewDiff() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(ident, func(r clip.Result) tea.Msg {
-		return appmsg.ToastMsg{Message: r.Message("Yanked: " + ident), Duration: 2 * time.Second}
+		return appmsg.FlashMsg{Text: r.Message("Yanked: " + ident)}
 	})
 }
 

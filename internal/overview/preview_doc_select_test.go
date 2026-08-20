@@ -26,7 +26,7 @@ func previewDocSelectFixture(t *testing.T, content string) *Model {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "main.go"}))
+	run(t, m, openPreviewDocSpan(m, terminallink.Span{Kind: terminallink.KindFile, Value: "main.go"}))
 	if m.preview.doc == nil || m.preview.doc.view() == nil {
 		t.Fatal("main.go did not open in the preview's document pane")
 	}
@@ -101,7 +101,7 @@ func TestPreviewDocSelectionIsExclusiveAcrossTabs(t *testing.T) {
 	if err := os.WriteFile(path, []byte("other content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "other.go"}))
+	run(t, m, openPreviewDocSpan(m, terminallink.Span{Kind: terminallink.KindFile, Value: "other.go"}))
 	if len(m.preview.doc.tabs.Items) != 2 {
 		t.Fatalf("the pane holds %d tabs, want the two files opened in it", len(m.preview.doc.tabs.Items))
 	}

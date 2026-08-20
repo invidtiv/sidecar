@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -22,6 +23,25 @@ import (
 func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	if len(args) == 0 {
 		return false, 0
+	}
+
+	// `sidecar -config <path> notify post ...` is how an isolated proof run
+	// reaches a subcommand, and how the flag is spelled everywhere else. Global
+	// flags written before the command used to make args[0] unmatchable, so
+	// dispatch fell through to TUI startup and died with "Sidecar requires an
+	// interactive terminal". Strip them here and apply the one that changes
+	// where a command reads and writes.
+	args, configPath, ok := stripGlobalFlags(args)
+	if !ok || len(args) == 0 {
+		return false, 0
+	}
+	if !namesCommand(args[0]) {
+		return false, 0
+	}
+	if configPath != "" {
+		// Before defaultEnv, and before any command resolves a path: -config
+		// moves state.json and the config directory together (td-8d18de).
+		config.SetConfigPath(configPath)
 	}
 
 	env := defaultEnv(stdout, stderr)
@@ -56,6 +76,65 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	}
 
 	return true, 0
+}
+
+// globalValueFlags are the process-level flags that take a value. They are
+// declared in cmd/sidecar as ordinary flag.Flag values; this list is only how
+// dispatch knows to step over the value as well as the name.
+var globalValueFlags = map[string]bool{
+	"-config": true, "-project": true,
+	"-enable-feature": true, "-disable-feature": true,
+}
+
+// globalBoolFlags are the process-level flags that take no value.
+var globalBoolFlags = map[string]bool{"-debug": true}
+
+// stripGlobalFlags removes leading global flags from args and reports the
+// -config value among them. ok is false for anything it does not recognise —
+// an unknown flag before the command is left for flag.Parse to complain about,
+// exactly as it did before, rather than being silently dropped.
+func stripGlobalFlags(args []string) (rest []string, configPath string, ok bool) {
+	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		arg := args[0]
+		if arg == "-h" || arg == "--help" {
+			return args, configPath, true
+		}
+		name, value, hasValue := arg, "", false
+		if i := strings.IndexByte(arg, '='); i > 0 {
+			name, value, hasValue = arg[:i], arg[i+1:], true
+		}
+		// Go's flag package accepts one dash or two for the same flag.
+		canonical := "-" + strings.TrimLeft(name, "-")
+		switch {
+		case globalValueFlags[canonical]:
+			if !hasValue {
+				if len(args) < 2 {
+					return args, configPath, false
+				}
+				value = args[1]
+				args = args[1:]
+			}
+			if canonical == "-config" {
+				configPath = value
+			}
+			args = args[1:]
+		case globalBoolFlags[canonical]:
+			args = args[1:]
+		default:
+			return args, configPath, false
+		}
+	}
+	return args, configPath, true
+}
+
+// namesCommand reports whether tok is something Run answers. Anything else
+// belongs to ordinary TUI startup.
+func namesCommand(tok string) bool {
+	switch tok {
+	case "-h", "--help", "help", "--agents", "agents":
+		return true
+	}
+	return RootCommand().FindSubcommand(tok) != nil
 }
 
 func runShellName(env Env, args []string) int {

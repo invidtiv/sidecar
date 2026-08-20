@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -302,7 +303,8 @@ func showTaskCreatedToast(taskID string) tea.Cmd {
 	if taskID != "" {
 		text = fmt.Sprintf("Created %s", taskID)
 	}
-	return appmsg.ShowToast(text, 3*time.Second)
+	// A created task belongs to the td source, where it is findable later.
+	return appmsg.Alert(notify.SourceTD, notify.SeverityInfo, text)
 }
 
 func showTaskCreateFailedToast(err error) tea.Cmd {

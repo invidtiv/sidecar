@@ -135,8 +135,10 @@ func (p *Plugin) docSelectionResult(view *docview.Model, result textselect.Resul
 		p.saveSelectionState()
 	}
 	return view.SelectionCopyCmd(result, func(notice textselect.CopyNotice) tea.Msg {
-		return app.ToastMsg{
-			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		// A copy that worked is a flash; one that failed is a notification.
+		if notice.IsError {
+			return app.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
 		}
+		return app.FlashMsg{Text: notice.Message}
 	})
 }

@@ -1305,11 +1305,11 @@ func TestCopyChordWithoutSelectionLeavesClipboardAlone(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("copy chord returned no cmd")
 	}
-	toast, ok := cmd().(app.ToastMsg)
+	flash, ok := cmd().(app.FlashMsg)
 	if !ok {
-		t.Fatalf("copy chord without selection returned %T, want a toast", cmd())
+		t.Fatalf("copy chord without selection returned %T, want a flash", cmd())
 	}
-	if !strings.Contains(toast.Message, "Nothing selected") {
-		t.Errorf("toast = %q, want a nothing-selected hint, not a copy", toast.Message)
+	if !strings.Contains(flash.Text, "Nothing selected") {
+		t.Errorf("flash = %q, want a nothing-selected hint, not a copy", flash.Text)
 	}
 }

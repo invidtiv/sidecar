@@ -51,12 +51,12 @@ func TestPreviewDragSelectShowsCopyHintOnce(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("first drag-select should return the copy-hint toast command")
 	}
-	toast, ok := cmd().(appmsg.ToastMsg)
+	flash, ok := cmd().(appmsg.FlashMsg)
 	if !ok {
-		t.Fatalf("command produced %T, want ToastMsg", cmd())
+		t.Fatalf("command produced %T, want FlashMsg", cmd())
 	}
-	if !strings.Contains(toast.Message, "copy selection") {
-		t.Errorf("toast = %q, want the copy hint", toast.Message)
+	if !strings.Contains(flash.Text, "copy selection") {
+		t.Errorf("flash = %q, want the copy hint", flash.Text)
 	}
 	if !p.selectionCopyHintShown {
 		t.Error("selectionCopyHintShown should be set after the hint")

@@ -1,6 +1,7 @@
 package tdmonitor
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 
 	tdnotes "github.com/marcus/td/pkg/notes"
 
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tdroot"
 	"github.com/marcus/sidecar/internal/tdsetup"
@@ -429,5 +431,39 @@ func TestNotesInitializationSuccessRefreshesTDMonitor(t *testing.T) {
 	_, cmd = p.Update(tdsetup.ResultMsg{Origin: tdsetup.OriginNotes, Epoch: 9, Err: os.ErrPermission})
 	if cmd != nil || p.loadingModel {
 		t.Fatal("Notes-owned setup failure leaked into the td monitor")
+	}
+}
+
+func TestTDMonitorInitializationFailurePostsDurableTDAlert(t *testing.T) {
+	p := New()
+	p.ctx = &plugin.Context{Epoch: 9}
+
+	_, cmd := p.Update(tdsetup.ResultMsg{
+		Origin: tdsetup.OriginTDMonitor,
+		Epoch:  9,
+		Err:    errors.New("td init failed"),
+	})
+	if cmd == nil {
+		t.Fatal("TD-owned setup failure returned no notification command")
+	}
+	got := cmd()
+	post, ok := got.(notify.PostMsg)
+	if !ok {
+		t.Fatalf("TD-owned setup failure returned %T, want notify.PostMsg", got)
+	}
+	if post.Notification.Source != notify.SourceTD || post.Notification.Severity != notify.SeverityError {
+		t.Fatalf("notification = source %q severity %q, want td/error", post.Notification.Source, post.Notification.Severity)
+	}
+	if post.Notification.Title != "td init failed" {
+		t.Fatalf("notification title = %q", post.Notification.Title)
+	}
+
+	_, cmd = p.Update(tdsetup.ResultMsg{
+		Origin: tdsetup.OriginNotes,
+		Epoch:  9,
+		Err:    errors.New("notes-owned failure"),
+	})
+	if cmd != nil {
+		t.Fatal("Notes-owned setup failure leaked into td notifications")
 	}
 }

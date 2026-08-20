@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/features"
@@ -47,7 +45,7 @@ func (p *Plugin) activeDiffPane() (*diffPane, *PaneNode) {
 // showDiffCmd opens the working-tree Diff leaf on the selected surface.
 func (p *Plugin) showDiffCmd() tea.Cmd {
 	if p.paneRoot == nil {
-		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	root, surface, ok := p.selectedTerminalSurface()
 	if !ok {
@@ -63,7 +61,7 @@ func (p *Plugin) showDiffCmd() tea.Cmd {
 // be drawn.
 func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacediff.Target) tea.Cmd {
 	if p.paneRoot == nil {
-		return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	if p.ctx == nil {
 		return nil
@@ -572,7 +570,7 @@ func (p *Plugin) yankFocusedDiff() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(ident, func(r clip.Result) tea.Msg {
-		return appmsg.ToastMsg{Message: r.Message("Yanked: " + ident), Duration: 2 * time.Second}
+		return appmsg.FlashMsg{Text: r.Message("Yanked: " + ident)}
 	})
 }
 

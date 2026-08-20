@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/state"
@@ -121,11 +122,8 @@ type Plugin struct {
 	// Push status state
 	pushStatus              *PushStatus
 	pushInProgress          bool
-	pushError               string
-	pushSuccess             bool      // Show success indicator after push
-	pushSuccessTime         time.Time // When to auto-clear success
-	pushMenuReturnMode      ViewMode  // Mode to return to when push menu closes
-	pushMenuFocus           int       // 0=push, 1=force, 2=upstream
+	pushMenuReturnMode      ViewMode // Mode to return to when push menu closes
+	pushMenuFocus           int      // 0=push, 1=force, 2=upstream
 	pushMenuModal           *modal.Modal
 	pushMenuModalWidth      int
 	pushPreservedCommitHash string // Hash of selected commit when push started
@@ -174,7 +172,6 @@ type Plugin struct {
 	writeExecutor      gitWriteExecutor
 	nextOperationID    uint64
 	activeOperation    *operationRequest
-	operationError     string
 	operationSelection selectionIdentity
 	auxWriteInProgress bool // discard, stash, and branch mutations
 
@@ -225,10 +222,6 @@ type Plugin struct {
 	// Fetch/Pull state
 	fetchInProgress bool
 	pullInProgress  bool
-	fetchSuccess    bool
-	pullSuccess     bool
-	fetchError      string
-	pullError       string
 
 	// History search state (/ in commit section)
 	historySearchState *HistorySearchState
@@ -485,12 +478,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.activeOperation = nil
 		if msg.Err != nil {
 			p.operationSelection = selectionIdentity{}
-			p.operationError = msg.Err.Error()
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: titleCase(string(msg.Kind)) + " failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
+			return p, remoteFailureAlert(titleCase(string(msg.Kind)), msg.Err)
 		}
-		p.operationError = ""
 		return p, p.refresh()
 
 	case DiscardResultMsg:
@@ -838,29 +827,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		p.pushInProgress = false
-		p.pushError = ""
-		p.pushSuccess = true
-		p.pushSuccessTime = time.Now()
-		// Refresh to show updated push status
+		// The status view shows the result; the confirmation is a flash.
 		// Note: pushPreservedCommitHash will be used by RecentCommitsLoadedMsg to restore cursor
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPushSuccessAfterDelay())
+		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), app.ShowFlash("Pushed"))
 
 	case PushErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.pushInProgress = false
-		p.pushError = msg.Err.Error()
 		p.pushPreservedCommitHash = "" // Clear stale hash on error
 		if isPushRejectedError(msg.Err) {
 			p.errorOfferPull = true
 		}
 		p.showErrorModal("Push Failed", msg.Err)
-		return p, p.loadRecentCommits()
-
-	case PushSuccessClearMsg:
-		p.pushSuccess = false
-		return p, nil
+		return p, tea.Batch(p.loadRecentCommits(), remoteFailureAlert("Push", msg.Err))
 
 	case StashResultMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -884,12 +865,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		default:
 			toastMsg = "Stash popped"
 		}
-		return p, tea.Batch(
-			p.refresh(),
-			func() tea.Msg {
-				return app.ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
-			},
-		)
+		// The status view shows the result; the confirmation is a flash.
+		return p, tea.Batch(p.refresh(), app.ShowFlash(toastMsg))
 
 	case BranchListLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -929,28 +906,23 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		p.fetchInProgress = false
-		p.fetchSuccess = true
-		p.fetchError = ""
 		// Refresh to show updated ahead/behind
-		return p, tea.Batch(p.loadRecentCommits(), p.clearFetchSuccessAfterDelay())
+		return p, tea.Batch(p.loadRecentCommits(), app.ShowFlash("Fetched"))
 
 	case FetchErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.fetchInProgress = false
-		p.fetchError = msg.Err.Error()
 		p.showErrorModal("Fetch Failed", msg.Err)
-		return p, nil
+		return p, remoteFailureAlert("Fetch", msg.Err)
 
 	case PullSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.pullInProgress = false
-		p.pullSuccess = true
-		p.pullError = ""
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPullSuccessAfterDelay())
+		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), app.ShowFlash("Pulled"))
 
 	case PullErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -971,9 +943,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				return p, nil
 			}
 		}
-		p.pullError = msg.Err.Error()
 		p.showErrorModal("Pull Failed", msg.Err)
-		return p, nil
+		return p, remoteFailureAlert("Pull", msg.Err)
 
 	case StashErrorMsg:
 		p.showErrorModal("Stash Failed", msg.Err)
@@ -986,16 +957,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.pullInProgress = false
 		p.pullConflictFiles = nil
 		p.pullConflictType = ""
-		p.pullError = ""
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
-
-	case FetchSuccessClearMsg:
-		p.fetchSuccess = false
-		return p, nil
-
-	case PullSuccessClearMsg:
-		p.pullSuccess = false
-		return p, nil
 
 	case RepoDetectedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1658,9 +1620,6 @@ type PushStatusLoadedMsg struct {
 	Status *PushStatus
 }
 
-// PushSuccessClearMsg is sent to clear the push success indicator.
-type PushSuccessClearMsg struct{}
-
 // StashResultMsg is sent when a stash operation completes.
 type StashResultMsg struct {
 	Epoch     uint64
@@ -1736,12 +1695,6 @@ type StashErrorMsg struct {
 	Err error
 }
 
-// FetchSuccessClearMsg is sent to clear the fetch success indicator.
-type FetchSuccessClearMsg struct{}
-
-// PullSuccessClearMsg is sent to clear the pull success indicator.
-type PullSuccessClearMsg struct{}
-
 // initCommitTextarea initializes the commit message textarea.
 func (p *Plugin) initCommitTextarea() {
 	p.commitMessage = textarea.New()
@@ -1768,27 +1721,6 @@ func (p *Plugin) initCommitTextarea() {
 	p.commitModalWidthCache = 0
 }
 
-// clearPushSuccessAfterDelay returns a command that clears the push success indicator after 3 seconds.
-func (p *Plugin) clearPushSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return PushSuccessClearMsg{}
-	})
-}
-
-// clearFetchSuccessAfterDelay returns a command that clears the fetch success indicator after 3 seconds.
-func (p *Plugin) clearFetchSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return FetchSuccessClearMsg{}
-	})
-}
-
-// clearPullSuccessAfterDelay returns a command that clears the pull success indicator after 3 seconds.
-func (p *Plugin) clearPullSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return PullSuccessClearMsg{}
-	})
-}
-
 // confirmStashPop fetches the latest stash and shows the confirm modal.
 func (p *Plugin) confirmStashPop() tea.Cmd {
 	workDir := p.repoRoot
@@ -1807,3 +1739,38 @@ type StashPopConfirmMsg struct {
 }
 
 // updateConfirmStashPop handles key events in the confirm stash pop modal.
+
+// remoteFailureAlert files a git failure as a session-source error
+// notification: a short title, with the first meaningful line of git's own
+// output as the body. The full text still belongs to the error modal — the
+// notification is the record that it happened, not a second dump of it.
+func remoteFailureAlert(action string, err error) tea.Cmd {
+	return func() tea.Msg {
+		post := notify.Alert(notify.SourceSession, notify.SeverityError, action+" failed")
+		post.Notification.Body = firstMeaningfulLine(err.Error())
+		return post
+	}
+}
+
+// firstMeaningfulLine picks the line of a git error that actually says what
+// went wrong, preferring git's own diagnostic markers over the transport
+// preamble ("To ../remote.git"), and falling back to the first non-blank line.
+func firstMeaningfulLine(s string) string {
+	var first string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if first == "" {
+			first = line
+		}
+		if strings.HasPrefix(line, "! ") || strings.HasPrefix(line, "error:") || strings.HasPrefix(line, "fatal:") {
+			return line
+		}
+	}
+	if first != "" {
+		return first
+	}
+	return strings.TrimSpace(s)
+}

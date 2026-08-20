@@ -114,12 +114,17 @@ func TestPreviewSplitPreservesClamps(t *testing.T) {
 			split, 119-previewMinWidth, previewMinWidth)
 	}
 
-	// previewW floor: when the cap itself goes negative the preview is still
-	// pinned at previewMinWidth (degenerate narrow terminal).
+	// A box too narrow to hold both minima gives everything it has to the
+	// preview, and the panes still add up to the box: the split may never
+	// report a surface wider than the width it was handed, or the plugin paints
+	// over whatever is beside it (the notification centre's right panel).
 	p.sidebarWidth = 40
 	narrow := p.previewSplitFor(30)
-	if narrow.PreviewWidth != previewMinWidth {
-		t.Fatalf("narrow PreviewWidth = %d, want %d", narrow.PreviewWidth, previewMinWidth)
+	if narrow.SidebarWidth != 0 {
+		t.Fatalf("narrow SidebarWidth = %d, want 0", narrow.SidebarWidth)
+	}
+	if total := narrow.SidebarWidth + dividerWidth + narrow.PreviewWidth; total != 30 {
+		t.Fatalf("narrow split spans %d columns, want 30 (%+v)", total, narrow)
 	}
 }
 
@@ -147,13 +152,12 @@ func TestPreviewDimensionsClampsAndFallback(t *testing.T) {
 		t.Fatalf("tiny preview dims = (%d,%d), want (20,5) floors", w, h)
 	}
 
-	// With the sidebar visible the width floor is never reached, because the
-	// available-previewMinWidth cap goes negative on a narrow terminal and pins
-	// the preview at previewMinWidth. Pre-existing behaviour, asserted so the
-	// clamp ordering cannot silently change.
+	// With the sidebar visible the same floors apply: a box too narrow for both
+	// minima no longer pins the preview at previewMinWidth, because that made
+	// the plugin wider than the box the shell gave it.
 	p.sidebarVisible = true
-	if w, _ = p.calculatePreviewDimensions(); w != previewMinWidth-panelOverhead {
-		t.Fatalf("tiny split width = %d, want %d", w, previewMinWidth-panelOverhead)
+	if w, _ = p.calculatePreviewDimensions(); w != 20 {
+		t.Fatalf("tiny split width = %d, want the 20-column floor", w)
 	}
 }
 

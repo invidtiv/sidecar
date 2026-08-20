@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -938,10 +937,7 @@ func (p *Plugin) copySelectedTextToClipboard() tea.Cmd {
 
 	lineCount := endLine - startLine + 1
 	return clip.Copy(strings.Join(result, "\n"), func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{
-			Message:  r.Message(fmt.Sprintf("Copied %d line(s)", lineCount)),
-			Duration: 2 * time.Second,
-		}
+		return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d line(s)", lineCount))}
 	})
 }
 
@@ -951,16 +947,11 @@ func (p *Plugin) copyFileContentsToClipboard() tea.Cmd {
 		return docview.YankContents(p.ctx.WorkDir, p.previewFile)
 	}
 	if len(p.previewLines) == 0 {
-		return func() tea.Msg {
-			return msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
-		}
+		return msg.ShowFlash("No content to copy")
 	}
 	lineCount := len(p.previewLines)
 	return clip.Copy(strings.Join(p.previewLines, "\n"), func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{
-			Message:  r.Message(fmt.Sprintf("Copied %d lines", lineCount)),
-			Duration: 2 * time.Second,
-		}
+		return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d lines", lineCount))}
 	})
 }
 
@@ -1008,6 +999,35 @@ func (p *Plugin) toggleMarkdownRender() {
 		p.renderMarkdownContent()
 	}
 	// Re-run search if active (line indices change between modes)
+	if p.contentSearchMode && p.contentSearchQuery != "" {
+		p.updateContentMatches()
+	}
+}
+
+// handleThemeChanged rebuilds the rendered markdown preview under the new
+// theme. Rendered row indices can shift, so content search matches are
+// recomputed and scroll/selection are preserved where still valid, clamped
+// otherwise.
+func (p *Plugin) handleThemeChanged() {
+	if !p.markdownRenderMode || !p.isMarkdownFile() {
+		return
+	}
+	p.markdownRendered = nil
+	p.renderMarkdownContent()
+
+	lineCount := len(p.getPreviewLines())
+	p.clampPreviewScroll()
+	if lineCount == 0 {
+		p.selection.Clear()
+	} else {
+		maxLine := lineCount - 1
+		if p.selection.Active {
+			if p.selection.Start.Line > maxLine || p.selection.End.Line > maxLine {
+				p.selection.Clear()
+			}
+		}
+	}
+
 	if p.contentSearchMode && p.contentSearchQuery != "" {
 		p.updateContentMatches()
 	}

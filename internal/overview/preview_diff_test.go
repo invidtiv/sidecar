@@ -390,7 +390,7 @@ func TestFocusedContentLeavesPassHostGlobals(t *testing.T) {
 	})
 	t.Run("document", func(t *testing.T) {
 		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-		run(t, m, m.openPreviewDoc(terminallink.Span{Kind: terminallink.KindFile, Value: "README.md"}))
+		run(t, m, openPreviewDocSpan(m, terminallink.Span{Kind: terminallink.KindFile, Value: "README.md"}))
 		if !m.docPaneFocused() {
 			t.Fatal("premise: document leaf should own the keyboard")
 		}

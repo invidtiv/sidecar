@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -98,7 +98,6 @@ func (p *Plugin) beginWrite(kind operationKind, args []string, selection selecti
 		Args:  append([]string(nil), args...),
 	}
 	p.activeOperation = &req
-	p.operationError = ""
 	p.operationSelection = selection
 	executor := p.writeExecutor
 	if executor == nil {
@@ -116,9 +115,13 @@ func (p *Plugin) beginWrite(kind operationKind, args []string, selection selecti
 }
 
 func (p *Plugin) writeBusyToast() tea.Cmd {
-	return func() tea.Msg {
-		return app.ToastMsg{Message: "Git write already in progress", IsError: true}
-	}
+	// A refused keypress, from the source that means "you have to act" rather
+	// than generic app chrome (audit row 72). It goes through Blocked, not a
+	// bare waiting alert: `waiting` is sticky by default, and this fires from a
+	// dozen keypress handlers while a write is in flight — one sticky, never
+	// expiring centre entry per impatient keystroke is exactly the spam the
+	// two-tier split exists to prevent.
+	return msg.Blocked("Git write already in progress")
 }
 
 func (p *Plugin) writeInProgress() bool {

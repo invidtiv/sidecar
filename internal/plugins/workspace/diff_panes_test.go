@@ -441,12 +441,13 @@ func TestShowDiffToastsWhenPanesDisabled(t *testing.T) {
 		t.Fatal("flag-off d returned no toast")
 	}
 	msg := cmd()
-	toast, ok := msg.(appmsg.ToastMsg)
+	// Static feature state is a flash, not a stored notification.
+	flash, ok := msg.(appmsg.FlashMsg)
 	if !ok {
-		t.Fatalf("flag-off d produced %T, want ToastMsg", msg)
+		t.Fatalf("flag-off d produced %T, want FlashMsg", msg)
 	}
-	if toast.Message != features.WorkspaceDocPanesDisabledDiff {
-		t.Fatalf("toast = %q", toast.Message)
+	if flash.Text != features.WorkspaceDocPanesDisabledDiff {
+		t.Fatalf("flash = %q", flash.Text)
 	}
 	if p.paneRoot != nil {
 		t.Fatal("flag-off d created a pane tree")
@@ -456,8 +457,8 @@ func TestShowDiffToastsWhenPanesDisabled(t *testing.T) {
 	if click == nil {
 		t.Fatal("flag-off Diff chip returned no toast")
 	}
-	if got := click(); got.(appmsg.ToastMsg).Message != features.WorkspaceDocPanesDisabledDiff {
-		t.Fatalf("chip toast = %#v", got)
+	if got := click(); got.(appmsg.FlashMsg).Text != features.WorkspaceDocPanesDisabledDiff {
+		t.Fatalf("chip flash = %#v", got)
 	}
 }
 

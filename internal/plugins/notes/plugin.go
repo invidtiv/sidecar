@@ -145,6 +145,9 @@ type Plugin struct {
 	viewSurfaceSrc   string
 	viewSurfaceWidth int
 	viewSurfaceMD    bool
+	// viewSurfaceStyle is the markdown renderer's theme identity the surface
+	// was built under; a live theme change rebuilds it without a resize.
+	viewSurfaceStyle string
 
 	// Per-note view/edit place for this session (not persisted).
 	notePlaces map[string]notePlace
@@ -1322,10 +1325,9 @@ func readOnlyPasteToast(filter NoteFilter) tea.Cmd {
 		label = "Deleted notes"
 	}
 	return func() tea.Msg {
-		return msg.ToastMsg{
-			Message:  label + " are read-only",
-			Duration: 2 * time.Second,
-		}
+		// A refusal the user provokes by typing: frequent, and worth saying
+		// only while it is on screen.
+		return msg.FlashMsg{Text: label + " are read-only"}
 	}
 }
 
@@ -1394,15 +1396,13 @@ func (p *Plugin) FooterStatus() (string, bool) {
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
-	if p.saveInFlight || p.exportSaveInFlight {
-		return "notes: saving…", false
-	}
 	if p.mutation != nil {
 		if p.mutation.kind == noteMutationDelete {
 			return "notes: deleting…", false
 		}
 		return "notes: creating…", false
 	}
+	// An in-flight save is routine and self-resolving: no status line.
 	return "", false
 }
 
@@ -1460,18 +1460,10 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Enter/i/click are what enter edit.
 	if key == "tab" && p.editorNote != nil {
 		if p.activePane == PaneList {
-			p.activePane = PaneEditor
-			if !p.previewMode {
-				p.leaveEditToView()
-			}
-			p.editorTextarea.Blur()
+			p.focusEditorPane()
 			return p, nil
 		}
-		if !p.previewMode {
-			p.leaveEditToView()
-		}
-		p.activePane = PaneList
-		return p, p.saveEditorContent()
+		return p, p.focusListPane()
 	}
 
 	// Esc returns to Active view from Archived/Deleted views
@@ -2061,6 +2053,7 @@ func (p *Plugin) syncPreviewFromTextarea() {
 func (p *Plugin) invalidateViewSurface() {
 	p.viewSurfaceSrc = ""
 	p.viewSurfaceWidth = 0
+	p.viewSurfaceStyle = ""
 	p.viewSurface = markdown.MappedRender{}
 }
 
@@ -2076,8 +2069,28 @@ func (p *Plugin) ensureViewSurface() {
 	if width < 1 {
 		width = 1
 	}
-	if p.viewSurfaceSrc == src && p.viewSurfaceWidth == width && p.viewSurfaceMD == p.markdownView && len(p.viewSurface.Lines) > 0 {
+	// Only the glamour surface carries theme state; the raw wrap has none, so
+	// it must not churn on a theme change.
+	style := ""
+	if p.markdownView && p.md != nil {
+		style = p.md.StyleKey()
+	}
+	if p.viewSurfaceSrc == src && p.viewSurfaceWidth == width && p.viewSurfaceMD == p.markdownView &&
+		p.viewSurfaceStyle == style && len(p.viewSurface.Lines) > 0 {
 		return
+	}
+	// A theme change is the one rebuild that leaves the source and width alone,
+	// so the cursor and scroll are re-anchored through the source mapping
+	// rather than left pointing at visual rows from the previous render.
+	reanchor := p.viewSurfaceSrc == src && p.viewSurfaceWidth == width &&
+		p.viewSurfaceMD == p.markdownView && p.viewSurfaceStyle != style &&
+		len(p.viewSurface.Lines) > 0
+	var cursorAnchor, scrollAnchor markdown.Anchor
+	screenRow := 0
+	if reanchor {
+		cursorAnchor = p.viewSurface.At(p.previewCursorLine)
+		scrollAnchor = p.viewSurface.At(p.previewScrollOff)
+		screenRow = p.previewCursorLine - p.previewScrollOff
 	}
 	if p.markdownView && p.md != nil {
 		p.viewSurface = renderNotesMarkdown(p.md, src, width)
@@ -2093,6 +2106,15 @@ func (p *Plugin) ensureViewSurface() {
 	p.viewSurfaceSrc = src
 	p.viewSurfaceWidth = width
 	p.viewSurfaceMD = p.markdownView
+	p.viewSurfaceStyle = style
+	if reanchor {
+		p.previewCursorLine = p.viewSurface.VisualRowForSource(cursorAnchor.SourceLine, cursorAnchor.SourceCol)
+		scroll := p.viewSurface.VisualRowForSource(scrollAnchor.SourceLine, scrollAnchor.SourceCol)
+		if p.previewCursorLine-screenRow >= 0 {
+			scroll = p.previewCursorLine - screenRow
+		}
+		p.previewScrollOff = max(scroll, 0)
+	}
 }
 
 func (p *Plugin) toggleMarkdownView() {
@@ -2817,7 +2839,7 @@ func (p *Plugin) yankNoteContent() tea.Cmd {
 		content = p.editorTextarea.Value()
 	}
 	return clip.Copy(content, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied note content"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied note content")}
 	})
 }
 
@@ -2838,11 +2860,12 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 	}
 
 	if title == "" {
-		return msg.ShowToast("No title to copy", 2*time.Second)
+		// Nothing to act on, nothing to say (audit row 43).
+		return nil
 	}
 
 	return clip.Copy(title, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied: " + title), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied: " + title)}
 	})
 }
 
@@ -2863,11 +2886,12 @@ func (p *Plugin) yankNoteID() tea.Cmd {
 func (p *Plugin) copyEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
 	if content == "" {
-		return msg.ShowToast("No content to copy", 2*time.Second)
+		// Nothing to act on, nothing to say (audit row 44).
+		return nil
 	}
 
 	return clip.Copy(content, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied to clipboard"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied to clipboard")}
 	})
 }
 
@@ -3153,7 +3177,9 @@ func (p *Plugin) loadNotes() tea.Cmd {
 
 // showSavedToast shows a toast notification for note save.
 func showSavedToast() tea.Cmd {
-	return msg.ShowToast("Saved", 2*time.Second)
+	// Routine, high-frequency, and the editor already shows a clean buffer
+	// (audit row 45).
+	return msg.ShowFlash("Saved")
 }
 
 func showSaveFailedToast(err error) tea.Cmd {
@@ -3207,7 +3233,7 @@ func showRestoredToast(title string) tea.Cmd {
 	if displayTitle != "" {
 		text = "Restored: " + displayTitle
 	}
-	return msg.ShowToast(text, 2*time.Second)
+	return msg.ShowFlash(text)
 }
 
 // truncateTitle truncates a title to maxLen chars with ellipsis.
@@ -3248,7 +3274,8 @@ func (p *Plugin) hasUndo() bool {
 // undoLastAction undoes the last delete or archive action.
 func (p *Plugin) undoLastAction() tea.Cmd {
 	if p.store == nil || !p.hasUndo() {
-		return msg.ShowToast("Nothing to undo", 2*time.Second)
+		// Nothing to undo is nothing to report (audit row 47).
+		return nil
 	}
 	latest := p.undoStack[len(p.undoStack)-1]
 	if blocked, ok := p.guardPendingCreateDurableAction(latest.NoteID); ok {
@@ -3256,7 +3283,7 @@ func (p *Plugin) undoLastAction() tea.Cmd {
 	}
 	action := p.popUndo()
 	if action == nil {
-		return msg.ShowToast("Nothing to undo", 2*time.Second)
+		return nil
 	}
 	p.undoErr = nil
 

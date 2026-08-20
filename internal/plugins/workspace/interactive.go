@@ -262,11 +262,9 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	if !p.interactiveCopyPasteHintShown {
 		p.interactiveCopyPasteHintShown = true
 		cmds = append(cmds, func() tea.Msg {
-			return app.ToastMsg{
-				Message: fmt.Sprintf("Interactive copy/paste: %s or %s / %s (configurable)",
-					p.getInteractiveCopyKey(), superCopyKey, p.getInteractivePasteKey()),
-				Duration: 3 * time.Second,
-			}
+			// A one-time hint about keys, not an event: flash it.
+			return app.FlashMsg{Text: fmt.Sprintf("Interactive copy/paste: %s or %s / %s (configurable)",
+				p.getInteractiveCopyKey(), superCopyKey, p.getInteractivePasteKey())}
 		})
 	}
 	return tea.Batch(cmds...)

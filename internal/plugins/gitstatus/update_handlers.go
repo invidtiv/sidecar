@@ -3,7 +3,6 @@ package gitstatus
 import (
 	"log/slog"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -154,7 +153,7 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "s":
@@ -226,7 +225,6 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case "r":
-		p.pushError = "" // Clear any stale push error
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
 
 	case "S":
@@ -363,8 +361,6 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			// Fetch from remote
 			if !p.fetchInProgress {
 				p.fetchInProgress = true
-				p.fetchError = ""
-				p.fetchSuccess = false
 				return p, p.doFetch()
 			}
 		}
@@ -614,7 +610,7 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "d":
@@ -1200,8 +1196,6 @@ func (p *Plugin) executePullMenuAction(actionID string) (plugin.Plugin, tea.Cmd)
 	}
 	p.viewMode = p.pullMenuReturnMode
 	p.pullInProgress = true
-	p.pullError = ""
-	p.pullSuccess = false
 	p.clearPullModal()
 
 	switch actionID {
@@ -1286,8 +1280,6 @@ func (p *Plugin) executePushMenuAction(idx int) (plugin.Plugin, tea.Cmd) {
 	}
 	p.viewMode = p.pushMenuReturnMode
 	p.pushInProgress = true
-	p.pushError = ""
-	p.pushSuccess = false
 	p.pushMenuFocus = 0
 	p.clearPushMenuModal()
 

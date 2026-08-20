@@ -88,9 +88,10 @@ type Model struct {
 	hasPendingScroll bool
 
 	// body is the rendered, sanitized body for the current width.
-	body       []string
-	bodyForW   int
-	bodyForGen uint64
+	body         []string
+	bodyForW     int
+	bodyForGen   uint64
+	bodyForStyle string
 }
 
 // New creates a view bound to a resolver. A nil renderer takes the default.

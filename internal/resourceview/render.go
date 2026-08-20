@@ -84,6 +84,7 @@ func (m *Model) maxScroll() int {
 func (m *Model) invalidateBody() {
 	m.body = nil
 	m.bodyForW = -1
+	m.bodyForStyle = ""
 }
 
 // View renders the card, held to exactly the box it was given. A content that
@@ -268,7 +269,8 @@ func (m *Model) renderedBody() []string {
 	if m.doc.Body == nil || m.doc.Body.Text == "" {
 		return nil
 	}
-	if m.body != nil && m.bodyForW == m.width && m.bodyForGen == m.generation {
+	style := m.renderer.StyleKey()
+	if m.body != nil && m.bodyForW == m.width && m.bodyForGen == m.generation && m.bodyForStyle == style {
 		return m.body
 	}
 	var out []string
@@ -282,6 +284,7 @@ func (m *Model) renderedBody() []string {
 	m.body = out
 	m.bodyForW = m.width
 	m.bodyForGen = m.generation
+	m.bodyForStyle = style
 	return out
 }
 

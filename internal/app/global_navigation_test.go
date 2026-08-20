@@ -457,10 +457,13 @@ func TestOpenInGitMissingPathStaysInGlobal(t *testing.T) {
 		t.Fatalf("missing path cmd = %#v, want an error toast", toast)
 	}
 	// Applying the toast must not leave global or focus Git.
+	// The only follow-up a toast may produce is its own reveal tick.
 	updated, more := m.Update(toast)
 	m = asAppModel(t, updated)
 	if more != nil {
-		t.Fatalf("toast produced a follow-up command: %T", more())
+		if _, ok := more().(revealTickMsg); !ok {
+			t.Fatalf("toast produced a follow-up command: %T", more())
+		}
 	}
 	if !m.inGlobalScope() || plugins["git"].focused != gitBefore {
 		t.Fatal("applying the missing-path toast left global or focused Git")

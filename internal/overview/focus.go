@@ -4,7 +4,11 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/plugin"
 )
+
+// The browser extends its Tab ring with the shell's notification centre.
+var _ plugin.FocusCycler = (*Model)(nil)
 
 // focusRing is the windows this tab has on screen, in cycle order. It is the
 // arrangement's answer, not the tree's alone: an arrangement that draws no list
@@ -43,4 +47,37 @@ func (m *Model) setFocusTarget(target panelayout.Target) tea.Cmd {
 func (m *Model) cyclePaneFocus(reverse bool) tea.Cmd {
 	ring := m.focusRing()
 	return m.setFocusTarget(panelayout.CycleTarget(ring, m.currentFocusTarget(), reverse))
+}
+
+// AtFocusCycleEnd and FocusCycleStart implement plugin.FocusCycler for the
+// global Workspaces browser, the parity twin of the project surface: the shell
+// inserts the notification centre at the wrap point of this ring too, so Tab
+// behaves the same on both.
+func (m *Model) AtFocusCycleEnd(reverse bool) bool {
+	return panelayout.AtRingEnd(m.focusRing(), m.currentFocusTarget(), reverse)
+}
+
+func (m *Model) FocusCycleStart(reverse bool) tea.Cmd {
+	if target, ok := panelayout.RingStart(m.focusRing(), reverse); ok {
+		return m.setFocusTarget(target)
+	}
+	return nil
+}
+
+// The browser reports its rail drags for the same reason the project surface
+// does: the floating tiers stay off the screen while a divider is being moved.
+var _ plugin.ResizeDragReporter = (*Model)(nil)
+
+// ResizeDragActive reports a live divider drag on this surface — the preview
+// pane tree's rails and the diff view's.
+func (m *Model) ResizeDragActive() bool {
+	if m == nil || m.workspacesMouse == nil || !m.workspacesMouse.IsDragging() {
+		return false
+	}
+	switch m.workspacesMouse.DragRegion() {
+	case previewPaneDividerKind, previewDiffDividerKind:
+		return true
+	default:
+		return false
+	}
 }

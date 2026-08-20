@@ -116,10 +116,15 @@ func SplitFor(width int, cfg SplitConfig) Split {
 	if sidebar > available-cfg.PreviewMin {
 		sidebar = available - cfg.PreviewMin
 	}
-	preview := available - sidebar
-	if preview < cfg.PreviewMin {
-		preview = cfg.PreviewMin
+	// A box too narrow to hold both minima gives everything it has to the
+	// preview. The panes must always add back up to the width they were given:
+	// growing the preview back to its minimum here made the surface one column
+	// wider than its box, which paints over whatever is to its right — the
+	// notification centre, at the widths the panel produces.
+	if sidebar < 0 {
+		sidebar = 0
 	}
+	preview := max(0, available-sidebar)
 	previewX := sidebar + cfg.DividerWidth
 	return Split{
 		SidebarWidth:        sidebar,

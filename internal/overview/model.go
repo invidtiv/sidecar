@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -1206,7 +1207,7 @@ func (m *Model) RevealWorkspace(workspace workspaceinventory.Workspace) tea.Cmd 
 	if name == "" {
 		name = workspace.ID
 	}
-	return tea.Batch(append(cmds, appmsg.ShowToast(name+" is no longer in the catalog", 3*time.Second))...)
+	return tea.Batch(append(cmds, appmsg.Alert(notify.SourceSession, notify.SeverityWarning, name+" is no longer in the catalog"))...)
 }
 
 func (m *Model) View(width, height int) string {
