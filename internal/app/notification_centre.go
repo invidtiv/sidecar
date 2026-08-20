@@ -12,9 +12,11 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -26,8 +28,10 @@ import (
 //
 // Everything it draws goes through the shared grammar: ui.RenderHandle for the
 // resize rail, ui.ReserveHeaderClose/ComposeHeaderClose for the close
-// affordance, notify.GroupBySource for the section order, and the host footer
-// for its key hints (notificationCentreCommands, never a hand-rendered footer).
+// affordance, ui.RenderScrollbar for the body, notify.GroupBySource for the
+// section order, tty.WheelBurst for trackpad/Magic Mouse coalescing, and the
+// host footer for its key hints (notificationCentreCommands, never a
+// hand-rendered footer).
 
 const (
 	// notificationCentreContext is the keymap/footer context the panel owns
@@ -336,6 +340,27 @@ func notificationAge(created, now time.Time) string {
 	}
 }
 
+// notificationCentreLayout is the panel's interior geometry, shared by the
+// renderer, the wheel handler, and the boundary query so a notch cannot be
+// answered against a different box than the one that was drawn.
+func notificationCentreLayout(panelWidth, height int) (inner, bodyInner, interiorHeight, bodyHeight int) {
+	inner = max(1, panelWidth-4)
+	// The body always reserves the shared scrollbar column. RenderScrollbar
+	// paints a spacer when everything fits, so the list does not jump sideways
+	// the moment it becomes long enough to scroll.
+	bodyInner = max(1, inner-1)
+	interiorHeight = max(0, height-2)
+	bodyHeight = max(0, interiorHeight-4)
+	return
+}
+
+func (m Model) notificationCentreClock() time.Time {
+	if m.notificationCentreNow != nil {
+		return m.notificationCentreNow()
+	}
+	return time.Now()
+}
+
 // renderNotificationCentre paints the reserved right column — the resize rail
 // and the panel — for a content region of the given height. It also registers
 // the panel's hit regions, in screen coordinates, so the shell can route a
@@ -352,8 +377,8 @@ func (m Model) renderNotificationCentre(height int) string {
 	// second kind of surface. That border costs two columns and two rows, and
 	// its one column of padding either side costs two more columns — the
 	// interior is what is left.
-	inner := max(1, panelWidth-4)
-	now := time.Now()
+	inner, bodyInner, interiorHeight, bodyHeight := notificationCentreLayout(panelWidth, height)
+	now := m.notificationCentreClock()
 
 	handle := ui.RenderHandle(height, true,
 		ui.HandleStateFrom(m.notificationCentreHoverHandle, m.notificationCentreDragging()))
@@ -367,21 +392,26 @@ func (m Model) renderNotificationCentre(height int) string {
 	// Two header rows (title, rule), a spacer, and the footnote sit outside the
 	// scrolled body.
 	footnote := styles.Muted.Render(ansi.Truncate(notificationCentreFootnote, inner, "…"))
-	// The border takes the outermost row top and bottom; everything below is
-	// laid out against the interior.
-	interiorHeight := max(0, height-2)
 	lines := []string{titleRow, lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat("─", inner))}
-	// Title, rule, and — where there is room — a spacer and the footnote sit
-	// outside the scrolled body.
-	bodyHeight := max(0, interiorHeight-4)
 
-	rows := m.notificationCentreBody(inner, now)
-	scroll := m.notificationCentreScrollFor(rows, bodyHeight)
-	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
-		lines = append(lines, rows[i].text)
-	}
-	for len(lines) < max(0, interiorHeight-2) {
-		lines = append(lines, "")
+	rows := m.notificationCentreBody(bodyInner, now)
+	scroll := m.clampedNotificationCentreScroll(len(rows), bodyHeight)
+	if bodyHeight > 0 {
+		bodyLines := make([]string, 0, bodyHeight)
+		for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
+			bodyLines = append(bodyLines, padNotificationRow(rows[i].text, bodyInner))
+		}
+		for len(bodyLines) < bodyHeight {
+			bodyLines = append(bodyLines, strings.Repeat(" ", bodyInner))
+		}
+		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(rows),
+			ScrollOffset: scroll,
+			VisibleItems: bodyHeight,
+			TrackHeight:  bodyHeight,
+		})
+		joined := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(bodyLines, "\n"), scrollbar)
+		lines = append(lines, strings.Split(joined, "\n")...)
 	}
 	if interiorHeight >= 4 {
 		lines = append(lines, "", footnote)
@@ -434,6 +464,38 @@ func (m Model) notificationCentreScrollFor(rows []centreRow, bodyHeight int) int
 	return scroll
 }
 
+func (m Model) clampedNotificationCentreScroll(rowCount, bodyHeight int) int {
+	if bodyHeight <= 0 || rowCount <= bodyHeight {
+		return 0
+	}
+	return min(max(m.notificationCentreScroll, 0), rowCount-bodyHeight)
+}
+
+func (m Model) notificationCentreScrollBounds() scroll.Bounds {
+	height := m.contentHeight()
+	panelWidth := m.notificationCentrePanelWidth()
+	if panelWidth <= 0 || height < 3 {
+		return scroll.Bounds{}
+	}
+	_, bodyInner, _, bodyHeight := notificationCentreLayout(panelWidth, height)
+	rows := m.notificationCentreBody(bodyInner, m.notificationCentreClock())
+	return scroll.Bounds{
+		Position: m.notificationCentreScroll,
+		Maximum:  max(0, len(rows)-bodyHeight),
+	}
+}
+
+func (m *Model) ensureNotificationCentreCursorVisible() {
+	height := m.contentHeight()
+	panelWidth := m.notificationCentrePanelWidth()
+	if panelWidth <= 0 || height < 3 {
+		return
+	}
+	_, bodyInner, _, bodyHeight := notificationCentreLayout(panelWidth, height)
+	rows := m.notificationCentreBody(bodyInner, m.notificationCentreClock())
+	m.notificationCentreScroll = m.notificationCentreScrollFor(rows, bodyHeight)
+}
+
 // registerNotificationCentreRegions publishes the panel's pointer targets in
 // screen coordinates. Order is the shared rule: the widest target first, the
 // resize rail last so a press one cell off the edge resizes rather than
@@ -454,8 +516,8 @@ func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, s
 	// takes a row and a column, the panel's padding another column. Body rows
 	// then start after the title row and its rule. Both rows of a two-line
 	// entry carry the same item id, so clicking either selects the entry.
-	inner := max(1, panelWidth-4)
-	clearCol := notificationGroupClearCol(inner)
+	_, bodyInner, _, _ := notificationCentreLayout(panelWidth, height)
+	clearCol := notificationGroupClearCol(bodyInner)
 	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
 		y := headerHeight + 1 + 2 + (i - scroll)
 		if rows[i].group != "" {
@@ -556,18 +618,21 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if m.notificationCentreCursor < len(items)-1 {
 			m.notificationCentreCursor++
 		}
+		m.ensureNotificationCentreCursorVisible()
 		m.readSelectedNotification()
 		return true, nil
 	case "k", "up":
 		if m.notificationCentreCursor > 0 {
 			m.notificationCentreCursor--
 		}
+		m.ensureNotificationCentreCursorVisible()
 		m.readSelectedNotification()
 		return true, nil
 	case "d":
 		if selected, ok := m.selectedNotification(items); ok {
 			m.dismissNotification(selected.ID)
 			m.clampNotificationCentreCursor(len(m.notificationCentreItems()))
+			m.ensureNotificationCentreCursorVisible()
 		}
 		return true, nil
 	case "D":
@@ -594,6 +659,7 @@ func (m *Model) dismissNotificationGroup(source notify.SourceID) {
 	}
 	m.notificationCentreCursor = 0
 	m.clampNotificationCentreCursor(len(m.notificationCentreItems()))
+	m.ensureNotificationCentreCursorVisible()
 }
 
 // activateSelectedNotification is what `enter` means on the centre: take the
@@ -724,6 +790,14 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 
 	action := m.notificationCentreMouse.HandleMouse(msg)
 	switch action.Type {
+	case mouse.ActionScrollUp, mouse.ActionScrollDown:
+		if !m.pointerOnNotificationCentre(action.X, action.Y) {
+			return false, nil
+		}
+		m.scrollNotificationCentre(action.Delta)
+		return true, nil
+	case mouse.ActionScrollLeft, mouse.ActionScrollRight:
+		return m.pointerOnNotificationCentre(action.X, action.Y), nil
 	case mouse.ActionDrag:
 		if action.DragStartID != regionNotificationCentreHandle {
 			return false, nil
@@ -767,6 +841,7 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 				m.notificationCentreCursor = index
 			}
 			m.focusNotificationCentre()
+			m.ensureNotificationCentreCursorVisible()
 			m.readSelectedNotification()
 			if action.Type == mouse.ActionDoubleClick {
 				// A double-click is `enter` on the row it landed on — the same
@@ -780,6 +855,69 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 		}
 	}
 	return false, nil
+}
+
+func (m Model) pointerOnNotificationCentre(x, y int) bool {
+	panelWidth := m.notificationCentrePanelWidth()
+	height := m.contentHeight()
+	if panelWidth <= 0 || height < 3 {
+		return false
+	}
+	panelX := m.width - panelWidth
+	handleX := panelX - notificationCentreHandleWidth
+	hitX := max(0, handleX-(notificationCentreHandleHit-1)/2)
+	if x < hitX || x >= m.width {
+		return false
+	}
+	if y < headerHeight || y >= headerHeight+height {
+		return false
+	}
+	return true
+}
+
+func (m *Model) scrollNotificationCentre(delta int) {
+	if m.notificationCentreWheel == nil {
+		m.notificationCentreWheel = &tty.WheelBurst{}
+	}
+	flushed, ok := m.notificationCentreWheel.Add(delta, m.notificationCentreClock())
+	if !ok {
+		return
+	}
+	next, changed := m.notificationCentreScrollBounds().Move(flushed)
+	if changed {
+		m.notificationCentreScroll = next
+	}
+}
+
+// notificationCentreWheelAtBoundary answers FilterInput for a wheel over the
+// reserved column. over is false when the pointer is not on the panel, so the
+// plugin underneath can still answer; a true over with bounded=true is a
+// certain no-op that must be dropped before Update and View.
+func (m *Model) notificationCentreWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, over bool) {
+	if !m.notificationCentreVisible() {
+		return false, false
+	}
+	mm := msg.Mouse()
+	if !m.pointerOnNotificationCentre(mm.X, mm.Y) {
+		if m.notificationCentreWheel != nil {
+			m.notificationCentreWheel.Reset()
+		}
+		return false, false
+	}
+	if m.notificationCentreMouse == nil {
+		return false, true
+	}
+	action := m.notificationCentreMouse.HandleMouse(msg)
+	if action.Type != mouse.ActionScrollUp && action.Type != mouse.ActionScrollDown {
+		return false, true
+	}
+	if !m.notificationCentreScrollBounds().AtBoundary(action.Delta) {
+		return false, true
+	}
+	if m.notificationCentreWheel != nil {
+		m.notificationCentreWheel.Reset()
+	}
+	return true, true
 }
 
 // focusNotificationCentre gives the panel the keyboard without changing

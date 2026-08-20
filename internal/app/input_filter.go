@@ -39,6 +39,12 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if m.hasModal() {
 		return m.activeModalWheelAtBoundary(msg)
 	}
+	// The centre is a reserved column, not a modal: a wheel over it must not
+	// be answered by the plugin underneath, and an inertial tail at its
+	// boundary must be dropped here the same way every other surface's is.
+	if bounded, over := (&m).notificationCentreWheelAtBoundary(msg); over {
+		return bounded
+	}
 
 	local := offsetMouseY(msg, -headerHeight)
 	wheel, ok := local.(tea.MouseWheelMsg)

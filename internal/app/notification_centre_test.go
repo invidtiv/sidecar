@@ -1,17 +1,21 @@
 package app
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/scroll/scrolltest"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // sizingPlugin records every content box the shell hands it. The panel's whole
@@ -62,6 +66,7 @@ func centreTestModel(t *testing.T, plugins ...*sizingPlugin) Model {
 		cfg:                     config.Default(),
 		notifications:           notify.NewMemStore(),
 		notificationCentreMouse: mouse.NewHandler(),
+		notificationCentreWheel: &tty.WheelBurst{},
 		toastMouse:              mouse.NewHandler(),
 	}
 	m.updateContext()
@@ -733,9 +738,10 @@ func TestCentreGroupHeaderClearClearsItsOwnGroup(t *testing.T) {
 	if got := m.notificationCentreMouse.HitMap.Test(region.Rect.X, region.Rect.Y); got == nil || got.ID != region.ID {
 		t.Fatalf("the group × is covered by another region: %v", got)
 	}
-	// It is the last interior cell of the header row, where the rule ends.
+	// It is the last body cell of the header row, one column left of the scrollbar.
 	inner := m.notificationCentrePanelWidth() - 4
-	wantX := m.width - m.notificationCentrePanelWidth() + 2 + notificationGroupClearCol(inner)
+	bodyInner := max(1, inner-1)
+	wantX := m.width - m.notificationCentrePanelWidth() + 2 + notificationGroupClearCol(bodyInner)
 	if region.Rect.X != wantX || region.Rect.W != 1 {
 		t.Fatalf("group × region = %+v, want x=%d w=1", region.Rect, wantX)
 	}
@@ -753,5 +759,278 @@ func TestCentreGroupHeaderClearClearsItsOwnGroup(t *testing.T) {
 		if notify.SourceOf(n.Source).ID == source {
 			t.Fatalf("the group × left %q behind", n.Title)
 		}
+	}
+}
+
+func TestCentreGroupClearKeepsTheNewCursorOnScreen(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	for i := range 40 {
+		postCentreNotification(t, &m, notify.SourceTasks, fmt.Sprintf("task %03d", i))
+	}
+	postCentreNotification(t, &m, notify.SourceAgent, "agent one")
+	postCentreNotification(t, &m, notify.SourceAgent, "agent two")
+	m.toggleNotificationCentre()
+	// Hide the agent rows (and cursor 0) while leaving the tasks header on
+	// screen so its × is a real target.
+	m.notificationCentreScroll = 3
+	m.View()
+
+	source := notify.SourceOf(notify.SourceTasks).ID
+	region := centreRegion(t, &m, regionNotificationCentreGroup+string(source))
+	handled, _ := m.notificationCentreMouseEvent(
+		tea.MouseClickMsg{Button: tea.MouseLeft, X: region.Rect.X, Y: region.Rect.Y})
+	if !handled {
+		t.Fatal("a click on the group × was not handled")
+	}
+	if m.notificationCentreCursor != 0 {
+		t.Fatalf("cursor after clearing the group = %d, want 0", m.notificationCentreCursor)
+	}
+
+	_, bodyInner, _, bodyHeight := notificationCentreLayout(m.notificationCentrePanelWidth(), m.contentHeight())
+	rows := m.notificationCentreBody(bodyInner, time.Now())
+	scroll := m.notificationCentreScroll
+	onScreen := false
+	for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
+		if rows[i].item == 0 {
+			onScreen = true
+			break
+		}
+	}
+	if !onScreen {
+		t.Fatalf("cursor 0 is off-screen at scroll %d after the group ×", scroll)
+	}
+}
+
+func fillCentreList(t *testing.T, n int) Model {
+	t.Helper()
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	for i := range n {
+		postCentreNotification(t, &m, notify.SourceTasks, fmt.Sprintf("item %03d", i))
+	}
+	m.toggleNotificationCentre()
+	m.View()
+	return m
+}
+
+func centreWheel(m Model, down bool) tea.MouseWheelMsg {
+	button := tea.MouseWheelUp
+	if down {
+		button = tea.MouseWheelDown
+	}
+	return tea.MouseWheelMsg{
+		X:      m.width - 5,
+		Y:      headerHeight + 5,
+		Button: button,
+	}
+}
+
+func visualCell(line string, col int) rune {
+	x := 0
+	for _, r := range ansi.Strip(line) {
+		if x == col {
+			return r
+		}
+		x += lipgloss.Width(string(r))
+	}
+	return 0
+}
+
+func TestCentreWheelScrollsTheBody(t *testing.T) {
+	m := fillCentreList(t, 50)
+	if maxScroll := m.notificationCentreScrollBounds().Maximum; maxScroll <= mouse.WheelScrollLines {
+		t.Fatalf("max scroll = %d, list is not long enough to exercise the wheel", maxScroll)
+	}
+
+	height := m.contentHeight()
+	before := m.renderNotificationCentre(height)
+	if !strings.Contains(before, "item 049") {
+		t.Fatal("newest item missing at the top of the list")
+	}
+
+	handled, _ := m.notificationCentreMouseEvent(centreWheel(m, true))
+	if !handled {
+		t.Fatal("wheel over the centre was not handled")
+	}
+	if got := m.notificationCentreScroll; got != mouse.WheelScrollLines {
+		t.Fatalf("scroll after one notch = %d, want %d", got, mouse.WheelScrollLines)
+	}
+
+	m.notificationCentreScroll = m.notificationCentreScrollBounds().Maximum
+	after := m.renderNotificationCentre(height)
+	if strings.Contains(after, "item 049") {
+		t.Fatal("the newest item was still in view after scrolling down the list")
+	}
+	if !strings.Contains(after, "item 000") && !strings.Contains(after, "item 010") {
+		t.Fatal("scrolling did not reveal older items")
+	}
+}
+
+func TestCentreWheelBurstCoalescesATrackpadFlick(t *testing.T) {
+	m := fillCentreList(t, 50)
+	at := time.Unix(200, 0)
+	m.notificationCentreNow = func() time.Time { return at }
+	wheel := centreWheel(m, true)
+
+	if handled, _ := m.notificationCentreMouseEvent(wheel); !handled {
+		t.Fatal("first notch was not handled")
+	}
+	if got := m.notificationCentreScroll; got != mouse.WheelScrollLines {
+		t.Fatalf("first notch scroll = %d, want immediate movement of %d", got, mouse.WheelScrollLines)
+	}
+
+	at = at.Add(tty.WheelDebounceInterval / 2)
+	if handled, _ := m.notificationCentreMouseEvent(wheel); !handled {
+		t.Fatal("held notch was not claimed by the centre")
+	}
+	if got := m.notificationCentreScroll; got != mouse.WheelScrollLines {
+		t.Fatalf("held notch scroll = %d, want unchanged until the burst flushes", got)
+	}
+	if pending := m.notificationCentreWheel.Pending(); pending != mouse.WheelScrollLines {
+		t.Fatalf("held pending = %d, want the notch kept for the next flush", pending)
+	}
+
+	at = at.Add(tty.WheelDebounceInterval)
+	if handled, _ := m.notificationCentreMouseEvent(wheel); !handled {
+		t.Fatal("flush notch was not handled")
+	}
+	if got := m.notificationCentreScroll; got != 3*mouse.WheelScrollLines {
+		t.Fatalf("scroll after flush = %d, want the held notch plus the flush (%d)", got, 3*mouse.WheelScrollLines)
+	}
+}
+
+func TestCentreScrollbarAppearsOnlyWhenTheBodyScrolls(t *testing.T) {
+	short := centreTestModel(t, &sizingPlugin{id: "files"})
+	postCentreNotification(t, &short, notify.SourceTasks, "one")
+	short.toggleNotificationCentre()
+	height := short.contentHeight()
+	panelWidth := short.notificationCentrePanelWidth()
+	inner, _, _, bodyHeight := notificationCentreLayout(panelWidth, height)
+	scrollbarCol := 2 + inner
+	shortPanel := short.renderNotificationCentre(height)
+	shortLines := strings.Split(shortPanel, "\n")
+	if len(shortLines) < 3+bodyHeight {
+		t.Fatalf("short panel has %d lines, want at least %d", len(shortLines), 3+bodyHeight)
+	}
+	for i := 0; i < bodyHeight; i++ {
+		if cell := visualCell(shortLines[3+i], scrollbarCol); cell != ' ' {
+			t.Fatalf("short list body row %d scrollbar cell = %q, want a spacer", i, cell)
+		}
+	}
+
+	long := fillCentreList(t, 50)
+	longPanel := long.renderNotificationCentre(height)
+	longLines := strings.Split(longPanel, "\n")
+	thumbs, tracks := 0, 0
+	for i := 0; i < bodyHeight; i++ {
+		switch visualCell(longLines[3+i], scrollbarCol) {
+		case '┃':
+			thumbs++
+		case '│':
+			tracks++
+		}
+	}
+	if thumbs == 0 || tracks == 0 {
+		t.Fatalf("long list scrollbar thumbs=%d tracks=%d, want both", thumbs, tracks)
+	}
+}
+
+func TestCentreKeysKeepTheCursorOnScreen(t *testing.T) {
+	m := fillCentreList(t, 50)
+	bounds := m.notificationCentreScrollBounds()
+	if bounds.Maximum <= 0 {
+		t.Fatal("list is not long enough to need cursor-follow scrolling")
+	}
+	for i := 0; i < 40; i++ {
+		m.handleKeyMsg(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	}
+	if m.notificationCentreScroll == 0 {
+		t.Fatal("j/k did not scroll the body to keep the cursor visible")
+	}
+	if m.notificationCentreScroll > bounds.Maximum {
+		t.Fatalf("scroll = %d, past max %d", m.notificationCentreScroll, bounds.Maximum)
+	}
+}
+
+func TestFilterInputDropsCentreInertiaAndIgnoresThePluginUnderneath(t *testing.T) {
+	p := &wheelBoundaryPlugin{atBoundary: true, lastY: -1}
+	m := fillCentreList(t, 50)
+	if err := m.registry.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	for i, pl := range m.registry.Plugins() {
+		if pl.ID() == p.ID() {
+			m.activePlugin = i
+			break
+		}
+	}
+
+	up := centreWheel(m, false)
+	if got := FilterInput(m, up); got != nil {
+		t.Fatal("upward inertia at the top of the centre reached Update")
+	}
+	if p.lastY != -1 {
+		t.Fatalf("plugin was asked about a wheel over the centre, Y=%d", p.lastY)
+	}
+
+	down := centreWheel(m, true)
+	if got := FilterInput(m, down); got == nil {
+		t.Fatal("a downward wheel on a scrollable centre was dropped")
+	}
+	if p.lastY != -1 {
+		t.Fatalf("plugin was asked about a movable centre wheel, Y=%d", p.lastY)
+	}
+
+	scrolltest.Run(t, scrolltest.Tail{
+		Name: "notification-centre top",
+		X:    up.X,
+		Y:    up.Y,
+		Down: false,
+		Dropped: func(msg tea.MouseWheelMsg) bool {
+			return FilterInput(m, msg) == nil
+		},
+	})
+
+	m.notificationCentreScroll = m.notificationCentreScrollBounds().Maximum
+	bottom := centreWheel(m, true)
+	scrolltest.Run(t, scrolltest.Tail{
+		Name: "notification-centre bottom",
+		X:    bottom.X,
+		Y:    bottom.Y,
+		Down: true,
+		Dropped: func(msg tea.MouseWheelMsg) bool {
+			return FilterInput(m, msg) == nil
+		},
+	})
+
+	p.atBoundary = false
+	p.lastY = -1
+	content := tea.MouseWheelMsg{X: 10, Y: headerHeight + 5, Button: tea.MouseWheelDown}
+	if got := FilterInput(m, content); got == nil {
+		t.Fatal("a wheel over the content column was swallowed by the open centre")
+	}
+	if p.lastY != 5 {
+		t.Fatalf("plugin Y after a content-column wheel = %d, want header-adjusted 5", p.lastY)
+	}
+}
+
+func TestCentreBoundaryWheelClearsAHeldBurst(t *testing.T) {
+	m := fillCentreList(t, 50)
+	at := time.Unix(300, 0)
+	m.notificationCentreNow = func() time.Time { return at }
+	m.notificationCentreWheel.Add(mouse.WheelScrollLines, at)
+	m.notificationCentreWheel.Add(mouse.WheelScrollLines, at.Add(time.Millisecond))
+	if m.notificationCentreWheel.Pending() == 0 {
+		t.Fatal("test premise: burst has no held delta")
+	}
+
+	m.notificationCentreScroll = m.notificationCentreScrollBounds().Maximum
+	if bounded, over := m.notificationCentreWheelAtBoundary(centreWheel(m, true)); !over || !bounded {
+		t.Fatalf("bottom downward wheel bounded=%v over=%v, want both true", bounded, over)
+	}
+	if pending := m.notificationCentreWheel.Pending(); pending != 0 {
+		t.Fatalf("held delta survived boundary drop: %d", pending)
+	}
+	if bounded, _ := m.notificationCentreWheelAtBoundary(centreWheel(m, false)); bounded {
+		t.Fatal("wheel back into the list was dropped")
 	}
 }
