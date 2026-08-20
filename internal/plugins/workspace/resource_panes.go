@@ -168,28 +168,6 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
 }
 
-// attachResourcePane points the content behind leafID at ref. Focus, the
-// open-or-focus decision and the persist all belong to the shared pane, so
-// this host cannot answer a second click differently from the first.
-func (p *Plugin) attachResourcePane(leafID int, root, surface string, ref resourceview.Ref, fromTerminal bool) tea.Cmd {
-	if p.ctx == nil || !ref.Valid() {
-		return nil
-	}
-	if p.resources == nil {
-		p.resources = make(map[int]*resourcePane)
-	}
-	res := p.resources[leafID]
-	if res == nil {
-		res = p.newResourcePane(leafID, root, surface)
-		p.resources[leafID] = res
-	}
-	res.root, res.surface = root, surface
-	if fromTerminal {
-		return res.pane.ActivateFromTerminal(ref)
-	}
-	return res.pane.Activate(ref)
-}
-
 // applyResourceResolved delivers a resolve to the tab that asked for it. The
 // epoch check is the document pane's: a result that outlived its project has
 // nowhere to land. Routing past that is the shared pane's model-ID and
@@ -322,13 +300,6 @@ func (p *Plugin) hideResourcePane() tea.Cmd {
 // sibling.
 func (p *Plugin) closeResourcePane(leafID int) tea.Cmd {
 	return p.forgetContentPane(leafID)
-}
-
-// reopenHiddenResourcePane rebuilds a hidden split at the last ratio so a
-// resource click can focus or append against the remembered set.
-func (p *Plugin) reopenHiddenResourcePane() tea.Cmd {
-	res, _ := p.activeResourcePane()
-	return p.reopenHiddenContentPane(PaneResource, res != nil, paneLayoutHasResourceTabs, contentKindResource, "Resource")
 }
 
 // encodeResourceTabs is the reference-only projection this surface writes.

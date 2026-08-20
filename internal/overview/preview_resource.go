@@ -176,21 +176,6 @@ func (m *Model) openPreviewResourceRef(ref resourceview.Ref, fromTerminal bool) 
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
 }
 
-// ensurePreviewResource returns the pane bound to this workspace row, building
-// one if the row has none. A row change builds a fresh pane rather than
-// retargeting the old one, so the epoch that scopes answers changes with it.
-func (m *Model) ensurePreviewResource(workspaceID string) *previewResource {
-	if res := m.preview.resource; res != nil && res.surface == workspaceID {
-		return res
-	}
-	res := &previewResource{surface: workspaceID, epoch: m.nextPreviewContentEpoch()}
-	res.tabs = resourceview.NewTabs(nil, m.previewResourceResolver(workspaceID, res.epoch))
-	res.tabs.SetEpoch(res.epoch)
-	res.pane = resourceview.NewPane(res.tabs, previewResourceHost{m: m, res: res})
-	m.preview.resource = res
-	return res
-}
-
 // previewResourceResolver wraps the host-supplied resolver so every answer
 // carries the surface and epoch it was asked from. resourceview's Resolver
 // signature does not carry either — the view checks only model ID and
@@ -271,17 +256,6 @@ func (m *Model) closePreviewResource() tea.Cmd {
 		return m.syncTerminalGeometry()
 	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
-}
-
-// forgetPreviewResource drops the in-memory tab set for workspaceID. Global
-// resource tabs are not written to disk; q/esc and last-x must not leave a
-// cache entry that a later row switch would restore.
-func (m *Model) forgetPreviewResource(workspaceID string) {
-	m.preview.resource = nil
-	if cached, ok := m.preview.paneCache[workspaceID]; ok {
-		cached.resource = nil
-		m.preview.paneCache[workspaceID] = cached
-	}
 }
 
 func (m *Model) closePreviewResourceTab() tea.Cmd {

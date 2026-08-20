@@ -355,13 +355,6 @@ func (p *Plugin) hideIssuePane() tea.Cmd {
 	return p.hideContentPane(leaf.ID)
 }
 
-// reopenHiddenIssuePane rebuilds a hidden split at the last ratio so an issue
-// click can focus or append against the remembered set.
-func (p *Plugin) reopenHiddenIssuePane() tea.Cmd {
-	issue, _ := p.activeIssuePane()
-	return p.reopenHiddenContentPane(PaneIssue, issue != nil, paneLayoutHasIssueTabs, contentKindIssue, "Issue")
-}
-
 func (p *Plugin) ensureActiveIssueTabLoaded(issue *issuePane) tea.Cmd {
 	if issue == nil || p.ctx == nil {
 		return nil

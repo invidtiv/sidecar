@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
@@ -13,7 +12,6 @@ import (
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
@@ -424,23 +422,6 @@ func (m *Model) closePreviewDocTab() tea.Cmd {
 	return m.finishPreviewDeckClose()
 }
 
-func (m *Model) ensurePreviewDocTabLoaded() tea.Cmd {
-	doc := m.preview.doc
-	if doc == nil {
-		return nil
-	}
-	view := doc.view()
-	if view == nil || !view.NeedsLoad() {
-		return nil
-	}
-	rendered := view.Rendered()
-	wrap := view.Wrap()
-	cmd := view.Load(doc.allocID(), doc.root, view.Title(), 0, doc.epoch)
-	view.SetRendered(rendered)
-	view.SetWrap(wrap)
-	return cmd
-}
-
 func openPreviewFile(root, display, abs string) (*os.File, error) {
 	if display != "" && !filepath.IsAbs(filepath.FromSlash(display)) {
 		return terminallink.OpenRegular(filepath.Join(root, filepath.FromSlash(display)))
@@ -600,44 +581,6 @@ func (m *Model) lastPreviewBoxes() map[int]panelayout.Box {
 		boxes[leaf.Node.ID] = leaf.Box
 	}
 	return boxes
-}
-
-func (m *Model) ensurePreviewPane(kind panelayout.Kind, name string) (int, tea.Cmd) {
-	if m.preview.paneRoot == nil {
-		m.resetActivePreviewPanes()
-	}
-	plan, ok := panelayout.PlanOpen(m.preview.paneRoot, kind, m.lastPreviewBoxes())
-	if !ok {
-		return 0, nil
-	}
-	plan = panelayout.ApplyAxisOverride(plan, m.openSplit)
-	if plan.Retarget != 0 {
-		return plan.Retarget, nil
-	}
-	peer, ok := m.previewPeerBox()
-	if !ok {
-		return 0, nil
-	}
-	id := m.preview.paneNextID
-	trial := panelayout.Clone(m.preview.paneRoot)
-	trial, focus := panelayout.SplitLeaf(trial, plan.Split, plan.Axis, &panelayout.Node{ID: id, Kind: kind, ContentID: id})
-	if focus != id {
-		return 0, nil
-	}
-	if _, _, fits := panelayout.LayoutPanes(trial, peer, previewPaneFloors()); !fits {
-		dimension := "wider"
-		if plan.Axis == panelayout.Rows {
-			dimension = "taller"
-		}
-		return 0, appmsg.ShowToast(name+" pane needs a "+dimension+" window; layout left unchanged", 3*time.Second)
-	}
-	m.preview.paneRoot, focus = panelayout.SplitLeaf(m.preview.paneRoot, plan.Split, plan.Axis, &panelayout.Node{ID: id, Kind: kind, ContentID: id})
-	if focus != id {
-		return 0, nil
-	}
-	m.preview.paneFocus = focus
-	m.preview.paneNextID = panelayout.MaxID(m.preview.paneRoot) + 1
-	return id, nil
 }
 
 // layoutPreviewPanes places the tree in peer, a surface-local OUTER rectangle.

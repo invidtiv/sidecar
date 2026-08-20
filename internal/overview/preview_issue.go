@@ -38,7 +38,6 @@ type previewIssue struct {
 	surface string
 	focused bool
 	epoch   uint64
-	nextID  int
 }
 
 func (i *previewIssue) view() *issueview.Model {
@@ -46,11 +45,6 @@ func (i *previewIssue) view() *issueview.Model {
 		return nil
 	}
 	return i.tabs.ActiveView()
-}
-
-func (i *previewIssue) allocID() int {
-	i.nextID++
-	return i.nextID
 }
 
 // previewIssueLoadedMsg adds workspace identity to issueview's own request
@@ -68,45 +62,6 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 		return nil
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")
-}
-
-func (m *Model) newPreviewIssueModel(issue *previewIssue) *issueview.Model {
-	view := issueview.New(nil)
-	view.OpenHandler = func(id string) tea.Cmd {
-		if m.preview.issue != issue {
-			return nil
-		}
-		return m.openOrFocusPreviewIssue(issue, id)
-	}
-	// O asks the app for the same jump the project issue pane and the preview
-	// modal make. This surface cannot reach the app's plugins itself, so it
-	// raises the request and the app performs the one jump.
-	view.OpenInTDHandler = func(id string) tea.Cmd {
-		if id == "" {
-			return nil
-		}
-		return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} }
-	}
-	return view
-}
-
-// openOrFocusPreviewIssue selects an existing tab or appends a fresh model
-// and loads it. A unique model ID is allocated per new tab so a late result
-// cannot land on whichever tab is now active.
-func (m *Model) openOrFocusPreviewIssue(issue *previewIssue, issueID string) tea.Cmd {
-	issueID = issueview.NormalizeID(issueID)
-	if issue == nil || issueID == "" {
-		return nil
-	}
-	if idx := issue.tabs.Find(issueID); idx >= 0 {
-		issue.tabs.Select(idx)
-		return nil
-	}
-	view := m.newPreviewIssueModel(issue)
-	if _, created := issue.tabs.OpenOrFocus(issueID, view); !created {
-		return nil
-	}
-	return wrapPreviewIssueLoad(view.Load(issue.allocID(), issue.root, issueID, issue.epoch), issue.surface)
 }
 
 func wrapPreviewIssueLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
@@ -172,17 +127,6 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 		return m.syncTerminalGeometry()
 	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
-}
-
-// forgetPreviewIssue drops the in-memory tab set for workspaceID. Global
-// issue tabs are not written to disk; q/esc and last-x must not leave a
-// cache entry that a later row switch would restore.
-func (m *Model) forgetPreviewIssue(workspaceID string) {
-	m.preview.issue = nil
-	if cached, ok := m.preview.paneCache[workspaceID]; ok {
-		cached.issue = nil
-		m.preview.paneCache[workspaceID] = cached
-	}
 }
 
 func (m *Model) closePreviewIssueTab() tea.Cmd {

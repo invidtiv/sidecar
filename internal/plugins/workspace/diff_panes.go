@@ -379,11 +379,6 @@ func (p *Plugin) hideDiffPane() tea.Cmd {
 	return p.hideContentPane(leaf.ID)
 }
 
-func (p *Plugin) reopenHiddenDiffPane() tea.Cmd {
-	diff, _ := p.activeDiffPane()
-	return p.reopenHiddenContentPane(PaneDiff, diff != nil, paneLayoutHasDiffTabs, contentKindDiff, "Diff")
-}
-
 func (p *Plugin) ensureActiveDiffTabLoaded(diff *diffPane) tea.Cmd {
 	if diff == nil || p.ctx == nil {
 		return nil

@@ -9,7 +9,6 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/ui"
@@ -50,77 +49,6 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
 	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff")
-}
-
-func (m *Model) newPreviewDiffView(target workspacediff.Target) *workspacediff.View {
-	view := &workspacediff.View{
-		Target:   target,
-		ViewMode: m.diff.ViewMode,
-		State:    workspacediff.LoadStateLoading,
-	}
-	if target.Kind == workspacediff.TargetCommit {
-		view.Focus = workspacediff.FocusCommitFiles
-	}
-	if w := state.GetDiffTabFileListWidth(); w > 0 {
-		view.SetListWidth(w)
-	}
-	return view
-}
-
-func (m *Model) openOrFocusPreviewDiff(diff *previewDiff, target workspacediff.Target, workspaceID string) tea.Cmd {
-	if diff == nil || target.Identity() == "" {
-		return nil
-	}
-	if idx := diff.tabs.Find(target.Identity()); idx >= 0 {
-		diff.tabs.Select(idx)
-		return m.ensurePreviewDiffLoaded(diff, workspaceID)
-	}
-	view := m.newPreviewDiffView(target)
-	if _, created := diff.tabs.OpenOrFocus(target, view); !created {
-		return m.ensurePreviewDiffLoaded(diff, workspaceID)
-	}
-	return m.loadPreviewDiffView(view, diff.root, workspaceID)
-}
-
-func (m *Model) ensurePreviewDiffLoaded(diff *previewDiff, workspaceID string) tea.Cmd {
-	if diff == nil {
-		return nil
-	}
-	view := diff.view()
-	if view == nil {
-		return nil
-	}
-	if view.State != workspacediff.LoadStateUnknown && view.State != workspacediff.LoadStateLoading && view.State != workspacediff.LoadStateError {
-		return nil
-	}
-	return m.loadPreviewDiffView(view, diff.root, workspaceID)
-}
-
-func (m *Model) loadPreviewDiffView(view *workspacediff.View, root, workspaceID string) tea.Cmd {
-	if view == nil {
-		return nil
-	}
-	view.Bind(root, workspaceID, m.preview.contentEpoch)
-	view.State = workspacediff.LoadStateLoading
-	switch view.Target.Kind {
-	case workspacediff.TargetCommit:
-		// A tab with nothing to load must not be left on "Loading" forever.
-		if view.Target.A == "" {
-			view.State = workspacediff.LoadStateError
-			view.Error = "commit tab has no commit"
-			return nil
-		}
-		return view.LoadCommit(view.Target.A)
-	case workspacediff.TargetRange:
-		if cmd := view.LoadRange(); cmd != nil {
-			return cmd
-		}
-		view.State = workspacediff.LoadStateError
-		view.Error = "range tab has no revisions"
-		return nil
-	default:
-		return workspacediff.LoadSnapshotCmdAt(root, "", workspaceID, m.preview.contentEpoch, view.Target.Identity())
-	}
 }
 
 func (m *Model) applyPreviewDiffSnapshot(msg workspacediff.SnapshotMsg) tea.Cmd {
@@ -223,14 +151,6 @@ func (m *Model) closePreviewDiff() tea.Cmd {
 		return m.syncTerminalGeometry()
 	}
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
-}
-
-func (m *Model) forgetPreviewDiff(workspaceID string) {
-	m.preview.diff = nil
-	if cached, ok := m.preview.paneCache[workspaceID]; ok {
-		cached.diff = nil
-		m.preview.paneCache[workspaceID] = cached
-	}
 }
 
 func (m *Model) closePreviewDiffTab() tea.Cmd {

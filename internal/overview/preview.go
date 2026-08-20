@@ -302,11 +302,6 @@ func (m *Model) resetActivePreviewPanes() {
 	m.preview.paneDragSplitID = 0
 }
 
-func (m *Model) nextPreviewContentEpoch() uint64 {
-	m.preview.contentEpoch++
-	return m.preview.contentEpoch
-}
-
 func (m *Model) stashPreviewPanes() {
 	if m.preview.workspaceID == "" || m.preview.paneRoot == nil {
 		return
