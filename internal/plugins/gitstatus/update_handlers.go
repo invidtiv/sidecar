@@ -225,7 +225,6 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		}
 
 	case "r":
-		p.pushError = "" // Clear any stale push error
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
 
 	case "S":
@@ -362,8 +361,6 @@ func (p *Plugin) updateStatus(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 			// Fetch from remote
 			if !p.fetchInProgress {
 				p.fetchInProgress = true
-				p.fetchError = ""
-				p.fetchSuccess = false
 				return p, p.doFetch()
 			}
 		}
@@ -1199,8 +1196,6 @@ func (p *Plugin) executePullMenuAction(actionID string) (plugin.Plugin, tea.Cmd)
 	}
 	p.viewMode = p.pullMenuReturnMode
 	p.pullInProgress = true
-	p.pullError = ""
-	p.pullSuccess = false
 	p.clearPullModal()
 
 	switch actionID {
@@ -1285,8 +1280,6 @@ func (p *Plugin) executePushMenuAction(idx int) (plugin.Plugin, tea.Cmd) {
 	}
 	p.viewMode = p.pushMenuReturnMode
 	p.pushInProgress = true
-	p.pushError = ""
-	p.pushSuccess = false
 	p.pushMenuFocus = 0
 	p.clearPushMenuModal()
 

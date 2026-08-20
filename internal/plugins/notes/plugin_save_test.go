@@ -888,7 +888,7 @@ func TestNewExternalPreparationPreservesFailedActiveExport(t *testing.T) {
 	}
 }
 
-func TestSlowRetainedExportShowsSavingFooter(t *testing.T) {
+func TestSlowRetainedExportShowsNoSavingFooter(t *testing.T) {
 	p, a, _ := newTwoNoteSavePlugin(t)
 	blocked := newBlockingStore(p.store)
 	p.store = blocked
@@ -900,9 +900,12 @@ func TestSlowRetainedExportShowsSavingFooter(t *testing.T) {
 	result := make(chan tea.Msg, 1)
 	go func() { result <- cmd() }()
 	<-blocked.started
-	status, isErr := p.FooterStatus()
-	if isErr || !strings.Contains(status, "saving") {
-		t.Fatalf("slow export footer = %q error=%v", status, isErr)
+	if !p.exportSaveInFlight {
+		t.Fatal("slow export did not register as in flight")
+	}
+	// An in-flight save is routine: it must not claim the footer.
+	if status, isErr := p.FooterStatus(); status != "" || isErr {
+		t.Fatalf("slow export footer = %q error=%v, want empty", status, isErr)
 	}
 	close(blocked.release)
 	drainNotesMsg(t, p, <-result)

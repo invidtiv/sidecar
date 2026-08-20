@@ -124,9 +124,6 @@ func (p *Plugin) dismissErrorModal() (plugin.Plugin, tea.Cmd) {
 	p.errorModalWidth = 0
 	p.errorModalHeight = 0
 	p.errorOfferPull = false
-	p.pushError = ""
-	p.fetchError = ""
-	p.pullError = ""
 	return p, nil
 }
 
@@ -138,9 +135,6 @@ func (p *Plugin) errorModalToPullMenu() (plugin.Plugin, tea.Cmd) {
 	p.errorModal = nil
 	p.errorModalWidth = 0
 	p.errorModalHeight = 0
-	p.pushError = ""
-	p.fetchError = ""
-	p.pullError = ""
 	p.errorOfferPull = false
 	// Open pull menu
 	p.pullMenuReturnMode = ViewModeStatus

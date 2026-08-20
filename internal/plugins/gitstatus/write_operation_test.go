@@ -10,7 +10,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -278,16 +279,22 @@ func TestWriteFailurePreservesSnapshotAndReportsDetail(t *testing.T) {
 
 	_, cmd := p.updateStatus(tea.KeyPressMsg{Code: 's', Text: "s"})
 	result := cmd().(operationResultMsg)
-	_, toastCmd := p.Update(result)
-	toast := toastCmd().(app.ToastMsg)
+	_, alertCmd := p.Update(result)
+	post, ok := alertCmd().(notify.PostMsg)
+	if !ok {
+		t.Fatalf("write failure did not file a notification: %T", alertCmd())
+	}
 	if p.activeOperation != nil {
 		t.Fatal("failed operation remained busy")
 	}
 	if len(p.tree.Modified) != 1 || p.tree.Modified[0] != entry {
 		t.Fatal("failure changed the displayed snapshot")
 	}
-	if !strings.Contains(toast.Message, "hook rejected the file") || !strings.Contains(p.operationError, "hook rejected the file") {
-		t.Fatalf("failure detail missing: toast=%q state=%q", toast.Message, p.operationError)
+	if post.Notification.Source != notify.SourceSession || post.Notification.Severity != notify.SeverityError {
+		t.Fatalf("write failure notification = %s/%s, want session/error", post.Notification.Source, post.Notification.Severity)
+	}
+	if !strings.Contains(post.Notification.Title, "hook rejected the file") || !strings.Contains(p.operationError, "hook rejected the file") {
+		t.Fatalf("failure detail missing: alert=%q state=%q", post.Notification.Title, p.operationError)
 	}
 }
 
@@ -404,5 +411,53 @@ func TestWriteBusyNoticeIsLeasedNotSticky(t *testing.T) {
 	}
 	if n.Sticky || n.ExpiresAt == nil {
 		t.Fatalf("refusal must expire on its own: sticky=%v expires=%v", n.Sticky, n.ExpiresAt)
+	}
+}
+
+// A successful push confirms itself with a flash and leaves no sidebar echo.
+func TestPushSuccessFlashesAndPaintsNoSidebarLine(t *testing.T) {
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		ctx:          &plugin.Context{},
+		tree:         &FileTree{},
+		sidebarWidth: 40,
+		mouseHandler: handler,
+		hasRepo:      true,
+	}
+	p.pushInProgress = true
+
+	_, cmd := p.Update(PushSuccessMsg{})
+	if cmd == nil {
+		t.Fatal("push success produced no command")
+	}
+	if p.pushInProgress {
+		t.Fatal("push success left the in-flight flag set")
+	}
+
+	var flashed bool
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		switch m := c().(type) {
+		case tea.BatchMsg:
+			for _, sub := range m {
+				walk(sub)
+			}
+		case appmsg.FlashMsg:
+			if strings.Contains(m.Text, "Pushed") {
+				flashed = true
+			}
+		}
+	}
+	walk(cmd)
+	if !flashed {
+		t.Fatal("push success did not flash")
+	}
+
+	sidebar := p.renderSidebar(20)
+	if strings.Contains(sidebar, "Pushed") {
+		t.Fatalf("push success painted a sidebar line:\n%s", sidebar)
 	}
 }

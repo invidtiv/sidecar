@@ -13,6 +13,8 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
 	"github.com/marcus/sidecar/internal/state"
@@ -121,11 +123,8 @@ type Plugin struct {
 	// Push status state
 	pushStatus              *PushStatus
 	pushInProgress          bool
-	pushError               string
-	pushSuccess             bool      // Show success indicator after push
-	pushSuccessTime         time.Time // When to auto-clear success
-	pushMenuReturnMode      ViewMode  // Mode to return to when push menu closes
-	pushMenuFocus           int       // 0=push, 1=force, 2=upstream
+	pushMenuReturnMode      ViewMode // Mode to return to when push menu closes
+	pushMenuFocus           int      // 0=push, 1=force, 2=upstream
 	pushMenuModal           *modal.Modal
 	pushMenuModalWidth      int
 	pushPreservedCommitHash string // Hash of selected commit when push started
@@ -225,10 +224,6 @@ type Plugin struct {
 	// Fetch/Pull state
 	fetchInProgress bool
 	pullInProgress  bool
-	fetchSuccess    bool
-	pullSuccess     bool
-	fetchError      string
-	pullError       string
 
 	// History search state (/ in commit section)
 	historySearchState *HistorySearchState
@@ -486,9 +481,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Err != nil {
 			p.operationSelection = selectionIdentity{}
 			p.operationError = msg.Err.Error()
-			return p, func() tea.Msg {
-				return app.ToastMsg{Message: titleCase(string(msg.Kind)) + " failed: " + msg.Err.Error(), Duration: 4 * time.Second, IsError: true}
-			}
+			return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, titleCase(string(msg.Kind))+" failed: "+msg.Err.Error())
 		}
 		p.operationError = ""
 		return p, p.refresh()
@@ -838,29 +831,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		p.pushInProgress = false
-		p.pushError = ""
-		p.pushSuccess = true
-		p.pushSuccessTime = time.Now()
-		// Refresh to show updated push status
+		// The status view shows the result; the confirmation is a flash.
 		// Note: pushPreservedCommitHash will be used by RecentCommitsLoadedMsg to restore cursor
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPushSuccessAfterDelay())
+		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), app.ShowFlash("Pushed"))
 
 	case PushErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.pushInProgress = false
-		p.pushError = msg.Err.Error()
 		p.pushPreservedCommitHash = "" // Clear stale hash on error
 		if isPushRejectedError(msg.Err) {
 			p.errorOfferPull = true
 		}
 		p.showErrorModal("Push Failed", msg.Err)
-		return p, p.loadRecentCommits()
-
-	case PushSuccessClearMsg:
-		p.pushSuccess = false
-		return p, nil
+		return p, tea.Batch(p.loadRecentCommits(), appmsg.Alert(notify.SourceSession, notify.SeverityError, "Push failed: "+msg.Err.Error()))
 
 	case StashResultMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -925,28 +910,23 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		p.fetchInProgress = false
-		p.fetchSuccess = true
-		p.fetchError = ""
 		// Refresh to show updated ahead/behind
-		return p, tea.Batch(p.loadRecentCommits(), p.clearFetchSuccessAfterDelay())
+		return p, tea.Batch(p.loadRecentCommits(), app.ShowFlash("Fetched"))
 
 	case FetchErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.fetchInProgress = false
-		p.fetchError = msg.Err.Error()
 		p.showErrorModal("Fetch Failed", msg.Err)
-		return p, nil
+		return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Fetch failed: "+msg.Err.Error())
 
 	case PullSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
 		}
 		p.pullInProgress = false
-		p.pullSuccess = true
-		p.pullError = ""
-		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), p.clearPullSuccessAfterDelay())
+		return p, tea.Batch(p.refresh(), p.loadRecentCommits(), app.ShowFlash("Pulled"))
 
 	case PullErrorMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -967,9 +947,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				return p, nil
 			}
 		}
-		p.pullError = msg.Err.Error()
 		p.showErrorModal("Pull Failed", msg.Err)
-		return p, nil
+		return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Pull failed: "+msg.Err.Error())
 
 	case StashErrorMsg:
 		p.showErrorModal("Stash Failed", msg.Err)
@@ -982,16 +961,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.pullInProgress = false
 		p.pullConflictFiles = nil
 		p.pullConflictType = ""
-		p.pullError = ""
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
-
-	case FetchSuccessClearMsg:
-		p.fetchSuccess = false
-		return p, nil
-
-	case PullSuccessClearMsg:
-		p.pullSuccess = false
-		return p, nil
 
 	case RepoDetectedMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -1654,9 +1624,6 @@ type PushStatusLoadedMsg struct {
 	Status *PushStatus
 }
 
-// PushSuccessClearMsg is sent to clear the push success indicator.
-type PushSuccessClearMsg struct{}
-
 // StashResultMsg is sent when a stash operation completes.
 type StashResultMsg struct {
 	Epoch     uint64
@@ -1732,12 +1699,6 @@ type StashErrorMsg struct {
 	Err error
 }
 
-// FetchSuccessClearMsg is sent to clear the fetch success indicator.
-type FetchSuccessClearMsg struct{}
-
-// PullSuccessClearMsg is sent to clear the pull success indicator.
-type PullSuccessClearMsg struct{}
-
 // initCommitTextarea initializes the commit message textarea.
 func (p *Plugin) initCommitTextarea() {
 	p.commitMessage = textarea.New()
@@ -1762,27 +1723,6 @@ func (p *Plugin) initCommitTextarea() {
 	p.commitButtonHover = false
 	p.commitModal = nil
 	p.commitModalWidthCache = 0
-}
-
-// clearPushSuccessAfterDelay returns a command that clears the push success indicator after 3 seconds.
-func (p *Plugin) clearPushSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return PushSuccessClearMsg{}
-	})
-}
-
-// clearFetchSuccessAfterDelay returns a command that clears the fetch success indicator after 3 seconds.
-func (p *Plugin) clearFetchSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return FetchSuccessClearMsg{}
-	})
-}
-
-// clearPullSuccessAfterDelay returns a command that clears the pull success indicator after 3 seconds.
-func (p *Plugin) clearPullSuccessAfterDelay() tea.Cmd {
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-		return PullSuccessClearMsg{}
-	})
 }
 
 // confirmStashPop fetches the latest stash and shows the confirm modal.

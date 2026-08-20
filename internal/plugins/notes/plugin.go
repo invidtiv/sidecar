@@ -1303,9 +1303,7 @@ func (p *Plugin) FooterStatus() (string, bool) {
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
-	if p.saveInFlight || p.exportSaveInFlight {
-		return "notes: saving…", false
-	}
+	// An in-flight save is routine and self-resolving: no status line.
 	return "", false
 }
 
