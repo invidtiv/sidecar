@@ -456,11 +456,21 @@ transitions: agent finished (`✓ SESSION`, pass/fail colour), agent waiting
 (`? WAITING`, sticky — no countdown, "stays"), session died. Debounce so a
 flapping status doesn't spam. Workspace list icons are untouched; the
 per-source config (Phase 4) is the off-switch for users who don't want both.
+Also in Phase 2 (decided 2026-08-19): **`tab` cycles focus through the open
+centre like any other pane.** With the centre open, the app-level focus cycle
+includes it as a stop — tab into it, tab onward back into content — exactly as
+other panes participate. This replaces the Phase 1 decision to leave `tab`
+unclaimed; `alt+n`/`N`/click remain as direct routes. (When a collapsed toast
+is on screen, its `tab expand` (1b) must not fight the focus cycle — prefer a
+different expand key if both can be live at once.)
 
-**Phase 3 — stacking + reveal.** Max 3 toasts, newest pushes others down;
-same-source collapse to `×N` with peek line and `tab` expand (1b).
+**Phase 3 — stacking + reveal.** Max 3 toasts on screen, newest on top;
+posts beyond 3 **queue** (macOS-style, decided 2026-08-19) and surface as
+slots free, oldest queued first. Same-source collapse to `×N` with peek line
+and expand (1b) — this is also where repeated `waiting` refusals dedupe.
 `internal/reveal` row machine per the 1h spec; wire toast entry/exit through
-it. Suppress-while-pane-resizing guard.
+it (adopt `flashAnimated()`'s degraded-terminal check via a shared home).
+Suppress-while-pane-resizing guard.
 
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
