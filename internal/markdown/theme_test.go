@@ -270,3 +270,30 @@ func TestCurrentThemeSnapshotFollowsActiveTheme(t *testing.T) {
 		t.Errorf("Renderer.StyleKey() = %q, want %q", r.StyleKey(), keyB)
 	}
 }
+
+// TestExplicitMarkdownThemePathPreservesCase pins the fix for a style-file path
+// being lowercased before it reached the filesystem, which silently disabled
+// the documented override on case-sensitive filesystems.
+func TestExplicitMarkdownThemePathPreservesCase(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "MixedCase-Style.json")
+	if err := os.WriteFile(path, []byte(`{"document":{"color":"#123456"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pal := testPaletteA()
+	pal.MarkdownTheme = "  " + path + "  "
+	cfg, key := BuildStyle(ThemeSnapshot{Palette: pal})
+	if !strings.Contains(key, "file:") {
+		t.Fatalf("style key = %q, want file hash", key)
+	}
+	if deref(t, "document", cfg.Document.Color) != "#123456" {
+		t.Error("style file contents were not used")
+	}
+
+	// Preset names stay case-insensitive for dark/light only.
+	pal.MarkdownTheme = "DARK"
+	if _, key := BuildStyle(ThemeSnapshot{Palette: pal}); !strings.HasPrefix(key, "palette|dark|") {
+		t.Errorf("style key = %q, want palette dark", key)
+	}
+}

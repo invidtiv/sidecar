@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"charm.land/glamour/v2/ansi"
 	glamourstyles "charm.land/glamour/v2/styles"
@@ -60,7 +62,13 @@ func (s ThemeSnapshot) build() (ansi.StyleConfig, string) {
 // computes the style key without building the palette-derived config.
 func (s ThemeSnapshot) resolve() (mode, chromaTheme, key string, override *ansi.StyleConfig) {
 	c := s.Palette
-	mode = strings.ToLower(strings.TrimSpace(c.MarkdownTheme))
+	// Keep the original spelling: it may be a path on a case-sensitive
+	// filesystem. Only the dark/light comparison is case-insensitive.
+	raw := strings.TrimSpace(c.MarkdownTheme)
+	mode = raw
+	if lower := strings.ToLower(raw); lower == "dark" || lower == "light" {
+		mode = lower
+	}
 
 	if mode != "dark" && mode != "light" && mode != "" {
 		if cfg, keyExtra, ok := explicitStyle(mode); ok {
@@ -79,21 +87,70 @@ func (s ThemeSnapshot) resolve() (mode, chromaTheme, key string, override *ansi.
 	return mode, chromaTheme, paletteKey(c, mode, chromaTheme), nil
 }
 
+// overrideEntry caches a resolved file-backed override. StyleKey is called
+// several times per frame — twice per visible conversation message — so
+// re-reading and re-parsing the style file on every call is a real cost on
+// machines running an endpoint security agent. A cached entry is revalidated
+// with a single os.Stat (mtime+size) instead.
+type overrideEntry struct {
+	cfg      ansi.StyleConfig
+	keyExtra string
+	ok       bool
+
+	modTime  time.Time
+	size     int64
+	fromFile bool
+}
+
+var (
+	overrideMu    sync.Mutex
+	overrideCache = map[string]overrideEntry{}
+)
+
 // explicitStyle resolves a nonstandard markdownTheme value as a full-style
 // override: a registered Glamour preset name, or a JSON style file on disk.
+// File-backed overrides are cached and revalidated by mtime+size.
 func explicitStyle(name string) (ansi.StyleConfig, string, bool) {
 	if preset, ok := glamourstyles.DefaultStyles[name]; ok && preset != nil {
 		return copyStyle(*preset), "preset", true
 	}
+
+	overrideMu.Lock()
+	defer overrideMu.Unlock()
+
+	if entry, cached := overrideCache[name]; cached {
+		info, err := os.Stat(name)
+		switch {
+		// A file written within the last couple of seconds is re-read even if
+		// mtime and size match: a same-size rewrite inside the filesystem's
+		// timestamp resolution is otherwise invisible.
+		case err == nil && entry.fromFile &&
+			info.ModTime().Equal(entry.modTime) && info.Size() == entry.size &&
+			time.Since(info.ModTime()) > 2*time.Second:
+			return entry.cfg, entry.keyExtra, entry.ok
+		case err != nil && !entry.fromFile:
+			// Still unreadable; the cached negative result stands.
+			return entry.cfg, entry.keyExtra, entry.ok
+		}
+	}
+
+	var entry overrideEntry
 	data, err := os.ReadFile(name)
-	if err != nil {
-		return ansi.StyleConfig{}, "", false
+	if err == nil {
+		var cfg ansi.StyleConfig
+		if json.Unmarshal(data, &cfg) == nil {
+			entry.cfg = cfg
+			entry.keyExtra = fmt.Sprintf("file:%016x", xxhash.Sum64(data))
+			entry.ok = true
+		}
+		entry.fromFile = true
+		if info, statErr := os.Stat(name); statErr == nil {
+			entry.modTime = info.ModTime()
+			entry.size = info.Size()
+		}
 	}
-	var cfg ansi.StyleConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return ansi.StyleConfig{}, "", false
-	}
-	return cfg, fmt.Sprintf("file:%016x", xxhash.Sum64(data)), true
+	overrideCache[name] = entry
+	return entry.cfg, entry.keyExtra, entry.ok
 }
 
 // presetStyle returns a deep copy of a Glamour preset, used only for its

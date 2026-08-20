@@ -727,9 +727,9 @@ func ApplyThemeColors(theme Theme) {
 		ScrollbarThumbColor = TextMuted
 	}
 
-	// Store syntax/markdown theme names for external use
+	// Store the syntax theme name for external use. The Markdown theme is read
+	// from the palette snapshot by internal/markdown, not from a global.
 	CurrentSyntaxTheme = c.SyntaxTheme
-	CurrentMarkdownTheme = c.MarkdownTheme
 
 	// Update tab theme state
 	CurrentTabStyle = c.TabStyle
@@ -1066,9 +1066,4 @@ func rebuildStyles() {
 // GetSyntaxTheme returns the current syntax highlighting theme name
 func GetSyntaxTheme() string {
 	return CurrentSyntaxTheme
-}
-
-// GetMarkdownTheme returns the current markdown rendering theme name
-func GetMarkdownTheme() string {
-	return CurrentMarkdownTheme
 }

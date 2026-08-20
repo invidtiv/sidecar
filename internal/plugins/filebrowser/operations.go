@@ -1016,17 +1016,11 @@ func (p *Plugin) handleThemeChanged() {
 	p.renderMarkdownContent()
 
 	lineCount := len(p.getPreviewLines())
+	p.clampPreviewScroll()
 	if lineCount == 0 {
-		p.previewScroll = 0
 		p.selection.Clear()
 	} else {
 		maxLine := lineCount - 1
-		if p.previewScroll > maxLine {
-			p.previewScroll = maxLine
-		}
-		if p.previewScroll < 0 {
-			p.previewScroll = 0
-		}
 		if p.selection.Active {
 			if p.selection.Start.Line > maxLine || p.selection.End.Line > maxLine {
 				p.selection.Clear()
