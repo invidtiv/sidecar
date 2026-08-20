@@ -423,12 +423,6 @@ func (m *Model) ownsNotifyRequest(req uirequest.Request) bool {
 	return false
 }
 
-func pathsEqual(a, b string) bool {
-	an, _ := normalizePath(a)
-	bn, _ := normalizePath(b)
-	return an == bn
-}
-
 // pathWithin reports whether path is root itself or lives beneath it. The
 // separator on the prefix keeps a sibling named sidecar-notification-center
 // from matching sidecar.

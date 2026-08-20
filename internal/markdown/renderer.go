@@ -7,7 +7,6 @@ import (
 
 	"charm.land/glamour/v2"
 	"github.com/cespare/xxhash/v2"
-	"github.com/marcus/sidecar/internal/styles"
 )
 
 const (
@@ -24,6 +23,7 @@ type Renderer struct {
 	mu          sync.RWMutex
 	renderer    *glamour.TermRenderer
 	lastWidth   int
+	styleKey    string
 	cache       map[uint64][]string
 	mappedCache map[uint64]MappedRender
 }
@@ -36,8 +36,21 @@ func NewRenderer() (*Renderer, error) {
 	}, nil
 }
 
-// RenderContent renders markdown content to styled lines.
+// StyleKey returns the style key of the current theme snapshot. Consumers that
+// keep their own caches above this renderer should record it as a dependency.
+func (r *Renderer) StyleKey() string {
+	return CurrentThemeSnapshot().StyleKey()
+}
+
+// RenderContent renders markdown content to styled lines using the current
+// theme snapshot.
 func (r *Renderer) RenderContent(content string, width int) []string {
+	return r.renderContent(content, width, CurrentThemeSnapshot())
+}
+
+// renderContent renders against one explicit theme snapshot so a concurrent
+// theme change cannot mix one palette's cache key with another palette's style.
+func (r *Renderer) renderContent(content string, width int, snapshot ThemeSnapshot) []string {
 	if width < MinWidthForMarkdown {
 		return WrapText(content, width)
 	}
@@ -46,7 +59,8 @@ func (r *Renderer) RenderContent(content string, width int) []string {
 		return []string{}
 	}
 
-	key := r.cacheKey(content, width)
+	styleKey := snapshot.StyleKey()
+	key := r.cacheKey(content, width, styleKey)
 
 	// Check cache first (read lock)
 	r.mu.RLock()
@@ -66,7 +80,7 @@ func (r *Renderer) RenderContent(content string, width int) []string {
 	}
 
 	// Get or create renderer for this width
-	renderer, err := r.getOrCreateRenderer(width)
+	renderer, err := r.getOrCreateRenderer(width, snapshot, styleKey)
 	if err != nil {
 		log.Printf("glamour renderer error: %v", err)
 		return WrapText(content, width)
@@ -92,24 +106,27 @@ func (r *Renderer) RenderContent(content string, width int) []string {
 	return lines
 }
 
-// cacheKey generates a cache key from content and width using xxhash.
-func (r *Renderer) cacheKey(content string, width int) uint64 {
+// cacheKey generates a cache key from content, width, and the active style key.
+func (r *Renderer) cacheKey(content string, width int, styleKey string) uint64 {
 	h := xxhash.New()
 	_, _ = h.WriteString(content)
 	_, _ = h.Write([]byte{byte(width >> 8), byte(width)})
+	_, _ = h.WriteString("\x00")
+	_, _ = h.WriteString(styleKey)
 	return h.Sum64()
 }
 
-// getOrCreateRenderer lazily creates or recreates the renderer for the given width.
-// Must be called with write lock held.
-func (r *Renderer) getOrCreateRenderer(width int) (*glamour.TermRenderer, error) {
-	if r.renderer != nil && r.lastWidth == width {
+// getOrCreateRenderer lazily creates or recreates the renderer for the given
+// width and theme snapshot. Must be called with write lock held.
+func (r *Renderer) getOrCreateRenderer(width int, snapshot ThemeSnapshot, styleKey string) (*glamour.TermRenderer, error) {
+	if r.renderer != nil && r.lastWidth == width && r.styleKey == styleKey {
 		return r.renderer, nil
 	}
 
-	// Width changed or first use - create new renderer and clear cache
+	// Width or theme changed (or first use) - rebuild and clear caches
+	style, _ := BuildStyle(snapshot)
 	renderer, err := glamour.NewTermRenderer(
-		glamour.WithStylePath(styles.GetMarkdownTheme()),
+		glamour.WithStyles(style),
 		glamour.WithWordWrap(width),
 	)
 	if err != nil {
@@ -118,7 +135,8 @@ func (r *Renderer) getOrCreateRenderer(width int) (*glamour.TermRenderer, error)
 
 	r.renderer = renderer
 	r.lastWidth = width
-	r.cache = make(map[uint64][]string) // Clear cache on width change
+	r.styleKey = styleKey
+	r.cache = make(map[uint64][]string) // Clear caches on width/theme change
 	r.mappedCache = make(map[uint64]MappedRender)
 
 	return renderer, nil

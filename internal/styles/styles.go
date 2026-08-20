@@ -79,8 +79,7 @@ var (
 	BlameAge5 = lipgloss.Color("#9CA3AF") // < 1 year
 
 	// Third-party theme names (updated by ApplyTheme)
-	CurrentSyntaxTheme   = "monokai"
-	CurrentMarkdownTheme = "dark"
+	CurrentSyntaxTheme = "monokai"
 )
 
 // Tab theme state (updated by ApplyTheme)

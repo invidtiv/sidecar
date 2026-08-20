@@ -584,7 +584,7 @@ func (m *Model) getChangelogModalWidth() int {
 }
 
 // ensureChangelogModal creates/updates the changelog modal with caching.
-// The modal is only rebuilt when width or height changes. Scroll offset changes
+// The modal is only rebuilt when width, height, or the markdown style changes. Scroll offset changes
 // are handled dynamically via the shared changelogScrollState pointer.
 func (m *Model) ensureChangelogModal() {
 	modalW := m.getChangelogModalWidth()
@@ -602,14 +602,17 @@ func (m *Model) ensureChangelogModal() {
 
 	// Check if we can reuse the cached modal
 	// Rebuild only if width or max visible lines changed
+	styleKey := markdown.CurrentThemeSnapshot().StyleKey()
 	if m.changelogModal != nil &&
 		m.changelogModalWidth == modalW &&
-		m.changelogMaxVisibleLines == maxContentLines {
+		m.changelogMaxVisibleLines == maxContentLines &&
+		m.changelogModalStyleKey == styleKey {
 		return
 	}
 
 	m.changelogModalWidth = modalW
 	m.changelogMaxVisibleLines = maxContentLines
+	m.changelogModalStyleKey = styleKey
 
 	// Render changelog content and cache the lines
 	content := m.updateChangelog
@@ -686,6 +689,7 @@ func (m *Model) clearChangelogModal() {
 	m.changelogMouseHandler = nil
 	m.changelogRenderedLines = nil
 	m.changelogMaxVisibleLines = 0
+	m.changelogModalStyleKey = ""
 	m.changelogScrollState = nil
 }
 

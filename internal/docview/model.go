@@ -64,6 +64,7 @@ type Model struct {
 	live livewatch.Refresher
 
 	renderWidth   int
+	renderStyle   string
 	renderedLines []string
 
 	// Laying out a document is O(lines): every source line is measured, given a
@@ -404,17 +405,25 @@ type docContent struct {
 }
 
 // layoutKey names everything a laid-out document depends on. Width changes the
-// gutter and the wrap points, wrap and rendered change what the lines are, and
-// contentGen moves whenever the document itself is replaced.
+// gutter and the wrap points, wrap and rendered change what the lines are,
+// contentGen moves whenever the document itself is replaced, and styleKey moves
+// whenever the active theme changes the markdown renderer's colors.
 type layoutKey struct {
 	width      int
 	wrap       bool
 	rendered   bool
 	contentGen uint64
+	styleKey   string
 }
 
 func (m *Model) currentLayoutKey() layoutKey {
-	return layoutKey{width: m.width, wrap: m.wrap, rendered: m.rendered, contentGen: m.contentGen}
+	return layoutKey{
+		width:      m.width,
+		wrap:       m.wrap,
+		rendered:   m.rendered,
+		contentGen: m.contentGen,
+		styleKey:   m.renderer.StyleKey(),
+	}
 }
 
 func (m *Model) display() displayRows {
@@ -524,9 +533,10 @@ func (m *Model) content() docContent {
 	} else {
 		// Glamour output has no 1:1 mapping back to source lines, so numbering
 		// it would be a lie.
-		if m.renderWidth != m.width {
+		if style := m.renderer.StyleKey(); m.renderWidth != m.width || m.renderStyle != style {
 			m.renderedLines = m.renderer.RenderContent(m.result.Content, m.width)
 			m.renderWidth = m.width
+			m.renderStyle = style
 		}
 		lines = m.renderedLines
 	}
@@ -563,6 +573,7 @@ func (m *Model) placeholder() ([]string, bool) {
 
 func (m *Model) invalidateRender() {
 	m.renderWidth = -1
+	m.renderStyle = ""
 	m.renderedLines = nil
 	m.contentGen++
 	m.layoutValid = false
