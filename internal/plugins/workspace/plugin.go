@@ -30,6 +30,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -129,15 +130,6 @@ const (
 	regionDiffTargetTab   = "diff-target-tab"
 	regionPaneClose       = "pane-close"
 	regionPaneTreeDivider = "pane-tree-divider"
-
-	// Type selector modal element IDs
-	typeSelectorListID       = "type-selector-list"
-	typeSelectorInputID      = "type-selector-name-input"
-	typeSelectorConfirmID    = "type-selector-confirm"
-	typeSelectorCancelID     = "type-selector-cancel"
-	typeSelectorAgentListID  = "type-selector-agent-list" // td-a902fe
-	typeSelectorSkipPermsID  = "type-selector-skip-perms" // td-a902fe
-	typeSelectorAgentItemPfx = "ts-agent-"                // td-a902fe: prefix for agent items
 
 	// Shell delete confirmation modal regions
 )
@@ -398,18 +390,10 @@ type Plugin struct {
 	// Conflict detection state
 	conflicts []Conflict
 
-	// Create modal state
-	createNameInput         textinput.Model
-	createBaseBranchInput   textinput.Model
-	createAgentInput        textinput.Model
-	createAgentType         AgentType // Selected agent type (default: AgentClaude)
-	createAgentIdx          int       // Selected agent index in selectableAgentTypes()
-	createBaseIdx           int       // Selected base-branch index in branchAll
-	createSkipPermissions   bool      // Skip permissions checkbox
-	createError             string    // Error message to display in create modal
-	createModal             *modal.Modal
-	createModalWidth        int
-	createModalBranchN      int
+	// Create modal state. The chooser lives in workspacecreate.Form;
+	// confirm/recovery still use createOperationModal.
+	createForm              *workspacecreate.Form
+	createError             string // Operation errors shown on the form
 	createOperationModal    *modal.Modal
 	createOperationWidth    int
 	createPlan              *CreateOperationPlan
@@ -549,18 +533,6 @@ type Plugin struct {
 	// talks to the user's tmux server.
 	attachSession func(sessionName, displayName string) tea.Cmd
 
-	// Type selector modal state (shell vs worktree)
-	typeSelectorIdx        int             // 0=Shell, 1=Worktree
-	typeSelectorNameInput  textinput.Model // Optional shell name input
-	typeSelectorModal      *modal.Modal    // Modal instance
-	typeSelectorModalWidth int             // Cached width for rebuild detection
-
-	// Type selector modal - shell agent selection (td-2bb232)
-	typeSelectorAgentIdx   int       // Selected index in agent list (0 = None)
-	typeSelectorAgentType  AgentType // The selected agent type
-	typeSelectorSkipPerms  bool      // Whether skip permissions is checked
-	typeSelectorFocusField int       // Focus: 0=name, 1=agent, 2=skipPerms, 3=buttons
-
 	// Resume conversation state (td-aa4136)
 	pendingResumeCmd      string // Resume command to inject after shell creation
 	pendingResumeWorktree string // Worktree name to enter interactive mode after agent starts
@@ -616,7 +588,6 @@ func New() *Plugin {
 		terminalHistory:     make(map[string]tty.HistoryReach),
 		markdownRenderer:    mdRenderer,
 		shellSelected:       false, // Start with first worktree selected, not shell
-		typeSelectorIdx:     1,     // Default to Worktree option
 		applicationFocused:  true,
 		terminalOwnership:   &terminalOwnershipLease{},
 		shellStartupHooks:   defaultShellStartupHooks(),
@@ -1834,19 +1805,37 @@ func (p *Plugin) getDefaultCreateAgentType() AgentType {
 	return got
 }
 
-// clearCreateModal resets create modal state.
-func (p *Plugin) clearCreateModal() {
-	p.createNameInput = textinput.Model{}
-	p.createBaseBranchInput = textinput.Model{}
-	p.createAgentInput = textinput.Model{}
-	p.createAgentType = p.getDefaultCreateAgentType()
-	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-	p.createBaseIdx = 0
-	p.createSkipPermissions = false
+func (p *Plugin) preferredCreateAgent() string {
+	if p == nil || p.ctx == nil {
+		return ""
+	}
+	fileAgent := loadAgentType(p.ctx.ProjectRoot, p.ctx.WorkDir)
+	if isKnownAgentType(fileAgent) {
+		return string(fileAgent)
+	}
+	return ""
+}
+
+func (p *Plugin) createOpenOpts(kind workspacecreate.Kind, focusKind bool, name string) workspacecreate.OpenOpts {
+	nextShell := "Shell 1"
+	if p.ctx != nil {
+		nextShell = p.nextShellDisplayName()
+	}
+	return workspacecreate.OpenOpts{
+		Kind:           kind,
+		FocusKind:      focusKind,
+		ShowProject:    false,
+		Name:           name,
+		Agents:         p.configAgents(),
+		NextShell:      nextShell,
+		PreferredAgent: p.preferredCreateAgent(),
+		DefaultAgent:   string(p.getConfigDefaultAgentType()),
+	}
+}
+
+func (p *Plugin) resetCreateFormState() {
+	p.createForm = nil
 	p.createError = ""
-	p.createModal = nil
-	p.createModalWidth = 0
-	p.createModalBranchN = 0
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
 	p.createPlan = nil
@@ -1855,76 +1844,56 @@ func (p *Plugin) clearCreateModal() {
 	p.createBusyStep = ""
 	p.createCopyEnv = false
 	p.createRunHook = false
+	p.branchAll = nil
+	p.branchFiltered = nil
+	p.branchIdx = 0
+	p.branchScroll = 0
+}
+
+// clearCreateModal resets create modal state.
+func (p *Plugin) clearCreateModal() {
+	p.resetCreateFormState()
 	p.taskSearchInput = textinput.Model{}
 	p.taskSearchAll = nil
 	p.taskSearchFiltered = nil
 	p.taskSearchIdx = 0
 	p.taskSearchScroll = 0
 	p.taskSearchLoading = false
-	p.branchAll = nil
-	p.branchFiltered = nil
-	p.branchIdx = 0
-	p.branchScroll = 0
 	p.taskLinkModal = nil
 	p.taskLinkModalWidth = 0
 }
 
-// initCreateModalBase initializes common create modal state.
-func (p *Plugin) initCreateModalBase() {
+// openCreate opens the shared Create Workspace form.
+func (p *Plugin) openCreate(kind workspacecreate.Kind, focusKind bool, name string) tea.Cmd {
+	p.resetCreateFormState()
 	p.viewMode = ViewModeCreate
-
-	p.createNameInput = textinput.New()
-	p.createNameInput.Placeholder = "feature name"
-	p.createNameInput.Prompt = ""
-	p.createNameInput.Focus()
-	p.createNameInput.CharLimit = 100
-
-	p.createBaseBranchInput = textinput.New()
-	p.createBaseBranchInput.Placeholder = ""
-	p.createBaseBranchInput.Prompt = ""
-	p.createBaseBranchInput.CharLimit = 100
-
-	p.createAgentInput = textinput.New()
-	p.createAgentInput.Placeholder = ""
-	p.createAgentInput.Prompt = ""
-	p.createAgentInput.CharLimit = 80
-
-	p.createAgentType = p.getDefaultCreateAgentType()
-	p.createAgentIdx = p.agentTypeIndex(p.createAgentType)
-	p.createBaseIdx = 0
-	p.loadCreateAutoApprove()
-	p.prefillCreateAgentInput()
-	p.prefillCreateBaseBranch()
-	p.createError = ""
-	p.createModal = nil
-	p.createModalWidth = 0
-	p.createModalBranchN = 0
-	p.createOperationModal = nil
-	p.createOperationWidth = 0
-	p.createPlan = nil
-	p.createSetupResult = nil
-	p.createDeleteResult = nil
-	p.createBusyStep = ""
-	p.createCopyEnv = false
-	p.createRunHook = false
-	p.branchAll = nil
-	p.branchFiltered = nil
-	p.branchIdx = 0
-	p.branchScroll = 0
+	p.createForm = workspacecreate.Open(p.createOpenOpts(kind, focusKind, name))
+	return p.loadBranches()
 }
 
-// openCreateModal opens the create worktree modal and initializes all inputs.
+// initCreateModalBase initializes the shared form in Worktree, Name focused.
+func (p *Plugin) initCreateModalBase() {
+	_ = p.openCreate(workspacecreate.KindWorktree, false, "")
+}
+
+func (p *Plugin) initCreateModalNamed(name string) {
+	_ = p.openCreate(workspacecreate.KindWorktree, false, name)
+}
+
+// openCreateModal opens the create form (Worktree, focus Name).
 func (p *Plugin) openCreateModal() tea.Cmd {
-	p.initCreateModalBase()
-	return p.loadBranches()
+	return p.openCreate(workspacecreate.KindWorktree, false, "")
+}
+
+// openCreateModalFocusKind opens the create form with the kind toggle focused.
+func (p *Plugin) openCreateModalFocusKind() tea.Cmd {
+	return p.openCreate(workspacecreate.KindWorktree, true, "")
 }
 
 // openCreateModalWithTask opens the create modal with a name derived from the
 // task. Linking stays a separate action on the created worktree.
 func (p *Plugin) openCreateModalWithTask(taskID, taskTitle string) tea.Cmd {
-	p.initCreateModalBase()
-	p.createNameInput.SetValue(p.deriveBranchName(taskID, taskTitle))
-	return p.loadBranches()
+	return p.openCreate(workspacecreate.KindWorktree, false, p.deriveBranchName(taskID, taskTitle))
 }
 
 // deriveBranchName creates a git-safe branch name from task ID and title.

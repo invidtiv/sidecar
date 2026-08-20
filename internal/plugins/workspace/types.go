@@ -23,7 +23,6 @@ const (
 	ViewModeConfirmDelete                      // Delete confirmation modal
 	ViewModeConfirmDeleteShell                 // Shell delete confirmation modal
 	ViewModeCommitForMerge                     // Commit modal before merge workflow
-	ViewModeTypeSelector                       // Type selector modal (shell vs worktree)
 	ViewModeRenameShell                        // Rename shell modal
 	ViewModeRenameWorktree                     // Rename worktree display-name modal
 	ViewModeFilePicker                         // Diff file picker modal

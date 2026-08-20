@@ -246,10 +246,7 @@ func parseWorktreeList(output, mainWorkdir string) ([]*Worktree, error) {
 // returned plan is shown verbatim before beginCreateWorktree can mutate Git.
 func (p *Plugin) resolveCreatePlan() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
-	name := p.createNameInput.Value()
-	baseBranch := p.createBaseBranchInput.Value()
-	agentType := p.createAgentType
-	skipPerms := p.createSkipPermissions
+	name, baseBranch, agentType, skipPerms := p.createFormValues()
 
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	dirPrefix := p.ctx.Config != nil && p.ctx.Config.Plugins.Workspace.DirPrefix
@@ -272,9 +269,7 @@ func (p *Plugin) resolveCreatePlan() tea.Cmd {
 // preflight/add/setup state machine above.
 func (p *Plugin) createWorktree() tea.Cmd {
 	ctx, scope := p.newLifecycleScope(nil)
-	name, base := p.createNameInput.Value(), p.createBaseBranchInput.Value()
-	agentType := p.createAgentType
-	skipPerms := p.createSkipPermissions
+	name, base, agentType, skipPerms := p.createFormValues()
 	workDir, projectRoot := p.ctx.WorkDir, p.ctx.ProjectRoot
 	if base == "" {
 		base = "HEAD"

@@ -568,19 +568,8 @@ func (p *Plugin) createNewShell(customName string) tea.Cmd {
 	return p.createShell(shellCreateOpts{CustomName: customName})
 }
 
-// createShellWithAgent creates a new shell session with optional agent startup.
-// td-16b2b5: Captures agent info from type selector state, creates shell, and includes
-// agent info in the message so the handler can start the agent after shell creation.
-func (p *Plugin) createShellWithAgent() tea.Cmd {
-	return p.createShell(shellCreateOpts{
-		CustomName: p.typeSelectorNameInput.Value(),
-		AgentType:  p.typeSelectorAgentType,
-		SkipPerms:  p.typeSelectorSkipPerms,
-	})
-}
-
 // resolveShellAgentType returns the agent to launch in a shell created outside
-// the type-selector modal. Unlike worktrees, a shell with no configured default
+// the create form. Unlike worktrees, a shell with no configured default
 // stays a plain shell rather than falling back to Claude.
 func (p *Plugin) resolveShellAgentType() AgentType {
 	if p == nil || p.ctx == nil || p.ctx.Config == nil {

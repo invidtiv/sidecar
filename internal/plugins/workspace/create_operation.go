@@ -161,7 +161,8 @@ func (p *Plugin) selectCreatedWorktree(wt *Worktree) {
 }
 
 func (p *Plugin) finishCreatedWorktree(plan *CreateOperationPlan, wt *Worktree) []tea.Cmd {
-	if plan != nil && plan.AgentType != "" {
+	p.persistCreateLastAgent()
+	if p.createForm == nil && plan != nil && plan.AgentType != "" {
 		_ = state.SetLastCreateAgent(string(plan.AgentType))
 	}
 	p.selectCreatedWorktree(wt)

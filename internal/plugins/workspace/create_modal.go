@@ -5,19 +5,18 @@ import (
 	"strconv"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
-	"github.com/marcus/sidecar/internal/state"
-	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
 const (
-	createNameFieldID       = "create-name"
-	createBaseFieldID       = "create-base"
-	createAgentFieldID      = "create-agent"
-	createSkipPermissionsID = "create-skip-permissions"
-	createSubmitID          = "create-submit"
-	createCancelID          = "create-cancel"
+	createNameFieldID       = workspacecreate.FieldName
+	createBaseFieldID       = workspacecreate.FieldBase
+	createAgentFieldID      = workspacecreate.FieldAgent
+	createSkipPermissionsID = workspacecreate.FieldSkip
+	createSubmitID          = workspacecreate.ActionCreate
+	createCancelID          = workspacecreate.ActionCancel
 	createConfirmID         = "create-confirm"
 	createRetrySetupID      = "create-retry-setup"
 	createOpenAnywayID      = "create-open-anyway"
@@ -125,6 +124,9 @@ func parseIndexedID(prefix, id string) (int, bool) {
 }
 
 func (p *Plugin) ensureCreateModal() {
+	if p.createForm == nil {
+		return
+	}
 	modalW := 70
 	maxW := p.width - 4
 	if maxW < 1 {
@@ -133,79 +135,71 @@ func (p *Plugin) ensureCreateModal() {
 	if modalW > maxW {
 		modalW = maxW
 	}
+	p.createForm.Build(modalW)
+	if p.createError != "" {
+		p.createForm.SetError(p.createError)
+	}
+}
 
-	branchN := len(p.branchAll)
-	if p.createModal != nil && p.createModalWidth == modalW && p.createModalBranchN == branchN {
+func (p *Plugin) createFormModal() *modal.Modal {
+	if p.createForm == nil {
+		return nil
+	}
+	return p.createForm.Modal()
+}
+
+func (p *Plugin) setCreateError(msg string) {
+	p.createError = msg
+	if p.createForm != nil {
+		p.createForm.SetError(msg)
+	}
+}
+
+func (p *Plugin) createFormValues() (name, base string, agent AgentType, skip bool) {
+	if p.createForm == nil {
+		return "", "", AgentNone, false
+	}
+	return p.createForm.Name(), p.createForm.BaseBranch(), AgentType(p.createForm.Agent()), p.createForm.SkipPerms()
+}
+
+func (p *Plugin) persistCreateLastAgent() {
+	if p.createForm != nil {
+		p.createForm.PersistLastAgent()
+	}
+}
+
+func (p *Plugin) setCreateKindFromClick(x int) {
+	if p.createForm == nil || p.mouseHandler == nil {
 		return
 	}
-
-	prevFocus := ""
-	if p.createModal != nil {
-		prevFocus = p.createModal.FocusedID()
-	}
-
-	p.createModalWidth = modalW
-	p.createModalBranchN = branchN
-	p.syncCreateAgentFromIdx()
-	// Combo owns the input while focused; rebuilding after branch load
-	// must not overwrite an in-progress filter query.
-	if prevFocus != createAgentFieldID {
-		p.prefillCreateAgentInput()
-	}
-
-	branchItems := p.createBranchItems()
-	agentItems := p.createAgentItems()
-
-	p.createModal = modal.New("Create New Worktree",
-		modal.WithWidth(modalW),
-		modal.WithPrimaryAction(createSubmitID),
-		modal.WithHints(false),
-	).
-		AddSection(modal.InputWithLabel(createNameFieldID, "Name", &p.createNameInput, modal.WithSubmitOnEnter(true))).
-		AddSection(p.createSlugHintSection()).
-		AddSection(modal.Text("Base Branch")).
-		AddSection(modal.Combo(createBaseFieldID, &p.createBaseBranchInput, branchItems, &p.createBaseIdx,
-			modal.WithComboFilter(comboExactOrAllFilter(branchItems)))).
-		AddSection(modal.Text("Agent")).
-		AddSection(modal.Combo(createAgentFieldID, &p.createAgentInput, agentItems, &p.createAgentIdx,
-			modal.WithComboFilter(comboExactOrAllFilter(agentItems)))).
-		AddSection(modal.When(p.shouldShowSkipPermissions, modal.Checkbox(createSkipPermissionsID, "Auto-approve all actions", &p.createSkipPermissions))).
-		AddSection(p.createSkipPermissionsHintSection()).
-		AddSection(p.createErrorSection()).
-		AddSection(modal.Buttons(
-			modal.Btn(" Create ", createSubmitID),
-			modal.Btn(" Cancel ", createCancelID),
-		))
-
-	if prevFocus != "" {
-		p.createModal.SetFocus(prevFocus)
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != workspacecreate.FieldKind {
+			continue
+		}
+		p.createForm.SetKindFromClickX(x, region.Rect.X, region.Rect.W)
+		return
 	}
 }
 
-func (p *Plugin) createBranchItems() []modal.DropdownItem {
-	items := make([]modal.DropdownItem, len(p.branchAll))
-	for i, branch := range p.branchAll {
-		items[i] = modal.DropdownItem{ID: branch, Label: branch, Value: branch}
+func (p *Plugin) submitCreateForm() tea.Cmd {
+	if p.createForm == nil {
+		return nil
 	}
-	return items
+	if p.createForm.Kind() == workspacecreate.KindShell {
+		p.createForm.PersistLastAgent()
+		name, _, agent, skip := p.createFormValues()
+		p.viewMode = ViewModeList
+		cmd := p.createShell(shellCreateOpts{CustomName: name, AgentType: agent, SkipPerms: skip})
+		p.clearCreateModal()
+		return cmd
+	}
+	return p.validateAndCreateWorktree()
 }
 
-func (p *Plugin) createAgentItems() []modal.DropdownItem {
-	types := p.selectableAgentTypes()
-	items := make([]modal.DropdownItem, len(types))
-	for i, at := range types {
-		label := AgentDisplayNames[at]
-		if label == "" {
-			label = string(at)
-		}
-		items[i] = modal.DropdownItem{
-			ID:    string(at),
-			Label: label,
-			Value: label,
-			Data:  at,
-		}
+func (p *Plugin) syncCreateFormAfterInput() {
+	if p.createForm != nil {
+		p.createForm.SyncAfterInput()
 	}
-	return items
 }
 
 func comboExactOrAllFilter(items []modal.DropdownItem) modal.ComboFilterFunc {
@@ -234,109 +228,4 @@ func comboQueryMatchesItemExactly(query string, items []modal.DropdownItem) bool
 		}
 	}
 	return false
-}
-
-func (p *Plugin) createSlugHintSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		display := strings.TrimSpace(p.createNameInput.Value())
-		slug := SlugifyWorktreeName(display)
-		if slug == "" || slug == display {
-			return modal.RenderedSection{}
-		}
-		return modal.RenderedSection{Content: dimText("git: " + slug)}
-	}, nil)
-}
-
-func (p *Plugin) createSkipPermissionsHintSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.createAgentType == AgentNone {
-			return modal.RenderedSection{}
-		}
-		if p.shouldShowSkipPermissions() {
-			flag := SkipPermissionsFlags[p.createAgentType]
-			return modal.RenderedSection{Content: dimText(fmt.Sprintf("      (Adds %s)", flag))}
-		}
-		return modal.RenderedSection{Content: dimText("  Skip permissions not available for this agent")}
-	}, nil)
-}
-
-func (p *Plugin) createErrorSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.createError == "" {
-			return modal.RenderedSection{}
-		}
-		errStyle := lipgloss.NewStyle().Foreground(styles.Error)
-		return modal.RenderedSection{Content: errStyle.Render("Error: " + p.createError)}
-	}, nil)
-}
-
-func (p *Plugin) prefillCreateBaseBranch() {
-	if strings.TrimSpace(p.createBaseBranchInput.Value()) != "" {
-		p.syncCreateBaseIdx()
-		return
-	}
-	if p.ctx == nil || p.ctx.WorkDir == "" {
-		return
-	}
-	current, err := getCurrentBranch(p.ctx.WorkDir)
-	if err != nil || current == "" || current == "HEAD" {
-		return
-	}
-	p.createBaseBranchInput.SetValue(current)
-	p.syncCreateBaseIdx()
-}
-
-func (p *Plugin) syncCreateBaseIdx() {
-	val := p.createBaseBranchInput.Value()
-	for i, branch := range p.branchAll {
-		if branch == val {
-			p.createBaseIdx = i
-			return
-		}
-	}
-}
-
-func (p *Plugin) prefillCreateAgentInput() {
-	label := AgentDisplayNames[p.createAgentType]
-	if label == "" {
-		label = string(p.createAgentType)
-	}
-	if p.createAgentInput.Value() != label {
-		p.createAgentInput.SetValue(label)
-	}
-}
-
-func (p *Plugin) syncCreateAgentFromIdx() {
-	agents := p.selectableAgentTypes()
-	prev := p.createAgentType
-	if p.createAgentIdx >= 0 && p.createAgentIdx < len(agents) {
-		p.createAgentType = agents[p.createAgentIdx]
-	} else {
-		p.createAgentType, p.createAgentIdx = clampAgentSelection(agents, p.createAgentType, p.createAgentIdx)
-	}
-	if p.createAgentType != prev {
-		p.loadCreateAutoApprove()
-	}
-}
-
-func (p *Plugin) loadCreateAutoApprove() {
-	p.createSkipPermissions = state.GetAgentAutoApprove(string(p.createAgentType))
-}
-
-func (p *Plugin) persistCreateAutoApprove() {
-	if p.createAgentType == "" {
-		return
-	}
-	_ = state.SetAgentAutoApprove(string(p.createAgentType), p.createSkipPermissions)
-}
-
-func (p *Plugin) applyCreateModalAfterInput(prevAgent AgentType, prevSkip bool) {
-	p.syncCreateAgentFromIdx()
-	if p.createAgentType != prevAgent {
-		p.loadCreateAutoApprove()
-		return
-	}
-	if p.createSkipPermissions != prevSkip {
-		p.persistCreateAutoApprove()
-	}
 }

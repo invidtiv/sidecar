@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 func TestSanitizeName(t *testing.T) {
@@ -691,13 +692,11 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		{AgentGrok, true},        // Has --always-approve
 	}
 
-	p := &Plugin{}
 	for _, tt := range tests {
 		t.Run(string(tt.agentType), func(t *testing.T) {
-			p.createAgentType = tt.agentType
-			result := p.shouldShowSkipPermissions()
+			result := workspaceops.AgentSkipFlag(string(tt.agentType)) != ""
 			if result != tt.expected {
-				t.Errorf("shouldShowSkipPermissions(%q) = %v, want %v", tt.agentType, result, tt.expected)
+				t.Errorf("AgentSkipFlag(%q) present = %v, want %v", tt.agentType, result, tt.expected)
 			}
 		})
 	}

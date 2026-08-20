@@ -407,10 +407,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case CreateDoneMsg:
 		if msg.Err != nil {
-			p.createError = msg.Err.Error()
+			p.setCreateError(msg.Err.Error())
 			// Stay in ViewModeCreate - don't close modal or clear state
 		} else {
-			if msg.AgentType != "" {
+			p.persistCreateLastAgent()
+			if p.createForm == nil && msg.AgentType != "" {
 				_ = state.SetLastCreateAgent(string(msg.AgentType))
 			}
 			p.viewMode = ViewModeList
@@ -441,7 +442,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createOperationModal = nil
 		p.createOperationWidth = 0
 		if msg.Err != nil {
-			p.createError = msg.Err.Error()
+			p.setCreateError(msg.Err.Error())
 			p.createPlan = nil
 		} else {
 			p.createPlan = msg.Plan
@@ -454,7 +455,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createOperationModal = nil
 		p.createOperationWidth = 0
 		if msg.Err != nil && msg.Worktree == nil {
-			p.createError = msg.Err.Error()
+			p.setCreateError(msg.Err.Error())
 			p.createPlan = nil
 			return p, nil
 		}
@@ -474,7 +475,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.createPlan = msg.Plan
 		p.createSetupResult = msg.Result
 		if msg.Result == nil || msg.Result.Worktree == nil {
-			p.createError = "setup returned no created worktree"
+			p.setCreateError("setup returned no created worktree")
 			return p, nil
 		}
 		warnings := msg.Result.Warnings()
@@ -1587,12 +1588,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case BranchListMsg:
 		if msg.Err == nil {
 			p.branchAll = msg.Branches
-			p.branchFiltered = filterBranches(p.createBaseBranchInput.Value(), p.branchAll)
-			p.prefillCreateBaseBranch()
-			p.syncCreateBaseIdx()
-			if p.viewMode == ViewModeCreate {
-				p.createModal = nil
-				p.createModalWidth = 0
+			current := ""
+			if p.ctx != nil && p.ctx.WorkDir != "" {
+				if b, err := getCurrentBranch(p.ctx.WorkDir); err == nil && b != "" && b != "HEAD" {
+					current = b
+				}
+			}
+			if p.createForm != nil {
+				p.createForm.SetBranches(p.branchAll, current)
 			}
 		}
 

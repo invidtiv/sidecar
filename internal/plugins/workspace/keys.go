@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/textinput"
@@ -38,8 +37,6 @@ func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return p.handleConfirmDeleteShellKeys(msg)
 	case ViewModeCommitForMerge:
 		return p.handleCommitForMergeKeys(msg)
-	case ViewModeTypeSelector:
-		return p.handleTypeSelectorKeys(msg)
 	case ViewModeRenameShell:
 		return p.handleRenameShellKeys(msg)
 	case ViewModeRenameWorktree:
@@ -52,57 +49,6 @@ func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return p.handleInteractiveKeys(msg)
 	}
 	return nil
-}
-
-// handleTypeSelectorKeys handles keys in the type selector modal.
-func (p *Plugin) handleTypeSelectorKeys(msg tea.KeyPressMsg) tea.Cmd {
-	p.ensureTypeSelectorModal()
-	if p.typeSelectorModal == nil {
-		return nil
-	}
-
-	// Track selection before to detect changes
-	prevIdx := p.typeSelectorIdx
-	prevAgentIdx := p.typeSelectorAgentIdx
-
-	action, cmd := p.typeSelectorModal.HandleKey(msg)
-
-	// Modal width depends on selection - rebuild if type changed
-	if p.typeSelectorIdx != prevIdx {
-		p.typeSelectorModalWidth = 0 // Force rebuild
-	}
-
-	// Sync agent type when agent index changes (td-f42a86)
-	// No need to rebuild modal - When sections handle visibility dynamically
-	shellAgents := p.selectableShellAgentTypes()
-	if p.typeSelectorAgentIdx != prevAgentIdx && p.typeSelectorAgentIdx >= 0 && p.typeSelectorAgentIdx < len(shellAgents) {
-		p.typeSelectorAgentType = shellAgents[p.typeSelectorAgentIdx]
-	}
-
-	switch action {
-	case "cancel", typeSelectorCancelID:
-		p.viewMode = ViewModeList
-		p.clearTypeSelectorModal()
-		return nil
-	case typeSelectorConfirmID, "type-shell", "type-workspace":
-		return p.executeTypeSelectorConfirm()
-	}
-
-	return cmd
-}
-
-// executeTypeSelectorConfirm executes the type selector confirmation.
-func (p *Plugin) executeTypeSelectorConfirm() tea.Cmd {
-	p.viewMode = ViewModeList
-	if p.typeSelectorIdx == 0 {
-		// Shell selected - use createShellWithAgent which captures agent info (td-16b2b5)
-		cmd := p.createShellWithAgent()
-		p.clearTypeSelectorModal()
-		return cmd
-	}
-	// Workspace selected
-	p.clearTypeSelectorModal()
-	return p.openCreateModal()
 }
 
 // handleFetchPRKeys handles keys in the fetch PR modal.
@@ -657,19 +603,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return cmd
 		}
 	case "n":
-		// Open type selector modal to choose between Shell and Worktree
-		p.viewMode = ViewModeTypeSelector
-		p.typeSelectorIdx = 1 // Default to Worktree (more common)
-		p.typeSelectorNameInput = textinput.New()
-		p.typeSelectorNameInput.Placeholder = p.nextShellDisplayName()
-		p.typeSelectorNameInput.Prompt = ""
-		p.typeSelectorNameInput.SetWidth(30)
-		p.typeSelectorNameInput.CharLimit = 50
-		p.typeSelectorModal = nil    // Force rebuild
-		p.typeSelectorModalWidth = 0 // Force rebuild
-		return nil
+		return p.openCreateModal()
 	case "ctrl+n":
-		// Create a shell directly, skipping the type selector modal
+		// Instant create: default agent, auto-approve off. Does not open the form.
 		return p.createDefaultShell(false)
 	case "d":
 		return p.showDiffCmd()
@@ -1052,18 +988,17 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	p.ensureCreateModal()
-	if p.createModal == nil {
+	m := p.createFormModal()
+	if m == nil {
 		return nil
 	}
 
-	prevAgent := p.createAgentType
-	prevSkip := p.createSkipPermissions
-	action, cmd := p.createModal.HandleKey(msg)
-	p.applyCreateModalAfterInput(prevAgent, prevSkip)
+	action, cmd := m.HandleKey(msg)
+	p.syncCreateFormAfterInput()
 
 	switch action {
 	case createSubmitID:
-		return p.validateAndCreateWorktree()
+		return p.submitCreateForm()
 	case "cancel", createCancelID:
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
@@ -1071,7 +1006,7 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 
 	if action == "" {
-		p.createError = ""
+		p.setCreateError("")
 	}
 	return cmd
 }
@@ -1080,16 +1015,14 @@ func (p *Plugin) validateAndCreateWorktree() tea.Cmd {
 	if p.createBusyStep != "" || p.createPlan != nil {
 		return nil
 	}
-	p.syncCreateAgentFromIdx()
-	name := strings.TrimSpace(p.createNameInput.Value())
-	if name == "" {
-		p.createError = "Name is required"
+	if p.createForm == nil {
 		return nil
 	}
-	if SlugifyWorktreeName(name) == "" {
-		p.createError = "Name does not produce a valid git branch"
+	if err := p.createForm.Validate(); err != "" {
+		p.setCreateError(err)
 		return nil
 	}
+	p.setCreateError("")
 	p.createBusyStep = "Validating branch, source, and destination"
 	p.createOperationModal = nil
 	return p.resolveCreatePlan()
@@ -1125,24 +1058,6 @@ func (p *Plugin) handleCreateOperationAction(action string) tea.Cmd {
 		return nil
 	}
 	return nil
-}
-
-// shouldShowSkipPermissions returns true if the current agent type supports skip permissions.
-func (p *Plugin) shouldShowSkipPermissions() bool {
-	if p.createAgentType == AgentNone {
-		return false
-	}
-	flag := SkipPermissionsFlags[p.createAgentType]
-	return flag != ""
-}
-
-// shouldShowShellSkipPerms returns true if the selected shell agent supports skip permissions.
-// td-a902fe: Used in type selector modal when Shell is selected with an agent.
-func (p *Plugin) shouldShowShellSkipPerms() bool {
-	if p.typeSelectorAgentType == AgentNone {
-		return false
-	}
-	return SkipPermissionsFlags[p.typeSelectorAgentType] != ""
 }
 
 func (p *Plugin) agentTypeIndex(agentType AgentType) int {
