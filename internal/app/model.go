@@ -384,6 +384,16 @@ type Model struct {
 	// anything in the store.
 	toastReshow      *notify.Notification
 	toastReshowUntil time.Time
+	// toastReveals is one reveal state per on-screen block, keyed by source —
+	// the same key the stack collapses on, so a block keeps its motion when a
+	// second notification joins it. See internal/reveal and toast_stack.go.
+	toastReveals   map[notify.SourceID]*toastReveal
+	toastRevealSeq int
+	// toastExpanded opens every collapsed block's hidden members (design 1b's
+	// peek line). It is one flag rather than one per block: the affordance is a
+	// single global key, and "expand what is on screen" is what a user pressing
+	// it means.
+	toastExpanded bool
 	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
 	// the centre stays open across every navigation until the user closes it.
 	notificationCentreOpen bool

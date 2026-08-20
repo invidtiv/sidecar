@@ -159,3 +159,17 @@ func (p *Plugin) FocusCycleStart(reverse bool) tea.Cmd {
 	}
 	return nil
 }
+
+// The project surface tells the shell when a pane rail is under the pointer, so
+// the floating tiers stay off the screen for the length of the drag.
+var _ plugin.ResizeDragReporter = (*Plugin)(nil)
+
+// ResizeDragActive reports a live divider drag. It reuses the same predicate
+// the no-SIGWINCH-until-drop gate does, so "a rail is being dragged" has one
+// definition on this surface rather than two that can disagree.
+func (p *Plugin) ResizeDragActive() bool {
+	if p == nil || p.mouseHandler == nil || !p.mouseHandler.IsDragging() {
+		return false
+	}
+	return isDividerDragRegion(p.mouseHandler.DragRegion())
+}

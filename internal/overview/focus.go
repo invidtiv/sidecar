@@ -63,3 +63,21 @@ func (m *Model) FocusCycleStart(reverse bool) tea.Cmd {
 	}
 	return nil
 }
+
+// The browser reports its rail drags for the same reason the project surface
+// does: the floating tiers stay off the screen while a divider is being moved.
+var _ plugin.ResizeDragReporter = (*Model)(nil)
+
+// ResizeDragActive reports a live divider drag on this surface — the preview
+// pane tree's rails and the diff view's.
+func (m *Model) ResizeDragActive() bool {
+	if m == nil || m.workspacesMouse == nil || !m.workspacesMouse.IsDragging() {
+		return false
+	}
+	switch m.workspacesMouse.DragRegion() {
+	case previewPaneDividerKind, previewDiffDividerKind:
+		return true
+	default:
+		return false
+	}
+}

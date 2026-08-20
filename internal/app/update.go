@@ -384,6 +384,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// per toast: a countdown ticks one cell a second, which is exactly the
 		// resolution this tick already has.
 		(&m).sweepNotifications(time.Now())
+		// The same heartbeat reconciles the toast column: an expiry frees a
+		// slot, and the oldest queued stack takes it here rather than waiting
+		// for the next post.
+		revealCmd := (&m).syncToastReveal(time.Now())
 		// The worktree inventory costs a `git worktree list` fork, so it is
 		// refreshed off the update loop (never inline: this runs on the render
 		// goroutine) and only every worktreeInventoryTicks. A branch switched
@@ -410,9 +414,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeCheckCounter++
 		if m.worktreeCheckCounter >= 10 {
 			m.worktreeCheckCounter = 0
-			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd, inventoryCmd)
+			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd, inventoryCmd, revealCmd)
 		}
-		return m, tea.Batch(tickCmd(), titleCmd, inventoryCmd)
+		return m, tea.Batch(tickCmd(), titleCmd, inventoryCmd, revealCmd)
 
 	case worktreeInventoryRefreshedMsg:
 		current, _ := normalizePath(m.ui.WorkDir)
@@ -427,7 +431,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// message, but it lands in the store, floats as a bordered toast, and
 		// stays in the centre afterwards.
 		(&m).showToastWithSeverity(msg.Message, msg.Duration, msg.IsError)
-		return m, nil
+		return m, (&m).syncToastReveal(time.Now())
 
 	case FlashMsg:
 		// The flash tier never touches the store: it is feedback, not a
@@ -437,15 +441,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case flashTickMsg:
 		return m, (&m).advanceFlash(msg)
 
+	case revealTickMsg:
+		// One whole row per frame (design 1h). The loop stops the moment every
+		// block has settled: motion must not hold a 90ms timer over a screen
+		// that is not moving.
+		return m, (&m).advanceToastReveal(msg)
+
 	case notify.PostMsg:
 		// The store is the app's, so posting is answered here and the result
 		// broadcast: whoever draws toasts reacts to PostedMsg rather than
 		// reaching into the store.
-		return m, (&m).postNotification(msg.Notification)
+		cmd := (&m).postNotification(msg.Notification)
+		return m, tea.Batch(cmd, (&m).syncToastReveal(time.Now()))
 
 	case notify.DismissMsg:
 		(&m).dismissNotification(msg.ID)
-		return m, nil
+		return m, (&m).syncToastReveal(time.Now())
 
 	case notify.ReadMsg:
 		(&m).readNotification(msg.ID)
@@ -1755,6 +1766,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		if m.dismissVisibleToast() {
+			return m, nil
+		}
+	case toastExpandKey:
+		// The expand affordance on a collapsed stack (design 1b). `tab` is the
+		// design's key and Phase 2 spent it on the focus cycle, so this is
+		// `alt+e` — global, like `alt+n`, since a toast can be on screen on any
+		// tab and has no focus context of its own to route through. It falls
+		// through untouched when there is nothing collapsed to open.
+		if m.hasModal() || m.consumesTextInput() || m.contextRebindsKey(toastExpandKey) {
+			break
+		}
+		if m.toggleToastExpand() {
 			return m, nil
 		}
 	case "K":

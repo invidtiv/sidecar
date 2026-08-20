@@ -297,9 +297,11 @@ func TestCentreEnterReshowsTheSelectionAsAToast(t *testing.T) {
 	m.notificationCentreCursor = 0
 
 	before := len(m.notificationCentreItems())
-	handled, cmd := m.notificationCentreKey(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if !handled || cmd != nil {
-		t.Fatalf("enter handled=%v cmd=%v, want consumed and command-free", handled, cmd != nil)
+	// `enter` is consumed by the panel; the only command it may return is the
+	// re-shown block's reveal tick.
+	handled, _ := m.notificationCentreKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled {
+		t.Fatal("enter was not consumed by the panel")
 	}
 	if got := len(m.notificationCentreItems()); got != before {
 		t.Fatalf("enter changed the list: %d -> %d", before, got)

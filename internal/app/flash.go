@@ -2,9 +2,7 @@ package app
 
 import (
 	"image/color"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,6 +10,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overlay"
+	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -149,30 +148,11 @@ func flashAlpha(frame int) float64 {
 	return 0
 }
 
-var (
-	flashAnimateOnce sync.Once
-	flashAnimateOK   bool
-)
-
-// flashAnimated reports whether this terminal gets the fade. A dumb or absent
-// TERM cannot be trusted with per-frame colour changes, and SIDECAR_NO_ANIMATION
-// is the explicit opt-out for a slow link where 90ms repaints cost more than
-// the motion is worth. The answer is resolved once: it is read on the render
-// and update paths, and an environment lookup per frame is exactly the kind of
-// per-frame syscall the startup/latency rules exist to prevent.
-func flashAnimated() bool {
-	flashAnimateOnce.Do(func() {
-		term := strings.ToLower(strings.TrimSpace(os.Getenv("TERM")))
-		if term == "" || term == "dumb" {
-			return
-		}
-		if v := strings.TrimSpace(os.Getenv("SIDECAR_NO_ANIMATION")); v != "" && v != "0" {
-			return
-		}
-		flashAnimateOK = true
-	})
-	return flashAnimateOK
-}
+// flashAnimated reports whether this terminal gets the fade. The check itself
+// now lives in internal/reveal, which is the shared home for "may this terminal
+// have motion at all": the toast reveal asks the same question, and two copies
+// of it could answer differently.
+func flashAnimated() bool { return reveal.Animated() }
 
 // blendColor interpolates from base toward toward by alpha, in plain sRGB. It
 // is deliberately simple: two or three steps between a background and a
@@ -225,7 +205,7 @@ func (m Model) renderFlashLine(width int) string {
 // it: they share a corner by design, and two tiers of feedback must not
 // obscure each other. The toast is the louder tier, so it keeps the top row.
 func (m Model) renderFlashOverlay(screen string, x0, y0, width, height int) string {
-	if height <= 0 || width <= 0 {
+	if height <= 0 || width <= 0 || m.overlaysSuppressed() {
 		return screen
 	}
 	line := m.renderFlashLine(min(flashMaxWidth, width-2*flashMarginX))
@@ -254,13 +234,19 @@ func (m Model) toastOverlayHeight(width int) int {
 		return 0
 	}
 	now := time.Now()
-	n, ok := m.visibleToast(now)
-	if !ok {
-		return 0
+	total := 0
+	for _, s := range m.toastStacks(now) {
+		block := renderToastBlock(s, min(toastMaxWidth, width-2*toastMarginX), now, m.toastExpanded)
+		if block == "" {
+			continue
+		}
+		if r, ok := m.toastReveals[s.Source]; ok {
+			block = r.state.Clip(block)
+			if block == "" {
+				continue
+			}
+		}
+		total += lipgloss.Height(block) + toastGapY
 	}
-	block := renderToastBlock(n, min(toastMaxWidth, width-2*toastMarginX), now)
-	if block == "" {
-		return 0
-	}
-	return lipgloss.Height(block)
+	return total
 }

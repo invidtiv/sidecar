@@ -244,12 +244,30 @@ func (m *Model) sweepNotifications(now time.Time) {
 	// toast slot a burst reads everything queued behind the newest. Sticky
 	// notifications have no countdown and stay unread until the user answers
 	// them, which is what sticky is for.
-	if !m.hasModal() {
-		if n, ok := m.visibleToast(now); ok {
-			if m.toastPainted == nil {
-				m.toastPainted = make(map[string]bool)
+	if !m.hasModal() && !m.overlaysSuppressed() {
+		if m.toastPainted == nil {
+			m.toastPainted = make(map[string]bool)
+		}
+		for _, s := range m.toastStacks(now) {
+			// Only what is actually legible counts as painted. A collapsed
+			// stack shows its lead and a `×N`; the members hiding behind it
+			// were never read, so they keep their unread state and their place
+			// in the centre until the user expands the block or opens the
+			// centre. Expanding the block is seeing them, and marks them.
+			r, ok := m.toastReveals[s.Source]
+			if ok && !r.state.Visible() {
+				continue
 			}
-			m.toastPainted[n.ID] = true
+			m.toastPainted[s.Lead().ID] = true
+			if !m.toastExpanded {
+				continue
+			}
+			for i, member := range s.Members {
+				if i > toastExpandedMembers {
+					break
+				}
+				m.toastPainted[member.ID] = true
+			}
 		}
 	}
 	for _, n := range m.notificationCache {

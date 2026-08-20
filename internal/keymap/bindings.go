@@ -27,6 +27,12 @@ func DefaultBindings() []Binding {
 		// `N` yields to plugins that bind it (git's prev-match), and the centre
 		// has no navbar tab, so alt+n is the route that works on every tab.
 		{Key: "alt+n", Command: "toggle-notifications", Context: "global"},
+		// alt+e opens a collapsed toast stack (design 1b's peek line). The
+		// design's key was tab, which the centre's focus cycle now owns; alt+e
+		// keeps the expand affordance in the same family as alt+n and out of
+		// every plugin's way. Handled in handleKeyMsg; registered so the
+		// palette, help and rebinding find it.
+		{Key: "alt+e", Command: "expand-toast", Context: "global"},
 		// Comma is the conventional settings key and is otherwise unbound.
 		{Key: ",", Command: "open-configuration", Context: "global"},
 		{Key: "r", Command: "refresh", Context: "global"},

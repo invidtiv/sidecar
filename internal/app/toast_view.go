@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,14 +11,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overlay"
+	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
 // Toasts are a bordered floating block in the top-right of the *content
 // region*, composited with internal/overlay exactly as the command palette's
-// surfaces are. Phase 1 draws one toast, with no stacking and no reveal — which
-// is also the spec'd degraded mode (design frame 1h), so nothing here is thrown
-// away when the reveal machine lands.
+// surfaces are. Since Phase 3 there is a column of them: up to
+// notify.DefaultSlots blocks, newest on top, same-source toasts collapsed into
+// one block with a `×N` and a peek line (design 1b), each block entering and
+// leaving through the row machine in internal/reveal (design 1h). This file
+// draws; toast_stack.go decides what is on screen and animates it.
 
 const (
 	// toastMaxWidth is the widest a toast gets on a roomy terminal. Narrower
@@ -40,54 +44,124 @@ const (
 	toastCellFull       = "▪"
 	toastCellEmpty      = "▫"
 
-	// regionToast is the toast's whole block as a pointer target. Toasts are
-	// click-to-dismiss: they take no focus, so the pointer route is the only
-	// direct one, with the global `d` as the keyboard fallback.
+	// regionToast prefixes one block's pointer target (regionToastFor adds the
+	// source). Toasts are click-to-dismiss: they take no focus, so the pointer
+	// route is the only direct one, with the global `d` as the keyboard
+	// fallback.
 	regionToast = "toast"
+
+	// toastExpandKey opens a collapsed stack. Design 1b says `tab`; Phase 2
+	// gave `tab` to the focus cycle whenever the centre is open, so the expand
+	// affordance took the `alt+…` family the centre's own guaranteed key
+	// (`alt+n`) already lives in.
+	toastExpandKey = "alt+e"
+	// toastExpandedMembers caps how many hidden titles an expanded block lists,
+	// so expanding a chatty source cannot push the column off the screen.
+	toastExpandedMembers = 4
 )
 
-// visibleToast is the notification a toast is currently drawn for, if any.
-// Newest wins: without stacking there is one slot, and the thing that just
-// happened is the thing worth showing.
+// visibleToast is the notification the *top* block is drawn for, if any. It is
+// the "what would `d` act on" question, not "what is on screen": with stacking
+// there are up to notify.DefaultSlots blocks, and the top one is the thing that
+// just happened.
 func (m Model) visibleToast(now time.Time) (notify.Notification, bool) {
-	// A re-show wins the slot: the user asked for this one specifically, which
-	// is a newer intent than whatever the store last posted.
-	if n, ok := m.reshownToast(now); ok {
-		return n, true
-	}
-	toastable := m.ToastableNotifications(now)
-	if len(toastable) == 0 {
+	stacks := m.toastStacks(now)
+	if len(stacks) == 0 {
 		return notify.Notification{}, false
 	}
-	return toastable[0], true
+	return stacks[0].Lead(), true
 }
 
-// renderToastOverlay composites the current toast onto an already-rendered
+// toastBlockWidth is the outer width every block in the column is drawn at, or
+// 0 when the content region has no room for a bordered block at all. One width
+// for the whole column: blocks of different widths would not read as a stack.
+func (m Model) toastBlockWidth() int {
+	width := m.contentWidth()
+	if width < toastMinWidth+2*toastMarginX {
+		return 0
+	}
+	return min(toastMaxWidth, width-2*toastMarginX)
+}
+
+// renderToastOverlay composites the toast column onto an already-rendered
 // screen. x0/y0 are the content region's top-left in screen cells and
 // width/height its size — deliberately *not* m.width/m.height, so that when the
-// notification centre reserves a right-hand column the toast follows the
+// notification centre reserves a right-hand column the toasts follow the
 // content's right edge inward instead of hiding underneath the panel.
+//
+// Blocks are painted top-down, newest first (1b), each clipped to the rows its
+// reveal has released (1h). A block that does not fit in the remaining height
+// is not painted at all — and therefore, by the read gate, never marked read.
 func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) string {
 	m.clearToastRegion()
-	if width < toastMinWidth+2*toastMarginX || height <= 0 {
+	if width < toastMinWidth+2*toastMarginX || height <= 0 || m.overlaysSuppressed() {
 		return screen
 	}
-	n, ok := m.visibleToast(time.Now())
-	if !ok {
-		return screen
-	}
-	block := renderToastBlock(n, min(toastMaxWidth, width-2*toastMarginX), time.Now())
-	if block == "" {
-		return screen
-	}
-	blockWidth := lipgloss.Width(block)
-	x := x0 + width - toastMarginX - blockWidth
-	if x < x0 {
-		x = x0
-	}
+	now := time.Now()
+	blockWidth := min(toastMaxWidth, width-2*toastMarginX)
 	y := y0 + toastMarginY
-	m.registerToastRegion(x, y, blockWidth, lipgloss.Height(block))
-	return overlay.Composite(screen, block, x, y)
+	for _, s := range m.toastStacks(now) {
+		r, ok := m.toastReveals[s.Source]
+		var block string
+		if ok {
+			block = r.block
+		}
+		if block == "" {
+			block = renderToastBlock(s, blockWidth, now, m.toastExpanded)
+		}
+		if block == "" {
+			continue
+		}
+		if ok {
+			block = r.state.Clip(block)
+		}
+		if block == "" {
+			continue
+		}
+		bw, bh := lipgloss.Width(block), lipgloss.Height(block)
+		if y+bh > y0+height {
+			break
+		}
+		x := x0 + width - toastMarginX - bw
+		if x < x0 {
+			x = x0
+		}
+		m.registerToastRegion(regionToastFor(s.Source), x, y, bw, bh)
+		screen = overlay.Composite(screen, block, x, y)
+		y += bh + toastGapY
+	}
+	// A block still retracting has no stack behind it any more, but it is still
+	// on screen and still clickable until its last row goes.
+	for _, id := range m.leavingToastSources() {
+		block := m.toastReveals[id].state.Clip(m.toastReveals[id].block)
+		if block == "" {
+			continue
+		}
+		bw, bh := lipgloss.Width(block), lipgloss.Height(block)
+		if y+bh > y0+height {
+			break
+		}
+		x := x0 + width - toastMarginX - bw
+		if x < x0 {
+			x = x0
+		}
+		screen = overlay.Composite(screen, block, x, y)
+		y += bh + toastGapY
+	}
+	return screen
+}
+
+// leavingToastSources lists the retracting blocks in a stable order. Map order
+// would move a block sideways in the column between two frames of its own exit.
+func (m Model) leavingToastSources() []notify.SourceID {
+	var out []notify.SourceID
+	for id, r := range m.toastReveals {
+		if r.state.Phase() == reveal.Leaving {
+			out = append(out, id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // clearToastRegion retires the pointer target. A frame that draws no toast
@@ -98,16 +172,29 @@ func (m Model) clearToastRegion() {
 	}
 }
 
-func (m Model) registerToastRegion(x, y, width, height int) {
+func (m Model) registerToastRegion(id string, x, y, width, height int) {
 	if m.toastMouse == nil || width <= 0 || height <= 0 {
 		return
 	}
-	m.toastMouse.HitMap.AddRect(regionToast, x, y, width, height, nil)
+	m.toastMouse.HitMap.AddRect(id, x, y, width, height, nil)
 }
 
-// toastMouseEvent answers a press that landed on the toast. The whole block is
-// one target and one action — dismiss — because a toast that takes no focus
-// has nothing else it could mean, and a click that misses falls through to the
+// regionToastFor is one block's pointer target. Each block in the column is
+// its own target so a click dismisses the block under the pointer rather than
+// whatever happens to be on top.
+func regionToastFor(source notify.SourceID) string { return regionToast + ":" + string(source) }
+
+func toastSourceForRegion(id string) (notify.SourceID, bool) {
+	rest, ok := strings.CutPrefix(id, regionToast+":")
+	if !ok {
+		return "", false
+	}
+	return notify.SourceID(rest), true
+}
+
+// toastMouseEvent answers a press that landed on a toast. A block is one
+// target and one action — dismiss — because a toast that takes no focus has
+// nothing else it could mean, and a click that misses falls through to the
 // content untouched.
 func (m *Model) toastMouseEvent(msg tea.MouseMsg) bool {
 	if m.toastMouse == nil {
@@ -118,19 +205,26 @@ func (m *Model) toastMouseEvent(msg tea.MouseMsg) bool {
 		return false
 	}
 	mi := click.Mouse()
-	if region := m.toastMouse.HitMap.Test(mi.X, mi.Y); region == nil || region.ID != regionToast {
+	region := m.toastMouse.HitMap.Test(mi.X, mi.Y)
+	if region == nil {
 		return false
 	}
-	return m.dismissVisibleToast()
+	source, ok := toastSourceForRegion(region.ID)
+	if !ok {
+		return false
+	}
+	return m.dismissToastStack(source)
 }
 
-// renderToastBlock draws one toast at the given outer width: source-hued
-// border and rule line, title, body, the key row, and — unless the
-// notification is sticky — the cell-drawn countdown.
-func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) string {
-	if outerWidth < toastMinWidth {
+// renderToastBlock draws one stack at the given outer width: source-hued
+// border and rule line, the lead's title (with `×N` when the stack collapsed
+// several), its body, the peek or expanded list, the key row, and — unless the
+// lead is sticky — the cell-drawn countdown.
+func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bool) string {
+	if outerWidth < toastMinWidth || s.Count() == 0 {
 		return ""
 	}
+	n := s.Lead()
 	source := n.SourceInfo()
 	// One helper answers "what does this source look like" for the toast, the
 	// status flash, and the centre, so an error looks like an error everywhere.
@@ -147,9 +241,15 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 		title = source.Label
 	}
 	glyph := notify.RenderGlyph(n.Source, n.Severity)
+	// `×N` (1b) is the collapse made visible: it is the difference between
+	// "one thing happened" and "five did, here is the latest".
+	count := ""
+	if s.Count() > 1 {
+		count = lipgloss.NewStyle().Foreground(hue).Render(fmt.Sprintf(" ×%d", s.Count()))
+	}
 	lines = append(lines,
 		glyph+" "+lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).
-			Render(ansi.Truncate(title, max(0, inner-2), "…")))
+			Render(ansi.Truncate(title, max(0, inner-2-lipgloss.Width(count)), "…"))+count)
 	lines = append(lines, lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", inner)))
 
 	if body := strings.TrimSpace(n.Body); body != "" {
@@ -159,6 +259,23 @@ func renderToastBlock(n notify.Notification, outerWidth int, now time.Time) stri
 				break
 			}
 			lines = append(lines, lipgloss.NewStyle().Foreground(styles.TextSecondary).Render(line))
+		}
+	}
+
+	if hidden := s.Hidden(); hidden > 0 {
+		if expanded {
+			for i, member := range s.Members[1:] {
+				if i >= toastExpandedMembers {
+					lines = append(lines, styles.Muted.Render(
+						fmt.Sprintf("· %d more", hidden-toastExpandedMembers)))
+					break
+				}
+				lines = append(lines, styles.Muted.Render("· ")+
+					lipgloss.NewStyle().Foreground(styles.TextSecondary).
+						Render(ansi.Truncate(strings.TrimSpace(member.Title), max(1, inner-2), "…")))
+			}
+		} else {
+			lines = append(lines, toastPeekRow(hidden, inner))
 		}
 	}
 
@@ -194,6 +311,18 @@ func toastKeyRow(inner int) string {
 		styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
 	if lipgloss.Width(row) > inner {
 		row = styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
+	}
+	return ansi.Truncate(row, inner, "")
+}
+
+// toastPeekRow is design 1b's "▾ 2 more · tab expand" line, with the key the
+// expand affordance actually has: `tab` belongs to the focus cycle whenever the
+// centre is open (Phase 2), and one key cannot mean two things.
+func toastPeekRow(hidden, inner int) string {
+	row := styles.Muted.Render(fmt.Sprintf("▾ %d more · ", hidden)) +
+		styles.KeyHint.Render(toastExpandKey) + styles.Muted.Render(" expand")
+	if lipgloss.Width(row) > inner {
+		row = styles.Muted.Render(fmt.Sprintf("▾ %d more", hidden))
 	}
 	return ansi.Truncate(row, inner, "")
 }
@@ -244,17 +373,46 @@ func toastRemaining(remaining time.Duration) string {
 	}
 }
 
-// dismissVisibleToast answers `d` while a toast is on screen. It dismisses the
-// notification outright rather than only hiding the toast: `d` in the centre
+// dismissVisibleToast answers `d` while a toast is on screen: it acts on the
+// top block, the one the user just watched arrive. It dismisses the
+// notifications outright rather than only hiding the block — `d` in the centre
 // means the same thing, and one key must not mean two things.
 func (m *Model) dismissVisibleToast() bool {
-	n, ok := m.visibleToast(time.Now())
-	if !ok {
+	if m.overlaysSuppressed() {
 		return false
 	}
-	m.clearToastReshow()
-	m.dismissNotification(n.ID)
-	return true
+	stacks := m.toastStacks(time.Now())
+	if len(stacks) == 0 {
+		return false
+	}
+	return m.dismissToastStack(stacks[0].Source)
+}
+
+// dismissToastStack clears one block. A collapsed block dismisses **all** its
+// members, not just the lead: the block is one object with one `×N` on it, and
+// making the user dismiss the same block five times to clear five members
+// would be a worse bargain than the centre's own `D dismiss group`, which this
+// mirrors. Anything dismissed is still in the store's 24h window.
+func (m *Model) dismissToastStack(source notify.SourceID) bool {
+	now := time.Now()
+	for _, s := range m.toastStacks(now) {
+		if s.Source != source {
+			continue
+		}
+		if reshown, ok := m.reshownToast(now); ok && s.Lead().ID == reshown.ID {
+			// The re-show is presentation only; dismissing it must not dismiss
+			// the record it was copied from unless that record is toasting too.
+			m.clearToastReshow()
+			m.syncToastReveal(now)
+			return true
+		}
+		for _, member := range s.Members {
+			m.dismissNotification(member.ID)
+		}
+		m.syncToastReveal(now)
+		return true
+	}
+	return false
 }
 
 // reshownToast is the "view details" slot: the notification the user selected

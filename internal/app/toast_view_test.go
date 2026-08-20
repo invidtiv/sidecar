@@ -67,7 +67,7 @@ func TestStickyToastHasNoCountdown(t *testing.T) {
 	if !n.Sticky {
 		t.Fatalf("the waiting source should be sticky by default")
 	}
-	block := ansi.Strip(renderToastBlock(n, 40, time.Now()))
+	block := ansi.Strip(renderToastBlock(oneToastStack(n), 40, time.Now(), false))
 	if strings.Contains(block, toastCellFull) || strings.Contains(block, toastCellEmpty) {
 		t.Fatalf("a sticky toast drew a countdown:\n%s", block)
 	}
@@ -158,7 +158,7 @@ func TestToastRowsFitTheBlockInterior(t *testing.T) {
 	}, time.Now())
 
 	for _, outer := range []int{toastMinWidth, 32, toastMaxWidth} {
-		block := renderToastBlock(n, outer, time.Now())
+		block := renderToastBlock(oneToastStack(n), outer, time.Now(), false)
 		if got := lipgloss.Width(block); got != outer {
 			t.Fatalf("outer=%d: block width = %d", outer, got)
 		}
@@ -207,7 +207,7 @@ func TestClickingAToastDismissesIt(t *testing.T) {
 	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
 
 	region := m.toastMouse.HitMap.Test(96, headerHeight)
-	if region == nil || region.ID != regionToast {
+	if region == nil || region.ID != regionToastFor(notify.SourceAgent) {
 		t.Fatalf("no toast hit region under the block's top-right corner: %v", region)
 	}
 	if !m.toastMouseEvent(clickAt(96, headerHeight)) {
@@ -254,4 +254,11 @@ func TestAToastNeverTakesFocus(t *testing.T) {
 	if m.notificationCentreFocused || m.notificationCentreOpen {
 		t.Fatal("posting a toast opened or focused the centre")
 	}
+}
+
+// oneToastStack is the single-notification stack most of these tests draw: the
+// collapse rules have their own tests, and a block of one is what the vast
+// majority of real toasts are.
+func oneToastStack(n notify.Notification) notify.Stack {
+	return notify.Stack{Source: notify.SourceOf(n.Source).ID, Members: []notify.Notification{n}, First: n.CreatedAt}
 }

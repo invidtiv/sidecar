@@ -121,6 +121,21 @@ type FocusCycler interface {
 	FocusCycleStart(reverse bool) tea.Cmd
 }
 
+// ResizeDragReporter is implemented by a surface whose panes are resized by
+// dragging a rail. While that drag is live the shell suppresses the floating
+// tiers — toasts and status flashes — because every drag frame re-lays out the
+// whole content region and a block composited on top of it both flickers and
+// pays for a second full-screen composite on the frame that is already the
+// expensive one (design 1g's "suppress while resizing", and the resize storm
+// deferred from notifications Phase 1).
+//
+// Nothing is lost by the suppression: the notification is already in the store,
+// the centre and the header count, and it paints on the frame after the drop.
+type ResizeDragReporter interface {
+	// ResizeDragActive reports that a pane rail is currently being dragged.
+	ResizeDragActive() bool
+}
+
 type PendingWorkspaceSelector interface {
 	SetPendingWorkspaceSelection(PendingWorkspaceSelection)
 }

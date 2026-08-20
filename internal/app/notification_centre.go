@@ -469,6 +469,7 @@ func (m *Model) notificationCentreKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		if selected, ok := m.selectedNotification(items); ok {
 			m.reshowNotification(selected, time.Now())
 			m.readSelectedNotification()
+			return true, m.syncToastReveal(time.Now())
 		}
 		return true, nil
 	}

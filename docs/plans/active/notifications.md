@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phases 3–7 planned, not started
+**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phase 3 **done** (see "Phase 3 as built"); Phases 4–7 planned, not started
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -585,6 +585,76 @@ and expand (1b) — this is also where repeated `waiting` refusals dedupe.
 `internal/reveal` row machine per the 1h spec; wire toast entry/exit through
 it (adopt `flashAnimated()`'s degraded-terminal check via a shared home).
 Suppress-while-pane-resizing guard.
+
+### Phase 3 as built: stacking + reveal
+
+- **The stacking rules are state-free and live in `internal/notify/stack.go`**
+  (`Stack`, `Layout`, `StackToasts`). The app shell asks what belongs on screen
+  and gets back an answer any surface could have computed, exactly as with
+  `Toastable` and the lane triggers.
+- **Collapse is per *source*, and the source id is the block's identity** — the
+  collapse key, the reveal key, and the pointer target are one string. That is
+  what makes a block keep its animation when a second notification joins it, and
+  it is the mechanism by which repeated `waiting` refusals dedupe: they are one
+  block with `×N`, not a column of near-identical ones. Consequence worth
+  knowing: there are six sources, so the queue only engages when more than three
+  sources are live at once.
+- **Admission is first-come-first-served; display is newest-on-top.** Two
+  different orderings on purpose: a stack is admitted by its *oldest* member (so
+  a chatty source cannot shove a block off the screen the instant before it is
+  read) and the admitted blocks are painted newest first per 1b. A freed slot is
+  filled by the heartbeat's sweep, not only by the next post.
+- **The read gate survives stacking, which was the risk.** Only what is legible
+  is recorded as painted: the lead of each *visible* block, plus the listed
+  members when the block is expanded. A queued block, a block that did not fit
+  the remaining height, and a collapsed member are all unpainted, so expiry
+  cannot read them — they stay unread and wait in the centre.
+- **Expand key: `alt+e`.** Design 1b says `tab`; Phase 2 spent `tab` on the
+  focus cycle whenever the centre is open, and one key cannot mean two things.
+  `alt+e` sits in the same family as the centre's guaranteed `alt+n`, is global
+  (a toast can be on screen on any tab and has no focus context of its own), and
+  falls through untouched when nothing on screen is collapsed. It is registered
+  as `expand-toast` in `keymap/bindings.go` like every other binding. The peek
+  line renders the real key, not the design's.
+- **`internal/reveal`** is the 1h row machine and nothing else: `New/Advance/
+  Leave/Resize/Rows/Clip`, one integer, generic over "a block of N rows".
+  Because reveal is top-down and retract is bottom-up, both directions are "how
+  many rows from the top are painted", so `Clip` is the whole renderer contract
+  and a border is never redrawn mid-motion. `reveal.Animated()` is the **shared
+  home** for the degraded-terminal check that Phase 1.5 asked for;
+  `flashAnimated()` is now a one-line call into it, so the two motions cannot
+  disagree about a dumb terminal. `SetAnimatedForTests` exists because the real
+  answer is (deliberately) resolved once per process.
+- **Wiring.** `internal/app/toast_stack.go` owns the column: `toastStacks` (the
+  store's layout plus the presentation-only re-show slot, which takes over its
+  source's block rather than opening a second one), `syncToastReveal` (called on
+  every path that can change the column — post, `ToastMsg`, dismiss, re-show,
+  the 1s sweep, and the reveal tick itself), and the `revealTickMsg` loop, which
+  stops the moment every block has settled rather than holding a 90ms timer over
+  a still screen. Blocks are rendered at sync time and cached, so the render
+  path stays pure.
+- **Dismissal — decided.** Click or `d` on a collapsed block dismisses **all**
+  its members, mirroring the centre's `D dismiss group`. Making the user clear
+  the same block five times to empty it would be a worse bargain, and the `×N`
+  told them what they were clearing. Dismissing a re-shown block clears the
+  presentation copy only, never the record behind it.
+- **Suppress-while-resizing** (1g, and the storm deferred from Phase 1) is
+  `Model.overlaysSuppressed()`: while a resize rail is being dragged neither
+  toasts nor flashes paint, nothing is recorded as painted (so nothing is read),
+  and everything still lands in the centre and the header count. The app knows
+  its own centre rail directly; surfaces report theirs through a new optional
+  capability, **`plugin.ResizeDragReporter`** — implemented for the parity pair
+  (`workspace`, `overview`) by reusing each surface's existing divider-drag
+  predicate. Two-pane plugins with their own rails (`notes`, `conversations`,
+  `git-status`) are a one-method follow-up each, the same shape the Phase 2
+  `FocusCycler` limit has.
+- Toasts still take no focus, still never steal it, and click-to-dismiss/`d`
+  work per block. Tested in `internal/reveal/reveal_test.go`,
+  `internal/notify/stack_test.go`, `internal/app/toast_stack_test.go`; verified
+  in the real app through `scripts/tmux-drive.sh` (isolated tmux + state): six
+  notifications posted from a second shell drew three blocks newest-on-top with
+  `waiting ×3` and its `▾ 2 more · alt+e expand` peek line, the fourth source
+  queued, and `alt+e` listed the hidden members.
 
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
