@@ -43,11 +43,21 @@ const (
 	toastCellFull       = "▪"
 	toastCellEmpty      = "▫"
 
+	// toastCloseGlyph is the close affordance at the top-right of every block
+	// (polish round 2). It replaces the key row: the block says what it can do
+	// by showing the control rather than by spending a row on prose. `d` and a
+	// click anywhere on the block still dismiss.
+	toastCloseGlyph = "×"
+
 	// regionToast prefixes one block's pointer target (regionToastFor adds the
 	// source). Toasts are click-to-dismiss: they take no focus, so the pointer
 	// route is the only direct one, with the global `d` as the keyboard
 	// fallback.
 	regionToast = "toast"
+	// regionToastClose is the `×` button's own target, registered after (and so
+	// on top of) its block's, and carrying the same stack key: pressing it
+	// dismisses exactly that block.
+	regionToastClose = "toast-close"
 
 	// toastExpandKey opens a collapsed stack. Design 1b says `tab`; Phase 2
 	// gave `tab` to the focus cycle whenever the centre is open, so the expand
@@ -133,6 +143,14 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 		// on a block on its way out must not claim the press.
 		if r.state.Phase() != reveal.Leaving {
 			m.registerToastRegion(regionToastFor(r.stack.Key), x, y, bw, bh)
+			// The `×` sits on the title row, one cell in from the interior's
+			// right edge (border + padding = 2 cells of chrome). It is
+			// registered after the block, so the later region wins the press
+			// and the close button is a real target rather than a picture of
+			// one. It is only a target once that row is actually painted.
+			if r.state.Rows() > 1 {
+				m.registerToastRegion(regionToastClose+":"+string(r.stack.Key), x+bw-2, y+1, 1, 1)
+			}
 		}
 		screen = overlay.Composite(screen, block, x, y)
 		y += bh + toastGapY
@@ -161,6 +179,9 @@ func (m Model) registerToastRegion(id string, x, y, width, height int) {
 func regionToastFor(key notify.StackKey) string { return regionToast + ":" + string(key) }
 
 func toastKeyForRegion(id string) (notify.StackKey, bool) {
+	if rest, ok := strings.CutPrefix(id, regionToastClose+":"); ok {
+		return notify.StackKey(rest), true
+	}
 	rest, ok := strings.CutPrefix(id, regionToast+":")
 	if !ok {
 		return "", false
@@ -223,9 +244,20 @@ func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bo
 	if s.Count() > 1 {
 		count = lipgloss.NewStyle().Foreground(hue).Render(fmt.Sprintf(" ×%d", s.Count()))
 	}
-	lines = append(lines,
-		glyph+" "+lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).
-			Render(ansi.Truncate(title, max(0, inner-2-lipgloss.Width(count)), "…"))+count)
+	// The title row carries the controls (polish round 2): the countdown cells
+	// and the close button live at its right edge, so the block spends no rows
+	// on a key hint or a standalone meter. A sticky notification has no
+	// countdown and shows just the `×`.
+	right := lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(toastCloseGlyph)
+	if cells := toastCountdownMeter(n, now); cells != "" {
+		right = cells + " " + right
+	}
+	rightWidth := lipgloss.Width(right)
+	titleWidth := max(0, inner-2-lipgloss.Width(count)-rightWidth-1)
+	left := glyph + " " + lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).
+		Render(ansi.Truncate(title, titleWidth, "…")) + count
+	gap := max(1, inner-lipgloss.Width(left)-rightWidth)
+	lines = append(lines, left+strings.Repeat(" ", gap)+right)
 	lines = append(lines, lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", inner)))
 
 	if body := strings.TrimSpace(n.Body); body != "" {
@@ -255,12 +287,6 @@ func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bo
 		}
 	}
 
-	lines = append(lines, "")
-	lines = append(lines, toastKeyRow(inner))
-	if countdown := toastCountdown(n, now); countdown != "" {
-		lines = append(lines, countdown)
-	}
-
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(hue).
@@ -275,21 +301,11 @@ func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bo
 		Render(strings.Join(lines, "\n"))
 }
 
-// toastKeyRow is design 1a's footer row, minus the keys a toast cannot honour.
-// Snooze is deferred to Phase 6 (tasks own their own snoozing), and `enter
-// open` is gone because a toast has no focus context: nothing routes `enter` to
-// it, so advertising it was a promise the toast could not keep. What is left is
-// what actually works — click the block, or press `d` where the focused context
-// has not claimed it. Targets get their keyboard route through the centre in
-// Phase 5.
-func toastKeyRow(inner int) string {
-	row := styles.Muted.Render("click") + styles.Muted.Render(" or ") +
-		styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
-	if lipgloss.Width(row) > inner {
-		row = styles.KeyHint.Render("d") + styles.Muted.Render(" dismiss")
-	}
-	return ansi.Truncate(row, inner, "")
-}
+// The key row design 1a specified ("click or d dismiss") is gone as of polish
+// round 2, together with the standalone countdown row: two rows per block spent
+// on prose about controls that are discoverable from the block itself. Both
+// routes still work — click anywhere on the block, the `×` at its top-right, or
+// the global `d` where the focused context has not claimed it.
 
 // toastPeekRow is design 1b's "▾ 2 more · tab expand" line, with the key the
 // expand affordance actually has: `tab` belongs to the focus cycle whenever the
@@ -303,10 +319,13 @@ func toastPeekRow(hidden, inner int) string {
 	return ansi.Truncate(row, inner, "")
 }
 
-// toastCountdown draws the `▰▰▰▱▱ 4s` meter. A sticky notification has no
-// countdown — it stays until the user answers it — and neither does one whose
-// expiry has already passed (it is about to leave on the next tick).
-func toastCountdown(n notify.Notification, now time.Time) string {
+// toastCountdownMeter draws the `▪▪▪▫▫` cells that now sit in the title row,
+// left of the `×`. Cells only: the numeric label went with the row it used to
+// share (polish round 2) — the meter answers "is this about to go" without
+// asking to be read. A sticky notification has no countdown — it stays until
+// the user answers it — and neither does one whose expiry has already passed
+// (it is about to leave on the next tick).
+func toastCountdownMeter(n notify.Notification, now time.Time) string {
 	if n.Sticky || n.ExpiresAt == nil {
 		return ""
 	}
@@ -329,24 +348,8 @@ func toastCountdown(n notify.Notification, now time.Time) string {
 	// Both halves sit below the body text in weight: the countdown is a hint
 	// about how long the block will linger, not information the user has to
 	// read (plan 1.5 item 4).
-	meter := lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellFull, filled)) +
+	return lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellFull, filled)) +
 		lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled))
-	return meter + lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(" "+toastRemaining(remaining))
-}
-
-// toastRemaining is the countdown's label. Design 1a shows seconds because its
-// toasts live seconds; a `--expiry 5m` toast showed `290s`, which is a duration
-// nobody reads at a glance. Seconds up to a minute, then minutes, then hours —
-// always rounded up, so the label never reads 0.
-func toastRemaining(remaining time.Duration) string {
-	switch {
-	case remaining < time.Minute:
-		return fmt.Sprintf("%ds", int((remaining+time.Second-1)/time.Second))
-	case remaining < time.Hour:
-		return fmt.Sprintf("%dm", int((remaining+time.Minute-1)/time.Minute))
-	default:
-		return fmt.Sprintf("%dh", int((remaining+time.Hour-1)/time.Hour))
-	}
 }
 
 // dismissVisibleToast answers `d` while a toast is on screen: it acts on the

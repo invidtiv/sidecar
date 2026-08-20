@@ -203,7 +203,9 @@ func TestResizeDragSuppressesTheFloatingTiers(t *testing.T) {
 func TestToastsThatDoNotFitAreNeverMarkedPainted(t *testing.T) {
 	m := stackModel(t)
 	// Room for the header, the footer and one block, and no more.
-	m.height = headerHeight + footerHeight + 9
+	// A bodyless block is 3 rows since polish round 2 (border, title, rule,
+	// border — the rule and the title share the interior), plus the 1-row gap.
+	m.height = headerHeight + footerHeight + 5
 	for _, s := range []notify.SourceID{notify.SourceAgent, notify.SourceSession} {
 		postToast(t, m, s, string(s)+" happened")
 		time.Sleep(2 * time.Millisecond)

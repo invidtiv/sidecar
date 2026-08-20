@@ -32,7 +32,9 @@ func TestArrivalsASecondApartStackRatherThanReplace(t *testing.T) {
 	if len(m.toastColumn) != 3 {
 		t.Fatalf("the column holds %d blocks, want 3", len(m.toastColumn))
 	}
-	if strings.Contains(screen, "×") {
+	// `×N` is the collapse marker. (The bare `×` is every block's close button
+	// since polish round 2, so the marker is only the one with a count on it.)
+	if strings.Contains(screen, "×2") || strings.Contains(screen, "×3") {
 		t.Fatalf("three distinct messages collapsed into one block:\n%s", screen)
 	}
 }

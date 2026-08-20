@@ -20,7 +20,8 @@ func blankScreen(w, h int) string {
 }
 
 // A toast is a bordered block in the top-right of the content region, carrying
-// the title, the body, the key row, and a countdown.
+// the title, the body, and — in the title row — the countdown cells and the
+// close button.
 func TestToastIsDrawnTopRightOfTheContentRegion(t *testing.T) {
 	m := notifyModel()
 	m.width, m.height, m.ready = 100, 30, true
@@ -44,7 +45,7 @@ func TestToastIsDrawnTopRightOfTheContentRegion(t *testing.T) {
 	if strings.Contains(lines[0], "Agent finished") {
 		t.Fatal("the toast painted over the header row")
 	}
-	for _, want := range []string{"Agent finished", "sidecar: tests green", "dismiss", toastCellFull} {
+	for _, want := range []string{"Agent finished", "sidecar: tests green", toastCloseGlyph, toastCellFull} {
 		if !strings.Contains(screen, want) {
 			t.Fatalf("the toast is missing %q:\n%s", want, screen)
 		}
@@ -72,6 +73,46 @@ func TestStickyToastHasNoCountdown(t *testing.T) {
 	if strings.Contains(block, toastCellFull) || strings.Contains(block, toastCellEmpty) {
 		t.Fatalf("a sticky toast drew a countdown:\n%s", block)
 	}
+	// It still shows the close button — that is all a sticky block carries.
+	if !strings.Contains(block, toastCloseGlyph) {
+		t.Fatalf("a sticky toast has no close button:\n%s", block)
+	}
+}
+
+// The `×` is its own hit region on top of the block's, and it dismisses exactly
+// the block it belongs to.
+func TestToastCloseButtonDismissesItsOwnBlock(t *testing.T) {
+	m := notifyModel()
+	m.width, m.height, m.ready = 100, 30, true
+	m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "Agent finished"})
+	m.postNotification(notify.Notification{Source: notify.SourceSystem, Title: "System note"})
+	syncToasts(t, m)
+	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
+
+	// Close the *agent* block, which is not the one on top: the button belongs
+	// to its own block, not to whatever the newest one happens to be.
+	agent := toastKeyOf(t, m, "Agent finished")
+	want := regionToastClose + ":" + string(agent)
+	clicked := false
+	for _, r := range m.toastMouse.HitMap.Regions() {
+		if r.ID != want {
+			continue
+		}
+		clicked = true
+		if got := m.toastMouse.HitMap.Test(r.Rect.X, r.Rect.Y); got == nil || got.ID != want {
+			t.Fatalf("the × is covered by its block: %v", got)
+		}
+		if !m.toastMouseEvent(clickAt(r.Rect.X, r.Rect.Y)) {
+			t.Fatal("a click on the × did not dismiss")
+		}
+	}
+	if !clicked {
+		t.Fatalf("no close region for the agent block: %+v", m.toastMouse.HitMap.Regions())
+	}
+	live := m.ToastableNotifications(time.Now())
+	if len(live) != 1 || live[0].Title != "System note" {
+		t.Fatalf("the × dismissed the wrong block: %+v", live)
+	}
 }
 
 // The countdown loses a cell as the expiry approaches, off the 1s heartbeat.
@@ -79,15 +120,19 @@ func TestCountdownTicksDown(t *testing.T) {
 	created := time.Now().UTC()
 	expires := created.Add(5 * time.Second)
 	n := notify.Notification{CreatedAt: created, ExpiresAt: &expires}
-	full := ansi.Strip(toastCountdown(n, created))
-	late := ansi.Strip(toastCountdown(n, created.Add(4*time.Second)))
+	full := ansi.Strip(toastCountdownMeter(n, created))
+	late := ansi.Strip(toastCountdownMeter(n, created.Add(4*time.Second)))
 	if strings.Count(full, toastCellFull) != toastCountdownCells {
 		t.Fatalf("a fresh toast should be full: %q", full)
 	}
-	if strings.Count(late, toastCellFull) != 1 || !strings.Contains(late, "1s") {
+	if strings.Count(late, toastCellFull) != 1 {
 		t.Fatalf("countdown at 1s remaining = %q", late)
 	}
-	if toastCountdown(n, expires) != "" {
+	// Cells only since polish round 2 — no numeric label anywhere in the meter.
+	if strings.ContainsAny(late, "0123456789") {
+		t.Fatalf("the meter still carries a numeric time: %q", late)
+	}
+	if toastCountdownMeter(n, expires) != "" {
 		t.Fatalf("an expired toast still drew a countdown")
 	}
 }
@@ -186,20 +231,33 @@ func TestToastRowsFitTheBlockInterior(t *testing.T) {
 	}
 }
 
-func TestCountdownLabelAboveAMinute(t *testing.T) {
-	cases := []struct {
-		remaining time.Duration
-		want      string
-	}{
-		{4 * time.Second, "4s"},
-		{59 * time.Second, "59s"},
-		{90 * time.Second, "2m"},
-		{290 * time.Second, "5m"},
-		{2 * time.Hour, "2h"},
+// Polish round 2 dropped the key row and the standalone countdown row: a
+// plain notification is border + title + rule + body + border, and nothing
+// advertises keys in prose.
+func TestToastHasNoKeyRowOrCountdownRow(t *testing.T) {
+	n := notify.Normalize(notify.Notification{
+		Source: notify.SourceAgent,
+		Title:  "Agent finished",
+		Body:   "review the diff",
+	}, time.Now())
+	block := ansi.Strip(renderToastBlock(oneToastStack(n), 40, time.Now(), false))
+	if strings.Contains(block, "dismiss") {
+		t.Fatalf("the key row survived:\n%s", block)
 	}
-	for _, tc := range cases {
-		if got := toastRemaining(tc.remaining); got != tc.want {
-			t.Fatalf("toastRemaining(%v) = %q, want %q", tc.remaining, got, tc.want)
+	if got := len(strings.Split(block, "\n")); got != 5 {
+		t.Fatalf("block is %d rows, want 5:\n%s", got, block)
+	}
+	// The countdown is in the title row, left of the ×, and nowhere else.
+	rows := strings.Split(block, "\n")
+	if !strings.Contains(rows[1], toastCellFull) || !strings.Contains(rows[1], toastCloseGlyph) {
+		t.Fatalf("title row does not carry the meter and the ×: %q", rows[1])
+	}
+	for i, row := range rows {
+		if i == 1 {
+			continue
+		}
+		if strings.ContainsAny(row, toastCellFull+toastCellEmpty) {
+			t.Fatalf("row %d still draws countdown cells: %q", i, row)
 		}
 	}
 }

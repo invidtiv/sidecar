@@ -26,13 +26,15 @@ import (
 // deliberately not pulled forward here.
 
 const (
-	// flashStep is one animation frame. It matches design 1h's ~90ms cadence,
-	// so the two motions in the system move at one speed.
-	flashStep = 90 * time.Millisecond
+	// flashStep is one animation frame. It is reveal.Step, so the two motions in
+	// the system move at one speed — including through polish round 2's ~25%
+	// speed-up.
+	flashStep = reveal.Step
 	// flashFadeSteps is how many interpolation steps the line takes in and out.
-	// Three is the top of the 2–3 the spec allows: enough to read as a fade,
-	// short enough that the line is legible within a quarter of a second.
-	flashFadeSteps = 3
+	// It is scaled with the faster frame so the fade lasts the same quarter of
+	// a second it always did: 4 × 67ms ≈ 3 × 90ms. One more interpolation step
+	// over the same colour ramp is a smoother fade, not a different one.
+	flashFadeSteps = 4
 	// flashHold is how long the line sits at full strength between the fades.
 	flashHold = 2 * time.Second
 	// flashMaxWidth bounds the line on a wide terminal so it stays a corner

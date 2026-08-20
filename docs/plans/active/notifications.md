@@ -465,6 +465,37 @@ From live use (Marcus, 2026-08-19, nt-9519f6). Runs after
 - Reveal/retract ~25% faster (90ms → ~67ms per row); flash fade steps
   proportionally.
 
+#### Toast redesign as built (2026-08-19)
+
+- **The block is now border · title row · rule · body · border.** The key row
+  and the standalone countdown row are gone from `renderToastBlock`
+  (`internal/app/toast_view.go`), and so is the blank spacer that only existed
+  to separate the body from the key row — **three** rows saved on a bodyless
+  block, not the two the spec counted, because the spacer had nothing left to
+  separate. Nothing else needed changing to follow the shorter block: the
+  reveal machine takes its row count from `lipgloss.Height(block)`, and
+  `syncToastReveal`'s height budget, the read gate and the hit regions all read
+  that same rendered block, so the row counts followed by construction.
+- **Controls live in the title row, right-aligned:** the countdown cells
+  (`toastCountdownMeter`, cells only — `toastRemaining` and its numeric label
+  are deleted) then a space then `×`. A sticky notification shows just the `×`.
+  The title truncates against whatever the controls leave.
+- **The `×` is its own hit region** (`regionToastClose:<stack key>`) registered
+  *after* its block's, so the later region wins the press (`HitMap.Test` is
+  last-wins), and only once the reveal has released the title row. Both region
+  prefixes resolve to the same stack key, so the `×` and a body click run the
+  identical `dismissToastStack` — the button dismisses exactly its own block,
+  including when that block is not the top one.
+- **`reveal.Step` is 67ms**, which speeds both motions in the system because
+  `flashStep` is now literally `reveal.Step` rather than a second 90ms
+  constant. `flashFadeSteps` went 3 → 4 so the fade lasts the same wall-clock
+  quarter-second over one more interpolation step. The countdown is unaffected:
+  it ticks off the 1s heartbeat, not the reveal frame.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated tmux +
+  state, `paths` checked, stopped after): a live `agent` toast draws
+  `◆ Agent finished        ▪▪▪▪▪ ×` with the body below it and no key row; a
+  sticky `waiting` block draws the `×` alone.
+
 **Centre:**
 
 - Double-click on an entry = `enter` (view details today; activation when

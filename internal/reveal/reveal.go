@@ -19,10 +19,13 @@ import (
 	"time"
 )
 
-// Step is one animation frame. Design 1h says ~90ms, and the status flash
-// already moves at that cadence, so the two motions in the system run at one
-// speed rather than two that nearly agree.
-const Step = 90 * time.Millisecond
+// Step is one animation frame. Design 1h says ~90ms; polish round 2 speeds
+// reveal and retract by ~25% because at 90ms a five-row block took most of half
+// a second to arrive. The status flash moves at the same cadence, so the two
+// motions in the system still run at one speed rather than two that nearly
+// agree (the flash takes an extra fade step to keep its fade the same length in
+// wall-clock time).
+const Step = 67 * time.Millisecond
 
 // Phase is where a block is in its life.
 type Phase int
