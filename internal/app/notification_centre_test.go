@@ -309,7 +309,7 @@ func TestCentreEnterReshowsTheSelectionAsAToast(t *testing.T) {
 	if !m.notificationCentreOpen || !m.notificationCentreFocused {
 		t.Fatal("enter closed or blurred the panel; it is a detail view, not a navigation")
 	}
-	shown, ok := m.visibleToast(time.Now())
+	shown, ok := m.visibleToast()
 	if !ok || shown.ID != posted.ID {
 		t.Fatalf("visibleToast after enter = %+v (ok=%v), want the selection", shown, ok)
 	}
@@ -507,6 +507,7 @@ func TestToastDismissDoesNotStealAPluginsDKey(t *testing.T) {
 	}
 
 	// Where `d` really is free, it still dismisses the toast.
+	syncToasts(t, &m)
 	m.activeContext = "global"
 	m.handleKeyMsg(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	if n, ok := m.findNotification(posted.ID); !ok || !n.Dismissed() {

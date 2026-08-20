@@ -16,26 +16,74 @@ func stackable(source SourceID, title string, created time.Time, life time.Durat
 	return n
 }
 
-// Design 1b: same-source toasts are one block carrying ×N, with the newest as
-// its lead. This is also where a source that repeats itself stops being a
-// column of near-identical blocks.
-func TestSameSourceCollapsesIntoOneBlock(t *testing.T) {
+// Design 1b: a source repeating *itself* is one block carrying ×N, with the
+// newest as its lead — the refusal a user is leaning on a key for stops being
+// a column of near-identical blocks.
+func TestRepeatedMessageCollapsesIntoOneBlock(t *testing.T) {
 	now := time.Now().UTC()
 	all := []Notification{
-		stackable(SourceWaiting, "first", now.Add(-3*time.Second), 0),
-		stackable(SourceWaiting, "second", now.Add(-2*time.Second), 0),
-		stackable(SourceWaiting, "third", now.Add(-time.Second), 0),
+		repeat(SourceWaiting, "Agent is waiting", "a", now.Add(-3*time.Second)),
+		repeat(SourceWaiting, "Agent is waiting", "b", now.Add(-2*time.Second)),
+		repeat(SourceWaiting, "Agent is waiting", "c", now.Add(-time.Second)),
 	}
 	layout := StackToasts(all, now, DefaultSlots)
 	if len(layout.Stacks) != 1 {
-		t.Fatalf("three waiting notifications drew %d blocks, want 1", len(layout.Stacks))
+		t.Fatalf("three copies of one message drew %d blocks, want 1", len(layout.Stacks))
 	}
 	s := layout.Stacks[0]
 	if s.Count() != 3 || s.Hidden() != 2 {
 		t.Fatalf("count=%d hidden=%d, want 3/2", s.Count(), s.Hidden())
 	}
-	if s.Lead().Title != "third" {
-		t.Fatalf("lead = %q, want the newest member", s.Lead().Title)
+	if s.Lead().ID != "c" {
+		t.Fatalf("lead = %q, want the newest member", s.Lead().ID)
+	}
+}
+
+func repeat(source SourceID, title, id string, created time.Time) Notification {
+	return Notification{ID: id, Source: source, Title: title, CreatedAt: created, Sticky: true}
+}
+
+// Live-use regression: three *different* notifications a second apart from the
+// same source are three blocks. They collapsed to one before, so each arrival
+// replaced the last instead of stacking — which is what agents and the CLI
+// actually post, since nearly everything they send is `agent`.
+func TestDistinctMessagesFromOneSourceStack(t *testing.T) {
+	now := time.Now().UTC()
+	all := []Notification{
+		stackable(SourceAgent, "first", now.Add(-3*time.Second), time.Minute),
+		stackable(SourceAgent, "second", now.Add(-2*time.Second), time.Minute),
+		stackable(SourceAgent, "third", now.Add(-time.Second), time.Minute),
+	}
+	layout := StackToasts(all, now, DefaultSlots)
+	if len(layout.Stacks) != 3 || len(layout.Queued) != 0 {
+		t.Fatalf("on screen=%d queued=%d, want 3/0", len(layout.Stacks), len(layout.Queued))
+	}
+	if layout.Stacks[0].Lead().Title != "third" {
+		t.Fatalf("top block = %q, want the newest", layout.Stacks[0].Lead().Title)
+	}
+	for _, s := range layout.Stacks {
+		if s.Count() != 1 {
+			t.Fatalf("block %q collapsed %d notifications, want 1", s.Key, s.Count())
+		}
+	}
+}
+
+// A fourth distinct message from the same source queues rather than shoving a
+// block off the screen.
+func TestAFourthMessageFromOneSourceQueues(t *testing.T) {
+	now := time.Now().UTC()
+	all := []Notification{
+		stackable(SourceAgent, "first", now.Add(-4*time.Second), time.Minute),
+		stackable(SourceAgent, "second", now.Add(-3*time.Second), time.Minute),
+		stackable(SourceAgent, "third", now.Add(-2*time.Second), time.Minute),
+		stackable(SourceAgent, "fourth", now.Add(-time.Second), time.Minute),
+	}
+	layout := StackToasts(all, now, DefaultSlots)
+	if len(layout.Stacks) != DefaultSlots || len(layout.Queued) != 1 {
+		t.Fatalf("on screen=%d queued=%d, want 3/1", len(layout.Stacks), len(layout.Queued))
+	}
+	if layout.Queued[0].Lead().Title != "fourth" {
+		t.Fatalf("queued %q, want the newest — admission is first-come-first-served", layout.Queued[0].Lead().Title)
 	}
 }
 

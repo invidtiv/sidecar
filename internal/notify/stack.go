@@ -2,6 +2,7 @@ package notify
 
 import (
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -21,12 +22,35 @@ import (
 // DefaultSlots is how many toast blocks may be on screen at once (1b).
 const DefaultSlots = 3
 
+// StackKey is a block's identity: the collapse key, the reveal key, and the
+// pointer target, one string.
+//
+// It was the source id through Phase 3, which read correctly against the six
+// registered sources but wrongly against real use: nearly everything an agent
+// or the CLI posts is `agent`, so three unrelated notifications a second apart
+// collapsed into one block and each new title *replaced* the last. Design 1b's
+// collapse exists to stop a source repeating *itself* — "a refusal the user is
+// leaning on a key for" — which is a repeat of the same message, not any two
+// messages that share a source. So identity is source **and** title: repeats
+// still dedupe to `×N`, and distinct notifications stack, queue and retract as
+// separate blocks the way the spec describes.
+type StackKey string
+
+// StackKeyFor is the block identity a notification belongs to.
+func StackKeyFor(n Notification) StackKey {
+	title := strings.ToLower(strings.Join(strings.Fields(n.Title), " "))
+	return StackKey(string(SourceOf(n.Source).ID) + "\x00" + title)
+}
+
 // Stack is one toast block: the notification actually drawn, plus every other
 // undismissed toastable notification from the same source hiding behind it.
 type Stack struct {
-	// Source is the stack's identity. Collapse is per source, so the source id
-	// is also the stable key a host keys its reveal state by — a block does not
-	// restart its animation because a second notification joined it.
+	// Key is the stack's identity: the collapse key, the reveal key and the
+	// pointer target. A block does not restart its animation because another
+	// copy of the same message joined it.
+	Key StackKey
+	// Source is what the block looks like — hue, glyph, section — not what it
+	// is. Two blocks can share a source.
 	Source SourceID
 	// Members are the stack's notifications, newest first. Never empty.
 	Members []Notification
@@ -78,7 +102,7 @@ func StackToasts(all []Notification, now time.Time, slots int) Layout {
 		if !stacks[i].First.Equal(stacks[j].First) {
 			return stacks[i].First.Before(stacks[j].First)
 		}
-		return stacks[i].Source < stacks[j].Source
+		return stacks[i].Key < stacks[j].Key
 	})
 	var out Layout
 	if len(stacks) > slots {
@@ -101,16 +125,22 @@ func louderStack(a, b Stack) bool {
 	return al.ID > bl.ID
 }
 
-// collapse groups toastable notifications by source, newest member first.
+// collapse groups toastable notifications by block identity (source + title),
+// newest member first.
 func collapse(toastable []Notification) []Stack {
-	index := map[SourceID]int{}
+	index := map[StackKey]int{}
 	var stacks []Stack
 	for _, n := range toastable {
-		id := SourceOf(n.Source).ID
-		at, ok := index[id]
+		key := StackKeyFor(n)
+		at, ok := index[key]
 		if !ok {
-			index[id] = len(stacks)
-			stacks = append(stacks, Stack{Source: id, Members: []Notification{n}, First: n.CreatedAt})
+			index[key] = len(stacks)
+			stacks = append(stacks, Stack{
+				Key:     key,
+				Source:  SourceOf(n.Source).ID,
+				Members: []Notification{n},
+				First:   n.CreatedAt,
+			})
 			continue
 		}
 		stacks[at].Members = append(stacks[at].Members, n)

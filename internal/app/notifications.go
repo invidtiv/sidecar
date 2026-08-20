@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -258,7 +259,8 @@ func (m *Model) sweepNotifications(now time.Time) {
 		if m.toastPainted == nil {
 			m.toastPainted = make(map[string]bool)
 		}
-		for _, s := range m.toastStacks(now) {
+		for _, r := range m.toastColumnBlocks() {
+			s := r.stack
 			// Only what is actually legible counts as painted. A collapsed
 			// stack shows its lead and a `×N`; the members hiding behind it
 			// were never read, so they keep their unread state and their place
@@ -270,8 +272,7 @@ func (m *Model) sweepNotifications(now time.Time) {
 			// the single answer to "what is painted", and absence from it is
 			// as much of an answer as a retracted state — defaulting to
 			// "painted" here would read notifications nothing ever drew.
-			r, ok := m.toastReveals[s.Source]
-			if !ok || !r.state.Visible() {
+			if !r.state.Visible() {
 				continue
 			}
 			m.toastPainted[s.Lead().ID] = true
@@ -377,7 +378,13 @@ func (m *Model) ownsNotifyRequest(req uirequest.Request) bool {
 		if mine == "" {
 			continue
 		}
-		if origin.WorkDir != "" && pathsEqual(mine, origin.WorkDir) {
+		// Containment, not equality. A caller's working directory is wherever
+		// its shell happens to be, and an agent shell is nearly always in a
+		// subdirectory of the project — `internal/app`, not the root. Requiring
+		// the exact root disowned every post from inside the tree, so the CLI
+		// fell back to writing the log and told the user no instance was
+		// running while one was showing that very project.
+		if origin.WorkDir != "" && pathWithin(origin.WorkDir, mine) {
 			return true
 		}
 		if origin.ProjectKey != "" && filepath.Base(mine) == origin.ProjectKey {
@@ -391,6 +398,21 @@ func pathsEqual(a, b string) bool {
 	an, _ := normalizePath(a)
 	bn, _ := normalizePath(b)
 	return an == bn
+}
+
+// pathWithin reports whether path is root itself or lives beneath it. The
+// separator on the prefix keeps a sibling named sidecar-notification-center
+// from matching sidecar.
+func pathWithin(path, root string) bool {
+	pn, _ := normalizePath(path)
+	rn, _ := normalizePath(root)
+	if pn == "" || rn == "" {
+		return false
+	}
+	if pn == rn {
+		return true
+	}
+	return strings.HasPrefix(pn, strings.TrimSuffix(rn, string(filepath.Separator))+string(filepath.Separator))
 }
 
 func (m *Model) findNotification(id string) (notify.Notification, bool) {

@@ -384,10 +384,14 @@ type Model struct {
 	// anything in the store.
 	toastReshow      *notify.Notification
 	toastReshowUntil time.Time
-	// toastReveals is one reveal state per on-screen block, keyed by source —
-	// the same key the stack collapses on, so a block keeps its motion when a
-	// second notification joins it. See internal/reveal and toast_stack.go.
-	toastReveals   map[notify.SourceID]*toastReveal
+	// toastReveals is one reveal state per on-screen block, keyed by the stack
+	// key — the same key the stack collapses on, so a block keeps its motion
+	// when another copy of the same message joins it. toastColumn is the order
+	// they are painted in, and together they are the *only* description of what
+	// is on screen: the store feeds them, and never the renderer directly. See
+	// internal/reveal and toast_stack.go.
+	toastReveals   map[notify.StackKey]*toastReveal
+	toastColumn    []notify.StackKey
 	toastRevealSeq int
 	// toastExpanded opens every collapsed block's hidden members (design 1b's
 	// peek line). It is one flag rather than one per block: the affordance is a

@@ -150,6 +150,7 @@ func TestAToastDoesNotDisplaceAPluginFooterStatus(t *testing.T) {
 	}
 
 	// And it is on screen where toasts now live: over the content region.
+	syncToasts(t, &m)
 	screen := ansi.Strip(m.renderToastOverlay(strings.Repeat(strings.Repeat(" ", m.width)+"\n", m.height), 0, headerHeight, m.width, m.height-headerHeight-footerHeight))
 	if !strings.Contains(screen, "saved") {
 		t.Fatalf("the toast is not drawn over the content region:\n%s", screen)

@@ -2,14 +2,30 @@ package app
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
+
+// syncToasts is the frame boundary the app has and a test otherwise does not:
+// every path that changes the record set calls syncToastReveal before the next
+// render, because the reveal machine — not the store — is what the renderer,
+// the read gate and the dismiss key read. The row motion is pinned off so a
+// block is painted whole on the frame it is synced; internal/reveal tests the
+// motion itself.
+func syncToasts(t *testing.T, m *Model) {
+	t.Helper()
+	restore := reveal.SetAnimatedForTests(false)
+	defer restore()
+	m.syncToastReveal(time.Now())
+}
 
 func notifyModel() *Model {
 	m := &Model{notifications: notify.NewMemStore(), toastMouse: mouse.NewHandler()}
@@ -123,5 +139,45 @@ func TestHandleNotifyRequestPostsPayload(t *testing.T) {
 	m.handleNotifyRequest(mine)
 	if !m.Notifications()[0].Dismissed() {
 		t.Fatalf("the poster should be able to dismiss")
+	}
+}
+
+// Live-use regression: a `sidecar notify post` run from anywhere inside the
+// project must reach the instance showing it. Ownership was exact path
+// equality, so a post from a subdirectory — where an agent shell nearly always
+// is — was disowned, the CLI fell back to writing the log, and it told the user
+// no Sidecar instance was running while one was on screen in front of them.
+func TestNotifyRequestOwnershipCoversSubdirectories(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "internal", "app")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := notifyModel()
+	m.ui.WorkDir = root
+
+	for _, dir := range []string{root, nested} {
+		req := uirequest.Request{
+			Action: uirequest.ActionNotify,
+			Origin: uirequest.Origin{WorkDir: dir},
+		}
+		if !m.ownsNotifyRequest(req) {
+			t.Fatalf("a post from %q was disowned by the instance showing %q", dir, root)
+		}
+	}
+
+	// Containment, not prefix matching: a sibling directory is another project.
+	sibling := t.TempDir()
+	if m.ownsNotifyRequest(uirequest.Request{
+		Action: uirequest.ActionNotify,
+		Origin: uirequest.Origin{WorkDir: sibling},
+	}) {
+		t.Fatalf("a post from an unrelated directory %q was claimed", sibling)
+	}
+	if m.ownsNotifyRequest(uirequest.Request{
+		Action: uirequest.ActionNotify,
+		Origin: uirequest.Origin{WorkDir: root + "-other"},
+	}) {
+		t.Fatal("a sibling whose name merely starts with the project's was claimed")
 	}
 }

@@ -139,7 +139,7 @@ func runNotifyPost(env Env, args []string) int {
 		return 1
 	}
 
-	delivered := notifyDeliver(env, uirequest.Request{
+	delivered, outcome := notifyDeliver(env, uirequest.Request{
 		Origin:  originForRequest(n.Origin),
 		Action:  uirequest.ActionNotify,
 		Target:  uirequest.Target{Kind: uirequest.TargetKindNotification},
@@ -167,7 +167,7 @@ func runNotifyPost(env Env, args []string) int {
 	if delivered {
 		_, _ = fmt.Fprintf(env.Stdout, "Posted %s (%s).\n", n.ID, n.Source)
 	} else {
-		_, _ = fmt.Fprintf(env.Stdout, "Stored %s (%s); no running Sidecar instance, so it appears at next start.\n", n.ID, n.Source)
+		_, _ = fmt.Fprintf(env.Stdout, "Stored %s (%s); %s\n", n.ID, n.Source, outcome.explain())
 	}
 	return 0
 }
@@ -221,7 +221,7 @@ func runNotifyDismiss(env Env, args []string) int {
 		return 4
 	}
 
-	delivered := notifyDeliver(env, notifyDismissRequest(caller, id))
+	delivered, _ := notifyDeliver(env, notifyDismissRequest(caller, id))
 
 	if !delivered {
 		store, err := notify.Open(env.StateDir)
@@ -349,20 +349,49 @@ func writeNotifyJSON(env Env, res notifyResult) int {
 	return 0
 }
 
+// deliveryOutcome is why a request was not taken. The CLI reported every
+// failure as "no running Sidecar instance", which was a lie in the two cases
+// that actually happen — an instance running on another project, and an
+// instance that never answered — and sent the user looking for a process that
+// was in front of them.
+type deliveryOutcome int
+
+const (
+	deliveryNoInstance deliveryOutcome = iota
+	deliveryDeclined
+	deliveryTimedOut
+	deliveryWriteFailed
+	deliveryTaken
+)
+
+func (o deliveryOutcome) explain() string {
+	switch o {
+	case deliveryDeclined:
+		return "no running Sidecar instance is showing this project, so it appears there within a second if one opens it, or at next start."
+	case deliveryTimedOut:
+		return "a running Sidecar instance did not answer in time, so it appears there within a second, or at next start."
+	case deliveryWriteFailed:
+		return "the request could not be handed to a running Sidecar instance, so it appears at next start."
+	default:
+		return "no running Sidecar instance, so it appears at next start."
+	}
+}
+
 // notifyDeliver writes the request and reports whether a live instance took
-// it. No announced instance means no request is written at all: there is
-// nobody to answer, and the caller writes the log itself.
-func notifyDeliver(env Env, req uirequest.Request) bool {
+// it, and why not when it did not. No announced instance means no request is
+// written at all: there is nobody to answer, and the caller writes the log
+// itself.
+func notifyDeliver(env Env, req uirequest.Request) (bool, deliveryOutcome) {
 	instances, err := uirequest.ListInstances(env.StateDir)
 	if err != nil || len(instances) == 0 {
-		return false
+		return false, deliveryNoInstance
 	}
 	req.ID = uirequest.NewRequestID()
 	req.Version = 1
 	req.CreatedAt = time.Now().UTC()
 	req.TTLMs = int(uirequest.DefaultTTL / time.Millisecond)
 	if _, err := uirequest.WriteRequest(env.StateDir, req); err != nil {
-		return false
+		return false, deliveryWriteFailed
 	}
 	defer func() { _ = uirequest.Cleanup(env.StateDir, req.ID, req.Action) }()
 
@@ -372,17 +401,17 @@ func notifyDeliver(env Env, req uirequest.Request) bool {
 		if err == nil {
 			for _, ack := range acks {
 				if ack.Status == uirequest.StatusOpened {
-					return true
+					return true, deliveryTaken
 				}
 			}
 			if len(acks) >= len(instances) {
 				// Every instance answered and none took it.
-				return false
+				return false, deliveryDeclined
 			}
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
-	return false
+	return false, deliveryTimedOut
 }
 
 // notifyOrigin identifies the caller. Inside a Sidecar shell that is the

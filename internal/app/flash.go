@@ -233,18 +233,13 @@ func (m Model) toastOverlayHeight(width int) int {
 	if width < toastMinWidth+2*toastMarginX {
 		return 0
 	}
-	now := time.Now()
 	total := 0
-	for _, s := range m.toastStacks(now) {
-		block := renderToastBlock(s, min(toastMaxWidth, width-2*toastMarginX), now, m.toastExpanded)
+	// The reveal machine's column, same as the renderer's: the flash must sit
+	// below what is actually painted, including a block mid-retraction.
+	for _, r := range m.toastColumnBlocks() {
+		block := r.state.Clip(r.block)
 		if block == "" {
 			continue
-		}
-		if r, ok := m.toastReveals[s.Source]; ok {
-			block = r.state.Clip(block)
-			if block == "" {
-				continue
-			}
 		}
 		total += lipgloss.Height(block) + toastGapY
 	}

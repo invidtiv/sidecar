@@ -29,6 +29,7 @@ func TestToastIsDrawnTopRightOfTheContentRegion(t *testing.T) {
 		Title:  "Agent finished",
 		Body:   "sidecar: tests green",
 	})
+	syncToasts(t, m)
 
 	screen := ansi.Strip(m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28))
 	lines := strings.Split(screen, "\n")
@@ -95,13 +96,18 @@ func TestCountdownTicksDown(t *testing.T) {
 // in the centre.
 func TestDismissVisibleToast(t *testing.T) {
 	m := notifyModel()
+	m.width, m.height, m.ready = 100, 30, true
 	m.postNotification(notify.Notification{Source: notify.SourceSystem, Title: "saved"})
+	syncToasts(t, m)
 	if !m.dismissVisibleToast() {
 		t.Fatal("d did not dismiss the toast on screen")
 	}
 	if len(m.ToastableNotifications(time.Now())) != 0 {
 		t.Fatal("the toast survived dismissal")
 	}
+	// The block is retracting now, which every dismissal path reconciles
+	// before the next frame; a second `d` must not claim it.
+	syncToasts(t, m)
 	if m.dismissVisibleToast() {
 		t.Fatal("d claimed a toast with nothing on screen")
 	}
@@ -204,10 +210,11 @@ func TestClickingAToastDismissesIt(t *testing.T) {
 	m := notifyModel()
 	m.width, m.height, m.ready = 100, 30, true
 	m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "Agent finished"})
+	syncToasts(t, m)
 	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
 
 	region := m.toastMouse.HitMap.Test(96, headerHeight)
-	if region == nil || region.ID != regionToastFor(notify.SourceAgent) {
+	if region == nil || region.ID != regionToastFor(toastKeyOf(t, m, "Agent finished")) {
 		t.Fatalf("no toast hit region under the block's top-right corner: %v", region)
 	}
 	if !m.toastMouseEvent(clickAt(96, headerHeight)) {
@@ -216,7 +223,10 @@ func TestClickingAToastDismissesIt(t *testing.T) {
 	if len(m.ToastableNotifications(time.Now())) != 0 {
 		t.Fatal("the toast survived the click")
 	}
-	// A frame that draws no toast leaves no clickable hole behind it.
+	// A frame that draws no toast leaves no clickable hole behind it. The
+	// block is still retracting, so it is still painted — but a block on its
+	// way out is no longer a target.
+	syncToasts(t, m)
 	m.renderToastOverlay(blankScreen(100, 30), 0, headerHeight, 100, 28)
 	if m.toastMouse.HitMap.Test(96, headerHeight) != nil {
 		t.Fatal("the hit region outlived the toast")

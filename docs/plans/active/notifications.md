@@ -785,6 +785,63 @@ normal border in place of the active, interactive or flash one.
   `internal/plugins/workspace/focus_exclusivity_test.go` (border chrome changes,
   content bytes do not, and it restores).
 
+
+### Live-use fix: block identity, the reveal-driven column, and delivery (2026-08-19)
+
+Three defects Marcus hit within a minute of real use. They are one chain: what
+counts as a block, who decides a block is on screen, and whether a post reaches
+the running app at all.
+
+- **A block's identity is the source *and* the title, not the source.**
+  `notify.StackKey` / `StackKeyFor`, and `Stack.Key` beside `Stack.Source`
+  (which now means only "what the block looks like"). Phase 3 keyed collapse on
+  the source, which read correctly against the six-source registry and wrongly
+  against real use: nearly everything an agent or `sidecar notify post` sends is
+  `agent`, so three unrelated notifications a second apart became one block and
+  each arrival *replaced* the last. Design 1b's collapse exists to stop a source
+  repeating *itself* — "a refusal the user is leaning on a key for" — which is a
+  repeat of the same message. Repeats still dedupe to `×N` with the peek line;
+  distinct messages stack, queue at four, and retract as separate blocks. The
+  "there are six sources, so the queue only engages when more than three sources
+  are live" note above is superseded.
+- **The reveal machine is the only description of what is on screen.**
+  `syncToastReveal` now owns an ordered `Model.toastColumn` and each block's
+  `toastReveal.stack`; the renderer, the flash's height query, the read gate,
+  `d`, the click target and the expand key all read it, and nothing reads the
+  store's live stacks. Painting from the store produced both of Marcus's
+  animation symptoms: a record that arrived between two syncs was drawn whole
+  and then torn down to replay its entry ("all 3 appear, then disappear, then
+  stack"), and a record that expired left the store before the machine began
+  retracting, so the block blanked for a frame and was re-painted only to play
+  its exit. Record-set changes now only ever feed the machine. A block keeps its
+  place in the column while it retracts, and stops being a pointer target and a
+  `d` target the moment it starts leaving — it has already been answered.
+- **A post from inside the project reaches it.** `ownsNotifyRequest` matched the
+  caller's working directory by exact equality against the instance's work dir
+  and project root, so a post from any subdirectory — where an agent shell
+  nearly always is — was disowned. With a single instance running this was
+  hidden, because the CLI adopts the unique instance's origin; with two it was
+  not, and the post silently took the JSONL fallback and reached the app a
+  second later through the sweep. It is containment now (separator-guarded, so a
+  sibling named `sidecar-notification-center` does not match `sidecar`).
+- **The CLI's fallback message is honest.** Every failure read "no running
+  Sidecar instance", which sent the user looking for a process on screen in
+  front of them. `deliveryOutcome` distinguishes nothing announced, every
+  instance declined, nobody answered in time, and the request could not be
+  written, and says which.
+- Regression tests: `internal/notify/stack_test.go` (repeats collapse, distinct
+  messages from one source stack and queue at four),
+  `internal/app/toast_lifecycle_test.go` (arrivals a second apart stack; a
+  sweep-discovered record joins without rebuilding the block already on screen;
+  a block is never painted ahead of its reveal; an expired block stays painted
+  and retracts bottom-up without blinking out),
+  `internal/app/notifications_test.go` (ownership from a subdirectory, and not
+  from a sibling), `internal/cli/notify_test.go` (the fallback says why).
+  Verified in the real app through `scripts/tmux-drive.sh` (isolated tmux +
+  state, with a second announced instance so single-instance adoption could not
+  mask it): three posts a second apart from a subdirectory shell all reported
+  `Posted` and drew three blocks, newest on top.
+
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still

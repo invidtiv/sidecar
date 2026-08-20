@@ -2,7 +2,6 @@ package app
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -64,12 +63,12 @@ const (
 // the "what would `d` act on" question, not "what is on screen": with stacking
 // there are up to notify.DefaultSlots blocks, and the top one is the thing that
 // just happened.
-func (m Model) visibleToast(now time.Time) (notify.Notification, bool) {
-	stacks := m.toastStacks(now)
-	if len(stacks) == 0 {
+func (m Model) visibleToast() (notify.Notification, bool) {
+	column := m.toastColumnBlocks()
+	if len(column) == 0 {
 		return notify.Notification{}, false
 	}
-	return stacks[0].Lead(), true
+	return column[0].stack.Lead(), true
 }
 
 // toastBlockWidth is the outer width every block in the column is drawn at, or
@@ -100,28 +99,24 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 	now := time.Now()
 	blockWidth := min(toastMaxWidth, width-2*toastMarginX)
 	y := y0 + toastMarginY
-	for _, s := range m.toastStacks(now) {
-		r, ok := m.toastReveals[s.Source]
-		var block string
-		if ok {
-			block = r.block
-			// The cache is only good for the width it was rendered at. A
-			// terminal resize, and the centre panel opening, closing or being
-			// dragged, all change the content region without going through
-			// syncToastReveal — redraw rather than paint a stale-width block.
-			if block != "" && lipgloss.Width(block) != blockWidth {
-				block = ""
-			}
-		}
-		if block == "" {
-			block = renderToastBlock(s, blockWidth, now, m.toastExpanded)
+	// The column is the reveal machine's, top to bottom, retracting blocks
+	// included — never the store's live stacks. Painting from the store meant a
+	// record that arrived between two syncs was drawn whole and then torn down
+	// to replay its entry, and a record that expired vanished for a frame and
+	// was re-painted only to play its exit.
+	for _, r := range m.toastColumnBlocks() {
+		block := r.block
+		// The cache is only good for the width it was rendered at. A terminal
+		// resize, and the centre panel opening, closing or being dragged, all
+		// change the content region without going through syncToastReveal —
+		// redraw rather than paint a stale-width block.
+		if block != "" && lipgloss.Width(block) != blockWidth {
+			block = renderToastBlock(r.stack, blockWidth, now, m.toastExpanded)
 		}
 		if block == "" {
 			continue
 		}
-		if ok {
-			block = r.state.Clip(block)
-		}
+		block = r.state.Clip(block)
 		if block == "" {
 			continue
 		}
@@ -133,42 +128,16 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 		if x < x0 {
 			x = x0
 		}
-		m.registerToastRegion(regionToastFor(s.Source), x, y, bw, bh)
-		screen = overlay.Composite(screen, block, x, y)
-		y += bh + toastGapY
-	}
-	// A block still retracting has no stack behind it any more, but it is still
-	// on screen and still clickable until its last row goes.
-	for _, id := range m.leavingToastSources() {
-		block := m.toastReveals[id].state.Clip(m.toastReveals[id].block)
-		if block == "" {
-			continue
-		}
-		bw, bh := lipgloss.Width(block), lipgloss.Height(block)
-		if y+bh > y0+height {
-			break
-		}
-		x := x0 + width - toastMarginX - bw
-		if x < x0 {
-			x = x0
+		// A block still retracting stays painted until its last row goes, but
+		// it is no longer a target: it has already been answered, and a click
+		// on a block on its way out must not claim the press.
+		if r.state.Phase() != reveal.Leaving {
+			m.registerToastRegion(regionToastFor(r.stack.Key), x, y, bw, bh)
 		}
 		screen = overlay.Composite(screen, block, x, y)
 		y += bh + toastGapY
 	}
 	return screen
-}
-
-// leavingToastSources lists the retracting blocks in a stable order. Map order
-// would move a block sideways in the column between two frames of its own exit.
-func (m Model) leavingToastSources() []notify.SourceID {
-	var out []notify.SourceID
-	for id, r := range m.toastReveals {
-		if r.state.Phase() == reveal.Leaving {
-			out = append(out, id)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
 }
 
 // clearToastRegion retires the pointer target. A frame that draws no toast
@@ -189,14 +158,14 @@ func (m Model) registerToastRegion(id string, x, y, width, height int) {
 // regionToastFor is one block's pointer target. Each block in the column is
 // its own target so a click dismisses the block under the pointer rather than
 // whatever happens to be on top.
-func regionToastFor(source notify.SourceID) string { return regionToast + ":" + string(source) }
+func regionToastFor(key notify.StackKey) string { return regionToast + ":" + string(key) }
 
-func toastSourceForRegion(id string) (notify.SourceID, bool) {
+func toastKeyForRegion(id string) (notify.StackKey, bool) {
 	rest, ok := strings.CutPrefix(id, regionToast+":")
 	if !ok {
 		return "", false
 	}
-	return notify.SourceID(rest), true
+	return notify.StackKey(rest), true
 }
 
 // toastMouseEvent answers a press that landed on a toast. A block is one
@@ -216,11 +185,11 @@ func (m *Model) toastMouseEvent(msg tea.MouseMsg) bool {
 	if region == nil {
 		return false
 	}
-	source, ok := toastSourceForRegion(region.ID)
+	key, ok := toastKeyForRegion(region.ID)
 	if !ok {
 		return false
 	}
-	return m.dismissToastStack(source)
+	return m.dismissToastStack(key)
 }
 
 // renderToastBlock draws one stack at the given outer width: source-hued
@@ -388,11 +357,15 @@ func (m *Model) dismissVisibleToast() bool {
 	if m.overlaysSuppressed() {
 		return false
 	}
-	stacks := m.toastStacks(time.Now())
-	if len(stacks) == 0 {
-		return false
+	for _, r := range m.toastColumnBlocks() {
+		// A block already retracting has been answered; `d` means the one above
+		// it, or nothing.
+		if r.state.Phase() == reveal.Leaving {
+			continue
+		}
+		return m.dismissToastStack(r.stack.Key)
 	}
-	return m.dismissToastStack(stacks[0].Source)
+	return false
 }
 
 // dismissToastStack clears one block. A collapsed block dismisses **all** its
@@ -400,10 +373,11 @@ func (m *Model) dismissVisibleToast() bool {
 // making the user dismiss the same block five times to clear five members
 // would be a worse bargain than the centre's own `D dismiss group`, which this
 // mirrors. Anything dismissed is still in the store's 24h window.
-func (m *Model) dismissToastStack(source notify.SourceID) bool {
+func (m *Model) dismissToastStack(key notify.StackKey) bool {
 	now := time.Now()
-	for _, s := range m.toastStacks(now) {
-		if s.Source != source {
+	for _, r := range m.toastColumnBlocks() {
+		s := r.stack
+		if s.Key != key || r.state.Phase() == reveal.Leaving {
 			continue
 		}
 		if reshown, ok := m.reshownToast(now); ok && s.Lead().ID == reshown.ID {

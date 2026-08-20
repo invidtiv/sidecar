@@ -67,7 +67,7 @@ func TestQueuedToastSurfacesWhenASlotFrees(t *testing.T) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	// Dismiss the oldest admitted block, exactly as a click on it would.
-	if !m.dismissToastStack(notify.SourceAgent) {
+	if !m.dismissToastStack(toastKeyOf(t, m, "agent happened")) {
 		t.Fatal("dismissing the agent block failed")
 	}
 	m.syncToastReveal(time.Now())
@@ -78,12 +78,14 @@ func TestQueuedToastSurfacesWhenASlotFrees(t *testing.T) {
 	}
 }
 
-// Same-source toasts are one block with ×N and a peek line. This is the
-// dedupe: five refusals from one source are one block, not five.
-func TestSameSourceCollapsesWithAPeekLine(t *testing.T) {
+// A repeated message is one block with ×N and a peek line. This is the dedupe:
+// five copies of one refusal are one block, not five. Note the identity is
+// source *and* title — three *different* messages from one source are three
+// blocks, which is what live use actually posts.
+func TestARepeatedMessageCollapsesWithAPeekLine(t *testing.T) {
 	m := stackModel(t)
-	for _, title := range []string{"needs input a", "needs input b", "needs input c"} {
-		postToast(t, m, notify.SourceWaiting, title)
+	for range 3 {
+		postToast(t, m, notify.SourceWaiting, "needs input")
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -94,8 +96,8 @@ func TestSameSourceCollapsesWithAPeekLine(t *testing.T) {
 	if !strings.Contains(screen, "2 more") || !strings.Contains(screen, toastExpandKey) {
 		t.Fatalf("the peek line is missing its count or its expand key:\n%s", screen)
 	}
-	if strings.Contains(screen, "needs input a") {
-		t.Fatalf("a collapsed member was drawn anyway:\n%s", screen)
+	if got := strings.Count(screen, "needs input"); got != 1 {
+		t.Fatalf("a collapsed member was drawn anyway: %d copies on screen:\n%s", got, screen)
 	}
 
 	// The expand key opens it, and the members are listed.
@@ -107,8 +109,8 @@ func TestSameSourceCollapsesWithAPeekLine(t *testing.T) {
 	// it was rendered for.
 	m.syncToastReveal(time.Now())
 	screen = ansi.Strip(m.renderToastOverlay(blankScreen(100, 40), 0, headerHeight, 100, 38))
-	if !strings.Contains(screen, "needs input a") || !strings.Contains(screen, "needs input b") {
-		t.Fatalf("expanding did not reveal the members:\n%s", screen)
+	if got := strings.Count(screen, "needs input"); got != 3 {
+		t.Fatalf("expanding listed %d of 3 members:\n%s", got, screen)
 	}
 	if !m.toggleToastExpand() {
 		t.Fatal("the expand key did not collapse an expanded block")
@@ -264,4 +266,17 @@ func rowOf(screen, needle string) int {
 		}
 	}
 	return -1
+}
+
+// toastKeyOf resolves a block's identity from a title, so a test names a
+// notification the way a user would rather than reconstructing the key.
+func toastKeyOf(t *testing.T, m *Model, title string) notify.StackKey {
+	t.Helper()
+	for _, n := range m.notificationCache {
+		if n.Title == title {
+			return notify.StackKeyFor(n)
+		}
+	}
+	t.Fatalf("no notification titled %q in the store", title)
+	return ""
 }

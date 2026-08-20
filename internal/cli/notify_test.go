@@ -3,10 +3,12 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // notifyEnv is a CLI environment pinned to a private state dir, with tmux
@@ -197,5 +199,35 @@ func TestNotifyDismissRequestCarriesTheCallersOrigin(t *testing.T) {
 	poster := notify.Origin{TmuxSession: "sidecar-sh-poster"}
 	if req.Origin.TmuxSession == poster.TmuxSession {
 		t.Fatal("the request must not carry the poster's origin")
+	}
+}
+
+// The fallback message has to be true. Every failure used to read "no running
+// Sidecar instance", which sent the user looking for a process that was on
+// screen in front of them: the instance was running, it had simply not claimed
+// the request. Now each outcome says what actually happened.
+func TestNotifyPostReportsWhyItFellBack(t *testing.T) {
+	env, out, errOut := notifyEnv(t)
+
+	// A live announced instance that never answers: this process is one.
+	if err := uirequest.Announce(env.StateDir, uirequest.Instance{
+		PID:     os.Getpid(),
+		Project: "somewhere-else",
+		WorkDir: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("announce: %v", err)
+	}
+
+	if code := runNotifyPost(env, []string{"Tests are green"}); code != 0 {
+		t.Fatalf("post = %d, stderr %q", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "no running Sidecar instance,") {
+		t.Fatalf("an instance was running; the message denied it: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "did not answer in time") {
+		t.Fatalf("expected the unanswered outcome, got %q", out.String())
+	}
+	if all, err := notify.ReadAll(notify.Path(env.StateDir)); err != nil || len(all) != 1 {
+		t.Fatalf("the notification must still be filed: %d, %v", len(all), err)
 	}
 }

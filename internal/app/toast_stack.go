@@ -34,6 +34,11 @@ const (
 type toastReveal struct {
 	state *reveal.State
 	block string
+	// stack is the block this state was last synced from. It is kept because
+	// the reveal machine, not the store, is what the render, the read gate and
+	// the dismiss key read: a block whose records have expired is still on
+	// screen until its retraction finishes, and it has to know what it holds.
+	stack notify.Stack
 }
 
 // revealTickMsg drives the ~90ms reveal frames. It is tagged like every other
@@ -55,13 +60,18 @@ func (m Model) toastStacks(now time.Time) []notify.Stack {
 	// posted — so it takes the top slot outright. It is a copy, not a record,
 	// so it cannot come out of StackToasts.
 	if n, ok := m.reshownToast(now); ok {
-		source := notify.SourceOf(n.Source).ID
-		out := []notify.Stack{{Source: source, Members: []notify.Notification{n}, First: n.CreatedAt}}
+		key := notify.StackKeyFor(n)
+		out := []notify.Stack{{
+			Key:     key,
+			Source:  notify.SourceOf(n.Source).ID,
+			Members: []notify.Notification{n},
+			First:   n.CreatedAt,
+		}}
 		for _, s := range stacks {
-			// One block per source, always: source is the collapse key, the
+			// One block per identity, always: the key is the collapse key, the
 			// reveal key and the pointer target, so a re-show takes over its
-			// source's block rather than opening a second one beside it.
-			if s.Source == source {
+			// own block rather than opening a second one beside it.
+			if s.Key == key {
 				continue
 			}
 			out = append(out, s)
@@ -82,9 +92,10 @@ func (m Model) toastStacks(now time.Time) []notify.Stack {
 func (m *Model) syncToastReveal(now time.Time) tea.Cmd {
 	width := m.toastBlockWidth()
 	if m.toastReveals == nil {
-		m.toastReveals = map[notify.SourceID]*toastReveal{}
+		m.toastReveals = map[notify.StackKey]*toastReveal{}
 	}
-	live := map[notify.SourceID]bool{}
+	live := map[notify.StackKey]bool{}
+	var order []notify.StackKey
 	// The column stops where the content region does. A block the renderer
 	// would have to clip off the bottom is not on screen, so it gets no reveal
 	// state — which is also how the read gate learns it was never painted.
@@ -100,32 +111,57 @@ func (m *Model) syncToastReveal(now time.Time) tea.Cmd {
 				break
 			}
 			budget -= height + toastGapY
-			live[s.Source] = true
-			r, ok := m.toastReveals[s.Source]
+			live[s.Key] = true
+			order = append(order, s.Key)
+			r, ok := m.toastReveals[s.Key]
 			if !ok {
 				r = &toastReveal{state: reveal.New(height)}
-				m.toastReveals[s.Source] = r
+				m.toastReveals[s.Key] = r
 			} else if r.state.Phase() == reveal.Leaving || r.state.Phase() == reveal.Gone {
-				// The source came back before its retraction finished, so it
+				// The block came back before its retraction finished, so it
 				// arrives again rather than snapping back to full height.
 				r.state = reveal.New(height)
 			} else {
 				r.state.Resize(height)
 			}
 			r.block = block
+			r.stack = s
+		}
+	}
+	// Anything no longer admitted retracts, and keeps its place in the column
+	// while it does: a block must never blink out and be re-painted just to
+	// play its exit. Its cached block is what "bottom-up" retracts — the
+	// records behind it may already have left the store.
+	for _, key := range m.toastColumn {
+		if live[key] {
+			continue
+		}
+		if r, ok := m.toastReveals[key]; ok {
+			r.state.Leave()
+			if r.state.Phase() != reveal.Gone {
+				order = append(order, key)
+			}
 		}
 	}
 	var animating bool
-	for id, r := range m.toastReveals {
-		if !live[id] {
+	for key, r := range m.toastReveals {
+		if !live[key] {
+			// A state the previous column never listed (a resize dropped it, or
+			// it was created before this column existed) still has to leave.
 			r.state.Leave()
 		}
 		if r.state.Phase() == reveal.Gone {
-			delete(m.toastReveals, id)
+			delete(m.toastReveals, key)
 			continue
 		}
 		if r.state.Animating() {
 			animating = true
+		}
+	}
+	m.toastColumn = nil
+	for _, key := range order {
+		if _, ok := m.toastReveals[key]; ok {
+			m.toastColumn = append(m.toastColumn, key)
 		}
 	}
 	if !animating {
@@ -133,6 +169,21 @@ func (m *Model) syncToastReveal(now time.Time) tea.Cmd {
 	}
 	m.toastRevealSeq++
 	return revealTick(m.toastRevealSeq)
+}
+
+// toastColumnBlocks is what is on screen this frame, top to bottom: the reveal
+// machine's answer, not the store's. Every render, hit-test, read-gate and
+// dismiss path reads it, so a record set change can only ever feed the machine
+// — it can never make a block appear before its entry animation or vanish
+// before its exit.
+func (m Model) toastColumnBlocks() []*toastReveal {
+	out := make([]*toastReveal, 0, len(m.toastColumn))
+	for _, key := range m.toastColumn {
+		if r, ok := m.toastReveals[key]; ok {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // advanceToastReveal handles one reveal frame.
@@ -156,11 +207,10 @@ func (m *Model) toggleToastExpand() bool {
 	if m.overlaysSuppressed() {
 		return false
 	}
-	now := time.Now()
 	if !m.toastExpanded {
 		expandable := false
-		for _, s := range m.toastStacks(now) {
-			if s.Hidden() > 0 {
+		for _, r := range m.toastColumnBlocks() {
+			if r.stack.Hidden() > 0 {
 				expandable = true
 				break
 			}
