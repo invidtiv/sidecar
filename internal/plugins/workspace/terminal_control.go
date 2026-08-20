@@ -132,6 +132,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	if cmd := p.reconcileLiveWatches(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	// Agent lane transitions are swept here for the same reason: too many paths
+	// mutate an agent's activity to trust each of them to notice a transition.
+	if cmd := p.notifyAgentTransitions(time.Now()); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return p, tea.Batch(cmds...)
 }
 

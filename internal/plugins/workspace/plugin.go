@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -532,6 +533,10 @@ type Plugin struct {
 	shells           []*ShellSession // Current workDir shells (top Shells section)
 	selectedShellIdx int             // Currently selected top-section shell index
 	shellSelected    bool            // True when a top-section shell is selected
+	// agentLaneTracker turns agent lane transitions into notifications. It is
+	// the plugin's only notification state: the rules live in internal/notify,
+	// and this holds the per-workspace history they debounce against.
+	agentLaneTracker notify.LaneTracker
 	// nestedByWorkDir is the nest projection of the full manifest, keyed by
 	// parent worktree path. Current workDir shells stay out of this map.
 	nestedByWorkDir map[string][]*ShellSession

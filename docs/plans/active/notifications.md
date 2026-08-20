@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done** (see "Phase 1 as built"); Phase 1.5 **done** (see "Phase 1.5 as built"); Phases 2–7 planned, not started
+**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phases 3–7 planned, not started
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -471,7 +471,7 @@ different expand key if both can be live at once.)
 
 ### Phase 2 as built: tab as a focus stop
 
-Only the tab item; the agentstatus triggers are still to do.
+Only the tab item; the agentstatus triggers are the section after this one.
 
 - **The mechanism is the surfaces' own ring, extended — not a second cycle.**
   `plugin.FocusCycler` (`internal/plugin/plugin.go`) is a new optional
@@ -515,6 +515,68 @@ Only the tab item; the agentstatus triggers are still to do.
   state): on Workspaces, `tab` walks sidebar → preview → **centre** → sidebar
   with the panel staying open throughout; on the hosted td tab `tab` still
   drives td's own panels, as designed.
+
+### Phase 2 as built: session & waiting triggers
+
+The agentstatus half of Phase 2. Both halves are now done.
+
+- **The rules live in `internal/notify/triggers.go`** (`LaneTracker`,
+  `LaneObservation`, `LaneEvents`) and know nothing about tmux, plugins, or
+  Bubble Tea. A caller hands `Observe` the **complete** set of workspaces it can
+  speak for plus a clock; it gets back notifications to post and ids to
+  withdraw. The package imports `internal/agentstatus` (a pure leaf) rather than
+  stringly-typing lanes.
+- **Transitions, not states, and only settled ones.** A lane must hold for
+  `Debounce` (`DefaultLaneDebounce` = 3s) before it is committed. A flap
+  working→blocked→working inside that window posts nothing. A committed lane
+  becomes the tracker's truth, so the same logical event cannot post twice: the
+  next post needs a *different* settled lane first. That is the debounce and the
+  dedupe in one mechanism rather than two.
+- **First sight is a baseline, never a notification.** Starting Sidecar beside
+  four already-blocked agents must not open with four toasts about states the
+  user already knew.
+- **What posts.** blocked → `waiting`/warning, **sticky**, "`<name>` needs
+  input". working|blocked → done → `session`/info, "`<name>` finished" (the
+  pass/fail split the plan asked for: a finish is info). working|blocked|done →
+  paused **with `Presentation.Health`** → `session`/error, "`<name>` session
+  ended". Plain paused (no health) is not a death. idle→done is the done-TTL
+  bookkeeping, not a finish, and posts nothing.
+- **Self-dismiss — decided.** The tracker **assigns the notification id itself**
+  (the store's `Post` is id-preserving and idempotent) precisely so it can name
+  the waiting notification later. Any settled transition *out of* blocked
+  withdraws it, and so does the workspace disappearing from the observation set.
+  A "needs input" toast that outlives the wait is worse than no toast. A
+  workspace that simply vanishes gets its waiting withdrawn but earns **no**
+  death notification — a shell the user closed is not an incident, and a session
+  that really failed reaches the paused/health lane while still observed.
+- **Body/identity.** Title carries the shell or worktree name; body is
+  `provider · project[/branch] · evidence`, so one of five agents is
+  identifiable from the toast alone. `Origin` is `{TmuxSession, ProjectKey,
+  WorkDir}` — the same shape the CLI sends, so an agent's own `sidecar notify
+  dismiss` and a lane trigger agree on identity.
+- **Wiring — a deviation worth recording.** The plan said "the app wires it to
+  the heartbeat". The app shell has no per-shell agent state at all: the only
+  place `agentstatus.Presentation` exists per workspace is the workspace plugin,
+  which already polls. So the adapter is
+  `internal/plugins/workspace/agent_triggers.go`, called from the single sweep
+  seam at the bottom of `Plugin.Update` (`terminal_control.go`) beside the focus
+  rule and the live-watch reconcile — the three status-apply sites each end in a
+  dozen early returns, so hooking them individually would have been three
+  chances to miss one. It emits ordinary `notify.PostMsg` / `notify.DismissMsg`
+  commands; nothing new was added to the app shell.
+- **Only readable agents are observed.** A workspace with no `Agent`, or one
+  whose provider `agentactivity` cannot read, produces no observation — its lane
+  is a projection of legacy status and would announce transitions nobody made.
+  Worktrees, top-level shells, and nested (sibling) shells are all in the set;
+  leaving nested shells out would make every sibling look vanished and withdraw
+  live notifications.
+- **Workspace list icons untouched**, as specified. Phase 4's per-source config
+  is the off-switch for users who find the icons sufficient.
+- Tested without tmux: `internal/notify/triggers_test.go` (baseline, flap,
+  once-only, self-dismiss, vanish, per-workspace independence, the
+  finish/death lane rules) and
+  `internal/plugins/workspace/agent_triggers_test.go` (observation filtering,
+  nested shells, the post→dismiss round trip through real `tea.Cmd`s).
 
 **Phase 3 — stacking + reveal.** Max 3 toasts on screen, newest on top;
 posts beyond 3 **queue** (macOS-style, decided 2026-08-19) and surface as
