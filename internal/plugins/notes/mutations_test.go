@@ -254,7 +254,7 @@ func TestOptimisticCreateStaysResponsiveAndRekeysQueuedSave(t *testing.T) {
 				t.Fatal("temporary write generation survived canonical rekey")
 			}
 			applyCommandResults(t, p, followup)
-			persisted, err := controlled.noteStore.Get(created.Note.ID)
+			persisted, err := controlled.Get(created.Note.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -464,7 +464,7 @@ func TestDeleteUndoRestoreFailureStaysVisibleAndRetryable(t *testing.T) {
 	if len(restores) != 2 || restores[0] != notes[0].ID || restores[1] != notes[0].ID {
 		t.Fatalf("restore attempts = %v, want same note twice", restores)
 	}
-	restored, err := controlled.noteStore.Get(notes[0].ID)
+	restored, err := controlled.Get(notes[0].ID)
 	if err != nil || restored == nil || restored.DeletedAt != nil {
 		t.Fatalf("restored note = %+v, err=%v", restored, err)
 	}

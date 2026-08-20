@@ -335,7 +335,7 @@ func dumpNotesMapped(surface markdown.MappedRender) string {
 		out.WriteString(": ")
 		out.WriteString(strings.TrimSpace(ansi.Strip(line)))
 		out.WriteString(" ")
-		out.WriteString(fmt.Sprintf("%+v", surface.At(row)))
+		fmt.Fprintf(&out, "%+v", surface.At(row))
 		out.WriteByte('\n')
 	}
 	return out.String()
