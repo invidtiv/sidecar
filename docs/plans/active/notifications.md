@@ -600,6 +600,38 @@ is exactly today's behaviour). Embedded td is best effort. Centralize in the
 existing `FocusCycler`/`panelayout.focusring` machinery — no per-plugin
 bespoke cycles.
 
+## Bottom-status sweep + ship — after polish round 2, before Phases 4/5
+
+Marcus (2026-08-19): after polish round 2, ALL remaining bottom-of-screen
+transient toasts/flashes are replaced by the notification system (classified
+per the Phase 1.5 audit rules), then this branch ships: merge `main` into
+`notification-center` (main has unrelated files-pane work), then merge this
+branch to `main` and release. Phases 4–7 continue after shipping.
+
+The residual sites (audited 2026-08-19; everything else is clean or is a
+legitimate standing indicator):
+
+1. `internal/plugins/notes/plugin.go:1299` — the `"notes: saving…"`
+   in-flight branch of `FooterStatus` goes (routine, self-resolving). The
+   `saveErr`/`recoveryErr` branches STAY — standing error conditions with no
+   other always-on surface are (b)-class, not toasts.
+2. `internal/plugins/gitstatus/sidebar_view.go:234-244` — `✓ Pushed` /
+   `Fetched` / `Pulled` + their clear-after-delay tick plumbing → flashes,
+   exactly like the already-migrated stash path (`plugin.go:872-888`).
+3. `internal/plugins/gitstatus/sidebar_view.go:215,249,258,267` —
+   `operationError`/`pushError`/`fetchError`/`pullError` one-liners → error
+   notifications (source per the re-tier rules); the push-error modal stays,
+   the sidebar echo goes.
+4. `internal/plugins/gitstatus/commit_view.go:156-170` — decision: the
+   modal-local `"Committing…"` progress and `commitError` lines STAY (a
+   modal's own status is form feedback, not a screen-bottom toast) unless
+   live use says otherwise.
+5. Embedded td/tasks footer bands are td's own UI — out of scope here.
+
+Ship checklist: sweep lands with review; merge main → branch, resolve,
+full suite + one headless smoke; merge branch → main; release per
+`docs/guides/active/releasing.md`.
+
 ## Enhancements
 
 Ordered so each phase ships something visible and none blocks the next.
