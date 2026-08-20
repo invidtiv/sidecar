@@ -43,7 +43,7 @@ func interactiveLinkModel(t *testing.T) *Model {
 // report. A kind added later has to be added here as well.
 func everyKindPreviewTree(t *testing.T, m *Model) {
 	t.Helper()
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-1111aa"))
 	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
 	m.WorkspacesView(focusWide, focusTall)

@@ -207,7 +207,15 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 		m.clearPreviewSelection()
 		return terminallink.OpenHTTP(span.Value), true
 	case terminallink.KindFile:
-		cmd := m.openPreviewDoc(span)
+		// The file branch speaks the shared vocabulary: the span becomes a
+		// uirequest.Target (the one span→target mapping, shared with every
+		// other surface) and the pane opener takes it from there. The other
+		// kinds still read their span directly; they migrate next.
+		target, ok := uirequest.TargetFromSpan(span)
+		if !ok {
+			return nil, false
+		}
+		cmd := m.openPreviewDocTarget(target)
 		if cmd == nil {
 			return nil, false
 		}
@@ -259,17 +267,16 @@ func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
 	return m.openPreviewDiff(target)
 }
 
-func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
+// openPreviewDocTarget opens a file target in the preview document pane. The
+// target's Value is the token as the text wrote it; it is re-resolved against
+// this surface's own root, so a target that names nothing here opens nothing.
+func (m *Model) openPreviewDocTarget(target uirequest.Target) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
 	}
 	root := workspace.Path
-	raw := span.Extra.Raw
-	if raw == "" {
-		raw = span.Value
-	}
-	display, abs, ok := terminallink.ResolveFile(root, raw)
+	display, abs, ok := terminallink.ResolveFile(root, target.Value)
 	if !ok {
 		return nil
 	}
@@ -299,13 +306,13 @@ func (m *Model) openPreviewDoc(span terminallink.Span) tea.Cmd {
 
 	var load tea.Cmd
 	if idx := m.preview.doc.tabs.IndexOf(display); idx >= 0 {
-		load = m.selectPreviewDocTab(idx, span.Extra.Line, file)
+		load = m.selectPreviewDocTab(idx, target.Line, file)
 		file = nil
 	} else {
 		viewer := docview.New(nil)
-		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, span.Extra.Line, m.preview.doc.epoch)
+		load = viewer.LoadFile(m.preview.doc.allocID(), file, display, target.Line, m.preview.doc.epoch)
 		file = nil
-		applyPreviewDocRenderMode(viewer, display, span.Extra.Line)
+		applyPreviewDocRenderMode(viewer, display, target.Line)
 		m.preview.doc.tabs.Append(viewer)
 	}
 

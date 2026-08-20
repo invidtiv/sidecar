@@ -508,6 +508,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clearChangelogModal() // Force rebuild with new content
 		return m, nil
 
+	case ActivateTargetMsg:
+		return m, m.activateTarget(msg)
+
 	case FocusPluginByIDMsg:
 		// Switch to requested plugin
 		m.leaveOverview(false)

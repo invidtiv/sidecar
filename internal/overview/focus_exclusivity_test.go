@@ -17,7 +17,7 @@ import (
 func TestGlobalSurfaceBlursWhileFocusIsHeldOutsideThePanes(t *testing.T) {
 	t.Cleanup(func() { styles.SetFocusHeldOutsidePanes(false) })
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	m.WorkspacesView(previewWide, previewTall)
 
 	styles.SetFocusHeldOutsidePanes(false)

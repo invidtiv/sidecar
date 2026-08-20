@@ -19,7 +19,7 @@ func focusRingModel(t *testing.T) *Model {
 	t.Helper()
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	m.WorkspacesView(previewWide, previewTall)
 	return m

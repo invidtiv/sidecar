@@ -263,7 +263,7 @@ func TestGlobalIssueAndDocumentShareTheProjectPanePlacement(t *testing.T) {
 	}
 
 	action := previewNeedleAction(t, m, "README.md")
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, action)))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, action)))
 	if m.preview.doc == nil || m.preview.issue == nil {
 		t.Fatalf("opening doc did not preserve issue: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
 	}
@@ -283,7 +283,7 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte(longDoc), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	if m.preview.doc == nil || m.preview.issue == nil {
 		t.Fatalf("stack did not open: doc=%#v issue=%#v", m.preview.doc, m.preview.issue)
@@ -354,7 +354,7 @@ func TestGlobalPaneStackResizesAndRestoresPerWorkspaceScroll(t *testing.T) {
 func TestGlobalStackClicksKeepInputAndTreeFocusTogether(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	m.WorkspacesView(previewWide, previewTall)
 
@@ -443,7 +443,7 @@ func TestGlobalIssuePreviewWheelKeyboardAndQClose(t *testing.T) {
 
 	// When the issue is the lower half of a file/issue stack, the widened
 	// divider must not cover its tab ID cell.
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	run(t, m, m.openPreviewIssue("td-196c42"))
 	m.WorkspacesView(previewWide, previewTall)
 	x, y, ok := visualPreviewIssueIDPoint(t, m, "td-196c42")
@@ -608,8 +608,8 @@ func TestGlobalPreviewDocTabStripAndMToggle(t *testing.T) {
 
 func TestGlobalPreviewDocTabClickSelectsFile(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
-	run(t, m, m.openPreviewDoc(terminallink.Span{
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, terminallink.Span{
 		Kind: terminallink.KindFile, Value: "main.go", Extra: terminallink.Extra{Raw: "main.go"},
 	}))
 	if m.preview.doc == nil || m.preview.doc.view().Title() != "main.go" {
@@ -669,7 +669,7 @@ func TestGlobalPreviewIssueQReturnsToTheList(t *testing.T) {
 
 func TestGlobalPreviewDocQClosesAndDropsStaleLoad(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	first := m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
+	first := openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
 	if m.preview.doc == nil {
 		t.Fatal("doc did not open")
 	}
@@ -688,10 +688,10 @@ func TestGlobalPreviewReopenRejectsClosedModelResults(t *testing.T) {
 	t.Run("document", func(t *testing.T) {
 		m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 		span := mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))
-		oldLoad := m.openPreviewDoc(span)
+		oldLoad := openPreviewDocSpan(m, span)
 		oldEpoch := m.preview.doc.epoch
 		m.closePreviewDoc()
-		newLoad := m.openPreviewDoc(span)
+		newLoad := openPreviewDocSpan(m, span)
 		if m.preview.doc.epoch == oldEpoch {
 			t.Fatalf("reopened document reused epoch %d", oldEpoch)
 		}
@@ -729,7 +729,7 @@ func TestGlobalPreviewReopenRejectsClosedModelResults(t *testing.T) {
 
 func TestGlobalPreviewLoadFinishesWhileItsWorkspaceIsCached(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	load := m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
+	load := openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md")))
 	if load == nil || m.preview.doc == nil {
 		t.Fatal("document did not begin loading")
 	}
@@ -981,4 +981,15 @@ func diffSpanCount(spans []terminallink.Span) int {
 		}
 	}
 	return n
+}
+
+// openPreviewDocSpan is the tests' span-shaped entry to the file pane. The
+// production path maps the span to a uirequest.Target first; these tests keep
+// writing spans because that is what a terminal click produces.
+func openPreviewDocSpan(m *Model, span terminallink.Span) tea.Cmd {
+	target, ok := uirequest.TargetFromSpan(span)
+	if !ok {
+		return nil
+	}
+	return m.openPreviewDocTarget(target)
 }

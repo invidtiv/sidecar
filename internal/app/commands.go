@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 // ToastMsg is re-exported from msg package for backward compatibility.
@@ -109,6 +110,30 @@ type FocusPluginByIDMsg struct {
 type NavigateToFileMsg struct {
 	Path string // Relative path from workdir
 	Line int    // Optional 1-based line to reveal after loading
+}
+
+// ActivateTargetMsg is the one route for "jump to the thing this text names".
+// Every surface — a terminal link, the notification centre, a future CLI action
+// — sends this rather than reaching into a plugin, because only the app shell
+// can both focus plugins and switch projects.
+//
+// Target is the cross-surface vocabulary (uirequest.Target). Project is an
+// optional qualifier — a project path or its base name — and empty means the
+// project the user is already in.
+type ActivateTargetMsg struct {
+	Target  uirequest.Target
+	Project string
+}
+
+// ActivateTarget returns a command that activates a target in the current
+// project. Use ActivateTargetIn for a cross-project jump.
+func ActivateTarget(target uirequest.Target) tea.Cmd {
+	return ActivateTargetIn(target, "")
+}
+
+// ActivateTargetIn returns a command that activates a target in a named project.
+func ActivateTargetIn(target uirequest.Target, project string) tea.Cmd {
+	return func() tea.Msg { return ActivateTargetMsg{Target: target, Project: project} }
 }
 
 // OpenPrefilledShellMsg asks the Workspaces plugin for an ordinary new shell

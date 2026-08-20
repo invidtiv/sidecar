@@ -22,7 +22,11 @@ const (
 type TargetKind string
 
 const (
-	TargetKindFile     TargetKind = "file"
+	TargetKindFile TargetKind = "file"
+	// TargetKindURL is an http(s) link. Activation validates it with
+	// terminallink.SafeHTTPURL and refuses anything else; it is never a
+	// scheme the app hands to the OS unchecked.
+	TargetKindURL      TargetKind = "url"
 	TargetKindIssue    TargetKind = "issue"
 	TargetKindDiff     TargetKind = "diff"
 	TargetKindWorktree TargetKind = "worktree"

@@ -1,6 +1,7 @@
 # Unified target activation — one jump service for every surface
 
-**Status:** planned, not started
+**Status:** Sequence step 1 (steel thread) **done** — see "Step 1 as built";
+steps 2–4 planned, not started
 **Created:** 2026-08-19
 **Depended on by:** `notifications.md` Phase 5 (calls to action) — that phase
 assumes everything here is done. This plan is pure architecture: no new
@@ -90,3 +91,52 @@ first. Put the rule next to the service so a new consumer cannot miss it.
 New link kinds (session/task *detection* patterns), notification-centre
 integration, numbered/digit-key jump UI — all belong to `notifications.md`
 Phase 5, which starts only when this plan is done.
+
+## Step 1 as built
+
+The steel thread landed as three pieces, no behaviour change:
+
+- **`internal/targetactivation`** (new, state-free, no bubbletea, no
+  filesystem): `Resolve(uirequest.Target) (Plan, error)`. A `Plan` is data —
+  `{Kind, PluginID, Path, Line, URL}` — and the shell turns it into commands, so
+  a headless caller can act on the same answer. `PlanOpenFile` names
+  `FileBrowserPluginID`; `PlanOpenURL` carries an already-validated URL.
+  Unrouted kinds return `ErrUnsupportedKind` (a sentinel, not a malformed-target
+  error) so a surface migrating one kind at a time keeps its own branch for the
+  rest. The package doc is where the safety discipline lives: URL activation
+  refuses anything `terminallink.SafeHTTPURL` rejects, and the
+  StripOSC8-before-Decorate rule is written down for every render site that
+  feeds the service.
+- **Vocabulary.** `uirequest` gained `TargetKindURL` and
+  `TargetFromSpan(terminallink.Span) (Target, bool)` — the one span→target
+  mapping, replacing what each surface was about to keep privately. It resolves
+  nothing (spans arrive resolved), so it is safe in a render pass. `Raw` wins
+  over `Value` for file and diff spans, matching what both surfaces already did.
+  Resource spans return false: `Target` has no matcher field yet, which is step
+  2's job.
+- **`app.ActivateTargetMsg{Target, Project}`** + `ActivateTarget` /
+  `ActivateTargetIn` helpers, handled in `update.go` by
+  `internal/app/activate_target.go`. File plans become `FocusPlugin` +
+  `NavigateToFileMsg`. Deviations worth naming: (a) a `Project` naming another
+  project is refused out loud with `msg.Blocked` rather than silently activated
+  against the wrong project — step 3 replaces that refusal with the
+  pending-target slot; (b) URL execution is wired through `terminallink.OpenHTTP`
+  rather than stubbed, because the refusal rule was the point and no surface
+  sends a URL target yet.
+
+Overview migration: only the FILE branch of `activatePreviewLinkAt` moved. It
+now maps the span with `uirequest.TargetFromSpan` and calls
+`openPreviewDocTarget(uirequest.Target)` (was `openPreviewDoc(span)`). The two
+`ui_requests.go` file sites that used to *build* a synthetic span out of a
+`uirequest.Target` just to call the opener now pass the target straight through
+— a small deletion the shared vocabulary paid for immediately. Overview keeps
+opening its own document pane; the file browser route is the shell's path for
+other consumers, and forcing overview onto it would have changed behaviour.
+Existing overview tests updated mechanically via one test-local
+`openPreviewDocSpan` helper.
+
+Tests: `internal/targetactivation/activate_test.go` (routing, file refusals —
+absolute, `~`, escaping `..`, control chars, negative line — URL safety,
+unsupported kinds), `internal/uirequest/target_span_test.go` (span mapping),
+`internal/app/activate_target_test.go` (the shell route and both refusals).
+`go build ./... && go test ./...` green.
