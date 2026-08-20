@@ -892,6 +892,11 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case tea.MouseMsg:
 		return p.handleMouse(msg)
 
+	case appmsg.ThemeChangedMsg:
+		// Presentation-only invalidation: rendered markdown carries theme
+		// colours, so it must be rebuilt while preserving user state.
+		p.handleThemeChanged()
+
 	case tea.WindowSizeMsg:
 		p.width = msg.Width
 		p.height = msg.Height
