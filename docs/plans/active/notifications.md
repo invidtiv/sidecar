@@ -496,6 +496,32 @@ From live use (Marcus, 2026-08-19, nt-9519f6). Runs after
   `◆ Agent finished        ▪▪▪▪▪ ×` with the body below it and no key row; a
   sticky `waiting` block draws the `×` alone.
 
+#### Review of the toast slice (2026-08-19)
+
+- **Fixed: the `×`'s hit region was one cell right of the glyph.** A block is
+  border · padding · inner · padding · border, so the interior's last cell is
+  `blockWidth-3`, not `blockWidth-2`; the region sat on the right padding cell.
+  It was invisible in behaviour — the block's own region covers the glyph and
+  runs the same `dismissToastStack` — and would have become a real miss the
+  moment the two regions meant different things. The column is now
+  `toastCloseCol(blockWidth)`, read by the hit map, and the close-button test
+  asserts the region is the cell the glyph is drawn in (mutation-checked: the
+  test fails at `-2`).
+- Checked and sound: the rendered block, the reveal row count, the height
+  budget in `syncToastReveal` and the read gate all derive from
+  `lipgloss.Height` of the same string, so the two-row removal moved them
+  together; the close region is registered after the block's (last-wins) and
+  only once `Rows() > 1`, so it can neither steal a press from another block
+  nor exist before the title row is painted; a sticky or expired countdown
+  returning `""` changes no row count because the meter lives in the title row.
+- Stale `90ms` comments in `toast_stack.go`, `update.go` and `reveal.go` now
+  name `reveal.Step` instead of a number that has changed.
+- **Deferred nit:** the read gate marks the lead painted at `Rows() > 0`, i.e.
+  with only the border row on screen. Unreachable today (the sweep is on the 1s
+  heartbeat and a reveal finishes in well under that), but `Rows() > 1` — "the
+  title row is legible", the same test the close button uses — is the truer
+  gate if the cadence ever slows.
+
 **Centre:**
 
 - Double-click on an entry = `enter` (view details today; activation when
@@ -677,6 +703,31 @@ bespoke cycles.
   previewed it walks tree → **centre** → tree, which is the "not drawn is not a
   stop" rule doing its job. Notes and conversations are not in this project's
   tab set, so they are covered by their package tests.
+
+#### Review of the centre, row-background and tab slices (2026-08-19)
+
+No defects found in these three; nothing changed. What was checked:
+
+- **Centre pointer.** The group `×` and the entry rows cannot overlap — a
+  header row is skipped by the item loop and carries only its own 1×1 region,
+  registered after the panel-wide region so it wins the press. Its column comes
+  from `notificationGroupClearCol(inner)` with the same `inner = panelWidth-4`
+  the renderer uses, and both sides degrade together below six columns.
+  Double-click is `internal/mouse`'s 400ms same-region counter, so a slow second
+  click is an ordinary click; the single-click path still selects and marks
+  read before the branch, so read-marking is unchanged either way.
+- **`ui.RowBackground`.** The ANSI walk re-asserts the background after every
+  reset, explicit `48;…` and legacy code through the *existing* `sgrBackground`
+  parser; non-SGR sequences (OSC 8 hyperlinks) pass through untouched, and
+  truncation is `ansi.Truncate`, so no escape is cut mid-sequence. Unselected
+  rows do not go through it at all — the old code padded only in the selected
+  branch too, so nothing regressed there.
+- **Tab parity and the shell reorder.** Asking the `FocusCycler` before the
+  keymap is safe for every context that binds `tab` to a non-cycle command:
+  `config`/`config-edit` are not cyclers, and `file-browser-project-search`,
+  `file-browser-file-op` and `notes-task-modal` are all declined by their
+  surface's `FocusContext` switch. Toasts still register no focus and no
+  surface gained a focus-stealing path.
 
 ## Bottom-status sweep + ship — after polish round 2, before Phases 4/5
 

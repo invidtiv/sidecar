@@ -102,6 +102,10 @@ func TestToastCloseButtonDismissesItsOwnBlock(t *testing.T) {
 		if got := m.toastMouse.HitMap.Test(r.Rect.X, r.Rect.Y); got == nil || got.ID != want {
 			t.Fatalf("the × is covered by its block: %v", got)
 		}
+		// The region has to be the cell the glyph is actually drawn in — a
+		// target one cell off is invisible in behaviour today (both regions
+		// dismiss the same stack) and wrong the moment they differ.
+		assertToastCloseRegionIsOnTheGlyph(t, m, agent, r.Rect.X)
 		if !m.toastMouseEvent(clickAt(r.Rect.X, r.Rect.Y)) {
 			t.Fatal("a click on the × did not dismiss")
 		}
@@ -113,6 +117,41 @@ func TestToastCloseButtonDismissesItsOwnBlock(t *testing.T) {
 	if len(live) != 1 || live[0].Title != "System note" {
 		t.Fatalf("the × dismissed the wrong block: %+v", live)
 	}
+}
+
+// assertToastCloseRegionIsOnTheGlyph checks that the close region's column is
+// the column the `×` occupies in the block that was painted for that stack.
+func assertToastCloseRegionIsOnTheGlyph(t *testing.T, m *Model, key notify.StackKey, closeX int) {
+	t.Helper()
+	var blockX, blockW int
+	found := false
+	for _, r := range m.toastMouse.HitMap.Regions() {
+		if r.ID == regionToastFor(key) {
+			blockX, blockW, found = r.Rect.X, r.Rect.W, true
+		}
+	}
+	if !found {
+		t.Fatalf("no block region for %q", key)
+	}
+	for _, r := range m.toastColumnBlocks() {
+		if r.stack.Key != key {
+			continue
+		}
+		title := strings.Split(ansi.Strip(r.block), "\n")[1]
+		idx := strings.Index(title, toastCloseGlyph)
+		if idx < 0 {
+			t.Fatalf("no × on the title row: %q", title)
+		}
+		col := lipgloss.Width(title[:idx])
+		if col != toastCloseCol(blockW) {
+			t.Fatalf("× drawn at column %d, toastCloseCol says %d", col, toastCloseCol(blockW))
+		}
+		if blockX+col != closeX {
+			t.Fatalf("close region at x=%d, × drawn at x=%d", closeX, blockX+col)
+		}
+		return
+	}
+	t.Fatalf("no painted block for %q", key)
 }
 
 // The countdown loses a cell as the expiry approaches, off the 1s heartbeat.

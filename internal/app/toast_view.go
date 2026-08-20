@@ -150,13 +150,12 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 		// on a block on its way out must not claim the press.
 		if r.state.Phase() != reveal.Leaving {
 			m.registerToastRegion(regionToastFor(r.stack.Key), x, y, bw, bh)
-			// The `×` sits on the title row, one cell in from the interior's
-			// right edge (border + padding = 2 cells of chrome). It is
-			// registered after the block, so the later region wins the press
-			// and the close button is a real target rather than a picture of
-			// one. It is only a target once that row is actually painted.
+			// The `×` sits on the title row, at the interior's right edge. It
+			// is registered after the block, so the later region wins the
+			// press and the close button is a real target rather than a
+			// picture of one. It is only a target once that row is painted.
 			if r.state.Rows() > 1 {
-				m.registerToastRegion(regionToastClose+":"+string(r.stack.Key), x+bw-2, y+1, 1, 1)
+				m.registerToastRegion(regionToastClose+":"+string(r.stack.Key), x+toastCloseCol(bw), y+1, 1, 1)
 			}
 		}
 		screen = overlay.Composite(screen, block, x, y)
@@ -184,6 +183,14 @@ func (m Model) registerToastRegion(id string, x, y, width, height int) {
 // its own target so a click dismisses the block under the pointer rather than
 // whatever happens to be on top.
 func regionToastFor(key notify.StackKey) string { return regionToast + ":" + string(key) }
+
+// toastCloseCol is the column, relative to the block's left edge, that the `×`
+// is drawn in: the last interior cell. A block is border · padding · inner ·
+// padding · border, so the interior ends three cells in from the right, not
+// two — the right padding cell sits between the glyph and the border. The
+// renderer right-aligns the control to that cell and the hit map targets it
+// through this one function, so the button and its region cannot drift apart.
+func toastCloseCol(blockWidth int) int { return blockWidth - 3 }
 
 func toastKeyForRegion(id string) (notify.StackKey, bool) {
 	if rest, ok := strings.CutPrefix(id, regionToastClose+":"); ok {

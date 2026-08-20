@@ -443,7 +443,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case revealTickMsg:
 		// One whole row per frame (design 1h). The loop stops the moment every
-		// block has settled: motion must not hold a 90ms timer over a screen
+		// block has settled: motion must not hold a frame timer over a screen
 		// that is not moving.
 		return m, (&m).advanceToastReveal(msg)
 

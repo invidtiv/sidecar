@@ -41,7 +41,7 @@ type toastReveal struct {
 	stack notify.Stack
 }
 
-// revealTickMsg drives the ~90ms reveal frames. It is tagged like every other
+// revealTickMsg drives the reveal frames (reveal.Step). It is tagged like every other
 // timer in the app, so a burst of posts cannot leave two loops advancing the
 // same states.
 type revealTickMsg struct{ seq int }

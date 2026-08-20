@@ -85,7 +85,7 @@ func (s *State) Visible() bool { return s.Rows() > 0 }
 
 // Animating reports whether the block still owes frames. A host schedules its
 // tick while any of its blocks says yes and stops when none do — motion must
-// not keep a 90ms timer alive for a screen that has settled.
+// not keep a frame timer alive for a screen that has settled.
 func (s *State) Animating() bool {
 	if s == nil {
 		return false
