@@ -1,9 +1,9 @@
 # Sidecar-wide content links and passive panes
 
-**Status:** proposed
+**Status:** implemented
 **Written:** 2026-08-19, against `82a30ced`
-**Tracking:** `td-7be1ec`
-**Related:** [workspace windowing](workspace-windowing-system.md) · [terminal resource providers](terminal-resource-providers.md) · [agent open](../implemented/agent-open-in-split-cli.md) · [workspace focus ring](../implemented/workspace-focus-ring.md) · [workspace diff pane](../implemented/workspace-diff-pane.md)
+**Tracking:** epic `td-f6b856`
+**Related:** [workspace windowing](../active/workspace-windowing-system.md) · [terminal resource providers](../active/terminal-resource-providers.md) · [agent open](agent-open-in-split-cli.md) · [workspace focus ring](workspace-focus-ring.md) · [workspace diff pane](workspace-diff-pane.md)
 
 ## Decision
 
