@@ -457,9 +457,11 @@ references.
 
 ## Incremental delivery
 
-User-visible work is gated by a `plugin_content_panes` feature flag, default
-off, until Files and Git pass the real journeys. Existing Workspaces links and
-panes are not gated or changed by that flag.
+`plugin_content_panes` is default-on after Files, Git, and Workspace parity
+journeys and independent implementation review completed. Its ordinary config
+and CLI overrides remain available. Existing project and global Workspaces are
+ungated and unwrapped because they already own the shared pane host. The
+separate `tasks_plugin` and `notes_plugin` feature defaults remain opt-in.
 
 ### M0 — Shared target and passive-pane core, no visible change
 
