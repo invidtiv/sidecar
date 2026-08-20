@@ -1,7 +1,7 @@
 # Unified target activation — one jump service for every surface
 
-**Status:** Sequence steps 1–3 **done** — see the "as built" sections;
-step 4 (regression proof) planned, not started
+**Status:** **done** — all four sequence steps landed; see the "as built"
+sections and the step 4 proof run
 **Created:** 2026-08-19
 **Depended on by:** `notifications.md` Phase 5 (calls to action) — that phase
 assumes everything here is done. This plan is pure architecture: no new
@@ -300,3 +300,65 @@ are hand-written mirrors of the real dispatch switches, so the parity pair
 proves a *declaration*, not the dispatch itself. A new kind added to the helper
 but not to the switch would pass. The regression proof should therefore exercise
 each kind on both surfaces for real, which is what step 4 already promises.
+
+## Step 4 as built — the regression proof
+
+The proof was run as an **A/B against the pre-plan binary**, which is the only
+evidence that answers this plan's actual claim: behaviour is preserved exactly.
+`feeba195` was built into a throwaway clone under `/private/tmp` and driven
+through the identical keystroke and click sequence as the branch binary, in a
+second `tmux-drive` run dir. Both instances were isolated on both axes
+(`paths` verified first: private tmux socket, `XDG_STATE_HOME`, and `-config`
+under the run dir — the isolated `state.json` sits beside the isolated config,
+and the developer's `~/.config/sidecar/state.json` was untouched throughout).
+Both were stopped at the end and the private tmux server no longer exists.
+
+Fixtures: two synthesized git checkouts (`alpha`, `beta`) configured as
+projects, and a `links.txt` in `alpha` printed into a Sidecar shell so every
+kind is one clickable token on its own line. Activation is mouse-only on both
+surfaces, so clicks were synthesized as SGR-1006 sequences (`ESC[<0;col;rowM/m`)
+sent to the drive session, with coordinates read out of the preceding text snap.
+
+Result: **every cell identical between the two binaries**, and identical across
+the two surfaces per kind.
+
+| kind | workspace terminal | global preview (Sessions) |
+| --- | --- | --- |
+| file, markdown (`README.md`) | doc pane opens, renders "alpha readme" | same |
+| file, `path:line` (`src/main.go:3`) | decorated, click opens nothing | same |
+| issue (`td-331dbf19`) | issue pane opens ("issue not found", no td db) | same |
+| diff (40-char sha) | commit pane opens with message + 2-file list | same |
+| unsafe URL (`file:///etc/passwd`) | never decorated, so never clickable | same |
+| safe URL | decorated; hand-off to the OS opener, not observable headlessly | same |
+
+Two things worth writing down:
+
+- **`path:line` on a non-document file activates nothing on either surface, in
+  both binaries.** It is decorated, so it promises a click it does not honour.
+  That is pre-existing behaviour, unchanged by this plan, and out of its scope —
+  but it is a real papercut and the obvious candidate for the first behavioural
+  follow-up.
+- **Foreign-root resolution lands where it should.** With the app switched to
+  `beta`, clicking `README.md` in `alpha`'s session preview opened *alpha*'s
+  README, not beta's. That is the class of bug the steps 1–3 review fixed
+  (`TestPathQualifierForMainRepoIsNotCurrentInAWorktree`), confirmed live.
+- The notification centre survives a project switch: opened with `N` in `alpha`,
+  still open and correctly framed after switching to `beta` and rebuilding the
+  registry.
+
+Not driven headlessly: the cross-project *jump* (`activateFileForRoot` →
+`ActivateTargetIn`). Reaching it needs a workspace terminal whose scanned root
+is not the current checkout, and the only route to one through the UI is
+creating a worktree, which in this app launches an agent — not something a proof
+run should spawn. That path stays covered by `internal/app/pending_target_test.go`
+(nine cases, including the unresolvable-project notification and the
+refuse-before-switch rule) and `TestForeignRootFileLinkAsksForACrossProjectJump`.
+The foreign-root resolution result above is the closest live evidence.
+
+One defect fixed, the one the review flagged: the parity pair asserted a
+*declaration*. `internal/parityscan` (test support) now reads the real dispatch
+switch out of the source and requires it to name exactly the kinds the
+`…HandlesPlanKind` helper claims, on both surfaces —
+`TestPreviewHandledKindsAreTheDispatchedKinds` and
+`TestTerminalHandledKindsAreTheDispatchedKinds`, mutation-checked by adding
+`PlanAttachSession` to the preview helper (the test fails; the old pair did not).

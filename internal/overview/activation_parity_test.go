@@ -3,6 +3,7 @@ package overview
 import (
 	"testing"
 
+	"github.com/marcus/sidecar/internal/parityscan"
 	"github.com/marcus/sidecar/internal/targetactivation"
 )
 
@@ -21,4 +22,16 @@ func TestPreviewDispatchesEveryPlanKind(t *testing.T) {
 	if previewHandlesPlanKind(targetactivation.PlanKind("invented")) {
 		t.Fatal("an unknown plan kind must not report as handled")
 	}
+}
+
+// TestPreviewHandledKindsAreTheDispatchedKinds closes the gap the declaration
+// above leaves open: previewHandlesPlanKind is hand-written, so a kind added to
+// it but never given a branch in activatePreviewPlan would satisfy the parity
+// pair while clicking it did nothing. This reads the real switch out of the
+// source and requires the two to name exactly the same kinds.
+func TestPreviewHandledKindsAreTheDispatchedKinds(t *testing.T) {
+	t.Parallel()
+	declared := parityscan.HandledKinds(t, "preview_links.go", "previewHandlesPlanKind")
+	dispatched := parityscan.HandledKinds(t, "preview_links.go", "activatePreviewPlan")
+	parityscan.RequireSameKinds(t, "the global preview surface", declared, dispatched)
 }
