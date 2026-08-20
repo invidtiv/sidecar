@@ -2,6 +2,96 @@
 
 All notable changes to sidecar are documented here.
 
+## [v1.2.0] - 2026-08-20
+
+The footer toast is gone. Notifications stack in the corner, live in a centre
+you can open from any surface, and take numbered jumps to the thing they name.
+Clicking a file, a commit, a td id, or a note link opens a pane beside the
+plugin you were already looking at, instead of yanking you away. Markdown
+follows the active Sidecar theme. Notes is no longer a beta.
+
+### Features
+
+- **A notification system instead of a one-line footer echo.** Toasts are
+  bordered blocks in the top-right of the content region: they stack, collapse
+  by source, reveal a row at a time, and dismiss on click or `d`. The centre is
+  an app-level right panel (`N` / `alt+n`) with per-source sections, unread
+  dots, wheel scrolling, and a header indicator next to the gear. Settled agent
+  lane transitions post here; so does anything that used to flash the footer.
+  A quieter status-flash tier exists for things that should not take a toast
+  slot. Expiry, stacking, and per-source behaviour live on the existing config
+  screen.
+- **`sidecar notify` for agents.** `post`, `list`, and `dismiss` write the same
+  log the UI reads. A post appears as a toast in the running instance and stays
+  in the centre until dismissed; with no instance running it is stored and
+  shown at the next start. `--target kind:value[:line][@project]` attaches
+  numbered calls to action (issue, task, commit, file, session, url), including
+  a jump into another checkout.
+- **Content links and passive panes on Files, Git, Notes, td, and Tasks.** A
+  file path, `path:line`, td id, commit hash, or `sidecar://…` link underlines
+  only when it can be activated in the current project. Clicking it keeps the
+  active plugin on screen and opens the same Document, Issue, Diff, or Resource
+  pane Workspaces already uses: first pane to the right, another kind stacked
+  in that column, the same kind as a tab. Plugin content panes are on by
+  default. Tab walks the plugin, then the panes, in visual order; `q`/`esc`
+  hides the focused pane and `x` closes a tab.
+- **Tab walks into the embedded td and Tasks panels.** Those two surfaces now
+  name their own focus stops, so the app's tab ring can enter the monitor's
+  current-work / list / activity panels and Tasks' list and detail regions
+  instead of treating the whole plugin as one opaque box.
+- **In-file search and inline edit in document panes**, on both the project
+  workspace and the global Sessions browser. `/` searches the focused file
+  (incremental, `n`/`N`, wrap-aware highlights); the same tmux-PTY editor the
+  Files plugin uses now edits a doc pane in place. `ctrl+p` / `ctrl+f` reach
+  the file finder from the browser as well.
+- **Markdown follows the active Sidecar theme.** Headings, links, inline code,
+  rules, and fenced blocks are derived from the current palette rather than
+  Glamour's generic `dark` preset. Fenced code uses the same Chroma style as
+  file previews. Switching a theme restyles Markdown that is already on screen
+  without discarding scroll, selection, tabs, or search.
+- **Notes is a stable project surface.** A project that has not run `td init`
+  gets a setup path rather than a dead screen. Create and delete are optimistic,
+  mouse editing is native (multi-click, click-after-EOL, pane-local `$EDITOR`
+  forwarding), and the built-in editor honors Mac/Emacs keys plus a persisted
+  Built-in / `$EDITOR` preference. Layout, filter, and save chrome are tighter;
+  informal numbered outlines render as lists; edit padding matches the
+  markdown view.
+
+### Bug Fixes
+
+- **Unsafe internal link labels stay inert**, and only rectangles that are
+  actually rendered as links are decorated — so a label that looks like a path
+  or a td id inside chrome, search, or an editor is not clickable.
+- **Absolute content paths survive a project switch**, so a pane opened by
+  full path does not resolve against the wrong checkout.
+- **Git full-file staging keeps its identity** when a content pane is open
+  beside the Git plugin, instead of staging the wrong file because the pane
+  and the list had drifted apart.
+- **A path qualifier on a jump names a checkout, not a project**, so
+  cross-project notification targets and `sidecar open` land in the worktree
+  they named.
+- **Git failure alerts are a headline**, not a dump, and the last bottom-status
+  echoes in Notes and git-status are gone — those events are notifications.
+
+### Internal
+
+- `internal/contentlink` owns link recognition and `sidecar://` routing;
+  `internal/passivedeck` owns the app-level content deck both plugin hosts and
+  the workspace surfaces bind to. There is still one compositor and one pane
+  frame.
+- Document search lives in `internal/docview`. Inline edit for Files, Notes,
+  and doc panes shares `internal/inlineedit`.
+- Cross-surface jumps (notification centre, content links, `sidecar open`) go
+  through one state-free activation service, with a single pending-target slot
+  so a project switch and a landing cannot race.
+
+### Dependencies
+
+- td v0.60.0 → **v0.61.0**. The embedded monitor exposes its three root panels
+  as focus stops the host tab ring can enter.
+- tasks v1.11.0 → **v1.12.0**. Same contract for Tasks' list and detail
+  regions.
+
 ## [v1.1.1] - 2026-08-19
 
 ### Dependencies
