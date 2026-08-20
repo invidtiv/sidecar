@@ -286,7 +286,7 @@ Move the header row out of the content and into the frame. Today `renderDocPane`
 | Not building | Why |
 |---|---|
 | **A pane tree in `internal/overview`** | ~~Deferred.~~ **Overtaken by events:** overview has a tree. The concern this row raised was right about the mechanism and wrong about the mitigation — keeping the tree out did not prevent a second geometry computation, it just delayed it. The mitigation that works is a shared presentation layer both surfaces are obliged to use: `internal/paneframe` (td-b657fb). |
-| **App-level windowing across plugins** | Would change `plugin.Plugin.View(width, height)` and every plugin. The tree lives inside the workspace preview region. |
+| **App-level windowing across plugins** | **Superseded by [Sidecar-wide content links and passive panes](sidecar-wide-content-links.md).** The requirement now exists for passive Document/Issue/Diff/Resource leaves beside Files, Git, and opt-in surfaces. The new plan reuses `panelayout`/`paneframe` through an app-owned host and optional plugin capabilities; it does not change the mandatory `plugin.Plugin` interface or put live-terminal splitting outside Workspaces. |
 | **The sidebar as a tree node** | Its lifetime is per-plugin; the tree's is per-selection (`{Root, Surface}`). Merging would tie sidebar width to which shell is selected. It has its own drag and its split is shared with overview via `termpreview.SplitFor`. It is chrome, not content. |
 | **Multiple simultaneous live panes** | §2.3. |
 | **Duplicate views of one tmux session** | Forced by tmux. Refuse at split time. |
@@ -294,7 +294,7 @@ Move the header row out of the content and into the frame. Today `renderDocPane`
 | **Auto-tiling (bspwm-style)** | Its payoff is smallest at N=2–4 and its cost is highest when every reshuffle is a resize into a redrawing agent. Manual placement (i3-style) matches a workspace tool where each pane is a deliberate choice. |
 | **Named/saved layouts, layout picker** | VS Code's implicit restore wins and Sidecar already implements it. `alt+w =` delivers ~90% of tmux's five presets at 2% of the UX surface. |
 | **New tmux sessions on split** | A split shows an *existing* session or the panel session. Session creation stays where it is. |
-| **A CLI surface for splitting** | Correct per the ownership test in CLAUDE.md §2: sidecar owns none of this data. Keep the split *rules* as state-free functions (they already are) so the door stays open. |
+| **A CLI surface for splitting** | **Overtaken by `sidecar open`.** Sidecar does own presentation and pane placement, so agents may request a file, issue, diff, or provider resource through the implemented shell-targeted UI request path. Arbitrary pane-tree manipulation and ambiguous “current visible plugin” targeting remain out of scope. |
 
 ---
 
