@@ -2004,7 +2004,7 @@ func (p *Plugin) ensureViewSurface() {
 		return
 	}
 	if p.markdownView && p.md != nil {
-		p.viewSurface = p.md.RenderMapped(src, width)
+		p.viewSurface = renderNotesMarkdown(p.md, src, width)
 	} else {
 		p.viewSurface = markdown.MapWrappedSource(src, width)
 	}

@@ -1,6 +1,6 @@
 # Notes post-overhaul polish
 
-**Status:** Active. `td-cdc3ba` implementation is in independent review.
+**Status:** Active. `td-cdc3ba` and `td-42cd0f` are complete; `td-8c2abd` is next.
 **Source:** td note `nt-22509205`, items 3 and 7-25 only.
 **Epic:** `td-8ca977`
 
@@ -26,7 +26,7 @@ files during Notes setup.
 | 8, 9, 19 | `td-889d49` | One optimistic create/delete state owner with rollback and next-note focus |
 | 10, 11, 12, 16 | `td-43b82d` | Native multi-click selection, EOL click placement, and scoped `$EDITOR` mouse forwarding |
 | 13, 14, 15, 18, 21, 22 | `td-8c2abd` | Shared geometry, filter control, spacing, text color, and compact save symbols |
-| 23, 24 | `td-42cd0f` | Verify the removed attach path and fix the reproducible Markdown render-state defect |
+| 23, 24 | `td-42cd0f` | Verify the removed attach path and render loose numbered outlines as lists without breaking source mapping |
 
 Items 1, 2, and 4-6 were removed in the source note. Everything below its
 `Next round` heading is deliberately out of scope.
@@ -76,6 +76,14 @@ Keyboard editing remains correct when mouse reporting is absent.
 Notes has no full-screen tmux attach mode. The current empty attach key, nil attach
 callback, absent command/footer, and inert `ctrl+]` are retained and regression-tested.
 
+Notes also accepts informal numbered outlines as notes, even where strict CommonMark
+would fold them into prose. In particular, an ordinal such as `3.` or `7.` at the
+start of a source line may interrupt the preceding paragraph without a blank line.
+This forgiveness is Notes-scoped: Files, issue views, and other Markdown consumers
+keep the shared renderer's standard semantics. The implementation must preserve the
+original source line/column anchors so clicking the rendered list still opens the
+unchanged note at the right caret.
+
 ### Optimistic mutations
 
 Optimism is an application-state contract, not a cosmetic spinner removal.
@@ -111,7 +119,7 @@ ownership. Valid focused verification follows its candidate; broad gates run onc
 on the reviewed integrated branch.
 
 1. `td-cdc3ba` — activation, shared td setup, and Configuration foundation.
-2. `td-42cd0f` — deterministic Markdown reproduction/fix and attach closeout.
+2. `td-42cd0f` — forgiving numbered-outline rendering and attach closeout.
 3. `td-8c2abd` — final layout and visual geometry.
 4. `td-982583` — editor preference, keyboard behavior, and ID copy.
 5. `td-43b82d` — mouse behavior against the settled geometry and editor routing.
@@ -130,7 +138,8 @@ Focused tests establish:
 - list/header geometry and filter toggle behavior at narrow and wide widths;
 - preview/edit cursor, scroll, wrap, selection, and hit-region parity after spacing;
 - save-symbol states, theme colors, and narrow-header degradation;
-- ordered and unordered Markdown stability across note switches, resize, edit, and save;
+- strict and loose numbered-list stability and source anchors across note switches,
+  resize, edit, and save;
 - editor preference persistence and context-specific key ownership;
 - word/line multi-click, Unicode/wrapped EOL targeting, and mouse-reporting boundaries;
 - optimistic mutation responsiveness, load reconciliation, rollback, and post-delete focus.

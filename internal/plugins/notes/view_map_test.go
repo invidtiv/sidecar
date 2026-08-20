@@ -2,6 +2,7 @@ package notes
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"unicode"
@@ -33,6 +34,278 @@ func TestMarkdownViewIsDefault(t *testing.T) {
 	if !strings.Contains(plain, "word") {
 		t.Fatalf("glamour view missing paragraph text: %q", plain)
 	}
+}
+
+func TestMarkdownListsStayStructuredAcrossNoteAndRenderTransitions(t *testing.T) {
+	p, first, second := newTwoNoteSavePlugin(t)
+	ordered := "1. alder\n2. birch\n3. cedar"
+	unordered := "- delta\n- ember\n- fir"
+
+	firstSaved, err := p.store.SaveContent(first.ID, ordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSaved, err := p.store.SaveContent(second.ID, unordered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.notes = []Note{*firstSaved, *secondSaved}
+	p.moveCursorToNote(first.ID)
+	p.editorNote = nil
+	p.previewMode = true
+	p.markdownView = true
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		t.Fatal("clean initial note load unexpectedly returned a command")
+	}
+
+	assertRenderedListRows(t, p, "ordered initial", "alder", "birch", "cedar")
+
+	// Switching notes must replace both the source and mapped render rather than
+	// reusing the first note's cached list.
+	p.cursor = 1
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		t.Fatal("clean note switch unexpectedly returned a command")
+	}
+	assertRenderedListRows(t, p, "unordered after switch", "delta", "ember", "fir")
+	assertRenderedListOmits(t, p, "unordered after switch", "alder", "birch", "cedar")
+
+	// Exercise both sides of a wrap-width change. The renderer cache is shared
+	// across notes, so a width-specific entry must not become source ownership.
+	for _, width := range []int{76, 132} {
+		_, _ = p.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		assertRenderedListRows(t, p, fmt.Sprintf("unordered width %d", width), "delta", "ember", "fir")
+		if p.viewSurfaceWidth != p.editorLayout().wrapColumn {
+			t.Fatalf("width %d cached surface width %d, want %d", width, p.viewSurfaceWidth, p.editorLayout().wrapColumn)
+		}
+	}
+
+	// Raw view and the textarea are alternate projections of the same source.
+	// Returning through each one must rebuild the rendered list, not flatten the
+	// source into the narrow-renderer's paragraph fallback.
+	_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if p.activePane != PaneEditor {
+		t.Fatal("tab did not focus the editor preview")
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if p.markdownView {
+		t.Fatal("toggle did not enter raw view")
+	}
+	assertRawListRows(t, p, "unordered raw", "- delta", "- ember", "- fir")
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'm', Text: "m"})
+	if !p.markdownView {
+		t.Fatal("toggle did not return to rendered view")
+	}
+	assertRenderedListRows(t, p, "unordered after raw round trip", "delta", "ember", "fir")
+
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if p.previewMode {
+		t.Fatal("enter edit left preview mode active")
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	assertRenderedListRows(t, p, "unordered after edit round trip", "delta", "ember", "fir")
+
+	// A canonical save completion updates the cached note in place. Keep the
+	// exact post-save journey in this regression because editing was reported to
+	// repair the intermittent flattened view.
+	updated := "- delta saved\n- ember saved\n- fir saved"
+	_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if p.activePane != PaneEditor {
+		t.Fatal("tab did not refocus the editor preview for save journey")
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if p.previewMode {
+		t.Fatal("save journey did not enter edit mode")
+	}
+	_, _ = p.Update(tea.KeyPressMsg{Code: 'a', Mod: tea.ModAlt})
+	_, _ = p.Update(tea.PasteMsg{Content: updated})
+	if got := p.editorTextarea.Value(); got != updated {
+		t.Fatalf("production edit path produced %q, want %q", got, updated)
+	}
+	if !p.editorDirty {
+		t.Fatal("production edit path did not mark note dirty")
+	}
+	_, save := p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if !p.previewMode {
+		t.Fatal("production edit exit did not restore preview")
+	}
+	drainNotesCmd(t, p, save)
+	assertRenderedListRows(t, p, "unordered after save", "delta saved", "ember saved", "fir saved")
+
+	// Return to the first note at the final width to prove neither the second
+	// source nor the intermediate widths contaminated its cache entry.
+	p.moveCursorToNote(first.ID)
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		drainNotesCmd(t, p, cmd)
+	}
+	assertRenderedListRows(t, p, "ordered final", "alder", "birch", "cedar")
+	assertRenderedListOmits(t, p, "ordered final", "delta saved", "ember saved", "fir saved")
+}
+
+func TestNotesForgivingOrdinalListsPreserveSourceBoundaries(t *testing.T) {
+	p, exact, other := newTwoNoteSavePlugin(t)
+	content := strings.Join([]string{
+		"Next steps for notes:",
+		"Pragmatically orchestrate the items in this list. Optimize to have the features all implemented and reviewed, not for ceremony.",
+		"",
+		"1 and 2. [removed]",
+		"3. enable notes by default (remove from beta), only visible if td is activated.",
+		"4,5.,6. removed",
+		"7. prefererence to make vim the default editor rather thant he built in simple editor",
+		"8. creating a note and deleting should be instant / optimistic",
+	}, "\n")
+	standard, err := markdown.NewRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ordinalBoundaryRow(standard.RenderMapped(content, 100), "3.", "enable notes by default"); ok {
+		t.Fatal("shared Markdown unexpectedly adopted Notes-only forgiving list semantics")
+	}
+	projection := projectNotesOrdinalLists(content)
+	if got := projectionCandidateLines(projection); !slices.Equal(got, []int{4, 6, 7}) {
+		t.Fatalf("AST-scoped candidate lines = %v, want [4 6 7]; candidates=%+v", got, projection.candidates)
+	}
+	exactSaved, err := p.store.SaveContent(exact.ID, content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.notes = []Note{*exactSaved, *other}
+	p.moveCursorToNote(other.ID)
+	p.editorNote = nil
+	p.previewMode = true
+	p.markdownView = true
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		drainNotesCmd(t, p, cmd)
+	}
+
+	// Reproduce the real journey: the loose outline is opened after another
+	// note, then rendered at both wide and narrow wrapping widths.
+	p.moveCursorToNote(exact.ID)
+	if cmd := p.loadNoteIntoEditor(); cmd != nil {
+		drainNotesCmd(t, p, cmd)
+	}
+	for _, width := range []int{132, 76} {
+		_, _ = p.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+		assertOrdinalBoundary(t, p, "3.", "enable notes by default", 4)
+		row := assertOrdinalBoundary(t, p, "7.", "prefererence to make vim", 6)
+		assertOrdinalBoundary(t, p, "8.", "creating a note", 7)
+
+		// The transformed render must remain click-to-edit faithful at the
+		// inserted boundary, landing on the original (not projected) line.
+		visual := ansi.Strip(p.viewSurface.Lines[row])
+		clickCol := strings.Index(visual, "prefererence")
+		clickLine, sourceCol := sourceAtVisualRow(p.viewSurface, row, clickCol, content)
+		if clickCol < 0 || clickLine != 6 || !sourceHasPrefix(content, clickLine, sourceCol, "prefererence") {
+			t.Fatalf("width %d: rendered click mapped to %d:%d from visual col %d", width, clickLine, sourceCol, clickCol)
+		}
+		p.activePane = PaneEditor
+		p.previewCursorLine = row
+		_, _ = p.Update(tea.KeyPressMsg{Code: 'i', Text: "i"})
+		if got := p.editorTextarea.Line(); got != 6 {
+			t.Fatalf("width %d: click/edit boundary landed on source line %d, want 6", width, got)
+		}
+		_, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+		assertOrdinalBoundary(t, p, "7.", "prefererence to make vim", 6)
+	}
+}
+
+func assertOrdinalBoundary(t *testing.T, p *Plugin, marker, text string, sourceLine int) int {
+	t.Helper()
+	p.ensureViewSurface()
+	row, ok := ordinalBoundaryRow(p.viewSurface, marker, text)
+	if !ok {
+		t.Fatalf("rendered outline has no distinct %s %q row:\n%s", marker, text, strings.Join(strippedRenderLines(p.viewSurface), "\n"))
+	}
+	a := p.viewSurface.At(row)
+	if a.SourceLine != sourceLine {
+		t.Fatalf("%s row mapped to source line %d, want %d", marker, a.SourceLine, sourceLine)
+	}
+	return row
+}
+
+func ordinalBoundaryRow(surface markdown.MappedRender, marker, text string) (int, bool) {
+	for row, line := range strippedRenderLines(surface) {
+		plain := strings.TrimSpace(line)
+		if strings.HasPrefix(plain, marker) && strings.Contains(plain, text) {
+			return row, true
+		}
+	}
+	return -1, false
+}
+
+func projectionCandidateLines(projection notesMarkdownProjection) []int {
+	lines := make([]int, len(projection.candidates))
+	for i, candidate := range projection.candidates {
+		lines[i] = candidate.sourceLine
+	}
+	return lines
+}
+
+func assertRenderedListRows(t *testing.T, p *Plugin, stage string, items ...string) {
+	t.Helper()
+	if !p.previewMode || !p.markdownView {
+		t.Fatalf("%s: expected rendered preview, preview=%v markdown=%v", stage, p.previewMode, p.markdownView)
+	}
+	p.ensureViewSurface()
+
+	rows := make([]int, len(items))
+	for i := range rows {
+		rows[i] = -1
+	}
+	for row, line := range p.viewSurface.Lines {
+		plain := ansi.Strip(line)
+		for i, item := range items {
+			if strings.Contains(plain, item) {
+				rows[i] = row
+			}
+		}
+	}
+	for i, row := range rows {
+		if row < 0 {
+			t.Fatalf("%s: rendered list lost %q:\n%s", stage, items[i], strings.Join(strippedRenderLines(p.viewSurface), "\n"))
+		}
+		if i > 0 && row <= rows[i-1] {
+			t.Fatalf("%s: list items collapsed or reordered, rows=%v:\n%s", stage, rows, strings.Join(strippedRenderLines(p.viewSurface), "\n"))
+		}
+	}
+}
+
+func assertRenderedListOmits(t *testing.T, p *Plugin, stage string, items ...string) {
+	t.Helper()
+	plain := strings.Join(strippedRenderLines(p.viewSurface), "\n")
+	for _, item := range items {
+		if strings.Contains(plain, item) {
+			t.Fatalf("%s: mapped render retained stale item %q:\n%s", stage, item, plain)
+		}
+	}
+}
+
+func assertRawListRows(t *testing.T, p *Plugin, stage string, want ...string) {
+	t.Helper()
+	if !p.previewMode || p.markdownView {
+		t.Fatalf("%s: expected raw preview, preview=%v markdown=%v", stage, p.previewMode, p.markdownView)
+	}
+	p.ensureViewSurface()
+	if p.viewSurfaceMD {
+		t.Fatalf("%s: raw mode retained a rendered Markdown surface", stage)
+	}
+	got := strippedRenderLines(p.viewSurface)
+	next := 0
+	for _, line := range got {
+		if next < len(want) && strings.TrimSpace(line) == want[next] {
+			next++
+		}
+	}
+	if next != len(want) {
+		t.Fatalf("%s: raw list rows = %q, want ordered rows %q", stage, got, want)
+	}
+}
+
+func strippedRenderLines(surface markdown.MappedRender) []string {
+	lines := make([]string, len(surface.Lines))
+	for i, line := range surface.Lines {
+		lines[i] = ansi.Strip(line)
+	}
+	return lines
 }
 
 func TestToggleMarkdownRemapsPlace(t *testing.T) {

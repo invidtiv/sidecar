@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -1028,6 +1029,19 @@ func TestNotesAttachKeyAlwaysEmpty(t *testing.T) {
 	}
 	if p.edit.Model.OnAttach != nil {
 		t.Fatal("notes inline editor wired an OnAttach hook; notes has no full-screen path")
+	}
+	for _, binding := range keymap.DefaultBindings() {
+		if !strings.HasPrefix(binding.Context, "notes-") {
+			continue
+		}
+		if binding.Command == "attach" || binding.Key == "ctrl+]" {
+			t.Fatalf("notes revived a full-screen attach binding: %+v", binding)
+		}
+	}
+	for _, command := range p.Commands() {
+		if command.ID == "attach" {
+			t.Fatalf("notes inline editor advertised an attach footer/palette command: %+v", command)
+		}
 	}
 }
 
