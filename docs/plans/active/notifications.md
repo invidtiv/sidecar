@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phase 3 **done** (see "Phase 3 as built"); Phases 4–7 planned, not started
+**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phase 3 **done** (see "Phase 3 as built"); Phases 4–7 planned, not started. Next up: `target-activation.md` (separate plan, prerequisite), then Phase 5 — Phase 4 is deliberately deferred behind them
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -790,10 +790,42 @@ per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still
 lands in the centre and counts in the corner.
 
-**Phase 5 — calls to action.** Reuse `internal/terminallink` scanning over
-notification title/body: td ids, commits, `file:line`, session ids, URLs
-become numbered, underlined, project-aware jumps (1e); `enter` activates the
-selected/first target; digit keys jump. Cross-project prefix rendering.
+**Phase 5 — calls to action.** **Prerequisite:
+`docs/plans/active/target-activation.md` must be done first** — it extracts
+the twice-implemented jump machinery (overview `preview_links.go`, workspace
+`terminal_links.go`) into one app-level activation service with
+cross-project landing. This phase assumes that service exists and builds
+only the notification side on top of it. Decisions settled with Marcus
+(2026-08-19):
+
+- **Activation happens from the centre only.** Toasts keep no focus context,
+  steal nothing, and gain no activation affordance — click-to-dismiss and
+  `d` stay their whole interaction. Frame 1e's toast key row is superseded.
+- Scanning: `terminallink.ScanWith` over title/body (it is pure and returns
+  kinded spans — reusable as-is). Add `KindSession` (+ detection pattern)
+  and task ids to the scanner; both existing surfaces' kind switches and
+  twin tests update with it. Stored `notify.Targets` and scanned spans
+  reconcile into one target list — stored targets first, scan fills gaps.
+- `sidecar notify post` grows `--target kind:value[:line][@project]`
+  (repeatable) so agents can attach precise targets instead of relying on
+  scanning; scanning remains the fallback for plain text.
+- Centre UI per 1e: targets numbered 1–N, underlined; `enter` activates the
+  selected/first target (re-show moves to a secondary key — update
+  `keymap/bindings.go` and `notificationCentreCommands` per the Phase 1.5
+  note); digit keys jump; cross-project targets render `repo/td-xxxxxx` and
+  go through the activation service's pending-target landing.
+- Cross-project targets are **not existence-verified at render time** (the
+  resolvers are per-checkout; per-notification I/O at render is not worth
+  it): they render activatable and fail gracefully on activation via the
+  service's error path. Same-project targets keep the verified-underline
+  invariant.
+- Untrusted text: title/body from the CLI go through `StripOSC8` before
+  `Decorate`, and URL activation refuses non-`SafeHTTPURL` values — the
+  service's safety rule, applied at the centre like every other consumer.
+
+Slices: **5a** same-project file + td-issue targets end-to-end in the centre
+(numbering, enter, digits); **5b** cross-project landing + `--target` CLI;
+**5c** session/task kinds + session attach jumps.
 
 **Phase 6 — tasks both ways + td.** `tasks` source adapter posts
 due/reminder notifications; `T` files a notification onto a task (REMINDERS
