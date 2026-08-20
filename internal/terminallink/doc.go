@@ -1,10 +1,8 @@
-// Package terminallink detects URL, file, issue, and git-spec spans in
-// terminal text.
+// Package terminallink is the compatibility facade for terminal callers of
+// the presentation-neutral contentlink recognition core.
 //
-// Detection lives here so the project Workspaces plugin and the global
-// Workspaces preview share one matcher. Hosts activate the kinds they
-// understand and ignore the rest. Adding a kind therefore does not require
-// editing two hosts.
+// New rendered surfaces should import internal/contentlink directly. Existing
+// Workspaces callers retain this package while they migrate in small slices.
 //
 // KindIssue is emitted for td-<hex> ids so a later terminal | file + td split
 // can bind a live td pane. It must not open internal/app/issue_preview.go.

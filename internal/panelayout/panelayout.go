@@ -14,7 +14,10 @@ const (
 type Kind int
 
 const (
-	Terminal Kind = iota
+	// Primary is the host's owned content. In Workspaces that content is a
+	// terminal; app content decks may host any plugin without changing the pane
+	// tree's persisted vocabulary.
+	Primary Kind = iota
 	Document
 	Issue
 	Diff
@@ -24,6 +27,10 @@ const (
 	// become tabs in one leaf rather than two pane kinds.
 	Resource
 )
+
+// Terminal is the persisted-value and source compatibility alias used by the
+// existing Workspace hosts. Primary deliberately retains its numeric value.
+const Terminal = Primary
 
 type Axis int
 
@@ -61,11 +68,21 @@ type Divider struct {
 type Floor struct{ Width, Height int }
 
 type Floors struct {
+	Primary Floor
+	// Terminal is the compatibility field for existing Workspace callers.
+	// Primary wins when both are populated.
 	Terminal Floor
 	Doc      Floor
 	Issue    Floor
 	Diff     Floor
 	Resource Floor
+}
+
+func (f Floors) primary() Floor {
+	if f.Primary != (Floor{}) {
+		return f.Primary
+	}
+	return f.Terminal
 }
 
 type Layout struct {
@@ -127,7 +144,7 @@ func paneMinimum(node *Node, floors Floors) Floor {
 		return Floor{}
 	}
 	if node.Split == nil {
-		floor := floors.Terminal
+		floor := floors.primary()
 		switch node.Kind {
 		case Document:
 			floor = floors.Doc
@@ -172,13 +189,13 @@ func ApplyAxisOverride(plan OpenPlan, split string) OpenPlan {
 	return plan
 }
 
-// PlanOpen keeps the terminal in a full-height left column: the first content
+// PlanOpen keeps the primary content in a full-height left column: the first content
 // opens beside it, a different content kind stacks in the right column, a later
 // content kind stacks on the largest content leaf, and a repeated kind
 // retargets its existing leaf. boxes may be nil; ties and missing geometry
 // follow the first content leaf in the tree.
 func PlanOpen(root *Node, kind Kind, boxes map[int]Box) (OpenPlan, bool) {
-	if kind == Terminal {
+	if kind == Primary {
 		return OpenPlan{}, false
 	}
 	if leaf := FirstOfKind(root, kind); leaf != nil {
@@ -187,7 +204,7 @@ func PlanOpen(root *Node, kind Kind, boxes map[int]Box) (OpenPlan, bool) {
 	contents := contentLeaves(root)
 	switch {
 	case len(contents) == 0:
-		if leaf := FirstOfKind(root, Terminal); leaf != nil {
+		if leaf := FirstOfKind(root, Primary); leaf != nil {
 			return OpenPlan{Split: leaf.ID, Axis: Columns}, true
 		}
 	case len(contents) == 1:
@@ -221,7 +238,7 @@ func contentLeaves(node *Node) []*Node {
 		return nil
 	}
 	if node.Split == nil {
-		if node.Kind != Terminal {
+		if node.Kind != Primary {
 			return []*Node{node}
 		}
 		return nil

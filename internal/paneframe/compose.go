@@ -56,7 +56,12 @@ func ChromeFloors(content panelayout.Floors) panelayout.Floors {
 	grow := func(f panelayout.Floor) panelayout.Floor {
 		return panelayout.Floor{Width: f.Width + Overhead, Height: f.Height + BorderWidth}
 	}
+	primary := content.Primary
+	if primary == (panelayout.Floor{}) {
+		primary = content.Terminal
+	}
 	return panelayout.Floors{
+		Primary:  grow(primary),
 		Terminal: grow(content.Terminal),
 		Doc:      grow(content.Doc),
 		Issue:    grow(content.Issue),

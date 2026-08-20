@@ -1,0 +1,114 @@
+// Package contentlink recognizes activatable references in rendered text.
+//
+// Recognition is presentation-neutral and side-effect free. Callers provide
+// ready resolver snapshots; unresolved candidates are returned as pending
+// work for a later command rather than resolved during rendering.
+package contentlink
+
+import "regexp"
+
+// Kind classifies an activatable reference.
+type Kind string
+
+const (
+	KindURL      Kind = "url"
+	KindFile     Kind = "file"
+	KindIssue    Kind = "issue"
+	KindDiff     Kind = "diff"
+	KindResource Kind = "resource"
+	KindInternal Kind = "internal"
+)
+
+// Ref is the presentation-neutral identity produced by every recognition
+// path. Line is 1-based and zero when absent. Provider and Matcher identify an
+// external resource matcher. Namespace is set only for internal intents.
+type Ref struct {
+	Kind      Kind
+	Value     string
+	Line      int
+	Provider  string
+	Matcher   string
+	Namespace string
+}
+
+// Extra preserves the terminal-link scanner's original public shape while
+// callers migrate to Ref. Raw is the token as rendered before ready resolution.
+type Extra struct {
+	Line      int
+	Raw       string
+	Provider  string
+	Matcher   string
+	Namespace string
+}
+
+// Span is one non-overlapping reference in inclusive visual columns. Row is
+// zero for a line scan and the zero-based rendered row for a frame scan.
+type Span struct {
+	Kind     Kind
+	Row      int
+	StartCol int
+	EndCol   int
+	Value    string
+	Extra    Extra
+	Explicit bool
+}
+
+// Ref returns the shared identity for this rendered span.
+func (s Span) Ref() Ref {
+	return Ref{
+		Kind: s.Kind, Value: s.Value, Line: s.Extra.Line,
+		Provider: s.Extra.Provider, Matcher: s.Extra.Matcher,
+		Namespace: s.Extra.Namespace,
+	}
+}
+
+// SpanForRef constructs a coordinate-free span. It is useful at adapters that
+// still consume the compatibility Span vocabulary.
+func SpanForRef(ref Ref) Span {
+	extra := Extra{Line: ref.Line, Provider: ref.Provider, Matcher: ref.Matcher, Namespace: ref.Namespace}
+	return Span{Kind: ref.Kind, Value: ref.Value, Extra: extra}
+}
+
+// Activatable reports whether hosts may bind and decorate the kind.
+func Activatable(k Kind) bool {
+	switch k {
+	case KindURL, KindFile, KindIssue, KindDiff, KindResource, KindInternal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Resolver and DiffResolver are the legacy synchronous scanner hooks. New
+// rendered surfaces should use ScanFrame with a ResolutionSnapshot instead.
+type Resolver func(raw string) (value string, extra Extra, ok bool)
+type DiffResolver func(raw string) (value string, extra Extra, ok bool)
+
+type ResourceMatcher struct {
+	Provider string
+	ID       string
+	Re       *regexp.Regexp
+}
+
+type Options struct {
+	Resolve     Resolver
+	ResolveDiff DiffResolver
+	Matchers    []ResourceMatcher
+}
+
+const (
+	MaxNewDiffResolves         = 16
+	MaxResourceLocatorChars    = 200
+	MaxResourceMatchesPerLine  = 32
+	MaxAutomaticMatchesPerLine = 64
+	MaxRenderedRows            = 1000
+	MaxRenderedColumns         = 4096
+	MaxPendingResolutions      = 128
+	MaxInternalURIBytes        = 2048
+	MaxInternalNamespaceBytes  = 32
+	MaxInternalIDRunes         = 512
+	MaxInternalQueryParameters = 16
+	MaxInternalQueryKeyBytes   = 32
+	MaxInternalQueryValueRunes = 256
+	MaxExplicitLabelColumns    = 4096
+)
