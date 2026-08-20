@@ -330,36 +330,38 @@ assert_contains "$output" "non-interactive login shell resolves:
   $temporary/nlogin/sidecar
   sidecar version non-interactive-login"
 
-# A sidecar earlier on PATH fails closed after the Homebrew-prefix link is in place.
+# A sidecar earlier on PATH is pointed at the activated artifact so
+# `install-worktree && sidecar` runs this build.
 shadow=$temporary/shadow
 mkdir -p "$shadow"
 printf '#!/bin/sh\nprintf "sidecar version shadowed\\n"\n' >"$shadow/sidecar"
 chmod +x "$shadow/sidecar"
-before=$(readlink "$brew_prefix/bin/sidecar")
 SIDECAR_TEST_PATH_PREFIX=$shadow
 FAKE_LOGIN_SIDECAR=$shadow/sidecar
 FAKE_NLOGIN_SIDECAR=$shadow/sidecar
 export SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
-if run install-worktree >/dev/null 2>"$temporary/shadow.err"; then
-  fail 'shadowed PATH unexpectedly succeeded'
-fi
+output=$(run install-worktree)
 unset SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
-grep -q 'does not run the build just activated' "$temporary/shadow.err" ||
-  fail "shadowed PATH did not report the mismatch: $(cat "$temporary/shadow.err")"
-grep -q "$shadow/sidecar" "$temporary/shadow.err" ||
-  fail 'shadowed PATH error omitted the winning binary'
-[ "$(readlink "$brew_prefix/bin/sidecar")" != "$before" ] ||
-  fail 'shadowed PATH rolled back the activation instead of keeping it'
+assert_contains "$output" "pointed $shadow/sidecar at the activated build"
+assert_contains "$output" 'verified: sidecar on PATH is this build'
+[ -L "$shadow/sidecar" ] || fail 'PATH winner was not replaced with a symlink'
+shadow_resolved=$(realpath -q "$shadow/sidecar")
+brew_resolved=$(realpath -q "$brew_prefix/bin/sidecar")
+[ "$shadow_resolved" = "$brew_resolved" ] ||
+  fail "PATH winner resolves to $shadow_resolved, want $brew_resolved"
 assert_kind local
 
-# Login-shell shadowing fails even when the current PATH is correct.
-FAKE_LOGIN_SIDECAR=$shadow/sidecar
+# Login-shell PATH winners are retargeted even when the current shell already matches.
+login_shadow=$temporary/login-shadow
+mkdir -p "$login_shadow"
+printf '#!/bin/sh\nprintf "sidecar version login-shadowed\\n"\n' >"$login_shadow/sidecar"
+chmod +x "$login_shadow/sidecar"
+FAKE_LOGIN_SIDECAR=$login_shadow/sidecar
 export FAKE_LOGIN_SIDECAR
-if run install-worktree >/dev/null 2>"$temporary/login-shadow.err"; then
-  fail 'login-shell shadow unexpectedly succeeded'
-fi
+output=$(run install-worktree)
 unset FAKE_LOGIN_SIDECAR
-grep -q 'interactive login shell' "$temporary/login-shadow.err" ||
-  fail "login-shell shadow did not name the login probe: $(cat "$temporary/login-shadow.err")"
+assert_contains "$output" "pointed $login_shadow/sidecar at the activated build"
+assert_contains "$output" 'verified: sidecar on PATH is this build'
+[ -L "$login_shadow/sidecar" ] || fail 'login PATH winner was not replaced with a symlink'
 
 printf 'dev-install tests passed\n'

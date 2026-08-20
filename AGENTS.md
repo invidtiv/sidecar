@@ -49,9 +49,9 @@ make install-local
 # Deliberately activate the current branch/worktree
 make install-worktree
 
-# Both managed installs fail closed if `sidecar` on PATH (current shell and
-# login zsh) is not the binary just activated — typically ~/go/bin winning
-# over Homebrew after an unmanaged `make install`.
+# Managed installs link Homebrew and retarget any other `sidecar` that
+# wins PATH (typically ~/go/bin from unmanaged `make install`) so
+# `make install-worktree && sidecar` runs this build.
 
 # First command in any git worktree: shadow the main checkout's go.work
 # (without this, every go command in a worktree fails with "directory ...

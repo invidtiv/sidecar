@@ -64,12 +64,12 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Bug Fixes
 
-- **`make install-worktree` / `make install-local` fail if `sidecar` on PATH
-  is not the build they just activated.** The Homebrew-prefix link is still
-  swapped; the command then probes the current shell and login zsh and
-  exits non-zero when another binary wins (typically `~/go/bin` from
-  unmanaged `make install`). `make install-status` still reports the
-  disagreement without failing.
+- **`make install-worktree` / `make install-local` make `sidecar` on PATH
+  run the build they just activated.** Homebrew is still the managed
+  link; copies that win PATH (typically `~/go/bin` from unmanaged
+  `make install`) are pointed at the same artifact so
+  `make install-worktree && sidecar` is one build. `make install-status`
+  still reports resolution without mutating it.
 - **Unsafe internal link labels stay inert**, and only rectangles that are
   actually rendered as links are decorated — so a label that looks like a path
   or a td id inside chrome, search, or an editor is not clickable.

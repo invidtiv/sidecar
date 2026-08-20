@@ -324,11 +324,10 @@ make install-hooks    # Install pre-commit hooks (gofmt, go vet, go build)
 `make install-local` refuses branches and linked worktrees so an incidental
 checkout cannot silently replace the normal development binary. Use
 `make install-worktree` when that replacement is intentional. Both managed
-commands require Homebrew, then check that `sidecar` on PATH — including
-login zsh — is the build they just activated. If another binary wins
-(often `~/go/bin/sidecar` from `make install`), they exit non-zero and
-leave the Homebrew-prefix link in place. Use `make install` for a
-separate, unmanaged Go installation.
+commands require Homebrew, then point every `sidecar` that wins PATH
+(current shell and login zsh — often `~/go/bin/sidecar` from `make install`)
+at the same artifact, so `make install-worktree && sidecar` runs this
+build. Use `make install` for a separate, unmanaged Go installation.
 
 ### Go Lint Baseline
 
