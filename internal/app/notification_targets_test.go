@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,6 +271,36 @@ func TestCentreActivatesAScannedSessionTarget(t *testing.T) {
 	}
 	if activate.Target.Kind != uirequest.TargetKindSession || activate.Target.Value != "sidecar-ws-alpha" {
 		t.Fatalf("activated %+v", activate.Target)
+	}
+}
+
+func TestCentreScrollKeepsScannedSessionTargetsActivatable(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	session := postTargetNotification(t, &m, "agent finished", "sidecar-ws-alpha is waiting for you")
+	for i := range 50 {
+		postCentreNotification(t, &m, notify.SourceTasks, fmt.Sprintf("task %03d", i))
+	}
+	m.toggleNotificationCentre()
+	if handled, _ := m.notificationCentreMouseEvent(centreWheel(m, true)); !handled {
+		t.Fatal("wheel over the centre was not handled")
+	}
+	if m.notificationCentreScroll == 0 {
+		t.Fatal("test premise: centre did not scroll")
+	}
+	for i, item := range m.notificationCentreItems() {
+		if item.ID == session.ID {
+			m.notificationCentreCursor = i
+			break
+		}
+	}
+
+	handled, cmd := m.notificationCentreKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled {
+		t.Fatal("enter was not consumed after scrolling")
+	}
+	activate, ok := activateTargetMsgFrom(t, cmd)
+	if !ok || activate.Target.Kind != uirequest.TargetKindSession || activate.Target.Value != "sidecar-ws-alpha" {
+		t.Fatalf("activation after scroll = %+v (ok=%v)", activate.Target, ok)
 	}
 }
 

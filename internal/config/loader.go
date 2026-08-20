@@ -129,7 +129,12 @@ type rawPluginsConfig struct {
 	FileBrowser   rawFileBrowserConfig   `json:"file-browser"`
 	Conversations rawConversationsConfig `json:"conversations"`
 	Workspace     rawWorkspaceConfig     `json:"workspace"`
+	Notes         rawNotesConfig         `json:"notes"`
 	Tasks         rawTasksConfig         `json:"tasks"`
+}
+
+type rawNotesConfig struct {
+	DefaultEditor string `json:"defaultEditor"`
 }
 
 type rawTasksConfig struct {
@@ -312,6 +317,11 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	// Tasks
 	if raw.Plugins.Tasks.Position != "" {
 		cfg.Plugins.Tasks.Position = raw.Plugins.Tasks.Position
+	}
+
+	// Notes
+	if raw.Plugins.Notes.DefaultEditor != "" {
+		cfg.Plugins.Notes.DefaultEditor = raw.Plugins.Notes.DefaultEditor
 	}
 
 	// Workspace

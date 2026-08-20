@@ -230,10 +230,14 @@ type SidebarDisplayConfig struct {
 // NotesPluginConfig configures the notes plugin.
 type NotesPluginConfig struct {
 	// DefaultEditor sets the default editor mode when pressing Enter on a note.
-	// Values: "builtin" (default), "vim", "nvim", or any $EDITOR value.
-	// When set to "vim"/"nvim", Enter opens the note in inline vim instead of built-in editor.
+	// Values: "builtin" (default) or "pane" ($EDITOR in the Notes pane).
 	DefaultEditor string `json:"defaultEditor,omitempty"`
 }
+
+const (
+	NotesEditorBuiltin = "builtin"
+	NotesEditorPane    = "pane"
+)
 
 // KeymapConfig holds key binding overrides.
 type KeymapConfig struct {
@@ -281,6 +285,9 @@ func Default() *Config {
 			Conversations: ConversationsPluginConfig{
 				Enabled:       true,
 				ClaudeDataDir: "~/.claude",
+			},
+			Notes: NotesPluginConfig{
+				DefaultEditor: NotesEditorBuiltin,
 			},
 			Tasks: TasksPluginConfig{
 				Position: TasksPositionAfterWorkspaces,
@@ -343,6 +350,16 @@ func (c *Config) Validate() error {
 	case TasksPositionAfterWorkspaces, TasksPositionAfterNotes:
 	default:
 		c.Plugins.Tasks.Position = TasksPositionAfterWorkspaces
+	}
+	switch c.Plugins.Notes.DefaultEditor {
+	case NotesEditorBuiltin, NotesEditorPane:
+	case "vim", "nvim":
+		// These were the documented values on the previously dormant field.
+		// They meant an in-pane editor, so preserve that intent when the field
+		// becomes active rather than silently switching those users to built-in.
+		c.Plugins.Notes.DefaultEditor = NotesEditorPane
+	default:
+		c.Plugins.Notes.DefaultEditor = NotesEditorBuiltin
 	}
 	return validateTerminalResources(&c.TerminalResources)
 }

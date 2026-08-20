@@ -59,6 +59,16 @@ func ConversationsWanted(cfg *config.Config) bool {
 	return cfg.Plugins.Conversations.Enabled
 }
 
+// NotesWanted reports whether the Notes surface belongs in the project tab
+// ring. td owns Notes persistence, so disabling the existing td panel also
+// hides Notes without rewriting the user's independent Notes preference.
+func NotesWanted(cfg *config.Config) bool {
+	if cfg == nil {
+		cfg = config.Default()
+	}
+	return cfg.Plugins.TDMonitor.Enabled && features.IsEnabled(features.NotesPlugin.Name)
+}
+
 // Plan returns the plugins to register, in tab order.
 //
 // Tab shortcut numbers are derived from this list. Nothing may assume a plugin
@@ -84,7 +94,7 @@ func Plan(cfg *config.Config) []Entry {
 	}
 	// The workspace plugin has no enable switch; it is sidecar's core tab.
 	base = append(base, Entry{IDWorkspace, func() plugin.Plugin { return workspace.New() }})
-	if features.IsEnabled(features.NotesPlugin.Name) {
+	if NotesWanted(cfg) {
 		base = append(base, Entry{IDNotes, func() plugin.Plugin { return notes.New() }})
 	}
 

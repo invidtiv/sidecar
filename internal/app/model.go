@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -431,6 +432,10 @@ type Model struct {
 	notificationCentreMouse       *mouse.Handler
 	notificationCentreHoverHandle bool
 	notificationCentreHoverClose  bool
+	// Burst is a pointer so FilterInput's Model copy still shares it: Reset at
+	// a boundary must survive the filter not returning a model.
+	notificationCentreWheel *tty.WheelBurst
+	notificationCentreNow   func() time.Time
 
 	// flash is the status-flash tier: one transient line in the content
 	// region's top-right, never stored and never counted. See flash.go.
@@ -496,6 +501,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
 	m.notificationCentreMouse = mouse.NewHandler()
+	m.notificationCentreWheel = &tty.WheelBurst{}
 	m.toastMouse = mouse.NewHandler()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab

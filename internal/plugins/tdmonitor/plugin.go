@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/workspace"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tdroot"
+	"github.com/marcus/sidecar/internal/tdsetup"
 	"github.com/marcus/td/pkg/monitor"
 )
 
@@ -209,7 +210,7 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 		p.ctx.Logger.Debug("td monitor: database not found", "error", msg.Err)
 		if p.tdOnPath {
 			// td is installed but project not initialized - show setup modal
-			p.setupModal = NewSetupModel(p.ctx.WorkDir)
+			p.setupModal = NewSetupModel(p.ctx.WorkDir, p.ctx.Epoch)
 			return p.setupModal.Init()
 		}
 		// td is not installed on system - show not-installed view
@@ -294,17 +295,22 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.adoptMonitor(ready)
 	}
 
-	// Handle setup completion - reinitialize to load the monitor
-	if _, ok := msg.(SetupCompleteMsg); ok {
+	// A successful init from either td-backed surface makes both refresh. A
+	// failed attempt belongs only to the surface that started it.
+	if result, ok := msg.(tdsetup.ResultMsg); ok {
+		if plugin.IsStale(p.ctx, result) {
+			return p, nil
+		}
+		if result.Err != nil {
+			if result.Origin != tdsetup.OriginTDMonitor {
+				return p, nil
+			}
+			return p, appmsg.Alert(notify.SourceTD, notify.SeverityError, result.Err.Error())
+		}
 		if err := p.Init(p.ctx); err == nil {
 			return p, p.Start()
 		}
 		return p, nil
-	}
-
-	// Handle setup error - show error toast
-	if errMsg, ok := msg.(SetupErrorMsg); ok {
-		return p, appmsg.Alert(notify.SourceTD, notify.SeverityError, errMsg.Error)
 	}
 
 	// Handle setup skip - show not-installed view

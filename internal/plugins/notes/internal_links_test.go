@@ -89,6 +89,39 @@ func TestInternalNoteNavigationFailuresNeverMoveTheUser(t *testing.T) {
 	}
 }
 
+func TestInternalNoteNavigationPreservesAnOptimisticCreate(t *testing.T) {
+	store := openTestStore(t)
+	target, err := store.Create("target", "body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled := newControlledMutationStore(store)
+	p := navigationTestPlugin(controlled, "/project")
+	p.notes = []Note{*target}
+	p.editorNote = &p.notes[0]
+
+	create := p.beginOptimisticCreate("new note", "new body")
+	createdResult := runCommandAsync(create)
+	<-controlled.createStarted
+	tempID := p.mutation.tempID
+
+	drainNotesCmd(t, p, mustNoteNavigationCmd(t, p, app.NavigateToNoteMsg{ID: target.ID, ProjectRoot: "/project"}))
+	if p.editorNote == nil || p.editorNote.ID != target.ID || p.getSelectedNote() == nil || p.getSelectedNote().ID != target.ID {
+		t.Fatalf("navigation selection = editor %+v selected %+v", p.editorNote, p.getSelectedNote())
+	}
+	if p.noteByID(tempID) == nil {
+		t.Fatalf("navigation dropped pending create %q from %+v", tempID, p.notes)
+	}
+
+	close(controlled.createRelease)
+	created := (<-createdResult).(NoteSavedMsg)
+	_, followup := p.Update(created)
+	if p.noteByID(created.Note.ID) == nil || p.editorNote == nil || p.editorNote.ID != target.ID {
+		t.Fatalf("create completion lost canonical row or target selection: notes=%+v editor=%+v", p.notes, p.editorNote)
+	}
+	applyCommandResults(t, p, followup)
+}
+
 func TestNotesCapabilitiesExposeExactRenderedPreviewOnly(t *testing.T) {
 	store := openTestStore(t)
 	p := navigationTestPlugin(store, "/project")
@@ -118,7 +151,7 @@ func TestNotesCapabilitiesExposeExactRenderedPreviewOnly(t *testing.T) {
 		t.Fatalf("surfaces = %+v", surfaces)
 	}
 	layout := p.editorLayout()
-	want := mouse.Rect{X: p.listWidth + dividerWidth + 2, Y: 2, W: layout.wrapColumn, H: len(p.viewSurface.Lines)}
+	want := mouse.Rect{X: p.listWidth + dividerWidth + 2 + layout.leftMargin, Y: 1 + layout.contentRow, W: layout.wrapColumn, H: len(p.viewSurface.Lines)}
 	if surfaces[0].Rect != want {
 		t.Fatalf("preview rect = %+v, want %+v", surfaces[0].Rect, want)
 	}
@@ -132,7 +165,7 @@ func TestNotesCapabilitiesExposeExactRenderedPreviewOnly(t *testing.T) {
 		InternalNamespaces: map[string]contentlink.URIOptions{"note": {ValidateID: func(id string) bool { return id == note.ID }}},
 	})
 	if len(scanned.Spans) == 0 || scanned.Spans[0].Ref() != (contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: note.ID}) {
-		t.Fatalf("rendered Markdown internal spans = %+v", scanned.Spans)
+		t.Fatalf("rendered Markdown body = %q, internal spans = %+v", strings.Join(body, "\n"), scanned.Spans)
 	}
 }
 
@@ -146,6 +179,7 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 		{name: "task modal", apply: func(p *Plugin) { p.showTaskModal = true }},
 		{name: "delete modal", apply: func(p *Plugin) { p.showDeleteModal = true }},
 		{name: "info modal", apply: func(p *Plugin) { p.showInfoModal = true }},
+		{name: "setup modal", apply: func(p *Plugin) { p.showSetupModal = true }},
 		{name: "inline tmux", apply: func(p *Plugin) { p.edit.Active = true }},
 		{name: "inline exit confirm", apply: func(p *Plugin) { p.edit.ShowExitConfirm = true }},
 		{name: "loading", apply: func(p *Plugin) { p.loading = true }},

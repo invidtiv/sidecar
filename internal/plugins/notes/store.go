@@ -14,6 +14,7 @@ import (
 	tdnotes "github.com/marcus/td/pkg/notes"
 
 	"github.com/marcus/sidecar/internal/tdroot"
+	"github.com/marcus/sidecar/internal/tdsetup"
 )
 
 const (
@@ -65,6 +66,16 @@ type Store struct {
 // for attribution.
 func NewStore(baseDir, sessionID string) (*Store, error) {
 	return &Store{baseDir: baseDir, sessionID: sessionID, timeout: tdNoteCommandTimeout}, nil
+}
+
+// SetupStatus is the production adapter's asynchronous readiness probe. Test
+// stores are already initialized, and fake noteStore implementations do not
+// need to know about filesystem setup at all.
+func (s *Store) SetupStatus() error {
+	if s.td != nil {
+		return nil
+	}
+	return tdsetup.Status(s.baseDir)
 }
 
 // newInProcessStore opens an existing test database via td's in-process API.

@@ -639,3 +639,32 @@ func TestDefault_SelectionCopyOnSelectOff(t *testing.T) {
 		t.Error("Selection.CopyOnSelect = true, want a selection that does not touch the clipboard by default")
 	}
 }
+
+func TestLoadFrom_NotesDefaultEditorNormalizesCurrentLegacyAndUnknownValues(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{name: "absent defaults built-in", raw: `{}`, want: NotesEditorBuiltin},
+		{name: "pane", raw: `{"plugins":{"notes":{"defaultEditor":"pane"}}}`, want: NotesEditorPane},
+		{name: "legacy vim keeps pane intent", raw: `{"plugins":{"notes":{"defaultEditor":"vim"}}}`, want: NotesEditorPane},
+		{name: "legacy nvim keeps pane intent", raw: `{"plugins":{"notes":{"defaultEditor":"nvim"}}}`, want: NotesEditorPane},
+		{name: "unknown falls back safely", raw: `{"plugins":{"notes":{"defaultEditor":"mystery"}}}`, want: NotesEditorBuiltin},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.raw), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.Plugins.Notes.DefaultEditor; got != tt.want {
+				t.Fatalf("default editor = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

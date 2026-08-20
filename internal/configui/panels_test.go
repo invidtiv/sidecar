@@ -90,7 +90,7 @@ func TestPanelsPageListsEverySurface(t *testing.T) {
 		"Git", "Status, commits, branches, and diffs",
 		"Files", "Project browser and inline editing",
 		"td", "Issues and task state from the current project",
-		"Notes", "BETA", "Project notes, kept inside Sidecar",
+		"Notes", "Project notes, kept inside Sidecar",
 		"Conversations", "Session history from supported agent harnesses",
 		"Tasks", "Embedded Tasks global tab, backed by the Tasks command",
 		"ON", "OFF",
@@ -113,7 +113,7 @@ func TestPanelTogglesPersistTheirRealKeys(t *testing.T) {
 		{regionPanel + panelIDTD, func(c *config.Config) bool { return c.Plugins.TDMonitor.Enabled }, false},
 		{regionPanel + panelIDNotes, func(c *config.Config) bool {
 			return c.Features.Flags[features.NotesPlugin.Name]
-		}, true},
+		}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.region, func(t *testing.T) {
@@ -126,6 +126,53 @@ func TestPanelTogglesPersistTheirRealKeys(t *testing.T) {
 				t.Fatalf("a restart-scoped toggle did not say so:\n%s", view)
 			}
 		})
+	}
+}
+
+func TestNotesIsStableAndExplainsTDDependencyWithoutChangingPreference(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"td": true}, func(cfg *config.Config) {
+		cfg.Plugins.TDMonitor.Enabled = false
+		cfg.Features.Flags[features.NotesPlugin.Name] = true
+	})
+	view := ansi.Strip(m.View(160, 45))
+	if strings.Contains(view, "Notes  BETA") {
+		t.Fatalf("stable Notes still has a beta badge:\n%s", view)
+	}
+	if !strings.Contains(view, "available when the td panel is on") {
+		t.Fatalf("td dependency is not explained:\n%s", view)
+	}
+	if !m.flagEnabled(features.NotesPlugin.Name) {
+		t.Fatal("td-off view rewrote the Notes preference")
+	}
+}
+
+func TestFocusNotesPreferenceTargetsExistingToggle(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"td": true}, nil)
+	m.Navigate(PageSetup)
+	m.FocusNotesPreference()
+	_ = m.View(160, 45)
+	if m.Page() != PagePanels || !m.detailFocus {
+		t.Fatalf("focus route = page %q detail=%v", m.Page(), m.detailFocus)
+	}
+	if got := m.focusedID; got != regionPanel+panelIDNotes {
+		t.Fatalf("focused control = %q, want Notes toggle", got)
+	}
+}
+
+func TestNotesDefaultEditorSelectorPersistsBothChoices(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"td": true}, nil)
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "Default editor") || !strings.Contains(view, "Built-in") {
+		t.Fatalf("Notes editor selector is missing:\n%s", view)
+	}
+
+	choose(t, m, regionPanelNotesEditor, config.NotesEditorPane)
+	if got := loadSaved(t).Plugins.Notes.DefaultEditor; got != config.NotesEditorPane {
+		t.Fatalf("pane choice saved %q", got)
+	}
+	choose(t, m, regionPanelNotesEditor, config.NotesEditorBuiltin)
+	if got := loadSaved(t).Plugins.Notes.DefaultEditor; got != config.NotesEditorBuiltin {
+		t.Fatalf("built-in choice saved %q", got)
 	}
 }
 
@@ -163,18 +210,19 @@ func TestConversationsToggleKeepsBothSwitchesConsistent(t *testing.T) {
 	}
 }
 
-// Notes has no external command, so it never opens the enable route.
-func TestNotesEnablesWithoutTheEnableRoute(t *testing.T) {
+// Notes is stable and has no external install route. Its existing switch can
+// opt out directly even though the built-in default is now on.
+func TestNotesTogglesWithoutTheEnableRoute(t *testing.T) {
 	m := panelsFixture(t, nil, nil)
 	activate(t, m, regionPanel+panelIDNotes)
 	if m.Route().IsChild() {
 		t.Fatalf("Notes opened a dependency route: %#v", m.Route())
 	}
-	if !loadSaved(t).Features.Flags[features.NotesPlugin.Name] {
-		t.Fatal("Notes did not persist")
+	if loadSaved(t).Features.Flags[features.NotesPlugin.Name] {
+		t.Fatal("Notes opt-out did not persist")
 	}
-	if view := ansi.Strip(m.View(160, 45)); !strings.Contains(view, "BETA") {
-		t.Fatalf("the BETA badge disappeared after enabling Notes:\n%s", view)
+	if view := ansi.Strip(m.View(160, 45)); strings.Contains(view, "Notes  BETA") {
+		t.Fatalf("stable Notes regained a BETA badge:\n%s", view)
 	}
 }
 

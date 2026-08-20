@@ -73,7 +73,7 @@ func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 	}
 	return []contentlink.Surface{{
 		ID:          notesBodyFocusID,
-		Rect:        mouse.Rect{X: p.listWidth + dividerWidth + 2 + layout.leftMargin, Y: 2, W: layout.wrapColumn, H: rows},
+		Rect:        mouse.Rect{X: p.listWidth + dividerWidth + 2 + layout.leftMargin, Y: 1 + layout.contentRow, W: layout.wrapColumn, H: rows},
 		WorkDir:     p.ctx.WorkDir,
 		ProjectRoot: p.ctx.ProjectRoot,
 		Kinds: contentlink.NewKindSet(
@@ -93,6 +93,6 @@ func (p *Plugin) contentLinksSafe() bool {
 		p.loading || p.loadErr != nil || p.editorNote == nil || !p.previewMode {
 		return false
 	}
-	return !p.searchMode && !p.showTaskModal && !p.showDeleteModal && !p.showInfoModal &&
+	return !p.searchMode && !p.showSetupModal && !p.showTaskModal && !p.showDeleteModal && !p.showInfoModal &&
 		!p.edit.Active && !p.edit.ShowExitConfirm
 }

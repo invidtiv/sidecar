@@ -169,6 +169,36 @@ func (p *Plugin) selectAllEditor() (pluginResult, tea.Cmd) {
 	return p, nil
 }
 
+func (p *Plugin) moveEditorToNoteBoundary(end, extend bool) (pluginResult, tea.Cmd) {
+	if extend && !p.selAnchor.Valid() {
+		if p.selection.Anchor.Valid() {
+			p.selAnchor = p.selection.Anchor
+		} else {
+			p.selAnchor = ui.SelectionPoint{Line: p.editorTextarea.Line(), Col: p.editorTextarea.Column()}
+		}
+	}
+	if end {
+		p.editorTextarea.MoveToEnd()
+	} else {
+		p.editorTextarea.MoveToBegin()
+	}
+	p.trackTextareaScroll()
+	if !extend {
+		p.clearEditSelection()
+		return p, nil
+	}
+	caret := srcPos{line: p.editorTextarea.Line(), col: p.editorTextarea.Column()}
+	start, finish, empty := caretPairToExclusive(srcFromPoint(p.selAnchor), caret)
+	if empty {
+		p.selection.Clear()
+		p.selection.Anchor = p.selAnchor
+	} else {
+		p.selection.SelectRange(start.point(), finish.point(), false)
+		p.selection.Anchor = p.selAnchor
+	}
+	return p, nil
+}
+
 func (p *Plugin) extendSelectionByMotion(msg tea.KeyPressMsg) (pluginResult, tea.Cmd) {
 	if !p.selAnchor.Valid() {
 		if p.selection.Anchor.Valid() {

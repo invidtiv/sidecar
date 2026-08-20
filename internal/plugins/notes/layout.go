@@ -14,10 +14,12 @@ import (
 // the cursor, not the frame.
 type editorLayout struct {
 	wrapColumn    int // cells of note text
-	leftMargin    int // reserved columns before text (0: no gutter)
+	leftMargin    int // reserved columns before note text
+	rightMargin   int // reserved columns after the body scrollbar
 	contentHeight int // body rows under the status header
 	scrollbarCol  int // 0-based column of the scrollbar in the inner pane
 	statusRow     int // 0-based inner-pane row of the status header
+	contentRow    int // 0-based inner-pane row where note text begins
 	innerWidth    int // full inner width of the editor pane
 }
 
@@ -25,6 +27,9 @@ const (
 	paneChromeX      = 4 // left/right border + padding
 	paneChromeY      = 2 // top/bottom border
 	editorStatusRows = 1
+	editorTopRows    = 1
+	editorBottomRows = 1
+	editorSideCols   = 1
 	scrollbarWidth   = 1
 )
 
@@ -46,17 +51,18 @@ func (p *Plugin) editorLayout() editorLayout {
 	}
 
 	statusRow := 0
-	contentHeight := innerHeight - editorStatusRows
+	contentHeight := innerHeight - editorStatusRows - editorTopRows - editorBottomRows
 	if contentHeight < 1 {
 		contentHeight = 1
 	}
 
-	leftMargin := 0
-	scrollbarCol := innerWidth - scrollbarWidth
+	leftMargin := editorSideCols
+	rightMargin := editorSideCols
+	scrollbarCol := innerWidth - rightMargin - scrollbarWidth
 	if scrollbarCol < 0 {
 		scrollbarCol = 0
 	}
-	wrapColumn := innerWidth - leftMargin - scrollbarWidth
+	wrapColumn := scrollbarCol - leftMargin
 	if wrapColumn < 1 {
 		wrapColumn = 1
 	}
@@ -64,9 +70,11 @@ func (p *Plugin) editorLayout() editorLayout {
 	return editorLayout{
 		wrapColumn:    wrapColumn,
 		leftMargin:    leftMargin,
+		rightMargin:   rightMargin,
 		contentHeight: contentHeight,
 		scrollbarCol:  scrollbarCol,
 		statusRow:     statusRow,
+		contentRow:    statusRow + editorStatusRows + editorTopRows,
 		innerWidth:    innerWidth,
 	}
 }
@@ -145,6 +153,20 @@ func attachScrollbar(body, bar string, bodyWidth, height int) string {
 		padded[i] = padToWidth(line, bodyWidth)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(padded, "\n"), bar)
+}
+
+// insetEditorBody adds the horizontal body padding from editorLayout without
+// changing the shared preview/edit viewport. The scrollbar stays beside the
+// note text and the right inset remains outside it.
+func insetEditorBody(body, bar string, l editorLayout) string {
+	core := attachScrollbar(body, bar, l.wrapColumn, l.contentHeight)
+	lines := strings.Split(core, "\n")
+	left := strings.Repeat(" ", l.leftMargin)
+	right := strings.Repeat(" ", l.rightMargin)
+	for i := range lines {
+		lines[i] = left + lines[i] + right
+	}
+	return strings.Join(lines, "\n")
 }
 
 func padToWidth(line string, width int) string {

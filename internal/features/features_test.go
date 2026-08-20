@@ -163,6 +163,16 @@ func TestCrossProjectOverviewIsKnownAndDefaultsOn(t *testing.T) {
 	// contract for a fresh install / empty feature map.
 }
 
+func TestNotesPluginIsStableAndDefaultsOn(t *testing.T) {
+	globalManager = nil
+	if !IsKnownFeature(NotesPlugin.Name) {
+		t.Fatalf("%s is not registered", NotesPlugin.Name)
+	}
+	if !NotesPlugin.Default || !IsEnabled(NotesPlugin.Name) {
+		t.Fatal("Notes must default on before configuration overrides")
+	}
+}
+
 func TestListAllReturnsCopy(t *testing.T) {
 	original := ListAll()
 	originalLen := len(original)

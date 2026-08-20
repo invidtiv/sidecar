@@ -113,6 +113,14 @@ var WheelBoundaryRegistry = []WheelBoundarySurface{
 		Note:        "Answered by overview.WorkspacesWheelAtBoundary and BoardWheelAtBoundary; rename/view flyouts forward.",
 	},
 	{
+		ID:          "notification-centre",
+		Surface:     "App-shell notification centre panel",
+		Policy:      WheelCovered,
+		Probe:       nil, // owned by internal/app, not a plugin
+		HostsModals: false,
+		Note:        "Answered by app.notificationCentreWheelAtBoundary from FilterInput before the plugin underneath.",
+	},
+	{
 		ID:          IDTDMonitor,
 		Surface:     "Embedded td monitor panels, detail scroll, and td-owned modals",
 		Policy:      WheelExternallyOwned,

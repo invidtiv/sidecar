@@ -56,10 +56,12 @@ var (
 		Description: "Auto-refresh the files tree when watched directories change on disk",
 	}
 
-	// NotesPlugin enables the notes plugin for capturing quick notes.
+	// NotesPlugin enables the notes plugin for capturing quick notes. Notes is
+	// stable and defaults on; assembly additionally requires the existing td
+	// panel preference because td owns its storage.
 	NotesPlugin = Feature{
 		Name:        "notes_plugin",
-		Default:     false,
+		Default:     true,
 		Description: "Enable the notes plugin for capturing quick notes",
 	}
 

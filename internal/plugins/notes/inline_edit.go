@@ -37,6 +37,9 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.store == nil {
 		return nil
 	}
+	if blocked, ok := p.guardPendingCreateDurableAction(noteID); ok {
+		return blocked
+	}
 	if p.edit.Active && p.inlineEditNoteID == noteID && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return nil
 	}
@@ -116,6 +119,9 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
+	}
 	// The session below reads the note from the store; an unsaved buffer has to
 	// land first or it is overwritten by what vim reads and writes back.
 	if p.editorDirty {
@@ -192,6 +198,7 @@ func (p *Plugin) exitInlineEditMode() {
 // can never operate on the next project's store.
 func (p *Plugin) resetInlineEditState() {
 	p.edit.Reset()
+	p.inlineWheel.Reset()
 	p.inlineEditNoteID = ""
 	p.edit.ShowExitConfirm = false
 	p.edit.ClearPendingClick()
@@ -429,6 +436,9 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 	region, data := p.edit.TakePendingClick()
 
 	switch region {
+	case regionListFilter:
+		p.activePane = PaneList
+		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
 	case regionNoteItem:
 		// User clicked a note item - select it
 		if idx, ok := data.(int); ok {
@@ -452,9 +462,9 @@ func (p *Plugin) processPendingClickActionWithSave(noteID, notePath string) (*Pl
 	saveCmd := p.saveRetainedExport(noteID, notePath, p.edit.Activation)
 
 	// Process the pending click
-	p2, _ := p.processPendingClickAction()
+	p2, actionCmd := p.processPendingClickAction()
 
-	return p2, saveCmd
+	return p2, tea.Batch(saveCmd, actionCmd)
 }
 
 // clearInlineEditorAttachKey makes ctrl+] inert in the notes vim pane. Notes
