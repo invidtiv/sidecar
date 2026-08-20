@@ -72,6 +72,8 @@ type Plugin struct {
 	activePane           FocusPane // Which pane is focused
 	sidebarRestore       FocusPane // Tracks pane focused before collapse; restored on expand via toggleSidebar()
 	sidebarVisible       bool      // Toggle sidebar with Tab
+	paneFocusManaged     bool      // Set once an outer app deck composes Git focus.
+	paneFocusActive      bool      // Whether Git's inner active border is visible.
 	sidebarWidth         int       // Calculated width (~30%)
 	diffPaneWidth        int       // Calculated width (~70%)
 	recentCommits        []*Commit // Cached recent commits for sidebar
@@ -86,6 +88,7 @@ type Plugin struct {
 
 	// Inline diff state (for three-pane view)
 	selectedDiffFile     string        // File being previewed in diff pane
+	selectedDiffStaged   bool          // Staging side of selectedDiffFile; paths can appear in both groups
 	forceNextDiffReload  bool          // Bypass dedup on next autoLoadDiff call
 	diffPaneScroll       int           // Vertical scroll for inline diff
 	diffPaneHorizScroll  int           // Horizontal scroll for inline diff
@@ -599,7 +602,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil // Ignore stale message from previous project
 		}
 		// Only update if this is still the selected file
-		if msg.File == p.selectedDiffFile {
+		if msg.File == p.selectedDiffFile && msg.Staged == p.selectedDiffStaged {
 			p.diffPaneParsedDiff = msg.Parsed
 			// Clamp scroll to new content length (diff may have shrunk after stage/unstage).
 			// In full-file view mode, clamp against the full-file line count (which includes
@@ -612,7 +615,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			if p.diffPaneViewMode == DiffViewFullFile {
 				entries := p.tree.AllEntries()
 				for _, entry := range entries {
-					if entry.Path == msg.File {
+					if entry.Path == msg.File && entry.Staged == msg.Staged {
 						return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
 					}
 				}
@@ -1537,6 +1540,7 @@ type InlineDiffLoadedMsg struct {
 	Epoch     uint64 // Epoch when request was issued (for stale detection)
 	RequestID uint64
 	File      string
+	Staged    bool
 	Raw       string
 	Parsed    *ParsedDiff
 }

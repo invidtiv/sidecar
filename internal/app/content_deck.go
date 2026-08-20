@@ -786,6 +786,15 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	if leaf == nil {
 		return nil, false
 	}
+	if leaf.Kind == panelayout.Primary {
+		provider, ok := h.plugin.(plugin.PaneFocusProvider)
+		if !ok || len(provider.PaneFocusStops()) == 0 {
+			// A primary sub-mode with no projected stops owns its keys. Git's
+			// full-screen diff is the important case: Tab returns to its sidebar
+			// and must not enter a passive outer leaf left open beside it.
+			return nil, false
+		}
+	}
 	if key.Code == tea.KeyTab {
 		cmd := h.cycleCombinedFocus(key.Mod.Contains(tea.ModShift))
 		m.persistAppContentDeck(h)

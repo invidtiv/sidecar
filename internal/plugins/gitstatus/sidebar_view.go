@@ -86,8 +86,9 @@ func (p *Plugin) renderThreePaneView() string {
 		p.mouseHandler.HitMap.AddRect(regionPaneDivider, dividerX, 0, dividerHitWidth, p.height, nil)
 
 		// Determine if panes are active based on focus
-		sidebarActive := p.activePane == PaneSidebar
-		diffActive := p.activePane != PaneSidebar
+		innerFocusActive := p.innerPaneFocusActive()
+		sidebarActive := innerFocusActive && p.activePane == PaneSidebar
+		diffActive := innerFocusActive && p.activePane != PaneSidebar
 
 		sidebarContent := p.renderSidebar(innerHeight)
 		diffContent := p.renderDiffPane(innerHeight)
@@ -109,7 +110,7 @@ func (p *Plugin) renderThreePaneView() string {
 	diffContent := p.renderDiffPane(innerHeight)
 
 	// Apply gradient border style (always active when full-width)
-	return styles.RenderPanel(diffContent, p.diffPaneWidth, paneHeight, true)
+	return styles.RenderPanel(diffContent, p.diffPaneWidth, paneHeight, p.innerPaneFocusActive())
 }
 
 // renderSidebar renders the left sidebar with files and commits.

@@ -31,6 +31,7 @@ type deckHostTestPlugin struct {
 	frame         string
 	width, height int
 	innerActive   bool
+	noFocusStops  bool
 	wheelBoundary bool
 	wheelX        int
 }
@@ -52,6 +53,9 @@ func (p *deckHostTestPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	return p, nil
 }
 func (p *deckHostTestPlugin) PaneFocusStops() []plugin.PaneFocusStop {
+	if p.noFocusStops {
+		return nil
+	}
 	return []plugin.PaneFocusStop{{ID: "tree"}, {ID: "preview"}}
 }
 func (p *deckHostTestPlugin) PaneFocus() string { return p.focus }
@@ -455,6 +459,28 @@ func TestAppContentDeckPersistsKeyboardAndPaletteNavigation(t *testing.T) {
 	m.runAppContentCommand("prev-tab")
 	if got := persistedAppDeckState(t, root, p.id); paneActive(got.Root, "document") != 1 {
 		t.Fatalf("palette previous tab persisted active=%d, want 1", paneActive(got.Root, "document"))
+	}
+}
+
+func TestAppContentDeckLeavesTabWithPrimarySubmodeThatHasNoFocusStops(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "one.md"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "git-status", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "one.md"})
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Primary))
+	p.noFocusStops = true
+
+	if cmd, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab}); handled || cmd != nil {
+		t.Fatalf("primary submode Tab was claimed: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+		t.Fatal("declining submode Tab changed outer focus")
 	}
 }
 

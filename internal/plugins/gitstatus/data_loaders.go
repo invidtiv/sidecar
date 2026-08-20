@@ -50,10 +50,10 @@ func (p *Plugin) loadInlineDiff(path string, staged bool, status FileStatus) tea
 			rawDiff, err = GetDiff(workDir, path, staged)
 		}
 		if err != nil {
-			return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Raw: "", Parsed: nil}
+			return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Staged: staged, Raw: "", Parsed: nil}
 		}
 		parsed, _ := ParseUnifiedDiff(rawDiff)
-		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Raw: rawDiff, Parsed: parsed}
+		return InlineDiffLoadedMsg{Epoch: epoch, RequestID: requestID, File: path, Staged: staged, Raw: rawDiff, Parsed: parsed}
 	}
 }
 

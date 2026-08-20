@@ -140,7 +140,11 @@ func (p *Plugin) renderDiffModal() string {
 
 // wrapDiffContent wraps diff content with panel border.
 func (p *Plugin) wrapDiffContent(content string, paneHeight int) string {
-	return styles.PanelActive.
+	style := styles.PanelInactive
+	if p.innerPaneFocusActive() {
+		style = styles.PanelActive
+	}
+	return style.
 		Width(p.width - 2).
 		Height(paneHeight).
 		Render(content)
@@ -174,7 +178,7 @@ func (p *Plugin) renderDiffTwoPane() string {
 
 	// Sidebar is inactive (showing files), diff pane is active
 	sidebarActive := false
-	diffActive := true
+	diffActive := p.innerPaneFocusActive()
 
 	sidebarContent := p.renderSidebar(innerHeight)
 	diffContent := p.renderFullDiffContent(innerHeight)

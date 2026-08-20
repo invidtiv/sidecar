@@ -62,17 +62,19 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 	entries := p.tree.AllEntries()
 	if len(entries) == 0 || p.cursor >= len(entries) {
 		p.selectedDiffFile = ""
+		p.selectedDiffStaged = false
 		p.diffPaneParsedDiff = nil
 		return nil
 	}
 
 	entry := entries[p.cursor]
-	isNewFile := entry.Path != p.selectedDiffFile
+	isNewFile := entry.Path != p.selectedDiffFile || entry.Staged != p.selectedDiffStaged
 	if !isNewFile && !p.forceNextDiffReload {
 		return nil // Already loaded
 	}
 
 	p.selectedDiffFile = entry.Path
+	p.selectedDiffStaged = entry.Staged
 	p.forceNextDiffReload = false
 	if isNewFile {
 		// Only reset scroll and clear full-file diff when switching to a different file
@@ -119,6 +121,7 @@ func (p *Plugin) autoLoadCommitPreview() tea.Cmd {
 
 	// Clear file diff when switching to commit
 	p.selectedDiffFile = ""
+	p.selectedDiffStaged = false
 	p.diffPaneParsedDiff = nil
 	p.previewCommitError = ""
 	p.previewCommitCursor = 0
