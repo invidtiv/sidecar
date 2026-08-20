@@ -190,8 +190,12 @@ type Plugin struct {
 	infoModalNote         *Note
 	infoModalMouseHandler *mouse.Handler
 
-	// Pending edit state (for auto-edit on new note)
-	pendingEditID string
+	// Structural create/delete state. All list snapshots reconcile through
+	// this one optimistic owner while td persists the mutation.
+	mutation       *noteMutation
+	nextMutationID uint64
+	mutationErr    error
+	mutationAction string
 
 	// External editor state (for reading back content after $EDITOR exits)
 	pendingInlineEditID    string // Note ID being edited
@@ -241,7 +245,7 @@ type Plugin struct {
 
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
-
+	undoErr   error
 }
 
 // notePlace is the session-only view/edit position for one note.
@@ -386,6 +390,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.searchMode = false
 	p.searchQuery = ""
 	p.filteredNotes = nil
+	p.mutation = nil
+	p.nextMutationID = 0
+	p.mutationErr = nil
+	p.mutationAction = ""
 
 	// Pane state
 	p.activePane = PaneList
@@ -407,6 +415,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.selExtend = false
 	p.editHistories = make(map[string]*editHistory)
 	p.lastSavedContent = ""
+	p.undoErr = nil
 
 	// Editor state
 	p.editorNote = nil
@@ -526,7 +535,11 @@ func (p *Plugin) Stop() {
 		}
 	}
 	p.exportCheckpointFailed = !allExportsCheckpointed
-	if p.needsEditorCheckpoint() {
+	// A pending create has no td identity yet. Its content save is deliberately
+	// queued for the Create result; lifecycle teardown must not turn that queue
+	// into SaveContent(local-note-N).
+	checkpointPendingCreate := p.editorNote != nil && p.pendingCreateID(p.editorNote.ID)
+	if p.needsEditorCheckpoint() && !checkpointPendingCreate {
 		root := ""
 		var logger *slog.Logger
 		if p.ctx != nil {
@@ -801,23 +814,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.setupNeeded = false
 			p.showSetupModal = false
 			p.setupDismissed = false
-			p.notes = msg.Notes
+			p.notes = p.reconcileMutation(msg.Notes)
 			p.loadErr = nil
 
-			// Auto-edit mode: a note we just created opens in the simple editor
-			// with the cursor at the end, ready to type into.
-			if p.pendingEditID != "" {
-				for i, n := range p.notes {
-					if n.ID == p.pendingEditID {
-						p.cursor = i
-						p.activePane = PaneEditor
-						p.previewMode = false
-						p.pendingEditID = ""
-						return p, p.loadNoteIntoEditorAtEnd()
-					}
-				}
-				p.pendingEditID = ""
-			} else if p.editorNote != nil {
+			if p.editorNote != nil {
 				// Follow the edited note if it moved position (due to updated_at sort)
 				for i, n := range p.notes {
 					if n.ID == p.editorNote.ID {
@@ -848,19 +848,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if p.isStaleNoteSaveResult(msg.Epoch, msg.EditorActivation) {
 			return p, nil
 		}
+		if msg.MutationID != 0 {
+			return p, p.finishOptimisticCreate(msg)
+		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: save failed", "error", msg.Err)
 		} else {
-			// Track new note ID for auto-edit mode
-			if msg.Note != nil && p.pendingEditID == "" {
-				p.pendingEditID = msg.Note.ID
-			}
 			return p, p.loadNotes()
 		}
 
 	case NoteDeletedMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil
+		}
+		if msg.MutationID != 0 {
+			return p, p.finishOptimisticDelete(msg)
 		}
 		if msg.Err != nil {
 			p.ctx.Logger.Error("notes: delete failed", "error", msg.Err)
@@ -885,8 +887,14 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, nil
 		}
 		if msg.Err != nil {
+			if msg.Action.Type != "" {
+				p.pushUndo(msg.Action)
+			}
+			p.undoErr = msg.Err
 			p.ctx.Logger.Error("notes: restore failed", "error", msg.Err)
+			return p, showRestoreFailedToast(msg.Err)
 		} else {
+			p.undoErr = nil
 			p.ctx.Logger.Debug("notes: restored", "id", msg.ID)
 			return p, tea.Batch(
 				showRestoredToast(msg.Title),
@@ -1291,16 +1299,7 @@ func (p *Plugin) createNoteFromPaste(content string) tea.Cmd {
 	if p.editorDirty {
 		return p.saveBefore(func() tea.Cmd { return p.createNoteFromPaste(content) })
 	}
-	title := firstNonBlankLine(content)
-	epoch := p.ctx.Epoch
-	store := p.store
-	return func() tea.Msg {
-		note, err := store.Create(title, content)
-		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
-		}
-		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
-	}
+	return p.beginOptimisticCreate(firstNonBlankLine(content), content)
 }
 
 func firstNonBlankLine(content string) string {
@@ -1383,14 +1382,26 @@ func (p *Plugin) applySavedContent(msg NoteContentSavedMsg) {
 
 // FooterStatus keeps slow/failed saves visible after the transient toast.
 func (p *Plugin) FooterStatus() (string, bool) {
+	if p.mutationErr != nil {
+		return "notes: " + p.mutationAction + " failed — retry the action", true
+	}
 	if p.saveErr != nil {
 		return "notes: save failed — Ctrl-S to retry", true
+	}
+	if p.undoErr != nil {
+		return "notes: undo failed — u to retry", true
 	}
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
 	if p.saveInFlight || p.exportSaveInFlight {
 		return "notes: saving…", false
+	}
+	if p.mutation != nil {
+		if p.mutation.kind == noteMutationDelete {
+			return "notes: deleting…", false
+		}
+		return "notes: creating…", false
 	}
 	return "", false
 }
@@ -2253,6 +2264,10 @@ func (p *Plugin) saveEditorContent() tea.Cmd {
 	if p.editorNote == nil || p.store == nil || (!p.editorDirty && !p.needsEditorCheckpoint()) {
 		return p.runPendingAfterSave()
 	}
+	if p.pendingCreateID(p.editorNote.ID) {
+		p.saveQueued = true
+		return nil
+	}
 	if p.saveInFlight {
 		p.saveQueued = true
 		return nil
@@ -2328,6 +2343,9 @@ func (p *Plugin) openInExternalEditor() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -2721,19 +2739,8 @@ func (p *Plugin) createNoteWithTitle(title string) tea.Cmd {
 	if p.store == nil {
 		return nil
 	}
-	epoch := p.ctx.Epoch
-	store := p.store
-
 	// Use title as initial content (first line) so cursor can be positioned after it
-	content := title
-
-	return func() tea.Msg {
-		note, err := store.Create(title, content)
-		if err != nil {
-			return NoteSavedMsg{Note: nil, Err: err, Epoch: epoch}
-		}
-		return NoteSavedMsg{Note: note, Err: nil, Epoch: epoch}
-	}
+	return p.beginOptimisticCreate(title, title)
 }
 
 // togglePin returns a command that toggles the pinned state of the selected note.
@@ -2741,6 +2748,9 @@ func (p *Plugin) togglePin() tea.Cmd {
 	note := p.selectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -2764,6 +2774,9 @@ func (p *Plugin) toggleArchive() tea.Cmd {
 	note := p.selectedNote()
 	if note == nil || p.store == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	if p.editorDirty {
 		noteID := note.ID
@@ -3234,10 +3247,18 @@ func (p *Plugin) hasUndo() bool {
 
 // undoLastAction undoes the last delete or archive action.
 func (p *Plugin) undoLastAction() tea.Cmd {
-	action := p.popUndo()
-	if action == nil || p.store == nil {
+	if p.store == nil || !p.hasUndo() {
 		return msg.ShowToast("Nothing to undo", 2*time.Second)
 	}
+	latest := p.undoStack[len(p.undoStack)-1]
+	if blocked, ok := p.guardPendingCreateDurableAction(latest.NoteID); ok {
+		return blocked
+	}
+	action := p.popUndo()
+	if action == nil {
+		return msg.ShowToast("Nothing to undo", 2*time.Second)
+	}
+	p.undoErr = nil
 
 	noteID := action.NoteID
 	title := action.Title
@@ -3254,10 +3275,21 @@ func (p *Plugin) undoLastAction() tea.Cmd {
 			err = store.Unarchive(noteID)
 		}
 		return NoteRestoredMsg{
-			ID:    noteID,
-			Title: title,
-			Err:   err,
-			Epoch: epoch,
+			ID:     noteID,
+			Title:  title,
+			Err:    err,
+			Epoch:  epoch,
+			Action: *action,
 		}
+	}
+}
+
+func showRestoreFailedToast(err error) tea.Cmd {
+	text := "Undo failed"
+	if err != nil {
+		text += ": " + err.Error()
+	}
+	return func() tea.Msg {
+		return msg.ToastMsg{Message: text, Duration: 4 * time.Second, IsError: true}
 	}
 }

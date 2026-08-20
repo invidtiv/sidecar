@@ -75,6 +75,9 @@ func (p *Plugin) openDeleteModal() tea.Cmd {
 	if note == nil {
 		return nil
 	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
+	}
 	if p.editorDirty {
 		noteID := note.ID
 		return p.saveBefore(func() tea.Cmd {
@@ -163,23 +166,9 @@ func (p *Plugin) confirmDeleteNote() tea.Cmd {
 		p.closeDeleteModal()
 		return nil
 	}
-
-	noteID := p.deleteModalNote.ID
-	epoch := p.ctx.Epoch
-	store := p.store
-
-	// Push undo before delete
-	p.pushUndo(UndoAction{
-		Type:   UndoDelete,
-		NoteID: p.deleteModalNote.ID,
-		Title:  p.deleteModalNote.Title,
-	})
-
-	// Close modal
-	p.closeDeleteModal()
-
-	return func() tea.Msg {
-		err := store.Delete(noteID)
-		return NoteDeletedMsg{ID: noteID, Err: err, Epoch: epoch}
+	if blocked, ok := p.guardPendingCreateDurableAction(p.deleteModalNote.ID); ok {
+		return blocked
 	}
+
+	return p.beginOptimisticDelete(*p.deleteModalNote)
 }

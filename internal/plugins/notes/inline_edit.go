@@ -37,6 +37,9 @@ func (p *Plugin) enterInlineEditMode(noteID string) tea.Cmd {
 	if p.store == nil {
 		return nil
 	}
+	if blocked, ok := p.guardPendingCreateDurableAction(noteID); ok {
+		return blocked
+	}
 	if p.edit.Active && p.inlineEditNoteID == noteID && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return nil
 	}
@@ -115,6 +118,9 @@ func (p *Plugin) editSelectedNote() tea.Cmd {
 	note := p.getSelectedNote()
 	if note == nil {
 		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
 	}
 	// The session below reads the note from the store; an unsaved buffer has to
 	// land first or it is overwritten by what vim reads and writes back.

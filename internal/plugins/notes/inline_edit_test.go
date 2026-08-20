@@ -295,7 +295,7 @@ func TestInlineExitSaveSnapshotsOwningStore(t *testing.T) {
 	_, followup = p.Update(NoteSavedMsg{
 		Note: &Note{ID: "stale-note"}, Epoch: 2, EditorActivation: 4,
 	})
-	if followup != nil || p.pendingEditID != "" {
+	if followup != nil || p.mutation != nil {
 		t.Fatal("stale inline NoteSavedMsg reached replacement UI state")
 	}
 }

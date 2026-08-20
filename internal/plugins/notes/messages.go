@@ -21,6 +21,8 @@ type NoteSavedMsg struct {
 	Err              error
 	Epoch            uint64
 	EditorActivation uint64 // Non-zero only for an inline-editor save lifecycle.
+	MutationID       uint64 // Non-zero for an optimistic create.
+	TempID           string // Local identity replaced by Note.ID on success.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -30,9 +32,10 @@ func (m NoteSavedMsg) GetEpoch() uint64 {
 
 // NoteDeletedMsg is sent when a note is deleted.
 type NoteDeletedMsg struct {
-	ID    string
-	Err   error
-	Epoch uint64
+	ID         string
+	Err        error
+	Epoch      uint64
+	MutationID uint64 // Non-zero for an optimistic delete.
 }
 
 // GetEpoch returns the epoch for staleness detection.
@@ -107,10 +110,11 @@ func (m ExternalEditorPreparedMsg) GetEpoch() uint64 { return m.Epoch }
 
 // NoteRestoredMsg is sent when a note is restored (undo delete/archive).
 type NoteRestoredMsg struct {
-	ID    string
-	Title string
-	Err   error
-	Epoch uint64
+	ID     string
+	Title  string
+	Err    error
+	Epoch  uint64
+	Action UndoAction // Popped action; restored to the stack when persistence fails.
 }
 
 // GetEpoch returns the epoch for staleness detection.
