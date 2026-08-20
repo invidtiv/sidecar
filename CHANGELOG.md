@@ -4,6 +4,8 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.2.1] - 2026-08-20
+
 ### Bug Fixes
 
 - **Text selection is easier to find against the canvas.** The highlight sat
@@ -11,7 +13,8 @@ All notable changes to sidecar are documented here.
   in Notes, Files, or a document pane disappeared into the shell background.
   Selection now lifts to at least 2.65:1 against the canvas and stays on the
   same ink pole, so body text, headings, and syntax colours are not inverted
-  or washed out.
+  or washed out. Curated tinted selections bring vibrant, theme-matched highlights
+  while supporting chromatic contrast in normalizer calculations.
 
 ## [v1.2.0] - 2026-08-20
 
