@@ -735,7 +735,11 @@ func (p *Plugin) previewResizeTarget() string {
 	return wt.Agent.TmuxSession
 }
 
-// exitInteractiveMode exits interactive mode and returns to list view.
+// exitInteractiveMode ends the live pane and leaves the focus ring where it
+// is. Covering the plugin, a click that then names a new window, and a
+// selection change are not navigations back to wherever the mode was entered
+// from; walking the ring there is what made switching plugins land on the
+// sidebar after typing in the shell.
 //
 // Every way out goes through here, including the ones that never reach the
 // component — a click landing off every terminal region, a filter opening, a
@@ -748,10 +752,6 @@ func (p *Plugin) exitInteractiveMode() {
 		terminal.ReleaseInput()
 	}
 	if p.interactiveState != nil {
-		// Preserve focus on whichever sub-pane was interactive
-		p.termPanelFocused = p.interactiveState.TermPanel
-		// Hand the pane back to whoever had it before interactive mode claimed it.
-		p.activePane = p.interactiveState.PaneOnEntry
 		p.interactiveState.Active = false
 	}
 	p.interactiveState = nil
@@ -892,6 +892,13 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 // output from there as soon as it is back at zero.
 func (p *Plugin) leaveInteractiveMode() tea.Cmd {
 	termPanel := p.interactiveState != nil && p.interactiveState.TermPanel
+	// Esc is a navigation back: restore the window that held focus before the
+	// live pane claimed the keyboard, so Enter-from-the-list still returns to
+	// the list. Plugin blur uses exitInteractiveMode directly and must not.
+	if p.interactiveState != nil {
+		p.termPanelFocused = p.interactiveState.TermPanel
+		p.activePane = p.interactiveState.PaneOnEntry
+	}
 	p.exitInteractiveMode()
 	if termPanel {
 		p.termPanelScroll = tty.LeaveLiveWindow(&p.termPanelFreeze, p.termPanelScroll, p.termPanelMaxScroll())

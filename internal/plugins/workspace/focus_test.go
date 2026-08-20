@@ -235,6 +235,76 @@ func TestTabLeavesALiveTerminalSearchInput(t *testing.T) {
 	assertFocus(t, p, sidebarTarget(), "terminal search to sidebar")
 }
 
+// Covering the plugin (a tab switch) used to restore the window interactive
+// mode was entered from, so typing in the shell and switching to Git put the
+// ring back on the list. Covering is not a navigation of this surface's
+// windows: the live pane ends, and the shell keeps the ring.
+func TestPluginBlurKeepsTheLiveTerminalFocused(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.sidebarVisible = true
+	p.setFocusTarget(sidebarTarget())
+	term := terminalLeafID(p.paneRoot)
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, PaneOnEntry: PaneSidebar, TargetSession: "focus-blur"}
+	p.activePane = PanePreview
+	p.paneFocus = term
+	t.Cleanup(p.stopTerminalModels)
+
+	p.SetFocused(false)
+	if p.viewMode == ViewModeInteractive {
+		t.Fatal("plugin blur left the live pane holding the keyboard")
+	}
+	p.SetFocused(true)
+	assertFocus(t, p, leafTarget(term), "return from another plugin")
+}
+
+// Esc is a navigation back, so Enter-from-the-list still returns to the list.
+func TestLeavingInteractiveModeRestoresTheWindowItWasEnteredFrom(t *testing.T) {
+	root := t.TempDir()
+	p := docPaneTestPlugin(t, root, true)
+	p.sidebarVisible = true
+	p.setFocusTarget(sidebarTarget())
+	p.viewMode = ViewModeInteractive
+	p.interactiveState = &InteractiveState{Active: true, PaneOnEntry: PaneSidebar, TargetSession: "focus-esc"}
+	p.activePane = PanePreview
+	p.paneFocus = terminalLeafID(p.paneRoot)
+	t.Cleanup(p.stopTerminalModels)
+
+	p.leaveInteractiveMode()
+	assertFocus(t, p, sidebarTarget(), "esc from a live pane entered on the list")
+}
+
+// Opening a document leaves the content deck focused on that leaf. Tab onto
+// the shell, then project the deck (the live-refresh path that runs when the
+// plugin becomes visible again). The ring must stay on the shell — copying
+// deck.FocusedLeaf() was how an extra panel stole the keyboard on return.
+func TestDeckProjectionKeepsFocusOnTheTerminal(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.sidebarVisible = true
+	rootPath, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		t.Fatal("no selected terminal surface")
+	}
+	if cmd := p.openDocPaneForSurface(rootPath, surface, "README.md", 0); cmd == nil {
+		t.Fatal("open produced no command")
+	}
+	if p.contentDeck == nil {
+		t.Fatal("document pane did not open a content deck")
+	}
+	term := terminalLeafID(p.paneRoot)
+	p.setFocusTarget(leafTarget(term))
+	assertFocus(t, p, leafTarget(term), "tab/click to the shell")
+	if p.contentDeck.FocusedLeaf() != term {
+		t.Fatalf("deck focus = %d, want the terminal %d", p.contentDeck.FocusedLeaf(), term)
+	}
+
+	p.applyWorkspaceDeckBroadcast(struct{}{})
+	assertFocus(t, p, leafTarget(term), "after a deck projection")
+}
+
 // The panel is a window only while it is drawn. When the preview shrinks past
 // the split's minimum the renderer falls back to output-only, and Tab must not
 // park focus on a panel that is not on screen.

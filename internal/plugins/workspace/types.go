@@ -333,9 +333,11 @@ type InteractiveState struct {
 	// (rather than the main agent/shell session).
 	TermPanel bool
 
-	// PaneOnEntry is the pane that was active before interactive mode took over,
-	// restored on exit. Interactive mode forces the preview pane active so the
-	// embedded terminal owns the cursor and mouse mode (td-62b8ab).
+	// PaneOnEntry is the pane that was active before interactive mode took over.
+	// leaveInteractiveMode (Esc) restores it so Enter-from-the-list still
+	// returns to the list. Other exits leave the ring on the live pane.
+	// Interactive mode forces the preview pane active so the embedded terminal
+	// owns the cursor and mouse mode (td-62b8ab).
 	PaneOnEntry FocusPane
 
 	// LastKeyTime tracks when the last key was sent for polling decay.

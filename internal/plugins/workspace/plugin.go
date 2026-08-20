@@ -614,7 +614,9 @@ func (p *Plugin) SetFocused(f bool) {
 	if !f && !p.focused && !p.terminalOwnershipIsActive() {
 		return
 	}
-	// Exit interactive mode when plugin loses focus (user switched tabs) (td-efd736)
+	// Exit interactive mode when plugin loses focus (user switched tabs) (td-efd736).
+	// The ring stays on the live pane: covering this plugin is not a navigation
+	// back to the sidebar or an extra content leaf.
 	if !f && p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
 	}

@@ -189,7 +189,19 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 		return
 	}
 	oldDocs, oldIssues, oldDiffs, oldResources := p.docs, p.issues, p.diffs, p.resources
-	p.paneRoot, p.paneFocus = reconcileWorkspaceDeckTree(p.paneRoot, deck.Tree()), deck.FocusedLeaf()
+	keep := p.paneFocus
+	p.paneRoot = reconcileWorkspaceDeckTree(p.paneRoot, deck.Tree())
+	// setFocusTarget is the sole writer of the ring. A live-refresh broadcast
+	// must not walk it to whatever leaf last opened a tab — that is how
+	// switching plugins stole the shell whenever a document, issue, or diff
+	// pane was open. Keep the current leaf when it still exists; otherwise take
+	// the deck's answer, which Close/Open have already pointed at the survivor.
+	if FindPane(p.paneRoot, keep) != nil {
+		p.paneFocus = keep
+		p.syncDeckFocus()
+	} else {
+		p.paneFocus = deck.FocusedLeaf()
+	}
 	p.paneNextID = panelayout.MaxID(p.paneRoot) + 1
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)

@@ -72,9 +72,7 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 	// legal on the window that has focus. Ending it HERE, rather than at each
 	// site that moves focus, is what keeps the ring honest: a ring drawn on one
 	// leaf while keys land in another is exactly what a per-site rule leaks the
-	// first time a site forgets. It runs before the writes below because
-	// exitInteractiveMode restores the pane that was focused on entry, which
-	// this call is in the middle of replacing.
+	// first time a site forgets.
 	if p.viewMode == ViewModeInteractive && !p.targetOwnsTerminalKeyboard(t) {
 		p.exitInteractiveMode()
 	}
@@ -92,11 +90,24 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 		// being pinned where a document or a gesture left it. Without this the
 		// panel arrives frozen and the first key moves nothing.
 		p.thawTermPanelWindow()
+		p.syncDeckFocus()
 	default:
 		p.activePane = PanePreview
 		p.paneFocus = t.Leaf
 		p.termPanelFocused = false
+		p.syncDeckFocus()
 	}
+}
+
+// syncDeckFocus keeps the content deck's focused leaf on the same window the
+// ring names. The global browser does this in focusPreviewLeaf; without it a
+// later deck projection copies the last-opened extra pane back onto paneFocus
+// and the shell loses the keyboard.
+func (p *Plugin) syncDeckFocus() {
+	if p.contentDeck == nil || p.activePane != PanePreview {
+		return
+	}
+	p.contentDeck.FocusLeaf(p.paneFocus)
 }
 
 // targetOwnsTerminalKeyboard reports that a focus target is a window a live
