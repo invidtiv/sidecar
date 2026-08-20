@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/overlay"
 	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/styles"
@@ -287,6 +288,15 @@ func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bo
 		}
 	}
 
+	// The block background must survive the styled spans inside each line (the
+	// bold title's reset was leaving the title row on the terminal's default
+	// background, visibly lighter than the rest of the block). ui.RowBackground
+	// re-asserts it after every inner reset — the same fix the centre's
+	// selection highlight uses — so lipgloss's Background below only has the
+	// border and padding cells left to cover.
+	for i, line := range lines {
+		lines[i] = ui.RowBackground(line, inner, styles.BgSecondary)
+	}
 	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(hue).
@@ -347,9 +357,11 @@ func toastCountdownMeter(n notify.Notification, now time.Time) string {
 	filled = max(1, min(toastCountdownCells, filled))
 	// Both halves sit below the body text in weight: the countdown is a hint
 	// about how long the block will linger, not information the user has to
-	// read (plan 1.5 item 4).
-	return lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellFull, filled)) +
-		lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled))
+	// read (plan 1.5 item 4). The filled cells sit on the RIGHT, against the
+	// `×`, and the meter empties left-to-right — a fuse burning down toward
+	// the close button (Marcus, 2026-08-19).
+	return lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat(toastCellEmpty, toastCountdownCells-filled)) +
+		lipgloss.NewStyle().Foreground(styles.TextSubtle).Render(strings.Repeat(toastCellFull, filled))
 }
 
 // dismissVisibleToast answers `d` while a toast is on screen: it acts on the
