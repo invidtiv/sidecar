@@ -16,12 +16,15 @@ import (
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resource"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -263,6 +266,204 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	if !ok || click.X != 5 || click.Y != 4 {
 		t.Fatalf("primary mouse origin = %#v, want plugin-local (5,4)", p.seen[len(p.seen)-1])
 	}
+}
+
+func TestAppContentDeckPassiveFocusChangesOnlyOnIntentionalClick(t *testing.T) {
+	for _, id := range []string{"file-browser", "git-status"} {
+		t.Run(id, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			p := &deckHostTestPlugin{id: id, focus: "preview", frame: "primary"}
+			m := appDeckTestModel(t, root, p)
+			m.renderContent(200, 40)
+			m.openAppContent(root, id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"})
+			m.renderContent(200, 40)
+			h := m.currentContentDeck()
+			docID := h.deck.Leaf(panelayout.Document)
+			var primary, doc paneframe.Box
+			for _, placement := range h.layout.Leaves {
+				switch placement.Node.Kind {
+				case panelayout.Primary:
+					primary = placement.Box
+				case panelayout.Document:
+					doc = paneframe.GeometryForChrome(placement.Box, appDeckHost{h}.Chrome(placement.Node)).Inner
+				}
+			}
+			m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: doc.X + 1, Y: doc.Y + 1, Button: tea.MouseLeft}))
+			if h.deck.FocusedLeaf() != docID || p.innerActive {
+				t.Fatalf("passive click focus leaf=%d active=%v, want doc %d", h.deck.FocusedLeaf(), p.innerActive, docID)
+			}
+			m.renderContent(200, 40)
+			m.appContentMouse(tea.MouseMotionMsg(tea.Mouse{X: primary.X + 2, Y: primary.Y + 2}))
+			m.appContentMouse(tea.MouseWheelMsg(tea.Mouse{X: primary.X + 2, Y: primary.Y + 2, Button: tea.MouseWheelDown}))
+			m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: primary.X + 2, Y: primary.Y + 2, Button: tea.MouseLeft}))
+			if h.deck.FocusedLeaf() != docID || p.innerActive {
+				t.Fatalf("hover/wheel/release retargeted focus leaf=%d active=%v", h.deck.FocusedLeaf(), p.innerActive)
+			}
+			m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: primary.X + 2, Y: primary.Y + 2, Button: tea.MouseLeft}))
+			if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) || !p.innerActive {
+				t.Fatalf("primary click focus leaf=%d active=%v", h.deck.FocusedLeaf(), p.innerActive)
+			}
+		})
+	}
+}
+
+func TestAppContentDeckClickRetainsDocumentKeyboardContextThroughUpdate(t *testing.T) {
+	for _, id := range []string{"file-browser", "git-status"} {
+		t.Run(id, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("alpha beta\nalpha\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			p := &deckHostTestPlugin{id: id, focus: "preview", frame: "primary"}
+			m := appDeckTestModel(t, root, p)
+			adopt := func(updated tea.Model) {
+				switch next := updated.(type) {
+				case Model:
+					m = &next
+				case *Model:
+					m = next
+				default:
+					t.Fatalf("updated model type %T", updated)
+				}
+			}
+			m.renderContent(200, 40)
+			m.openAppContent(root, id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"})
+			m.renderContent(200, 40)
+			h := m.currentContentDeck()
+			docID := h.deck.Leaf(panelayout.Document)
+			var primary, doc paneframe.Box
+			for _, placement := range h.layout.Leaves {
+				if placement.Node.Kind == panelayout.Primary {
+					primary = placement.Box
+				} else if placement.Node.Kind == panelayout.Document {
+					doc = paneframe.GeometryForChrome(placement.Box, appDeckHost{h}.Chrome(placement.Node)).Inner
+				}
+			}
+			updated, _ := m.Update(tea.MouseClickMsg{X: doc.X + 1, Y: headerHeight + doc.Y + 1, Button: tea.MouseLeft})
+			adopt(updated)
+			if h.deck.FocusedLeaf() != docID || m.activeContext != "workspace-doc" {
+				t.Fatalf("click leaf=%d context=%q, want doc/%q", h.deck.FocusedLeaf(), m.activeContext, "workspace-doc")
+			}
+			m.renderContent(200, 40)
+			updated, _ = m.Update(tea.MouseMotionMsg{X: primary.X + 1, Y: headerHeight + primary.Y + 1})
+			adopt(updated)
+			if h.deck.FocusedLeaf() != docID || m.activeContext != "workspace-doc" {
+				t.Fatalf("hover stole retained focus: leaf=%d context=%q", h.deck.FocusedLeaf(), m.activeContext)
+			}
+			updated, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+			adopt(updated)
+			view := h.deck.Viewer(docID).(*docview.Model)
+			if !view.SearchActive() || m.activeContext != "workspace-doc-find" {
+				t.Fatalf("search active=%v context=%q", view.SearchActive(), m.activeContext)
+			}
+			updated, _ = m.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+			adopt(updated)
+			if view.SearchQuery() != "q" || h.deck.FocusedLeaf() != docID {
+				t.Fatalf("search query=%q leaf=%d", view.SearchQuery(), h.deck.FocusedLeaf())
+			}
+			updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+			adopt(updated)
+			if view.SearchActive() || m.activeContext != "workspace-doc" {
+				t.Fatalf("escape search active=%v context=%q", view.SearchActive(), m.activeContext)
+			}
+			updated, _ = m.Update(tea.MouseClickMsg{X: primary.X + 1, Y: headerHeight + primary.Y + 1, Button: tea.MouseLeft})
+			adopt(updated)
+			if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) || m.activeContext == "workspace-doc" {
+				t.Fatalf("click-away leaf=%d context=%q", h.deck.FocusedLeaf(), m.activeContext)
+			}
+		})
+	}
+}
+
+func TestAppContentDeckAdvertisesAndRunsSupportedViewerCommands(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# title\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	h.SetResourceResolver(func(int, uint64, uint64, resource.Reference, bool) tea.Cmd { return nil })
+	for _, ref := range []contentlink.Ref{
+		{Kind: contentlink.KindFile, Value: "README.md"},
+		{Kind: contentlink.KindIssue, Value: "td-a91834"},
+		{Kind: contentlink.KindDiff, Value: "wt"},
+		{Kind: contentlink.KindResource, Provider: "test", Matcher: "item", Value: "one"},
+	} {
+		m.openAppContent(root, p.id, ref)
+		m.renderContent(200, 40)
+	}
+
+	assertCommands := func(kind panelayout.Kind, want ...string) map[string]plugin.Command {
+		t.Helper()
+		h.deck.FocusLeaf(h.deck.Leaf(kind))
+		h.syncInnerFocus()
+		commands := make(map[string]plugin.Command)
+		for _, command := range m.appContentCommands() {
+			if command.Handler == nil {
+				t.Fatalf("%v command %q has no handler", kind, command.ID)
+			}
+			commands[command.ID] = command
+		}
+		for _, id := range want {
+			if _, ok := commands[id]; !ok {
+				t.Fatalf("%v commands missing %q: %#v", kind, id, commands)
+			}
+		}
+		return commands
+	}
+
+	docCommands := assertCommands(panelayout.Document, "search-content", "edit", "render", "toggle-wrap", "reveal")
+	// Finder, project search, file info, sidebar and resize are Workspace host
+	// surfaces, not docview interactions. The app deck does not advertise them
+	// until it has those host adapters.
+	for _, excluded := range []string{"find-file", "search-project", "info", "toggle-sidebar", "resize-pane-grow", "resize-pane-shrink"} {
+		if _, ok := docCommands[excluded]; ok {
+			t.Fatalf("unsupported app host command %q was advertised", excluded)
+		}
+	}
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'I', Text: "I"}); !handled {
+		t.Fatal("unsupported Workspace-only info key escaped the focused passive document")
+	}
+	doc := h.deck.Viewer(h.deck.Leaf(panelayout.Document)).(*docview.Model)
+	beforeRendered, beforeWrap := doc.Rendered(), doc.Wrap()
+	docCommands["render"].Handler()
+	docCommands["toggle-wrap"].Handler()
+	if doc.Rendered() == beforeRendered || doc.Wrap() == beforeWrap {
+		t.Fatalf("document command handlers did not mutate viewer: rendered=%v wrap=%v", doc.Rendered(), doc.Wrap())
+	}
+	docCommands["search-content"].Handler()
+	if !doc.SearchActive() {
+		t.Fatal("InFile command did not enter shared docview search")
+	}
+	doc.CloseSearch()
+
+	assertCommands(panelayout.Issue, "open-item", "open-in-td", "yank-issue", "yank-issue-key")
+	issue := h.deck.Viewer(h.deck.Leaf(panelayout.Issue)).(*issueview.Model)
+	openNested := issue.OpenHandler("td-child")
+	if openNested == nil {
+		t.Fatal("Issue viewer has no app activation handler")
+	}
+	activation, ok := openNested().(ActivateTargetMsg)
+	if !ok || activation.Target.Kind != uirequest.TargetKindIssue || activation.Target.Value != "td-child" {
+		t.Fatalf("nested Issue activation = %#v", openNested())
+	}
+	diffCommands := assertCommands(panelayout.Diff, "diff-open", "diff-down", "diff-up", "toggle-diff-view", "toggle-diff-scope")
+	diff := h.deck.Viewer(h.deck.Leaf(panelayout.Diff)).(*workspacediff.View)
+	beforeMode := diff.ViewMode
+	diffCommands["toggle-diff-view"].Handler()
+	if diff.ViewMode == beforeMode {
+		t.Fatal("Diff palette handler did not change the shared viewer mode")
+	}
+	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Diff))
+	h.deck.CloseActive()
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindResource, Provider: "test", Matcher: "item", Value: "one"})
+	m.renderContent(200, 40)
+	assertCommands(panelayout.Resource, resourceview.CommandRefresh, resourceview.CommandOpenSource)
 }
 
 func TestAppContentDeckBorderlessPrimaryRuleIsCapabilityDriven(t *testing.T) {

@@ -323,6 +323,7 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 	previous := m.globalTab
 	var deckCmd tea.Cmd
 	if h := m.currentContentDeck(); h != nil {
+		h.releaseAppContentDocumentEdit()
 		h.laidOut = false
 		h.links = nil
 		h.press = nil
@@ -552,6 +553,9 @@ func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	switch {
 	case m.globalTasksFocused():
 		if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+			if handled, cmd := m.handleAppContentEditMouse(mouseMsg); handled {
+				return cmd
+			}
 			if cmd, handled := m.appContentMouse(mouseMsg); handled {
 				return cmd
 			}

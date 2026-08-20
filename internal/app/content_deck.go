@@ -79,6 +79,7 @@ type appContentDeck struct {
 	dragSplit                         int
 	live                              *livepanes.Set
 	suppressRefresh                   bool
+	edit                              *appDeckDocumentEdit
 }
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
@@ -106,7 +107,7 @@ func (m *Model) activeContentDeck() *appContentDeck {
 	h := m.contentDecks[key]
 	ctx := contentpanes.SurfaceContext{Root: m.ui.WorkDir, DiffRoot: m.ui.WorkDir, Surface: p.ID(), Epoch: m.registry.Context().Epoch}
 	if h == nil {
-		cfg := contentpanes.Config{}
+		cfg := contentpanes.Config{ConfigureViewer: configureAppDeckViewer}
 		if manager := ResourceProviderManager(); manager != nil {
 			cfg.ResourceResolver = resourceResolver(manager)
 		}
@@ -185,6 +186,7 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	h.suppressRefresh = m.hasModal() || m.configOpen() || (m.inGlobalScope() && !h.global)
 	for _, other := range m.contentDecks {
 		if other != h && other.laidOut {
+			other.releaseAppContentDocumentEdit()
 			other.laidOut = false
 			if other.live != nil {
 				other.queued = append(other.queued, other.live.Reconcile())
@@ -330,6 +332,11 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 		frame = c.h.scanPrimary(frame, render.Origin)
 		return ui.FitBlock(frame, c.size.Width, c.size.Height)
 	}
+	if c.node.Kind == panelayout.Document {
+		if frame, ok := c.h.renderAppContentDocumentEdit(c.node.ID, c.size); ok {
+			return ui.FitBlock(frame, c.size.Width, c.size.Height)
+		}
+	}
 	bodyH := max(c.size.Height-paneframe.HeaderRows, 0)
 	body := ""
 	switch v := c.h.deck.Viewer(c.node.ID).(type) {
@@ -375,10 +382,32 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 
 func (h *appContentDeck) syncInnerFocus() {
 	provider, ok := h.plugin.(plugin.PaneFocusProvider)
+	if ok {
+		provider.SetPaneFocusActive(h.deck.Leaf(panelayout.Primary) == h.deck.FocusedLeaf())
+	}
+	for _, placement := range h.layout.Leaves {
+		if view, ok := h.deck.Viewer(placement.Node.ID).(*issueview.Model); ok {
+			focused := placement.Node.ID == h.deck.FocusedLeaf()
+			view.SetActive(focused)
+			view.SetFocused(focused)
+		}
+	}
+}
+
+func configureAppDeckViewer(kind panelayout.Kind, model any) {
+	if kind != panelayout.Issue {
+		return
+	}
+	view, ok := model.(*issueview.Model)
 	if !ok {
 		return
 	}
-	provider.SetPaneFocusActive(h.deck.Leaf(panelayout.Primary) == h.deck.FocusedLeaf())
+	view.OpenHandler = func(issueID string) tea.Cmd {
+		return func() tea.Msg {
+			return ActivateTargetMsg{Target: uirequest.Target{Kind: uirequest.TargetKindIssue, Value: issueID}}
+		}
+	}
+	view.OpenInTDHandler = OpenIssueInTD
 }
 
 type appDeckRegions struct{ h *appContentDeck }
@@ -691,8 +720,10 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 			}
 		}
 	}
-	if paneframe.FocusLeafAt(appDeckHost{h}, mi.X, mi.Y) {
-		h.syncInnerFocus()
+	if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+		if paneframe.FocusLeafAt(appDeckHost{h}, mi.X, mi.Y) {
+			h.syncInnerFocus()
+		}
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
 	if leaf == nil || leaf.Kind == panelayout.Primary {
@@ -836,6 +867,10 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	if leaf.Kind == panelayout.Primary {
 		return nil, false
 	}
+	if view, ok := h.deck.Viewer(leaf.ID).(*docview.Model); ok && view.SearchActive() {
+		_, cmd := view.HandleSearchKey(key)
+		return cmd, true
+	}
 	switch key.String() {
 	case "q", "esc":
 		h.deck.HideFocused()
@@ -858,19 +893,49 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:
-		return nil, v.HandleKey(key)
+		switch key.String() {
+		case "/":
+			v.StartSearch()
+			return nil, true
+		case "e":
+			return m.enterAppContentDocumentEdit(), true
+		case "m":
+			v.ToggleRenderMode()
+			return nil, true
+		case "w":
+			v.ToggleWrap()
+			return nil, true
+		case "ctrl+r":
+			return docview.Reveal(v.Root(), v.Title()), true
+		}
+		v.HandleKey(key)
+		return nil, true
 	case *issueview.Model:
-		handled, cmd := v.HandleKey(key)
-		return cmd, handled
+		_, cmd := v.HandleKey(key)
+		return cmd, true
 	case *workspacediff.View:
-		return v.HandleKey(key)
+		cmd, _ := v.HandleKey(key)
+		return cmd, true
 	case *resourceview.Model:
 		switch key.String() {
+		case "r":
+			return v.Refresh(), true
+		case "o":
+			if safe, ok := contentlink.SafeHTTPURL(v.SourceURL()); ok {
+				return openPathCmd(safe), true
+			}
+			return nil, true
 		case "j", "down":
 			v.ScrollBy(1)
 			return nil, true
 		case "k", "up":
 			v.ScrollBy(-1)
+			return nil, true
+		case "pgdown":
+			v.ScrollBy(max(v.Height()-1, 1))
+			return nil, true
+		case "pgup":
+			v.ScrollBy(-max(v.Height()-1, 1))
 			return nil, true
 		}
 	}
@@ -974,6 +1039,12 @@ func (m Model) appContentContext() (string, bool) {
 	}
 	switch leaf.Kind {
 	case panelayout.Document:
+		if h.appContentDocumentEditing() {
+			return "workspace-doc-edit", true
+		}
+		if view, ok := h.deck.Viewer(leaf.ID).(*docview.Model); ok && view.SearchActive() {
+			return "workspace-doc-find", true
+		}
 		return "workspace-doc", true
 	case panelayout.Issue:
 		return "workspace-issue", true
@@ -995,7 +1066,18 @@ func (m *Model) appContentCommands() []plugin.Command {
 		return plugin.Command{ID: id, Name: name, Description: description, Context: ctx, Priority: priority,
 			Handler: func() tea.Cmd { return m.runAppContentCommand(id) }}
 	}
-	return []plugin.Command{
+	if ctx == "workspace-doc-find" {
+		cmds := docview.SearchCommands(ctx)
+		for i := range cmds {
+			id := cmds[i].ID
+			cmds[i].Handler = func() tea.Cmd { return m.runAppContentCommand(id) }
+		}
+		return cmds
+	}
+	if ctx == "workspace-doc-edit" {
+		return nil
+	}
+	cmds := []plugin.Command{
 		command("close", "Close", "Hide content pane", 1),
 		command("close-tab", "Tab×", "Close active content tab", 2),
 		command("prev-tab", "Tab←", "Previous content tab", 3),
@@ -1003,6 +1085,48 @@ func (m *Model) appContentCommands() []plugin.Command {
 		command("next-pane", "Focus", "Focus next pane", 5),
 		command("prev-pane", "Back", "Focus previous pane", 6),
 	}
+	h := m.currentContentDeck()
+	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+	if leaf == nil {
+		return cmds
+	}
+	switch v := h.deck.Viewer(leaf.ID).(type) {
+	case *docview.Model:
+		cmds = append(cmds,
+			command("search-content", "InFile", "Search this file's contents", 7),
+			command("edit", "Edit", "Edit this file inline", 8),
+			command("toggle-wrap", "Wrap", "Toggle line wrapping", 10),
+			command("reveal", "Reveal", "Reveal in file manager", 11),
+		)
+		if terminallink.Markdown(v.Title()) {
+			name := "Raw"
+			if !v.Rendered() {
+				name = "Render"
+			}
+			cmds = append(cmds, command("render", name, "Toggle rendered and raw markdown", 9))
+		}
+	case *issueview.Model:
+		cmds = append(cmds,
+			command("open-item", "Open", "Open selected parent or subtask", 7),
+			command("open-in-td", "TD", "Open selected issue in td", 8),
+			command("yank-issue", "Yank", "Copy issue as markdown", 9),
+			command("yank-issue-key", "YankID", "Copy issue ID", 10),
+		)
+	case *workspacediff.View:
+		for _, viewerCommand := range v.Commands(ctx) {
+			id := viewerCommand.ID
+			viewerCommand.Handler = func() tea.Cmd { return m.runAppContentCommand(id) }
+			cmds = append(cmds, viewerCommand)
+		}
+	case *resourceview.Model:
+		for i, viewerCommand := range resourceview.Commands() {
+			if viewerCommand.ID == resourceview.CommandCloseTab || viewerCommand.ID == resourceview.CommandPrevTab || viewerCommand.ID == resourceview.CommandNextTab {
+				continue
+			}
+			cmds = append(cmds, command(viewerCommand.ID, viewerCommand.Name, viewerCommand.Name+" resource", 7+i))
+		}
+	}
+	return cmds
 }
 
 func (m *Model) runAppContentCommand(id string) tea.Cmd {
@@ -1037,12 +1161,86 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		m.persistAppContentDeck(h)
 		m.updateContext()
 		return cmd
-	default:
+	}
+	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+	if leaf == nil {
 		return nil
+	}
+	switch view := h.deck.Viewer(leaf.ID).(type) {
+	case *docview.Model:
+		switch id {
+		case "search-content":
+			view.StartSearch()
+		case "edit":
+			return m.enterAppContentDocumentEdit()
+		case "render":
+			view.ToggleRenderMode()
+		case "toggle-wrap":
+			view.ToggleWrap()
+		case "reveal":
+			return docview.Reveal(view.Root(), view.Title())
+		case "confirm":
+			_, cmd := view.HandleSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+			return cmd
+		case "next-match":
+			_, cmd := view.HandleSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+			return cmd
+		case "prev-match":
+			_, cmd := view.HandleSearchKey(tea.KeyPressMsg{Code: 'N', Text: "N"})
+			return cmd
+		case "cancel":
+			_, cmd := view.HandleSearchKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+			return cmd
+		}
+	case *issueview.Model:
+		key := map[string]string{"open-item": "enter", "open-in-td": "O", "yank-issue": "y", "yank-issue-key": "Y"}[id]
+		if key != "" {
+			_, cmd := view.HandleKey(appContentKeyPress(key))
+			return cmd
+		}
+	case *workspacediff.View:
+		key := map[string]string{
+			"diff-open": "enter", "diff-down": "j", "diff-up": "k", "diff-back": "h",
+			"toggle-diff-view": "v", "toggle-diff-scope": "z", "next-file": ".", "prev-file": ",",
+			"file-picker": "f", "diff-next-change": "n", "diff-top": "g", "diff-bottom": "G",
+			"diff-page-down": "pgdown", "diff-page-up": "pgup", "diff-scroll-down": "j", "diff-scroll-up": "k",
+		}[id]
+		if key != "" {
+			cmd, _ := view.HandleKey(appContentKeyPress(key))
+			return cmd
+		}
+	case *resourceview.Model:
+		switch id {
+		case resourceview.CommandRefresh:
+			return view.Refresh()
+		case resourceview.CommandOpenSource:
+			if safe, ok := contentlink.SafeHTTPURL(view.SourceURL()); ok {
+				return openPathCmd(safe)
+			}
+		}
 	}
 	m.persistAppContentDeck(h)
 	m.updateContext()
 	return nil
+}
+
+func appContentKeyPress(key string) tea.KeyPressMsg {
+	switch key {
+	case "enter":
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "pgdown":
+		return tea.KeyPressMsg{Code: tea.KeyPgDown}
+	case "pgup":
+		return tea.KeyPressMsg{Code: tea.KeyPgUp}
+	default:
+		runes := []rune(key)
+		if len(runes) == 1 {
+			return tea.KeyPressMsg{Code: runes[0], Text: key}
+		}
+		return tea.KeyPressMsg{}
+	}
 }
 
 type appContentCommandPlugin struct {

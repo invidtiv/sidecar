@@ -59,9 +59,17 @@ The steel thread is a file reference in the Files preview:
 4. He clicks the td ID. The existing right column gains an Issue split rather
    than replacing the Document pane. Clicking another td ID adds a tab to the
    Issue pane.
-5. He presses Tab. Focus walks the Files tree, Files preview, Document leaf, and
+5. The retained-focus correction (`td-a91834`) keeps the journey coherent: he
+   presses Tab and focus walks the Files tree, Files preview, Document leaf, and
    Issue leaf in visual order; Shift+Tab walks backward. A click focuses any
-   visible window. The active border and keyboard owner always agree.
+   visible window and retains that keyboard target across redraws. Hover,
+   wheel, and button release never retarget focus. The active border, footer,
+   help/palette context, and keyboard owner always agree. Passive viewers expose
+   their shared interactions in the app host: Document in-file search, inline
+   edit, render/wrap, and reveal; Issue navigation/open/copy; Diff navigation
+   and view/scope; Resource refresh/open/scroll. Workspace-only finder, project
+   search, file-info, sidebar, and resize surfaces remain unadvertised until the
+   app deck has equivalent host adapters.
 6. He clicks the hash. A Diff pane opens or adds a tab using
    `internal/workspacediff`; it is not a second Git renderer.
 7. With a terminal resource provider enabled, clicking its locator opens the
@@ -494,9 +502,12 @@ work enters `Init`, `Start` before command return, or render.
 
 1. Add an app-owned deck host around eligible project plugins. Its primary
    content calls the plugin's existing `View` with the leaf's inner size.
-2. Route WindowSize, keys, mouse, commands, focus, and footer context to the
-   focused primary/passive leaf. Do not change the mandatory `plugin.Plugin`
-   interface.
+2. Route WindowSize, keys, mouse, commands, focus, and footer/help/palette
+   context to the focused primary/passive leaf. Only an intentional click or
+   Tab traversal changes the retained keyboard target; pointer motion and wheel
+   routing do not. Reuse each shared viewer's command/state implementation and
+   advertise only host actions the app deck actually supports. Do not change
+   the mandatory `plugin.Plugin` interface.
 3. Add `PaneFocusProvider` and `ContentLinkProvider` optional capabilities.
 4. Implement both in Files from its existing `PaneTree`/`PanePreview` state and
    exact preview geometry. Link only read-only text/Markdown source previews;

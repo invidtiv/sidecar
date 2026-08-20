@@ -90,6 +90,9 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	if m.globalWorkspacesVisible() && m.overview.PreviewOwnsKeyboard() {
 		return tea.MouseModeCellMotion
 	}
+	if mode, ok := m.appContentDocumentEditMouseMode(); ok {
+		return mode
+	}
 	if h := m.currentContentDeck(); h != nil && h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
 		return tea.MouseModeAllMotion
 	}
@@ -115,6 +118,9 @@ func (m Model) pluginCursor() *tea.Cursor {
 	if m.inGlobalScope() {
 		if h := m.currentContentDeck(); h != nil {
 			if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+				if cursor := m.appContentDocumentEditCursor(); cursor != nil {
+					return m.placeContentCursor(cursor)
+				}
 				return nil
 			}
 			cursor := providerCursor(h.plugin)
@@ -133,6 +139,9 @@ func (m Model) pluginCursor() *tea.Cursor {
 	}
 	if h := m.currentContentDeck(); h != nil {
 		if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+			if cursor := m.appContentDocumentEditCursor(); cursor != nil {
+				return m.placeContentCursor(cursor)
+			}
 			return nil
 		}
 		cursor := providerCursor(active)
