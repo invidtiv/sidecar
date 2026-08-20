@@ -114,6 +114,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#1e2130",
 			BgTertiary:  "#36394b",
 			BgOverlay:   "#24283bcc",
+			SelectionBg: "#283457",
 
 			SurfaceRaised: "#3e4253",
 			KeyHintFg:     "#8daff7",
@@ -200,6 +201,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#212121",
 			BgTertiary:  "#393939",
 			BgOverlay:   "#282828cc",
+			SelectionBg: "#504945",
 
 			SurfaceRaised: "#424242",
 			KeyHintFg:     "#fabd2f",
@@ -286,6 +288,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#21222c",
 			BgTertiary:  "#393b46",
 			BgOverlay:   "#282a36cc",
+			SelectionBg: "#44475a",
 
 			SurfaceRaised: "#42444e",
 			KeyHintFg:     "#ff8ccf",
@@ -372,6 +375,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#262b34",
 			BgTertiary:  "#3f444f",
 			BgOverlay:   "#2e3440cc",
+			SelectionBg: "#3b4a68",
 
 			SurfaceRaised: "#474c57",
 			KeyHintFg:     "#abc0d6",
@@ -458,6 +462,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#1b1e23",
 			BgTertiary:  "#33363c",
 			BgOverlay:   "#21252bcc",
+			SelectionBg: "#2c3e55",
 
 			SurfaceRaised: "#3c3f44",
 			KeyHintFg:     "#69b3f0",
@@ -544,6 +549,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#191921",
 			BgTertiary:  "#313139",
 			BgOverlay:   "#1f1f28cc",
+			SelectionBg: "#2d4f67",
 
 			SurfaceRaised: "#3a3a42",
 			KeyHintFg:     "#8aa6dc",
@@ -630,6 +636,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#14131e",
 			BgTertiary:  "#2b2a36",
 			BgOverlay:   "#191724cc",
+			SelectionBg: "#403d52",
 
 			SurfaceRaised: "#35333e",
 			KeyHintFg:     "#ed7d9c",
@@ -716,6 +723,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#1d2226",
 			BgTertiary:  "#353b3f",
 			BgOverlay:   "#232a2ecc",
+			SelectionBg: "#344246",
 
 			SurfaceRaised: "#3d4447",
 			KeyHintFg:     "#a7c080",
@@ -802,6 +810,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#001920",
 			BgTertiary:  "#143038",
 			BgOverlay:   "#001e27cc",
+			SelectionBg: "#073642",
 
 			SurfaceRaised: "#1f3941",
 			KeyHintFg:     "#bd9b48",
@@ -888,6 +897,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#252226",
 			BgTertiary:  "#3e3b3f",
 			BgOverlay:   "#2d2a2ecc",
+			SelectionBg: "#534c54",
 
 			SurfaceRaised: "#464447",
 			KeyHintFg:     "#ffd866",
@@ -974,6 +984,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#011220",
 			BgTertiary:  "#152938",
 			BgOverlay:   "#011627cc",
+			SelectionBg: "#234d70",
 
 			SurfaceRaised: "#1f3241",
 			KeyHintFg:     "#82aaff",
@@ -1060,6 +1071,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#191e27",
 			BgTertiary:  "#313641",
 			BgOverlay:   "#1f2430cc",
+			SelectionBg: "#273747",
 
 			SurfaceRaised: "#3a3e49",
 			KeyHintFg:     "#6dcbfa",
@@ -1146,6 +1158,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#0b0e13",
 			BgTertiary:  "#20242a",
 			BgOverlay:   "#0d1117cc",
+			SelectionBg: "#264f78",
 
 			SurfaceRaised: "#2a2e33",
 			KeyHintFg:     "#58a6ff",
@@ -1232,6 +1245,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#000000",
 			BgTertiary:  "#141414",
 			BgOverlay:   "#000000cc",
+			SelectionBg: "#34294f",
 
 			SurfaceRaised: "#1f1f1f",
 			KeyHintFg:     "#f97137",
@@ -1318,6 +1332,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#10202e",
 			BgTertiary:  "#263848",
 			BgOverlay:   "#132738cc",
+			SelectionBg: "#255a8a",
 
 			SurfaceRaised: "#2f4150",
 			KeyHintFg:     "#ffe50a",
@@ -1404,6 +1419,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#17191f",
 			BgTertiary:  "#2e3037",
 			BgOverlay:   "#1c1e26cc",
+			SelectionBg: "#3f3a4d",
 
 			SurfaceRaised: "#373940",
 			KeyHintFg:     "#f0859e",
@@ -1490,6 +1506,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#191834",
 			BgTertiary:  "#302f4f",
 			BgOverlay:   "#1e1d40cc",
+			SelectionBg: "#493c8a",
 
 			SurfaceRaised: "#393857",
 			KeyHintFg:     "#ff77ff",
@@ -1576,6 +1593,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#1c1c1c",
 			BgTertiary:  "#343434",
 			BgOverlay:   "#222222cc",
+			SelectionBg: "#4a4846",
 
 			SurfaceRaised: "#3d3d3d",
 			KeyHintFg:     "#88aad3",
@@ -1662,6 +1680,7 @@ var CuratedThemes = map[string]Theme{
 			BgSecondary: "#343434",
 			BgTertiary:  "#4e4e4e",
 			BgOverlay:   "#3f3f3fcc",
+			SelectionBg: "#545454",
 
 			SurfaceRaised: "#565656",
 			KeyHintFg:     "#aad6c0",

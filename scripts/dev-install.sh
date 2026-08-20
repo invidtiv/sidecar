@@ -393,6 +393,18 @@ install_local() {
     die "activation failed; restored the previous installation"
   fi
   trap - EXIT HUP INT TERM
+
+  # Also sync to GOBIN / $(go env GOPATH)/bin if present so login shells with
+  # ~/go/bin early on PATH resolve the newly activated build.
+  gobin=$("$go_command" env GOBIN 2>/dev/null || true)
+  if [ -z "$gobin" ]; then
+    gopath=$("$go_command" env GOPATH 2>/dev/null || true)
+    [ -n "$gopath" ] && gobin="$gopath/bin"
+  fi
+  if [ -n "$gobin" ] && [ -d "$gobin" ]; then
+    cp -f "$destination/sidecar" "$gobin/sidecar" 2>/dev/null || true
+  fi
+
   printf 'activated local Sidecar build from %s\n' "$repo_root"
   sync_launch_paths "$bin_dir/sidecar"
   status

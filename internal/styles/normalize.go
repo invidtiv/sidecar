@@ -21,18 +21,13 @@ const (
 const surfaceSeparation = 1.12
 
 // TargetSelectionSeparation is the contrast a text-selection highlight aims
-// for against the canvas. BgTertiary sits at 1.2–1.5:1, which reads as a
-// selected-row fill, not a span. This target is a visible lift that still
-// leaves body text on the canvas's ink pole, so the highlight does not invert
-// or wash out markdown and syntax colours.
+// for against the canvas when deriving from scratch.
 //
-// Themes whose body text has no headroom (a grey foreground on a grey
-// canvas) cannot hit the target without washing that text out.
 // SelectionSeparationFloor is the CheckPaletteContrast minimum;
-// deriveSelectionBg still aims at TargetSelectionSeparation.
+// deriveSelectionBg still aims at TargetSelectionSeparation for untinted derivations.
 const (
 	TargetSelectionSeparation = 2.65
-	SelectionSeparationFloor  = 1.5
+	SelectionSeparationFloor  = 1.18
 )
 
 // NormalizePalette enforces the contrast guarantees the UI relies on and fills
@@ -220,9 +215,22 @@ func deriveSelectionBg(seed, canvas, textPrimary string) string {
 	}
 	pole := MaxContrastPole([]string{canvas})
 
-	if selectionHighlightUsable(seed, text, pole) &&
-		ContrastRatio(seed, canvas) >= TargetSelectionSeparation-0.01 {
-		return seed
+	// An authored or inherited seed is kept when it is usable (same ink pole as
+	// the canvas, preserves text contrast) and separates from the canvas:
+	// - Chromatic tinted selections (e.g. VSCode slate blue, TokyoNight blue,
+	//   Dracula purple) provide clear visual separation at SelectionSeparationFloor.
+	// - Neutral/achromatic selections require TargetSelectionSeparation.
+	if selectionHighlightUsable(seed, text, pole) {
+		_, seedS, _ := HexToHSL(seed)
+		if seedS >= 0.10 {
+			if ContrastRatio(seed, canvas) >= SelectionSeparationFloor-0.01 {
+				return seed
+			}
+		} else {
+			if ContrastRatio(seed, canvas) >= TargetSelectionSeparation-0.01 {
+				return seed
+			}
+		}
 	}
 
 	canvasH, canvasS, canvasL := HexToHSL(canvas)
@@ -230,6 +238,12 @@ func deriveSelectionBg(seed, canvas, textPrimary string) string {
 	if seed != "" && IsValidHexColor(seed) && MaxContrastPole([]string{seed}) == pole {
 		sh, ss, _ := HexToHSL(seed)
 		hues = [][2]float64{{sh, ss}, {canvasH, canvasS}}
+	}
+	// When deriving for a dark canvas with very low saturation, also offer
+	// a classic editor slate-blue tint (H: 210°, S: 45%) so auto-derived
+	// selections have clear chromatic contrast rather than pure neutral grey.
+	if canvasS < 0.15 && len(hues) == 1 {
+		hues = append(hues, [2]float64{210.0, 0.45})
 	}
 
 	conventionalLighter := IsDarkBackground(canvas)

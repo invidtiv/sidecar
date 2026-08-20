@@ -169,10 +169,9 @@ var (
 			BgSecondary: "#131619", // header / footer bars
 			BgTertiary:  "#171b1f", // selected row
 			BgOverlay:   "#0b0d0ecc",
-			// Text-selection highlight: a step above the hairline, far enough
-			// off the canvas to find a span, still dark enough that body text
-			// keeps its colour instead of inverting.
-			SelectionBg: "#4f5964",
+			// Text-selection highlight: a rich slate-blue tint providing clear
+			// chromatic contrast off the canvas while preserving body text legibility.
+			SelectionBg: "#264f78",
 
 			// Raised chrome (key-hint pills, bar chips)
 			SurfaceRaised: "#22272c",

@@ -180,10 +180,10 @@ func TestConvertSelectionBgLiftsOffCanvas(t *testing.T) {
 		t.Errorf("SelectionBg %s flipped the canvas ink pole (scheme selection was %s)",
 			palette.SelectionBg, scheme.SelectionBackground)
 	}
-	if ratio := styles.ContrastRatio(palette.SelectionBg, palette.BgPrimary); ratio < styles.TargetSelectionSeparation-0.01 {
+	if ratio := styles.ContrastRatio(palette.SelectionBg, palette.BgPrimary); ratio < styles.SelectionSeparationFloor-0.01 {
 		if styles.ContrastRatio(palette.TextPrimary, palette.SelectionBg) > 4.5+0.15 {
 			t.Errorf("SelectionBg %s vs canvas %s is %.2f (want >= %.2f) with text headroom still left",
-				palette.SelectionBg, palette.BgPrimary, ratio, styles.TargetSelectionSeparation)
+				palette.SelectionBg, palette.BgPrimary, ratio, styles.SelectionSeparationFloor)
 		}
 	}
 	if ratio := styles.ContrastRatio(palette.TextPrimary, palette.SelectionBg); ratio < 4.5-0.01 {

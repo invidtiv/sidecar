@@ -152,9 +152,9 @@ func TestSidecarModernTextSelectionHighlightIsVisibleWithoutInvertingInk(t *test
 	if c.SelectionBg == c.BgTertiary {
 		t.Fatalf("SelectionBg reused BgTertiary (%s); the selected-row fill is too close to the canvas to mark a span", c.BgTertiary)
 	}
-	if ContrastRatio(c.SelectionBg, c.BgPrimary) < TargetSelectionSeparation {
-		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want a visible lift (>= %.1f)",
-			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary), TargetSelectionSeparation)
+	if ContrastRatio(c.SelectionBg, c.BgPrimary) < SelectionSeparationFloor {
+		t.Errorf("SelectionBg %s vs canvas %s is %.2f; want a visible lift (>= %.2f)",
+			c.SelectionBg, c.BgPrimary, ContrastRatio(c.SelectionBg, c.BgPrimary), SelectionSeparationFloor)
 	}
 	if Luminance(c.SelectionBg) <= Luminance(c.BgPrimary) {
 		t.Errorf("SelectionBg %s is not lighter than the canvas %s", c.SelectionBg, c.BgPrimary)

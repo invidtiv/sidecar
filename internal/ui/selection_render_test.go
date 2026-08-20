@@ -104,9 +104,7 @@ func TestGetSelectionBgANSIUsesThemeSelectionBg(t *testing.T) {
 	prev := styles.GetCurrentTheme()
 	t.Cleanup(func() { styles.ApplyTheme(prev.Name) })
 
-	styles.ApplyThemeWithOverrides("sidecar-modern", map[string]string{
-		"selectionBg": "#3b5070",
-	})
+	styles.ApplyTheme("sidecar-modern")
 	hex := styles.GetCurrentTheme().Colors.SelectionBg
 	var r, g, b int
 	if _, err := fmt.Sscanf(hex, "#%02x%02x%02x", &r, &g, &b); err != nil {
