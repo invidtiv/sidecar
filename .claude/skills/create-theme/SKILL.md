@@ -166,6 +166,56 @@ The `syntaxTheme` value can be any Chroma theme:
 
 See [Chroma Style Gallery](https://xyproto.github.io/splash/docs/) for all options.
 
+It applies everywhere Sidecar highlights code: raw file previews, git diffs, and
+fenced code blocks inside rendered Markdown. If the name is not a registered
+Chroma style, Sidecar falls back deterministically to `github` for light
+palettes and `monokai` for dark ones rather than failing.
+
+## Markdown Colors
+
+There is **no Markdown-specific color family**. Rendered Markdown — Files
+preview, Notes view mode, conversation bodies, workspace document/issue/resource
+panes, release notes — is styled by `internal/markdown` from the same normalized
+semantic palette every other surface uses, so a new theme gets palette-correct
+Markdown for free and a live theme preview (`#`) repaints already-open documents
+immediately.
+
+| Markdown role | Palette key |
+| --- | --- |
+| Body, paragraph, table text | `textPrimary` |
+| H3–H4, image/definition terms | `textSecondary` |
+| H5–H6, strikethrough, quote text, metadata | `textMuted` |
+| H1, strong text, list/enumeration/task markers | `primary` |
+| Other headings, inline code text | `accent` |
+| Block quotes | `secondary` |
+| Links and link text | `link` |
+| Horizontal rules | `borderMuted` (falling back to `borderNormal`) |
+| Inline code background | `bgSecondary` |
+| Fenced code blocks | `syntaxTheme` |
+
+The rendered document deliberately paints **no background** so pane chrome and
+selection keep owning the canvas; only inline code and the Chroma code-block
+style carry one.
+
+### markdownTheme
+
+`markdownTheme` is not a color. It has two behaviors:
+
+- `dark` or `light` — the normal case. Sidecar takes only *structure* from that
+  Glamour preset (margins, prefixes, list glyphs, task markers) and then
+  overwrites every color from the table above. Set it to match your
+  background; if it is missing or unusable, Sidecar picks a mode from
+  `bgPrimary`'s luma.
+- Any other value — an advanced **full-style override**: a registered Glamour
+  style name, or a path to a Glamour JSON style file. That file owns the whole
+  Markdown appearance and the palette mapping is skipped entirely. Use this only
+  when you deliberately want Markdown to stop tracking the Sidecar palette.
+
+Curated themes and community conversions must use `dark` or `light`; an
+all-theme audit test (`internal/markdown/theme_audit_test.go`) fails on a
+missing semantic color, an unknown `syntaxTheme`, or a non-structural
+`markdownTheme`.
+
 ## Color Validation
 
 Colors must be valid hex in `#RRGGBB` format. Invalid colors are ignored.

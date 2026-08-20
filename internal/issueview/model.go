@@ -106,6 +106,9 @@ type Model struct {
 	hits     []Hit
 	rows     []row
 	buildFor int
+	// buildStyle is the markdown style key the current rows were built under,
+	// so a live theme change rebuilds them without a resize.
+	buildStyle string
 
 	// OpenHandler, when set, receives parent/subtask/sibling activations
 	// instead of Load retargeting this model. Hosts that tab issues use this
@@ -760,9 +763,10 @@ func (m *Model) ensureRows() []row {
 	if m.data == nil {
 		return []row{{kind: rowText, text: styles.Muted.Render("No issue"), cursor: -1}}
 	}
-	if m.buildFor != m.width || m.rows == nil {
+	if style := m.renderer.StyleKey(); m.buildFor != m.width || m.buildStyle != style || m.rows == nil {
 		m.rows = m.buildRows()
 		m.buildFor = m.width
+		m.buildStyle = style
 	}
 	return m.rows
 }
@@ -814,6 +818,7 @@ func (m *Model) Loading() bool { return m.loading }
 
 func (m *Model) invalidateRender() {
 	m.buildFor = -1
+	m.buildStyle = ""
 	m.rows = nil
 	m.hits = nil
 }

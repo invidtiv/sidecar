@@ -82,7 +82,8 @@ func (r *Renderer) RenderMapped(content string, width int) MappedRender {
 		return MappedRender{Lines: []string{}, Anchors: []Anchor{}}
 	}
 
-	key := r.cacheKey(content, width)
+	snapshot := CurrentThemeSnapshot()
+	key := r.cacheKey(content, width, snapshot.StyleKey())
 
 	r.mu.RLock()
 	if cached, ok := r.mappedCache[key]; ok {
@@ -95,7 +96,7 @@ func (r *Renderer) RenderMapped(content string, width int) MappedRender {
 	if width < MinWidthForMarkdown {
 		result = MapWrappedSource(content, width)
 	} else {
-		lines := r.RenderContent(content, width)
+		lines := r.renderContent(content, width, snapshot)
 		result = r.assignAnchors(content, width, lines)
 	}
 

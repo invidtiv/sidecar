@@ -318,6 +318,42 @@ func TestAutomaticOverlapAndTerminalFacadeShape(t *testing.T) {
 	}
 }
 
+func TestSessionRecognitionLivesInSharedScanner(t *testing.T) {
+	for _, line := range []string{
+		"agent idle in sidecar-sh-repo-1",
+		"sidecar-ws-notification-center finished",
+		"(sidecar-ws-td-331dbf19) needs review",
+	} {
+		spans := Scan(line, nil, nil)
+		if len(spans) != 1 || spans[0].Kind != KindSession {
+			t.Fatalf("%q: spans = %+v", line, spans)
+		}
+		if !SessionName(spans[0].Value) {
+			t.Fatalf("%q: scanner emitted invalid session %q", line, spans[0].Value)
+		}
+	}
+
+	for _, line := range []string{
+		"attach to main",
+		"see /tmp/sidecar-sh-repo-1.log",
+		"sidecar-tp-repo is internal",
+		"my-sidecar-sh-repo-1 is not ours",
+	} {
+		for _, span := range Scan(line, nil, nil) {
+			if span.Kind == KindSession {
+				t.Fatalf("%q: invented session %+v", line, span)
+			}
+		}
+	}
+}
+
+func TestSessionRecognitionPrecedesContainedIssue(t *testing.T) {
+	spans := Scan("sidecar-ws-td-331dbf19 is stuck", nil, nil)
+	if len(spans) != 1 || spans[0].Kind != KindSession {
+		t.Fatalf("spans = %+v", spans)
+	}
+}
+
 func spanKinds(spans []Span) []string {
 	out := make([]string, len(spans))
 	for i, span := range spans {

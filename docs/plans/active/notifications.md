@@ -1,6 +1,6 @@
 # Notifications — toasts, centre, indicator, sources
 
-**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phase 3 **done** (see "Phase 3 as built"); Phases 4–7 planned, not started. Next up: `target-activation.md` (separate plan, prerequisite), then Phase 5 — Phase 4 is deliberately deferred behind them
+**Status:** Phase 1 (steel thread) **done**; Phase 1.5 **done**; Phase 2 **done** (both halves — see the two "Phase 2 as built" sections); Phase 3 **done** (see "Phase 3 as built"); `target-activation.md` **done**; Phase 5 **done** (5a–5c, review pass, and the end-to-end proof run — see "Phase 5 proof run"). Phases 4, 6 and 7 planned, not started; Phase 4 is deliberately deferred behind Phase 5
 **Created:** 2026-08-18
 **Design:** claude.ai/design project `3172ac49-4413-4a60-9235-0afa5c77cf77`, file `Sidecar Notifications.dc.html` (frames 1a–1h). The design is authoritative for visual grammar. Two deliberate deviations, decided by Marcus: the sources config lives on the existing config screen (`internal/configui`), not the design's invented one; and the notification centre is an **app-level right panel that pushes all content left** (see "The centre" below), not the in-pane split the design's frame 1c sketches.
 
@@ -1336,3 +1336,297 @@ assigned/reviewable. (No `git` source — see Architecture.)
 notifications for sources that opt in, so tmux/iTerm/Ghostty surface them as
 real macOS notifications when sidecar is unfocused. Adapter-shaped, per
 source, off by default.
+
+### Phase 5a as built: same-project file and td-issue targets (2026-08-19)
+
+The centre can now act on what a notification names. Scope was 5a only:
+cross-project landing and `--target` are 5b, session/task kinds are 5c.
+
+- **Reconciliation is one state-free function, `notify.CallsToAction`**
+  (`internal/notify/cta.go`). Stored `notify.Targets` come first in the order
+  they were attached; `terminallink.ScanWith` over title then body fills the
+  gaps in reading order (`ScanWith` emits kind by kind, so the spans are sorted
+  by column before numbering). A scanned span that says the same thing as a
+  stored target is **not** a second entry — it becomes that target's location,
+  which is what lets a stored target be underlined where it is written.
+  Numbering is 1..N over the reconciled list. `notify.CTATitle`/`CTABody` are
+  the exact strings the centre renders — `StripOSC8` applied once, whitespace
+  collapsed once — so a span's columns are the columns on screen; the centre
+  calls them too rather than repeating the normalisation.
+- **`notify` now imports `uirequest` and `terminallink`** (no cycle: neither
+  imports `notify`). A `CallToAction` carries a `uirequest.Target`, so the
+  reconciled list is already in the activation vocabulary and the centre adds
+  no mapping of its own. `notify.TargetTask` maps to nothing yet and is
+  **dropped rather than numbered** — a digit that cannot jump is worse than no
+  digit — which is 5c's first job to reverse.
+- **Verification is memoized, not skipped.** `internal/app/notification_targets.go`
+  scans with a `Resolve` that stats against the current checkout
+  (`terminallink.ResolveFile`), so the plan's verified-underline invariant
+  holds for same-project files; the answer is cached per notification id
+  (`Model.notificationCTAs`, pruned in `refreshNotifications`, the one seam the
+  cache is written at) so it is one stat per record rather than one per frame.
+  No diff resolver and no resource matchers: both need a live snapshot the
+  centre does not hold, and a git existence check per notification is not worth
+  a lit-up commit id — commit targets therefore only appear when a poster
+  attaches one.
+- **Rendering — decided, and a deviation from "two lines".** Located targets
+  are underlined in place in the title and body rows (`terminallink.Decorate`
+  over spans shifted to where the row drew them and clipped to what survived
+  truncation). The **numbered** list needs its own row, and it is drawn **only
+  for the entry under the cursor on a focused panel** — the only entry `enter`
+  and the digits can act on. So the list stays the two rows plan 1.5 asked for,
+  the selection expands to a third `1 td-4c1f9a · 2 internal/app/model.go:42`,
+  and a target that appears nowhere in the text (attached, or in another
+  project) still has somewhere to be seen. Decoration passes every span as
+  `KindFile` deliberately: in the centre a URL is underlined like everything
+  else and activated through the service's `SafeHTTPURL` check, never turned
+  into an OSC-8 link the terminal would open unchecked.
+- **Keys.** `enter` = activate the first call to action, via
+  `app.ActivateTargetIn` — one function, `activateNotificationTarget`, that the
+  digits also use, so the double-click keeps following `enter` by construction.
+  On an entry with **no** target `enter` falls back to the old detail re-show
+  rather than doing nothing (most notifications name nothing activatable).
+  Re-show moved to **`v`** (`show-details`), free in every context and the
+  conventional "view". Digits **1-9** jump — but only when the selection has a
+  target of that number; otherwise the digit stays the project tab it is
+  everywhere else and still releases focus, so the panel never eats a
+  navigation key to do nothing. `keymap/bindings.go` registers `v` and, of the
+  digits, **only `1`** (`jump-target`): the panel answers the whole range
+  itself, exactly as the shell does for its own globals, and nine rows in help
+  would say nine things about one behaviour.
+- **The `path:line` papercut is closed on this route.** A file target from the
+  centre lands in the file browser at its line — `RelativeProjectPath` +
+  `NavigateToFileMsg{Path, Line}`, which the file browser already honours. The
+  terminal surfaces' version of the papercut (their own click path) is
+  untouched and still open.
+- **Toasts were not touched**, per the phase decision: no focus context, no
+  activation affordance.
+- Tested: `internal/notify/cta_test.go` (ordering, stored-first, location
+  adoption, dedupe, the dropped task kind, StripOSC8 columns, cross-project
+  `Display`) and `internal/app/notification_targets_test.go` (enter, digits,
+  the unclaimed digit releasing focus, `v`, the file landing at its line, an
+  unverified path being neither underlined nor numbered, the memo and its
+  pruning). `TestCentreEntriesAreTwoLines` now also asserts the focused
+  selection's third row and that blurring takes it away.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated tmux and
+  state in a private run dir, `paths` checked first, stopped after): a
+  `sidecar notify post` into the isolated store rendered `Review td-4c1f9a now`
+  with the id underlined, `Fix internal/app/model.go:42 first` with the path
+  underlined, the selection's `1 td-4c1f9a · 2 internal/app/mo…` row, a footer
+  reading `enter Open · 1 Target · v Details`, and pressing `2` opened
+  `internal/app/model.go` in the Files preview scrolled to line 42.
+
+### Phase 5b as built: cross-project landing and `--target` (2026-08-19)
+
+Most of the cross-project *rendering* and *activation* was already in place
+after 5a (`CallToAction.Project` → `Display()`'s `repo/td-xxxxxx`, and
+`ActivateTargetIn` → the pending-target slot), so this slice is mainly the
+posting surface and the tests that pin the behaviour down.
+
+- **The spec grammar is a model rule, not a CLI rule.**
+  `notify.ParseTargetSpec` / `ParseTargetSpecs` (`internal/notify/target_spec.go`)
+  own `kind:value[:line][@project]`, so a future API or MCP poster accepts
+  exactly the same strings. The two ambiguities in the grammar are resolved by
+  kind: `:line` is read **for files only** (a commit sha, a session name and a
+  URL can all end in digits), and the text after the last `@` is taken as a
+  project qualifier only when it *looks* like one — an absolute path (or `~`),
+  or a name containing no `/` and no `:`. That keeps
+  `url:https://user@host/path` intact while `issue:td-99aabb@braid` and
+  `file:cmd/main.go:12@/Users/x/code/braid` both qualify.
+- **Validation is loud, and happens before anything is posted.** An unknown
+  kind, an empty value, a URL that is not `SafeHTTPURL`, or an id that is not
+  `terminallink.IssueID` is exit code 2 with the valid kinds named; one bad
+  spec fails the whole post rather than filing a notification that quietly does
+  less than it says. Exact duplicates within one post are dropped (a typo, not
+  two calls to action).
+- **`--target` is repeatable and order-preserving**, which is the numbering:
+  stored targets come first in attach order (5a's reconciliation), the scan
+  fills the gaps. Documented in the command's `Long` text and flags, so it
+  lands in `sidecar --agents` and `docs/reference/cli.md` (regenerated).
+- **Nothing new was needed on the bus.** The `notify` request payload is the
+  marshalled `Notification`, so `Targets` already travel over the file-RPC route
+  and through the JSONL fallback; the round trip is now covered by a test rather
+  than left to inspection.
+- **Cross-project targets stay unverified at render**, per the phase decision:
+  a stored target with a `Project` never adopts a local span as its location
+  (a span is written in this checkout's terms), so it is numbered, prefixed
+  with the project, and fails through the activation service's error path if
+  the project is gone.
+- Tested: `internal/notify/target_spec_test.go` (grammar, the file-only line,
+  project qualifiers vs URL userinfo, refusals, order/dedupe, the
+  cross-project `Display` prefix), `internal/cli/notify_test.go`
+  (`--target` end-to-end into the log and back through `CallsToAction`, and the
+  refusal storing nothing), and `internal/app/notification_targets_test.go`
+  (`enter` on a foreign target emits `ActivateTargetMsg` with the project).
+- Verified in the real app through an isolated `scripts/tmux-drive.sh` run
+  (`paths` checked, private run dir, `stop` confirmed): a post carrying
+  `--target issue:td-99aabb@braid --target file:internal/app/model.go:42`
+  rendered the selection row `1 braid/td-99aabb · 2 internal/…`, and pressing
+  `1` refused out loud with "Cannot jump to braid: that project is no longer
+  available" rather than doing nothing.
+- **Left for 5c:** `notify.TargetTask` still maps to no activation and is
+  dropped from the numbered list, so `--target task:...` parses and stores but
+  does not yet number — the kind switch in `notify.targetFromStored`, the
+  scanner's `KindSession`/task ids, and both terminal surfaces' dispatch are
+  5c's five-test recipe.
+
+### Phase 5c as built: session and task kinds (2026-08-19)
+
+Phase 5 is complete: every `notify.TargetKind` now maps to an activation, and
+the two kinds this slice added reach the centre and both terminal surfaces.
+
+- **Session detection is deliberately narrow, and that is the decision.** A
+  tmux session name is free text — `main`, `work`, `notes` — so a general
+  pattern would underline ordinary prose. `terminallink.KindSession` matches
+  only the names Sidecar itself mints and only as a whole token:
+  `sidecar-sh-<project>-<n>` (a shell) and `sidecar-ws-<slug>` (a worktree
+  agent). Those are also exactly the sessions `AttachSessionMsg` looks up, so
+  detection promises nothing attach cannot deliver. `sidecar-tp-` and
+  `sidecar-edit-` are internal panes no surface attaches and are **not**
+  detected. `/tmp/sidecar-sh-repo-1.log`, `my-sidecar-sh-repo-1` and
+  `SIDECAR-SH-REPO-1` are text. Sessions are scanned **before** issues and git
+  specs so `sidecar-ws-td-331dbf19` is one session, not the issue id inside it.
+  `terminallink.SessionName` is the anchored form, used by `--target
+  session:…` to refuse a name nothing could attach — the same shape as
+  `IssueID`.
+- **Task ids have no pattern, and will not get one.** A `tasks` id is
+  `SecureRandom.hex(4)` — bare 8-hex, indistinguishable from a short git sha or
+  from prose. Detecting it would either steal every short sha or fire on
+  arbitrary words. **Task targets are therefore stored-only**: they arrive from
+  `--target task:<id>` and never from a scan. `PlanKindsFromSpans()` says so in
+  a comment and omits `PlanOpenTask`, which is why the surface parity pair does
+  not require the terminal surfaces to dispatch it — no span can produce it.
+- **Task activation is the Tasks tab, best effort by design.** The embedded
+  Tasks model (`tasksui`) exposes no select-by-id entry point, so
+  `PlanOpenTask` focuses the `tasks` plugin and stops there. If a deep-link
+  entry ever appears it becomes a second command in the same branch. A project
+  without the Tasks plugin refuses out loud through the existing
+  absent-plugin guard ("Cannot open that here: tasks is not available in this
+  project"), which is what the proof run exercised.
+- **Both surfaces now dispatch `PlanAttachSession`** — the branch deferred by
+  `target-activation.md` step 2. The workspace surface routes the clicked span
+  through the *same* `attachSessionMsg` the public message uses (one lookup,
+  one feature gate, no creation). The global preview surface attaches the way
+  *it* attaches: select the row running that session and hand it the keyboard
+  (`enterPreviewInteractive`), because on that surface the live pane is already
+  on screen. Same decision, surface-local execution — the rule every other kind
+  on those two surfaces already follows. A session no row is running is
+  unhandled, so the click reports itself as doing nothing rather than pretending.
+- **The centre inherited both kinds for free**, exactly as 5a predicted:
+  `notify.targetFromStored` gained the `TargetTask` case (`TargetSession`
+  already mapped), and scanned session spans become numbered calls to action
+  through the same reconciliation.
+- **Known gap, written down rather than papered over:** attaching a session
+  that no shell and no worktree agent is running does nothing and says nothing.
+  That is `AttachSessionMsg`'s pre-existing shape (the shell cannot know which
+  names exist; the plugin can, and currently returns nil). Making it refuse out
+  loud belongs to the workspace plugin, not to this slice.
+- Tested: `internal/terminallink/scan_test.go` (four new — the names it finds,
+  an eight-line false-positive gate, session-beats-the-id-inside-it, and the
+  anchored `SessionName`), `internal/targetactivation` (the span fixture gained
+  a session, so the shared parity test now requires both surfaces to dispatch
+  attach), `internal/app/activate_target_test.go` (a task target focuses Tasks),
+  `internal/app/notification_targets_test.go` (a scanned session and an attached
+  task both activate from the centre), `internal/plugins/workspace`
+  (a clicked session span goes through the one gated attach) and
+  `internal/overview` (a session no row runs is unhandled).
+  `internal/notify/target_spec_test.go` gained the foreign-session refusal and
+  moved the file-only-`:line` case onto a commit spec.
+- Verified in the real app through an isolated `scripts/tmux-drive.sh` run
+  (`paths` checked first, run dir `/private/tmp/sidecar-drive-501-cta5c`,
+  `stop` confirmed, private server gone): a post of
+  `"Agent finished in sidecar-ws-alpha" --target task:a1b2c3d4` rendered the
+  selection row `1 a1b2c3d4 · 2 sidecar-ws-alpha` — the attached task first, the
+  scanned session second; `1` refused out loud because this project has no Tasks
+  tab; `2` focused the Workspaces plugin and attached nothing, the session
+  fixture not existing.
+
+### Phase 5 review pass — corrections (2026-08-19)
+
+An independent review of 5a–5c against this plan and `target-activation.md`.
+Toasts were confirmed untouched (no activation affordance, no focus context),
+`enter`/double-click still share one function, the digit keys still release
+focus when they name nothing, `StripOSC8`-before-`Decorate` holds on every
+centre render path, and URL activation still goes through the service's
+`SafeHTTPURL`. Two real defects were found and fixed:
+
+- **The call-to-action memo outlived its checkout.** `notificationCTAs` was
+  keyed by notification id alone, but the store is global and a
+  project/worktree switch changes both what a relative path means and whether
+  it exists. A file verified in project A stayed underlined and numbered in
+  project B, and activating it navigated to a path that is not there — the
+  verified-underline invariant silently broken by navigation. The memo now
+  records the root it was computed against (`notificationCTARoot`): a mismatch
+  is answered fresh and not written back, and `pruneNotificationCTAs` drops the
+  whole map on the next refresh. Regression test:
+  `TestCentreTargetMemoIsPerCheckout`.
+- **`--target url:` lost its tail to the `@project` rule.** `@` is legal in a
+  URL path, in userinfo and in a query, so
+  `url:https://example.com/pkg@v2` parsed as `https://example.com/pkg` in
+  project `v2` — a call to action that silently opens the wrong page. URLs are
+  not project-scoped (they open in a browser wherever they are activated), so
+  the project split is now skipped entirely for the `url` kind. Regression
+  test: `TestParseTargetSpecKeepsAtInURLs`.
+
+Left open deliberately: a stored file target with no line and a scanned span of
+the same path *with* a line are numbered separately (different targets by key);
+an underline may cover the truncation ellipsis when a target is clipped at the
+row's right edge; and 5c's known gap — attaching a session nothing is running
+does nothing and says nothing — is still the workspace plugin's to close.
+
+### Phase 5 proof run (2026-08-19)
+
+Phase 5 driven end to end in the real app: an isolated `scripts/tmux-drive.sh`
+instance (`paths` checked first — run dir `/private/tmp/sidecar-drive-501-cta5p`,
+private tmux socket and state tree, nothing under `~/.local/state/sidecar` or
+`~/.config/sidecar`; `stop` confirmed, both servers gone) configured with two
+synthesized project fixtures, `alpha` (an 80-line `long.txt` for the `:line`
+proof) and `beta`. Every item passed; two gaps found are *pre-existing shapes of
+the activation surfaces*, not Phase 5 regressions, and are written down below.
+
+- **Stored + scanned targets, numbering, `enter`, digits, `v`.** A post of
+  `"Review td-4c1f9a now" --body "check README then td-4c1f9a" --target
+  file:README.md:3` rendered the title's `td-4c1f9a` underlined and the
+  selection row `1 README.md:3 · 2 td-4c1f9a` — stored first, scanned second.
+  `enter` opened the file browser on the file; with a target of
+  `file:long.txt:60` the preview opened scrolled to line 60 (rows 39–80 on
+  screen). `2` opened a `td-4c1f9a` issue pane, which said `issue "td-4c1f9a"
+  not found` — the loud, correct answer in a fixture with no td database. `v`
+  re-showed the detail card.
+- **Cross-project.** `--target issue:td-9911aa@beta` rendered `1 beta/td-9911aa`;
+  `enter` switched the project to `beta`. `--target issue:td-8822bb@nowhere`
+  refused out loud and filed the refusal as a notification: "Cannot jump to
+  nowhere: that project is no longer available".
+- **Session.** `"Agent idle" --body "waiting in sidecar-sh-alpha-1"` underlined
+  the scanned session name and numbered it `1 sidecar-sh-alpha-1`. With
+  `tmux_full_attach` **off**, activating focused Workspaces and attached nothing
+  — the documented gate. With the flag **on**, the jump reached the workspace
+  plugin and selected the shell, but the suspend-and-attach itself cannot be
+  seen from this harness: the outer driver pane is already a tmux client, so a
+  nested `tmux attach` is not a thing `capture-pane` can show. That limitation
+  is `headless-testing.md`'s, not this phase's.
+- **Toasts unchanged.** The same notifications' toasts showed title and body
+  only: no numbered row, no underline, no digit or `enter` affordance.
+- **Unsafe URLs.** `--target url:file:///etc/passwd` and
+  `url:javascript:alert(1)` are exit 2 at parse and store nothing. A
+  hand-written `url:file:///etc/passwd` appended straight into
+  `notifications.jsonl` (bypassing the CLI entirely) *is* numbered but refuses
+  on activation — `refusing to open "file:///etc/passwd": only …` — so the
+  `SafeHTTPURL` gate holds at the only place that matters.
+
+**Found, not fixed (pre-existing, outside this phase's code):**
+
+- **A cross-project landing can drop the jump silently.** After
+  `switchProject`'s `Reinit`, `applyPendingActivation` re-emits the
+  `ActivateTargetMsg` immediately, but the workspace plugin has not loaded its
+  shells and worktrees yet, so `selectedTerminalSurface()` fails and
+  `openIssuePaneMsg` returns `nil`. Observed: landing in `beta` switched the
+  project and focused Workspaces but opened no issue pane; activating the *same*
+  target once `beta` was loaded opened it correctly. The fix is a readiness
+  signal (or a deferred re-emit) in `target-activation`'s hand-off, plus a loud
+  refusal in `openIssuePaneMsg`/`openDiffPaneMsg`/`openResourcePaneMsg` when
+  there is no surface — the same "returns nil rather than refusing" shape 5c
+  already recorded for `attachSessionMsg`.
+- **The same silence in-project:** a project with no shell and no worktree has
+  no terminal surface to host an issue/diff/resource pane, so those activations
+  focus Workspaces and stop. Creating a shell (`ctrl+n`) makes them work.

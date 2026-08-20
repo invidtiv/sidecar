@@ -197,6 +197,7 @@ func (m *Model) UnreadNotifications() int {
 func (m *Model) refreshNotifications() {
 	if m.notifications == nil {
 		m.notificationCache = nil
+		m.pruneNotificationCTAs()
 		return
 	}
 	all, err := m.notifications.List()
@@ -205,6 +206,7 @@ func (m *Model) refreshNotifications() {
 		return
 	}
 	m.notificationCache = all
+	m.pruneNotificationCTAs()
 }
 
 // postNotification stores a notification and returns the broadcast announcing
@@ -430,12 +432,6 @@ func (m *Model) ownsNotifyRequest(req uirequest.Request) bool {
 		}
 	}
 	return false
-}
-
-func pathsEqual(a, b string) bool {
-	an, _ := normalizePath(a)
-	bn, _ := normalizePath(b)
-	return an == bn
 }
 
 // pathWithin reports whether path is root itself or lives beneath it. The

@@ -133,6 +133,9 @@ type Plugin struct {
 	viewSurfaceSrc   string
 	viewSurfaceWidth int
 	viewSurfaceMD    bool
+	// viewSurfaceStyle is the markdown renderer's theme identity the surface
+	// was built under; a live theme change rebuilds it without a resize.
+	viewSurfaceStyle string
 
 	// Per-note view/edit place for this session (not persisted).
 	notePlaces map[string]notePlace
@@ -1969,6 +1972,7 @@ func (p *Plugin) syncPreviewFromTextarea() {
 func (p *Plugin) invalidateViewSurface() {
 	p.viewSurfaceSrc = ""
 	p.viewSurfaceWidth = 0
+	p.viewSurfaceStyle = ""
 	p.viewSurface = markdown.MappedRender{}
 }
 
@@ -1984,8 +1988,28 @@ func (p *Plugin) ensureViewSurface() {
 	if width < 1 {
 		width = 1
 	}
-	if p.viewSurfaceSrc == src && p.viewSurfaceWidth == width && p.viewSurfaceMD == p.markdownView && len(p.viewSurface.Lines) > 0 {
+	// Only the glamour surface carries theme state; the raw wrap has none, so
+	// it must not churn on a theme change.
+	style := ""
+	if p.markdownView && p.md != nil {
+		style = p.md.StyleKey()
+	}
+	if p.viewSurfaceSrc == src && p.viewSurfaceWidth == width && p.viewSurfaceMD == p.markdownView &&
+		p.viewSurfaceStyle == style && len(p.viewSurface.Lines) > 0 {
 		return
+	}
+	// A theme change is the one rebuild that leaves the source and width alone,
+	// so the cursor and scroll are re-anchored through the source mapping
+	// rather than left pointing at visual rows from the previous render.
+	reanchor := p.viewSurfaceSrc == src && p.viewSurfaceWidth == width &&
+		p.viewSurfaceMD == p.markdownView && p.viewSurfaceStyle != style &&
+		len(p.viewSurface.Lines) > 0
+	var cursorAnchor, scrollAnchor markdown.Anchor
+	screenRow := 0
+	if reanchor {
+		cursorAnchor = p.viewSurface.At(p.previewCursorLine)
+		scrollAnchor = p.viewSurface.At(p.previewScrollOff)
+		screenRow = p.previewCursorLine - p.previewScrollOff
 	}
 	if p.markdownView && p.md != nil {
 		p.viewSurface = p.md.RenderMapped(src, width)
@@ -2001,6 +2025,15 @@ func (p *Plugin) ensureViewSurface() {
 	p.viewSurfaceSrc = src
 	p.viewSurfaceWidth = width
 	p.viewSurfaceMD = p.markdownView
+	p.viewSurfaceStyle = style
+	if reanchor {
+		p.previewCursorLine = p.viewSurface.VisualRowForSource(cursorAnchor.SourceLine, cursorAnchor.SourceCol)
+		scroll := p.viewSurface.VisualRowForSource(scrollAnchor.SourceLine, scrollAnchor.SourceCol)
+		if p.previewCursorLine-screenRow >= 0 {
+			scroll = p.previewCursorLine - screenRow
+		}
+		p.previewScrollOff = max(scroll, 0)
+	}
 }
 
 func (p *Plugin) toggleMarkdownView() {

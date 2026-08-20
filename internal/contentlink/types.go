@@ -21,6 +21,9 @@ const (
 	KindDiff     Kind = "diff"
 	KindResource Kind = "resource"
 	KindInternal Kind = "internal"
+	// KindSession identifies a Sidecar-owned tmux session that a host can
+	// attach. Only names Sidecar itself mints are recognized from text.
+	KindSession Kind = "session"
 )
 
 // Ref is the presentation-neutral identity produced by every recognition
@@ -106,7 +109,7 @@ func SpanForRef(ref Ref) Span {
 // Activatable reports whether hosts may bind and decorate the kind.
 func Activatable(k Kind) bool {
 	switch k {
-	case KindURL, KindFile, KindIssue, KindDiff, KindResource, KindInternal:
+	case KindURL, KindFile, KindIssue, KindDiff, KindResource, KindInternal, KindSession:
 		return true
 	default:
 		return false

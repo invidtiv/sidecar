@@ -1004,6 +1004,35 @@ func (p *Plugin) toggleMarkdownRender() {
 	}
 }
 
+// handleThemeChanged rebuilds the rendered markdown preview under the new
+// theme. Rendered row indices can shift, so content search matches are
+// recomputed and scroll/selection are preserved where still valid, clamped
+// otherwise.
+func (p *Plugin) handleThemeChanged() {
+	if !p.markdownRenderMode || !p.isMarkdownFile() {
+		return
+	}
+	p.markdownRendered = nil
+	p.renderMarkdownContent()
+
+	lineCount := len(p.getPreviewLines())
+	p.clampPreviewScroll()
+	if lineCount == 0 {
+		p.selection.Clear()
+	} else {
+		maxLine := lineCount - 1
+		if p.selection.Active {
+			if p.selection.Start.Line > maxLine || p.selection.End.Line > maxLine {
+				p.selection.Clear()
+			}
+		}
+	}
+
+	if p.contentSearchMode && p.contentSearchQuery != "" {
+		p.updateContentMatches()
+	}
+}
+
 // renderMarkdownContent renders the current preview content as markdown.
 func (p *Plugin) renderMarkdownContent() {
 	if p.markdownRenderer == nil || len(p.previewLines) == 0 {

@@ -87,7 +87,8 @@ const (
 type renderCacheKey struct {
 	messageID string
 	width     int
-	expanded  bool // whether content is expanded (affects render)
+	expanded  bool   // whether content is expanded (affects render)
+	styleKey  string // active markdown theme identity (td-031c89)
 }
 
 // Plugin implements the conversations plugin.

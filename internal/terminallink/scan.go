@@ -3,7 +3,7 @@ package terminallink
 import "github.com/marcus/sidecar/internal/contentlink"
 
 // Compatibility aliases keep terminal hosts source-compatible while the
-// presentation-neutral contentlink package becomes recognition authority.
+// presentation-neutral contentlink package remains recognition authority.
 type Kind = contentlink.Kind
 
 const (
@@ -13,6 +13,7 @@ const (
 	KindDiff     = contentlink.KindDiff
 	KindResource = contentlink.KindResource
 	KindInternal = contentlink.KindInternal
+	KindSession  = contentlink.KindSession
 )
 
 type Extra = contentlink.Extra
@@ -25,6 +26,9 @@ const MaxNewDiffResolves = contentlink.MaxNewDiffResolves
 
 func Activatable(kind Kind) bool { return contentlink.Activatable(kind) }
 func IssueID(value string) bool  { return contentlink.IssueID(value) }
+func SessionName(value string) bool {
+	return contentlink.SessionName(value)
+}
 func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
 	return contentlink.Scan(line, resolve, resolveDiff)
 }

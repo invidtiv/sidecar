@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
+	"github.com/marcus/sidecar/internal/markdown"
 )
 
 // Session selection and state management methods
@@ -434,7 +435,7 @@ func (p *Plugin) clearRenderCache() {
 func (p *Plugin) getCachedRender(msgID string, width int, expanded bool) (string, bool) {
 	p.renderCacheMutex.RLock()
 	defer p.renderCacheMutex.RUnlock()
-	key := renderCacheKey{messageID: msgID, width: width, expanded: expanded}
+	key := renderCacheKey{messageID: msgID, width: width, expanded: expanded, styleKey: markdown.CurrentThemeSnapshot().StyleKey()}
 	cached, ok := p.renderCache[key]
 	return cached, ok
 }
@@ -458,7 +459,7 @@ func (p *Plugin) setCachedRender(msgID string, width int, expanded bool, content
 		}
 	}
 
-	key := renderCacheKey{messageID: msgID, width: width, expanded: expanded}
+	key := renderCacheKey{messageID: msgID, width: width, expanded: expanded, styleKey: markdown.CurrentThemeSnapshot().StyleKey()}
 	p.renderCache[key] = content
 }
 

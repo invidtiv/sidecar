@@ -19,14 +19,22 @@ var (
 	bareFilePattern = regexp.MustCompile(
 		`(?:^|[\s(\x5b` + "`" + `])((?:~/|\.{0,2}/|/)?[^\s()\x5b\x5d` + "`" + `<>:"']+\.[A-Za-z0-9_+-]+[.,;!?)}\x5d` + "`" + `]*)`,
 	)
-	issuePattern         = regexp.MustCompile(`\btd-[0-9a-fA-F]{4,}\b`)
-	issueIDPattern       = regexp.MustCompile(`^td-[0-9a-fA-F]{4,}$`)
+	issuePattern   = regexp.MustCompile(`\btd-[0-9a-fA-F]{4,}\b`)
+	issueIDPattern = regexp.MustCompile(`^td-[0-9a-fA-F]{4,}$`)
+	// Only Sidecar-owned attachable sessions are recognized. Internal terminal
+	// and editor pane sessions deliberately remain ordinary text.
+	sessionPattern       = regexp.MustCompile(`\bsidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}`)
+	sessionNamePattern   = regexp.MustCompile(`^sidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 	gitRevPattern        = regexp.MustCompile(`[0-9a-f]{7,64}`)
 	gitDottedPattern     = regexp.MustCompile(`[0-9a-f]{7,64}(?:\.\.\.|\.\.)[0-9a-f]{7,64}`)
 	gitCommitWordPattern = regexp.MustCompile(`\bcommit[ \t]+[0-9a-f]{7,64}`)
 )
 
 func IssueID(value string) bool { return issueIDPattern.MatchString(value) }
+
+// SessionName reports whether value is a Sidecar-owned attachable tmux
+// session name. Stored notification targets use the same validation as scans.
+func SessionName(value string) bool { return sessionNamePattern.MatchString(value) }
 
 func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
 	return ScanWith(line, Options{Resolve: resolve, ResolveDiff: resolveDiff})
@@ -54,12 +62,29 @@ func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) [
 	if opts.Resolve != nil || pending != nil {
 		appendBounded(scanBareFiles(plain, spans, opts.Resolve, pending))
 	}
+	// A worktree session can contain an issue id or end in hex. Claim the whole
+	// session before issue and diff recognition can claim a substring.
+	appendBounded(scanSessions(plain, spans))
 	appendBounded(scanIssues(plain, spans))
 	if opts.ResolveDiff != nil || pending != nil {
 		appendBounded(scanGitSpecs(plain, spans, opts.ResolveDiff, pending))
 	}
 	appendBounded(scanResources(plain, spans, opts.Matchers))
 	return spans
+}
+
+// scanSessions finds only whole Sidecar-owned session tokens. A session name
+// embedded in a path or filename is not an attach target.
+func scanSessions(plain string, existing []Span) []Span {
+	var out []Span
+	for _, loc := range sessionPattern.FindAllStringIndex(plain, -1) {
+		start, end := loc[0], loc[1]
+		if overlapsBytes(plain, append(existing, out...), start, end) || !issueTokenWhole(plain, start, end) {
+			continue
+		}
+		out = append(out, makeSpan(KindSession, plain, start, end, plain[start:end], Extra{}))
+	}
+	return out
 }
 
 func scanInternalURIs(plain string, existing []Span, namespaces map[string]URIOptions) []Span {
