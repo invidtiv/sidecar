@@ -86,6 +86,9 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Internal
 
+- `make lint` is the GitHub lint job: full codebase, `GOOS=linux`,
+  `GOWORK=off`, golangci-lint v2.12.2. The old `--new-from-merge-base`
+  gate missed unused leftovers whose function bodies were not edited.
 - `internal/contentlink` owns link recognition and `sidecar://` routing;
   `internal/passivedeck` owns the app-level content deck both plugin hosts and
   the workspace surfaces bind to. There is still one compositor and one pane

@@ -98,7 +98,9 @@ the activated artifact so the next `sidecar` is that build.
   jump bundled with an unrelated change makes field regressions hard to assign.
 - **`go.work` / `replace`:** never ship with replace directives; always validate
   with `GOWORK=off`.
-- **Lint:** Go CI runs tests *and* golangci-lint. `go test` alone is not the gate.
+- **Lint:** Go CI runs tests *and* full-codebase `golangci-lint` (linux,
+  `GOWORK=off`, v2.12.2). `make lint` is that same command. `go test` alone
+  is not the gate.
 - **Homebrew builds from source** (avoids Gatekeeper warnings). The formula is
   rendered from `packaging/homebrew/sidecar.rb.tmpl`, not sed-edited in place.
 

@@ -1060,10 +1060,6 @@ func (p *Plugin) handleCreateOperationAction(action string) tea.Cmd {
 	return nil
 }
 
-func (p *Plugin) agentTypeIndex(agentType AgentType) int {
-	return agentTypeIndexIn(p.selectableAgentTypes(), agentType)
-}
-
 // handleTaskLinkKeys handles keys in task link modal.
 func (p *Plugin) handleTaskLinkKeys(msg tea.KeyPressMsg) tea.Cmd {
 	p.ensureTaskLinkModal()

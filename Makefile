@@ -125,16 +125,23 @@ fmt-check-all:
 		exit 1; \
 	fi
 
-# Run linter
-lint:
-	golangci-lint run --new-from-merge-base=$(LINT_BASE) ./...
+# Must match golangci-lint-action version in .github/workflows/go-ci.yml.
+GOLANGCI_LINT_VERSION ?= v2.12.2
 
-# Run linter across the full codebase (includes legacy debt)
-lint-all:
-	golangci-lint run ./...
-
-# Match GitHub's Linux full-codebase lint analysis from a macOS checkout.
-lint-linux:
+# Same analysis GitHub runs: full codebase, linux, no go.work.
+# --new-from-merge-base misses leftovers whose bodies were not edited
+# (unused functions after their last caller is deleted).
+lint lint-all lint-linux:
+	@got=$$(golangci-lint version 2>/dev/null | sed -n 's/^golangci-lint has version \([0-9.]*\).*/\1/p' | head -1); \
+	want=$(patsubst v%,%,$(GOLANGCI_LINT_VERSION)); \
+	if [ -z "$$got" ]; then \
+		echo "golangci-lint is not installed (need $(GOLANGCI_LINT_VERSION))"; \
+		exit 1; \
+	fi; \
+	if [ "$$got" != "$$want" ]; then \
+		echo "golangci-lint v$$got != GitHub $(GOLANGCI_LINT_VERSION) (.github/workflows/go-ci.yml)"; \
+		exit 1; \
+	fi
 	GOOS=linux GOWORK=off golangci-lint run ./...
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)

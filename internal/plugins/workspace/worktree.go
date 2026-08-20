@@ -543,22 +543,6 @@ func (p *Plugin) loadBranches() tea.Cmd {
 	}
 }
 
-// filterBranches filters branches based on a search query.
-func filterBranches(query string, allBranches []string) []string {
-	if query == "" {
-		return allBranches
-	}
-
-	query = strings.ToLower(query)
-	var matches []string
-	for _, branch := range allBranches {
-		if strings.Contains(strings.ToLower(branch), query) {
-			matches = append(matches, branch)
-		}
-	}
-	return matches
-}
-
 const sidecarTaskFile = "task"
 const sidecarAgentFile = "agent"
 

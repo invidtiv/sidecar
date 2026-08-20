@@ -35,16 +35,6 @@ func resolveSelectableAgents(configAgents []string, shellMode bool) []AgentType 
 	return out
 }
 
-// agentTypeIndexIn returns the index of agentType in list, or 0 if missing.
-func agentTypeIndexIn(list []AgentType, agentType AgentType) int {
-	for i, at := range list {
-		if at == agentType {
-			return i
-		}
-	}
-	return 0
-}
-
 // clampAgentSelection ensures type/index are consistent with the selectable list.
 // If agentType is not in list, falls back to first entry (or None for empty).
 func clampAgentSelection(list []AgentType, agentType AgentType, idx int) (AgentType, int) {

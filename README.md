@@ -316,8 +316,7 @@ make install          # Unmanaged go install to GOBIN (does not change Homebrew)
 make fmt              # Format code
 make fmt-check        # Verify formatting for changed Go files
 make fmt-check-all    # Verify formatting across full codebase
-make lint             # Lint new issues only (merge-base with main)
-make lint-all         # Lint entire codebase (includes legacy debt)
+make lint             # Same as GitHub: full codebase, linux, GOWORK=off, golangci-lint v2.12.2
 make install-hooks    # Install pre-commit hooks (gofmt, go vet, go build)
 ```
 
@@ -333,8 +332,9 @@ build. Use `make install` for a separate, unmanaged Go installation.
 
 - Formatting: changed Go files must be `gofmt`-clean (`make fmt-check`)
 - Correctness lint: `errcheck`, `govet`, `ineffassign`, `staticcheck`, `unused`
-- Enforcement: CI runs tests and blocks new lint issues on PRs (`.github/workflows/go-ci.yml`)
-- Debt tracking: run `make lint-all` to measure and burn down legacy lint debt
+- Enforcement: CI and `make lint` run the same full-codebase linux analysis
+  (`golangci-lint` v2.12.2, `GOWORK=off`). `--new-from-merge-base` is not the
+  gate; it misses unused leftovers whose function bodies were not edited.
 
 ## Privacy
 
