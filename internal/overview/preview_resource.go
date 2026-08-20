@@ -125,10 +125,18 @@ var _ resourceview.Surface = (*Model)(nil)
 // spinner that never ends.
 func (m *Model) SetResourceResolver(resolve resourceview.Resolver) {
 	m.resolveResource = resolve
+	if m.preview.deck != nil {
+		ctx := m.preview.deck.Context()
+		m.preview.deck.SetResourceResolver(m.previewResourceResolver(ctx.Surface, ctx.Epoch))
+	}
 	if res := m.preview.resource; res != nil {
 		res.tabs.SetResolver(m.previewResourceResolver(res.surface, res.epoch))
 	}
 	for workspaceID, cached := range m.preview.paneCache {
+		if cached.deck != nil {
+			ctx := cached.deck.Context()
+			cached.deck.SetResourceResolver(m.previewResourceResolver(ctx.Surface, ctx.Epoch))
+		}
 		if cached.resource == nil || cached.resource == m.preview.resource {
 			continue
 		}

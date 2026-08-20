@@ -138,6 +138,36 @@ func TestResourceKeyClickOpensAResourceLeaf(t *testing.T) {
 	}
 }
 
+func TestLateResourceResolverConfiguresExistingDeckFactory(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	p := docPaneTestPlugin(t, root, true)
+	root, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		t.Fatal("no selected terminal surface")
+	}
+	p.openDocPaneForSurface(root, surface, "README.md", 0)
+	stub := &resourceStub{}
+	p.SetResourceResolver(stub.resolve)
+	cmd := p.openResourcePaneForSurface(root, surface, resourceview.Ref{
+		Instance: "jira-work", Matcher: "issue-key", Locator: "CASH-1245",
+	})
+	if cmd == nil {
+		t.Fatal("first Resource after late resolver setup returned no load command")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			if child != nil {
+				_ = child()
+			}
+		}
+	}
+	if stub.calls != 1 {
+		t.Fatalf("late resolver calls = %d, want 1", stub.calls)
+	}
+}
+
 func TestASecondLocatorAppendsATabAndADuplicateFocusesOne(t *testing.T) {
 	p, stub, _ := resourceTestPlugin(t)
 

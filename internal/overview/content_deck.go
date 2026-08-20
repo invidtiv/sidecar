@@ -21,7 +21,7 @@ func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 		return contentpanes.SurfaceContext{}, false
 	}
 	return contentpanes.SurfaceContext{
-		Root: workspace.Path, Surface: workspace.ID, Epoch: m.preview.contentEpoch,
+		Root: workspace.Path, DiffRoot: previewDiffPath(workspace), Surface: workspace.ID, Epoch: m.preview.contentEpoch,
 	}, true
 }
 

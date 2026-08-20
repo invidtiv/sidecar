@@ -133,6 +133,35 @@ func TestDeckSameIdentityReloadsWhenSurfaceContextChanges(t *testing.T) {
 	}
 }
 
+func TestDeckDiffUsesDedicatedDiffRoot(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	ctx.DiffRoot = t.TempDir()
+	d := New(ctx, Config{})
+	out := d.Open(ctx, diffRef("wt"), testPlacement())
+	view := d.Viewer(out.LeafID).(*workspacediff.View)
+	if view.WorkDir != ctx.DiffRoot {
+		t.Fatalf("diff WorkDir = %q, want dedicated DiffRoot %q", view.WorkDir, ctx.DiffRoot)
+	}
+}
+
+func TestDeckLateResourceResolverConfiguresFutureViewer(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	calls := 0
+	d.SetResourceResolver(func(_ int, _, _ uint64, _ resource.Reference, _ bool) tea.Cmd {
+		calls++
+		return func() tea.Msg { return nil }
+	})
+	out := d.Open(ctx, resourceRefForTest("ENG-42"), testPlacement())
+	if out.Command == nil {
+		t.Fatal("resource opened after late resolver setup returned no load command")
+	}
+	_ = out.Command()
+	if calls != 1 {
+		t.Fatalf("late resolver calls = %d, want 1", calls)
+	}
+}
+
 func TestDeckSetContextRearmsEveryKindAndSelectRestartsLoad(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("one"), 0o600); err != nil {

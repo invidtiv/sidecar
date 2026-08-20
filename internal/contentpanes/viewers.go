@@ -2,6 +2,7 @@ package contentpanes
 
 import (
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -123,6 +124,11 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
 	return cmd
 }
+func (v *documentViewer) loadFile(ctx SurfaceContext, ref contentlink.Ref, id int, file *os.File) tea.Cmd {
+	cmd := v.view.LoadFile(id, file, ref.Value, ref.Line, ctx.Epoch)
+	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
+	return cmd
+}
 func (v *documentViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetRendered(state.Rendered)
@@ -190,11 +196,15 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 	if surface == "" {
 		surface = ctx.Surface
 	}
-	v.view.BindGeneration(ctx.Root, surface, ctx.Epoch, uint64(id))
+	root := ctx.DiffRoot
+	if root == "" {
+		root = ctx.Root
+	}
+	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
 	case workspacediff.TargetWorkingTree:
-		return workspacediff.LoadSnapshotCmdBound(ctx.Root, ctx.BaseRef, surface, ctx.Epoch, target.Identity(), uint64(id))
+		return workspacediff.LoadSnapshotCmdBound(root, ctx.BaseRef, surface, ctx.Epoch, target.Identity(), uint64(id))
 	case workspacediff.TargetRange:
 		return v.view.LoadRange()
 	case workspacediff.TargetCommit:
@@ -210,7 +220,11 @@ func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state 
 	if surface == "" {
 		surface = ctx.Surface
 	}
-	v.view.BindGeneration(ctx.Root, surface, ctx.Epoch, uint64(id))
+	root := ctx.DiffRoot
+	if root == "" {
+		root = ctx.Root
+	}
+	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateUnknown
 	v.view.Scope = workspacediff.ParseScope(state.Scope)
 	v.view.ViewMode = workspacediff.ParseViewMode(state.Mode)

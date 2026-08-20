@@ -78,6 +78,9 @@ func (p *Plugin) hideContentPane(leafID int) tea.Cmd {
 	if ok {
 		p.rememberHiddenPaneLayout(root, surface)
 	}
+	if p.contentDeck != nil && p.contentDeck.FocusLeaf(leafID) {
+		p.contentDeck.HideFocused()
+	}
 	if !p.closeContentLeaf(leafID) {
 		p.hiddenPaneLayout = nil
 		return nil

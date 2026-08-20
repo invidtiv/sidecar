@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
 // M1 of docs/plans/active/terminal-resource-providers.md: the global
@@ -195,6 +196,19 @@ func TestGlobalResourcePaneDegradesWithNoResolver(t *testing.T) {
 	}
 	if err := view.Err(); err == nil || err.Code != resource.CodeUnavailable {
 		t.Fatalf("error card = %#v, want an unavailable provider", view.Err())
+	}
+}
+
+func TestGlobalLateResourceResolverConfiguresExistingDeckFactory(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	resolver := &fakeResolver{}
+	m.SetResourceResolver(resolver.resolve)
+	run(t, m, m.openPreviewResourceRef(resourceview.Ref{
+		Instance: "jira-work", Matcher: "project-key", Locator: "CASH-1245",
+	}, false))
+	if got := len(resolver.refs()); got != 1 {
+		t.Fatalf("late resolver calls = %d, want 1 for first Resource created by existing deck", got)
 	}
 }
 

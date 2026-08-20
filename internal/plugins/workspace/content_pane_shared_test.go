@@ -262,6 +262,25 @@ func TestContentKindsShareTheHideAndReopenLifecycle(t *testing.T) {
 	}
 }
 
+func TestHiddenDocumentDoesNotResurrectWhenInflightLoadLands(t *testing.T) {
+	tc := contentKindCases()[0]
+	p := tc.setup(t)
+	inFlight := tc.open(t, p, false)
+	leaf, _ := tc.live(p)
+	if leaf == nil || inFlight == nil {
+		t.Fatal("document setup did not open with an in-flight load")
+	}
+	focusContentLeaf(p, leaf.ID)
+	tc.hide(p)
+	deliverLoads(t, p, inFlight)
+	if doc, _ := p.activeDocPane(); doc != nil {
+		t.Fatalf("in-flight result resurrected hidden document: %#v", doc)
+	}
+	if got := p.contentDeck.Leaf(PaneDoc); got != 0 {
+		t.Fatalf("shared deck restored hidden Document leaf %d", got)
+	}
+}
+
 // Hiding one kind while another content leaf is still live cannot restore the
 // whole remembered layout — that would duplicate the live leaf. The shared
 // helper reinserts just the hidden kind's leaf beside it.

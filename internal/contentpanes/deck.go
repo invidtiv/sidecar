@@ -9,16 +9,19 @@ package contentpanes
 
 import (
 	"fmt"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/resourceview"
 )
 
 // SurfaceContext is the stable identity and resolution context for one deck.
 // BaseRef is used only by working-tree Diff viewers.
 type SurfaceContext struct {
 	Root        string
+	DiffRoot    string
 	Surface     string
 	DiffSurface string
 	BaseRef     string
@@ -328,6 +331,31 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	return out
 }
 
+// OpenDocumentFile opens a validated, already-open file through the ordinary
+// Deck lifecycle. The returned command owns file when accepted.
+func (d *Deck) OpenDocumentFile(ctx SurfaceContext, ref contentlink.Ref, placement Placement, file *os.File) Outcome {
+	out := d.Open(ctx, ref, placement)
+	if !out.Accepted() || out.Kind != panelayout.Document || file == nil {
+		return out
+	}
+	if out.Command == nil {
+		_ = file.Close()
+		return out
+	}
+	t := d.tabByID(out.TabID)
+	if t == nil {
+		_ = file.Close()
+		return out
+	}
+	viewer, ok := t.view.(*documentViewer)
+	if !ok {
+		_ = file.Close()
+		return out
+	}
+	out.Command = d.start(t, viewer.loadFile(ctx, ref, int(t.id), file))
+	return out
+}
+
 // ReplaceActive retargets the active tab without changing the leaf geometry.
 // Hosts use this for picker-style navigation where Enter replaces the current
 // document while Shift+Enter remains the ordinary append operation.
@@ -393,7 +421,7 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 }
 
 func sameContext(a, b SurfaceContext) bool {
-	return a.Root == b.Root && a.Surface == b.Surface && a.DiffSurface == b.DiffSurface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
+	return a.Root == b.Root && a.DiffRoot == b.DiffRoot && a.Surface == b.Surface && a.DiffSurface == b.DiffSurface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
 }
 
 func (d *Deck) start(t *tab, cmd tea.Cmd) tea.Cmd {
@@ -460,6 +488,20 @@ func (d *Deck) ConfigureViewers(configure func(panelayout.Kind, any)) {
 			configure(p.kind, t.view.model())
 		}
 	}
+}
+
+// SetResourceResolver updates existing viewers and the factory used by future
+// Resource tabs created after provider discovery completes.
+func (d *Deck) SetResourceResolver(resolve resourceview.Resolver) {
+	if d == nil {
+		return
+	}
+	d.cfg.ResourceResolver = resolve
+	d.ConfigureViewers(func(_ panelayout.Kind, model any) {
+		if view, ok := model.(*resourceview.Model); ok {
+			view.SetResolver(resolve)
+		}
+	})
 }
 
 // Viewer returns the active host-independent viewer model for a passive leaf.

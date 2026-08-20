@@ -55,3 +55,21 @@ func TestGlobalContentKindsAreSharedDeckProjections(t *testing.T) {
 		assertPreviewDeckProjection(t, m, panelayout.Resource, m.preview.resource.view())
 	})
 }
+
+func TestGlobalShellDiffDeckBindsProjectRoot(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindShell)
+	ws := m.catalog["a"]
+	ws.Path = t.TempDir()
+	ws.ProjectRoot = t.TempDir()
+	m.catalog["a"] = ws
+	result := m.results["sidecar"]
+	result.ProjectRoot = ws.ProjectRoot
+	result.Workspaces[0] = ws
+	m.results["sidecar"] = result
+	m.syncBoard()
+	m.workspaces.SelectID("a")
+	run(t, m, m.openPreviewDiff(workspacediff.WorkingTreeTarget()))
+	if got := m.preview.diff.view().WorkDir; got != ws.ProjectRoot {
+		t.Fatalf("shell Diff WorkDir = %q, want ProjectRoot %q (shell cwd %q)", got, ws.ProjectRoot, ws.Path)
+	}
+}

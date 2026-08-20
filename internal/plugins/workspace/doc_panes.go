@@ -181,19 +181,24 @@ func (p *Plugin) openDocPaneForSurface(root, surface, rel string, line int) tea.
 }
 
 func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, file *os.File) tea.Cmd {
-	defer func() {
+	if p.paneRoot == nil || p.ctx == nil {
 		if file != nil {
 			_ = file.Close()
 		}
-	}()
-	if p.paneRoot == nil || p.ctx == nil {
 		return nil
 	}
 	rel = docview.NormalizeTabPath(rel)
 	if rel == "" || rel == "." {
+		if file != nil {
+			_ = file.Close()
+		}
 		return nil
 	}
-	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindFile, Value: rel, Line: line}, "Document")
+	cmd := p.openWorkspaceContentFile(root, surface, contentlink.Ref{Kind: contentlink.KindFile, Value: rel, Line: line}, "Document", file)
+	if cmd == nil && file != nil {
+		_ = file.Close()
+	}
+	return cmd
 }
 
 // attachDocPane points the content behind leafID at rel and reports whether it

@@ -94,13 +94,7 @@ func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) {
 		}
 	}
 	if p.contentDeck != nil {
-		p.contentDeck.ConfigureViewers(func(kind panelayout.Kind, model any) {
-			if kind == panelayout.Resource {
-				if view, ok := model.(*resourceview.Model); ok {
-					view.SetResolver(resolve)
-				}
-			}
-		})
+		p.contentDeck.SetResourceResolver(resolve)
 	}
 }
 

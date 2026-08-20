@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -21,7 +22,7 @@ func (p *Plugin) workspaceDeckContext(root, surface string) contentpanes.Surface
 		epoch = p.ctx.Epoch
 	}
 	return contentpanes.SurfaceContext{
-		Root: root, Surface: surface, DiffSurface: p.diffWorkspaceID(root, surface),
+		Root: root, DiffRoot: root, Surface: surface, DiffSurface: p.diffWorkspaceID(root, surface),
 		BaseRef: p.selectedDiffBaseRef(), Epoch: epoch,
 	}
 }
@@ -131,13 +132,23 @@ func (p *Plugin) workspaceDeckPlacement() (contentpanes.Placement, bool) {
 }
 
 func (p *Plugin) openWorkspaceContent(root, surface string, ref contentlink.Ref, name string) tea.Cmd {
+	return p.openWorkspaceContentFile(root, surface, ref, name, nil)
+}
+
+func (p *Plugin) openWorkspaceContentFile(root, surface string, ref contentlink.Ref, name string, file *os.File) tea.Cmd {
 	wasInteractive := p.viewMode == ViewModeInteractive
 	deck := p.ensureWorkspaceDeck(root, surface)
 	placement, ok := p.workspaceDeckPlacement()
 	if !ok {
 		return nil
 	}
-	out := deck.Open(p.workspaceDeckContext(root, surface), ref, placement)
+	ctx := p.workspaceDeckContext(root, surface)
+	var out contentpanes.Outcome
+	if file != nil {
+		out = deck.OpenDocumentFile(ctx, ref, placement, file)
+	} else {
+		out = deck.Open(ctx, ref, placement)
+	}
 	if out.Status == contentpanes.StatusRefused {
 		if out.Refusal == contentpanes.RefusalFit {
 			dimension := "wider"

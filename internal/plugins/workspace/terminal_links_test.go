@@ -1225,19 +1225,26 @@ func TestOpenTerminalPathPreviewsOtherWorktreeFileInPlace(t *testing.T) {
 	if doc.view().Rendered() {
 		t.Fatal("non-markdown preview opened rendered")
 	}
-	msg := cmd()
-	if _, ok := msg.(app.SwitchWorktreeMsg); ok {
-		t.Fatal("previewing another worktree switched project")
-	}
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, child := range batch {
-			if child == nil {
-				continue
-			}
-			if _, switched := child().(app.SwitchWorktreeMsg); switched {
-				t.Fatal("preview batch switched project")
-			}
+	var deliver func(tea.Cmd)
+	deliver = func(next tea.Cmd) {
+		if next == nil {
+			return
 		}
+		switch msg := next().(type) {
+		case tea.BatchMsg:
+			for _, child := range msg {
+				deliver(child)
+			}
+		case app.SwitchWorktreeMsg:
+			t.Fatal("previewing another worktree switched project")
+		case docview.LoadedMsg:
+			p.update(msg)
+		}
+	}
+	deliver(cmd)
+	doc.view().SetSize(80, 20)
+	if got := ansi.Strip(doc.view().View()); !strings.Contains(got, "package internal") {
+		t.Fatalf("cross-worktree preview did not load the validated file: %q", got)
 	}
 }
 
