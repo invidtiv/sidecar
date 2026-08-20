@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -19,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 type deckHostTestPlugin struct {
@@ -27,6 +30,8 @@ type deckHostTestPlugin struct {
 	frame         string
 	width, height int
 	innerActive   bool
+	wheelBoundary bool
+	wheelX        int
 }
 
 type queuedAppDeckTestMsg struct{}
@@ -58,8 +63,40 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 	return []contentlink.Surface{{
 		ID: "preview", Rect: mouse.Rect{W: len(p.frame), H: 1},
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
-		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff),
+		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal),
 	}}
+}
+
+func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
+	root := t.TempDir()
+	open := "\x1b]8;;sidecar://note/nt-4jdj4e\x1b\\"
+	close := "\x1b]8;;\x1b\\"
+	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: open + "Renamed title" + close}
+	m := appDeckTestModel(t, root, p)
+	frame := m.renderContent(120, 30)
+	if strings.Contains(frame, "sidecar://") || strings.Contains(frame, "\x1b]8;") {
+		t.Fatalf("rendered app frame leaked internal OSC: %q", frame)
+	}
+	h := m.currentContentDeck()
+	if h == nil || len(h.links) != 1 || h.links[0].Ref != (contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: "nt-4jdj4e"}) {
+		t.Fatalf("internal hits = %+v", h)
+	}
+	before := h.deck.Encode()
+	cmd := m.openAppContent(root, p.id, h.links[0].Ref)
+	if cmd == nil {
+		t.Fatal("note intent returned no navigation command")
+	}
+	got, ok := cmd().(NavigateToNoteMsg)
+	if !ok || got.ID != "nt-4jdj4e" || got.ProjectRoot != root {
+		t.Fatalf("navigation message = %#v", cmd())
+	}
+	if after := h.deck.Encode(); !reflect.DeepEqual(after, before) {
+		t.Fatalf("note intent mutated passive pane deck: before=%+v after=%+v", before, after)
+	}
+}
+func (p *deckHostTestPlugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	p.wheelX = msg.X
+	return p.wheelBoundary
 }
 
 func appDeckTestModel(t *testing.T, root string, plugins ...*deckHostTestPlugin) *Model {
@@ -305,4 +342,145 @@ func TestAppContentDeckQueuedRenderCommandSurvivesEarlyUpdateReturn(t *testing.T
 	if !found {
 		t.Fatal("render-queued command was dropped by content result early return")
 	}
+}
+
+func TestAppContentDeckDiffWheelAndPointerBoundaryOwnership(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "long.txt")
+	if err := os.WriteFile(path, []byte(strings.Repeat("line\n", 100)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain", wheelBoundary: true}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "long.txt"})
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	docLeaf := h.deck.Leaf(panelayout.Document)
+	doc, ok := h.deck.Viewer(docLeaf).(*docview.Model)
+	if !ok {
+		t.Fatalf("document viewer = %T", h.deck.Viewer(docLeaf))
+	}
+	loaded, ok := doc.Load(9, root, "long.txt", 0, 77)().(docview.LoadedMsg)
+	if !ok || !doc.SetResult(loaded) {
+		t.Fatal("could not load long document fixture")
+	}
+	if doc.Rendered() {
+		doc.ToggleRenderMode()
+	}
+	m.renderContent(200, 40)
+	doc.Scroll(5)
+	if doc.ScrollOffset() == 0 {
+		t.Fatal("document fixture did not scroll")
+	}
+	m.renderContent(200, 40)
+	docBox := appDeckLeafBox(t, h, docLeaf)
+	wheelUp := tea.MouseWheelMsg{X: docBox.X + 2, Y: headerHeight + docBox.Y + 2, Button: tea.MouseWheelUp}
+	if got := FilterInput(*m, wheelUp); got == nil {
+		t.Fatal("Files' primary boundary swallowed movable Document wheel")
+	}
+	if p.wheelX != 0 {
+		t.Fatalf("hidden Files boundary was consulted, x=%d", p.wheelX)
+	}
+
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindDiff, Value: "wt"})
+	m.renderContent(200, 40)
+	diffLeaf := h.deck.Leaf(panelayout.Diff)
+	diff, ok := h.deck.Viewer(diffLeaf).(*workspacediff.View)
+	if !ok {
+		t.Fatalf("diff viewer = %T", h.deck.Viewer(diffLeaf))
+	}
+	diff.Content = strings.Repeat("changed line\n", 100)
+	m.renderContent(200, 40)
+	diffBox := appDeckLeafBox(t, h, diffLeaf)
+	wheelDown := tea.MouseWheelMsg{X: diffBox.X + 2, Y: diffBox.Y + 2, Button: tea.MouseWheelDown}
+	m.appContentMouse(wheelDown)
+	if diff.DiffScroll == 0 {
+		t.Fatal("passive Diff wheel did not move content")
+	}
+}
+
+func TestAppContentDeckPersistsKeyboardAndPaletteNavigation(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one.md", "two.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "one.md"})
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "two.md"})
+	m.renderContent(200, 40)
+	m.handleAppContentKey(tea.KeyPressMsg{Code: '{', Text: "{"})
+	if got := persistedAppDeckState(t, root, p.id); paneActive(got.Root, "document") != 0 {
+		t.Fatalf("keyboard previous tab persisted active=%d", paneActive(got.Root, "document"))
+	}
+	m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab})
+	if got := persistedAppDeckState(t, root, p.id); got.FocusKind != "primary" {
+		t.Fatalf("Tab persisted focus kind %q, want primary", got.FocusKind)
+	}
+	m.runAppContentCommand("prev-pane")
+	if got := persistedAppDeckState(t, root, p.id); got.FocusKind != "document" {
+		t.Fatalf("palette previous pane persisted focus kind %q, want document", got.FocusKind)
+	}
+	m.runAppContentCommand("prev-tab")
+	if got := persistedAppDeckState(t, root, p.id); paneActive(got.Root, "document") != 1 {
+		t.Fatalf("palette previous tab persisted active=%d, want 1", paneActive(got.Root, "document"))
+	}
+}
+
+func TestEnteringGlobalScopeDeactivatesAppDeckLiveSurface(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "live.md"), []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.globalTasks = &globalTasksHost{plugin: &deckHostTestPlugin{id: "tasks", focus: "tree"}}
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "live.md"})
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	if !h.laidOut || h.visibleDocument() == nil {
+		t.Fatal("document was not a visible live target before global entry")
+	}
+	m.enterOverview()
+	if h.laidOut || h.visibleDocument() != nil {
+		t.Fatalf("global entry retained hidden deck visibility: laidOut=%v doc=%p", h.laidOut, h.visibleDocument())
+	}
+}
+
+func appDeckLeafBox(t *testing.T, h *appContentDeck, leafID int) panelayout.Box {
+	t.Helper()
+	for _, placement := range h.layout.Leaves {
+		if placement.Node != nil && placement.Node.ID == leafID {
+			return placement.Box
+		}
+	}
+	t.Fatalf("leaf %d has no placement", leafID)
+	return panelayout.Box{}
+}
+
+func persistedAppDeckState(t *testing.T, root, pluginID string) contentpanes.State {
+	t.Helper()
+	var saved contentpanes.State
+	if err := json.Unmarshal(state.GetContentDeck(root, pluginID), &saved); err != nil {
+		t.Fatal(err)
+	}
+	return saved
+}
+
+func paneActive(node *contentpanes.NodeState, kind string) int {
+	if node == nil {
+		return -1
+	}
+	if node.Kind == kind && node.Pane != nil {
+		return node.Pane.Active
+	}
+	if active := paneActive(node.A, kind); active >= 0 {
+		return active
+	}
+	return paneActive(node.B, kind)
 }

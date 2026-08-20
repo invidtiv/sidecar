@@ -66,6 +66,9 @@ func (m Model) wheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		}
 		return false
 	}
+	if boundary, owned := m.appContentWheelAtBoundary(wheel); owned {
+		return boundary
+	}
 	consumer, ok := m.ActivePlugin().(plugin.WheelBoundaryConsumer)
 	return ok && consumer.WheelAtBoundary(wheel)
 }

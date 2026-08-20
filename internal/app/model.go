@@ -919,10 +919,19 @@ func (m *Model) enterOverview() tea.Cmd {
 	if current := m.ActivePlugin(); current != nil {
 		current.SetFocused(false)
 	}
+	var deckCmd tea.Cmd
+	if h := m.currentContentDeck(); h != nil {
+		h.laidOut = false
+		h.links = nil
+		h.press = nil
+		if h.live != nil {
+			deckCmd = h.live.Reconcile()
+		}
+	}
 	m.scope = ScopeGlobal
 	m.ensureVisibleGlobalTab()
 	m.updateContext()
-	return m.startVisibleGlobalTab()
+	return tea.Batch(deckCmd, m.startVisibleGlobalTab())
 }
 
 // exitOverview leaves the global space and hands keyboard focus back to the

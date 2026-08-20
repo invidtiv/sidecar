@@ -716,11 +716,60 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 			v.Scroll(delta)
 		case *issueview.Model:
 			v.Scroll(delta)
+		case *workspacediff.View:
+			v.ScrollContent(delta, v.Height())
 		case *resourceview.Model:
 			v.ScrollBy(delta)
 		}
 	}
 	return nil
+}
+
+// appContentWheelAtBoundary mirrors appContentMouse's pointer ownership before
+// Update runs. The pre-update filter must ask the leaf under the pointer, not
+// the primary plugin hidden beside it, or a short Files preview can swallow a
+// valid wheel intended for a long passive document.
+func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, owned bool) {
+	h := m.currentContentDeck()
+	if h == nil || !h.laidOut {
+		return false, false
+	}
+	delta := 0
+	switch wheel.Button {
+	case tea.MouseWheelUp:
+		delta = -1
+	case tea.MouseWheelDown:
+		delta = 1
+	default:
+		return false, false
+	}
+	leaf := paneframe.LeafAt(h.layout, wheel.X, wheel.Y)
+	if leaf == nil {
+		return false, false
+	}
+	if leaf.Kind == panelayout.Primary {
+		consumer, ok := h.plugin.(plugin.WheelBoundaryConsumer)
+		if !ok {
+			return false, true
+		}
+		adjusted, ok := offsetMouse(wheel, -h.primaryInner.X, -h.primaryInner.Y).(tea.MouseWheelMsg)
+		if !ok {
+			return false, true
+		}
+		return consumer.WheelAtBoundary(adjusted), true
+	}
+	switch v := h.deck.Viewer(leaf.ID).(type) {
+	case *docview.Model:
+		return v.ScrollAtBoundary(delta), true
+	case *issueview.Model:
+		return v.ScrollAtBoundary(delta), true
+	case *workspacediff.View:
+		return v.ScrollAtBoundary(delta, v.Height()), true
+	case *resourceview.Model:
+		return v.ScrollAtBoundary(delta), true
+	default:
+		return false, true
+	}
 }
 
 func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -733,7 +782,9 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	if key.Code == tea.KeyTab {
-		return h.cycleCombinedFocus(key.Mod.Contains(tea.ModShift)), true
+		cmd := h.cycleCombinedFocus(key.Mod.Contains(tea.ModShift))
+		m.persistAppContentDeck(h)
+		return cmd, true
 	}
 	if leaf.Kind == panelayout.Primary {
 		return nil, false
@@ -750,9 +801,13 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.persistAppContentDeck(h)
 		return nil, true
 	case "{":
-		return h.deck.CycleTab(-1), true
+		cmd := h.deck.CycleTab(-1)
+		m.persistAppContentDeck(h)
+		return cmd, true
 	case "}":
-		return h.deck.CycleTab(1), true
+		cmd := h.deck.CycleTab(1)
+		m.persistAppContentDeck(h)
+		return cmd, true
 	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:

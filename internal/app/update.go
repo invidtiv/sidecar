@@ -164,7 +164,7 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, h := range m.contentDecks {
-		if h.live != nil {
+		if h.laidOut && h.live != nil {
 			if cmd, handled := h.live.Handle(msg); handled && cmd != nil {
 				cmds = append(cmds, cmd)
 			}
