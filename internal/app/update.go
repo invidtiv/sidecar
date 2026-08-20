@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
@@ -164,10 +165,17 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	for _, h := range m.contentDecks {
-		if h.laidOut && h.live != nil {
-			if cmd, handled := h.live.Handle(msg); handled && cmd != nil {
-				cmds = append(cmds, cmd)
-			}
+		if h.live == nil {
+			continue
+		}
+		// A watcher start must always be adopted, even after its deck left the
+		// screen. Handle stops the now-unwanted watcher and clears the in-flight
+		// flag; dropping it here leaks the watcher and wedges future starts.
+		if _, started := msg.(livepanes.WatchStartedMsg); !h.laidOut && !started {
+			continue
+		}
+		if cmd, handled := h.live.Handle(msg); handled && cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 	updated, cmd := m.update(msg)

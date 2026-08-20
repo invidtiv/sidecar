@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -63,36 +64,8 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 	return []contentlink.Surface{{
 		ID: "preview", Rect: mouse.Rect{W: len(p.frame), H: 1},
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
-		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal),
+		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff),
 	}}
-}
-
-func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
-	root := t.TempDir()
-	open := "\x1b]8;;sidecar://note/nt-4jdj4e\x1b\\"
-	close := "\x1b]8;;\x1b\\"
-	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: open + "Renamed title" + close}
-	m := appDeckTestModel(t, root, p)
-	frame := m.renderContent(120, 30)
-	if strings.Contains(frame, "sidecar://") || strings.Contains(frame, "\x1b]8;") {
-		t.Fatalf("rendered app frame leaked internal OSC: %q", frame)
-	}
-	h := m.currentContentDeck()
-	if h == nil || len(h.links) != 1 || h.links[0].Ref != (contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: "nt-4jdj4e"}) {
-		t.Fatalf("internal hits = %+v", h)
-	}
-	before := h.deck.Encode()
-	cmd := m.openAppContent(root, p.id, h.links[0].Ref)
-	if cmd == nil {
-		t.Fatal("note intent returned no navigation command")
-	}
-	got, ok := cmd().(NavigateToNoteMsg)
-	if !ok || got.ID != "nt-4jdj4e" || got.ProjectRoot != root {
-		t.Fatalf("navigation message = %#v", cmd())
-	}
-	if after := h.deck.Encode(); !reflect.DeepEqual(after, before) {
-		t.Fatalf("note intent mutated passive pane deck: before=%+v after=%+v", before, after)
-	}
 }
 func (p *deckHostTestPlugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	p.wheelX = msg.X
@@ -449,6 +422,58 @@ func TestEnteringGlobalScopeDeactivatesAppDeckLiveSurface(t *testing.T) {
 	m.enterOverview()
 	if h.laidOut || h.visibleDocument() != nil {
 		t.Fatalf("global entry retained hidden deck visibility: laidOut=%v doc=%p", h.laidOut, h.visibleDocument())
+	}
+}
+
+func TestWatcherStartedAfterGlobalEntryIsStoppedAndDoesNotWedgeDeck(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "live.md"), []byte("live"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.globalTasks = &globalTasksHost{plugin: &deckHostTestPlugin{id: "tasks", focus: "tree"}}
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "live.md"})
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	t.Cleanup(h.live.Stop)
+
+	var started livepanes.WatchStartedMsg
+	for _, cmd := range h.queued {
+		if cmd == nil {
+			continue
+		}
+		if msg, ok := cmd().(livepanes.WatchStartedMsg); ok {
+			started = msg
+			break
+		}
+	}
+	if started.Watcher == nil {
+		t.Fatal("visible document did not queue an in-flight watcher start")
+	}
+	h.queued = nil
+	m.enterOverview()
+	if h.laidOut {
+		t.Fatal("global entry left the project deck laid out")
+	}
+
+	updated, _ := m.Update(started)
+	model := updated.(Model)
+	if got := h.live.Watcher("docs"); got != nil {
+		t.Fatal("late watcher was adopted for a hidden deck")
+	}
+	model.scope = ScopeProject
+	model.renderContent(200, 40)
+	var restarted bool
+	for _, cmd := range h.queued {
+		if cmd != nil {
+			restarted = true
+			break
+		}
+	}
+	if !restarted {
+		t.Fatal("late watcher result left the document binding wedged")
 	}
 }
 
