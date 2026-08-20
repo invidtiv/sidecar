@@ -80,6 +80,10 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 		// Only reset scroll and clear full-file diff when switching to a different file
 		p.diffPaneScroll = 0
 		p.diffPaneFullFileDiff = nil
+		// A full-file load for the previous path/staging side may still be in
+		// flight. It must not remain valid when the same path selects the other
+		// side of an MM entry.
+		p.inlineFullFileRequestID = 0
 	}
 	// Note: for force-reloads of the same file (stage/unstage/discard),
 	// we don't clear diffPaneFullFileDiff here to avoid flicker.

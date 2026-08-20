@@ -635,7 +635,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		ffd := BuildFullFileDiff(msg.OldContent, msg.NewContent, msg.Parsed)
 		if msg.ForInline {
-			if msg.File == p.selectedDiffFile {
+			if msg.File == p.selectedDiffFile && msg.Staged == p.selectedDiffStaged {
 				p.diffPaneFullFileDiff = ffd
 				// Clamp scroll if new content is shorter
 				p.clampDiffPaneScroll()
@@ -1526,6 +1526,7 @@ type FullFileDiffLoadedMsg struct {
 	Epoch      uint64
 	RequestID  uint64
 	File       string
+	Staged     bool
 	OldContent string
 	NewContent string
 	Parsed     *ParsedDiff

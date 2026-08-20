@@ -194,6 +194,30 @@ func TestDuplicatePathPreviewSwitchesBetweenStagedAndUnstagedIdentity(t *testing
 	}
 }
 
+func TestHeldFullFileResultCannotCrossDuplicatePathStagingSide(t *testing.T) {
+	p, _, _ := safeDiffCapabilityPlugin(t)
+	p.diffPaneViewMode = DiffViewFullFile
+	p.selectedDiffStaged = true
+	p.inlineFullFileRequestID = 7
+	p.diffPaneFullFileDiff = &FullFileDiff{Lines: []FullFileLine{{NewText: "staged"}}}
+	p.cursor = 1 // same.go on the unstaged side
+	if cmd := p.autoLoadDiff(); cmd == nil {
+		t.Fatal("switching staging side did not start a new inline preview")
+	}
+	if p.inlineFullFileRequestID != 0 || p.diffPaneFullFileDiff != nil {
+		t.Fatalf("side switch retained full-file request/content: request=%d content=%+v", p.inlineFullFileRequestID, p.diffPaneFullFileDiff)
+	}
+
+	updated, _ := p.Update(FullFileDiffLoadedMsg{
+		Epoch: 0, RequestID: 7, File: "same.go", Staged: true, ForInline: true,
+		OldContent: "old", NewContent: "staged",
+	})
+	p = updated.(*Plugin)
+	if p.diffPaneFullFileDiff != nil {
+		t.Fatalf("held staged full-file result applied under unstaged selection: %+v", p.diffPaneFullFileDiff)
+	}
+}
+
 func cutGitSurface(frame string, rect mouse.Rect) string {
 	lines := strings.Split(frame, "\n")
 	cut := make([]string, 0, rect.H)

@@ -243,6 +243,7 @@ func (p *Plugin) loadFullFileDiff(path string, staged bool, status FileStatus, c
 			Epoch:      epoch,
 			RequestID:  requestID,
 			File:       path,
+			Staged:     staged,
 			OldContent: oldContent,
 			NewContent: newContent,
 			Parsed:     parsed,
