@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -352,14 +353,14 @@ func TestGlobalBrowserListOffersSharedCreationMutations(t *testing.T) {
 			t.Fatalf("%q was answered by the global browser (cmd=%v)", k, cmd != nil)
 		}
 	}
-	if handled, _ := m.WorkspacesKey(key("n")); !handled || !m.CreateOpen() || m.createKindIndex != globalCreateWorktree {
+	if handled, _ := m.WorkspacesKey(key("n")); !handled || !m.CreateOpen() || m.createForm == nil || m.createForm.Kind() != workspacecreate.KindWorktree {
 		t.Fatal("n did not open shared global worktree creation")
 	}
 	m.closeCreateShell()
 	if m.workspaces.SelectedID() != before {
 		t.Fatalf("a refused key moved the selection to %q", m.workspaces.SelectedID())
 	}
-	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}); !handled || !m.CreateOpen() {
+	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'n', Mod: tea.ModCtrl}); !handled || !m.CreateOpen() || m.createForm == nil || m.createForm.Kind() != workspacecreate.KindShell {
 		t.Fatal("ctrl+n did not open shared global shell creation")
 	}
 	if len(recorder.panes()) != captures {

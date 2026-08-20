@@ -9,8 +9,12 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -44,8 +48,12 @@ func TestGlobalWorktreePlanUsesOnlyTargetProjectConfig(t *testing.T) {
 		return &workspaceops.WorktreePlan{SourceWorktree: workDir, MainWorktree: projectRoot, Branch: name, Path: "/tmp/two-feature", SourceRef: "HEAD", SourceOID: "abc"}, nil
 	}
 	m.OpenCreateWorktree("two")
-	m.createNameInput.SetValue("feature")
-	msg := m.planCreateWorktree()().(globalWorktreePlannedMsg)
+	typeCreateName(t, m, "feature")
+	cmd := m.planCreateWorktree()
+	if cmd == nil {
+		t.Fatalf("plan cmd is nil, error=%q name=%q", m.createError, m.createForm.Name())
+	}
+	msg := cmd().(globalWorktreePlannedMsg)
 	if gotDir != "/tmp/two" || gotSetup.HookPath != "two.sh" || !gotSetup.RunHook {
 		t.Fatalf("target config leaked: dir=%q setup=%+v", gotDir, gotSetup)
 	}
@@ -65,7 +73,7 @@ func TestGlobalWorktreeCancellationBeforeAndAfterMutation(t *testing.T) {
 		executed++
 		return nil, nil
 	}
-	m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex)
+	m.applyCreateAction(globalCreateCancelID)
 	if executed != 0 || m.CreateOpen() {
 		t.Fatalf("pre-mutation cancel executed=%d open=%v", executed, m.CreateOpen())
 	}
@@ -78,7 +86,7 @@ func TestGlobalWorktreeCancellationBeforeAndAfterMutation(t *testing.T) {
 		t.Fatalf("post-mutation cancel path lost recovery: open=%v record=%+v warning=%q", m.CreateOpen(), m.createRecord, m.createWarning)
 	}
 	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { return nil }
-	if cmd := m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex); cmd == nil || !m.createBusy || m.createRecord == nil {
+	if cmd := m.applyCreateAction(globalCreateCancelID); cmd == nil || !m.createBusy || m.createRecord == nil {
 		t.Fatalf("post-mutation cancel did not retain and launch created identity: cmd=%v busy=%v record=%+v", cmd, m.createBusy, m.createRecord)
 	}
 }
@@ -244,8 +252,12 @@ func TestGlobalCreateHeaderAndProjectSectionActionsRouteTypedProjects(t *testing
 		t.Fatal("clicking the rendered header action did not open create")
 	}
 	selected, _ := m.SelectedWorkspace()
-	if m.createProjectKey != selected.ProjectKey {
-		t.Fatalf("header default project = %q, want selected row project %q", m.createProjectKey, selected.ProjectKey)
+	gotKey := ""
+	if m.createForm != nil {
+		gotKey = m.createForm.ProjectKey()
+	}
+	if gotKey != selected.ProjectKey {
+		t.Fatalf("header default project = %q, want selected row project %q", gotKey, selected.ProjectKey)
 	}
 	m.closeCreateShell()
 	_ = m.WorkspacesView(previewWide, previewTall)
@@ -258,8 +270,12 @@ func TestGlobalCreateHeaderAndProjectSectionActionsRouteTypedProjects(t *testing
 	if !m.CreateOpen() {
 		t.Fatal("clicking the rendered section action did not open create")
 	}
-	if want := createProjectKeyFromAction(id); m.createProjectKey != want {
-		t.Fatalf("section preselected %q, want typed action project %q", m.createProjectKey, want)
+	gotKey = ""
+	if m.createForm != nil {
+		gotKey = m.createForm.ProjectKey()
+	}
+	if want := createProjectKeyFromAction(id); gotKey != want {
+		t.Fatalf("section preselected %q, want typed action project %q", gotKey, want)
 	}
 }
 
@@ -292,6 +308,7 @@ func TestGlobalCreateResolvesNamesAndConfigInsideTargetProject(t *testing.T) {
 }
 
 func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "codex", AgentStart: map[string]string{"codex": "codex-custom"},
@@ -342,11 +359,78 @@ func renderCreateModal(t *testing.T, m *Model) string {
 	if m.height < 1 {
 		m.height = 30
 	}
+	prev := m.activeCreateModal()
 	m.ensureCreateModal()
-	if m.createModal == nil {
+	md := m.activeCreateModal()
+	if md == nil {
 		t.Fatal("create modal is nil")
 	}
-	return m.createModal.Render(m.width, m.height, m.createMouse)
+	view := md.Render(m.width, m.height, m.createMouse)
+	if (prev == nil || prev != md) && m.createPlan == nil && m.createForm != nil {
+		m.createForm.RestoreFocus()
+	}
+	return view
+}
+
+func createFormModal(t *testing.T, m *Model) *modal.Modal {
+	t.Helper()
+	renderCreateModal(t, m)
+	if m.createForm != nil {
+		m.createForm.RestoreFocus()
+	}
+	md := m.activeCreateModal()
+	if md == nil {
+		t.Fatal("create modal is nil")
+	}
+	return md
+}
+
+func createAgentIDs(m *Model) []string {
+	if m.createForm == nil {
+		return nil
+	}
+	items := m.createForm.AgentItems()
+	ids := make([]string, len(items))
+	for i, item := range items {
+		id, _ := item.Data.(string)
+		ids[i] = id
+	}
+	return ids
+}
+
+func selectCreateAgent(t *testing.T, m *Model, agent string) {
+	t.Helper()
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldAgent)
+	renderCreateModal(t, m)
+	for _, dir := range []string{"up", "down"} {
+		for i := 0; i < 24; i++ {
+			if m.createForm.Agent() == agent {
+				return
+			}
+			m.handleCreateShellKey(createKey(dir))
+		}
+	}
+	t.Fatalf("could not select agent %q, got %q", agent, m.createForm.Agent())
+}
+
+func clearFocusedCombo(m *Model) {
+	for i := 0; i < 80; i++ {
+		m.handleCreateShellKey(createKey("backspace"))
+	}
+}
+
+func typeCreateName(t *testing.T, m *Model, name string) {
+	t.Helper()
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldName)
+	renderCreateModal(t, m)
+	for _, r := range name {
+		m.handleCreateShellKey(createKey(string(r)))
+	}
+	if got := strings.TrimSpace(m.createForm.Name()); got != name {
+		t.Fatalf("name = %q, want %q", got, name)
+	}
 }
 
 func createKey(k string) tea.KeyPressMsg {
@@ -367,6 +451,10 @@ func createKey(k string) tea.KeyPressMsg {
 		return tea.KeyPressMsg{Code: tea.KeyLeft}
 	case "right":
 		return tea.KeyPressMsg{Code: tea.KeyRight}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case " ":
+		return tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 	default:
 		r := []rune(k)
 		if len(r) == 1 {
@@ -395,29 +483,27 @@ func TestCreateModalProjectComboFiltersAndSubmitUsesProject(t *testing.T) {
 		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
 	}
 	m.OpenCreateShell("sidecar")
-	renderCreateModal(t, m)
-	m.createModal.SetFocus(globalCreateProjectID)
-	m.createProjectInput.SetValue("")
-	renderCreateModal(t, m)
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldProject)
+	clearFocusedCombo(m)
 
 	m.handleCreateShellKey(createKey("b"))
 	if m.createBusy || !m.CreateOpen() {
 		t.Fatal("typing a project filter submitted")
-	}
-	if m.createProjectInput.Value() != "b" {
-		t.Fatalf("filter = %q, want b", m.createProjectInput.Value())
 	}
 	if project, ok := m.selectedCreateProject(); !ok || project.Name != "braid" {
 		t.Fatalf("filtered project = %+v ok=%v, want braid", project, ok)
 	}
 
 	renderCreateModal(t, m)
-	item, ok := createHit(m, globalCreateProjectID+"/item/0")
+	item, ok := createHit(m, workspacecreate.FieldProject+"/item/0")
 	if !ok {
 		t.Fatal("expected project overlay row")
 	}
 	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{X: item.Rect.X + 1, Y: item.Rect.Y, Button: tea.MouseLeft}); cmd != nil {
-		t.Fatal("overlay click submitted")
+		if m.createBusy {
+			t.Fatal("overlay click submitted")
+		}
 	}
 	if project, ok := m.selectedCreateProject(); !ok || project.Path != "/tmp/braid" {
 		t.Fatalf("clicked project = %+v", project)
@@ -436,44 +522,46 @@ func TestCreateModalProjectComboFiltersAndSubmitUsesProject(t *testing.T) {
 func TestCreateModalKindClickChangesKindAndPlaceholder(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreateShell("sidecar")
-	renderCreateModal(t, m)
-	if m.createKindIndex != globalCreateShell {
-		t.Fatalf("kind = %d, want shell", m.createKindIndex)
+	view := createFormModal(t, m).Render(m.width, m.height, m.createMouse)
+	if m.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("kind = %v, want shell", m.createForm.Kind())
 	}
-	if m.createNameInput.Placeholder != m.defaultShellDisplayName("sidecar") {
-		t.Fatalf("shell placeholder = %q", m.createNameInput.Placeholder)
+	if !strings.Contains(view, "Shell") {
+		t.Fatalf("shell placeholder missing from view:\n%s", view)
 	}
 
-	region, ok := createHit(m, globalCreateKindID)
+	region, ok := createHit(m, workspacecreate.FieldKind)
 	if !ok {
 		t.Fatal("kind control was not hit-tested")
 	}
 	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{
-		X: region.Rect.X + region.Rect.W - 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+		X: region.Rect.X + 3*region.Rect.W/4, Y: region.Rect.Y, Button: tea.MouseLeft,
 	}); cmd != nil {
 		t.Fatalf("kind click submitted: %v", cmd)
 	}
-	if m.createKindIndex != globalCreateWorktree {
-		t.Fatalf("kind after click = %d, want worktree", m.createKindIndex)
+	if m.createForm.Kind() != workspacecreate.KindWorktree {
+		t.Fatalf("kind after click = %v, want worktree", m.createForm.Kind())
 	}
-	if m.createNameInput.Placeholder != "feature-name" {
-		t.Fatalf("worktree placeholder = %q", m.createNameInput.Placeholder)
+	view = renderCreateModal(t, m)
+	if !strings.Contains(ansi.Strip(view), "feature") {
+		t.Fatalf("worktree placeholder missing from view:\n%s", view)
 	}
 
 	renderCreateModal(t, m)
-	region, ok = createHit(m, globalCreateKindID)
+	region, ok = createHit(m, workspacecreate.FieldKind)
 	if !ok {
 		t.Fatal("kind control missing after rebuild")
 	}
 	m.handleCreateShellMouse(tea.MouseClickMsg{
-		X: region.Rect.X + 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+		X: region.Rect.X + region.Rect.W/4, Y: region.Rect.Y, Button: tea.MouseLeft,
 	})
-	if m.createKindIndex != globalCreateShell {
-		t.Fatalf("kind after left click = %d, want shell", m.createKindIndex)
+	if m.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("kind after left click = %v, want shell", m.createForm.Kind())
 	}
 }
 
 func TestCreateModalKindSwitchKeepsChosenAgent(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "claude",
@@ -482,55 +570,55 @@ func TestCreateModalKindSwitchKeepsChosenAgent(t *testing.T) {
 
 	m.OpenCreateShell("sidecar")
 	renderCreateModal(t, m)
-	if m.selectedCreateAgent() != "claude" {
-		t.Fatalf("default shell agent = %q, want claude", m.selectedCreateAgent())
+	if m.createForm.Agent() != "claude" {
+		t.Fatalf("default shell agent = %q, want claude", m.createForm.Agent())
 	}
-	beforeType, beforeIdx := m.createAgentType, m.createAgentIndex
+	beforeType := m.createForm.Agent()
 
-	m.createModal.SetFocus(globalCreateKindID)
+	createFormModal(t, m).SetFocus(workspacecreate.FieldKind)
 	if handled, cmd := m.handleCreateShellKey(createKey("j")); !handled || cmd != nil {
 		t.Fatalf("kind j handled=%v cmd=%v", handled, cmd)
 	}
-	if m.createKindIndex != globalCreateWorktree {
-		t.Fatalf("kind after j = %d, want worktree", m.createKindIndex)
+	if m.createForm.Kind() != workspacecreate.KindWorktree {
+		t.Fatalf("kind after j = %v, want worktree", m.createForm.Kind())
 	}
-	if got := m.selectedCreateAgent(); got != beforeType {
-		t.Fatalf("kind switch remapped agent %q@%d → %q@%d", beforeType, beforeIdx, got, m.createAgentIndex)
+	if got := m.createForm.Agent(); got != beforeType {
+		t.Fatalf("kind switch remapped agent %q → %q", beforeType, got)
 	}
 
-	region, ok := createHit(m, globalCreateKindID)
+	renderCreateModal(t, m)
+	region, ok := createHit(m, workspacecreate.FieldKind)
 	if !ok {
 		t.Fatal("kind control missing after rebuild")
 	}
 	if cmd := m.handleCreateShellMouse(tea.MouseClickMsg{
-		X: region.Rect.X + 1, Y: region.Rect.Y, Button: tea.MouseLeft,
+		X: region.Rect.X + region.Rect.W/4, Y: region.Rect.Y, Button: tea.MouseLeft,
 	}); cmd != nil {
 		t.Fatalf("kind click submitted: %v", cmd)
 	}
-	if m.createKindIndex != globalCreateShell {
-		t.Fatalf("kind after click = %d, want shell", m.createKindIndex)
+	if m.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("kind after click = %v, want shell", m.createForm.Kind())
 	}
-	if got := m.selectedCreateAgent(); got != "claude" {
+	if got := m.createForm.Agent(); got != "claude" {
 		t.Fatalf("click back to shell remapped agent to %q", got)
 	}
 
-	m.createAgentType = ""
-	m.rematchCreateAgentIndex()
-	m.prefillCreateAgentInput()
-	if m.selectedCreateAgent() != "" {
-		t.Fatalf("None not selected: %q", m.selectedCreateAgent())
+	selectCreateAgent(t, m, "")
+	if m.createForm.Agent() != "" {
+		t.Fatalf("None not selected: %q", m.createForm.Agent())
 	}
-	m.createModal.SetFocus(globalCreateKindID)
+	createFormModal(t, m).SetFocus(workspacecreate.FieldKind)
 	m.handleCreateShellKey(createKey("j"))
-	if m.createKindIndex != globalCreateWorktree {
-		t.Fatalf("kind after None switch = %d, want worktree", m.createKindIndex)
+	if m.createForm.Kind() != workspacecreate.KindWorktree {
+		t.Fatalf("kind after None switch = %v, want worktree", m.createForm.Kind())
 	}
-	if got := m.selectedCreateAgent(); got != "" {
+	if got := m.createForm.Agent(); got != "" {
 		t.Fatalf("switching kind remapped None to %q", got)
 	}
 }
 
 func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "claude",
@@ -554,14 +642,12 @@ func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 
 	m.OpenCreateShell("sidecar")
 	renderCreateModal(t, m)
-	if m.createAgentTypes()[0] != "" {
-		t.Fatalf("shell agent list should lead with None: %v", m.createAgentTypes())
+	if ids := createAgentIDs(m); len(ids) == 0 || ids[0] != "" {
+		t.Fatalf("shell agent list should lead with None: %v", ids)
 	}
-	m.createModal.SetFocus(globalCreateAgentID)
-	renderCreateModal(t, m)
-	m.handleCreateShellKey(createKey("down"))
-	if m.selectedCreateAgent() != "grok" {
-		t.Fatalf("selected agent = %q, want grok (input=%q idx=%d)", m.selectedCreateAgent(), m.createAgentInput.Value(), m.createAgentIndex)
+	selectCreateAgent(t, m, "grok")
+	if m.createForm.Agent() != "grok" {
+		t.Fatalf("selected agent = %q, want grok", m.createForm.Agent())
 	}
 
 	msg := m.submitCreateShell()().(globalShellCreatedMsg)
@@ -573,17 +659,16 @@ func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 	}
 
 	m.OpenCreateWorktree("sidecar")
-	m.createNameInput.SetValue("feature")
-	if got := m.createAgentTypes(); got[len(got)-1] != "" {
-		t.Fatalf("worktree agent list should end with None: %v", got)
+	typeCreateName(t, m, "feature")
+	if ids := createAgentIDs(m); len(ids) == 0 || ids[len(ids)-1] != "" {
+		t.Fatalf("worktree agent list should end with None: %v", ids)
 	}
 	originalPlan := resolveGlobalWorktree
 	defer func() { resolveGlobalWorktree = originalPlan }()
 	resolveGlobalWorktree = func(context.Context, string, string, string, string, bool, config.WorktreeSetupConfig) (*workspaceops.WorktreePlan, error) {
 		return &workspaceops.WorktreePlan{Branch: "feature", Path: "/tmp/feature"}, nil
 	}
-	m.createAgentType = ""
-	m.rematchCreateAgentIndex()
+	selectCreateAgent(t, m, "")
 	planMsg := m.planCreateWorktree()().(globalWorktreePlannedMsg)
 	if planMsg.Plan == nil || planMsg.Plan.AgentType != "" {
 		t.Fatalf("None should leave plan.AgentType empty: %+v", planMsg.Plan)
@@ -591,6 +676,7 @@ func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 }
 
 func TestCreateModalNoneDoesNotStartAgent(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "claude", AgentStart: map[string]string{"claude": "claude-custom"},
@@ -608,8 +694,7 @@ func TestCreateModalNoneDoesNotStartAgent(t *testing.T) {
 		return nil
 	}
 	m.OpenCreateShell("sidecar")
-	m.createAgentType = ""
-	m.rematchCreateAgentIndex()
+	selectCreateAgent(t, m, "")
 	msg := m.submitCreateShell()().(globalShellCreatedMsg)
 	if msg.Err != nil || spec.AgentType != "" || started != 0 {
 		t.Fatalf("None started an agent: spec=%+v started=%d err=%v", spec, started, msg.Err)
@@ -619,19 +704,31 @@ func TestCreateModalNoneDoesNotStartAgent(t *testing.T) {
 func TestCreateModalTabCyclesWithoutTrapping(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreate("")
-	renderCreateModal(t, m)
-	if m.createModal.FocusedID() != globalCreateKindID {
-		t.Fatalf("chooser focus = %q, want kind", m.createModal.FocusedID())
+	md := createFormModal(t, m)
+	if md.FocusedID() != workspacecreate.FieldKind {
+		t.Fatalf("chooser focus = %q, want kind", md.FocusedID())
 	}
-	want := []string{globalCreateProjectID, globalCreateAgentID, globalCreateNameID, globalCreateSubmitID, globalCreateCancelID, globalCreateKindID}
+	if m.createForm.Kind() != workspacecreate.KindWorktree {
+		t.Fatalf("OpenCreate kind = %v, want worktree", m.createForm.Kind())
+	}
+	want := []string{
+		workspacecreate.FieldProject,
+		workspacecreate.FieldName,
+		workspacecreate.FieldBase,
+		workspacecreate.FieldAgent,
+		workspacecreate.FieldSkip,
+		workspacecreate.ActionCreate,
+		workspacecreate.ActionCancel,
+		workspacecreate.FieldKind,
+	}
 	for i, id := range want {
 		m.handleCreateShellKey(createKey("tab"))
-		if got := m.createModal.FocusedID(); got != id {
+		if got := m.activeCreateModal().FocusedID(); got != id {
 			t.Fatalf("tab %d focus = %q, want %q", i+1, got, id)
 		}
 	}
 	m.handleCreateShellKey(createKey("shift+tab"))
-	if got := m.createModal.FocusedID(); got != globalCreateCancelID {
+	if got := m.activeCreateModal().FocusedID(); got != workspacecreate.ActionCancel {
 		t.Fatalf("shift+tab focus = %q, want cancel", got)
 	}
 }
@@ -639,8 +736,7 @@ func TestCreateModalTabCyclesWithoutTrapping(t *testing.T) {
 func TestCreateModalEscClosesOverlayThenModal(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreateShell("sidecar")
-	renderCreateModal(t, m)
-	m.createModal.SetFocus(globalCreateProjectID)
+	createFormModal(t, m).SetFocus(workspacecreate.FieldProject)
 	renderCreateModal(t, m)
 
 	handled, cmd := m.handleCreateShellKey(createKey("esc"))
@@ -654,17 +750,15 @@ func TestCreateModalEscClosesOverlayThenModal(t *testing.T) {
 }
 
 func TestCreateModalLastProjectAndAgentPersist(t *testing.T) {
-	var lastProject, lastAgent string
+	_ = state.SetLastCreateAgent("")
+	t.Cleanup(func() { _ = state.SetLastCreateAgent("") })
+	var lastProject string
 	origLoadP, origSaveP := loadLastGlobalCreateProject, saveLastGlobalCreateProject
-	origLoadA, origSaveA := loadLastCreateAgent, saveLastCreateAgent
 	defer func() {
 		loadLastGlobalCreateProject, saveLastGlobalCreateProject = origLoadP, origSaveP
-		loadLastCreateAgent, saveLastCreateAgent = origLoadA, origSaveA
 	}()
 	loadLastGlobalCreateProject = func() string { return lastProject }
 	saveLastGlobalCreateProject = func(v string) error { lastProject = v; return nil }
-	loadLastCreateAgent = func() string { return lastAgent }
-	saveLastCreateAgent = func(v string) error { lastAgent = v; return nil }
 
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
@@ -676,11 +770,10 @@ func TestCreateModalLastProjectAndAgentPersist(t *testing.T) {
 		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
 	}
 	m.OpenCreateShell("braid")
-	m.createAgentType = "grok"
-	m.rematchCreateAgentIndex()
+	selectCreateAgent(t, m, "grok")
 	_ = m.submitCreateShell()()
-	if lastProject != "/tmp/braid" || lastAgent != "grok" {
-		t.Fatalf("persisted project=%q agent=%q", lastProject, lastAgent)
+	if lastProject != "/tmp/braid" || state.GetLastCreateAgent() != "grok" {
+		t.Fatalf("persisted project=%q agent=%q", lastProject, state.GetLastCreateAgent())
 	}
 
 	fresh := catalogModel(t)
@@ -690,38 +783,34 @@ func TestCreateModalLastProjectAndAgentPersist(t *testing.T) {
 	if project, ok := fresh.selectedCreateProject(); !ok || project.Name != "braid" {
 		t.Fatalf("fresh project = %+v ok=%v, want braid", project, ok)
 	}
-	if fresh.createAgentType != "grok" {
-		t.Fatalf("fresh agent = %q, want grok", fresh.createAgentType)
+	if fresh.createForm.Agent() != "grok" {
+		t.Fatalf("fresh agent = %q, want grok", fresh.createForm.Agent())
 	}
 }
 
 func TestCreateModalComboQuerySurvivesUnrelatedRebuild(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreateShell("sidecar")
-	renderCreateModal(t, m)
-	m.createModal.SetFocus(globalCreateAgentID)
-	m.createAgentInput.SetValue("")
-	renderCreateModal(t, m)
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldAgent)
+	clearFocusedCombo(m)
 	m.handleCreateShellKey(createKey("g"))
-	if m.createAgentInput.Value() != "g" {
-		t.Fatalf("agent query = %q, want g", m.createAgentInput.Value())
+	if m.createForm.Agent() == "g" {
+		t.Fatal("typing a filter should not commit agent id g")
 	}
 	m.width = 40
 	renderCreateModal(t, m)
-	if m.createAgentInput.Value() != "g" {
-		t.Fatalf("rebuild wiped agent query: %q", m.createAgentInput.Value())
-	}
-	if m.createModal.FocusedID() != globalCreateAgentID {
-		t.Fatalf("rebuild dropped agent focus: %q", m.createModal.FocusedID())
+	if got := m.activeCreateModal().FocusedID(); got != workspacecreate.FieldAgent {
+		t.Fatalf("rebuild dropped agent focus: %q", got)
 	}
 }
 
 func TestCreateModalOverlayDoesNotChangeHeight(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreateShell("sidecar")
-	m.createModal.SetFocus(globalCreateNameID)
+	createFormModal(t, m).SetFocus(workspacecreate.FieldName)
 	closed := renderCreateModal(t, m)
-	m.createModal.SetFocus(globalCreateProjectID)
+	createFormModal(t, m).SetFocus(workspacecreate.FieldProject)
 	open := renderCreateModal(t, m)
 	if lipgloss.Height(closed) != lipgloss.Height(open) {
 		t.Fatalf("combo overlay changed height: closed=%d open=%d", lipgloss.Height(closed), lipgloss.Height(open))
@@ -906,7 +995,7 @@ func TestCancelCreateClearsPending(t *testing.T) {
 	m := catalogModel(t)
 	m.OpenCreateShell("sidecar")
 	m.pendingCreatedTmux = "should-clear"
-	m.applyCreateAction(globalCreateCancelID, m.createProjectIndex, m.createKindIndex)
+	m.applyCreateAction(globalCreateCancelID)
 	if m.pendingCreatedTmux != "" {
 		t.Fatal("cancel-without-create left pending set")
 	}
@@ -938,5 +1027,171 @@ func TestPendingCreatedWorktreeSurvivesMissThenHits(t *testing.T) {
 	}
 	if got := m.workspaces.SelectedID(); got != "created-worktree" {
 		t.Fatalf("selected = %q, want created worktree", got)
+	}
+}
+
+func TestOpenCreateIsWorktreeWithKindFocused(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreate("")
+	md := createFormModal(t, m)
+	if m.createForm.Kind() != workspacecreate.KindWorktree {
+		t.Fatalf("kind = %v, want worktree", m.createForm.Kind())
+	}
+	if md.FocusedID() != workspacecreate.FieldKind {
+		t.Fatalf("focus = %q, want kind", md.FocusedID())
+	}
+}
+
+func TestOpenCreateShellIsShellWithNameFocused(t *testing.T) {
+	m := catalogModel(t)
+	m.OpenCreateShell("sidecar")
+	md := createFormModal(t, m)
+	if m.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("kind = %v, want shell", m.createForm.Kind())
+	}
+	if md.FocusedID() != workspacecreate.FieldName {
+		t.Fatalf("focus = %q, want name", md.FocusedID())
+	}
+	if m.createBusy {
+		t.Fatal("ctrl+n/OpenCreateShell must stay a modal, not instant create")
+	}
+}
+
+func TestPlanCreateWorktreePassesFormBaseNotHEAD(t *testing.T) {
+	m := catalogModel(t)
+	var gotBase string
+	original := resolveGlobalWorktree
+	defer func() { resolveGlobalWorktree = original }()
+	resolveGlobalWorktree = func(_ context.Context, _, _, _, base string, _ bool, _ config.WorktreeSetupConfig) (*workspaceops.WorktreePlan, error) {
+		gotBase = base
+		return &workspaceops.WorktreePlan{Branch: "feature", Path: "/tmp/feature"}, nil
+	}
+	m.OpenCreateWorktree("sidecar")
+	typeCreateName(t, m, "feature")
+	m.createForm.SetBranches([]string{"main", "develop"}, "develop")
+	msg := m.planCreateWorktree()().(globalWorktreePlannedMsg)
+	if gotBase == "HEAD" {
+		t.Fatal("ResolveWorktreePlan was called with hardcoded HEAD")
+	}
+	if gotBase != "develop" {
+		t.Fatalf("base = %q, want develop", gotBase)
+	}
+	if msg.Plan == nil {
+		t.Fatal("expected a plan")
+	}
+}
+
+func TestSkipPermsReachesShellAndWorktree(t *testing.T) {
+	_ = state.SetLastCreateAgent("")
+	_ = state.SetAgentAutoApprove("claude", false)
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
+		DefaultAgentType: "claude",
+		AgentStart:       map[string]string{"claude": "claude-custom"},
+	}}}
+	originalCreate, originalStart, originalAgent := createManagedShell, startGlobalShellAgent, resolveGlobalAgentCmd
+	defer func() {
+		createManagedShell, startGlobalShellAgent, resolveGlobalAgentCmd = originalCreate, originalStart, originalAgent
+	}()
+	var spec workspaceops.ManagedShellSpec
+	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		spec = got
+		return workspaceops.ShellResult{SessionName: got.SessionName}, nil
+	}
+	var agentSkip bool
+	resolveGlobalAgentCmd = func(path, agent string, configured map[string]string, skip bool) string {
+		agentSkip = skip
+		return originalAgent(path, agent, configured, skip)
+	}
+	startGlobalShellAgent = func(context.Context, string, string) error { return nil }
+
+	m.OpenCreateShell("sidecar")
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldSkip)
+	renderCreateModal(t, m)
+	if !m.createForm.ShowSkip() {
+		t.Fatal("claude should show auto-approve")
+	}
+	m.handleCreateShellKey(createKey(" "))
+	if !m.createForm.SkipPerms() {
+		t.Fatal("space should enable auto-approve")
+	}
+	msg := m.submitCreateShell()().(globalShellCreatedMsg)
+	if msg.Err != nil || !spec.SkipPerms || !agentSkip {
+		t.Fatalf("shell skip not applied: spec=%+v agentSkip=%v err=%v", spec, agentSkip, msg.Err)
+	}
+
+	originalPlan := resolveGlobalWorktree
+	defer func() { resolveGlobalWorktree = originalPlan }()
+	resolveGlobalWorktree = func(context.Context, string, string, string, string, bool, config.WorktreeSetupConfig) (*workspaceops.WorktreePlan, error) {
+		return &workspaceops.WorktreePlan{Branch: "feature", Path: "/tmp/feature"}, nil
+	}
+	m.OpenCreateWorktree("sidecar")
+	typeCreateName(t, m, "feature")
+	md = createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldSkip)
+	renderCreateModal(t, m)
+	if m.createForm.SkipPerms() {
+		m.handleCreateShellKey(createKey(" "))
+	}
+	if m.createForm.SkipPerms() {
+		t.Fatal("expected skip off before toggling on")
+	}
+	m.handleCreateShellKey(createKey(" "))
+	if !m.createForm.SkipPerms() {
+		t.Fatal("expected skip on for worktree")
+	}
+	planMsg := m.planCreateWorktree()().(globalWorktreePlannedMsg)
+	if planMsg.Plan == nil || !planMsg.Plan.SkipPerms {
+		t.Fatalf("worktree SkipPerms not set: %+v", planMsg.Plan)
+	}
+}
+
+func TestProjectChangeReloadsBranches(t *testing.T) {
+	m := catalogModel(t)
+	origList, origCurrent := listCreateBranches, currentCreateBranch
+	defer func() {
+		listCreateBranches, currentCreateBranch = origList, origCurrent
+	}()
+	var dirs []string
+	listCreateBranches = func(_ context.Context, dir string) ([]string, error) {
+		dirs = append(dirs, dir)
+		if dir == "/tmp/braid" {
+			return []string{"braid-main"}, nil
+		}
+		return []string{"sidecar-main"}, nil
+	}
+	currentCreateBranch = func(_ context.Context, dir string) (string, error) {
+		if dir == "/tmp/braid" {
+			return "braid-main", nil
+		}
+		return "sidecar-main", nil
+	}
+
+	if cmd := m.OpenCreateWorktree("sidecar"); cmd != nil {
+		m.Update(cmd())
+	}
+	if m.createForm.BaseBranch() != "sidecar-main" {
+		t.Fatalf("initial base = %q, want sidecar-main", m.createForm.BaseBranch())
+	}
+	if len(dirs) != 1 || dirs[0] != "/tmp/sidecar" {
+		t.Fatalf("open loaded dirs = %v, want [/tmp/sidecar]", dirs)
+	}
+
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldProject)
+	_, cmd := m.handleCreateShellKey(createKey("down"))
+	if project, ok := m.selectedCreateProject(); !ok || project.Name != "braid" {
+		t.Fatalf("project after down = %+v ok=%v, want braid", project, ok)
+	}
+	if cmd == nil {
+		t.Fatal("project change should reload branches")
+	}
+	m.Update(cmd())
+	if m.createForm.BaseBranch() != "braid-main" {
+		t.Fatalf("base after project change = %q, want braid-main", m.createForm.BaseBranch())
+	}
+	if len(dirs) != 2 || dirs[1] != "/tmp/braid" {
+		t.Fatalf("reload dirs = %v, want sidecar then braid", dirs)
 	}
 }

@@ -36,6 +36,7 @@ import (
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -122,7 +123,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
-		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
+		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
 		return true
@@ -294,14 +295,7 @@ type Model struct {
 	renameMouse      *mouse.Handler
 
 	createOpen         bool
-	createProjectIndex int
-	createProjectKey   string
-	createKindIndex    int
-	createNameInput    textinput.Model
-	createProjectInput textinput.Model
-	createAgentInput   textinput.Model
-	createAgentIndex   int
-	createAgentType    string
+	createForm         *workspacecreate.Form
 	createError        string
 	createWarning      string
 	createBusy         bool
@@ -344,8 +338,6 @@ var (
 	saveWorkspaceListSort       = state.SetWorkspaceListSort
 	loadLastGlobalCreateProject = state.GetLastGlobalCreateProject
 	saveLastGlobalCreateProject = state.SetLastGlobalCreateProject
-	loadLastCreateAgent         = state.GetLastCreateAgent
-	saveLastCreateAgent         = state.SetLastCreateAgent
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -716,11 +708,14 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case renameShellDoneMsg:
 		m.applyRenameShell(msg)
 		return nil
+	case globalCreateBranchesMsg:
+		m.applyCreateBranches(msg)
+		return nil
 	case globalShellCreatedMsg:
 		m.createBusy = false
 		if msg.Err != nil {
-			m.createError = msg.Err.Error()
 			m.createModal = nil
+			m.setCreateError(msg.Err.Error())
 			m.clearPendingCreated()
 			return nil
 		}
@@ -729,8 +724,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case globalWorktreePlannedMsg:
 		m.createBusy = false
 		if msg.Err != nil {
-			m.createError = msg.Err.Error()
 			m.createModal = nil
+			m.setCreateError(msg.Err.Error())
 			return nil
 		}
 		m.createPlan = msg.Plan
