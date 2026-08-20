@@ -4,6 +4,16 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.2.2] - 2026-08-20
+
+### Bug Fixes
+
+- **Create Workspace modal retains keyboard focus across fields.** Tabbing or
+  clicking away from the Name field no longer snaps focus back to Name on intermediate
+  view renders. Initial focus resolution now handles declarative modals before and
+  after first paint without overwriting active field selection.
+- **Retain workspace shell focus when switching plugins.**
+
 ## [v1.2.1] - 2026-08-20
 
 ### Bug Fixes
