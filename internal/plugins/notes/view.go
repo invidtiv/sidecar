@@ -517,7 +517,6 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 	var prefix strings.Builder
 
 	// Status icon only for archived/deleted notes (no placeholder for active)
-	hasStatusIcon := note.DeletedAt != nil || note.Archived
 	if note.DeletedAt != nil {
 		prefix.WriteString(styles.StatusDeletedNote.Render(iconDeleted))
 		prefix.WriteString(" ")
@@ -568,29 +567,21 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		title = ansi.Truncate(title, titleWidth, "...")
 	}
 
-	// Style based on selection
-	if selected {
-		// For selected rows, use full-width background highlight
-		var plainRow string
-		if hasStatusIcon {
-			if note.DeletedAt != nil {
-				plainRow = iconDeleted + " "
-			} else if note.Archived {
-				plainRow = iconArchived + " "
-			}
-		}
-		plainRow += "  " // cursor space
-		if note.Pinned {
-			plainRow += "* "
-		}
-		plainRow += title
+	row := prefixStr + styles.Body.Render(title)
 
-		plainRow = padToWidth(plainRow, maxWidth)
-		return styles.ListItemSelected.Render(plainRow)
+	// A selected row is the same row, highlighted. It used to be rebuilt as
+	// plain text so that a single lipgloss Background() would cover it, which
+	// dropped the status icon's colour, the cursor and the pin badge — the
+	// selected row read as a different kind of row. ui.RowBackground holds the
+	// background across the styled spans' own resets instead, and does the
+	// truncation and padding, so the highlight is uniform and the styling
+	// survives.
+	if selected {
+		return ui.RowBackground(row, maxWidth, styles.BgTertiary)
 	}
 
 	// Regular row with styled components
-	return prefixStr + styles.Body.Render(title)
+	return row
 }
 
 // ensureCursorVisibleForList adjusts scrollOff for a list of given size.

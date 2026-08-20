@@ -223,10 +223,16 @@ func (m Model) notificationCentreItemLines(n notify.Notification, inner, index i
 }
 
 // styleCentreRow applies the cursor highlight to a row of the selected entry.
+//
+// Both rows of an entry go through here, so the two-line highlight is one
+// rectangle. It uses ui.RowBackground rather than a lipgloss Background(): the
+// rows are built from pre-styled spans (the source-hued unread dot, the muted
+// meta column and body) whose resets would otherwise punch holes in the
+// highlight. RowBackground also truncates and pads, so padNotificationRow is
+// not needed on this path.
 func (m Model) styleCentreRow(row string, inner, index int) string {
 	if m.notificationCentreOwnsKeys() && index == m.notificationCentreCursor {
-		return lipgloss.NewStyle().Background(styles.SurfaceRaised).
-			Render(padNotificationRow(row, inner))
+		return ui.RowBackground(row, inner, styles.SurfaceRaised)
 	}
 	return row
 }

@@ -540,6 +540,58 @@ styles-layer helper that applies a row background across already-styled
 content, adopted by notes and the centre in this round; other plugins migrate
 opportunistically, not in this round.
 
+#### Selected-row background as built (2026-08-19)
+
+- **The helper is `ui.RowBackground(row, width, bg)`** in
+  `internal/ui/row_background.go`, with `RowBackgroundSeq` for callers holding
+  an escape sequence already and `SelectedRowBackground` for the theme's
+  selection colour. **Deviation from the wording of the spec:** it lives in
+  `internal/ui`, not `internal/styles`. `internal/ui` is the established home
+  for ANSI row surgery — `injectRangeBackground`, `CarryRowBackground`,
+  `ApplyTerminalDefaultBackground` and the `sgrBackground` parameter parser are
+  all there — and `ui` imports `styles`, so putting it in `styles` would have
+  meant a second copy of that parser. It reuses the existing one instead, which
+  is what "no second scheme" asks for.
+- **What it does:** truncates the row to width with `ansi.Truncate`, then walks
+  it once and re-asserts the background after *anything* that touches the
+  background — a bare `\x1b[m` or `\x1b[0m`, a compound reset like
+  `0;38;2;…`, an explicit `48;2;…`/`48;5;…` an inner span set for itself, a
+  legacy 40-47/100-107 code — then pads to exactly width with
+  background-coloured spaces and terminates with a reset so the fill cannot
+  bleed. Foreground, bold and underline are left as the row wrote them: the
+  selected row is *the same row*, highlighted.
+  `styles.FillBackground` is the older, weaker cousin (reset-substitution only,
+  no truncation, no explicit-background override); it is untouched here and is
+  a candidate to be re-expressed over this walk later.
+- **Adopted in two places.** `styleCentreRow`
+  (`internal/app/notification_centre.go`) replaces a
+  `lipgloss.Background().Render(padNotificationRow(...))` — both rows of an
+  entry go through it, so the two-line highlight is one rectangle covering the
+  source-hued unread dot, the muted age column and the muted body.
+  `renderNoteRow` (`internal/plugins/notes/view.go`) previously **rebuilt the
+  selected row as plain text** so a single `Background()` could cover it, which
+  is why a selected note lost its status-icon colour, cursor and pin styling;
+  it now renders the ordinary styled row and highlights that.
+- **Tests** assert the property that matters rather than a byte string: a
+  helper walks the rendered row and records the background active at *each
+  visible cell*, and the row is only correct if every cell carries the
+  selection background and the row is exactly `width` cells wide.
+  `internal/ui/row_background_test.go` runs that over adversarial inputs
+  (nested lipgloss, both reset spellings, inner 256/truecolour/legacy
+  backgrounds, a `38;2;49;0;0` foreground that contains a `49`, wide runes and
+  emoji, over-width and under-width rows); `internal/app` and
+  `internal/plugins/notes` assert it end-to-end on the real renderers, plus
+  that unselected rows carry no background at all.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated on both
+  axes, `paths` checked, stopped after): the selected agent entry draws as a
+  solid two-row block across the hue glyph, the title, the age column and the
+  muted body.
+- **Opportunistic follow-ups, deliberately not in this round:** every other
+  surface that still highlights by rebuilding a plain row or by wrapping a
+  styled one in `Background()` — the overview/workspace lists, git status,
+  file browser, conversations, the kanban `CardSelected` path — is one call to
+  `ui.RowBackground` each, with no behaviour change beyond the holes closing.
+
 **Tab parity (global).** Every surface's tab cycle must reach the open centre
 — notes, git, files, conversations implement `FocusCycler` so tab cycles
 their panes then the centre (their two-pane `tab` toggle becomes a ring with
