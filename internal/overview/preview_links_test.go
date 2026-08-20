@@ -142,6 +142,37 @@ func TestGlobalPreviewUnderlinesAndOpensFileLinks(t *testing.T) {
 	}
 }
 
+func TestGlobalPreviewOpensAbsoluteDocumentWithoutWorkspacePrefix(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	absPath := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(absPath, []byte("{\"outside\":true}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := m.openPreviewDocTarget(uirequest.Target{Kind: uirequest.TargetKindFile, Value: absPath, Line: 1})
+	if cmd == nil {
+		t.Fatal("absolute preview target returned no load command")
+	}
+	if got := m.preview.doc.view().Root(); got != "" {
+		t.Fatalf("absolute preview root before result = %q, want empty", got)
+	}
+	run(t, m, cmd)
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.preview.doc == nil || m.preview.doc.view().Title() != filepath.ToSlash(resolved) {
+		t.Fatalf("absolute preview document = %#v", m.preview.doc)
+	}
+	view := m.preview.doc.view()
+	if view.Root() != "" {
+		t.Fatalf("absolute preview root = %q, want empty", view.Root())
+	}
+	view.SetSize(80, 20)
+	if got := ansi.Strip(view.View()); !strings.Contains(got, `{"outside":true}`) {
+		t.Fatalf("absolute preview did not load target: %q", got)
+	}
+}
+
 func TestGlobalPreviewURLAndIssueActivationStayDistinct(t *testing.T) {
 	stubPreviewTd(t)
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)

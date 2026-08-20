@@ -168,6 +168,61 @@ func appDeckTestModel(t *testing.T, root string, plugins ...*deckHostTestPlugin)
 	return m
 }
 
+func TestAppContentDeckResolvedAbsoluteDocumentKeepsCanonicalPath(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	absPath := filepath.Join(home, ".config", "sidecar", "config.json")
+	if err := os.MkdirAll(filepath.Dir(absPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(absPath, []byte("{\"outside\":true}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	raw := "~/.config/sidecar/config.json"
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: raw}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(160, 40)
+	h := m.currentContentDeck()
+	if h == nil {
+		t.Fatal("app content deck was not created")
+	}
+	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: raw}
+	resolved := resolveAppContentLink(h.key, contentlink.Surface{
+		ID: "preview", WorkDir: root, ProjectRoot: root,
+	}, candidate)().(appContentResolvedMsg)
+	want, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resolved.Found || resolved.Ref.Value != filepath.ToSlash(want) {
+		t.Fatalf("absolute resolution = %#v, want %q", resolved, want)
+	}
+	cmd := m.openAppContent(root, p.id, resolved.Ref)
+	if cmd == nil {
+		t.Fatal("resolved absolute document returned no load")
+	}
+	result := cmd().(contentpanes.Result)
+	loaded := result.Payload.(docview.LoadedMsg)
+	if loaded.Result.Error != nil || loaded.Result.Content != "{\"outside\":true}\n" {
+		t.Fatalf("absolute app load = error %v body %q", loaded.Result.Error, loaded.Result.Content)
+	}
+	updated, _ := m.Update(result)
+	got := updated.(Model)
+	m = &got
+	h = m.currentContentDeck()
+	view := h.deck.Viewer(h.deck.Leaf(panelayout.Document)).(*docview.Model)
+	if view.Root() != "" || view.Title() != filepath.ToSlash(want) {
+		t.Fatalf("absolute app viewer root/title = %q / %q", view.Root(), view.Title())
+	}
+	// App live-watch reconciliation calls SetRoot with the plugin workdir. The
+	// shared viewer must retain the absolute target across that later phase.
+	view.SetRoot(root)
+	if target := view.WatchTarget(); view.Root() != "" || target.Path != want {
+		t.Fatalf("absolute app live target = root %q path %q", view.Root(), target.Path)
+	}
+}
+
 func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"README.md", "guide.md"} {

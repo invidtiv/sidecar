@@ -99,6 +99,7 @@ func TestScanBareMarkdownUsesResolverAndSkipsMisses(t *testing.T) {
 }
 
 func TestScanBareCodeAndHomePaths(t *testing.T) {
+	base := t.TempDir()
 	home := t.TempDir()
 	if err := os.WriteFile(filepath.Join(home, "dot.go"), []byte("package dot"), 0o644); err != nil {
 		t.Fatal(err)
@@ -108,7 +109,7 @@ func TestScanBareCodeAndHomePaths(t *testing.T) {
 	t.Cleanup(func() { userHomeDir = orig })
 
 	resolve := func(raw string) (string, Extra, bool) {
-		display, _, ok := ResolveFile(home, raw)
+		display, _, ok := ResolveFile(base, raw)
 		return display, Extra{Raw: raw}, ok
 	}
 	spans := Scan("see main.go and ~/dot.go and missing.go", resolve, nil)
@@ -119,13 +120,25 @@ func TestScanBareCodeAndHomePaths(t *testing.T) {
 	if len(spans) != 0 {
 		t.Fatalf("missing path:line = %#v", spans)
 	}
-	if err := os.WriteFile(filepath.Join(home, "main.go"), []byte("package main"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(base, "main.go"), []byte("package main"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	spans = Scan("main.go:37", resolve, nil)
 	if len(spans) != 1 || spans[0].Value != "main.go" || spans[0].Extra.Line != 37 {
 		t.Fatalf("path:line = %#v", spans)
 	}
+	spans = Scan("~/dot.go:19", resolve, nil)
+	homePath, err := filepath.EvalSymlinks(homeFilePath(home, "dot.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spans) != 1 || spans[0].Value != homePath || spans[0].Extra.Raw != "~/dot.go" || spans[0].Extra.Line != 19 {
+		t.Fatalf("home path:line = %#v", spans)
+	}
+}
+
+func homeFilePath(home, name string) string {
+	return filepath.Clean(filepath.Join(home, name))
 }
 
 func TestScanWithoutResolverOmitsBareMarkdown(t *testing.T) {

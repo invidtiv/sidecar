@@ -452,6 +452,14 @@ Do not persist loaded bodies, diff output, provider documents, errors, OSC
 labels, detected spans, or rendered frames. Apply the same path containment,
 resource-locator privacy, and stale-result identity rules as Workspaces.
 
+Document references keep the path meaning established by their source surface:
+relative paths resolve against that `SurfaceContext`, while resolved `~/` and
+absolute paths stay absolute through async load, live refresh, hide/reopen, and
+persistence. A host may validate and open a regular file outside the selected
+worktree, but no later viewer or watcher may join that canonical target to the
+project root again. Missing targets remain explicit load errors rather than
+being rewritten to a plausible in-project path.
+
 Global hosted decks are in-memory in v1, matching global Workspaces. If real
 Tasks use shows restart persistence matters, add it deliberately under a stable
 global surface ID; do not smuggle it into a project state entry.

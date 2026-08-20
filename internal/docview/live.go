@@ -29,10 +29,17 @@ import (
 // rather than writing through it, but only events naming this exact path are
 // reported.
 func (m *Model) WatchTarget() livewatch.Target {
-	if m == nil || m.root == "" || m.path == "" {
+	if m == nil || m.path == "" {
 		return livewatch.Target{}
 	}
-	return livewatch.File(filepath.Join(m.root, m.path))
+	path := filepath.FromSlash(m.path)
+	if filepath.IsAbs(path) {
+		return livewatch.File(path)
+	}
+	if m.root == "" {
+		return livewatch.Target{}
+	}
+	return livewatch.File(filepath.Join(m.root, path))
 }
 
 // SetRoot records the directory that m.path is relative to.
@@ -43,6 +50,14 @@ func (m *Model) WatchTarget() livewatch.Target {
 // path to re-read.
 func (m *Model) SetRoot(root string) {
 	if m == nil {
+		return
+	}
+	// An absolute title already carries its complete location. Hosts call
+	// SetRoot while reconciling live watchers, including after an async load;
+	// accepting their surface root here would re-root an outside-worktree
+	// document on its next refresh.
+	if filepath.IsAbs(filepath.FromSlash(m.path)) {
+		m.root = ""
 		return
 	}
 	m.root = root
@@ -71,7 +86,7 @@ func (m *Model) Observe() {
 // as the veto lifts, so a host may safely block refreshes while something else
 // owns the pane without losing the update.
 func (m *Model) Refresh(suppressed bool) tea.Cmd {
-	if m == nil || m.root == "" || m.path == "" {
+	if m == nil || m.path == "" || (m.root == "" && !filepath.IsAbs(filepath.FromSlash(m.path))) {
 		return nil
 	}
 	// Nothing loaded yet, or a load already in flight whose result the

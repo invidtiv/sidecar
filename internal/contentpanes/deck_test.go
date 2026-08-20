@@ -133,6 +133,111 @@ func TestDeckSameIdentityReloadsWhenSurfaceContextChanges(t *testing.T) {
 	}
 }
 
+func TestDeckDocumentPathsPreserveAbsoluteAndRootRelativeMeaning(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "relative.txt"), []byte("relative\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	absDir := t.TempDir()
+	absPath := filepath.Join(absDir, "outside.txt")
+	if err := os.WriteFile(absPath, []byte("absolute\nsecond\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{})
+
+	for _, tc := range []struct {
+		name     string
+		ref      contentlink.Ref
+		wantRoot string
+		wantBody string
+	}{
+		{name: "relative", ref: contentlink.Ref{Kind: contentlink.KindFile, Value: "relative.txt", Line: 2}, wantRoot: root, wantBody: "relative\nsecond\n"},
+		{name: "absolute", ref: contentlink.Ref{Kind: contentlink.KindFile, Value: absPath, Line: 2}, wantRoot: "", wantBody: "absolute\nsecond\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := d.Open(ctx, tc.ref, testPlacement())
+			if out.Command == nil {
+				t.Fatal("document open returned no load command")
+			}
+			result := out.Command().(Result)
+			loaded := result.Payload.(docview.LoadedMsg)
+			if loaded.Path != filepath.ToSlash(filepath.Clean(tc.ref.Value)) {
+				t.Fatalf("loaded path = %q, want %q", loaded.Path, tc.ref.Value)
+			}
+			if loaded.Result.Error != nil || loaded.Result.Content != tc.wantBody {
+				t.Fatalf("load result = error %v body %q", loaded.Result.Error, loaded.Result.Content)
+			}
+			view := d.Viewer(out.LeafID).(*docview.Model)
+			if view.Root() != tc.wantRoot {
+				t.Fatalf("document root = %q, want %q", view.Root(), tc.wantRoot)
+			}
+			if _, applied := d.Apply(result); !applied {
+				t.Fatal("current document result was rejected")
+			}
+			if view.Rendered() {
+				t.Fatal("a line-qualified text target must remain raw")
+			}
+		})
+	}
+}
+
+func TestDeckAbsoluteDocumentPersistsAndReopensWithoutDoubleRooting(t *testing.T) {
+	root := t.TempDir()
+	absPath := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(absPath, []byte("# outside\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{})
+	opened := d.Open(ctx, fileRef(absPath), testPlacement())
+	if opened.Command == nil {
+		t.Fatal("absolute document open returned no command")
+	}
+	_ = opened.Command().(Result)
+	state := d.Encode()
+	d.CloseActive()
+
+	restored := Decode(ctx, Config{}, state)
+	p := paneForKind(restored, panelayout.Document)
+	if p == nil || len(p.tabs) != 1 || p.tabs[0].ref.Value != filepath.ToSlash(absPath) {
+		t.Fatalf("restored absolute tab = %#v", p)
+	}
+	cmd := restored.SelectTab(p.leafID, 0)
+	if cmd == nil {
+		t.Fatal("restored absolute tab did not load")
+	}
+	current := cmd().(Result)
+	loaded := current.Payload.(docview.LoadedMsg)
+	if loaded.Result.Error != nil || loaded.Result.Content != "# outside\n" {
+		t.Fatalf("restored load = error %v body %q", loaded.Result.Error, loaded.Result.Content)
+	}
+	if got := restored.Viewer(p.leafID).(*docview.Model).Root(); got != "" {
+		t.Fatalf("restored absolute document root = %q, want empty", got)
+	}
+	if _, applied := restored.Apply(current); !applied {
+		t.Fatal("restored tab rejected its current async result")
+	}
+}
+
+func TestDeckMissingAbsoluteDocumentReportsTheExactTarget(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	missing := filepath.Join(t.TempDir(), "missing.txt")
+	d := New(ctx, Config{})
+	out := d.Open(ctx, fileRef(missing), testPlacement())
+	if out.Status != StatusOpened || out.Command == nil {
+		t.Fatalf("missing absolute Open = %#v", out)
+	}
+	result := out.Command().(Result)
+	loaded := result.Payload.(docview.LoadedMsg)
+	if loaded.Result.Error == nil {
+		t.Fatal("missing absolute target reported success")
+	}
+	if loaded.Path != filepath.ToSlash(missing) || strings.Contains(loaded.Result.Error.Error(), ctx.Root) {
+		t.Fatalf("missing result path/error = %q / %v", loaded.Path, loaded.Result.Error)
+	}
+}
+
 func TestDeckDiffUsesDedicatedDiffRoot(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	ctx.DiffRoot = t.TempDir()

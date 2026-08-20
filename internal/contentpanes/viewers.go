@@ -118,7 +118,16 @@ type documentViewer struct{ view *docview.Model }
 
 func (v *documentViewer) model() any { return v.view }
 func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
-	cmd := v.view.Load(id, ctx.Root, ref.Value, ref.Line, ctx.Epoch)
+	root := ctx.Root
+	// A resolved file reference may deliberately name a regular file outside
+	// the source surface (for example ~/.config/sidecar/config.json or another
+	// worktree). filepath.Join does not preserve an absolute second argument,
+	// so give absolute references no root to join while relative references
+	// retain the surface that gives them meaning.
+	if filepath.IsAbs(filepath.FromSlash(ref.Value)) {
+		root = ""
+	}
+	cmd := v.view.Load(id, root, ref.Value, ref.Line, ctx.Epoch)
 	// Load defaults every line-zero target to rendered. The shared content rule
 	// is narrower: only Markdown opens rendered; source and plain text stay raw.
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)

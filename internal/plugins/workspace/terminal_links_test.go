@@ -1246,6 +1246,12 @@ func TestOpenTerminalPathPreviewsOtherWorktreeFileInPlace(t *testing.T) {
 	if got := ansi.Strip(doc.view().View()); !strings.Contains(got, "package internal") {
 		t.Fatalf("cross-worktree preview did not load the validated file: %q", got)
 	}
+	// The project live adapter supplies pane.root after async delivery. That
+	// must not turn an already-absolute cross-worktree title into main/<abs>.
+	doc.view().SetRoot(doc.root)
+	if target := doc.view().WatchTarget(); target.Path != mustEvalSymlink(t, path) || doc.view().Root() != "" {
+		t.Fatalf("cross-worktree live target = %q root=%q", target.Path, doc.view().Root())
+	}
 }
 
 func TestLinkDecorationPreservesSearchAndSelectionRendering(t *testing.T) {
