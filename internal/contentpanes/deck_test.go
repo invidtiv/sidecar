@@ -144,6 +144,29 @@ func TestDeckDiffUsesDedicatedDiffRoot(t *testing.T) {
 	}
 }
 
+func TestDeckDiffSnapshotContinuationKeepsDedicatedDiffRoot(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	ctx.DiffRoot = t.TempDir()
+	d := New(ctx, Config{})
+	out := d.Open(ctx, diffRef("wt"), testPlacement())
+	view := d.Viewer(out.LeafID).(*workspacediff.View)
+	view.Scope = workspacediff.ScopeCommits
+	cmd := d.ApplyBroadcast(workspacediff.SnapshotMsg{
+		Epoch: ctx.Epoch, Binding: view.Binding, WorkspaceID: ctx.Surface,
+		Identity: workspacediff.IdentityWorkingTree,
+		Snapshot: &workspacediff.Snapshot{
+			State:   workspacediff.LoadStateReady,
+			Commits: []workspacediff.CommitInfo{{Hash: "deadbeef", Subject: "fix"}},
+		},
+	})
+	if cmd == nil {
+		t.Fatal("commit snapshot did not start its selected-commit continuation")
+	}
+	if got := view.WorkDir; got != ctx.DiffRoot {
+		t.Fatalf("snapshot continuation rebound WorkDir = %q, want DiffRoot %q", got, ctx.DiffRoot)
+	}
+}
+
 func TestDeckLateResourceResolverConfiguresFutureViewer(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})

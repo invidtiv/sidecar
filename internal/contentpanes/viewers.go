@@ -183,6 +183,12 @@ func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
 type diffViewer struct{ view *workspacediff.View }
 
 func (v *diffViewer) model() any { return v.view }
+func diffRoot(ctx SurfaceContext) string {
+	if ctx.DiffRoot != "" {
+		return ctx.DiffRoot
+	}
+	return ctx.Root
+}
 func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	target, ok := workspacediff.ParseSpec(ref.Value)
 	if !ok {
@@ -196,10 +202,7 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 	if surface == "" {
 		surface = ctx.Surface
 	}
-	root := ctx.DiffRoot
-	if root == "" {
-		root = ctx.Root
-	}
+	root := diffRoot(ctx)
 	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
@@ -220,10 +223,7 @@ func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state 
 	if surface == "" {
 		surface = ctx.Surface
 	}
-	root := ctx.DiffRoot
-	if root == "" {
-		root = ctx.Root
-	}
+	root := diffRoot(ctx)
 	v.view.BindGeneration(root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateUnknown
 	v.view.Scope = workspacediff.ParseScope(state.Scope)
@@ -252,7 +252,7 @@ func (v *diffViewer) apply(ctx SurfaceContext, msg any) (tea.Cmd, bool) {
 		if !accepts(m.Epoch, m.WorkspaceID, m.Identity) {
 			return nil, false
 		}
-		return v.view.ApplySnapshotMsg(m, ctx.Root, ctx.Surface), true
+		return v.view.ApplySnapshotMsg(m, diffRoot(ctx), ctx.Surface), true
 	case workspacediff.RangeMsg:
 		if !accepts(m.Epoch, m.WorkspaceID, m.Identity) {
 			return nil, false
