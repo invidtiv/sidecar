@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -125,10 +127,14 @@ func TestWriteBusyRefusesSecondOperation(t *testing.T) {
 	tree.Modified = []*FileEntry{{Path: "a", Unstaged: true}}
 	p := &Plugin{ctx: &plugin.Context{}, repoRoot: tree.workDir, hasRepo: true, tree: tree, activeOperation: &operationRequest{ID: 1}}
 
+	// The refusal speaks as the waiting source: the user has to act on it.
 	_, cmd := p.updateStatus(tea.KeyPressMsg{Code: 's', Text: "s"})
-	msg, ok := cmd().(app.ToastMsg)
-	if !ok || !strings.Contains(msg.Message, "already in progress") {
-		t.Fatalf("busy result = %#v", msg)
+	post, ok := cmd().(notify.PostMsg)
+	if !ok || !strings.Contains(post.Notification.Title, "already in progress") {
+		t.Fatalf("busy result = %#v", cmd())
+	}
+	if post.Notification.Source != notify.SourceWaiting {
+		t.Fatalf("busy refusal source = %q", post.Notification.Source)
 	}
 }
 
@@ -147,7 +153,7 @@ func TestWriteBusyRefusesStatusMutationEntryPoints(t *testing.T) {
 				t.Fatal("mutation was not refused")
 			}
 			msg := cmd()
-			if _, ok := msg.(app.ToastMsg); !ok {
+			if _, ok := msg.(notify.PostMsg); !ok {
 				t.Fatalf("refusal returned %T", msg)
 			}
 			if p.viewMode != ViewModeStatus {
@@ -165,7 +171,7 @@ func TestWriteBusyRefusesRelevantModalAndHelperFlows(t *testing.T) {
 			t.Fatalf("%s returned nil", name)
 		}
 		msg := cmd()
-		if _, ok := msg.(app.ToastMsg); !ok {
+		if _, ok := msg.(notify.PostMsg); !ok {
 			t.Fatalf("%s returned %T", name, msg)
 		}
 	}
@@ -187,7 +193,7 @@ func TestWriteBusyRefusesRemoteActionBoundariesAndAbort(t *testing.T) {
 		if result != p || cmd == nil {
 			t.Fatal("action boundary did not return a refusal")
 		}
-		if _, ok := cmd().(app.ToastMsg); !ok {
+		if _, ok := cmd().(notify.PostMsg); !ok {
 			t.Fatalf("refusal returned %T", cmd())
 		}
 		if p.viewMode != wantMode {
@@ -273,16 +279,27 @@ func TestWriteFailurePreservesSnapshotAndReportsDetail(t *testing.T) {
 
 	_, cmd := p.updateStatus(tea.KeyPressMsg{Code: 's', Text: "s"})
 	result := cmd().(operationResultMsg)
-	_, toastCmd := p.Update(result)
-	toast := toastCmd().(app.ToastMsg)
+	_, alertCmd := p.Update(result)
+	post, ok := alertCmd().(notify.PostMsg)
+	if !ok {
+		t.Fatalf("write failure did not file a notification: %T", alertCmd())
+	}
 	if p.activeOperation != nil {
 		t.Fatal("failed operation remained busy")
 	}
 	if len(p.tree.Modified) != 1 || p.tree.Modified[0] != entry {
 		t.Fatal("failure changed the displayed snapshot")
 	}
-	if !strings.Contains(toast.Message, "hook rejected the file") || !strings.Contains(p.operationError, "hook rejected the file") {
-		t.Fatalf("failure detail missing: toast=%q state=%q", toast.Message, p.operationError)
+	if post.Notification.Source != notify.SourceSession || post.Notification.Severity != notify.SeverityError {
+		t.Fatalf("write failure notification = %s/%s, want session/error", post.Notification.Source, post.Notification.Severity)
+	}
+	// The title stays a short headline; the transcript belongs to the body
+	// (and, in full, to the error modal).
+	if strings.ContainsAny(post.Notification.Title, "\n") || strings.Contains(post.Notification.Title, "hook rejected") {
+		t.Fatalf("failure title dumped the transcript: %q", post.Notification.Title)
+	}
+	if !strings.Contains(post.Notification.Body, "hook rejected the file") {
+		t.Fatalf("failure detail missing: alert=%q/%q", post.Notification.Title, post.Notification.Body)
 	}
 }
 
@@ -377,4 +394,75 @@ func runGitTest(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v: %s", args, err, out)
 	}
 	return string(out)
+}
+
+// A refusal fires from every mutation key while a write is in flight, so it
+// must carry a lease. The `waiting` source is sticky by default: without an
+// explicit expiry each impatient keypress would leave a permanent unread entry
+// in the notification centre.
+func TestWriteBusyNoticeIsLeasedNotSticky(t *testing.T) {
+	p := &Plugin{}
+	cmd := p.writeBusyToast()
+	if cmd == nil {
+		t.Fatal("writeBusyToast returned no command")
+	}
+	post, ok := cmd().(notify.PostMsg)
+	if !ok {
+		t.Fatalf("want notify.PostMsg, got %T", cmd())
+	}
+	n := post.Notification
+	if n.Source != notify.SourceWaiting || n.Severity != notify.SeverityWarning {
+		t.Fatalf("want a waiting warning, got %s/%s", n.Source, n.Severity)
+	}
+	if n.Sticky || n.ExpiresAt == nil {
+		t.Fatalf("refusal must expire on its own: sticky=%v expires=%v", n.Sticky, n.ExpiresAt)
+	}
+}
+
+// A successful push confirms itself with a flash and leaves no sidebar echo.
+func TestPushSuccessFlashesAndPaintsNoSidebarLine(t *testing.T) {
+	handler := mouse.NewHandler()
+	p := &Plugin{
+		ctx:          &plugin.Context{},
+		tree:         &FileTree{},
+		sidebarWidth: 40,
+		mouseHandler: handler,
+		hasRepo:      true,
+	}
+	p.pushInProgress = true
+
+	_, cmd := p.Update(PushSuccessMsg{})
+	if cmd == nil {
+		t.Fatal("push success produced no command")
+	}
+	if p.pushInProgress {
+		t.Fatal("push success left the in-flight flag set")
+	}
+
+	var flashed bool
+	var walk func(tea.Cmd)
+	walk = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		switch m := c().(type) {
+		case tea.BatchMsg:
+			for _, sub := range m {
+				walk(sub)
+			}
+		case appmsg.FlashMsg:
+			if strings.Contains(m.Text, "Pushed") {
+				flashed = true
+			}
+		}
+	}
+	walk(cmd)
+	if !flashed {
+		t.Fatal("push success did not flash")
+	}
+
+	sidebar := p.renderSidebar(20)
+	if strings.Contains(sidebar, "Pushed") {
+		t.Fatalf("push success painted a sidebar line:\n%s", sidebar)
+	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -215,34 +216,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.showDiagnostics {
 			m.diagnosticsModalWidth = 0
 		}
-		// Forward adjusted WindowSizeMsg to all plugins
-		// Plugins receive the content area size (minus header and footer)
-		// Must match the height passed to Plugin.View() in view.go
-		adjustedHeight := msg.Height - headerHeight - footerHeight
-		adjustedMsg := tea.WindowSizeMsg{
-			Width:  msg.Width,
-			Height: adjustedHeight,
-		}
-		plugins := m.registry.Plugins()
-		var cmds []tea.Cmd
-		for i, p := range plugins {
-			newPlugin, cmd := p.Update(adjustedMsg)
-			plugins[i] = newPlugin
-			if cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
-		// The global Tasks host lays out against the same content box.
-		if cmd := m.globalTasks.update(adjustedMsg); cmd != nil {
-			cmds = append(cmds, cmd)
-		}
-		// So does the Workspaces browser, whose live pane is sized against the
-		// box the new geometry gives it.
-		if m.overview != nil {
-			if cmd := m.overview.WorkspacesResize(msg.Width, adjustedHeight); cmd != nil {
-				cmds = append(cmds, cmd)
-			}
-		}
+		// Forward the content box to every surface. It is the terminal minus the
+		// header, the footer, and any column the notification centre has
+		// reserved — so a resize while the panel is open keeps handing out the
+		// narrowed width rather than resetting to the full terminal.
+		cmds := (&m).emitContentSize()
 		// First real frame: name the terminal after the project.
 		if cmd := (&m).syncTerminalTitle(false); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -311,6 +289,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, m.exitOverview()
 				}
 
+				// The unread indicator is the centre's only pointer route in —
+				// the centre has no navbar tab — and toggles it the same way
+				// the shortcut does.
+				if start, end, ok := m.getNotificationIndicatorBounds(); ok && !m.intro.Active && mi.X >= start && mi.X < end {
+					return m, (&m).toggleNotificationCentre()
+				}
+
 				// The gear toggles Configuration: it is the control that opened
 				// the surface, so it is also the one that puts it away, and
 				// reopening returns to the section the user was last on.
@@ -337,6 +322,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 			return m, nil
+		}
+
+		// The reserved right column belongs to the notification centre: its
+		// close affordance, its list rows, and its resize rail. Anything it
+		// does not claim falls through to the content below — and a press that
+		// lands in the content returns focus there without closing the panel.
+		if handled, cmd := (&m).notificationCentreMouseEvent(msg); handled {
+			return m, cmd
+		}
+		// A toast floats over the content and is click-to-dismiss. It is tested
+		// after the panel (which owns its own column) and before the content, so
+		// the only clicks it takes are the ones that landed on the block itself.
+		if (&m).toastMouseEvent(msg) {
+			// The dismissal changed the column, so the retraction needs its
+			// tick: without it the block sits frozen until the next heartbeat.
+			return m, (&m).syncToastReveal(time.Now())
+		}
+		if isClickPress && mi.X < m.contentWidth() {
+			(&m).blurNotificationCentre()
 		}
 
 		if m.configOpen() {
@@ -379,8 +383,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case TickMsg:
 		m.ui.UpdateClock()
-		m.ui.ClearExpiredToast()
-		m.ClearToast()
+		// Notification expiry rides the existing heartbeat rather than a timer
+		// per toast: a countdown ticks one cell a second, which is exactly the
+		// resolution this tick already has.
+		// The same heartbeat reconciles the toast column — see
+		// reconcileNotifications for the order and why it is that order.
+		revealCmd := (&m).reconcileNotifications(time.Now())
 		// The worktree inventory costs a `git worktree list` fork, so it is
 		// refreshed off the update loop (never inline: this runs on the render
 		// goroutine) and only every worktreeInventoryTicks. A branch switched
@@ -407,9 +415,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeCheckCounter++
 		if m.worktreeCheckCounter >= 10 {
 			m.worktreeCheckCounter = 0
-			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd, inventoryCmd)
+			return m, tea.Batch(tickCmd(), checkWorktreeExists(m.ui.WorkDir), titleCmd, inventoryCmd, revealCmd)
 		}
-		return m, tea.Batch(tickCmd(), titleCmd, inventoryCmd)
+		return m, tea.Batch(tickCmd(), titleCmd, inventoryCmd, revealCmd)
 
 	case worktreeInventoryRefreshedMsg:
 		current, _ := normalizePath(m.ui.WorkDir)
@@ -420,8 +428,39 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ToastMsg:
-		m.ShowToast(msg.Message, msg.Duration)
-		m.statusIsError = msg.IsError
+		// Every legacy toast is a notification now: same call sites, same
+		// message, but it lands in the store, floats as a bordered toast, and
+		// stays in the centre afterwards.
+		(&m).showToastWithSeverity(msg.Message, msg.Duration, msg.IsError)
+		return m, (&m).syncToastReveal(time.Now())
+
+	case FlashMsg:
+		// The flash tier never touches the store: it is feedback, not a
+		// record. A new flash replaces whatever is on screen.
+		return m, (&m).showFlash(msg)
+
+	case flashTickMsg:
+		return m, (&m).advanceFlash(msg)
+
+	case revealTickMsg:
+		// One whole row per frame (design 1h). The loop stops the moment every
+		// block has settled: motion must not hold a frame timer over a screen
+		// that is not moving.
+		return m, (&m).advanceToastReveal(msg)
+
+	case notify.PostMsg:
+		// The store is the app's, so posting is answered here and the result
+		// broadcast: whoever draws toasts reacts to PostedMsg rather than
+		// reaching into the store.
+		cmd := (&m).postNotification(msg.Notification)
+		return m, tea.Batch(cmd, (&m).syncToastReveal(time.Now()))
+
+	case notify.DismissMsg:
+		(&m).dismissNotification(msg.ID)
+		return m, (&m).syncToastReveal(time.Now())
+
+	case notify.ReadMsg:
+		(&m).readNotification(msg.ID)
 		return m, nil
 
 	case RefreshMsg:
@@ -469,6 +508,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.clearChangelogModal() // Force rebuild with new content
 		return m, nil
+
+	case ActivateTargetMsg:
+		return m, m.activateTarget(msg)
 
 	case FocusPluginByIDMsg:
 		// Switch to requested plugin
@@ -681,6 +723,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case uirequest.RequestMsg:
+		if msg.Request.Action == uirequest.ActionNotify {
+			if cmd := (&m).handleNotifyRequest(msg.Request); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}
@@ -840,6 +887,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, cmd
 		case ModalNone:
+			// The notification centre is the focused surface when it has the
+			// keyboard, and esc is its explicit close — the only kind of close
+			// there is. It answers before Configuration and before the global
+			// space, because focus, not layering, decides who owns esc.
+			if m.notificationCentreOwnsKeys() {
+				return m, m.closeNotificationCentre()
+			}
 			// Configuration answers esc itself: clear the search, then return
 			// from a focused child route, then close and restore the surface it
 			// covered.
@@ -875,6 +929,27 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// The notification centre owns the keyboard while it is focused, so it
+	// answers before every surface below — including Configuration, which it
+	// sits beside rather than under. It claims only its own list keys: tab
+	// numbers, the project selector, and quit keep working underneath, which is
+	// what makes it a panel and not a modal.
+	if !m.hasModal() && m.notificationCentreOwnsKeys() {
+		if handled, cmd := m.notificationCentreKey(msg); handled {
+			return m, cmd
+		}
+	}
+
+	// With the panel open it is also a stop on the focus cycle: the focused
+	// surface keeps cycling its own panes, and the press that would have
+	// wrapped its ring lands here instead. This has to run before the surfaces
+	// below see the key, and it declines every context that owns tab for
+	// something of its own — see notificationCentreTabKey.
+	if handled, cmd := m.notificationCentreTabKey(msg); handled {
+		m.updateContext()
+		return m, cmd
 	}
 
 	// Configuration covers the content area, so it answers before any of
@@ -1670,6 +1745,56 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+	case "N", "alt+n":
+		// The notification centre. Bare `n` is taken several times over
+		// (new-worktree, new-note, next-match); `N` is free in the global
+		// context, and the search/diff contexts that bind it are answered at
+		// precedence level 3 before this switch runs.
+		//
+		// `alt+n` is the guaranteed route (`ctrl+n` is cursor-down everywhere). `N` is genuinely taken in some
+		// plugins — git binds it to prev-match, which is worth more there than
+		// this toggle — and the centre has no navbar tab, so without a key that
+		// no context rebinds it would be reachable only by mouse on those tabs.
+		if m.consumesTextInput() {
+			break
+		}
+		if msg.String() == "N" && m.contextRebindsKey("N") {
+			break
+		}
+		// Open but not focused — the user navigated away with a tab key — means
+		// `N` is a request to go back to it, not to close something they are not
+		// looking at. Pressing it again from there closes, as it always has.
+		if m.notificationCentreVisible() && !m.notificationCentreFocused {
+			m.focusNotificationCentre()
+			m.readSelectedNotification()
+			return m, nil
+		}
+		return m, m.toggleNotificationCentre()
+	case "d":
+		// `d` dismisses the toast on screen, exactly as the toast's own key row
+		// says — but only where `d` is otherwise free. Precedence level 3 covers
+		// plugins implementing plugin.KeyRouter, which is `tasks` alone; git
+		// status and the workspace list bind `d` at level 5, *after* this switch,
+		// so without the contextRebindsKey guard a toast on screen would swallow
+		// their diff key for the length of its countdown.
+		if m.hasModal() || m.consumesTextInput() || m.contextRebindsKey("d") {
+			break
+		}
+		if m.dismissVisibleToast() {
+			return m, m.syncToastReveal(time.Now())
+		}
+	case toastExpandKey:
+		// The expand affordance on a collapsed stack (design 1b). `tab` is the
+		// design's key and Phase 2 spent it on the focus cycle, so this is
+		// `alt+e` — global, like `alt+n`, since a toast can be on screen on any
+		// tab and has no focus context of its own to route through. It falls
+		// through untouched when there is nothing collapsed to open.
+		if m.hasModal() || m.consumesTextInput() || m.contextRebindsKey(toastExpandKey) {
+			break
+		}
+		if m.toggleToastExpand() {
+			return m, m.syncToastReveal(time.Now())
+		}
 	case "K":
 		// Toggle cross-project Overview (Kanban). Blocked in text-input contexts
 		// above. Workspace shell delete is D (with confirm); this stays global.
@@ -1682,10 +1807,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Only enable if we're in a git repo with worktrees
 		worktrees := m.worktreeInventory()
 		if len(worktrees) <= 1 {
-			// No worktrees or only main repo - show toast
-			return m, func() tea.Msg {
-				return ToastMsg{Message: "No worktrees found", Duration: 2 * time.Second}
-			}
+			// No worktrees or only main repo. Why the key did nothing is worth
+			// saying once, but not worth keeping (audit row 14).
+			return m, ShowFlash("No worktrees found")
 		}
 		m.showWorktreeSwitcher = !m.showWorktreeSwitcher
 		if m.showWorktreeSwitcher {
@@ -1775,6 +1899,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateContext() {
 	if ctx, ok := modalFocusContext(m.activeModal()); ok {
 		m.activeContext = ctx
+		return
+	}
+	// A modal takes the keyboard from the panel while it is up, and the panel
+	// takes it back when the modal closes — without ever having closed itself.
+	if m.notificationCentreOwnsKeys() {
+		m.activeContext = notificationCentreContext
 		return
 	}
 	if m.configOpen() {

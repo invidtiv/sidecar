@@ -88,7 +88,7 @@ func YankPath(path string) tea.Cmd {
 		return nil
 	}
 	return clip.Copy(path, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied: " + path), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied: " + path)}
 	})
 }
 
@@ -97,7 +97,7 @@ func YankContents(root, path string) tea.Cmd {
 	if path == "" {
 		return nil
 	}
-	empty := msg.ToastMsg{Message: "No content to copy", Duration: 2 * time.Second}
+	empty := msg.FlashMsg{Text: "No content to copy"}
 	return clip.CopyFrom(
 		func() (string, tea.Msg) {
 			data, err := os.ReadFile(resolvePath(root, path))
@@ -111,7 +111,7 @@ func YankContents(root, path string) tea.Cmd {
 			if !strings.HasSuffix(text, "\n") {
 				lines++
 			}
-			return msg.ToastMsg{Message: r.Message(fmt.Sprintf("Copied %d lines", lines)), Duration: 2 * time.Second}
+			return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d lines", lines))}
 		},
 	)
 }

@@ -330,7 +330,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		if node != nil && node != p.tree.Root {
 			p.clipboardPath = node.Path
 			p.clipboardIsDir = node.IsDir
-			return p, appmsg.ShowToast("Marked for copy: "+node.Path, 2*time.Second)
+			return p, appmsg.ShowFlash("Marked for copy: " + node.Path)
 		}
 
 	case "Y":
@@ -418,7 +418,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		if !p.treeVisible {
 			// When hiding tree, focus moves to preview pane
 			p.activePane = PanePreview
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "H":
@@ -657,7 +657,7 @@ func (p *Plugin) handlePreviewKey(key string) (plugin.Plugin, tea.Cmd) {
 		p.treeVisible = !p.treeVisible
 		if !p.treeVisible {
 			p.activePane = PanePreview
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		} else {
 			p.activePane = PaneTree
 		}
@@ -1206,7 +1206,7 @@ func (p *Plugin) handleBlameKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if len(p.blameState.Lines) > 0 && p.blameState.Cursor < len(p.blameState.Lines) {
 			hash := p.blameState.Lines[p.blameState.Cursor].CommitHash
 			return p, clip.Copy(hash, func(r clip.Result) tea.Msg {
-				return appmsg.ToastMsg{Message: r.Message("Copied: " + hash), Duration: 2 * time.Second}
+				return appmsg.FlashMsg{Text: r.Message("Copied: " + hash)}
 			})
 		}
 
@@ -1215,7 +1215,8 @@ func (p *Plugin) handleBlameKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		if len(p.blameState.Lines) > 0 && p.blameState.Cursor < len(p.blameState.Lines) {
 			line := p.blameState.Lines[p.blameState.Cursor]
 			info := fmt.Sprintf("%s by %s (%s)", line.CommitHash, line.Author, RelativeTime(line.AuthorTime))
-			return p, appmsg.ShowToast(info, 3*time.Second)
+			// A detail the user asked to see, not an event (audit row 63).
+			return p, appmsg.ShowFlash(info)
 		}
 	}
 

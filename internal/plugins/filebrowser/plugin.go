@@ -1128,7 +1128,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, tea.Batch(
 			p.refresh(),
-			appmsg.ShowToast("Moved "+msg.Name+" → "+displayDropDir(msg.Dir), 2*time.Second),
+			// The browser already shows the move (audit row 66).
+			appmsg.ShowFlash("Moved "+msg.Name+" → "+displayDropDir(msg.Dir)),
 		)
 
 	case CreateSuccessMsg:

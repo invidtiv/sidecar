@@ -221,3 +221,47 @@ func resolveFileTarget(workDir, raw string, explicitLine int) (Target, error) {
 		Line:  line,
 	}, nil
 }
+
+// TargetFromSpan maps a scanned terminal-link span onto the cross-surface
+// target vocabulary. It is the one span→Target translation: the surfaces used
+// to each keep their own, and the two drifted. It resolves nothing — a span
+// arrives already resolved by the scanner's Resolve hooks — so it is safe
+// anywhere, including a render pass.
+//
+// Raw wins over Value for file and diff spans because Raw is the token as the
+// text wrote it; the surfaces re-resolve it against their own root on
+// activation, exactly as they did before.
+//
+// A resource span carries both halves of its identity — Provider and Matcher —
+// because a live matcher already claimed the locator to produce the span; the
+// host does not have to guess which matcher owns it a second time.
+//
+// It reports false only for spans this vocabulary does not carry, so a caller
+// keeps its existing branch rather than mistaking "not mapped" for "malformed".
+func TargetFromSpan(span terminallink.Span) (Target, bool) {
+	rawOrValue := func() string {
+		if span.Extra.Raw != "" {
+			return span.Extra.Raw
+		}
+		return span.Value
+	}
+	switch span.Kind {
+	case terminallink.KindFile:
+		return Target{Kind: TargetKindFile, Value: rawOrValue(), Line: span.Extra.Line}, true
+	case terminallink.KindURL:
+		return Target{Kind: TargetKindURL, Value: span.Value}, true
+	case terminallink.KindIssue:
+		return Target{Kind: TargetKindIssue, Value: span.Value}, true
+	case terminallink.KindDiff:
+		return Target{Kind: TargetKindDiff, Value: rawOrValue()}, true
+	case terminallink.KindResource:
+		return Target{
+			Kind:     TargetKindResource,
+			Value:    span.Value,
+			Provider: span.Extra.Provider,
+			Matcher:  span.Extra.Matcher,
+		}, true
+	default:
+		return Target{}, false
+	}
+}

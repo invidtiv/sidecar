@@ -66,7 +66,7 @@ func TestIssueSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 		t.Fatal("a bound surface produced no link resolver")
 	}
 	links := resolver.links(line)
-	if len(links) != 1 || links[0].Kind != terminalIssueLink || links[0].Value != "td-1a2b3c" {
+	if len(links) != 1 || links[0].Kind != terminallink.KindIssue || links[0].Value != "td-1a2b3c" {
 		t.Fatalf("resolved links = %#v, want one issue link", links)
 	}
 	decorated := decorateTerminalLinks(line, resolver)
@@ -93,10 +93,10 @@ func TestDetectTerminalLinksFindsSafeURLAndPathLine(t *testing.T) {
 	if len(links) != 2 {
 		t.Fatalf("links = %#v, want URL and path", links)
 	}
-	if links[0].Kind != terminalURLLink || links[0].Value != "https://example.com/docs?q=1" {
+	if links[0].Kind != terminallink.KindURL || links[0].Value != "https://example.com/docs?q=1" {
 		t.Fatalf("URL link = %#v", links[0])
 	}
-	if links[1].Kind != terminalPathLink || links[1].Value != "internal/foo.go" || links[1].Line != 123 {
+	if links[1].Kind != terminallink.KindFile || links[1].Value != "internal/foo.go" || links[1].Line != 123 {
 		t.Fatalf("path link = %#v", links[1])
 	}
 }
@@ -404,7 +404,7 @@ func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing
 			}
 			var bare []string
 			for _, link := range links {
-				if link.Kind == terminalPathLink && link.Line == 0 {
+				if link.Kind == terminallink.KindFile && link.Line == 0 {
 					bare = append(bare, link.Value)
 				}
 			}
@@ -1335,7 +1335,7 @@ func TestGitSpecSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 		t.Fatal("a bound surface produced no link resolver")
 	}
 	links := resolver.links(line)
-	if len(links) != 1 || links[0].Kind != terminalDiffLink || links[0].Value != "abc1234" {
+	if len(links) != 1 || links[0].Kind != terminallink.KindDiff || links[0].Value != "abc1234" {
 		t.Fatalf("resolved links = %#v, want one diff link", links)
 	}
 	decorated := decorateTerminalLinks(line, resolver)
@@ -1477,7 +1477,7 @@ func TestGitSpecFilenameAndMixedCaseAreNotLinks(t *testing.T) {
 		}
 	}
 	links := p.resolvedTerminalLinks(ctx, buffer, "abc1234..def5678")
-	if len(links) != 1 || links[0].Kind != terminalDiffLink || links[0].Value != "abc1234..def5678" {
+	if len(links) != 1 || links[0].Kind != terminallink.KindDiff || links[0].Value != "abc1234..def5678" {
 		t.Fatalf("range links = %#v", links)
 	}
 }

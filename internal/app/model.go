@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -159,6 +160,10 @@ type Model struct {
 	keymap        *keymap.Registry
 	activeContext string
 
+	// pendingActivation is the single hand-off across a project switch — a
+	// target to land or a workspace selection to apply. See pending_target.go.
+	pendingActivation *pendingActivation
+
 	// UI state
 	width, height           int
 	showHelp                bool
@@ -274,11 +279,6 @@ type Model struct {
 	// Header/footer
 	ui *UIState
 
-	// Status/toast messages
-	statusMsg     string
-	statusExpiry  time.Time
-	statusIsError bool
-
 	// Error handling
 	lastError error
 
@@ -368,6 +368,64 @@ type Model struct {
 	// value, so anything it assigns is discarded, and a cached-and-nil channel
 	// silently stops the listener re-arming after the first request.
 	uiRequestWatcher *uirequest.Watcher
+
+	// Notification store and its render-side snapshot. The store is app-shell
+	// state, like the header: it outlives every plugin, survives project and
+	// worktree switches, and is the single writer for this process.
+	notifications     notify.Store
+	notificationCache []notify.Notification
+	// toastPainted records notification ids a toast was actually drawn for, so
+	// the expiry sweep only marks read what the user had a chance to see.
+	toastPainted map[string]bool
+	// toastMouse carries the toast's one pointer target. A toast has no focus
+	// context and never takes the keyboard (plan 1.5 item 5): click-to-dismiss
+	// and the global `d` fallback are its whole interaction surface, so a hit
+	// map is all the pointer state it needs.
+	toastMouse *mouse.Handler
+	// toastReshow is a notification the user asked to see again from the
+	// centre (`enter` = view details). It is a presentation-only copy with its
+	// own countdown: re-showing must not re-post, un-dismiss, or reorder
+	// anything in the store.
+	toastReshow      *notify.Notification
+	toastReshowUntil time.Time
+	// toastReveals is one reveal state per on-screen block, keyed by the stack
+	// key — the same key the stack collapses on, so a block keeps its motion
+	// when another copy of the same message joins it. toastColumn is the order
+	// they are painted in, and together they are the *only* description of what
+	// is on screen: the store feeds them, and never the renderer directly. See
+	// internal/reveal and toast_stack.go.
+	toastReveals   map[notify.StackKey]*toastReveal
+	toastColumn    []notify.StackKey
+	toastRevealSeq int
+	// toastExpanded opens every collapsed block's hidden members (design 1b's
+	// peek line). It is one flag rather than one per block: the affordance is a
+	// single global key, and "expand what is on screen" is what a user pressing
+	// it means.
+	toastExpanded bool
+	// notificationCentreOpen is app-shell state, deliberately not per-plugin:
+	// the centre stays open across every navigation until the user closes it.
+	notificationCentreOpen bool
+	// notificationCentreWidth is the panel's own width in columns, persisted in
+	// internal/state. Zero means "not resolved yet"; the first frame reads the
+	// saved preference and falls back to the default.
+	notificationCentreWidth int
+	// notificationCentreFocused says the panel owns the keyboard. It is not the
+	// same as open: clicking back into content returns focus without closing.
+	notificationCentreFocused bool
+	// notificationCentreCursor selects a row in the flat, source-grouped list.
+	notificationCentreCursor int
+	// notificationCentreScroll is the first body row drawn.
+	notificationCentreScroll int
+	// Pointer state for the panel: the shared drag machinery (internal/mouse
+	// hit regions plus ui.RenderHandle) resizes it, exactly as a plugin's pane
+	// divider does.
+	notificationCentreMouse       *mouse.Handler
+	notificationCentreHoverHandle bool
+	notificationCentreHoverClose  bool
+
+	// flash is the status-flash tier: one transient line in the content
+	// region's top-right, never stored and never counted. See flash.go.
+	flash flashState
 }
 
 // Option adjusts the model at construction. Options exist for the deliberate,
@@ -421,6 +479,14 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
 		m.uiRequestWatcher = watcher
 	}
+	// Bind the `notifications` config section before the store opens: the
+	// store completes every record it is handed, and completion is where a
+	// per-source expiry is applied.
+	notify.ApplyConfig(cfg.Notifications)
+	m.notifications = openNotificationStore()
+	m.refreshNotifications()
+	m.notificationCentreMouse = mouse.NewHandler()
+	m.toastMouse = mouse.NewHandler()
 	if tab, ok := parseGlobalTabID(state.GetLastGlobalTab()); ok {
 		m.globalTab = tab
 	}
@@ -565,6 +631,9 @@ func (m *Model) initQuitModal() {
 
 // ActivePlugin returns the currently active plugin.
 func (m Model) ActivePlugin() plugin.Plugin {
+	if m.registry == nil {
+		return nil
+	}
 	plugins := m.registry.Plugins()
 	if len(plugins) == 0 {
 		return nil
@@ -625,6 +694,10 @@ func (m *Model) PrevPlugin() tea.Cmd {
 
 // FocusPluginByID switches to a plugin by its ID.
 func (m *Model) FocusPluginByID(id string) tea.Cmd {
+	// Deliberate navigation. Anything still parked for a switch is stale: the
+	// user asked for somewhere else. (A landing takes the slot before it emits
+	// its own focus, so this never eats the jump it is part of.)
+	m.clearPendingActivation()
 	plugins := m.registry.Plugins()
 	for i, p := range plugins {
 		if p.ID() == id {
@@ -648,18 +721,30 @@ func (m *Model) focusPluginByIDWithoutNotice(id string) {
 	}
 }
 
-// ShowToast displays a temporary status message.
-func (m *Model) ShowToast(msg string, duration time.Duration) {
-	m.statusMsg = msg
-	m.statusExpiry = time.Now().Add(duration)
+// ShowToast files a transient message as a `system` notification. It keeps the
+// old name and signature because dozens of callers use it, but there is no
+// footer toast behind it any more: the message becomes a real notification, so
+// it floats as a toast for `duration` and then stays in the centre instead of
+// vanishing unseen.
+func (m *Model) ShowToast(message string, duration time.Duration) {
+	m.showToastWithSeverity(message, duration, false)
 }
 
-// ClearToast clears any expired toast message.
-func (m *Model) ClearToast() {
-	if m.statusMsg != "" && time.Now().After(m.statusExpiry) {
-		m.statusMsg = ""
-		m.statusIsError = false
+func (m *Model) showToastWithSeverity(message string, duration time.Duration, isError bool) {
+	severity := notify.SeverityInfo
+	if isError {
+		severity = notify.SeverityError
 	}
+	n := notify.Notification{
+		Source:   notify.SourceSystem,
+		Severity: severity,
+		Title:    message,
+	}
+	if duration > 0 {
+		expires := time.Now().UTC().Add(duration)
+		n.ExpiresAt = &expires
+	}
+	m.postNotification(n)
 }
 
 // resetProjectSwitcher resets the project switcher modal state.
@@ -785,6 +870,8 @@ func (m *Model) switchProject(projectPath string) tea.Cmd {
 
 func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDestination) tea.Cmd {
 	m.resetProjectSwitcher()
+	// The user picked a destination by hand, which outranks any parked jump.
+	m.clearPendingActivation()
 	if destination.Kind == destinationOverview && m.globalScopeAvailable() {
 		return m.enterOverview()
 	}
@@ -795,9 +882,9 @@ func (m *Model) activateProjectSwitcherDestination(destination projectSwitcherDe
 	// and keep the useful notice without adding a second command beside the one
 	// PluginFocused reconciliation the return requires.
 	if m.inGlobalScope() && destination.Kind == destinationProject && destination.Path == m.ui.WorkDir {
-		focus := m.exitOverview()
-		m.ShowToast("Already on this project", 2*time.Second)
-		return focus
+		// No notice: the user is already looking at the project they picked, so
+		// saying nothing changed adds nothing (audit row 4).
+		return m.exitOverview()
 	}
 	m.leaveOverview(false)
 	m.updateContext()
@@ -880,11 +967,17 @@ func (m *Model) switchProjectWithInventory(projectPath string, inventory []Workt
 }
 
 func (m *Model) switchProjectWithSelection(projectPath string, inventory []WorktreeInfo, pending *plugin.PendingWorkspaceSelection, restoreLastWorktree bool) tea.Cmd {
-	// Skip if already on this project
+	// Skip if already on this project. Silently: the user is looking at it
+	// (audit row 17).
 	if projectPath == m.ui.WorkDir {
-		return func() tea.Msg {
-			return ToastMsg{Message: "Already on this project", Duration: 2 * time.Second}
-		}
+		return nil
+	}
+
+	// A caller-supplied selection is a hand-off like any other, so it goes
+	// through the one slot rather than beside it. It supersedes a target parked
+	// by an earlier jump: this switch is the newer request.
+	if pending != nil {
+		m.setPendingActivation(pendingActivation{selection: pending})
 	}
 
 	// Save the active plugin state for the old project root
@@ -967,30 +1060,20 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	if themeCmd != nil {
 		startCmds = append(startCmds, themeCmd)
 	}
-	if pending != nil {
-		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
-			selector.SetPendingWorkspaceSelection(*pending)
-		}
-		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
-			if cmd := provider.TakePendingWorkspaceAction(); cmd != nil {
-				startCmds = append(startCmds, cmd)
-			}
-		}
-	}
+	// One hand-off slot, one apply site: a workspace selection this call was
+	// given, or a target a cross-project jump parked before switching.
+	startCmds = append(startCmds, m.applyPendingActivation()...)
 
-	// Send WindowSizeMsg to all plugins so they recalculate layout/bounds.
+	// Send the content box to all plugins so they recalculate layout/bounds.
 	// Without this, plugins like td-monitor lose mouse interactivity because
 	// their panel bounds are only calculated on WindowSizeMsg receipt.
-	adjustedHeight := m.height - headerHeight - footerHeight
-	sizeMsg := tea.WindowSizeMsg{Width: m.width, Height: adjustedHeight}
-	plugins := m.registry.Plugins()
-	for i, p := range plugins {
-		newPlugin, cmd := p.Update(sizeMsg)
-		plugins[i] = newPlugin
-		if cmd != nil {
-			startCmds = append(startCmds, cmd)
-		}
-	}
+	//
+	// Reinit rebuilds every plugin, so a plugin that came back would otherwise
+	// lay out against the full terminal and paint underneath an open
+	// notification centre. emitContentSize restores the reservation here,
+	// before the next frame — this is the project/worktree-switch half of the
+	// promise that the panel survives all navigation.
+	startCmds = append(startCmds, m.emitContentSize()...)
 
 	// Reinit deliberately clears every plugin's focus-owned resources. Always
 	// hand focus back explicitly, including on a project's first visit where no
@@ -1025,12 +1108,9 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 		titleCmd,
 		inventoryRefresh,
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
-		func() tea.Msg {
-			return ToastMsg{
-				Message:  fmt.Sprintf("Switched to %s", GetRepoName(targetPath)),
-				Duration: 3 * time.Second,
-			}
-		},
+		// Routine confirmation of a switch the user just made and can see:
+		// a flash, not a stored notification (audit row 18).
+		ShowFlash(fmt.Sprintf("Switched to %s", GetRepoName(targetPath))),
 	)
 }
 
@@ -1082,15 +1162,14 @@ func (m *Model) navigateFromOverviewAction(workspace workspaceinventory.Workspac
 	}
 	pending := plugin.PendingWorkspaceSelection{Kind: kind, Key: key, Path: workspace.Path, Action: action}
 	if workspaceinventory.CanonicalPath(target) == workspaceinventory.CanonicalPath(m.ui.WorkDir) {
-		if selector, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceSelector); ok {
-			selector.SetPendingWorkspaceSelection(pending)
-		}
+		// No switch, so no Reinit to wait for — but the hand-off still goes
+		// through the one slot, applied immediately, so the selection has a
+		// single apply site whether or not a project switch is involved.
+		m.setPendingActivation(pendingActivation{selection: &pending})
+		applyCmds := m.applyPendingActivation()
 		m.updateContext()
-		var actionCmd tea.Cmd
-		if provider, ok := m.registry.Get(workspacePluginID).(plugin.PendingWorkspaceActionProvider); ok {
-			actionCmd = provider.TakePendingWorkspaceAction()
-		}
-		return tea.Batch(m.FocusPluginByID(workspacePluginID), actionCmd)
+		// FocusPluginByID clears the slot; it is already empty by here.
+		return tea.Batch(append(applyCmds, m.FocusPluginByID(workspacePluginID))...)
 	}
 	// Worktree cards name an exact destination, so the remembered worktree must
 	// not override it. Shells are project-scoped and still open in whichever
@@ -1166,9 +1245,9 @@ func (m *Model) confirmThemeSelection(tc config.ThemeConfig, displayName string)
 	} else {
 		toastMsg += " (global)"
 	}
-	return tea.Batch(themeCmd, func() tea.Msg {
-		return ToastMsg{Message: toastMsg, Duration: 2 * time.Second}
-	})
+	// The theme change is the confirmation; only the save-failed branch above
+	// is worth keeping (audit row 21).
+	return tea.Batch(themeCmd, ShowFlash(toastMsg))
 }
 
 // saveTheme persists a ThemeConfig based on scope.
@@ -1206,7 +1285,7 @@ Rules:
 My code is located at: [TELL ME WHERE YOUR CODE DIRECTORIES ARE]`
 
 	return clip.Copy(prompt, func(r clip.Result) tea.Msg {
-		return ToastMsg{Message: r.Message("Copied LLM setup prompt"), Duration: 2 * time.Second}
+		return FlashMsg{Text: r.Message("Copied LLM setup prompt")}
 	})
 }
 
@@ -1345,9 +1424,8 @@ func (m *Model) saveProjectAdd() tea.Cmd {
 	// Refresh the filtered list
 	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 
-	return func() tea.Msg {
-		return ToastMsg{Message: fmt.Sprintf("Added project: %s", name), Duration: 3 * time.Second}
-	}
+	// The new row in the switcher is the confirmation (audit row 26).
+	return ShowFlash(fmt.Sprintf("Added project: %s", name))
 }
 
 // resetThemeSwitcher resets the theme switcher modal state.

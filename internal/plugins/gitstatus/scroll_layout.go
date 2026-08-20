@@ -166,9 +166,7 @@ func (p *Plugin) commitSectionCapacity(visibleHeight int) int {
 	linesUsed += 2
 
 	// Remote operation status line if present
-	if p.pushInProgress || p.fetchInProgress || p.pullInProgress ||
-		p.pushSuccess || p.fetchSuccess || p.pullSuccess ||
-		p.pushError != "" || p.fetchError != "" || p.pullError != "" {
+	if p.pushInProgress || p.fetchInProgress || p.pullInProgress {
 		linesUsed++
 	}
 

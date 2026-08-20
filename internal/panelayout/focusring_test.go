@@ -177,3 +177,58 @@ func TestCycleTargetWalksWholeRing(t *testing.T) {
 		}
 	}
 }
+
+func TestAtRingEndAndRingStart(t *testing.T) {
+	ring := []Target{{Kind: TargetSidebar}, {Kind: TargetLeaf, Leaf: 1}, {Kind: TargetLeaf, Leaf: 2}}
+	if AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 1}, false) {
+		t.Fatal("a middle window reported the end of the ring")
+	}
+	if !AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 2}, false) {
+		t.Fatal("the last window did not report the end of the ring")
+	}
+	if !AtRingEnd(ring, Target{Kind: TargetSidebar}, true) {
+		t.Fatal("the first window is the end going backwards")
+	}
+	if AtRingEnd(ring, Target{Kind: TargetLeaf, Leaf: 9}, false) {
+		t.Fatal("a target the ring does not contain is not at its end")
+	}
+	if AtRingEnd(nil, Target{Kind: TargetSidebar}, false) {
+		t.Fatal("an empty ring has no end")
+	}
+
+	if start, ok := RingStart(ring, false); !ok || start != ring[0] {
+		t.Fatalf("RingStart forward = %v (%v), want %v", start, ok, ring[0])
+	}
+	if start, ok := RingStart(ring, true); !ok || start != ring[len(ring)-1] {
+		t.Fatalf("RingStart reverse = %v (%v), want %v", start, ok, ring[len(ring)-1])
+	}
+	if _, ok := RingStart(nil, false); ok {
+		t.Fatal("an empty ring has no start")
+	}
+}
+
+// TwoPaneRing is the tree ring's answer for the surfaces that have no tree: a
+// window that is not drawn is not a stop, in either position.
+func TestTwoPaneRing(t *testing.T) {
+	both := TwoPaneRing(true, true)
+	if len(both) != 2 || both[0].Kind != TargetSidebar || both[1] != ContentPaneTarget {
+		t.Fatalf("ring = %v, want the list then the content pane", both)
+	}
+	if got := TwoPaneRing(true, false); len(got) != 1 || got[0].Kind != TargetSidebar {
+		t.Fatalf("ring without a content pane = %v, want the list alone", got)
+	}
+	if got := TwoPaneRing(false, true); len(got) != 1 || got[0] != ContentPaneTarget {
+		t.Fatalf("ring with the list hidden = %v, want the content pane alone", got)
+	}
+	if got := TwoPaneRing(false, false); len(got) != 0 {
+		t.Fatalf("ring with nothing drawn = %v, want no stops", got)
+	}
+
+	// The wrap points of the two-window ring are its two ends.
+	if !AtRingEnd(both, ContentPaneTarget, false) || AtRingEnd(both, ContentPaneTarget, true) {
+		t.Fatal("the content pane is the forward wrap point and only that")
+	}
+	if start, ok := RingStart(both, false); !ok || start.Kind != TargetSidebar {
+		t.Fatalf("forward restart = %v, want the list", start)
+	}
+}

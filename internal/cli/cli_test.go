@@ -298,3 +298,35 @@ func quoteJSON(t *testing.T, value string) string {
 }
 
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+
+// `sidecar -config <path> notify post ...` must reach the subcommand. The
+// global flag before the command used to make args[0] unmatchable, so dispatch
+// fell through to TUI startup and the binary died with "Sidecar requires an
+// interactive terminal".
+func TestGlobalFlagsBeforeACommandStillDispatch(t *testing.T) {
+	rest, cfg, ok := stripGlobalFlags([]string{"-config", "/tmp/x/config.json", "notify", "post", "hi"})
+	if !ok || cfg != "/tmp/x/config.json" {
+		t.Fatalf("strip = (%v, %q, %v)", rest, cfg, ok)
+	}
+	if len(rest) != 3 || rest[0] != "notify" {
+		t.Fatalf("rest = %v, want the command and its arguments", rest)
+	}
+
+	rest, cfg, ok = stripGlobalFlags([]string{"--config=/tmp/y", "-debug", "-project", "/repo", "notify", "list"})
+	if !ok || cfg != "/tmp/y" || len(rest) != 2 || rest[0] != "notify" {
+		t.Fatalf("strip = (%v, %q, %v)", rest, cfg, ok)
+	}
+
+	// Flags the CLI does not own are left alone: `sidecar -version` and
+	// `sidecar -project /x` still belong to ordinary TUI startup.
+	if _, _, ok := stripGlobalFlags([]string{"-version"}); ok {
+		t.Fatal("-version must fall through to flag parsing")
+	}
+	if rest, _, ok := stripGlobalFlags([]string{"-project", "/repo"}); !ok || len(rest) != 0 {
+		t.Fatalf("a flag-only argv leaves no command: rest=%v ok=%v", rest, ok)
+	}
+
+	if !namesCommand("notify") || namesCommand("-project") {
+		t.Fatal("namesCommand disagrees with the registry")
+	}
+}

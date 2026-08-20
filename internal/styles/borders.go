@@ -330,9 +330,12 @@ func GetInteractiveGradient() Gradient {
 // This is the main function plugins should use for bordered panels.
 // active determines whether to use active (focused) or normal gradient.
 // width and height are the outer dimensions including borders.
+// A focused border is downgraded to the normal one while an app-level surface
+// outside every pane holds the keyboard, so exactly one pane ever reads as
+// focused — see focus.go.
 func RenderPanel(content string, width, height int, active bool) string {
 	var gradient Gradient
-	if active {
+	if active && !focusHeldOutsidePanes.Load() {
 		gradient = GetActiveGradient()
 	} else {
 		gradient = GetNormalGradient()
@@ -344,6 +347,15 @@ func RenderPanel(content string, width, height int, active bool) string {
 
 // RenderPanelWithGradient renders content in a panel with a custom gradient.
 // Useful for modals or special cases that need different gradient colors.
+//
+// The custom gradients in use are all focus or attention chrome on a pane
+// (interactive input, the attention flash), so this obeys the same
+// exactly-one-focused-pane rule as RenderPanel: while focus is held outside the
+// panes the pane draws its normal border. Overlay chrome — modals, toasts, the
+// centre panel — is rendered while that signal is clear and is unaffected.
 func RenderPanelWithGradient(content string, width, height int, gradient Gradient) string {
+	if focusHeldOutsidePanes.Load() {
+		gradient = GetNormalGradient()
+	}
 	return RenderGradientBorder(content, width, height, gradient, 1)
 }

@@ -1229,10 +1229,9 @@ func readOnlyPasteToast(filter NoteFilter) tea.Cmd {
 		label = "Deleted notes"
 	}
 	return func() tea.Msg {
-		return msg.ToastMsg{
-			Message:  label + " are read-only",
-			Duration: 2 * time.Second,
-		}
+		// A refusal the user provokes by typing: frequent, and worth saying
+		// only while it is on screen.
+		return msg.FlashMsg{Text: label + " are read-only"}
 	}
 }
 
@@ -1295,9 +1294,7 @@ func (p *Plugin) FooterStatus() (string, bool) {
 	if p.recoveryErr != nil {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
-	if p.saveInFlight || p.exportSaveInFlight {
-		return "notes: saving…", false
-	}
+	// An in-flight save is routine and self-resolving: no status line.
 	return "", false
 }
 
@@ -1355,18 +1352,10 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Enter/i/click are what enter edit.
 	if key == "tab" && p.editorNote != nil {
 		if p.activePane == PaneList {
-			p.activePane = PaneEditor
-			if !p.previewMode {
-				p.leaveEditToView()
-			}
-			p.editorTextarea.Blur()
+			p.focusEditorPane()
 			return p, nil
 		}
-		if !p.previewMode {
-			p.leaveEditToView()
-		}
-		p.activePane = PaneList
-		return p, p.saveEditorContent()
+		return p, p.focusListPane()
 	}
 
 	// Esc returns to Active view from Archived/Deleted views
@@ -2653,7 +2642,7 @@ func (p *Plugin) yankNoteContent() tea.Cmd {
 		content = p.editorTextarea.Value()
 	}
 	return clip.Copy(content, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied note content"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied note content")}
 	})
 }
 
@@ -2674,11 +2663,12 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 	}
 
 	if title == "" {
-		return msg.ShowToast("No title to copy", 2*time.Second)
+		// Nothing to act on, nothing to say (audit row 43).
+		return nil
 	}
 
 	return clip.Copy(title, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied: " + title), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied: " + title)}
 	})
 }
 
@@ -2686,11 +2676,12 @@ func (p *Plugin) yankNoteTitle() tea.Cmd {
 func (p *Plugin) copyEditorContent() tea.Cmd {
 	content := p.editorTextarea.Value()
 	if content == "" {
-		return msg.ShowToast("No content to copy", 2*time.Second)
+		// Nothing to act on, nothing to say (audit row 44).
+		return nil
 	}
 
 	return clip.Copy(content, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message("Copied to clipboard"), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message("Copied to clipboard")}
 	})
 }
 
@@ -2946,7 +2937,9 @@ func (p *Plugin) loadNotes() tea.Cmd {
 
 // showSavedToast shows a toast notification for note save.
 func showSavedToast() tea.Cmd {
-	return msg.ShowToast("Saved", 2*time.Second)
+	// Routine, high-frequency, and the editor already shows a clean buffer
+	// (audit row 45).
+	return msg.ShowFlash("Saved")
 }
 
 func showSaveFailedToast(err error) tea.Cmd {
@@ -2982,7 +2975,7 @@ func showRestoredToast(title string) tea.Cmd {
 	if displayTitle != "" {
 		text = "Restored: " + displayTitle
 	}
-	return msg.ShowToast(text, 2*time.Second)
+	return msg.ShowFlash(text)
 }
 
 // truncateTitle truncates a title to maxLen chars with ellipsis.
@@ -3024,7 +3017,8 @@ func (p *Plugin) hasUndo() bool {
 func (p *Plugin) undoLastAction() tea.Cmd {
 	action := p.popUndo()
 	if action == nil || p.store == nil {
-		return msg.ShowToast("Nothing to undo", 2*time.Second)
+		// Nothing to undo is nothing to report (audit row 47).
+		return nil
 	}
 
 	noteID := action.NoteID

@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -90,7 +91,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// is stale for its epoch.
 		return p, p.applyDocSearchMsg(msg)
 	case docview.RevealErrorMsg:
-		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 2*time.Second)
+		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 4*time.Second)
 	case issueview.LoadedMsg:
 		p.applyIssueLoaded(msg)
 		return p, nil
@@ -1622,9 +1623,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.mergeCommitState = nil
 				p.mergeCommitMessageInput = textinput.Model{}
 				p.clearCommitForMergeModal()
-				if msg.NothingToCommit {
-					cmds = append(cmds, appmsg.ShowToast("Nothing to commit — workspace was already clean", 3*time.Second))
-				}
+				// Nothing to commit is a no-op the git view already shows;
+				// the merge simply proceeds (audit row 31).
 				cmds = append(cmds, p.proceedToMergeWorkflow(wt))
 			}
 		}
@@ -1638,7 +1638,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 					p.mergeState.StepStatus[MergeStepReviewDiff] = "running"
 					p.mergeState.ReviewedOID = ""
 					p.clearMergeModal()
-					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.ShowToast("Reviewed source changed; review the updated diff before pushing", 4*time.Second))
+					cmds = append(cmds, p.loadMergeDiff(p.mergeState.Worktree), appmsg.Alert(notify.SourceWaiting, notify.SeverityWarning, "Reviewed source changed; review the updated diff before pushing"))
 					break
 				}
 				title := fmt.Sprintf("%s Failed", msg.Step.String())
@@ -1712,7 +1712,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.clearMergeModal()
 			if msg.Err != nil {
 				cmds = append(cmds,
-					appmsg.ShowToast("Agent failed, using commit summary", 3*time.Second),
+					// The agent's own failure, not the app's (audit row 33).
+					appmsg.Alert(notify.SourceAgent, notify.SeverityWarning, "Agent failed, using commit summary"),
 				)
 			}
 		}
@@ -1797,7 +1798,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			} else if msg.Operation != nil && msg.Operation.Aborted {
 				p.cancelMergeWorkflow()
 				p.clearMergeModal()
-				cmds = append(cmds, appmsg.ShowToast("Merge aborted; target restored", 3*time.Second))
+				cmds = append(cmds, appmsg.Alert(notify.SourceSession, notify.SeverityWarning, "Merge aborted; target restored"))
 			} else {
 				// Direct merge succeeded, advance to confirmation
 				p.mergeState.Step = MergeStepDirectMerge
@@ -1982,6 +1983,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.createShellWithResume(msg.Command)
 
+	case app.OpenIssuePaneMsg:
+		return p, p.openIssuePaneMsg(msg)
+
+	case app.OpenDiffPaneMsg:
+		return p, p.openDiffPaneMsg(msg)
+
+	case app.OpenResourcePaneMsg:
+		return p, p.openResourcePaneMsg(msg)
+
+	case app.AttachSessionMsg:
+		return p, p.attachSessionMsg(msg)
+
 	case cursorPositionMsg:
 		// Update cached cursor position for interactive mode rendering (td-648af4)
 		if p.interactiveState != nil && p.interactiveState.Active {
@@ -2012,7 +2025,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		if msg.Empty {
 			return p, func() tea.Msg {
-				return app.ToastMsg{Message: "Clipboard empty", Duration: 2 * time.Second}
+				// Nothing was pasted and nothing is worth keeping about it.
+				return appmsg.FlashMsg{Text: "Clipboard empty"}
 			}
 		}
 		if msg.Err != nil {
@@ -2027,7 +2041,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.Err != nil {
 			p.termPanelVisible = false
 			p.termPanelFocused = false
-			return p, appmsg.ShowToast("Terminal: "+msg.Err.Error(), 3*time.Second)
+			return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Terminal: "+msg.Err.Error())
 		}
 		if msg.SessionName == p.termPanelSession {
 			p.termPanelPaneID = msg.PaneID

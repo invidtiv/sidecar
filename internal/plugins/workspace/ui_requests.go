@@ -182,7 +182,7 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 				Surface:  surface,
 				At:       time.Now().UTC(),
 			})
-			return appmsg.ShowToast(features.WorkspaceDocPanesDisabledDiff, 3*time.Second)
+			return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 		}
 		retargeted = p.willRetargetPane(PaneDiff)
 		spec := uirequest.DiffTarget(root, req.Target.Value)

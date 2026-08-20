@@ -15,14 +15,18 @@ type State struct {
 	LineWrapEnabled   bool   `json:"lineWrapEnabled,omitempty"`   // Wrap long lines instead of truncating
 
 	// Pane width preferences (percentage of total width, 0 = use default)
-	FileBrowserTreeWidth   int    `json:"fileBrowserTreeWidth,omitempty"`
-	GitStatusSidebarWidth  int    `json:"gitStatusSidebarWidth,omitempty"`
-	ConversationsSideWidth int    `json:"conversationsSideWidth,omitempty"`
-	WorkspaceSidebarWidth  int    `json:"workspaceSidebarWidth,omitempty"`
-	DiffTabFileListWidth   int    `json:"diffTabFileListWidth,omitempty"`
-	TermPanelSize          int    `json:"termPanelSize,omitempty"`    // Terminal panel split size (percentage, 0 = 50%)
-	TermPanelLayout        string `json:"termPanelLayout,omitempty"`  // "bottom" or "right"
-	TermPanelVisible       bool   `json:"termPanelVisible,omitempty"` // Whether terminal panel was visible at exit
+	FileBrowserTreeWidth   int `json:"fileBrowserTreeWidth,omitempty"`
+	GitStatusSidebarWidth  int `json:"gitStatusSidebarWidth,omitempty"`
+	ConversationsSideWidth int `json:"conversationsSideWidth,omitempty"`
+	WorkspaceSidebarWidth  int `json:"workspaceSidebarWidth,omitempty"`
+	DiffTabFileListWidth   int `json:"diffTabFileListWidth,omitempty"`
+	// NotificationCentreWidth is the app-level right panel's width in columns.
+	// It belongs to the shell rather than a plugin, but it is the same kind of
+	// preference as the pane widths above and is persisted the same way.
+	NotificationCentreWidth int    `json:"notificationCentreWidth,omitempty"`
+	TermPanelSize           int    `json:"termPanelSize,omitempty"`    // Terminal panel split size (percentage, 0 = 50%)
+	TermPanelLayout         string `json:"termPanelLayout,omitempty"`  // "bottom" or "right"
+	TermPanelVisible        bool   `json:"termPanelVisible,omitempty"` // Whether terminal panel was visible at exit
 
 	// Plugin-specific state (keyed by working directory path)
 	FileBrowser  map[string]FileBrowserState `json:"fileBrowser,omitempty"`
@@ -473,6 +477,28 @@ func SetGitStatusSidebarWidth(width int) error {
 		current = &State{}
 	}
 	current.GitStatusSidebarWidth = width
+	mu.Unlock()
+	return Save()
+}
+
+// GetNotificationCentreWidth returns the saved notification centre panel width.
+// Returns 0 if no preference is saved (use default).
+func GetNotificationCentreWidth() int {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return 0
+	}
+	return current.NotificationCentreWidth
+}
+
+// SetNotificationCentreWidth saves the notification centre panel width.
+func SetNotificationCentreWidth(width int) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	current.NotificationCentreWidth = width
 	mu.Unlock()
 	return Save()
 }

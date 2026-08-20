@@ -95,17 +95,17 @@ func (p *Plugin) openCommitInGitHub() tea.Cmd {
 
 	remoteURL := GetRemoteURL(p.repoRoot)
 	if remoteURL == "" {
-		return msg.ShowToast("No remote configured", 2*time.Second)
+		return msg.ShowFlash("No remote configured")
 	}
 
 	ghInfo := ParseGitHubInfo(remoteURL)
 	if ghInfo == nil {
-		return msg.ShowToast("Not a GitHub repository", 2*time.Second)
+		return msg.ShowFlash("Not a GitHub repository")
 	}
 
 	url := BuildCommitURL(ghInfo, commit.Hash)
 	return tea.Batch(
 		openInBrowser(url),
-		msg.ShowToast("Opening in GitHub...", 2*time.Second),
+		msg.ShowFlash("Opening in GitHub..."),
 	)
 }

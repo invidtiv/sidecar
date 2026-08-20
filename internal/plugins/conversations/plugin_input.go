@@ -1,9 +1,6 @@
 package conversations
 
 import (
-	"strings"
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/adapter"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -125,7 +122,7 @@ func (p *Plugin) updateSessions(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 
 	case "+":
@@ -218,7 +215,8 @@ func (p *Plugin) toggleCategoryFilter() tea.Cmd {
 		p.cursor = 0
 		p.scrollOff = 0
 		p.hitRegionsDirty = true
-		return appmsg.ShowToast("Showing all sessions", 2*time.Second)
+		// The unfiltered list is the confirmation (audit row 52).
+		return nil
 	}
 
 	// Check if any sessions have a category set — if none do, the toggle is a no-op
@@ -230,7 +228,8 @@ func (p *Plugin) toggleCategoryFilter() tea.Cmd {
 		}
 	}
 	if !hasCategorized {
-		return appmsg.ShowToast("No categorized sessions", 2*time.Second)
+		// Why the toggle did nothing, said once and not kept (audit row 53).
+		return appmsg.ShowFlash("No categorized sessions")
 	}
 
 	// Currently showing all -> apply default filter
@@ -244,9 +243,8 @@ func (p *Plugin) toggleCategoryFilter() tea.Cmd {
 	p.cursor = 0
 	p.scrollOff = 0
 	p.hitRegionsDirty = true
-	// Build label from active categories
-	label := strings.Join(p.filters.Categories, ", ")
-	return appmsg.ShowToast("Showing "+label+" sessions", 2*time.Second)
+	// The filtered list is the confirmation (audit row 54).
+	return nil
 }
 
 // updateSearch handles key events in search mode.
@@ -491,7 +489,7 @@ func (p *Plugin) updateMessages(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Toggle sidebar visibility
 		p.toggleSidebar()
 		if !p.sidebarVisible {
-			return p, appmsg.ShowToast("Sidebar hidden (\\ to restore)", 2*time.Second)
+			return p, appmsg.ShowFlash("Sidebar hidden (\\ to restore)")
 		}
 		return p, nil
 

@@ -1,8 +1,6 @@
 package issueview
 
 import (
-	"time"
-
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/msg"
@@ -29,6 +27,6 @@ func copyText(text, ok string) tea.Cmd {
 		return nil
 	}
 	return clip.Copy(text, func(r clip.Result) tea.Msg {
-		return msg.ToastMsg{Message: r.Message(ok), Duration: 2 * time.Second}
+		return msg.FlashMsg{Text: r.Message(ok)}
 	})
 }

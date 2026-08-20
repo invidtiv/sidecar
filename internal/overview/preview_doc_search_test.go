@@ -16,7 +16,7 @@ import (
 func focusedDocPreview(t *testing.T) *Model {
 	t.Helper()
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	if m.preview.doc == nil {
 		t.Fatal("README.md did not open in a document pane")
 	}

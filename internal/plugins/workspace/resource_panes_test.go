@@ -91,7 +91,7 @@ func clickResourceKey(t *testing.T, p *Plugin, line string) tea.Cmd {
 		t.Fatal("the selected terminal surface has no link context")
 	}
 	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
-		if link.Kind != terminalResourceLink {
+		if link.Kind != terminallink.KindResource {
 			continue
 		}
 		cmd, ok := p.activateResolvedTerminalLink(link, context, false)
@@ -185,7 +185,7 @@ func TestAnUnreadyProviderLeavesTheKeyAsPlainText(t *testing.T) {
 		t.Fatal("the selected terminal surface has no link context")
 	}
 	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
-		if link.Kind == terminalResourceLink {
+		if link.Kind == terminallink.KindResource {
 			t.Fatalf("an unready provider still produced %#v", link)
 		}
 	}
@@ -341,7 +341,7 @@ func TestAReadyProviderUnderlinesTheKey(t *testing.T) {
 
 	found := false
 	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
-		if link.Kind == terminalResourceLink {
+		if link.Kind == terminallink.KindResource {
 			found = true
 		}
 	}

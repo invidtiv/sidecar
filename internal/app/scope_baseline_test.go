@@ -269,8 +269,10 @@ func TestSelectingTheCoveredProjectFromGlobalRestoresItsTerminalOnce(t *testing.
 		t.Fatalf("terminal restoration: open=%v notices=%d want=%d",
 			project.terminalOpen, project.focusNotices, beforeNotices+1)
 	}
-	if m.statusMsg != "Already on this project" {
-		t.Fatalf("same-project notice = %q", m.statusMsg)
+	// Selecting the project already on screen says nothing: there is no
+	// change to report (Phase 1.5 re-tiering, audit row 4).
+	if hasSystemNotification(m, "Already on this project") {
+		t.Fatalf("same-project selection filed a notification: %#v", m.Notifications())
 	}
 	if got := totalInits(plugins); got != inits {
 		t.Fatalf("same-project return reinitialized plugins: %d -> %d", inits, got)
@@ -590,8 +592,8 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	}
 
 	// A project destination leaves the global space. Switching to the project
-	// already under the Overview is refused as "already on this project", which
-	// is what keeps the remembered destination intact.
+	// already under the Overview is refused silently, which is what keeps the
+	// remembered destination intact.
 	same := destinations[1]
 	if same.Kind != destinationProject || same.Path != "/tmp/one" {
 		t.Fatalf("second destination = %#v, want the current project", same)
@@ -606,8 +608,8 @@ func TestProjectSwitcherFromOverviewRoutesByDestinationKind(t *testing.T) {
 	if _, ok := cmd().(plugin.PluginFocusedMsg); !ok {
 		t.Fatal("switching to the current project should restore focus, not re-switch")
 	}
-	if m.statusMsg != "Already on this project" {
-		t.Fatal("switching to the current project lost its notice")
+	if hasSystemNotification(m, "Already on this project") {
+		t.Fatal("switching to the current project filed a notification")
 	}
 	if m.activePlugin != 2 || m.activeContext != "git" {
 		t.Fatalf("project destination changed the plugin: plugin=%d context=%q", m.activePlugin, m.activeContext)
@@ -702,4 +704,15 @@ func TestHeaderKeysYieldToAFocusedTextInput(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hasSystemNotification reports whether the model filed a notice with this
+// title. Notices used to be a footer string; they are notifications now.
+func hasSystemNotification(m Model, title string) bool {
+	for _, n := range m.Notifications() {
+		if n.Title == title {
+			return true
+		}
+	}
+	return false
 }

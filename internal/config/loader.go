@@ -68,6 +68,17 @@ type rawConfig struct {
 	// place, but only the first is silent about it.
 	TerminalResources *rawTerminalResourcesConfig `json:"terminalResources"`
 	Selection         rawSelectionConfig          `json:"selection"`
+	// Notifications is a pointer for the same reason: an absent section leaves
+	// internal/notify's registry defaults alone.
+	Notifications *rawNotificationsConfig `json:"notifications"`
+}
+
+type rawNotificationsConfig struct {
+	Sources map[string]rawNotificationSourceConfig `json:"sources"`
+}
+
+type rawNotificationSourceConfig struct {
+	Expiry string `json:"expiry"`
 }
 
 type rawSelectionConfig struct {
@@ -454,6 +465,16 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	if cfg.Plugins.Workspace.CopyOnSelect {
 		cfg.Selection.CopyOnSelect = true
 		cfg.Plugins.Workspace.CopyOnSelect = false
+	}
+
+	// Notifications
+	if raw.Notifications != nil && len(raw.Notifications.Sources) > 0 {
+		if cfg.Notifications.Sources == nil {
+			cfg.Notifications.Sources = make(map[string]NotificationSourceConfig, len(raw.Notifications.Sources))
+		}
+		for id, src := range raw.Notifications.Sources {
+			cfg.Notifications.Sources[id] = NotificationSourceConfig{Expiry: src.Expiry}
+		}
 	}
 
 	// Features

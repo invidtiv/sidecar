@@ -405,7 +405,6 @@ func (m *Model) confirmOpenIn() tea.Cmd {
 	}
 
 	appName := selected.Name
-	return func() tea.Msg {
-		return ToastMsg{Message: "Opened in " + appName, Duration: 2 * time.Second}
-	}
+	// The app coming to the front is the confirmation (audit row 16).
+	return ShowFlash("Opened in " + appName)
 }

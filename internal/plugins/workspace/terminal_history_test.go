@@ -117,8 +117,8 @@ func TestTheEndOfTmuxsHistoryIsSaidOnce(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("the end of this pane's history was never mentioned")
 	}
-	toast, ok := cmd().(appmsg.ToastMsg)
-	if !ok || toast.Message != tty.HistoryExhaustedNotice {
+	flash, ok := cmd().(appmsg.FlashMsg)
+	if !ok || flash.Text != tty.HistoryExhaustedNotice {
 		t.Fatalf("message at the end of history = %#v, want %q", cmd(), tty.HistoryExhaustedNotice)
 	}
 	if again := notch(); again != nil {

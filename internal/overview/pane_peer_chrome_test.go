@@ -48,7 +48,7 @@ func TestGlobalOneLeafInnerMatchesTheInsetPeer(t *testing.T) {
 // complete perimeter of its own, separated by the shared one-cell drag handle.
 func TestGlobalTwoLeafLeavesWearTheirOwnBorders(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	if m.preview.doc == nil {
 		t.Fatal("document pane did not open")
 	}
@@ -107,7 +107,7 @@ func assertGlobalLeafHasCompletePanel(t *testing.T, rows []string, outer panefra
 // here than in the project workspace.
 func TestGlobalLeafChromeReadsFocusLikeTheProjectSurface(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	run(t, m, m.openPreviewDoc(mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	doc := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document)
 	term := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
 	if doc == nil || term == nil {

@@ -132,12 +132,12 @@ func TestArchivedListPasteIsReadOnly(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("read-only paste returned no toast")
 	}
-	toast, ok := cmd().(msg.ToastMsg)
+	flash, ok := cmd().(msg.FlashMsg)
 	if !ok {
-		t.Fatalf("read-only paste produced %T, want toast", cmd())
+		t.Fatalf("read-only paste produced %T, want flash", cmd())
 	}
-	if !strings.Contains(toast.Message, "read-only") {
-		t.Fatalf("toast = %q, want read-only", toast.Message)
+	if !strings.Contains(flash.Text, "read-only") {
+		t.Fatalf("flash = %q, want read-only", flash.Text)
 	}
 	after, err := p.store.List(true)
 	if err != nil {

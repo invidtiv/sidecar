@@ -127,8 +127,15 @@ const (
 
 // WrapLeaf draws content inside one leaf's OUTER box. Content bytes are never
 // dimmed; only the border states change.
+//
+// The chrome the caller asks for is passed through EffectiveChrome first, so a
+// surface cannot draw a focused leaf while an app-level surface outside every
+// pane tree holds the keyboard. Applying it here rather than in each Host is
+// what makes exactly-one-focused-pane an app-wide property: every focused
+// border on both surfaces, including the lone-preview frame that never goes
+// through Compose, is painted by this function.
 func WrapLeaf(content string, outer Box, chrome Chrome) string {
-	switch chrome {
+	switch EffectiveChrome(chrome) {
 	case ChromeInteractive:
 		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetInteractiveGradient())
 	case ChromeFlash:

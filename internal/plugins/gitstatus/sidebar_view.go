@@ -206,18 +206,10 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 	sb.WriteString("\n")
 	currentY++
 
-	// Git operation status
+	// Git operation status. Only in-flight progress lives here; results
+	// (success and failure alike) are notifications, not sidebar echoes.
 	if p.activeOperation != nil {
 		sb.WriteString(styles.StatusInProgress.Render(operationProgressLabel(p.activeOperation.Kind)))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.operationError != "" {
-		errMsg := p.operationError
-		maxLen := p.sidebarWidth - 8
-		if len(errMsg) > maxLen && maxLen > 3 {
-			errMsg = errMsg[:maxLen-3] + "..."
-		}
-		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
 		sb.WriteString("\n")
 		currentY++
 	} else if p.pushInProgress {
@@ -230,46 +222,6 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 		currentY++
 	} else if p.pullInProgress {
 		sb.WriteString(styles.StatusInProgress.Render("Pulling..."))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.pushSuccess {
-		sb.WriteString(styles.StatusStaged.Render("✓ Pushed"))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.fetchSuccess {
-		sb.WriteString(styles.StatusStaged.Render("✓ Fetched"))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.pullSuccess {
-		sb.WriteString(styles.StatusStaged.Render("✓ Pulled"))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.pushError != "" {
-		// Truncate error if too long (account for "✗ " prefix)
-		errMsg := p.pushError
-		maxLen := p.sidebarWidth - 8 // 2 for "✗ " prefix + 6 for padding
-		if len(errMsg) > maxLen && maxLen > 3 {
-			errMsg = errMsg[:maxLen-3] + "..."
-		}
-		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.fetchError != "" {
-		errMsg := p.fetchError
-		maxLen := p.sidebarWidth - 8
-		if len(errMsg) > maxLen && maxLen > 3 {
-			errMsg = errMsg[:maxLen-3] + "..."
-		}
-		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
-		sb.WriteString("\n")
-		currentY++
-	} else if p.pullError != "" {
-		errMsg := p.pullError
-		maxLen := p.sidebarWidth - 8
-		if len(errMsg) > maxLen && maxLen > 3 {
-			errMsg = errMsg[:maxLen-3] + "..."
-		}
-		sb.WriteString(styles.StatusDeleted.Render("✗ " + errMsg))
 		sb.WriteString("\n")
 		currentY++
 	}

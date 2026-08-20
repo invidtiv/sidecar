@@ -770,9 +770,11 @@ func (m *Model) previewSelectionLines() []string {
 // notification type is this surface's.
 func (m *Model) copyPreviewSelectionCmd() tea.Cmd {
 	return m.TerminalConfig().CopySelectionCmd(m.previewSelectionLines(), func(notice tty.CopyNotice) tea.Msg {
-		return appmsg.ToastMsg{
-			Message: notice.Message, Duration: notice.Duration, IsError: notice.IsError,
+		// A copy that worked is a flash; one that failed is a notification.
+		if notice.IsError {
+			return appmsg.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
 		}
+		return appmsg.FlashMsg{Text: notice.Message}
 	})
 }
 

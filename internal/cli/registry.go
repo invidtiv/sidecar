@@ -212,8 +212,123 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, helpCmd, openCmd, setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentsCmd, helpCmd, notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
+}
+
+// notifyCommand is the agent-facing side of the notification system: post an
+// alert the user sees as a toast and in the notification centre, dismiss one
+// you posted, and read the log back.
+//
+// Listing reads the log directly, so it answers with no Sidecar running.
+// Posting prefers a running instance (the user sees it immediately) and falls
+// back to writing the log, so nothing is lost either way.
+func notifyCommand() *Command {
+	postCmd := &Command{
+		Name:    "post",
+		Summary: "Post a notification the user sees in Sidecar",
+		Usage:   "sidecar notify post [options] <title>",
+		Long: "Post a notification. It appears as a toast in the running Sidecar instance for\n" +
+			"this shell's project and stays in the notification centre until dismissed.\n\n" +
+			"With no instance running the notification is written to Sidecar's notification\n" +
+			"log and appears at the next start; nothing is lost.\n\n" +
+			"--expiry sets how long the toast stays on screen — a duration such as 10s, or\n" +
+			"\"never\" for one that waits for the user. Expiry never removes the notification\n" +
+			"from the centre.",
+		Flags: []Flag{
+			{Name: "--body", Arg: "TEXT", Summary: "Detail line shown under the title"},
+			{Name: "--source", Arg: "ID", Summary: "Source: agent, waiting, session, tasks, td, system (default agent)"},
+			{Name: "--expiry", Arg: "DURATION", Summary: "Toast lifetime (e.g. 10s), or \"never\" (default: the source's)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "The notification title, one short line"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "posted, or stored for the next start"},
+			{Code: 1, Summary: "state failure"},
+			{Code: 2, Summary: "usage or validation error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar notify post \"Tests are green\""},
+			{Command: "sidecar notify post \"Need a decision\" --source waiting --expiry never"},
+			{Command: "sidecar notify post \"Build failed\" --body \"go test ./internal/app\" --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar notify post \"<short title>\" [--body TEXT] [--source ID]",
+			Summary:    "Tell the user something happened without making them watch this shell",
+		},
+		Run: runNotifyPost,
+	}
+
+	dismissCmd := &Command{
+		Name:    "dismiss",
+		Summary: "Dismiss a notification you posted",
+		Usage:   "sidecar notify dismiss [--json] <id>",
+		Long: "Dismiss one notification. A caller may only dismiss notifications it posted:\n" +
+			"identity is the Sidecar shell you are in, or failing that the working directory,\n" +
+			"so the notification you posted a moment ago is dismissible and the user's own\n" +
+			"and other agents' are not.",
+		Flags: []Flag{
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "The notification id from post or list"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "dismissed"},
+			{Code: 1, Summary: "state failure"},
+			{Code: 2, Summary: "usage error"},
+			{Code: 3, Summary: "no notification with that id"},
+			{Code: 4, Summary: "that notification was posted by someone else"},
+		},
+		Examples: []Example{
+			{Command: "sidecar notify dismiss ntf-06215f4b1a2c3-9f1e2d3c"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar notify dismiss <id>",
+			Summary:    "Take back a notification you posted once it no longer matters",
+		},
+		Run: runNotifyDismiss,
+	}
+
+	listCmd := &Command{
+		Name:    "list",
+		Summary: "List notifications",
+		Usage:   "sidecar notify list [--all] [--unread] [--json]",
+		Long: "List notifications, newest first. This reads Sidecar's notification log directly,\n" +
+			"so it answers whether or not Sidecar is running and never changes anything.\n\n" +
+			"By default dismissed notifications are left out; --all includes them.",
+		Flags: []Flag{
+			{Name: "--all", Summary: "Include dismissed notifications", Bool: true},
+			{Name: "--unread", Summary: "Only notifications the user has not seen", Bool: true},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+			{Code: 1, Summary: "the notification log could not be read"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar notify list"},
+			{Command: "sidecar notify list --unread --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar notify list --json",
+			Summary:    "See what Sidecar is currently telling the user",
+		},
+		Run: runNotifyList,
+	}
+
+	return &Command{
+		Name:    "notify",
+		Summary: "Post, dismiss, and list Sidecar notifications",
+		Usage:   "sidecar notify <command>",
+		Long: "Sidecar's notification surface: a toast in the running instance, an entry in the\n" +
+			"notification centre, and a count in the header until the user reads it.",
+		Sub: []*Command{dismissCmd, listCmd, postCmd},
+		Run: runNotifyRoot,
+	}
 }
 
 // terminalLinksCommand is the protocol/admin surface for terminal resource

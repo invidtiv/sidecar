@@ -1467,7 +1467,7 @@ func (p *Plugin) yankMergeErrorToClipboard() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(p.mergeState.ErrorDetail, func(r clip.Result) tea.Msg {
-		return appmsg.ToastMsg{Message: r.Message("Copied error to clipboard"), Duration: 2 * time.Second}
+		return appmsg.FlashMsg{Text: r.Message("Copied error to clipboard")}
 	})
 }
 
@@ -1477,7 +1477,7 @@ func (p *Plugin) yankPRURLToClipboard() tea.Cmd {
 		return nil
 	}
 	return clip.Copy(p.mergeState.PRURL, func(r clip.Result) tea.Msg {
-		return appmsg.ToastMsg{Message: r.Message("Copied PR URL to clipboard"), Duration: 2 * time.Second}
+		return appmsg.FlashMsg{Text: r.Message("Copied PR URL to clipboard")}
 	})
 }
 

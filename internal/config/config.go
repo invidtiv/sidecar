@@ -25,6 +25,10 @@ type Config struct {
 	// app-level rather than per-plugin because providers serve both workspace
 	// projections and are not project-tab plugins.
 	TerminalResources TerminalResourcesConfig `json:"terminalResources"`
+	// Notifications configures the notification system. It is app-level
+	// because the store, the toasts, and the centre are the shell's, not any
+	// plugin's.
+	Notifications NotificationsConfig `json:"notifications,omitempty"`
 }
 
 // SelectionConfig configures text selection across surfaces.
