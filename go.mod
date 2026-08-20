@@ -16,7 +16,7 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/marcus/td v0.60.0
+	github.com/marcus/td v0.61.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/rivo/uniseg v0.4.7
@@ -48,7 +48,7 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/makeworld-the-better-one/dither/v2 v2.4.0 // indirect
-	github.com/marcus/tasks v1.11.0
+	github.com/marcus/tasks v1.12.0
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sixel v0.0.5 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect

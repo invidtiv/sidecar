@@ -93,7 +93,7 @@ func (m Model) preferredMouseMode() tea.MouseMode {
 	if h := m.currentContentDeck(); h != nil && h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
 		return tea.MouseModeAllMotion
 	}
-	if provider, ok := m.ActivePlugin().(plugin.MouseModeProvider); ok {
+	if provider, ok := m.focusedSurface().(plugin.MouseModeProvider); ok {
 		switch mode := provider.PreferredMouseMode(); mode {
 		case tea.MouseModeCellMotion, tea.MouseModeAllMotion:
 			return mode
@@ -113,6 +113,18 @@ func (m Model) pluginCursor() *tea.Cursor {
 		return nil
 	}
 	if m.inGlobalScope() {
+		if h := m.currentContentDeck(); h != nil {
+			if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+				return nil
+			}
+			cursor := providerCursor(h.plugin)
+			if cursor == nil {
+				return nil
+			}
+			cursor.X += h.primaryInner.X
+			cursor.Y += h.primaryInner.Y
+			return m.placeContentCursor(cursor)
+		}
 		return m.placeContentCursor(m.globalCursor())
 	}
 	active := m.ActivePlugin()
@@ -1144,10 +1156,13 @@ func (m *Model) renderContent(width, height int) string {
 }
 
 // renderGlobalContent renders the visible global tab.
-func (m Model) renderGlobalContent(width, height int) string {
+func (m *Model) renderGlobalContent(width, height int) string {
 	switch m.globalTab {
 	case GlobalTasks:
 		if host := m.globalTasksPlugin(); host != nil {
+			if h := m.activeContentDeck(); h != nil {
+				return m.renderContentDeck(h, width, height)
+			}
 			return host.View(width, height)
 		}
 	case GlobalSessions:
@@ -1303,6 +1318,11 @@ func (m Model) footerHints() []footerHint {
 		// Derived from the registered config bindings like every other surface,
 		// so a rebound key changes the footer with it.
 		hints = m.commandFooterHints(m.configCommands(), m.activeContext)
+	case len((&m).appContentCommands()) > 0:
+		// A passive app-owned leaf is the focused surface even when its primary
+		// host is app-global Tasks. Its Close/Tab/Focus controls must outrank the
+		// covered host's commands just as its keys and help context do.
+		hints = m.commandFooterHints((&m).appContentCommands(), m.activeContext)
 	case m.globalTasksFocused():
 		hints = m.pluginFooterHints(m.globalTasksPlugin(), m.activeContext)
 	case m.inGlobalScope() && m.globalTab == GlobalSessions:
@@ -1319,10 +1339,8 @@ func (m Model) footerHints() []footerHint {
 			footerHint{keys: "r", label: "Refresh"},
 			footerHint{keys: "esc", label: "Close"},
 		)
-	case !m.inGlobalScope():
-		if commands := (&m).appContentCommands(); len(commands) > 0 {
-			hints = m.commandFooterHints(commands, m.activeContext)
-		} else if p := m.ActivePlugin(); p != nil {
+	case m.focusedSurface() != nil:
+		if p := m.focusedSurface(); p != nil {
 			hints = m.pluginFooterHints(p, m.activeContext)
 		}
 	}
@@ -1580,6 +1598,9 @@ func (m *Model) helpSurface() (title, context string) {
 	}
 	if m.inGlobalScope() {
 		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
+			if _, ok := m.appContentContext(); ok {
+				return host.Name() + " content", m.activeContext
+			}
 			return host.Name(), host.FocusContext()
 		}
 		if m.globalWorkspacesVisible() {

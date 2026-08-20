@@ -945,6 +945,17 @@ func (m *Model) exitOverview() tea.Cmd { return m.leaveOverview(true) }
 // the hidden old surface cannot reopen a terminal during the handoff.
 func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 	wasGlobal := m.inGlobalScope()
+	var deckCmd tea.Cmd
+	if wasGlobal {
+		if h := m.currentContentDeck(); h != nil {
+			h.laidOut = false
+			h.links = nil
+			h.press = nil
+			if h.live != nil {
+				deckCmd = h.live.Reconcile()
+			}
+		}
+	}
 	if wasGlobal && m.overview != nil {
 		m.overview.Stop()
 	}
@@ -955,10 +966,10 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 		}
 		m.updateContext()
 		if restoreProject {
-			return PluginFocused()
+			return tea.Batch(deckCmd, PluginFocused())
 		}
 	}
-	return nil
+	return deckCmd
 }
 
 // toggleOverview moves between the global and project spaces. No-op when the

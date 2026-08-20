@@ -3,6 +3,7 @@ package tdmonitor
 import (
 	"log/slog"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/marcus/td/pkg/monitor"
@@ -30,73 +31,52 @@ func liveMonitor(t *testing.T) *Plugin {
 	return p
 }
 
-// With the centre open td's three panels are a ring with one more stop: the
-// centre belongs after the last panel going forward and before the first going
-// back, and nowhere in between.
-func TestTDMonitorRingWrapsAtTheLastPanel(t *testing.T) {
+func TestTDMonitorProjectsStableStopsAndFocusesDirectly(t *testing.T) {
 	p := liveMonitor(t)
-
-	p.model.ActivePanel = monitor.PanelCurrentWork
-	if p.AtFocusCycleEnd(false) {
-		t.Fatal("the first panel is not the end of the forward cycle")
+	p.View(120, 36)
+	want := []plugin.PaneFocusStop{{ID: "current-work"}, {ID: "task-list"}, {ID: "activity"}}
+	if got := p.PaneFocusStops(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stops = %#v, want %#v", got, want)
 	}
-	if !p.AtFocusCycleEnd(true) {
-		t.Fatal("the first panel is where a reverse cycle wraps")
+	if cmd := p.SetPaneFocus("activity"); cmd != nil {
+		t.Fatal("direct focus unexpectedly returned a command")
 	}
-
-	p.model.ActivePanel = monitor.PanelTaskList
-	if p.AtFocusCycleEnd(false) || p.AtFocusCycleEnd(true) {
-		t.Fatal("a middle panel is not a wrap point in either direction")
+	if got := p.PaneFocus(); got != "activity" || p.model.ActivePanel != monitor.PanelActivity {
+		t.Fatalf("focus=%q panel=%v", got, p.model.ActivePanel)
 	}
-
-	p.model.ActivePanel = monitor.PanelActivity
-	if !p.AtFocusCycleEnd(false) {
-		t.Fatal("the last panel is where a forward cycle wraps")
-	}
-	if p.AtFocusCycleEnd(true) {
-		t.Fatal("the last panel is not the start of the ring")
-	}
-}
-
-// The handback runs td's own panel command rather than assigning the panel, so
-// the cursor clamping and scroll fix-up that go with a panel move still happen.
-func TestTDMonitorFocusCycleStart(t *testing.T) {
-	p := liveMonitor(t)
-
-	p.model.ActivePanel = monitor.PanelActivity
-	p.FocusCycleStart(false)
-	if p.model.ActivePanel != monitor.PanelCurrentWork {
-		t.Fatalf("forward handback focused panel %v, want the first", p.model.ActivePanel)
-	}
-
-	p.FocusCycleStart(true)
+	p.SetPaneFocus("bogus")
 	if p.model.ActivePanel != monitor.PanelActivity {
-		t.Fatalf("reverse handback focused panel %v, want the last", p.model.ActivePanel)
+		t.Fatal("unknown direct focus mutated td")
+	}
+	if got := p.ContentLinkSurfaces(); got != nil {
+		t.Fatalf("unsafe td link surface = %#v", got)
 	}
 }
 
-// td binds tab to a modal's button cycle, to an epic's task section and to its
-// forms and searches. Outside the main context the ring is not offered at all.
-func TestTDMonitorOffersNoRingOutsideTheMainContext(t *testing.T) {
+func TestTDMonitorResponsiveAndOverlayTabOwnership(t *testing.T) {
 	p := liveMonitor(t)
-	p.model.ActivePanel = monitor.PanelActivity
-	p.model.HelpOpen = true
-	if got := p.model.CurrentContextString(); got == "td-monitor" {
-		t.Fatalf("expected a non-main context, got %q", got)
+	p.View(monitor.MinWidth-1, monitor.MinHeight)
+	if got := p.PaneFocusStops(); len(got) != 0 {
+		t.Fatalf("compact replacement exposed stops: %#v", got)
 	}
-	if p.AtFocusCycleEnd(false) || p.AtFocusCycleEnd(true) {
-		t.Fatal("a td sub-context offered the centre a tab stop")
+	p.View(120, 36)
+	p.model.HelpOpen = true
+	before := p.model.ActivePanel
+	if got := p.PaneFocusStops(); len(got) != 0 {
+		t.Fatalf("overlay-owned Tab exposed stops: %#v", got)
+	}
+	p.SetPaneFocus("task-list")
+	if p.model.ActivePanel != before {
+		t.Fatal("direct focus reached behind overlay")
 	}
 }
 
-// A plugin with no model yet — td not installed, or the build still in flight —
-// answers no rather than reaching into a nil monitor.
-func TestTDMonitorWithoutAModelHasNoRing(t *testing.T) {
+func TestTDMonitorWithoutModelHasNoCapabilities(t *testing.T) {
 	p := New()
-	if p.AtFocusCycleEnd(false) || p.AtFocusCycleEnd(true) {
-		t.Fatal("a plugin with no model claimed a wrap point")
+	if got := p.PaneFocusStops(); got != nil || p.PaneFocus() != "" {
+		t.Fatalf("nil model capability: stops=%#v focus=%q", got, p.PaneFocus())
 	}
-	if cmd := p.FocusCycleStart(false); cmd != nil {
-		t.Fatal("a plugin with no model returned a handback command")
+	if cmd := p.SetPaneFocus("activity"); cmd != nil {
+		t.Fatal("nil model returned a focus command")
 	}
 }

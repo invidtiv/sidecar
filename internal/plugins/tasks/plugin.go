@@ -29,6 +29,12 @@ type Plugin struct {
 	ctx     *plugin.Context
 	focused bool
 
+	// paneFocusManaged is set once the app-owned deck composes Tasks' spatial
+	// focus. It lets the wrapper panel show active chrome only while Tasks owns
+	// the primary leaf without changing Tasks' own focus state.
+	paneFocusManaged bool
+	paneFocusActive  bool
+
 	// Embedded Tasks model, nil until TasksReadyMsg is adopted.
 	model *tasksui.Model
 
@@ -456,7 +462,8 @@ func (p *Plugin) View(width, height int) string {
 	switch {
 	case p.model != nil:
 		innerWidth, innerHeight := innerSize(width, height)
-		framed = styles.RenderPanel(p.model.View(innerWidth, innerHeight), width, height, true)
+		active := !p.paneFocusManaged || p.paneFocusActive
+		framed = styles.RenderPanel(p.model.View(innerWidth, innerHeight), width, height, active)
 	case p.unavailable != "":
 		framed = renderUnavailable(p.unavailable, width, height)
 	case p.loading:

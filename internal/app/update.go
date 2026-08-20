@@ -1800,7 +1800,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// underlying plugin's mandatory interface.
 			surfaces := m.surfacePlugins()
 			if commands := m.appContentCommands(); len(commands) > 0 {
-				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.ActivePlugin(), commands: commands})
+				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.focusedSurface(), commands: commands})
 			}
 			m.palette.Open(m.keymap, surfaces, m.activeContext, pluginCtx)
 			m.activeContext = "palette"
@@ -2003,7 +2003,11 @@ func (m *Model) updateContext() {
 		// The visible global tab owns the context. Tasks reports its own, so a
 		// Tasks overlay keeps sidecar's globals off its keyboard.
 		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
-			m.activeContext = host.FocusContext()
+			if ctx, ok := m.appContentContext(); ok {
+				m.activeContext = ctx
+			} else {
+				m.activeContext = host.FocusContext()
+			}
 			return
 		}
 		if m.globalWorkspacesVisible() && m.overview != nil {

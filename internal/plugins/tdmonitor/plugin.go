@@ -50,6 +50,12 @@ type Plugin struct {
 	ctx     *plugin.Context
 	focused bool
 
+	// paneFocusManaged is set once the app deck composes td's panels into its
+	// focus ring. When a passive leaf owns focus, td keeps its semantic panel
+	// selection but paints its active border with the ordinary border colour.
+	paneFocusManaged bool
+	paneFocusActive  bool
+
 	// Embedded td monitor model
 	model *monitor.Model
 
@@ -215,7 +221,7 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 
 	// Ensure the adopted monitor has the latest resolved palette in case a
 	// theme change occurred while loading.
-	_ = p.model.SetTheme(buildTheme())
+	p.applyPaneFocusTheme()
 
 	// Use sidecar's clipboard (atotto/clipboard) instead of td's built-in one.
 	// td's copyToClipboard doesn't handle WSL (tries xclip/xsel only);
@@ -271,9 +277,7 @@ func (p *Plugin) Stop() {
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle live theme changes
 	if _, ok := msg.(app.ThemeChangedMsg); ok {
-		if p.model != nil {
-			_ = p.model.SetTheme(buildTheme())
-		}
+		p.applyPaneFocusTheme()
 		return p, nil
 	}
 

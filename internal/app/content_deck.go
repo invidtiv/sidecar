@@ -57,30 +57,33 @@ type appContentLinkHit struct {
 }
 
 type appContentDeck struct {
-	key, workdir, pluginID string
-	deck                   *contentpanes.Deck
-	plugin                 plugin.Plugin
-	layout                 panelayout.Layout
-	laidOut                bool
-	canvas                 paneframe.Box
-	mouse                  *mouse.Handler
-	queued                 []tea.Cmd
-	primaryInner           paneframe.Box
-	links                  []appContentLinkHit
-	tabHits                []appDeckTabHit
-	generation             uint64
-	press                  *appContentLinkHit
-	pressX, pressY         int
-	dragged                bool
-	resolution             *contentlink.ResolutionIndex
-	pending                map[contentlink.Pending]bool
-	resourceMatchers       []contentlink.ResourceMatcher
-	dragSplit              int
-	live                   *livepanes.Set
-	suppressRefresh        bool
+	key, workdir, stateRoot, pluginID string
+	global                            bool
+	deck                              *contentpanes.Deck
+	plugin                            plugin.Plugin
+	layout                            panelayout.Layout
+	laidOut                           bool
+	canvas                            paneframe.Box
+	mouse                             *mouse.Handler
+	queued                            []tea.Cmd
+	primaryInner                      paneframe.Box
+	links                             []appContentLinkHit
+	tabHits                           []appDeckTabHit
+	generation                        uint64
+	press                             *appContentLinkHit
+	pressX, pressY                    int
+	dragged                           bool
+	resolution                        *contentlink.ResolutionIndex
+	pending                           map[contentlink.Pending]bool
+	resourceMatchers                  []contentlink.ResourceMatcher
+	dragSplit                         int
+	live                              *livepanes.Set
+	suppressRefresh                   bool
 }
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
+
+const globalTasksDeckRoot = "@global-tasks"
 
 func (m *Model) contentDeckEligible(p plugin.Plugin) bool {
 	if p == nil || p.ID() == workspacePluginID || !features.IsEnabled(features.PluginContentPanes.Name) {
@@ -92,14 +95,14 @@ func (m *Model) contentDeckEligible(p plugin.Plugin) bool {
 }
 
 func (m *Model) activeContentDeck() *appContentDeck {
-	if m.inGlobalScope() || m.configOpen() {
+	if m.configOpen() {
 		return nil
 	}
-	p := m.ActivePlugin()
+	p, stateRoot, global := m.contentDeckSurface()
 	if !m.contentDeckEligible(p) {
 		return nil
 	}
-	key := appDeckKey(m.ui.WorkDir, p.ID())
+	key := appDeckKey(stateRoot, p.ID())
 	h := m.contentDecks[key]
 	ctx := contentpanes.SurfaceContext{Root: m.ui.WorkDir, DiffRoot: m.ui.WorkDir, Surface: p.ID(), Epoch: m.registry.Context().Epoch}
 	if h == nil {
@@ -108,10 +111,10 @@ func (m *Model) activeContentDeck() *appContentDeck {
 			cfg.ResourceResolver = resourceResolver(manager)
 		}
 		var saved contentpanes.State
-		if raw := state.GetContentDeck(m.ui.WorkDir, p.ID()); len(raw) > 0 {
+		if raw := state.GetContentDeck(stateRoot, p.ID()); len(raw) > 0 {
 			_ = json.Unmarshal(raw, &saved)
 		}
-		h = &appContentDeck{key: key, workdir: m.ui.WorkDir, pluginID: p.ID(), plugin: p,
+		h = &appContentDeck{key: key, workdir: m.ui.WorkDir, stateRoot: stateRoot, pluginID: p.ID(), plugin: p, global: global,
 			mouse: mouse.NewHandler(), resolution: contentlink.NewResolutionIndex(contentlink.MaxPendingResolutions),
 			pending: make(map[contentlink.Pending]bool)}
 		h.live = h.newLiveSet()
@@ -126,6 +129,7 @@ func (m *Model) activeContentDeck() *appContentDeck {
 		m.contentDecks[key] = h
 	} else {
 		h.plugin = p
+		h.workdir = m.ui.WorkDir
 		h.deck.SetContext(ctx)
 	}
 	h.syncInnerFocus()
@@ -133,14 +137,24 @@ func (m *Model) activeContentDeck() *appContentDeck {
 }
 
 func (m Model) currentContentDeck() *appContentDeck {
-	if m.inGlobalScope() || m.configOpen() || m.registry == nil {
+	if m.configOpen() || m.registry == nil {
 		return nil
 	}
-	p := m.ActivePlugin()
+	p, stateRoot, _ := m.contentDeckSurface()
 	if !m.contentDeckEligible(p) {
 		return nil
 	}
-	return m.contentDecks[appDeckKey(m.ui.WorkDir, p.ID())]
+	return m.contentDecks[appDeckKey(stateRoot, p.ID())]
+}
+
+func (m Model) contentDeckSurface() (plugin.Plugin, string, bool) {
+	if m.globalTasksFocused() {
+		return m.globalTasksPlugin(), globalTasksDeckRoot, true
+	}
+	if m.inGlobalScope() {
+		return nil, "", false
+	}
+	return m.ActivePlugin(), m.ui.WorkDir, false
 }
 
 func appDeckFloors() panelayout.Floors {
@@ -160,8 +174,8 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	if h == nil || width <= 0 || height <= 0 {
 		return ""
 	}
-	h.plugin = m.ActivePlugin()
-	h.suppressRefresh = m.hasModal() || m.configOpen() || m.inGlobalScope()
+	h.plugin = m.focusedSurface()
+	h.suppressRefresh = m.hasModal() || m.configOpen() || (m.inGlobalScope() && !h.global)
 	for _, other := range m.contentDecks {
 		if other != h && other.laidOut {
 			other.laidOut = false
@@ -549,14 +563,26 @@ func sameCanonicalAppPath(a, b string) bool {
 }
 
 func (m *Model) ackAppContentRequest(req uirequest.Request, status uirequest.Status, reason string, pane int) {
+	surface := ""
+	if h := m.currentContentDeck(); h != nil {
+		surface = "plugin:" + h.pluginID
+	} else if p := m.focusedSurface(); p != nil {
+		surface = "plugin:" + p.ID()
+	}
 	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 		Instance: uirequest.InstanceID("app-content"), Host: uirequest.HostName(), PID: os.Getpid(),
-		Status: status, Reason: reason, Surface: "plugin:" + m.ActivePlugin().ID(), Pane: pane, At: time.Now().UTC(),
+		Status: status, Reason: reason, Surface: surface, Pane: pane, At: time.Now().UTC(),
 	})
 }
 
 func (m *Model) adoptAppContentPlugin(h *appContentDeck) {
 	if h == nil || h.plugin == nil || m.registry == nil {
+		return
+	}
+	if h.global {
+		if m.globalTasks != nil {
+			m.globalTasks.plugin = h.plugin
+		}
 		return
 	}
 	plugins := m.registry.Plugins()
@@ -574,7 +600,7 @@ func (m *Model) persistAppContentDeck(h *appContentDeck) {
 	}
 	raw, err := json.Marshal(h.deck.Encode())
 	if err == nil {
-		_ = state.SetContentDeck(h.workdir, h.pluginID, raw)
+		_ = state.SetContentDeck(h.stateRoot, h.pluginID, raw)
 	}
 }
 
@@ -663,10 +689,7 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 		adjusted := offsetMouse(msg, -h.primaryInner.X, -h.primaryInner.Y)
 		newPlugin, cmd := h.plugin.Update(adjusted)
 		h.plugin = newPlugin
-		plugins := m.registry.Plugins()
-		if m.activePlugin < len(plugins) {
-			m.registry.Replace(m.activePlugin, newPlugin)
-		}
+		m.adoptAppContentPlugin(h)
 		return cmd, true
 	}
 	cmd := h.handlePassiveMouse(msg, leaf)

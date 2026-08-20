@@ -123,8 +123,10 @@ func (m *Model) emitContentSize() []tea.Cmd {
 	}
 	// The global Tasks host is not in the registry, and the Workspaces browser
 	// sizes a live pane; both lay out against the same box.
-	if cmd := m.globalTasks.update(size); cmd != nil {
-		cmds = append(cmds, cmd)
+	if !m.globalTasksFocused() || m.currentContentDeck() == nil {
+		if cmd := m.globalTasks.update(size); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	if m.overview != nil {
 		if cmd := m.overview.WorkspacesResize(size.Width, size.Height); cmd != nil {

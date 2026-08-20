@@ -321,6 +321,15 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 		return nil
 	}
 	previous := m.globalTab
+	var deckCmd tea.Cmd
+	if h := m.currentContentDeck(); h != nil {
+		h.laidOut = false
+		h.links = nil
+		h.press = nil
+		if h.live != nil {
+			deckCmd = h.live.Reconcile()
+		}
+	}
 	m.globalTab = tab
 	_ = state.SetLastGlobalTab(tab.persistID())
 	if catalogTab(previous) && !catalogTab(tab) && m.overview != nil {
@@ -332,7 +341,7 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 		m.overview.Stop()
 	}
 	m.updateContext()
-	return m.startVisibleGlobalTab()
+	return tea.Batch(deckCmd, m.startVisibleGlobalTab())
 }
 
 // catalogTab reports that a global tab is a projection of the cross-project
@@ -542,6 +551,11 @@ func (m Model) globalCatalogNavigable() bool {
 func (m *Model) globalMouse(msg tea.Msg) tea.Cmd {
 	switch {
 	case m.globalTasksFocused():
+		if mouseMsg, ok := msg.(tea.MouseMsg); ok {
+			if cmd, handled := m.appContentMouse(mouseMsg); handled {
+				return cmd
+			}
+		}
 		return m.globalTasks.update(msg)
 	case m.globalTab == GlobalActivity && m.overview != nil:
 		return m.overview.Update(msg)

@@ -485,6 +485,111 @@ func TestAppContentDeckLeavesTabWithPrimarySubmodeThatHasNoFocusStops(t *testing
 	}
 }
 
+func TestGlobalTasksUsesOneDeckAcrossProjectSwitches(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootA, "a.md"), []byte("a"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "b.md"), []byte("b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	project := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "project"}
+	tasks := &deckHostTestPlugin{id: "tasks", focus: "tree", frame: "tasks"}
+	m := appDeckTestModel(t, rootA, project)
+	m.globalTasks = &globalTasksHost{plugin: tasks}
+	m.scope = ScopeGlobal
+	m.globalTab = GlobalTasks
+
+	m.renderGlobalContent(180, 36)
+	h := m.currentContentDeck()
+	if h == nil || !h.global || h.stateRoot != globalTasksDeckRoot || h.plugin != tasks {
+		t.Fatalf("global Tasks deck = %+v", h)
+	}
+	if tasks.width != h.primaryInner.W || tasks.height != h.primaryInner.H {
+		t.Fatalf("Tasks size=%dx%d inner=%dx%d", tasks.width, tasks.height, h.primaryInner.W, h.primaryInner.H)
+	}
+	ackDir := t.TempDir()
+	config.SetTestStateDir(ackDir)
+	t.Cleanup(config.ResetTestStateDir)
+	req := uirequest.Request{
+		ID: "global-tasks-open", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(),
+		Origin: uirequest.Origin{ProjectKey: "proof", WorkDir: rootA},
+		Target: uirequest.Target{Kind: uirequest.TargetKindDiff, Value: "wt"},
+	}
+	if cmd, handled := m.handleAppContentUIRequest(req); !handled || cmd == nil {
+		t.Fatalf("global Tasks request handled=%v cmd=%v", handled, cmd)
+	}
+	acks, err := uirequest.ReadAcks(ackDir, req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened || acks[0].Surface != "plugin:tasks" {
+		t.Fatalf("global Tasks acks=%+v err=%v", acks, err)
+	}
+	if cmd := m.openAppContent(rootA, tasks.ID(), contentlink.Ref{Kind: contentlink.KindFile, Value: "a.md"}); cmd == nil {
+		t.Fatal("global Tasks document returned no load command")
+	}
+	m.renderGlobalContent(180, 36)
+	if raw := state.GetContentDeck(globalTasksDeckRoot, tasks.ID()); len(raw) == 0 {
+		t.Fatal("global Tasks deck was not persisted under its stable root")
+	}
+	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Primary))
+	tasks.focus = "tree"
+	seenBefore := len(tasks.seen)
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab}); !handled || tasks.focus != "preview" {
+		t.Fatalf("first global Tasks Tab handled=%v focus=%q", handled, tasks.focus)
+	}
+	if len(tasks.seen) != seenBefore {
+		t.Fatal("global outer ring replayed Tab into Tasks")
+	}
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab}); !handled || h.deck.FocusedLeaf() == h.deck.Leaf(panelayout.Primary) {
+		t.Fatalf("second global Tasks Tab handled=%v leaf=%d", handled, h.deck.FocusedLeaf())
+	}
+	if cmd := m.openAppContent(rootA, tasks.ID(), contentlink.Ref{Kind: contentlink.KindDiff, Value: "wt"}); cmd == nil {
+		t.Fatal("global Tasks diff returned no load command")
+	}
+	m.renderGlobalContent(180, 36)
+	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Diff))
+	h.syncInnerFocus()
+	m.updateContext()
+	labels := footerLabels(*m)
+	for _, want := range []string{"Close", "Tab×", "Tab←", "Tab→", "Focus", "Back"} {
+		if !containsHint(labels, want) {
+			t.Fatalf("global passive footer labels=%v, missing %q", labels, want)
+		}
+	}
+	h.deck.FocusLeaf(h.deck.Leaf(panelayout.Primary))
+	m.globalMouse(tea.MouseClickMsg(tea.Mouse{X: h.primaryInner.X, Y: h.primaryInner.Y, Button: tea.MouseLeft}))
+	if got := m.registry.Plugins()[0]; got != project {
+		t.Fatalf("global Tasks mouse replaced project plugin with %T", got)
+	}
+	if m.globalTasks.plugin != tasks {
+		t.Fatal("global Tasks mouse did not retain the hosted surface")
+	}
+	if click, ok := tasks.seen[len(tasks.seen)-1].(tea.MouseClickMsg); !ok || click.X != 0 || click.Y != 0 {
+		t.Fatalf("global Tasks mouse offset = %#v", tasks.seen[len(tasks.seen)-1])
+	}
+
+	// Tasks is app-global: changing the selected project changes resolution
+	// context, but neither replaces its deck nor creates project-keyed state.
+	m.ui.WorkDir, m.ui.ProjectRoot = rootB, rootB
+	m.renderGlobalContent(180, 36)
+	if got := m.currentContentDeck(); got != h {
+		t.Fatalf("project switch replaced global deck: got=%p want=%p", got, h)
+	} else if got.workdir != rootB {
+		t.Fatalf("global deck workdir=%q, want %q", got.workdir, rootB)
+	}
+	if cmd := m.openAppContent(rootB, tasks.ID(), contentlink.Ref{Kind: contentlink.KindFile, Value: "b.md"}); cmd == nil {
+		t.Fatal("switched global Tasks document returned no load command")
+	}
+	if got := m.contentDecks[appDeckKey(rootB, tasks.ID())]; got != nil {
+		t.Fatal("global Tasks created project-keyed deck state")
+	}
+
+	m.exitOverview()
+	if h.laidOut || h.links != nil {
+		t.Fatalf("leaving global Tasks retained active deck: laidOut=%v links=%v", h.laidOut, h.links)
+	}
+}
+
 func TestEnteringGlobalScopeDeactivatesAppDeckLiveSurface(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "live.md"), []byte("live"), 0o600); err != nil {
