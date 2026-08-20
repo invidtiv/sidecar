@@ -223,6 +223,16 @@ Custom color overrides and theme preferences can be set in `~/.config/sidecar/co
 
 See [Theme Creation Skill](.claude/skills/create-theme/SKILL.md) for custom theme creation and color palette reference.
 
+## Sidecar additions
+
+Standalone executables that extend Sidecar over a frozen protocol. Sidecar does
+not import them, and they do not import Sidecar. The only coupling is one JSON
+object in and one JSON object out.
+
+| Addition | What it does |
+| --- | --- |
+| [sidecar-jira](https://github.com/marcus/sidecar-jira) | Read-only Jira Cloud issues as terminal resource panes |
+
 ## Keyboard Shortcuts
 
 | Key                 | Action                           |
