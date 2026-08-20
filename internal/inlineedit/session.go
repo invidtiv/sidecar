@@ -268,9 +268,10 @@ func (s *Session) SizeIndicator() string {
 }
 
 func (s *Session) forwardMouse(button, col, row int, release bool) tea.Cmd {
-	if s == nil || !s.IsModelActive() || s.Name == "" {
+	if s == nil || !s.IsModelActive() || s.Name == "" || !s.Model.PaneMouseReporting() {
 		return nil
 	}
+	s.Model.NoteMouseActivity()
 	return s.Target().MouseCmd(s.Model.Scope(), button, col, row, release)
 }
 

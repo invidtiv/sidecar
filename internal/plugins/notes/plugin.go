@@ -156,6 +156,7 @@ type Plugin struct {
 	// (logical line + rune offset). View-mode (archived/deleted) selection
 	// still uses visual rows for copy-only drags.
 	selection ui.SelectionState
+	pointer   tty.Pointer       // shared character/word/line mouse gesture state
 	selAnchor ui.SelectionPoint // keyboard/mouse extend origin
 	selExtend bool              // alt+s: ordinary movement extends
 
@@ -213,6 +214,7 @@ type Plugin struct {
 	inlineEditNoteID    string
 	orphanEditSession   string    // Defensive re-init cleanup, executed asynchronously in Start
 	lastDragForwardTime time.Time // Throttle: last time a drag event was forwarded to tmux
+	inlineWheel         tty.WheelBurst
 
 	// Inline auto-save state (for periodic saving during inline edit)
 	inlineAutoSaveGen      int    // Generation for staleness check

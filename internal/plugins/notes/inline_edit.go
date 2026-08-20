@@ -192,6 +192,7 @@ func (p *Plugin) exitInlineEditMode() {
 // can never operate on the next project's store.
 func (p *Plugin) resetInlineEditState() {
 	p.edit.Reset()
+	p.inlineWheel.Reset()
 	p.inlineEditNoteID = ""
 	p.edit.ShowExitConfirm = false
 	p.edit.ClearPendingClick()

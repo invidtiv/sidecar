@@ -256,6 +256,18 @@ func (pt *Pointer) ExtendToUnit(g Geometry, buf Buffer, sel *ui.SelectionState, 
 	if !ok {
 		return false
 	}
+	return pt.ExtendMappedUnit(sel, start, end)
+}
+
+// ExtendMappedUnit extends a word or line gesture whose coordinates were
+// mapped by the host. This is the same granularity rule as ExtendToUnit, but it
+// lets a rendered surface keep its selection in source coordinates rather than
+// pretending wrapped visual rows are logical source lines.
+func (pt *Pointer) ExtendMappedUnit(sel *ui.SelectionState, start, end ui.SelectionPoint) bool {
+	if sel == nil || pt.unit == SelectUnitChar || !pt.unitStart.Valid() || !pt.unitEnd.Valid() ||
+		!start.Valid() || !end.Valid() {
+		return false
+	}
 	if start.Before(pt.unitStart) {
 		sel.SelectRange(pt.unitEnd, start, false)
 	} else {
@@ -284,8 +296,18 @@ func (pt *Pointer) SelectUnitAt(g Geometry, buf Buffer, sel *ui.SelectionState, 
 	if !ok {
 		return false
 	}
-	pt.Begin()
 	pt.dragX, pt.dragY = x, y
+	return pt.SelectMappedUnit(sel, start, end, unit)
+}
+
+// SelectMappedUnit installs a host-mapped word or line span and records it as
+// the gesture anchor. Hosts use this when their drawn rows map back to a
+// different coordinate space, such as soft-wrapped source text.
+func (pt *Pointer) SelectMappedUnit(sel *ui.SelectionState, start, end ui.SelectionPoint, unit SelectionUnit) bool {
+	if sel == nil || unit == SelectUnitChar || !start.Valid() || !end.Valid() {
+		return false
+	}
+	pt.Begin()
 	pt.unit = unit
 	pt.unitStart, pt.unitEnd = start, end
 	pt.Resolution = ClickNone

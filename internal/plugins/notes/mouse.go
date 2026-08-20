@@ -14,13 +14,40 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/textselect"
+	"github.com/marcus/sidecar/internal/tty"
 	rw "github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 )
 
 // dragForwardThrottle is the minimum interval between forwarding mouse drag
 // events to the tmux session for inline editor text selection.
 // ~60fps to prevent subprocess spam (each forward spawns tmux send-keys).
 const dragForwardThrottle = 16 * time.Millisecond
+
+func (p *Plugin) inlineEditorMouseReporting() bool {
+	return p.edit.Model != nil && p.edit.Model.PaneMouseReporting()
+}
+
+// forwardWheelToInlineEditor applies the same bounded flick policy as every
+// other embedded terminal. A plain editor that has not enabled mouse reporting
+// receives no synthetic keys and has no Sidecar-owned scrollback to move.
+func (p *Plugin) forwardWheelToInlineEditor(action mouse.MouseAction) tea.Cmd {
+	if p.edit.Model == nil {
+		return nil
+	}
+	return tty.WheelHandler{
+		Burst:          &p.inlineWheel,
+		WritesEnabled:  p.edit.NativeActive(),
+		MouseReporting: p.inlineEditorMouseReporting,
+		PaneCoords:     p.calculateInlineEditorMouseCoords,
+		NoteActivity:   p.edit.Model.NoteMouseActivity,
+		SendNotches:    p.edit.Model.SendWheelNotches,
+	}.Handle(tty.WheelGesture{
+		Delta: action.Delta, X: action.X, Y: action.Y,
+		Shift: action.Shift, Alt: action.Alt, Now: time.Now(),
+	})
+}
 
 // Mouse region identifiers
 const (
@@ -71,15 +98,24 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 			return p2, tea.Batch(saveCmd, actionCmd)
 		}
 
-		// Handle click (mouse press) - start potential drag
-		if action.Type == mouse.ActionClick {
+		if action.Type == mouse.ActionScrollUp || action.Type == mouse.ActionScrollDown {
+			return p, p.forwardWheelToInlineEditor(action)
+		}
+
+		// Each physical click is one pane press. The shared handler labels the
+		// second and third clicks for local selection users, but a mouse-aware
+		// editor still needs the complete click stream to recognize them itself.
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick || action.Type == mouse.ActionTripleClick {
 			if action.Region != nil {
 				switch action.Region.ID {
 				case regionNoteItem, regionListPane, regionListFilter:
 					// Click in list pane - auto-save and switch
 					return handleClickAway(action.Region.ID, action.Region.Data)
 				case regionEditorPane, regionEditorLine:
-					// Forward mouse press to vim and start tracking drag
+					if !p.inlineEditorMouseReporting() {
+						return p, nil
+					}
+					// Forward mouse press to the pane and start tracking drag.
 					col, row, ok := p.calculateInlineEditorMouseCoords(action.X, action.Y)
 					if ok {
 						p.edit.Dragging = true
@@ -140,12 +176,14 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p.handleMouseClick(action)
 	case mouse.ActionDoubleClick:
 		return p.handleMouseDoubleClick(action)
+	case mouse.ActionTripleClick:
+		return p.handleMouseTripleClick(action)
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		return p.handleMouseScroll(action)
 	case mouse.ActionDrag:
 		return p.handleMouseDrag(action)
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd()
+		return p.handleMouseDragEndRegion(action.DragStartID)
 	case mouse.ActionHover:
 		return p.handleMouseHover(action)
 	}
@@ -196,6 +234,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 			}
 			srcLine, srcCol := p.clickToSource(action.X, action.Y)
 			cmd := p.enterEditAt(srcLine, srcCol)
+			p.pointer.ResetUnit()
 			// Prepare drag-to-select (use regionEditorLine for drag dispatch)
 			p.selection.PrepareDrag(srcLine, srcCol, action.Region.Rect)
 			p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, 0)
@@ -215,6 +254,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 					p.previewCursorLine = lineIdx
 				}
 				cmd := p.enterEditAt(srcLine, srcCol)
+				p.pointer.ResetUnit()
 				p.selection.PrepareDrag(srcLine, srcCol, action.Region.Rect)
 				p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, srcLine)
 				return p, cmd
@@ -252,12 +292,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 		p.activePane = PaneEditor
 		return p, p.loadNoteIntoEditor()
 
-	case regionEditorLine:
+	case regionEditorPane, regionEditorLine:
 		p.activePane = PaneEditor
 		if !p.previewMode {
-			srcLine, srcCol := p.clickToSource(action.X, action.Y)
-			p.setTextareaCursorPosition(srcLine, srcCol)
-			p.trackTextareaScroll()
+			p.selectSourceUnitAt(action, tty.SelectUnitWord)
 		} else if lineIdx, ok := action.Region.Data.(int); ok {
 			p.previewCursorLine = lineIdx
 		}
@@ -265,6 +303,34 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 	}
 
 	return p, nil
+}
+
+// handleMouseTripleClick selects one logical source line in the built-in
+// editor. Wrapped visual rows remain projections of that one source line.
+func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	if action.Region == nil {
+		return p, nil
+	}
+	if action.Region.ID != regionEditorPane && action.Region.ID != regionEditorLine {
+		return p, nil
+	}
+	p.activePane = PaneEditor
+	if !p.previewMode {
+		p.selectSourceUnitAt(action, tty.SelectUnitLine)
+	}
+	return p, nil
+}
+
+func (p *Plugin) selectSourceUnitAt(action mouse.MouseAction, unit tty.SelectionUnit) {
+	line, col := p.clickToSource(action.X, action.Y)
+	p.setTextareaCursorPosition(line, col)
+	p.trackTextareaScroll()
+	start, end, ok := sourceUnitSpan(p.editorTextarea.Value(), srcPos{line: line, col: col}, unit)
+	if !ok || !p.pointer.SelectMappedUnit(&p.selection, start.point(), end.point(), unit) {
+		return
+	}
+	p.mouseHandler.StartDrag(action.X, action.Y, regionEditorLine, line)
+	p.syncPreviewFromTextarea()
 }
 
 // handleMouseScroll handles scroll wheel actions.
@@ -385,10 +451,17 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 	}
 
 	if !p.previewMode {
+		line, col := p.clickToSource(action.X, action.Y)
+		if p.pointer.Unit() != tty.SelectUnitChar {
+			start, end, ok := sourceUnitSpan(p.editorTextarea.Value(), srcPos{line: line, col: col}, p.pointer.Unit())
+			if ok && p.pointer.ExtendMappedUnit(&p.selection, start.point(), end.point()) {
+				p.syncPreviewFromTextarea()
+			}
+			return p, nil
+		}
 		// Edit mode: convert the click and the pointer (inclusive character
 		// carets) into an exclusive source range so backward drags keep both
 		// endpoint characters.
-		line, col := p.clickToSource(action.X, action.Y)
 		click := srcFromPoint(p.selection.Anchor)
 		if !p.selection.Anchor.Valid() {
 			click = srcPos{line: line, col: col}
@@ -421,7 +494,11 @@ func (p *Plugin) handleEditorSelectionDrag(action mouse.MouseAction) (*Plugin, t
 
 // handleMouseDragEnd handles the end of a drag operation.
 func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
-	switch p.mouseHandler.DragRegion() {
+	return p.handleMouseDragEndRegion(p.mouseHandler.DragRegion())
+}
+
+func (p *Plugin) handleMouseDragEndRegion(region string) (*Plugin, tea.Cmd) {
+	switch region {
 	case regionDivider:
 		// Save the current list width to state
 		_ = state.SetNotesListWidth(p.listWidth)
@@ -479,14 +556,16 @@ func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, sour
 		visualText = ansi.Strip(surface.Lines[visual])
 	}
 	runeInRow := visualColToRuneOffset(visualText, colInRow)
-	if line, col, ok := landOnClickedWord(source, a, visualText, runeInRow); ok {
-		return line, col
+	if runeInRow < utf8.RuneCountInString(visualText) {
+		if line, col, ok := landOnClickedWord(source, a, visualText, runeInRow); ok {
+			return line, col
+		}
 	}
 	line, col = a.SourceLine, a.SourceCol+max(0, runeInRow)
 	if visual+1 < len(surface.Anchors) {
 		next := surface.At(visual + 1)
-		if next.SourceLine == line && next.SourceCol > a.SourceCol && col >= next.SourceCol {
-			col = next.SourceCol - 1
+		if next.SourceLine == line && next.SourceCol > a.SourceCol && col > next.SourceCol {
+			col = next.SourceCol
 		}
 	}
 	sourceLines := strings.Split(source, "\n")
@@ -503,22 +582,42 @@ func visualColToRuneOffset(s string, col int) int {
 	if col <= 0 || s == "" {
 		return 0
 	}
-	runes := []rune(s)
+	graphemes := uniseg.NewGraphemes(s)
+	runeOff := 0
 	cell := 0
-	for i, r := range runes {
-		w := rw.RuneWidth(r)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		w := rw.StringWidth(cluster)
 		if w < 1 {
 			w = 1
 		}
 		if cell+w > col {
-			return i
+			return runeOff
 		}
 		cell += w
+		runeOff += utf8.RuneCountInString(cluster)
 		if cell == col {
-			return i + 1
+			return runeOff
 		}
 	}
-	return len(runes)
+	return runeOff
+}
+
+// sourceUnitSpan maps the shared word/line semantics onto Notes' exclusive
+// logical source carets. The shared selector works in visual cells; converting
+// both boundaries keeps wide and combining Unicode intact.
+func sourceUnitSpan(content string, at srcPos, unit tty.SelectionUnit) (srcPos, srcPos, bool) {
+	lines := sourceLines(content)
+	at = clampSrc(at, lines)
+	line := lines[at.line]
+	runes := []rune(line)
+	visualCol := uniseg.StringWidth(string(runes[:at.col]))
+	start, end, ok := textselect.UnitSpanAt(unit, line, at.line, visualCol, textselect.DefaultTabWidth)
+	if !ok {
+		return srcPos{}, srcPos{}, false
+	}
+	return srcPos{line: at.line, col: visualColToRuneOffset(line, start.Col)},
+		srcPos{line: at.line, col: visualColToRuneOffset(line, end.Col+1)}, true
 }
 
 func wordAt(s string, runeOff int) (word string, intra int) {

@@ -65,6 +65,49 @@ func TestViewDeclaresNativeTerminalCapabilities(t *testing.T) {
 	}
 }
 
+func TestAppRoutesCompleteMouseGesturePastHeaderInPluginCoordinates(t *testing.T) {
+	p := &nativeTestPlugin{focused: true, mouse: tea.MouseModeCellMotion}
+	m := nativeTestModel(t, p)
+
+	events := []tea.MouseMsg{
+		tea.MouseClickMsg(tea.Mouse{X: 17, Y: headerHeight + 4, Button: tea.MouseLeft}),
+		tea.MouseMotionMsg(tea.Mouse{X: 22, Y: headerHeight + 5, Button: tea.MouseLeft}),
+		tea.MouseReleaseMsg(tea.Mouse{X: 22, Y: headerHeight + 5, Button: tea.MouseLeft}),
+		tea.MouseWheelMsg(tea.Mouse{X: 22, Y: headerHeight + 5, Button: tea.MouseWheelDown}),
+	}
+	for _, event := range events {
+		updated, cmd := m.Update(event)
+		m = updated.(Model)
+		if cmd != nil {
+			t.Fatalf("%T unexpectedly returned a command", event)
+		}
+	}
+
+	if len(p.seen) != len(events) {
+		t.Fatalf("plugin saw %d events, want %d", len(p.seen), len(events))
+	}
+	for i, want := range []struct {
+		typeName string
+		x, y     int
+		button   tea.MouseButton
+	}{
+		{"tea.MouseClickMsg", 17, 4, tea.MouseLeft},
+		{"tea.MouseMotionMsg", 22, 5, tea.MouseLeft},
+		{"tea.MouseReleaseMsg", 22, 5, tea.MouseLeft},
+		{"tea.MouseWheelMsg", 22, 5, tea.MouseWheelDown},
+	} {
+		got, ok := p.seen[i].(tea.MouseMsg)
+		if !ok {
+			t.Fatalf("event %d reached plugin as %T, want mouse message", i, p.seen[i])
+		}
+		point := got.Mouse()
+		if point.X != want.x || point.Y != want.y || point.Button != want.button {
+			t.Fatalf("event %d (%s) = (%d,%d,%v), want (%d,%d,%v)", i, want.typeName,
+				point.X, point.Y, point.Button, want.x, want.y, want.button)
+		}
+	}
+}
+
 func TestViewSuppressesPluginCursorAndCellMotionWhenCoveredOrBlurred(t *testing.T) {
 	p := &nativeTestPlugin{
 		focused: true,
