@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -54,6 +55,15 @@ func openNotificationStore() notify.Store {
 // the content region is the whole terminal.
 func (m Model) contentWidth() int {
 	return max(0, m.width-m.reservedRightWidth())
+}
+
+// contentHeight is the height of the content region — the same arithmetic
+// viewContent does, kept here so the toast column can ask how much room it has
+// without waiting to be handed the geometry at render time. A block that will
+// not fit must not be counted as painted, and the read gate runs on the
+// heartbeat, not in View.
+func (m Model) contentHeight() int {
+	return max(0, m.height-headerHeight-footerHeight)
 }
 
 // reservedRightWidth is the width of the right-hand column reserved by the
@@ -254,12 +264,20 @@ func (m *Model) sweepNotifications(now time.Time) {
 			// were never read, so they keep their unread state and their place
 			// in the centre until the user expands the block or opens the
 			// centre. Expanding the block is seeing them, and marks them.
+			// No reveal state means the block is not on screen at all: the
+			// column is too narrow for a bordered block, or the block did not
+			// fit the content region's remaining height. syncToastReveal is
+			// the single answer to "what is painted", and absence from it is
+			// as much of an answer as a retracted state — defaulting to
+			// "painted" here would read notifications nothing ever drew.
 			r, ok := m.toastReveals[s.Source]
-			if ok && !r.state.Visible() {
+			if !ok || !r.state.Visible() {
 				continue
 			}
 			m.toastPainted[s.Lead().ID] = true
-			if !m.toastExpanded {
+			// Members are only legible once the block has finished arriving:
+			// mid-reveal the lower rows are not on screen yet.
+			if !m.toastExpanded || r.state.Phase() != reveal.Shown {
 				continue
 			}
 			for i, member := range s.Members {

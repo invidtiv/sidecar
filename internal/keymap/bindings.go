@@ -519,6 +519,11 @@ func DefaultBindings() []Binding {
 		{Key: "q", Command: "close-detail", Context: "git-commit-detail"},
 
 		// Conversations sidebar context (two-pane mode, left pane focused)
+		// Content search expands every session on alt+e. The key is handled in
+		// the plugin, but it has to be registered: the global alt+e (expand a
+		// collapsed toast stack) stands aside only for a context that has
+		// claimed the key, and an unregistered claim is invisible to that rule.
+		{Key: "alt+e", Command: "expand-all", Context: "conversations-content-search"},
 		{Key: "tab", Command: "switch-pane", Context: "conversations-sidebar"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "conversations-sidebar"},
 		{Key: "a", Command: "new-session", Context: "conversations-sidebar"},

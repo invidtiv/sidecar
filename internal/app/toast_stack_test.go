@@ -102,6 +102,10 @@ func TestSameSourceCollapsesWithAPeekLine(t *testing.T) {
 	if !m.toggleToastExpand() {
 		t.Fatal("the expand key did nothing with a collapsed block on screen")
 	}
+	// The key handler reconciles the column afterwards, which is what re-draws
+	// the block at its new height; the cached block is only good for the shape
+	// it was rendered for.
+	m.syncToastReveal(time.Now())
 	screen = ansi.Strip(m.renderToastOverlay(blankScreen(100, 40), 0, headerHeight, 100, 38))
 	if !strings.Contains(screen, "needs input a") || !strings.Contains(screen, "needs input b") {
 		t.Fatalf("expanding did not reveal the members:\n%s", screen)
@@ -188,6 +192,69 @@ func TestResizeDragSuppressesTheFloatingTiers(t *testing.T) {
 	if m.UnreadNotifications() != 1 {
 		t.Fatalf("unread = %d, want the suppressed notification still counted", m.UnreadNotifications())
 	}
+}
+
+// A block the content region has no room for is not on screen, and the read
+// gate must treat "no room" exactly as it treats "queued": never painted,
+// therefore never read by its own expiry. Before this, a short terminal (or one
+// too narrow for a bordered block at all) silently read everything posted to it.
+func TestToastsThatDoNotFitAreNeverMarkedPainted(t *testing.T) {
+	m := stackModel(t)
+	// Room for the header, the footer and one block, and no more.
+	m.height = headerHeight + footerHeight + 9
+	for _, s := range []notify.SourceID{notify.SourceAgent, notify.SourceSession} {
+		postToast(t, m, s, string(s)+" happened")
+		time.Sleep(2 * time.Millisecond)
+	}
+	m.sweepNotifications(time.Now())
+	painted := 0
+	for _, n := range m.Notifications() {
+		if m.toastPainted[n.ID] {
+			painted++
+		}
+	}
+	if painted != 1 {
+		t.Fatalf("painted %d blocks in a region with room for one", painted)
+	}
+
+	// A content region too narrow for a bordered block paints nothing at all.
+	narrow := stackModel(t)
+	narrow.width = toastMinWidth
+	postToast(t, narrow, notify.SourceAgent, "agent happened")
+	narrow.sweepNotifications(time.Now())
+	for id, ok := range narrow.toastPainted {
+		if ok {
+			t.Fatalf("%s was recorded as painted on a terminal with no room for a toast", id)
+		}
+	}
+}
+
+// The rendered block is cached at the width it was drawn for. The content
+// region moves without the column being re-synced — a terminal resize, the
+// centre opening — so a stale cache must not be painted.
+func TestToastBlockFollowsTheContentWidth(t *testing.T) {
+	m := stackModel(t)
+	postToast(t, m, notify.SourceAgent, "agent happened")
+	wide := ansi.Strip(m.renderToastOverlay(blankScreen(100, 40), 0, headerHeight, 100, 38))
+
+	// The centre opens: the content region narrows below toastMaxWidth.
+	narrow := ansi.Strip(m.renderToastOverlay(blankScreen(100, 40), 0, headerHeight, 30, 38))
+	if widthOf(wide, "agent happened") == widthOf(narrow, "agent happened") {
+		t.Fatalf("the block kept its old width after the content region narrowed:\n%s", narrow)
+	}
+	if strings.Contains(narrow, strings.Repeat("─", toastMaxWidth-2)) {
+		t.Fatalf("a full-width rule survived into a narrow content region:\n%s", narrow)
+	}
+}
+
+// widthOf is the length of the line the needle is on, trailing blanks removed.
+func widthOf(screen, needle string) int {
+	for _, line := range strings.Split(screen, "\n") {
+		if strings.Contains(line, needle) {
+			return len(strings.TrimRight(line, " "))
+		}
+	}
+	return -1
 }
 
 func rowOf(screen, needle string) int {

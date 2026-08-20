@@ -105,6 +105,13 @@ func (m Model) renderToastOverlay(screen string, x0, y0, width, height int) stri
 		var block string
 		if ok {
 			block = r.block
+			// The cache is only good for the width it was rendered at. A
+			// terminal resize, and the centre panel opening, closing or being
+			// dragged, all change the content region without going through
+			// syncToastReveal — redraw rather than paint a stale-width block.
+			if block != "" && lipgloss.Width(block) != blockWidth {
+				block = ""
+			}
 		}
 		if block == "" {
 			block = renderToastBlock(s, blockWidth, now, m.toastExpanded)
@@ -403,13 +410,11 @@ func (m *Model) dismissToastStack(source notify.SourceID) bool {
 			// The re-show is presentation only; dismissing it must not dismiss
 			// the record it was copied from unless that record is toasting too.
 			m.clearToastReshow()
-			m.syncToastReveal(now)
 			return true
 		}
 		for _, member := range s.Members {
 			m.dismissNotification(member.ID)
 		}
-		m.syncToastReveal(now)
 		return true
 	}
 	return false

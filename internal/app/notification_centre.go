@@ -686,8 +686,18 @@ func (m *Model) notificationCentreTabKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.readSelectedNotification()
 		return true, nil
 	}
-	// No ring to extend: the centre takes tab only where the focused context
-	// has not bound it to something of its own.
+	// No ring to extend: the centre takes tab only from the shell's own
+	// context. Anything with a plugin context of its own keeps the key, whether
+	// or not that claim is registered in the keymap — several surfaces
+	// (git's diff and commit-preview panes, the file browser's sub-modes, the
+	// notes list, conversations' content search) switch panes on a hard-coded
+	// tab, and the registry is not a complete index of who wants the key.
+	// Guessing wrong here costs a working pane toggle; guessing conservatively
+	// costs a tab stop the plan already lists as a known limit, reachable by
+	// alt+n, N and the pointer.
+	if m.activeContext != "" && m.activeContext != "global" {
+		return false, nil
+	}
 	if m.contextRebindsKey(key) || m.pluginClaimsKey(key) {
 		return false, nil
 	}

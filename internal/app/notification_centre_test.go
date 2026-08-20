@@ -579,7 +579,11 @@ func TestSelectingAndExpiringMarkNotificationsRead(t *testing.T) {
 	if m.UnreadNotifications() != 1 {
 		t.Fatalf("a fresh notification should be unread")
 	}
-	m.sweepNotifications(third.CreatedAt.Add(time.Second)) // a tick with the toast on screen
+	// A tick with the toast on screen. The column is reconciled first, exactly
+	// as the heartbeat does it: the read gate asks the reveal states what is
+	// painted, so a sweep with no synced column reads nothing.
+	m.syncToastReveal(third.CreatedAt.Add(time.Second))
+	m.sweepNotifications(third.CreatedAt.Add(time.Second))
 	m.sweepNotifications(third.ExpiresAt.Add(time.Second))
 	if n, _ := m.findNotification(third.ID); !n.Read() {
 		t.Fatal("an expired toast stayed unread, so it would toast again at the next start")

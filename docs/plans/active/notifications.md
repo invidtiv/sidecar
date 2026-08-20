@@ -656,6 +656,55 @@ Suppress-while-pane-resizing guard.
   `waiting ×3` and its `▾ 2 more · alt+e expand` peek line, the fourth source
   queued, and `alt+e` listed the hidden members.
 
+### Phases 2–3 review pass — corrections
+
+An independent review of the three Phase 2/3 commits found five real defects.
+All are fixed; the notes above stand except where they say otherwise here.
+
+- **The read gate defaulted to "painted" when there was no reveal state.** The
+  sweep only skipped a block whose state said invisible, so a content region
+  too narrow for a bordered block — or a block clipped off the bottom of a
+  short one — was marked painted and read by its own expiry, which is exactly
+  the failure the gate exists to prevent. `syncToastReveal` is now the single
+  answer to "what is on screen": it stops admitting blocks when the content
+  region's remaining height runs out, and the sweep requires a state that is
+  present *and* visible. Expanded members are only marked once the block has
+  finished arriving (`reveal.Shown`) — mid-reveal its lower rows are not on
+  screen. The heartbeat reconciles the column *before* it sweeps, so a block
+  that just took a freed slot is read on the frame it appears rather than a
+  second later.
+- **The cached block outlived its width.** Blocks are rendered at sync time and
+  cached, but the content region also moves without a sync — a terminal resize,
+  the centre opening or being dragged — and the renderer painted the stale
+  block at the old width. It now redraws whenever the cache does not match the
+  width it is being asked for.
+- **Three interactions dropped the reveal tick.** `d`, a click, and `alt+e`
+  changed the column and returned `nil`, so a retraction or an expansion sat
+  frozen until the next heartbeat. The key/mouse handlers now return the sync's
+  command, and the mutators no longer sync internally (one owner per frame).
+- **The tab stop could steal a hard-coded `tab`.** The fallback for surfaces
+  without `FocusCycler` only stood aside for a *registered* binding, and
+  several surfaces switch panes on a `tab` that is not in the keymap (git's
+  diff and commit-preview panes, file-browser sub-modes, the notes list,
+  conversations' content search). With no ring on offer the centre now takes
+  `tab` only from the shell's own context (`global`/empty). This widens the
+  known limit recorded above rather than changing its shape: `alt+n`, `N` and
+  the pointer are the routes everywhere else, and any surface becomes a stop by
+  implementing `FocusCycler`.
+- **`alt+e` collided with conversations' content search**, which expands all
+  sessions on that key from a context the keymap did not describe. The binding
+  is now registered (`expand-all` in `conversations-content-search`), so the
+  global expand stands aside for it — registration is what makes a claim
+  visible to the fallback rules.
+
+**Known risk, not fixed (Phase 4 or later).** A sticky `waiting` notification
+survives a restart, but the `LaneTracker` does not: after a restart the tracker
+re-baselines and no longer knows the id it posted, so that one notification is
+never self-dismissed when the agent unblocks. It ages out with the 24h
+retention and the user can dismiss it. The fix is a deterministic per-workspace
+id for the waiting record, which needs a rule for re-posting after a dismissal
+and is not worth inventing here.
+
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still

@@ -28,10 +28,11 @@ func shiftTabKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyTab, Mo
 func (m *Model) pressTab()         { m.handleKeyMsg(tabKey()) }
 func (m *Model) pressShiftTab()    { m.handleKeyMsg(shiftTabKey()) }
 
-// The plain case: a surface with no Tab binding of its own. The open panel is
-// one more stop on the cycle — tab in, tab onward — and it never closes.
+// The plain case: a surface at the wrap point of its own ring. The open panel
+// is one more stop on the cycle — tab in, tab onward — and it never closes.
 func TestTabCyclesIntoAndOutOfTheOpenCentre(t *testing.T) {
-	m := centreTestModel(t, &sizingPlugin{id: "files"})
+	p := &cyclerPlugin{sizingPlugin: sizingPlugin{id: "workspace"}, atEnd: true}
+	m := centreTestModelWithPlugin(t, p)
 	postCentreNotification(t, &m, notify.SourceTasks, "task one")
 
 	m.toggleNotificationCentre()
@@ -92,6 +93,22 @@ func TestTabStaysWithASurfaceThatBindsIt(t *testing.T) {
 	}
 	if m.notificationCentreFocused {
 		t.Fatal("focus moved to the centre from a surface that owns tab")
+	}
+}
+
+// A surface with a context of its own but no ring keeps tab even when nothing
+// in the keymap registry says so: several surfaces switch panes on a hard-coded
+// tab, and a stop the centre steals from one of them is a broken pane toggle.
+func TestTabStaysWithASurfaceThatHasNoRing(t *testing.T) {
+	m := centreTestModel(t, &sizingPlugin{id: "notes-list"})
+	m.toggleNotificationCentre()
+	m.blurNotificationCentre()
+
+	if handled, _ := m.notificationCentreTabKey(tabKey()); handled {
+		t.Fatal("the centre took tab from a surface that never offered its ring")
+	}
+	if m.notificationCentreFocused {
+		t.Fatal("focus moved to the centre from a surface with no ring")
 	}
 }
 

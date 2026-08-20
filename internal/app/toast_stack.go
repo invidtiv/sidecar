@@ -85,21 +85,29 @@ func (m *Model) syncToastReveal(now time.Time) tea.Cmd {
 		m.toastReveals = map[notify.SourceID]*toastReveal{}
 	}
 	live := map[notify.SourceID]bool{}
+	// The column stops where the content region does. A block the renderer
+	// would have to clip off the bottom is not on screen, so it gets no reveal
+	// state — which is also how the read gate learns it was never painted.
+	budget := m.contentHeight() - toastMarginY
 	if width > 0 && !m.overlaysSuppressed() {
 		for _, s := range m.toastStacks(now) {
 			block := renderToastBlock(s, width, now, m.toastExpanded)
 			if block == "" {
 				continue
 			}
-			live[s.Source] = true
 			height := lipgloss.Height(block)
+			if height > budget {
+				break
+			}
+			budget -= height + toastGapY
+			live[s.Source] = true
 			r, ok := m.toastReveals[s.Source]
 			if !ok {
 				r = &toastReveal{state: reveal.New(height)}
 				m.toastReveals[s.Source] = r
 			} else if r.state.Phase() == reveal.Leaving || r.state.Phase() == reveal.Gone {
-				// The source came back before its retraction finished. Re-enter
-				// from wherever the rows are rather than snapping to full height.
+				// The source came back before its retraction finished, so it
+				// arrives again rather than snapping back to full height.
 				r.state = reveal.New(height)
 			} else {
 				r.state.Resize(height)
@@ -162,7 +170,6 @@ func (m *Model) toggleToastExpand() bool {
 		}
 	}
 	m.toastExpanded = !m.toastExpanded
-	m.syncToastReveal(now)
 	return true
 }
 
