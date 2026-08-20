@@ -25,6 +25,15 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 	if len(m.focusIDs) == 0 {
 		m.focusIDs = m.collectFocusIDs(contentWidth)
 	}
+	if m.pendingFocusID != "" {
+		for i, fid := range m.focusIDs {
+			if fid == m.pendingFocusID {
+				m.focusIdx = i
+				m.pendingFocusID = ""
+				break
+			}
+		}
+	}
 
 	focusID := m.currentFocusID()
 	rendered := make([]renderedSection, 0, len(m.sections))
@@ -101,6 +110,15 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	// 1. First pass: render sections at full width to measure total height
 	rendered, focusIDs := m.renderSections(contentWidth)
 	m.focusIDs = focusIDs
+	if m.pendingFocusID != "" {
+		for i, fid := range m.focusIDs {
+			if fid == m.pendingFocusID {
+				m.focusIdx = i
+				m.pendingFocusID = ""
+				break
+			}
+		}
+	}
 
 	// Ensure focusIdx is valid
 	if len(m.focusIDs) > 0 && m.focusIdx >= len(m.focusIDs) {
@@ -118,6 +136,15 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	if needsScrollbar && contentWidth > 1 {
 		rendered, focusIDs = m.renderSections(contentWidth - 1)
 		m.focusIDs = focusIDs
+		if m.pendingFocusID != "" {
+			for i, fid := range m.focusIDs {
+				if fid == m.pendingFocusID {
+					m.focusIdx = i
+					m.pendingFocusID = ""
+					break
+				}
+			}
+		}
 		if len(m.focusIDs) > 0 && m.focusIdx >= len(m.focusIDs) {
 			m.focusIdx = 0
 		}

@@ -70,7 +70,6 @@ func renderForm(t *testing.T, f *Form) string {
 		t.Fatal("Build returned nil")
 	}
 	view := m.Render(80, 40, mouse.NewHandler())
-	f.RestoreFocus()
 	return view
 }
 
@@ -401,7 +400,6 @@ func TestKindToggleKeys(t *testing.T) {
 	f := Open(OpenOpts{Kind: KindWorktree, FocusKind: true})
 	m := f.Build(52)
 	m.Render(80, 40, mouse.NewHandler())
-	f.RestoreFocus()
 	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyLeft})
 	if f.Kind() != KindShell {
 		t.Fatalf("left on kind = %v, want Shell", f.Kind())
@@ -409,6 +407,35 @@ func TestKindToggleKeys(t *testing.T) {
 	view := renderForm(t, f)
 	if strings.Contains(view, "Base Branch") {
 		t.Fatalf("after left, still shows Base Branch:\n%s", view)
+	}
+}
+
+func TestTabAcrossFieldsWithRenders(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	m := f.Build(52)
+	_ = m.Render(80, 40, mouse.NewHandler())
+	if m.FocusedID() != FieldName {
+		t.Fatalf("initial focus = %q, want %s", m.FocusedID(), FieldName)
+	}
+
+	wantOrder := []string{
+		FieldBase,
+		FieldAgent,
+		FieldSkip,
+		ActionCreate,
+		ActionCancel,
+		FieldKind,
+		FieldProject,
+		FieldName,
+	}
+
+	for i, want := range wantOrder {
+		m.HandleKey(tea.KeyPressMsg{Code: tea.KeyTab})
+		// Simulate frame render between keypresses
+		_ = f.Build(52).Render(80, 40, mouse.NewHandler())
+		if got := m.FocusedID(); got != want {
+			t.Fatalf("after tab %d, focus = %q, want %s", i+1, got, want)
+		}
 	}
 }
 

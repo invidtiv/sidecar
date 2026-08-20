@@ -175,21 +175,22 @@ func (f *Form) Build(width int) *modal.Modal {
 	if f.modal != nil && f.modalWidth == width && f.cachedKind == f.kind && f.cachedBranch == len(f.branches) {
 		return f.modal
 	}
-	f.build(width, prevFocus)
-	f.pendingFocus = prevFocus
-	if f.pendingFocus == "" {
-		f.pendingFocus = f.openedFocus
+	if prevFocus == "" {
+		prevFocus = f.openedFocus
 	}
+	f.build(width, prevFocus)
+	f.pendingFocus = ""
 	return f.modal
 }
 
-// RestoreFocus applies the pending focus after the modal has been rendered
-// (SetFocus needs the focus ID list Render builds).
+// RestoreFocus applies the pending focus after the modal has been rendered.
+// No-op if focus is already managed by the modal.
 func (f *Form) RestoreFocus() {
 	if f == nil || f.modal == nil || f.pendingFocus == "" {
 		return
 	}
 	f.modal.SetFocus(f.pendingFocus)
+	f.pendingFocus = ""
 }
 
 // InitialFocusID is Name, or the kind toggle when Open was given FocusKind.
@@ -434,6 +435,7 @@ func (f *Form) build(width int, prevFocus string) {
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
 		modal.WithHints(true),
+		modal.WithInitialFocus(prevFocus),
 	)
 	for _, section := range sections {
 		m.AddSection(section)

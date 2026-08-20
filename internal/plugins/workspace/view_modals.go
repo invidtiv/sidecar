@@ -30,7 +30,6 @@ func (p *Plugin) renderCreateModal(width, height int) string {
 	}
 
 	modalContent := m.Render(width, height, p.mouseHandler)
-	p.createForm.RestoreFocus()
 	return ui.OverlayModal(background, modalContent, width, height)
 }
 

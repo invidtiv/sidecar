@@ -359,25 +359,18 @@ func renderCreateModal(t *testing.T, m *Model) string {
 	if m.height < 1 {
 		m.height = 30
 	}
-	prev := m.activeCreateModal()
 	m.ensureCreateModal()
 	md := m.activeCreateModal()
 	if md == nil {
 		t.Fatal("create modal is nil")
 	}
 	view := md.Render(m.width, m.height, m.createMouse)
-	if (prev == nil || prev != md) && m.createPlan == nil && m.createForm != nil {
-		m.createForm.RestoreFocus()
-	}
 	return view
 }
 
 func createFormModal(t *testing.T, m *Model) *modal.Modal {
 	t.Helper()
 	renderCreateModal(t, m)
-	if m.createForm != nil {
-		m.createForm.RestoreFocus()
-	}
 	md := m.activeCreateModal()
 	if md == nil {
 		t.Fatal("create modal is nil")
@@ -723,11 +716,13 @@ func TestCreateModalTabCyclesWithoutTrapping(t *testing.T) {
 	}
 	for i, id := range want {
 		m.handleCreateShellKey(createKey("tab"))
+		renderCreateModal(t, m)
 		if got := m.activeCreateModal().FocusedID(); got != id {
 			t.Fatalf("tab %d focus = %q, want %q", i+1, got, id)
 		}
 	}
 	m.handleCreateShellKey(createKey("shift+tab"))
+	renderCreateModal(t, m)
 	if got := m.activeCreateModal().FocusedID(); got != workspacecreate.ActionCancel {
 		t.Fatalf("shift+tab focus = %q, want cancel", got)
 	}

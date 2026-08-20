@@ -858,3 +858,44 @@ func TestRenderScrollbarFunction(t *testing.T) {
 		t.Error("expected track character │ in scrollbar")
 	}
 }
+
+func TestWithInitialFocus(t *testing.T) {
+	m := New("Test", WithInitialFocus("btn-b")).
+		AddSection(Buttons(
+			Btn(" First ", "btn-a"),
+			Btn(" Second ", "btn-b"),
+			Btn(" Third ", "btn-c"),
+		))
+
+	if m.FocusedID() != "btn-b" {
+		t.Fatalf("before render, focus = %q, want btn-b", m.FocusedID())
+	}
+
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	if m.FocusedID() != "btn-b" {
+		t.Fatalf("after render, focus = %q, want btn-b", m.FocusedID())
+	}
+}
+
+func TestSetFocusBeforeRender(t *testing.T) {
+	m := New("Test").
+		AddSection(Buttons(
+			Btn(" First ", "btn-a"),
+			Btn(" Second ", "btn-b"),
+			Btn(" Third ", "btn-c"),
+		))
+	m.SetFocus("btn-c")
+
+	if m.FocusedID() != "btn-c" {
+		t.Fatalf("before render, focus = %q, want btn-c", m.FocusedID())
+	}
+
+	handler := mouse.NewHandler()
+	m.Render(80, 24, handler)
+
+	if m.FocusedID() != "btn-c" {
+		t.Fatalf("after render, focus = %q, want btn-c", m.FocusedID())
+	}
+}

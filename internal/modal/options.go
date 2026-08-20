@@ -41,6 +41,13 @@ func WithPrimaryAction(actionID string) Option {
 	}
 }
 
+// WithInitialFocus sets the element ID that receives focus on first render.
+func WithInitialFocus(id string) Option {
+	return func(m *Modal) {
+		m.SetFocus(id)
+	}
+}
+
 // WithCloseOnBackdropClick controls whether clicking the backdrop dismisses the modal.
 // Defaults to true.
 func WithCloseOnBackdropClick(close bool) Option {

@@ -34,7 +34,6 @@ func renderCreateForm(t *testing.T, p *Plugin) (*modal.Modal, string) {
 		t.Fatal("create form modal is nil")
 	}
 	view := m.Render(p.width, p.height, p.mouseHandler)
-	p.createForm.RestoreFocus()
 	return m, view
 }
 
@@ -435,6 +434,37 @@ func TestWorktreesPlusOpensCreateFormNameFocused(t *testing.T) {
 	})
 	if p.createForm == nil || p.createForm.InitialFocusID() != workspacecreate.FieldName {
 		t.Fatalf("Worktrees [+] focus = %q, want name", p.createForm.InitialFocusID())
+	}
+}
+
+func TestCreateModalTabCyclesAcrossFieldsWithRenders(t *testing.T) {
+	p := New()
+	p.width, p.height = 80, 40
+	p.mouseHandler = mouse.NewHandler()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
+	p.initCreateModalBase()
+
+	m, _ := renderCreateForm(t, p)
+	if got := m.FocusedID(); got != workspacecreate.FieldName {
+		t.Fatalf("initial focus = %q, want %s", got, workspacecreate.FieldName)
+	}
+
+	wantOrder := []string{
+		workspacecreate.FieldBase,
+		workspacecreate.FieldAgent,
+		workspacecreate.FieldSkip,
+		workspacecreate.ActionCreate,
+		workspacecreate.ActionCancel,
+		workspacecreate.FieldKind,
+		workspacecreate.FieldName,
+	}
+
+	for i, want := range wantOrder {
+		p.handleCreateKeys(tea.KeyPressMsg{Code: tea.KeyTab})
+		m, _ = renderCreateForm(t, p)
+		if got := m.FocusedID(); got != want {
+			t.Fatalf("after tab %d, focus = %q, want %s", i+1, got, want)
+		}
 	}
 }
 

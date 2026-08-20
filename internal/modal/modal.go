@@ -20,10 +20,11 @@ type Modal struct {
 	marginY         int    // Rows of surface kept clear above and below the box
 
 	// State (managed internally)
-	focusIdx     int      // Current focused element index in focusIDs
-	hoverID      string   // Currently hovered element ID
-	focusIDs     []string // Ordered list of focusable IDs (built during Render)
-	scrollOffset int      // Content scroll position in lines
+	focusIdx       int      // Current focused element index in focusIDs
+	pendingFocusID string   // Pending focus target before focusIDs is resolved
+	hoverID        string   // Currently hovered element ID
+	focusIDs       []string // Ordered list of focusable IDs (built during Render)
+	scrollOffset   int      // Content scroll position in lines
 
 	// Focus-scroll tracking (cached during buildLayout)
 	focusPositions map[string]focusablePos // Absolute Y positions of focusable elements
@@ -290,9 +291,15 @@ func (m *Modal) WheelAtBoundary(msg tea.MouseWheelMsg, h *mouse.Handler) bool {
 
 // SetFocus sets focus to a specific element by ID.
 func (m *Modal) SetFocus(id string) {
+	if id == "" {
+		m.pendingFocusID = ""
+		return
+	}
+	m.pendingFocusID = id
 	for i, fid := range m.focusIDs {
 		if fid == id {
 			m.focusIdx = i
+			m.pendingFocusID = ""
 			m.scrollToFocused()
 			return
 		}
@@ -312,6 +319,7 @@ func (m *Modal) HoveredID() string {
 // Reset resets the modal state (focus, hover, scroll).
 func (m *Modal) Reset() {
 	m.focusIdx = 0
+	m.pendingFocusID = ""
 	m.hoverID = ""
 	m.scrollOffset = 0
 }
@@ -319,7 +327,7 @@ func (m *Modal) Reset() {
 // currentFocusID returns the ID of the currently focused element.
 func (m *Modal) currentFocusID() string {
 	if len(m.focusIDs) == 0 {
-		return ""
+		return m.pendingFocusID
 	}
 	if m.focusIdx < 0 || m.focusIdx >= len(m.focusIDs) {
 		return m.focusIDs[0]
@@ -332,6 +340,7 @@ func (m *Modal) cycleFocus(delta int) {
 	if len(m.focusIDs) == 0 {
 		return
 	}
+	m.pendingFocusID = ""
 	m.focusIdx = (m.focusIdx + delta + len(m.focusIDs)) % len(m.focusIDs)
 	m.scrollToFocused()
 }

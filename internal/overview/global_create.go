@@ -370,9 +370,6 @@ func (m *Model) overlayCreateShell(background string, width, height int) string 
 		return background
 	}
 	rendered := md.Render(width, height, m.createMouse)
-	if m.createPlan == nil && m.createForm != nil {
-		m.createForm.RestoreFocus()
-	}
 	return ui.OverlayModal(background, rendered, width, height)
 }
 
@@ -397,9 +394,6 @@ func (m *Model) CreatePaste(value string) bool {
 	if md == nil {
 		return false
 	}
-	w, h := m.createRenderSize()
-	_ = md.Render(w, h, m.createMouse)
-	m.createForm.RestoreFocus()
 	prev := md.FocusedID()
 	md.SetFocus(workspacecreate.FieldName)
 	for _, r := range value {
