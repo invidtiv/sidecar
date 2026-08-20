@@ -51,6 +51,7 @@ type View struct {
 
 	Target      Target
 	Epoch       uint64
+	Binding     uint64
 	WorkspaceID string
 	WorkDir     string
 
@@ -78,6 +79,13 @@ type View struct {
 
 // Bind records the host identity used to drop stale async results.
 func (v *View) Bind(workdir, workspaceID string, epoch uint64) {
+	v.BindGeneration(workdir, workspaceID, epoch, 0)
+}
+
+// BindGeneration adds a per-view request identity. Legacy hosts use zero;
+// shared decks use their never-reused tab ID so raw broadcasts cannot cross a
+// context rebind that deliberately reuses workspace and epoch.
+func (v *View) BindGeneration(workdir, workspaceID string, epoch, binding uint64) {
 	if workdir != "" {
 		v.WorkDir = workdir
 	}
@@ -85,6 +93,7 @@ func (v *View) Bind(workdir, workspaceID string, epoch uint64) {
 		v.WorkspaceID = workspaceID
 	}
 	v.Epoch = epoch
+	v.Binding = binding
 	if v.Target.Identity() == "" {
 		v.Target = WorkingTreeTarget()
 	}
@@ -103,7 +112,10 @@ func (v *View) SetSize(width, height int) {
 func (v *View) Width() int  { return v.width }
 func (v *View) Height() int { return v.height }
 
-func (v *View) accepts(epoch uint64, workspaceID, identity string) bool {
+func (v *View) accepts(epoch, binding uint64, workspaceID, identity string) bool {
+	if binding != 0 && v.Binding != 0 && binding != v.Binding {
+		return false
+	}
 	if workspaceID != "" && v.WorkspaceID != "" && workspaceID != v.WorkspaceID {
 		return false
 	}
@@ -208,12 +220,12 @@ func (v *View) loadCommit(workdir, workspaceID, hash string) tea.Cmd {
 	if workspaceID != "" {
 		v.WorkspaceID = workspaceID
 	}
-	epoch, id, ident := v.Epoch, v.WorkspaceID, v.Target.Identity()
+	epoch, binding, id, ident := v.Epoch, v.Binding, v.WorkspaceID, v.Target.Identity()
 	wd := v.WorkDir
 	return func() tea.Msg {
 		detail, err := LoadCommitDetail(context.Background(), wd, hash)
 		return CommitDetailMsg{
-			Epoch: epoch, WorkspaceID: id, Identity: ident,
+			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
 			Hash: hash, Commit: detail, Err: err,
 		}
 	}
@@ -222,6 +234,7 @@ func (v *View) loadCommit(workdir, workspaceID, hash string) tea.Cmd {
 // CommitDetailMsg is the result of LoadSelectedCommit.
 type CommitDetailMsg struct {
 	Epoch       uint64
+	Binding     uint64
 	WorkspaceID string
 	Identity    string
 	Hash        string
@@ -232,7 +245,7 @@ type CommitDetailMsg struct {
 // ApplyCommitDetail installs a loaded commit if it is still the row under
 // the cursor, or the root of a TargetCommit tab whose Identity matches.
 func (v *View) ApplyCommitDetail(msg CommitDetailMsg) tea.Cmd {
-	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
 	if v.Target.Kind == TargetCommit {
@@ -300,6 +313,7 @@ func (v *View) applyCommitRoot(msg CommitDetailMsg) tea.Cmd {
 // SnapshotMsg is a completed snapshot load for one worktree.
 type SnapshotMsg struct {
 	Epoch       uint64
+	Binding     uint64
 	WorkspaceID string
 	Identity    string
 	Snapshot    *Snapshot
@@ -320,16 +334,21 @@ func LoadSnapshotCmd(workdir, baseRef, workspaceID string) tea.Cmd {
 
 // LoadSnapshotCmdAt is LoadSnapshotCmd with epoch and target identity.
 func LoadSnapshotCmdAt(workdir, baseRef, workspaceID string, epoch uint64, identity string) tea.Cmd {
+	return LoadSnapshotCmdBound(workdir, baseRef, workspaceID, epoch, identity, 0)
+}
+
+// LoadSnapshotCmdBound is LoadSnapshotCmdAt with a per-view request identity.
+func LoadSnapshotCmdBound(workdir, baseRef, workspaceID string, epoch uint64, identity string, binding uint64) tea.Cmd {
 	if identity == "" {
 		identity = IdentityWorkingTree
 	}
 	return func() tea.Msg {
 		snapshot, err := LoadSnapshot(context.Background(), workdir, baseRef)
 		if err != nil {
-			return SnapshotMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: identity, Err: err,
+			return SnapshotMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: identity, Err: err,
 				Command: "git diff HEAD / git log <base>..HEAD / git diff <merge-base>..HEAD", BaseRef: baseRef}
 		}
-		return SnapshotMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: identity, Snapshot: snapshot, BaseRef: baseRef}
+		return SnapshotMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: identity, Snapshot: snapshot, BaseRef: baseRef}
 	}
 }
 
@@ -338,7 +357,7 @@ func (v *View) ApplySnapshotMsg(msg SnapshotMsg, workdir, workspaceID string) te
 	if v.Target.Kind != TargetWorkingTree {
 		return nil
 	}
-	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
 	if msg.Refresh {
@@ -376,6 +395,7 @@ func (v *View) ApplyLoadedSnapshot(snapshot *Snapshot, workdir, workspaceID stri
 // RangeMsg is the result of LoadRange for one A..B / A...B tab.
 type RangeMsg struct {
 	Epoch       uint64
+	Binding     uint64
 	WorkspaceID string
 	Identity    string
 	Raw         string
@@ -388,11 +408,15 @@ func (v *View) LoadRange() tea.Cmd {
 	if v.Target.Kind != TargetRange || v.Target.A == "" || v.Target.B == "" {
 		return nil
 	}
-	return LoadRangeCmd(v.WorkDir, v.Target, v.Epoch, v.WorkspaceID)
+	return loadRangeCmdBound(v.WorkDir, v.Target, v.Epoch, v.WorkspaceID, v.Binding)
 }
 
 // LoadRangeCmd runs one git diff for a range target.
 func LoadRangeCmd(workdir string, t Target, epoch uint64, workspaceID string) tea.Cmd {
+	return loadRangeCmdBound(workdir, t, epoch, workspaceID, 0)
+}
+
+func loadRangeCmdBound(workdir string, t Target, epoch uint64, workspaceID string, binding uint64) tea.Cmd {
 	if t.Kind != TargetRange || t.A == "" || t.B == "" {
 		return nil
 	}
@@ -405,9 +429,9 @@ func LoadRangeCmd(workdir string, t Target, epoch uint64, workspaceID string) te
 	return func() tea.Msg {
 		raw, err := loadRangeDiff(context.Background(), workdir, spec)
 		if err != nil {
-			return RangeMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: ident, Err: err}
+			return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Err: err}
 		}
-		return RangeMsg{Epoch: epoch, WorkspaceID: workspaceID, Identity: ident, Raw: raw, Files: ParseFiles(raw)}
+		return RangeMsg{Epoch: epoch, Binding: binding, WorkspaceID: workspaceID, Identity: ident, Raw: raw, Files: ParseFiles(raw)}
 	}
 }
 
@@ -429,7 +453,7 @@ func (v *View) ApplyRangeMsg(msg RangeMsg) tea.Cmd {
 	if v.Target.Kind != TargetRange {
 		return nil
 	}
-	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
 	if msg.Err != nil {
@@ -612,6 +636,7 @@ func (v *View) FileNames() []string {
 // CommitFileDiffMsg is a completed commit-file patch load.
 type CommitFileDiffMsg struct {
 	Epoch       uint64
+	Binding     uint64
 	WorkspaceID string
 	Identity    string
 	CommitHash  string
@@ -622,7 +647,7 @@ type CommitFileDiffMsg struct {
 
 // ApplyCommitFileDiff installs a commit file patch if the cursor still matches.
 func (v *View) ApplyCommitFileDiff(msg CommitFileDiffMsg) tea.Cmd {
-	if !v.accepts(msg.Epoch, msg.WorkspaceID, msg.Identity) {
+	if !v.accepts(msg.Epoch, msg.Binding, msg.WorkspaceID, msg.Identity) {
 		return nil
 	}
 	if v.CommitDetail == nil || v.CommitDetail.Hash != msg.CommitHash {
@@ -666,11 +691,11 @@ func (v *View) LoadSelectedCommitFile() tea.Cmd {
 		parentHash = v.CommitDetail.ParentHashes[0]
 	}
 	hash := v.CommitDetail.Hash
-	workdir, epoch, id, ident := v.WorkDir, v.Epoch, v.WorkspaceID, v.Target.Identity()
+	workdir, epoch, binding, id, ident := v.WorkDir, v.Epoch, v.Binding, v.WorkspaceID, v.Target.Identity()
 	return func() tea.Msg {
 		raw, err := loadCommitFileDiff(workdir, hash, file.Path, parentHash)
 		return CommitFileDiffMsg{
-			Epoch: epoch, WorkspaceID: id, Identity: ident,
+			Epoch: epoch, Binding: binding, WorkspaceID: id, Identity: ident,
 			CommitHash: hash, FilePath: file.Path, Raw: raw, Err: err,
 		}
 	}

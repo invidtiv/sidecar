@@ -175,6 +175,29 @@ func TestDeckSetContextRearmsEveryKindAndSelectRestartsLoad(t *testing.T) {
 	}
 }
 
+func TestDeckDiffRejectsRawBroadcastFromReusedSurfaceEpochAfterRebind(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	out := d.Open(ctx, diffRef("wt"), testPlacement())
+	before := d.Viewer(out.LeafID).(*workspacediff.View)
+	stale := workspacediff.SnapshotMsg{
+		Epoch: ctx.Epoch, Binding: before.Binding, WorkspaceID: ctx.Surface,
+		Identity: workspacediff.IdentityWorkingTree,
+	}
+	other := ctx
+	other.Root = t.TempDir()
+	other.BaseRef = "release"
+	d.SetContext(other)
+	after := d.Viewer(out.LeafID).(*workspacediff.View)
+	if before.Binding == 0 || after.Binding == before.Binding {
+		t.Fatalf("diff binding was reused across context: before=%d after=%d", before.Binding, after.Binding)
+	}
+	after.ApplySnapshotMsg(stale, other.Root, other.Surface)
+	if after.State != workspacediff.LoadStateUnknown {
+		t.Fatalf("stale raw snapshot changed rebound view state to %v", after.State)
+	}
+}
+
 func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})

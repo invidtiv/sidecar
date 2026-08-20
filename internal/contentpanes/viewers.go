@@ -160,17 +160,20 @@ func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
 type diffViewer struct{ view *workspacediff.View }
 
 func (v *diffViewer) model() any { return v.view }
-func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, _ int) tea.Cmd {
+func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	target, ok := workspacediff.ParseSpec(ref.Value)
 	if !ok {
 		return nil
 	}
 	v.view.Target = target
-	v.view.Bind(ctx.Root, ctx.Surface, ctx.Epoch)
+	if target.Kind == workspacediff.TargetCommit {
+		v.view.Focus = workspacediff.FocusCommitFiles
+	}
+	v.view.BindGeneration(ctx.Root, ctx.Surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
 	case workspacediff.TargetWorkingTree:
-		return workspacediff.LoadSnapshotCmdAt(ctx.Root, ctx.BaseRef, ctx.Surface, ctx.Epoch, target.Identity())
+		return workspacediff.LoadSnapshotCmdBound(ctx.Root, ctx.BaseRef, ctx.Surface, ctx.Epoch, target.Identity(), uint64(id))
 	case workspacediff.TargetRange:
 		return v.view.LoadRange()
 	case workspacediff.TargetCommit:
@@ -179,10 +182,10 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, _ int) tea.Cm
 		return nil
 	}
 }
-func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, _ int, state TabState) {
+func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	target, _ := workspacediff.ParseSpec(ref.Value)
 	v.view.Target = target
-	v.view.Bind(ctx.Root, ctx.Surface, ctx.Epoch)
+	v.view.BindGeneration(ctx.Root, ctx.Surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateUnknown
 	v.view.Scope = workspacediff.ParseScope(state.Scope)
 	v.view.ViewMode = workspacediff.ParseViewMode(state.Mode)
