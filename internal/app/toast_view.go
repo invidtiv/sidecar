@@ -30,6 +30,12 @@ const (
 	// notification is still in the centre and still counts in the corner).
 	toastMaxWidth = 44
 	toastMinWidth = 24
+
+	// A title wraps to at most this many rows before the last one ellipsizes;
+	// a body to at most toastBodyMaxRows. Text a toast exists to deliver must
+	// be readable on the toast, not hidden behind `…` (Marcus, 2026-08-19).
+	toastTitleMaxRows = 3
+	toastBodyMaxRows  = 4
 	// toastMargin is the gap between the block and the top/right edges of the
 	// content region.
 	toastMarginX = 1
@@ -254,19 +260,36 @@ func renderToastBlock(s notify.Stack, outerWidth int, now time.Time, expanded bo
 		right = cells + " " + right
 	}
 	rightWidth := lipgloss.Width(right)
-	titleWidth := max(0, inner-2-lipgloss.Width(count)-rightWidth-1)
-	left := glyph + " " + lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true).
-		Render(ansi.Truncate(title, titleWidth, "…")) + count
+	titleWidth := max(1, inner-2-lipgloss.Width(count)-rightWidth-1)
+	// The title wraps rather than hiding behind an ellipsis — a toast whose
+	// only content is its title must be readable. Up to three rows; only the
+	// last resorts to `…`. Continuation rows indent under the title text.
+	titleStyle := lipgloss.NewStyle().Foreground(styles.TextPrimary).Bold(true)
+	titleLines := strings.Split(ansi.Wrap(title, titleWidth, ""), "\n")
+	if len(titleLines) > toastTitleMaxRows {
+		titleLines = titleLines[:toastTitleMaxRows]
+		titleLines[toastTitleMaxRows-1] = ansi.Truncate(titleLines[toastTitleMaxRows-1]+"…", titleWidth, "…")
+	}
+	left := glyph + " " + titleStyle.Render(titleLines[0]) + count
 	gap := max(1, inner-lipgloss.Width(left)-rightWidth)
 	lines = append(lines, left+strings.Repeat(" ", gap)+right)
-	lines = append(lines, lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", inner)))
+	for _, tl := range titleLines[1:] {
+		lines = append(lines, "  "+titleStyle.Render(tl))
+	}
+	// The rule line only earns its row when something renders beneath it — a
+	// title-only toast is title, controls, done.
+	body := strings.TrimSpace(n.Body)
+	if body != "" || s.Hidden() > 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(hue).Render(strings.Repeat("─", inner)))
+	}
 
-	if body := strings.TrimSpace(n.Body); body != "" {
-		wrapped := ansi.Wrap(body, inner, "")
-		for i, line := range strings.Split(wrapped, "\n") {
-			if i >= 3 {
-				break
-			}
+	if body != "" {
+		wrapped := strings.Split(ansi.Wrap(body, inner, ""), "\n")
+		if len(wrapped) > toastBodyMaxRows {
+			wrapped = wrapped[:toastBodyMaxRows]
+			wrapped[toastBodyMaxRows-1] = ansi.Truncate(wrapped[toastBodyMaxRows-1]+"…", inner, "…")
+		}
+		for _, line := range wrapped {
 			lines = append(lines, lipgloss.NewStyle().Foreground(styles.TextSecondary).Render(line))
 		}
 	}

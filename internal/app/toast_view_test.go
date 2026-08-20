@@ -219,14 +219,21 @@ func TestToastRowsFitTheBlockInterior(t *testing.T) {
 				t.Fatalf("outer=%d: row %d width = %d, want %d (%q)", outer, i, got, outer, line)
 			}
 		}
-		// Row 1 is the rule; it fills the interior exactly, and no stub of it
-		// survives onto row 2.
+		// The rule row (wherever the wrapped title leaves it) fills the
+		// interior exactly, and no stub of it survives onto the next row.
 		wantRule := strings.Repeat("─", outer-4)
-		if !strings.Contains(lines[2], wantRule) {
-			t.Fatalf("outer=%d: rule row does not carry a %d-cell rule: %q", outer, outer-4, lines[2])
+		ruleRow := -1
+		for i, line := range lines {
+			if strings.Contains(line, wantRule) {
+				ruleRow = i
+				break
+			}
 		}
-		if strings.Contains(ansi.Strip(lines[3]), "──") {
-			t.Fatalf("outer=%d: the rule overflowed onto the next row: %q", outer, lines[3])
+		if ruleRow < 0 {
+			t.Fatalf("outer=%d: no row carries a %d-cell rule: %q", outer, outer-4, block)
+		}
+		if strings.Contains(ansi.Strip(lines[ruleRow+1]), "──") {
+			t.Fatalf("outer=%d: the rule overflowed onto the next row: %q", outer, lines[ruleRow+1])
 		}
 	}
 }
