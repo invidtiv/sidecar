@@ -90,6 +90,17 @@ var (
 		Description: "Open documents in panes beside workspace terminals. When disabled, Diff is unavailable (no pane tree).",
 	}
 
+	// PluginContentPanes enables the app-owned passive content deck around
+	// eligible capability-driven plugins. Files, Git, Notes, and the embedded
+	// td/Tasks focus hosts have completed their parity journeys; td/Tasks still
+	// expose no link surface until their owning packages publish safe passive
+	// text rectangles.
+	PluginContentPanes = Feature{
+		Name:        "plugin_content_panes",
+		Default:     true,
+		Description: "Open passive content panes beside eligible project plugins",
+	}
+
 	// WorkspaceDocPanesDisabledDiff is the toast/no-op copy when Diff is
 	// requested while the pane tree is off.
 	WorkspaceDocPanesDisabledDiff = "Document panes are disabled; Diff needs the workspace pane tree"
@@ -124,6 +135,7 @@ var allFeatures = []Feature{
 	TasksPlugin,
 	ConversationsPlugin,
 	WorkspaceDocPanes,
+	PluginContentPanes,
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 	TerminalResourceProviders,

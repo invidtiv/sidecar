@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -26,6 +27,24 @@ func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 	plan, err := targetactivation.Resolve(req.Target)
 	if err != nil {
 		return msg.Blocked(err.Error())
+	}
+	// An eligible visible plugin is already an app-owned content host. Keep the
+	// user on that surface for passive targets instead of forcing the project
+	// Workspace tab; both terminal clicks and sidecar-open then reach the same
+	// Deck operation. File navigation retains its canonical Files reveal route.
+	if h := m.activeContentDeck(); h != nil {
+		var ref contentlink.Ref
+		switch plan.Kind {
+		case targetactivation.PlanOpenIssue:
+			ref = contentlink.Ref{Kind: contentlink.KindIssue, Value: plan.Issue}
+		case targetactivation.PlanOpenDiff:
+			ref = contentlink.Ref{Kind: contentlink.KindDiff, Value: plan.Spec}
+		case targetactivation.PlanOpenResource:
+			ref = contentlink.Ref{Kind: contentlink.KindResource, Provider: plan.Provider, Matcher: plan.Matcher, Value: plan.Locator}
+		}
+		if ref.Kind != "" {
+			return m.openAppContent(h.workdir, h.pluginID, ref)
+		}
 	}
 	// The plugin a plan names can be absent — a project whose registry was just
 	// rebuilt without it, or a build where it is compiled out. Say so rather

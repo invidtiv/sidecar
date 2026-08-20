@@ -536,7 +536,7 @@ func (p *Plugin) updateStatusDiffPane(msg tea.KeyPressMsg) (plugin.Plugin, tea.C
 			if p.diffPaneFullFileDiff == nil && p.selectedDiffFile != "" {
 				entries := p.tree.AllEntries()
 				for _, entry := range entries {
-					if entry.Path == p.selectedDiffFile {
+					if entry.Path == p.selectedDiffFile && entry.Staged == p.selectedDiffStaged {
 						return p, p.loadFullFileDiff(entry.Path, entry.Staged, entry.Status, "", true)
 					}
 				}

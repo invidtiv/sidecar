@@ -156,6 +156,7 @@ type Model struct {
 	// Plugin management
 	registry     *plugin.Registry
 	activePlugin int
+	contentDecks map[string]*appContentDeck
 
 	// Keymap
 	keymap        *keymap.Registry
@@ -478,6 +479,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		registry:           reg,
 		keymap:             km,
 		activePlugin:       activeIdx,
+		contentDecks:       make(map[string]*appContentDeck),
 		activeContext:      "global",
 		showClock:          cfg.UI.ShowClock,
 		titleTemplate:      cfg.UI.TerminalTitle,
@@ -931,10 +933,20 @@ func (m *Model) enterOverview() tea.Cmd {
 	if current := m.ActivePlugin(); current != nil {
 		current.SetFocused(false)
 	}
+	var deckCmd tea.Cmd
+	if h := m.currentContentDeck(); h != nil {
+		h.releaseAppContentDocumentEdit()
+		h.laidOut = false
+		h.links = nil
+		h.press = nil
+		if h.live != nil {
+			deckCmd = h.live.Reconcile()
+		}
+	}
 	m.scope = ScopeGlobal
 	m.ensureVisibleGlobalTab()
 	m.updateContext()
-	return m.startVisibleGlobalTab()
+	return tea.Batch(deckCmd, m.startVisibleGlobalTab())
 }
 
 // exitOverview leaves the global space and hands keyboard focus back to the
@@ -948,6 +960,18 @@ func (m *Model) exitOverview() tea.Cmd { return m.leaveOverview(true) }
 // the hidden old surface cannot reopen a terminal during the handoff.
 func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 	wasGlobal := m.inGlobalScope()
+	var deckCmd tea.Cmd
+	if wasGlobal {
+		if h := m.currentContentDeck(); h != nil {
+			h.releaseAppContentDocumentEdit()
+			h.laidOut = false
+			h.links = nil
+			h.press = nil
+			if h.live != nil {
+				deckCmd = h.live.Reconcile()
+			}
+		}
+	}
 	if wasGlobal && m.overview != nil {
 		m.overview.Stop()
 	}
@@ -958,10 +982,10 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 		}
 		m.updateContext()
 		if restoreProject {
-			return PluginFocused()
+			return tea.Batch(deckCmd, PluginFocused())
 		}
 	}
-	return nil
+	return deckCmd
 }
 
 // toggleOverview moves between the global and project spaces. No-op when the

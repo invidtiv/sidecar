@@ -1,29 +1,17 @@
 package terminallink
 
 import (
-	"net/url"
 	"os/exec"
 	"runtime"
-	"strings"
-	"unicode"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 )
 
 // SafeHTTPURL trims trailing prose punctuation and accepts only http(s) URLs
 // with a host and no control characters.
 func SafeHTTPURL(raw string) (string, bool) {
-	raw = strings.TrimRight(raw, ".,;!?) ]}")
-	for _, r := range raw {
-		if unicode.IsControl(r) {
-			return "", false
-		}
-	}
-	parsed, err := url.ParseRequestURI(raw)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return "", false
-	}
-	return raw, true
+	return contentlink.SafeHTTPURL(raw)
 }
 
 // OpenHTTP opens a validated http(s) URL in the system browser.

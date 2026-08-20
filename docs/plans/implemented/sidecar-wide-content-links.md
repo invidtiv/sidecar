@@ -1,9 +1,9 @@
 # Sidecar-wide content links and passive panes
 
-**Status:** proposed
+**Status:** implemented
 **Written:** 2026-08-19, against `82a30ced`
-**Tracking:** `td-7be1ec`
-**Related:** [workspace windowing](workspace-windowing-system.md) · [terminal resource providers](terminal-resource-providers.md) · [agent open](../implemented/agent-open-in-split-cli.md) · [workspace focus ring](../implemented/workspace-focus-ring.md) · [workspace diff pane](../implemented/workspace-diff-pane.md)
+**Tracking:** epic `td-f6b856`
+**Related:** [workspace windowing](../active/workspace-windowing-system.md) · [terminal resource providers](../active/terminal-resource-providers.md) · [agent open](agent-open-in-split-cli.md) · [workspace focus ring](workspace-focus-ring.md) · [workspace diff pane](workspace-diff-pane.md)
 
 ## Decision
 
@@ -59,9 +59,17 @@ The steel thread is a file reference in the Files preview:
 4. He clicks the td ID. The existing right column gains an Issue split rather
    than replacing the Document pane. Clicking another td ID adds a tab to the
    Issue pane.
-5. He presses Tab. Focus walks the Files tree, Files preview, Document leaf, and
+5. The retained-focus correction (`td-a91834`) keeps the journey coherent: he
+   presses Tab and focus walks the Files tree, Files preview, Document leaf, and
    Issue leaf in visual order; Shift+Tab walks backward. A click focuses any
-   visible window. The active border and keyboard owner always agree.
+   visible window and retains that keyboard target across redraws. Hover,
+   wheel, and button release never retarget focus. The active border, footer,
+   help/palette context, and keyboard owner always agree. Passive viewers expose
+   their shared interactions in the app host: Document in-file search, inline
+   edit, render/wrap, and reveal; Issue navigation/open/copy; Diff navigation
+   and view/scope; Resource refresh/open/scroll. Workspace-only finder, project
+   search, file-info, sidebar, and resize surfaces remain unadvertised until the
+   app deck has equivalent host adapters.
 6. He clicks the hash. A Diff pane opens or adds a tab using
    `internal/workspacediff`; it is not a second Git renderer.
 7. With a terminal resource provider enabled, clicking its locator opens the
@@ -170,6 +178,15 @@ The deck's primary leaf contains the plugin's existing `View`. It is opaque to
 layout: Files may still draw its tree/preview split and Git its sidebar/diff
 split. Passive Document, Issue, Diff, and Resource leaves sit beside that
 primary leaf through the shared pane tree.
+
+The primary leaf is borderless: its placement box is its content box, because
+the plugin already draws the panes and active chrome it owns. Passive leaves
+retain normal `paneframe` chrome. This makes a Files tree, Files preview, and
+opened Document three flat peers rather than nesting the first two inside an
+extra outer panel. The borderless rule is a `paneframe` chrome/geometry choice,
+including matching floor and hit-region costs; it is not a Files-specific
+compositor exception. Divider targets may widen into a framed neighbour's
+border, but never into a borderless primary's real content.
 
 Do not wrap project Workspaces or global Workspaces in another deck. They
 already are content-deck hosts and remain the parity reference. Configuration,
@@ -435,6 +452,14 @@ Do not persist loaded bodies, diff output, provider documents, errors, OSC
 labels, detected spans, or rendered frames. Apply the same path containment,
 resource-locator privacy, and stale-result identity rules as Workspaces.
 
+Document references keep the path meaning established by their source surface:
+relative paths resolve against that `SurfaceContext`, while resolved `~/` and
+absolute paths stay absolute through async load, live refresh, hide/reopen, and
+persistence. A host may validate and open a regular file outside the selected
+worktree, but no later viewer or watcher may join that canonical target to the
+project root again. Missing targets remain explicit load errors rather than
+being rewritten to a plausible in-project path.
+
 Global hosted decks are in-memory in v1, matching global Workspaces. If real
 Tasks use shows restart persistence matters, add it deliberately under a stable
 global surface ID; do not smuggle it into a project state entry.
@@ -448,9 +473,11 @@ references.
 
 ## Incremental delivery
 
-User-visible work is gated by a `plugin_content_panes` feature flag, default
-off, until Files and Git pass the real journeys. Existing Workspaces links and
-panes are not gated or changed by that flag.
+`plugin_content_panes` is default-on after Files, Git, and Workspace parity
+journeys and independent implementation review completed. Its ordinary config
+and CLI overrides remain available. Existing project and global Workspaces are
+ungated and unwrapped because they already own the shared pane host. The
+separate `tasks_plugin` and `notes_plugin` feature defaults remain opt-in.
 
 ### M0 — Shared target and passive-pane core, no visible change
 
@@ -483,9 +510,12 @@ work enters `Init`, `Start` before command return, or render.
 
 1. Add an app-owned deck host around eligible project plugins. Its primary
    content calls the plugin's existing `View` with the leaf's inner size.
-2. Route WindowSize, keys, mouse, commands, focus, and footer context to the
-   focused primary/passive leaf. Do not change the mandatory `plugin.Plugin`
-   interface.
+2. Route WindowSize, keys, mouse, commands, focus, and footer/help/palette
+   context to the focused primary/passive leaf. Only an intentional click or
+   Tab traversal changes the retained keyboard target; pointer motion and wheel
+   routing do not. Reuse each shared viewer's command/state implementation and
+   advertise only host actions the app deck actually supports. Do not change
+   the mandatory `plugin.Plugin` interface.
 3. Add `PaneFocusProvider` and `ContentLinkProvider` optional capabilities.
 4. Implement both in Files from its existing `PaneTree`/`PanePreview` state and
    exact preview geometry. Link only read-only text/Markdown source previews;
@@ -634,6 +664,25 @@ focused pointer/model tests because exact mouse synthesis remains a harness
 limitation. Final implementation gates are focused repeated/race tests, full
 `go test ./...`, `go vet ./...`, `go build ./...`, repository lint, gofmt, and
 `git diff --check`, followed by independent review of the integrated candidate.
+
+### Completed proof evidence
+
+Candidate `9021d6c9` completed the pragmatic proof matrix. Real isolated UI
+captures show Files as flat peers at `200x50` and `120x40`, exact non-mutating
+fit refusal, retained Document search focus, canonical `~/` file activation,
+Git staged/unstaged identity and Issue interaction, valid and missing Notes
+internal-link outcomes, td/Tasks focus and input ownership, and default-on plus
+explicit-disable behavior. The exact artifacts and private driver paths are
+recorded on `td-a0fa62` and the reviewed milestone tasks that produced them;
+every driver was stopped and no default tmux or real Sidecar state was used.
+
+Focused model tests provide the assertions a screenshot cannot prove reliably:
+all four passive target kinds, click-versus-drag arbitration, Document edit
+lifecycle, hide/reopen/close, plugin/project switching, persistence and cached
+async results, live-watch ownership, Git no-mutation and held-result staging
+identity, Notes missing-target non-mutation, Workspace host parity, and nil
+unsafe td/Tasks link zones. The final full-repository gates remain owned by
+`td-1ac6af`; they are intentionally not duplicated as proof ceremony here.
 
 ## Risks and controls
 

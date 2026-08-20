@@ -1,7 +1,7 @@
 .PHONY: build install install-dev install-local install-worktree worktree-init use-homebrew reap-test-tmux \
 	install-status test-dev-install test test-v clean check-clean tag \
 	release-snapshot check-release-state release release-tap \
-	fmt fmt-check fmt-check-all lint lint-all goreleaser-snapshot install-hooks sync-deps
+	fmt fmt-check fmt-check-all lint lint-all lint-linux goreleaser-snapshot install-hooks sync-deps
 
 # Default target
 all: build
@@ -132,6 +132,10 @@ lint:
 # Run linter across the full codebase (includes legacy debt)
 lint-all:
 	golangci-lint run ./...
+
+# Match GitHub's Linux full-codebase lint analysis from a macOS checkout.
+lint-linux:
+	GOOS=linux GOWORK=off golangci-lint run ./...
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)
 build-all:

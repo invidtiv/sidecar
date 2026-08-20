@@ -4,52 +4,69 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/td/pkg/monitor"
 
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
-// The embedded td monitor extends its own panel ring with the shell's
-// notification centre: Current Work → Task List → Activity → centre → Current
-// Work while the panel is open, and exactly td's three-panel cycle while it is
-// closed.
-//
-// This surface is the one case where the ring is not sidecar's. td owns the
-// panels, the cursor clamping and the scroll bookkeeping that go with moving
-// between them, so this file asks td both questions rather than answering
-// either itself: `ActivePanel` (exported by td) says where the cycle stands,
-// and the handback is td's own `tab`/`shift+tab` — replayed into the hosted
-// model, whose wrap is the `% 3` in td's CmdNextPanel. Reaching into the model
-// to assign a panel would skip the clamp and the scroll fix-up that command
-// runs, which is exactly the kind of second cycle this plumbing exists to
-// avoid.
-var _ plugin.FocusCycler = (*Plugin)(nil)
+var (
+	_ plugin.PaneFocusProvider   = (*Plugin)(nil)
+	_ plugin.ContentLinkProvider = (*Plugin)(nil)
+)
 
-// AtFocusCycleEnd reports the wrap point of td's main panel ring. Only the main
-// context has one: td binds `tab` to a modal's button cycle, to an epic's task
-// section and to its forms and searches, and a shell stop must not take the key
-// from any of them.
-func (p *Plugin) AtFocusCycleEnd(reverse bool) bool {
-	if p.model == nil || p.model.CurrentContextString() != "td-monitor" {
-		return false
-	}
-	if reverse {
-		return p.model.ActivePanel == monitor.PanelCurrentWork
-	}
-	return p.model.ActivePanel == monitor.PanelActivity
-}
-
-// FocusCycleStart hands the keyboard back to the panel td's own cycle resumes
-// at, by replaying the key that would have wrapped it.
-func (p *Plugin) FocusCycleStart(reverse bool) tea.Cmd {
-	if p.model == nil {
+// PaneFocusStops projects td's currently rendered root panels into the app
+// focus ring. Inputs, overlays, and replacement views retain Tab by exposing
+// no outer stops.
+func (p *Plugin) PaneFocusStops() []plugin.PaneFocusStop {
+	if p.model == nil || p.model.TabOwnsFocus() {
 		return nil
 	}
-	key := tea.KeyPressMsg{Code: tea.KeyTab}
-	if reverse {
-		key.Mod = tea.ModShift
+	upstream := p.model.VisibleFocusStops()
+	stops := make([]plugin.PaneFocusStop, 0, len(upstream))
+	for _, stop := range upstream {
+		stops = append(stops, plugin.PaneFocusStop{ID: string(stop.ID)})
 	}
-	updated, cmd := p.model.Update(key)
-	if m, ok := updated.(monitor.Model); ok {
-		p.model = &m
-	}
-	return cmd
+	return stops
 }
+
+func (p *Plugin) PaneFocus() string {
+	if p.model == nil {
+		return ""
+	}
+	return string(p.model.CurrentFocusStop())
+}
+
+// SetPaneFocus uses td's direct setter so cursor clamping and scroll
+// normalization remain owned by the embedded model. No Tab is replayed.
+func (p *Plugin) SetPaneFocus(id string) tea.Cmd {
+	if p.model != nil && !p.model.TabOwnsFocus() {
+		p.model.SetFocusStop(monitor.FocusStopID(id))
+	}
+	return nil
+}
+
+// SetPaneFocusActive mutes only td's selected-panel border while an outer leaf
+// owns focus. The selected panel, cursor, scroll, and rows remain untouched.
+func (p *Plugin) SetPaneFocusActive(active bool) {
+	changed := !p.paneFocusManaged || p.paneFocusActive != active
+	p.paneFocusManaged = true
+	p.paneFocusActive = active
+	if changed {
+		p.applyPaneFocusTheme()
+	}
+}
+
+func (p *Plugin) applyPaneFocusTheme() {
+	if p.model == nil {
+		return
+	}
+	theme := buildTheme()
+	if p.paneFocusManaged && !p.paneFocusActive {
+		theme.BorderActive = theme.Border
+	}
+	_ = p.model.SetTheme(theme)
+}
+
+// ContentLinkSurfaces stays empty until td exports exact passive text
+// rectangles. Its current panel bounds contain actionable rows and controls;
+// scanning them would turn mutation targets into content links.
+func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface { return nil }

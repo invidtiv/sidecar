@@ -238,3 +238,39 @@ func TestSetRootEnablesRefreshForADescriptorLoad(t *testing.T) {
 		t.Fatal("Refresh() = nil after SetRoot gave the model a path to re-read")
 	}
 }
+
+func TestAbsoluteDocumentKeepsItsPathAcrossHostRootAndRefresh(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(t.TempDir(), "outside.md")
+	if err := os.WriteFile(path, []byte("one\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := New(nil)
+	loaded := m.Load(4, "", path, 0, 11)().(LoadedMsg)
+	if !m.SetResult(loaded) {
+		t.Fatal("absolute load result was rejected")
+	}
+
+	m.SetRoot(root)
+	if got := m.Root(); got != "" {
+		t.Fatalf("host SetRoot re-rooted absolute document to %q", got)
+	}
+	if got := m.WatchTarget().Path; got != path {
+		t.Fatalf("absolute watch target = %q, want %q", got, path)
+	}
+	if err := os.WriteFile(path, []byte("two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Observe()
+	cmd := m.Refresh(false)
+	if cmd == nil {
+		t.Fatal("absolute document did not refresh")
+	}
+	refreshed := cmd().(LoadedMsg)
+	if refreshed.Result.Error != nil || refreshed.Result.Content != "two\n" {
+		t.Fatalf("absolute refresh = error %v body %q", refreshed.Result.Error, refreshed.Result.Content)
+	}
+	if !m.SetResult(refreshed) {
+		t.Fatal("absolute refresh result was rejected")
+	}
+}

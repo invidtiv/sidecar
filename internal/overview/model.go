@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/activitystore"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/livewatch"
@@ -120,7 +121,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
-		previewDocLoadedMsg, previewIssueLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg,
+		previewDocLoadedMsg, previewIssueLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
@@ -138,13 +139,15 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	}
 }
 
-// IsSharedDiffMessage reports whether msg is a workspacediff load result.
-// These are the one async family this browser does not own: a project
-// plugin's Diff pane hosts the same views and issues the same loads, so the
-// result belongs to every host that is waiting on it. A caller that routes it
-// here alone leaves those panes on "Loading diff…" forever — the same shape as
-// the issueview.LoadedMsg the preview modal used to claim.
+// IsSharedDiffMessage reports whether msg must remain available to project
+// workspace plugins after the global browser has inspected it. Deck results
+// are shared by construction; raw workspacediff messages predate Deck and are
+// shared for the same reason. Routing either family here alone leaves the
+// project pane that issued the load waiting forever.
 func IsSharedDiffMessage(msg tea.Msg) bool {
+	if _, ok := msg.(contentpanes.Result); ok {
+		return true
+	}
 	switch msg.(type) {
 	case workspacediff.SnapshotMsg, workspacediff.CommitDetailMsg,
 		workspacediff.RangeMsg, workspacediff.CommitFileDiffMsg:
@@ -688,6 +691,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewDocLoadedMsg:
 		m.applyPreviewDocLoaded(msg)
 		return nil
+	case contentpanes.Result:
+		return m.applyPreviewDeckResult(msg)
 	case previewDocSearchMsg:
 		return m.applyPreviewDocSearchMsg(msg)
 	case previewIssueLoadedMsg:

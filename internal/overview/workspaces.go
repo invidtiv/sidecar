@@ -342,7 +342,7 @@ func (m *Model) registerPreviewOutputRegions(peer termpreview.Box) {
 	if !ok {
 		return
 	}
-	paneframe.RegisterRegions(paneRegions{m}, layout)
+	paneframe.RegisterRegions(paneRegions{m}, paneHost{m}, layout)
 }
 
 func (m *Model) setHandleHover(action mouse.MouseAction) {
@@ -855,6 +855,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 			ratio += action.DragDX * 100 / peer.W
 		}
 		panelayout.SetRatio(m.preview.paneRoot, m.preview.paneDragSplitID, ratio)
+		if m.preview.deck != nil {
+			m.preview.deck.SetRatio(m.preview.paneDragSplitID, ratio)
+		}
 		return m.syncTerminalGeometry()
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == workspacesDividerRegion {

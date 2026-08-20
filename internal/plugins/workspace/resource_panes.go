@@ -2,6 +2,8 @@ package workspace
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -91,6 +93,9 @@ func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) {
 			res.tabs.SetResolver(resolve)
 		}
 	}
+	if p.contentDeck != nil {
+		p.contentDeck.SetResourceResolver(resolve)
+	}
 }
 
 func (p *Plugin) newResourcePane(leafID int, root, surface string) *resourcePane {
@@ -153,31 +158,14 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 	if p.paneRoot == nil || p.ctx == nil || !ref.Valid() {
 		return nil
 	}
-	return p.openContentPane(contentPaneOpen{kind: PaneResource, name: "Resource", reopen: p.reopenHiddenResourcePane,
-		attach:   func(id int, _ bool) tea.Cmd { return p.attachResourcePane(id, root, surface, ref, fromTerminal) },
-		attached: func(id int) bool { return p.resources[id] != nil }})
-}
-
-// attachResourcePane points the content behind leafID at ref. Focus, the
-// open-or-focus decision and the persist all belong to the shared pane, so
-// this host cannot answer a second click differently from the first.
-func (p *Plugin) attachResourcePane(leafID int, root, surface string, ref resourceview.Ref, fromTerminal bool) tea.Cmd {
-	if p.ctx == nil || !ref.Valid() {
-		return nil
-	}
-	if p.resources == nil {
-		p.resources = make(map[int]*resourcePane)
-	}
-	res := p.resources[leafID]
-	if res == nil {
-		res = p.newResourcePane(leafID, root, surface)
-		p.resources[leafID] = res
-	}
-	res.root, res.surface = root, surface
 	if fromTerminal {
-		return res.pane.ActivateFromTerminal(ref)
+		p.clearTerminalSelection()
+		p.pointer.Abandon()
 	}
-	return res.pane.Activate(ref)
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
 }
 
 // applyResourceResolved delivers a resolve to the tab that asked for it. The
@@ -232,6 +220,14 @@ func (p *Plugin) handleResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if res == nil {
 		return false, nil
 	}
+	if p.contentDeck != nil {
+		switch msg.String() {
+		case "}":
+			return true, p.cycleWorkspaceDeckTab(panelayout.Resource, 1)
+		case "{":
+			return true, p.cycleWorkspaceDeckTab(panelayout.Resource, -1)
+		}
+	}
 	if handled, cmd := res.pane.HandleKey(msg.String()); handled {
 		return true, cmd
 	}
@@ -255,6 +251,9 @@ func (p *Plugin) closeActiveResourceTab() tea.Cmd {
 	if res == nil || leaf == nil {
 		return nil
 	}
+	if p.contentDeck != nil {
+		return p.closeWorkspaceDeckTab(panelayout.Resource)
+	}
 	empty, cmd := res.pane.CloseActiveTab()
 	if !empty {
 		return cmd
@@ -267,6 +266,9 @@ func (p *Plugin) selectResourceTab(res *resourcePane, idx int) tea.Cmd {
 		return nil
 	}
 	p.pointer.Abandon()
+	if p.contentDeck != nil {
+		return p.selectWorkspaceDeckTab(panelayout.Resource, idx)
+	}
 	return res.pane.SelectTab(idx)
 }
 
@@ -298,13 +300,6 @@ func (p *Plugin) hideResourcePane() tea.Cmd {
 // sibling.
 func (p *Plugin) closeResourcePane(leafID int) tea.Cmd {
 	return p.forgetContentPane(leafID)
-}
-
-// reopenHiddenResourcePane rebuilds a hidden split at the last ratio so a
-// resource click can focus or append against the remembered set.
-func (p *Plugin) reopenHiddenResourcePane() tea.Cmd {
-	res, _ := p.activeResourcePane()
-	return p.reopenHiddenContentPane(PaneResource, res != nil, paneLayoutHasResourceTabs, contentKindResource, "Resource")
 }
 
 // encodeResourceTabs is the reference-only projection this surface writes.

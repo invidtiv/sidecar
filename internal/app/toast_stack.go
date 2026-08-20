@@ -249,6 +249,9 @@ func (m Model) overlaysSuppressed() bool {
 	if m.notificationCentreDragging() {
 		return true
 	}
+	if h := m.currentContentDeck(); h != nil && h.mouse.IsDragging() && h.dragSplit != 0 {
+		return true
+	}
 	if p, ok := m.ActivePlugin().(plugin.ResizeDragReporter); ok && p != nil {
 		return p.ResizeDragActive()
 	}

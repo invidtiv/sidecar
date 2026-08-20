@@ -91,8 +91,10 @@ type Plugin struct {
 	height int
 
 	// Pane state
-	activePane FocusPane
-	listWidth  int // width of list pane (calculated from ratio)
+	activePane       FocusPane
+	listWidth        int  // width of list pane (calculated from ratio)
+	paneFocusManaged bool // Set once an outer deck composes Notes pane focus.
+	paneFocusActive  bool // Whether Notes inner active chrome should be drawn.
 
 	// Filter state
 	viewFilter NoteFilter // Active, Archived, or Deleted view
@@ -245,6 +247,7 @@ type Plugin struct {
 	saveErr            error
 	pendingAfterSave   func() tea.Cmd // Latest buffer-replacing action waiting on durable content.
 	loadRequestID      uint64         // Latest list snapshot allowed to replace the local cache.
+	navigateRequestID  uint64         // Latest internal note navigation existence check.
 
 	// Undo state
 	undoStack []UndoAction // Stack of undoable actions (most recent last)
@@ -356,6 +359,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.saveErr = nil
 	p.pendingAfterSave = nil
 	p.loadRequestID++
+	p.navigateRequestID++
 	p.externalPrepareID++
 	p.exportSaveRequestID++
 	p.exportSaveInFlight = false
@@ -745,6 +749,28 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case app.NavigateToNoteMsg:
+		return p, p.resolveNoteNavigation(msg)
+
+	case NoteNavigationResolvedMsg:
+		if plugin.IsStale(p.ctx, msg) || msg.RequestID != p.navigateRequestID || p.ctx == nil || msg.ProjectRoot != p.ctx.ProjectRoot {
+			return p, nil
+		}
+		if msg.Err != nil || msg.Note == nil || msg.Note.DeletedAt != nil {
+			return p, app.Blocked("Cannot open note " + msg.ID + ": it no longer exists in this project")
+		}
+		index := -1
+		for i := range msg.Notes {
+			if msg.Notes[i].ID == msg.ID && msg.Notes[i].DeletedAt == nil {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			return p, app.Blocked("Cannot open note " + msg.ID + ": it no longer exists in this project")
+		}
+		return p, p.completeNoteNavigation(msg.ID, msg.Filter, msg.Notes, index)
+
 	case InlineEditStartedMsg:
 		if !p.ownsInlineEditMessage(msg.Activation, msg.Epoch) {
 			return p, p.cleanupStaleInlineEditStart(msg)
@@ -820,6 +846,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.notes = p.reconcileMutation(msg.Notes)
 			p.loadErr = nil
 
+			// Optimistic creation already opened its temporary note in the editor;
+			// every list snapshot reconciles through that mutation until td returns
+			// the canonical identity. Ordinary reloads follow the current note.
 			if p.editorNote != nil {
 				// Follow the edited note if it moved position (due to updated_at sort)
 				for i, n := range p.notes {
@@ -1195,6 +1224,62 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	return p, nil
+}
+
+func (p *Plugin) resolveNoteNavigation(req app.NavigateToNoteMsg) tea.Cmd {
+	if p.ctx == nil || p.store == nil || req.ID == "" || req.ProjectRoot == "" || req.ProjectRoot != p.ctx.ProjectRoot {
+		return nil
+	}
+	p.navigateRequestID++
+	requestID, epoch := p.navigateRequestID, p.ctx.Epoch
+	store, projectRoot, id := p.store, p.ctx.ProjectRoot, req.ID
+	return func() tea.Msg {
+		note, err := store.Get(id)
+		filter := FilterActive
+		var notes []Note
+		if err == nil && note != nil && note.DeletedAt == nil {
+			if note.Archived {
+				filter = FilterArchived
+				notes, err = store.ListArchived()
+			} else {
+				notes, err = store.List(false)
+			}
+		}
+		return NoteNavigationResolvedMsg{
+			ID: id, ProjectRoot: projectRoot, Note: note, Notes: notes, Filter: filter,
+			Err: err, Epoch: epoch, RequestID: requestID,
+		}
+	}
+}
+
+func (p *Plugin) completeNoteNavigation(id string, filter NoteFilter, notes []Note, index int) tea.Cmd {
+	finish := func() tea.Cmd {
+		p.viewFilter = filter
+		p.searchMode = false
+		p.searchQuery = ""
+		p.filteredNotes = nil
+		p.notes = p.reconcileMutation(notes)
+		p.cursor = index
+		for i := range p.notes {
+			if p.notes[i].ID == id {
+				p.cursor = i
+				break
+			}
+		}
+		p.activePane = PaneEditor
+		p.previewMode = true
+		if p.editorNote != nil && p.editorNote.ID == id {
+			// The list reload replaced p.notes. Force the same stable ID through
+			// the ordinary loader so title/content pointers cannot stay stale.
+			p.editorNote = nil
+		}
+		load := p.loadNoteIntoEditor()
+		return tea.Batch(load, app.FocusPlugin(pluginID))
+	}
+	if p.editorDirty {
+		return p.saveBefore(finish)
+	}
+	return finish()
 }
 
 // handlePaste applies one tea.PasteMsg as a single operation for the focused

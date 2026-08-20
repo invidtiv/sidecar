@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	app "github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -77,7 +78,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.applyTerminalHistory(msg)
 	case terminalSearchHistoryLoadedMsg:
 		return p, p.applyTerminalSearchHistory(msg)
+	case contentpanes.Result:
+		return p, p.applyWorkspaceDeckResult(msg)
 	case docview.LoadedMsg:
+		if p.contentDeck != nil {
+			return p, p.applyWorkspaceDeckBroadcast(msg)
+		}
 		p.applyDocLoaded(msg)
 		return p, nil
 	case docview.GitInfoMsg:
@@ -93,9 +99,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case docview.RevealErrorMsg:
 		return p, appmsg.ShowToast("Reveal failed: "+msg.Err.Error(), 4*time.Second)
 	case issueview.LoadedMsg:
+		if p.contentDeck != nil {
+			return p, p.applyWorkspaceDeckBroadcast(msg)
+		}
 		p.applyIssueLoaded(msg)
 		return p, nil
 	case resourceview.ResolvedMsg:
+		if p.contentDeck != nil {
+			return p, p.applyWorkspaceDeckBroadcast(msg)
+		}
 		p.applyResourceResolved(msg)
 		return p, nil
 
@@ -308,20 +320,36 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	case workspacediff.SnapshotMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplySnapshotMsg(msg, p.diff.WorkDir, p.diff.WorkspaceID))
-		cmds = append(cmds, p.applyDiffLoadedToLeaves(msg))
+		if p.contentDeck != nil {
+			cmds = append(cmds, p.applyWorkspaceDeckBroadcast(msg))
+		} else {
+			cmds = append(cmds, p.applyDiffLoadedToLeaves(msg))
+		}
 
 	case workspacediff.CommitDetailMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplyCommitDetail(msg))
-		cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
+		if p.contentDeck != nil {
+			cmds = append(cmds, p.applyWorkspaceDeckBroadcast(msg))
+		} else {
+			cmds = append(cmds, p.applyCommitDetailToLeaves(msg))
+		}
 
 	case workspacediff.RangeMsg:
-		cmds = append(cmds, p.applyRangeToLeaves(msg))
+		if p.contentDeck != nil {
+			cmds = append(cmds, p.applyWorkspaceDeckBroadcast(msg))
+		} else {
+			cmds = append(cmds, p.applyRangeToLeaves(msg))
+		}
 
 	case workspacediff.CommitFileDiffMsg:
 		p.bindDiffView()
 		cmds = append(cmds, p.diff.ApplyCommitFileDiff(msg))
-		cmds = append(cmds, p.applyCommitFileDiffToLeaves(msg))
+		if p.contentDeck != nil {
+			cmds = append(cmds, p.applyWorkspaceDeckBroadcast(msg))
+		} else {
+			cmds = append(cmds, p.applyCommitFileDiffToLeaves(msg))
+		}
 
 	case FullFileDiffLoadedMsg:
 		if plugin.IsStale(p.ctx, msg) {

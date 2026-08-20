@@ -4,6 +4,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panemodal"
 	"github.com/marcus/sidecar/internal/panesearch"
@@ -281,11 +282,11 @@ func (p *Plugin) loadDocSearchResult(doc *docPane, out panesearch.Outcome) tea.C
 	if leaf == nil || leaf.Kind != PaneDoc {
 		return nil
 	}
-	cmd, _ := p.docPaneLoadTab(doc, leaf.ContentID, out.Path, out.Line, nil, !out.NewTab)
-	p.activePane = PanePreview
-	p.paneFocus = leaf.ID
-	p.saveSelectionState()
-	return cmd
+	ref := contentlink.Ref{Kind: contentlink.KindFile, Value: out.Path, Line: out.Line}
+	if out.NewTab {
+		return p.openWorkspaceContent(doc.root, doc.surface, ref, "Document")
+	}
+	return p.replaceWorkspaceContent(doc.root, doc.surface, ref)
 }
 
 // applyDocSearchMsg delivers a surface's own async result back to the pane that

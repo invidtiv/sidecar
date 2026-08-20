@@ -26,6 +26,9 @@ func FocusHeldOutsidePanes() bool { return styles.FocusHeldOutsidePanes() }
 // this; it is exported so a caller that needs to reason about the drawn state
 // reads the same rule the renderer used.
 func EffectiveChrome(chrome Chrome) Chrome {
+	if chrome == ChromeNone {
+		return ChromeNone
+	}
 	if styles.FocusHeldOutsidePanes() {
 		return ChromeIdle
 	}

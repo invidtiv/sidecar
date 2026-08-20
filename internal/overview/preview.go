@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -117,6 +118,7 @@ type previewState struct {
 	issue           *previewIssue
 	diff            *previewDiff
 	resource        *previewResource
+	deck            *contentpanes.Deck
 	paneRoot        *panelayout.Node
 	paneFocus       int
 	paneNextID      int
@@ -162,6 +164,7 @@ type previewPaneCache struct {
 	issue    *previewIssue
 	diff     *previewDiff
 	resource *previewResource
+	deck     *contentpanes.Deck
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -292,15 +295,11 @@ func (m *Model) resetActivePreviewPanes() {
 	m.preview.issue = nil
 	m.preview.diff = nil
 	m.preview.resource = nil
+	m.preview.deck = nil
 	m.preview.paneRoot = &panelayout.Node{ID: 1, Kind: panelayout.Terminal}
 	m.preview.paneFocus = 1
 	m.preview.paneNextID = 2
 	m.preview.paneDragSplitID = 0
-}
-
-func (m *Model) nextPreviewContentEpoch() uint64 {
-	m.preview.contentEpoch++
-	return m.preview.contentEpoch
 }
 
 func (m *Model) stashPreviewPanes() {
@@ -319,7 +318,7 @@ func (m *Model) stashPreviewPanes() {
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
 		doc: m.preview.doc, issue: m.preview.issue, diff: m.preview.diff,
-		resource: m.preview.resource,
+		resource: m.preview.resource, deck: m.preview.deck,
 	}
 }
 
@@ -328,6 +327,7 @@ func (m *Model) restorePreviewPanes(workspaceID string) {
 		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
 		m.preview.doc, m.preview.issue, m.preview.diff = cached.doc, cached.issue, cached.diff
 		m.preview.resource = cached.resource
+		m.preview.deck = cached.deck
 		m.preview.paneDragSplitID = 0
 		return
 	}

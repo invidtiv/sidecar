@@ -53,15 +53,31 @@ type Host interface {
 // its content. Callers state the minimum a content needs; the frame knows what
 // it costs to draw one.
 func ChromeFloors(content panelayout.Floors) panelayout.Floors {
-	grow := func(f panelayout.Floor) panelayout.Floor {
+	return ChromeFloorsFor(content, nil)
+}
+
+// ChromeFloorsFor adds the budget required by each kind's selected chrome.
+// A nil selector means every kind is framed. This keeps fit decisions aligned
+// with GeometryForChrome when a host deliberately embeds an already-composed,
+// borderless surface beside ordinary framed leaves.
+func ChromeFloorsFor(content panelayout.Floors, chrome func(panelayout.Kind) Chrome) panelayout.Floors {
+	grow := func(kind panelayout.Kind, f panelayout.Floor) panelayout.Floor {
+		if chrome != nil && chrome(kind) == ChromeNone {
+			return f
+		}
 		return panelayout.Floor{Width: f.Width + Overhead, Height: f.Height + BorderWidth}
 	}
+	primary := content.Primary
+	if primary == (panelayout.Floor{}) {
+		primary = content.Terminal
+	}
 	return panelayout.Floors{
-		Terminal: grow(content.Terminal),
-		Doc:      grow(content.Doc),
-		Issue:    grow(content.Issue),
-		Diff:     grow(content.Diff),
-		Resource: grow(content.Resource),
+		Primary:  grow(panelayout.Primary, primary),
+		Terminal: grow(panelayout.Terminal, content.Terminal),
+		Doc:      grow(panelayout.Document, content.Doc),
+		Issue:    grow(panelayout.Issue, content.Issue),
+		Diff:     grow(panelayout.Diff, content.Diff),
+		Resource: grow(panelayout.Resource, content.Resource),
 	}
 }
 
@@ -101,8 +117,9 @@ func Compose(host Host, layout panelayout.Layout, canvas Box, width, height int)
 // geometry beyond this process, and a render has nothing to dispatch it with, so
 // the frame hands it to the host for the next update rather than dropping it.
 func ComposeLeaf(host Host, placement panelayout.Placement, zoomed bool) string {
-	geom := Geometry(placement.Box)
-	return WrapLeaf(RenderContent(host, placement.Node, geom.Inner, zoomed), geom.Outer, host.Chrome(placement.Node))
+	chrome := host.Chrome(placement.Node)
+	geom := GeometryForChrome(placement.Box, chrome)
+	return WrapLeaf(RenderContent(host, placement.Node, geom.Inner, zoomed), geom.Outer, chrome)
 }
 
 // RenderContent draws one leaf's body into its INNER box, with no chrome around
@@ -136,8 +153,18 @@ func RenderContent(host Host, node *panelayout.Node, inner Box, zoomed bool) str
 // RegisterRegions gives it by registering dividers after leaf bodies, said once
 // so a pointer cannot resize past a pane and re-focus it in the same press.
 func LeafAt(layout panelayout.Layout, x, y int) *panelayout.Node {
+	return leafAt(nil, layout, x, y)
+}
+
+// LeafAtForHost is LeafAt using the same chrome-aware divider targets that the
+// host registered for the rendered frame.
+func LeafAtForHost(host Host, layout panelayout.Layout, x, y int) *panelayout.Node {
+	return leafAt(host, layout, x, y)
+}
+
+func leafAt(host Host, layout panelayout.Layout, x, y int) *panelayout.Node {
 	for _, divider := range layout.Dividers {
-		if boxContains(DividerHitBox(divider), x, y) {
+		if boxContains(DividerHitBoxFor(host, layout, divider), x, y) {
 			return nil
 		}
 	}
@@ -179,7 +206,7 @@ func FocusLeafAt(host Host, x, y int) bool {
 	if !ok {
 		return false
 	}
-	node := LeafAt(layout, x, y)
+	node := LeafAtForHost(host, layout, x, y)
 	if node == nil {
 		return false
 	}
@@ -195,13 +222,13 @@ type RegionSink interface {
 	Leaf(node *panelayout.Node, outer Box)
 	// Divider is one split's widened drag target.
 	Divider(splitID int, hit Box)
-	// Tabs is a leaf's header tab strip, INNER.
+	// Tabs is a leaf's header tab strip, in its chrome-aware content box.
 	Tabs(node *panelayout.Node, inner Box)
-	// Close is a leaf's header X, INNER.
+	// Close is a leaf's header X, in its chrome-aware content box.
 	Close(node *panelayout.Node, inner Box)
 	// Body is anything a leaf's content owns inside its own box — a diff list
-	// divider, a file row — INNER. It registers last so it beats everything the
-	// frame put down.
+	// divider, a file row — in its chrome-aware content box. It registers last
+	// so it beats everything the frame put down.
 	Body(node *panelayout.Node, inner Box)
 }
 
@@ -223,7 +250,7 @@ type RegionSink interface {
 //     claims, and a one-cell miss on a tab must not steal the close.
 //   - Content-owned regions last, so they beat the tree divider and the leaf
 //     body drawn under them.
-func RegisterRegions(sink RegionSink, layout panelayout.Layout) {
+func RegisterRegions(sink RegionSink, host Host, layout panelayout.Layout) {
 	if sink == nil {
 		return
 	}
@@ -231,15 +258,22 @@ func RegisterRegions(sink RegionSink, layout panelayout.Layout) {
 		sink.Leaf(placement.Node, placement.Box)
 	}
 	for _, divider := range layout.Dividers {
-		sink.Divider(divider.SplitID, DividerHitBox(divider))
+		sink.Divider(divider.SplitID, DividerHitBoxFor(host, layout, divider))
 	}
 	for _, placement := range layout.Leaves {
-		sink.Tabs(placement.Node, Inset(placement.Box))
+		sink.Tabs(placement.Node, regionGeometry(host, placement).Inner)
 	}
 	for _, placement := range layout.Leaves {
-		sink.Close(placement.Node, Inset(placement.Box))
+		sink.Close(placement.Node, regionGeometry(host, placement).Inner)
 	}
 	for _, placement := range layout.Leaves {
-		sink.Body(placement.Node, Inset(placement.Box))
+		sink.Body(placement.Node, regionGeometry(host, placement).Inner)
 	}
+}
+
+func regionGeometry(host Host, placement panelayout.Placement) Geom {
+	if host == nil {
+		return Geometry(placement.Box)
+	}
+	return GeometryForChrome(placement.Box, host.Chrome(placement.Node))
 }

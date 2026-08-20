@@ -133,6 +133,42 @@ func TestChromeFloorsBudgetOneBorderPerLeaf(t *testing.T) {
 	}
 }
 
+func TestBorderlessChromeUsesTheWholePlacementAndNoFloorBudget(t *testing.T) {
+	outer := Box{X: 7, Y: 3, W: 20, H: 6}
+	if got := GeometryForChrome(outer, ChromeNone); got.Inner != outer || got.Outer != outer {
+		t.Fatalf("borderless geometry = %+v, want whole placement %+v", got, outer)
+	}
+	content := panelayout.Floors{
+		Primary: panelayout.Floor{Width: 80, Height: 10},
+		Doc:     panelayout.Floor{Width: 30, Height: 8},
+	}
+	got := ChromeFloorsFor(content, func(kind panelayout.Kind) Chrome {
+		if kind == panelayout.Primary {
+			return ChromeNone
+		}
+		return ChromeIdle
+	})
+	if got.Primary != content.Primary {
+		t.Fatalf("borderless primary floor = %+v, want %+v", got.Primary, content.Primary)
+	}
+	if want := (panelayout.Floor{Width: 30 + Overhead, Height: 8 + BorderWidth}); got.Doc != want {
+		t.Fatalf("framed document floor = %+v, want %+v", got.Doc, want)
+	}
+
+	primary := &panelayout.Node{ID: 1, Kind: panelayout.Primary}
+	host := &fakeHost{
+		contents: map[int]*fakeContent{1: {kind: "primary", body: "primary"}},
+		chrome:   map[int]Chrome{1: ChromeNone},
+	}
+	rendered := ansi.Strip(ComposeLeaf(host, panelayout.Placement{Node: primary, Box: outer}, false))
+	if host.contents[1].size != (Size{Width: outer.W, Height: outer.H}) {
+		t.Fatalf("borderless content size = %+v, want %dx%d", host.contents[1].size, outer.W, outer.H)
+	}
+	if !strings.HasPrefix(rendered, "primary") || strings.ContainsRune("╭╮╰╯┌┐└┘╔╗╚╝", []rune(rendered)[0]) {
+		t.Fatalf("borderless leaf unexpectedly gained a perimeter: %q", rendered)
+	}
+}
+
 // The handle is one cell but a pointer is not, so both axes widen by one cell
 // on each side — and the cell they take is a neighbouring leaf's border, never
 // its header row, because layout places OUTER boxes with the divider between
@@ -168,6 +204,66 @@ func TestDividerHitBoxStopsAtTheNeighbouringBorders(t *testing.T) {
 		if header >= hit.Y && header < hit.Y+hit.H {
 			t.Fatalf("divider target %+v covers leaf %+v's header row %d", hit, placement.Box, header)
 		}
+	}
+}
+
+func TestDividerHitBoxDoesNotStealBorderlessContent(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		axis   panelayout.Axis
+		noneID int
+	}{
+		{name: "columns primary left", axis: panelayout.Columns, noneID: 1},
+		{name: "columns primary right", axis: panelayout.Columns, noneID: 2},
+		{name: "rows primary above", axis: panelayout.Rows, noneID: 1},
+		{name: "rows primary below", axis: panelayout.Rows, noneID: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := twoLeafTree(tc.axis)
+			layout, ok := panelayout.LayoutTree(root, Box{W: 80, H: 20}, panelayout.Floors{
+				Primary: panelayout.Floor{Width: 10, Height: 3},
+				Doc:     panelayout.Floor{Width: 10, Height: 3},
+			}, 1)
+			if !ok || len(layout.Dividers) != 1 {
+				t.Fatalf("layout = %+v ok=%v", layout, ok)
+			}
+			host := &fakeHost{chrome: map[int]Chrome{1: ChromeIdle, 2: ChromeIdle}}
+			host.chrome[tc.noneID] = ChromeNone
+			divider := layout.Dividers[0]
+			want := divider.Box
+			if tc.axis == panelayout.Columns {
+				want.W = 2
+				if tc.noneID == 2 {
+					want.X--
+				}
+			} else {
+				want.H = 2
+				if tc.noneID == 2 {
+					want.Y--
+				}
+			}
+			got := DividerHitBoxFor(host, layout, divider)
+			if got != want {
+				t.Fatalf("mixed divider hit = %+v, want %+v", got, want)
+			}
+			borderless := layout.Leaves[tc.noneID-1].Box
+			point := [2]int{borderless.X + borderless.W/2, borderless.Y + borderless.H/2}
+			if tc.axis == panelayout.Columns {
+				if tc.noneID == 1 {
+					point[0] = layout.Dividers[0].Box.X - 1
+				} else {
+					point[0] = layout.Dividers[0].Box.X + 1
+				}
+			} else if tc.noneID == 1 {
+				point[1] = layout.Dividers[0].Box.Y - 1
+			} else {
+				point[1] = layout.Dividers[0].Box.Y + 1
+			}
+			host.layout, host.laid, host.focus = layout, true, 999
+			if !FocusLeafAt(host, point[0], point[1]) || host.focus != tc.noneID {
+				t.Fatalf("borderless edge point %v was stolen by divider; focus=%d", point, host.focus)
+			}
+		})
 	}
 }
 
@@ -315,7 +411,7 @@ func TestRegisterRegionsOrdersTargetsSoTheTopOneWins(t *testing.T) {
 		Dividers: []panelayout.Divider{{SplitID: 3, Box: Box{X: 10, W: 1, H: 10}}},
 	}
 	sink := &recordingSink{}
-	RegisterRegions(sink, layout)
+	RegisterRegions(sink, &fakeHost{chrome: map[int]Chrome{}}, layout)
 	want := []string{
 		"leaf:1", "leaf:2",
 		"divider:3",
@@ -340,7 +436,7 @@ func TestRegisterRegionsUsesOuterForLeavesAndInnerForHeaders(t *testing.T) {
 		close: func(b Box) { closeBox = b },
 		body:  func(b Box) { bodyBox = b },
 	}
-	RegisterRegions(sink, panelayout.Layout{
+	RegisterRegions(sink, &fakeHost{chrome: map[int]Chrome{}}, panelayout.Layout{
 		Leaves: []panelayout.Placement{{Node: &panelayout.Node{ID: 1}, Box: outer}},
 	})
 	if leafBox != outer {
@@ -350,6 +446,25 @@ func TestRegisterRegionsUsesOuterForLeavesAndInnerForHeaders(t *testing.T) {
 	for name, got := range map[string]Box{"tabs": tabBox, "close": closeBox, "body": bodyBox} {
 		if got != inner {
 			t.Fatalf("%s region = %+v, want INNER %+v", name, got, inner)
+		}
+	}
+}
+
+func TestRegisterRegionsUsesWholeBoxForBorderlessLeaf(t *testing.T) {
+	outer := Box{X: 4, Y: 2, W: 30, H: 10}
+	var leafBox, tabBox, closeBox, bodyBox Box
+	sink := boxSink{
+		leaf:  func(b Box) { leafBox = b },
+		tabs:  func(b Box) { tabBox = b },
+		close: func(b Box) { closeBox = b },
+		body:  func(b Box) { bodyBox = b },
+	}
+	node := &panelayout.Node{ID: 1, Kind: panelayout.Primary}
+	host := &fakeHost{chrome: map[int]Chrome{1: ChromeNone}}
+	RegisterRegions(sink, host, panelayout.Layout{Leaves: []panelayout.Placement{{Node: node, Box: outer}}})
+	for name, got := range map[string]Box{"leaf": leafBox, "tabs": tabBox, "close": closeBox, "body": bodyBox} {
+		if got != outer {
+			t.Fatalf("%s region = %+v, want borderless placement %+v", name, got, outer)
 		}
 	}
 }

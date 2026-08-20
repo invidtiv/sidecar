@@ -11,6 +11,26 @@ func planFloors() Floors {
 	}
 }
 
+func TestPrimaryKeepsTerminalPersistedValueAndFloorCompatibility(t *testing.T) {
+	if Primary != Terminal || int(Primary) != 0 {
+		t.Fatalf("Primary=%d Terminal=%d, want compatible persisted value 0", Primary, Terminal)
+	}
+	root := &Node{ID: 1, Kind: Primary}
+	for name, floors := range map[string]Floors{
+		"primary":  {Primary: Floor{Width: 12, Height: 4}},
+		"terminal": {Terminal: Floor{Width: 12, Height: 4}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, ok := LayoutPanes(root, Box{W: 11, H: 4}, floors); ok {
+				t.Fatal("layout ignored primary floor")
+			}
+			if _, _, ok := LayoutPanes(root, Box{W: 12, H: 4}, floors); !ok {
+				t.Fatal("layout refused exact primary floor")
+			}
+		})
+	}
+}
+
 func TestPlanOpen(t *testing.T) {
 	stacked := terminalDocIssue()
 	tests := []struct {

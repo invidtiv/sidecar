@@ -3,9 +3,11 @@ package workspace
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -69,20 +71,7 @@ func (p *Plugin) openDiffPaneForSurface(root, surface string, target workspacedi
 	if target.Identity() == "" {
 		target = workspacediff.WorkingTreeTarget()
 	}
-	return p.openContentPane(contentPaneOpen{kind: PaneDiff, name: "Diff", reopen: p.reopenHiddenDiffPane,
-		attach:   func(id int, _ bool) tea.Cmd { return p.attachDiffPane(id, root, surface, target) },
-		attached: func(id int) bool { return p.diffs[id] != nil && p.diffs[id].view() != nil },
-		planned: func(plan paneOpen) {
-			if p.ctx.Logger == nil {
-				return
-			}
-			kind := "split"
-			if plan.Retarget != 0 {
-				kind = "retarget"
-			}
-			p.ctx.Logger.Debug("openDiffPaneForSurface",
-				"surface", surface, "target", target.Identity(), "plan", kind)
-		}})
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff")
 }
 
 // attachDiffPane points the content behind leafID at target and returns its
@@ -305,6 +294,9 @@ func (p *Plugin) cycleActiveDiffTab(delta int) tea.Cmd {
 	if diff == nil || len(diff.tabs.Items) < 2 {
 		return nil
 	}
+	if p.contentDeck != nil && len(diff.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Diff) {
+		return p.cycleWorkspaceDeckTab(panelayout.Diff, delta)
+	}
 	diff.tabs.Cycle(delta)
 	p.saveSelectionState()
 	return p.ensureActiveDiffTabLoaded(diff)
@@ -314,6 +306,9 @@ func (p *Plugin) closeActiveDiffTab() tea.Cmd {
 	diff, leaf := p.focusedDiffPane()
 	if diff == nil {
 		return nil
+	}
+	if p.contentDeck != nil && len(diff.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Diff) {
+		return p.closeWorkspaceDeckTab(panelayout.Diff)
 	}
 	if len(diff.tabs.Items) <= 1 {
 		return p.closeDiffPane(leaf.ID)
@@ -352,6 +347,9 @@ func (p *Plugin) selectDiffTab(diff *diffPane, leafID, idx int) tea.Cmd {
 	if idx == diff.tabs.Active {
 		return p.ensureActiveDiffTabLoaded(diff)
 	}
+	if p.contentDeck != nil {
+		return p.selectWorkspaceDeckTab(panelayout.Diff, idx)
+	}
 	diff.tabs.Select(idx)
 	p.saveSelectionState()
 	return p.ensureActiveDiffTabLoaded(diff)
@@ -379,11 +377,6 @@ func (p *Plugin) hideDiffPane() tea.Cmd {
 		return nil
 	}
 	return p.hideContentPane(leaf.ID)
-}
-
-func (p *Plugin) reopenHiddenDiffPane() tea.Cmd {
-	diff, _ := p.activeDiffPane()
-	return p.reopenHiddenContentPane(PaneDiff, diff != nil, paneLayoutHasDiffTabs, contentKindDiff, "Diff")
 }
 
 func (p *Plugin) ensureActiveDiffTabLoaded(diff *diffPane) tea.Cmd {
@@ -587,6 +580,9 @@ func (p *Plugin) resizeFocusedLeaf(delta int) tea.Cmd {
 		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio+delta)
 	} else {
 		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio-delta)
+	}
+	if p.contentDeck != nil {
+		p.contentDeck.SetRatio(parent.ID, parent.Split.Ratio)
 	}
 	p.saveSelectionState()
 	return p.resizeDocTerminalCmd()

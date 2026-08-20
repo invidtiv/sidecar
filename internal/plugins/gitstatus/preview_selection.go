@@ -62,22 +62,28 @@ func (p *Plugin) autoLoadDiff() tea.Cmd {
 	entries := p.tree.AllEntries()
 	if len(entries) == 0 || p.cursor >= len(entries) {
 		p.selectedDiffFile = ""
+		p.selectedDiffStaged = false
 		p.diffPaneParsedDiff = nil
 		return nil
 	}
 
 	entry := entries[p.cursor]
-	isNewFile := entry.Path != p.selectedDiffFile
+	isNewFile := entry.Path != p.selectedDiffFile || entry.Staged != p.selectedDiffStaged
 	if !isNewFile && !p.forceNextDiffReload {
 		return nil // Already loaded
 	}
 
 	p.selectedDiffFile = entry.Path
+	p.selectedDiffStaged = entry.Staged
 	p.forceNextDiffReload = false
 	if isNewFile {
 		// Only reset scroll and clear full-file diff when switching to a different file
 		p.diffPaneScroll = 0
 		p.diffPaneFullFileDiff = nil
+		// A full-file load for the previous path/staging side may still be in
+		// flight. It must not remain valid when the same path selects the other
+		// side of an MM entry.
+		p.inlineFullFileRequestID = 0
 	}
 	// Note: for force-reloads of the same file (stage/unstage/discard),
 	// we don't clear diffPaneFullFileDiff here to avoid flicker.
@@ -119,6 +125,7 @@ func (p *Plugin) autoLoadCommitPreview() tea.Cmd {
 
 	// Clear file diff when switching to commit
 	p.selectedDiffFile = ""
+	p.selectedDiffStaged = false
 	p.diffPaneParsedDiff = nil
 	p.previewCommitError = ""
 	p.previewCommitCursor = 0

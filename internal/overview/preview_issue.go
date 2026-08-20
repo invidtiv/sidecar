@@ -2,6 +2,7 @@ package overview
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -37,7 +38,6 @@ type previewIssue struct {
 	surface string
 	focused bool
 	epoch   uint64
-	nextID  int
 }
 
 func (i *previewIssue) view() *issueview.Model {
@@ -45,11 +45,6 @@ func (i *previewIssue) view() *issueview.Model {
 		return nil
 	}
 	return i.tabs.ActiveView()
-}
-
-func (i *previewIssue) allocID() int {
-	i.nextID++
-	return i.nextID
 }
 
 // previewIssueLoadedMsg adds workspace identity to issueview's own request
@@ -66,73 +61,7 @@ func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	if !ok || issueID == "" || workspace.Path == "" {
 		return nil
 	}
-	leafID, refusal := m.ensurePreviewPane(panelayout.Issue, "Issue")
-	if refusal != nil {
-		return refusal
-	}
-	if leafID == 0 {
-		return nil
-	}
-
-	wasInteractive := m.PreviewInteractive()
-	if m.preview.issue == nil {
-		m.preview.issue = &previewIssue{epoch: m.nextPreviewContentEpoch()}
-	}
-	issue := m.preview.issue
-	issue.root = workspace.Path
-	issue.surface = workspace.ID
-	m.focusPreviewPane(panelayout.Issue)
-	load := m.openOrFocusPreviewIssue(issue, issueID)
-	if view := issue.view(); view != nil {
-		view.SetActive(true)
-		view.SetFocused(true)
-	}
-
-	var cmds []tea.Cmd
-	if wasInteractive {
-		cmds = append(cmds, m.exitPreviewInteractive())
-	}
-	cmds = append(cmds, load, m.syncTerminalGeometry())
-	return tea.Batch(cmds...)
-}
-
-func (m *Model) newPreviewIssueModel(issue *previewIssue) *issueview.Model {
-	view := issueview.New(nil)
-	view.OpenHandler = func(id string) tea.Cmd {
-		if m.preview.issue != issue {
-			return nil
-		}
-		return m.openOrFocusPreviewIssue(issue, id)
-	}
-	// O asks the app for the same jump the project issue pane and the preview
-	// modal make. This surface cannot reach the app's plugins itself, so it
-	// raises the request and the app performs the one jump.
-	view.OpenInTDHandler = func(id string) tea.Cmd {
-		if id == "" {
-			return nil
-		}
-		return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} }
-	}
-	return view
-}
-
-// openOrFocusPreviewIssue selects an existing tab or appends a fresh model
-// and loads it. A unique model ID is allocated per new tab so a late result
-// cannot land on whichever tab is now active.
-func (m *Model) openOrFocusPreviewIssue(issue *previewIssue, issueID string) tea.Cmd {
-	issueID = issueview.NormalizeID(issueID)
-	if issue == nil || issueID == "" {
-		return nil
-	}
-	if idx := issue.tabs.Find(issueID); idx >= 0 {
-		issue.tabs.Select(idx)
-		return nil
-	}
-	view := m.newPreviewIssueModel(issue)
-	if _, created := issue.tabs.OpenOrFocus(issueID, view); !created {
-		return nil
-	}
-	return wrapPreviewIssueLoad(view.Load(issue.allocID(), issue.root, issueID, issue.epoch), issue.surface)
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")
 }
 
 func wrapPreviewIssueLoad(cmd tea.Cmd, workspaceID string) tea.Cmd {
@@ -175,12 +104,15 @@ func (m *Model) applyPreviewIssueLoaded(msg previewIssueLoadedMsg) {
 }
 
 func (m *Model) closePreviewIssue() tea.Cmd {
-	if m.preview.issue == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	m.forgetPreviewIssue(m.preview.workspaceID)
-	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue); leaf != nil {
-		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Issue))
+	for m.preview.deck.Leaf(panelayout.Issue) != 0 {
+		m.preview.deck.CloseActive()
+	}
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
 	}
 	if m.preview.doc != nil {
 		m.focusPreviewPane(panelayout.Document)
@@ -197,46 +129,35 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 	return tea.Batch(m.focusList(), m.syncTerminalGeometry())
 }
 
-// forgetPreviewIssue drops the in-memory tab set for workspaceID. Global
-// issue tabs are not written to disk; q/esc and last-x must not leave a
-// cache entry that a later row switch would restore.
-func (m *Model) forgetPreviewIssue(workspaceID string) {
-	m.preview.issue = nil
-	if cached, ok := m.preview.paneCache[workspaceID]; ok {
-		cached.issue = nil
-		m.preview.paneCache[workspaceID] = cached
-	}
-}
-
 func (m *Model) closePreviewIssueTab() tea.Cmd {
-	if m.preview.issue == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	if len(m.preview.issue.tabs.Items) <= 1 {
-		return m.closePreviewIssue()
-	}
-	m.preview.issue.tabs.CloseActive()
-	return nil
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Issue))
+	m.preview.deck.CloseActive()
+	return m.finishPreviewDeckClose()
 }
 
 func (m *Model) cyclePreviewIssueTab(delta int) tea.Cmd {
-	if m.preview.issue == nil || len(m.preview.issue.tabs.Items) < 2 {
+	if m.preview.deck == nil || !m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Issue)) {
 		return nil
 	}
-	m.preview.issue.tabs.Cycle(delta)
-	return nil
+	cmd := m.preview.deck.CycleTab(delta)
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
+	}
+	return cmd
 }
 
 func (m *Model) clickPreviewIssueTab(index int) tea.Cmd {
-	if m.preview.issue == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	m.focusPreviewPane(panelayout.Issue)
-	if index == m.preview.issue.tabs.Active {
-		return nil
+	cmd := m.preview.deck.SelectTab(m.preview.deck.Leaf(panelayout.Issue), index)
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
 	}
-	m.preview.issue.tabs.Select(index)
-	return nil
+	return cmd
 }
 
 func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) string {

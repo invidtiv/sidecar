@@ -9,19 +9,25 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // isMouseEscapeSequence returns true if the key message appears to be
@@ -136,6 +142,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 	}
+	if cmd, handled := m.routeAppContentEditMsg(msg); handled {
+		return m, cmd
+	}
 
 	// A global view that sidecar draws itself owns keyboard focus, so a paste
 	// must not reach a hidden project plugin (an interactive tmux pane would
@@ -149,12 +158,69 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	// only, exactly as keys are routed. Broadcasting it instead dropped the same
 	// text into every background plugin's text input — a paste into a workspace
 	// terminal also landed in the Tasks prompt.
+	if h := m.currentContentDeck(); h != nil && h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) {
+		return m, nil
+	}
 	return m.forwardKeyToPlugin(msg)
 }
 
 // Update handles all messages and returns the updated model and commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	for _, h := range m.contentDecks {
+		if h.live == nil {
+			continue
+		}
+		// A watcher start must always be adopted, even after its deck left the
+		// screen. Handle stops the now-unwanted watcher and clears the in-flight
+		// flag; dropping it here leaks the watcher and wedges future starts.
+		if _, started := msg.(livepanes.WatchStartedMsg); !h.laidOut && !started {
+			continue
+		}
+		if cmd, handled := h.live.Handle(msg); handled && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	updated, cmd := m.update(msg)
+	cmds = append(cmds, cmd)
+	var decks map[string]*appContentDeck
+	switch model := updated.(type) {
+	case Model:
+		decks = model.contentDecks
+	case *Model:
+		decks = model.contentDecks
+	}
+	for _, h := range decks {
+		cmds = append(cmds, h.takeQueued())
+	}
+	return updated, tea.Batch(cmds...)
+}
+
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	if result, ok := msg.(contentpanes.Result); ok {
+		if cmd := (&m).applyAppContentResult(result); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+	switch msg := msg.(type) {
+	case appContentResolvedMsg:
+		if h := m.contentDecks[msg.Key]; h != nil {
+			delete(h.pending, msg.Candidate)
+			if h.resolution.Put(msg.Candidate, msg.Ref, msg.Found) {
+				h.generation++
+				h.links = nil
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg,
+		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
+		resourceview.ResolvedMsg:
+		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if m.overview != nil && overview.IsAsyncMessage(msg) {
 		cmd := m.overview.Update(msg)
 		// A workspacediff result is not the global browser's alone. A project
@@ -358,6 +424,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Forward mouse events to active plugin with Y offset for the app header.
 		if p := m.ActivePlugin(); p != nil {
 			adjusted := offsetMouseY(msg, -headerHeight) // Offset for app header
+			if handled, cmd := (&m).handleAppContentEditMouse(adjusted); handled {
+				m.updateContext()
+				return m, cmd
+			}
+			if cmd, handled := (&m).appContentMouse(adjusted); handled {
+				m.updateContext()
+				return m, cmd
+			}
 			newPlugin, cmd := p.Update(adjusted)
 			plugins := m.registry.Plugins()
 			if m.activePlugin < len(plugins) {
@@ -722,6 +796,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// A pane editor's lifecycle messages are surface-tagged and reach both
 		// workspace projections: the plugins get them from the broadcast below,
 		// and the global browser is not a plugin, so it is offered them here.
+		var appEditCmd tea.Cmd
+		switch editMsg := msg.(type) {
+		case inlineedit.StartedMsg:
+			appEditCmd, _ = (&m).applyAppContentEditStarted(editMsg)
+		case inlineedit.ExitedMsg:
+			appEditCmd, _ = (&m).applyAppContentEditExited(editMsg)
+		}
+		if appEditCmd != nil {
+			cmds = append(cmds, appEditCmd)
+		}
 		if m.overview != nil {
 			if cmd := m.overview.Update(msg); cmd != nil {
 				cmds = append(cmds, cmd)
@@ -736,6 +820,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
+		}
+		if cmd, handled := (&m).handleAppContentUIRequest(msg.Request); handled {
+			cmds = append(cmds, cmd)
+			return m, tea.Batch(cmds...)
 		}
 		if m.overview != nil {
 			if cmd := m.overview.Update(msg); cmd != nil {
@@ -761,6 +849,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// An embedded terminal's own messages are scope-tagged, so the global
 	// Workspaces browser is offered every one of them alongside the plugins:
 	// whichever activation owns the scope acts on it and the rest ignore it.
+	if tty.IsTerminalMessage(msg) {
+		if cmd, handled := (&m).routeAppContentEditMsg(msg); handled && cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	if m.overview != nil && tty.IsTerminalMessage(msg) {
 		if cmd := m.overview.WorkspacesTerminalMsg(msg); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -991,6 +1084,12 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// mode, so focus returns to it when the modal closes.
 	// A global view covers the plugin pane and owns keyboard focus, so a plugin
 	// left in interactive/text-input mode underneath it must not swallow keys.
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() {
+		if cmd, handled := m.handleAppContentEditKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
+	}
 	if !m.hasModal() && !m.globalOverlayOwnsKeys() &&
 		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" ||
 			m.activeContext == "notes-inline-edit" || m.activeContext == "workspace-doc-edit") {
@@ -1013,6 +1112,15 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		// Forward everything else to plugin (esc, alt+enter handled by plugin)
 		return m.forwardKeyToPlugin(msg)
+	}
+
+	// Once passive content exists, the app owns the combined inner+outer focus
+	// ring and passive-leaf keys. Inputs and blocking overlays above retain Tab.
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() {
+		if cmd, handled := m.handleAppContentKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
 	}
 
 	// Precedence level 3: an active plugin contextual binding beats sidecar's
@@ -1721,9 +1829,14 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				pluginCtx = p.ID()
 			}
 			m.palette.SetSize(m.width, m.height)
-			// surfacePlugins includes the global Tasks host, so its commands
-			// stay reachable now that it is not a registry plugin.
-			m.palette.Open(m.keymap, m.surfacePlugins(), m.activeContext, pluginCtx)
+			// surfacePlugins includes the global Tasks host. A passive app-owned
+			// leaf contributes its own command projection without changing the
+			// underlying plugin's mandatory interface.
+			surfaces := m.surfacePlugins()
+			if commands := m.appContentCommands(); len(commands) > 0 {
+				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.focusedSurface(), commands: commands})
+			}
+			m.palette.Open(m.keymap, surfaces, m.activeContext, pluginCtx)
 			m.activeContext = "palette"
 		} else {
 			m.updateContext()
@@ -1924,7 +2037,11 @@ func (m *Model) updateContext() {
 		// The visible global tab owns the context. Tasks reports its own, so a
 		// Tasks overlay keeps sidecar's globals off its keyboard.
 		if host := m.globalTasksPlugin(); m.globalTasksFocused() && host != nil {
-			m.activeContext = host.FocusContext()
+			if ctx, ok := m.appContentContext(); ok {
+				m.activeContext = ctx
+			} else {
+				m.activeContext = host.FocusContext()
+			}
 			return
 		}
 		if m.globalWorkspacesVisible() && m.overview != nil {
@@ -1937,7 +2054,11 @@ func (m *Model) updateContext() {
 		return
 	}
 	if p := m.ActivePlugin(); p != nil {
-		m.activeContext = p.FocusContext()
+		if ctx, ok := m.appContentContext(); ok {
+			m.activeContext = ctx
+		} else {
+			m.activeContext = p.FocusContext()
+		}
 	} else {
 		m.activeContext = "global"
 	}
@@ -1946,6 +2067,11 @@ func (m *Model) updateContext() {
 // pluginCommandHandler finds a plugin command handler for a palette selection.
 // A handler declared for the selected context wins over one declared elsewhere.
 func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
+	for _, cmd := range m.appContentCommands() {
+		if cmd.ID == commandID && cmd.Context == context && cmd.Handler != nil {
+			return cmd.Handler
+		}
+	}
 	var fallback func() tea.Cmd
 	for _, p := range m.surfacePlugins() {
 		for _, cmd := range p.Commands() {

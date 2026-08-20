@@ -55,7 +55,8 @@ func runLiveDepth(t *testing.T, p *Plugin, cmd tea.Cmd, depth int) {
 			runLiveDepth(t, p, child, depth+1)
 		}
 	case docview.LoadedMsg:
-		p.applyDocLoaded(m)
+		_, next := p.update(m)
+		runLiveDepth(t, p, next, depth+1)
 	case livepanes.WatchStartedMsg:
 		// Adopt the watcher but drop the livewatch.Listen it returns: a listener
 		// goroutine here would consume the signal the test waits for.

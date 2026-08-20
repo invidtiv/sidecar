@@ -178,6 +178,9 @@ func (m *Model) publishResourceProviders() {
 // resourceSurfaces is every surface currently able to show a resource pane.
 func (m *Model) resourceSurfaces() []resourceview.Surface {
 	var out []resourceview.Surface
+	for _, deck := range m.contentDecks {
+		out = append(out, deck)
+	}
 	if m.registry != nil {
 		for _, p := range m.registry.Plugins() {
 			if surface, ok := p.(resourceview.Surface); ok {
