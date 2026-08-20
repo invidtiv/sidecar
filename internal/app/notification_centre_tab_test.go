@@ -150,3 +150,67 @@ func centreTestModelWithPlugin(t *testing.T, p plugin.Plugin) Model {
 	m.updateContext()
 	return m
 }
+
+// A surface that implements FocusCycler answers for its own tab, whatever the
+// keymap says the key runs there. The two-pane surfaces bind `switch-pane`; the
+// embedded td monitor registers td's own `next-panel`; git's diff pane
+// registers nothing at all. All three are cycles, and the ring's answer is what
+// decides — not the name the surface gave its cycle.
+func TestARingWinsOverTheRegisteredBinding(t *testing.T) {
+	for _, ctx := range []string{"git-status", "conversations-main", "file-browser-preview", "workspace-preview", "td-monitor"} {
+		t.Run(ctx, func(t *testing.T) {
+			p := &cyclerPlugin{sizingPlugin: sizingPlugin{id: ctx}, atEnd: true}
+			m := centreTestModelWithPlugin(t, p)
+			// td's cycle is registered under its own command name; the shell
+			// must still ask the ring rather than reading that as a claim.
+			if ctx == "td-monitor" {
+				m.keymap.RegisterPluginBinding("tab", "next-panel", ctx)
+			}
+			m.toggleNotificationCentre()
+			m.blurNotificationCentre()
+
+			if handled, _ := m.notificationCentreTabKey(tabKey()); !handled {
+				t.Fatalf("%s: the centre stood aside at the ring's wrap point", ctx)
+			}
+			if !m.notificationCentreOwnsKeys() {
+				t.Fatalf("%s: the centre did not take the keyboard", ctx)
+			}
+		})
+	}
+}
+
+// contextCyclerPlugin is a surface whose focus context changes when its ring
+// resumes — every real two-pane surface does, since the context names the
+// focused pane.
+type contextCyclerPlugin struct {
+	cyclerPlugin
+	resumed bool
+}
+
+func (p *contextCyclerPlugin) FocusContext() string {
+	if p.resumed {
+		return "git-status"
+	}
+	return "git-status-diff"
+}
+func (p *contextCyclerPlugin) FocusCycleStart(reverse bool) tea.Cmd {
+	p.resumed = true
+	return p.cyclerPlugin.FocusCycleStart(reverse)
+}
+
+// Tabbing out of the panel must leave the shell describing the window the ring
+// resumed at, not the one the keyboard just left: the footer is read from the
+// context, and asking for it before the handback answered one window late.
+func TestTabOutOfTheCentreReReadsTheSurfaceContext(t *testing.T) {
+	p := &contextCyclerPlugin{cyclerPlugin: cyclerPlugin{sizingPlugin: sizingPlugin{id: "git-status"}, atEnd: true}}
+	m := centreTestModelWithPlugin(t, p)
+	m.toggleNotificationCentre()
+
+	m.pressTab()
+	if !p.resumed {
+		t.Fatal("tab out of the panel did not resume the surface's ring")
+	}
+	if m.activeContext != "git-status" {
+		t.Fatalf("activeContext = %q, want the window the ring resumed at", m.activeContext)
+	}
+}

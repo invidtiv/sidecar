@@ -600,6 +600,84 @@ is exactly today's behaviour). Embedded td is best effort. Centralize in the
 existing `FocusCycler`/`panelayout.focusring` machinery — no per-plugin
 bespoke cycles.
 
+#### Tab parity as built (2026-08-19)
+
+- **All five surfaces now implement `plugin.FocusCycler`** — `notes`,
+  `gitstatus`, `filebrowser`, `conversations` and, yes, the embedded `td`
+  monitor — each in a new `focus.go` of its own, each with a compile-time
+  `var _ plugin.FocusCycler` assertion. There is no new key routing and no
+  per-plugin cycle: the shell's `notificationCentreTabKey` and the ring helpers
+  in `panelayout` are the same ones workspace and overview already used.
+- **One helper carries the four two-pane surfaces**: `panelayout.TwoPaneRing`
+  (plus `panelayout.ContentPaneTarget`) is `Ring` for a layout that is a list
+  beside one content pane rather than a tree. `AtRingEnd`/`RingStart` then
+  answer both questions exactly as they do for the tree surfaces, so the stop
+  lands where the wrap was. A window that is not drawn is not a stop — a hidden
+  sidebar, a diff pane with nothing selected, a preview with no file, notes
+  with no note open — which means on those the centre becomes the *second* stop
+  rather than the third, and `tab` alternates surface ↔ centre.
+- **Each surface offers the ring only in the contexts that have one, and it
+  answers with its own `FocusContext()`** rather than a second list of booleans
+  that could drift from it: `git-status*`/`git-commit-preview`,
+  `file-browser-tree`/`-preview`, `conversations-sidebar`/`-main`,
+  `notes-list`/`notes-preview`. Everything else declines — searches, filters,
+  file-op and resume modals, blame, info, the inline editors, git's full-screen
+  diff and its commit/push/pull modes, conversations' turn detail and analytics,
+  and above all the notes editing pane, where `tab` saves and leaves the edit
+  and is therefore a mode exit, not a focus cycle. This is the same discipline
+  workspace uses to decline during a doc or terminal search.
+- **Notes moves focus by running the key's own code.** The two halves of what
+  `tab` always meant there are now `focusEditorPane` / `focusListPane`, and both
+  the key handler and `FocusCycleStart` call them, so the note pane arrives
+  resting (not editing) on either route and there is no second copy of the
+  action to keep in step.
+- **The embedded td monitor is in, not deferred.** It is the one surface whose
+  ring is not sidecar's: td owns the panels and the cursor-clamping and scroll
+  bookkeeping that go with moving between them. So `AtFocusCycleEnd` reads td's
+  exported `Model.ActivePanel` (last panel forward, first panel back, and only
+  in td's main context — `tab` is a button cycle in its modals, a section jump
+  in an epic, and a completion in its forms), and `FocusCycleStart` **replays
+  `tab`/`shift+tab` into the hosted model** rather than assigning a panel, so
+  the wrap is td's own `% 3` with its clamp and scroll fix-up intact.
+- **One shell change was required, and it is the interesting one:
+  `notificationCentreTabKey` now asks the `FocusCycler` BEFORE it consults the
+  keymap.** Reading the registry first made the answer depend on the *name* a
+  surface gave its own cycle: td registers `next-panel`, which is not
+  `next-pane`/`switch-pane`, so the shell read it as "this surface owns tab
+  outright" and the centre was unreachable on the td tab even with the ring in
+  place — and git's diff pane registers nothing at all. A surface that
+  implements `FocusCycler` has declared in code that its `tab` is a ring and is
+  the only thing that knows where that ring ends, including in the modes where
+  it is not a ring; the registry check stays exactly where it was for everything
+  that does not implement it.
+- **A one-frame staleness fixed on the way out:** `leaveNotificationCentreFocus`
+  blurred (and so re-read the context) *before* the handback moved focus inside
+  the surface, so the footer described the window the keyboard had just left
+  until the next event redrew it. It now re-reads the context after
+  `FocusCycleStart`. Caught in the drive proof, not in a test — there is a test
+  for it now.
+- **No new keymap bindings.** Registering `tab → switch-pane` for the contexts
+  that lack it (`notes-list`, `git-status-diff`, `git-commit-preview`) would
+  have been display-only for the footer and risked changing dispatch on
+  surfaces that handle the key themselves; the ring answer already runs ahead of
+  the registry. Worth revisiting if those footers should advertise the stop.
+- **Tests, per surface**: the ring includes the centre at the wrap point and
+  only there, in both directions; the handback lands on the window the cycle
+  resumes at; a pane that is not drawn is not a stop; every sub-mode keeps
+  `tab`; and the surface's own key handler still performs the exact toggle it
+  always did (which is the closed-centre behaviour, since the shell never asks
+  while the panel is shut). Plus `panelayout.TwoPaneRing`, and two shell tests:
+  a ring beats the registered binding whatever it is named, and tabbing out
+  re-reads the surface's context.
+- Verified in the real app through `scripts/tmux-drive.sh` (isolated tmux +
+  state, `paths` checked, stopped after) with a live notification posted through
+  the isolated CLI: on the **td** tab `tab` walks Current Work → Task List →
+  Activity → **centre** and repeats (period four); on **git status** it walks
+  sidebar → diff → **centre** → sidebar; on the **file browser** with no file
+  previewed it walks tree → **centre** → tree, which is the "not drawn is not a
+  stop" rule doing its job. Notes and conversations are not in this project's
+  tab set, so they are covered by their package tests.
+
 ## Bottom-status sweep + ship — after polish round 2, before Phases 4/5
 
 Marcus (2026-08-19): after polish round 2, ALL remaining bottom-of-screen

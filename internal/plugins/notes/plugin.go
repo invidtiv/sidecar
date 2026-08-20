@@ -1363,18 +1363,10 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Enter/i/click are what enter edit.
 	if key == "tab" && p.editorNote != nil {
 		if p.activePane == PaneList {
-			p.activePane = PaneEditor
-			if !p.previewMode {
-				p.leaveEditToView()
-			}
-			p.editorTextarea.Blur()
+			p.focusEditorPane()
 			return p, nil
 		}
-		if !p.previewMode {
-			p.leaveEditToView()
-		}
-		p.activePane = PaneList
-		return p, p.saveEditorContent()
+		return p, p.focusListPane()
 	}
 
 	// Esc returns to Active view from Archived/Deleted views

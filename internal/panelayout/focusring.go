@@ -111,3 +111,28 @@ func RingStart(ring []Target, reverse bool) (Target, bool) {
 	}
 	return ring[0], true
 }
+
+// ContentPaneTarget names the single content window of a surface that has no
+// pane tree — git's diff pane, the file browser's preview, the conversation
+// message list, the notes editor. Those surfaces have one list and one content
+// pane and nothing to give a leaf an id, so they all share this entry.
+var ContentPaneTarget = Target{Kind: TargetLeaf}
+
+// TwoPaneRing is Ring for the surfaces whose layout is a list beside one
+// content pane rather than a tree. Either window may be off screen — a hidden
+// sidebar, a content pane with nothing selected to draw — and a window that is
+// not drawn is not a stop, exactly as with the tree ring.
+//
+// It exists so that "the ring" has one definition for those surfaces too: the
+// shell inserts the notification centre at the wrap point of whatever this
+// returns, and the surface's own Tab toggle stays its own.
+func TwoPaneRing(listVisible, contentVisible bool) []Target {
+	var ring []Target
+	if listVisible {
+		ring = append(ring, Target{Kind: TargetSidebar})
+	}
+	if contentVisible {
+		ring = append(ring, ContentPaneTarget)
+	}
+	return ring
+}

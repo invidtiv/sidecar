@@ -751,14 +751,15 @@ func (m *Model) notificationCentreTabKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	case "workspace-interactive", "file-browser-inline-edit", "notes-inline-edit":
 		return false, nil
 	}
-	// A context that has bound tab to something that is not a pane cycle —
-	// accepting a completion, moving to the next field, toggling a search
-	// option — owns the key outright, ring or no ring.
-	if cmd, bound := m.keymap.CommandForContextKey(m.activeContext, key); bound &&
-		cmd != "next-pane" && cmd != "switch-pane" {
-		return false, nil
-	}
 	reverse := key == "shift+tab"
+	// A surface that implements FocusCycler has said in code that its tab is a
+	// ring, and it is the only thing that knows where that ring ends — including
+	// in the modes where it is not a ring at all, which is what it declines for.
+	// So it is asked BEFORE the keymap: the registry can only say which command
+	// the key runs, and a cycle named `next-panel` (the embedded td monitor) or
+	// left unregistered entirely (git's diff pane) is still a cycle. Reading the
+	// registry first made the answer depend on the name a surface happened to
+	// give its own cycle.
 	if cycler := m.notificationCentreFocusCycler(); cycler != nil {
 		if !cycler.AtFocusCycleEnd(reverse) {
 			return false, nil
@@ -766,6 +767,13 @@ func (m *Model) notificationCentreTabKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		m.focusNotificationCentre()
 		m.readSelectedNotification()
 		return true, nil
+	}
+	// A context that has bound tab to something that is not a pane cycle —
+	// accepting a completion, moving to the next field, toggling a search
+	// option — owns the key outright.
+	if cmd, bound := m.keymap.CommandForContextKey(m.activeContext, key); bound &&
+		cmd != "next-pane" && cmd != "switch-pane" {
+		return false, nil
 	}
 	// No ring to extend: the centre takes tab only from the shell's own
 	// context. Anything with a plugin context of its own keeps the key, whether
@@ -793,7 +801,13 @@ func (m *Model) notificationCentreTabKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func (m *Model) leaveNotificationCentreFocus(reverse bool) tea.Cmd {
 	m.blurNotificationCentre()
 	if cycler := m.notificationCentreFocusCycler(); cycler != nil {
-		return cycler.FocusCycleStart(reverse)
+		cmd := cycler.FocusCycleStart(reverse)
+		// The blur above read the surface's context before the handback moved
+		// focus inside it, so the footer would have described the window the
+		// keyboard just left until the next event redrew it. Ask again now that
+		// the ring has resumed.
+		m.updateContext()
+		return cmd
 	}
 	return nil
 }
