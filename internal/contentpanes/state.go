@@ -182,7 +182,7 @@ func (d *Deck) decodePane(saved PaneState, kind panelayout.Kind, leafID int) *pa
 		d.nextTabID++
 		v := newViewer(d.cfg, kind)
 		v.arm(d.ctx, ref, int(d.nextTabID), state)
-		p.tabs = append(p.tabs, &tab{id: d.nextTabID, identity: identity, ref: ref, view: v})
+		p.tabs = append(p.tabs, &tab{id: d.nextTabID, identity: identity, ref: ref, view: v, ctx: d.ctx})
 	}
 	if len(p.tabs) == 0 {
 		return nil

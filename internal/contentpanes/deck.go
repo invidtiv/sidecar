@@ -103,6 +103,7 @@ type tab struct {
 	ref        contentlink.Ref
 	generation uint64
 	view       viewer
+	ctx        SurfaceContext
 }
 
 type pane struct {
@@ -290,14 +291,22 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 		p.active = i
 		d.focus = p.leafID
 		t.ref = ref
-		cmd := t.view.focus(d.ctx, ref, int(t.id))
+		var cmd tea.Cmd
+		if !sameContext(t.ctx, d.ctx) {
+			state := t.view.snapshot(t.ref)
+			t.view.arm(d.ctx, ref, int(t.id), state)
+			cmd = t.view.load(d.ctx, ref, int(t.id))
+			t.ctx = d.ctx
+		} else {
+			cmd = t.view.focus(d.ctx, ref, int(t.id))
+		}
 		return Outcome{
 			Status: StatusFocused, Ref: ref, Kind: p.kind, LeafID: p.leafID,
 			TabID: t.id, CreatedLeaf: freshLeaf, Command: d.start(t, cmd),
 		}
 	}
 	d.nextTabID++
-	t := &tab{id: d.nextTabID, identity: identity, ref: ref, view: newViewer(d.cfg, p.kind)}
+	t := &tab{id: d.nextTabID, identity: identity, ref: ref, view: newViewer(d.cfg, p.kind), ctx: d.ctx}
 	p.tabs = append(p.tabs, t)
 	p.active = len(p.tabs) - 1
 	d.focus = p.leafID
@@ -306,6 +315,10 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 		Status: StatusOpened, Ref: ref, Kind: p.kind, LeafID: p.leafID,
 		TabID: t.id, CreatedLeaf: freshLeaf, CreatedTab: true, Command: d.start(t, cmd),
 	}
+}
+
+func sameContext(a, b SurfaceContext) bool {
+	return a.Root == b.Root && a.Surface == b.Surface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
 }
 
 func (d *Deck) start(t *tab, cmd tea.Cmd) tea.Cmd {

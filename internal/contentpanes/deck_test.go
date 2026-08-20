@@ -98,6 +98,39 @@ func TestDeckPlacementAndHomogeneousTabs(t *testing.T) {
 	}
 }
 
+func TestDeckSameIdentityReloadsWhenSurfaceContextChanges(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("one"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{})
+	first := d.Open(ctx, fileRef("README.md"), testPlacement())
+	if first.Command == nil {
+		t.Fatal("first open did not load")
+	}
+	firstResult := first.Command().(Result)
+	if _, ok := d.Apply(firstResult); !ok {
+		t.Fatal("first result was not applied")
+	}
+
+	other := ctx
+	other.Root = t.TempDir()
+	other.Surface = "other"
+	other.Epoch++
+	if err := os.WriteFile(filepath.Join(other.Root, "README.md"), []byte("two"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := d.Open(other, fileRef("README.md"), testPlacement())
+	if got.Status != StatusFocused || got.Command == nil {
+		t.Fatalf("cross-surface focus = %#v, want reload command", got)
+	}
+	result := got.Command().(Result)
+	if result.ID.Surface != other.Surface || result.ID.Epoch != other.Epoch {
+		t.Fatalf("reload identity = %#v, want surface %q epoch %d", result.ID, other.Surface, other.Epoch)
+	}
+}
+
 func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})
