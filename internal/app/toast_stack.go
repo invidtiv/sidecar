@@ -132,16 +132,29 @@ func (m *Model) syncToastReveal(now time.Time) tea.Cmd {
 	// while it does: a block must never blink out and be re-painted just to
 	// play its exit. Its cached block is what "bottom-up" retracts — the
 	// records behind it may already have left the store.
-	for _, key := range m.toastColumn {
+	//
+	// "Its place" is literal — it is re-inserted at the index it held in the
+	// previous column, not appended. Appending was invisible for an expiry
+	// (the oldest block is already the bottom one) and wrong for every other
+	// way a block leaves: dismissing the top block with `d` or a click made it
+	// jump to the bottom of the column and retract there while the blocks
+	// below it slid up past it.
+	for i, key := range m.toastColumn {
 		if live[key] {
 			continue
 		}
-		if r, ok := m.toastReveals[key]; ok {
-			r.state.Leave()
-			if r.state.Phase() != reveal.Gone {
-				order = append(order, key)
-			}
+		r, ok := m.toastReveals[key]
+		if !ok {
+			continue
 		}
+		r.state.Leave()
+		if r.state.Phase() == reveal.Gone {
+			continue
+		}
+		at := min(i, len(order))
+		order = append(order, "")
+		copy(order[at+1:], order[at:])
+		order[at] = key
 	}
 	var animating bool
 	for key, r := range m.toastReveals {

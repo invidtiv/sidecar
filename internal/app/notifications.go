@@ -237,6 +237,35 @@ func (m *Model) readNotification(id string) {
 	m.refreshNotifications()
 }
 
+// reconcileNotifications is the whole notification side of the 1s heartbeat,
+// in the order the three steps have to run in:
+//
+//  1. Sync the column first, because the sweep's read gate asks the reveal
+//     states what is on screen — a block that just took a slot freed by an
+//     expiry is painted this frame, not next second.
+//  2. Sweep: retire expired toasts, mark what was painted read, compact the
+//     24h window — and re-read the log, which is where a record another
+//     process appended becomes visible.
+//  3. Sync again, because of that last clause. The CLI's fallback path (no
+//     instance took the request) appends straight to the log, so a swept-in
+//     record has no reveal state after step 1 and, without this, waited for
+//     the *next* heartbeat to get one — a fallback post reached the screen up
+//     to a second later than the same post delivered through the request bus.
+//     Both arrival paths now reach the column on the same frame.
+//
+// The reveal ticks are sequence-tagged, so the second sync's tick supersedes
+// the first's and two loops can never advance the same states. When the second
+// sync has nothing to animate it returns nil without bumping the sequence, and
+// the first tick — which is still current — is the one to keep.
+func (m *Model) reconcileNotifications(now time.Time) tea.Cmd {
+	revealCmd := m.syncToastReveal(now)
+	m.sweepNotifications(now)
+	if cmd := m.syncToastReveal(now); cmd != nil {
+		revealCmd = cmd
+	}
+	return revealCmd
+}
+
 // sweepNotifications runs on the 1s heartbeat. It retires toasts whose
 // countdown has run out (they stay in the centre — suppressed is not dropped)
 // and compacts records past the 24h retention window.

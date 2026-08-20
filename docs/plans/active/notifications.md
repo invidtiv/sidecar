@@ -842,6 +842,50 @@ the running app at all.
   mask it): three posts a second apart from a subdirectory shell all reported
   `Posted` and drew three blocks, newest on top.
 
+### Live-use fix: review pass on the two fixes above (2026-08-19)
+
+Two defects the reviewer found in the reveal-driven column, both in the seam
+between "what changed the record set" and "what the machine is told":
+
+- **A block leaves from where it stood.** Retracting blocks were appended to the
+  end of the column rather than re-inserted at the index they held. That is
+  invisible for an expiry — the oldest block is already the bottom one — and
+  wrong for every other way a block leaves: dismissing the top block with `d`
+  or a click made it jump to the bottom of the column and retract there while
+  the blocks below slid up past it. `syncToastReveal` now splices each leaving
+  key back in at its previous index.
+- **Both arrival paths reach the column on the same frame.** The heartbeat
+  synced the column *before* `sweepNotifications`, and the sweep is also where
+  the store re-reads the log — so a record another process appended (the CLI's
+  fallback, when no instance took the request) had no reveal state when the
+  sync ran and waited a further second for one. The heartbeat's notification
+  work is now one method, `Model.reconcileNotifications`: sync (so the read
+  gate sees blocks that just took a freed slot), sweep, sync again (so
+  swept-in records are painted on the heartbeat that discovered them). Reveal
+  ticks are sequence-tagged, so the second sync's tick supersedes the first's.
+- Regression tests: `TestADismissedBlockRetractsWhereItStood` and
+  `TestSweptInRecordJoinsTheColumnOnTheSameHeartbeat` in
+  `internal/app/toast_lifecycle_test.go`, both mutation-checked against the
+  pre-fix code.
+
+**Proof run** (`scripts/tmux-drive.sh`, isolated tmux + state, `paths` checked
+first, session stopped afterwards, the real state tree never written):
+
+- *Focus exclusivity.* On **Sessions** with the centre open, six sampled frames
+  walking `tab` forward and `shift+tab` back: every frame had exactly one panel
+  wearing the active border — list, preview, then the centre at column 162 —
+  and the other two the normal one.
+- *Delivery.* `sidecar notify post` from `internal/app` (a subdirectory) against
+  the running isolated instance returned `"delivered":true` and printed
+  `Posted`, not "appears at next start".
+- *Stacking and motion.* Three posts a second apart, sampled with
+  `capture-pane` at a 3.5ms median interval for 26s across the full countdown:
+  2696 frames held all three blocks, newest on top, **zero** ordering
+  violations; each title appeared in exactly one contiguous run of frames; and
+  each block's height profile was strictly monotonic, `0→2→…→8` on entry and
+  `8→7→…→2→0` on exit. No frame anywhere showed a block whole, then gone, then
+  back — neither symptom Marcus reported can occur.
+
 **Phase 4 — config page.** `Notifications` config section + configui page:
 per-source `toast/centre/bell/expiry` table, behaviour block, quiet hours,
 `t` test toast (1g). Bell column = terminal BEL. Everything suppressed still

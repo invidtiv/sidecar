@@ -167,3 +167,88 @@ func TestAnExpiredBlockRetractsWithoutBlinkingOut(t *testing.T) {
 		t.Fatal("the block is still on screen after its retraction finished")
 	}
 }
+
+// A block leaves from where it stood. Retracting blocks were appended to the
+// end of the column, which is invisible for an expiry (the oldest block is
+// already the bottom one) and wrong for every other way a block leaves:
+// dismissing the top block with `d` or a click made it jump to the bottom and
+// retract there while the blocks below slid up past it.
+func TestADismissedBlockRetractsWhereItStood(t *testing.T) {
+	defer reveal.SetAnimatedForTests(true)()
+	m := notifyModel()
+	m.width, m.height, m.ready = 100, 40, true
+
+	for _, title := range []string{"Build started", "Tests green", "Deployed"} {
+		if _, err := m.notifications.Post(notify.Notification{Source: notify.SourceAgent, Title: title}); err != nil {
+			t.Fatalf("posting %q: %v", title, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	m.refreshNotifications()
+	for range 40 {
+		m.syncToastReveal(time.Now())
+		if len(m.toastColumn) == 3 && m.toastReveals[m.toastColumn[2]].state.Phase() == reveal.Shown {
+			break
+		}
+		m.advanceToastReveal(revealTickMsg{seq: m.toastRevealSeq})
+	}
+	if len(m.toastColumn) != 3 {
+		t.Fatalf("test setup: %d blocks on screen, want 3", len(m.toastColumn))
+	}
+	top := m.toastColumn[0]
+	below := []notify.StackKey{m.toastColumn[1], m.toastColumn[2]}
+
+	if !m.dismissVisibleToast() {
+		t.Fatal("`d` did not dismiss the top block")
+	}
+	m.syncToastReveal(time.Now())
+
+	if len(m.toastColumn) != 3 {
+		t.Fatalf("the retracting block left the column immediately: %d blocks", len(m.toastColumn))
+	}
+	if m.toastColumn[0] != top {
+		t.Fatalf("the dismissed block moved to index %d — it must retract where it stood",
+			indexOfKey(m.toastColumn, top))
+	}
+	if m.toastReveals[top].state.Phase() != reveal.Leaving {
+		t.Fatalf("phase=%v, want Leaving", m.toastReveals[top].state.Phase())
+	}
+	if m.toastColumn[1] != below[0] || m.toastColumn[2] != below[1] {
+		t.Fatal("the blocks underneath were reordered by the dismissal")
+	}
+}
+
+func indexOfKey(column []notify.StackKey, key notify.StackKey) int {
+	for i, k := range column {
+		if k == key {
+			return i
+		}
+	}
+	return -1
+}
+
+// Both arrival paths reach the column on the same frame. A record another
+// process appended only becomes visible to this instance inside the sweep's
+// re-read, so a heartbeat that synced the column *before* the sweep and not
+// after left it without a reveal state for a full second — the CLI's fallback
+// post arrived visibly later than the same post delivered through the bus.
+func TestSweptInRecordJoinsTheColumnOnTheSameHeartbeat(t *testing.T) {
+	m := stackModel(t)
+	// Appended to the store, deliberately not refreshed into the cache: this is
+	// what another process's write looks like from here.
+	if _, err := m.notifications.Post(notify.Notification{Source: notify.SourceAgent, Title: "From the CLI"}); err != nil {
+		t.Fatalf("appending: %v", err)
+	}
+	if len(m.toastColumn) != 0 {
+		t.Fatal("test setup: nothing should be on screen yet")
+	}
+
+	m.reconcileNotifications(time.Now())
+
+	if len(m.toastColumn) != 1 {
+		t.Fatalf("the swept-in record is not in the column after one heartbeat: %d blocks", len(m.toastColumn))
+	}
+	if screen := paint(m); !strings.Contains(screen, "From the CLI") {
+		t.Fatalf("the swept-in record was not painted on the heartbeat that discovered it:\n%s", screen)
+	}
+}

@@ -385,13 +385,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Notification expiry rides the existing heartbeat rather than a timer
 		// per toast: a countdown ticks one cell a second, which is exactly the
 		// resolution this tick already has.
-		// The same heartbeat reconciles the toast column: an expiry frees a
-		// slot, and the oldest queued stack takes it here rather than waiting
-		// for the next post. It runs *before* the sweep because the sweep's
-		// read gate asks the reveal states what is on screen — a block that
-		// just took a freed slot is painted this frame, not next second.
-		revealCmd := (&m).syncToastReveal(time.Now())
-		(&m).sweepNotifications(time.Now())
+		// The same heartbeat reconciles the toast column — see
+		// reconcileNotifications for the order and why it is that order.
+		revealCmd := (&m).reconcileNotifications(time.Now())
 		// The worktree inventory costs a `git worktree list` fork, so it is
 		// refreshed off the update loop (never inline: this runs on the render
 		// goroutine) and only every worktreeInventoryTicks. A branch switched
