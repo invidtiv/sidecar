@@ -450,6 +450,44 @@ commit", filter confirmations) were deleted outright.
   `internal/config` — both leaves, no cycle — so every plugin can post a
   source-specific notification without importing `internal/app`.
 
+## Polish round 2 — queued behind target-activation
+
+From live use (Marcus, 2026-08-19, nt-9519f6). Runs after
+`target-activation.md` completes; before Phase 5.
+
+**Toast redesign** (deviates from 1a/1h; this plan wins):
+
+- Drop the key row ("click or d dismiss") and the countdown row; global `d`
+  and click-to-dismiss keep working, only the hints go. Two rows saved.
+- An `×` close button top-right of the block; the countdown loader cells move
+  to the title row, left of the `×` (no numeric time, cells only). Sticky
+  notifications show just the `×`.
+- Reveal/retract ~25% faster (90ms → ~67ms per row); flash fade steps
+  proportionally.
+
+**Centre:**
+
+- Double-click on an entry = `enter` (view details today; activation when
+  Phase 5 rebinds it — double-click follows whatever `enter` means).
+- An `×` at the right of each group header clears the group (same action
+  as `D`): `◆ SYSTEM ───────────── ×`.
+
+**Selected-row background consistency (general fix, scoped).** Selected rows
+in the notes list and the centre render inconsistent backgrounds depending on
+the row's text — pre-styled spans (hues, links) punch holes in the selection
+highlight. This is a recurring sidecar problem: fix it as a shared
+styles-layer helper that applies a row background across already-styled
+content, adopted by notes and the centre in this round; other plugins migrate
+opportunistically, not in this round.
+
+**Tab parity (global).** Every surface's tab cycle must reach the open centre
+— notes, git, files, conversations implement `FocusCycler` so tab cycles
+their panes then the centre (their two-pane `tab` toggle becomes a ring with
+the centre as the extra stop **only while the centre is open**; closed, tab
+is exactly today's behaviour). Embedded td is best effort. Centralize in the
+existing `FocusCycler`/`panelayout.focusring` machinery — no per-plugin
+bespoke cycles.
+
 ## Enhancements
 
 Ordered so each phase ships something visible and none blocks the next.
