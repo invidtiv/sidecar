@@ -112,17 +112,24 @@ printf 'sidecar version current-shell\n'
 EOF
 chmod +x "$fake_bin/sidecar"
 
-cat >"$fake_bin/zsh" <<'EOF'
+cat >"$fake_bin/zsh" <<EOF
 #!/bin/sh
-case "${1:-}" in
+set -eu
+case "\${1:-}" in
   -lic)
-    printf '/fake/interactive/sidecar\nsidecar version interactive-login\n'
+    path=$brew_prefix/bin/sidecar
+    [ -z "\${FAKE_LOGIN_SIDECAR:-}" ] || path=\$FAKE_LOGIN_SIDECAR
     ;;
   -lc)
-    printf '/fake/non-interactive/sidecar\nsidecar version non-interactive-login\n'
+    path=$brew_prefix/bin/sidecar
+    [ -z "\${FAKE_NLOGIN_SIDECAR:-}" ] || path=\$FAKE_NLOGIN_SIDECAR
     ;;
   *) exit 2 ;;
 esac
+printf 'SIDECAR_DEV_INSTALL_PATH=%s\\n' "\$path"
+if [ -x "\$path" ]; then
+  "\$path" --version
+fi
 EOF
 chmod +x "$fake_bin/zsh"
 
@@ -134,9 +141,15 @@ chmod +x "$brew_prefix/Cellar/sidecar/1.0.0/bin/sidecar"
 
 run() {
   active_repo=${SIDECAR_TEST_REPO:-$test_repo}
-  env PATH="$fake_bin:$PATH" \
+  path="$brew_prefix/bin:$fake_bin:$PATH"
+  if [ -n "${SIDECAR_TEST_PATH_PREFIX:-}" ]; then
+    path="$SIDECAR_TEST_PATH_PREFIX:$path"
+  fi
+  env PATH="$path" \
     FAKE_BREW_PREFIX="$brew_prefix" \
     FAKE_BREW_STATE="$brew_state" \
+    FAKE_LOGIN_SIDECAR="${FAKE_LOGIN_SIDECAR:-}" \
+    FAKE_NLOGIN_SIDECAR="${FAKE_NLOGIN_SIDECAR:-}" \
     SIDECAR_REPO_ROOT="$active_repo" \
     SIDECAR_DEV_STATE="$dev_state" \
     SIDECAR_BREW_PREFIX="$brew_prefix" \
@@ -148,6 +161,7 @@ run() {
 # Missing -> canonical main install, with inspectable clean metadata.
 output=$(run install-local)
 assert_contains "$output" 'activated local Sidecar build'
+assert_contains "$output" 'verified: sidecar on PATH is this build'
 assert_contains "$output" 'branch=main'
 assert_contains "$output" 'dirty=false'
 assert_kind local
@@ -289,13 +303,63 @@ assert_contains "$output" 'link state: local'
 assert_contains "$output" "raw target: $before"
 assert_contains "$output" 'activation version: sidecar version devel+'
 assert_contains "$output" "current shell resolves:
+  $brew_prefix/bin/sidecar"
+assert_contains "$output" "interactive login shell resolves:
+  $brew_prefix/bin/sidecar"
+assert_contains "$output" "non-interactive login shell resolves:
+  $brew_prefix/bin/sidecar"
+
+# Status remains read-only and still reports PATH disagreement.
+mkdir -p "$temporary/interactive" "$temporary/nlogin"
+printf '#!/bin/sh\nprintf "sidecar version interactive-login\\n"\n' >"$temporary/interactive/sidecar"
+printf '#!/bin/sh\nprintf "sidecar version non-interactive-login\\n"\n' >"$temporary/nlogin/sidecar"
+chmod +x "$temporary/interactive/sidecar" "$temporary/nlogin/sidecar"
+SIDECAR_TEST_PATH_PREFIX=$fake_bin
+FAKE_LOGIN_SIDECAR=$temporary/interactive/sidecar
+FAKE_NLOGIN_SIDECAR=$temporary/nlogin/sidecar
+export SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+output=$(run status)
+unset SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+assert_contains "$output" "current shell resolves:
   $fake_bin/sidecar
   sidecar version current-shell"
 assert_contains "$output" "interactive login shell resolves:
-  /fake/interactive/sidecar
+  $temporary/interactive/sidecar
   sidecar version interactive-login"
 assert_contains "$output" "non-interactive login shell resolves:
-  /fake/non-interactive/sidecar
+  $temporary/nlogin/sidecar
   sidecar version non-interactive-login"
+
+# A sidecar earlier on PATH fails closed after the Homebrew-prefix link is in place.
+shadow=$temporary/shadow
+mkdir -p "$shadow"
+printf '#!/bin/sh\nprintf "sidecar version shadowed\\n"\n' >"$shadow/sidecar"
+chmod +x "$shadow/sidecar"
+before=$(readlink "$brew_prefix/bin/sidecar")
+SIDECAR_TEST_PATH_PREFIX=$shadow
+FAKE_LOGIN_SIDECAR=$shadow/sidecar
+FAKE_NLOGIN_SIDECAR=$shadow/sidecar
+export SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+if run install-worktree >/dev/null 2>"$temporary/shadow.err"; then
+  fail 'shadowed PATH unexpectedly succeeded'
+fi
+unset SIDECAR_TEST_PATH_PREFIX FAKE_LOGIN_SIDECAR FAKE_NLOGIN_SIDECAR
+grep -q 'does not run the build just activated' "$temporary/shadow.err" ||
+  fail "shadowed PATH did not report the mismatch: $(cat "$temporary/shadow.err")"
+grep -q "$shadow/sidecar" "$temporary/shadow.err" ||
+  fail 'shadowed PATH error omitted the winning binary'
+[ "$(readlink "$brew_prefix/bin/sidecar")" != "$before" ] ||
+  fail 'shadowed PATH rolled back the activation instead of keeping it'
+assert_kind local
+
+# Login-shell shadowing fails even when the current PATH is correct.
+FAKE_LOGIN_SIDECAR=$shadow/sidecar
+export FAKE_LOGIN_SIDECAR
+if run install-worktree >/dev/null 2>"$temporary/login-shadow.err"; then
+  fail 'login-shell shadow unexpectedly succeeded'
+fi
+unset FAKE_LOGIN_SIDECAR
+grep -q 'interactive login shell' "$temporary/login-shadow.err" ||
+  fail "login-shell shadow did not name the login probe: $(cat "$temporary/login-shadow.err")"
 
 printf 'dev-install tests passed\n'

@@ -82,12 +82,12 @@ link_kind() {
 }
 
 describe_link() {
-  path=$1
-  kind=$(link_kind "$path")
-  raw=$(readlink "$path" 2>/dev/null || printf 'regular file')
-  resolved=$(resolved_path "$path" || printf 'unresolved')
+  link_path=$1
+  kind=$(link_kind "$link_path")
+  raw=$(readlink "$link_path" 2>/dev/null || printf 'regular file')
+  resolved=$(resolved_path "$link_path" || printf 'unresolved')
   printf 'link state: %s\n' "$kind"
-  printf 'activation path: %s\n' "$path"
+  printf 'activation path: %s\n' "$link_path"
   printf 'raw target: %s\n' "$raw"
   printf 'resolved target: %s\n' "$resolved"
   if [ "$kind" = local ]; then
@@ -97,49 +97,102 @@ describe_link() {
       sed 's/^/  /' "$metadata"
     fi
   fi
-  if [ -x "$path" ]; then
+  if [ -x "$link_path" ]; then
     printf 'activation version: '
-    "$path" --version 2>&1 || true
+    "$link_path" --version 2>&1 || true
   fi
 }
 
-shell_probe() {
+# Login zshrc may print to stdout. Parsers look for this sentinel, not the first line.
+probe_script='printf "SIDECAR_DEV_INSTALL_PATH=%s\n" "$(command -v sidecar 2>/dev/null || true)"; command sidecar --version 2>/dev/null || true'
+
+probe_path_from() {
+  printf '%s\n' "$1" | sed -n 's/^SIDECAR_DEV_INSTALL_PATH=//p' | tail -n 1
+}
+
+probe_version_from() {
+  printf '%s\n' "$1" | awk '/^sidecar version / { v = $0 } END { print v }'
+}
+
+print_probe_report() {
   label=$1
-  shift
+  probe_output=$2
+  found_path=$(probe_path_from "$probe_output")
+  found_version=$(probe_version_from "$probe_output")
   printf '%s resolves:\n' "$label"
-  output=$({ "$@"; } 2>&1 || true)
-  if [ -n "$output" ]; then
-    printf '%s\n' "$output" | sed 's/^/  /'
+  if [ -n "$found_path" ]; then
+    printf '  %s\n' "$found_path"
   else
     printf '  not found\n'
+  fi
+  if [ -n "$found_version" ]; then
+    printf '  %s\n' "$found_version"
   fi
 }
 
-login_shell_probe() {
-  label=$1
-  option=$2
-  printf '%s resolves:\n' "$label"
-  output=$("$zsh_command" "$option" \
-    'command -v sidecar || exit 0; sidecar --version' 2>/dev/null || true)
-  if [ -n "$output" ]; then
-    printf '%s\n' "$output" | sed 's/^/  /'
-  else
-    printf '  not found\n'
-  fi
+current_shell_probe() {
+  sh -c "$probe_script" 2>/dev/null || true
+}
+
+login_shell_probe_output() {
+  option=$1
+  "$zsh_command" "$option" "$probe_script" 2>/dev/null || true
 }
 
 status() {
   bin_dir=$(active_bin_dir)
   printf 'managed command directory: %s\n' "$bin_dir"
   describe_link "$bin_dir/sidecar"
-  shell_probe 'current shell' sh -c 'command -v sidecar || exit 0; sidecar --version'
+  print_probe_report 'current shell' "$(current_shell_probe)"
   if [ -x "$zsh_command" ]; then
-    login_shell_probe 'interactive login shell' -lic
-    login_shell_probe 'non-interactive login shell' -lc
+    print_probe_report 'interactive login shell' "$(login_shell_probe_output -lic)"
+    print_probe_report 'non-interactive login shell' "$(login_shell_probe_output -lc)"
   else
     printf 'interactive login shell resolves:\n  unavailable: %s\n' "$zsh_command"
     printf 'non-interactive login shell resolves:\n  unavailable: %s\n' "$zsh_command"
   fi
+}
+
+# After a managed switch, `sidecar` on PATH must be that build. The Homebrew
+# link stays; a mismatch is PATH shadowing (often ~/go/bin from `make install`).
+verify_activated_sidecar() {
+  activation=$1
+  want=$(resolved_path "$activation" || true)
+  want_version=$("$activation" --version 2>/dev/null || true)
+  failed=0
+  report=
+  append_mismatch() {
+    label=$1
+    probe_output=$2
+    found_path=$(probe_path_from "$probe_output")
+    got=$(resolved_path "$found_path" 2>/dev/null || true)
+    found_version=$(probe_version_from "$probe_output")
+    [ -n "$got" ] || got='not found'
+    [ -n "$found_version" ] || found_version='no --version'
+    if [ -n "$want" ] && [ "$got" = "$want" ]; then
+      return 0
+    fi
+    failed=1
+    report=$report$(printf '\n  %s:\n    %s\n    %s' "$label" "$got" "$found_version")
+  }
+
+  append_mismatch 'current shell' "$(current_shell_probe)"
+  if [ -x "$zsh_command" ]; then
+    append_mismatch 'interactive login shell' "$(login_shell_probe_output -lic)"
+    append_mismatch 'non-interactive login shell' "$(login_shell_probe_output -lc)"
+  fi
+
+  if [ "$failed" -ne 0 ]; then
+    printf 'sidecar dev install: `sidecar` does not run the build just activated\n' >&2
+    printf '  activated:\n    %s\n    %s\n' "${want:-unresolved}" "${want_version:-no --version}" >&2
+    printf '%s\n' "$report" >&2
+    printf '  The Homebrew-prefix link is in place. Another sidecar wins PATH\n' >&2
+    printf '  (often ~/go/bin/sidecar from unmanaged `make install` / go install).\n' >&2
+    printf '  Put %s ahead of that directory, or remove the extra binary, then:\n' "$(active_bin_dir)" >&2
+    printf '    hash -r && sidecar -v\n' >&2
+    exit 1
+  fi
+  printf 'verified: sidecar on PATH is this build (%s)\n' "${want_version:-ok}"
 }
 
 restore_previous() {
@@ -252,6 +305,7 @@ install_local() {
   trap - EXIT HUP INT TERM
   printf 'activated local Sidecar build from %s\n' "$repo_root"
   status
+  verify_activated_sidecar "$bin_dir/sidecar"
 }
 
 use_homebrew() {
@@ -266,6 +320,7 @@ use_homebrew() {
     homebrew)
       printf 'Homebrew Sidecar is already active\n'
       status
+      verify_activated_sidecar "$bin_dir/sidecar"
       return
       ;;
     local|missing) ;;
@@ -288,6 +343,7 @@ use_homebrew() {
   trap - HUP INT TERM
   printf 'activated Homebrew Sidecar\n'
   status
+  verify_activated_sidecar "$bin_dir/sidecar"
 }
 
 case "$action" in

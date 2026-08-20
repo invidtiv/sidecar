@@ -88,7 +88,10 @@ After public verification, deliberately choose the development machine's active
 binary. Use `make install-local` to return to the canonical `main` checkout, or
 `make use-homebrew` to keep the released formula active. Finish with
 `make install-status`; it reports both interactive and non-interactive login
-shell resolution, which can differ on this machine.
+shell resolution, which can differ on this machine. `make install-local` and
+`make install-worktree` now fail closed when those probes do not run the
+activated binary, so a shadowed `~/go/bin/sidecar` cannot look like a
+successful switch.
 
 ## Sidecar-specific notes
 
