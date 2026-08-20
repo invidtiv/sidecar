@@ -83,6 +83,30 @@ func TestTargetProjectIsCurrentAcceptsPathAndBaseName(t *testing.T) {
 	}
 }
 
+// TestPathQualifierForMainRepoIsNotCurrentInAWorktree: a relative file target
+// only means something in the checkout it was scanned against. A jump naming
+// the main repo by path, made while the user sits in a linked worktree, must be
+// a real switch — not "already here", which would open the worktree's copy of a
+// file on a different branch.
+func TestPathQualifierForMainRepoIsNotCurrentInAWorktree(t *testing.T) {
+	main := t.TempDir()
+	worktree := t.TempDir()
+	m := activationModel(worktree)
+	m.ui.ProjectRoot = main
+
+	if m.targetProjectIsCurrent(main) {
+		t.Fatal("a path naming the main repo is not the worktree the user is in")
+	}
+	if !m.targetProjectIsCurrent(worktree) {
+		t.Fatal("the checkout the user is in is current")
+	}
+	// A qualifier given as a *name* still names the project, where either
+	// checkout is a legitimate landing.
+	if !m.targetProjectIsCurrent(baseName(main)) {
+		t.Fatal("a project name should still match the project root")
+	}
+}
+
 func baseName(path string) string {
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i] == '/' {

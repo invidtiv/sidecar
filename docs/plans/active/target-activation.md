@@ -261,3 +261,42 @@ path-vs-name resolution. Plus
 `TestActivateOtherProjectIsRefusedForNow` is deleted — that refusal is what this
 step replaced. `go build ./... && go vet ./... && go test ./...` green; no proof
 run yet (step 4 owns it) and tmux was not touched.
+
+## Review of steps 1–3 (independent, fix-then-ship)
+
+The full diff since `feeba195` was reviewed against this plan: migration drift
+kind by kind on both surfaces, deleted-vs-still-reachable old paths, the parity
+pair, the pending-target slot's lifetime, the safety rules, state-freeness and
+startup latency. Findings:
+
+- **Fixed — a path qualifier naming the main repo was "current" inside a linked
+  worktree.** `targetProjectIsCurrent` matched the qualifier against
+  `m.ui.ProjectRoot` as well as `m.ui.WorkDir`. Step 3 turned the workspace
+  guard into a real jump that sends the *scanned root* as the qualifier, so a
+  terminal rooted at the main repo, activated from a linked worktree, would be
+  called "already here" and its **relative** file target resolved against the
+  worktree — silently opening a different branch's copy of the file. A qualifier
+  given as a path now only matches the checkout the user is actually in;
+  qualifiers given as a *name* still match either, since a name names the
+  project. (`TestPathQualifierForMainRepoIsNotCurrentInAWorktree`,
+  mutation-checked.)
+- Verified sound: `terminallink.Activatable` covers exactly the five kinds the
+  workspace plugin's deleted enum covered, so the `activatableTerminalLinks`
+  rebuild filters identically; the diff `Raw`-or-`Value` fallback and the file
+  `Raw`-wins rule survive the span↔link round trip; both surfaces `StripOSC8`
+  before `Decorate` and both take their URL from `Plan.URL`; the private
+  `terminalLinkKind` enum, `openPreviewDoc(span)` and
+  `openFileBrowserIfCurrentProject` are gone with no callers left; the public
+  pane handlers open through the same `…ForSurface` functions and the same
+  `WorkspaceDocPanesDisabledDiff` gate as the `sidecar open` journey; there is
+  exactly one `SetPendingWorkspaceSelection` call site in the shell, so the
+  absorbed pair left no twin; `switchProjectWithSelection` has no early return
+  between storing the slot and applying it, so nothing can strand a hand-off for
+  a later, unrelated switch; `targetactivation` imports nothing stateful; and
+  nothing was added to any `Init`/`Start` path.
+
+Remaining risk for step 4: `previewHandlesPlanKind` / `terminalHandlesPlanKind`
+are hand-written mirrors of the real dispatch switches, so the parity pair
+proves a *declaration*, not the dispatch itself. A new kind added to the helper
+but not to the switch would pass. The regression proof should therefore exercise
+each kind on both surfaces for real, which is what step 4 already promises.

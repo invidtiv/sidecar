@@ -145,7 +145,17 @@ func (m *Model) targetProjectIsCurrent(project string) bool {
 	if project == "" {
 		return true
 	}
-	for _, candidate := range []string{m.ui.WorkDir, m.ui.ProjectRoot} {
+	// A qualifier given as a path names an exact checkout, so only the checkout
+	// the user is actually in counts as "already here". Matching it against the
+	// project root would call a jump to the main repo "current" while the user
+	// sits in a linked worktree, and the target's relative path would then
+	// resolve against the wrong tree — a different branch's copy of the file.
+	// A qualifier given as a name names the project, where either is current.
+	candidates := []string{m.ui.WorkDir, m.ui.ProjectRoot}
+	if filepath.IsAbs(project) {
+		candidates = candidates[:1]
+	}
+	for _, candidate := range candidates {
 		if candidate == "" {
 			continue
 		}
