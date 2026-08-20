@@ -232,9 +232,12 @@ func resolveFileTarget(workDir, raw string, explicitLine int) (Target, error) {
 // text wrote it; the surfaces re-resolve it against their own root on
 // activation, exactly as they did before.
 //
-// It reports false for spans this vocabulary does not carry yet (resource,
-// whose matcher identity has no Target field), so a caller keeps its existing
-// branch rather than mistaking "not mapped" for "malformed".
+// A resource span carries both halves of its identity — Provider and Matcher —
+// because a live matcher already claimed the locator to produce the span; the
+// host does not have to guess which matcher owns it a second time.
+//
+// It reports false only for spans this vocabulary does not carry, so a caller
+// keeps its existing branch rather than mistaking "not mapped" for "malformed".
 func TargetFromSpan(span terminallink.Span) (Target, bool) {
 	rawOrValue := func() string {
 		if span.Extra.Raw != "" {
@@ -251,6 +254,13 @@ func TargetFromSpan(span terminallink.Span) (Target, bool) {
 		return Target{Kind: TargetKindIssue, Value: span.Value}, true
 	case terminallink.KindDiff:
 		return Target{Kind: TargetKindDiff, Value: rawOrValue()}, true
+	case terminallink.KindResource:
+		return Target{
+			Kind:     TargetKindResource,
+			Value:    span.Value,
+			Provider: span.Extra.Provider,
+			Matcher:  span.Extra.Matcher,
+		}, true
 	default:
 		return Target{}, false
 	}

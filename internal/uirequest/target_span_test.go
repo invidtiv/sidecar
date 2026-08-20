@@ -45,8 +45,14 @@ func TestTargetFromSpan(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "resource is not mapped yet",
-			span: terminallink.Span{Kind: terminallink.KindResource, Value: "CASH-1245"},
+			name: "resource carries provider and matcher",
+			span: terminallink.Span{
+				Kind:  terminallink.KindResource,
+				Value: "CASH-1245",
+				Extra: terminallink.Extra{Provider: "jira", Matcher: "issue-key"},
+			},
+			want: Target{Kind: TargetKindResource, Value: "CASH-1245", Provider: "jira", Matcher: "issue-key"},
+			ok:   true,
 		},
 	}
 	for _, tc := range cases {

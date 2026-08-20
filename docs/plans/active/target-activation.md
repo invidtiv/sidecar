@@ -1,7 +1,7 @@
 # Unified target activation — one jump service for every surface
 
-**Status:** Sequence step 1 (steel thread) **done** — see "Step 1 as built";
-steps 2–4 planned, not started
+**Status:** Sequence steps 1–2 **done** — see the "as built" sections;
+steps 3–4 planned, not started
 **Created:** 2026-08-19
 **Depended on by:** `notifications.md` Phase 5 (calls to action) — that phase
 assumes everything here is done. This plan is pure architecture: no new
@@ -140,3 +140,66 @@ absolute, `~`, escaping `..`, control chars, negative line — URL safety,
 unsupported kinds), `internal/uirequest/target_span_test.go` (span mapping),
 `internal/app/activate_target_test.go` (the shell route and both refusals).
 `go build ./... && go test ./...` green.
+
+## Step 2 as built
+
+Both surfaces now activate through the service; the local kind switches are
+gone. No user-visible behaviour changed — mouse entry points, pane placement and
+focus outcomes are the ones the existing surface tests already asserted, and
+those assertions were not touched.
+
+- **Vocabulary.** `uirequest.Target` gained `Matcher` (the provider-stable
+  matcher ID a resource *span* already knows, because a live matcher claimed the
+  locator to produce it; the CLI still leaves it empty and the host fills it in)
+  and `TargetKindSession`. `TargetFromSpan` therefore maps resource spans and now
+  returns true for every activatable span kind.
+- **The service** gained `PlanOpenIssue`, `PlanOpenDiff`, `PlanOpenResource` and
+  `PlanAttachSession`, plus `PlanForSpan(span)` — the whole span→target→plan path
+  in one call, which is what both surfaces use — and `PlanKindsFromSpans()`, the
+  parity contract.
+- **Public messages** (`internal/app/commands.go`): `OpenIssuePaneMsg`,
+  `OpenDiffPaneMsg`, `OpenResourcePaneMsg`, `AttachSessionMsg` and their command
+  helpers, handled in `internal/plugins/workspace/target_panes.go`. Each opens
+  against the plugin's selected surface using the same functions the
+  `sidecar open` journey uses; attach-by-name is a lookup over shells and
+  worktree agents, gated on `fullTmuxAttachEnabled()` exactly like the private
+  path it wraps. Nothing creates a session that does not exist.
+- **Deletions.** The workspace plugin's private `terminalLinkKind` enum and both
+  translations are gone: `terminalLink` now carries `terminallink.Kind` plus the
+  one thing the scanner cannot know (the canonical root it was resolved
+  against), and `spansFromTerminalLinks` is a rebuild rather than a switch.
+  `openFileBrowserIfCurrentProject` no longer builds its own
+  `FocusPlugin`+`NavigateToFileMsg` pair; it sends `app.ActivateTarget`.
+- **URL safety** is now enforced on both surfaces, because both get their URL
+  from `Plan.URL` and `Resolve` refuses anything `SafeHTTPURL` rejects.
+
+Deviations worth naming:
+
+1. **File-path containment moved out of `Resolve`.** Step 1 refused absolute,
+   `~` and `..`-escaping file targets inside `Resolve`. That is wrong for a
+   terminal surface, which legitimately resolves an absolute token against the
+   root it scanned — keeping it would have been a regression the moment the
+   workspace file branch migrated. `Resolve` now keeps only the surface-neutral
+   checks (non-empty, no control characters, non-negative line) and returns the
+   token as written; the project-relative rule lives in the new exported
+   `targetactivation.RelativeProjectPath`, applied by the one execution that
+   needs it (`app.NavigateToFileMsg`). The user-visible refusal is unchanged.
+2. **Each surface still executes into its own panes.** The shared half is the
+   decision (`PlanForSpan`); the pane opening stays local, because routing
+   overview through the workspace plugin's panes would change behaviour, which
+   this plan forbids.
+3. **`openFileBrowserIfCurrentProject` keeps its current-project guard.** Sending
+   the target with a `Project` qualifier instead would have turned today's silent
+   no-op into a refusal toast. Step 3 is where that guard becomes the
+   pending-target slot.
+
+Parity: `PlanKindsFromSpans()` is asserted complete against
+`terminallink.Activatable` in `targetactivation`, and the mirrored pair
+`TestPreviewDispatchesEveryPlanKind` (`internal/overview`) /
+`TestTerminalDispatchesEveryPlanKind` (`internal/plugins/workspace`) asserts each
+surface dispatches all of it — so a new kind cannot reach one surface and miss
+the other. Also added: `TestActivatePaneTargetsSendPublicMessages` (the shell
+seam) and `TestPublicPaneMessagesOpenTheSamePanesAsAClick` plus the attach gate
+test (the workspace handlers). `go build ./... && go vet ./... && go test ./...`
+green; no proof run, because nothing user-visible changed and tmux was not
+touched.

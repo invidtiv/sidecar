@@ -836,11 +836,7 @@ func TestPreviewClickThenCLISharesResolvedIdentity(t *testing.T) {
 			ws.ProjectRoot = root
 			m.catalog["a"] = ws
 
-			run(t, m, m.activatePreviewDiff(terminallink.Span{
-				Kind:  terminallink.KindDiff,
-				Value: tc.token,
-				Extra: terminallink.Extra{Raw: tc.token},
-			}))
+			run(t, m, m.activatePreviewDiff(tc.token))
 			if m.preview.diff == nil || m.preview.diff.view() == nil {
 				t.Fatal("click opened no Diff view")
 			}
@@ -884,11 +880,7 @@ func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 		t.Fatalf("range identity = %q", got)
 	}
 
-	run(t, m, m.activatePreviewDiff(terminallink.Span{
-		Kind:  terminallink.KindDiff,
-		Value: "abc1234",
-		Extra: terminallink.Extra{Raw: "abc1234"},
-	}))
+	run(t, m, m.activatePreviewDiff("abc1234"))
 	if idx := m.preview.diff.tabs.Find("c:abc1234"); idx < 0 {
 		t.Fatalf("commit tab missing after click: keys=%v", previewDiffKeys(m.preview.diff))
 	}

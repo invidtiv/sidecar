@@ -1970,6 +1970,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.createShellWithResume(msg.Command)
 
+	case app.OpenIssuePaneMsg:
+		return p, p.openIssuePaneMsg(msg)
+
+	case app.OpenDiffPaneMsg:
+		return p, p.openDiffPaneMsg(msg)
+
+	case app.OpenResourcePaneMsg:
+		return p, p.openResourcePaneMsg(msg)
+
+	case app.AttachSessionMsg:
+		return p, p.attachSessionMsg(msg)
+
 	case cursorPositionMsg:
 		// Update cached cursor position for interactive mode rendering (td-648af4)
 		if p.interactiveState != nil && p.interactiveState.Active {

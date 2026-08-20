@@ -39,6 +39,10 @@ const (
 	// TargetKindNotification is a notification id. Its Value is empty on a
 	// post (the id travels in the payload) and set on a dismiss.
 	TargetKindNotification TargetKind = "notification"
+	// TargetKindSession is a tmux session name to attach. Nothing detects one
+	// in text yet; it exists so activation has a session vocabulary rather
+	// than a plugin-private method.
+	TargetKindSession TargetKind = "session"
 )
 
 // Status describes the host's response to a UI request.
@@ -72,6 +76,12 @@ type Target struct {
 	// bare locator must not make the CLI start provider discovery or choose
 	// among instances.
 	Provider string `json:"provider,omitempty"`
+	// Matcher is the provider-stable matcher ID for TargetKindResource when the
+	// sender already knows it — a scanned resource span does, because a live
+	// matcher claimed the locator to produce the span. It is empty for every
+	// other kind and for senders (the CLI) with no matcher snapshot, and a host
+	// with one fills it in.
+	Matcher string `json:"matcher,omitempty"`
 }
 
 // Options specifies optional placement flags. There is deliberately no focus

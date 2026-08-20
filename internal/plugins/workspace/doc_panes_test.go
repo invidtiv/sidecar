@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
@@ -20,6 +21,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/uirequest"
 )
 
 func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
@@ -869,9 +871,14 @@ func TestFeatureDisabledMarkdownKeepsFileBrowserRoute(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("feature-disabled markdown path returned no command")
 	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) != 2 {
-		t.Fatalf("feature-disabled route = %T, want focus plus navigation", cmd())
+	// The shell owns the focus-plus-navigate dispatch now; this host asks for
+	// the jump and stops there.
+	activation, ok := cmd().(app.ActivateTargetMsg)
+	if !ok {
+		t.Fatalf("feature-disabled route = %T, want an activation request", cmd())
+	}
+	if activation.Target.Kind != uirequest.TargetKindFile || activation.Target.Value != "README.md" || activation.Target.Line != 7 {
+		t.Fatalf("feature-disabled route target = %+v", activation.Target)
 	}
 }
 

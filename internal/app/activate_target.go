@@ -27,12 +27,28 @@ func (m *Model) activateTarget(req ActivateTargetMsg) tea.Cmd {
 	}
 	switch plan.Kind {
 	case targetactivation.PlanOpenFile:
+		// The canonical file message is project-relative, so the containment
+		// rule is applied here rather than in Resolve: a terminal surface
+		// resolving the same plan against its own root accepts paths this
+		// route must refuse.
+		path, err := targetactivation.RelativeProjectPath(plan.Path)
+		if err != nil {
+			return msg.Blocked(err.Error())
+		}
 		return tea.Batch(
 			FocusPlugin(plan.PluginID),
-			func() tea.Msg { return NavigateToFileMsg{Path: plan.Path, Line: plan.Line} },
+			func() tea.Msg { return NavigateToFileMsg{Path: path, Line: plan.Line} },
 		)
 	case targetactivation.PlanOpenURL:
 		return terminallink.OpenHTTP(plan.URL)
+	case targetactivation.PlanOpenIssue:
+		return tea.Batch(FocusPlugin(plan.PluginID), OpenIssuePane(plan.Issue))
+	case targetactivation.PlanOpenDiff:
+		return tea.Batch(FocusPlugin(plan.PluginID), OpenDiffPane(plan.Spec))
+	case targetactivation.PlanOpenResource:
+		return tea.Batch(FocusPlugin(plan.PluginID), OpenResourcePane(plan.Provider, plan.Matcher, plan.Locator))
+	case targetactivation.PlanAttachSession:
+		return tea.Batch(FocusPlugin(plan.PluginID), AttachSession(plan.Session))
 	default:
 		return nil
 	}

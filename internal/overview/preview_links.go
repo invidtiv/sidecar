@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -202,60 +203,64 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 	if !ok {
 		return nil, false
 	}
-	switch span.Kind {
-	case terminallink.KindURL:
+	plan, err := targetactivation.PlanForSpan(span)
+	if err != nil {
+		return nil, false
+	}
+	return m.activatePreviewPlan(plan)
+}
+
+// activatePreviewPlan executes what the shared service resolved. The decision —
+// what this text names, whether the URL is safe — is targetactivation's and is
+// identical on the workspace surface; only the panes below are this surface's
+// own, so a kind that activates here activates there.
+func (m *Model) activatePreviewPlan(plan targetactivation.Plan) (tea.Cmd, bool) {
+	var cmd tea.Cmd
+	switch plan.Kind {
+	case targetactivation.PlanOpenURL:
 		m.clearPreviewSelection()
-		return terminallink.OpenHTTP(span.Value), true
-	case terminallink.KindFile:
-		// The file branch speaks the shared vocabulary: the span becomes a
-		// uirequest.Target (the one span→target mapping, shared with every
-		// other surface) and the pane opener takes it from there. The other
-		// kinds still read their span directly; they migrate next.
-		target, ok := uirequest.TargetFromSpan(span)
-		if !ok {
-			return nil, false
-		}
-		cmd := m.openPreviewDocTarget(target)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindIssue:
-		cmd := m.openPreviewIssue(span.Value)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindDiff:
-		cmd := m.activatePreviewDiff(span)
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
-	case terminallink.KindResource:
-		cmd := m.activatePreviewResource(resourceview.Ref{
-			Instance: span.Extra.Provider,
-			Matcher:  span.Extra.Matcher,
-			Locator:  span.Value,
+		return terminallink.OpenHTTP(plan.URL), true
+	case targetactivation.PlanOpenFile:
+		cmd = m.openPreviewDocTarget(uirequest.Target{
+			Kind:  uirequest.TargetKindFile,
+			Value: plan.Path,
+			Line:  plan.Line,
 		})
-		if cmd == nil {
-			return nil, false
-		}
-		m.clearPreviewSelection()
-		return cmd, true
+	case targetactivation.PlanOpenIssue:
+		cmd = m.openPreviewIssue(plan.Issue)
+	case targetactivation.PlanOpenDiff:
+		cmd = m.activatePreviewDiff(plan.Spec)
+	case targetactivation.PlanOpenResource:
+		cmd = m.activatePreviewResource(resourceview.Ref{
+			Instance: plan.Provider,
+			Matcher:  plan.Matcher,
+			Locator:  plan.Locator,
+		})
 	default:
 		return nil, false
 	}
+	if cmd == nil {
+		return nil, false
+	}
+	m.clearPreviewSelection()
+	return cmd, true
 }
 
-func (m *Model) activatePreviewDiff(span terminallink.Span) tea.Cmd {
-	raw := span.Extra.Raw
-	if raw == "" {
-		raw = span.Value
+// previewHandlesPlanKind is the parity assertion's other half: every plan kind
+// a scanned span can produce must be dispatched above. Its twin lives on the
+// workspace surface.
+func previewHandlesPlanKind(kind targetactivation.PlanKind) bool {
+	switch kind {
+	case targetactivation.PlanOpenURL, targetactivation.PlanOpenFile,
+		targetactivation.PlanOpenIssue, targetactivation.PlanOpenDiff,
+		targetactivation.PlanOpenResource:
+		return true
+	default:
+		return false
 	}
+}
+
+func (m *Model) activatePreviewDiff(raw string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil

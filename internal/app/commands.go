@@ -125,6 +125,52 @@ type ActivateTargetMsg struct {
 	Project string
 }
 
+// OpenIssuePaneMsg, OpenDiffPaneMsg, OpenResourcePaneMsg and AttachSessionMsg
+// are the public entries for what used to be reachable only through
+// workspace-plugin-private methods. They are the surface-parity seam: any
+// plugin, the notification centre, or a future CLI action can send them, and
+// hosts send them rather than importing workspace.
+//
+// Each opens against the plugin's currently selected surface, exactly as a
+// click on the same link in that surface's terminal does.
+type (
+	// OpenIssuePaneMsg opens an issue id in an issue pane.
+	OpenIssuePaneMsg struct{ Issue string }
+	// OpenDiffPaneMsg opens a git spec in a diff pane. The host re-resolves the
+	// spec in its own checkout, so a crafted spec cannot skip rev-parse.
+	OpenDiffPaneMsg struct{ Spec string }
+	// OpenResourcePaneMsg opens an external provider's locator in a resource
+	// pane. Matcher may be empty; the host's live matcher snapshot then decides
+	// which matcher claims the locator, and refuses when none does.
+	OpenResourcePaneMsg struct{ Provider, Matcher, Locator string }
+	// AttachSessionMsg attaches a tmux session by name. The host honours the
+	// same full-attach feature gate as every other attach path.
+	AttachSessionMsg struct{ Session string }
+)
+
+// OpenIssuePane returns a command that opens an issue in an issue pane.
+func OpenIssuePane(issue string) tea.Cmd {
+	return func() tea.Msg { return OpenIssuePaneMsg{Issue: issue} }
+}
+
+// OpenDiffPane returns a command that opens a git spec in a diff pane.
+func OpenDiffPane(spec string) tea.Cmd {
+	return func() tea.Msg { return OpenDiffPaneMsg{Spec: spec} }
+}
+
+// OpenResourcePane returns a command that opens a provider locator in a
+// resource pane.
+func OpenResourcePane(provider, matcher, locator string) tea.Cmd {
+	return func() tea.Msg {
+		return OpenResourcePaneMsg{Provider: provider, Matcher: matcher, Locator: locator}
+	}
+}
+
+// AttachSession returns a command that attaches a tmux session by name.
+func AttachSession(session string) tea.Cmd {
+	return func() tea.Msg { return AttachSessionMsg{Session: session} }
+}
+
 // ActivateTarget returns a command that activates a target in the current
 // project. Use ActivateTargetIn for a cross-project jump.
 func ActivateTarget(target uirequest.Target) tea.Cmd {

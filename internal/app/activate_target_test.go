@@ -105,3 +105,95 @@ func baseName(path string) string {
 	}
 	return path
 }
+
+// TestActivatePaneTargetsSendPublicMessages proves the seam: issue, diff,
+// resource and session activation leave the shell as public messages any plugin
+// or surface can send and receive, not as calls into a plugin's private methods.
+func TestActivatePaneTargetsSendPublicMessages(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name   string
+		target uirequest.Target
+		check  func(t *testing.T, msgs []tea.Msg)
+	}{
+		{
+			name:   "issue",
+			target: uirequest.Target{Kind: uirequest.TargetKindIssue, Value: "td-331dbf19"},
+			check: func(t *testing.T, msgs []tea.Msg) {
+				for _, got := range msgs {
+					if typed, ok := got.(OpenIssuePaneMsg); ok {
+						if typed.Issue != "td-331dbf19" {
+							t.Fatalf("issue = %q", typed.Issue)
+						}
+						return
+					}
+				}
+				t.Fatal("no OpenIssuePaneMsg")
+			},
+		},
+		{
+			name:   "diff",
+			target: uirequest.Target{Kind: uirequest.TargetKindDiff, Value: "HEAD~1"},
+			check: func(t *testing.T, msgs []tea.Msg) {
+				for _, got := range msgs {
+					if typed, ok := got.(OpenDiffPaneMsg); ok {
+						if typed.Spec != "HEAD~1" {
+							t.Fatalf("spec = %q", typed.Spec)
+						}
+						return
+					}
+				}
+				t.Fatal("no OpenDiffPaneMsg")
+			},
+		},
+		{
+			name: "resource",
+			target: uirequest.Target{
+				Kind: uirequest.TargetKindResource, Value: "CASH-1245",
+				Provider: "jira", Matcher: "issue-key",
+			},
+			check: func(t *testing.T, msgs []tea.Msg) {
+				for _, got := range msgs {
+					if typed, ok := got.(OpenResourcePaneMsg); ok {
+						if typed.Provider != "jira" || typed.Matcher != "issue-key" || typed.Locator != "CASH-1245" {
+							t.Fatalf("resource = %+v", typed)
+						}
+						return
+					}
+				}
+				t.Fatal("no OpenResourcePaneMsg")
+			},
+		},
+		{
+			name:   "session",
+			target: uirequest.Target{Kind: uirequest.TargetKindSession, Value: "sidecar-main"},
+			check: func(t *testing.T, msgs []tea.Msg) {
+				for _, got := range msgs {
+					if typed, ok := got.(AttachSessionMsg); ok {
+						if typed.Session != "sidecar-main" {
+							t.Fatalf("session = %q", typed.Session)
+						}
+						return
+					}
+				}
+				t.Fatal("no AttachSessionMsg")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := activationModel(dir)
+			msgs := collect(m.activateTarget(ActivateTargetMsg{Target: tc.target}))
+			focused := false
+			for _, got := range msgs {
+				if typed, ok := got.(FocusPluginByIDMsg); ok && typed.PluginID == "workspace-manager" {
+					focused = true
+				}
+			}
+			if !focused {
+				t.Fatal("expected the workspace plugin to be focused")
+			}
+			tc.check(t, msgs)
+		})
+	}
+}
