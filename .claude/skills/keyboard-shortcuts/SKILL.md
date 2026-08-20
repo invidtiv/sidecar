@@ -149,8 +149,8 @@ There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→
 | wheel on terminal | Scroll only; do not activate |
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
 | `i` | Find TD task (`open-issue`). Not interactive |
-| `n` | Create a worktree, choosing the owning project, then confirm the Git plan |
-| `ctrl+n` | Create a shell, choosing the owning project (selected row then last-used default) |
+| `n` | Open Create Workspace (Worktree) |
+| `ctrl+n` | Open Create Workspace with Shell selected (modal) |
 | `D` | Delete the selected shell (shown only for shell rows) |
 | `m` | Open the owning project's established merge strategy workflow for a safe worktree |
 | `/` | Filter |
@@ -402,7 +402,7 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 | `workspace-doc-edit` | A pane's inline editor (owns every key, ctrl+c included) |
 | `workspace-issue` | Issue tabs beside the terminal (hide with `q`; last `x` forgets) |
 | `workspace-diff` | Diff tabs beside the terminal (hide with `q`; last `x` forgets) |
-| `workspace-create` | Create worktree input |
+| `workspace-create` | Create Workspace form |
 | `workspace-task-link` | Task selection modal |
 | `workspace-merge` | Merge workflow modal |
 | `workspace-interactive` | Embedded terminal |
@@ -411,8 +411,8 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 
 | Key | Command | Description |
 |-----|---------|-------------|
-| `n` | new-workspace | Create new workspace |
-| `ctrl+n` | new-shell | Create new shell session (shadows the global `ctrl+n` cursor-down in this context) |
+| `n` | new-workspace | Open Create Workspace (Worktree) |
+| `ctrl+n` | new-shell | Create a new shell immediately (shadows the global `ctrl+n` cursor-down in this context) |
 | `v` | open-view | Open View: sort the list (Manual, Activity, Recent, Name) |
 | `V` | toggle-view | Toggle list/kanban |
 | `D` | delete-workspace | Delete workspace / delete shell (confirm) |

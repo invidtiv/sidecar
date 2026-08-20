@@ -522,8 +522,16 @@ func TestWorktreeSubmitPlansThenConfirm(t *testing.T) {
 	}
 }
 
-func TestTypeSelectorIdentifiersHaveZeroReferences(t *testing.T) {
-	re := regexp.MustCompile(`typeSelector|ViewModeTypeSelector|ensureTypeSelector|createShellWithAgent|workspace-type-selector`)
+func TestRemovedChooserIdentifiersHaveZeroReferences(t *testing.T) {
+	pat := strings.Join([]string{
+		"type" + "Selector",
+		"ViewMode" + "TypeSelector",
+		"ensure" + "TypeSelector",
+		"createShell" + "WithAgent",
+		"workspace-" + "type-selector",
+		"Create New " + "Worktree",
+	}, "|")
+	re := regexp.MustCompile(pat)
 	root := "."
 	var hits []string
 	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
@@ -547,12 +555,6 @@ func TestTypeSelectorIdentifiersHaveZeroReferences(t *testing.T) {
 			if re.FindString(line) == "" {
 				continue
 			}
-			if strings.Contains(line, "TestTypeSelectorIdentifiersHaveZeroReferences") {
-				continue
-			}
-			if strings.Contains(line, "typeSelector|ViewModeTypeSelector") {
-				continue
-			}
 			hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1)+": "+strings.TrimSpace(line))
 		}
 		return nil
@@ -561,6 +563,6 @@ func TestTypeSelectorIdentifiersHaveZeroReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(hits) > 0 {
-		t.Fatalf("type-selector identifiers still referenced:\n%s", strings.Join(hits, "\n"))
+		t.Fatalf("removed chooser identifiers still referenced:\n%s", strings.Join(hits, "\n"))
 	}
 }

@@ -12,6 +12,11 @@ follows the active Sidecar theme. Notes is no longer a beta.
 
 ### Features
 
+- **One Create Workspace form on both surfaces.** Project Workspaces and
+  global Sessions share the same Shell | Worktree modal, with auto-approve
+  and base branch on global as well as project. Instant-create shortcuts are
+  unchanged: project `ctrl+n`, Shells `[+]`, and `autoCreateShell` still skip
+  the form.
 - **A notification system instead of a one-line footer echo.** Toasts are
   bordered blocks in the top-right of the content region: they stack, collapse
   by source, reveal a row at a time, and dismiss on click or `d`. The centre is

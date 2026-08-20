@@ -607,9 +607,9 @@ func (p *Plugin) maybeAutoCreateShell() tea.Cmd {
 // createDefaultShell creates a shell using the configured default agent. Used by
 // the ctrl+n binding and by auto-create on first focus.
 func (p *Plugin) createDefaultShell(keepSelection bool) tea.Cmd {
-	// SkipPerms stays false: the type-selector modal defaults it off, and a shell
-	// the user did not explicitly configure should not launch an agent with
-	// permission prompts disabled.
+	// SkipPerms stays false: instant create does not read the form's auto-approve
+	// pref. A shell the user did not explicitly configure should not launch an
+	// agent with permission prompts disabled.
 	return p.createShell(shellCreateOpts{
 		AgentType:     p.resolveShellAgentType(),
 		KeepSelection: keepSelection,
