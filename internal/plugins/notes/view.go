@@ -73,8 +73,9 @@ func (p *Plugin) renderTwoPaneLayout(height int) string {
 	}
 
 	// Determine if panes are active
-	listActive := p.activePane == PaneList && !p.searchMode
-	editorActive := p.activePane == PaneEditor
+	innerFocusActive := p.innerPaneFocusActive()
+	listActive := innerFocusActive && p.activePane == PaneList && !p.searchMode
+	editorActive := innerFocusActive && p.activePane == PaneEditor
 
 	// Calculate editor width
 	editorWidth := p.width - p.listWidth - dividerWidth

@@ -12,6 +12,7 @@ import (
 
 var (
 	urlPattern      = regexp.MustCompile(`https?://[^\s<>"']+`)
+	internalPattern = regexp.MustCompile(`sidecar://[^\s<>"']+`)
 	pathLinePattern = regexp.MustCompile(
 		`(?:^|[\s(\[])((?:~/|\.{0,2}/|/)?[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9_+-]+):([1-9][0-9]*)`,
 	)
@@ -59,6 +60,37 @@ func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) [
 	}
 	appendBounded(scanResources(plain, spans, opts.Matchers))
 	return spans
+}
+
+func scanInternalURIs(plain string, existing []Span, namespaces map[string]URIOptions) []Span {
+	if len(namespaces) == 0 {
+		return nil
+	}
+	var out []Span
+	for _, loc := range internalPattern.FindAllStringIndex(plain, -1) {
+		raw := strings.TrimRight(plain[loc[0]:loc[1]], ".,;!?)]}")
+		end := loc[0] + len(raw)
+		if raw == "" || overlapsBytes(plain, append(existing, out...), loc[0], end) {
+			continue
+		}
+		var parsed InternalURI
+		matched := false
+		for namespace, opts := range namespaces {
+			candidate, err := ParseInternalURIWith(raw, opts)
+			if err == nil && candidate.Ref.Namespace == namespace {
+				parsed, matched = candidate, true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		span := SpanForRef(parsed.Ref)
+		span.StartCol = colAt(plain, loc[0])
+		span.EndCol = colAt(plain, end) - 1
+		out = append(out, span)
+	}
+	return out
 }
 
 func scanURLs(plain string, existing []Span) []Span {

@@ -69,7 +69,8 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 				return resolve(KindDiff, raw)
 			},
 		}
-		spans := scanPlain(plain, explicit, autoOpts, &pending)
+		internal := scanInternalURIs(plain, explicit, opts.InternalNamespaces)
+		spans := scanPlain(plain, append(explicit, internal...), autoOpts, &pending)
 		for i := range spans {
 			spans[i].Row = row
 		}

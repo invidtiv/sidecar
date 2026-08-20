@@ -16,7 +16,12 @@ type InternalURI struct {
 
 // URIOptions is the generic parser's query allowlist. The zero value accepts
 // no query parameters. Namespace handlers choose their own bounded keys.
-type URIOptions struct{ AllowedQuery map[string]struct{} }
+type URIOptions struct {
+	AllowedQuery map[string]struct{}
+	// ValidateID applies namespace-owned identity rules after generic URI
+	// decoding and bounds checks. A nil validator accepts any generic ID.
+	ValidateID func(string) bool
+}
 
 func ParseInternalURI(raw string) (InternalURI, error) {
 	return ParseInternalURIWith(raw, URIOptions{})
@@ -41,7 +46,8 @@ func ParseInternalURIWith(raw string, opts URIOptions) (InternalURI, error) {
 	}
 	id, err := url.PathUnescape(escapedPath[1:])
 	if err != nil || id == "" || !utf8.ValidString(id) || utf8.RuneCountInString(id) > MaxInternalIDRunes ||
-		containsControl(id) || strings.HasPrefix(id, "/") || strings.Contains(id, "\\") {
+		containsControl(id) || strings.HasPrefix(id, "/") || strings.Contains(id, "\\") ||
+		(opts.ValidateID != nil && !opts.ValidateID(id)) {
 		return InternalURI{}, fmt.Errorf("invalid sidecar id")
 	}
 	query, err := url.ParseQuery(parsed.RawQuery)

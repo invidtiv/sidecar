@@ -392,7 +392,8 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 		for row := 0; row < surface.Rect.H && surface.Rect.Y+row < len(lines); row++ {
 			y := surface.Rect.Y + row
 			segment := ansi.Cut(lines[y], surface.Rect.X, surface.Rect.X+surface.Rect.W)
-			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.Snapshot(), Matchers: h.resourceMatchers, Decorate: true})
+			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.Snapshot(), Matchers: h.resourceMatchers,
+				InternalNamespaces: sidecarIntentNamespaces, Decorate: true})
 			for _, span := range result.Spans {
 				if !surface.Kinds.Allows(span.Kind) {
 					continue
@@ -449,7 +450,11 @@ func (m *Model) openAppContent(workdir, pluginID string, ref contentlink.Ref) te
 		return terminallink.OpenHTTP(ref.Value)
 	}
 	if ref.Kind == contentlink.KindInternal {
-		return nil
+		cmd, err := sidecarIntents.activate(IntentAppContext{ProjectRoot: m.ui.ProjectRoot}, ref)
+		if err != nil {
+			return nil
+		}
+		return cmd
 	}
 	out := m.openAppContentOutcome(h, ref, "")
 	if out.Status == contentpanes.StatusRefused {

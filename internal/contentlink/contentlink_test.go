@@ -71,6 +71,38 @@ func TestParseInternalURIQueryAllowlistIsBoundedAndCopied(t *testing.T) {
 	}
 }
 
+func TestInternalNamespaceValidatorAppliesToPlainAndExplicitLinks(t *testing.T) {
+	opts := map[string]URIOptions{"note": {ValidateID: func(id string) bool {
+		return strings.HasPrefix(id, "nt-") && len(id) <= 12
+	}}}
+	plain := ScanFrame("open sidecar://note/nt-4jdj4e", FrameOptions{InternalNamespaces: opts})
+	osc := "\x1b]8;;sidecar://note/nt-4jdj4e\x1b\\Release checklist\x1b]8;;\x1b\\"
+	explicit := ScanFrame(osc, FrameOptions{InternalNamespaces: opts})
+	want := Ref{Kind: KindInternal, Namespace: "note", Value: "nt-4jdj4e"}
+	if len(plain.Spans) != 1 || plain.Spans[0].Ref() != want || plain.Spans[0].Explicit {
+		t.Fatalf("plain internal span = %+v", plain.Spans)
+	}
+	if len(explicit.Spans) != 1 || explicit.Spans[0].Ref() != want || !explicit.Spans[0].Explicit {
+		t.Fatalf("explicit internal span = %+v", explicit.Spans)
+	}
+	if explicit.Output != "Release checklist" || strings.Contains(explicit.Output, "sidecar://") {
+		t.Fatalf("explicit output leaked destination: %q", explicit.Output)
+	}
+
+	for _, raw := range []string{
+		"sidecar://note/wrong-4jdj4e",
+		"sidecar://note/nt-4jdj4e#part",
+		"sidecar://note/nt-%00",
+		"sidecar://unknown/nt-4jdj4e",
+		"sidecar://note/nt-" + strings.Repeat("x", 20),
+	} {
+		got := ScanFrame(raw, FrameOptions{InternalNamespaces: opts})
+		if len(got.Spans) != 0 {
+			t.Errorf("%q became active: %+v", raw, got.Spans)
+		}
+	}
+}
+
 func TestScanFrameExplicitInternalWinsAndPreservesRenderedCoordinates(t *testing.T) {
 	open := "\x1b]8;;sidecar://note/nt-4jdj4e\x1b\\"
 	close := "\x1b]8;;\x1b\\"

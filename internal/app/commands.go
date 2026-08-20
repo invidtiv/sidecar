@@ -112,6 +112,14 @@ type NavigateToFileMsg struct {
 	Line int    // Optional 1-based line to reveal after loading
 }
 
+// NavigateToNoteMsg asks Notes to verify and select a stable note identity in
+// the named project. Notes focuses itself only after the note is confirmed to
+// exist, so a stale or foreign link cannot move the user.
+type NavigateToNoteMsg struct {
+	ID          string
+	ProjectRoot string
+}
+
 // ActivateTargetMsg is the one route for "jump to the thing this text names".
 // Every surface — a terminal link, the notification centre, a future CLI action
 // — sends this rather than reaching into a plugin, because only the app shell

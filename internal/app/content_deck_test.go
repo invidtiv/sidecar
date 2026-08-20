@@ -64,9 +64,63 @@ func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 	return []contentlink.Surface{{
 		ID: "preview", Rect: mouse.Rect{W: len(p.frame), H: 1},
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
-		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff),
+		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal),
 	}}
 }
+
+func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
+	root := t.TempDir()
+	open := "\x1b]8;;sidecar://note/nt-4jdj4e\x1b\\"
+	close := "\x1b]8;;\x1b\\"
+	want := contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: "nt-4jdj4e"}
+	for _, tc := range []struct {
+		name, frame string
+	}{
+		{name: "plain URI", frame: "sidecar://note/nt-4jdj4e"},
+		{name: "Markdown OSC label", frame: open + "Renamed title" + close},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: tc.frame}
+			m := appDeckTestModel(t, root, p)
+			frame := m.renderContent(120, 30)
+			if strings.Contains(frame, "\x1b]8;") {
+				t.Fatalf("rendered app frame leaked internal OSC: %q", frame)
+			}
+			h := m.currentContentDeck()
+			if h == nil || len(h.links) != 1 || h.links[0].Ref != want {
+				t.Fatalf("internal hits = %+v", h)
+			}
+			before := h.deck.Encode()
+			cmd := m.openAppContent(root, p.id, h.links[0].Ref)
+			if cmd == nil {
+				t.Fatal("note intent returned no navigation command")
+			}
+			got, ok := cmd().(NavigateToNoteMsg)
+			if !ok || got.ID != "nt-4jdj4e" || got.ProjectRoot != root {
+				t.Fatalf("navigation message = %#v", cmd())
+			}
+			if after := h.deck.Encode(); !reflect.DeepEqual(after, before) {
+				t.Fatalf("note intent mutated passive pane deck: before=%+v after=%+v", before, after)
+			}
+		})
+	}
+}
+
+func TestAppContentDeckStripsUnknownInternalOSCWithoutActivation(t *testing.T) {
+	root := t.TempDir()
+	frame := "\x1b]8;;sidecar://unknown/nt-4jdj4e\x1b\\visible label\x1b]8;;\x1b\\"
+	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: frame}
+	m := appDeckTestModel(t, root, p)
+	rendered := m.renderContent(120, 30)
+	h := m.currentContentDeck()
+	if strings.Contains(rendered, "sidecar://") || strings.Contains(rendered, "\x1b]8;") || !strings.Contains(rendered, "visible label") {
+		t.Fatalf("unknown OSC sanitization = %q", rendered)
+	}
+	if h == nil || len(h.links) != 0 {
+		t.Fatalf("unknown namespace activated: %+v", h.links)
+	}
+}
+
 func (p *deckHostTestPlugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	p.wheelX = msg.X
 	return p.wheelBoundary

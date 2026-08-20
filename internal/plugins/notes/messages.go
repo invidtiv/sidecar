@@ -1,5 +1,21 @@
 package notes
 
+// NoteNavigationResolvedMsg is the read-only existence check for an internal
+// note link. Notes moves/focuses only after this result and a matching list
+// reload both confirm the stable ID in the current project.
+type NoteNavigationResolvedMsg struct {
+	ID          string
+	ProjectRoot string
+	Note        *Note
+	Notes       []Note
+	Filter      NoteFilter
+	Err         error
+	Epoch       uint64
+	RequestID   uint64
+}
+
+func (m NoteNavigationResolvedMsg) GetEpoch() uint64 { return m.Epoch }
+
 // NotesLoadedMsg is sent when notes are loaded from the database.
 type NotesLoadedMsg struct {
 	Notes       []Note
