@@ -18,10 +18,11 @@ import (
 // SurfaceContext is the stable identity and resolution context for one deck.
 // BaseRef is used only by working-tree Diff viewers.
 type SurfaceContext struct {
-	Root    string
-	Surface string
-	BaseRef string
-	Epoch   uint64
+	Root        string
+	Surface     string
+	DiffSurface string
+	BaseRef     string
+	Epoch       uint64
 }
 
 // Placement is the geometry against which a new split is trialled. Boxes are
@@ -30,6 +31,7 @@ type Placement struct {
 	Box    panelayout.Box
 	Boxes  map[int]panelayout.Box
 	Floors panelayout.Floors
+	Split  string
 }
 
 // Status is the typed result of Open.
@@ -206,6 +208,24 @@ func (d *Deck) FocusLeaf(id int) bool {
 	return true
 }
 
+func (d *Deck) Leaf(kind panelayout.Kind) int {
+	if d == nil {
+		return 0
+	}
+	if leaf := panelayout.FirstOfKind(d.root, kind); leaf != nil {
+		return leaf.ID
+	}
+	return 0
+}
+
+func (d *Deck) SetRatio(splitID, ratio int) bool {
+	if d == nil {
+		return false
+	}
+	n := panelayout.Find(d.root, splitID)
+	return n != nil && n.Split != nil && panelayout.SetRatio(d.root, splitID, ratio)
+}
+
 // CycleFocus walks visible leaves in layout order and wraps.
 func (d *Deck) CycleFocus(delta int) int {
 	if d == nil || d.root == nil {
@@ -264,6 +284,7 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	if !ok {
 		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
 	}
+	plan = panelayout.ApplyAxisOverride(plan, placement.Split)
 
 	if plan.Retarget != 0 {
 		p := d.panes[plan.Retarget]
@@ -294,6 +315,9 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	if leafID <= 0 {
 		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
 	}
+	if leaf := panelayout.Find(d.root, leafID); leaf != nil {
+		leaf.ContentID = leafID
+	}
 	delete(d.hidden, kind)
 	p.leafID = leafID
 	d.panes[leafID] = p
@@ -302,6 +326,37 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	out := d.openTab(p, normalized, identity, true)
 	out.CreatedLeaf = true
 	return out
+}
+
+// ReplaceActive retargets the active tab without changing the leaf geometry.
+// Hosts use this for picker-style navigation where Enter replaces the current
+// document while Shift+Enter remains the ordinary append operation.
+func (d *Deck) ReplaceActive(ctx SurfaceContext, ref contentlink.Ref) Outcome {
+	if d == nil {
+		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: ref}
+	}
+	normalized, kind, identity, ok := normalizeRef(ctx, ref)
+	if !ok || kind == panelayout.Primary {
+		return Outcome{Status: StatusRefused, Refusal: RefusalInvalid, Ref: ref}
+	}
+	d.SetContext(ctx)
+	leafID := d.Leaf(kind)
+	p := d.panes[leafID]
+	if p == nil || p.active < 0 || p.active >= len(p.tabs) {
+		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
+	}
+	for i, t := range p.tabs {
+		if t.identity == identity {
+			p.active, d.focus = i, leafID
+			return d.openTab(p, normalized, identity, false)
+		}
+	}
+	d.nextTabID++
+	t := &tab{id: d.nextTabID, identity: identity, ref: normalized, view: newViewer(d.cfg, kind), ctx: ctx}
+	p.tabs[p.active] = t
+	d.focus = leafID
+	return Outcome{Status: StatusOpened, Ref: normalized, Kind: kind, LeafID: leafID,
+		TabID: t.id, CreatedTab: true, Command: d.start(t, t.view.load(ctx, normalized, int(t.id)))}
 }
 
 func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf bool) Outcome {
@@ -338,7 +393,7 @@ func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf 
 }
 
 func sameContext(a, b SurfaceContext) bool {
-	return a.Root == b.Root && a.Surface == b.Surface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
+	return a.Root == b.Root && a.Surface == b.Surface && a.DiffSurface == b.DiffSurface && a.BaseRef == b.BaseRef && a.Epoch == b.Epoch
 }
 
 func (d *Deck) start(t *tab, cmd tea.Cmd) tea.Cmd {
@@ -368,6 +423,43 @@ func (d *Deck) Apply(result Result) (tea.Cmd, bool) {
 	t.ref, t.identity = ref, identity
 	d.deduplicate(t)
 	return d.start(t, cmd), true
+}
+
+// ApplyBroadcast routes an existing viewer-owned broadcast message through
+// every tab. Viewer identities decide whether it applies.
+func (d *Deck) ApplyBroadcast(payload any) tea.Cmd {
+	if d == nil || payload == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, p := range d.panesAndHidden() {
+		for _, t := range append([]*tab(nil), p.tabs...) {
+			cmd, ok := t.view.apply(d.ctx, payload)
+			if !ok {
+				continue
+			}
+			ref, identity := t.view.reference(t.ref)
+			t.ref, t.identity = ref, identity
+			d.deduplicate(t)
+			if cmd != nil {
+				// Viewer follow-ups already carry their own model/epoch/surface
+				// identity and must remain broadcast messages for sibling hosts.
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (d *Deck) ConfigureViewers(configure func(panelayout.Kind, any)) {
+	if d == nil || configure == nil {
+		return
+	}
+	for _, p := range d.panesAndHidden() {
+		for _, t := range p.tabs {
+			configure(p.kind, t.view.model())
+		}
+	}
 }
 
 // Viewer returns the active host-independent viewer model for a passive leaf.
@@ -517,6 +609,10 @@ func (d *Deck) deduplicate(survivor *tab) {
 		if !contains {
 			continue
 		}
+		var activeTab *tab
+		if p.active >= 0 && p.active < len(p.tabs) {
+			activeTab = p.tabs[p.active]
+		}
 		for i := len(p.tabs) - 1; i >= 0; i-- {
 			if p.tabs[i] == survivor || p.tabs[i].identity != survivor.identity {
 				continue
@@ -529,8 +625,15 @@ func (d *Deck) deduplicate(survivor *tab) {
 			}
 		}
 		for i, candidate := range p.tabs {
+			if candidate == activeTab {
+				p.active = i
+				return
+			}
+		}
+		for i, candidate := range p.tabs {
 			if candidate == survivor {
 				p.active = i
+				break
 			}
 		}
 		return

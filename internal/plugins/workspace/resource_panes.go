@@ -2,6 +2,8 @@ package workspace
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -91,6 +93,15 @@ func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) {
 			res.tabs.SetResolver(resolve)
 		}
 	}
+	if p.contentDeck != nil {
+		p.contentDeck.ConfigureViewers(func(kind panelayout.Kind, model any) {
+			if kind == panelayout.Resource {
+				if view, ok := model.(*resourceview.Model); ok {
+					view.SetResolver(resolve)
+				}
+			}
+		})
+	}
 }
 
 func (p *Plugin) newResourcePane(leafID int, root, surface string) *resourcePane {
@@ -153,9 +164,14 @@ func (p *Plugin) openResourcePaneForSurfaceMode(root, surface string, ref resour
 	if p.paneRoot == nil || p.ctx == nil || !ref.Valid() {
 		return nil
 	}
-	return p.openContentPane(contentPaneOpen{kind: PaneResource, name: "Resource", reopen: p.reopenHiddenResourcePane,
-		attach:   func(id int, _ bool) tea.Cmd { return p.attachResourcePane(id, root, surface, ref, fromTerminal) },
-		attached: func(id int) bool { return p.resources[id] != nil }})
+	if fromTerminal {
+		p.clearTerminalSelection()
+		p.pointer.Abandon()
+	}
+	if p.viewMode == ViewModeInteractive {
+		p.exitInteractiveMode()
+	}
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
 }
 
 // attachResourcePane points the content behind leafID at ref. Focus, the
@@ -232,6 +248,14 @@ func (p *Plugin) handleResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if res == nil {
 		return false, nil
 	}
+	if p.contentDeck != nil {
+		switch msg.String() {
+		case "}":
+			return true, p.cycleWorkspaceDeckTab(panelayout.Resource, 1)
+		case "{":
+			return true, p.cycleWorkspaceDeckTab(panelayout.Resource, -1)
+		}
+	}
 	if handled, cmd := res.pane.HandleKey(msg.String()); handled {
 		return true, cmd
 	}
@@ -255,6 +279,9 @@ func (p *Plugin) closeActiveResourceTab() tea.Cmd {
 	if res == nil || leaf == nil {
 		return nil
 	}
+	if p.contentDeck != nil {
+		return p.closeWorkspaceDeckTab(panelayout.Resource)
+	}
 	empty, cmd := res.pane.CloseActiveTab()
 	if !empty {
 		return cmd
@@ -267,6 +294,9 @@ func (p *Plugin) selectResourceTab(res *resourcePane, idx int) tea.Cmd {
 		return nil
 	}
 	p.pointer.Abandon()
+	if p.contentDeck != nil {
+		return p.selectWorkspaceDeckTab(panelayout.Resource, idx)
+	}
 	return res.pane.SelectTab(idx)
 }
 

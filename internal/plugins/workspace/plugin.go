@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
@@ -225,6 +226,7 @@ type Plugin struct {
 	// feature is disabled. Phase 1 intentionally creates only one terminal leaf;
 	// document registry and load-request state arrive with the open-doc journey.
 	paneRoot        *PaneNode
+	contentDeck     *contentpanes.Deck
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
@@ -771,6 +773,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.resetTerminalModels()
 	p.applicationFocused = true
 	p.paneRoot = nil
+	p.contentDeck = nil
 	p.paneFocus = 0
 	p.paneNextID = 1
 	p.paneDragSplitID = 0

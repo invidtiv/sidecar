@@ -3,6 +3,7 @@ package overview
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -38,7 +39,7 @@ func (d *previewDiff) view() *workspacediff.View {
 }
 
 func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
-	workspace, ok := m.SelectedWorkspace()
+	_, ok := m.SelectedWorkspace()
 	if !ok {
 		return nil
 	}
@@ -48,30 +49,7 @@ func (m *Model) openPreviewDiff(target workspacediff.Target) tea.Cmd {
 	if !features.IsEnabled(features.WorkspaceDocPanes.Name) {
 		return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 	}
-	leafID, refusal := m.ensurePreviewPane(panelayout.Diff, "Diff")
-	if refusal != nil {
-		return refusal
-	}
-	if leafID == 0 {
-		return nil
-	}
-
-	wasInteractive := m.PreviewInteractive()
-	if m.preview.diff == nil {
-		m.preview.diff = &previewDiff{}
-	}
-	diff := m.preview.diff
-	diff.root = previewDiffPath(workspace)
-	diff.surface = workspace.ID
-	m.focusPreviewPane(panelayout.Diff)
-	load := m.openOrFocusPreviewDiff(diff, target, workspace.ID)
-
-	var cmds []tea.Cmd
-	if wasInteractive {
-		cmds = append(cmds, m.exitPreviewInteractive())
-	}
-	cmds = append(cmds, load, m.syncTerminalGeometry())
-	return tea.Batch(cmds...)
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Identity()}, "Diff")
 }
 
 func (m *Model) newPreviewDiffView(target workspacediff.Target) *workspacediff.View {
@@ -222,12 +200,15 @@ func (m *Model) applyPreviewDiffFile(msg workspacediff.CommitFileDiffMsg) tea.Cm
 }
 
 func (m *Model) closePreviewDiff() tea.Cmd {
-	if m.preview.diff == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	m.forgetPreviewDiff(m.preview.workspaceID)
-	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Diff); leaf != nil {
-		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Diff))
+	for m.preview.deck.Leaf(panelayout.Diff) != 0 {
+		m.preview.deck.CloseActive()
+	}
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
 	}
 	if m.preview.doc != nil {
 		m.focusPreviewPane(panelayout.Document)
@@ -253,34 +234,38 @@ func (m *Model) forgetPreviewDiff(workspaceID string) {
 }
 
 func (m *Model) closePreviewDiffTab() tea.Cmd {
-	if m.preview.diff == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	if len(m.preview.diff.tabs.Items) <= 1 {
-		return m.closePreviewDiff()
-	}
-	m.preview.diff.tabs.CloseActive()
-	return nil
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Diff))
+	m.preview.deck.CloseActive()
+	return m.finishPreviewDeckClose()
 }
 
 func (m *Model) cyclePreviewDiffTab(delta int) tea.Cmd {
-	if m.preview.diff == nil || len(m.preview.diff.tabs.Items) < 2 {
+	if m.preview.diff != nil && (m.preview.deck == nil || len(m.preview.diff.tabs.Items) != previewDeckTabCount(m.preview.deck, panelayout.Diff)) {
+		m.preview.diff.tabs.Cycle(delta)
 		return nil
 	}
-	m.preview.diff.tabs.Cycle(delta)
-	return nil
+	if m.preview.deck == nil || !m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Diff)) {
+		return nil
+	}
+	cmd := m.preview.deck.CycleTab(delta)
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
+	}
+	return cmd
 }
 
 func (m *Model) clickPreviewDiffTab(index int) tea.Cmd {
-	if m.preview.diff == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	m.focusPreviewPane(panelayout.Diff)
-	if index == m.preview.diff.tabs.Active {
-		return nil
+	cmd := m.preview.deck.SelectTab(m.preview.deck.Leaf(panelayout.Diff), index)
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
 	}
-	m.preview.diff.tabs.Select(index)
-	return nil
+	return cmd
 }
 
 func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string {

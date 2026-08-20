@@ -1523,6 +1523,9 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 			newRatio += action.DragDX * 100 / peer.W
 		}
 		SetRatio(p.paneRoot, p.paneDragSplitID, newRatio)
+		if p.contentDeck != nil {
+			p.contentDeck.SetRatio(p.paneDragSplitID, newRatio)
+		}
 	case regionPaneLeaf:
 		// A document selection. The leaf the gesture started in answers it,
 		// wherever the pointer has since travelled.

@@ -3,6 +3,7 @@ package overview
 import (
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resource"
@@ -157,25 +158,14 @@ func (m *Model) OpenPreviewResource(ref resourceview.Ref) tea.Cmd {
 }
 
 func (m *Model) openPreviewResourceRef(ref resourceview.Ref, fromTerminal bool) tea.Cmd {
-	workspace, ok := m.SelectedWorkspace()
+	_, ok := m.SelectedWorkspace()
 	if !ok || !ref.Valid() {
 		return nil
 	}
-	leafID, refusal := m.ensurePreviewPane(panelayout.Resource, "Resource")
-	if refusal != nil {
-		return refusal
-	}
-	if leafID == 0 {
-		return nil
-	}
-	res := m.ensurePreviewResource(workspace.ID)
-	var open tea.Cmd
 	if fromTerminal {
-		open = res.pane.ActivateFromTerminal(ref)
-	} else {
-		open = res.pane.Activate(ref)
+		m.clearPreviewSelection()
 	}
-	return tea.Batch(open, m.syncTerminalGeometry())
+	return m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindResource, Provider: ref.Instance, Matcher: ref.Matcher, Value: ref.Locator}, "Resource")
 }
 
 // ensurePreviewResource returns the pane bound to this workspace row, building
@@ -250,12 +240,15 @@ func (m *Model) applyPreviewResourceResolved(msg previewResourceResolvedMsg) {
 }
 
 func (m *Model) closePreviewResource() tea.Cmd {
-	if m.preview.resource == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	m.forgetPreviewResource(m.preview.workspaceID)
-	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Resource); leaf != nil {
-		m.preview.paneRoot, m.preview.paneFocus = panelayout.Close(m.preview.paneRoot, leaf.ID)
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Resource))
+	for m.preview.deck.Leaf(panelayout.Resource) != 0 {
+		m.preview.deck.CloseActive()
+	}
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
 	}
 	if m.preview.doc != nil {
 		m.focusPreviewPane(panelayout.Document)
@@ -284,29 +277,26 @@ func (m *Model) forgetPreviewResource(workspaceID string) {
 }
 
 func (m *Model) closePreviewResourceTab() tea.Cmd {
-	res := m.preview.resource
-	if res == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
-	if res.tabs.Len() <= 1 {
-		return m.closePreviewResource()
-	}
-	empty, cmd := res.pane.CloseActiveTab()
-	if empty {
-		return tea.Batch(cmd, m.closePreviewResource())
-	}
-	return cmd
+	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Resource))
+	m.preview.deck.CloseActive()
+	return m.finishPreviewDeckClose()
 }
 
 func (m *Model) clickPreviewResourceTab(index int) tea.Cmd {
-	res := m.preview.resource
-	if res == nil {
+	if m.preview.deck == nil {
 		return nil
 	}
 	// SelectTab owns focus and resolves an armed tab even when it is already
 	// selected. Skipping it for the active index stranded re-armed tabs after
 	// a workspace-row switch.
-	return res.pane.SelectTab(index)
+	cmd := m.preview.deck.SelectTab(m.preview.deck.Leaf(panelayout.Resource), index)
+	if ctx, ok := m.previewDeckContext(); ok {
+		m.syncPreviewDeckProjection(ctx)
+	}
+	return cmd
 }
 
 func (m *Model) renderPreviewResource(res *previewResource, box termpreview.Box) string {

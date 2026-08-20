@@ -7,11 +7,13 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
@@ -191,19 +193,7 @@ func (p *Plugin) openDocPaneFileForSurface(root, surface, rel string, line int, 
 	if rel == "" || rel == "." {
 		return nil
 	}
-	// The open dance itself is the shared helper's; what stays here is the one
-	// thing no other kind has — ownership of an already-opened *os.File. The
-	// attach callback clears the captured handle the moment a load takes it, so
-	// the deferred close above cannot double-close a file docview now owns.
-	return p.openContentPane(contentPaneOpen{kind: PaneDoc, name: "Document", reopen: p.reopenHiddenDocPane,
-		attach: func(id int, fresh bool) tea.Cmd {
-			cmd, consumed := p.attachDocPane(id, root, surface, rel, line, file, fresh)
-			if consumed {
-				file = nil
-			}
-			return cmd
-		},
-		attached: func(id int) bool { return p.docs[id] != nil && p.docs[id].view() != nil }})
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindFile, Value: rel, Line: line}, "Document")
 }
 
 // attachDocPane points the content behind leafID at rel and reports whether it
@@ -319,6 +309,9 @@ func (p *Plugin) closeActiveDocTab() tea.Cmd {
 	if p.guardDocEdit(doc, func() tea.Cmd { return p.closeActiveDocTab() }) {
 		return nil
 	}
+	if p.contentDeck != nil {
+		return p.closeWorkspaceDeckTab(panelayout.Document)
+	}
 	if len(doc.tabs.Items) <= 1 {
 		return p.closeDocPane()
 	}
@@ -418,6 +411,9 @@ func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	if hit.Index == doc.tabs.Active {
 		return nil
 	}
+	if p.contentDeck != nil {
+		return p.selectWorkspaceDeckTab(panelayout.Document, hit.Index)
+	}
 	cmd, _ := p.selectDocTab(doc, leaf.ContentID, hit.Index, 0, nil)
 	p.saveSelectionState()
 	return cmd
@@ -427,6 +423,9 @@ func (p *Plugin) cycleActiveDocTab(delta int) tea.Cmd {
 	doc, _ := p.activeDocPane()
 	if doc == nil || len(doc.tabs.Items) < 2 {
 		return nil
+	}
+	if p.contentDeck != nil {
+		return p.cycleWorkspaceDeckTab(panelayout.Document, delta)
 	}
 	p.closeDocInfo()
 	doc.tabs.Cycle(delta)
@@ -1007,6 +1006,10 @@ func (p *Plugin) docTerminalResizeCmds() []tea.Cmd {
 }
 
 func (p *Plugin) applyDocLoaded(msg docview.LoadedMsg) {
+	if p.contentDeck != nil {
+		_ = p.applyWorkspaceDeckBroadcast(msg)
+		return
+	}
 	doc := p.docs[msg.ModelID]
 	if doc == nil || p.ctx == nil || msg.Epoch != p.ctx.Epoch {
 		return
@@ -1211,6 +1214,9 @@ func (p *Plugin) resizeFocusedDoc(delta int) tea.Cmd {
 		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio+delta)
 	} else {
 		SetRatio(p.paneRoot, parent.ID, parent.Split.Ratio-delta)
+	}
+	if p.contentDeck != nil {
+		p.contentDeck.SetRatio(parent.ID, parent.Split.Ratio)
 	}
 	p.saveSelectionState()
 	return p.resizeDocTerminalCmd()
@@ -1652,6 +1658,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.issues = make(map[int]*issuePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
+	p.contentDeck = nil
 	p.hiddenPaneLayout = nil
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}

@@ -156,6 +156,12 @@ func TestContentKindsShareTheRetargetRule(t *testing.T) {
 			if leaf == nil || tabs != 1 {
 				t.Fatalf("first open = leaf %#v tabs=%d, want one leaf with one tab", leaf, tabs)
 			}
+			if p.contentDeck == nil || p.contentDeck.Leaf(tc.kind) != leaf.ID {
+				t.Fatalf("first open was not owned by the shared deck: deck=%p leaf=%#v", p.contentDeck, leaf)
+			}
+			if items, active := p.contentDeck.Tabs(leaf.ID); len(items) != 1 || active != 0 {
+				t.Fatalf("shared deck tabs = %d active=%d, want one active tab", len(items), active)
+			}
 			first := leaf.ID
 			if p.paneFocus != first || p.activePane != PanePreview {
 				t.Fatalf("first open left focus=%d active=%v, want the new leaf focused", p.paneFocus, p.activePane)
@@ -168,6 +174,9 @@ func TestContentKindsShareTheRetargetRule(t *testing.T) {
 			}
 			if tabs != 2 {
 				t.Fatalf("second open = %d tabs, want the second target appended", tabs)
+			}
+			if items, active := p.contentDeck.Tabs(first); len(items) != 2 || active != 1 {
+				t.Fatalf("shared deck after retarget = %d tabs active=%d, want two tabs with the second active", len(items), active)
 			}
 			if got := len(p.contentLeafIDs()); got != 1 {
 				t.Fatalf("second open produced %d content leaves, want one", got)

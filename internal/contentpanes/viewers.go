@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -21,6 +22,9 @@ import (
 type Config struct {
 	Renderer         *markdown.Renderer
 	ResourceResolver resourceview.Resolver
+	// ConfigureViewer attaches host presentation behavior (for example issue
+	// navigation handlers or Diff paint state). It must remain free of I/O.
+	ConfigureViewer func(kind panelayout.Kind, model any)
 }
 
 type viewer interface {
@@ -34,21 +38,27 @@ type viewer interface {
 }
 
 func newViewer(cfg Config, kind panelayout.Kind) viewer {
+	var v viewer
 	switch kind {
 	case panelayout.Document:
-		return &documentViewer{view: docview.New(cfg.Renderer)}
+		v = &documentViewer{view: docview.New(cfg.Renderer)}
 	case panelayout.Issue:
-		return &issueViewer{view: issueview.New(cfg.Renderer)}
+		v = &issueViewer{view: issueview.New(cfg.Renderer)}
 	case panelayout.Diff:
-		return &diffViewer{view: &workspacediff.View{}}
+		v = &diffViewer{view: &workspacediff.View{}}
 	case panelayout.Resource:
-		return &resourceViewer{view: resourceview.New(cfg.Renderer, cfg.ResourceResolver)}
+		v = &resourceViewer{view: resourceview.New(cfg.Renderer, cfg.ResourceResolver)}
 	default:
 		panic("contentpanes: viewer requested for non-content kind")
 	}
+	if cfg.ConfigureViewer != nil {
+		cfg.ConfigureViewer(kind, v.model())
+	}
+	return v
 }
 
 func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, panelayout.Kind, string, bool) {
+	_ = ctx
 	ref.Value = strings.TrimSpace(ref.Value)
 	switch ref.Kind {
 	case contentlink.KindURL:
@@ -68,7 +78,10 @@ func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, pan
 		return ref, panelayout.Primary, ref.Namespace + "\x00" + ref.Value, true
 	case contentlink.KindFile:
 		path := filepath.Clean(ref.Value)
-		if path == "." || path == "" || filepath.IsAbs(path) || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+		// Absolute refs are admitted because the host owns path resolution and
+		// may deliberately preview a validated file from another worktree in
+		// place. Relative traversal is never a valid resolved host reference.
+		if !filepath.IsAbs(path) && (path == "." || path == "" || path == ".." || strings.HasPrefix(path, ".."+string(filepath.Separator))) {
 			return contentlink.Ref{}, panelayout.Document, "", false
 		}
 		ref.Value = filepath.ToSlash(path)
@@ -104,7 +117,11 @@ type documentViewer struct{ view *docview.Model }
 
 func (v *documentViewer) model() any { return v.view }
 func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
-	return v.view.Load(id, ctx.Root, ref.Value, ref.Line, ctx.Epoch)
+	cmd := v.view.Load(id, ctx.Root, ref.Value, ref.Line, ctx.Epoch)
+	// Load defaults every line-zero target to rendered. The shared content rule
+	// is narrower: only Markdown opens rendered; source and plain text stay raw.
+	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
+	return cmd
 }
 func (v *documentViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, ref.Value, ctx.Epoch)
@@ -169,11 +186,15 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 	if target.Kind == workspacediff.TargetCommit {
 		v.view.Focus = workspacediff.FocusCommitFiles
 	}
-	v.view.BindGeneration(ctx.Root, ctx.Surface, ctx.Epoch, uint64(id))
+	surface := ctx.DiffSurface
+	if surface == "" {
+		surface = ctx.Surface
+	}
+	v.view.BindGeneration(ctx.Root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateLoading
 	switch target.Kind {
 	case workspacediff.TargetWorkingTree:
-		return workspacediff.LoadSnapshotCmdBound(ctx.Root, ctx.BaseRef, ctx.Surface, ctx.Epoch, target.Identity(), uint64(id))
+		return workspacediff.LoadSnapshotCmdBound(ctx.Root, ctx.BaseRef, surface, ctx.Epoch, target.Identity(), uint64(id))
 	case workspacediff.TargetRange:
 		return v.view.LoadRange()
 	case workspacediff.TargetCommit:
@@ -185,7 +206,11 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	target, _ := workspacediff.ParseSpec(ref.Value)
 	v.view.Target = target
-	v.view.BindGeneration(ctx.Root, ctx.Surface, ctx.Epoch, uint64(id))
+	surface := ctx.DiffSurface
+	if surface == "" {
+		surface = ctx.Surface
+	}
+	v.view.BindGeneration(ctx.Root, surface, ctx.Epoch, uint64(id))
 	v.view.State = workspacediff.LoadStateUnknown
 	v.view.Scope = workspacediff.ParseScope(state.Scope)
 	v.view.ViewMode = workspacediff.ParseViewMode(state.Mode)
@@ -195,14 +220,18 @@ func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state 
 	}
 }
 func (v *diffViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
-	if v.view.State == workspacediff.LoadStateUnknown {
+	if v.view.State == workspacediff.LoadStateUnknown || v.view.State == workspacediff.LoadStateLoading {
 		return v.load(ctx, ref, id)
 	}
 	return nil
 }
 func (v *diffViewer) apply(ctx SurfaceContext, msg any) (tea.Cmd, bool) {
+	expectedSurface := ctx.DiffSurface
+	if expectedSurface == "" {
+		expectedSurface = ctx.Surface
+	}
 	accepts := func(epoch uint64, surface, identity string) bool {
-		return epoch == ctx.Epoch && surface == ctx.Surface && identity == v.view.Target.Identity()
+		return epoch == ctx.Epoch && surface == expectedSurface && identity == v.view.Target.Identity()
 	}
 	switch m := msg.(type) {
 	case workspacediff.SnapshotMsg:

@@ -188,7 +188,8 @@ func TestOverviewCommitTabApplyLeavesLoading(t *testing.T) {
 	run(t, m, func() tea.Msg {
 		return workspacediff.CommitDetailMsg{
 			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "c:abc1234",
-			Hash: "abc1234",
+			Binding: view.Binding,
+			Hash:    "abc1234",
 			Commit: &workspacediff.CommitDetail{
 				Hash: "abc1234", ShortHash: "abc1234", Subject: "one",
 				Files: []workspacediff.CommitFile{{Path: "a.go"}},
@@ -217,7 +218,8 @@ func TestOverviewRangeTabApplyRefusesSnapshot(t *testing.T) {
 	run(t, m, func() tea.Msg {
 		return workspacediff.RangeMsg{
 			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "r:aaa1111..bbb2222",
-			Raw: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\n+hi\n",
+			Binding: view.Binding,
+			Raw:     "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\n+hi\n",
 		}
 	})
 	if view.State == workspacediff.LoadStateLoading || len(view.Files) != 1 {
@@ -226,6 +228,7 @@ func TestOverviewRangeTabApplyRefusesSnapshot(t *testing.T) {
 	run(t, m, func() tea.Msg {
 		return workspacediff.SnapshotMsg{
 			Epoch: view.Epoch, WorkspaceID: view.WorkspaceID, Identity: "r:aaa1111..bbb2222",
+			Binding:  view.Binding,
 			Snapshot: &workspacediff.Snapshot{State: workspacediff.LoadStateReady, WorkingTree: "wt"},
 		}
 	})

@@ -3,8 +3,10 @@ package workspace
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -69,9 +71,7 @@ func (p *Plugin) openIssuePaneForSurface(root, surface, issueID string) tea.Cmd 
 	if p.paneRoot == nil || p.ctx == nil || issueID == "" {
 		return nil
 	}
-	return p.openContentPane(contentPaneOpen{kind: PaneIssue, name: "Issue", reopen: p.reopenHiddenIssuePane,
-		attach:   func(id int, _ bool) tea.Cmd { return p.attachIssuePane(id, root, surface, issueID) },
-		attached: func(id int) bool { return p.issues[id] != nil && p.issues[id].view() != nil }})
+	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindIssue, Value: issueID}, "Issue")
 }
 
 // attachIssuePane points the content behind leafID at issueID and returns its
@@ -241,6 +241,9 @@ func (p *Plugin) cycleActiveIssueTab(delta int) tea.Cmd {
 	if issue == nil || len(issue.tabs.Items) < 2 {
 		return nil
 	}
+	if p.contentDeck != nil && len(issue.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Issue) {
+		return p.cycleWorkspaceDeckTab(panelayout.Issue, delta)
+	}
 	issue.tabs.Cycle(delta)
 	p.saveSelectionState()
 	return p.ensureActiveIssueTabLoaded(issue)
@@ -250,6 +253,9 @@ func (p *Plugin) closeActiveIssueTab() tea.Cmd {
 	issue, leaf := p.focusedIssuePane()
 	if issue == nil {
 		return nil
+	}
+	if p.contentDeck != nil && len(issue.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Issue) {
+		return p.closeWorkspaceDeckTab(panelayout.Issue)
 	}
 	if len(issue.tabs.Items) <= 1 {
 		return p.closeIssuePane(leaf.ID)
@@ -270,6 +276,9 @@ func (p *Plugin) selectIssueTab(issue *issuePane, leafID, idx int) tea.Cmd {
 	}
 	if idx == issue.tabs.Active {
 		return p.ensureActiveIssueTabLoaded(issue)
+	}
+	if p.contentDeck != nil {
+		return p.selectWorkspaceDeckTab(panelayout.Issue, idx)
 	}
 	issue.tabs.Select(idx)
 	p.saveSelectionState()
