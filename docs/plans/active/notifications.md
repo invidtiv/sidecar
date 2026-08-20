@@ -729,6 +729,57 @@ No defects found in these three; nothing changed. What was checked:
   surface's `FocusContext` switch. Toasts still register no focus and no
   surface gained a focus-stealing path.
 
+#### Final proof run of polish round 2 (2026-08-19)
+
+Driven headlessly through `scripts/tmux-drive.sh` at 200x50 on an isolated tmux
+server *and* state tree (`paths` checked first — everything under
+`/private/tmp/scproof`, nothing under `~/.local/state/sidecar` or
+`~/.config/sidecar` — and `stop` at the end). Notifications were posted through
+the same isolated binary (`sidecar -config <run>/config/config.json notify
+post`), and pointer input was raw SGR mouse sequences sent to the host pane.
+Notes and conversations, which are not in this project's default tab set, were
+brought on screen for the run with `{"features":{"flags":{"notes_plugin":true,
+"conversations_plugin":true}},"plugins":{"conversations":{"enabled":true}}}` in
+the throwaway config. **All four items pass; no code changed.**
+
+- **Toast.** The block is exactly border · title · rule · body · border:
+  `│ ◆ Agent finished                 ▪▪▪▪▪ × │` over
+  `│ ────…──── │` and `│ Body line for the toast │`. No key row, no countdown
+  row; the meter sits in the title row left of the `×`. A sticky `waiting`
+  toast draws `│ ? Waiting for input                    × │` — the `×` alone.
+  Reveal cadence, sampled by capturing the pane in a tight loop and stamping
+  each frame: the block grew 3 → 4 → 5 rows at +67ms and +64ms, i.e. the 67ms
+  step, not 90ms. The countdown still burns one cell per second
+  (`▪▪▪▪▪` → `▫▪▪▪▪` → `▫▫▪▪▪` over ~2s off the 1s heartbeat).
+- **Toast close button, three-stack.** With Charlie/Bravo/Alpha stacked, a
+  click on the `×` of the *middle* block (col 197, its own row) removed Bravo
+  and left Charlie and Alpha in place, header indicator `●3 → ●2`.
+- **Centre.** Single click on an entry selects and marks read and posts no
+  toast; a double-click on the same cell re-showed that entry as a toast
+  (`◆ Alpha one … ×` appeared above the existing stack). Clicking the `×` on
+  the `● SYSTEM` header cleared the SYSTEM group and left every AGENTS entry
+  untouched.
+- **Row background.** Measured by walking the captured SGR stream and recording
+  the background at each visible cell. A selected centre entry carries
+  `48;2;34;39;44` continuously across cols 165–198 on *both* of its rows with
+  no gaps, and the row above it carries none. A selected notes row carries
+  `48;2;23;27;31` continuously across cols 3–56 while keeping its own
+  foreground — `\x1b[1m\x1b[38;2;192;152;47m\x1b[48;2;23;27;31m> * \x1b[0m…`,
+  the background re-asserted after the inner `[0m`, which is the whole point of
+  the fix. Unselected notes rows carry no background at all.
+- **Tab parity, centre open** (active pane read from the gold `191;148;47`
+  border): notes → list → preview → **centre** → list (period 3); git → sidebar
+  → diff → **centre** → sidebar (period 3); files with nothing previewed →
+  tree → **centre** → tree (period 2, the "not drawn is not a stop" rule);
+  conversations → sidebar → main → **centre** (period 3). With the centre
+  closed, conversations alternates sidebar ↔ main exactly as before. With the
+  file browser's `/` search open, `tab` changes nothing — the search keeps it.
+- **Observed, out of scope, not fixed:** while the centre holds focus, a
+  plugin-level key with no centre binding still reaches the plugin — pressing
+  `/` on the files tab opens the file browser's search from a focused centre.
+  That is app-wide key routing under `SetFocusHeldOutsidePanes`, not a polish
+  round 2 behaviour, and changing it is a routing decision rather than a fix.
+
 ## Bottom-status sweep + ship — after polish round 2, before Phases 4/5
 
 Marcus (2026-08-19): after polish round 2, ALL remaining bottom-of-screen
