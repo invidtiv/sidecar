@@ -254,17 +254,6 @@ func (m *Model) activeCreateModal() *modal.Modal {
 	return m.createModal
 }
 
-func (m *Model) createRenderSize() (int, int) {
-	w, h := m.width, m.height
-	if w < 1 {
-		w = 80
-	}
-	if h < 1 {
-		h = 24
-	}
-	return w, h
-}
-
 func (m *Model) createProjectItems() []workspacecreate.ProjectItem {
 	items := make([]workspacecreate.ProjectItem, 0, len(m.projects))
 	for _, project := range m.projects {
