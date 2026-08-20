@@ -89,11 +89,13 @@ var (
 	}
 
 	// PluginContentPanes enables the app-owned passive content deck around
-	// eligible project plugins. It remains opt-in until Files and Git complete
-	// the real-app parity journeys.
+	// eligible capability-driven plugins. Files, Git, Notes, and the embedded
+	// td/Tasks focus hosts have completed their parity journeys; td/Tasks still
+	// expose no link surface until their owning packages publish safe passive
+	// text rectangles.
 	PluginContentPanes = Feature{
 		Name:        "plugin_content_panes",
-		Default:     false,
+		Default:     true,
 		Description: "Open passive content panes beside eligible project plugins",
 	}
 

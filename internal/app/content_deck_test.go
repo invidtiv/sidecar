@@ -485,6 +485,21 @@ func TestAppContentDeckLeavesTabWithPrimarySubmodeThatHasNoFocusStops(t *testing
 	}
 }
 
+func TestProjectWorkspaceRemainsItsExistingUnwrappedPaneHost(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: workspacePluginID, focus: "preview", frame: "workspace"}
+	m := appDeckTestModel(t, root, p)
+	if h := m.activeContentDeck(); h != nil {
+		t.Fatalf("project Workspace was wrapped in a second app deck: %+v", h)
+	}
+	if got := m.renderContent(120, 30); !strings.Contains(got, "workspace") {
+		t.Fatalf("existing Workspace host did not render directly: %q", got)
+	}
+	if len(m.contentDecks) != 0 {
+		t.Fatalf("Workspace created app deck state: %+v", m.contentDecks)
+	}
+}
+
 func TestGlobalTasksUsesOneDeckAcrossProjectSwitches(t *testing.T) {
 	rootA := t.TempDir()
 	rootB := t.TempDir()
