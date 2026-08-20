@@ -13,7 +13,6 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
-	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/filebrowser"
@@ -173,7 +172,6 @@ type Plugin struct {
 	writeExecutor      gitWriteExecutor
 	nextOperationID    uint64
 	activeOperation    *operationRequest
-	operationError     string
 	operationSelection selectionIdentity
 	auxWriteInProgress bool // discard, stash, and branch mutations
 
@@ -480,10 +478,8 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.activeOperation = nil
 		if msg.Err != nil {
 			p.operationSelection = selectionIdentity{}
-			p.operationError = msg.Err.Error()
-			return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, titleCase(string(msg.Kind))+" failed: "+msg.Err.Error())
+			return p, remoteFailureAlert(titleCase(string(msg.Kind)), msg.Err)
 		}
-		p.operationError = ""
 		return p, p.refresh()
 
 	case DiscardResultMsg:
@@ -845,7 +841,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.errorOfferPull = true
 		}
 		p.showErrorModal("Push Failed", msg.Err)
-		return p, tea.Batch(p.loadRecentCommits(), appmsg.Alert(notify.SourceSession, notify.SeverityError, "Push failed: "+msg.Err.Error()))
+		return p, tea.Batch(p.loadRecentCommits(), remoteFailureAlert("Push", msg.Err))
 
 	case StashResultMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -919,7 +915,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		p.fetchInProgress = false
 		p.showErrorModal("Fetch Failed", msg.Err)
-		return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Fetch failed: "+msg.Err.Error())
+		return p, remoteFailureAlert("Fetch", msg.Err)
 
 	case PullSuccessMsg:
 		if plugin.IsStale(p.ctx, msg) {
@@ -948,7 +944,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		p.showErrorModal("Pull Failed", msg.Err)
-		return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Pull failed: "+msg.Err.Error())
+		return p, remoteFailureAlert("Pull", msg.Err)
 
 	case StashErrorMsg:
 		p.showErrorModal("Stash Failed", msg.Err)
@@ -1743,3 +1739,38 @@ type StashPopConfirmMsg struct {
 }
 
 // updateConfirmStashPop handles key events in the confirm stash pop modal.
+
+// remoteFailureAlert files a git failure as a session-source error
+// notification: a short title, with the first meaningful line of git's own
+// output as the body. The full text still belongs to the error modal — the
+// notification is the record that it happened, not a second dump of it.
+func remoteFailureAlert(action string, err error) tea.Cmd {
+	return func() tea.Msg {
+		post := notify.Alert(notify.SourceSession, notify.SeverityError, action+" failed")
+		post.Notification.Body = firstMeaningfulLine(err.Error())
+		return post
+	}
+}
+
+// firstMeaningfulLine picks the line of a git error that actually says what
+// went wrong, preferring git's own diagnostic markers over the transport
+// preamble ("To ../remote.git"), and falling back to the first non-blank line.
+func firstMeaningfulLine(s string) string {
+	var first string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if first == "" {
+			first = line
+		}
+		if strings.HasPrefix(line, "! ") || strings.HasPrefix(line, "error:") || strings.HasPrefix(line, "fatal:") {
+			return line
+		}
+	}
+	if first != "" {
+		return first
+	}
+	return strings.TrimSpace(s)
+}

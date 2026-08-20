@@ -98,7 +98,6 @@ func (p *Plugin) beginWrite(kind operationKind, args []string, selection selecti
 		Args:  append([]string(nil), args...),
 	}
 	p.activeOperation = &req
-	p.operationError = ""
 	p.operationSelection = selection
 	executor := p.writeExecutor
 	if executor == nil {

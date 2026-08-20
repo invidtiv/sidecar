@@ -812,6 +812,42 @@ Ship checklist: sweep lands with review; merge main → branch, resolve,
 full suite + one headless smoke; merge branch → main; release per
 `docs/guides/active/releasing.md`.
 
+#### Bottom-status sweep as built (2026-08-19) — **done**
+
+Items 1–3 landed; items 4 and 5 stand as written (untouched).
+
+- **Notes (1).** `FooterStatus` lost only the `saveInFlight ||
+  exportSaveInFlight` branch; `saveErr` and `recoveryErr` still claim the
+  footer. The editor header's `Saved`/`Unsaved*` is the save indicator.
+- **Git success (2).** `Push`/`Fetch`/`Pull` success are now
+  `app.ShowFlash("Pushed"/"Fetched"/"Pulled")`, matching the stash path. The
+  sidebar status block is **in-flight only** (`activeOperation` progress label,
+  then `Pushing…/Fetching…/Pulling…`); the `✓ Pushed/Fetched/Pulled` rows and
+  their whole tick plumbing are gone — fields `pushSuccess`/`pushSuccessTime`/
+  `fetchSuccess`/`pullSuccess`, the three `*SuccessClearMsg` types and
+  handlers, and the three `clear*AfterDelay` helpers.
+- **Git errors (3).** The sidebar error one-liners are gone and the failures
+  are notifications: `session`/`error`, per the Phase 1.5 re-tier rule for
+  terminal errors. The push/fetch/pull error **modals stay** — the notification
+  is the record that it happened, the modal is the full text. The old
+  `app.ToastMsg` on `operationResultMsg` (which spoke as `system`) became the
+  same session/error alert. Dead state removed with the rendering:
+  `pushError`/`fetchError`/`pullError` **and** `operationError`, which nothing
+  read once the sidebar line went.
+- **Two lines, not a transcript.** Git failures file through
+  `remoteFailureAlert` (`gitstatus/plugin.go`): short title (`Push failed`),
+  body = `firstMeaningfulLine` of git's output, preferring `! …`/`error:`/
+  `fatal:` over the `To ../remote.git` preamble. Filing the raw multi-line
+  stderr as the *title* was the review fix.
+- **Geometry.** `commitSectionCapacity` reserves the status row on the
+  in-flight flags alone, so the removed rows' line is genuinely reclaimed.
+- **Proof (headless, isolated repo + bare remote).** Stage-all → commit → push:
+  `● Pushed` flash top-right, no sidebar line. Rejected push: session/error
+  toast (`Push failed` / `! [rejected] HEAD -> main (fetch first)`) plus the
+  Push Failed modal, entry under `✓ SESSIONS` in the centre, no sidebar echo.
+  Fetch: ahead/behind updates, no `✓ Fetched` row. Notes edit + `ctrl+s`: no
+  `notes: saving…` in the footer, header goes `Unsaved*` → `Saved`.
+
 ## Enhancements
 
 Ordered so each phase ships something visible and none blocks the next.

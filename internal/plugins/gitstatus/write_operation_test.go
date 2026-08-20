@@ -293,8 +293,13 @@ func TestWriteFailurePreservesSnapshotAndReportsDetail(t *testing.T) {
 	if post.Notification.Source != notify.SourceSession || post.Notification.Severity != notify.SeverityError {
 		t.Fatalf("write failure notification = %s/%s, want session/error", post.Notification.Source, post.Notification.Severity)
 	}
-	if !strings.Contains(post.Notification.Title, "hook rejected the file") || !strings.Contains(p.operationError, "hook rejected the file") {
-		t.Fatalf("failure detail missing: alert=%q state=%q", post.Notification.Title, p.operationError)
+	// The title stays a short headline; the transcript belongs to the body
+	// (and, in full, to the error modal).
+	if strings.ContainsAny(post.Notification.Title, "\n") || strings.Contains(post.Notification.Title, "hook rejected") {
+		t.Fatalf("failure title dumped the transcript: %q", post.Notification.Title)
+	}
+	if !strings.Contains(post.Notification.Body, "hook rejected the file") {
+		t.Fatalf("failure detail missing: alert=%q/%q", post.Notification.Title, post.Notification.Body)
 	}
 }
 
