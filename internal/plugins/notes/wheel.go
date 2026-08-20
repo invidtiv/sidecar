@@ -87,6 +87,8 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 // open, which lets the ordinary panes answer.
 func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
 	switch {
+	case p.showSetupModal:
+		return p.setupModal != nil && p.setupModal.WheelAtBoundary(msg, p.setupMouseHandler), true
 	case p.edit.ShowExitConfirm:
 		// A fixed three-option dialog that absorbs every mouse event without
 		// scroll state of its own.

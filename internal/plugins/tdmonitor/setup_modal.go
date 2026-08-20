@@ -2,7 +2,6 @@ package tdmonitor
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -11,12 +10,13 @@ import (
 	"github.com/marcus/td/pkg/monitor/modal"
 	"github.com/marcus/td/pkg/monitor/mouse"
 
-	"github.com/marcus/sidecar/internal/tdroot"
+	"github.com/marcus/sidecar/internal/tdsetup"
 )
 
 // SetupModel handles the setup modal when td is on PATH but not initialized in project.
 type SetupModel struct {
 	baseDir string
+	epoch   uint64
 	width   int
 	height  int
 
@@ -29,16 +29,14 @@ type SetupModel struct {
 	installInstructions bool
 }
 
-// SetupCompleteMsg is sent when setup completes successfully.
-type SetupCompleteMsg struct{}
-
 // SetupSkippedMsg is sent when user skips setup.
 type SetupSkippedMsg struct{}
 
 // NewSetupModel creates a new setup modal model.
-func NewSetupModel(baseDir string) *SetupModel {
+func NewSetupModel(baseDir string, epoch uint64) *SetupModel {
 	m := &SetupModel{
 		baseDir:             baseDir,
+		epoch:               epoch,
 		mouseHandler:        mouse.NewHandler(),
 		initDB:              true,
 		installInstructions: true,
@@ -109,30 +107,17 @@ func (m *SetupModel) handleAction(action string) tea.Cmd {
 	return nil
 }
 
-// SetupErrorMsg is sent when setup encounters a blocking error.
-type SetupErrorMsg struct {
-	Error string
-}
-
 // performSetup executes the selected setup options.
 func (m *SetupModel) performSetup() tea.Cmd {
 	return func() tea.Msg {
-		// Check for .todos file conflict before running td init (#194)
 		if m.initDB {
-			if err := tdroot.CheckTodosConflict(m.baseDir); err != nil {
-				return SetupErrorMsg{
-					Error: "A .todos file exists where a directory is expected. " +
-						"Remove or rename it (mv .todos .todos.bak) and try again.",
+			if err := tdsetup.Initialize(m.baseDir); err != nil {
+				return tdsetup.ResultMsg{
+					ProjectRoot: m.baseDir,
+					Origin:      tdsetup.OriginTDMonitor,
+					Epoch:       m.epoch,
+					Err:         err,
 				}
-			}
-		}
-
-		if m.initDB {
-			// Call td init via exec
-			cmd := exec.Command("td", "init")
-			cmd.Dir = m.baseDir
-			if err := cmd.Run(); err != nil {
-				return SetupErrorMsg{Error: "td init failed: " + err.Error()}
 			}
 		}
 
@@ -143,7 +128,7 @@ func (m *SetupModel) performSetup() tea.Cmd {
 			}
 		}
 
-		return SetupCompleteMsg{}
+		return tdsetup.ResultMsg{ProjectRoot: m.baseDir, Origin: tdsetup.OriginTDMonitor, Epoch: m.epoch}
 	}
 }
 

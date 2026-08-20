@@ -12,6 +12,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tdroot"
+	"github.com/marcus/sidecar/internal/tdsetup"
 )
 
 func TestNew(t *testing.T) {
@@ -401,5 +402,32 @@ func TestMonitorReadyWithStaleEpochIsDropped(t *testing.T) {
 	}
 	if !p.loadingModel {
 		t.Error("a stale message should not clear the loading state")
+	}
+}
+
+func TestNotesInitializationSuccessRefreshesTDMonitor(t *testing.T) {
+	root := tempTdProject(t)
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir:     root,
+		ProjectRoot: root,
+		Epoch:       9,
+		Logger:      slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatal(err)
+	}
+	p.loadingModel = false
+
+	_, cmd := p.Update(tdsetup.ResultMsg{Origin: tdsetup.OriginNotes, Epoch: 9, ProjectRoot: root})
+	if cmd == nil || !p.loadingModel {
+		t.Fatal("Notes-owned td initialization did not rebuild the td monitor")
+	}
+
+	// A failed Notes attempt is rendered by Notes and must not disturb td.
+	p.loadingModel = false
+	_, cmd = p.Update(tdsetup.ResultMsg{Origin: tdsetup.OriginNotes, Epoch: 9, Err: os.ErrPermission})
+	if cmd != nil || p.loadingModel {
+		t.Fatal("Notes-owned setup failure leaked into the td monitor")
 	}
 }

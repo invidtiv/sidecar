@@ -73,7 +73,7 @@ var settingsIndex = []IndexEntry{
 	{Page: PagePanels, Label: "Git panel", Keywords: []string{"git", "panel", "status", "diff"}},
 	{Page: PagePanels, Label: "Files panel", Keywords: []string{"files", "browser", "panel"}},
 	{Page: PagePanels, Label: "td panel", Keywords: []string{"td", "issues", "tasks", "panel"}},
-	{Page: PagePanels, Label: "Notes panel", Keywords: []string{"notes", "panel", "beta"}},
+	{Page: PagePanels, Label: "Notes panel", Keywords: []string{"notes", "panel"}},
 	{Page: PagePanels, Label: "Conversations panel", Keywords: []string{"conversations", "history", "sessions", "panel"}},
 	{Page: PagePanels, Label: "Tasks panel", Keywords: []string{"tasks", "panel", "beta"}},
 	{Page: PagePanels, Label: "td database location", Keywords: []string{"td", "database", "dbpath", "issues", "path"}},

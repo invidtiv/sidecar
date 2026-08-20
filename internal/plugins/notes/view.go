@@ -36,6 +36,9 @@ func (p *Plugin) renderView() string {
 	if p.store == nil {
 		return p.renderInitMessage()
 	}
+	if p.setupNeeded {
+		return p.renderInitMessage()
+	}
 	if p.loading {
 		return p.renderLoading()
 	}
@@ -462,9 +465,9 @@ func (p *Plugin) renderInitMessage() string {
 	var sb strings.Builder
 	sb.WriteString(styles.Title.Render("Notes"))
 	sb.WriteString("\n\n")
-	sb.WriteString(styles.Muted.Render("Notes plugin requires td initialization."))
+	sb.WriteString(styles.Muted.Render("Notes uses td storage, and this project is not initialized yet."))
 	sb.WriteString("\n")
-	sb.WriteString(styles.Code.Render("Run 'td init' in this project."))
+	sb.WriteString(styles.Code.Render("Press Enter to set up td, or r to check again."))
 	return sb.String()
 }
 

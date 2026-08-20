@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tdsetup"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -102,6 +103,18 @@ type Plugin struct {
 	loading     bool
 	loadErr     error
 	recoveryErr error
+
+	// td setup is offered only after the first asynchronous store probe says
+	// this project has no .todos environment. Nothing here is touched by Init
+	// or View until that command has settled.
+	setupNeeded       bool
+	showSetupModal    bool
+	setupModal        *modal.Modal
+	setupModalWidth   int
+	setupMouseHandler *mouse.Handler
+	setupErr          error
+	setupInitializing bool
+	setupDismissed    bool
 
 	// g key state for g g sequence
 	pendingG bool
@@ -349,6 +362,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.loading = false
 	p.loadErr = nil
 	p.recoveryErr = nil
+	p.setupNeeded = false
+	p.showSetupModal = false
+	p.setupModal = nil
+	p.setupModalWidth = 0
+	p.setupErr = nil
+	p.setupInitializing = false
+	p.setupDismissed = false
+	if p.setupMouseHandler == nil {
+		p.setupMouseHandler = mouse.NewHandler()
+	}
 	p.pendingG = false
 	p.searchMode = false
 	p.searchQuery = ""
@@ -749,10 +772,21 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if msg.RecoveryErr != nil && p.ctx != nil && p.ctx.Logger != nil {
 			p.ctx.Logger.Error("notes: unsaved draft recovery failed", "error", msg.RecoveryErr)
 		}
-		if msg.Err != nil {
+		if errors.Is(msg.Err, tdsetup.ErrNotInitialized) {
+			p.setupNeeded = true
+			p.loadErr = nil
+			p.setupErr = nil
+			if !p.setupDismissed {
+				p.showSetupModal = true
+				p.clearSetupModal()
+			}
+		} else if msg.Err != nil {
 			p.loadErr = msg.Err
 			p.ctx.Logger.Error("notes: load failed", "error", msg.Err)
 		} else {
+			p.setupNeeded = false
+			p.showSetupModal = false
+			p.setupDismissed = false
 			p.notes = msg.Notes
 			p.loadErr = nil
 
@@ -1001,6 +1035,27 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		return p, p.loadNotes()
 
+	case tdsetup.ResultMsg:
+		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.Err != nil {
+			if msg.Origin == tdsetup.OriginNotes {
+				p.setupInitializing = false
+				p.setupErr = msg.Err
+				p.showSetupModal = true
+				p.clearSetupModal()
+			}
+			return p, nil
+		}
+		p.setupInitializing = false
+		p.setupErr = nil
+		p.setupNeeded = false
+		p.showSetupModal = false
+		p.setupDismissed = false
+		p.clearSetupModal()
+		return p, p.loadNotes()
+
 	case app.ErrorMsg:
 		// $EDITOR never launched, so only the error arrives and no refresh ever
 		// comes to consume the pending read-back. Drop it with its temp file
@@ -1013,6 +1068,25 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, nil
 
 	case tea.KeyPressMsg:
+		if p.showSetupModal {
+			cmd, handled := p.handleSetupModalKey(msg)
+			if handled {
+				return p, cmd
+			}
+		}
+		if p.setupNeeded {
+			switch msg.String() {
+			case "enter":
+				p.showSetupModal = true
+				p.setupDismissed = false
+				p.clearSetupModal()
+				return p, nil
+			case "r":
+				p.setupDismissed = false
+				return p, p.loadNotes()
+			}
+			return p, nil
+		}
 		// Handle inline editor first if in inline edit mode
 		if p.edit.Active {
 			handled, cmd := p.handleInlineEditorKey(msg)
@@ -1047,6 +1121,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p.handleKey(msg)
 
 	case tea.MouseMsg:
+		if p.showSetupModal {
+			cmd, handled := p.handleSetupModalMouse(msg)
+			if handled {
+				return p, cmd
+			}
+		}
 		// Inline-edit click-away is handled in handleMouse. Do not forward
 		// presses to the tty model first — that hid list clicks (td-bb475e).
 		// Handle info modal first if open
@@ -1095,7 +1175,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 // handlePaste applies one tea.PasteMsg as a single operation for the focused
 // surface. It never falls through to the textarea catch-all.
 func (p *Plugin) handlePaste(msg tea.PasteMsg) (plugin.Plugin, tea.Cmd) {
-	if p.edit.ShowExitConfirm || p.showDeleteModal || p.showInfoModal {
+	if p.showSetupModal || p.edit.ShowExitConfirm || p.showDeleteModal || p.showInfoModal {
 		return p, nil
 	}
 	if p.showTaskModal {
@@ -2524,6 +2604,12 @@ func (p *Plugin) View(width, height int) string {
 	p.width = width
 	p.height = height
 
+	if p.showSetupModal {
+		p.ensureSetupModal()
+		content := p.renderSetupModal()
+		return lipgloss.NewStyle().Width(width).Height(height).MaxHeight(height).Render(content)
+	}
+
 	// Info modal takes precedence
 	if p.showInfoModal {
 		p.ensureInfoModal()
@@ -2864,6 +2950,9 @@ func (p *Plugin) Commands() []plugin.Command {
 
 // FocusContext returns the current focus context.
 func (p *Plugin) FocusContext() string {
+	if p.showSetupModal {
+		return "notes-setup-modal"
+	}
 	if p.showInfoModal {
 		return "notes-info"
 	}
@@ -2899,7 +2988,7 @@ func (p *Plugin) ConsumesTextInput() bool {
 
 // BlocksGlobalKeys reports whether a plugin-owned modal has keyboard focus.
 func (p *Plugin) BlocksGlobalKeys() bool {
-	return p.showInfoModal || p.showDeleteModal || p.showTaskModal
+	return p.showSetupModal || p.showInfoModal || p.showDeleteModal || p.showTaskModal
 }
 
 // loadNotes returns a command that loads notes from the store.
@@ -2920,6 +3009,16 @@ func (p *Plugin) loadNotes() tea.Cmd {
 	requestID := p.loadRequestID
 
 	return func() tea.Msg {
+		if checker, ok := store.(interface{ SetupStatus() error }); ok {
+			if err := checker.SetupStatus(); err != nil {
+				return NotesLoadedMsg{
+					Err:       err,
+					Epoch:     epoch,
+					RequestID: requestID,
+					Filter:    filter,
+				}
+			}
+		}
 		recoveryErr := recoverNoteDrafts(projectRoot, store)
 		var notes []Note
 		var err error

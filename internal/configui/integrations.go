@@ -58,7 +58,7 @@ func NotesIntegration() Integration {
 		ID:   "notes",
 		Name: "Notes",
 		Flag: features.NotesPlugin.Name,
-		Why:  "Notes adds project notes to Sidecar. It is a beta integration.",
+		Why:  "Notes adds project notes to Sidecar.",
 	}
 }
 

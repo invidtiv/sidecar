@@ -145,7 +145,11 @@ func (m *Model) buildPanels(b *paneBuilder) {
 
 	// Notes ----------------------------------------------------------------
 	notes := NotesIntegration()
-	m.panelRow(b, panelIDNotes, notes.Name, BetaBadge(), "Project notes, kept inside Sidecar",
+	notesDetail := "Project notes, kept inside Sidecar"
+	if !cfg.Plugins.TDMonitor.Enabled {
+		notesDetail += "; available when the td panel is on"
+	}
+	m.panelRow(b, panelIDNotes, notes.Name, "", notesDetail,
 		m.flagEnabled(notes.Flag), func(m *Model) tea.Cmd {
 			// Notes ships inside Sidecar: there is no command to look for and
 			// nothing to install, so the toggle is the whole story.
@@ -178,6 +182,15 @@ func (m *Model) buildPanels(b *paneBuilder) {
 		b.note(m.restartNote)
 	}
 	b.lead("Sidecar decides which panels to build when it starts, so these switches apply on the next launch.")
+}
+
+// FocusNotesPreference opens the page that owns Notes enablement and puts the
+// detail cursor on its existing toggle. Setup surfaces use this rather than
+// inventing a second Notes setting.
+func (m *Model) FocusNotesPreference() {
+	m.Navigate(PagePanels)
+	m.detailFocus = true
+	m.focusControlByID(regionPanel + panelIDNotes)
 }
 
 // panelRow paints one surface as a two-line block. The ON/OFF pill is the

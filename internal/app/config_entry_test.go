@@ -102,6 +102,24 @@ func TestOpenConfigurationMsgFallsBackToTheDefaultPage(t *testing.T) {
 	}
 }
 
+func TestOpenNotesPreferencesUsesConfigurationPanelsRoute(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	updated, cmd := m.Update(OpenNotesPreferencesMsg{})
+	m = asAppModel(t, updated)
+	if !m.configOpen() || m.config.Page() != configui.PagePanels {
+		t.Fatalf("Notes preferences route: open=%v page=%q", m.configOpen(), m.config.Page())
+	}
+	if cmd == nil {
+		t.Fatal("Notes preferences did not start Configuration readiness checks")
+	}
+	// The exact Notes-row focus belongs to configui and is asserted in its
+	// focused route test; the app owns only opening and return behavior.
+	m = typeKey(t, m, "esc")
+	if m.configOpen() {
+		t.Fatal("escape did not return from Notes preferences")
+	}
+}
+
 // The project switcher's no-projects state keeps ctrl+a and gains a route into
 // Setup. Both have to be visible, or the second is a secret.
 func TestProjectSwitcherNoProjectsOffersSetup(t *testing.T) {
