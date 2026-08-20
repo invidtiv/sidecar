@@ -1847,7 +1847,7 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 // The ORDER is the shared frame's, which is what keeps a click on a stacked
 // leaf's tab behaving identically here and in the global Workspaces browser.
 func (p *Plugin) registerPaneTreeRegions(layout PaneLayout) {
-	paneframe.RegisterRegions(paneRegions{p}, layout)
+	paneframe.RegisterRegions(paneRegions{p}, paneHost{p}, layout)
 }
 
 // paneDividerHitBox widens a divider's one-cell box into the target a pointer is

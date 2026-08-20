@@ -123,7 +123,21 @@ const (
 	ChromeInteractive
 	// ChromeFlash is the focused terminal leaf's attention flash.
 	ChromeFlash
+	// ChromeNone leaves the placed outer box unframed. Its content receives the
+	// whole box, so an already-composed primary surface can sit beside framed
+	// passive leaves without acquiring a second, visually nested perimeter.
+	ChromeNone
 )
+
+// GeometryForChrome pairs a placed box with the content box implied by its
+// chrome. Borderless content owns the whole placement; every framed state uses
+// the shared panel inset.
+func GeometryForChrome(outer Box, chrome Chrome) Geom {
+	if chrome == ChromeNone {
+		return Geom{Outer: outer, Inner: outer}
+	}
+	return Geometry(outer)
+}
 
 // WrapLeaf draws content inside one leaf's OUTER box. Content bytes are never
 // dimmed; only the border states change.
@@ -136,6 +150,8 @@ const (
 // through Compose, is painted by this function.
 func WrapLeaf(content string, outer Box, chrome Chrome) string {
 	switch EffectiveChrome(chrome) {
+	case ChromeNone:
+		return ui.FitBlock(content, outer.W, outer.H)
 	case ChromeInteractive:
 		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetInteractiveGradient())
 	case ChromeFlash:
@@ -180,6 +196,75 @@ func DividerHitBox(divider panelayout.Divider) Box {
 	hit.Y--
 	hit.H += 2
 	return hit
+}
+
+// DividerHitBoxFor widens a divider only into neighbouring framed chrome. A
+// borderless leaf owns every cell in its placement, so taking its edge column
+// or row would steal a real content target. When a nested divider touches more
+// than one leaf on a side, every touching leaf must be framed before that side
+// contributes the one-cell resize margin.
+func DividerHitBoxFor(host Host, layout panelayout.Layout, divider panelayout.Divider) Box {
+	if host == nil {
+		return DividerHitBox(divider)
+	}
+	hit := divider.Box
+	if divider.Axis == panelayout.Columns {
+		if dividerSideFramed(host, layout, divider, -1) {
+			hit.X--
+			hit.W++
+		}
+		if dividerSideFramed(host, layout, divider, 1) {
+			hit.W++
+		}
+		return hit
+	}
+	if dividerSideFramed(host, layout, divider, -1) {
+		hit.Y--
+		hit.H++
+	}
+	if dividerSideFramed(host, layout, divider, 1) {
+		hit.H++
+	}
+	return hit
+}
+
+func dividerSideFramed(host Host, layout panelayout.Layout, divider panelayout.Divider, side int) bool {
+	found := false
+	for _, placement := range layout.Leaves {
+		box := placement.Box
+		touches := false
+		if divider.Axis == panelayout.Columns {
+			edge := box.X
+			if side < 0 {
+				edge = box.X + box.W
+			}
+			dividerEdge := divider.Box.X
+			if side > 0 {
+				dividerEdge += divider.Box.W
+			}
+			touches = edge == dividerEdge &&
+				box.Y < divider.Box.Y+divider.Box.H && box.Y+box.H > divider.Box.Y
+		} else {
+			edge := box.Y
+			if side < 0 {
+				edge = box.Y + box.H
+			}
+			dividerEdge := divider.Box.Y
+			if side > 0 {
+				dividerEdge += divider.Box.H
+			}
+			touches = edge == dividerEdge &&
+				box.X < divider.Box.X+divider.Box.W && box.X+box.W > divider.Box.X
+		}
+		if !touches {
+			continue
+		}
+		found = true
+		if host.Chrome(placement.Node) == ChromeNone {
+			return false
+		}
+	}
+	return found
 }
 
 // HandleStateFor resolves a split's handle state from the surface's pointer

@@ -158,7 +158,7 @@ func (m Model) contentDeckSurface() (plugin.Plugin, string, bool) {
 }
 
 func appDeckFloors() panelayout.Floors {
-	return paneframe.ChromeFloors(panelayout.Floors{
+	return paneframe.ChromeFloorsFor(panelayout.Floors{
 		// Files itself contains a tree and preview split. Below this width its
 		// inner minimums wrap despite receiving the correct leaf size, so preserve
 		// the useful primary surface and refuse another outer split.
@@ -167,7 +167,14 @@ func appDeckFloors() panelayout.Floors {
 		Issue:    panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Diff:     panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Resource: panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
-	})
+	}, appDeckChromeForKind)
+}
+
+func appDeckChromeForKind(kind panelayout.Kind) paneframe.Chrome {
+	if kind == panelayout.Primary {
+		return paneframe.ChromeNone
+	}
+	return paneframe.ChromeIdle
 }
 
 func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
@@ -196,7 +203,7 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	}
 	view := paneframe.Compose(appDeckHost{h}, layout, h.canvas, width, height)
 	m.adoptAppContentPlugin(h)
-	paneframe.RegisterRegions(appDeckRegions{h}, layout)
+	paneframe.RegisterRegions(appDeckRegions{h}, appDeckHost{h}, layout)
 	if h.live != nil {
 		h.queued = append(h.queued, h.live.Reconcile())
 	}
@@ -273,6 +280,9 @@ func (x appDeckHost) HandleState(splitID int) ui.HandleState {
 }
 func (x appDeckHost) QueueSizeCmd(cmd tea.Cmd) { x.h.queued = append(x.h.queued, cmd) }
 func (x appDeckHost) Chrome(n *panelayout.Node) paneframe.Chrome {
+	if n != nil && n.Kind == panelayout.Primary {
+		return paneframe.ChromeNone
+	}
 	if n != nil && n.ID == x.h.deck.FocusedLeaf() {
 		return paneframe.ChromeActive
 	}
@@ -771,7 +781,7 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 	default:
 		return false, false
 	}
-	leaf := paneframe.LeafAt(h.layout, wheel.X, wheel.Y)
+	leaf := paneframe.LeafAtForHost(appDeckHost{h}, h.layout, wheel.X, wheel.Y)
 	if leaf == nil {
 		return false, false
 	}

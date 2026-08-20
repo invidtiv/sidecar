@@ -171,6 +171,15 @@ layout: Files may still draw its tree/preview split and Git its sidebar/diff
 split. Passive Document, Issue, Diff, and Resource leaves sit beside that
 primary leaf through the shared pane tree.
 
+The primary leaf is borderless: its placement box is its content box, because
+the plugin already draws the panes and active chrome it owns. Passive leaves
+retain normal `paneframe` chrome. This makes a Files tree, Files preview, and
+opened Document three flat peers rather than nesting the first two inside an
+extra outer panel. The borderless rule is a `paneframe` chrome/geometry choice,
+including matching floor and hit-region costs; it is not a Files-specific
+compositor exception. Divider targets may widen into a framed neighbour's
+border, but never into a borderless primary's real content.
+
 Do not wrap project Workspaces or global Workspaces in another deck. They
 already are content-deck hosts and remain the parity reference. Configuration,
 Activity, modals, the intro, and placeholders are not linkable deck surfaces.

@@ -342,7 +342,7 @@ func (m *Model) registerPreviewOutputRegions(peer termpreview.Box) {
 	if !ok {
 		return
 	}
-	paneframe.RegisterRegions(paneRegions{m}, layout)
+	paneframe.RegisterRegions(paneRegions{m}, paneHost{m}, layout)
 }
 
 func (m *Model) setHandleHover(action mouse.MouseAction) {

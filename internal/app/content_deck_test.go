@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
@@ -34,6 +36,7 @@ type deckHostTestPlugin struct {
 	noFocusStops  bool
 	wheelBoundary bool
 	wheelX        int
+	linkRect      mouse.Rect
 }
 
 type queuedAppDeckTestMsg struct{}
@@ -65,8 +68,12 @@ func (p *deckHostTestPlugin) SetPaneFocus(id string) tea.Cmd {
 }
 func (p *deckHostTestPlugin) SetPaneFocusActive(active bool) { p.innerActive = active }
 func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
+	rect := p.linkRect
+	if rect == (mouse.Rect{}) {
+		rect = mouse.Rect{W: len(p.frame), H: 1}
+	}
 	return []contentlink.Surface{{
-		ID: "preview", Rect: mouse.Rect{W: len(p.frame), H: 1},
+		ID: "preview", Rect: rect,
 		WorkDir: "/tmp", ProjectRoot: "/tmp", ReadOnly: true,
 		Kinds: contentlink.NewKindSet(contentlink.KindIssue, contentlink.KindFile, contentlink.KindDiff, contentlink.KindInternal),
 	}}
@@ -166,17 +173,40 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 		}
 	}
 	p := &deckHostTestPlugin{id: "files", focus: "tree", frame: "plain preview"}
+	p.cursor = tea.NewCursor(3, 2)
 	m := appDeckTestModel(t, root, p)
-	m.renderContent(200, 40)
+	rendered := m.renderContent(200, 40)
 	h := m.currentContentDeck()
-	if h == nil || p.width != 196 || p.height != 38 {
-		t.Fatalf("initial primary inner size = %dx%d deck=%p, want 196x38", p.width, p.height, h)
+	if h == nil || p.width != 200 || p.height != 40 {
+		t.Fatalf("initial primary size = %dx%d deck=%p, want borderless 200x40", p.width, p.height, h)
+	}
+	if h.primaryInner != (paneframe.Box{W: 200, H: 40}) {
+		t.Fatalf("primary origin = %+v, want the whole borderless placement", h.primaryInner)
+	}
+	if !strings.HasPrefix(rendered, "plain preview") {
+		t.Fatalf("primary gained an enclosing frame: %q", rendered)
 	}
 	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
 		t.Fatal("first document returned no load command")
 	}
 	m.renderContent(200, 40)
-	if p.width >= 196 {
+	var primaryPlacement, docPlacement paneframe.Box
+	var docNode *panelayout.Node
+	for _, placement := range h.layout.Leaves {
+		if placement.Node.Kind == panelayout.Primary {
+			primaryPlacement = placement.Box
+		} else if placement.Node.Kind == panelayout.Document {
+			docPlacement = placement.Box
+			docNode = placement.Node
+		}
+	}
+	if h.primaryInner != primaryPlacement {
+		t.Fatalf("split primary origin = %+v, want whole placement %+v", h.primaryInner, primaryPlacement)
+	}
+	if docPlacement == (paneframe.Box{}) || paneframe.GeometryForChrome(docPlacement, appDeckHost{h}.Chrome(docNode)).Inner == docPlacement {
+		t.Fatalf("passive document did not retain framed geometry: %+v", docPlacement)
+	}
+	if p.width >= 200 {
 		t.Fatalf("split primary retained full width %d", p.width)
 	}
 	firstLeaf := h.deck.Leaf(panelayout.Document)
@@ -216,6 +246,60 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab})
 	if h.deck.FocusedLeaf() == h.deck.Leaf(panelayout.Primary) || p.innerActive {
 		t.Fatalf("second Tab did not leave primary: leaf=%d innerActive=%v", h.deck.FocusedLeaf(), p.innerActive)
+	}
+	m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if h.deck.FocusedLeaf() != h.deck.Leaf(panelayout.Primary) || p.focus != "preview" || !p.innerActive {
+		t.Fatalf("Shift+Tab did not restore flat primary preview focus: leaf=%d focus=%q active=%v", h.deck.FocusedLeaf(), p.focus, p.innerActive)
+	}
+	if cursor := m.pluginCursor(); cursor == nil || cursor.X != primaryPlacement.X+3 || cursor.Y != headerHeight+primaryPlacement.Y+2 {
+		t.Fatalf("primary cursor = %#v, want borderless origin %+v plus local (3,2)", cursor, primaryPlacement)
+	}
+	seen := len(p.seen)
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: primaryPlacement.X + 5, Y: primaryPlacement.Y + 4, Button: tea.MouseLeft}))
+	if len(p.seen) != seen+1 {
+		t.Fatalf("primary click was not forwarded: seen %d -> %d", seen, len(p.seen))
+	}
+	click, ok := p.seen[len(p.seen)-1].(tea.MouseClickMsg)
+	if !ok || click.X != 5 || click.Y != 4 {
+		t.Fatalf("primary mouse origin = %#v, want plugin-local (5,4)", p.seen[len(p.seen)-1])
+	}
+}
+
+func TestAppContentDeckBorderlessPrimaryRuleIsCapabilityDriven(t *testing.T) {
+	for _, id := range []string{"file-browser", "git-status", "notes", "td-monitor", "tasks"} {
+		t.Run(id, func(t *testing.T) {
+			root := t.TempDir()
+			p := &deckHostTestPlugin{id: id, focus: "preview", frame: id}
+			m := appDeckTestModel(t, root, p)
+			rendered := m.renderContent(120, 30)
+			h := m.currentContentDeck()
+			host := appDeckHost{h}
+			if h == nil || h.primaryInner != (paneframe.Box{W: 120, H: 30}) || host.Chrome(h.deck.Tree()) != paneframe.ChromeNone {
+				t.Fatalf("primary host = %+v inner=%+v chrome=%v", h, h.primaryInner, host.Chrome(h.deck.Tree()))
+			}
+			if !strings.HasPrefix(rendered, id) {
+				t.Fatalf("capability host %q gained an enclosing frame: %q", id, rendered)
+			}
+		})
+	}
+}
+
+func TestAppContentDeckTranslatesLinksFromBorderlessPrimaryOrigin(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{
+		id: "file-browser", focus: "preview",
+		frame:    "ignored\nignored\n   td-22f35f",
+		linkRect: mouse.Rect{X: 3, Y: 2, W: 9, H: 1},
+	}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(120, 30)
+	h := m.currentContentDeck()
+	if h == nil || len(h.links) != 1 {
+		t.Fatalf("borderless primary links = %+v", h)
+	}
+	want := mouse.Rect{X: 3, Y: 2, W: 9, H: 1}
+	if h.links[0].Rect != want {
+		t.Fatalf("link rect = %+v, want plugin-local rect translated without legacy frame inset %+v", h.links[0].Rect, want)
 	}
 }
 
@@ -280,6 +364,41 @@ func TestAppContentLinkDragDoesNotActivate(t *testing.T) {
 	}
 }
 
+func TestAppContentDeckDividerDoesNotStealBorderlessPrimaryEdge(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"})
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	if len(h.layout.Dividers) != 1 {
+		t.Fatalf("layout dividers = %+v", h.layout.Dividers)
+	}
+	divider := h.layout.Dividers[0]
+
+	seen := len(p.seen)
+	primaryEdge := tea.MouseClickMsg(tea.Mouse{X: divider.Box.X - 1, Y: divider.Box.Y + divider.Box.H/2, Button: tea.MouseLeft})
+	m.appContentMouse(primaryEdge)
+	if h.dragSplit != 0 || len(p.seen) != seen+1 {
+		t.Fatalf("primary edge started drag=%d or was not forwarded (%d -> %d)", h.dragSplit, seen, len(p.seen))
+	}
+	click, ok := p.seen[len(p.seen)-1].(tea.MouseClickMsg)
+	if !ok || click.X != primaryEdge.X-h.primaryInner.X || click.Y != primaryEdge.Y-h.primaryInner.Y {
+		t.Fatalf("primary edge mouse offset = %#v, origin=%+v", p.seen[len(p.seen)-1], h.primaryInner)
+	}
+
+	passiveBorder := tea.MouseClickMsg(tea.Mouse{X: divider.Box.X + divider.Box.W, Y: divider.Box.Y + divider.Box.H/2, Button: tea.MouseLeft})
+	m.appContentMouse(passiveBorder)
+	if h.dragSplit != divider.SplitID {
+		t.Fatalf("passive framed border did not retain widened drag target: drag=%d want=%d", h.dragSplit, divider.SplitID)
+	}
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse(passiveBorder)))
+}
+
 func TestActivateTargetKeepsPassiveTargetOnEligibleFilesSurface(t *testing.T) {
 	root := t.TempDir()
 	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
@@ -339,21 +458,34 @@ func TestAppContentDeckClaimsProjectUIRequestAndTruthfullyRefusesFit(t *testing.
 }
 
 func TestAppContentDeckRefusesPassiveSplitAtFitBoundary(t *testing.T) {
-	root := t.TempDir()
-	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
-	m := appDeckTestModel(t, root, p)
-	m.renderContent(90, 30)
-	h := m.currentContentDeck()
-	before := h.deck.Encode()
-	out := m.openAppContentOutcome(h, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}, "")
-	if out.Status != contentpanes.StatusRefused || out.Refusal != contentpanes.RefusalFit {
-		t.Fatalf("90x30 outcome = status %v refusal %q", out.Status, out.Refusal)
-	}
-	if after := h.deck.Encode(); !reflect.DeepEqual(after, before) {
-		t.Fatalf("90x30 refusal mutated deck\nbefore=%#v\nafter=%#v", before, after)
-	}
-	if p.width != 86 || p.height != 28 {
-		t.Fatalf("narrow primary inner size = %dx%d, want 86x28", p.width, p.height)
+	for _, tc := range []struct {
+		width int
+		fit   bool
+	}{{90, false}, {114, false}, {115, true}} {
+		t.Run(fmt.Sprint(tc.width), func(t *testing.T) {
+			root := t.TempDir()
+			p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+			m := appDeckTestModel(t, root, p)
+			m.renderContent(tc.width, 30)
+			h := m.currentContentDeck()
+			before := h.deck.Encode()
+			out := m.openAppContentOutcome(h, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}, "")
+			if tc.fit {
+				if out.Status == contentpanes.StatusRefused || h.deck.Leaf(panelayout.Issue) == 0 {
+					t.Fatalf("%dx30 should fit exact borderless-primary floor: %+v", tc.width, out)
+				}
+				return
+			}
+			if out.Status != contentpanes.StatusRefused || out.Refusal != contentpanes.RefusalFit {
+				t.Fatalf("%dx30 outcome = status %v refusal %q", tc.width, out.Status, out.Refusal)
+			}
+			if after := h.deck.Encode(); !reflect.DeepEqual(after, before) {
+				t.Fatalf("%dx30 refusal mutated deck\nbefore=%#v\nafter=%#v", tc.width, before, after)
+			}
+			if p.width != tc.width || p.height != 30 {
+				t.Fatalf("narrow primary size = %dx%d, want borderless %dx30", p.width, p.height, tc.width)
+			}
+		})
 	}
 }
 
