@@ -1,6 +1,6 @@
 # External terminal resource providers
 
-**Status:** proposed **Written:** 2026-08-17, at `78ea23d` **Tracking:** `td-26230f` **Related:** [workspace windowing](../deprecated/workspace-windowing-system.md) · [configuration design](../implemented/sidecar-configuration-design.md) · [configuration seam map](sidecar-configuration-seam-map.md)
+**Status:** implemented — all milestones (M0–M3) shipped; the protocol is published and frozen as `sidecar.terminal-resource/v1` in [the protocol reference](../../reference/terminal-resource-provider-protocol.md), the reference providers (`sidecar-jira`, `sidecar-github`) are released separately, and both workspace projections share the Resource pane. **Written:** 2026-08-17, at `78ea23d` **Tracking:** `td-26230f` **Related:** [workspace windowing](../deprecated/workspace-windowing-system.md) · [configuration design](sidecar-configuration-design.md) · [configuration seam map](sidecar-configuration-seam-map.md)
 
 ## Decision
 
