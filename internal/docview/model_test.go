@@ -213,10 +213,17 @@ func TestLoadFileReadsPinnedInodeAfterPathReplacement(t *testing.T) {
 
 func TestLoadingState(t *testing.T) {
 	m := newTestModel(t)
-	m.SetSize(30, 2)
+	m.SetSize(30, 4)
 	_ = m.Load(1, t.TempDir(), "wait.md", 0, 3)
-	if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading document") || !strings.Contains(got, "wait.md") {
-		t.Fatalf("loading view = %q", got)
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	if len(rows) < 3 || strings.TrimSpace(rows[0]) != "" {
+		t.Fatalf("loading view missing spacer: %q", rows)
+	}
+	if !strings.HasPrefix(strings.TrimRight(rows[1], " "), "  Loading document") {
+		t.Fatalf("loading label = %q", rows[1])
+	}
+	if !strings.Contains(rows[2], "wait.md") || !strings.HasPrefix(strings.TrimRight(rows[2], " "), "  wait.md") {
+		t.Fatalf("loading path = %q", rows[2])
 	}
 }
 
@@ -237,7 +244,7 @@ func TestEmptyAndTruncatedStates(t *testing.T) {
 
 func TestSetResultRejectsStaleIdentityWithoutMutation(t *testing.T) {
 	m := newTestModel(t)
-	m.SetSize(30, 1)
+	m.SetSize(30, 4)
 	current := loadFixture(t, m, "current", 0)
 
 	tests := []struct {
@@ -270,7 +277,7 @@ func TestSetResultRejectsStaleIdentityWithoutMutation(t *testing.T) {
 
 func TestArmNeedsLoadAndPendingScroll(t *testing.T) {
 	m := newTestModel(t)
-	m.SetSize(20, 2)
+	m.SetSize(20, 4)
 	if !m.NeedsLoad() {
 		t.Fatal("new model should need a load")
 	}
@@ -284,6 +291,7 @@ func TestArmNeedsLoadAndPendingScroll(t *testing.T) {
 
 	msg := loadFixture(t, m, "one\ntwo\nthree\nfour\nfive\n", 0)
 	m.SetRendered(false)
+	m.SetSize(20, 2)
 	m.SetPendingScroll(3)
 	if m.ScrollOffset() != 3 {
 		t.Fatalf("pending scroll = %d", m.ScrollOffset())
@@ -301,6 +309,36 @@ func TestArmNeedsLoadAndPendingScroll(t *testing.T) {
 	m.ApplyLine(1)
 	if m.Rendered() || m.ScrollOffset() != 0 {
 		t.Fatalf("ApplyLine = rendered=%v scroll=%d", m.Rendered(), m.ScrollOffset())
+	}
+}
+
+func TestReloadPreservesScrollAndLeavesLoadingUntilResult(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(20, 4)
+	msg := loadFixture(t, m, "one\ntwo\nthree\nfour\nfive\n", 0)
+	m.SetRendered(false)
+	m.SetSize(20, 2)
+	if !m.SetResult(msg) {
+		t.Fatal("load result was rejected")
+	}
+	m.Scroll(3)
+	if m.ScrollOffset() != 3 {
+		t.Fatalf("scroll = %d", m.ScrollOffset())
+	}
+
+	cmd := m.Reload()
+	if cmd == nil {
+		t.Fatal("reload returned no command")
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "Loading document") {
+		t.Fatalf("reload did not show the loading placeholder: %q", got)
+	}
+	reloaded, ok := cmd().(LoadedMsg)
+	if !ok || !m.SetResult(reloaded) {
+		t.Fatal("reload result was rejected")
+	}
+	if m.NeedsLoad() || m.ScrollOffset() != 3 {
+		t.Fatalf("after reload needsLoad=%v scroll=%d", m.NeedsLoad(), m.ScrollOffset())
 	}
 }
 
@@ -354,7 +392,7 @@ func TestPlaceholderLinesAreNotNumbered(t *testing.T) {
 			if !strings.Contains(view, tc.expect) {
 				t.Fatalf("view = %q, want %q", view, tc.expect)
 			}
-			if !strings.HasPrefix(view, tc.expect) {
+			if !strings.HasPrefix(strings.TrimLeft(view, " \n"), tc.expect) {
 				t.Fatalf("placeholder was given a gutter: %q", view)
 			}
 		})

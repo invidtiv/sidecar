@@ -4,6 +4,33 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Features
+
+- **First-run onboarding that names the next step.** Launching in a non-git
+  directory with no configured projects opens Configuration → Add Project
+  instead of an empty td monitor. Initialize this directory (or the Git tab)
+  runs `git init -b main` after a click or `i`, then reloads git context
+  without a restart.
+- **In-app install for td and Tasks.** The td uninstalled view and
+  Configuration → Panels offer a confirmed Install button (Homebrew, or
+  `go install` if brew is missing). Sidecar never uses sudo and does not
+  treat a package-manager exit as success. Diagnostics for missing standalone
+  Tasks points at Panels rather than claiming Sidecar will not install it.
+- **Empty states that point at the next action.** TD monitor empty panes
+  explain how to create work; embedded Sidecar adds a Workspaces hint when
+  there are no tasks yet. Workspaces first-run copy covers `n` / `+` once
+  inventory has loaded. An unattached worktree preview is padded and has a
+  Start Agent button that opens the create-workspace form.
+
+### Bug Fixes
+
+- **Create Workspace kind toggle shows the selected type.** Opening the form in
+  Shell mode (or leaving focus on Name) no longer leaves both Shell and Worktree
+  looking unselected; the current kind stays highlighted.
+- **Note activity in the td monitor says "created note" / "updated note"**
+  instead of treating notes as issues. (Requires a td build that includes the
+  matching monitor change.)
+
 ## [v1.2.2] - 2026-08-20
 
 ### Bug Fixes

@@ -83,7 +83,7 @@ func (m *Model) syncWorkspaces() {
 	}
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
-	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.applyWorkspacesEmptyState(0)
 }
 
 func (m *Model) syncCreateActions() {
@@ -297,8 +297,42 @@ func (m *Model) WorkspacesView(width, height int) string {
 
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
+func (m *Model) applyWorkspacesEmptyState(width int) {
+	// Hide-idle only filters rows that exist. First-run copy is for a catalog
+	// we have actually collected and found empty — not for "nothing loaded yet",
+	// which would claim no workspaces exist while inventory is still in flight.
+	if !m.workspacesInventorySettled() || len(m.catalog) > 0 {
+		m.workspaces.SetEmptyText(workspacesEmptyText(false))
+		return
+	}
+	if width > 0 {
+		lines, actionLine := globalFirstRunEmpty(width)
+		m.workspaces.SetEmptyState(lines, globalCreateActionID, actionLine)
+		return
+	}
+	m.workspaces.SetEmptyText(workspacesEmptyText(true))
+}
+
+// workspacesInventorySettled reports that every configured project has a
+// collector result. An empty catalog before that is "we don't know yet".
+func (m *Model) workspacesInventorySettled() bool {
+	if m.loading {
+		return false
+	}
+	if len(m.projects) == 0 {
+		return false
+	}
+	for _, project := range m.projects {
+		if _, loaded := m.results[projectKey(project)]; !loaded {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Model) renderWorkspaceList(x, y, width, height int) string {
 	m.syncCreateActions()
+	m.applyWorkspacesEmptyState(max(1, width-1))
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
 		Width:   width,
 		Height:  height,
@@ -1197,7 +1231,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			focus = m.focusList()
 		case workspacelist.RegionSort:
 			m.openViewFlyout()
-		case workspacelist.RegionHeaderAction:
+		case workspacelist.RegionHeaderAction, workspacelist.RegionEmptyAction:
 			if region.ID == globalCreateActionID {
 				return m.OpenCreate("")
 			}

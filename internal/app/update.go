@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
@@ -602,12 +603,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.publishResourceProviders()
 		return m, nil
 
+	case firstRunProbeMsg:
+		return m, (&m).handleFirstRunProbe(msg)
+
 	case OpenConfigurationMsg:
 		// One entry: an empty state, a launch command, and the gear all arrive
 		// here, and escape returns to whatever was underneath when they did. A
 		// named page is honored exactly; an unnamed one resumes where the user
-		// last was.
-		return m, m.openConfiguration(msg.Page)
+		// last was. AddProject is the first-run deep link onto the form.
+		return m, (&m).handleOpenConfiguration(msg)
 
 	case OpenNotesPreferencesMsg:
 		cmd := m.openConfiguration(configui.PagePanels)
@@ -862,6 +866,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.overview.WorkspacesTerminalMsg(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
+	}
+
+	if ready, ok := msg.(gitinit.ReadyMsg); ok && ready.Root != "" {
+		m.refreshWorktreeCache()
 	}
 
 	// Forward other messages to ALL plugins (not just active)
@@ -2211,13 +2219,13 @@ func isRootContext(ctx string) bool {
 	// Plugin root contexts where 'q' is not used for navigation
 	case "conversations", "conversations-sidebar", "conversations-main":
 		return true
-	case "git-status", "git-status-commits", "git-status-diff", "git-commit-preview":
+	case "git-status", "git-status-commits", "git-status-diff", "git-commit-preview", "git-no-repo":
 		return true
 	case "file-browser-tree", "file-browser-preview":
 		return true
 	case "workspace-list", "workspace-preview":
 		return true
-	case "td-monitor", "td-board":
+	case "td-monitor", "td-board", "td-not-installed":
 		return true
 	case "notes-list":
 		return true

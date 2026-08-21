@@ -124,6 +124,7 @@ func (m *Model) activeContentDeck() *appContentDeck {
 		}
 		if saved.Root != nil {
 			h.deck = contentpanes.Decode(ctx, cfg, saved)
+			h.queued = append(h.queued, h.deck.LoadVisible()...)
 		} else {
 			h.deck = contentpanes.New(ctx, cfg)
 		}
@@ -131,7 +132,7 @@ func (m *Model) activeContentDeck() *appContentDeck {
 	} else {
 		h.plugin = p
 		h.workdir = m.ui.WorkDir
-		h.deck.SetContext(ctx)
+		h.queued = append(h.queued, h.deck.SetContext(ctx)...)
 	}
 	h.syncInnerFocus()
 	return h
@@ -909,6 +910,8 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		case "e":
 			return m.enterAppContentDocumentEdit(), true
+		case "r":
+			return h.deck.ReloadFocused(), true
 		case "m":
 			v.ToggleRenderMode()
 			return nil, true

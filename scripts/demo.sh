@@ -193,5 +193,8 @@ case "$PRESET" in
         ;;
 esac
 
+# Seed generic isolated tasks store (if Tasks plugin enabled)
+setup_tasks_store "$DEMO_TASKS_DIR" "$ENABLE_TASKS"
+
 # Launch environment
 launch_demo "$SIDECAR_BIN" "$DRY_RUN" "$KEEP" "$ENABLE_TD" "$ENABLE_TASKS"

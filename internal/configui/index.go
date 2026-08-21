@@ -38,6 +38,7 @@ var settingsIndex = []IndexEntry{
 
 	// Projects
 	{Page: PageProjects, Label: "Add project", Keywords: []string{"project", "add", "path", "location", "new"}},
+	{Page: PageProjects, Label: "Initialize this directory", Keywords: []string{"git", "init", "repository", "main", "onboarding"}},
 	{Page: PageProjects, Label: "Project location", Keywords: []string{"path", "location", "directory", "folder"}},
 	{Page: PageProjects, Label: "Project theme", Keywords: []string{"theme", "project", "override"}},
 	{Page: PageProjects, Label: "Open in application", Keywords: []string{"open in", "editor", "ide", "application"}},

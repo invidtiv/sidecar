@@ -324,8 +324,10 @@ func TestSelectPlan_EnabledButNotInstalledIsNotPlanned(t *testing.T) {
 		t.Error("an uninstalled product must never be part of an update plan")
 	}
 	row := m.diagnosticsProductRow(notInstalled)
-	if !strings.Contains(row, "standalone not installed") || !strings.Contains(row, "brew install marcus/tap/tasks") {
-		t.Errorf("diagnostics should explain the embedded/standalone split and the install command:\n%s", row)
+	if !strings.Contains(row, "standalone not installed") ||
+		!strings.Contains(row, "Panels → Install Tasks") ||
+		!strings.Contains(row, "brew install marcus/tap/tasks") {
+		t.Errorf("diagnostics should point at Panels install and still name the command:\n%s", row)
 	}
 }
 

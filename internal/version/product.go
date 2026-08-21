@@ -146,9 +146,10 @@ func DescriptorFor(id ProductID) (Descriptor, bool) {
 	return Descriptor{}, false
 }
 
-// InstallHint is the supported way to install a product that is not installed
-// at all. Sidecar never runs it: turning an update confirmation into a new
-// product installation is a separate decision.
+// InstallHint is the supported Homebrew command to install a product that is
+// not installed at all. The updater never runs it — a confirmed update is
+// never a new product installation. First-install runs this string (or a
+// go-install fallback) only after the user has read it and confirmed.
 func (d Descriptor) InstallHint() string {
 	if d.Formula == "" {
 		return d.ReleasesURL

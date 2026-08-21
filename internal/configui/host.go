@@ -118,12 +118,18 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case completionsMsg:
 		m.applyCompletions(msg)
+	case cwdGitMsg:
+		return m.applyCwdGit(msg)
+	case repoInitMsg:
+		return m.applyRepoInit(msg)
 	case probeMsg:
 		m.applyProbe(msg)
 	case installationMsg:
 		m.applyInstallation(msg)
 	case installResultMsg:
 		return m.applyInstallResult(msg)
+	case installTickMsg:
+		return m.tickInstallSpinner()
 	}
 	return nil
 }

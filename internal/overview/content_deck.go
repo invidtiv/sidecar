@@ -44,19 +44,18 @@ func (m *Model) newPreviewDeck(ctx contentpanes.SurfaceContext) *contentpanes.De
 	})
 }
 
-func (m *Model) ensurePreviewDeck() (*contentpanes.Deck, contentpanes.SurfaceContext, bool) {
+func (m *Model) ensurePreviewDeck() (*contentpanes.Deck, contentpanes.SurfaceContext, []tea.Cmd, bool) {
 	ctx, ok := m.previewDeckContext()
 	if !ok {
-		return nil, ctx, false
+		return nil, ctx, nil, false
 	}
 	if m.preview.deck == nil {
 		m.preview.contentEpoch++
 		ctx.Epoch = m.preview.contentEpoch
 		m.preview.deck = m.newPreviewDeck(ctx)
-	} else {
-		m.preview.deck.SetContext(ctx)
+		return m.preview.deck, ctx, nil, true
 	}
-	return m.preview.deck, ctx, true
+	return m.preview.deck, ctx, m.preview.deck.SetContext(ctx), true
 }
 
 func (m *Model) previewDeckPlacement() (contentpanes.Placement, bool) {
@@ -70,7 +69,7 @@ func (m *Model) previewDeckPlacement() (contentpanes.Placement, bool) {
 }
 
 func (m *Model) openPreviewContent(ref contentlink.Ref, name string) tea.Cmd {
-	deck, ctx, ok := m.ensurePreviewDeck()
+	deck, ctx, adopt, ok := m.ensurePreviewDeck()
 	if !ok {
 		return nil
 	}
@@ -96,17 +95,23 @@ func (m *Model) openPreviewContent(ref contentlink.Ref, name string) tea.Cmd {
 	if wasInteractive {
 		cmds = append(cmds, m.exitPreviewInteractive())
 	}
-	cmds = append(cmds, out.Command, m.syncTerminalGeometry())
-	cmds[len(cmds)-2] = wrapPreviewDeckLoad(out, ctx.Surface)
+	for _, cmd := range adopt {
+		cmds = append(cmds, wrapPreviewDeckCmd(cmd, ctx.Surface))
+	}
+	cmds = append(cmds, wrapPreviewDeckLoad(out, ctx.Surface), m.syncTerminalGeometry())
 	return tea.Batch(cmds...)
 }
 
 func wrapPreviewDeckLoad(out contentpanes.Outcome, workspaceID string) tea.Cmd {
-	if out.Command == nil {
+	return wrapPreviewDeckCmd(out.Command, workspaceID)
+}
+
+func wrapPreviewDeckCmd(cmd tea.Cmd, workspaceID string) tea.Cmd {
+	if cmd == nil {
 		return nil
 	}
 	return func() tea.Msg {
-		msg := out.Command()
+		msg := cmd()
 		result, ok := msg.(contentpanes.Result)
 		if !ok {
 			return msg

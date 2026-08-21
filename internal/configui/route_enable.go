@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -27,10 +28,6 @@ const (
 	regionEnableCopy    = "config-enable-copy"
 	regionEnableRecheck = "config-enable-recheck"
 	regionEnableCancel  = "config-enable-cancel"
-
-	// installTimeout bounds one confirmed `brew install`. A package manager
-	// that never returns must not leave the route claiming to be working.
-	installTimeout = 15 * time.Minute
 )
 
 // installPhase is where a confirmed install has got to.
@@ -50,6 +47,8 @@ type enableState struct {
 	// problem is why the last attempt failed, in the user's terms.
 	problem string
 	output  string
+	command string
+	spinner ui.BrailleSpinner
 }
 
 // installationEnv is the seam the install runs through. Tests substitute it so
@@ -58,7 +57,13 @@ func (m *Model) installationEnv() *version.Environment {
 	if m.installEnv != nil {
 		return m.installEnv
 	}
-	return version.DefaultEnvironment()
+	env := version.DefaultEnvironment()
+	if m.checkInput.Env.LookPath != nil {
+		out := *env
+		out.LookPath = m.checkInput.Env.LookPath
+		return &out
+	}
+	return env
 }
 
 // SetInstallEnvironment substitutes the process environment the enable route
@@ -84,7 +89,11 @@ func (m *Model) toggleIntegration(integration Integration) tea.Cmd {
 
 // openEnableRoute opens the dependency check for an integration.
 func (m *Model) openEnableRoute(integration Integration) {
-	m.PushChild(ChildEnableIntegration, "Enable "+integration.Name)
+	title := "Enable " + integration.Name
+	if m.flagEnabled(integration.Flag) {
+		title = "Install " + integration.Name
+	}
+	m.PushChild(ChildEnableIntegration, title)
 	m.enable = &enableState{integration: integration}
 	m.rowCursor = 0
 	m.detailFocus = false
@@ -112,12 +121,26 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 	b.text(SectionHeader("System check"))
 	b.text(FormRow(integration.Name+" command", checkValue(m.probed, found, "Found on PATH", "Not found on PATH"), State{}))
 	b.text(FormRow("Homebrew", checkValue(m.probed, m.brewFound, "Available", "Not found"), State{}))
+	b.text(FormRow("Go", checkValue(m.probed, m.goFound, "Available", "Not found"), State{}))
+
+	plan, planErr := version.PlanInstall(m.installationEnv(), descriptor)
+	command := state.command
+	if command == "" && planErr == nil {
+		command = plan.Command
+	}
+	if command == "" {
+		command = version.InstallCommand(descriptor)
+	}
 
 	switch state.phase {
 	case installRunning:
 		b.blank()
-		b.text(Indented("Installing " + integration.Name + " with Homebrew…"))
-		b.note(version.InstallCommand(descriptor))
+		progress := "Installing " + integration.Name + "…"
+		if spin := state.spinner.View(); spin != "" {
+			progress = spin + " " + progress
+		}
+		b.text(Indented(progress))
+		b.note(command)
 		b.blank()
 		b.lead("This runs in the background. Sidecar will say what happened either way.")
 		return
@@ -126,37 +149,51 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 		b.text(Warning("The install did not finish"))
 		b.note(state.problem)
 		b.blank()
-		b.buttons(
-			buttonSpec{id: regionEnableInstall, key: "enter", label: "Enter  Try the install again", primary: true,
-				run: func(m *Model) tea.Cmd { return m.startInstall() }},
-			buttonSpec{id: regionEnableCopy, key: "c", label: "C  Copy command", run: func(m *Model) tea.Cmd {
-				return copyCmd(version.InstallCommand(descriptor), "Copied install command")
-			}},
-			buttonSpec{id: regionEnableCancel, key: "", label: "Esc  Back", run: func(m *Model) tea.Cmd {
+		retry := []buttonSpec{
+			{id: regionEnableCancel, key: "", label: "Esc  Back", run: func(m *Model) tea.Cmd {
 				m.Back()
 				return nil
 			}},
-		)
+		}
+		if planErr == nil {
+			retry = []buttonSpec{
+				{id: regionEnableInstall, key: "enter", label: "Enter  Try the install again", primary: true,
+					run: func(m *Model) tea.Cmd { return m.startInstall() }},
+				{id: regionEnableCopy, key: "c", label: "C  Copy command", run: func(m *Model) tea.Cmd {
+					return copyCmd(command, "Copied install command")
+				}},
+				retry[0],
+			}
+		}
+		b.buttons(retry...)
 		b.blank()
-		b.text(Muted(integration.Name + " is still turned off. Nothing was changed."))
+		if m.flagEnabled(integration.Flag) {
+			b.text(Muted(integration.Name + " is still missing. Nothing was changed."))
+		} else {
+			b.text(Muted(integration.Name + " is still turned off. Nothing was changed."))
+		}
 		return
 	}
 
 	b.blank()
 	switch {
 	case found:
+		action := "Enable " + integration.Name
+		if m.flagEnabled(integration.Flag) {
+			action = integration.Name + " is ready"
+		}
 		b.buttons(
-			buttonSpec{id: regionEnableInstall, key: "enter", label: "Enter  Enable " + integration.Name, primary: true,
+			buttonSpec{id: regionEnableInstall, key: "enter", label: "Enter  " + action, primary: true,
 				run: func(m *Model) tea.Cmd { return m.finishEnable(integration) }},
 			buttonSpec{id: regionEnableCancel, key: "", label: "Esc  Cancel", run: func(m *Model) tea.Cmd {
 				m.Back()
 				return nil
 			}},
 		)
-	case m.brewFound:
+	case planErr == nil:
 		b.buttons(
 			buttonSpec{id: regionEnableInstall, key: "enter",
-				label: "Enter  Install " + integration.Name + " with Homebrew", primary: true,
+				label: "Enter  Install " + integration.Name, primary: true,
 				run: func(m *Model) tea.Cmd { return m.startInstall() }},
 			buttonSpec{id: regionEnableCancel, key: "", label: "Esc  Cancel", run: func(m *Model) tea.Cmd {
 				m.Back()
@@ -164,18 +201,21 @@ func (m *Model) buildEnableRoute(b *paneBuilder) {
 			}},
 		)
 		b.blank()
-		b.text(IndentedRaw(CodeChip(version.InstallCommand(descriptor))))
+		b.text(IndentedRaw(CodeChip(command)))
 		b.blank()
 		b.note("Sidecar shows the install action and waits for your confirmation before it runs.")
 		b.note("It never installs automatically and never uses sudo.")
 	default:
-		// No Homebrew: Sidecar has nothing safe to run, so it says exactly what
-		// to do instead of offering an action it cannot honour.
-		b.text(Indented("Homebrew is not available, so Sidecar cannot install " + integration.Name + " for you."))
+		// Neither Homebrew nor Go: Sidecar has nothing safe to run, so it says
+		// exactly what to do instead of offering an action it cannot honour.
+		b.text(Indented("Sidecar cannot install " + integration.Name + " for you on this machine."))
 		b.blank()
 		b.text(Indented("Install it yourself with either of these, then return here:"))
 		b.blank()
 		b.text(IndentedRaw(CodeChip(version.InstallCommand(descriptor))))
+		if goCmd := version.GoInstallCommand(descriptor); goCmd != "" {
+			b.note(goCmd)
+		}
 		b.note(descriptor.ReleasesURL)
 		b.blank()
 		b.buttons(
@@ -221,18 +261,50 @@ func (m *Model) startInstall() tea.Cmd {
 	if state == nil {
 		return nil
 	}
+	plan, err := version.PlanInstall(m.installationEnv(), state.integration.Descriptor)
+	if err != nil {
+		state.phase = installFailed
+		state.problem = err.Error()
+		return nil
+	}
 	state.phase = installRunning
 	state.problem = ""
+	state.command = plan.Command
+	state.spinner.Start()
 	integration := state.integration
 	env := m.installationEnv()
+	// Tick is queued on pending so Key/Mouse drain it without wrapping the
+	// install command itself — tests that run the control directly still
+	// receive installResultMsg, not a Batch.
+	m.pending = append(m.pending, installTick())
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), installTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), version.InstallTimeout)
 		defer cancel()
 		return installResultMsg{
 			integration: integration,
-			outcome:     version.InstallWithHomebrew(ctx, env, integration.Descriptor),
+			outcome:     version.Install(ctx, env, integration.Descriptor),
 		}
 	}
+}
+
+type installTickMsg struct{}
+
+func (installTickMsg) configMsg() {}
+
+func installTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return installTickMsg{} })
+}
+
+func (m *Model) tickInstallSpinner() tea.Cmd {
+	state := m.enable
+	if state == nil || state.phase != installRunning {
+		state = m.installing
+	}
+	if state == nil || state.phase != installRunning {
+		return nil
+	}
+	state.spinner.Tick()
+	return installTick()
 }
 
 // applyInstallResult settles a finished install. Success enables the panel and
@@ -247,6 +319,7 @@ func (m *Model) applyInstallResult(msg installResultMsg) tea.Cmd {
 	if m.installing != nil && m.installing.integration.ID == msg.integration.ID {
 		m.installing = nil
 	}
+	state.spinner.Stop()
 	if msg.outcome.Err != nil {
 		state.phase = installFailed
 		state.problem = msg.outcome.Err.Error()

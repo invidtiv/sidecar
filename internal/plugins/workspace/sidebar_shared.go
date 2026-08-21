@@ -288,7 +288,8 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 			// sidebar and no word about what to do next. The question is
 			// whether there is anything to show, not whether Git found
 			// something.
-			empty = []string{styles.Muted.Render("No workspaces"), styles.Muted.Render("Press 'n' to create one")}
+			empty, emptyActionLine = firstRunEmptyLines(max(1, width-1))
+			emptyActionID = regionOpenCreateButton
 		}
 	}
 

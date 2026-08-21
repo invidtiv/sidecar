@@ -1,9 +1,13 @@
 package overview
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -19,6 +23,42 @@ func workspacesEmptyText(showIdle bool) string {
 		return "No shells or worktrees found in the configured projects"
 	}
 	return "no sessions"
+}
+
+func globalFirstRunEmpty(width int) (lines []string, actionLine int) {
+	if width < 1 {
+		width = 1
+	}
+	pill := styles.RenderPillWithStyle(globalFirstRunPillLabel(width), styles.ButtonHover, nil)
+	lines = []string{
+		styles.Title.Render(ansi.Truncate("No workspaces yet", width, "…")),
+		"",
+	}
+	for _, text := range []string{
+		"Press n to create a worktree, or ctrl+n for a shell.",
+		"Click + in the header, or the button below.",
+		"Pick an agent in that form to launch one.",
+	} {
+		wrapped := ansi.Wordwrap(text, width, "")
+		for _, line := range strings.Split(strings.TrimRight(wrapped, "\n"), "\n") {
+			if line != "" {
+				lines = append(lines, styles.Muted.Render(line))
+			}
+		}
+	}
+	lines = append(lines, "")
+	actionLine = len(lines)
+	lines = append(lines, pill)
+	return lines, actionLine
+}
+
+func globalFirstRunPillLabel(width int) string {
+	for _, label := range []string{"n  Create Workspace", "n  Create", "Create"} {
+		if ansi.StringWidth(label)+2 <= width {
+			return label
+		}
+	}
+	return "Create"
 }
 
 func (m *Model) ViewFlyoutOpen() bool { return m.viewFlyoutOpen }

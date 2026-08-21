@@ -34,6 +34,38 @@ task, and put a file or issue in front of the user rather than describing its
 path (`sidecar open` works from any context, not only a Sidecar shell). Never
 edit `shells.json` or rename tmux sessions directly.
 
+## Demoing Features
+
+When you finish building or modifying a user-facing feature, make it easy for
+the user to try it in an isolated demo environment using `./scripts/demo.sh`.
+Demo runs are 100% ephemeral: they automatically compile a fresh binary from the
+current working tree, use private tmux sockets and temp state trees, and clean up
+on exit.
+
+See `docs/guides/active/demo-environments.md`.
+
+You can present the demo in two ways:
+
+1. **Provide the command to the user**:
+   ```bash
+   ./scripts/demo.sh                  # Multi-project demo (5 themed sample projects)
+   ./scripts/demo.sh single -p <name> # Single project demo (intersections, plastic-pieces, etc.)
+   ./scripts/demo.sh fresh            # Clean first-run onboarding (use --no-td/--no-tasks to mask deps)
+   ```
+
+2. **Launch a demo shell / split for the user (Sidecar Inception)**:
+   When working inside a Sidecar shell, you can launch the demo directly into
+   the user's running session using the shell creation CLI (per
+   `docs/plans/active/agent-shell-create-cli.md` and `docs/plans/active/terminal-splits-and-windowing.md`):
+   ```bash
+   # Create a dedicated workspace demo shell:
+   sidecar create shell --name "Demo: <Feature>" --run "./scripts/demo.sh"
+
+   # Or split the agent's current shell to show the demo side-by-side:
+   sidecar create shell --split right --run "./scripts/demo.sh"
+   ```
+
+
 ## Build & Versioning
 
 ```bash

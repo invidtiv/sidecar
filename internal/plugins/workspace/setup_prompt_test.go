@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -43,8 +44,14 @@ func TestEmptyWorkspacesKeepsCreateAdviceWhenNothingIsMissing(t *testing.T) {
 	p := emptyListPlugin(t, configWithProjects(), true)
 
 	view := p.renderSidebarContent(34, 20)
-	if !strings.Contains(view, "Press 'n' to create one") {
+	if !strings.Contains(view, "Press n to create") {
 		t.Fatalf("empty list lost its create advice:\n%s", view)
+	}
+	if !strings.Contains(view, "Create") {
+		t.Fatalf("empty list missing a create control:\n%s", view)
+	}
+	if !strings.Contains(view, "agent") {
+		t.Fatalf("empty list did not say how to launch an agent:\n%s", view)
 	}
 	if strings.Contains(view, "Sidecar Setup") {
 		t.Fatalf("empty list offered Setup with nothing missing:\n%s", view)
@@ -52,8 +59,43 @@ func TestEmptyWorkspacesKeepsCreateAdviceWhenNothingIsMissing(t *testing.T) {
 	if p.setupPromptActive() {
 		t.Fatal("setupPromptActive with nothing missing")
 	}
+	if !p.firstRunEmptyActive() {
+		t.Fatal("firstRunEmptyActive false with nothing missing")
+	}
 	if cmd := p.openSetupCmd(); cmd != nil {
 		t.Fatal("openSetupCmd produced a command with nothing missing")
+	}
+
+	var found bool
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionOpenCreateButton {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("first-run empty state has no create hit region")
+	}
+
+	cmd := p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if p.createForm == nil {
+		t.Fatal("enter on the unblocked empty list did not open Create Workspace")
+	}
+	_ = cmd
+}
+
+func TestUnblockedEmptyCreatePillOpensForm(t *testing.T) {
+	p := emptyListPlugin(t, configWithProjects(), true)
+	p.renderSidebarContent(34, 20)
+	cmd := p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionOpenCreateButton},
+	})
+	if cmd == nil && p.createForm == nil {
+		t.Fatal("create pill did nothing")
+	}
+	if p.createForm == nil {
+		t.Fatal("create pill did not open workspacecreate.Form")
 	}
 }
 
@@ -68,7 +110,7 @@ func TestEmptyWorkspacesOffersSetupWhenNoProjectIsConfigured(t *testing.T) {
 	if !strings.Contains(view, "Sidecar Setup") || !strings.Contains(view, "Enter") {
 		t.Fatalf("blocked empty state missing the contextual action:\n%s", view)
 	}
-	if strings.Contains(view, "Press 'n' to create one") {
+	if strings.Contains(view, "Press n to create a worktree") {
 		t.Fatalf("blocked empty state kept advice that cannot work:\n%s", view)
 	}
 	if !p.setupPromptActive() {

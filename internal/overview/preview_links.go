@@ -457,6 +457,20 @@ func (m *Model) applyPreviewDocLoaded(msg previewDocLoadedMsg) {
 	}
 }
 
+func (m *Model) reloadPreviewDoc() tea.Cmd {
+	if m.preview.deck != nil {
+		if ctx, ok := m.previewDeckContext(); ok {
+			m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Document))
+			return wrapPreviewDeckCmd(m.preview.deck.ReloadFocused(), ctx.Surface)
+		}
+	}
+	doc := m.preview.doc
+	if doc == nil || doc.view() == nil || doc.view().Title() == "" {
+		return nil
+	}
+	return wrapPreviewDocLoad(doc.view().Reload(), doc.surface)
+}
+
 func applyPreviewDocRenderMode(view *docview.Model, path string, line int) {
 	if view == nil {
 		return
@@ -735,8 +749,7 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 			}
 			return true, nil
 		case "r":
-			// Refresh rebuilds the preview and would drop this document.
-			return true, nil
+			return true, m.reloadPreviewDoc()
 		case "enter", interactiveEnterKeyAlt:
 			m.preview.doc.focused = false
 			return true, m.enterPreviewInteractive()

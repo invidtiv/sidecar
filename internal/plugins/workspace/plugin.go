@@ -102,6 +102,8 @@ const (
 	regionShellsPlusButton     = "shells-plus-button"
 	regionWorkspacesPlusButton = "workspaces-plus-button"
 	regionListSortButton       = "list-sort-button"
+	regionStartAgentButton     = "start-agent-button"
+	regionOpenCreateButton     = "open-create-button"
 
 	// Diff tab pane divider (for drag-to-resize file list vs diff viewer)
 	regionDiffTabDivider = "diff-tab-divider"
@@ -420,7 +422,8 @@ type Plugin struct {
 	// Create modal state. The chooser lives in workspacecreate.Form;
 	// confirm/recovery still use createOperationModal.
 	createForm              *workspacecreate.Form
-	createError             string // Operation errors shown on the form
+	createTargetWorktree    *Worktree // KindShell submit starts an agent here instead of a new shell
+	createError             string    // Operation errors shown on the form
 	createOperationModal    *modal.Modal
 	createOperationWidth    int
 	createPlan              *CreateOperationPlan
@@ -543,6 +546,8 @@ type Plugin struct {
 	hoverSortButton           bool
 	hoverShellsPlusButton     bool
 	hoverWorkspacesPlusButton bool
+	hoverStartAgentButton     bool
+	startAgentBtn             startAgentButtonHit
 	// hoverPaneClose is the content leaf whose header X is under the pointer.
 	hoverPaneClose int
 	// hoverDividerRegion / hoverDividerID are the resizable split under the
@@ -1591,21 +1596,6 @@ func (p *Plugin) resetPreviewScroll() {
 	p.jumpPreviewWindow(0)
 }
 
-// previewWindowBound is the furthest back this surface's window can be placed,
-// taken from the window the render path actually draws. Freeze and thaw both
-// read it there: taking the start from the rendered layout and the bound from
-// the line count is two derivations of one window, and they disagree wherever
-// interactive mode's untrimmed rows or a pane shorter than the viewport do — so
-// releasing a drag moved the window the gesture had been holding still.
-//
-// It is measured as a window off the live edge, because that is the only state
-// a bound is ever asked about: a window following the live grid is placed by
-// the grid, not by an offset, and its untrimmed count would otherwise let the
-// first step back name a row the trimmed window cannot draw.
-func (p *Plugin) previewWindowBound() int {
-	return p.terminalWindowBound(false)
-}
-
 // pollSelectedAgentNowIfVisible triggers an immediate poll for visible output.
 func (p *Plugin) pollSelectedAgentNowIfVisible() tea.Cmd {
 	wt := p.selectedWorktree()
@@ -1792,6 +1782,7 @@ func (p *Plugin) createOpenOpts(kind workspacecreate.Kind, focusKind bool, name 
 
 func (p *Plugin) resetCreateFormState() {
 	p.createForm = nil
+	p.createTargetWorktree = nil
 	p.createError = ""
 	p.createOperationModal = nil
 	p.createOperationWidth = 0
@@ -1825,6 +1816,25 @@ func (p *Plugin) openCreate(kind workspacecreate.Kind, focusKind bool, name stri
 	p.resetCreateFormState()
 	p.viewMode = ViewModeCreate
 	p.createForm = workspacecreate.Open(p.createOpenOpts(kind, focusKind, name))
+	return p.loadBranches()
+}
+
+// openStartAgentCreate opens the shared create form on Shell so an existing
+// worktree with no agent can pick an agent, a name, and skip-permissions the
+// same way n/c/[+] already do. Submit starts the agent on this worktree rather
+// than creating a new shell in the project root.
+func (p *Plugin) openStartAgentCreate(wt *Worktree) tea.Cmd {
+	if wt == nil {
+		return nil
+	}
+	p.resetCreateFormState()
+	p.createTargetWorktree = wt
+	p.viewMode = ViewModeCreate
+	opts := p.createOpenOpts(workspacecreate.KindShell, false, "")
+	if preferred := p.resolveWorktreeAgentType(wt); preferred != "" && preferred != AgentNone {
+		opts.PreferredAgent = string(preferred)
+	}
+	p.createForm = workspacecreate.Open(opts)
 	return p.loadBranches()
 }
 

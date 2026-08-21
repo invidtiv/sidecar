@@ -1140,6 +1140,9 @@ func (m *Model) renderContent(width, height int) string {
 	if m.inGlobalScope() {
 		return m.renderGlobalContent(width, height)
 	}
+	if m.firstRunProbePending {
+		return m.renderFirstRunProbe(width, height)
+	}
 	p := m.ActivePlugin()
 	if p == nil {
 		msg := "No plugins loaded"

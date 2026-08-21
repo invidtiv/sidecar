@@ -175,12 +175,14 @@ func (p *Plugin) renderListView(width, height int) string {
 			// Multi-leaf: each leaf is its own panel. Do not wrap the peer again.
 			previewContent := p.renderPreviewContent(split.PreviewWidth, paneHeight)
 			p.registerPreviewActionRegions(split)
+			p.registerStartAgentButton(split)
 			return previewContent
 		}
 
 		// Render content using calculated content width (consistent with panel overhead)
 		previewContent := p.renderPreviewContent(split.ContentWidth, innerHeight)
 		p.registerPreviewActionRegions(split)
+		p.registerStartAgentButton(split)
 
 		if p.previewFlashActive() {
 			return styles.RenderPanelWithGradient(previewContent, split.PreviewWidth, paneHeight, styles.GetFlashGradient())
@@ -219,6 +221,7 @@ func (p *Plugin) renderListView(width, height int) string {
 	// Preview tabs are registered after document bodies and their divider, so
 	// the visible chips remain the highest-priority targets.
 	p.registerPreviewActionRegions(split)
+	p.registerStartAgentButton(split)
 
 	flashActive := p.previewFlashActive()
 

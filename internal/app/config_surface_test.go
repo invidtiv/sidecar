@@ -30,6 +30,8 @@ func typeKey(t *testing.T, m Model, key string) Model {
 		msg = tea.KeyPressMsg{Code: tea.KeyDown}
 	case "up":
 		msg = tea.KeyPressMsg{Code: tea.KeyUp}
+	case "tab":
+		msg = tea.KeyPressMsg{Code: tea.KeyTab}
 	default:
 		runes := []rune(key)
 		if len(runes) != 1 {
@@ -236,6 +238,32 @@ func TestConfigurationFooterHintsComeFromBindings(t *testing.T) {
 		if !strings.Contains(keys, wantKey) {
 			t.Fatalf("footer hint %q keys = %q, want %q", label, keys, wantKey)
 		}
+	}
+}
+
+// Init only shows in the footer when the command is registered in the keymap
+// for the config context, not merely listed in Commands().
+func TestAddProjectInitAppearsInFooter(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	keymap.RegisterDefaults(m.keymap)
+
+	hints := m.commandFooterHints([]plugin.Command{
+		{ID: "init-repo", Name: "Init", Context: "config", Priority: 5},
+		{ID: "add-project", Name: "Add", Context: "config", Priority: 5},
+	}, "config")
+	byLabel := map[string]string{}
+	for _, hint := range hints {
+		byLabel[hint.label] = hint.keys
+	}
+	keys, ok := byLabel["Init"]
+	if !ok {
+		t.Fatalf("footer is missing Init: %#v", hints)
+	}
+	if !strings.Contains(keys, "i") {
+		t.Fatalf("footer hint Init keys = %q, want i", keys)
+	}
+	if _, ok := byLabel["Add"]; !ok {
+		t.Fatalf("footer dropped Add while checking Init: %#v", hints)
 	}
 }
 

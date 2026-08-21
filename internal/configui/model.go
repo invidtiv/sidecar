@@ -79,6 +79,7 @@ type Model struct {
 	// never something a render looks up.
 	probes    map[string]commandProbe
 	brewFound bool
+	goFound   bool
 	probed    bool
 
 	// installEnv is the process environment the enable route installs through.
@@ -207,9 +208,19 @@ func (m *Model) Open(page PageID) {
 	m.panelsState = nil
 	m.advancedState = nil
 	m.aboutState = nil
-	m.enable = nil
 	m.addProject = nil
-	m.installing = nil
+	// A confirmed install already in flight belongs to the user, not this
+	// Open. Dropping it would swallow the result if Configuration is closed
+	// and reopened while Homebrew or go is still working.
+	inFlight := m.installing
+	if m.enable != nil && m.enable.phase == installRunning {
+		inFlight = m.enable
+	}
+	if inFlight != nil && inFlight.phase != installRunning {
+		inFlight = nil
+	}
+	m.enable = nil
+	m.installing = inFlight
 	m.resetDetail()
 }
 
@@ -437,6 +448,8 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "open-file", Name: "Open", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
 	case "a":
 		return plugin.Command{ID: "add-project", Name: "Add", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case "i":
+		return plugin.Command{ID: "init-repo", Name: "Init", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
 	case "d":
 		return plugin.Command{ID: "remove-project", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
 	case "g":
@@ -483,6 +496,12 @@ func (m *Model) drain(cmd tea.Cmd) tea.Cmd {
 	cmds := append(m.pending, cmd)
 	m.pending = nil
 	return tea.Batch(cmds...)
+}
+
+// TakePending returns commands queued outside a key handler — a directory
+// listing, a git probe — so the host can run them after a programmatic open.
+func (m *Model) TakePending() tea.Cmd {
+	return m.drain(nil)
 }
 
 func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
@@ -587,6 +606,10 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 		case "tab":
+			if m.Route().IsChild() {
+				m.moveRowCursor(1)
+				return true, nil
+			}
 			m.focusSearch()
 			return true, nil
 		}

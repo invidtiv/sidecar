@@ -8,7 +8,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/installui"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/version"
 )
 
 // Stallion ASCII art - a galloping horse
@@ -76,15 +80,25 @@ func lerpRGB(c1, c2 RGB, t float64) RGB {
 
 // NotInstalledModel handles the animated "td not installed" view.
 type NotInstalledModel struct {
-	startTime time.Time
-	width     int
-	height    int
+	startTime    time.Time
+	width        int
+	height       int
+	installer    *installui.Model
+	mouseHandler *mouse.Handler
 }
 
 // NewNotInstalledModel creates a new not-installed view model.
 func NewNotInstalledModel() *NotInstalledModel {
+	return NewNotInstalledModelWithEnv(nil)
+}
+
+// NewNotInstalledModelWithEnv creates the view against a described machine so
+// tests never invoke a real package manager.
+func NewNotInstalledModelWithEnv(env *version.Environment) *NotInstalledModel {
 	return &NotInstalledModel{
-		startTime: time.Now(),
+		startTime:    time.Now(),
+		installer:    installui.New(version.TdDescriptor(), env),
+		mouseHandler: mouse.NewHandler(),
 	}
 }
 
@@ -107,12 +121,47 @@ func (m *NotInstalledModel) Init() tea.Cmd {
 func (m *NotInstalledModel) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case StallionTickMsg:
+		if m.installer != nil {
+			m.installer.Tick()
+		}
 		return StallionTick()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+	case tea.KeyPressMsg:
+		if m.installer != nil {
+			return m.installer.HandleKey(msg)
+		}
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	}
 	return nil
+}
+
+func (m *NotInstalledModel) handleMouse(msg tea.MouseMsg) tea.Cmd {
+	if m.mouseHandler == nil {
+		return nil
+	}
+	switch mm := msg.(type) {
+	case tea.MouseMotionMsg:
+		hit := m.mouseHandler.HitMap.Test(mm.X, mm.Y)
+		m.installerHover(hit != nil && hit.ID == installui.RegionInstall)
+	case tea.MouseClickMsg:
+		if mm.Button != tea.MouseLeft {
+			return nil
+		}
+		hit := m.mouseHandler.HandleClick(mm.X, mm.Y)
+		if hit.Region != nil && hit.Region.ID == installui.RegionInstall {
+			return m.installer.HandleClick()
+		}
+	}
+	return nil
+}
+
+func (m *NotInstalledModel) installerHover(hover bool) {
+	if m.installer != nil {
+		m.installer.Hover = hover
+	}
 }
 
 // gradientColorAt returns the color for a character based on its position and time.
@@ -228,41 +277,80 @@ func (m *NotInstalledModel) renderPitch() string {
 
 	linkStyle := styles.Link
 
+	// Syntax highlighted command styles
+	kwStyle := lipgloss.NewStyle().
+		Foreground(styles.Primary).
+		Bold(true)
+
+	argStyle := lipgloss.NewStyle().
+		Foreground(styles.TextPrimary)
+
+	commentStyle := lipgloss.NewStyle().
+		Foreground(styles.TextMuted).
+		Italic(true)
+
 	codeBoxStyle := lipgloss.NewStyle().
-		Foreground(styles.Success).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.BorderNormal).
-		Padding(0, 1)
+		Padding(0, 2)
+
+	// Build formatted code box
+	var codeLines []string
+	codeLines = append(codeLines, kwStyle.Render("brew install")+" "+argStyle.Render("marcus/tap/td"))
+	codeLines = append(codeLines, commentStyle.Render("# or"))
+	codeLines = append(codeLines, kwStyle.Render("go install")+" "+argStyle.Render("github.com/marcus/td@latest"))
+	codeLines = append(codeLines, "")
+	codeLines = append(codeLines, kwStyle.Render("td init"))
+	installCode := strings.Join(codeLines, "\n")
 
 	// Build content
 	var b strings.Builder
 
-	// Explain why they're seeing this screen
-	b.WriteString(mutedStyle.Render("td is not installed on your system."))
+	// Status notice
+	b.WriteString(mutedStyle.Render("td is not installed on this system."))
 	b.WriteString("\n\n")
 
+	// Section Title
 	b.WriteString(titleStyle.Render("External memory for AI sessions"))
 	b.WriteString("\n\n")
 
+	// Capabilities
 	b.WriteString(textStyle.Render("td gives each session:"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Current focus and pending work"))
+	b.WriteString(bulletStyle.Render("  • Durable task context that persists across AI sessions"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Decisions and their reasoning"))
+	b.WriteString(bulletStyle.Render("  • Work tracking with progress logs and structured handoffs"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Structured handoffs between sessions"))
+	b.WriteString(bulletStyle.Render("  • Independent review and approval workflows"))
+	b.WriteString("\n")
+	b.WriteString(bulletStyle.Render("  • Fast, local SQLite storage"))
 	b.WriteString("\n\n")
 
-	b.WriteString(mutedStyle.Render("Local SQLite. No cloud. Git-friendly."))
+	// Installation instructions (above Learn more)
+	b.WriteString(codeBoxStyle.Render(installCode))
 	b.WriteString("\n\n")
+
+	if m.installer != nil {
+		if progress := m.installer.RenderProgress(); progress != "" {
+			b.WriteString(progress)
+			b.WriteString("\n")
+			b.WriteString(mutedStyle.Render(m.installer.DisplayCommand()))
+			b.WriteString("\n\n")
+		} else if m.installer.CanInstall() {
+			hover := m.installer.Hover
+			b.WriteString(m.installer.RenderButton(true, hover))
+			b.WriteString("\n")
+			b.WriteString(mutedStyle.Render("Runs: " + m.installer.DisplayCommand()))
+			b.WriteString("\n\n")
+		}
+		if problem := m.installer.RenderProblem(); problem != "" {
+			b.WriteString(problem)
+			b.WriteString("\n\n")
+		}
+	}
 
 	// Website link
-	b.WriteString(textStyle.Render("Learn more: "))
-	b.WriteString(linkStyle.Render("https://marcus.github.io/td/"))
-	b.WriteString("\n\n")
-
-	installCmd := "brew install marcus/tap/td\n# or\ngo install github.com/marcus/td@latest\n\ntd init"
-	b.WriteString(codeBoxStyle.Render(installCmd))
+	b.WriteString(textStyle.Render("Learn more: ") + linkStyle.Render("https://marcus.github.io/td/"))
 
 	return b.String()
 }
@@ -271,6 +359,9 @@ func (m *NotInstalledModel) renderPitch() string {
 func (m *NotInstalledModel) View(width, height int) string {
 	m.width = width
 	m.height = height
+	if m.mouseHandler != nil {
+		m.mouseHandler.HitMap.Clear()
+	}
 
 	stallion := m.renderStallion()
 	pitch := m.renderPitch()
@@ -280,9 +371,34 @@ func (m *NotInstalledModel) View(width, height int) string {
 	centeredPitch := lipgloss.PlaceHorizontal(stallionWidth, lipgloss.Center, pitch)
 
 	// Combine vertically - use Left to preserve stallion's whitespace alignment
-	// (Center causes ANSI width miscalculation issues)
+	// (PlaceHorizontal/Center on stallion causes ANSI width miscalculation issues)
 	content := lipgloss.JoinVertical(lipgloss.Left, stallion, centeredPitch)
 
-	// Center in available space
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+	placed := lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
+	m.registerInstallHit(placed, width, height)
+	return placed
+}
+
+func (m *NotInstalledModel) registerInstallHit(placed string, width, height int) {
+	if m.mouseHandler == nil || m.installer == nil || !m.installer.CanInstall() || m.installer.Busy() {
+		return
+	}
+	label := installui.ButtonLabel(version.TdDescriptor())
+	lines := strings.Split(placed, "\n")
+	for y, line := range lines {
+		if y >= height {
+			break
+		}
+		stripped := ansi.Strip(line)
+		idx := strings.Index(stripped, label)
+		if idx < 0 {
+			continue
+		}
+		w := ansi.StringWidth(label)
+		if idx+w > width {
+			w = max(0, width-idx)
+		}
+		m.mouseHandler.HitMap.AddRect(installui.RegionInstall, idx, y, w, 1, nil)
+		return
+	}
 }

@@ -1,31 +1,27 @@
 package gitstatus
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/gitinit"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-// sidecarGitignoreEntries lists all sidecar state paths that should be ignored
-// by git. They are added only when the user explicitly initializes a new
-// repository from Sidecar; merely opening an existing repository never mutates
-// its .gitignore.
-var sidecarGitignoreEntries = []string{
-	".todos/",
-	".sidecar/",
-	".sidecar-agent",
-	".sidecar-task",
-	".sidecar-pr",
-	".sidecar-start.sh",
-	".sidecar-base",
-	".td-root",
-}
+// sidecarGitignoreEntries is kept as an alias so existing tests keep working.
+var sidecarGitignoreEntries = gitinit.SidecarGitignoreEntries
+
+const (
+	regionInitRepo     = "git-init-repo"
+	initRepoButtonText = " Initialize Git Repository "
+	// RenderPanel draws a 1-cell border; content therefore starts at (2, 1)
+	// after the left padding of 1 that RenderPanel applies.
+	noRepoContentX = 2
+	noRepoContentY = 1
+)
 
 // RepoDetectedMsg is sent after probing for a repository in the current workdir.
 type RepoDetectedMsg struct {
@@ -52,13 +48,31 @@ func (m RepoInitDoneMsg) GetEpoch() uint64 { return m.Epoch }
 func (p *Plugin) updateNoRepo(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	switch msg.String() {
 	case "i", "enter":
-		if p.repoInitInProgress {
-			return p, nil
-		}
-		p.repoInitInProgress = true
-		return p, p.initRepo()
+		return p.startRepoInit()
 	case "r":
 		return p, p.detectRepo()
+	}
+	return p, nil
+}
+
+func (p *Plugin) startRepoInit() (plugin.Plugin, tea.Cmd) {
+	if p.repoInitInProgress {
+		return p, nil
+	}
+	p.repoInitInProgress = true
+	return p, p.initRepo()
+}
+
+func (p *Plugin) handleNoRepoMouse(msg tea.MouseMsg) (plugin.Plugin, tea.Cmd) {
+	if p.mouseHandler == nil {
+		return p, nil
+	}
+	action := p.mouseHandler.HandleMouse(msg)
+	if action.Type != mouse.ActionClick || action.Region == nil {
+		return p, nil
+	}
+	if action.Region.ID == regionInitRepo {
+		return p.startRepoInit()
 	}
 	return p, nil
 }
@@ -90,26 +104,8 @@ func (p *Plugin) initRepo() tea.Cmd {
 	epoch := p.ctx.Epoch
 
 	return func() tea.Msg {
-		cmd := exec.Command("git", "init")
-		cmd.Dir = workDir
-		if out, err := cmd.CombinedOutput(); err != nil {
-			msg := strings.TrimSpace(string(out))
-			if msg == "" {
-				msg = err.Error()
-			}
-			return RepoInitDoneMsg{Epoch: epoch, Err: fmt.Errorf("git init failed: %s", msg)}
-		}
-
-		root, err := resolveGitRoot(workDir)
-		if err != nil {
-			return RepoInitDoneMsg{Epoch: epoch, Err: fmt.Errorf("git init succeeded but repository was not detected: %w", err)}
-		}
-
-		if err := ensureGitignoreEntries(workDir, sidecarGitignoreEntries); err != nil {
-			return RepoInitDoneMsg{Epoch: epoch, Root: root, Err: err}
-		}
-
-		return RepoInitDoneMsg{Epoch: epoch, Root: root}
+		root, err := gitinit.Init(workDir)
+		return RepoInitDoneMsg{Epoch: epoch, Root: root, Err: err}
 	}
 }
 
@@ -119,77 +115,39 @@ func (p *Plugin) renderNoRepoView() string {
 		p.mouseHandler.Clear()
 	}
 
-	var sb strings.Builder
-	sb.WriteString(styles.Title.Render("Git"))
-	sb.WriteString("\n\n")
-	sb.WriteString(styles.Muted.Render("No git repository found in this project."))
-	sb.WriteString("\n")
+	lines := []string{
+		styles.Title.Render("Git"),
+		"",
+		styles.Muted.Render("Sidecar uses Git repositories for worktrees, status, and diffs."),
+		styles.Muted.Render("No git repository was found in this directory."),
+		"",
+	}
+
 	if p.repoInitInProgress {
-		sb.WriteString(styles.StatusInProgress.Render("Initializing repository..."))
+		lines = append(lines, styles.StatusInProgress.Render("Initializing repository…"))
 	} else {
-		sb.WriteString(styles.Muted.Render("Press "))
-		sb.WriteString(styles.Title.Render("i"))
-		sb.WriteString(styles.Muted.Render(" to initialize one."))
-		sb.WriteString("\n")
-		sb.WriteString(styles.Muted.Render("Press "))
-		sb.WriteString(styles.Title.Render("r"))
-		sb.WriteString(styles.Muted.Render(" to re-check."))
+		pill := styles.RenderPillWithStyle(initRepoButtonText, styles.ButtonHover, nil)
+		buttonLine := len(lines)
+		lines = append(lines, "  "+pill)
+		if p.mouseHandler != nil {
+			p.mouseHandler.HitMap.AddRect(
+				regionInitRepo,
+				noRepoContentX+2,
+				noRepoContentY+buttonLine,
+				ansi.StringWidth(pill),
+				1,
+				nil,
+			)
+		}
 	}
 
 	panelHeight := p.height
 	if panelHeight < 4 {
 		panelHeight = 4
 	}
-	return styles.RenderPanel(sb.String(), p.width, panelHeight, true)
+	return styles.RenderPanel(strings.Join(lines, "\n"), p.width, panelHeight, true)
 }
 
-// ensureGitignoreEntries appends missing entries to .gitignore in workDir.
 func ensureGitignoreEntries(workDir string, entries []string) error {
-	gitignorePath := filepath.Join(workDir, ".gitignore")
-
-	var existing string
-	if data, err := os.ReadFile(gitignorePath); err == nil {
-		existing = string(data)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("read .gitignore: %w", err)
-	}
-
-	var missing []string
-	for _, entry := range entries {
-		found := false
-		for _, line := range strings.Split(existing, "\n") {
-			if strings.TrimSpace(line) == entry {
-				found = true
-				break
-			}
-		}
-		if !found {
-			missing = append(missing, entry)
-		}
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-
-	var toAppend strings.Builder
-	if existing != "" && !strings.HasSuffix(existing, "\n") {
-		toAppend.WriteString("\n")
-	}
-	for _, entry := range missing {
-		toAppend.WriteString(entry)
-		toAppend.WriteString("\n")
-	}
-
-	f, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf("open .gitignore: %w", err)
-	}
-	defer func() {
-		_ = f.Close()
-	}()
-
-	if _, err := f.WriteString(toAppend.String()); err != nil {
-		return fmt.Errorf("write .gitignore: %w", err)
-	}
-	return nil
+	return gitinit.EnsureGitignore(workDir, entries)
 }

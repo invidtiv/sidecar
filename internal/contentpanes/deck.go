@@ -153,11 +153,14 @@ func (d *Deck) Context() SurfaceContext {
 	return d.ctx
 }
 
-// SetContext changes the deck's async scope without starting work. Results
-// from the old epoch or surface are subsequently stale.
-func (d *Deck) SetContext(ctx SurfaceContext) {
+// SetContext changes the deck's async scope. Tabs are rebound to the new
+// identity so in-flight results from the old context cannot land, and the
+// active tab of every visible pane is asked to load. Hidden panes stay armed
+// until they are shown. Loading visible tabs here is what keeps a sibling
+// document from sitting on "Loading document…" after a split.
+func (d *Deck) SetContext(ctx SurfaceContext) []tea.Cmd {
 	if d == nil || sameContext(d.ctx, ctx) {
-		return
+		return nil
 	}
 	d.ctx = ctx
 	for _, p := range d.panesAndHidden() {
@@ -165,6 +168,43 @@ func (d *Deck) SetContext(ctx SurfaceContext) {
 			d.rebindTab(t, p.kind, ctx)
 		}
 	}
+	return d.LoadVisible()
+}
+
+// LoadVisible starts a load for the active tab of every visible pane that
+// still needs one. Decode and SetContext arm viewers without I/O; hosts must
+// return these commands or a visible pane sits on its placeholder until
+// something else happens to select it.
+func (d *Deck) LoadVisible() []tea.Cmd {
+	if d == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, p := range d.panes {
+		if p == nil || p.active < 0 || p.active >= len(p.tabs) {
+			continue
+		}
+		t := p.tabs[p.active]
+		if cmd := d.start(t, t.view.focus(d.ctx, t.ref, int(t.id))); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
+}
+
+// ReloadFocused force-reloads the focused pane's active tab, including a tab
+// already showing a document. It is the user-facing recovery for a pane stuck
+// on its loading placeholder.
+func (d *Deck) ReloadFocused() tea.Cmd {
+	if d == nil {
+		return nil
+	}
+	p := d.panes[d.focus]
+	if p == nil || p.active < 0 || p.active >= len(p.tabs) {
+		return nil
+	}
+	t := p.tabs[p.active]
+	return d.start(t, t.view.reload(d.ctx, t.ref, int(t.id)))
 }
 
 func (d *Deck) rebindTab(t *tab, kind panelayout.Kind, ctx SurfaceContext) {
@@ -367,7 +407,7 @@ func (d *Deck) ReplaceActive(ctx SurfaceContext, ref contentlink.Ref) Outcome {
 	if !ok || kind == panelayout.Primary {
 		return Outcome{Status: StatusRefused, Refusal: RefusalInvalid, Ref: ref}
 	}
-	d.SetContext(ctx)
+	adopt := d.SetContext(ctx)
 	leafID := d.Leaf(kind)
 	p := d.panes[leafID]
 	if p == nil || p.active < 0 || p.active >= len(p.tabs) {
@@ -376,7 +416,9 @@ func (d *Deck) ReplaceActive(ctx SurfaceContext, ref contentlink.Ref) Outcome {
 	for i, t := range p.tabs {
 		if t.identity == identity {
 			p.active, d.focus = i, leafID
-			return d.openTab(p, normalized, identity, false)
+			out := d.openTab(p, normalized, identity, false)
+			out.Command = batchCmds(append(adopt, out.Command)...)
+			return out
 		}
 	}
 	d.nextTabID++
@@ -384,7 +426,24 @@ func (d *Deck) ReplaceActive(ctx SurfaceContext, ref contentlink.Ref) Outcome {
 	p.tabs[p.active] = t
 	d.focus = leafID
 	return Outcome{Status: StatusOpened, Ref: normalized, Kind: kind, LeafID: leafID,
-		TabID: t.id, CreatedTab: true, Command: d.start(t, t.view.load(ctx, normalized, int(t.id)))}
+		TabID: t.id, CreatedTab: true, Command: batchCmds(append(adopt, d.start(t, t.view.load(ctx, normalized, int(t.id))))...)}
+}
+
+func batchCmds(cmds ...tea.Cmd) tea.Cmd {
+	var out []tea.Cmd
+	for _, cmd := range cmds {
+		if cmd != nil {
+			out = append(out, cmd)
+		}
+	}
+	switch len(out) {
+	case 0:
+		return nil
+	case 1:
+		return out[0]
+	default:
+		return tea.Batch(out...)
+	}
 }
 
 func (d *Deck) openTab(p *pane, ref contentlink.Ref, identity string, freshLeaf bool) Outcome {

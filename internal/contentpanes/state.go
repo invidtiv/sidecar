@@ -90,7 +90,9 @@ func (d *Deck) encodePane(p *pane) PaneState {
 
 // Decode restores references in an armed state without starting any load.
 // Unknown kinds and invalid tabs collapse out of the tree. If the surviving
-// state has no primary leaf, Decode returns a safe primary-only deck.
+// state has no primary leaf, Decode returns a safe primary-only deck. Hosts
+// must return [Deck.LoadVisible] after Decode, or every restored pane stays on
+// its loading placeholder until a later select happens to start work.
 func Decode(ctx SurfaceContext, cfg Config, state State) *Deck {
 	d := New(ctx, cfg)
 	seen := make(map[panelayout.Kind]bool)

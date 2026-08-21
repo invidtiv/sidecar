@@ -39,11 +39,15 @@ TD solves this with **persistent, structured memory** via a local SQLite databas
 
 ## Installation
 
+From Sidecar, the td tab's uninstalled view offers **Install td** (Homebrew, or `go install` if brew is missing). You confirm the command before it runs.
+
 ```bash
+brew install marcus/tap/td
+# or
 go install github.com/marcus/td@latest
 ```
 
-**Requirements:** Go 1.21+
+**Requirements for `go install`:** Go 1.21+
 
 Initialize TD in your project:
 

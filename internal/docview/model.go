@@ -177,6 +177,22 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	return true
 }
 
+// Reload force-rereads the current path, preserving scroll, wrap, and render
+// mode. Unlike Refresh it runs even when nothing has observed a disk change,
+// which is what a stuck loading placeholder needs.
+func (m *Model) Reload() tea.Cmd {
+	if m == nil || m.path == "" {
+		return nil
+	}
+	offset := m.ScrollOffset()
+	rendered, wrap := m.rendered, m.wrap
+	cmd := m.Load(m.modelID, m.root, m.path, 0, m.epoch)
+	m.SetRendered(rendered)
+	m.SetWrap(wrap)
+	m.SetPendingScroll(offset)
+	return cmd
+}
+
 // Arm shows the loading placeholder for a restored tab without issuing a load.
 func (m *Model) Arm(modelID int, relPath string, epoch uint64) {
 	m.modelID = modelID
@@ -588,7 +604,7 @@ func (m *Model) content() docContent {
 // number.
 func (m *Model) placeholder() ([]string, bool) {
 	if m.loading {
-		return []string{"Loading document…", m.path}, true
+		return []string{"", "  Loading document…", "  " + m.path}, true
 	}
 	if m.result.Error != nil {
 		return []string{"Document unavailable", m.path, m.result.Error.Error()}, true

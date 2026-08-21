@@ -103,8 +103,9 @@ func DefaultBindings() []Binding {
 		{Key: "r", Command: "recheck", Context: "config"},
 		{Key: "c", Command: "copy-guidance", Context: "config"},
 		{Key: "o", Command: "open-file", Context: "config"},
-		// Projects: add, remove, and reorder the configured list.
+		// Projects: add, remove, initialize a non-git cwd, and reorder.
 		{Key: "a", Command: "add-project", Context: "config"},
+		{Key: "i", Command: "init-repo", Context: "config"},
 		{Key: "d", Command: "remove-project", Context: "config"},
 		{Key: "shift+up", Command: "move-project-up", Context: "config"},
 		{Key: "shift+down", Command: "move-project-down", Context: "config"},
@@ -157,6 +158,12 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "confirm", Context: "config-confirm"},
 		{Key: "esc", Command: "cancel", Context: "config-confirm"},
 		{Key: "n", Command: "cancel", Context: "config-confirm"},
+
+		// td-not-installed: first-install of td. Enter/i confirm the focused
+		// button; the plugin runs the command. Binding i here is what keeps
+		// Sidecar's global find-issue shortcut from swallowing the key.
+		{Key: "enter", Command: "install", Context: "td-not-installed"},
+		{Key: "i", Command: "install", Context: "td-not-installed"},
 
 		// Global Workspaces context (cross-project shell/worktree browser).
 		// Like the Agents board above, these keys are answered by the app before
@@ -281,6 +288,8 @@ func DefaultBindings() []Binding {
 		// tmux's own (ctrl+\, esc esc).
 		{Key: "e", Command: "edit", Context: "workspace-doc"},
 		{Key: "e", Command: "edit", Context: "global-workspaces-doc"},
+		{Key: "r", Command: "reload", Context: "workspace-doc"},
+		{Key: "r", Command: "reload", Context: "global-workspaces-doc"},
 
 		{Key: "enter", Command: "confirm", Context: "workspace-doc-find"},
 		{Key: "n", Command: "next-match", Context: "workspace-doc-find"},

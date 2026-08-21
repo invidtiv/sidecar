@@ -115,13 +115,13 @@ func (m *Model) buildProjects(b *paneBuilder) {
 	left := Body("Your projects") + "  " + Muted(count)
 	b.rightControlPrimary(left, regionProjectAdd, "a", "A  Add project", func(m *Model) tea.Cmd {
 		m.OpenAddProject()
-		return nil
+		return m.drain(nil)
 	})
 	b.blank()
 
 	if len(list) == 0 {
 		b.lead("Sidecar does not know about any projects yet.")
-		b.lead("Add one to switch between projects, create workspaces, and set per-project themes.")
+		b.lead("Add a Git repository to switch between projects, create workspaces, and set per-project themes.")
 		return
 	}
 
