@@ -209,10 +209,16 @@ func (p *Plugin) submitCreateForm() tea.Cmd {
 	if p.createForm.Kind() == workspacecreate.KindShell {
 		p.createForm.PersistLastAgent()
 		name, _, agent, skip := p.createFormValues()
+		wt := p.createTargetWorktree
 		p.viewMode = ViewModeList
-		cmd := p.createShell(shellCreateOpts{CustomName: name, AgentType: agent, SkipPerms: skip})
 		p.clearCreateModal()
-		return cmd
+		if wt != nil {
+			if agent == AgentNone || agent == "" {
+				agent = p.resolveWorktreeAgentType(wt)
+			}
+			return p.StartAgentWithOptions(wt, agent, skip)
+		}
+		return p.createShell(shellCreateOpts{CustomName: name, AgentType: agent, SkipPerms: skip})
 	}
 	return p.validateAndCreateWorktree()
 }

@@ -236,6 +236,7 @@ func isBackgroundRegion(regionID string) bool {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
 		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
+		regionStartAgentButton, regionOpenCreateButton, regionOpenSetupButton,
 		regionPaneClose, regionPaneTitle,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
@@ -707,6 +708,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverSortButton = false
 		p.hoverShellsPlusButton = false
 		p.hoverWorkspacesPlusButton = false
+		p.hoverStartAgentButton = false
 		p.hoverPaneClose = 0
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
@@ -724,6 +726,8 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
+			case regionStartAgentButton:
+				p.hoverStartAgentButton = true
 			case regionPaneDivider, regionDiffTabDivider:
 				p.hoverDividerRegion = action.Region.ID
 				p.clearIssueHover()
@@ -878,6 +882,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	case regionOpenSetupButton:
 		// The blocked empty state's pill: the mouse path for the Enter above it.
 		return p.openSetupCmd()
+	case regionOpenCreateButton:
+		return p.openCreateModal()
+	case regionStartAgentButton:
+		return p.openStartAgentCreate(p.selectedWorktree())
 	case regionShellsPlusButton:
 		// Click on Shells [+] button - immediately create a new shell
 		return p.createNewShell("")

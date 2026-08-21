@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -363,12 +364,139 @@ func TestComboExactOrAllFilterShowsAllOnExactValue(t *testing.T) {
 	}
 }
 
+func unattachedWorktreePlugin(t *testing.T) *Plugin {
+	t.Helper()
+	p := New()
+	p.width, p.height = 120, 40
+	p.mouseHandler = mouse.NewHandler()
+	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
+	p.viewMode = ViewModeList
+	p.sidebarVisible = true
+	p.sidebarWidth = 40
+	p.activePane = PaneSidebar
+	p.worktrees = []*Worktree{{Name: "feature", Path: filepath.Join(p.ctx.WorkDir, "feature")}}
+	p.selectedIdx = 0
+	return p
+}
+
+func TestSOnUnattachedWorktreeOpensCreateFormKindShell(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	_ = p.handleListKeys(tea.KeyPressMsg{Code: 's', Text: "s"})
+	if p.viewMode != ViewModeCreate {
+		t.Fatalf("viewMode = %d, want ViewModeCreate", p.viewMode)
+	}
+	if p.createForm == nil {
+		t.Fatal("s opened no workspacecreate.Form")
+	}
+	if p.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("kind = %v, want shell", p.createForm.Kind())
+	}
+	if p.createTargetWorktree != p.worktrees[0] {
+		t.Fatal("create target was not the selected worktree")
+	}
+	if p.agentConfigModal != nil || p.viewMode == ViewModeAgentConfig {
+		t.Fatal("s opened the legacy agent config modal")
+	}
+}
+
+func TestSOnRunningWorktreeStillOpensAgentChoice(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	p.worktrees[0].Agent = &Agent{TmuxSession: "live"}
+	_ = p.handleListKeys(tea.KeyPressMsg{Code: 's', Text: "s"})
+	if p.viewMode != ViewModeAgentChoice {
+		t.Fatalf("viewMode = %d, want ViewModeAgentChoice", p.viewMode)
+	}
+	if p.createForm != nil {
+		t.Fatal("running worktree s opened the create form")
+	}
+}
+
+func TestStartAgentSubmitOnTargetWorktreeDoesNotCreateShell(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	_ = p.openStartAgentCreate(p.worktrees[0])
+	if p.createForm == nil {
+		t.Fatal("expected create form")
+	}
+	cmd := p.submitCreateForm()
+	if cmd == nil {
+		t.Fatal("submit returned no command")
+	}
+	if p.createForm != nil || p.createTargetWorktree != nil {
+		t.Fatal("form/target should clear after submit")
+	}
+	msg := cmd()
+	if _, ok := msg.(ShellCreatedMsg); ok {
+		t.Fatal("target worktree submit created a project shell")
+	}
+	if _, ok := msg.(AgentStartedMsg); !ok {
+		t.Fatalf("submit produced %T, want AgentStartedMsg", msg)
+	}
+}
+
+func TestStartAgentButtonClickOpensCreateForm(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	cmd := p.handleMouseClick(mouse.MouseAction{
+		Type:   mouse.ActionClick,
+		Region: &mouse.Region{ID: regionStartAgentButton},
+	})
+	if cmd == nil && p.createForm == nil {
+		t.Fatal("click Start Agent did nothing")
+	}
+	if p.createForm == nil || p.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatal("click Start Agent did not open workspacecreate on Shell")
+	}
+}
+
+func TestEnterOnEmptyPreviewOpensCreateForm(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	p.activePane = PanePreview
+	_ = p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if p.createForm == nil || p.createForm.Kind() != workspacecreate.KindShell {
+		t.Fatalf("enter on empty preview did not open workspacecreate.Form, viewMode=%d", p.viewMode)
+	}
+}
+
+func TestEmptyWorktreePreviewIsPaddedWithStartAgentButton(t *testing.T) {
+	p := unattachedWorktreePlugin(t)
+	p.activePane = PanePreview
+	rendered := ansi.Strip(p.renderOutputContent(80, 20))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 5 {
+		t.Fatalf("empty preview too short:\n%s", rendered)
+	}
+	if strings.TrimSpace(lines[1]) != "" {
+		t.Fatalf("missing 1-row top padding, line 1 = %q", lines[1])
+	}
+	if !strings.HasPrefix(lines[2], "  ") {
+		t.Fatalf("missing 2-col left padding, line 2 = %q", lines[2])
+	}
+	if !strings.Contains(rendered, "No agent running") {
+		t.Fatalf("lost empty-agent copy:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Start Agent") {
+		t.Fatalf("missing Start Agent button:\n%s", rendered)
+	}
+
+	_ = p.View(p.width, p.height)
+	var found bool
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionStartAgentButton {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("Start Agent button has no hit region")
+	}
+}
+
 func TestNOpensSharedCreateFormWorktreeNameFocused(t *testing.T) {
 	p := New()
 	p.width, p.height = 80, 40
 	p.mouseHandler = mouse.NewHandler()
 	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
 	p.viewMode = ViewModeList
+	_ = workspacecreate.Open(workspacecreate.OpenOpts{Kind: workspacecreate.KindWorktree})
 
 	_ = p.handleListKeys(tea.KeyPressMsg{Code: 'n', Text: "n"})
 	if p.viewMode != ViewModeCreate {
@@ -398,6 +526,7 @@ func TestHeaderPlusOpensCreateFormKindFocused(t *testing.T) {
 	p.mouseHandler = mouse.NewHandler()
 	p.ctx = &plugin.Context{Epoch: 1, WorkDir: t.TempDir(), ProjectRoot: t.TempDir()}
 	p.viewMode = ViewModeList
+	_ = workspacecreate.Open(workspacecreate.OpenOpts{Kind: workspacecreate.KindWorktree})
 
 	cmd := p.handleMouseClick(mouse.MouseAction{
 		Type:   mouse.ActionClick,

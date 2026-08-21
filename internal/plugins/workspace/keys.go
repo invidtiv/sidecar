@@ -419,6 +419,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if msg.String() == "enter" && p.activePane == PaneSidebar && p.setupPromptActive() {
 		return p.openSetupCmd()
 	}
+	if msg.String() == "enter" && p.activePane == PaneSidebar && p.firstRunEmptyActive() {
+		return p.openCreateModal()
+	}
 	if handled, cmd := p.handleDocKey(msg); handled {
 		return cmd
 	}
@@ -690,6 +693,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 					agentType := p.resolveWorktreeAgentType(wt)
 					return p.StartAgent(wt, agentType)
 				}
+				if p.activePane == PanePreview && p.startAgentEmptyActive() {
+					return p.openStartAgentCreate(wt)
+				}
 			}
 			if cmd := p.enterInteractiveMode(); cmd != nil {
 				return cmd
@@ -841,9 +847,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return nil
 		}
 		if wt.Agent == nil {
-			// No agent running - open agent config modal
-			p.openAgentConfigModal(wt, false)
-			return nil
+			return p.openStartAgentCreate(wt)
 		}
 		// Agent exists - show choice modal (attach and/or restart)
 		p.agentChoiceWorktree = wt

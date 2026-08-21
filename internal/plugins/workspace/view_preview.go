@@ -19,6 +19,7 @@ func (p *Plugin) renderPreviewContent(width, height int) string {
 	// frame's header records. Clearing them first means a frame that draws no
 	// header leaves no click targets behind it.
 	p.previewActionPlacements = nil
+	p.startAgentBtn = startAgentButtonHit{}
 	if content, ok := p.renderDocumentSplit(width, height); ok {
 		return content
 	}
@@ -390,7 +391,7 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 	}
 
 	if wt.Agent == nil {
-		return notice(dimText("No agent running\nPress 's' to start an agent"))
+		return notice(p.renderStartAgentEmpty(width))
 	}
 
 	// Hint depends on mode - interactive mode shows exit hints
@@ -414,6 +415,80 @@ func (p *Plugin) renderOutputContent(width, height int) string {
 		hint = p.watchedAttachHint()
 	}
 	return p.renderCapturedTerminal(chips, actions, hint, wt.Agent.OutputBuf, width, height, false, "No output yet")
+}
+
+const (
+	emptyPreviewTopPad  = 1
+	emptyPreviewLeftPad = 2
+	startAgentBtnLabel  = "[ Start Agent ]"
+)
+
+// startAgentButtonHit is the preview empty-state button, in content-local
+// coordinates (origin is the first body row under the Output header).
+type startAgentButtonHit struct {
+	drawn bool
+	row   int
+	col   int
+	width int
+}
+
+func (p *Plugin) startAgentEmptyActive() bool {
+	if p.selectingShell() {
+		return false
+	}
+	wt := p.selectedWorktree()
+	return wt != nil && !wt.IsMain && wt.Agent == nil && !wt.IsOrphaned
+}
+
+func (p *Plugin) renderStartAgentEmpty(width int) string {
+	p.startAgentBtn = startAgentButtonHit{}
+	guidance := []string{
+		"No agent running",
+		"Press s or click Start Agent to launch one.",
+	}
+	pad := strings.Repeat(" ", emptyPreviewLeftPad)
+	var lines []string
+	for i := 0; i < emptyPreviewTopPad; i++ {
+		lines = append(lines, "")
+	}
+	for _, line := range guidance {
+		lines = append(lines, dimText(pad+line))
+	}
+	lines = append(lines, "")
+	style := styles.Button
+	if p.activePane == PanePreview {
+		style = styles.ButtonFocused
+	}
+	if p.hoverStartAgentButton {
+		style = styles.ButtonHover
+	}
+	label := startAgentBtnLabel
+	if width > 0 && emptyPreviewLeftPad+ansi.StringWidth(label) > width {
+		label = "[Start]"
+	}
+	pill := styles.RenderPillWithStyle(label, style, nil)
+	btnRow := len(lines)
+	lines = append(lines, pad+pill)
+	p.startAgentBtn = startAgentButtonHit{
+		drawn: ansi.StringWidth(pill) > 0 && width >= emptyPreviewLeftPad+1,
+		row:   btnRow,
+		col:   emptyPreviewLeftPad,
+		width: ansi.StringWidth(pill),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (p *Plugin) registerStartAgentButton(split previewSplit) {
+	if !p.startAgentBtn.drawn || p.mouseHandler == nil {
+		return
+	}
+	originX, originY := split.ContentX, p.previewContentY()+1
+	if surface := p.terminalSurfaceGeometry(false); surface.OK {
+		originX, originY = surface.X, surface.Y
+	}
+	p.mouseHandler.HitMap.AddRect(regionStartAgentButton,
+		originX+p.startAgentBtn.col, originY+p.startAgentBtn.row,
+		p.startAgentBtn.width, 1, nil)
 }
 
 // renderOrphanedMessage renders the recovery prompt for orphaned worktrees.
