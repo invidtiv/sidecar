@@ -24,10 +24,15 @@ var (
 	noteIDPattern  = regexp.MustCompile(`^nt-[a-z0-9]{1,64}$`)
 	// Only Sidecar-owned attachable sessions are recognized. Internal terminal
 	// and editor pane sessions deliberately remain ordinary text.
-	sessionPattern       = regexp.MustCompile(`\bsidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}`)
-	sessionNamePattern   = regexp.MustCompile(`^sidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
-	gitRevPattern        = regexp.MustCompile(`[0-9a-f]{7,64}`)
-	gitDottedPattern     = regexp.MustCompile(`[0-9a-f]{7,64}(?:\.\.\.|\.\.)[0-9a-f]{7,64}`)
+	sessionPattern     = regexp.MustCompile(`\bsidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}`)
+	sessionNamePattern = regexp.MustCompile(`^sidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+	gitRevPattern      = regexp.MustCompile(`[0-9a-f]{7,64}`)
+	// gitDottedPattern recognizes A..B / A...B where each side is a short hex
+	// rev or a symbolic name (main, HEAD, feature-x). Symbolic sides are
+	// verified by git before a span is decorated — a prose "..." costs one
+	// cached, negative resolution and never renders as a link. Terminal
+	// scanning (internal/terminallink) deliberately stays hex-only.
+	gitDottedPattern     = regexp.MustCompile(`(?:[0-9a-f]{7,64}|[A-Za-z][0-9A-Za-z_-]*)(?:\.\.\.|\.\.)(?:[0-9a-f]{7,64}|[A-Za-z][0-9A-Za-z_-]*)`)
 	gitCommitWordPattern = regexp.MustCompile(`\bcommit[ \t]+[0-9a-f]{7,64}`)
 )
 
