@@ -88,3 +88,15 @@ func TestScanContentLinksOptsOutOfPlaceholders(t *testing.T) {
 		t.Fatalf("placeholder was scanned: %+v output=%q", frame.Hits, frame.Output)
 	}
 }
+
+// URL yield reclassifies a claimed URL span into KindResource before
+// AllowedKinds filtering, so a scanning surface that advertised one kind
+// without the other would turn claimed URLs into inert text. Every surface
+// shares this set; the pair must move together or someone has to decide what a
+// claimed URL means on that surface first.
+func TestContentLinkKindsAlwaysPairURLWithResource(t *testing.T) {
+	kinds := ContentLinkKinds()
+	if !kinds.Allows(contentlink.KindURL) || !kinds.Allows(contentlink.KindResource) {
+		t.Fatalf("ContentLinkKinds = %+v, want url and resource together (claimed URLs are resource spans)", kinds)
+	}
+}

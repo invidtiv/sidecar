@@ -179,3 +179,51 @@ func TestYieldNeverRewritesExplicitOSCDestinations(t *testing.T) {
 		t.Fatalf("explicit URL span was rewritten: %+v", result.Spans[0])
 	}
 }
+
+// A claimed URL keeps its emulator hyperlink after reclassification: the
+// locator is still a browser URL, so cmd-click stays the escape hatch even
+// though Sidecar's own click now follows the resource span. Decoration carries
+// exactly one OSC-8 pair — the synthesized one, over source-stripped text.
+func TestDecorateHyperlinksClaimedResourceURLs(t *testing.T) {
+	spans := ScanWith("see https://github.com/marcus/sidecar/pull/88", Options{Matchers: claimingMatchers()})
+	got := resourceSpans(spans)
+	if len(got) != 1 {
+		t.Fatalf("want 1 claimed resource span, got %+v", spans)
+	}
+	out := Decorate("see https://github.com/marcus/sidecar/pull/88", spans)
+	if !strings.Contains(out, "\x1b]8;;https://github.com/marcus/sidecar/pull/88\x1b\\") {
+		t.Errorf("claimed resource lost its OSC-8 hyperlink: %q", out)
+	}
+	if got := strings.Count(out, "]8;;"); got != 2 { // one open + one close
+		t.Errorf("OSC-8 pair count = %d, want exactly one pair (%q)", got, out)
+	}
+}
+
+// Resource locators that are not http(s) URLs stay underline-only; there is no
+// browser destination to synthesize for a key or a ref.
+func TestDecorateNeverHyperlinksNonHTTPResourceLocators(t *testing.T) {
+	spans := ScanWith("CASH-1245", Options{Matchers: []ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key",
+		Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}}})
+	out := Decorate("CASH-1245", spans)
+	if !strings.Contains(out, "\x1b[4m") {
+		t.Errorf("resource span should be underlined: %q", out)
+	}
+	if strings.Contains(out, "\x1b]8;;") {
+		t.Errorf("a non-http resource locator must not become OSC-8: %q", out)
+	}
+}
+
+// Explicit destinations are never double-wrapped: ScanFrame strips the source
+// OSC first and decoration synthesizes exactly one pair back.
+func TestDecorateSynthesizesOneOSCPairOverExplicitSpans(t *testing.T) {
+	frame := "\x1b]8;;https://example.test/x\x1b\\https://example.test/x\x1b]8;;\x1b\\"
+	result := ScanFrame(frame, FrameOptions{Decorate: true})
+	if len(result.Spans) != 1 || result.Spans[0].Kind != KindURL {
+		t.Fatalf("want 1 explicit URL span, got %+v", result.Spans)
+	}
+	if got := strings.Count(result.Output, "]8;;"); got != 2 {
+		t.Errorf("OSC-8 pair count = %d, want exactly one synthesized pair: %q", got, result.Output)
+	}
+}
