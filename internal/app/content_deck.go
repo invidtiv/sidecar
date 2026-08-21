@@ -69,21 +69,25 @@ type appContentDeck struct {
 	canvas                            paneframe.Box
 	mouse                             *mouse.Handler
 	queued                            []tea.Cmd
-	primaryInner                      paneframe.Box
-	links                             []appContentLinkHit
-	tabHits                           []appDeckTabHit
-	hoverTabClose                     tabs.CloseHover
-	generation                        uint64
-	press                             *appContentLinkHit
-	pressX, pressY                    int
-	dragged                           bool
-	resolution                        *contentlink.ResolutionIndex
-	pending                           map[contentlink.Pending]bool
-	resourceMatchers                  []contentlink.ResourceMatcher
-	dragSplit                         int
-	live                              *livepanes.Set
-	suppressRefresh                   bool
-	edit                              *appDeckDocumentEdit
+	// pluginSize is the geometry last announced to plugin, and pluginSized
+	// distinguishes "never sized" from a genuine zero-sized frame.
+	pluginSize       paneframe.Size
+	pluginSized      bool
+	primaryInner     paneframe.Box
+	links            []appContentLinkHit
+	tabHits          []appDeckTabHit
+	hoverTabClose    tabs.CloseHover
+	generation       uint64
+	press            *appContentLinkHit
+	pressX, pressY   int
+	dragged          bool
+	resolution       *contentlink.ResolutionIndex
+	pending          map[contentlink.Pending]bool
+	resourceMatchers []contentlink.ResourceMatcher
+	dragSplit        int
+	live             *livepanes.Set
+	suppressRefresh  bool
+	edit             *appDeckDocumentEdit
 	// wheel holds one flick per scrollable leaf this deck draws, and wheelNow
 	// is its clock (nil is the wall clock, replaced by tests). Each leaf
 	// scrolls independently, so the delta one of them holds back belongs to it
@@ -330,11 +334,23 @@ func (c *appDeckContent) Title() string {
 	}
 	return ""
 }
+
+// SetSize is called on every render, and appDeckContent is rebuilt each time,
+// so the geometry the plugin was last told has to be remembered on the deck. A
+// resize is a state change, not a frame: re-announcing the same size every
+// frame hands the plugin a WindowSizeMsg it has already answered, and any
+// plugin that returns a command for one turns a static frame into a message
+// loop. An embedded td with an issue modal open re-rendered its description
+// markdown ~150 times a second on a terminal nobody had touched (td-fcb03a).
 func (c *appDeckContent) SetSize(size paneframe.Size) tea.Cmd {
 	c.size = size
 	if c.node.Kind != panelayout.Primary || c.h.plugin == nil {
 		return nil
 	}
+	if c.h.pluginSized && c.h.pluginSize == size {
+		return nil
+	}
+	c.h.pluginSize, c.h.pluginSized = size, true
 	updated, cmd := c.h.plugin.Update(tea.WindowSizeMsg{Width: size.Width, Height: size.Height})
 	c.h.plugin = updated
 	return cmd
