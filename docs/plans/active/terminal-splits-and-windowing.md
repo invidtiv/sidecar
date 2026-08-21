@@ -109,10 +109,14 @@ retarget; they always split, following the auto rules. The one-session-one-leaf
 refusal stays (it's forced by tmux and applies to *showing the same session twice*,
 not to having several sessions).
 
-- Live-leaf cap: start at 2 live leaves per workspace surface (primary + one split
-  terminal) and lift it only with a load proof of N control-mode subscriptions, per
-  the windowing plan's M2 risk notes. The cap is a refusal-with-toast, not a hidden
-  rule.
+- Live-leaf cap: at most 2 live terminals **on screen** at a time (primary + one
+  split terminal). Any number of screens/workspaces may each hold 1–2; off-screen
+  terminals hold no control-mode subscription (already the rule), so on-screen load
+  equals today's primary + panel. The cap is a refusal-with-toast, not a hidden
+  rule. Raising it to 3–4 on-screen live panes (an all-terminal 2×2) is a phase-B+
+  decision gated on a load proof of N simultaneous control-mode subscriptions.
+- No idle-throttling policy: unfocused on-screen live leaves stay fully live; add
+  `SetVisible(false)` demotion only if a measured performance problem appears.
 - Focus/keyboard: exactly one live leaf owns the keyboard at a time (existing rule);
   click or Tab moves it. No new key machinery in phase A.
 
@@ -129,7 +133,18 @@ Extend `internal/workspacecreate` / `create_modal.go`:
 - The row set is data-driven so phase B rows (File, Git diff, td issue, Note) are
   additions to a table, not new modal code.
 
-### A4 — Sidebar badge
+### A4 — Rename via clickable pane title
+
+Non-primary terminal leaves have no sidebar row to select (badge-only grouping),
+so rename lives on the pane itself: the title label at the top-left of the pane
+header is a click target that opens the existing shell-rename modal. Cheap by
+construction — pane headers are already `paneframe` hit regions (click-to-focus),
+so this adds one region on the title text and reuses the rename flow. Names default
+to an auto-name (e.g. `term · <workdir base>`); agent-driven renames simply show up
+in the header. Mouse-only in phase A; a keyboard path arrives with the deferred
+chord tier. Per the parity rule, the clickable-title region lands in `paneframe`.
+
+### A5 — Sidebar badge
 
 - Workspace rows gain the layout glyph (`◧◨` / `⊞n`) derived from the persisted
   pane tree's content-leaf count, rendered in the existing row style (rows keep
@@ -138,11 +153,13 @@ Extend `internal/workspacecreate` / `create_modal.go`:
 - Applies to both the project workspace sidebar and the global Sessions browser
   list, from one shared helper.
 
-### A5 — Parity and persistence
+### A6 — Parity and persistence
 
-- Both surfaces bind through their `pane_host.go`; the terminal leaf kind must
-  answer in both or degrade explicitly. Open question 2 below governs how far the
-  global surface goes in phase A.
+- Both surfaces bind through their `pane_host.go`. The rule is parity with the
+  primary terminal: on each surface, a split terminal leaf gets exactly the
+  treatment the primary terminal gets there — interactive where the primary is
+  interactive (project workspace), capture-preview where the primary is a preview
+  (global Sessions browser tiles). No special case in either direction.
 - Persistence evolves `state.PaneLayoutJSON` in place; unknown kind ⇒ drop the
   leaf and collapse its split (windowing plan persistence rules).
 
@@ -191,17 +208,15 @@ are project-scoped peers, listed and badged like any other.
 - **Equalize:** ships whenever the 2×2 grid does (double-click divider and/or a
   command), since binary-tree ratios otherwise read as 50/25/25.
 
-## Open questions
+## Resolved questions
 
-1. **Live-leaf cap number and idle policy** — 2 in phase A; what does B3 allow
-   per project, and do unfocused live leaves drop to `SetVisible(false)`? Needs the
-   control-subscription load proof before raising the cap.
-2. **Global Sessions browser and live terminal leaves in phase A** — full live
-   binding, or render the leaf as a capture preview (like session previews today)
-   with a "focus to interact" affordance? Preview-first is the cheaper honest
-   option; decide before A5.
-3. **Terminal leaf naming/rename** — auto-name only in phase A, or reuse the
-   shell-rename flow immediately?
+1. **Live-leaf cap:** 2 live terminals on screen at a time; unlimited across
+   screens; no idle `SetVisible(false)` demotion unless a measured performance
+   problem forces it (see A2).
+2. **Global Sessions browser:** split terminals mirror the primary terminal's
+   treatment per surface — no separate liveness decision (see A6).
+3. **Rename:** clickable pane-title label opens the rename modal, shipped in
+   phase A (see A4). Sidebar grouping stays badge-only.
 
 ## Acceptance evidence
 
