@@ -537,10 +537,9 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	return p, nil
 }
 
-// clickToSource maps a click in the editor body to a source line/column.
-// Both rendered/raw view and textarea edit mode map through soft-wrapped visual
-// rows. Sets previewCursorLine to that visual row so enterEditAt can keep the
-// clicked screen row.
+// previewContentLinkAt reports whether a preview click landed on a span the
+// app content deck can activate without a Ready snapshot (issue ids, http
+// URLs, sidecar://note/…). Unresolved file/diff tokens must not match.
 func (p *Plugin) previewContentLinkAt(x, y int) bool {
 	if !p.previewMode || p.editorNote == nil {
 		return false
@@ -552,38 +551,45 @@ func (p *Plugin) previewContentLinkAt(x, y int) bool {
 	}
 	col := p.screenXToEditorCol(x)
 	line := p.viewSurface.Lines[visual]
+	// Only kinds ScanFrame can emit without a host Ready snapshot. File and
+	// diff hits stay pending until the app deck resolves them; treating those
+	// as links here steals the click (no edit, no activation).
 	kinds := contentlink.NewKindSet(
-		contentlink.KindFile,
 		contentlink.KindIssue,
-		contentlink.KindDiff,
-		contentlink.KindResource,
 		contentlink.KindURL,
 		contentlink.KindInternal,
 	)
 	frame := contentlink.ScanFrame(line, contentlink.FrameOptions{
-		InternalNamespaces: map[string]contentlink.URIOptions{"note": {}},
-		AllowedKinds:       kinds,
+		InternalNamespaces: map[string]contentlink.URIOptions{
+			"note": {ValidateID: validNotesInternalID},
+		},
+		AllowedKinds: kinds,
 	})
 	for _, span := range frame.Spans {
-		if span.Kind != "" && col >= span.StartCol && col <= span.EndCol {
-			return true
-		}
-	}
-	for _, span := range contentlink.ScanWith(ansi.Strip(line), contentlink.Options{
-		Resolve: func(raw string) (string, contentlink.Extra, bool) {
-			return raw, contentlink.Extra{}, true
-		},
-		ResolveDiff: func(raw string) (string, contentlink.Extra, bool) {
-			return raw, contentlink.Extra{}, true
-		},
-	}) {
-		if kinds.Allows(span.Kind) && col >= span.StartCol && col <= span.EndCol {
+		if span.Kind != "" && kinds.Allows(span.Kind) && col >= span.StartCol && col <= span.EndCol {
 			return true
 		}
 	}
 	return false
 }
 
+func validNotesInternalID(id string) bool {
+	if !strings.HasPrefix(id, "nt-") || len(id) < 4 || len(id) > 67 {
+		return false
+	}
+	for _, r := range id[3:] {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// clickToSource maps a click in the editor body to a source line/column.
+// Both rendered/raw view and textarea edit mode map through soft-wrapped visual
+// rows. Sets previewCursorLine to that visual row so enterEditAt can keep the
+// clicked screen row.
 func (p *Plugin) clickToSource(x, y int) (line, col int) {
 	visualInView := y - p.editorContentStartY()
 	if visualInView < 0 {

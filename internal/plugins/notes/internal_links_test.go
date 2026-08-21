@@ -202,63 +202,86 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 }
 
 func TestPreviewClickOnContentLinkDoesNotEnterEdit(t *testing.T) {
-	store := openTestStore(t)
-	p := navigationTestPlugin(store, "/project")
-	note := Note{ID: "nt-4jdj4e", Title: "links", Content: "See td-7be1ec and README.md in the tree."}
-	p.notes = []Note{note}
-	p.editorNote = &p.notes[0]
-	p.previewLines = strings.Split(note.Content, "\n")
-	p.previewMode = true
-	p.markdownView = false
-	_ = p.View(100, 12)
-	p.registerMouseRegions()
+	click := func(t *testing.T, content, token string) (*Plugin, bool, bool) {
+		t.Helper()
+		store := openTestStore(t)
+		p := navigationTestPlugin(store, t.TempDir())
+		note := Note{ID: "nt-4jdj4e", Title: "links", Content: content}
+		p.notes = []Note{note}
+		p.editorNote = &p.notes[0]
+		p.previewLines = strings.Split(note.Content, "\n")
+		p.previewMode = true
+		p.markdownView = false
+		_ = p.View(100, 12)
+		p.registerMouseRegions()
 
-	layout := p.editorLayout()
-	y := 1 + layout.contentRow
-	contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
-	plain := ansi.Strip(p.viewSurface.Lines[0])
-	issueAt := strings.Index(plain, "td-7be1ec")
-	if issueAt < 0 {
-		t.Fatalf("issue id not in preview %q", plain)
-	}
-	if !p.previewContentLinkAt(contentX+issueAt+1, y) {
-		t.Fatal("issue span was not recognized as a content link")
-	}
-	_, _ = p.handleMouseClick(mouse.MouseAction{
-		X:      contentX + issueAt + 1,
-		Y:      y,
-		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
-	})
-	if !p.previewMode {
-		t.Fatal("clicking a td link entered edit")
-	}
-
-	fileAt := strings.Index(plain, "README.md")
-	if fileAt < 0 {
-		t.Fatalf("file link not in preview %q", plain)
-	}
-	_, _ = p.handleMouseClick(mouse.MouseAction{
-		X:      contentX + fileAt + 1,
-		Y:      y,
-		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
-		Alt:    true,
-	})
-	if !p.previewMode {
-		t.Fatal("alt+click on a file link entered edit")
+		layout := p.editorLayout()
+		y := 1 + layout.contentRow
+		contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
+		plain := ansi.Strip(p.viewSurface.Lines[0])
+		at := strings.Index(plain, token)
+		if at < 0 {
+			t.Fatalf("%q not in preview %q", token, plain)
+		}
+		x := contentX + at + 1
+		hit := p.previewContentLinkAt(x, y)
+		_, _ = p.handleMouseClick(mouse.MouseAction{
+			X: x, Y: y,
+			Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+		})
+		return p, hit, p.previewMode
 	}
 
-	textAt := strings.Index(plain, "See ")
-	if textAt < 0 {
-		textAt = 0
-	}
-	_, _ = p.handleMouseClick(mouse.MouseAction{
-		X:      contentX + textAt,
-		Y:      y,
-		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+	t.Run("issue", func(t *testing.T) {
+		p, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "td-7be1ec")
+		if !hit || !preview {
+			t.Fatalf("td link hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+		_ = p
 	})
-	if p.previewMode {
-		t.Fatal("clicking non-link preview text did not enter edit")
-	}
+	t.Run("unresolved-filename-enters-edit", func(t *testing.T) {
+		p, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "README.md")
+		if hit || preview {
+			t.Fatalf("missing README.md hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+		p.previewMode = true
+		layout := p.editorLayout()
+		y := 1 + layout.contentRow
+		contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
+		plain := ansi.Strip(p.viewSurface.Lines[0])
+		at := strings.Index(plain, "README.md")
+		_, _ = p.handleMouseClick(mouse.MouseAction{
+			X: contentX + at + 1, Y: y, Alt: true,
+			Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+		})
+		if p.previewMode {
+			t.Fatal("alt+click on missing README.md did not enter edit")
+		}
+	})
+	t.Run("hex-lookalike-enters-edit", func(t *testing.T) {
+		_, hit, preview := click(t, "commit abcdefa is not a link", "abcdefa")
+		if hit || preview {
+			t.Fatalf("hex lookalike hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+	})
+	t.Run("plain-text-enters-edit", func(t *testing.T) {
+		_, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "See ")
+		if hit || preview {
+			t.Fatalf("plain text hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+	})
+	t.Run("internal-note-uri", func(t *testing.T) {
+		_, hit, preview := click(t, "Open sidecar://note/nt-4jdj4e next", "sidecar://note/nt-4jdj4e")
+		if !hit || !preview {
+			t.Fatalf("internal note uri hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+	})
+	t.Run("http-url", func(t *testing.T) {
+		_, hit, preview := click(t, "See https://example.com/notes later", "https://example.com/notes")
+		if !hit || !preview {
+			t.Fatalf("http url hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+	})
 }
 
 func navigationTestPlugin(store noteStore, root string) *Plugin {
