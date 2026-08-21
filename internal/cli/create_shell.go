@@ -89,21 +89,13 @@ func runCreateShell(env Env, args []string) int {
 	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		code := destExitCode(err)
-		if code == 3 {
-			return 2
-		}
-		return code
+		return createDestExitCode(err)
 	}
 
 	proj, err := registeredProjectForCreate(env.StateDir, dest)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		code := destExitCode(err)
-		if code == 3 {
-			return 2
-		}
-		return code
+		return createDestExitCode(err)
 	}
 	if proj.Path == "" {
 		cliErrln(env.Stderr, "no Sidecar project is registered for this directory; pass --project or run from a registered project")
@@ -146,8 +138,10 @@ func runCreateShell(env Env, args []string) int {
 		DisplayName: display,
 		Focus:       &focus,
 	}
-	dest.Origin.WorkDir = proj.Path
 	dest.Origin.ProjectKey = proj.Key
+	if dest.Origin.WorkDir == "" {
+		dest.Origin.WorkDir = proj.Path
+	}
 	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
 		Kind:  uirequest.TargetKindShell,
 		Value: session,

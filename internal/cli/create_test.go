@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 func TestCreateShellValidation(t *testing.T) {
@@ -173,6 +175,98 @@ func TestCreateWorktreeValidation(t *testing.T) {
 	}
 }
 
+func TestCreateShellFromSiblingWorktree(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	repo := filepath.Join(root, "repo")
+	topic := filepath.Join(root, "repo-topic")
+	initGitRepo(t, repo)
+	runGit(t, repo, "worktree", "add", "-b", "topic", topic)
+	writeProjectMeta(t, stateDir, "demo", repo)
+	writeRegisteredWorktree(t, stateDir, repo, topic)
+	t.Chdir(topic)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--name", "from-topic", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("from sibling worktree: handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+	if result.Shell.Session == "" {
+		t.Fatal("missing session")
+	}
+}
+
+func TestCreateShellFromSidecarWSIdentity(t *testing.T) {
+	stateHome, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	repo := filepath.Join(root, "repo")
+	topic := filepath.Join(root, "repo-topic")
+	initGitRepo(t, repo)
+	runGit(t, repo, "worktree", "add", "-b", "topic", topic)
+	writeProjectMeta(t, stateDir, "demo", repo)
+	writeRegisteredWorktree(t, stateDir, repo, topic)
+	t.Chdir(topic)
+
+	socket := filepath.Join(t.TempDir(), "tmux.sock")
+	binDir := t.TempDir()
+	tmux := filepath.Join(binDir, "tmux")
+	script := "#!/bin/sh\nprintf '%s\\t%s\\t%s\\n' sidecar-ws-repo-topic " + shellQuote(socket) + " " + shellQuote(topic) + "\n"
+	if err := os.WriteFile(tmux, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--name", "from-ws", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("from sidecar-ws identity: handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+}
+
+func TestCreateShellLookupOriginKindState(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "stale")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	projectDir := filepath.Join(stateHome, "sidecar", "projects", "sidecar")
+	if err := os.Remove(filepath.Join(projectDir, "shells.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectDir, "shells.json"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 1 {
+		t.Fatalf("KindState = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "read registered shell manifest") {
+		t.Fatalf("stderr = %q, want original KindState message", errOut.String())
+	}
+}
+
 func TestCreateWorktreeUnknownProjectDoesNotInitState(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	t.Chdir(t.TempDir())
@@ -242,6 +336,87 @@ func TestCreateWorktreeNoLaunchHonorsHook(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(result.Path, ".env")); err != nil {
 		t.Fatalf("env file was not copied: %v", err)
+	}
+}
+
+func TestCreateWorktreeRequiredHookDoesNotLaunch(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	cfgDir := t.TempDir()
+	cfgPath := filepath.Join(cfgDir, "config.json")
+	if err := os.WriteFile(cfgPath, []byte(`{
+  "plugins": {"workspace": {"worktreeSetup": {"runHook": true, "hookPath": ".worktree-setup.sh", "hookRequired": true}}}
+}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(repo); err == nil {
+		repo = resolved
+	}
+	initGitRepo(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, ".worktree-setup.sh"), []byte("#!/bin/bash\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(repo)
+	writeProjectMeta(t, stateDir, "demo", repo)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "create", "worktree", "--json", "--wait", "0", "boom"}, &out, &errOut)
+	if !handled || code != 1 {
+		t.Fatalf("required hook: handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
+	}
+	var result createWorktreeResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	if workspaceops.SessionExists(result.Shell.Session) {
+		t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+		t.Fatalf("required hook failure launched %s", result.Shell.Session)
+	}
+	head, err := exec.Command("git", "-C", result.Path, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtKey, err := projectdir.WorktreeKey(result.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoKey, err := workspaceops.RepoKeyForPath(t.Context(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal, err := workspaceops.LoadPendingCreation(t.Context(), repo, []workspaceops.WorktreeRecord{{
+		Key: wtKey, Path: result.Path, HEADOID: strings.TrimSpace(string(head)),
+	}}, repoKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal == nil {
+		t.Fatal("CLI journal not visible to LoadPendingCreation with plugin repoKey")
+	}
+	if journal.RepoKey != repoKey {
+		t.Fatalf("journal.RepoKey = %q want %q", journal.RepoKey, repoKey)
+	}
+}
+
+func initGitRepo(t *testing.T, repo string) {
+	t.Helper()
+	if err := os.MkdirAll(repo, 0755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "init", "-q")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-qm", "init")
+}
+
+func writeRegisteredWorktree(t *testing.T, stateDir, projectRoot, worktreePath string) {
+	t.Helper()
+	if _, err := projectdir.WorktreeDirWithBase(stateDir, projectRoot, worktreePath); err != nil {
+		t.Fatal(err)
 	}
 }
 

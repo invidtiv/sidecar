@@ -3,11 +3,13 @@ package overview
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -159,23 +161,14 @@ func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
 }
 
 func (m *Model) createRequestProject(req uirequest.Request) (Project, string, bool) {
-	if req.Origin.ProjectKey != "" {
-		for _, project := range m.projects {
-			key := projectKey(project)
-			if key == req.Origin.ProjectKey || project.Name == req.Origin.ProjectKey || filepath.Base(project.Path) == req.Origin.ProjectKey {
-				return project, key, true
-			}
-		}
-		if _, ok := m.results[req.Origin.ProjectKey]; ok {
-			return Project{Key: req.Origin.ProjectKey, Path: req.Origin.WorkDir, Name: req.Origin.ProjectKey}, req.Origin.ProjectKey, true
+	for _, project := range m.projects {
+		if m.originMatchesProject(req, project) {
+			return project, projectKey(project), true
 		}
 	}
-	if req.Origin.WorkDir != "" {
-		want := workspaceinventory.CanonicalPath(req.Origin.WorkDir)
-		for _, project := range m.projects {
-			if workspaceinventory.CanonicalPath(project.Path) == want {
-				return project, projectKey(project), true
-			}
+	if req.Origin.ProjectKey != "" {
+		if _, ok := m.results[req.Origin.ProjectKey]; ok {
+			return Project{Key: req.Origin.ProjectKey, Path: req.Origin.WorkDir, Name: req.Origin.ProjectKey}, req.Origin.ProjectKey, true
 		}
 	}
 	if req.Origin.TmuxSession != "" {
@@ -192,10 +185,50 @@ func (m *Model) createRequestProject(req uirequest.Request) (Project, string, bo
 			}
 		}
 	}
-	if len(m.projects) == 1 {
-		return m.projects[0], projectKey(m.projects[0]), true
-	}
 	return Project{}, "", false
+}
+
+func (m *Model) originMatchesProject(req uirequest.Request, project Project) bool {
+	key := projectKey(project)
+	if req.Origin.ProjectKey != "" {
+		if req.Origin.ProjectKey == key || req.Origin.ProjectKey == project.Name || req.Origin.ProjectKey == filepath.Base(project.Path) {
+			return true
+		}
+		if dir, ok := projectdir.Lookup(project.Path); ok && filepath.Base(dir) == req.Origin.ProjectKey {
+			return true
+		}
+	}
+	if req.Origin.WorkDir == "" {
+		return false
+	}
+	want := workspaceinventory.CanonicalPath(req.Origin.WorkDir)
+	if workspaceinventory.CanonicalPath(project.Path) == want || createPathInside(want, project.Path) {
+		return true
+	}
+	result, ok := m.results[key]
+	if !ok {
+		return false
+	}
+	for _, ws := range result.Workspaces {
+		if ws.Path == "" {
+			continue
+		}
+		if workspaceinventory.CanonicalPath(ws.Path) == want || createPathInside(want, ws.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+func createPathInside(path, root string) bool {
+	if path == "" || root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(workspaceinventory.CanonicalPath(root), workspaceinventory.CanonicalPath(path))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (m *Model) applyCreateShellRequest(req uirequest.Request, payload uirequest.CreatePayload, project Project, key string) tea.Cmd {

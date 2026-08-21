@@ -2,6 +2,7 @@ package overview
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -142,11 +143,12 @@ func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
 	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
 
 	path := workspaceinventory.CanonicalPath(t.TempDir())
+	writeRegisteredSlug(t, stateHome, "demo", path)
 	m := New(workspaceinventory.Collector{})
-	m.projects = []Project{{Name: "sidecar", Path: path}}
+	m.projects = []Project{{Name: "Demo", Path: path}}
 	key := projectKey(m.projects[0])
 	existing := workspaceinventory.Workspace{
-		ID: key + ":shell:sidecar-sh-sidecar-1", ProjectKey: key, ProjectName: "sidecar",
+		ID: key + ":shell:sidecar-sh-sidecar-1", ProjectKey: key, ProjectName: "Demo",
 		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", Path: path,
 	}
 	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{existing}}
@@ -161,7 +163,7 @@ func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
 	}
 	req := uirequest.Request{
 		ID: "req-create-shell", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
-		Origin:  uirequest.Origin{ProjectKey: key, WorkDir: path},
+		Origin:  uirequest.Origin{ProjectKey: "demo", WorkDir: path},
 		Payload: payload,
 	}
 	_ = m.handleUIRequest(req)
@@ -176,6 +178,80 @@ func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
 	}
 }
 
+func TestOverview_CreateOriginSlugMatchesProjectCount(t *testing.T) {
+	for _, n := range []int{0, 1, 2} {
+		t.Run(string(rune('0'+n))+"projects", func(t *testing.T) {
+			stateHome := t.TempDir()
+			t.Setenv("XDG_STATE_HOME", stateHome)
+			t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+			a := workspaceinventory.CanonicalPath(t.TempDir())
+			b := workspaceinventory.CanonicalPath(t.TempDir())
+			writeRegisteredSlug(t, stateHome, "demo", a)
+			m := New(workspaceinventory.Collector{})
+			switch n {
+			case 1:
+				m.projects = []Project{{Name: "Demo", Path: a}}
+			case 2:
+				m.projects = []Project{{Name: "Demo", Path: a}, {Name: "Other", Path: b}}
+			}
+			if n > 0 {
+				key := projectKey(m.projects[0])
+				m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{{
+					ID: key + ":shell:sidecar-sh-a-1", ProjectKey: key, ProjectName: "Demo",
+					Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-a-1", Name: "Shell 1", Path: a, Live: true,
+				}}}
+				m.syncBoard()
+			}
+			focus := true
+			payload, err := json.Marshal(uirequest.CreatePayload{
+				Kind: uirequest.CreateKindShell, Session: "sidecar-sh-a-2", DisplayName: "peer", Focus: &focus,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := uirequest.Request{
+				ID: "req-slug-" + string(rune('0'+n)), Action: uirequest.ActionCreate,
+				CreatedAt: time.Now().UTC(), TTLMs: 5000,
+				Origin:  uirequest.Origin{ProjectKey: "demo", WorkDir: a},
+				Payload: payload,
+			}
+			_ = m.handleUIRequest(req)
+			acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n == 0 {
+				if len(acks) != 0 {
+					t.Fatalf("0 projects should not ack, got %+v", acks)
+				}
+				return
+			}
+			selected, ok := m.SelectedWorkspace()
+			if !ok || selected.TmuxName != "sidecar-sh-a-2" {
+				t.Fatalf("n=%d selected = %+v ok=%v", n, selected, ok)
+			}
+			if len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+				t.Fatalf("n=%d acks = %+v", n, acks)
+			}
+		})
+	}
+}
+
+func writeRegisteredSlug(t *testing.T, stateHome, slug, path string) {
+	t.Helper()
+	dir := filepath.Join(stateHome, "sidecar", "projects", slug)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOverview_CreateWorktreeSelectsAndAcks(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
@@ -183,11 +259,13 @@ func TestOverview_CreateWorktreeSelectsAndAcks(t *testing.T) {
 
 	path := workspaceinventory.CanonicalPath(t.TempDir())
 	wtPath := workspaceinventory.CanonicalPath(t.TempDir())
+	other := workspaceinventory.CanonicalPath(t.TempDir())
+	writeRegisteredSlug(t, stateHome, "demo", path)
 	m := New(workspaceinventory.Collector{})
-	m.projects = []Project{{Name: "sidecar", Path: path}}
+	m.projects = []Project{{Name: "Demo", Path: path}, {Name: "Other", Path: other}}
 	key := projectKey(m.projects[0])
 	existing := workspaceinventory.Workspace{
-		ID: key + ":worktree:" + path, ProjectKey: key, ProjectName: "sidecar",
+		ID: key + ":worktree:" + path, ProjectKey: key, ProjectName: "Demo",
 		Kind: workspaceinventory.KindWorktree, Path: path, Name: "main", IsMain: true, Live: true,
 	}
 	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{existing}}
@@ -203,7 +281,7 @@ func TestOverview_CreateWorktreeSelectsAndAcks(t *testing.T) {
 	}
 	req := uirequest.Request{
 		ID: "req-create-wt", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
-		Origin:  uirequest.Origin{ProjectKey: key, WorkDir: path},
+		Origin:  uirequest.Origin{ProjectKey: "demo", WorkDir: path},
 		Payload: payload,
 	}
 	_ = m.handleUIRequest(req)

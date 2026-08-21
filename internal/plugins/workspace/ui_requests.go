@@ -192,32 +192,40 @@ func (p *Plugin) applyCreateWorktreeRequest(req uirequest.Request, payload uireq
 	if payload.Path == "" {
 		return nil
 	}
-	wt := &Worktree{Name: payload.DisplayName, Path: payload.Path, Branch: payload.Branch}
-	if payload.DisplayName == "" {
-		wt.Name = filepath.Base(payload.Path)
+	name := payload.DisplayName
+	if name == "" {
+		name = filepath.Base(payload.Path)
+	}
+	idx := -1
+	for i, existing := range p.worktrees {
+		if existing != nil && sameCanonicalPath(existing.Path, payload.Path) {
+			idx = i
+			existing.Name = name
+			if payload.Branch != "" {
+				existing.Branch = payload.Branch
+			}
+			break
+		}
+	}
+	if idx < 0 {
+		wt := &Worktree{Name: name, Path: payload.Path, Branch: payload.Branch}
+		p.worktrees = append(p.worktrees, wt)
+		idx = len(p.worktrees) - 1
 	}
 	if payload.ShouldFocus() {
-		p.selectCreatedWorktree(wt)
-	} else {
-		found := false
-		for _, existing := range p.worktrees {
-			if sameCanonicalPath(existing.Path, wt.Path) {
-				found = true
-				if payload.DisplayName != "" {
-					existing.Name = payload.DisplayName
-				}
-				break
-			}
-		}
-		if !found {
-			p.worktrees = append(p.worktrees, wt)
-		}
+		p.selectWorktreeAt(idx)
+		p.resetPreviewScroll()
+		p.saveSelectionState()
+		p.ensureVisible()
 	}
 	surface := "worktree:" + payload.Path
 	if payload.Session != "" {
 		surface = "shell:" + payload.Session
 	}
 	p.ackCreate(req, surface)
+	if p.ctx != nil {
+		return p.refreshWorktrees()
+	}
 	return nil
 }
 

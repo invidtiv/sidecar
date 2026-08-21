@@ -172,6 +172,39 @@ func TestUIRequests_CreateShellSelectsAndAcks(t *testing.T) {
 	}
 }
 
+func TestUIRequests_CreateWorktreeDoesNotDuplicateInventoriedRow(t *testing.T) {
+	path := t.TempDir()
+	p := &Plugin{
+		worktrees: []*Worktree{{Name: "cli-wt", Path: path, Key: "hash-key", Branch: "old"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindWorktree, Session: "sidecar-ws-cli-wt", DisplayName: "renamed",
+		Focus: &focus, Path: path, Branch: "cli-wt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-wt-dup", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: path},
+		Payload: payload,
+	}
+	_ = p.handleUIRequest(req)
+	if len(p.worktrees) != 1 {
+		t.Fatalf("worktrees grew to %d: %+v", len(p.worktrees), p.worktrees)
+	}
+	if p.worktrees[0].Key != "hash-key" {
+		t.Fatalf("replaced inventoried key: %+v", p.worktrees[0])
+	}
+	if p.worktrees[0].Name != "renamed" || p.worktrees[0].Branch != "cli-wt" {
+		t.Fatalf("did not update row: %+v", p.worktrees[0])
+	}
+	if p.selectedWorktree() == nil || p.selectedWorktree().Key != "hash-key" {
+		t.Fatalf("selected = %#v", p.selectedWorktree())
+	}
+}
+
 func TestUIRequests_CreateWorktreeSelectsAndAcks(t *testing.T) {
 	p := &Plugin{
 		worktrees: []*Worktree{{Name: "main", Path: "/tmp/main", Key: "main"}},

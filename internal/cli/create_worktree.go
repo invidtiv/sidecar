@@ -96,20 +96,12 @@ func runCreateWorktree(env Env, args []string) int {
 	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		code := destExitCode(err)
-		if code == 3 {
-			return 2
-		}
-		return code
+		return createDestExitCode(err)
 	}
 	proj, err := registeredProjectForCreate(env.StateDir, dest)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		code := destExitCode(err)
-		if code == 3 {
-			return 2
-		}
-		return code
+		return createDestExitCode(err)
 	}
 	if proj.Path == "" {
 		cliErrln(env.Stderr, "no Sidecar project is registered for this directory; pass --project or run from a registered project")
@@ -129,7 +121,11 @@ func runCreateWorktree(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 2
 	}
-	plan.RepoKey = proj.Path
+	if repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, proj.Path); keyErr == nil {
+		plan.RepoKey = repoKey
+	} else {
+		plan.RepoKey = workspaceops.StablePathKey(proj.Path)
+	}
 	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	plan.AgentType = agent
 	plan.SkipPerms = skipPerms
@@ -160,7 +156,7 @@ func runCreateWorktree(env Env, args []string) int {
 
 	session := workspaceops.WorktreeSessionName(record.Path, record.Name)
 	var launchErr error
-	if !noLaunch {
+	if !noLaunch && len(requiredFailed) == 0 {
 		configured := map[string]string(nil)
 		if cfg != nil {
 			configured = cfg.Plugins.Workspace.AgentStart
@@ -193,8 +189,10 @@ func runCreateWorktree(env Env, args []string) int {
 		Path:        record.Path,
 		Branch:      record.Branch,
 	}
-	dest.Origin.WorkDir = record.Path
 	dest.Origin.ProjectKey = proj.Key
+	if dest.Origin.WorkDir == "" {
+		dest.Origin.WorkDir = proj.Path
+	}
 	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
 		Kind:  uirequest.TargetKindWorktree,
 		Value: record.Path,
