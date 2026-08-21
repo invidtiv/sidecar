@@ -28,10 +28,6 @@ const (
 	regionEnableCopy    = "config-enable-copy"
 	regionEnableRecheck = "config-enable-recheck"
 	regionEnableCancel  = "config-enable-cancel"
-
-	// installTimeout bounds one confirmed `brew install`. A package manager
-	// that never returns must not leave the route claiming to be working.
-	installTimeout = 15 * time.Minute
 )
 
 // installPhase is where a confirmed install has got to.
@@ -277,6 +273,10 @@ func (m *Model) startInstall() tea.Cmd {
 	state.spinner.Start()
 	integration := state.integration
 	env := m.installationEnv()
+	// Tick is queued on pending so Key/Mouse drain it without wrapping the
+	// install command itself — tests that run the control directly still
+	// receive installResultMsg, not a Batch.
+	m.pending = append(m.pending, installTick())
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), version.InstallTimeout)
 		defer cancel()
@@ -285,6 +285,26 @@ func (m *Model) startInstall() tea.Cmd {
 			outcome:     version.Install(ctx, env, integration.Descriptor),
 		}
 	}
+}
+
+type installTickMsg struct{}
+
+func (installTickMsg) configMsg() {}
+
+func installTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(time.Time) tea.Msg { return installTickMsg{} })
+}
+
+func (m *Model) tickInstallSpinner() tea.Cmd {
+	state := m.enable
+	if state == nil || state.phase != installRunning {
+		state = m.installing
+	}
+	if state == nil || state.phase != installRunning {
+		return nil
+	}
+	state.spinner.Tick()
+	return installTick()
 }
 
 // applyInstallResult settles a finished install. Success enables the panel and

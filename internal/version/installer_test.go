@@ -3,6 +3,8 @@ package version
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,7 +33,7 @@ func TestPlanInstallFallsBackToGoWhenBrewMissing(t *testing.T) {
 	if plan.Method != InstallMethodGo {
 		t.Fatalf("method = %s, want go", plan.Method)
 	}
-	if plan.Command != "go install github.com/marcus/td@latest" {
+	if plan.Command != "GOWORK=off go install github.com/marcus/td@latest" {
 		t.Fatalf("command = %q", plan.Command)
 	}
 }
@@ -96,6 +98,42 @@ func TestInstallGoFallbackRunsDisplayedCommand(t *testing.T) {
 	}
 	if !fake.ran("go install github.com/marcus/td@latest") {
 		t.Fatalf("ran %v", fake.calls)
+	}
+	if !strings.Contains(outcome.Command, "GOWORK=off") {
+		t.Fatalf("displayed command omitted GOWORK=off: %q", outcome.Command)
+	}
+}
+
+func TestInstallGoFindsBinaryInGOBINNotOnPATH(t *testing.T) {
+	gobin := t.TempDir()
+	t.Setenv("GOBIN", gobin)
+	origPATH := os.Getenv("PATH")
+	t.Setenv("PATH", "/usr/bin")
+
+	fake := newFakeEnv()
+	fake.lookPathErr["brew"] = true
+	fake.lookPathErr["td"] = true
+	fake.onRun = func(key string) {
+		if strings.Contains(key, "go install") {
+			p := filepath.Join(gobin, "td")
+			if err := os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Errorf("write gobin td: %v", err)
+			}
+		}
+	}
+	env := fake.env()
+	outcome := Install(context.Background(), env, TdDescriptor())
+	if !outcome.Installed {
+		t.Fatalf("go install into GOBIN was not detected: %+v", outcome)
+	}
+	if _, err := env.LookPath("td"); err != nil {
+		t.Fatalf("LookPath after install did not find GOBIN td: %v", err)
+	}
+	if got := os.Getenv("PATH"); !strings.HasPrefix(got, gobin) {
+		t.Fatalf("process PATH was not prepended with GOBIN: %q", got)
+	}
+	if origPATH == os.Getenv("PATH") {
+		t.Fatal("PATH was not updated for this process")
 	}
 }
 

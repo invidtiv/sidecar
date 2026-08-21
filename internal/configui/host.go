@@ -128,6 +128,8 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 		m.applyInstallation(msg)
 	case installResultMsg:
 		return m.applyInstallResult(msg)
+	case installTickMsg:
+		return m.tickInstallSpinner()
 	}
 	return nil
 }

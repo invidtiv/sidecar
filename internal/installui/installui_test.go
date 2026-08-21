@@ -89,7 +89,7 @@ func TestGoFallbackWhenBrewMissing(t *testing.T) {
 	if m.Plan.Method != version.InstallMethodGo {
 		t.Fatalf("method = %s", m.Plan.Method)
 	}
-	if m.DisplayCommand() != "go install github.com/marcus/td@latest" {
+	if m.DisplayCommand() != "GOWORK=off go install github.com/marcus/td@latest" {
 		t.Fatalf("command = %q", m.DisplayCommand())
 	}
 }

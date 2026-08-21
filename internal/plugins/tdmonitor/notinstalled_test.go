@@ -95,7 +95,7 @@ func TestNotInstalledGoFallbackWhenBrewMissing(t *testing.T) {
 	if !strings.Contains(view, "Install td") {
 		t.Fatalf("missing button:\n%s", view)
 	}
-	if !strings.Contains(view, "Runs: go install github.com/marcus/td@latest") {
+	if !strings.Contains(view, "Runs: GOWORK=off go install github.com/marcus/td@latest") {
 		t.Fatalf("did not advertise go install:\n%s", view)
 	}
 }

@@ -3,6 +3,8 @@ package version
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -90,13 +92,10 @@ func CommandAvailable(env *Environment, d Descriptor) bool {
 func InstallCommand(d Descriptor) string { return d.InstallHint() }
 
 // GoInstallCommand is the exact `go install` Sidecar would run, joined so it
-// can be shown and copied as one instruction.
+// can be shown and copied as one instruction. GOWORK=off is part of the
+// command: ExecRunner applies it, and a pasted copy must behave the same way.
 func GoInstallCommand(d Descriptor) string {
-	var parts []string
-	for _, cmd := range goInstallCommands(d, "latest") {
-		parts = append(parts, strings.Join(cmd, " "))
-	}
-	return strings.Join(parts, " && ")
+	return strings.Join(goInstallCommandStrings(d, "latest"), " && ")
 }
 
 // PlanInstall chooses Homebrew when brew is on PATH, otherwise go install.
@@ -203,10 +202,88 @@ func runInstall(ctx context.Context, env *Environment, d Descriptor, plan Instal
 	}
 	outcome.Output = strings.TrimSpace(output.String())
 	// A clean exit is not the claim; a resolvable command is.
-	if !CommandAvailable(env, d) {
-		outcome.Err = errors.New(d.Executable + " is still not on PATH after installing")
+	if CommandAvailable(env, d) {
+		outcome.Installed = true
 		return outcome
 	}
-	outcome.Installed = true
+	// `go install` writes GOBIN (or GOPATH/bin, or ~/go/bin). That directory
+	// is often missing from this process's PATH even though the install
+	// succeeded. Search it, then put it on this process's PATH so later
+	// LookPath/re-probe/setup see the new binary. The user's shell rc is not
+	// touched.
+	if plan.Method == InstallMethodGo {
+		if path := goBinExecutable(d.Executable); path != "" {
+			rememberInstalledCommand(env, d.Executable, path)
+			outcome.Installed = true
+			return outcome
+		}
+	}
+	outcome.Err = errors.New(d.Executable + " is still not on PATH after installing")
 	return outcome
+}
+
+// goInstallBinDir is the directory `go install` writes to for this process:
+// GOBIN if set, otherwise the first GOPATH/bin, otherwise ~/go/bin.
+func goInstallBinDir() string {
+	if v := strings.TrimSpace(os.Getenv("GOBIN")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("GOPATH")); v != "" {
+		if i := strings.IndexByte(v, os.PathListSeparator); i >= 0 {
+			v = v[:i]
+		}
+		if v != "" {
+			return filepath.Join(v, "bin")
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, "go", "bin")
+	}
+	return ""
+}
+
+func goBinExecutable(name string) string {
+	dir := goInstallBinDir()
+	if dir == "" || name == "" {
+		return ""
+	}
+	p := filepath.Join(dir, name)
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return p
+}
+
+func rememberInstalledCommand(env *Environment, name, path string) {
+	if env == nil || path == "" {
+		return
+	}
+	prependProcessPATH(filepath.Dir(path))
+	orig := env.LookPath
+	env.LookPath = func(n string) (string, error) {
+		if orig != nil {
+			if p, err := orig(n); err == nil {
+				return p, nil
+			}
+		}
+		if n == name {
+			return path, nil
+		}
+		return "", errors.New(n + ": not found")
+	}
+}
+
+func prependProcessPATH(dir string) {
+	if dir == "" {
+		return
+	}
+	path := os.Getenv("PATH")
+	sep := string(os.PathListSeparator)
+	for _, p := range filepath.SplitList(path) {
+		if p == dir {
+			return
+		}
+	}
+	_ = os.Setenv("PATH", dir+sep+path)
 }

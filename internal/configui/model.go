@@ -208,9 +208,19 @@ func (m *Model) Open(page PageID) {
 	m.panelsState = nil
 	m.advancedState = nil
 	m.aboutState = nil
-	m.enable = nil
 	m.addProject = nil
-	m.installing = nil
+	// A confirmed install already in flight belongs to the user, not this
+	// Open. Dropping it would swallow the result if Configuration is closed
+	// and reopened while Homebrew or go is still working.
+	inFlight := m.installing
+	if m.enable != nil && m.enable.phase == installRunning {
+		inFlight = m.enable
+	}
+	if inFlight != nil && inFlight.phase != installRunning {
+		inFlight = nil
+	}
+	m.enable = nil
+	m.installing = inFlight
 	m.resetDetail()
 }
 

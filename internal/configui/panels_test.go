@@ -275,7 +275,7 @@ func TestTasksEnableRouteOffersGoInstallWhenBrewMissing(t *testing.T) {
 	if !strings.Contains(view, "Install Tasks") {
 		t.Fatalf("go fallback did not offer install:\n%s", view)
 	}
-	if !strings.Contains(view, "go install github.com/marcus/tasks/cmd/tasks@latest") {
+	if !strings.Contains(view, "GOWORK=off go install github.com/marcus/tasks/cmd/tasks@latest") {
 		t.Fatalf("go fallback did not show the command:\n%s", view)
 	}
 	cmd := runByID(t, m, regionEnableInstall)
@@ -605,5 +605,63 @@ func TestInstallLeftRunningReportsFailure(t *testing.T) {
 	}
 	if loadSaved(t).Features.Flags[features.TasksPlugin.Name] {
 		t.Fatal("a failed install enabled the panel anyway")
+	}
+}
+
+// The Tasks install route animates its spinner: Start is not enough, Handle
+// must Tick and schedule the next frame while the install is still running.
+func TestTasksInstallSpinnerTicks(t *testing.T) {
+	present := map[string]bool{"brew": true}
+	m := panelsFixture(t, present, nil)
+	m.SetInstallEnvironment(stubEnvironmentWith(&stubRunner{}, present))
+
+	activate(t, m, regionPanel+panelIDTasks)
+	m.View(160, 45)
+	_ = runByID(t, m, regionEnableInstall)
+	if m.enable == nil || m.enable.phase != installRunning {
+		t.Fatal("the install did not start")
+	}
+	if !m.enable.spinner.IsActive() {
+		t.Fatal("the spinner was not started")
+	}
+	before := m.enable.spinner.View()
+	cmd := m.Handle(installTickMsg{})
+	if cmd == nil {
+		t.Fatal("a running install did not schedule the next spinner tick")
+	}
+	after := m.enable.spinner.View()
+	if after == "" || after == before {
+		t.Fatalf("spinner did not advance: before %q after %q", before, after)
+	}
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "Installing Tasks") {
+		t.Fatalf("ticked spinner is not on the install route:\n%s", view)
+	}
+}
+
+// Closing and reopening Configuration must not drop a confirmed install that
+// is still running.
+func TestInstallSurvivesConfigurationReopen(t *testing.T) {
+	present := map[string]bool{"brew": true}
+	m := panelsFixture(t, present, nil)
+	runner := &stubRunner{onRun: func() { present["tasks"] = true }}
+	m.SetInstallEnvironment(stubEnvironmentWith(runner, present))
+
+	activate(t, m, regionPanel+panelIDTasks)
+	m.View(160, 45)
+	cmd := runByID(t, m, regionEnableInstall)
+	if !m.Escape() {
+		t.Fatal("Escape did not leave the enable route")
+	}
+	if m.installing == nil {
+		t.Fatal("Escape dropped the in-flight install")
+	}
+	m.Open(PagePanels)
+	if m.installing == nil || m.installing.phase != installRunning {
+		t.Fatal("Open dropped the in-flight install")
+	}
+	saveCmd := m.Handle(cmd().(installResultMsg))
+	if saveCmd == nil {
+		t.Fatal("the install that outlived Open was never reported")
 	}
 }
