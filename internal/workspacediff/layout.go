@@ -189,7 +189,14 @@ func (v *View) commitFileHits(box mouse.Rect) []Hit {
 	if v.CommitDetail == nil {
 		return hits
 	}
-	hits = append(hits, Hit{ID: RegionCommitBack, Rect: mouse.Rect{X: box.X, Y: box.Y, W: box.W, H: 1}})
+	// A commit-root tab has nowhere to go back to, and the renderer draws that
+	// first row as a title ("Commit abc1234") rather than the "←" control. A
+	// back target registered under a title is a click that discards the file
+	// list and loads nothing, which is how the pane got stuck on "Loading
+	// commit files…" after clicking its own header.
+	if v.Target.Kind != TargetCommit {
+		hits = append(hits, Hit{ID: RegionCommitBack, Rect: mouse.Rect{X: box.X, Y: box.Y, W: box.W, H: 1}})
+	}
 	visible := box.H - commitFileListHeaderLines
 	if visible < 1 {
 		visible = 1

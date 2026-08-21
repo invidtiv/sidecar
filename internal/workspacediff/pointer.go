@@ -52,6 +52,12 @@ func (v *View) HandleClick(id string, data any) tea.Cmd {
 		return nil
 	case RegionCommitBack:
 		v.Focus = FocusFileList
+		// Back is a move within a commit LIST. A commit-root tab is the commit,
+		// so there is no list to return to and dropping the detail would leave
+		// the pane loading something nobody asked for.
+		if v.Target.Kind == TargetCommit {
+			return nil
+		}
 		v.resetCommitDetail()
 		return nil
 	case RegionCommitFile:
