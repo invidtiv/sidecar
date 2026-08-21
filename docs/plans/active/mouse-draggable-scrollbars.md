@@ -68,6 +68,15 @@ Terminal windows (rows-back-from-live-edge + `Follow`):
 
 Keep `RenderScrollbar` working unchanged for any caller we have not migrated yet; introduce an interactive wrapper alongside it.
 
+> **Placement deviation (recorded at review).** The state-free thumb math lives in
+> `internal/scroll/thumb.go`, not `internal/ui`: `internal/ui/confirm_dialog.go`
+> imports `internal/modal`, so modal→ui would cycle. `internal/ui` still exposes
+> the plan's API shape (`Geometry`, `RenderScrollbarWithGeometry`,
+> `OffsetAtRow`, `RowForOffset`) as delegates over the shared core, satisfying
+> rule 1 — no surface keeps its own copy of the math. Hover/drag variants derive
+> via intensity modulation (`styles.Lighten`) rather than new theme keys; idle
+> output stays byte-identical.
+
 ```go
 // internal/ui/scrollbar.go (extended)
 type Geometry struct {
