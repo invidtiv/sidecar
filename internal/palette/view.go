@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // keyColumnWidth is the fixed width for the key column to ensure clean alignment.
@@ -73,7 +74,7 @@ func (m *Model) countSection() modal.Section {
 	}, nil)
 }
 
-// listSection renders the command list with keyboard and mouse hit targets.
+// listSection renders the command list with scrollbar, keyboard and mouse hit targets.
 func (m *Model) listSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		entries := m.filtered
@@ -111,42 +112,44 @@ func (m *Model) listSection() modal.Section {
 		}
 		m.offset = scrollOffset
 
-		var sb strings.Builder
+		rowWidth := max(10, contentWidth-2) // Reserve 2 cols for space + scrollbar
+		lines := make([]string, 0, visibleCount)
 		focusables := make([]modal.FocusableInfo, 0, visibleCount)
-		lineOffset := 0
 
-		if scrollOffset > 0 {
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", scrollOffset)))
-			sb.WriteString("\n")
-			lineOffset++
-		}
-
-		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(entries); i++ {
-			entry := entries[i]
-			isSelected := i == selectedIdx
-			itemID := fmt.Sprintf("%s%d", paletteItemPrefix, i)
+		for i := 0; i < visibleCount; i++ {
+			entryIdx := scrollOffset + i
+			entry := entries[entryIdx]
+			isSelected := entryIdx == selectedIdx
+			itemID := fmt.Sprintf("%s%d", paletteItemPrefix, entryIdx)
 			isHovered := itemID == hoverID
 
-			line := m.renderEntry(entry, isSelected || isHovered, contentWidth)
-			sb.WriteString(line)
-			sb.WriteString("\n")
+			line := m.renderEntry(entry, isSelected || isHovered, rowWidth)
+			lineWidth := lipgloss.Width(line)
+			if lineWidth < rowWidth {
+				line += strings.Repeat(" ", rowWidth-lineWidth)
+			}
+			lines = append(lines, line)
 
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i - scrollOffset),
+				OffsetY: i,
 				Width:   contentWidth,
 				Height:  1,
 			})
 		}
 
-		remaining := len(entries) - (scrollOffset + visibleCount)
-		if remaining > 0 {
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		}
+		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(entries),
+			ScrollOffset: scrollOffset,
+			VisibleItems: visibleCount,
+			TrackHeight:  visibleCount,
+		})
+
+		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
 
 		return modal.RenderedSection{
-			Content:    strings.TrimRight(sb.String(), "\n"),
+			Content:    bodyContent,
 			Focusables: focusables,
 		}
 	}, nil)

@@ -1,6 +1,8 @@
 package palette
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -381,5 +383,38 @@ func TestUpdate_MouseClick(t *testing.T) {
 	}
 	if selectedMsg.CommandID != "cmd-1" || selectedMsg.Context != "ctx-1" || selectedMsg.Key != "k1" {
 		t.Errorf("unexpected selectedMsg: %+v", selectedMsg)
+	}
+}
+
+func TestView_ScrollbarAndStableHeight(t *testing.T) {
+	m := New()
+	m.SetSize(80, 24)
+	entries := make([]PaletteEntry, 30)
+	for i := 0; i < 30; i++ {
+		entries[i] = PaletteEntry{
+			Name:      fmt.Sprintf("Command %02d", i),
+			CommandID: fmt.Sprintf("cmd-%d", i),
+		}
+	}
+	m.filtered = entries
+	m.allEntries = entries
+
+	var initialLines int
+	for cur := 0; cur < len(entries); cur++ {
+		m.cursor = cur
+		m.clearModal()
+		v := m.View()
+
+		// Verify scrollbar characters are present
+		if !strings.Contains(v, "┃") && !strings.Contains(v, "│") {
+			t.Errorf("cursor %d: scrollbar characters missing from view", cur)
+		}
+
+		lines := strings.Count(v, "\n") + 1
+		if cur == 0 {
+			initialLines = lines
+		} else if lines != initialLines {
+			t.Fatalf("cursor %d: modal height changed to %d lines (expected %d lines)", cur, lines, initialLines)
+		}
 	}
 }
