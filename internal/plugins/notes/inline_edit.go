@@ -439,6 +439,12 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 	case regionListFilter:
 		p.activePane = PaneList
 		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
+	case regionNewNote:
+		p.activePane = PaneList
+		if p.viewFilter == FilterActive {
+			return p, p.createNote()
+		}
+		return p, nil
 	case regionNoteItem:
 		// User clicked a note item - select it
 		if idx, ok := data.(int); ok {

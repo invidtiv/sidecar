@@ -18,6 +18,7 @@ type noteMutationKind uint8
 const (
 	noteMutationCreate noteMutationKind = iota + 1
 	noteMutationDelete
+	noteMutationArchive
 )
 
 // noteMutation is the single owner of a structural change while td is
@@ -343,25 +344,7 @@ func (p *Plugin) beginOptimisticDelete(note Note) tea.Cmd {
 		}
 	}
 	p.notes = kept
-	if p.searchQuery != "" {
-		p.filteredNotes = FilterNotes(p.notes, p.searchQuery)
-	}
-	display := p.getDisplayNotes()
-	if len(display) == 0 {
-		p.cursor = 0
-		p.scrollOff = 0
-		_ = p.abandonEditor()
-	} else {
-		p.cursor = mutation.listIndex
-		if p.cursor >= len(display) {
-			p.cursor = len(display) - 1
-		}
-		if p.cursor < 0 {
-			p.cursor = 0
-		}
-		p.ensureCursorVisibleForList(p.height-2, len(display))
-		_ = p.loadNoteIntoEditor()
-	}
+	p.selectNeighborAfterRemoval(mutation.listIndex)
 
 	epoch := p.ctx.Epoch
 	store := p.store
@@ -397,6 +380,100 @@ func (p *Plugin) finishOptimisticDelete(result NoteDeletedMsg) tea.Cmd {
 	return p.loadNotes()
 }
 
+func (p *Plugin) beginOptimisticArchive(note Note) tea.Cmd {
+	if p.store == nil {
+		return nil
+	}
+	if blocked, ok := p.guardPendingCreateDurableAction(note.ID); ok {
+		return blocked
+	}
+	if p.mutation != nil {
+		return msg.ShowToast("A note change is still pending", 2*time.Second)
+	}
+
+	p.nextMutationID++
+	mutationID := p.nextMutationID
+	mutation := &noteMutation{
+		id:        mutationID,
+		kind:      noteMutationArchive,
+		deleteID:  note.ID,
+		note:      note,
+		listIndex: p.cursor,
+		startedAt: time.Now(),
+		before:    p.captureMutationSnapshot(),
+	}
+	p.mutation = mutation
+	p.mutationErr = nil
+	p.mutationAction = ""
+	p.loadRequestID++
+
+	kept := p.notes[:0]
+	for _, candidate := range p.notes {
+		if candidate.ID != note.ID {
+			kept = append(kept, candidate)
+		}
+	}
+	p.notes = kept
+	p.selectNeighborAfterRemoval(mutation.listIndex)
+
+	epoch := p.ctx.Epoch
+	store := p.store
+	return func() tea.Msg {
+		err := store.ToggleArchive(note.ID)
+		return NoteArchiveToggledMsg{ID: note.ID, Err: err, Epoch: epoch, MutationID: mutationID}
+	}
+}
+
+func (p *Plugin) finishOptimisticArchive(result NoteArchiveToggledMsg) tea.Cmd {
+	mutation := p.mutation
+	if mutation == nil || mutation.kind != noteMutationArchive ||
+		mutation.id != result.MutationID || mutation.deleteID != result.ID {
+		return nil
+	}
+	if result.Err != nil {
+		p.restoreMutationSnapshot(mutation.before)
+		p.mutation = nil
+		p.mutationErr = result.Err
+		p.mutationAction = "archive"
+		p.loadRequestID++
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Error("notes: archive failed", "error", result.Err)
+		}
+		return showMutationFailedToast(noteMutationArchive, result.Err)
+	}
+
+	p.mutation = nil
+	p.mutationErr = nil
+	p.mutationAction = ""
+	if !mutation.note.Archived {
+		p.pushUndo(UndoAction{Type: UndoArchive, NoteID: mutation.note.ID, Title: mutation.note.Title})
+	}
+	p.loadRequestID++
+	return p.loadNotes()
+}
+
+func (p *Plugin) selectNeighborAfterRemoval(index int) {
+	if p.searchQuery != "" {
+		p.filteredNotes = FilterNotes(p.notes, p.searchQuery)
+	}
+	display := p.getDisplayNotes()
+	if len(display) == 0 {
+		p.cursor = 0
+		p.scrollOff = 0
+		_ = p.abandonEditor()
+		return
+	}
+	p.cursor = index
+	if p.cursor >= len(display) {
+		p.cursor = len(display) - 1
+	}
+	if p.cursor < 0 {
+		p.cursor = 0
+	}
+	p.ensureCursorVisibleForList(p.height-2, len(display))
+	_ = p.loadNoteIntoEditor()
+}
+
 func (p *Plugin) clearDeletedEditorState(id string) {
 	delete(p.notePlaces, id)
 	delete(p.editHistories, id)
@@ -425,7 +502,7 @@ func (p *Plugin) reconcileMutation(notes []Note) []Note {
 	if mutation == nil {
 		return merged
 	}
-	if mutation.kind == noteMutationDelete {
+	if mutation.kind == noteMutationDelete || mutation.kind == noteMutationArchive {
 		filtered := merged[:0]
 		for _, note := range merged {
 			if note.ID != mutation.deleteID {
@@ -569,8 +646,11 @@ func (p *Plugin) moveSyncMapKey(values interface {
 
 func showMutationFailedToast(kind noteMutationKind, err error) tea.Cmd {
 	action := "Create"
-	if kind == noteMutationDelete {
+	switch kind {
+	case noteMutationDelete:
 		action = "Delete"
+	case noteMutationArchive:
+		action = "Archive"
 	}
 	text := action + " failed"
 	if err != nil {

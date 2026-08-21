@@ -110,6 +110,18 @@ func (p *Plugin) restoreSnapshot(snap editSnapshot) {
 	p.clearEditSelection()
 }
 
+func (p *Plugin) continueListOnEnter() (tea.Cmd, bool) {
+	next, row, col, ok := continueMarkdownList(p.editorTextarea.Value(), p.editorTextarea.Line(), p.editorTextarea.Column())
+	if !ok {
+		return nil, false
+	}
+	p.prepareEdit(editOpTyping)
+	p.editorTextarea.SetValue(next)
+	p.setTextareaCursorPosition(row, col)
+	p.trackTextareaScroll()
+	return p.afterContentChange(), true
+}
+
 func (p *Plugin) afterContentChange() tea.Cmd {
 	p.syncPreviewFromTextarea()
 	p.invalidateViewSurface()

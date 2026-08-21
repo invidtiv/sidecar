@@ -176,6 +176,7 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 	}{
 		{name: "built-in edit", apply: func(p *Plugin) { p.previewMode = false }},
 		{name: "search", apply: func(p *Plugin) { p.searchMode = true }},
+		{name: "in-note search", apply: func(p *Plugin) { p.noteSearchMode = true }},
 		{name: "task modal", apply: func(p *Plugin) { p.showTaskModal = true }},
 		{name: "delete modal", apply: func(p *Plugin) { p.showDeleteModal = true }},
 		{name: "info modal", apply: func(p *Plugin) { p.showInfoModal = true }},
@@ -197,6 +198,66 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 				t.Fatalf("unsafe state exposed links: %+v", got)
 			}
 		})
+	}
+}
+
+func TestPreviewClickOnContentLinkDoesNotEnterEdit(t *testing.T) {
+	store := openTestStore(t)
+	p := navigationTestPlugin(store, "/project")
+	note := Note{ID: "nt-4jdj4e", Title: "links", Content: "See td-7be1ec and README.md in the tree."}
+	p.notes = []Note{note}
+	p.editorNote = &p.notes[0]
+	p.previewLines = strings.Split(note.Content, "\n")
+	p.previewMode = true
+	p.markdownView = false
+	_ = p.View(100, 12)
+	p.registerMouseRegions()
+
+	layout := p.editorLayout()
+	y := 1 + layout.contentRow
+	contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
+	plain := ansi.Strip(p.viewSurface.Lines[0])
+	issueAt := strings.Index(plain, "td-7be1ec")
+	if issueAt < 0 {
+		t.Fatalf("issue id not in preview %q", plain)
+	}
+	if !p.previewContentLinkAt(contentX+issueAt+1, y) {
+		t.Fatal("issue span was not recognized as a content link")
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{
+		X:      contentX + issueAt + 1,
+		Y:      y,
+		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+	})
+	if !p.previewMode {
+		t.Fatal("clicking a td link entered edit")
+	}
+
+	fileAt := strings.Index(plain, "README.md")
+	if fileAt < 0 {
+		t.Fatalf("file link not in preview %q", plain)
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{
+		X:      contentX + fileAt + 1,
+		Y:      y,
+		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+		Alt:    true,
+	})
+	if !p.previewMode {
+		t.Fatal("alt+click on a file link entered edit")
+	}
+
+	textAt := strings.Index(plain, "See ")
+	if textAt < 0 {
+		textAt = 0
+	}
+	_, _ = p.handleMouseClick(mouse.MouseAction{
+		X:      contentX + textAt,
+		Y:      y,
+		Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+	})
+	if p.previewMode {
+		t.Fatal("clicking non-link preview text did not enter edit")
 	}
 }
 

@@ -157,6 +157,15 @@ type Plugin struct {
 	// Mouse state
 	mouseHandler *mouse.Handler
 	hoverDivider bool
+	hoverNewNote bool
+
+	// In-note search (preview pane). List search is searchMode/searchQuery.
+	noteSearchMode      bool
+	noteSearchCommitted bool
+	noteSearchQuery     string
+	noteSearchMatches   []noteSearchMatch
+	noteSearchCursor    int
+
 	// selection stores exclusive [Start, End) source carets in edit mode
 	// (logical line + rune offset). View-mode (archived/deleted) selection
 	// still uses visual rows for copy-only drags.
@@ -397,6 +406,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.searchMode = false
 	p.searchQuery = ""
 	p.filteredNotes = nil
+	p.clearNoteSearch()
 	p.mutation = nil
 	p.nextMutationID = 0
 	p.mutationErr = nil
@@ -910,6 +920,15 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case NoteArchiveToggledMsg:
 		if plugin.IsStale(p.ctx, msg) {
+			return p, nil
+		}
+		if msg.MutationID != 0 {
+			return p, p.finishOptimisticArchive(msg)
+		}
+		if msg.Err != nil {
+			if p.ctx != nil && p.ctx.Logger != nil {
+				p.ctx.Logger.Error("notes: archive failed", "error", msg.Err)
+			}
 			return p, nil
 		}
 		return p, p.loadNotes()
@@ -1482,10 +1501,14 @@ func (p *Plugin) FooterStatus() (string, bool) {
 		return "notes: unsaved draft recovery failed — r to retry", true
 	}
 	if p.mutation != nil {
-		if p.mutation.kind == noteMutationDelete {
+		switch p.mutation.kind {
+		case noteMutationDelete:
 			return "notes: deleting…", false
+		case noteMutationArchive:
+			return "notes: archiving…", false
+		default:
+			return "notes: creating…", false
 		}
-		return "notes: creating…", false
 	}
 	// An in-flight save is routine and self-resolving: no status line.
 	return "", false
@@ -1571,7 +1594,7 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	// Skip navigation operations when notes list is empty
 	if len(notesList) == 0 {
 		switch key {
-		case "n":
+		case "n", "c":
 			// Create new note - allowed even with empty list
 			return p, p.createNote()
 		case "r":
@@ -1599,7 +1622,7 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		// Jump to bottom
 		p.cursor = len(notesList) - 1
 		return p, p.loadNoteIntoEditor()
-	case "n":
+	case "n", "c":
 		// Create new note (only in Active view)
 		if p.viewFilter == FilterActive {
 			return p, p.createNote()
@@ -1762,6 +1785,12 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p.replaceEditorSelection(text, editOpReplace)
 	}
 
+	if !p.hasEditSelection() && (key == "enter" || key == "ctrl+m") {
+		if cmd, ok := p.continueListOnEnter(); ok {
+			return p, cmd
+		}
+	}
+
 	if p.hasEditSelection() && isMotionKey(msg) {
 		p.clearEditSelection()
 	}
@@ -1791,6 +1820,10 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	key := msg.String()
 
+	if p.noteSearchMode {
+		return p.handleNoteSearchKey(msg)
+	}
+
 	switch key {
 	case "ctrl+s":
 		if p.editorDirty {
@@ -1800,10 +1833,12 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 		return p, nil
 
 	case "tab":
+		p.clearNoteSearch()
 		p.activePane = PaneList
 		return p, nil
 
 	case "esc":
+		p.clearNoteSearch()
 		p.activePane = PaneList
 		return p, nil
 
@@ -1863,6 +1898,11 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 	case "m":
 		p.toggleMarkdownView()
+
+	case "/":
+		if p.editorNote != nil {
+			p.startNoteSearch()
+		}
 	}
 
 	return p, nil
@@ -2013,6 +2053,7 @@ func (p *Plugin) openDefaultEditor() tea.Cmd {
 // enterEditAt switches to edit mode at a source line/column. The current
 // visual screen row is preserved across rendered/raw and textarea wrapping.
 func (p *Plugin) enterEditAt(row, col int) tea.Cmd {
+	p.clearNoteSearch()
 	screenRow := p.previewCursorLine - p.previewScrollOff
 	if screenRow < 0 {
 		screenRow = 0
@@ -2212,6 +2253,9 @@ func (p *Plugin) toggleMarkdownView() {
 	p.markdownView = !p.markdownView
 	p.invalidateViewSurface()
 	p.ensureViewSurface()
+	if p.noteSearchMode && p.noteSearchQuery != "" {
+		p.updateNoteSearchMatches()
+	}
 	visual := p.viewSurface.VisualRowForSource(a.SourceLine, a.SourceCol)
 	p.previewCursorLine = visual
 	p.previewScrollOff = visual - screenRow
@@ -2269,6 +2313,7 @@ func (p *Plugin) loadNoteIntoEditor() tea.Cmd {
 	}
 
 	p.rememberCurrentPlace()
+	p.clearNoteSearch()
 	p.editorNote = note
 	p.editorTextarea.SetValue(note.Content)
 	p.previewLines = strings.Split(note.Content, "\n")
@@ -2893,23 +2938,7 @@ func (p *Plugin) toggleArchive() tea.Cmd {
 		})
 	}
 
-	// Push undo action only when archiving (not when unarchiving)
-	if !note.Archived {
-		p.pushUndo(UndoAction{
-			Type:   UndoArchive,
-			NoteID: note.ID,
-			Title:  note.Title,
-		})
-	}
-
-	noteID := note.ID
-	epoch := p.ctx.Epoch
-	store := p.store
-
-	return func() tea.Msg {
-		err := store.ToggleArchive(noteID)
-		return NoteArchiveToggledMsg{ID: noteID, Err: err, Epoch: epoch}
-	}
+	return p.beginOptimisticArchive(*note)
 }
 
 // yankNoteContent copies the note content to the system clipboard.
@@ -3013,6 +3042,20 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "cancel", Name: "Cancel", Description: "Cancel task creation", Category: plugin.CategoryActions, Context: "notes-task-modal", Priority: 2},
 		}
 	}
+	if p.noteSearchMode {
+		cmds := []plugin.Command{
+			{ID: "search-cancel", Name: "Cancel", Description: "Exit in-note search", Category: plugin.CategoryActions, Context: "notes-note-search", Priority: 1},
+		}
+		if p.noteSearchCommitted {
+			cmds = append(cmds,
+				plugin.Command{ID: "next-match", Name: "Next", Description: "Next match", Category: plugin.CategoryNavigation, Context: "notes-note-search", Priority: 2},
+				plugin.Command{ID: "prev-match", Name: "Prev", Description: "Previous match", Category: plugin.CategoryNavigation, Context: "notes-note-search", Priority: 3},
+			)
+		} else {
+			cmds = append(cmds, plugin.Command{ID: "search-confirm", Name: "Find", Description: "Commit search", Category: plugin.CategoryActions, Context: "notes-note-search", Priority: 2})
+		}
+		return cmds
+	}
 	if p.searchMode {
 		cmds := []plugin.Command{
 			{ID: "search-confirm", Name: "Select", Description: "Select note or create new", Category: plugin.CategoryActions, Context: "notes-search", Priority: 1},
@@ -3029,6 +3072,7 @@ func (p *Plugin) Commands() []plugin.Command {
 	if p.activePane == PaneEditor && p.editorNote != nil {
 		if p.previewMode {
 			cmds := []plugin.Command{
+				{ID: "search-in-note", Name: "Find", Description: "Search in this note", Category: plugin.CategorySearch, Context: "notes-preview", Priority: 1},
 				{ID: "switch-pane", Name: "List", Description: "Switch to list pane", Category: plugin.CategoryNavigation, Context: "notes-preview", Priority: 2},
 			}
 			// Archived and deleted notes are read-only, and all three edit keys
@@ -3182,6 +3226,9 @@ func (p *Plugin) FocusContext() string {
 	if p.edit.Active {
 		return "notes-inline-edit"
 	}
+	if p.noteSearchMode {
+		return "notes-note-search"
+	}
 	if p.searchMode {
 		return "notes-search"
 	}
@@ -3197,7 +3244,7 @@ func (p *Plugin) FocusContext() string {
 // ConsumesTextInput reports whether notes currently has an active text-entry
 // surface and should receive printable keys directly.
 func (p *Plugin) ConsumesTextInput() bool {
-	if p.searchMode || p.showTaskModal || p.edit.Active {
+	if p.searchMode || p.noteSearchMode || p.showTaskModal || p.edit.Active {
 		return true
 	}
 	return p.activePane == PaneEditor && p.editorNote != nil && !p.previewMode

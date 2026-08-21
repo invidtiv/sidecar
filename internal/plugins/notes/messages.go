@@ -73,9 +73,10 @@ func (m NotePinToggledMsg) GetEpoch() uint64 {
 
 // NoteArchiveToggledMsg is sent when a note's archived state is toggled.
 type NoteArchiveToggledMsg struct {
-	ID    string
-	Err   error
-	Epoch uint64
+	ID         string
+	Err        error
+	Epoch      uint64
+	MutationID uint64 // Non-zero for an optimistic archive/unarchive.
 }
 
 // GetEpoch returns the epoch for staleness detection.

@@ -11,6 +11,25 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 )
 
+func TestNotesMarkdownStylesBoldItalicStrike(t *testing.T) {
+	renderer, err := markdown.NewRenderer(markdown.CompactDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "**bold** and *italic* and ~~strike~~"
+	result := renderNotesMarkdown(renderer, content, 80)
+	joined := strings.Join(result.Lines, "\n")
+	plain := ansi.Strip(joined)
+	if !strings.Contains(plain, "bold") || !strings.Contains(plain, "italic") || !strings.Contains(plain, "strike") {
+		t.Fatalf("projection stripped decorations: %q", plain)
+	}
+	for i, line := range result.Lines {
+		if ansi.StringWidth(line) != ansi.StringWidth(ansi.Strip(line)) {
+			t.Fatalf("line %d ANSI width leaked: styled=%d plain=%d %q", i, ansi.StringWidth(line), ansi.StringWidth(ansi.Strip(line)), line)
+		}
+	}
+}
+
 func TestNotesOrdinalCandidatesStayASTAndOutlineScoped(t *testing.T) {
 	tests := []struct {
 		name    string

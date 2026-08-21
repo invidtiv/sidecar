@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
@@ -51,12 +52,13 @@ func (p *Plugin) forwardWheelToInlineEditor(action mouse.MouseAction) tea.Cmd {
 
 // Mouse region identifiers
 const (
-	regionListPane   = "list-pane"   // Overall list pane for scroll targeting
-	regionEditorPane = "editor-pane" // Overall editor pane for scroll targeting
-	regionDivider    = "divider"     // Border between list and editor
-	regionListFilter = "list-filter" // Active/Archived/Deleted header control
-	regionNoteItem   = "note-item"   // Individual note in list (Data: visible index)
-	regionEditorLine = "editor-line" // Individual editor line (Data: line index)
+	regionListPane   = "list-pane"     // Overall list pane for scroll targeting
+	regionEditorPane = "editor-pane"   // Overall editor pane for scroll targeting
+	regionDivider    = "divider"       // Border between list and editor
+	regionListFilter = "list-filter"   // Active/Archived/Deleted header control
+	regionNewNote    = "list-new-note" // Header + New Note button
+	regionNoteItem   = "note-item"     // Individual note in list (Data: visible index)
+	regionEditorLine = "editor-line"   // Individual editor line (Data: line index)
 )
 
 // handleMouse processes mouse events and dispatches to appropriate handlers.
@@ -108,7 +110,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick || action.Type == mouse.ActionTripleClick {
 			if action.Region != nil {
 				switch action.Region.ID {
-				case regionNoteItem, regionListPane, regionListFilter:
+				case regionNoteItem, regionListPane, regionListFilter, regionNewNote:
 					// Click in list pane - auto-save and switch
 					return handleClickAway(action.Region.ID, action.Region.Data)
 				case regionEditorPane, regionEditorLine:
@@ -208,6 +210,13 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		p.activePane = PaneList
 		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
 
+	case regionNewNote:
+		p.activePane = PaneList
+		if p.viewFilter == FilterActive {
+			return p, p.createNote()
+		}
+		return p, nil
+
 	case regionNoteItem:
 		idx, ok := action.Region.Data.(int)
 		if !ok {
@@ -225,6 +234,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	case regionEditorPane:
 		p.activePane = PaneEditor
 		p.selection.Clear()
+		// A content-link span belongs to the app content deck. Consuming the
+		// click as "enter edit" would drop preview surfaces before release
+		// can activate the link.
+		if p.previewMode && p.previewContentLinkAt(action.X, action.Y) {
+			return p, nil
+		}
 		// Clicking into the note follows the default-editor preference. With no
 		// note loaded the pane is a placeholder — focusing an editor over it
 		// would show input that the list keys then ignore.
@@ -245,6 +260,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	case regionEditorLine:
 		if lineIdx, ok := action.Region.Data.(int); ok {
 			p.activePane = PaneEditor
+			if p.previewMode && p.previewContentLinkAt(action.X, action.Y) {
+				p.previewCursorLine = lineIdx
+				return p, nil
+			}
 			if p.viewFilter == FilterActive {
 				if p.previewMode && p.ctx != nil && p.ctx.Config != nil && p.ctx.Config.Plugins.Notes.DefaultEditor == config.NotesEditorPane {
 					return p, p.editSelectedNote()
@@ -337,7 +356,7 @@ func (p *Plugin) selectSourceUnitAt(action mouse.MouseAction, unit tty.Selection
 func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	inListPane := false
 	if action.Region != nil {
-		inListPane = action.Region.ID == regionListPane || action.Region.ID == regionNoteItem || action.Region.ID == regionListFilter
+		inListPane = action.Region.ID == regionListPane || action.Region.ID == regionNoteItem || action.Region.ID == regionListFilter || action.Region.ID == regionNewNote
 	} else {
 		inListPane = action.X < p.listWidth
 	}
@@ -514,6 +533,7 @@ func (p *Plugin) handleMouseDragEndRegion(region string) (*Plugin, tea.Cmd) {
 // handleMouseHover handles mouse hover for visual feedback.
 func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	p.hoverDivider = action.Region != nil && action.Region.ID == regionDivider
+	p.hoverNewNote = action.Region != nil && action.Region.ID == regionNewNote
 	return p, nil
 }
 
@@ -521,6 +541,49 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 // Both rendered/raw view and textarea edit mode map through soft-wrapped visual
 // rows. Sets previewCursorLine to that visual row so enterEditAt can keep the
 // clicked screen row.
+func (p *Plugin) previewContentLinkAt(x, y int) bool {
+	if !p.previewMode || p.editorNote == nil {
+		return false
+	}
+	p.ensureViewSurface()
+	visual := p.screenYToVisualRow(y)
+	if visual < 0 || visual >= len(p.viewSurface.Lines) {
+		return false
+	}
+	col := p.screenXToEditorCol(x)
+	line := p.viewSurface.Lines[visual]
+	kinds := contentlink.NewKindSet(
+		contentlink.KindFile,
+		contentlink.KindIssue,
+		contentlink.KindDiff,
+		contentlink.KindResource,
+		contentlink.KindURL,
+		contentlink.KindInternal,
+	)
+	frame := contentlink.ScanFrame(line, contentlink.FrameOptions{
+		InternalNamespaces: map[string]contentlink.URIOptions{"note": {}},
+		AllowedKinds:       kinds,
+	})
+	for _, span := range frame.Spans {
+		if span.Kind != "" && col >= span.StartCol && col <= span.EndCol {
+			return true
+		}
+	}
+	for _, span := range contentlink.ScanWith(ansi.Strip(line), contentlink.Options{
+		Resolve: func(raw string) (string, contentlink.Extra, bool) {
+			return raw, contentlink.Extra{}, true
+		},
+		ResolveDiff: func(raw string) (string, contentlink.Extra, bool) {
+			return raw, contentlink.Extra{}, true
+		},
+	}) {
+		if kinds.Allows(span.Kind) && col >= span.StartCol && col <= span.EndCol {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Plugin) clickToSource(x, y int) (line, col int) {
 	visualInView := y - p.editorContentStartY()
 	if visualInView < 0 {
@@ -883,8 +946,9 @@ func (p *Plugin) registerMouseRegions() {
 	// Editor line regions (higher priority)
 	p.registerEditorLineRegions()
 
-	// Header control is last so it wins over the general list-pane region.
+	// Header controls are last so they win over the general list-pane region.
 	p.registerListFilterRegion()
+	p.registerNewNoteRegion()
 }
 
 func (p *Plugin) registerListFilterRegion() {
@@ -898,6 +962,21 @@ func (p *Plugin) registerListFilterRegion() {
 	}
 	// RenderPanel content begins after the left border and its one-cell padding.
 	p.mouseHandler.HitMap.AddRect(regionListFilter, 2+header.filterX, 1, header.filterWidth, 1, nil)
+}
+
+func (p *Plugin) registerNewNoteRegion() {
+	if p.viewFilter != FilterActive {
+		return
+	}
+	listInner := p.listWidth - paneChromeX
+	if listInner < 1 {
+		return
+	}
+	header := p.listHeader(listInner, len(p.getDisplayNotes()))
+	if header.newWidth < 1 {
+		return
+	}
+	p.mouseHandler.HitMap.AddRect(regionNewNote, 2+header.newX, 1, header.newWidth, 1, nil)
 }
 
 // registerListItemRegions registers click regions for visible note items.

@@ -185,6 +185,8 @@ type notesListHeader struct {
 	view        string
 	filterX     int
 	filterWidth int
+	newX        int
+	newWidth    int
 }
 
 // listHeader is shared by paint and hit testing so the state pill cannot drift
@@ -200,16 +202,29 @@ func (p *Plugin) listHeader(width, noteCount int) notesListHeader {
 	count = styles.Muted.Render(count)
 	pill := p.renderFilterPill()
 	pillWidth := ansi.StringWidth(pill)
+	newBtn, newWidth := p.renderNewNoteButton(width)
 	right := count + " " + pill
+	if newWidth > 0 {
+		right += " " + newBtn
+	}
 	rightWidth := ansi.StringWidth(right)
 	if rightWidth > width {
 		right = pill
+		if newWidth > 0 {
+			right += " " + newBtn
+		}
+		rightWidth = ansi.StringWidth(right)
+	}
+	if rightWidth > width && newWidth > 0 {
+		right = pill
 		rightWidth = pillWidth
+		newWidth = 0
 	}
 	if rightWidth > width {
 		right = ansi.Truncate(right, width, "")
 		rightWidth = ansi.StringWidth(right)
 		pillWidth = rightWidth
+		newWidth = 0
 	}
 
 	leftWidth := width - rightWidth
@@ -225,15 +240,39 @@ func (p *Plugin) listHeader(width, noteCount int) notesListHeader {
 	}
 	leftCells := ansi.StringWidth(left)
 	view := left + strings.Repeat(" ", width-leftCells-rightWidth) + right
+	filterX := width - pillWidth
+	newX := 0
+	if newWidth > 0 {
+		newX = width - newWidth
+		filterX = newX - 1 - pillWidth
+	}
 	return notesListHeader{
 		view:        view,
-		filterX:     width - pillWidth,
+		filterX:     filterX,
 		filterWidth: pillWidth,
+		newX:        newX,
+		newWidth:    newWidth,
 	}
 }
 
 func (p *Plugin) renderFilterPill() string {
 	return styles.RenderPillWithStyle(p.viewFilter.String(), p.noteFilterStyle(), nil)
+}
+
+func (p *Plugin) renderNewNoteButton(width int) (string, int) {
+	if p.viewFilter != FilterActive {
+		return "", 0
+	}
+	style := p.noteFilterStyle()
+	if p.hoverNewNote {
+		style = styles.ButtonHover.Padding(0, 1).Bold(true)
+	}
+	label := "+ New"
+	if width >= 42 {
+		label = "+ New Note"
+	}
+	btn := styles.RenderPillWithStyle(label, style, nil)
+	return btn, ansi.StringWidth(btn)
 }
 
 func (p *Plugin) noteFilterStyle() lipgloss.Style {
@@ -310,15 +349,15 @@ func (p *Plugin) renderViewSurface(height int) string {
 	var sb strings.Builder
 	for i := start; i < end; i++ {
 		line := lines[i]
+		if !p.markdownView {
+			line = styles.Body.Render(line)
+		}
+		line = p.highlightNoteSearchLine(i, line)
 		if p.selection.HasSelection() && p.selection.IsLineSelected(i) {
 			startCol, endCol := p.selection.GetLineSelectionCols(i)
 			line = ui.InjectCharacterRangeBackground(line, startCol, endCol)
-			sb.WriteString(line)
-		} else if p.markdownView {
-			sb.WriteString(line)
-		} else {
-			sb.WriteString(styles.Body.Render(line))
 		}
+		sb.WriteString(line)
 		if i < end-1 {
 			sb.WriteString("\n")
 		}
@@ -368,7 +407,9 @@ func (p *Plugin) renderEditorStatusHeader(width int) string {
 	}
 
 	leftText := ""
-	if p.previewMode {
+	if p.noteSearchMode || p.noteSearchQuery != "" {
+		leftText = p.renderNoteSearchPrompt()
+	} else if p.previewMode {
 		if p.markdownView {
 			leftText = "[md]"
 		} else {

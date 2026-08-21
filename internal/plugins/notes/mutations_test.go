@@ -14,19 +14,23 @@ import (
 
 type controlledMutationStore struct {
 	noteStore
-	createStarted chan struct{}
-	createRelease chan struct{}
-	createErr     error
-	createOnce    sync.Once
-	deleteStarted chan struct{}
-	deleteRelease chan struct{}
-	deleteErr     error
-	deleteOnce    sync.Once
-	actionMu      sync.Mutex
-	pinIDs        []string
-	archiveIDs    []string
-	restoreIDs    []string
-	restoreErrs   []error
+	createStarted  chan struct{}
+	createRelease  chan struct{}
+	createErr      error
+	createOnce     sync.Once
+	deleteStarted  chan struct{}
+	deleteRelease  chan struct{}
+	deleteErr      error
+	deleteOnce     sync.Once
+	archiveStarted chan struct{}
+	archiveRelease chan struct{}
+	archiveErr     error
+	archiveOnce    sync.Once
+	actionMu       sync.Mutex
+	pinIDs         []string
+	archiveIDs     []string
+	restoreIDs     []string
+	restoreErrs    []error
 }
 
 func newControlledMutationStore(store noteStore) *controlledMutationStore {
@@ -68,6 +72,17 @@ func (s *controlledMutationStore) ToggleArchive(id string) error {
 	s.actionMu.Lock()
 	s.archiveIDs = append(s.archiveIDs, id)
 	s.actionMu.Unlock()
+	if s.archiveRelease != nil {
+		s.archiveOnce.Do(func() {
+			if s.archiveStarted != nil {
+				close(s.archiveStarted)
+			}
+		})
+		<-s.archiveRelease
+	}
+	if s.archiveErr != nil {
+		return s.archiveErr
+	}
 	return s.noteStore.ToggleArchive(id)
 }
 
@@ -370,6 +385,92 @@ func TestOptimisticDeleteImmediateSelectionTombstoneAndSuccess(t *testing.T) {
 		_ = p.confirmDeleteNote()
 		if p.cursor != 0 || p.editorNote == nil || p.editorNote.ID != notes[0].ID {
 			t.Fatalf("last delete selected cursor=%d editor=%+v, want previous", p.cursor, p.editorNote)
+		}
+	})
+}
+
+func TestOptimisticArchiveImmediateSelectionAndRollback(t *testing.T) {
+	t.Run("middle-selects-next", func(t *testing.T) {
+		p, controlled, notes := newDeleteMutationPlugin(t, 3)
+		controlled.archiveStarted = make(chan struct{})
+		controlled.archiveRelease = make(chan struct{})
+		p.cursor = 1
+		loadEditorForTest(p, 1)
+		p.activePane = PaneList
+
+		archiveCmd := p.toggleArchive()
+		if len(p.notes) != 2 || p.noteByID(notes[1].ID) != nil {
+			t.Fatalf("archive did not remove immediately: %+v", p.notes)
+		}
+		if p.cursor != 1 || p.editorNote == nil || p.editorNote.ID != notes[2].ID {
+			t.Fatalf("middle archive selected cursor=%d editor=%+v, want former next", p.cursor, p.editorNote)
+		}
+		if p.activePane != PaneList {
+			t.Fatalf("archive moved focus to %v, want list", p.activePane)
+		}
+
+		result := runCommandAsync(archiveCmd)
+		<-controlled.archiveStarted
+		_, _ = p.Update(NotesLoadedMsg{
+			Notes:     append([]Note(nil), notes...),
+			Epoch:     p.ctx.Epoch,
+			RequestID: p.loadRequestID,
+			Filter:    FilterActive,
+		})
+		if p.noteByID(notes[1].ID) != nil {
+			t.Fatal("pending archive tombstone was resurrected by a current list load")
+		}
+		close(controlled.archiveRelease)
+		archived := (<-result).(NoteArchiveToggledMsg)
+		_, followup := p.Update(archived)
+		if p.mutation != nil || len(p.undoStack) != 1 || p.undoStack[0].NoteID != notes[1].ID {
+			t.Fatalf("archive success truth = mutation %+v undo %+v", p.mutation, p.undoStack)
+		}
+		applyCommandResults(t, p, followup)
+	})
+
+	t.Run("last-selects-previous", func(t *testing.T) {
+		p, _, notes := newDeleteMutationPlugin(t, 2)
+		p.cursor = 1
+		loadEditorForTest(p, 1)
+		p.activePane = PaneEditor
+		_ = p.toggleArchive()
+		if p.cursor != 0 || p.editorNote == nil || p.editorNote.ID != notes[0].ID {
+			t.Fatalf("last archive selected cursor=%d editor=%+v, want previous", p.cursor, p.editorNote)
+		}
+		if p.activePane != PaneEditor {
+			t.Fatalf("archive moved focus to %v, want editor", p.activePane)
+		}
+	})
+
+	t.Run("store-error-restores-and-toasts", func(t *testing.T) {
+		p, controlled, notes := newDeleteMutationPlugin(t, 2)
+		controlled.archiveStarted = make(chan struct{})
+		controlled.archiveRelease = make(chan struct{})
+		controlled.archiveErr = errors.New("archive unavailable")
+		p.cursor = 0
+		p.scrollOff = 2
+		loadEditorForTest(p, 0)
+		p.activePane = PaneList
+		before := p.captureMutationSnapshot()
+
+		archiveCmd := p.toggleArchive()
+		result := runCommandAsync(archiveCmd)
+		<-controlled.archiveStarted
+		close(controlled.archiveRelease)
+		failed := (<-result).(NoteArchiveToggledMsg)
+		_, toast := p.Update(failed)
+		if got, ok := firstToast(toast); !ok || !got.IsError {
+			t.Fatalf("archive rollback returned no error toast: %+v", got)
+		}
+		if p.mutation != nil || len(p.notes) != 2 || p.notes[0].ID != notes[0].ID || p.cursor != 0 || p.scrollOff != 2 {
+			t.Fatalf("archive rollback list/cursor = %+v cursor=%d scroll=%d", p.notes, p.cursor, p.scrollOff)
+		}
+		if p.activePane != before.activePane {
+			t.Fatalf("archive rollback pane = %v, want %v", p.activePane, before.activePane)
+		}
+		if len(p.undoStack) != 0 {
+			t.Fatalf("failed archive recorded undo: %+v", p.undoStack)
 		}
 	})
 }
