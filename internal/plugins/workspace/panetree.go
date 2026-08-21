@@ -15,6 +15,9 @@ const (
 	PaneIssue    = panelayout.Issue
 	PaneDiff     = panelayout.Diff
 	PaneResource = panelayout.Resource
+	// PaneShell is a live terminal peer of the primary terminal. The terminal
+	// panel is the first one: see shell_leaf.go.
+	PaneShell = panelayout.Shell
 )
 
 type SplitAxis = panelayout.Axis

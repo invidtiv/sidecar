@@ -2,6 +2,7 @@ package workspace
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/ui"
@@ -22,6 +23,9 @@ const (
 	contentKindDoc      = "doc"
 	contentKindIssue    = "issue"
 	contentKindDiff     = "diff"
+	// contentKindShell is a live terminal peer of the primary terminal — the
+	// terminal panel, and later any user-created terminal split.
+	contentKindShell = "shell"
 	// contentKindResource is the one key every external provider persists
 	// under, so installing another integration adds no kind here.
 	contentKindResource = "resource"
@@ -71,6 +75,8 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 			return nil
 		}
 		return &resourceContent{p: p, res: res}
+	case PaneShell:
+		return &shellContent{p: p}
 	default:
 		return &terminalContent{p: p}
 	}
@@ -119,6 +125,39 @@ func (c *terminalContent) SetSize(size Size) tea.Cmd {
 // anyway; doing it here is what makes the contract true rather than survivable.
 func (c *terminalContent) View(Render) string {
 	return ui.FitBlock(c.p.renderPreviewContentLegacy(c.size.Width, c.size.Height), c.size.Width, c.size.Height)
+}
+
+// shellContent is a live terminal peer of the primary one — today the terminal
+// panel. Like the primary terminal's leaf it draws its own header row from
+// inside its body, because a terminal's header carries that surface's window
+// status and its interactive-mode exit key, which the frame does not know.
+type shellContent struct {
+	p    *Plugin
+	size Size
+}
+
+func (c *shellContent) Kind() string { return contentKindShell }
+
+func (c *shellContent) Title() string { return c.p.shellLeafTitle() }
+
+// TitleColumns is what the header actually spends on the name, marker and all.
+// The frame registers the title's hit region from this, so a focused leaf's
+// "▸ " is part of the target the user is aiming at rather than two cells of it
+// that do nothing.
+func (c *shellContent) TitleColumns() int {
+	return ansi.StringWidth(c.p.termPanelChip())
+}
+
+// SetSize records the box and nothing else, for the reason terminalContent
+// gives: the tmux pane is resized on the state change that moved the box, not
+// on every frame.
+func (c *shellContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *shellContent) View(Render) string {
+	return ui.FitBlock(c.p.renderTermPanelOutput(c.size.Width, c.size.Height), c.size.Width, c.size.Height)
 }
 
 // docContent is the document leaf: the pane's own header row above a document

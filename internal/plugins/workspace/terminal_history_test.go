@@ -63,7 +63,7 @@ func TestAWatchedPreviewReachesTmuxsOldestLine(t *testing.T) {
 		t.Fatal("the fixture's preview has no history source")
 	}
 
-	p.jumpPreviewWindow(p.previewMaxScroll())
+	p.jumpPreviewWindow(p.terminalMaxScroll(false))
 	cmd := p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -5, Region: &mouse.Region{ID: regionPreviewPane}})
 	if cmd == nil {
@@ -89,7 +89,7 @@ func TestAWatchedPreviewReachesTmuxsOldestLine(t *testing.T) {
 	if !absolute || base != 0 {
 		t.Fatalf("buffer base = %d absolute=%v, want the pane's oldest line", base, absolute)
 	}
-	p.jumpPreviewWindow(p.previewMaxScroll())
+	p.jumpPreviewWindow(p.terminalMaxScroll(false))
 	layout := p.terminalViewportLayoutFor(false)
 	if layout.AbsoluteStart != 0 {
 		t.Fatalf("the oldest window starts at absolute %d, want line 0", layout.AbsoluteStart)
@@ -108,7 +108,7 @@ func TestTheEndOfTmuxsHistoryIsSaidOnce(t *testing.T) {
 	source.Buffer.UpdateSnapshot(numberedTerminalLines(0, 1220), 0)
 	notch := func() tea.Cmd {
 		t.Helper()
-		p.jumpPreviewWindow(p.previewMaxScroll())
+		p.jumpPreviewWindow(p.terminalMaxScroll(false))
 		return p.handleMouseScroll(mouse.MouseAction{
 			Type: mouse.ActionScrollUp, Delta: -5, Region: &mouse.Region{ID: regionPreviewPane}})
 	}

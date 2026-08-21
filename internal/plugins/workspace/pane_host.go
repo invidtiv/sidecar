@@ -51,7 +51,19 @@ func (h paneHost) QueueSizeCmd(cmd tea.Cmd) { h.p.paneSizeCmds = append(h.p.pane
 // muted on neighbours. Content bytes are not dimmed.
 func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 	p := h.p
-	focused := node != nil && p.activePane == PanePreview && p.paneFocus == node.ID
+	if node != nil && node.Kind == PaneShell {
+		// The panel's keyboard is termPanelFocused's, not paneFocus's: the ring
+		// names the terminal leaf for both terminals and that flag says which of
+		// them has the keys.
+		if p.activePane != PanePreview || !p.termPanelFocused {
+			return paneframe.ChromeIdle
+		}
+		if p.interactiveDescribes(true) {
+			return paneframe.ChromeInteractive
+		}
+		return paneframe.ChromeActive
+	}
+	focused := node != nil && p.activePane == PanePreview && p.paneFocus == node.ID && !p.termPanelFocused
 	if !focused {
 		return paneframe.ChromeIdle
 	}
@@ -82,6 +94,17 @@ func (r paneRegions) Divider(splitID int, hit paneframe.Box) {
 
 func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
 	r.p.registerPaneTabRegions(node, inner)
+}
+
+// Title is the leaf's header name. Only a shell leaf claims it: the primary
+// terminal is named by the sidebar row that selected it, and that row already
+// has R. A shell split has no row of its own — the sidebar badges it rather
+// than listing it — so its title is where its rename lives.
+func (r paneRegions) Title(node *panelayout.Node, hit paneframe.Box) {
+	if node == nil || node.Split != nil || node.Kind != PaneShell {
+		return
+	}
+	r.p.mouseHandler.HitMap.AddRect(regionPaneTitle, hit.X, hit.Y, hit.W, hit.H, node.ID)
 }
 
 func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {

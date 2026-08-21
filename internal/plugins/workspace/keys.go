@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceops"
 	"github.com/marcus/sidecar/internal/worktreedelete"
 )
@@ -492,7 +493,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
+		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
 			if !p.termPanelFocused {
 				p.termPanelFocused = true
 				return nil
@@ -519,7 +520,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
+		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
 			if p.termPanelFocused {
 				p.termPanelFocused = false
 				return nil
@@ -656,9 +657,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused {
+		} else if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && !p.termPanelFocused {
 			// Right layout: move focus from agent to terminal panel
-			p.thawTermPanelWindow()
+			p.thawTerminalWindow(true)
 			p.termPanelFocused = true
 		}
 	case "enter":
@@ -730,7 +731,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused {
+		if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && p.termPanelFocused {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
 			p.releaseTerminalDocProjection(false)
@@ -858,6 +859,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeRenameShell
 			p.renameShellSession = shell
+			p.renameShellLeafID = 0
 			p.renameShellInput = textinput.New()
 			p.renameShellInput.SetValue(shell.Name)
 			p.renameShellInput.CharLimit = 50
@@ -924,16 +926,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if !terminalPanelEnabled() {
 			return nil
 		}
-		// Toggle terminal panel visibility (on/off with last layout)
-		p.ctx.Logger.Debug("termPanel: ctrl+t pressed", "currentlyVisible", p.termPanelVisible)
+		// Toggle a shell split at the remembered axis and ratio.
 		return p.toggleTermPanel()
-	case "alt+t":
-		if !terminalPanelEnabled() {
-			return nil
-		}
-		// Switch terminal panel layout direction (bottom ↔ right)
-		p.ctx.Logger.Debug("termPanel: alt+t pressed, switching layout")
-		return p.switchTermPanelLayout()
 	default:
 		// Unhandled key in preview pane - flash to indicate attach is needed
 		if fullTmuxAttachEnabled() && p.activePane == PanePreview {
@@ -1003,6 +997,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
+	}
+	if workspacecreate.IsPlacementAction(action) {
+		return p.createFormPlacementAction(action)
 	}
 
 	if action == "" {
@@ -1427,6 +1424,13 @@ func (p *Plugin) handleRenameShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 // executeRenameShell performs the rename operation.
 func (p *Plugin) executeRenameShell() tea.Cmd {
+	// A modal opened from a pane title names the leaf, not a manifest shell.
+	if p.renameShellLeafTarget() != nil {
+		return p.executeRenameShellLeaf()
+	}
+	if p.renameShellSession == nil {
+		return nil
+	}
 	newName, err := shellstate.NormalizeName(p.renameShellInput.Value())
 	if err != nil {
 		p.renameShellError = err.Error()
@@ -1452,6 +1456,7 @@ func (p *Plugin) executeRenameShell() tea.Cmd {
 // clearRenameShellModal clears rename modal state.
 func (p *Plugin) clearRenameShellModal() {
 	p.renameShellSession = nil
+	p.renameShellLeafID = 0
 	p.renameShellInput = textinput.Model{}
 	p.renameShellModal = nil
 	p.renameShellModalWidth = 0

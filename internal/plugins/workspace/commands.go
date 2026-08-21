@@ -278,15 +278,6 @@ func (p *Plugin) Commands() []plugin.Command {
 				cmds = append(cmds,
 					plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-preview", Priority: 16},
 				)
-				if p.termPanelVisible {
-					layoutName := "Right"
-					if p.termPanelLayout == TermPanelRight {
-						layoutName = "Bottom"
-					}
-					cmds = append(cmds,
-						plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-preview", Priority: 17},
-					)
-				}
 			}
 			return cmds
 		}
@@ -398,15 +389,6 @@ func (p *Plugin) Commands() []plugin.Command {
 			cmds = append(cmds,
 				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 17},
 			)
-			if p.termPanelVisible {
-				layoutName := "Right"
-				if p.termPanelLayout == TermPanelRight {
-					layoutName = "Bottom"
-				}
-				cmds = append(cmds,
-					plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-list", Priority: 18},
-				)
-			}
 		}
 		return cmds
 	}

@@ -170,6 +170,18 @@ func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
 	}
 }
 
+// Title is the leaf's header name. A shell leaf claims it for the reason it
+// does on the project surface: it has no row in this list either — the row it
+// belongs to wears a layout badge instead — so the pane's own title is where
+// its rename lives. Every other leaf is named by the row that selected it, and
+// that row already answers R.
+func (r paneRegions) Title(node *panelayout.Node, hit paneframe.Box) {
+	if node == nil || node.Split != nil || node.Kind != panelayout.Shell {
+		return
+	}
+	r.m.workspacesMouse.HitMap.AddRect(previewPaneTitleKind, hit.X, hit.Y, hit.W, hit.H, previewPaneTitleHit(node.ID))
+}
+
 // Close is the leaf's header X. A leaf whose content is gone registers nothing,
 // the same rule Leaf and Tabs follow: a button that closes a pane that is not
 // there is a click that does nothing where something is drawn.
@@ -208,6 +220,9 @@ func previewPaneFloors() panelayout.Floors {
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Resource: panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		// A shell leaf is a terminal, so it budgets what the primary terminal
+		// budgets on this surface.
+		Shell: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
 	})
 }
 

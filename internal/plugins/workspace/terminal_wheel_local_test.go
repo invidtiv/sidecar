@@ -31,12 +31,12 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	p.width, p.height = 120, 40
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.termPanelSession = "panel-session"
 	p.termPanelPaneID = "%2"
 	p.termPanelOutput = panel
 	p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)] = tty.HistoryReach{HistorySize: 1200}
-	if p.termPanelMaxScroll() <= 0 {
+	if p.terminalMaxScroll(true) <= 0 {
 		t.Fatal("test premise: the panel fixture has nothing to scroll back through")
 	}
 	// The panel is coalesced by the shared burst like every other terminal
@@ -68,7 +68,7 @@ func TestPassivePanelWheelStopsAtTheLoadedTopAndAsksForHistory(t *testing.T) {
 		}
 	}
 
-	if bound := p.termPanelMaxScroll(); p.termPanelScroll != bound {
+	if bound := p.terminalMaxScroll(true); p.termPanelScroll != bound {
 		t.Fatalf("panel wheel left scroll %d, want the loaded bound %d", p.termPanelScroll, bound)
 	}
 	if lastCmd == nil {
@@ -97,7 +97,7 @@ func TestPanelWheelKeepsAnAbsoluteSelectionThroughADocProjection(t *testing.T) {
 		buffer: snapshot, source: live, termPanel: true,
 		identity: p.terminalProjectionIdentity(true),
 	}
-	p.pinTermPanelWindow(30, true)
+	p.pinTerminalWindow(true, 30, true)
 	p.selection.Clear()
 	p.selection.Start = ui.SelectionPoint{Line: 12, Col: 0}
 	p.selection.End = ui.SelectionPoint{Line: 14, Col: 4}
@@ -128,13 +128,13 @@ func TestPanelWheelThawsAGesturePinRatherThanDroppingIt(t *testing.T) {
 	relative.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
 	p.termPanelOutput = relative
 
-	bound := p.termPanelMaxScroll()
+	bound := p.terminalMaxScroll(true)
 	// A gesture froze the window well back through the scrollback while the
 	// offset behind it still read the live edge: thawing that pin and dropping
 	// it land in visibly different places.
 	const pinnedStart = 20
 	p.termPanelScroll = 0
-	p.pinTermPanelWindow(pinnedStart, false)
+	p.pinTerminalWindow(true, pinnedStart, false)
 	p.selection.Clear()
 	p.selection.Start = ui.SelectionPoint{Line: 1, Col: 0}
 	p.selection.End = ui.SelectionPoint{Line: 2, Col: 4}

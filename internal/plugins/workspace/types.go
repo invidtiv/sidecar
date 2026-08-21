@@ -70,14 +70,6 @@ const (
 	DiffTabFocusCommitDiff  = workspacediff.FocusCommitDiff
 )
 
-// TermPanelLayout represents the terminal panel split orientation.
-type TermPanelLayout int
-
-const (
-	TermPanelBottom TermPanelLayout = iota // Terminal below output (horizontal divider)
-	TermPanelRight                         // Terminal to the right of output (vertical divider)
-)
-
 // WorktreeStatus represents the current state of a worktree.
 type WorktreeStatus int
 

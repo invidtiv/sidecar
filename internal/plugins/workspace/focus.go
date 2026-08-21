@@ -25,8 +25,8 @@ func (p *Plugin) termPanelOnScreen() bool {
 	if !p.termPanelVisible || !p.paneTreeShowing() {
 		return false
 	}
-	_, _, fits := p.termPanelSplitBoxes()
-	return fits
+	_, drawn := p.shellLeafBox()
+	return drawn
 }
 
 // focusRing lists the windows Tab walks, in the order the preview draws them:
@@ -89,7 +89,7 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 		// Focus is an explicit navigation of the panel, so its window stops
 		// being pinned where a document or a gesture left it. Without this the
 		// panel arrives frozen and the first key moves nothing.
-		p.thawTermPanelWindow()
+		p.thawTerminalWindow(true)
 		p.syncDeckFocus()
 	default:
 		p.activePane = PanePreview

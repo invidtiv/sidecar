@@ -425,6 +425,12 @@ func (r appDeckRegions) Tabs(n *panelayout.Node, b paneframe.Box) {
 		}
 	}
 }
+
+// Title is the header name's own target. The deck hosts no leaf that is
+// renamed from its pane, so it registers nothing and the tab strip under it
+// keeps the cells.
+func (r appDeckRegions) Title(*panelayout.Node, paneframe.Box) {}
+
 func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	if n.Kind != panelayout.Primary && b.W > 0 {
 		r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+b.W-1, b.Y, 1, 1, n.ID)

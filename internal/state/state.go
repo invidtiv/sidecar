@@ -23,10 +23,14 @@ type State struct {
 	// NotificationCentreWidth is the app-level right panel's width in columns.
 	// It belongs to the shell rather than a plugin, but it is the same kind of
 	// preference as the pane widths above and is persisted the same way.
-	NotificationCentreWidth int    `json:"notificationCentreWidth,omitempty"`
-	TermPanelSize           int    `json:"termPanelSize,omitempty"`    // Terminal panel split size (percentage, 0 = 50%)
-	TermPanelLayout         string `json:"termPanelLayout,omitempty"`  // "bottom" or "right"
-	TermPanelVisible        bool   `json:"termPanelVisible,omitempty"` // Whether terminal panel was visible at exit
+	NotificationCentreWidth int `json:"notificationCentreWidth,omitempty"`
+	// The three legacy terminal-panel keys below are read once, converted into
+	// a pane-tree split, and cleared. Nothing writes them any more: the panel is
+	// a Shell leaf of the persisted pane layout, so its side, its size and its
+	// presence are the layout's to state.
+	LegacyTermPanelSize    int    `json:"termPanelSize,omitempty"`    // Panel's own share (percentage, 0 = 50%)
+	LegacyTermPanelSide    string `json:"termPanelLayout,omitempty"`  // "bottom" or "right"
+	LegacyTermPanelVisible bool   `json:"termPanelVisible,omitempty"` // Panel was up at exit
 
 	// Plugin-specific state (keyed by working directory path)
 	FileBrowser  map[string]FileBrowserState `json:"fileBrowser,omitempty"`
@@ -139,6 +143,11 @@ type PaneLayoutJSON struct {
 	// one-tab list when IssueTabs is absent.
 	Issue  string `json:"issue,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
+	// Session is a live leaf's durable target selector — the tmux session name
+	// it owns. It is never a tmux pane id: pane ids are reassigned by the
+	// server and mean nothing after a restart, so a leaf that persisted one
+	// would reattach to whatever now holds that id.
+	Session string `json:"session,omitempty"`
 }
 
 // PaneIssueTabJSON is one persisted issue tab. Restore re-fetches the issue
@@ -572,65 +581,34 @@ func SetDiffTabFileListWidth(width int) error {
 	return Save()
 }
 
-// GetTermPanelSize returns the saved terminal panel split size (percentage).
-func GetTermPanelSize() int {
+// LegacyTermPanel returns the pre-split terminal panel preferences: whether the
+// panel was up at exit, which side it was on ("bottom" or "right"), and the
+// percentage it occupied. They exist only to be converted into a pane-tree
+// split once; nothing writes them.
+func LegacyTermPanel() (visible bool, side string, size int) {
 	mu.RLock()
 	defer mu.RUnlock()
 	if current == nil {
-		return 0
+		return false, "", 0
 	}
-	return current.TermPanelSize
+	return current.LegacyTermPanelVisible, current.LegacyTermPanelSide, current.LegacyTermPanelSize
 }
 
-// SetTermPanelSize saves the terminal panel split size (percentage).
-func SetTermPanelSize(size int) error {
+// ClearLegacyTermPanel drops the legacy keys once they have been converted, so
+// the conversion happens exactly once per user.
+func ClearLegacyTermPanel() error {
 	mu.Lock()
 	if current == nil {
-		current = &State{}
+		mu.Unlock()
+		return nil
 	}
-	current.TermPanelSize = size
-	mu.Unlock()
-	return Save()
-}
-
-// GetTermPanelLayout returns the saved terminal panel layout ("bottom" or "right").
-func GetTermPanelLayout() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	if current == nil {
-		return ""
+	if !current.LegacyTermPanelVisible && current.LegacyTermPanelSide == "" && current.LegacyTermPanelSize == 0 {
+		mu.Unlock()
+		return nil
 	}
-	return current.TermPanelLayout
-}
-
-// SetTermPanelLayout saves the terminal panel layout ("bottom" or "right").
-func SetTermPanelLayout(layout string) error {
-	mu.Lock()
-	if current == nil {
-		current = &State{}
-	}
-	current.TermPanelLayout = layout
-	mu.Unlock()
-	return Save()
-}
-
-// GetTermPanelVisible returns whether the terminal panel was visible at last exit.
-func GetTermPanelVisible() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	if current == nil {
-		return false
-	}
-	return current.TermPanelVisible
-}
-
-// SetTermPanelVisible saves the terminal panel visibility state.
-func SetTermPanelVisible(visible bool) error {
-	mu.Lock()
-	if current == nil {
-		current = &State{}
-	}
-	current.TermPanelVisible = visible
+	current.LegacyTermPanelVisible = false
+	current.LegacyTermPanelSide = ""
+	current.LegacyTermPanelSize = 0
 	mu.Unlock()
 	return Save()
 }

@@ -46,7 +46,7 @@ func TestAFailedForwardedClickLeavesInteractiveModeExactlyOnce(t *testing.T) {
 // was armed in. Ending only the gesture leaves a live pane holding the keyboard
 // behind a divider drag.
 func TestPressingAwayFromTheTerminalEndsTheGestureAndTheMode(t *testing.T) {
-	for _, away := range []string{regionPaneDivider, regionSidebar, regionTermPanelDivider} {
+	for _, away := range []string{regionPaneDivider, regionSidebar, regionPaneTreeDivider} {
 		t.Run(away, func(t *testing.T) {
 			p := newInteractiveInputTestPlugin()
 			p.width, p.height = 100, 30
@@ -159,8 +159,8 @@ func TestLeavingALivePaneKeepsTheReadersWindow(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	if p.previewMaxScroll() < 10 {
-		t.Fatalf("the fixture cannot sit off the live edge (bound %d)", p.previewMaxScroll())
+	if p.terminalMaxScroll(false) < 10 {
+		t.Fatalf("the fixture cannot sit off the live edge (bound %d)", p.terminalMaxScroll(false))
 	}
 
 	p.jumpPreviewWindow(10)
@@ -199,7 +199,7 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 	if p.previewFreeze.Active() {
 		t.Fatal("the window stayed pinned after the mode that pinned it ended")
 	}
-	if want := p.previewMaxScroll() - pinned; p.previewScroll != want {
+	if want := p.terminalMaxScroll(false) - pinned; p.previewScroll != want {
 		t.Fatalf("window = %d rows back, want the %d the pinned rows sit at", p.previewScroll, want)
 	}
 	if p.previewScroll == 0 {
@@ -277,7 +277,7 @@ func TestTabWalksTheSameWindowsAsTheBrowser(t *testing.T) {
 	// The panel is this surface's extra window. It joins the ring in placement
 	// order — after the leaves, before the wrap back to the sidebar — and is the
 	// only entry the browser's walk lacks.
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(sidebarTarget())
 	got := tabWalk(t, p, len(parityFocusWalkPanel))
 	if !sameWalk(got, parityFocusWalkPanel) {
@@ -296,7 +296,7 @@ func TestTabIsHeldByALivePaneAsItIsInTheBrowser(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 	p.sidebarVisible = true
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(leafTarget(1))
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{Active: true, TargetPane: "%1", TargetSession: "parity-focus"}

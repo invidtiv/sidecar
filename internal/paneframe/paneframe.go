@@ -14,6 +14,8 @@
 package paneframe
 
 import (
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/styles"
@@ -106,6 +108,41 @@ type Content interface {
 	SetSize(Size) tea.Cmd
 	// View draws exactly Size.Height rows of exactly Size.Width columns.
 	View(Render) string
+}
+
+// TitledLeaf is a content whose header title is drawn wider than its Title()
+// text — a focus marker, a glyph, a pad. It is optional on purpose: a content
+// that does not implement it is measured from Title() alone, which is what the
+// frame can see for itself.
+type TitledLeaf interface {
+	// TitleColumns is the columns this content's header title occupies,
+	// starting at the leaf's first inner column. Zero means the leaf draws no
+	// title a pointer can aim at.
+	TitleColumns() int
+}
+
+// TitleHitBox is the cells one leaf's header title occupies: the leading run of
+// its own header row, inside its chrome-aware inner box.
+//
+// It lives here rather than on either surface because a clickable title is a
+// windowing behaviour — the deferred title-drag tier will want the same cells —
+// and a surface that measured its own would be the second hit-testing system
+// this package exists to prevent. ok is false for a leaf with no content, no
+// title, or no room to draw one.
+func TitleHitBox(content Content, inner Box) (Box, bool) {
+	if content == nil || inner.W <= 0 || inner.H <= 0 {
+		return Box{}, false
+	}
+	cols := 0
+	if titled, ok := content.(TitledLeaf); ok {
+		cols = titled.TitleColumns()
+	} else {
+		cols = ansi.StringWidth(content.Title())
+	}
+	if cols <= 0 {
+		return Box{}, false
+	}
+	return Box{X: inner.X, Y: inner.Y, W: min(cols, inner.W), H: 1}, true
 }
 
 // Chrome is the border a leaf wears. It is a reader of focus, not a decision a

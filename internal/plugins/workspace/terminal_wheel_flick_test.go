@@ -22,9 +22,9 @@ func flickWheelPlugin(t *testing.T, gap time.Duration) *Plugin {
 		at = at.Add(gap)
 		return at
 	}
-	if p.previewMaxScroll() < 60 || p.termPanelMaxScroll() < 60 {
+	if p.terminalMaxScroll(false) < 60 || p.terminalMaxScroll(true) < 60 {
 		t.Fatalf("test premise: bounds preview=%d panel=%d are too shallow for the flick",
-			p.previewMaxScroll(), p.termPanelMaxScroll())
+			p.terminalMaxScroll(false), p.terminalMaxScroll(true))
 	}
 	return p
 }

@@ -443,7 +443,7 @@ anywhere in the tree.)
 |-----|---------|
 | `ctrl+\` | exit |
 | `ctrl+]` | attach (`tmux_full_attach`, default off) |
-| `ctrl+t` / `alt+t` | toggle / switch terminal panel (`workspace_terminal_panel`, default off) |
+| `ctrl+t` | toggle a terminal split beside the preview (`workspace_terminal_panel`, default off) |
 | `alt+c` | copy |
 | `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |

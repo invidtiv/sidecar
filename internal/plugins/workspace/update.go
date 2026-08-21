@@ -2163,7 +2163,10 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	// Restore terminal panel only after selection is final, since its session
 	// identity depends on the selected shell/worktree.
 	if p.termPanelVisible && p.termPanelSession == "" {
-		sessionName := p.termPanelSessionName()
+		// A restored leaf reattaches the session it owned; createTermPanelSession
+		// recreates it in the workspace's workdir when it is gone.
+		sessionName := shellSessionSelector(p.restoredShellSession, p.termPanelSessionName())
+		p.restoredShellSession = ""
 		if sessionName != "" {
 			p.termPanelSession = sessionName
 			p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)

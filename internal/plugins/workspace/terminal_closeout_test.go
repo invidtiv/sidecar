@@ -167,7 +167,7 @@ func TestDragSelectLeavesThePaneFollowingOutput(t *testing.T) {
 	// The gesture ended where it started, against the live edge — and there is a
 	// live edge to be at: a pane with no output makes every bound zero, and an
 	// assertion against zero cannot tell following from stuck.
-	if p.previewWindowBound() == 0 {
+	if p.terminalWindowBound(false) == 0 {
 		t.Fatal("the fixture has no scrollback, so the window cannot be off the live edge at all")
 	}
 	p.finishInteractiveSelection()
@@ -220,7 +220,7 @@ func TestReleasingADragLeavesTheWindowWhereTheFreezePinnedIt(t *testing.T) {
 	givePaneScrollableOutput(p, 120)
 
 	p.freezeTerminalSelectionViewport()
-	if pinned, bound := p.previewFreeze.Start(), p.previewWindowBound(); pinned != bound {
+	if pinned, bound := p.previewFreeze.Start(), p.terminalWindowBound(false); pinned != bound {
 		t.Fatalf("the live window pinned at %d, want the furthest offset it can name (%d)", pinned, bound)
 	}
 

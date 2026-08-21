@@ -186,7 +186,7 @@ func TestWatchedTerminalBoundaryDropsOnlyLocalExhaustedInertia(t *testing.T) {
 	if p.WheelAtBoundary(up) {
 		t.Fatal("local terminal wheel toward available history was dropped")
 	}
-	p.previewScroll = p.previewMaxScroll()
+	p.previewScroll = p.terminalMaxScroll(false)
 	source, ok := p.terminalHistoryFor(false)
 	if !ok {
 		t.Fatal("test premise: terminal history source unavailable")

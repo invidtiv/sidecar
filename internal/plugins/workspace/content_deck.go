@@ -190,7 +190,13 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 	}
 	oldDocs, oldIssues, oldDiffs, oldResources := p.docs, p.issues, p.diffs, p.resources
 	keep := p.paneFocus
+	// The deck's tree is the passive content panes' — it has never heard of the
+	// shell leaf. Its shape is recorded before the projection lands and the leaf
+	// is put back after, so a projection cannot quietly close the panel or move
+	// its divider back to the default.
+	p.rememberShellSplit()
 	p.paneRoot = reconcileWorkspaceDeckTree(p.paneRoot, deck.Tree())
+	p.syncShellLeaf()
 	// setFocusTarget is the sole writer of the ring. A live-refresh broadcast
 	// must not walk it to whatever leaf last opened a tab — that is how
 	// switching plugins stole the shell whenever a document, issue, or diff
