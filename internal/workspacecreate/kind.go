@@ -8,38 +8,147 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-// KindFromClickX maps a click on the kind toggle to Shell (left half) or
-// Worktree (right half). regionX/regionW are the toggle's hit-region bounds.
-func KindFromClickX(x, regionX, regionW int) Kind {
-	if regionW > 0 && x >= regionX+regionW/2 {
-		return KindWorktree
-	}
-	return KindShell
+// kindRow is one row of the create modal's kind list. The list is a table so a
+// later pane kind (File, Git diff, td issue, Note) is an entry here rather than
+// new modal code.
+type kindRow struct {
+	Kind  Kind
+	Label string
+	// HostScoped rows are offered only by a host that can place them — a
+	// terminal split needs a pane tree, which the global browser's preview
+	// tiles do not have.
+	HostScoped bool
 }
 
-func kindToggle(id string, selected *Kind, onChange func()) modal.Section {
+// kindCatalog is every row the modal knows, in list order.
+var kindCatalog = []kindRow{
+	{Kind: KindShell, Label: "Shell"},
+	{Kind: KindWorktree, Label: "Worktree"},
+	{Kind: KindTerminalSplit, Label: "Terminal split", HostScoped: true},
+}
+
+const kindSeparator = " | "
+
+// kindRowsFor is the catalog a host offers.
+func kindRowsFor(hostScoped bool) []kindRow {
+	rows := make([]kindRow, 0, len(kindCatalog))
+	for _, row := range kindCatalog {
+		if row.HostScoped && !hostScoped {
+			continue
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func kindLabel(rows []kindRow, kind Kind) string {
+	for _, row := range rows {
+		if row.Kind == kind {
+			return row.Label
+		}
+	}
+	return ""
+}
+
+func kindIndex(rows []kindRow, kind Kind) int {
+	for i, row := range rows {
+		if row.Kind == kind {
+			return i
+		}
+	}
+	return 0
+}
+
+// kindSpans are each row's [start, end) columns inside the rendered toggle, so
+// a click lands on the row it is over rather than on a proportional guess. A
+// separator belongs to the row on its left, so no click between two rows misses
+// both.
+func kindSpans(rows []kindRow) [][2]int {
+	spans := make([][2]int, 0, len(rows))
+	x := 0
+	sep := ansi.StringWidth(kindSeparator)
+	for i, row := range rows {
+		w := ansi.StringWidth(" " + row.Label + " ")
+		end := x + w
+		if i < len(rows)-1 {
+			end += sep
+		}
+		spans = append(spans, [2]int{x, end})
+		x = end
+	}
+	return spans
+}
+
+// kindFromClickX maps a click on the kind toggle to the row under it. Clicks in
+// a separator, or past the last row in a region wider than the toggle, keep the
+// nearest row rather than falling through to the first.
+func kindFromClickX(rows []kindRow, current Kind, x, regionX, regionW int) Kind {
+	if len(rows) == 0 || regionW <= 0 {
+		return current
+	}
+	offset := x - regionX
+	if offset < 0 {
+		return rows[0].Kind
+	}
+	spans := kindSpans(rows)
+	for i, span := range spans {
+		if offset < span[1] {
+			return rows[i].Kind
+		}
+	}
+	return rows[len(rows)-1].Kind
+}
+
+// KindFromClickX maps a click on the two-row kind toggle to Shell (left) or
+// Worktree (right). It is the host-independent form kept for callers without a
+// form in hand; hosts should use Form.SetKindFromClickX, which knows which rows
+// the form actually offers.
+func KindFromClickX(x, regionX, regionW int) Kind {
+	return kindFromClickX(kindRowsFor(false), KindShell, x, regionX, regionW)
+}
+
+// kindDisabledSelected is the selected-but-unavailable row: the selected row's
+// chrome so the toggle still says which kind is active, in muted text so the
+// row still says it cannot be created. It is a function rather than a value so
+// it reads the colour at render time and follows a theme change.
+func kindDisabledSelected() lipgloss.Style {
+	return styles.ButtonHover.Foreground(styles.TextMuted)
+}
+
+// kindToggle renders the row list. disabledReason answers, per row, why that
+// row cannot be created right now; a disabled row is drawn muted whether or not
+// it is selected, so the rule is visible before the row is entered.
+func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disabledReason func(Kind) string) modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		sel := KindShell
 		if selected != nil {
 			sel = *selected
 		}
 		focused := focusID == id
-		shellStyle, treeStyle := styles.Button, styles.Button
-		if focused {
-			if sel == KindWorktree {
-				treeStyle = styles.ButtonFocused
-			} else {
-				shellStyle = styles.ButtonFocused
+		parts := make([]string, 0, len(rows)*2)
+		for i, row := range rows {
+			disabled := disabledReason != nil && disabledReason(row.Kind) != ""
+			style := styles.Button
+			switch {
+			case disabled && row.Kind == sel:
+				// A disabled row that is still the active kind — its Name field and
+				// placement row are drawn below it — must read as selected, or the
+				// toggle shows nothing selected at all. Selected chrome, muted text.
+				style = kindDisabledSelected()
+			case disabled:
+				style = styles.Muted
+			case row.Kind == sel:
+				style = styles.ButtonHover
+				if focused {
+					style = styles.ButtonFocused
+				}
 			}
-		} else if sel == KindWorktree {
-			treeStyle = styles.ButtonHover
-		} else {
-			shellStyle = styles.ButtonHover
+			if i > 0 {
+				parts = append(parts, styles.Muted.Render(kindSeparator))
+			}
+			parts = append(parts, style.Render(" "+row.Label+" "))
 		}
-		shell := shellStyle.Render(" Shell ")
-		sep := styles.Muted.Render(" | ")
-		tree := treeStyle.Render(" Worktree ")
-		content := lipgloss.JoinHorizontal(lipgloss.Top, shell, sep, tree)
+		content := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 		if ansi.StringWidth(content) > contentWidth && contentWidth > 0 {
 			content = ansi.Truncate(content, contentWidth, "…")
 		}
@@ -52,7 +161,7 @@ func kindToggle(id string, selected *Kind, onChange func()) modal.Section {
 			}},
 		}
 	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
-		if focusID != id || selected == nil {
+		if focusID != id || selected == nil || len(rows) == 0 {
 			return "", nil
 		}
 		key, ok := msg.(tea.KeyPressMsg)
@@ -60,12 +169,18 @@ func kindToggle(id string, selected *Kind, onChange func()) modal.Section {
 			return "", nil
 		}
 		prev := *selected
+		idx := kindIndex(rows, prev)
 		switch key.String() {
-		case "left", "h", "k":
-			*selected = KindShell
-		case "right", "l", "j":
-			*selected = KindWorktree
+		case "left", "h", "up", "k":
+			if idx > 0 {
+				idx--
+			}
+		case "right", "l", "down", "j":
+			if idx < len(rows)-1 {
+				idx++
+			}
 		}
+		*selected = rows[idx].Kind
 		if *selected != prev && onChange != nil {
 			onChange()
 		}

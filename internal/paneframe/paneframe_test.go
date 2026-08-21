@@ -392,6 +392,9 @@ func (s *recordingSink) Divider(splitID int, _ Box) {
 func (s *recordingSink) Tabs(node *panelayout.Node, _ Box) {
 	s.calls = append(s.calls, fmt.Sprintf("tabs:%d", node.ID))
 }
+func (s *recordingSink) Title(node *panelayout.Node, _ Box) {
+	s.calls = append(s.calls, fmt.Sprintf("title:%d", node.ID))
+}
 func (s *recordingSink) Close(node *panelayout.Node, _ Box) {
 	s.calls = append(s.calls, fmt.Sprintf("close:%d", node.ID))
 }
@@ -472,6 +475,8 @@ func TestRegisterRegionsUsesWholeBoxForBorderlessLeaf(t *testing.T) {
 type boxSink struct {
 	leaf, tabs, close, body func(Box)
 }
+
+func (s boxSink) Title(*panelayout.Node, Box) {}
 
 func (s boxSink) Leaf(_ *panelayout.Node, b Box)  { s.leaf(b) }
 func (s boxSink) Divider(int, Box)                {}

@@ -195,7 +195,7 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	if msg.Source.TermPanel {
 		// A pinned window names an absolute row, which the prepend just renumbered.
 		p.termPanelFreeze.Rebase(added)
-		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
+		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.terminalMaxScroll(true))
 		if more {
 			return p.loadOlderTerminalHistory(true, remainder)
 		}
@@ -204,7 +204,7 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	// A window placed from the live bottom is not renumbered by a prepend, so
 	// only the user's pending upward movement is replayed here.
 	p.previewFreeze.Rebase(added)
-	p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
+	p.previewScroll = min(p.previewScroll+scrollLines, p.terminalMaxScroll(false))
 	if more {
 		return p.loadOlderTerminalHistory(false, remainder)
 	}

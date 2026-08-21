@@ -81,6 +81,8 @@ func (p *Plugin) View(width, height int) string {
 		view = p.renderConfirmDeleteModal(width, height)
 	case ViewModeConfirmDeleteShell:
 		view = p.renderConfirmDeleteShellModal(width, height)
+	case ViewModeConfirmCloseSplit:
+		view = p.renderConfirmCloseSplitModal(width, height)
 	case ViewModeCommitForMerge:
 		view = p.renderCommitForMergeModal(width, height)
 	case ViewModeRenameShell:
@@ -332,6 +334,9 @@ func (p *Plugin) renderWorktreeItemKind(wt *Worktree, selected bool, width int, 
 	if wt.IsOrphaned {
 		after = append(after, workspacelist.RowField{Text: "⚠ session ended", Rendered: styles.StatusModified.Render("⚠ session ended")})
 	}
+	if badge := p.worktreeRowBadge(wt); badge != "" {
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: " " + badge, Rendered: styles.Muted.Render(" " + badge)})
+	}
 	lines := workspacelist.RenderRow(workspacelist.RowPresentation{
 		Marker: marker, Kind: kind, Name: name, Age: worktreeAge(wt), NameMeta: nameMeta,
 		BeforeProvider: before, Provider: provider, AfterProvider: after,
@@ -469,6 +474,11 @@ func (p *Plugin) renderShellEntryKind(shell *ShellSession, selected bool, width 
 	var nameMeta []workspacelist.RowField
 	if badge, hasBadge := p.pendingViewBadge(shell.TmuxName); hasBadge {
 		nameMeta = append(nameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
+	}
+	// The layout glyph joins the metadata the row already carries. A split
+	// workspace stays one row: the panes are what the badge is for.
+	if badge := p.shellRowBadge(shell); badge != "" {
+		nameMeta = append(nameMeta, workspacelist.RowField{Text: " " + badge, Rendered: styles.Muted.Render(" " + badge)})
 	}
 	prefix := workspacelist.RowField{}
 	if namePrefix != "" {

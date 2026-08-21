@@ -22,6 +22,7 @@ const (
 	ViewModeAgentChoice                        // Agent action choice modal (attach/restart)
 	ViewModeConfirmDelete                      // Delete confirmation modal
 	ViewModeConfirmDeleteShell                 // Shell delete confirmation modal
+	ViewModeConfirmCloseSplit                  // Split-terminal close confirmation modal
 	ViewModeCommitForMerge                     // Commit modal before merge workflow
 	ViewModeRenameShell                        // Rename shell modal
 	ViewModeRenameWorktree                     // Rename worktree display-name modal
@@ -68,14 +69,6 @@ const (
 	DiffTabFocusDiff        = workspacediff.FocusDiff
 	DiffTabFocusCommitFiles = workspacediff.FocusCommitFiles
 	DiffTabFocusCommitDiff  = workspacediff.FocusCommitDiff
-)
-
-// TermPanelLayout represents the terminal panel split orientation.
-type TermPanelLayout int
-
-const (
-	TermPanelBottom TermPanelLayout = iota // Terminal below output (horizontal divider)
-	TermPanelRight                         // Terminal to the right of output (vertical divider)
 )
 
 // WorktreeStatus represents the current state of a worktree.

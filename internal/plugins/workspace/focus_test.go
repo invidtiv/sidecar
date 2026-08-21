@@ -64,7 +64,7 @@ func TestTabCyclesEveryVisibleWindowIncludingTheTerminalPanel(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 	p.sidebarVisible = true
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(sidebarTarget())
 
 	forward := []panelayout.Target{leafTarget(1), leafTarget(2), leafTarget(3), panelTarget(), sidebarTarget()}
@@ -83,9 +83,9 @@ func TestTabToTheTerminalPanelThawsItsWindow(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 	p.sidebarVisible = false
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(leafTarget(3))
-	p.pinTermPanelWindow(4, true)
+	p.pinTerminalWindow(true, 4, true)
 	if !p.termPanelFreeze.Active() {
 		t.Fatal("the panel window did not pin")
 	}
@@ -185,7 +185,7 @@ func TestClickFocusesTheWindowUnderThePointer(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	steelThreadPaneTree(t, p, root)
 	p.sidebarVisible = true
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(sidebarTarget())
 
 	clicks := []struct {
@@ -317,20 +317,20 @@ func TestTabSkipsTheTerminalPanelWhenTheSplitDoesNotFit(t *testing.T) {
 	// shrinks; without one the split sizes itself from default dimensions and
 	// always fits.
 	p.sidebarVisible = false
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitCols, 50)
 
 	p.View(p.width, p.height)
 	if !p.termPanelOnScreen() {
 		t.Fatal("fixture should draw the panel before the window shrinks")
 	}
-	// A right split needs two 10-column boxes plus a divider; 20 columns of
-	// preview is one short, so the renderer draws output only.
-	p.termPanelLayout = TermPanelRight
+	// A column split needs two floored boxes plus a divider; a preview this
+	// narrow is short of that, so the frame zooms to the focused leaf and the
+	// panel is nowhere on screen.
 	for _, size := range [][2]int{{80, 24}, {60, 20}, {50, 16}} {
 		p.width, p.height = size[0], size[1]
 		p.View(p.width, p.height)
 	}
-	if _, _, fits := p.termPanelSplitBoxes(); fits {
+	if _, drawn := p.shellLeafBox(); drawn {
 		t.Fatal("fixture failed to produce a split that does not fit")
 	}
 	if p.termPanelOnScreen() {

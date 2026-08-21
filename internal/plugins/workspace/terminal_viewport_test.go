@@ -342,9 +342,9 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 	if p.previewScroll == 0 {
 		t.Fatal("shift+PageUp did not leave live-follow mode")
 	}
-	if p.previewScroll > p.previewMaxScroll() {
+	if p.previewScroll > p.terminalMaxScroll(false) {
 		t.Fatalf("shift+PageUp moved past the buffer: scroll=%d max=%d",
-			p.previewScroll, p.previewMaxScroll())
+			p.previewScroll, p.terminalMaxScroll(false))
 	}
 }
 
@@ -445,29 +445,37 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 	}
 }
 
-func TestBottomSplitDimensionsMatchRenderedTerminalContent(t *testing.T) {
+// The two terminals' tmux sizes are the two leaf boxes, and the boxes tile the
+// preview: whatever the split gives one, the other and the divider account for
+// the rest. Sizing either from arithmetic of its own is how a pane came to be
+// resized to a split nothing drew.
+func TestBottomSplitDimensionsTileThePreview(t *testing.T) {
 	for _, shellSelected := range []bool{false, true} {
 		t.Run(map[bool]string{false: "worktree", true: "shell"}[shellSelected], func(t *testing.T) {
-			p := &Plugin{
-				width:            100,
-				height:           30,
-				shellSelected:    shellSelected,
-				termPanelVisible: true,
-				termPanelLayout:  TermPanelBottom,
-				termPanelSize:    50,
+			p := surfacePlugin(shellSelected)
+			p.sidebarVisible = false
+			p.width, p.height = 100, 30
+			showTermPanel(t, p, SplitRows, 50)
+
+			primary, ok := p.terminalSlotBox(false)
+			if !ok {
+				t.Fatal("the primary terminal must have a box")
 			}
-			_, previewContentHeight := p.calculatePreviewDimensions()
-			containerHeight := previewContentHeight + 1
-			termBoxHeight := containerHeight * p.termPanelEffectiveSize() / 100
-			outputBoxHeight := containerHeight - termBoxHeight - 1
+			shell, ok := p.terminalSlotBox(true)
+			if !ok {
+				t.Fatal("a drawn panel must have a box")
+			}
+			if shell.Y <= primary.Y+primary.H {
+				t.Fatalf("panel box %+v does not sit below the primary %+v", shell, primary)
+			}
 
 			_, gotTermHeight, _ := p.calculateTermPanelDimensions()
 			_, gotOutputHeight := p.calculateAgentPaneDimensions()
-			if gotTermHeight != termBoxHeight-1 {
-				t.Fatalf("terminal content height = %d, rendered child content = %d", gotTermHeight, termBoxHeight-1)
+			if _, wantTerm := terminalSlotSize(shell); gotTermHeight != wantTerm {
+				t.Fatalf("terminal content height = %d, want the leaf's %d", gotTermHeight, wantTerm)
 			}
-			if gotOutputHeight != outputBoxHeight-1 {
-				t.Fatalf("output content height = %d, rendered child content = %d", gotOutputHeight, outputBoxHeight-1)
+			if _, wantOutput := terminalSlotSize(primary); gotOutputHeight != wantOutput {
+				t.Fatalf("output content height = %d, want the leaf's %d", gotOutputHeight, wantOutput)
 			}
 		})
 	}

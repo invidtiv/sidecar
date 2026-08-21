@@ -2067,6 +2067,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = append(cmds, p.pollInteractivePaneImmediate())
 
+	case ShellLeafCloseProbeMsg:
+		return p, p.handleShellLeafCloseProbe(msg)
+
 	case TermPanelSessionCreatedMsg:
 		p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.termPanelSession)
 		if msg.Err != nil {
@@ -2163,7 +2166,10 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 	// Restore terminal panel only after selection is final, since its session
 	// identity depends on the selected shell/worktree.
 	if p.termPanelVisible && p.termPanelSession == "" {
-		sessionName := p.termPanelSessionName()
+		// A restored leaf reattaches the session it owned; createTermPanelSession
+		// recreates it in the workspace's workdir when it is gone.
+		sessionName := shellSessionSelector(p.restoredShellSession, p.termPanelSessionName())
+		p.restoredShellSession = ""
 		if sessionName != "" {
 			p.termPanelSession = sessionName
 			p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)

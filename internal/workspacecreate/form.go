@@ -30,7 +30,14 @@ type Kind int
 const (
 	KindShell Kind = iota
 	KindWorktree
+	// KindTerminalSplit creates a live terminal beside the workspace's own
+	// terminal. It owns no branch and no agent, so it needs at most a name.
+	KindTerminalSplit
 )
+
+// lastKind is the row the list was last left on. The modal remembers it across
+// opens because the row a user picked once is the row they usually want again.
+var lastKind = KindShell
 
 // Stable field IDs shared by both hosts.
 const (
@@ -56,8 +63,23 @@ type ProjectItem struct {
 // already-resolved fallbacks from the host (.sidecar-agent / defaultAgentType);
 // this package does not load them from disk.
 type OpenOpts struct {
-	Kind           Kind
-	FocusKind      bool
+	Kind      Kind
+	FocusKind bool
+	// UseLastKind starts the list on the row it was last left on, when that
+	// row is one this host offers.
+	UseLastKind bool
+	// AllowTerminalSplit offers the Terminal split row. A host without a pane
+	// tree to place one in leaves it off.
+	AllowTerminalSplit bool
+	// TerminalSplitDisabled is why a terminal split cannot be created right
+	// now — the on-screen live-terminal cap being the one reason today. When
+	// it is set the row and its form render disabled with this one line, and
+	// the create paths refuse: the modal states the rule instead of offering a
+	// creation that would be refused after the fact.
+	TerminalSplitDisabled string
+	// TerminalName is the auto-name a terminal split takes when the name field
+	// is left empty.
+	TerminalName   string
 	ShowProject    bool
 	ProjectKey     string
 	Name           string
@@ -71,9 +93,13 @@ type OpenOpts struct {
 
 // Form is the Create Workspace chooser: inputs, indexes, skip, error, and modal cache.
 type Form struct {
-	kind        Kind
-	showProject bool
-	openedFocus string
+	kind             Kind
+	rows             []kindRow
+	placement        Placement
+	terminalName     string
+	terminalDisabled string
+	showProject      bool
+	openedFocus      string
 
 	projects     []ProjectItem
 	projectKey   string
@@ -111,16 +137,26 @@ type Form struct {
 // It does not persist last agent.
 func Open(opts OpenOpts) *Form {
 	f := &Form{
-		kind:           opts.Kind,
-		showProject:    opts.ShowProject,
-		projects:       append([]ProjectItem(nil), opts.Projects...),
-		projectKey:     opts.ProjectKey,
-		allowlist:      append([]string(nil), opts.Agents...),
-		branches:       append([]string(nil), opts.Branches...),
-		nextShell:      opts.NextShell,
-		preferredAgent: opts.PreferredAgent,
-		defaultAgent:   opts.DefaultAgent,
+		kind:             opts.Kind,
+		rows:             kindRowsFor(opts.AllowTerminalSplit),
+		terminalName:     strings.TrimSpace(opts.TerminalName),
+		terminalDisabled: strings.TrimSpace(opts.TerminalSplitDisabled),
+		showProject:      opts.ShowProject,
+		projects:         append([]ProjectItem(nil), opts.Projects...),
+		projectKey:       opts.ProjectKey,
+		allowlist:        append([]string(nil), opts.Agents...),
+		branches:         append([]string(nil), opts.Branches...),
+		nextShell:        opts.NextShell,
+		preferredAgent:   opts.PreferredAgent,
+		defaultAgent:     opts.DefaultAgent,
 	}
+	if opts.UseLastKind && kindLabel(f.rows, lastKind) != "" {
+		f.kind = lastKind
+	}
+	if kindLabel(f.rows, f.kind) == "" {
+		f.kind = f.rows[0].Kind
+	}
+	lastKind = f.kind
 	f.nameInput = textinput.New()
 	f.nameInput.Prompt = ""
 	f.nameInput.CharLimit = 100
@@ -251,12 +287,92 @@ func (f *Form) SetKind(k Kind) {
 		return
 	}
 	f.kind = k
+	lastKind = k
 	f.applyKindChange()
 }
 
-// SetKindFromClickX picks Shell or Worktree from a click on the kind toggle.
+// SetKindFromClickX picks the row under a click on the kind toggle.
 func (f *Form) SetKindFromClickX(x, regionX, regionW int) {
-	f.SetKind(KindFromClickX(x, regionX, regionW))
+	if f == nil {
+		return
+	}
+	f.SetKind(kindFromClickX(f.rows, f.kind, x, regionX, regionW))
+}
+
+// Placement is the segmented row's current value; Auto until a placement button
+// is clicked.
+func (f *Form) Placement() Placement {
+	if f == nil {
+		return PlacementAuto
+	}
+	return f.placement
+}
+
+// SetPlacement records the placement a button click asked for.
+func (f *Form) SetPlacement(placement Placement) {
+	if f == nil {
+		return
+	}
+	f.placement = placement
+	f.invalidate()
+}
+
+// PlacementSplit is the `--split` value for the current placement.
+func (f *Form) PlacementSplit() string {
+	if f == nil {
+		return "auto"
+	}
+	return PlacementSplit(f.placement)
+}
+
+// KindDisabledReason is why the selected row cannot be created right now, or
+// empty when it can. It is the one gate every create path asks — keyboard,
+// click, and placement button alike — so a disabled row cannot be created
+// through a path that forgot to check.
+func (f *Form) KindDisabledReason() string {
+	if f == nil {
+		return ""
+	}
+	return f.kindDisabledReason(f.kind)
+}
+
+func (f *Form) kindDisabledReason(kind Kind) string {
+	if f == nil || kind != KindTerminalSplit {
+		return ""
+	}
+	return f.terminalDisabled
+}
+
+// ApplyPlacementAction records a placement button click and reports that the
+// form should now be submitted. One click is the whole gesture.
+func (f *Form) ApplyPlacementAction(action string) bool {
+	placement, ok := PlacementFromAction(action)
+	if !ok || f == nil {
+		return false
+	}
+	if f.KindDisabledReason() != "" {
+		return false
+	}
+	f.placement = placement
+	return true
+}
+
+// ShowPlacement reports that the placement row belongs on screen: only a pane
+// this modal places has somewhere to put it.
+func (f *Form) ShowPlacement() bool {
+	return f != nil && f.kind == KindTerminalSplit
+}
+
+// TerminalName is the name a created terminal split takes: what was typed, or
+// the auto-name.
+func (f *Form) TerminalName() string {
+	if f == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(f.nameInput.Value()); name != "" {
+		return name
+	}
+	return f.terminalName
 }
 
 func (f *Form) Name() string {
@@ -331,6 +447,9 @@ func (f *Form) Validate() string {
 	if f == nil {
 		return ""
 	}
+	if reason := f.KindDisabledReason(); reason != "" {
+		return reason
+	}
 	if f.kind != KindWorktree {
 		return ""
 	}
@@ -395,7 +514,7 @@ func (f *Form) build(width int, prevFocus string) {
 	f.cachedBranch = len(f.branches)
 
 	sections := []modal.Section{
-		kindToggle(FieldKind, &f.kind, f.applyKindChange),
+		kindToggle(FieldKind, f.rows, &f.kind, f.applyKindChange, f.kindDisabledReason),
 		modal.Spacer(),
 	}
 	if f.showProject {
@@ -416,6 +535,25 @@ func (f *Form) build(width int, prevFocus string) {
 				modal.WithComboFilter(comboExactOrAllFilter(branchItems))),
 		)
 	}
+	if f.kind == KindTerminalSplit {
+		disabled := f.KindDisabledReason()
+		reason := f.errorSection()
+		if disabled != "" {
+			reason = modal.Text(styles.Muted.Render(disabled))
+		}
+		sections = append(sections,
+			reason,
+			modal.Spacer(),
+			placementButtons(disabled != ""),
+			modal.Spacer(),
+			modal.Buttons(
+				createButton(disabled != ""),
+				modal.Btn(" Cancel ", ActionCancel),
+			),
+		)
+		f.assemble(width, prevFocus, sections)
+		return
+	}
 	agentItems := f.AgentItems()
 	sections = append(sections,
 		modal.Text("Agent"),
@@ -431,16 +569,53 @@ func (f *Form) build(width int, prevFocus string) {
 		),
 	)
 
+	f.assemble(width, prevFocus, sections)
+}
+
+func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
+	// Enter resolves to Create, and Create is refused while the selected kind is
+	// disabled — so the hint line must not promise a confirm that is a no-op.
+	hints := modal.WithHints(true)
+	if f.KindDisabledReason() != "" {
+		hints = modal.WithHintText("Tab to switch · Esc to cancel")
+	}
 	m := modal.New("Create Workspace",
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
-		modal.WithHints(true),
+		hints,
 		modal.WithInitialFocus(prevFocus),
 	)
 	for _, section := range sections {
 		m.AddSection(section)
 	}
 	f.modal = m
+}
+
+// placementButtons is the segmented Auto/Right/Below row. Each button is a
+// create action, so one click both chooses the placement and creates.
+func placementButtons(disabled bool) modal.Section {
+	buttons := make([]modal.ButtonDef, 0, len(placementCatalog))
+	for _, row := range placementCatalog {
+		opts := []modal.BtnOption{}
+		if row.Placement == PlacementAuto {
+			opts = append(opts, modal.BtnPrimary())
+		}
+		if disabled {
+			opts = append(opts, modal.BtnDisabled())
+		}
+		buttons = append(buttons, modal.Btn(" "+row.Label+" ", row.Action, opts...))
+	}
+	return modal.Buttons(buttons...)
+}
+
+// createButton is the modal's Create action, disabled when the selected row
+// cannot be created. A disabled Create is unfocusable and inert, so the row's
+// refusal is visible before the click rather than in a toast after it.
+func createButton(disabled bool) modal.ButtonDef {
+	if disabled {
+		return modal.Btn(" Create ", ActionCreate, modal.BtnDisabled())
+	}
+	return modal.Btn(" Create ", ActionCreate, modal.BtnPrimary())
 }
 
 func (f *Form) applyKindChange() {
@@ -460,6 +635,14 @@ func (f *Form) invalidate() {
 }
 
 func (f *Form) updateNamePlaceholder() {
+	if f.kind == KindTerminalSplit {
+		ph := f.terminalName
+		if ph == "" {
+			ph = "Terminal"
+		}
+		f.nameInput.Placeholder = ph
+		return
+	}
 	if f.kind == KindWorktree {
 		f.nameInput.Placeholder = worktreeNamePlaceholder
 		return

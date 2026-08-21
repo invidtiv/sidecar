@@ -91,7 +91,7 @@ func TestProjectBoardKeepsItsOwnLaneHues(t *testing.T) {
 // noticing.
 func TestWorkspaceTerminalStatesItsWholeHostContract(t *testing.T) {
 	p := &Plugin{}
-	hooks := p.terminalHooks()
+	hooks := p.terminalHooks(workspaceTerminalPrimary)
 	if hooks.OnKey == nil || hooks.BeforeSend == nil || hooks.OnExit == nil ||
 		hooks.OnAttach == nil || hooks.OnSessionEnded == nil {
 		t.Fatalf("hooks = %+v, want every callback this surface owns", hooks)
@@ -101,7 +101,7 @@ func TestWorkspaceTerminalStatesItsWholeHostContract(t *testing.T) {
 	if hooks.ExitAction != tty.ExitReleasesInput {
 		t.Fatalf("exit action = %v, want the terminal kept open", hooks.ExitAction)
 	}
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	if model.OnKey == nil || model.BeforeSend == nil || model.OnExit == nil ||
 		model.OnAttach == nil || model.OnSessionEnded == nil ||
 		model.ExitAction != hooks.ExitAction {
@@ -167,7 +167,7 @@ func TestDragSelectLeavesThePaneFollowingOutput(t *testing.T) {
 	// The gesture ended where it started, against the live edge — and there is a
 	// live edge to be at: a pane with no output makes every bound zero, and an
 	// assertion against zero cannot tell following from stuck.
-	if p.previewWindowBound() == 0 {
+	if p.terminalWindowBound(false) == 0 {
 		t.Fatal("the fixture has no scrollback, so the window cannot be off the live edge at all")
 	}
 	p.finishInteractiveSelection()
@@ -220,7 +220,7 @@ func TestReleasingADragLeavesTheWindowWhereTheFreezePinnedIt(t *testing.T) {
 	givePaneScrollableOutput(p, 120)
 
 	p.freezeTerminalSelectionViewport()
-	if pinned, bound := p.previewFreeze.Start(), p.previewWindowBound(); pinned != bound {
+	if pinned, bound := p.previewFreeze.Start(), p.terminalWindowBound(false); pinned != bound {
 		t.Fatalf("the live window pinned at %d, want the furthest offset it can name (%d)", pinned, bound)
 	}
 

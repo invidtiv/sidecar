@@ -12,10 +12,10 @@ import (
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panebadge"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/ui"
@@ -114,26 +114,14 @@ func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 }
 
 func workspaceSurfaceIdentity(wt *Worktree) string {
-	if wt == nil {
-		return ""
-	}
-	key := wt.IdentityKey()
-	if wt.Key == "" {
-		if canonical, err := projectdir.WorktreeKey(wt.Path); err == nil {
-			key = canonical
-		}
-	}
-	if key == "" {
-		key = stablePathKey(wt.Path)
-	}
-	return "workspace:" + key
+	return panebadge.WorktreeSurface(worktreeSurfaceKey(wt))
 }
 
 func legacyWorkspaceSurfaceIdentity(wt *Worktree) string {
 	if wt == nil || wt.Path == "" {
 		return ""
 	}
-	return "workspace:" + stablePathKey(wt.Path)
+	return panebadge.WorktreeSurface(stablePathKey(wt.Path))
 }
 
 func (p *Plugin) activeDocPane() (*docPane, *PaneNode) {
@@ -160,7 +148,11 @@ func paneTreeFloors() Floors {
 	// Inner markdown still never drops below MinWidthForMarkdown.
 	return paneframe.ChromeFloors(Floors{
 		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
-		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+		// A shell leaf is a terminal like the primary one, so it gets the
+		// terminal panel's own floors — the same numbers the hand-rolled split
+		// clamps to today.
+		Shell: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
+		Doc:   PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		// An issue's body is markdown wrapped by the same renderer, so it needs
 		// the width that renderer stops being markdown below.
 		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
@@ -823,6 +815,11 @@ func (p *Plugin) contentLeafSurface(leafID int) (root, surface string, ok bool) 
 		return "", "", false
 	}
 	switch leaf.Kind {
+	case PaneShell:
+		// A shell leaf belongs to whatever the sidebar has selected: it holds no
+		// content of its own to be stale against, and the session it draws is
+		// the selection's.
+		return p.selectedTerminalSurface()
 	case PaneDoc:
 		if doc := p.docs[leaf.ContentID]; doc != nil {
 			return doc.root, doc.surface, true
@@ -896,7 +893,7 @@ func (p *Plugin) docVisible() bool {
 			break
 		}
 	}
-	return live && p.paneRoot != nil
+	return (live || p.shellLeaf() != nil) && p.paneRoot != nil
 }
 
 // previewLeafFocused reports whether a visible content leaf holds the preview's
@@ -1246,6 +1243,16 @@ func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
 	}
 	p.paneLayoutSurface = surface
 	layout := p.savedPaneLayoutForCurrentSurface(surface)
+	if p.legacyTermPanel.Visible {
+		// The pre-split panel preference becomes a split of this layout, once.
+		// It is spent on the FIRST surface restored either way: a preference
+		// held back until some later workspace happens to have a saved layout
+		// would splice a split into a workspace it was never set on.
+		if layout != nil {
+			layout = migrateTermPanelIntoLayout(layout, p.legacyTermPanel)
+		}
+		p.legacyTermPanel = termPanelPrefs{}
+	}
 	if layout == nil {
 		p.paneRestoreCmd = nil
 		return
@@ -1282,6 +1289,11 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 	}
 	if node.Kind == PaneTerminal {
 		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
+	}
+	if node.Kind == PaneShell {
+		// The leaf owns its session, so its identity is persisted with it
+		// rather than re-derived: a durable selector, never a pane id.
+		return &state.PaneLayoutJSON{Kind: contentKindShell, Session: p.termPanelSession}
 	}
 	if node.Kind == PaneIssue {
 		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
@@ -1354,9 +1366,9 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.paneNextID = 1
-	terminalCount := 0
+	terminalCount, shellCount := 0, 0
 	var loads []tea.Cmd
-	restored := p.decodePaneNode(layout, root, &terminalCount, &loads)
+	restored := p.decodePaneNode(layout, root, &terminalCount, &shellCount, &loads)
 	if restored == nil || terminalCount != 1 || !supportedPaneTree(restored) {
 		p.resetPaneTreeToTerminal()
 		return nil
@@ -1364,6 +1376,20 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.paneRoot = restored
 	p.paneFocus = terminalLeafID(restored)
 	p.paneNextID = maxPaneID(restored) + 1
+	// A restored shell leaf turns the split back on FOR THIS SURFACE, and a
+	// layout without one turns it off: the split is the workspace's own, so the
+	// workspace's saved layout is the whole answer. Anything else opens a split
+	// on a workspace the user never split.
+	if shellCount > 0 {
+		p.termPanelVisible = true
+		p.shellLeafSurface = surface
+		p.rememberShellSplit()
+	} else {
+		p.termPanelVisible = false
+		p.termPanelFocused = false
+		p.shellLeafSurface = ""
+	}
+	p.syncShellLeaf()
 	return tea.Batch(loads...)
 }
 
@@ -1382,7 +1408,7 @@ func supportedPaneTree(root *PaneNode) bool {
 	}
 	if root.Split == nil {
 		switch root.Kind {
-		case PaneTerminal, PaneDoc, PaneIssue, PaneDiff, PaneResource:
+		case PaneTerminal, PaneShell, PaneDoc, PaneIssue, PaneDiff, PaneResource:
 			return true
 		default:
 			return false
@@ -1392,7 +1418,7 @@ func supportedPaneTree(root *PaneNode) bool {
 		supportedPaneTree(root.Split.A) && supportedPaneTree(root.Split.B)
 }
 
-func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount *int, loads *[]tea.Cmd) *PaneNode {
+func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount, shellCount *int, loads *[]tea.Cmd) *PaneNode {
 	if saved == nil {
 		return nil
 	}
@@ -1405,8 +1431,8 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		default:
 			return nil
 		}
-		a := p.decodePaneNode(saved.Split.A, root, terminalCount, loads)
-		b := p.decodePaneNode(saved.Split.B, root, terminalCount, loads)
+		a := p.decodePaneNode(saved.Split.A, root, terminalCount, shellCount, loads)
+		b := p.decodePaneNode(saved.Split.B, root, terminalCount, shellCount, loads)
 		if a == nil {
 			return b
 		}
@@ -1423,6 +1449,15 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 			return nil
 		}
 		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
+	case contentKindShell:
+		// One shell leaf, for the same reason there is one terminal leaf: a
+		// second would draw a tmux session that is already on screen.
+		if *shellCount > 0 {
+			return nil
+		}
+		*shellCount++
+		p.restoredShellSession = shellSessionSelector(saved.Session, "")
+		return &PaneNode{ID: p.nextPaneID(), Kind: PaneShell}
 	case contentKindDoc:
 		return p.decodeDocLeaf(saved, root, loads)
 	case contentKindIssue:
@@ -1521,6 +1556,10 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
 	p.paneFocus = p.paneRoot.ID
+	// A split terminal IS owned by a selection, so a tree rebuilt for a new one
+	// is rebuilt without it unless the new selection is the split's own
+	// workspace — syncShellLeaf reconciles both halves of that.
+	p.syncShellLeaf()
 }
 
 // docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
@@ -1639,6 +1678,12 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 		return
 	}
 	switch node.Kind {
+	case PaneShell:
+		// The panel's terminal takes clicks over its INNER box — the border is
+		// the frame's, not the terminal's — and it is registered here so a click
+		// cannot land on a panel the frame did not draw.
+		inner := leafGeometry(box).Inner
+		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, inner.X, inner.Y, inner.W, inner.H, node.ID)
 	case PaneDoc:
 		if doc := p.docs[node.ContentID]; doc != nil {
 			p.registerDocPaneRegions(doc, node.ID, box)
@@ -1691,6 +1736,11 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 		if p.paneContent(node) == nil {
 			return
 		}
+		p.registerPaneCloseRegion(node.ID, box)
+	case PaneShell:
+		// A split terminal is closable exactly like any other non-primary leaf.
+		// The PRIMARY terminal is not: it is the surface the sidebar selects,
+		// and closing it would leave the workspace with nothing to select into.
 		p.registerPaneCloseRegion(node.ID, box)
 	}
 }

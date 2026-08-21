@@ -140,7 +140,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	return p, tea.Batch(cmds...)
 }
 
-func (p *Plugin) newWorkspaceTerminal() *tty.Model {
+func (p *Plugin) newWorkspaceTerminal(role workspaceTerminalRole) *tty.Model {
 	config := p.terminalConfig()
 	config.ScrollbackLines = outputBufferCap
 	model := tty.New(&config)
@@ -148,7 +148,7 @@ func (p *Plugin) newWorkspaceTerminal() *tty.Model {
 	// empty chord so ctrl+] stays the pane's when full attach is off.
 	model.Config.AttachKey = config.AttachKey
 	model.SetResizeDebounce(p.resizeDebounce())
-	model.SetHooks(p.terminalHooks())
+	model.SetHooks(p.terminalHooks(role))
 	return model
 }
 
@@ -166,13 +166,20 @@ func (p *Plugin) applyResizeDebounceToTerminals() {
 // the component that owns the rest. It is one value rather than field-by-field
 // assignment so a hook cannot be added to one embedding host and forgotten in
 // the other — the global browser states its contract the same way.
-func (p *Plugin) terminalHooks() tty.Hooks {
+func (p *Plugin) terminalHooks(role workspaceTerminalRole) tty.Hooks {
+	// A split terminal's session end closes its leaf; the primary's does not.
+	// Routing both through the same component hook is what keeps "the pane
+	// died" one signal with two surface answers rather than two detectors.
+	sessionEnded := p.noteSessionEnded
+	if role == workspaceTerminalPanel {
+		sessionEnded = p.noteShellLeafSessionEnded
+	}
 	return tty.Hooks{
 		OnKey:          p.interactiveKey,
 		BeforeSend:     p.beforeInteractiveSend,
 		OnExit:         p.leaveInteractiveMode,
 		OnAttach:       p.attachFromInteractive,
-		OnSessionEnded: p.noteSessionEnded,
+		OnSessionEnded: sessionEnded,
 		// This surface draws the pane whether or not the user is typing into it,
 		// so leaving the mode releases the keyboard and nothing else: closing here
 		// would drop the loaded scrollback the user just read and reconciliation
@@ -188,8 +195,8 @@ func (p *Plugin) resetTerminalModels() {
 	if p.panelTerminal != nil {
 		p.panelTerminal.Close()
 	}
-	p.primaryTerminal = p.newWorkspaceTerminal()
-	p.panelTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	p.primaryTerminalTarget = workspaceTerminalTarget{}
 	p.panelTerminalTarget = workspaceTerminalTarget{}
 }

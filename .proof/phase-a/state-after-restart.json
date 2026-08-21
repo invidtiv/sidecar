@@ -1,0 +1,38 @@
+{
+    "gitDiffMode": "unified",
+    "workspace": {
+        "/Users/marcus/code/sidecar": {
+            "workspaceName": "sidecar",
+            "paneLayouts": {
+                "shell:sidecar-sh-sidecar-4": {
+                    "root": "/Users/marcus/code/sidecar",
+                    "surface": "shell:sidecar-sh-sidecar-4",
+                    "kind": "terminal",
+                    "open": true
+                },
+                "workspace:3e5fb2d5104915f8485a14e555f578dfc8e0e176bac809edac79e95b9f2b3b6a": {
+                    "root": "/Users/marcus/code/sidecar-agent-shell-create",
+                    "surface": "workspace:3e5fb2d5104915f8485a14e555f578dfc8e0e176bac809edac79e95b9f2b3b6a",
+                    "kind": "terminal",
+                    "open": true
+                },
+                "workspace:56680c558beb3436c31f1b1f5bb91998c2cc738178f05c60d7d83a365986ab1b": {
+                    "root": "/Users/marcus/code/sidecar",
+                    "surface": "workspace:56680c558beb3436c31f1b1f5bb91998c2cc738178f05c60d7d83a365986ab1b",
+                    "split": {
+                        "axis": "cols",
+                        "ratio": 37,
+                        "a": {
+                            "kind": "terminal"
+                        },
+                        "b": {
+                            "kind": "shell"
+                        }
+                    },
+                    "open": true
+                }
+            }
+        }
+    },
+    "seenDefaultThemeNotice": true
+}

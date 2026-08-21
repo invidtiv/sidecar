@@ -184,7 +184,7 @@ const (
 
 // ensureRenameShellModal builds/rebuilds the rename shell modal.
 func (p *Plugin) ensureRenameShellModal() {
-	if p.renameShellSession == nil {
+	if p.renameShellSession == nil && p.renameShellLeafTarget() == nil {
 		return
 	}
 
@@ -221,13 +221,18 @@ func (p *Plugin) ensureRenameShellModal() {
 // renameShellInfoSection renders the shell info section.
 func (p *Plugin) renameShellInfoSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		if p.renameShellSession == nil {
+		current := ""
+		switch {
+		case p.renameShellSession != nil:
+			current = p.renameShellSession.Name
+		case p.renameShellLeafTarget() != nil:
+			current = p.shellLeafTitle()
+		default:
 			return modal.RenderedSection{}
 		}
 
-		shell := p.renameShellSession
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Current: %s", lipgloss.NewStyle().Bold(true).Render(shell.Name))
+		fmt.Fprintf(&sb, "Current: %s", lipgloss.NewStyle().Bold(true).Render(current))
 
 		return modal.RenderedSection{Content: sb.String()}
 	}, nil)

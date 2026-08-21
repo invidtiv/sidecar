@@ -44,11 +44,11 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 
 	if termPanel {
 		panel := testTerminalBuffer(strings.Repeat("panel row\n", 60))
-		p.termPanelVisible = true
+		showTermPanel(t, p, SplitRows, 50)
 		p.termPanelSession = "sidecar-panel"
 		p.termPanelPaneID = "%9"
 		p.termPanelOutput = panel
-		model := p.newWorkspaceTerminal()
+		model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 		model.State = &tty.State{
 			Active:                true,
 			TargetSession:         "sidecar-panel",
@@ -79,9 +79,9 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 		}
 	}
 
-	bound := p.previewMaxScroll()
+	bound := p.terminalMaxScroll(false)
 	if termPanel {
-		bound = p.termPanelMaxScroll()
+		bound = p.terminalMaxScroll(true)
 	}
 	if bound <= parityWheelStart+mouse.WheelScrollLines {
 		t.Fatalf("test premise: a bound of %d rows cannot hold a notch past the starting window", bound)

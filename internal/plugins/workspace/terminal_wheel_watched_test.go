@@ -31,7 +31,7 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 	}}
 	p.selectedShellIdx = 0
 
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	model.State = &tty.State{
 		Active:                true,
 		TargetSession:         "sidecar-sh-one",
@@ -186,7 +186,7 @@ func TestWatchedTerminalBoundaryDropsOnlyLocalExhaustedInertia(t *testing.T) {
 	if p.WheelAtBoundary(up) {
 		t.Fatal("local terminal wheel toward available history was dropped")
 	}
-	p.previewScroll = p.previewMaxScroll()
+	p.previewScroll = p.terminalMaxScroll(false)
 	source, ok := p.terminalHistoryFor(false)
 	if !ok {
 		t.Fatal("test premise: terminal history source unavailable")

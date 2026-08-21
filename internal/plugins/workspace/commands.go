@@ -191,6 +191,11 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "cancel", Name: "Cancel", Description: "Cancel deletion", Context: "workspace-confirm-delete-shell", Priority: 1},
 			{ID: "delete", Name: "Delete", Description: "Terminate shell", Context: "workspace-confirm-delete-shell", Priority: 2},
 		}
+	case ViewModeConfirmCloseSplit:
+		return []plugin.Command{
+			{ID: "cancel", Name: "Cancel", Description: "Keep the split", Context: "workspace-confirm-close-split", Priority: 1},
+			{ID: "close", Name: "Close", Description: "Close the terminal split", Context: "workspace-confirm-close-split", Priority: 2},
+		}
 	case ViewModeCommitForMerge:
 		return []plugin.Command{
 			{ID: "cancel", Name: "Cancel", Description: "Cancel merge", Context: "workspace-commit-for-merge", Priority: 1},
@@ -278,15 +283,6 @@ func (p *Plugin) Commands() []plugin.Command {
 				cmds = append(cmds,
 					plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-preview", Priority: 16},
 				)
-				if p.termPanelVisible {
-					layoutName := "Right"
-					if p.termPanelLayout == TermPanelRight {
-						layoutName = "Bottom"
-					}
-					cmds = append(cmds,
-						plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-preview", Priority: 17},
-					)
-				}
 			}
 			return cmds
 		}
@@ -398,15 +394,6 @@ func (p *Plugin) Commands() []plugin.Command {
 			cmds = append(cmds,
 				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 17},
 			)
-			if p.termPanelVisible {
-				layoutName := "Right"
-				if p.termPanelLayout == TermPanelRight {
-					layoutName = "Bottom"
-				}
-				cmds = append(cmds,
-					plugin.Command{ID: "switch-terminal-layout", Name: layoutName, Description: "Switch terminal layout", Context: "workspace-list", Priority: 18},
-				)
-			}
 		}
 		return cmds
 	}
@@ -443,6 +430,8 @@ func (p *Plugin) FocusContext() string {
 		return "workspace-confirm-delete"
 	case ViewModeConfirmDeleteShell:
 		return "workspace-confirm-delete-shell"
+	case ViewModeConfirmCloseSplit:
+		return "workspace-confirm-close-split"
 	case ViewModeCommitForMerge:
 		return "workspace-commit-for-merge"
 	case ViewModeRenameShell:

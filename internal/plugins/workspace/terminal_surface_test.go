@@ -240,19 +240,17 @@ func TestTerminalSurfaceGeometryMatchesRenderedOrigin(t *testing.T) {
 func TestTerminalSurfaceGeometryTermPanelMatchesRenderedOrigin(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		layout TermPanelLayout
+		layout SplitAxis
 		shell  bool
 	}{
-		{"worktree bottom", TermPanelBottom, false},
-		{"worktree right", TermPanelRight, false},
-		{"shell bottom", TermPanelBottom, true},
-		{"shell right", TermPanelRight, true},
+		{"worktree bottom", SplitRows, false},
+		{"worktree right", SplitCols, false},
+		{"shell bottom", SplitRows, true},
+		{"shell right", SplitCols, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := surfacePlugin(tc.shell)
-			p.termPanelVisible = true
-			p.termPanelSize = 50
-			p.termPanelLayout = tc.layout
+			showTermPanel(t, p, tc.layout, 50)
 			p.termPanelSession = "panel-session"
 			p.termPanelPaneID = "%13"
 			p.termPanelOutput = markerBuffer("PANEL", 3)
@@ -286,11 +284,10 @@ func TestTerminalSurfaceGeometryTermPanelMatchesRenderedOrigin(t *testing.T) {
 // is, because a stray blank line is exactly the kind of thing only the pixels
 // can catch.
 func TestExactlyOneHeaderRowAboveEveryTerminal(t *testing.T) {
-	panelPlugin := func(shell bool, layout TermPanelLayout) *Plugin {
+	panelPlugin := func(t *testing.T, shell bool, layout SplitAxis) *Plugin {
+		t.Helper()
 		p := surfacePlugin(shell)
-		p.termPanelVisible = true
-		p.termPanelSize = 50
-		p.termPanelLayout = layout
+		showTermPanel(t, p, layout, 50)
 		p.termPanelSession = "panel-session"
 		p.termPanelPaneID = "%13"
 		p.termPanelOutput = markerBuffer("PANEL", 3)
@@ -309,9 +306,9 @@ func TestExactlyOneHeaderRowAboveEveryTerminal(t *testing.T) {
 	}{
 		{"shell", surfacePlugin(true), "SHELL00", false, "border"},
 		{"worktree", surfacePlugin(false), "AGENT00", false, "border"},
-		{"term panel right child", panelPlugin(false, TermPanelRight), "PANEL00", true, "border"},
-		{"term panel bottom child", panelPlugin(false, TermPanelBottom), "PANEL00", true, "divider"},
-		{"term panel bottom primary", panelPlugin(false, TermPanelBottom), "AGENT00", false, "border"},
+		{"term panel right child", panelPlugin(t, false, SplitCols), "PANEL00", true, "border"},
+		{"term panel bottom child", panelPlugin(t, false, SplitRows), "PANEL00", true, "divider"},
+		{"term panel bottom primary", panelPlugin(t, false, SplitRows), "AGENT00", false, "border"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := tc.plugin
@@ -342,10 +339,11 @@ func TestExactlyOneHeaderRowAboveEveryTerminal(t *testing.T) {
 						surface.HeaderY, previewBorderRows)
 				}
 			case "divider":
-				// The bottom child's header sits directly on the split rule; a
-				// second row of chrome would show up as a blank line here.
-				if !strings.Contains(above, "━") {
-					t.Fatalf("row above the header = %q, want the split handle", above)
+				// The bottom leaf's header sits directly on its own top border,
+				// which is the one row of chrome every leaf spends; a second row
+				// would show up as a blank line here.
+				if !strings.Contains(above, "─") {
+					t.Fatalf("row above the header = %q, want the leaf's top border", above)
 				}
 			}
 		})
@@ -501,15 +499,13 @@ func TestResolvedPaneGeometryPrefersInteractiveState(t *testing.T) {
 // to the tmux row above or below the one under the cursor. The origin now comes
 // from the same geometry the render path draws with, so the mapping holds at
 // every height.
-func TestTermPanelBottomMouseRowMatchesRenderedRow(t *testing.T) {
+func TestSplitRowsMouseRowMatchesRenderedRow(t *testing.T) {
 	for height := 24; height <= 41; height++ {
 		t.Run(fmt.Sprintf("height %d", height), func(t *testing.T) {
 			p := surfacePlugin(false)
 			p.height = height
-			p.termPanelVisible = true
+			showTermPanel(t, p, SplitRows, 50)
 			p.termPanelFocused = true
-			p.termPanelSize = 50
-			p.termPanelLayout = TermPanelBottom
 			p.termPanelSession = "panel-session"
 			p.termPanelPaneID = "%13"
 
@@ -688,29 +684,40 @@ func TestTerminalHeaderRowHintFloorDropsChips(t *testing.T) {
 	}
 }
 
-// The renderers bail to a full-preview, output-only layout when the split's two
-// floors do not fit. The sizer and the geometry have to agree that there is no
-// panel at all, or its tmux pane is resized to a split nothing draws and the
-// cursor is placed against a surface that is nowhere on screen.
-func TestTermPanelDimensionsFallBackWhenSplitDoesNotFit(t *testing.T) {
-	for _, layout := range []TermPanelLayout{TermPanelBottom, TermPanelRight} {
+// A viewport too small for two floored boxes has no panel at all: the split is
+// refused rather than squeezed (Law 2), the flag goes back off with it, and the
+// primary terminal keeps the whole preview. A panel flagged up with nowhere to
+// draw would be resized to a split nothing rendered and would put the cursor
+// against a surface that is nowhere on screen.
+func TestTermPanelRefusesASplitTheViewportCannotHold(t *testing.T) {
+	for _, axis := range []SplitAxis{SplitRows, SplitCols} {
 		p := surfacePlugin(false)
+		enableSingleTerminalTree(p)
 		p.sidebarVisible = false
-		p.width, p.height = 10, 6 // below both floors; preview clamps to 20x5
+		p.width, p.height = 10, 6 // below both floors
+		p.shellSplitAxis, p.shellSplitRatio = axis, 50
 		p.termPanelVisible = true
-		p.termPanelLayout = layout
-		p.termPanelSize = 50
+		if p.syncShellLeaf() {
+			t.Fatalf("axis %v: a split was opened in a viewport that cannot hold one", axis)
+		}
+		if p.termPanelVisible || p.shellLeaf() != nil {
+			t.Fatalf("axis %v: a refused split left the panel flagged up", axis)
+		}
 
-		previewWidth, previewHeight := p.calculatePreviewDimensions()
 		if w, h, ok := p.calculateTermPanelDimensions(); ok {
-			t.Fatalf("layout %v: term panel dims = (%d,%d), want no panel", layout, w, h)
+			t.Fatalf("axis %v: term panel dims = (%d,%d), want no panel", axis, w, h)
 		}
 		if surface := p.terminalSurfaceGeometry(true); surface.OK {
-			t.Fatalf("layout %v: term panel surface = %#v, want none", layout, surface)
+			t.Fatalf("axis %v: term panel surface = %#v, want none", axis, surface)
 		}
-		if w, h := p.calculateAgentPaneDimensions(); w != previewWidth || h != previewHeight {
-			t.Fatalf("layout %v: agent pane dims = (%d,%d), want the full preview (%d,%d)",
-				layout, w, h, previewWidth, previewHeight)
+		box, ok := p.terminalSlotBox(false)
+		if !ok {
+			t.Fatalf("axis %v: the primary terminal lost its box", axis)
+		}
+		wantW, wantH := terminalSlotSize(box)
+		if w, h := p.calculateAgentPaneDimensions(); w != wantW || h != wantH {
+			t.Fatalf("axis %v: agent pane dims = (%d,%d), want the whole terminal leaf (%d,%d)",
+				axis, w, h, wantW, wantH)
 		}
 	}
 }

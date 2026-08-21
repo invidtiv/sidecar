@@ -230,6 +230,10 @@ type ButtonDef struct {
 	Label    string
 	ID       string
 	IsDanger bool
+	// Disabled buttons are drawn muted, are skipped by focus, and never
+	// return their action. A refusal the user can see beats a click that
+	// quietly does nothing.
+	Disabled bool
 }
 
 // BtnOption is a functional option for buttons.
@@ -248,6 +252,14 @@ func Btn(label, id string, opts ...BtnOption) ButtonDef {
 func BtnDanger() BtnOption {
 	return func(b *ButtonDef) {
 		b.IsDanger = true
+	}
+}
+
+// BtnDisabled marks the button unavailable: muted, unfocusable, and inert to
+// both Enter and a click.
+func BtnDisabled() BtnOption {
+	return func(b *ButtonDef) {
+		b.Disabled = true
 	}
 }
 
@@ -289,13 +301,18 @@ func (b *buttonsSection) Render(contentWidth int, focusID, hoverID string) Rende
 		// Calculate visual width (ANSI-stripped)
 		visualWidth := ansi.StringWidth(rendered)
 
-		focusables = append(focusables, FocusableInfo{
-			ID:      btn.ID,
-			OffsetX: currentX,
-			OffsetY: 0,
-			Width:   visualWidth,
-			Height:  1,
-		})
+		// A disabled button registers nothing: Tab passes over it and a click
+		// lands on no target, so refusal is structural rather than a check
+		// every caller has to remember.
+		if !btn.Disabled {
+			focusables = append(focusables, FocusableInfo{
+				ID:      btn.ID,
+				OffsetX: currentX,
+				OffsetY: 0,
+				Width:   visualWidth,
+				Height:  1,
+			})
+		}
 
 		currentX += visualWidth
 	}
@@ -307,6 +324,9 @@ func (b *buttonsSection) Render(contentWidth int, focusID, hoverID string) Rende
 }
 
 func (b *buttonsSection) resolveStyle(btn ButtonDef, focusID, hoverID string) lipgloss.Style {
+	if btn.Disabled {
+		return styles.Muted
+	}
 	isFocused := btn.ID == focusID
 	isHovered := btn.ID == hoverID
 
@@ -338,7 +358,7 @@ func (b *buttonsSection) Update(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	// Enter on a focused button returns that button's ID as the action
 	if keyMsg.String() == "enter" {
 		for _, btn := range b.buttons {
-			if btn.ID == focusID {
+			if btn.ID == focusID && !btn.Disabled {
 				return btn.ID, nil
 			}
 		}

@@ -94,7 +94,7 @@ func TestPreviewWindowJumps(t *testing.T) {
 	p.worktrees = []*Worktree{wt}
 	p.selectedIdx = 0
 
-	p.jumpPreviewWindow(p.previewMaxScroll())
+	p.jumpPreviewWindow(p.terminalMaxScroll(false))
 	if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
 		t.Errorf("jump to oldest: drawn window starts at %d, want the oldest row 0", start)
 	}
@@ -138,7 +138,7 @@ func TestScrollDirectionConsistency(t *testing.T) {
 
 	t.Run("output tab j moves towards the live bottom", func(t *testing.T) {
 		p := scrollTestOutputPlugin(5)
-		p.scrollPreviewWindow(-1)
+		p.scrollTerminalWindow(false, -1)
 		if p.previewScroll != 4 {
 			t.Errorf("after j: previewScroll = %d, want 4", p.previewScroll)
 		}
@@ -146,7 +146,7 @@ func TestScrollDirectionConsistency(t *testing.T) {
 
 	t.Run("output tab k moves back through scrollback", func(t *testing.T) {
 		p := scrollTestOutputPlugin(5)
-		p.scrollPreviewWindow(1)
+		p.scrollTerminalWindow(false, 1)
 		if p.previewScroll != 6 {
 			t.Errorf("after k: previewScroll = %d, want 6", p.previewScroll)
 		}
@@ -183,7 +183,7 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 	p.shellSelected = true
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
 
-	bound := p.previewMaxScroll()
+	bound := p.terminalMaxScroll(false)
 	if bound == 0 {
 		t.Fatal("the fixture has no scrollback to walk back through")
 	}
@@ -198,7 +198,7 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 	}
 
 	// Walk back further than any bound could allow.
-	p.scrollPreviewWindow(1000)
+	p.scrollTerminalWindow(false, 1000)
 	if p.previewScroll != bound {
 		t.Fatalf("previewScroll = %d, want the bound %d", p.previewScroll, bound)
 	}
@@ -208,7 +208,7 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 
 	// One notch forward has to move the rows on screen: a window parked past the
 	// oldest drawn row would spend the whole dead zone before anything happened.
-	p.scrollPreviewWindow(-1)
+	p.scrollTerminalWindow(false, -1)
 	if start := p.terminalViewportLayoutFor(false).Start; start != 1 {
 		t.Fatalf("after one notch back towards live the window starts at %d, want 1", start)
 	}
@@ -226,7 +226,7 @@ func TestGJumpToTop(t *testing.T) {
 
 	t.Run("output", func(t *testing.T) {
 		p := scrollTestOutputPlugin(0)
-		p.jumpPreviewWindow(p.previewMaxScroll())
+		p.jumpPreviewWindow(p.terminalMaxScroll(false))
 		if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
 			t.Errorf("after g: drawn window starts at %d, want the oldest row 0", start)
 		}
@@ -250,7 +250,7 @@ func TestFollowIsDerivedFromTheWindowPosition(t *testing.T) {
 		t.Error("a window at the live bottom is not following output")
 	}
 
-	p.scrollPreviewWindow(1)
+	p.scrollTerminalWindow(false, 1)
 	follow, offset, fromBottom := p.terminalScrollState(false)
 	if follow || offset != 1 || !fromBottom {
 		t.Errorf("after scrolling up: (%v,%d,%v), want (false,1,true)", follow, offset, fromBottom)
@@ -652,7 +652,7 @@ func TestPanelBoundIsTheDrawnPanelWindow(t *testing.T) {
 	}))
 	p.termPanelOutput = panel
 
-	bound := p.termPanelMaxScroll()
+	bound := p.terminalMaxScroll(true)
 	p.termPanelScroll = 0
 	live := p.terminalViewportLayoutFor(true).Start
 	if live != bound {
@@ -660,12 +660,12 @@ func TestPanelBoundIsTheDrawnPanelWindow(t *testing.T) {
 			"and its bound are not one measurement", live, bound)
 	}
 
-	p.scrollTermPanelWindow(1)
+	p.scrollTerminalWindow(true, 1)
 	if got := p.terminalViewportLayoutFor(true).Start; got != live-1 {
 		t.Fatalf("one notch back off the panel's live edge started at %d, want %d", got, live-1)
 	}
 
-	p.scrollTermPanelWindow(bound)
+	p.scrollTerminalWindow(true, bound)
 	if got := p.terminalViewportLayoutFor(true).Start; got != 0 {
 		t.Fatalf("at the panel's bound the window starts at %d, want the oldest row 0", got)
 	}

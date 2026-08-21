@@ -26,6 +26,11 @@ const (
 	// and resolved, not which windows exist, so a Jira ticket and a CI build
 	// become tabs in one leaf rather than two pane kinds.
 	Resource
+	// Shell is a live terminal leaf the user created, distinct from Primary:
+	// Primary is the one terminal the host owns, Shell is a peer session the
+	// tree hosts beside it. Keeping them apart is what lets a host have more
+	// than one live terminal without the tree learning what a terminal is.
+	Shell
 )
 
 // Terminal is the persisted-value and source compatibility alias used by the
@@ -76,6 +81,7 @@ type Floors struct {
 	Issue    Floor
 	Diff     Floor
 	Resource Floor
+	Shell    Floor
 }
 
 func (f Floors) primary() Floor {
@@ -154,6 +160,8 @@ func paneMinimum(node *Node, floors Floors) Floor {
 			floor = floors.Diff
 		case Resource:
 			floor = floors.Resource
+		case Shell:
+			floor = floors.Shell
 		}
 		return Floor{Width: max(floor.Width, 0), Height: max(floor.Height, 0)}
 	}
@@ -189,16 +197,96 @@ func ApplyAxisOverride(plan OpenPlan, split string) OpenPlan {
 	return plan
 }
 
+// LiveLeafCap is how many live leaves may be on screen in one tree at once:
+// the host's primary terminal plus one peer. Live leaves cost a control-mode
+// subscription and a tmux resize per geometry change, so the cap is a refusal
+// the caller reports, never a silent drop.
+const LiveLeafCap = 2
+
+// IsLive reports that a leaf of this kind drives a live terminal session.
+func IsLive(kind Kind) bool { return kind == Primary || kind == Shell }
+
+// Duplicable reports that a second leaf of this kind is a second thing, not the
+// same thing shown again. Document/Issue/Diff/Resource swap their content in
+// place, so opening one twice retargets the leaf that exists; a Shell open is a
+// new session, so it always splits.
+func Duplicable(kind Kind) bool { return kind == Shell }
+
+// LiveLeafCount is how many live leaves the tree currently holds.
+func LiveLeafCount(node *Node) int {
+	if node == nil {
+		return 0
+	}
+	if node.Split == nil {
+		if IsLive(node.Kind) {
+			return 1
+		}
+		return 0
+	}
+	return LiveLeafCount(node.Split.A) + LiveLeafCount(node.Split.B)
+}
+
+// LeafCount is how many content leaves the tree holds. It is the number a
+// sidebar row's layout badge is derived from, so a live tree and the tree the
+// same workspace persisted are counted by one rule.
+func LeafCount(node *Node) int {
+	if node == nil {
+		return 0
+	}
+	if node.Split == nil {
+		return 1
+	}
+	return LeafCount(node.Split.A) + LeafCount(node.Split.B)
+}
+
+// LiveCapReached reports that no further live leaf fits in this tree. Hosts use
+// it to explain the refusal instead of leaving PlanOpen's false unexplained.
+func LiveCapReached(root *Node) bool { return LiveLeafCount(root) >= LiveLeafCap }
+
+// FirstOfContent names the leaf already showing one content id of a kind, or
+// nil. A live session is never shown in two leaves, so an open that names a
+// session already on screen retargets it rather than splitting.
+func FirstOfContent(node *Node, kind Kind, contentID int) *Node {
+	if node == nil || contentID == 0 {
+		return nil
+	}
+	if node.Split == nil {
+		if node.Kind == kind && node.ContentID == contentID {
+			return node
+		}
+		return nil
+	}
+	if leaf := FirstOfContent(node.Split.A, kind, contentID); leaf != nil {
+		return leaf
+	}
+	return FirstOfContent(node.Split.B, kind, contentID)
+}
+
 // PlanOpen keeps the primary content in a full-height left column: the first content
 // opens beside it, a different content kind stacks in the right column, a later
 // content kind stacks on the largest content leaf, and a repeated kind
 // retargets its existing leaf. boxes may be nil; ties and missing geometry
 // follow the first content leaf in the tree.
 func PlanOpen(root *Node, kind Kind, boxes map[int]Box) (OpenPlan, bool) {
+	return PlanOpenContent(root, kind, 0, boxes)
+}
+
+// PlanOpenContent is PlanOpen for a named piece of content. A duplicable kind
+// never retargets a leaf showing something else — every open is a new session —
+// but it does retarget the leaf already showing this exact content, which is
+// what keeps one tmux session out of two leaves.
+func PlanOpenContent(root *Node, kind Kind, contentID int, boxes map[int]Box) (OpenPlan, bool) {
 	if kind == Primary {
 		return OpenPlan{}, false
 	}
-	if leaf := FirstOfKind(root, kind); leaf != nil {
+	if leaf := FirstOfContent(root, kind, contentID); leaf != nil {
+		return OpenPlan{Retarget: leaf.ID}, true
+	}
+	if Duplicable(kind) {
+		if IsLive(kind) && LiveCapReached(root) {
+			return OpenPlan{}, false
+		}
+	} else if leaf := FirstOfKind(root, kind); leaf != nil {
 		return OpenPlan{Retarget: leaf.ID}, true
 	}
 	contents := contentLeaves(root)

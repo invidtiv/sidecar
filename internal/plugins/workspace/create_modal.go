@@ -181,9 +181,30 @@ func (p *Plugin) setCreateKindFromClick(x int) {
 	}
 }
 
+// createFormPlacementAction records a placement button click and creates
+// immediately: one click is the whole gesture, no second confirmation.
+func (p *Plugin) createFormPlacementAction(action string) tea.Cmd {
+	if p.createForm == nil || !p.createForm.ApplyPlacementAction(action) {
+		return nil
+	}
+	return p.submitCreateForm()
+}
+
 func (p *Plugin) submitCreateForm() tea.Cmd {
 	if p.createForm == nil {
 		return nil
+	}
+	if p.createForm.Kind() == workspacecreate.KindTerminalSplit {
+		// The disabled row refuses here too, not only in its chrome: Enter
+		// reaches the modal's primary action from any field, so a visual
+		// disable alone would still let the keyboard through.
+		if p.createForm.KindDisabledReason() != "" {
+			return nil
+		}
+		name, placement := p.createForm.TerminalName(), p.createForm.PlacementSplit()
+		p.viewMode = ViewModeList
+		p.clearCreateModal()
+		return p.createTerminalSplit(name, placement)
 	}
 	if p.createForm.Kind() == workspacecreate.KindShell {
 		p.createForm.PersistLastAgent()
