@@ -228,41 +228,61 @@ func (m *NotInstalledModel) renderPitch() string {
 
 	linkStyle := styles.Link
 
+	// Syntax highlighted command styles
+	kwStyle := lipgloss.NewStyle().
+		Foreground(styles.Primary).
+		Bold(true)
+
+	argStyle := lipgloss.NewStyle().
+		Foreground(styles.TextPrimary)
+
+	commentStyle := lipgloss.NewStyle().
+		Foreground(styles.TextMuted).
+		Italic(true)
+
 	codeBoxStyle := lipgloss.NewStyle().
-		Foreground(styles.Success).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(styles.BorderNormal).
-		Padding(0, 1)
+		Padding(0, 2)
+
+	// Build formatted code box
+	var codeLines []string
+	codeLines = append(codeLines, kwStyle.Render("brew install")+" "+argStyle.Render("marcus/tap/td"))
+	codeLines = append(codeLines, commentStyle.Render("# or"))
+	codeLines = append(codeLines, kwStyle.Render("go install")+" "+argStyle.Render("github.com/marcus/td@latest"))
+	codeLines = append(codeLines, "")
+	codeLines = append(codeLines, kwStyle.Render("td init"))
+	installCode := strings.Join(codeLines, "\n")
 
 	// Build content
 	var b strings.Builder
 
-	// Explain why they're seeing this screen
-	b.WriteString(mutedStyle.Render("td is not installed on your system."))
+	// Status notice
+	b.WriteString(mutedStyle.Render("td is not installed on this system."))
 	b.WriteString("\n\n")
 
+	// Section Title
 	b.WriteString(titleStyle.Render("External memory for AI sessions"))
 	b.WriteString("\n\n")
 
+	// Capabilities
 	b.WriteString(textStyle.Render("td gives each session:"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Current focus and pending work"))
+	b.WriteString(bulletStyle.Render("  • Durable task context that persists across AI sessions"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Decisions and their reasoning"))
+	b.WriteString(bulletStyle.Render("  • Work tracking with progress logs and structured handoffs"))
 	b.WriteString("\n")
-	b.WriteString(bulletStyle.Render("  • Structured handoffs between sessions"))
+	b.WriteString(bulletStyle.Render("  • Independent review and approval workflows"))
+	b.WriteString("\n")
+	b.WriteString(bulletStyle.Render("  • Fast, local SQLite storage"))
 	b.WriteString("\n\n")
 
-	b.WriteString(mutedStyle.Render("Local SQLite. No cloud. Git-friendly."))
+	// Installation instructions (above Learn more)
+	b.WriteString(codeBoxStyle.Render(installCode))
 	b.WriteString("\n\n")
 
 	// Website link
-	b.WriteString(textStyle.Render("Learn more: "))
-	b.WriteString(linkStyle.Render("https://marcus.github.io/td/"))
-	b.WriteString("\n\n")
-
-	installCmd := "brew install marcus/tap/td\n# or\ngo install github.com/marcus/td@latest\n\ntd init"
-	b.WriteString(codeBoxStyle.Render(installCmd))
+	b.WriteString(textStyle.Render("Learn more: ") + linkStyle.Render("https://marcus.github.io/td/"))
 
 	return b.String()
 }
@@ -275,14 +295,19 @@ func (m *NotInstalledModel) View(width, height int) string {
 	stallion := m.renderStallion()
 	pitch := m.renderPitch()
 
-	// Get stallion width to center pitch within it
+	// Get dimensions
 	stallionWidth := lipgloss.Width(stallion)
-	centeredPitch := lipgloss.PlaceHorizontal(stallionWidth, lipgloss.Center, pitch)
+	pitchWidth := lipgloss.Width(pitch)
 
-	// Combine vertically - use Left to preserve stallion's whitespace alignment
-	// (Center causes ANSI width miscalculation issues)
-	content := lipgloss.JoinVertical(lipgloss.Left, stallion, centeredPitch)
+	maxWidth := stallionWidth
+	if pitchWidth > maxWidth {
+		maxWidth = pitchWidth
+	}
 
-	// Center in available space
+	centeredStallion := lipgloss.PlaceHorizontal(maxWidth, lipgloss.Center, stallion)
+	centeredPitch := lipgloss.PlaceHorizontal(maxWidth, lipgloss.Center, pitch)
+
+	content := lipgloss.JoinVertical(lipgloss.Left, centeredStallion, centeredPitch)
+
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
