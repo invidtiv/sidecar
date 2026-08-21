@@ -109,8 +109,20 @@ func (p *Plugin) trackTextareaScroll() {
 }
 
 // editorScrollbar draws the shared body scrollbar from the same
-// source-line viewport preview and edit use.
+// source-line viewport preview and edit use, stashing its geometry so hit
+// regions register from the same numbers it rendered with.
 func (p *Plugin) editorScrollbar(l editorLayout) string {
+	params := p.editorScrollbarParams(l)
+	rendered, geom := ui.RenderScrollbarWithState(params, p.bodyScrollbarStyle())
+	trackX, trackY := p.bodyScrollbarRect(l)
+	p.stashBodyScrollbar(params, geom, trackX, trackY)
+	return rendered
+}
+
+// editorScrollbarParams is the single source of the body bar's renderer
+// inputs. Rendering and hit-region registration both consume it so the drawn
+// thumb and the hit-tested one can never disagree.
+func (p *Plugin) editorScrollbarParams(l editorLayout) ui.ScrollbarParams {
 	visible := l.contentHeight
 	if visible < 1 {
 		visible = 1
@@ -130,12 +142,20 @@ func (p *Plugin) editorScrollbar(l editorLayout) string {
 	if totalItems < total {
 		totalItems = total
 	}
-	return ui.RenderScrollbar(ui.ScrollbarParams{
+	return ui.ScrollbarParams{
 		TotalItems:   totalItems,
 		ScrollOffset: p.previewScrollOff,
 		VisibleItems: visible,
 		TrackHeight:  visible,
-	})
+	}
+}
+
+// bodyScrollbarRect is where the rendered bar sits in plugin coordinates:
+// pane border + padding, then the layout's scrollbar column; rows start at
+// the shared body content row.
+func (p *Plugin) bodyScrollbarRect(l editorLayout) (trackX, trackY int) {
+	return p.listWidth + dividerWidth + 2 + l.scrollbarCol,
+		p.editorContentStartY()
 }
 
 // attachScrollbar pads body to height×bodyWidth and joins a one-column bar.

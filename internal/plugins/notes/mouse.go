@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	rw "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 )
@@ -102,6 +103,30 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 
 		if action.Type == mouse.ActionScrollUp || action.Type == mouse.ActionScrollDown {
 			return p, p.forwardWheelToInlineEditor(action)
+		}
+
+		// Scrollbar gestures are sidecar's, not the pane app's: consume them
+		// here so a bar press can never land in the editor as a caret-moving
+		// synthetic click and a bar drag can never become text selection.
+		// Drags and releases are keyed to the gesture's origin so a pointer
+		// that wanders off the bar stays owned by the scrollbar.
+		switch action.Type {
+		case mouse.ActionClick:
+			if action.Region != nil {
+				switch action.Region.ID {
+				case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+					return p.handleScrollbarPress(action)
+				}
+			}
+		case mouse.ActionDrag:
+			if p.mouseHandler.DragRegion() == ui.RegionScrollbarThumb {
+				return p.handleScrollbarDrag(action)
+			}
+		case mouse.ActionDragEnd:
+			if action.DragStartID == ui.RegionScrollbarThumb {
+				p.scrollbarDragEnded()
+				return p, nil
+			}
 		}
 
 		// Each physical click is one pane press. The shared handler labels the
@@ -206,6 +231,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return p.handleScrollbarPress(action)
+
 	case regionListFilter:
 		p.activePane = PaneList
 		return p, p.switchViewFilter(nextNoteFilter(p.viewFilter))
@@ -302,6 +330,11 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// A scrollbar gesture is not a note open; swallow the second click of
+		// a double-press on the bar.
+		return p, nil
+
 	case regionNoteItem:
 		idx, ok := action.Region.Data.(int)
 		if !ok {
@@ -430,9 +463,12 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 	return p, cmd
 }
 
-// handleMouseDrag handles drag actions (pane resizing and text selection).
+// handleMouseDrag handles drag actions (pane resizing, text selection and
+// scrollbar gestures).
 func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	switch p.mouseHandler.DragRegion() {
+	case ui.RegionScrollbarThumb:
+		return p.handleScrollbarDrag(action)
 	case regionDivider:
 		return p.handleDividerDrag(action)
 	case regionEditorLine:
@@ -518,6 +554,9 @@ func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
 
 func (p *Plugin) handleMouseDragEndRegion(region string) (*Plugin, tea.Cmd) {
 	switch region {
+	case ui.RegionScrollbarThumb:
+		// Scroll offsets are ephemeral; nothing to persist or finalize.
+		p.scrollbarDragEnded()
 	case regionDivider:
 		// Save the current list width to state
 		_ = state.SetNotesListWidth(p.listWidth)
@@ -534,6 +573,7 @@ func (p *Plugin) handleMouseDragEndRegion(region string) (*Plugin, tea.Cmd) {
 func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	p.hoverDivider = action.Region != nil && action.Region.ID == regionDivider
 	p.hoverNewNote = action.Region != nil && action.Region.ID == regionNewNote
+	p.updateScrollbarHover(action.Region)
 	return p, nil
 }
 
@@ -974,6 +1014,18 @@ func (p *Plugin) registerMouseRegions() {
 	// Header controls are last so they win over the general list-pane region.
 	p.registerListFilterRegion()
 	p.registerNewNoteRegion()
+
+	// Scrollbar bars are registered after every content region so the reverse
+	// scan prefers them: a press on a bar must never select a note row or
+	// place an editor caret. The inline editor gate lives inside
+	// registerBodyScrollbarRegion.
+	if snap, ok := p.listScrollbarSnapshot(); ok {
+		p.scrollPointer.list = snap
+	} else {
+		p.scrollPointer.list = scrollBarSnapshot{}
+	}
+	p.registerListScrollbarRegion()
+	p.registerBodyScrollbarRegion()
 }
 
 func (p *Plugin) registerListFilterRegion() {

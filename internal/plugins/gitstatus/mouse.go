@@ -6,6 +6,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // Git is declared "covered" in assembly.WheelBoundaryRegistry; this assertion
@@ -53,6 +54,9 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		switch action.Region.ID {
 		case regionSidebar, regionFile, regionCommit:
 			inSidebar = true
+		case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			bar, _ := action.Region.Data.(int)
+			inSidebar = bar != scrollBarNone
 		case regionDiffPane, regionCommitFile:
 			inSidebar = false
 		default:
@@ -140,10 +144,11 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p.handleMouseDrag(action)
 
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd()
+		return p.handleMouseDragEnd(action)
 
 	case mouse.ActionHover:
 		p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
+		p.updateScrollbarHover(action.Region)
 		return p, nil
 	}
 
@@ -157,6 +162,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return p.handleScrollbarPress(action)
+
 	case regionSidebar:
 		p.activePane = PaneSidebar
 		return p, nil
@@ -251,6 +259,11 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// A scrollbar gesture is not a file open; swallow the second click of
+		// a double-press so rapid track clicks cannot launch an editor.
+		return p, nil
+
 	case regionFile:
 		// Double-click on file - open it in editor (folders handled by single-click)
 		entries := p.tree.AllEntries()
@@ -344,6 +357,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 	case regionSidebar, regionFile, regionCommit:
 		return p.scrollSidebar(action.Delta)
 
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return p.scrollSidebar(action.Delta)
+
 	case regionDiffPane, regionCommitFile:
 		return p.scrollDiffPane(action.Delta)
 	}
@@ -429,6 +445,9 @@ func (p *Plugin) scrollDiffPaneHorizontal(delta int) (*Plugin, tea.Cmd) {
 
 // handleMouseDrag handles drag motion events.
 func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	if p.mouseHandler.DragRegion() == ui.RegionScrollbarThumb {
+		return p.handleScrollbarDrag(action)
+	}
 	if p.mouseHandler.DragRegion() == regionPaneDivider {
 		// Calculate new sidebar width based on drag
 		startValue := p.mouseHandler.DragStartValue()
@@ -456,10 +475,15 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	return p, nil
 }
 
-// handleMouseDragEnd handles the end of a drag operation (saves pane width).
-func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
-	// Save the current sidebar width to state
-	_ = state.SetGitStatusSidebarWidth(p.sidebarWidth)
+// handleMouseDragEnd handles the end of a drag operation. Only the pane
+// divider persists anything; scrollbar gestures leave no state behind.
+func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	switch action.DragStartID {
+	case regionPaneDivider:
+		_ = state.SetGitStatusSidebarWidth(p.sidebarWidth)
+	case ui.RegionScrollbarThumb:
+		p.scrollbarDragEnded()
+	}
 	return p, nil
 }
 

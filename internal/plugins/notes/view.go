@@ -171,12 +171,14 @@ func (p *Plugin) renderListPane(height int) string {
 		}
 	}
 
-	bar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   noteCount,
-		ScrollOffset: p.scrollOff,
-		VisibleItems: contentHeight,
-		TrackHeight:  contentHeight,
-	})
+	// The list bar's geometry is derived from layout state so registration
+	// and rendering share one source of truth.
+	snap, ok := p.listScrollbarSnapshot()
+	if !ok {
+		return sb.String()
+	}
+	bar, _ := ui.RenderScrollbarWithState(snap.params, p.listScrollbarStyle())
+	p.scrollPointer.list = snap
 	sb.WriteString(attachScrollbar(body.String(), bar, bodyWidth, contentHeight))
 	return sb.String()
 }

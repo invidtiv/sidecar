@@ -159,6 +159,9 @@ type Plugin struct {
 	hoverDivider bool
 	hoverNewNote bool
 
+	// Interactive scrollbar pointer state (td-550ce1)
+	scrollPointer notesScrollState
+
 	// In-note search (preview pane). List search is searchMode/searchQuery.
 	noteSearchMode      bool
 	noteSearchCommitted bool
