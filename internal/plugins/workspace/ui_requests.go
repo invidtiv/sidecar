@@ -36,6 +36,9 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 		p.applyShellRenameRequest(req)
 		return nil
 	}
+	if req.Action == uirequest.ActionCreate {
+		return p.applyCreateRequest(req)
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -98,6 +101,135 @@ func (p *Plugin) applyWorktreeRenameRequest(req uirequest.Request) {
 			return
 		}
 	}
+}
+
+func (p *Plugin) applyCreateRequest(req uirequest.Request) tea.Cmd {
+	payload, err := uirequest.DecodeCreatePayload(req.Payload)
+	if err != nil {
+		return nil
+	}
+	if !p.createRequestApplies(req) {
+		return nil
+	}
+	switch payload.Kind {
+	case uirequest.CreateKindShell:
+		return p.applyCreateShellRequest(req, payload)
+	case uirequest.CreateKindWorktree:
+		return p.applyCreateWorktreeRequest(req, payload)
+	default:
+		return nil
+	}
+}
+
+func (p *Plugin) createRequestApplies(req uirequest.Request) bool {
+	if p.ctx == nil {
+		return true
+	}
+	if req.Origin.ProjectKey != "" && p.matchesProjectTarget(req) {
+		return true
+	}
+	if req.Origin.TmuxSession != "" {
+		for _, sh := range p.shells {
+			if sh != nil && sh.TmuxName == req.Origin.TmuxSession {
+				return true
+			}
+		}
+		if _, sh := p.findNestedShell(req.Origin.TmuxSession); sh != nil {
+			return true
+		}
+	}
+	if req.Origin.WorkDir != "" && (sameCanonicalPath(p.ctx.ProjectRoot, req.Origin.WorkDir) || sameCanonicalPath(p.ctx.WorkDir, req.Origin.WorkDir)) {
+		return true
+	}
+	return false
+}
+
+func (p *Plugin) applyCreateShellRequest(req uirequest.Request, payload uirequest.CreatePayload) tea.Cmd {
+	if payload.Session == "" {
+		return nil
+	}
+	idx := -1
+	for i, sh := range p.shells {
+		if sh != nil && sh.TmuxName == payload.Session {
+			idx = i
+			if payload.DisplayName != "" {
+				sh.Name = payload.DisplayName
+			}
+			break
+		}
+	}
+	if idx < 0 {
+		workDir := ""
+		if p.ctx != nil {
+			workDir = p.ctx.WorkDir
+		}
+		if req.Origin.WorkDir != "" {
+			workDir = req.Origin.WorkDir
+		}
+		name := payload.DisplayName
+		if name == "" {
+			name = payload.Session
+		}
+		p.shells = append(p.shells, &ShellSession{
+			Name:     name,
+			TmuxName: payload.Session,
+			WorkDir:  workDir,
+		})
+		idx = len(p.shells) - 1
+	}
+	if payload.ShouldFocus() {
+		p.selectTopShellAt(idx)
+		p.saveSelectionState()
+	}
+	p.ackCreate(req, "shell:"+payload.Session)
+	if p.shellManifest != nil {
+		return p.syncShellsFromManifest(p.currentShellStartupScope())
+	}
+	return nil
+}
+
+func (p *Plugin) applyCreateWorktreeRequest(req uirequest.Request, payload uirequest.CreatePayload) tea.Cmd {
+	if payload.Path == "" {
+		return nil
+	}
+	wt := &Worktree{Name: payload.DisplayName, Path: payload.Path, Branch: payload.Branch}
+	if payload.DisplayName == "" {
+		wt.Name = filepath.Base(payload.Path)
+	}
+	if payload.ShouldFocus() {
+		p.selectCreatedWorktree(wt)
+	} else {
+		found := false
+		for _, existing := range p.worktrees {
+			if sameCanonicalPath(existing.Path, wt.Path) {
+				found = true
+				if payload.DisplayName != "" {
+					existing.Name = payload.DisplayName
+				}
+				break
+			}
+		}
+		if !found {
+			p.worktrees = append(p.worktrees, wt)
+		}
+	}
+	surface := "worktree:" + payload.Path
+	if payload.Session != "" {
+		surface = "shell:" + payload.Session
+	}
+	p.ackCreate(req, surface)
+	return nil
+}
+
+func (p *Plugin) ackCreate(req uirequest.Request, surface string) {
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   uirequest.StatusOpened,
+		Surface:  surface,
+		At:       time.Now().UTC(),
+	})
 }
 
 func (p *Plugin) applyShellRenameRequest(req uirequest.Request) {

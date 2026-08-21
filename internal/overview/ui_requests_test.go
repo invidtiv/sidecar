@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -132,6 +133,46 @@ func TestOverview_ShellRenameRepaintsSharedCatalog(t *testing.T) {
 	}
 	if got := m.catalog[workspace.ID].Name; got != "active task context" {
 		t.Fatalf("catalog name = %q", got)
+	}
+}
+
+func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	path := workspaceinventory.CanonicalPath(t.TempDir())
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "sidecar", Path: path}}
+	key := projectKey(m.projects[0])
+	existing := workspaceinventory.Workspace{
+		ID: key + ":shell:sidecar-sh-sidecar-1", ProjectKey: key, ProjectName: "sidecar",
+		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", Path: path,
+	}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{existing}}
+	m.syncBoard()
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, Session: "sidecar-sh-sidecar-2", DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-shell", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{ProjectKey: key, WorkDir: path},
+		Payload: payload,
+	}
+	_ = m.handleUIRequest(req)
+
+	selected, ok := m.SelectedWorkspace()
+	if !ok || selected.TmuxName != "sidecar-sh-sidecar-2" || selected.Name != "dev server" {
+		t.Fatalf("selected = %+v ok=%v", selected, ok)
+	}
+	acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
 	}
 }
 

@@ -106,6 +106,54 @@ func RootCommand() *Command {
 		Run:     runShellRoot,
 	}
 
+	createShellCmd := &Command{
+		Name:    "shell",
+		Summary: "Create a Sidecar-managed workspace shell",
+		Usage:   "sidecar create shell [options]",
+		Long: "Create a new Sidecar-managed shell in the resolved project's workspace.\n" +
+			"The shell is recorded in shells.json so it appears in Sidecar whether or not\n" +
+			"an instance is running. --run executes a command in the new shell; --type types\n" +
+			"it without pressing Enter so the user can review it.\n\n" +
+			"--split would place a live terminal beside the current shell. That mode needs\n" +
+			"terminal-splits Phase A (the panelayout Terminal/Shell leaf) and has not shipped.",
+		Flags: []Flag{
+			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
+			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
+			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--split", Arg: "auto|right|below", Summary: "Live split placement (not yet available)"},
+			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "created (missing ack is non-fatal)"},
+			{Code: 1, Summary: "state or tmux failure"},
+			{Code: 2, Summary: "usage or validation error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
+			{Command: "sidecar create shell --json --wait 0"},
+			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND]",
+			Summary:    "Create a Sidecar-visible shell the user can click into",
+		},
+		Run: runCreateShell,
+	}
+
+	createCmd := &Command{
+		Name:    "create",
+		Summary: "Create a Sidecar-managed shell or worktree",
+		Usage:   "sidecar create <command>",
+		Long:    "Create Sidecar-owned shells and worktrees so they appear in the workspace.",
+		Sub:     []*Command{createShellCmd},
+		Run:     runCreateRoot,
+	}
+
 	openCmd := &Command{
 		Name:    "open",
 		Summary: "Show a file, a td issue, a git diff, or a provider resource in a split pane",
@@ -212,7 +260,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, helpCmd, notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentsCmd, createCmd, helpCmd, notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -136,6 +137,38 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 			assertInteractiveTerminalGeometry(t, p, grown)
 			assertDeferredGeometryAssertion(t, p, closeCmd, grown)
 		})
+	}
+}
+
+func TestUIRequests_CreateShellSelectsAndAcks(t *testing.T) {
+	p := &Plugin{
+		shells: []*ShellSession{{Name: "Shell 1", TmuxName: "sidecar-sh-sidecar-1"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, Session: "sidecar-sh-sidecar-2", DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-shell", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: "/tmp/proj"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("expected no sync cmd on a bare plugin, got %T", cmd)
+	}
+	if len(p.shells) != 2 || p.shells[1].TmuxName != "sidecar-sh-sidecar-2" || p.shells[1].Name != "dev server" {
+		t.Fatalf("shells = %+v", p.shells)
+	}
+	selected := p.getSelectedShell()
+	if selected == nil || selected.TmuxName != "sidecar-sh-sidecar-2" {
+		t.Fatalf("selected = %#v", selected)
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened || acks[0].Surface != "shell:sidecar-sh-sidecar-2" {
+		t.Fatalf("acks = %+v err=%v", acks, err)
 	}
 }
 

@@ -2,6 +2,7 @@ package overview
 
 import (
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -31,6 +32,9 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if req.Action == uirequest.ActionRenameShell {
 		m.applyShellRenameRequest(req)
 		return nil
+	}
+	if req.Action == uirequest.ActionCreate {
+		return m.applyCreateRequest(req)
 	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
@@ -133,6 +137,194 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		At:       time.Now().UTC(),
 	})
 	return nil
+}
+
+func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
+	payload, err := uirequest.DecodeCreatePayload(req.Payload)
+	if err != nil {
+		return nil
+	}
+	project, key, ok := m.createRequestProject(req)
+	if !ok {
+		return nil
+	}
+	switch payload.Kind {
+	case uirequest.CreateKindShell:
+		return m.applyCreateShellRequest(req, payload, project, key)
+	case uirequest.CreateKindWorktree:
+		return m.applyCreateWorktreeRequest(req, payload, project, key)
+	default:
+		return nil
+	}
+}
+
+func (m *Model) createRequestProject(req uirequest.Request) (Project, string, bool) {
+	if req.Origin.ProjectKey != "" {
+		for _, project := range m.projects {
+			key := projectKey(project)
+			if key == req.Origin.ProjectKey || project.Name == req.Origin.ProjectKey || filepath.Base(project.Path) == req.Origin.ProjectKey {
+				return project, key, true
+			}
+		}
+		if _, ok := m.results[req.Origin.ProjectKey]; ok {
+			return Project{Key: req.Origin.ProjectKey, Path: req.Origin.WorkDir, Name: req.Origin.ProjectKey}, req.Origin.ProjectKey, true
+		}
+	}
+	if req.Origin.WorkDir != "" {
+		want := workspaceinventory.CanonicalPath(req.Origin.WorkDir)
+		for _, project := range m.projects {
+			if workspaceinventory.CanonicalPath(project.Path) == want {
+				return project, projectKey(project), true
+			}
+		}
+	}
+	if req.Origin.TmuxSession != "" {
+		for key, result := range m.results {
+			for _, ws := range result.Workspaces {
+				if ws.TmuxName == req.Origin.TmuxSession {
+					for _, project := range m.projects {
+						if projectKey(project) == key {
+							return project, key, true
+						}
+					}
+					return Project{Key: key, Path: result.ProjectRoot, Name: result.ProjectName}, key, true
+				}
+			}
+		}
+	}
+	if len(m.projects) == 1 {
+		return m.projects[0], projectKey(m.projects[0]), true
+	}
+	return Project{}, "", false
+}
+
+func (m *Model) applyCreateShellRequest(req uirequest.Request, payload uirequest.CreatePayload, project Project, key string) tea.Cmd {
+	if payload.Session == "" {
+		return nil
+	}
+	name := payload.DisplayName
+	if name == "" {
+		name = payload.Session
+	}
+	ws := workspaceinventory.Workspace{
+		ProjectKey:  key,
+		ProjectName: project.Name,
+		ProjectRoot: project.Path,
+		Kind:        workspaceinventory.KindShell,
+		Key:         payload.Session,
+		Name:        name,
+		Path:        project.Path,
+		TmuxName:    payload.Session,
+		Live:        true,
+	}
+	if ws.Path == "" {
+		ws.Path = req.Origin.WorkDir
+		ws.ProjectRoot = req.Origin.WorkDir
+	}
+	ws.ID = ws.ProjectKey + ":shell:" + ws.Key
+	m.upsertCreateWorkspace(key, ws)
+	if payload.ShouldFocus() {
+		m.pendingCreatedTmux = payload.Session
+		m.pendingCreatedPath = ""
+		if !m.workspaces.SelectID(ws.ID) {
+			m.honorPendingCreated()
+		} else {
+			m.clearPendingCreated()
+		}
+	}
+	m.ackCreate(req, "shell:"+payload.Session)
+	if project.Path != "" {
+		return m.refreshProjectAfterMutation(project)
+	}
+	return nil
+}
+
+func (m *Model) applyCreateWorktreeRequest(req uirequest.Request, payload uirequest.CreatePayload, project Project, key string) tea.Cmd {
+	if payload.Path == "" {
+		return nil
+	}
+	path := workspaceinventory.CanonicalPath(payload.Path)
+	name := payload.DisplayName
+	if name == "" {
+		name = filepath.Base(path)
+	}
+	ws := workspaceinventory.Workspace{
+		ProjectKey:  key,
+		ProjectName: project.Name,
+		ProjectRoot: project.Path,
+		Kind:        workspaceinventory.KindWorktree,
+		Key:         path,
+		Name:        name,
+		Path:        path,
+		Branch:      payload.Branch,
+		TmuxName:    payload.Session,
+	}
+	ws.ID = ws.ProjectKey + ":worktree:" + ws.Key
+	m.showIdleWorktrees = true
+	m.upsertCreateWorkspace(key, ws)
+	if payload.ShouldFocus() {
+		m.pendingCreatedPath = path
+		m.pendingCreatedTmux = ""
+		if !m.workspaces.SelectID(ws.ID) {
+			m.honorPendingCreated()
+		} else {
+			m.clearPendingCreated()
+		}
+	}
+	surface := "worktree:" + path
+	if payload.Session != "" {
+		surface = "shell:" + payload.Session
+	}
+	m.ackCreate(req, surface)
+	if project.Path != "" {
+		return m.refreshProjectAfterMutation(project)
+	}
+	return nil
+}
+
+func (m *Model) upsertCreateWorkspace(key string, ws workspaceinventory.Workspace) {
+	result := m.results[key]
+	found := false
+	for i, existing := range result.Workspaces {
+		sameShell := ws.Kind == workspaceinventory.KindShell && existing.Kind == workspaceinventory.KindShell && existing.TmuxName == ws.TmuxName
+		sameWorktree := ws.Kind == workspaceinventory.KindWorktree && existing.Kind == workspaceinventory.KindWorktree && existing.Path == ws.Path
+		if !sameShell && !sameWorktree {
+			continue
+		}
+		if ws.Name != "" {
+			result.Workspaces[i].Name = ws.Name
+		}
+		if ws.TmuxName != "" {
+			result.Workspaces[i].TmuxName = ws.TmuxName
+		}
+		if ws.Branch != "" {
+			result.Workspaces[i].Branch = ws.Branch
+		}
+		if ws.Live {
+			result.Workspaces[i].Live = true
+		}
+		found = true
+		break
+	}
+	if !found {
+		result.Workspaces = append(result.Workspaces, ws)
+	}
+	if m.results == nil {
+		m.results = make(map[string]workspaceinventory.ProjectResult)
+	}
+	m.results[key] = result
+	m.syncBoard()
+}
+
+func (m *Model) ackCreate(req uirequest.Request, surface string) {
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   uirequest.StatusOpened,
+		Surface:  surface,
+		At:       time.Now().UTC(),
+	})
 }
 
 func (m *Model) applyWorktreeRenameRequest(req uirequest.Request) {

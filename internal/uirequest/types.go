@@ -2,6 +2,7 @@ package uirequest
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -12,11 +13,51 @@ const (
 	ActionOpen           Action = "open"
 	ActionRenameWorktree Action = "rename-worktree"
 	ActionRenameShell    Action = "rename-shell"
+	// ActionCreate selects a shell or worktree the CLI just recorded. The
+	// durable write has already happened; the payload is the selection cue.
+	ActionCreate Action = "create"
 	// ActionNotify posts (or dismisses) a notification in a running instance.
 	// Its payload is a notification record rather than a target, because the
 	// object it names does not exist until the request lands.
 	ActionNotify Action = "notify"
 )
+
+// CreatePayload is the ActionCreate record. Kind distinguishes a workspace
+// shell from a worktree; Focus defaults to true when omitted.
+type CreatePayload struct {
+	Kind        string `json:"kind"`
+	Session     string `json:"session,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
+	Focus       *bool  `json:"focus,omitempty"`
+	Path        string `json:"path,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+}
+
+const (
+	CreateKindShell    = "shell"
+	CreateKindWorktree = "worktree"
+)
+
+func (p CreatePayload) ShouldFocus() bool {
+	if p.Focus == nil {
+		return true
+	}
+	return *p.Focus
+}
+
+func DecodeCreatePayload(raw json.RawMessage) (CreatePayload, error) {
+	var p CreatePayload
+	if len(raw) == 0 {
+		return p, fmt.Errorf("create payload is required")
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, err
+	}
+	if p.Kind == "" {
+		return p, fmt.Errorf("create payload kind is required")
+	}
+	return p, nil
+}
 
 // TargetKind identifies the type of object affected by a UI request.
 type TargetKind string

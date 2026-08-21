@@ -35,6 +35,97 @@ type registeredProject struct {
 	Worktrees []string
 }
 
+// resolveCreateDestination is open's ladder plus cwd's already-registered
+// project. Missing or ambiguous running instances are not fatal for create:
+// a registered project is enough to write shells.json. Unknown projects stay
+// a usage error and never initialize project state. Exit 3 is not used for a
+// missing instance.
+func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
+	dest, err := resolveOpenDestination(ctx, stateDir, shellFlag, projectFlag)
+	if err == nil {
+		return dest, nil
+	}
+	if shellFlag != "" || projectFlag != "" {
+		return dest, err
+	}
+	if destExitCode(err) != 3 {
+		return dest, err
+	}
+	if cwdDest, cwdErr := resolveRegisteredCwdProject(stateDir); cwdErr == nil {
+		return cwdDest, nil
+	}
+	return openDestination{}, &destError{
+		code: 2,
+		msg:  "no Sidecar project is registered for this directory; pass --project or run from a registered project",
+	}
+}
+
+func resolveRegisteredCwdProject(stateDir string) (openDestination, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return openDestination{}, &destError{code: 2, msg: "cannot resolve working directory: " + err.Error()}
+	}
+	projects, err := loadRegisteredProjects(stateDir)
+	if err != nil {
+		return openDestination{}, err
+	}
+	var best registeredProject
+	bestLen := -1
+	nBest := 0
+	for _, p := range projects {
+		if p.Path == "" || !pathInside(cwd, p.Path) {
+			continue
+		}
+		n := len(canonicalOpenPath(p.Path))
+		if n > bestLen {
+			best = p
+			bestLen = n
+			nBest = 1
+			continue
+		}
+		if n == bestLen {
+			nBest++
+		}
+	}
+	if nBest != 1 {
+		return openDestination{}, &destError{
+			code: 2,
+			msg:  "no Sidecar project is registered for this directory; pass --project or run from a registered project",
+		}
+	}
+	return destFromProject(best, best.Path, uirequest.ResolvedProject), nil
+}
+
+func registeredProjectForCreate(stateDir string, dest openDestination) (registeredProject, error) {
+	projects, err := loadRegisteredProjects(stateDir)
+	if err != nil {
+		return registeredProject{}, err
+	}
+	if dest.Origin.ProjectKey != "" {
+		for _, p := range projects {
+			if p.Key == dest.Origin.ProjectKey {
+				return p, nil
+			}
+		}
+	}
+	if dest.Origin.WorkDir != "" {
+		want := canonicalOpenPath(dest.Origin.WorkDir)
+		var hits []registeredProject
+		for _, p := range projects {
+			if p.Path != "" && canonicalOpenPath(p.Path) == want {
+				hits = append(hits, p)
+			}
+		}
+		if len(hits) == 1 {
+			return hits[0], nil
+		}
+	}
+	return registeredProject{}, &destError{
+		code: 2,
+		msg:  "no Sidecar project is registered for this directory; pass --project or run from a registered project",
+	}
+}
+
 func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag)

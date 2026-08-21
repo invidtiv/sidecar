@@ -94,6 +94,32 @@ func TestLaunchWorktreeSessionRunsEnvironmentTaskAndAgent(t *testing.T) {
 	}
 }
 
+func TestTypeInShellOmitsEnter(t *testing.T) {
+	runner := &fakeTmuxRunner{}
+	if err := TypeInShellWithRunner(context.Background(), "sidecar-sh-demo-1", "go test ./...", runner); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("calls = %v", runner.calls)
+	}
+	got := strings.Join(runner.calls[0], " ")
+	if got != "send-keys -t sidecar-sh-demo-1 go test ./..." {
+		t.Fatalf("type keys = %q", got)
+	}
+	if strings.HasSuffix(got, "Enter") {
+		t.Fatal("type must not press Enter")
+	}
+
+	runner = &fakeTmuxRunner{}
+	if err := StartAgentInShellWithRunner(context.Background(), "sidecar-sh-demo-1", "python3 -m http.server", runner); err != nil {
+		t.Fatal(err)
+	}
+	got = strings.Join(runner.calls[0], " ")
+	if got != "send-keys -t sidecar-sh-demo-1 python3 -m http.server Enter" {
+		t.Fatalf("start keys = %q", got)
+	}
+}
+
 func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 	got := ResolveAgentCommand(t.TempDir(), "codex", map[string]string{"codex": "codex-custom"}, true)
 	if got != "codex-custom --dangerously-bypass-approvals-and-sandbox" {

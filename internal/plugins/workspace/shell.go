@@ -1136,10 +1136,7 @@ func (p *Plugin) sendResumeCommandToShell(tmuxSession string, resumeCmd string) 
 	}
 
 	return func() tea.Msg {
-		// Use tmux send-keys to type the command without pressing Enter
-		// This lets the user review before executing
-		cmd := exec.Command("tmux", "send-keys", "-t", tmuxSession, resumeCmd)
-		if err := cmd.Run(); err != nil {
+		if err := workspaceops.TypeInShell(context.Background(), tmuxSession, resumeCmd); err != nil {
 			return shellResumeErrorMsg{Err: err}
 		}
 		return shellResumeInjectedMsg{TmuxSession: tmuxSession}

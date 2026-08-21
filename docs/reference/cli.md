@@ -23,6 +23,59 @@ Usage: sidecar --agents
 sidecar --agents
 ```
 
+## `sidecar create`
+
+Create a Sidecar-managed shell or worktree
+
+Create Sidecar-owned shells and worktrees so they appear in the workspace.
+
+```
+Usage: sidecar create <command>
+```
+
+### `sidecar create shell`
+
+Create a Sidecar-managed workspace shell
+
+Create a new Sidecar-managed shell in the resolved project's workspace.
+The shell is recorded in shells.json so it appears in Sidecar whether or not
+an instance is running. --run executes a command in the new shell; --type types
+it without pressing Enter so the user can review it.
+
+--split would place a live terminal beside the current shell. That mode needs
+terminal-splits Phase A (the panelayout Terminal/Shell leaf) and has not shipped.
+
+```
+Usage: sidecar create shell [options]
+```
+
+**Options:**
+
+- `--name NAME`: Display name (default: the next Shell N)
+- `--run COMMAND`: Execute COMMAND in the new shell
+- `--type COMMAND`: Type COMMAND without pressing Enter
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--split auto|right|below`: Live split placement (not yet available)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: created (missing ack is non-fatal)
+- `1`: state or tmux failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar create shell --name "dev server" --run "python3 -m http.server"
+sidecar create shell --json --wait 0
+# type a command for the user to review
+sidecar create shell --type "go test ./..."
+```
+
 ## `sidecar help`
 
 Show help for commands or emit JSON command metadata
