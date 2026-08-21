@@ -254,6 +254,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 		m.workspacesMouse = mouse.NewHandler()
 	}
 	m.workspacesMouse.Clear()
+	m.clearPreviewDocLinkHits()
 	layout := m.workspacesLayout()
 	var view string
 	if layout.previewOnly {
@@ -1150,6 +1151,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	if _, ok := action.Region.Data.(previewDocTabHit); ok {
+		return m.handlePreviewDocMouse(action)
+	}
+	if _, ok := action.Region.Data.(previewDocLinkHit); ok {
 		return m.handlePreviewDocMouse(action)
 	}
 	if _, ok := action.Region.Data.(previewIssueTabHit); ok {

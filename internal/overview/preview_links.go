@@ -39,7 +39,7 @@ type previewPaneCloseHit struct {
 }
 
 func isPreviewDocRegion(kind string) bool {
-	return kind == previewDocRegionKind || kind == previewDocTabKind
+	return kind == previewDocRegionKind || kind == previewDocTabKind || kind == previewDocLinkKind
 }
 
 // previewDocTabHit is the tab stored on the document header region.
@@ -658,6 +658,21 @@ func (m *Model) registerPreviewDocTabRegions(docBox termpreview.Box) {
 }
 
 func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
+	if hit, ok := action.Region.Data.(previewDocLinkHit); ok {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick:
+			m.focusPreviewPane(panelayout.Document)
+			if action.Shift || action.Alt {
+				return m.pressPreviewDocSelection(action)
+			}
+			return m.activatePreviewDocLink(hit.Ref)
+		case mouse.ActionScrollUp, mouse.ActionScrollDown:
+			if view := m.preview.doc.view(); view != nil {
+				view.Scroll(action.Delta)
+			}
+		}
+		return nil
+	}
 	if tab, ok := action.Region.Data.(previewDocTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			if tab.Close {
@@ -801,7 +816,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)
-		body = view.View()
+		body = m.decoratePreviewDocBody(doc, view.View())
 	}
 	if contentHeight <= 0 {
 		return header

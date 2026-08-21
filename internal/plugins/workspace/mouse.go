@@ -96,12 +96,14 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
 			leafID = data
 		case docTabHit:
+			leafID = data.LeafID
+		case docContentLinkHit:
 			leafID = data.LeafID
 		case issueTabHit:
 			leafID = data.LeafID
@@ -937,6 +939,16 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// The title of a pane with no sidebar row is where its rename lives.
 		// Focus has already moved: FocusLeafAt answers from geometry.
 		return p.clickPaneTitle(action.Region.Data)
+	case regionDocLink:
+		hit, ok := action.Region.Data.(docContentLinkHit)
+		if !ok {
+			return nil
+		}
+		p.focusLeaf(hit.LeafID)
+		if action.Shift || action.Alt {
+			return p.pressDocSelection(hit.LeafID, action)
+		}
+		return p.activateDocContentLink(hit)
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
@@ -1270,12 +1282,14 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
 			leafID = data
 		case docTabHit:
+			leafID = data.LeafID
+		case docContentLinkHit:
 			leafID = data.LeafID
 		case issueTabHit:
 			leafID = data.LeafID

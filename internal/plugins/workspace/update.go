@@ -81,6 +81,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		return p, p.applyTerminalSearchHistory(msg)
 	case contentpanes.Result:
 		return p, p.applyWorkspaceDeckResult(msg)
+	case docLinkResolvedMsg:
+		p.applyDocLinkResolved(msg)
+		return p, nil
 	case docview.LoadedMsg:
 		if p.contentDeck != nil {
 			return p, p.applyWorkspaceDeckBroadcast(msg)

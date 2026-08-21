@@ -595,6 +595,9 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case previewDocLinkResolvedMsg:
+		m.applyPreviewDocLinkResolved(msg)
+		return nil
 	case workspacePulseTickMsg:
 		if msg.generation != m.pulseGeneration {
 			return nil

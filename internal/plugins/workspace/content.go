@@ -222,7 +222,7 @@ func (c *docContent) View(render Render) string {
 	body := ""
 	if view := c.doc.view(); view != nil {
 		c.p.bindDocSelection(view, render.Origin)
-		body = view.View()
+		body = c.p.decorateDocBody(c.doc, view.View())
 	}
 	header := c.p.docPaneHeaderRow(c.doc, c.size.Width, render.Focused)
 	if c.doc.mode != nil {

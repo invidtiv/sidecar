@@ -205,6 +205,8 @@ func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 	switch node.Kind {
 	case panelayout.Terminal:
 		r.m.registerPreviewActionRegions(inner)
+	case panelayout.Document:
+		r.m.registerPreviewDocLinkHits(inner)
 	case panelayout.Diff:
 		r.m.registerPreviewDiffLeafHits(inner)
 	}
@@ -241,9 +243,10 @@ func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
 		inner := paneframe.Inset(peer)
 		return paneframe.WrapLeaf(m.renderPreview(inner.W, inner.H), peer, m.lonePreviewChrome())
 	}
-	m.registerPreviewOutputRegions(peer)
 	// Regions are re-earned every frame: a pane this frame does not draw must
-	// not leave last frame's modal regions on screen.
+	// not leave last frame's modal regions on screen. Compose first so
+	// document content-link hits exist before Body registers them — the same
+	// order the project workspace uses.
 	m.clearPreviewDocSearchRegions()
 	view := ""
 	if len(layout.Leaves) == 1 {
@@ -251,6 +254,7 @@ func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
 	} else {
 		view = paneframe.Compose(paneHost{m}, layout, peer, peer.W, peer.H)
 	}
+	m.registerPreviewOutputRegions(peer)
 	// Last, because a live search surface is drawn over its leaf and its regions
 	// have to beat the leaf's own.
 	m.registerPreviewDocSearchRegions()

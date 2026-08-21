@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
@@ -141,6 +142,10 @@ type previewState struct {
 	diffAdminResolving map[string]bool
 
 	linkMemo previewLinkMemo
+
+	docLinkHits       []previewDocLinkHit
+	docLinkResolution *contentlink.ResolutionIndex
+	docLinkPending    map[contentlink.Pending]bool
 }
 
 type previewLinkMemo struct {

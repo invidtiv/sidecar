@@ -1646,6 +1646,7 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !p.docVisible() {
 		return "", false
 	}
+	p.clearDocLinkHits()
 	// Regions are re-earned every frame: a pane this frame does not draw must
 	// not leave last frame's modal regions on screen.
 	p.clearDocSearchRegions()

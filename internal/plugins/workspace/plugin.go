@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
@@ -125,6 +126,7 @@ const (
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
 	regionPaneLeaf      = "pane-leaf"
+	regionDocLink       = "doc-link"
 	regionDocTab        = "doc-tab"
 	regionIssueTab      = "issue-tab"
 	regionResourceTab   = "resource-tab"
@@ -249,6 +251,12 @@ type Plugin struct {
 	paneFrame      PaneLayout
 	paneFrameDrawn bool
 	docs           map[int]*docPane
+	// docLinkHits are the content-link targets the last composed document
+	// bodies earned. They are registered in the frame's Body slot so tabs and
+	// close buttons keep the header row.
+	docLinkHits       []docContentLinkHit
+	docLinkResolution *contentlink.ResolutionIndex
+	docLinkPending    map[contentlink.Pending]bool
 	// docSelectLeaf is the document leaf a live text-selection drag started in.
 	// A drag is answered by where it began, never by where the pointer has since
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
@@ -620,6 +628,8 @@ func New() *Plugin {
 		listSort:            workspacelist.SortManual,
 		activePane:          PaneSidebar,
 		mouseHandler:        mouse.NewHandler(),
+		docLinkResolution:   contentlink.NewResolutionIndex(contentlink.MaxPendingResolutions),
+		docLinkPending:      make(map[contentlink.Pending]bool),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
