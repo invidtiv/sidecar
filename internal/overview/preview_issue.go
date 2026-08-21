@@ -20,7 +20,10 @@ func isPreviewIssueRegion(kind string) bool {
 }
 
 // previewIssueTabHit is the tab stored on the issue header region.
-type previewIssueTabHit int
+type previewIssueTabHit struct {
+	Index int
+	Close bool
+}
 
 // OpenIssueInTDMsg asks the app to leave global and open this issue in td.
 // The jump itself belongs to the app — this surface only names the issue.
@@ -130,11 +133,17 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 }
 
 func (m *Model) closePreviewIssueTab() tea.Cmd {
+	if m.preview.issue == nil {
+		return nil
+	}
+	return m.closePreviewIssueTabAt(m.preview.issue.tabs.Active)
+}
+
+func (m *Model) closePreviewIssueTabAt(index int) tea.Cmd {
 	if m.preview.deck == nil {
 		return nil
 	}
-	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Issue))
-	m.preview.deck.CloseActive()
+	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Issue), index)
 	return m.finishPreviewDeckClose()
 }
 
@@ -196,19 +205,23 @@ func (m *Model) registerPreviewIssueTabRegions(issueBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.issue.focused
-	for _, tab := range issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused).Tabs {
+	strip := issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused)
+	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewIssueTabKind,
-			issueBox.X+tab.Col, issueBox.Y, tab.Width, 1,
-			previewIssueTabHit(tab.Index),
+			issueBox.X+col, issueBox.Y, width, 1,
+			previewIssueTabHit{Index: index, Close: close},
 		)
-	}
+	})
 }
 
 func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 	if tab, ok := action.Region.Data.(previewIssueTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.clickPreviewIssueTab(int(tab))
+			if tab.Close {
+				return m.closePreviewIssueTabAt(tab.Index)
+			}
+			return m.clickPreviewIssueTab(tab.Index)
 		}
 		if view := m.preview.issue.view(); view != nil {
 			switch action.Type {

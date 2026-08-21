@@ -20,7 +20,10 @@ const (
 	previewDiffTabKind    = "global-preview-diff-tab"
 )
 
-type previewDiffTabHit int
+type previewDiffTabHit struct {
+	Index int
+	Close bool
+}
 
 // previewDiff is the memory-only Diff pane beside the selected terminal.
 type previewDiff struct {
@@ -154,11 +157,17 @@ func (m *Model) closePreviewDiff() tea.Cmd {
 }
 
 func (m *Model) closePreviewDiffTab() tea.Cmd {
+	if m.preview.diff == nil {
+		return nil
+	}
+	return m.closePreviewDiffTabAt(m.preview.diff.tabs.Active)
+}
+
+func (m *Model) closePreviewDiffTabAt(index int) tea.Cmd {
 	if m.preview.deck == nil {
 		return nil
 	}
-	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Diff))
-	m.preview.deck.CloseActive()
+	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Diff), index)
 	return m.finishPreviewDeckClose()
 }
 
@@ -244,13 +253,14 @@ func (m *Model) registerPreviewDiffTabRegions(diffBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.diff.focused
-	for _, tab := range layoutPreviewDiffStrip(m.preview.diff.tabs, ui.ReserveHeaderClose(diffBox.W).TabsWidth, focused).Tabs {
+	strip := layoutPreviewDiffStrip(m.preview.diff.tabs, ui.ReserveHeaderClose(diffBox.W).TabsWidth, focused)
+	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewDiffTabKind,
-			diffBox.X+tab.Col, diffBox.Y, tab.Width, 1,
-			previewDiffTabHit(tab.Index),
+			diffBox.X+col, diffBox.Y, width, 1,
+			previewDiffTabHit{Index: index, Close: close},
 		)
-	}
+	})
 }
 
 // registerPreviewDiffLeafHits registers the targets the diff view owns inside
@@ -376,7 +386,10 @@ func (m *Model) yankPreviewDiff() tea.Cmd {
 func (m *Model) handlePreviewDiffMouse(action mouse.MouseAction) tea.Cmd {
 	if tab, ok := action.Region.Data.(previewDiffTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.clickPreviewDiffTab(int(tab))
+			if tab.Close {
+				return m.closePreviewDiffTabAt(tab.Index)
+			}
+			return m.clickPreviewDiffTab(tab.Index)
 		}
 		if action.Type == mouse.ActionScrollUp || action.Type == mouse.ActionScrollDown {
 			if view := m.preview.diff.view(); view != nil {

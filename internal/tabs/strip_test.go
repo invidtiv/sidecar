@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -99,8 +98,56 @@ func TestLayoutStripPreviewFlag(t *testing.T) {
 	if preview.Tabs[0].Rendered == plain.Tabs[0].Rendered {
 		t.Fatal("preview flag should change RenderTab output")
 	}
-	want := styles.RenderTab("main.go", 0, 1, true, true)
-	if !strings.Contains(preview.Tabs[0].Rendered, ansi.Strip(want)) && preview.Tabs[0].Rendered == "" {
-		t.Fatalf("preview rendered empty")
+	if preview.Tabs[0].Rendered == "" {
+		t.Fatal("preview rendered empty")
+	}
+	if !strings.Contains(ansi.Strip(preview.Tabs[0].Rendered), "main.go") {
+		t.Fatalf("preview dropped the label: %q", ansi.Strip(preview.Tabs[0].Rendered))
+	}
+}
+
+func TestLayoutStripPaintsACloseControlOnEachTab(t *testing.T) {
+	labels := []Label{{Text: "main.go"}, {Text: "README.md"}}
+	strip := LayoutStrip(labels, 0, 48, true, truncateFit)
+	if len(strip.Tabs) != 2 {
+		t.Fatalf("hits = %d, want 2", len(strip.Tabs))
+	}
+	row := ansi.Strip(strip.Row)
+	if strings.Count(row, ui.CloseButtonLabel) != 2 {
+		t.Fatalf("row %q does not have one × per tab", row)
+	}
+	for i, hit := range strip.Tabs {
+		if hit.CloseW < 1 {
+			t.Fatalf("tab %d has no close hit: %#v", i, hit)
+		}
+		if hit.CloseCol < hit.Col || hit.CloseCol+hit.CloseW > hit.Col+hit.Width {
+			t.Fatalf("tab %d close is outside the pill: %#v", i, hit)
+		}
+		if hit.CloseCol+hit.CloseW > hit.Col+hit.Width {
+			t.Fatalf("tab %d close overruns the pill: %#v", i, hit)
+		}
+		plain := ansi.Strip(hit.Rendered)
+		if !strings.Contains(plain, ui.CloseButtonLabel) {
+			t.Fatalf("tab %d rendered %q, want ×", i, plain)
+		}
+	}
+}
+
+func TestLayoutStripRegisterHitsPutsCloseAfterSelect(t *testing.T) {
+	strip := LayoutStrip([]Label{{Text: "a.go"}, {Text: "b.go"}}, 0, 40, true, truncateFit)
+	var calls []string
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		kind := "tab"
+		if close {
+			kind = "close"
+		}
+		calls = append(calls, kind)
+		if width < 1 {
+			t.Fatalf("%s %d has width %d", kind, index, width)
+		}
+		_ = col
+	})
+	if len(calls) != 4 || calls[0] != "tab" || calls[1] != "tab" || calls[2] != "close" || calls[3] != "close" {
+		t.Fatalf("registration order = %v, want tab,tab,close,close", calls)
 	}
 }

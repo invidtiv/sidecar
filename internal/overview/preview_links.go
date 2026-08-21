@@ -43,7 +43,10 @@ func isPreviewDocRegion(kind string) bool {
 }
 
 // previewDocTabHit is the tab stored on the document header region.
-type previewDocTabHit int
+type previewDocTabHit struct {
+	Index int
+	Close bool
+}
 
 // previewDoc is the terminal-adjacent file preview on the global surface.
 // It reuses docview.Tabs; it is not the issue-preview modal.
@@ -410,15 +413,21 @@ func (m *Model) closePreviewDocTab() tea.Cmd {
 	if m.preview.doc == nil {
 		return nil
 	}
-	// Closing the tab takes the file the editor is holding away; ask first.
-	if m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDocTab() }) {
+	return m.closePreviewDocTabAt(m.preview.doc.tabs.Active)
+}
+
+func (m *Model) closePreviewDocTabAt(index int) tea.Cmd {
+	if m.preview.doc == nil || m.preview.deck == nil {
 		return nil
 	}
-	if m.preview.deck == nil {
+	if index < 0 || index >= len(m.preview.doc.tabs.Items) {
 		return nil
 	}
-	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Document))
-	m.preview.deck.CloseActive()
+	// Closing the tab the editor is holding away; ask first.
+	if index == m.preview.doc.tabs.Active && m.guardPreviewDocEdit(func() tea.Cmd { return m.closePreviewDocTabAt(index) }) {
+		return nil
+	}
+	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Document), index)
 	return m.finishPreviewDeckClose()
 }
 
@@ -642,15 +651,19 @@ func (m *Model) registerPreviewDocTabRegions(docBox termpreview.Box) {
 	if m.preview.doc == nil {
 		return
 	}
-	for _, tab := range docview.LayoutTabStrip(m.preview.doc.tabs, ui.ReserveHeaderClose(docBox.W).TabsWidth, m.PreviewFocused() && m.preview.doc.focused).Tabs {
-		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+tab.Col, docBox.Y, tab.Width, 1, previewDocTabHit(tab.Index))
-	}
+	strip := docview.LayoutTabStrip(m.preview.doc.tabs, ui.ReserveHeaderClose(docBox.W).TabsWidth, m.PreviewFocused() && m.preview.doc.focused)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+col, docBox.Y, width, 1, previewDocTabHit{Index: index, Close: close})
+	})
 }
 
 func (m *Model) handlePreviewDocMouse(action mouse.MouseAction) tea.Cmd {
 	if tab, ok := action.Region.Data.(previewDocTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.clickPreviewDocTab(int(tab))
+			if tab.Close {
+				return m.closePreviewDocTabAt(tab.Index)
+			}
+			return m.clickPreviewDocTab(tab.Index)
 		}
 		if m.preview.doc != nil && m.preview.doc.view() != nil {
 			switch action.Type {

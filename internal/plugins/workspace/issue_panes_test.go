@@ -904,8 +904,11 @@ func TestIssueTabHeaderHasNoCloseChipOrHint(t *testing.T) {
 	issue := openTwoIssueTabs(t, p)
 	strip := layoutIssueTabStrip(issue, 48, true)
 	got := ansi.Strip(strip.Row)
-	if strings.Contains(got, "q close") || strings.Contains(got, "×") {
+	if strings.Contains(got, "q close") {
 		t.Fatalf("issue strip still has chips/hints: %q", got)
+	}
+	if strings.Count(got, "×") != 2 {
+		t.Fatalf("issue strip = %q, want one × per tab", got)
 	}
 	if !strings.Contains(got, "td-1111aa") || !strings.Contains(got, "td-2222bb") {
 		t.Fatalf("issue strip dropped a tab: %q", got)

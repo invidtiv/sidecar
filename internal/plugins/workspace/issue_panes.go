@@ -251,16 +251,23 @@ func (p *Plugin) cycleActiveIssueTab(delta int) tea.Cmd {
 
 func (p *Plugin) closeActiveIssueTab() tea.Cmd {
 	issue, leaf := p.focusedIssuePane()
-	if issue == nil {
+	if issue == nil || leaf == nil {
+		return nil
+	}
+	return p.closeIssueTabAt(issue, leaf.ID, issue.tabs.Active)
+}
+
+func (p *Plugin) closeIssueTabAt(issue *issuePane, leafID, index int) tea.Cmd {
+	if issue == nil || index < 0 || index >= len(issue.tabs.Items) {
 		return nil
 	}
 	if p.contentDeck != nil && len(issue.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Issue) {
-		return p.closeWorkspaceDeckTab(panelayout.Issue)
+		return p.closeWorkspaceDeckTabAt(panelayout.Issue, index)
 	}
 	if len(issue.tabs.Items) <= 1 {
-		return p.closeIssuePane(leaf.ID)
+		return p.closeIssuePane(leafID)
 	}
-	issue.tabs.CloseActive()
+	issue.tabs.CloseAt(index)
 	p.saveSelectionState()
 	return p.ensureActiveIssueTabLoaded(issue)
 }
@@ -293,6 +300,7 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 		return nil, false
 	}
 	var tabs []mouse.Region
+	var closeAt *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
 		if region.ID != regionIssueTab {
 			continue
@@ -300,9 +308,20 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 		if y != region.Rect.Y {
 			continue
 		}
+		hit, ok := region.Data.(issueTabHit)
+		if !ok {
+			continue
+		}
+		if hit.Close {
+			if x >= region.Rect.X && x < region.Rect.X+region.Rect.W {
+				r := region
+				closeAt = &r
+			}
+			continue
+		}
 		tabs = append(tabs, region)
 	}
-	if len(tabs) == 0 {
+	if len(tabs) == 0 && closeAt == nil {
 		return nil, false
 	}
 	inIssueHeader := false
@@ -318,6 +337,9 @@ func (p *Plugin) clickIssueTabAt(x, y int) (tea.Cmd, bool) {
 	}
 	if !inIssueHeader {
 		return nil, false
+	}
+	if closeAt != nil {
+		return p.clickIssueTab(closeAt.Data), true
 	}
 	best := tabs[0]
 	bestDist := tabRowDistance(x, best.Rect)
@@ -341,6 +363,9 @@ func (p *Plugin) clickIssueTab(data any) tea.Cmd {
 	issue := p.issues[leaf.ContentID]
 	if issue == nil {
 		return nil
+	}
+	if hit.Close {
+		return p.closeIssueTabAt(issue, hit.LeafID, hit.Index)
 	}
 	return p.selectIssueTab(issue, hit.LeafID, hit.Index)
 }
@@ -531,9 +556,10 @@ func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box)
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
-	for _, tab := range layoutIssueTabStrip(issue, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
-		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+tab.Col, box.Y, tab.Width, 1, issueTabHit{LeafID: leafID, Index: tab.Index})
-	}
+	strip := layoutIssueTabStrip(issue, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+col, box.Y, width, 1, issueTabHit{LeafID: leafID, Index: index, Close: close})
+	})
 }
 
 // issueLeafAt resolves a pane-leaf region's payload to the issue it names. It

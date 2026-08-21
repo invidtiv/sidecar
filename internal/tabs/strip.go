@@ -6,10 +6,12 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
-// MinBudget is the floor for one tab's column share, chrome included.
-const MinBudget = 8
+// MinBudget is the floor for one tab's column share, chrome and the per-tab
+// close control included.
+const MinBudget = 10
 
 // Label is the text a host wants drawn on one tab.
 type Label struct {
@@ -18,17 +20,20 @@ type Label struct {
 }
 
 // FitLabel shortens a tab's text so the rendered pill fits in maxWidth.
-// maxWidth is the label column budget (chrome already reserved).
+// maxWidth is the label column budget (chrome and close already reserved).
 // The function returns label text, not the painted tab.
 type FitLabel func(text string, index, total, maxWidth int, active bool) string
 
 // Hit is a drawn tab's click target. Col is relative to the strip's first
-// column; Width is the rendered pill.
+// column; Width is the rendered pill. CloseCol/CloseW are the × control on
+// the pill's right edge; CloseW is 0 when the tab was too narrow to hold one.
 type Hit struct {
 	Index    int
 	Col      int
 	Width    int
 	Rendered string
+	CloseCol int
+	CloseW   int
 }
 
 // Strip is the header row: only tabs, packed left to right.
@@ -37,12 +42,61 @@ type Strip struct {
 	Tabs []Hit
 }
 
+// RegisterHits calls add once for each painted tab, then once for each tab's
+// close control. Close is registered second so it wins the cells it occupies,
+// the same order paneframe uses for the leaf-header X.
+func (s Strip) RegisterHits(add func(col, width, index int, close bool)) {
+	if add == nil {
+		return
+	}
+	for _, tab := range s.Tabs {
+		add(tab.Col, tab.Width, tab.Index, false)
+	}
+	for _, tab := range s.Tabs {
+		if tab.CloseW > 0 {
+			add(tab.CloseCol, tab.CloseW, tab.Index, true)
+		}
+	}
+}
+
 func tabActive(focused bool, index, active int) bool {
 	return focused && index == active
 }
 
 func tabChromeWidth(index, total int, active bool) int {
 	return lipgloss.Width(styles.RenderTab("X", index, total, active, false)) - 1
+}
+
+func closeSuffix() string {
+	return " " + ui.CloseButtonLabel
+}
+
+func closeOffset(rendered string) (col, width int) {
+	plain := ansi.Strip(rendered)
+	runes := []rune(plain)
+	at := -1
+	for i, r := range runes {
+		if string(r) == ui.CloseButtonLabel {
+			at = i
+		}
+	}
+	if at < 0 {
+		return 0, 0
+	}
+	start := at
+	if at > 0 && runes[at-1] == ' ' {
+		start = at - 1
+	}
+	return lipgloss.Width(string(runes[:start])), lipgloss.Width(string(runes[start : at+1]))
+}
+
+func tabHit(index, col int, rendered string) Hit {
+	hit := Hit{Index: index, Col: col, Width: lipgloss.Width(rendered), Rendered: rendered}
+	if off, w := closeOffset(rendered); w > 0 {
+		hit.CloseCol = col + off
+		hit.CloseW = w
+	}
+	return hit
 }
 
 func identityFit(text string, _, _, maxWidth int, _ bool) string {
@@ -60,16 +114,31 @@ func fitRendered(text string, index, total, maxWidth int, active, preview bool, 
 	if fit == nil {
 		fit = identityFit
 	}
-	labelW := maxWidth - tabChromeWidth(index, total, active)
+	close := closeSuffix()
+	closeW := lipgloss.Width(close)
+	chrome := tabChromeWidth(index, total, active)
+	labelW := maxWidth - chrome - closeW
+	if labelW < 1 {
+		close = ""
+		labelW = maxWidth - chrome
+	}
 	if labelW < 1 {
 		labelW = 1
 	}
 	for labelW >= 1 {
-		rendered := styles.RenderTab(fit(text, index, total, labelW, active), index, total, active, preview)
+		rendered := styles.RenderTab(fit(text, index, total, labelW, active)+close, index, total, active, preview)
 		if w := lipgloss.Width(rendered); w <= maxWidth {
 			return rendered
 		}
 		if labelW == 1 {
+			if close != "" {
+				close = ""
+				labelW = maxWidth - chrome
+				if labelW < 1 {
+					labelW = 1
+				}
+				continue
+			}
 			return ansi.Truncate(rendered, maxWidth, "")
 		}
 		labelW--
@@ -126,7 +195,7 @@ func paintStrip(rendered []string, widths []int, start, end int, showLeft, showR
 			x++
 		}
 		tokens = append(tokens, rendered[i])
-		hits = append(hits, Hit{Index: i, Col: x, Width: widths[i], Rendered: rendered[i]})
+		hits = append(hits, tabHit(i, x, rendered[i]))
 		x += widths[i]
 	}
 	if showRight {
@@ -159,7 +228,7 @@ func LayoutStrip(labels []Label, active, width int, focused bool, fit FitLabel) 
 		rendered := fitRendered(labels[0].Text, 0, 1, width, tabActive(focused, 0, active), labels[0].Preview, fit)
 		return Strip{
 			Row:  padTabRow(rendered, width),
-			Tabs: []Hit{{Index: 0, Col: 0, Width: lipgloss.Width(rendered), Rendered: rendered}},
+			Tabs: []Hit{tabHit(0, 0, rendered)},
 		}
 	}
 

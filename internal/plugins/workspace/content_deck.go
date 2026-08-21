@@ -390,11 +390,19 @@ func (p *Plugin) cycleWorkspaceDeckTab(kind panelayout.Kind, delta int) tea.Cmd 
 	return cmd
 }
 
-func (p *Plugin) closeWorkspaceDeckTab(kind panelayout.Kind) tea.Cmd {
-	if p.contentDeck == nil || !p.contentDeck.FocusLeaf(p.contentDeck.Leaf(kind)) {
+func (p *Plugin) closeWorkspaceDeckTabAt(kind panelayout.Kind, index int) tea.Cmd {
+	if p.contentDeck == nil {
 		return nil
 	}
-	p.contentDeck.CloseActive()
+	leaf := p.contentDeck.Leaf(kind)
+	if leaf == 0 {
+		return nil
+	}
+	p.contentDeck.CloseTab(leaf, index)
+	return p.finishWorkspaceDeckClose(kind)
+}
+
+func (p *Plugin) finishWorkspaceDeckClose(kind panelayout.Kind) tea.Cmd {
 	leafClosed := p.contentDeck.Leaf(kind) == 0
 	ctx := p.contentDeck.Context()
 	p.syncWorkspaceDeckProjection(ctx.Root, ctx.Surface)

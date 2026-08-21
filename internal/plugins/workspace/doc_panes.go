@@ -233,22 +233,29 @@ func (p *Plugin) selectDocTab(doc *docPane, modelID, idx, line int, file *os.Fil
 }
 
 func (p *Plugin) closeActiveDocTab() tea.Cmd {
-	doc, _ := p.activeDocPane()
-	if doc == nil {
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil {
 		return nil
 	}
-	// Closing the tab takes the file the editor is holding away; ask first.
-	if p.guardDocEdit(doc, func() tea.Cmd { return p.closeActiveDocTab() }) {
+	return p.closeDocTabAt(doc, leaf.ID, doc.tabs.Active)
+}
+
+func (p *Plugin) closeDocTabAt(doc *docPane, leafID, index int) tea.Cmd {
+	if doc == nil || index < 0 || index >= len(doc.tabs.Items) {
+		return nil
+	}
+	// Closing the tab the editor is holding away; ask first.
+	if index == doc.tabs.Active && p.guardDocEdit(doc, func() tea.Cmd { return p.closeDocTabAt(doc, leafID, index) }) {
 		return nil
 	}
 	if p.contentDeck != nil {
-		return p.closeWorkspaceDeckTab(panelayout.Document)
+		return p.closeWorkspaceDeckTabAt(panelayout.Document, index)
 	}
 	if len(doc.tabs.Items) <= 1 {
 		return p.closeDocPane()
 	}
 	p.closeDocInfo()
-	doc.tabs.CloseActive()
+	doc.tabs.CloseAt(index)
 	p.saveSelectionState()
 	return p.ensureActiveDocTabLoaded(doc)
 }
@@ -265,6 +272,7 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		return nil, false
 	}
 	var tabs []mouse.Region
+	var closeAt *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
 		if region.ID != regionDocTab {
 			continue
@@ -272,9 +280,20 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		if y != region.Rect.Y {
 			continue
 		}
+		hit, ok := region.Data.(docTabHit)
+		if !ok {
+			continue
+		}
+		if hit.Close {
+			if x >= region.Rect.X && x < region.Rect.X+region.Rect.W {
+				r := region
+				closeAt = &r
+			}
+			continue
+		}
 		tabs = append(tabs, region)
 	}
-	if len(tabs) == 0 {
+	if len(tabs) == 0 && closeAt == nil {
 		return nil, false
 	}
 	inDocHeader := false
@@ -299,6 +318,9 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 	}
 	if !inDocHeader {
 		return nil, false
+	}
+	if closeAt != nil {
+		return p.clickDocTab(closeAt.Data), true
 	}
 	best := tabs[0]
 	bestDist := tabRowDistance(x, best.Rect)
@@ -339,6 +361,9 @@ func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
+	}
+	if hit.Close {
+		return p.closeDocTabAt(doc, hit.LeafID, hit.Index)
 	}
 	if hit.Index == doc.tabs.Active {
 		return nil
@@ -1611,9 +1636,10 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
-	for _, tab := range layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
-		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+tab.Col, box.Y, tab.Width, 1, docTabHit{LeafID: leafID, Index: tab.Index})
-	}
+	strip := layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+col, box.Y, width, 1, docTabHit{LeafID: leafID, Index: index, Close: close})
+	})
 }
 
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {

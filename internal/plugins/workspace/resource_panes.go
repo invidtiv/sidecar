@@ -248,17 +248,24 @@ func (p *Plugin) handleResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 
 func (p *Plugin) closeActiveResourceTab() tea.Cmd {
 	res, leaf := p.focusedResourcePane()
-	if res == nil || leaf == nil {
+	if res == nil || leaf == nil || res.tabs == nil {
+		return nil
+	}
+	return p.closeResourceTabAt(res, leaf.ID, res.tabs.ActiveIndex())
+}
+
+func (p *Plugin) closeResourceTabAt(res *resourcePane, leafID, index int) tea.Cmd {
+	if res == nil || res.pane == nil {
 		return nil
 	}
 	if p.contentDeck != nil {
-		return p.closeWorkspaceDeckTab(panelayout.Resource)
+		return p.closeWorkspaceDeckTabAt(panelayout.Resource, index)
 	}
-	empty, cmd := res.pane.CloseActiveTab()
+	empty, cmd := res.pane.CloseTab(index)
 	if !empty {
 		return cmd
 	}
-	return tea.Batch(cmd, p.closeResourcePane(leaf.ID))
+	return tea.Batch(cmd, p.closeResourcePane(leafID))
 }
 
 func (p *Plugin) selectResourceTab(res *resourcePane, idx int) tea.Cmd {
@@ -281,7 +288,11 @@ func (p *Plugin) clickResourceTab(data any) tea.Cmd {
 	if leaf == nil || leaf.Kind != PaneResource {
 		return nil
 	}
-	return p.selectResourceTab(p.resources[leaf.ContentID], hit.Index)
+	res := p.resources[leaf.ContentID]
+	if hit.Close {
+		return p.closeResourceTabAt(res, hit.LeafID, hit.Index)
+	}
+	return p.selectResourceTab(res, hit.Index)
 }
 
 // hideResourcePane collapses the live Resource leaf and remembers its
@@ -396,6 +407,7 @@ func paneLayoutHasResourceTabs(layout *state.PaneLayoutJSON) bool {
 type resourceTabHit struct {
 	LeafID int
 	Index  int
+	Close  bool
 }
 
 // layoutResourceTabStrip is the Resource leaf's tab strip. The strip is the
@@ -422,8 +434,9 @@ func (p *Plugin) registerResourcePaneRegions(res *resourcePane, leafID int, box 
 }
 
 func (p *Plugin) registerResourceTabRegions(res *resourcePane, leafID int, box Box) {
-	for _, tab := range layoutResourceTabStrip(res, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
-		p.mouseHandler.HitMap.AddRect(regionResourceTab, box.X+tab.Col, box.Y, tab.Width, 1,
-			resourceTabHit{LeafID: leafID, Index: tab.Index})
-	}
+	strip := layoutResourceTabStrip(res, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		p.mouseHandler.HitMap.AddRect(regionResourceTab, box.X+col, box.Y, width, 1,
+			resourceTabHit{LeafID: leafID, Index: index, Close: close})
+	})
 }

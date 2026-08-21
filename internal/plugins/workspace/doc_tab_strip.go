@@ -9,6 +9,7 @@ import (
 type docTabHit struct {
 	LeafID int
 	Index  int
+	Close  bool
 }
 
 type docTabPlacement = docview.TabHit

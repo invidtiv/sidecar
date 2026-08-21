@@ -304,16 +304,23 @@ func (p *Plugin) cycleActiveDiffTab(delta int) tea.Cmd {
 
 func (p *Plugin) closeActiveDiffTab() tea.Cmd {
 	diff, leaf := p.focusedDiffPane()
-	if diff == nil {
+	if diff == nil || leaf == nil {
+		return nil
+	}
+	return p.closeDiffTabAt(diff, leaf.ID, diff.tabs.Active)
+}
+
+func (p *Plugin) closeDiffTabAt(diff *diffPane, leafID, index int) tea.Cmd {
+	if diff == nil || index < 0 || index >= len(diff.tabs.Items) {
 		return nil
 	}
 	if p.contentDeck != nil && len(diff.tabs.Items) == workspaceDeckTabCount(p.contentDeck, panelayout.Diff) {
-		return p.closeWorkspaceDeckTab(panelayout.Diff)
+		return p.closeWorkspaceDeckTabAt(panelayout.Diff, index)
 	}
 	if len(diff.tabs.Items) <= 1 {
-		return p.closeDiffPane(leaf.ID)
+		return p.closeDiffPane(leafID)
 	}
-	diff.tabs.CloseActive()
+	diff.tabs.CloseAt(index)
 	p.saveSelectionState()
 	return p.ensureActiveDiffTabLoaded(diff)
 }
@@ -367,6 +374,9 @@ func (p *Plugin) clickDiffTab(data any) tea.Cmd {
 	diff := p.diffs[leaf.ContentID]
 	if diff == nil {
 		return nil
+	}
+	if hit.Close {
+		return p.closeDiffTabAt(diff, hit.LeafID, hit.Index)
 	}
 	return p.selectDiffTab(diff, hit.LeafID, hit.Index)
 }
@@ -528,9 +538,10 @@ func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDiffTargetTabRegions(diff *diffPane, leafID int, box Box) {
-	for _, tab := range layoutDiffTabStrip(diff, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
-		p.mouseHandler.HitMap.AddRect(regionDiffTargetTab, box.X+tab.Col, box.Y, tab.Width, 1, diffTabHit{LeafID: leafID, Index: tab.Index})
-	}
+	strip := layoutDiffTabStrip(diff, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		p.mouseHandler.HitMap.AddRect(regionDiffTargetTab, box.X+col, box.Y, width, 1, diffTabHit{LeafID: leafID, Index: index, Close: close})
+	})
 }
 
 func (p *Plugin) registerDiffLeafHits(diff *diffPane, box Box) {
