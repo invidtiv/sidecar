@@ -98,7 +98,7 @@ const (
 	regionPaneDivider = "pane-divider" // Border between tree and preview
 	regionTreeItem    = "tree-item"    // Individual file/folder (Data: visible index)
 	regionPreviewLine = "preview-line" // Individual preview line (Data: line index)
-	regionPreviewTab  = "preview-tab"  // Preview tab (Data: tab index)
+	regionPreviewTab  = "preview-tab"  // Preview tab (Data: previewTabHit)
 
 	// File operation modal buttons
 	regionFileOpConfirm    = "file-op-confirm"    // Confirm/Create/Delete/Yes button
@@ -159,10 +159,19 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 					// Find which tab was clicked based on X position
 					tabX := previewX + 2 // left border + padding
 					for _, hit := range p.tabHits {
+						if hit.CloseW < 1 {
+							continue
+						}
+						closeStart := tabX + hit.CloseX
+						if action.X >= closeStart && action.X < closeStart+hit.CloseW {
+							return handleClickAway(regionPreviewTab, previewTabHit{Index: hit.Index, Close: true})
+						}
+					}
+					for _, hit := range p.tabHits {
 						hitStart := tabX + hit.X
 						hitEnd := hitStart + hit.Width
 						if action.X >= hitStart && action.X < hitEnd {
-							return handleClickAway(regionPreviewTab, hit.Index)
+							return handleClickAway(regionPreviewTab, previewTabHit{Index: hit.Index})
 						}
 					}
 					// Fallback: find the closest tab based on X position
@@ -181,7 +190,7 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 								bestIdx = hit.Index
 							}
 						}
-						return handleClickAway(regionPreviewTab, bestIdx)
+						return handleClickAway(regionPreviewTab, previewTabHit{Index: bestIdx})
 					}
 					return handleClickAway(regionPreviewTab, nil)
 				}
@@ -392,11 +401,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		return p, nil
 
 	case regionPreviewTab:
-		if idx, ok := action.Region.Data.(int); ok {
-			p.activePane = PanePreview
-			return p, p.switchTab(idx)
-		}
-		return p, nil
+		p.activePane = PanePreview
+		return p, p.clickPreviewTab(action.Region.Data)
 
 	case regionPaneDivider:
 		// Start drag with current tree width

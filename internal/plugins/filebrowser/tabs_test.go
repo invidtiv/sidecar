@@ -575,6 +575,30 @@ func TestTabs_TabHitRegistration(t *testing.T) {
 				i-1, p.tabHits[i-1].X, i, p.tabHits[i].X)
 		}
 	}
+	for i, hit := range p.tabHits {
+		if hit.CloseW < 1 {
+			t.Errorf("tabHit[%d] has no close control", i)
+		}
+		if hit.CloseX < hit.X || hit.CloseX+hit.CloseW > hit.X+hit.Width {
+			t.Errorf("tabHit[%d] close is outside the pill: %+v", i, hit)
+		}
+	}
+}
+
+func TestTabs_ClickPreviewTabCloseClosesThatTab(t *testing.T) {
+	tmpDir := t.TempDir()
+	p := createTabTestPlugin(t, tmpDir)
+	p.tabs = []FileTab{{Path: "README.md"}, {Path: "main.go"}}
+	p.activeTab = 1
+	p.previewFile = "main.go"
+	_ = p.renderPreviewTabs(80)
+	if p.tabHits[0].CloseW < 1 {
+		t.Fatal("README tab has no close geometry")
+	}
+	_ = p.clickPreviewTab(previewTabHit{Index: 0, Close: true})
+	if len(p.tabs) != 1 || p.tabs[0].Path != "main.go" {
+		t.Fatalf("close left %#v, want [main.go]", p.tabs)
+	}
 }
 
 // TestTabs_SyncTreeSelection verifies tab switch syncs tree cursor.

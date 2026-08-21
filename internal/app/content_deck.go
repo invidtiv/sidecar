@@ -359,6 +359,7 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 
 type appDeckTabHit struct {
 	leafID, index int
+	close         bool
 	rect          mouse.Rect
 }
 
@@ -374,10 +375,12 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 	}
 	reserve := ui.ReserveHeaderClose(width)
 	strip := tabs.LayoutStrip(labels, active, reserve.TabsWidth, focused, nil)
-	for _, hit := range strip.Tabs {
-		h.tabHits = append(h.tabHits, appDeckTabHit{leafID: leafID, index: hit.Index,
-			rect: mouse.Rect{X: origin.X + hit.Col, Y: origin.Y, W: hit.Width, H: 1}})
-	}
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		h.tabHits = append(h.tabHits, appDeckTabHit{
+			leafID: leafID, index: index, close: close,
+			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
+		})
+	})
 	return ui.ComposeHeaderClose(strip.Row, width, false)
 }
 
@@ -781,6 +784,11 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 			case appDeckTabRegion:
 				if hit, ok := region.Data.(appDeckTabHit); ok {
 					h.deck.FocusLeaf(hit.leafID)
+					if hit.close {
+						h.deck.CloseTab(hit.leafID, hit.index)
+						h.syncInnerFocus()
+						return nil
+					}
 					return h.deck.SelectTab(hit.leafID, hit.index)
 				}
 			}

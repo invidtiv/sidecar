@@ -331,7 +331,7 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	m.renderContent(200, 40)
 	var firstTab *mouse.Region
 	for _, region := range h.mouse.HitMap.Regions() {
-		if hit, ok := region.Data.(appDeckTabHit); region.ID == appDeckTabRegion && ok && hit.leafID == firstLeaf && hit.index == 0 {
+		if hit, ok := region.Data.(appDeckTabHit); region.ID == appDeckTabRegion && ok && !hit.close && hit.leafID == firstLeaf && hit.index == 0 {
 			copy := region
 			firstTab = &copy
 			break
@@ -372,6 +372,55 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	click, ok := p.seen[len(p.seen)-1].(tea.MouseClickMsg)
 	if !ok || click.X != 5 || click.Y != 4 {
 		t.Fatalf("primary mouse origin = %#v, want plugin-local (5,4)", p.seen[len(p.seen)-1])
+	}
+}
+
+func TestAppContentDeckTabCloseClosesThatTab(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"README.md", "guide.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("# "+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &deckHostTestPlugin{id: "files", focus: "tree", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("README open returned no load")
+	}
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "guide.md"})
+	h := m.currentContentDeck()
+	leaf := h.deck.Leaf(panelayout.Document)
+	items, _ := h.deck.Tabs(leaf)
+	if len(items) != 2 {
+		t.Fatalf("tabs=%d, want 2", len(items))
+	}
+	m.renderContent(200, 40)
+	var closeHit *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		hit, ok := region.Data.(appDeckTabHit)
+		if region.ID != appDeckTabRegion || !ok || !hit.close || hit.leafID != leaf || hit.index != 0 {
+			continue
+		}
+		copy := region
+		closeHit = &copy
+		break
+	}
+	if closeHit == nil {
+		t.Fatal("README tab has no close hit region")
+	}
+	resolved := h.mouse.HitMap.Test(closeHit.Rect.X, closeHit.Rect.Y)
+	if resolved == nil {
+		t.Fatal("close cell hit-tests nothing")
+	}
+	hit, ok := resolved.Data.(appDeckTabHit)
+	if !ok || !hit.close || hit.index != 0 {
+		t.Fatalf("close cell resolves to %#v, want README close", resolved.Data)
+	}
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: closeHit.Rect.X, Y: closeHit.Rect.Y, Button: tea.MouseLeft}))
+	items, _ = h.deck.Tabs(leaf)
+	if len(items) != 1 || items[0].Ref.Value != "guide.md" {
+		t.Fatalf("close left %#v, want [guide.md]", items)
 	}
 }
 

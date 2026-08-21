@@ -32,9 +32,19 @@ type FileTab struct {
 }
 
 type tabHit struct {
+	Index  int
+	X      int
+	Width  int
+	CloseX int
+	CloseW int
+}
+
+// previewTabHit is the payload a tab-row click carries: Index selects, Close
+// closes that same tab. The HitMap registers the close cells after the pill
+// so they win the overlap.
+type previewTabHit struct {
 	Index int
-	X     int
-	Width int
+	Close bool
 }
 
 func fileTabItem(tab FileTab) tabs.Item[FileTab] {
@@ -410,9 +420,48 @@ func (p *Plugin) renderPreviewTabs(width int) string {
 
 	strip := tabs.LayoutStrip(labels, p.activeTab, width, true, fitFilesLabel)
 	for _, hit := range strip.Tabs {
-		p.tabHits = append(p.tabHits, tabHit{Index: hit.Index, X: hit.Col, Width: hit.Width})
+		p.tabHits = append(p.tabHits, tabHit{
+			Index: hit.Index, X: hit.Col, Width: hit.Width,
+			CloseX: hit.CloseCol, CloseW: hit.CloseW,
+		})
 	}
 	return strip.Row
+}
+
+func (p *Plugin) registerPreviewTabHits(tabX, tabY int) {
+	if p.mouseHandler == nil {
+		return
+	}
+	for _, hit := range p.tabHits {
+		p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX+hit.X, tabY, hit.Width, 1, previewTabHit{Index: hit.Index})
+	}
+	for _, hit := range p.tabHits {
+		if hit.CloseW < 1 {
+			continue
+		}
+		p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX+hit.CloseX, tabY, hit.CloseW, 1, previewTabHit{Index: hit.Index, Close: true})
+	}
+}
+
+func previewTabPayload(data any) (index int, close, ok bool) {
+	switch hit := data.(type) {
+	case previewTabHit:
+		return hit.Index, hit.Close, true
+	case int:
+		return hit, false, true
+	}
+	return 0, false, false
+}
+
+func (p *Plugin) clickPreviewTab(data any) tea.Cmd {
+	index, close, ok := previewTabPayload(data)
+	if !ok {
+		return nil
+	}
+	if close {
+		return p.closeTab(index)
+	}
+	return p.switchTab(index)
 }
 
 func fitFilesLabel(text string, _, _, maxWidth int, _ bool) string {

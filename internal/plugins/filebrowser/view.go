@@ -281,9 +281,7 @@ func (p *Plugin) renderNormalPanes() string {
 		if len(p.tabHits) > 0 {
 			tabY := inputBarHeight + 1
 			tabX := 2 // left border + padding
-			for _, hit := range p.tabHits {
-				p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX+hit.X, tabY, hit.Width, 1, hit.Index)
-			}
+			p.registerPreviewTabHits(tabX, tabY)
 		}
 
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -393,9 +391,7 @@ func (p *Plugin) renderNormalPanes() string {
 	if len(p.tabHits) > 0 {
 		tabY := paneY + 1
 		tabX := previewX + 2 // left border + padding
-		for _, hit := range p.tabHits {
-			p.mouseHandler.HitMap.AddRect(regionPreviewTab, tabX+hit.X, tabY, hit.Width, 1, hit.Index)
-		}
+		p.registerPreviewTabHits(tabX, tabY)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Top, parts...)
