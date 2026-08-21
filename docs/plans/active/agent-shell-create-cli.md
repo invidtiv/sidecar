@@ -3,9 +3,9 @@
 Let agents create Sidecar-visible shells and worktrees non-interactively:
 
 ```bash
-sidecar shell create --name "dev server" --run "npm run dev"
-sidecar shell create --split right --run "go test ./... -watch"   # terminal split beside the agent's shell
-sidecar worktree create fix-auth --base main --agent claude
+sidecar create shell --name "dev server" --run "npm run dev"
+sidecar create shell --split right --run "go test ./... -watch"   # terminal split beside the agent's shell
+sidecar create worktree fix-auth --base main --agent claude
 ```
 
 A shell created this way appears as a normal workspace row in the running Sidecar
@@ -58,8 +58,12 @@ Parity is owed here.
    instance → cwd's project root. The created shell belongs to the resolved
    project; `--split` additionally requires a resolvable *current shell* to split
    beside.
-5. **Worktree creation is a separate subcommand**, `sidecar worktree create`,
-   because its inputs differ (name, `--base`, `--agent`, `--skip-permissions`,
+5. **One `create` command group, kind as subcommand:** `sidecar create shell`,
+   `sidecar create worktree`. Per-kind flags stay separate and discoverable
+   (`sidecar create --help` lists the kinds), and the group is where future
+   kinds land — e.g. a `create server` shortcut (a shell pre-wired to run a
+   project's dev server) — without renaming anything. Worktree is its own
+   subcommand because its inputs differ (name, `--base`, `--agent`, `--skip-permissions`,
    setup hook). It wraps `workspaceops.ResolveWorktreePlan` + `ExecuteWorktree` +
    the setup pipeline (`workspaceops/setup.go`), honoring
    `.worktree-setup.sh` and the config's env-file rules — identical semantics to
@@ -80,10 +84,13 @@ Parity is owed here.
 
 ## Work sequence
 
-### M1 — `sidecar shell create` (workspace-shell mode, headless-capable)
+### M1 — `sidecar create shell` (workspace-shell mode, headless-capable)
 
-- New registry entries under the existing `shell` command group
-  (`internal/cli/registry.go`) with `Run` in `internal/cli/shell_create.go`.
+- New `create` command group in the registry (`internal/cli/registry.go`) with
+  the `shell` subcommand's `Run` in `internal/cli/create_shell.go`.
+- Refusal rule: if context resolution finds no known project (no shell env, no
+  flags, no unique instance, cwd not a project root), exit 2 with a hint —
+  never initialize project state. Mirrors `open`'s behavior.
 - Flags: `--name`, `--run`, `--type`, `--project`, `--shell`, `--json`, `--wait`.
 - Implementation is a thin shell over the global browser's proven path
   (`overview/global_create.go: submitCreateShell`): `ShellNames` →
@@ -91,25 +98,26 @@ Parity is owed here.
   optional `StartAgentInShell`. Extract any duplicated glue into
   `workspaceops` rather than copying it — the CLI must not grow logic the TUI
   lacks.
-- New `uirequest` action `create-shell` carrying a payload
-  `{session, displayName, focus}`: on receipt the workspace plugin (and global
+- New `uirequest` action `create` with a payload carrying a `kind` field
+  (`{kind: "shell", session, displayName, focus}` here; `kind: "worktree"` in
+  M2, future kinds later): on receipt the workspace plugin (and global
   browser) reconcile immediately (skip the watcher debounce), select the new
   shell, and ack. CLI polls acks per the `open` handshake; absence of an ack is
   non-fatal in this mode.
 - **Proof:** isolated `tmux-drive.sh` run — running Sidecar on screen, agent
-  shell runs `sidecar shell create --run 'python3 -m http.server'`, snapshot
+  shell runs `sidecar create shell --run 'python3 -m http.server'`, snapshot
   shows the new row selected with the server running; second proof with no
   Sidecar running, then launch, row appears.
 
-### M2 — `sidecar worktree create`
+### M2 — `sidecar create worktree`
 
 - Flags: `<name>`, `--base`, `--agent`, `--skip-permissions`, `--run`, `--json`,
   `--no-launch`.
 - Wraps `ResolveWorktreePlan`/`ExecuteWorktree`/setup pipeline with the same
   crash-safety expectations as the TUI (`create_operation.go`'s pending-creation
   journal — reuse it or extract its core into `workspaceops`, don't skip it).
-- Same `create-shell`-style ack layering for selection in a running instance
-  (likely a `create-worktree` action or a generalized payload).
+- Same ack layering for selection in a running instance: the shared `create`
+  action with `kind: "worktree"`.
 - **Proof:** isolated run creating a worktree with a hook script; assert setup
   hook ran, env files copied, row appears, agent session named `sidecar-ws-…`.
 
@@ -118,26 +126,18 @@ Parity is owed here.
 - Blocked until the Terminal leaf kind (`panelayout` `Shell` kind, A1–A2 of the
   terminal-splits plan) ships. Until then the flag exits 2 with a message naming
   the limitation.
-- Then: `--split` routes entirely through `uirequest` (`create-shell` with
+- Then: `--split` routes entirely through `uirequest` (the `create` action with
   `Options.Split`); the host creates the session via the same
   `CreateManagedShell` core, opens it as a Terminal leaf via the duplicable-kind
   `PlanOpen` path with `ApplyAxisOverride`, and acks with the placement taken.
   Host-side refusals (fit, live-leaf cap) surface as exit 4 + reason.
 - **Proof:** agent inside a Sidecar shell runs
-  `sidecar shell create --split right --run '…server…'`; snapshot shows two live
+  `sidecar create shell --split right --run '…server…'`; snapshot shows two live
   terminals, the server interactable, sidebar badge `◧◨`.
-
-## Open questions
-
-- Should `sidecar shell create` (no `--split`, no running instance, cwd not a
-  known project) initialize project state, or refuse? Leaning refuse with a hint
-  (`open` refuses similarly today).
-- Whether M2's ack action is `create-worktree` or one `create` action with a
-  kind field — decide when writing the payload; the bus supports either.
 
 ## Acceptance evidence
 
-- Unit tables: flag parsing/exit codes; `create-shell` request handling on both
+- Unit tables: flag parsing/exit codes; `create` request handling on both
   surfaces (workspace plugin + overview) asserting parity.
 - `tmux-drive.sh` transcripts for the three proofs above, fully isolated
   (both tmux socket and state tree — `paths` check first).
