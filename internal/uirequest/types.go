@@ -23,7 +23,8 @@ const (
 )
 
 // CreatePayload is the ActionCreate record. Kind distinguishes a workspace
-// shell from a worktree; Focus defaults to true when omitted.
+// shell from a worktree; Focus defaults to true when omitted. Run/Type are
+// the split-mode seeds executed in the terminal-panel session after it exists.
 type CreatePayload struct {
 	Kind        string `json:"kind"`
 	Session     string `json:"session,omitempty"`
@@ -31,6 +32,8 @@ type CreatePayload struct {
 	Focus       *bool  `json:"focus,omitempty"`
 	Path        string `json:"path,omitempty"`
 	Branch      string `json:"branch,omitempty"`
+	Run         string `json:"run,omitempty"`
+	Type        string `json:"type,omitempty"`
 }
 
 const (

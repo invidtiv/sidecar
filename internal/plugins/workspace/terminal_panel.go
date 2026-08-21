@@ -1,10 +1,12 @@
 package workspace
 
 import (
+	"context"
 	"fmt"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 const (
@@ -22,6 +24,12 @@ type TermPanelSessionCreatedMsg struct {
 	SessionName string
 	PaneID      string
 	Err         error
+}
+
+type termPanelSeed struct {
+	session string
+	run     string
+	typeCmd string
 }
 
 // termPanelSessionName returns the tmux session name for the current worktree/shell's terminal panel.
@@ -173,6 +181,37 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 		paneID := getPaneID(sessionName)
 		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
 	}
+}
+
+func (p *Plugin) applyPendingTermPanelSeed(session string) tea.Cmd {
+	seed := p.pendingTermPanelSeed
+	if seed == nil || seed.session == "" || seed.session != session {
+		return nil
+	}
+	p.pendingTermPanelSeed = nil
+	run, typeCmd := seed.run, seed.typeCmd
+	if run == "" && typeCmd == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx := context.Background()
+		var err error
+		if run != "" {
+			err = workspaceops.StartAgentInShell(ctx, session, run)
+		} else {
+			err = workspaceops.TypeInShell(ctx, session, typeCmd)
+		}
+		if err != nil {
+			return TermPanelSeedFailedMsg{Err: err}
+		}
+		return nil
+	}
+}
+
+// TermPanelSeedFailedMsg is a --run/--type that could not be sent after the
+// split session existed.
+type TermPanelSeedFailedMsg struct {
+	Err error
 }
 
 // calculateTermPanelDimensions returns the width and height the terminal

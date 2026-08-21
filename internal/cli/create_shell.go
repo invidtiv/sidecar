@@ -77,9 +77,6 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "--run and --type are mutually exclusive\n\n%s", help)
 		return 2
 	}
-	if flags.splitSet {
-		return refuseCreateSplit(env)
-	}
 
 	ctx := env.Ctx
 	if ctx == nil {
@@ -90,6 +87,21 @@ func runCreateShell(env Env, args []string) int {
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return createDestExitCode(err)
+	}
+	if flags.splitSet {
+		if dest.Origin.TmuxSession == "" {
+			if identity, idErr := currentShellIdentity(ctx); idErr == nil {
+				dest.Origin.TmuxSession = identity.session
+				if dest.Origin.WorkDir == "" {
+					dest.Origin.WorkDir = identity.path
+				}
+			}
+		}
+		if dest.Origin.TmuxSession == "" {
+			cliErrf(env.Stderr, "%s\n\n%s", createSplitNeedsShell, help)
+			return 2
+		}
+		return runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
 	}
 
 	proj, err := registeredProjectForCreate(env.StateDir, dest)
@@ -145,7 +157,7 @@ func runCreateShell(env Env, args []string) int {
 	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
 		Kind:  uirequest.TargetKindShell,
 		Value: session,
-	})
+	}, uirequest.Options{})
 	if reqErr != nil {
 		cliErrln(env.Stderr, reqErr)
 		if seedErr != nil {
@@ -182,6 +194,100 @@ func runCreateShell(env Env, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd string) int {
+	display := strings.TrimSpace(nameFlag)
+	if display != "" {
+		normalized, err := shellstate.NormalizeName(display)
+		if err != nil {
+			cliErrln(env.Stderr, err)
+			return 2
+		}
+		display = normalized
+	}
+
+	workDir := dest.Origin.WorkDir
+	if proj, err := registeredProjectForCreate(env.StateDir, dest); err == nil && proj.Path != "" {
+		dest.Origin.ProjectKey = proj.Key
+		if workDir == "" {
+			workDir = proj.Path
+		}
+		if dest.Origin.WorkDir == "" {
+			dest.Origin.WorkDir = proj.Path
+		}
+	}
+
+	focus := true
+	payload := uirequest.CreatePayload{
+		Kind:        uirequest.CreateKindShell,
+		DisplayName: display,
+		Focus:       &focus,
+		Run:         runCmd,
+		Type:        typeCmd,
+	}
+	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
+		Kind:  uirequest.TargetKindShell,
+		Value: dest.Origin.TmuxSession,
+	}, uirequest.Options{Split: flags.splitMode})
+	if reqErr != nil {
+		cliErrln(env.Stderr, reqErr)
+		return 1
+	}
+
+	result := createShellResult{
+		Shell: createShellInfo{
+			DisplayName: display,
+			WorkDir:     workDir,
+		},
+		Placement: flags.splitMode,
+	}
+
+	emit := func() {
+		if flags.jsonOutput {
+			if err := json.NewEncoder(env.Stdout).Encode(result); err != nil {
+				cliErrln(env.Stderr, err)
+			}
+			return
+		}
+		if result.Shell.Session != "" {
+			_, _ = fmt.Fprintf(env.Stdout, "Created split %q (%s).\n", display, result.Shell.Session)
+			return
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Sent split request for %q.\n", display)
+	}
+
+	if flags.wait <= 0 {
+		emit()
+		return 0
+	}
+
+	acks := pollCreateAcks(env.StateDir, req.ID, req.Action, flags.wait)
+	result.Acked = len(acks) > 0
+	result.Surface = createAckSurface(acks)
+	if session := createAckSession(acks); session != "" {
+		result.Shell.Session = session
+	}
+
+	if createAcksOpened(acks) {
+		emit()
+		return 0
+	}
+	emit()
+	if createAcksAllDeclined(acks) {
+		reason := createAcksDeclinedReason(acks)
+		if reason == "" {
+			reason = "the window is too small to split"
+		}
+		cliErrln(env.Stderr, reason)
+		return 4
+	}
+	if dest.Origin.TmuxSession != "" {
+		cliErrf(env.Stderr, "no running Sidecar instance is showing this shell (%s)\n", dest.Origin.TmuxSession)
+	} else {
+		cliErrf(env.Stderr, "no running Sidecar instance is showing this project (%s)\n", dest.Origin.ProjectKey)
+	}
+	return 3
 }
 
 type createShellInfo struct {

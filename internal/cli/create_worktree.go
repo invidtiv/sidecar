@@ -196,7 +196,7 @@ func runCreateWorktree(env Env, args []string) int {
 	req, reqErr := writeCreateRequest(env, dest, payload, uirequest.Target{
 		Kind:  uirequest.TargetKindWorktree,
 		Value: record.Path,
-	})
+	}, uirequest.Options{})
 	if reqErr != nil {
 		cliErrln(env.Stderr, reqErr)
 		return 1

@@ -146,6 +146,9 @@ func (m *Model) applyCreateRequest(req uirequest.Request) tea.Cmd {
 	if err != nil {
 		return nil
 	}
+	if strings.TrimSpace(req.Options.Split) != "" {
+		return nil
+	}
 	project, key, ok := m.createRequestProject(req)
 	if !ok {
 		return nil

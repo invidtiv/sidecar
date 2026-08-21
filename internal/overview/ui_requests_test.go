@@ -137,6 +137,52 @@ func TestOverview_ShellRenameRepaintsSharedCatalog(t *testing.T) {
 	}
 }
 
+func TestOverview_CreateShellSplitDoesNotAck(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	path := workspaceinventory.CanonicalPath(t.TempDir())
+	writeRegisteredSlug(t, stateHome, "demo", path)
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "Demo", Path: path}}
+	key := projectKey(m.projects[0])
+	existing := workspaceinventory.Workspace{
+		ID: key + ":shell:sidecar-sh-sidecar-1", ProjectKey: key, ProjectName: "Demo",
+		Kind: workspaceinventory.KindShell, TmuxName: "sidecar-sh-sidecar-1", Name: "Shell 1", Path: path,
+	}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{existing}}
+	m.syncBoard()
+	before := len(m.results[key].Workspaces)
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-split", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{ProjectKey: "demo", WorkDir: path, TmuxSession: "sidecar-sh-sidecar-1"},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := m.handleUIRequest(req); cmd != nil {
+		t.Fatalf("split create should be ignored, got %T", cmd)
+	}
+	if got := len(m.results[key].Workspaces); got != before {
+		t.Fatalf("catalog grew %d -> %d", before, got)
+	}
+	acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 0 {
+		t.Fatalf("expected no ack, got %+v", acks)
+	}
+}
+
 func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

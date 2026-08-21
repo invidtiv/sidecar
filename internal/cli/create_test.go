@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -25,9 +26,6 @@ func TestCreateShellValidation(t *testing.T) {
 		{"unknown option", []string{"create", "shell", "--bogus"}, 2, "unknown option"},
 		{"positional", []string{"create", "shell", "extra"}, 2, "takes no positional"},
 		{"run and type", []string{"create", "shell", "--run", "true", "--type", "false"}, 2, "mutually exclusive"},
-		{"split bare", []string{"create", "shell", "--split"}, 2, "terminal-splits Phase A"},
-		{"split auto", []string{"create", "shell", "--split", "auto"}, 2, "panelayout Terminal"},
-		{"split right", []string{"create", "shell", "--split=right"}, 2, "terminal-splits Phase A"},
 		{"split invalid", []string{"create", "shell", "--split", "diagonal"}, 2, "invalid split option"},
 		{"unknown create kind", []string{"create", "wat"}, 2, "unknown create command"},
 	} {
@@ -140,6 +138,183 @@ func TestCreateShellJSONNoAckNonFatal(t *testing.T) {
 	}
 }
 
+func TestCreateShellSplitRequiresCurrentShell(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--split", "right", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 2 {
+		t.Fatalf("Run() = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "managed shell") && !strings.Contains(errOut.String(), "--shell") {
+		t.Fatalf("stderr = %q, want a current-shell hint", errOut.String())
+	}
+	if strings.Contains(errOut.String(), "terminal-splits Phase A") {
+		t.Fatalf("still the Phase A refusal: %q", errOut.String())
+	}
+}
+
+func TestCreateShellSplitNoInstanceExit3(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--split", "right", "--json", "--wait", "100ms"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("Run() = handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
+	}
+	if !strings.Contains(errOut.String(), "sidecar-sh-sidecar-1") {
+		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
+func TestCreateShellSplitDeclinedExit4(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	reason := "Two live terminals at a time; close one first"
+	done := ackCreateRequests(t, stateHome, uirequest.Ack{
+		Instance: "test-instance", Host: "localhost", PID: 1,
+		Status: uirequest.StatusDeclined, Reason: reason, At: time.Now().UTC(),
+	})
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--split=right", "--wait", "1s"}, &out, &errOut)
+	<-done
+	if !handled || code != 4 {
+		t.Fatalf("Run() = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), reason) {
+		t.Fatalf("stderr = %q, want host reason", errOut.String())
+	}
+}
+
+func TestCreateShellSplitOpenedJSON(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+	done := ackCreateRequests(t, stateHome, uirequest.Ack{
+		Instance: "test-instance", Host: "localhost", PID: 1,
+		Status: uirequest.StatusOpened, Surface: "shell:sidecar-tp-sidecar-sh-sidecar-1",
+		At: time.Now().UTC(),
+	})
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--split", "right", "--name", "dev server", "--json", "--wait", "1s"}, &out, &errOut)
+	<-done
+	if !handled || code != 0 {
+		t.Fatalf("Run() = handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	if !result.Acked || result.Placement != "right" || result.Surface != "shell:sidecar-tp-sidecar-sh-sidecar-1" {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.Shell.Session != "sidecar-tp-sidecar-sh-sidecar-1" || result.Shell.DisplayName != "dev server" {
+		t.Fatalf("shell = %+v", result.Shell)
+	}
+}
+
+func TestCreateShellSplitWait0WritesOptions(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--split=below", "--run", "echo hi", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run() = handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	if result.Acked || result.Placement != "below" || result.Shell.Session != "" {
+		t.Fatalf("result = %+v", result)
+	}
+
+	req := readLatestCreateRequest(t, stateHome)
+	if req.Options.Split != "below" {
+		t.Fatalf("Options.Split = %q", req.Options.Split)
+	}
+	payload, err := uirequest.DecodeCreatePayload(req.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.Kind != uirequest.CreateKindShell || payload.Run != "echo hi" || payload.Session != "" {
+		t.Fatalf("payload = %+v", payload)
+	}
+}
+
+func ackCreateRequests(t *testing.T, stateHome string, ack uirequest.Ack) <-chan struct{} {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reqsDir := filepath.Join(stateHome, "sidecar", "requests")
+		for i := 0; i < 40; i++ {
+			time.Sleep(25 * time.Millisecond)
+			entries, err := os.ReadDir(reqsDir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".json") || strings.Contains(e.Name(), ".tmp.") {
+					continue
+				}
+				req, err := uirequest.ReadRequest(filepath.Join(reqsDir, e.Name()))
+				if err != nil || req.Action != uirequest.ActionCreate {
+					continue
+				}
+				_ = uirequest.WriteAck(filepath.Join(stateHome, "sidecar"), req.ID, req.Action, ack)
+				return
+			}
+		}
+	}()
+	return done
+}
+
+func readLatestCreateRequest(t *testing.T, stateHome string) uirequest.Request {
+	t.Helper()
+	dir := filepath.Join(stateHome, "sidecar", "requests")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".json") || strings.Contains(e.Name(), ".tmp.") {
+			continue
+		}
+		if !strings.Contains(e.Name(), string(uirequest.ActionCreate)) {
+			continue
+		}
+		req, err := uirequest.ReadRequest(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return req
+	}
+	t.Fatalf("no create request in %v", entries)
+	return uirequest.Request{}
+}
+
 func TestCreateListedForAgents(t *testing.T) {
 	rendered := RenderAgents(RootCommand())
 	if !strings.Contains(rendered, "sidecar create shell") {
@@ -161,6 +336,7 @@ func TestCreateWorktreeValidation(t *testing.T) {
 		{"no-launch with agent", []string{"create", "worktree", "--no-launch", "--agent", "claude", "x"}, 2, "--no-launch cannot be combined"},
 		{"no-launch with run", []string{"create", "worktree", "--run", "true", "--no-launch", "x"}, 2, "--no-launch cannot be combined"},
 		{"unknown option", []string{"create", "worktree", "--bogus", "x"}, 2, "unknown option"},
+		{"split unsupported", []string{"create", "worktree", "--split", "right", "x"}, 2, "not supported"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer

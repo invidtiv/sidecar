@@ -2068,10 +2068,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = append(cmds, p.pollInteractivePaneImmediate())
 
 	case TermPanelSessionCreatedMsg:
-		p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.termPanelSession)
+		if p.ctx != nil && p.ctx.Logger != nil {
+			p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.termPanelSession)
+		}
 		if msg.Err != nil {
 			p.termPanelVisible = false
 			p.termPanelFocused = false
+			if p.pendingTermPanelSeed != nil && p.pendingTermPanelSeed.session == msg.SessionName {
+				p.pendingTermPanelSeed = nil
+			}
 			return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Terminal: "+msg.Err.Error())
 		}
 		if msg.SessionName == p.termPanelSession {
@@ -2081,7 +2086,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, tea.Batch(
 				p.resizeTermPanelPaneCmd(),
 				p.resizeSelectedPaneCmd(),
+				p.applyPendingTermPanelSeed(msg.SessionName),
 			)
+		}
+
+	case TermPanelSeedFailedMsg:
+		if msg.Err != nil {
+			p.toastMessage = msg.Err.Error()
+			p.toastTime = time.Now()
 		}
 
 	case tea.KeyPressMsg:

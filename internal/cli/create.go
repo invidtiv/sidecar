@@ -14,7 +14,9 @@ import (
 
 const createWaitDefault = 1200 * time.Millisecond
 
-const createSplitPhaseA = "--split is not available yet: live split placement needs terminal-splits Phase A (the panelayout Terminal/Shell leaf) and has not shipped"
+const createSplitWorktreeUnsupported = "--split is not supported for create worktree"
+
+const createSplitNeedsShell = "--split requires a current Sidecar shell; run this from a managed shell or pass --shell"
 
 const createPlacementWorkspace = "workspace"
 
@@ -113,11 +115,11 @@ func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr
 }
 
 func refuseCreateSplit(env Env) int {
-	cliErrln(env.Stderr, createSplitPhaseA)
+	cliErrln(env.Stderr, createSplitWorktreeUnsupported)
 	return 2
 }
 
-func writeCreateRequest(env Env, dest openDestination, payload uirequest.CreatePayload, target uirequest.Target) (uirequest.Request, error) {
+func writeCreateRequest(env Env, dest openDestination, payload uirequest.CreatePayload, target uirequest.Target, opts uirequest.Options) (uirequest.Request, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return uirequest.Request{}, err
@@ -130,6 +132,7 @@ func writeCreateRequest(env Env, dest openDestination, payload uirequest.CreateP
 		Origin:    dest.Origin,
 		Action:    uirequest.ActionCreate,
 		Target:    target,
+		Options:   opts,
 		Payload:   data,
 	}
 	_, err = uirequest.WriteRequest(env.StateDir, req)
@@ -161,6 +164,53 @@ func createAckSurface(acks []uirequest.Ack) string {
 		}
 	}
 	return ""
+}
+
+func createAckSession(acks []uirequest.Ack) string {
+	for _, ack := range acks {
+		if ack.Status != uirequest.StatusOpened && ack.Status != uirequest.StatusRetargeted {
+			continue
+		}
+		if session, ok := strings.CutPrefix(ack.Surface, "shell:"); ok && session != "" {
+			return session
+		}
+	}
+	return ""
+}
+
+func createAcksOpened(acks []uirequest.Ack) bool {
+	for _, ack := range acks {
+		if ack.Status == uirequest.StatusOpened || ack.Status == uirequest.StatusRetargeted {
+			return true
+		}
+	}
+	return false
+}
+
+func createAcksDeclinedReason(acks []uirequest.Ack) string {
+	for _, ack := range acks {
+		if ack.Status == uirequest.StatusDeclined && ack.Reason != "" {
+			return ack.Reason
+		}
+	}
+	for _, ack := range acks {
+		if ack.Status == uirequest.StatusDeclined {
+			return ""
+		}
+	}
+	return ""
+}
+
+func createAcksAllDeclined(acks []uirequest.Ack) bool {
+	if len(acks) == 0 {
+		return false
+	}
+	for _, ack := range acks {
+		if ack.Status != uirequest.StatusDeclined {
+			return false
+		}
+	}
+	return true
 }
 
 func existingShellDefinitions(proj registeredProject) []shellstate.Definition {

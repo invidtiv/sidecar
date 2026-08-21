@@ -114,33 +114,37 @@ func RootCommand() *Command {
 			"The shell is recorded in shells.json so it appears in Sidecar whether or not\n" +
 			"an instance is running. --run executes a command in the new shell; --type types\n" +
 			"it without pressing Enter so the user can review it.\n\n" +
-			"--split would place a live terminal beside the current shell. That mode needs\n" +
-			"terminal-splits Phase A (the panelayout Terminal/Shell leaf) and has not shipped.",
+			"--split auto|right|below places a live terminal beside the current shell (the\n" +
+			"workspace_terminal_panel feature must be on). Split mode needs a running instance\n" +
+			"and a current shell (SIDECAR_SHELL / --shell). It does not add a workspace row.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
-			{Name: "--split", Arg: "auto|right|below", Summary: "Live split placement (not yet available)"},
+			{Name: "--split", Arg: "auto|right|below", Summary: "Place a live terminal beside the current shell"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
 		Args: ArgSpec{Min: 0, Max: 0},
 		ExitCodes: []ExitCode{
-			{Code: 0, Summary: "created (missing ack is non-fatal)"},
+			{Code: 0, Summary: "created (missing ack is non-fatal in workspace-shell mode)"},
 			{Code: 1, Summary: "state or tmux failure"},
 			{Code: 2, Summary: "usage or validation error"},
+			{Code: 3, Summary: "no running instance (split mode)"},
+			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
+			{Command: "sidecar create shell --split right --run \"python3 -m http.server 8765\""},
 			{Command: "sidecar create shell --json --wait 0"},
 			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND]",
-			Summary:    "Create a Sidecar-visible shell the user can click into",
+			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND] [--split auto|right|below]",
+			Summary:    "Create a Sidecar-visible shell or a live split beside the current shell",
 		},
 		Run: runCreateShell,
 	}
