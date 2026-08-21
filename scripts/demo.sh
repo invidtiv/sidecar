@@ -22,7 +22,7 @@
 #   --onboarding        Shortcut for --no-td --no-tasks (clean new-user experience)
 #   --keep              Preserve the temporary /tmp directory on exit (don't delete)
 #   --dry-run           Generate the demo files and print paths without launching Sidecar
-#   --bin=PATH          Path to custom sidecar executable (defaults to built bin/sidecar)
+#   --bin=PATH          Path to custom sidecar executable (defaults to fresh build from active checkout)
 #   -h, --help          Show this help message
 #
 # Examples:
@@ -143,26 +143,29 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# Resolve Sidecar binary
+# Initialize demo scratch directory
+create_demo_root "$PRESET"
+
+# Resolve or build Sidecar binary
 SIDECAR_BIN="${CUSTOM_BIN:-}"
 if [ -z "$SIDECAR_BIN" ]; then
-    if [ -x "$REPO_DIR/bin/sidecar" ]; then
-        SIDECAR_BIN="$REPO_DIR/bin/sidecar"
-    elif command -v sidecar >/dev/null 2>&1; then
-        SIDECAR_BIN="$(command -v sidecar)"
-    else
-        log_info "Building local Sidecar binary..."
-        (cd "$REPO_DIR" && go build -o bin/sidecar ./cmd/sidecar)
-        SIDECAR_BIN="$REPO_DIR/bin/sidecar"
-    fi
+    short_commit=$(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null || echo "dev")
+    branch=$(git -C "$REPO_DIR" branch --show-current 2>/dev/null || echo "main")
+    dirty=""
+    [ -z "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ] || dirty="+dirty"
+    demo_version="devel+${branch}.${short_commit}${dirty}"
+
+    log_info "Building fresh Sidecar binary from active checkout ($demo_version)..."
+    (
+        cd "$REPO_DIR"
+        GOWORK=off go build -ldflags "-s -w -X main.Version=$demo_version" -o "$DEMO_BIN_DIR/sidecar" ./cmd/sidecar
+    )
+    SIDECAR_BIN="$DEMO_BIN_DIR/sidecar"
 fi
 
 if [ ! -x "$SIDECAR_BIN" ]; then
     die "Sidecar binary not executable at: $SIDECAR_BIN"
 fi
-
-# Initialize demo scratch directory
-create_demo_root "$PRESET"
 
 # Dispatch preset setup
 case "$PRESET" in
