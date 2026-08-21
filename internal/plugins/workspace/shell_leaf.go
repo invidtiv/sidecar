@@ -20,6 +20,13 @@ import (
 // agree with it — exactly one Shell leaf while the panel is up, none while it is
 // not — so no other path can leave a leaf drawn for a panel that was hidden, or
 // a panel flagged visible with nowhere to draw.
+//
+// The flag is scoped by shellLeafSurface: a split terminal is a peer IN one
+// workspace, not a plugin-wide preference that follows the sidebar around. The
+// surface that opened the split owns it, and a selection that lands anywhere
+// else releases it (releaseShellLeafOffSurface) before the tree is rebuilt — so
+// a workspace nobody split is never badged, never persisted with a shell leaf,
+// and never shows another workspace's session for a frame.
 
 const (
 	// shellSplitDefaultRatio is the primary terminal's share of a freshly opened
@@ -97,6 +104,7 @@ func (p *Plugin) syncShellLeaf() bool {
 	if p.paneRoot == nil {
 		return false
 	}
+	p.releaseShellLeafOffSurface()
 	leaf := p.shellLeaf()
 	switch {
 	case p.termPanelVisible && leaf == nil:
@@ -106,6 +114,60 @@ func (p *Plugin) syncShellLeaf() bool {
 		return true
 	}
 	return false
+}
+
+// claimShellLeafSurface records the workspace a split terminal is being opened
+// on. It is the ownership half of termPanelVisible and moves with it: opening
+// without claiming would leave the split adoptable by whatever the sidebar
+// lands on next.
+func (p *Plugin) claimShellLeafSurface() {
+	_, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		surface = ""
+	}
+	p.shellLeafSurface = surface
+}
+
+// releaseShellLeafOffSurface drops the split when the selection is no longer
+// the workspace that owns it. A split terminal belongs to its workspace
+// (settled decision 6), so it neither follows the selection nor opens itself on
+// a workspace the user never split; the owning workspace's persisted layout
+// brings it back when the selection returns.
+//
+// A claim that was never made — a legacy panel preference restored at startup,
+// or a layout decoded before the surface was known — adopts the current
+// selection rather than being thrown away, which is what the pre-ownership
+// build did with every split.
+func (p *Plugin) releaseShellLeafOffSurface() {
+	if !p.termPanelVisible {
+		p.shellLeafSurface = ""
+		return
+	}
+	_, surface, ok := p.selectedTerminalSurface()
+	if !ok || surface == "" {
+		return
+	}
+	if p.shellLeafSurface == "" {
+		p.shellLeafSurface = surface
+		return
+	}
+	if surface == p.shellLeafSurface {
+		return
+	}
+	p.termPanelVisible = false
+	p.termPanelFocused = false
+	p.shellLeafSurface = ""
+	p.forgetShellLeafName()
+}
+
+// shellLeafOwnsSelection reports that the open split terminal is the selected
+// workspace's own.
+func (p *Plugin) shellLeafOwnsSelection() bool {
+	if !p.termPanelVisible {
+		return false
+	}
+	_, surface, ok := p.selectedTerminalSurface()
+	return ok && surface != "" && (p.shellLeafSurface == "" || surface == p.shellLeafSurface)
 }
 
 // shellSessionSelector picks a shell leaf's durable tmux target: the selector
@@ -182,7 +244,7 @@ func (p *Plugin) openShellLeaf() bool {
 	placement := strings.TrimSpace(p.shellSplitPlacement)
 	p.shellSplitPlacement = ""
 	if panelayout.LiveCapReached(p.paneRoot) {
-		p.termPanelVisible = false
+		p.abandonShellLeaf()
 		p.toastMessage = shellCapMessage
 		p.toastTime = time.Now()
 		return false
@@ -190,18 +252,18 @@ func (p *Plugin) openShellLeaf() bool {
 	plan, ratio, planned := p.shellLeafOpenPlan(placement)
 	peer, placed := p.previewPeerBox()
 	if !planned || !placed {
-		p.termPanelVisible = false
+		p.abandonShellLeaf()
 		return false
 	}
 	trial, _ := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, &PaneNode{Kind: PaneShell})
 	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
-		p.termPanelVisible = false
+		p.abandonShellLeaf()
 		return false
 	}
 	node := &PaneNode{Kind: PaneShell}
 	root, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
 	if focus != node.ID {
-		p.termPanelVisible = false
+		p.abandonShellLeaf()
 		return false
 	}
 	p.paneRoot = root
@@ -212,6 +274,15 @@ func (p *Plugin) openShellLeaf() bool {
 	// on the terminal leaf the ring names.
 	p.paneFocus = terminalLeafID(p.paneRoot)
 	return true
+}
+
+// abandonShellLeaf is every refusal's exit: the flag, its focus, and its
+// ownership go together. Leaving termPanelFocused set behind a refused split is
+// how a surface ends up with no leaf drawing focused chrome.
+func (p *Plugin) abandonShellLeaf() {
+	p.termPanelVisible = false
+	p.termPanelFocused = false
+	p.shellLeafSurface = ""
 }
 
 // createTerminalSplit is the create modal's Terminal split row: a live terminal

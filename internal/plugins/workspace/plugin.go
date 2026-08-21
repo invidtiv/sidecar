@@ -385,6 +385,11 @@ type Plugin struct {
 	// shellLeafName is the name the create modal gave the shell leaf, shown in
 	// its header chip.
 	shellLeafName string
+	// shellLeafSurface is the workspace the open split terminal belongs to. A
+	// split is a peer in one workspace, not a plugin-wide preference, so the
+	// selection landing anywhere else releases it — see
+	// releaseShellLeafOffSurface.
+	shellLeafSurface string
 	// restoredShellSession is the durable session selector a restored shell
 	// leaf carried, used once instead of re-deriving the name.
 	restoredShellSession string

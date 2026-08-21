@@ -86,11 +86,16 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		p.rememberShellSplit()
 		p.termPanelVisible = false
 		p.termPanelFocused = false
+		p.shellLeafSurface = ""
 		p.syncShellLeaf()
 		p.saveSelectionState()
 		return p.resizeSelectedPaneCmd()
 	}
 
+	// The split belongs to the workspace it is opened on, so it is claimed
+	// before it exists: syncShellLeaf releases any split whose owner is not the
+	// selection, and an unclaimed one would be released on the spot.
+	p.claimShellLeafSurface()
 	p.termPanelVisible = true
 	if !p.syncShellLeaf() {
 		p.termPanelFocused = false
@@ -101,15 +106,21 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	p.activePane = PanePreview
 	sessionName := p.termPanelSessionName()
 	if sessionName == "" {
-		p.termPanelVisible = false
-		p.termPanelFocused = false
+		p.abandonShellLeaf()
 		p.syncShellLeaf()
 		return nil
 	}
+
+	// The session is the leaf's durable selector, and the save below is the
+	// first one that will encode the leaf: assigning it after the save is how a
+	// freshly created split was persisted with no session at all, and came back
+	// from a relaunch attached to whatever the selection derived.
+	reusing := p.termPanelSession == sessionName && p.termPanelOutput != nil
+	p.termPanelSession = sessionName
 	p.saveSelectionState()
 
 	// If we already have an active session for this, just show it
-	if p.termPanelSession == sessionName && p.termPanelOutput != nil {
+	if reusing {
 		return tea.Batch(
 			p.resizeTermPanelPaneCmd(),
 			p.resizeSelectedPaneCmd(),
@@ -117,7 +128,6 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	}
 
 	// Switch to the new session (old session preserved for later reuse)
-	p.termPanelSession = sessionName
 	p.releaseTerminalDocProjection(true)
 	if p.termPanelOutput == nil {
 		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
@@ -258,10 +268,13 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	return p.renderCapturedTerminal(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
 }
 
-// refreshTermPanelForSelection switches the terminal panel to the newly selected worktree/shell.
-// Returns a tea.Cmd if a new session needs to be created/polled.
+// refreshTermPanelForSelection points the terminal panel at the session its own
+// workspace owns. A split does not follow the selection onto another workspace
+// — that workspace's split is its own, restored from its own layout — so this
+// only ever re-derives the session for the surface that owns the open leaf,
+// which matters when a shell is renamed underneath it.
 func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
-	if !p.termPanelVisible {
+	if !p.shellLeafOwnsSelection() {
 		return nil
 	}
 	newSession := p.termPanelSessionName()

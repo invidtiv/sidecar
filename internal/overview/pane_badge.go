@@ -2,7 +2,6 @@ package overview
 
 import (
 	"github.com/marcus/sidecar/internal/panebadge"
-	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -12,19 +11,22 @@ import (
 // projections of one model, and a workspace showing two panes is showing two
 // panes in both of them.
 
-// paneRowBadge is the layout glyph one row wears.
+// paneRowBadge is the layout glyph one row wears — every row, selected or not,
+// read from the workspace's persisted tree.
 //
-// The selected row is answered from the LIVE preview tree when this surface is
-// the one that placed it, for the reason the project sidebar answers it that
-// way: a split is persisted on save, not on creation, and a badge read only
-// from disk would lag the pane the user just opened.
+// The project sidebar answers its selected row from its live tree instead, and
+// that is not a divergence: there, the live tree IS the workspace's layout, the
+// one that gets saved, so reading it only spares the badge a save's worth of
+// lag. Here the preview tree is this browser's own ephemeral projection — it is
+// built as a lone Terminal node per selection, never restored from disk and
+// never written back, and it has no Shell content to hold a split terminal at
+// all. Answering the selected row from it made a split workspace lose its badge
+// the moment it was selected, which is precisely the disagreement between the
+// two lists that the badge exists to avoid.
 func (m *Model) paneRowBadge(workspace workspaceinventory.Workspace) string {
 	surface := workspaceSurfaceIdentity(workspace)
 	if surface == "" {
 		return ""
-	}
-	if selected, ok := m.SelectedWorkspace(); ok && selected.ID == workspace.ID && m.preview.paneRoot != nil {
-		return panebadge.Glyph(panelayout.LeafCount(m.preview.paneRoot))
 	}
 	return RowLayoutBadge(state.GetWorkspaceState(workspace.ProjectRoot), surface)
 }

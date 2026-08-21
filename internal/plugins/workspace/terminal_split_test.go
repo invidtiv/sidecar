@@ -220,31 +220,25 @@ func TestPlacementActionsReachTheHost(t *testing.T) {
 	}
 }
 
-// A split terminal follows the selection onto the newly selected workspace's
-// own session, so the name the create modal gave it on the workspace it was
-// created in must not title another workspace's terminal. Real-app proof
-// caught the leaf still reading "term · <other workspace>" after the selection
-// moved; an unnamed leaf falls back to the auto-name for where it now is.
+// The name the create modal gave a split belongs to the workspace the split
+// belongs to. The split does not follow the selection at all now, so the name
+// goes with it: a selection landing on another workspace leaves nothing named,
+// and the owning workspace still reads what it was called. Real-app proof
+// caught the leaf still reading "term \u00b7 <other workspace>" after the
+// selection moved.
 func TestSplitTerminalNameDoesNotFollowTheSelectionToAnotherWorkspace(t *testing.T) {
-	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
-	stubTd(t)
-	dir := t.TempDir()
-	p := docPaneTestPlugin(t, dir, true)
-	p.sidebarVisible = false
-	p.View(p.width, p.height)
+	p, _ := twoShellPlugin(t)
 
 	p.createTerminalSplit("dev server", "auto")
 	if got := p.shellLeafTitle(); got != "dev server" {
 		t.Fatalf("leaf title = %q, want the name the modal gave it", got)
 	}
 
-	// The selection moved: the leaf is now showing a different session.
-	p.termPanelSession = "sidecar-tp-first"
-	p.forgetShellLeafName()
-	if got := p.shellLeafTitle(); got == "dev server" {
-		t.Fatal("the previous workspace's name titled the new workspace's terminal")
+	selectShell(p, 1)
+	if p.shellLeafName != "" {
+		t.Fatalf("the previous workspace's name %q survived onto another workspace", p.shellLeafName)
 	}
-	if want := p.terminalSplitAutoName(); p.shellLeafTitle() != want {
-		t.Fatalf("leaf title = %q, want the auto-name %q", p.shellLeafTitle(), want)
+	if got := p.shellLeafTitle(); got != p.terminalSplitAutoName() {
+		t.Fatalf("leaf title = %q, want the auto-name %q", got, p.terminalSplitAutoName())
 	}
 }

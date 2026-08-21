@@ -1243,9 +1243,14 @@ func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
 	}
 	p.paneLayoutSurface = surface
 	layout := p.savedPaneLayoutForCurrentSurface(surface)
-	if layout != nil && p.legacyTermPanel.Visible {
+	if p.legacyTermPanel.Visible {
 		// The pre-split panel preference becomes a split of this layout, once.
-		layout = migrateTermPanelIntoLayout(layout, p.legacyTermPanel)
+		// It is spent on the FIRST surface restored either way: a preference
+		// held back until some later workspace happens to have a saved layout
+		// would splice a split into a workspace it was never set on.
+		if layout != nil {
+			layout = migrateTermPanelIntoLayout(layout, p.legacyTermPanel)
+		}
 		p.legacyTermPanel = termPanelPrefs{}
 	}
 	if layout == nil {
@@ -1371,12 +1376,18 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.paneRoot = restored
 	p.paneFocus = terminalLeafID(restored)
 	p.paneNextID = maxPaneID(restored) + 1
-	// A restored shell leaf turns the panel back on; a layout without one does
-	// not turn it off, because the panel's visibility is still a preference the
-	// user set once for the surface rather than per selection.
+	// A restored shell leaf turns the split back on FOR THIS SURFACE, and a
+	// layout without one turns it off: the split is the workspace's own, so the
+	// workspace's saved layout is the whole answer. Anything else opens a split
+	// on a workspace the user never split.
 	if shellCount > 0 {
 		p.termPanelVisible = true
+		p.shellLeafSurface = surface
 		p.rememberShellSplit()
+	} else {
+		p.termPanelVisible = false
+		p.termPanelFocused = false
+		p.shellLeafSurface = ""
 	}
 	p.syncShellLeaf()
 	return tea.Batch(loads...)
@@ -1545,8 +1556,9 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
 	p.paneFocus = p.paneRoot.ID
-	// The panel is not a content leaf the selection owns: it is a preference,
-	// so a tree rebuilt for a new selection is rebuilt with it.
+	// A split terminal IS owned by a selection, so a tree rebuilt for a new one
+	// is rebuilt without it unless the new selection is the split's own
+	// workspace — syncShellLeaf reconciles both halves of that.
 	p.syncShellLeaf()
 }
 
