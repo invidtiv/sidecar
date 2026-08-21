@@ -65,6 +65,24 @@ type SidebarOptions struct {
 	EmptyActionID   string
 	EmptyActionLine int
 	FooterLines     []string
+	// InteractiveScrollbar opts the bar into the pointer contract: thumb and
+	// track Regions are appended after every content region — reverse-scan
+	// priority, so a press on the bar is answered by the bar and never by a
+	// row beneath its column — and the drawn geometry is reported for hit
+	// registration. Nothing is registered when everything fits. Surfaces that
+	// have not adopted pointer scrolling leave it false and get exactly the
+	// draw-only bar of before.
+	InteractiveScrollbar bool
+	// FreeScroll reports that ScrollOffset was chosen by a pointer gesture
+	// rather than derived from the selection, so the render clamps it without
+	// dragging the selected row back into view — a drag past the selection
+	// would otherwise be pulled straight back. Any selection move clears it.
+	FreeScroll bool
+	// ScrollbarHover / ScrollbarDrag feed the bar's pointer emphasis back into
+	// the draw, following the divider's HandleState convention. Idle output
+	// stays byte-identical to plain RenderScrollbar.
+	ScrollbarHover bool
+	ScrollbarDrag  bool
 }
 
 // SidebarRendered is the exact view, geometry and viewport produced by one
@@ -75,6 +93,22 @@ type SidebarRendered struct {
 	Regions      []Region
 	ScrollOffset int
 	VisibleRows  int
+	// Scrollbar reports the bar this pass drew at the list's right edge, for
+	// surfaces answering presses on its regions. Has is false whenever no
+	// thumb exists — everything fits, or no body was drawn.
+	Scrollbar SidebarScrollbar
+}
+
+// SidebarScrollbar is what one render pass learned about the list's bar: the
+// params it was drawn with and where its track and thumb landed, in content
+// coordinates (the same space as Regions). A bar that was not drawn can never
+// register regions or answer a press.
+type SidebarScrollbar struct {
+	Params   ui.ScrollbarParams
+	TrackTop int // first row of the track, content-local
+	ThumbTop int // thumb's offset within the track, in rows
+	ThumbH   int // thumb height in rows
+	Has      bool
 }
 
 const (
@@ -82,6 +116,20 @@ const (
 	RegionSectionAction RegionKind = "workspacelist-section-action"
 	RegionEmptyAction   RegionKind = "workspacelist-empty-action"
 )
+
+// The scrollbar's region kinds are the shared core's IDs, so every surface's
+// hit map names a scrollbar identically and the shared gesture contract reads
+// the same everywhere.
+const (
+	RegionScrollbarTrack RegionKind = RegionKind(ui.RegionScrollbarTrack)
+	RegionScrollbarThumb RegionKind = RegionKind(ui.RegionScrollbarThumb)
+)
+
+// IsScrollbarRegion reports whether kind belongs to the list's bar rather than
+// to its content.
+func IsScrollbarRegion(kind RegionKind) bool {
+	return kind == RegionScrollbarTrack || kind == RegionScrollbarThumb
+}
 
 // headerSpacerMinBody is how many body rows must survive the blank line under
 // the panel header for that line to be worth spending. A heading plus two rows
@@ -156,7 +204,7 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		}
 	}
 
-	scroll := adjustSidebarScroll(flat, opts.Sections, opts.ScrollOffset, bodyHeight, width, opts.SelectedID, opts.Focused)
+	scroll := adjustSidebarScroll(flat, opts.Sections, opts.ScrollOffset, bodyHeight, width, opts.SelectedID, opts.Focused, opts.FreeScroll)
 	visibleEnd := sidebarVisibleEnd(flat, opts.Sections, scroll, bodyHeight, width, opts.SelectedID, opts.Focused)
 	rowWidth := max(1, width-1)
 	y := len(lines)
@@ -210,11 +258,23 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 	// rows, including section headings. This keeps row targets off its column.
 	chromeRows := height - footerRows - bodyHeight
 	renderedBodyRows := max(0, len(lines)-chromeRows)
+	var bar SidebarScrollbar
 	if renderedBodyRows > 0 {
 		body := strings.Join(lines[chromeRows:], "\n")
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{TotalItems: len(flat), ScrollOffset: scroll, VisibleItems: max(1, visibleRows), TrackHeight: renderedBodyRows})
+		params := ui.ScrollbarParams{TotalItems: len(flat), ScrollOffset: scroll, VisibleItems: max(1, visibleRows), TrackHeight: renderedBodyRows}
+		state := ui.HandleStateFrom(opts.ScrollbarHover, opts.ScrollbarDrag)
+		scrollbar, geom := ui.RenderScrollbarWithState(params, ui.ScrollbarStyle{Thumb: state, Track: state})
 		joined := lipgloss.JoinHorizontal(lipgloss.Top, body, scrollbar)
 		lines = append(lines[:chromeRows], strings.Split(joined, "\n")...)
+		bar = SidebarScrollbar{Params: params, TrackTop: chromeRows, ThumbTop: geom.ThumbRect.Min.Y, ThumbH: geom.ThumbRect.Dy(), Has: geom.HasThumb}
+		if opts.InteractiveScrollbar && geom.HasThumb {
+			// Registered after every content region so the reverse scan prefers
+			// the bar in the column it owns.
+			regions = append(regions,
+				Region{Kind: RegionScrollbarTrack, X: renderedBodyX(width), Y: chromeRows, W: 1, H: geom.TrackRect.Dy()},
+				Region{Kind: RegionScrollbarThumb, X: renderedBodyX(width), Y: chromeRows + geom.ThumbRect.Min.Y, W: 1, H: geom.ThumbRect.Dy()},
+			)
+		}
 	}
 	for len(lines) < height-footerRows {
 		lines = append(lines, strings.Repeat(" ", width))
@@ -225,8 +285,12 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 	if len(lines) > height {
 		lines = lines[:height]
 	}
-	return SidebarRendered{View: strings.Join(lines, "\n"), Regions: regions, ScrollOffset: scroll, VisibleRows: visibleRows}
+	return SidebarRendered{View: strings.Join(lines, "\n"), Regions: regions, ScrollOffset: scroll, VisibleRows: visibleRows, Scrollbar: bar}
 }
+
+// renderedBodyX is the content-local column JoinHorizontal places the bar in:
+// the body's widest line, which fit() holds at width-1.
+func renderedBodyX(width int) int { return max(1, width-1) }
 
 // adjustSidebarScroll keeps SelectedID on screen using body lines, not row
 // counts. Headings and separators consume height, so paging by visible row
@@ -235,10 +299,18 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 // If the selection already fits at the incoming offset, the offset is kept
 // (then clamped so the last page still fills the pane). Otherwise the
 // smallest offset that reveals it is used — 0 when the row fits from the top.
-func adjustSidebarScroll(flat []sidebarFlatRow, sections []SidebarSection, scroll, height, width int, selectedID string, focused bool) int {
+//
+// freeScroll marks an offset a pointer gesture chose: only the clamp applies,
+// because dragging past the selected row must not be dragged straight back.
+func adjustSidebarScroll(flat []sidebarFlatRow, sections []SidebarSection, scroll, height, width int, selectedID string, focused bool, freeScroll bool) int {
 	n := len(flat)
 	if n == 0 {
 		return 0
+	}
+	maxScroll := sidebarMaxScroll(flat, sections, height, width, selectedID, focused)
+	scroll = min(max(scroll, 0), maxScroll)
+	if freeScroll {
+		return scroll
 	}
 	selected := -1
 	for i := range flat {
@@ -247,8 +319,6 @@ func adjustSidebarScroll(flat []sidebarFlatRow, sections []SidebarSection, scrol
 			break
 		}
 	}
-	maxScroll := sidebarMaxScroll(flat, sections, height, width, selectedID, focused)
-	scroll = min(max(scroll, 0), maxScroll)
 	if selected >= 0 && selected < scroll {
 		// Moving up out of the viewport: park the row at the top. Using the
 		// global minimum here would jump a tall list back to offset 0 on k.
@@ -489,4 +559,66 @@ func ApplySelection(content string, width int, selected, focused bool) string {
 		return content
 	}
 	return selectionStyle(focused).Width(width).Render(content)
+}
+
+// ScrollGesture is one surface's in-flight pointer gesture on the shared
+// sidebar bar, following docs/plans/active/mouse-draggable-scrollbars.md:
+// a thumb press grabs where it landed, a track press jumps so the grabbed
+// point becomes the thumb anchor and the same gesture continues from there,
+// and dragging maps the pointer back through the shared inverse mapping —
+// clamped at both ends without ever ending the gesture.
+//
+// It is state-free about the list itself: the surface owns its offset and
+// applies what Press and DragTo return through its own viewport setter, which
+// is what keeps the math adoptable by a headless caller unchanged.
+type ScrollGesture struct {
+	params    ui.ScrollbarParams
+	trackY    int // absolute row of the track top, captured at press time
+	grabDelta int // rows between the pointer and the thumb's anchor row
+	active    bool
+}
+
+// Active reports that a gesture is in flight.
+func (g *ScrollGesture) Active() bool { return g.active }
+
+// End settles the gesture — on a release anywhere, or on the first button-less
+// motion after a release was lost outside the window. Nothing is persisted; a
+// scroll offset is ephemeral view state.
+func (g *ScrollGesture) End() {
+	g.active = false
+	g.grabDelta = 0
+}
+
+// Press begins a gesture from a press on one of the bar's regions and returns
+// the offset to scroll to now. bar is the last render's snapshot, trackY the
+// absolute screen row of the track top, pointerRow the pressed absolute row,
+// thumb whether the thumb rather than the track was pressed, and offset the
+// view's current scroll offset — the anchor a thumb press grabs at.
+func (g *ScrollGesture) Press(bar SidebarScrollbar, trackY, pointerRow int, thumb bool, offset int) int {
+	local := pointerRow - trackY
+	g.params, g.trackY, g.active = bar.Params, trackY, true
+	if !thumb {
+		// Jump-to-spot: grab at the clicked row with no offset within the
+		// thumb, so the drag from here maps the pointer straight onto rows.
+		g.grabDelta = 0
+		return ui.OffsetAtRow(bar.Params, local)
+	}
+	g.grabDelta = local - ui.RowForOffset(bar.Params, offset)
+	return offset
+}
+
+// DragTo maps the pointer's absolute row back onto the dragged offset,
+// preserving where within the thumb the gesture grabbed. OffsetAtRow clamps
+// past both ends of the track without ending anything.
+func (g *ScrollGesture) DragTo(pointerRow int) int {
+	return ui.OffsetAtRow(g.params, pointerRow-g.trackY-g.grabDelta)
+}
+
+// SetScrollViewport pins the list's viewport to an offset a scrollbar gesture
+// chose, latching free-scroll mode: renders keep the chosen position even when
+// the selected row sits outside it. Any selection move — keyboard, wheel, or a
+// click on a row — clears the latch, and following resumes.
+func (m *Model) SetScrollViewport(offset int) {
+	m.freeScroll = true
+	m.scroll = max(offset, 0)
 }

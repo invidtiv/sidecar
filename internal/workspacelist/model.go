@@ -40,8 +40,12 @@ type Model struct {
 	sortMode Sort
 	filter   Filter
 
-	selectedID      string
-	scroll          int
+	selectedID string
+	scroll     int
+	// freeScroll latches that the viewport is where a scrollbar gesture put
+	// it, so renders stop parking the selected row back into view. Selection
+	// movement clears it; see Model.SetScrollViewport.
+	freeScroll      bool
 	visible         []Item
 	rows            int
 	loading         bool
@@ -258,6 +262,7 @@ func (m *Model) Top() bool {
 	changed := m.selectedID != m.visible[0].ID
 	m.selectedID = m.visible[0].ID
 	m.scroll = 0
+	m.freeScroll = false
 	return changed
 }
 
@@ -268,6 +273,7 @@ func (m *Model) Bottom() bool {
 	last := m.visible[len(m.visible)-1].ID
 	changed := m.selectedID != last
 	m.selectedID = last
+	m.freeScroll = false
 	m.ensureVisible()
 	return changed
 }
@@ -290,6 +296,9 @@ func (m *Model) Reproject() { m.reproject() }
 func (m *Model) FocusFilter() { m.filter.Focus() }
 
 func (m *Model) ensureVisible() {
+	// Whatever moved the selection — a key, the wheel, a click, a refresh that
+	// had to reselect — owns the viewport again.
+	m.freeScroll = false
 	if m.rows <= 0 {
 		return
 	}
@@ -333,12 +342,19 @@ type RenderOptions struct {
 	Title         string
 	Focused       bool
 	Now           time.Time
+	// ScrollbarHover / ScrollbarDrag carry the list bar's pointer emphasis
+	// from the surface's mouse state into the draw.
+	ScrollbarHover bool
+	ScrollbarDrag  bool
 }
 
 // Rendered is the drawn list plus the regions it registered.
 type Rendered struct {
 	View    string
 	Regions []Region
+	// Scrollbar reports the interactive bar this pass drew, for surfaces
+	// answering presses on its thumb/track regions.
+	Scrollbar SidebarScrollbar
 }
 
 // twoLineWidth is the sidebar width below which a row degrades to one
@@ -402,8 +418,15 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	rendered := RenderSidebar(SidebarOptions{Width: opts.Width, Height: opts.Height, Title: opts.Title, Focused: opts.Focused,
 		SelectedID: m.selectedID, ScrollOffset: m.scroll,
-		HeaderAction: m.headerAction,
-		HeaderMeta:   &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode)},
+		// The global list's bar is live: its thumb/track regions ride along
+		// with every content region, and a gesture-chosen offset is honored
+		// rather than re-derived from the selection.
+		InteractiveScrollbar: true,
+		FreeScroll:           m.freeScroll,
+		ScrollbarHover:       opts.ScrollbarHover,
+		ScrollbarDrag:        opts.ScrollbarDrag,
+		HeaderAction:         m.headerAction,
+		HeaderMeta:           &SidebarAction{ID: "sort", Label: SortPillLabel(m.sortMode)},
 		// The filter row costs a row of chrome, so it appears when the filter is
 		// live and not before — the rule the project sidebar already follows, so
 		// the first heading sits on the same row on both surfaces.
@@ -412,7 +435,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		EmptyActionID: m.emptyActionID, EmptyActionLine: m.emptyActionLine,
 		FooterLines: m.failureLines(failureRows, opts.Width)})
 	m.scroll, m.rows = rendered.ScrollOffset, rendered.VisibleRows
-	return Rendered{View: rendered.View, Regions: rendered.Regions}
+	return Rendered{View: rendered.View, Regions: rendered.Regions, Scrollbar: rendered.Scrollbar}
 }
 
 // failureLines renders the per-project unavailable rows that fit in the space

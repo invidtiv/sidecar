@@ -335,17 +335,70 @@ func (m *Model) workspacesInventorySettled() bool {
 func (m *Model) renderWorkspaceList(x, y, width, height int) string {
 	m.syncCreateActions()
 	m.applyWorkspacesEmptyState(max(1, width-1))
+	dragging := m.wsBar.gesture.Active()
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
-		Width:   width,
-		Height:  height,
-		Title:   "Workspaces",
-		Focused: !m.PreviewFocused(),
-		Now:     m.now(),
+		Width:          width,
+		Height:         height,
+		Title:          "Workspaces",
+		Focused:        !m.PreviewFocused(),
+		Now:            m.now(),
+		ScrollbarHover: m.wsBar.hover && !dragging,
+		ScrollbarDrag:  dragging,
 	})
+	m.wsBar.bar, m.wsBar.originY = rendered.Scrollbar, y
 	for _, region := range rendered.Regions {
 		m.workspacesMouse.HitMap.AddRect(string(region.Kind), x+region.X, y+region.Y, region.W, region.H, region)
 	}
 	return rendered.View
+}
+
+// workspaceScrollbarState is the Sessions list's scrollbar pointer state.
+// The bar snapshot is what the last render reported; the gesture keeps the
+// press-time mapping so re-renders cannot shift it under the pointer.
+type workspaceScrollbarState struct {
+	bar     workspacelist.SidebarScrollbar
+	originY int
+	hover   bool
+	gesture workspacelist.ScrollGesture
+}
+
+// isWorkspacesScrollbarRegion reports that a hit region belongs to the list's
+// bar rather than to a row or control.
+func isWorkspacesScrollbarRegion(region *mouse.Region) bool {
+	if region == nil {
+		return false
+	}
+	hit, ok := region.Data.(workspacelist.Region)
+	return ok && workspacelist.IsScrollbarRegion(hit.Kind)
+}
+
+// pressWorkspacesScrollbar begins the bar's gesture: grab the thumb where it
+// was pressed, or jump-to-spot on the track and keep dragging from there. The
+// bar's regions were registered after the rows precisely so this wins them —
+// a scrollbar press never selects a session underneath.
+func (m *Model) pressWorkspacesScrollbar(action mouse.MouseAction) {
+	bar := m.wsBar.bar
+	if !bar.Has || action.Region == nil {
+		return
+	}
+	hit, ok := action.Region.Data.(workspacelist.Region)
+	if !ok {
+		return
+	}
+	trackY := m.wsBar.originY + bar.TrackTop
+	offset := m.wsBar.gesture.Press(bar, trackY, action.Y, hit.Kind == workspacelist.RegionScrollbarThumb, m.workspaces.ScrollOffset())
+	m.workspaces.SetScrollViewport(offset)
+	m.workspacesMouse.StartDrag(action.X, action.Y, string(hit.Kind), offset)
+}
+
+// dragWorkspacesScrollbar applies the gesture's offset mapping for the pointer
+// row. The shared core clamps past both ends of the track without ending the
+// gesture.
+func (m *Model) dragWorkspacesScrollbar(action mouse.MouseAction) {
+	if !m.wsBar.gesture.Active() {
+		return
+	}
+	m.workspaces.SetScrollViewport(m.wsBar.gesture.DragTo(action.Y))
 }
 
 // previewRegionKind is the hit region covering the preview box.
@@ -908,6 +961,13 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		// swallow the X's hover.
 		m.setPreviewCloseHover(action)
 		m.setHandleHover(action)
+		// Scrollbar emphasis, plus recovery from a release that was lost
+		// (outside the window, focus stolen): the drag machinery already ended
+		// the gesture on the first button-less motion, so drop our half too.
+		m.wsBar.hover = isWorkspacesScrollbarRegion(action.Region)
+		if m.wsBar.gesture.Active() && !m.workspacesMouse.IsDragging() {
+			m.wsBar.gesture.End()
+		}
 	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.
@@ -929,6 +989,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
+	}
+	if action.Type == mouse.ActionDrag && isWorkspacesScrollbarDragID(m.workspacesMouse.DragRegion()) {
+		m.dragWorkspacesScrollbar(action)
+		return nil
+	}
+	if action.Type == mouse.ActionDragEnd && isWorkspacesScrollbarDragID(action.DragStartID) {
+		m.wsBar.gesture.End()
+		return nil
 	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewDiffDividerKind {
 		view := m.previewDiffDragView()
@@ -1011,6 +1079,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	// sort header, chrome — reconciles the producer to the selection this same
 	// event moved rather than to the one it is leaving.
 	return tea.Batch(cmd, m.focusList())
+}
+
+// isWorkspacesScrollbarDragID reports that a drag started in one of the list
+// bar's regions, so its motion belongs to the gesture rather than to whatever
+// the pointer is over now.
+func isWorkspacesScrollbarDragID(id string) bool {
+	return id == string(workspacelist.RegionScrollbarThumb) ||
+		id == string(workspacelist.RegionScrollbarTrack)
 }
 
 // pressInSecondaryLeaf reports that a press landed inside a non-terminal leaf of
@@ -1104,7 +1180,11 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	}
 	if region, ok := action.Region.Data.(workspacelist.Region); ok {
 		switch region.Kind {
-		case workspacelist.RegionRow, workspacelist.RegionSort, workspacelist.RegionFilter:
+		case workspacelist.RegionRow, workspacelist.RegionSort, workspacelist.RegionFilter,
+			workspacelist.RegionScrollbarThumb, workspacelist.RegionScrollbarTrack:
+			// The bar's column sits over the sidebar background, so a notch
+			// there scrolls the list exactly as it did before the bar was
+			// clickable.
 			return m.workspaces.ScrollAtBoundary(action.Delta)
 		}
 	}
@@ -1262,6 +1342,15 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 
 	region, ok := action.Region.Data.(workspacelist.Region)
 	if !ok {
+		return nil
+	}
+	if workspacelist.IsScrollbarRegion(region.Kind) {
+		// A press on the thumb or track: grab or jump-to-spot, then drag.
+		// Handled before the click switch so a double-click on the bar cannot
+		// reach row activation.
+		if action.Type == mouse.ActionClick {
+			m.pressWorkspacesScrollbar(action)
+		}
 		return nil
 	}
 	var focus tea.Cmd

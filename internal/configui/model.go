@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -761,6 +762,21 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		if action.Region != nil {
 			m.hoverID = action.Region.ID
 		}
+		// A button-less motion means any scrollbar drag we still think is in
+		// flight lost its release; drop it rather than leave it armed.
+		m.dropThemeScrollbarGesture()
+	case mouse.ActionDrag:
+		if isThemeScrollbarDrag(m.mouse.DragRegion()) {
+			if picker := m.activePicker(); picker != nil {
+				m.dragThemeScrollbar(picker, action)
+			}
+		}
+	case mouse.ActionDragEnd:
+		if isThemeScrollbarDrag(action.DragStartID) {
+			if picker := m.activePicker(); picker != nil {
+				m.settleThemeScrollbar(picker)
+			}
+		}
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		if m.dropdownOpen() {
 			// A list longer than its window scrolls under the wheel exactly as
@@ -825,6 +841,13 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 			return m.runControl(index)
 		}
 		switch id := action.Region.ID; {
+		case id == ui.RegionScrollbarThumb || id == ui.RegionScrollbarTrack:
+			// Grab the thumb, or jump-to-spot on the track and keep dragging
+			// from there. The bar's rects are registered after the row rects
+			// precisely so this wins them.
+			if picker := m.activePicker(); picker != nil && action.Type == mouse.ActionClick {
+				m.pressThemeScrollbar(picker, action)
+			}
 		case id == regionThemeList:
 			// A click on the frame or the scrollbar is still a click on the
 			// list: put the keyboard there so Escape restores a preview.
@@ -856,7 +879,8 @@ func (m *Model) scrollThemeList(action mouse.MouseAction) {
 	if picker == nil || action.Region == nil {
 		return
 	}
-	if id := action.Region.ID; !strings.HasPrefix(id, regionThemeRow) && id != regionThemeList {
+	if id := action.Region.ID; !strings.HasPrefix(id, regionThemeRow) && id != regionThemeList &&
+		id != ui.RegionScrollbarThumb && id != ui.RegionScrollbarTrack {
 		return
 	}
 	if !picker.scrollWindow(action.Delta) {
@@ -898,7 +922,8 @@ func (m *Model) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if region == nil {
 		return false
 	}
-	if id := region.ID; strings.HasPrefix(id, regionThemeRow) || id == regionThemeList {
+	if id := region.ID; strings.HasPrefix(id, regionThemeRow) || id == regionThemeList ||
+		id == ui.RegionScrollbarThumb || id == ui.RegionScrollbarTrack {
 		picker := m.activePicker()
 		if picker == nil {
 			return false

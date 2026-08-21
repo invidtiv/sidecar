@@ -166,47 +166,51 @@ type previewOwnershipLease struct {
 }
 
 type Model struct {
-	collector           workspaceinventory.Collector
-	refreshCollector    workspaceinventory.Collector
-	projects            []Project
-	roots               []string
-	generation          int
-	requestID           uint64
-	loading             bool
-	tmuxErr             error
-	results             map[string]workspaceinventory.ProjectResult
-	projectErrors       map[string]error
-	stale               map[string]bool
-	completed           map[int]bool
-	pending             []Project
-	pendingInventory    []Project
-	phase               refreshPhase
-	identityProjects    map[int]Project
-	inventoryOrder      []Project
-	inventoryScheduled  map[string]bool
-	inventoryProjects   map[string]Project
-	inventoryResults    map[string]workspaceinventory.ProjectResult
-	statusInputs        map[string]workspaceinventory.ProjectResult
-	active              int
-	currentPanes        []workspaceinventory.Pane
-	shellClaims         workspaceinventory.ShellClaims
-	liveOnly            bool
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	traceWriter         io.Writer
-	cycleStart          time.Time
-	configured          int
-	firstResult         bool
-	maxActive           int
-	pollScheduled       bool
-	configuredPaths     []string
-	board               kanban.Component
-	cards               map[string]workspaceinventory.Workspace
-	agentCount          int
-	compactScroll       int
-	mouse               *mouse.Handler
-	workspaces          workspacelist.Model
-	workspacesMouse     *mouse.Handler
+	collector          workspaceinventory.Collector
+	refreshCollector   workspaceinventory.Collector
+	projects           []Project
+	roots              []string
+	generation         int
+	requestID          uint64
+	loading            bool
+	tmuxErr            error
+	results            map[string]workspaceinventory.ProjectResult
+	projectErrors      map[string]error
+	stale              map[string]bool
+	completed          map[int]bool
+	pending            []Project
+	pendingInventory   []Project
+	phase              refreshPhase
+	identityProjects   map[int]Project
+	inventoryOrder     []Project
+	inventoryScheduled map[string]bool
+	inventoryProjects  map[string]Project
+	inventoryResults   map[string]workspaceinventory.ProjectResult
+	statusInputs       map[string]workspaceinventory.ProjectResult
+	active             int
+	currentPanes       []workspaceinventory.Pane
+	shellClaims        workspaceinventory.ShellClaims
+	liveOnly           bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	traceWriter        io.Writer
+	cycleStart         time.Time
+	configured         int
+	firstResult        bool
+	maxActive          int
+	pollScheduled      bool
+	configuredPaths    []string
+	board              kanban.Component
+	cards              map[string]workspaceinventory.Workspace
+	agentCount         int
+	compactScroll      int
+	mouse              *mouse.Handler
+	workspaces         workspacelist.Model
+	workspacesMouse    *mouse.Handler
+	// wsBar is the Sessions list's interactive scrollbar: the bar's last
+	// render snapshot, where its track sits on screen, whether the pointer
+	// hovers it, and any drag gesture in flight.
+	wsBar               workspaceScrollbarState
 	sidebarWidth        int
 	sidebarVisible      bool
 	catalog             map[string]workspaceinventory.Workspace
