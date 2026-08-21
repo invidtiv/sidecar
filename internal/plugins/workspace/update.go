@@ -12,6 +12,7 @@ import (
 	app "github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/migration"
@@ -155,6 +156,15 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.pollAllShellStatusesNow(),
 			}
 			return p, tea.Batch(focusCmds...)
+		}
+
+	case gitinit.ReadyMsg:
+		if msg.Root == "" {
+			return p, nil
+		}
+		if !p.refreshing {
+			p.refreshing = true
+			cmds = append(cmds, p.refreshWorktrees())
 		}
 
 	case RefreshMsg:

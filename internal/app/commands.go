@@ -208,8 +208,13 @@ type OpenPrefilledShellMsg struct {
 // offers a way out of that state — a plugin sends this rather than importing
 // the Configuration surface — and it is also how a launch command's startup
 // destination is honored. Escape returns to whatever sent it.
+//
+// AddProject opens the Add Project child of Projects after the page is shown,
+// which is the first-run path when Sidecar launches in a non-Git directory
+// with no configured projects.
 type OpenConfigurationMsg struct {
-	Page configui.PageID
+	Page       configui.PageID
+	AddProject bool
 }
 
 // OpenNotesPreferencesMsg asks the host to open the one existing Notes

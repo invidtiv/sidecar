@@ -3,6 +3,7 @@ package configui
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 )
@@ -206,11 +208,12 @@ func TestLocationCompletionRules(t *testing.T) {
 	}
 
 	m.OpenAddProject()
+	_ = m.TakePending()
 	m.View(160, 45)
 	if m.editingID() != regionFormLocation {
 		t.Fatalf("the deep link focused %q, want Location", m.editingID())
 	}
-	if len(m.addProject.completions) != 0 || len(m.pending) != 0 {
+	if len(m.addProject.completions) != 0 {
 		t.Fatal("an empty Location asked for a directory listing")
 	}
 
@@ -567,5 +570,79 @@ func TestProjectFormPickerOpensOnTheInheritedThemeWithNoRecordedChoice(t *testin
 	}
 	if got := picker.selected().ThemeKey; got != styles.FreshInstallTheme {
 		t.Errorf("picker opened on %q, want the inherited fresh-install theme %q", got, styles.FreshInstallTheme)
+	}
+}
+
+func TestAddProjectExplainsGitAndOffersInitThisDirectory(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	m, _ := configFixture(t, cfg)
+	m.SetHostState(HostState{Config: loadSaved(t), ProjectDir: dir})
+
+	m.OpenAddProject()
+	probeCmd := m.TakePending()
+	if probeCmd == nil {
+		t.Fatal("OpenAddProject queued no cwd git probe")
+	}
+	probe, ok := unwrapConfigMsg(probeCmd()).(cwdGitMsg)
+	if !ok {
+		t.Fatal("OpenAddProject did not probe whether cwd is a git repo")
+	}
+	if follow := m.Handle(probe); follow != nil {
+		t.Fatalf("probe returned a follow-up command: %T", follow)
+	}
+
+	view := ansi.Strip(m.View(160, 45))
+	for _, want := range []string{"Git repositories", "Location", "Initialize this directory"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("Add Project missing %q:\n%s", want, view)
+		}
+	}
+	regionFor(t, m, regionFormInitRepo)
+
+	cmd := m.initCwdRepo()
+	if cmd == nil {
+		t.Fatal("Initialize this directory produced no command")
+	}
+	msg, ok := cmd().(repoInitMsg)
+	if !ok {
+		t.Fatalf("init produced %T", msg)
+	}
+	follow := m.Handle(msg)
+	if follow == nil {
+		t.Fatal("successful init did not announce ReadyMsg")
+	}
+	if ready, ok := follow().(gitinit.ReadyMsg); !ok || ready.Root == "" {
+		t.Fatal("init did not broadcast a repository-ready message")
+	}
+	if m.addProject == nil || !m.addProject.cwdIsRepo {
+		t.Fatal("form did not record that cwd is now a repository")
+	}
+
+	head := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	head.Dir = dir
+	out, err := head.Output()
+	if err != nil {
+		t.Fatalf("symbolic-ref: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "main" {
+		t.Fatalf("HEAD = %q, want main", got)
+	}
+}
+
+func unwrapConfigMsg(msg tea.Msg) tea.Msg {
+	switch typed := msg.(type) {
+	case tea.BatchMsg:
+		for _, sub := range typed {
+			if sub == nil {
+				continue
+			}
+			if inner := unwrapConfigMsg(sub()); inner != nil {
+				return inner
+			}
+		}
+		return nil
+	default:
+		return msg
 	}
 }

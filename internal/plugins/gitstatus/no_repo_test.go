@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
 
@@ -217,6 +218,117 @@ func TestDiagnosticsReportDegradedGitData(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing diagnostics: %#v", want)
+	}
+}
+
+func TestInitRepo_CreatesMainBranch(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: tmp, Epoch: 1}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	msg := p.initRepo()()
+	done, ok := msg.(RepoInitDoneMsg)
+	if !ok {
+		t.Fatalf("initRepo produced %T, want RepoInitDoneMsg", msg)
+	}
+	if done.Err != nil {
+		t.Fatalf("initRepo error = %v", done.Err)
+	}
+	if done.Root == "" {
+		t.Fatal("initRepo returned empty root")
+	}
+
+	cmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	cmd.Dir = tmp
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("symbolic-ref: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "main" {
+		t.Fatalf("HEAD = %q, want main", got)
+	}
+}
+
+func TestNoRepoView_RegistersPaddedInitButton(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: tmp}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	view := p.View(80, 24)
+	if !strings.Contains(view, "Initialize Git Repository") {
+		t.Fatalf("no-repo view missing init button:\n%s", view)
+	}
+	if !strings.Contains(view, "worktrees") {
+		t.Fatalf("no-repo view missing git explanation:\n%s", view)
+	}
+
+	var found bool
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionInitRepo {
+			found = true
+			if region.Rect.W < 8 || region.Rect.H != 1 {
+				t.Fatalf("init button hit region too small: %+v", region.Rect)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Initialize Git Repository has no hit region")
+	}
+}
+
+func TestNoRepoMouse_InitClickStartsInit(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: tmp}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	p.View(80, 24)
+
+	var target mouse.Region
+	var found bool
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionInitRepo {
+			target = region
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no init button hit region")
+	}
+
+	updatedPlugin, cmd := p.Update(tea.MouseClickMsg{
+		X: target.Rect.X, Y: target.Rect.Y, Button: tea.MouseLeft,
+	})
+	updated, ok := updatedPlugin.(*Plugin)
+	if !ok {
+		t.Fatalf("updated plugin type = %T", updatedPlugin)
+	}
+	if !updated.repoInitInProgress {
+		t.Fatal("click did not start init")
+	}
+	if cmd == nil {
+		t.Fatal("click produced no init command")
+	}
+}
+
+func TestUpdateNoRepo_EnterStartsInit(t *testing.T) {
+	tmp := t.TempDir()
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: tmp}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+
+	updatedPlugin, cmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	updated, ok := updatedPlugin.(*Plugin)
+	if !ok {
+		t.Fatalf("updated plugin type = %T, want *Plugin", updatedPlugin)
+	}
+	if !updated.repoInitInProgress || cmd == nil {
+		t.Fatal("enter did not start init")
 	}
 }
 

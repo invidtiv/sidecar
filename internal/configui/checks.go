@@ -164,6 +164,7 @@ func (m *Model) activateRepair(repair configchecks.RepairID) tea.Cmd {
 		// The deep link lands on the work itself: Projects' Add Project route,
 		// with Location focused, rather than on the page that hosts it.
 		m.OpenAddProject()
+		return m.drain(nil)
 	}
 	return nil
 }

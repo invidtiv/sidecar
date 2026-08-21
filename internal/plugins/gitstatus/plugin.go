@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/notify"
@@ -398,7 +399,7 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case tea.MouseMsg:
 		if p.inNoRepoMode() {
-			return p, nil
+			return p.handleNoRepoMouse(msg)
 		}
 		// Handle mouse events based on view mode
 		switch p.viewMode {
@@ -987,11 +988,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			}
 		}
 		p.activateRepo(msg.Root)
+		ready := func() tea.Msg { return gitinit.ReadyMsg{Root: msg.Root} }
 		if msg.Err != nil {
 			return p, tea.Batch(
 				p.refresh(),
 				p.startWatcher(),
 				p.loadRecentCommits(),
+				ready,
 				func() tea.Msg {
 					return app.ToastMsg{
 						Message:  "Repository initialized; failed to update .gitignore",
@@ -1005,8 +1008,9 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			p.refresh(),
 			p.startWatcher(),
 			p.loadRecentCommits(),
+			ready,
 			func() tea.Msg {
-				return app.ToastMsg{Message: "Initialized git repository", Duration: 2 * time.Second}
+				return app.ToastMsg{Message: "Initialized git repository on main", Duration: 2 * time.Second}
 			},
 		)
 
@@ -1122,7 +1126,7 @@ func (p *Plugin) SetFocused(f bool) { p.focused = f }
 func (p *Plugin) Commands() []plugin.Command {
 	commands := []plugin.Command{
 		// git-no-repo context
-		{ID: "init-repo", Name: "Init", Description: "Initialize a git repository", Category: plugin.CategoryGit, Context: "git-no-repo", Priority: 1},
+		{ID: "init-repo", Name: "Init", Description: "Initialize a git repository on main", Category: plugin.CategoryGit, Context: "git-no-repo", Priority: 1},
 		{ID: "refresh", Name: "Retry", Description: "Re-check for a git repository", Category: plugin.CategoryActions, Context: "git-no-repo", Priority: 2},
 		// git-status context (files)
 		{ID: "stage-file", Name: "Stage", Description: "Stage selected file for commit", Category: plugin.CategoryGit, Context: "git-status", Priority: 1},

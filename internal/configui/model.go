@@ -485,6 +485,12 @@ func (m *Model) drain(cmd tea.Cmd) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
+// TakePending returns commands queued outside a key handler — a directory
+// listing, a git probe — so the host can run them after a programmatic open.
+func (m *Model) TakePending() tea.Cmd {
+	return m.drain(nil)
+}
+
 func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
 

@@ -2,11 +2,13 @@ package configui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/pathcomplete"
 	"github.com/marcus/sidecar/internal/theme"
 )
@@ -31,6 +33,7 @@ const (
 	regionFormOpenIn      = "config-form-open-in"
 	regionFormSave        = "config-form-save"
 	regionFormCancel      = "config-form-cancel"
+	regionFormInitRepo    = "config-form-init-repo"
 	regionFormCompletion  = "config-form-completion-"
 	inlinePickerRows      = 6
 	completionCandidates  = 6
@@ -67,6 +70,12 @@ type projectForm struct {
 	completion    int
 
 	message string
+
+	// cwdGit tracks whether the host's working directory is already a repo,
+	// filled by a command so the form never probes git while rendering.
+	cwdProbed      bool
+	cwdIsRepo      bool
+	initInProgress bool
 }
 
 // isProjectFormRoute reports that the visible route is the project form, which
@@ -127,6 +136,143 @@ func (m *Model) startProjectForm(project *config.ProjectConfig) {
 		}
 	}
 	m.addProject = form
+	if project == nil {
+		m.queueCwdGitProbe()
+	}
+}
+
+// PrefillAddProjectFromDir puts the current working directory in Location
+// (and Name, if empty) so a first-run user can add this folder without
+// hunting for it. Completions stay user-initiated: a prefilled path still
+// asks for candidates.
+// AddProjectLocation is the Location field on the open Add/Edit Project form.
+func (m *Model) AddProjectLocation() string {
+	if m.addProject == nil {
+		return ""
+	}
+	return m.addProject.location.Value()
+}
+
+func (m *Model) PrefillAddProjectFromDir(dir string) {
+	form := m.addProject
+	if form == nil || strings.TrimSpace(dir) == "" {
+		return
+	}
+	form.location.SetValue(dir)
+	if strings.TrimSpace(form.name.Value()) == "" {
+		form.name.SetValue(filepath.Base(dir))
+	}
+	if m.editingID() == regionFormLocation {
+		m.requestCompletions()
+	}
+}
+
+type cwdGitMsg struct {
+	Dir    string
+	IsRepo bool
+}
+
+func (cwdGitMsg) configMsg() {}
+
+type repoInitMsg struct {
+	Root string
+	Err  error
+}
+
+func (repoInitMsg) configMsg() {}
+
+func (m *Model) queueCwdGitProbe() {
+	dir := m.host.ProjectDir
+	if strings.TrimSpace(dir) == "" {
+		return
+	}
+	m.pending = append(m.pending, func() tea.Msg {
+		return cwdGitMsg{Dir: dir, IsRepo: gitinit.IsRepository(dir)}
+	})
+}
+
+func (m *Model) applyCwdGit(msg cwdGitMsg) tea.Cmd {
+	form := m.addProject
+	if form == nil || form.edit {
+		return nil
+	}
+	if msg.Dir != m.host.ProjectDir {
+		return nil
+	}
+	form.cwdProbed = true
+	form.cwdIsRepo = msg.IsRepo
+	return nil
+}
+
+func (m *Model) buildInitThisDirectory(b *paneBuilder, form *projectForm) {
+	if form.edit || !form.cwdProbed || form.cwdIsRepo {
+		return
+	}
+	if form.initInProgress {
+		b.text(IndentedRaw(mutedStyle().Render("Initializing git repository…")))
+		b.blank()
+		return
+	}
+	b.buttons(buttonSpec{
+		id:    regionFormInitRepo,
+		key:   "",
+		label: "Initialize this directory",
+		run: func(m *Model) tea.Cmd {
+			return m.initCwdRepo()
+		},
+	})
+	b.blank()
+}
+
+func (m *Model) initCwdRepo() tea.Cmd {
+	form := m.addProject
+	if form == nil || form.initInProgress {
+		return nil
+	}
+	dir := m.host.ProjectDir
+	if strings.TrimSpace(dir) == "" {
+		form.message = "No working directory to initialize"
+		return nil
+	}
+	form.initInProgress = true
+	form.message = ""
+	return func() tea.Msg {
+		root, err := gitinit.Init(dir)
+		return repoInitMsg{Root: root, Err: err}
+	}
+}
+
+func (m *Model) applyRepoInit(msg repoInitMsg) tea.Cmd {
+	form := m.addProject
+	if form == nil {
+		if msg.Root != "" {
+			return func() tea.Msg { return gitinit.ReadyMsg{Root: msg.Root} }
+		}
+		return nil
+	}
+	form.initInProgress = false
+	if msg.Root == "" {
+		if msg.Err != nil {
+			form.message = msg.Err.Error()
+		} else {
+			form.message = "Failed to initialize repository"
+		}
+		return nil
+	}
+	form.cwdIsRepo = true
+	form.cwdProbed = true
+	if strings.TrimSpace(form.location.Value()) == "" || form.location.Value() == m.host.ProjectDir {
+		form.location.SetValue(msg.Root)
+	}
+	if strings.TrimSpace(form.name.Value()) == "" {
+		form.name.SetValue(filepath.Base(msg.Root))
+	}
+	if msg.Err != nil {
+		form.message = "Repository initialized on main; failed to update .gitignore"
+	} else {
+		form.message = ""
+	}
+	return func() tea.Msg { return gitinit.ReadyMsg{Root: msg.Root} }
 }
 
 // closeProjectForm abandons the draft, putting back the theme the user was
@@ -155,6 +301,11 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 
 	b.text(PaneTitle("Project details"))
 	b.blank()
+	if !form.edit {
+		b.lead("Sidecar uses Git repositories for worktrees, status, and diffs.")
+		b.lead("Add an existing repo by Location, or initialize this directory and save it as a project.")
+		b.blank()
+	}
 
 	// Name.
 	b.row(regionFormName, "", func(m *Model) tea.Cmd {
@@ -183,6 +334,7 @@ func (m *Model) buildProjectForm(b *paneBuilder) {
 	})
 	m.buildCompletions(b, form)
 	b.blank()
+	m.buildInitThisDirectory(b, form)
 
 	// Theme: a selector that expands the shared picker inline beneath itself.
 	b.row(regionFormTheme, "", func(m *Model) tea.Cmd {

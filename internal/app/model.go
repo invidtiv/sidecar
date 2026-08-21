@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livewatch"
@@ -361,6 +362,11 @@ type Model struct {
 	// surface rather than replacing it: escape still returns to the app the
 	// user would have had.
 	startupConfigPage configui.PageID
+	// firstRunProbePending is set when launch has no configured projects and
+	// no startup destination. A tea.Cmd answers whether cwd is a Git repo;
+	// until it does, the content area shows a guided loading state instead of
+	// an empty td-monitor.
+	firstRunProbePending bool
 	// lastNotifiedTheme is the last styles palette delivered to plugins. Theme
 	// notifications compare against it so search typing and other Configuration
 	// input do not rebuild plugin styles when the resolved colors did not change.
@@ -530,6 +536,9 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 			opt(&m)
 		}
 	}
+	if m.cfg != nil && len(m.cfg.Projects.List) == 0 && m.startupConfigPage == "" {
+		m.firstRunProbePending = true
+	}
 	return m
 }
 
@@ -624,6 +633,11 @@ func (m Model) Init() tea.Cmd {
 	if m.startupConfigPage != "" {
 		page := m.startupConfigPage
 		cmds = append(cmds, func() tea.Msg { return OpenConfigurationMsg{Page: page} })
+	} else if m.firstRunProbePending {
+		workDir := m.ui.WorkDir
+		cmds = append(cmds, func() tea.Msg {
+			return firstRunProbeMsg{NeedsSetup: !gitinit.IsRepository(workDir)}
+		})
 	}
 
 	return tea.Batch(cmds...)
