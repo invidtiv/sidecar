@@ -18,6 +18,10 @@ auto-tiling" scope row is reversed — auto-placement *is* the primary interface
 with the mitigating difference that placement happens only at creation/close time
 (one resize per event), never as continuous reshuffling.
 
+**Client plan:** [agent-shell-create-cli.md](agent-shell-create-cli.md) gives agents a
+`sidecar shell create --split …` path; its split mode is gated on this plan's Phase A
+Terminal leaf and reuses the same placement vocabulary.
+
 ## Settled decisions
 
 These came out of design review (mockups: `~/code/tui/mockups/sidecar-splits.tui.yaml`).
