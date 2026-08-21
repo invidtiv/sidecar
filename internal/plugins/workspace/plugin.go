@@ -385,6 +385,9 @@ type Plugin struct {
 	// shellLeafName is the name the create modal gave the shell leaf, shown in
 	// its header chip.
 	shellLeafName string
+	// pendingTermPanelSeed is a --run/--type to send after the split tmux
+	// session exists. The create ack does not wait for that session.
+	pendingTermPanelSeed *termPanelSeed
 	// shellLeafSurface is the workspace the open split terminal belongs to. A
 	// split is a peer in one workspace, not a plugin-wide preference, so the
 	// selection landing anywhere else releases it — see

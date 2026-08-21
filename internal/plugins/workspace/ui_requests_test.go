@@ -1,14 +1,17 @@
 package workspace
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -136,6 +139,305 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 			assertInteractiveTerminalGeometry(t, p, grown)
 			assertDeferredGeometryAssertion(t, p, closeCmd, grown)
 		})
+	}
+}
+
+func TestUIRequests_CreateShellSplitPlacement(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		placement string
+		want      SplitAxis
+	}{
+		{name: "auto", placement: "auto", want: SplitCols},
+		{name: "right", placement: "right", want: SplitCols},
+		{name: "below", placement: "below", want: SplitRows},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+			stubTd(t)
+			p := docPaneTestPlugin(t, t.TempDir(), true)
+			p.sidebarVisible = false
+			p.View(p.width, p.height)
+
+			focus := true
+			payload, err := json.Marshal(uirequest.CreatePayload{
+				Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := uirequest.Request{
+				ID: "req-split-" + tc.name, Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+				Origin:  uirequest.Origin{TmuxSession: "test-shell"},
+				Options: uirequest.Options{Split: tc.placement},
+				Payload: payload,
+			}
+			if cmd := p.handleUIRequest(req); cmd == nil {
+				t.Fatal("expected createTerminalSplit cmd")
+			}
+			leaf := p.shellLeaf()
+			if leaf == nil {
+				t.Fatalf("no shell leaf after a %s create", tc.placement)
+			}
+			split := FindPane(p.paneRoot, p.shellSplitID())
+			if split == nil || split.Split == nil || split.Split.Axis != tc.want {
+				t.Fatalf("axis = %+v, want %v", split, tc.want)
+			}
+			if got := p.shellLeafTitle(); got != "dev server" {
+				t.Fatalf("leaf title = %q", got)
+			}
+			acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+			if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+				t.Fatalf("acks = %+v err=%v", acks, err)
+			}
+			if acks[0].Surface != "shell:"+p.termPanelSession {
+				t.Fatalf("surface = %q session = %q", acks[0].Surface, p.termPanelSession)
+			}
+		})
+	}
+}
+
+func TestUIRequests_CreateShellSplitSeedsReusedSession(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	stubTd(t)
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	p.sidebarVisible = false
+	p.View(p.width, p.height)
+
+	if p.createTerminalSplit("dev server", "right") == nil {
+		t.Fatal("first split did not open")
+	}
+	if p.shellLeaf() == nil || p.termPanelSession == "" || p.termPanelOutput == nil {
+		t.Fatal("first split did not claim a session")
+	}
+	p.rememberShellSplit()
+	p.termPanelVisible = false
+	p.termPanelFocused = false
+	p.shellLeafSurface = ""
+	p.syncShellLeaf()
+	if p.shellLeaf() != nil {
+		t.Fatal("hide left a shell leaf")
+	}
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus, Run: "echo HELLO_FROM_SPLIT",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-reuse-seed", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "test-shell"},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("reused split returned no cmd")
+	}
+	if p.shellLeaf() == nil {
+		t.Fatal("reused split did not restore the leaf")
+	}
+	if p.pendingTermPanelSeed != nil {
+		t.Fatal("reuse left --run queued instead of applying it")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+}
+
+func TestUIRequests_CreateShellSplitCapDeclines(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	p := shellLeafTestPlugin(t, SplitCols)
+	before := clonePaneTree(p.paneRoot)
+	beforeLeaf := p.shellLeaf()
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "second", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-cap", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "test-shell"},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("cap should not return a create cmd")
+	}
+	if leaf := p.shellLeaf(); leaf != beforeLeaf {
+		t.Fatalf("tree changed: %+v", leaf)
+	}
+	if !reflect.DeepEqual(p.paneRoot, before) {
+		t.Fatal("pane tree changed on cap refusal")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusDeclined {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+	if acks[0].Reason != shellCapMessage {
+		t.Fatalf("reason = %q", acks[0].Reason)
+	}
+}
+
+func TestUIRequests_CreateShellSplitFlagOffDeclines(t *testing.T) {
+	stubTd(t)
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	p.View(p.width, p.height)
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-flag", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "test-shell"},
+		Options: uirequest.Options{Split: "auto"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("flag off should not split")
+	}
+	if p.shellLeaf() != nil {
+		t.Fatal("flag off opened a shell leaf")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusDeclined {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+	if !strings.Contains(acks[0].Reason, features.WorkspaceTerminalPanel.Name) {
+		t.Fatalf("reason = %q, want the flag name", acks[0].Reason)
+	}
+}
+
+func TestUIRequests_CreateShellSplitForeignOriginIgnored(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	stubTd(t)
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	p.View(p.width, p.height)
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-foreign", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "other-session"},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("foreign origin should be ignored")
+	}
+	if p.shellLeaf() != nil {
+		t.Fatal("foreign origin opened a shell leaf")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(acks) != 0 {
+		t.Fatalf("expected no ack, got %+v", acks)
+	}
+}
+
+func TestUIRequests_CreateShellSelectsAndAcks(t *testing.T) {
+	p := &Plugin{
+		shells: []*ShellSession{{Name: "Shell 1", TmuxName: "sidecar-sh-sidecar-1"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, Session: "sidecar-sh-sidecar-2", DisplayName: "dev server", Focus: &focus,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-shell", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: "/tmp/proj"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatalf("expected no sync cmd on a bare plugin, got %T", cmd)
+	}
+	if len(p.shells) != 2 || p.shells[1].TmuxName != "sidecar-sh-sidecar-2" || p.shells[1].Name != "dev server" {
+		t.Fatalf("shells = %+v", p.shells)
+	}
+	selected := p.getSelectedShell()
+	if selected == nil || selected.TmuxName != "sidecar-sh-sidecar-2" {
+		t.Fatalf("selected = %#v", selected)
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened || acks[0].Surface != "shell:sidecar-sh-sidecar-2" {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+}
+
+func TestUIRequests_CreateWorktreeDoesNotDuplicateInventoriedRow(t *testing.T) {
+	path := t.TempDir()
+	p := &Plugin{
+		worktrees: []*Worktree{{Name: "cli-wt", Path: path, Key: "hash-key", Branch: "old"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindWorktree, Session: "sidecar-ws-cli-wt", DisplayName: "renamed",
+		Focus: &focus, Path: path, Branch: "cli-wt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-wt-dup", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: path},
+		Payload: payload,
+	}
+	_ = p.handleUIRequest(req)
+	if len(p.worktrees) != 1 {
+		t.Fatalf("worktrees grew to %d: %+v", len(p.worktrees), p.worktrees)
+	}
+	if p.worktrees[0].Key != "hash-key" {
+		t.Fatalf("replaced inventoried key: %+v", p.worktrees[0])
+	}
+	if p.worktrees[0].Name != "renamed" || p.worktrees[0].Branch != "cli-wt" {
+		t.Fatalf("did not update row: %+v", p.worktrees[0])
+	}
+	if p.selectedWorktree() == nil || p.selectedWorktree().Key != "hash-key" {
+		t.Fatalf("selected = %#v", p.selectedWorktree())
+	}
+}
+
+func TestUIRequests_CreateWorktreeSelectsAndAcks(t *testing.T) {
+	p := &Plugin{
+		worktrees: []*Worktree{{Name: "main", Path: "/tmp/main", Key: "main"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindWorktree, Session: "sidecar-ws-cli-wt", DisplayName: "cli-wt",
+		Focus: &focus, Path: "/tmp/cli-wt", Branch: "cli-wt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-wt", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: "/tmp/main"},
+		Payload: payload,
+	}
+	_ = p.handleUIRequest(req)
+	if p.selectedWorktree() == nil || p.selectedWorktree().Name != "cli-wt" {
+		t.Fatalf("selected worktree = %#v", p.selectedWorktree())
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
 	}
 }
 

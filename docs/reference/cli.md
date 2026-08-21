@@ -23,6 +23,102 @@ Usage: sidecar --agents
 sidecar --agents
 ```
 
+## `sidecar create`
+
+Create a Sidecar-managed shell or worktree
+
+Create Sidecar-owned shells and worktrees so they appear in the workspace.
+
+```
+Usage: sidecar create <command>
+```
+
+### `sidecar create shell`
+
+Create a Sidecar-managed workspace shell
+
+Create a new Sidecar-managed shell in the resolved project's workspace.
+The shell is recorded in shells.json so it appears in Sidecar whether or not
+an instance is running. --run executes a command in the new shell; --type types
+it without pressing Enter so the user can review it.
+
+--split auto|right|below places a live terminal beside the current shell (the
+workspace_terminal_panel feature must be on). Split mode needs a running instance
+and a current shell (SIDECAR_SHELL / --shell). It does not add a workspace row.
+
+```
+Usage: sidecar create shell [options]
+```
+
+**Options:**
+
+- `--name NAME`: Display name (default: the next Shell N)
+- `--run COMMAND`: Execute COMMAND in the new shell
+- `--type COMMAND`: Type COMMAND without pressing Enter
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--split auto|right|below`: Place a live terminal beside the current shell
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: created (missing ack is non-fatal in workspace-shell mode)
+- `1`: state or tmux failure
+- `2`: usage or validation error
+- `3`: no running instance (split mode)
+- `4`: instance declined (cap, too small, or feature off)
+
+**Examples:**
+
+```bash
+sidecar create shell --name "dev server" --run "python3 -m http.server"
+sidecar create shell --split right --run "python3 -m http.server 8765"
+sidecar create shell --json --wait 0
+# type a command for the user to review
+sidecar create shell --type "go test ./..."
+```
+
+### `sidecar create worktree`
+
+Create a Sidecar-managed git worktree
+
+Create a git worktree with the same setup pipeline as the TUI create modal:
+plan, add, pending-creation journal, identity, and configured hook/env-file rules.
+--agent launches the worktree session (sidecar-ws-…). --no-launch skips that
+launch after the worktree and setup still complete.
+
+```
+Usage: sidecar create worktree [options] <name>
+```
+
+**Options:**
+
+- `--base REF`: Base ref (default HEAD)
+- `--agent TYPE`: Launch this agent in the new worktree session
+- `--skip-permissions`: Pass the agent's auto-approve flag
+- `--run COMMAND`: Execute COMMAND in the new worktree session
+- `--no-launch`: Create the worktree without launching a session
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: created (missing ack is non-fatal)
+- `1`: git, setup, or tmux failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar create worktree fix-auth --base main --agent claude
+sidecar create worktree scratch --no-launch --json
+```
+
 ## `sidecar help`
 
 Show help for commands or emit JSON command metadata

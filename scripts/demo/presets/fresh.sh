@@ -9,6 +9,7 @@ setup_preset_fresh() {
     local enable_tasks="${4:-1}"
     local enable_notes="${5:-1}"
     local blank="${6:-0}"
+    local enable_git="${7:-1}"
 
     log_info "Setting up preset: 'fresh' (clean onboarding slate)..."
 
@@ -18,6 +19,20 @@ setup_preset_fresh() {
     generate_demo_config "$config_file" "$projects_json" "sidecar-modern" \
         "$enable_notes" "$enable_tasks" "1"
 
-    # Target directory to launch Sidecar in (empty demo root)
-    LAUNCH_PROJECT_DIR="$demo_root"
+    if [ "$enable_git" -eq 1 ]; then
+        local repo_dir="$demo_root/repo"
+        init_git_repo "$repo_dir" "fresh-repo"
+        if [ "$blank" -eq 0 ]; then
+            cat > "$repo_dir/README.md" <<'EOF'
+# Sample Project
+
+A newly initialized Git repository without Sidecar configuration.
+EOF
+            git_commit_all "$repo_dir" "Initial commit"
+        fi
+        LAUNCH_PROJECT_DIR="$repo_dir"
+    else
+        # Plain non-git directory (for testing non-git onboarding)
+        LAUNCH_PROJECT_DIR="$demo_root"
+    fi
 }

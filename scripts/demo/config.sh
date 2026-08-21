@@ -30,11 +30,11 @@ generate_demo_config() {
   "plugins": {
     "git-status": {
       "enabled": true,
-      "refreshInterval": 1000000000
+      "refreshInterval": "1s"
     },
     "td-monitor": {
       "enabled": true,
-      "refreshInterval": 5000000000,
+      "refreshInterval": "5s",
       "dbPath": ".todos/issues.db"
     },
     "file-browser": {

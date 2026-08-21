@@ -1,10 +1,27 @@
 package uirequest
 
 import (
+	"encoding/json"
 	"os"
 	"testing"
 	"time"
 )
+
+func TestDecodeCreatePayloadRunAndType(t *testing.T) {
+	raw, err := json.Marshal(CreatePayload{
+		Kind: CreateKindShell, DisplayName: "dev server", Run: "echo hi", Type: "",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeCreatePayload(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Kind != CreateKindShell || got.DisplayName != "dev server" || got.Run != "echo hi" || got.Type != "" {
+		t.Fatalf("payload = %+v", got)
+	}
+}
 
 func TestWriteAndReadRequest(t *testing.T) {
 	stateDir := t.TempDir()

@@ -49,22 +49,3 @@ setup_td_for_project() {
         )
     fi
 }
-
-# configure_td_path ENABLE_TD DEMO_BIN_DIR
-configure_td_path() {
-    local enable_td="$1"
-    local bin_dir="$2"
-
-    if [ "$enable_td" -eq 0 ]; then
-        # When TD is deliberately disabled, mask any host `td` binary so Sidecar
-        # genuinely observes TD as uninstalled on the system (for onboarding tests).
-        log_info "TD disabled: masking td binary from PATH for onboarding simulation"
-        mkdir -p "$bin_dir"
-        cat > "$bin_dir/td" <<'EOF'
-#!/bin/sh
-echo "td: command not found (demo onboarding mode)" >&2
-exit 127
-EOF
-        chmod +x "$bin_dir/td" # Executable shim that fails
-    fi
-}

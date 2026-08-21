@@ -266,6 +266,23 @@ func StablePathKey(path string) string {
 	sum := sha256.Sum256([]byte(filepath.Clean(path)))
 	return fmt.Sprintf("%x", sum[:])
 }
+
+// RepoKeyForPath is the workspace plugin's repoSnapshot.Key: StablePathKey of
+// the resolved git common-dir. Pending-creation resume looks up this identity.
+func RepoKeyForPath(ctx context.Context, path string) (string, error) {
+	common, err := gitOutput(ctx, path, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(path, common)
+	}
+	common = filepath.Clean(common)
+	if resolved, err := filepath.EvalSymlinks(common); err == nil {
+		common = filepath.Clean(resolved)
+	}
+	return StablePathKey(common), nil
+}
 func shortOID(oid string) string {
 	if len(oid) > 8 {
 		return oid[:8]

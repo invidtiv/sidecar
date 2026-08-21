@@ -206,15 +206,37 @@ func StartAgentInShell(ctx context.Context, sessionName, command string) error {
 }
 
 func StartAgentInShellWithRunner(ctx context.Context, sessionName, command string, runner TmuxRunner) error {
+	return sendKeysToShell(ctx, sessionName, command, true, runner)
+}
+
+// TypeInShell types command into the session without pressing Enter, so the
+// user can review it. This is the send-keys core behind resume injection.
+func TypeInShell(ctx context.Context, sessionName, command string) error {
+	return TypeInShellWithRunner(ctx, sessionName, command, ExecTmuxRunner{})
+}
+
+func TypeInShellWithRunner(ctx context.Context, sessionName, command string, runner TmuxRunner) error {
+	return sendKeysToShell(ctx, sessionName, command, false, runner)
+}
+
+func sendKeysToShell(ctx context.Context, sessionName, command string, execute bool, runner TmuxRunner) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("agent command is empty")
 	}
-	output, err := runner.Run(ctx, "send-keys", "-t", sessionName, command, "Enter")
+	args := []string{"send-keys", "-t", sessionName, command}
+	if execute {
+		args = append(args, "Enter")
+	}
+	output, err := runner.Run(ctx, args...)
 	if err != nil {
-		return fmt.Errorf("start agent: %s: %w", strings.TrimSpace(string(output)), err)
+		verb := "type command"
+		if execute {
+			verb = "start agent"
+		}
+		return fmt.Errorf("%s: %s: %w", verb, strings.TrimSpace(string(output)), err)
 	}
 	return nil
 }

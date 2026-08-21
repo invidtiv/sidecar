@@ -35,6 +35,128 @@ type registeredProject struct {
 	Worktrees []string
 }
 
+const unregisteredCreateProject = "no Sidecar project is registered for this directory; pass --project or run from a registered project"
+
+// resolveCreateDestination is open's ladder plus cwd's already-registered
+// project, including sibling worktrees. A Sidecar-owned session whose
+// LookupOrigin misses (sidecar-ws-* is not in shells.json) continues to unique
+// instance then cwd rather than failing. KindState read errors stay exit 1.
+// Missing or ambiguous running instances are not fatal: a registered project
+// is enough. Unknown projects stay a usage error and never initialize state.
+func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
+	if shellFlag != "" || projectFlag != "" {
+		return resolveExplicitDestination(stateDir, shellFlag, projectFlag)
+	}
+
+	if identity, err := currentShellIdentity(ctx); err == nil {
+		origin, err := shellstate.LookupOrigin(stateDir, shellstate.Identity{
+			TmuxName:  identity.session,
+			Namespace: identity.socket,
+		})
+		if err == nil {
+			return destFromOrigin(origin, uirequest.ResolvedCurrentShell, origin.WorkDir), nil
+		}
+		if isShellStateError(err) {
+			return openDestination{}, &destError{code: 1, msg: err.Error()}
+		}
+		// LookupOrigin miss for a sidecar-sh-/sidecar-ws- session: continue.
+	}
+
+	instances, err := uirequest.ListInstances(stateDir)
+	if err != nil {
+		return openDestination{}, &destError{code: 1, msg: err.Error()}
+	}
+	if len(instances) == 1 {
+		return destFromUniqueInstance(stateDir, instances[0])
+	}
+
+	if cwdDest, cwdErr := resolveRegisteredCwdProject(stateDir); cwdErr == nil {
+		return cwdDest, nil
+	}
+	return openDestination{}, &destError{code: 2, msg: unregisteredCreateProject}
+}
+
+func isShellStateError(err error) bool {
+	var se *shellstate.Error
+	return errors.As(err, &se) && se.Kind == shellstate.KindState
+}
+
+func createDestExitCode(err error) int {
+	code := destExitCode(err)
+	if code == 3 {
+		return 2
+	}
+	return code
+}
+
+func resolveRegisteredCwdProject(stateDir string) (openDestination, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return openDestination{}, &destError{code: 2, msg: "cannot resolve working directory: " + err.Error()}
+	}
+	projects, err := loadRegisteredProjects(stateDir)
+	if err != nil {
+		return openDestination{}, err
+	}
+	proj, root, ok := uniqueProjectContaining(projects, cwd)
+	if !ok {
+		return openDestination{}, &destError{code: 2, msg: unregisteredCreateProject}
+	}
+	workDir := root
+	if workDir == "" {
+		workDir = proj.Path
+	}
+	return destFromProject(proj, workDir, uirequest.ResolvedProject), nil
+}
+
+func uniqueProjectContaining(projects []registeredProject, path string) (registeredProject, string, bool) {
+	var best registeredProject
+	bestRoot := ""
+	bestLen := -1
+	nBest := 0
+	for _, p := range projects {
+		root := containingRoot(path, p.roots())
+		if root == "" {
+			continue
+		}
+		n := len(canonicalOpenPath(root))
+		if n > bestLen {
+			best = p
+			bestRoot = root
+			bestLen = n
+			nBest = 1
+			continue
+		}
+		if n == bestLen {
+			nBest++
+		}
+	}
+	if nBest != 1 {
+		return registeredProject{}, "", false
+	}
+	return best, bestRoot, true
+}
+
+func registeredProjectForCreate(stateDir string, dest openDestination) (registeredProject, error) {
+	projects, err := loadRegisteredProjects(stateDir)
+	if err != nil {
+		return registeredProject{}, err
+	}
+	if dest.Origin.ProjectKey != "" {
+		for _, p := range projects {
+			if p.Key == dest.Origin.ProjectKey {
+				return p, nil
+			}
+		}
+	}
+	if dest.Origin.WorkDir != "" {
+		if p, _, ok := uniqueProjectContaining(projects, dest.Origin.WorkDir); ok {
+			return p, nil
+		}
+	}
+	return registeredProject{}, &destError{code: 2, msg: unregisteredCreateProject}
+}
+
 func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
 	if shellFlag != "" || projectFlag != "" {
 		return resolveExplicitDestination(stateDir, shellFlag, projectFlag)
