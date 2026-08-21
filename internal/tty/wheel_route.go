@@ -108,6 +108,11 @@ func (h WheelHandler) Handle(g WheelGesture) tea.Cmd {
 		}
 		return h.ScrollLocal(delta)
 	}
+	// From the next event of this gesture on, forwarded flushes pace
+	// themselves to WheelPaneDebounce: a momentum tail over an application
+	// that owns its own scrollback must not become one send plus one capture
+	// per base-debounce tick after its view has stopped moving.
+	h.Burst.pane = true
 	if h.PinToLive != nil {
 		h.PinToLive()
 	}
