@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/terminallink"
 )
@@ -27,16 +28,21 @@ type CompiledMatcher struct {
 	Order int
 
 	re *regexp.Regexp
-}
-
-// Regexp returns the compiled expression. The whole match is the locator.
+}                                                // Regexp returns the compiled expression. The whole match is the locator.
 func (m CompiledMatcher) Regexp() *regexp.Regexp { return m.re }
 
 // Snapshot is an immutable, ordered set of compiled matchers. The scanner holds
 // one for the duration of a scan; a replacement never mutates one in place.
+//
+// It also carries each instance's claimed hosts, keyed by instance ID. Claims
+// ride on the same snapshot as the matchers so that a claimed URL can only be
+// reclassified by a matcher that is live in exactly this generation — and so
+// that a refused replacement keeps claims and matchers consistent with each
+// other.
 type Snapshot struct {
 	generation uint64
 	matchers   []CompiledMatcher
+	claims     map[string][]string
 }
 
 // Generation identifies this snapshot. Cache entries and in-flight resolves are
@@ -70,6 +76,12 @@ func (s *Snapshot) Len() int {
 // in precedence order. It is the only crossing between provider machinery and
 // the scanner: terminallink learns a pattern and a reference, never a process,
 // a document, or this package.
+//
+// Each matcher carries its instance's claimed hosts. That is how the URL-yield
+// rule reaches the scanner without widening this crossing: the scanner sees a
+// host list on the same value that already named the pattern and the reference,
+// and it can only reclassify a built-in URL span when one of those hosts
+// matches AND this matcher matches the entire URL.
 func (s *Snapshot) TerminalMatchers() []terminallink.ResourceMatcher {
 	if s == nil || len(s.matchers) == 0 {
 		return nil
@@ -77,12 +89,29 @@ func (s *Snapshot) TerminalMatchers() []terminallink.ResourceMatcher {
 	out := make([]terminallink.ResourceMatcher, 0, len(s.matchers))
 	for _, m := range s.matchers {
 		out = append(out, terminallink.ResourceMatcher{
-			Provider: m.Instance,
-			ID:       m.ID,
-			Re:       m.re,
+			Provider:   m.Instance,
+			ID:         m.ID,
+			Re:         m.re,
+			ClaimHosts: s.claimHostsFor(m.Instance),
 		})
 	}
 	return out
+}
+
+// ClaimHosts reports an instance's claimed hostnames in their normalized,
+// lowercase form. Unknown instances return nil.
+func (s *Snapshot) ClaimHosts(instance string) []string {
+	if s == nil {
+		return nil
+	}
+	return s.claimHostsFor(instance)
+}
+
+func (s *Snapshot) claimHostsFor(instance string) []string {
+	if len(s.claims) == 0 {
+		return nil
+	}
+	return s.claims[instance]
 }
 
 // Lookup finds a matcher by instance and ID.
@@ -104,6 +133,10 @@ type DescribedSet struct {
 	Instance string
 	Order    int
 	Matchers []Matcher
+	// ClaimHosts is the instance configuration's claimed hostnames. It travels
+	// with the described matchers so a claimed URL is only ever reclassified by
+	// a matcher from this same set.
+	ClaimHosts []string
 }
 
 // SnapshotStore holds the current snapshot and swaps it atomically.
@@ -188,10 +221,47 @@ func (s *SnapshotStore) Replace(sets []DescribedSet) error {
 	}
 
 	sortMatchers(compiled)
+
+	claims := make(map[string][]string)
+	for _, set := range sets {
+		hosts := normalizeClaimHosts(set.ClaimHosts)
+		if len(hosts) > 0 {
+			claims[set.Instance] = hosts
+		}
+	}
+
 	s.nextGen++
-	s.current.Store(&Snapshot{generation: s.nextGen, matchers: compiled})
+	s.current.Store(&Snapshot{generation: s.nextGen, matchers: compiled, claims: claims})
 	s.lastErr = nil
 	return nil
+}
+
+// claimHostsProvider is the optional capability by which an adapter surfaces
+// its instance configuration's claimed hosts. CommandProvider implements it;
+// the Manager reads it when assembling a described set, so a fake or a future
+// transport that has nothing to claim simply omits it.
+type claimHostsProvider interface {
+	ClaimHosts() []string
+}
+
+// normalizeClaimHosts lowercases and trims claimed-hostname entries and drops
+// anything that is not a bare hostname. internal/config already refuses
+// malformed entries loudly; this second pass keeps programmatic callers from
+// smuggling a scheme or a path past the scanner, using the same shape rule.
+func normalizeClaimHosts(entries []string) []string {
+	if len(entries) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if host, ok := config.NormalizeClaimHost(entry); ok {
+			out = append(out, host)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // sortMatchers imposes the documented precedence: ascending configured-provider

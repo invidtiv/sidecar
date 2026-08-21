@@ -22,7 +22,7 @@ func TestTerminalResourceBoundsMatchTheProtocol(t *testing.T) {
 
 func TestFromConfig(t *testing.T) {
 	cfg := config.TerminalResourcesConfig{Providers: []config.TerminalResourceProviderConfig{
-		{ID: "first", Command: []string{fixtureBin}, Enabled: true, Timeout: 3 * time.Second},
+		{ID: "first", Command: []string{fixtureBin}, Enabled: true, Timeout: 3 * time.Second, ClaimHosts: []string{"github.com"}},
 		{ID: "off", Command: []string{fixtureBin}, Enabled: false},
 		{ID: "second", Command: []string{fixtureBin, "-mode=error-response"}, Enabled: true},
 	}}
@@ -42,6 +42,10 @@ func TestFromConfig(t *testing.T) {
 	// An unset timeout takes the clamped default.
 	if got := providers[1].(*CommandProvider).ResolveTimeout(); got != resource.DefaultResolveTimeout {
 		t.Fatalf("default timeout = %s", got)
+	}
+	// The instance configuration's claimed hosts travel with the provider.
+	if !slices.Equal(providers[0].(*CommandProvider).ClaimHosts(), []string{"github.com"}) {
+		t.Fatalf("claimHosts = %v", providers[0].(*CommandProvider).ClaimHosts())
 	}
 }
 

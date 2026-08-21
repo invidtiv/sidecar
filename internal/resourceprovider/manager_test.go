@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -163,6 +164,62 @@ func TestManagerKeepsMatchersWhenARedescribeFails(t *testing.T) {
 	}
 	if m.SnapshotError() == nil {
 		t.Fatal("the failed replacement was not reported")
+	}
+}
+
+// claimingFakeProvider is a fakeProvider that also carries its instance
+// configuration's claimed hosts, the way CommandProvider does.
+type claimingFakeProvider struct {
+	fakeProvider
+	claimHosts []string
+}
+
+func (f *claimingFakeProvider) ClaimHosts() []string { return f.claimHosts }
+
+// A disabled or removed instance must stop claiming hosts immediately: claims
+// travel with the described matcher set, and a disabled instance contributes
+// none.
+func TestManagerDisabledAndRemovedInstancesStopClaiming(t *testing.T) {
+	p := &claimingFakeProvider{
+		fakeProvider: fakeProvider{instance: "p", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}},
+		claimHosts:   []string{"example.test"},
+	}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+	if got := m.Snapshot().ClaimHosts("p"); !slices.Equal(got, []string{"example.test"}) {
+		t.Fatalf("claims = %v", got)
+	}
+
+	// Disabling is authoritative: no matchers, no claims.
+	m.SetProviders(nil, []string{"p"})
+	m.DescribeAll(context.Background())
+	if got := m.Snapshot().ClaimHosts("p"); got != nil {
+		t.Fatalf("a disabled instance still claimed %v", got)
+	}
+	if m.Snapshot().Len() != 0 {
+		t.Fatalf("a disabled instance kept matchers live")
+	}
+}
+
+// Claims are instance configuration, not describe output, so they survive a
+// non-authoritative describe failure that keeps the previous matcher set.
+func TestManagerKeepsClaimsWhenARedescribeFails(t *testing.T) {
+	p := &claimingFakeProvider{
+		fakeProvider: fakeProvider{instance: "p", desc: Description{Matchers: []Matcher{{ID: "m", Pattern: "A-[0-9]+"}}}},
+		claimHosts:   []string{"example.test"},
+	}
+	m := NewManager(ManagerOptions{})
+	m.SetProviders([]Provider{p}, nil)
+	m.DescribeAll(context.Background())
+
+	p.descErr = &TransportError{Reason: ReasonTimeout}
+	m.DescribeAll(context.Background())
+	if m.Snapshot().Len() != 1 {
+		t.Fatal("the failure dropped the live matchers")
+	}
+	if got := m.Snapshot().ClaimHosts("p"); !slices.Equal(got, []string{"example.test"}) {
+		t.Fatalf("the failure dropped the claims: %v", got)
 	}
 }
 

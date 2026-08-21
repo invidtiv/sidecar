@@ -11,12 +11,15 @@ import (
 )
 
 // CommandProvider is the default Provider: a short-lived child process per
-// request, one JSON object in, one JSON object out.
+// request, one JSON object in, one JSON object out. It also carries the
+// instance configuration's claimed hosts, which are host-side data a provider
+// process never sees.
 type CommandProvider struct {
-	instance string
-	argv     []string
-	dir      string
-	env      []string
+	instance   string
+	argv       []string
+	dir        string
+	env        []string
+	claimHosts []string
 
 	describeTimeout time.Duration
 	resolveTimeout  time.Duration
@@ -27,6 +30,7 @@ type CommandProvider struct {
 }
 
 var _ Provider = (*CommandProvider)(nil)
+var _ claimHostsProvider = (*CommandProvider)(nil)
 
 // CommandConfig is everything a CommandProvider needs. It is resolved once, at
 // construction, so no invocation reads configuration or the environment.
@@ -39,6 +43,10 @@ type CommandConfig struct {
 	// PassEnv names variables whose current values are inherited on top of the
 	// documented base environment.
 	PassEnv []string
+	// ClaimHosts is the instance configuration's claimed hostnames, already
+	// validated and lowercased by internal/config. It is host-side data: it
+	// never reaches the child process or the protocol.
+	ClaimHosts []string
 	// HostEnv is the os.Environ()-shaped environment to draw from.
 	HostEnv []string
 	// ResolveTimeout is clamped; zero takes the default.
@@ -68,6 +76,7 @@ func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 		argv:            append([]string(nil), cfg.Argv...),
 		dir:             cfg.Dir,
 		env:             BuildEnv(cfg.PassEnv, cfg.HostEnv),
+		claimHosts:      normalizeClaimHosts(cfg.ClaimHosts),
 		describeTimeout: resource.DescribeTimeout,
 		resolveTimeout:  resource.ClampResolveTimeout(cfg.ResolveTimeout),
 		runner:          runner,
@@ -78,6 +87,9 @@ func NewCommandProvider(cfg CommandConfig) (*CommandProvider, error) {
 
 // Instance reports the configured instance ID.
 func (p *CommandProvider) Instance() string { return p.instance }
+
+// ClaimHosts reports the instance's claimed hostnames. It is a copy.
+func (p *CommandProvider) ClaimHosts() []string { return append([]string(nil), p.claimHosts...) }
 
 // Argv exposes the resolved command for diagnostics. It is a copy.
 func (p *CommandProvider) Argv() []string { return append([]string(nil), p.argv...) }

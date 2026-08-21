@@ -2,6 +2,7 @@ package resourceprovider
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/resource"
@@ -203,5 +204,64 @@ func TestNilSnapshotYieldsNoTerminalMatchers(t *testing.T) {
 	var s *Snapshot
 	if got := s.TerminalMatchers(); got != nil {
 		t.Fatalf("a nil snapshot must contribute nothing, got %+v", got)
+	}
+}
+
+// Claims ride on the matchers so the scanner can reclassify a built-in URL
+// span only under an instance's own patterns. An instance without claims
+// contributes none, and entries are normalized to the lowercase form URL host
+// extraction produces.
+func TestSnapshotCarriesClaimHostsOnTerminalMatchers(t *testing.T) {
+	store := NewSnapshotStore()
+	err := store.Replace([]DescribedSet{
+		{Instance: "github", Order: 0, ClaimHosts: []string{"GitHub.com", "  ", "https://evil.test"},
+			Matchers: []Matcher{{ID: "url", Pattern: `x`}}},
+		{Instance: "plain", Order: 1, Matchers: []Matcher{{ID: "m", Pattern: `y`}}},
+	})
+	if err != nil {
+		t.Fatalf("Replace: %v", err)
+	}
+	snap := store.Current()
+	if got := snap.ClaimHosts("github"); !slices.Equal(got, []string{"github.com"}) {
+		t.Fatalf("github claims = %v, want [github.com]", got)
+	}
+	if got := snap.ClaimHosts("plain"); got != nil {
+		t.Fatalf("plain claims = %v, want none", got)
+	}
+	if got := snap.ClaimHosts("absent"); got != nil {
+		t.Fatalf("absent claims = %v, want none", got)
+	}
+	for _, m := range snap.TerminalMatchers() {
+		switch m.Provider {
+		case "github":
+			if !slices.Equal(m.ClaimHosts, []string{"github.com"}) {
+				t.Errorf("%s/%s claimHosts = %v", m.Provider, m.ID, m.ClaimHosts)
+			}
+		case "plain":
+			if m.ClaimHosts != nil {
+				t.Errorf("%s/%s claimHosts = %v, want none", m.Provider, m.ID, m.ClaimHosts)
+			}
+		}
+	}
+}
+
+// A replacement that drops an instance's claim must drop it everywhere at once:
+// claims and matchers are one snapshot.
+func TestSnapshotReplacementReplacesClaimHostsAtomically(t *testing.T) {
+	store := NewSnapshotStore()
+	set := func(claims []string) {
+		t.Helper()
+		err := store.Replace([]DescribedSet{{
+			Instance: "a", Order: 0, ClaimHosts: claims,
+			Matchers: []Matcher{{ID: "m", Pattern: `A-[0-9]+`}},
+		}})
+		if err != nil {
+			t.Fatalf("Replace: %v", err)
+		}
+	}
+	set([]string{"old.example.com"})
+	set(nil)
+	if got := store.Current().ClaimHosts("a"); got != nil {
+		t.Fatalf("claims survived a replacement that dropped them: %v", got)
 	}
 }

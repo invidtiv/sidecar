@@ -121,10 +121,20 @@ func Activatable(k Kind) bool {
 type Resolver func(raw string) (value string, extra Extra, ok bool)
 type DiffResolver func(raw string) (value string, extra Extra, ok bool)
 
+// ResourceMatcher is one live external matcher. The whole match is the
+// locator.
+//
+// ClaimHosts carries the matcher's instance configuration: the lowercased
+// hostnames whose built-in URL spans that instance may reclassify into
+// resource spans. It is empty for an instance that claims nothing, and it
+// never widens what Re itself matches — a URL is yielded only when its host is
+// listed here AND Re matches the entire URL string. Built-in precedence is not
+// inverted anywhere else.
 type ResourceMatcher struct {
-	Provider string
-	ID       string
-	Re       *regexp.Regexp
+	Provider   string
+	ID         string
+	Re         *regexp.Regexp
+	ClaimHosts []string
 }
 
 type Options struct {

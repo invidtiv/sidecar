@@ -198,12 +198,22 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 
 	type described struct {
 		instance string
+		index    int
 		order    int
 		desc     Description
 		err      error
 		took     time.Duration
 	}
 	results := make([]described, len(providers))
+	// Claimed hosts are host-side instance configuration, not describe output:
+	// they are read once here and travel with whatever matchers the instance
+	// contributes, including the kept set of a non-authoritative failure.
+	claims := make([][]string, len(providers))
+	for i, p := range providers {
+		if source, ok := p.(claimHostsProvider); ok {
+			claims[i] = source.ClaimHosts()
+		}
+	}
 
 	var wg sync.WaitGroup
 	for i, p := range providers {
@@ -212,12 +222,12 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 			defer wg.Done()
 			started := m.now()
 			if err := m.acquire(ctx, p.Instance()); err != nil {
-				results[i] = described{instance: p.Instance(), order: i, err: err, took: m.now().Sub(started)}
+				results[i] = described{instance: p.Instance(), index: i, order: i, err: err, took: m.now().Sub(started)}
 				return
 			}
 			defer m.release(p.Instance())
 			desc, err := p.Describe(ctx)
-			results[i] = described{instance: p.Instance(), order: i, desc: desc, err: err, took: m.now().Sub(started)}
+			results[i] = described{instance: p.Instance(), index: i, order: i, desc: desc, err: err, took: m.now().Sub(started)}
 		}(i, p)
 	}
 	wg.Wait()
@@ -257,7 +267,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 			kept := m.lastGood[r.instance]
 			st.MatcherCount = len(kept)
 			if len(kept) > 0 {
-				sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: kept})
+				sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: kept, ClaimHosts: claims[r.index]})
 			}
 			continue
 		}
@@ -267,7 +277,7 @@ func (m *Manager) DescribeAll(ctx context.Context) []Status {
 		st.Info = r.desc.Info
 		st.MatcherCount = len(r.desc.Matchers)
 		m.lastGood[r.instance] = r.desc.Matchers
-		sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: r.desc.Matchers})
+		sets = append(sets, DescribedSet{Instance: r.instance, Order: r.order, Matchers: r.desc.Matchers, ClaimHosts: claims[r.index]})
 	}
 	m.mu.Unlock()
 

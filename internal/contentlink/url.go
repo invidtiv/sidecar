@@ -20,3 +20,15 @@ func SafeHTTPURL(raw string) (string, bool) {
 	}
 	return raw, true
 }
+
+// urlHost extracts the lowercased hostname from an already-validated http(s)
+// URL value, without its port. Claimed-host matching is by exact hostname:
+// listing github.com claims github.com, not a subdomain of it.
+func urlHost(value string) (string, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host, host != ""
+}

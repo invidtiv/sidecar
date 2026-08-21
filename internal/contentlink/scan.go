@@ -67,6 +67,7 @@ func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) [
 		}
 	}
 	appendBounded(scanURLs(plain, spans))
+	yieldClaimedURLs(spans, opts.Matchers)
 	appendBounded(scanPathLines(plain, spans, opts.Resolve, pending))
 	if opts.Resolve != nil || pending != nil {
 		appendBounded(scanBareFiles(plain, spans, opts.Resolve, pending))
@@ -138,6 +139,63 @@ func scanURLs(plain string, existing []Span) []Span {
 		out = append(out, makeSpan(KindURL, plain, loc[0], end, value, Extra{}))
 	}
 	return out
+}
+
+// yieldClaimedURLs reclassifies an already-found built-in URL span as a
+// resource span. This is the one narrow exception to built-ins-keep-precedence,
+// and every condition below is load-bearing (see the "Why URL yield" section of
+// docs/plans/active/sidecar-github.md):
+//
+//  1. The URL's host equals one of the matcher instance's claimHosts. A greedy
+//     pattern therefore cannot claim a URL on any host its instance did not
+//     list.
+//  2. The same instance's matcher matches the ENTIRE URL string — a partial or
+//     prefix match keeps the browser link. This is also what protects unrelated
+//     orgs on a listed host: allowlist-generated patterns only cover their own
+//     owner/repo paths.
+//  3. Only automatic URL spans are candidates. Explicit OSC-8 destinations are
+//     never rewritten: an explicit destination means what it says, which is the
+//     same discipline AllowedKinds applies to every other automatic match.
+//
+// Matchers arrive in precedence order (configured-provider order, then
+// priority), so the first whole-string match wins and first-wins across
+// claiming instances falls out of the existing ordering. Unclaimed URLs keep
+// PlanOpenURL; the span keeps its columns either way, so no later scanner sees
+// a different overlap picture than before this pass existed.
+func yieldClaimedURLs(spans []Span, matchers []ResourceMatcher) {
+	if len(matchers) == 0 {
+		return
+	}
+	for i := range spans {
+		span := &spans[i]
+		if span.Kind != KindURL || span.Explicit || span.Extra.Provider != "" {
+			continue
+		}
+		host, ok := urlHost(span.Value)
+		if !ok || utf8.RuneCountInString(span.Value) > MaxResourceLocatorChars {
+			continue
+		}
+		for _, m := range matchers {
+			if m.Re == nil || m.Provider == "" || m.ID == "" || !claimsHost(m, host) {
+				continue
+			}
+			if loc := m.Re.FindStringIndex(span.Value); loc != nil && loc[0] == 0 && loc[1] == len(span.Value) {
+				span.Kind = KindResource
+				span.Extra.Provider = m.Provider
+				span.Extra.Matcher = m.ID
+				break
+			}
+		}
+	}
+}
+
+func claimsHost(m ResourceMatcher, host string) bool {
+	for _, claimed := range m.ClaimHosts {
+		if claimed == host {
+			return true
+		}
+	}
+	return false
 }
 
 func scanPathLines(plain string, existing []Span, resolve Resolver, pending *[]Pending) []Span {

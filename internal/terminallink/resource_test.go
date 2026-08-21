@@ -66,6 +66,26 @@ func TestScanWithBuiltinsKeepPrecedenceOverExternalMatchers(t *testing.T) {
 	}
 }
 
+// The narrow URL-yield exception: a matcher whose instance lists a host in
+// claimHosts may reclassify that host's URL span when the matcher matches the
+// entire URL. Any other host keeps the browser link.
+func TestScanWithClaimedHostYieldsURLSpansToTheirInstance(t *testing.T) {
+	greedy := []ResourceMatcher{{
+		Provider: "greedy", ID: "url", Re: regexp.MustCompile(`https?://\S+`),
+		ClaimHosts: []string{"example.test"},
+	}}
+	spans := ScanWith("see https://example.test/x and https://other.test/y", Options{Matchers: greedy})
+	if len(spans) != 2 {
+		t.Fatalf("want 2 spans, got %+v", spans)
+	}
+	if spans[0].Kind != KindResource || spans[0].Extra.Provider != "greedy" || spans[0].Value != "https://example.test/x" {
+		t.Errorf("claimed-host span = {%q %q %+v}", spans[0].Kind, spans[0].Value, spans[0].Extra)
+	}
+	if spans[1].Kind != KindURL {
+		t.Errorf("unlisted host = %q, want url", spans[1].Kind)
+	}
+}
+
 func TestScanWithExternalMatchersRunInGivenOrderFirstWins(t *testing.T) {
 	matchers := []ResourceMatcher{
 		{Provider: "first", ID: "a", Re: regexp.MustCompile(`CASH-[0-9]+`)},

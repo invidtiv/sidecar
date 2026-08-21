@@ -48,6 +48,7 @@ func FromConfig(cfg config.TerminalResourcesConfig, opts Options) ([]Provider, [
 			Argv:           p.Command,
 			Dir:            opts.Dir,
 			PassEnv:        p.PassEnv,
+			ClaimHosts:     p.ClaimHosts,
 			HostEnv:        hostEnv,
 			ResolveTimeout: p.Timeout,
 			Runner:         opts.Runner,
