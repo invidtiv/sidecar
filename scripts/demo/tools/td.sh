@@ -16,8 +16,8 @@ setup_td_for_project() {
     if command -v td >/dev/null 2>&1; then
         (
             cd "$project_dir"
-            # Initialize td in this project root if not already initialized
-            td init -q 2>/dev/null || true
+            # Initialize td in this project root (provide newline for agent instruction prompt)
+            printf "\n" | td init >/dev/null 2>&1 || true
 
             case "$project_name" in
                 "Intersections")

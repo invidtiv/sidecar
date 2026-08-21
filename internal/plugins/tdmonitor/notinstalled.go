@@ -295,19 +295,14 @@ func (m *NotInstalledModel) View(width, height int) string {
 	stallion := m.renderStallion()
 	pitch := m.renderPitch()
 
-	// Get dimensions
+	// Get stallion width to center pitch within it
 	stallionWidth := lipgloss.Width(stallion)
-	pitchWidth := lipgloss.Width(pitch)
+	centeredPitch := lipgloss.PlaceHorizontal(stallionWidth, lipgloss.Center, pitch)
 
-	maxWidth := stallionWidth
-	if pitchWidth > maxWidth {
-		maxWidth = pitchWidth
-	}
+	// Combine vertically - use Left to preserve stallion's whitespace alignment
+	// (PlaceHorizontal/Center on stallion causes ANSI width miscalculation issues)
+	content := lipgloss.JoinVertical(lipgloss.Left, stallion, centeredPitch)
 
-	centeredStallion := lipgloss.PlaceHorizontal(maxWidth, lipgloss.Center, stallion)
-	centeredPitch := lipgloss.PlaceHorizontal(maxWidth, lipgloss.Center, pitch)
-
-	content := lipgloss.JoinVertical(lipgloss.Left, centeredStallion, centeredPitch)
-
+	// Center in available space
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
 }
