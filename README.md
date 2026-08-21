@@ -12,7 +12,7 @@ You might never open your editor again.
 
 ## Overview
 
-Sidecar puts your entire development workflow in one shell: run AI coding agents in embedded interactive terminals, open [td](https://github.com/marcus/td) task issues, files, git diffs, and Jira resources in split panes beside your terminal, monitor agent sessions across all projects, review diffs, stage commits, and manage workspaces—all without leaving Sidecar.
+Sidecar puts your entire development workflow in one shell: run AI coding agents in embedded interactive terminals, open [td](https://github.com/marcus/td) task issues, files, git diffs, and Jira or GitHub resources in split panes beside your terminal, monitor agent sessions across all projects, review diffs, stage commits, and manage workspaces—all without leaving Sidecar.
 
 ## Quick Install
 
@@ -51,7 +51,7 @@ Run your coding agent (Claude Code, Codex, Gemini, Cursor, OpenCode, Pi, etc.) d
 
 As the agent works, you or the agent can:
 
-- Open task tracking issues (`td-xxxxxx`), files (`path:line`), diffs, or Jira resources in split panes right beside the terminal via `sidecar open`
+- Open task tracking issues (`td-xxxxxx`), files (`path:line`), diffs, or Jira and GitHub resources in split panes right beside the terminal via `sidecar open`
 - Watch tasks move through the workflow in TD Monitor
 - See files change in real-time and review syntax-highlighted diffs in the Git plugin
 - Browse project code in the File Browser
@@ -75,6 +75,7 @@ sidecar open internal/cli/cli.go:88
 sidecar open td-b922d8
 sidecar open --diff
 sidecar open --provider jira-work PROJ-123
+sidecar open --provider github marcus/sidecar#302
 
 # Enable debug logging
 sidecar --debug
@@ -98,7 +99,7 @@ Run agent shells and manage git worktrees in an integrated workspace. Launch cod
 **Features:**
 
 - Embedded terminal with full tmux integration, mouse scrolling, and seamless copy-paste
-- Open TD issues, project files, diffs, and Jira tickets beside the terminal with `sidecar open <target>`
+- Open TD issues, project files, diffs, and Jira or GitHub resources beside the terminal with `sidecar open <target>`
 - Create, rename, and manage interactive shells (`ctrl+n`) and worktree workspaces (`n`/`D`)
 - Launch coding agents (Claude, Codex, Gemini, Cursor, OpenCode, Pi) with `a`
 - Integrated merge workflow: commit, push, create PR, and cleanup with `m`
@@ -171,7 +172,7 @@ Press `,` (comma) or run `sidecar setup` to open the full in-app Configuration i
 - **Appearance**: Live theme selection, swatches, and custom color overrides
 - **Projects**: Add, remove, and manage configured projects and paths
 - **Workspaces & Terminal**: Customize default agents, shell creation, terminal scrollback, and tmux settings
-- **Panels & Integrations**: Configure external terminal resource providers (e.g., Jira issue link matchers)
+- **Panels & Integrations**: Configure external terminal resource providers (e.g., Jira and GitHub link matchers)
 - **Diagnostics & About**: System info, update checks, and troubleshooting tools
 
 ## Project Switcher
@@ -229,9 +230,15 @@ Standalone executables that extend Sidecar over a frozen protocol. Sidecar does
 not import them, and they do not import Sidecar. The only coupling is one JSON
 object in and one JSON object out.
 
-| Addition | What it does |
-| --- | --- |
-| [sidecar-jira](https://github.com/marcus/sidecar-jira) | Read-only Jira Cloud issues as terminal resource panes |
+| Addition | What it does | Recognizes |
+| --- | --- | --- |
+| [sidecar-jira](https://github.com/marcus/sidecar-jira) | Read-only Jira Cloud issues as terminal resource panes | `PROJ-123` issue keys |
+| [sidecar-github](https://github.com/marcus/sidecar-github) | Read-only GitHub issues and pull requests as terminal resource panes — title, open/draft/merged status, author, reviewers, labels, and body | `owner/repo#88`, and GitHub issue/PR URLs |
+
+Write your own against the
+[terminal resource provider protocol](docs/reference/terminal-resource-provider-protocol.md):
+a provider is any executable that reads one JSON request on stdin, writes one
+JSON response on stdout, and declares the resource patterns it recognizes.
 
 ## Keyboard Shortcuts
 
