@@ -6,7 +6,7 @@ In both the global workspace (Workspaces tab, `internal/overview`) and the proje
 
 Desired behavior: **Tab / Shift+Tab cycle focus across all visible windows** (sidebar, terminal(s), doc/files pane, TD issue pane); **click focuses whatever was clicked**, defocusing the previous window; **exception:** a terminal in interactive (typing) mode captures Tab. The solution must generalize as the windowing system grows more splits.
 
-This aligns with `docs/plans/active/workspace-windowing-system.md` (§3.2 Tab row, §3.3 precedence ladder, §3.5 mouse item 4) — this slice builds the ring/setter seam that doc wants, without fighting its M0/M1 milestones.
+This aligns with `docs/plans/deprecated/workspace-windowing-system.md` (§3.2 Tab row, §3.3 precedence ladder, §3.5 mouse item 4) — this slice builds the ring/setter seam that doc wants, without fighting its M0/M1 milestones.
 
 ## Design
 

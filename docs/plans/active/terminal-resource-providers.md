@@ -3,7 +3,7 @@
 **Status:** proposed
 **Written:** 2026-08-17, at `78ea23d`
 **Tracking:** `td-26230f`
-**Related:** [workspace windowing](workspace-windowing-system.md) · [configuration design](../implemented/sidecar-configuration-design.md) · [configuration seam map](sidecar-configuration-seam-map.md)
+**Related:** [workspace windowing](../deprecated/workspace-windowing-system.md) · [configuration design](../implemented/sidecar-configuration-design.md) · [configuration seam map](sidecar-configuration-seam-map.md)
 
 ## Decision
 
