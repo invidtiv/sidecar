@@ -418,7 +418,7 @@ func (m *Model) projectSwitcherCountSection() modal.Section {
 	}, nil)
 }
 
-// projectSwitcherListSection renders the project list with scroll.
+// projectSwitcherListSection renders the project list with scroll and scrollbar.
 func (m *Model) projectSwitcherListSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		allProjects := m.cfg.Projects.List
@@ -447,28 +447,23 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 		}
 		scrollOffset := m.projectSwitcherScroll
 
-		// Track focusables and line offset
-		focusables := make([]modal.FocusableInfo, 0, visibleCount)
-		lineOffset := 0
-
-		if scrollOffset > 0 {
-			b.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", scrollOffset)))
-			b.WriteString("\n")
-			lineOffset++
-		}
-
 		cursorStyle := lipgloss.NewStyle().Foreground(styles.Primary)
 		nameNormalStyle := lipgloss.NewStyle().Foreground(styles.Secondary)
 		nameSelectedStyle := lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 		nameCurrentStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 		nameCurrentSelectedStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 
-		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(projects); i++ {
-			destination := projects[i]
-			isCursor := i == m.projectSwitcherCursor
+		rowWidth := max(10, contentWidth-2) // Reserve 2 cols for space + scrollbar
+		lines := make([]string, 0, visibleCount)
+		focusables := make([]modal.FocusableInfo, 0, visibleCount)
+
+		for i := 0; i < visibleCount; i++ {
+			entryIdx := scrollOffset + i
+			destination := projects[entryIdx]
+			isCursor := entryIdx == m.projectSwitcherCursor
 			isOverview := destination.Kind == destinationOverview
 			isCurrent := (!isOverview && (destination.Path == m.ui.WorkDir || destination.Path == m.ui.ProjectRoot)) || (isOverview && m.inGlobalScope())
-			itemID := projectSwitcherItemID(i)
+			itemID := projectSwitcherItemID(entryIdx)
 			isHovered := itemID == hoverID
 
 			var row strings.Builder
@@ -507,46 +502,46 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			}
 			pathDisplay = shortenHomePath(pathDisplay)
 
-			// Right-align the path on the same line, truncating from the left
-			// when the row would otherwise overflow.
+			// Right-align the path on the same line within rowWidth
 			left := row.String()
 			leftWidth := ansi.StringWidth(left)
-			maxPathLen := contentWidth - leftWidth - 2
+			maxPathLen := rowWidth - leftWidth - 2
 			if maxPathLen < 4 {
 				maxPathLen = 4
 			}
 			if len(pathDisplay) > maxPathLen {
 				pathDisplay = "…" + pathDisplay[len(pathDisplay)-maxPathLen+1:]
 			}
-			padding := contentWidth - leftWidth - ansi.StringWidth(pathDisplay)
+			padding := rowWidth - leftWidth - ansi.StringWidth(pathDisplay)
 			if padding < 1 {
 				padding = 1
 			}
-			b.WriteString(left)
-			b.WriteString(strings.Repeat(" ", padding))
-			b.WriteString(styles.Subtle.Render(pathDisplay))
-
-			if i < scrollOffset+visibleCount-1 && i < len(projects)-1 {
-				b.WriteString("\n")
+			line := left + strings.Repeat(" ", padding) + styles.Subtle.Render(pathDisplay)
+			lineWidth := lipgloss.Width(line)
+			if lineWidth < rowWidth {
+				line += strings.Repeat(" ", rowWidth-lineWidth)
 			}
+			lines = append(lines, line)
 
-			// Each project takes exactly one line.
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i - scrollOffset),
+				OffsetY: i,
 				Width:   contentWidth,
 				Height:  1,
 			})
 		}
 
-		remaining := len(projects) - (scrollOffset + visibleCount)
-		if remaining > 0 {
-			b.WriteString("\n")
-			b.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		}
+		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(projects),
+			ScrollOffset: scrollOffset,
+			VisibleItems: visibleCount,
+			TrackHeight:  visibleCount,
+		})
 
-		return modal.RenderedSection{Content: b.String(), Focusables: focusables}
+		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
+
+		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
 	}, m.projectSwitcherListUpdate)
 }
 

@@ -100,7 +100,7 @@ func (m *Model) themeSwitcherCountSection() modal.Section {
 	}, nil)
 }
 
-// themeSwitcherListSection renders the theme list with selection.
+// themeSwitcherListSection renders the theme list with selection and scrollbar.
 func (m *Model) themeSwitcherListSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		themes := m.themeSwitcherFiltered
@@ -136,43 +136,43 @@ func (m *Model) themeSwitcherListSection() modal.Section {
 			scrollOffset = 0
 		}
 
-		var sb strings.Builder
+		rowWidth := max(10, contentWidth-2) // Reserve 2 cols for space + scrollbar
+		lines := make([]string, 0, visibleCount)
 		focusables := make([]modal.FocusableInfo, 0, visibleCount)
-		lineOffset := 0
 
-		if scrollOffset > 0 {
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", scrollOffset)))
-			sb.WriteString("\n")
-			lineOffset++
-		}
-
-		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(themes); i++ {
-			entry := themes[i]
+		for i := 0; i < visibleCount; i++ {
+			entryIdx := scrollOffset + i
+			entry := themes[entryIdx]
 
 			// Render separator lines (non-selectable)
 			if entry.IsSeparator {
-				sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ── %s ──", entry.SeparatorText)))
-				sb.WriteString("\n")
+				sepLine := styles.Muted.Render(fmt.Sprintf("  ── %s ──", entry.SeparatorText))
+				lineWidth := lipgloss.Width(sepLine)
+				if lineWidth < rowWidth {
+					sepLine += strings.Repeat(" ", rowWidth-lineWidth)
+				}
+				lines = append(lines, sepLine)
 				continue
 			}
 
-			isSelected := i == selectedIdx
-			itemID := themeSwitcherItemID(i)
+			isSelected := entryIdx == selectedIdx
+			itemID := themeSwitcherItemID(entryIdx)
 			isHovered := itemID == hoverID
 			isCurrent := entry.IsBuiltIn == m.themeSwitcherOriginal.IsBuiltIn && entry.ThemeKey == m.themeSwitcherOriginal.ThemeKey
 
+			var row strings.Builder
 			if isSelected {
-				sb.WriteString(cursorStyle.Render("> "))
+				row.WriteString(cursorStyle.Render("> "))
 			} else {
-				sb.WriteString("  ")
+				row.WriteString("  ")
 			}
 
 			// Color swatch for all themes
 			if swatchColors := theme.Swatch(entry); len(swatchColors) > 0 {
 				for _, sc := range swatchColors {
-					sb.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(sc)).Render(" "))
+					row.WriteString(lipgloss.NewStyle().Background(lipgloss.Color(sc)).Render(" "))
 				}
-				sb.WriteString(" ")
+				row.WriteString(" ")
 			}
 
 			var nameStyle lipgloss.Style
@@ -184,28 +184,38 @@ func (m *Model) themeSwitcherListSection() modal.Section {
 				nameStyle = nameNormalStyle
 			}
 
-			sb.WriteString(nameStyle.Render(entry.Name))
+			row.WriteString(nameStyle.Render(entry.Name))
 
 			if isCurrent {
-				sb.WriteString(styles.Muted.Render(" (current)"))
+				row.WriteString(styles.Muted.Render(" (current)"))
 			}
-			sb.WriteString("\n")
+
+			line := row.String()
+			lineWidth := lipgloss.Width(line)
+			if lineWidth < rowWidth {
+				line += strings.Repeat(" ", rowWidth-lineWidth)
+			}
+			lines = append(lines, line)
 
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i - scrollOffset),
+				OffsetY: i,
 				Width:   contentWidth,
 				Height:  1,
 			})
 		}
 
-		remaining := len(themes) - (scrollOffset + visibleCount)
-		if remaining > 0 {
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		}
+		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(themes),
+			ScrollOffset: scrollOffset,
+			VisibleItems: visibleCount,
+			TrackHeight:  visibleCount,
+		})
 
-		return modal.RenderedSection{Content: strings.TrimRight(sb.String(), "\n"), Focusables: focusables}
+		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
+
+		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
 	}, m.themeSwitcherListUpdate)
 }
 

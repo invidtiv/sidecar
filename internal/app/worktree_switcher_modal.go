@@ -143,7 +143,7 @@ func (m *Model) worktreeSwitcherCountSection() modal.Section {
 	}, nil)
 }
 
-// worktreeSwitcherListSection renders the worktree list with selection.
+// worktreeSwitcherListSection renders the worktree list with selection and scrollbar.
 func (m *Model) worktreeSwitcherListSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		worktrees := m.worktreeSwitcherFiltered
@@ -171,31 +171,26 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 		}
 		scrollOffset := m.worktreeSwitcherScroll
 
-		var sb strings.Builder
+		rowWidth := max(10, contentWidth-2) // Reserve 2 cols for space + scrollbar
+		lines := make([]string, 0, visibleCount*2)
 		focusables := make([]modal.FocusableInfo, 0, visibleCount)
-		lineOffset := 0
 
-		// Scroll indicator (top)
-		if scrollOffset > 0 {
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", scrollOffset)))
-			sb.WriteString("\n")
-			lineOffset++
-		}
-
-		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(worktrees); i++ {
-			wt := worktrees[i]
-			isCursor := i == m.worktreeSwitcherCursor
-			itemID := worktreeSwitcherItemID(i)
+		for i := 0; i < visibleCount; i++ {
+			entryIdx := scrollOffset + i
+			wt := worktrees[entryIdx]
+			isCursor := entryIdx == m.worktreeSwitcherCursor
+			itemID := worktreeSwitcherItemID(entryIdx)
 			isHovered := itemID == hoverID
 
 			normalizedPath, _ := normalizePath(wt.Path)
 			isCurrent := normalizedPath == normalizedWorkDir
 
+			var nameRow strings.Builder
 			// Cursor indicator
 			if isCursor {
-				sb.WriteString(cursorStyle.Render("> "))
+				nameRow.WriteString(cursorStyle.Render("> "))
 			} else {
-				sb.WriteString("  ")
+				nameRow.WriteString("  ")
 			}
 
 			// Determine display name (branch name for worktrees, "main" badge for main repo)
@@ -218,51 +213,62 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 				nameStyle = nameNormalStyle
 			}
 
-			sb.WriteString(nameStyle.Render(displayName))
+			nameRow.WriteString(nameStyle.Render(displayName))
 
 			// Main badge
 			if wt.IsMain {
-				sb.WriteString(" ")
-				sb.WriteString(mainBadgeStyle.Render("[main]"))
+				nameRow.WriteString(" ")
+				nameRow.WriteString(mainBadgeStyle.Render("[main]"))
 			}
 
 			// Current indicator
 			if isCurrent {
-				sb.WriteString(styles.Muted.Render(" (current)"))
+				nameRow.WriteString(styles.Muted.Render(" (current)"))
 			}
 
-			sb.WriteString("\n")
+			line1 := nameRow.String()
+			lineWidth1 := lipgloss.Width(line1)
+			if lineWidth1 < rowWidth {
+				line1 += strings.Repeat(" ", rowWidth-lineWidth1)
+			}
+			lines = append(lines, line1)
 
 			// Show path (truncated if needed)
 			pathDisplay := wt.Path
-			maxPathLen := contentWidth - 4
+			maxPathLen := rowWidth - 4
+			if maxPathLen < 4 {
+				maxPathLen = 4
+			}
 			if len(pathDisplay) > maxPathLen {
 				pathDisplay = "..." + pathDisplay[len(pathDisplay)-maxPathLen+3:]
 			}
-			sb.WriteString(styles.Muted.Render("  " + pathDisplay))
-
-			if i < scrollOffset+visibleCount-1 && i < len(worktrees)-1 {
-				sb.WriteString("\n")
+			line2 := styles.Muted.Render("  " + pathDisplay)
+			lineWidth2 := lipgloss.Width(line2)
+			if lineWidth2 < rowWidth {
+				line2 += strings.Repeat(" ", rowWidth-lineWidth2)
 			}
+			lines = append(lines, line2)
 
 			// Each worktree takes 2 lines (name + path)
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      itemID,
 				OffsetX: 0,
-				OffsetY: lineOffset + (i-scrollOffset)*2,
+				OffsetY: i * 2,
 				Width:   contentWidth,
 				Height:  2,
 			})
 		}
 
-		// Scroll indicator (bottom)
-		remaining := len(worktrees) - (scrollOffset + visibleCount)
-		if remaining > 0 {
-			sb.WriteString("\n")
-			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		}
+		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(worktrees) * 2,
+			ScrollOffset: scrollOffset * 2,
+			VisibleItems: visibleCount * 2,
+			TrackHeight:  visibleCount * 2,
+		})
 
-		return modal.RenderedSection{Content: sb.String(), Focusables: focusables}
+		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
+
+		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
 	}, m.worktreeSwitcherListUpdate)
 }
 

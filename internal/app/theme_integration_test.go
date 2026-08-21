@@ -1,12 +1,14 @@
 package app
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
@@ -350,5 +352,132 @@ func TestNotifyThemeChangedPersistsReplacementAndBatchesCmds(t *testing.T) {
 	}
 	if vp.gen != 1 {
 		t.Errorf("replacement gen = %d, want 1 (write into Plugins() copy was discarded)", vp.gen)
+	}
+}
+
+func TestThemeSwitcherMouseWheelAndClick(t *testing.T) {
+	origCfg, _ := config.Load()
+	t.Cleanup(func() {
+		if origCfg != nil {
+			_ = config.Save(origCfg)
+		}
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	m := newTestThemeModel()
+	m.showThemeSwitcher = true
+	m.initThemeSwitcher()
+
+	// 1. Mouse wheel down advances selected index and previews new theme
+	initialIdx := m.themeSwitcherSelectedIdx
+	updated, _ := m.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown, X: 40, Y: 20})
+	m = updated.(*Model)
+	if m.themeSwitcherSelectedIdx <= initialIdx {
+		t.Fatalf("wheel down idx = %d, want > %d", m.themeSwitcherSelectedIdx, initialIdx)
+	}
+	if styles.GetCurrentTheme().Name == "sidecar-modern" {
+		t.Fatalf("theme after wheel down did not preview new theme: %q", styles.GetCurrentTheme().Name)
+	}
+
+	// 2. Single click on a theme item selects and confirms it
+	m.ensureThemeSwitcherModal()
+	if m.themeSwitcherMouseHandler == nil {
+		m.themeSwitcherMouseHandler = mouse.NewHandler()
+	}
+	m.themeSwitcherModal.Render(m.width, m.height, m.themeSwitcherMouseHandler)
+	regions := m.themeSwitcherMouseHandler.HitMap.Regions()
+	var targetRegion *mouse.Region
+	for _, r := range regions {
+		if r.ID == themeSwitcherItemPrefix+"2" {
+			targetRegion = &r
+			break
+		}
+	}
+	if targetRegion == nil {
+		t.Fatal("theme-switcher-item-2 region not found")
+	}
+
+	clickMsg := tea.MouseClickMsg{
+		X:      targetRegion.Rect.X + 2,
+		Y:      targetRegion.Rect.Y,
+		Button: tea.MouseLeft,
+	}
+	updated, clickCmd := m.Update(clickMsg)
+	m = updated.(*Model)
+	if m.showThemeSwitcher {
+		t.Fatal("theme switcher modal should be closed after theme click")
+	}
+	if clickCmd == nil {
+		t.Fatal("click on theme did not return confirmation command")
+	}
+}
+
+func TestProjectAndThemeSwitcherScrollbarStableHeight(t *testing.T) {
+	t.Cleanup(func() {
+		styles.ApplyTheme("sidecar-modern")
+	})
+	styles.ApplyTheme("sidecar-modern")
+
+	m := newTestThemeModel()
+	m.cfg.Projects.List = []config.ProjectConfig{
+		{Name: "p0", Path: "/path/0"},
+		{Name: "p1", Path: "/path/1"},
+		{Name: "p2", Path: "/path/2"},
+		{Name: "p3", Path: "/path/3"},
+		{Name: "p4", Path: "/path/4"},
+		{Name: "p5", Path: "/path/5"},
+		{Name: "p6", Path: "/path/6"},
+		{Name: "p7", Path: "/path/7"},
+		{Name: "p8", Path: "/path/8"},
+		{Name: "p9", Path: "/path/9"},
+		{Name: "p10", Path: "/path/10"},
+		{Name: "p11", Path: "/path/11"},
+	}
+
+	// Test Project Switcher scrollbar & height stability
+	m.showProjectSwitcher = true
+	m.initProjectSwitcher()
+	m.ensureProjectSwitcherModal()
+
+	projView := m.projectSwitcherModal.Render(m.width, m.height, m.projectSwitcherMouseHandler)
+	if !strings.Contains(projView, "┃") && !strings.Contains(projView, "│") {
+		t.Error("project switcher missing scrollbar characters")
+	}
+
+	projLines := strings.Count(projView, "\n") + 1
+	for cur := 0; cur < len(m.projectSwitcherFiltered); cur++ {
+		m.projectSwitcherCursor = cur
+		m.projectSwitcherScroll = projectSwitcherEnsureCursorVisible(m.projectSwitcherCursor, m.projectSwitcherScroll, 8)
+		m.clearProjectSwitcherModal()
+		m.ensureProjectSwitcherModal()
+		v := m.projectSwitcherModal.Render(m.width, m.height, m.projectSwitcherMouseHandler)
+		lines := strings.Count(v, "\n") + 1
+		if lines != projLines {
+			t.Fatalf("project switcher cursor %d: height changed from %d to %d lines", cur, projLines, lines)
+		}
+	}
+	m.showProjectSwitcher = false
+
+	// Test Theme Switcher scrollbar & height stability
+	m.showThemeSwitcher = true
+	m.initThemeSwitcher()
+	m.ensureThemeSwitcherModal()
+
+	themeView := m.themeSwitcherModal.Render(m.width, m.height, m.themeSwitcherMouseHandler)
+	if !strings.Contains(themeView, "┃") && !strings.Contains(themeView, "│") {
+		t.Error("theme switcher missing scrollbar characters")
+	}
+
+	themeLines := strings.Count(themeView, "\n") + 1
+	for cur := 0; cur < len(m.themeSwitcherFiltered); cur++ {
+		m.themeSwitcherSelectedIdx = cur
+		m.clearThemeSwitcherModal()
+		m.ensureThemeSwitcherModal()
+		v := m.themeSwitcherModal.Render(m.width, m.height, m.themeSwitcherMouseHandler)
+		lines := strings.Count(v, "\n") + 1
+		if lines != themeLines {
+			t.Fatalf("theme switcher cursor %d: height changed from %d to %d lines", cur, themeLines, lines)
+		}
 	}
 }

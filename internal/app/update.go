@@ -2377,20 +2377,85 @@ func (m *Model) handleThemeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 		m.themeSwitcherMouseHandler = mouse.NewHandler()
 	}
 
+	// Handle scroll wheel for theme list navigation
+	switch msg.Mouse().Button {
+	case tea.MouseWheelUp:
+		themes := m.themeSwitcherFiltered
+		if len(themes) > 0 {
+			prevIdx := m.themeSwitcherSelectedIdx
+			for i := m.themeSwitcherSelectedIdx - 1; i >= 0; i-- {
+				if !themes[i].IsSeparator {
+					m.themeSwitcherSelectedIdx = i
+					break
+				}
+			}
+			if m.themeSwitcherSelectedIdx != prevIdx {
+				m.clearThemeSwitcherModal()
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+			}
+		}
+		return m, nil
+	case tea.MouseWheelDown:
+		themes := m.themeSwitcherFiltered
+		if len(themes) > 0 {
+			prevIdx := m.themeSwitcherSelectedIdx
+			for i := m.themeSwitcherSelectedIdx + 1; i < len(themes); i++ {
+				if !themes[i].IsSeparator {
+					m.themeSwitcherSelectedIdx = i
+					break
+				}
+			}
+			if m.themeSwitcherSelectedIdx != prevIdx {
+				m.clearThemeSwitcherModal()
+				return m, m.previewThemeEntry(themes[m.themeSwitcherSelectedIdx])
+			}
+		}
+		return m, nil
+	}
+
 	action := m.themeSwitcherModal.HandleMouse(msg, m.themeSwitcherMouseHandler)
+
+	// Check if action is a theme item click
+	if strings.HasPrefix(action, themeSwitcherItemPrefix) {
+		var idx int
+		if _, err := fmt.Sscanf(action, themeSwitcherItemPrefix+"%d", &idx); err == nil {
+			themes := m.themeSwitcherFiltered
+			if idx >= 0 && idx < len(themes) && !themes[idx].IsSeparator {
+				m.themeSwitcherSelectedIdx = idx
+				entry := themes[idx]
+				themeCmd := m.previewThemeEntry(entry)
+				var tc config.ThemeConfig
+				if entry.IsBuiltIn {
+					tc = config.ThemeConfig{Name: entry.ThemeKey}
+				} else {
+					tc = config.ThemeConfig{Name: "default", Community: entry.ThemeKey}
+				}
+				return m, tea.Batch(themeCmd, m.confirmThemeSelection(tc, entry.Name))
+			}
+		}
+		return m, nil
+	}
+
 	switch action {
+	case "cancel":
+		cmd := m.previewThemeEntry(m.themeSwitcherOriginal)
+		m.resetThemeSwitcher()
+		m.updateContext()
+		return m, cmd
 	case "select":
 		themes := m.themeSwitcherFiltered
 		if m.themeSwitcherSelectedIdx >= 0 && m.themeSwitcherSelectedIdx < len(themes) {
 			entry := themes[m.themeSwitcherSelectedIdx]
-			themeCmd := m.previewThemeEntry(entry)
-			var tc config.ThemeConfig
-			if entry.IsBuiltIn {
-				tc = config.ThemeConfig{Name: entry.ThemeKey}
-			} else {
-				tc = config.ThemeConfig{Name: "default", Community: entry.ThemeKey}
+			if !entry.IsSeparator {
+				themeCmd := m.previewThemeEntry(entry)
+				var tc config.ThemeConfig
+				if entry.IsBuiltIn {
+					tc = config.ThemeConfig{Name: entry.ThemeKey}
+				} else {
+					tc = config.ThemeConfig{Name: "default", Community: entry.ThemeKey}
+				}
+				return m, tea.Batch(themeCmd, m.confirmThemeSelection(tc, entry.Name))
 			}
-			return m, tea.Batch(themeCmd, m.confirmThemeSelection(tc, entry.Name))
 		}
 	}
 	return m, nil
