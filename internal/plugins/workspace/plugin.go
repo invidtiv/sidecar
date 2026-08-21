@@ -375,6 +375,16 @@ type Plugin struct {
 	termPanelVisible bool      // Whether the terminal panel's leaf is in the tree
 	shellSplitAxis   SplitAxis // Axis the next shell split opens at
 	shellSplitRatio  int       // Primary terminal's share of that split
+	// shellSplitPlacement is the `--split` placement the create modal asked
+	// for, consumed by the open that follows it. Empty means ctrl+t's
+	// remembered shape.
+	shellSplitPlacement string
+	// shellLeafName is the name the create modal gave the shell leaf, shown in
+	// its header chip.
+	shellLeafName string
+	// restoredShellSession is the durable session selector a restored shell
+	// leaf carried, used once instead of re-deriving the name.
+	restoredShellSession string
 	// legacyTermPanel is one user's pre-split panel preference, held only until
 	// the first persisted layout it can be spliced into.
 	legacyTermPanel       termPanelPrefs
@@ -1745,14 +1755,17 @@ func (p *Plugin) createOpenOpts(kind workspacecreate.Kind, focusKind bool, name 
 		nextShell = p.nextShellDisplayName()
 	}
 	return workspacecreate.OpenOpts{
-		Kind:           kind,
-		FocusKind:      focusKind,
-		ShowProject:    false,
-		Name:           name,
-		Agents:         p.configAgents(),
-		NextShell:      nextShell,
-		PreferredAgent: p.preferredCreateAgent(),
-		DefaultAgent:   string(p.getConfigDefaultAgentType()),
+		Kind:      kind,
+		FocusKind: focusKind,
+		// This surface has a pane tree, so it can place a terminal split.
+		AllowTerminalSplit: terminalPanelEnabled(),
+		TerminalName:       p.terminalSplitAutoName(),
+		ShowProject:        false,
+		Name:               name,
+		Agents:             p.configAgents(),
+		NextShell:          nextShell,
+		PreferredAgent:     p.preferredCreateAgent(),
+		DefaultAgent:       string(p.getConfigDefaultAgentType()),
 	}
 }
 
@@ -1803,14 +1816,37 @@ func (p *Plugin) initCreateModalNamed(name string) {
 	_ = p.openCreate(workspacecreate.KindWorktree, false, name)
 }
 
-// openCreateModal opens the create form (Worktree, focus Name).
+// openCreateModal opens the create form on the row it was last left on, Name
+// focused.
 func (p *Plugin) openCreateModal() tea.Cmd {
-	return p.openCreate(workspacecreate.KindWorktree, false, "")
+	return p.openCreateRemembered(false)
 }
 
-// openCreateModalFocusKind opens the create form with the kind toggle focused.
+// openCreateModalFocusKind opens the create form with the kind list focused.
 func (p *Plugin) openCreateModalFocusKind() tea.Cmd {
-	return p.openCreate(workspacecreate.KindWorktree, true, "")
+	return p.openCreateRemembered(true)
+}
+
+// openCreateRemembered opens the create form on the remembered row: the kind a
+// user picked once is the kind they usually want again.
+func (p *Plugin) openCreateRemembered(focusKind bool) tea.Cmd {
+	p.resetCreateFormState()
+	p.viewMode = ViewModeCreate
+	opts := p.createOpenOpts(workspacecreate.KindWorktree, focusKind, "")
+	opts.UseLastKind = true
+	p.createForm = workspacecreate.Open(opts)
+	return p.loadBranches()
+}
+
+// terminalSplitAutoName is the name a terminal split takes when the user types
+// none: the workspace's own directory, which is what distinguishes one split
+// from another in a header.
+func (p *Plugin) terminalSplitAutoName() string {
+	dir := strings.TrimSpace(p.termPanelWorkDir())
+	if dir == "" {
+		return "Terminal"
+	}
+	return "term · " + filepath.Base(dir)
 }
 
 // openCreateModalWithTask opens the create modal with a name derived from the

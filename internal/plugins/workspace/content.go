@@ -137,7 +137,7 @@ type shellContent struct {
 
 func (c *shellContent) Kind() string { return contentKindShell }
 
-func (c *shellContent) Title() string { return "Terminal" }
+func (c *shellContent) Title() string { return c.p.shellLeafTitle() }
 
 // SetSize records the box and nothing else, for the reason terminalContent
 // gives: the tmux pane is resized on the state change that moved the box, not

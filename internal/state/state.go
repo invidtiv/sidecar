@@ -143,6 +143,11 @@ type PaneLayoutJSON struct {
 	// one-tab list when IssueTabs is absent.
 	Issue  string `json:"issue,omitempty"`
 	Scroll int    `json:"scroll,omitempty"`
+	// Session is a live leaf's durable target selector — the tmux session name
+	// it owns. It is never a tmux pane id: pane ids are reassigned by the
+	// server and mean nothing after a restart, so a leaf that persisted one
+	// would reattach to whatever now holds that id.
+	Session string `json:"session,omitempty"`
 }
 
 // PaneIssueTabJSON is one persisted issue tab. Restore re-fetches the issue

@@ -443,6 +443,9 @@ func (p *Plugin) handleCreateModalMouse(msg tea.MouseMsg) tea.Cmd {
 		p.clearCreateModal()
 		return nil
 	}
+	if workspacecreate.IsPlacementAction(action) {
+		return p.createFormPlacementAction(action)
+	}
 
 	return nil
 }

@@ -1,5 +1,14 @@
 package workspace
 
+import (
+	"strings"
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/panelayout"
+)
+
 // The terminal panel is a Shell leaf of the pane tree, and nothing more. Its
 // box, its divider, its border and its hit regions are the shared frame's,
 // exactly like a document's or a diff's — there is no second split system
@@ -24,6 +33,10 @@ const (
 	// remembered: below the primary terminal, which is where the panel opened
 	// before it was a leaf.
 	shellSplitDefaultAxis = SplitRows
+
+	// shellCapMessage is what a refused third live terminal says. The cap is a
+	// rule the user can see and act on, not a click that quietly does nothing.
+	shellCapMessage = "Two live terminals at a time; close one first"
 )
 
 // shellLeaf is the terminal panel's leaf, or nil when the panel is not in the
@@ -95,25 +108,98 @@ func (p *Plugin) syncShellLeaf() bool {
 	return false
 }
 
-// openShellLeaf splits the primary terminal with a Shell leaf at the remembered
-// shape. A split the viewport cannot hold is refused rather than squeezed
-// (Law 2), and the refusal turns the panel back off so no state claims a leaf
-// that is not there.
+// shellSessionSelector picks a shell leaf's durable tmux target: the selector
+// persisted with the leaf when it names a session, else the one derived from the
+// current selection. A tmux pane id is never durable — the server reassigns
+// them — so anything that is not a session name of ours falls back to derived.
+func shellSessionSelector(persisted, derived string) string {
+	persisted = strings.TrimSpace(persisted)
+	if strings.HasPrefix(persisted, termPanelSessionPrefix) {
+		return persisted
+	}
+	return derived
+}
+
+// shellCloseNeedsConfirm reports that closing a shell leaf must ask first,
+// because something other than the login shell is running in it. It is a
+// state-free rule so a headless caller could adopt it unchanged: currentCommand
+// is tmux's pane_current_command, shellCommand the session's own shell.
+func shellCloseNeedsConfirm(currentCommand, shellCommand string) bool {
+	current := strings.TrimSpace(currentCommand)
+	if current == "" {
+		return false
+	}
+	shell := strings.TrimSpace(shellCommand)
+	if shell == "" {
+		return true
+	}
+	return !strings.EqualFold(baseCommand(current), baseCommand(shell))
+}
+
+func baseCommand(command string) string {
+	if idx := strings.LastIndexByte(command, '/'); idx >= 0 {
+		command = command[idx+1:]
+	}
+	return strings.TrimPrefix(command, "-")
+}
+
+// shellSplitPlacement is where the next shell split lands, in the `--split`
+// vocabulary the create modal's placement buttons share with the CLI: "auto"
+// (or empty) follows panelayout's auto rules, "right"/"below" override the
+// axis. It is set immediately before the flag that opens the leaf, and
+// openShellLeaf consumes it, so no two paths can disagree about placement.
+func (p *Plugin) setShellSplitPlacement(placement string) {
+	p.shellSplitPlacement = placement
+}
+
+// shellLeafOpenPlan answers where a shell split goes. With no placement asked
+// for, it is the remembered shape on the primary terminal — what ctrl+t has
+// always done. With one, it is panelayout's auto plan, axis-overridden by the
+// same function `sidecar open --split` uses.
+func (p *Plugin) shellLeafOpenPlan(placement string) (panelayout.OpenPlan, int, bool) {
+	axis, ratio := p.shellSplitShape()
+	if placement == "" {
+		terminal := firstPaneLeafOfKind(p.paneRoot, PaneTerminal)
+		if terminal == nil {
+			return panelayout.OpenPlan{}, 0, false
+		}
+		return panelayout.OpenPlan{Split: terminal.ID, Axis: axis}, ratio, true
+	}
+	plan, ok := planPaneOpen(p.paneRoot, PaneShell, p.lastPaneBoxes())
+	if !ok {
+		return panelayout.OpenPlan{}, 0, false
+	}
+	return panelayout.ApplyAxisOverride(plan, placement), shellSplitDefaultRatio, true
+}
+
+// openShellLeaf splits the tree with a Shell leaf where shellLeafOpenPlan says.
+// Two things are refused rather than squeezed or hidden: a third live terminal
+// on screen (panelayout.LiveLeafCap), and a split the viewport cannot hold
+// (Law 2). Both turn the panel back off so no state claims a leaf that is not
+// there, and both say why in a toast — a refusal nobody can see is a bug
+// report.
 func (p *Plugin) openShellLeaf() bool {
-	terminal := firstPaneLeafOfKind(p.paneRoot, PaneTerminal)
+	placement := strings.TrimSpace(p.shellSplitPlacement)
+	p.shellSplitPlacement = ""
+	if panelayout.LiveCapReached(p.paneRoot) {
+		p.termPanelVisible = false
+		p.toastMessage = shellCapMessage
+		p.toastTime = time.Now()
+		return false
+	}
+	plan, ratio, planned := p.shellLeafOpenPlan(placement)
 	peer, placed := p.previewPeerBox()
-	if terminal == nil || !placed {
+	if !planned || !placed {
 		p.termPanelVisible = false
 		return false
 	}
-	axis, ratio := p.shellSplitShape()
-	trial, _ := SplitLeaf(clonePaneTree(p.paneRoot), terminal.ID, axis, &PaneNode{Kind: PaneShell})
+	trial, _ := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, &PaneNode{Kind: PaneShell})
 	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.termPanelVisible = false
 		return false
 	}
 	node := &PaneNode{Kind: PaneShell}
-	root, focus := SplitLeaf(p.paneRoot, terminal.ID, axis, node)
+	root, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
 	if focus != node.ID {
 		p.termPanelVisible = false
 		return false
@@ -126,6 +212,35 @@ func (p *Plugin) openShellLeaf() bool {
 	// on the terminal leaf the ring names.
 	p.paneFocus = terminalLeafID(p.paneRoot)
 	return true
+}
+
+// createTerminalSplit is the create modal's Terminal split row: a live terminal
+// peer of this workspace's own, placed where the modal's placement row asked.
+// A split that is already open is not opened twice — a second leaf would draw a
+// session that is already on screen — and a refused split explains itself in
+// openShellLeaf's toast.
+func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
+	if !terminalPanelEnabled() {
+		return nil
+	}
+	if p.termPanelVisible {
+		p.shellLeafName = strings.TrimSpace(name)
+		p.toastMessage = shellCapMessage
+		p.toastTime = time.Now()
+		return nil
+	}
+	p.shellLeafName = strings.TrimSpace(name)
+	p.setShellSplitPlacement(placement)
+	return p.toggleTermPanel()
+}
+
+// shellLeafTitle is what the shell leaf's header calls it: the name the create
+// modal gave it, or the kind's own label.
+func (p *Plugin) shellLeafTitle() string {
+	if name := strings.TrimSpace(p.shellLeafName); name != "" {
+		return name
+	}
+	return "Terminal"
 }
 
 // shellLeafBox is the panel's INNER box — header row plus viewport, inside its

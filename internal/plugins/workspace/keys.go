@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceops"
 	"github.com/marcus/sidecar/internal/worktreedelete"
 )
@@ -995,6 +996,9 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		p.viewMode = ViewModeList
 		p.clearCreateModal()
 		return nil
+	}
+	if workspacecreate.IsPlacementAction(action) {
+		return p.createFormPlacementAction(action)
 	}
 
 	if action == "" {

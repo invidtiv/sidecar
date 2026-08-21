@@ -1298,7 +1298,9 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
 	}
 	if node.Kind == PaneShell {
-		return &state.PaneLayoutJSON{Kind: contentKindShell}
+		// The leaf owns its session, so its identity is persisted with it
+		// rather than re-derived: a durable selector, never a pane id.
+		return &state.PaneLayoutJSON{Kind: contentKindShell, Session: p.termPanelSession}
 	}
 	if node.Kind == PaneIssue {
 		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
@@ -1455,6 +1457,7 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 			return nil
 		}
 		*shellCount++
+		p.restoredShellSession = shellSessionSelector(saved.Session, "")
 		return &PaneNode{ID: p.nextPaneID(), Kind: PaneShell}
 	case contentKindDoc:
 		return p.decodeDocLeaf(saved, root, loads)

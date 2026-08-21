@@ -214,7 +214,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 // termPanelChip is the terminal panel's identity chip, the left region of its
 // header row.
 func (p *Plugin) termPanelChip() string {
-	return p.paneFocusChip("Terminal", p.termPanelFocused)
+	return p.paneFocusChip(p.shellLeafTitle(), p.termPanelFocused)
 }
 
 // termPanelHints is the right region of the terminal panel's header row.
