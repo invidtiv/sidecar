@@ -298,9 +298,10 @@ func (m *Model) WorkspacesView(width, height int) string {
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
 func (m *Model) applyWorkspacesEmptyState(width int) {
-	// Hide-idle only filters rows that exist. A catalog with nothing in it
-	// is first-run, whether or not idle worktrees would be shown.
-	if len(m.catalog) > 0 {
+	// Hide-idle only filters rows that exist. First-run copy is for a catalog
+	// we have actually collected and found empty — not for "nothing loaded yet",
+	// which would claim no workspaces exist while inventory is still in flight.
+	if !m.workspacesInventorySettled() || len(m.catalog) > 0 {
 		m.workspaces.SetEmptyText(workspacesEmptyText(false))
 		return
 	}
@@ -310,6 +311,23 @@ func (m *Model) applyWorkspacesEmptyState(width int) {
 		return
 	}
 	m.workspaces.SetEmptyText(workspacesEmptyText(true))
+}
+
+// workspacesInventorySettled reports that every configured project has a
+// collector result. An empty catalog before that is "we don't know yet".
+func (m *Model) workspacesInventorySettled() bool {
+	if m.loading {
+		return false
+	}
+	if len(m.projects) == 0 {
+		return false
+	}
+	for _, project := range m.projects {
+		if _, loaded := m.results[projectKey(project)]; !loaded {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *Model) renderWorkspaceList(x, y, width, height int) string {
