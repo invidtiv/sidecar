@@ -169,3 +169,22 @@ func TestSilentPluginFooterStatusChangesNothing(t *testing.T) {
 		t.Fatalf("a healthy plugin put a condition in the footer:\n%s", footer)
 	}
 }
+
+// The last-refresh clock used to sit at the right edge of every footer.
+// It belongs in Settings → Diagnostics now, so the footer can spend that
+// width on hints.
+func TestFooterOmitsRefreshTimestamp(t *testing.T) {
+	p := &footerStatusPlugin{}
+	p.context = "tasks-list"
+	p.claims = map[string]bool{}
+	m := routerTestModel(t, p)
+	m.ui.LastRefresh = time.Date(2026, 8, 21, 15, 4, 5, 0, time.UTC)
+
+	footer := ansi.Strip(m.renderFooter())
+	if strings.Contains(footer, "↻") {
+		t.Fatalf("footer still paints the refresh glyph:\n%s", footer)
+	}
+	if strings.Contains(footer, "15:04:05") {
+		t.Fatalf("footer still paints the refresh time:\n%s", footer)
+	}
+}

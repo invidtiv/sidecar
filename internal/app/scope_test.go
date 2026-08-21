@@ -629,7 +629,7 @@ func TestGlobalWorkspacesKeysAreDiscoverableInHelpAndPalette(t *testing.T) {
 		t.Fatalf("help surface = %q/%q", title, ctx)
 	}
 	var help strings.Builder
-	m.renderBindingSection(&help, ctx)
+	m.renderBindingSection(&help, ctx, 60)
 	rendered := ansi.Strip(help.String())
 	if strings.TrimSpace(rendered) == "" {
 		t.Fatal("the help modal renders an empty section for the global Workspaces tab")

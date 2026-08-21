@@ -1242,29 +1242,21 @@ func (m Model) renderFooter() string {
 		status = style.Render(text)
 	}
 
-	// Last refresh
-	refresh := styles.Muted.Render(fmt.Sprintf("↻ %s", m.ui.LastRefresh.Format("15:04:05")))
-
-	// Calculate available width for hints (leave room for status, refresh, and spacing)
+	// Refresh time and update status live in Settings → Diagnostics, not here.
 	statusWidth := lipgloss.Width(status)
-	refreshWidth := lipgloss.Width(refresh)
-	minSpacing := 4 // Minimum spacing between elements
-	availableForHints := m.width - statusWidth - refreshWidth - minSpacing
+	minSpacing := 4
+	availableForHints := m.width - statusWidth - minSpacing
 
-	// Key hints (context-aware) - truncate to fit
 	hintsStr := renderHintLineTruncated(m.footerHints(), availableForHints)
 
-	// Calculate spacing
 	hintsWidth := lipgloss.Width(hintsStr)
-	spacing := m.width - hintsWidth - statusWidth - refreshWidth
-
+	spacing := m.width - hintsWidth - statusWidth
 	if spacing < 0 {
 		spacing = 0
 	}
 
-	footer := hintsStr + strings.Repeat(" ", spacing/2) + status + strings.Repeat(" ", spacing-(spacing/2)) + refresh
+	footer := hintsStr + strings.Repeat(" ", spacing) + status
 
-	// Use MaxWidth to prevent wrapping and ensure single line
 	return styles.Footer.Width(m.width).MaxWidth(m.width).Render(footer)
 }
 
@@ -1570,7 +1562,7 @@ func (m *Model) helpGlobalSection() modal.Section {
 		var b strings.Builder
 		b.WriteString(styles.Title.Render("Global"))
 		b.WriteString("\n")
-		m.renderBindingSection(&b, "global")
+		m.renderBindingSection(&b, "global", contentWidth)
 		return modal.RenderedSection{Content: b.String()}
 	}, nil)
 }
@@ -1592,7 +1584,7 @@ func (m *Model) helpPluginSection() modal.Section {
 		var b strings.Builder
 		b.WriteString(styles.Title.Render(title))
 		b.WriteString("\n")
-		m.renderBindingSection(&b, ctx)
+		m.renderBindingSection(&b, ctx, contentWidth)
 		return modal.RenderedSection{Content: b.String()}
 	}, nil)
 }
@@ -1638,19 +1630,30 @@ func (m *Model) renderHelpModal(content string) string {
 	return ui.OverlayModal(content, modalContent, m.width, m.height)
 }
 
-// renderBindingSection renders bindings for a context.
-func (m Model) renderBindingSection(b *strings.Builder, context string) {
+const (
+	bindingHelpIndent = 2
+	bindingHelpGap    = 1
+	bindingHelpKeyMin = 11
+	bindingHelpCmdMin = 8
+)
+
+type bindingHelpRow struct {
+	keys string
+	name string
+}
+
+// renderBindingSection renders bindings for a context, aligned to contentWidth.
+func (m Model) renderBindingSection(b *strings.Builder, context string, contentWidth int) {
 	bindings := m.keymap.BindingsForContext(context)
 
-	// Group similar bindings
 	seen := make(map[string]bool)
+	var rows []bindingHelpRow
 	for _, binding := range bindings {
 		if seen[binding.Command] {
 			continue
 		}
 		seen[binding.Command] = true
 
-		// Find all keys for this command
 		var keys []string
 		for _, b2 := range bindings {
 			if b2.Command != binding.Command {
@@ -1665,13 +1668,124 @@ func (m Model) renderBindingSection(b *strings.Builder, context string) {
 			keys = append(keys, b2.Key)
 		}
 
-		keyStr := formatBindingKeys(keys)
-		cmdName := formatCommandName(binding.Command)
-
-		// Pad key to align commands
-		padded := fmt.Sprintf("%-11s", keyStr)
-		fmt.Fprintf(b, "  %s %s\n", styles.Muted.Render(padded), cmdName)
+		rows = append(rows, bindingHelpRow{
+			keys: formatBindingKeys(keys),
+			name: formatCommandName(binding.Command),
+		})
 	}
+	writeBindingRows(b, rows, contentWidth)
+}
+
+// writeBindingRows paints key/command rows with an ANSI-aware key column so
+// styled keys cannot steal padding and wrap into the next command.
+func writeBindingRows(b *strings.Builder, rows []bindingHelpRow, contentWidth int) {
+	if len(rows) == 0 {
+		return
+	}
+
+	keyCol := bindingHelpKeyMin
+	for _, row := range rows {
+		if w := lipgloss.Width(row.keys); w > keyCol {
+			keyCol = w
+		}
+	}
+
+	unlimited := contentWidth <= 0
+	if !unlimited {
+		maxKey := contentWidth - bindingHelpIndent - bindingHelpGap - bindingHelpCmdMin
+		if maxKey < 1 {
+			maxKey = 1
+		}
+		if keyCol > maxKey {
+			keyCol = maxKey
+		}
+	}
+
+	cmdWidth := 0
+	if !unlimited {
+		cmdWidth = contentWidth - bindingHelpIndent - bindingHelpGap - keyCol
+		if cmdWidth < 1 {
+			cmdWidth = 1
+		}
+	}
+
+	indent := strings.Repeat(" ", bindingHelpIndent)
+	cont := strings.Repeat(" ", bindingHelpIndent+keyCol+bindingHelpGap)
+
+	for _, row := range rows {
+		keys := row.keys
+		if !unlimited && lipgloss.Width(keys) > keyCol {
+			keys = ansi.Truncate(keys, keyCol, "…")
+		}
+		keyCell := padVisual(styles.Muted.Render(keys), keyCol)
+
+		nameLines := []string{row.name}
+		if !unlimited {
+			nameLines = wrapPlain(row.name, cmdWidth)
+		}
+		if len(nameLines) == 0 {
+			nameLines = []string{""}
+		}
+
+		fmt.Fprintf(b, "%s%s%s%s\n", indent, keyCell, strings.Repeat(" ", bindingHelpGap), nameLines[0])
+		for _, extra := range nameLines[1:] {
+			fmt.Fprintf(b, "%s%s\n", cont, extra)
+		}
+	}
+}
+
+func padVisual(s string, width int) string {
+	n := width - lipgloss.Width(s)
+	if n <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", n)
+}
+
+func wrapPlain(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	words := strings.Fields(s)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	var cur string
+	flush := func() {
+		if cur == "" {
+			return
+		}
+		lines = append(lines, cur)
+		cur = ""
+	}
+	for _, word := range words {
+		for lipgloss.Width(word) > width {
+			flush()
+			cut := 1
+			for cut < len(word) && lipgloss.Width(word[:cut+1]) <= width {
+				cut++
+			}
+			lines = append(lines, word[:cut])
+			word = word[cut:]
+		}
+		if word == "" {
+			continue
+		}
+		if cur == "" {
+			cur = word
+			continue
+		}
+		if lipgloss.Width(cur+" "+word) <= width {
+			cur += " " + word
+			continue
+		}
+		flush()
+		cur = word
+	}
+	flush()
+	return lines
 }
 
 // contextShadowsGlobalKey reports that the focused context binds this key

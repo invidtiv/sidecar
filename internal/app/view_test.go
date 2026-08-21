@@ -632,6 +632,115 @@ func TestGlobalRestoreOmittedWithoutProjectName(t *testing.T) {
 	}
 }
 
+func TestFooterOmitsRefreshTimestampAtRender(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m.width = 80
+	m.height = 24
+	m.ready = true
+	m.ui.LastRefresh = time.Date(2026, 8, 21, 19, 31, 42, 0, time.UTC)
+
+	footer := ansi.Strip(m.renderFooter())
+	if strings.Contains(footer, "↻") || strings.Contains(footer, "19:31:42") {
+		t.Fatalf("footer still shows the refresh stamp:\n%s", footer)
+	}
+}
+
+func TestHelpBindingRowsStayAlignedAtNarrowWidth(t *testing.T) {
+	rows := []bindingHelpRow{
+		{keys: "shift+tab, ctrl+enter", name: "open the configuration panel"},
+		{keys: "q", name: "quit"},
+	}
+	const width = 28
+	cmdCol := bindingHelpCommandColumn(rows, width)
+
+	var b strings.Builder
+	writeBindingRows(&b, rows, width)
+
+	plain := ansi.Strip(b.String())
+	lines := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped rows, got:\n%s", plain)
+	}
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			t.Fatalf("line %d is %d cells, want <= %d: %q", i, lipgloss.Width(line), width, line)
+		}
+	}
+
+	var firstLines []string
+	for _, line := range lines {
+		_, afterIndent := visualCut(line, bindingHelpIndent)
+		left, right := visualCut(line, cmdCol)
+		if afterIndent != "" && !strings.HasPrefix(afterIndent, " ") {
+			firstLines = append(firstLines, line)
+			if strings.HasPrefix(right, " ") || strings.TrimSpace(right) == "" {
+				t.Fatalf("command did not start at column %d: %q\n%s", cmdCol, line, plain)
+			}
+			continue
+		}
+		if strings.TrimSpace(left) != "" {
+			t.Fatalf("a key wrapped into the command column: %q\n%s", line, plain)
+		}
+	}
+	if len(firstLines) != 2 {
+		t.Fatalf("want one start line per command, got %d:\n%s", len(firstLines), plain)
+	}
+	if !strings.Contains(firstLines[1], "q") || !strings.Contains(firstLines[1], "quit") {
+		t.Fatalf("second command did not stay on its own row: %q\n%s", firstLines[1], plain)
+	}
+
+	var wide strings.Builder
+	writeBindingRows(&wide, rows, 72)
+	wideLines := strings.Split(strings.TrimRight(ansi.Strip(wide.String()), "\n"), "\n")
+	if len(wideLines) != 2 {
+		t.Fatalf("wide help should keep one line per command, got:\n%s", wide.String())
+	}
+	wideCol := bindingHelpCommandColumn(rows, 72)
+	for _, line := range wideLines {
+		_, right := visualCut(line, wideCol)
+		if strings.HasPrefix(right, " ") || strings.TrimSpace(right) == "" {
+			t.Fatalf("wide command did not start at column %d: %q\n%s", wideCol, line, wide.String())
+		}
+	}
+}
+
+func bindingHelpCommandColumn(rows []bindingHelpRow, contentWidth int) int {
+	keyCol := bindingHelpKeyMin
+	for _, row := range rows {
+		if w := lipgloss.Width(row.keys); w > keyCol {
+			keyCol = w
+		}
+	}
+	if contentWidth > 0 {
+		maxKey := contentWidth - bindingHelpIndent - bindingHelpGap - bindingHelpCmdMin
+		if maxKey < 1 {
+			maxKey = 1
+		}
+		if keyCol > maxKey {
+			keyCol = maxKey
+		}
+	}
+	return bindingHelpIndent + keyCol + bindingHelpGap
+}
+
+func visualCut(s string, col int) (left, right string) {
+	if col <= 0 {
+		return "", s
+	}
+	var w int
+	for i, r := range s {
+		rw := lipgloss.Width(string(r))
+		if w+rw > col {
+			return s[:i], s[i:]
+		}
+		w += rw
+		if w == col {
+			return s[:i+len(string(r))], s[i+len(string(r)):]
+		}
+	}
+	return s, ""
+}
+
 func TestIntroActive_SetFalseAfterCompletion(t *testing.T) {
 	m := Model{
 		intro: IntroModel{

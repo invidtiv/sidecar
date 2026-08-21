@@ -86,6 +86,11 @@ func TestDiagnosticsModalRenderingAndInteractions(t *testing.T) {
 		t.Errorf("rendered diagnostics modal missing 'Close' button")
 	}
 
+	// Refresh time lives here, not in the application footer.
+	if !strings.Contains(rendered, "Refresh:") {
+		t.Errorf("diagnostics modal missing last-refresh time")
+	}
+
 	// 6. Test Mouse Click on Close button
 	regions := m.diagnosticsMouseHandler.HitMap.Regions()
 	var closeRegion *mouse.Region
