@@ -859,6 +859,17 @@ func TestRenderScrollbarFunction(t *testing.T) {
 	}
 }
 
+func TestRenderScrollbarFitsReturnsEmpty(t *testing.T) {
+	// Content that fits never shows a bar; the shared scroll math reports no
+	// thumb and renderScrollbar renders nothing.
+	if sb := renderScrollbar(10, 0, 10); sb != "" {
+		t.Errorf("expected empty scrollbar when content fits, got %q", sb)
+	}
+	if sb := renderScrollbar(5, 0, 10); sb != "" {
+		t.Errorf("expected empty scrollbar when content shorter than viewport, got %q", sb)
+	}
+}
+
 func TestWithInitialFocus(t *testing.T) {
 	m := New("Test", WithInitialFocus("btn-b")).
 		AddSection(Buttons(

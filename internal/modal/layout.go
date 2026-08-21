@@ -6,6 +6,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overlay"
+	"github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -306,34 +307,15 @@ func totalHeight(sections []renderedSection) int {
 	return h
 }
 
-// renderScrollbar renders a single-column vertical scrollbar.
-// Uses the same visual style as ui.RenderScrollbar but avoids an import cycle.
+// renderScrollbar renders a single-column vertical scrollbar. Thumb math is
+// shared with ui.RenderScrollbar via internal/scroll; only the background
+// styling is modal's own.
 func renderScrollbar(totalItems, scrollOffset, viewportHeight int) string {
-	if viewportHeight < 1 || totalItems < 1 {
+	if viewportHeight < 1 || totalItems <= viewportHeight {
 		return ""
 	}
 
-	// Thumb size: proportional to visible fraction, minimum 1
-	thumbSize := (viewportHeight * viewportHeight) / totalItems
-	if thumbSize < 1 {
-		thumbSize = 1
-	}
-	if thumbSize > viewportHeight {
-		thumbSize = viewportHeight
-	}
-
-	// Thumb position
-	maxOffset := totalItems - viewportHeight
-	if maxOffset < 1 {
-		maxOffset = 1
-	}
-	thumbPos := (scrollOffset * (viewportHeight - thumbSize)) / maxOffset
-	if thumbPos < 0 {
-		thumbPos = 0
-	}
-	if thumbPos > viewportHeight-thumbSize {
-		thumbPos = viewportHeight - thumbSize
-	}
+	loc := scroll.ThumbLocFor(totalItems, scrollOffset, viewportHeight, viewportHeight)
 
 	trackStyle := lipgloss.NewStyle().Foreground(styles.ScrollbarTrackColor).Background(styles.BgSecondary)
 	thumbStyle := lipgloss.NewStyle().Foreground(styles.ScrollbarThumbColor).Background(styles.BgSecondary)
@@ -343,7 +325,7 @@ func renderScrollbar(totalItems, scrollOffset, viewportHeight int) string {
 
 	lines := make([]string, viewportHeight)
 	for i := range viewportHeight {
-		if i >= thumbPos && i < thumbPos+thumbSize {
+		if i >= loc.Pos && i < loc.Pos+loc.Size {
 			lines[i] = thumbChar
 		} else {
 			lines[i] = trackChar
