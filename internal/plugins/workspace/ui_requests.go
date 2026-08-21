@@ -246,8 +246,17 @@ func (p *Plugin) applyCreateShellSplit(req uirequest.Request, payload uirequest.
 		return nil
 	}
 	before := p.shellLeaf()
+	session := p.termPanelSessionName()
+	if payload.Run != "" || payload.Type != "" {
+		p.pendingTermPanelSeed = &termPanelSeed{
+			session: session,
+			run:     payload.Run,
+			typeCmd: payload.Type,
+		}
+	}
 	cmd := p.createTerminalSplit(payload.DisplayName, placement)
 	if p.shellLeaf() == nil || p.shellLeaf() == before {
+		p.pendingTermPanelSeed = nil
 		reason := p.toastMessage
 		if reason == "" {
 			reason = "the window is too small to split"
@@ -255,16 +264,8 @@ func (p *Plugin) applyCreateShellSplit(req uirequest.Request, payload uirequest.
 		p.ackCreateDeclined(req, reason)
 		return nil
 	}
-	session := p.termPanelSession
-	if session == "" {
-		session = p.termPanelSessionName()
-	}
-	if payload.Run != "" || payload.Type != "" {
-		p.pendingTermPanelSeed = &termPanelSeed{
-			session: session,
-			run:     payload.Run,
-			typeCmd: payload.Type,
-		}
+	if p.termPanelSession != "" {
+		session = p.termPanelSession
 	}
 	p.ackCreate(req, "shell:"+session)
 	return cmd

@@ -127,11 +127,15 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	p.termPanelSession = sessionName
 	p.saveSelectionState()
 
-	// If we already have an active session for this, just show it
+	// If we already have an active session for this, just show it.
+	// A --run/--type queued by sidecar create shell --split must still fire:
+	// hiding the panel leaves this session in place, so the next --split
+	// takes this branch and never emits TermPanelSessionCreatedMsg.
 	if reusing {
 		return tea.Batch(
 			p.resizeTermPanelPaneCmd(),
 			p.resizeSelectedPaneCmd(),
+			p.applyPendingTermPanelSeed(sessionName),
 		)
 	}
 

@@ -197,6 +197,56 @@ func TestUIRequests_CreateShellSplitPlacement(t *testing.T) {
 	}
 }
 
+func TestUIRequests_CreateShellSplitSeedsReusedSession(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	stubTd(t)
+	p := docPaneTestPlugin(t, t.TempDir(), true)
+	p.sidebarVisible = false
+	p.View(p.width, p.height)
+
+	if p.createTerminalSplit("dev server", "right") == nil {
+		t.Fatal("first split did not open")
+	}
+	if p.shellLeaf() == nil || p.termPanelSession == "" || p.termPanelOutput == nil {
+		t.Fatal("first split did not claim a session")
+	}
+	p.rememberShellSplit()
+	p.termPanelVisible = false
+	p.termPanelFocused = false
+	p.shellLeafSurface = ""
+	p.syncShellLeaf()
+	if p.shellLeaf() != nil {
+		t.Fatal("hide left a shell leaf")
+	}
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindShell, DisplayName: "dev server", Focus: &focus, Run: "echo HELLO_FROM_SPLIT",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-split-reuse-seed", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: "test-shell"},
+		Options: uirequest.Options{Split: "right"},
+		Payload: payload,
+	}
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("reused split returned no cmd")
+	}
+	if p.shellLeaf() == nil {
+		t.Fatal("reused split did not restore the leaf")
+	}
+	if p.pendingTermPanelSeed != nil {
+		t.Fatal("reuse left --run queued instead of applying it")
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+}
+
 func TestUIRequests_CreateShellSplitCapDeclines(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitCols)
