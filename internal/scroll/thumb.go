@@ -43,11 +43,14 @@ func ThumbLocFor(totalItems, scrollOffset, visibleItems, trackHeight int) ThumbL
 }
 
 // OffsetAtRow maps a track row to the smallest scroll offset whose thumb
-// top renders exactly on that row, clamped to
+// top renders on or below that row, clamped to
 // [0, totalItems-visibleItems]. Rows on a track with no thumb (content
-// fits) map to 0. The mapping is monotonic in row, and re-rendering the
-// result pins the thumb back on the queried row instead of drifting off
-// the pointer.
+// fits) map to 0. The mapping is monotonic in row. Re-rendering the
+// returned offset pins the thumb back on the queried row exactly while
+// travel (trackHeight minus thumb size) does not exceed maxOffset
+// (totalItems minus visibleItems); beyond that ratio rows outnumber
+// offsets, and re-rendering lands below the queried row instead, never
+// above it.
 func OffsetAtRow(totalItems, visibleItems, trackHeight, row int) int {
 	loc := ThumbLocFor(totalItems, 0, visibleItems, trackHeight)
 	if !loc.Has {

@@ -131,6 +131,7 @@ func TestOffsetAtRowNoThumbReturnsZero(t *testing.T) {
 func TestRoundTripStability(t *testing.T) {
 	for _, tc := range []struct{ total, visible, track int }{
 		{100, 10, 10}, {10000, 1, 40}, {50, 7, 13}, {120, 40, 25}, {11, 10, 1},
+		{8, 6, 15}, // size 11, travel 4 > maxOffset 2: collapsed anchoring
 	} {
 		maxOffset := tc.total - tc.visible
 		travel := tc.track - ThumbLocFor(tc.total, 0, tc.visible, tc.track).Size
@@ -148,14 +149,40 @@ func TestRoundTripStability(t *testing.T) {
 			}
 		}
 		// Anchoring: rendering the offset a row maps to must place the thumb
-		// exactly back on that row, or drags visibly snap off the pointer.
+		// back on that row without ever snapping above it. Exact re-anchor
+		// holds while travel <= maxOffset; in the collapsed regime the
+		// documented guarantee weakens to at-or-below, with monotonicity,
+		// clamping, and endpoints still holding.
+		exactAnchor := travel <= maxOffset
+		prev := -1
 		for row := 0; row < travel; row++ {
 			back := OffsetAtRow(tc.total, tc.visible, tc.track, row)
+			if back < prev {
+				t.Fatalf("total=%d visible=%d track=%d: OffsetAtRow not monotonic at row %d (%d < %d)",
+					tc.total, tc.visible, tc.track, row, back, prev)
+			}
+			if back < 0 || back > maxOffset {
+				t.Fatalf("total=%d visible=%d track=%d: OffsetAtRow(%d) = %d, out of [0,%d]",
+					tc.total, tc.visible, tc.track, row, back, maxOffset)
+			}
 			reanchored := RowForOffset(tc.total, tc.visible, tc.track, back)
-			if reanchored != row {
+			if exactAnchor && reanchored != row {
 				t.Fatalf("total=%d visible=%d track=%d: row %d maps to offset %d which renders at row %d",
 					tc.total, tc.visible, tc.track, row, back, reanchored)
 			}
+			if !exactAnchor && reanchored < row {
+				t.Fatalf("total=%d visible=%d track=%d: collapsed regime snapped above: row %d -> offset %d -> row %d",
+					tc.total, tc.visible, tc.track, row, back, reanchored)
+			}
+			prev = back
+		}
+		if got := OffsetAtRow(tc.total, tc.visible, tc.track, 0); got != 0 {
+			t.Errorf("total=%d visible=%d track=%d: top row = %d, want 0",
+				tc.total, tc.visible, tc.track, got)
+		}
+		if got := OffsetAtRow(tc.total, tc.visible, tc.track, travel); got != maxOffset {
+			t.Errorf("total=%d visible=%d track=%d: bottom row = %d, want %d",
+				tc.total, tc.visible, tc.track, got, maxOffset)
 		}
 	}
 }
