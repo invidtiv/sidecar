@@ -1,6 +1,17 @@
 #!/bin/sh
 set -eu
 
+# Managed development installs (install-local / install-worktree) ship the
+# checkout as-is — unreleased sidecar code marked devel[+dirty]. Dependency
+# resolution follows the same contract: when the checkout has a resolvable
+# go.work, sibling modules listed there (td, tasks) are compiled in from
+# source, so an installed sidecar always tracks your newest local td without
+# a release dance. Set SIDECAR_INSTALL_PINNED=1 to build against the
+# go.mod-pinned versions instead — the same thing release CI ships. Without
+# a resolvable go.work, both modes build pinned, so fresh clones and CI are
+# unaffected. Every activation records which dependency revisions were
+# compiled in; `make install-status` prints them.
+
 action=${1:-status}
 if [ -n "${SIDECAR_REPO_ROOT:-}" ]; then
   repo_root=$(CDPATH= cd -- "$SIDECAR_REPO_ROOT" && pwd -P)
@@ -313,6 +324,49 @@ rollback_on_signal() {
   exit 1
 }
 
+# resolved_gowork prints the go.work path plain builds would use from the
+# checkout (empty when none resolves or GOWORK is disabled).
+resolved_gowork() {
+  gw=$(cd "$repo_root" && "$go_command" env GOWORK 2>/dev/null || true)
+  [ -n "$gw" ] || return 0
+  case "$gw" in
+    /*) printf '%s\n' "$gw" ;;
+    off) ;;
+    *) printf '%s\n' "$repo_root/$gw" ;;
+  esac
+}
+
+# workspace_member_dirs lists the use entries of a go.work, one per line.
+workspace_member_dirs() {
+  awk '
+    /^[[:space:]]*use[[:space:]]*\(/ { block=1; next }
+    block && /^[[:space:]]*\)/ { block=0; next }
+    block && NF { sub(/\/\/.*/, ""); print $1 }
+    !block && /^[[:space:]]*use[[:space:]]+/ && !/\(/ {
+      sub(/\/\/.*/, ""); print $2
+    }
+  ' "$1"
+}
+
+# record_dep_lines appends one dep= line per workspace sibling with its exact
+# provenance. Best-effort: metadata gaps never fail an install.
+record_dep_lines() {
+  for member in $(workspace_member_dirs "$repo_root/go.work"); do
+    [ "$member" != "." ] || continue
+    dir=$(CDPATH= cd -- "$repo_root/$member" 2>/dev/null && pwd -P) || continue
+    [ -f "$dir/go.mod" ] || continue
+    mod=$(sed -n 's/^module[[:space:]]\{1,\}\([^[:space:]]*\).*/\1/p' "$dir/go.mod" | head -n 1)
+    [ -n "$mod" ] || continue
+    rev=unknown
+    dirty=false
+    if git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+      rev=$(git -C "$dir" rev-parse --short HEAD 2>/dev/null || printf unknown)
+      [ -z "$(git -C "$dir" status --porcelain --untracked-files=normal 2>/dev/null)" ] || dirty=true
+    fi
+    printf 'dep=%s source=%s revision=%s dirty=%s\n' "$mod" "$dir" "$rev" "$dirty"
+  done
+}
+
 install_local() {
   mode=$1
   git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1 ||
@@ -346,10 +400,29 @@ install_local() {
   rm -rf "$temporary"
   mkdir "$temporary"
   trap 'rm -rf "$temporary"' EXIT HUP INT TERM
+
+  deps_mode=pinned
+  resolved_gowork_path=
+  if [ "${SIDECAR_INSTALL_PINNED:-}" != 1 ] && [ -f "$repo_root/go.work" ]; then
+    resolved_gowork_path=$(resolved_gowork)
+    [ -n "$resolved_gowork_path" ] && deps_mode=workspace
+  fi
+  if [ -f "$repo_root/go.work" ] && [ "$deps_mode" = pinned ] &&
+    [ "${SIDECAR_INSTALL_PINNED:-}" != 1 ]; then
+    printf 'sidecar dev install: go.work did not resolve; building with pinned dependencies\n'
+  fi
+
   (
     cd "$repo_root"
-    GOWORK=off "$go_command" build -ldflags "-s -w -X main.Version=$version" \
-      -o "$temporary/sidecar" ./cmd/sidecar
+    if [ "$deps_mode" = workspace ]; then
+      GOWORK="$resolved_gowork_path" "$go_command" build \
+        -ldflags "-s -w -X main.Version=$version" \
+        -o "$temporary/sidecar" ./cmd/sidecar
+    else
+      GOWORK=off "$go_command" build \
+        -ldflags "-s -w -X main.Version=$version" \
+        -o "$temporary/sidecar" ./cmd/sidecar
+    fi
   )
   {
     printf 'source=%s\n' "$repo_root"
@@ -358,7 +431,11 @@ install_local() {
     printf 'dirty=%s\n' "$dirty"
     printf 'built_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     printf 'version=%s\n' "$version"
+    printf 'deps_mode=%s\n' "$deps_mode"
   } >"$temporary/metadata"
+  if [ "$deps_mode" = workspace ]; then
+    record_dep_lines >>"$temporary/metadata"
+  fi
   mv "$temporary" "$destination"
   trap - EXIT HUP INT TERM
 
@@ -406,6 +483,7 @@ install_local() {
   fi
 
   printf 'activated local Sidecar build from %s\n' "$repo_root"
+  sed -n 's/^deps_mode=/dependency mode: /p; s/^dep=/dependency: /p' "$destination/metadata"
   sync_launch_paths "$bin_dir/sidecar"
   status
   verify_activated_sidecar "$bin_dir/sidecar"

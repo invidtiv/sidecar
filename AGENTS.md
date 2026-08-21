@@ -84,6 +84,13 @@ make install-worktree
 # Managed installs link Homebrew and retarget any other `sidecar` that
 # wins PATH (typically ~/go/bin from unmanaged `make install`) so
 # `make install-worktree && sidecar` runs this build.
+#
+# Managed dev installs build through your go.work: sibling modules listed
+# there (td, tasks) are compiled in from source, so an installed sidecar
+# tracks your newest local td without a release dance. Each activation
+# records which sibling revisions were compiled in — `make install-status`
+# prints them. Build against the go.mod pins instead (what releases ship)
+# with SIDECAR_INSTALL_PINNED=1 make install-local.
 
 # First command in any git worktree: shadow the main checkout's go.work
 # (without this, every go command in a worktree fails with "directory ...

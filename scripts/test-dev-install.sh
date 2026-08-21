@@ -4,6 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 temporary=$(mktemp -d)
 cleanup() {
+  [ -z "${KEEP:-}" ] || { printf 'kept sandbox: %s\n' "$temporary"; return; }
   rm -rf "$temporary"
 }
 trap cleanup EXIT HUP INT TERM
@@ -29,12 +30,16 @@ assert_kind() {
 }
 
 test_repo=$temporary/repo
+# mktemp hands back /var/folders/... on macOS; the install script records
+# physical paths (pwd -P), so provenance assertions must compare against the
+# same canonical form. Resolved after the fixture directory exists.
 fake_bin=$temporary/fake-bin
 brew_prefix=$temporary/homebrew
 brew_state=$temporary/brew-state
 dev_state=$temporary/dev-state
 mkdir -p "$test_repo/cmd/sidecar" "$fake_bin" \
   "$brew_prefix/bin" "$brew_prefix/Cellar/sidecar/1.0.0/bin" "$brew_state"
+physical_repo=$(CDPATH= cd -- "$test_repo" && pwd -P)
 git init --quiet --initial-branch=main "$test_repo"
 printf 'module example.invalid/sidecar\n\ngo 1.25\n' >"$test_repo/go.mod"
 printf 'package main\nfunc main() {}\n' >"$test_repo/cmd/sidecar/main.go"
@@ -45,8 +50,22 @@ git -C "$test_repo" -c user.name=test -c user.email=test@example.invalid \
 cat >"$fake_bin/go" <<'EOF'
 #!/bin/sh
 set -eu
-[ "${GOWORK:-}" = off ] || exit 3
-[ ! -e "$FAKE_BREW_STATE/go-fail" ] || exit 1
+state=${FAKE_BREW_STATE:?FAKE_BREW_STATE required}
+# Emulate `go env <var>`: report the fixture workspace when one is staged.
+# Probes are never builds; they record nothing.
+if [ "${1:-}" = env ]; then
+  if [ "${2:-}" = GOWORK ] && [ -n "${FAKE_GO_ENV_GOWORK:-}" ]; then
+    printf '%s\n' "$FAKE_GO_ENV_GOWORK"
+  fi
+  exit 0
+fi
+# Record the GOWORK the build ran under; tests assert per-mode contracts.
+printf '%s\n' "${GOWORK:-<unset>}" >>"$state/gowork-calls"
+case "${GOWORK:-}" in
+  off|/*) ;;
+  *) exit 3 ;;
+esac
+[ ! -e "$state/go-fail" ] || exit 1
 output=
 ldflags=
 while [ "$#" -gt 0 ]; do
@@ -150,6 +169,8 @@ run() {
     FAKE_BREW_STATE="$brew_state" \
     FAKE_LOGIN_SIDECAR="${FAKE_LOGIN_SIDECAR:-}" \
     FAKE_NLOGIN_SIDECAR="${FAKE_NLOGIN_SIDECAR:-}" \
+    FAKE_GO_ENV_GOWORK="${FAKE_GO_ENV_GOWORK:-}" \
+    SIDECAR_INSTALL_PINNED="${SIDECAR_INSTALL_PINNED:-}" \
     SIDECAR_REPO_ROOT="$active_repo" \
     SIDECAR_DEV_STATE="$dev_state" \
     SIDECAR_BREW_PREFIX="$brew_prefix" \
@@ -184,6 +205,68 @@ output=$(run install-local)
 assert_contains "$output" 'dirty=true'
 assert_contains "$output" '+dirty'
 rm "$test_repo/untracked"
+
+# Without a go.work, installs build pinned and say so.
+output=$(run install-local)
+assert_contains "$output" 'deps_mode=pinned'
+[ "$(tail -n 1 "$brew_state/gowork-calls")" = off ] ||
+  fail "pinned install did not build with GOWORK=off: $(tail -n 1 "$brew_state/gowork-calls")"
+
+# A resolvable workspace compiles sibling modules in and records provenance.
+mkdir -p "$test_repo/td"
+printf 'module example.invalid/td\n\ngo 1.25\n' >"$test_repo/td/go.mod"
+git -C "$test_repo/td" init --quiet --initial-branch=main
+git -C "$test_repo/td" add .
+git -C "$test_repo/td" -c user.name=test -c user.email=test@example.invalid \
+  commit --quiet -m td-initial
+cat >"$test_repo/go.work" <<EOF
+go 1.25
+
+use (
+	.
+	./td
+)
+EOF
+FAKE_GO_ENV_GOWORK="$test_repo/go.work" run install-local >"$temporary/workspace-output"
+grep -q 'dependency mode: workspace' "$temporary/workspace-output" ||
+  fail 'workspace install did not report dependency mode'
+grep -q "^dependency: example.invalid/td source=$physical_repo/td revision=[0-9a-f]\{7,\} dirty=false$" \
+  "$temporary/workspace-output" || fail 'workspace install did not record td provenance'
+metadata=$(dirname "$(readlink "$brew_prefix/bin/sidecar")")/metadata
+grep -q '^deps_mode=workspace$' "$metadata" || fail 'metadata missing deps_mode=workspace'
+grep -q "^dep=example.invalid/td source=$physical_repo/td revision=[0-9a-f]\{7,\} dirty=false$" \
+  "$metadata" || fail "metadata missing td dep line: $(cat "$metadata")"
+[ "$(tail -n 1 "$brew_state/gowork-calls")" = "$test_repo/go.work" ] ||
+  fail "workspace install did not build under go.work: $(tail -n 1 "$brew_state/gowork-calls")"
+
+# Dirty siblings are flagged in the same provenance line.
+touch "$test_repo/td/untracked"
+FAKE_GO_ENV_GOWORK="$test_repo/go.work" run install-local >/dev/null
+grep -q "^dep=example.invalid/td source=$physical_repo/td revision=[0-9a-f]\{7,\} dirty=true$" \
+  "$(dirname "$(readlink "$brew_prefix/bin/sidecar")")/metadata" ||
+  fail 'dirty sibling was not flagged'
+rm "$test_repo/td/untracked"
+
+# SIDECAR_INSTALL_PINNED=1 opts out even when a workspace resolves.
+SIDECAR_INSTALL_PINNED=1 FAKE_GO_ENV_GOWORK="$test_repo/go.work" run install-local >/dev/null
+metadata=$(dirname "$(readlink "$brew_prefix/bin/sidecar")")/metadata
+grep -q '^deps_mode=pinned$' "$metadata" || fail 'pinned override was ignored'
+grep -q '^dep=' "$metadata" && fail 'pinned install recorded dependency lines'
+[ "$(tail -n 1 "$brew_state/gowork-calls")" = off ] ||
+  fail 'pinned override did not build with GOWORK=off'
+# Function-prefix assignments persist across calls in some shells (macOS
+# bash 3.2); drop the override so later scenarios see default behavior.
+unset SIDECAR_INSTALL_PINNED
+
+# A staged go.work that does not resolve falls back to pinned.
+FAKE_GO_ENV_GOWORK= run install-local >"$temporary/fallback-output"
+grep -q 'go.work did not resolve; building with pinned dependencies' \
+  "$temporary/fallback-output" || fail 'unresolved workspace did not warn'
+grep -q 'deps_mode=pinned' "$temporary/fallback-output" ||
+  fail 'unresolved workspace did not fall back to pinned'
+[ "$(tail -n 1 "$brew_state/gowork-calls")" = off ] ||
+  fail 'unresolved workspace did not build pinned'
+rm "$test_repo/go.work"
 
 # Build failure leaves the current managed link untouched.
 before=$(readlink "$brew_prefix/bin/sidecar")
