@@ -107,7 +107,10 @@ func KindFromClickX(x, regionX, regionW int) Kind {
 	return kindFromClickX(kindRowsFor(false), KindShell, x, regionX, regionW)
 }
 
-func kindToggle(id string, rows []kindRow, selected *Kind, onChange func()) modal.Section {
+// kindToggle renders the row list. disabledReason answers, per row, why that
+// row cannot be created right now; a disabled row is drawn muted whether or not
+// it is selected, so the rule is visible before the row is entered.
+func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disabledReason func(Kind) string) modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		sel := KindShell
 		if selected != nil {
@@ -117,6 +120,14 @@ func kindToggle(id string, rows []kindRow, selected *Kind, onChange func()) moda
 		parts := make([]string, 0, len(rows)*2)
 		for i, row := range rows {
 			style := styles.Button
+			if disabledReason != nil && disabledReason(row.Kind) != "" {
+				style = styles.Muted
+				if i > 0 {
+					parts = append(parts, styles.Muted.Render(kindSeparator))
+				}
+				parts = append(parts, style.Render(" "+row.Label+" "))
+				continue
+			}
 			if row.Kind == sel {
 				style = styles.ButtonHover
 				if focused {

@@ -262,7 +262,7 @@ func liveOwnedDividerPlugin(t *testing.T) (*Plugin, *tty.Model) {
 	// reconcileTerminalModels reset both and Open the primary, which
 	// resizes tmux synchronously.
 	if p.panelTerminal == nil {
-		p.panelTerminal = p.newWorkspaceTerminal()
+		p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	}
 	return p, p.primaryTerminal
 }

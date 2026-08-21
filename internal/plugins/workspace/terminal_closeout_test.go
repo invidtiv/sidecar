@@ -91,7 +91,7 @@ func TestProjectBoardKeepsItsOwnLaneHues(t *testing.T) {
 // noticing.
 func TestWorkspaceTerminalStatesItsWholeHostContract(t *testing.T) {
 	p := &Plugin{}
-	hooks := p.terminalHooks()
+	hooks := p.terminalHooks(workspaceTerminalPrimary)
 	if hooks.OnKey == nil || hooks.BeforeSend == nil || hooks.OnExit == nil ||
 		hooks.OnAttach == nil || hooks.OnSessionEnded == nil {
 		t.Fatalf("hooks = %+v, want every callback this surface owns", hooks)
@@ -101,7 +101,7 @@ func TestWorkspaceTerminalStatesItsWholeHostContract(t *testing.T) {
 	if hooks.ExitAction != tty.ExitReleasesInput {
 		t.Fatalf("exit action = %v, want the terminal kept open", hooks.ExitAction)
 	}
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	if model.OnKey == nil || model.BeforeSend == nil || model.OnExit == nil ||
 		model.OnAttach == nil || model.OnSessionEnded == nil ||
 		model.ExitAction != hooks.ExitAction {

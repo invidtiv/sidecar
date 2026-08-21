@@ -2067,6 +2067,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		cmds = append(cmds, p.pollInteractivePaneImmediate())
 
+	case ShellLeafCloseProbeMsg:
+		return p, p.handleShellLeafCloseProbe(msg)
+
 	case TermPanelSessionCreatedMsg:
 		p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.termPanelSession)
 		if msg.Err != nil {

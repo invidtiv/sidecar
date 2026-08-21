@@ -196,6 +196,8 @@ func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) 
 		return p.deleteConfirm.WheelAtBoundary(p.width, msg, p.mouseHandler), true
 	case ViewModeConfirmDeleteShell:
 		return p.deleteShellModal != nil && p.deleteShellModal.WheelAtBoundary(msg, p.mouseHandler), true
+	case ViewModeConfirmCloseSplit:
+		return p.closeSplitModal != nil && p.closeSplitModal.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeAgentConfig:
 		return p.agentConfigModal != nil && p.agentConfigModal.WheelAtBoundary(msg, p.mouseHandler), true
 	case ViewModeAgentChoice:
@@ -303,6 +305,10 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 
 	if p.viewMode == ViewModeConfirmDeleteShell {
 		return p.handleConfirmDeleteShellModalMouse(msg)
+	}
+
+	if p.viewMode == ViewModeConfirmCloseSplit {
+		return p.handleConfirmCloseSplitModalMouse(msg)
 	}
 
 	if p.viewMode == ViewModeAgentConfig {

@@ -31,7 +31,7 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 	}}
 	p.selectedShellIdx = 0
 
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	model.State = &tty.State{
 		Active:                true,
 		TargetSession:         "sidecar-sh-one",

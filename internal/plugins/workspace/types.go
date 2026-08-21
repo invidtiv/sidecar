@@ -22,6 +22,7 @@ const (
 	ViewModeAgentChoice                        // Agent action choice modal (attach/restart)
 	ViewModeConfirmDelete                      // Delete confirmation modal
 	ViewModeConfirmDeleteShell                 // Shell delete confirmation modal
+	ViewModeConfirmCloseSplit                  // Split-terminal close confirmation modal
 	ViewModeCommitForMerge                     // Commit modal before merge workflow
 	ViewModeRenameShell                        // Rename shell modal
 	ViewModeRenameWorktree                     // Rename worktree display-name modal

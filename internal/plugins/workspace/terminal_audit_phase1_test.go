@@ -352,7 +352,7 @@ func newInteractiveInputTestPlugin() *Plugin {
 func attachLiveTerminal(p *Plugin, mouseReporting bool) *tty.Model {
 	// Built the way the plugin builds its own, so the host hooks the component
 	// calls — its chords, its snap-back, its way out — are the real ones.
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	model.State = &tty.State{
 		Active:                true,
 		TargetSession:         p.interactiveState.TargetSession,

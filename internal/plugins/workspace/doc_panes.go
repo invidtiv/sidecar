@@ -1737,6 +1737,11 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 			return
 		}
 		p.registerPaneCloseRegion(node.ID, box)
+	case PaneShell:
+		// A split terminal is closable exactly like any other non-primary leaf.
+		// The PRIMARY terminal is not: it is the surface the sidebar selects,
+		// and closing it would leave the workspace with nothing to select into.
+		p.registerPaneCloseRegion(node.ID, box)
 	}
 }
 

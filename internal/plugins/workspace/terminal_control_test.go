@@ -90,8 +90,8 @@ func newTerminalEmbeddingTestPlugin() *Plugin {
 	p.applicationFocused = true
 	p.viewMode = ViewModeList
 	p.SetFocused(true)
-	p.primaryTerminal = p.newWorkspaceTerminal()
-	p.panelTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	return p
 }
 
@@ -156,8 +156,8 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 
 func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
 	p := nestedSidebarPlugin(t)
-	p.primaryTerminal = p.newWorkspaceTerminal()
-	p.panelTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	const session = "sidecar-sh-sidecar-feature-1"
 	parent, shell := p.findNestedShell(session)
 	if shell == nil {
@@ -195,8 +195,8 @@ func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
 
 func TestNestedShellSwitchRejectsPriorTerminalFrame(t *testing.T) {
 	p := nestedSidebarPlugin(t)
-	p.primaryTerminal = p.newWorkspaceTerminal()
-	p.panelTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	const nestedSession = "sidecar-sh-sidecar-feature-1"
 	parent, nested := p.findNestedShell(nestedSession)
 	nested.Agent = &Agent{

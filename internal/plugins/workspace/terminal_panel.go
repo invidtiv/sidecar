@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 const (
@@ -251,12 +252,30 @@ func (p *Plugin) termPanelHints() string {
 // renderTermPanelOutput renders the terminal panel's captured output.
 func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	chips := []string{p.termPanelChip()}
+	// The split's header carries the same ✕ every non-primary leaf has. Its
+	// leaf id is what the region is registered with, so hover and the click
+	// answer from one identity.
+	closeLeafID := 0
+	if leaf := p.shellLeaf(); leaf != nil {
+		closeLeafID = leaf.ID
+	}
 	if p.termPanelOutput == nil {
 		hintFloor := 0
 		if p.interactiveDescribes(true) {
 			hintFloor = p.interactiveHintFloor()
 		}
-		header := p.terminalHeader(chips, p.termPanelHints(), width, hintFloor)
+		headerWidth := width
+		reserve := ui.HeaderClose{CloseCol: -1}
+		if closeLeafID != 0 {
+			reserve = ui.ReserveHeaderClose(width)
+			if reserve.CloseW > 0 {
+				headerWidth = reserve.TabsWidth
+			}
+		}
+		header := p.terminalHeader(chips, p.termPanelHints(), headerWidth, hintFloor)
+		if reserve.CloseW > 0 {
+			header = ui.ComposeHeaderClose(header, width, p.hoverPaneClose == closeLeafID)
+		}
 		if height <= terminalHeaderRows {
 			return header
 		}
@@ -265,7 +284,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	}
 	// The terminal panel has no action chips of its own; Diff and Task belong
 	// to the surface's primary header.
-	return p.renderCapturedTerminal(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
+	return p.renderCapturedTerminalWithClose(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready", closeLeafID)
 }
 
 // refreshTermPanelForSelection points the terminal panel at the session its own
