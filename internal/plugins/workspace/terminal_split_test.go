@@ -219,3 +219,32 @@ func TestPlacementActionsReachTheHost(t *testing.T) {
 		t.Fatal("Create routed as a placement action")
 	}
 }
+
+// A split terminal follows the selection onto the newly selected workspace's
+// own session, so the name the create modal gave it on the workspace it was
+// created in must not title another workspace's terminal. Real-app proof
+// caught the leaf still reading "term · <other workspace>" after the selection
+// moved; an unnamed leaf falls back to the auto-name for where it now is.
+func TestSplitTerminalNameDoesNotFollowTheSelectionToAnotherWorkspace(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	stubTd(t)
+	dir := t.TempDir()
+	p := docPaneTestPlugin(t, dir, true)
+	p.sidebarVisible = false
+	p.View(p.width, p.height)
+
+	p.createTerminalSplit("dev server", "auto")
+	if got := p.shellLeafTitle(); got != "dev server" {
+		t.Fatalf("leaf title = %q, want the name the modal gave it", got)
+	}
+
+	// The selection moved: the leaf is now showing a different session.
+	p.termPanelSession = "sidecar-tp-first"
+	p.forgetShellLeafName()
+	if got := p.shellLeafTitle(); got == "dev server" {
+		t.Fatal("the previous workspace's name titled the new workspace's terminal")
+	}
+	if want := p.terminalSplitAutoName(); p.shellLeafTitle() != want {
+		t.Fatalf("leaf title = %q, want the auto-name %q", p.shellLeafTitle(), want)
+	}
+}

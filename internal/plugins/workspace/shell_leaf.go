@@ -235,12 +235,21 @@ func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
 }
 
 // shellLeafTitle is what the shell leaf's header calls it: the name the create
-// modal gave it, or the kind's own label.
+// modal gave it, or the auto-name the modal would have prefilled — the split's
+// own workspace — so an unnamed split reads the same either way.
 func (p *Plugin) shellLeafTitle() string {
 	if name := strings.TrimSpace(p.shellLeafName); name != "" {
 		return name
 	}
-	return "Terminal"
+	return p.terminalSplitAutoName()
+}
+
+// forgetShellLeafName drops a name that belonged to a workspace the split has
+// left. The leaf follows the selection onto that workspace's own session, so
+// carrying the previous workspace's label over would title one workspace's
+// terminal with another's name.
+func (p *Plugin) forgetShellLeafName() {
+	p.shellLeafName = ""
 }
 
 // shellLeafBox is the panel's INNER box — header row plus viewport, inside its

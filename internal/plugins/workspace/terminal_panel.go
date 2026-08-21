@@ -46,11 +46,21 @@ func (p *Plugin) termPanelWorkDir() string {
 		if shell.WorkDir != "" {
 			return shell.WorkDir
 		}
-		return p.ctx.WorkDir
+		return p.pluginWorkDir()
 	}
 	wt := p.selectedWorktree()
 	if wt != nil {
 		return wt.Path
+	}
+	return p.pluginWorkDir()
+}
+
+// pluginWorkDir is the plugin's own working directory, or empty before a
+// context is bound. The header asks for it every frame, including on a plugin
+// a test drove straight into a render, so it answers rather than panics.
+func (p *Plugin) pluginWorkDir() string {
+	if p == nil || p.ctx == nil {
+		return ""
 	}
 	return p.ctx.WorkDir
 }
@@ -260,6 +270,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 	}
 	// Switch to new session (old session preserved for later reuse)
 	p.termPanelSession = newSession
+	p.forgetShellLeafName()
 	p.releaseTerminalDocProjection(true)
 	p.termPanelPaneID = ""
 	p.termPanelScroll = 0
