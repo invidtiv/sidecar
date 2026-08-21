@@ -26,14 +26,25 @@ func canvasBuffer(t *testing.T, lines []string, paneRows int) *tty.OutputBuffer 
 // the new rows are unpainted. They must not drown the canvas vote, or the
 // extra rows stay on Sidecar's surface instead of the TUI's black.
 func TestCanvasBackgroundIgnoresTrailingDefaultBackgroundRows(t *testing.T) {
-	lines := []string{canvasBlack + "header", canvasBlack + "body", canvasBlack + "   ", "status"}
+	// Grok (and capture-pane of a 0m-resetting TUI) closes each painted row, so
+	// the new unpainted rows after a resize do not inherit the canvas. Without
+	// trimming those trailing default-bg blanks, 4-of-24 misses the 90% share.
+	lines := []string{
+		canvasBlack + "header\x1b[0m",
+		canvasBlack + "body\x1b[0m",
+		canvasBlack + "   \x1b[0m",
+		canvasBlack + "status\x1b[0m",
+	}
 	for range 20 {
 		lines = append(lines, "")
+	}
+	if CanvasRowShare(len(lines)) <= 4 {
+		t.Fatalf("fixture would not drown without the trim: share(%d)=%d", len(lines), CanvasRowShare(len(lines)))
 	}
 	buffer := canvasBuffer(t, lines, len(lines))
 
 	if got := CanvasBackground(buffer, 0, len(lines)); got != canvasBlack {
-		t.Fatalf("canvas = %q, want %q with trailing default-bg rows ignored", got, canvasBlack)
+		t.Fatalf("canvas = %q, want %q with trailing 0m-closed default-bg rows ignored", got, canvasBlack)
 	}
 }
 
@@ -50,29 +61,32 @@ func TestCanvasBackgroundStillRejectsAFullPaneDiff(t *testing.T) {
 }
 
 func TestDrawRowsFillsUnusedRowsAndColumnsWithCanvas(t *testing.T) {
-	// Painted region is 4×8; the allotted box is 10×20, the way a capture
-	// shorter and narrower than the Sidecar pane looks after a resize.
+	// Four 0m-closed painted rows in a 10-row, wider pane: the capture is
+	// shorter and narrower than the allotted box after a resize.
 	lines := []string{
-		canvasBlack + "header",
-		"body",
-		"",
+		canvasBlack + "header\x1b[0m",
+		canvasBlack + "body\x1b[0m",
+		canvasBlack + "   \x1b[0m",
 		canvasBlack + "status\x1b[49m tail",
 	}
 	buffer := canvasBuffer(t, lines, len(lines))
 	layout := tty.FitViewport(tty.ViewportInput{
 		Buffer: buffer, Width: 30, Height: 10, Follow: true,
-		Interactive: true, PaneWidth: 12, PaneHeight: 4, Scrollbar: true,
+		Interactive: true, PaneWidth: 12, PaneHeight: 10, Scrollbar: true,
 	})
+	if layout.DisplayHeight <= len(lines) {
+		t.Fatalf("display height %d does not add unused rows below %d captured", layout.DisplayHeight, len(lines))
+	}
 
 	drawn := DrawRows(RowsInput{
 		Buffer:      buffer,
 		Layout:      layout,
-		PaneHeight:  4,
+		PaneHeight:  10,
 		Interactive: true,
 		Follow:      true,
 	})
 	if len(drawn) != layout.DisplayHeight {
-		t.Fatalf("drew %d rows, want pane height %d", len(drawn), layout.DisplayHeight)
+		t.Fatalf("drew %d rows, want allotted height %d", len(drawn), layout.DisplayHeight)
 	}
 
 	fillWidth := layout.PadWidth
@@ -94,8 +108,11 @@ func TestDrawRowsFillsUnusedRowsAndColumnsWithCanvas(t *testing.T) {
 
 func TestPadCanvasBoxFillsTheAllottedBox(t *testing.T) {
 	panel := "\x1b[48;2;36;36;36m"
-	content := canvasBlack + "ab\n" + panel + "cd\x1b[49m e"
-	got := PadCanvasBox(content, canvasBlack, 8, 5)
+	// Rows arrive already painted (DrawRows). PadCanvasBox must not re-walk
+	// them; it only grows unused columns and unused rows.
+	row0 := ui.ApplyTerminalDefaultBackground(canvasBlack+"ab", canvasBlack, 2)
+	row1 := ui.ApplyTerminalDefaultBackground(panel+"cd\x1b[49m e", canvasBlack, 4)
+	got := PadCanvasBox(row0+"\n"+row1, canvasBlack, 8, 5)
 	rows := strings.Split(got, "\n")
 	if len(rows) != 5 {
 		t.Fatalf("padded to %d rows, want 5", len(rows))
@@ -104,12 +121,51 @@ func TestPadCanvasBoxFillsTheAllottedBox(t *testing.T) {
 		if ansi.StringWidth(row) != 8 {
 			t.Errorf("row %d width = %d, want 8: %q", i, ansi.StringWidth(row), row)
 		}
-		if !strings.HasPrefix(row, canvasBlack) {
+		if !strings.Contains(row, canvasBlack) {
 			t.Errorf("row %d missing canvas: %q", i, row)
 		}
 	}
 	if !strings.Contains(rows[1], panel+"cd\x1b[49m"+canvasBlack+" e") {
 		t.Errorf("explicit panel/default transition = %q", rows[1])
+	}
+	if strings.Count(rows[1], panel+"cd\x1b[49m"+canvasBlack) != 1 {
+		t.Errorf("panel/default transition was applied twice: %q", rows[1])
+	}
+}
+
+// The workspace viewport paints in DrawRows then grows the box with
+// PadCanvasBox. That composition must keep the panel/default contract the
+// fullscreen-canvas tests lock: panel + 49m + canvas + " default", once.
+func TestDrawRowsThenPadCanvasBoxPreservesPanelDefault(t *testing.T) {
+	panel := "\x1b[48;2;36;36;36m"
+	lines := []string{
+		canvasBlack + "header\x1b[0m",
+		canvasBlack + "   \x1b[0m",
+		panel + "panel\x1b[49m default",
+		canvasBlack + "status\x1b[0m",
+	}
+	for range 12 {
+		lines = append(lines, "")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	layout := tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: 30, Height: 16, Follow: true,
+		Interactive: true, PaneWidth: 30, PaneHeight: 16, Scrollbar: true,
+	})
+	drawn := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout, PaneHeight: 16, Interactive: true, Follow: true,
+	})
+	got := PadCanvasBox(strings.Join(drawn, "\n"), canvasBlack, 30, 16)
+	rows := strings.Split(got, "\n")
+	if len(rows) != 16 {
+		t.Fatalf("composed %d rows, want 16", len(rows))
+	}
+	want := panel + "panel\x1b[49m" + canvasBlack + " default"
+	if !strings.Contains(rows[2], want) {
+		t.Fatalf("explicit panel/default transition = %q", rows[2])
+	}
+	if strings.Count(rows[2], want) != 1 {
+		t.Fatalf("panel/default transition was applied twice: %q", rows[2])
 	}
 }
 

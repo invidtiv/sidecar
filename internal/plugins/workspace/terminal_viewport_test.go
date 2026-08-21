@@ -1170,10 +1170,10 @@ func TestTerminalViewportFillsCanvasOnLargeAllottedBox(t *testing.T) {
 	canvas := "\x1b[48;2;20;20;20m"
 	panel := "\x1b[48;2;36;36;36m"
 	lines := []string{
-		canvas + "header",
-		canvas + "   ",
+		canvas + "header\x1b[0m",
+		canvas + "   \x1b[0m",
 		panel + "panel\x1b[49m default",
-		canvas + "status",
+		canvas + "status\x1b[0m",
 	}
 	for range 12 {
 		lines = append(lines, "")

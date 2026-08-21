@@ -146,11 +146,22 @@ func PadCanvasBox(content, bg string, width, height int, truncate ...func(string
 		if i < len(lines) {
 			line = lines[i]
 		}
-		if bg != "" {
-			out[i] = ui.ApplyTerminalDefaultBackground(line, bg, width)
+		if bg == "" {
+			out[i] = fill(line, width, cut)
 			continue
 		}
-		out[i] = fill(line, width, cut)
+		// Default-bg cells are painted in DrawRows. This only grows the
+		// allotted box: unused columns on an already-drawn row, and unused
+		// rows below the capture. Re-walking SGR here doubled canvas/49m
+		// sequences and broke the panel/default contract (td-5d79ba).
+		if line == "" {
+			out[i] = ui.ApplyTerminalDefaultBackground("", bg, width)
+			continue
+		}
+		if gap := width - ansi.StringWidth(line); gap > 0 {
+			line += bg + strings.Repeat(" ", gap) + ui.RowBackgroundDefault
+		}
+		out[i] = line
 	}
 	return strings.Join(out, "\n")
 }
