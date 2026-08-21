@@ -83,7 +83,7 @@ func (m *Model) syncWorkspaces() {
 	}
 	m.workspaces.SetFailures(failures)
 	m.workspaces.SetLoading(m.loading)
-	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.applyWorkspacesEmptyState(0)
 }
 
 func (m *Model) syncCreateActions() {
@@ -297,8 +297,22 @@ func (m *Model) WorkspacesView(width, height int) string {
 
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
+func (m *Model) applyWorkspacesEmptyState(width int) {
+	if !m.showIdleWorktrees {
+		m.workspaces.SetEmptyText(workspacesEmptyText(false))
+		return
+	}
+	if width > 0 {
+		lines, actionLine := globalFirstRunEmpty(width)
+		m.workspaces.SetEmptyState(lines, globalCreateActionID, actionLine)
+		return
+	}
+	m.workspaces.SetEmptyText(workspacesEmptyText(true))
+}
+
 func (m *Model) renderWorkspaceList(x, y, width, height int) string {
 	m.syncCreateActions()
+	m.applyWorkspacesEmptyState(max(1, width-1))
 	rendered := m.workspaces.Render(workspacelist.RenderOptions{
 		Width:   width,
 		Height:  height,
@@ -1197,7 +1211,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			focus = m.focusList()
 		case workspacelist.RegionSort:
 			m.openViewFlyout()
-		case workspacelist.RegionHeaderAction:
+		case workspacelist.RegionHeaderAction, workspacelist.RegionEmptyAction:
 			if region.ID == globalCreateActionID {
 				return m.OpenCreate("")
 			}

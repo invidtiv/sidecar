@@ -40,17 +40,20 @@ type Model struct {
 	sortMode Sort
 	filter   Filter
 
-	selectedID     string
-	scroll         int
-	visible        []Item
-	rows           int
-	loading        bool
-	failures       []string
-	emptyText      string
-	pinnedIDs      []string
-	pulseFrame     int
-	headerAction   *SidebarAction
-	sectionActions map[string]*SidebarAction
+	selectedID      string
+	scroll          int
+	visible         []Item
+	rows            int
+	loading         bool
+	failures        []string
+	emptyText       string
+	emptyLines      []string
+	emptyActionID   string
+	emptyActionLine int
+	pinnedIDs       []string
+	pulseFrame      int
+	headerAction    *SidebarAction
+	sectionActions  map[string]*SidebarAction
 }
 
 // SetCreateActions supplies presentation-only create affordances. Section
@@ -99,7 +102,21 @@ func (m *Model) SetFailures(failures []string) {
 	m.failures = append([]string(nil), failures...)
 }
 
-func (m *Model) SetEmptyText(text string) { m.emptyText = text }
+func (m *Model) SetEmptyText(text string) {
+	m.emptyText = text
+	m.emptyLines = nil
+	m.emptyActionID = ""
+	m.emptyActionLine = 0
+}
+
+// SetEmptyState replaces the catalog-empty copy with already-styled lines and
+// an optional pressable row. SetEmptyText is the one-line form.
+func (m *Model) SetEmptyState(lines []string, actionID string, actionLine int) {
+	m.emptyLines = append([]string(nil), lines...)
+	m.emptyActionID = actionID
+	m.emptyActionLine = actionLine
+	m.emptyText = ""
+}
 
 // SetItems replaces the catalog projection, preserving the selected identity.
 func (m *Model) SetItems(items []Item) {
@@ -377,6 +394,8 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 			empty = []string{NoMatchRow(max(1, opts.Width-1), m.filter.Query())}
 		case m.loading:
 			empty = []string{styles.Muted.Render("Loading workspaces…")}
+		case len(m.emptyLines) > 0:
+			empty = append([]string(nil), m.emptyLines...)
 		case m.emptyText != "":
 			empty = []string{styles.Muted.Render(m.emptyText)}
 		}
@@ -389,7 +408,9 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 		// live and not before — the rule the project sidebar already follows, so
 		// the first heading sits on the same row on both surfaces.
 		FilterActive: m.filter.Active(), FilterLine: m.filter.RenderRow(opts.Width, matched, total),
-		Sections: sidebarSections, EmptyLines: empty, FooterLines: m.failureLines(failureRows, opts.Width)})
+		Sections: sidebarSections, EmptyLines: empty,
+		EmptyActionID: m.emptyActionID, EmptyActionLine: m.emptyActionLine,
+		FooterLines: m.failureLines(failureRows, opts.Width)})
 	m.scroll, m.rows = rendered.ScrollOffset, rendered.VisibleRows
 	return Rendered{View: rendered.View, Regions: rendered.Regions}
 }

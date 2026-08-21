@@ -39,6 +39,36 @@ type setupPrompt struct {
 // regionOpenSetupButton is the pressable pill in the blocked empty state.
 const regionOpenSetupButton = "open-setup-button"
 
+// firstRunEmptyLines is the unblocked empty list: a project is configured and
+// tmux is present, there is just nothing to show yet. The blocked prompt above
+// is a different state; this one points at create, not Setup.
+func firstRunEmptyLines(width int) (lines []string, actionLine int) {
+	pill := styles.RenderPillWithStyle(firstRunPillLabel(width), styles.ButtonHover, nil)
+	lines = []string{
+		styles.Title.Render(ansi.Truncate("No workspaces yet", width, "…")),
+		"",
+	}
+	for _, line := range wrapPromptText("Press n to create a worktree or shell. Click + in the header, or the button below.", width) {
+		lines = append(lines, styles.Muted.Render(line))
+	}
+	for _, line := range wrapPromptText("Pick an agent in that form to launch one, or press s on a worktree later.", width) {
+		lines = append(lines, styles.Muted.Render(line))
+	}
+	lines = append(lines, "")
+	actionLine = len(lines)
+	lines = append(lines, pill)
+	return lines, actionLine
+}
+
+func firstRunPillLabel(width int) string {
+	for _, label := range []string{"n  Create Workspace", "n  Create", "Create"} {
+		if ansi.StringWidth(label)+2 <= width {
+			return label
+		}
+	}
+	return "Create"
+}
+
 // setupPromptFor reports the prompt for a blocked Workspaces list, if it is
 // blocked. It answers false whenever the list is merely empty.
 func (p *Plugin) setupPromptFor() (setupPrompt, bool) {
@@ -70,6 +100,21 @@ func (p *Plugin) setupPromptActive() bool {
 	}
 	_, ok := p.setupPromptFor()
 	return ok
+}
+
+func (p *Plugin) firstRunEmptyActive() bool {
+	if p.filterActive() || p.sharedSidebarRowCount() > 0 {
+		return false
+	}
+	for _, section := range p.sidebarNavSections() {
+		if len(section.items) > 0 {
+			return false
+		}
+	}
+	if _, blocked := p.setupPromptFor(); blocked {
+		return false
+	}
+	return true
 }
 
 // openSetupCmd asks the host for Configuration. The plugin does not own the

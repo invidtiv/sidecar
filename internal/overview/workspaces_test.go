@@ -417,6 +417,29 @@ func TestHideIdleKeepsLiveAndAgentRows(t *testing.T) {
 	}
 }
 
+func TestFirstRunEmptyCatalogRegistersCreateControl(t *testing.T) {
+	m := catalogModel(t)
+	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar"}
+	m.results["braid"] = workspaceinventory.ProjectResult{ProjectKey: "braid"}
+	m.showIdleWorktrees = true
+	m.syncBoard()
+	_ = m.WorkspacesView(60, 24)
+	var found bool
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if region.ID != string(workspacelist.RegionEmptyAction) {
+			continue
+		}
+		hit, ok := region.Data.(workspacelist.Region)
+		if ok && hit.ID == globalCreateActionID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("global first-run empty state has no create hit region")
+	}
+}
+
 func TestHideIdleEmptyStateSaysNoSessions(t *testing.T) {
 	m := catalogModel(t)
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar", Workspaces: []workspaceinventory.Workspace{
@@ -436,8 +459,14 @@ func TestHideIdleEmptyStateSaysNoSessions(t *testing.T) {
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar"}
 	m.syncBoard()
 	view = ansi.Strip(m.WorkspacesView(60, 24))
-	if !strings.Contains(view, "No shells or worktrees found in the configured projects") {
+	if !strings.Contains(view, "No workspaces yet") {
 		t.Fatalf("truly empty catalog lost its empty copy:\n%s", view)
+	}
+	if !strings.Contains(view, "Press n") || !strings.Contains(view, "ctrl+n") {
+		t.Fatalf("first-run empty state missing create keys:\n%s", view)
+	}
+	if !strings.Contains(view, "agent") {
+		t.Fatalf("first-run empty state did not say how to launch an agent:\n%s", view)
 	}
 }
 

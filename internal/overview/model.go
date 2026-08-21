@@ -352,7 +352,7 @@ func New(collector workspaceinventory.Collector) *Model {
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
-	m.workspaces.SetEmptyText(workspacesEmptyText(m.showIdleWorktrees))
+	m.applyWorkspacesEmptyState(0)
 	m.workspaces.SetPinned(loadPinnedWorkspaceIDs())
 	// The chosen order is as much a part of "where I left off" as the pins and
 	// the sidebar width beside it. Without this the list reshuffled itself on
