@@ -5,7 +5,7 @@ worktrees, placed automatically — and, behind that, the pane tree's placement 
 growing into a small general windowing system that can eventually host any pane kind
 from anywhere in Sidecar.
 
-**Relationship to [workspace-windowing-system.md](workspace-windowing-system.md):**
+**Relationship to [workspace-windowing-system.md](../deprecated/workspace-windowing-system.md):**
 that document remains the architectural authority for the pane tree, floors,
 refuse-don't-squeeze, the live/passive leaf distinction, and the compositor — all of
 which have since shipped for passive panes (`internal/panelayout`, `internal/paneframe`,

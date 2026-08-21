@@ -87,7 +87,7 @@ The steel-thread tests in `pane_placement_test.go` already describe the *desired
 
 - Rebuilding or forking the Git Status plugin. No staging, commit editor, push/pull, stash, branch picker, or GitHub from the Diff leaf. The existing **Git** chip / `O` (`open-in-git`) remains the jump into that plugin.
 - A new Sidecar "diff CLI" beyond `sidecar open` target kinds.
-- A second live terminal, floating panes, or the rest of `docs/plans/active/workspace-windowing-system.md`.
+- A second live terminal, floating panes, or the rest of `docs/plans/deprecated/workspace-windowing-system.md`.
 - Persisting diff *bodies*. Persist the target spec (working-tree / commit / range) and reload, the way issue tabs persist an id and re-fetch.
 - Making Sidecar the source of truth for git objects or td tasks.
 - Changing the default tmux server, or writing proof runs into `~/.local/state/sidecar`.
@@ -952,7 +952,7 @@ Never start a proof on the default tmux server. Never write `~/.local/state/side
 - `internal/features/features.go` — `WorkspaceDocPanes`
 - `internal/overview/{preview,preview_links,preview_tabs,ui_requests,workspaces}.go` — global host
 - `docs/plans/active/agent-open-in-split-cli.md` — request bus, never-steal-focus
-- `docs/plans/active/workspace-windowing-system.md` — live vs passive leaves, Law 2
+- `docs/plans/deprecated/workspace-windowing-system.md` — live vs passive leaves, Law 2
 - `.claude/skills/{keyboard-shortcuts,drag-pane,ui-features,create-plugin}/SKILL.md`
 - `AGENTS.md` — startup latency, `tmux-drive.sh` isolation, footer rules, td-331dbf19 paging
 - `docs/reference/cli.md` — generated from the CLI registry

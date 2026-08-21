@@ -3,7 +3,7 @@
 **Status:** implemented
 **Written:** 2026-08-19, against `82a30ced`
 **Tracking:** epic `td-f6b856`
-**Related:** [workspace windowing](../active/workspace-windowing-system.md) · [terminal resource providers](../active/terminal-resource-providers.md) · [agent open](agent-open-in-split-cli.md) · [workspace focus ring](workspace-focus-ring.md) · [workspace diff pane](workspace-diff-pane.md)
+**Related:** [workspace windowing](../deprecated/workspace-windowing-system.md) · [terminal resource providers](../active/terminal-resource-providers.md) · [agent open](agent-open-in-split-cli.md) · [workspace focus ring](workspace-focus-ring.md) · [workspace diff pane](workspace-diff-pane.md)
 
 ## Decision
 
