@@ -133,7 +133,9 @@ When you confirm an update from the update modal, sidecar updates the products n
 
 These commands make their own network requests to Homebrew or the Go module proxy. After each product, sidecar runs every binary that release ships with that binary's own version command (`tasks version`, `tasks-tui --version`, `td version --short`, and so on) to verify the exact installed version.
 
-Sidecar never installs a product you do not already have, and never overwrites an executable it does not recognise as Homebrew- or `go install`-managed (for example an active local development build). Those are reported with a manual command instead. No update runs until you choose **Update**.
+A confirmed **Update** never installs a product you do not already have, and never overwrites an executable Sidecar does not recognise as Homebrew- or `go install`-managed (for example an active local development build). Those stay listed with a manual command. No update runs until you choose **Update**.
+
+A first install of **td** or **Tasks** is a different, explicit action: Sidecar only runs it after you confirm the exact command on the td uninstalled view or Configuration → Panels. It never uses sudo, and a clean package-manager exit is not treated as success — the command has to resolve on PATH afterwards.
 
 ### External CLI tools
 

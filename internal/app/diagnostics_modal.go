@@ -179,11 +179,12 @@ func (m *Model) diagnosticsProductRow(t version.Target) string {
 	case !t.Installed:
 		if t.Product == version.ProductTasks {
 			// Sidecar embeds the Tasks TUI at build time; the standalone
-			// commands are a separate installation Sidecar will not perform.
+			// commands are a separate install. Configuration → Panels runs
+			// that install after the user confirms the command.
 			d := version.TasksDescriptor()
 			return fmt.Sprintf("%s %s\n%s", label,
 				styles.Muted.Render("embedded only · standalone not installed"),
-				styles.Muted.Render("             install: "+d.InstallHint()))
+				styles.Muted.Render("             Panels → Install Tasks, or: "+d.InstallHint()))
 		}
 		return label + " " + styles.Muted.Render("not installed")
 

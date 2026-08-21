@@ -391,7 +391,9 @@ If a product fails, earlier successful updates are kept. The result screen shows
 
 ### If Tasks is enabled but not installed
 
-Sidecar will not install it for you. Diagnostics shows `embedded only · standalone not installed` alongside the supported install command:
+Sidecar's Tasks tab is embedded in the binary. The standalone `tasks` / `tasks-tui` / `tasks-api` commands are a separate install. Configuration → **Panels & Integrations** offers **Install Tasks**: it shows the exact command, waits for confirmation, then runs Homebrew (`brew install marcus/tap/tasks`) or `go install` if brew is missing. The td tab has the same one-click path when `td` is not on PATH.
+
+Diagnostics still reports `embedded only · standalone not installed` until those commands resolve. If neither Homebrew nor Go is available, copy the command from Panels and install it yourself:
 
 ```bash
 brew install marcus/tap/tasks
