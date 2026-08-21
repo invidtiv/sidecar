@@ -616,6 +616,12 @@ func (p *Plugin) clickToSource(x, y int) (line, col int) {
 // visual row, clamped so a horizontal click cannot spill into the next
 // wrap segment.
 func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, source string) (line, col int) {
+	// A click below the last rendered row is a click in empty space, not on
+	// the last line's first column. Land the caret at the end of the text so
+	// typing continues where the note left off.
+	if visual >= len(surface.Lines) && len(surface.Lines) > 0 {
+		return endOfSource(source)
+	}
 	a := surface.At(visual)
 	if !a.Precise {
 		return a.SourceLine, a.SourceCol
@@ -645,6 +651,19 @@ func sourceAtVisualRow(surface markdown.MappedRender, visual, colInRow int, sour
 		col = 0
 	}
 	return line, col
+}
+
+// endOfSource returns the caret position just past the last character of the
+// note's final non-empty-trailing line.
+func endOfSource(source string) (line, col int) {
+	lines := strings.Split(source, "\n")
+	last := len(lines) - 1
+	// Trailing newlines render no visual row of their own; the natural landing
+	// spot is the end of the last line that has text.
+	for last > 0 && strings.TrimSpace(lines[last]) == "" {
+		last--
+	}
+	return last, utf8.RuneCountInString(lines[last])
 }
 
 func visualColToRuneOffset(s string, col int) int {

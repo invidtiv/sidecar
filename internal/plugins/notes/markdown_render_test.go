@@ -359,3 +359,19 @@ func dumpNotesMapped(surface markdown.MappedRender) string {
 	}
 	return out.String()
 }
+
+// A click below the last rendered row lands at the end of the note, not at
+// column zero of the last line.
+func TestSourceAtVisualRowBelowContentLandsAtEnd(t *testing.T) {
+	content := "# Title\n\nsome text here\n"
+	renderer, err := markdown.NewRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := renderer.RenderMapped(content, 60)
+
+	line, col := sourceAtVisualRow(rendered, len(rendered.Lines)+5, 0, content)
+	if line != 2 || col != len("some text here") {
+		t.Fatalf("below-content click mapped to %d:%d, want 2:%d", line, col, len("some text here"))
+	}
+}
