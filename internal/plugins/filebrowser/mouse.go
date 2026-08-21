@@ -38,7 +38,14 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	}
 	inTreePane := action.X < p.treeWidth
 	if action.Region != nil {
-		inTreePane = action.Region.ID == regionTreePane || action.Region.ID == regionTreeItem
+		switch action.Region.ID {
+		case regionTreePane, regionTreeItem:
+			inTreePane = true
+		case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			// The tree column's bars count as tree pane for boundary
+			// purposes; the preview's own bar does not.
+			inTreePane = scrollbarRegionIsTreeSide(action.Region)
+		}
 	}
 	surface := regionPreviewPane
 	var bounds sharedscroll.Bounds
@@ -321,6 +328,22 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
 	p.setTabCloseHover(action)
 
+	// Scrollbar hover highlight, plus recovery from a release that was lost
+	// (outside the window, focus stolen): the drag machinery already ended the
+	// gesture on the first button-less motion, so drop our half too.
+	if p.dragScrollbar != sbNone && !p.mouseHandler.IsDragging() {
+		p.dragScrollbar = sbNone
+	}
+	p.hoverScrollbar = sbNone
+	if action.Region != nil {
+		switch action.Region.ID {
+		case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			if view, ok := action.Region.Data.(scrollbarView); ok {
+				p.hoverScrollbar = view
+			}
+		}
+	}
+
 	// Only track hover for file operation modal buttons
 	if p.fileOpMode == FileOpNone {
 		p.fileOpButtonHover = 0
@@ -409,6 +432,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		// Start drag with current tree width
 		p.mouseHandler.StartDrag(action.X, action.Y, regionPaneDivider, p.treeWidth)
 		return p, nil
+
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// Grab the thumb, or jump-to-spot on the track and continue dragging
+		// from there. Never falls through to the row regions underneath: the
+		// bar's rects were registered after them precisely to win.
+		return p.handleScrollbarPress(action)
 
 	case regionFileOpConfirm:
 		// Click on confirm button in file op modal
@@ -546,6 +575,8 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 		return p.handlePreviewSelectionDrag(action)
 	case regionTreeItem:
 		return p.handleTreeItemDrag(action)
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return p.handleScrollbarDrag(action)
 	}
 	return p, nil
 }
@@ -591,9 +622,14 @@ func (p *Plugin) clearDragState() {
 	p.dragHoverSince = time.Time{}
 	p.dragHoverGen++ // Any spring-load tick already in flight is now stale.
 	p.dragLastScroll = time.Time{}
-	if p.mouseHandler != nil && p.mouseHandler.DragRegion() == regionTreeItem {
-		p.mouseHandler.EndDrag()
+	if p.mouseHandler != nil {
+		switch p.mouseHandler.DragRegion() {
+		case regionTreeItem, ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			// The handler keeps thinking it is dragging otherwise; see above.
+			p.mouseHandler.EndDrag()
+		}
 	}
+	p.dragScrollbar = sbNone
 }
 
 // handleTreeItemDrag maintains the drag-to-move gesture for tree rows: it
@@ -912,6 +948,9 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) (*Plugin, tea.Cmd)
 		}
 	case regionTreeItem:
 		return p.commitTreeItemDrop(action)
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// Settle: the offset was clamped on every assignment and nothing
+		// persists; the deferred clear below drops the gesture.
 	}
 	return p, nil
 }

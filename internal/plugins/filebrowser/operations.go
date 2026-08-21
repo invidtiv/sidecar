@@ -756,6 +756,7 @@ func (p *Plugin) updateSearchMatches() tea.Cmd {
 	// Use fuzzy filter on cached files (same as Ctrl+P)
 	p.searchMatches = filefind.FuzzyFilter(p.quickOpen.Files, p.searchQuery, 20)
 	p.searchCursor = 0
+	p.followSearchCursor()
 	return cmd
 }
 
@@ -771,6 +772,7 @@ func (p *Plugin) refilterSearchMatches() {
 	p.searchMatches = nil
 	if p.searchQuery == "" {
 		p.searchCursor = 0
+		p.followSearchCursor()
 		return
 	}
 	p.searchMatches = filefind.FuzzyFilter(p.quickOpen.Files, p.searchQuery, 20)
@@ -782,6 +784,7 @@ func (p *Plugin) refilterSearchMatches() {
 			break
 		}
 	}
+	p.followSearchCursor()
 }
 
 // findAndExpandPath finds a file by path, expanding only the directories along the way.
