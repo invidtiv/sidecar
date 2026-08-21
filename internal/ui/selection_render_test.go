@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
@@ -181,6 +182,23 @@ func TestApplyTerminalDefaultBackgroundPreservesExplicitBackgrounds(t *testing.T
 	}
 	if !strings.Contains(got, panel+"panel\x1b[49m"+canvas+" tail") {
 		t.Errorf("explicit panel or following default background was lost: %q", got)
+	}
+}
+
+func TestApplyTerminalDefaultBackgroundPadsShortAndEmptyRows(t *testing.T) {
+	canvas := "\x1b[48;2;20;20;20m"
+
+	short := ApplyTerminalDefaultBackground("hi", canvas, 6)
+	if ansi.StringWidth(short) != 6 {
+		t.Errorf("short row width = %d, want 6: %q", ansi.StringWidth(short), short)
+	}
+	if !strings.HasPrefix(short, canvas+"hi") || !strings.Contains(short, canvas+"    ") {
+		t.Errorf("short row did not pad with canvas spaces: %q", short)
+	}
+
+	empty := ApplyTerminalDefaultBackground("", canvas, 4)
+	if ansi.StringWidth(empty) != 4 || !strings.HasPrefix(empty, canvas) || !strings.Contains(empty, "    ") {
+		t.Errorf("empty row = %q, want four canvas spaces", empty)
 	}
 }
 

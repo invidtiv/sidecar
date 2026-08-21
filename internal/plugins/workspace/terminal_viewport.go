@@ -157,6 +157,10 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 			}),
 		)
 	}
+	if canvasBg := termpreview.CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight); canvasBg != "" {
+		content = termpreview.PadCanvasBox(content, canvasBg, in.Width, in.Height,
+			func(line string, width int) string { return cache.Truncate(line, width, "") })
+	}
 	return terminalViewportResult{
 		Content: content,
 		Layout:  layout,

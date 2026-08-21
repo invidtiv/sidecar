@@ -64,6 +64,10 @@ func DrawRows(in RowsInput) []string {
 		tabWidth = tty.DefaultTabWidth
 	}
 	contentWidth := layout.DisplayWidth
+	fillWidth := contentWidth
+	if layout.PadWidth > fillWidth {
+		fillWidth = layout.PadWidth
+	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
 	canvasBg := CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
@@ -103,17 +107,52 @@ func DrawRows(in RowsInput) []string {
 	}
 	if canvasBg != "" {
 		for i, line := range drawn {
-			drawn[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, contentWidth)
+			drawn[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, fillWidth)
 		}
 	}
 	if in.Pad {
+		padTo := contentWidth
+		if canvasBg != "" {
+			padTo = fillWidth
+		}
 		for i, line := range drawn {
-			if gap := contentWidth - ansi.StringWidth(line); gap > 0 {
+			if gap := padTo - ansi.StringWidth(line); gap > 0 {
 				drawn[i] = line + strings.Repeat(" ", gap)
 			}
 		}
 	}
 	return drawn
+}
+
+// PadCanvasBox makes content exactly height rows of width columns. When bg is
+// set, default-background cells and unused rows/columns take that canvas so a
+// capture shorter or narrower than the allotted box cannot expose the
+// surrounding surface. When bg is empty the box is padded with unstyled spaces.
+func PadCanvasBox(content, bg string, width, height int, truncate ...func(string, int) string) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	cut := TruncateANSI
+	if len(truncate) > 0 && truncate[0] != nil {
+		cut = truncate[0]
+	}
+	var lines []string
+	if content != "" {
+		lines = strings.Split(content, "\n")
+	}
+	out := make([]string, height)
+	for i := range out {
+		line := ""
+		if i < len(lines) {
+			line = lines[i]
+		}
+		if bg != "" {
+			out[i] = ui.ApplyTerminalDefaultBackground(line, bg, width)
+			continue
+		}
+		out[i] = fill(line, width, cut)
+	}
+	return strings.Join(out, "\n")
 }
 
 // Letterboxed reports whether the drawn rows are padded out to the viewport.
@@ -142,19 +181,40 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	if len(rows) == 0 {
 		return ""
 	}
-	counts := make(map[string]int)
-	blankRows := make(map[string]int)
+	type painted struct {
+		bgs   map[string]struct{}
+		blank bool
+	}
+	resolved := make([]painted, 0, len(rows))
 	inherited := inheritedRowBackground(buffer, paneTop)
 	for _, row := range rows {
 		// Counting the row as tmux would render it, not as it was captured: a
 		// canvas is emitted once and then carried, so without re-opening the
 		// inherited background only the first row of the canvas would vote.
-		resolved, next, _ := ui.CarryRowBackground(row, inherited)
+		text, next, _ := ui.CarryRowBackground(row, inherited)
 		inherited = next
-		blank := strings.TrimSpace(ansi.Strip(resolved)) == ""
-		for bg := range rowBackgrounds(resolved) {
+		resolved = append(resolved, painted{
+			bgs:   rowBackgrounds(text),
+			blank: strings.TrimSpace(ansi.Strip(text)) == "",
+		})
+	}
+	// Trailing default-background blanks are unused cells after a resize, not
+	// a vote against the canvas that is still on the rows the TUI painted.
+	last := len(resolved) - 1
+	for last >= 0 && resolved[last].blank && len(resolved[last].bgs) == 0 {
+		last--
+	}
+	if last < 0 {
+		return ""
+	}
+	measured := resolved[:last+1]
+
+	counts := make(map[string]int)
+	blankRows := make(map[string]int)
+	for _, row := range measured {
+		for bg := range row.bgs {
 			counts[bg]++
-			if blank {
+			if row.blank {
 				blankRows[bg]++
 			}
 		}
@@ -167,7 +227,7 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 			canvas = ""
 		}
 	}
-	if canvas == "" || best < CanvasRowShare(len(rows)) || blankRows[canvas] == 0 {
+	if canvas == "" || best < CanvasRowShare(len(measured)) || blankRows[canvas] == 0 {
 		return ""
 	}
 	return canvas
