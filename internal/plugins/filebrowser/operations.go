@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/filefind"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/tty"
@@ -1034,15 +1035,21 @@ func (p *Plugin) handleThemeChanged() {
 }
 
 // renderMarkdownContent renders the current preview content as markdown.
+//
+// Rendered rows draw into the full content column — the line-number gutter is
+// empty in this mode. Glamour's document style reserves a 2-column margin on
+// each side of its word-wrap width: body text wraps at W−4 and no output line
+// exceeds W−2. Passing contentWidth+2 keeps that left margin as this mode's
+// visual indent while the text reaches the frame's right edge, instead of the
+// whole render stopping several columns short of it (td-65095b).
 func (p *Plugin) renderMarkdownContent() {
 	if p.markdownRenderer == nil || len(p.previewLines) == 0 {
 		return
 	}
 	content := strings.Join(p.previewLines, "\n")
-	// Subtract padding for margins
-	width := p.previewWidth - 6
-	if width < 30 {
-		width = 30
+	width := p.previewContentWidth() + 2
+	if width < markdown.MinWidthForMarkdown {
+		width = markdown.MinWidthForMarkdown
 	}
 	p.markdownRendered = p.markdownRenderer.RenderContent(content, width)
 }

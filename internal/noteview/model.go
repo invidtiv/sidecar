@@ -65,11 +65,21 @@ type Model struct {
 	buildStyle string
 }
 
-// New creates an empty note viewer. A nil renderer uses the default markdown
-// renderer.
+// New creates an empty note viewer.
+//
+// The card owns its wrap contract: it insets each side by
+// horizontalContentPadding itself and reserves a scrollbar column in
+// contentWidth, so its markdown must render without Glamour's document
+// margin — the same pairing Notes uses. A nil renderer, or one built without
+// markdown.CompactDocument, is replaced by the card's own compact renderer
+// rather than mutated: an injected instance may be shared with viewers
+// (docview, resourceview) whose inset is Glamour's margin. This is what keeps
+// every surface that shows a note — workspace leaf, overview preview, app
+// content deck — wrapping identically no matter what it injects; without it,
+// body text wraps several columns before the frame's right edge (td-65095b).
 func New(renderer *markdown.Renderer) *Model {
-	if renderer == nil {
-		renderer, _ = markdown.NewRenderer()
+	if renderer == nil || !renderer.CompactsDocument() {
+		renderer, _ = markdown.NewRenderer(markdown.CompactDocument)
 	}
 	return &Model{renderer: renderer, buildFor: -1}
 }
