@@ -211,3 +211,56 @@ func TestCarryThenFillKeepsExplicitBackgrounds(t *testing.T) {
 		t.Fatalf("panel/default mix = %q", got)
 	}
 }
+
+// A TUI that repaints itself in sections leaves interior rows the grid never
+// touched — default-attribute cells tmux captures as empty. In a real terminal
+// those show the terminal's own default, which is the colour the application
+// matched to its canvas; they must abstain from the vote, not drown it.
+// Regression: an opencode pane mid-repaint flipped between filled and unfilled
+// as those abstentions pushed coverage under the near-total bar.
+func TestCanvasBackgroundAbstainsInteriorDefaultRows(t *testing.T) {
+	var lines []string
+	// Eight painted rows that each close their background ([0m), then eight
+	// untouched rows, then more painted rows including a painted blank.
+	for range 8 {
+		lines = append(lines, canvasBlack+"content\x1b[0m")
+	}
+	for range 8 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, canvasBlack+"\x1b[0m")
+	for range 2 {
+		lines = append(lines, canvasBlack+"status\x1b[0m")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+
+	// Under the old all-rows share: 9 of 19 measured < CanvasRowShare(19)=17,
+	// so the canvas was missed and the untouched rows fell through to the
+	// surface. The blank-row requirement still holds: the canvas appears on
+	// the painted blank row (row 16).
+	if CanvasRowShare(9) > 9 {
+		t.Fatal("fixture premise: nine painted rows cannot reach their own share")
+	}
+	if got := CanvasBackground(buffer, 0, len(lines)); got != canvasBlack {
+		t.Fatalf("canvas = %q, want %q with interior default rows abstaining", got, canvasBlack)
+	}
+}
+
+// The abstention rule does not open the door to highlighting: a diff's
+// added-line green paints content rows only, so it never lands on a blank row
+// and fails the requirement regardless of how few other rows carry any
+// background.
+func TestInteriorAbstentionsStillRejectHighlightOnlyCanvases(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+	var lines []string
+	for range 4 {
+		lines = append(lines, green+"+ added line\x1b[49m")
+	}
+	for range 12 {
+		lines = append(lines, "")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
+		t.Fatalf("green highlight promoted to canvas %q once unpainted rows abstain", got)
+	}
+}

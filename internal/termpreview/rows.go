@@ -220,9 +220,22 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	}
 	measured := resolved[:last+1]
 
+	// Interior rows without any background abstain rather than vote against:
+	// tmux stores cells an application never touched as default-attribute, and
+	// a real terminal draws those in its own default — which is the colour the
+	// application matched to its canvas through OSC 11. Counting them against
+	// the canvas made detection flip with every partial repaint (an opencode
+	// pane that had filled only some of its rows), and the flip itself was the
+	// visible inconsistency: the pane alternated between the canvas and the
+	// surrounding surface as the TUI redrew.
 	counts := make(map[string]int)
 	blankRows := make(map[string]int)
+	paintedRowCount := 0
 	for _, row := range measured {
+		if len(row.bgs) == 0 {
+			continue
+		}
+		paintedRowCount++
 		for bg := range row.bgs {
 			counts[bg]++
 			if row.blank {
@@ -238,21 +251,27 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 			canvas = ""
 		}
 	}
-	if canvas == "" || best < CanvasRowShare(len(measured)) || blankRows[canvas] == 0 {
+	// The share is measured against the rows that carry a background. A
+	// highlight drawn on top of a canvas (a Claude Code diff's added-line
+	// green) covers content rows only, so it never reaches the blank-row
+	// requirement below; the near-total bar keeps a bare majority of painted
+	// rows from promoting a panel colour.
+	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) || blankRows[canvas] == 0 {
 		return ""
 	}
 	return canvas
 }
 
-// CanvasRowShare is how many of the observed rows a background must cover to be
-// the pane's canvas rather than highlighting drawn on top of one.
+// CanvasRowShare is how many of the rows that carry a background a candidate
+// must cover to be the pane's canvas rather than highlighting drawn on top of
+// one. Rows without any background are abstentions (see CanvasBackground), so
+// the share is measured over the painted ones.
 //
-// A canvas is on every row by definition — it is the surface the application
-// paints onto — so this is deliberately near-total rather than a simple
-// majority. Measured against live panes: Grok's canvas covers 43 of 43 and 56
-// of 56 rows, while a Claude Code diff's added-line green covers 19 of 55. An
-// earlier one-third rule sat directly between those two, so scrolling a long
-// diff by a single row flipped it and repainted the whole pane green.
+// The bar is deliberately near-total rather than a simple majority. Measured
+// against live panes: Grok's canvas covers 43 of 43 and 56 of 56 rows, while a
+// Claude Code diff's added-line green covered 19 of 55. An earlier one-third
+// rule sat directly between those two, so scrolling a long diff by a single row
+// flipped it and repainted the whole pane green.
 func CanvasRowShare(rows int) int {
 	return max(2, rows*9/10)
 }
