@@ -247,6 +247,8 @@ func (m *Model) View() string {
 
 	display := m.display()
 	body := m.contentHeight()
+	bodyWidth := m.contentWidth()
+	useBar := m.needsScrollbar() && body > 0
 	rows := make([]string, 0, m.height)
 	for i := 0; i < body; i++ {
 		lineIndex := m.scroll + i
@@ -257,12 +259,42 @@ func (m *Model) View() string {
 			// gutter cell in front of it is not selectable content.
 			line = display.gutters[lineIndex] + m.decorateRow(display.rows[lineIndex], lineIndex)
 		}
-		rows = append(rows, fitLine(line, m.width))
+		rows = append(rows, fitLine(line, bodyWidth))
+	}
+	if useBar {
+		bar := ui.RenderScrollbar(ui.ScrollbarParams{
+			TotalItems:   len(display.rows),
+			ScrollOffset: m.scroll,
+			VisibleItems: body,
+			TrackHeight:  body,
+		})
+		barLines := strings.Split(bar, "\n")
+		for i := 0; i < len(rows) && i < len(barLines); i++ {
+			rows[i] = rows[i] + barLines[i]
+		}
 	}
 	if m.searchActive() {
 		rows = append(rows, fitLine(m.searchBar(), m.width))
 	}
 	return strings.Join(rows, "\n")
+}
+
+// needsScrollbar reports whether to reserve a scrollbar column.
+func (m *Model) needsScrollbar() bool {
+	return m != nil && m.width >= 8 && m.height > 0
+}
+
+// contentWidth is the visual width available for document content, excluding
+// the scrollbar column when one is reserved.
+func (m *Model) contentWidth() int {
+	if m == nil {
+		return 0
+	}
+	w := m.width
+	if m.needsScrollbar() {
+		w--
+	}
+	return max(w, 0)
 }
 
 // contentHeight is how many rows of the document the pane draws, which is its
@@ -418,7 +450,7 @@ type layoutKey struct {
 
 func (m *Model) currentLayoutKey() layoutKey {
 	return layoutKey{
-		width:      m.width,
+		width:      m.contentWidth(),
 		wrap:       m.wrap,
 		rendered:   m.rendered,
 		contentGen: m.contentGen,
@@ -454,10 +486,11 @@ func (m *Model) layOut() displayRows {
 
 func (m *Model) layOutContent(content docContent) displayRows {
 	gutter := Gutter{}
+	width := m.contentWidth()
 	if content.numbered {
-		gutter = NewGutterForWidth(len(content.lines)-content.banner, m.width)
+		gutter = NewGutterForWidth(len(content.lines)-content.banner, width)
 	}
-	textWidth := m.width - gutter.Width()
+	textWidth := width - gutter.Width()
 
 	out := displayRows{
 		gutters:     make([]string, 0, len(content.lines)),
@@ -533,9 +566,10 @@ func (m *Model) content() docContent {
 	} else {
 		// Glamour output has no 1:1 mapping back to source lines, so numbering
 		// it would be a lie.
-		if style := m.renderer.StyleKey(); m.renderWidth != m.width || m.renderStyle != style {
-			m.renderedLines = m.renderer.RenderContent(m.result.Content, m.width)
-			m.renderWidth = m.width
+		renderWidth := m.contentWidth()
+		if style := m.renderer.StyleKey(); m.renderWidth != renderWidth || m.renderStyle != style {
+			m.renderedLines = m.renderer.RenderContent(m.result.Content, renderWidth)
+			m.renderWidth = renderWidth
 			m.renderStyle = style
 		}
 		lines = m.renderedLines

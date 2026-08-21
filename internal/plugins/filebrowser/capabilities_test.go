@@ -76,7 +76,8 @@ func TestContentLinkSurfaceUsesRenderedWrappedPreviewGeometry(t *testing.T) {
 	}
 	// width=100 gives tree=29, divider=1, preview=70. The source starts
 	// after preview x=30, border=1, padding=1 and the five-cell gutter.
-	wantRect := (mouse.Rect{X: 37, Y: 3, W: 61, H: 3})
+	// 1 column is reserved for the scrollbar.
+	wantRect := (mouse.Rect{X: 37, Y: 3, W: 60, H: 3})
 	if surface.Rect != wantRect {
 		t.Fatalf("surface rect = %+v, want %+v", surface.Rect, wantRect)
 	}
@@ -91,10 +92,10 @@ func TestContentLinkSurfaceUsesRenderedWrappedPreviewGeometry(t *testing.T) {
 			frameLines[y], surface.Rect.X, surface.Rect.X+surface.Rect.W,
 		)))
 	}
-	if got := strings.TrimRight(sourceRows[0], " "); got != strings.Repeat("x", 61) {
+	if got := strings.TrimRight(sourceRows[0], " "); got != strings.Repeat("x", 60) {
 		t.Fatalf("first wrapped source row = %q", got)
 	}
-	if got := strings.TrimRight(sourceRows[1], " "); got != strings.Repeat("x", 9) {
+	if got := strings.TrimRight(sourceRows[1], " "); got != strings.Repeat("x", 10) {
 		t.Fatalf("second wrapped source row = %q", got)
 	}
 	if got := strings.TrimRight(sourceRows[2], " "); got != "td-22f35f" {
@@ -119,7 +120,7 @@ func TestContentLinkSurfaceCollapsedTreeUsesFullPreviewGeometry(t *testing.T) {
 	if len(surfaces) != 1 {
 		t.Fatalf("surfaces = %+v, want one preview surface", surfaces)
 	}
-	if got, want := surfaces[0].Rect, (mouse.Rect{X: 7, Y: 3, W: 89, H: 1}); got != want {
+	if got, want := surfaces[0].Rect, (mouse.Rect{X: 7, Y: 3, W: 88, H: 1}); got != want {
 		t.Fatalf("collapsed surface rect = %+v, want %+v", got, want)
 	}
 }

@@ -193,9 +193,9 @@ func (s selectionSource) Line(i int) string {
 }
 
 // contentWidth is how many columns of a row the pane draws, which is its width
-// less the gutter in front of it.
+// less the gutter in front of it and the scrollbar column at the right.
 func (s selectionSource) contentWidth() int {
-	return max(s.m.width-s.m.display().gutterWidth, 0)
+	return max(s.m.contentWidth()-s.m.display().gutterWidth, 0)
 }
 
 func (s selectionSource) LineCount() int { return len(s.m.display().rows) }
