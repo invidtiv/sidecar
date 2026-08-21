@@ -166,3 +166,79 @@ func TestCopyFromShowsTheHostsOwnMessageWhenThereIsNothingToCopy(t *testing.T) {
 		t.Errorf("messages = %#v, want only the host's own message", msgs)
 	}
 }
+
+func resetRecent(t *testing.T) {
+	t.Helper()
+	ResetRecent()
+	t.Cleanup(ResetRecent)
+}
+
+func TestCopyFeedsTheSessionRing(t *testing.T) {
+	resetRecent(t)
+	stubNative(t, nil)
+
+	Copy("first", nil)
+	Copy("second", nil)
+
+	text, ok := LastCopied()
+	if !ok || text != "second" {
+		t.Errorf("LastCopied() = %q, %v; want %q, true", text, ok, "second")
+	}
+}
+
+func TestCopyFromFeedsTheSessionRingWhenTheCommandRuns(t *testing.T) {
+	resetRecent(t)
+	stubNative(t, nil)
+
+	if _, ok := LastCopied(); ok {
+		t.Fatal("the ring held text before any copy ran")
+	}
+	drain(CopyFrom(func() (string, tea.Msg) { return "produced", nil }, nil))
+
+	if text, ok := LastCopied(); !ok || text != "produced" {
+		t.Errorf("LastCopied() = %q, %v; want the produced text", text, ok)
+	}
+}
+
+func TestSessionRingDeduplicatesAndMovesToFront(t *testing.T) {
+	resetRecent(t)
+
+	for _, text := range []string{"a", "b", "a"} {
+		Copy(text, nil)
+	}
+
+	want := []string{"a", "b"}
+	if len(recent) != len(want) {
+		t.Fatalf("ring = %q, want %q", recent, want)
+	}
+	for i := range want {
+		if recent[i] != want[i] {
+			t.Fatalf("ring = %q, want %q", recent, want)
+		}
+	}
+}
+
+func TestSessionRingKeepsOnlyTheRecentLimit(t *testing.T) {
+	resetRecent(t)
+
+	for i := 0; i < recentLimit+3; i++ {
+		Copy(string(rune('a'+i)), nil)
+	}
+
+	if len(recent) != recentLimit {
+		t.Fatalf("ring length = %d, want %d", len(recent), recentLimit)
+	}
+	if text, _ := LastCopied(); text != string(rune('a'+recentLimit+2)) {
+		t.Errorf("LastCopied() = %q, want the newest copy", text)
+	}
+}
+
+func TestSessionRingIgnoresEmptyCopies(t *testing.T) {
+	resetRecent(t)
+
+	Copy("", nil)
+
+	if _, ok := LastCopied(); ok {
+		t.Error("the ring held an empty copy")
+	}
+}

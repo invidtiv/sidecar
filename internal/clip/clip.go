@@ -79,6 +79,7 @@ func CopyFrom(produce func() (string, tea.Msg), wrap func(Result, string) tea.Ms
 // wrap, which turns it into the host's own message. wrap may return nil when
 // the host says nothing about a copy.
 func Copy(text string, wrap func(Result) tea.Msg) tea.Cmd {
+	recordRecent(text)
 	return tea.Sequence(
 		tea.SetClipboard(text),
 		func() tea.Msg {

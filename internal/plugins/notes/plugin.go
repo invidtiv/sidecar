@@ -1600,6 +1600,10 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		case "r":
 			// Refresh - allowed even with empty list
 			return p, p.loadNotes()
+		case "alt+v", "super+v":
+			// Paste creates a note from the session copy, exactly as a real
+			// paste does with no list to stand in the way.
+			return p, p.pasteRecentCmd()
 		}
 		return p, nil
 	}
@@ -1704,6 +1708,8 @@ func (p *Plugin) handleKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		return p, p.yankNoteTitle()
 	case "ctrl+y":
 		return p, p.yankNoteID()
+	case "alt+v", "super+v":
+		return p, p.pasteRecentCmd()
 	case "u":
 		// Undo last delete/archive (only in Active view)
 		if p.viewFilter == FilterActive {
@@ -1734,10 +1740,10 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 		p.autoSaveID++
 		return p, p.saveEditorContent()
 
-	case "ctrl+z":
+	case "ctrl+z", "alt+z", "super+z":
 		return p.undoEditorEdit()
 
-	case "ctrl+y", "ctrl+shift+z":
+	case "ctrl+y", "ctrl+shift+z", "alt+shift+z", "super+shift+z":
 		return p.redoEditorEdit()
 
 	case "alt+s":
@@ -1756,6 +1762,9 @@ func (p *Plugin) handleEditorKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 
 	case "alt+x":
 		return p.cutEditorSelection()
+
+	case "alt+v", "super+v":
+		return p, p.pasteRecentCmd()
 	}
 
 	// Command-key delivery depends on the terminal. Match modifier bits
@@ -1871,6 +1880,9 @@ func (p *Plugin) handleEditorPreviewKey(msg tea.KeyPressMsg) (plugin.Plugin, tea
 
 	case "ctrl+y":
 		return p, p.yankNoteID()
+
+	case "alt+v", "super+v":
+		return p, p.pasteRecentCmd()
 
 	case "j", "down", "ctrl+n":
 		p.ensureViewSurface()
@@ -3116,12 +3128,13 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		cmds = append(cmds,
 			plugin.Command{ID: "copy-note", Name: "Copy", Description: "Copy selection or note", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 4},
-			plugin.Command{ID: "select-all", Name: "All", Description: "Select all (Alt-A; Cmd-A when delivered)", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
-			plugin.Command{ID: "select-toggle", Name: "Select", Description: "Set or clear the selection anchor", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 6},
-			plugin.Command{ID: "note-start", Name: "Start", Description: "Move to note start (Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 7},
-			plugin.Command{ID: "note-end", Name: "End", Description: "Move to note end (Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 8},
-			plugin.Command{ID: "select-note-start", Name: "SelStart", Description: "Select to note start (Shift-Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 9},
-			plugin.Command{ID: "select-note-end", Name: "SelEnd", Description: "Select to note end (Shift-Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 10},
+			plugin.Command{ID: "paste-recent", Name: "Paste", Description: "Paste last session copy", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 5},
+			plugin.Command{ID: "select-all", Name: "All", Description: "Select all (Alt-A; Cmd-A when delivered)", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 6},
+			plugin.Command{ID: "select-toggle", Name: "Select", Description: "Set or clear the selection anchor", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 7},
+			plugin.Command{ID: "note-start", Name: "Start", Description: "Move to note start (Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 8},
+			plugin.Command{ID: "note-end", Name: "End", Description: "Move to note end (Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 9},
+			plugin.Command{ID: "select-note-start", Name: "SelStart", Description: "Select to note start (Shift-Cmd-Up when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 10},
+			plugin.Command{ID: "select-note-end", Name: "SelEnd", Description: "Select to note end (Shift-Cmd-Down when delivered)", Category: plugin.CategoryNavigation, Context: "notes-editor", Priority: 11},
 		)
 		if p.hasEditSelection() {
 			cmds = append(cmds, plugin.Command{ID: "cut", Name: "Cut", Description: "Cut selection", Category: plugin.CategoryActions, Context: "notes-editor", Priority: 3})

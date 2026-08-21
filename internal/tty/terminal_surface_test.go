@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
@@ -597,6 +598,99 @@ func TestTerminalOldScopeSkipsEveryQueuedInputEffect(t *testing.T) {
 	WaitForPendingSends()
 	if effects.Load() != 0 {
 		t.Fatalf("old scope reached %d paste/clipboard/mouse effects", effects.Load())
+	}
+}
+
+func TestTerminalPastePrefersTheNativeClipboardWhenItHasContent(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	restoreClipboardSeams := stubTerminalClipboard(t, func() (string, error) { return "native text", nil })
+	defer restoreClipboardSeams()
+	var sent atomic.Value
+	sent.Store("")
+	terminalSendPasteRaw = func(_ string, text string) error { sent.Store(text); return nil }
+
+	clip.ResetRecent()
+	t.Cleanup(clip.ResetRecent)
+	clip.Copy("session copy", nil)
+
+	m := New(nil)
+	target := "%paste-native-first"
+	m.Open(Target{Session: "editor", Pane: target})
+	sender := defaultTerminalInputSender{model: m}
+	msg := sender.PasteClipboard(m.Scope(), target)()
+	WaitForPendingSends()
+
+	if sent.Load().(string) != "native text" {
+		t.Fatalf("pasted %q, want the native clipboard", sent.Load())
+	}
+	result, ok := msg.(PasteResultMsg)
+	if !ok || result.Err != nil || result.Empty {
+		t.Fatalf("result = %#v, want a clean paste", msg)
+	}
+}
+
+func TestTerminalPasteFallsBackToTheSessionCopyWhenNativeReadFails(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	restoreClipboardSeams := stubTerminalClipboard(t, func() (string, error) {
+		return "", errors.New("no clipboard utilities available")
+	})
+	defer restoreClipboardSeams()
+	var sent atomic.Value
+	sent.Store("")
+	terminalSendPasteRaw = func(_ string, text string) error { sent.Store(text); return nil }
+
+	clip.ResetRecent()
+	t.Cleanup(clip.ResetRecent)
+	clip.Copy("session copy", nil)
+
+	m := New(nil)
+	target := "%paste-session-fallback"
+	m.Open(Target{Session: "editor", Pane: target})
+	sender := defaultTerminalInputSender{model: m}
+	_ = sender.PasteClipboard(m.Scope(), target)()
+	WaitForPendingSends()
+
+	if sent.Load().(string) != "session copy" {
+		t.Fatalf("pasted %q, want the session ring's most recent copy", sent.Load())
+	}
+}
+
+func TestTerminalPasteWithNothingToReadReportsEmpty(t *testing.T) {
+	WaitForPendingSends()
+	t.Cleanup(WaitForPendingSends)
+	restoreClipboardSeams := stubTerminalClipboard(t, func() (string, error) { return "", nil })
+	defer restoreClipboardSeams()
+
+	clip.ResetRecent()
+	t.Cleanup(clip.ResetRecent)
+
+	m := New(nil)
+	target := "%paste-all-empty"
+	m.Open(Target{Session: "editor", Pane: target})
+	sender := defaultTerminalInputSender{model: m}
+	msg := sender.PasteClipboard(m.Scope(), target)()
+
+	result, ok := msg.(PasteResultMsg)
+	if !ok || !result.Empty {
+		t.Fatalf("result = %#v, want Empty", msg)
+	}
+}
+
+// stubTerminalClipboard replaces the clipboard seams PasteClipboard reads
+// through and restores terminalSendPasteRaw, which every test here stubs.
+func stubTerminalClipboard(t *testing.T, read func() (string, error)) func() {
+	t.Helper()
+	WaitForPendingSends()
+	originalRead := terminalReadClipboard
+	originalRawPaste := terminalSendPasteRaw
+	terminalReadClipboard = read
+	terminalSendPasteRaw = func(string, string) error { return nil }
+	return func() {
+		terminalReadClipboard = originalRead
+		terminalSendPasteRaw = originalRawPaste
+		WaitForPendingSends()
 	}
 }
 

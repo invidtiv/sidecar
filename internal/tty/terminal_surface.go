@@ -100,6 +100,13 @@ func (s defaultTerminalInputSender) PasteClipboard(scope MessageScope, target st
 		return s.model.withActivationError(scope, func() error {
 			result.Scope = scope
 			text, err := terminalReadClipboard()
+			if err != nil || text == "" {
+				// Over SSH the system clipboard belongs to a machine the
+				// reader cannot see; what this session copied, it still has.
+				if recent, ok := clip.LastCopied(); ok && recent != "" {
+					text, err = recent, nil
+				}
+			}
 			if err != nil {
 				result.Err = err
 				return nil

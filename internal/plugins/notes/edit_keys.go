@@ -4,6 +4,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -265,4 +267,18 @@ func (p *Plugin) copyEditorOrSelection() tea.Cmd {
 		return p.copySelectionCmd()
 	}
 	return p.copyEditorContent()
+}
+
+// pasteRecentCmd re-pastes the most recent text any surface copied this
+// session. It arrives as a tea.PasteMsg so it takes exactly the routing a
+// terminal paste takes, which is what makes it work over SSH where the system
+// clipboard cannot be read back.
+func (p *Plugin) pasteRecentCmd() tea.Cmd {
+	return func() tea.Msg {
+		text, ok := clip.LastCopied()
+		if !ok || text == "" {
+			return msg.FlashMsg{Text: "Nothing copied yet"}
+		}
+		return tea.PasteMsg{Content: text}
+	}
 }

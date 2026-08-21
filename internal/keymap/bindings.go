@@ -861,6 +861,7 @@ func DefaultBindings() []Binding {
 		{Key: "y", Command: "yank-content", Context: "notes-list"},
 		{Key: "Y", Command: "yank-title", Context: "notes-list"},
 		{Key: "ctrl+y", Command: "yank-id", Context: "notes-list"},
+		{Key: "alt+v", Command: "paste-recent", Context: "notes-list"},
 		{Key: "esc", Command: "back-to-active", Context: "notes-list"},
 
 		// Notes info modal context
@@ -890,6 +891,7 @@ func DefaultBindings() []Binding {
 		{Key: "N", Command: "prev-match", Context: "notes-note-search"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-preview"},
 		{Key: "ctrl+y", Command: "yank-id", Context: "notes-preview"},
+		{Key: "alt+v", Command: "paste-recent", Context: "notes-preview"},
 
 		// Notes editor context
 		{Key: "tab", Command: "switch-pane", Context: "notes-editor"},
@@ -920,9 +922,15 @@ func DefaultBindings() []Binding {
 		{Key: "shift+super+up", Command: "select-note-start", Context: "notes-editor"},
 		{Key: "shift+super+down", Command: "select-note-end", Context: "notes-editor"},
 		{Key: "alt+x", Command: "cut", Context: "notes-editor"},
+		{Key: "alt+v", Command: "paste-recent", Context: "notes-editor"},
+		{Key: "super+v", Command: "paste-recent", Context: "notes-editor"},
 		{Key: "ctrl+z", Command: "undo-edit", Context: "notes-editor"},
+		{Key: "alt+z", Command: "undo-edit", Context: "notes-editor"},
+		{Key: "super+z", Command: "undo-edit", Context: "notes-editor"},
 		{Key: "ctrl+y", Command: "redo-edit", Context: "notes-editor"},
 		{Key: "ctrl+shift+z", Command: "redo-edit", Context: "notes-editor"},
+		{Key: "alt+shift+z", Command: "redo-edit", Context: "notes-editor"},
+		{Key: "super+shift+z", Command: "redo-edit", Context: "notes-editor"},
 
 		// Notes task modal context
 		{Key: "enter", Command: "create-task", Context: "notes-task-modal"},
