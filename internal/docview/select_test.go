@@ -129,9 +129,10 @@ func TestSelectionColumnsMatchTabsAsTheyAreDrawn(t *testing.T) {
 }
 
 func TestSelectionRunsOverWrappedRowsAsDrawn(t *testing.T) {
-	// 13 columns leaves 8 for the text past a five-column gutter, so the line
-	// below is laid out as two visual rows the engine never has to know about.
-	m := newSelectableModel(t, 13, 2, "alpha beta")
+	// 14 columns leaves 8 for the text past a five-column gutter and one-column
+	// scrollbar, so the line below is laid out as two visual rows the engine never
+	// has to know about.
+	m := newSelectableModel(t, 14, 2, "alpha beta")
 	m.SetWrap(true)
 	if got := len(m.display().rows); got != 2 {
 		t.Fatalf("laid out %d rows, want the line wrapped in two", got)
@@ -156,7 +157,7 @@ func TestSelectionStopsAtTheEdgeOfWhatIsDrawn(t *testing.T) {
 	// the pane beside this one must not reach the cut-off columns.
 	long := strings.Repeat("abcdefghij", 10)
 	m := newSelectableModel(t, 40, 2, long, long)
-	drawn := m.width - m.display().gutterWidth
+	drawn := m.contentWidth() - m.display().gutterWidth
 
 	m.HandleSelectionMouse(selectPress(m.contentX(0), selectionOriginY))
 	m.HandleSelectionMouse(selectDrag(m.contentX(drawn+25), selectionOriginY+1))

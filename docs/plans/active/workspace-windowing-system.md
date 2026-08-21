@@ -1,5 +1,15 @@
 # Sidecar Windowing System — Synthesized Recommendation
 
+> **Status:** architectural reference. The passive-pane half (M0, M3) has shipped
+> via `internal/panelayout`/`internal/paneframe` and the content-links work. The
+> live-terminal half (M1/M2) is now delivered by
+> [terminal-splits-and-windowing.md](terminal-splits-and-windowing.md), which is the
+> controlling plan for that work and **supersedes this document's interaction model**
+> (creation is modal-first with automatic placement; the `alt+w` chord vocabulary in
+> §3 is deferred to a power-user tier; the "reject auto-tiling" scope row in §4 is
+> reversed for creation-time placement). The tree/floors/compositor/leaf-class
+> architecture in §§1–2 and the risk and testing material in §§6–7 remain authoritative.
+
 Merged from three independent designs (A: architecture, B: incremental, C: prior art/UX). Every load-bearing code claim below was re-read in the tree at `db8c342`. Corrections to the source designs are marked **[correction]**.
 
 ---

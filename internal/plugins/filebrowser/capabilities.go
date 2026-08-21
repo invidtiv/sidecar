@@ -135,9 +135,19 @@ func (p *Plugin) previewTextRect() mouse.Rect {
 	}
 }
 
+// previewContentWidth is the inner cell width the preview rows are rendered into,
+// excluding borders, panel padding, and the scrollbar column.
+func (p *Plugin) previewContentWidth() int {
+	w := p.previewWidth - 4 - 1
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
 func (p *Plugin) previewTextWidths() (gutterWidth, lineWidth int) {
 	gutterWidth = p.previewGutter().Width()
-	lineWidth = p.previewWidth - gutterWidth - 4 // two borders + two padding cells
+	lineWidth = p.previewContentWidth() - gutterWidth
 	if lineWidth < 10 {
 		lineWidth = 10
 	}

@@ -2,6 +2,7 @@ package docview
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,8 +102,8 @@ func TestScrollAndLineTargetClamp(t *testing.T) {
 		t.Fatal("current result was rejected")
 	}
 	rows := strings.Split(ansi.Strip(m.View()), "\n")
-	if got := strings.TrimSpace(rows[0]) + "\n" + strings.TrimSpace(rows[1]); got != "3 three\n4 four" {
-		t.Fatalf("targeted view = %q", got)
+	if !strings.HasPrefix(strings.TrimSpace(rows[0]), "3 three") || !strings.HasPrefix(strings.TrimSpace(rows[1]), "4 four") {
+		t.Fatalf("targeted view = %q", strings.Join(rows, "\n"))
 	}
 
 	m.Scroll(-999)
@@ -154,13 +155,14 @@ func TestWrapSplitsLongLineAndSurvivesLoad(t *testing.T) {
 	if len(rows) != 3 {
 		t.Fatalf("row count = %d, want 3 (%q)", len(rows), view)
 	}
-	if strings.TrimSpace(rows[0]) != "abcdefgh" || strings.TrimSpace(rows[1]) != "ijklmnop" {
+	// Width 8 reserves 1 column for scrollbar, leaving 7 for wrapped content.
+	if strings.TrimSpace(rows[0]) != "abcdefg" || strings.TrimSpace(rows[1]) != "hijklmn" {
 		t.Fatalf("wrapped view = %q", view)
 	}
 
 	m.SetWrap(false)
 	truncated := strings.TrimSpace(strings.Split(ansi.Strip(m.View()), "\n")[0])
-	if truncated != "abcdefgh" {
+	if truncated != "abcdefg" {
 		t.Fatalf("truncated view = %q", truncated)
 	}
 }
@@ -384,14 +386,14 @@ func TestGutterConsumesWidthWhenTruncatingAndWrapping(t *testing.T) {
 		t.Fatal("current result was rejected")
 	}
 	rows := strings.Split(ansi.Strip(m.View()), "\n")
-	// 15 cells - 5 gutter cells leaves exactly 10 for the text.
-	if rows[0] != "   1 abcdefghij" {
+	// 15 cells - 1 scrollbar cell - 5 gutter cells leaves exactly 9 for the text.
+	if rows[0] != "   1 abcdefghi " {
 		t.Fatalf("truncated row = %q", rows[0])
 	}
 
 	m.SetWrap(true)
 	rows = strings.Split(ansi.Strip(m.View()), "\n")
-	if rows[0] != "   1 abcdefghij" || rows[1] != "     klmnopqrst" || rows[2] != "     uvwxyz    " {
+	if rows[0] != "   1 abcdefghi " || rows[1] != "     jklmnopqr " || rows[2] != "     stuvwxyz  " {
 		t.Fatalf("wrapped rows = %q", rows)
 	}
 	for i, row := range rows {
@@ -527,5 +529,55 @@ func BenchmarkScrollLargeDocument(b *testing.B) {
 	for range b.N {
 		m.Scroll(1)
 		m.View()
+	}
+}
+
+func TestScrollbarRendersOnOverflowAndSpacerWhenFitting(t *testing.T) {
+	m := newTestModel(t)
+	m.SetSize(30, 4)
+	m.loading = false
+	m.rendered = false
+
+	// 1. Short content: fits on screen -> spacer column (spaces at right edge).
+	m.result = filepreview.PreviewResult{Content: "one\ntwo", Lines: []string{"one", "two"}}
+	m.invalidateRender()
+	rows := strings.Split(ansi.Strip(m.View()), "\n")
+	if len(rows) != 4 {
+		t.Fatalf("row count = %d, want 4", len(rows))
+	}
+	for i, row := range rows {
+		if ansi.StringWidth(row) != 30 {
+			t.Errorf("row %d width = %d, want 30", i, ansi.StringWidth(row))
+		}
+		if !strings.HasSuffix(row, " ") {
+			t.Errorf("row %d does not end in spacer space: %q", i, row)
+		}
+	}
+
+	// 2. Long content: overflows -> scrollbar thumb and track rendered.
+	longLines := make([]string, 20)
+	for i := range longLines {
+		longLines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	m.result = filepreview.PreviewResult{Content: strings.Join(longLines, "\n"), Lines: longLines}
+	m.invalidateRender()
+
+	// At top (scroll = 0): thumb is at top.
+	rows = strings.Split(ansi.Strip(m.View()), "\n")
+	if !strings.HasSuffix(rows[0], "┃") {
+		t.Fatalf("row 0 at scroll 0 should end with thumb ┃: %q", rows[0])
+	}
+	if !strings.HasSuffix(rows[3], "│") {
+		t.Fatalf("row 3 at scroll 0 should end with track │: %q", rows[3])
+	}
+
+	// Scroll to bottom: thumb is at bottom.
+	m.Scroll(999)
+	rows = strings.Split(ansi.Strip(m.View()), "\n")
+	if !strings.HasSuffix(rows[3], "┃") {
+		t.Fatalf("row 3 at bottom scroll should end with thumb ┃: %q", rows[3])
+	}
+	if !strings.HasSuffix(rows[0], "│") {
+		t.Fatalf("row 0 at bottom scroll should end with track │: %q", rows[0])
 	}
 }

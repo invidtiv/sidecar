@@ -953,6 +953,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 	if !showLineNumbers {
 		gutter = docview.Gutter{}
 	}
+	contentWidth := p.previewContentWidth()
 	_, maxLineWidth := p.previewTextWidths()
 
 	// Style for truncating lines with ANSI codes
@@ -964,6 +965,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 		contentEnd = end - 1
 	}
 
+	var contentSB strings.Builder
 	visualLinesRendered := 0
 	renderedAll := false
 	for i := start; i < contentEnd; i++ {
@@ -1017,13 +1019,13 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 
 					// Line number with selection background (first wrapped line only)
 					if wi == 0 {
-						sb.WriteString(ui.InjectSelectionBackground(gutter.Number(i + 1)))
+						contentSB.WriteString(ui.InjectSelectionBackground(gutter.Number(i + 1)))
 					} else {
-						sb.WriteString(gutter.Blank())
+						contentSB.WriteString(gutter.Blank())
 					}
-					sb.WriteString(wl)
+					contentSB.WriteString(wl)
 					if visualLinesRendered < visibleHeight-1 || p.isTruncated {
-						sb.WriteString("\n")
+						contentSB.WriteString("\n")
 					}
 					visualLinesRendered++
 					offset += segWidth
@@ -1037,16 +1039,16 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 				lineContent = ui.InjectCharacterRangeBackground(lineContent, startCol, endCol)
 				// Truncate using lipgloss (handles ANSI codes properly)
 				lineNumStr := gutter.Number(i + 1)
-				sb.WriteString(ui.InjectSelectionBackground(lineNumStr))
+				contentSB.WriteString(ui.InjectSelectionBackground(lineNumStr))
 				lineContent = lipgloss.NewStyle().MaxWidth(maxLineWidth).Render(lineContent)
-				sb.WriteString(lineContent)
+				contentSB.WriteString(lineContent)
 
 				// Pad remaining width with selection background if full-line selection
 				if startCol == 0 && endCol == -1 {
-					contentWidth := lipgloss.Width(lineNumStr) + lipgloss.Width(lineContent)
-					if contentWidth < p.previewWidth-4 {
-						padding := strings.Repeat(" ", p.previewWidth-4-contentWidth)
-						sb.WriteString(ui.InjectSelectionBackground(padding))
+					cw := lipgloss.Width(lineNumStr) + lipgloss.Width(lineContent)
+					if cw < contentWidth {
+						padding := strings.Repeat(" ", contentWidth-cw)
+						contentSB.WriteString(ui.InjectSelectionBackground(padding))
 					}
 				}
 				visualLinesRendered++
@@ -1074,13 +1076,13 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 						break
 					}
 					if wi == 0 {
-						sb.WriteString(gutter.Number(i + 1))
+						contentSB.WriteString(gutter.Number(i + 1))
 					} else {
-						sb.WriteString(gutter.Blank())
+						contentSB.WriteString(gutter.Blank())
 					}
-					sb.WriteString(wl)
+					contentSB.WriteString(wl)
 					if visualLinesRendered < visibleHeight-1 || p.isTruncated {
-						sb.WriteString("\n")
+						contentSB.WriteString("\n")
 					}
 					visualLinesRendered++
 				}
@@ -1089,8 +1091,8 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 				line := lineStyle.Render(lineContent)
 
 				// Render with or without line numbers
-				sb.WriteString(gutter.Number(i + 1))
-				sb.WriteString(line)
+				contentSB.WriteString(gutter.Number(i + 1))
+				contentSB.WriteString(line)
 				visualLinesRendered++
 			}
 		}
@@ -1098,15 +1100,23 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 		// Don't add newline after last line (non-wrap path)
 		if !p.previewWrapEnabled {
 			if i < contentEnd-1 || p.isTruncated {
-				sb.WriteString("\n")
+				contentSB.WriteString("\n")
 			}
 		}
 	}
 
 	if p.isTruncated {
-		sb.WriteString(styles.Muted.Render("... (file truncated)"))
+		contentSB.WriteString(styles.Muted.Render("... (file truncated)"))
 	}
 
+	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+		TotalItems:   len(lines),
+		ScrollOffset: p.previewScroll,
+		VisibleItems: visibleHeight,
+		TrackHeight:  visibleHeight,
+	})
+
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(contentSB.String(), contentWidth), scrollbar))
 	return sb.String()
 }
 
@@ -1166,11 +1176,7 @@ func (p *Plugin) previewSelectionAtXY(x, y int) (int, int, bool) {
 		row = innerHeight - 1
 	}
 
-	lineNumWidth := p.previewGutter().Width()
-	maxLineWidth := p.previewWidth - lineNumWidth - 4
-	if maxLineWidth < 10 {
-		maxLineWidth = 10
-	}
+	lineNumWidth, maxLineWidth := p.previewTextWidths()
 
 	if !p.previewWrapEnabled {
 		lineIdx := p.previewScroll + row

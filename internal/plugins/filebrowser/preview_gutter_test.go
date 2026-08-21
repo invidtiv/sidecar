@@ -61,8 +61,9 @@ func TestPreviewGutterWidensPastFourDigits(t *testing.T) {
 			t.Errorf("row %q: gutter is %d cells, want 6", row, len(number))
 		}
 		want := strings.TrimSpace(number)
-		if got := strings.TrimSpace(text); got != want {
-			t.Errorf("row %q: numbered %s but reads line %s", row, want, got)
+		fields := strings.Fields(text)
+		if len(fields) == 0 || fields[0] != want {
+			t.Errorf("row %q: numbered %s but reads line %s", row, want, text)
 		}
 	}
 	if seen == 0 {
