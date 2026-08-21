@@ -161,12 +161,7 @@ func (p *Plugin) cancelDocSearch(doc *docPane) tea.Cmd {
 	if len(doc.tabs.Items) > 0 {
 		return nil
 	}
-	if !p.closeContentLeaf(doc.leafID) {
-		return nil
-	}
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(doc.leafID)
 }
 
 // closeUnfocusedDocSearches drops any pane search whose pane no longer holds

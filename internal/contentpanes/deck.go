@@ -675,6 +675,25 @@ func (d *Deck) CloseTab(leafID, index int) bool {
 	return d.CloseActive()
 }
 
+// ForgetLeaf forgets a pane outright, dropping all its tabs and collapsing its leaf.
+// Neither the live leaf nor any hidden snapshot survives.
+func (d *Deck) ForgetLeaf(leafID int) bool {
+	if d == nil {
+		return false
+	}
+	p := d.panes[leafID]
+	if p != nil {
+		delete(d.panes, leafID)
+		delete(d.hidden, p.kind)
+		p.leafID = 0
+		p.tabs = nil
+	}
+	if panelayout.Find(d.root, leafID) != nil {
+		d.root, d.focus = panelayout.Close(d.root, leafID)
+	}
+	return p != nil
+}
+
 // Hidden reports whether kind has a remembered, currently collapsed pane.
 func (d *Deck) Hidden(kind panelayout.Kind) bool {
 	return d != nil && d.hidden[kind] != nil

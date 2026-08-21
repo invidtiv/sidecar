@@ -232,6 +232,10 @@ func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
 	}
 
 	showTermPanel(t, p, SplitRows, 50)
+	ids = commandIDs(p.Commands())
+	if !ids["toggle-terminal"] {
+		t.Errorf("nested shell with split panel missing toggle-terminal: %v", ids)
+	}
 }
 
 func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {

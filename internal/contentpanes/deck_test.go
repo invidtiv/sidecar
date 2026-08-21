@@ -552,6 +552,24 @@ func TestDeckFocusHideCloseAndReopen(t *testing.T) {
 	}
 }
 
+func TestDeckForgetLeafDropsAllTabsAndCollapsesLeaf(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	place := testPlacement()
+	doc := d.Open(ctx, fileRef("one.md"), place)
+	d.Open(ctx, fileRef("two.md"), place)
+	issue := d.Open(ctx, issueRef("td-1111aa"), place)
+	if !d.ForgetLeaf(doc.LeafID) {
+		t.Fatal("ForgetLeaf failed")
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Document) != nil || d.Hidden(panelayout.Document) {
+		t.Fatalf("ForgetLeaf retained document: root=%#v hidden=%v", d.root, d.Hidden(panelayout.Document))
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Issue) == nil || d.panes[issue.LeafID] == nil {
+		t.Fatal("ForgetLeaf damaged companion issue leaf")
+	}
+}
+
 func TestDeckEncodeDecodeIsReferenceOnlyAndArmsRestoredTabs(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})

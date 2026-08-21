@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -334,6 +335,28 @@ func TestContentKindsReinsertBesideALiveLeaf(t *testing.T) {
 			}
 			if got := len(p.contentLeafIDs()); got != 2 {
 				t.Fatalf("reinsert produced %d content leaves, want the document and the %s leaf", got, tc.name)
+			}
+		})
+	}
+}
+
+func TestContentKindsForgetDoesNotResurrectOnBroadcast(t *testing.T) {
+	for _, tc := range contentKindCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			p := tc.setup(t)
+			inFlight := tc.open(t, p, false)
+			deliverLoads(t, p, inFlight)
+			leaf, tabs := tc.live(p)
+			if leaf == nil || tabs != 1 {
+				t.Fatalf("setup = leaf %#v tabs=%d, want 1 tab", leaf, tabs)
+			}
+			p.closeContentPane(leaf.ID)
+			if l, _ := tc.live(p); l != nil {
+				t.Fatalf("close left the leaf live: %#v", l)
+			}
+			p.applyWorkspaceDeckBroadcast(docview.LoadedMsg{})
+			if l, _ := tc.live(p); l != nil {
+				t.Fatalf("broadcast resurrected closed %s leaf: %#v", tc.name, l)
 			}
 		})
 	}

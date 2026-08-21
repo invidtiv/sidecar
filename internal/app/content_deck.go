@@ -1151,9 +1151,13 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 	case "close":
 		h.deck.HideFocused()
 		h.syncInnerFocus()
+		m.persistAppContentDeck(h)
+		m.updateContext()
 	case "close-tab":
 		h.deck.CloseActive()
 		h.syncInnerFocus()
+		m.persistAppContentDeck(h)
+		m.updateContext()
 	case "prev-tab":
 		cmd := h.deck.CycleTab(-1)
 		m.persistAppContentDeck(h)

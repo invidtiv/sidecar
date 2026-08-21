@@ -518,13 +518,7 @@ func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads
 
 // closeIssuePane removes the issue leaf and gives its box back to its sibling.
 func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
-	if !p.closeContentLeaf(leafID) {
-		return nil
-	}
-	p.hiddenPaneLayout = nil
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(leafID)
 }
 
 // issuePaneHeaderRow is the issue leaf's header: the tab strip plus the shared X.

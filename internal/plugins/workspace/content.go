@@ -418,13 +418,7 @@ func (p *Plugin) closeContentPane(leafID int) tea.Cmd {
 
 func (p *Plugin) closeDocPaneAt(leafID int) tea.Cmd {
 	p.closeDocInfo()
-	if !p.closeContentLeaf(leafID) {
-		return nil
-	}
-	p.hiddenPaneLayout = nil
-	p.activePane = PanePreview
-	p.saveSelectionState()
-	return p.resizeDocTerminalCmd()
+	return p.forgetContentPane(leafID)
 }
 
 // clickPaneCloseAt closes the content leaf whose header X contains (x, y).
