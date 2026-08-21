@@ -36,6 +36,8 @@ func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 		return p.handleConfirmDeleteKeys(msg)
 	case ViewModeConfirmDeleteShell:
 		return p.handleConfirmDeleteShellKeys(msg)
+	case ViewModeConfirmCloseSplit:
+		return p.handleConfirmCloseSplitKeys(msg)
 	case ViewModeCommitForMerge:
 		return p.handleCommitForMergeKeys(msg)
 	case ViewModeRenameShell:

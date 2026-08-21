@@ -81,6 +81,8 @@ func (p *Plugin) View(width, height int) string {
 		view = p.renderConfirmDeleteModal(width, height)
 	case ViewModeConfirmDeleteShell:
 		view = p.renderConfirmDeleteShellModal(width, height)
+	case ViewModeConfirmCloseSplit:
+		view = p.renderConfirmCloseSplitModal(width, height)
 	case ViewModeCommitForMerge:
 		view = p.renderCommitForMergeModal(width, height)
 	case ViewModeRenameShell:

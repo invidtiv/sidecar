@@ -13,6 +13,7 @@ type Modal struct {
 	width           int
 	sections        []Section
 	showHints       bool
+	hintText        string
 	primaryAction   string
 	closeOnBackdrop bool
 	customFooter    string // Fixed footer rendered outside scroll viewport

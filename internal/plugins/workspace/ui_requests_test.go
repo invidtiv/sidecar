@@ -538,7 +538,7 @@ func interactiveUIRequestTestPlugin(t *testing.T, root string) *Plugin {
 	if !ok {
 		t.Fatal("test terminal leaf is not placed")
 	}
-	p.primaryTerminal = p.newWorkspaceTerminal()
+	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	p.primaryTerminal.Width = p.terminalContentWidth(box.W)
 	p.primaryTerminal.Height = box.H - terminalHeaderRows
 	// Activate the model without Open: Open would start a real control client,

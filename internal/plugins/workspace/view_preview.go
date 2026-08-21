@@ -254,8 +254,25 @@ const watchedLiveEdgeKey = "G"
 // chips left, hints right — and then the viewport, which runs from the next row
 // to the bottom of the surface.
 func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string) string {
+	return p.renderCapturedTerminalWithClose(chips, actions, hint, buffer, width, height, termPanel, emptyText, 0)
+}
+
+// renderCapturedTerminalWithClose is renderCapturedTerminal with the shared
+// header ✕ reserved on the right for closeLeafID. Zero draws no button, which
+// is the primary terminal: only a split is closable from its own header.
+func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint string, buffer *tty.OutputBuffer, width, height int, termPanel bool, emptyText string, closeLeafID int) string {
 	if projected := p.projectedTerminalBuffer(termPanel); projected != nil {
 		buffer = projected
+	}
+	// The button is reserved out of the header row alone: the viewport under it
+	// is tmux geometry and must keep every column it was sized for.
+	headerWidth := width
+	reserve := ui.HeaderClose{CloseCol: -1}
+	if closeLeafID != 0 {
+		reserve = ui.ReserveHeaderClose(width)
+		if reserve.CloseW > 0 {
+			headerWidth = reserve.TabsWidth
+		}
 	}
 	interactive := p.interactiveDescribes(termPanel)
 	// While interactive the exit key leads the hints and is what the row must
@@ -263,6 +280,13 @@ func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, bu
 	hintFloor := 0
 	if interactive {
 		hintFloor = p.interactiveHintFloor()
+	}
+	renderHeader := func(hint string) string {
+		row := p.terminalHeaderWithActions(chips, actions, hint, headerWidth, hintFloor)
+		if reserve.CloseW > 0 {
+			row = ui.ComposeHeaderClose(row, width, p.hoverPaneClose == closeLeafID)
+		}
+		return row
 	}
 
 	// The attach flash lives in the right region rather than on a row of its
@@ -288,10 +312,10 @@ func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, bu
 	}
 	height -= terminalHeaderRows // The header occupies the surface's first row.
 	if height < 1 {
-		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor)
+		return renderHeader(hint)
 	}
 	if buffer == nil || buffer.LineCount() == 0 {
-		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
+		return renderHeader(hint) + "\n" + truncateEmpty(emptyText)
 	}
 
 	// The window itself — the buffer, the pane geometry it is fitted to, and
@@ -306,7 +330,7 @@ func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, bu
 	input.LinkResolver = p.terminalLinkResolver(termPanel, buffer)
 	result := renderTerminalViewport(input, p.truncateCache)
 	if result.Content == "" {
-		return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + truncateEmpty(emptyText)
+		return renderHeader(hint) + "\n" + truncateEmpty(emptyText)
 	}
 	// What the header states about the drawn window — that it is off the live
 	// edge and how to get back, that older lines exist above it, that the pane is
@@ -334,7 +358,7 @@ func (p *Plugin) renderCapturedTerminal(chips, actions []string, hint string, bu
 			}
 		}
 	}
-	return p.terminalHeaderWithActions(chips, actions, hint, width, hintFloor) + "\n" + result.Content
+	return renderHeader(hint) + "\n" + result.Content
 }
 
 // renderOutputContent renders agent output.

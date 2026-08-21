@@ -43,8 +43,28 @@ const (
 
 	// shellCapMessage is what a refused third live terminal says. The cap is a
 	// rule the user can see and act on, not a click that quietly does nothing.
+	// It is the toast a PROGRAMMATIC caller gets — ctrl+t, a CLI open — because
+	// those arrive with no modal to state the rule in first.
 	shellCapMessage = "Two live terminals at a time; close one first"
+
+	// shellCapDisabledReason is the same rule said where the user is about to
+	// break it: one line under the create modal's disabled Terminal split row.
+	shellCapDisabledReason = "Two terminals are already on screen — close one first"
 )
+
+// terminalSplitDisabledReason is why the create modal must refuse a terminal
+// split, or empty when it may offer one. It reads the same cap openShellLeaf
+// enforces, so the modal and the refusal cannot disagree; asking it earlier is
+// what turns a post-click toast into a row the user can see is unavailable.
+func (p *Plugin) terminalSplitDisabledReason() string {
+	if !terminalPanelEnabled() {
+		return ""
+	}
+	if p.termPanelVisible || panelayout.LiveCapReached(p.paneRoot) {
+		return shellCapDisabledReason
+	}
+	return ""
+}
 
 // shellLeaf is the terminal panel's leaf, or nil when the panel is not in the
 // tree.
@@ -303,6 +323,89 @@ func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
 	p.shellLeafName = strings.TrimSpace(name)
 	p.setShellSplitPlacement(placement)
 	return p.toggleTermPanel()
+}
+
+// shellCloseMode is why a split terminal is leaving the screen, which is the
+// only thing the three exits disagree about. They used to be two near-identical
+// copies that differed by accident — ctrl+t kept the user's typed name, the ✕
+// discarded it — so the difference is now a parameter rather than a fork.
+type shellCloseMode int
+
+const (
+	// shellCloseHide is ctrl+t: the leaf goes, the session and its name stay, and
+	// the next toggle reattaches to the same shell with its scrollback intact.
+	shellCloseHide shellCloseMode = iota
+	// shellCloseExplicit is the header ✕ and the confirm's Close. Per the plan,
+	// the leaf's close closes its session: the confirm asks about a running
+	// process, so answering Close must actually stop it. Nothing else reaps
+	// sidecar-tp-* sessions, so a kept session here is an unreachable one.
+	shellCloseExplicit
+	// shellCloseSessionEnded is the shell dying under the user. There is nothing
+	// left to kill, and the buffer and pane id go with the leaf.
+	shellCloseSessionEnded
+)
+
+// closeShellLeaf collapses the split terminal and hands the keyboard back to
+// the primary terminal. It is the one exit every close takes — ctrl+t, the
+// header ✕, the confirm modal's Close, and a session that ended under the user
+// — so the three flags that decide who owns the keyboard (termPanelVisible, its
+// focus, and the surface claim) can never be left disagreeing with the tree.
+// Leaving any of them set is exactly the wedge that made "exit" cost a restart.
+func (p *Plugin) closeShellLeaf(mode shellCloseMode) tea.Cmd {
+	if !p.termPanelVisible && p.shellLeaf() == nil {
+		return nil
+	}
+	// Only a leaf that HELD the keyboard hands it back. A shell killed from
+	// outside while the user works in the sidebar must not yank focus to the
+	// preview under them.
+	hadFocus := p.termPanelFocused || p.activePane == PanePreview
+	if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
+		p.exitInteractiveMode()
+	}
+	// The shape it was closed at is what the next ctrl+t opens at.
+	p.rememberShellSplit()
+	session := strings.TrimSpace(p.termPanelSession)
+	p.termPanelVisible = false
+	p.termPanelFocused = false
+	p.shellLeafSurface = ""
+	p.termPanelScroll = 0
+	if mode != shellCloseHide {
+		p.forgetShellLeafName()
+	}
+	p.syncShellLeaf()
+	var ended tea.Cmd
+	if mode != shellCloseHide {
+		if mode == shellCloseExplicit {
+			ended = killShellLeafSession(session)
+		}
+		p.cleanupTermPanelSession()
+	}
+	if hadFocus {
+		// Focus returns to the primary terminal rather than to nothing: a surface
+		// whose only live leaf is unfocusable is a surface with no keyboard.
+		p.activePane = PanePreview
+	}
+	// Pane focus moves regardless: it names a leaf that no longer exists.
+	if id := terminalLeafID(p.paneRoot); id != 0 {
+		p.paneFocus = id
+	}
+	p.saveSelectionState()
+	return tea.Batch(ended, p.resizeSelectedPaneCmd())
+}
+
+// noteShellLeafSessionEnded is the split terminal's own session-end signal. The
+// primary terminal's end is noteSessionEnded's — the surface keeps its leaf and
+// says so — but a split has no sidebar row to go back to, so its leaf closes.
+// No confirm: the process the confirm would ask about has already ended.
+func (p *Plugin) noteShellLeafSessionEnded() tea.Cmd {
+	// The shared notice runs first and unchanged: it leaves interactive mode and
+	// raises shell-death suspicion. Closing first would let leaveInteractiveMode
+	// put termPanelFocused back on a leaf that is gone.
+	shared := p.noteSessionEnded()
+	if !p.termPanelVisible {
+		return shared
+	}
+	return tea.Batch(shared, p.closeShellLeaf(shellCloseSessionEnded))
 }
 
 // shellLeafTitle is what the shell leaf's header calls it: the name the create

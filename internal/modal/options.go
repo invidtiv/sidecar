@@ -34,6 +34,16 @@ func WithHints(show bool) Option {
 	}
 }
 
+// WithHintText replaces the default keyboard hint line. Use it where one of the
+// default verbs is a lie — a modal whose Enter is a no-op should not advertise
+// "Enter to confirm". Implies WithHints(true).
+func WithHintText(text string) Option {
+	return func(m *Modal) {
+		m.showHints = true
+		m.hintText = text
+	}
+}
+
 // WithPrimaryAction sets the action ID returned when input submits implicitly.
 func WithPrimaryAction(actionID string) Option {
 	return func(m *Modal) {

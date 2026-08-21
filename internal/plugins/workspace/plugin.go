@@ -495,6 +495,12 @@ type Plugin struct {
 	deleteConfirmShell    *ShellSession // Shell pending deletion
 	deleteShellModal      *modal.Modal
 	deleteShellModalWidth int
+	// closeSplitModal asks before closing a split terminal that is running
+	// something other than its own shell; shellCloseCommand is what tmux said
+	// that something is.
+	closeSplitModal      *modal.Modal
+	closeSplitModalWidth int
+	shellCloseCommand    string
 
 	// Rename shell modal state
 	renameShellSession    *ShellSession   // Shell being renamed
@@ -1771,13 +1777,16 @@ func (p *Plugin) createOpenOpts(kind workspacecreate.Kind, focusKind bool, name 
 		FocusKind: focusKind,
 		// This surface has a pane tree, so it can place a terminal split.
 		AllowTerminalSplit: terminalPanelEnabled(),
-		TerminalName:       p.terminalSplitAutoName(),
-		ShowProject:        false,
-		Name:               name,
-		Agents:             p.configAgents(),
-		NextShell:          nextShell,
-		PreferredAgent:     p.preferredCreateAgent(),
-		DefaultAgent:       string(p.getConfigDefaultAgentType()),
+		// The cap is stated in the modal, not discovered after the click: the
+		// row and its form render disabled and the create paths refuse.
+		TerminalSplitDisabled: p.terminalSplitDisabledReason(),
+		TerminalName:          p.terminalSplitAutoName(),
+		ShowProject:           false,
+		Name:                  name,
+		Agents:                p.configAgents(),
+		NextShell:             nextShell,
+		PreferredAgent:        p.preferredCreateAgent(),
+		DefaultAgent:          string(p.getConfigDefaultAgentType()),
 	}
 }
 

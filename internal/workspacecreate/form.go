@@ -71,6 +71,12 @@ type OpenOpts struct {
 	// AllowTerminalSplit offers the Terminal split row. A host without a pane
 	// tree to place one in leaves it off.
 	AllowTerminalSplit bool
+	// TerminalSplitDisabled is why a terminal split cannot be created right
+	// now — the on-screen live-terminal cap being the one reason today. When
+	// it is set the row and its form render disabled with this one line, and
+	// the create paths refuse: the modal states the rule instead of offering a
+	// creation that would be refused after the fact.
+	TerminalSplitDisabled string
 	// TerminalName is the auto-name a terminal split takes when the name field
 	// is left empty.
 	TerminalName   string
@@ -87,12 +93,13 @@ type OpenOpts struct {
 
 // Form is the Create Workspace chooser: inputs, indexes, skip, error, and modal cache.
 type Form struct {
-	kind         Kind
-	rows         []kindRow
-	placement    Placement
-	terminalName string
-	showProject  bool
-	openedFocus  string
+	kind             Kind
+	rows             []kindRow
+	placement        Placement
+	terminalName     string
+	terminalDisabled string
+	showProject      bool
+	openedFocus      string
 
 	projects     []ProjectItem
 	projectKey   string
@@ -130,17 +137,18 @@ type Form struct {
 // It does not persist last agent.
 func Open(opts OpenOpts) *Form {
 	f := &Form{
-		kind:           opts.Kind,
-		rows:           kindRowsFor(opts.AllowTerminalSplit),
-		terminalName:   strings.TrimSpace(opts.TerminalName),
-		showProject:    opts.ShowProject,
-		projects:       append([]ProjectItem(nil), opts.Projects...),
-		projectKey:     opts.ProjectKey,
-		allowlist:      append([]string(nil), opts.Agents...),
-		branches:       append([]string(nil), opts.Branches...),
-		nextShell:      opts.NextShell,
-		preferredAgent: opts.PreferredAgent,
-		defaultAgent:   opts.DefaultAgent,
+		kind:             opts.Kind,
+		rows:             kindRowsFor(opts.AllowTerminalSplit),
+		terminalName:     strings.TrimSpace(opts.TerminalName),
+		terminalDisabled: strings.TrimSpace(opts.TerminalSplitDisabled),
+		showProject:      opts.ShowProject,
+		projects:         append([]ProjectItem(nil), opts.Projects...),
+		projectKey:       opts.ProjectKey,
+		allowlist:        append([]string(nil), opts.Agents...),
+		branches:         append([]string(nil), opts.Branches...),
+		nextShell:        opts.NextShell,
+		preferredAgent:   opts.PreferredAgent,
+		defaultAgent:     opts.DefaultAgent,
 	}
 	if opts.UseLastKind && kindLabel(f.rows, lastKind) != "" {
 		f.kind = lastKind
@@ -317,11 +325,32 @@ func (f *Form) PlacementSplit() string {
 	return PlacementSplit(f.placement)
 }
 
+// KindDisabledReason is why the selected row cannot be created right now, or
+// empty when it can. It is the one gate every create path asks — keyboard,
+// click, and placement button alike — so a disabled row cannot be created
+// through a path that forgot to check.
+func (f *Form) KindDisabledReason() string {
+	if f == nil {
+		return ""
+	}
+	return f.kindDisabledReason(f.kind)
+}
+
+func (f *Form) kindDisabledReason(kind Kind) string {
+	if f == nil || kind != KindTerminalSplit {
+		return ""
+	}
+	return f.terminalDisabled
+}
+
 // ApplyPlacementAction records a placement button click and reports that the
 // form should now be submitted. One click is the whole gesture.
 func (f *Form) ApplyPlacementAction(action string) bool {
 	placement, ok := PlacementFromAction(action)
 	if !ok || f == nil {
+		return false
+	}
+	if f.KindDisabledReason() != "" {
 		return false
 	}
 	f.placement = placement
@@ -418,6 +447,9 @@ func (f *Form) Validate() string {
 	if f == nil {
 		return ""
 	}
+	if reason := f.KindDisabledReason(); reason != "" {
+		return reason
+	}
 	if f.kind != KindWorktree {
 		return ""
 	}
@@ -482,7 +514,7 @@ func (f *Form) build(width int, prevFocus string) {
 	f.cachedBranch = len(f.branches)
 
 	sections := []modal.Section{
-		kindToggle(FieldKind, f.rows, &f.kind, f.applyKindChange),
+		kindToggle(FieldKind, f.rows, &f.kind, f.applyKindChange, f.kindDisabledReason),
 		modal.Spacer(),
 	}
 	if f.showProject {
@@ -504,13 +536,18 @@ func (f *Form) build(width int, prevFocus string) {
 		)
 	}
 	if f.kind == KindTerminalSplit {
+		disabled := f.KindDisabledReason()
+		reason := f.errorSection()
+		if disabled != "" {
+			reason = modal.Text(styles.Muted.Render(disabled))
+		}
 		sections = append(sections,
-			f.errorSection(),
+			reason,
 			modal.Spacer(),
-			placementButtons(),
+			placementButtons(disabled != ""),
 			modal.Spacer(),
 			modal.Buttons(
-				modal.Btn(" Create ", ActionCreate, modal.BtnPrimary()),
+				createButton(disabled != ""),
 				modal.Btn(" Cancel ", ActionCancel),
 			),
 		)
@@ -536,10 +573,16 @@ func (f *Form) build(width int, prevFocus string) {
 }
 
 func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
+	// Enter resolves to Create, and Create is refused while the selected kind is
+	// disabled — so the hint line must not promise a confirm that is a no-op.
+	hints := modal.WithHints(true)
+	if f.KindDisabledReason() != "" {
+		hints = modal.WithHintText("Tab to switch · Esc to cancel")
+	}
 	m := modal.New("Create Workspace",
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
-		modal.WithHints(true),
+		hints,
 		modal.WithInitialFocus(prevFocus),
 	)
 	for _, section := range sections {
@@ -550,16 +593,29 @@ func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 
 // placementButtons is the segmented Auto/Right/Below row. Each button is a
 // create action, so one click both chooses the placement and creates.
-func placementButtons() modal.Section {
+func placementButtons(disabled bool) modal.Section {
 	buttons := make([]modal.ButtonDef, 0, len(placementCatalog))
 	for _, row := range placementCatalog {
+		opts := []modal.BtnOption{}
 		if row.Placement == PlacementAuto {
-			buttons = append(buttons, modal.Btn(" "+row.Label+" ", row.Action, modal.BtnPrimary()))
-			continue
+			opts = append(opts, modal.BtnPrimary())
 		}
-		buttons = append(buttons, modal.Btn(" "+row.Label+" ", row.Action))
+		if disabled {
+			opts = append(opts, modal.BtnDisabled())
+		}
+		buttons = append(buttons, modal.Btn(" "+row.Label+" ", row.Action, opts...))
 	}
 	return modal.Buttons(buttons...)
+}
+
+// createButton is the modal's Create action, disabled when the selected row
+// cannot be created. A disabled Create is unfocusable and inert, so the row's
+// refusal is visible before the click rather than in a toast after it.
+func createButton(disabled bool) modal.ButtonDef {
+	if disabled {
+		return modal.Btn(" Create ", ActionCreate, modal.BtnDisabled())
+	}
+	return modal.Btn(" Create ", ActionCreate, modal.BtnPrimary())
 }
 
 func (f *Form) applyKindChange() {

@@ -261,7 +261,7 @@ func TestWorkspaceTerminalAttachKeyEmptyByDefault(t *testing.T) {
 	if got := p.getInteractiveAttachKey(); got != "" {
 		t.Fatalf("AttachKey = %q, want empty so ctrl+] belongs to the pane", got)
 	}
-	model := p.newWorkspaceTerminal()
+	model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	if model.Config.AttachKey != "" {
 		t.Fatalf("terminal model AttachKey = %q, want empty", model.Config.AttachKey)
 	}
@@ -269,7 +269,7 @@ func TestWorkspaceTerminalAttachKeyEmptyByDefault(t *testing.T) {
 	if got := p.getInteractiveAttachKey(); got == "" {
 		t.Fatal("AttachKey stayed empty with tmux_full_attach on")
 	}
-	model = p.newWorkspaceTerminal()
+	model = p.newWorkspaceTerminal(workspaceTerminalPrimary)
 	if model.Config.AttachKey == "" {
 		t.Fatal("terminal model AttachKey stayed empty with tmux_full_attach on")
 	}

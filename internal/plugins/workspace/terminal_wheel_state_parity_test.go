@@ -48,7 +48,7 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 		p.termPanelSession = "sidecar-panel"
 		p.termPanelPaneID = "%9"
 		p.termPanelOutput = panel
-		model := p.newWorkspaceTerminal()
+		model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 		model.State = &tty.State{
 			Active:                true,
 			TargetSession:         "sidecar-panel",

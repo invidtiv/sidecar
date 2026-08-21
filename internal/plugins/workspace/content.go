@@ -409,6 +409,8 @@ func (p *Plugin) closeContentPane(leafID int) tea.Cmd {
 		return p.closeDiffPane(leafID)
 	case PaneResource:
 		return p.closeResourcePane(leafID)
+	case PaneShell:
+		return p.requestCloseShellLeaf()
 	default:
 		return nil
 	}

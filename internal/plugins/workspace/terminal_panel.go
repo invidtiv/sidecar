@@ -3,9 +3,12 @@ package workspace
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -86,18 +89,10 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return nil
 	}
 	if p.termPanelVisible {
-		// Hide: exit interactive mode if targeting terminal panel
-		if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			p.exitInteractiveMode()
-		}
-		// The shape the leaf was left in is what the next toggle opens at.
-		p.rememberShellSplit()
-		p.termPanelVisible = false
-		p.termPanelFocused = false
-		p.shellLeafSurface = ""
-		p.syncShellLeaf()
-		p.saveSelectionState()
-		return p.resizeSelectedPaneCmd()
+		// Hide is a close that keeps the session and the user's typed name. It is
+		// the same exit the ✕ takes, told apart by its mode, so the two paths
+		// cannot drift into disagreeing about anything else.
+		return p.closeShellLeaf(shellCloseHide)
 	}
 
 	// The split belongs to the workspace it is opened on, so it is claimed
@@ -294,12 +289,30 @@ func (p *Plugin) termPanelHints() string {
 // renderTermPanelOutput renders the terminal panel's captured output.
 func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	chips := []string{p.termPanelChip()}
+	// The split's header carries the same ✕ every non-primary leaf has. Its
+	// leaf id is what the region is registered with, so hover and the click
+	// answer from one identity.
+	closeLeafID := 0
+	if leaf := p.shellLeaf(); leaf != nil {
+		closeLeafID = leaf.ID
+	}
 	if p.termPanelOutput == nil {
 		hintFloor := 0
 		if p.interactiveDescribes(true) {
 			hintFloor = p.interactiveHintFloor()
 		}
-		header := p.terminalHeader(chips, p.termPanelHints(), width, hintFloor)
+		headerWidth := width
+		reserve := ui.HeaderClose{CloseCol: -1}
+		if closeLeafID != 0 {
+			reserve = ui.ReserveHeaderClose(width)
+			if reserve.CloseW > 0 {
+				headerWidth = reserve.TabsWidth
+			}
+		}
+		header := p.terminalHeader(chips, p.termPanelHints(), headerWidth, hintFloor)
+		if reserve.CloseW > 0 {
+			header = ui.ComposeHeaderClose(header, width, p.hoverPaneClose == closeLeafID)
+		}
 		if height <= terminalHeaderRows {
 			return header
 		}
@@ -308,7 +321,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	}
 	// The terminal panel has no action chips of its own; Diff and Task belong
 	// to the surface's primary header.
-	return p.renderCapturedTerminal(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready")
+	return p.renderCapturedTerminalWithClose(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready", closeLeafID)
 }
 
 // refreshTermPanelForSelection points the terminal panel at the session its own
@@ -337,6 +350,20 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		p.termPanelOutput.Clear()
 	}
 	return p.createTermPanelSession(newSession)
+}
+
+// killShellLeafSession ends the split's own tmux session. Only an explicit
+// close does this: a hidden split is reattached by the next ctrl+t, but a closed
+// one has no way back, and nothing else reaps sidecar-tp-* sessions.
+func killShellLeafSession(session string) tea.Cmd {
+	session = strings.TrimSpace(session)
+	if !strings.HasPrefix(session, termPanelSessionPrefix) {
+		return nil
+	}
+	return func() tea.Msg {
+		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
+		return nil
+	}
 }
 
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.
