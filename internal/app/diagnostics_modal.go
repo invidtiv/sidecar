@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
-	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/version"
@@ -29,11 +29,12 @@ func (m *Model) ensureDiagnosticsModal() {
 	}
 	m.diagnosticsModalWidth = modalW
 
-	m.diagnosticsModal = modal.New("Sidecar",
+	m.diagnosticsModal = modal.New("",
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
 	).
 		AddSection(m.diagnosticsLogoSection()).
+		AddSection(modal.Spacer()).
 		AddSection(m.diagnosticsPluginsSection()).
 		AddSection(modal.Spacer()).
 		AddSection(m.diagnosticsSystemSection()).
@@ -41,7 +42,8 @@ func (m *Model) ensureDiagnosticsModal() {
 		AddSection(m.diagnosticsVersionSection()).
 		AddSection(m.diagnosticsUpdateSection()).
 		AddSection(m.diagnosticsErrorSection()).
-		AddSection(m.diagnosticsHintsSection())
+		AddSection(modal.Spacer()).
+		AddSection(modal.Buttons(modal.Btn(" Close ", "close", modal.BtnPrimary())))
 }
 
 // clearDiagnosticsModal clears the diagnostics modal state.
@@ -51,19 +53,36 @@ func (m *Model) clearDiagnosticsModal() {
 	m.diagnosticsMouseHandler = nil
 }
 
-// diagnosticsLogoSection renders the Sidecar ASCII art logo.
+// diagnosticsLogoSection renders the Sidecar ASCII art logo centered in the modal.
 func (m *Model) diagnosticsLogoSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		logo := `   _____ _     __
-  / ___/(_)___/ /__  _________ ______
-  \__ \/ / __  / _ \/ ___/ __ \/ ___/
- ___/ / / /_/ /  __/ /__/ /_/ / /
-/____/_/\__,_/\___/\___/\__,_/_/     `
-		return modal.RenderedSection{Content: styles.Logo.Render(logo)}
+		rawLines := []string{
+			`   _____ _     __`,
+			`  / ___/(_)___/ /__  _________ ______`,
+			`  \__ \/ / __  / _ \/ ___/ __ \/ ___/`,
+			` ___/ / / /_/ /  __/ /__/ /_/ / /`,
+			`/____/_/\__,_/\___/\___/\__,_/_/`,
+		}
+		maxW := 0
+		for _, l := range rawLines {
+			if len(l) > maxW {
+				maxW = len(l)
+			}
+		}
+		pad := max(0, (contentWidth-maxW)/2)
+		var b strings.Builder
+		for i, l := range rawLines {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(strings.Repeat(" ", pad))
+			b.WriteString(l)
+		}
+		return modal.RenderedSection{Content: styles.Logo.Render(b.String())}
 	}, nil)
 }
 
-// diagnosticsPluginsSection renders the plugins status section.
+// diagnosticsPluginsSection renders the plugins status section as a table.
 func (m *Model) diagnosticsPluginsSection() modal.Section {
 	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
 		var b strings.Builder
@@ -74,37 +93,50 @@ func (m *Model) diagnosticsPluginsSection() modal.Section {
 		// its own health (unconfigured, unreadable store) and dropping it out of
 		// the registry must not drop it out of diagnostics.
 		plugins := m.surfacePlugins()
-		for _, p := range plugins {
-			status := styles.StatusCompleted.Render("✓")
-			fmt.Fprintf(&b, "  %s %s: active\n", status, p.Name())
-
-			// Check for plugin-specific diagnostics
-			if dp, ok := p.(plugin.DiagnosticProvider); ok {
-				for _, d := range dp.Diagnostics() {
-					var statusIcon string
-					switch d.Status {
-					case "ok":
-						statusIcon = styles.StatusCompleted.Render("•")
-					case "warning":
-						statusIcon = styles.StatusModified.Render("•")
-					case "error":
-						statusIcon = styles.StatusBlocked.Render("•")
-					default:
-						statusIcon = styles.Muted.Render("•")
-					}
-					fmt.Fprintf(&b, "    %s %s\n", statusIcon, d.Detail)
-				}
-			}
-		}
-
 		unavail := m.registry.Unavailable()
-		for id, reason := range unavail {
-			status := styles.StatusBlocked.Render("✗")
-			fmt.Fprintf(&b, "  %s %s: %s\n", status, id, reason)
+
+		type pluginItem struct {
+			icon string
+			name string
+		}
+		var items []pluginItem
+		for _, p := range plugins {
+			items = append(items, pluginItem{
+				icon: styles.StatusCompleted.Render("✓"),
+				name: p.Name(),
+			})
+		}
+		for id := range unavail {
+			items = append(items, pluginItem{
+				icon: styles.StatusBlocked.Render("✗"),
+				name: id,
+			})
 		}
 
-		if len(plugins) == 0 && len(unavail) == 0 {
+		if len(items) == 0 {
 			b.WriteString(styles.Muted.Render("  No plugins registered\n"))
+			return modal.RenderedSection{Content: strings.TrimSuffix(b.String(), "\n")}
+		}
+
+		col1Width := contentWidth / 2
+		if col1Width < 15 {
+			col1Width = 15
+		}
+
+		for i := 0; i < len(items); i += 2 {
+			left := items[i].icon + " " + items[i].name
+			leftWidth := lipgloss.Width(left)
+
+			if i+1 < len(items) {
+				right := items[i+1].icon + " " + items[i+1].name
+				pad := col1Width - leftWidth - 2
+				if pad < 2 {
+					pad = 2
+				}
+				fmt.Fprintf(&b, "  %s%s%s\n", left, strings.Repeat(" ", pad), right)
+			} else {
+				fmt.Fprintf(&b, "  %s\n", left)
+			}
 		}
 
 		return modal.RenderedSection{Content: strings.TrimSuffix(b.String(), "\n")}
@@ -236,13 +268,6 @@ func (m *Model) diagnosticsErrorSection() modal.Section {
 	}, nil)
 }
 
-// diagnosticsHintsSection renders the close hint.
-func (m *Model) diagnosticsHintsSection() modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		return modal.RenderedSection{Content: "\n" + styles.Subtle.Render("Press ! or esc to close")}
-	}, nil)
-}
-
 // renderDiagnosticsModal renders the diagnostics modal.
 func (m *Model) renderDiagnosticsModal(content string) string {
 	m.ensureDiagnosticsModal()
@@ -268,6 +293,9 @@ func (m *Model) handleDiagnosticsModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 	}
 	action := m.diagnosticsModal.HandleMouse(msg, m.diagnosticsMouseHandler)
 	switch action {
+	case "close", "cancel":
+		m.showDiagnostics = false
+		return m, nil
 	case "update":
 		if m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
 			m.openUpdatePreview()

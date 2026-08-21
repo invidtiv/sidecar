@@ -1187,6 +1187,9 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 			switch action {
+			case "close", "cancel":
+				m.showDiagnostics = false
+				return m, nil
 			case "update":
 				// Open update modal instead of starting update directly
 				if m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
