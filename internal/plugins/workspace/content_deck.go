@@ -44,7 +44,7 @@ func (p *Plugin) configureDeckViewer(kind panelayout.Kind, model any) {
 	}
 }
 
-func (p *Plugin) ensureWorkspaceDeck(root, surface string) *contentpanes.Deck {
+func (p *Plugin) ensureWorkspaceDeck(root, surface string) (*contentpanes.Deck, []tea.Cmd) {
 	ctx := p.workspaceDeckContext(root, surface)
 	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
 	hidden := p.hiddenPaneLayout
@@ -53,17 +53,18 @@ func (p *Plugin) ensureWorkspaceDeck(root, surface string) *contentpanes.Deck {
 		// it before reopening so drag ratios and tabs survive both an in-process
 		// hide and a relaunch.
 		p.contentDeck = contentpanes.Decode(ctx, cfg, contentpanes.State{Version: 1, Root: workspaceDeckNode(hidden)})
-	} else if p.contentDeck == nil {
+		return p.contentDeck, p.contentDeck.LoadVisible()
+	}
+	if p.contentDeck == nil {
 		saved := p.encodePaneNode(p.paneRoot)
 		if saved != nil {
 			p.contentDeck = contentpanes.Decode(ctx, cfg, contentpanes.State{Version: 1, Root: workspaceDeckNode(saved)})
-		} else {
-			p.contentDeck = contentpanes.New(ctx, cfg)
+			return p.contentDeck, p.contentDeck.LoadVisible()
 		}
-	} else {
-		p.contentDeck.SetContext(ctx)
+		p.contentDeck = contentpanes.New(ctx, cfg)
+		return p.contentDeck, nil
 	}
-	return p.contentDeck
+	return p.contentDeck, p.contentDeck.SetContext(ctx)
 }
 
 func workspaceDeckNode(saved *state.PaneLayoutJSON) *contentpanes.NodeState {
@@ -130,7 +131,7 @@ func (p *Plugin) openWorkspaceContent(root, surface string, ref contentlink.Ref,
 
 func (p *Plugin) openWorkspaceContentFile(root, surface string, ref contentlink.Ref, name string, file *os.File) tea.Cmd {
 	wasInteractive := p.viewMode == ViewModeInteractive
-	deck := p.ensureWorkspaceDeck(root, surface)
+	deck, adopt := p.ensureWorkspaceDeck(root, surface)
 	placement, ok := p.workspaceDeckPlacement()
 	if !ok {
 		return nil
@@ -164,10 +165,11 @@ func (p *Plugin) openWorkspaceContentFile(root, surface string, ref contentlink.
 		p.focusLeaf(out.LeafID)
 	}
 	p.saveSelectionState()
+	cmds := unwrapDeckCmds(append(adopt, out.Command)...)
 	if out.CreatedLeaf {
-		return tea.Batch(unwrapWorkspaceDeckLoad(out.Command), p.resizeDocTerminalCmd())
+		cmds = append(cmds, p.docTerminalResizeCmds()...)
 	}
-	return unwrapWorkspaceDeckLoad(out.Command)
+	return tea.Batch(cmds...)
 }
 
 func unwrapWorkspaceDeckLoad(cmd tea.Cmd) tea.Cmd {
@@ -181,6 +183,16 @@ func unwrapWorkspaceDeckLoad(cmd tea.Cmd) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+func unwrapDeckCmds(cmds ...tea.Cmd) []tea.Cmd {
+	out := make([]tea.Cmd, 0, len(cmds))
+	for _, cmd := range cmds {
+		if unwrapped := unwrapWorkspaceDeckLoad(cmd); unwrapped != nil {
+			out = append(out, unwrapped)
+		}
+	}
+	return out
 }
 
 func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
@@ -313,7 +325,7 @@ func reconcileWorkspaceDeckTree(current, fresh *panelayout.Node) *panelayout.Nod
 }
 
 func (p *Plugin) replaceWorkspaceContent(root, surface string, ref contentlink.Ref) tea.Cmd {
-	deck := p.ensureWorkspaceDeck(root, surface)
+	deck, adopt := p.ensureWorkspaceDeck(root, surface)
 	out := deck.ReplaceActive(p.workspaceDeckContext(root, surface), ref)
 	if !out.Accepted() {
 		return nil
@@ -321,7 +333,7 @@ func (p *Plugin) replaceWorkspaceContent(root, surface string, ref contentlink.R
 	p.syncWorkspaceDeckProjection(root, surface)
 	p.focusLeaf(out.LeafID)
 	p.saveSelectionState()
-	return unwrapWorkspaceDeckLoad(out.Command)
+	return tea.Batch(unwrapDeckCmds(append(adopt, out.Command)...)...)
 }
 
 func (p *Plugin) applyWorkspaceDeckBroadcast(msg any) tea.Cmd {

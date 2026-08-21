@@ -973,6 +973,8 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	case "e":
 		return true, p.enterDocEdit(doc)
+	case "r":
+		return true, p.reloadFocusedDoc()
 	case "ctrl+p":
 		return true, p.openDocFinder(doc)
 	case "f":
@@ -1038,6 +1040,18 @@ func (p *Plugin) openDocInfo() tea.Cmd {
 	info, cmd := docview.OpenInfo(doc.root, doc.view().Title())
 	p.docInfo = info
 	return cmd
+}
+
+func (p *Plugin) reloadFocusedDoc() tea.Cmd {
+	if p.contentDeck != nil {
+		p.syncDeckFocus()
+		return unwrapWorkspaceDeckLoad(p.contentDeck.ReloadFocused())
+	}
+	doc, _ := p.activeDocPane()
+	if doc == nil || doc.view() == nil || doc.view().Title() == "" {
+		return nil
+	}
+	return doc.view().Reload()
 }
 
 func (p *Plugin) revealActiveDoc() tea.Cmd {

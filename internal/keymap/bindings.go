@@ -281,6 +281,8 @@ func DefaultBindings() []Binding {
 		// tmux's own (ctrl+\, esc esc).
 		{Key: "e", Command: "edit", Context: "workspace-doc"},
 		{Key: "e", Command: "edit", Context: "global-workspaces-doc"},
+		{Key: "r", Command: "reload", Context: "workspace-doc"},
+		{Key: "r", Command: "reload", Context: "global-workspaces-doc"},
 
 		{Key: "enter", Command: "confirm", Context: "workspace-doc-find"},
 		{Key: "n", Command: "next-match", Context: "workspace-doc-find"},

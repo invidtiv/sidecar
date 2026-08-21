@@ -31,6 +31,7 @@ type Config struct {
 type viewer interface {
 	model() any
 	load(SurfaceContext, contentlink.Ref, int) tea.Cmd
+	reload(SurfaceContext, contentlink.Ref, int) tea.Cmd
 	arm(SurfaceContext, contentlink.Ref, int, TabState)
 	focus(SurfaceContext, contentlink.Ref, int) tea.Cmd
 	apply(SurfaceContext, any) (tea.Cmd, bool)
@@ -138,6 +139,12 @@ func (v *documentViewer) loadFile(ctx SurfaceContext, ref contentlink.Ref, id in
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
 	return cmd
 }
+func (v *documentViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	if v.view.NeedsLoad() {
+		return v.load(ctx, ref, id)
+	}
+	return v.view.Reload()
+}
 func (v *documentViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, ref.Value, ctx.Epoch)
 	v.view.SetRendered(state.Rendered)
@@ -167,6 +174,9 @@ type issueViewer struct{ view *issueview.Model }
 func (v *issueViewer) model() any { return v.view }
 func (v *issueViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.view.Load(id, ctx.Root, ref.Value, ctx.Epoch)
+}
+func (v *issueViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	return v.load(ctx, ref, id)
 }
 func (v *issueViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, ref.Value, ctx.Epoch)
@@ -224,6 +234,9 @@ func (v *diffViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.C
 	default:
 		return nil
 	}
+}
+func (v *diffViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	return v.load(ctx, ref, id)
 }
 func (v *diffViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	target, _ := workspacediff.ParseSpec(ref.Value)
@@ -295,6 +308,9 @@ type resourceViewer struct{ view *resourceview.Model }
 func (v *resourceViewer) model() any { return v.view }
 func (v *resourceViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.view.Load(id, resourceRef(ref), ctx.Epoch)
+}
+func (v *resourceViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	return v.load(ctx, ref, id)
 }
 func (v *resourceViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, resourceRef(ref), ctx.Epoch)

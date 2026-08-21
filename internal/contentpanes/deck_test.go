@@ -315,20 +315,108 @@ func TestDeckSetContextRearmsEveryKindAndSelectRestartsLoad(t *testing.T) {
 	other := ctx
 	other.Root = t.TempDir()
 	other.BaseRef = "release"
-	d.SetContext(other)
+	cmds := d.SetContext(other)
+	if len(cmds) == 0 {
+		t.Fatal("SetContext did not restart loads for visible armed tabs")
+	}
+	started := map[panelayout.Kind]bool{}
+	for _, cmd := range cmds {
+		if cmd == nil {
+			continue
+		}
+		result, ok := cmd().(Result)
+		if !ok {
+			t.Fatalf("visible reload = %T, want Result", cmd())
+		}
+		tab := d.tabByID(result.ID.TabID)
+		if tab == nil {
+			t.Fatalf("reload targeted missing tab %d", result.ID.TabID)
+		}
+		for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
+			if paneForKind(d, kind) != nil && paneForKind(d, kind).tabs[0] == tab {
+				started[kind] = true
+			}
+		}
+	}
 	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
 		leaf := panelayout.FirstOfKind(d.root, kind)
 		if leaf == nil {
 			t.Fatalf("kind %d leaf disappeared", kind)
 		}
-		leafID := leaf.ID
-		p := d.panes[leafID]
+		p := d.panes[leaf.ID]
 		if p == nil || len(p.tabs) != 1 || !sameContext(p.tabs[0].ctx, other) {
 			t.Fatalf("kind %d tab was not rebound: %#v", kind, p)
 		}
-		if cmd := d.SelectTab(leafID, 0); cmd == nil {
-			t.Fatalf("selecting rebound kind %d did not restart its load", kind)
+		if !started[kind] {
+			t.Fatalf("kind %d visible tab was not asked to load after SetContext", kind)
 		}
+	}
+}
+
+func TestSetContextReloadsVisibleDocumentWithoutWaitingForSelect(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{})
+	opened := d.Open(ctx, fileRef("README.md"), testPlacement())
+	if opened.Command == nil {
+		t.Fatal("open did not load")
+	}
+	if _, ok := d.Apply(opened.Command().(Result)); !ok {
+		t.Fatal("first result was not applied")
+	}
+	view := d.Viewer(opened.LeafID).(*docview.Model)
+	view.SetSize(40, 6)
+	if strings.Contains(view.View(), "Loading document") {
+		t.Fatal("loaded document still shows loading")
+	}
+
+	other := ctx
+	other.BaseRef = "release"
+	cmds := d.SetContext(other)
+	if len(cmds) != 1 {
+		t.Fatalf("SetContext cmds = %d, want 1 visible document load", len(cmds))
+	}
+	view = d.Viewer(opened.LeafID).(*docview.Model)
+	view.SetSize(40, 6)
+	if !strings.Contains(view.View(), "Loading document") {
+		t.Fatal("rebind did not arm a loading placeholder")
+	}
+	if _, ok := d.Apply(cmds[0]().(Result)); !ok {
+		t.Fatal("SetContext load was not applied")
+	}
+	if strings.Contains(view.View(), "Loading document") {
+		t.Fatal("visible document stayed on loading after SetContext")
+	}
+	if !strings.Contains(view.View(), "hello") {
+		t.Fatalf("reloaded view = %q", view.View())
+	}
+}
+
+func TestDecodeLoadVisibleStartsArmedActiveTabs(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("body\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := testContext(root)
+	d := New(ctx, Config{})
+	place := testPlacement()
+	place.Box = panelayout.Box{W: 400, H: 120}
+	if out := d.Open(ctx, fileRef("README.md"), place); out.Command == nil {
+		t.Fatal("document open did not load")
+	}
+	if out := d.Open(ctx, issueRef("td-1a2b3c"), place); out.Command == nil {
+		t.Fatal("issue open did not load")
+	}
+	restored := Decode(ctx, Config{}, d.Encode())
+	doc := paneForKind(restored, panelayout.Document)
+	if doc == nil || !doc.tabs[0].view.(*documentViewer).view.NeedsLoad() {
+		t.Fatal("restored document was not armed")
+	}
+	if cmds := restored.LoadVisible(); len(cmds) < 2 {
+		t.Fatalf("LoadVisible = %d cmds, want the visible document and issue", len(cmds))
 	}
 }
 
@@ -349,8 +437,11 @@ func TestDeckDiffRejectsRawBroadcastFromReusedSurfaceEpochAfterRebind(t *testing
 	if before.Binding == 0 || after.Binding == before.Binding {
 		t.Fatalf("diff binding was reused across context: before=%d after=%d", before.Binding, after.Binding)
 	}
+	if after.State != workspacediff.LoadStateLoading {
+		t.Fatalf("rebound view state = %v, want loading from SetContext", after.State)
+	}
 	after.ApplySnapshotMsg(stale, other.Root, other.Surface)
-	if after.State != workspacediff.LoadStateUnknown {
+	if after.State != workspacediff.LoadStateLoading {
 		t.Fatalf("stale raw snapshot changed rebound view state to %v", after.State)
 	}
 }

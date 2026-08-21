@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
@@ -688,6 +689,9 @@ func TestDocumentCommandsDescribeCurrentMode(t *testing.T) {
 	if commandNameByID(commands, "toggle-sidebar") != "Sidebar" || commandNameByID(commands, "render") != "Raw" {
 		t.Fatalf("document sidebar/render commands = %#v", commands)
 	}
+	if commandNameByID(commands, "reload") != "Reload" {
+		t.Fatalf("document reload command = %#v", commands)
+	}
 	if commandNameByID(commands, "toggle-wrap") != "Wrap" || commandNameByID(commands, "info") != "Info" || commandNameByID(commands, "reveal") != "Reveal" {
 		t.Fatalf("document path-action commands = %#v", commands)
 	}
@@ -1090,6 +1094,53 @@ func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 	}
 }
 
+func TestSplitAfterRestoredDocumentLoadsTheVisibleFile(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# restored body\n")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal"},
+		B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}},
+	}}
+	applyDocOpen(t, p, p.restorePaneLayout(layout))
+	if p.contentDeck != nil {
+		t.Fatal("restore created a content deck; the split path would not adopt the live viewers")
+	}
+	doc := p.activeDocPaneOrNil()
+	if doc == nil || doc.view() == nil {
+		t.Fatal("restore lost the document")
+	}
+	doc.view().SetSize(40, 8)
+	if strings.Contains(ansi.Strip(doc.view().View()), "Loading document") {
+		t.Fatalf("restore load did not complete: %q", doc.view().View())
+	}
+
+	stubTd(t)
+	surfaceRoot, surface, ok := p.selectedTerminalSurface()
+	if !ok {
+		t.Fatal("no selected terminal surface")
+	}
+	applyDocOpen(t, p, p.openIssuePaneForSurface(surfaceRoot, surface, "td-1111aa"))
+	if len(p.docs) != 1 {
+		t.Fatalf("split dropped the document pane: docs=%d", len(p.docs))
+	}
+	for _, d := range p.docs {
+		if d.view() == nil {
+			t.Fatal("document pane has no view after split")
+		}
+		d.view().SetSize(40, 8)
+		got := ansi.Strip(d.view().View())
+		if strings.Contains(got, "Loading document") {
+			t.Fatalf("document pane stuck loading after split: %q", got)
+		}
+	}
+}
+
 // A leaf of a kind this build has never heard of is what the restore guard is
 // still for: it would size a terminal against a box nothing draws into.
 func TestRestorePaneLayoutRejectsUnknownLeafKind(t *testing.T) {
@@ -1444,20 +1495,22 @@ func applyDocOpen(t *testing.T, p *Plugin, cmd tea.Cmd) {
 	if cmd == nil {
 		return
 	}
-	msg := cmd()
-	if batch, ok := msg.(tea.BatchMsg); ok {
-		for _, child := range batch {
-			if child == nil {
-				continue
-			}
-			if loaded, ok := child().(docview.LoadedMsg); ok {
-				p.applyDocLoaded(loaded)
+	applyDocOpenMsg(t, p, cmd())
+}
+
+func applyDocOpenMsg(t *testing.T, p *Plugin, msg tea.Msg) {
+	t.Helper()
+	switch m := msg.(type) {
+	case tea.BatchMsg:
+		for _, child := range m {
+			if child != nil {
+				applyDocOpenMsg(t, p, child())
 			}
 		}
-		return
-	}
-	if loaded, ok := msg.(docview.LoadedMsg); ok {
-		p.applyDocLoaded(loaded)
+	case contentpanes.Result:
+		applyDocOpen(t, p, p.applyWorkspaceDeckResult(m))
+	case docview.LoadedMsg:
+		p.applyDocLoaded(m)
 	}
 }
 
