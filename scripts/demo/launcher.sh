@@ -2,6 +2,39 @@
 # Demo environment launcher and lifecycle manager.
 set -euo pipefail
 
+setup_sanitized_path() {
+    local enable_td="$1"
+    local enable_tasks="$2"
+    local demo_root="$3"
+
+    if [ "$enable_td" -eq 1 ] && [ "$enable_tasks" -eq 1 ]; then
+        return 0
+    fi
+
+    local mirror_dir="$demo_root/pathmirror"
+    mkdir -p "$mirror_dir"
+
+    IFS=':' read -r -a path_dirs <<<"$PATH"
+    for d in "${path_dirs[@]}"; do
+        [ -d "$d" ] || continue
+        for f in "$d"/*; do
+            [ -x "$f" ] && [ ! -d "$f" ] || continue
+            base="$(basename "$f")"
+            if [ "$enable_td" -eq 0 ] && [ "$base" = "td" ]; then
+                continue
+            fi
+            if [ "$enable_tasks" -eq 0 ]; then
+                case "$base" in
+                    tasks|tasks-tui|tasks-api) continue ;;
+                esac
+            fi
+            [ -e "$mirror_dir/$base" ] || ln -sfn "$f" "$mirror_dir/$base" 2>/dev/null || true
+        done
+    done
+
+    export PATH="$mirror_dir"
+}
+
 launch_demo() {
     local sidecar_bin="$1"
     local dry_run="${2:-0}"
@@ -14,10 +47,8 @@ launch_demo() {
     ACTIVE_DEMO_ROOT="$DEMO_ROOT"
     ACTIVE_TMUX_SOCKET="$INNER_TMUX_SOCKET"
 
-    # Setup isolated PATH (putting demo bin directory first to allow masking if needed)
-    configure_td_path "$enable_td" "$DEMO_BIN_DIR"
-    configure_tasks_environment "$enable_tasks" "$DEMO_BIN_DIR"
-    export PATH="$DEMO_BIN_DIR:$PATH"
+    # Sanitize PATH by mirroring and omitting disabled tools (so LookPath genuinely returns ErrNotFound)
+    setup_sanitized_path "$enable_td" "$enable_tasks" "$DEMO_ROOT"
 
     # Export two-axis isolation
     export_isolation_env
@@ -58,8 +89,8 @@ launch_demo() {
     printf " \033[1mState Tree:\033[0m       %s\n" "$DEMO_STATE_DIR"
     printf " \033[1mPrivate Tmux:\033[0m     %s\n" "$INNER_TMUX_SOCKET"
     printf " \033[1mLaunch Project:\033[0m   %s\n" "$LAUNCH_PROJECT_DIR"
-    printf " \033[1mTD Enabled:\033[0m       %s\n" "$([ "$enable_td" -eq 1 ] && echo "yes" || echo "no (masked)")"
-    printf " \033[1mTasks Plugin:\033[0m     %s\n" "$([ "$enable_tasks" -eq 1 ] && echo "yes" || echo "no (masked)")"
+    printf " \033[1mTD Enabled:\033[0m       %s\n" "$([ "$enable_td" -eq 1 ] && echo "yes" || echo "no (omitted from PATH)")"
+    printf " \033[1mTasks Plugin:\033[0m     %s\n" "$([ "$enable_tasks" -eq 1 ] && echo "yes" || echo "no (omitted from PATH)")"
     printf " \033[1mKeep on Exit:\033[0m     %s\n" "$([ "$keep" -eq 1 ] && echo "yes" || echo "no (auto-purge)")"
     printf "\033[1;36m=====================================================\033[0m\n"
     echo ""
