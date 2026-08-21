@@ -4,6 +4,12 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **Create Workspace kind toggle shows the selected type.** Opening the form in
+  Shell mode (or leaving focus on Name) no longer leaves both Shell and Worktree
+  looking unselected; the current kind stays highlighted.
+
 ## [v1.2.2] - 2026-08-20
 
 ### Bug Fixes

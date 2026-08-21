@@ -115,6 +115,30 @@ func kindDisabledSelected() lipgloss.Style {
 	return styles.ButtonHover.Foreground(styles.TextMuted)
 }
 
+func kindRowStyle(rowKind, sel Kind, disabled bool, hovered bool) lipgloss.Style {
+	if disabled && rowKind == sel {
+		// A disabled row that is still the active kind — its Name field and
+		// placement row are drawn below it — must read as selected, or the
+		// toggle shows nothing selected at all. Selected chrome, muted text.
+		return kindDisabledSelected()
+	}
+	if disabled {
+		return styles.Muted
+	}
+	if rowKind == sel {
+		return styles.ButtonFocused
+	}
+	if hovered {
+		return styles.ButtonHover
+	}
+	return styles.Button
+}
+
+func kindButtonStyles(sel Kind, hovered bool) (shellStyle, treeStyle lipgloss.Style) {
+	return kindRowStyle(KindShell, sel, false, hovered && sel != KindShell),
+		kindRowStyle(KindWorktree, sel, false, hovered && sel != KindWorktree)
+}
+
 // kindToggle renders the row list. disabledReason answers, per row, why that
 // row cannot be created right now; a disabled row is drawn muted whether or not
 // it is selected, so the rule is visible before the row is entered.
@@ -124,25 +148,11 @@ func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disa
 		if selected != nil {
 			sel = *selected
 		}
-		focused := focusID == id
+		hovered := hoverID == id
 		parts := make([]string, 0, len(rows)*2)
 		for i, row := range rows {
 			disabled := disabledReason != nil && disabledReason(row.Kind) != ""
-			style := styles.Button
-			switch {
-			case disabled && row.Kind == sel:
-				// A disabled row that is still the active kind — its Name field and
-				// placement row are drawn below it — must read as selected, or the
-				// toggle shows nothing selected at all. Selected chrome, muted text.
-				style = kindDisabledSelected()
-			case disabled:
-				style = styles.Muted
-			case row.Kind == sel:
-				style = styles.ButtonHover
-				if focused {
-					style = styles.ButtonFocused
-				}
-			}
+			style := kindRowStyle(row.Kind, sel, disabled, hovered && row.Kind != sel)
 			if i > 0 {
 				parts = append(parts, styles.Muted.Render(kindSeparator))
 			}
