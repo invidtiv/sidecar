@@ -30,6 +30,9 @@ All notable changes to sidecar are documented here.
 - **Note activity in the td monitor says "created note" / "updated note"**
   instead of treating notes as issues. (Requires a td build that includes the
   matching monitor change.)
+- **Create Workspace kind row shows when it has keyboard focus.** The chosen
+  kind stays filled; `[ ]` around the row uses the same Primary colour as a
+  focused input so Tab on the toggle is visible without stealing the selection.
 
 ## [v1.2.2] - 2026-08-20
 

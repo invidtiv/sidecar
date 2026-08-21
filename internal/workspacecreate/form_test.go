@@ -383,14 +383,17 @@ func TestComboDoesNotOverwriteFocusedFilterOnRebuild(t *testing.T) {
 }
 
 func TestKindFromClickX(t *testing.T) {
-	if got := KindFromClickX(9, 0, 20); got != KindShell {
-		t.Fatalf("left half = %v, want Shell", got)
+	rows := kindRowsFor(false)
+	spans := kindSpans(rows)
+	width := spans[len(spans)-1][1] + len(kindFrameClose)
+	if got := KindFromClickX(spans[0][0]+1, 0, width); got != KindShell {
+		t.Fatalf("click Shell = %v, want Shell", got)
 	}
-	if got := KindFromClickX(10, 0, 20); got != KindWorktree {
-		t.Fatalf("right half = %v, want Worktree", got)
+	if got := KindFromClickX(spans[1][0]+1, 0, width); got != KindWorktree {
+		t.Fatalf("click Worktree = %v, want Worktree", got)
 	}
 	f := Open(testOpts(KindShell))
-	f.SetKindFromClickX(15, 0, 20)
+	f.SetKindFromClickX(spans[1][0]+1, 0, width)
 	if f.Kind() != KindWorktree {
 		t.Fatalf("click right = %v, want Worktree", f.Kind())
 	}
