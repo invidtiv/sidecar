@@ -16,6 +16,7 @@
 # Options:
 #   -p, --project=NAME  Specific project for 'single' mode (intersections, plastic-pieces, avocet, synthwave, quantum)
 #   --blank             Create repositories without sample commits/files
+#   --git / --no-git    In 'fresh' mode, initialize a clean Git repo vs non-Git directory (default: --git)
 #   --no-td             Disable TD and mask 'td' binary to simulate missing TD
 #   --no-tasks          Disable Tasks plugin and mask 'tasks' binaries
 #   --no-notes          Disable Notes plugin
@@ -29,8 +30,8 @@
 #   ./scripts/demo.sh                                # 5 projects with project switcher
 #   ./scripts/demo.sh single                         # Single traffic sim project
 #   ./scripts/demo.sh single -p plastic-pieces       # 3D printing project
-#   ./scripts/demo.sh fresh --onboarding             # Zero-dependency onboarding test
-#   ./scripts/demo.sh --dry-run                      # Inspect generated files in /tmp
+#   ./scripts/demo.sh fresh --no-tasks               # Clean Git repo with TD installed, no tasks, 0 projects
+#   ./scripts/demo.sh fresh --no-git --onboarding    # Non-Git directory with 0 dependencies
 
 set -euo pipefail
 
@@ -68,13 +69,14 @@ source "$SCRIPT_DIR/demo/tools/tasks.sh"
 source "$SCRIPT_DIR/demo/launcher.sh"
 
 show_help() {
-    sed -n '2,32p' "$0" | sed 's/^# \?//'
+    sed -n '2,34p' "$0" | sed 's/^# \?//'
 }
 
 # Defaults
 PRESET="multi"
 SELECTED_PROJECT="intersections"
 BLANK=0
+ENABLE_GIT=1
 ENABLE_TD=1
 ENABLE_TASKS=1
 ENABLE_NOTES=1
@@ -100,6 +102,14 @@ while [ "$#" -gt 0 ]; do
             ;;
         --blank)
             BLANK=1
+            shift
+            ;;
+        --git)
+            ENABLE_GIT=1
+            shift
+            ;;
+        --no-git)
+            ENABLE_GIT=0
             shift
             ;;
         --no-td)
@@ -171,7 +181,7 @@ fi
 case "$PRESET" in
     fresh)
         setup_preset_fresh "$DEMO_ROOT" "$CONFIG_PATH" \
-            "$ENABLE_TD" "$ENABLE_TASKS" "$ENABLE_NOTES" "$BLANK"
+            "$ENABLE_TD" "$ENABLE_TASKS" "$ENABLE_NOTES" "$BLANK" "$ENABLE_GIT"
         ;;
     single)
         setup_preset_single "$DEMO_ROOT" "$CONFIG_PATH" \
