@@ -1510,6 +1510,78 @@ func (m *Model) runHostCommand(id string) (tea.Cmd, bool) {
 		// No page named: the palette command toggles and resumes where the user
 		// last was, exactly as the gear and `,` do.
 		return m.toggleConfiguration(), true
+	case "quit":
+		m.initQuitModal()
+		m.showQuitConfirm = true
+		return nil, true
+	case "switch-project":
+		m.showProjectSwitcher = true
+		m.initProjectSwitcher()
+		m.activeContext = "project-switcher"
+		return nil, true
+	case "switch-worktree":
+		worktrees := m.worktreeInventory()
+		if len(worktrees) > 1 {
+			m.showWorktreeSwitcher = true
+			m.initWorktreeSwitcher()
+			m.activeContext = "worktree-switcher"
+			return nil, true
+		}
+		return ShowFlash("No worktrees found"), true
+	case "switch-theme":
+		m.showThemeSwitcher = true
+		m.initThemeSwitcher()
+		m.activeContext = "theme-switcher"
+		return nil, true
+	case "open-in":
+		m.showOpenIn = true
+		m.initOpenIn()
+		m.activeContext = "open-in"
+		return nil, true
+	case "toggle-overview":
+		return m.toggleOverview(), true
+	case "toggle-notifications":
+		if m.notificationCentreVisible() && !m.notificationCentreFocused {
+			m.focusNotificationCentre()
+			m.readSelectedNotification()
+			return nil, true
+		}
+		return m.toggleNotificationCentre(), true
+	case "expand-toast":
+		if m.toggleToastExpand() {
+			return m.syncToastReveal(time.Now()), true
+		}
+		return nil, true
+	case "toggle-diagnostics":
+		m.showDiagnostics = true
+		m.activeContext = "diagnostics"
+		return tea.Batch(m.productCheckCmds(true)...), true
+	case "refresh":
+		return Refresh(), true
+	case "next-plugin":
+		return m.cycleTabs(1), true
+	case "prev-plugin":
+		return m.cycleTabs(-1), true
+	case "focus-plugin-1":
+		return m.selectProjectTabByNumber(0), true
+	case "focus-plugin-2":
+		return m.selectProjectTabByNumber(1), true
+	case "focus-plugin-3":
+		return m.selectProjectTabByNumber(2), true
+	case "focus-plugin-4":
+		return m.selectProjectTabByNumber(3), true
+	case "focus-plugin-5":
+		return m.selectProjectTabByNumber(4), true
+	case "focus-plugin-6":
+		return m.selectProjectTabByNumber(5), true
+	case "focus-plugin-7":
+		return m.selectProjectTabByNumber(6), true
+	case "focus-sessions":
+		return m.selectGlobalTab(GlobalSessions), true
+	case "focus-activity":
+		return m.selectGlobalTab(GlobalActivity), true
+	case "focus-tasks":
+		return m.selectGlobalTab(GlobalTasks), true
 	}
 	return nil, false
 }

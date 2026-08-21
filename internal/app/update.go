@@ -738,6 +738,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.runGlobalWorkspacesCommand(msg.CommandID); cmd != nil {
 			return m, cmd
 		}
+		// Fallback for contextual plugin commands: if entry has a key bound, forward to active plugin
+		if msg.Key != "" {
+			return m.forwardKeyToPlugin(appContentKeyPress(msg.Key))
+		}
 		return m, nil
 
 	case version.ProductStatusMsg:
@@ -906,6 +910,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEsc {
 		switch m.activeModal() {
 		case ModalPalette:
+			if m.palette.Query() != "" {
+				var cmd tea.Cmd
+				m.palette, cmd = m.palette.Update(msg)
+				return m, cmd
+			}
 			m.showPalette = false
 			m.updateContext()
 			return m, nil

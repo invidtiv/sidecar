@@ -4,14 +4,21 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
+)
+
+const (
+	paletteFilterID   = "palette-filter"
+	paletteItemPrefix = "palette-item-"
 )
 
 // CommandSelectedMsg is sent when a command is selected from the palette.
 type CommandSelectedMsg struct {
 	CommandID string
 	Context   string
+	Key       string
 }
 
 // Model is the command palette state.
@@ -21,6 +28,10 @@ type Model struct {
 
 	// Mouse support
 	mouseHandler *mouse.Handler
+
+	// Declarative modal
+	modal      *modal.Modal
+	modalWidth int
 
 	// Entries
 	allEntries []PaletteEntry
@@ -67,9 +78,42 @@ func (m Model) Init() tea.Cmd {
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	// Reserve space for input, borders, layer headers
 	m.maxVisible = max(5, (height-10)/2)
-	m.textInput.SetWidth(min(50, width-10))
+	m.clearModal()
+}
+
+// clearModal invalidates the cached modal so it rebuilds on next render.
+func (m *Model) clearModal() {
+	m.modal = nil
+	m.modalWidth = 0
+}
+
+// ensureModal builds/rebuilds the declarative modal dialog.
+func (m *Model) ensureModal() {
+	modalW := 74
+	if modalW > m.width-4 {
+		modalW = m.width - 4
+	}
+	if modalW < 36 {
+		modalW = 36
+	}
+
+	if m.modal != nil && m.modalWidth == modalW {
+		return
+	}
+	m.modalWidth = modalW
+
+	m.modal = modal.New("Shortcuts",
+		modal.WithWidth(modalW),
+		modal.WithHints(false),
+	).
+		AddSection(m.scopeSection()).
+		AddSection(modal.Input(paletteFilterID, &m.textInput, modal.WithSubmitOnEnter(false))).
+		AddSection(m.countSection()).
+		AddSection(modal.Spacer()).
+		AddSection(m.listSection()).
+		AddSection(modal.Spacer()).
+		AddSection(m.hintsSection())
 }
 
 // Open prepares the palette for display.
@@ -92,6 +136,7 @@ func (m *Model) Open(km *keymap.Registry, plugins []plugin.Plugin, activeContext
 	m.textInput.Focus()
 	m.cursor = 0
 	m.offset = 0
+	m.clearModal()
 }
 
 // ShowAllContexts returns whether all contexts mode is active.
@@ -149,6 +194,18 @@ func (m Model) SelectedEntry() *PaletteEntry {
 	return nil
 }
 
+// View renders the command palette using the declarative modal library.
+func (m *Model) View() string {
+	m.ensureModal()
+	if m.modal == nil {
+		return ""
+	}
+	if m.mouseHandler == nil {
+		m.mouseHandler = mouse.NewHandler()
+	}
+	return m.modal.Render(m.width, m.height, m.mouseHandler)
+}
+
 // Update handles messages for the palette.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -158,11 +215,18 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleMouse(msg)
 
 	case tea.KeyPressMsg:
-		// Match on String() so ctrl combos (gone as KeyCtrl* constants in v2)
-		// and special keys are handled uniformly.
+		// Match on String() so ctrl combos and special keys are handled uniformly.
 		switch msg.String() {
 		case "esc":
-			// Close without selecting - handled by parent
+			// Clear filter if non-empty, otherwise close (handled by parent)
+			if m.textInput.Value() != "" {
+				m.textInput.SetValue("")
+				m.refilter()
+				m.cursor = 0
+				m.offset = 0
+				m.clearModal()
+				return m, nil
+			}
 			return m, nil
 
 		case "enter":
@@ -172,6 +236,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 					return CommandSelectedMsg{
 						CommandID: entry.CommandID,
 						Context:   entry.Context,
+						Key:       entry.Key,
 					}
 				}
 			}
@@ -179,20 +244,22 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 		case "up", "ctrl+p":
 			m.moveCursor(-1)
+			m.clearModal()
 			return m, nil
 
 		case "down", "ctrl+n":
 			m.moveCursor(1)
+			m.clearModal()
 			return m, nil
 
-		case "ctrl+u":
-			// Page up
+		case "ctrl+u", "pgup":
 			m.moveCursor(-m.maxVisible)
+			m.clearModal()
 			return m, nil
 
-		case "ctrl+d":
-			// Page down
+		case "ctrl+d", "pgdown":
 			m.moveCursor(m.maxVisible)
+			m.clearModal()
 			return m, nil
 
 		case "tab":
@@ -201,6 +268,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.refilter()
 			m.cursor = 0
 			m.offset = 0
+			m.clearModal()
 			return m, nil
 
 		default:
@@ -213,6 +281,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.refilter()
 			m.cursor = 0
 			m.offset = 0
+			m.clearModal()
 
 			return m, tea.Batch(cmds...)
 		}
@@ -233,6 +302,7 @@ func (m *Model) moveCursor(delta int) {
 	// Clamp to valid range
 	if len(m.filtered) == 0 {
 		m.cursor = 0
+		m.offset = 0
 		return
 	}
 	if m.cursor < 0 {

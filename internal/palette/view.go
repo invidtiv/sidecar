@@ -5,314 +5,227 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-// keyColumnWidth is the fixed width for the key column to ensure alignment.
-// Fits "shift+tab" (9 chars) + KeyHint padding (2) + 1 buffer.
-const keyColumnWidth = 12
+// keyColumnWidth is the fixed width for the key column to ensure clean alignment.
+const (
+	keyColumnWidth  = 10
+	nameColumnWidth = 24
+)
 
-// Palette-specific styles.
-//
-// These are functions, not package-level vars: a var block is evaluated at
-// package init, which snapshots whatever colours styles happened to hold before
-// any theme was applied. That froze the command palette on the built-in default
-// purple no matter which theme was active. Building the style per render costs
-// nothing at this size and keeps the palette in the theme.
+// scopeSection renders the context selector / mode indicator.
+func (m *Model) scopeSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		var sb strings.Builder
+		activeStyle := lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+		mutedStyle := styles.Muted
 
-func paletteBox() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.Primary).
-		Background(styles.BgSecondary).
-		Padding(1, 2)
-}
+		ctxName := m.activeContext
+		if ctxName == "" {
+			ctxName = "global"
+		}
 
-func layerHeaderCurrent() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.Primary).
-		Bold(true).
-		PaddingLeft(1).
-		MarginTop(1)
-}
+		currentLabel := fmt.Sprintf("Context: %s", ctxName)
+		allLabel := "All Contexts"
 
-func layerHeaderPlugin() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.Secondary).
-		Bold(true).
-		PaddingLeft(1).
-		MarginTop(1)
-}
-
-func layerHeaderGlobal() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.TextSubtle).
-		PaddingLeft(1).
-		MarginTop(1)
-}
-
-func entryNormal() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(styles.TextPrimary)
-}
-
-func entrySelected() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.TextSelectionColor).
-		Background(styles.BgTertiary)
-}
-
-func entryName() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.TextPrimary).
-		Width(20)
-}
-
-func entryDesc() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(styles.TextSecondary)
-}
-
-func matchHighlight() lipgloss.Style {
-	return lipgloss.NewStyle().
-		Foreground(styles.Primary).
-		Bold(true)
-}
-
-// renderItem represents a single line in the palette (header or entry).
-type renderItem struct {
-	isHeader   bool
-	layer      Layer
-	entry      *PaletteEntry
-	entryIndex int // index in filtered entries (for cursor matching)
-}
-
-// View renders the command palette.
-func (m Model) View() string {
-	// Clear hit regions from previous render
-	m.mouseHandler.Clear()
-
-	var b strings.Builder
-
-	// Calculate width
-	width := min(80, m.width-4)
-	if width < 40 {
-		width = 40
-	}
-
-	// Header with search input
-	// Calculate content width (inside padding)
-	contentWidth := width - 4
-
-	promptPrefix := lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render(">")
-	escChip := styles.KeyHint.Render("esc")
-	inputWidth := contentWidth - lipgloss.Width(promptPrefix) - lipgloss.Width(escChip) - 3
-	paddedInput := lipgloss.NewStyle().Width(inputWidth).Render(m.textInput.View())
-	header := fmt.Sprintf("%s %s %s", promptPrefix, paddedInput, escChip)
-	b.WriteString(header)
-	b.WriteString("\n")
-
-	// Mode indicator with context badge
-	var modeText string
-	if m.showAllContexts {
-		modeText = styles.BarChip.Render("All Contexts")
-	} else {
-		modeText = styles.BarChip.Render(m.activeContext)
-	}
-	toggleHint := styles.Muted.Render("tab to toggle")
-	fmt.Fprintf(&b, "%s  %s", modeText, toggleHint)
-	b.WriteString("\n")
-	b.WriteString(strings.Repeat("─", contentWidth))
-	b.WriteString("\n")
-
-	// Build flat list of render items
-	items := m.buildRenderItems()
-	totalEntries := len(m.filtered)
-
-	// Calculate visible range based on entry indices
-	visibleStart := m.offset
-	visibleEnd := m.offset + m.maxVisible
-	if visibleEnd > totalEntries {
-		visibleEnd = totalEntries
-	}
-
-	// Track Y position for hit regions (relative to modal content)
-	// Header = 3 lines (input, mode indicator, divider)
-	currentY := 3
-
-	// Show scroll-up indicator if content above
-	if m.offset > 0 {
-		b.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", m.offset)))
-		b.WriteString("\n")
-		currentY++
-	}
-
-	// Render only visible items
-	for _, item := range items {
-		if item.isHeader {
-			// Show header only if it has visible entries
-			if m.layerHasVisibleEntries(item.layer, visibleStart, visibleEnd) {
-				b.WriteString(m.renderLayerHeader(item.layer, m.countEntriesInLayer(item.layer)))
-				b.WriteString("\n")
-				currentY++
-			}
+		if m.showAllContexts {
+			sb.WriteString(mutedStyle.Render(currentLabel))
+			sb.WriteString(mutedStyle.Render("  │  "))
+			sb.WriteString(activeStyle.Render(allLabel))
 		} else {
-			// Only render entries within visible range
-			if item.entryIndex >= visibleStart && item.entryIndex < visibleEnd {
-				isSelected := item.entryIndex == m.cursor
-				line := m.renderEntry(*item.entry, isSelected, width-4)
-				b.WriteString(line)
-				b.WriteString("\n")
-
-				// Register hit region for this entry
-				// Region is full width, 1 line tall, data = entry index
-				m.mouseHandler.HitMap.AddRect(regionPaletteEntry, 0, currentY, width, 1, item.entryIndex)
-				currentY++
-			}
+			sb.WriteString(activeStyle.Render(currentLabel))
+			sb.WriteString(mutedStyle.Render("  │  "))
+			sb.WriteString(mutedStyle.Render(allLabel))
 		}
-	}
 
-	// Show scroll-down indicator if content below
-	if visibleEnd < totalEntries {
-		remaining := totalEntries - visibleEnd
-		b.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
-		b.WriteString("\n")
-	}
+		// Trailing hint
+		hintStr := styles.Muted.Render("tab to toggle")
+		usedWidth := lipgloss.Width(sb.String())
+		hintWidth := lipgloss.Width(hintStr)
+		gap := contentWidth - usedWidth - hintWidth
+		if gap > 1 {
+			sb.WriteString(strings.Repeat(" ", gap))
+			sb.WriteString(hintStr)
+		} else {
+			sb.WriteString("  ")
+			sb.WriteString(hintStr)
+		}
 
-	// Empty state
-	if len(m.filtered) == 0 {
-		emptyMsg := styles.Muted.Render("No matching commands")
-		b.WriteString("\n")
-		b.WriteString(emptyMsg)
-		b.WriteString("\n")
-	}
-
-	// Wrap in box
-	content := strings.TrimRight(b.String(), "\n")
-	box := paletteBox().Width(width).Render(content)
-
-	return box
+		return modal.RenderedSection{Content: sb.String()}
+	}, nil)
 }
 
-// buildRenderItems creates a flat list of headers and entries for rendering.
-func (m Model) buildRenderItems() []renderItem {
-	groups := GroupEntriesByLayer(m.filtered)
-	layers := []Layer{LayerCurrentMode, LayerPlugin, LayerGlobal}
+// countSection renders the command count info.
+func (m *Model) countSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		var text string
+		if m.textInput.Value() != "" {
+			text = fmt.Sprintf("%d of %d commands", len(m.filtered), len(m.allEntries))
+		} else if len(m.allEntries) > 0 {
+			text = fmt.Sprintf("%d commands", len(m.filtered))
+		}
+		if text == "" {
+			return modal.RenderedSection{Content: ""}
+		}
+		return modal.RenderedSection{Content: styles.Muted.Render(text)}
+	}, nil)
+}
 
-	var items []renderItem
-	entryIndex := 0
+// listSection renders the command list with keyboard and mouse hit targets.
+func (m *Model) listSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		entries := m.filtered
 
-	for _, layer := range layers {
-		entries, ok := groups[layer]
-		if !ok || len(entries) == 0 {
-			continue
+		if len(entries) == 0 {
+			return modal.RenderedSection{Content: styles.Muted.Render("No matching commands")}
 		}
 
-		// Add layer header
-		items = append(items, renderItem{isHeader: true, layer: layer})
+		maxVisible := 10
+		if m.maxVisible > 0 && m.maxVisible < maxVisible {
+			maxVisible = m.maxVisible
+		}
+		visibleCount := min(maxVisible, len(entries))
 
-		// Add entries
-		for i := range entries {
-			items = append(items, renderItem{
-				entry:      &entries[i],
-				entryIndex: entryIndex,
+		selectedIdx := m.cursor
+		if selectedIdx < 0 {
+			selectedIdx = 0
+		}
+		if selectedIdx >= len(entries) {
+			selectedIdx = len(entries) - 1
+		}
+
+		scrollOffset := m.offset
+		if selectedIdx < scrollOffset {
+			scrollOffset = selectedIdx
+		}
+		if selectedIdx >= scrollOffset+visibleCount {
+			scrollOffset = selectedIdx - visibleCount + 1
+		}
+		if scrollOffset > len(entries)-visibleCount {
+			scrollOffset = len(entries) - visibleCount
+		}
+		if scrollOffset < 0 {
+			scrollOffset = 0
+		}
+		m.offset = scrollOffset
+
+		var sb strings.Builder
+		focusables := make([]modal.FocusableInfo, 0, visibleCount)
+		lineOffset := 0
+
+		if scrollOffset > 0 {
+			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↑ %d more above", scrollOffset)))
+			sb.WriteString("\n")
+			lineOffset++
+		}
+
+		for i := scrollOffset; i < scrollOffset+visibleCount && i < len(entries); i++ {
+			entry := entries[i]
+			isSelected := i == selectedIdx
+			itemID := fmt.Sprintf("%s%d", paletteItemPrefix, i)
+			isHovered := itemID == hoverID
+
+			line := m.renderEntry(entry, isSelected || isHovered, contentWidth)
+			sb.WriteString(line)
+			sb.WriteString("\n")
+
+			focusables = append(focusables, modal.FocusableInfo{
+				ID:      itemID,
+				OffsetX: 0,
+				OffsetY: lineOffset + (i - scrollOffset),
+				Width:   contentWidth,
+				Height:  1,
 			})
-			entryIndex++
 		}
-	}
 
-	return items
-}
-
-// layerHasVisibleEntries checks if a layer has any entries in the visible range.
-func (m Model) layerHasVisibleEntries(layer Layer, visibleStart, visibleEnd int) bool {
-	groups := GroupEntriesByLayer(m.filtered)
-	layers := []Layer{LayerCurrentMode, LayerPlugin, LayerGlobal}
-
-	entryIndex := 0
-	for _, l := range layers {
-		entries := groups[l]
-		layerStart := entryIndex
-		layerEnd := entryIndex + len(entries)
-
-		if l == layer {
-			// Check if any entries in this layer fall within visible range
-			return layerStart < visibleEnd && layerEnd > visibleStart
+		remaining := len(entries) - (scrollOffset + visibleCount)
+		if remaining > 0 {
+			sb.WriteString(styles.Muted.Render(fmt.Sprintf("  ↓ %d more below", remaining)))
 		}
-		entryIndex = layerEnd
-	}
-	return false
+
+		return modal.RenderedSection{
+			Content:    strings.TrimRight(sb.String(), "\n"),
+			Focusables: focusables,
+		}
+	}, nil)
 }
 
-// countEntriesInLayer returns the count of entries in a specific layer.
-func (m Model) countEntriesInLayer(layer Layer) int {
-	groups := GroupEntriesByLayer(m.filtered)
-	return len(groups[layer])
-}
-
-// renderLayerHeader renders a layer section header.
-func (m Model) renderLayerHeader(layer Layer, count int) string {
-	var style lipgloss.Style
-	var name string
-
-	switch layer {
-	case LayerCurrentMode:
-		style = layerHeaderCurrent()
-		name = strings.ToUpper(m.activeContext)
-	case LayerPlugin:
-		style = layerHeaderPlugin()
-		name = strings.ToUpper(m.pluginContext)
-	case LayerGlobal:
-		style = layerHeaderGlobal()
-		name = "GLOBAL"
-	}
-
-	return style.Render(name)
-}
-
-// renderEntry renders a single palette entry.
+// renderEntry renders a single palette entry line.
 func (m Model) renderEntry(entry PaletteEntry, selected bool, maxWidth int) string {
-	// Key column - render as pill/chip using KeyHint style. A keyless entry
-	// (a command sidecar's key ladder refused a binding for) leaves the column
-	// blank rather than painting an empty chip: the chip's padding and
-	// background would read as a key that renders as two spaces.
+	cursorStr := "  "
+	if selected {
+		cursorStr = lipgloss.NewStyle().Foreground(styles.Primary).Render("> ")
+	}
+
 	keyStr := ""
 	if entry.Key != "" {
 		keyStr = styles.KeyHint.Render(entry.Key)
 	}
 	keyWidth := lipgloss.Width(keyStr)
-
-	// Pad key to fixed column width for alignment
 	if keyWidth < keyColumnWidth {
-		keyStr = keyStr + strings.Repeat(" ", keyColumnWidth-keyWidth)
+		keyStr += strings.Repeat(" ", keyColumnWidth-keyWidth)
 	}
 
-	// Name with match highlighting
-	nameStr := m.highlightMatches(entry.Name, entry.MatchRanges)
-	nameStr = entryName().Render(nameStr)
-
-	// Description (truncate if needed)
-	// Account for: 2 leading spaces + keyColumnWidth + 1 space + 20 name + 1 space
-	descWidth := maxWidth - keyColumnWidth - 20 - 4
-	desc := entry.Description
-
-	// Show context count if command appears in multiple contexts
-	if entry.ContextCount > 1 {
-		desc = fmt.Sprintf("%s (%d contexts)", desc, entry.ContextCount)
-	}
-
-	if descWidth > 3 && len(desc) > descWidth {
-		desc = desc[:descWidth-3] + "..."
-	}
-	descStr := entryDesc().Render(desc)
-
-	line := fmt.Sprintf("  %s %s %s", keyStr, nameStr, descStr)
-
-	// Pad to full width for consistent selection highlighting
-	paddedLine := lipgloss.NewStyle().Width(maxWidth).Render(line)
-
+	nameHighlighted := m.highlightMatches(entry.Name, entry.MatchRanges)
+	var nStyle lipgloss.Style
 	if selected {
-		return entrySelected().Width(maxWidth).Render(paddedLine)
+		nStyle = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+	} else {
+		nStyle = lipgloss.NewStyle().Foreground(styles.TextPrimary)
 	}
-	return entryNormal().Render(paddedLine)
+	renderedName := nStyle.Render(nameHighlighted)
+	nameDisplayWidth := lipgloss.Width(entry.Name)
+	if nameDisplayWidth < nameColumnWidth {
+		renderedName += strings.Repeat(" ", nameColumnWidth-nameDisplayWidth)
+	}
+
+	var desc string
+	if entry.Description != "" && entry.Description != entry.Name {
+		desc = entry.Description
+	}
+	if entry.ContextCount > 1 {
+		if desc != "" {
+			desc = fmt.Sprintf("%s (%d contexts)", desc, entry.ContextCount)
+		} else {
+			desc = fmt.Sprintf("(%d contexts)", entry.ContextCount)
+		}
+	}
+
+	var descStr string
+	if desc != "" {
+		availDesc := maxWidth - (keyColumnWidth + nameColumnWidth + 4)
+		if availDesc > 3 && lipgloss.Width(desc) > availDesc {
+			desc = desc[:availDesc-3] + "..."
+		}
+		descStr = " " + lipgloss.NewStyle().Foreground(styles.TextSecondary).Render(desc)
+	}
+
+	return fmt.Sprintf("%s%s %s%s", cursorStr, keyStr, renderedName, descStr)
+}
+
+// hintsSection renders the footer hint line.
+func (m *Model) hintsSection() modal.Section {
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		var sb strings.Builder
+		if len(m.filtered) == 0 {
+			sb.WriteString(styles.KeyHint.Render("esc"))
+			sb.WriteString(styles.Muted.Render(" clear filter  "))
+			sb.WriteString(styles.KeyHint.Render("?"))
+			sb.WriteString(styles.Muted.Render(" close"))
+		} else {
+			sb.WriteString(styles.KeyHint.Render("enter"))
+			sb.WriteString(styles.Muted.Render(" select  "))
+			sb.WriteString(styles.KeyHint.Render("↑/↓"))
+			sb.WriteString(styles.Muted.Render(" navigate  "))
+			sb.WriteString(styles.KeyHint.Render("tab"))
+			sb.WriteString(styles.Muted.Render(" toggle scope  "))
+			sb.WriteString(styles.KeyHint.Render("esc"))
+			sb.WriteString(styles.Muted.Render(" close"))
+		}
+		return modal.RenderedSection{Content: sb.String()}
+	}, nil)
 }
 
 // highlightMatches applies highlighting to matched characters.
@@ -325,21 +238,26 @@ func (m Model) highlightMatches(text string, ranges []MatchRange) string {
 	lastEnd := 0
 
 	for _, r := range ranges {
-		// Add non-matched part
-		if r.Start > lastEnd {
-			result.WriteString(text[lastEnd:r.Start])
+		if r.Start > lastEnd && lastEnd < len(text) {
+			result.WriteString(text[lastEnd:min(r.Start, len(text))])
 		}
-		// Add matched part with highlighting
-		if r.End <= len(text) {
-			result.WriteString(matchHighlight().Render(text[r.Start:r.End]))
+		if r.Start < len(text) && r.End <= len(text) && r.Start < r.End {
+			highlighted := matchHighlight().Render(text[r.Start:r.End])
+			result.WriteString(highlighted)
 		}
 		lastEnd = r.End
 	}
 
-	// Add remaining text
 	if lastEnd < len(text) {
 		result.WriteString(text[lastEnd:])
 	}
 
 	return result.String()
+}
+
+func matchHighlight() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(styles.Primary).
+		Bold(true).
+		Underline(true)
 }

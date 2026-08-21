@@ -651,6 +651,91 @@ func TestPaletteIgnoresUnknownCommands(t *testing.T) {
 	}
 }
 
+// Global host commands selected in the palette execute their respective modal or action.
+func TestPaletteRunsHostCommands(t *testing.T) {
+	tests := []struct {
+		commandID string
+		assert    func(t *testing.T, m Model)
+	}{
+		{
+			commandID: "switch-project",
+			assert: func(t *testing.T, m Model) {
+				if !m.showProjectSwitcher {
+					t.Fatal("expected showProjectSwitcher to be true")
+				}
+			},
+		},
+		{
+			commandID: "switch-theme",
+			assert: func(t *testing.T, m Model) {
+				if !m.showThemeSwitcher {
+					t.Fatal("expected showThemeSwitcher to be true")
+				}
+			},
+		},
+		{
+			commandID: "quit",
+			assert: func(t *testing.T, m Model) {
+				if !m.showQuitConfirm {
+					t.Fatal("expected showQuitConfirm to be true")
+				}
+			},
+		},
+		{
+			commandID: "toggle-diagnostics",
+			assert: func(t *testing.T, m Model) {
+				if !m.showDiagnostics {
+					t.Fatal("expected showDiagnostics to be true")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.commandID, func(t *testing.T) {
+			p := newRouterPlugin()
+			m := routerTestModel(t, p)
+			m.showPalette = true
+
+			updated, _ := m.Update(palette.CommandSelectedMsg{CommandID: tt.commandID, Context: "global"})
+			var after Model
+			if mPtr, ok := updated.(*Model); ok {
+				after = *mPtr
+			} else {
+				after = updated.(Model)
+			}
+			if after.showPalette {
+				t.Fatal("palette stayed open")
+			}
+			tt.assert(t, after)
+		})
+	}
+}
+
+// A plugin command with a Key binding executes via fallback to the active plugin.
+func TestPaletteContextualKeyFallback(t *testing.T) {
+	p := newRouterPlugin()
+	m := routerTestModel(t, p)
+	m.showPalette = true
+
+	updated, _ := m.Update(palette.CommandSelectedMsg{CommandID: "custom-action", Context: "test-plugin", Key: "x"})
+	var after Model
+	if mPtr, ok := updated.(*Model); ok {
+		after = *mPtr
+	} else {
+		after = updated.(Model)
+	}
+	if after.showPalette {
+		t.Fatal("palette stayed open")
+	}
+	if len(p.keys) != 1 {
+		t.Fatalf("expected 1 forwarded key, got %d", len(p.keys))
+	}
+	if p.keys[0] != "x" {
+		t.Fatalf("forwarded key = %q, want 'x'", p.keys[0])
+	}
+}
+
 // TestTheHostRefusesItsReservedKeysWhateverARouterClaims is the guarantee the
 // precedence comment used to only assert.
 //

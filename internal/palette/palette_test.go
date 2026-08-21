@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
 )
 
 func TestNew(t *testing.T) {
@@ -304,5 +305,81 @@ func TestMinMax(t *testing.T) {
 	}
 	if max(10, 5) != 10 {
 		t.Errorf("max(10, 5) should be 10")
+	}
+}
+
+func TestUpdate_TabToggle(t *testing.T) {
+	m := New()
+	m.allEntries = []PaletteEntry{
+		{CommandID: "cmd-1", Context: "ctx-a"},
+		{CommandID: "cmd-2", Context: "ctx-b"},
+	}
+	m.activeContext = "ctx-a"
+	m.refilter()
+
+	if m.ShowAllContexts() {
+		t.Fatal("expected default to be current context mode")
+	}
+
+	// Press Tab
+	newModel, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !newModel.ShowAllContexts() {
+		t.Fatal("tab should toggle to all contexts mode")
+	}
+
+	// Press Tab again
+	newModel2, _ := newModel.Update(tea.KeyPressMsg{Code: tea.KeyTab})
+	if newModel2.ShowAllContexts() {
+		t.Fatal("tab should toggle back to current context mode")
+	}
+}
+
+func TestUpdate_MouseClick(t *testing.T) {
+	m := New()
+	m.SetSize(80, 24)
+	m.filtered = []PaletteEntry{
+		{CommandID: "cmd-0", Context: "ctx-0", Key: "k0"},
+		{CommandID: "cmd-1", Context: "ctx-1", Key: "k1"},
+	}
+
+	// Render once to populate hit targets
+	view := m.View()
+	if view == "" {
+		t.Fatal("View should not be empty")
+	}
+
+	// Find the hit region for item 1
+	var targetRegion *mouse.Region
+	for _, r := range m.mouseHandler.HitMap.Regions() {
+		if r.ID == paletteItemPrefix+"1" {
+			targetRegion = &r
+			break
+		}
+	}
+	if targetRegion == nil {
+		t.Fatal("hit region for palette-item-1 not found")
+	}
+
+	clickMsg := tea.MouseClickMsg{
+		X:      targetRegion.Rect.X + 2,
+		Y:      targetRegion.Rect.Y,
+		Button: tea.MouseLeft,
+	}
+
+	updatedModel, cmd := m.Update(clickMsg)
+	if updatedModel.cursor != 1 {
+		t.Errorf("cursor after click = %d, want 1", updatedModel.cursor)
+	}
+	if cmd == nil {
+		t.Fatal("mouse click on entry should return execution command")
+	}
+
+	msg := cmd()
+	selectedMsg, ok := msg.(CommandSelectedMsg)
+	if !ok {
+		t.Fatalf("expected CommandSelectedMsg, got %T", msg)
+	}
+	if selectedMsg.CommandID != "cmd-1" || selectedMsg.Context != "ctx-1" || selectedMsg.Key != "k1" {
+		t.Errorf("unexpected selectedMsg: %+v", selectedMsg)
 	}
 }
