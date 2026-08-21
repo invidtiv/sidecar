@@ -298,7 +298,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 // renderWorkspaceList draws the list and registers its regions at an x offset,
 // so a click lands on the row the list actually drew there.
 func (m *Model) applyWorkspacesEmptyState(width int) {
-	if !m.showIdleWorktrees {
+	// Hide-idle only filters rows that exist. A catalog with nothing in it
+	// is first-run, whether or not idle worktrees would be shown.
+	if len(m.catalog) > 0 {
 		m.workspaces.SetEmptyText(workspacesEmptyText(false))
 		return
 	}

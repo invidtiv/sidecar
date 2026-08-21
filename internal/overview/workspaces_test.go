@@ -424,20 +424,52 @@ func TestFirstRunEmptyCatalogRegistersCreateControl(t *testing.T) {
 	m.showIdleWorktrees = true
 	m.syncBoard()
 	_ = m.WorkspacesView(60, 24)
-	var found bool
+	if !firstRunCreateHit(m) {
+		t.Fatal("global first-run empty state has no create hit region")
+	}
+}
+
+func TestFirstRunEmptyCatalogShowsAtDefaultHideIdle(t *testing.T) {
+	m := catalogModel(t)
+	m.showIdleWorktrees = false
+	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar"}
+	m.results["braid"] = workspaceinventory.ProjectResult{ProjectKey: "braid"}
+	m.syncBoard()
+	if m.showIdleWorktrees {
+		t.Fatal("test premise: hide-idle is the default")
+	}
+	if len(m.catalog) != 0 {
+		t.Fatalf("catalog still has %d workspaces", len(m.catalog))
+	}
+	view := ansi.Strip(m.WorkspacesView(60, 24))
+	if strings.Contains(view, "no sessions") {
+		t.Fatalf("hide-idle replaced first-run copy on an empty catalog:\n%s", view)
+	}
+	if !strings.Contains(view, "No workspaces yet") {
+		t.Fatalf("default-empty catalog lost first-run copy:\n%s", view)
+	}
+	if !strings.Contains(view, "Press n") || !strings.Contains(view, "ctrl+n") {
+		t.Fatalf("first-run empty state missing create keys:\n%s", view)
+	}
+	if !strings.Contains(view, "agent") {
+		t.Fatalf("first-run empty state did not say how to launch an agent:\n%s", view)
+	}
+	if !firstRunCreateHit(m) {
+		t.Fatal("default-empty catalog has no create hit region")
+	}
+}
+
+func firstRunCreateHit(m *Model) bool {
 	for _, region := range m.workspacesMouse.HitMap.Regions() {
 		if region.ID != string(workspacelist.RegionEmptyAction) {
 			continue
 		}
 		hit, ok := region.Data.(workspacelist.Region)
 		if ok && hit.ID == globalCreateActionID {
-			found = true
-			break
+			return true
 		}
 	}
-	if !found {
-		t.Fatal("global first-run empty state has no create hit region")
-	}
+	return false
 }
 
 func TestHideIdleEmptyStateSaysNoSessions(t *testing.T) {
@@ -461,12 +493,6 @@ func TestHideIdleEmptyStateSaysNoSessions(t *testing.T) {
 	view = ansi.Strip(m.WorkspacesView(60, 24))
 	if !strings.Contains(view, "No workspaces yet") {
 		t.Fatalf("truly empty catalog lost its empty copy:\n%s", view)
-	}
-	if !strings.Contains(view, "Press n") || !strings.Contains(view, "ctrl+n") {
-		t.Fatalf("first-run empty state missing create keys:\n%s", view)
-	}
-	if !strings.Contains(view, "agent") {
-		t.Fatalf("first-run empty state did not say how to launch an agent:\n%s", view)
 	}
 }
 
