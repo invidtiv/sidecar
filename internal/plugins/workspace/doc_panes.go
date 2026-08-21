@@ -12,10 +12,10 @@ import (
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panebadge"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
-	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/ui"
@@ -114,26 +114,14 @@ func (p *Plugin) selectedTerminalSurface() (root, identity string, ok bool) {
 }
 
 func workspaceSurfaceIdentity(wt *Worktree) string {
-	if wt == nil {
-		return ""
-	}
-	key := wt.IdentityKey()
-	if wt.Key == "" {
-		if canonical, err := projectdir.WorktreeKey(wt.Path); err == nil {
-			key = canonical
-		}
-	}
-	if key == "" {
-		key = stablePathKey(wt.Path)
-	}
-	return "workspace:" + key
+	return panebadge.WorktreeSurface(worktreeSurfaceKey(wt))
 }
 
 func legacyWorkspaceSurfaceIdentity(wt *Worktree) string {
 	if wt == nil || wt.Path == "" {
 		return ""
 	}
-	return "workspace:" + stablePathKey(wt.Path)
+	return panebadge.WorktreeSurface(stablePathKey(wt.Path))
 }
 
 func (p *Plugin) activeDocPane() (*docPane, *PaneNode) {

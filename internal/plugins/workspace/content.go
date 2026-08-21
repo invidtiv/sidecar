@@ -2,6 +2,7 @@ package workspace
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/ui"
@@ -138,6 +139,14 @@ type shellContent struct {
 func (c *shellContent) Kind() string { return contentKindShell }
 
 func (c *shellContent) Title() string { return c.p.shellLeafTitle() }
+
+// TitleColumns is what the header actually spends on the name, marker and all.
+// The frame registers the title's hit region from this, so a focused leaf's
+// "▸ " is part of the target the user is aiming at rather than two cells of it
+// that do nothing.
+func (c *shellContent) TitleColumns() int {
+	return ansi.StringWidth(c.p.termPanelChip())
+}
 
 // SetSize records the box and nothing else, for the reason terminalContent
 // gives: the tmux pane is resized on the state change that moved the box, not

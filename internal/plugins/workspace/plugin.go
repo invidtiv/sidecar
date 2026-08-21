@@ -122,12 +122,15 @@ const (
 	// regionPaneLeaf is any content leaf's body — document or issue. One region
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
-	regionPaneLeaf        = "pane-leaf"
-	regionDocTab          = "doc-tab"
-	regionIssueTab        = "issue-tab"
-	regionResourceTab     = "resource-tab"
-	regionDiffTargetTab   = "diff-target-tab"
-	regionPaneClose       = "pane-close"
+	regionPaneLeaf      = "pane-leaf"
+	regionDocTab        = "doc-tab"
+	regionIssueTab      = "issue-tab"
+	regionResourceTab   = "resource-tab"
+	regionDiffTargetTab = "diff-target-tab"
+	regionPaneClose     = "pane-close"
+	// regionPaneTitle is a leaf's header name, which is a click target so a
+	// pane with no sidebar row of its own can still be renamed.
+	regionPaneTitle       = "pane-title"
 	regionPaneTreeDivider = "pane-tree-divider"
 
 	// Shell delete confirmation modal regions
@@ -487,6 +490,7 @@ type Plugin struct {
 
 	// Rename shell modal state
 	renameShellSession    *ShellSession   // Shell being renamed
+	renameShellLeafID     int             // Shell LEAF being renamed, when the modal was opened from a pane title
 	renameShellInput      textinput.Model // Text input for new name
 	renameShellModal      *modal.Modal    // Modal instance
 	renameShellModalWidth int             // Cached width for rebuild detection

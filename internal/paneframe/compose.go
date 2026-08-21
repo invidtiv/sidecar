@@ -225,6 +225,10 @@ type RegionSink interface {
 	Divider(splitID int, hit Box)
 	// Tabs is a leaf's header tab strip, in its chrome-aware content box.
 	Tabs(node *panelayout.Node, inner Box)
+	// Title is the cells a leaf's header title text occupies. It is a target of
+	// its own so a pointer can act on the name a leaf is drawn with — renaming
+	// it today, dragging the leaf by it later.
+	Title(node *panelayout.Node, hit Box)
 	// Close is a leaf's header X, in its chrome-aware content box.
 	Close(node *panelayout.Node, inner Box)
 	// Body is anything a leaf's content owns inside its own box — a diff list
@@ -247,8 +251,12 @@ type RegionSink interface {
 //     claim.
 //   - Tab strips next: they win the one cell a column divider reaches into a
 //     header, which is the cell a click on the leftmost tab lands on.
+//   - Title text next: it is drawn over the left end of the tab strip's row,
+//     so it has to beat the strip for the cells it covers.
 //   - Close buttons next: the X occupies the right edge the strip no longer
-//     claims, and a one-cell miss on a tab must not steal the close.
+//     claims, and a one-cell miss on a tab must not steal the close. It is
+//     registered after the title so a title that ran the width of a narrow
+//     header cannot swallow the button.
 //   - Content-owned regions last, so they beat the tree divider and the leaf
 //     body drawn under them.
 func RegisterRegions(sink RegionSink, host Host, layout panelayout.Layout) {
@@ -263,6 +271,14 @@ func RegisterRegions(sink RegionSink, host Host, layout panelayout.Layout) {
 	}
 	for _, placement := range layout.Leaves {
 		sink.Tabs(placement.Node, regionGeometry(host, placement).Inner)
+	}
+	for _, placement := range layout.Leaves {
+		if host == nil {
+			break
+		}
+		if hit, ok := TitleHitBox(host.Content(placement.Node), regionGeometry(host, placement).Inner); ok {
+			sink.Title(placement.Node, hit)
+		}
 	}
 	for _, placement := range layout.Leaves {
 		sink.Close(placement.Node, regionGeometry(host, placement).Inner)

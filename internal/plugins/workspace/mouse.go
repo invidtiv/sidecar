@@ -234,7 +234,7 @@ func isBackgroundRegion(regionID string) bool {
 	case regionSidebar, regionPreviewPane, regionPaneDivider,
 		regionWorktreeItem, regionPreviewAction, regionDiffTargetTab, regionListFilter,
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
-		regionPaneClose,
+		regionPaneClose, regionPaneTitle,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
@@ -919,6 +919,10 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.prepareTerminalClickOrDrag(action)
 	case regionPaneClose:
 		return p.clickPaneClose(action.Region.Data)
+	case regionPaneTitle:
+		// The title of a pane with no sidebar row is where its rename lives.
+		// Focus has already moved: FocusLeafAt answers from geometry.
+		return p.clickPaneTitle(action.Region.Data)
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
@@ -1306,8 +1310,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 			}
 		}
 		return nil
-	case regionTermPanelContent:
+	case regionTermPanelContent, regionPaneTitle:
 		// Scroll the panel under the pointer, whether or not it holds focus.
+		// The title region sits on the panel's own header row and is a press
+		// target only: a notch over it belongs to the pane under it.
 		// Who owns the notch — the application in the pane or this window — is
 		// the shared rule's answer, and it is the same answer here as when the
 		// panel holds the keyboard.

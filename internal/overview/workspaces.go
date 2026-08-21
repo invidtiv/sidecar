@@ -64,6 +64,11 @@ func (m *Model) syncWorkspaces() {
 			if badge, hasBadge := m.pendingViewBadge(workspace.TmuxName); hasBadge {
 				item.NameMeta = append(item.NameMeta, workspacelist.RowField{Text: badge, Rendered: styles.Muted.Render(badge)})
 			}
+			// The layout glyph joins the metadata the row already carries; the
+			// two-line row is unchanged, and a split workspace is still one row.
+			if badge := m.paneRowBadge(workspace); badge != "" {
+				item.NameMeta = append(item.NameMeta, workspacelist.RowField{Text: " " + badge, Rendered: styles.Muted.Render(" " + badge)})
+			}
 			if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
 				continue
 			}
@@ -314,9 +319,15 @@ const (
 	workspacesSidebarRegion = "global-workspaces-sidebar"
 	workspacesDividerRegion = "global-workspaces-divider"
 	previewPaneDividerKind  = "global-preview-pane-divider"
+	// previewPaneTitleKind is a pane header's name, which is a press target so
+	// a pane with no row in this list can still be renamed.
+	previewPaneTitleKind = "global-preview-pane-title"
 )
 
 type previewPaneDividerHit int
+
+// previewPaneTitleHit names the leaf whose header title was pressed.
+type previewPaneTitleHit int
 
 func (m *Model) addSidebarRegion(x, width, height int) {
 	if width > 0 && height > 0 {
@@ -1072,6 +1083,15 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if _, ok := action.Region.Data.(previewGitHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			return m.OpenSelectedInGit()
+		}
+		return nil
+	}
+	if _, ok := action.Region.Data.(previewPaneTitleHit); ok {
+		// A shell leaf's name is renamed from the pane, because it has no row
+		// of its own in this list. The rename surface is the list's own, so a
+		// name changed here and a name changed with R are one act.
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			return m.OpenRenameShell()
 		}
 		return nil
 	}

@@ -226,6 +226,19 @@ func LiveLeafCount(node *Node) int {
 	return LiveLeafCount(node.Split.A) + LiveLeafCount(node.Split.B)
 }
 
+// LeafCount is how many content leaves the tree holds. It is the number a
+// sidebar row's layout badge is derived from, so a live tree and the tree the
+// same workspace persisted are counted by one rule.
+func LeafCount(node *Node) int {
+	if node == nil {
+		return 0
+	}
+	if node.Split == nil {
+		return 1
+	}
+	return LeafCount(node.Split.A) + LeafCount(node.Split.B)
+}
+
 // LiveCapReached reports that no further live leaf fits in this tree. Hosts use
 // it to explain the refusal instead of leaving PlanOpen's false unexplained.
 func LiveCapReached(root *Node) bool { return LiveLeafCount(root) >= LiveLeafCap }

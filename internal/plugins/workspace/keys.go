@@ -859,6 +859,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if shell := p.getSelectedShell(); shell != nil {
 			p.viewMode = ViewModeRenameShell
 			p.renameShellSession = shell
+			p.renameShellLeafID = 0
 			p.renameShellInput = textinput.New()
 			p.renameShellInput.SetValue(shell.Name)
 			p.renameShellInput.CharLimit = 50
@@ -1423,6 +1424,13 @@ func (p *Plugin) handleRenameShellKeys(msg tea.KeyPressMsg) tea.Cmd {
 
 // executeRenameShell performs the rename operation.
 func (p *Plugin) executeRenameShell() tea.Cmd {
+	// A modal opened from a pane title names the leaf, not a manifest shell.
+	if p.renameShellLeafTarget() != nil {
+		return p.executeRenameShellLeaf()
+	}
+	if p.renameShellSession == nil {
+		return nil
+	}
 	newName, err := shellstate.NormalizeName(p.renameShellInput.Value())
 	if err != nil {
 		p.renameShellError = err.Error()
@@ -1448,6 +1456,7 @@ func (p *Plugin) executeRenameShell() tea.Cmd {
 // clearRenameShellModal clears rename modal state.
 func (p *Plugin) clearRenameShellModal() {
 	p.renameShellSession = nil
+	p.renameShellLeafID = 0
 	p.renameShellInput = textinput.Model{}
 	p.renameShellModal = nil
 	p.renameShellModalWidth = 0
