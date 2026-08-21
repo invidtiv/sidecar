@@ -44,9 +44,6 @@ func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 	// Worktree terminals are terminals: output is the surface. Diff and Task
 	// are action chips that insert leaves into the pane tree.
 	if p.selectingShell() {
-		if p.termPanelVisible {
-			return p.renderShellWithTermPanel(width, height)
-		}
 		return p.renderShellOutput(width, height)
 	}
 
@@ -54,9 +51,6 @@ func (p *Plugin) renderPreviewContentLegacy(width, height int) string {
 		return p.truncateAllLines(p.renderMainWorktreeView(width, height), width)
 	}
 
-	if p.termPanelVisible {
-		return p.renderOutputWithTermPanel(width, height)
-	}
 	return p.renderOutputContent(width, height)
 }
 

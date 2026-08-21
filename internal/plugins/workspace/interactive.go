@@ -308,7 +308,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	})
 
 	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
-	p.releaseTermPanelWindowPin()
+	p.releaseTerminalWindowPin(true)
 	p.interactiveState = &InteractiveState{
 		Active:        true,
 		TargetPane:    paneID,
@@ -552,7 +552,7 @@ func (p *Plugin) syncTerminalResizeHold() {
 
 func isDividerDragRegion(id string) bool {
 	switch id {
-	case regionPaneDivider, regionPaneTreeDivider, regionTermPanelDivider, regionDiffTabDivider:
+	case regionPaneDivider, regionPaneTreeDivider, regionDiffTabDivider:
 		return true
 	default:
 		return false
@@ -838,15 +838,6 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 			return tea.Batch(cmd, p.resizeInteractivePaneCmd()), true
 		}
 		return cmd, true
-	case "alt+t":
-		if !terminalPanelEnabled() {
-			return nil, true
-		}
-		cmd := p.switchTermPanelLayout()
-		if p.interactiveState != nil && p.interactiveState.Active {
-			return tea.Batch(cmd, p.resizeInteractivePaneCmd()), true
-		}
-		return cmd, true
 	}
 	// Everything above is this surface's own — a search over its own buffer and
 	// the panel the global browser does not draw. What is left is the set every
@@ -901,10 +892,10 @@ func (p *Plugin) leaveInteractiveMode() tea.Cmd {
 	}
 	p.exitInteractiveMode()
 	if termPanel {
-		p.termPanelScroll = tty.LeaveLiveWindow(&p.termPanelFreeze, p.termPanelScroll, p.termPanelMaxScroll())
+		p.termPanelScroll = tty.LeaveLiveWindow(&p.termPanelFreeze, p.termPanelScroll, p.terminalMaxScroll(true))
 		p.termPanelFreezeDoc = false
 	} else {
-		p.previewScroll = tty.LeaveLiveWindow(&p.previewFreeze, p.previewScroll, p.previewWindowBound())
+		p.previewScroll = tty.LeaveLiveWindow(&p.previewFreeze, p.previewScroll, p.terminalWindowBound(false))
 		p.previewFreezeDoc = false
 	}
 	return p.pollSelectedAgentNowIfVisible()
@@ -1064,10 +1055,10 @@ func (p *Plugin) terminalWheelAtBoundary(termPanel bool, action mouse.MouseActio
 	if route == tty.WheelPane {
 		return false
 	}
-	maximum, offset := p.previewMaxScroll(), p.previewScroll
+	maximum, offset := p.terminalMaxScroll(false), p.previewScroll
 	freeze := &p.previewFreeze
 	if termPanel {
-		maximum, offset = p.termPanelMaxScroll(), p.termPanelScroll
+		maximum, offset = p.terminalMaxScroll(true), p.termPanelScroll
 		freeze = &p.termPanelFreeze
 	}
 	position := maximum - offset
@@ -1154,7 +1145,7 @@ func (p *Plugin) pinTerminalWindowToLive(termPanel bool) {
 		if p.termPanelScroll != 0 || p.termPanelFreeze.Active() {
 			p.clearTerminalSelection()
 			// A jump chooses its own window, so the pin is dropped rather than thawed.
-			p.releaseTermPanelWindowPin()
+			p.releaseTerminalWindowPin(true)
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		}
@@ -1234,15 +1225,15 @@ func (p *Plugin) applyScrollbackMove(termPanel bool, move tty.ScrollbackMove) te
 	switch {
 	case move.ToOldest:
 		if termPanel {
-			p.releaseTermPanelWindowPin()
-			p.termPanelScroll = p.termPanelMaxScroll()
+			p.releaseTerminalWindowPin(true)
+			p.termPanelScroll = p.terminalMaxScroll(true)
 			return p.loadOlderTerminalHistory(true, historyLoadChunk)
 		}
-		p.jumpPreviewWindow(p.previewMaxScroll())
+		p.jumpPreviewWindow(p.terminalMaxScroll(false))
 		return p.loadOlderTerminalHistory(false, historyLoadChunk)
 	case move.ToLive:
 		if termPanel {
-			p.releaseTermPanelWindowPin()
+			p.releaseTerminalWindowPin(true)
 			p.termPanelScroll = 0
 			p.cancelTerminalHistoryIntent(true)
 			return nil
@@ -1270,30 +1261,11 @@ func (p *Plugin) applyScrollbackMove(termPanel bool, move tty.ScrollbackMove) te
 // clearing the selection ahead of it releases that pin outright and leaves the
 // placement below resuming from a stale offset.
 func (p *Plugin) scrollTerminalWindowByWheel(termPanel bool, rows int) tea.Cmd {
-	if termPanel {
-		p.thawTermPanelWindow()
-		p.clearTerminalSelectionOnScroll(true)
-		p.scrollTermPanelWindowRows(rows)
-		if rows > 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if rows < 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, -rows)
-		}
-		return nil
-	}
-
-	p.releaseTerminalDocProjection(false)
-	p.thawPreviewWindow()
-	p.clearTerminalSelectionOnScroll(false)
-	p.scrollPreviewWindowRows(rows)
-	if rows > 0 && p.previewScroll == 0 {
-		p.cancelTerminalHistoryIntent(false)
-	}
-	if rows < 0 && p.previewScroll == p.previewMaxScroll() {
-		return p.loadOlderTerminalHistory(false, -rows)
-	}
-	return nil
+	p.releaseTerminalDocProjection(termPanel)
+	p.thawTerminalWindow(termPanel)
+	p.clearTerminalSelectionOnScroll(termPanel)
+	p.moveTerminalWindowRows(termPanel, rows)
+	return p.terminalHistoryIntentForScroll(termPanel, -rows)
 }
 
 // scrollTerminalWindow moves a named terminal surface delta rows back through
@@ -1304,22 +1276,26 @@ func (p *Plugin) scrollTerminalWindowByWheel(termPanel bool, rows int) tea.Cmd {
 func (p *Plugin) scrollTerminalWindow(termPanel bool, delta int) tea.Cmd {
 	if termPanel {
 		p.clearTerminalSelectionOnScroll(true)
-		p.scrollTermPanelWindow(delta)
-		if delta < 0 && p.termPanelScroll == 0 {
-			p.cancelTerminalHistoryIntent(true)
-		}
-		if delta > 0 && p.termPanelScroll == p.termPanelMaxScroll() {
-			return p.loadOlderTerminalHistory(true, delta)
-		}
-		return nil
 	}
+	p.moveTerminalWindow(termPanel, delta)
+	return p.terminalHistoryIntentForScroll(termPanel, delta)
+}
 
-	p.scrollPreviewWindow(delta)
-	if delta < 0 && p.previewScroll == 0 {
-		p.cancelTerminalHistoryIntent(false)
+// terminalHistoryIntentForScroll is what a placed window owes the history
+// loader afterwards, counted in rows back through scrollback: an intent
+// cancelled at the live edge, and a reach for older lines at the far end. Both
+// surfaces answer it from their own window, which is the same window the
+// renderer drew.
+func (p *Plugin) terminalHistoryIntentForScroll(termPanel bool, delta int) tea.Cmd {
+	offset := p.previewScroll
+	if termPanel {
+		offset = p.termPanelScroll
 	}
-	if delta > 0 && p.previewScroll == p.previewMaxScroll() {
-		return p.loadOlderTerminalHistory(false, delta)
+	if delta < 0 && offset == 0 {
+		p.cancelTerminalHistoryIntent(termPanel)
+	}
+	if delta > 0 && offset == p.terminalMaxScroll(termPanel) {
+		return p.loadOlderTerminalHistory(termPanel, delta)
 	}
 	return nil
 }

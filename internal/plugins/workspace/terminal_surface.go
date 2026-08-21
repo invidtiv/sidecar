@@ -26,11 +26,6 @@ const (
 	// row, and both consumers read it from there.
 	terminalHeaderRows = termpreview.HeaderRows
 
-	// termPanelDividerRows / termPanelDividerCols size the rule drawn between
-	// the primary terminal and the terminal panel.
-	termPanelDividerRows = 1
-	termPanelDividerCols = 1
-
 	// previewContentInset is the columns the panel border and padding consume on
 	// the left of the preview pane.
 	previewContentInset = panelOverhead / 2
@@ -218,9 +213,9 @@ func (p *Plugin) leafGeometryFor(leafID int) (leafGeom, bool) {
 }
 
 // terminalSurfaceGeometry is the single source of truth for where a terminal
-// surface is drawn and how big it is. termPanel selects the terminal panel
-// child; false selects the primary agent/shell terminal (which occupies the
-// whole preview when the panel is hidden).
+// surface is drawn and how big it is. termPanel selects the shell leaf; false
+// selects the primary agent/shell terminal (which occupies the whole preview
+// when no shell leaf is beside it).
 //
 // OK is false when there is nothing to place: no viewport yet, or the terminal
 // panel was asked for while hidden. Callers that still need a size in that case
@@ -235,37 +230,33 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 	// The leaf begins with the surface's own header. Any terminal-panel split is
 	// a subdivision within this box, not extra pane-tree chrome. Where the header
 	// and the viewport sit inside the box is the shared layer's answer, taken
-	// from the box the pane tree placed — one derivation, two consumers. The
-	// sub-tree then places each terminal surface in its own leaf box, so no
-	// caller walks offsets of its own to find the second one.
+	// from the box the pane tree placed — one derivation, two consumers. A shell
+	// split beside this terminal is a leaf of that same tree, so no caller walks
+	// offsets of its own to find the second surface.
 	if placed := termpreview.SurfaceIn(leaf); !placed.OK {
 		return terminalSurface{}
 	}
 
 	if termPanel {
-		// A split too small to draw has no panel anywhere on screen, so there is
-		// nothing to locate — reporting one would put it past the preview's right
-		// edge and take the cursor and the mouse mapping with it. That is the
-		// same answer as "the sub-tree has no shell leaf".
-		if !p.termPanelVisible {
-			return terminalSurface{}
-		}
-		box, ok := p.shellSlotBox(true)
+		// A panel the frame did not draw has nothing to locate; reporting one
+		// would put it past the preview's edge and take the cursor and the mouse
+		// mapping with it.
+		box, ok := p.terminalSlotBox(true)
 		if !ok {
 			return terminalSurface{}
 		}
-		width, height := shellSlotTerminalSize(box)
+		width, height := terminalSlotSize(box)
 		return terminalSurface{
 			X: box.X, Y: box.Y + terminalHeaderRows, HeaderY: box.Y,
 			Width: width, Height: height, OK: true,
 		}
 	}
 
-	box, ok := p.shellSlotBox(false)
+	box, ok := p.terminalSlotBox(false)
 	if !ok {
 		return terminalSurface{}
 	}
-	width, height := shellSlotTerminalSize(box)
+	width, height := terminalSlotSize(box)
 	return terminalSurface{
 		X: box.X, Y: box.Y + terminalHeaderRows, HeaderY: box.Y,
 		Width: width, Height: height, OK: true,

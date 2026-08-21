@@ -118,7 +118,6 @@ const (
 	regionDiffTabFileListPane = "diff-tab-filelist-pane" // Left pane catch-all (for click-to-focus)
 
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
-	regionTermPanelDivider = "term-panel-divider"
 	regionTermPanelContent = "term-panel-content"
 	// regionPaneLeaf is any content leaf's body — document or issue. One region
 	// for both: the leaf ID it carries is what a click needs, and the tree says
@@ -369,10 +368,17 @@ type Plugin struct {
 	// lastDragRegion is the region ID of the last drag (EndDrag clears the handler before DragEnd).
 	lastDragRegion string
 
-	// Terminal panel state (Ctrl+T toggle)
-	termPanelVisible      bool              // Whether the terminal panel is shown
-	termPanelLayout       TermPanelLayout   // Bottom or right split
-	termPanelSize         int               // Split size in percentage (0 = use default 50%)
+	// Terminal panel state (Ctrl+T toggle). The panel is a Shell leaf of the
+	// pane tree: where it sits and how big it is are the tree's, and
+	// termPanelVisible says only whether that leaf belongs in it — see
+	// syncShellLeaf, which is the one place the two are reconciled.
+	termPanelVisible bool      // Whether the terminal panel's leaf is in the tree
+	shellSplitAxis   SplitAxis // Axis the next shell split opens at
+	shellSplitRatio  int       // Primary terminal's share of that split
+	// legacyTermPanel is one user's pre-split panel preference, held only until
+	// the first persisted layout it can be spliced into.
+	legacyTermPanel       termPanelPrefs
+	legacyTermPanelTaken  bool
 	termPanelSession      string            // Tmux session name for the terminal panel
 	termPanelPaneID       string            // Tmux pane ID for resize operations
 	termPanelOutput       *tty.OutputBuffer // Captured output from the terminal session
@@ -761,7 +767,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.docFinderCaches = panesearch.Caches{}
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
-	if features.IsEnabled(features.WorkspaceDocPanes.Name) {
+	// The terminal panel is a leaf of this tree now, so it needs one even where
+	// document panes are off: with no tree there is nowhere to put a split.
+	if features.IsEnabled(features.WorkspaceDocPanes.Name) || terminalPanelEnabled() {
 		p.paneRoot = &PaneNode{ID: p.paneNextID, Kind: PaneTerminal}
 		p.paneFocus = p.paneNextID
 		p.paneNextID++
@@ -930,17 +938,12 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		p.diff.SetListWidth(savedWidth)
 	}
 
-	// Load saved terminal panel preferences
-	if savedSize := state.GetTermPanelSize(); savedSize > 0 {
-		p.termPanelSize = savedSize
-	}
-	if layout := state.GetTermPanelLayout(); layout == "right" {
-		p.termPanelLayout = TermPanelRight
-	}
-	// Restore terminal panel visibility from last session only when the
-	// split is still enabled. A previously visible panel must not come back
-	// after the default flipped off.
-	if restoreTermPanelVisible(state.GetTermPanelVisible()) {
+	// Convert the pre-split terminal panel preference into the pane tree's
+	// vocabulary, once. A previously visible panel must not come back after the
+	// default flipped off, so the flag is still gated on the feature; the
+	// remembered shape is taken either way, because it is what ctrl+t opens at.
+	if prefs := p.takeLegacyTermPanelPrefs(); restoreTermPanelVisible(prefs.Visible) {
+		p.legacyTermPanel = prefs
 		p.termPanelVisible = true
 	}
 
@@ -1544,45 +1547,11 @@ func (p *Plugin) previewShowsTerminal() bool {
 	return true
 }
 
-// previewMaxScroll is the furthest back the primary terminal's window can sit,
-// in rows from the live bottom. It is the bound of the window the render path
-// actually draws, not the raw line count: a trimmed tail or a letterboxed pane
-// puts the two several rows apart, and a count-based bound then lets the window
-// walk past the oldest row that can be shown — a dead zone at the top of
-// scrollback, and a scrollback-history load that only fires after the reader
-// pushes through it.
-func (p *Plugin) previewMaxScroll() int {
-	return p.previewWindowBound()
-}
-
-// scrollPreviewWindow moves the primary terminal's window delta rows back
-// through scrollback, negative towards the live edge — the same direction the
-// global preview and the shared scrollback rule count in, so no call site has
-// to invert anything.
-//
-// Scrolling is an explicit navigation of this surface, so it thaws first: a
-// window a gesture or a document pinned to an absolute start is handed back to
-// the distance-from-bottom model where it stands, rather than being moved in a
-// coordinate the reader can no longer see.
-func (p *Plugin) scrollPreviewWindow(delta int) {
-	p.thawPreviewWindow()
-	p.previewScroll = tty.ScrollWindow(&p.previewFreeze, p.previewScroll, delta, p.previewMaxScroll())
-}
-
-// scrollPreviewWindowRows is scrollPreviewWindow for a caller counting rendered
-// rows down the screen — a wheel notch — rather than rows back through
-// scrollback. The two directions are opposite, and reconciling them is the
-// shared rule's rather than each call site's.
-func (p *Plugin) scrollPreviewWindowRows(rows int) {
-	p.thawPreviewWindow()
-	p.previewScroll = tty.ScrollWindowRows(&p.previewFreeze, p.previewScroll, rows, p.previewMaxScroll())
-}
-
 // jumpPreviewWindow places the primary terminal's window at an explicit
 // distance back from the live bottom, which ends any pin: a jump chooses its
 // own window rather than resuming from the one a gesture was reading.
 func (p *Plugin) jumpPreviewWindow(offset int) {
-	p.releasePreviewWindowPin()
+	p.releaseTerminalWindowPin(false)
 	p.previewScroll = max(offset, 0)
 }
 
@@ -1592,54 +1561,6 @@ func (p *Plugin) jumpPreviewWindow(offset int) {
 func (p *Plugin) resetPreviewScroll() {
 	p.previewOffset = 0
 	p.jumpPreviewWindow(0)
-}
-
-// pinPreviewWindow holds the primary terminal's window at an absolute start and
-// records who is holding it. The two owners are not released by the same
-// events: a pointer gesture's pin ends with the gesture, while a document
-// activation's outlives it, because the document is meant to keep showing the
-// context it was opened from. Whether this pin takes at all is the shared
-// freeze's rule — a second freeze inside one gesture keeps the first.
-func (p *Plugin) pinPreviewWindow(start int, doc bool) {
-	if p.previewFreeze.Active() {
-		return
-	}
-	p.previewFreeze.Freeze(start)
-	p.previewFreezeDoc = doc
-}
-
-// releasePreviewWindowPin drops the pin whoever placed it, for a jump that
-// chooses its own window rather than resuming from the pinned one.
-func (p *Plugin) releasePreviewWindowPin() {
-	p.previewFreeze.Release()
-	p.previewFreezeDoc = false
-}
-
-// thawPreviewWindow hands a window pinned to an absolute start back to the
-// distance-from-bottom model without moving the rows on screen, so it follows
-// new output again from exactly where it was left. Where it resumes from is the
-// shared rule's. Every explicit navigation of this surface calls it: a window
-// pinned and never released has stopped following output for good, which reads
-// as an agent that went quiet.
-func (p *Plugin) thawPreviewWindow() {
-	if !p.previewFreeze.Active() {
-		return
-	}
-	if offset, thawed := p.previewFreeze.ThawFrom(p.previewWindowBound()); thawed {
-		p.previewScroll = offset
-	}
-	p.previewFreezeDoc = false
-}
-
-// thawPreviewGesturePin is the half of the freeze a pointer gesture owes at its
-// end. A document activation's pin is not the gesture's to release: it outlives
-// the selection the click made, because the document is meant to keep showing
-// the context it was opened from, and only an explicit navigation ends it.
-func (p *Plugin) thawPreviewGesturePin() {
-	if p.previewFreezeDoc {
-		return
-	}
-	p.thawPreviewWindow()
 }
 
 // previewWindowBound is the furthest back this surface's window can be placed,

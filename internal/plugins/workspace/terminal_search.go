@@ -180,10 +180,10 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 	// pinned to an absolute row has to be shifted by the rows just prepended.
 	if msg.Source.TermPanel {
 		p.termPanelFreeze.Rebase(added)
-		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.termPanelMaxScroll())
+		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.terminalMaxScroll(true))
 	} else {
 		p.previewFreeze.Rebase(added)
-		p.previewScroll = min(p.previewScroll+scrollLines, p.previewMaxScroll())
+		p.previewScroll = min(p.previewScroll+scrollLines, p.terminalMaxScroll(false))
 	}
 	p.recomputeTerminalSearch()
 	if !p.terminalSearch.InputActive {
@@ -310,15 +310,15 @@ func (p *Plugin) revealTerminalSearchMatch() {
 	// means no viewport to centre in; the clamp then pins the scroll to the top
 	// of the (empty) range.
 	if search.TermPanel {
-		p.thawTermPanelWindow()
-		maxScroll := p.termPanelMaxScroll()
+		p.thawTerminalWindow(true)
+		maxScroll := p.terminalMaxScroll(true)
 		height := p.terminalViewportLayoutFor(true).DisplayHeight
 		start := min(max(localLine-height/2, 0), maxScroll)
 		p.termPanelScroll = maxScroll - start
 		return
 	}
-	p.thawPreviewWindow()
-	maxScroll := p.previewMaxScroll()
+	p.thawTerminalWindow(false)
+	maxScroll := p.terminalMaxScroll(false)
 	height := p.terminalViewportLayoutFor(false).DisplayHeight
 	start := min(max(localLine-height/2, 0), maxScroll)
 	p.previewScroll = maxScroll - start

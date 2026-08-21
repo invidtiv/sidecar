@@ -781,7 +781,7 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 	p.width = 80
 	p.height = 20
 	p.viewMode = ViewModeList
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 50))
 	p.selectionTermPanel = false
 	p.selection.SelectRange(
@@ -789,14 +789,18 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 		ui.SelectionPoint{Line: 10, Col: 3},
 		false,
 	)
+	panel := p.terminalSurfaceGeometry(true)
+	if !panel.OK {
+		t.Fatal("fixture drew no panel")
+	}
 	action := mouse.MouseAction{
 		Type:  mouse.ActionClick,
-		X:     12,
-		Y:     6,
+		X:     panel.X + 2,
+		Y:     panel.Y + 1,
 		Shift: true,
 		Region: &mouse.Region{
 			ID:   regionTermPanelContent,
-			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
+			Rect: mouse.Rect{X: panel.X, Y: panel.Y, W: panel.Width, H: panel.Height},
 		},
 	}
 	p.prepareInteractiveDrag(action, tty.ClickNone)
@@ -822,7 +826,7 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 	p.width = 80
 	p.height = 20
 	p.viewMode = ViewModeList
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panelword tail\n", 50))
 	p.selectionTermPanel = false
 	p.selection.SelectRange(
@@ -830,11 +834,15 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 		ui.SelectionPoint{Line: 10, Col: 3},
 		false,
 	)
+	panel := p.terminalSurfaceGeometry(true)
+	if !panel.OK {
+		t.Fatal("fixture drew no panel")
+	}
 	action := mouse.MouseAction{
-		Type: mouse.ActionDoubleClick, X: 12, Y: 6,
+		Type: mouse.ActionDoubleClick, X: panel.X + 2, Y: panel.Y + 1,
 		Region: &mouse.Region{
 			ID:   regionTermPanelContent,
-			Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8},
+			Rect: mouse.Rect{X: panel.X, Y: panel.Y, W: panel.Width, H: panel.Height},
 		},
 	}
 
@@ -1176,16 +1184,21 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 	p.width = 80
 	p.height = 20
 	p.viewMode = ViewModeList
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 200))
-	panelRegion := &mouse.Region{ID: regionTermPanelContent, Rect: mouse.Rect{X: 10, Y: 5, W: 40, H: 8}}
+	panel := p.terminalSurfaceGeometry(true)
+	if !panel.OK {
+		t.Fatal("fixture drew no panel")
+	}
+	panelRegion := &mouse.Region{ID: regionTermPanelContent,
+		Rect: mouse.Rect{X: panel.X, Y: panel.Y, W: panel.Width, H: panel.Height}}
 
-	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, X: 12, Y: 8, Region: panelRegion})
+	p.handleMouseClick(mouse.MouseAction{Type: mouse.ActionClick, X: panel.X + 2, Y: panel.Y + 3, Region: panelRegion})
 	p.handleMouseDrag(mouse.MouseAction{
-		Type: mouse.ActionDrag, X: 14, Y: 9, DragStartID: regionTermPanelContent, Region: panelRegion,
+		Type: mouse.ActionDrag, X: panel.X + 4, Y: panel.Y + 4, DragStartID: regionTermPanelContent, Region: panelRegion,
 	})
 	cmd := p.handleMouseDrag(mouse.MouseAction{
-		Type: mouse.ActionDrag, X: 14, Y: 0, DragStartID: regionTermPanelContent, Region: panelRegion,
+		Type: mouse.ActionDrag, X: panel.X + 4, Y: 0, DragStartID: regionTermPanelContent, Region: panelRegion,
 	})
 	if cmd == nil {
 		t.Fatal("a panel drag past the top edge scheduled no auto-scroll tick")
@@ -1342,7 +1355,7 @@ func TestEmptyPanelGestureThawsTheWindowItScrolled(t *testing.T) {
 	if p.termPanelFreeze.Active() {
 		t.Fatal("the empty release left the gesture pin holding the panel window")
 	}
-	want := tty.ThawOffsetFrom(scrolled, p.termPanelMaxScroll())
+	want := tty.ThawOffsetFrom(scrolled, p.terminalMaxScroll(true))
 	if want == 0 {
 		t.Fatal("test premise: the scrolled window is indistinguishable from the live edge")
 	}
@@ -1380,7 +1393,7 @@ func TestClearingATerminalSelectionThawsThePanelPin(t *testing.T) {
 
 	p.clearTerminalSelection()
 
-	want := tty.ThawOffsetFrom(pinned, p.termPanelMaxScroll())
+	want := tty.ThawOffsetFrom(pinned, p.terminalMaxScroll(true))
 	if p.termPanelFreeze.Active() || p.termPanelScroll != want {
 		t.Fatalf("clear left frozen %v scroll %d, want the thawed offset %d",
 			p.termPanelFreeze.Active(), p.termPanelScroll, want)
@@ -1391,7 +1404,7 @@ func TestClearingATerminalSelectionThawsThePanelPin(t *testing.T) {
 func TestPanelDocPinSurvivesAnEmptyGesture(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
 	p.termPanelScroll = 0
-	p.pinTermPanelWindow(20, true)
+	p.pinTerminalWindow(true, 20, true)
 
 	p.selectionTermPanel = true
 	p.finishInteractiveSelection()

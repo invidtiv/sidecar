@@ -823,8 +823,8 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 	p := newSelectionTestPlugin()
 	p.width, p.height = 100, 24
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	p.termPanelVisible = true
-	p.termPanelLayout = TermPanelRight
+	p.paneFocus, p.paneNextID = 1, 2
+	showTermPanel(t, p, SplitCols, 50)
 	p.termPanelOutput = buffer
 	p.interactiveState.TermPanel = true
 	p.selectionTermPanel = true
@@ -863,14 +863,15 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	})
 	p := newSelectionTestPlugin()
 	p.ctx = &plugin.Context{WorkDir: root}
-	p.width, p.height = 120, 30
+	// Wide and tall enough for three leaves: the panel stacks under the shell
+	// terminal, and the document this test opens takes the column beside them.
+	p.width, p.height = 180, 44
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: tty.NewOutputBuffer(20)}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
-	p.termPanelVisible = true
-	p.termPanelLayout = TermPanelRight
+	showTermPanel(t, p, SplitRows, 50)
 	p.termPanelSession = "panel-session"
 	p.termPanelPaneID = "%2"
 	p.termPanelOutput = panel
@@ -930,13 +931,14 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 		Output: strings.Join(history, "\n"), BaseLine: 50, Absolute: true,
 		PaneRows: len(history),
 	})
-	pinned := p.termPanelMaxScroll() / 2
+	t.Logf("DBG max=%d leaf=%v root=%+v", p.terminalMaxScroll(true), p.shellLeaf() != nil, p.termPanelVisible)
+	pinned := p.terminalMaxScroll(true) / 2
 	if pinned <= 0 {
 		t.Fatal("test premise: the panel has no rows above its window to pin over")
 	}
 	p.termPanelFreeze.Release()
 	p.termPanelFreeze.Freeze(pinned)
-	p.thawTermPanelWindow()
+	p.thawTerminalWindow(true)
 	before := p.termPanelScroll
 	p.termPanelFreeze.Release()
 	p.termPanelFreeze.Freeze(pinned)

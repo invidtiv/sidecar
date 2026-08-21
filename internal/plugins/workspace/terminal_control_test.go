@@ -247,9 +247,8 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			p.width, p.height = 100, 30
 			p.sidebarVisible = false
 			p.activePane = PanePreview
-			p.termPanelVisible = true
+			showTermPanel(t, p, SplitRows, 50)
 			p.termPanelFocused = true
-			p.termPanelLayout = TermPanelBottom
 			p.termPanelSession = "panel-session"
 			p.termPanelPaneID = "%2"
 

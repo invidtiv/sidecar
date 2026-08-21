@@ -34,7 +34,7 @@ var (
 		Description: "Suspend Sidecar and attach to the full tmux session",
 	}
 
-	// WorkspaceTerminalPanel enables the Ctrl+T / Alt+T split terminal panel.
+	// WorkspaceTerminalPanel enables the Ctrl+T split terminal pane.
 	WorkspaceTerminalPanel = Feature{
 		Name:        "workspace_terminal_panel",
 		Default:     false,

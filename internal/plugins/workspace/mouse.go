@@ -236,7 +236,7 @@ func isBackgroundRegion(regionID string) bool {
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
 		regionPaneClose,
 		regionKanbanCard, regionKanbanColumn, regionViewToggle,
-		regionDiffTabDivider, regionTermPanelDivider, regionTermPanelContent, regionPaneTreeDivider,
+		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
 		regionDiffTabPreviewFile, regionDiffTabFileListPane:
@@ -715,7 +715,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 				p.hoverShellsPlusButton = true
 			case regionWorkspacesPlusButton:
 				p.hoverWorkspacesPlusButton = true
-			case regionPaneDivider, regionTermPanelDivider, regionDiffTabDivider:
+			case regionPaneDivider, regionDiffTabDivider:
 				p.hoverDividerRegion = action.Region.ID
 				p.clearIssueHover()
 			case regionPaneTreeDivider:
@@ -967,10 +967,6 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 				p.mouseHandler.StartDrag(action.X, action.Y, regionPaneTreeDivider, split.Split.Ratio)
 			}
 		}
-	case regionTermPanelDivider:
-		// Start drag for terminal panel resizing (percentage-based).
-		startSize := p.termPanelEffectiveSize()
-		p.mouseHandler.StartDrag(action.X, action.Y, regionTermPanelDivider, startSize)
 	case regionListFilter:
 		// Clicking the filter row focuses the query, the same as `/`.
 		p.focusSidebar()
@@ -1453,30 +1449,6 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		}
 		view.SetListWidth(p.mouseHandler.DragStartValue())
 		view.ApplyListWidthDelta(action.DragDX, leafW)
-	case regionTermPanelDivider:
-		// Calculate new terminal panel size based on drag (percentage-based).
-		startValue := p.mouseHandler.DragStartValue()
-		if p.termPanelLayout == TermPanelRight && p.width > 0 {
-			// Right layout: drag horizontally, delta in X affects width %
-			newSize := startValue - (action.DragDX * 100 / p.width)
-			if newSize < termPanelMinSize {
-				newSize = termPanelMinSize
-			}
-			if newSize > termPanelMaxSize {
-				newSize = termPanelMaxSize
-			}
-			p.termPanelSize = newSize
-		} else if p.termPanelLayout != TermPanelRight && p.height > 0 {
-			// Bottom layout: drag vertically, delta in Y affects height %
-			newSize := startValue - (action.DragDY * 100 / p.height)
-			if newSize < termPanelMinSize {
-				newSize = termPanelMinSize
-			}
-			if newSize > termPanelMaxSize {
-				newSize = termPanelMaxSize
-			}
-			p.termPanelSize = newSize
-		}
 	case regionPaneTreeDivider:
 		split := FindPane(p.paneRoot, p.paneDragSplitID)
 		peer, ok := p.previewPeerBox()
@@ -1565,16 +1537,15 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	// Persist widths based on what was being dragged
 	switch dragSource {
 	case regionPaneTreeDivider:
+		// A divider the user dragged is a preference: where they left the shell
+		// split is where the next ctrl+t opens one.
+		p.rememberShellSplit()
 		p.saveSelectionState()
 		p.paneDragSplitID = 0
 		p.lastDragRegion = ""
 		return p.resizeDocTerminalCmd()
 	case regionDiffTabDivider:
 		_ = state.SetDiffTabFileListWidth(p.activeDiffView().ListWidth())
-	case regionTermPanelDivider:
-		_ = state.SetTermPanelSize(p.termPanelSize)
-		// Resize both panes after drag-to-resize
-		return tea.Batch(p.resizeTermPanelPaneCmd(), p.resizeSelectedPaneCmd())
 	default:
 		_ = state.SetWorkspaceSidebarWidth(p.sidebarWidth)
 	}

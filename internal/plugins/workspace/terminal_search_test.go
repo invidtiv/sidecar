@@ -278,7 +278,7 @@ func TestSearchHistoryReplaysAScrollCoalescedOntoIt(t *testing.T) {
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search did not request unvisited history")
 	}
-	p.previewScroll = p.previewMaxScroll()
+	p.previewScroll = p.terminalMaxScroll(false)
 
 	// The bound, reached while the search read is in flight.
 	if cmd := p.loadOlderTerminalHistory(false, 20); cmd != nil {

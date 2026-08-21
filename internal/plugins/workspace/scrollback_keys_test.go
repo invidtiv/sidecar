@@ -28,8 +28,8 @@ func watchedTerminalPlugin(t *testing.T, lines int) *Plugin {
 	}))
 	p.shellSelected = true
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
-	if p.previewMaxScroll() <= p.terminalSurfaceRows(false) {
-		t.Fatalf("test premise: %d rows of buffer is not deeper than one page", p.previewMaxScroll())
+	if p.terminalMaxScroll(false) <= p.terminalSurfaceRows(false) {
+		t.Fatalf("test premise: %d rows of buffer is not deeper than one page", p.terminalMaxScroll(false))
 	}
 	return p
 }
@@ -41,7 +41,7 @@ func watchedTerminalPlugin(t *testing.T, lines int) *Plugin {
 func TestWatchedPreviewAnswersThePagerKeys(t *testing.T) {
 	p := watchedTerminalPlugin(t, 300)
 	page := p.terminalSurfaceRows(false) - 1
-	bound := p.previewMaxScroll()
+	bound := p.terminalMaxScroll(false)
 
 	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyPgUp})
 	if p.previewScroll != page {
@@ -92,7 +92,7 @@ func TestWatchedHalfPageIsTheSurfaceNotThePlugin(t *testing.T) {
 func TestAWatchedScrollbackKeyReachesForHistoryAtTheBound(t *testing.T) {
 	p := watchedTerminalPlugin(t, 300)
 	p.recordTerminalHistory("shell", "sc-one", 5000)
-	p.previewScroll = p.previewMaxScroll()
+	p.previewScroll = p.terminalMaxScroll(false)
 
 	cmd := p.handleKeyPress(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	if cmd == nil {
@@ -113,7 +113,7 @@ func TestAWatchedScrollbackKeyReachesForHistoryAtTheBound(t *testing.T) {
 func TestWatchedPreviewAnswersTheShiftedNavigationKeys(t *testing.T) {
 	p := watchedTerminalPlugin(t, 300)
 	page := p.terminalSurfaceRows(false) - 1
-	bound := p.previewMaxScroll()
+	bound := p.terminalMaxScroll(false)
 
 	for _, step := range []struct {
 		name string

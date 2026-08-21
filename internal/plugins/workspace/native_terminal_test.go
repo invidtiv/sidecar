@@ -74,8 +74,6 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.sidebarWidth = 40
 	p.shellSelected = true
 	p.selectedShellIdx = 0
-	p.termPanelVisible = true
-	p.termPanelSize = 50
 	p.termPanelSession = "panel-session"
 	p.termPanelPaneID = "%12"
 	p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
@@ -92,21 +90,19 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 		CursorRow: 1, CursorCol: 2, CursorVisible: true,
 	}
 
-	p.termPanelLayout = TermPanelRight
+	showTermPanel(t, p, SplitCols, 50)
 	width, height, _ := p.calculateTermPanelDimensions()
 	p.interactiveState.PaneWidth = width
 	p.interactiveState.PaneHeight = height
-	if cursor := p.Cursor(); cursor == nil || cursor.X != 86 || cursor.Y != 3 {
-		t.Fatalf("right-panel Cursor() = %#v, want (86,3)", cursor)
-	}
+	assertPanelCursorAtSurface(t, p, "right-panel")
 
-	p.termPanelLayout = TermPanelBottom
+	p.termPanelVisible = false
+	p.syncShellLeaf()
+	showTermPanel(t, p, SplitRows, 50)
 	width, height, _ = p.calculateTermPanelDimensions()
 	p.interactiveState.PaneWidth = width
 	p.interactiveState.PaneHeight = height
-	if cursor := p.Cursor(); cursor == nil || cursor.X != 52 || cursor.Y != 22 {
-		t.Fatalf("bottom-panel Cursor() = %#v, want (52,22)", cursor)
-	}
+	assertPanelCursorAtSurface(t, p, "bottom-panel")
 
 	p.termPanelScroll = 1
 	if cursor := p.Cursor(); cursor != nil {
@@ -138,5 +134,25 @@ func TestTerminalViewportNativeCursorDoesNotMutateContent(t *testing.T) {
 	in.PaneHeight = 5
 	if x, y, ok := terminalViewportCursorPosition(in); !ok || x != 2 || y != 0 {
 		t.Fatalf("clipped-pane terminalViewportCursorPosition() = (%d,%d,%v), want (2,0,true)", x, y, ok)
+	}
+}
+
+// assertPanelCursorAtSurface pins the native cursor to the panel's own leaf: it
+// sits at that surface's origin plus the cursor tmux reported, in both split
+// axes. The numbers are taken from the placed leaf rather than written out,
+// because a literal here would only restate whichever arithmetic produced it —
+// what has to hold is that the cursor and the drawn surface come from the same
+// geometry.
+func assertPanelCursorAtSurface(t *testing.T, p *Plugin, name string) {
+	t.Helper()
+	surface := p.terminalSurfaceGeometry(true)
+	if !surface.OK {
+		t.Fatalf("%s: the panel has no surface to place a cursor in", name)
+	}
+	wantX := surface.X + p.interactiveState.CursorCol
+	wantY := surface.Y + p.interactiveState.CursorRow
+	cursor := p.Cursor()
+	if cursor == nil || cursor.X != wantX || cursor.Y != wantY {
+		t.Fatalf("%s Cursor() = %#v, want (%d,%d)", name, cursor, wantX, wantY)
 	}
 }

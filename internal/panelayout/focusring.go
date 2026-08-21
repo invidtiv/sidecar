@@ -8,9 +8,10 @@ const (
 	TargetSidebar TargetKind = iota
 	// TargetLeaf is a pane-tree leaf, identified by Target.Leaf.
 	TargetLeaf
-	// TargetTermPanel is the transitional terminal panel entry. It is deleted
-	// when windowing M1 absorbs the panel as a tree leaf; this case and the
-	// termPanelVisible argument to Ring are the only ring-side sites to remove.
+	// TargetTermPanel is the terminal panel's entry. The panel is a Shell leaf
+	// of the tree, but which of the two live terminals owns the KEYBOARD is not
+	// the leaf ring's answer on that host, so the panel is named separately and
+	// Shell leaves are skipped in the leaf walk.
 	TargetTermPanel
 )
 
@@ -24,6 +25,9 @@ type Target struct {
 // then every tree leaf in placement order, then the terminal panel (when
 // visible). Leaf order matches the A-then-B walk LayoutPanes performs, so Tab
 // follows the same sequence the panes are drawn in.
+//
+// Shell leaves are not leaf stops: the panel is the stop that names them, so a
+// ring that listed both would stop on the same window twice.
 func Ring(root *Node, sidebarVisible, termPanelVisible bool) []Target {
 	var ring []Target
 	if sidebarVisible {
@@ -41,6 +45,9 @@ func appendLeafTargets(node *Node, ring []Target) []Target {
 		return ring
 	}
 	if node.Split == nil {
+		if node.Kind == Shell {
+			return ring
+		}
 		return append(ring, Target{Kind: TargetLeaf, Leaf: node.ID})
 	}
 	ring = appendLeafTargets(node.Split.A, ring)

@@ -231,11 +231,8 @@ func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
 		}
 	}
 
-	p.termPanelVisible = true
+	showTermPanel(t, p, SplitRows, 50)
 	ids = commandIDs(p.Commands())
-	if !ids["switch-terminal-layout"] {
-		t.Fatalf("visible nested terminal panel omitted layout command: %v", ids)
-	}
 }
 
 func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {

@@ -827,6 +827,11 @@ func (p *Plugin) contentLeafSurface(leafID int) (root, surface string, ok bool) 
 		return "", "", false
 	}
 	switch leaf.Kind {
+	case PaneShell:
+		// A shell leaf belongs to whatever the sidebar has selected: it holds no
+		// content of its own to be stale against, and the session it draws is
+		// the selection's.
+		return p.selectedTerminalSurface()
 	case PaneDoc:
 		if doc := p.docs[leaf.ContentID]; doc != nil {
 			return doc.root, doc.surface, true
@@ -900,7 +905,7 @@ func (p *Plugin) docVisible() bool {
 			break
 		}
 	}
-	return live && p.paneRoot != nil
+	return (live || p.shellLeaf() != nil) && p.paneRoot != nil
 }
 
 // previewLeafFocused reports whether a visible content leaf holds the preview's
@@ -1250,6 +1255,11 @@ func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
 	}
 	p.paneLayoutSurface = surface
 	layout := p.savedPaneLayoutForCurrentSurface(surface)
+	if layout != nil && p.legacyTermPanel.Visible {
+		// The pre-split panel preference becomes a split of this layout, once.
+		layout = migrateTermPanelIntoLayout(layout, p.legacyTermPanel)
+		p.legacyTermPanel = termPanelPrefs{}
+	}
 	if layout == nil {
 		p.paneRestoreCmd = nil
 		return
@@ -1286,6 +1296,9 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 	}
 	if node.Kind == PaneTerminal {
 		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
+	}
+	if node.Kind == PaneShell {
+		return &state.PaneLayoutJSON{Kind: contentKindShell}
 	}
 	if node.Kind == PaneIssue {
 		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
@@ -1358,9 +1371,9 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.paneNextID = 1
-	terminalCount := 0
+	terminalCount, shellCount := 0, 0
 	var loads []tea.Cmd
-	restored := p.decodePaneNode(layout, root, &terminalCount, &loads)
+	restored := p.decodePaneNode(layout, root, &terminalCount, &shellCount, &loads)
 	if restored == nil || terminalCount != 1 || !supportedPaneTree(restored) {
 		p.resetPaneTreeToTerminal()
 		return nil
@@ -1368,6 +1381,14 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.paneRoot = restored
 	p.paneFocus = terminalLeafID(restored)
 	p.paneNextID = maxPaneID(restored) + 1
+	// A restored shell leaf turns the panel back on; a layout without one does
+	// not turn it off, because the panel's visibility is still a preference the
+	// user set once for the surface rather than per selection.
+	if shellCount > 0 {
+		p.termPanelVisible = true
+		p.rememberShellSplit()
+	}
+	p.syncShellLeaf()
 	return tea.Batch(loads...)
 }
 
@@ -1396,7 +1417,7 @@ func supportedPaneTree(root *PaneNode) bool {
 		supportedPaneTree(root.Split.A) && supportedPaneTree(root.Split.B)
 }
 
-func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount *int, loads *[]tea.Cmd) *PaneNode {
+func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount, shellCount *int, loads *[]tea.Cmd) *PaneNode {
 	if saved == nil {
 		return nil
 	}
@@ -1409,8 +1430,8 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		default:
 			return nil
 		}
-		a := p.decodePaneNode(saved.Split.A, root, terminalCount, loads)
-		b := p.decodePaneNode(saved.Split.B, root, terminalCount, loads)
+		a := p.decodePaneNode(saved.Split.A, root, terminalCount, shellCount, loads)
+		b := p.decodePaneNode(saved.Split.B, root, terminalCount, shellCount, loads)
 		if a == nil {
 			return b
 		}
@@ -1427,6 +1448,14 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 			return nil
 		}
 		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
+	case contentKindShell:
+		// One shell leaf, for the same reason there is one terminal leaf: a
+		// second would draw a tmux session that is already on screen.
+		if *shellCount > 0 {
+			return nil
+		}
+		*shellCount++
+		return &PaneNode{ID: p.nextPaneID(), Kind: PaneShell}
 	case contentKindDoc:
 		return p.decodeDocLeaf(saved, root, loads)
 	case contentKindIssue:
@@ -1525,6 +1554,9 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.paneNextID = 1
 	p.paneRoot = &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
 	p.paneFocus = p.paneRoot.ID
+	// The panel is not a content leaf the selection owns: it is a preference,
+	// so a tree rebuilt for a new selection is rebuilt with it.
+	p.syncShellLeaf()
 }
 
 // docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
@@ -1643,6 +1675,12 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 		return
 	}
 	switch node.Kind {
+	case PaneShell:
+		// The panel's terminal takes clicks over its INNER box — the border is
+		// the frame's, not the terminal's — and it is registered here so a click
+		// cannot land on a panel the frame did not draw.
+		inner := leafGeometry(box).Inner
+		p.mouseHandler.HitMap.AddRect(regionTermPanelContent, inner.X, inner.Y, inner.W, inner.H, node.ID)
 	case PaneDoc:
 		if doc := p.docs[node.ContentID]; doc != nil {
 			p.registerDocPaneRegions(doc, node.ID, box)

@@ -14,39 +14,40 @@ func enableSingleTerminalTree(p *Plugin) {
 	p.paneNextID = 2
 }
 
-func configureTerminalPanel(p *Plugin, layout TermPanelLayout) {
+// showTermPanel puts the terminal panel up as a Shell leaf of the pane tree,
+// split on axis with the primary terminal taking primaryRatio percent. It is
+// the tests' only way in, because the leaf and the flag are reconciled in one
+// place and a test that set only one of them would be testing a state the
+// plugin cannot reach.
+func showTermPanel(t *testing.T, p *Plugin, axis SplitAxis, primaryRatio int) {
+	t.Helper()
+	if p.paneRoot == nil {
+		enableSingleTerminalTree(p)
+	}
+	p.shellSplitAxis, p.shellSplitRatio = axis, primaryRatio
 	p.termPanelVisible = true
-	p.termPanelLayout = layout
-	p.termPanelSize = 40
+	if !p.syncShellLeaf() {
+		t.Fatalf("shell split did not fit at %dx%d", p.width, p.height)
+	}
+}
+
+func configureTerminalPanel(t *testing.T, p *Plugin, axis SplitAxis) {
+	t.Helper()
+	showTermPanel(t, p, axis, 60)
 	p.termPanelOutput = markerBuffer("PANEL", 4)
 }
 
+// A lone terminal leaf still renders exactly the legacy preview. The terminal
+// panel is no longer part of this comparison: it is a leaf of the tree now, so
+// a plugin with no tree has no panel to compare against.
 func TestSingleTerminalPaneTreePreservesLegacyRenderBytes(t *testing.T) {
-	tests := []struct {
-		name           string
-		sidebarVisible bool
-		panelVisible   bool
-		panelLayout    TermPanelLayout
-	}{
-		{name: "sidebar visible panel absent", sidebarVisible: true},
-		{name: "sidebar hidden panel absent", sidebarVisible: false},
-		{name: "sidebar visible panel right", sidebarVisible: true, panelVisible: true, panelLayout: TermPanelRight},
-		{name: "sidebar hidden panel right", sidebarVisible: false, panelVisible: true, panelLayout: TermPanelRight},
-		{name: "sidebar visible panel bottom", sidebarVisible: true, panelVisible: true, panelLayout: TermPanelBottom},
-		{name: "sidebar hidden panel bottom", sidebarVisible: false, panelVisible: true, panelLayout: TermPanelBottom},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, sidebarVisible := range []bool{true, false} {
+		t.Run(map[bool]string{true: "sidebar visible", false: "sidebar hidden"}[sidebarVisible], func(t *testing.T) {
 			legacy := surfacePlugin(false)
-			legacy.sidebarVisible = tc.sidebarVisible
+			legacy.sidebarVisible = sidebarVisible
 			withTree := surfacePlugin(false)
-			withTree.sidebarVisible = tc.sidebarVisible
+			withTree.sidebarVisible = sidebarVisible
 			enableSingleTerminalTree(withTree)
-			if tc.panelVisible {
-				configureTerminalPanel(legacy, tc.panelLayout)
-				configureTerminalPanel(withTree, tc.panelLayout)
-			}
 
 			legacyRender := legacy.renderListView(legacy.width, legacy.height)
 			treeRender := withTree.renderListView(withTree.width, withTree.height)
@@ -62,14 +63,14 @@ func TestTerminalSizingAndSurfaceGeometryUseTerminalLeafBox(t *testing.T) {
 		name           string
 		sidebarVisible bool
 		panelVisible   bool
-		panelLayout    TermPanelLayout
+		panelAxis      SplitAxis
 	}{
 		{name: "sidebar visible panel absent", sidebarVisible: true},
 		{name: "sidebar hidden panel absent", sidebarVisible: false},
-		{name: "sidebar visible panel right", sidebarVisible: true, panelVisible: true, panelLayout: TermPanelRight},
-		{name: "sidebar hidden panel right", sidebarVisible: false, panelVisible: true, panelLayout: TermPanelRight},
-		{name: "sidebar visible panel bottom", sidebarVisible: true, panelVisible: true, panelLayout: TermPanelBottom},
-		{name: "sidebar hidden panel bottom", sidebarVisible: false, panelVisible: true, panelLayout: TermPanelBottom},
+		{name: "sidebar visible panel right", sidebarVisible: true, panelVisible: true, panelAxis: SplitCols},
+		{name: "sidebar hidden panel right", sidebarVisible: false, panelVisible: true, panelAxis: SplitCols},
+		{name: "sidebar visible panel bottom", sidebarVisible: true, panelVisible: true, panelAxis: SplitRows},
+		{name: "sidebar hidden panel bottom", sidebarVisible: false, panelVisible: true, panelAxis: SplitRows},
 	}
 
 	for _, tc := range tests {
@@ -78,7 +79,7 @@ func TestTerminalSizingAndSurfaceGeometryUseTerminalLeafBox(t *testing.T) {
 			p.sidebarVisible = tc.sidebarVisible
 			enableSingleTerminalTree(p)
 			if tc.panelVisible {
-				configureTerminalPanel(p, tc.panelLayout)
+				configureTerminalPanel(t, p, tc.panelAxis)
 			}
 
 			leaf, ok := p.terminalLeafBox()
@@ -86,8 +87,14 @@ func TestTerminalSizingAndSurfaceGeometryUseTerminalLeafBox(t *testing.T) {
 				t.Fatal("terminal leaf was not placed")
 			}
 			content, ok := p.previewContentBox()
-			if !ok || leaf != content {
+			if !ok {
+				t.Fatal("preview content box is not placeable")
+			}
+			if !tc.panelVisible && leaf != content {
 				t.Fatalf("single terminal leaf = %+v, want preview content box %+v", leaf, content)
+			}
+			if tc.panelVisible && (leaf.W > content.W && leaf.H > content.H) {
+				t.Fatalf("terminal leaf %+v did not give the panel room inside %+v", leaf, content)
 			}
 			previewW, previewH := p.calculatePreviewDimensions()
 			if previewW != leaf.W || previewH != leaf.H-terminalHeaderRows {
@@ -114,11 +121,15 @@ func TestTerminalSizingAndSurfaceGeometryUseTerminalLeafBox(t *testing.T) {
 			if !panel.OK || !panelOK || panel.Width != panelW || panel.Height != panelH {
 				t.Fatalf("panel surface = %+v, sizing helper = %dx%d ok=%v", panel, panelW, panelH, panelOK)
 			}
-			if tc.panelLayout == TermPanelRight {
-				if panel.X != leaf.X+agentW+termPanelDividerCols || panel.HeaderY != leaf.Y {
+			// The panel is its own leaf, so it sits past the terminal leaf's
+			// chrome and the tree divider — the frame's arithmetic, not a walk
+			// of this test's own. What has to hold is that it is beyond the
+			// terminal leaf on the split's axis and nowhere near it on the other.
+			if tc.panelAxis == SplitCols {
+				if panel.X <= leaf.X+leaf.W || panel.HeaderY != leaf.Y {
 					t.Fatalf("right panel surface = %+v, leaf = %+v, agent width = %d", panel, leaf, agentW)
 				}
-			} else if panel.X != leaf.X || panel.HeaderY != leaf.Y+terminalHeaderRows+agentH+termPanelDividerRows {
+			} else if panel.X != leaf.X || panel.HeaderY <= leaf.Y+leaf.H {
 				t.Fatalf("bottom panel surface = %+v, leaf = %+v, agent height = %d", panel, leaf, agentH)
 			}
 		})

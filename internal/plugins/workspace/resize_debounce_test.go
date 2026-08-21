@@ -16,7 +16,7 @@ import (
 // Policy (td-59ce8a): No SIGWINCH until drop.
 //
 // During an active divider drag (IsDragging / DragRegion is regionPaneDivider,
-// regionPaneTreeDivider, regionTermPanelDivider, or regionDiffTabDivider):
+// regionPaneTreeDivider or regionDiffTabDivider):
 //   - Handle/box geometry updates every event (handleMouseDrag).
 //   - handleMouseDrag emits no resize cmd.
 //   - maybeResizeInteractivePane / maybeResizeVisiblePane must not issue a

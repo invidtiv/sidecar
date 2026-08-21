@@ -492,7 +492,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
+		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
 			if !p.termPanelFocused {
 				p.termPanelFocused = true
 				return nil
@@ -519,7 +519,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelBottom {
+		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
 			if p.termPanelFocused {
 				p.termPanelFocused = false
 				return nil
@@ -656,9 +656,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && !p.termPanelFocused {
+		} else if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && !p.termPanelFocused {
 			// Right layout: move focus from agent to terminal panel
-			p.thawTermPanelWindow()
+			p.thawTerminalWindow(true)
 			p.termPanelFocused = true
 		}
 	case "enter":
@@ -730,7 +730,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.termPanelLayout == TermPanelRight && p.termPanelFocused {
+		if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && p.termPanelFocused {
 			// Right layout: move focus from terminal panel back to agent
 			p.termPanelFocused = false
 			p.releaseTerminalDocProjection(false)
@@ -924,16 +924,8 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		if !terminalPanelEnabled() {
 			return nil
 		}
-		// Toggle terminal panel visibility (on/off with last layout)
-		p.ctx.Logger.Debug("termPanel: ctrl+t pressed", "currentlyVisible", p.termPanelVisible)
+		// Toggle a shell split at the remembered axis and ratio.
 		return p.toggleTermPanel()
-	case "alt+t":
-		if !terminalPanelEnabled() {
-			return nil
-		}
-		// Switch terminal panel layout direction (bottom ↔ right)
-		p.ctx.Logger.Debug("termPanel: alt+t pressed, switching layout")
-		return p.switchTermPanelLayout()
 	default:
 		// Unhandled key in preview pane - flash to indicate attach is needed
 		if fullTmuxAttachEnabled() && p.activePane == PanePreview {

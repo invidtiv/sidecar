@@ -179,13 +179,13 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 		p.pointer.ResetUnit()
 		// A panel pin belongs to the selection being dropped here, so it goes with
 		// it — before the new source reads the panel's window back.
-		p.releaseTermPanelGesturePin()
+		p.releaseTerminalGesturePin(true)
 	}
 	p.selectionTermPanel = termPanel
 	if termPanel && !p.selection.Anchor.Valid() {
 		// Pin the panel before anything hit-tests against it: a gesture reads the
 		// rows it was armed on, whatever output arrives underneath.
-		p.pinTermPanelWindow(p.terminalSelectionViewportLayout().Start, false)
+		p.pinTerminalWindow(true, p.terminalSelectionViewportLayout().Start, false)
 	}
 }
 
@@ -357,14 +357,14 @@ func (p *Plugin) applyTerminalViewportFreeze(freeze terminalViewportFreeze) {
 		// The clicked window wins over anything an earlier gesture pinned: this is
 		// the context the document was opened from, and it outlives the selection
 		// the click made.
-		p.releaseTermPanelWindowPin()
-		p.pinTermPanelWindow(freeze.start, true)
+		p.releaseTerminalWindowPin(true)
+		p.pinTerminalWindow(true, freeze.start, true)
 		return
 	}
 	// Same for the primary surface: the clicked window wins over anything an
 	// earlier gesture pinned, and it outlives the selection the click made.
-	p.releasePreviewWindowPin()
-	p.pinPreviewWindow(freeze.start, true)
+	p.releaseTerminalWindowPin(false)
+	p.pinTerminalWindow(false, freeze.start, true)
 }
 
 func (p *Plugin) projectedTerminalBuffer(termPanel bool) *tty.OutputBuffer {
@@ -427,14 +427,14 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 func (p *Plugin) freezeTerminalSelectionViewport() {
 	layout := p.terminalSelectionViewportLayout()
 	if p.selectionTermPanel {
-		p.pinTermPanelWindow(layout.Start, false)
+		p.pinTerminalWindow(true, layout.Start, false)
 		return
 	}
 	// Following the live grid can place the window past MaxOffset — the pane's
 	// own top, below the last row an offset can name. An offset beyond it is
 	// clamped by the next render, so pinning it unclamped freezes the window
 	// somewhere it will not be drawn.
-	p.pinPreviewWindow(min(max(layout.Start, 0), max(layout.MaxOffset, 0)), false)
+	p.pinTerminalWindow(false, min(max(layout.Start, 0), max(layout.MaxOffset, 0)), false)
 }
 
 // thawTerminalSelectionViewport is the other half of the freeze, owed at the end
@@ -444,7 +444,7 @@ func (p *Plugin) thawTerminalSelectionViewport() {
 	if p.selectionTermPanel {
 		return
 	}
-	p.thawPreviewGesturePin()
+	p.thawTerminalGesturePin(false)
 }
 
 // anchorDragFromOrigin starts a selection for a drag whose mouse-down landed off
@@ -470,7 +470,7 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 	// the pin the gesture was armed with ends with the gesture — handed back as a
 	// distance from the live bottom, the same half the primary surface just paid
 	// above, so a gesture that scrolled the window keeps the rows it scrolled to.
-	p.thawTermPanelGesturePin()
+	p.thawTerminalGesturePin(true)
 
 	switch resolution {
 	case tty.ClickActivate:
@@ -577,7 +577,7 @@ func (p *Plugin) clearTerminalSelection() {
 	// The panel window a gesture pinned was holding those rows still for this
 	// selection; nothing is reading them now, so it goes back to following output
 	// from where it stands rather than snapping to the offset behind the pin.
-	p.thawTermPanelGesturePin()
+	p.thawTerminalGesturePin(true)
 }
 
 // clearTerminalSelectionOnScroll is what every scroll made outside a pointer
