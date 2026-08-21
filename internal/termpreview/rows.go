@@ -233,6 +233,7 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	counts := make(map[string]int)
 	blankRows := make(map[string]int)
 	firstCell := make(map[string]int)
+	overlap := make(map[string]int)
 	paintedRowCount := 0
 	for _, row := range measured {
 		if len(row.bgs) == 0 {
@@ -246,6 +247,9 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 			counts[bg]++
 			if row.blank {
 				blankRows[bg]++
+			}
+			if len(row.bgs) > 1 {
+				overlap[bg]++
 			}
 		}
 	}
@@ -282,7 +286,27 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	// green) covers content rows only, so it never reaches the blank-row
 	// requirement below; the near-total bar keeps a bare majority of painted
 	// rows from promoting a panel colour.
-	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) || blankRows[canvas] == 0 {
+	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) {
+		return ""
+	}
+	// A blank row in the canvas is the usual proof it is a canvas and not
+	// highlighting — but the screen model's serialization closes every row and
+	// trims BCE tails, so the same opencode pane that proves itself in a raw
+	// capture comes back with no blank canvas rows at all, and the pane
+	// flickered between the two answers as the model took over from the first
+	// raw frame (td-fb5a9d). The fallback evidence is structural: a canvas owns
+	// the first cell of nearly every painted row (the TUI's own margin) and has
+	// other backgrounds drawn on top of it — on the same rows, which is what a
+	// box riding on a canvas looks like. A highlight has neither: a diff's
+	// green owns no margins, and its red deletions sit beside the green rows,
+	// never on them, so a second background elsewhere in the pane is no
+	// evidence at all. The co-occurrence bar is a quarter of the canvas's own
+	// rows, not a majority: a message-heavy screen is mostly bare margin rows
+	// with a box only around the input (measured live at 5 of 11), while
+	// line-level highlighting co-occurs with nothing, ever.
+	if blankRows[canvas] == 0 &&
+		(firstCell[canvas] < CanvasRowShare(paintedRowCount) ||
+			overlap[canvas] < max(2, counts[canvas]/4)) {
 		return ""
 	}
 	return canvas
