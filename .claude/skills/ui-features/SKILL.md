@@ -294,6 +294,42 @@ How to comply:
 
 Background: `docs/plans/active/scroll-inertia-complete-coverage.md`.
 
+## Wheel burst coalescing (required for every new scrollable surface)
+
+Boundary drop alone is half the protection. A flick that never reaches a boundary
+— mid-range inertia over a long card — still delivers one event per notch, and
+each accepted one is an `Update` + `View` repaint. `tty.WheelBurst` /
+`tty.WheelBursts` (`internal/tty/wheel.go`) coalesce a flick into whole flushes:
+"how much of this burst has the surface earned" lives in that one place, so a
+flick travels the same distance on every surface.
+
+**Rule: every new scrollable content area applies wheel deltas through the shared
+burst guard and drops at boundaries — both, not either.**
+
+How to comply:
+
+1. Hold one `tty.WheelBurst` per scroll surface. A host with one surface embeds
+   the value in whatever struct owns it (`internal/overview/preview.go`,
+   workspace `issuePane`); a host with several uses `tty.WheelBursts` keyed per
+   leaf/region (Files tree + preview, app content deck).
+2. Apply through `Add(delta, now)`; when `ok` is false the event was held, change
+   nothing, and return early. The held delta rides the next flush — never apply
+   `delta` directly.
+3. Inject the clock for tests: a `wheelNow func() time.Time` field (Files), the
+   plugin clock (`p.now()`), or a Model hook (`notificationCentreNow`). Tests
+   drive a whole flick without sleeping — see
+   `internal/plugins/filebrowser/scroll_burst_test.go` and the issue-viewer
+   equivalents beside each host.
+4. Reset the burst wherever the boundary answer is true, so inertia dropped at
+   the top or bottom cannot spend itself into the next gesture. Crossing
+   surfaces with `WheelBursts.For` resets automatically.
+5. Keyboard scrolling does not coalesce; do not route keys through the burst.
+
+Reference adoptions: embedded terminals (`internal/tty/tty.go`), Files tree and
+preview (`internal/plugins/filebrowser`), workspace terminal + issue panes,
+overview terminal + issue preview, app content deck + notification centre +
+issue preview modal.
+
 ## Mouse Support
 
 ### Setup

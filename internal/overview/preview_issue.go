@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -41,6 +42,9 @@ type previewIssue struct {
 	surface string
 	focused bool
 	epoch   uint64
+	// wheel coalesces one flick over this pane, exactly as the terminal's own
+	// burst does for its surface; the pane dying drops any held delta with it.
+	wheel tty.WheelBurst
 }
 
 func (i *previewIssue) view() *issueview.Model {
@@ -223,10 +227,10 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 			}
 			return m.clickPreviewIssueTab(tab.Index)
 		}
-		if view := m.preview.issue.view(); view != nil {
+		if m.preview.issue != nil {
 			switch action.Type {
 			case mouse.ActionScrollUp, mouse.ActionScrollDown:
-				view.Scroll(action.Delta)
+				m.scrollPreviewIssueByWheel(action.Delta)
 			}
 		}
 		return nil
@@ -254,11 +258,46 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return nil
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		if view != nil {
-			view.Scroll(action.Delta)
-		}
+		m.scrollPreviewIssueByWheel(action.Delta)
 	}
 	return nil
+}
+
+// scrollPreviewIssueByWheel applies one notch to the issue pane through the
+// shared burst guard, so a mid-range flick coalesces into the same handful of
+// repaints here that it earns on the terminal and Files surfaces. A held-back
+// delta is not lost; it rides the next flush.
+func (m *Model) scrollPreviewIssueByWheel(delta int) {
+	if m.preview.issue == nil {
+		return
+	}
+	flushed, ok := m.preview.issue.wheel.Add(delta, m.now())
+	if !ok {
+		return
+	}
+	if view := m.preview.issue.view(); view != nil {
+		view.Scroll(flushed)
+	}
+}
+
+// previewIssueWheelAtBoundary asks the card whether inertia over it is spent,
+// and drops any held delta when it is — the same pairing the boundary filter
+// and burst keep on every other surface, so a tail dropped at the top cannot
+// leak into the next gesture's first flush.
+func (m *Model) previewIssueWheelAtBoundary(delta int) bool {
+	issue := m.preview.issue
+	if issue == nil {
+		return true
+	}
+	view := issue.view()
+	if view == nil {
+		return true
+	}
+	bounded := view.ScrollAtBoundary(delta)
+	if bounded {
+		issue.wheel.Reset()
+	}
+	return bounded
 }
 
 func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {

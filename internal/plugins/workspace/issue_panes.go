@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -19,6 +20,10 @@ type issuePane struct {
 	root    string
 	surface string
 	tabs    issueview.Tabs
+	// wheel coalesces one flick over this leaf. A leaf is one scroll surface,
+	// so it holds a single burst rather than a keyed set, and dies with the
+	// leaf: no held delta can outlive the pane that earned it.
+	wheel tty.WheelBurst
 }
 
 func (i *issuePane) view() *issueview.Model {

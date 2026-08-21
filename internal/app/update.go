@@ -2910,10 +2910,18 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if view != nil {
 		switch ev := msg.(type) {
 		case tea.MouseWheelMsg:
+			// The card is the scroll owner (see issuePreviewWheelAtBoundary),
+			// and it earns its repaints through the shared burst guard like
+			// every other surface that hosts this viewer.
+			if m.issuePreviewWheel == nil {
+				m.issuePreviewWheel = &tty.WheelBurst{}
+			}
+			delta := -modalWheelLines
 			if ev.Button == tea.MouseWheelDown {
-				view.Scroll(3)
-			} else {
-				view.Scroll(-3)
+				delta = modalWheelLines
+			}
+			if flushed, ok := m.issuePreviewWheel.Add(delta, m.issuePreviewClock()); ok {
+				view.Scroll(flushed)
 			}
 			return m, nil
 		}

@@ -124,7 +124,11 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			return doc == nil || doc.view() == nil || doc.view().ScrollAtBoundary(action.Delta)
 		case PaneIssue:
 			issue := p.issues[leaf.ContentID]
-			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+			bounded := issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+			if issue != nil && bounded {
+				issue.wheel.Reset()
+			}
+			return bounded
 		case PaneNote:
 			note := p.notes[leaf.ContentID]
 			return note == nil || note.view() == nil || note.view().ScrollAtBoundary(action.Delta)
@@ -1331,11 +1335,17 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case PaneIssue:
 			// The issue component scrolls in rendered rows, the same units the
 			// document viewer answers a notch in, so the wheel reaches it by
-			// the same path rather than a second one.
+			// the same path rather than a second one — and through the same
+			// burst guard, or mid-range inertia would repaint the card once per
+			// notch instead of once per earned flush.
 			if issue := p.issues[leaf.ContentID]; issue != nil {
 				if view := issue.view(); view != nil {
+					flushed, ok := issue.wheel.Add(delta, p.now())
+					if !ok {
+						return nil
+					}
 					before := view.ScrollOffset()
-					view.Scroll(delta)
+					view.Scroll(flushed)
 					if view.ScrollOffset() != before {
 						p.saveSelectionState()
 					}

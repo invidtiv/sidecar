@@ -32,6 +32,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -82,6 +83,12 @@ type appContentDeck struct {
 	live                              *livepanes.Set
 	suppressRefresh                   bool
 	edit                              *appDeckDocumentEdit
+	// wheel holds one flick per scrollable leaf this deck draws, and wheelNow
+	// is its clock (nil is the wall clock, replaced by tests). Each leaf
+	// scrolls independently, so the delta one of them holds back belongs to it
+	// alone; today only the issue card coalesces here.
+	wheel    tty.WheelBursts
+	wheelNow func() time.Time
 }
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
@@ -825,7 +832,7 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 		case *docview.Model:
 			v.Scroll(delta)
 		case *issueview.Model:
-			v.Scroll(delta)
+			h.scrollIssueByWheel(leaf.ID, v, delta)
 		case *noteview.Model:
 			v.Scroll(delta)
 		case *workspacediff.View:
@@ -835,6 +842,27 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 		}
 	}
 	return nil
+}
+
+// issueWheelSurfaceKey names the flick over one deck leaf's issue card.
+func issueWheelSurfaceKey(leafID int) string { return fmt.Sprintf("issue-%d", leafID) }
+
+// scrollIssueByWheel applies one notch to a deck issue card through the shared
+// burst guard. A leaf is one scroll surface, so it is named by its leaf ID and
+// its held delta dies with the deck rather than crossing to its neighbours.
+func (h *appContentDeck) scrollIssueByWheel(leafID int, view *issueview.Model, delta int) {
+	flushed, ok := h.wheel.For(issueWheelSurfaceKey(leafID)).Add(delta, h.now())
+	if !ok {
+		return
+	}
+	view.Scroll(flushed)
+}
+
+func (h *appContentDeck) now() time.Time {
+	if h.wheelNow != nil {
+		return h.wheelNow()
+	}
+	return time.Now()
 }
 
 // appContentWheelAtBoundary mirrors appContentMouse's pointer ownership before
@@ -874,7 +902,13 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 	case *docview.Model:
 		return v.ScrollAtBoundary(delta), true
 	case *issueview.Model:
-		return v.ScrollAtBoundary(delta), true
+		bounded := v.ScrollAtBoundary(delta)
+		if bounded {
+			// A held delta must not leak into the next gesture after the
+			// filter starts dropping the inertia tail at this boundary.
+			h.wheel.For(issueWheelSurfaceKey(leaf.ID)).Reset()
+		}
+		return bounded, true
 	case *noteview.Model:
 		return v.ScrollAtBoundary(delta), true
 	case *workspacediff.View:

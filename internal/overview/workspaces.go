@@ -467,11 +467,7 @@ func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) boo
 		view := m.preview.doc.view()
 		return view == nil || view.ScrollAtBoundary(delta)
 	case panelayout.Issue:
-		if m.preview.issue == nil {
-			return true
-		}
-		view := m.preview.issue.view()
-		return view == nil || view.ScrollAtBoundary(delta)
+		return m.previewIssueWheelAtBoundary(delta)
 	case panelayout.Note:
 		if m.preview.note == nil {
 			return true
@@ -1033,8 +1029,7 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		return view == nil || view.ScrollAtBoundary(action.Delta)
 	}
 	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
-		view := m.preview.issue.view()
-		return view == nil || view.ScrollAtBoundary(action.Delta)
+		return m.previewIssueWheelAtBoundary(action.Delta)
 	}
 	if _, ok := action.Region.Data.(previewResourceTabHit); ok {
 		return m.preview.resource == nil ||
@@ -1055,8 +1050,7 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			view := m.preview.doc.view()
 			return view == nil || view.ScrollAtBoundary(action.Delta)
 		case isPreviewIssueRegion(kind):
-			view := m.preview.issue.view()
-			return view == nil || view.ScrollAtBoundary(action.Delta)
+			return m.previewIssueWheelAtBoundary(action.Delta)
 		case isPreviewResourceRegion(kind):
 			return m.preview.resource == nil ||
 				resourceScrollAtBoundary(m.preview.resource.view(), action.Delta)
