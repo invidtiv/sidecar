@@ -296,6 +296,13 @@ func (m *Model) View() string {
 }
 
 // needsScrollbar reports whether to reserve a scrollbar column.
+//
+// The column is ALWAYS reserved when the box is wide enough; overflow is not
+// consulted. The track renders as a blank spacer when everything fits, and
+// paying it unconditionally means the document never reflows the first time
+// content crosses the viewport. docview deliberately owns no padding of its
+// own, so unlike issueview this reservation is the pane's entire hidden cost:
+// rendered mode's inset is Glamour's document margin and stays visible.
 func (m *Model) needsScrollbar() bool {
 	return m != nil && m.width >= 8 && m.height > 0
 }

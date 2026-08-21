@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/markdown"
 )
 
 func sample() *Data {
@@ -118,6 +119,105 @@ func TestModelInsetsContentAndHitGeometryByOneColumn(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestModelWrapsDescriptionToFullContentWidth pins the card's wrap contract at
+// a representative pane width: description text must reach toward the right
+// chrome edge, because New pairs the card's own 1+1 inset with a
+// compact-document renderer. Before that pairing a host-injected renderer kept
+// Glamour's 2-column document margin, which compounded with the inset and the
+// reserved scrollbar column — body text wrapped around pane−7 while pane−3
+// columns were free (td-85a2be).
+func TestModelWrapsDescriptionToFullContentWidth(t *testing.T) {
+	const width = 80
+	m := New(nil)
+	m.SetSize(width, 24)
+	data := sample()
+	// "aaaa" tokens: greedy wrap at the card's content width fills a body line
+	// past width−7 cells; a margin-compounded render cannot exceed width−9.
+	// Any longest line below the threshold means a hidden inset came back.
+	data.Description = strings.Repeat("aaaa ", 60)
+	apply(t, m, data, nil)
+
+	lines := rows(t, m.View(), width, 24)
+	start := -1
+	for i, line := range lines {
+		if strings.Contains(ansi.Strip(line), "DESCRIPTION") {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		t.Fatal("view has no DESCRIPTION section")
+	}
+
+	longest := 0
+	for _, line := range lines[start:] {
+		plain := ansi.Strip(line)
+		// Drop the card's left padding column and its trailing scrollbar +
+		// right padding columns; what remains is the body the renderer wrapped.
+		body := strings.TrimRight(plain[1:len(plain)-2], " ")
+		if body == "" {
+			break // the blank separator row ends the section
+		}
+		if strings.HasPrefix(body, " ") {
+			t.Fatalf("description row carries an extra indent: %q", body)
+		}
+		if w := ansi.StringWidth(body); w > longest {
+			longest = w
+		}
+	}
+	if threshold := width - 7; longest <= threshold {
+		t.Fatalf("longest description line is %d cells, want > %d: body still wraps early",
+			longest, threshold)
+	}
+}
+
+// TestNewRendersHostAndNilRenderersIdentically is the parity contract for the
+// four surfaces that show a card (workspace leaf, overview preview, app content
+// deck, preview modal): whatever renderer a host injects — including one shared
+// with viewers that want Glamour's default inset — the card wraps identically.
+func TestNewRendersHostAndNilRenderersIdentically(t *testing.T) {
+	host, err := markdown.NewRenderer() // deliberately NOT compact
+	if err != nil {
+		t.Fatal(err)
+	}
+	if host.CompactsDocument() {
+		t.Fatal("precondition: the host renderer should not be compact")
+	}
+
+	mHost := New(host)
+	mNil := New(nil)
+	mCompact := New(mustCompactRenderer(t))
+	for _, m := range []*Model{mHost, mNil} {
+		m.SetSize(80, 24)
+		apply(t, m, sample(), nil)
+	}
+	mCompact.SetSize(80, 24)
+	apply(t, mCompact, sample(), nil)
+
+	want := mCompact.View()
+	if got := mHost.View(); got != want {
+		t.Fatalf("host-renderer view differs from the compact reference:\n%s", ansi.Strip(got))
+	}
+	if got := mNil.View(); got != want {
+		t.Fatalf("nil-renderer view differs from the compact reference:\n%s", ansi.Strip(got))
+	}
+	if !mHost.renderer.CompactsDocument() || !mNil.renderer.CompactsDocument() {
+		t.Fatal("the card ended up with a non-compact renderer")
+	}
+	if host.CompactsDocument() {
+		t.Fatal("the host's shared renderer was mutated")
+	}
+}
+
+func mustCompactRenderer(t *testing.T) *markdown.Renderer {
+	t.Helper()
+	r, err := markdown.NewRenderer(markdown.CompactDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 func TestModelRendersLoadingAndError(t *testing.T) {

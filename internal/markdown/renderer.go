@@ -41,6 +41,15 @@ func CompactDocument(r *Renderer) {
 	r.compactDocument = true
 }
 
+// CompactsDocument reports whether this renderer drops Glamour's document
+// margin and block prefix/suffix (see CompactDocument). Viewers that pad their
+// own frames ask this before adopting an injected renderer: pairing their
+// padding with a non-compact renderer compounds two insets onto one width and
+// wraps the body well before the frame's right edge. Such a viewer builds its
+// own compact renderer instead of flipping this one — the instance may be
+// shared with viewers (docview) whose inset IS Glamour's margin.
+func (r *Renderer) CompactsDocument() bool { return r.compactDocument }
+
 // NewRenderer creates a new markdown renderer instance.
 func NewRenderer(opts ...RendererOption) (*Renderer, error) {
 	r := &Renderer{

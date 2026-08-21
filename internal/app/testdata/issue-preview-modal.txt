@@ -8,13 +8,13 @@
 │   PARENT ───────────────────────────────────────────────────────────────     │
 │   ↑ ◆ td-parent1  Windowing epic                                             │
 │                                                                              │
-│   DESCRIPTION ───────────────────────────────────────────────────────── 7    │
-│     ## Why                                                                   │
+│   DESCRIPTION ───────────────────────────────────────────────────────── 6    │
+│   ## Why                                                                     │
 │                                                                              │
-│     The modal owns fetch and render today.                                   │
+│   The modal owns fetch and render today.                                     │
 │                                                                              │
-│     • move fetch                                                             │
-│     • move render                                                            │
+│   • move fetch                                                               │
+│   • move render                                                              │
 │                                                                              │
 │   SUBTASKS ────────────────────────────────────────────────────────── 2/3    │
 │   ■ td-83cfc9  closed  Snapshot diff                                         │

@@ -80,15 +80,16 @@ func LabelsLine(d *Data) string {
 }
 
 // Description renders the issue body as markdown wrapped to width, falling back
-// to the raw text when no renderer is available. A nil renderer builds the
-// default one.
+// to the raw text when no renderer is available. A nil renderer builds a
+// compact-document one, matching the wrap contract New enforces: this card
+// pads its own frame, so Glamour's document margin must stay out of the way.
 func Description(renderer *markdown.Renderer, d *Data, width int) string {
 	if d == nil || d.Description == "" {
 		return ""
 	}
-	if renderer == nil {
+	if renderer == nil || !renderer.CompactsDocument() {
 		var err error
-		if renderer, err = markdown.NewRenderer(); err != nil {
+		if renderer, err = markdown.NewRenderer(markdown.CompactDocument); err != nil {
 			return d.Description
 		}
 	}
@@ -267,9 +268,9 @@ func renderAcceptance(renderer *markdown.Renderer, d *Data, width int) string {
 	if d == nil || strings.TrimSpace(d.Acceptance) == "" {
 		return ""
 	}
-	if renderer == nil {
+	if renderer == nil || !renderer.CompactsDocument() {
 		var err error
-		if renderer, err = markdown.NewRenderer(); err != nil {
+		if renderer, err = markdown.NewRenderer(markdown.CompactDocument); err != nil {
 			return d.Acceptance
 		}
 	}

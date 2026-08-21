@@ -128,11 +128,21 @@ type ActionHint struct {
 	Key, Label string
 }
 
-// New creates an empty issue viewer. A nil renderer uses the default markdown
-// renderer.
+// New creates an empty issue viewer.
+//
+// The card owns its wrap contract: it insets each side by
+// horizontalContentPadding itself, so its markdown must render without
+// Glamour's document margin — the same pairing Notes uses. A nil renderer, or
+// one built without markdown.CompactDocument, is replaced by the card's own
+// compact renderer rather than mutated: an injected instance may be shared
+// with viewers (docview) whose inset is Glamour's margin. This is what keeps
+// every surface that shows a card — workspace leaf, overview preview, app
+// content deck, preview modal — wrapping identically no matter what it
+// injects; without it, body text wraps around width−7 while width−3 columns
+// are free.
 func New(renderer *markdown.Renderer) *Model {
-	if renderer == nil {
-		renderer, _ = markdown.NewRenderer()
+	if renderer == nil || !renderer.CompactsDocument() {
+		renderer, _ = markdown.NewRenderer(markdown.CompactDocument)
 	}
 	return &Model{renderer: renderer, cursor: -1, hover: -1, buildFor: -1}
 }
@@ -696,9 +706,15 @@ func (m *Model) ensureCursorVisible() {
 }
 
 func (m *Model) contentWidth() int {
-	// Reserve the scrollbar column whenever the box is wide enough. The
-	// track is a spacer when everything fits, so the card does not reflow
-	// the first time content crosses the viewport.
+	// Geometry, one decision per term: rows are built to
+	// width − horizontalContentPadding×2 (the card's own 1+1 inset) − 1
+	// reserved scrollbar column. The scrollbar column is ALWAYS reserved when
+	// the box is wide enough — needsScrollbar ignores actual overflow on
+	// purpose. The track renders as a blank spacer when everything fits, and
+	// paying it unconditionally means the body never reflows the first time
+	// content crosses the viewport. Rows are built against exactly this width
+	// by a compact-document renderer (see New), so wrapped text reaches the
+	// right chrome edge with nothing hidden underneath.
 	w := m.innerWidth()
 	if m.needsScrollbar() {
 		w--
