@@ -447,9 +447,18 @@ func (r appDeckRegions) Tabs(n *panelayout.Node, b paneframe.Box) {
 func (r appDeckRegions) Title(*panelayout.Node, paneframe.Box) {}
 
 func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
-	if n.Kind != panelayout.Primary && b.W > 0 {
-		r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+b.W-1, b.Y, 1, 1, n.ID)
+	if n.Kind == panelayout.Primary || b.W <= 0 {
+		return
 	}
+	// The drawn × is the padded three-cell button from ComposeHeaderClose, so
+	// the hit rect must be the same reserved geometry. Registering only the
+	// last column left the glyph itself dead: clicks had to land one cell to
+	// its right to close.
+	reserve := ui.ReserveHeaderClose(b.W)
+	if reserve.CloseW < 1 {
+		return
+	}
+	r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+reserve.CloseCol, b.Y, reserve.CloseW, 1, n.ID)
 }
 func (r appDeckRegions) Body(*panelayout.Node, paneframe.Box) {}
 

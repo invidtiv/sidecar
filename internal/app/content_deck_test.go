@@ -27,6 +27,7 @@ import (
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -446,6 +447,55 @@ func TestAppContentDeckTabCloseClosesThatTab(t *testing.T) {
 	items, _ = h.deck.Tabs(leaf)
 	if len(items) != 1 || items[0].Ref.Value != "guide.md" {
 		t.Fatalf("close left %#v, want [guide.md]", items)
+	}
+}
+
+// The leaf header's shared × is the padded three-cell close button drawn by
+// ComposeHeaderClose, so its hit rect must be the same reserved geometry.
+// Regression: the rect covered only the button's trailing pad column, so the
+// glyph itself was dead and closing an issue pane opened from Notes needed a
+// click one or two columns right of the ×.
+func TestAppContentDeckHeaderCloseCoversTheGlyph(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("document open returned no load command")
+	}
+	h := m.currentContentDeck()
+	doc := h.deck.Leaf(panelayout.Document)
+	if doc == 0 {
+		t.Fatal("document leaf did not open")
+	}
+	m.renderContent(200, 40)
+
+	var close *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		if region.ID == appDeckCloseRegion {
+			copy := region
+			close = &copy
+			break
+		}
+	}
+	if close == nil {
+		t.Fatal("leaf header registered no close region")
+	}
+	if close.Rect.W != ui.CloseButtonWidth() {
+		t.Fatalf("close rect width=%d, want %d (the padded button)", close.Rect.W, ui.CloseButtonWidth())
+	}
+	glyphX := close.Rect.X + close.Rect.W/2
+	resolved := h.mouse.HitMap.Test(glyphX, close.Rect.Y)
+	if resolved == nil || resolved.ID != appDeckCloseRegion {
+		t.Fatalf("clicking the × at x=%d resolved %#v, want the close region", glyphX, resolved)
+	}
+
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: glyphX, Y: close.Rect.Y, Button: tea.MouseLeft}))
+	if h.deck.Leaf(panelayout.Document) != 0 {
+		t.Fatal("clicking the × did not close the pane")
 	}
 }
 
