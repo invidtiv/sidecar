@@ -246,6 +246,49 @@ func TestCanvasBackgroundAbstainsInteriorDefaultRows(t *testing.T) {
 	}
 }
 
+// A full-height panel rides every row the canvas does, so the row-count vote
+// ties. Captured live from opencode: every row opens in the canvas
+// (48;2;10;10;10) and the side panel (48;2;20;20;20) opens mid-row, so the tie
+// breaks to the background that owns the row starts.
+func TestCanvasBackgroundBreaksFullHeightPanelTieOnRowStarts(t *testing.T) {
+	canvas := "\x1b[48;2;10;10;10m"
+	panel := "\x1b[48;2;20;20;20m"
+	var lines []string
+	lines = append(lines, canvas+"  chat  "+panel+"  panel  "+canvas)
+	for i := range 10 {
+		if i%2 == 0 {
+			lines = append(lines, canvas+"        "+panel+"  panel  "+canvas)
+		} else {
+			// Padding rows are whitespace in both backgrounds.
+			lines = append(lines, canvas+"        "+panel+"         "+canvas)
+		}
+	}
+	lines = append(lines, canvas+"  input "+panel+"         "+canvas)
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != canvas {
+		t.Fatalf("canvas = %q, want %q when a full-height panel ties the row vote", got, canvas)
+	}
+}
+
+// When the tied candidates also split the row starts evenly there is no single
+// canvas to find, and detection must abstain rather than guess.
+func TestCanvasBackgroundAbstainsWhenRowStartsTieToo(t *testing.T) {
+	left := "\x1b[48;2;10;10;10m"
+	right := "\x1b[48;2;20;20;20m"
+	var lines []string
+	for i := range 12 {
+		a, b := left, right
+		if i%2 == 1 {
+			a, b = right, left
+		}
+		lines = append(lines, a+"  half  "+b+"  half  \x1b[49m")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
+		t.Fatalf("canvas = %q, want abstention when row starts tie as well", got)
+	}
+}
+
 // The abstention rule does not open the door to highlighting: a diff's
 // added-line green paints content rows only, so it never lands on a blank row
 // and fails the requirement regardless of how few other rows carry any

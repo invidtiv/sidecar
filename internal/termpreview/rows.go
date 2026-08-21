@@ -194,6 +194,7 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	}
 	type painted struct {
 		bgs   map[string]struct{}
+		first string
 		blank bool
 	}
 	resolved := make([]painted, 0, len(rows))
@@ -206,6 +207,7 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 		inherited = next
 		resolved = append(resolved, painted{
 			bgs:   rowBackgrounds(text),
+			first: firstCellBackground(text),
 			blank: strings.TrimSpace(ansi.Strip(text)) == "",
 		})
 	}
@@ -230,12 +232,16 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	// surrounding surface as the TUI redrew.
 	counts := make(map[string]int)
 	blankRows := make(map[string]int)
+	firstCell := make(map[string]int)
 	paintedRowCount := 0
 	for _, row := range measured {
 		if len(row.bgs) == 0 {
 			continue
 		}
 		paintedRowCount++
+		if row.first != "" {
+			firstCell[row.first]++
+		}
 		for bg := range row.bgs {
 			counts[bg]++
 			if row.blank {
@@ -243,12 +249,32 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 			}
 		}
 	}
-	canvas, best := "", 0
+	canvas, best, tied := "", 0, false
 	for bg, count := range counts {
 		if count > best {
-			canvas, best = bg, count
+			canvas, best, tied = bg, count, false
 		} else if count == best {
-			canvas = ""
+			tied = true
+		}
+	}
+	// A full-height panel rides every row the canvas does — opencode's side
+	// panel spans the grid, so both backgrounds count every row and the vote
+	// ties. The canvas is the background the rows are drawn *in*: it owns each
+	// row's first cell, either painted there or carried in from the row above,
+	// while a panel opens mid-row. Ties go to the candidate that owns the most
+	// row starts; a tie on that too means there is no single canvas to find.
+	if tied {
+		canvas = ""
+		bestFirst := 0
+		for bg, count := range counts {
+			if count != best {
+				continue
+			}
+			if firstCell[bg] > bestFirst {
+				canvas, bestFirst = bg, firstCell[bg]
+			} else if firstCell[bg] == bestFirst {
+				canvas = ""
+			}
 		}
 	}
 	// The share is measured against the rows that carry a background. A
@@ -293,6 +319,33 @@ func inheritedRowBackground(buffer *tty.OutputBuffer, start int) string {
 	bg := ""
 	for _, row := range buffer.LinesRange(from, start) {
 		_, bg, _ = ui.CarryRowBackground(row, bg)
+	}
+	return bg
+}
+
+// firstCellBackground is the background the row's first cell is drawn in: the
+// last background set before any printable content. A row with no printable
+// content answers with whatever background it leaves active.
+func firstCellBackground(row string) string {
+	bg := ""
+	state := ansi.NormalState
+	remaining := row
+	for len(remaining) > 0 {
+		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
+		if n <= 0 {
+			break
+		}
+		if next, touches := ui.SGRBackground(seq); touches {
+			if next == ui.RowBackgroundDefault {
+				bg = ""
+			} else {
+				bg = next
+			}
+		} else if width > 0 {
+			return bg
+		}
+		state = newState
+		remaining = remaining[n:]
 	}
 	return bg
 }
