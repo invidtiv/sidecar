@@ -438,6 +438,9 @@ type Model struct {
 	notificationCentreMouse       *mouse.Handler
 	notificationCentreHoverHandle bool
 	notificationCentreHoverClose  bool
+	// notificationCentreHoverBar lights the body scrollbar's thumb and track
+	// under the pointer, and yields to the drag state while a gesture is live.
+	notificationCentreHoverBar bool
 	// Burst is a pointer so FilterInput's Model copy still shares it: Reset at
 	// a boundary must survive the filter not returning a model.
 	notificationCentreWheel *tty.WheelBurst

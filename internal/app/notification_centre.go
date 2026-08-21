@@ -396,6 +396,7 @@ func (m Model) renderNotificationCentre(height int) string {
 
 	rows := m.notificationCentreBody(bodyInner, now)
 	scroll := m.clampedNotificationCentreScroll(len(rows), bodyHeight)
+	var barGeom ui.Geometry
 	if bodyHeight > 0 {
 		bodyLines := make([]string, 0, bodyHeight)
 		for i := scroll; i < len(rows) && i < scroll+bodyHeight; i++ {
@@ -404,14 +405,12 @@ func (m Model) renderNotificationCentre(height int) string {
 		for len(bodyLines) < bodyHeight {
 			bodyLines = append(bodyLines, strings.Repeat(" ", bodyInner))
 		}
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(rows),
-			ScrollOffset: scroll,
-			VisibleItems: bodyHeight,
-			TrackHeight:  bodyHeight,
-		})
+		scrollbar, geom := ui.RenderScrollbarWithState(
+			m.notificationCentreScrollbarParams(len(rows), scroll, bodyHeight),
+			m.notificationCentreScrollbarStyle())
 		joined := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(bodyLines, "\n"), scrollbar)
 		lines = append(lines, strings.Split(joined, "\n")...)
+		barGeom = geom
 	}
 	if interiorHeight >= 4 {
 		lines = append(lines, "", footnote)
@@ -427,7 +426,7 @@ func (m Model) renderNotificationCentre(height int) string {
 	panel := styles.RenderPanel(strings.Join(body, "\n"), panelWidth, height,
 		m.notificationCentreFocused)
 
-	m.registerNotificationCentreRegions(height, rows, scroll, bodyHeight, reserve)
+	m.registerNotificationCentreRegions(height, rows, scroll, bodyHeight, reserve, barGeom)
 	return lipgloss.JoinHorizontal(lipgloss.Top, handle, panel)
 }
 
@@ -500,7 +499,7 @@ func (m *Model) ensureNotificationCentreCursorVisible() {
 // screen coordinates. Order is the shared rule: the widest target first, the
 // resize rail last so a press one cell off the edge resizes rather than
 // selecting.
-func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, scroll, bodyHeight int, reserve ui.HeaderClose) {
+func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, scroll, bodyHeight int, reserve ui.HeaderClose, barGeom ui.Geometry) {
 	if m.notificationCentreMouse == nil {
 		return
 	}
@@ -536,6 +535,18 @@ func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, s
 			panelX, y, panelWidth, 1, nil)
 	}
 
+	// The scrollbar's thumb and track come after the body rows they overlap —
+	// HitMap.Test scans reverse, so the last registration on a cell wins —
+	// and neither is registered when geom.HasThumb is false: a spacer column
+	// that only reserves width stays inert under the pointer.
+	if barGeom.HasThumb && bodyHeight > 0 {
+		barX := panelX + 2 + bodyInner
+		trackY := headerHeight + 1 + 2
+		hits.AddRect(ui.RegionScrollbarTrack, barX, trackY, 1, bodyHeight, nil)
+		hits.AddRect(ui.RegionScrollbarThumb,
+			barX, trackY+barGeom.ThumbRect.Min.Y, 1, max(1, barGeom.ThumbRect.Dy()), nil)
+	}
+
 	if reserve.CloseW > 0 {
 		hits.AddRect(regionNotificationCentreClose, panelX+2+reserve.CloseCol, headerHeight+1, reserve.CloseW, 1, nil)
 	}
@@ -547,6 +558,57 @@ func (m Model) registerNotificationCentreRegions(height int, rows []centreRow, s
 func (m Model) notificationCentreDragging() bool {
 	return m.notificationCentreMouse != nil &&
 		m.notificationCentreMouse.DragRegion() == regionNotificationCentreHandle
+}
+
+// notificationCentreBarDragging reports that a scrollbar gesture is live —
+// started on the thumb or on the track, both of which drag the same bar.
+func (m Model) notificationCentreBarDragging() bool {
+	if m.notificationCentreMouse == nil {
+		return false
+	}
+	switch m.notificationCentreMouse.DragRegion() {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return true
+	}
+	return false
+}
+
+// notificationCentreScrollbarStyle is the bar's pointer emphasis: hover lights
+// the whole rail, an active drag outranks it (ui.HandleStateFrom precedence).
+func (m Model) notificationCentreScrollbarStyle() ui.ScrollbarStyle {
+	drag := m.notificationCentreBarDragging()
+	state := ui.HandleStateFrom(m.notificationCentreHoverBar, drag)
+	return ui.ScrollbarStyle{Thumb: state, Track: state}
+}
+
+// notificationCentreScrollbarParams is the ScrollbarParams the renderer and
+// the pointer handlers must agree on. It takes the body's current numbers
+// rather than re-deriving them so a drag answered against it can never
+// disagree with the frame that is on screen.
+func (m Model) notificationCentreScrollbarParams(rowCount, scroll, bodyHeight int) ui.ScrollbarParams {
+	return ui.ScrollbarParams{
+		TotalItems:   rowCount,
+		ScrollOffset: scroll,
+		VisibleItems: max(1, bodyHeight),
+		TrackHeight:  max(1, bodyHeight),
+	}
+}
+
+// notificationCentreLiveScrollbarParams recomputes those numbers from the
+// panel's current state for a pointer event arriving between frames.
+func (m Model) notificationCentreLiveScrollbarParams() (ui.ScrollbarParams, bool) {
+	height := m.contentHeight()
+	panelWidth := m.notificationCentrePanelWidth()
+	if panelWidth <= 0 || height < 3 {
+		return ui.ScrollbarParams{}, false
+	}
+	_, bodyInner, _, bodyHeight := notificationCentreLayout(panelWidth, height)
+	if bodyHeight <= 0 {
+		return ui.ScrollbarParams{}, false
+	}
+	rows := m.notificationCentreBody(bodyInner, m.notificationCentreClock())
+	scroll := m.clampedNotificationCentreScroll(len(rows), bodyHeight)
+	return m.notificationCentreScrollbarParams(len(rows), scroll, bodyHeight), true
 }
 
 // padNotificationRow pads or truncates a styled row to exactly width columns.
@@ -785,7 +847,9 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 		region := m.notificationCentreMouse.HitMap.Test(mi.X, mi.Y)
 		m.notificationCentreHoverHandle = region != nil && region.ID == regionNotificationCentreHandle
 		m.notificationCentreHoverClose = region != nil && region.ID == regionNotificationCentreClose
-		return m.notificationCentreHoverHandle || m.notificationCentreHoverClose, nil
+		m.notificationCentreHoverBar = region != nil &&
+			(region.ID == ui.RegionScrollbarThumb || region.ID == ui.RegionScrollbarTrack)
+		return m.notificationCentreHoverHandle || m.notificationCentreHoverClose || m.notificationCentreHoverBar, nil
 	}
 
 	action := m.notificationCentreMouse.HandleMouse(msg)
@@ -799,25 +863,42 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 	case mouse.ActionScrollLeft, mouse.ActionScrollRight:
 		return m.pointerOnNotificationCentre(action.X, action.Y), nil
 	case mouse.ActionDrag:
-		if action.DragStartID != regionNotificationCentreHandle {
-			return false, nil
+		switch action.DragStartID {
+		case regionNotificationCentreHandle:
+			// The rail is on the panel's left edge, so dragging left widens it.
+			width := clampNotificationCentreWidth(
+				m.notificationCentreMouse.DragStartValue()-action.DragDX, m.width)
+			if width > 0 && width != m.notificationCentreWidth {
+				m.notificationCentreWidth = width
+				return true, tea.Batch(m.emitContentSize()...)
+			}
+			return true, nil
+		case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			// The grab anchor rode StartDrag's start value — thumb press stored
+			// pointer-Y minus the thumb top's track row, track press the track
+			// top itself — so both reduce to "the offset whose thumb top sits
+			// under the pointer". OffsetAtRow clamps both ends; releasing
+			// outside the bar settles without losing the gesture.
+			params, ok := m.notificationCentreLiveScrollbarParams()
+			if ok {
+				m.notificationCentreScroll = ui.OffsetAtRow(params,
+					action.Y-m.notificationCentreMouse.DragStartValue())
+			}
+			return true, nil
 		}
-		// The rail is on the panel's left edge, so dragging left widens it.
-		width := clampNotificationCentreWidth(
-			m.notificationCentreMouse.DragStartValue()-action.DragDX, m.width)
-		if width > 0 && width != m.notificationCentreWidth {
-			m.notificationCentreWidth = width
-			return true, tea.Batch(m.emitContentSize()...)
-		}
-		return true, nil
+		return false, nil
 	case mouse.ActionDragEnd:
-		if action.DragStartID != regionNotificationCentreHandle {
-			return false, nil
+		switch action.DragStartID {
+		case regionNotificationCentreHandle:
+			// The handler has already ended the drag; all that is left is to make
+			// the width the user chose survive a restart.
+			_ = state.SetNotificationCentreWidth(m.notificationCentreWidth)
+			return true, nil
+		case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+			// Settle: scroll offsets are ephemeral, nothing to persist.
+			return true, nil
 		}
-		// The handler has already ended the drag; all that is left is to make
-		// the width the user chose survive a restart.
-		_ = state.SetNotificationCentreWidth(m.notificationCentreWidth)
-		return true, nil
+		return false, nil
 	case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
 		if action.Region == nil {
 			return false, nil
@@ -829,6 +910,27 @@ func (m *Model) notificationCentreMouseEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 			return true, nil
 		case action.Region.ID == regionNotificationCentreClose:
 			return true, m.closeNotificationCentre()
+		case action.Region.ID == ui.RegionScrollbarThumb:
+			if params, ok := m.notificationCentreLiveScrollbarParams(); ok {
+				m.focusNotificationCentre()
+				// Anchor the gesture at the thumb: startValue carries pointer-Y
+				// minus the thumb top's track row, so every drag event maps the
+				// pointer straight back through ui.OffsetAtRow.
+				grab := mi.Y - ui.RowForOffset(params, params.ScrollOffset)
+				m.notificationCentreMouse.StartDrag(mi.X, mi.Y, ui.RegionScrollbarThumb, grab)
+			}
+			return true, nil
+		case action.Region.ID == ui.RegionScrollbarTrack:
+			if params, ok := m.notificationCentreLiveScrollbarParams(); ok {
+				m.focusNotificationCentre()
+				// Jump-to-spot anchored at the grabbed row: the offset whose
+				// thumb top lands there. Starting the drag from the track top
+				// keeps that anchor for the rest of the gesture, macOS-style.
+				trackTop := action.Region.Rect.Y
+				m.notificationCentreScroll = ui.OffsetAtRow(params, mi.Y-trackTop)
+				m.notificationCentreMouse.StartDrag(mi.X, mi.Y, ui.RegionScrollbarTrack, trackTop)
+			}
+			return true, nil
 		case strings.HasPrefix(action.Region.ID, regionNotificationCentreGroup):
 			// The header's `×` is `D` for that group, whatever the cursor is on.
 			m.focusNotificationCentre()
