@@ -76,6 +76,45 @@ sidecar create shell --json --wait 0
 sidecar create shell --type "go test ./..."
 ```
 
+### `sidecar create worktree`
+
+Create a Sidecar-managed git worktree
+
+Create a git worktree with the same setup pipeline as the TUI create modal:
+plan, add, pending-creation journal, identity, and configured hook/env-file rules.
+--agent launches the worktree session (sidecar-ws-…). --no-launch skips that
+launch after the worktree and setup still complete.
+
+```
+Usage: sidecar create worktree [options] <name>
+```
+
+**Options:**
+
+- `--base REF`: Base ref (default HEAD)
+- `--agent TYPE`: Launch this agent in the new worktree session
+- `--skip-permissions`: Pass the agent's auto-approve flag
+- `--run COMMAND`: Execute COMMAND in the new worktree session
+- `--no-launch`: Create the worktree without launching a session
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: created (missing ack is non-fatal)
+- `1`: git, setup, or tmux failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar create worktree fix-auth --base main --agent claude
+sidecar create worktree scratch --no-launch --json
+```
+
 ## `sidecar help`
 
 Show help for commands or emit JSON command metadata

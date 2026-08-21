@@ -76,6 +76,7 @@ func TestHelpDispatches(t *testing.T) {
 		{"nested subcommand help via flag", []string{"shell", "rename", "-h"}, 0, "Usage: sidecar shell rename"},
 		{"create help", []string{"create", "--help"}, 0, "Usage: sidecar create <command>"},
 		{"create shell help", []string{"create", "shell", "--help"}, 0, "--split"},
+		{"create worktree help", []string{"create", "worktree", "--help"}, 0, "--no-launch"},
 		{"unknown command via help", []string{"help", "nonexistent"}, 2, "unknown command \"nonexistent\""},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -176,6 +176,47 @@ func TestOverview_CreateShellSelectsAndAcks(t *testing.T) {
 	}
 }
 
+func TestOverview_CreateWorktreeSelectsAndAcks(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+
+	path := workspaceinventory.CanonicalPath(t.TempDir())
+	wtPath := workspaceinventory.CanonicalPath(t.TempDir())
+	m := New(workspaceinventory.Collector{})
+	m.projects = []Project{{Name: "sidecar", Path: path}}
+	key := projectKey(m.projects[0])
+	existing := workspaceinventory.Workspace{
+		ID: key + ":worktree:" + path, ProjectKey: key, ProjectName: "sidecar",
+		Kind: workspaceinventory.KindWorktree, Path: path, Name: "main", IsMain: true, Live: true,
+	}
+	m.results[key] = workspaceinventory.ProjectResult{ProjectKey: key, Workspaces: []workspaceinventory.Workspace{existing}}
+	m.syncBoard()
+
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindWorktree, Session: "sidecar-ws-cli-wt", DisplayName: "cli-wt",
+		Focus: &focus, Path: wtPath, Branch: "cli-wt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-wt", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{ProjectKey: key, WorkDir: path},
+		Payload: payload,
+	}
+	_ = m.handleUIRequest(req)
+	selected, ok := m.SelectedWorkspace()
+	if !ok || selected.Kind != workspaceinventory.KindWorktree || selected.Path != wtPath || selected.Name != "cli-wt" {
+		t.Fatalf("selected = %+v ok=%v", selected, ok)
+	}
+	acks, err := uirequest.ReadAcks(filepath.Join(stateHome, "sidecar"), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+}
+
 func TestOverview_PendingDiffLastWriteWins(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)

@@ -145,12 +145,49 @@ func RootCommand() *Command {
 		Run: runCreateShell,
 	}
 
+	createWorktreeCmd := &Command{
+		Name:    "worktree",
+		Summary: "Create a Sidecar-managed git worktree",
+		Usage:   "sidecar create worktree [options] <name>",
+		Long: "Create a git worktree with the same setup pipeline as the TUI create modal:\n" +
+			"plan, add, pending-creation journal, identity, and configured hook/env-file rules.\n" +
+			"--agent launches the worktree session (sidecar-ws-…). --no-launch skips that\n" +
+			"launch after the worktree and setup still complete.",
+		Flags: []Flag{
+			{Name: "--base", Arg: "REF", Summary: "Base ref (default HEAD)"},
+			{Name: "--agent", Arg: "TYPE", Summary: "Launch this agent in the new worktree session"},
+			{Name: "--skip-permissions", Summary: "Pass the agent's auto-approve flag", Bool: true},
+			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new worktree session"},
+			{Name: "--no-launch", Summary: "Create the worktree without launching a session", Bool: true},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "Worktree display name (also the branch slug)"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "created (missing ack is non-fatal)"},
+			{Code: 1, Summary: "git, setup, or tmux failure"},
+			{Code: 2, Summary: "usage or validation error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar create worktree fix-auth --base main --agent claude"},
+			{Command: "sidecar create worktree scratch --no-launch --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar create worktree <name> [--base REF] [--agent TYPE] [--no-launch]",
+			Summary:    "Create a Sidecar-visible git worktree with the same setup as the TUI",
+		},
+		Run: runCreateWorktree,
+	}
+
 	createCmd := &Command{
 		Name:    "create",
 		Summary: "Create a Sidecar-managed shell or worktree",
 		Usage:   "sidecar create <command>",
 		Long:    "Create Sidecar-owned shells and worktrees so they appear in the workspace.",
-		Sub:     []*Command{createShellCmd},
+		Sub:     []*Command{createShellCmd, createWorktreeCmd},
 		Run:     runCreateRoot,
 	}
 

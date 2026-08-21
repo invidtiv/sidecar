@@ -172,6 +172,33 @@ func TestUIRequests_CreateShellSelectsAndAcks(t *testing.T) {
 	}
 }
 
+func TestUIRequests_CreateWorktreeSelectsAndAcks(t *testing.T) {
+	p := &Plugin{
+		worktrees: []*Worktree{{Name: "main", Path: "/tmp/main", Key: "main"}},
+	}
+	focus := true
+	payload, err := json.Marshal(uirequest.CreatePayload{
+		Kind: uirequest.CreateKindWorktree, Session: "sidecar-ws-cli-wt", DisplayName: "cli-wt",
+		Focus: &focus, Path: "/tmp/cli-wt", Branch: "cli-wt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := uirequest.Request{
+		ID: "req-create-wt", Action: uirequest.ActionCreate, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{WorkDir: "/tmp/main"},
+		Payload: payload,
+	}
+	_ = p.handleUIRequest(req)
+	if p.selectedWorktree() == nil || p.selectedWorktree().Name != "cli-wt" {
+		t.Fatalf("selected worktree = %#v", p.selectedWorktree())
+	}
+	acks, err := uirequest.ReadAcks(config.StateDir(), req.ID, req.Action)
+	if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
+		t.Fatalf("acks = %+v err=%v", acks, err)
+	}
+}
+
 func TestUIRequests_WorktreeRenameRepaintsLiveList(t *testing.T) {
 	path := t.TempDir()
 	p := &Plugin{worktrees: []*Worktree{{Name: "panes", Path: path}}}
