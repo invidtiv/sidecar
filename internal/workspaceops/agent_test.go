@@ -3,6 +3,8 @@ package workspaceops
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -134,6 +136,9 @@ func TestAgentSkipFlag(t *testing.T) {
 	if got := AgentSkipFlag("claude"); got != "--dangerously-skip-permissions" {
 		t.Fatalf("claude skip flag = %q", got)
 	}
+	if got := AgentSkipFlag("opencode"); got != "--auto" {
+		t.Fatalf("opencode skip flag = %q, want --auto", got)
+	}
 	if got := AgentSkipFlag("copilot"); got != "" {
 		t.Fatalf("copilot skip flag = %q, want empty", got)
 	}
@@ -143,4 +148,38 @@ func TestAgentSkipFlag(t *testing.T) {
 	if got := AgentSkipFlag("nonesuch"); got != "" {
 		t.Fatalf("unknown agent skip flag = %q, want empty", got)
 	}
+}
+
+func TestResolveAgentCommandOpenCode(t *testing.T) {
+	t.Run("default without skip flag", func(t *testing.T) {
+		if got := ResolveAgentCommand(t.TempDir(), "opencode", nil, false); got != "opencode" {
+			t.Fatalf("resolved command = %q, want opencode", got)
+		}
+	})
+	t.Run("default appends auto when skipping permissions", func(t *testing.T) {
+		if got := ResolveAgentCommand(t.TempDir(), "opencode", nil, true); got != "opencode --auto" {
+			t.Fatalf("resolved command = %q, want %q", got, "opencode --auto")
+		}
+	})
+	t.Run("configured override with profile appends after existing flags", func(t *testing.T) {
+		got := ResolveAgentCommand(t.TempDir(), "opencode", map[string]string{"opencode": "opencode --profile fast"}, true)
+		if got != "opencode --profile fast --auto" {
+			t.Fatalf("resolved command = %q", got)
+		}
+	})
+	t.Run("run prefix is stripped before appending skip flag", func(t *testing.T) {
+		got := ResolveAgentCommand(t.TempDir(), "opencode", map[string]string{"opencode": "opencode run --model anthropic/claude-sonnet-4"}, true)
+		if got != "opencode --model anthropic/claude-sonnet-4 --auto" {
+			t.Fatalf("resolved command = %q", got)
+		}
+	})
+	t.Run("sidecar-agent-start override composes with skip flag", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".sidecar-agent-start"), []byte("opencode run\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ResolveAgentCommand(dir, "opencode", map[string]string{"*": "ignored"}, true); got != "opencode --auto" {
+			t.Fatalf("resolved command = %q", got)
+		}
+	})
 }

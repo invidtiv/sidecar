@@ -686,7 +686,7 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		{AgentCodex, true},       // Has --dangerously-bypass-approvals-and-sandbox
 		{AgentAntigravity, true}, // Has --dangerously-skip-permissions
 		{AgentCursor, true},      // Has -f flag
-		{AgentOpenCode, false},   // No known flag
+		{AgentOpenCode, true},    // Has --auto
 		{AgentPi, false},         // No known flag
 		{AgentAmp, true},         // Has --dangerously-allow-all
 		{AgentGrok, true},        // Has --always-approve

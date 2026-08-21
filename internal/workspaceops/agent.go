@@ -24,6 +24,7 @@ var agentDefaults = map[string]string{
 var agentSkipFlags = map[string]string{
 	"claude": "--dangerously-skip-permissions", "codex": "--dangerously-bypass-approvals-and-sandbox", "aider": "--yes",
 	"antigravity": "--dangerously-skip-permissions", "cursor": "-f", "amp": "--dangerously-allow-all", "grok": "--always-approve",
+	"opencode": "--auto",
 }
 
 // AgentSkipFlag returns the CLI flag that opts this agent into auto-approve,
