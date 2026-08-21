@@ -553,7 +553,7 @@ func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 
 // issuePaneHeaderRow is the issue leaf's header: the tab strip plus the shared X.
 func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutIssueTabStrip(issue, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, issue != nil && p.hoverPaneClose == issue.leafID)
+	return p.composeContentHeader(layoutIssueTabStrip(issue, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(issueLeafID(issue))).Row, width, issue != nil && p.hoverPaneClose == issue.leafID)
 }
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {

@@ -181,7 +181,7 @@ func (m *Model) renderPreviewIssue(issue *previewIssue, box termpreview.Box) str
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row, box.W, panelayout.Issue)
+	header := m.composePreviewHeader(issueview.LayoutTabStrip(issue.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Issue)).Row, box.W, panelayout.Issue)
 	if contentHeight <= 0 {
 		return header
 	}

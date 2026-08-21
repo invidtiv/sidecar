@@ -820,7 +820,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 		// holds, exactly as the project workspace does.
 		strip = docview.LayoutSearchTabStrip(doc.tabs, doc.mode.HeaderLabel(), tabsWidth, focused)
 	}
-	header := m.composePreviewHeader(strip.Row, box.W, panelayout.Document)
+	header := m.composePreviewHeader(strip.HoverClose(m.tabCloseHoverIn(panelayout.Document)).Row, box.W, panelayout.Document)
 	body := ""
 	if view != nil {
 		m.bindPreviewDocSelection(view, box)

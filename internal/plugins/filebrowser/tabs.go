@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -418,7 +419,7 @@ func (p *Plugin) renderPreviewTabs(width int) string {
 		labels[i] = tabs.Label{Text: text, Preview: p.tabs[i].IsPreview}
 	}
 
-	strip := tabs.LayoutStrip(labels, p.activeTab, width, true, fitFilesLabel)
+	strip := tabs.LayoutStrip(labels, p.activeTab, width, true, fitFilesLabel).HoverClose(p.hoverTabClose.Index0For())
 	for _, hit := range strip.Tabs {
 		p.tabHits = append(p.tabHits, tabHit{
 			Index: hit.Index, X: hit.Col, Width: hit.Width,
@@ -714,4 +715,18 @@ func (p *Plugin) cleanupAllEditSessions() {
 			p.tabs[i].EditEditor = ""
 		}
 	}
+}
+
+// setTabCloseHover lights the × of the preview tab the pointer is inside.
+// The Files pane draws one strip, so the tab index alone names it.
+func (p *Plugin) setTabCloseHover(action mouse.MouseAction) {
+	p.hoverTabClose = tabs.CloseHover{}
+	if action.Region == nil || action.Region.ID != regionPreviewTab {
+		return
+	}
+	index, close, ok := previewTabPayload(action.Region.Data)
+	if !ok || !close {
+		return
+	}
+	p.hoverTabClose = tabs.CloseHoverAt(0, index)
 }

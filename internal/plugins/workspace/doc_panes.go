@@ -1645,7 +1645,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 
 // docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
 func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
-	return p.composeContentHeader(layoutDocTabStrip(doc, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, doc != nil && p.hoverPaneClose == doc.leafID)
+	return p.composeContentHeader(layoutDocTabStrip(doc, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(docLeafID(doc))).Row, width, doc != nil && p.hoverPaneClose == doc.leafID)
 }
 
 func (p *Plugin) toggleDocRenderMode() {

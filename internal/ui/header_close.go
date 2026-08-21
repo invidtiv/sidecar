@@ -29,6 +29,22 @@ func CloseButtonWidth() int {
 	return lipgloss.Width(RenderCloseButton(false))
 }
 
+// RenderTabCloseHover paints the per-tab × the pointer is over. It fills
+// exactly width columns — the cells the × already occupies inside the pill —
+// so the highlight replaces them without reflowing the strip. The look is the
+// shared hover button, the same as the pane-header X, because they are the
+// same control at two scales.
+func RenderTabCloseHover(width int) string {
+	if width < 1 {
+		return ""
+	}
+	label := CloseButtonLabel
+	if pad := width - lipgloss.Width(label); pad > 0 {
+		label = strings.Repeat(" ", pad) + label
+	}
+	return ResolveButtonStyle(-1, 0, 0).UnsetPadding().Render(label)
+}
+
 // HeaderClose is the reserved right-edge close control on a pane header.
 type HeaderClose struct {
 	// TabsWidth is the columns left for the tab strip. Equals Width when the

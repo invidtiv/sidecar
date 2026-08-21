@@ -530,7 +530,7 @@ func (p *Plugin) closeDiffPane(leafID int) tea.Cmd {
 }
 
 func (p *Plugin) diffPaneHeaderRow(diff *diffPane, width int, focused bool) string {
-	return p.composeContentHeader(layoutDiffTabStrip(diff, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, diff != nil && p.hoverPaneClose == diff.leafID)
+	return p.composeContentHeader(layoutDiffTabStrip(diff, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(diffLeafID(diff))).Row, width, diff != nil && p.hoverPaneClose == diff.leafID)
 }
 
 func (p *Plugin) registerDiffPaneRegions(diff *diffPane, leafID int, box Box) {

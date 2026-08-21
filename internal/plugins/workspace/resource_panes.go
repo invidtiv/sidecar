@@ -425,7 +425,7 @@ func layoutResourceTabStrip(res *resourcePane, width int, focused bool) resource
 // resourcePaneHeaderRow is the Resource leaf's header: the tab strip plus the
 // shared X.
 func (p *Plugin) resourcePaneHeaderRow(res *resourcePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutResourceTabStrip(res, ui.ReserveHeaderClose(width).TabsWidth, focused).Row,
+	return p.composeContentHeader(layoutResourceTabStrip(res, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(resourceLeafID(res))).Row,
 		width, res != nil && p.hoverPaneClose == res.leafID)
 }
 

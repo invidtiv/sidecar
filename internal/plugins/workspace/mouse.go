@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -721,10 +722,17 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverWorkspacesPlusButton = false
 		p.hoverStartAgentButton = false
 		p.hoverPaneClose = 0
+		p.hoverTabClose = tabs.CloseHover{}
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
 		if action.Region != nil {
 			switch action.Region.ID {
+			case regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab:
+				// Only the × half of a tab hovers. The rest of the pill is a
+				// select target, and a select target that lit up would promise
+				// a close the click does not do.
+				p.setTabCloseHover(action.Region.Data)
+				p.clearIssueHover()
 			case regionKanbanCard:
 				if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
 					p.kanban.HandlePointer(boardkanban.PointerHover, region)

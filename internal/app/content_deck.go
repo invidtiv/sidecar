@@ -72,6 +72,7 @@ type appContentDeck struct {
 	primaryInner                      paneframe.Box
 	links                             []appContentLinkHit
 	tabHits                           []appDeckTabHit
+	hoverTabClose                     tabs.CloseHover
 	generation                        uint64
 	press                             *appContentLinkHit
 	pressX, pressY                    int
@@ -399,7 +400,25 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
 		})
 	})
-	return ui.ComposeHeaderClose(strip.Row, width, false)
+	return ui.ComposeHeaderClose(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, false)
+}
+
+// setTabCloseHover lights the × of the deck tab the pointer is inside. Only
+// the × half of a pill hovers; the rest of it selects.
+func (h *appContentDeck) setTabCloseHover(x, y int) {
+	h.hoverTabClose = tabs.CloseHover{}
+	if h.mouse == nil {
+		return
+	}
+	region := h.mouse.HitMap.Test(x, y)
+	if region == nil || region.ID != appDeckTabRegion {
+		return
+	}
+	hit, ok := region.Data.(appDeckTabHit)
+	if !ok || !hit.close {
+		return
+	}
+	h.hoverTabClose = tabs.CloseHoverAt(hit.leafID, hit.index)
 }
 
 func (h *appContentDeck) syncInnerFocus() {
@@ -754,6 +773,10 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 		if h.press != nil && (mi.X != h.pressX || mi.Y != h.pressY) {
 			h.dragged = true
 		}
+		// Hover is read here rather than in handlePassiveMouse: motion over a
+		// secondary leaf's tabs is routed to the primary plugin while primary
+		// holds focus, and the × still has to light under the pointer.
+		h.setTabCloseHover(mi.X, mi.Y)
 	case tea.MouseReleaseMsg:
 		if h.press != nil {
 			hit, activate := *h.press, !h.dragged && h.press.Rect.Contains(mi.X, mi.Y)

@@ -295,7 +295,7 @@ func (m *Model) renderPreviewResource(res *previewResource, box termpreview.Box)
 	focused := m.PreviewFocused() && res.focused
 	res.tabs.SetSize(box.W, contentHeight)
 	header := m.composePreviewHeader(
-		resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row,
+		resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Resource)).Row,
 		box.W, panelayout.Resource)
 	if contentHeight <= 0 {
 		return header

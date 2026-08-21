@@ -5,6 +5,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -497,6 +498,69 @@ func (p *Plugin) paneCloseAt(x, y int) (leafID int, ok bool) {
 		return leafID, ok
 	}
 	return 0, false
+}
+
+// Leaf accessors for the header renderers: a pane that is not on screen has
+// no leaf, and 0 never matches a hover.
+func docLeafID(d *docPane) int {
+	if d == nil {
+		return 0
+	}
+	return d.leafID
+}
+
+func issueLeafID(i *issuePane) int {
+	if i == nil {
+		return 0
+	}
+	return i.leafID
+}
+
+func noteLeafID(n *notePane) int {
+	if n == nil {
+		return 0
+	}
+	return n.leafID
+}
+
+func resourceLeafID(r *resourcePane) int {
+	if r == nil {
+		return 0
+	}
+	return r.leafID
+}
+
+func diffLeafID(d *diffPane) int {
+	if d == nil {
+		return 0
+	}
+	return d.leafID
+}
+
+// setTabCloseHover lights the × of the tab the pointer is inside. Every pane
+// kind registers the same {leaf, index, close} payload, so one switch answers
+// all of them; anything else under the pointer leaves the hover cleared.
+func (p *Plugin) setTabCloseHover(data any) {
+	var leafID, index int
+	var close bool
+	switch hit := data.(type) {
+	case docTabHit:
+		leafID, index, close = hit.LeafID, hit.Index, hit.Close
+	case issueTabHit:
+		leafID, index, close = hit.LeafID, hit.Index, hit.Close
+	case noteTabHit:
+		leafID, index, close = hit.LeafID, hit.Index, hit.Close
+	case resourceTabHit:
+		leafID, index, close = hit.LeafID, hit.Index, hit.Close
+	case diffTabHit:
+		leafID, index, close = hit.LeafID, hit.Index, hit.Close
+	default:
+		return
+	}
+	if !close {
+		return
+	}
+	p.hoverTabClose = tabs.CloseHoverAt(leafID, index)
 }
 
 func (p *Plugin) setPaneCloseHoverAt(x, y int) {

@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectsearch"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -260,6 +261,7 @@ type Plugin struct {
 	fileOpButtonFocus   int             // Button focus: 0=input, 1=confirm, 2=cancel
 	fileOpButtonHover   int             // Button hover: 0=none, 1=confirm, 2=cancel
 	hoverDivider        bool            // Pointer is over the tree/preview handle
+	hoverTabClose       tabs.CloseHover // Per-tab × under the pointer
 
 	// Line jump state (vim-style :<number>)
 	lineJumpMode   bool

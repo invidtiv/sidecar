@@ -33,6 +33,7 @@ import (
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -282,6 +283,8 @@ type Model struct {
 	// previewCloseHover is set while the pointer is over a content-pane X.
 	previewCloseHover bool
 	hoverPreviewClose panelayout.Kind
+	// hoverTabClose is the per-tab × under the pointer, keyed by preview kind.
+	hoverTabClose tabs.CloseHover
 	// hoverHandleRegion / hoverHandleSplit are the resizable split under the pointer.
 	hoverHandleRegion string
 	hoverHandleSplit  int

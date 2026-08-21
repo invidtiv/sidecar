@@ -319,6 +319,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	}
 
 	p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
+	p.setTabCloseHover(action)
 
 	// Only track hover for file operation modal buttons
 	if p.fileOpMode == FileOpNone {

@@ -165,7 +165,7 @@ func (m *Model) renderPreviewNote(note *previewNote, box termpreview.Box) string
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(noteview.LayoutTabStrip(note.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row, box.W, panelayout.Note)
+	header := m.composePreviewHeader(noteview.LayoutTabStrip(note.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Note)).Row, box.W, panelayout.Note)
 	if contentHeight <= 0 {
 		return header
 	}

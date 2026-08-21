@@ -204,7 +204,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Row, box.W, panelayout.Diff)
+	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Diff)).Row, box.W, panelayout.Diff)
 	if contentHeight <= 0 {
 		return header
 	}

@@ -398,7 +398,7 @@ func (p *Plugin) closeNotePane(leafID int) tea.Cmd {
 }
 
 func (p *Plugin) notePaneHeaderRow(note *notePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutNoteTabStrip(note, ui.ReserveHeaderClose(width).TabsWidth, focused).Row, width, note != nil && p.hoverPaneClose == note.leafID)
+	return p.composeContentHeader(layoutNoteTabStrip(note, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(noteLeafID(note))).Row, width, note != nil && p.hoverPaneClose == note.leafID)
 }
 
 func (p *Plugin) registerNotePaneRegions(note *notePane, leafID int, box Box) {

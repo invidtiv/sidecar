@@ -15,6 +15,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -418,11 +419,13 @@ func (m *Model) dividerHandleState(region string, splitID int) ui.HandleState {
 }
 
 func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
+	m.hoverTabClose = tabs.CloseHover{}
 	if action.Region == nil {
 		m.previewCloseHover = false
 		m.hoverPreviewClose = 0
 		return
 	}
+	m.setTabCloseHover(action.Region.Data)
 	hit, ok := action.Region.Data.(previewPaneCloseHit)
 	m.previewCloseHover = ok
 	if ok {
@@ -430,6 +433,39 @@ func (m *Model) setPreviewCloseHover(action mouse.MouseAction) {
 		return
 	}
 	m.hoverPreviewClose = 0
+}
+
+// setTabCloseHover lights the × of the preview tab the pointer is inside.
+// Preview panes are one per kind, so the kind stands in for the leaf the
+// project surface addresses by ID; only the × half of a pill hovers.
+func (m *Model) setTabCloseHover(data any) {
+	var kind panelayout.Kind
+	var index int
+	var close bool
+	switch hit := data.(type) {
+	case previewDocTabHit:
+		kind, index, close = panelayout.Document, hit.Index, hit.Close
+	case previewIssueTabHit:
+		kind, index, close = panelayout.Issue, hit.Index, hit.Close
+	case previewNoteTabHit:
+		kind, index, close = panelayout.Note, hit.Index, hit.Close
+	case previewDiffTabHit:
+		kind, index, close = panelayout.Diff, hit.Index, hit.Close
+	case previewResourceTabHit:
+		kind, index, close = panelayout.Resource, hit.Index, hit.Close
+	default:
+		return
+	}
+	if !close {
+		return
+	}
+	m.hoverTabClose = tabs.CloseHoverAt(int(kind), index)
+}
+
+// tabCloseHoverIn is the hovered tab index within one preview kind's strip,
+// or -1. Hosts pass it straight to Strip.HoverClose.
+func (m *Model) tabCloseHoverIn(kind panelayout.Kind) int {
+	return m.hoverTabClose.IndexFor(int(kind))
 }
 
 func (m *Model) scrollPreviewClose(kind panelayout.Kind, delta int) tea.Cmd {

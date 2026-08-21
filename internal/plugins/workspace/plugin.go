@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -561,6 +562,9 @@ type Plugin struct {
 	startAgentBtn             startAgentButtonHit
 	// hoverPaneClose is the content leaf whose header X is under the pointer.
 	hoverPaneClose int
+	// hoverTabClose is the per-tab × under the pointer. It is the pane X's
+	// smaller twin: same hover paint, addressed by leaf and tab index.
+	hoverTabClose tabs.CloseHover
 	// hoverDividerRegion / hoverDividerID are the resizable split under the
 	// pointer (tree splits also carry the split id).
 	hoverDividerRegion string
