@@ -527,8 +527,7 @@ In raw source mode, `docview.Model` builds a `displayRows` struct where `starts[
 When markdown is rendered, Glamour transforms markdown AST into formatted terminal blocks with headings, lists, tables, and blank padding rows. Lines no longer have a strict 1:1 line number match with raw markdown.
 
 To give the agent **100% reliable context**, `docview` provides a **triple-anchor strategy**:
-1. **Source Line Estimation:** Calculates proportional line position:
-   $$\text{EstimatedLine} = \max\left(1, \operatorname{round}\left(\frac{\text{scroll}}{\max(1, \text{totalRenderedRows})} \times \text{totalSourceLines}\right)\right)$$
+1. **Source Line Estimation:** Calculates proportional line position: $$\text{EstimatedLine} = \max\left(1, \operatorname{round}\left(\frac{\text{scroll}}{\max(1, \text{totalRenderedRows})} \times \text{totalSourceLines}\right)\right)$$
 2. **Semantic Heading Anchor (`heading`):** Parses the markdown AST to identify the innermost `#`, `##`, or `###` heading that precedes the estimated line (e.g. `## Design > ### A. Pure reorder helpers`).
 3. **Visual Text Snippet (`previewText`):** Extracts the first non-blank line of text currently rendered at row `m.scroll` in the viewport.
 

@@ -96,8 +96,7 @@ Update v0.2.0 available! Press ! for details
 - Shows for 10-15 seconds on startup
 - Brief, non-intrusive
 
-**Diagnostics modal (detailed)**:
-Add new "Version" section to `buildDiagnosticsContent()`:
+**Diagnostics modal (detailed)**: Add new "Version" section to `buildDiagnosticsContent()`:
 
 ```
 Version

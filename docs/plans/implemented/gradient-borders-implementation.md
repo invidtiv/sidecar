@@ -318,9 +318,7 @@ Gradients support 2+ color stops. Colors flow from top-left to bottom-right at t
 
 Example multi-stop gradient:
 ```yaml
-overrides:
-  gradientBorderActive: ["#FF0000", "#00FF00", "#0000FF"]  # RGB rainbow
-  gradientBorderAngle: 45
+overrides: gradientBorderActive: ["#FF0000", "#00FF00", "#0000FF"]  # RGB rainbow gradientBorderAngle: 45
 ```
 ```
 

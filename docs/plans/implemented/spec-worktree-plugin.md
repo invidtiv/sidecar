@@ -676,8 +676,7 @@ func isRootContext(ctx string) bool {
 }
 ```
 
-**Root contexts** (q = quit): `worktree-list`, `worktree-kanban`
-**Non-root contexts** (q = back): `worktree-output`, `worktree-diff`, `worktree-task`, `worktree-new-modal`, `worktree-confirm-delete`
+**Root contexts** (q = quit): `worktree-list`, `worktree-kanban` **Non-root contexts** (q = back): `worktree-output`, `worktree-diff`, `worktree-task`, `worktree-new-modal`, `worktree-confirm-delete`
 
 ### 4.7.2 Text Input Context Handling
 

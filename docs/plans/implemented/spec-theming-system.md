@@ -1,8 +1,6 @@
 # Theming System Implementation Plan
 
-**Status:** Planning
-**Epic:** Implement comprehensive theming support for sidecar
-**Created:** 2026-01-11
+**Status:** Planning **Epic:** Implement comprehensive theming support for sidecar **Created:** 2026-01-11
 
 ## Executive Summary
 

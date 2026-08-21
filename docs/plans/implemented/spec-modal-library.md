@@ -13,8 +13,7 @@ Instead of manually tracking `currentY` through content (the #1 source of bugs),
 3. Accumulates Y positions from measured heights
 4. Registers hit regions at the measured positions
 
-This guarantees hit regions match rendered output — wrapping, conditional content, bordered inputs, and conditional sections are all handled automatically.
-Line measurement must trim trailing newlines and return 0 for empty content (use `lipgloss.Height` on the trimmed string).
+This guarantees hit regions match rendered output — wrapping, conditional content, bordered inputs, and conditional sections are all handled automatically. Line measurement must trim trailing newlines and return 0 for empty content (use `lipgloss.Height` on the trimmed string).
 
 ## Package Structure
 
@@ -68,8 +67,7 @@ case tea.MouseMsg:
     // action = "delete", "cancel", or "" (hover update)
 ```
 
-`HandleKey` returns an optional `tea.Cmd` to support bubbles models (cursor blink, etc.).
-Backdrop clicks return `"cancel"` by default; set `WithCloseOnBackdropClick(false)` to disable.
+`HandleKey` returns an optional `tea.Cmd` to support bubbles models (cursor blink, etc.). Backdrop clicks return `"cancel"` by default; set `WithCloseOnBackdropClick(false)` to disable.
 
 ## Core Types
 
@@ -227,10 +225,7 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 }
 ```
 
-`measureHeight` trims trailing newlines and returns 0 for empty strings before calling `lipgloss.Height`.
-`desiredModalInnerHeight` clamps to the available screen height; if content fits, the modal shrinks to content height, otherwise it scrolls within the fixed viewport.
-Width is clamped between `minModalWidth` and `screenW-4` to prevent negative offsets on narrow terminals.
-`sliceLines` must truncate to `viewportHeight` and only pad with blank lines when scrolling is enabled (content taller than viewport).
+`measureHeight` trims trailing newlines and returns 0 for empty strings before calling `lipgloss.Height`. `desiredModalInnerHeight` clamps to the available screen height; if content fits, the modal shrinks to content height, otherwise it scrolls within the fixed viewport. Width is clamped between `minModalWidth` and `screenW-4` to prevent negative offsets on narrow terminals. `sliceLines` must truncate to `viewportHeight` and only pad with blank lines when scrolling is enabled (content taller than viewport).
 
 **Why this eliminates off-by-one errors:**
 
@@ -249,8 +244,7 @@ Built-in, fully automatic:
 - **Esc**: Return `"cancel"`
 - Keys forwarded to focused section via `Section.Update`
 
-`HandleKey` routes keystrokes to the focused section first (except for Tab/Shift+Tab/Esc), and returns the section action if one is emitted.
-Single-line inputs may submit on Enter; if no input-specific action is set, use `primaryAction`. Textareas always treat Enter as a newline.
+`HandleKey` routes keystrokes to the focused section first (except for Tab/Shift+Tab/Esc), and returns the section action if one is emitted. Single-line inputs may submit on Enter; if no input-specific action is set, use `primaryAction`. Textareas always treat Enter as a newline.
 
 ## Hover States
 

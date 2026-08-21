@@ -372,8 +372,7 @@ Extend `internal/terminallink` analogously to files and issues. Scan order stays
 5. **NEW** existence-gated git spec, scanned in this intra-kind order:
    1. `dotted` (`rev (".." \| "...") rev`)
    2. `commitword` (`commit` WS `rev`)
-   3. `rev`
-   Reuse `overlaps` so `abc1234..def5678` is one span, not two `rev`s plus a range.
+   3. `rev` Reuse `overlaps` so `abc1234..def5678` is one span, not two `rev`s plus a range.
 
 #### Grammar
 

@@ -210,8 +210,7 @@ If the current worktree is deleted externally:
 
 ### Distinguishing from Project Switcher
 
-Project switcher (`@`) switches between **different repos**.
-Worktree switcher (`W`) switches within **same repo**.
+Project switcher (`@`) switches between **different repos**. Worktree switcher (`W`) switches within **same repo**.
 
 To avoid confusion:
 - Different keybind (`W` vs `@`)

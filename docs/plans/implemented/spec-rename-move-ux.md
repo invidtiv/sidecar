@@ -71,8 +71,7 @@ p.fileOpTextInput.CursorEnd()
 **File:** `internal/plugins/filebrowser/view.go` (~lines 150-173)
 
 - Replace manual cursor rendering with `p.fileOpTextInput.View()`
-- When `fileOpConfirmCreate` is true, show:
-  `"Create 'foo/bar'? [y]es / [n]o"`
+- When `fileOpConfirmCreate` is true, show: `"Create 'foo/bar'? [y]es / [n]o"`
 
 ### 6. Update Tests
 
