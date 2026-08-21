@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
@@ -925,6 +926,15 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		cmd := h.deck.CycleTab(1)
 		m.persistAppContentDeck(h)
 		return cmd, true
+	}
+	// Sidecar's own globals outrank a passive leaf. A focused document, note,
+	// or diff must not swallow the keys that switch plugins, open the palette,
+	// or reach the switchers — those belong to the host's switch, which runs
+	// later in the key ladder. Returning false hands them back; everything the
+	// deck structurally owns (tab, q/esc, x, tab cycling) was answered above,
+	// and an active in-document search consumed its keys even earlier.
+	if keymap.GlobalKeys[key.String()] {
+		return nil, false
 	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:

@@ -667,6 +667,58 @@ func TestAppContentDeckBorderlessPrimaryRuleIsCapabilityDriven(t *testing.T) {
 	}
 }
 
+// A focused passive leaf (a document opened on the right of Files, a note pane,
+// a diff) must not swallow sidecar's own globals: the keys that switch plugins
+// belong to the host's switch, later in the key ladder. This is the regression
+// that made ] and 1-7 go dead whenever a Files document pane had focus.
+func TestAppContentDeckFocusedLeafKeepsPluginSwitchKeysGlobal(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	other := &deckHostTestPlugin{id: "git-status", focus: "tree", frame: "git"}
+	m := appDeckTestModel(t, root, p, other)
+	_ = m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("document open returned no load command")
+	}
+	h := m.currentContentDeck()
+	doc := h.deck.Leaf(panelayout.Document)
+	if doc == 0 {
+		t.Fatal("document leaf did not open")
+	}
+	h.deck.FocusLeaf(doc)
+	m.updateContext()
+
+	for _, key := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{name: "]", msg: tea.KeyPressMsg{Code: ']', Text: "]"}},
+		{name: "[", msg: tea.KeyPressMsg{Code: '[', Text: "["}},
+		{name: "`", msg: tea.KeyPressMsg{Code: '`', Text: "`"}},
+		{name: "1", msg: tea.KeyPressMsg{Code: '1', Text: "1"}},
+	} {
+		if _, handled := m.handleAppContentKey(key.msg); handled {
+			t.Fatalf("%s was swallowed by the focused passive document", key.name)
+		}
+	}
+
+	// End to end: ] still moves the header ring while the document has focus.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+	got := updated.(*Model)
+	if got.activePlugin != 1 {
+		t.Fatalf("] with a document pane focused left activePlugin=%d, want 1", got.activePlugin)
+	}
+
+	// The deck's own structural keys keep their answers: q still hides the
+	// focused pane rather than reaching the quit flow.
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled {
+		t.Fatal("q no longer hides the focused passive leaf")
+	}
+}
+
 func TestAppContentDeckTranslatesLinksFromBorderlessPrimaryOrigin(t *testing.T) {
 	root := t.TempDir()
 	p := &deckHostTestPlugin{
