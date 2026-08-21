@@ -96,7 +96,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -106,6 +106,8 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case docContentLinkHit:
 			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case noteTabHit:
 			leafID = data.LeafID
 		case resourceTabHit:
 			leafID = data.LeafID
@@ -123,6 +125,9 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case PaneIssue:
 			issue := p.issues[leaf.ContentID]
 			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+		case PaneNote:
+			note := p.notes[leaf.ContentID]
+			return note == nil || note.view() == nil || note.view().ScrollAtBoundary(action.Delta)
 		case PaneDiff:
 			view := p.activeDiffView()
 			return view.ScrollAtBoundary(action.Delta, view.Height())
@@ -834,6 +839,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
 	}
+	if cmd, ok := p.clickNoteTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	// Inner Diff regions win the hit test over regionPaneLeaf, so they must
 	// take pane-tree focus themselves or keys stay on the previous leaf.
@@ -953,6 +961,8 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
 		return p.clickIssueTab(action.Region.Data)
+	case regionNoteTab:
+		return p.clickNoteTab(action.Region.Data)
 	case regionResourceTab:
 		return p.clickResourceTab(action.Region.Data)
 	case regionDiffTargetTab:
@@ -1142,6 +1152,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
 	}
+	if cmd, ok := p.clickNoteTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	switch action.Region.ID {
 	case regionTermPanelContent:
@@ -1282,7 +1295,7 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1292,6 +1305,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case docContentLinkHit:
 			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case noteTabHit:
 			leafID = data.LeafID
 		case resourceTabHit:
 			leafID = data.LeafID
@@ -1319,6 +1334,16 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 			// the same path rather than a second one.
 			if issue := p.issues[leaf.ContentID]; issue != nil {
 				if view := issue.view(); view != nil {
+					before := view.ScrollOffset()
+					view.Scroll(delta)
+					if view.ScrollOffset() != before {
+						p.saveSelectionState()
+					}
+				}
+			}
+		case PaneNote:
+			if note := p.notes[leaf.ContentID]; note != nil {
+				if view := note.view(); view != nil {
 					before := view.ScrollOffset()
 					view.Scroll(delta)
 					if view.ScrollOffset() != before {

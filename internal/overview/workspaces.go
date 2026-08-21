@@ -442,6 +442,10 @@ func (m *Model) scrollPreviewClose(kind panelayout.Kind, delta int) tea.Cmd {
 		if m.preview.issue != nil && m.preview.issue.view() != nil {
 			m.preview.issue.view().Scroll(delta)
 		}
+	case panelayout.Note:
+		if m.preview.note != nil && m.preview.note.view() != nil {
+			m.preview.note.view().Scroll(delta)
+		}
 	case panelayout.Diff:
 		if view := m.preview.diff.view(); view != nil {
 			view.ScrollContent(delta, view.Height())
@@ -467,6 +471,12 @@ func (m *Model) previewCloseWheelAtBoundary(kind panelayout.Kind, delta int) boo
 			return true
 		}
 		view := m.preview.issue.view()
+		return view == nil || view.ScrollAtBoundary(delta)
+	case panelayout.Note:
+		if m.preview.note == nil {
+			return true
+		}
+		view := m.preview.note.view()
 		return view == nil || view.ScrollAtBoundary(delta)
 	case panelayout.Diff:
 		view := m.preview.diff.view()
@@ -690,6 +700,9 @@ func (m *Model) WorkspaceFocusContext() string {
 	if m.issuePaneFocused() {
 		return "global-workspaces-issue"
 	}
+	if m.notePaneFocused() {
+		return "global-workspaces-note"
+	}
 	if m.diffPaneFocused() {
 		return ctxGlobalWorkspacesDiff
 	}
@@ -713,6 +726,11 @@ func (m *Model) issuePaneFocused() bool {
 		m.preview.issue != nil && m.preview.issue.focused
 }
 
+func (m *Model) notePaneFocused() bool {
+	return m.PreviewFocused() && !m.PreviewInteractive() &&
+		m.preview.note != nil && m.preview.note.focused
+}
+
 func (m *Model) docPaneFocused() bool {
 	return m.PreviewFocused() && !m.PreviewInteractive() &&
 		m.preview.doc != nil && m.preview.doc.focused
@@ -729,7 +747,7 @@ func (m *Model) resourcePaneFocused() bool {
 }
 
 func (m *Model) contentLeafFocused() bool {
-	return m.issuePaneFocused() || m.diffPaneFocused() ||
+	return m.issuePaneFocused() || m.notePaneFocused() || m.diffPaneFocused() ||
 		m.resourcePaneFocused() || m.docPaneFocused()
 }
 
@@ -1159,6 +1177,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if _, ok := action.Region.Data.(previewIssueTabHit); ok {
 		return m.handlePreviewIssueMouse(action)
 	}
+	if _, ok := action.Region.Data.(previewNoteTabHit); ok {
+		return m.handlePreviewNoteMouse(action)
+	}
 	if _, ok := action.Region.Data.(previewResourceTabHit); ok {
 		return m.handlePreviewResourceMouse(action)
 	}
@@ -1167,6 +1188,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewIssueRegion(kind) {
 		return m.handlePreviewIssueMouse(action)
+	}
+	if kind, ok := action.Region.Data.(string); ok && isPreviewNoteRegion(kind) {
+		return m.handlePreviewNoteMouse(action)
 	}
 	if kind, ok := action.Region.Data.(string); ok && isPreviewResourceRegion(kind) {
 		return m.handlePreviewResourceMouse(action)

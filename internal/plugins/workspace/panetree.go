@@ -18,6 +18,7 @@ const (
 	// PaneShell is a live terminal peer of the primary terminal. The terminal
 	// panel is the first one: see shell_leaf.go.
 	PaneShell = panelayout.Shell
+	PaneNote  = panelayout.Note
 )
 
 type SplitAxis = panelayout.Axis

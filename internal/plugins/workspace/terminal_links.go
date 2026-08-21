@@ -352,6 +352,8 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 		return openInBrowser(plan.URL), true
 	case targetactivation.PlanOpenIssue:
 		return p.activateIssueLink(plan.Issue)
+	case targetactivation.PlanOpenNote:
+		return p.activateNoteLink(plan.Note)
 	case targetactivation.PlanOpenResource:
 		return p.activateResourceLink(resourceview.Ref{
 			Instance: plan.Provider,
@@ -381,7 +383,7 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 func terminalHandlesPlanKind(kind targetactivation.PlanKind) bool {
 	switch kind {
 	case targetactivation.PlanOpenURL, targetactivation.PlanOpenFile,
-		targetactivation.PlanOpenIssue, targetactivation.PlanOpenDiff,
+		targetactivation.PlanOpenIssue, targetactivation.PlanOpenNote, targetactivation.PlanOpenDiff,
 		targetactivation.PlanOpenResource, targetactivation.PlanAttachSession:
 		return true
 	default:

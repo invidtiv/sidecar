@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
@@ -215,7 +216,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
-	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg,
+	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg, noteview.LoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
 		resourceview.ResolvedMsg:
 		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {

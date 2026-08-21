@@ -246,6 +246,8 @@ func (m *Model) activatePreviewPlan(plan targetactivation.Plan) (tea.Cmd, bool) 
 		})
 	case targetactivation.PlanOpenIssue:
 		cmd = m.openPreviewIssue(plan.Issue)
+	case targetactivation.PlanOpenNote:
+		cmd = m.openPreviewNote(plan.Note)
 	case targetactivation.PlanOpenDiff:
 		cmd = m.activatePreviewDiff(plan.Spec)
 	case targetactivation.PlanAttachSession:
@@ -272,7 +274,7 @@ func (m *Model) activatePreviewPlan(plan targetactivation.Plan) (tea.Cmd, bool) 
 func previewHandlesPlanKind(kind targetactivation.PlanKind) bool {
 	switch kind {
 	case targetactivation.PlanOpenURL, targetactivation.PlanOpenFile,
-		targetactivation.PlanOpenIssue, targetactivation.PlanOpenDiff,
+		targetactivation.PlanOpenIssue, targetactivation.PlanOpenNote, targetactivation.PlanOpenDiff,
 		targetactivation.PlanOpenResource, targetactivation.PlanAttachSession:
 		return true
 	default:
@@ -573,6 +575,12 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 		m.preview.issue.focused = leaf.Kind == panelayout.Issue
 		if view := m.preview.issue.view(); view != nil {
 			view.SetFocused(m.preview.issue.focused)
+		}
+	}
+	if m.preview.note != nil {
+		m.preview.note.focused = leaf.Kind == panelayout.Note
+		if view := m.preview.note.view(); view != nil {
+			view.SetFocused(m.preview.note.focused)
 		}
 	}
 	if m.preview.diff != nil {

@@ -29,6 +29,7 @@ const (
 	// contentKindResource is the one key every external provider persists
 	// under, so installing another integration adds no kind here.
 	contentKindResource = "resource"
+	contentKindNote     = "note"
 )
 
 // Size is the box a content draws into: the leaf's INNER box, header row
@@ -75,6 +76,12 @@ func (p *Plugin) paneContent(node *PaneNode) Content {
 			return nil
 		}
 		return &resourceContent{p: p, res: res}
+	case PaneNote:
+		note := p.notes[node.ContentID]
+		if note == nil || note.view() == nil {
+			return nil
+		}
+		return &noteContent{p: p, note: note}
 	case PaneShell:
 		return &shellContent{p: p}
 	default:
@@ -366,6 +373,39 @@ func (c *resourceContent) View(render Render) string {
 		body)
 }
 
+type noteContent struct {
+	p    *Plugin
+	note *notePane
+	size Size
+}
+
+func (c *noteContent) Kind() string { return contentKindNote }
+
+func (c *noteContent) Title() string {
+	if view := c.note.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
+
+func (c *noteContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	if view := c.note.view(); view != nil {
+		view.SetSize(size.Width, maxInt(size.Height-terminalHeaderRows, 0))
+	}
+	return nil
+}
+
+func (c *noteContent) View(render Render) string {
+	body := ""
+	if view := c.note.view(); view != nil {
+		body = view.View()
+	}
+	return composePaneLeaf(
+		c.p.notePaneHeaderRow(c.note, c.size.Width, render.Focused),
+		body)
+}
+
 // composePaneLeaf joins a leaf's header row to the body under it. An empty
 // header is a leaf that owes no header row; an empty body still costs the join
 // its newline, because a leaf with no box left under its header has spent that
@@ -405,6 +445,8 @@ func (p *Plugin) closeContentPane(leafID int) tea.Cmd {
 		return p.closeDocPaneAt(leafID)
 	case PaneIssue:
 		return p.closeIssuePane(leafID)
+	case PaneNote:
+		return p.closeNotePane(leafID)
 	case PaneDiff:
 		return p.closeDiffPane(leafID)
 	case PaneResource:

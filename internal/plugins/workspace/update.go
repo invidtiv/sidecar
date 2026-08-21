@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/migration"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
@@ -107,6 +108,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, p.applyWorkspaceDeckBroadcast(msg)
 		}
 		p.applyIssueLoaded(msg)
+		return p, nil
+	case noteview.LoadedMsg:
+		if p.contentDeck != nil {
+			return p, p.applyWorkspaceDeckBroadcast(msg)
+		}
+		p.applyNoteLoaded(msg)
 		return p, nil
 	case resourceview.ResolvedMsg:
 		if p.contentDeck != nil {

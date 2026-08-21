@@ -134,6 +134,7 @@ type PaneLayoutJSON struct {
 	// ResourceTabs are external provider references. One list serves every
 	// provider, so a new integration adds no field here.
 	ResourceTabs []PaneResourceTabJSON `json:"resourceTabs,omitempty"`
+	NoteTabs     []PaneNoteTabJSON     `json:"noteTabs,omitempty"`
 	Active       int                   `json:"active,omitempty"`
 	// Open is true when restore should rebuild the split. False means this
 	// surface still has tabs but the pane is hidden (q). Omitted on a legacy
@@ -154,6 +155,13 @@ type PaneLayoutJSON struct {
 // and applies Scroll; the body is not cached.
 type PaneIssueTabJSON struct {
 	Issue  string `json:"issue"`
+	Scroll int    `json:"scroll,omitempty"`
+}
+
+// PaneNoteTabJSON is one persisted note tab. Restore re-fetches the note
+// through `td note`; the body is not cached.
+type PaneNoteTabJSON struct {
+	Note   string `json:"note"`
 	Scroll int    `json:"scroll,omitempty"`
 }
 

@@ -28,6 +28,7 @@ const (
 	// One key for every external provider. A leaf is a Resource leaf; which
 	// provider filled it is the tab's business, not the layout's.
 	contentKindResource = "resource"
+	contentKindNote     = "note"
 )
 
 // paneContent adapts a leaf to the content contract. It is the one place that
@@ -59,6 +60,11 @@ func (m *Model) paneContent(node *panelayout.Node) Content {
 			return nil
 		}
 		return &resourceContent{m: m, res: m.preview.resource}
+	case panelayout.Note:
+		if m.preview.note == nil || m.preview.note.view() == nil {
+			return nil
+		}
+		return &noteContent{m: m, note: m.preview.note}
 	default:
 		return &terminalContent{m: m}
 	}
@@ -198,4 +204,28 @@ func (c *resourceContent) SetSize(size Size) tea.Cmd {
 
 func (c *resourceContent) View(Render) string {
 	return c.m.renderPreviewResource(c.res, termpreview.Box{W: c.size.Width, H: c.size.Height})
+}
+
+type noteContent struct {
+	m    *Model
+	note *previewNote
+	size Size
+}
+
+func (c *noteContent) Kind() string { return contentKindNote }
+
+func (c *noteContent) Title() string {
+	if view := c.note.view(); view != nil {
+		return view.Title()
+	}
+	return ""
+}
+
+func (c *noteContent) SetSize(size Size) tea.Cmd {
+	c.size = size
+	return nil
+}
+
+func (c *noteContent) View(Render) string {
+	return c.m.renderPreviewNote(c.note, termpreview.Box{W: c.size.Width, H: c.size.Height})
 }

@@ -21,6 +21,7 @@ var (
 	)
 	issuePattern   = regexp.MustCompile(`\btd-[0-9a-fA-F]{4,}\b`)
 	issueIDPattern = regexp.MustCompile(`^td-[0-9a-fA-F]{4,}$`)
+	noteIDPattern  = regexp.MustCompile(`^nt-[a-z0-9]{1,64}$`)
 	// Only Sidecar-owned attachable sessions are recognized. Internal terminal
 	// and editor pane sessions deliberately remain ordinary text.
 	sessionPattern       = regexp.MustCompile(`\bsidecar-(?:sh|ws)-[A-Za-z0-9][A-Za-z0-9_-]{0,63}`)
@@ -31,6 +32,9 @@ var (
 )
 
 func IssueID(value string) bool { return issueIDPattern.MatchString(value) }
+
+// NoteID reports whether value is a td note identity (nt-…).
+func NoteID(value string) bool { return noteIDPattern.MatchString(value) }
 
 // SessionName reports whether value is a Sidecar-owned attachable tmux
 // session name. Stored notification targets use the same validation as scans.

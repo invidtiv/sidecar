@@ -35,6 +35,7 @@ import (
 const (
 	livePreviewOwner  = "overview"
 	livePreviewIssues = "issues"
+	livePreviewNotes  = "notes"
 	livePreviewDocs   = "docs"
 	livePreviewDiffs  = "diffs"
 )
@@ -69,6 +70,14 @@ func (m *Model) newLiveSet() *livepanes.Set {
 			Targets: m.previewIssueTargets,
 			Refresh: m.refreshPreviewIssues,
 			Owed:    m.previewIssueRefreshOwed,
+		},
+		livepanes.Binding{
+			Kind:    livePreviewNotes,
+			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
+			Prepare: m.resolvePreviewTDStore,
+			Targets: m.previewNoteTargets,
+			Refresh: m.refreshPreviewNotes,
+			Owed:    m.previewNoteRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind:    livePreviewDocs,
@@ -183,28 +192,31 @@ func (m *Model) previewIssueTargets() []livewatch.Target {
 }
 
 func (m *Model) resolvePreviewTDStore() tea.Cmd {
-	issue := m.preview.issue
-	if issue == nil || issue.root == "" || len(issue.tabs.Items) == 0 {
+	root := ""
+	visible := false
+	if issue := m.preview.issue; issue != nil && issue.root != "" && len(issue.tabs.Items) > 0 {
+		root = issue.root
+		visible = m.previewPaneVisible(panelayout.Issue)
+	}
+	if note := m.preview.note; note != nil && note.root != "" && len(note.tabs.Items) > 0 {
+		if root == "" {
+			root = note.root
+		}
+		visible = visible || m.previewPaneVisible(panelayout.Note)
+	}
+	if root == "" || !visible {
 		return nil
 	}
-	// Gated on visibility for the same reason the targets are: resolving this
-	// walks parent directories and can shell out to git, and a preview the
-	// layout could not place is not worth it. The project surface gates the same
-	// way; an asymmetry here is a cost one surface pays and the other does not.
-	if !m.previewPaneVisible(panelayout.Issue) {
+	if _, done := m.preview.tdStoreTargets[root]; done {
 		return nil
 	}
-	if _, done := m.preview.tdStoreTargets[issue.root]; done {
-		return nil
-	}
-	if m.preview.tdStoreResolving[issue.root] {
+	if m.preview.tdStoreResolving[root] {
 		return nil
 	}
 	if m.preview.tdStoreResolving == nil {
 		m.preview.tdStoreResolving = make(map[string]bool)
 	}
-	m.preview.tdStoreResolving[issue.root] = true
-	root := issue.root
+	m.preview.tdStoreResolving[root] = true
 	return func() tea.Msg {
 		return previewTDStoreResolvedMsg{Root: root, Targets: issueview.StoreTargets(root)}
 	}
@@ -371,6 +383,49 @@ func (m *Model) previewIssueRefreshOwed() bool {
 		return false
 	}
 	for _, item := range issue.tabs.Items {
+		if item.Value != nil && item.Value.RefreshPending() {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) previewNoteTargets() []livewatch.Target {
+	note := m.preview.note
+	if note == nil || note.root == "" || len(note.tabs.Items) == 0 {
+		return nil
+	}
+	if !m.previewPaneVisible(panelayout.Note) {
+		return nil
+	}
+	return m.preview.tdStoreTargets[note.root]
+}
+
+func (m *Model) refreshPreviewNotes() []tea.Cmd {
+	note := m.preview.note
+	if note == nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, item := range note.tabs.Items {
+		view := item.Value
+		if view == nil {
+			continue
+		}
+		view.Observe()
+		if cmd := wrapPreviewNoteLoad(view.Refresh(false), note.surface); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+	return cmds
+}
+
+func (m *Model) previewNoteRefreshOwed() bool {
+	note := m.preview.note
+	if note == nil {
+		return false
+	}
+	for _, item := range note.tabs.Items {
 		if item.Value != nil && item.Value.RefreshPending() {
 			return true
 		}

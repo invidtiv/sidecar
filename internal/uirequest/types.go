@@ -91,6 +91,9 @@ const (
 	// in text — a task id is bare 8-hex, indistinguishable from a short sha —
 	// so it only ever arrives from a poster that named it.
 	TargetKindTask TargetKind = "task"
+	// TargetKindNote is a td note identity (nt-…). sidecar open sidecar://note/<id>
+	// is the agent-facing form; the pane is a read-only card, not the Notes editor.
+	TargetKindNote TargetKind = "note"
 )
 
 // Status describes the host's response to a UI request.

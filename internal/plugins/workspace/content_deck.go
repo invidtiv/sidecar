@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
@@ -96,6 +97,11 @@ func workspaceDeckNode(saved *state.PaneLayoutJSON) *contentpanes.NodeState {
 		}
 		if len(pane.Tabs) == 0 && saved.Issue != "" {
 			pane.Tabs = append(pane.Tabs, contentpanes.TabState{Ref: contentlink.Ref{Kind: contentlink.KindIssue, Value: saved.Issue}, Scroll: saved.Scroll})
+		}
+	case contentKindNote:
+		n.Kind, pane.Kind = "note", "note"
+		for _, tab := range saved.NoteTabs {
+			pane.Tabs = append(pane.Tabs, contentpanes.TabState{Ref: contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: tab.Note}, Scroll: tab.Scroll})
 		}
 	case contentKindDiff:
 		n.Kind, pane.Kind = "diff", "diff"
@@ -200,7 +206,7 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 	if deck == nil {
 		return
 	}
-	oldDocs, oldIssues, oldDiffs, oldResources := p.docs, p.issues, p.diffs, p.resources
+	oldDocs, oldIssues, oldNotes, oldDiffs, oldResources := p.docs, p.issues, p.notes, p.diffs, p.resources
 	keep := p.paneFocus
 	// The deck's tree is the passive content panes' — it has never heard of the
 	// shell leaf. Its shape is recorded before the projection lands and the leaf
@@ -223,9 +229,10 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 	p.paneNextID = panelayout.MaxID(p.paneRoot) + 1
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.notes = make(map[int]*notePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
-	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
+	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Note, panelayout.Diff, panelayout.Resource} {
 		leafID := deck.Leaf(kind)
 		if leafID == 0 {
 			continue
@@ -258,6 +265,19 @@ func (p *Plugin) syncWorkspaceDeckProjection(root, surface string) {
 			}
 			issue.tabs.Active = active
 			p.issues[leafID] = issue
+		case panelayout.Note:
+			note := oldNotes[leafID]
+			if note == nil {
+				note = &notePane{}
+			}
+			note.leafID, note.root, note.surface, note.tabs = leafID, root, surface, noteview.Tabs{}
+			for _, item := range items {
+				if view, ok := item.Viewer.(*noteview.Model); ok {
+					note.tabs.Append(item.Ref.Value, view)
+				}
+			}
+			note.tabs.Active = active
+			p.notes[leafID] = note
 		case panelayout.Diff:
 			diff := oldDiffs[leafID]
 			if diff == nil {

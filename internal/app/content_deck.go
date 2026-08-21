@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -167,6 +168,7 @@ func appDeckFloors() panelayout.Floors {
 		Primary:  panelayout.Floor{Width: 80, Height: 10},
 		Doc:      panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Issue:    panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
+		Note:     panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Diff:     panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Resource: panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 	}, appDeckChromeForKind)
@@ -309,6 +311,8 @@ func (c *appDeckContent) Title() string {
 			return v.Title()
 		case *issueview.Model:
 			return v.Title()
+		case *noteview.Model:
+			return v.Title()
 		case *workspacediff.View:
 			return v.Target.TabLabel()
 		case *resourceview.Model:
@@ -347,6 +351,9 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 	case *issueview.Model:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.View()
+	case *noteview.Model:
+		v.SetSize(c.size.Width, bodyH)
+		body = v.View()
 	case *workspacediff.View:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.Render(c.size.Width, bodyH, workspacediff.RenderOpts{})
@@ -368,6 +375,9 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 	labels := make([]tabs.Label, 0, len(items))
 	for _, item := range items {
 		label := item.Ref.Value
+		if view, ok := item.Viewer.(*noteview.Model); ok && view.Title() != "" {
+			label = view.Title()
+		}
 		if label == "" {
 			label = string(item.Ref.Kind)
 		}
@@ -516,7 +526,7 @@ func (m *Model) openAppContent(workdir, pluginID string, ref contentlink.Ref) te
 	if ref.Kind == contentlink.KindURL {
 		return terminallink.OpenHTTP(ref.Value)
 	}
-	if ref.Kind == contentlink.KindInternal {
+	if ref.Kind == contentlink.KindInternal && h.pluginID == "notes" {
 		cmd, err := sidecarIntents.activate(IntentAppContext{ProjectRoot: m.ui.ProjectRoot}, ref)
 		if err != nil {
 			return nil
@@ -559,6 +569,8 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	switch req.Target.Kind {
 	case uirequest.TargetKindIssue:
 		ref = contentlink.Ref{Kind: contentlink.KindIssue, Value: req.Target.Value}
+	case uirequest.TargetKindNote:
+		ref = contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: req.Target.Value}
 	case uirequest.TargetKindDiff:
 		ref = contentlink.Ref{Kind: contentlink.KindDiff, Value: req.Target.Value}
 	case uirequest.TargetKindResource:
@@ -804,6 +816,8 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 			v.Scroll(delta)
 		case *issueview.Model:
 			v.Scroll(delta)
+		case *noteview.Model:
+			v.Scroll(delta)
 		case *workspacediff.View:
 			v.ScrollContent(delta, v.Height())
 		case *resourceview.Model:
@@ -851,6 +865,8 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 		return v.ScrollAtBoundary(delta), true
 	case *issueview.Model:
 		return v.ScrollAtBoundary(delta), true
+	case *noteview.Model:
+		return v.ScrollAtBoundary(delta), true
 	case *workspacediff.View:
 		return v.ScrollAtBoundary(delta, v.Height()), true
 	case *resourceview.Model:
@@ -862,7 +878,7 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 
 func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	h := m.activeContentDeck()
-	if h == nil || h.deck.Leaf(panelayout.Document)+h.deck.Leaf(panelayout.Issue)+h.deck.Leaf(panelayout.Diff)+h.deck.Leaf(panelayout.Resource) == 0 {
+	if h == nil || h.deck.Leaf(panelayout.Document)+h.deck.Leaf(panelayout.Issue)+h.deck.Leaf(panelayout.Note)+h.deck.Leaf(panelayout.Diff)+h.deck.Leaf(panelayout.Resource) == 0 {
 		return nil, false
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
@@ -932,6 +948,19 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		v.HandleKey(key)
 		return nil, true
 	case *issueview.Model:
+		_, cmd := v.HandleKey(key)
+		return cmd, true
+	case *noteview.Model:
+		switch key.String() {
+		case "y":
+			if data := v.Data(); data != nil {
+				return noteview.CopyMarkdown(data), true
+			}
+		case "Y", "shift+y":
+			if data := v.Data(); data != nil {
+				return noteview.CopyID(data), true
+			}
+		}
 		_, cmd := v.HandleKey(key)
 		return cmd, true
 	case *workspacediff.View:
@@ -1069,6 +1098,8 @@ func (m Model) appContentContext() (string, bool) {
 		return "workspace-doc", true
 	case panelayout.Issue:
 		return "workspace-issue", true
+	case panelayout.Note:
+		return "workspace-note", true
 	case panelayout.Diff:
 		return "workspace-diff", true
 	case panelayout.Resource:
@@ -1132,6 +1163,11 @@ func (m *Model) appContentCommands() []plugin.Command {
 			command("open-in-td", "TD", "Open selected issue in td", 8),
 			command("yank-issue", "Yank", "Copy issue as markdown", 9),
 			command("yank-issue-key", "YankID", "Copy issue ID", 10),
+		)
+	case *noteview.Model:
+		cmds = append(cmds,
+			command("yank-note", "Yank", "Copy note as markdown", 7),
+			command("yank-note-key", "YankID", "Copy note ID", 8),
 		)
 	case *workspacediff.View:
 		for _, viewerCommand := range v.Commands(ctx) {
@@ -1222,6 +1258,17 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		if key != "" {
 			_, cmd := view.HandleKey(appContentKeyPress(key))
 			return cmd
+		}
+	case *noteview.Model:
+		switch id {
+		case "yank-note":
+			if data := view.Data(); data != nil {
+				return noteview.CopyMarkdown(data)
+			}
+		case "yank-note-key":
+			if data := view.Data(); data != nil {
+				return noteview.CopyID(data)
+			}
 		}
 	case *workspacediff.View:
 		key := map[string]string{

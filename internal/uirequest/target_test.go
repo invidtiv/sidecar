@@ -20,6 +20,16 @@ func TestResolveTargetIssue(t *testing.T) {
 	}
 }
 
+func TestResolveTargetNoteURI(t *testing.T) {
+	target, err := ResolveTarget("/some/work/dir", "sidecar://note/nt-4jdj4e", 0, ResolveOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if target.Kind != TargetKindNote || target.Value != "nt-4jdj4e" {
+		t.Fatalf("unexpected note target: %+v", target)
+	}
+}
+
 func TestResolveTargetIssueWinsOverDiff(t *testing.T) {
 	target, err := ResolveTarget("/some/work/dir", "td-1234abcd", 0, ResolveOptions{Diff: true})
 	if err != nil {

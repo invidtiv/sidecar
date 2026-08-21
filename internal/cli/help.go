@@ -244,6 +244,7 @@ func RenderAgents(root *Command) string {
 	}
 
 	buf.WriteString("\nAdd --json to any of them for a structured result.\n")
+	buf.WriteString("If td is installed, td note list / td note show find notes and sidecar open sidecar://note/<id> puts one in a pane.\n")
 	buf.WriteString("Run \"sidecar help <command>\" for options and exit codes.\n")
 	return buf.String()
 }

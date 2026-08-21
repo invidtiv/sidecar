@@ -171,6 +171,31 @@ func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
 	}
 }
 
+func TestAppContentDeckOpensNotePaneFromNonNotesSurface(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "sidecar://note/nt-4jdj4e"}
+	m := appDeckTestModel(t, root, p)
+	_ = m.renderContent(120, 30)
+	h := m.currentContentDeck()
+	if h == nil || len(h.links) != 1 {
+		t.Fatalf("note link hits = %+v", h)
+	}
+	cmd := m.openAppContent(root, p.id, h.links[0].Ref)
+	if cmd == nil {
+		t.Fatal("opening a note from Files returned no load")
+	}
+	if h.deck.Leaf(panelayout.Note) == 0 {
+		t.Fatal("Files surface did not open a Note pane")
+	}
+	items, _ := h.deck.Tabs(h.deck.Leaf(panelayout.Note))
+	if len(items) != 1 || items[0].Ref.Value != "nt-4jdj4e" {
+		t.Fatalf("note tabs = %#v", items)
+	}
+	if _, ok := cmd().(NavigateToNoteMsg); ok {
+		t.Fatal("Files surface navigated inside Notes instead of opening a pane")
+	}
+}
+
 func TestAppContentDeckStripsUnknownInternalOSCWithoutActivation(t *testing.T) {
 	root := t.TempDir()
 	label := "sidecar://note/nt-4jdj4e"

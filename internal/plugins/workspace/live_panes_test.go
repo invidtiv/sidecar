@@ -210,7 +210,7 @@ func TestProjectSurfaceRegistersEveryLiveKind(t *testing.T) {
 	for _, kind := range p.live.Kinds() {
 		got[kind] = true
 	}
-	for _, want := range []string{liveIssues, liveDocs, liveDiffs} {
+	for _, want := range []string{liveIssues, liveNotes, liveDocs, liveDiffs} {
 		if !got[want] {
 			t.Errorf("the %q kind is not registered on the project surface", want)
 		}

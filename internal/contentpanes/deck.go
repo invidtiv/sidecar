@@ -1,5 +1,5 @@
 // Package contentpanes owns the host-independent lifecycle of Sidecar's
-// passive Document, Issue, Diff, and Resource panes.
+// passive Document, Issue, Note, Diff, and Resource panes.
 //
 // A Deck deliberately does not render or persist itself. Hosts provide the
 // available box when opening a leaf, render the returned viewer models, and
@@ -564,8 +564,8 @@ func (d *Deck) SetResourceResolver(resolve resourceview.Resolver) {
 }
 
 // Viewer returns the active host-independent viewer model for a passive leaf.
-// Its dynamic type is *docview.Model, *issueview.Model, *workspacediff.View,
-// or *resourceview.Model.
+// Its dynamic type is *docview.Model, *issueview.Model, *noteview.Model,
+// *workspacediff.View, or *resourceview.Model.
 func (d *Deck) Viewer(leafID int) any {
 	if d == nil {
 		return nil
@@ -789,6 +789,8 @@ func kindName(kind panelayout.Kind) string {
 		return "document"
 	case panelayout.Issue:
 		return "issue"
+	case panelayout.Note:
+		return "note"
 	case panelayout.Diff:
 		return "diff"
 	case panelayout.Resource:

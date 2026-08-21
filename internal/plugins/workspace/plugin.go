@@ -129,6 +129,7 @@ const (
 	regionDocLink       = "doc-link"
 	regionDocTab        = "doc-tab"
 	regionIssueTab      = "issue-tab"
+	regionNoteTab       = "note-tab"
 	regionResourceTab   = "resource-tab"
 	regionDiffTargetTab = "diff-target-tab"
 	regionPaneClose     = "pane-close"
@@ -262,6 +263,7 @@ type Plugin struct {
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
 	docSelectLeaf int
 	issues        map[int]*issuePane
+	notes         map[int]*notePane
 	diffs         map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
@@ -293,6 +295,7 @@ type Plugin struct {
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
+	noteModelNextID  int
 	// docInfo is the file-info modal over a workspace document tab.
 	docInfo *docview.Info
 	// docFinderCaches holds one file list per pane root, so the file finder
@@ -804,9 +807,11 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.notes = make(map[int]*notePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.issueModelNextID = 0
+	p.noteModelNextID = 0
 	p.docFinderCaches = panesearch.Caches{}
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
@@ -954,6 +959,17 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-issue")
+
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("y", "yank-note", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("Y", "yank-note-key", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-note")
 
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-diff")

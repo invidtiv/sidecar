@@ -45,6 +45,12 @@ func TestTargetFromSpan(t *testing.T) {
 			ok:   true,
 		},
 		{
+			name: "note from internal span",
+			span: terminallink.Span{Kind: terminallink.KindInternal, Value: "nt-4jdj4e", Extra: terminallink.Extra{Namespace: "note"}},
+			want: Target{Kind: TargetKindNote, Value: "nt-4jdj4e"},
+			ok:   true,
+		},
+		{
 			name: "resource carries provider and matcher",
 			span: terminallink.Span{
 				Kind:  terminallink.KindResource,

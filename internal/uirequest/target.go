@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -83,6 +84,13 @@ func ResolveTarget(workDir, raw string, explicitLine int, opts ResolveOptions) (
 			Value: raw,
 			Line:  0,
 		}, nil
+	}
+
+	if parsed, err := contentlink.ParseInternalURI(raw); err == nil && parsed.Ref.Namespace == "note" {
+		if !contentlink.NoteID(parsed.Ref.Value) {
+			return Target{}, fmt.Errorf("invalid note identity %q", parsed.Ref.Value)
+		}
+		return Target{Kind: TargetKindNote, Value: parsed.Ref.Value}, nil
 	}
 
 	workDir, err := canonicalizeWorkDir(workDir)
@@ -252,6 +260,11 @@ func TargetFromSpan(span terminallink.Span) (Target, bool) {
 		return Target{Kind: TargetKindURL, Value: span.Value}, true
 	case terminallink.KindIssue:
 		return Target{Kind: TargetKindIssue, Value: span.Value}, true
+	case terminallink.KindInternal:
+		if span.Extra.Namespace == "note" && contentlink.NoteID(span.Value) {
+			return Target{Kind: TargetKindNote, Value: span.Value}, true
+		}
+		return Target{}, false
 	case terminallink.KindDiff:
 		return Target{Kind: TargetKindDiff, Value: rawOrValue()}, true
 	case terminallink.KindSession:

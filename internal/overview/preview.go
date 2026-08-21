@@ -117,6 +117,7 @@ type previewState struct {
 	// cache keeps that live layout when the global cursor visits another row.
 	doc             *previewDoc
 	issue           *previewIssue
+	note            *previewNote
 	diff            *previewDiff
 	resource        *previewResource
 	deck            *contentpanes.Deck
@@ -167,6 +168,7 @@ type previewPaneCache struct {
 	nextID   int
 	doc      *previewDoc
 	issue    *previewIssue
+	note     *previewNote
 	diff     *previewDiff
 	resource *previewResource
 	deck     *contentpanes.Deck
@@ -298,6 +300,7 @@ func (m *Model) resetActivePreviewPanes() {
 	m.preview.doc.releaseEdit()
 	m.preview.doc = nil
 	m.preview.issue = nil
+	m.preview.note = nil
 	m.preview.diff = nil
 	m.preview.resource = nil
 	m.preview.deck = nil
@@ -322,7 +325,7 @@ func (m *Model) stashPreviewPanes() {
 	}
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
-		doc: m.preview.doc, issue: m.preview.issue, diff: m.preview.diff,
+		doc: m.preview.doc, issue: m.preview.issue, note: m.preview.note, diff: m.preview.diff,
 		resource: m.preview.resource, deck: m.preview.deck,
 	}
 }
@@ -330,7 +333,7 @@ func (m *Model) stashPreviewPanes() {
 func (m *Model) restorePreviewPanes(workspaceID string) {
 	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
 		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
-		m.preview.doc, m.preview.issue, m.preview.diff = cached.doc, cached.issue, cached.diff
+		m.preview.doc, m.preview.issue, m.preview.note, m.preview.diff = cached.doc, cached.issue, cached.note, cached.diff
 		m.preview.resource = cached.resource
 		m.preview.deck = cached.deck
 		m.preview.paneDragSplitID = 0
@@ -450,6 +453,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, m.forwardToTerminal(msg)
 	}
 	if handled, cmd := m.previewIssueKey(msg); handled {
+		return true, cmd
+	}
+	if handled, cmd := m.previewNoteKey(msg); handled {
 		return true, cmd
 	}
 	if handled, cmd := m.previewResourceKey(msg); handled {

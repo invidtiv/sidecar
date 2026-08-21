@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
@@ -121,6 +122,8 @@ func wrapPreviewDeckCmd(cmd tea.Cmd, workspaceID string) tea.Cmd {
 			return previewDocLoadedMsg{LoadedMsg: payload, WorkspaceID: workspaceID}
 		case issueview.LoadedMsg:
 			return previewIssueLoadedMsg{LoadedMsg: payload, WorkspaceID: workspaceID}
+		case noteview.LoadedMsg:
+			return previewNoteLoadedMsg{LoadedMsg: payload, WorkspaceID: workspaceID}
 		default:
 			return payload
 		}
@@ -138,13 +141,15 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 
 	oldDoc := m.preview.doc
 	oldIssue := m.preview.issue
+	oldNote := m.preview.note
 	oldDiff := m.preview.diff
 	oldResource := m.preview.resource
 	m.preview.doc = nil
 	m.preview.issue = nil
+	m.preview.note = nil
 	m.preview.diff = nil
 	m.preview.resource = nil
-	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
+	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Note, panelayout.Diff, panelayout.Resource} {
 		leafID := deck.Leaf(kind)
 		if leafID == 0 {
 			continue
@@ -184,6 +189,23 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 				issue.epoch = items[0].ID
 			}
 			m.preview.issue = issue
+		case panelayout.Note:
+			note := oldNote
+			if note == nil || note.surface != ctx.Surface {
+				note = &previewNote{}
+			}
+			note.root, note.surface = ctx.Root, ctx.Surface
+			note.tabs = noteview.Tabs{}
+			for _, item := range items {
+				if view, ok := item.Viewer.(*noteview.Model); ok {
+					note.tabs.Append(item.Ref.Value, view)
+				}
+			}
+			note.tabs.Active = active
+			if len(items) > 0 {
+				note.epoch = items[0].ID
+			}
+			m.preview.note = note
 		case panelayout.Diff:
 			diff := oldDiff
 			if diff == nil || diff.surface != ctx.Surface {
@@ -254,7 +276,8 @@ func (m *Model) finishPreviewDeckClose() tea.Cmd {
 		m.syncPreviewDeckProjection(ctx)
 	}
 	if m.preview.deck == nil || m.preview.deck.Leaf(panelayout.Document) != 0 ||
-		m.preview.deck.Leaf(panelayout.Issue) != 0 || m.preview.deck.Leaf(panelayout.Diff) != 0 ||
+		m.preview.deck.Leaf(panelayout.Issue) != 0 || m.preview.deck.Leaf(panelayout.Note) != 0 ||
+		m.preview.deck.Leaf(panelayout.Diff) != 0 ||
 		m.preview.deck.Leaf(panelayout.Resource) != 0 {
 		return m.syncTerminalGeometry()
 	}

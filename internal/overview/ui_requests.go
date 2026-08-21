@@ -74,6 +74,9 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 		case uirequest.TargetKindIssue:
 			retargeted = m.willRetargetPreviewPane(panelayout.Issue)
 			cmd = m.openPreviewIssue(req.Target.Value)
+		case uirequest.TargetKindNote:
+			retargeted = m.willRetargetPreviewPane(panelayout.Note)
+			cmd = m.openPreviewNote(req.Target.Value)
 		case uirequest.TargetKindDiff:
 			retargeted = m.willRetargetPreviewPane(panelayout.Diff)
 			cmd = m.openPreviewDiff(uirequest.DiffTarget(targetWorkspace.Path, req.Target.Value))

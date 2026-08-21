@@ -122,7 +122,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
-		previewDocLoadedMsg, previewIssueLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
+		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
@@ -692,6 +692,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.applyPreviewDocSearchMsg(msg)
 	case previewIssueLoadedMsg:
 		m.applyPreviewIssueLoaded(msg)
+		return nil
+	case previewNoteLoadedMsg:
+		m.applyPreviewNoteLoaded(msg)
 		return nil
 	case previewResourceResolvedMsg:
 		m.applyPreviewResourceResolved(msg)

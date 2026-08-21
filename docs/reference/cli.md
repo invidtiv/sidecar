@@ -280,9 +280,9 @@ sidecar notify post "Fixed upstream" --target issue:td-99aabb@braid
 
 ## `sidecar open`
 
-Show a file, a td issue, a git diff, or a provider resource in a split pane
+Show a file, a td issue, a note, a git diff, or a provider resource in a split pane
 
-Show a file, a td issue, a git diff, or an external provider resource to the user as a
+Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a
 split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.
 Otherwise it targets the unique running instance, or a specific --shell / --project.
 --diff with no spec is the working tree. --provider names a configured terminal resource
@@ -297,6 +297,7 @@ Usage: sidecar open [options] [<target>]
 
 - `path`: A file inside the target workspace, optionally "path:line"
 - `td-xxxxxx`: A td issue id
+- `sidecar://note/nt-xxxx`: A td note, opened as a read-only pane
 - `--diff`: Working-tree diff (wt); add a spec for a commit or range
 - `spec`: A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names
 - `locator`: With --provider, a resource key such as CASH-1245
@@ -330,6 +331,8 @@ sidecar open internal/cli/cli.go
 sidecar open internal/cli/cli.go:88
 # td issue
 sidecar open td-348d88
+# td note pane
+sidecar open sidecar://note/nt-4jdj4e
 # working-tree Diff leaf
 sidecar open --diff
 # that commit, not the working tree

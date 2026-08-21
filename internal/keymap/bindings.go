@@ -245,6 +245,16 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		{Key: "y", Command: "yank-note", Context: "global-workspaces-note"},
+		{Key: "Y", Command: "yank-note-key", Context: "global-workspaces-note"},
+		{Key: "q", Command: "close", Context: "global-workspaces-note"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-note"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-note"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-note"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-note"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-note"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-note"},
+
 		// Focused external-resource leaf. The command IDs after close are
 		// resourceview's own key vocabulary, which both terminal surfaces
 		// register, so the footer cannot advertise different keys for the
@@ -332,6 +342,17 @@ func DefaultBindings() []Binding {
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-issue"},
 		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
+
+		{Key: "y", Command: "yank-note", Context: "workspace-note"},
+		{Key: "Y", Command: "yank-note-key", Context: "workspace-note"},
+		{Key: "q", Command: "close", Context: "workspace-note"},
+		{Key: "esc", Command: "close", Context: "workspace-note"},
+		{Key: "x", Command: "close-tab", Context: "workspace-note"},
+		{Key: "{", Command: "prev-tab", Context: "workspace-note"},
+		{Key: "}", Command: "next-tab", Context: "workspace-note"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-note"},
+		{Key: "tab", Command: "next-pane", Context: "workspace-note"},
+		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-note"},
 
 		// The Resource leaf answers the same keys on this surface as it does
 		// in the global Workspaces browser. The two blocks are siblings on
