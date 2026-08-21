@@ -123,12 +123,11 @@ func (p *Plugin) renderNoRepoView() string {
 		"",
 	}
 
-	buttonLine := -1
 	if p.repoInitInProgress {
 		lines = append(lines, styles.StatusInProgress.Render("Initializing repository…"))
 	} else {
 		pill := styles.RenderPillWithStyle(initRepoButtonText, styles.ButtonHover, nil)
-		buttonLine = len(lines)
+		buttonLine := len(lines)
 		lines = append(lines, "  "+pill)
 		if p.mouseHandler != nil {
 			p.mouseHandler.HitMap.AddRect(

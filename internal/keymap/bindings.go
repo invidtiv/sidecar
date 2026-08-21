@@ -103,8 +103,9 @@ func DefaultBindings() []Binding {
 		{Key: "r", Command: "recheck", Context: "config"},
 		{Key: "c", Command: "copy-guidance", Context: "config"},
 		{Key: "o", Command: "open-file", Context: "config"},
-		// Projects: add, remove, and reorder the configured list.
+		// Projects: add, remove, initialize a non-git cwd, and reorder.
 		{Key: "a", Command: "add-project", Context: "config"},
+		{Key: "i", Command: "init-repo", Context: "config"},
 		{Key: "d", Command: "remove-project", Context: "config"},
 		{Key: "shift+up", Command: "move-project-up", Context: "config"},
 		{Key: "shift+down", Command: "move-project-down", Context: "config"},

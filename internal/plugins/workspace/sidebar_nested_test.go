@@ -232,7 +232,6 @@ func TestNestedShellPreviewCommandsMatchProjectShell(t *testing.T) {
 	}
 
 	showTermPanel(t, p, SplitRows, 50)
-	ids = commandIDs(p.Commands())
 }
 
 func TestNestedShellUsesOrdinaryTerminalSurfaceContracts(t *testing.T) {

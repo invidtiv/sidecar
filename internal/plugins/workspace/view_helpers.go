@@ -1,23 +1,11 @@
 package workspace
 
 import (
-	"strings"
 	"time"
 
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
-
-func padToHeight(content string, height, width int) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) > height {
-		lines = lines[:height]
-	}
-	for len(lines) < height {
-		lines = append(lines, strings.Repeat(" ", width))
-	}
-	return strings.Join(lines, "\n")
-}
 
 // dimText renders dim placeholder text using theme style.
 func dimText(s string) string {

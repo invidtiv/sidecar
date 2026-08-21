@@ -1596,21 +1596,6 @@ func (p *Plugin) resetPreviewScroll() {
 	p.jumpPreviewWindow(0)
 }
 
-// previewWindowBound is the furthest back this surface's window can be placed,
-// taken from the window the render path actually draws. Freeze and thaw both
-// read it there: taking the start from the rendered layout and the bound from
-// the line count is two derivations of one window, and they disagree wherever
-// interactive mode's untrimmed rows or a pane shorter than the viewport do — so
-// releasing a drag moved the window the gesture had been holding still.
-//
-// It is measured as a window off the live edge, because that is the only state
-// a bound is ever asked about: a window following the live grid is placed by
-// the grid, not by an offset, and its untrimmed count would otherwise let the
-// first step back name a row the trimmed window cannot draw.
-func (p *Plugin) previewWindowBound() int {
-	return p.terminalWindowBound(false)
-}
-
 // pollSelectedAgentNowIfVisible triggers an immediate poll for visible output.
 func (p *Plugin) pollSelectedAgentNowIfVisible() tea.Cmd {
 	wt := p.selectedWorktree()
