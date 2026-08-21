@@ -224,7 +224,7 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	inner.WriteString(viewport)
 	if m.showHints {
 		inner.WriteString("\n")
-		inner.WriteString(renderHintLine())
+		inner.WriteString(renderHintLine(m.hintText))
 	}
 	if m.customFooter != "" {
 		inner.WriteString("\n")
@@ -388,8 +388,11 @@ func renderTitleLine(title string, variant Variant) string {
 }
 
 // renderHintLine renders the keyboard hint line.
-func renderHintLine() string {
-	return styles.Muted.Render("Tab to switch \u00b7 Enter to confirm \u00b7 Esc to cancel")
+func renderHintLine(text string) string {
+	if strings.TrimSpace(text) == "" {
+		text = "Tab to switch \u00b7 Enter to confirm \u00b7 Esc to cancel"
+	}
+	return styles.Muted.Render(text)
 }
 
 // hintLines returns the number of lines the hint takes (0 if hidden, 1 if shown).

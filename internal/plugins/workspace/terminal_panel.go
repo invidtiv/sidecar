@@ -2,6 +2,8 @@ package workspace
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/tty"
@@ -79,18 +81,10 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 		return nil
 	}
 	if p.termPanelVisible {
-		// Hide: exit interactive mode if targeting terminal panel
-		if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
-			p.exitInteractiveMode()
-		}
-		// The shape the leaf was left in is what the next toggle opens at.
-		p.rememberShellSplit()
-		p.termPanelVisible = false
-		p.termPanelFocused = false
-		p.shellLeafSurface = ""
-		p.syncShellLeaf()
-		p.saveSelectionState()
-		return p.resizeSelectedPaneCmd()
+		// Hide is a close that keeps the session and the user's typed name. It is
+		// the same exit the ✕ takes, told apart by its mode, so the two paths
+		// cannot drift into disagreeing about anything else.
+		return p.closeShellLeaf(shellCloseHide)
 	}
 
 	// The split belongs to the workspace it is opened on, so it is claimed
@@ -313,6 +307,20 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		p.termPanelOutput.Clear()
 	}
 	return p.createTermPanelSession(newSession)
+}
+
+// killShellLeafSession ends the split's own tmux session. Only an explicit
+// close does this: a hidden split is reattached by the next ctrl+t, but a closed
+// one has no way back, and nothing else reaps sidecar-tp-* sessions.
+func killShellLeafSession(session string) tea.Cmd {
+	session = strings.TrimSpace(session)
+	if !strings.HasPrefix(session, termPanelSessionPrefix) {
+		return nil
+	}
+	return func() tea.Msg {
+		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
+		return nil
+	}
 }
 
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.

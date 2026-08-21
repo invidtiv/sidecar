@@ -217,3 +217,107 @@ func assertSplitClosedAndPrimaryFocusable(t *testing.T, p *Plugin) {
 		t.Fatal("the primary terminal could not take focus back")
 	}
 }
+
+// The wedge fix lives in one line of wiring — the panel role's OnSessionEnded —
+// and the handler test above cannot see it. This asserts the terminal the split
+// actually runs on is the one holding that hook, so deleting the role branch
+// restores the wedge and fails here.
+func TestPanelTerminalSessionEndIsWiredToTheShellLeafClose(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	p := shellLeafTestPlugin(t, SplitRows)
+	p.termPanelSession = termPanelSessionPrefix + "wiring"
+	p.termPanelFocused = true
+	p.activePane = PanePreview
+
+	model := p.newWorkspaceTerminal(workspaceTerminalPanel)
+	t.Cleanup(model.Close)
+	if model.OnSessionEnded == nil {
+		t.Fatal("the split terminal has no session-end hook")
+	}
+	model.OnSessionEnded()
+
+	assertSplitClosedAndPrimaryFocusable(t, p)
+
+	// And the primary's end is still the surface's own notice: it keeps its leaf.
+	primary := p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	t.Cleanup(primary.Close)
+	if primary.OnSessionEnded == nil {
+		t.Fatal("the primary terminal lost its session-end hook")
+	}
+}
+
+// The probe is a tmux spawn, so its answer can arrive after the user has moved
+// on. It must never force its confirm over the view they moved to.
+func TestShellLeafCloseProbeAbandonsWhenTheUserMovedOn(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	p := shellLeafTestPlugin(t, SplitCols)
+	p.termPanelSession = termPanelSessionPrefix + "probe"
+	p.viewMode = ViewModeCreate
+
+	p.handleShellLeafCloseProbe(ShellLeafCloseProbeMsg{
+		Session:        p.termPanelSession,
+		CurrentCommand: "node",
+		ShellCommand:   "zsh",
+		Mode:           ViewModeList,
+	})
+
+	if p.viewMode != ViewModeCreate {
+		t.Fatalf("viewMode = %v, want the create modal the user opened", p.viewMode)
+	}
+	if p.shellLeaf() == nil {
+		t.Fatal("an abandoned probe closed the split anyway")
+	}
+}
+
+// Hide and close are one exit told apart by its mode: ctrl+t keeps the session
+// and the user's typed name, the ✕ closes the session it asked about.
+func TestShellLeafHideKeepsTheSessionAndCloseEndsIt(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		mode        shellCloseMode
+		wantName    string
+		wantSession string
+	}{
+		{name: "hide keeps both", mode: shellCloseHide, wantName: "my split", wantSession: termPanelSessionPrefix + "keep"},
+		{name: "explicit close ends the session", mode: shellCloseExplicit},
+		{name: "session end clears state", mode: shellCloseSessionEnded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+			p := shellLeafTestPlugin(t, SplitRows)
+			p.shellLeafName = "my split"
+			p.termPanelSession = termPanelSessionPrefix + "keep"
+
+			p.closeShellLeaf(tc.mode)
+
+			if p.shellLeaf() != nil || p.termPanelVisible {
+				t.Fatal("the split survived its close")
+			}
+			if p.shellLeafName != tc.wantName {
+				t.Fatalf("shellLeafName = %q, want %q", p.shellLeafName, tc.wantName)
+			}
+			if p.termPanelSession != tc.wantSession {
+				t.Fatalf("termPanelSession = %q, want %q", p.termPanelSession, tc.wantSession)
+			}
+		})
+	}
+}
+
+// A shell killed from outside while the user works in the sidebar closes its
+// leaf without stealing the keyboard out from under them.
+func TestShellLeafSessionEndKeepsSidebarFocus(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	p := shellLeafTestPlugin(t, SplitRows)
+	p.termPanelSession = termPanelSessionPrefix + "outside"
+	p.termPanelFocused = false
+	p.activePane = PaneSidebar
+
+	p.noteShellLeafSessionEnded()
+
+	if p.shellLeaf() != nil {
+		t.Fatal("the dead split kept its leaf")
+	}
+	if p.activePane != PaneSidebar {
+		t.Fatalf("activePane = %v, want the sidebar the user was in", p.activePane)
+	}
+}

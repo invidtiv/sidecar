@@ -573,10 +573,16 @@ func (f *Form) build(width int, prevFocus string) {
 }
 
 func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
+	// Enter resolves to Create, and Create is refused while the selected kind is
+	// disabled — so the hint line must not promise a confirm that is a no-op.
+	hints := modal.WithHints(true)
+	if f.KindDisabledReason() != "" {
+		hints = modal.WithHintText("Tab to switch · Esc to cancel")
+	}
 	m := modal.New("Create Workspace",
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
-		modal.WithHints(true),
+		hints,
 		modal.WithInitialFocus(prevFocus),
 	)
 	for _, section := range sections {

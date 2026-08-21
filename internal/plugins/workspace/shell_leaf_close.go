@@ -31,6 +31,13 @@ type ShellLeafCloseProbeMsg struct {
 	CurrentCommand string
 	ShellCommand   string
 	Err            error
+
+	// Mode is the view mode the ✕ was clicked in. The probe is a tmux subprocess
+	// spawn, which on an EDR machine is long enough for the user to have opened
+	// the create modal or entered interactive mode in the meantime; this is the
+	// only async modal-open path in the plugin, so it carries its own precondition
+	// rather than assuming the mode it left behind.
+	Mode ViewMode
 }
 
 // loginShellCommand is the shell a session of ours was started with. tmux
@@ -49,9 +56,10 @@ func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
 	}
 	session := strings.TrimSpace(p.termPanelSession)
 	if session == "" {
-		return p.closeShellLeaf(true)
+		return p.closeShellLeaf(shellCloseSessionEnded)
 	}
 	shell := loginShellCommand()
+	mode := p.viewMode
 	return func() tea.Msg {
 		evidence, err := capturePaneEvidence(session)
 		return ShellLeafCloseProbeMsg{
@@ -59,6 +67,7 @@ func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
 			CurrentCommand: evidence.CurrentCommand,
 			ShellCommand:   shell,
 			Err:            err,
+			Mode:           mode,
 		}
 	}
 }
@@ -69,13 +78,22 @@ func (p *Plugin) handleShellLeafCloseProbe(msg ShellLeafCloseProbeMsg) tea.Cmd {
 	if !p.termPanelVisible || msg.Session != strings.TrimSpace(p.termPanelSession) {
 		return nil
 	}
+	// The gesture is abandoned if the user has moved on: an async answer must not
+	// force a modal over a view the user chose after clicking, nor yank them out
+	// of interactive mode. Clicking ✕ again from the list re-asks.
+	if p.viewMode != msg.Mode || p.viewMode != ViewModeList {
+		return nil
+	}
+	if p.interactiveState != nil && p.interactiveState.Active {
+		return nil
+	}
 	if msg.Err != nil {
 		// tmux could not resolve the target: the session is already gone, so
 		// there is no running process to ask about.
-		return p.closeShellLeaf(true)
+		return p.closeShellLeaf(shellCloseSessionEnded)
 	}
 	if !shellCloseNeedsConfirm(msg.CurrentCommand, msg.ShellCommand) {
-		return p.closeShellLeaf(false)
+		return p.closeShellLeaf(shellCloseExplicit)
 	}
 	p.shellCloseCommand = strings.TrimSpace(msg.CurrentCommand)
 	p.viewMode = ViewModeConfirmCloseSplit
@@ -109,7 +127,7 @@ func (p *Plugin) ensureConfirmCloseSplitModal() {
 		AddSection(modal.Text(lipgloss.NewStyle().Foreground(styles.Warning).
 			Render(running + " is running in this terminal."))).
 		AddSection(modal.Spacer()).
-		AddSection(modal.Text(dimText("The tmux session is kept; the split collapses."))).
+		AddSection(modal.Text(dimText("The split collapses and its tmux session is closed."))).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(
 			modal.Btn(" Close ", shellCloseConfirmID, modal.BtnPrimary()),
@@ -126,7 +144,7 @@ func (p *Plugin) confirmCloseSplit() tea.Cmd {
 	p.viewMode = ViewModeList
 	p.shellCloseCommand = ""
 	p.clearConfirmCloseSplitModal()
-	return p.closeShellLeaf(false)
+	return p.closeShellLeaf(shellCloseExplicit)
 }
 
 func (p *Plugin) cancelCloseSplit() tea.Cmd {

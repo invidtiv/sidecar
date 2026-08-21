@@ -107,6 +107,14 @@ func KindFromClickX(x, regionX, regionW int) Kind {
 	return kindFromClickX(kindRowsFor(false), KindShell, x, regionX, regionW)
 }
 
+// kindDisabledSelected is the selected-but-unavailable row: the selected row's
+// chrome so the toggle still says which kind is active, in muted text so the
+// row still says it cannot be created. It is a function rather than a value so
+// it reads the colour at render time and follows a theme change.
+func kindDisabledSelected() lipgloss.Style {
+	return styles.ButtonHover.Foreground(styles.TextMuted)
+}
+
 // kindToggle renders the row list. disabledReason answers, per row, why that
 // row cannot be created right now; a disabled row is drawn muted whether or not
 // it is selected, so the rule is visible before the row is entered.
@@ -119,16 +127,17 @@ func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disa
 		focused := focusID == id
 		parts := make([]string, 0, len(rows)*2)
 		for i, row := range rows {
+			disabled := disabledReason != nil && disabledReason(row.Kind) != ""
 			style := styles.Button
-			if disabledReason != nil && disabledReason(row.Kind) != "" {
+			switch {
+			case disabled && row.Kind == sel:
+				// A disabled row that is still the active kind — its Name field and
+				// placement row are drawn below it — must read as selected, or the
+				// toggle shows nothing selected at all. Selected chrome, muted text.
+				style = kindDisabledSelected()
+			case disabled:
 				style = styles.Muted
-				if i > 0 {
-					parts = append(parts, styles.Muted.Render(kindSeparator))
-				}
-				parts = append(parts, style.Render(" "+row.Label+" "))
-				continue
-			}
-			if row.Kind == sel {
+			case row.Kind == sel:
 				style = styles.ButtonHover
 				if focused {
 					style = styles.ButtonFocused

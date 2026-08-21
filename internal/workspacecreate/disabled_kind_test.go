@@ -3,6 +3,8 @@ package workspacecreate
 import (
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 // A disabled kind is disabled everywhere the form can be asked about it: the
@@ -51,5 +53,33 @@ func TestDisabledTerminalSplitRendersOneReasonLine(t *testing.T) {
 	rendered := f.Build(60).Render(120, 40, nil)
 	if got := strings.Count(rendered, "close one first"); got != 1 {
 		t.Fatalf("reason appears %d times, want once:\n%s", got, rendered)
+	}
+}
+
+// A disabled row that is still the ACTIVE kind — its Name field and placement
+// row are drawn below it — keeps the selected row's chrome, or the toggle shows
+// nothing selected at all. And the hint line stops promising a confirm that the
+// disabled state makes a silent no-op.
+func TestDisabledSelectedKindStillReadsAsSelected(t *testing.T) {
+	if got, want := kindDisabledSelected().GetBackground(), styles.ButtonHover.GetBackground(); got != want {
+		t.Fatalf("selected-disabled background = %v, want the selected row's %v", got, want)
+	}
+	if got, want := kindDisabledSelected().GetForeground(), styles.TextMuted; got != want {
+		t.Fatalf("selected-disabled foreground = %v, want muted %v", got, want)
+	}
+
+	const reason = "Two terminals are already on screen — close one first"
+	f := Open(OpenOpts{
+		Kind:                  KindTerminalSplit,
+		AllowTerminalSplit:    true,
+		TerminalSplitDisabled: reason,
+	})
+	if rendered := f.Build(60).Render(120, 40, nil); strings.Contains(rendered, "Enter to confirm") {
+		t.Fatalf("the disabled modal still promises Enter:\n%s", rendered)
+	}
+
+	f = Open(OpenOpts{Kind: KindTerminalSplit, AllowTerminalSplit: true})
+	if rendered := f.Build(60).Render(120, 40, nil); !strings.Contains(rendered, "Enter to confirm") {
+		t.Fatalf("an enabled modal lost its Enter hint:\n%s", rendered)
 	}
 }
