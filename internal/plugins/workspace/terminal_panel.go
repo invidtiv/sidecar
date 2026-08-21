@@ -232,17 +232,15 @@ func (p *Plugin) termPanelSplitBoxes() (outputBox, termBox int, fits bool) {
 // split. ok is false when the split does not fit, which means no panel is drawn
 // and there is nothing to size.
 func (p *Plugin) calculateTermPanelDimensions() (width, height int, ok bool) {
-	previewWidth, previewHeight := p.calculatePreviewDimensions()
-	_, termBox, fits := p.termPanelSplitBoxes()
-	if !fits {
+	// The box is the shell leaf's, from the pane sub-tree; each child box spends
+	// its own first row on its header, so the terminal inside it is one row
+	// shorter than the box. No shell leaf means no panel is drawn.
+	box, ok := p.shellSlotBox(true)
+	if !ok {
 		return 0, 0, false
 	}
-	if p.termPanelLayout == TermPanelRight {
-		return termBox, previewHeight, true
-	}
-	// Each child box spends its own first row on its header, so the terminal
-	// inside it is one row shorter than the box.
-	return previewWidth, max(termBox-terminalHeaderRows, 1), true
+	width, height = shellSlotTerminalSize(box)
+	return width, height, true
 }
 
 // termPanelContainerHeight converts the primary terminal's viewport height into
@@ -290,21 +288,14 @@ func termPanelRightBoxes(containerWidth, size int) (outputBox, termBox int, fits
 // output area when the terminal panel is visible. When hidden, returns full
 // preview dimensions.
 func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
-	previewWidth, previewHeight := p.calculatePreviewDimensions()
-	if !p.termPanelVisible {
-		return previewWidth, previewHeight
+	// The primary slot's box is the whole terminal leaf when no panel is drawn —
+	// including when the split does not fit — and the split's first child when
+	// one is. The box spends its first row on the header, like every surface.
+	box, ok := p.shellSlotBox(false)
+	if !ok {
+		return p.calculatePreviewDimensions()
 	}
-	outputBox, _, fits := p.termPanelSplitBoxes()
-	// If both minimums exceed the available space, the renderers draw no panel
-	// and this surface gets the whole preview.
-	if !fits {
-		return previewWidth, previewHeight
-	}
-	if p.termPanelLayout == TermPanelRight {
-		return outputBox, previewHeight
-	}
-	// The box spends its first row on the header, like every other surface.
-	return previewWidth, max(outputBox-terminalHeaderRows, 1)
+	return shellSlotTerminalSize(box)
 }
 
 // termPanelMaxScroll is how far back the panel's window can sit, in rows from

@@ -26,6 +26,11 @@ const (
 	// and resolved, not which windows exist, so a Jira ticket and a CI build
 	// become tabs in one leaf rather than two pane kinds.
 	Resource
+	// Shell is a live terminal leaf the user created, distinct from Primary:
+	// Primary is the one terminal the host owns, Shell is a peer session the
+	// tree hosts beside it. Keeping them apart is what lets a host have more
+	// than one live terminal without the tree learning what a terminal is.
+	Shell
 )
 
 // Terminal is the persisted-value and source compatibility alias used by the
@@ -76,6 +81,7 @@ type Floors struct {
 	Issue    Floor
 	Diff     Floor
 	Resource Floor
+	Shell    Floor
 }
 
 func (f Floors) primary() Floor {
@@ -154,6 +160,8 @@ func paneMinimum(node *Node, floors Floors) Floor {
 			floor = floors.Diff
 		case Resource:
 			floor = floors.Resource
+		case Shell:
+			floor = floors.Shell
 		}
 		return Floor{Width: max(floor.Width, 0), Height: max(floor.Height, 0)}
 	}

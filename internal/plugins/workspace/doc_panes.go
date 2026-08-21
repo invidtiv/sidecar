@@ -160,7 +160,11 @@ func paneTreeFloors() Floors {
 	// Inner markdown still never drops below MinWidthForMarkdown.
 	return paneframe.ChromeFloors(Floors{
 		Terminal: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
-		Doc:      PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+		// A shell leaf is a terminal like the primary one, so it gets the
+		// terminal panel's own floors — the same numbers the hand-rolled split
+		// clamps to today.
+		Shell: PaneFloor{Width: termPanelMinBoxCols, Height: termPanelMinBoxRows},
+		Doc:   PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		// An issue's body is markdown wrapped by the same renderer, so it needs
 		// the width that renderer stops being markdown below.
 		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
@@ -1382,7 +1386,7 @@ func supportedPaneTree(root *PaneNode) bool {
 	}
 	if root.Split == nil {
 		switch root.Kind {
-		case PaneTerminal, PaneDoc, PaneIssue, PaneDiff, PaneResource:
+		case PaneTerminal, PaneShell, PaneDoc, PaneIssue, PaneDiff, PaneResource:
 			return true
 		default:
 			return false

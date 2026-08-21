@@ -235,43 +235,39 @@ func (p *Plugin) terminalSurfaceGeometry(termPanel bool) terminalSurface {
 	// The leaf begins with the surface's own header. Any terminal-panel split is
 	// a subdivision within this box, not extra pane-tree chrome. Where the header
 	// and the viewport sit inside the box is the shared layer's answer, taken
-	// from the box the pane tree placed — one derivation, two consumers.
-	placed := termpreview.SurfaceIn(leaf)
-	if !placed.OK {
+	// from the box the pane tree placed — one derivation, two consumers. The
+	// sub-tree then places each terminal surface in its own leaf box, so no
+	// caller walks offsets of its own to find the second one.
+	if placed := termpreview.SurfaceIn(leaf); !placed.OK {
 		return terminalSurface{}
 	}
-	x := placed.X
-	headerY := placed.HeaderY
 
 	if termPanel {
+		// A split too small to draw has no panel anywhere on screen, so there is
+		// nothing to locate — reporting one would put it past the preview's right
+		// edge and take the cursor and the mouse mapping with it. That is the
+		// same answer as "the sub-tree has no shell leaf".
 		if !p.termPanelVisible {
 			return terminalSurface{}
 		}
-		// A split too small to draw has no panel anywhere on screen, so there is
-		// nothing to locate — reporting one would put it past the preview's right
-		// edge and take the cursor and the mouse mapping with it.
-		width, height, ok := p.calculateTermPanelDimensions()
+		box, ok := p.shellSlotBox(true)
 		if !ok {
 			return terminalSurface{}
 		}
-		if p.termPanelLayout == TermPanelRight {
-			outputWidth, _ := p.calculateAgentPaneDimensions()
-			x += outputWidth + termPanelDividerCols
-		} else {
-			// calculateAgentPaneDimensions reports the primary child's terminal
-			// rows only, so step over its header row too before the divider.
-			_, outputHeight := p.calculateAgentPaneDimensions()
-			headerY += terminalHeaderRows + outputHeight + termPanelDividerRows
-		}
+		width, height := shellSlotTerminalSize(box)
 		return terminalSurface{
-			X: x, Y: headerY + terminalHeaderRows, HeaderY: headerY,
+			X: box.X, Y: box.Y + terminalHeaderRows, HeaderY: box.Y,
 			Width: width, Height: height, OK: true,
 		}
 	}
 
-	width, height := p.calculateAgentPaneDimensions()
+	box, ok := p.shellSlotBox(false)
+	if !ok {
+		return terminalSurface{}
+	}
+	width, height := shellSlotTerminalSize(box)
 	return terminalSurface{
-		X: x, Y: headerY + terminalHeaderRows, HeaderY: headerY,
+		X: box.X, Y: box.Y + terminalHeaderRows, HeaderY: box.Y,
 		Width: width, Height: height, OK: true,
 	}
 }

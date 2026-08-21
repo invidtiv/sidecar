@@ -208,6 +208,9 @@ func previewPaneFloors() panelayout.Floors {
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Resource: panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		// A shell leaf is a terminal, so it budgets what the primary terminal
+		// budgets on this surface.
+		Shell: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
 	})
 }
 
