@@ -102,6 +102,14 @@ Sidecar does **not** read or require API keys or tokens.
 
 The Conversations plugin can export a session to a markdown file in the current working directory, or copy it to the clipboard. This is user-initiated only.
 
+### Terminal resource providers (opt-in)
+
+When the `terminal_resource_providers` feature flag is enabled (default **off**) and you configure external providers under `terminalResources` in `config.json`, sidecar launches those executables to recognize resource keys (such as `CASH-1245`) printed in terminal output and to fetch a resource's details when you open it. Recognition itself is local: no terminal text leaves sidecar until you activate a key.
+
+For each invocation, sidecar passes the executable only a minimal default environment plus variables you explicitly list in that provider's `passEnv`. It never sends terminal lines, scrollback, tmux identity, repository contents, or credentials. The enabled executable receives the clicked resource key and may contact its configured service using authentication that the provider owns; those network requests are made by the provider executable, not by sidecar.
+
+Returned resource content (title, fields, body, URLs) is held in memory only — sidecar does not persist it or write it to logs. Two bounded exceptions contain resource keys such as `CASH-1245`: restored pane layout references in per-project state, and UI-request files written under `~/.local/state/sidecar/requests/`, which are deleted after delivery and swept when expired.
+
 ### Executable detection
 
 On startup and when needed, sidecar checks `PATH` for: `tmux`, `brew`, `git`, `td`, `go`, and — only when the `tasks_plugin` feature is enabled — `tasks`, `tasks-tui`, `tasks-api`. It reads `os.Executable()` and resolves each product's executable (following symlinks) to determine how that specific binary was installed. Determining Homebrew ownership runs `brew --cellar <formula>` / `brew --prefix <formula>`; this reads local Homebrew metadata and makes no network request.
@@ -142,6 +150,8 @@ A first install of **td** or **Tasks** is a different, explicit action: Sidecar 
 The Workspaces plugin runs `gh` CLI commands (e.g., `gh pr list`, `gh pr create`) using your existing GitHub CLI authentication. These run only in response to explicit user actions such as fetching a PR or creating one from the merge workflow.
 
 Git push, pull, and fetch operations use the local `git` CLI with your configured remotes and credentials.
+
+When terminal resource providers are enabled (see above), the provider executables you configure make their own network requests to their configured services (for example a Jira or GitHub instance) when a resource is opened or refreshed. Sidecar itself makes no request on their behalf.
 
 ### Browser URLs
 

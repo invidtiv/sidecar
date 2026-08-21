@@ -2,7 +2,7 @@
 
 **Status:** v1 — frozen 2026-08-17
 **Protocol identifier:** `sidecar.terminal-resource/v1`
-**Related:** [the plan](../plans/active/terminal-resource-providers.md)
+**Related:** [the plan](../plans/implemented/terminal-resource-providers.md)
 
 A terminal resource provider is an explicitly configured local executable that
 teaches Sidecar to recognize a resource key in terminal output and to turn that
