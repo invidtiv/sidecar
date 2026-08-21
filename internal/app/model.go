@@ -442,6 +442,11 @@ type Model struct {
 	// a boundary must survive the filter not returning a model.
 	notificationCentreWheel *tty.WheelBurst
 	notificationCentreNow   func() time.Time
+	// The issue preview modal coalesces the same way, for the same reason: its
+	// boundary answer runs in the input filter's Model copy, and Reset there
+	// must reach the burst Update applies through.
+	issuePreviewWheel    *tty.WheelBurst
+	issuePreviewWheelNow func() time.Time
 
 	// flash is the status-flash tier: one transient line in the content
 	// region's top-right, never stored and never counted. See flash.go.
@@ -1679,6 +1684,11 @@ func (m *Model) resetIssuePreview() {
 	m.issuePreviewModalWidth = 0
 	m.issuePreviewModalHeight = 0
 	m.issuePreviewMouseHandler = nil
+	if m.issuePreviewWheel != nil {
+		// A held delta belongs to the issue being closed, never to whatever
+		// card the modal shows next.
+		m.issuePreviewWheel.Reset()
+	}
 }
 
 // backToIssueInput closes the preview and returns to the search modal

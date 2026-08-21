@@ -197,6 +197,40 @@ func TestRenderer_WidthZero(t *testing.T) {
 	}
 }
 
+func TestCompactDocumentKeepsInlineDecorations(t *testing.T) {
+	r, err := NewRenderer(CompactDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := "See **bold**, *italic*, _also italic_, and ~~struck~~ text."
+	joined := strings.Join(r.RenderContent(content, 80), "\n")
+	plain := ansi.Strip(joined)
+	for _, word := range []string{"bold", "italic", "struck"} {
+		if !strings.Contains(plain, word) {
+			t.Fatalf("compact render dropped %q: %q", word, plain)
+		}
+	}
+	if ansi.StringWidth(plain) != ansi.StringWidth(joined) && ansi.StringWidth(strings.Split(joined, "\n")[0]) != ansi.StringWidth(ansi.Strip(strings.Split(joined, "\n")[0])) {
+		t.Fatalf("ANSI width leaked: styled=%d plain=%d", ansi.StringWidth(joined), ansi.StringWidth(plain))
+	}
+	if !hasSGR(joined, "1") {
+		t.Fatalf("bold SGR missing: %q", joined)
+	}
+	if !hasSGR(joined, "3") {
+		t.Fatalf("italic SGR missing: %q", joined)
+	}
+	if !hasSGR(joined, "9") {
+		t.Fatalf("strikethrough SGR missing: %q", joined)
+	}
+}
+
+func hasSGR(s, code string) bool {
+	return strings.Contains(s, "\x1b["+code+"m") ||
+		strings.Contains(s, "\x1b["+code+";") ||
+		strings.Contains(s, ";"+code+"m") ||
+		strings.Contains(s, ";"+code+";")
+}
+
 func TestCompactDocumentDropsChrome(t *testing.T) {
 	plain, err := NewRenderer()
 	if err != nil {

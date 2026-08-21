@@ -17,11 +17,13 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -30,6 +32,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -80,6 +83,12 @@ type appContentDeck struct {
 	live                              *livepanes.Set
 	suppressRefresh                   bool
 	edit                              *appDeckDocumentEdit
+	// wheel holds one flick per scrollable leaf this deck draws, and wheelNow
+	// is its clock (nil is the wall clock, replaced by tests). Each leaf
+	// scrolls independently, so the delta one of them holds back belongs to it
+	// alone; today only the issue card coalesces here.
+	wheel    tty.WheelBursts
+	wheelNow func() time.Time
 }
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
@@ -167,6 +176,7 @@ func appDeckFloors() panelayout.Floors {
 		Primary:  panelayout.Floor{Width: 80, Height: 10},
 		Doc:      panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Issue:    panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
+		Note:     panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Diff:     panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 		Resource: panelayout.Floor{Width: markdown.MinWidthForMarkdown, Height: 8},
 	}, appDeckChromeForKind)
@@ -309,6 +319,8 @@ func (c *appDeckContent) Title() string {
 			return v.Title()
 		case *issueview.Model:
 			return v.Title()
+		case *noteview.Model:
+			return v.Title()
 		case *workspacediff.View:
 			return v.Target.TabLabel()
 		case *resourceview.Model:
@@ -347,6 +359,9 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 	case *issueview.Model:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.View()
+	case *noteview.Model:
+		v.SetSize(c.size.Width, bodyH)
+		body = v.View()
 	case *workspacediff.View:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.Render(c.size.Width, bodyH, workspacediff.RenderOpts{})
@@ -359,6 +374,7 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 
 type appDeckTabHit struct {
 	leafID, index int
+	close         bool
 	rect          mouse.Rect
 }
 
@@ -367,6 +383,9 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 	labels := make([]tabs.Label, 0, len(items))
 	for _, item := range items {
 		label := item.Ref.Value
+		if view, ok := item.Viewer.(*noteview.Model); ok && view.Title() != "" {
+			label = view.Title()
+		}
 		if label == "" {
 			label = string(item.Ref.Kind)
 		}
@@ -374,10 +393,12 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 	}
 	reserve := ui.ReserveHeaderClose(width)
 	strip := tabs.LayoutStrip(labels, active, reserve.TabsWidth, focused, nil)
-	for _, hit := range strip.Tabs {
-		h.tabHits = append(h.tabHits, appDeckTabHit{leafID: leafID, index: hit.Index,
-			rect: mouse.Rect{X: origin.X + hit.Col, Y: origin.Y, W: hit.Width, H: 1}})
-	}
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		h.tabHits = append(h.tabHits, appDeckTabHit{
+			leafID: leafID, index: index, close: close,
+			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
+		})
+	})
 	return ui.ComposeHeaderClose(strip.Row, width, false)
 }
 
@@ -433,9 +454,18 @@ func (r appDeckRegions) Tabs(n *panelayout.Node, b paneframe.Box) {
 func (r appDeckRegions) Title(*panelayout.Node, paneframe.Box) {}
 
 func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
-	if n.Kind != panelayout.Primary && b.W > 0 {
-		r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+b.W-1, b.Y, 1, 1, n.ID)
+	if n.Kind == panelayout.Primary || b.W <= 0 {
+		return
 	}
+	// The drawn × is the padded three-cell button from ComposeHeaderClose, so
+	// the hit rect must be the same reserved geometry. Registering only the
+	// last column left the glyph itself dead: clicks had to land one cell to
+	// its right to close.
+	reserve := ui.ReserveHeaderClose(b.W)
+	if reserve.CloseW < 1 {
+		return
+	}
+	r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+reserve.CloseCol, b.Y, reserve.CloseW, 1, n.ID)
 }
 func (r appDeckRegions) Body(*panelayout.Node, paneframe.Box) {}
 
@@ -513,7 +543,7 @@ func (m *Model) openAppContent(workdir, pluginID string, ref contentlink.Ref) te
 	if ref.Kind == contentlink.KindURL {
 		return terminallink.OpenHTTP(ref.Value)
 	}
-	if ref.Kind == contentlink.KindInternal {
+	if ref.Kind == contentlink.KindInternal && h.pluginID == "notes" {
 		cmd, err := sidecarIntents.activate(IntentAppContext{ProjectRoot: m.ui.ProjectRoot}, ref)
 		if err != nil {
 			return nil
@@ -556,6 +586,8 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	switch req.Target.Kind {
 	case uirequest.TargetKindIssue:
 		ref = contentlink.Ref{Kind: contentlink.KindIssue, Value: req.Target.Value}
+	case uirequest.TargetKindNote:
+		ref = contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: req.Target.Value}
 	case uirequest.TargetKindDiff:
 		ref = contentlink.Ref{Kind: contentlink.KindDiff, Value: req.Target.Value}
 	case uirequest.TargetKindResource:
@@ -781,6 +813,11 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 			case appDeckTabRegion:
 				if hit, ok := region.Data.(appDeckTabHit); ok {
 					h.deck.FocusLeaf(hit.leafID)
+					if hit.close {
+						h.deck.CloseTab(hit.leafID, hit.index)
+						h.syncInnerFocus()
+						return nil
+					}
 					return h.deck.SelectTab(hit.leafID, hit.index)
 				}
 			}
@@ -795,6 +832,8 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 		case *docview.Model:
 			v.Scroll(delta)
 		case *issueview.Model:
+			h.scrollIssueByWheel(leaf.ID, v, delta)
+		case *noteview.Model:
 			v.Scroll(delta)
 		case *workspacediff.View:
 			v.ScrollContent(delta, v.Height())
@@ -803,6 +842,27 @@ func (h *appContentDeck) handlePassiveMouse(msg tea.MouseMsg, leaf *panelayout.N
 		}
 	}
 	return nil
+}
+
+// issueWheelSurfaceKey names the flick over one deck leaf's issue card.
+func issueWheelSurfaceKey(leafID int) string { return fmt.Sprintf("issue-%d", leafID) }
+
+// scrollIssueByWheel applies one notch to a deck issue card through the shared
+// burst guard. A leaf is one scroll surface, so it is named by its leaf ID and
+// its held delta dies with the deck rather than crossing to its neighbours.
+func (h *appContentDeck) scrollIssueByWheel(leafID int, view *issueview.Model, delta int) {
+	flushed, ok := h.wheel.For(issueWheelSurfaceKey(leafID)).Add(delta, h.now())
+	if !ok {
+		return
+	}
+	view.Scroll(flushed)
+}
+
+func (h *appContentDeck) now() time.Time {
+	if h.wheelNow != nil {
+		return h.wheelNow()
+	}
+	return time.Now()
 }
 
 // appContentWheelAtBoundary mirrors appContentMouse's pointer ownership before
@@ -842,6 +902,14 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 	case *docview.Model:
 		return v.ScrollAtBoundary(delta), true
 	case *issueview.Model:
+		bounded := v.ScrollAtBoundary(delta)
+		if bounded {
+			// A held delta must not leak into the next gesture after the
+			// filter starts dropping the inertia tail at this boundary.
+			h.wheel.For(issueWheelSurfaceKey(leaf.ID)).Reset()
+		}
+		return bounded, true
+	case *noteview.Model:
 		return v.ScrollAtBoundary(delta), true
 	case *workspacediff.View:
 		return v.ScrollAtBoundary(delta, v.Height()), true
@@ -854,7 +922,7 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 
 func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	h := m.activeContentDeck()
-	if h == nil || h.deck.Leaf(panelayout.Document)+h.deck.Leaf(panelayout.Issue)+h.deck.Leaf(panelayout.Diff)+h.deck.Leaf(panelayout.Resource) == 0 {
+	if h == nil || h.deck.Leaf(panelayout.Document)+h.deck.Leaf(panelayout.Issue)+h.deck.Leaf(panelayout.Note)+h.deck.Leaf(panelayout.Diff)+h.deck.Leaf(panelayout.Resource) == 0 {
 		return nil, false
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
@@ -902,6 +970,15 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.persistAppContentDeck(h)
 		return cmd, true
 	}
+	// Sidecar's own globals outrank a passive leaf. A focused document, note,
+	// or diff must not swallow the keys that switch plugins, open the palette,
+	// or reach the switchers — those belong to the host's switch, which runs
+	// later in the key ladder. Returning false hands them back; everything the
+	// deck structurally owns (tab, q/esc, x, tab cycling) was answered above,
+	// and an active in-document search consumed its keys even earlier.
+	if keymap.GlobalKeys[key.String()] {
+		return nil, false
+	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:
 		switch key.String() {
@@ -924,6 +1001,19 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		v.HandleKey(key)
 		return nil, true
 	case *issueview.Model:
+		_, cmd := v.HandleKey(key)
+		return cmd, true
+	case *noteview.Model:
+		switch key.String() {
+		case "y":
+			if data := v.Data(); data != nil {
+				return noteview.CopyMarkdown(data), true
+			}
+		case "Y", "shift+y":
+			if data := v.Data(); data != nil {
+				return noteview.CopyID(data), true
+			}
+		}
 		_, cmd := v.HandleKey(key)
 		return cmd, true
 	case *workspacediff.View:
@@ -1061,6 +1151,8 @@ func (m Model) appContentContext() (string, bool) {
 		return "workspace-doc", true
 	case panelayout.Issue:
 		return "workspace-issue", true
+	case panelayout.Note:
+		return "workspace-note", true
 	case panelayout.Diff:
 		return "workspace-diff", true
 	case panelayout.Resource:
@@ -1125,6 +1217,11 @@ func (m *Model) appContentCommands() []plugin.Command {
 			command("yank-issue", "Yank", "Copy issue as markdown", 9),
 			command("yank-issue-key", "YankID", "Copy issue ID", 10),
 		)
+	case *noteview.Model:
+		cmds = append(cmds,
+			command("yank-note", "Yank", "Copy note as markdown", 7),
+			command("yank-note-key", "YankID", "Copy note ID", 8),
+		)
 	case *workspacediff.View:
 		for _, viewerCommand := range v.Commands(ctx) {
 			id := viewerCommand.ID
@@ -1151,9 +1248,13 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 	case "close":
 		h.deck.HideFocused()
 		h.syncInnerFocus()
+		m.persistAppContentDeck(h)
+		m.updateContext()
 	case "close-tab":
 		h.deck.CloseActive()
 		h.syncInnerFocus()
+		m.persistAppContentDeck(h)
+		m.updateContext()
 	case "prev-tab":
 		cmd := h.deck.CycleTab(-1)
 		m.persistAppContentDeck(h)
@@ -1210,6 +1311,17 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		if key != "" {
 			_, cmd := view.HandleKey(appContentKeyPress(key))
 			return cmd
+		}
+	case *noteview.Model:
+		switch id {
+		case "yank-note":
+			if data := view.Data(); data != nil {
+				return noteview.CopyMarkdown(data)
+			}
+		case "yank-note-key":
+			if data := view.Data(); data != nil {
+				return noteview.CopyID(data)
+			}
 		}
 	case *workspacediff.View:
 		key := map[string]string{

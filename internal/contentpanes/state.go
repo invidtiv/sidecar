@@ -53,7 +53,7 @@ func (d *Deck) Encode() State {
 	if leaf := panelayout.Find(d.root, d.focus); leaf != nil && leaf.Split == nil {
 		state.FocusKind = kindName(leaf.Kind)
 	}
-	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Diff, panelayout.Resource} {
+	for _, kind := range []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Note, panelayout.Diff, panelayout.Resource} {
 		if p := d.hidden[kind]; p != nil {
 			state.Hidden = append(state.Hidden, d.encodePane(p))
 		}
@@ -204,6 +204,8 @@ func parseKind(raw string) (panelayout.Kind, bool) {
 		return panelayout.Document, true
 	case "issue":
 		return panelayout.Issue, true
+	case "note":
+		return panelayout.Note, true
 	case "diff":
 		return panelayout.Diff, true
 	case "resource":

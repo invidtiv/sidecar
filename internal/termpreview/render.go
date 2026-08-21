@@ -141,11 +141,8 @@ func RenderBody(in RenderBufferInput) string {
 		)
 		visible = strings.Split(joined, "\n")
 	}
-	for i, line := range visible {
-		visible[i] = fill(line, width, truncate)
-	}
-
-	return strings.Join(padRows(visible, body, width), "\n")
+	canvasBg := CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	return PadCanvasBox(strings.Join(visible, "\n"), canvasBg, width, body, truncate)
 }
 
 // RenderBuffer draws a whole embedded terminal box: RenderHeader over

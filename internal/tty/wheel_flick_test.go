@@ -107,8 +107,10 @@ func TestATrackpadFlickIsBoundedBySendRateAndNotchesPerSend(t *testing.T) {
 	t.Logf("flick: %d events over %v -> %d sends (%.0f/s), %d notches, largest send %d",
 		len(gaps), span, sends, float64(sends)/span.Seconds(), notches, biggest)
 
-	if ceiling := int(span/WheelBurstDebounce) + 1; sends > ceiling {
-		t.Fatalf("%d sends over %v, want at most one per %v (%d)", sends, span, WheelBurstDebounce, ceiling)
+	// This handler's reporting pane claims every notch, so the send rate is the
+	// forwarded pace, not the base burst debounce.
+	if ceiling := int(span/WheelPaneDebounce) + 1; sends > ceiling {
+		t.Fatalf("%d sends over %v, want at most one per %v (%d)", sends, span, WheelPaneDebounce, ceiling)
 	}
 	if sends >= len(gaps) {
 		t.Fatalf("%d sends for %d events: the flick was not coalesced at all", sends, len(gaps))

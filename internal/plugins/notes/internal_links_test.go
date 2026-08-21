@@ -176,6 +176,7 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 	}{
 		{name: "built-in edit", apply: func(p *Plugin) { p.previewMode = false }},
 		{name: "search", apply: func(p *Plugin) { p.searchMode = true }},
+		{name: "in-note search", apply: func(p *Plugin) { p.noteSearchMode = true }},
 		{name: "task modal", apply: func(p *Plugin) { p.showTaskModal = true }},
 		{name: "delete modal", apply: func(p *Plugin) { p.showDeleteModal = true }},
 		{name: "info modal", apply: func(p *Plugin) { p.showInfoModal = true }},
@@ -198,6 +199,89 @@ func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreviewClickOnContentLinkDoesNotEnterEdit(t *testing.T) {
+	click := func(t *testing.T, content, token string) (*Plugin, bool, bool) {
+		t.Helper()
+		store := openTestStore(t)
+		p := navigationTestPlugin(store, t.TempDir())
+		note := Note{ID: "nt-4jdj4e", Title: "links", Content: content}
+		p.notes = []Note{note}
+		p.editorNote = &p.notes[0]
+		p.previewLines = strings.Split(note.Content, "\n")
+		p.previewMode = true
+		p.markdownView = false
+		_ = p.View(100, 12)
+		p.registerMouseRegions()
+
+		layout := p.editorLayout()
+		y := 1 + layout.contentRow
+		contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
+		plain := ansi.Strip(p.viewSurface.Lines[0])
+		at := strings.Index(plain, token)
+		if at < 0 {
+			t.Fatalf("%q not in preview %q", token, plain)
+		}
+		x := contentX + at + 1
+		hit := p.previewContentLinkAt(x, y)
+		_, _ = p.handleMouseClick(mouse.MouseAction{
+			X: x, Y: y,
+			Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+		})
+		return p, hit, p.previewMode
+	}
+
+	t.Run("issue", func(t *testing.T) {
+		p, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "td-7be1ec")
+		if !hit || !preview {
+			t.Fatalf("td link hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+		_ = p
+	})
+	t.Run("unresolved-filename-enters-edit", func(t *testing.T) {
+		p, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "README.md")
+		if hit || preview {
+			t.Fatalf("missing README.md hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+		p.previewMode = true
+		layout := p.editorLayout()
+		y := 1 + layout.contentRow
+		contentX := p.listWidth + dividerWidth + 2 + layout.leftMargin
+		plain := ansi.Strip(p.viewSurface.Lines[0])
+		at := strings.Index(plain, "README.md")
+		_, _ = p.handleMouseClick(mouse.MouseAction{
+			X: contentX + at + 1, Y: y, Alt: true,
+			Region: &mouse.Region{ID: regionEditorLine, Data: 0},
+		})
+		if p.previewMode {
+			t.Fatal("alt+click on missing README.md did not enter edit")
+		}
+	})
+	t.Run("hex-lookalike-enters-edit", func(t *testing.T) {
+		_, hit, preview := click(t, "commit abcdefa is not a link", "abcdefa")
+		if hit || preview {
+			t.Fatalf("hex lookalike hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+	})
+	t.Run("plain-text-enters-edit", func(t *testing.T) {
+		_, hit, preview := click(t, "See td-7be1ec and README.md in the tree.", "See ")
+		if hit || preview {
+			t.Fatalf("plain text hit=%v preview=%v, want enter-edit", hit, preview)
+		}
+	})
+	t.Run("internal-note-uri", func(t *testing.T) {
+		_, hit, preview := click(t, "Open sidecar://note/nt-4jdj4e next", "sidecar://note/nt-4jdj4e")
+		if !hit || !preview {
+			t.Fatalf("internal note uri hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+	})
+	t.Run("http-url", func(t *testing.T) {
+		_, hit, preview := click(t, "See https://example.com/notes later", "https://example.com/notes")
+		if !hit || !preview {
+			t.Fatalf("http url hit=%v preview=%v, want skip-edit", hit, preview)
+		}
+	})
 }
 
 func navigationTestPlugin(store noteStore, root string) *Plugin {

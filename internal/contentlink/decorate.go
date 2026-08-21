@@ -8,8 +8,13 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// Decorate underlines local references and synthesizes OSC-8 only for safe
-// HTTP(S). Source OSC must first be removed by StripOSC8 or ScanFrame.
+// Decorate underlines local references and synthesizes OSC-8 for safe HTTP(S)
+// destinations: built-in URL spans, and resource spans whose locator is itself
+// a browser URL — a claimed GitHub URL must keep its emulator hyperlink so
+// cmd-click remains the escape hatch even after Sidecar reclassifies the span.
+// Resource locators that are keys or refs stay underline-only.
+//
+// Source OSC must first be removed by StripOSC8 or ScanFrame.
 func Decorate(line string, spans []Span) string {
 	active := make([]Span, 0, len(spans))
 	for _, span := range spans {
@@ -20,14 +25,14 @@ func Decorate(line string, spans []Span) string {
 	sort.SliceStable(active, func(i, j int) bool { return active[i].StartCol > active[j].StartCol })
 	for _, span := range active {
 		open, close := "\x1b[4m", "\x1b[24m"
-		if span.Kind == KindURL {
+		if span.Kind == KindURL || span.Kind == KindResource {
 			if span.Explicit && len(span.Value) > MaxExplicitDestinationBytes {
 				continue
 			}
 			if safe, ok := SafeHTTPURL(span.Value); ok {
 				open = "\x1b]8;;" + safe + "\x1b\\\x1b[4m"
 				close = "\x1b[24m\x1b]8;;\x1b\\"
-			} else {
+			} else if span.Kind == KindURL {
 				continue
 			}
 		}

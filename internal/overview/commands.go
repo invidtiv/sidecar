@@ -22,6 +22,7 @@ const (
 	ctxGlobalWorkspacesDocSearch = "global-workspaces-doc-search"
 	ctxGlobalWorkspacesDocFind   = "global-workspaces-doc-find"
 	ctxGlobalWorkspacesIssue     = "global-workspaces-issue"
+	ctxGlobalWorkspacesNote      = "global-workspaces-note"
 	ctxGlobalWorkspacesDiff      = "global-workspaces-diff"
 	ctxGlobalWorkspacesResource  = "global-workspaces-resource"
 )
@@ -122,6 +123,15 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: ctxGlobalWorkspacesIssue, Priority: 6},
 			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: ctxGlobalWorkspacesIssue, Priority: 7},
 			{ID: "close", Name: "Close", Description: "Close the issue pane", Context: ctxGlobalWorkspacesIssue, Priority: 8},
+		}
+	case ctxGlobalWorkspacesNote:
+		return []plugin.Command{
+			{ID: "close-tab", Name: "Tab×", Description: "Close the active note tab", Context: ctxGlobalWorkspacesNote, Priority: 1},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: ctxGlobalWorkspacesNote, Priority: 2},
+			{ID: "next-tab", Name: "Tab→", Description: "Next note tab", Context: ctxGlobalWorkspacesNote, Priority: 3},
+			{ID: "yank-note", Name: "Yank", Description: "Copy note as markdown", Context: ctxGlobalWorkspacesNote, Priority: 4},
+			{ID: "yank-note-key", Name: "YankID", Description: "Copy note ID", Context: ctxGlobalWorkspacesNote, Priority: 5},
+			{ID: "close", Name: "Close", Description: "Close the note pane", Context: ctxGlobalWorkspacesNote, Priority: 6},
 		}
 	default:
 		cmds := []plugin.Command{

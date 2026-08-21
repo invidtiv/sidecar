@@ -36,6 +36,7 @@ import (
 // they are constants rather than literals scattered through the file.
 const (
 	liveIssues = "issues"
+	liveNotes  = "notes"
 	liveDocs   = "docs"
 	liveDiffs  = "diffs"
 )
@@ -61,6 +62,14 @@ func (p *Plugin) newLiveSet() *livepanes.Set {
 			Targets: p.issueWatchTargets,
 			Refresh: p.refreshIssuePanes,
 			Owed:    p.issueRefreshOwed,
+		},
+		livepanes.Binding{
+			Kind:    liveNotes,
+			Config:  livewatch.Config{Quiet: 400 * time.Millisecond, MaxLatency: 2 * time.Second},
+			Prepare: p.resolveTDStores,
+			Targets: p.noteWatchTargets,
+			Refresh: p.refreshNotePanes,
+			Owed:    p.noteRefreshOwed,
 		},
 		livepanes.Binding{
 			Kind:    liveDocs,
@@ -195,24 +204,36 @@ func (p *Plugin) issueWatchTargets() []livewatch.Target {
 func (p *Plugin) resolveTDStores() tea.Cmd {
 	visible := p.visibleContentLeaves()
 	var cmds []tea.Cmd
-	for id, pane := range p.issues {
-		if pane == nil || !visible[id] || pane.root == "" || len(pane.tabs.Items) == 0 {
-			continue
+	queue := func(root string) {
+		if root == "" {
+			return
 		}
-		if _, done := p.tdStoreTargets[pane.root]; done {
-			continue
+		if _, done := p.tdStoreTargets[root]; done {
+			return
 		}
-		if p.tdStoreResolving[pane.root] {
-			continue
+		if p.tdStoreResolving[root] {
+			return
 		}
 		if p.tdStoreResolving == nil {
 			p.tdStoreResolving = make(map[string]bool)
 		}
-		p.tdStoreResolving[pane.root] = true
-		root, epoch := pane.root, p.liveEpoch()
+		p.tdStoreResolving[root] = true
+		epoch := p.liveEpoch()
 		cmds = append(cmds, func() tea.Msg {
 			return tdStoreResolvedMsg{Epoch: epoch, Root: root, Targets: issueview.StoreTargets(root)}
 		})
+	}
+	for id, pane := range p.issues {
+		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 {
+			continue
+		}
+		queue(pane.root)
+	}
+	for id, pane := range p.notes {
+		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 {
+			continue
+		}
+		queue(pane.root)
 	}
 	return tea.Batch(cmds...)
 }
@@ -283,6 +304,62 @@ func (p *Plugin) issueRefreshOwed() bool {
 // modal closes.
 func (p *Plugin) issueRefreshSuppressed() bool {
 	return p.viewMode != ViewModeList
+}
+
+func (p *Plugin) noteWatchTargets() []livewatch.Target {
+	visible := p.visibleContentLeaves()
+	seen := make(map[string]bool)
+	var targets []livewatch.Target
+	for id, pane := range p.notes {
+		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 || pane.root == "" {
+			continue
+		}
+		for _, t := range p.tdStoreTargets[pane.root] {
+			if seen[t.Path] {
+				continue
+			}
+			seen[t.Path] = true
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+func (p *Plugin) refreshNotePanes() []tea.Cmd {
+	visible := p.visibleContentLeaves()
+	suppressed := p.issueRefreshSuppressed()
+	var cmds []tea.Cmd
+	for id, pane := range p.notes {
+		if pane == nil || !visible[id] {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			view := item.Value
+			if view == nil {
+				continue
+			}
+			view.Observe()
+			if cmd := view.Refresh(suppressed); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
+	return cmds
+}
+
+func (p *Plugin) noteRefreshOwed() bool {
+	visible := p.visibleContentLeaves()
+	for id, pane := range p.notes {
+		if pane == nil || !visible[id] {
+			continue
+		}
+		for _, item := range pane.tabs.Items {
+			if item.Value != nil && item.Value.RefreshPending() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

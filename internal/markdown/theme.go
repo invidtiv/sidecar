@@ -219,9 +219,13 @@ func applyPalette(cfg ansi.StyleConfig, c styles.ColorPalette, chromaTheme strin
 	cfg.H5.Color = muted
 	cfg.H6.Color = muted
 
+	italic, bold, strike := true, true, true
 	cfg.Emph.Color = text
+	cfg.Emph.Italic = &italic
 	cfg.Strong.Color = primary
+	cfg.Strong.Bold = &bold
 	cfg.Strikethrough.Color = muted
+	cfg.Strikethrough.CrossedOut = &strike
 	cfg.HorizontalRule.Color = rule
 
 	cfg.Item.Color = primary

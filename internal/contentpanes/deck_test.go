@@ -23,6 +23,7 @@ func testPlacement() Placement {
 			Primary:  panelayout.Floor{Width: 20, Height: 5},
 			Doc:      panelayout.Floor{Width: 20, Height: 5},
 			Issue:    panelayout.Floor{Width: 20, Height: 5},
+			Note:     panelayout.Floor{Width: 20, Height: 5},
 			Diff:     panelayout.Floor{Width: 20, Height: 5},
 			Resource: panelayout.Floor{Width: 20, Height: 5},
 		},
@@ -39,6 +40,10 @@ func fileRef(path string) contentlink.Ref {
 
 func issueRef(id string) contentlink.Ref {
 	return contentlink.Ref{Kind: contentlink.KindIssue, Value: id}
+}
+
+func noteRef(id string) contentlink.Ref {
+	return contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: id}
 }
 
 func diffRef(spec string) contentlink.Ref {
@@ -97,6 +102,50 @@ func TestDeckPlacementAndHomogeneousTabs(t *testing.T) {
 	}
 	if panelayout.FirstOfKind(d.root, panelayout.Issue) == nil || panelayout.FirstOfKind(d.root, panelayout.Document) == nil {
 		t.Fatalf("different kinds did not keep distinct leaves: %#v", d.root)
+	}
+
+	note := d.Open(ctx, noteRef("nt-abc123"), place)
+	if note.Status != StatusOpened || !note.CreatedLeaf || note.Kind != panelayout.Note {
+		t.Fatalf("note Open = %#v", note)
+	}
+	sameNote := d.Open(ctx, noteRef("nt-abc123"), place)
+	if sameNote.Status != StatusFocused || sameNote.CreatedLeaf || sameNote.CreatedTab {
+		t.Fatalf("same note = %#v", sameNote)
+	}
+	secondNote := d.Open(ctx, noteRef("nt-def456"), place)
+	if secondNote.Status != StatusOpened || secondNote.CreatedLeaf || !secondNote.CreatedTab || secondNote.LeafID != note.LeafID {
+		t.Fatalf("second note = %#v", secondNote)
+	}
+	if got := paneForKind(d, panelayout.Note); got == nil || len(got.tabs) != 2 || got.active != 1 {
+		t.Fatalf("note tabs = %#v", got)
+	}
+}
+
+func TestDeckNotePersistRoundTrip(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	place := testPlacement()
+	if out := d.Open(ctx, noteRef("nt-abc123"), place); !out.Accepted() {
+		t.Fatalf("open note = %#v", out)
+	}
+	if out := d.Open(ctx, noteRef("nt-def456"), place); !out.Accepted() {
+		t.Fatalf("open second note = %#v", out)
+	}
+	encoded := d.Encode()
+	raw, err := json.Marshal(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"kind":"note"`) || !strings.Contains(string(raw), "nt-abc123") {
+		t.Fatalf("encoded note state missing identity: %s", raw)
+	}
+	restored := Decode(ctx, Config{}, encoded)
+	if restored.Leaf(panelayout.Note) == 0 {
+		t.Fatal("restored deck lost the note leaf")
+	}
+	items, active := restored.Tabs(restored.Leaf(panelayout.Note))
+	if len(items) != 2 || active != 1 || items[0].Ref.Value != "nt-abc123" || items[1].Ref.Value != "nt-def456" {
+		t.Fatalf("restored note tabs = %#v active=%d", items, active)
 	}
 }
 
@@ -552,6 +601,24 @@ func TestDeckFocusHideCloseAndReopen(t *testing.T) {
 	}
 }
 
+func TestDeckForgetLeafDropsAllTabsAndCollapsesLeaf(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	place := testPlacement()
+	doc := d.Open(ctx, fileRef("one.md"), place)
+	d.Open(ctx, fileRef("two.md"), place)
+	issue := d.Open(ctx, issueRef("td-1111aa"), place)
+	if !d.ForgetLeaf(doc.LeafID) {
+		t.Fatal("ForgetLeaf failed")
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Document) != nil || d.Hidden(panelayout.Document) {
+		t.Fatalf("ForgetLeaf retained document: root=%#v hidden=%v", d.root, d.Hidden(panelayout.Document))
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Issue) == nil || d.panes[issue.LeafID] == nil {
+		t.Fatal("ForgetLeaf damaged companion issue leaf")
+	}
+}
+
 func TestDeckEncodeDecodeIsReferenceOnlyAndArmsRestoredTabs(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})
@@ -702,7 +769,7 @@ func TestDeckReturnsActionsAndRefusesInvalidRefs(t *testing.T) {
 	before := d.Encode()
 	for _, ref := range []contentlink.Ref{
 		{Kind: contentlink.KindURL, Value: "https://example.com/path"},
-		{Kind: contentlink.KindInternal, Namespace: "note", Value: "nt-123"},
+		{Kind: contentlink.KindInternal, Namespace: "session", Value: "sidecar-sh-1"},
 	} {
 		if out := d.Open(ctx, ref, place); out.Status != StatusAction || !out.Accepted() {
 			t.Fatalf("action Open(%#v) = %#v", ref, out)

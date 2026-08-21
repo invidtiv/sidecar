@@ -95,7 +95,15 @@ func TestLayoutTabStripShowsTwoTitles(t *testing.T) {
 	if !strings.Contains(got, "td-1111aa") || !strings.Contains(got, "td-2222bb") {
 		t.Fatalf("two-tab strip dropped an id: %q", got)
 	}
+	if strings.Count(got, "×") != 2 {
+		t.Fatalf("two-tab strip = %q, want one × per tab", got)
+	}
 	if len(strip.Tabs) != 2 {
 		t.Fatalf("visible tabs = %d, want 2", len(strip.Tabs))
+	}
+	for i, hit := range strip.Tabs {
+		if hit.CloseW < 1 {
+			t.Fatalf("tab %d has no close hit: %#v", i, hit)
+		}
 	}
 }

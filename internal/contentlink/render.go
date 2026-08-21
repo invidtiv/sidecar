@@ -17,6 +17,13 @@ type FrameOptions struct {
 	// empty set allows none. Explicit OSC labels still claim their cells when
 	// their destination kind is excluded, so automatic matching cannot turn a
 	// disallowed explicit destination into a different action.
+	//
+	// Claim interaction: URL yield runs before this filter, so a surface that
+	// allows KindURL but not KindResource would drop claimed URLs entirely —
+	// inert text where a browser link used to be. Every current scanning
+	// surface advertises both kinds together (docview.ContentLinkKinds is the
+	// shared set, pinned by test); a future surface wanting one without the
+	// other must decide what claimed URLs should do first.
 	AllowedKinds KindSet
 	Decorate     bool
 }

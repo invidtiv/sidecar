@@ -20,6 +20,10 @@ const (
 	// MaxTerminalResourceProviderIDChars bounds an instance ID, which is a
 	// persisted key.
 	MaxTerminalResourceProviderIDChars = 64
+	// MaxTerminalResourceClaimHosts bounds how many hosts one instance may
+	// claim, and MaxClaimHostChars bounds one claimed hostname.
+	MaxTerminalResourceClaimHosts = 16
+	MaxClaimHostChars             = 253
 	// DefaultTerminalResourceTimeout, MinTerminalResourceTimeout and
 	// MaxTerminalResourceTimeout clamp a per-instance resolve timeout.
 	DefaultTerminalResourceTimeout = 10 * time.Second
@@ -60,6 +64,17 @@ type TerminalResourceProviderConfig struct {
 	Enabled bool `json:"enabled"`
 	// Timeout is the per-resolve timeout, clamped to [1s, 60s].
 	Timeout time.Duration `json:"timeout,omitempty"`
+	// ClaimHosts lists hostnames whose built-in URL spans this instance may
+	// reclassify into resource spans. It is Sidecar instance configuration,
+	// never a provider protocol field: the provider does not know it exists.
+	//
+	// Matching is case-insensitive; entries are normalized to lowercase here.
+	// An entry must be a bare hostname — no scheme, no port, no path, no
+	// wildcard. Listing "github.com" claims exactly hosts equal to
+	// "github.com", not its subdomains and not every site a greedy pattern can
+	// reach: a URL is reclassified only when this instance's own matcher also
+	// matches the entire URL string.
+	ClaimHosts []string `json:"claimHosts,omitempty"`
 }
 
 // EnabledProviders returns the enabled instances in configuration order.
@@ -140,8 +155,83 @@ func validateTerminalResources(c *TerminalResourcesConfig) error {
 		p.PassEnv = pass
 
 		p.Timeout = clampTerminalResourceTimeout(p.Timeout)
+
+		claimHosts, err := validateClaimHosts(p.ID, p.ClaimHosts)
+		if err != nil {
+			return err
+		}
+		p.ClaimHosts = claimHosts
 	}
 	return nil
+}
+
+// validateClaimHosts normalizes and checks one instance's claimed hosts. Like
+// the rest of Validate it repairs what it safely can — trimming and lowering
+// case is unambiguous — and refuses what it cannot: an entry that is not a
+// bare hostname would silently never match anything, so the user needs to hear
+// about it rather than wonder why GitHub URLs still open the browser.
+func validateClaimHosts(instance string, entries []string) ([]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	if len(entries) > MaxTerminalResourceClaimHosts {
+		return nil, fmt.Errorf("terminalResources: provider %q claims %d hosts, the limit is %d",
+			instance, len(entries), MaxTerminalResourceClaimHosts)
+	}
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		host, ok := NormalizeClaimHost(entry)
+		if !ok {
+			return nil, fmt.Errorf("terminalResources: provider %q claimHosts entry %q is not a bare hostname (no scheme, port, path, or wildcard)",
+				instance, entry)
+		}
+		out = append(out, host)
+	}
+	return out, nil
+}
+
+// NormalizeClaimHost lowercases a claimed-hostname entry and reports whether it
+// is a bare hostname. It is the single shape rule for claimHosts end to end:
+// configuration validation refuses invalid entries with this, and the matcher
+// snapshot sanitizes programmatically supplied sets with the same function, so
+// a host that reaches the scanner has exactly the form URL host extraction
+// produces.
+//
+// The shape check is deliberately conservative: lowercase letters, digits,
+// dots, hyphens, and interior underscores only. That rejects schemes (":"), ports (":"),
+// paths ("/"), userinfo ("@"), wildcards ("*"), percent-escapes, whitespace,
+// and empty strings in one stroke. Labels may not begin or end with a hyphen;
+// underscores are tolerated anywhere for mDNS-style names.
+func NormalizeClaimHost(entry string) (string, bool) {
+	host := strings.ToLower(strings.TrimSpace(entry))
+	if host == "" || len(host) > MaxClaimHostChars {
+		return "", false
+	}
+	for _, label := range strings.Split(host, ".") {
+		if !validClaimHostLabel(label) {
+			return "", false
+		}
+	}
+	return host, true
+}
+
+func validClaimHostLabel(label string) bool {
+	if label == "" || len(label) > 63 {
+		return false
+	}
+	if label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		b := label[i]
+		switch {
+		case b >= 'a' && b <= 'z', b >= '0' && b <= '9':
+		case b == '-' || b == '_':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // clampTerminalResourceTimeout brings a configured timeout into range. A

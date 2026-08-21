@@ -71,6 +71,8 @@ const (
 	// embedded UI allows — but focusing the tab always happens, so the jump is
 	// never a no-op.
 	PlanOpenTask PlanKind = "open-task"
+	// PlanOpenNote opens Note in a read-only note pane.
+	PlanOpenNote PlanKind = "open-note"
 )
 
 // Plan is what the shell executes. It is data, not commands: the shell turns
@@ -88,6 +90,7 @@ type Plan struct {
 	Locator  string
 	Session  string
 	Task     string
+	Note     string
 }
 
 // PlanKindsFromSpans lists every plan kind a scanned terminal-link span can
@@ -99,7 +102,7 @@ func PlanKindsFromSpans() []PlanKind {
 	// scanner can tell from a short sha or from prose, so a task target only
 	// ever arrives from a poster that named one (`--target task:...`) and
 	// never from a scanned span.
-	return []PlanKind{PlanOpenURL, PlanOpenFile, PlanOpenIssue, PlanOpenDiff, PlanOpenResource, PlanAttachSession}
+	return []PlanKind{PlanOpenURL, PlanOpenFile, PlanOpenIssue, PlanOpenDiff, PlanOpenResource, PlanAttachSession, PlanOpenNote}
 }
 
 // PlanForSpan is the whole span→activation path in one call: the shared
@@ -167,6 +170,11 @@ func Resolve(target uirequest.Target) (Plan, error) {
 			return Plan{}, err
 		}
 		return Plan{Kind: PlanOpenTask, PluginID: TasksPluginID, Task: value}, nil
+	case uirequest.TargetKindNote:
+		if err := plainValue(value, "note"); err != nil {
+			return Plan{}, err
+		}
+		return Plan{Kind: PlanOpenNote, PluginID: WorkspacePluginID, Note: value}, nil
 	case "":
 		return Plan{}, errors.New("target has no kind")
 	default:

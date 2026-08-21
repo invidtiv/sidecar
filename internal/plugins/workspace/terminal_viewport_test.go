@@ -1161,3 +1161,45 @@ func TestTerminalViewportDoesNotTreatFullPaneDiffAsCanvas(t *testing.T) {
 		t.Errorf("a fully green diff was promoted to canvas %q", bg)
 	}
 }
+
+// A pane that grew past the last painted TUI row (or a capture shorter than
+// the allotted box) still owes the extra cells the canvas, not Sidecar's
+// surface. That is the large-window Grok gap: default-bg cells, unused
+// columns, and unused rows below the capture.
+func TestTerminalViewportFillsCanvasOnLargeAllottedBox(t *testing.T) {
+	canvas := "\x1b[48;2;20;20;20m"
+	panel := "\x1b[48;2;36;36;36m"
+	lines := []string{
+		canvas + "header\x1b[0m",
+		canvas + "   \x1b[0m",
+		panel + "panel\x1b[49m default",
+		canvas + "status\x1b[0m",
+	}
+	for range 12 {
+		lines = append(lines, "")
+	}
+	buffer := tty.NewOutputBuffer(100)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(lines, "\n"), PaneRows: len(lines)})
+
+	const width, height = 30, 16
+	result := renderTerminalViewport(terminalViewportInput{
+		Buffer: buffer, Width: width, Height: height, Follow: true,
+		Interactive: true, PaneWidth: width, PaneHeight: height,
+	}, ui.NewTruncateCache(32))
+
+	rows := strings.Split(result.Content, "\n")
+	if len(rows) != height {
+		t.Fatalf("rendered %d rows, want the allotted %d", len(rows), height)
+	}
+	for i, row := range rows {
+		if !strings.HasPrefix(row, canvas) {
+			t.Errorf("row %d is not filled with the canvas: %q", i, row)
+		}
+		if w := ansi.StringWidth(row); w != width {
+			t.Errorf("row %d width = %d, want %d: %q", i, w, width, row)
+		}
+	}
+	if !strings.Contains(rows[2], panel+"panel\x1b[49m"+canvas+" default") {
+		t.Errorf("explicit panel/default transition = %q", rows[2])
+	}
+}

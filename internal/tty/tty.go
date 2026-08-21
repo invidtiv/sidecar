@@ -1041,9 +1041,14 @@ func (m *Model) SendWheelNotches(up bool, col, row, notches int) tea.Cmd {
 	}
 	m.State.LastKeyTime = time.Now()
 	scope := m.Scope()
+	// The capture rides one debounce frame behind the send. Each new schedule
+	// bumps the poll generation, so a momentum burst coalesces into one capture
+	// per frame instead of one per forwarded flush — the storm that used to
+	// freeze the UI at an application's scrollback boundary. The delay itself
+	// is imperceptible next to the send it follows.
 	return tea.Batch(
 		m.guardActiveCommand(scope, m.input.SendWheel(scope, m.inputTarget(), up, col, row, notches)),
-		m.schedulePoll(0),
+		m.schedulePoll(WheelDebounceInterval),
 	)
 }
 

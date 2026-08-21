@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -165,6 +167,14 @@ func (m *Model) projectSwitcherWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	return scrollAfter == m.projectSwitcherScroll
 }
 
+// issuePreviewClock is the clock the preview card's burst reads.
+func (m *Model) issuePreviewClock() time.Time {
+	if m.issuePreviewWheelNow != nil {
+		return m.issuePreviewWheelNow()
+	}
+	return time.Now()
+}
+
 // issuePreviewWheelAtBoundary answers for the td issue preview. Its host
 // intercepts every wheel event and drives the issue card's own viewport, so the
 // card is the scroll owner whenever it exists; the declarative modal body only
@@ -185,5 +195,9 @@ func (m *Model) issuePreviewWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if msg.Mouse().Button == tea.MouseWheelDown {
 		delta = modalWheelLines
 	}
-	return view.ScrollAtBoundary(delta)
+	bounded := view.ScrollAtBoundary(delta)
+	if bounded && m.issuePreviewWheel != nil {
+		m.issuePreviewWheel.Reset()
+	}
+	return bounded
 }

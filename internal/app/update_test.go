@@ -148,9 +148,11 @@ func TestIsRootContext(t *testing.T) {
 		// Sidecar out from under it.
 		{"workspace-doc", false},
 		{"workspace-issue", false},
+		{"workspace-note", false},
 		{"workspace-diff", false},
 		{"global-workspaces-doc", false},
 		{"global-workspaces-issue", false},
+		{"global-workspaces-note", false},
 		{"global-workspaces-diff", false},
 		{"global-workspaces-filter", false},
 		{"global-workspaces-rename", false},

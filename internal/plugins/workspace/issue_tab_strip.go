@@ -7,6 +7,7 @@ import "github.com/marcus/sidecar/internal/issueview"
 type issueTabHit struct {
 	LeafID int
 	Index  int
+	Close  bool
 }
 
 // layoutIssueTabStrip is the issue leaf's tab strip: an end-truncated title

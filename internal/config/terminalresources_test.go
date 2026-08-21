@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -85,6 +86,91 @@ func TestLoadTerminalResourcesDefaults(t *testing.T) {
 	}
 	if p.Timeout != DefaultTerminalResourceTimeout {
 		t.Fatalf("timeout = %s", p.Timeout)
+	}
+	if p.ClaimHosts != nil {
+		t.Fatalf("claimHosts = %v, want none", p.ClaimHosts)
+	}
+}
+
+// Matching is case-insensitive and the stored form is lowercase, so loading
+// normalizes entries once instead of every scan.
+func TestLoadNormalizesClaimHosts(t *testing.T) {
+	path := writeConfig(t, `{"terminalResources":{"providers":[{
+	  "id":"github","command":["sidecar-github","sidecar-provider"],
+	  "claimHosts":["GitHub.com","gist.github.com"]
+	}]}}`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	got := cfg.TerminalResources.Providers[0].ClaimHosts
+	if !slices.Equal(got, []string{"github.com", "gist.github.com"}) {
+		t.Fatalf("claimHosts = %v", got)
+	}
+}
+
+// A claimHosts entry that can never match a hostname is refused rather than
+// silently ignored: the user needs to know why GitHub URLs still open the
+// browser.
+func TestValidateRejectsMalformedClaimHosts(t *testing.T) {
+	tests := []struct {
+		name  string
+		entry string
+	}{
+		{"empty", ""},
+		{"blank", "   "},
+		{"scheme", "https://github.com"},
+		{"port", "github.com:443"},
+		{"path", "github.com/owner"},
+		{"userinfo", "user@github.com"},
+		{"wildcard", "*.github.com"},
+		{"percent escape", "%65%67ithub.com"},
+		{"trailing dot path", "github.com./"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := TerminalResourcesConfig{Providers: []TerminalResourceProviderConfig{
+				{ID: "a", Command: []string{"x"}, ClaimHosts: []string{tc.entry}},
+			}}
+			err := validateTerminalResources(&cfg)
+			if err == nil {
+				t.Fatalf("entry %q should be rejected", tc.entry)
+			}
+			if !strings.Contains(err.Error(), "not a bare hostname") {
+				t.Fatalf("error = %q", err)
+			}
+		})
+	}
+}
+
+func TestValidateBoundsClaimHosts(t *testing.T) {
+	tooMany := make([]string, MaxTerminalResourceClaimHosts+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("host%d.example.com", i)
+	}
+	cfg := TerminalResourcesConfig{Providers: []TerminalResourceProviderConfig{
+		{ID: "a", Command: []string{"x"}, ClaimHosts: tooMany},
+	}}
+	err := validateTerminalResources(&cfg)
+	if err == nil || !strings.Contains(err.Error(), "the limit is") {
+		t.Fatalf("err = %v, want the limit message", err)
+	}
+}
+
+// The loader's unknown-field convention is deliberate and file-wide: unknown
+// keys inside terminalResources load inertly on an older Sidecar instead of
+// failing validation loudly.
+func TestLoadIgnoresUnknownTerminalResourceFields(t *testing.T) {
+	path := writeConfig(t, `{"terminalResources":{"providers":[
+	  {"id":"a","command":["x"],"futureField":true,"claimHosts":["example.com"]}
+	]}}`)
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	p := cfg.TerminalResources.Providers[0]
+	if !slices.Equal(p.ClaimHosts, []string{"example.com"}) {
+		t.Fatalf("claimHosts = %v", p.ClaimHosts)
 	}
 }
 
@@ -259,7 +345,7 @@ func TestSavePreservesTerminalResources(t *testing.T) {
 // reorder anything.
 func TestSaveTerminalResourcesIsIdempotent(t *testing.T) {
 	path := writeConfig(t, `{"terminalResources":{"providers":[
-	  {"id":"a","command":["a"],"enabled":true,"timeout":"5s"},
+	  {"id":"a","command":["a"],"enabled":true,"timeout":"5s","claimHosts":["GitHub.com"]},
 	  {"id":"b","command":["b","--x"],"enabled":false}
 	]}}`)
 	SetTestConfigPath(path)
@@ -298,6 +384,11 @@ func TestSaveTerminalResourcesIsIdempotent(t *testing.T) {
 	}
 	if reloaded.TerminalResources.Providers[0].ID != "a" || reloaded.TerminalResources.Providers[1].ID != "b" {
 		t.Fatalf("order changed: %+v", reloaded.TerminalResources.Providers)
+	}
+	// claimHosts must round-trip in normalized form, on disabled instances too.
+	reloadedA := reloaded.TerminalResources.Providers[0]
+	if !slices.Equal(reloadedA.ClaimHosts, []string{"github.com"}) {
+		t.Fatalf("claimHosts after round-trip = %v", reloadedA.ClaimHosts)
 	}
 }
 

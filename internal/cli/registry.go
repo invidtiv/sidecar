@@ -197,9 +197,9 @@ func RootCommand() *Command {
 
 	openCmd := &Command{
 		Name:    "open",
-		Summary: "Show a file, a td issue, a git diff, or a provider resource in a split pane",
+		Summary: "Show a file, a td issue, a note, a git diff, or a provider resource in a split pane",
 		Usage:   "sidecar open [options] [<target>]",
-		Long: "Show a file, a td issue, a git diff, or an external provider resource to the user as a\n" +
+		Long: "Show a file, a td issue, a td note, a git diff, or an external provider resource to the user as a\n" +
 			"split pane in a Sidecar workspace. From a Sidecar shell this targets that shell.\n" +
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
 			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
@@ -208,6 +208,7 @@ func RootCommand() *Command {
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
+			{Target: "sidecar://note/nt-xxxx", Summary: "A td note, opened as a read-only pane"},
 			{Target: "--diff", Summary: "Working-tree diff (wt); add a spec for a commit or range"},
 			{Target: "spec", Summary: "A git commit or range (abc1234, A..B); --diff accepts HEAD and branch names"},
 			{Target: "locator", Summary: "With --provider, a resource key such as CASH-1245"},
@@ -223,7 +224,7 @@ func RootCommand() *Command {
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
-		Args: ArgSpec{Min: 0, Max: 1, Description: "File, td-xxxxxx, or git spec; omitted with --diff for the working tree"},
+		Args: ArgSpec{Min: 0, Max: 1, Description: "File, td-xxxxxx, sidecar://note/nt-xxxx, or git spec; omitted with --diff for the working tree"},
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "opened or queued"},
 			{Code: 1, Summary: "state failure"},
@@ -235,6 +236,7 @@ func RootCommand() *Command {
 			{Command: "sidecar open internal/cli/cli.go", Description: "file, in a split beside the terminal"},
 			{Command: "sidecar open internal/cli/cli.go:88", Description: "file at a line"},
 			{Command: "sidecar open td-348d88", Description: "td issue"},
+			{Command: "sidecar open sidecar://note/nt-4jdj4e", Description: "td note pane"},
 			{Command: "sidecar open --diff", Description: "working-tree Diff leaf"},
 			{Command: "sidecar open --diff HEAD", Description: "that commit, not the working tree"},
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
@@ -243,8 +245,8 @@ func RootCommand() *Command {
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar open <path>[:line] | td-xxxxxx | --diff [spec] | --provider ID <locator>",
-			Summary:    "Put a file, a td issue, a git diff, or a provider resource in front of the user",
+			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator>",
+			Summary:    "Put a file, a td issue, a td note, a git diff, or a provider resource in front of the user",
 		},
 		Run: runOpen,
 	}

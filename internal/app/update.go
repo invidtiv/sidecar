@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/livepanes"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
@@ -215,7 +216,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
-	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg,
+	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg, noteview.LoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
 		resourceview.ResolvedMsg:
 		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {
@@ -2909,10 +2910,18 @@ func (m *Model) handleIssuePreviewMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if view != nil {
 		switch ev := msg.(type) {
 		case tea.MouseWheelMsg:
+			// The card is the scroll owner (see issuePreviewWheelAtBoundary),
+			// and it earns its repaints through the shared burst guard like
+			// every other surface that hosts this viewer.
+			if m.issuePreviewWheel == nil {
+				m.issuePreviewWheel = &tty.WheelBurst{}
+			}
+			delta := -modalWheelLines
 			if ev.Button == tea.MouseWheelDown {
-				view.Scroll(3)
-			} else {
-				view.Scroll(-3)
+				delta = modalWheelLines
+			}
+			if flushed, ok := m.issuePreviewWheel.Add(delta, m.issuePreviewClock()); ok {
+				view.Scroll(flushed)
 			}
 			return m, nil
 		}

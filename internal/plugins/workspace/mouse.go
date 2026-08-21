@@ -96,14 +96,18 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
 			leafID = data
 		case docTabHit:
 			leafID = data.LeafID
+		case docContentLinkHit:
+			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case noteTabHit:
 			leafID = data.LeafID
 		case resourceTabHit:
 			leafID = data.LeafID
@@ -120,7 +124,14 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			return doc == nil || doc.view() == nil || doc.view().ScrollAtBoundary(action.Delta)
 		case PaneIssue:
 			issue := p.issues[leaf.ContentID]
-			return issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+			bounded := issue == nil || issue.view() == nil || issue.view().ScrollAtBoundary(action.Delta)
+			if issue != nil && bounded {
+				issue.wheel.Reset()
+			}
+			return bounded
+		case PaneNote:
+			note := p.notes[leaf.ContentID]
+			return note == nil || note.view() == nil || note.view().ScrollAtBoundary(action.Delta)
 		case PaneDiff:
 			view := p.activeDiffView()
 			return view.ScrollAtBoundary(action.Delta, view.Height())
@@ -832,6 +843,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
 	}
+	if cmd, ok := p.clickNoteTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	// Inner Diff regions win the hit test over regionPaneLeaf, so they must
 	// take pane-tree focus themselves or keys stay on the previous leaf.
@@ -937,10 +951,22 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		// The title of a pane with no sidebar row is where its rename lives.
 		// Focus has already moved: FocusLeafAt answers from geometry.
 		return p.clickPaneTitle(action.Region.Data)
+	case regionDocLink:
+		hit, ok := action.Region.Data.(docContentLinkHit)
+		if !ok {
+			return nil
+		}
+		p.focusLeaf(hit.LeafID)
+		if action.Shift || action.Alt {
+			return p.pressDocSelection(hit.LeafID, action)
+		}
+		return p.activateDocContentLink(hit)
 	case regionDocTab:
 		return p.clickDocTab(action.Region.Data)
 	case regionIssueTab:
 		return p.clickIssueTab(action.Region.Data)
+	case regionNoteTab:
+		return p.clickNoteTab(action.Region.Data)
 	case regionResourceTab:
 		return p.clickResourceTab(action.Region.Data)
 	case regionDiffTargetTab:
@@ -1130,6 +1156,9 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickIssueTabAt(action.X, action.Y); ok {
 		return cmd
 	}
+	if cmd, ok := p.clickNoteTabAt(action.X, action.Y); ok {
+		return cmd
+	}
 
 	switch action.Region.ID {
 	case regionTermPanelContent:
@@ -1270,14 +1299,18 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocTab, regionIssueTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
 			leafID = data
 		case docTabHit:
 			leafID = data.LeafID
+		case docContentLinkHit:
+			leafID = data.LeafID
 		case issueTabHit:
+			leafID = data.LeafID
+		case noteTabHit:
 			leafID = data.LeafID
 		case resourceTabHit:
 			leafID = data.LeafID
@@ -1302,9 +1335,25 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case PaneIssue:
 			// The issue component scrolls in rendered rows, the same units the
 			// document viewer answers a notch in, so the wheel reaches it by
-			// the same path rather than a second one.
+			// the same path rather than a second one — and through the same
+			// burst guard, or mid-range inertia would repaint the card once per
+			// notch instead of once per earned flush.
 			if issue := p.issues[leaf.ContentID]; issue != nil {
 				if view := issue.view(); view != nil {
+					flushed, ok := issue.wheel.Add(delta, p.now())
+					if !ok {
+						return nil
+					}
+					before := view.ScrollOffset()
+					view.Scroll(flushed)
+					if view.ScrollOffset() != before {
+						p.saveSelectionState()
+					}
+				}
+			}
+		case PaneNote:
+			if note := p.notes[leaf.ContentID]; note != nil {
+				if view := note.view(); view != nil {
 					before := view.ScrollOffset()
 					view.Scroll(delta)
 					if view.ScrollOffset() != before {

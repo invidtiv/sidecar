@@ -297,6 +297,48 @@ func TestScanFrameReadyOnlyResolutionReturnsBoundedPendingWork(t *testing.T) {
 	}
 }
 
+// A symbolic git range (main...HEAD) is a diff reference the same way a hex
+// range is. The file scanner queues the token first — it wears a filename's
+// clothes — so the range only decorates once resolution has answered both
+// candidacies: file negative, diff positive. Prose ellipsis queues too and
+// dies there; it must never render as a link on its own.
+func TestScanFrameSymbolicGitRangesQueueForResolution(t *testing.T) {
+	frame := "compare main...HEAD or abc1234..def5678; wait...what about td-abcd prose"
+	result := ScanFrame(frame, FrameOptions{})
+	queued := func(kind Kind, raw string) bool {
+		for _, candidate := range result.Pending {
+			if candidate == (Pending{Kind: kind, Raw: raw}) {
+				return true
+			}
+		}
+		return false
+	}
+	if !queued(KindDiff, "main...HEAD") || !queued(KindDiff, "abc1234..def5678") || !queued(KindDiff, "wait...what") {
+		t.Fatalf("symbolic ranges were not queued for diff resolution: %+v", result.Pending)
+	}
+	if len(result.Spans) != 1 || result.Spans[0].Kind != KindIssue {
+		t.Fatalf("unready candidates became links: %+v", result.Spans)
+	}
+
+	index := NewResolutionIndex(16)
+	index.Put(Pending{Kind: KindFile, Raw: "main...HEAD"}, Ref{}, false)
+	index.Put(Pending{Kind: KindDiff, Raw: "main...HEAD"}, Ref{Kind: KindDiff, Value: "main...HEAD"}, true)
+	index.Put(Pending{Kind: KindDiff, Raw: "wait...what"}, Ref{}, false)
+	resolved := ScanFrame(frame, FrameOptions{Ready: index.Snapshot()})
+	var decorated []string
+	for _, span := range resolved.Spans {
+		decorated = append(decorated, string(span.Kind))
+	}
+	if strings.Join(decorated, ",") != "issue,diff" {
+		t.Fatalf("resolved spans = %v, want the verified range plus the issue", decorated)
+	}
+	for _, candidate := range resolved.Pending {
+		if candidate.Kind == KindDiff && (candidate.Raw == "main...HEAD" || candidate.Raw == "wait...what") {
+			t.Fatalf("resolved result was requeued: %+v", candidate)
+		}
+	}
+}
+
 func TestResolutionIndexEvictsOldestAndRejectsMismatchedResults(t *testing.T) {
 	index := NewResolutionIndex(2)
 	a := Pending{Kind: KindFile, Raw: "a.go"}

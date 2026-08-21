@@ -5,18 +5,20 @@ import (
 	"github.com/marcus/sidecar/internal/ui"
 )
 
-// TabMinBudget is the floor for one tab's column share, chrome included.
+// TabMinBudget is the floor for one tab's column share, chrome and the
+// per-tab close control included.
 const TabMinBudget = tabs.MinBudget
 
 // TabHit is a drawn tab's click target. Col is relative to the strip's first
-// column; Width is the rendered pill.
+// column; Width is the rendered pill. CloseCol/CloseW are the × on the
+// pill's right edge.
 type TabHit = tabs.Hit
 
 // TabStrip is the header row: only tabs, packed left to right.
 type TabStrip = tabs.Strip
 
 func fitDocLabel(text string, _, _, maxWidth int, _ bool) string {
-	return ui.TruncateStart(text, maxWidth)
+	return tabs.FitPath(text, maxWidth)
 }
 
 func tabLabels(group Tabs) []tabs.Label {

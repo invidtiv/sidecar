@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -10,16 +9,11 @@ import (
 type diffTabHit struct {
 	LeafID int
 	Index  int
+	Close  bool
 }
 
 func fitDiffLabel(text string, _, _, maxWidth int, _ bool) string {
-	if maxWidth < 1 {
-		return ""
-	}
-	if ansi.StringWidth(text) <= maxWidth {
-		return text
-	}
-	return ansi.Truncate(text, maxWidth, "…")
+	return tabs.FitEnd(text, maxWidth)
 }
 
 func layoutDiffTabStrip(diff *diffPane, width int, focused bool) tabs.Strip {

@@ -431,6 +431,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	if handled, cmd := p.handleIssueKey(msg); handled {
 		return cmd
 	}
+	if handled, cmd := p.handleNoteKey(msg); handled {
+		return cmd
+	}
 	if handled, cmd := p.handleDiffKey(msg); handled {
 		return cmd
 	}

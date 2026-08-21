@@ -51,7 +51,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	inListPane := action.X < p.listWidth
 	if action.Region != nil {
 		switch action.Region.ID {
-		case regionListPane, regionNoteItem, regionListFilter:
+		case regionListPane, regionNoteItem, regionListFilter, regionNewNote:
 			inListPane = true
 		case regionEditorPane, regionEditorLine:
 			inListPane = false

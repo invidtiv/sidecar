@@ -1,7 +1,6 @@
 package issueview
 
 import (
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/tabs"
 )
 
@@ -13,13 +12,7 @@ type TabHit = tabs.Hit
 type TabStrip = tabs.Strip
 
 func fitIssueLabel(text string, _, _, maxWidth int, _ bool) string {
-	if maxWidth < 1 {
-		return ""
-	}
-	if ansi.StringWidth(text) <= maxWidth {
-		return text
-	}
-	return ansi.Truncate(text, maxWidth, "…")
+	return tabs.FitEnd(text, maxWidth)
 }
 
 func tabLabels(group Tabs) []tabs.Label {

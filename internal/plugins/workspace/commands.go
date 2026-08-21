@@ -51,6 +51,19 @@ func (p *Plugin) Commands() []plugin.Command {
 		)
 		return cmds
 	}
+	if p.viewMode == ViewModeList && p.noteFocused() {
+		return []plugin.Command{
+			{ID: "close-tab", Name: "Tab×", Description: "Close active note", Context: "workspace-note", Priority: 1},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: "workspace-note", Priority: 2},
+			{ID: "next-tab", Name: "Tab→", Description: "Next note tab", Context: "workspace-note", Priority: 3},
+			{ID: "yank-note", Name: "Yank", Description: "Copy note as markdown", Context: "workspace-note", Priority: 4},
+			{ID: "yank-note-key", Name: "YankID", Description: "Copy note ID", Context: "workspace-note", Priority: 5},
+			{ID: "close", Name: "Close", Description: "Hide note pane", Context: "workspace-note", Priority: 6},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-note", Priority: 7},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-note", Priority: 8},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-note", Priority: 9},
+		}
+	}
 	if p.viewMode == ViewModeList && p.issueFocused() {
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: "workspace-issue", Priority: 1},
@@ -467,6 +480,9 @@ func (p *Plugin) FocusContext() string {
 		// host's root-context `q` quits Sidecar — to a pane drawn as focused.
 		if p.issueFocused() {
 			return "workspace-issue"
+		}
+		if p.noteFocused() {
+			return "workspace-note"
 		}
 		if p.diffFocused() {
 			return "workspace-diff"

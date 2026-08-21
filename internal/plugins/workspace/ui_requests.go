@@ -408,6 +408,10 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		retargeted = p.willRetargetPane(PaneIssue)
 		cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
 		opened = cmd != nil
+	case uirequest.TargetKindNote:
+		retargeted = p.willRetargetPane(PaneNote)
+		cmd = p.openNotePaneForSurface(root, surface, req.Target.Value)
+		opened = cmd != nil
 	case uirequest.TargetKindDiff:
 		if p.paneRoot == nil {
 			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
@@ -546,6 +550,8 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 		return p.openDocPaneForSurface(root, surface, pv.Target.Value, pv.Target.Line)
 	case uirequest.TargetKindIssue:
 		return p.openIssuePaneForSurface(root, surface, pv.Target.Value)
+	case uirequest.TargetKindNote:
+		return p.openNotePaneForSurface(root, surface, pv.Target.Value)
 	case uirequest.TargetKindDiff:
 		return p.openDiffPaneForSurface(root, surface, uirequest.DiffTarget(root, pv.Target.Value))
 	case uirequest.TargetKindResource:

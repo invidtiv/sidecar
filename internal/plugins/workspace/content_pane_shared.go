@@ -24,6 +24,9 @@ func (p *Plugin) hideContentPane(leafID int) tea.Cmd {
 // q/esc keeps. closeContentPane is the click dispatcher that routes here per
 // kind; this is what every one of those routes ends in.
 func (p *Plugin) forgetContentPane(leafID int) tea.Cmd {
+	if p.contentDeck != nil {
+		p.contentDeck.ForgetLeaf(leafID)
+	}
 	if !p.closeContentLeaf(leafID) {
 		return nil
 	}

@@ -156,6 +156,7 @@ func paneTreeFloors() Floors {
 		// An issue's body is markdown wrapped by the same renderer, so it needs
 		// the width that renderer stops being markdown below.
 		Issue: PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
+		Note:  PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		Diff:  PaneFloor{Width: markdown.MinWidthForMarkdown, Height: termPanelMinBoxRows},
 		// A resource card is a field grid over a markdown body rendered by
 		// that same renderer, so it needs the same width and the same rows.
@@ -233,22 +234,29 @@ func (p *Plugin) selectDocTab(doc *docPane, modelID, idx, line int, file *os.Fil
 }
 
 func (p *Plugin) closeActiveDocTab() tea.Cmd {
-	doc, _ := p.activeDocPane()
-	if doc == nil {
+	doc, leaf := p.activeDocPane()
+	if doc == nil || leaf == nil {
 		return nil
 	}
-	// Closing the tab takes the file the editor is holding away; ask first.
-	if p.guardDocEdit(doc, func() tea.Cmd { return p.closeActiveDocTab() }) {
+	return p.closeDocTabAt(doc, leaf.ID, doc.tabs.Active)
+}
+
+func (p *Plugin) closeDocTabAt(doc *docPane, leafID, index int) tea.Cmd {
+	if doc == nil || index < 0 || index >= len(doc.tabs.Items) {
+		return nil
+	}
+	// Closing the tab the editor is holding away; ask first.
+	if index == doc.tabs.Active && p.guardDocEdit(doc, func() tea.Cmd { return p.closeDocTabAt(doc, leafID, index) }) {
 		return nil
 	}
 	if p.contentDeck != nil {
-		return p.closeWorkspaceDeckTab(panelayout.Document)
+		return p.closeWorkspaceDeckTabAt(panelayout.Document, index)
 	}
 	if len(doc.tabs.Items) <= 1 {
 		return p.closeDocPane()
 	}
 	p.closeDocInfo()
-	doc.tabs.CloseActive()
+	doc.tabs.CloseAt(index)
 	p.saveSelectionState()
 	return p.ensureActiveDocTabLoaded(doc)
 }
@@ -265,6 +273,7 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		return nil, false
 	}
 	var tabs []mouse.Region
+	var closeAt *mouse.Region
 	for _, region := range p.mouseHandler.HitMap.Regions() {
 		if region.ID != regionDocTab {
 			continue
@@ -272,9 +281,20 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 		if y != region.Rect.Y {
 			continue
 		}
+		hit, ok := region.Data.(docTabHit)
+		if !ok {
+			continue
+		}
+		if hit.Close {
+			if x >= region.Rect.X && x < region.Rect.X+region.Rect.W {
+				r := region
+				closeAt = &r
+			}
+			continue
+		}
 		tabs = append(tabs, region)
 	}
-	if len(tabs) == 0 {
+	if len(tabs) == 0 && closeAt == nil {
 		return nil, false
 	}
 	inDocHeader := false
@@ -299,6 +319,9 @@ func (p *Plugin) clickDocTabAt(x, y int) (tea.Cmd, bool) {
 	}
 	if !inDocHeader {
 		return nil, false
+	}
+	if closeAt != nil {
+		return p.clickDocTab(closeAt.Data), true
 	}
 	best := tabs[0]
 	bestDist := tabRowDistance(x, best.Rect)
@@ -339,6 +362,9 @@ func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
+	}
+	if hit.Close {
+		return p.closeDocTabAt(doc, hit.LeafID, hit.Index)
 	}
 	if hit.Index == doc.tabs.Active {
 		return nil
@@ -488,7 +514,20 @@ func paneLayoutHasDiffTabs(layout *state.PaneLayoutJSON) bool {
 // issue leaf.
 func paneLayoutHasRetainedTabs(layout *state.PaneLayoutJSON) bool {
 	return paneLayoutHasDocTabs(layout) || paneLayoutHasIssueTabs(layout) ||
-		paneLayoutHasDiffTabs(layout) || paneLayoutHasResourceTabs(layout)
+		paneLayoutHasNoteTabs(layout) || paneLayoutHasDiffTabs(layout) || paneLayoutHasResourceTabs(layout)
+}
+
+func paneLayoutHasNoteTabs(layout *state.PaneLayoutJSON) bool {
+	if layout == nil {
+		return false
+	}
+	if len(layout.NoteTabs) > 0 {
+		return true
+	}
+	if layout.Split == nil {
+		return false
+	}
+	return paneLayoutHasNoteTabs(layout.Split.A) || paneLayoutHasNoteTabs(layout.Split.B)
 }
 
 // rememberHiddenPaneLayout merges the live tree into the surface's hidden
@@ -519,7 +558,7 @@ func mergeHiddenPaneLayout(existing, live *state.PaneLayoutJSON) *state.PaneLayo
 	if live == nil {
 		return clonePaneLayout(existing)
 	}
-	kinds := []string{contentKindDoc, contentKindIssue, contentKindDiff, contentKindResource}
+	kinds := []string{contentKindDoc, contentKindIssue, contentKindNote, contentKindDiff, contentKindResource}
 	var contents []*state.PaneLayoutJSON
 	for _, kind := range kinds {
 		leaf := firstLayoutLeafOfKind(live, kind)
@@ -628,6 +667,9 @@ func clonePaneLayout(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
 	if src.ResourceTabs != nil {
 		out.ResourceTabs = append([]state.PaneResourceTabJSON(nil), src.ResourceTabs...)
 	}
+	if src.NoteTabs != nil {
+		out.NoteTabs = append([]state.PaneNoteTabJSON(nil), src.NoteTabs...)
+	}
 	if src.Split != nil {
 		split := *src.Split
 		split.A = clonePaneLayout(src.Split.A)
@@ -656,6 +698,9 @@ func copyContentLeaf(src *state.PaneLayoutJSON) *state.PaneLayoutJSON {
 	}
 	if src.ResourceTabs != nil {
 		out.ResourceTabs = append([]state.PaneResourceTabJSON(nil), src.ResourceTabs...)
+	}
+	if src.NoteTabs != nil {
+		out.NoteTabs = append([]state.PaneNoteTabJSON(nil), src.NoteTabs...)
 	}
 	return out
 }
@@ -706,6 +751,11 @@ func replaceLayoutLeaf(tree *state.PaneLayoutJSON, kind string, leaf *state.Pane
 	} else {
 		target.ResourceTabs = nil
 	}
+	if leaf.NoteTabs != nil {
+		target.NoteTabs = append([]state.PaneNoteTabJSON(nil), leaf.NoteTabs...)
+	} else {
+		target.NoteTabs = nil
+	}
 }
 
 func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) bool {
@@ -754,6 +804,8 @@ func (p *Plugin) closeContentLeaf(leafID int) bool {
 		delete(p.docs, leaf.ContentID)
 	case PaneIssue:
 		delete(p.issues, leaf.ContentID)
+	case PaneNote:
+		delete(p.notes, leaf.ContentID)
 	case PaneDiff:
 		delete(p.diffs, leaf.ContentID)
 	case PaneResource:
@@ -827,6 +879,10 @@ func (p *Plugin) contentLeafSurface(leafID int) (root, surface string, ok bool) 
 	case PaneIssue:
 		if issue := p.issues[leaf.ContentID]; issue != nil {
 			return issue.root, issue.surface, true
+		}
+	case PaneNote:
+		if note := p.notes[leaf.ContentID]; note != nil {
+			return note.root, note.surface, true
 		}
 	case PaneDiff:
 		if diff := p.diffs[leaf.ContentID]; diff != nil {
@@ -1316,6 +1372,13 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 		}
 		return &state.PaneLayoutJSON{Kind: contentKindIssue, IssueTabs: tabs, Active: active}
 	}
+	if node.Kind == PaneNote {
+		tabs, active := encodeNoteTabs(p.notes[node.ContentID])
+		if len(tabs) == 0 {
+			return nil
+		}
+		return &state.PaneLayoutJSON{Kind: contentKindNote, NoteTabs: tabs, Active: active}
+	}
 	if node.Kind == PaneDiff {
 		tabs, active := encodeDiffTabs(p.diffs[node.ContentID])
 		if len(tabs) == 0 {
@@ -1377,6 +1440,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.notes = make(map[int]*notePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.paneNextID = 1
@@ -1422,7 +1486,7 @@ func supportedPaneTree(root *PaneNode) bool {
 	}
 	if root.Split == nil {
 		switch root.Kind {
-		case PaneTerminal, PaneShell, PaneDoc, PaneIssue, PaneDiff, PaneResource:
+		case PaneTerminal, PaneShell, PaneDoc, PaneIssue, PaneNote, PaneDiff, PaneResource:
 			return true
 		default:
 			return false
@@ -1476,6 +1540,8 @@ func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, termin
 		return p.decodeDocLeaf(saved, root, loads)
 	case contentKindIssue:
 		return p.decodeIssueLeaf(saved, root, loads)
+	case contentKindNote:
+		return p.decodeNoteLeaf(saved, root, loads)
 	case contentKindDiff:
 		return p.decodeDiffLeaf(saved, root, loads)
 	case contentKindResource:
@@ -1563,6 +1629,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.notes = make(map[int]*notePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.contentDeck = nil
@@ -1611,15 +1678,17 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
-	for _, tab := range layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID).Tabs {
-		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+tab.Col, box.Y, tab.Width, 1, docTabHit{LeafID: leafID, Index: tab.Index})
-	}
+	strip := layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip.RegisterHits(func(col, width, index int, close bool) {
+		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+col, box.Y, width, 1, docTabHit{LeafID: leafID, Index: index, Close: close})
+	})
 }
 
 func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !p.docVisible() {
 		return "", false
 	}
+	p.clearDocLinkHits()
 	// Regions are re-earned every frame: a pane this frame does not draw must
 	// not leave last frame's modal regions on screen.
 	p.clearDocSearchRegions()
@@ -1706,6 +1775,10 @@ func (p *Plugin) registerPaneLeafRegions(node *PaneNode, box Box) {
 		if issue := p.issues[node.ContentID]; issue != nil {
 			p.registerIssuePaneRegions(issue, node.ID, box)
 		}
+	case PaneNote:
+		if note := p.notes[node.ContentID]; note != nil {
+			p.registerNotePaneRegions(note, node.ID, box)
+		}
 	case PaneDiff:
 		if diff := p.diffs[node.ContentID]; diff != nil {
 			p.registerDiffPaneRegions(diff, node.ID, box)
@@ -1730,6 +1803,10 @@ func (p *Plugin) registerPaneTabRegions(node *PaneNode, box Box) {
 		if issue := p.issues[node.ContentID]; issue != nil {
 			p.registerIssueTabRegions(issue, node.ID, box)
 		}
+	case PaneNote:
+		if note := p.notes[node.ContentID]; note != nil {
+			p.registerNoteTabRegions(note, node.ID, box)
+		}
 	case PaneDiff:
 		if diff := p.diffs[node.ContentID]; diff != nil {
 			p.registerDiffTargetTabRegions(diff, node.ID, box)
@@ -1746,7 +1823,7 @@ func (p *Plugin) registerPaneCloseRegions(node *PaneNode, box Box) {
 		return
 	}
 	switch node.Kind {
-	case PaneDoc, PaneIssue, PaneDiff, PaneResource:
+	case PaneDoc, PaneIssue, PaneNote, PaneDiff, PaneResource:
 		if p.paneContent(node) == nil {
 			return
 		}

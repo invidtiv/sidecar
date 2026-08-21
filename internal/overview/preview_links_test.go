@@ -482,7 +482,7 @@ func TestGlobalIssuePreviewWheelKeyboardAndQClose(t *testing.T) {
 		t.Fatal("stacked issue tab ID is not drawn")
 	}
 	resolved := m.workspacesMouse.HitMap.Test(x, y)
-	if hit, isTab := resolved.Data.(previewIssueTabHit); !isTab || int(hit) != 0 {
+	if hit, isTab := resolved.Data.(previewIssueTabHit); !isTab || hit.Close || hit.Index != 0 {
 		t.Fatalf("lower issue tab at (%d,%d) resolves to %#v", x, y, resolved)
 	}
 }
@@ -656,7 +656,7 @@ func TestGlobalPreviewDocTabClickSelectsFile(t *testing.T) {
 		t.Fatal("README tab is not drawn")
 	}
 	resolved := m.workspacesMouse.HitMap.Test(x, y)
-	if hit, isTab := resolved.Data.(previewDocTabHit); !isTab || int(hit) != 0 {
+	if hit, isTab := resolved.Data.(previewDocTabHit); !isTab || hit.Close || hit.Index != 0 {
 		t.Fatalf("visual README tab at (%d,%d) resolves to %#v", x, y, resolved)
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))

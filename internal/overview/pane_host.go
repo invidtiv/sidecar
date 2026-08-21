@@ -143,6 +143,8 @@ func (r paneRegions) Leaf(node *panelayout.Node, outer paneframe.Box) {
 		r.m.registerPreviewDocRegion(paneframe.Inset(outer))
 	case panelayout.Issue:
 		r.m.registerPreviewIssueRegion(paneframe.Inset(outer))
+	case panelayout.Note:
+		r.m.registerPreviewNoteRegion(paneframe.Inset(outer))
 	case panelayout.Diff:
 		r.m.registerPreviewDiffRegion(paneframe.Inset(outer))
 	case panelayout.Resource:
@@ -163,6 +165,8 @@ func (r paneRegions) Tabs(node *panelayout.Node, inner paneframe.Box) {
 		r.m.registerPreviewDocTabRegions(inner)
 	case panelayout.Issue:
 		r.m.registerPreviewIssueTabRegions(inner)
+	case panelayout.Note:
+		r.m.registerPreviewNoteTabRegions(inner)
 	case panelayout.Diff:
 		r.m.registerPreviewDiffTabRegions(inner)
 	case panelayout.Resource:
@@ -205,6 +209,8 @@ func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 	switch node.Kind {
 	case panelayout.Terminal:
 		r.m.registerPreviewActionRegions(inner)
+	case panelayout.Document:
+		r.m.registerPreviewDocLinkHits(inner)
 	case panelayout.Diff:
 		r.m.registerPreviewDiffLeafHits(inner)
 	}
@@ -218,6 +224,7 @@ func previewPaneFloors() panelayout.Floors {
 		Terminal: panelayout.Floor{Width: previewTermMinWidth, Height: 3},
 		Doc:      panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Issue:    panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
+		Note:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Diff:     panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		Resource: panelayout.Floor{Width: previewSecondaryMinWidth, Height: 3},
 		// A shell leaf is a terminal, so it budgets what the primary terminal
@@ -241,9 +248,10 @@ func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
 		inner := paneframe.Inset(peer)
 		return paneframe.WrapLeaf(m.renderPreview(inner.W, inner.H), peer, m.lonePreviewChrome())
 	}
-	m.registerPreviewOutputRegions(peer)
 	// Regions are re-earned every frame: a pane this frame does not draw must
-	// not leave last frame's modal regions on screen.
+	// not leave last frame's modal regions on screen. Compose first so
+	// document content-link hits exist before Body registers them — the same
+	// order the project workspace uses.
 	m.clearPreviewDocSearchRegions()
 	view := ""
 	if len(layout.Leaves) == 1 {
@@ -251,6 +259,7 @@ func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
 	} else {
 		view = paneframe.Compose(paneHost{m}, layout, peer, peer.W, peer.H)
 	}
+	m.registerPreviewOutputRegions(peer)
 	// Last, because a live search surface is drawn over its leaf and its regions
 	// have to beat the leaf's own.
 	m.registerPreviewDocSearchRegions()

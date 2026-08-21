@@ -104,6 +104,10 @@ func TestResolvePaneKinds(t *testing.T) {
 	if _, err := Resolve(uirequest.Target{Kind: uirequest.TargetKindResource, Value: "CASH-1245"}); err == nil {
 		t.Fatal("expected refusal for a resource target with no provider")
 	}
+	note, err := Resolve(uirequest.Target{Kind: uirequest.TargetKindNote, Value: "nt-4jdj4e"})
+	if err != nil || note.Kind != PlanOpenNote || note.Note != "nt-4jdj4e" || note.PluginID != WorkspacePluginID {
+		t.Fatalf("note plan %+v err %v", note, err)
+	}
 	session, err := Resolve(uirequest.Target{Kind: uirequest.TargetKindSession, Value: "sidecar-main"})
 	if err != nil || session.Kind != PlanAttachSession || session.Session != "sidecar-main" {
 		t.Fatalf("session plan %+v err %v", session, err)
@@ -133,6 +137,10 @@ func TestSpanKindsCoverPlanKinds(t *testing.T) {
 		terminallink.KindResource: {
 			Kind: terminallink.KindResource, Value: "CASH-1245",
 			Extra: terminallink.Extra{Provider: "jira", Matcher: "issue-key"},
+		},
+		terminallink.KindInternal: {
+			Kind: terminallink.KindInternal, Value: "nt-4jdj4e",
+			Extra: terminallink.Extra{Namespace: "note"},
 		},
 	}
 	listed := make(map[PlanKind]bool, len(PlanKindsFromSpans()))

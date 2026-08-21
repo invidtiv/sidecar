@@ -64,6 +64,10 @@ func DrawRows(in RowsInput) []string {
 		tabWidth = tty.DefaultTabWidth
 	}
 	contentWidth := layout.DisplayWidth
+	fillWidth := contentWidth
+	if layout.PadWidth > fillWidth {
+		fillWidth = layout.PadWidth
+	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
 	canvasBg := CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
@@ -103,17 +107,63 @@ func DrawRows(in RowsInput) []string {
 	}
 	if canvasBg != "" {
 		for i, line := range drawn {
-			drawn[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, contentWidth)
+			drawn[i] = ui.ApplyTerminalDefaultBackground(line, canvasBg, fillWidth)
 		}
 	}
 	if in.Pad {
+		padTo := contentWidth
+		if canvasBg != "" {
+			padTo = fillWidth
+		}
 		for i, line := range drawn {
-			if gap := contentWidth - ansi.StringWidth(line); gap > 0 {
+			if gap := padTo - ansi.StringWidth(line); gap > 0 {
 				drawn[i] = line + strings.Repeat(" ", gap)
 			}
 		}
 	}
 	return drawn
+}
+
+// PadCanvasBox makes content exactly height rows of width columns. When bg is
+// set, default-background cells and unused rows/columns take that canvas so a
+// capture shorter or narrower than the allotted box cannot expose the
+// surrounding surface. When bg is empty the box is padded with unstyled spaces.
+func PadCanvasBox(content, bg string, width, height int, truncate ...func(string, int) string) string {
+	if width < 1 || height < 1 {
+		return ""
+	}
+	cut := TruncateANSI
+	if len(truncate) > 0 && truncate[0] != nil {
+		cut = truncate[0]
+	}
+	var lines []string
+	if content != "" {
+		lines = strings.Split(content, "\n")
+	}
+	out := make([]string, height)
+	for i := range out {
+		line := ""
+		if i < len(lines) {
+			line = lines[i]
+		}
+		if bg == "" {
+			out[i] = fill(line, width, cut)
+			continue
+		}
+		// Default-bg cells are painted in DrawRows. This only grows the
+		// allotted box: unused columns on an already-drawn row, and unused
+		// rows below the capture. Re-walking SGR here doubled canvas/49m
+		// sequences and broke the panel/default contract (td-5d79ba).
+		if line == "" {
+			out[i] = ui.ApplyTerminalDefaultBackground("", bg, width)
+			continue
+		}
+		if gap := width - ansi.StringWidth(line); gap > 0 {
+			line += bg + strings.Repeat(" ", gap) + ui.RowBackgroundDefault
+		}
+		out[i] = line
+	}
+	return strings.Join(out, "\n")
 }
 
 // Letterboxed reports whether the drawn rows are padded out to the viewport.
@@ -142,19 +192,53 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	if len(rows) == 0 {
 		return ""
 	}
-	counts := make(map[string]int)
-	blankRows := make(map[string]int)
+	type painted struct {
+		bgs   map[string]struct{}
+		blank bool
+	}
+	resolved := make([]painted, 0, len(rows))
 	inherited := inheritedRowBackground(buffer, paneTop)
 	for _, row := range rows {
 		// Counting the row as tmux would render it, not as it was captured: a
 		// canvas is emitted once and then carried, so without re-opening the
 		// inherited background only the first row of the canvas would vote.
-		resolved, next, _ := ui.CarryRowBackground(row, inherited)
+		text, next, _ := ui.CarryRowBackground(row, inherited)
 		inherited = next
-		blank := strings.TrimSpace(ansi.Strip(resolved)) == ""
-		for bg := range rowBackgrounds(resolved) {
+		resolved = append(resolved, painted{
+			bgs:   rowBackgrounds(text),
+			blank: strings.TrimSpace(ansi.Strip(text)) == "",
+		})
+	}
+	// Trailing default-background blanks are unused cells after a resize, not
+	// a vote against the canvas that is still on the rows the TUI painted.
+	last := len(resolved) - 1
+	for last >= 0 && resolved[last].blank && len(resolved[last].bgs) == 0 {
+		last--
+	}
+	if last < 0 {
+		return ""
+	}
+	measured := resolved[:last+1]
+
+	// Interior rows without any background abstain rather than vote against:
+	// tmux stores cells an application never touched as default-attribute, and
+	// a real terminal draws those in its own default — which is the colour the
+	// application matched to its canvas through OSC 11. Counting them against
+	// the canvas made detection flip with every partial repaint (an opencode
+	// pane that had filled only some of its rows), and the flip itself was the
+	// visible inconsistency: the pane alternated between the canvas and the
+	// surrounding surface as the TUI redrew.
+	counts := make(map[string]int)
+	blankRows := make(map[string]int)
+	paintedRowCount := 0
+	for _, row := range measured {
+		if len(row.bgs) == 0 {
+			continue
+		}
+		paintedRowCount++
+		for bg := range row.bgs {
 			counts[bg]++
-			if blank {
+			if row.blank {
 				blankRows[bg]++
 			}
 		}
@@ -167,21 +251,27 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 			canvas = ""
 		}
 	}
-	if canvas == "" || best < CanvasRowShare(len(rows)) || blankRows[canvas] == 0 {
+	// The share is measured against the rows that carry a background. A
+	// highlight drawn on top of a canvas (a Claude Code diff's added-line
+	// green) covers content rows only, so it never reaches the blank-row
+	// requirement below; the near-total bar keeps a bare majority of painted
+	// rows from promoting a panel colour.
+	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) || blankRows[canvas] == 0 {
 		return ""
 	}
 	return canvas
 }
 
-// CanvasRowShare is how many of the observed rows a background must cover to be
-// the pane's canvas rather than highlighting drawn on top of one.
+// CanvasRowShare is how many of the rows that carry a background a candidate
+// must cover to be the pane's canvas rather than highlighting drawn on top of
+// one. Rows without any background are abstentions (see CanvasBackground), so
+// the share is measured over the painted ones.
 //
-// A canvas is on every row by definition — it is the surface the application
-// paints onto — so this is deliberately near-total rather than a simple
-// majority. Measured against live panes: Grok's canvas covers 43 of 43 and 56
-// of 56 rows, while a Claude Code diff's added-line green covers 19 of 55. An
-// earlier one-third rule sat directly between those two, so scrolling a long
-// diff by a single row flipped it and repainted the whole pane green.
+// The bar is deliberately near-total rather than a simple majority. Measured
+// against live panes: Grok's canvas covers 43 of 43 and 56 of 56 rows, while a
+// Claude Code diff's added-line green covered 19 of 55. An earlier one-third
+// rule sat directly between those two, so scrolling a long diff by a single row
+// flipped it and repainted the whole pane green.
 func CanvasRowShare(rows int) int {
 	return max(2, rows*9/10)
 }

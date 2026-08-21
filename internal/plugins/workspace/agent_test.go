@@ -686,7 +686,7 @@ func TestShouldShowSkipPermissions(t *testing.T) {
 		{AgentCodex, true},       // Has --dangerously-bypass-approvals-and-sandbox
 		{AgentAntigravity, true}, // Has --dangerously-skip-permissions
 		{AgentCursor, true},      // Has -f flag
-		{AgentOpenCode, false},   // No known flag
+		{AgentOpenCode, true},    // Has --auto
 		{AgentPi, false},         // No known flag
 		{AgentAmp, true},         // Has --dangerously-allow-all
 		{AgentGrok, true},        // Has --always-approve
@@ -779,7 +779,7 @@ func TestBuildAgentCommand(t *testing.T) {
 			wantFlag:   "-f",
 			wantPrompt: false,
 		},
-		// OpenCode tests (no skip flag)
+		// OpenCode tests
 		{
 			name:       "opencode no skip no task",
 			agentType:  AgentOpenCode,
@@ -789,11 +789,11 @@ func TestBuildAgentCommand(t *testing.T) {
 			wantPrompt: false,
 		},
 		{
-			name:       "opencode with skip no task (no flag available)",
+			name:       "opencode with skip no task",
 			agentType:  AgentOpenCode,
 			skipPerms:  true,
 			taskID:     "",
-			wantFlag:   "",
+			wantFlag:   "--auto",
 			wantPrompt: false,
 		},
 		// Amp tests
@@ -879,7 +879,7 @@ func TestBuildAgentCommandSyntax(t *testing.T) {
 		{AgentCursor, false, "cursor-agent"},
 		{AgentCursor, true, "cursor-agent -f"},
 		{AgentOpenCode, false, "opencode"},
-		{AgentOpenCode, true, "opencode"}, // No skip flag
+		{AgentOpenCode, true, "opencode --auto"},
 		{AgentPi, false, "pi"},
 		{AgentPi, true, "pi"}, // No skip flag
 		{AgentAmp, false, "amp"},

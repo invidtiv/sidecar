@@ -447,9 +447,9 @@ func (p *Plugin) processPendingClickAction() (*Plugin, tea.Cmd) {
 		p.activePane = PaneTree
 		return p, p.loadCurrentTreeItemPreview()
 	case "preview-tab":
-		// User clicked a tab - switch to it using switchTab to trigger edit state restoration
-		if idx, ok := data.(int); ok {
-			return p, p.switchTab(idx)
+		// User clicked a tab — switch, or close when the click landed on ×.
+		if _, _, ok := previewTabPayload(data); ok {
+			return p, p.clickPreviewTab(data)
 		} else if len(p.tabs) > 1 {
 			// Fallback: switch to a different tab than current
 			newTab := 0

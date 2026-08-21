@@ -10,6 +10,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
@@ -125,8 +126,10 @@ const (
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
 	regionPaneLeaf      = "pane-leaf"
+	regionDocLink       = "doc-link"
 	regionDocTab        = "doc-tab"
 	regionIssueTab      = "issue-tab"
+	regionNoteTab       = "note-tab"
 	regionResourceTab   = "resource-tab"
 	regionDiffTargetTab = "diff-target-tab"
 	regionPaneClose     = "pane-close"
@@ -249,11 +252,18 @@ type Plugin struct {
 	paneFrame      PaneLayout
 	paneFrameDrawn bool
 	docs           map[int]*docPane
+	// docLinkHits are the content-link targets the last composed document
+	// bodies earned. They are registered in the frame's Body slot so tabs and
+	// close buttons keep the header row.
+	docLinkHits       []docContentLinkHit
+	docLinkResolution *contentlink.ResolutionIndex
+	docLinkPending    map[contentlink.Pending]bool
 	// docSelectLeaf is the document leaf a live text-selection drag started in.
 	// A drag is answered by where it began, never by where the pointer has since
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
 	docSelectLeaf int
 	issues        map[int]*issuePane
+	notes         map[int]*notePane
 	diffs         map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
@@ -285,6 +295,7 @@ type Plugin struct {
 	// issueModelNextID allocates a unique load identity per issue tab so a
 	// late result cannot land on whichever tab is now active.
 	issueModelNextID int
+	noteModelNextID  int
 	// docInfo is the file-info modal over a workspace document tab.
 	docInfo *docview.Info
 	// docFinderCaches holds one file list per pane root, so the file finder
@@ -620,6 +631,8 @@ func New() *Plugin {
 		listSort:            workspacelist.SortManual,
 		activePane:          PaneSidebar,
 		mouseHandler:        mouse.NewHandler(),
+		docLinkResolution:   contentlink.NewResolutionIndex(contentlink.MaxPendingResolutions),
+		docLinkPending:      make(map[contentlink.Pending]bool),
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
@@ -794,9 +807,11 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.hiddenPaneLayout = nil
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
+	p.notes = make(map[int]*notePane)
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.issueModelNextID = 0
+	p.noteModelNextID = 0
 	p.docFinderCaches = panesearch.Caches{}
 	p.closeDocInfo()
 	p.terminalDocProjection = terminalDocProjection{}
@@ -944,6 +959,17 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 		ctx.Keymap.RegisterPluginBinding("Y", "yank-issue-key", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-issue")
 		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-issue")
+
+		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("x", "close-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("{", "prev-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("}", "next-tab", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("\\", "toggle-sidebar", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("y", "yank-note", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("Y", "yank-note-key", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("tab", "next-pane", "workspace-note")
+		ctx.Keymap.RegisterPluginBinding("shift+tab", "prev-pane", "workspace-note")
 
 		ctx.Keymap.RegisterPluginBinding("q", "close", "workspace-diff")
 		ctx.Keymap.RegisterPluginBinding("esc", "close", "workspace-diff")

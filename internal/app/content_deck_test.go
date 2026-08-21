@@ -27,6 +27,7 @@ import (
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
@@ -168,6 +169,31 @@ func TestAppContentDeckConsumesInternalOSCAndActivatesNoteIntent(t *testing.T) {
 				t.Fatalf("note intent mutated passive pane deck: before=%+v after=%+v", before, after)
 			}
 		})
+	}
+}
+
+func TestAppContentDeckOpensNotePaneFromNonNotesSurface(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "sidecar://note/nt-4jdj4e"}
+	m := appDeckTestModel(t, root, p)
+	_ = m.renderContent(120, 30)
+	h := m.currentContentDeck()
+	if h == nil || len(h.links) != 1 {
+		t.Fatalf("note link hits = %+v", h)
+	}
+	cmd := m.openAppContent(root, p.id, h.links[0].Ref)
+	if cmd == nil {
+		t.Fatal("opening a note from Files returned no load")
+	}
+	if h.deck.Leaf(panelayout.Note) == 0 {
+		t.Fatal("Files surface did not open a Note pane")
+	}
+	items, _ := h.deck.Tabs(h.deck.Leaf(panelayout.Note))
+	if len(items) != 1 || items[0].Ref.Value != "nt-4jdj4e" {
+		t.Fatalf("note tabs = %#v", items)
+	}
+	if _, ok := cmd().(NavigateToNoteMsg); ok {
+		t.Fatal("Files surface navigated inside Notes instead of opening a pane")
 	}
 }
 
@@ -331,7 +357,7 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	m.renderContent(200, 40)
 	var firstTab *mouse.Region
 	for _, region := range h.mouse.HitMap.Regions() {
-		if hit, ok := region.Data.(appDeckTabHit); region.ID == appDeckTabRegion && ok && hit.leafID == firstLeaf && hit.index == 0 {
+		if hit, ok := region.Data.(appDeckTabHit); region.ID == appDeckTabRegion && ok && !hit.close && hit.leafID == firstLeaf && hit.index == 0 {
 			copy := region
 			firstTab = &copy
 			break
@@ -372,6 +398,104 @@ func TestAppContentDeckSizesPrimaryAndComposesOneFocusRing(t *testing.T) {
 	click, ok := p.seen[len(p.seen)-1].(tea.MouseClickMsg)
 	if !ok || click.X != 5 || click.Y != 4 {
 		t.Fatalf("primary mouse origin = %#v, want plugin-local (5,4)", p.seen[len(p.seen)-1])
+	}
+}
+
+func TestAppContentDeckTabCloseClosesThatTab(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"README.md", "guide.md"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("# "+name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &deckHostTestPlugin{id: "files", focus: "tree", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("README open returned no load")
+	}
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "guide.md"})
+	h := m.currentContentDeck()
+	leaf := h.deck.Leaf(panelayout.Document)
+	items, _ := h.deck.Tabs(leaf)
+	if len(items) != 2 {
+		t.Fatalf("tabs=%d, want 2", len(items))
+	}
+	m.renderContent(200, 40)
+	var closeHit *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		hit, ok := region.Data.(appDeckTabHit)
+		if region.ID != appDeckTabRegion || !ok || !hit.close || hit.leafID != leaf || hit.index != 0 {
+			continue
+		}
+		copy := region
+		closeHit = &copy
+		break
+	}
+	if closeHit == nil {
+		t.Fatal("README tab has no close hit region")
+	}
+	resolved := h.mouse.HitMap.Test(closeHit.Rect.X, closeHit.Rect.Y)
+	if resolved == nil {
+		t.Fatal("close cell hit-tests nothing")
+	}
+	hit, ok := resolved.Data.(appDeckTabHit)
+	if !ok || !hit.close || hit.index != 0 {
+		t.Fatalf("close cell resolves to %#v, want README close", resolved.Data)
+	}
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: closeHit.Rect.X, Y: closeHit.Rect.Y, Button: tea.MouseLeft}))
+	items, _ = h.deck.Tabs(leaf)
+	if len(items) != 1 || items[0].Ref.Value != "guide.md" {
+		t.Fatalf("close left %#v, want [guide.md]", items)
+	}
+}
+
+// The leaf header's shared × is the padded three-cell close button drawn by
+// ComposeHeaderClose, so its hit rect must be the same reserved geometry.
+// Regression: the rect covered only the button's trailing pad column, so the
+// glyph itself was dead and closing an issue pane opened from Notes needed a
+// click one or two columns right of the ×.
+func TestAppContentDeckHeaderCloseCoversTheGlyph(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "notes", focus: "preview", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("document open returned no load command")
+	}
+	h := m.currentContentDeck()
+	doc := h.deck.Leaf(panelayout.Document)
+	if doc == 0 {
+		t.Fatal("document leaf did not open")
+	}
+	m.renderContent(200, 40)
+
+	var close *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		if region.ID == appDeckCloseRegion {
+			copy := region
+			close = &copy
+			break
+		}
+	}
+	if close == nil {
+		t.Fatal("leaf header registered no close region")
+	}
+	if close.Rect.W != ui.CloseButtonWidth() {
+		t.Fatalf("close rect width=%d, want %d (the padded button)", close.Rect.W, ui.CloseButtonWidth())
+	}
+	glyphX := close.Rect.X + close.Rect.W/2
+	resolved := h.mouse.HitMap.Test(glyphX, close.Rect.Y)
+	if resolved == nil || resolved.ID != appDeckCloseRegion {
+		t.Fatalf("clicking the × at x=%d resolved %#v, want the close region", glyphX, resolved)
+	}
+
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: glyphX, Y: close.Rect.Y, Button: tea.MouseLeft}))
+	if h.deck.Leaf(panelayout.Document) != 0 {
+		t.Fatal("clicking the × did not close the pane")
 	}
 }
 
@@ -590,6 +714,58 @@ func TestAppContentDeckBorderlessPrimaryRuleIsCapabilityDriven(t *testing.T) {
 				t.Fatalf("capability host %q gained an enclosing frame: %q", id, rendered)
 			}
 		})
+	}
+}
+
+// A focused passive leaf (a document opened on the right of Files, a note pane,
+// a diff) must not swallow sidecar's own globals: the keys that switch plugins
+// belong to the host's switch, later in the key ladder. This is the regression
+// that made ] and 1-7 go dead whenever a Files document pane had focus.
+func TestAppContentDeckFocusedLeafKeepsPluginSwitchKeysGlobal(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# hi\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	other := &deckHostTestPlugin{id: "git-status", focus: "tree", frame: "git"}
+	m := appDeckTestModel(t, root, p, other)
+	_ = m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("document open returned no load command")
+	}
+	h := m.currentContentDeck()
+	doc := h.deck.Leaf(panelayout.Document)
+	if doc == 0 {
+		t.Fatal("document leaf did not open")
+	}
+	h.deck.FocusLeaf(doc)
+	m.updateContext()
+
+	for _, key := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{name: "]", msg: tea.KeyPressMsg{Code: ']', Text: "]"}},
+		{name: "[", msg: tea.KeyPressMsg{Code: '[', Text: "["}},
+		{name: "`", msg: tea.KeyPressMsg{Code: '`', Text: "`"}},
+		{name: "1", msg: tea.KeyPressMsg{Code: '1', Text: "1"}},
+	} {
+		if _, handled := m.handleAppContentKey(key.msg); handled {
+			t.Fatalf("%s was swallowed by the focused passive document", key.name)
+		}
+	}
+
+	// End to end: ] still moves the header ring while the document has focus.
+	updated, _ := m.Update(tea.KeyPressMsg{Code: ']', Text: "]"})
+	got := updated.(*Model)
+	if got.activePlugin != 1 {
+		t.Fatalf("] with a document pane focused left activePlugin=%d, want 1", got.activePlugin)
+	}
+
+	// The deck's own structural keys keep their answers: q still hides the
+	// focused pane rather than reaching the quit flow.
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); !handled {
+		t.Fatal("q no longer hides the focused passive leaf")
 	}
 }
 

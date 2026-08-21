@@ -7,6 +7,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -20,7 +21,10 @@ func isPreviewIssueRegion(kind string) bool {
 }
 
 // previewIssueTabHit is the tab stored on the issue header region.
-type previewIssueTabHit int
+type previewIssueTabHit struct {
+	Index int
+	Close bool
+}
 
 // OpenIssueInTDMsg asks the app to leave global and open this issue in td.
 // The jump itself belongs to the app — this surface only names the issue.
@@ -38,6 +42,9 @@ type previewIssue struct {
 	surface string
 	focused bool
 	epoch   uint64
+	// wheel coalesces one flick over this pane, exactly as the terminal's own
+	// burst does for its surface; the pane dying drops any held delta with it.
+	wheel tty.WheelBurst
 }
 
 func (i *previewIssue) view() *issueview.Model {
@@ -130,11 +137,17 @@ func (m *Model) closePreviewIssue() tea.Cmd {
 }
 
 func (m *Model) closePreviewIssueTab() tea.Cmd {
+	if m.preview.issue == nil {
+		return nil
+	}
+	return m.closePreviewIssueTabAt(m.preview.issue.tabs.Active)
+}
+
+func (m *Model) closePreviewIssueTabAt(index int) tea.Cmd {
 	if m.preview.deck == nil {
 		return nil
 	}
-	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Issue))
-	m.preview.deck.CloseActive()
+	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Issue), index)
 	return m.finishPreviewDeckClose()
 }
 
@@ -196,24 +209,28 @@ func (m *Model) registerPreviewIssueTabRegions(issueBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.issue.focused
-	for _, tab := range issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused).Tabs {
+	strip := issueview.LayoutTabStrip(m.preview.issue.tabs, ui.ReserveHeaderClose(issueBox.W).TabsWidth, focused)
+	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewIssueTabKind,
-			issueBox.X+tab.Col, issueBox.Y, tab.Width, 1,
-			previewIssueTabHit(tab.Index),
+			issueBox.X+col, issueBox.Y, width, 1,
+			previewIssueTabHit{Index: index, Close: close},
 		)
-	}
+	})
 }
 
 func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 	if tab, ok := action.Region.Data.(previewIssueTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.clickPreviewIssueTab(int(tab))
+			if tab.Close {
+				return m.closePreviewIssueTabAt(tab.Index)
+			}
+			return m.clickPreviewIssueTab(tab.Index)
 		}
-		if view := m.preview.issue.view(); view != nil {
+		if m.preview.issue != nil {
 			switch action.Type {
 			case mouse.ActionScrollUp, mouse.ActionScrollDown:
-				view.Scroll(action.Delta)
+				m.scrollPreviewIssueByWheel(action.Delta)
 			}
 		}
 		return nil
@@ -241,11 +258,46 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 		m.focusPreviewPane(panelayout.Issue)
 		return nil
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
-		if view != nil {
-			view.Scroll(action.Delta)
-		}
+		m.scrollPreviewIssueByWheel(action.Delta)
 	}
 	return nil
+}
+
+// scrollPreviewIssueByWheel applies one notch to the issue pane through the
+// shared burst guard, so a mid-range flick coalesces into the same handful of
+// repaints here that it earns on the terminal and Files surfaces. A held-back
+// delta is not lost; it rides the next flush.
+func (m *Model) scrollPreviewIssueByWheel(delta int) {
+	if m.preview.issue == nil {
+		return
+	}
+	flushed, ok := m.preview.issue.wheel.Add(delta, m.now())
+	if !ok {
+		return
+	}
+	if view := m.preview.issue.view(); view != nil {
+		view.Scroll(flushed)
+	}
+}
+
+// previewIssueWheelAtBoundary asks the card whether inertia over it is spent,
+// and drops any held delta when it is — the same pairing the boundary filter
+// and burst keep on every other surface, so a tail dropped at the top cannot
+// leak into the next gesture's first flush.
+func (m *Model) previewIssueWheelAtBoundary(delta int) bool {
+	issue := m.preview.issue
+	if issue == nil {
+		return true
+	}
+	view := issue.view()
+	if view == nil {
+		return true
+	}
+	bounded := view.ScrollAtBoundary(delta)
+	if bounded {
+		issue.wheel.Reset()
+	}
+	return bounded
 }
 
 func (m *Model) previewIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {

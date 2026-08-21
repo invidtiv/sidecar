@@ -111,15 +111,22 @@ func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 	r.p.registerPaneCloseRegions(node, inner)
 }
 
-// Body is the diff leaf's own list/hunk divider and file rows. Nothing else
-// registers content-owned targets today.
+// Body is anything a leaf's content owns inside its own box — a diff list
+// divider, a file row, a document content link — in its chrome-aware content
+// box. It registers last so it beats everything the frame put down except a
+// later overlay (finder, project search).
 func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
-	if node == nil || node.Kind != PaneDiff {
+	if node == nil {
 		return
 	}
-	diff := r.p.diffs[node.ContentID]
-	if diff == nil {
-		return
+	switch node.Kind {
+	case PaneDoc:
+		r.p.registerDocLinkHits(node, inner)
+	case PaneDiff:
+		diff := r.p.diffs[node.ContentID]
+		if diff == nil {
+			return
+		}
+		r.p.registerDiffLeafHits(diff, inner)
 	}
-	r.p.registerDiffLeafHits(diff, inner)
 }

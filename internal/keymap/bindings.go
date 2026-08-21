@@ -245,6 +245,16 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		{Key: "y", Command: "yank-note", Context: "global-workspaces-note"},
+		{Key: "Y", Command: "yank-note-key", Context: "global-workspaces-note"},
+		{Key: "q", Command: "close", Context: "global-workspaces-note"},
+		{Key: "esc", Command: "close", Context: "global-workspaces-note"},
+		{Key: "x", Command: "close-tab", Context: "global-workspaces-note"},
+		{Key: "{", Command: "prev-tab", Context: "global-workspaces-note"},
+		{Key: "}", Command: "next-tab", Context: "global-workspaces-note"},
+		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-note"},
+		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-note"},
+
 		// Focused external-resource leaf. The command IDs after close are
 		// resourceview's own key vocabulary, which both terminal surfaces
 		// register, so the footer cannot advertise different keys for the
@@ -332,6 +342,17 @@ func DefaultBindings() []Binding {
 		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-issue"},
 		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
+
+		{Key: "y", Command: "yank-note", Context: "workspace-note"},
+		{Key: "Y", Command: "yank-note-key", Context: "workspace-note"},
+		{Key: "q", Command: "close", Context: "workspace-note"},
+		{Key: "esc", Command: "close", Context: "workspace-note"},
+		{Key: "x", Command: "close-tab", Context: "workspace-note"},
+		{Key: "{", Command: "prev-tab", Context: "workspace-note"},
+		{Key: "}", Command: "next-tab", Context: "workspace-note"},
+		{Key: "\\", Command: "toggle-sidebar", Context: "workspace-note"},
+		{Key: "tab", Command: "next-pane", Context: "workspace-note"},
+		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-note"},
 
 		// The Resource leaf answers the same keys on this surface as it does
 		// in the global Workspaces browser. The two blocks are siblings on
@@ -819,6 +840,7 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "cursor-up", Context: "notes-list"},
 		{Key: "G", Command: "cursor-bottom", Context: "notes-list"},
 		{Key: "n", Command: "new-note", Context: "notes-list"},
+		{Key: "c", Command: "new-note", Context: "notes-list"},
 		{Key: "X", Command: "delete-note", Context: "notes-list"},
 		{Key: "x", Command: "show-deleted", Context: "notes-list"},
 		{Key: "p", Command: "toggle-pin", Context: "notes-list"},
@@ -861,6 +883,11 @@ func DefaultBindings() []Binding {
 		{Key: "e", Command: "vim-edit", Context: "notes-preview"},
 		{Key: "E", Command: "external-editor", Context: "notes-preview"},
 		{Key: "m", Command: "toggle-markdown", Context: "notes-preview"},
+		{Key: "/", Command: "search-in-note", Context: "notes-preview"},
+		{Key: "esc", Command: "cancel", Context: "notes-note-search"},
+		{Key: "enter", Command: "search-confirm", Context: "notes-note-search"},
+		{Key: "n", Command: "next-match", Context: "notes-note-search"},
+		{Key: "N", Command: "prev-match", Context: "notes-note-search"},
 		{Key: "ctrl+s", Command: "save", Context: "notes-preview"},
 		{Key: "ctrl+y", Command: "yank-id", Context: "notes-preview"},
 

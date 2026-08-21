@@ -90,6 +90,13 @@ func (t *Tabs) CloseActive() {
 	t.fromGroup(g)
 }
 
+// CloseAt removes the tab at index. Out of range is a no-op.
+func (t *Tabs) CloseAt(index int) {
+	g := t.asGroup()
+	g.CloseAt(index)
+	t.fromGroup(g)
+}
+
 // VisibleRange is the overflow window for this group: the inclusive [start, end]
 // of tabs that fit in maxWidth, keeping Active on screen.
 func (t Tabs) VisibleRange(widths []int, maxWidth int) (start, end int, showLeft, showRight bool) {

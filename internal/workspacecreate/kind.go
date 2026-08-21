@@ -27,7 +27,11 @@ var kindCatalog = []kindRow{
 	{Kind: KindTerminalSplit, Label: "Terminal split", HostScoped: true},
 }
 
-const kindSeparator = " | "
+const (
+	kindSeparator  = " | "
+	kindFrameOpen  = "["
+	kindFrameClose = "]"
+)
 
 // kindRowsFor is the catalog a host offers.
 func kindRowsFor(hostScoped bool) []kindRow {
@@ -65,7 +69,7 @@ func kindIndex(rows []kindRow, kind Kind) int {
 // both.
 func kindSpans(rows []kindRow) [][2]int {
 	spans := make([][2]int, 0, len(rows))
-	x := 0
+	x := ansi.StringWidth(kindFrameOpen)
 	sep := ansi.StringWidth(kindSeparator)
 	for i, row := range rows {
 		w := ansi.StringWidth(" " + row.Label + " ")
@@ -139,6 +143,41 @@ func kindButtonStyles(sel Kind, hovered bool) (shellStyle, treeStyle lipgloss.St
 		kindRowStyle(KindWorktree, sel, false, hovered && sel != KindWorktree)
 }
 
+// kindFrameStyle is the [ ] around the kind row. It uses the same colours as a
+// modal input border so "this field is active" is not the same signal as
+// "this kind is selected".
+func kindFrameStyle(focused, hovered bool) lipgloss.Style {
+	s := lipgloss.NewStyle()
+	switch {
+	case focused:
+		return s.Foreground(styles.Primary)
+	case hovered:
+		return s.Foreground(styles.TextMuted)
+	default:
+		return s.Foreground(styles.BorderNormal)
+	}
+}
+
+func renderKindToggle(rows []kindRow, sel Kind, focused, hovered bool, disabledReason func(Kind) string, contentWidth int) string {
+	frame := kindFrameStyle(focused, hovered)
+	parts := make([]string, 0, len(rows)*2+2)
+	parts = append(parts, frame.Render(kindFrameOpen))
+	for i, row := range rows {
+		disabled := disabledReason != nil && disabledReason(row.Kind) != ""
+		style := kindRowStyle(row.Kind, sel, disabled, hovered && row.Kind != sel)
+		if i > 0 {
+			parts = append(parts, styles.Muted.Render(kindSeparator))
+		}
+		parts = append(parts, style.Render(" "+row.Label+" "))
+	}
+	parts = append(parts, frame.Render(kindFrameClose))
+	content := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+	if ansi.StringWidth(content) > contentWidth && contentWidth > 0 {
+		content = ansi.Truncate(content, contentWidth, "…")
+	}
+	return content
+}
+
 // kindToggle renders the row list. disabledReason answers, per row, why that
 // row cannot be created right now; a disabled row is drawn muted whether or not
 // it is selected, so the rule is visible before the row is entered.
@@ -148,20 +187,7 @@ func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disa
 		if selected != nil {
 			sel = *selected
 		}
-		hovered := hoverID == id
-		parts := make([]string, 0, len(rows)*2)
-		for i, row := range rows {
-			disabled := disabledReason != nil && disabledReason(row.Kind) != ""
-			style := kindRowStyle(row.Kind, sel, disabled, hovered && row.Kind != sel)
-			if i > 0 {
-				parts = append(parts, styles.Muted.Render(kindSeparator))
-			}
-			parts = append(parts, style.Render(" "+row.Label+" "))
-		}
-		content := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-		if ansi.StringWidth(content) > contentWidth && contentWidth > 0 {
-			content = ansi.Truncate(content, contentWidth, "…")
-		}
+		content := renderKindToggle(rows, sel, focusID == id, hoverID == id, disabledReason, contentWidth)
 		return modal.RenderedSection{
 			Content: content,
 			Focusables: []modal.FocusableInfo{{

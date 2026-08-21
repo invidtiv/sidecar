@@ -93,6 +93,6 @@ func (p *Plugin) contentLinksSafe() bool {
 		p.loading || p.loadErr != nil || p.editorNote == nil || !p.previewMode {
 		return false
 	}
-	return !p.searchMode && !p.showSetupModal && !p.showTaskModal && !p.showDeleteModal && !p.showInfoModal &&
+	return !p.searchMode && !p.noteSearchMode && !p.showSetupModal && !p.showTaskModal && !p.showDeleteModal && !p.showInfoModal &&
 		!p.edit.Active && !p.edit.ShowExitConfirm
 }

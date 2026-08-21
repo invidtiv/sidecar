@@ -8,6 +8,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacediff"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // ViewMode represents the current view state.
@@ -147,17 +148,20 @@ const (
 )
 
 // SkipPermissionsFlags maps agent types to their skip-permissions CLI flags.
-var SkipPermissionsFlags = map[AgentType]string{
-	AgentClaude:      "--dangerously-skip-permissions",
-	AgentCodex:       "--dangerously-bypass-approvals-and-sandbox",
-	AgentCopilot:     "", // No known flag
-	AgentAider:       "--yes",
-	AgentAntigravity: "--dangerously-skip-permissions",
-	AgentCursor:      "-f",
-	AgentOpenCode:    "", // No known flag
-	AgentPi:          "", // No known flag
-	AgentAmp:         "--dangerously-allow-all",
-	AgentGrok:        "--always-approve",
+// Derived from workspaceops.AgentSkipFlag so this map cannot drift from the
+// one the creation forms use; agents without a known flag resolve to "".
+var SkipPermissionsFlags = buildSkipPermissionsFlags()
+
+func buildSkipPermissionsFlags() map[AgentType]string {
+	agents := []AgentType{
+		AgentClaude, AgentCodex, AgentCopilot, AgentAider, AgentAntigravity,
+		AgentCursor, AgentOpenCode, AgentPi, AgentAmp, AgentGrok,
+	}
+	flags := make(map[AgentType]string, len(agents))
+	for _, agent := range agents {
+		flags[agent] = workspaceops.AgentSkipFlag(string(agent))
+	}
+	return flags
 }
 
 // SystemPromptAppendFlags maps agent types to the flag that appends text to

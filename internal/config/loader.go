@@ -95,8 +95,13 @@ type rawTerminalResourceProviderConfig struct {
 	PassEnv []string `json:"passEnv"`
 	// Enabled is a pointer because a configured instance is on unless it says
 	// otherwise; an omitted field must not read as "disabled".
-	Enabled *bool  `json:"enabled"`
-	Timeout string `json:"timeout"`
+	Enabled *bool `json:"enabled"`
+	// ClaimHosts follows the file-wide unknown-field convention: json.Unmarshal
+	// into this typed struct silently ignores keys it does not know, so a
+	// config written by a newer Sidecar loads on an older one with the newer
+	// fields inert. Known-field validation stays strict.
+	ClaimHosts []string `json:"claimHosts"`
+	Timeout    string   `json:"timeout"`
 }
 
 type rawUIConfig struct {
@@ -446,10 +451,11 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 		providers := make([]TerminalResourceProviderConfig, 0, len(raw.TerminalResources.Providers))
 		for _, rp := range raw.TerminalResources.Providers {
 			p := TerminalResourceProviderConfig{
-				ID:      rp.ID,
-				Command: append([]string(nil), rp.Command...),
-				PassEnv: append([]string(nil), rp.PassEnv...),
-				Enabled: true,
+				ID:         rp.ID,
+				Command:    append([]string(nil), rp.Command...),
+				PassEnv:    append([]string(nil), rp.PassEnv...),
+				ClaimHosts: append([]string(nil), rp.ClaimHosts...),
+				Enabled:    true,
 			}
 			if rp.Enabled != nil {
 				p.Enabled = *rp.Enabled

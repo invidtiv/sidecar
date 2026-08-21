@@ -613,7 +613,7 @@ func TestTheIssueLookupAdvertisesIOnWorkspaces(t *testing.T) {
 			}
 
 			var help strings.Builder
-			m.renderBindingSection(&help, "global")
+			m.renderBindingSection(&help, "global", 60)
 			var found bool
 			for _, line := range strings.Split(ansi.Strip(help.String()), "\n") {
 				if !strings.Contains(line, formatCommandName("open-issue")) {

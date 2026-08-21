@@ -429,8 +429,8 @@ func TestListHeaderCountFilterAndSpacing(t *testing.T) {
 
 	plain := strings.Split(ansi.Strip(p.renderListPane(10)), "\n")
 	fields := strings.Fields(plain[0])
-	if !strings.HasPrefix(plain[0], "Notes") || len(fields) < 3 || fields[len(fields)-2] != "14" || fields[len(fields)-1] != "Active" {
-		t.Fatalf("header is not title-left/count+state-right: %q", plain[0])
+	if !strings.HasPrefix(plain[0], "Notes") || !strings.Contains(plain[0], "14") || !strings.Contains(plain[0], "Active") || !strings.Contains(plain[0], "+ New") {
+		t.Fatalf("header is not title-left/count+state+new-right: %q fields=%v", plain[0], fields)
 	}
 	if strings.Contains(plain[0], "(14)") {
 		t.Fatalf("count retained parentheses: %q", plain[0])
@@ -519,6 +519,45 @@ func TestFilterShortcutsToggleAndPillCycles(t *testing.T) {
 	_, _ = p.handleMouseClick(mouse.MouseAction{Region: region})
 	if p.viewFilter != FilterActive {
 		t.Fatalf("third pill click selected %s, want Active", p.viewFilter)
+	}
+}
+
+func TestNewNoteHeaderButtonCreatesAndStaysRightOfFilter(t *testing.T) {
+	p := layoutTestPlugin(t)
+	p.ctx = &plugin.Context{Epoch: 1, ProjectRoot: t.TempDir()}
+	p.store = openTestStore(t)
+	p.viewFilter = FilterActive
+	p.registerMouseRegions()
+	header := p.listHeader(p.listWidth-paneChromeX, len(p.getDisplayNotes()))
+	if header.newWidth < 1 || header.newX <= header.filterX {
+		t.Fatalf("new-note control is not right of the filter: %+v", header)
+	}
+	var region *mouse.Region
+	for _, candidate := range p.mouseHandler.HitMap.Regions() {
+		if candidate.ID == regionNewNote {
+			copy := candidate
+			region = &copy
+			break
+		}
+	}
+	if region == nil {
+		t.Fatal("+ New Note has no mouse hit region")
+	}
+	if region.Rect.X != 2+header.newX || region.Rect.W != header.newWidth {
+		t.Fatalf("new-note hit region %+v does not match painted header %+v", region.Rect, header)
+	}
+	_, cmd := p.handleMouseClick(mouse.MouseAction{Region: region})
+	if cmd == nil {
+		t.Fatal("new-note click scheduled no create")
+	}
+	if p.mutation == nil || p.mutation.kind != noteMutationCreate || p.activePane != PaneEditor || p.previewMode {
+		t.Fatalf("new-note click did not enter optimistic create: mutation=%+v pane=%v preview=%v", p.mutation, p.activePane, p.previewMode)
+	}
+
+	p.viewFilter = FilterArchived
+	archived := p.listHeader(p.listWidth-paneChromeX, 0)
+	if archived.newWidth != 0 {
+		t.Fatalf("archived header still painted new-note: %+v", archived)
 	}
 }
 

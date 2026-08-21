@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/markdown"
+	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
@@ -46,6 +47,8 @@ func newViewer(cfg Config, kind panelayout.Kind) viewer {
 		v = &documentViewer{view: docview.New(cfg.Renderer)}
 	case panelayout.Issue:
 		v = &issueViewer{view: issueview.New(cfg.Renderer)}
+	case panelayout.Note:
+		v = &noteViewer{view: noteview.New(cfg.Renderer)}
 	case panelayout.Diff:
 		v = &diffViewer{view: &workspacediff.View{}}
 	case panelayout.Resource:
@@ -77,6 +80,13 @@ func normalizeRef(ctx SurfaceContext, ref contentlink.Ref) (contentlink.Ref, pan
 			return contentlink.Ref{}, panelayout.Primary, "", false
 		}
 		ref = parsed.Ref
+		if ref.Namespace == "note" {
+			ref.Value = noteview.NormalizeID(ref.Value)
+			if ref.Value == "" {
+				return contentlink.Ref{}, panelayout.Note, "", false
+			}
+			return ref, panelayout.Note, ref.Value, true
+		}
 		return ref, panelayout.Primary, ref.Namespace + "\x00" + ref.Value, true
 	case contentlink.KindFile:
 		path := filepath.Clean(ref.Value)
@@ -196,6 +206,36 @@ func (v *issueViewer) reference(ref contentlink.Ref) (contentlink.Ref, string) {
 	return ref, ref.Value
 }
 func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
+	return TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
+}
+
+type noteViewer struct{ view *noteview.Model }
+
+func (v *noteViewer) model() any { return v.view }
+func (v *noteViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	return v.view.Load(id, ctx.Root, ref.Value, ctx.Epoch)
+}
+func (v *noteViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	return v.load(ctx, ref, id)
+}
+func (v *noteViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
+	v.view.Arm(id, ref.Value, ctx.Epoch)
+	v.view.SetPendingScroll(state.Scroll)
+}
+func (v *noteViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
+	if v.view.NeedsLoad() {
+		return v.load(ctx, ref, id)
+	}
+	return nil
+}
+func (v *noteViewer) apply(_ SurfaceContext, msg any) (tea.Cmd, bool) {
+	m, ok := msg.(noteview.LoadedMsg)
+	return nil, ok && v.view.SetResult(m)
+}
+func (v *noteViewer) reference(ref contentlink.Ref) (contentlink.Ref, string) {
+	return ref, ref.Value
+}
+func (v *noteViewer) snapshot(ref contentlink.Ref) TabState {
 	return TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
 }
 

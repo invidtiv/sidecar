@@ -23,7 +23,10 @@ func isPreviewResourceRegion(kind string) bool {
 }
 
 // previewResourceTabHit is the tab stored on the resource header region.
-type previewResourceTabHit int
+type previewResourceTabHit struct {
+	Index int
+	Close bool
+}
 
 // previewResource is the memory-only Resource pane beside the selected
 // terminal. Everything a Resource leaf DOES — the click journey, the
@@ -259,11 +262,17 @@ func (m *Model) closePreviewResource() tea.Cmd {
 }
 
 func (m *Model) closePreviewResourceTab() tea.Cmd {
+	if m.preview.resource == nil || m.preview.resource.tabs == nil {
+		return nil
+	}
+	return m.closePreviewResourceTabAt(m.preview.resource.tabs.ActiveIndex())
+}
+
+func (m *Model) closePreviewResourceTabAt(index int) tea.Cmd {
 	if m.preview.deck == nil {
 		return nil
 	}
-	m.preview.deck.FocusLeaf(m.preview.deck.Leaf(panelayout.Resource))
-	m.preview.deck.CloseActive()
+	m.preview.deck.CloseTab(m.preview.deck.Leaf(panelayout.Resource), index)
 	return m.finishPreviewDeckClose()
 }
 
@@ -314,13 +323,14 @@ func (m *Model) registerPreviewResourceTabRegions(box termpreview.Box) {
 	focused := m.PreviewFocused() && res.focused
 	// The strip is laid out by the same call that drew it, so a click cannot
 	// land on a tab that overflow pushed out of the header.
-	for _, tab := range resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused).Tabs {
+	strip := resourceview.LayoutTabStrip(res.tabs, ui.ReserveHeaderClose(box.W).TabsWidth, focused)
+	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewResourceTabKind,
-			box.X+tab.Col, box.Y, tab.Width, 1,
-			previewResourceTabHit(tab.Index),
+			box.X+col, box.Y, width, 1,
+			previewResourceTabHit{Index: index, Close: close},
 		)
-	}
+	})
 }
 
 func (m *Model) handlePreviewResourceMouse(action mouse.MouseAction) tea.Cmd {
@@ -330,7 +340,10 @@ func (m *Model) handlePreviewResourceMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	if tab, ok := action.Region.Data.(previewResourceTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.clickPreviewResourceTab(int(tab))
+			if tab.Close {
+				return m.closePreviewResourceTabAt(tab.Index)
+			}
+			return m.clickPreviewResourceTab(tab.Index)
 		}
 		switch action.Type {
 		case mouse.ActionScrollUp, mouse.ActionScrollDown:

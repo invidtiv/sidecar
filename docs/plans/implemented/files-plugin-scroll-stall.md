@@ -145,3 +145,14 @@ Proof: unit tests for burst apply/hold/flush on the files handlers (drive time t
 - `internal/filepreview/preview.go` — `LoadPreview` (leave the loader; change who calls it)
 - `internal/tty/wheel.go` — reuse `WheelBurst` as-is
 - `internal/plugins/workspace/mouse.go` — `scrollPreview` is the pattern to copy
+
+## Adoption note (post-implementation)
+
+Files adopted slices 1–3, and the burst pattern has since spread by reference
+rather than by copy: every surface that hosts a scrollable content area is
+expected to apply wheel deltas through `tty.WheelBurst`/`WheelBursts` **and**
+answer `ScrollAtBoundary` — the pairing is now the documented default for new
+scrollable surfaces in `.claude/skills/ui-features/SKILL.md` ("Wheel burst
+coalescing"). The td issue viewer's hosts (workspace issue leaf, overview
+Workspaces preview, app content deck, app preview modal) are the most recent
+adopters, each tested beside its host with a clock-driven flick.

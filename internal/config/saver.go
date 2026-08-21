@@ -29,11 +29,12 @@ type saveTerminalResourcesConfig struct {
 }
 
 type saveTerminalResourceProviderConfig struct {
-	ID      string   `json:"id"`
-	Command []string `json:"command"`
-	PassEnv []string `json:"passEnv,omitempty"`
-	Enabled bool     `json:"enabled"`
-	Timeout string   `json:"timeout,omitempty"`
+	ID         string   `json:"id"`
+	Command    []string `json:"command"`
+	PassEnv    []string `json:"passEnv,omitempty"`
+	Enabled    bool     `json:"enabled"`
+	Timeout    string   `json:"timeout,omitempty"`
+	ClaimHosts []string `json:"claimHosts,omitempty"`
 }
 
 type saveProjectsConfig struct {
@@ -159,10 +160,11 @@ func toSaveTerminalResources(cfg TerminalResourcesConfig) saveTerminalResourcesC
 	out := saveTerminalResourcesConfig{}
 	for _, p := range cfg.Providers {
 		sp := saveTerminalResourceProviderConfig{
-			ID:      p.ID,
-			Command: append([]string(nil), p.Command...),
-			PassEnv: append([]string(nil), p.PassEnv...),
-			Enabled: p.Enabled,
+			ID:         p.ID,
+			Command:    append([]string(nil), p.Command...),
+			PassEnv:    append([]string(nil), p.PassEnv...),
+			Enabled:    p.Enabled,
+			ClaimHosts: append([]string(nil), p.ClaimHosts...),
 		}
 		if p.Timeout > 0 {
 			sp.Timeout = p.Timeout.String()

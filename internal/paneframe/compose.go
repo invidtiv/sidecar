@@ -79,6 +79,7 @@ func ChromeFloorsFor(content panelayout.Floors, chrome func(panelayout.Kind) Chr
 		Diff:     grow(panelayout.Diff, content.Diff),
 		Resource: grow(panelayout.Resource, content.Resource),
 		Shell:    grow(panelayout.Shell, content.Shell),
+		Note:     grow(panelayout.Note, content.Note),
 	}
 }
 

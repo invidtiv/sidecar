@@ -31,6 +31,9 @@ const (
 	// tree hosts beside it. Keeping them apart is what lets a host have more
 	// than one live terminal without the tree learning what a terminal is.
 	Shell
+	// Note is a read-only td note card. Added after Shell so existing numeric
+	// Kind values stay stable; persistence uses the string "note".
+	Note
 )
 
 // Terminal is the persisted-value and source compatibility alias used by the
@@ -82,6 +85,7 @@ type Floors struct {
 	Diff     Floor
 	Resource Floor
 	Shell    Floor
+	Note     Floor
 }
 
 func (f Floors) primary() Floor {
@@ -162,6 +166,8 @@ func paneMinimum(node *Node, floors Floors) Floor {
 			floor = floors.Resource
 		case Shell:
 			floor = floors.Shell
+		case Note:
+			floor = floors.Note
 		}
 		return Floor{Width: max(floor.Width, 0), Height: max(floor.Height, 0)}
 	}
@@ -207,9 +213,9 @@ const LiveLeafCap = 2
 func IsLive(kind Kind) bool { return kind == Primary || kind == Shell }
 
 // Duplicable reports that a second leaf of this kind is a second thing, not the
-// same thing shown again. Document/Issue/Diff/Resource swap their content in
-// place, so opening one twice retargets the leaf that exists; a Shell open is a
-// new session, so it always splits.
+// same thing shown again. Document/Issue/Diff/Resource/Note swap their content
+// in place, so opening one twice retargets the leaf that exists; a Shell open
+// is a new session, so it always splits.
 func Duplicable(kind Kind) bool { return kind == Shell }
 
 // LiveLeafCount is how many live leaves the tree currently holds.

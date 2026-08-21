@@ -304,7 +304,7 @@ func TestDocPaneTabStripLeftTruncatesDeepPath(t *testing.T) {
 		t.Fatal("doc did not open")
 	}
 
-	const width = 16
+	const width = 22
 	got := ansi.Strip(layoutDocTabStrip(doc, width, true).Row)
 	if !strings.Contains(got, "plugin.go") {
 		t.Fatalf("narrow header dropped the filename: %q", got)
@@ -332,14 +332,63 @@ func TestDocPaneTabStripShowsTwoFilenames(t *testing.T) {
 	if !strings.Contains(got, "README.md") || !strings.Contains(got, "plugin.go") {
 		t.Fatalf("two-tab header dropped a filename: %q", got)
 	}
-	if strings.Contains(got, "Rendered") || strings.Contains(got, "×") || strings.Contains(got, "q close") {
+	if strings.Contains(got, "Rendered") || strings.Contains(got, "q close") {
 		t.Fatalf("two-tab header still has chips/hints: %q", got)
+	}
+	if strings.Count(got, "×") != 2 {
+		t.Fatalf("two-tab header = %q, want one × per tab", got)
 	}
 	if len(strip.Tabs) != 2 {
 		t.Fatalf("visible tabs = %d, want 2: %q", len(strip.Tabs), got)
 	}
 	if cells := ansi.StringWidth(strip.Row); cells != width {
 		t.Fatalf("header width = %d, want %d", cells, width)
+	}
+}
+
+func TestDocPaneTabCloseClickClosesThatTab(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# readme\n")
+	writeDocPaneFixture(t, root, "main.go", "package main\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.width, p.height = 100, 20
+	applyDocOpen(t, p, p.openTerminalPath("README.md", 0))
+	applyDocOpen(t, p, p.openTerminalPath("main.go", 0))
+	doc := p.activeDocPaneOrNil()
+	if doc.view().Title() != "main.go" {
+		t.Fatalf("active = %q, want main.go", doc.view().Title())
+	}
+
+	p.mouseHandler.Clear()
+	_ = p.renderListView(p.width, p.height)
+	var closeHit *mouse.Region
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID != regionDocTab {
+			continue
+		}
+		hit, ok := region.Data.(docTabHit)
+		if !ok || !hit.Close || hit.Index != 0 {
+			continue
+		}
+		r := region
+		closeHit = &r
+		break
+	}
+	if closeHit == nil {
+		t.Fatal("README tab has no close hit region")
+	}
+	x, y := closeHit.Rect.X, closeHit.Rect.Y
+	resolved := p.mouseHandler.HitMap.Test(x, y)
+	if resolved == nil || resolved.ID != regionDocTab {
+		t.Fatalf("close cell (%d,%d) resolves to %#v, want %s", x, y, resolved, regionDocTab)
+	}
+	hit, ok := resolved.Data.(docTabHit)
+	if !ok || !hit.Close || hit.Index != 0 {
+		t.Fatalf("close cell (%d,%d) resolves to %#v, want README close", x, y, resolved.Data)
+	}
+	_ = p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	if titles := docTabTitles(doc); len(titles) != 1 || titles[0] != "main.go" {
+		t.Fatalf("close click left %v, want [main.go]", titles)
 	}
 }
 
@@ -2129,8 +2178,11 @@ func TestDocPaneAcceptanceJourney(t *testing.T) {
 		if !strings.Contains(header, "README.md") || !strings.Contains(header, "plugin.go") {
 			t.Fatalf("header dropped a filename: %q", header)
 		}
-		if strings.Contains(header, "Raw") || strings.Contains(header, "Rendered") || strings.Contains(header, "×") || strings.Contains(header, "q close") {
+		if strings.Contains(header, "Raw") || strings.Contains(header, "Rendered") || strings.Contains(header, "q close") {
 			t.Fatalf("header is not a path-only tab strip: %q", header)
+		}
+		if strings.Count(header, "×") != 2 {
+			t.Fatalf("header = %q, want one × per tab", header)
 		}
 	}
 	if strings.Contains(narrow, "internal/plugins") {

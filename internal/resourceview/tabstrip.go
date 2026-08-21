@@ -1,8 +1,6 @@
 package resourceview
 
 import (
-	"github.com/charmbracelet/x/ansi"
-
 	"github.com/marcus/sidecar/internal/tabs"
 )
 
@@ -16,13 +14,7 @@ type TabStrip = tabs.Strip
 // locator is its front: CASH-1245 and CASH-1246 differ in the last character,
 // but a strip that dropped the project prefix would show two identical tabs.
 func fitResourceLabel(text string, _, _, maxWidth int, _ bool) string {
-	if maxWidth < 1 {
-		return ""
-	}
-	if ansi.StringWidth(text) <= maxWidth {
-		return text
-	}
-	return ansi.Truncate(text, maxWidth, "…")
+	return tabs.FitEnd(text, maxWidth)
 }
 
 func tabLabels(t *Tabs) []tabs.Label {

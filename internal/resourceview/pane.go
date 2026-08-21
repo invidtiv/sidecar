@@ -138,6 +138,16 @@ func (p *Pane) CloseActiveTab() (empty bool, cmd tea.Cmd) {
 	return empty, nil
 }
 
+// CloseTab closes the tab at index through the same last-tab empty report.
+func (p *Pane) CloseTab(i int) (empty bool, cmd tea.Cmd) {
+	if p == nil || p.Tabs == nil {
+		return true, nil
+	}
+	empty = p.Tabs.Close(i)
+	p.persist()
+	return empty, nil
+}
+
 // Refresh re-resolves the active tab, bypassing cache freshness.
 func (p *Pane) Refresh() tea.Cmd {
 	if p == nil || p.Tabs == nil {

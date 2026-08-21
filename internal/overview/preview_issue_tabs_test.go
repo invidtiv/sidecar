@@ -68,7 +68,7 @@ func visualPreviewIssueIDPoint(t *testing.T, m *Model, issueID string) (x, y int
 	}
 	for _, region := range m.workspacesMouse.HitMap.Regions() {
 		hit, isTab := region.Data.(previewIssueTabHit)
-		if !isTab || int(hit) != index {
+		if !isTab || hit.Close || hit.Index != index {
 			continue
 		}
 		return region.Rect.X + max(region.Rect.W/2, 0), region.Rect.Y, true
@@ -88,7 +88,7 @@ func TestGlobalIssueTabsClickAndCycle(t *testing.T) {
 				t.Fatal("td-1111aa is not on the issue header")
 			}
 			resolved := m.workspacesMouse.HitMap.Test(x, y)
-			if hit, isTab := resolved.Data.(previewIssueTabHit); !isTab || int(hit) != 0 {
+			if hit, isTab := resolved.Data.(previewIssueTabHit); !isTab || hit.Close || hit.Index != 0 {
 				t.Fatalf("visible ID at (%d,%d) resolves to %#v, want tab 0", x, y, resolved)
 			}
 			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
@@ -368,8 +368,11 @@ func TestGlobalIssueHeaderHasNoCloseChipOrHint(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 	strip := issueview.LayoutTabStrip(m.preview.issue.tabs, 48, true)
 	got := ansi.Strip(strip.Row)
-	if strings.Contains(got, "q close") || strings.Contains(got, "×") {
+	if strings.Contains(got, "q close") {
 		t.Fatalf("issue strip still has chips/hints: %q", got)
+	}
+	if strings.Count(got, "×") != 2 {
+		t.Fatalf("issue strip = %q, want one × per tab", got)
 	}
 	if !strings.Contains(got, "td-1111aa") || !strings.Contains(got, "td-2222bb") {
 		t.Fatalf("issue strip dropped a tab: %q", got)

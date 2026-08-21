@@ -80,6 +80,17 @@ const (
 	// running. It has to outlast the trailing garbage a split SGR report leaves
 	// behind, and it bounds how long anything keyed to the flick is deferred.
 	WheelBurstTimeout = 500 * time.Millisecond
+
+	// WheelPaneDebounce is the minimum spacing between two flushes a burst has
+	// been forwarding to the application in the pane (td-b8c54e). A momentum
+	// tail over a CLI that owns its own scrollback — opencode, grok — used to
+	// arrive as one send plus one capture per 12ms tick long after the
+	// application's view had stopped moving, and that subprocess storm is what
+	// froze the UI at the top or bottom of its scrollback. Pacing the forwarded
+	// path alone keeps plain-shell scrolling at its existing cadence, and the
+	// held-back delta rides out with the next flush, so the gesture still
+	// travels the same distance.
+	WheelPaneDebounce = 30 * time.Millisecond
 )
 
 // WheelBurst coalesces a trackpad flick into whole steps. It is the one place
@@ -93,6 +104,11 @@ type WheelBurst struct {
 	pending int
 	count   int
 	lastAt  time.Time
+	// pane records that this burst's last flush was forwarded to the
+	// application in the pane, so later flushes of the same gesture space
+	// themselves out to WheelPaneDebounce. A new gesture (past the burst
+	// timeout) or an explicit Reset clears it.
+	pane bool
 }
 
 // Add takes one wheel event and reports the delta to apply, if any. A held-back
@@ -103,10 +119,14 @@ func (b *WheelBurst) Add(delta int, now time.Time) (int, bool) {
 		b.count++
 	} else {
 		b.count = 1
+		b.pane = false
 	}
 	debounce := WheelDebounceInterval
 	if b.count > WheelBurstThreshold {
 		debounce = WheelBurstDebounce
+	}
+	if b.pane {
+		debounce = max(debounce, WheelPaneDebounce)
 	}
 	b.pending += delta
 	if since < debounce {
@@ -127,6 +147,7 @@ func (b *WheelBurst) Pending() int { return b.pending }
 func (b *WheelBurst) Reset() {
 	b.pending = 0
 	b.count = 0
+	b.pane = false
 }
 
 // LastAt is when the burst last let an event through, which is what a snap-back
