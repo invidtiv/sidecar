@@ -130,8 +130,6 @@ func (p *Plugin) renderNoRepoView() string {
 		pill := styles.RenderPillWithStyle(initRepoButtonText, styles.ButtonHover, nil)
 		buttonLine = len(lines)
 		lines = append(lines, "  "+pill)
-		lines = append(lines, "")
-		lines = append(lines, styles.Muted.Render("Press i or Enter to initialize one. Press r to re-check."))
 		if p.mouseHandler != nil {
 			p.mouseHandler.HitMap.AddRect(
 				regionInitRepo,

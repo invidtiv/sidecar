@@ -630,6 +630,88 @@ func TestAddProjectExplainsGitAndOffersInitThisDirectory(t *testing.T) {
 	}
 }
 
+func TestAddProjectInitIsAKeyboardAndFooterAction(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	m, _ := configFixture(t, cfg)
+	m.SetHostState(HostState{Config: loadSaved(t), ProjectDir: dir})
+	m.OpenAddProject()
+	probe, ok := unwrapConfigMsg(m.TakePending()()).(cwdGitMsg)
+	if !ok {
+		t.Fatal("expected cwd git probe")
+	}
+	m.Handle(probe)
+	m.View(160, 45)
+
+	if m.editingID() != regionFormLocation {
+		t.Fatalf("Add Project focused %q, want Location", m.editingID())
+	}
+
+	var sawInit bool
+	for _, command := range m.Commands() {
+		if command.ID == "init-repo" && command.Context == ContextConfig {
+			sawInit = true
+		}
+	}
+	if !sawInit {
+		t.Fatal("Commands() did not advertise Init while Initialize is on screen")
+	}
+
+	handled, _ := m.Key(tea.KeyPressMsg{Code: tea.KeyTab})
+	if !handled {
+		t.Fatal("Tab from Location was ignored")
+	}
+	if m.editing() {
+		t.Fatal("Tab left Location in edit mode")
+	}
+	if m.SearchFocused() {
+		t.Fatal("Tab from Add Project focused Search")
+	}
+	m.View(160, 45)
+	if m.focusedID != regionFormInitRepo {
+		t.Fatalf("Tab from Location focused %q, want Initialize", m.focusedID)
+	}
+
+	handled, cmd := m.Key(tea.KeyPressMsg{Code: 'i', Text: "i"})
+	if !handled || cmd == nil {
+		t.Fatal("i did not run Initialize")
+	}
+	if m.addProject == nil || !m.addProject.initInProgress {
+		t.Fatal("i did not start git init")
+	}
+}
+
+func TestAddProjectLocationEnterSavesNotInit(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	m, _ := configFixture(t, cfg)
+	m.SetHostState(HostState{Config: loadSaved(t), ProjectDir: dir})
+	m.OpenAddProject()
+	probe, ok := unwrapConfigMsg(m.TakePending()()).(cwdGitMsg)
+	if !ok {
+		t.Fatal("expected cwd git probe")
+	}
+	m.Handle(probe)
+	m.View(160, 45)
+
+	other := t.TempDir()
+	m.addProject.location.SetValue(other)
+	handled, cmd := m.Key(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !handled {
+		t.Fatal("Enter in Location was ignored")
+	}
+	if cmd != nil {
+		t.Fatal("Location Enter started a command; it should move to Save")
+	}
+	if m.addProject.initInProgress {
+		t.Fatal("Location Enter initialized git instead of moving to Save")
+	}
+	m.View(160, 45)
+	if m.focusedID != regionFormSave {
+		t.Fatalf("Location Enter focused %q, want Save", m.focusedID)
+	}
+}
+
 func unwrapConfigMsg(msg tea.Msg) tea.Msg {
 	switch typed := msg.(type) {
 	case tea.BatchMsg:

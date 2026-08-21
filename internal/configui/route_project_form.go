@@ -204,6 +204,10 @@ func (m *Model) applyCwdGit(msg cwdGitMsg) tea.Cmd {
 	return nil
 }
 
+func (form *projectForm) offersInit() bool {
+	return form != nil && !form.edit && form.cwdProbed && !form.cwdIsRepo && !form.initInProgress
+}
+
 func (m *Model) buildInitThisDirectory(b *paneBuilder, form *projectForm) {
 	if form.edit || !form.cwdProbed || form.cwdIsRepo {
 		return
@@ -215,8 +219,8 @@ func (m *Model) buildInitThisDirectory(b *paneBuilder, form *projectForm) {
 	}
 	b.buttons(buttonSpec{
 		id:    regionFormInitRepo,
-		key:   "",
-		label: "Initialize this directory",
+		key:   "i",
+		label: "I  Initialize this directory",
 		run: func(m *Model) tea.Cmd {
 			return m.initCwdRepo()
 		},
@@ -488,6 +492,16 @@ func (m *Model) editLocationField() {
 					m.acceptCompletion(form.completion)
 					return true, nil
 				}
+				// With nothing to complete, Tab walks to Initialize when this
+				// directory can become a repo, otherwise to Save. It must not
+				// jump to Search: first-run users need a keyboard path to init.
+				m.closeEditor()
+				if form.offersInit() {
+					m.focusControlByID(regionFormInitRepo)
+				} else {
+					m.focusControlByID(regionFormSave)
+				}
+				return true, nil
 			case "down", "ctrl+n":
 				if len(form.completions) > 0 {
 					form.completion = min(form.completion+1, len(form.completions)-1)

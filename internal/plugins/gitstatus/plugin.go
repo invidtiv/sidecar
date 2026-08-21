@@ -963,6 +963,16 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		p.pullConflictType = ""
 		return p, tea.Batch(p.refresh(), p.loadRecentCommits())
 
+	case gitinit.ReadyMsg:
+		if msg.Root == "" {
+			return p, nil
+		}
+		p.repoInitInProgress = false
+		if !p.hasRepo || p.repoRoot != msg.Root {
+			p.activateRepo(msg.Root)
+		}
+		return p, tea.Batch(p.refresh(), p.startWatcher(), p.loadRecentCommits())
+
 	case RepoDetectedMsg:
 		if plugin.IsStale(p.ctx, msg) {
 			return p, nil

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/gitinit"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -277,6 +278,35 @@ func TestNoRepoView_RegistersPaddedInitButton(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Initialize Git Repository has no hit region")
+	}
+	if strings.Contains(view, "Press i") || strings.Contains(view, "Press r") {
+		t.Fatalf("no-repo view duplicated footer key hints:\n%s", view)
+	}
+}
+
+func TestNoRepoReadyMsgActivatesRepo(t *testing.T) {
+	tmp := t.TempDir()
+	if _, err := gitinit.Init(tmp); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	p := New()
+	if err := p.Init(&plugin.Context{WorkDir: t.TempDir(), Epoch: 1}); err != nil {
+		t.Fatalf("Init() error = %v", err)
+	}
+	if p.hasRepo {
+		t.Fatal("hasRepo true before ReadyMsg")
+	}
+
+	updatedPlugin, cmd := p.Update(gitinit.ReadyMsg{Root: tmp})
+	updated, ok := updatedPlugin.(*Plugin)
+	if !ok {
+		t.Fatalf("updated plugin type = %T", updatedPlugin)
+	}
+	if !updated.hasRepo || updated.repoRoot != tmp {
+		t.Fatalf("ReadyMsg did not activate repo: hasRepo=%v root=%q", updated.hasRepo, updated.repoRoot)
+	}
+	if cmd == nil {
+		t.Fatal("ReadyMsg produced no reload command")
 	}
 }
 

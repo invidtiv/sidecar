@@ -438,6 +438,8 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "open-file", Name: "Open", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
 	case "a":
 		return plugin.Command{ID: "add-project", Name: "Add", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case "i":
+		return plugin.Command{ID: "init-repo", Name: "Init", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
 	case "d":
 		return plugin.Command{ID: "remove-project", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
 	case "g":
@@ -594,6 +596,10 @@ func (m *Model) key(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, nil
 			}
 		case "tab":
+			if m.Route().IsChild() {
+				m.moveRowCursor(1)
+				return true, nil
+			}
 			m.focusSearch()
 			return true, nil
 		}
