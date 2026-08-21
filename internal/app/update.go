@@ -2225,7 +2225,7 @@ func isRootContext(ctx string) bool {
 		return true
 	case "workspace-list", "workspace-preview":
 		return true
-	case "td-monitor", "td-board":
+	case "td-monitor", "td-board", "td-not-installed":
 		return true
 	case "notes-list":
 		return true

@@ -72,6 +72,9 @@ func panelsFixture(t *testing.T, present map[string]bool, mutate func(*config.Co
 			return "", errors.New("not found")
 		},
 	}})
+	// Probe and PlanInstall must describe the same machine. Tests that run an
+	// install replace this with a runner of their own.
+	m.SetInstallEnvironment(stubEnvironment(present))
 	// The probe is a command; run it the way the host does.
 	if msg := m.ProbeCmd()(); msg != nil {
 		m.Handle(msg.(Msg))
@@ -252,7 +255,7 @@ func TestTasksEnableRouteOffersHomebrewInstall(t *testing.T) {
 	for _, want := range []string{
 		"Enable Tasks", "BETA", "Tasks needs to be installed", "System check",
 		"Tasks command", "Not found on PATH", "Homebrew", "Available",
-		"Install Tasks with Homebrew", "brew install marcus/tap/tasks",
+		"Install Tasks", "brew install marcus/tap/tasks",
 		"waits for your confirmation", "never uses sudo",
 	} {
 		if !strings.Contains(view, want) {
@@ -261,14 +264,51 @@ func TestTasksEnableRouteOffersHomebrewInstall(t *testing.T) {
 	}
 }
 
-// Without Homebrew there is nothing safe to run, so the route says what to do.
+// Without Homebrew, go install is the fallback when the toolchain is present.
+func TestTasksEnableRouteOffersGoInstallWhenBrewMissing(t *testing.T) {
+	present := map[string]bool{"go": true}
+	m := panelsFixture(t, present, nil)
+	runner := &stubRunner{onRun: func() { present["tasks"] = true }}
+	m.SetInstallEnvironment(stubEnvironmentWith(runner, present))
+	activate(t, m, regionPanel+panelIDTasks)
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "Install Tasks") {
+		t.Fatalf("go fallback did not offer install:\n%s", view)
+	}
+	if !strings.Contains(view, "go install github.com/marcus/tasks/cmd/tasks@latest") {
+		t.Fatalf("go fallback did not show the command:\n%s", view)
+	}
+	cmd := runByID(t, m, regionEnableInstall)
+	msg := cmd().(installResultMsg)
+	if !msg.outcome.Installed {
+		t.Fatalf("go install failed: %+v", msg.outcome)
+	}
+	if len(runner.commands) == 0 {
+		t.Fatal("go install ran nothing")
+	}
+	for _, pkg := range version.TasksDescriptor().GoPackages {
+		want := "go install " + pkg + "@latest"
+		found := false
+		for _, c := range runner.commands {
+			if c == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing %s in %v", want, runner.commands)
+		}
+	}
+}
+
+// Without Homebrew or Go there is nothing safe to run, so the route says what to do.
 func TestTasksEnableRouteFallsBackToManualInstructions(t *testing.T) {
 	m := panelsFixture(t, nil, nil)
 	activate(t, m, regionPanel+panelIDTasks)
 	view := ansi.Strip(m.View(160, 45))
 	for _, want := range []string{
 		"Homebrew", "Not found",
-		"Homebrew is not available, so Sidecar cannot install Tasks for you.",
+		"Sidecar cannot install Tasks for you on this machine.",
 		"brew install marcus/tap/tasks",
 		"Copy install command",
 	} {
@@ -278,8 +318,30 @@ func TestTasksEnableRouteFallsBackToManualInstructions(t *testing.T) {
 	}
 	for _, c := range m.controls {
 		if c.id == regionEnableInstall {
-			t.Fatal("an install action was offered without Homebrew")
+			t.Fatal("an install action was offered without Homebrew or Go")
 		}
+	}
+}
+
+// Tasks already enabled but the standalone command is missing: Panels offers
+// the same install action rather than a scavenger hunt for brew.
+func TestTasksEnabledMissingOffersInstall(t *testing.T) {
+	m := panelsFixture(t, map[string]bool{"brew": true}, func(cfg *config.Config) {
+		if cfg.Features.Flags == nil {
+			cfg.Features.Flags = map[string]bool{}
+		}
+		cfg.Features.Flags[features.TasksPlugin.Name] = true
+	})
+	view := ansi.Strip(m.View(160, 45))
+	if !strings.Contains(view, "Install Tasks") {
+		t.Fatalf("enabled-but-missing Tasks did not offer install:\n%s", view)
+	}
+	activate(t, m, regionPanelTasksInstall)
+	if m.Route().Child != ChildEnableIntegration {
+		t.Fatalf("the install button did not open the enable route: %#v", m.Route())
+	}
+	if view := ansi.Strip(m.View(160, 45)); !strings.Contains(view, "Install Tasks") {
+		t.Fatalf("the enable route is missing the install action:\n%s", view)
 	}
 }
 
@@ -297,7 +359,7 @@ func TestTasksInstallSuccessEnablesThePanel(t *testing.T) {
 	if m.enable.phase != installRunning {
 		t.Fatalf("the route did not show the install running: %v", m.enable.phase)
 	}
-	if view := ansi.Strip(m.View(160, 45)); !strings.Contains(view, "Installing Tasks with Homebrew") {
+	if view := ansi.Strip(m.View(160, 45)); !strings.Contains(view, "Installing Tasks") {
 		t.Fatalf("the running state is not on screen:\n%s", view)
 	}
 

@@ -18,6 +18,7 @@ type fakeEnv struct {
 	paths       map[string]string
 	lookPathErr map[string]bool
 	self        string
+	onRun       func(key string)
 }
 
 func newFakeEnv() *fakeEnv {
@@ -33,6 +34,9 @@ func newFakeEnv() *fakeEnv {
 func (f *fakeEnv) Run(_ context.Context, name string, args ...string) (string, error) {
 	key := strings.TrimSpace(name + " " + strings.Join(args, " "))
 	f.calls = append(f.calls, key)
+	if f.onRun != nil {
+		f.onRun(key)
+	}
 	return f.outputs[key], f.errs[key]
 }
 

@@ -79,6 +79,7 @@ type Model struct {
 	// never something a render looks up.
 	probes    map[string]commandProbe
 	brewFound bool
+	goFound   bool
 	probed    bool
 
 	// installEnv is the process environment the enable route installs through.

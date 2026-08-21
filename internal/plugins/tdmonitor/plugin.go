@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/installui"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -16,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tdroot"
 	"github.com/marcus/sidecar/internal/tdsetup"
+	"github.com/marcus/sidecar/internal/version"
 	"github.com/marcus/td/pkg/monitor"
 )
 
@@ -86,11 +88,60 @@ type Plugin struct {
 	// embedded monitor opens td's SQLite database, which is slow enough to be
 	// worth keeping off the pre-first-frame path (td-9c7bf2).
 	loadingModel bool
+
+	// installEnv is the process environment first-install runs through. Nil
+	// means the real one; a test substitutes it so no test ever runs brew.
+	installEnv *version.Environment
 }
 
 // New creates a new TD Monitor plugin.
 func New() *Plugin {
 	return &Plugin{}
+}
+
+// SetInstallEnvironment substitutes the process environment first-install
+// runs through. Tests use this so they never invoke a real package manager.
+func (p *Plugin) SetInstallEnvironment(env *version.Environment) { p.installEnv = env }
+
+func (p *Plugin) environment() *version.Environment {
+	if p.installEnv != nil {
+		return p.installEnv
+	}
+	return version.DefaultEnvironment()
+}
+
+func (p *Plugin) lookPath(name string) (string, error) {
+	env := p.environment()
+	if env.LookPath != nil {
+		return env.LookPath(name)
+	}
+	return exec.LookPath(name)
+}
+
+func (p *Plugin) startInstall() tea.Cmd {
+	if p.notInstalled == nil || p.notInstalled.installer == nil {
+		return nil
+	}
+	return p.notInstalled.installer.Start()
+}
+
+func (p *Plugin) handleInstallResult(msg installui.ResultMsg) tea.Cmd {
+	if p.notInstalled != nil && p.notInstalled.installer != nil {
+		p.notInstalled.installer.ApplyResult(msg.Outcome)
+	}
+	if toast := installui.FailureToast(msg.Outcome); toast != "" {
+		return appmsg.Alert(notify.SourceTD, notify.SeverityError, toast)
+	}
+	if !msg.Outcome.Installed {
+		return nil
+	}
+	if p.ctx == nil {
+		return nil
+	}
+	if err := p.Init(p.ctx); err == nil {
+		return p.Start()
+	}
+	return nil
 }
 
 // ID returns the plugin identifier.
@@ -123,7 +174,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	}
 
 	// Check if td binary is available on PATH
-	_, err := exec.LookPath("td")
+	_, err := p.lookPath("td")
 	p.tdOnPath = err == nil
 
 	// The embedded monitor itself is built in Start(), off the startup path.
@@ -214,7 +265,7 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 			return p.setupModal.Init()
 		}
 		// td is not installed on system - show not-installed view
-		p.notInstalled = NewNotInstalledModel()
+		p.notInstalled = NewNotInstalledModelWithEnv(p.environment())
 		return p.notInstalled.Init()
 	}
 
@@ -316,8 +367,12 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	// Handle setup skip - show not-installed view
 	if _, ok := msg.(SetupSkippedMsg); ok {
 		p.setupModal = nil
-		p.notInstalled = NewNotInstalledModel()
+		p.notInstalled = NewNotInstalledModelWithEnv(p.environment())
 		return p, p.notInstalled.Init()
+	}
+
+	if result, ok := msg.(installui.ResultMsg); ok {
+		return p, p.handleInstallResult(result)
 	}
 
 	if p.model == nil {
@@ -478,8 +533,24 @@ func (p *Plugin) IsFocused() bool { return p.focused }
 // SetFocused sets the focus state.
 func (p *Plugin) SetFocused(f bool) { p.focused = f }
 
+const notInstalledContext = "td-not-installed"
+
 // Commands returns the available commands by consuming TD's exported command metadata.
 func (p *Plugin) Commands() []plugin.Command {
+	if p.notInstalled != nil && p.model == nil {
+		if p.notInstalled.installer == nil || !p.notInstalled.installer.CanInstall() {
+			return nil
+		}
+		return []plugin.Command{{
+			ID:          "install",
+			Name:        "Install",
+			Description: "Install td",
+			Category:    plugin.CategoryActions,
+			Context:     notInstalledContext,
+			Priority:    1,
+			Handler:     p.startInstall,
+		}}
+	}
 	if p.model == nil || p.model.Keymap == nil {
 		return nil
 	}
@@ -527,6 +598,9 @@ func categorizeCommand(id string) plugin.Category {
 
 // FocusContext returns the current focus context by consuming TD's context state.
 func (p *Plugin) FocusContext() string {
+	if p.model == nil && p.notInstalled != nil {
+		return notInstalledContext
+	}
 	if p.model == nil {
 		return "td-monitor"
 	}

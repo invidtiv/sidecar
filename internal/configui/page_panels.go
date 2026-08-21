@@ -21,22 +21,23 @@ import (
 // keeps the underlying pair consistent itself.
 
 const (
-	regionPanel            = "config-panel-"
-	regionPanelGitRefresh  = "config-panel-git-refresh"
-	regionPanelTDPath      = "config-panel-td-path"
-	regionPanelTDRefresh   = "config-panel-td-refresh"
-	regionPanelConvDir     = "config-panel-conversations-dir"
-	regionPanelNotesEditor = "config-panel-notes-editor"
-	panelInputWidth        = 40
-	panelRestartNote       = "Takes effect after Sidecar restarts."
-	panelIDGit             = "git"
-	panelIDFiles           = "files"
-	panelIDTD              = "td"
-	panelIDNotes           = "notes"
-	panelIDConversations   = "conversations"
-	panelIDTasks           = "tasks"
-	tdCommandName          = "td"
-	conversationsFlagLabel = "Conversations panel"
+	regionPanel             = "config-panel-"
+	regionPanelGitRefresh   = "config-panel-git-refresh"
+	regionPanelTDPath       = "config-panel-td-path"
+	regionPanelTDRefresh    = "config-panel-td-refresh"
+	regionPanelConvDir      = "config-panel-conversations-dir"
+	regionPanelNotesEditor  = "config-panel-notes-editor"
+	panelInputWidth         = 40
+	panelRestartNote        = "Takes effect after Sidecar restarts."
+	panelIDGit              = "git"
+	panelIDFiles            = "files"
+	panelIDTD               = "td"
+	panelIDNotes            = "notes"
+	panelIDConversations    = "conversations"
+	panelIDTasks            = "tasks"
+	regionPanelTasksInstall = "config-panel-tasks-install"
+	tdCommandName           = "td"
+	conversationsFlagLabel  = "Conversations panel"
 )
 
 // refreshChoices are the poll intervals the refresh selectors offer.
@@ -187,6 +188,13 @@ func (m *Model) buildPanels(b *paneBuilder) {
 		m.flagEnabled(tasks.Flag), func(m *Model) tea.Cmd { return m.toggleIntegration(tasks) })
 	if m.flagEnabled(tasks.Flag) && m.probed && !m.commandFound(tasks.Descriptor.Executable) {
 		b.note("The tasks command is not on PATH, so the tab will have nothing to show.")
+		b.buttons(buttonSpec{
+			id: regionPanelTasksInstall, key: "", label: " Install Tasks ", primary: true,
+			run: func(m *Model) tea.Cmd {
+				m.openEnableRoute(TasksIntegration())
+				return nil
+			},
+		})
 	}
 
 	b.blank()

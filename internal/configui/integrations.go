@@ -75,6 +75,7 @@ type commandProbe struct {
 type probeMsg struct {
 	commands map[string]commandProbe
 	brew     bool
+	goTool   bool
 }
 
 func (probeMsg) configMsg() {}
@@ -104,6 +105,8 @@ func (m *Model) ProbeCmd() tea.Cmd {
 		}
 		_, err := lookPath("brew")
 		msg.brew = err == nil
+		_, err = lookPath("go")
+		msg.goTool = err == nil
 		return msg
 	}
 }
@@ -112,6 +115,7 @@ func (m *Model) ProbeCmd() tea.Cmd {
 func (m *Model) applyProbe(msg probeMsg) {
 	m.probes = msg.commands
 	m.brewFound = msg.brew
+	m.goFound = msg.goTool
 	m.probed = true
 }
 

@@ -158,6 +158,12 @@ func DefaultBindings() []Binding {
 		{Key: "esc", Command: "cancel", Context: "config-confirm"},
 		{Key: "n", Command: "cancel", Context: "config-confirm"},
 
+		// td-not-installed: first-install of td. Enter/i confirm the focused
+		// button; the plugin runs the command. Binding i here is what keeps
+		// Sidecar's global find-issue shortcut from swallowing the key.
+		{Key: "enter", Command: "install", Context: "td-not-installed"},
+		{Key: "i", Command: "install", Context: "td-not-installed"},
+
 		// Global Workspaces context (cross-project shell/worktree browser).
 		// Like the Agents board above, these keys are answered by the app before
 		// keymap dispatch; they are registered so help, the palette, and the

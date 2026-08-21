@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 )
 
 // Installing a product Sidecar does not yet have is a different act from
@@ -17,12 +18,29 @@ import (
 //   - It never uses sudo and never elevates.
 //   - It never claims success from an exit code alone: the command has to be
 //     resolvable afterwards, or the install is reported as failed.
+//
+// Homebrew is preferred when `brew` is on PATH; otherwise a `go install` of
+// the product's GoPackages at @latest. Tmux repair deliberately never takes
+// this path — that is a different product.
+
+// InstallTimeout bounds one confirmed first-install. A package manager that
+// never returns must not leave the UI claiming to be working.
+const InstallTimeout = 15 * time.Minute
 
 // ErrNoFormula reports a product with no Homebrew formula to install from.
 var ErrNoFormula = errors.New("no Homebrew formula for this product")
 
 // ErrNoHomebrew reports that Homebrew is not available on this machine.
 var ErrNoHomebrew = errors.New("homebrew is not installed")
+
+// ErrNoGo reports that the Go toolchain is not available on this machine.
+var ErrNoGo = errors.New("go is not installed")
+
+// ErrNoInstaller reports that neither Homebrew nor Go can run a first install.
+var ErrNoInstaller = errors.New("no supported installer is available")
+
+// ErrNoGoPackages reports a product with no safe go-install package set.
+var ErrNoGoPackages = errors.New("no automated Go install for this product")
 
 // InstallOutcome is the settled result of one confirmed install attempt.
 type InstallOutcome struct {
@@ -34,31 +52,113 @@ type InstallOutcome struct {
 	Err     error
 }
 
+// InstallPlan is the exact first-install Sidecar would run for a product on
+// this machine. Confirmation, the copyable instruction, and execution share
+// Command so the user has read the same string that will run.
+type InstallPlan struct {
+	Method  InstallMethod
+	Command string
+	Steps   [][]string
+}
+
 // HomebrewAvailable reports whether `brew` is on PATH.
 func HomebrewAvailable(env *Environment) bool {
+	return commandOnPath(env, "brew")
+}
+
+// GoAvailable reports whether `go` is on PATH.
+func GoAvailable(env *Environment) bool {
+	return commandOnPath(env, "go")
+}
+
+func commandOnPath(env *Environment, name string) bool {
 	if env == nil || env.LookPath == nil {
 		return false
 	}
-	_, err := env.LookPath("brew")
+	_, err := env.LookPath(name)
 	return err == nil
 }
 
 // CommandAvailable reports whether a product's primary executable is on PATH.
 func CommandAvailable(env *Environment, d Descriptor) bool {
-	if env == nil || env.LookPath == nil {
-		return false
-	}
-	_, err := env.LookPath(d.Executable)
-	return err == nil
+	return commandOnPath(env, d.Executable)
 }
 
-// InstallCommand is the exact command InstallWithHomebrew would run, so the
-// confirmation, the copyable instruction, and the execution are the same string.
+// InstallCommand is the exact Homebrew command a brew-backed install would run,
+// so the confirmation, the copyable instruction, and the execution are the same
+// string when Homebrew is the chosen method.
 func InstallCommand(d Descriptor) string { return d.InstallHint() }
+
+// GoInstallCommand is the exact `go install` Sidecar would run, joined so it
+// can be shown and copied as one instruction.
+func GoInstallCommand(d Descriptor) string {
+	var parts []string
+	for _, cmd := range goInstallCommands(d, "latest") {
+		parts = append(parts, strings.Join(cmd, " "))
+	}
+	return strings.Join(parts, " && ")
+}
+
+// PlanInstall chooses Homebrew when brew is on PATH, otherwise go install.
+// The returned Command is what Install will run; a caller that shows a
+// different string is offering a command it will not honour.
+func PlanInstall(env *Environment, d Descriptor) (InstallPlan, error) {
+	if env == nil {
+		env = DefaultEnvironment()
+	}
+	if HomebrewAvailable(env) {
+		if d.Formula == "" {
+			return InstallPlan{}, ErrNoFormula
+		}
+		return InstallPlan{
+			Method:  InstallMethodHomebrew,
+			Command: InstallCommand(d),
+			Steps:   [][]string{{"brew", "install", d.Formula}},
+		}, nil
+	}
+	if GoAvailable(env) {
+		if len(d.GoPackages) == 0 {
+			return InstallPlan{}, ErrNoGoPackages
+		}
+		return InstallPlan{
+			Method:  InstallMethodGo,
+			Command: GoInstallCommand(d),
+			Steps:   goInstallCommands(d, "latest"),
+		}, nil
+	}
+	return InstallPlan{}, ErrNoInstaller
+}
+
+// Install runs PlanInstall and verifies the product's command is resolvable
+// afterwards. It is never called without an explicit user confirmation.
+func Install(ctx context.Context, env *Environment, d Descriptor) InstallOutcome {
+	if env == nil {
+		env = DefaultEnvironment()
+	}
+	plan, err := PlanInstall(env, d)
+	if err != nil {
+		return InstallOutcome{Command: fallbackCommand(d, err), Err: err}
+	}
+	return runInstall(ctx, env, d, plan)
+}
+
+func fallbackCommand(d Descriptor, err error) string {
+	if err == ErrNoHomebrew || err == ErrNoFormula {
+		return InstallCommand(d)
+	}
+	if err == ErrNoGoPackages || err == ErrNoGo {
+		return GoInstallCommand(d)
+	}
+	if cmd := InstallCommand(d); cmd != "" {
+		return cmd
+	}
+	return GoInstallCommand(d)
+}
 
 // InstallWithHomebrew installs a product's formula. It is never called without
 // an explicit user confirmation, and it verifies the result rather than
-// trusting the package manager's exit code.
+// trusting the package manager's exit code. Callers that should fall back to
+// go install use Install instead.
 func InstallWithHomebrew(ctx context.Context, env *Environment, d Descriptor) InstallOutcome {
 	outcome := InstallOutcome{Command: InstallCommand(d)}
 	if d.Formula == "" {
@@ -72,12 +172,36 @@ func InstallWithHomebrew(ctx context.Context, env *Environment, d Descriptor) In
 		outcome.Err = ErrNoHomebrew
 		return outcome
 	}
-	out, err := env.Runner.Run(ctx, "brew", "install", d.Formula)
-	outcome.Output = strings.TrimSpace(out)
-	if err != nil {
-		outcome.Err = err
+	return runInstall(ctx, env, d, InstallPlan{
+		Method:  InstallMethodHomebrew,
+		Command: InstallCommand(d),
+		Steps:   [][]string{{"brew", "install", d.Formula}},
+	})
+}
+
+func runInstall(ctx context.Context, env *Environment, d Descriptor, plan InstallPlan) InstallOutcome {
+	outcome := InstallOutcome{Command: plan.Command}
+	if env.Runner == nil {
+		outcome.Err = errors.New("no command runner")
 		return outcome
 	}
+	var output strings.Builder
+	for _, step := range plan.Steps {
+		if len(step) == 0 {
+			continue
+		}
+		out, err := env.Runner.Run(ctx, step[0], step[1:]...)
+		if output.Len() > 0 && out != "" {
+			output.WriteByte('\n')
+		}
+		output.WriteString(out)
+		if err != nil {
+			outcome.Output = strings.TrimSpace(output.String())
+			outcome.Err = err
+			return outcome
+		}
+	}
+	outcome.Output = strings.TrimSpace(output.String())
 	// A clean exit is not the claim; a resolvable command is.
 	if !CommandAvailable(env, d) {
 		outcome.Err = errors.New(d.Executable + " is still not on PATH after installing")
