@@ -407,6 +407,14 @@ func (p *Plugin) beginOptimisticArchive(note Note) tea.Cmd {
 	p.mutationAction = ""
 	p.loadRequestID++
 
+	// Same code path as delete: drop the editor binding for the note leaving
+	// the list BEFORE the in-place filter below. editorNote points into the
+	// p.notes backing array, so compaction would otherwise shift it onto the
+	// neighbor's slot and loadNoteIntoEditor would early-return on the matching
+	// ID, leaving the archived note's body stale in the right pane. Safe to
+	// clear unconditionally: toggleArchive saves a dirty buffer first.
+	p.clearDeletedEditorState(note.ID)
+
 	kept := p.notes[:0]
 	for _, candidate := range p.notes {
 		if candidate.ID != note.ID {

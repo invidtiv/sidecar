@@ -389,6 +389,48 @@ func TestOptimisticDeleteImmediateSelectionTombstoneAndSuccess(t *testing.T) {
 	})
 }
 
+// Archiving the note that is open in the right pane must load the newly
+// selected neighbor's content into that pane, exactly as delete does.
+// Regression: the optimistic list filter compacts p.notes in place, which
+// shifted the editorNote pointer onto the neighbor's slot; loadNoteIntoEditor
+// then early-returned on the matching ID and the pane kept the archived body.
+func TestOptimisticArchiveReloadsRightPaneContent(t *testing.T) {
+	p, controlled, notes := newDeleteMutationPlugin(t, 3)
+	controlled.archiveStarted = make(chan struct{})
+	controlled.archiveRelease = make(chan struct{})
+	p.cursor = 1
+	loadEditorForTest(p, 1)
+	p.activePane = PaneList
+
+	archiveCmd := p.toggleArchive()
+	if p.editorNote == nil || p.editorNote.ID != notes[2].ID {
+		t.Fatalf("begin: editor=%v, want %s", p.editorNote, notes[2].ID)
+	}
+	if got := p.editorTextarea.Value(); got != notes[2].Content {
+		t.Fatalf("begin: textarea=%q, want %q", got, notes[2].Content)
+	}
+	if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
+		t.Fatalf("begin: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
+	}
+
+	result := runCommandAsync(archiveCmd)
+	<-controlled.archiveStarted
+	close(controlled.archiveRelease)
+	archived := (<-result).(NoteArchiveToggledMsg)
+	_, followup := p.Update(archived)
+	applyCommandResults(t, p, followup)
+
+	if p.cursor != 1 || p.editorNote == nil || p.editorNote.ID != notes[2].ID {
+		t.Fatalf("after cycle: cursor=%d editor=%+v, want 1/%s", p.cursor, p.editorNote, notes[2].ID)
+	}
+	if got := p.editorTextarea.Value(); got != notes[2].Content {
+		t.Fatalf("after cycle: textarea=%q, want %q", got, notes[2].Content)
+	}
+	if len(p.previewLines) != 1 || p.previewLines[0] != notes[2].Content {
+		t.Fatalf("after cycle: previewLines=%v, want [%q]", p.previewLines, notes[2].Content)
+	}
+}
+
 func TestOptimisticArchiveImmediateSelectionAndRollback(t *testing.T) {
 	t.Run("middle-selects-next", func(t *testing.T) {
 		p, controlled, notes := newDeleteMutationPlugin(t, 3)
