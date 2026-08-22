@@ -183,6 +183,7 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: m.decoratePreviewLine,
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
+		BarStyle: m.previewTermBarStyle(),
 	})
 }
 

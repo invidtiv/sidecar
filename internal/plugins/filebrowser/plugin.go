@@ -161,6 +161,11 @@ type Plugin struct {
 	treeCursor    int
 	treeScrollOff int
 
+	// Search results manual scroll override. -1 (the default) follows the
+	// cursor the way the view always has; a scrollbar gesture pins it until
+	// keyboard navigation resumes. See scrollbar.go.
+	searchScrollOff int
+
 	// Preview state
 	previewFile        string
 	previewLines       []string
@@ -263,6 +268,12 @@ type Plugin struct {
 	hoverDivider        bool            // Pointer is over the tree/preview handle
 	hoverTabClose       tabs.CloseHover // Per-tab × under the pointer
 
+	// Interactive scrollbar state (see scrollbar.go).
+	bars             [sbViewCount]scrollbarBar // What the last render pass drew
+	hoverScrollbar   scrollbarView             // Bar under the pointer
+	dragScrollbar    scrollbarView             // Bar with a gesture in flight
+	scrollbarGrabRow int                       // Track-local row the thumb was grabbed at
+
 	// Line jump state (vim-style :<number>)
 	lineJumpMode   bool
 	lineJumpBuffer string
@@ -359,12 +370,13 @@ type Plugin struct {
 // New creates a new File Browser plugin.
 func New() *Plugin {
 	p := &Plugin{
-		mouseHandler:  mouse.NewHandler(),
-		imageRenderer: image.New(), // Detect terminal graphics protocol once
-		treeVisible:   true,        // Tree pane visible by default
-		showIgnored:   true,        // Show git-ignored files by default
-		dragDropIdx:   -1,
-		dragHoverIdx:  -1,
+		mouseHandler:    mouse.NewHandler(),
+		imageRenderer:   image.New(), // Detect terminal graphics protocol once
+		treeVisible:     true,        // Tree pane visible by default
+		showIgnored:     true,        // Show git-ignored files by default
+		dragDropIdx:     -1,
+		dragHoverIdx:    -1,
+		searchScrollOff: -1, // -1 = search results follow the cursor
 	}
 	p.edit.Model = tty.New(nil) // Inline editor with default config
 	p.edit.Host = p
@@ -400,6 +412,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.stateRestored = false
 	p.stopped = false
 	p.pendingAutoRefresh = false
+	p.searchScrollOff = -1
 	p.clearDragState()
 
 	// The quick-open caches describe the old project's disk; drop them, along
@@ -980,6 +993,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if fbState.TreeScroll > 0 {
 			p.treeScrollOff = fbState.TreeScroll
 		}
+		// The saved offset came from a session that may have had a different
+		// pane height or tree size; a tree that now fits must draw from the top.
+		p.clampTreeScroll()
 
 		// Restore active pane
 		if fbState.ActivePane == "preview" {

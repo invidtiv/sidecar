@@ -192,8 +192,9 @@ type Plugin struct {
 	amendMessageLoading   bool
 
 	// Mouse support
-	mouseHandler *mouse.Handler
-	hoverDivider bool
+	mouseHandler  *mouse.Handler
+	hoverDivider  bool
+	sidebarScroll sidebarScrollState // interactive scrollbar pointer state
 
 	// Error modal state
 	errorModal       *modal.Modal

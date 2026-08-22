@@ -239,7 +239,7 @@ const issueViewFocusID = "issue-view"
 
 func (m *Model) ensureIssuePreviewView() *issueview.Model {
 	if m.issuePreviewView == nil && m.issuePreviewData != nil {
-		m.issuePreviewView = issueview.New(nil)
+		m.issuePreviewView = m.newIssuePreviewView()
 		m.issuePreviewView.SetData(m.issuePreviewData)
 	}
 	if m.issuePreviewView != nil && len(m.issuePreviewView.ActionHints()) == 0 {
@@ -256,6 +256,21 @@ func (m *Model) ensureIssuePreviewView() *issueview.Model {
 		})
 	}
 	return m.issuePreviewView
+}
+
+// newIssuePreviewView is the modal's card constructor. Every host that shows
+// an issue card wires the same cross-project fallback, so a miss in one
+// surface behaves like a miss in every other.
+func (m *Model) newIssuePreviewView() *issueview.Model {
+	view := issueview.New(nil)
+	view.FallbackRefs = m.issueFallbackRefs
+	return view
+}
+
+// issueFallbackRefs supplies this app's configured projects to an issue card's
+// cross-project search at click time.
+func (m *Model) issueFallbackRefs() []issueview.ProjectRef {
+	return issueview.ProjectRefsFromConfig(m.cfg)
 }
 
 func issuePreviewViewportHeight(screenH int) int {
@@ -319,7 +334,13 @@ func (m *Model) ensureIssuePreviewModal() {
 	}
 
 	viewH := issuePreviewViewportHeight(m.height)
-	b := modal.New("",
+	// A cross-project card's modal title names the owning project; a local one
+	// keeps the bare card, which already shows everything it needs.
+	title := ""
+	if view.FoundIn() != "" {
+		title = view.Title()
+	}
+	b := modal.New(title,
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
 	)

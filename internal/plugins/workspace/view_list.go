@@ -171,6 +171,7 @@ func (p *Plugin) renderListView(width, height int) string {
 	if !p.sidebarVisible {
 		// Register hit region for full-width preview (uses outer dimensions)
 		p.mouseHandler.HitMap.AddRect(regionPreviewPane, 0, 0, split.PreviewWidth, paneHeight, nil)
+		p.registerTerminalScrollbarHits(false)
 
 		if p.docVisible() {
 			// Multi-leaf: each leaf is its own panel. Do not wrap the peer again.
@@ -204,6 +205,7 @@ func (p *Plugin) renderListView(width, height int) string {
 	// 1. Pane regions (lowest priority - fallback for scroll)
 	p.mouseHandler.HitMap.AddRect(regionSidebar, 0, 0, sidebarW, paneHeight, nil)
 	p.mouseHandler.HitMap.AddRect(regionPreviewPane, split.PreviewX, 0, previewW, paneHeight, nil)
+	p.registerTerminalScrollbarHits(false)
 
 	// 2. Divider region (high priority - for drag)
 	p.mouseHandler.HitMap.AddRect(regionPaneDivider, sidebarW, 0, dividerHitWidth, paneHeight, nil)

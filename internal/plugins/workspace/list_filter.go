@@ -277,7 +277,10 @@ func (p *Plugin) selectFirstVisible() {
 		return
 	}
 	p.selectSidebarItem(items[0])
+	// g is an absolute jump, so it owns the viewport even when the selection
+	// was already first: Model.Top resets scroll and drops free-scroll together.
 	p.scrollOffset = 0
+	p.freeScroll = false
 	p.exitInteractiveMode()
 	p.saveSelectionState()
 }

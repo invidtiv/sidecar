@@ -779,8 +779,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The modal is one host of issueview. A workspace issue pane is
 		// another. Claiming every LoadedMsg here left those panes stuck on
 		// "Loading issue…" because the plugin never saw its own result.
-		if m.claimIssuePreviewLoad(msg) {
-			return m, nil
+		if cmd, claimed := m.claimIssuePreviewLoad(msg); claimed {
+			return m, cmd
 		}
 
 	case IssueSearchResultMsg:
@@ -2344,6 +2344,10 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		return m, m.previewProjectTheme()
 	}
 
+	if handled, cmd := m.projectSwitcherBarEvent(msg); handled {
+		return m, cmd
+	}
+
 	action := m.projectSwitcherModal.HandleMouse(msg, m.projectSwitcherMouseHandler)
 
 	// Check if action is a project item click
@@ -2423,6 +2427,10 @@ func (m *Model) handleThemeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 			}
 		}
 		return m, nil
+	}
+
+	if handled, cmd := m.themeSwitcherBarEvent(msg); handled {
+		return m, cmd
 	}
 
 	action := m.themeSwitcherModal.HandleMouse(msg, m.themeSwitcherMouseHandler)
@@ -2855,7 +2863,7 @@ func (m *Model) issueInputSubmit() (tea.Model, tea.Cmd) {
 	if m.ui != nil {
 		workDir = m.ui.WorkDir
 	}
-	m.issuePreviewView = issueview.New(nil)
+	m.issuePreviewView = m.newIssuePreviewView()
 	return m, tea.Batch(
 		m.issuePreviewView.Load(issuePreviewModelID, workDir, issueID, 0),
 		m.startIssuePreviewWatch(workDir, issueID),

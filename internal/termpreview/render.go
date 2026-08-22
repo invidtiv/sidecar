@@ -38,6 +38,10 @@ type RenderBufferInput struct {
 	// which can exceed the loaded buffer while older history is still unfetched.
 	TotalItems int
 
+	// BarStyle is the pointer emphasis the scrollbar draws with. The zero
+	// value renders byte-identically to the idle bar.
+	BarStyle ui.ScrollbarStyle
+
 	TabWidth int
 	// Truncate is the consumer's ANSI-aware truncation cache; nil uses
 	// TruncateANSI.
@@ -140,14 +144,15 @@ func RenderBody(in RenderBufferInput) string {
 		// otherwise the bar renders after the longest line and creeps right as the
 		// user types (td-26bdb2).
 		visible = padRows(visible, body, max(layout.PadWidth, contentWidth))
+		bar, _ := ui.RenderScrollbarWithState(ui.ScrollbarParams{
+			TotalItems:   max(in.TotalItems, layout.EffectiveCount),
+			ScrollOffset: layout.AbsoluteStart,
+			VisibleItems: layout.DisplayHeight,
+			TrackHeight:  body,
+		}, in.BarStyle)
 		joined := lipgloss.JoinHorizontal(lipgloss.Top,
 			strings.Join(visible, "\n"),
-			ui.RenderScrollbar(ui.ScrollbarParams{
-				TotalItems:   max(in.TotalItems, layout.EffectiveCount),
-				ScrollOffset: layout.AbsoluteStart,
-				VisibleItems: layout.DisplayHeight,
-				TrackHeight:  body,
-			}),
+			bar,
 		)
 		visible = strings.Split(joined, "\n")
 	}

@@ -302,7 +302,14 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		// action was the noisiest thing in this header.
 		HeaderMeta:   &workspacelist.SidebarAction{ID: regionListSortButton, Label: workspacelist.SortPillLabel(p.listSort), Hovered: p.hoverSortButton},
 		HeaderAction: &workspacelist.SidebarAction{ID: regionCreateWorktreeButton, Label: "+", Hovered: p.hoverNewButton},
-		PrefixLines:  warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
+		// The project list's bar is live like global Sessions': its thumb/track
+		// regions ride along with every content region, and an offset a pointer
+		// gesture chose is honored rather than re-derived from the selection.
+		InteractiveScrollbar: true,
+		FreeScroll:           p.freeScroll,
+		ScrollbarHover:       p.sidebarBar.hover && !p.sidebarBar.gesture.Active(),
+		ScrollbarDrag:        p.sidebarBar.gesture.Active(),
+		PrefixLines:          warnings, FilterActive: p.filterActive(), FilterLine: p.listFilter.RenderRow(width, matched, total),
 		Sections: sections, EmptyLines: empty,
 		EmptyActionID: emptyActionID, EmptyActionLine: emptyActionLine,
 	})
@@ -322,10 +329,30 @@ func (p *Plugin) renderSidebarContent(width, height int) string {
 		case workspacelist.RegionFilter:
 			id = regionListFilter
 		}
-		// Panel content begins one row and two columns inside RenderPanel.
-		p.mouseHandler.HitMap.AddRect(id, 2+region.X, 1+region.Y, region.W, region.H, data)
+		p.mouseHandler.HitMap.AddRect(id, sidebarContentX+region.X, sidebarContentY+region.Y, region.W, region.H, data)
 	}
+	// The bar snapshot travels with the same origin the regions were just
+	// registered at, so a press maps back onto what was actually drawn.
+	p.sidebarBar.bar, p.sidebarBar.originY = rendered.Scrollbar, sidebarContentY
 	return rendered.View
+}
+
+// Panel content begins one row and two columns inside RenderPanel.
+const (
+	sidebarContentX = 2
+	sidebarContentY = 1
+)
+
+// sidebarBarState is the project sidebar's scrollbar pointer state. The bar
+// snapshot is what the last render reported; originY turns the snapshot's
+// content-local geometry into the coordinates the mouse handler answers; the
+// gesture keeps the press-time mapping so re-renders cannot shift it under the
+// pointer; hover feeds the bar's emphasis back into the draw.
+type sidebarBarState struct {
+	bar     workspacelist.SidebarScrollbar
+	originY int
+	hover   bool
+	gesture workspacelist.ScrollGesture
 }
 
 func (p *Plugin) sharedSidebarRowCount() int {

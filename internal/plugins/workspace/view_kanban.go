@@ -45,6 +45,12 @@ func (p *Plugin) renderKanbanView(width, height int) string {
 			p.mouseHandler.HitMap.AddRect(regionKanbanColumn, region.X, region.Y, region.W, region.H, region)
 		case boardkanban.RegionCard:
 			p.mouseHandler.HitMap.AddRect(regionKanbanCard, region.X, region.Y, region.W, region.H, region)
+		case boardkanban.RegionScrollbarThumb, boardkanban.RegionScrollbarTrack:
+			// Registered after every card region, so the reverse-scanning hit
+			// test hands a press on the bar's column to the bar rather than to
+			// the card drawn under it. Lanes that fit register nothing: their
+			// reserved column is an anti-jitter spacer, not a control.
+			p.mouseHandler.HitMap.AddRect(regionKanbanScrollbar, region.X, region.Y, region.W, region.H, region)
 		}
 	}
 	return result.View

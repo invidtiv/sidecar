@@ -226,6 +226,14 @@ func (p *Plugin) clampTreeScroll() {
 
 // renderNormalPanes renders the standard 2-pane layout without modals.
 func (p *Plugin) renderNormalPanes() string {
+	// The scroll offset can go stale between renders: state restored from a
+	// session with a different pane height or tree, a rebuild that shrank the
+	// flat list, a collapse that removed rows. Clamping here — before both the
+	// render loop and the hit-region loop read the offset — guarantees that a
+	// tree which fits the viewport draws in full from the top, and that the
+	// rows we register for clicks are exactly the rows we draw.
+	p.clampTreeScroll()
+
 	inputBarHeight := p.inputBarHeight()
 
 	// Pane height for panels (outer dimensions including borders)
@@ -283,6 +291,8 @@ func (p *Plugin) renderNormalPanes() string {
 			tabX := 2 // left border + padding
 			p.registerPreviewTabHits(tabX, tabY)
 		}
+		// Scrollbar column last: above the pane region it overlaps.
+		p.registerScrollbarRegions()
 
 		return lipgloss.JoinVertical(lipgloss.Left, parts...)
 	}
@@ -393,6 +403,11 @@ func (p *Plugin) renderNormalPanes() string {
 		tabX := previewX + 2 // left border + padding
 		p.registerPreviewTabHits(tabX, tabY)
 	}
+
+	// Scrollbar columns LAST (tested first = highest priority): the tree item
+	// and preview line rects above reach into the bar's column, and a press on
+	// the bar must never select a row or grab a text selection underneath it.
+	p.registerScrollbarRegions()
 
 	return lipgloss.JoinVertical(lipgloss.Top, parts...)
 }
@@ -552,6 +567,10 @@ func (p *Plugin) renderFileOpSuggestions() string {
 func (p *Plugin) renderTreePane(visibleHeight int) string {
 	var sb strings.Builder
 
+	// Whatever this pane draws this pass — tree or search results — is what
+	// gets a scrollbar; forget both so an undrawn one can never register.
+	p.clearTreeColumnBars()
+
 	// Header with sort mode and ignored indicator
 	header := styles.Title.Render("Files")
 	sb.WriteString(header)
@@ -624,12 +643,7 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 		}
 	}
 
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   p.tree.Len(),
-		ScrollOffset: p.treeScrollOff,
-		VisibleItems: visibleHeight,
-		TrackHeight:  visibleHeight,
-	})
+	scrollbar := p.drawScrollbar(sbTree, p.tree.Len(), p.treeScrollOff, visibleHeight)
 
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(treeSB.String(), maxWidth), scrollbar))
 	return sb.String()
@@ -639,11 +653,9 @@ func (p *Plugin) renderTreePane(visibleHeight int) string {
 func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) string {
 	maxWidth := treeNodeWidth(p.treeWidth)
 
-	// Calculate scroll offset for search results
-	searchScrollOff := 0
-	if p.searchCursor >= visibleHeight {
-		searchScrollOff = p.searchCursor - visibleHeight + 1
-	}
+	// The scroll offset: a scrollbar gesture pins it; otherwise it follows the
+	// cursor. Both cases resolve here, once, so rows and bar always agree.
+	searchScrollOff := p.effectiveSearchScrollOff(visibleHeight)
 
 	end := searchScrollOff + visibleHeight
 	if end > len(p.searchMatches) {
@@ -681,12 +693,7 @@ func (p *Plugin) renderSearchResults(sb *strings.Builder, visibleHeight int) str
 		}
 	}
 
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   len(p.searchMatches),
-		ScrollOffset: searchScrollOff,
-		VisibleItems: visibleHeight,
-		TrackHeight:  visibleHeight,
-	})
+	scrollbar := p.drawScrollbar(sbSearch, len(p.searchMatches), searchScrollOff, visibleHeight)
 
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(resultSB.String(), maxWidth), scrollbar))
 	return sb.String()
@@ -850,6 +857,10 @@ func (p *Plugin) renderTreeNode(node *FileNode, selected bool, maxWidth int) str
 
 // renderPreviewPane renders the file preview in the right pane.
 func (p *Plugin) renderPreviewPane(visibleHeight int) string {
+	// The bar is only drawn when source lines are; forget the previous pass
+	// before any early return so a stale bar can never register regions.
+	p.bars[sbPreview] = scrollbarBar{}
+
 	// Handle inline edit mode - render editor within preview pane
 	if p.edit.Active && p.edit.Model != nil && p.edit.Model.IsActive() {
 		return p.renderInlineEditorContent(visibleHeight)
@@ -1105,12 +1116,7 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 		contentSB.WriteString(styles.Muted.Render("... (file truncated)"))
 	}
 
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
-		TotalItems:   len(lines),
-		ScrollOffset: p.previewScroll,
-		VisibleItems: visibleHeight,
-		TrackHeight:  visibleHeight,
-	})
+	scrollbar := p.drawScrollbar(sbPreview, len(lines), p.previewScroll, visibleHeight)
 
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, treeColumn(contentSB.String(), contentWidth), scrollbar))
 	return sb.String()

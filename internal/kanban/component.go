@@ -72,6 +72,12 @@ type Component struct {
 	selection Selection
 	scroll    map[LaneID]int
 	hoverID   string
+	// Per-lane scrollbar pointer state, detailed in scrollbar.go. bars is the
+	// snapshot of what the last render drew; barDrag is a live gesture;
+	// barHover is the hovered lane ("" when none).
+	bars     []scrollbarBar
+	barDrag  scrollbarGesture
+	barHover LaneID
 }
 
 func (c *Component) SetBoard(board Board) {
@@ -111,7 +117,10 @@ func (c *Component) ScrollLane(column, delta int) {
 	c.clampScroll()
 }
 
-func (c *Component) ClearHover() { c.hoverID = "" }
+func (c *Component) ClearHover() {
+	c.hoverID = ""
+	c.barHover = ""
+}
 
 // VisibleCards returns the actual per-lane card window used by Render. It also
 // scrolls the selected card into view, so background consumers such as the
@@ -146,6 +155,14 @@ func (c *Component) HandlePointer(kind PointerKind, region HitRegion) Action {
 		}
 		return Action{}
 	}
+	if region.Kind == RegionScrollbarThumb || region.Kind == RegionScrollbarTrack {
+		// Hover emphasis only; presses route through PressScrollbar, and the
+		// bar never selects or activates cards beneath it.
+		if kind == PointerHover {
+			c.barHover = c.board.Lanes[region.Column].ID
+		}
+		return Action{}
+	}
 	card, ok := c.board.CardAt(Selection{Column: region.Column, Row: region.Row})
 	if !ok || card.ID != region.CardID {
 		return Action{}
@@ -153,6 +170,7 @@ func (c *Component) HandlePointer(kind PointerKind, region HitRegion) Action {
 	switch kind {
 	case PointerHover:
 		c.hoverID = card.ID
+		c.barHover = ""
 		return Action{}
 	case PointerClick:
 		c.Select(Selection{Column: region.Column, Row: region.Row})
@@ -173,6 +191,8 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 		options.CardHeight = 4
 	}
 	if c.Compact(options.Width, options.MinColumnWidth) {
+		c.bars = nil
+		c.barHover = ""
 		return RenderResult{Compact: true}
 	}
 	layout := CalculateLayout(options.Width, options.Height, len(c.board.Lanes), options.MinColumnWidth, options.CardHeight)
@@ -201,6 +221,7 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 	regions := make([]HitRegion, 0)
 	columnHeaders := make([]string, 0, len(c.board.Lanes))
 	columnX := 2
+	contentTopY := 5
 	for column, lane := range c.board.Lanes {
 		width := widths[column]
 		columnHeaders = append(columnHeaders, renderLaneHeader(lane, width, column == c.selection.Column))
@@ -213,14 +234,20 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 		contentLimit--
 	}
 	columnX = 2
+	barXs := make([]int, len(widths))
 	for column, width := range widths {
-		regions = append(regions, HitRegion{Kind: RegionColumnBody, Column: column, Row: -1, X: columnX, Y: 5, W: width, H: layout.ContentRows})
+		regions = append(regions, HitRegion{Kind: RegionColumnBody, Column: column, Row: -1, X: columnX, Y: contentTopY, W: width, H: layout.ContentRows})
+		// The bar is the last cell of each lane's row block: card text gets
+		// width-1 columns and the scrollbar paints in the remaining one.
+		barXs[column] = columnX + width - 1
 		columnX += width + 1
 	}
 
+	c.bars = make([]scrollbarBar, len(c.board.Lanes))
+	geoms := make([]ui.Geometry, len(c.board.Lanes))
 	visibleByLane := make([][]Card, len(c.board.Lanes))
-	hiddenBelowByLane := make([]int, len(c.board.Lanes))
 	scrollbarsByLane := make([][]string, len(c.board.Lanes))
+	hiddenBelowByLane := make([]int, len(c.board.Lanes))
 	maxRows := 0
 	for column, lane := range c.board.Lanes {
 		start := c.scroll[lane.ID]
@@ -228,9 +255,13 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 		visible := lane.Cards[start:end]
 		visibleByLane[column] = visible
 		hiddenBelowByLane[column] = len(lane.Cards) - end
-		scrollbarsByLane[column] = strings.Split(ui.RenderScrollbar(ui.ScrollbarParams{
+		params := ui.ScrollbarParams{
 			TotalItems: len(lane.Cards), ScrollOffset: start, VisibleItems: maxCards, TrackHeight: contentLimit,
-		}), "\n")
+		}
+		rendered, geom := ui.RenderScrollbarWithState(params, c.scrollbarStyle(column))
+		scrollbarsByLane[column] = strings.Split(rendered, "\n")
+		geoms[column] = geom
+		c.bars[column] = scrollbarBar{params: params, trackTopY: contentTopY, valid: geom.HasThumb}
 		rows := len(visible)
 		if rows == 0 && lane.State != CellReady {
 			rows = 1
@@ -290,6 +321,15 @@ func (c *Component) Render(options RenderOptions) RenderResult {
 			}
 		}
 		lines = append(lines, strings.Join(cells, vertSep))
+	}
+	// Lane bars register last of all: after every card region so HitMap.Test's
+	// reverse scan lets a bar press win the column it shares with cards. Each
+	// lane's regions carry its index in Column — the same namespacing every
+	// kanban region uses — and lanes that fit register nothing.
+	for column := range c.board.Lanes {
+		if geoms[column].HasThumb {
+			regions = registerScrollbarRegion(regions, column, barXs[column], contentTopY, contentLimit, geoms[column])
+		}
 	}
 	return RenderResult{View: styles.RenderPanel(strings.Join(lines, "\n"), options.Width, options.Height, true), Regions: regions}
 }

@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/issueview"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -92,12 +93,16 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		regionID = action.Region.ID
 	}
 	switch regionID {
-	case regionSidebar, regionWorktreeItem:
+	case regionSidebar, regionWorktreeItem,
+		string(workspacelist.RegionScrollbarThumb), string(workspacelist.RegionScrollbarTrack):
+		// The bar's column sits over the sidebar background, so a notch there
+		// scrolls the list exactly as it did before the bar was clickable.
 		return (sharedscroll.Bounds{
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
 		}).AtBoundary(action.Delta)
-	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose,
+		regionNoteScrollbarThumb, regionNoteScrollbarTrack:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -113,6 +118,10 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		case resourceTabHit:
 			leafID = data.LeafID
 		case diffTabHit:
+			leafID = data.LeafID
+		case noteScrollbarHit:
+			// A notch on a note pane's bar is bounded by that pane, exactly as
+			// it was when the bar's column answered as the leaf body.
 			leafID = data.LeafID
 		}
 		leaf := FindPane(p.paneRoot, leafID)
@@ -153,7 +162,7 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			return p.terminalWheelAtBoundary(false, action)
 		}
 		return (sharedscroll.Bounds{Position: p.previewOffset, Maximum: p.getMaxScrollOffset()}).AtBoundary(action.Delta)
-	case regionKanbanCard, regionKanbanColumn:
+	case regionKanbanCard, regionKanbanColumn, regionKanbanScrollbar:
 		return false
 	}
 	if action.Region != nil {
@@ -250,11 +259,13 @@ func isBackgroundRegion(regionID string) bool {
 		regionCreateWorktreeButton, regionShellsPlusButton, regionWorkspacesPlusButton, regionListSortButton,
 		regionStartAgentButton, regionOpenCreateButton, regionOpenSetupButton,
 		regionPaneClose, regionPaneTitle,
-		regionKanbanCard, regionKanbanColumn, regionViewToggle,
+		regionKanbanCard, regionKanbanColumn, regionKanbanScrollbar, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
+		regionTermScrollbarThumb, regionTermScrollbarTrack,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
-		regionDiffTabPreviewFile, regionDiffTabFileListPane:
+		regionDiffTabPreviewFile, regionDiffTabFileListPane,
+		string(workspacelist.RegionScrollbarThumb), string(workspacelist.RegionScrollbarTrack):
 		return true
 	default:
 		return false
@@ -353,6 +364,21 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging() {
 		if dragSourceBefore == regionPaneLeaf {
 			p.abandonDocSelection()
+		}
+		if dragSourceBefore == regionIssueScrollbar {
+			p.finishIssueScrollbarDrag()
+		}
+		if dragSourceBefore == regionKanbanScrollbar {
+			p.kanban.ReleaseScrollbar()
+		}
+		if isNoteScrollbarDragID(dragSourceBefore) {
+			p.finishNoteScrollbarDrag()
+		}
+		if isTermScrollbarDragID(dragSourceBefore) {
+			p.finishTerminalScrollbarDrag()
+		}
+		if isListScrollbarID(dragSourceBefore) {
+			p.sidebarBar.gesture.End()
 		}
 		// Drop what the press armed and end the gesture: an edge scroll tick still
 		// in flight belongs to a gesture that is over, and neither activation nor a
@@ -725,15 +751,24 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverTabClose = tabs.CloseHover{}
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
+		p.sidebarBar.hover = false
+		p.hoverTermBarSet = false
 		if action.Region != nil {
 			switch action.Region.ID {
+			case regionTermScrollbarThumb, regionTermScrollbarTrack:
+				if hit, ok := action.Region.Data.(terminalScrollbarHit); ok {
+					p.hoverTermBar = hit
+					p.hoverTermBarSet = true
+				}
 			case regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab:
 				// Only the × half of a tab hovers. The rest of the pill is a
 				// select target, and a select target that lit up would promise
 				// a close the click does not do.
 				p.setTabCloseHover(action.Region.Data)
 				p.clearIssueHover()
-			case regionKanbanCard:
+			case regionKanbanCard, regionKanbanScrollbar:
+				// A card lights the card; a lane bar lights the bar. The
+				// component answers by region kind, so one route serves both.
 				if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
 					p.kanban.HandlePointer(boardkanban.PointerHover, region)
 				}
@@ -780,6 +815,10 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		} else {
 			p.clearIssueHover()
 		}
+		// The list's bar lights under the pointer wherever its regions resolve,
+		// and goes dark the moment the pointer leaves them — including a nil
+		// region, which the switch above cannot answer.
+		p.sidebarBar.hover = action.Region != nil && isListScrollbarID(action.Region.ID)
 	}
 	return nil
 }
@@ -859,6 +898,27 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	// take pane-tree focus themselves or keys stay on the previous leaf.
 	if isDiffBodyRegion(action.Region.ID) {
 		p.focusActiveDiffLeaf()
+	}
+
+	// A press on the sidebar list's bar grabs or jumps-to-spot before any row
+	// logic can run: the reverse-scanned hit map gave the bar this column, and
+	// a scrollbar press never selects a shell or worktree underneath it.
+	if isListScrollbarID(action.Region.ID) {
+		p.pressListScrollbar(action)
+		return nil
+	}
+
+	// A press on a terminal surface's bar grabs or jumps-to-spot instead of
+	// reaching the pane under it — and never becomes a forwarded click or a
+	// text selection, whatever the application in the pane is doing with the
+	// mouse (plan rule 4). The double-click case re-grabs exactly like a
+	// single press.
+	if _, ok := action.Region.Data.(terminalScrollbarHit); ok {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick:
+			p.pressTerminalScrollbar(action)
+		}
+		return nil
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -1008,7 +1068,15 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
 		beforeActive := issue.tabs.Active
 		beforeID, beforeScroll := view.IssueID(), view.ScrollOffset()
-		_, cmd := view.HandleClick(lx, ly)
+		kind, cmd := view.HandleClick(lx, ly)
+		if kind == issueview.HitScrollbar {
+			// The card armed a scrollbar gesture (and did any track-click
+			// jump itself). Start the shared handler's drag so motions come
+			// back to ScrollbarDrag and the release anywhere settles it.
+			p.issueScrollLeaf = leafID
+			p.issueScrollTrackY = action.Y - ly
+			p.mouseHandler.StartDrag(action.X, action.Y, regionIssueScrollbar, leafID)
+		}
 		after := issue.view()
 		if issue.tabs.Active != beforeActive ||
 			(after != nil && (after.IssueID() != beforeID || after.ScrollOffset() != beforeScroll)) {
@@ -1073,6 +1141,19 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		}
 	case regionPreviewAction:
 		return p.clickPreviewAction(action.Region.Data)
+	case regionNoteScrollbarThumb, regionNoteScrollbarTrack:
+		// A press on a note pane's bar grabs or jumps-to-spot before any pane
+		// logic can run: the reverse-scanned hit map gave the bar its column,
+		// and a scrollbar press is not a click on the pane beneath it.
+		if hit, ok := action.Region.Data.(noteScrollbarHit); ok {
+			p.focusLeaf(hit.LeafID)
+			p.pressNoteScrollbar(hit.LeafID, action)
+		}
+	case regionKanbanScrollbar:
+		// A press on a lane's bar grabs or jumps-to-spot before any card
+		// logic can run: the reverse-scanned hit map gave the bar this
+		// column, and a scrollbar press never selects a card underneath it.
+		p.pressKanbanScrollbar(action)
 	case regionKanbanCard:
 		// Click on kanban card - select it
 		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
@@ -1158,6 +1239,36 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
 		return cmd
 	}
+	// A rapid second press on the sidebar's bar re-grabs it exactly like the
+	// first one did (thumb grab continues, track re-jumps) instead of being
+	// dropped for not naming a row.
+	if isListScrollbarID(action.Region.ID) {
+		p.pressListScrollbar(action)
+		return nil
+	}
+	// The same parity for a note pane's bar: a rapid second press re-arms the
+	// gesture instead of being absorbed as a stray activation.
+	if isNoteScrollbarDragID(action.Region.ID) {
+		if hit, ok := action.Region.Data.(noteScrollbarHit); ok {
+			p.focusLeaf(hit.LeafID)
+			p.pressNoteScrollbar(hit.LeafID, action)
+		}
+		return nil
+	}
+	// The same parity for a terminal surface's bar: a rapid second press
+	// re-grabs or re-jumps instead of falling through to the pane under it.
+	if isTermScrollbarDragID(action.Region.ID) {
+		if _, ok := action.Region.Data.(terminalScrollbarHit); ok {
+			p.pressTerminalScrollbar(action)
+		}
+		return nil
+	}
+	// The same parity for a lane bar: a rapid second press re-arms the
+	// gesture instead of falling through to card activation.
+	if action.Region.ID == regionKanbanScrollbar {
+		p.pressKanbanScrollbar(action)
+		return nil
+	}
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
 		return cmd
 	}
@@ -1226,12 +1337,22 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			p.focusLeaf(leafID)
 			return p.pressDocSelection(leafID, action)
 		}
-		if _, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
+		if issue, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
 			p.focusLeaf(leaf.ID)
 			// Bubble Tea emits the first click and then a double-click event at
 			// the same cell. The first click is the sole issue navigation;
 			// replaying it here can open the child and then its newly rendered
-			// parent when both rows occupy the same coordinate.
+			// parent when both rows occupy the same coordinate. A rapid second
+			// press on the card's bar re-arms the gesture instead, through the
+			// seam that can never reach a nav row.
+			if view := issue.view(); view != nil {
+				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+				if view.PressScrollbar(lx, ly) {
+					p.issueScrollLeaf = leaf.ID
+					p.issueScrollTrackY = action.Y - ly
+					p.mouseHandler.StartDrag(action.X, action.Y, regionIssueScrollbar, leaf.ID)
+				}
+			}
 			return nil
 		}
 	case regionKanbanCard:
@@ -1307,7 +1428,8 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 	switch regionID {
 	case regionSidebar, regionWorktreeItem:
 		return p.scrollSidebar(delta)
-	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose:
+	case regionPaneLeaf, regionDocLink, regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab, regionPaneClose,
+		regionNoteScrollbarThumb, regionNoteScrollbarTrack:
 		leafID := 0
 		switch data := action.Region.Data.(type) {
 		case int:
@@ -1323,6 +1445,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		case resourceTabHit:
 			leafID = data.LeafID
 		case diffTabHit:
+			leafID = data.LeafID
+		case noteScrollbarHit:
+			// A notch on a note pane's bar scrolls that pane, exactly as it
+			// did when the bar's column answered as the leaf body.
 			leafID = data.LeafID
 		}
 		leaf := FindPane(p.paneRoot, leafID)
@@ -1398,9 +1524,10 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) tea.Cmd {
 		return nil
 	case regionPreviewPane:
 		return p.wheelPreview(action, delta)
-	case regionKanbanCard, regionKanbanColumn:
+	case regionKanbanCard, regionKanbanColumn, regionKanbanScrollbar:
 		// Scroll the lane under the pointer, not whichever lane happened to
-		// have keyboard focus before the wheel gesture.
+		// have keyboard focus before the wheel gesture. A notch on a lane's
+		// bar names that same lane through its region data.
 		if region, ok := action.Region.Data.(boardkanban.HitRegion); ok {
 			return p.scrollKanbanColumn(region.Column, delta)
 		}
@@ -1455,6 +1582,64 @@ func (p *Plugin) scrollSidebar(delta int) tea.Cmd {
 		return p.loadSelectedContent()
 	}
 	return nil
+}
+
+// isListScrollbarID reports that a hit or drag belongs to the shared sidebar
+// list's bar rather than to one of its rows or controls.
+func isListScrollbarID(id string) bool {
+	return id == string(workspacelist.RegionScrollbarThumb) ||
+		id == string(workspacelist.RegionScrollbarTrack)
+}
+
+// pressListScrollbar begins the bar's gesture: grab the thumb where it was
+// pressed, or jump-to-spot on the track and keep dragging from there. The bar's
+// snapshot is what the last render reported and originY is where its content
+// began inside the panel, so the pointer maps onto what was actually drawn.
+func (p *Plugin) pressListScrollbar(action mouse.MouseAction) {
+	bar := p.sidebarBar.bar
+	if !bar.Has || action.Region == nil {
+		return
+	}
+	kind := workspacelist.RegionKind(action.Region.ID)
+	trackY := p.sidebarBar.originY + bar.TrackTop
+	offset := p.sidebarBar.gesture.Press(bar, trackY, action.Y, kind == workspacelist.RegionScrollbarThumb, p.scrollOffset)
+	p.setListViewport(offset)
+	p.mouseHandler.StartDrag(action.X, action.Y, string(kind), offset)
+}
+
+// dragListScrollbar applies the gesture's offset mapping for the pointer row.
+func (p *Plugin) dragListScrollbar(action mouse.MouseAction) {
+	if !p.sidebarBar.gesture.Active() {
+		return
+	}
+	p.setListViewport(p.sidebarBar.gesture.DragTo(action.Y))
+}
+
+// pressKanbanScrollbar begins a lane bar's gesture: grabbing the thumb where it
+// was pressed, or jumping-to-spot on the track anchored there so the same
+// gesture keeps dragging. The board component owns the mapping — the regions
+// are what the last render reported and the lane travels in the region's
+// Column — so this is only routing: arm, then start the shared handler's drag.
+func (p *Plugin) pressKanbanScrollbar(action mouse.MouseAction) {
+	if action.Region == nil {
+		return
+	}
+	region, ok := action.Region.Data.(boardkanban.HitRegion)
+	if !ok {
+		return
+	}
+	if p.kanban.PressScrollbar(region, action.Y) {
+		p.mouseHandler.StartDrag(action.X, action.Y, regionKanbanScrollbar, 0)
+	}
+}
+
+// setListViewport pins the sidebar's viewport to an offset a scrollbar gesture
+// chose, latching free-scroll mode: renders keep the chosen position even when
+// the selected row sits outside it. Any selection move clears the latch through
+// ensureVisible, and following resumes.
+func (p *Plugin) setListViewport(offset int) {
+	p.freeScroll = true
+	p.scrollOffset = max(offset, 0)
 }
 
 // handleMouseHorizontalScroll handles horizontal scroll events (shift+wheel or trackpad).
@@ -1516,7 +1701,48 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 	dragRegion := p.mouseHandler.DragRegion()
 	p.lastDragRegion = dragRegion // Save for handleMouseDragEnd (EndDrag clears before DragEnd)
 
+	// The sidebar bar's gesture maps the pointer row through its press-time
+	// snapshot; the shared core clamps past both ends of the track without
+	// ending anything.
+	if isListScrollbarID(dragRegion) {
+		p.dragListScrollbar(action)
+		return nil
+	}
+
+	// A lane bar's drag maps through the press-time snapshot the board
+	// component holds; only the grabbed lane's offset moves, wherever the
+	// pointer has since travelled.
+	if dragRegion == regionKanbanScrollbar {
+		p.kanban.DragScrollbar(action.Y)
+		return nil
+	}
+
+	// A note pane's bar drag: the press-time snapshot of its params maps the
+	// pointer onto the rows that were actually drawn.
+	if isNoteScrollbarDragID(dragRegion) {
+		p.dragNoteScrollbar(action.Y)
+		return nil
+	}
+
+	// A terminal surface's bar drag: its own press-time snapshot maps the
+	// pointer onto the window it armed on, wherever the pointer has since
+	// travelled.
+	if isTermScrollbarDragID(dragRegion) {
+		p.dragTerminalScrollbar(action.Y)
+		return nil
+	}
+
 	switch dragRegion {
+	case regionIssueScrollbar:
+		// An issue card's scrollbar gesture. The press-time snapshot of the
+		// card's top row maps the pointer onto view-local rows; the shared
+		// core clamps past both ends of the track.
+		if issue := p.issues[p.issueScrollLeaf]; issue != nil {
+			if view := issue.view(); view != nil {
+				view.ScrollbarDrag(action.Y - p.issueScrollTrackY)
+			}
+		}
+		return nil
 	case regionPaneDivider:
 		// Calculate new sidebar width based on drag
 		startValue := p.mouseHandler.DragStartValue()
@@ -1588,12 +1814,42 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		// and nothing else ends it: the handler has already closed the drag, so
 		// the lost-release path never fires either.
 		p.abandonDocSelection()
+		p.finishIssueScrollbarDrag()
+		p.finishNoteScrollbarDrag()
+		p.finishTerminalScrollbarDrag()
+		p.sidebarBar.gesture.End()
 		return nil
 	}
 
 	dragSource := action.DragStartID
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
+	}
+	if dragSource == regionIssueScrollbar {
+		// An issue scrollbar gesture settles wherever the pointer is; the
+		// offset is view state and nothing persists it here.
+		p.finishIssueScrollbarDrag()
+		return nil
+	}
+	if dragSource == regionKanbanScrollbar {
+		// A lane bar's gesture settles wherever the pointer left it; scroll
+		// offsets are ephemeral view state and nothing persists them here.
+		p.kanban.ReleaseScrollbar()
+		return nil
+	}
+	if isNoteScrollbarDragID(dragSource) {
+		p.finishNoteScrollbarDrag()
+		return nil
+	}
+	if isTermScrollbarDragID(dragSource) {
+		p.finishTerminalScrollbarDrag()
+		return nil
+	}
+	if isListScrollbarID(dragSource) {
+		// The sidebar bar's gesture settles wherever the pointer left it; the
+		// offset is view state and nothing persists it here.
+		p.sidebarBar.gesture.End()
+		return nil
 	}
 	if dragSource == regionPaneLeaf {
 		// A document selection ends here rather than in the width-persisting

@@ -32,6 +32,9 @@ func (m *Model) newPreviewDeck(ctx contentpanes.SurfaceContext) *contentpanes.De
 		case *issueview.Model:
 			view.OpenHandler = func(id string) tea.Cmd { return m.openPreviewIssue(id) }
 			view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
+			// Same cross-project fallback as the other two hosts: the app-level
+			// config, read inside the fetch command.
+			view.FallbackRefs = m.issueFallbackRefs
 		case *workspacediff.View:
 			view.ViewMode = m.diff.ViewMode
 			if w := state.GetDiffTabFileListWidth(); w > 0 {

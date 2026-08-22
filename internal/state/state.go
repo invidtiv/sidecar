@@ -152,10 +152,14 @@ type PaneLayoutJSON struct {
 }
 
 // PaneIssueTabJSON is one persisted issue tab. Restore re-fetches the issue
-// and applies Scroll; the body is not cached.
+// and applies Scroll; the body is not cached. OwnerName and OwnerRoot are set
+// only on a cross-project tab: restore reopens it from its owning store
+// without re-running the search, badge intact.
 type PaneIssueTabJSON struct {
-	Issue  string `json:"issue"`
-	Scroll int    `json:"scroll,omitempty"`
+	Issue     string `json:"issue"`
+	Scroll    int    `json:"scroll,omitempty"`
+	OwnerName string `json:"ownerName,omitempty"`
+	OwnerRoot string `json:"ownerRoot,omitempty"`
 }
 
 // PaneNoteTabJSON is one persisted note tab. Restore re-fetches the note

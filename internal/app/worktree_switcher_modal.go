@@ -66,8 +66,14 @@ func (m *Model) resetWorktreeSwitcher() {
 	m.clearWorktreeSwitcherModal()
 }
 
-// clearWorktreeSwitcherModal clears the modal cache.
+// clearWorktreeSwitcherModal clears the modal cache. A scrollbar gesture live
+// on this modal's handler ends here — closing mid-drag must not leave a dead
+// anchor behind (the td-f63097 boundary, from the switcher's side).
 func (m *Model) clearWorktreeSwitcherModal() {
+	if m.worktreeSwitcherMouseHandler != nil && m.worktreeSwitcherMouseHandler.IsDragging() {
+		m.worktreeSwitcherMouseHandler.EndDrag()
+	}
+	m.worktreeSwitcherBar = switcherBarState{}
 	m.worktreeSwitcherModal = nil
 	m.worktreeSwitcherModalWidth = 0
 	m.worktreeSwitcherMouseHandler = nil
@@ -259,20 +265,35 @@ func (m *Model) worktreeSwitcherListSection() modal.Section {
 			})
 		}
 
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+		barParams := ui.ScrollbarParams{
 			TotalItems:   len(worktrees) * 2,
 			ScrollOffset: scrollOffset * 2,
 			VisibleItems: visibleCount * 2,
 			TrackHeight:  visibleCount * 2,
-		})
+		}
+		scrollbar, _ := ui.RenderScrollbarWithState(barParams, m.worktreeSwitcherBar.style(m.worktreeSwitcherMouseHandler))
 
 		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
 
-		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
+		// Declaring the bar lets the modal library place its hit regions and
+		// route presses/drags back through this section's Update.
+		return modal.RenderedSection{
+			Content:    bodyContent,
+			Focusables: focusables,
+			Scrollbar: &modal.SectionScrollbar{
+				TotalItems:   barParams.TotalItems,
+				ScrollOffset: barParams.ScrollOffset,
+				VisibleItems: barParams.VisibleItems,
+				TrackHeight:  barParams.TrackHeight,
+				LocalX:       rowWidth + 1,
+			},
+		}
 	}, m.worktreeSwitcherListUpdate)
 }
 
 // worktreeSwitcherListUpdate handles key events for the worktree list.
+// Scrollbar gestures on the declared bar are answered by
+// worktreeSwitcherBarEvent in the switcher's mouse handler.
 func (m *Model) worktreeSwitcherListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
@@ -359,6 +380,12 @@ func (m *Model) handleWorktreeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 	}
 	if m.worktreeSwitcherMouseHandler == nil {
 		m.worktreeSwitcherMouseHandler = mouse.NewHandler()
+	}
+
+	// The list's own scrollbar claims its events before anything else sees
+	// them (see modal_scrollbar.go for why this cannot route via the modal).
+	if handled, cmd := m.worktreeSwitcherBarEvent(msg); handled {
+		return m, cmd
 	}
 
 	action := m.worktreeSwitcherModal.HandleMouse(msg, m.worktreeSwitcherMouseHandler)

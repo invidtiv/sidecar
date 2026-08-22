@@ -107,6 +107,15 @@ func (p *Plugin) newIssueModel(pane *issuePane) *issueview.Model {
 		}
 		return p.openOrFocusIssue(pane, id)
 	}
+	// A local miss searches this host's other configured projects before the
+	// card declares an issue missing. The handler is read inside the fetch
+	// command, so the update goroutine never resolves roots or stats stores.
+	view.FallbackRefs = func() []issueview.ProjectRef {
+		if p.ctx == nil {
+			return nil
+		}
+		return issueview.ProjectRefsFromConfig(p.ctx.Config)
+	}
 	// O leaves the pane for td, through the same jump the issue preview modal
 	// uses. Nothing about the jump is restated here.
 	view.OpenInTDHandler = app.OpenIssueInTD
@@ -413,7 +422,17 @@ func (p *Plugin) loadIssueView(view *issueview.Model, root, issueID string) tea.
 	if modelID == 0 {
 		modelID = p.nextIssueModelID()
 	}
-	return view.Load(modelID, root, issueID, p.ctx.Epoch)
+	return view.Load(modelID, issueLoadRoot(view, root), issueID, p.ctx.Epoch)
+}
+
+// issueLoadRoot picks the directory a card loads from: an adopted cross-
+// project card keeps its owning store so restore and reload never re-run the
+// search; every other card loads from the pane's own root. State-free.
+func issueLoadRoot(view *issueview.Model, root string) string {
+	if adopted := view.WorkDir(); adopted != "" {
+		return adopted
+	}
+	return root
 }
 
 func encodeIssueTabs(issue *issuePane) ([]state.PaneIssueTabJSON, int) {
@@ -431,13 +450,18 @@ func encodeIssueTabs(issue *issuePane) ([]state.PaneIssueTabJSON, int) {
 			continue
 		}
 		scroll := 0
+		tab := state.PaneIssueTabJSON{}
 		if item.Value != nil {
 			scroll = item.Value.ScrollOffset()
+			if name, root := item.Value.Owner(); name != "" && root != "" {
+				tab.OwnerName, tab.OwnerRoot = name, root
+			}
 		}
 		if i == issue.tabs.Active {
 			active = len(tabs)
 		}
-		tabs = append(tabs, state.PaneIssueTabJSON{Issue: id, Scroll: scroll})
+		tab.Issue, tab.Scroll = id, scroll
+		tabs = append(tabs, tab)
 	}
 	return tabs, active
 }
@@ -482,7 +506,9 @@ func normalizePersistedIssueLeaves(layout *state.PaneLayoutJSON) {
 		if i == wanted {
 			active = len(tabs)
 		}
-		tabs = append(tabs, state.PaneIssueTabJSON{Issue: id, Scroll: tab.Scroll})
+		// Owner fields ride along so a cross-project tab survives migration.
+		tabs = append(tabs, state.PaneIssueTabJSON{Issue: id, Scroll: tab.Scroll,
+			OwnerName: tab.OwnerName, OwnerRoot: tab.OwnerRoot})
 	}
 	if len(tabs) == 0 {
 		layout.IssueTabs = nil
@@ -507,8 +533,10 @@ func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads
 		wanted = 0
 	}
 	type restoredTab struct {
-		id     string
-		scroll int
+		id        string
+		scroll    int
+		ownerName string
+		ownerRoot string
 	}
 	var pending []restoredTab
 	active := 0
@@ -520,7 +548,8 @@ func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads
 		if i == wanted {
 			active = len(pending)
 		}
-		pending = append(pending, restoredTab{id: id, scroll: tab.Scroll})
+		pending = append(pending, restoredTab{id: id, scroll: tab.Scroll,
+			ownerName: tab.OwnerName, ownerRoot: tab.OwnerRoot})
 	}
 	if len(pending) == 0 {
 		return nil
@@ -534,6 +563,10 @@ func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads
 	var group issueview.Tabs
 	for _, tab := range pending {
 		view := p.newIssueModel(pane)
+		// A persisted cross-project tab reinstates its adoption before the
+		// first load so restore fetches from the owning store without re-running
+		// the search; loadIssueView honors the adopted directory.
+		view.RestoreOwner(tab.ownerName, tab.ownerRoot)
 		view.Arm(p.nextIssueModelID(), tab.id, p.ctx.Epoch)
 		view.SetPendingScroll(tab.scroll)
 		group.Append(tab.id, view)
@@ -558,6 +591,17 @@ func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) s
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
 	p.mouseHandler.HitMap.AddRect(regionPaneLeaf, box.X, box.Y, box.W, box.H, leafID)
+}
+
+// finishIssueScrollbarDrag settles an issue card's scrollbar gesture and
+// forgets which leaf it belonged to. Safe to call with no gesture live.
+func (p *Plugin) finishIssueScrollbarDrag() {
+	if issue := p.issues[p.issueScrollLeaf]; issue != nil {
+		if view := issue.view(); view != nil {
+			view.ScrollbarDragEnd()
+		}
+	}
+	p.issueScrollLeaf = 0
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {

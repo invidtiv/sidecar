@@ -60,9 +60,10 @@ func asScrollOwner(s Section) (ScrollOwnerSection, bool) {
 
 // RenderedSection is the result of rendering a section.
 type RenderedSection struct {
-	Content    string          // Rendered string content
-	Focusables []FocusableInfo // Focusable elements with hit region info
-	Overlay    *Overlay        // Optional floating layer; does not affect section height
+	Content    string            // Rendered string content
+	Focusables []FocusableInfo   // Focusable elements with hit region info
+	Overlay    *Overlay          // Optional floating layer; does not affect section height
+	Scrollbar  *SectionScrollbar // Interactive scrollbar drawn into this section's content (see scrollbar.go)
 }
 
 // Overlay is drawn over later sections and does not count toward modal height.

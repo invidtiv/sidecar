@@ -1,12 +1,15 @@
 package issueview
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/marcus/sidecar/internal/tdroot"
 )
 
 // Data holds one td issue plus the related rows the card needs to render
@@ -60,37 +63,82 @@ type treeNode struct {
 
 // FetchedMsg carries one td fetch result. Hosts that track their own request
 // identity wrap it; the app's modal consumes it directly.
+//
+// FoundIn is nil for a local result. A non-nil Owner means the issue lives in
+// another configured project's store; the card adopts that store as its own
+// (refreshes address it directly) and shows the project name as a badge.
 type FetchedMsg struct {
 	IssueID string
 	Data    *Data
 	Error   error
+	FoundIn *Owner
 }
 
 // Fetch runs `td show` and, when that succeeds, `td tree` so the card can
 // show subtasks and walk an epic's children. workDir sets the command's
 // working directory so td uses the correct project database.
 func Fetch(workDir, issueID string) tea.Cmd {
+	return FetchWithFallbacks(workDir, issueID, nil)
+}
+
+// FetchWithFallbacks is Fetch with cross-project candidates. The refs are raw
+// config projects; resolving them into verified candidates happens here,
+// inside the command, because it stats files and may shell out to git.
+func FetchWithFallbacks(workDir, issueID string, fallbacks []ProjectRef) tea.Cmd {
 	return func() tea.Msg {
-		data, err := loadIssue(workDir, issueID)
-		return FetchedMsg{IssueID: issueID, Data: data, Error: err}
+		data, owner, err := loadIssue(workDir, issueID, fallbacks)
+		return FetchedMsg{IssueID: issueID, Data: data, Error: err, FoundIn: owner}
 	}
 }
 
-func loadIssue(workDir, issueID string) (*Data, error) {
+// loadIssue fetches an issue locally first. Only on a genuine "not found" —
+// never a corrupt store or another real td error — does it search the
+// fallbacks, so a broken local database cannot silently masquerade as a
+// foreign issue.
+func loadIssue(workDir, issueID string, fallbacks []ProjectRef) (*Data, *Owner, error) {
 	data, err := showIssue(workDir, issueID)
 	if err != nil {
-		return nil, err
+		if len(fallbacks) > 0 && isNotFound(err) {
+			if h := findAcrossProjects(context.Background(), issueID,
+				BuildCandidates(tdroot.ResolveTDRoot(workDir), fallbacks)); h != nil {
+				attachTree(h.Cand.Root, h.Data)
+				owner := Owner{Name: h.Cand.Name, Root: h.Cand.Root}
+				return h.Data, &owner, nil
+			}
+			// Total miss: say what was actually searched rather than letting
+			// the card claim the issue does not exist at all.
+			return nil, nil, fmt.Errorf("issue %q not found in %d project(s)",
+				issueID, 1+len(fallbacks))
+		}
+		return nil, nil, err
 	}
 	attachTree(workDir, data)
-	return data, nil
+	return data, nil, nil
+}
+
+// isNotFound reports whether err is td's genuine missing-issue answer. Real
+// failures (corrupt store, locked database) surface other messages and must
+// short-circuit rather than fall through to the cross-project search.
+func isNotFound(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found")
 }
 
 func showIssue(workDir, issueID string) (*Data, error) {
-	cmd := exec.Command("td", "show", issueID, "-f", "json")
+	return showIssueContext(context.Background(), workDir, issueID)
+}
+
+// showIssueContext is showIssue bound to ctx: a cancelled or timed-out
+// context kills the td subprocess, which is how the cross-project fan-out
+// retracts its losers when a winner is found.
+func showIssueContext(ctx context.Context, workDir, issueID string) (*Data, error) {
+	cmd := exec.CommandContext(ctx, "td", "show", issueID, "-f", "json")
 	cmd.Dir = workDir
 	configureReadOnlyTd(cmd)
 	out, err := cmd.Output()
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if msg := extractTdError(string(out)); msg != "" {
 			return nil, fmt.Errorf("%s", msg)
 		}

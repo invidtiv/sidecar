@@ -199,9 +199,10 @@ func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 	r.m.registerPreviewCloseRegion(node.Kind, inner)
 }
 
-// Body is the terminal leaf's action chips and the diff leaf's own list/hunk
-// divider and file rows — targets a content owns inside its own box, which have
-// to beat the tree divider and the leaf drawn under them.
+// Body is anything a leaf's content owns inside its own box — the terminal
+// leaf's action chips, a diff leaf's own list/hunk divider and file rows, a
+// document's content links, the note tab's scrollbar — targets that beat the
+// tree divider and the leaf drawn under them.
 func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 	if node == nil || node.Split != nil {
 		return
@@ -213,6 +214,8 @@ func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 		r.m.registerPreviewDocLinkHits(inner)
 	case panelayout.Diff:
 		r.m.registerPreviewDiffLeafHits(inner)
+	case panelayout.Note:
+		r.m.registerPreviewNoteScrollbarRegions(termpreview.Box(inner))
 	}
 }
 

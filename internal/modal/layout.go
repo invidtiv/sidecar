@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overlay"
 	"github.com/marcus/sidecar/internal/styles"
@@ -15,6 +16,8 @@ type renderedSection struct {
 	height     int
 	focusables []FocusableInfo
 	overlay    *Overlay
+	scrollbar  *SectionScrollbar
+	section    int // index into m.sections this render came from
 }
 
 // renderSections renders all sections at the given content width and returns
@@ -39,7 +42,7 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 	rendered := make([]renderedSection, 0, len(m.sections))
 	var focusIDs []string
 
-	for _, s := range m.sections {
+	for i, s := range m.sections {
 		res := s.Render(contentWidth, focusID, m.hoverID)
 		res.Content = clampLines(res.Content, contentWidth)
 		height := measureHeight(res.Content)
@@ -49,6 +52,8 @@ func (m *Modal) renderSections(contentWidth int) ([]renderedSection, []string) {
 			height:     height,
 			focusables: res.Focusables,
 			overlay:    res.Overlay,
+			scrollbar:  res.Scrollbar,
+			section:    i,
 		})
 
 		focusIDs = appendTabIDs(focusIDs, res.Focusables)
@@ -196,9 +201,17 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	viewport := sliceLines(fullContent, m.scrollOffset, viewportHeight, padToHeight)
 
 	// 5. If scrollbar needed, render and join horizontally
-	if needsScrollbar {
-		scrollbar := renderScrollbar(actualContentHeight, m.scrollOffset, viewportHeight)
-		viewport = lipgloss.JoinHorizontal(lipgloss.Top, viewport, scrollbar)
+	var viewportBar placedBar
+	if needsScrollbar && contentWidth > 1 {
+		barRendered, bar := m.renderViewportBar(handler, actualContentHeight, m.scrollOffset, viewportHeight)
+		// Reserve the bar's column deterministically: hold every viewport
+		// line to exactly the reduced content width BEFORE joining, so the
+		// glyph renders in the last content column no matter where the
+		// widest visible line ends. Hit registration reads this same column
+		// (registerBars), so drawn bar and hit regions cannot drift apart.
+		viewport = padViewportLines(viewport, contentWidth-1)
+		viewport = lipgloss.JoinHorizontal(lipgloss.Top, viewport, barRendered)
+		viewportBar = bar
 	}
 
 	// 5b. Fill each viewport line's background to prevent splotchy colors.
@@ -237,6 +250,13 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 	modalX := (screenW - modalWidth) / 2
 	modalY := (screenH - modalH) / 2
 
+	// Calculate content area position
+	contentX := modalX + 3 // border(1) + padding(2)
+	contentY := modalY + 2 // border(1) + padding(1)
+	if m.title != "" {
+		contentY += headerLines
+	}
+
 	// 8. Register hit regions
 	if handler != nil {
 		handler.HitMap.Clear()
@@ -246,13 +266,6 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 
 		// Modal body absorber (for scroll events)
 		handler.HitMap.AddRect("modal-body", modalX, modalY, modalWidth, modalH, nil)
-
-		// Calculate content area position
-		contentX := modalX + 3 // border(1) + padding(2)
-		contentY := modalY + 2 // border(1) + padding(1)
-		if m.title != "" {
-			contentY += headerLines
-		}
 
 		// Register focusable elements with measured positions
 		sectionStartY := 0
@@ -281,6 +294,16 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 				}
 			}
 		}
+
+		// Interactive scrollbar regions register after everything above, so
+		// the bar's column beats any content rect that reaches into it. A bar
+		// with no thumb (or scrolled fully out of the viewport) registers
+		// nothing at all. See scrollbar.go for the gesture contract.
+		m.registerBars(handler, viewportBar, visible, contentX, contentY, contentWidth, contentY, viewportHeight)
+	} else {
+		// No handler: no regions can exist, so stale bar geometry must not
+		// survive either.
+		m.bars = m.bars[:0]
 	}
 
 	return styled
@@ -304,53 +327,6 @@ func totalHeight(sections []renderedSection) int {
 		h += r.height
 	}
 	return h
-}
-
-// renderScrollbar renders a single-column vertical scrollbar.
-// Uses the same visual style as ui.RenderScrollbar but avoids an import cycle.
-func renderScrollbar(totalItems, scrollOffset, viewportHeight int) string {
-	if viewportHeight < 1 || totalItems < 1 {
-		return ""
-	}
-
-	// Thumb size: proportional to visible fraction, minimum 1
-	thumbSize := (viewportHeight * viewportHeight) / totalItems
-	if thumbSize < 1 {
-		thumbSize = 1
-	}
-	if thumbSize > viewportHeight {
-		thumbSize = viewportHeight
-	}
-
-	// Thumb position
-	maxOffset := totalItems - viewportHeight
-	if maxOffset < 1 {
-		maxOffset = 1
-	}
-	thumbPos := (scrollOffset * (viewportHeight - thumbSize)) / maxOffset
-	if thumbPos < 0 {
-		thumbPos = 0
-	}
-	if thumbPos > viewportHeight-thumbSize {
-		thumbPos = viewportHeight - thumbSize
-	}
-
-	trackStyle := lipgloss.NewStyle().Foreground(styles.ScrollbarTrackColor).Background(styles.BgSecondary)
-	thumbStyle := lipgloss.NewStyle().Foreground(styles.ScrollbarThumbColor).Background(styles.BgSecondary)
-
-	trackChar := trackStyle.Render("│") // │
-	thumbChar := thumbStyle.Render("┃") // ┃
-
-	lines := make([]string, viewportHeight)
-	for i := range viewportHeight {
-		if i >= thumbPos && i < thumbPos+thumbSize {
-			lines[i] = thumbChar
-		} else {
-			lines[i] = trackChar
-		}
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 // modalStyle returns the lipgloss style for the modal box based on variant.
@@ -437,6 +413,26 @@ func sliceLines(content string, offset, height int, padToHeight bool) string {
 		}
 	}
 
+	return strings.Join(lines, "\n")
+}
+
+// padViewportLines holds every viewport line to exactly width columns so the
+// scrollbar joins at a fixed column: the drawn bar's position becomes a fact
+// of the layout rather than a side effect of wherever the widest visible line
+// happens to end (which moves with scroll position on ragged content).
+func padViewportLines(content string, width int) string {
+	if width < 1 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		switch w := ansi.StringWidth(line); {
+		case w < width:
+			lines[i] = line + strings.Repeat(" ", width-w)
+		case w > width:
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 

@@ -74,7 +74,12 @@ const (
 	// Kanban view regions
 	regionKanbanCard   = "kanban-card"
 	regionKanbanColumn = "kanban-column"
-	regionViewToggle   = "view-toggle"
+	// regionKanbanScrollbar names a drag that began on a lane's scrollbar.
+	// The board arms the gesture in PressScrollbar (which also does any
+	// track-click jump); this ID is what turns the host's StartDrag into
+	// motions routed to DragScrollbar and a release anywhere that settles it.
+	regionKanbanScrollbar = "kanban-scrollbar"
+	regionViewToggle      = "view-toggle"
 
 	// Task Link modal regions
 	regionTaskLinkDropdown = "task-link-dropdown"
@@ -123,17 +128,34 @@ const (
 
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelContent = "term-panel-content"
+	// A terminal surface's scrollbar drag sources, on the same terms as the
+	// note pane's: the sidebar list starts its own bar drags under the shared
+	// renderer's thumb/track strings in this same hit map, so a drag source
+	// here must be unambiguous. The payload names the surface.
+	regionTermScrollbarThumb = "term-scrollbar-thumb"
+	regionTermScrollbarTrack = "term-scrollbar-track"
 	// regionPaneLeaf is any content leaf's body — document or issue. One region
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
-	regionPaneLeaf      = "pane-leaf"
-	regionDocLink       = "doc-link"
-	regionDocTab        = "doc-tab"
-	regionIssueTab      = "issue-tab"
-	regionNoteTab       = "note-tab"
-	regionResourceTab   = "resource-tab"
-	regionDiffTargetTab = "diff-target-tab"
-	regionPaneClose     = "pane-close"
+	regionPaneLeaf = "pane-leaf"
+	// regionIssueScrollbar names a drag that began on an issue card's
+	// scrollbar. The card arms the gesture in HandleClick (which also does any
+	// track-click jump); this ID is what turns the host's StartDrag into
+	// motions routed to ScrollbarDrag and a release that settles it.
+	regionIssueScrollbar = "issue-scrollbar"
+	// A note pane's scrollbar drag sources, on the same terms. They
+	// deliberately do not reuse the shared renderer's thumb/track IDs: the
+	// sidebar list starts its own bar drags under those exact strings in this
+	// same hit map, so a drag source here must be unambiguous.
+	regionNoteScrollbarThumb = "note-scrollbar-thumb"
+	regionNoteScrollbarTrack = "note-scrollbar-track"
+	regionDocLink            = "doc-link"
+	regionDocTab             = "doc-tab"
+	regionIssueTab           = "issue-tab"
+	regionNoteTab            = "note-tab"
+	regionResourceTab        = "resource-tab"
+	regionDiffTargetTab      = "diff-target-tab"
+	regionPaneClose          = "pane-close"
 	// regionPaneTitle is a leaf's header name, which is a click target so a
 	// pane with no sidebar row of its own can still be renamed.
 	regionPaneTitle       = "pane-title"
@@ -187,6 +209,12 @@ type Plugin struct {
 	selectedIdx  int
 	scrollOffset int // Sidebar list scroll offset
 	visibleCount int // Number of visible list items
+	// freeScroll latches that the sidebar viewport is where a scrollbar gesture
+	// put it rather than where the selection is; any selection move clears it.
+	freeScroll bool
+	// sidebarBar carries the shared list's bar between the render pass that
+	// drew it and the pointer events that answer it.
+	sidebarBar sidebarBarState
 	// previewOffset is the document tabs' scroll position: an absolute line
 	// from the top of the rendered content. The terminal surfaces do not use
 	// it — a window over a live buffer is placed from the live bottom instead,
@@ -263,9 +291,20 @@ type Plugin struct {
 	// A drag is answered by where it began, never by where the pointer has since
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
 	docSelectLeaf int
-	issues        map[int]*issuePane
-	notes         map[int]*notePane
-	diffs         map[int]*diffPane
+	// issueScrollLeaf and issueScrollTrackY carry an issue card's live
+	// scrollbar gesture: which leaf it started in and the absolute Y the card's
+	// row 0 sat at when the button went down, so motion maps onto view-local
+	// rows without re-deriving pane geometry mid-gesture. See mouse.go.
+	issueScrollLeaf   int
+	issueScrollTrackY int
+	// noteBar carries a note pane's live scrollbar gesture. noteview exposes a
+	// state-free seam, so the host owns the bookkeeping: the press-time params
+	// snapshot keeps a mid-gesture re-render — a live refresh, a resize — from
+	// shifting the mapping under the pointer. See mouse.go.
+	noteBar noteBarGesture
+	issues  map[int]*issuePane
+	notes   map[int]*notePane
+	diffs   map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
 	// exist, so a Jira ticket and a CI build are tabs in one kind of leaf.
@@ -427,6 +466,12 @@ type Plugin struct {
 	termPanelFreezeDoc    bool              // Whether that pin belongs to a document activation rather than a pointer gesture
 	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 	terminalDocProjection terminalDocProjection
+	// termBar is a live pointer gesture on one of this plugin's two terminal
+	// scrollbars, armed by a press on that surface's bar regions and settled
+	// by release or lost-release. See terminal_scrollbar.go.
+	termBar         termBarGesture
+	hoverTermBar    terminalScrollbarHit
+	hoverTermBarSet bool
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
@@ -1978,9 +2023,15 @@ func (p *Plugin) moveCursor(delta int) {
 		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
 		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
-	if selectionChanged {
-		p.applySelectionChange()
+	if !selectionChanged {
+		// A key or wheel notch the list could not answer — the selection sits
+		// against either end — leaves the viewport exactly where it is,
+		// including a free-scrolled position: workspacelist.Model.Move returns
+		// before its own ensureVisible when the selection did not move, and a
+		// clamped press must not drag the view back to the selection.
+		return
 	}
+	p.applySelectionChange()
 	p.ensureVisible()
 }
 
@@ -2004,6 +2055,10 @@ func (p *Plugin) applySelectionChange() {
 // two-line rows). A stale or short count over-scrolls. RenderSidebar is the
 // line-aware authority and advances or clamps on the next paint.
 func (p *Plugin) ensureVisible() {
+	// Whatever moved the selection — a key, the wheel, a click, a refresh that
+	// reselected — owns the viewport again: a scrollbar gesture's latch ends
+	// here, the way workspacelist.Model.ensureVisible clears its own.
+	p.freeScroll = false
 	if p.visibleCount <= 0 {
 		p.scrollOffset = 0
 		return

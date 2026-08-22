@@ -141,6 +141,7 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 
 	entries := p.tree.AllEntries()
 	if len(entries) == 0 {
+		p.sidebarScroll.files = sidebarBarSnapshot{}
 		sb.WriteString(styles.Muted.Render("Working tree clean"))
 		sb.WriteString("\n")
 		currentY++
@@ -156,7 +157,8 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 			filesHeight = 3
 		}
 
-		// Render file sections into separate builder for scrollbar joining
+		// Render file sections into separate builder for scrollbar joining.
+		// The sections start at sidebarFilesTopY (pane border + header rows).
 		var filesSB strings.Builder
 		lineNum := 0
 		globalIdx := 0
@@ -189,15 +191,18 @@ func (p *Plugin) renderSidebar(visibleHeight int) string {
 		// Render scrollbar alongside files section
 		filesContent := strings.TrimRight(filesSB.String(), "\n")
 		filesVisibleLines := lineNum
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+		filesParams := ui.ScrollbarParams{
 			TotalItems:   len(entries),
 			ScrollOffset: p.scrollOff,
 			VisibleItems: filesVisibleLines,
 			TrackHeight:  filesVisibleLines,
-		})
-		filesWithScrollbar := lipgloss.JoinHorizontal(lipgloss.Top, filesContent, scrollbar)
-		sb.WriteString(filesWithScrollbar)
+		}
+		filesBar, filesGeom := p.renderFilesScrollbar(filesParams)
+		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, filesContent, filesBar))
 		sb.WriteString("\n")
+		// After the file-row regions so scrollbar presses win the reverse scan
+		// and never stage/unstage/open a file row under the bar.
+		p.registerFilesScrollbarRegions(filesParams, filesGeom, filesContent)
 	}
 
 	// Separator
@@ -468,6 +473,7 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 	}
 
 	if len(commits) == 0 {
+		p.sidebarScroll.commits = sidebarBarSnapshot{}
 		if p.historyFilterActive {
 			sb.WriteString(styles.Muted.Render("No matching commits"))
 		} else {
@@ -509,6 +515,9 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 		endIdx = len(commits)
 	}
 	var commitsSB strings.Builder
+
+	// The track starts on the first commit row (currentY is past the header).
+	commitsTrackY := *currentY
 
 	for i := startIdx; i < endIdx; i++ {
 		commit := commits[i]
@@ -580,13 +589,18 @@ func (p *Plugin) renderRecentCommits(currentY *int, maxVisible int) string {
 	// Join commits with scrollbar
 	commitsContent := strings.TrimRight(commitsSB.String(), "\n")
 	visibleCommits := endIdx - startIdx
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+	commitsParams := ui.ScrollbarParams{
 		TotalItems:   len(commits),
 		ScrollOffset: p.commitScrollOff,
 		VisibleItems: visibleCommits,
 		TrackHeight:  visibleCommits,
-	})
-	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, commitsContent, scrollbar))
+	}
+	commitsBar, commitsGeom := ui.RenderScrollbarWithState(commitsParams, p.sidebarScrollbarStyle(scrollBarCommits))
+	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, commitsContent, commitsBar))
+
+	// After the commit-row regions so scrollbar presses win the reverse scan
+	// and never select a commit under the bar.
+	p.registerCommitsScrollbarRegions(commitsParams, commitsGeom, commitsTrackY, commitsContent)
 
 	return sb.String()
 }

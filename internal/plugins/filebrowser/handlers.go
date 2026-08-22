@@ -363,11 +363,13 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 		p.searchQuery = ""
 		p.searchMatches = nil
 		p.searchCursor = 0
+		p.followSearchCursor()
 
 	case "n":
 		// Next match
 		if len(p.searchMatches) > 0 {
 			p.searchCursor = (p.searchCursor + 1) % len(p.searchMatches)
+			p.followSearchCursor()
 			p.jumpToSearchMatch()
 		}
 
@@ -378,6 +380,7 @@ func (p *Plugin) handleTreeKey(key string) (plugin.Plugin, tea.Cmd) {
 			if p.searchCursor < 0 {
 				p.searchCursor = len(p.searchMatches) - 1
 			}
+			p.followSearchCursor()
 			p.jumpToSearchMatch()
 		}
 
@@ -1016,11 +1019,13 @@ func (p *Plugin) handleSearchKey(msg tea.KeyPressMsg) (plugin.Plugin, tea.Cmd) {
 	case "up", "ctrl+p":
 		if p.searchCursor > 0 {
 			p.searchCursor--
+			p.followSearchCursor()
 		}
 
 	case "down", "ctrl+n":
 		if p.searchCursor < len(p.searchMatches)-1 {
 			p.searchCursor++
+			p.followSearchCursor()
 		}
 
 	default:
@@ -1055,6 +1060,11 @@ func (p *Plugin) visibleContentHeight() int {
 
 // ensureTreeCursorVisible adjusts scroll offset to keep cursor visible.
 func (p *Plugin) ensureTreeCursorVisible() {
+	// Drop any stale offset first (restored state, a tree that shrank) so the
+	// cursor math below runs against the real scrollable range. When the tree
+	// fits the viewport this pins the offset at 0 and the whole list shows.
+	p.clampTreeScroll()
+
 	visibleHeight := p.treeItemRows()
 
 	if p.treeCursor < p.treeScrollOff {
