@@ -2,6 +2,8 @@ package tty
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -51,42 +53,70 @@ func prepareServer() error {
 			return fmt.Errorf("set tmux history-limit: %w", err)
 		}
 	}
-	return advertiseTruecolor()
+	advertiseTruecolor()
+	return nil
 }
 
-// advertiseTruecolor makes 24-bit color reachable for applications inside
-// sidecar-managed panes. Two gaps close here, both idempotent:
+// advertiseTruecolor tells tmux that the terminal sidecar is running in renders
+// 24-bit color, so tmux passes direct-color SGR through instead of quantizing
+// it to the 256 cube — which is what turned an agent's theme into a wall of
+// cube-index-22 green inside a sidecar pane.
 //
-//   - The pane-side terminfo entry carries no RGB feature unless overridden, so
-//     applications that ask terminfo rather than the environment are told "no"
-//     — and told it by a TERM of tmux-256color, which is exactly the answer
-//     that makes a library quantize to the 256 cube. This is the half that
-//     actually bites: a fresh tmux 3.6 server carries only "linux*:AX@", so
-//     without the append there is no direct-color capability to find. Append Tc
-//     once; existing overrides already mentioning Tc or RGB win.
-//   - COLORTERM in the server's global environment, for applications that sniff
-//     the environment instead (chalk and everything built on it). Note this is
-//     belt and braces rather than the fix: tmux 3.6 injects COLORTERM=truecolor
-//     into pane processes on its own, verified against a server whose global
-//     and process environments both lack it. It still matters on older tmux and
-//     for anything spawned outside a pane. Set it only when absent — a value
-//     already present is the user's answer.
-func advertiseTruecolor() error {
-	if _, err := exec.Command("tmux", "show-environment", "-g", "COLORTERM").Output(); err != nil {
-		// Nonzero exit means the variable is unset.
-		if err := exec.Command("tmux", "set-environment", "-g", "COLORTERM", "truecolor").Run(); err != nil {
-			return fmt.Errorf("set tmux global COLORTERM: %w", err)
-		}
+// terminal-overrides is a *server* option: it applies to every session on that
+// server, sidecar's or not, and it outlives the process that set it. Two limits
+// follow from that, and both matter more than the feature does:
+//
+//   - The claim names sidecar's own TERM, never the "*" glob. Claiming direct
+//     color for every terminal type tmux might ever attach is a lie for any
+//     client that cannot render it: tmux would stop downsampling and write
+//     \e[38;2;… into, say, Terminal.app, corrupting color in sessions sidecar
+//     has nothing to do with and cannot undo.
+//   - It is only made when sidecar's own environment already says so. COLORTERM
+//     is the terminal's claim about itself; without it sidecar has no evidence,
+//     and guessing is how the first limit gets violated by another route.
+//
+// Nothing here is fatal. This is a color hint reached on the way to opening a
+// shell, and refusing to open the shell because a hint could not be set would
+// be a far worse failure than 256 colors. Errors are logged and abandoned.
+func advertiseTruecolor() {
+	if strings.TrimSpace(os.Getenv("COLORTERM")) == "" {
+		// No claim from the terminal, so sidecar makes none either.
+		return
+	}
+	term := strings.TrimSpace(os.Getenv("TERM"))
+	if term == "" || strings.ContainsAny(term, ",:*?[] ") {
+		// A TERM carrying the option's own separators would corrupt the list,
+		// and a glob would reintroduce exactly the blast radius above.
+		return
 	}
 
-	overrides, err := exec.Command("tmux", "show-options", "-gv", "terminal-overrides").Output()
-	existing := strings.TrimSpace(string(overrides))
-	if err != nil || (!strings.Contains(existing, "Tc") && !strings.Contains(existing, "RGB")) {
-		if err := exec.Command("tmux", "set-option", "-sa", "terminal-overrides", ",*:Tc").Run(); err != nil {
-			return fmt.Errorf("append tmux terminal-overrides: %w", err)
+	// Read the server option with -sv, the scope it is actually set in. Reading
+	// a server option through -gv is what made an errored read fall through to
+	// the append below on every NewSession, growing the list without bound.
+	entry := term + ":Tc"
+	out, err := exec.Command("tmux", "show-options", "-sv", "terminal-overrides").Output()
+	if err != nil {
+		slog.Debug("tmux terminal-overrides unreadable; leaving color alone", "err", err)
+		return
+	}
+	// Match the whole entry, not a substring. A user whose config carries
+	// "xterm-256color:Tc" while running under alacritty would otherwise look
+	// already-configured and never get the setting they need.
+	//
+	// Split on newlines as well as commas: show-options prints an array option
+	// one entry per line, while the value handed to set-option is comma
+	// separated. Reading only commas made every entry look like one long
+	// unmatched string, so each shell the user opened appended another copy.
+	for _, existing := range strings.FieldsFunc(string(out), func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if strings.TrimSpace(existing) == entry {
+			return
 		}
 	}
-	return nil
+	if err := exec.Command("tmux", "set-option", "-sa", "terminal-overrides", ","+entry).Run(); err != nil {
+		slog.Debug("could not advertise truecolor to tmux", "term", term, "err", err)
+	}
 }
 
 // NewSession creates a tmux session only after the server-wide history default

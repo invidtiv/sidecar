@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 func installFakeTmux(t *testing.T) string {
@@ -26,17 +28,11 @@ if [ "$1" = "start-server" ] && [ -n "$TMUX_FAKE_FAIL_ONCE" ] && [ ! -e "$TMUX_F
 fi
 if [ "$1" = "show-options" ]; then
 	case "$*" in
-		*terminal-overrides*) printf '%s\n' "${TMUX_FAKE_OVERRIDES:-}" ;;
+		*terminal-overrides*)
+			if [ -n "$TMUX_FAKE_OVERRIDES_ERROR" ]; then exit 1; fi
+			printf '%s\n' "${TMUX_FAKE_OVERRIDES:-}" ;;
 		*) printf '%s\n' "${TMUX_FAKE_HISTORY:-2000}" ;;
 	esac
-fi
-if [ "$1" = "show-environment" ]; then
-	# tmux exits nonzero for a global variable that is not set.
-	if [ -n "$TMUX_FAKE_COLORTERM" ]; then
-		printf 'COLORTERM=%s\n' "$TMUX_FAKE_COLORTERM"
-		exit 0
-	fi
-	exit 1
 fi
 if [ "$1" = "send-keys" ] && [ -n "$TMUX_FAKE_SEND_ERROR" ]; then
 	printf '%s\n' "$TMUX_FAKE_SEND_ERROR" >&2
@@ -64,6 +60,8 @@ func fakeTmuxCalls(t *testing.T, logPath string) []string {
 func TestNewSessionPreparesHistoryBeforeCreation(t *testing.T) {
 	logPath := installFakeTmux(t)
 	t.Setenv("TMUX_FAKE_HISTORY", "2000")
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "xterm-ghostty")
 
 	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -74,14 +72,73 @@ func TestNewSessionPreparesHistoryBeforeCreation(t *testing.T) {
 		"start-server ; set-option -s exit-empty off",
 		"show-options -gv history-limit",
 		"set-option -g history-limit 10000",
-		"show-environment -g COLORTERM",
-		"set-environment -g COLORTERM truecolor",
-		"show-options -gv terminal-overrides",
-		"set-option -sa terminal-overrides ,*:Tc",
+		"show-options -sv terminal-overrides",
+		"set-option -sa terminal-overrides ,xterm-ghostty:Tc",
 		"new-session -d -s test-session",
 	}
 	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("tmux call order:\n%s\nwant:\n%s", strings.Join(calls, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// The claim names sidecar's own TERM. A "*" glob would tell tmux that every
+// terminal type on the server renders direct color, including clients sidecar
+// never opened and cannot correct.
+func TestTruecolorClaimIsScopedToOurTerminal(t *testing.T) {
+	logPath := installFakeTmux(t)
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "alacritty")
+
+	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	var appended string
+	for _, call := range fakeTmuxCalls(t, logPath) {
+		if strings.Contains(call, "set-option -sa terminal-overrides") {
+			appended = call
+		}
+	}
+	if appended == "" {
+		t.Fatal("a truecolor terminal got no override at all")
+	}
+	if !strings.HasSuffix(appended, ",alacritty:Tc") {
+		t.Fatalf("override was not scoped to TERM: %q", appended)
+	}
+	if strings.Contains(appended, "*") {
+		t.Fatalf("override claims every terminal type: %q", appended)
+	}
+}
+
+// Without COLORTERM sidecar has no evidence the terminal renders direct color,
+// so it says nothing rather than claiming on the terminal's behalf.
+func TestNoTruecolorClaimWithoutEvidence(t *testing.T) {
+	logPath := installFakeTmux(t)
+	t.Setenv("COLORTERM", "")
+	t.Setenv("TERM", "xterm-256color")
+
+	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	for _, call := range fakeTmuxCalls(t, logPath) {
+		if strings.Contains(call, "terminal-overrides") {
+			t.Fatalf("sidecar touched terminal-overrides with no COLORTERM:\n%s", call)
+		}
+	}
+}
+
+// A color hint is not worth a shell. Every tmux call advertiseTruecolor makes
+// may fail without failing the session the user actually asked for.
+func TestTruecolorFailureDoesNotBlockSessionCreation(t *testing.T) {
+	logPath := installFakeTmux(t)
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "xterm-ghostty")
+	t.Setenv("TMUX_FAKE_OVERRIDES_ERROR", "1")
+
+	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
+		t.Fatalf("a failed color hint blocked session creation: %v", err)
+	}
+	if !strings.Contains(strings.Join(fakeTmuxCalls(t, logPath), "\n"), "new-session -d -s test-session") {
+		t.Fatal("the session was never created")
 	}
 }
 
@@ -102,35 +159,44 @@ func TestNewSessionPreservesHigherHistoryLimit(t *testing.T) {
 	}
 }
 
-func TestPrepareServerLeavesAnExistingCOLORTERMAlone(t *testing.T) {
-	// A value already in the server environment is the user's (or their
-	// shell's) answer; sidecar only fills the absence.
-	logPath := installFakeTmux(t)
-	t.Setenv("TMUX_FAKE_COLORTERM", "24bit")
-
-	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
-		t.Fatalf("NewSession: %v", err)
-	}
-	for _, call := range fakeTmuxCalls(t, logPath) {
-		if strings.HasPrefix(call, "set-environment") {
-			t.Fatalf("existing COLORTERM was overwritten:\n%s", call)
-		}
-	}
-}
-
 func TestPrepareServerAppendsOverridesOnlyWhenMissing(t *testing.T) {
 	// Every launch runs prepareServer, so an unconditional append would grow
-	// the override list by one ,*:Tc per restart.
+	// the override list by one entry per shell opened.
 	logPath := installFakeTmux(t)
-	t.Setenv("TMUX_FAKE_OVERRIDES", ",xterm-256color:Tc,*:RGB")
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "xterm-ghostty")
+	t.Setenv("TMUX_FAKE_OVERRIDES", "linux*:AX@,xterm-ghostty:Tc")
 
 	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
 	for _, call := range fakeTmuxCalls(t, logPath) {
 		if strings.Contains(call, "set-option -sa terminal-overrides") {
-			t.Fatalf("overrides already carrying Tc/RGB were appended to:\n%s", call)
+			t.Fatalf("an override already naming this TERM was appended to again:\n%s", call)
 		}
+	}
+}
+
+// Another terminal's Tc entry is not ours. Matching "Tc" anywhere in the list
+// made a user whose config carries xterm-256color:Tc, but who runs under
+// alacritty, look configured and silently never get the setting.
+func TestAnotherTerminalsOverrideDoesNotCountAsOurs(t *testing.T) {
+	logPath := installFakeTmux(t)
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "alacritty")
+	t.Setenv("TMUX_FAKE_OVERRIDES", "xterm-256color:Tc")
+
+	if err := NewSession("new-session", "-d", "-s", "test-session"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	var appended bool
+	for _, call := range fakeTmuxCalls(t, logPath) {
+		if strings.HasSuffix(call, ",alacritty:Tc") {
+			appended = true
+		}
+	}
+	if !appended {
+		t.Fatal("a different terminal's Tc entry suppressed our own")
 	}
 }
 
@@ -251,15 +317,28 @@ func TestPrepareServerAdvertisesTruecolor(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(tmpdir) })
 	t.Setenv("TMUX_TMPDIR", tmpdir)
-	t.Cleanup(func() { _ = exec.Command("tmux", "kill-server").Run() })
+	// Kill by socket path, never a bare kill-server. A bare one trusts
+	// TMUX_TMPDIR to still be private at cleanup time; t.Setenv's restore runs
+	// in the same LIFO stack, and reordering these lines would aim it at the
+	// developer's own server. This is the td-8d18de mistake, and
+	// internal/testenv exists because of it.
+	socket := testenv.SocketPath(tmpdir)
+	t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
 
-	// Run twice: the second pass must be a no-op, or every sidecar launch
-	// grows the override list. A fresh tmux 3.6 server carries only
-	// "linux*:AX@", so the first pass appends exactly one ,*:Tc and the second
-	// must find it and leave the value alone.
+	// Pin both inputs the decision reads, so the assertion means the same
+	// thing on a CI runner with no COLORTERM as on a developer's terminal.
+	t.Setenv("COLORTERM", "truecolor")
+	t.Setenv("TERM", "xterm-ghostty")
+	const entry = "xterm-ghostty:Tc"
+
+	// Run twice: the second pass must be a no-op, or every shell a user opens
+	// grows the override list by another copy of the same entry.
 	first, err := prepareAndReadOverrides()
 	if err != nil {
 		t.Fatalf("PrepareServer pass 1: %v", err)
+	}
+	if !strings.Contains(first, entry) {
+		t.Fatalf("PrepareServer did not advertise %q: %q", entry, first)
 	}
 	second, err := prepareAndReadOverrides()
 	if err != nil {
@@ -268,41 +347,29 @@ func TestPrepareServerAdvertisesTruecolor(t *testing.T) {
 	if first != second {
 		t.Fatalf("terminal-overrides changed across passes:\n%q\nvs\n%q", first, second)
 	}
-	if !strings.Contains(first, "Tc") && !strings.Contains(first, "RGB") {
-		t.Fatalf("no truecolor capability advertised after PrepareServer: %q", first)
+	if got := strings.Count(second, entry); got != 1 {
+		t.Fatalf("%q appears %d times after two passes, want 1: %q", entry, got, second)
 	}
 
-	envOut, err := exec.Command("tmux", "show-environment", "-g", "COLORTERM").Output()
-	if err != nil || strings.TrimSpace(string(envOut)) != "COLORTERM=truecolor" {
-		t.Fatalf("global COLORTERM = %q (err %v), want COLORTERM=truecolor", envOut, err)
-	}
-
-	// Creating a session must not disturb either setting: NewSession runs a
-	// full preparation pass of its own, so this is the third pass and the same
-	// idempotence that holds above has to hold through session creation.
+	// Creating a session runs a full preparation pass of its own, so this is a
+	// third pass and the same idempotence has to survive it.
 	if err := NewSession("new-session", "-d", "-s", "probe"); err != nil {
 		t.Fatalf("NewSession probe: %v", err)
 	}
-	third, err := exec.Command("tmux", "show-options", "-gv", "terminal-overrides").Output()
+	third, err := exec.Command("tmux", "show-options", "-sv", "terminal-overrides").Output()
 	if err != nil {
 		t.Fatalf("read terminal-overrides after NewSession: %v", err)
 	}
 	if string(third) != first {
 		t.Fatalf("NewSession changed terminal-overrides:\n%q\nvs\n%q", third, first)
 	}
-	envOut, err = exec.Command("tmux", "show-environment", "-g", "COLORTERM").Output()
-	if err != nil || strings.TrimSpace(string(envOut)) != "COLORTERM=truecolor" {
-		t.Fatalf("global COLORTERM after NewSession = %q (err %v), want COLORTERM=truecolor", envOut, err)
-	}
 }
 
-// Note on what this test deliberately does not assert: the environment a pane
-// process actually receives. tmux 3.6 injects COLORTERM=truecolor into panes on
-// its own — verified on an isolated server whose global environment and server
-// process environment both lack the variable — and marcus's ~/.zshenv exports it
-// as well. A pane-side probe would therefore pass whether or not
-// advertiseTruecolor ran, which is worse than no assertion. The global
-// environment is the only part of that contract sidecar owns and can prove.
+// What this deliberately does not assert: the environment a pane process
+// receives. tmux 3.6 injects COLORTERM=truecolor into panes itself — verified
+// against a server whose global and process environments both lack it — so a
+// pane-side probe would pass whether or not this code ran. An assertion that
+// cannot fail is worse than none.
 
 // prepareAndReadOverrides runs one preparation pass and returns the resulting
 // terminal-overrides value.
@@ -310,6 +377,6 @@ func prepareAndReadOverrides() (string, error) {
 	if err := PrepareServer(); err != nil {
 		return "", err
 	}
-	out, err := exec.Command("tmux", "show-options", "-gv", "terminal-overrides").Output()
+	out, err := exec.Command("tmux", "show-options", "-sv", "terminal-overrides").Output()
 	return string(out), err
 }
