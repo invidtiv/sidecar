@@ -24,7 +24,7 @@ func TestLoadIssueAttachesChildrenAndSiblings(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	data, err := loadIssue(dir, "td-b")
+	data, _, err := loadIssue(dir, "td-b", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestLoadIssueDisablesSyncAndAnalyticsForEveryTdRead(t *testing.T) {
 	t.Setenv("ISSUEVIEW_SENTINEL", "preserved")
 	t.Setenv("ISSUEVIEW_ENV_LOG", logPath)
 
-	if _, err := loadIssue(dir, "td-child"); err != nil {
+	if _, _, err := loadIssue(dir, "td-child", nil); err != nil {
 		t.Fatal(err)
 	}
 	logged, err := os.ReadFile(logPath)

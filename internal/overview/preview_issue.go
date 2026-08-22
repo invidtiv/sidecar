@@ -62,6 +62,12 @@ type previewIssueLoadedMsg struct {
 	WorkspaceID string
 }
 
+// issueFallbackRefs supplies the app-level configured projects to this
+// surface's issue cards' cross-project search at click time.
+func (m *Model) issueFallbackRefs() []issueview.ProjectRef {
+	return issueview.ProjectRefsFromConfig(m.config)
+}
+
 func (m *Model) openPreviewIssue(issueID string) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	issueID = issueview.NormalizeID(issueID)

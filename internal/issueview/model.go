@@ -26,6 +26,9 @@ type LoadedMsg struct {
 	IssueID           string
 	Data              *Data
 	Error             error
+	// FoundIn is nil for a local issue. Non-nil, the issue was resolved in
+	// another project's store; hosts use it to retarget live watchers.
+	FoundIn *Owner
 
 	// Refresh marks a result produced by Model.Refresh rather than Model.Load:
 	// an in-place re-read that must not disturb scroll, cursor or hover, and
@@ -78,6 +81,9 @@ type Model struct {
 	epoch             uint64
 	issueID           string
 	workDir           string
+	// foundIn is the owning project's display name when the current issue was
+	// resolved in another configured project's store; empty for local issues.
+	foundIn string
 
 	width  int
 	height int
@@ -121,6 +127,14 @@ type Model struct {
 	// surface that shows an issue card answers O the same way and advertises
 	// it in the same ACTIONS row.
 	OpenInTDHandler func(issueID string) tea.Cmd
+
+	// FallbackRefs, when set, supplies this host's configured projects at
+	// click time. On a local miss the card searches them (see crossproject.go)
+	// instead of declaring the issue missing. It is called inside the fetch
+	// command — resolving candidates stats files and may shell out to git —
+	// never on the update goroutine. Hosts without cross-project search leave
+	// it nil and behave exactly as before.
+	FallbackRefs func() []ProjectRef
 }
 
 // ActionHint is one key/label pair drawn in the card's ACTIONS row.
@@ -155,7 +169,14 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.requestGeneration++
 	m.epoch = epoch
 	m.issueID = issueID
+	// Reloading the store an adopted card already owns (a restored tab's first
+	// fetch, or in-card navigation) keeps the adoption; anything else is a
+	// genuine retarget and starts clean.
+	keepAdoption := m.foundIn != "" && workDir == m.workDir
 	m.workDir = workDir
+	if !keepAdoption {
+		m.foundIn = ""
+	}
 	m.scroll = 0
 	m.cursor = -1
 	m.hover = -1
@@ -169,14 +190,26 @@ func (m *Model) Load(modelID int, workDir, issueID string, epoch uint64) tea.Cmd
 	m.invalidateRender()
 
 	generation := m.requestGeneration
-	fetch := Fetch(workDir, issueID)
+	fallbacks := m.fallbackRefs()
+	fetch := FetchWithFallbacks(workDir, issueID, fallbacks)
 	return func() tea.Msg {
 		msg, _ := fetch().(FetchedMsg)
 		return LoadedMsg{
 			ModelID: modelID, RequestGeneration: generation, Epoch: epoch,
 			IssueID: issueID, Data: msg.Data, Error: msg.Error,
+			FoundIn: msg.FoundIn,
 		}
 	}
+}
+
+// fallbackRefs snapshots the host's project list once per load. A nil handler
+// means no cross-project search; the closure keeps the update goroutine out of
+// filesystem work either way.
+func (m *Model) fallbackRefs() []ProjectRef {
+	if m.FallbackRefs == nil {
+		return nil
+	}
+	return m.FallbackRefs()
 }
 
 // SetResult applies msg if it belongs to the current load. It returns false
@@ -202,6 +235,15 @@ func (m *Model) SetResult(msg LoadedMsg) bool {
 	m.loading = false
 	m.data = msg.Data
 	m.err = msg.Error
+	// A cross-project hit adopts its owning store: Refresh and any in-card
+	// navigation address it directly from here on, and the badge names where
+	// the card came from. A local result clears both.
+	if msg.FoundIn != nil && msg.FoundIn.Root != "" {
+		m.workDir = msg.FoundIn.Root
+		m.foundIn = msg.FoundIn.Name
+	} else {
+		m.foundIn = ""
+	}
 	m.cursor = -1
 	m.hover = -1
 	m.invalidateRender()
@@ -821,13 +863,44 @@ func (m *Model) SetPendingScroll(offset int) {
 // IssueID returns the issue this model is targeting.
 func (m *Model) IssueID() string { return m.issueID }
 
-// Title returns the issue's headline, or its ID before data arrives.
+// WorkDir is the directory the card fetches from: the host-supplied root for a
+// local issue, or the owning project's root after a cross-project hit. Hosts
+// use it to point live watchers at the store that can actually change this
+// card.
+func (m *Model) WorkDir() string { return m.workDir }
+
+// Owner returns the owning project's display name and store root when the
+// current issue was resolved in another configured project; empty strings for
+// a local issue.
+func (m *Model) Owner() (name, root string) { return m.foundIn, m.workDir }
+
+// RestoreOwner reinstates a persisted cross-project adoption before the first
+// load, so a restored tab refetches from the owning store — and keeps its
+// badge — without re-running the search. Only the restore path calls this.
+func (m *Model) RestoreOwner(name, root string) {
+	if name == "" || root == "" {
+		return
+	}
+	m.foundIn = name
+	m.workDir = root
+}
+
+// Title returns the issue's headline, or its ID before data arrives. A
+// cross-project card is prefixed with its owning project so tab strips,
+// overview headers, and modal titles carry the context, not just the card.
 func (m *Model) Title() string {
 	if m.data == nil {
 		return m.issueID
 	}
-	return Heading(m.data)
+	title := Heading(m.data)
+	if m.foundIn != "" {
+		return "[" + m.foundIn + "] " + title
+	}
+	return title
 }
+
+// FoundIn is the owning project's display name, or empty for a local issue.
+func (m *Model) FoundIn() string { return m.foundIn }
 
 // Loading reports whether a fetch is outstanding.
 func (m *Model) Loading() bool { return m.loading }

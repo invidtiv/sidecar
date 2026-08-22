@@ -89,7 +89,7 @@ func TestWorkspaceIssueLoadIsNotSwallowedByThePreviewHost(t *testing.T) {
 	m.issuePreviewView = issueview.New(nil)
 	_ = m.issuePreviewView.Load(issuePreviewModelID, "", "td-other", 0)
 	probe.seen = nil
-	if claimed := m.claimIssuePreviewLoad(msg); claimed {
+	if _, claimed := m.claimIssuePreviewLoad(msg); claimed {
 		t.Fatal("the modal claimed a load addressed to a workspace pane")
 	}
 }

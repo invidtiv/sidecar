@@ -189,7 +189,14 @@ func (m *Model) statusHeader(d *Data, width int) string {
 	if d.Status != "" {
 		left = statusStyle(d.Status).Render(StatusLabel(d.Status))
 	}
-	right := styles.Muted.Render(d.ID)
+	right := ""
+	// A cross-project card names its owner beside the issue ID: same card, but
+	// the user can see it did not come from this project's store.
+	if m.foundIn != "" {
+		right = styles.Muted.Render("["+m.foundIn+"]") + "  " + styles.Subtle.Render(d.ID)
+	} else {
+		right = styles.Muted.Render(d.ID)
+	}
 	return ruleBetween(left, right, width)
 }
 

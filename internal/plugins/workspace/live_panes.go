@@ -172,6 +172,34 @@ func (p *Plugin) visibleContentLeaves() map[int]bool {
 // Issue cards (td-312e4e)
 // ---------------------------------------------------------------------------
 
+// issuePaneRoots lists every td store directory this leaf's cards can come
+// from: the surface's own root plus, for any card that was resolved in another
+// configured project, that card's adopted store. Deduplicated; the pane root
+// keeps its original position so existing resolution order is unchanged.
+func (p *Plugin) issuePaneRoots(pane *issuePane) []string {
+	if pane == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var roots []string
+	add := func(root string) {
+		if root == "" || seen[root] {
+			return
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	add(pane.root)
+	for _, item := range pane.tabs.Items {
+		if item.Value != nil {
+			// A card whose watcher still pointed at the requester's store would
+			// quietly stop being true while an agent works on the owner's.
+			add(item.Value.WorkDir())
+		}
+	}
+	return roots
+}
+
 // issueWatchTargets is the td store behind any visible issue pane, or nil when
 // none is on screen.
 //
@@ -185,15 +213,17 @@ func (p *Plugin) issueWatchTargets() []livewatch.Target {
 	seen := make(map[string]bool)
 	var targets []livewatch.Target
 	for id, pane := range p.issues {
-		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 || pane.root == "" {
+		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 {
 			continue
 		}
-		for _, t := range p.tdStoreTargets[pane.root] {
-			if seen[t.Path] {
-				continue
+		for _, root := range p.issuePaneRoots(pane) {
+			for _, t := range p.tdStoreTargets[root] {
+				if seen[t.Path] {
+					continue
+				}
+				seen[t.Path] = true
+				targets = append(targets, t)
 			}
-			seen[t.Path] = true
-			targets = append(targets, t)
 		}
 	}
 	return targets
@@ -227,7 +257,9 @@ func (p *Plugin) resolveTDStores() tea.Cmd {
 		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 {
 			continue
 		}
-		queue(pane.root)
+		for _, root := range p.issuePaneRoots(pane) {
+			queue(root)
+		}
 	}
 	for id, pane := range p.notes {
 		if pane == nil || !visible[id] || len(pane.tabs.Items) == 0 {

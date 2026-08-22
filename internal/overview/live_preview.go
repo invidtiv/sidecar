@@ -182,44 +182,84 @@ func (m *Model) previewPaneVisible(kind panelayout.Kind) bool {
 
 func (m *Model) previewIssueTargets() []livewatch.Target {
 	issue := m.preview.issue
-	if issue == nil || issue.root == "" || len(issue.tabs.Items) == 0 {
+	if issue == nil || len(issue.tabs.Items) == 0 {
 		return nil
 	}
 	if !m.previewPaneVisible(panelayout.Issue) {
 		return nil
 	}
-	return m.preview.tdStoreTargets[issue.root]
+	// A cross-project card is watched at its owning store; deduping per
+	// directory keeps shared stores to one registration.
+	seen := make(map[string]bool)
+	var targets []livewatch.Target
+	for _, root := range m.previewIssueRoots() {
+		for _, t := range m.preview.tdStoreTargets[root] {
+			if seen[t.Path] {
+				continue
+			}
+			seen[t.Path] = true
+			targets = append(targets, t)
+		}
+	}
+	return targets
+}
+
+// previewIssueRoots lists every td store this surface's open issue cards can
+// come from: the selected workspace's root plus, for any card resolved in
+// another configured project, that card's adopted store. Deduplicated.
+func (m *Model) previewIssueRoots() []string {
+	issue := m.preview.issue
+	if issue == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var roots []string
+	add := func(root string) {
+		if root == "" || seen[root] {
+			return
+		}
+		seen[root] = true
+		roots = append(roots, root)
+	}
+	add(issue.root)
+	for _, item := range issue.tabs.Items {
+		if item.Value != nil {
+			add(item.Value.WorkDir())
+		}
+	}
+	return roots
 }
 
 func (m *Model) resolvePreviewTDStore() tea.Cmd {
-	root := ""
-	visible := false
-	if issue := m.preview.issue; issue != nil && issue.root != "" && len(issue.tabs.Items) > 0 {
-		root = issue.root
-		visible = m.previewPaneVisible(panelayout.Issue)
+	// Resolving walks parents and can shell out to git, so only roots behind
+	// panes actually on screen are queued.
+	var roots []string
+	if m.preview.issue != nil && len(m.preview.issue.tabs.Items) > 0 && m.previewPaneVisible(panelayout.Issue) {
+		roots = append(roots, m.previewIssueRoots()...)
 	}
-	if note := m.preview.note; note != nil && note.root != "" && len(note.tabs.Items) > 0 {
-		if root == "" {
-			root = note.root
-		}
-		visible = visible || m.previewPaneVisible(panelayout.Note)
+	if note := m.preview.note; note != nil && note.root != "" && len(note.tabs.Items) > 0 && m.previewPaneVisible(panelayout.Note) {
+		roots = append(roots, note.root)
 	}
-	if root == "" || !visible {
-		return nil
-	}
-	if _, done := m.preview.tdStoreTargets[root]; done {
-		return nil
-	}
-	if m.preview.tdStoreResolving[root] {
+	if len(roots) == 0 {
 		return nil
 	}
 	if m.preview.tdStoreResolving == nil {
 		m.preview.tdStoreResolving = make(map[string]bool)
 	}
-	m.preview.tdStoreResolving[root] = true
-	return func() tea.Msg {
-		return previewTDStoreResolvedMsg{Root: root, Targets: issueview.StoreTargets(root)}
+	var cmds []tea.Cmd
+	for _, root := range roots {
+		if _, done := m.preview.tdStoreTargets[root]; done {
+			continue
+		}
+		if m.preview.tdStoreResolving[root] {
+			continue
+		}
+		m.preview.tdStoreResolving[root] = true
+		cmds = append(cmds, func() tea.Msg {
+			return previewTDStoreResolvedMsg{Root: root, Targets: issueview.StoreTargets(root)}
+		})
 	}
+	return tea.Batch(cmds...)
 }
 
 func (m *Model) refreshPreviewIssues() []tea.Cmd {

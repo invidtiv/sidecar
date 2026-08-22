@@ -36,6 +36,14 @@ func (p *Plugin) configureDeckViewer(kind panelayout.Kind, model any) {
 			return p.openIssuePaneForSurface(ctx.Root, ctx.Surface, id)
 		}
 		view.OpenInTDHandler = app.OpenIssueInTD
+		// Same cross-project fallback as every other host: this project's
+		// config, read inside the fetch command.
+		view.FallbackRefs = func() []issueview.ProjectRef {
+			if p.ctx == nil {
+				return nil
+			}
+			return issueview.ProjectRefsFromConfig(p.ctx.Config)
+		}
 	case *workspacediff.View:
 		view.ViewMode = p.diff.ViewMode
 		if w := state.GetDiffTabFileListWidth(); w > 0 {
