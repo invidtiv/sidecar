@@ -70,6 +70,17 @@ func IsolateTmux() (socket string, teardown func(), err error) {
 		_ = os.RemoveAll(dir)
 		return "", nil, fmt.Errorf("tmux isolation: %w", err)
 	}
+	// TMUX_PANE is the same leak one level down: it names the developer's own
+	// pane, and code that excludes the hosting pane reads it as a default. A
+	// test scripting panes %1-%4 then quietly loses whichever one collides with
+	// the real pane the suite happens to be running in — and a fresh tmux
+	// server hands out exactly those low IDs, so the collision arrives after an
+	// unrelated restart and looks like the last commit broke something. Tests
+	// that want a hosting pane set one explicitly with t.Setenv.
+	if err := os.Unsetenv("TMUX_PANE"); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, fmt.Errorf("tmux isolation: %w", err)
+	}
 	return SocketPath(dir), teardownFor(dir), nil
 }
 
