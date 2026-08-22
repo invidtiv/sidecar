@@ -25,7 +25,23 @@ const (
 	// ControlColumn is the column every control starts at, measured from the
 	// pane's content origin.
 	ControlColumn = RowIndent + LabelColumn
+	// MaxControlWidth is the widest any fixed-width control asks to be drawn.
+	MaxControlWidth = 48
+	// MaxRowWidth caps the width a row lays its content out in. A row that
+	// right-aligns a control — the ON/OFF pill on every panel switch — would
+	// otherwise pin it to the pane's right edge, so widening the window drags
+	// the pill away from the label it belongs to until the two are reading as
+	// separate columns. Capping at the control column plus the widest control
+	// puts that right edge exactly where the widest form field already ends, so
+	// pills and fields share one edge instead of the pills drifting past it.
+	MaxRowWidth = ControlColumn + MaxControlWidth
 )
+
+// RowWidth is the width a row lays its content out in: everything the pane has
+// to give, but never more than MaxRowWidth. Rows stay left-aligned in the pane
+// and simply stop growing, which is what keeps a right-aligned control near its
+// label on a wide terminal.
+func RowWidth(inner int) int { return min(inner, MaxRowWidth) }
 
 // ControlWidth is how wide a fixed-width control may actually be drawn: the
 // width the page asked for, or everything the pane has left after the label
@@ -351,6 +367,11 @@ func PanelRow(title, badge, detail, control string, width int, state State) stri
 	if badge != "" {
 		left += "  " + badge
 	}
+	// The row is measured in its own capped width, not the pane's: the pill,
+	// the wrapped detail, and the selection band all stop at the same edge, so
+	// a wide terminal grows the empty space to the right of the row rather than
+	// stretching the row itself.
+	width = RowWidth(width)
 	first := padRight(left, control, width)
 	block := first
 	if detail != "" {

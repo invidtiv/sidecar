@@ -250,8 +250,31 @@ func (b *paneBuilder) panelToggle(id, title, badge, detail string, on bool, run 
 	lines := strings.Split(block, "\n")
 	y := len(b.lines)
 	b.lines = append(b.lines, lines...)
-	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, len(lines), nil)
-	b.m.mouse.HitMap.AddRect(toggleID, b.originX+b.inner-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
+	// Both regions are measured in the row's capped width, the same one
+	// PanelRow paints in. Measuring the pill against b.inner instead would
+	// leave its hit box out at the pane edge, hovering empty space while the
+	// pill the user is actually clicking sits further left.
+	rowWidth := RowWidth(b.inner)
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, rowWidth, len(lines), nil)
+	b.m.mouse.HitMap.AddRect(toggleID, b.originX+rowWidth-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
+}
+
+// panelStatus paints a panelToggle-shaped row for a setting this page reports
+// but does not own: the same title, detail, and ON/OFF pill, with the pill
+// rendered disabled so it reads as a state rather than a switch. Activating the
+// row runs go, which is expected to navigate to the control that does own it.
+//
+// The pill is deliberately not its own control here. Giving it one would put a
+// clickable switch on a row that cannot save, which is exactly the confusion
+// the read-only rendering exists to prevent.
+func (b *paneBuilder) panelStatus(id, title, badge, detail string, on bool, go_ func(*Model) tea.Cmd) {
+	rowState := b.declare(id, "", true, go_)
+	pill := Toggle(on, State{Disabled: true})
+	block := PanelRow(title, badge, detail, pill, b.inner, rowState)
+	lines := strings.Split(block, "\n")
+	y := len(b.lines)
+	b.lines = append(b.lines, lines...)
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, RowWidth(b.inner), len(lines), nil)
 }
 
 // buttonSpec is one pill in a button row.
