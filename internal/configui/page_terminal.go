@@ -156,7 +156,7 @@ func (m *Model) buildTerminal(b *paneBuilder) {
 	b.help("Opens the full tmux client instead of Sidecar's embedded terminal.")
 	b.help("Leave this off unless you rely on tmux's own interface and shortcuts.")
 	if !attachAvailable() {
-		b.help("Turn on Full tmux attach under Advanced to configure this chord.")
+		b.help("Turn on Full tmux attach under " + PageTitle(PageFlags) + " to configure this chord.")
 	}
 
 	m.keyRow(b, regionCopyKey, "Copy selection", terminalKey(ws.InteractiveCopyKey, defaults.CopyKey),

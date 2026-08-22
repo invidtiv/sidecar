@@ -19,6 +19,7 @@ const (
 	PageTerminal    PageID = "terminal"
 	PagePanels      PageID = "panels"
 	PageDiagnostics PageID = "diagnostics"
+	PageFlags       PageID = "flags"
 	PageAdvanced    PageID = "advanced"
 	PageAbout       PageID = "about"
 )
@@ -59,6 +60,7 @@ var groups = []Group{
 		Title: "System",
 		Pages: []Page{
 			{ID: PageDiagnostics, Title: "Diagnostics"},
+			{ID: PageFlags, Title: "Feature Flags"},
 			{ID: PageAdvanced, Title: "Advanced"},
 			{ID: PageAbout, Title: "About Sidecar"},
 		},

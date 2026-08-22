@@ -45,7 +45,7 @@ func TestTerminalAttachForceDisabled(t *testing.T) {
 	if !strings.Contains(view, "Disabled") {
 		t.Fatalf("a configured attach chord was shown as live:\n%s", view)
 	}
-	if !strings.Contains(view, "Full tmux attach under Advanced") {
+	if !strings.Contains(view, "Full tmux attach under Feature Flags") {
 		t.Fatalf("Terminal did not say why attach is unavailable:\n%s", view)
 	}
 	for _, c := range m.controls {

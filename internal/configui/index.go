@@ -92,10 +92,6 @@ var settingsIndex = []IndexEntry{
 	{Page: PageDiagnostics, Label: "Configuration recovery", Keywords: []string{"config", "invalid", "parse", "error", "repair", "recover"}},
 
 	// Advanced
-	{Page: PageAdvanced, Label: "Cross-project Activity", Keywords: []string{"feature", "preview", "activity", "cross project", "flag"}},
-	{Page: PageAdvanced, Label: "Document panes", Keywords: []string{"feature", "preview", "documents", "panes", "flag"}},
-	{Page: PageAdvanced, Label: "Full tmux attach", Keywords: []string{"tmux", "attach", "feature", "preview", "flag"}},
-	{Page: PageAdvanced, Label: "Split workspace terminal", Keywords: []string{"terminal", "split", "workspace", "feature", "flag"}},
 	{Page: PageAdvanced, Label: "Terminal preview capture", Keywords: []string{"capture", "limit", "performance", "terminal"}},
 
 	// About
@@ -107,8 +103,33 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAbout, Label: "Command palette", Keywords: []string{"palette", "commands", "shortcuts", "help"}},
 }
 
-// Index returns the full static settings index.
-func Index() []IndexEntry { return settingsIndex }
+// Index returns the full settings index: the static entries above plus one per
+// registered feature flag.
+func Index() []IndexEntry { return append(append([]IndexEntry{}, settingsIndex...), flagIndex()...) }
+
+// flagIndex is Feature Flags' share of the index, derived from the registry
+// rather than written out. Search is the main way a flag gets found by name, so
+// a hand-written list here would put every new flag one forgotten line away
+// from being unsearchable — the same failure that kept five flags off the
+// surface entirely. The flag's own name is a keyword because that is the string
+// a user reads in config.json and comes here to look up.
+func flagIndex() []IndexEntry {
+	items := previews()
+	entries := make([]IndexEntry, 0, len(items))
+	for _, item := range items {
+		page := PageFlags
+		if item.owner != "" {
+			// Search should land on the control that can actually set it.
+			page = item.owner
+		}
+		entries = append(entries, IndexEntry{
+			Page:     page,
+			Label:    item.label,
+			Keywords: []string{"feature", "flag", "preview", item.flag},
+		})
+	}
+	return entries
+}
 
 // Search returns the index entries matching a query, in index order. An empty
 // or whitespace-only query matches nothing: search is a filter the user opts
@@ -119,7 +140,7 @@ func Search(query string) []IndexEntry {
 		return nil
 	}
 	var matches []IndexEntry
-	for _, entry := range settingsIndex {
+	for _, entry := range Index() {
 		if entry.matches(q) {
 			matches = append(matches, entry)
 		}

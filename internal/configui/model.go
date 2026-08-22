@@ -1175,6 +1175,8 @@ func (m *Model) buildDetail(originX, inner, paneHeight int) ([]string, bool) {
 		m.buildTerminal(builder)
 	case route.Page == PagePanels:
 		m.buildPanels(builder)
+	case route.Page == PageFlags:
+		m.buildFlags(builder)
 	case route.Page == PageAdvanced:
 		m.buildAdvanced(builder)
 	case route.Page == PageAbout:
