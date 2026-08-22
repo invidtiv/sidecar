@@ -1055,6 +1055,11 @@ func (p *Plugin) visibleContentHeight() int {
 
 // ensureTreeCursorVisible adjusts scroll offset to keep cursor visible.
 func (p *Plugin) ensureTreeCursorVisible() {
+	// Drop any stale offset first (restored state, a tree that shrank) so the
+	// cursor math below runs against the real scrollable range. When the tree
+	// fits the viewport this pins the offset at 0 and the whole list shows.
+	p.clampTreeScroll()
+
 	visibleHeight := p.treeItemRows()
 
 	if p.treeCursor < p.treeScrollOff {
