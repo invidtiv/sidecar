@@ -114,9 +114,12 @@ func RootCommand() *Command {
 			"The shell is recorded in shells.json so it appears in Sidecar whether or not\n" +
 			"an instance is running. --run executes a command in the new shell; --type types\n" +
 			"it without pressing Enter so the user can review it.\n\n" +
-			"--split auto|right|below places a live terminal beside the current shell (the\n" +
-			"workspace_terminal_panel feature must be on). Split mode needs a running instance\n" +
-			"and a current shell (SIDECAR_SHELL / --shell). It does not add a workspace row.",
+			"From inside a Sidecar shell the default placement is a live terminal beside\n" +
+			"the current shell. --tab places the shell in the workspace instead, switching\n" +
+			"to a completely new surface; --split auto|right|below picks the side of the\n" +
+			"beside-the-session split explicitly (the workspace_terminal_panel feature must\n" +
+			"be on). Beside-the-session modes need a running instance and a current shell\n" +
+			"(SIDECAR_SHELL / --shell) and do not add a workspace row.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
@@ -124,6 +127,7 @@ func RootCommand() *Command {
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
 			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Place a live terminal beside the current shell"},
+			{Name: "--tab", Summary: "Open as a workspace shell instead of beside this session", Bool: true},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
@@ -143,8 +147,8 @@ func RootCommand() *Command {
 			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND] [--split auto|right|below]",
-			Summary:    "Create a Sidecar-visible shell or a live split beside the current shell",
+			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
+			Summary:    "Create a shell beside the current session (default) or as a workspace tab (--tab)",
 		},
 		Run: runCreateShell,
 	}

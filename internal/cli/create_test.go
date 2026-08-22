@@ -604,3 +604,34 @@ func runGit(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %s: %s: %v", strings.Join(args, " "), out, err)
 	}
 }
+
+// nt-7c82c9: an agent inside a Sidecar shell that asks for a shell gets it
+// beside its own session by default; a workspace-wide switch needs --tab.
+func TestCreateShellDefaultsToBesideSession(t *testing.T) {
+	stateHome, _ := setupShellCLI(t, "host shell")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", "/nonexistent/tmux.sock,1,0")
+	t.Setenv("TMUX_PANE", "%1")
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--name", "dev", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run() = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"placement":"auto"`) {
+		t.Fatalf("stdout = %q, want the beside-the-session (auto) placement", out.String())
+	}
+
+	out, errOut = bytes.Buffer{}, bytes.Buffer{}
+	handled, code = Run([]string{"create", "shell", "--tab", "--name", "dev", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled {
+		t.Fatal("not handled")
+	}
+	if strings.Contains(out.String(), `"placement":"auto"`) {
+		t.Fatalf("stdout = %q, --tab must not take the beside-the-session path", out.String())
+	}
+	if code == 0 && !strings.Contains(out.String(), `"placement":"workspace"`) {
+		t.Fatalf("stdout = %q, want workspace placement for --tab", out.String())
+	}
+}

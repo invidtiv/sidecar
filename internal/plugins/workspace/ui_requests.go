@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -407,11 +408,11 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 	case uirequest.TargetKindIssue:
 		retargeted = p.willRetargetPane(PaneIssue)
 		cmd = p.openIssuePaneForSurface(root, surface, req.Target.Value)
-		opened = cmd != nil
+		opened = p.contentPaneOnScreen(PaneIssue)
 	case uirequest.TargetKindNote:
 		retargeted = p.willRetargetPane(PaneNote)
 		cmd = p.openNotePaneForSurface(root, surface, req.Target.Value)
-		opened = cmd != nil
+		opened = p.contentPaneOnScreen(PaneNote)
 	case uirequest.TargetKindDiff:
 		if p.paneRoot == nil {
 			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
@@ -503,6 +504,18 @@ func canonicalOpenPath(path string) string {
 func (p *Plugin) willRetargetPane(kind PaneKind) bool {
 	plan, ok := planPaneOpen(p.paneRoot, kind, p.lastPaneBoxes())
 	return ok && plan.Retarget != 0
+}
+
+// contentPaneOnScreen reports whether kind's content leaf is in the live pane
+// tree. An open that only focuses an already-loaded tab returns no command,
+// so the command cannot witness that anything happened — the pane tree is
+// (the same rule the file branch follows with docPaneShows).
+func (p *Plugin) contentPaneOnScreen(kind panelayout.Kind) bool {
+	if p.contentDeck == nil {
+		return false
+	}
+	leafID := p.contentDeck.Leaf(kind)
+	return leafID != 0 && FindPane(p.paneRoot, leafID) != nil
 }
 
 // docPaneShows reports whether the live document pane is showing rel.

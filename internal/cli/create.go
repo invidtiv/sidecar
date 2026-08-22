@@ -41,6 +41,7 @@ type createCommonFlags struct {
 	projectFlag string
 	splitSet    bool
 	splitMode   string
+	tab         bool
 }
 
 func takeFlagArg(arg string, args []string, i int, name string) (value string, next int, ok bool) {
@@ -90,6 +91,9 @@ func applyCreateCommonFlag(arg string, args []string, i int, help string, stderr
 		}
 		flags.wait = d
 		return next, true, 0
+	case arg == "--tab":
+		flags.tab = true
+		return i, true, 0
 	case arg == "--split" || strings.HasPrefix(arg, "--split="):
 		mode := "auto"
 		next = i
