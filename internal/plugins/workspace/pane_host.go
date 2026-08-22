@@ -112,9 +112,9 @@ func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 }
 
 // Body is anything a leaf's content owns inside its own box — a diff list
-// divider, a file row, a document content link — in its chrome-aware content
-// box. It registers last so it beats everything the frame put down except a
-// later overlay (finder, project search).
+// divider, a file row, a document content link, a note pane's scrollbar — in
+// its chrome-aware content box. It registers last so it beats everything the
+// frame put down except a later overlay (finder, project search).
 func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 	if node == nil {
 		return
@@ -128,5 +128,7 @@ func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 			return
 		}
 		r.p.registerDiffLeafHits(diff, inner)
+	case PaneNote:
+		r.p.registerNoteScrollbarHits(node.ID, inner)
 	}
 }

@@ -971,6 +971,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		if view := m.previewIssueView(); view != nil && view.ScrollbarDragging() && !m.workspacesMouse.IsDragging() {
 			view.ScrollbarDragEnd()
 		}
+		if note := m.preview.note; note != nil && note.bar.active && !m.workspacesMouse.IsDragging() {
+			note.bar = previewNoteBar{}
+		}
 	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.
@@ -992,6 +995,18 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
+	}
+	// A note pane's bar gesture: motion and release belong to it wherever the
+	// pointer has since travelled. Checked before the list's bar, whose drag
+	// IDs are the same shared strings — at most one of the two gestures is
+	// ever live, and this asks its own state first.
+	if action.Type == mouse.ActionDrag && m.previewNoteBarOwnsDrag(m.workspacesMouse.DragRegion()) {
+		m.dragPreviewNoteScrollbar(action.Y)
+		return nil
+	}
+	if action.Type == mouse.ActionDragEnd && m.previewNoteBarOwnsDrag(action.DragStartID) {
+		m.settlePreviewNoteScrollbar()
+		return nil
 	}
 	if action.Type == mouse.ActionDrag && isWorkspacesScrollbarDragID(m.workspacesMouse.DragRegion()) {
 		m.dragWorkspacesScrollbar(action)

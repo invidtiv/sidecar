@@ -13,15 +13,34 @@ import (
 const (
 	previewNoteRegionKind = "global-preview-note"
 	previewNoteTabKind    = "global-preview-note-tab"
+	// previewNoteBarKind is the data carried by the active note tab's bar
+	// regions. The region IDs are the shared renderer's (ui.RegionScrollbar*),
+	// which other surfaces' bars also use, so the payload — not the ID — is
+	// what tells this pane's bar apart in the shared hit map.
+	previewNoteBarKind = "global-preview-note-bar"
 )
 
 func isPreviewNoteRegion(kind string) bool {
-	return kind == previewNoteRegionKind || kind == previewNoteTabKind
+	return kind == previewNoteRegionKind || kind == previewNoteTabKind || kind == previewNoteBarKind
 }
 
+// previewNoteTabHit is the tab stored on the note header's regions.
 type previewNoteTabHit struct {
 	Index int
 	Close bool
+}
+
+// previewNoteBar carries one note pane's in-flight pointer gesture on its bar.
+//
+// noteview exposes a deliberately state-free seam, so the host owns the
+// bookkeeping: the press-time params snapshot keeps a mid-gesture re-render —
+// a live refresh, a resize — from shifting the mapping under the pointer, and
+// OffsetAtRow clamps past both ends of the track without ever ending anything.
+type previewNoteBar struct {
+	params    ui.ScrollbarParams // renderer inputs at press time
+	trackTopY int                // absolute row of the track top at press time
+	grabDelta int                // rows between the pointer and the thumb's anchor row
+	active    bool
 }
 
 type previewNote struct {
@@ -30,6 +49,9 @@ type previewNote struct {
 	surface string
 	focused bool
 	epoch   uint64
+	// bar is the live scrollbar gesture on the active tab, armed by a press on
+	// one of this pane's bar regions and settled by release or lost-release.
+	bar previewNoteBar
 }
 
 func (n *previewNote) view() *noteview.Model {
@@ -202,6 +224,36 @@ func (m *Model) registerPreviewNoteTabRegions(noteBox termpreview.Box) {
 	})
 }
 
+// registerPreviewNoteScrollbarRegions puts the active tab's bar regions in the
+// hit map. It runs from the frame's Body pass — after the leaf, tabs, title and
+// close regions — so the bar wins HitMap.Test's reverse scan over everything
+// drawn under its column. A tab whose content fits registers nothing: the
+// reserved column is an anti-jitter spacer, not a control.
+func (m *Model) registerPreviewNoteScrollbarRegions(noteBox termpreview.Box) {
+	view := m.previewNoteView()
+	if view == nil || !view.HasScrollbar() || noteBox.H <= termpreview.HeaderRows {
+		return
+	}
+	params := view.ScrollbarParams()
+	_, geom := ui.RenderScrollbarWithGeometry(params)
+	if !geom.HasThumb || geom.TrackRect.Dy() <= 0 {
+		return
+	}
+	barX := noteBox.X + noteBox.W - 2 // the card pads one column either side of its bar
+	top := noteBox.Y + termpreview.HeaderRows
+	m.workspacesMouse.HitMap.AddRect(ui.RegionScrollbarTrack, barX, top, 1, geom.TrackRect.Dy(), previewNoteBarKind)
+	// The thumb is added after the track so the reverse scan hands a press on
+	// their overlap to the thumb, exactly as the shared geometry orders them.
+	m.workspacesMouse.HitMap.AddRect(ui.RegionScrollbarThumb, barX, top+geom.ThumbRect.Min.Y, 1, geom.ThumbRect.Dy(), previewNoteBarKind)
+}
+
+func (m *Model) previewNoteView() *noteview.Model {
+	if m.preview.note == nil {
+		return nil
+	}
+	return m.preview.note.view()
+}
+
 func (m *Model) handlePreviewNoteMouse(action mouse.MouseAction) tea.Cmd {
 	if tab, ok := action.Region.Data.(previewNoteTabHit); ok {
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
@@ -220,7 +272,16 @@ func (m *Model) handlePreviewNoteMouse(action mouse.MouseAction) tea.Cmd {
 	}
 	note := m.preview.note
 	kind, _ := regionKind(action.Region)
-	if kind != previewNoteRegionKind || note == nil {
+	if kind != previewNoteRegionKind && kind != previewNoteBarKind {
+		return nil
+	}
+	// A press on the active tab's bar grabs or jumps-to-spot before any
+	// focus-only answer can run: the reverse-scanned hit map gave the bar its
+	// column, and a scrollbar press is not a click on the pane beneath it.
+	if kind == previewNoteBarKind && note != nil {
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
+			m.pressPreviewNoteScrollbar(action)
+		}
 		return nil
 	}
 	view := note.view()
@@ -234,6 +295,78 @@ func (m *Model) handlePreviewNoteMouse(action mouse.MouseAction) tea.Cmd {
 		}
 	}
 	return nil
+}
+
+// pressPreviewNoteScrollbar begins the active tab's bar gesture: grabbing the
+// thumb where it was pressed, or jumping to the clicked spot anchored there so
+// the same gesture keeps dragging (macOS track-click). The double-click case
+// rides this seam deliberately — a rapid second press re-grabs the bar instead
+// of being absorbed as a stray activation of what sits under it.
+func (m *Model) pressPreviewNoteScrollbar(action mouse.MouseAction) {
+	note := m.preview.note
+	view := m.previewNoteView()
+	if note == nil || view == nil || action.Region == nil {
+		return
+	}
+	params := view.ScrollbarParams()
+	_, geom := ui.RenderScrollbarWithGeometry(params)
+	if !geom.HasThumb {
+		return
+	}
+	offset := view.ScrollOffset()
+	trackTop := action.Region.Rect.Y
+	grabDelta := 0
+	if action.Region.ID == ui.RegionScrollbarThumb {
+		trackTop -= geom.ThumbRect.Min.Y
+		grabDelta = action.Y - trackTop - ui.RowForOffset(params, offset)
+	} else {
+		// Track press: jump-to-spot, anchored at the grabbed row.
+		offset = view.OffsetAtTrackRow(action.Y - trackTop)
+		view.ScrollToOffset(offset)
+	}
+	note.bar = previewNoteBar{
+		params:    params,
+		trackTopY: trackTop,
+		grabDelta: grabDelta,
+		active:    true,
+	}
+	m.workspacesMouse.StartDrag(action.X, action.Y, action.Region.ID, offset)
+}
+
+// dragPreviewNoteScrollbar applies a held gesture's mapping for one pointer
+// row. Only a live gesture answers; the shared core clamps past both ends of
+// the press-time track without ending anything.
+func (m *Model) dragPreviewNoteScrollbar(y int) {
+	note := m.preview.note
+	if note == nil || !note.bar.active {
+		return
+	}
+	if view := note.view(); view != nil {
+		row := y - note.bar.trackTopY - note.bar.grabDelta
+		view.ScrollToOffset(ui.OffsetAtRow(note.bar.params, row))
+	}
+}
+
+// settlePreviewNoteScrollbar ends whichever bar gesture a release or a lost
+// release left live. Offsets hold where the pointer left them; nothing is
+// persisted. Reports whether a live gesture was actually settled.
+func (m *Model) settlePreviewNoteScrollbar() bool {
+	note := m.preview.note
+	if note == nil || !note.bar.active {
+		return false
+	}
+	note.bar = previewNoteBar{}
+	return true
+}
+
+// previewNoteBarOwnsDrag reports that a drag named by its source belongs to
+// the note pane's live bar gesture. The list's bar starts its drags under the
+// same shared region IDs, so the live-gesture state — not the ID alone — is
+// what tells them apart.
+func (m *Model) previewNoteBarOwnsDrag(dragSource string) bool {
+	note := m.preview.note
+	return note != nil && note.bar.active &&
+		(dragSource == ui.RegionScrollbarThumb || dragSource == ui.RegionScrollbarTrack)
 }
 
 func (m *Model) previewNoteKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {

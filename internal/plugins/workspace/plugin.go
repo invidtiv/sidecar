@@ -137,13 +137,19 @@ const (
 	// track-click jump); this ID is what turns the host's StartDrag into
 	// motions routed to ScrollbarDrag and a release that settles it.
 	regionIssueScrollbar = "issue-scrollbar"
-	regionDocLink        = "doc-link"
-	regionDocTab         = "doc-tab"
-	regionIssueTab       = "issue-tab"
-	regionNoteTab        = "note-tab"
-	regionResourceTab    = "resource-tab"
-	regionDiffTargetTab  = "diff-target-tab"
-	regionPaneClose      = "pane-close"
+	// A note pane's scrollbar drag sources, on the same terms. They
+	// deliberately do not reuse the shared renderer's thumb/track IDs: the
+	// sidebar list starts its own bar drags under those exact strings in this
+	// same hit map, so a drag source here must be unambiguous.
+	regionNoteScrollbarThumb = "note-scrollbar-thumb"
+	regionNoteScrollbarTrack = "note-scrollbar-track"
+	regionDocLink            = "doc-link"
+	regionDocTab             = "doc-tab"
+	regionIssueTab           = "issue-tab"
+	regionNoteTab            = "note-tab"
+	regionResourceTab        = "resource-tab"
+	regionDiffTargetTab      = "diff-target-tab"
+	regionPaneClose          = "pane-close"
 	// regionPaneTitle is a leaf's header name, which is a click target so a
 	// pane with no sidebar row of its own can still be renamed.
 	regionPaneTitle       = "pane-title"
@@ -285,9 +291,14 @@ type Plugin struct {
 	// rows without re-deriving pane geometry mid-gesture. See mouse.go.
 	issueScrollLeaf   int
 	issueScrollTrackY int
-	issues            map[int]*issuePane
-	notes             map[int]*notePane
-	diffs             map[int]*diffPane
+	// noteBar carries a note pane's live scrollbar gesture. noteview exposes a
+	// state-free seam, so the host owns the bookkeeping: the press-time params
+	// snapshot keeps a mid-gesture re-render — a live refresh, a resize — from
+	// shifting the mapping under the pointer. See mouse.go.
+	noteBar noteBarGesture
+	issues  map[int]*issuePane
+	notes   map[int]*notePane
+	diffs   map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
 	// exist, so a Jira ticket and a CI build are tabs in one kind of leaf.
