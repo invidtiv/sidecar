@@ -199,14 +199,15 @@ Status per surface:
 | Notes list / preview / edit (+ noteview API) | adopted (td-550ce1, td-0d5d69) |
 | Palette results | adopted (td-3037a9) |
 | Notification centre | adopted (td-3037a9) |
-| Kanban lanes — component gesture API | adopted (td-76f757); **host wiring pending → td-a7d02e** |
+| Kanban lanes — component gesture API + host wiring | adopted (td-76f757, td-a7d02e) |
 | Workspacelist sidebar — global Sessions host | adopted (td-c6f01c) |
 | Workspacelist sidebar — project workspace host | adopted (td-85b9f6) |
 | Config UI theme picker | adopted (td-c6f01c) |
 | Doc viewer (deck + workspace pane + Sessions preview hosts) | adopted (td-b31ec5, td-0d5d69) |
 | Issue viewer (deck + workspace pane + Sessions preview hosts) | adopted (td-b31ec5, td-0d5d69) |
 | Note card in app content deck | adopted (td-0d5d69) |
-| Note card in Sessions note preview | **visible but inert there → td-14f48e** |
+| Note card in Sessions note preview | adopted (td-14f48e) |
+| Note card in project PaneNote panes | adopted (td-14f48e, found inert during that wiring) |
 | Modal framework viewport bar + project/worktree/theme switcher bars | adopted (td-a6317f) |
 | Workspace primary terminal + term panel bar | cut-terminal (user decision; terminals manage their own scrollback) |
 | Sessions preview terminal bar | cut-terminal (same decision) |
@@ -216,8 +217,9 @@ press re-grabs exactly like the first press did on every wired surface. Fixed in
 filebrowser, gitstatus, conversations, notes (incl. inline-editor branch), configui theme
 picker, both workspacelist sidebar hosts, docview (second press previously fell through to
 the text-selection engine), and issue cards in all three hosts (new `issueview.PressScrollbar`
-arming seam that can never reach a nav row). Kanban is exempt until its hosts are wired
-(td-a7d02e).
+arming seam that can never reach a nav row). Kanban hosts were wired in td-a7d02e, closing
+its exemption. Known residual nit: triple-press on bars is a silent no-op (grab parity stops
+at double-press) — benign, logged for a future pass.
 
 Deliberate allow-list — remaining direct `RenderScrollbar` callers that stay non-interactive:
 
