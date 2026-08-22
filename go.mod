@@ -1,6 +1,6 @@
 module github.com/marcus/sidecar
 
-go 1.26.0
+go 1.27.0
 
 require (
 	charm.land/bubbles/v2 v2.1.0
@@ -16,11 +16,13 @@ require (
 	github.com/charmbracelet/x/cellbuf v0.0.15
 	github.com/charmbracelet/x/vt v0.0.0-20260803091719-3755ebad01b1
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/marcus/tasks v1.12.0
 	github.com/marcus/td v0.62.0
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/rivo/uniseg v0.4.7
 	github.com/yuin/goldmark v1.7.8
+	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.41.0
@@ -48,7 +50,6 @@ require (
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/makeworld-the-better-one/dither/v2 v2.4.0 // indirect
-	github.com/marcus/tasks v1.12.0
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sixel v0.0.5 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
@@ -65,7 +66,6 @@ require (
 	golang.org/x/image v0.32.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.45.0
 	golang.org/x/text v0.33.0 // indirect
 	modernc.org/libc v1.66.10 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
