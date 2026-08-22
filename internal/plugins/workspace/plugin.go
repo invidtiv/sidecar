@@ -1980,9 +1980,15 @@ func (p *Plugin) moveCursor(delta int) {
 		p.selectedNestedTmux != oldNested ||
 		(p.shellSelected && p.selectedShellIdx != oldShellIdx) ||
 		(!p.shellSelected && p.selectedNestedTmux == "" && p.selectedIdx != oldWorktreeIdx)
-	if selectionChanged {
-		p.applySelectionChange()
+	if !selectionChanged {
+		// A key or wheel notch the list could not answer — the selection sits
+		// against either end — leaves the viewport exactly where it is,
+		// including a free-scrolled position: workspacelist.Model.Move returns
+		// before its own ensureVisible when the selection did not move, and a
+		// clamped press must not drag the view back to the selection.
+		return
 	}
+	p.applySelectionChange()
 	p.ensureVisible()
 }
 

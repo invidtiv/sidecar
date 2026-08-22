@@ -170,15 +170,26 @@ func TestSidebarScrollbarRegionWinsItsColumn(t *testing.T) {
 	if sel := selectionLabel(p); sel != before {
 		t.Errorf("pressing the bar selected %q underneath it, want %q held", sel, before)
 	}
+	releaseMouseAt(t, p, 1, 1) // released far outside the bar
 
 	// A wheel notch over the bar column belongs to the list, exactly as over
-	// the row beside it — both sit over the sidebar background.
+	// the row beside it — both sit over the sidebar background. The selection
+	// sits on the last row, where a downward notch is bounded: only the case
+	// this guards answers true for the bar's column, because any other region
+	// there falls back to false, so deleting the case fails right here.
+	p.selectLastVisible()
+	if sel := selectionLabel(p); sel == before {
+		t.Fatal("test setup: the last row was already selected; pick another end")
+	}
 	onBar := tea.MouseWheelMsg{X: bar.track.Rect.X, Y: bar.track.Rect.Y + 2, Button: tea.MouseWheelDown}
 	beside := tea.MouseWheelMsg{X: 4, Y: onBar.Y, Button: tea.MouseWheelDown}
-	if got, want := p.WheelAtBoundary(onBar), p.WheelAtBoundary(beside); got != want {
-		t.Errorf("wheel at the bar column bounded=%v, want the row beside it (%v)", got, want)
+	want := p.WheelAtBoundary(beside)
+	if !want {
+		t.Fatal("test setup: sidebar wheel at the last row reported unbounded")
 	}
-	releaseMouseAt(t, p, bar.track.Rect.X, bar.track.Rect.Y+2)
+	if got := p.WheelAtBoundary(onBar); got != want {
+		t.Errorf("bounded wheel at the bar column = %v, want the row beside it (%v)", got, want)
+	}
 }
 
 // Content that fits registers no bar regions at all.
@@ -230,12 +241,40 @@ func TestSidebarFreeScrollSurvivesRenderUntilSelectionMoves(t *testing.T) {
 		t.Errorf("re-rendered viewport = %d, want the gesture position %d", got, dragged)
 	}
 
-	p.moveCursor(-1) // any selection move owns the viewport again
+	p.moveCursor(1) // the selection moved down a row, so it owns the viewport again
 	if p.freeScroll {
 		t.Fatal("moving the selection left the free-scroll latch set")
 	}
 	p.renderListView(p.width, p.height)
 	if got := p.sidebarBar.bar.Params.ScrollOffset; got >= dragged {
 		t.Errorf("viewport = %d after the selection moved, want it following again (<%d)", got, dragged)
+	}
+}
+
+// A key or notch the list cannot answer — the selection sits against an end —
+// leaves a free-scrolled viewport exactly where it is, the way
+// workspacelist.Model.Move returns before its own ensureVisible when nothing
+// moved. A clamped press must not drag the view back to the selection.
+func TestSidebarClampedNavigationHoldsFreeScrollViewport(t *testing.T) {
+	p := scrollListPlugin(t, 60)
+	renderedListBar(t, p)
+
+	const dragged = 10
+	p.setListViewport(dragged)
+	before := selectionLabel(p)
+	p.moveCursor(-1) // Up with the selection on the first row: nothing moves
+	if sel := selectionLabel(p); sel != before {
+		t.Fatalf("test setup: selection moved %q -> %q on a clamped press", before, sel)
+	}
+	if !p.freeScroll {
+		t.Fatal("a no-op navigation cleared the free-scroll latch")
+	}
+	if got := p.scrollOffset; got != dragged {
+		t.Errorf("no-op navigation moved the viewport to %d, want %d held", got, dragged)
+	}
+
+	p.moveCursor(1) // a real move hands following back to the keyboard
+	if p.freeScroll {
+		t.Fatal("a real selection move left the free-scroll latch set")
 	}
 }
