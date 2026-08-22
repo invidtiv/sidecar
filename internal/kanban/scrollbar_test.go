@@ -351,3 +351,178 @@ func TestPointerEventsOnBarsNeverSelectCards(t *testing.T) {
 		t.Fatal("thumb press did not begin a gesture")
 	}
 }
+
+func TestVanishedLaneGestureSettles(t *testing.T) {
+	var c Component
+	c.SetBoard(overflowBoard(3, 9))
+	result := c.Render(boardRenderOptions())
+	thumb := barRegion(t, result, RegionScrollbarThumb, 0)
+	if !c.PressScrollbar(thumb, thumb.Y) {
+		t.Fatal("thumb press was rejected")
+	}
+	before := cloneScroll(c.scroll)
+
+	// A board refresh removes the grabbed lane mid-gesture.
+	shrunk := Board{Lanes: overflowBoard(3, 9).Lanes[1:]}
+	c.SetBoard(shrunk)
+
+	if c.DragScrollbar(thumb.Y + 4) {
+		t.Fatal("drag reported movement for a vanished lane")
+	}
+	if c.DraggingScrollbar() {
+		t.Fatal("gesture survived its lane vanishing")
+	}
+	for id, got := range c.scroll {
+		if want := before[id]; got != want {
+			t.Fatalf("%s offset = %d, want untouched %d", id, got, want)
+		}
+	}
+	if sel := c.Selection(); sel != (Selection{}) {
+		t.Fatalf("selection = %#v, want untouched by the vanished lane", sel)
+	}
+
+	// The component keeps working: remaining lanes render bars and drag only
+	// themselves.
+	next := c.Render(boardRenderOptions())
+	fresh := barRegion(t, next, RegionScrollbarThumb, 0)
+	if !c.PressScrollbar(fresh, fresh.Y) || !c.DragScrollbar(fresh.Y+3) {
+		t.Fatal("fresh gesture on surviving lane failed")
+	}
+	if got := c.scroll["lane-1"]; got != 3 {
+		t.Fatalf("lane-1 offset = %d, want 3", got)
+	}
+	if got := c.scroll["lane-2"]; got != 0 {
+		t.Fatalf("lane-2 offset = %d, want untouched 0", got)
+	}
+	c.ReleaseScrollbar()
+}
+
+func TestCompactModeInvalidatesBarsBetweenPressAndDrag(t *testing.T) {
+	var c Component
+	c.SetBoard(overflowBoard(3, 9))
+	wide := boardRenderOptions()
+	result := c.Render(wide)
+	thumb := barRegion(t, result, RegionScrollbarThumb, 0)
+	hovered := barRegion(t, result, RegionScrollbarThumb, 1)
+	c.HandlePointer(PointerHover, hovered)
+	if !c.PressScrollbar(thumb, thumb.Y) {
+		t.Fatal("thumb press was rejected")
+	}
+
+	// Resize below the compact threshold between press and drag: snapshots
+	// and hover are dropped with the bars they describe.
+	narrow := wide
+	narrow.Width = 40 // below MinimumWidth(3,16,4)=54
+	if compact := c.Render(narrow); !compact.Compact {
+		t.Fatalf("expected compact render, got %#v", compact.Regions)
+	}
+	if len(c.bars) != 0 {
+		t.Fatalf("compact render kept %d bar snapshots", len(c.bars))
+	}
+	if c.barHover != "" {
+		t.Fatalf("compact render kept hover on %q", c.barHover)
+	}
+	// Stale rects resolve to nothing while the snapshots are gone: replaying
+	// them must not arm a gesture against whichever lane now owns that index.
+	for _, region := range []HitRegion{thumb, hovered} {
+		if c.PressScrollbar(region, region.Y+1) {
+			t.Fatalf("stale %s press accepted in compact mode", region.Kind)
+		}
+	}
+
+	// The live gesture itself survives the crossing, still bound to its lane.
+	if !c.DragScrollbar(thumb.Y + 4) {
+		t.Fatal("live gesture died crossing compact mode")
+	}
+	if got := c.scroll["lane-0"]; got != 4 {
+		t.Fatalf("lane-0 offset = %d, want 4", got)
+	}
+	if c.scroll["lane-1"] != 0 || c.scroll["lane-2"] != 0 {
+		t.Fatalf("other lanes moved across compact mode: %#v", c.scroll)
+	}
+
+	// Leaving compact rebuilds valid bars; mapping stays continuous and fresh
+	// presses bind by the current layout, not stale state.
+	exit := c.Render(wide)
+	if exit.Compact || len(c.bars) != 3 {
+		t.Fatalf("bars not rebuilt after compact: len=%d", len(c.bars))
+	}
+	params := ui.ScrollbarParams{TotalItems: 9, ScrollOffset: 4, VisibleItems: 2, TrackHeight: 8}
+	if got, want := barRegion(t, exit, RegionScrollbarThumb, 0).Y, trackTopY()+ui.RowForOffset(params, 4); got != want {
+		t.Fatalf("rebuilt thumb Y = %d, want %d", got, want)
+	}
+	c.ReleaseScrollbar()
+	fresh := barRegion(t, exit, RegionScrollbarThumb, 1)
+	if !c.PressScrollbar(fresh, fresh.Y) {
+		t.Fatal("fresh press rejected after leaving compact")
+	}
+	if !c.DragScrollbar(fresh.Y + 2) {
+		t.Fatal("fresh drag did not move its lane")
+	}
+	if got := c.scroll["lane-1"]; got != 2 {
+		t.Fatalf("lane-1 offset = %d, want 2", got)
+	}
+	if got := c.scroll["lane-0"]; got != 4 {
+		t.Fatalf("lane-0 offset = %d, want untouched 4", got)
+	}
+	c.ReleaseScrollbar()
+}
+
+func trackTopY() int { return 5 }
+
+func TestDragMapsThroughPressTimeSnapshot(t *testing.T) {
+	var c Component
+	board := overflowBoard(3, 9)
+	board.Lanes[0].Cards = board.Lanes[0].Cards[:5] // thumb is 3 rows tall here
+	c.SetBoard(board)
+	result := c.Render(boardRenderOptions())
+	track := barRegion(t, result, RegionScrollbarTrack, 0)
+
+	// Grab the middle of the fat thumb: one row of grab offset.
+	midThumb := track.Y + 1
+	if !c.PressScrollbar(barRegion(t, result, RegionScrollbarThumb, 0), midThumb) {
+		t.Fatal("thumb press was rejected")
+	}
+
+	// Content changes under the pointer mid-gesture: the lane grows and an
+	// external writer moves its live offset. Mapping must keep using the
+	// params captured at press.
+	grown := overflowBoard(3, 12)
+	c.SetBoard(grown)
+	c.ScrollLane(0, 3)
+	if got := c.scroll["lane-0"]; got != 3 {
+		t.Fatalf("setup: live offset = %d, want 3", got)
+	}
+
+	pressParams := ui.ScrollbarParams{TotalItems: 5, ScrollOffset: 0, VisibleItems: 2, TrackHeight: track.H}
+	if !c.DragScrollbar(track.Y + 3) {
+		t.Fatal("drag did not move the lane")
+	}
+	want := ui.OffsetAtRow(pressParams, 2) // pointer row minus the grabbed row
+	if got := c.scroll["lane-0"]; got != want {
+		t.Fatalf("offset = %d, want snapshot-mapped %d (live board would say 3)", got, want)
+	}
+
+	// Clamping still holds at both ends of the press-time track, without
+	// ending the gesture.
+	c.DragScrollbar(track.Y + 999)
+	if got := c.scroll["lane-0"]; got != ui.OffsetAtRow(pressParams, track.H) {
+		t.Fatalf("past-bottom offset = %d, want snapshot clamp", got)
+	}
+	if !c.DraggingScrollbar() {
+		t.Fatal("clamping ended the gesture")
+	}
+	c.DragScrollbar(track.Y - 999)
+	if got := c.scroll["lane-0"]; got != 0 {
+		t.Fatalf("past-top offset = %d, want 0", got)
+	}
+	c.ReleaseScrollbar()
+}
+
+func cloneScroll(scroll map[LaneID]int) map[LaneID]int {
+	out := make(map[LaneID]int, len(scroll))
+	for id, value := range scroll {
+		out[id] = value
+	}
+	return out
+}
