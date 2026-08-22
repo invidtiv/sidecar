@@ -93,7 +93,10 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 		regionID = action.Region.ID
 	}
 	switch regionID {
-	case regionSidebar, regionWorktreeItem:
+	case regionSidebar, regionWorktreeItem,
+		string(workspacelist.RegionScrollbarThumb), string(workspacelist.RegionScrollbarTrack):
+		// The bar's column sits over the sidebar background, so a notch there
+		// scrolls the list exactly as it did before the bar was clickable.
 		return (sharedscroll.Bounds{
 			Position: p.sharedSidebarSelectionIndex(),
 			Maximum:  len(p.visibleSidebarItems()) - 1,
@@ -255,7 +258,8 @@ func isBackgroundRegion(regionID string) bool {
 		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
-		regionDiffTabPreviewFile, regionDiffTabFileListPane:
+		regionDiffTabPreviewFile, regionDiffTabFileListPane,
+		string(workspacelist.RegionScrollbarThumb), string(workspacelist.RegionScrollbarTrack):
 		return true
 	default:
 		return false
@@ -357,6 +361,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		if dragSourceBefore == regionIssueScrollbar {
 			p.finishIssueScrollbarDrag()
+		}
+		if isListScrollbarID(dragSourceBefore) {
+			p.sidebarBar.gesture.End()
 		}
 		// Drop what the press armed and end the gesture: an edge scroll tick still
 		// in flight belongs to a gesture that is over, and neither activation nor a
@@ -729,6 +736,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverTabClose = tabs.CloseHover{}
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
+		p.sidebarBar.hover = false
 		if action.Region != nil {
 			switch action.Region.ID {
 			case regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab:
@@ -784,6 +792,10 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		} else {
 			p.clearIssueHover()
 		}
+		// The list's bar lights under the pointer wherever its regions resolve,
+		// and goes dark the moment the pointer leaves them — including a nil
+		// region, which the switch above cannot answer.
+		p.sidebarBar.hover = action.Region != nil && isListScrollbarID(action.Region.ID)
 	}
 	return nil
 }
@@ -863,6 +875,14 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	// take pane-tree focus themselves or keys stay on the previous leaf.
 	if isDiffBodyRegion(action.Region.ID) {
 		p.focusActiveDiffLeaf()
+	}
+
+	// A press on the sidebar list's bar grabs or jumps-to-spot before any row
+	// logic can run: the reverse-scanned hit map gave the bar this column, and
+	// a scrollbar press never selects a shell or worktree underneath it.
+	if isListScrollbarID(action.Region.ID) {
+		p.pressListScrollbar(action)
+		return nil
 	}
 
 	// Interactive mode: seamless pane switching between agent and terminal panel
@@ -1469,6 +1489,46 @@ func (p *Plugin) scrollSidebar(delta int) tea.Cmd {
 	return nil
 }
 
+// isListScrollbarID reports that a hit or drag belongs to the shared sidebar
+// list's bar rather than to one of its rows or controls.
+func isListScrollbarID(id string) bool {
+	return id == string(workspacelist.RegionScrollbarThumb) ||
+		id == string(workspacelist.RegionScrollbarTrack)
+}
+
+// pressListScrollbar begins the bar's gesture: grab the thumb where it was
+// pressed, or jump-to-spot on the track and keep dragging from there. The bar's
+// snapshot is what the last render reported and originY is where its content
+// began inside the panel, so the pointer maps onto what was actually drawn.
+func (p *Plugin) pressListScrollbar(action mouse.MouseAction) {
+	bar := p.sidebarBar.bar
+	if !bar.Has || action.Region == nil {
+		return
+	}
+	kind := workspacelist.RegionKind(action.Region.ID)
+	trackY := p.sidebarBar.originY + bar.TrackTop
+	offset := p.sidebarBar.gesture.Press(bar, trackY, action.Y, kind == workspacelist.RegionScrollbarThumb, p.scrollOffset)
+	p.setListViewport(offset)
+	p.mouseHandler.StartDrag(action.X, action.Y, string(kind), offset)
+}
+
+// dragListScrollbar applies the gesture's offset mapping for the pointer row.
+func (p *Plugin) dragListScrollbar(action mouse.MouseAction) {
+	if !p.sidebarBar.gesture.Active() {
+		return
+	}
+	p.setListViewport(p.sidebarBar.gesture.DragTo(action.Y))
+}
+
+// setListViewport pins the sidebar's viewport to an offset a scrollbar gesture
+// chose, latching free-scroll mode: renders keep the chosen position even when
+// the selected row sits outside it. Any selection move clears the latch through
+// ensureVisible, and following resumes.
+func (p *Plugin) setListViewport(offset int) {
+	p.freeScroll = true
+	p.scrollOffset = max(offset, 0)
+}
+
 // handleMouseHorizontalScroll handles horizontal scroll events (shift+wheel or trackpad).
 func (p *Plugin) handleMouseHorizontalScroll(action mouse.MouseAction) tea.Cmd {
 	if action.Region == nil {
@@ -1527,6 +1587,14 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 
 	dragRegion := p.mouseHandler.DragRegion()
 	p.lastDragRegion = dragRegion // Save for handleMouseDragEnd (EndDrag clears before DragEnd)
+
+	// The sidebar bar's gesture maps the pointer row through its press-time
+	// snapshot; the shared core clamps past both ends of the track without
+	// ending anything.
+	if isListScrollbarID(dragRegion) {
+		p.dragListScrollbar(action)
+		return nil
+	}
 
 	switch dragRegion {
 	case regionIssueScrollbar:
@@ -1611,6 +1679,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		// the lost-release path never fires either.
 		p.abandonDocSelection()
 		p.finishIssueScrollbarDrag()
+		p.sidebarBar.gesture.End()
 		return nil
 	}
 
@@ -1622,6 +1691,12 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		// An issue scrollbar gesture settles wherever the pointer is; the
 		// offset is view state and nothing persists it here.
 		p.finishIssueScrollbarDrag()
+		return nil
+	}
+	if isListScrollbarID(dragSource) {
+		// The sidebar bar's gesture settles wherever the pointer left it; the
+		// offset is view state and nothing persists it here.
+		p.sidebarBar.gesture.End()
 		return nil
 	}
 	if dragSource == regionPaneLeaf {

@@ -192,6 +192,12 @@ type Plugin struct {
 	selectedIdx  int
 	scrollOffset int // Sidebar list scroll offset
 	visibleCount int // Number of visible list items
+	// freeScroll latches that the sidebar viewport is where a scrollbar gesture
+	// put it rather than where the selection is; any selection move clears it.
+	freeScroll bool
+	// sidebarBar carries the shared list's bar between the render pass that
+	// drew it and the pointer events that answer it.
+	sidebarBar sidebarBarState
 	// previewOffset is the document tabs' scroll position: an absolute line
 	// from the top of the rendered content. The terminal surfaces do not use
 	// it — a window over a live buffer is placed from the live bottom instead,
@@ -2000,6 +2006,10 @@ func (p *Plugin) applySelectionChange() {
 // two-line rows). A stale or short count over-scrolls. RenderSidebar is the
 // line-aware authority and advances or clamps on the next paint.
 func (p *Plugin) ensureVisible() {
+	// Whatever moved the selection — a key, the wheel, a click, a refresh that
+	// reselected — owns the viewport again: a scrollbar gesture's latch ends
+	// here, the way workspacelist.Model.ensureVisible clears its own.
+	p.freeScroll = false
 	if p.visibleCount <= 0 {
 		p.scrollOffset = 0
 		return
