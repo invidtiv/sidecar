@@ -859,9 +859,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		// grabbed lane's bar — wherever the pointer has since travelled,
 		// including nowhere the board drew at all.
 		if isBoardScrollbarDragID(action.DragStartID) {
-			if action.Type == mouse.ActionDrag {
+			switch action.Type {
+			case mouse.ActionDrag:
 				m.board.DragScrollbar(action.Y)
-			} else if action.Type == mouse.ActionDragEnd {
+			case mouse.ActionDragEnd:
 				m.board.ReleaseScrollbar()
 			}
 			return nil

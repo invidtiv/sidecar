@@ -53,10 +53,6 @@ func motionAt(x, y int) tea.MouseMotionMsg {
 	return tea.MouseMotionMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
-func bareMotionAt(x, y int) tea.MouseMotionMsg {
-	return tea.MouseMotionMsg{X: x, Y: y}
-}
-
 func releaseAt(x, y int) tea.MouseReleaseMsg {
 	return tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
@@ -190,18 +186,6 @@ func regionByID(t *testing.T, h *mouse.Handler, id string) *mouse.Region {
 	}
 	t.Fatalf("no %q region registered", id)
 	return nil
-}
-
-// viewportParams reconstructs the ScrollbarParams the framework's viewport bar
-// was drawn with: one row of content per row of thumb math.
-func (m *Modal) viewportParams() (total, visible int) {
-	total = 0
-	for _, s := range m.sections {
-		res := s.Render(40, "", "")
-		total += measureHeight(res.Content)
-	}
-	visible = m.lastViewportH
-	return total, max(1, visible)
 }
 
 func TestViewportThumbDragEndToEnd(t *testing.T) {

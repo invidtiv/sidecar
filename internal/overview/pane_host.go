@@ -215,7 +215,7 @@ func (r paneRegions) Body(node *panelayout.Node, inner paneframe.Box) {
 	case panelayout.Diff:
 		r.m.registerPreviewDiffLeafHits(inner)
 	case panelayout.Note:
-		r.m.registerPreviewNoteScrollbarRegions(termpreview.Box{X: inner.X, Y: inner.Y, W: inner.W, H: inner.H})
+		r.m.registerPreviewNoteScrollbarRegions(termpreview.Box(inner))
 	}
 }
 

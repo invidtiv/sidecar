@@ -142,7 +142,7 @@ lint lint-all lint-linux:
 		echo "golangci-lint v$$got != GitHub $(GOLANGCI_LINT_VERSION) (.github/workflows/go-ci.yml)"; \
 		exit 1; \
 	fi
-	GOOS=linux GOWORK=off golangci-lint run ./...
+	GOOS=linux GOWORK=off GOTOOLCHAIN=go$(shell go list -m -f '{{.GoVersion}}') golangci-lint run ./...
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)
 build-all:
