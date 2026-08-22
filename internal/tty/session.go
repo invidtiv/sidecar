@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 )
 
 // HistoryLimit is the minimum scrollback retained for sidecar-managed panes.
@@ -150,14 +151,28 @@ func SendKeys(sessionName string, keys ...KeySpec) error {
 	return nil
 }
 
+// refusesHostingPane reports that paneID is the pane this process itself
+// draws in. State-free so a headless caller can adopt the rule unchanged.
+func refusesHostingPane(paneID string) bool {
+	host := tmuxenv.HostingPane()
+	return host != "" && paneID == host
+}
+
 // ResizeTmuxPane resizes a tmux window/pane to the specified dimensions.
 // resize-window works for detached sessions; resize-pane is a fallback.
 //
 // The geometry ownership lease is enforced here rather than at the dozen call
 // sites (td-ee222a): callers stay dumb, and an instance that does not own the
 // session simply renders the geometry it finds. See geometry_lease.go.
+//
+// The hosting pane is refused outright: it is the pane this process draws in,
+// so a resize aimed at it shrinks sidecar's own screen (td-9cddeb) and no
+// caller can ever have a reason to want that.
 func ResizeTmuxPane(paneID string, width, height int) {
 	if width <= 0 && height <= 0 {
+		return
+	}
+	if refusesHostingPane(paneID) {
 		return
 	}
 	if !defaultLeaseKeeper.allow(paneID) {

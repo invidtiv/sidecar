@@ -63,3 +63,15 @@ func TestNamespaceDiffersAcrossSockets(t *testing.T) {
 		t.Fatalf("Namespace() identical across sockets: %q", first)
 	}
 }
+
+func TestHostingPaneReadsTheEnvironment(t *testing.T) {
+	t.Setenv("TMUX_PANE", "%42")
+	if got, want := HostingPane(), "%42"; got != want {
+		t.Fatalf("HostingPane() = %q, want %q", got, want)
+	}
+
+	t.Setenv("TMUX_PANE", "")
+	if got := HostingPane(); got != "" {
+		t.Fatalf("HostingPane() = %q, want empty outside tmux", got)
+	}
+}

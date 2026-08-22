@@ -233,6 +233,7 @@ type Collector struct {
 	shellOwners        map[string]string
 	trackerBase        *trackerStore
 	beforeTrackerApply func()
+	hostPaneID         string
 }
 
 // RefreshMetrics contains privacy-safe operation and concurrency counters for
@@ -260,6 +261,13 @@ func (c Collector) defaults() Collector {
 	}
 	if c.Capture == nil {
 		c.Capture = tty.CapturePaneWithState
+	}
+	if c.hostPaneID == "" {
+		// The pane hosting this process is not a workspace: a row correlated to
+		// it hands the preview a resize target that is sidecar's own screen.
+		// See tmuxenv.HostingPane. Tests set it explicitly through HostPane so a
+		// fake pane list can exercise the exclusion without an outer tmux.
+		c.hostPaneID = tmuxenv.HostingPane()
 	}
 	if c.Now == nil {
 		c.Now = time.Now
@@ -354,6 +362,14 @@ func (c Collector) WithShellClaims(claims ShellClaims) Collector {
 	return c
 }
 
+// HostPane overrides which pane ID counts as the pane hosting this process.
+// The default comes from TMUX_PANE; tests set a fake one so the exclusion can
+// be exercised against a scripted pane list.
+func (c Collector) HostPane(id string) Collector {
+	c.hostPaneID = id
+	return c
+}
+
 func (c Collector) Metrics() MetricsSnapshot {
 	if c.metrics == nil {
 		return MetricsSnapshot{}
@@ -382,7 +398,16 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		if len(parts) != 6 {
 			continue
 		}
-		panes = append(panes, Pane{ID: parts[0], Session: parts[1], Path: filepath.Clean(parts[2]), Command: parts[3], Title: parts[4], Dead: parts[5] == "1"})
+		p := Pane{ID: parts[0], Session: parts[1], Path: filepath.Clean(parts[2]), Command: parts[3], Title: parts[4], Dead: parts[5] == "1"}
+		// The pane hosting this process never enters the inventory. Correlation
+		// is by cwd, so without this a sidecar launched from a plain shell in
+		// (or beside) a catalogued project — a mosh session, an outer tmux — is
+		// the only live match for that project's worktree row, and the preview
+		// bound to it asserts geometry on the window sidecar itself draws in.
+		if c.hostPaneID != "" && p.ID == c.hostPaneID {
+			continue
+		}
+		panes = append(panes, p)
 	}
 	return panes, nil
 }

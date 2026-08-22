@@ -26,6 +26,19 @@ func SocketPath() string {
 	return filepath.Join(tmpDir(), "tmux-"+strconv.Itoa(os.Getuid()), "default")
 }
 
+// HostingPane returns the tmux pane ID this process is running in, from
+// TMUX_PANE. Empty when sidecar was launched outside tmux.
+//
+// main unsets TMUX early so sidecar's own tmux sessions stay independent of
+// the outer one, but it deliberately leaves TMUX_PANE alone: which pane hosts
+// this process is a fact about the outside world that several components need
+// (the pane inventory must never correlate a workspace row to it — a preview
+// bound to the hosting pane resizes the window sidecar itself draws in), and
+// the environment keeps that answer with no subprocess and no startup cost.
+func HostingPane() string {
+	return os.Getenv("TMUX_PANE")
+}
+
 // Namespace returns a stable identity for the tmux server this process talks
 // to: the resolved socket path. Two Sidecar instances share a namespace exactly
 // when they can see each other's sessions.

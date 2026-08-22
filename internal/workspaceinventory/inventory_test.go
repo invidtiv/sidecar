@@ -1072,3 +1072,73 @@ func TestValidateWorkspaceAcceptsAPlainWorktreeAndStillGuardsAgentIdentity(t *te
 		t.Fatalf("agent worktree without a recorded agent = %v", err)
 	}
 }
+
+func paneLine(id, session, path string) string {
+	return strings.Join([]string{id, session, path, "zsh", "", "0"}, "\t")
+}
+
+// The pane hosting this process must never enter the inventory: correlation is
+// by cwd, so without the exclusion a sidecar launched from a plain shell in a
+// catalogued project is the only live match for that project's worktree row,
+// and the preview bound to it resizes the window sidecar itself draws in.
+func TestListPanesNeverReportsTheHostingPane(t *testing.T) {
+	root := t.TempDir()
+	tmux := strings.Join([]string{
+		paneLine("%142", "mosh-host", root),
+		paneLine("%19", "sidecar-ws-x", root),
+	}, "\n")
+	collector := Collector{Runner: &fakeRunner{tmux: tmux}}.HostPane("%142")
+
+	panes, err := collector.ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].ID != "%19" {
+		t.Fatalf("panes = %#v, want only %%19", panes)
+	}
+
+	// The default comes from TMUX_PANE, not only from the explicit override.
+	t.Setenv("TMUX_PANE", "%142")
+	defaulted := Collector{Runner: &fakeRunner{tmux: tmux}}.WithDefaults()
+	panes, err = defaulted.ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panes) != 1 || panes[0].ID != "%19" {
+		t.Fatalf("panes = %#v, want only %%19 with the env default", panes)
+	}
+}
+
+func TestWorktreeRowDoesNotCorrelateToTheHostingPane(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{
+		tmux: paneLine("%142", "mosh-host", root),
+		git:  map[string]string{root: "worktree " + root + "\nbranch refs/heads/main\n"},
+	}
+	collector := Collector{Runner: runner, Capture: func(string, int) (string, tty.PaneState, error) {
+		return "$ ", tty.PaneState{}, nil
+	}}.HostPane("%142")
+
+	inventory := collector.CollectProjectInventory(context.Background(), "sidecar", root)
+	if inventory.Err != nil {
+		t.Fatal(inventory.Err)
+	}
+	panes, err := collector.ListPanes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, panes)
+
+	var main *Workspace
+	for i := range result.Workspaces {
+		if result.Workspaces[i].IsMain {
+			main = &result.Workspaces[i]
+		}
+	}
+	if main == nil {
+		t.Fatalf("no main workspace in %#v", result.Workspaces)
+	}
+	if main.Live || main.PaneID != "" || main.Ambiguous {
+		t.Fatalf("main workspace correlated to the hosting pane: %#v", main)
+	}
+}

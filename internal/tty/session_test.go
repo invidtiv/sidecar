@@ -169,3 +169,20 @@ func TestResizeTmuxPane_ZeroDimensions(t *testing.T) {
 	ResizeTmuxPane("nonexistent", 0, 0)
 	ResizeTmuxPane("nonexistent", -1, -1)
 }
+
+// A resize aimed at the pane hosting this process is refused outright: that
+// pane is sidecar's own screen, and shrinking it is the td-9cddeb bug.
+func TestResizeTmuxPaneRefusesTheHostingPane(t *testing.T) {
+	t.Setenv("TMUX_PANE", "")
+	if refusesHostingPane("%0") {
+		t.Fatal("no hosting pane outside tmux, nothing may be refused")
+	}
+
+	t.Setenv("TMUX_PANE", "%142")
+	if !refusesHostingPane("%142") {
+		t.Fatal("the hosting pane must be refused")
+	}
+	if refusesHostingPane("%19") || refusesHostingPane("") {
+		t.Fatal("other panes are not the hosting pane")
+	}
+}
