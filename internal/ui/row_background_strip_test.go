@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -37,15 +36,27 @@ func TestStripRowBackgroundsKeepsForegroundAndAttributes(t *testing.T) {
 }
 
 func TestStripRowBackgroundsKeepsColorArgumentAlignment(t *testing.T) {
-	// 38 consumes its own arguments; a later 48 must still be found and
-	// stripped without disturbing the foreground token.
-	in := "\x1b[38;2;200;200;200;48;5;22mtx\x1b[0m"
-	got := StripRowBackgrounds(in)
-	if strings.Contains(got, "48;") {
-		t.Fatalf("background survived a compound fg+bg sequence: %q", got)
+	// Exact strings: a compound fg+bg sequence must rebuild into ONE well-formed
+	// SGR. The earlier implementation spliced sgrColorParam's complete sequence
+	// into the parameter list, producing ESC[ESC[38;2;…m;49m — the inner CSI
+	// won and the orphaned ";49m" rendered as literal text down opencode's
+	// left margin (td-e8d3cf).
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"fg truecolor + bg 256", "\x1b[38;2;200;200;200;48;5;22mtx\x1b[0m",
+			"\x1b[38;2;200;200;200;49mtx\x1b[0m"},
+		{"bg first, fg second", "\x1b[48;5;22;38;2;10;20;30mtx\x1b[0m",
+			"\x1b[49;38;2;10;20;30mtx\x1b[0m"},
+		{"underline color kept", "\x1b[58;2;255;0;0;48;5;22mtx\x1b[0m",
+			"\x1b[58;2;255;0;0;49mtx\x1b[0m"},
 	}
-	if !strings.Contains(got, "38;2;200;200;200") {
-		t.Fatalf("foreground lost by compound strip: %q", got)
+	for _, tc := range cases {
+		if got := StripRowBackgrounds(tc.in); got != tc.want {
+			t.Errorf("%s: StripRowBackgrounds(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		}
 	}
 }
 

@@ -70,16 +70,23 @@ func stripSequenceBackgrounds(seq string) string {
 			// stripping wants the background — so they pass through as-is.
 			kept = append(kept, param)
 		case "38", "48", "58":
-			value, consumed := sgrColorParam(params, i)
-			i += consumed
+			_, consumed := sgrColorParam(params, i)
 			if param == "48" {
+				i += consumed
 				kept = append(kept, "49")
 				touched = true
-			} else {
-				// A foreground or underline color consumes its own arguments;
-				// keep the whole token so later parameters stay aligned.
-				kept = append(kept, value)
+				continue
 			}
+			// Foreground/underline colors keep their arguments verbatim — the
+			// raw params, never sgrColorParam's rebuilt sequence, which would
+			// nest an ESC inside the reconstructed SGR and leave the tail
+			// (";49m") to render as text (td-e8d3cf).
+			end := i + 1 + consumed
+			if end > len(params) {
+				end = len(params)
+			}
+			kept = append(kept, params[i:end]...)
+			i = end - 1
 		default:
 			if code, err := strconv.Atoi(param); err == nil &&
 				(code >= 40 && code <= 47 || code >= 100 && code <= 107) {
