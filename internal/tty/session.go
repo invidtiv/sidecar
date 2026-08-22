@@ -51,6 +51,41 @@ func prepareServer() error {
 			return fmt.Errorf("set tmux history-limit: %w", err)
 		}
 	}
+	return advertiseTruecolor()
+}
+
+// advertiseTruecolor makes 24-bit color reachable for applications inside
+// sidecar-managed panes. Two gaps close here, both idempotent:
+//
+//   - The pane-side terminfo entry carries no RGB feature unless overridden, so
+//     applications that ask terminfo rather than the environment are told "no"
+//     — and told it by a TERM of tmux-256color, which is exactly the answer
+//     that makes a library quantize to the 256 cube. This is the half that
+//     actually bites: a fresh tmux 3.6 server carries only "linux*:AX@", so
+//     without the append there is no direct-color capability to find. Append Tc
+//     once; existing overrides already mentioning Tc or RGB win.
+//   - COLORTERM in the server's global environment, for applications that sniff
+//     the environment instead (chalk and everything built on it). Note this is
+//     belt and braces rather than the fix: tmux 3.6 injects COLORTERM=truecolor
+//     into pane processes on its own, verified against a server whose global
+//     and process environments both lack it. It still matters on older tmux and
+//     for anything spawned outside a pane. Set it only when absent — a value
+//     already present is the user's answer.
+func advertiseTruecolor() error {
+	if _, err := exec.Command("tmux", "show-environment", "-g", "COLORTERM").Output(); err != nil {
+		// Nonzero exit means the variable is unset.
+		if err := exec.Command("tmux", "set-environment", "-g", "COLORTERM", "truecolor").Run(); err != nil {
+			return fmt.Errorf("set tmux global COLORTERM: %w", err)
+		}
+	}
+
+	overrides, err := exec.Command("tmux", "show-options", "-gv", "terminal-overrides").Output()
+	existing := strings.TrimSpace(string(overrides))
+	if err != nil || (!strings.Contains(existing, "Tc") && !strings.Contains(existing, "RGB")) {
+		if err := exec.Command("tmux", "set-option", "-sa", "terminal-overrides", ",*:Tc").Run(); err != nil {
+			return fmt.Errorf("append tmux terminal-overrides: %w", err)
+		}
+	}
 	return nil
 }
 
