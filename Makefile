@@ -131,6 +131,9 @@ GOLANGCI_LINT_VERSION ?= v2.13.1
 # Same analysis GitHub runs: full codebase, linux, no go.work.
 # --new-from-merge-base misses leftovers whose bodies were not edited
 # (unused functions after their last caller is deleted).
+# GOWORK=off belongs on the version query too, not just the run: under the
+# dev go.work, `go list -m` answers for tasks and td as well and GOTOOLCHAIN
+# collapses to "go1.26.0 1.26.0 1.25.8" — three words where one is expected.
 lint lint-all lint-linux:
 	@got=$$(golangci-lint version 2>/dev/null | sed -n 's/^golangci-lint has version \([0-9.]*\).*/\1/p' | head -1); \
 	want=$(patsubst v%,%,$(GOLANGCI_LINT_VERSION)); \
@@ -142,7 +145,7 @@ lint lint-all lint-linux:
 		echo "golangci-lint v$$got != GitHub $(GOLANGCI_LINT_VERSION) (.github/workflows/go-ci.yml)"; \
 		exit 1; \
 	fi
-	GOOS=linux GOWORK=off GOTOOLCHAIN=go$(shell go list -m -f '{{.GoVersion}}') golangci-lint run ./...
+	GOOS=linux GOWORK=off GOTOOLCHAIN=go$(shell GOWORK=off go list -m -f '{{.GoVersion}}') golangci-lint run ./...
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)
 build-all:
