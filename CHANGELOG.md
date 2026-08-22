@@ -4,6 +4,82 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-08-22
+
+### Features
+
+- **Scrollbars you can grab, everywhere they appear.** A shared interactive
+  scrollbar core with one geometry and inverse mapping now backs the palette,
+  notification centre, file browser (tree, search, and preview), git,
+  conversations, notes, the doc and issue viewers, kanban lanes, the sessions
+  sidebar, the project workspace sidebar, the theme picker, modal viewports,
+  and the project switcher. Bars drag from anywhere on the track, hosted views
+  receive the gesture through the content deck, and a sub-modal opening cancels
+  the parent's in-flight drag.
+- **Terminal panes scroll interactively too**, with the scrollbar wired through
+  both workspace projections rather than reimplemented per surface.
+- **Cross-project td issue links resolve on a local miss.** An issue ID that
+  does not exist in the current project is looked up across the other
+  configured projects instead of dead-ending.
+- **Carried terminal backgrounds are span-capped.** `bounded` renders short
+  runs — diff hunks, highlighted notices — and drops the background of any run
+  longer than the cap, so an application that paints most of its output one
+  colour degrades to plain text instead of repainting the pane. `never`
+  suppresses carried backgrounds entirely; `auto` keeps the previous
+  canvas-detection behaviour. Configurable per surface as
+  `plugins.workspace.terminalBackgrounds` and `terminalBackgroundSpanMax`.
+- **24-bit colour is advertised to tmux.** A fresh tmux server carries no
+  direct-colour capability, so tmux quantized truecolour output to the 256 cube
+  inside sidecar panes. Sidecar now appends one `terminal-overrides` entry,
+  idempotently. The claim names sidecar's own `TERM` rather than every terminal
+  type, and is only made when `COLORTERM` says the terminal renders direct
+  colour — `terminal-overrides` is a server option that outlives sidecar and
+  applies to every session on the server, so a blanket claim would corrupt
+  colour in terminals sidecar never opened. Failure is never fatal: a colour
+  hint cannot block opening a shell.
+- **A Feature Flags page listing the whole registry.** Configuration → System →
+  Feature Flags shows every flag Sidecar knows about with its real state.
+  Previously only four hand-picked flags had a control, so `tmux_interactive_input`,
+  `tmux_inline_edit`, `files_auto_refresh`, `plugin_content_panes`, and
+  `terminal_resource_providers` were settable only by hand-editing
+  `config.json`. Flags that Panels & Integrations already owns are shown
+  read-only with a jump to the control that owns them, so the flag and the
+  plugin's own enabled key cannot drift apart.
+- **The split workspace terminal ships on by default.**
+
+### Bug Fixes
+
+- **Relaunching returns to the global tab you left on.** Quitting from
+  Sessions, Activity, or Tasks reopened the project workspace: the last global
+  tab was remembered but the space itself was not, so the remembered tab only
+  applied the next time you pressed `K`. A remembered space whose tabs are no
+  longer available falls back rather than showing an empty surface.
+- **Sidecar never resizes the tmux pane hosting itself.** Scrolling the global
+  Sessions list to its bottom could shrink Sidecar's own screen (td-9cddeb).
+- **Settings toggles stop drifting right on a wide window.** Panel rows
+  right-aligned their ON/OFF pill to the pane's full width, so widening the
+  terminal pulled every toggle away from its label. Rows now stop at a shared
+  cap that lines the pills up with where the widest form field ends.
+- **Background SGRs are stripped without nesting escape sequences.**
+- **The global Sessions list sees new projects and non-Git projects' shells.**
+- **The files tree shows the full list from the top when it fits the viewport.**
+- **Repeat pane opens stop lying**, and `create shell` opens beside the session.
+- **The workspace sidebar's free-scroll clears on selection change only.**
+- **`g` / `G` can be typed into the conversations session search box** instead
+  of jumping the list.
+
+### Build
+
+- **Go 1.27**, matching td and tasks. `encoding/json/v2` is the default
+  implementation; sidecar's adapter parsing, config, and state round-trip
+  unchanged.
+- **`make lint` works in a go.work checkout again.** It computed `GOTOOLCHAIN`
+  from a `go list -m` that did not set `GOWORK=off`, so the workspace answered
+  for tasks and td as well and the recipe expanded to three version words.
+- **Test binaries no longer inherit the developer's `TMUX_PANE`**, which could
+  silently drop a scripted pane from an inventory assertion after a tmux server
+  restart renumbered panes.
+
 ## [v1.3.0] - 2026-08-21
 
 ### Features
