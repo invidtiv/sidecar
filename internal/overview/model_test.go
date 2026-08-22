@@ -625,6 +625,28 @@ func TestOverviewExplicitRefreshCancelsAndStartsNewGeneration(t *testing.T) {
 	}
 }
 
+func TestSetProjectsAppliesChangedMembershipMidCycle(t *testing.T) {
+	m := New(workspaceinventory.Collector{Runner: &stageRunner{}})
+	first := []Project{{Name: "one", Path: t.TempDir()}}
+	if cmd := m.Ensure(first); cmd == nil || !m.loading || m.cancel == nil {
+		t.Fatalf("Ensure did not start a cycle: cmd=%v loading=%v", cmd, m.loading)
+	}
+	oldContext, oldGeneration := m.ctx, m.generation
+	added := append(append([]Project(nil), first...), Project{Name: "two", Path: t.TempDir()})
+	// Ensure drops a changed set while a cycle is running; SetProjects must not.
+	if cmd := m.SetProjects(added); cmd == nil || m.generation != oldGeneration+1 {
+		t.Fatalf("SetProjects cmd=%v generation=%d", cmd, m.generation)
+	}
+	select {
+	case <-oldContext.Done():
+	default:
+		t.Fatal("SetProjects did not cancel the prior generation")
+	}
+	if cmd := m.SetProjects(added); cmd != nil {
+		t.Fatalf("unchanged project set restarted collection: %v", cmd != nil)
+	}
+}
+
 func TestOverviewDoubleClickActivatesExactCard(t *testing.T) {
 	m := New(workspaceinventory.Collector{})
 	workspace := workspaceinventory.Workspace{

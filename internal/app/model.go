@@ -937,6 +937,16 @@ func (m *Model) overviewProjects() []overview.Project {
 	return selected
 }
 
+// syncOverviewProjects applies a changed configured project set to the running
+// global catalog. When the global space is not live, entry does this through
+// startVisibleGlobalTab's Ensure, so there is nothing to do here.
+func (m *Model) syncOverviewProjects() tea.Cmd {
+	if m.overview == nil || !m.inGlobalScope() {
+		return nil
+	}
+	return m.overview.SetProjects(m.overviewProjects())
+}
+
 // enterOverview switches to the global space on its last-used tab. The project,
 // worktree, and active plugin identity remain in place, but the covered project
 // surface loses focus before a global surface starts. That focus transition is
@@ -1481,8 +1491,10 @@ func (m *Model) saveProjectAdd() tea.Cmd {
 	// Refresh the filtered list
 	m.projectSwitcherFiltered = m.projectSwitcherDestinations("")
 
-	// The new row in the switcher is the confirmation (audit row 26).
-	return ShowFlash(fmt.Sprintf("Added project: %s", name))
+	// The new row in the switcher is the confirmation (audit row 26), and a
+	// live global catalog picks the project up immediately instead of waiting
+	// for a tab transition or a restart.
+	return tea.Batch(ShowFlash(fmt.Sprintf("Added project: %s", name)), m.syncOverviewProjects())
 }
 
 // resetThemeSwitcher resets the theme switcher modal state.

@@ -66,6 +66,58 @@ func TestMissingTmuxServerIsAnEmptyInventory(t *testing.T) {
 	}
 }
 
+func TestCollectorKeepsDurableShellsWhenGitInventoryFails(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"sidecar-sh-intersections-1","displayName":"ORCHESTRATOR","namespace":"` + tmuxenv.Namespace() + `","agentType":"opencode"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collector := Collector{Runner: &fakeRunner{gitErr: map[string]error{root: fmt.Errorf("not a git repository")}}}
+	result := collector.CollectProjectInventory(context.Background(), "intersections", root)
+	if result.Err == nil || !strings.Contains(result.Err.Error(), "not a Git repository") {
+		t.Fatalf("Git failure was not reported: %#v", result)
+	}
+	if len(result.Workspaces) != 1 {
+		t.Fatalf("recorded shell was dropped: %#v", result.Workspaces)
+	}
+	shell := result.Workspaces[0]
+	if shell.Kind != KindShell || shell.TmuxName != "sidecar-sh-intersections-1" || shell.Provider != "opencode" {
+		t.Fatalf("shell identity = %#v", shell)
+	}
+}
+
+func TestStatusRefreshCorrelatesShellsOfAFailedGitInventory(t *testing.T) {
+	stateBase := t.TempDir()
+	config.SetTestStateDir(stateBase)
+	t.Cleanup(config.ResetTestStateDir)
+	root := t.TempDir()
+	projectState, err := projectdir.ResolveWithBase(stateBase, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"shells":[{"tmuxName":"sidecar-sh-intersections-1","displayName":"ORCHESTRATOR","namespace":"` + tmuxenv.Namespace() + `"}]}`
+	if err := os.WriteFile(filepath.Join(projectState, "shells.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collector := Collector{Runner: &fakeRunner{gitErr: map[string]error{root: fmt.Errorf("not a git repository")}}}.WithDefaults()
+	inventory := collector.CollectProjectInventory(context.Background(), "intersections", root)
+	if inventory.Err == nil || len(inventory.Workspaces) != 1 {
+		t.Fatalf("inventory = %#v", inventory)
+	}
+	refreshed := collector.RefreshProjectStatus(context.Background(), inventory, []string{root}, []Pane{{ID: "%1", Session: "sidecar-sh-intersections-1", Path: root, Command: "zsh"}})
+	shell, ok := shellNamed(refreshed, "sidecar-sh-intersections-1")
+	if !ok || !shell.Live {
+		t.Fatalf("recorded shell never became live: %#v", refreshed.Workspaces)
+	}
+}
+
 func TestTwoProjectInventoryIsReadOnlyAndExcludesPlainShells(t *testing.T) {
 	stateBase := t.TempDir()
 	config.SetTestStateDir(stateBase)
