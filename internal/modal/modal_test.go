@@ -842,8 +842,9 @@ func TestScrollbarReducesContentWidth(t *testing.T) {
 }
 
 func TestRenderScrollbarFunction(t *testing.T) {
-	// Test the internal renderScrollbar function directly
-	sb := renderScrollbar(20, 0, 10)
+	// Test the viewport bar renderer directly (nil handler: no gesture live).
+	m := New("Test")
+	sb, bar := m.renderViewportBar(nil, 20, 0, 10)
 	lines := strings.Split(sb, "\n")
 	if len(lines) != 10 {
 		t.Errorf("expected 10 lines, got %d", len(lines))
@@ -857,15 +858,19 @@ func TestRenderScrollbarFunction(t *testing.T) {
 	if !strings.Contains(full, "│") {
 		t.Error("expected track character │ in scrollbar")
 	}
+	if !bar.has || bar.thumbTop < 0 || bar.thumbTop+bar.thumbH > 10 {
+		t.Errorf("expected usable thumb geometry, got %+v", bar)
+	}
 }
 
 func TestRenderScrollbarFitsReturnsEmpty(t *testing.T) {
 	// Content that fits never shows a bar; the shared scroll math reports no
-	// thumb and renderScrollbar renders nothing.
-	if sb := renderScrollbar(10, 0, 10); sb != "" {
+	// thumb and renderViewportBar renders nothing.
+	m := New("Test")
+	if sb, bar := m.renderViewportBar(nil, 10, 0, 10); sb != "" || bar.has {
 		t.Errorf("expected empty scrollbar when content fits, got %q", sb)
 	}
-	if sb := renderScrollbar(5, 0, 10); sb != "" {
+	if sb, bar := m.renderViewportBar(nil, 5, 0, 10); sb != "" || bar.has {
 		t.Errorf("expected empty scrollbar when content shorter than viewport, got %q", sb)
 	}
 }

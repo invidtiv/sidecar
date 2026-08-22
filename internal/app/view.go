@@ -532,20 +532,36 @@ func (m *Model) projectSwitcherListSection() modal.Section {
 			})
 		}
 
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+		barParams := ui.ScrollbarParams{
 			TotalItems:   len(projects),
 			ScrollOffset: scrollOffset,
 			VisibleItems: visibleCount,
 			TrackHeight:  visibleCount,
-		})
+		}
+		scrollbar, _ := ui.RenderScrollbarWithState(barParams, m.projectSwitcherBar.style(m.projectSwitcherMouseHandler))
 
 		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
 
-		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
+		// Declaring the bar lets the modal library place its hit regions and
+		// route presses/drags back through this section's Update.
+		return modal.RenderedSection{
+			Content:    bodyContent,
+			Focusables: focusables,
+			Scrollbar: &modal.SectionScrollbar{
+				TotalItems:   barParams.TotalItems,
+				ScrollOffset: barParams.ScrollOffset,
+				VisibleItems: barParams.VisibleItems,
+				TrackHeight:  barParams.TrackHeight,
+				LocalX:       rowWidth + 1,
+			},
+		}
 	}, m.projectSwitcherListUpdate)
 }
 
-// projectSwitcherListUpdate handles key events for the project list.
+// projectSwitcherListUpdate handles key events for the project list. Scrollbar
+// gestures on the declared bar are answered by projectSwitcherBarEvent in the
+// switcher's mouse handler — see modal_scrollbar.go for why they cannot route
+// through here.
 func (m *Model) projectSwitcherListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {

@@ -197,6 +197,7 @@ type Model struct {
 	projectSwitcherModalWidth   int
 	projectSwitcherMouseHandler *mouse.Handler
 	projectSwitcherAddFocused   bool // the + (add project) button holds focus
+	projectSwitcherBar          switcherBarState
 
 	// Project add sub-mode (within project switcher)
 	projectAddMode         bool
@@ -224,6 +225,7 @@ type Model struct {
 	worktreeSwitcherMouseHandler *mouse.Handler
 	worktreeCheckCounter         int // Counter for periodic worktree existence check
 	worktreeInventoryCounter     int // Counter for periodic worktree inventory refresh
+	worktreeSwitcherBar          switcherBarState
 
 	// Worktree info cache (avoids git subprocess forks on every View render)
 	cachedWorktreeInfo      *WorktreeInfo
@@ -249,6 +251,7 @@ type Model struct {
 	themeSwitcherFiltered     []themeEntry
 	themeSwitcherOriginal     themeEntry // original theme to restore on cancel
 	themeSwitcherScope        string     // "global" or "project"
+	themeSwitcherBar          switcherBarState
 
 	// Issue preview - input phase
 	showIssueInput         bool
@@ -799,8 +802,14 @@ func (m *Model) resetProjectSwitcher() tea.Cmd {
 	return m.applyResolvedTheme(resolved)
 }
 
-// clearProjectSwitcherModal clears the modal cache.
+// clearProjectSwitcherModal clears the modal cache. A scrollbar gesture live
+// on this modal's handler ends here — closing mid-drag must not leave a dead
+// anchor behind (the td-f63097 boundary, from the switcher's side).
 func (m *Model) clearProjectSwitcherModal() {
+	if m.projectSwitcherMouseHandler != nil && m.projectSwitcherMouseHandler.IsDragging() {
+		m.projectSwitcherMouseHandler.EndDrag()
+	}
+	m.projectSwitcherBar = switcherBarState{}
 	m.projectSwitcherModal = nil
 	m.projectSwitcherModalWidth = 0
 	m.projectSwitcherMouseHandler = nil
@@ -1498,8 +1507,14 @@ func (m *Model) resetThemeSwitcher() {
 	m.clearThemeSwitcherModal()
 }
 
-// clearThemeSwitcherModal clears the theme switcher modal state.
+// clearThemeSwitcherModal clears the theme switcher modal state. A scrollbar
+// gesture live on this modal's handler ends here — closing mid-drag must not
+// leave a dead anchor behind (the td-f63097 boundary, from the switcher's side).
 func (m *Model) clearThemeSwitcherModal() {
+	if m.themeSwitcherMouseHandler != nil && m.themeSwitcherMouseHandler.IsDragging() {
+		m.themeSwitcherMouseHandler.EndDrag()
+	}
+	m.themeSwitcherBar = switcherBarState{}
 	m.themeSwitcherModal = nil
 	m.themeSwitcherModalWidth = 0
 	m.themeSwitcherMouseHandler = nil
