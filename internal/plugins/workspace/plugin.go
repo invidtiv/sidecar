@@ -74,7 +74,12 @@ const (
 	// Kanban view regions
 	regionKanbanCard   = "kanban-card"
 	regionKanbanColumn = "kanban-column"
-	regionViewToggle   = "view-toggle"
+	// regionKanbanScrollbar names a drag that began on a lane's scrollbar.
+	// The board arms the gesture in PressScrollbar (which also does any
+	// track-click jump); this ID is what turns the host's StartDrag into
+	// motions routed to DragScrollbar and a release anywhere that settles it.
+	regionKanbanScrollbar = "kanban-scrollbar"
+	regionViewToggle      = "view-toggle"
 
 	// Task Link modal regions
 	regionTaskLinkDropdown = "task-link-dropdown"

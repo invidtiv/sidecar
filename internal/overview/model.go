@@ -845,7 +845,26 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.Start(m.projects)
 		}
 	case tea.MouseMsg:
+		wasDragging := m.mouse.IsDragging()
 		action := m.mouse.HandleMouse(msg)
+		if action.Type == mouse.ActionHover && wasDragging && !m.mouse.IsDragging() {
+			// A release lost off-window or behind focus change: the shared
+			// handler cancels the stale drag on this first button-less motion,
+			// and a live lane-bar gesture settles with it at the same boundary.
+			m.board.ReleaseScrollbar()
+			return nil
+		}
+		// A drag and its release belong to the region they started in — the
+		// grabbed lane's bar — wherever the pointer has since travelled,
+		// including nowhere the board drew at all.
+		if isBoardScrollbarDragID(action.DragStartID) {
+			if action.Type == mouse.ActionDrag {
+				m.board.DragScrollbar(action.Y)
+			} else if action.Type == mouse.ActionDragEnd {
+				m.board.ReleaseScrollbar()
+			}
+			return nil
+		}
 		if action.Region == nil {
 			return nil
 		}
@@ -855,8 +874,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		switch action.Type {
 		case mouse.ActionClick:
+			if isBoardBarRegion(region) {
+				m.pressBoardScrollbar(region, action)
+				break
+			}
 			m.board.HandlePointer(kanban.PointerClick, region)
 		case mouse.ActionDoubleClick:
+			// Double-press parity: a rapid second press on a bar re-grabs it
+			// exactly like the first one did instead of activating a card.
+			if isBoardBarRegion(region) {
+				m.pressBoardScrollbar(region, action)
+				break
+			}
 			if m.board.HandlePointer(kanban.PointerDoubleClick, region).Kind == kanban.ActionActivated {
 				return m.activate()
 			}
@@ -1231,7 +1260,14 @@ func (m *Model) View(width, height int) string {
 		return m.renderCompact(width, height)
 	}
 	for _, region := range result.Regions {
-		m.mouse.HitMap.AddRect("overview-card", region.X, region.Y, region.W, region.H, region)
+		// Lane bars keep the shared renderer's region IDs so a press can be
+		// told from a card at hit-test time; they are emitted after every
+		// card region, so the reverse scan gives them the column they share.
+		id := "overview-card"
+		if region.Kind == kanban.RegionScrollbarThumb || region.Kind == kanban.RegionScrollbarTrack {
+			id = string(region.Kind)
+		}
+		m.mouse.HitMap.AddRect(id, region.X, region.Y, region.W, region.H, region)
 	}
 	return result.View
 }
