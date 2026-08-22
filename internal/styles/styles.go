@@ -584,7 +584,7 @@ func RenderPillWithStyle(text string, style lipgloss.Style, outerBg color.Color)
 	// Get background from style for pill caps. GetBackground() returns NoColor{}
 	// (not nil) when unset, so detect that and fall back.
 	bg := style.GetBackground()
-	if _, isNoColor := bg.(lipgloss.NoColor); bg == nil || isNoColor {
+	if _, isNoColor := bg.(lipgloss.NoColor); isNoColor {
 		bg = BgTertiary // fallback
 	}
 

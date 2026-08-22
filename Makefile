@@ -126,7 +126,7 @@ fmt-check-all:
 	fi
 
 # Must match golangci-lint-action version in .github/workflows/go-ci.yml.
-GOLANGCI_LINT_VERSION ?= v2.12.2
+GOLANGCI_LINT_VERSION ?= v2.13.1
 
 # Same analysis GitHub runs: full codebase, linux, no go.work.
 # --new-from-merge-base misses leftovers whose bodies were not edited

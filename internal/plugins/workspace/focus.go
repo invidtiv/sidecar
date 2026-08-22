@@ -62,12 +62,12 @@ func (p *Plugin) currentFocusTarget() panelayout.Target {
 // termPanelFocused move together here and nowhere else, so a click and a Tab
 // leave the surface in the same shape. Doc and issue focus are derived from
 // paneFocus, so a leaf needs no second bool kept in step.
-func (p *Plugin) setFocusTarget(t panelayout.Target) {
+func (p *Plugin) setFocusTarget(t panelayout.Target) (cmdOut tea.Cmd) {
 	// A pane search is a modal on that pane, so it belongs to whoever holds the
 	// keyboard: focus landing anywhere else dismisses it, the way clicking off a
 	// modal does. Leaving it open would leave a box drawn with a cursor in it
 	// that no keystroke could reach, and none could close.
-	defer p.closeUnfocusedDocSearches()
+	defer func() { cmdOut = p.closeUnfocusedDocSearches() }()
 	// Interactive mode is a live pane holding the keyboard, and it is only ever
 	// legal on the window that has focus. Ending it HERE, rather than at each
 	// site that moves focus, is what keeps the ring honest: a ring drawn on one
@@ -97,6 +97,7 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) {
 		p.termPanelFocused = false
 		p.syncDeckFocus()
 	}
+	return
 }
 
 // syncDeckFocus keeps the content deck's focused leaf on the same window the
@@ -166,7 +167,7 @@ func (p *Plugin) AtFocusCycleEnd(reverse bool) bool {
 
 func (p *Plugin) FocusCycleStart(reverse bool) tea.Cmd {
 	if target, ok := panelayout.RingStart(p.focusRing(), reverse); ok {
-		p.setFocusTarget(target)
+		return p.setFocusTarget(target)
 	}
 	return nil
 }
