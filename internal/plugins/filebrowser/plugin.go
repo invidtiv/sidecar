@@ -980,6 +980,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		if fbState.TreeScroll > 0 {
 			p.treeScrollOff = fbState.TreeScroll
 		}
+		// The saved offset came from a session that may have had a different
+		// pane height or tree size; a tree that now fits must draw from the top.
+		p.clampTreeScroll()
 
 		// Restore active pane
 		if fbState.ActivePane == "preview" {
