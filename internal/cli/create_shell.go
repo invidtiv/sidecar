@@ -88,22 +88,48 @@ func runCreateShell(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return createDestExitCode(err)
 	}
-	if flags.splitSet {
-		if dest.Origin.TmuxSession == "" {
-			if identity, idErr := currentShellIdentity(ctx); idErr == nil {
-				dest.Origin.TmuxSession = identity.session
-				if dest.Origin.WorkDir == "" {
-					dest.Origin.WorkDir = identity.path
-				}
+	if flags.splitSet && flags.tab {
+		cliErrf(env.Stderr, "--split and --tab name different placements\n\n%s", help)
+		return 2
+	}
+	// A shell asked for from inside a Sidecar shell opens beside that session
+	// by default; switching the whole workspace to the new shell is what --tab
+	// asks for explicitly (nt-7c82c9). Outside any Sidecar shell there is
+	// nothing to split beside, so workspace placement is the only option.
+	if dest.Origin.TmuxSession == "" && !flags.tab {
+		if identity, idErr := currentShellIdentity(ctx); idErr == nil {
+			dest.Origin.TmuxSession = identity.session
+			if dest.Origin.WorkDir == "" {
+				dest.Origin.WorkDir = identity.path
 			}
 		}
+	}
+	if flags.splitSet || (!flags.tab && dest.Origin.TmuxSession != "") {
 		if dest.Origin.TmuxSession == "" {
 			cliErrf(env.Stderr, "%s\n\n%s", createSplitNeedsShell, help)
 			return 2
 		}
-		return runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
+		if !flags.splitSet {
+			flags.splitMode = "auto"
+		}
+		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
+		// Beside-the-session was only the default, not something the caller
+		// asked for: a decline (feature off, no room, no live instance) falls
+		// back to a workspace shell so the command still lands.
+		if code == 0 || code == 2 || flags.splitSet {
+			return code
+		}
+		cliErrf(env.Stderr, "no beside-the-session placement available; created a workspace shell instead\n")
 	}
 
+	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd)
+}
+
+func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd string) int {
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	proj, err := registeredProjectForCreate(env.StateDir, dest)
 	if err != nil {
 		cliErrln(env.Stderr, err)
@@ -116,6 +142,7 @@ func runCreateShell(env Env, args []string) int {
 
 	display, session := workspaceops.ShellNames(proj.Path, existingShellDefinitions(proj))
 	if custom := strings.TrimSpace(nameFlag); custom != "" {
+		var err error
 		display, err = shellstate.NormalizeName(custom)
 		if err != nil {
 			cliErrln(env.Stderr, err)

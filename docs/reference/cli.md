@@ -42,9 +42,12 @@ The shell is recorded in shells.json so it appears in Sidecar whether or not
 an instance is running. --run executes a command in the new shell; --type types
 it without pressing Enter so the user can review it.
 
---split auto|right|below places a live terminal beside the current shell (the
-workspace_terminal_panel feature must be on). Split mode needs a running instance
-and a current shell (SIDECAR_SHELL / --shell). It does not add a workspace row.
+From inside a Sidecar shell the default placement is a live terminal beside
+the current shell. --tab places the shell in the workspace instead, switching
+to a completely new surface; --split auto|right|below picks the side of the
+beside-the-session split explicitly (the workspace_terminal_panel feature must
+be on). Beside-the-session modes need a running instance and a current shell
+(SIDECAR_SHELL / --shell) and do not add a workspace row.
 
 ```
 Usage: sidecar create shell [options]
@@ -58,6 +61,7 @@ Usage: sidecar create shell [options]
 - `--shell NAME`: Resolve the project from a registered shell
 - `--project NAME`: Target project (slug, basename, or path)
 - `--split auto|right|below`: Place a live terminal beside the current shell
+- `--tab`: Open as a workspace shell instead of beside this session
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help

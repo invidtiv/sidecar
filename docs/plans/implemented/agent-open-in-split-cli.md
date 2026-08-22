@@ -1,16 +1,12 @@
 # Plan: Agent-facing "show this to the user" CLI, and a real CLI help system
 
-**Research snapshot:** 2026-08-14
-**Status:** proposed
-**Scope:** `internal/cli`, a new request bus package, the two pane hosts
-(`internal/plugins/workspace`, `internal/overview`), `cmd/sidecar/main.go`, docs.
+**Research snapshot:** 2026-08-14 **Status:** proposed **Scope:** `internal/cli`, a new request bus package, the two pane hosts (`internal/plugins/workspace`, `internal/overview`), `cmd/sidecar/main.go`, docs.
 
 ## Decision first
 
 Two decisions, one plan.
 
-**1. A new non-interactive verb lets an agent put a file or a ticket in front of
-the user, as a split pane in the workspace it is already working in.**
+**1. A new non-interactive verb lets an agent put a file or a ticket in front of the user, as a split pane in the workspace it is already working in.**
 
 ```bash
 sidecar open internal/cli/cli.go            # file, in a split beside the terminal
@@ -19,57 +15,26 @@ sidecar open td-348d88                      # td issue
 sidecar open --json --split below README.md # structured result for the agent
 ```
 
-The command carries no target selector. Like `sidecar shell rename`, it acts on
-the Sidecar shell that contains the calling process — the strongest, least
-ambiguous handle an agent already holds. It reaches the running Sidecar instance
-over a small file-based request bus in the state tree, and the instance opens the
-pane through **exactly the code path a clicked terminal link already uses**.
+The command carries no target selector. Like `sidecar shell rename`, it acts on the Sidecar shell that contains the calling process — the strongest, least ambiguous handle an agent already holds. It reaches the running Sidecar instance over a small file-based request bus in the state tree, and the instance opens the pane through **exactly the code path a clicked terminal link already uses**.
 
-**2. The CLI gets a command registry and a generated help system**, because
-`open` is the second of many. Every command is declared once (name, summary,
-usage, flags, exit codes, examples) and help, `--json` discovery, the reference
-doc, and the agent instructions are all projections of that one declaration.
+**2. The CLI gets a command registry and a generated help system**, because `open` is the second of many. Every command is declared once (name, summary, usage, flags, exit codes, examples) and help, `--json` discovery, the reference doc, and the agent instructions are all projections of that one declaration.
 
-Correction to the premise: `shell name` and `shell rename` **do** have help today
-(`sidecar shell --help`, `sidecar shell name --help`, `sidecar shell rename
---help`, `internal/cli/cli.go:191-241`). What is actually missing is
-*discoverability and machine-readability*: `sidecar --help` prints only TUI flags
-and never mentions `shell` (`cmd/sidecar/main.go:334`), there is no `sidecar
-help`, and nothing emits the command tree as JSON. An agent that does not already
-know the word "shell" cannot find these commands.
+Correction to the premise: `shell name` and `shell rename` **do** have help today (`sidecar shell --help`, `sidecar shell name --help`, `sidecar shell rename --help`, `internal/cli/cli.go:191-241`). What is actually missing is *discoverability and machine-readability*: `sidecar --help` prints only TUI flags and never mentions `shell` (`cmd/sidecar/main.go:334`), there is no `sidecar help`, and nothing emits the command tree as JSON. An agent that does not already know the word "shell" cannot find these commands.
 
 ### Why this belongs in Sidecar's CLI at all
 
-Sidecar's standing rule is that it is a presentation layer over tools that own
-their own data, so it owes no CLI parity: an agent that wants to move a file runs
-`mv`. Pane layout is the exception, on the same ground the shell-rename CLI was
-granted: **Sidecar owns the pane tree.** There is no underlying tool to call.
-Without Sidecar, a split showing `README.md` next to a live agent terminal does
-not exist. The same is true of the shell display name, and the argument that
-carried `sidecar shell rename` carries this.
+Sidecar's standing rule is that it is a presentation layer over tools that own their own data, so it owes no CLI parity: an agent that wants to move a file runs `mv`. Pane layout is the exception, on the same ground the shell-rename CLI was granted: **Sidecar owns the pane tree.** There is no underlying tool to call. Without Sidecar, a split showing `README.md` next to a live agent terminal does not exist. The same is true of the shell display name, and the argument that carried `sidecar shell rename` carries this.
 
-Note what stays out: the agent does not get a way to *read* a file, *fetch* an
-issue, or *open* an editor. It gets one thing Sidecar owns — a pane.
+Note what stays out: the agent does not get a way to *read* a file, *fetch* an issue, or *open* an editor. It gets one thing Sidecar owns — a pane.
 
 ## Outcome and agent journey
 
-1. An agent working in a Sidecar project shell writes a design doc, or is about
-   to explain a ticket it is working from.
+1. An agent working in a Sidecar project shell writes a design doc, or is about to explain a ticket it is working from.
 2. It runs `sidecar open docs/plans/active/thing.md` (or `sidecar open td-9f21c4`).
-3. The command resolves the calling tmux session to one registered Sidecar shell,
-   validates the target against that shell's workspace root, and writes a request
-   into the state tree.
-4. Every live Sidecar instance hosting that shell picks the request up within
-   ~100ms. If the user is already looking at that shell, a document (or issue)
-   pane opens beside the terminal — the same pane a click on that path in the
-   terminal output produces. If they are somewhere else, the shell's row gets a
-   badge saying something is waiting, and the pane opens when they go there.
-   Nothing moves the user's selection or focus.
-5. Each instance writes an acknowledgement. The command prints where it landed
-   and exits 0; if no instance is watching, it exits 3 and says so, so the agent
-   can fall back to "the file is at …" instead of claiming it showed something.
-6. The user is now looking at the thing and can scroll, tab, and collaborate on
-   it while the agent keeps working in the terminal beside it.
+3. The command resolves the calling tmux session to one registered Sidecar shell, validates the target against that shell's workspace root, and writes a request into the state tree.
+4. Every live Sidecar instance hosting that shell picks the request up within ~100ms. If the user is already looking at that shell, a document (or issue) pane opens beside the terminal — the same pane a click on that path in the terminal output produces. If they are somewhere else, the shell's row gets a badge saying something is waiting, and the pane opens when they go there. Nothing moves the user's selection or focus.
+5. Each instance writes an acknowledgement. The command prints where it landed and exits 0; if no instance is watching, it exits 3 and says so, so the agent can fall back to "the file is at …" instead of claiming it showed something.
+6. The user is now looking at the thing and can scroll, tab, and collaborate on it while the agent keeps working in the terminal beside it.
 
 Human output:
 
@@ -98,8 +63,7 @@ Structured output:
 }
 ```
 
-Repeating the same open is a successful no-op that retargets the existing pane —
-the same behaviour a second link click has today — so retries are harmless.
+Repeating the same open is a successful no-op that retargets the existing pane — the same behaviour a second link click has today — so retries are harmless.
 
 ## What exists now
 
@@ -144,12 +108,9 @@ Exit codes: 0 opened or queued, 1 state failure, 2 usage or validation error,
             4 an instance declined (e.g. the window is too small to split).
 ```
 
-There is no focus flag. The command never moves the user's selection (see
-"Routing"), so there is nothing for an agent to override.
+There is no focus flag. The command never moves the user's selection (see "Routing"), so there is nothing for an agent to override.
 
-Deliberate omissions in v1: no `--shell`/`--project` targeting (the calling shell
-is the target, as with `rename`), no URLs, no arbitrary text or stdin panes, no
-pane closing. Each is a natural sibling later; none is needed for the journey.
+Deliberate omissions in v1: no `--shell`/`--project` targeting (the calling shell is the target, as with `rename`), no URLs, no arbitrary text or stdin panes, no pane closing. Each is a natural sibling later; none is needed for the journey.
 
 ### Siblings this design anticipates
 
@@ -179,24 +140,15 @@ type Command struct {
 }
 ```
 
-- `sidecar help`, `sidecar --help`, `sidecar <cmd> --help`, `sidecar help <cmd>
-  [<sub>]` all render from the registry. No help string is written twice.
-- `sidecar help --json` emits the whole tree — name, summary, usage, flags,
-  args, exit codes, examples — so an agent discovers the surface in one call.
-  This is the "full help system available to agents" the request asks for.
-- Conventions enforced by the registry, not by discipline: every command accepts
-  `-h/--help` and `--json`; JSON is one object on stdout; diagnostics go to
-  stderr; `0/1/2` mean success / state failure / usage error everywhere.
-- A test renders the registry to `docs/reference/cli.md` and fails on drift, the
-  same shape as the existing keybinding-parity tests.
-- `AGENTS.md`'s CLI section is generated from the registry too, next to the
-  existing `shellstate.NamingInstruction` pattern — one source, many channels.
+- `sidecar help`, `sidecar --help`, `sidecar <cmd> --help`, `sidecar help <cmd> [<sub>]` all render from the registry. No help string is written twice.
+- `sidecar help --json` emits the whole tree — name, summary, usage, flags, args, exit codes, examples — so an agent discovers the surface in one call. This is the "full help system available to agents" the request asks for.
+- Conventions enforced by the registry, not by discipline: every command accepts `-h/--help` and `--json`; JSON is one object on stdout; diagnostics go to stderr; `0/1/2` mean success / state failure / usage error everywhere.
+- A test renders the registry to `docs/reference/cli.md` and fails on drift, the same shape as the existing keybinding-parity tests.
+- `AGENTS.md`'s CLI section is generated from the registry too, next to the existing `shellstate.NamingInstruction` pattern — one source, many channels.
 
 ## Transport: a request bus in the state tree
 
-The CLI runs in a different process from the TUI. It needs to reach whichever
-instances are showing the calling shell — possibly two, on two machines attached
-to one tmux server (see `internal/tty/geometry_lease.go`).
+The CLI runs in a different process from the TUI. It needs to reach whichever instances are showing the calling shell — possibly two, on two machines attached to one tmux server (see `internal/tty/geometry_lease.go`).
 
 **Chosen: a directory inbox with fsnotify delivery and per-instance ack files.**
 
@@ -228,152 +180,73 @@ Request payload:
 }
 ```
 
-Ack payload: `{instance, host, pid, status: opened|retargeted|declined|error,
-reason, surface, pane, at}`.
+Ack payload: `{instance, host, pid, status: opened|retargeted|declined|error, reason, surface, pane, at}`.
 
 Mechanics:
 
-- One inbox for all projects. Each instance watches one directory (fsnotify on
-  the dir, 100ms debounce), and each request is self-describing, so an instance
-  can decide in-memory whether it hosts `origin.tmuxSession`.
-- **Every** instance that hosts the surface acts and acks. Two machines showing
-  the same shell both open the pane, which is the correct behavior — the user is
-  in front of one of them and it must be the right one.
-- The CLI polls the ack directory until `--wait` elapses or an ack arrives, then
-  deletes the request and its ack directory. Instances sweep entries older than
-  `ttlMs` on startup and on each event, so a killed CLI leaves no litter.
-- No daemon, no socket, no port, no new dependency; the files are inspectable,
-  greppable, and hand-repairable, which is the same argument that put
-  `shells.json` on disk.
+- One inbox for all projects. Each instance watches one directory (fsnotify on the dir, 100ms debounce), and each request is self-describing, so an instance can decide in-memory whether it hosts `origin.tmuxSession`.
+- **Every** instance that hosts the surface acts and acks. Two machines showing the same shell both open the pane, which is the correct behavior — the user is in front of one of them and it must be the right one.
+- The CLI polls the ack directory until `--wait` elapses or an ack arrives, then deletes the request and its ack directory. Instances sweep entries older than `ttlMs` on startup and on each event, so a killed CLI leaves no litter.
+- No daemon, no socket, no port, no new dependency; the files are inspectable, greppable, and hand-repairable, which is the same argument that put `shells.json` on disk.
 
 Rejected alternatives:
 
-- **Unix socket per instance.** Needs a liveness registry, stale-socket
-  reaping, and a connection protocol, and buys only synchronous delivery — which
-  ack files already give at file-watch latency. Revisit if Sidecar ever wants a
-  real local API surface; the request/ack schema is the same shape either way.
-- **tmux user options** (the geometry-lease trick). One opaque slot per session,
-  no queue, needs polling. Right for a lease, wrong for a message.
-- **Print a link and let the user click it.** Works today via terminal links,
-  but it cannot open a split unattended, and the whole point is that the agent
-  puts the thing on screen.
-- **A `td`-style separate binary or an MCP tool.** The caller and the state are
-  local and the operation is one deterministic mutation; a protocol adds nothing.
+- **Unix socket per instance.** Needs a liveness registry, stale-socket reaping, and a connection protocol, and buys only synchronous delivery — which ack files already give at file-watch latency. Revisit if Sidecar ever wants a real local API surface; the request/ack schema is the same shape either way.
+- **tmux user options** (the geometry-lease trick). One opaque slot per session, no queue, needs polling. Right for a lease, wrong for a message.
+- **Print a link and let the user click it.** Works today via terminal links, but it cannot open a split unattended, and the whole point is that the agent puts the thing on screen.
+- **A `td`-style separate binary or an MCP tool.** The caller and the state are local and the operation is one deterministic mutation; a protocol adds nothing.
 
 ## Routing and refusal at the host
 
-A request names a *surface* (`shell:<tmuxName>`), never a pane. Each host maps it
-to what it already understands.
+A request names a *surface* (`shell:<tmuxName>`), never a pane. Each host maps it to what it already understands.
 
-**The governing rule: an agent never moves the user.** Selection, plugin focus,
-and scroll position belong to the person at the keyboard. A request either lands
-where the user is already looking, or it waits for them with a visible marker
-telling them where to go.
+**The governing rule: an agent never moves the user.** Selection, plugin focus, and scroll position belong to the person at the keyboard. A request either lands where the user is already looking, or it waits for them with a visible marker telling them where to go.
 
-1. **The requesting shell is already the selected surface.** Open immediately:
-   `openDocPaneForSurface` / `openIssuePaneForSurface` in the project workspace
-   plugin, or the `preview_links.go` open path in global Workspaces. This is the
-   click path; splitting, retargeting an already-open document pane, and
-   surface-collapse-on-selection-change all come for free. Ack `opened`.
-   The user sees a pane appear beside the terminal they are watching, which is
-   exactly what they would expect from an agent working in front of them.
-2. **The requesting shell is not selected (or Workspaces is not the focused
-   plugin).** Open nothing. Record a pending-view marker against that shell and
-   render a badge on its row, so the user can see *which* shell wants to show
-   them something. Ack `queued`. When the user next selects that shell, the
-   queued target opens as in case 1 and the badge clears. A stale queue expires
-   with the request TTL, and selecting the shell after expiry opens nothing.
+1. **The requesting shell is already the selected surface.** Open immediately: `openDocPaneForSurface` / `openIssuePaneForSurface` in the project workspace plugin, or the `preview_links.go` open path in global Workspaces. This is the click path; splitting, retargeting an already-open document pane, and surface-collapse-on-selection-change all come for free. Ack `opened`. The user sees a pane appear beside the terminal they are watching, which is exactly what they would expect from an agent working in front of them.
+2. **The requesting shell is not selected (or Workspaces is not the focused plugin).** Open nothing. Record a pending-view marker against that shell and render a badge on its row, so the user can see *which* shell wants to show them something. Ack `queued`. When the user next selects that shell, the queued target opens as in case 1 and the badge clears. A stale queue expires with the request TTL, and selecting the shell after expiry opens nothing.
 3. **Not this instance's shell.** Ignore silently — no ack, no marker.
 
-The badge is its own signal, **not** `agentstatus.Presentation.Attention`. That
-field means "the agent is blocked and needs you" and feeds the Needs Attention
-lane (`internal/workspacelist/list.go:36`, `internal/overview/model.go:892`);
-overloading it would put a shell in a lane it does not belong in. The
-pending-view marker is per-instance in-memory state with its own glyph and its
-own count, sitting beside the status icon on the row.
+The badge is its own signal, **not** `agentstatus.Presentation.Attention`. That field means "the agent is blocked and needs you" and feeds the Needs Attention lane (`internal/workspacelist/list.go:36`, `internal/overview/model.go:892`); overloading it would put a shell in a lane it does not belong in. The pending-view marker is per-instance in-memory state with its own glyph and its own count, sitting beside the status icon on the row.
 
-4. **Cannot split.** `panelayout` already refuses rather than squeezes (Law 2 of
-   `workspace-windowing-system.md`). The host acks `declined` with the existing
-   `paneFitMessage` reason; the CLI exits 4 and prints it, so the agent tells the
-   user "your window is too narrow" instead of assuming success.
-5. **Rate.** Repeated opens against one surface retarget the existing leaf; a
-   burst is coalesced by the same debounce that already batches manifest events.
+4. **Cannot split.** `panelayout` already refuses rather than squeezes (Law 2 of `workspace-windowing-system.md`). The host acks `declined` with the existing `paneFitMessage` reason; the CLI exits 4 and prints it, so the agent tells the user "your window is too narrow" instead of assuming success.
+5. **Rate.** Repeated opens against one surface retarget the existing leaf; a burst is coalesced by the same debounce that already batches manifest events.
 
 ## Safety rules
 
-- Request files live under `config.StateDir()` and pass
-  `config.AssertIsolatedPath`, so an isolated proof run can never write into the
-  real tree (`AGENTS.md`, td-8d18de).
-- File targets resolve **inside the origin workspace root**, with the
-  `create_operation.go` `openat`/`O_NOFOLLOW` discipline: no `..` escape, no
-  symlink escape, no absolute path outside the root, size and type checks before
-  a pane is created.
-- The host re-validates everything on receipt. A request is data, never a
-  command: no shell, no exec, no path the host has not itself resolved.
-- Requests whose `origin.tmuxSession` is absent from a registered manifest, whose
-  `namespace` does not match, or whose `createdAt` is expired, are dropped.
+- Request files live under `config.StateDir()` and pass `config.AssertIsolatedPath`, so an isolated proof run can never write into the real tree (`AGENTS.md`, td-8d18de).
+- File targets resolve **inside the origin workspace root**, with the `create_operation.go` `openat`/`O_NOFOLLOW` discipline: no `..` escape, no symlink escape, no absolute path outside the root, size and type checks before a pane is created.
+- The host re-validates everything on receipt. A request is data, never a command: no shell, no exec, no path the host has not itself resolved.
+- Requests whose `origin.tmuxSession` is absent from a registered manifest, whose `namespace` does not match, or whose `createdAt` is expired, are dropped.
 - Nothing here changes tmux server state, and nothing renames a tmux session.
 
 ## Milestones
 
 Each ships something usable on its own.
 
-**M0 — registry and help.** Command registry, generated help, `sidecar help`,
-`sidecar help --json`, `sidecar --help` listing commands, `docs/reference/cli.md`
-generator + drift test, `shell name`/`shell rename` migrated with output and exit
-codes unchanged (existing `internal/cli/cli_test.go` assertions must pass
-untouched). *Value alone: agents can find the commands that already exist.*
+**M0 — registry and help.** Command registry, generated help, `sidecar help`, `sidecar help --json`, `sidecar --help` listing commands, `docs/reference/cli.md` generator + drift test, `shell name`/`shell rename` migrated with output and exit codes unchanged (existing `internal/cli/cli_test.go` assertions must pass untouched). *Value alone: agents can find the commands that already exist.*
 
-**M1 — the steel thread.** `internal/uirequest` (schema, atomic write, watch,
-ack, sweep) + `sidecar open <path>` + the project workspace host, selected-shell
-case only. An agent in the shell the user is watching runs one command and a
-split appears beside its terminal. Files only; a request for an unselected shell
-is dropped with a `queued` ack that no badge backs yet.
+**M1 — the steel thread.** `internal/uirequest` (schema, atomic write, watch, ack, sweep) + `sidecar open <path>` + the project workspace host, selected-shell case only. An agent in the shell the user is watching runs one command and a split appears beside its terminal. Files only; a request for an unselected shell is dropped with a `queued` ack that no badge backs yet.
 
-**M2 — completeness.** The pending-view badge and queued-open-on-select path,
-`td-` issue targets, the global Workspaces host, `--split`, `--wait`, declined
-acks and exit codes 3/4, `AGENTS.md` guidance so agents actually use it.
+**M2 — completeness.** The pending-view badge and queued-open-on-select path, `td-` issue targets, the global Workspaces host, `--split`, `--wait`, declined acks and exit codes 3/4, `AGENTS.md` guidance so agents actually use it.
 
-**M3 — the siblings.** `sidecar panes`, `sidecar close`, URL targets,
-`sidecar notify`. Each should be a registry entry plus a `Run`; if any of them
-needs new plumbing, M1's seam was drawn wrong.
+**M3 — the siblings.** `sidecar panes`, `sidecar close`, URL targets, `sidecar notify`. Each should be a registry entry plus a `Run`; if any of them needs new plumbing, M1's seam was drawn wrong.
 
 ## Testing
 
-- **Registry/help:** golden render of the full tree, JSON schema shape, and a
-  test that every command declares summary, usage, exit codes, and an example.
-- **Bus:** encode/decode, atomic write under concurrent writers, TTL sweep,
-  ack collection, expired/foreign/malformed requests dropped.
-- **Resolution:** table tests that `internal/terminallink`-classified targets and
-  CLI-classified targets agree, including `path:line`, absolute paths, escapes,
-  and non-existent files.
-- **Host parity — the load-bearing test:** a request and a synthetic link click
-  for the same target produce **identical pane trees**. This is what keeps the
-  CLI from growing a second, drifting open path.
+- **Registry/help:** golden render of the full tree, JSON schema shape, and a test that every command declares summary, usage, exit codes, and an example.
+- **Bus:** encode/decode, atomic write under concurrent writers, TTL sweep, ack collection, expired/foreign/malformed requests dropped.
+- **Resolution:** table tests that `internal/terminallink`-classified targets and CLI-classified targets agree, including `path:line`, absolute paths, escapes, and non-existent files.
+- **Host parity — the load-bearing test:** a request and a synthetic link click for the same target produce **identical pane trees**. This is what keeps the CLI from growing a second, drifting open path.
 - **Refusal:** a too-small box yields `declined` and no tree mutation.
-- **End to end:** `scripts/tmux-drive.sh` with an isolated tmux server *and*
-  isolated state tree, running `sidecar open` inside a created shell and
-  asserting the captured screen shows the split.
+- **End to end:** `scripts/tmux-drive.sh` with an isolated tmux server *and* isolated state tree, running `sidecar open` inside a created shell and asserting the captured screen shows the split.
 
 ## Decided
 
-- **Verb: `sidecar open`.** Shortest for agents; it does not shadow
-  `/usr/bin/open`.
-- **Never steal focus.** An open lands only where the user is already looking;
-  otherwise it queues behind a badge on the shell's row and opens when they
-  choose to go there. No `--focus` escape hatch, because the point is that the
-  agent cannot decide this.
+- **Verb: `sidecar open`.** Shortest for agents; it does not shadow `/usr/bin/open`.
+- **Never steal focus.** An open lands only where the user is already looking; otherwise it queues behind a badge on the shell's row and opens when they choose to go there. No `--focus` escape hatch, because the point is that the agent cannot decide this.
 
 ## Open questions
 
-1. **Badge shape.** A glyph plus count on the shell row is the minimum. Should
-   the pending count also roll up to the Workspaces plugin's own tab/title, so a
-   user in the file browser knows something is waiting at all? Recommendation:
-   yes in M2, as a plain count, with no lane or sort-order change.
-2. **Queue depth.** If an agent opens three files while the user is away, does
-   selecting the shell open three panes, the last one, or one tab group?
-   Recommendation: one document pane with the targets as tabs (`docview.Tabs`
-   already models this), newest selected.
-3. **Non-Sidecar callers.** Should `sidecar open` from an ordinary terminal fall
-   back to "the most recently focused Sidecar instance", or fail cleanly?
-   Recommendation: fail cleanly in v1 (exit 3), consistent with `shell rename`.
+1. **Badge shape.** A glyph plus count on the shell row is the minimum. Should the pending count also roll up to the Workspaces plugin's own tab/title, so a user in the file browser knows something is waiting at all? Recommendation: yes in M2, as a plain count, with no lane or sort-order change.
+2. **Queue depth.** If an agent opens three files while the user is away, does selecting the shell open three panes, the last one, or one tab group? Recommendation: one document pane with the targets as tabs (`docview.Tabs` already models this), newest selected.
+3. **Non-Sidecar callers.** Should `sidecar open` from an ordinary terminal fall back to "the most recently focused Sidecar instance", or fail cleanly? Recommendation: fail cleanly in v1 (exit 3), consistent with `shell rename`.

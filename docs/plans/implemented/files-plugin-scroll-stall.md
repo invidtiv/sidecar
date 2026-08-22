@@ -8,9 +8,7 @@
 > the declared policy registry in `internal/plugins/assembly`. Read that plan for
 > the current design; this document is kept as the original diagnosis.
 
-**Date:** 2026-08-13
-**Status:** implemented — promises satisfied by the global wheel boundary contract
-**Scope:** Files plugin wheel handling. No code in this pass; another agent was in the tree when this was written.
+**Date:** 2026-08-13 **Status:** implemented — promises satisfied by the global wheel boundary contract **Scope:** Files plugin wheel handling. No code in this pass; another agent was in the tree when this was written.
 
 ## Goal
 
@@ -148,11 +146,4 @@ Proof: unit tests for burst apply/hold/flush on the files handlers (drive time t
 
 ## Adoption note (post-implementation)
 
-Files adopted slices 1–3, and the burst pattern has since spread by reference
-rather than by copy: every surface that hosts a scrollable content area is
-expected to apply wheel deltas through `tty.WheelBurst`/`WheelBursts` **and**
-answer `ScrollAtBoundary` — the pairing is now the documented default for new
-scrollable surfaces in `.claude/skills/ui-features/SKILL.md` ("Wheel burst
-coalescing"). The td issue viewer's hosts (workspace issue leaf, overview
-Workspaces preview, app content deck, app preview modal) are the most recent
-adopters, each tested beside its host with a clock-driven flick.
+Files adopted slices 1–3, and the burst pattern has since spread by reference rather than by copy: every surface that hosts a scrollable content area is expected to apply wheel deltas through `tty.WheelBurst`/`WheelBursts` **and** answer `ScrollAtBoundary` — the pairing is now the documented default for new scrollable surfaces in `.claude/skills/ui-features/SKILL.md` ("Wheel burst coalescing"). The td issue viewer's hosts (workspace issue leaf, overview Workspaces preview, app content deck, app preview modal) are the most recent adopters, each tested beside its host with a clock-driven flick.

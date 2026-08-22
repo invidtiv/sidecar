@@ -226,6 +226,14 @@ func (p *Plugin) clampTreeScroll() {
 
 // renderNormalPanes renders the standard 2-pane layout without modals.
 func (p *Plugin) renderNormalPanes() string {
+	// The scroll offset can go stale between renders: state restored from a
+	// session with a different pane height or tree, a rebuild that shrank the
+	// flat list, a collapse that removed rows. Clamping here — before both the
+	// render loop and the hit-region loop read the offset — guarantees that a
+	// tree which fits the viewport draws in full from the top, and that the
+	// rows we register for clicks are exactly the rows we draw.
+	p.clampTreeScroll()
+
 	inputBarHeight := p.inputBarHeight()
 
 	// Pane height for panels (outer dimensions including borders)

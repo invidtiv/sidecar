@@ -1,8 +1,10 @@
 package filebrowser
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
 )
 
@@ -145,7 +147,7 @@ func TestRenderMarkdownContent(t *testing.T) {
 			previewFile:      "test.md",
 			previewLines:     content,
 			markdownRenderer: renderer,
-			previewWidth:     46, // 46-6=40 effective width
+			previewWidth:     46, // contentWidth 41, glamour word-wrap 43
 		}
 		p40.renderMarkdownContent()
 
@@ -153,7 +155,7 @@ func TestRenderMarkdownContent(t *testing.T) {
 			previewFile:      "test.md",
 			previewLines:     content,
 			markdownRenderer: renderer,
-			previewWidth:     106, // 106-6=100 effective width
+			previewWidth:     106, // contentWidth 101, glamour word-wrap 103
 		}
 		p100.renderMarkdownContent()
 
@@ -163,4 +165,44 @@ func TestRenderMarkdownContent(t *testing.T) {
 				len(p40.markdownRendered), len(p100.markdownRendered))
 		}
 	})
+}
+
+// TestRenderMarkdownFillsPreviewContentWidth pins the rendered mode's wrap
+// contract: every rendered row must fit the frame's content column, and a
+// long paragraph must actually fill it — Glamour's 2-column document margin
+// becomes the mode's visual indent while the text reaches the right edge.
+// The old previewWidth−6 word-wrap left the render floating several columns
+// short of the frame (td-65095b).
+func TestRenderMarkdownFillsPreviewContentWidth(t *testing.T) {
+	renderer, err := markdown.NewRenderer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{
+		previewFile:      "test.md",
+		previewLines:     []string{"# Head", "", strings.Repeat("word ", 120)},
+		markdownRenderer: renderer,
+		previewWidth:     106,
+	}
+	p.renderMarkdownContent()
+	if len(p.markdownRendered) == 0 {
+		t.Fatal("markdownRendered is empty")
+	}
+
+	contentWidth := p.previewContentWidth() // 101 at previewWidth 106
+	longest := 0
+	for _, line := range p.markdownRendered {
+		w := ansi.StringWidth(line)
+		if w > contentWidth {
+			t.Fatalf("rendered line of %d cells overflows the %d-cell content column: %q",
+				w, contentWidth, ansi.Strip(line))
+		}
+		if w > longest {
+			longest = w
+		}
+	}
+	if longest != contentWidth {
+		t.Fatalf("longest rendered line is %d cells, want %d: the render stops short of the frame",
+			longest, contentWidth)
+	}
 }

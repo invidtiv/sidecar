@@ -1,8 +1,6 @@
 # Review of Worktree Manager Plugin Specification
 
-**Date:** January 13, 2026
-**Reviewer:** Gemini CLI
-**Target:** `@docs/spec-worktree-plugin.md`
+**Date:** January 13, 2026 **Reviewer:** Gemini CLI **Target:** `@docs/spec-worktree-plugin.md`
 
 ## Executive Summary
 
@@ -18,8 +16,7 @@ Additionally, the proposed `td` integration strategy (modifying `td` source code
 
 **Violation:** In Bubble Tea, **only** the `Update` function can mutate the model. Background goroutines must return `tea.Msg`s. Direct mutation causes race conditions and UI rendering glitches (panics) because the View reads these structs while the goroutine writes to them.
 
-**Correction Required:**
-Refactor the polling mechanism to use the standard Bubble Tea command loop pattern.
+**Correction Required:** Refactor the polling mechanism to use the standard Bubble Tea command loop pattern.
 
 *   **Change in `Update`:**
     ```go
@@ -49,20 +46,16 @@ Refactor the polling mechanism to use the standard Bubble Tea command loop patte
 
 **Issue:** The spec proposes modifying `td` source code to read a `.td-root` file. While valid, this creates a "hard" dependency version requirement between `sidecar` and `td`.
 
-**Suggestion:**
-Check if `td` supports an environment variable to override the database path (e.g., `TD_DB_PATH` or `TD_CONFIG_DIR`).
+**Suggestion:** Check if `td` supports an environment variable to override the database path (e.g., `TD_DB_PATH` or `TD_CONFIG_DIR`).
 
-1.  **If `td` supports Env Vars:**
-    Instead of writing a `.td-root` file, the Worktree Plugin should simply inject this environment variable when spawning the agent or running `td` commands in that worktree.
+1.  **If `td` supports Env Vars:** Instead of writing a `.td-root` file, the Worktree Plugin should simply inject this environment variable when spawning the agent or running `td` commands in that worktree.
     *   *Implementation:* In `getAgentCommand`, prepend `export TD_DB_PATH=/path/to/main/.todos; ...`
 
-2.  **If `td` does NOT support Env Vars:**
-    The `.td-root` file approach is acceptable, but consider adding the environment variable support to `td` instead of a custom file logic. It is a more standard CLI pattern.
+2.  **If `td` does NOT support Env Vars:** The `.td-root` file approach is acceptable, but consider adding the environment variable support to `td` instead of a custom file logic. It is a more standard CLI pattern.
 
 ## 3. Architecture & Code Reuse
 
-**Omission:** The spec defines a new `TDClient`.
-**Context:** `sidecar` already has `internal/plugins/tdmonitor`.
+**Omission:** The spec defines a new `TDClient`. **Context:** `sidecar` already has `internal/plugins/tdmonitor`.
 
 **Recommendation:**
 *   Check `internal/plugins/tdmonitor` for an existing `td` client wrapper.
@@ -70,13 +63,11 @@ Check if `td` supports an environment variable to override the database path (e.
 
 ## 4. Tmux Integration & UX
 
-**Issue:** `AttachToSession` uses `tea.ExecProcess`.
-**Refinement:**
+**Issue:** `AttachToSession` uses `tea.ExecProcess`. **Refinement:**
 *   **Polling Pause:** When the user attaches to a session, the `Update` loop should **pause** polling for that specific agent. Polling while the user is interactively using the tmux session adds unnecessary CPU load and potential I/O contention.
 *   **Resume:** When `tea.ExecProcess` returns (user detaches), immediately trigger a refresh/poll command to capture what happened while the user was away.
 
-**Safety:**
-The spec mentions `CleanupOrphanedSessions`. This should be extremely conservative.
+**Safety:** The spec mentions `CleanupOrphanedSessions`. This should be extremely conservative.
 *   *Risk:* If a user names their own session `sidecar-wt-manual-test`, the plugin might kill it.
 *   *Fix:* Only kill sessions that explicitly match IDs known to the current Sidecar instance's state, or use a specific tmux variable/tag to strictly identify ownership.
 
@@ -84,19 +75,15 @@ The spec mentions `CleanupOrphanedSessions`. This should be extremely conservati
 
 The spec follows the keymap guide well, but a few specific details need alignment with `internal/keymap`:
 
-1.  **Context Naming:**
-    The spec uses "List View" and "Kanban View".
+1.  **Context Naming:** The spec uses "List View" and "Kanban View".
     *   Ensure `FocusContext()` returns stable strings like `worktree-list` and `worktree-kanban` to allow `internal/keymap/bindings.go` to provide specific bindings for each view.
 
-2.  **Footer Hints:**
-    The spec shows a footer: `n:new y:approve...`.
+2.  **Footer Hints:** The spec shows a footer: `n:new y:approve...`.
     *   *Correction:* In Sidecar, plugins do **not** render their own footer. The plugin must implement `Commands() []plugin.Command`. The main app (`internal/app/model.go`) renders the footer based on these commands. The mockup in the spec should be updated to reflect that the footer is system-managed.
 
 ## 6. Directory Structure & Paths
 
-**Observation:** The spec suggests sibling directories (`../sidecar-worktrees`).
-**Constraint:** This assumes the user has write permissions to the parent directory.
-**Improvement:**
+**Observation:** The spec suggests sibling directories (`../sidecar-worktrees`). **Constraint:** This assumes the user has write permissions to the parent directory. **Improvement:**
 *   Default to sibling directories.
 *   Add a validation step in `Init`: If the parent directory is not writable, fallback to a subdirectory within the main repo (e.g., `.sidecar/worktrees/`) and add that path to `.gitignore` automatically.
 
@@ -104,8 +91,7 @@ The spec follows the keymap guide well, but a few specific details need alignmen
 
 Based on the complexity of Bubble Tea concurrency, I suggest a modified Phase 1:
 
-**Phase 1.5: The TUI Loop**
-Before integrating Agents/Tmux, build the TUI list view using **mock data** to ensure the `Kanban` <-> `List` toggle and `Focus` handling works smoothly within the `View(w, h)` constraints. Sidecar panes can be narrow; the Kanban view might need a "min-width" check to auto-collapse to List view if the terminal is too small.
+**Phase 1.5: The TUI Loop** Before integrating Agents/Tmux, build the TUI list view using **mock data** to ensure the `Kanban` <-> `List` toggle and `Focus` handling works smoothly within the `View(w, h)` constraints. Sidecar panes can be narrow; the Kanban view might need a "min-width" check to auto-collapse to List view if the terminal is too small.
 
 ## Summary of Necessary Changes to Spec
 

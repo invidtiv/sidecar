@@ -2,9 +2,7 @@
 
 ## Summary
 
-**Approach**: Export td's monitor as a reusable package, wrap in thin sidecar plugin
-**Effort**: ~50 lines in td, ~100 lines in sidecar (vs ~2000 lines to rebuild)
-**Result**: Full feature parity, single source of truth, sidecar theme integration
+**Approach**: Export td's monitor as a reusable package, wrap in thin sidecar plugin **Effort**: ~50 lines in td, ~100 lines in sidecar (vs ~2000 lines to rebuild) **Result**: Full feature parity, single source of truth, sidecar theme integration
 
 ---
 

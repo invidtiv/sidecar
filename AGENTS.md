@@ -19,6 +19,13 @@ Run `td usage` or `td <command> --help`.
 
 <!-- td-agent-instructions:end -->
 
+## Markdown plans
+
+When writing plans or other Markdown documents, do not insert hard line breaks
+to keep a column width — let paragraphs flow as single long lines. Hard-wrapped
+text renders poorly when the document is viewed at any width other than the one
+it was written for.
+
 ## Commit completed work by default
 
 Unless the user explicitly asks not to commit, create a focused commit once the

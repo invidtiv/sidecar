@@ -281,11 +281,63 @@ func TestCanvasBackgroundAbstainsWhenRowStartsTieToo(t *testing.T) {
 		if i%2 == 1 {
 			a, b = right, left
 		}
-		lines = append(lines, a+"  half  "+b+"  half  \x1b[49m")
+		// Half the rows are blank in both backgrounds, so the share bar and
+		// blank-row gates pass for either candidate and only the row-start
+		// tie forces the abstention.
+		if i%4 < 2 {
+			lines = append(lines, a+"        "+b+"        \x1b[49m")
+		} else {
+			lines = append(lines, a+"  half  "+b+"  half  \x1b[49m")
+		}
 	}
 	buffer := canvasBuffer(t, lines, len(lines))
 	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
 		t.Fatalf("canvas = %q, want abstention when row starts tie as well", got)
+	}
+}
+
+// The screen model's serialization closes every row with a reset and trims
+// BCE tails, so an opencode pane that proves its canvas through blank rows in
+// a raw capture comes back with no blank canvas rows at all — the pane filled
+// on the first raw frame and reverted when the model took over. Shaped from a
+// live frame: painted rows open in the canvas margin, boxes ride on top, the
+// untouched interior abstains, and nothing is blank.
+func TestCanvasBackgroundAcceptsModelSerializedCanvasWithoutBlankRows(t *testing.T) {
+	canvas := "\x1b[48;2;10;10;10m"
+	box := "\x1b[48;2;20;20;20m"
+	var lines []string
+	for range 8 {
+		lines = append(lines, canvas+"  │"+box+"  message text  \x1b[m")
+	}
+	lines = append(lines, canvas+"  Thought: 7.4s\x1b[m")
+	for range 30 {
+		lines = append(lines, "")
+	}
+	for range 4 {
+		lines = append(lines, canvas+"  │"+box+"  input  \x1b[m")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != canvas {
+		t.Fatalf("canvas = %q, want %q from model-serialized rows with no blank canvas rows", got, canvas)
+	}
+}
+
+// A second background beside the candidate is not the same as one on top of
+// it: a mostly-added diff has red deletion rows next to its green rows, and
+// with col-0 green and no blank rows that shape reached every other gate. The
+// fallback demands same-row co-occurrence, which line-level highlighting
+// never has.
+func TestNoBlankRowFallbackRejectsMixedDiffHighlight(t *testing.T) {
+	green := "\x1b[48;2;0;80;0m"
+	red := "\x1b[48;2;80;0;0m"
+	var lines []string
+	for range 10 {
+		lines = append(lines, green+"+ added line\x1b[49m")
+	}
+	lines = append(lines, red+"- removed line\x1b[49m")
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
+		t.Fatalf("mostly-green diff with a deletion row promoted to canvas %q", got)
 	}
 }
 

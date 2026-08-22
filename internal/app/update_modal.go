@@ -251,9 +251,14 @@ func parseReleaseNotes(notes string) string {
 }
 
 // renderReleaseNotes renders markdown release notes.
+//
+// The modal box already insets its content by border + padding, so the notes
+// render with a compact-document renderer: Glamour's default 2-column
+// document margin would compound with the modal's own inset and wrap the
+// text well before the box's right edge (td-65095b).
 func (m *Model) renderReleaseNotes(notes string, width int) string {
 	// Try to use markdown renderer
-	renderer, err := markdown.NewRenderer()
+	renderer, err := markdown.NewRenderer(markdown.CompactDocument)
 	if err != nil {
 		return notes
 	}

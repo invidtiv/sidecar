@@ -19,8 +19,7 @@ Companion to `sidecar-configuration-design.md`. Produced by repo recon on 2026-0
 - `enterOverview()` / `exitOverview()` / `leaveOverview(restoreProject bool)` (model.go:745-786) show how to enter and restore the previous surface and focus. Configuration's Escape-restores-prior-surface should mirror `leaveOverview`.
 - `globalTasksHost` (scope.go:354-411) is the pattern for a host-owned surface that survives project switches (not in the plugin registry).
 
-**Plugin interface** — `internal/plugin/plugin.go`: `Plugin` = `ID/Name/Icon/Init/Start/Stop/Update/View(width,height)/IsFocused/SetFocused/Commands/FocusContext`. Optional capabilities: `TextInputConsumer.ConsumesTextInput()` (line 24), `GlobalKeyBlocker.BlocksGlobalKeys()` (44), `KeyRouter.ClaimsKey/QuitKeyExits` (61), `FooterStatusProvider` (80), `CursorProvider`, `MouseModeProvider`, `WheelBoundaryConsumer`, `DiagnosticProvider` (137).
-Registration order/gating: `internal/plugins/assembly/assembly.go` — `Plan(cfg)` (line 66) and `Register(reg, cfg, logger)` (line 110). Registry: `internal/plugin/registry.go` (`Reinit` on project switch).
+**Plugin interface** — `internal/plugin/plugin.go`: `Plugin` = `ID/Name/Icon/Init/Start/Stop/Update/View(width,height)/IsFocused/SetFocused/Commands/FocusContext`. Optional capabilities: `TextInputConsumer.ConsumesTextInput()` (line 24), `GlobalKeyBlocker.BlocksGlobalKeys()` (44), `KeyRouter.ClaimsKey/QuitKeyExits` (61), `FooterStatusProvider` (80), `CursorProvider`, `MouseModeProvider`, `WheelBoundaryConsumer`, `DiagnosticProvider` (137). Registration order/gating: `internal/plugins/assembly/assembly.go` — `Plan(cfg)` (line 66) and `Register(reg, cfg, logger)` (line 110). Registry: `internal/plugin/registry.go` (`Reinit` on project switch).
 
 **Focus/switching**
 - `FocusPluginByIDMsg{PluginID}` — `internal/app/commands.go:79`; helper `FocusPlugin(id) tea.Cmd` (commands.go:124); handled at `internal/app/update.go:432` → `Model.FocusPluginByID` (model.go:561). Note update.go:432 also exits global scope.
@@ -54,8 +53,7 @@ Registration order/gating: `internal/plugins/assembly/assembly.go` — `Plan(cfg
 4. `pluginClaimsKey(key)` contextual binding (836).
 5. app global switch, then `m.keymap.Handle(msg, m.activeContext)` (1621), then `forwardKeyToPlugin` (1632).
 
-**Context resolution** — `Model.updateContext()` (update.go:1640): modal context (`modalFocusContext`, model.go:94) → global-scope tab context (`GlobalTab.context()`, scope.go:81) → active plugin `FocusContext()` → `"global"`.
-Helper classifiers to extend: `isRootContext` (update.go:1791), `isTextInputContext` (1815), `isGlobalRefreshContext` (1832), `Model.textInputFocused()` (1777).
+**Context resolution** — `Model.updateContext()` (update.go:1640): modal context (`modalFocusContext`, model.go:94) → global-scope tab context (`GlobalTab.context()`, scope.go:81) → active plugin `FocusContext()` → `"global"`. Helper classifiers to extend: `isRootContext` (update.go:1791), `isTextInputContext` (1815), `isGlobalRefreshContext` (1832), `Model.textInputFocused()` (1777).
 
 **Footer hints derived from bindings** — `internal/app/view.go`: `renderFooter()` (1001), `footerHints()` (1100), `globalFooterHints()` (1140), `pluginFooterHints(p, ctx)` (1209), `commandFooterHints(commands, ctx)` (1216), `typingFooterHints()` (1082), `firstReachableKey`/`survivesTextInput` (1192/1205), `renderHintLineTruncated` (1271).
 
@@ -65,9 +63,7 @@ Helper classifiers to extend: `isRootContext` (update.go:1791), `isTextInputCont
 
 ## 3. Config model and save paths
 
-**Model** — `internal/config/config.go`
-`Config{Projects ProjectsConfig; Plugins PluginsConfig; Keymap KeymapConfig; UI UIConfig; Features FeaturesConfig}` (line 14).
-`Default()` at 228, `Validate()` at 283 (clamps refresh intervals, clamps `TmuxCaptureMaxBytes<=0` → 2MB, coerces Tasks position). **`Validate` is the existing clamp seam for the Advanced capture-limit bounds.**
+**Model** — `internal/config/config.go` `Config{Projects ProjectsConfig; Plugins PluginsConfig; Keymap KeymapConfig; UI UIConfig; Features FeaturesConfig}` (line 14). `Default()` at 228, `Validate()` at 283 (clamps refresh intervals, clamps `TmuxCaptureMaxBytes<=0` → 2MB, coerces Tasks position). **`Validate` is the existing clamp seam for the Advanced capture-limit bounds.**
 
 **Read** — `internal/config/loader.go`: `Load()` (163) / `LoadFrom(path)` (169), `mergeConfig` (222) merging `raw*` pointer-typed shadow structs (absent keys keep defaults), `applyEnvOverrides` (400), `ExpandPath` (451), `ConfigPath()` (463, `~/.config/sidecar/config.json`; `SetConfigPath`), `StateDir()` (480). Isolation guards in `internal/config/isolation.go`.
 

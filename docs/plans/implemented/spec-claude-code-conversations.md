@@ -3,8 +3,7 @@
 ## Executive Summary
 Fix bug preventing sessions from loading, enhance with token stats & search, maintain adapter abstraction for reusability with other AI coding tools (opencode, codex, gemini-cli).
 
-**Bug**: Sessions never load - watcher event loop incomplete, silent failures in Init()
-**Priority Features**: Session slug display, token usage stats, search/filter
+**Bug**: Sessions never load - watcher event loop incomplete, silent failures in Init() **Priority Features**: Session slug display, token usage stats, search/filter
 
 ## Critical Files
 - `internal/plugins/conversations/plugin.go` - Core bug fix + search state

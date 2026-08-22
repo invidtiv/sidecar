@@ -143,7 +143,7 @@ Each adoption is mechanical and independent:
 Adopt, one PR-sized slice per surface group, cheapest first to shake out the pattern:
 
 1. Palette + notification centre (small, well-tested views)
-2. File browser (tree/search/preview) 
+2. File browser (tree/search/preview)
 3. Git status sidebar, conversations, notes (+ noteview)
 4. Kanban lanes (per-column regions — verify N bars coexist in one HitMap)
 5. Workspacelist sidebar, configui theme picker

@@ -186,6 +186,4 @@ require (
 
 ## Implementation Notes
 
-The built-in diff renderer is the only rendering path. External tool integration (delta)
-was removed in favor of the built-in renderer which provides consistent behavior across
-all environments.
+The built-in diff renderer is the only rendering path. External tool integration (delta) was removed in favor of the built-in renderer which provides consistent behavior across all environments.

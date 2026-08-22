@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/tty/screenmodel"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -32,6 +33,32 @@ func TestCanvasProbeLiveCaptures(t *testing.T) {
 
 		got := CanvasBackground(buffer, 0, len(lines))
 		t.Logf("=== %s: rows=%d canvas=%q", filepath.Base(f), len(lines), got)
+
+		// The live interactive path replays the capture through the screen
+		// model and renders frames from the emulator, so detection must also
+		// hold on that serialization, not just on raw capture-pane output.
+		width := 0
+		for _, l := range lines {
+			if w := ansi.StringWidth(l); w > width {
+				width = w
+			}
+		}
+		model := screenmodel.New(width, len(lines))
+		if err := model.Seed(screenmodel.Seed{Output: content, Width: width, Height: len(lines)}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		frame, err := model.Frame()
+		if err != nil {
+			t.Fatalf("frame: %v", err)
+		}
+		fbuf := tty.NewOutputBuffer(len(lines) + 10)
+		fbuf.ApplySnapshot(tty.PaneSnapshot{Output: frame.Output, PaneRows: len(lines)})
+		fgot := CanvasBackground(fbuf, 0, len(lines))
+		t.Logf("    via screenmodel: canvas=%q", fgot)
+		if fgot != got {
+			t.Logf("    MISMATCH raw=%q model=%q", got, fgot)
+			_ = os.WriteFile(f+".frame", []byte(frame.Output), 0o644)
+		}
 
 		inherited := ""
 		counts := map[string]int{}

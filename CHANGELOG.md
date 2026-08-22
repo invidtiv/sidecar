@@ -4,6 +4,8 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.3.0] - 2026-08-21
+
 ### Features
 
 - **First-run onboarding that names the next step.** Launching in a non-git
@@ -33,6 +35,68 @@ All notable changes to sidecar are documented here.
 - **Create Workspace kind row shows when it has keyboard focus.** The chosen
   kind stays filled; `[ ]` around the row uses the same Primary colour as a
   focused input so Tab on the toggle is visible without stealing the selection.
+
+### Workspaces and panes
+
+- **The terminal panel is a Shell leaf of the pane tree.** The panel's second,
+  parallel split system is gone; shells, files, notes, issues, and resources are
+  all leaves of one tree with one compositor, one border rule, and one divider
+  renderer. Shell placement is duplicable, respects a live cap, and the sidebar
+  shows layout badges. Pane titles are clickable to rename.
+- **Split terminals belong to their own workspace.** A split's close ends its
+  session and its confirmation says what will actually happen; a wedged split can
+  be closed, a reused session honours `--run`, and split names are scoped to the
+  owning workspace.
+- **`sidecar create` CLI.** `sidecar create shell`, `sidecar create shell --split
+  <dir>`, and `sidecar create worktree` let an agent open shells, splits, and
+  worktrees in the running app, with worktree context, journalling, and ack
+  matching.
+- **Notes open as workspace content panes.** Notes lists, archive, search,
+  formatting, and content links were polished together; the archive reloads the
+  right pane with the selected note, and clicking below a note's last line lands
+  the caret at the end of the text.
+- **Per-tab close buttons** with a hover state and tighter tab labels.
+- **Clickable links in Files panes**, symbolic git ranges recognized as diff
+  links, and `claimHosts` so resource providers can claim built-in URL spans
+  while keeping their OSC-8 hyperlinks.
+- **Scrollbars** in Files fileview panes, workspace document panes, and the
+  switcher/palette modals, which also gained stable height and mouse support.
+- **opencode auto-approve** support in shell creation via `--auto`, derived from
+  workspaceops rather than hardcoded per launcher.
+- **Session copy ring** — paste-recent over ssh, plus undo aliases in notes.
+- **Refreshed diagnostics info modal** layout, plugin table, and close button.
+
+### Bug Fixes — panes, rendering, and input
+
+- **Pane geometry is announced to plugins on resize, not every frame**
+  (td-fcb03a), and wheel bursts are coalesced and paced across issue viewer
+  surfaces and forwarded pane applications.
+- **Canvas detection** survives the screen model's serialization, abstains on
+  untouched default-background rows, and breaks ties on row starts
+  (td-fb5a9d, td-b8c54e); Grok terminal backgrounds fill on large canvases.
+- **Issue and document panes render markdown at full pane width** via the
+  compact renderer contract, and padded viewers are paired with compact-document
+  renderers (td-85a2be, td-65095b).
+- **Clicking a commit tab's own header no longer strands it loading**, file panes
+  no longer stick on Loading after a split, and plugin-switch keys stay live over
+  a focused content pane.
+- **Notes preview clicks are only stolen for real content links** (td-b57215),
+  and the content pane header × hit rect covers the glyph.
+- **Footer** drops the refresh stamp and aligns shortcut help (td-f6ad90,
+  td-70f800).
+
+### Build and tooling
+
+- **Managed dev installs track workspace siblings** (td, tasks) through
+  `go.work`, and `make install-status` reports the sibling revisions compiled in.
+- **`scripts/demo.sh`** — modular, fully ephemeral demo environments (multi-project,
+  single-project, and fresh onboarding presets) that build a fresh binary from the
+  working tree and clean up on exit.
+
+### Dependencies
+
+- td v0.61.0 → v0.62.0 (monitor empty states, note activity verbs, embedded
+  next-step, and the issue-modal CPU fixes).
 
 ## [v1.2.2] - 2026-08-20
 

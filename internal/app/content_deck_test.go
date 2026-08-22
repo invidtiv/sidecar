@@ -1327,3 +1327,42 @@ func paneActive(node *contentpanes.NodeState, kind string) int {
 	}
 	return paneActive(node.B, kind)
 }
+
+// A render is not a resize. The frame calls SetSize on every compose pass, so a
+// deck that forwards each one hands its plugin a WindowSizeMsg per frame — and
+// a plugin that answers one with a command (embedded td re-renders its open
+// issue's markdown) then drives the next frame itself, at whatever rate the
+// event loop can turn (td-fcb03a).
+func TestAppContentDeckAnnouncesSizeOnChangeNotPerFrame(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: "files", focus: "tree", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+
+	sizes := func() []tea.WindowSizeMsg {
+		var out []tea.WindowSizeMsg
+		for _, msg := range p.seen {
+			if size, ok := msg.(tea.WindowSizeMsg); ok {
+				out = append(out, size)
+			}
+		}
+		return out
+	}
+
+	for range 5 {
+		m.renderContent(200, 40)
+	}
+	got := sizes()
+	if len(got) != 1 || got[0] != (tea.WindowSizeMsg{Width: 200, Height: 40}) {
+		t.Fatalf("five frames at one size sent %d resizes (%+v), want exactly one 200x40", len(got), got)
+	}
+
+	m.renderContent(180, 40)
+	m.renderContent(180, 40)
+	got = sizes()
+	if len(got) != 2 || got[1] != (tea.WindowSizeMsg{Width: 180, Height: 40}) {
+		t.Fatalf("a real resize then a repeat frame sent %+v, want the 200x40 followed by one 180x40", got)
+	}
+	if p.width != 180 || p.height != 40 {
+		t.Fatalf("plugin size = %dx%d, want the resize to have reached it", p.width, p.height)
+	}
+}

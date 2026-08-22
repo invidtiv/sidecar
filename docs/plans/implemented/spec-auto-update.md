@@ -209,8 +209,7 @@ case UpdateErrorMsg:
 
 **File**: `internal/app/view.go`
 
-Replace the static "Update:" section (lines 601-605) with interactive button.
-**Important**: Calculate button bounds for mouse clicks. The button position depends on modal centering.
+Replace the static "Update:" section (lines 601-605) with interactive button. **Important**: Calculate button bounds for mouse clicks. The button position depends on modal centering.
 
 In `renderDiagnosticsOverlay()`, after calling `buildDiagnosticsContent()`:
 

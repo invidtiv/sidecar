@@ -1,7 +1,6 @@
 # Plan: Abstract Interactive Shell for Cross-Plugin Reuse
 
-**Epic**: td-50cf27
-**Status**: Planning complete, ready for implementation
+**Epic**: td-50cf27 **Status**: Planning complete, ready for implementation
 
 ## Goal
 Extract the interactive shell from the workspace plugin into a reusable `internal/tty` package so plugins (files, git) can run CLI editors (vim, nano) in-pane.
