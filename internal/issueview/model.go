@@ -493,6 +493,10 @@ func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
 	if m.beginScrollbarGesture(x, y) {
 		return HitScrollbar, nil
 	}
+	// A fresh press implies the previous gesture's button came up. If its end
+	// was never reported back, settle here so the thumb cannot stay rendered
+	// pressed under a host that wires clicks but not drags.
+	m.settleStaleScrollbarGesture()
 	// Resolve the row against the frame that was clicked before changing focus:
 	// activation can add an ACTIONS row, which invalidates this frame's hits.
 	var clicked *Hit
@@ -514,6 +518,12 @@ func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
 // scrollbar column answers first: hovering the bar highlights the bar and
 // clears any row highlight, the same exclusivity a row hover has.
 func (m *Model) HandleHover(x, y int) {
+	// A hover can only be delivered while the shared mouse handler holds no
+	// drag — motion during a real drag arrives as ActionDrag instead — so one
+	// landing on a card that still holds a scrollbar gesture proves the
+	// gesture's release was lost or never wired. Settle before it can render
+	// a thumb stuck pressed.
+	m.settleStaleScrollbarGesture()
 	if m.scrollbarContains(x, y) {
 		m.scrollbarHover = true
 		m.hover = -1

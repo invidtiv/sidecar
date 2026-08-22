@@ -229,6 +229,52 @@ func TestIssueScrollbar_IdleByteParityAcrossHoverRoundTrip(t *testing.T) {
 	}
 }
 
+// A bar press whose drag is never wired — the reviewer's F1 repro — must not
+// latch the thumb pressed: a plain hover, which the shared handler only
+// delivers while it holds no drag, settles it and restores idle bytes.
+func TestIssueScrollbar_StuckLatchRecoversOnHover(t *testing.T) {
+	m := overflowIssueModel(t)
+	rect := barRect(t, m)
+	idle := m.View()
+
+	m.HandleClick(rect.X, rect.Y+1)
+	if !m.ScrollbarDragging() {
+		t.Fatal("press did not arm the gesture")
+	}
+	if m.View() == idle {
+		t.Fatal("an armed gesture changed no bytes")
+	}
+
+	m.HandleHover(2, 2)
+	if m.ScrollbarDragging() {
+		t.Fatal("hover could not settle an unwired scrollbar gesture")
+	}
+	if m.View() != idle {
+		t.Fatal("settled gesture left pressed-style bytes behind")
+	}
+}
+
+// Any fresh click equally proves the previous gesture's button came up.
+func TestIssueScrollbar_NextClickSettlesStaleGesture(t *testing.T) {
+	m := overflowIssueModel(t)
+	rect := barRect(t, m)
+
+	m.HandleClick(rect.X, rect.Y+1)
+	if !m.ScrollbarDragging() {
+		t.Fatal("press did not arm the gesture")
+	}
+	kind, cmd := m.HandleClick(2, 2)
+	if kind != HitBody || cmd != nil {
+		t.Fatalf("body click = %v/%v", kind, cmd)
+	}
+	if m.ScrollbarDragging() {
+		t.Fatal("the next click left a stale scrollbar gesture live")
+	}
+	if m.HasScrollbar() && !m.Active() {
+		t.Fatal("body click lost its ordinary activate behavior")
+	}
+}
+
 // Bar hover and nav-row hover are exclusive: hovering one clears the other,
 // and the stale-clearing (-1,-1) call hosts use resets both.
 func TestIssueScrollbar_HoverExclusivity(t *testing.T) {

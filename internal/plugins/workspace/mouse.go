@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/issueview"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
@@ -353,6 +354,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	if action.Type == mouse.ActionHover && wasDragging && !p.mouseHandler.IsDragging() {
 		if dragSourceBefore == regionPaneLeaf {
 			p.abandonDocSelection()
+		}
+		if dragSourceBefore == regionIssueScrollbar {
+			p.finishIssueScrollbarDrag()
 		}
 		// Drop what the press armed and end the gesture: an edge scroll tick still
 		// in flight belongs to a gesture that is over, and neither activation nor a
@@ -1008,7 +1012,15 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
 		beforeActive := issue.tabs.Active
 		beforeID, beforeScroll := view.IssueID(), view.ScrollOffset()
-		_, cmd := view.HandleClick(lx, ly)
+		kind, cmd := view.HandleClick(lx, ly)
+		if kind == issueview.HitScrollbar {
+			// The card armed a scrollbar gesture (and did any track-click
+			// jump itself). Start the shared handler's drag so motions come
+			// back to ScrollbarDrag and the release anywhere settles it.
+			p.issueScrollLeaf = leafID
+			p.issueScrollTrackY = action.Y - ly
+			p.mouseHandler.StartDrag(action.X, action.Y, regionIssueScrollbar, leafID)
+		}
 		after := issue.view()
 		if issue.tabs.Active != beforeActive ||
 			(after != nil && (after.IssueID() != beforeID || after.ScrollOffset() != beforeScroll)) {
@@ -1517,6 +1529,16 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 	p.lastDragRegion = dragRegion // Save for handleMouseDragEnd (EndDrag clears before DragEnd)
 
 	switch dragRegion {
+	case regionIssueScrollbar:
+		// An issue card's scrollbar gesture. The press-time snapshot of the
+		// card's top row maps the pointer onto view-local rows; the shared
+		// core clamps past both ends of the track.
+		if issue := p.issues[p.issueScrollLeaf]; issue != nil {
+			if view := issue.view(); view != nil {
+				view.ScrollbarDrag(action.Y - p.issueScrollTrackY)
+			}
+		}
+		return nil
 	case regionPaneDivider:
 		// Calculate new sidebar width based on drag
 		startValue := p.mouseHandler.DragStartValue()
@@ -1588,12 +1610,19 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		// and nothing else ends it: the handler has already closed the drag, so
 		// the lost-release path never fires either.
 		p.abandonDocSelection()
+		p.finishIssueScrollbarDrag()
 		return nil
 	}
 
 	dragSource := action.DragStartID
 	if dragSource == "" {
 		dragSource = p.lastDragRegion
+	}
+	if dragSource == regionIssueScrollbar {
+		// An issue scrollbar gesture settles wherever the pointer is; the
+		// offset is view state and nothing persists it here.
+		p.finishIssueScrollbarDrag()
+		return nil
 	}
 	if dragSource == regionPaneLeaf {
 		// A document selection ends here rather than in the width-persisting

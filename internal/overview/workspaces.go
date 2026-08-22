@@ -968,6 +968,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		if m.wsBar.gesture.Active() && !m.workspacesMouse.IsDragging() {
 			m.wsBar.gesture.End()
 		}
+		if view := m.previewIssueView(); view != nil && view.ScrollbarDragging() && !m.workspacesMouse.IsDragging() {
+			view.ScrollbarDragEnd()
+		}
 	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.
@@ -996,6 +999,14 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	if action.Type == mouse.ActionDragEnd && isWorkspacesScrollbarDragID(action.DragStartID) {
 		m.wsBar.gesture.End()
+		return nil
+	}
+	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewIssueScrollbarKind {
+		m.dragPreviewIssueScrollbar(action)
+		return nil
+	}
+	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewIssueScrollbarKind {
+		m.endPreviewIssueScrollbarDrag()
 		return nil
 	}
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == previewDiffDividerKind {

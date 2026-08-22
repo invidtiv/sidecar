@@ -126,14 +126,19 @@ const (
 	// regionPaneLeaf is any content leaf's body — document or issue. One region
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
-	regionPaneLeaf      = "pane-leaf"
-	regionDocLink       = "doc-link"
-	regionDocTab        = "doc-tab"
-	regionIssueTab      = "issue-tab"
-	regionNoteTab       = "note-tab"
-	regionResourceTab   = "resource-tab"
-	regionDiffTargetTab = "diff-target-tab"
-	regionPaneClose     = "pane-close"
+	regionPaneLeaf = "pane-leaf"
+	// regionIssueScrollbar names a drag that began on an issue card's
+	// scrollbar. The card arms the gesture in HandleClick (which also does any
+	// track-click jump); this ID is what turns the host's StartDrag into
+	// motions routed to ScrollbarDrag and a release that settles it.
+	regionIssueScrollbar = "issue-scrollbar"
+	regionDocLink        = "doc-link"
+	regionDocTab         = "doc-tab"
+	regionIssueTab       = "issue-tab"
+	regionNoteTab        = "note-tab"
+	regionResourceTab    = "resource-tab"
+	regionDiffTargetTab  = "diff-target-tab"
+	regionPaneClose      = "pane-close"
 	// regionPaneTitle is a leaf's header name, which is a click target so a
 	// pane with no sidebar row of its own can still be renamed.
 	regionPaneTitle       = "pane-title"
@@ -263,9 +268,15 @@ type Plugin struct {
 	// A drag is answered by where it began, never by where the pointer has since
 	// travelled, and the shared pane-leaf region cannot say which leaf that was.
 	docSelectLeaf int
-	issues        map[int]*issuePane
-	notes         map[int]*notePane
-	diffs         map[int]*diffPane
+	// issueScrollLeaf and issueScrollTrackY carry an issue card's live
+	// scrollbar gesture: which leaf it started in and the absolute Y the card's
+	// row 0 sat at when the button went down, so motion maps onto view-local
+	// rows without re-deriving pane geometry mid-gesture. See mouse.go.
+	issueScrollLeaf   int
+	issueScrollTrackY int
+	issues            map[int]*issuePane
+	notes             map[int]*notePane
+	diffs             map[int]*diffPane
 	// resources are the external-provider leaves. One map for every provider:
 	// the extension point is which resource is recognized, not which windows
 	// exist, so a Jira ticket and a CI build are tabs in one kind of leaf.

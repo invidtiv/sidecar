@@ -14,6 +14,11 @@ import (
 const (
 	previewIssueRegionKind = "global-preview-issue"
 	previewIssueTabKind    = "global-preview-issue-tab"
+	// previewIssueScrollbarKind names a drag that began on the issue card's
+	// scrollbar. The card arms the gesture in HandleClick (which also does any
+	// track-click jump); this ID is what turns the host's StartDrag into
+	// motions routed to ScrollbarDrag and a release anywhere that settles it.
+	previewIssueScrollbarKind = "global-preview-issue-scrollbar"
 )
 
 func isPreviewIssueRegion(kind string) bool {
@@ -42,6 +47,10 @@ type previewIssue struct {
 	surface string
 	focused bool
 	epoch   uint64
+	// scrollTrackY is the absolute Y the card's row 0 sat at when a scrollbar
+	// gesture's button went down, so motion maps onto view-local rows without
+	// re-deriving the preview box mid-gesture.
+	scrollTrackY int
 	// wheel coalesces one flick over this pane, exactly as the terminal's own
 	// burst does for its surface; the pane dying drops any held delta with it.
 	wheel tty.WheelBurst
@@ -249,7 +258,14 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 		}
 		lx := action.X - action.Region.Rect.X
 		ly := action.Y - action.Region.Rect.Y - termpreview.HeaderRows
-		_, cmd := view.HandleClick(lx, ly)
+		kind, cmd := view.HandleClick(lx, ly)
+		if kind == issueview.HitScrollbar {
+			// The card armed a scrollbar gesture (and did any track-click
+			// jump itself). Start the shared handler's drag so motions come
+			// back to ScrollbarDrag and the release anywhere settles it.
+			issue.scrollTrackY = action.Y - ly
+			m.workspacesMouse.StartDrag(action.X, action.Y, previewIssueScrollbarKind, 0)
+		}
 		return cmd
 	case mouse.ActionDoubleClick:
 		// The preceding click already navigated. Consume Bubble Tea's
@@ -261,6 +277,34 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 		m.scrollPreviewIssueByWheel(action.Delta)
 	}
 	return nil
+}
+
+// previewIssueView is the issue card on screen, or nil when the pane holds
+// nothing renderable.
+func (m *Model) previewIssueView() *issueview.Model {
+	if m.preview.issue == nil {
+		return nil
+	}
+	return m.preview.issue.view()
+}
+
+// dragPreviewIssueScrollbar extends an issue card's scrollbar gesture from a
+// held pointer. The press-time snapshot of the card's top row maps the pointer
+// onto view-local rows; the shared core clamps past both ends of the track.
+func (m *Model) dragPreviewIssueScrollbar(action mouse.MouseAction) {
+	if issue := m.preview.issue; issue != nil {
+		if view := issue.view(); view != nil {
+			view.ScrollbarDrag(action.Y - issue.scrollTrackY)
+		}
+	}
+}
+
+// endPreviewIssueScrollbarDrag settles an issue card's scrollbar gesture
+// wherever the pointer is; the offset is view state and nothing persists it.
+func (m *Model) endPreviewIssueScrollbarDrag() {
+	if view := m.previewIssueView(); view != nil {
+		view.ScrollbarDragEnd()
+	}
 }
 
 // scrollPreviewIssueByWheel applies one notch to the issue pane through the

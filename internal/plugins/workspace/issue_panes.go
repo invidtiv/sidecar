@@ -560,6 +560,17 @@ func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box)
 	p.mouseHandler.HitMap.AddRect(regionPaneLeaf, box.X, box.Y, box.W, box.H, leafID)
 }
 
+// finishIssueScrollbarDrag settles an issue card's scrollbar gesture and
+// forgets which leaf it belonged to. Safe to call with no gesture live.
+func (p *Plugin) finishIssueScrollbarDrag() {
+	if issue := p.issues[p.issueScrollLeaf]; issue != nil {
+		if view := issue.view(); view != nil {
+			view.ScrollbarDragEnd()
+		}
+	}
+	p.issueScrollLeaf = 0
+}
+
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
 	strip := layoutIssueTabStrip(issue, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {

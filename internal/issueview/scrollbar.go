@@ -104,6 +104,17 @@ func (m *Model) ScrollbarDragEnd() {
 	m.scrollbarGrabDelta = 0
 }
 
+// settleStaleScrollbarGesture ends a gesture whose continuation can no longer
+// arrive. HandleClick and HandleHover call it on the boundaries that prove a
+// live drag is over — a fresh press, or motion the shared handler delivered as
+// hover because it held no drag — so an unwired or lost release can never
+// leave the thumb rendered pressed indefinitely.
+func (m *Model) settleStaleScrollbarGesture() {
+	if m != nil && m.scrollbarDragging {
+		m.ScrollbarDragEnd()
+	}
+}
+
 // beginScrollbarGesture answers a press on an interactive bar: grabbing the
 // thumb where it was pressed, or jumping to the clicked spot and anchoring
 // the thumb there so the same gesture keeps dragging (macOS track-click).
