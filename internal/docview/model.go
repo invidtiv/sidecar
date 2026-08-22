@@ -88,6 +88,11 @@ type Model struct {
 	// that are no longer the ones the user picked.
 	selectionKey layoutKey
 
+	// scrollbarHover and scrollbarDrag are the bar's pointer state. See
+	// scrollbar.go.
+	scrollbarHover bool
+	scrollbarDrag  docScrollbarDrag
+
 	// search is this document's in-file search: its query, its matches and the
 	// layout they were found in. See search.go.
 	search searchState
@@ -278,12 +283,7 @@ func (m *Model) View() string {
 		rows = append(rows, fitLine(line, bodyWidth))
 	}
 	if useBar {
-		bar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(display.rows),
-			ScrollOffset: m.scroll,
-			VisibleItems: body,
-			TrackHeight:  body,
-		})
+		bar, _ := ui.RenderScrollbarWithState(m.ScrollbarParams(), m.scrollbarStyle())
 		barLines := strings.Split(bar, "\n")
 		for i := 0; i < len(rows) && i < len(barLines); i++ {
 			rows[i] = rows[i] + barLines[i]

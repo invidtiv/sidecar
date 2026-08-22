@@ -60,6 +60,11 @@ const (
 	HitParent
 	HitChild
 	HitBody
+	// HitScrollbar reports a press that began a scrollbar gesture instead of
+	// landing on the card's content. Hosts see it from HandleClick while
+	// ScrollbarDragging is true, which is their cue to start the shared
+	// handler's drag so motions come back to ScrollbarDrag.
+	HitScrollbar
 )
 
 // Hit is one interactive rectangle in the last View, in view-local cells.
@@ -115,6 +120,12 @@ type Model struct {
 	// buildStyle is the markdown style key the current rows were built under,
 	// so a live theme change rebuilds them without a resize.
 	buildStyle string
+
+	// Scrollbar pointer state. See scrollbar.go.
+	scrollbarHover      bool
+	scrollbarDragging   bool
+	scrollbarGrabDelta  int
+	scrollbarDragParams ui.ScrollbarParams
 
 	// OpenHandler, when set, receives parent/subtask/sibling activations
 	// instead of Load retargeting this model. Hosts that tab issues use this
@@ -401,12 +412,7 @@ func (m *Model) View() string {
 		out[i] = painted
 	}
 	if useBar {
-		bar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(m.ensureRows()),
-			ScrollOffset: m.scroll,
-			VisibleItems: m.height,
-			TrackHeight:  m.height,
-		})
+		bar, _ := ui.RenderScrollbarWithState(m.ScrollbarParams(), m.scrollbarStyle())
 		out = strings.Split(lipglossJoin(out, bar), "\n")
 	}
 	for i := range out {
@@ -521,7 +527,18 @@ func (m *Model) handleKeyString(key string) (bool, tea.Cmd) {
 // HandleClick selects and opens a parent or child row at view-local (x, y).
 // A click on empty chrome still only activates the card so the next arrow key
 // can navigate; hosts do not need a separate double-click path for issue rows.
+// A click on an interactive scrollbar instead begins a drag gesture and never
+// activates anything: see scrollbar.go.
 func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
+	// The bar is answered before any row hit can be: action buttons live in
+	// the card's rows, and a press on the bar must never open one.
+	if m.beginScrollbarGesture(x, y) {
+		return HitScrollbar, nil
+	}
+	// A fresh press implies the previous gesture's button came up. If its end
+	// was never reported back, settle here so the thumb cannot stay rendered
+	// pressed under a host that wires clicks but not drags.
+	m.settleStaleScrollbarGesture()
 	// Resolve the row against the frame that was clicked before changing focus:
 	// activation can add an ACTIONS row, which invalidates this frame's hits.
 	var clicked *Hit
@@ -539,8 +556,22 @@ func (m *Model) HandleClick(x, y int) (HitKind, tea.Cmd) {
 	return HitBody, nil
 }
 
-// HandleHover updates the hover highlight from view-local coordinates.
+// HandleHover updates the hover highlight from view-local coordinates. The
+// scrollbar column answers first: hovering the bar highlights the bar and
+// clears any row highlight, the same exclusivity a row hover has.
 func (m *Model) HandleHover(x, y int) {
+	// A hover can only be delivered while the shared mouse handler holds no
+	// drag — motion during a real drag arrives as ActionDrag instead — so one
+	// landing on a card that still holds a scrollbar gesture proves the
+	// gesture's release was lost or never wired. Settle before it can render
+	// a thumb stuck pressed.
+	m.settleStaleScrollbarGesture()
+	if m.scrollbarContains(x, y) {
+		m.scrollbarHover = true
+		m.hover = -1
+		return
+	}
+	m.scrollbarHover = false
 	if hit := m.hitAt(x, y); hit != nil && hit.Cursor >= 0 {
 		m.hover = hit.Cursor
 		return

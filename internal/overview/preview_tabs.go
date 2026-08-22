@@ -178,6 +178,7 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: m.decoratePreviewLine,
+		BarStyle: m.previewTermBarStyle(),
 	})
 }
 

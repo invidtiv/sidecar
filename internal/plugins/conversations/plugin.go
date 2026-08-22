@@ -218,6 +218,8 @@ type Plugin struct {
 	prevMsgScroll   int
 	prevTurnScroll  int
 
+	// Interactive session-list scrollbar (td-550ce1)
+	listScroll listScrollState
 	// Unfocused refresh throttling (td-05149f66)
 	pendingRefresh bool // true when refresh was skipped due to unfocused state
 

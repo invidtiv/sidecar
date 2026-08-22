@@ -89,6 +89,11 @@ type previewState struct {
 	// layer's — the project surface freezes its own panes by the same one.
 	freeze tty.WindowFreeze
 
+	// termBar is a live pointer gesture on this surface's scrollbar, armed by
+	// a press on its bar regions and settled by release or lost-release. See
+	// preview_term_bar.go.
+	termBar previewTermBar
+
 	// buffer aliases terminal.Buffer while that model owns the visible target.
 	// Keeping the alias makes the viewport independent of input ownership.
 	buffer *tty.OutputBuffer

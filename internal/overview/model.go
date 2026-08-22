@@ -166,47 +166,52 @@ type previewOwnershipLease struct {
 }
 
 type Model struct {
-	collector           workspaceinventory.Collector
-	refreshCollector    workspaceinventory.Collector
-	projects            []Project
-	roots               []string
-	generation          int
-	requestID           uint64
-	loading             bool
-	tmuxErr             error
-	results             map[string]workspaceinventory.ProjectResult
-	projectErrors       map[string]error
-	stale               map[string]bool
-	completed           map[int]bool
-	pending             []Project
-	pendingInventory    []Project
-	phase               refreshPhase
-	identityProjects    map[int]Project
-	inventoryOrder      []Project
-	inventoryScheduled  map[string]bool
-	inventoryProjects   map[string]Project
-	inventoryResults    map[string]workspaceinventory.ProjectResult
-	statusInputs        map[string]workspaceinventory.ProjectResult
-	active              int
-	currentPanes        []workspaceinventory.Pane
-	shellClaims         workspaceinventory.ShellClaims
-	liveOnly            bool
-	ctx                 context.Context
-	cancel              context.CancelFunc
-	traceWriter         io.Writer
-	cycleStart          time.Time
-	configured          int
-	firstResult         bool
-	maxActive           int
-	pollScheduled       bool
-	configuredPaths     []string
-	board               kanban.Component
-	cards               map[string]workspaceinventory.Workspace
-	agentCount          int
-	compactScroll       int
-	mouse               *mouse.Handler
-	workspaces          workspacelist.Model
-	workspacesMouse     *mouse.Handler
+	collector          workspaceinventory.Collector
+	refreshCollector   workspaceinventory.Collector
+	projects           []Project
+	roots              []string
+	generation         int
+	requestID          uint64
+	loading            bool
+	tmuxErr            error
+	results            map[string]workspaceinventory.ProjectResult
+	projectErrors      map[string]error
+	stale              map[string]bool
+	completed          map[int]bool
+	pending            []Project
+	pendingInventory   []Project
+	phase              refreshPhase
+	identityProjects   map[int]Project
+	inventoryOrder     []Project
+	inventoryScheduled map[string]bool
+	inventoryProjects  map[string]Project
+	inventoryResults   map[string]workspaceinventory.ProjectResult
+	statusInputs       map[string]workspaceinventory.ProjectResult
+	active             int
+	currentPanes       []workspaceinventory.Pane
+	shellClaims        workspaceinventory.ShellClaims
+	liveOnly           bool
+	ctx                context.Context
+	cancel             context.CancelFunc
+	traceWriter        io.Writer
+	cycleStart         time.Time
+	configured         int
+	firstResult        bool
+	maxActive          int
+	pollScheduled      bool
+	configuredPaths    []string
+	board              kanban.Component
+	cards              map[string]workspaceinventory.Workspace
+	agentCount         int
+	compactScroll      int
+	mouse              *mouse.Handler
+	workspaces         workspacelist.Model
+	workspacesMouse    *mouse.Handler
+	// wsBar is the Sessions list's interactive scrollbar: the bar's last
+	// render snapshot, where its track sits on screen, whether the pointer
+	// hovers it, and any drag gesture in flight.
+	wsBar               workspaceScrollbarState
+	hoverTermBar        bool
 	sidebarWidth        int
 	sidebarVisible      bool
 	catalog             map[string]workspaceinventory.Workspace
@@ -853,7 +858,27 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			return m.Start(m.projects)
 		}
 	case tea.MouseMsg:
+		wasDragging := m.mouse.IsDragging()
 		action := m.mouse.HandleMouse(msg)
+		if action.Type == mouse.ActionHover && wasDragging && !m.mouse.IsDragging() {
+			// A release lost off-window or behind focus change: the shared
+			// handler cancels the stale drag on this first button-less motion,
+			// and a live lane-bar gesture settles with it at the same boundary.
+			m.board.ReleaseScrollbar()
+			return nil
+		}
+		// A drag and its release belong to the region they started in — the
+		// grabbed lane's bar — wherever the pointer has since travelled,
+		// including nowhere the board drew at all.
+		if isBoardScrollbarDragID(action.DragStartID) {
+			switch action.Type {
+			case mouse.ActionDrag:
+				m.board.DragScrollbar(action.Y)
+			case mouse.ActionDragEnd:
+				m.board.ReleaseScrollbar()
+			}
+			return nil
+		}
 		if action.Region == nil {
 			return nil
 		}
@@ -863,8 +888,18 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		switch action.Type {
 		case mouse.ActionClick:
+			if isBoardBarRegion(region) {
+				m.pressBoardScrollbar(region, action)
+				break
+			}
 			m.board.HandlePointer(kanban.PointerClick, region)
 		case mouse.ActionDoubleClick:
+			// Double-press parity: a rapid second press on a bar re-grabs it
+			// exactly like the first one did instead of activating a card.
+			if isBoardBarRegion(region) {
+				m.pressBoardScrollbar(region, action)
+				break
+			}
 			if m.board.HandlePointer(kanban.PointerDoubleClick, region).Kind == kanban.ActionActivated {
 				return m.activate()
 			}
@@ -1239,7 +1274,14 @@ func (m *Model) View(width, height int) string {
 		return m.renderCompact(width, height)
 	}
 	for _, region := range result.Regions {
-		m.mouse.HitMap.AddRect("overview-card", region.X, region.Y, region.W, region.H, region)
+		// Lane bars keep the shared renderer's region IDs so a press can be
+		// told from a card at hit-test time; they are emitted after every
+		// card region, so the reverse scan gives them the column they share.
+		id := "overview-card"
+		if region.Kind == kanban.RegionScrollbarThumb || region.Kind == kanban.RegionScrollbarTrack {
+			id = string(region.Kind)
+		}
+		m.mouse.HitMap.AddRect(id, region.X, region.Y, region.W, region.H, region)
 	}
 	return result.View
 }

@@ -190,12 +190,8 @@ func (m *Model) View() string {
 		out[i] = fitLine(line, bodyWidth)
 	}
 	if useBar {
-		bar := ui.RenderScrollbar(ui.ScrollbarParams{
-			TotalItems:   len(m.ensureRows()),
-			ScrollOffset: m.scroll,
-			VisibleItems: m.height,
-			TrackHeight:  m.height,
-		})
+		params := m.ScrollbarParams()
+		bar, _ := ui.RenderScrollbarWithGeometry(params)
 		barLines := strings.Split(bar, "\n")
 		for i := range out {
 			s := " "
@@ -245,6 +241,48 @@ func (m *Model) handleKeyString(key string) (bool, tea.Cmd) {
 
 // ModelID is the load identity last passed to Load.
 func (m *Model) ModelID() int { return m.modelID }
+
+// ScrollbarParams reports the renderer inputs the card draws its bar with:
+// one row per rendered line, a viewport of height rows. Hosts that want to
+// make the bar interactive feed these to ui.RenderScrollbarWithGeometry for
+// region registration and ui.OffsetAtRow/RowForOffset for press and drag
+// mapping — no scrollbar math lives outside internal/ui.
+func (m *Model) ScrollbarParams() ui.ScrollbarParams {
+	return ui.ScrollbarParams{
+		TotalItems:   len(m.ensureRows()),
+		ScrollOffset: m.scroll,
+		VisibleItems: m.height,
+		TrackHeight:  m.height,
+	}
+}
+
+// HasScrollbar reports whether the card currently draws a bar (content
+// overflows the viewport). When false, hosts must register no regions: the
+// reserved column is an anti-jitter spacer, not a control.
+func (m *Model) HasScrollbar() bool {
+	_, geom := ui.RenderScrollbarWithGeometry(m.ScrollbarParams())
+	return geom.HasThumb
+}
+
+// ScrollToOffset pins the viewport at offset, clamped into range by the same
+// bounds the renderer maps onto thumb travel. Reports whether it moved.
+func (m *Model) ScrollToOffset(offset int) bool {
+	params := m.ScrollbarParams()
+	offset = min(max(offset, 0), max(params.TotalItems-params.VisibleItems, 0))
+	if offset == m.scroll {
+		return false
+	}
+	m.scroll = offset
+	m.clampScroll()
+	return true
+}
+
+// OffsetAtTrackRow maps a track row (pointer Y minus the bar's top) to the
+// scroll offset whose thumb top anchors there — the shared core every other
+// interactive scrollbar uses for track clicks and drags.
+func (m *Model) OffsetAtTrackRow(row int) int {
+	return ui.OffsetAtRow(m.ScrollbarParams(), row)
+}
 
 func (m *Model) contentWidth() int {
 	w := m.innerWidth()

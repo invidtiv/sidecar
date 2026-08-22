@@ -80,6 +80,7 @@ func (m *Model) AbandonSelection() textselect.Result {
 	if m == nil {
 		return textselect.Result{}
 	}
+	m.abandonScrollbarGesture()
 	return m.selection.Abandon()
 }
 
@@ -106,6 +107,12 @@ func (m *Model) SelectionText() []string {
 func (m *Model) HandleSelectionMouse(action mouse.MouseAction) textselect.Result {
 	if m == nil {
 		return textselect.Result{}
+	}
+	// The scrollbar column is answered here, before the selection engine can
+	// see it: a press on the bar must never arm a selection or resolve into a
+	// click-through. See scrollbar.go.
+	if result, handled := m.handleScrollbarMouse(action); handled {
+		return result
 	}
 	result := m.selection.HandleMouse(action, selectionSource{m})
 	if result.AutoScroll != 0 {

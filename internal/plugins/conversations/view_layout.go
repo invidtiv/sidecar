@@ -125,6 +125,10 @@ func (p *Plugin) renderTwoPane() string {
 		// Turn item regions - HIGHEST PRIORITY (registered last)
 		p.registerTurnHitRegions(mainX+1, mainWidth-2, innerHeight)
 
+		// Session scrollbar - after all content so a bar press never selects
+		// a session row underneath (reverse-scan priority).
+		p.registerListScrollbarRegion()
+
 		p.hitRegionsDirty = false
 	}
 
@@ -398,13 +402,14 @@ func (p *Plugin) renderSidebarPane(height int) string {
 
 	sessionContent := strings.TrimRight(sessionSB.String(), "\n")
 
-	// Render scrollbar
-	scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+	// Render scrollbar. The track spans the session rows, which begin one row
+	// past the header lines (linesUsed) plus the panel border.
+	scrollbar := p.renderSessionScrollbar(ui.ScrollbarParams{
 		TotalItems:   len(sessions),
 		ScrollOffset: p.scrollOff,
 		VisibleItems: contentHeight,
 		TrackHeight:  contentHeight,
-	})
+	}, 1+linesUsed, sessionContent)
 
 	sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, sessionContent, scrollbar))
 

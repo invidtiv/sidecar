@@ -36,6 +36,10 @@ type terminalViewportInput struct {
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
 	LinkResolver  *terminalLineLinkResolver
+
+	// BarStyle is the pointer emphasis the scrollbar draws with. The zero
+	// value renders byte-identically to the idle bar.
+	BarStyle ui.ScrollbarStyle
 }
 
 // terminalViewportLayout is the shared layout value. Links, search and the
@@ -147,14 +151,15 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		// (td-26bdb2). Padding to the exact content width pins it to the edge and
 		// keeps the joined block from exceeding the pane and wrapping.
 		displayLines = padLinesToWidth(displayLines, layout.PadWidth)
+		bar, _ := ui.RenderScrollbarWithState(ui.ScrollbarParams{
+			TotalItems:   max(in.TotalItems, layout.EffectiveCount),
+			ScrollOffset: layout.AbsoluteStart,
+			VisibleItems: layout.DisplayHeight,
+			TrackHeight:  layout.DisplayHeight,
+		}, in.BarStyle)
 		content = lipgloss.JoinHorizontal(lipgloss.Top,
 			strings.Join(displayLines, "\n"),
-			ui.RenderScrollbar(ui.ScrollbarParams{
-				TotalItems:   max(in.TotalItems, layout.EffectiveCount),
-				ScrollOffset: layout.AbsoluteStart,
-				VisibleItems: layout.DisplayHeight,
-				TrackHeight:  layout.DisplayHeight,
-			}),
+			bar,
 		)
 	}
 	if canvasBg := termpreview.CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight); canvasBg != "" {

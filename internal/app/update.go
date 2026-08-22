@@ -2344,6 +2344,10 @@ func (m *Model) handleProjectSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd
 		return m, m.previewProjectTheme()
 	}
 
+	if handled, cmd := m.projectSwitcherBarEvent(msg); handled {
+		return m, cmd
+	}
+
 	action := m.projectSwitcherModal.HandleMouse(msg, m.projectSwitcherMouseHandler)
 
 	// Check if action is a project item click
@@ -2423,6 +2427,10 @@ func (m *Model) handleThemeSwitcherMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) 
 			}
 		}
 		return m, nil
+	}
+
+	if handled, cmd := m.themeSwitcherBarEvent(msg); handled {
+		return m, cmd
 	}
 
 	action := m.themeSwitcherModal.HandleMouse(msg, m.themeSwitcherMouseHandler)

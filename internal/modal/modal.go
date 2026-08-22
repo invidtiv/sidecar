@@ -36,6 +36,13 @@ type Modal struct {
 	// longer be trusted (see Invalidate).
 	lastMaxScroll int
 	layoutValid   bool
+
+	// Interactive scrollbar state (see scrollbar.go). bars is rebuilt by every
+	// buildLayout; press survives across renders so a viewport-bar drag keeps
+	// its press-time mapping even when the layout shifts underneath it.
+	bars     []placedBar // viewport bar (section -1) first, then section-declared
+	barHover bool        // pointer over the framework's own viewport bar
+	press    *barGesture // live viewport-bar gesture; nil when none
 }
 
 // focusablePos records the absolute position of a focusable element within the full content.
@@ -133,11 +140,22 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 	action := handler.HandleMouse(msg)
 
 	switch action.Type {
-	case mouse.ActionClick:
+	case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
 		if action.Region == nil {
 			return ""
 		}
 		id := action.Region.ID
+
+		// A scrollbar press starts (or restarts) a viewport-bar gesture; a
+		// section-declared bar's press is absorbed here — its owner claims
+		// those events through SectionBarAt before they ever arrive, and in
+		// any case a press on the bar must never select the row beneath it.
+		if id == RegionScrollbarThumb || id == RegionScrollbarTrack {
+			if idx, ok := m.barIndexAt(action.Region); ok && m.bars[idx].section < 0 {
+				m.handleViewportBarPress(action, handler)
+			}
+			return ""
+		}
 
 		// Backdrop click optionally dismisses the modal.
 		if id == BackdropRegionID {
@@ -179,8 +197,26 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		}
 		return ""
 
+	case mouse.ActionDrag:
+		m.handleViewportBarMotion(action.Y)
+		return ""
+
+	case mouse.ActionDragEnd:
+		// The handler has already closed the drag; settle the gesture.
+		m.endViewportBarGesture()
+		return ""
+
 	case mouse.ActionHover:
-		if action.Region != nil && action.Region.ID != BackdropRegionID && action.Region.ID != "modal-body" {
+		// The handler cancels a drag on the first button-less motion (a lost
+		// release). That hover is the gesture's only survivor here, so the bar
+		// settles with it instead of holding a dead anchor.
+		if m.press != nil && !handler.IsDragging() {
+			m.endViewportBarGesture()
+		}
+		barHovered := m.isViewportBarRegion(action.Region)
+		m.barHover = barHovered
+		if action.Region != nil && !barHovered &&
+			action.Region.ID != BackdropRegionID && action.Region.ID != "modal-body" {
 			m.hoverID = action.Region.ID
 		} else {
 			m.hoverID = ""
@@ -188,13 +224,17 @@ func (m *Modal) HandleMouse(msg tea.MouseMsg, handler *mouse.Handler) string {
 		return ""
 
 	case mouse.ActionScrollUp:
-		if action.Region != nil && action.Region.ID == "modal-body" {
+		// The viewport bar's column scrolls the body, exactly as it did before
+		// the bar owned regions; a section-declared bar absorbs instead.
+		if action.Region != nil &&
+			(action.Region.ID == "modal-body" || m.isViewportBarRegion(action.Region)) {
 			m.ScrollBy(-wheelLines)
 		}
 		return ""
 
 	case mouse.ActionScrollDown:
-		if action.Region != nil && action.Region.ID == "modal-body" {
+		if action.Region != nil &&
+			(action.Region.ID == "modal-body" || m.isViewportBarRegion(action.Region)) {
 			m.ScrollBy(wheelLines)
 		}
 		return ""
@@ -281,7 +321,7 @@ func (m *Modal) WheelAtBoundary(msg tea.MouseWheelMsg, h *mouse.Handler) bool {
 		}
 	}
 
-	if region.ID == "modal-body" {
+	if region.ID == "modal-body" || m.isViewportBarRegion(region) {
 		return m.bounds().AtBoundary(delta)
 	}
 
@@ -323,6 +363,12 @@ func (m *Modal) Reset() {
 	m.pendingFocusID = ""
 	m.hoverID = ""
 	m.scrollOffset = 0
+	// A modal reused across opens must not inherit a dead gesture: the drag
+	// that was live when it closed settles here rather than leaking into the
+	// next open (the td-f63097 boundary, from the modal's side).
+	m.press = nil
+	m.barHover = false
+	m.bars = nil
 }
 
 // currentFocusID returns the ID of the currently focused element.

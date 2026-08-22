@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/ui"
@@ -62,6 +63,33 @@ type themePicker struct {
 	// useGlobal, when set, adds the distinct reset action the inline picker
 	// needs. Nil on Appearance, where "no theme" is not a choice.
 	useGlobal func(*Model) tea.Cmd
+
+	// bar is the scrollbar the last build of the list reported, gesture any
+	// drag in flight on it. The window position is view state; nothing here
+	// is persisted.
+	bar     themeScrollbar
+	gesture themeScrollGesture
+}
+
+// themeScrollbar is what one build of the picker's list learned about its
+// scrollbar: the params it was drawn with and where its track sits in
+// content-area coordinates. has is false when every visible theme fits and no
+// regions exist.
+type themeScrollbar struct {
+	params ui.ScrollbarParams
+	trackX int
+	trackY int
+	has    bool
+}
+
+// themeScrollGesture carries one drag on that bar: the press-time params and
+// track origin, so re-renders cannot shift the mapping under the pointer, and
+// where within the thumb the grab landed.
+type themeScrollGesture struct {
+	active    bool
+	params    ui.ScrollbarParams
+	trackY    int
+	grabDelta int
 }
 
 // newThemePicker builds a picker over the whole theme library.
@@ -159,18 +187,16 @@ func (p *themePicker) maxScroll() int {
 	return max(0, len(p.filtered)-p.rows)
 }
 
-// scrollWindow moves the visible window and keeps the cursor on the same
-// visual row inside it. That is what the wheel asks for: the list scrolls,
-// the highlight stays put, and the theme under it is the one previewed.
-//
-// One notch is three rows, and the preview it ends on is the only one worth
-// applying: previewing each row a flick passes over would recolour the whole
-// application three times for a gesture the user reads as one.
-func (p *themePicker) scrollWindow(delta int) bool {
-	if delta == 0 || len(p.filtered) == 0 {
+// setViewport moves the visible window to next and keeps the cursor on the
+// same visual row inside it: the list scrolls, the highlight stays put, and
+// the theme under the row is the one a following preview will apply. It
+// reports false when nothing moved. Both the wheel and the scrollbar gestures
+// scroll through here, so a notch and a drag cannot disagree about where the
+// highlight lands.
+func (p *themePicker) setViewport(next int) bool {
+	if len(p.filtered) == 0 {
 		return false
 	}
-	next := p.scroll + delta
 	if next < 0 {
 		next = 0
 	}
@@ -188,6 +214,19 @@ func (p *themePicker) scrollWindow(delta int) bool {
 	if p.cursor >= p.scroll+p.rows {
 		p.cursor = min(p.scroll+p.rows-1, len(p.filtered)-1)
 		p.skipSeparator(-1)
+	}
+	return true
+}
+
+// scrollWindow answers one wheel notch. The preview it ends on is the only one
+// worth applying: previewing each row a flick passes over would recolour the
+// whole application three times for a gesture the user reads as one.
+func (p *themePicker) scrollWindow(delta int) bool {
+	if delta == 0 || len(p.filtered) == 0 {
+		return false
+	}
+	if !p.setViewport(p.scroll + delta) {
+		return false
 	}
 	p.preview()
 	return true
@@ -357,12 +396,35 @@ func (m *Model) buildThemePicker(b *paneBuilder, p *themePicker, indent int) {
 		body = append(body, strings.Repeat(" ", rowWidth))
 	}
 
-	box := themeListBox(body, p.scroll, len(p.filtered), p.rows, listWidth, listFocused || b.hovering(regionThemeList))
+	box, geom := themeListBox(body, p.scroll, len(p.filtered), p.rows, listWidth,
+		listFocused || b.hovering(regionThemeList), m.scrollbarStyle(b))
 	y = len(b.lines)
 	b.lines = append(b.lines, prefixLines(box, pad)...)
 	b.m.mouse.HitMap.AddRect(regionThemeList, b.originX+indent, 1+y, listWidth, len(box), nil)
 	for _, hit := range hits {
 		b.m.mouse.HitMap.AddRect(hit.id, b.originX+indent+1, 1+y+1+hit.offset, rowWidth, 1, nil)
+	}
+	// The bar's two targets go in after the row rects: HitMap.Test scans
+	// reverse, so a press on the track or thumb is answered by the bar and
+	// never selects a theme row beneath its column. Nothing is registered when
+	// every theme fits.
+	p.bar = themeScrollbar{}
+	if geom.HasThumb {
+		trackX := b.originX + indent + 1 + rowWidth
+		trackY := 1 + y + 1
+		p.bar = themeScrollbar{
+			params: ui.ScrollbarParams{
+				TotalItems:   len(p.filtered),
+				ScrollOffset: p.scroll,
+				VisibleItems: p.rows,
+				TrackHeight:  len(body),
+			},
+			trackX: trackX,
+			trackY: trackY,
+			has:    true,
+		}
+		b.m.mouse.HitMap.AddRect(ui.RegionScrollbarTrack, trackX, trackY, 1, geom.TrackRect.Dy(), nil)
+		b.m.mouse.HitMap.AddRect(ui.RegionScrollbarThumb, trackX, trackY+geom.ThumbRect.Min.Y, 1, geom.ThumbRect.Dy(), nil)
 	}
 
 	if p.useGlobal != nil {
@@ -399,11 +461,77 @@ func (m *Model) clickThemeRow(index int) tea.Cmd {
 	return nil
 }
 
+// pressThemeScrollbar begins the bar's gesture. Pressing the thumb grabs it at
+// the pressed row; pressing the track jumps so the grabbed point becomes the
+// thumb anchor — and either way the same drag continues from there, which is
+// what makes a track click feel like catching a moving thumb.
+func (m *Model) pressThemeScrollbar(picker *themePicker, action mouse.MouseAction) {
+	bar := picker.bar
+	if !bar.has || action.Region == nil {
+		return
+	}
+	row := action.Y - bar.trackY
+	offset := picker.scroll
+	grab := row - ui.RowForOffset(bar.params, offset)
+	if action.Region.ID == ui.RegionScrollbarTrack {
+		offset = ui.OffsetAtRow(bar.params, row)
+		grab = 0
+		picker.setViewport(offset)
+	}
+	picker.gesture = themeScrollGesture{active: true, params: bar.params, trackY: bar.trackY, grabDelta: grab}
+	m.mouse.StartDrag(action.X, action.Y, action.Region.ID, offset)
+}
+
+// dragThemeScrollbar maps the pointer row back onto the window through the
+// shared inverse mapping, preserving where within the thumb the gesture
+// grabbed. OffsetAtRow clamps past both ends of the track without ending
+// anything.
+func (m *Model) dragThemeScrollbar(picker *themePicker, action mouse.MouseAction) {
+	gesture := picker.gesture
+	if !gesture.active {
+		return
+	}
+	picker.setViewport(ui.OffsetAtRow(gesture.params, action.Y-gesture.trackY-gesture.grabDelta))
+}
+
+// settleThemeScrollbar ends the gesture and previews once. A whole drag reads
+// as one gesture, so the recolour waits for it rather than chasing every row
+// the pointer crossed.
+func (m *Model) settleThemeScrollbar(picker *themePicker) {
+	if !picker.gesture.active {
+		return
+	}
+	picker.gesture = themeScrollGesture{}
+	picker.preview()
+}
+
+// dropThemeScrollbarGesture recovers a scrollbar drag whose release was lost —
+// released outside the window, or focus stolen mid-gesture. The drag machinery
+// has already ended its half on the first button-less motion; this drops ours
+// quietly, without previewing, because the pointer is elsewhere now.
+func (m *Model) dropThemeScrollbarGesture() {
+	picker := m.activePicker()
+	if picker != nil && picker.gesture.active && !m.mouse.IsDragging() {
+		picker.gesture = themeScrollGesture{}
+	}
+}
+
+// scrollbarStyle derives the bar's hover/drag emphasis from the page's pointer
+// state, following the divider's HandleState convention.
+func (m *Model) scrollbarStyle(b *paneBuilder) ui.ScrollbarStyle {
+	dragging := isThemeScrollbarDrag(m.mouse.DragRegion())
+	hovering := !dragging && b.hovering(ui.RegionScrollbarThumb, ui.RegionScrollbarTrack)
+	state := ui.HandleStateFrom(hovering, dragging)
+	return ui.ScrollbarStyle{Thumb: state, Track: state}
+}
+
 // themeListBox frames the visible window and hangs a scrollbar on its right
 // edge. The frame is what makes focus and scroll position obvious; it also
 // keeps the list's geometry stable so a "more above" line cannot jump the
-// rows out from under the pointer.
-func themeListBox(rows []string, scroll, total, visible, width int, focused bool) []string {
+// rows out from under the pointer. The bar renders with whatever pointer
+// emphasis style carries — idle output stays byte-identical to plain
+// RenderScrollbar — and reports where its thumb landed for hit registration.
+func themeListBox(rows []string, scroll, total, visible, width int, focused bool, style ui.ScrollbarStyle) ([]string, ui.Geometry) {
 	if width < 8 {
 		width = 8
 	}
@@ -417,12 +545,13 @@ func themeListBox(rows []string, scroll, total, visible, width int, focused bool
 			fitted[i] = padDisplay(row, rowWidth)
 		}
 	}
-	bar := strings.Split(ui.RenderScrollbar(ui.ScrollbarParams{
+	barLines, geom := ui.RenderScrollbarWithState(ui.ScrollbarParams{
 		TotalItems:   total,
 		ScrollOffset: scroll,
 		VisibleItems: visible,
 		TrackHeight:  len(fitted),
-	}), "\n")
+	}, style)
+	bar := strings.Split(barLines, "\n")
 	body := make([]string, len(fitted))
 	for i, row := range fitted {
 		track := " "
@@ -439,7 +568,14 @@ func themeListBox(rows []string, scroll, total, visible, width int, focused bool
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(fg).
 		Render(strings.Join(body, "\n"))
-	return strings.Split(boxed, "\n")
+	return strings.Split(boxed, "\n"), geom
+}
+
+// isThemeScrollbarDrag reports that a drag in flight began on the theme list's
+// scrollbar, so its motion belongs to the bar rather than to whatever region
+// the pointer is over now.
+func isThemeScrollbarDrag(id string) bool {
+	return id == ui.RegionScrollbarThumb || id == ui.RegionScrollbarTrack
 }
 
 func prefixLines(lines []string, pad string) []string {

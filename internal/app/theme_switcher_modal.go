@@ -16,6 +16,10 @@ import (
 const (
 	themeSwitcherFilterID   = "theme-switcher-filter"
 	themeSwitcherItemPrefix = "theme-switcher-item-"
+
+	// themeSwitcherMaxVisible is how many rows the theme window shows; both
+	// the render and the scrollbar gesture math derive from it.
+	themeSwitcherMaxVisible = 12
 )
 
 // themeEntry is one theme in the unified list. The list, the filter, and the
@@ -114,7 +118,7 @@ func (m *Model) themeSwitcherListSection() modal.Section {
 		nameSelectedStyle := lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
 		nameCurrentStyle := lipgloss.NewStyle().Foreground(styles.Success).Bold(true)
 
-		maxVisible := 12
+		maxVisible := themeSwitcherMaxVisible
 		visibleCount := min(maxVisible, len(themes))
 
 		selectedIdx := m.themeSwitcherSelectedIdx
@@ -206,20 +210,35 @@ func (m *Model) themeSwitcherListSection() modal.Section {
 			})
 		}
 
-		scrollbar := ui.RenderScrollbar(ui.ScrollbarParams{
+		barParams := ui.ScrollbarParams{
 			TotalItems:   len(themes),
 			ScrollOffset: scrollOffset,
 			VisibleItems: visibleCount,
 			TrackHeight:  visibleCount,
-		})
+		}
+		scrollbar, _ := ui.RenderScrollbarWithState(barParams, m.themeSwitcherBar.style(m.themeSwitcherMouseHandler))
 
 		bodyContent := lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(lines, "\n")+" ", scrollbar)
 
-		return modal.RenderedSection{Content: bodyContent, Focusables: focusables}
+		// Declaring the bar lets the modal library place its hit regions and
+		// route presses/drags back through this section's Update.
+		return modal.RenderedSection{
+			Content:    bodyContent,
+			Focusables: focusables,
+			Scrollbar: &modal.SectionScrollbar{
+				TotalItems:   barParams.TotalItems,
+				ScrollOffset: barParams.ScrollOffset,
+				VisibleItems: barParams.VisibleItems,
+				TrackHeight:  barParams.TrackHeight,
+				LocalX:       rowWidth + 1,
+			},
+		}
 	}, m.themeSwitcherListUpdate)
 }
 
-// themeSwitcherListUpdate handles key events for the theme list.
+// themeSwitcherListUpdate handles key events for the theme list. Scrollbar
+// gestures on the declared bar are answered by themeSwitcherBarEvent in the
+// switcher's mouse handler.
 func (m *Model) themeSwitcherListUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {

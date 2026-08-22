@@ -32,6 +32,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -94,6 +95,19 @@ type appContentDeck struct {
 	// alone; today only the issue card coalesces here.
 	wheel    tty.WheelBursts
 	wheelNow func() time.Time
+	// Pointer state for hosted panes' interactive scrollbars. docGestureLeaf
+	// is the document whose HandleSelectionMouse gesture — bar or selection —
+	// is live; issueScroll* carry an issue card's bar gesture and the absolute
+	// Y of its row 0 at press time; noteBar is the host-side bookkeeping a
+	// state-free noteview seam leaves to this surface. selKeys and
+	// selCopyOnSelect bind the shared selection chords to documents at render
+	// time, the only place both are known.
+	docGestureLeaf    int
+	issueScrollLeaf   int
+	issueScrollTrackY int
+	noteBar           appDeckNoteBar
+	selKeys           textselect.Keys
+	selCopyOnSelect   bool
 }
 
 func appDeckKey(workdir, pluginID string) string { return workdir + "\x00" + pluginID }
@@ -200,6 +214,11 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	}
 	h.plugin = m.focusedSurface()
 	h.suppressRefresh = m.hasModal() || m.configOpen() || (m.inGlobalScope() && !h.global)
+	// The chords a document's selection answers are a render-time binding: this
+	// is where the deck knows both which surface is drawn and what the user
+	// configured.
+	terminal := TerminalConfig(m.cfg)
+	h.selKeys, h.selCopyOnSelect = terminal.SelectionKeys(), terminal.CopyOnSelect
 	for _, other := range m.contentDecks {
 		if other != h && other.laidOut {
 			other.releaseAppContentDocumentEdit()
@@ -372,6 +391,11 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 	switch v := c.h.deck.Viewer(c.node.ID).(type) {
 	case *docview.Model:
 		v.SetSize(c.size.Width, bodyH)
+		v.SetSelection(c.h.selKeys, c.h.selCopyOnSelect)
+		// The body sits below the leaf's own tab-header row. Recording where
+		// it was drawn is what makes the viewer's own bar hit-testing agree
+		// with the regions the frame registers for it.
+		v.SetOrigin(render.Origin.X, render.Origin.Y+paneframe.HeaderRows)
 		body = v.View()
 	case *issueview.Model:
 		v.SetSize(c.size.Width, bodyH)
@@ -502,7 +526,17 @@ func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	}
 	r.h.mouse.HitMap.AddRect(appDeckCloseRegion, b.X+reserve.CloseCol, b.Y, reserve.CloseW, 1, n.ID)
 }
-func (r appDeckRegions) Body(*panelayout.Node, paneframe.Box) {}
+
+// Body registers what a hosted pane owns inside its chrome-aware box. The
+// frame calls it last, so the scrollbar columns registered here win the hit
+// test over the leaf body drawn under them while every frame-owned region —
+// leaf, divider, tabs, title, close — keeps its established priority.
+func (r appDeckRegions) Body(n *panelayout.Node, b paneframe.Box) {
+	if n == nil || n.Kind == panelayout.Primary {
+		return
+	}
+	r.h.registerAppContentScrollbars(n, b)
+}
 
 func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 	provider, ok := h.plugin.(plugin.ContentLinkProvider)
@@ -745,6 +779,12 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 		return nil, false
 	}
 	mi := msg.Mouse()
+	// A release can be lost when the pointer leaves the window or a modal takes
+	// input mid-gesture. The shared handler cancels that stale drag on the next
+	// button-less motion; capture what it held before this event so the hosted
+	// pane's half of the gesture can be settled at that same boundary.
+	wasDragging := h.mouse.IsDragging()
+	dragSourceBefore := h.mouse.DragRegion()
 	action := h.mouse.HandleMouse(msg)
 	if action.Type == mouse.ActionClick && action.Region != nil && action.Region.ID == appDeckDividerRegion {
 		if splitID, ok := action.Region.Data.(int); ok {
@@ -806,6 +846,10 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 		if paneframe.FocusLeafAt(appDeckHost{h}, mi.X, mi.Y) {
 			h.syncInnerFocus()
 		}
+	}
+	if cmd, claimed := h.routeAppContentGesture(action, wasDragging, dragSourceBefore); claimed {
+		m.persistAppContentDeck(h)
+		return cmd, true
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
 	if leaf == nil || leaf.Kind == panelayout.Primary {

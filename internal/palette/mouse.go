@@ -35,6 +35,14 @@ func (m *Model) handleMouse(msg tea.MouseMsg) (Model, tea.Cmd) {
 
 	action := m.modal.HandleMouse(msg, m.mouseHandler)
 
+	// The results scrollbar's gestures (view.go) answer through the same
+	// dispatch: presses probe its regions directly and drags are visible in
+	// the shared handler's state. Anything it claims is already handled.
+	if m.handleScrollbarPointer(msg) {
+		m.clearModal()
+		return *m, nil
+	}
+
 	// Single click on a palette item immediately selects and executes it
 	if strings.HasPrefix(action, paletteItemPrefix) {
 		var idx int

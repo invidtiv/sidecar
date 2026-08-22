@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // handleMouse processes mouse events in the two-pane view.
@@ -30,10 +31,11 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		return p.handleMouseDrag(action)
 
 	case mouse.ActionDragEnd:
-		return p.handleMouseDragEnd()
+		return p.handleMouseDragEnd(action)
 
 	case mouse.ActionHover:
 		p.hoverDivider = action.Region != nil && action.Region.ID == regionPaneDivider
+		p.updateListScrollbarHover(action.Region)
 		return p, nil
 	}
 
@@ -47,6 +49,9 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		return p.handleListScrollbarPress(action)
+
 	case regionSessionItem:
 		// Click on a session item - select it
 		if idx, ok := action.Region.Data.(int); ok {
@@ -119,6 +124,12 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 	}
 
 	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// A scrollbar gesture is not a session pick: the second press of a
+		// double-press on the bar grabs it again (thumb grab continues,
+		// track re-jumps) rather than being swallowed.
+		return p.handleListScrollbarPress(action)
+
 	case regionSessionItem:
 		// Double-click on session item: select and focus messages pane
 		if idx, ok := action.Region.Data.(int); ok {
@@ -188,6 +199,9 @@ func (p *Plugin) handleMouseScroll(action mouse.MouseAction) (*Plugin, tea.Cmd) 
 
 	switch action.Region.ID {
 	case regionSidebar, regionSessionItem:
+		return p.scrollSidebar(action.Delta)
+
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
 		return p.scrollSidebar(action.Delta)
 
 	case regionMainPane, regionTurnItem, regionMessageItem:
@@ -303,6 +317,9 @@ func (p *Plugin) scrollDetailPane(delta int) (*Plugin, tea.Cmd) {
 
 // handleMouseDrag handles drag motion events for pane resizing.
 func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	if p.mouseHandler.DragRegion() == ui.RegionScrollbarThumb {
+		return p.handleListScrollbarDrag(action)
+	}
 	if p.mouseHandler.DragRegion() != regionPaneDivider {
 		return p, nil
 	}
@@ -330,9 +347,14 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 	return p, nil
 }
 
-// handleMouseDragEnd handles the end of a drag operation (saves pane width).
-func (p *Plugin) handleMouseDragEnd() (*Plugin, tea.Cmd) {
-	// Save the current sidebar width to state
-	_ = state.SetConversationsSideWidth(p.sidebarWidth)
+// handleMouseDragEnd handles the end of a drag operation. Only the pane
+// divider persists anything; scrollbar gestures leave no state behind.
+func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) (*Plugin, tea.Cmd) {
+	switch action.DragStartID {
+	case regionPaneDivider:
+		_ = state.SetConversationsSideWidth(p.sidebarWidth)
+	case ui.RegionScrollbarThumb:
+		p.listScrollbarDragEnded()
+	}
 	return p, nil
 }
