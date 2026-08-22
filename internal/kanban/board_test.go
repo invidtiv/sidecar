@@ -65,10 +65,10 @@ func TestComponentRenderOwnsScrollHitRegionsAndHeight(t *testing.T) {
 	if got.Compact || lipgloss.Height(got.View) != 14 {
 		t.Fatalf("render compact=%v height=%d", got.Compact, lipgloss.Height(got.View))
 	}
-	if len(got.Regions) != 3 { // header, scrollable column body, and one visible card
+	if len(got.Regions) != 5 { // header, scrollable column body, one visible card, and the lane bar's track + thumb
 		t.Fatalf("regions = %#v", got.Regions)
 	}
-	selectedRegion := got.Regions[len(got.Regions)-1]
+	selectedRegion := got.Regions[2] // the one visible card, between body and bar regions
 	if selectedRegion.CardID != "d" || selectedRegion.Row != 3 {
 		t.Fatalf("selected card was not scrolled into view: %#v", selectedRegion)
 	}
