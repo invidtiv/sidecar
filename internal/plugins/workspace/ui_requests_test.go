@@ -286,6 +286,8 @@ func TestUIRequests_CreateShellSplitCapDeclines(t *testing.T) {
 
 func TestUIRequests_CreateShellSplitFlagOffDeclines(t *testing.T) {
 	stubTd(t)
+	features.SetOverride(features.WorkspaceTerminalPanel.Name, false)
+	t.Cleanup(func() { features.Init(config.Default()) })
 	p := docPaneTestPlugin(t, t.TempDir(), true)
 	p.View(p.width, p.height)
 	focus := true

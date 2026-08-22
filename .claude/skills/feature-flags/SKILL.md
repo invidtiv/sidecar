@@ -88,7 +88,7 @@ Feature state resolves in this order (first match wins):
 | `notes_plugin` | true | Project Notes while the td panel is enabled |
 | `tasks_plugin` | false | Embedded Tasks plugin tab |
 | `conversations_plugin` | false | Conversations multi-agent history tab (off = no adapters / session I/O) |
-| `workspace_terminal_panel` | false | Workspace Ctrl+T / Alt+T split terminal panel |
+| `workspace_terminal_panel` | true | Workspace Ctrl+T / Alt+T split terminal panel |
 
 ## API Reference
 

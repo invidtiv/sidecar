@@ -171,7 +171,7 @@ Sidecar puts your entire software engineering workflow into a single, unified te
 - **Low-Latency PTY Engine:** High-performance terminal emulation engine using `internal/tty` and isolated tmux servers.
 - **Interactive Input (`tmux_interactive_input`):** Direct keypress forwarding to interactive shell sessions and sub-processes.
 - **Full tmux attach (`tmux_full_attach`, default off):** Suspend Sidecar and run `tmux attach-session`. Off so users stay in the embedded pane.
-- **Workspace terminal panel (`workspace_terminal_panel`, default off):** Ctrl+T / Alt+T split terminal beside the workspace preview.
+- **Workspace terminal panel (`workspace_terminal_panel`, default on):** Ctrl+T / Alt+T split terminal beside the workspace preview.
 - **Adaptive Polling & Cursor Rendering:** Smooth virtual cursor positioning, line scrolling, and output buffer management.
 - **Mouse Interaction:** Mouse scroll wheel, click-to-focus, and drag-and-drop pane boundary resizing (`internal/mouse`).
 - **Headless Testing Toolchain (`scripts/tmux-drive.sh`):** Drives Sidecar in headless tmux sessions with isolated configuration/state paths (`SIDECAR_ISOLATED_STATE=1`) and captures text/PNG screenshots.

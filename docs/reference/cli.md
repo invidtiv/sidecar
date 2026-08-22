@@ -45,9 +45,10 @@ it without pressing Enter so the user can review it.
 From inside a Sidecar shell the default placement is a live terminal beside
 the current shell. --tab places the shell in the workspace instead, switching
 to a completely new surface; --split auto|right|below picks the side of the
-beside-the-session split explicitly (the workspace_terminal_panel feature must
-be on). Beside-the-session modes need a running instance and a current shell
-(SIDECAR_SHELL / --shell) and do not add a workspace row.
+beside-the-session split explicitly (the workspace_terminal_panel feature,
+on by default, must not be disabled). Beside-the-session modes need a running
+instance and a current shell (SIDECAR_SHELL / --shell) and do not add a
+workspace row.
 
 ```
 Usage: sidecar create shell [options]

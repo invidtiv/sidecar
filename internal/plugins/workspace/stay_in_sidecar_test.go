@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	boardkanban "github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -224,9 +225,12 @@ func TestKanbanDoubleClickDoesNotAttachByDefault(t *testing.T) {
 	}
 }
 
-func TestTerminalPanelIsOffByDefault(t *testing.T) {
+func TestTerminalPanelFlagOffGatesEverything(t *testing.T) {
+	features.Init(config.Default())
+	features.SetOverride(features.WorkspaceTerminalPanel.Name, false)
+	t.Cleanup(func() { features.Init(config.Default()) })
 	if terminalPanelEnabled() {
-		t.Fatal("workspace_terminal_panel must default off")
+		t.Fatal("workspace_terminal_panel override did not turn the flag off")
 	}
 	p := surfacePlugin(false)
 	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); cmd != nil || p.termPanelVisible {

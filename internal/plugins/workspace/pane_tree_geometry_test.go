@@ -157,6 +157,7 @@ func TestInitRebuildsFeatureGatedPaneTreeState(t *testing.T) {
 	}
 
 	cfg.Features.Flags[features.WorkspaceDocPanes.Name] = false
+	cfg.Features.Flags[features.WorkspaceTerminalPanel.Name] = false
 	features.Init(cfg)
 	if err := p.Init(&plugin.Context{Config: cfg, Epoch: 2}); err != nil {
 		t.Fatalf("disabled Init: %v", err)

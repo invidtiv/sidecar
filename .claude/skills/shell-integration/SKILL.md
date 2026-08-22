@@ -311,7 +311,7 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
     "tmux_interactive_input": true,
     "tmux_inline_edit": true,
     "tmux_full_attach": false,
-    "workspace_terminal_panel": false
+    "workspace_terminal_panel": true
   }
 }
 ```

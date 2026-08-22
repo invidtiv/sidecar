@@ -34,10 +34,12 @@ var (
 		Description: "Suspend Sidecar and attach to the full tmux session",
 	}
 
-	// WorkspaceTerminalPanel enables the Ctrl+T split terminal pane.
+	// WorkspaceTerminalPanel enables the workspace split terminal pane —
+	// live terminals placed beside the session, which is also what
+	// `sidecar create shell` defaults to from inside a shell (nt-7c82c9).
 	WorkspaceTerminalPanel = Feature{
 		Name:        "workspace_terminal_panel",
-		Default:     false,
+		Default:     true,
 		Description: "Enable the workspace split terminal panel",
 	}
 

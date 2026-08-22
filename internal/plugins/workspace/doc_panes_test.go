@@ -2123,6 +2123,7 @@ func TestFeatureDisabledPreservesPaneLayoutForReenable(t *testing.T) {
 	}
 	cfg := config.Default()
 	cfg.Features.Flags[features.WorkspaceDocPanes.Name] = false
+	cfg.Features.Flags[features.WorkspaceTerminalPanel.Name] = false
 	features.Init(cfg)
 	t.Cleanup(func() { features.Init(config.Default()) })
 	p := New()

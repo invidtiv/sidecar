@@ -406,7 +406,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				termName = "Hide"
 			}
 			cmds = append(cmds,
-				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 17},
+				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 19},
 			)
 		}
 		return cmds

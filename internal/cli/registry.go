@@ -117,9 +117,10 @@ func RootCommand() *Command {
 			"From inside a Sidecar shell the default placement is a live terminal beside\n" +
 			"the current shell. --tab places the shell in the workspace instead, switching\n" +
 			"to a completely new surface; --split auto|right|below picks the side of the\n" +
-			"beside-the-session split explicitly (the workspace_terminal_panel feature must\n" +
-			"be on). Beside-the-session modes need a running instance and a current shell\n" +
-			"(SIDECAR_SHELL / --shell) and do not add a workspace row.",
+			"beside-the-session split explicitly (the workspace_terminal_panel feature,\n" +
+			"on by default, must not be disabled). Beside-the-session modes need a running\n" +
+			"instance and a current shell (SIDECAR_SHELL / --shell) and do not add a\n" +
+			"workspace row.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
