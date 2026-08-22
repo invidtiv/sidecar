@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overlay"
 	"github.com/marcus/sidecar/internal/styles"
@@ -201,8 +202,14 @@ func (m *Modal) buildLayout(screenW, screenH int, handler *mouse.Handler) string
 
 	// 5. If scrollbar needed, render and join horizontally
 	var viewportBar placedBar
-	if needsScrollbar {
+	if needsScrollbar && contentWidth > 1 {
 		barRendered, bar := m.renderViewportBar(handler, actualContentHeight, m.scrollOffset, viewportHeight)
+		// Reserve the bar's column deterministically: hold every viewport
+		// line to exactly the reduced content width BEFORE joining, so the
+		// glyph renders in the last content column no matter where the
+		// widest visible line ends. Hit registration reads this same column
+		// (registerBars), so drawn bar and hit regions cannot drift apart.
+		viewport = padViewportLines(viewport, contentWidth-1)
 		viewport = lipgloss.JoinHorizontal(lipgloss.Top, viewport, barRendered)
 		viewportBar = bar
 	}
@@ -406,6 +413,26 @@ func sliceLines(content string, offset, height int, padToHeight bool) string {
 		}
 	}
 
+	return strings.Join(lines, "\n")
+}
+
+// padViewportLines holds every viewport line to exactly width columns so the
+// scrollbar joins at a fixed column: the drawn bar's position becomes a fact
+// of the layout rather than a side effect of wherever the widest visible line
+// happens to end (which moves with scroll position on ragged content).
+func padViewportLines(content string, width int) string {
+	if width < 1 {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		switch w := ansi.StringWidth(line); {
+		case w < width:
+			lines[i] = line + strings.Repeat(" ", width-w)
+		case w > width:
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
 	return strings.Join(lines, "\n")
 }
 

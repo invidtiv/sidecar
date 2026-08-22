@@ -159,7 +159,10 @@ func (m *Modal) registerBars(handler *mouse.Handler, viewport placedBar, visible
 
 	if viewport.has {
 		vp := viewport
-		vp.trackX = contentX + contentWidth
+		// The bar renders in the last content column: buildLayout normalizes
+		// the viewport to contentWidth-1 before joining, so the glyph lands
+		// here and the region sits on it by construction.
+		vp.trackX = contentX + contentWidth - 1
 		vp.trackY = viewportTop
 		add(vp)
 	}

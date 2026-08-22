@@ -180,37 +180,87 @@ func TestSwitcherBarInertWhenContentFits(t *testing.T) {
 
 // --- rule 8 guard -----------------------------------------------------------
 
-// TestOpeningSubModalCancelsPreexistingBarDrag covers the modal guard from the
-// switcher's side: a drag started on the bar goes dead when another surface
-// takes the pointer (project-add opens over the switcher); the stray motions
-// and release that follow move nothing, and the gesture settles cleanly.
-func TestOpeningSubModalCancelsPreexistingBarDrag(t *testing.T) {
-	m := projectSwitcherModel(t, 20)
+// TestSubModalOpenCancelsParentBarGestureThroughRealUpdate covers the modal
+// guard from the switcher's side, through real Update routing. The premise:
+// once projectAddMode is set, every mouse event goes to the add modal — a
+// stray release never reaches the parent handler. What can interrupt a live
+// list-bar drag is the keyboard: ctrl+a opens add-project while the thumb is
+// still held. The gesture must die at that boundary — silently, so its moved
+// flag can never spend a preview it was owed.
+func TestSubModalOpenCancelsParentBarGestureThroughRealUpdate(t *testing.T) {
+	m := routerTestModel(t, newRouterPlugin())
+	projects := manyProjects(20)
+	// A theme only proj-12 resolves: if the abandoned drag ever spends its
+	// preview, the app visibly recolours to it.
+	projects[12].Theme = &config.ThemeConfig{Name: "zenburn"}
+	m.cfg.Projects.List = projects
+	m.ui.WorkDir = "/tmp/proj-00"
+	m.showProjectSwitcher = true
+	m.initProjectSwitcher()
+	m.renderProjectSwitcherOverlay("bg")
+	before := styles.GetCurrentTheme().Name
+
+	step := func(mu Model, msg tea.Msg) Model {
+		out, _ := mu.Update(msg)
+		switch v := out.(type) {
+		case Model:
+			return v
+		case *Model:
+			return *v
+		default:
+			t.Fatalf("Update returned %T", out)
+			return mu
+		}
+	}
+
 	h := m.projectSwitcherMouseHandler
-	thumb := barRegion(t, h, ui.RegionScrollbarThumb)
+	thumb := sectionBarRegion(t, h, ui.RegionScrollbarThumb)
+	track := sectionBarRegion(t, h, ui.RegionScrollbarTrack)
 
-	m.handleProjectSwitcherMouse(switcherClick(thumb.Rect.X, thumb.Rect.Y+1))
-	m.handleProjectSwitcherMouse(switcherDragMotion(thumb.Rect.X, thumb.Rect.Y+3))
-	scrolledTo := m.projectSwitcherScroll
-	if scrolledTo == 0 {
-		t.Fatal("precondition: drag moved the list")
+	// Drag toward the bottom of the list: scroll lands on maxOff, the cursor
+	// follows into the window at proj-12, and the gesture holds moved=true.
+	mu := step(m, switcherClick(thumb.Rect.X, thumb.Rect.Y))
+	if !mu.projectSwitcherMouseHandler.IsDragging() {
+		t.Fatal("thumb press did not arm the drag")
+	}
+	mu = step(mu, switcherDragMotion(track.Rect.X, track.Rect.Y+track.Rect.H-1))
+	if mu.projectSwitcherScroll != len(projects)-projectSwitcherMaxVisible || !mu.projectSwitcherBar.moved {
+		t.Fatalf("drag precondition: scroll=%d moved=%v", mu.projectSwitcherScroll, mu.projectSwitcherBar.moved)
+	}
+	if mu.projectSwitcherCursor != 12 {
+		t.Fatalf("cursor = %d, want 12 (the themed project)", mu.projectSwitcherCursor)
 	}
 
-	// Opening the add-project sub-flow routes the pointer elsewhere (the same
-	// boundary any modal-open crosses).
-	m.initProjectAdd()
-
-	// Stray events from the abandoned gesture arrive through the switcher's
-	// old path; they must not advance the list or resurrect the drag.
-	m.handleProjectSwitcherMouse(switcherRelease(thumb.Rect.X, thumb.Rect.Y+9))
-	if m.projectSwitcherScroll != scrolledTo {
-		t.Errorf("stray release moved scroll %d -> %d", scrolledTo, m.projectSwitcherScroll)
+	// ctrl+a interrupts the live drag; the sub-flow takes the pointer away.
+	mu = step(mu, tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl})
+	if !mu.projectAddMode {
+		t.Fatal("ctrl+a did not open the add sub-flow")
+	}
+	if mu.projectSwitcherBar.active || mu.projectSwitcherBar.moved {
+		t.Fatalf("parent bar gesture survived the sub-modal boundary: %+v", mu.projectSwitcherBar)
+	}
+	if mu.projectSwitcherMouseHandler.IsDragging() {
+		t.Error("handler drag survived the boundary")
 	}
 
-	// Closing the sub-modal discards the dead gesture state entirely.
-	m.clearProjectAddModal()
-	if m.projectSwitcherBar.active {
-		t.Error("bar gesture survived the modal boundary it should have died at")
+	// The events real routing produces while the sub-flow is open go to the
+	// add modal; they must be inert for the parent gesture either way.
+	mu = step(mu, switcherRelease(thumb.Rect.X, thumb.Rect.Y))
+	if got := styles.GetCurrentTheme().Name; got != before {
+		t.Fatalf("stray release recoloured: %q -> %q", before, got)
+	}
+
+	// Back on the list, nothing may settle late from the abandoned drag.
+	mu = step(mu, tea.KeyPressMsg{Code: tea.KeyEsc})
+	if mu.projectAddMode {
+		t.Fatal("esc did not close the add sub-flow")
+	}
+	mu = step(mu, switcherBareMotion(0, 0))
+	if mu.projectSwitcherBar.active {
+		t.Error("abandoned gesture re-armed itself")
+	}
+	if got := styles.GetCurrentTheme().Name; got != before {
+		t.Errorf("late settle recoloured from the abandoned drag: %q -> %q", before, got)
 	}
 }
 

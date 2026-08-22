@@ -1363,6 +1363,17 @@ func (m *Model) initProjectAdd() {
 	m.projectAddMode = true
 	m.clearProjectAddModal()
 
+	// Opening the sub-flow takes the pointer away from the switcher list
+	// (update.go routes every mouse event here once projectAddMode is set), so
+	// a list-bar gesture dies at this boundary rather than settling late: real
+	// routing never delivers the stray release to the parent handler, and a
+	// moved drag must not spend its preview on it (the td-f63097 boundary,
+	// parent side). State stays inert until the next genuine press.
+	if m.projectSwitcherMouseHandler != nil && m.projectSwitcherMouseHandler.IsDragging() {
+		m.projectSwitcherMouseHandler.EndDrag()
+	}
+	m.projectSwitcherBar = switcherBarState{}
+
 	if m.projectAdd == nil {
 		m.projectAdd = &projectAddState{}
 	}

@@ -61,6 +61,137 @@ func releaseAt(x, y int) tea.MouseReleaseMsg {
 	return tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft}
 }
 
+// --- rendered-pixel alignment ----------------------------------------------
+//
+// The tests above click *registered* coordinates, which cannot catch a region
+// that drifted off the drawn bar. These helpers read the rendered frame the
+// way a user does: find the glyph, press there.
+
+// scanLineCells walks one rendered line and returns its visible cells keyed by
+// column, skipping ANSI escape sequences.
+func scanLineCells(line string) map[int]rune {
+	cells := make(map[int]rune)
+	col := 0
+	inEscape := false
+	for _, r := range line {
+		switch {
+		case inEscape:
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEscape = false
+			}
+		case r == '\x1b':
+			inEscape = true
+		default:
+			cells[col] = r
+			col++
+		}
+	}
+	return cells
+}
+
+// frameLine returns one row of the rendered modal box. Render returns the box
+// alone, so box rows map to screen rows through the modal-body origin.
+func frameLine(t *testing.T, rendered string, body *mouse.Region, y int) map[int]rune {
+	t.Helper()
+	lines := strings.Split(rendered, "\n")
+	idx := y - body.Rect.Y
+	if idx < 0 || idx >= len(lines) {
+		t.Fatalf("frame row %d outside rendered box (0..%d)", y, len(lines)-1)
+	}
+	return scanLineCells(lines[idx])
+}
+
+// TestViewportBarRegionsSitOnRenderedGlyphs is the geometry-vs-render contract:
+// every registered bar cell shows a drawn bar glyph, pressing the RENDERED
+// thumb engages the gesture, and the bar holds its column across scroll
+// positions — for full-width and ragged content alike.
+func TestViewportBarRegionsSitOnRenderedGlyphs(t *testing.T) {
+	tests := []struct {
+		name  string
+		lines func(i int) string
+	}{
+		{"full-width rows", func(i int) string { return strings.Repeat("row ", 8) }},
+		{"ragged short lines", func(i int) string { return fmt.Sprintf("Line %d", i) }},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New("Test", WithWidth(40))
+			for i := 0; i < 30; i++ {
+				m.AddSection(Text(tc.lines(i)))
+			}
+			handler := mouse.NewHandler()
+			rendered := m.Render(80, 24, handler)
+
+			body := regionByID(t, handler, "modal-body")
+			track, thumb := barRegions(t, handler)
+
+			// Ghost-column guard: no registered bar cell may sit on anything
+			// but a drawn glyph.
+			for _, r := range []*mouse.Region{track, thumb} {
+				for y := r.Rect.Y; y < r.Rect.Y+r.Rect.H; y++ {
+					got := frameLine(t, rendered, body, y)[r.Rect.X-body.Rect.X]
+					if got != '│' && got != '┃' {
+						t.Fatalf("registered %q cell (%d,%d) renders %q, not a bar glyph", r.ID, r.Rect.X, y, got)
+					}
+				}
+			}
+
+			// Press the thumb where it was DRAWN: locate the ┃ in the
+			// rendered frame, not in the hit map.
+			var gx, gy int
+			found := false
+			for y := track.Rect.Y; y < track.Rect.Y+track.Rect.H && !found; y++ {
+				cells := frameLine(t, rendered, body, y)
+				for x := range cells {
+					if cells[x] == '┃' {
+						gx, gy = x+body.Rect.X, y
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				t.Fatal("no thumb glyph anywhere in the rendered frame")
+			}
+			if hit := handler.HitMap.Test(gx, gy); hit == nil || hit.ID != RegionScrollbarThumb {
+				t.Fatalf("visible thumb at (%d,%d) hits %v, want %q", gx, gy, hit, RegionScrollbarThumb)
+			}
+			m.HandleMouse(clickAt(gx, gy), handler)
+			if !handler.IsDragging() {
+				t.Fatalf("pressing the drawn thumb at (%d,%d) did not start a drag", gx, gy)
+			}
+			m.HandleMouse(releaseAt(gx, gy), handler)
+
+			// The column is layout, not content: it must not move as the
+			// scroll offset changes what the widest visible line is.
+			m.ScrollToBottom()
+			rendered2 := m.Render(80, 24, handler)
+			track2, _ := barRegions(t, handler)
+			for y := track2.Rect.Y; y < track2.Rect.Y+track2.Rect.H; y++ {
+				got := frameLine(t, rendered2, body, y)[track2.Rect.X-body.Rect.X]
+				if got != '│' && got != '┃' {
+					t.Fatalf("at bottom scroll, registered cell (%d,%d) renders %q", track2.Rect.X, y, got)
+				}
+			}
+			if track2.Rect.X != track.Rect.X {
+				t.Errorf("bar column moved with scroll: %d -> %d", track.Rect.X, track2.Rect.X)
+			}
+		})
+	}
+}
+
+func regionByID(t *testing.T, h *mouse.Handler, id string) *mouse.Region {
+	t.Helper()
+	for i := range h.HitMap.Regions() {
+		if h.HitMap.Regions()[i].ID == id {
+			return &h.HitMap.Regions()[i]
+		}
+	}
+	t.Fatalf("no %q region registered", id)
+	return nil
+}
+
 // viewportParams reconstructs the ScrollbarParams the framework's viewport bar
 // was drawn with: one row of content per row of thumb math.
 func (m *Modal) viewportParams() (total, visible int) {
