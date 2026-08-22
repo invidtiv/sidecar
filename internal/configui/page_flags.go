@@ -21,6 +21,14 @@ const regionFlag = "config-flag-"
 func (m *Model) buildFlags(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageFlags)), "")
 	b.lead("Every feature flag Sidecar knows about. A flag that is off is off for this build, not missing.")
+	// Above the list, not below it. Appended after twelve rows this was the
+	// first thing the pane's height clamp cut, so a user toggling a
+	// startup-scoped flag on a normal-sized terminal saw the success toast and
+	// never the sentence telling them it needs a restart.
+	if m.restartNote != "" {
+		b.blank()
+		b.note(m.restartNote)
+	}
 	b.blank()
 
 	// Flags another page owns sort last, so the switches that work here are not
@@ -36,21 +44,20 @@ func (m *Model) buildFlags(b *paneBuilder) {
 		switches = append(switches, item)
 	}
 
+	// No blank line between rows: the list has to stay shorter than the pane at
+	// ordinary terminal heights, because the pane truncates and the row cursor
+	// walks onto rows that were cut. Each row is one line and the focused one
+	// explains itself.
 	for _, item := range switches {
 		m.previewRow(b, item)
-		b.blank()
 	}
 
 	if len(owned) > 0 {
+		b.blank()
 		b.text(SectionHeader("Set on other pages"))
 		for _, item := range owned {
 			m.previewRow(b, item)
-			b.blank()
 		}
-	}
-
-	if m.restartNote != "" {
-		b.note(m.restartNote)
 	}
 }
 
@@ -79,6 +86,22 @@ type preview struct {
 	owner PageID
 	// ownerControl is the control id on that page to put the cursor on.
 	ownerControl string
+	// reads answers what this row should show, when the raw flag is not it.
+	// Panels' Conversations switch is the flag AND the plugin's own enabled
+	// key, and toggleConversations clears only the plugin key on the way off —
+	// so the flag stays true and a row reading it alone renders ON next to a
+	// Panels page rendering OFF. The row is labelled with the panel's name, so
+	// it owes the panel's answer. Nil means the flag itself.
+	reads func(*Model) bool
+}
+
+// state is what the row reports: the owning surface's answer where one exists,
+// the flag otherwise.
+func (p preview) state(m *Model) bool {
+	if p.reads != nil {
+		return p.reads(m)
+	}
+	return m.flagEnabled(p.flag)
 }
 
 // previewCopy is the hand-written presentation for a flag, keyed by flag name.
@@ -159,6 +182,7 @@ var previewCopy = map[string]preview{
 		help:         "Browse multi-agent session history.",
 		owner:        PagePanels,
 		ownerControl: regionPanel + panelIDConversations,
+		reads:        (*Model).conversationsOn,
 	},
 }
 
@@ -171,17 +195,26 @@ func previews() []preview {
 	all := features.ListAll()
 	items := make([]preview, 0, len(all))
 	for _, feature := range all {
-		item := previewCopy[feature.Name]
-		item.flag = feature.Name
-		if item.label == "" {
-			item.label = feature.Name
-		}
-		if item.help == "" {
-			item.help = feature.Description
-		}
-		items = append(items, item)
+		items = append(items, previewFor(feature))
 	}
 	return items
+}
+
+// previewFor is the derivation for one feature: hand-written copy where it
+// exists, the registry's own name and description where it does not. It is a
+// separate function so the fallback can be tested with a feature that has no
+// entry — every registered flag currently has one, which made a test that
+// skipped curated flags iterate zero times and prove nothing.
+func previewFor(feature features.Feature) preview {
+	item := previewCopy[feature.Name]
+	item.flag = feature.Name
+	if item.label == "" {
+		item.label = feature.Name
+	}
+	if item.help == "" {
+		item.help = feature.Description
+	}
+	return item
 }
 
 // previewRow paints one flag the way Panels paints a surface: title and the
@@ -191,18 +224,31 @@ func previews() []preview {
 // A flag owned by another page is shown with its real state but does not toggle
 // here; activating the row jumps to the control that owns it.
 func (m *Model) previewRow(b *paneBuilder, item preview) {
-	enabled := m.flagEnabled(item.flag)
+	enabled := item.state(m)
+	// Every clause that has something to say gets said. The old switch stopped
+	// at the first match, so terminal_resource_providers — the only flag that
+	// both needs a restart and has a scope note — silently dropped the half
+	// that warns turning it off kills running provider processes.
 	detail := item.help
-	switch {
-	case item.owner != "":
-		detail = item.help + " Set this on " + PageTitle(item.owner) + ", which pairs it with the panel's own settings."
-	case item.restart:
-		detail = item.help + " Read once when Sidecar starts, so a change takes effect after a restart."
-	case item.note != "":
-		detail = item.help + " " + item.note
+	if item.owner != "" {
+		detail += " Set this on " + PageTitle(item.owner) + ", which pairs it with the panel's own settings."
+	}
+	if item.restart {
+		detail += " Read once when Sidecar starts, so a change takes effect after a restart."
+	}
+	if item.note != "" {
+		detail += " " + item.note
+	}
+	// Only the focused row spends lines on its explanation; see
+	// panelToggleFocusDetail.
+	detailFor := func(s State) string {
+		if !s.Focused {
+			return ""
+		}
+		return detail
 	}
 	if item.owner != "" {
-		b.panelStatus(regionFlag+item.flag, item.label, "", detail, enabled, func(m *Model) tea.Cmd {
+		b.panelStatus(regionFlag+item.flag, item.label, "", detailFor, enabled, func(m *Model) tea.Cmd {
 			m.Navigate(item.owner)
 			m.detailFocus = true
 			m.focusControlByID(item.ownerControl)
@@ -210,7 +256,7 @@ func (m *Model) previewRow(b *paneBuilder, item preview) {
 		})
 		return
 	}
-	b.panelToggle(regionFlag+item.flag, item.label, "", detail, enabled, func(m *Model) tea.Cmd {
+	b.panelToggleFocusDetail(regionFlag+item.flag, item.label, "", detailFor, enabled, func(m *Model) tea.Cmd {
 		next := !m.flagEnabled(item.flag)
 		// The restart requirement is stated at save time, next to the control
 		// that needs it, and only for the flags that genuinely need it.

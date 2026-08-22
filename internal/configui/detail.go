@@ -259,6 +259,36 @@ func (b *paneBuilder) panelToggle(id, title, badge, detail string, on bool, run 
 	b.m.mouse.HitMap.AddRect(toggleID, b.originX+rowWidth-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
 }
 
+// panelToggleFocusDetail is panelToggle with the explanation shown only under
+// the row the cursor is on. A page whose row count grows with a registry cannot
+// afford two or three lines each: the Configuration detail pane truncates
+// rather than scrolling, and the row cursor still walks onto rows that were cut,
+// so the selection silently vanishes off the bottom. One line per row keeps the
+// whole list on screen, and the focused row still says what it does.
+//
+// detailFor receives the row's interaction state so a caller can vary the copy
+// with focus; returning "" paints no second line.
+func (b *paneBuilder) panelToggleFocusDetail(id, title, badge string, detailFor func(State) string, on bool, run func(*Model) tea.Cmd) {
+	toggleID := id + toggleSuffix
+	rowState := b.declareClickless(id, "", true, run)
+	toggleState := b.declare(toggleID, "", false, run)
+	if rowState.Focused {
+		toggleState.Focused = true
+		toggleState.Hovered = false
+	} else if b.hovering(toggleID) {
+		rowState.Hovered = true
+		toggleState.Hovered = true
+	}
+	pill := Toggle(on, toggleState)
+	block := PanelRow(title, badge, detailFor(rowState), pill, b.inner, rowState)
+	lines := strings.Split(block, "\n")
+	y := len(b.lines)
+	b.lines = append(b.lines, lines...)
+	rowWidth := RowWidth(b.inner)
+	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, rowWidth, len(lines), nil)
+	b.m.mouse.HitMap.AddRect(toggleID, b.originX+rowWidth-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
+}
+
 // panelStatus paints a panelToggle-shaped row for a setting this page reports
 // but does not own: the same title, detail, and ON/OFF pill, with the pill
 // rendered disabled so it reads as a state rather than a switch. Activating the
@@ -267,10 +297,10 @@ func (b *paneBuilder) panelToggle(id, title, badge, detail string, on bool, run 
 // The pill is deliberately not its own control here. Giving it one would put a
 // clickable switch on a row that cannot save, which is exactly the confusion
 // the read-only rendering exists to prevent.
-func (b *paneBuilder) panelStatus(id, title, badge, detail string, on bool, go_ func(*Model) tea.Cmd) {
+func (b *paneBuilder) panelStatus(id, title, badge string, detailFor func(State) string, on bool, go_ func(*Model) tea.Cmd) {
 	rowState := b.declare(id, "", true, go_)
 	pill := Toggle(on, State{Disabled: true})
-	block := PanelRow(title, badge, detail, pill, b.inner, rowState)
+	block := PanelRow(title, badge, detailFor(rowState), pill, b.inner, rowState)
 	lines := strings.Split(block, "\n")
 	y := len(b.lines)
 	b.lines = append(b.lines, lines...)

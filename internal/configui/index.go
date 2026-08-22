@@ -74,9 +74,9 @@ var settingsIndex = []IndexEntry{
 	{Page: PagePanels, Label: "Git panel", Keywords: []string{"git", "panel", "status", "diff"}},
 	{Page: PagePanels, Label: "Files panel", Keywords: []string{"files", "browser", "panel"}},
 	{Page: PagePanels, Label: "td panel", Keywords: []string{"td", "issues", "tasks", "panel"}},
-	{Page: PagePanels, Label: "Notes panel", Keywords: []string{"notes", "panel"}},
-	{Page: PagePanels, Label: "Conversations panel", Keywords: []string{"conversations", "history", "sessions", "panel"}},
-	{Page: PagePanels, Label: "Tasks panel", Keywords: []string{"tasks", "panel", "beta"}},
+	{Page: PagePanels, Label: "Notes panel", Keywords: []string{"notes", "panel", "feature", "flag", "notes_plugin"}},
+	{Page: PagePanels, Label: "Conversations panel", Keywords: []string{"conversations", "history", "sessions", "panel", "feature", "flag", "conversations_plugin"}},
+	{Page: PagePanels, Label: "Tasks panel", Keywords: []string{"tasks", "panel", "beta", "feature", "flag", "tasks_plugin"}},
 	{Page: PagePanels, Label: "td database location", Keywords: []string{"td", "database", "dbpath", "issues", "path"}},
 	{Page: PagePanels, Label: "Conversations source directory", Keywords: []string{"conversations", "claude", "directory", "history", "path"}},
 	{Page: PagePanels, Label: "Panel refresh interval", Keywords: []string{"refresh", "interval", "poll", "git", "td"}},
@@ -117,13 +117,15 @@ func flagIndex() []IndexEntry {
 	items := previews()
 	entries := make([]IndexEntry, 0, len(items))
 	for _, item := range items {
-		page := PageFlags
 		if item.owner != "" {
-			// Search should land on the control that can actually set it.
-			page = item.owner
+			// The owning page already has a hand-written entry under the same
+			// label, and search renders one row per entry: emitting another
+			// would show the user "Notes panel" twice under Panels &
+			// Integrations and inflate the "N matching settings" count.
+			continue
 		}
 		entries = append(entries, IndexEntry{
-			Page:     page,
+			Page:     PageFlags,
 			Label:    item.label,
 			Keywords: []string{"feature", "flag", "preview", item.flag},
 		})

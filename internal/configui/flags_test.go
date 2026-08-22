@@ -54,19 +54,111 @@ func TestFlagsPageListsEveryRegisteredFlag(t *testing.T) {
 	}
 }
 
-// A flag with no hand-written copy still renders, using the registry's own name
-// and description. This is what lets a new flag land without touching configui.
+// A flag with no hand-written copy still derives a usable row from the registry
+// alone. This is the whole premise of deriving the list — registering a feature
+// is meant to be enough — so it is exercised with a feature that genuinely has
+// no entry rather than by filtering the real ones, all of which are curated.
 func TestFlagsPageFallsBackToRegistryCopy(t *testing.T) {
-	for _, item := range previews() {
-		if _, curated := previewCopy[item.flag]; curated {
-			continue
+	synthetic := features.Feature{
+		Name:        "not_a_registered_flag",
+		Description: "Does a thing the registry describes and configui does not.",
+	}
+	if _, curated := previewCopy[synthetic.Name]; curated {
+		t.Fatalf("%s is curated, so this no longer tests the fallback", synthetic.Name)
+	}
+	item := previewFor(synthetic)
+	if item.flag != synthetic.Name {
+		t.Fatalf("flag = %q, want %q", item.flag, synthetic.Name)
+	}
+	if item.label != synthetic.Name {
+		t.Fatalf("label = %q, want the flag name", item.label)
+	}
+	if item.help != synthetic.Description {
+		t.Fatalf("help = %q, want the registry description", item.help)
+	}
+	if item.owner != "" || item.restart {
+		t.Fatalf("an uncurated flag invented metadata: %+v", item)
+	}
+}
+
+// Curated copy wins over the registry's, or the hand-written labels would be
+// silently discarded by the same code path.
+func TestFlagsPagePrefersCuratedCopy(t *testing.T) {
+	item := previewFor(features.Feature{
+		Name:        features.CrossProjectOverview.Name,
+		Description: "registry text that should not win",
+	})
+	if item.label != "Cross-project Activity" {
+		t.Fatalf("label = %q, want the curated one", item.label)
+	}
+	if item.help == "registry text that should not win" {
+		t.Fatal("registry description overrode curated help")
+	}
+	if !item.restart {
+		t.Fatal("curated restart flag was lost")
+	}
+}
+
+// The list must stay shorter than an ordinary terminal. The detail pane
+// truncates instead of scrolling and the row cursor still walks onto rows that
+// were cut, so a page that outgrows the pane loses rows with no indication —
+// and this list grows every time a feature is registered.
+func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{100, 24}, {120, 30}, {160, 45}} {
+		m := flagsFixture(t, nil)
+		view := ansi.Strip(m.View(size.w, size.h))
+		for _, item := range previews() {
+			if !strings.Contains(view, item.label) {
+				t.Fatalf("%dx%d cut %q off the page:\n%s", size.w, size.h, item.label, view)
+			}
 		}
-		if item.label != item.flag {
-			t.Fatalf("uncurated %s labelled %q, want the flag name", item.flag, item.label)
+	}
+}
+
+// The restart notice is above the list, so it cannot be the first thing the
+// pane's height clamp removes.
+func TestRestartNoticeSurvivesAShortPane(t *testing.T) {
+	m := flagsFixture(t, nil)
+	activate(t, m, regionFlag+features.CrossProjectOverview.Name)
+	if view := ansi.Strip(m.View(100, 24)); !strings.Contains(view, panelRestartNote) {
+		t.Fatalf("a short pane hid the restart notice:\n%s", view)
+	}
+}
+
+// A flag whose consumer needs a restart *and* has a scope note says both. The
+// original switch stopped at the first match and dropped the sentence warning
+// that turning terminal_resource_providers off kills running provider
+// processes.
+func TestFlagRowStatesRestartAndScopeTogether(t *testing.T) {
+	m := flagsFixture(t, nil)
+	m.View(160, 60)
+	m.detailFocus = true
+	m.focusControlByID(regionFlag + features.TerminalResourceProviders.Name)
+	view := ansi.Strip(m.View(160, 60))
+	// Match phrases short enough to survive the detail's wrap. The view is two
+	// panes side by side, so the sidebar's own text sits between the detail's
+	// wrapped lines and nothing can be matched across one.
+	for _, want := range []string{"takes effect after a restart", "turning this off stops every provider"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("focused row is missing %q:\n%s", want, view)
 		}
-		if item.help == "" {
-			t.Fatalf("uncurated %s has no help text", item.flag)
-		}
+	}
+}
+
+// The Conversations row reports what Panels reports. Panels pairs the flag with
+// the plugin's own enabled key and clears only the key on the way off, so a row
+// reading the raw flag renders ON beside a Panels page rendering OFF.
+func TestOwnedRowAgreesWithTheOwningPage(t *testing.T) {
+	m := flagsFixture(t, func(cfg *config.Config) {
+		cfg.Features.Flags = map[string]bool{features.ConversationsPlugin.Name: true}
+		cfg.Plugins.Conversations.Enabled = false
+	})
+	item := previewCopy[features.ConversationsPlugin.Name]
+	if got := item.state(m); got != m.conversationsOn() {
+		t.Fatalf("Feature Flags says %v, Panels says %v", got, m.conversationsOn())
+	}
+	if item.state(m) {
+		t.Fatal("the row reported ON for a panel Panels shows as OFF")
 	}
 }
 

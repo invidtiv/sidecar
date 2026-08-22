@@ -47,6 +47,41 @@ if features.IsEnabled("my_new_feature") {
 }
 ```
 
+That is all a flag needs to be reachable. Configuration → System → **Feature
+Flags** derives its list from `features.ListAll()`, so registering a feature
+puts a working switch on the page with the registry's own `Name` as the label
+and `Description` as the help text. There is no second list to remember.
+
+## Giving a flag better copy (optional)
+
+`previewCopy` in `internal/configui/page_flags.go` overrides the registry's
+wording per flag. Only fill in what you want to change:
+
+```go
+features.MyNewFeature.Name: {
+    label:   "Human-readable name",
+    help:    "One sentence on what turning this on does.",
+    restart: true, // only if a consumer reads it once at startup
+    note:    "An honest scope line for a flag that applies live but not retroactively.",
+},
+```
+
+`restart` must be checked against what actually consumes the flag, never added
+as blanket caution — a flag read at the point of use applies immediately and
+must not claim otherwise. Both `restart` and `note` render when both are set.
+
+**A flag that another page already owns as a first-class setting** sets `owner`
+and `ownerControl` instead. It is then listed read-only with a jump to the
+control that owns it, because two switches over one value is how surfaces start
+disagreeing. If the owning page's control means more than the raw flag — Panels'
+Conversations switch is the flag *and* the plugin's own `enabled` key — also set
+`reads` so the row reports the owner's answer rather than the flag's.
+
+**Keep the page shorter than a small terminal.** The Configuration detail pane
+truncates rather than scrolling, and the row cursor still walks onto rows that
+were cut. Rows are one line each with the explanation shown only under the
+focused row for that reason; `TestFlagsPageFitsAnOrdinaryTerminal` guards it.
+
 ## User Configuration
 
 ### Config file (`~/.config/sidecar/config.json`)
