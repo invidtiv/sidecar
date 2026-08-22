@@ -47,6 +47,20 @@ type State struct {
 	// Last selected global tab ("agents", "workspaces", or "tasks").
 	LastGlobalTab string `json:"lastGlobalTab,omitempty"`
 
+	// LastScope is the top-level space the user was in when Sidecar last left
+	// it: "global" or "project". Together with LastGlobalTab it is the whole of
+	// the remembered top-level selection — which space, and which tab inside it
+	// — so a relaunch reopens where the user was rather than always on the
+	// project workspace. Empty (a first run, or an upgrade from a version that
+	// never wrote it) means the project workspace, which is the behaviour those
+	// users already have.
+	//
+	// It is deliberately not keyed by working directory. The global space spans
+	// every configured project, so "I was in Sessions" is not a fact about the
+	// project Sidecar happened to be launched in, and keying it by one would
+	// make the answer depend on which checkout the user started from.
+	LastScope string `json:"lastScope,omitempty"`
+
 	// ShowIdleWorktrees reveals "no session" rows on the global Workspaces list.
 	// Fresh state leaves this off so the list is sessions by default.
 	ShowIdleWorktrees bool `json:"showIdleWorktrees,omitempty"`
@@ -816,6 +830,32 @@ func SetLastGlobalTab(tab string) error {
 		current = &State{}
 	}
 	current.LastGlobalTab = tab
+	mu.Unlock()
+	return Save()
+}
+
+// GetLastScope returns the saved top-level scope ID, or empty when none is
+// saved.
+func GetLastScope() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.LastScope
+}
+
+// SetLastScope saves the top-level scope the user is in.
+func SetLastScope(scope string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if current.LastScope == scope {
+		mu.Unlock()
+		return nil
+	}
+	current.LastScope = scope
 	mu.Unlock()
 	return Save()
 }

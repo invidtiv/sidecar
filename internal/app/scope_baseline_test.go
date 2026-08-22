@@ -47,13 +47,17 @@ import (
 
 // isolateAppState points sidecar state at a temp directory so tests that
 // persist preferences cannot write the real state.json. Cleanup clears the
-// remembered tab so a later New() does not restore another test's last switch.
+// remembered tab and scope so a later New() does not restore another test's
+// last switch, or start in the global space because another test entered it.
 func isolateAppState(t *testing.T) {
 	t.Helper()
 	if err := state.InitWithDir(t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = state.SetLastGlobalTab("") })
+	t.Cleanup(func() {
+		_ = state.SetLastGlobalTab("")
+		_ = state.SetLastScope("")
+	})
 }
 
 // scopeBaselineModel builds an app model on four registered plugins with the

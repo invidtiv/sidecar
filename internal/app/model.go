@@ -542,6 +542,24 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		// registered as a project plugin. Constructing it does no I/O.
 		m.globalTasks = newGlobalTasksHost(reg.Context(), km)
 	}
+	// Restore the top-level space the user left on. It runs here, after the two
+	// fields that decide which global tabs exist are built, and it reads only
+	// the state the process already loaded — no extra file is opened on the
+	// pre-first-frame path.
+	//
+	// The persisted scope is a request, not an instruction. Global scope is
+	// honored only while the global space still has a tab to show: a user who
+	// quit in Sessions and then disabled the cross-project Overview gets the
+	// project workspace back rather than an empty surface. ensureVisibleGlobalTab
+	// applies the same rule one level down, moving off a remembered tab whose
+	// own feature is now off.
+	if scope, ok := parseAppScopeID(state.GetLastScope()); ok && scope == ScopeGlobal && m.globalScopeAvailable() {
+		m.scope = ScopeGlobal
+		m.ensureVisibleGlobalTab()
+		// The keymap context is the restored tab's from the first frame, so the
+		// footer names the right keys before the first message arrives.
+		m.updateContext()
+	}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(&m)
@@ -608,7 +626,17 @@ func (m Model) Init() tea.Cmd {
 	// Deliberately no PluginFocused() broadcast: several plugins refresh on that
 	// message without checking their own focus flag, which would duplicate their
 	// Start() work on the startup path.
-	if p := m.ActivePlugin(); p != nil {
+	//
+	// A launch restored into the global space skips it, for the reason
+	// enterOverview drops focus on the way in: focus is the visibility contract
+	// terminal-owning plugins use, and a project plugin nobody is looking at
+	// must not hold a pane. The restored global tab starts its own collection
+	// instead — in a command, like every other startup fetch.
+	if m.inGlobalScope() {
+		if cmd := m.startVisibleGlobalTab(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	} else if p := m.ActivePlugin(); p != nil {
 		p.SetFocused(true)
 	}
 
@@ -986,6 +1014,7 @@ func (m *Model) enterOverview() tea.Cmd {
 	}
 	m.scope = ScopeGlobal
 	m.ensureVisibleGlobalTab()
+	m.persistScope()
 	m.updateContext()
 	return tea.Batch(deckCmd, m.startVisibleGlobalTab())
 }
@@ -1018,6 +1047,10 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 	}
 	m.scope = ScopeProject
 	if wasGlobal {
+		// Only a real crossing writes. leaveOverview is also the no-op prelude to
+		// activating a project tab the user is already on, and a state write per
+		// tab press is a cost the remembered scope does not need to charge.
+		m.persistScope()
 		if current := m.ActivePlugin(); current != nil && restoreProject {
 			current.SetFocused(true)
 		}

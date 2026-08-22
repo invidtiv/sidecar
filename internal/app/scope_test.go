@@ -194,6 +194,10 @@ func TestNoCrossProjectCollectionUntilTheBoardIsVisible(t *testing.T) {
 	}
 }
 
+// Quitting on a global tab and launching again reopens that tab. The remembered
+// selection is two facts — which space, and which tab inside it — and a restart
+// has to honour both: honouring only the tab is the bug where every launch
+// dropped the user back on the project workspace.
 func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 	isolateAppState(t)
 	m, _ := newScopeBaselineModel(t, "git")
@@ -210,21 +214,144 @@ func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 	if got := state.GetLastGlobalTab(); got != "sessions" {
 		t.Fatalf("persisted tab = %q, want sessions", got)
 	}
+	if got := state.GetLastScope(); got != "global" {
+		t.Fatalf("persisted scope = %q, want global", got)
+	}
 
 	// A new Model is what a Sidecar relaunch constructs.
-	restarted, _ := newScopeBaselineModel(t, "git")
-	if restarted.inGlobalScope() {
-		t.Fatal("restart landed in the global space")
+	restarted, plugins := newScopeBaselineModel(t, "git")
+	if !restarted.inGlobalScope() {
+		t.Fatal("restart did not reopen the global space")
 	}
 	if restarted.globalTab != GlobalSessions {
 		t.Fatalf("New() did not restore the persisted tab: %v", restarted.globalTab)
 	}
-
-	updated, _ = restarted.Update(tea.KeyPressMsg{Code: 'k', Text: "K", Mod: tea.ModShift})
-	restarted = asAppModel(t, updated)
-	if !restarted.inGlobalScope() || restarted.globalTab != GlobalSessions {
-		t.Fatalf("K after restart: global=%v tab=%v", restarted.inGlobalScope(), restarted.globalTab)
+	if restarted.activeContext != "global-workspaces" {
+		t.Fatalf("restart context = %q, want the restored tab's own", restarted.activeContext)
 	}
+	// The project underneath is still the remembered one; the global space
+	// covers it, it does not replace it.
+	if restarted.activePlugin != 2 || restarted.ui.WorkDir != "/tmp/one" {
+		t.Fatalf("restart moved the project: plugin=%d work=%q", restarted.activePlugin, restarted.ui.WorkDir)
+	}
+	// A project plugin nobody is looking at must not be focused, for the same
+	// reason entering the global space unfocuses it: focus is what makes a
+	// terminal-owning plugin hold a pane.
+	if plugins["git"].focused {
+		t.Fatal("restart focused the covered project plugin")
+	}
+
+	// esc leaves the restored space the ordinary way and hands focus back.
+	updated, _ = restarted.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	exited := asAppModel(t, updated)
+	if exited.inGlobalScope() || exited.activeContext != "git" {
+		t.Fatalf("esc after restart: global=%v context=%q", exited.inGlobalScope(), exited.activeContext)
+	}
+	if got := state.GetLastScope(); got != "project" {
+		t.Fatalf("leaving the global space persisted %q, want project", got)
+	}
+
+	// And that is what the next launch gets.
+	again, _ := newScopeBaselineModel(t, "git")
+	if again.inGlobalScope() {
+		t.Fatal("restart after leaving the global space reopened it")
+	}
+}
+
+// No persisted value at all — a first run, or an upgrade from a version that
+// never wrote the key — keeps the behaviour those users already have.
+func TestNoPersistedScopeLaunchesIntoTheProjectWorkspace(t *testing.T) {
+	isolateAppState(t)
+	if got := state.GetLastScope(); got != "" {
+		t.Fatalf("fresh state persisted a scope: %q", got)
+	}
+	m, _ := newScopeBaselineModel(t, "git")
+	if m.inGlobalScope() {
+		t.Fatal("a launch with nothing persisted opened the global space")
+	}
+	if m.activePlugin != 2 {
+		t.Fatalf("active plugin = %d, want the remembered git tab", m.activePlugin)
+	}
+	// Reading an absent preference must not invent one: a user who never uses
+	// the global space never grows the key.
+	if got := state.GetLastScope(); got != "" {
+		t.Fatalf("construction wrote a scope: %q", got)
+	}
+}
+
+// A persisted scope whose surface is gone must land somewhere real. Both levels
+// of the selection can go stale independently, so both are checked: the tab
+// inside the global space, and the global space itself.
+func TestStalePersistedScopeFallsBack(t *testing.T) {
+	t.Run("remembered tab's feature is off", func(t *testing.T) {
+		isolateAppState(t)
+		if err := state.SetLastScope("global"); err != nil {
+			t.Fatal(err)
+		}
+		// Tasks was the tab, and the Tasks host is not built in this fixture.
+		if err := state.SetLastGlobalTab("tasks"); err != nil {
+			t.Fatal(err)
+		}
+		m, _ := newScopeBaselineModel(t, "git")
+		if !m.inGlobalScope() {
+			t.Fatal("a stale tab cost the user the whole space")
+		}
+		if m.globalTab != GlobalSessions {
+			t.Fatalf("stale tab did not fall back: %v", m.globalTab)
+		}
+		if content := ansi.Strip(m.renderContent(m.width, 20)); !strings.Contains(content, "Workspaces") {
+			t.Fatalf("fallback tab did not render its surface:\n%s", content)
+		}
+	})
+
+	t.Run("the whole global space is gone", func(t *testing.T) {
+		isolateAppState(t)
+		if err := state.SetLastScope("global"); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.SetLastGlobalTab("sessions"); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg := config.Default()
+		cfg.Features.Flags[features.CrossProjectOverview.Name] = false
+		features.Init(cfg)
+		t.Cleanup(func() { features.Init(config.Default()) })
+		cfg.Projects.List = []config.ProjectConfig{{Name: "one", Path: "/tmp/one"}}
+
+		registry := plugin.NewRegistry(nil)
+		for _, name := range []string{"files", "workspaces", "git", "notes"} {
+			if err := registry.Register(&navigationPlugin{id: name}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// Neither global tab exists: Overview is off and Tasks is not hosted.
+		m := New(registry, keymap.NewRegistry(), cfg, "", "/tmp/one", "/tmp/one", "git")
+		m.intro.Active, m.intro.Done = false, true
+		m.width, m.height, m.ready = 140, 40, true
+		m.updateContext()
+		if m.globalScopeAvailable() {
+			t.Fatal("test premise: the global space still has a tab")
+		}
+		if m.inGlobalScope() {
+			t.Fatal("restored a global space that has nothing to show")
+		}
+		if m.activePlugin != 2 || m.activeContext != "git" {
+			t.Fatalf("fallback surface = plugin %d context %q, want the project workspace",
+				m.activePlugin, m.activeContext)
+		}
+	})
+
+	// The project half of the selection goes stale the same way: a remembered
+	// plugin that is no longer registered falls back to the first tab.
+	t.Run("remembered project plugin is gone", func(t *testing.T) {
+		isolateAppState(t)
+		m, _ := newScopeBaselineModel(t, "plugin-that-was-removed")
+		if m.inGlobalScope() || m.activePlugin != 0 {
+			t.Fatalf("stale plugin: global=%v plugin=%d, want the first project tab",
+				m.inGlobalScope(), m.activePlugin)
+		}
+	})
 }
 
 func TestGlobalTabPersistenceReadsLegacyNamesAndWritesNewNames(t *testing.T) {

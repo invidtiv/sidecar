@@ -22,6 +22,41 @@ const (
 	ScopeGlobal
 )
 
+// persistID is the stable state.json value for a scope. Together with
+// GlobalTab.persistID it records the whole top-level selection: which space,
+// and which tab inside it.
+func (s AppScope) persistID() string {
+	switch s {
+	case ScopeGlobal:
+		return "global"
+	case ScopeProject:
+		return "project"
+	}
+	return ""
+}
+
+// parseAppScopeID reads a persisted scope back. An empty or unrecognised value
+// is not an error and not a scope: the caller keeps the project space, which is
+// what a first run and an upgrade from a version that never wrote the key both
+// have to get.
+func parseAppScopeID(id string) (AppScope, bool) {
+	switch id {
+	case "global":
+		return ScopeGlobal, true
+	case "project":
+		return ScopeProject, true
+	}
+	return ScopeProject, false
+}
+
+// persistScope records the top-level space the user is now in, so the next
+// launch reopens it. It is called only from the two transitions that change the
+// scope, so crossing the boundary costs one small write and moving between
+// project tabs costs none.
+func (m *Model) persistScope() {
+	_ = state.SetLastScope(m.scope.persistID())
+}
+
 // GlobalTab is a tab owned by the global space. These are not plugin indices
 // and must never be encoded as such: a disabled tab would otherwise shift an
 // index onto the wrong action.

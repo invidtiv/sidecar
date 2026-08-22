@@ -900,6 +900,82 @@ func TestSetLastGlobalTab_InitializesNilState(t *testing.T) {
 	}
 }
 
+func TestGetLastScope_DefaultIsEmpty(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetLastScope(); got != "" {
+		t.Errorf("GetLastScope() with nil current = %q, want empty", got)
+	}
+	// A state file written before the key existed decodes to the same empty
+	// value, which is what keeps an upgrade on its current behaviour.
+	current = &State{}
+	if err := json.Unmarshal([]byte(`{"lastGlobalTab":"sessions"}`), current); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetLastScope(); got != "" {
+		t.Errorf("GetLastScope() for a pre-upgrade file = %q, want empty", got)
+	}
+}
+
+func TestSetLastScopeRoundTrips(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	path = stateFile
+	current = nil
+
+	if err := SetLastScope("global"); err != nil {
+		t.Fatalf("SetLastScope() failed: %v", err)
+	}
+	if current == nil || current.LastScope != "global" {
+		t.Fatalf("current.LastScope = %#v, want global", current)
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"lastScope"`) {
+		t.Fatalf("persisted JSON should name lastScope:\n%s", data)
+	}
+
+	current = nil
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetLastScope(); got != "global" {
+		t.Errorf("reloaded LastScope = %q, want global", got)
+	}
+
+	if err := SetLastScope("project"); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetLastScope(); got != "project" {
+		t.Errorf("LastScope after switching back = %q, want project", got)
+	}
+}
+
+// Re-recording the scope the file already holds must not rewrite it: the app
+// calls this on every scope crossing, and the common case is idempotent.
+func TestSetLastScopeSkipsAnUnchangedWrite(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	path = stateFile
+	current = &State{LastScope: "global"}
+
+	if err := SetLastScope("global"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("unchanged scope wrote the state file: %v", err)
+	}
+}
+
 func TestGetShowIdleWorktrees_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()
