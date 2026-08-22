@@ -51,6 +51,13 @@ type RenderBufferInput struct {
 	// Decorate is the host's per-row decoration (links). Nil draws the row
 	// undecorated.
 	Decorate func(line string, absoluteLine int) string
+
+	// Backgrounds selects how far carried backgrounds may reach (see
+	// tty.BackgroundMode). Empty means auto. Canvas detection and the box fill
+	// run only in auto; bounded and never render plain text beyond their rule.
+	Backgrounds tty.BackgroundMode
+	// BackgroundSpanMax is the row cap for bounded mode; <= 0 uses the default.
+	BackgroundSpanMax int
 }
 
 // RenderHeader draws the one row above an embedded terminal — identity chips
@@ -110,18 +117,21 @@ func RenderBody(in RenderBufferInput) string {
 	}
 
 	contentWidth := max(layout.DisplayWidth, 1)
+	backgrounds := tty.NormalizeBackgroundMode(in.Backgrounds)
 	visible := DrawRows(RowsInput{
-		Buffer:       in.Buffer,
-		Layout:       layout,
-		AbsoluteBase: in.AbsoluteBase,
-		TabWidth:     tabWidth,
-		Selection:    in.Selection,
-		Decorate:     in.Decorate,
-		Truncate:     truncate,
-		PaneHeight:   in.PaneHeight,
-		Interactive:  in.Interactive,
-		Follow:       in.Follow,
-		Pad:          true,
+		Buffer:            in.Buffer,
+		Layout:            layout,
+		AbsoluteBase:      in.AbsoluteBase,
+		TabWidth:          tabWidth,
+		Selection:         in.Selection,
+		Decorate:          in.Decorate,
+		Truncate:          truncate,
+		PaneHeight:        in.PaneHeight,
+		Interactive:       in.Interactive,
+		Follow:            in.Follow,
+		Pad:               true,
+		Backgrounds:       backgrounds,
+		BackgroundSpanMax: in.BackgroundSpanMax,
 	})
 
 	if layout.ShowScrollbar {
@@ -141,7 +151,10 @@ func RenderBody(in RenderBufferInput) string {
 		)
 		visible = strings.Split(joined, "\n")
 	}
-	canvasBg := CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	var canvasBg string
+	if backgrounds == tty.BackgroundAuto {
+		canvasBg = CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	}
 	return PadCanvasBox(strings.Join(visible, "\n"), canvasBg, width, body, truncate)
 }
 

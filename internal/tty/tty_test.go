@@ -334,3 +334,31 @@ func TestWheelReachesAnApplicationThatAskedForMouseEvents(t *testing.T) {
 		t.Fatalf("wheel down call = %#v", got)
 	}
 }
+
+func TestNormalizeBackgroundMode(t *testing.T) {
+	cases := []struct {
+		in   BackgroundMode
+		want BackgroundMode
+	}{
+		{"", BackgroundAuto},
+		{BackgroundAuto, BackgroundAuto},
+		{BackgroundBounded, BackgroundBounded},
+		{BackgroundNever, BackgroundNever},
+		{"plaid", BackgroundAuto},
+	}
+	for _, tc := range cases {
+		if got := NormalizeBackgroundMode(tc.in); got != tc.want {
+			t.Errorf("NormalizeBackgroundMode(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestDefaultConfigCarriesBackgroundDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Backgrounds != BackgroundAuto {
+		t.Errorf("DefaultConfig.Backgrounds = %q, want auto", cfg.Backgrounds)
+	}
+	if cfg.BackgroundSpanMax != DefaultBackgroundSpanMax {
+		t.Errorf("DefaultConfig.BackgroundSpanMax = %d, want %d", cfg.BackgroundSpanMax, DefaultBackgroundSpanMax)
+	}
+}

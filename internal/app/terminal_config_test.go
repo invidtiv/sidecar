@@ -58,3 +58,24 @@ func TestTerminalConfigDrivesTheChords(t *testing.T) {
 		t.Error("the configured paste chord is not answered")
 	}
 }
+
+func TestTerminalConfigResolvesBackgroundMode(t *testing.T) {
+	cfg := config.Default()
+	got := TerminalConfig(cfg)
+	if got.Backgrounds != tty.BackgroundAuto || got.BackgroundSpanMax != tty.DefaultBackgroundSpanMax {
+		t.Fatalf("default resolution = (%q, %d), want (auto, %d)",
+			got.Backgrounds, got.BackgroundSpanMax, tty.DefaultBackgroundSpanMax)
+	}
+
+	// A config that skipped Validate still resolves to a documented mode.
+	cfg.Plugins.Workspace.TerminalBackgrounds = "bounded"
+	cfg.Plugins.Workspace.TerminalBackgroundSpanMax = 4
+	if got := TerminalConfig(cfg); got.Backgrounds != tty.BackgroundBounded || got.BackgroundSpanMax != 4 {
+		t.Fatalf("resolution = (%q, %d), want (bounded, 4)", got.Backgrounds, got.BackgroundSpanMax)
+	}
+
+	cfg.Plugins.Workspace.TerminalBackgrounds = "plaid"
+	if got := TerminalConfig(cfg); got.Backgrounds != tty.BackgroundAuto {
+		t.Fatalf("unknown spelling resolved to %q, want auto", got.Backgrounds)
+	}
+}

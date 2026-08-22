@@ -41,17 +41,74 @@ type Config struct {
 	// ScrollbackLines is the number of scrollback lines to capture
 	// (default: DefaultScrollbackLines).
 	ScrollbackLines int
+
+	// Backgrounds controls how background colors carried in captured pane
+	// output render (default: BackgroundAuto).
+	Backgrounds BackgroundMode
+
+	// BackgroundSpanMax caps how many consecutive rows a single carried
+	// background may paint when Backgrounds is BackgroundBounded
+	// (default: DefaultBackgroundSpanMax). Rows past the cap in the same run
+	// render with their background dropped to the terminal default.
+	BackgroundSpanMax int
 }
+
+// BackgroundMode selects how far a captured pane's carried backgrounds are
+// allowed to reach.
+//
+//   - BackgroundAuto keeps canvas detection: when one background covers nearly
+//     every painted row of the live grid, default-background cells are filled
+//     with it so a fullscreen TUI does not show seams against the surface.
+//   - BackgroundBounded renders short spans — diffs, selection-style
+//     highlights, a few-line block — but drops the background of any run that
+//     exceeds BackgroundSpanMax consecutive rows, so an application that paints
+//     most of its output one color degrades to plain text instead of
+//     repainting the pane.
+//   - BackgroundNever drops every carried background; rows render as text on
+//     the surrounding surface.
+type BackgroundMode string
+
+const (
+	// BackgroundAuto is the historical behavior: detect a pane-wide canvas and
+	// fill default-background cells with it.
+	BackgroundAuto BackgroundMode = "auto"
+	// BackgroundBounded renders background spans up to BackgroundSpanMax rows
+	// and suppresses longer runs.
+	BackgroundBounded BackgroundMode = "bounded"
+	// BackgroundNever suppresses all carried backgrounds.
+	BackgroundNever BackgroundMode = "never"
+)
+
+// DefaultBackgroundSpanMax is the span cap when Backgrounds is bounded and no
+// explicit cap is configured. Twelve rows comfortably covers a diff hunk or a
+// highlighted notice while staying far below any pane height a wall of
+// same-colored blocks needs to trip canvas-scale rendering.
+const DefaultBackgroundSpanMax = 12
 
 // DefaultConfig returns the default configuration.
 func DefaultConfig() Config {
 	return Config{
-		ExitKey:         "ctrl+\\",
-		AttachKey:       "ctrl+]",
-		CopyKey:         "alt+c",
-		PasteKey:        "alt+v",
-		SelectAllKey:    "ctrl+a",
-		ScrollbackLines: DefaultScrollbackLines,
+		ExitKey:           "ctrl+\\",
+		AttachKey:         "ctrl+]",
+		CopyKey:           "alt+c",
+		PasteKey:          "alt+v",
+		SelectAllKey:      "ctrl+a",
+		ScrollbackLines:   DefaultScrollbackLines,
+		Backgrounds:       BackgroundAuto,
+		BackgroundSpanMax: DefaultBackgroundSpanMax,
+	}
+}
+
+// NormalizeBackgroundMode maps an empty or unknown mode spelling onto a valid
+// one, so a mistyped config value degrades to a documented behavior instead of
+// an undefined branch. Unknown values fall back to auto, the long-standing
+// default.
+func NormalizeBackgroundMode(mode BackgroundMode) BackgroundMode {
+	switch mode {
+	case BackgroundBounded, BackgroundNever:
+		return mode
+	default:
+		return BackgroundAuto
 	}
 }
 

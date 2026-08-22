@@ -3,6 +3,8 @@ package config
 import (
 	"path/filepath"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 const (
@@ -171,6 +173,23 @@ type WorkspacePluginConfig struct {
 	AgentStart map[string]string `json:"agentStart,omitempty"`
 	// TmuxCaptureMaxBytes caps tmux pane capture size for the preview pane. Default: 2MB.
 	TmuxCaptureMaxBytes int `json:"tmuxCaptureMaxBytes"`
+	// TerminalBackgrounds controls how background colors carried in captured
+	// pane output render:
+	//
+	//   - "auto" (default) keeps canvas detection: when one background covers
+	//     nearly every painted row of the live grid, default-background cells
+	//     are filled with it so a fullscreen TUI shows no seams.
+	//   - "bounded" renders short background spans (diffs, highlights, a
+	//     few-line block) but drops the background of any run longer than
+	//     TerminalBackgroundSpanMax consecutive rows. An application that
+	//     paints most of its output one color degrades to plain text instead of
+	//     repainting the whole pane.
+	//   - "never" drops every carried background; rows render as plain text.
+	//
+	// Unknown values fall back to "auto".
+	TerminalBackgrounds string `json:"terminalBackgrounds,omitempty"`
+	// TerminalBackgroundSpanMax is the row cap for "bounded" mode. Default: 12.
+	TerminalBackgroundSpanMax int `json:"terminalBackgroundSpanMax,omitempty"`
 	// ResizeDebounceMs is the shared interval for live-pane SIGWINCH during
 	// layout motion (divider drag, interactive correction). Default: 300.
 	// 0 restores per-event paint and poll-driven resize. Negative values
@@ -339,6 +358,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Plugins.Workspace.TmuxCaptureMaxBytes <= 0 {
 		c.Plugins.Workspace.TmuxCaptureMaxBytes = 2 * 1024 * 1024
+	}
+	c.Plugins.Workspace.TerminalBackgrounds = string(tty.NormalizeBackgroundMode(tty.BackgroundMode(c.Plugins.Workspace.TerminalBackgrounds)))
+	if c.Plugins.Workspace.TerminalBackgroundSpanMax <= 0 {
+		c.Plugins.Workspace.TerminalBackgroundSpanMax = tty.DefaultBackgroundSpanMax
 	}
 	if c.Plugins.Workspace.ResizeDebounceMs < 0 {
 		c.Plugins.Workspace.ResizeDebounceMs = 300

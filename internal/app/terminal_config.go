@@ -29,6 +29,12 @@ func TerminalConfig(cfg *config.Config) tty.Config {
 		// every selectable surface reads, and the terminal's own key is what
 		// configs written before it existed still carry.
 		terminal.CopyOnSelect = workspace.CopyOnSelect || cfg.Selection.CopyOnSelect
+		// Validate has already normalized the spelling; resolve again so a
+		// caller that skipped Validate still gets a documented mode.
+		terminal.Backgrounds = tty.NormalizeBackgroundMode(tty.BackgroundMode(workspace.TerminalBackgrounds))
+		if workspace.TerminalBackgroundSpanMax > 0 {
+			terminal.BackgroundSpanMax = workspace.TerminalBackgroundSpanMax
+		}
 	}
 	// Empty AttachKey is the pane's chord. tty.New treats empty as "use default",
 	// so hosts that honour this resolution must assign the field after New.

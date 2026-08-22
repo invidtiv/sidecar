@@ -328,6 +328,11 @@ type Plugin struct {
 	// Agent state
 	attachedSession     string // Name of worktree we're attached to (pauses polling)
 	tmuxCaptureMaxBytes int    // Cap for tmux capture output (bytes)
+	// backgrounds and backgroundSpanMax are plugins.workspace.
+	// terminalBackgrounds / terminalBackgroundSpanMax, resolved through
+	// app.TerminalConfig's rules so every terminal surface answers alike.
+	backgrounds       tty.BackgroundMode
+	backgroundSpanMax int
 	// resizeDebounceDur is plugins.workspace.resizeDebounceMs. A nil pointer
 	// means tty.DefaultResizeDebounce; a set 0 is the per-event escape hatch.
 	resizeDebounceDur *time.Duration
@@ -640,6 +645,8 @@ func New() *Plugin {
 		sidebarWidth:        40,   // Default 40% sidebar
 		sidebarVisible:      true, // Sidebar visible by default
 		tmuxCaptureMaxBytes: defaultTmuxCaptureMaxBytes,
+		backgrounds:         tty.BackgroundAuto,
+		backgroundSpanMax:   tty.DefaultBackgroundSpanMax,
 		truncateCache:       ui.NewTruncateCache(1000), // Cache up to 1000 truncations
 		terminalHistory:     make(map[string]tty.HistoryReach),
 		markdownRenderer:    mdRenderer,
@@ -828,6 +835,14 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	}
 	if ctx.Config != nil && ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes > 0 {
 		p.tmuxCaptureMaxBytes = ctx.Config.Plugins.Workspace.TmuxCaptureMaxBytes
+	}
+	if ctx.Config != nil {
+		p.backgrounds = tty.NormalizeBackgroundMode(tty.BackgroundMode(ctx.Config.Plugins.Workspace.TerminalBackgrounds))
+		if ctx.Config.Plugins.Workspace.TerminalBackgroundSpanMax > 0 {
+			p.backgroundSpanMax = ctx.Config.Plugins.Workspace.TerminalBackgroundSpanMax
+		} else {
+			p.backgroundSpanMax = tty.DefaultBackgroundSpanMax
+		}
 	}
 	if ctx.Config != nil {
 		p.setResizeDebounce(time.Duration(ctx.Config.Plugins.Workspace.ResizeDebounceMs) * time.Millisecond)

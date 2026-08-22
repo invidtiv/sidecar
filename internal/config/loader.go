@@ -147,22 +147,24 @@ type rawTasksConfig struct {
 }
 
 type rawWorkspaceConfig struct {
-	DirPrefix             *bool                    `json:"dirPrefix"`
-	DefaultAgentType      string                   `json:"defaultAgentType"`
-	LegacyDefaultAgent    string                   `json:"defaultAgent"` // Backward compatibility
-	Agents                []string                 `json:"agents"`
-	AgentStart            json.RawMessage          `json:"agentStart"`
-	TmuxCaptureMaxBytes   *int                     `json:"tmuxCaptureMaxBytes"`
-	ResizeDebounceMs      *int                     `json:"resizeDebounceMs"`
-	AutoCreateShell       *bool                    `json:"autoCreateShell"`
-	InteractiveExitKey    string                   `json:"interactiveExitKey"`
-	InteractiveAttachKey  string                   `json:"interactiveAttachKey"`
-	InteractiveCopyKey    string                   `json:"interactiveCopyKey"`
-	InteractivePasteKey   string                   `json:"interactivePasteKey"`
-	CopyOnSelect          *bool                    `json:"copyOnSelect"`
-	OverviewWorktreeScope string                   `json:"overviewWorktreeScope"`
-	SidebarDisplay        *rawSidebarDisplayConfig `json:"sidebarDisplay"`
-	WorktreeSetup         *rawWorktreeSetupConfig  `json:"worktreeSetup"`
+	DirPrefix                 *bool                    `json:"dirPrefix"`
+	DefaultAgentType          string                   `json:"defaultAgentType"`
+	LegacyDefaultAgent        string                   `json:"defaultAgent"` // Backward compatibility
+	Agents                    []string                 `json:"agents"`
+	AgentStart                json.RawMessage          `json:"agentStart"`
+	TmuxCaptureMaxBytes       *int                     `json:"tmuxCaptureMaxBytes"`
+	TerminalBackgrounds       string                   `json:"terminalBackgrounds"`
+	TerminalBackgroundSpanMax *int                     `json:"terminalBackgroundSpanMax"`
+	ResizeDebounceMs          *int                     `json:"resizeDebounceMs"`
+	AutoCreateShell           *bool                    `json:"autoCreateShell"`
+	InteractiveExitKey        string                   `json:"interactiveExitKey"`
+	InteractiveAttachKey      string                   `json:"interactiveAttachKey"`
+	InteractiveCopyKey        string                   `json:"interactiveCopyKey"`
+	InteractivePasteKey       string                   `json:"interactivePasteKey"`
+	CopyOnSelect              *bool                    `json:"copyOnSelect"`
+	OverviewWorktreeScope     string                   `json:"overviewWorktreeScope"`
+	SidebarDisplay            *rawSidebarDisplayConfig `json:"sidebarDisplay"`
+	WorktreeSetup             *rawWorktreeSetupConfig  `json:"worktreeSetup"`
 }
 
 type rawWorktreeSetupConfig struct {
@@ -352,6 +354,12 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 	if raw.Plugins.Workspace.TmuxCaptureMaxBytes != nil {
 		cfg.Plugins.Workspace.TmuxCaptureMaxBytes = *raw.Plugins.Workspace.TmuxCaptureMaxBytes
+	}
+	if raw.Plugins.Workspace.TerminalBackgrounds != "" {
+		cfg.Plugins.Workspace.TerminalBackgrounds = raw.Plugins.Workspace.TerminalBackgrounds
+	}
+	if raw.Plugins.Workspace.TerminalBackgroundSpanMax != nil {
+		cfg.Plugins.Workspace.TerminalBackgroundSpanMax = *raw.Plugins.Workspace.TerminalBackgroundSpanMax
 	}
 	if raw.Plugins.Workspace.ResizeDebounceMs != nil {
 		cfg.Plugins.Workspace.ResizeDebounceMs = *raw.Plugins.Workspace.ResizeDebounceMs

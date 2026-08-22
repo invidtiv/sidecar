@@ -36,6 +36,11 @@ type terminalViewportInput struct {
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
 	LinkResolver  *terminalLineLinkResolver
+
+	// Backgrounds selects how far carried backgrounds may reach (see
+	// tty.BackgroundMode). Empty means auto.
+	Backgrounds       tty.BackgroundMode
+	BackgroundSpanMax int
 }
 
 // terminalViewportLayout is the shared layout value. Links, search and the
@@ -81,11 +86,13 @@ func (in terminalViewportInput) viewport() tty.ViewportInput {
 func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, width, height int) terminalViewportInput {
 	interactive := p.interactiveDescribes(termPanel)
 	in := terminalViewportInput{
-		Buffer:       buffer,
-		Width:        width,
-		Height:       height,
-		Interactive:  interactive,
-		TrimTrailing: tty.TrimsTrailingRows(interactive),
+		Buffer:            buffer,
+		Width:             width,
+		Height:            height,
+		Interactive:       interactive,
+		TrimTrailing:      tty.TrimsTrailingRows(interactive),
+		Backgrounds:       p.backgrounds,
+		BackgroundSpanMax: p.backgroundSpanMax,
 	}
 	in.PaneWidth, in.PaneHeight = p.resolvedPaneGeometry(termPanel, interactive)
 	if interactive {
@@ -119,16 +126,18 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	}
 
 	displayLines := termpreview.DrawRows(termpreview.RowsInput{
-		Buffer:       in.Buffer,
-		Layout:       layout,
-		AbsoluteBase: in.AbsoluteBase,
-		TabWidth:     tabStopWidth,
-		Selection:    in.Selection,
-		Decorate:     in.decorate,
-		Truncate:     func(line string, width int) string { return cache.Truncate(line, width, "") },
-		PaneHeight:   in.PaneHeight,
-		Interactive:  in.Interactive,
-		Follow:       in.Follow,
+		Buffer:            in.Buffer,
+		Layout:            layout,
+		AbsoluteBase:      in.AbsoluteBase,
+		TabWidth:          tabStopWidth,
+		Selection:         in.Selection,
+		Decorate:          in.decorate,
+		Truncate:          func(line string, width int) string { return cache.Truncate(line, width, "") },
+		PaneHeight:        in.PaneHeight,
+		Interactive:       in.Interactive,
+		Follow:            in.Follow,
+		Backgrounds:       in.Backgrounds,
+		BackgroundSpanMax: in.BackgroundSpanMax,
 	})
 
 	if !in.NativeCursor {
@@ -157,7 +166,11 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 			}),
 		)
 	}
-	if canvasBg := termpreview.CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight); canvasBg != "" {
+	var canvasBg string
+	if tty.NormalizeBackgroundMode(in.Backgrounds) == tty.BackgroundAuto {
+		canvasBg = termpreview.CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	}
+	if canvasBg != "" {
 		content = termpreview.PadCanvasBox(content, canvasBg, in.Width, in.Height,
 			func(line string, width int) string { return cache.Truncate(line, width, "") })
 	}

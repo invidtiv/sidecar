@@ -172,12 +172,17 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 	_, total := tty.BufferBase(input.Buffer)
 	layout := tty.FitViewport(input)
 	hints = m.appendWindowStatus(styles.Muted.Render(hints), input, layout, width, chips)
+	// Same resolution the project surface answers: one config rule for how far
+	// carried backgrounds reach, so a pane cannot render differently depending
+	// on which surface is showing it.
+	terminalCfg := m.TerminalConfig()
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width: width, Height: height, Chips: chips, Hints: hints,
 		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: m.decoratePreviewLine,
+		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 	})
 }
 

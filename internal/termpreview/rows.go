@@ -34,6 +34,13 @@ type RowsInput struct {
 	Interactive bool
 	Follow      bool
 
+	// Backgrounds selects how far carried backgrounds may reach (see
+	// tty.BackgroundMode). Empty means auto.
+	Backgrounds tty.BackgroundMode
+	// BackgroundSpanMax is the row cap enforced when Backgrounds is bounded;
+	// <= 0 uses tty.DefaultBackgroundSpanMax.
+	BackgroundSpanMax int
+
 	// Pad right-pads every drawn row to the window width. A host that draws the
 	// rows into a filled box wants it; one that joins them against its own
 	// chrome does not.
@@ -70,12 +77,40 @@ func DrawRows(in RowsInput) []string {
 	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
-	canvasBg := CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	backgrounds := tty.NormalizeBackgroundMode(in.Backgrounds)
+	spanMax := in.BackgroundSpanMax
+	if spanMax <= 0 {
+		spanMax = tty.DefaultBackgroundSpanMax
+	}
+	// Detection costs a walk of the live grid; modes that will not fill skip it.
+	var canvasBg string
+	if backgrounds == tty.BackgroundAuto {
+		canvasBg = CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	}
 	inheritedBg := inheritedRowBackground(in.Buffer, layout.Start)
+	bandLen := 0
 	drawn := make([]string, 0, max(len(lines), layout.DisplayHeight))
 	for i, line := range lines {
-		var openBg bool
-		line, inheritedBg, openBg = ui.CarryRowBackground(line, inheritedBg)
+		line, nextBg, touchedBg := ui.CarryRowBackground(line, inheritedBg)
+		// Band accounting reads the source stream, not the stripped output: a
+		// run keeps counting through suppressed rows so one long wall cannot
+		// masquerade as several short spans. A row belongs to the band when it
+		// paints anything — sets its own background even if it closes the row
+		// with 0m, or carries one in from the row above.
+		if touchedBg || nextBg != "" {
+			bandLen++
+		} else {
+			bandLen = 0
+		}
+		inheritedBg = nextBg
+		switch {
+		case backgrounds == tty.BackgroundNever:
+			line = ui.StripRowBackgrounds(line)
+			touchedBg = false
+		case backgrounds == tty.BackgroundBounded && bandLen > spanMax:
+			line = ui.StripRowBackgrounds(line)
+			touchedBg = false
+		}
 		line = ui.ExpandTabs(line, tabWidth)
 		absoluteLine := in.AbsoluteBase + layout.Start + i
 		if in.Decorate != nil {
@@ -94,7 +129,7 @@ func DrawRows(in RowsInput) []string {
 		// Truncation can cut inside a background span, and the padding that
 		// follows appends unstyled cells, so a row that touches the background
 		// closes it here rather than letting it run into the next row.
-		if openBg {
+		if touchedBg {
 			line += ui.RowBackgroundDefault
 		}
 		drawn = append(drawn, line)

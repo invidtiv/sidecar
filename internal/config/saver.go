@@ -82,21 +82,23 @@ type saveConversationsConfig struct {
 }
 
 type saveWorkspaceConfig struct {
-	DirPrefix             *bool                 `json:"dirPrefix,omitempty"`
-	DefaultAgentType      string                `json:"defaultAgentType,omitempty"`
-	Agents                []string              `json:"agents,omitempty"`
-	AgentStart            map[string]string     `json:"agentStart,omitempty"`
-	TmuxCaptureMaxBytes   *int                  `json:"tmuxCaptureMaxBytes,omitempty"`
-	ResizeDebounceMs      *int                  `json:"resizeDebounceMs,omitempty"`
-	AutoCreateShell       *bool                 `json:"autoCreateShell,omitempty"`
-	InteractiveExitKey    string                `json:"interactiveExitKey,omitempty"`
-	InteractiveAttachKey  string                `json:"interactiveAttachKey,omitempty"`
-	InteractiveCopyKey    string                `json:"interactiveCopyKey,omitempty"`
-	InteractivePasteKey   string                `json:"interactivePasteKey,omitempty"`
-	CopyOnSelect          *bool                 `json:"copyOnSelect,omitempty"`
-	OverviewWorktreeScope string                `json:"overviewWorktreeScope,omitempty"`
-	SidebarDisplay        *SidebarDisplayConfig `json:"sidebarDisplay,omitempty"`
-	WorktreeSetup         WorktreeSetupConfig   `json:"worktreeSetup"`
+	DirPrefix                 *bool                 `json:"dirPrefix,omitempty"`
+	DefaultAgentType          string                `json:"defaultAgentType,omitempty"`
+	Agents                    []string              `json:"agents,omitempty"`
+	AgentStart                map[string]string     `json:"agentStart,omitempty"`
+	TmuxCaptureMaxBytes       *int                  `json:"tmuxCaptureMaxBytes,omitempty"`
+	TerminalBackgrounds       string                `json:"terminalBackgrounds,omitempty"`
+	TerminalBackgroundSpanMax *int                  `json:"terminalBackgroundSpanMax,omitempty"`
+	ResizeDebounceMs          *int                  `json:"resizeDebounceMs,omitempty"`
+	AutoCreateShell           *bool                 `json:"autoCreateShell,omitempty"`
+	InteractiveExitKey        string                `json:"interactiveExitKey,omitempty"`
+	InteractiveAttachKey      string                `json:"interactiveAttachKey,omitempty"`
+	InteractiveCopyKey        string                `json:"interactiveCopyKey,omitempty"`
+	InteractivePasteKey       string                `json:"interactivePasteKey,omitempty"`
+	CopyOnSelect              *bool                 `json:"copyOnSelect,omitempty"`
+	OverviewWorktreeScope     string                `json:"overviewWorktreeScope,omitempty"`
+	SidebarDisplay            *SidebarDisplayConfig `json:"sidebarDisplay,omitempty"`
+	WorktreeSetup             WorktreeSetupConfig   `json:"worktreeSetup"`
 }
 
 // toSaveConfig converts Config to the JSON-serializable format.
@@ -131,21 +133,23 @@ func toSaveConfig(cfg *Config) saveConfig {
 				DefaultEditor: cfg.Plugins.Notes.DefaultEditor,
 			},
 			Workspace: saveWorkspaceConfig{
-				DirPrefix:             &cfg.Plugins.Workspace.DirPrefix,
-				DefaultAgentType:      cfg.Plugins.Workspace.DefaultAgentType,
-				Agents:                cfg.Plugins.Workspace.Agents,
-				AgentStart:            cfg.Plugins.Workspace.AgentStart,
-				TmuxCaptureMaxBytes:   &cfg.Plugins.Workspace.TmuxCaptureMaxBytes,
-				ResizeDebounceMs:      &cfg.Plugins.Workspace.ResizeDebounceMs,
-				AutoCreateShell:       &cfg.Plugins.Workspace.AutoCreateShell,
-				InteractiveExitKey:    cfg.Plugins.Workspace.InteractiveExitKey,
-				InteractiveAttachKey:  cfg.Plugins.Workspace.InteractiveAttachKey,
-				InteractiveCopyKey:    cfg.Plugins.Workspace.InteractiveCopyKey,
-				InteractivePasteKey:   cfg.Plugins.Workspace.InteractivePasteKey,
-				CopyOnSelect:          &cfg.Plugins.Workspace.CopyOnSelect,
-				OverviewWorktreeScope: cfg.Plugins.Workspace.OverviewWorktreeScope,
-				WorktreeSetup:         cfg.Plugins.Workspace.WorktreeSetup,
-				SidebarDisplay:        &cfg.Plugins.Workspace.SidebarDisplay,
+				DirPrefix:                 &cfg.Plugins.Workspace.DirPrefix,
+				DefaultAgentType:          cfg.Plugins.Workspace.DefaultAgentType,
+				Agents:                    cfg.Plugins.Workspace.Agents,
+				AgentStart:                cfg.Plugins.Workspace.AgentStart,
+				TmuxCaptureMaxBytes:       &cfg.Plugins.Workspace.TmuxCaptureMaxBytes,
+				TerminalBackgrounds:       cfg.Plugins.Workspace.TerminalBackgrounds,
+				TerminalBackgroundSpanMax: &cfg.Plugins.Workspace.TerminalBackgroundSpanMax,
+				ResizeDebounceMs:          &cfg.Plugins.Workspace.ResizeDebounceMs,
+				AutoCreateShell:           &cfg.Plugins.Workspace.AutoCreateShell,
+				InteractiveExitKey:        cfg.Plugins.Workspace.InteractiveExitKey,
+				InteractiveAttachKey:      cfg.Plugins.Workspace.InteractiveAttachKey,
+				InteractiveCopyKey:        cfg.Plugins.Workspace.InteractiveCopyKey,
+				InteractivePasteKey:       cfg.Plugins.Workspace.InteractivePasteKey,
+				CopyOnSelect:              &cfg.Plugins.Workspace.CopyOnSelect,
+				OverviewWorktreeScope:     cfg.Plugins.Workspace.OverviewWorktreeScope,
+				WorktreeSetup:             cfg.Plugins.Workspace.WorktreeSetup,
+				SidebarDisplay:            &cfg.Plugins.Workspace.SidebarDisplay,
 			},
 		},
 		Keymap:            cfg.Keymap,

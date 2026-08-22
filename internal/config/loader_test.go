@@ -668,3 +668,41 @@ func TestLoadFrom_NotesDefaultEditorNormalizesCurrentLegacyAndUnknownValues(t *t
 		})
 	}
 }
+
+func TestLoadFrom_TerminalBackgrounds(t *testing.T) {
+	tests := []struct {
+		name        string
+		content     string
+		wantMode    string
+		wantSpanMax int
+	}{
+		{"absent", `{}`, "auto", 12},
+		{"bounded", `{"plugins":{"workspace":{"terminalBackgrounds":"bounded"}}}`, "bounded", 12},
+		{"never", `{"plugins":{"workspace":{"terminalBackgrounds":"never"}}}`, "never", 12},
+		{"unknown falls back to auto",
+			`{"plugins":{"workspace":{"terminalBackgrounds":"plaid"}}}`, "auto", 12},
+		{"explicit span cap",
+			`{"plugins":{"workspace":{"terminalBackgrounds":"bounded","terminalBackgroundSpanMax":4}}}`,
+			"bounded", 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			cfg, err := LoadFrom(path)
+			if err != nil {
+				t.Fatalf("LoadFrom failed: %v", err)
+			}
+			if got := cfg.Plugins.Workspace.TerminalBackgrounds; got != tt.wantMode {
+				t.Errorf("TerminalBackgrounds = %q, want %q", got, tt.wantMode)
+			}
+			if got := cfg.Plugins.Workspace.TerminalBackgroundSpanMax; got != tt.wantSpanMax {
+				t.Errorf("TerminalBackgroundSpanMax = %d, want %d", got, tt.wantSpanMax)
+			}
+		})
+	}
+}
