@@ -108,26 +108,35 @@ func (m *Model) previewIssueData() *IssuePreviewData {
 	return m.issuePreviewData
 }
 
-func (m *Model) claimIssuePreviewLoad(msg issueview.LoadedMsg) bool {
+// claimIssuePreviewLoad applies msg to the modal's card when it belongs to
+// it. The returned command, when non-nil, retargets the live watcher after a
+// cross-project adoption and must be run with the result.
+func (m *Model) claimIssuePreviewLoad(msg issueview.LoadedMsg) (tea.Cmd, bool) {
 	if !m.showIssuePreview || m.issuePreviewView == nil {
-		return false
+		return nil, false
 	}
 	if !m.issuePreviewView.SetResult(msg) {
 		// A refresh that found nothing new returns false here, and must still be
 		// claimed: it was this modal's own result, and letting it fall through
 		// would offer a card the plugins have no reason to see. Claiming it
 		// without touching the modal is exactly the no-repaint behaviour.
-		return msg.Refresh && msg.ModelID == issuePreviewModelID
+		return nil, msg.Refresh && msg.ModelID == issuePreviewModelID
 	}
 	if msg.Refresh {
 		// The refresh changed the card in place. Only the cached modal has to be
 		// rebuilt; the surrounding loading and error state is already correct.
 		m.issuePreviewData = m.issuePreviewView.Data()
 		m.invalidateIssuePreviewModal()
-		return true
+		return nil, true
 	}
 	m.applyIssuePreviewData(m.issuePreviewView.Data(), msg.Error)
-	return true
+	// A cross-project hit moves the card to its owning store; a watcher left
+	// on the requester's store would never see the owner's edits again. The
+	// restart is batched with the result application.
+	if msg.FoundIn != nil && msg.FoundIn.Root != "" {
+		return m.startIssuePreviewWatch(msg.FoundIn.Root, msg.IssueID), true
+	}
+	return nil, true
 }
 
 func (m *Model) applyIssuePreviewData(data *IssuePreviewData, err error) {

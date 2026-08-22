@@ -420,18 +420,33 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 	if projectState, ok := lookupProject(root); ok {
 		shells = readShells(filepath.Join(projectState, "shells.json"))
 	}
+	// Durable shells are Sidecar state, not Git state: they must survive every
+	// early return below. Dropping them when the Git inventory failed hid a
+	// whole project from the global browser even though its shells were
+	// recorded and live.
+	appendShells := func() {
+		for _, shell := range shells {
+			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
+			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
+			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
+			result.Workspaces = append(result.Workspaces, workspace)
+		}
+	}
 	info, err := os.Stat(root)
 	if err != nil {
 		result.Err = fmt.Errorf("configured project missing: %w", err)
+		appendShells()
 		return result
 	}
 	if !info.IsDir() {
 		result.Err = fmt.Errorf("configured project is not a directory")
+		appendShells()
 		return result
 	}
 	out, err := c.Runner.Output(ctx, "git", "--no-optional-locks", "-C", root, "worktree", "list", "--porcelain")
 	if err != nil {
 		result.Err = fmt.Errorf("configured project is not a Git repository: %w", err)
+		appendShells()
 		return result
 	}
 	// Every Git worktree is catalogued, including the main worktree and
@@ -472,14 +487,7 @@ func (c Collector) CollectProjectInventory(ctx context.Context, name, root strin
 		result.Workspaces = append(result.Workspaces, workspace)
 	}
 
-	if len(shells) > 0 {
-		for _, shell := range shells {
-			workspace := Workspace{ProjectKey: result.ProjectKey, ProjectName: name, ProjectRoot: result.ProjectRoot, Kind: KindShell, Key: shell.TmuxName, Name: shell.DisplayName, Path: result.ProjectRoot, TmuxName: shell.TmuxName, Provider: shell.AgentType, Namespace: shell.Namespace, CreatedAt: shell.CreatedAt, ObservedAt: now}
-			workspace.ID = workspace.ProjectKey + ":shell:" + workspace.Key
-			workspace.Presentation = agentstatus.Resolve(agentstatus.Input{ProviderSupported: supported(shell.AgentType), Orphaned: true, CapturedAt: now, Now: now})
-			result.Workspaces = append(result.Workspaces, workspace)
-		}
-	}
+	appendShells()
 	return result
 }
 
@@ -493,7 +501,11 @@ func (c Collector) RefreshProjectStatus(ctx context.Context, previous ProjectRes
 	result := previous
 	result.ObservedAt = now
 	result.Workspaces = append([]Workspace(nil), previous.Workspaces...)
-	if previous.Err != nil {
+	// A failed inventory with no workspaces has nothing to refresh. One that
+	// still carries durable shells does: the status pass reads only tmux
+	// evidence, so a Git failure must not freeze those shells into a
+	// permanently session-less presentation.
+	if previous.Err != nil && len(previous.Workspaces) == 0 {
 		return result
 	}
 	for i := range result.Workspaces {

@@ -380,7 +380,7 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		m.config.SetHostState(m.configHostState())
 		m.config.SetCheckInput(m.configCheckInput())
 	}
-	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd}
+	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd, m.syncOverviewProjects()}
 	if msg.Notice != "" {
 		cmds = append(cmds, toast(msg.Notice))
 	}

@@ -35,13 +35,13 @@ func TestTmuxFullAttach_ConfigEnables(t *testing.T) {
 	}
 }
 
-func TestWorkspaceTerminalPanel_DefaultOff(t *testing.T) {
+func TestWorkspaceTerminalPanel_DefaultOn(t *testing.T) {
 	globalManager = nil
-	if WorkspaceTerminalPanel.Default {
-		t.Error("workspace_terminal_panel must ship disabled by default")
+	if !WorkspaceTerminalPanel.Default {
+		t.Error("workspace_terminal_panel must ship enabled by default")
 	}
-	if IsEnabled(WorkspaceTerminalPanel.Name) {
-		t.Error("workspace_terminal_panel should be disabled without config")
+	if !IsEnabled(WorkspaceTerminalPanel.Name) {
+		t.Error("workspace_terminal_panel should be enabled without config")
 	}
 	if !IsKnownFeature(WorkspaceTerminalPanel.Name) {
 		t.Error("workspace_terminal_panel should be a registered feature")

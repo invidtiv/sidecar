@@ -432,6 +432,18 @@ func sameConfiguredProjects(paths []string, projects []Project) bool {
 	return true
 }
 
+// SetProjects applies a changed configured project set immediately, canceling
+// any cycle that is still running so the change cannot be silently dropped.
+// Ensure defers to an in-flight cycle, which is right for visibility gestures
+// but wrong for membership changes: a project added or removed while the
+// browser is live must win now, not after the next tab transition.
+func (m *Model) SetProjects(projects []Project) tea.Cmd {
+	if m.cancel != nil && sameConfiguredProjects(m.configuredPaths, projects) {
+		return nil
+	}
+	return m.start(projects, "refresh")
+}
+
 func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	if m.cancel != nil {
 		if m.pollScheduled {
