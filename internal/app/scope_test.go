@@ -237,6 +237,11 @@ func TestPersistedGlobalTabRestoresAfterRestart(t *testing.T) {
 	// A project plugin nobody is looking at must not be focused, for the same
 	// reason entering the global space unfocuses it: focus is what makes a
 	// terminal-owning plugin hold a pane.
+	//
+	// Init() is what decides this, so it has to run: New() never calls
+	// SetFocused at all, which made asserting on the freshly-constructed model
+	// pass with the whole branch reverted.
+	restarted.Init()
 	if plugins["git"].focused {
 		t.Fatal("restart focused the covered project plugin")
 	}
@@ -265,7 +270,7 @@ func TestNoPersistedScopeLaunchesIntoTheProjectWorkspace(t *testing.T) {
 	if got := state.GetLastScope(); got != "" {
 		t.Fatalf("fresh state persisted a scope: %q", got)
 	}
-	m, _ := newScopeBaselineModel(t, "git")
+	m, plugins := newScopeBaselineModel(t, "git")
 	if m.inGlobalScope() {
 		t.Fatal("a launch with nothing persisted opened the global space")
 	}
@@ -276,6 +281,13 @@ func TestNoPersistedScopeLaunchesIntoTheProjectWorkspace(t *testing.T) {
 	// the global space never grows the key.
 	if got := state.GetLastScope(); got != "" {
 		t.Fatalf("construction wrote a scope: %q", got)
+	}
+	// The contrast that makes the restored-global assertion mean something: in
+	// project scope Init() does focus the active plugin, so "not focused" over
+	// there is a real difference rather than a value nobody ever set.
+	m.Init()
+	if !plugins["git"].focused {
+		t.Fatal("an ordinary launch left the active project plugin unfocused")
 	}
 }
 
@@ -343,13 +355,25 @@ func TestStalePersistedScopeFallsBack(t *testing.T) {
 	})
 
 	// The project half of the selection goes stale the same way: a remembered
-	// plugin that is no longer registered falls back to the first tab.
+	// plugin that is no longer registered falls back to the first tab. Persist
+	// global scope too, so the assertion has something to disprove — with no
+	// persisted scope, inGlobalScope() is false however the fallback behaves,
+	// and activePlugin 0 is simply its initial value.
 	t.Run("remembered project plugin is gone", func(t *testing.T) {
 		isolateAppState(t)
+		if err := state.SetLastScope("global"); err != nil {
+			t.Fatalf("persist scope: %v", err)
+		}
+		if err := state.SetLastGlobalTab("workspaces"); err != nil {
+			t.Fatalf("persist tab: %v", err)
+		}
 		m, _ := newScopeBaselineModel(t, "plugin-that-was-removed")
-		if m.inGlobalScope() || m.activePlugin != 0 {
-			t.Fatalf("stale plugin: global=%v plugin=%d, want the first project tab",
-				m.inGlobalScope(), m.activePlugin)
+		// The global half restores; only the project half was stale.
+		if !m.inGlobalScope() {
+			t.Fatal("a stale project plugin discarded the restored global space")
+		}
+		if m.activePlugin != 0 {
+			t.Fatalf("stale plugin fell back to %d, want the first project tab", m.activePlugin)
 		}
 	})
 }
