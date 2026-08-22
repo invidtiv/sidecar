@@ -104,13 +104,38 @@ func TestFlagsPagePrefersCuratedCopy(t *testing.T) {
 // were cut, so a page that outgrows the pane loses rows with no indication —
 // and this list grows every time a feature is registered.
 func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
-	for _, size := range []struct{ w, h int }{{100, 24}, {120, 30}, {160, 45}} {
+	// At 120 columns and 31 rows every flag shows its name and its whole
+	// description on one line. The numbers are asserted rather than described
+	// so that adding a flag, or letting a description grow past the row width,
+	// fails here instead of silently pushing the last row under the fold.
+	for _, size := range []struct{ w, h int }{{120, 31}, {160, 31}, {160, 45}} {
 		m := flagsFixture(t, nil)
 		view := ansi.Strip(m.View(size.w, size.h))
 		for _, item := range previews() {
 			if !strings.Contains(view, item.label) {
-				t.Fatalf("%dx%d cut %q off the page:\n%s", size.w, size.h, item.label, view)
+				t.Fatalf("%dx%d cut the %q row off the page:\n%s", size.w, size.h, item.label, view)
 			}
+			// Every flag explains itself, whether or not the cursor is on it:
+			// half these names do not say what they turn on. A description that
+			// no longer appears whole has outgrown the row and wrapped, which
+			// costs a line per flag and is how the page overflows again.
+			if !strings.Contains(view, item.help) {
+				t.Fatalf("%dx%d wrapped %q's description %q — shorten it:\n%s",
+					size.w, size.h, item.label, item.help, view)
+			}
+		}
+	}
+}
+
+// Narrower than that the descriptions wrap, which is fine — but every row must
+// still be reachable, because the pane truncates and the cursor walks onto rows
+// that were cut.
+func TestFlagsPageKeepsEveryRowOnANarrowPane(t *testing.T) {
+	m := flagsFixture(t, nil)
+	view := ansi.Strip(m.View(100, 36))
+	for _, item := range previews() {
+		if !strings.Contains(view, item.label) {
+			t.Fatalf("100x36 cut the %q row off the page:\n%s", item.label, view)
 		}
 	}
 }
@@ -120,7 +145,7 @@ func TestFlagsPageFitsAnOrdinaryTerminal(t *testing.T) {
 func TestRestartNoticeSurvivesAShortPane(t *testing.T) {
 	m := flagsFixture(t, nil)
 	activate(t, m, regionFlag+features.CrossProjectOverview.Name)
-	if view := ansi.Strip(m.View(100, 24)); !strings.Contains(view, panelRestartNote) {
+	if view := ansi.Strip(m.View(120, 31)); !strings.Contains(view, panelRestartNote) {
 		t.Fatalf("a short pane hid the restart notice:\n%s", view)
 	}
 }

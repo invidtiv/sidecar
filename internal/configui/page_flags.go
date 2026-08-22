@@ -20,7 +20,6 @@ const regionFlag = "config-flag-"
 
 func (m *Model) buildFlags(b *paneBuilder) {
 	b.text(PaneTitle(PageTitle(PageFlags)), "")
-	b.lead("Every feature flag Sidecar knows about. A flag that is off is off for this build, not missing.")
 	// Above the list, not below it. Appended after twelve rows this was the
 	// first thing the pane's height clamp cut, so a user toggling a
 	// startup-scoped flag on a normal-sized terminal saw the success toast and
@@ -53,7 +52,7 @@ func (m *Model) buildFlags(b *paneBuilder) {
 	}
 
 	if len(owned) > 0 {
-		b.blank()
+		// SectionHeader supplies its own leading blank line.
 		b.text(SectionHeader("Set on other pages"))
 		for _, item := range owned {
 			m.previewRow(b, item)
@@ -127,59 +126,59 @@ func (p preview) state(m *Model) bool {
 var previewCopy = map[string]preview{
 	features.CrossProjectOverview.Name: {
 		label:   "Cross-project Activity",
-		help:    "Show workspaces from every configured project in Activity.",
+		help:    "Show every configured project's workspaces in Activity.",
 		restart: true,
 	},
 	features.WorkspaceDocPanes.Name: {
 		label: "Document panes",
-		help:  "Open files, issues, and diffs beside your active workspace.",
+		help:  "Open files, issues, and diffs in panes beside the workspace.",
 	},
 	features.TmuxFullAttach.Name: {
 		label: "Full tmux attach",
-		help:  "Hand the terminal over to tmux's native client and shortcuts.",
+		help:  "Hand the terminal to tmux's own client and native shortcuts.",
 		note:  "Applies to terminals opened after the change, and unlocks the attach chord on Terminal.",
 	},
 	features.WorkspaceTerminalPanel.Name: {
 		label: "Split workspace terminal",
-		help:  "Show a dedicated terminal next to the workspace list.",
+		help:  "Show a live terminal beside the workspace list.",
 	},
 	features.TmuxInteractiveInput.Name: {
 		label: "Type into terminals",
-		help:  "Send keystrokes to tmux panes instead of showing them read-only.",
+		help:  "Type into panes. Off makes every terminal read-only.",
 	},
 	features.TmuxInlineEdit.Name: {
 		label: "Inline file editing",
-		help:  "Edit a previewed file in place instead of opening an external editor.",
+		help:  "Edit a file in the preview pane, without an external editor.",
 	},
 	features.FilesAutoRefresh.Name: {
 		label: "Auto-refresh files",
-		help:  "Watch expanded directories and refresh the tree when they change on disk.",
+		help:  "Refresh the file tree when a watched directory changes on disk.",
 	},
 	features.PluginContentPanes.Name: {
 		label: "Plugin content panes",
-		help:  "Open passive content panes beside Files, Git, Notes, and the embedded issue hosts.",
+		help:  "Open a content pane beside Files, Git, Notes, and issue views.",
 	},
 	features.TerminalResourceProviders.Name: {
 		label:   "Terminal resource providers",
-		help:    "Recognize and open resources from configured external providers.",
+		help:    "Turn terminal text into openable links via external providers.",
 		restart: true,
 		note:    "Providers are described once at startup; turning this off stops every provider process.",
 	},
 	features.NotesPlugin.Name: {
 		label:        "Notes panel",
-		help:         "Capture quick notes in a Sidecar panel.",
+		help:         "Keep quick notes in their own Sidecar panel.",
 		owner:        PagePanels,
 		ownerControl: regionPanel + panelIDNotes,
 	},
 	features.TasksPlugin.Name: {
 		label:        "Tasks panel",
-		help:         "Show the embedded Tasks tab.",
+		help:         "Show the embedded Tasks tab for your task list.",
 		owner:        PagePanels,
 		ownerControl: regionPanel + panelIDTasks,
 	},
 	features.ConversationsPlugin.Name: {
 		label:        conversationsFlagLabel,
-		help:         "Browse multi-agent session history.",
+		help:         "Browse past agent sessions from Claude, Codex, and others.",
 		owner:        PagePanels,
 		ownerControl: regionPanel + panelIDConversations,
 		reads:        (*Model).conversationsOn,
@@ -225,30 +224,42 @@ func previewFor(feature features.Feature) preview {
 // here; activating the row jumps to the control that owns it.
 func (m *Model) previewRow(b *paneBuilder, item preview) {
 	enabled := item.state(m)
-	// Every clause that has something to say gets said. The old switch stopped
-	// at the first match, so terminal_resource_providers — the only flag that
-	// both needs a restart and has a scope note — silently dropped the half
-	// that warns turning it off kills running provider processes.
-	detail := item.help
-	if item.owner != "" {
-		detail += " Set this on " + PageTitle(item.owner) + ", which pairs it with the panel's own settings."
-	}
-	if item.restart {
-		detail += " Read once when Sidecar starts, so a change takes effect after a restart."
-	}
-	if item.note != "" {
-		detail += " " + item.note
-	}
-	// Only the focused row spends lines on its explanation; see
-	// panelToggleFocusDetail.
+	// Every row says what it does, whether or not the cursor is on it: half
+	// these names do not explain themselves, and a flag a user cannot interpret
+	// is one they will not touch.
+	//
+	// The help line is written to fit the row's width, so a row stays two lines
+	// and twelve of them stay inside the pane. Anything conditional is added
+	// only for the focused row, which is the one place a third line is
+	// affordable.
 	detailFor := func(s State) string {
+		detail := item.help
 		if !s.Focused {
-			return ""
+			return detail
+		}
+		// Every clause with something to say gets said. A switch stopping at
+		// the first match is what silently dropped the one sentence warning
+		// that turning terminal_resource_providers off kills running provider
+		// processes — it is the only flag that both restarts and has a note.
+		if item.owner != "" {
+			detail += " Set this on " + PageTitle(item.owner) + ", which pairs it with the panel's own settings."
+		}
+		if item.restart {
+			detail += " Read once when Sidecar starts, so a change takes effect after a restart."
+		}
+		if item.note != "" {
+			detail += " " + item.note
 		}
 		return detail
 	}
+	// A restart-scoped flag says so inline rather than spending a line on it,
+	// so the warning is visible on every row and not only the focused one.
+	badge := ""
+	if item.restart {
+		badge = Badge("restart", false)
+	}
 	if item.owner != "" {
-		b.panelStatus(regionFlag+item.flag, item.label, "", detailFor, enabled, func(m *Model) tea.Cmd {
+		b.panelStatus(regionFlag+item.flag, item.label, badge, detailFor, enabled, func(m *Model) tea.Cmd {
 			m.Navigate(item.owner)
 			m.detailFocus = true
 			m.focusControlByID(item.ownerControl)
@@ -256,7 +267,7 @@ func (m *Model) previewRow(b *paneBuilder, item preview) {
 		})
 		return
 	}
-	b.panelToggleFocusDetail(regionFlag+item.flag, item.label, "", detailFor, enabled, func(m *Model) tea.Cmd {
+	b.panelToggleFocusDetail(regionFlag+item.flag, item.label, badge, detailFor, enabled, func(m *Model) tea.Cmd {
 		next := !m.flagEnabled(item.flag)
 		// The restart requirement is stated at save time, next to the control
 		// that needs it, and only for the flags that genuinely need it.
