@@ -80,3 +80,42 @@ func TestPreviewIssueScrollbarLostReleaseRecoversOnHover(t *testing.T) {
 		t.Fatal("lost release left the scrollbar gesture live")
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// card's bar re-arms exactly like the first press did — through the seam that
+// can never reach a nav row — instead of being absorbed wholesale.
+func TestPreviewIssueScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	m, issue := openLongPreviewIssue(t)
+	x, y := previewIssueScrollbarPoint(t, m)
+	view := issue.view()
+	params := view.ScrollbarParams()
+
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}))
+	if !view.ScrollbarDragging() {
+		t.Fatal("first press did not arm the gesture")
+	}
+	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: x, Y: y}))
+	if view.ScrollbarDragging() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	_, geom := ui.RenderScrollbarWithGeometry(params)
+	pressRow := geom.ThumbRect.Max.Y // first track row past the thumb: a jump
+	want := ui.OffsetAtRow(params, pressRow)
+	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: x, Y: y + pressRow, Button: tea.MouseLeft}))
+	if !view.ScrollbarDragging() {
+		t.Fatal("a quick second press on the bar did not re-grab it")
+	}
+	if got := m.workspacesMouse.DragRegion(); got != previewIssueScrollbarKind {
+		t.Fatalf("second press started drag %q, want %s", got, previewIssueScrollbarKind)
+	}
+	if want > 0 && view.ScrollOffset() != want {
+		t.Fatalf("track re-press left offset %d, want anchor %d", view.ScrollOffset(), want)
+	}
+
+	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: x, Y: y + pressRow + 2, Button: tea.MouseLeft}))
+	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: 1, Y: 1}))
+	if view.ScrollbarDragging() {
+		t.Fatal("release did not settle the re-grabbed gesture")
+	}
+}

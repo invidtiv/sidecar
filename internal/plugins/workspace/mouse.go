@@ -1190,6 +1190,13 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
 		return cmd
 	}
+	// A rapid second press on the sidebar's bar re-grabs it exactly like the
+	// first one did (thumb grab continues, track re-jumps) instead of being
+	// dropped for not naming a row.
+	if isListScrollbarID(action.Region.ID) {
+		p.pressListScrollbar(action)
+		return nil
+	}
 	if cmd, ok := p.clickDocTabAt(action.X, action.Y); ok {
 		return cmd
 	}
@@ -1258,12 +1265,22 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 			p.focusLeaf(leafID)
 			return p.pressDocSelection(leafID, action)
 		}
-		if _, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
+		if issue, leaf := p.issueLeafAt(action.Region.Data); leaf != nil {
 			p.focusLeaf(leaf.ID)
 			// Bubble Tea emits the first click and then a double-click event at
 			// the same cell. The first click is the sole issue navigation;
 			// replaying it here can open the child and then its newly rendered
-			// parent when both rows occupy the same coordinate.
+			// parent when both rows occupy the same coordinate. A rapid second
+			// press on the card's bar re-arms the gesture instead, through the
+			// seam that can never reach a nav row.
+			if view := issue.view(); view != nil {
+				lx, ly := issueViewLocal(action.X, action.Y, action.Region.Rect)
+				if view.PressScrollbar(lx, ly) {
+					p.issueScrollLeaf = leaf.ID
+					p.issueScrollTrackY = action.Y - ly
+					p.mouseHandler.StartDrag(action.X, action.Y, regionIssueScrollbar, leaf.ID)
+				}
+			}
 			return nil
 		}
 	case regionKanbanCard:

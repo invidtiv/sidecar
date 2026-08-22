@@ -180,3 +180,36 @@ func TestSessionsFreeScrollSurvivesRenderUntilSelectionMoves(t *testing.T) {
 		t.Errorf("viewport = %d after the selection moved, want it following again (<%d)", got, dragged)
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// bar must re-grab it exactly like the first one did, before the click switch
+// can ever reach row activation with it.
+func TestSessionsScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	m := scrollCatalogModel(t, 40)
+	bar := sessionsBar(t, m)
+	selectedBefore := m.workspaces.SelectedID()
+
+	pointerDown(t, m, bar.thumb.Rect.X, bar.thumb.Rect.Y+1)
+	if !m.wsBar.gesture.Active() {
+		t.Fatal("first press did not begin a gesture")
+	}
+	release(t, m, bar.thumb.Rect.X, bar.thumb.Rect.Y+1)
+	if m.wsBar.gesture.Active() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg{X: bar.thumb.Rect.X, Y: bar.thumb.Rect.Y + 1, Button: tea.MouseLeft}
+	m.WorkspacesMouse(double)
+	if !m.workspacesMouse.IsDragging() || !m.wsBar.gesture.Active() {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+	if m.workspaces.SelectedID() != selectedBefore {
+		t.Errorf("second press selected %q, want %q held", m.workspaces.SelectedID(), selectedBefore)
+	}
+
+	dragTo(t, m, bar.thumb.Rect.X, bar.thumb.Rect.Y+6)
+	if got := m.workspaces.ScrollOffset(); got <= 0 {
+		t.Fatalf("post-regrab drag left offset %d, want it following the pointer", got)
+	}
+	release(t, m, 1, 1)
+}

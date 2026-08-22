@@ -157,9 +157,16 @@ func (h *appContentDeck) pressAppContentGesture(action mouse.MouseAction) (tea.C
 		return appDeckSelectionCopyCmd(v, result), true
 	case *issueview.Model:
 		if action.Type != mouse.ActionClick {
-			// Bubble Tea emits the first click and then double/triple events at
-			// the same cell. The first click is the sole navigation; replaying
-			// it can open the child and then its newly rendered parent at once.
+			// A rapid second press re-arms the bar exactly like the first one
+			// did, without reaching the nav rows (a plain click here is the
+			// sole navigation; replaying it can open the child and then its
+			// newly rendered parent at once).
+			lx, ly := h.appContentCardLocal(hit.LeafID, action.X, action.Y)
+			if v.PressScrollbar(lx, ly) {
+				h.issueScrollLeaf = hit.LeafID
+				h.issueScrollTrackY = action.Y - ly
+				h.mouse.StartDrag(action.X, action.Y, appDeckIssueScrollbarRegion, hit.LeafID)
+			}
 			return nil, true
 		}
 		lx, ly := h.appContentCardLocal(hit.LeafID, action.X, action.Y)

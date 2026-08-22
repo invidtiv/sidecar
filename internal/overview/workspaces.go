@@ -1358,8 +1358,9 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if workspacelist.IsScrollbarRegion(region.Kind) {
 		// A press on the thumb or track: grab or jump-to-spot, then drag.
 		// Handled before the click switch so a double-click on the bar cannot
-		// reach row activation.
-		if action.Type == mouse.ActionClick {
+		// reach row activation — and so the second press of a rapid
+		// double-press re-grabs exactly like the first one did.
+		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
 			m.pressWorkspacesScrollbar(action)
 		}
 		return nil

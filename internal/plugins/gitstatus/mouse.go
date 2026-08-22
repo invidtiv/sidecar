@@ -260,9 +260,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 
 	switch action.Region.ID {
 	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
-		// A scrollbar gesture is not a file open; swallow the second click of
-		// a double-press so rapid track clicks cannot launch an editor.
-		return p, nil
+		// A scrollbar gesture is not a file open: the second press of a
+		// double-press on the bar grabs it again (thumb grab continues,
+		// track re-jumps) rather than being swallowed.
+		return p.handleScrollbarPress(action)
 
 	case regionFile:
 		// Double-click on file - open it in editor (folders handled by single-click)

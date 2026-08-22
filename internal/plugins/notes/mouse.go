@@ -111,10 +111,12 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) (*Plugin, tea.Cmd) {
 		// Drags and releases are keyed to the gesture's origin so a pointer
 		// that wanders off the bar stays owned by the scrollbar.
 		switch action.Type {
-		case mouse.ActionClick:
+		case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
 			if action.Region != nil {
 				switch action.Region.ID {
 				case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+					// Every press of a rapid multi-press re-grabs the bar;
+					// none of them may fall through to the editor beneath.
 					return p.handleScrollbarPress(action)
 				}
 			}
@@ -331,9 +333,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 
 	switch action.Region.ID {
 	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
-		// A scrollbar gesture is not a note open; swallow the second click of
-		// a double-press on the bar.
-		return p, nil
+		// A scrollbar gesture is not a note open: the second press of a
+		// double-press on the bar grabs it again (thumb grab continues,
+		// track re-jumps) rather than being swallowed.
+		return p.handleScrollbarPress(action)
 
 	case regionNoteItem:
 		idx, ok := action.Region.Data.(int)

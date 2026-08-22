@@ -123,3 +123,50 @@ func TestIssueLeafScrollbarLostReleaseRecoversOnHover(t *testing.T) {
 		t.Fatal("lost release left the scrollbar gesture live")
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// card's bar re-arms exactly like the first press did, through the seam that
+// can never reach a nav row.
+func TestIssueLeafScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	p, issue, x, topY := issueScrollbarFixture(t)
+	view := issue.view()
+	params := view.ScrollbarParams()
+
+	p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: topY, Button: tea.MouseLeft}))
+	if !view.ScrollbarDragging() {
+		t.Fatal("first press did not arm the gesture")
+	}
+	p.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: x, Y: topY, Button: tea.MouseLeft}))
+	if view.ScrollbarDragging() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	// The repeat press lands on the first track row past the thumb's bottom:
+	// a jump-to-spot anchor proving the re-grab re-ran the gesture rather
+	// than no-oping.
+	_, geom := ui.RenderScrollbarWithGeometry(params)
+	pressRow := geom.ThumbRect.Max.Y
+	want := ui.OffsetAtRow(params, pressRow)
+	if want == 0 {
+		t.Fatal("test setup: press row maps to offset 0")
+	}
+	p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: topY + pressRow, Button: tea.MouseLeft}))
+	if !view.ScrollbarDragging() {
+		t.Fatal("a quick second press on the bar did not re-grab it")
+	}
+	if p.mouseHandler.DragRegion() != regionIssueScrollbar {
+		t.Fatalf("second press started drag %q, want %s", p.mouseHandler.DragRegion(), regionIssueScrollbar)
+	}
+	if view.ScrollOffset() != want {
+		t.Fatalf("track re-press left offset %d, want anchor %d", view.ScrollOffset(), want)
+	}
+
+	p.handleMouse(tea.MouseMotionMsg(tea.Mouse{X: x, Y: topY + pressRow + 2, Button: tea.MouseLeft}))
+	if got := ui.OffsetAtRow(params, pressRow+2); view.ScrollOffset() != got {
+		t.Fatalf("post-regrab drag left offset %d, want %d", view.ScrollOffset(), got)
+	}
+	p.handleMouse(tea.MouseReleaseMsg(tea.Mouse{X: 1, Y: 1}))
+	if p.issueScrollLeaf != 0 {
+		t.Fatal("settle left the host holding the leaf")
+	}
+}

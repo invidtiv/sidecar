@@ -481,3 +481,53 @@ func TestAppContentDeckIdleRenderByteParityUnderMouseTraffic(t *testing.T) {
 		t.Fatal("idle parity check left a gesture live")
 	}
 }
+
+// The second press of a rapid double-press on an issue card's bar re-arms the
+// gesture exactly like the first one did — through the seam that can never
+// reach a nav row — instead of being absorbed as a navigation-replay guard.
+func TestAppContentDeckIssueCardSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}); cmd == nil {
+		t.Fatal("issue open returned no load command")
+	}
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	issue := seedDeckIssue(t, h)
+	m.renderContent(200, 40)
+
+	issueLeaf := h.deck.Leaf(panelayout.Issue)
+	rect := issue.ScrollbarRect()
+	inner := appDeckInnerBox(t, h, issueLeaf)
+	x := inner.X + rect.X
+	topY := inner.Y + paneframe.HeaderRows
+	params := issue.ScrollbarParams()
+	_, geom := ui.RenderScrollbarWithGeometry(params)
+	pressRow := geom.ThumbRect.Max.Y
+
+	m.appContentMouse(deckClick(x, topY+pressRow))
+	if !issue.ScrollbarDragging() {
+		t.Fatal("first press did not arm the gesture")
+	}
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: x, Y: topY + pressRow, Button: tea.MouseLeft}))
+	if issue.ScrollbarDragging() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg(tea.Mouse{X: x, Y: topY + pressRow, Button: tea.MouseLeft})
+	m.appContentMouse(double)
+	if !issue.ScrollbarDragging() {
+		t.Fatal("a quick second press on the bar did not re-grab it")
+	}
+	if got := h.mouse.DragRegion(); got != appDeckIssueScrollbarRegion {
+		t.Fatalf("second press started drag %q, want %s", got, appDeckIssueScrollbarRegion)
+	}
+
+	m.appContentMouse(deckDragTo(x, topY+pressRow+4))
+	if want := ui.OffsetAtRow(params, pressRow+4); issue.ScrollOffset() != want {
+		t.Fatalf("post-regrab drag left offset %d, want %d", issue.ScrollOffset(), want)
+	}
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: 1, Y: 1, Button: tea.MouseLeft}))
+}

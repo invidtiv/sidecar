@@ -322,3 +322,33 @@ func TestIssueScrollbar_HoverExclusivity(t *testing.T) {
 		t.Fatalf("clearing hover = cursor %d bar %v", m.hover, m.scrollbarHover)
 	}
 }
+
+// PressScrollbar is the arming seam hosts use for repeat presses: it arms the
+// bar exactly like HandleClick does, but can never reach a nav row even when
+// the bar moved between frames and the point now sits over one.
+func TestIssueScrollbar_PressScrollbarArmsWithoutNavigation(t *testing.T) {
+	m := overflowIssueModel(t)
+	rect := barRect(t, m)
+	params := m.ScrollbarParams()
+
+	if !m.PressScrollbar(rect.X, rect.Y) {
+		t.Fatal("thumb press was not armed through the seam")
+	}
+	if !m.ScrollbarDragging() {
+		t.Fatal("seam press did not arm a drag")
+	}
+	if m.IssueID() != "td-abc123" {
+		t.Fatalf("seam press navigated to %q", m.IssueID())
+	}
+	m.ScrollbarDragEnd()
+
+	// A track press through the seam jumps to the grabbed row like a click.
+	row := rect.H / 2
+	if !m.PressScrollbar(rect.X, rect.Y+row) {
+		t.Fatal("track press was not armed through the seam")
+	}
+	if want := ui.OffsetAtRow(params, row); want > 0 && m.scroll != want {
+		t.Fatalf("track jump left scroll %d, want %d", m.scroll, want)
+	}
+	m.ScrollbarDragEnd()
+}

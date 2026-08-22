@@ -477,36 +477,45 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
 
 // handleMouseDoubleClick handles double click actions.
 func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.Cmd) {
-	if action.Region == nil || action.Region.ID != regionTreeItem {
+	if action.Region == nil {
 		return p, nil
 	}
 
-	idx, ok := action.Region.Data.(int)
-	if !ok {
-		return p, nil
-	}
+	switch action.Region.ID {
+	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
+		// The second press of a rapid double-press grabs the bar exactly
+		// like the first one did (thumb grab continues, track re-jumps)
+		// instead of being dropped for not being a tree row.
+		return p.handleScrollbarPress(action)
+	case regionTreeItem:
+		idx, ok := action.Region.Data.(int)
+		if !ok {
+			return p, nil
+		}
 
-	node := p.tree.GetNode(idx)
-	if node == nil {
-		return p, nil
-	}
+		node := p.tree.GetNode(idx)
+		if node == nil {
+			return p, nil
+		}
 
-	if node.IsDir {
-		// Toggle folder expand/collapse
-		_ = p.tree.Toggle(node)
-		p.syncWatcherDirs()
-		p.treeCursor = idx
-		p.ensureTreeCursorVisible()
-		return p, nil
-	}
+		if node.IsDir {
+			// Toggle folder expand/collapse
+			_ = p.tree.Toggle(node)
+			p.syncWatcherDirs()
+			p.treeCursor = idx
+			p.ensureTreeCursorVisible()
+			return p, nil
+		}
 
-	// Open file in editor (same as 'e' key) and pin the tab
-	cmd := p.openTab(node.Path, TabOpenReplace)
-	p.pinTab(p.activeTab)
-	if p.isInlineEditSupported(node.Path) {
-		return p, tea.Batch(cmd, p.enterInlineEditMode(node.Path, 0))
+		// Open file in editor (same as 'e' key) and pin the tab
+		cmd := p.openTab(node.Path, TabOpenReplace)
+		p.pinTab(p.activeTab)
+		if p.isInlineEditSupported(node.Path) {
+			return p, tea.Batch(cmd, p.enterInlineEditMode(node.Path, 0))
+		}
+		return p, tea.Batch(cmd, p.openFile(node.Path))
 	}
-	return p, tea.Batch(cmd, p.openFile(node.Path))
+	return p, nil
 }
 
 // handleMouseScroll handles scroll wheel actions.

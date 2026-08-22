@@ -150,3 +150,30 @@ func TestSessionScrollbar_NoRegionsWhenContentFits(t *testing.T) {
 		}
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// bar must re-grab it exactly like the first one did instead of swallowing it
+// (repeat track-clicks at one cell lose every other press otherwise).
+func TestSessionScrollbar_SecondQuickPressStillGrabsTheBar(t *testing.T) {
+	p := sessionListTestPlugin(t, 30)
+	_ = p.View(p.width, p.height)
+
+	thumb := findConvRegion(t, p, ui.RegionScrollbarThumb)
+	if _, _ = p.handleMouse(convClickMsg(thumb.X, thumb.Y)); !p.mouseHandler.IsDragging() {
+		t.Fatal("first press did not start a drag")
+	}
+	if _, _ = p.handleMouse(convReleaseMsg(thumb.X, thumb.Y)); p.mouseHandler.IsDragging() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg(tea.Mouse{X: thumb.X, Y: thumb.Y, Button: tea.MouseLeft})
+	if _, cmd := p.handleMouse(double); cmd != nil {
+		t.Fatal("the second press produced a command")
+	}
+	if !p.mouseHandler.IsDragging() || p.mouseHandler.DragRegion() != ui.RegionScrollbarThumb {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+	if _, _ = p.handleMouse(convReleaseMsg(thumb.X, thumb.Y)); p.mouseHandler.IsDragging() {
+		t.Fatal("release did not settle the re-grabbed gesture")
+	}
+}

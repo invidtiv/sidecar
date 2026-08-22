@@ -270,8 +270,18 @@ func (m *Model) handlePreviewIssueMouse(action mouse.MouseAction) tea.Cmd {
 	case mouse.ActionDoubleClick:
 		// The preceding click already navigated. Consume Bubble Tea's
 		// follow-up double event so a child that has just rendered its parent
-		// at this cell cannot immediately navigate back.
+		// at this cell cannot immediately navigate back — but a rapid second
+		// press on the card's bar re-arms the gesture through the seam that
+		// can never reach a nav row.
 		m.focusPreviewPane(panelayout.Issue)
+		if view != nil {
+			lx := action.X - action.Region.Rect.X
+			ly := action.Y - action.Region.Rect.Y - termpreview.HeaderRows
+			if view.PressScrollbar(lx, ly) {
+				issue.scrollTrackY = action.Y - ly
+				m.workspacesMouse.StartDrag(action.X, action.Y, previewIssueScrollbarKind, 0)
+			}
+		}
 		return nil
 	case mouse.ActionScrollUp, mouse.ActionScrollDown:
 		m.scrollPreviewIssueByWheel(action.Delta)

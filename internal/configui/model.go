@@ -844,8 +844,9 @@ func (m *Model) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		case id == ui.RegionScrollbarThumb || id == ui.RegionScrollbarTrack:
 			// Grab the thumb, or jump-to-spot on the track and keep dragging
 			// from there. The bar's rects are registered after the row rects
-			// precisely so this wins them.
-			if picker := m.activePicker(); picker != nil && action.Type == mouse.ActionClick {
+			// precisely so this wins them. A rapid second press re-grabs
+			// exactly like the first one did.
+			if picker := m.activePicker(); picker != nil {
 				m.pressThemeScrollbar(picker, action)
 			}
 		case id == regionThemeList:

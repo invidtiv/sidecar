@@ -150,6 +150,18 @@ func (m *Model) beginScrollbarGesture(x, y int) bool {
 	return true
 }
 
+// PressScrollbar answers a press on the interactive bar without ever reaching
+// the nav rows: grabbing the thumb where it was pressed, or jumping to the
+// clicked spot and anchoring the thumb there so the same gesture keeps
+// dragging (macOS track-click). It is the arming seam hosts use when their
+// click classification named a repeat press something other than a plain
+// click — Bubble Tea reports a rapid second press as ActionDoubleClick, and
+// routing that through HandleClick could reach a nav row if the bar moved
+// between frames. Reports whether the press was the bar's.
+func (m *Model) PressScrollbar(x, y int) bool {
+	return m.beginScrollbarGesture(x, y)
+}
+
 // scrollbarContains reports whether a view-local point lands on an
 // interactive bar.
 func (m *Model) scrollbarContains(x, y int) bool {

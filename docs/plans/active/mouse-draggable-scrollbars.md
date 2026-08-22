@@ -181,3 +181,49 @@ Adopt, one PR-sized slice per surface group, cheapest first to shake out the pat
 - Should track-click support a "jump to next page" alternative (macOS offers both)? Default plan: jump-to-spot only; revisit if it feels wrong in practice.
 - Hover/pressed colors: reuse existing theme keys with intensity modulation, or add `ScrollbarThumbHover`/`ScrollbarThumbActive` theme keys? (Adding keys touches `create-theme` docs and curated themes.)
 - Should the anti-jitter spacer column (content-fits case) ever appear interactive? Plan says no — no regions registered when `HasThumb` is false.
+
+## Adoption outcome
+
+Recorded at Phase 4 (td-ed732e). No new theme keys were added at any point: hover/drag
+emphasis derives via intensity modulation (`styles.Lighten`) off the existing
+`scrollbarThumb`/`scrollbarTrack` keys, and idle rendering stays byte-identical.
+
+Status per surface:
+
+| Surface | Status |
+|---|---|
+| Shared core (`internal/ui`, `internal/scroll`) | adopted (td-6852aa) |
+| File browser tree / search / preview | adopted (td-d889dc) |
+| Git status sidebar files + commits bars | adopted (td-550ce1) |
+| Conversations list | adopted (td-550ce1) |
+| Notes list / preview / edit (+ noteview API) | adopted (td-550ce1, td-0d5d69) |
+| Palette results | adopted (td-3037a9) |
+| Notification centre | adopted (td-3037a9) |
+| Kanban lanes — component gesture API | adopted (td-76f757); **host wiring pending → td-a7d02e** |
+| Workspacelist sidebar — global Sessions host | adopted (td-c6f01c) |
+| Workspacelist sidebar — project workspace host | adopted (td-85b9f6) |
+| Config UI theme picker | adopted (td-c6f01c) |
+| Doc viewer (deck + workspace pane + Sessions preview hosts) | adopted (td-b31ec5, td-0d5d69) |
+| Issue viewer (deck + workspace pane + Sessions preview hosts) | adopted (td-b31ec5, td-0d5d69) |
+| Note card in app content deck | adopted (td-0d5d69) |
+| Note card in Sessions note preview | **visible but inert there → td-14f48e** |
+| Modal framework viewport bar + project/worktree/theme switcher bars | adopted (td-a6317f) |
+| Workspace primary terminal + term panel bar | cut-terminal (user decision; terminals manage their own scrollback) |
+| Sessions preview terminal bar | cut-terminal (same decision) |
+
+Double-press parity (wave-1 P3 carried here): unified on GRAB semantics — a rapid second
+press re-grabs exactly like the first press did on every wired surface. Fixed in
+filebrowser, gitstatus, conversations, notes (incl. inline-editor branch), configui theme
+picker, both workspacelist sidebar hosts, docview (second press previously fell through to
+the text-selection engine), and issue cards in all three hosts (new `issueview.PressScrollbar`
+arming seam that can never reach a nav row). Kanban is exempt until its hosts are wired
+(td-a7d02e).
+
+Deliberate allow-list — remaining direct `RenderScrollbar` callers that stay non-interactive:
+
+- `internal/plugins/workspace/terminal_viewport.go` — terminal window bar over captured
+  scrollback. Cut with Phase 3 by user decision; the pane application owns scrolling.
+- `internal/termpreview/render.go` — same bar drawn by the Sessions preview terminals;
+  same cut.
+
+Nothing else renders a scrollbar without owning interactive scroll state.

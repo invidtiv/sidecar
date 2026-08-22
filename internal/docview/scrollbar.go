@@ -136,7 +136,10 @@ func (m *Model) handleScrollbarMouse(action mouse.MouseAction) (textselect.Resul
 		m.scrollbarDrag = docScrollbarDrag{}
 		return textselect.Result{Handled: true}, true
 
-	case mouse.ActionClick:
+	case mouse.ActionClick, mouse.ActionDoubleClick, mouse.ActionTripleClick:
+		// Every press of a rapid multi-press grabs the bar exactly like the
+		// first one did; answering only the first would hand the second to
+		// the selection engine below as a word-select on the bar column.
 		rect := m.ScrollbarRect()
 		if rect.W <= 0 || !rect.Contains(action.X, action.Y) {
 			return textselect.Result{}, false

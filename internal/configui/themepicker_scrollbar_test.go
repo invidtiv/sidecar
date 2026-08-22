@@ -206,3 +206,35 @@ func TestThemeScrollbarDragRecoveredFromLostRelease(t *testing.T) {
 		t.Error("a recovered gesture previewed as if it had settled")
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// bar must re-grab it exactly like the first one did instead of being gated
+// to plain clicks only.
+func TestThemeScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	m, picker := scrollbarModel(t)
+	thumb := regionFor(t, m, ui.RegionScrollbarThumb)
+
+	m.Mouse(tea.MouseClickMsg{X: thumb.Rect.X, Y: thumb.Rect.Y + 1, Button: tea.MouseLeft})
+	if !picker.gesture.active {
+		t.Fatal("first press did not arm the gesture")
+	}
+	m.Mouse(tea.MouseReleaseMsg{X: thumb.Rect.X, Y: thumb.Rect.Y + 1, Button: tea.MouseLeft})
+	if picker.gesture.active {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg{X: thumb.Rect.X, Y: thumb.Rect.Y + 1, Button: tea.MouseLeft}
+	m.Mouse(double)
+	if !m.mouse.IsDragging() || !picker.gesture.active {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+
+	m.Mouse(tea.MouseMotionMsg{X: thumb.Rect.X, Y: thumb.Rect.Y + 4, Button: tea.MouseLeft})
+	if picker.scroll == 0 {
+		t.Error("post-regrab drag did not move the window")
+	}
+	m.Mouse(tea.MouseReleaseMsg{X: thumb.Rect.X, Y: thumb.Rect.Y + 4, Button: tea.MouseLeft})
+	if m.mouse.IsDragging() || picker.gesture.active {
+		t.Error("drag state survived release")
+	}
+}

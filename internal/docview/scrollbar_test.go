@@ -277,3 +277,40 @@ func TestDocScrollbar_AbandonSettlesGesture(t *testing.T) {
 		t.Fatal("abandon left the scrollbar gesture live")
 	}
 }
+
+// The second press of a rapid double-press grabs the bar exactly like the
+// first one did; answering only ActionClick would hand it to the selection
+// engine as a word-select on the bar column.
+func TestDocScrollbar_SecondQuickPressStillGrabsTheBar(t *testing.T) {
+	m := overflowDocModel(t, 20)
+	rect := m.ScrollbarRect()
+	params := m.ScrollbarParams()
+
+	doubleClickAt := func(x, y int) mouse.MouseAction {
+		return mouse.MouseAction{Type: mouse.ActionDoubleClick, X: x, Y: y}
+	}
+
+	m.HandleSelectionMouse(clickAt(rect.X, rect.Y))
+	m.HandleSelectionMouse(releaseAt(rect.X, rect.Y))
+	before := m.scroll
+
+	res := m.HandleSelectionMouse(doubleClickAt(rect.X, rect.Y))
+	if !res.Handled || !m.ScrollbarDragging() {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+	if m.HasSelection() {
+		t.Fatal("the second press started a text selection")
+	}
+
+	// The re-grab is a live gesture: motions map through the shared core.
+	if res := m.HandleSelectionMouse(dragTo(rect.X, rect.Y+2)); !res.Handled {
+		t.Fatal("post-regrab drag was not consumed")
+	}
+	if m.scroll != ui.OffsetAtRow(params, 2) {
+		t.Fatalf("post-regrab drag left scroll %d, want %d", m.scroll, ui.OffsetAtRow(params, 2))
+	}
+	m.HandleSelectionMouse(releaseAt(rect.X, rect.Y+2))
+	if m.HasSelection() && before >= 0 {
+		t.Fatal("the gesture left a selection behind")
+	}
+}

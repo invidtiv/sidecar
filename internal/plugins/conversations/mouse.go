@@ -125,9 +125,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) (*Plugin, tea.
 
 	switch action.Region.ID {
 	case ui.RegionScrollbarThumb, ui.RegionScrollbarTrack:
-		// A scrollbar gesture is not a session pick; swallow the second click
-		// of a double-press on the bar.
-		return p, nil
+		// A scrollbar gesture is not a session pick: the second press of a
+		// double-press on the bar grabs it again (thumb grab continues,
+		// track re-jumps) rather than being swallowed.
+		return p.handleListScrollbarPress(action)
 
 	case regionSessionItem:
 		// Double-click on session item: select and focus messages pane

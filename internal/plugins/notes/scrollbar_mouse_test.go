@@ -261,3 +261,34 @@ func findOptionalRegion(p *Plugin, id string) (mouse.Rect, bool) {
 	}
 	return mouse.Rect{}, false
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// bar must re-grab it exactly like the first one did instead of swallowing it
+// (repeat track-clicks at one cell lose every other press otherwise).
+func TestNotesListScrollbar_SecondQuickPressStillGrabsTheBar(t *testing.T) {
+	p := notesListTestPlugin(t, 30)
+	_ = p.View(p.width, p.height)
+
+	thumb := findNotesRegion(t, p, ui.RegionScrollbarThumb)
+	if _, _ = p.handleMouse(notesClickMsg(thumb.X, thumb.Y)); !p.mouseHandler.IsDragging() {
+		t.Fatal("first press did not start a drag")
+	}
+	if _, _ = p.handleMouse(notesReleaseMsg(thumb.X, thumb.Y)); p.mouseHandler.IsDragging() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg(tea.Mouse{X: thumb.X, Y: thumb.Y, Button: tea.MouseLeft})
+	focusBefore := p.activePane
+	if _, cmd := p.handleMouse(double); cmd != nil {
+		t.Fatal("the second press produced a command")
+	}
+	if !p.mouseHandler.IsDragging() || p.mouseHandler.DragRegion() != ui.RegionScrollbarThumb {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+	if p.activePane != focusBefore {
+		t.Fatalf("second press moved focus to pane %v, want unchanged", p.activePane)
+	}
+	if _, _ = p.handleMouse(notesReleaseMsg(thumb.X, thumb.Y)); p.mouseHandler.IsDragging() {
+		t.Fatal("release did not settle the re-grabbed gesture")
+	}
+}

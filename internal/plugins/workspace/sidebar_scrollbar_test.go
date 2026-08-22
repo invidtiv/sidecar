@@ -278,3 +278,36 @@ func TestSidebarClampedNavigationHoldsFreeScrollViewport(t *testing.T) {
 		t.Fatal("a real selection move left the free-scroll latch set")
 	}
 }
+
+// The second press of a rapid double-press arrives as ActionDoubleClick; the
+// bar must re-grab it exactly like the first one did instead of dropping it
+// for not naming a row.
+func TestSidebarScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	p := scrollListPlugin(t, 60)
+	bar := renderedListBar(t, p)
+
+	pressMouseAt(t, p, bar.track.Rect.X, bar.thumb.Rect.Y+2)
+	if !p.sidebarBar.gesture.Active() {
+		t.Fatal("first press did not begin a gesture")
+	}
+	releaseMouseAt(t, p, bar.track.Rect.X, bar.thumb.Rect.Y+2)
+	if p.sidebarBar.gesture.Active() {
+		t.Fatal("release did not settle the first gesture")
+	}
+
+	double := tea.MouseClickMsg{X: bar.track.Rect.X, Y: bar.thumb.Rect.Y + 2, Button: tea.MouseLeft}
+	p.handleMouse(double)
+	if !p.mouseHandler.IsDragging() || !p.sidebarBar.gesture.Active() {
+		t.Fatal("a quick second press on the thumb did not grab the bar")
+	}
+
+	dragMouseTo(t, p, bar.track.Rect.X, bar.thumb.Rect.Y+8)
+	dragged := p.scrollOffset
+	if dragged <= 0 {
+		t.Fatalf("post-regrab drag left offset %d, want it following the pointer", dragged)
+	}
+	releaseMouseAt(t, p, 1, 1)
+	if p.mouseHandler.IsDragging() || p.sidebarBar.gesture.Active() {
+		t.Error("drag state survived release")
+	}
+}

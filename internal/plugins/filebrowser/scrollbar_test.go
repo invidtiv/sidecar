@@ -229,6 +229,47 @@ func TestScrollbarDragRecoveredFromLostRelease(t *testing.T) {
 	}
 }
 
+// A second press inside the double-click window arrives as ActionDoubleClick.
+// The bar must treat it as a fresh grab — continuing a thumb grab or
+// re-jumping on the track — instead of dropping it for not naming a row.
+func TestScrollbarSecondQuickPressStillGrabsTheBar(t *testing.T) {
+	p := newOverflowTreePlugin(t, 60)
+	thumb, _, topY := requireBar(t, p, sbTree)
+
+	x, y := thumb.Rect.X, topY+2
+	press(t, p, x, y)
+	release(t, p, x, y)
+
+	_, cmd := p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseLeft}))
+	if cmd != nil {
+		t.Error("the second press produced a command")
+	}
+	if !p.mouseHandler.IsDragging() || p.dragScrollbar != sbTree {
+		t.Fatalf("a quick second press did not grab the bar (dragScrollbar=%v)", p.dragScrollbar)
+	}
+
+	// The re-grab kept the within-thumb anchor: pressing at track row 2 and
+	// dragging to row 5 lands three anchor-adjusted rows further down.
+	motion(t, p, x, y+3)
+	want := ui.OffsetAtRow(mustTreeParams(t, p), (y+3-topY)-2)
+	if got := p.treeScrollOff; got != want {
+		t.Errorf("post-regrab drag left offset %d, want %d", got, want)
+	}
+	release(t, p, x, y+3)
+	if p.treeCursor != 0 {
+		t.Errorf("treeCursor moved to %d by scrollbar presses, want 0", p.treeCursor)
+	}
+}
+
+func mustTreeParams(t *testing.T, p *Plugin) ui.ScrollbarParams {
+	t.Helper()
+	params, ok := p.liveScrollbarParams(sbTree)
+	if !ok {
+		t.Fatal("liveScrollbarParams(tree) not ok")
+	}
+	return params
+}
+
 func TestPreviewScrollbarDragEndToEnd(t *testing.T) {
 	p := newOverflowPreviewPlugin(t, 50)
 	thumb, _, topY := requireBar(t, p, sbPreview)

@@ -241,17 +241,36 @@ renderHintLineTruncated(hints, availableWidth)
 ## Scrollbar (internal/ui)
 
 ```go
-ui.RenderScrollbar(ui.ScrollbarParams{
+rendered, geom := ui.RenderScrollbarWithState(ui.ScrollbarParams{
     TotalItems:   len(items),
     ScrollOffset: p.scrollOffset,
     VisibleItems: visibleCount,
     TrackHeight:  height,
-})
+}, style) // ui.ScrollbarStyle{Thumb: state, Track: state}; zero value renders byte-identically to RenderScrollbar
 ```
+
+Every scrollbar backed by real scroll state is interactive under the mouse (macOS-style).
+The draw-only `ui.RenderScrollbar` survives only for terminal panes, which manage their own
+scrollback. Adoption ledger:
+`docs/plans/active/mouse-draggable-scrollbars.md` ("Adoption outcome").
 
 Pattern: reduce content width by 1, render content, render scrollbar, join horizontally with `lipgloss.JoinHorizontal(lipgloss.Top, content, scrollbar)`.
 
 For multi-line items, set `TrackHeight` to actual terminal rows: `visibleCount * linesPerItem`.
+
+Mouse contract per surface:
+
+1. Register `ui.RegionScrollbarTrack`, then `ui.RegionScrollbarThumb`, after content
+   regions in the same render pass that builds the HitMap (reverse scan gives the bar its
+   column). Register nothing when `geom.HasThumb` is false — that column is a spacer.
+2. Thumb press = grab at that row; track press = jump-to-spot anchored at the grabbed row;
+   both end in `StartDrag` so releasing anywhere settles cleanly. Drag maps through
+   `ui.OffsetAtRow` against the press-time params snapshot; past-end clamps never end the
+   gesture.
+3. A rapid second press arrives as `ActionDoubleClick`: answer it like `ActionClick`
+   (re-grab), never swallow it.
+4. Emphasis derives via `ui.HandleStateFrom(hovering, dragging)` — intensity modulation on
+   the existing theme keys, no new keys.
 
 ## Wheel boundaries (required for every new scrollable surface)
 
