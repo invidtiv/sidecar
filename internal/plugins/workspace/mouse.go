@@ -261,6 +261,7 @@ func isBackgroundRegion(regionID string) bool {
 		regionPaneClose, regionPaneTitle,
 		regionKanbanCard, regionKanbanColumn, regionKanbanScrollbar, regionViewToggle,
 		regionDiffTabDivider, regionTermPanelContent, regionPaneTreeDivider,
+		regionTermScrollbarThumb, regionTermScrollbarTrack,
 		regionDiffTabFile, regionDiffTabCommit, regionDiffTabDiffPane, regionDiffTabMinimap,
 		regionCommitFileItem, regionCommitFileBack, regionCommitFileDiffPane,
 		regionDiffTabPreviewFile, regionDiffTabFileListPane,
@@ -372,6 +373,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 		}
 		if isNoteScrollbarDragID(dragSourceBefore) {
 			p.finishNoteScrollbarDrag()
+		}
+		if isTermScrollbarDragID(dragSourceBefore) {
+			p.finishTerminalScrollbarDrag()
 		}
 		if isListScrollbarID(dragSourceBefore) {
 			p.sidebarBar.gesture.End()
@@ -748,8 +752,14 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
 		p.sidebarBar.hover = false
+		p.hoverTermBarSet = false
 		if action.Region != nil {
 			switch action.Region.ID {
+			case regionTermScrollbarThumb, regionTermScrollbarTrack:
+				if hit, ok := action.Region.Data.(terminalScrollbarHit); ok {
+					p.hoverTermBar = hit
+					p.hoverTermBarSet = true
+				}
 			case regionDocTab, regionIssueTab, regionNoteTab, regionResourceTab, regionDiffTargetTab:
 				// Only the × half of a tab hovers. The rest of the pill is a
 				// select target, and a select target that lit up would promise
@@ -895,6 +905,19 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 	// a scrollbar press never selects a shell or worktree underneath it.
 	if isListScrollbarID(action.Region.ID) {
 		p.pressListScrollbar(action)
+		return nil
+	}
+
+	// A press on a terminal surface's bar grabs or jumps-to-spot instead of
+	// reaching the pane under it — and never becomes a forwarded click or a
+	// text selection, whatever the application in the pane is doing with the
+	// mouse (plan rule 4). The double-click case re-grabs exactly like a
+	// single press.
+	if _, ok := action.Region.Data.(terminalScrollbarHit); ok {
+		switch action.Type {
+		case mouse.ActionClick, mouse.ActionDoubleClick:
+			p.pressTerminalScrollbar(action)
+		}
 		return nil
 	}
 
@@ -1229,6 +1252,14 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 		if hit, ok := action.Region.Data.(noteScrollbarHit); ok {
 			p.focusLeaf(hit.LeafID)
 			p.pressNoteScrollbar(hit.LeafID, action)
+		}
+		return nil
+	}
+	// The same parity for a terminal surface's bar: a rapid second press
+	// re-grabs or re-jumps instead of falling through to the pane under it.
+	if isTermScrollbarDragID(action.Region.ID) {
+		if _, ok := action.Region.Data.(terminalScrollbarHit); ok {
+			p.pressTerminalScrollbar(action)
 		}
 		return nil
 	}
@@ -1693,6 +1724,14 @@ func (p *Plugin) handleMouseDrag(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 
+	// A terminal surface's bar drag: its own press-time snapshot maps the
+	// pointer onto the window it armed on, wherever the pointer has since
+	// travelled.
+	if isTermScrollbarDragID(dragRegion) {
+		p.dragTerminalScrollbar(action.Y)
+		return nil
+	}
+
 	switch dragRegion {
 	case regionIssueScrollbar:
 		// An issue card's scrollbar gesture. The press-time snapshot of the
@@ -1777,6 +1816,7 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 		p.abandonDocSelection()
 		p.finishIssueScrollbarDrag()
 		p.finishNoteScrollbarDrag()
+		p.finishTerminalScrollbarDrag()
 		p.sidebarBar.gesture.End()
 		return nil
 	}
@@ -1799,6 +1839,10 @@ func (p *Plugin) handleMouseDragEnd(action mouse.MouseAction) tea.Cmd {
 	}
 	if isNoteScrollbarDragID(dragSource) {
 		p.finishNoteScrollbarDrag()
+		return nil
+	}
+	if isTermScrollbarDragID(dragSource) {
+		p.finishTerminalScrollbarDrag()
 		return nil
 	}
 	if isListScrollbarID(dragSource) {

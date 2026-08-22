@@ -249,9 +249,12 @@ rendered, geom := ui.RenderScrollbarWithState(ui.ScrollbarParams{
 }, style) // ui.ScrollbarStyle{Thumb: state, Track: state}; zero value renders byte-identically to RenderScrollbar
 ```
 
-Every scrollbar backed by real scroll state is interactive under the mouse (macOS-style).
-The draw-only `ui.RenderScrollbar` survives only for terminal panes, which manage their own
-scrollback. Adoption ledger:
+Every scrollbar backed by real scroll state is interactive under the mouse (macOS-style),
+including the terminal panes' bars over captured scrollback. Terminal surfaces map
+presses and drags through `tty.WindowScrollbarFor` onto the shared window model: the
+gesture freezes the window at an absolute start, release thaws (offset zero follows
+again), and history loads defer to release so a mid-gesture renumber cannot shift the
+mapping. Adoption ledger:
 `docs/plans/active/mouse-draggable-scrollbars.md` ("Adoption outcome").
 
 Pattern: reduce content width by 1, render content, render scrollbar, join horizontally with `lipgloss.JoinHorizontal(lipgloss.Top, content, scrollbar)`.

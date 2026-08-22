@@ -211,6 +211,7 @@ type Model struct {
 	// render snapshot, where its track sits on screen, whether the pointer
 	// hovers it, and any drag gesture in flight.
 	wsBar               workspaceScrollbarState
+	hoverTermBar        bool
 	sidebarWidth        int
 	sidebarVisible      bool
 	catalog             map[string]workspaceinventory.Workspace

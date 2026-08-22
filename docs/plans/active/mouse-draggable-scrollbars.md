@@ -209,8 +209,22 @@ Status per surface:
 | Note card in Sessions note preview | adopted (td-14f48e) |
 | Note card in project PaneNote panes | adopted (td-14f48e, found inert during that wiring) |
 | Modal framework viewport bar + project/worktree/theme switcher bars | adopted (td-a6317f) |
-| Workspace primary terminal + term panel bar | cut-terminal (user decision; terminals manage their own scrollback) |
-| Sessions preview terminal bar | cut-terminal (same decision) |
+| Workspace primary terminal + term panel bar | adopted (un-cut; see Phase 3 outcome below) |
+| Sessions preview terminal bar | adopted (same un-cut) |
+
+Phase 3 was originally cut by user decision ("terminals manage their own
+scrollback") and later un-cut by the same authority once it was clear that the
+reserved column sits outside every pane application's grid — tmux sizes the
+pane to `tty.ContentWidth`, so a wheel notch or click over the bar already
+mapped out-of-pane before any region existed, and apps that draw their own
+scrollback inside the pane (Grok, OpenCode, Claude Code) never own the column.
+The adoption maps drags through `tty.WindowScrollbarFor` onto the shared
+window model: a gesture freezes the window at an absolute start (the same pin
+a text selection takes), motions move the frozen start through the press-time
+snapshot without thawing, and release thaws — offset zero resumes following,
+parking at the oldest row reaches for older history exactly as a wheel notch
+there would. History loads are deferred to release so a mid-gesture renumber
+can never shift the mapping. Wheel routing itself is untouched (rule 7).
 
 Double-press parity (wave-1 P3 carried here): unified on GRAB semantics — a rapid second
 press re-grabs exactly like the first press did on every wired surface. Fixed in
@@ -223,9 +237,8 @@ at double-press) — benign, logged for a future pass.
 
 Deliberate allow-list — remaining direct `RenderScrollbar` callers that stay non-interactive:
 
-- `internal/plugins/workspace/terminal_viewport.go` — terminal window bar over captured
-  scrollback. Cut with Phase 3 by user decision; the pane application owns scrolling.
-- `internal/termpreview/render.go` — same bar drawn by the Sessions preview terminals;
-  same cut.
+- (none — the two terminal entries below were adopted when Phase 3 was un-cut;
+  they render through `ui.RenderScrollbarWithState` with host-held gestures
+  over `tty.WindowScrollbarFor`.)
 
 Nothing else renders a scrollbar without owning interactive scroll state.

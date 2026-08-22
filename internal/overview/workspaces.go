@@ -261,6 +261,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if layout.previewOnly {
 		m.addPreviewRegion(0, width, height)
 		view = m.renderPreviewPeer(layout.peer)
+		// Last, so the terminal's bar beats everything the frame put down over
+		// its column. It reads the window the frame just drew.
+		m.registerPreviewTermScrollbarRegions()
 	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
 		view = styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
@@ -272,6 +275,7 @@ func (m *Model) WorkspacesView(width, height int) string {
 
 		leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
 		rightPane := m.renderPreviewPeer(layout.peer)
+		m.registerPreviewTermScrollbarRegions()
 		divider := ui.RenderHandle(height, true, m.dividerHandleState(workspacesDividerRegion, 0))
 		// Register the forgiving three-column divider target last, above both pane
 		// regions and any list row that reaches the content edge.
@@ -974,6 +978,10 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		if note := m.preview.note; note != nil && note.bar.active && !m.workspacesMouse.IsDragging() {
 			note.bar = previewNoteBar{}
 		}
+		m.hoverTermBar = isPreviewTermBarRegion(action.Region)
+		if m.preview.termBar.active && !m.workspacesMouse.IsDragging() {
+			m.settlePreviewTermScrollbar()
+		}
 	}
 	// What a pointer action over a terminal means is the shared layer's; what
 	// this surface does about it is its own.
@@ -995,6 +1003,18 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if action.Type == mouse.ActionDrag && m.workspacesMouse.DragRegion() == workspacesDividerRegion {
 		m.sidebarWidth = workspacelist.ResizePercent(m.workspacesMouse.DragStartValue(), action.DragDX, m.width)
 		return m.syncTerminalGeometry()
+	}
+	// A terminal bar's gesture: motion and release belong to it wherever the
+	// pointer has since travelled. Checked before the note tab's bar, whose
+	// drag IDs are the same shared strings — at most one of the two gestures
+	// is ever live, and each asks its own state first.
+	if action.Type == mouse.ActionDrag && m.previewTermBarOwnsDrag(m.workspacesMouse.DragRegion()) {
+		m.dragPreviewTermScrollbar(action.Y)
+		return nil
+	}
+	if action.Type == mouse.ActionDragEnd && m.previewTermBarOwnsDrag(action.DragStartID) {
+		m.settlePreviewTermScrollbar()
+		return nil
 	}
 	// A note pane's bar gesture: motion and release belong to it wherever the
 	// pointer has since travelled. Checked before the list's bar, whose drag
@@ -1085,6 +1105,11 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	secondaryClick := m.pressInSecondaryLeaf(action)
 	pressAway := tty.PressesTerminal(action.Type) && tty.PressLeavesTerminal(kind, previewRegionKind)
+	// A press on the terminal's own scrollbar is chrome, not a leave: it must
+	// neither end the pointer gesture nor hand the keyboard to the list.
+	if kind == previewTermBarKind {
+		pressAway = false
+	}
 	if pressAway {
 		m.preview.pointer.Abandon()
 	}
@@ -1199,6 +1224,10 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 			}
 			return view.ScrollAtBoundary(action.Delta, view.Height())
 		case kind == previewRegionKind:
+			return m.previewWheelAtBoundary(action)
+		case kind == previewTermBarKind:
+			// The bar's column sits over the terminal, so a notch there is
+			// answered exactly as one over the pane beside it.
 			return m.previewWheelAtBoundary(action)
 		default:
 			return false
@@ -1360,6 +1389,21 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 			case tty.PointerSelectLine:
 				return m.selectPreviewUnit(action, tty.SelectUnitLine)
 			case tty.PointerWheel:
+				return m.wheelPreview(action)
+			}
+			return nil
+		case previewTermBarKind:
+			// A press on the terminal's bar grabs or jumps-to-spot instead of
+			// reaching the pane under it — and never becomes a forwarded click
+			// or a text selection, whatever the application in the pane is
+			// doing with the mouse (plan rule 4). The double-click case
+			// re-grabs exactly like a single press. A notch over the bar's
+			// column scrolls the pane locally, exactly as it did back when the
+			// column had no regions of its own.
+			switch action.Type {
+			case mouse.ActionClick, mouse.ActionDoubleClick:
+				m.pressPreviewTermScrollbar(action)
+			case mouse.ActionScrollUp, mouse.ActionScrollDown:
 				return m.wheelPreview(action)
 			}
 			return nil

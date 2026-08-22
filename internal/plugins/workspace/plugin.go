@@ -128,6 +128,12 @@ const (
 
 	// Terminal panel divider (for drag-to-resize output vs terminal panel)
 	regionTermPanelContent = "term-panel-content"
+	// A terminal surface's scrollbar drag sources, on the same terms as the
+	// note pane's: the sidebar list starts its own bar drags under the shared
+	// renderer's thumb/track strings in this same hit map, so a drag source
+	// here must be unambiguous. The payload names the surface.
+	regionTermScrollbarThumb = "term-scrollbar-thumb"
+	regionTermScrollbarTrack = "term-scrollbar-track"
 	// regionPaneLeaf is any content leaf's body — document or issue. One region
 	// for both: the leaf ID it carries is what a click needs, and the tree says
 	// what kind of leaf that is, so the arms ask the tree instead of the name.
@@ -455,6 +461,12 @@ type Plugin struct {
 	termPanelFreezeDoc    bool              // Whether that pin belongs to a document activation rather than a pointer gesture
 	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 	terminalDocProjection terminalDocProjection
+	// termBar is a live pointer gesture on one of this plugin's two terminal
+	// scrollbars, armed by a press on that surface's bar regions and settled
+	// by release or lost-release. See terminal_scrollbar.go.
+	termBar         termBarGesture
+	hoverTermBar    terminalScrollbarHit
+	hoverTermBarSet bool
 
 	// File picker modal state (gf command)
 	filePickerIdx int // Selected file index in picker
