@@ -18,8 +18,12 @@ func jiraMatchers(claimHosts ...string) []ResourceMatcher {
 	}}
 }
 
-// markdownLink is what internal/markdown emits for `[label](dest)`: an OSC-8
-// open carrying Glamour's session-scoped id= parameter, the label, and a close.
+// markdownLink is the shape internal/markdown emits for `[label](dest)`: an
+// OSC-8 open carrying Glamour's session-scoped id= parameter, the label, and a
+// close. Real Glamour terminates with BEL and uses a numeric id; the ST
+// terminator is used here so both terminators stay covered, with the BEL form
+// exercised end-to-end against the live renderer in
+// docview.TestScanContentLinksYieldsMarkdownLinkLabelsOnlyWhenRendered.
 func markdownLink(label, dest string) string {
 	return "\x1b]8;id=13-1;" + dest + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
