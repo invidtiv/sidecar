@@ -69,6 +69,60 @@ func TestOutputBufferRevisionAdvancesOnlyForAcceptedContent(t *testing.T) {
 	}
 }
 
+func TestOutputBufferSnapshotSplitParticipatesInIdentity(t *testing.T) {
+	buf := NewOutputBuffer(20)
+	first := PaneSnapshot{Output: "history\nlive", BaseLine: 4, Absolute: true, HistoryRows: 1, PaneRows: 1}
+	if !buf.ApplySnapshot(first) {
+		t.Fatal("first snapshot was not accepted")
+	}
+	revision := buf.Revision()
+	if buf.ApplySnapshot(first) || buf.Revision() != revision {
+		t.Fatal("identical snapshot advanced the buffer")
+	}
+
+	changedSplit := first
+	changedSplit.HistoryRows = 0
+	changedSplit.PaneRows = 2
+	if !buf.ApplySnapshot(changedSplit) || buf.Revision() != revision+1 {
+		t.Fatal("split-only change was suppressed")
+	}
+	if lines, paneTop, ok := buf.PaneWindow(); !ok || lines != 2 || paneTop != 0 {
+		t.Fatalf("pane window after split change = lines %d top %d ok %v", lines, paneTop, ok)
+	}
+}
+
+func TestOutputBufferSnapshotRangesCopiesClampedDisjointBands(t *testing.T) {
+	buf := NewOutputBuffer(20)
+	buf.Update("zero\none\ntwo\nthree\nfour\nfive")
+	wantRevision := buf.Revision()
+	revision, rows := buf.SnapshotRanges(
+		RowRange{Start: -4, End: 2},
+		RowRange{Start: 4, End: 99},
+		RowRange{Start: 3, End: 3},
+	)
+	if revision != wantRevision {
+		t.Fatalf("snapshot revision = %d, want %d", revision, wantRevision)
+	}
+	if got := strings.Join(rows[0], ","); got != "zero,one" {
+		t.Fatalf("clamped leading band = %q", got)
+	}
+	if got := strings.Join(rows[1], ","); got != "four,five" {
+		t.Fatalf("clamped trailing band = %q", got)
+	}
+	if len(rows[2]) != 0 {
+		t.Fatalf("empty band = %#v", rows[2])
+	}
+	rows[0][0] = "changed"
+	if got := buf.LinesRange(0, 1)[0]; got != "zero" {
+		t.Fatalf("returned band aliases buffer storage: %q", got)
+	}
+
+	var nilBuffer *OutputBuffer
+	if nilRevision, nilRows := nilBuffer.SnapshotRanges(RowRange{Start: 0, End: 1}); nilRevision != 0 || len(nilRows) != 1 || nilRows[0] != nil {
+		t.Fatalf("nil snapshot = revision %d rows %#v", nilRevision, nilRows)
+	}
+}
+
 func TestOutputBuffer_Capacity(t *testing.T) {
 	buf := NewOutputBuffer(3)
 

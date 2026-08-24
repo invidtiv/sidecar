@@ -101,7 +101,7 @@ func BenchmarkShadowComparePerCapture(b *testing.B) {
 	if err := model.Write([]byte(payload.String())); err != nil {
 		b.Fatal(err)
 	}
-	frame, err := model.Frame()
+	frame, err := model.DiagnosticFrame()
 	if err != nil {
 		b.Fatal(err)
 	}

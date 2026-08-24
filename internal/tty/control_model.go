@@ -163,6 +163,12 @@ type paneModelFeed struct {
 
 	seeds      int
 	frameDirty bool
+	// lastPublished is actor-owned presentation identity. A seed boundary is
+	// deliberately separate: every completed seed must reach the consumer even
+	// when it reconstructed byte-for-byte identical terminal state.
+	lastPublished      screenmodel.Frame
+	lastPublishedSeeds int
+	hasPublished       bool
 	// discarded is the last client_discarded value seen for this client, and
 	// discardCheckedAt is when it was seen. Published on every frame so a
 	// consumer can tell a frame whose byte stream is confirmed complete from one
@@ -617,6 +623,10 @@ func (c *sessionControlClient) publishModelFrames() {
 			screenCompareStats.recordModelBytes(feed.model.Footprint())
 		}
 		feed.frameDirty = false
+		force := !feed.hasPublished || feed.lastPublishedSeeds != feed.seeds
+		if !force && frame.SamePresentation(feed.lastPublished) {
+			continue
+		}
 		payload := ModelFrame{
 			Session:          feed.session,
 			Pane:             feed.pane,
@@ -635,7 +645,11 @@ func (c *sessionControlClient) publishModelFrames() {
 		if !valid || callback == nil {
 			continue
 		}
-		deliverModelFrame(gate, callback, payload)
+		if deliverModelFrame(gate, callback, payload) {
+			feed.lastPublished = frame
+			feed.lastPublishedSeeds = feed.seeds
+			feed.hasPublished = true
+		}
 	}
 }
 

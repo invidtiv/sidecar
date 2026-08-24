@@ -471,9 +471,9 @@ type screenExtent = int
 // compareCaptureWithModel is the canonical comparison: cells, style and link
 // attributes, cursor, dimensions, alternate-screen state, mouse modes, and
 // loaded history. It never compares rendered string spelling — the model side
-// uses the canonical grid the model already produced, and the capture side is
-// decoded by screenmodel's independent hand-written decoder.
-func compareCaptureWithModel(in screenCompareInput, frame screenmodel.Frame) screenCompareResult {
+// explicitly requests the model's canonical diagnostic grid, and the capture
+// side is decoded by screenmodel's independent hand-written decoder.
+func compareCaptureWithModel(in screenCompareInput, frame screenmodel.DiagnosticFrame) screenCompareResult {
 	var res screenCompareResult
 	add := func(m screenmodel.Mismatch, class string) {
 		res.Mismatches = append(res.Mismatches, m)
@@ -722,7 +722,7 @@ func (c *sessionControlClient) shadowCompare(pane string, snapshot ControlSnapsh
 	// one of the captures a byte-fed authority would not have issued.
 	screenCompareStats.bump(&screenCompareStats.CapturesWhileModelLive, 1)
 
-	frame, err := feed.model.Frame()
+	frame, err := feed.model.DiagnosticFrame()
 	if err != nil {
 		c.faultFeed(feed, ResyncModelFault, err)
 		return

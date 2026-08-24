@@ -86,9 +86,11 @@ type Seed struct {
 	Mouse         MouseState
 }
 
-// Frame is one rendered model snapshot. Its fields are shaped to populate
-// tty.ControlSnapshot without translation, so the existing viewport, history,
-// search, and selection journey keeps working unchanged.
+// Frame is one consumer-visible presentation snapshot. Its fields are shaped
+// to populate tty.ControlSnapshot without translation, so the existing
+// viewport, history, search, and selection journey keeps working unchanged.
+// Canonical cells and diagnostic-only attribution live in [DiagnosticFrame] so
+// ordinary presentation does not allocate a second representation of the grid.
 type Frame struct {
 	// Output is exactly the live pane rows. LoadedHistory is kept separate so a
 	// frame publication never recopies Sidecar's 600-line history window merely
@@ -107,16 +109,19 @@ type Frame struct {
 	AltScreen     bool
 	Mouse         MouseState
 
-	// Cells is the canonical visible grid. It is the fidelity harness's unit
-	// of comparison and the future shadow-mode comparison input; the viewport
-	// consumes Output.
-	Cells Grid
-
-	// CursorStyle and BracketedPaste are model-observed state with no
-	// capture-pane equivalent. BracketedPaste is reported for diagnostics
-	// only — tmux, not this model, is the authority for paste correctness.
+	// CursorStyle and BracketedPaste are model-observed interaction state with no
+	// capture-pane equivalent. Tmux remains the paste transport authority, while
+	// the consumer still needs to know whether bracketed paste is enabled.
 	CursorStyle    CursorStyle
 	BracketedPaste bool
+}
+
+// DiagnosticFrame is an explicit fidelity snapshot. It is requested only by
+// the shadow comparator and tests that need canonical cell evidence. Frame and
+// Cells are built under one model actor guard, so they describe one instant.
+type DiagnosticFrame struct {
+	Frame
+	Cells Grid
 
 	// HardResets is the number of RIS (ESC c) sequences the model has seen
 	// since the last seed. It exists so a diagnostic cannot attribute a
@@ -138,6 +143,7 @@ type HistorySnapshot struct {
 	data       []byte
 	start, end int
 	rows       int
+	source     *historyBuffer
 }
 
 type historyBuffer struct{ bytes []byte }
@@ -170,6 +176,26 @@ func (f Frame) CombinedOutput() string {
 	return history + "\n" + f.Output
 }
 
+// SamePresentation reports whether two frames are exactly equivalent to every
+// presentation and interaction consumer. The loaded-history comparison is O(1):
+// published bytes are immutable, and rebuild or compaction replaces source.
+func (f Frame) SamePresentation(other Frame) bool {
+	return f.Output == other.Output &&
+		f.LoadedHistory.sameIdentity(other.LoadedHistory) &&
+		f.CaptureBase == other.CaptureBase &&
+		f.HistorySize == other.HistorySize &&
+		f.HasHistory == other.HasHistory &&
+		f.Width == other.Width && f.Height == other.Height &&
+		f.CursorRow == other.CursorRow && f.CursorCol == other.CursorCol &&
+		f.CursorVisible == other.CursorVisible && f.CursorStyle == other.CursorStyle &&
+		f.AltScreen == other.AltScreen && f.Mouse == other.Mouse &&
+		f.BracketedPaste == other.BracketedPaste
+}
+
+func (h HistorySnapshot) sameIdentity(other HistorySnapshot) bool {
+	return h.source == other.source && h.start == other.start && h.end == other.end && h.rows == other.rows
+}
+
 // PaneModel is the behavior contract the workspace will eventually depend on.
 // Only this interface may be referenced outside the package; the concrete
 // [Model] and the emulator behind it stay here.
@@ -178,6 +204,7 @@ type PaneModel interface {
 	Write([]byte) error
 	Resize(width, height int) error
 	Frame() (Frame, error)
+	DiagnosticFrame() (DiagnosticFrame, error)
 	Close()
 }
 
@@ -542,8 +569,6 @@ func (m *Model) frame() Frame {
 		BracketedPaste: m.bracketedPaste,
 		CaptureBase: max(m.seedCaptureBase+
 			(m.seedLoaded+m.pushedSinceSeed-m.emu.ScrollbackLen()), 0),
-		HardResets:      m.hardResets,
-		ScrollbackAtCap: false,
 	}
 	pos := m.emu.CursorPosition()
 	f.CursorCol, f.CursorRow = pos.X, pos.Y
@@ -559,8 +584,23 @@ func (m *Model) frame() Frame {
 	f.Output = screen
 	f.LoadedHistory = m.loadedHistorySnapshot()
 
-	f.Cells = m.grid()
 	return f
+}
+
+// DiagnosticFrame renders presentation plus the canonical grid and diagnostic
+// attribution in one atomic model operation.
+func (m *Model) DiagnosticFrame() (DiagnosticFrame, error) {
+	var f DiagnosticFrame
+	err := m.do(func() error {
+		f = DiagnosticFrame{
+			Frame:           m.frame(),
+			Cells:           m.grid(),
+			HardResets:      m.hardResets,
+			ScrollbackAtCap: false,
+		}
+		return nil
+	})
+	return f, err
 }
 
 func ensureOutputRows(output string, height int) string {
@@ -656,6 +696,7 @@ func (m *Model) loadedHistorySnapshot() HistorySnapshot {
 	return HistorySnapshot{
 		data: m.historyData.bytes, start: m.historySpans[0][0],
 		end: m.historySpans[len(m.historySpans)-1][1], rows: len(m.historySpans),
+		source: m.historyData,
 	}
 }
 

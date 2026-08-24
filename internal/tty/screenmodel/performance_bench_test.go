@@ -8,6 +8,7 @@ import (
 )
 
 var benchmarkFrame Frame
+var benchmarkDiagnosticFrame DiagnosticFrame
 
 func seededOpenCodeModel(b testing.TB) (*Model, terminalfixture.OpenCode) {
 	b.Helper()
@@ -65,4 +66,17 @@ func BenchmarkFrameOpenCodeFixture(b *testing.B) {
 	b.StopTimer()
 	snapshot := counters.Snapshot()
 	b.ReportMetric(float64(snapshot.ModelFramesBuilt)/float64(b.N), "frames_built/op")
+}
+
+func BenchmarkDiagnosticFrameOpenCodeFixture(b *testing.B) {
+	model, _ := seededOpenCodeModel(b)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		frame, err := model.DiagnosticFrame()
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDiagnosticFrame = frame
+	}
 }

@@ -80,6 +80,12 @@ type CaptureInput struct {
 	RowsJoined bool
 }
 
+// RowRange is a half-open buffer row range used by [OutputBuffer.SnapshotRanges].
+type RowRange struct {
+	Start int
+	End   int
+}
+
 // CaptureSnapshot describes a capture-pane rendering: PaneHeight grid rows
 // preceded by whatever history the capture carried. It is a plain function over
 // the capture and the geometry observed with it, so every capture-shaped
@@ -111,16 +117,18 @@ func CaptureSnapshot(in CaptureInput) PaneSnapshot {
 // OutputBuffer is a thread-safe bounded buffer for terminal output.
 // Uses maphash for efficient content change detection to avoid duplicate processing.
 type OutputBuffer struct {
-	mu          sync.Mutex
-	lines       []string
-	cap         int
-	baseLine    int
-	absolute    bool
-	lastHash    uint64       // Hash of cleaned content (after mouse sequence stripping)
-	lastRawHash uint64       // Hash of raw content before processing
-	lastLen     int          // Length of last content (collision guard)
-	lastBase    int          // Absolute base of the last live snapshot
-	hashSeed    maphash.Seed // Seed for stable hashing
+	mu              sync.Mutex
+	lines           []string
+	cap             int
+	baseLine        int
+	absolute        bool
+	lastHash        uint64       // Hash of cleaned content (after mouse sequence stripping)
+	lastRawHash     uint64       // Hash of raw content before processing
+	lastLen         int          // Length of last content (collision guard)
+	lastBase        int          // Absolute base of the last live snapshot
+	lastHistoryRows int          // Leading history rows in the last live snapshot
+	lastPaneRows    int          // Live grid rows in the last live snapshot
+	hashSeed        maphash.Seed // Seed for stable hashing
 
 	// paneBase is the line holding pane row 0, in the same coordinate space as
 	// baseLine, and paneKnown says a producer has supplied it. It is stored
@@ -174,7 +182,8 @@ func (b *OutputBuffer) applyRelative(s PaneSnapshot) bool {
 	// Compute hash of raw content first
 	rawHash := maphash.String(b.hashSeed, s.Output)
 	rawLen := len(s.Output)
-	if !b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen {
+	if !b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen &&
+		s.HistoryRows == b.lastHistoryRows && s.PaneRows == b.lastPaneRows {
 		return false // Content unchanged - skip ALL processing
 	}
 
@@ -188,6 +197,8 @@ func (b *OutputBuffer) applyRelative(s PaneSnapshot) bool {
 	b.baseLine = 0
 	b.absolute = false
 	b.lastBase = 0
+	b.lastHistoryRows = s.HistoryRows
+	b.lastPaneRows = s.PaneRows
 	b.lines = splitSnapshotRows(content, s)
 	b.setPaneSplitLocked(0, s)
 	b.trimLocked()
@@ -203,7 +214,8 @@ func (b *OutputBuffer) applyAbsolute(s PaneSnapshot) bool {
 	content, baseLine := s.Output, s.BaseLine
 	rawHash := maphash.String(b.hashSeed, content)
 	rawLen := len(content)
-	if b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen && baseLine == b.lastBase {
+	if b.absolute && rawHash == b.lastRawHash && rawLen == b.lastLen && baseLine == b.lastBase &&
+		s.HistoryRows == b.lastHistoryRows && s.PaneRows == b.lastPaneRows {
 		return false
 	}
 
@@ -231,6 +243,8 @@ func (b *OutputBuffer) applyAbsolute(s PaneSnapshot) bool {
 	b.lastRawHash = rawHash
 	b.lastLen = rawLen
 	b.lastBase = baseLine
+	b.lastHistoryRows = s.HistoryRows
+	b.lastPaneRows = s.PaneRows
 	b.revision++
 	return true
 }
@@ -363,6 +377,8 @@ func (b *OutputBuffer) Write(content string) {
 	b.baseLine = 0
 	b.absolute = false
 	b.lastBase = 0
+	b.lastHistoryRows = 0
+	b.lastPaneRows = 0
 	b.paneKnown = false
 
 	// Trim to capacity (keep most recent lines)
@@ -404,6 +420,27 @@ func (b *OutputBuffer) LinesRange(start, end int) []string {
 	result := make([]string, end-start)
 	copy(result, b.lines[start:end])
 	return result
+}
+
+// SnapshotRanges copies several independently clamped row bands and returns
+// the revision they all describe. The bands are read under one lock, so callers
+// never need a Revision/LinesRange retry loop to obtain one coherent view. Only
+// requested rows are copied; gaps between bands are not retained in the result.
+func (b *OutputBuffer) SnapshotRanges(ranges ...RowRange) (revision uint64, rows [][]string) {
+	rows = make([][]string, len(ranges))
+	if b == nil {
+		return 0, rows
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	limit := len(b.lines)
+	for i, rowRange := range ranges {
+		start := min(max(rowRange.Start, 0), limit)
+		end := min(max(rowRange.End, start), limit)
+		rows[i] = append([]string(nil), b.lines[start:end]...)
+	}
+	return b.revision, rows
 }
 
 // LinesAbsoluteRange returns a copy of absolute lines in [start, end).
@@ -508,6 +545,8 @@ func (b *OutputBuffer) Clear() {
 	b.lastRawHash = 0
 	b.lastLen = 0
 	b.lastBase = 0
+	b.lastHistoryRows = 0
+	b.lastPaneRows = 0
 	b.paneBase = 0
 	b.paneKnown = false
 	b.revision++

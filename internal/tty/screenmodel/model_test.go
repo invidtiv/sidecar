@@ -16,7 +16,7 @@ func TestWriteRendersFrame(t *testing.T) {
 	if err := m.Write([]byte("hi\r\nthere")); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	f, err := m.Frame()
+	f, err := m.DiagnosticFrame()
 	if err != nil {
 		t.Fatalf("frame: %v", err)
 	}
@@ -67,6 +67,79 @@ func TestModeAndCursorStateTracked(t *testing.T) {
 	}
 }
 
+func TestFrameSamePresentationCoversEveryConsumerField(t *testing.T) {
+	history := &historyBuffer{bytes: []byte("history\n")}
+	base := Frame{
+		Output: "live", LoadedHistory: HistorySnapshot{
+			data: history.bytes, start: 0, end: len(history.bytes), rows: 1, source: history,
+		},
+		CaptureBase: 4, HistorySize: 5, HasHistory: true,
+		Width: 80, Height: 24, CursorRow: 2, CursorCol: 3, CursorVisible: true,
+		CursorStyle: CursorBar, AltScreen: true,
+		Mouse:          MouseState{X10: true, Normal: true, Highlight: true, ButtonEvent: true, AnyEvent: true, SGR: true},
+		BracketedPaste: true,
+	}
+	if !base.SamePresentation(base) {
+		t.Fatal("a frame did not equal itself")
+	}
+
+	tests := map[string]func(*Frame){
+		"output":           func(f *Frame) { f.Output = "changed" },
+		"history source":   func(f *Frame) { f.LoadedHistory.source = &historyBuffer{bytes: history.bytes} },
+		"history start":    func(f *Frame) { f.LoadedHistory.start++ },
+		"history end":      func(f *Frame) { f.LoadedHistory.end-- },
+		"history rows":     func(f *Frame) { f.LoadedHistory.rows++ },
+		"capture base":     func(f *Frame) { f.CaptureBase++ },
+		"history size":     func(f *Frame) { f.HistorySize++ },
+		"has history":      func(f *Frame) { f.HasHistory = false },
+		"width":            func(f *Frame) { f.Width++ },
+		"height":           func(f *Frame) { f.Height++ },
+		"cursor row":       func(f *Frame) { f.CursorRow++ },
+		"cursor column":    func(f *Frame) { f.CursorCol++ },
+		"cursor visible":   func(f *Frame) { f.CursorVisible = false },
+		"cursor style":     func(f *Frame) { f.CursorStyle = CursorUnderline },
+		"alternate screen": func(f *Frame) { f.AltScreen = false },
+		"mouse x10":        func(f *Frame) { f.Mouse.X10 = false },
+		"mouse normal":     func(f *Frame) { f.Mouse.Normal = false },
+		"mouse highlight":  func(f *Frame) { f.Mouse.Highlight = false },
+		"mouse button":     func(f *Frame) { f.Mouse.ButtonEvent = false },
+		"mouse any":        func(f *Frame) { f.Mouse.AnyEvent = false },
+		"mouse sgr":        func(f *Frame) { f.Mouse.SGR = false },
+		"bracketed paste":  func(f *Frame) { f.BracketedPaste = false },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			changed := base
+			mutate(&changed)
+			if base.SamePresentation(changed) {
+				t.Fatal("changed field was omitted from presentation identity")
+			}
+		})
+	}
+}
+
+func TestPresentationFrameOmitsDiagnosticGrid(t *testing.T) {
+	m := New(10, 3)
+	defer m.Close()
+	if err := m.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	presentation, err := m.Frame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostic, err := m.DiagnosticFrame()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !presentation.SamePresentation(diagnostic.Frame) {
+		t.Fatal("explicit diagnostic path changed presentation state")
+	}
+	if len(diagnostic.Cells) != presentation.Height || len(diagnostic.Cells[0]) != presentation.Width {
+		t.Fatalf("diagnostic grid = %dx%d, want %dx%d", len(diagnostic.Cells[0]), len(diagnostic.Cells), presentation.Width, presentation.Height)
+	}
+}
+
 func TestSeedRestoresScreenCursorAndModes(t *testing.T) {
 	m := New(8, 4)
 	defer m.Close()
@@ -85,7 +158,7 @@ func TestSeedRestoresScreenCursorAndModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	f, _ := m.Frame()
+	f, _ := m.DiagnosticFrame()
 	if f.Cells[0][0].Grapheme != "h" || f.Cells[1][0].Grapheme != "w" {
 		t.Fatalf("seeded grid wrong: %q %q", f.Cells[0][0].Grapheme, f.Cells[1][0].Grapheme)
 	}
@@ -148,7 +221,7 @@ func TestResizeChangesReportedGeometry(t *testing.T) {
 	if err := m.Resize(20, 6); err != nil {
 		t.Fatalf("resize: %v", err)
 	}
-	f, _ := m.Frame()
+	f, _ := m.DiagnosticFrame()
 	if f.Width != 20 || f.Height != 6 {
 		t.Fatalf("geometry = %dx%d, want 20x6", f.Width, f.Height)
 	}
@@ -459,7 +532,7 @@ func TestCanonicalColorNormalizesSpelling(t *testing.T) {
 	m := New(20, 1)
 	defer m.Close()
 	_ = m.Write([]byte("\x1b[33ma\x1b[38;5;3mb\x1b[93mc\x1b[38;2;1;2;3md"))
-	f, _ := m.Frame()
+	f, _ := m.DiagnosticFrame()
 	if got := f.Cells[0][0].Fg; got != IndexedColor(3) {
 		t.Errorf("SGR 33 fg = %q, want i3", got)
 	}
@@ -478,7 +551,7 @@ func TestWideCellsReportContinuation(t *testing.T) {
 	m := New(6, 1)
 	defer m.Close()
 	_ = m.Write([]byte("日x"))
-	f, _ := m.Frame()
+	f, _ := m.DiagnosticFrame()
 	if f.Cells[0][0].Width != 2 || f.Cells[0][0].Grapheme != "日" {
 		t.Fatalf("wide cell = %s", f.Cells[0][0].Describe())
 	}
@@ -552,7 +625,7 @@ func TestSplitUTF8AndCSISurviveWriteBoundaries(t *testing.T) {
 	}
 }
 
-func renderOnce(t *testing.T, input string, splits []int) Frame {
+func renderOnce(t *testing.T, input string, splits []int) DiagnosticFrame {
 	t.Helper()
 	m := New(20, 3)
 	defer m.Close()
@@ -566,7 +639,7 @@ func renderOnce(t *testing.T, input string, splits []int) Frame {
 	if err := m.Write([]byte(input[prev:])); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	f, err := m.Frame()
+	f, err := m.DiagnosticFrame()
 	if err != nil {
 		t.Fatalf("frame: %v", err)
 	}
