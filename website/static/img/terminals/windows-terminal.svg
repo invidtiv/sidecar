@@ -1,0 +1,42 @@
+<svg  viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="termBg" x1="36.45" y1="47.83" x2="11.82" y2="5.17" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#333333"/>
+      <stop offset="1" stop-color="#4D4D4D"/>
+    </linearGradient>
+    <linearGradient id="termTabLeft" x1="0" y1="6" x2="16" y2="13" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#cccccc"/>
+    </linearGradient>
+    <linearGradient id="termTabMid" x1="16" y1="6" x2="32" y2="13" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#999999"/>
+    </linearGradient>
+    <linearGradient id="termTabRight" x1="32" y1="6" x2="48" y2="13" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#666666"/>
+    </linearGradient>
+    <linearGradient id="promptGrad1" x1="14.5" y1="34" x2="10.5" y2="27" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#999999"/>
+      <stop offset="1" stop-color="#B3B3B3"/>
+    </linearGradient>
+    <linearGradient id="promptGrad2" x1="16.3" y1="30" x2="8.7" y2="17" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#CCCCCC"/>
+      <stop offset="1" stop-color="#E6E6E6"/>
+    </linearGradient>
+    <linearGradient id="cursorGrad" x1="35.1" y1="40" x2="28.9" y2="29" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#CCCCCC"/>
+      <stop offset="1" stop-color="#E6E6E6"/>
+    </linearGradient>
+  </defs>
+  <g transform="matrix(0.9375,0,0,0.9375,1.5,1.5)">
+    <!-- Top tab bar -->
+    <path d="M 0,13 H 16 V 6 H 2 C 0.9,6 0,6.9 0,8 Z" fill="#cccccc"/>
+    <path d="M 32,6 H 16 v 7 h 16 z" fill="#999999"/>
+    <path d="M 48,13 H 32 V 6 h 14 c 1.1,0 2,0.9 2,2 z" fill="#666666"/>
+    <!-- Terminal window background -->
+    <path d="M 46,42 H 2 C 0.9,42 0,41.1 0,40 V 12 h 48 v 28 c 0,1.1 -0.9,2 -2,2 z" fill="url(#termBg)"/>
+    <!-- Chevron / prompt > -->
+    <path d="m 15.2,24.3 -8.8,8.8 c -0.5,0.5 -0.5,1.2 0,1.6 l 1.8,1.8 c 0.5,0.5 1.2,0.5 1.6,0 l 8.8,-8.8 c 0.5,-0.5 0.5,-1.2 0,-1.6 l -1.8,-1.8 c -0.4,-0.4 -1.2,-0.4 -1.6,0 z" fill="url(#promptGrad1)"/>
+    <path d="m 9.8,17.3 8.8,8.8 c 0.5,0.5 0.5,1.2 0,1.6 l -1.8,1.8 c -0.5,0.5 -1.2,0.5 -1.6,0 L 6.4,20.7 c -0.5,-0.5 -0.5,-1.2 0,-1.6 l 1.8,-1.8 c 0.4,-0.4 1.2,-0.4 1.6,0 z" fill="url(#promptGrad2)"/>
+    <!-- Cursor _ -->
+    <path d="M 40,32 H 24 c -0.6,0 -1,0.4 -1,1 v 3 c 0,0.6 0.4,1 1,1 h 16 c 0.6,0 1,-0.4 1,-1 v -3 c 0,-0.6 -0.4,-1 -1,-1 z" fill="url(#cursorGrad)"/>
+  </g>
+</svg>

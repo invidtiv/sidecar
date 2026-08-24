@@ -1,5 +1,6 @@
 import React, {useCallback, useEffect, useRef, useState} from 'react';
 import Link from '@docusaurus/Link';
+import useBaseUrl from '@docusaurus/useBaseUrl';
 import Layout from '@theme/Layout';
 import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import SidecarDemo, {SidecarStill} from '@site/src/components/Tui/Demo';
@@ -163,6 +164,49 @@ const LOOP = [
     step: '4. Merge',
     color: 'oklch(0.78 0.11 350)',
     body: 'Each workspace is its own worktree and branch. One key commits, pushes, opens the PR and cleans the tree up behind you.',
+  },
+];
+
+const TERMINALS = [
+  {
+    name: 'Ghostty',
+    icon: '/img/terminals/ghostty.png',
+    platform: 'macOS · Linux',
+  },
+  {
+    name: 'iTerm2',
+    icon: '/img/terminals/iterm2.png',
+    platform: 'macOS',
+  },
+  {
+    name: 'Kitty',
+    icon: '/img/terminals/kitty.svg',
+    platform: 'macOS · Linux',
+  },
+  {
+    name: 'Alacritty',
+    icon: '/img/terminals/alacritty.svg',
+    platform: 'macOS · Linux · Windows',
+  },
+  {
+    name: 'WezTerm',
+    icon: '/img/terminals/wezterm.svg',
+    platform: 'macOS · Linux · Windows',
+  },
+  {
+    name: 'Warp',
+    icon: '/img/terminals/warp.svg',
+    platform: 'macOS · Linux',
+  },
+  {
+    name: 'GNOME Terminal',
+    icon: '/img/terminals/gnome-terminal.svg',
+    platform: 'Linux',
+  },
+  {
+    name: 'Windows Terminal',
+    icon: '/img/terminals/windows-terminal.svg',
+    platform: 'Windows · WSL',
   },
 ];
 
@@ -336,6 +380,45 @@ export default function Home() {
             </div>
           </section>
         </div>
+
+        {/* --------------------------------------------------- terminals */}
+        <section className={styles.terminalsSection}>
+          <div className={styles.wrap}>
+            <Reveal className={styles.terminalsHeader}>
+              <div>
+                <div
+                  className={styles.kicker}
+                  style={{'--kicker-color': 'var(--sc-green)'}}>
+                  compatibility
+                </div>
+                <h2 className={styles.h2} style={{marginTop: 14}}>
+                  Works in the terminal you already use
+                </h2>
+              </div>
+              <p className={styles.terminalsSub}>
+                Sidecar is a pure TUI workspace that runs in any modern terminal.
+                No config migration, no new emulator to learn, and no switching
+                away from your favorite shell.
+              </p>
+            </Reveal>
+            <Reveal className={styles.terminalGrid}>
+              {TERMINALS.map((t) => (
+                <div key={t.name} className={styles.terminalCard}>
+                  <div className={styles.terminalIconWrap}>
+                    <img
+                      src={useBaseUrl(t.icon)}
+                      alt={`${t.name} logo`}
+                      className={styles.terminalIcon}
+                      loading="lazy"
+                    />
+                  </div>
+                  <div className={styles.terminalName}>{t.name}</div>
+                  <div className={styles.terminalPlatform}>{t.platform}</div>
+                </div>
+              ))}
+            </Reveal>
+          </div>
+        </section>
 
         {/* ------------------------------------------------------- loop */}
         <section className={`${styles.section} ${styles.sectionTint}`}>

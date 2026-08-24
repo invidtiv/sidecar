@@ -206,6 +206,90 @@
   }
 }
 
+/* ------------------------------------------------------------- terminals */
+
+.terminalsSection {
+  padding: 68px var(--pad) 76px;
+  border-top: 1px solid var(--sc-line);
+  background: var(--sc-canvas);
+}
+
+.terminalsHeader {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+}
+
+.terminalsSub {
+  max-width: 48ch;
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--sc-text-2);
+  text-wrap: pretty;
+}
+
+.terminalGrid {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 1px;
+  margin-top: 36px;
+  background: var(--sc-line);
+  border: 1px solid var(--sc-line);
+}
+
+.terminalCard {
+  background: var(--sc-canvas-2);
+  padding: 24px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  transition: background 140ms ease;
+}
+
+.terminalCard:hover {
+  background: var(--sc-panel);
+}
+
+.terminalIconWrap {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.terminalIcon {
+  max-width: 36px;
+  max-height: 36px;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.4));
+  transition: transform 140ms ease;
+}
+
+.terminalCard:hover .terminalIcon {
+  transform: scale(1.12);
+}
+
+.terminalName {
+  font: 500 13.5px var(--sc-display);
+  color: var(--sc-text);
+  white-space: nowrap;
+}
+
+.terminalPlatform {
+  font: 400 11px var(--sc-mono);
+  color: var(--sc-text-3);
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
 /* -------------------------------------------------------- feature layouts */
 
 .split {
@@ -456,12 +540,17 @@
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .terminalGrid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+
   .flatGrid {
     grid-template-columns: repeat(2, 1fr);
     gap: 28px 32px;
   }
 
   .section,
+  .terminalsSection,
   .cta {
     padding-top: 64px;
     padding-bottom: 64px;
@@ -469,6 +558,19 @@
 }
 
 @media (max-width: 640px) {
+  .terminalsHeader {
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .terminalGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .terminalCard {
+    padding: 18px 10px 16px;
+  }
+
   .cells4,
   .cells3,
   .flatGrid {

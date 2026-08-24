@@ -1,0 +1,10 @@
+<svg viewBox="0 0 253 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="warpGrad" x1="35" y1="25" x2="216" y2="170" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#01C38D"/>
+      <stop offset="1" stop-color="#00D2B4"/>
+    </linearGradient>
+  </defs>
+  <path d="M127.725 25.5701H196.111C207.181 25.5701 216.155 34.8433 216.155 46.2824V126.695C216.155 138.134 207.181 147.407 196.111 147.407H98.2486L127.725 25.5701Z" fill="url(#warpGrad)"/>
+  <path d="M109.963 48.652H54.8733C43.8976 48.652 35 57.9252 35 69.3643V149.777C35 161.216 43.8976 170.489 54.8733 170.489H122.676L125.395 159.154H83.4561L109.963 48.652Z" fill="url(#warpGrad)"/>
+</svg>
