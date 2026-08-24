@@ -150,6 +150,11 @@ func TestNotesCapabilitiesExposeExactRenderedPreviewOnly(t *testing.T) {
 	if len(surfaces) != 1 || !surfaces[0].ReadOnly || surfaces[0].ID != "note" {
 		t.Fatalf("surfaces = %+v", surfaces)
 	}
+	// The note preview is internal/markdown output, the same trust domain as
+	// Files' rendered preview and a docview document pane.
+	if !surfaces[0].RendererOwned {
+		t.Error("note preview surface is not marked renderer-owned")
+	}
 	layout := p.editorLayout()
 	want := mouse.Rect{X: p.listWidth + dividerWidth + 2 + layout.leftMargin, Y: 1 + layout.contentRow, W: layout.wrapColumn, H: len(p.viewSurface.Lines)}
 	if surfaces[0].Rect != want {

@@ -180,7 +180,8 @@ not a crash.
 - Matching is case-sensitive unless the pattern opts into RE2 flags.
 - Built-in matchers (URL, file, td issue, git diff) keep precedence. External
   matchers run afterward in ascending configured-provider order, then descending
-  priority, then matcher ID.
+  priority, then matcher ID. The single exception is host-side `claimHosts`
+  configuration — see "Configuration".
 - Overlaps are resolved first-wins through the same visual-column overlap
   function the existing scanner uses.
 - Pattern count, pattern length, matches per line, locator length, and total
@@ -430,7 +431,8 @@ Providers are configured explicitly in Sidecar's app-level config:
         "command": ["sidecar-jira", "sidecar-provider", "--profile", "work"],
         "passEnv": ["JIRA_API_TOKEN"],
         "enabled": true,
-        "timeout": "10s"
+        "timeout": "10s",
+        "claimHosts": ["avalara.atlassian.net"]
       }
     ]
   }
@@ -443,6 +445,43 @@ Providers are configured explicitly in Sidecar's app-level config:
 - `passEnv` names variables whose *current values* are inherited. Inline secret
   values are not supported, and the base environment wins on conflict.
 - Array order is matcher precedence.
+- `claimHosts` is host-side configuration, described below. It is never a
+  protocol field — a provider does not know it exists and cannot request it.
+
+### `claimHosts`: letting a provider take back its own links
+
+A URL is a built-in match, and built-ins keep precedence. `claimHosts` is the
+one narrow exception: it names the hostnames whose URLs *this instance* may
+reclassify into its own resource cards instead of opening the browser.
+
+Both of these must hold before anything is reclassified:
+
+1. The URL's host equals one of this instance's `claimHosts` entries. Entries
+   are bare hostnames — no scheme, no port, no path, no wildcard — matched
+   case-insensitively and exactly. `github.com` does not claim
+   `gist.github.com`.
+2. This same instance's matcher matches, **in full**, either the whole URL or —
+   on a frame Sidecar's own Markdown renderer drew — the rendered link label. A
+   partial or prefix match keeps the browser link.
+
+The label branch is what makes Jira work. `sidecar-jira`'s matcher is issue-key
+shaped, so it can never match a whole browse URL, and a brief normally writes
+the key as a Markdown link:
+
+```markdown
+See [ZMS-37161](https://avalara.atlassian.net/browse/ZMS-37161) for the ticket.
+```
+
+With `claimHosts: ["avalara.atlassian.net"]` configured, clicking that label in
+a rendered Files preview, a note, or a document pane opens the Resource card.
+Remove the entry and it goes back to opening the browser.
+
+The label branch applies **only** to frames Sidecar rendered. A program writing
+to a terminal can print any label over any destination, so terminal hyperlinks
+always mean what their destination says.
+
+`claimHosts` is per instance. Two Jira sites configured as two instances claim
+only their own hosts, and an instance with no `claimHosts` claims nothing.
 
 ## Headless verification
 

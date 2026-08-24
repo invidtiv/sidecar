@@ -26,6 +26,23 @@ type FrameOptions struct {
 	// other must decide what claimed URLs should do first.
 	AllowedKinds KindSet
 	Decorate     bool
+	// RendererOwned declares that this frame was drawn by Sidecar's own Markdown
+	// renderer rather than written by a foreign program.
+	//
+	// The never-rewrite-an-explicit-destination rule (condition 3 of the "Why URL
+	// yield" block on yieldClaimedURLs) exists because a program writing to a PTY
+	// can lie about where its label points: it can print "td-1234" over a
+	// destination of its choosing. internal/markdown is not that adversary — its
+	// OSC-8 hyperlinks are a mechanical transcription of the document's own
+	// Markdown links, so a label there is as trustworthy as the same text would
+	// be if the author had written it bare.
+	//
+	// That is the whole license: on a renderer-owned frame a claiming provider
+	// may reclassify an explicit hyperlink whose label (or destination) its
+	// matcher owns. It does not widen which hosts may be claimed, it does not let
+	// an unclaimed host yield, and it is never a default — terminal scanning
+	// (internal/terminallink) leaves it false and behaves exactly as before.
+	RendererOwned bool
 }
 
 type FrameResult struct {
@@ -81,7 +98,8 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 			return ref.Value, extra, true
 		}
 		autoOpts := Options{
-			Matchers: opts.Matchers,
+			Matchers:      opts.Matchers,
+			RendererOwned: opts.RendererOwned,
 			Resolve: func(raw string) (string, Extra, bool) {
 				return resolve(KindFile, raw)
 			},
@@ -146,6 +164,13 @@ func extractExplicit(line string, namespaces map[string]URIOptions) (string, []S
 			if validClose && active.ok && endCol-startCol+1 <= MaxExplicitLabelColumns {
 				span := SpanForRef(active.ref)
 				span.StartCol, span.EndCol, span.Explicit = startCol, endCol, true
+				// Retain what the label actually read as. Extra.Raw is defined as
+				// the token as rendered before ready resolution, and a
+				// renderer-owned frame's URL yield matches against it — a Jira key
+				// only ever appears as the label of its own browse URL, never in
+				// the destination in a shape any provider matcher recognizes. The
+				// column span is already bounded above, so the text is too.
+				span.Extra.Raw = ansi.Strip(text[startByte:])
 				spans = append(spans, span)
 			} else {
 				// Invalid and unterminated explicit destinations still own their

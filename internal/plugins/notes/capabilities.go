@@ -85,6 +85,9 @@ func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 			contentlink.KindInternal,
 		),
 		ReadOnly: true,
+		// The note preview is always internal/markdown output; the editor pane,
+		// which is not this surface, is where raw bytes are shown.
+		RendererOwned: true,
 	}}
 }
 

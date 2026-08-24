@@ -74,6 +74,13 @@ type TerminalResourceProviderConfig struct {
 	// "github.com", not its subdomains and not every site a greedy pattern can
 	// reach: a URL is reclassified only when this instance's own matcher also
 	// matches the entire URL string.
+	//
+	// On a frame Sidecar's own Markdown renderer drew — a rendered preview, a
+	// note, a document pane — the whole-match test may instead be satisfied by
+	// the rendered link label. That is what lets an issue-key matcher claim
+	// `[ZMS-37161](https://<site>.atlassian.net/browse/ZMS-37161)`, whose key
+	// never appears in the destination in a shape any matcher recognizes. The
+	// host gate is unchanged: the destination still decides who may claim.
 	ClaimHosts []string `json:"claimHosts,omitempty"`
 }
 

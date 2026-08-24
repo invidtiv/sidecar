@@ -1,6 +1,7 @@
 package docview
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -86,6 +87,57 @@ func TestScanContentLinksOptsOutOfPlaceholders(t *testing.T) {
 	frame := m.ScanContentLinks(m.View(), contentlink.FrameOptions{Decorate: true})
 	if len(frame.Hits) != 0 || strings.Contains(frame.Output, "\x1b[4m") {
 		t.Fatalf("placeholder was scanned: %+v output=%q", frame.Hits, frame.Output)
+	}
+}
+
+// End-to-end proof that Glamour emits OSC-8 for a Markdown link and that a
+// rendered document is the trust domain where a claiming provider may reclaim
+// its own key from the label. The same document shown as raw source is not.
+func TestScanContentLinksYieldsMarkdownLinkLabelsOnlyWhenRendered(t *testing.T) {
+	const source = "See [ZMS-37161](https://avalara.atlassian.net/browse/ZMS-37161) for the ticket.\n"
+	matchers := []contentlink.ResourceMatcher{{
+		Provider:   "jira-work",
+		ID:         "issue-key",
+		Re:         regexp.MustCompile(`\b[A-Z][A-Z0-9]+-[0-9]+\b`),
+		ClaimHosts: []string{"avalara.atlassian.net"},
+	}}
+	scan := func(m *Model) []contentlink.Ref {
+		frame := m.ScanContentLinks(m.View(), contentlink.FrameOptions{
+			Matchers:     matchers,
+			AllowedKinds: ContentLinkKinds(),
+			Decorate:     true,
+		})
+		var refs []contentlink.Ref
+		for _, hit := range frame.Hits {
+			refs = append(refs, hit.Ref)
+		}
+		return refs
+	}
+
+	m := newSelectableModel(t, 80, 8, strings.Split(source, "\n")...)
+	m.SetRendered(true)
+	rendered := scan(m)
+	found := false
+	for _, ref := range rendered {
+		if ref.Kind == contentlink.KindResource {
+			found = true
+			if ref.Value != "ZMS-37161" || ref.Provider != "jira-work" || ref.Matcher != "issue-key" {
+				t.Fatalf("resource ref = %+v, want the label as the jira-work locator", ref)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("rendered Markdown link label did not become a resource: %+v", rendered)
+	}
+
+	// Raw source rows are the document's own bytes. A file that writes an OSC-8
+	// sequence itself is not Sidecar's renderer, so its explicit destination is
+	// still never reclassified.
+	raw := newSelectableModel(t, 80, 8,
+		"\x1b]8;id=13-1;https://avalara.atlassian.net/browse/ZMS-37161\x1b\\ZMS-37161\x1b]8;;\x1b\\")
+	refs := scan(raw)
+	if len(refs) != 1 || refs[0].Kind != contentlink.KindURL {
+		t.Fatalf("raw source claimed a resource from an explicit destination: %+v", refs)
 	}
 }
 

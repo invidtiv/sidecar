@@ -559,7 +559,8 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 				allowedKinds = contentlink.KindSet{}
 			}
 			result := contentlink.ScanFrame(segment, contentlink.FrameOptions{Ready: h.resolution.Snapshot(), Matchers: h.resourceMatchers,
-				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: allowedKinds, Decorate: true})
+				InternalNamespaces: sidecarIntentNamespaces, AllowedKinds: allowedKinds, Decorate: true,
+				RendererOwned: surface.RendererOwned})
 			for _, span := range result.Spans {
 				h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: span.Ref(), Rect: mouse.Rect{
 					X: origin.X + surface.Rect.X + span.StartCol, Y: origin.Y + y, W: span.EndCol - span.StartCol + 1, H: 1,

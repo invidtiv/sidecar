@@ -66,6 +66,11 @@ type Surface struct {
 	ProjectRoot string
 	Kinds       KindSet
 	ReadOnly    bool
+	// RendererOwned marks a rectangle Sidecar's own Markdown renderer drew, as
+	// opposed to bytes a foreign program wrote. It licenses exactly one thing —
+	// see FrameOptions.RendererOwned — and a surface showing anything a PTY, a
+	// subprocess, or a file's own escape sequences can reach must leave it false.
+	RendererOwned bool
 }
 
 // Extra preserves the terminal-link scanner's original public shape while
@@ -141,6 +146,10 @@ type Options struct {
 	Resolve     Resolver
 	ResolveDiff DiffResolver
 	Matchers    []ResourceMatcher
+	// RendererOwned is FrameOptions.RendererOwned, threaded down so
+	// yieldClaimedURLs can tell a renderer-owned frame from a terminal one. Line
+	// scanning (ScanWith) never sets it.
+	RendererOwned bool
 }
 
 const (

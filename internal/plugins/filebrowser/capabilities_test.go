@@ -71,6 +71,11 @@ func TestContentLinkSurfaceUsesRenderedWrappedPreviewGeometry(t *testing.T) {
 	if surface.ID != "preview" || !surface.ReadOnly {
 		t.Fatalf("surface identity/read-only = %+v", surface)
 	}
+	// Raw source rows are the file's own bytes; an OSC-8 sequence in them keeps
+	// the terminal rule.
+	if surface.RendererOwned {
+		t.Error("raw source surface claimed to be renderer-owned")
+	}
 	if surface.WorkDir != "/worktree" || surface.ProjectRoot != "/project" {
 		t.Fatalf("surface roots = workdir %q project %q", surface.WorkDir, surface.ProjectRoot)
 	}
@@ -206,6 +211,11 @@ func TestContentLinkSurfaceScansRenderedMarkdown(t *testing.T) {
 	}
 	if surface.ID != "preview" || !surface.ReadOnly {
 		t.Fatalf("rendered surface identity/read-only = %+v", surface)
+	}
+	// Only these rows were drawn by internal/markdown, so only these may let a
+	// claiming provider reclassify an explicit hyperlink.
+	if !surface.RendererOwned {
+		t.Error("rendered Markdown surface is not marked renderer-owned")
 	}
 	for _, kind := range []contentlink.Kind{
 		contentlink.KindFile, contentlink.KindIssue, contentlink.KindDiff,

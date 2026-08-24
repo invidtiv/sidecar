@@ -91,6 +91,10 @@ func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) Con
 	if opts.AllowedKinds == nil {
 		opts.AllowedKinds = ContentLinkKinds()
 	}
+	// The viewer, not the host, knows whether these rows came out of
+	// internal/markdown. Raw source rows are the document's own bytes, so an
+	// OSC-8 sequence in them is authored content and keeps the terminal rule.
+	opts.RendererOwned = m.rendered
 	rect := m.ContentLinkRect()
 	if rect.W <= 0 || rect.H <= 0 {
 		return ContentLinkFrame{Output: body}

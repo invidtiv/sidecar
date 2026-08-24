@@ -67,7 +67,7 @@ func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) [
 		}
 	}
 	appendBounded(scanURLs(plain, spans))
-	yieldClaimedURLs(spans, opts.Matchers)
+	yieldClaimedURLs(spans, opts.Matchers, opts.RendererOwned)
 	appendBounded(scanPathLines(plain, spans, opts.Resolve, pending))
 	if opts.Resolve != nil || pending != nil {
 		appendBounded(scanBareFiles(plain, spans, opts.Resolve, pending))
@@ -153,40 +153,76 @@ func scanURLs(plain string, existing []Span) []Span {
 //     prefix match keeps the browser link. This is also what protects unrelated
 //     orgs on a listed host: allowlist-generated patterns only cover their own
 //     owner/repo paths.
-//  3. Only automatic URL spans are candidates. Explicit OSC-8 destinations are
-//     never rewritten: an explicit destination means what it says, which is the
-//     same discipline AllowedKinds applies to every other automatic match.
+//  3. Only automatic URL spans are candidates, unless the frame is
+//     renderer-owned. An explicit destination written by a foreign program means
+//     what it says, which is the same discipline AllowedKinds applies to every
+//     other automatic match. On a frame Sidecar's own Markdown renderer drew
+//     there is no such adversary, so an explicit hyperlink is a candidate too —
+//     see FrameOptions.RendererOwned for why that is a different trust domain.
+//
+// On a renderer-owned frame condition 2 widens: the matcher may match the whole
+// rendered LABEL instead of the whole destination. That is what makes a Jira key
+// work — `[ZMS-37161](https://site.atlassian.net/browse/ZMS-37161)` carries the
+// key only in its label, and an issue-key-shaped matcher can never match a whole
+// browse URL. A label match makes the label the locator the provider is invoked
+// with; a destination match keeps the URL, exactly as terminal yield behaves.
+// Conditions 1 and 3's host gate is untouched in both branches.
 //
 // Matchers arrive in precedence order (configured-provider order, then
 // priority), so the first whole-string match wins and first-wins across
 // claiming instances falls out of the existing ordering. Unclaimed URLs keep
 // PlanOpenURL; the span keeps its columns either way, so no later scanner sees
 // a different overlap picture than before this pass existed.
-func yieldClaimedURLs(spans []Span, matchers []ResourceMatcher) {
+func yieldClaimedURLs(spans []Span, matchers []ResourceMatcher, rendererOwned bool) {
 	if len(matchers) == 0 {
 		return
 	}
 	for i := range spans {
 		span := &spans[i]
-		if span.Kind != KindURL || span.Explicit || span.Extra.Provider != "" {
+		if span.Kind != KindURL || span.Extra.Provider != "" {
 			continue
 		}
+		if span.Explicit && !rendererOwned {
+			continue
+		}
+		// The host gate always reads the destination: a label never decides which
+		// instance may claim, only whether that instance's matcher owns the token.
 		host, ok := urlHost(span.Value)
 		if !ok || utf8.RuneCountInString(span.Value) > MaxResourceLocatorChars {
 			continue
+		}
+		label := ""
+		if span.Explicit && rendererOwned {
+			label = span.Extra.Raw
 		}
 		for _, m := range matchers {
 			if m.Re == nil || m.Provider == "" || m.ID == "" || !claimsHost(m, host) {
 				continue
 			}
-			if loc := m.Re.FindStringIndex(span.Value); loc != nil && loc[0] == 0 && loc[1] == len(span.Value) {
-				span.Kind = KindResource
-				span.Extra.Provider = m.Provider
-				span.Extra.Matcher = m.ID
-				break
+			locator, matched := span.Value, matchesWhole(m, span.Value)
+			if !matched && matchesWhole(m, label) {
+				locator, matched = label, true
 			}
+			if !matched {
+				continue
+			}
+			span.Kind = KindResource
+			span.Value = locator
+			span.Extra.Provider = m.Provider
+			span.Extra.Matcher = m.ID
+			break
 		}
 	}
+}
+
+// matchesWhole reports whether m's pattern covers the entire candidate. A
+// partial or prefix match keeps the browser link.
+func matchesWhole(m ResourceMatcher, candidate string) bool {
+	if candidate == "" || utf8.RuneCountInString(candidate) > MaxResourceLocatorChars || containsControl(candidate) {
+		return false
+	}
+	loc := m.Re.FindStringIndex(candidate)
+	return loc != nil && loc[0] == 0 && loc[1] == len(candidate)
 }
 
 func claimsHost(m ResourceMatcher, host string) bool {

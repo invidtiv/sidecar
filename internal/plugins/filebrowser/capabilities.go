@@ -90,6 +90,10 @@ func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 			contentlink.KindInternal,
 		),
 		ReadOnly: true,
+		// Only the rendered view is drawn by internal/markdown. Raw source rows
+		// are the file's own bytes, so an OSC-8 sequence in them keeps the
+		// terminal rule.
+		RendererOwned: p.markdownRenderMode && p.isMarkdownFile(),
 	}}
 }
 
