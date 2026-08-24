@@ -289,6 +289,11 @@ thead th {
 
 /* --------------------------------------------------- theme switcher popup */
 
+.dropdown--nocaret .navbar__link::after {
+  display: none !important;
+  content: none !important;
+}
+
 .themeSwatchGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -297,6 +302,7 @@ thead th {
   border: 1px solid var(--sc-line);
   max-height: 60vh;
   overflow-y: auto;
+  scrollbar-width: thin;
 }
 
 /* ------------------------------------------------------ reveal on scroll */

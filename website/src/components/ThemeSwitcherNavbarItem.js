@@ -10,6 +10,7 @@ const STORAGE_KEY = 'sidecar-theme';
  */
 function applyTheme(name) {
   const t = findTheme(name);
+  if (!t || !t.colors) return;
   const root = document.documentElement;
   root.setAttribute('data-sidecar-theme', t.name);
   root.style.setProperty('--sc-accent', t.colors.Primary);
@@ -20,6 +21,9 @@ function applyTheme(name) {
   root.style.setProperty('--sc-pink', t.colors.LaneDone || t.colors.Error);
   root.style.setProperty('--ifm-color-primary', t.colors.Primary);
   root.style.setProperty('--ifm-link-color', t.colors.Primary);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('sidecar-theme-change', {detail: t.name}));
+  }
 }
 
 export default function ThemeSwitcherNavbarItem() {
@@ -57,13 +61,19 @@ export default function ThemeSwitcherNavbarItem() {
   const current = findTheme(theme);
 
   return (
-    <div className="navbar__item dropdown" ref={ref}>
+    <div
+      className={`navbar__item dropdown dropdown--right dropdown--nocaret ${open ? 'dropdown--show' : ''}`}
+      ref={ref}
+      style={{position: 'relative'}}>
       <button
         type="button"
         className="navbar__link"
         aria-haspopup="true"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -75,21 +85,33 @@ export default function ThemeSwitcherNavbarItem() {
           cursor: 'pointer',
           color: 'var(--ifm-navbar-link-color)',
           padding: '0 12px',
+          pointerEvents: 'auto',
+          userSelect: 'none',
         }}>
         <Swatch colors={current.colors} />
         <span>{current.displayName}</span>
-        <span style={{opacity: 0.5}}>▾</span>
+        <span
+          style={{
+            fontSize: 10,
+            opacity: 0.6,
+            transition: 'transform 150ms ease',
+            transform: open ? 'rotate(180deg)' : 'none',
+            display: 'inline-block',
+          }}>
+          ▼
+        </span>
       </button>
 
-      {open ? (
+      {open && (
         <div
           className="themeSwatchGrid"
           style={{
             position: 'absolute',
-            top: 'calc(100% - 6px)',
+            top: 'calc(100% + 4px)',
             right: 0,
-            zIndex: 200,
+            zIndex: 300,
             width: 340,
+            boxShadow: '0 16px 36px rgba(0, 0, 0, 0.8)',
           }}>
           {THEMES.map((t) => {
             const active = t.name === theme;
@@ -103,7 +125,7 @@ export default function ThemeSwitcherNavbarItem() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: 9,
-                  padding: '8px 11px',
+                  padding: '9px 12px',
                   border: 0,
                   cursor: 'pointer',
                   textAlign: 'left',
@@ -112,14 +134,15 @@ export default function ThemeSwitcherNavbarItem() {
                   background: active ? 'var(--sc-panel)' : 'var(--sc-canvas-2)',
                   color: active ? 'var(--sc-text)' : 'var(--sc-text-3)',
                   boxShadow: active ? `inset 2px 0 0 ${t.colors.Primary}` : 'none',
+                  transition: 'background 120ms ease, color 120ms ease',
                 }}>
                 <Swatch colors={t.colors} />
-                {t.displayName}
+                <span>{t.displayName}</span>
               </button>
             );
           })}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
@@ -131,9 +154,9 @@ function Swatch({colors}) {
       style={{
         display: 'flex',
         flex: 'none',
-        width: 26,
+        width: 24,
         height: 10,
-        outline: '1px solid rgba(255,255,255,.12)',
+        outline: '1px solid rgba(255,255,255,.14)',
       }}>
       <span style={{flex: 1, background: colors.Primary}} />
       <span style={{flex: 1, background: colors.Info}} />

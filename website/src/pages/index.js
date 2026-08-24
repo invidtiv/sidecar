@@ -275,6 +275,17 @@ const DETAILS = [
 
 function ThemeGallery() {
   const [theme, setTheme] = useState('sidecar-modern');
+
+  useEffect(() => {
+    const onThemeChange = (e) => {
+      if (e.detail) setTheme(e.detail);
+    };
+    window.addEventListener('sidecar-theme-change', onThemeChange);
+    const stored = localStorage.getItem('sidecar-theme');
+    if (stored) setTheme(stored);
+    return () => window.removeEventListener('sidecar-theme-change', onThemeChange);
+  }, []);
+
   return (
     <Reveal className={styles.themeSection}>
       <div>
