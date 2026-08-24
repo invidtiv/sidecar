@@ -160,10 +160,13 @@ func TestContentLinkSurfaceOptsOutOfUnsafePreviewStates(t *testing.T) {
 		{name: "blame modal", mutate: func(p *Plugin) { p.blameMode = true }},
 		{name: "file operation", mutate: func(p *Plugin) { p.fileOpMode = FileOpMove }},
 		{name: "line jump", mutate: func(p *Plugin) { p.lineJumpMode = true }},
-		{name: "rendered markdown", mutate: func(p *Plugin) {
+		// Render mode itself is safe; render mode with nothing rendered yet is
+		// not, because the rows on screen are still the raw fallback.
+		{name: "render mode before rendering", mutate: func(p *Plugin) {
 			p.previewFile = "notes.md"
 			p.tabs[p.activeTab].Path = "notes.md"
 			p.markdownRenderMode = true
+			p.markdownRendered = nil
 		}},
 	}
 
@@ -180,6 +183,86 @@ func TestContentLinkSurfaceOptsOutOfUnsafePreviewStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContentLinkSurfaceScansRenderedMarkdown(t *testing.T) {
+	p := renderedMarkdownContentLinkPreview("notes.md",
+		[]string{"# Notes", "", "See td-22f35f."},
+		[]string{"", "  \x1b[1mNotes\x1b[0m", "", "  See td-22f35f.", ""},
+	)
+	frame := p.View(100, 12)
+
+	surfaces := p.ContentLinkSurfaces()
+	if len(surfaces) != 1 {
+		t.Fatalf("rendered markdown exported no surface: %+v", surfaces)
+	}
+	surface := surfaces[0]
+	// The gutter is empty in render mode, so the scan rect is the panel's whole
+	// content column: x = preview origin 30 + border 1 + padding 1, and width is
+	// previewContentWidth (70 − 2 borders − 2 padding − 1 scrollbar). Glamour's
+	// two-column document margin is visual indent drawn inside this box.
+	if got, want := surface.Rect, (mouse.Rect{X: 32, Y: 3, W: 65, H: 5}); got != want {
+		t.Fatalf("rendered surface rect = %+v, want %+v", got, want)
+	}
+	if surface.ID != "preview" || !surface.ReadOnly {
+		t.Fatalf("rendered surface identity/read-only = %+v", surface)
+	}
+	for _, kind := range []contentlink.Kind{
+		contentlink.KindFile, contentlink.KindIssue, contentlink.KindDiff,
+		contentlink.KindResource, contentlink.KindURL, contentlink.KindInternal,
+	} {
+		if !surface.Kinds.Allows(kind) {
+			t.Errorf("rendered surface does not allow %q", kind)
+		}
+	}
+
+	// The exported rows must be the rows that were drawn, indent included.
+	lines := strings.Split(frame, "\n")
+	row := surface.Rect.Y + 3
+	if row >= len(lines) {
+		t.Fatalf("surface row %d is outside %d-row frame", row, len(lines))
+	}
+	got := strings.TrimRight(ansi.Strip(ansi.Cut(lines[row], surface.Rect.X, surface.Rect.X+surface.Rect.W)), " ")
+	if got != "  See td-22f35f." {
+		t.Fatalf("rendered row inside the scan rect = %q, want the drawn Glamour row", got)
+	}
+}
+
+func TestContentLinkSurfaceHeightFollowsRenderedRowsNotSourceLines(t *testing.T) {
+	longer := make([]string, 0, 12)
+	for i := 0; i < 12; i++ {
+		longer = append(longer, "  rendered row")
+	}
+	p := renderedMarkdownContentLinkPreview("notes.md", []string{"# One", "", "two"}, longer)
+	p.View(100, 12)
+	surfaces := p.ContentLinkSurfaces()
+	if len(surfaces) != 1 {
+		t.Fatalf("rendered markdown exported no surface: %+v", surfaces)
+	}
+	// Twelve rendered rows into an eight-row source area: the export is what the
+	// frame could draw, never the three source lines.
+	if got, want := surfaces[0].Rect.H, 8; got != want {
+		t.Fatalf("surface height = %d, want %d rendered rows on screen", got, want)
+	}
+
+	shorter := []string{"  one rendered row", "  two"}
+	q := renderedMarkdownContentLinkPreview("notes.md",
+		[]string{"# One", "", "two", "three", "four", "five"}, shorter)
+	q.View(100, 12)
+	surfaces = q.ContentLinkSurfaces()
+	if len(surfaces) != 1 {
+		t.Fatalf("short rendered markdown exported no surface: %+v", surfaces)
+	}
+	if got, want := surfaces[0].Rect.H, len(shorter); got != want {
+		t.Fatalf("short surface height = %d, want %d rendered rows", got, want)
+	}
+}
+
+func renderedMarkdownContentLinkPreview(path string, source, rendered []string) *Plugin {
+	p := loadedContentLinkPreview(path, source)
+	p.markdownRenderMode = true
+	p.markdownRendered = append([]string(nil), rendered...)
+	return p
 }
 
 func loadedContentLinkPreview(path string, lines []string) *Plugin {

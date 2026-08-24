@@ -65,9 +65,9 @@ func (p *Plugin) innerPaneFocusActive() bool {
 	return !p.paneFocusManaged || p.paneFocusActive
 }
 
-// ContentLinkSurfaces exposes only a loaded source preview whose rows can be
-// mapped exactly to the rendered frame. Interactive modes and placeholder
-// states deliberately opt out for the frame.
+// ContentLinkSurfaces exposes only a loaded preview whose rows can be mapped
+// exactly to the rendered frame. Interactive modes and placeholder states
+// deliberately opt out for the frame.
 func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 	if !p.contentLinksSafe() {
 		return nil
@@ -104,9 +104,13 @@ func (p *Plugin) contentLinksSafe() bool {
 	if p.isImage || p.isBinary || p.previewError != nil || len(p.previewLines) == 0 {
 		return false
 	}
-	// Rendered Markdown is presentation output rather than a source preview and
-	// does not retain a one-to-one mapping to the source rows.
-	if p.markdownRenderMode && p.isMarkdownFile() {
+	// Rendered Markdown is scanned as what was drawn: rows are Glamour's output
+	// rows and columns are their visual columns, exactly as Notes and docview
+	// already treat their own Glamour frames. No source-row mapping is needed —
+	// recognition is column-based on an already-rendered frame. A render mode
+	// that has not produced output yet still opts out, because the rows on
+	// screen are then a transient state the exported geometry does not describe.
+	if p.markdownRenderMode && p.isMarkdownFile() && len(p.markdownRendered) == 0 {
 		return false
 	}
 	return p.activePreviewLoaded()
@@ -160,11 +164,16 @@ func (p *Plugin) previewRenderedRows(lineWidth int) int {
 		// The final visible row belongs to the truncation notice, not the source.
 		limit--
 	}
+	// Bound the walk by the slice actually being drawn, not by the source lines.
+	// In render mode previewDisplayLines is Glamour's output, which is longer or
+	// shorter than the source; counting source rows while reading rendered ones
+	// is what lands a link a row off (or clips the last rows of a long render).
+	display := p.previewDisplayLines()
 	rows := 0
-	for i := p.previewScroll; i < len(p.previewLines) && rows < limit; i++ {
+	for i := p.previewScroll; i < len(display) && rows < limit; i++ {
 		lineRows := 1
 		if p.previewWrapEnabled {
-			lineRows = len(p.wrapPreviewLine(p.previewRenderLine(i), lineWidth))
+			lineRows = len(p.wrapPreviewLine(display[i], lineWidth))
 			if lineRows < 1 {
 				lineRows = 1
 			}
@@ -188,10 +197,12 @@ func (p *Plugin) previewSourceRowCapacity() int {
 	return rows
 }
 
-func (p *Plugin) previewRenderLine(line int) string {
+// previewDisplayLines is the one accessor for "the lines the preview is
+// currently drawing" — rendered Glamour rows in render mode, highlighted or raw
+// source rows otherwise. Exported geometry (previewRenderedRows) and the gutter
+// (previewGutter) both read it through previewRenderLines, so they cannot
+// disagree about what is on screen.
+func (p *Plugin) previewDisplayLines() []string {
 	lines, _ := p.previewRenderLines()
-	if line >= 0 && line < len(lines) {
-		return lines[line]
-	}
-	return ""
+	return lines
 }
