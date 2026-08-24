@@ -7,8 +7,9 @@
 import {execSync} from 'child_process';
 import {themes as prismThemes} from 'prism-react-renderer';
 
-// Compute commit count from git at build time
+// Compute commit count and version from git at build time
 let commitCount = 2374;
+let currentVersion = '1.5';
 try {
   const countStr = execSync('git rev-list --count HEAD', {encoding: 'utf8'}).trim();
   const parsed = parseInt(countStr, 10);
@@ -19,12 +20,21 @@ try {
   // Fallback if git is not available
 }
 
+try {
+  const verStr = execSync('git describe --tags --abbrev=0', {encoding: 'utf8'}).trim();
+  if (verStr) {
+    currentVersion = verStr.replace(/^v/, '');
+  }
+} catch {
+  // Fallback
+}
+
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
   title: 'Sidecar',
-  tagline: 'You might never open your editor again.',
+  tagline: 'Everything you need to develop, across every project, in a single terminal.',
   favicon: 'img/favicon.ico',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
@@ -46,6 +56,7 @@ const config = {
   customFields: {
     githubUrl: 'https://github.com/marcus/sidecar',
     commitCount,
+    currentVersion,
   },
 
   onBrokenLinks: 'throw',
@@ -116,7 +127,7 @@ const config = {
       image: 'img/sidecar-logo.png',
       metadata: [
         {name: 'twitter:card', content: 'summary_large_image'},
-        {name: 'twitter:image:alt', content: 'Sidecar - You might never open your editor again'},
+        {name: 'twitter:image:alt', content: 'Sidecar - Full development context in a single terminal'},
       ],
       colorMode: {
         defaultMode: 'dark',

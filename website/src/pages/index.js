@@ -146,22 +146,22 @@ const LOOP = [
   {
     step: '1. See',
     color: 'oklch(0.82 0.13 82)',
-    body: 'Sessions puts every agent in every repo on one screen — what it is on, how long it has been there, and which one is stuck waiting for you.',
+    body: 'Sessions brings every agent across every project into one view — tracking live progress, session duration, and notifying you the moment an agent is ready.',
   },
   {
     step: '2. Steer',
     color: 'oklch(0.78 0.10 165)',
-    body: 'Enter drops you into that agent’s shell and you just type. It is a real tmux session underneath, and you never have to know that.',
+    body: 'Jump directly into any agent’s shell with instant keystroke response, full searchable scrollback, and persistent session recovery.',
   },
   {
     step: '3. Review',
     color: 'oklch(0.80 0.09 250)',
-    body: 'The agent opens the file it wants you to look at in a pane beside the conversation. Diffs, history and td issues land the same way.',
+    body: 'Inspect changes alongside the conversation — files, diffs, git history, and tasks open automatically in synchronized adjacent panes.',
   },
   {
     step: '4. Merge',
     color: 'oklch(0.78 0.11 350)',
-    body: 'Each workspace is its own worktree and branch. One key commits, pushes, opens the PR and cleans the tree up behind you.',
+    body: 'Each feature develops in an isolated git worktree. Stage, commit, push, create PRs, and clean up branches with single keystrokes.',
   },
 ];
 
@@ -225,49 +225,49 @@ const AGENTS = [
 
 const DETAILS = [
   [
-    'Project switcher',
+    'Cross-project context',
     '@',
-    'Jump between repos without restarting. Active tab, cursor and scroll come back exactly where you left them, per project.',
+    'Switch between repositories with zero friction. Active tabs, cursor position, and scrollback are remembered per project.',
   ],
   [
     'Worktree switcher',
     'W',
-    'Move between worktrees inside a repo. Sidecar remembers which one you were in and restores it next time.',
+    'Switch between worktrees instantly inside any repository with state restored automatically.',
   ],
   [
     'Configuration screen',
     ',',
-    'Appearance, projects, workspaces, agents, terminal and integrations — a real settings surface, not a JSON file you have to guess at.',
+    'Visual settings for appearance, projects, workspaces, agents, terminal behavior, and integrations.',
   ],
   [
     'Setup check',
     'sidecar setup',
-    'Looks at tmux, terminal colour support, your projects and your AGENTS.md, then offers to fix what it finds.',
+    'Analyzes your environment, color support, projects, and agent configurations with automated fixes.',
   ],
   [
-    'File finder and search',
+    'Fuzzy finder & search',
     'ctrl+p',
-    'Fuzzy find by name or grep the tree by content, scoped to the pane you are in.',
+    'Fuzzy search filenames or grep code across the workspace, scoped to your active pane.',
   ],
   [
-    'Edit in place',
+    'Inline editor',
     'e',
-    'Open $EDITOR inside the preview pane instead of taking over the screen, or edit inline without leaving the tree.',
+    'Open $EDITOR inside the split preview or make quick edits inline without leaving the workspace.',
   ],
   [
-    'Notes',
+    'Cross-project notes',
     'Notes tab',
-    'A project scratchpad that converts straight into a td issue or a worktree spec when the thought turns into work.',
+    'A persistent scratchpad for every project that turns thoughts into tracked tasks and worktree specs.',
   ],
   [
-    'Mouse, all of it',
+    'Intuitive mouse & vim navigation',
     'drag',
-    'Click to focus, scroll anywhere, drag a divider to resize a split. Vim keys do everything too.',
+    'Click to focus, scroll anywhere, drag split dividers to resize, with full vim keybinding parity.',
   ],
   [
-    'Single binary, MIT',
+    'Fast native binary',
     'go',
-    'No runtime, no daemon, no telemetry. It starts in milliseconds and the source is yours to read.',
+    'Compiled into a single fast executable with zero runtime dependencies and instant startup.',
   ],
 ];
 
@@ -288,12 +288,11 @@ function ThemeGallery() {
     <Reveal className={styles.themeSection}>
       <div>
         <div className={styles.kicker}>themes</div>
-        <h3 className={styles.h3}>Twenty-one themes</h3>
+        <h3 className={styles.h3}>Twenty-one handcrafted themes</h3>
         <p className={styles.body}>
-          Not a light mode and a dark mode. Twenty-one full palettes, each one
-          contrast-checked against every surface — tabs, diffs, key hints, kanban
-          lanes, blame ages. Press <code>#</code> in the app; pick one here and
-          the mockup follows.
+          Twenty-one precision-tuned palettes, each contrast-checked across every
+          surface — tabs, diffs, key hints, kanban lanes, and file trees.
+          Press <code>#</code> in the app; pick one here and the mockup follows.
         </p>
         <div className={styles.themeList}>
           {THEMES.map((t) => {
@@ -330,11 +329,12 @@ export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   const githubUrl = siteConfig.customFields.githubUrl;
   const commitCount = siteConfig.customFields.commitCount || 2374;
+  const currentVersion = siteConfig.customFields.currentVersion || '1.5';
 
   return (
     <Layout
       title="A terminal workspace for the agents you have running"
-      description="Sidecar shows every coding agent across every repo, drops you into any of their shells without touching tmux, and lets them open files and tasks in a pane beside the conversation.">
+      description="Sidecar gives you complete context for everything you need to develop in one project or across many — agent sessions, git diffs, durable tasks, and notes in a single terminal.">
       <main className={styles.page}>
         {/* ------------------------------------------------------- hero */}
         <div className={styles.grid}>
@@ -350,7 +350,7 @@ export default function Home() {
                   to="https://github.com/marcus/sidecar/releases">
                   <span className={styles.milestoneMark} aria-hidden="true" />
                   <span>
-                    <strong>Sidecar 1.0 is here</strong>
+                    <strong>Sidecar {currentVersion} is here</strong>
                     <span className={styles.milestoneMeta}>
                       {commitCount.toLocaleString('en-US')} commits since{' '}
                       {FIRST_COMMIT_MONTH}
@@ -359,16 +359,14 @@ export default function Home() {
                 </Link>
               </div>
               <h1 className={styles.h1}>
-                You might never open
+                Full development context.
                 <br />
-                your <em>editor</em> again.
+                In <em>one</em> terminal.
               </h1>
               <p className={styles.lede}>
-                Sidecar is a terminal workspace for the agents you already have
-                running. See every session across every repo, drop into any of
-                their shells without ever touching tmux, and let an agent put a
-                file or a <code>td</code> task in a pane right beside the
-                conversation.
+                Sidecar brings together everything you need to build across all your projects
+                in a single terminal. Monitor live agent sessions, inspect git diffs,
+                track durable tasks, take notes, and manage your day without losing your place.
               </p>
               <CopyCommand command={BREW_COMMAND} />
               <div className={styles.installAlt}>
@@ -382,7 +380,7 @@ export default function Home() {
             <div className={styles.demoHead}>
               <Shimmer>Try the tabs</Shimmer>
               <span style={{color: 'var(--sc-text-4)'}}>
-                single binary · starts in milliseconds · no telemetry
+                instant startup · native performance · 100% offline &amp; private
               </span>
             </div>
             <div className={styles.demoShell}>
@@ -406,9 +404,9 @@ export default function Home() {
                 </h2>
               </div>
               <p className={styles.terminalsSub}>
-                Sidecar is a pure TUI workspace that runs in any modern terminal.
-                No config migration, no new emulator to learn, and no switching
-                away from your favorite shell.
+                Sidecar brings rich multi-pane workspaces, agent orchestration, and
+                task management directly into your favorite terminal emulator on macOS,
+                Linux, and Windows.
               </p>
             </Reveal>
             <Reveal className={styles.terminalGrid}>
@@ -434,7 +432,7 @@ export default function Home() {
         <section className={`${styles.section} ${styles.sectionTint}`}>
           <div className={styles.wrap}>
             <Reveal>
-              <h2 className={styles.h2}>The loop, once you stop context switching</h2>
+              <h2 className={styles.h2}>A complete development loop in one screen</h2>
             </Reveal>
             <Reveal className={`${styles.cells} ${styles.cells4}`}>
               {LOOP.map((c) => (
@@ -456,12 +454,12 @@ export default function Home() {
               kicker="sessions"
               color="oklch(0.82 0.13 82)"
               title="Every repo, every agent, one screen"
-              body="Sessions is the view most people live in. It gathers the agent shells and worktrees from every project you have configured, sorts them by what moved most recently, and shows you which ones are working, which are done, and which are blocked on an answer from you."
+              body="Sessions gives you unified mission control for your entire workspace fleet. It gathers agent shells, git worktrees, and project status across all your repositories in one place, sorted by recent activity so you always know what is running, what is complete, and what needs your attention."
               points={[
-                'The same fleet as a list or as a kanban board — Working, Blocked, Done, Idle, Paused',
-                'Live output preview for the selected shell, without attaching to it',
-                'Enter opens the workspace; the project scope and its tabs come with it',
-                'Polls on a schedule that backs off when nothing is moving',
+                'Fleet overview as a list or kanban board — Working, Blocked, Done, Idle, Paused',
+                'Live output preview for any agent shell with zero latency',
+                'One key opens the full project workspace with tabs, files, and state preserved',
+                'Lightweight background monitoring that keeps you informed in real time',
               ]}>
               <Mock screen="sessions" />
             </Feature>
@@ -479,15 +477,15 @@ export default function Home() {
                   shell
                 </div>
                 <h2 className={styles.h2} style={{marginTop: 14}}>
-                  A full agent session, without ever meeting tmux
+                  Durable agent shells with persistent session state
                 </h2>
               </div>
               <p className={styles.body} style={{maxWidth: '52ch', marginTop: 0}}>
-                Every shell Sidecar starts is a real tmux session, and you never
-                have to know it. You type into the pane, scroll its history,
-                select and copy from it, and resize it by dragging — no prefix
-                keys, no attach, no detach. Close Sidecar and the agents keep
-                running; open it tomorrow and they are all still there.
+                Sidecar provides resilient, interactive terminal sessions that maintain
+                state across restarts. Type commands directly, search scrollback history,
+                copy output, and arrange multi-pane splits freely. Close your terminal
+                anytime — all agent tasks and sessions keep running in the background and
+                restore exactly where you left them.
               </p>
             </Reveal>
             <Reveal style={{marginTop: 40}}>
@@ -495,10 +493,10 @@ export default function Home() {
             </Reveal>
             <Reveal className={styles.widePoints}>
               {[
-                'Type straight into any agent shell from inside the TUI',
-                'Lazy scrollback, search, text selection and paste',
-                'Shells survive Sidecar restarts and are recovered by name',
-                'Agents rename their own shell to describe what they are doing',
+                'Direct interactive access to every agent shell inside the TUI',
+                'Fast scrollback buffer with search, text selection, and clipboard support',
+                'Durable session persistence that survives terminal restarts',
+                'Dynamic shell naming reflecting the agent’s live task in real time',
               ].map((p) => (
                 <div
                   key={p}
@@ -517,14 +515,13 @@ export default function Home() {
             <Reveal>
               <div className={styles.kicker}>sidecar open</div>
               <h2 className={styles.h2} style={{marginTop: 14}}>
-                Agents can put things in front of you
+                Live context projected directly to your screen
               </h2>
               <p className={styles.body} style={{maxWidth: '70ch'}}>
-                An agent that wants you to look at something does not have to
-                describe a path and hope. It runs one command and the thing
-                appears in a pane next to the conversation, at the right line,
-                where you can read it while the agent keeps going. You can open
-                the same things yourself by clicking a path in the shell output.
+                Keep conversation and code connected side-by-side. Agents can
+                programmatically project files, diffs, and tasks into adjacent panes at
+                exact line numbers, giving you immediate visual clarity while the agent
+                continues building.
               </p>
             </Reveal>
             <Reveal className={`${styles.cells} ${styles.cells3}`}>
@@ -555,13 +552,13 @@ export default function Home() {
             <Feature
               kicker="worktrees"
               color="oklch(0.78 0.11 350)"
-              title="Run four features at once without a single git command"
-              body="Press n. Sidecar creates a git worktree in a sibling directory, branches it, links a td task to it, starts the agent you picked and hands it the task as context. Each one is a real isolated checkout, so four agents can build four features without touching each other's tree."
+              title="Parallel feature development with isolated git worktrees"
+              body="Develop multiple features simultaneously with complete isolation. Press 'n' to branch a dedicated git worktree, link a task, start your preferred agent with full context, and track GitHub PR and CI status across branches."
               points={[
-                'Create, switch, merge and delete a worktree with one key each',
-                'PR status and CI checks read straight from GitHub',
-                'Merge workflow: commit, push, open the PR, then clean up the tree',
-                'Sidecar keeps its own state files out of your repo automatically',
+                'Instant worktree creation, branch switching, and lifecycle management',
+                'Live GitHub PR status, review feedback, and CI check indicators',
+                'Streamlined merge workflow: stage, commit, push, and create PRs in one place',
+                'Automatic workspace state isolation keeping repositories clean',
               ]}>
               <Mock screen="worktrees" />
             </Feature>
@@ -575,13 +572,13 @@ export default function Home() {
               reverse
               kicker="git"
               color="oklch(0.72 0.14 155)"
-              title="Read what the agent actually changed"
-              body="Staged, unstaged and untracked on the left; a syntax-highlighted diff on the right. Stage a hunk, write the commit message, walk back through history, or blame a line — the review happens where the work happened."
+              title="Deep git inspection and inline review"
+              body="Inspect everything your agents and team changed with rich syntax-highlighted diffs, commit trees, and hunk staging. Stage changes, author commit messages, and explore history right alongside your running sessions."
               points={[
-                'Stage and unstage with one key, commit without leaving the tab',
-                'Unified or side-by-side diffs, full-screen when you need the room',
-                'Commit history with per-commit diffs and file stats',
-                'Refreshes itself when the agent writes to disk',
+                'One-key staging, hunk inspection, and streamlined commit authoring',
+                'Side-by-side and unified diff views with full-screen expansion',
+                'Interactive commit history with per-commit diffs and file statistics',
+                'Live auto-refresh whenever agents write changes to disk',
               ]}>
               <Mock screen="git" />
             </Feature>
@@ -596,12 +593,12 @@ export default function Home() {
               kicker="tasks · beta"
               color="oklch(0.80 0.09 250)"
               title="td is where agents keep their work. Tasks is where you keep yours."
-              body="td is built for agents: durable context across compaction, progress logs, handoffs, and a review before anything closes. Tasks is the other half — a full personal task manager in the same window, with lists, priorities, tags, due dates, a board and a journal. Hand one of your tasks to an agent and it crosses over into td, then comes back as something to review."
+              body="Manage agent workflows and your own personal tasks in a single terminal. td provides agents with durable context across prompt compaction, structured progress logs, and verification before closing. Tasks gives you a full personal task manager with lists, tags, priorities, due dates, kanban boards, and daily journals across all your projects."
               points={[
-                'td: focused task, status-filtered board, session activity, one-key review',
-                'Tasks: lists, priorities, tags, due dates, kanban, journal, undo',
-                'Both read the same store the td CLI does — nothing is trapped in the UI',
-                'Tasks is in beta behind the tasks_plugin flag',
+                'Durable agent memory with progress logs, handoffs, and verification reviews',
+                'Full personal task manager with tags, priorities, due dates, boards, and journals',
+                'Unified cross-project task visibility accessible via both TUI and CLI',
+                'Convert personal todos into tracked agent issues with a single keystroke',
               ]}>
               <Mock screen="tasks" />
             </Feature>
@@ -626,11 +623,10 @@ export default function Home() {
                 gap: 32,
                 flexWrap: 'wrap',
               }}>
-              <h2 className={styles.h2}>Whichever agent you use</h2>
+              <h2 className={styles.h2}>Built for every modern coding agent</h2>
               <p className={styles.body} style={{maxWidth: '46ch', marginTop: 0}}>
-                Sidecar launches and watches agents by name, and normalises their
-                very different session formats into one timeline. Swapping agents
-                costs you nothing here.
+                Sidecar orchestrates and monitors all your favorite CLI agents,
+                normalizing their session formats and states into one cohesive developer timeline.
               </p>
             </Reveal>
             <Reveal className={`${styles.cells} ${styles.cells3}`}>
@@ -648,7 +644,7 @@ export default function Home() {
         <section className={styles.section}>
           <div className={styles.wrap}>
             <Reveal>
-              <h2 className={styles.h2}>Built for the terminal you already know</h2>
+              <h2 className={styles.h2}>Full development power inside your terminal</h2>
             </Reveal>
             <Reveal className={styles.flatGrid}>
               {DETAILS.map(([title, key, body]) => (
