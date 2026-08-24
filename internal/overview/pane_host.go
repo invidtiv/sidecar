@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -244,6 +245,7 @@ func previewPaneFloors() panelayout.Floors {
 // them to grab. This is the same branch the project workspace takes, and it is
 // what the two surfaces have to keep taking together.
 func (m *Model) renderPreviewPeer(peer termpreview.Box) string {
+	terminalperf.Record(terminalperf.GlobalWorkspacePreviewRendered)
 	layout, laid := m.layoutPreviewPanes(peer)
 	if !laid || len(layout.Leaves) == 0 {
 		// No tree to place: the preview is still one framed box, so a degenerate

@@ -328,7 +328,11 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 		input.Selection = &p.selection
 	}
 	input.SearchMatches = p.terminalSearchMatches(termPanel)
-	input.LinkResolver = p.terminalLinkResolver(termPanel, buffer)
+	if termPanel {
+		input.LinkState = p.panelLinkState
+	} else {
+		input.LinkState = p.primaryLinkState
+	}
 	input.BarStyle = p.terminalBarStyle(termPanel)
 	result := renderTerminalViewport(input, p.truncateCache)
 	if result.Content == "" {

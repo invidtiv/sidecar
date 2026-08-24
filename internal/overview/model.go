@@ -35,6 +35,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -124,7 +125,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
-		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg:
+		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
 		return true
@@ -210,19 +211,21 @@ type Model struct {
 	// wsBar is the Sessions list's interactive scrollbar: the bar's last
 	// render snapshot, where its track sits on screen, whether the pointer
 	// hovers it, and any drag gesture in flight.
-	wsBar               workspaceScrollbarState
-	hoverTermBar        bool
-	sidebarWidth        int
-	sidebarVisible      bool
-	catalog             map[string]workspaceinventory.Workspace
-	preview             previewState
-	previewOwnership    *previewOwnershipLease
-	diff                workspacediff.View
-	terminalConfig      tty.Config
-	config              *config.Config
-	width               int
-	height              int
-	previewSpecResolver func(string, string) (string, bool)
+	wsBar                 workspaceScrollbarState
+	hoverTermBar          bool
+	sidebarWidth          int
+	sidebarVisible        bool
+	catalog               map[string]workspaceinventory.Workspace
+	preview               previewState
+	previewOwnership      *previewOwnershipLease
+	diff                  workspacediff.View
+	terminalConfig        tty.Config
+	config                *config.Config
+	width                 int
+	height                int
+	terminalLinks         termpreview.LinkCoordinator
+	linkMatcherGeneration uint64
+	terminalLinkRoot      terminalLinkRootContext
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -271,6 +274,14 @@ type Model struct {
 	workspacesViewCacheW    int
 	workspacesViewCacheH    int
 	workspacesViewCacheOK   bool
+	workspacesViewRegions   []mouse.Region
+
+	// The global list is stable across live terminal frames. Its cache owns
+	// only the framed left panel and the regions that panel drew; preview and
+	// shared pane composition remain live on every frame.
+	workspaceListCache         workspaceListRenderCache
+	workspaceListDataRevision  uint64
+	workspaceListThemeRevision uint64
 
 	// showIdleWorktrees is the global-list visibility flag. Off by default;
 	// the sort/filter fly-out is the only control that turns it on.
@@ -357,6 +368,7 @@ func New(collector workspaceinventory.Collector) *Model {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
 	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees(), previewOwnership: &previewOwnershipLease{}}
+	m.preview.rowAnalyzer = &termpreview.RowAnalyzer{}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
@@ -615,9 +627,17 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case appmsg.ThemeChangedMsg:
+		// listItem contains already-styled metadata, so a palette change must
+		// rebuild the projection rather than merely dropping the rendered string.
+		m.workspaceListThemeRevision++
+		m.syncWorkspaces()
+		return nil
 	case previewDocLinkResolvedMsg:
 		m.applyPreviewDocLinkResolved(msg)
 		return nil
+	case previewLinkRevalidatedMsg:
+		return m.applyPreviewLinkRevalidated(msg)
 	case workspacePulseTickMsg:
 		if msg.generation != m.pulseGeneration {
 			return nil

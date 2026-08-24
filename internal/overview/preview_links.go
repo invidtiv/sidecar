@@ -96,97 +96,6 @@ func (m *Model) previewResolveRoot() string {
 	return workspace.Path
 }
 
-func (m *Model) previewLinkSpans(line string) []terminallink.Span {
-	root := m.previewResolveRoot()
-	// Matchers go through on every scan, including the rootless one: an
-	// external resource key is recognized from the line alone, and an empty
-	// matcher list — no provider ready — leaves the line as plain text.
-	if root == "" {
-		return terminallink.ScanWith(line, terminallink.Options{Matchers: m.resourceMatchers})
-	}
-	return terminallink.ScanWith(line, terminallink.Options{
-		Resolve: func(raw string) (string, terminallink.Extra, bool) {
-			display, _, ok := terminallink.ResolveFile(root, raw)
-			if !ok {
-				return "", terminallink.Extra{}, false
-			}
-			return display, terminallink.Extra{Raw: raw}, true
-		},
-		ResolveDiff: m.previewDiffResolver(root),
-		Matchers:    m.resourceMatchers,
-	})
-}
-
-func (m *Model) previewDiffResolver(root string) terminallink.DiffResolver {
-	if m.preview.paneRoot == nil || root == "" {
-		return nil
-	}
-	buffer := m.previewBuffer()
-	if buffer == nil {
-		return nil
-	}
-	memo := m.ensurePreviewLinkMemo(root, buffer)
-	return func(raw string) (string, terminallink.Extra, bool) {
-		resolution, found := memo.specs[raw]
-		if !found {
-			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
-				return "", terminallink.Extra{}, false
-			}
-			memo.newSpecs++
-			value, ok := m.resolvePreviewSpec(root, raw)
-			resolution = previewSpecResolution{value: value, ok: ok}
-			memo.specs[raw] = resolution
-		}
-		if !resolution.ok {
-			return "", terminallink.Extra{}, false
-		}
-		if resolution.value == "" {
-			return raw, terminallink.Extra{Raw: raw}, true
-		}
-		return resolution.value, terminallink.Extra{Raw: raw}, true
-	}
-}
-
-func (m *Model) ensurePreviewLinkMemo(root string, buffer *tty.OutputBuffer) *previewLinkMemo {
-	revision := buffer.Revision()
-	memo := &m.preview.linkMemo
-	if memo.root != root || memo.buffer != buffer || memo.revision != revision || memo.specs == nil {
-		m.preview.linkMemo = previewLinkMemo{
-			root: root, buffer: buffer, revision: revision,
-			specs: make(map[string]previewSpecResolution),
-		}
-	}
-	return &m.preview.linkMemo
-}
-
-func (m *Model) resolvePreviewSpec(root, raw string) (string, bool) {
-	if m.previewSpecResolver != nil {
-		return m.previewSpecResolver(root, raw)
-	}
-	value, _, ok := terminallink.ResolveGitSpec(root, raw)
-	return value, ok
-}
-
-func (m *Model) decoratePreviewLine(line string, _ int) string {
-	line = terminallink.StripOSC8(line)
-	return terminallink.Decorate(line, m.decoratedPreviewSpans(line))
-}
-
-// decoratedPreviewSpans keeps exactly the kinds this surface activates. The
-// answer is terminallink's rather than a list restated here, because the two
-// hand-written copies of it — one for drawing, one for hit testing — were one
-// new kind away from disagreeing about what is clickable.
-func (m *Model) decoratedPreviewSpans(line string) []terminallink.Span {
-	spans := m.previewLinkSpans(line)
-	bound := make([]terminallink.Span, 0, len(spans))
-	for _, span := range spans {
-		if terminallink.Activatable(span.Kind) {
-			bound = append(bound, span)
-		}
-	}
-	return bound
-}
-
 func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool) {
 	geometry, ok := m.previewGeometry()
 	if !ok {
@@ -202,15 +111,8 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 		return terminallink.Span{}, false
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
-	for _, span := range m.previewLinkSpans(line) {
-		if !terminallink.Activatable(span.Kind) {
-			continue
-		}
-		if cell.Col >= span.StartCol && cell.Col <= span.EndCol {
-			return span, true
-		}
-	}
-	return terminallink.Span{}, false
+	span, ok := m.preview.linkState.SpanAt(line, cell.Line, cell.Col)
+	return span, ok
 }
 
 func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (tea.Cmd, bool) {
@@ -224,6 +126,9 @@ func (m *Model) activatePreviewLinkAt(action mouse.MouseAction, modified bool) (
 	plan, err := targetactivation.PlanForSpan(span)
 	if err != nil {
 		return nil, false
+	}
+	if plan.Kind == targetactivation.PlanOpenFile || plan.Kind == targetactivation.PlanOpenDiff {
+		return m.revalidatePreviewLink(span)
 	}
 	return m.activatePreviewPlan(plan)
 }

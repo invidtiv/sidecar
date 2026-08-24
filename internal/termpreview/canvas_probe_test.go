@@ -9,7 +9,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 // TestCanvasProbeLiveCaptures is a diagnostic, not a regression test. It reads
@@ -65,21 +64,20 @@ func TestCanvasProbeLiveCaptures(t *testing.T) {
 		blanks := map[string]int{}
 		painted := 0
 		for i, row := range buffer.LinesRange(0, len(lines)) {
-			text, next, _ := ui.CarryRowBackground(row, inherited)
-			inherited = next
-			bgs := rowBackgrounds(text)
-			blank := strings.TrimSpace(ansi.Strip(text)) == ""
-			if len(bgs) > 0 {
+			resolved := analyzeRawRow(row, 0).resolve(inherited)
+			inherited = resolved.trailing
+			blank := resolved.blank
+			if len(resolved.backgrounds) > 0 {
 				painted++
-				for bg := range bgs {
+				for _, bg := range resolved.backgrounds {
 					counts[bg]++
 					if blank {
 						blanks[bg]++
 					}
 				}
 			}
-			keys := make([]string, 0, len(bgs))
-			for bg := range bgs {
+			keys := make([]string, 0, len(resolved.backgrounds))
+			for _, bg := range resolved.backgrounds {
 				keys = append(keys, strings.TrimPrefix(strings.TrimSuffix(bg, "m"), "\x1b["))
 			}
 			t.Logf("row %2d blank=%v bgs=%v", i, blank, keys)

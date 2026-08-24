@@ -1,11 +1,29 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/state"
 )
+
+func TestTerminalPerformanceEnabled(t *testing.T) {
+	for _, value := range []string{"1", "true", "YES", " on "} {
+		t.Run(fmt.Sprintf("enabled_%q", value), func(t *testing.T) {
+			if !terminalPerformanceEnabled(value) {
+				t.Fatalf("terminalPerformanceEnabled(%q) = false", value)
+			}
+		})
+	}
+	for _, value := range []string{"", "0", "false", "sometimes"} {
+		t.Run(fmt.Sprintf("disabled_%q", value), func(t *testing.T) {
+			if terminalPerformanceEnabled(value) {
+				t.Fatalf("terminalPerformanceEnabled(%q) = true", value)
+			}
+		})
+	}
+}
 
 func TestInitialPluginRestoresPerWorktreeAcrossRestart(t *testing.T) {
 	stateDir := filepath.Join(t.TempDir(), "config")

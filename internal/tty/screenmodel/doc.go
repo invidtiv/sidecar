@@ -10,8 +10,8 @@
 // # Ownership
 //
 // A [Model] is single-actor: exactly one goroutine may call Seed, Write,
-// Resize, Frame, or Close at a time. The type does not serialize for you. It
-// detects violations instead — a concurrent entry returns
+// Resize, Frame, DiagnosticFrame, or Close at a time. The type does not
+// serialize for you. It detects violations instead — a concurrent entry returns
 // [ErrConcurrentUse] rather than corrupting emulator state — so a misuse
 // shows up as a loud error in tests instead of a rare rendering bug.
 //

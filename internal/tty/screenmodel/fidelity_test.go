@@ -46,7 +46,7 @@ func replayEntry(t *testing.T, entry corpusEntry, plan replayPlan) replayResult 
 		}
 	}
 
-	f, err := m.Frame()
+	f, err := m.DiagnosticFrame()
 	if err != nil {
 		t.Fatalf("frame: %v", err)
 	}
@@ -245,7 +245,7 @@ func TestSeedFromCaptureReproducesOracle(t *testing.T) {
 			if err != nil {
 				t.Fatalf("seed: %v", err)
 			}
-			got, gerr := m.Frame()
+			got, gerr := m.DiagnosticFrame()
 			if gerr != nil {
 				t.Fatalf("frame: %v", gerr)
 			}
@@ -313,7 +313,7 @@ func TestFrameOutputRendersTheFrame(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("reseed from Output: %v", err)
 			}
-			again, err := m.Frame()
+			again, err := m.DiagnosticFrame()
 			if err != nil {
 				t.Fatalf("frame: %v", err)
 			}
@@ -336,7 +336,7 @@ func TestFrameOutputRendersTheFrame(t *testing.T) {
 
 // replayFrame replays a whole entry and returns the resulting frame, including
 // the fields replayResult drops.
-func replayFrame(t *testing.T, entry corpusEntry) Frame {
+func replayFrame(t *testing.T, entry corpusEntry) DiagnosticFrame {
 	t.Helper()
 	m := New(entry.Width, entry.Height)
 	defer m.Close()
@@ -351,7 +351,7 @@ func replayFrame(t *testing.T, entry corpusEntry) Frame {
 			t.Fatalf("write: %v", err)
 		}
 	}
-	f, err := m.Frame()
+	f, err := m.DiagnosticFrame()
 	if err != nil {
 		t.Fatalf("frame: %v", err)
 	}

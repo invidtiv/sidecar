@@ -188,6 +188,8 @@ type Model struct {
 	mailboxDone               chan struct{}
 	controlGen                uint64
 	modelLive                 bool
+	modelPresentation         modelInteractionState
+	modelPresentationSet      bool
 	visible                   bool
 	focused                   bool
 	input                     terminalInputSender

@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/clip"
+	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
 // The callback side of ControlManager is intentionally hidden here. The
@@ -22,6 +23,16 @@ const terminalMailboxCapacity = 32
 type terminalMailbox struct {
 	events      chan terminalControlEvent
 	overflowGen atomic.Uint64
+}
+
+// modelInteractionState retains model fields that tty.State does not expose as
+// public surface policy. Keeping the full state makes the delivery boundary's
+// no-op decision match the control actor's presentation identity instead of
+// collapsing distinct cursor, alternate-screen, or mouse-mode transitions.
+type modelInteractionState struct {
+	cursorStyle screenmodel.CursorStyle
+	altScreen   bool
+	mouse       screenmodel.MouseState
 }
 
 type terminalControlSubscription interface {
@@ -324,6 +335,7 @@ func (m *Model) startControl() {
 		m.subscription = nil
 	}
 	m.controlGen++
+	m.modelPresentationSet = false
 	gen := m.controlGen
 	mailbox := m.mailbox
 	request := ControlRequest{
@@ -415,41 +427,7 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 			cmd = m.retryControl()
 			break
 		}
-		// The frame knows its own split exactly and publishes it with the content
-		// it describes: LoadedHistory.Rows() rows above pane row 0, then Height
-		// grid rows. Nothing downstream has to re-derive it from the serialized
-		// form, where a blank final grid row is indistinguishable from a trailing
-		// terminator and used to cost the buffer a row (td-d29821).
-		m.State.OutputBuf.ApplySnapshot(PaneSnapshot{
-			Output:      output,
-			BaseLine:    frame.Frame.CaptureBase,
-			Absolute:    frame.Frame.HasHistory,
-			HistoryRows: frame.Frame.LoadedHistory.Rows(),
-			PaneRows:    frame.Frame.Height,
-		})
-		if frame.Frame.HasHistory {
-			m.history = HistoryInfo{
-				HistorySize: frame.Frame.HistorySize,
-				CaptureBase: frame.Frame.CaptureBase,
-				HasHistory:  true,
-			}
-		} else {
-			m.history = HistoryInfo{}
-		}
-		m.State.CursorRow = frame.Frame.CursorRow
-		m.State.CursorCol = frame.Frame.CursorCol
-		m.State.CursorVisible = frame.Frame.CursorVisible
-		m.State.PaneHeight = frame.Frame.Height
-		m.State.PaneWidth = frame.Frame.Width
-		m.State.BracketedPasteEnabled = frame.Frame.BracketedPaste
-		m.State.MouseReportingEnabled = frame.Frame.Mouse.Any()
-		wasModelLive := m.modelLive
-		m.modelLive = true
-		m.fallbackEstablished = false
-		m.consecutiveRecoveryBlanks = 0
-		if !wasModelLive {
-			m.State.PollGeneration++ // reject every provisional capture/timer
-		}
+		m.applyModelFrameOutput(frame.Frame, output)
 	case terminalSnapshotEvent:
 		if !m.modelLive {
 			s := msg.Event.snapshot
@@ -475,6 +453,65 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 		cmd = m.schedulePoll(0)
 	}
 	return tea.Batch(cmd, m.listenControl())
+}
+
+// applyModelFrame adopts one model presentation and reports whether anything a
+// terminal consumer observes changed. OutputBuffer owns row-derived revision;
+// cursor and mode-only changes deliberately do not invalidate row caches.
+func (m *Model) applyModelFrame(frame screenmodel.Frame) bool {
+	return m.applyModelFrameOutput(frame, frame.CombinedOutput())
+}
+
+func (m *Model) applyModelFrameOutput(frame screenmodel.Frame, output string) bool {
+	// The frame knows its own split exactly and publishes it with the content it
+	// describes: LoadedHistory.Rows() rows above pane row 0, then Height grid
+	// rows. Nothing downstream has to re-derive it from the serialized form.
+	bufferChanged := m.State.OutputBuf.ApplySnapshot(PaneSnapshot{
+		Output:      output,
+		BaseLine:    frame.CaptureBase,
+		Absolute:    frame.HasHistory,
+		HistoryRows: frame.LoadedHistory.Rows(),
+		PaneRows:    frame.Height,
+	})
+	nextHistory := HistoryInfo{}
+	if frame.HasHistory {
+		nextHistory = HistoryInfo{
+			HistorySize: frame.HistorySize,
+			CaptureBase: frame.CaptureBase,
+			HasHistory:  true,
+		}
+	}
+	nextInteraction := modelInteractionState{
+		cursorStyle: frame.CursorStyle,
+		altScreen:   frame.AltScreen,
+		mouse:       frame.Mouse,
+	}
+	stateChanged := !m.modelLive || m.history != nextHistory ||
+		m.State.CursorRow != frame.CursorRow || m.State.CursorCol != frame.CursorCol ||
+		m.State.CursorVisible != frame.CursorVisible ||
+		m.State.PaneHeight != frame.Height || m.State.PaneWidth != frame.Width ||
+		m.State.BracketedPasteEnabled != frame.BracketedPaste ||
+		m.State.MouseReportingEnabled != frame.Mouse.Any() ||
+		!m.modelPresentationSet || m.modelPresentation != nextInteraction
+
+	m.history = nextHistory
+	m.State.CursorRow = frame.CursorRow
+	m.State.CursorCol = frame.CursorCol
+	m.State.CursorVisible = frame.CursorVisible
+	m.State.PaneHeight = frame.Height
+	m.State.PaneWidth = frame.Width
+	m.State.BracketedPasteEnabled = frame.BracketedPaste
+	m.State.MouseReportingEnabled = frame.Mouse.Any()
+	m.modelPresentation = nextInteraction
+	m.modelPresentationSet = true
+	wasModelLive := m.modelLive
+	m.modelLive = true
+	m.fallbackEstablished = false
+	m.consecutiveRecoveryBlanks = 0
+	if !wasModelLive {
+		m.State.PollGeneration++ // reject every provisional capture/timer
+	}
+	return bufferChanged || stateChanged
 }
 
 // applySnapshot adopts one control-mode capture as presentation. The snapshot

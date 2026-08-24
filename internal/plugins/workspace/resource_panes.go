@@ -77,9 +77,7 @@ var _ resourceview.Surface = (*Plugin)(nil)
 // ordinary text until a provider has actually described itself.
 func (p *Plugin) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 	p.resourceMatchers = matchers
-	// A changed matcher set changes what the same buffer revision underlines,
-	// so the per-surface span memo is no longer an answer about this scan.
-	p.terminalLinkMemo.surfaces = nil
+	p.linkMatcherGeneration++
 }
 
 // SetResourceResolver injects how a reference becomes a document. The host

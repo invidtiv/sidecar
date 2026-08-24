@@ -71,6 +71,9 @@ func linkPreviewModel(t *testing.T, kind workspaceinventory.Kind) *Model {
 	m.workspaces.SelectID("a")
 	recorder.output["%1"] = "see README.md then https://example.com/docs and review td-196c42\n"
 	run(t, m, m.SetWorkspacesVisible(true))
+	m.PrepareTerminalLinks()
+	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+	m.PrepareTerminalLinks()
 	m.WorkspacesView(previewWide, previewTall)
 	return m
 }
@@ -830,8 +833,9 @@ func TestGlobalPreviewDiffLeafKeepsDoc(t *testing.T) {
 
 func TestGlobalPreviewDecoratesEveryActivatedLinkKind(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	m.previewSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
-	decorated := m.decoratePreviewLine("see README.md then review td-196c42 and abc1234", 0)
+	installPreviewTestTerminalLinks(m, func(_, raw string) (string, bool) { return raw, raw == "abc1234" })
+	line := "see README.md then review td-196c42 and abc1234"
+	decorated := preparedPreviewLineForTest(t, m, line).Decorate(line, 0)
 	if !strings.Contains(decorated, "\x1b[4mREADME.md\x1b[24m") {
 		t.Fatalf("the file this surface does open was not underlined: %q", decorated)
 	}
@@ -889,14 +893,17 @@ func TestPreviewClickThenCLISharesResolvedIdentity(t *testing.T) {
 
 func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	m.previewSpecResolver = func(_, raw string) (string, bool) {
+	installPreviewTestTerminalLinks(m, func(_, raw string) (string, bool) {
 		return raw, raw == "abc1234" || raw == "abc1234..def5678"
-	}
+	})
 	if buf := m.previewBuffer(); buf == nil {
 		t.Fatal("no preview buffer")
 	} else {
 		buf.Update("landed abc1234 then abc1234..def5678\n")
 	}
+	m.PrepareTerminalLinks()
+	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+	m.PrepareTerminalLinks()
 	m.WorkspacesView(previewWide, previewTall)
 
 	cmd, claimed := m.activatePreviewLinkAt(previewNeedleAction(t, m, "abc1234.."), false)
@@ -917,45 +924,9 @@ func TestGlobalPreviewGitSpecClickOpensDiffLeaf(t *testing.T) {
 	}
 
 	m.preview.paneRoot = nil
-	if spans := m.previewLinkSpans("landed abc1234"); diffSpanCount(spans) != 0 {
+	line := "landed abc1234"
+	if spans := preparedPreviewLineForTest(t, m, line).Spans(line, 0); diffSpanCount(spans) != 0 {
 		t.Fatalf("nil pane tree still emitted git spans: %#v", spans)
-	}
-}
-
-func TestGlobalPreviewGitSpecCapAndRejects(t *testing.T) {
-	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-	calls := 0
-	m.previewSpecResolver = func(_, raw string) (string, bool) {
-		calls++
-		return raw, true
-	}
-	var tokens []string
-	for i := 0; i < 20; i++ {
-		tokens = append(tokens, fmt.Sprintf("aaaaaa%02x", i))
-	}
-	line := strings.Join(tokens, " ")
-	spans := m.previewLinkSpans(line)
-	if calls != terminallink.MaxNewDiffResolves {
-		t.Fatalf("resolver calls = %d, want cap %d", calls, terminallink.MaxNewDiffResolves)
-	}
-	if diffSpanCount(spans) != terminallink.MaxNewDiffResolves {
-		t.Fatalf("spans = %d, want %d", diffSpanCount(spans), terminallink.MaxNewDiffResolves)
-	}
-	_ = m.previewLinkSpans(line)
-	if calls != terminallink.MaxNewDiffResolves {
-		t.Fatalf("memo reused: calls = %d", calls)
-	}
-
-	m.previewSpecResolver = func(_, raw string) (string, bool) { return raw, true }
-	m.preview.linkMemo = previewLinkMemo{}
-	if n := diffSpanCount(m.previewLinkSpans("Abc1234")); n != 0 {
-		t.Fatalf("mixed-case produced %d spans", n)
-	}
-	if n := diffSpanCount(m.previewLinkSpans("abc1234.go")); n != 0 {
-		t.Fatalf("filename produced %d spans", n)
-	}
-	if n := diffSpanCount(m.previewLinkSpans("abc1234..def5678")); n != 1 {
-		t.Fatalf("range produced %d spans, want 1", n)
 	}
 }
 

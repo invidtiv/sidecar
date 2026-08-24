@@ -132,14 +132,15 @@ func (s *ControlSubscription) Close() {
 // tmux control clients are attached to exactly one session, so pooling by pane
 // alone would silently miss notifications from Sidecar's other sessions.
 type ControlManager struct {
-	mu       sync.Mutex
-	factory  controlChannelFactory
-	coalesce time.Duration
-	nextID   atomic.Uint64
-	subs     map[uint64]*managerControlSubscription
-	clients  map[string]*sessionControlClient
-	starting map[string]bool
-	stopped  bool
+	mu           sync.Mutex
+	factory      controlChannelFactory
+	coalesce     time.Duration
+	modelCadence modelCadenceConfig
+	nextID       atomic.Uint64
+	subs         map[uint64]*managerControlSubscription
+	clients      map[string]*sessionControlClient
+	starting     map[string]bool
+	stopped      bool
 }
 
 func NewControlManager() *ControlManager {
@@ -151,11 +152,12 @@ func newControlManager(factory controlChannelFactory, coalesce time.Duration) *C
 		coalesce = 0
 	}
 	return &ControlManager{
-		factory:  factory,
-		coalesce: coalesce,
-		subs:     make(map[uint64]*managerControlSubscription),
-		clients:  make(map[string]*sessionControlClient),
-		starting: make(map[string]bool),
+		factory:      factory,
+		coalesce:     coalesce,
+		modelCadence: realtimeModelCadence(),
+		subs:         make(map[uint64]*managerControlSubscription),
+		clients:      make(map[string]*sessionControlClient),
+		starting:     make(map[string]bool),
 	}
 }
 
@@ -400,7 +402,10 @@ func (m *ControlManager) clientFailed(client *sessionControlClient, err error) {
 		}
 	}
 	m.mu.Unlock()
-	client.close()
+	// Failure can be reported by the ordered actor itself. Initiate shutdown
+	// without joining here; run's defer is the completion barrier, while Stop
+	// and unused-client removal join through close from non-actor callers.
+	client.beginClose()
 	for _, fallback := range fallbacks {
 		callFallback(fallback, err)
 	}
@@ -505,10 +510,11 @@ type paneCompareState struct {
 }
 
 type sessionControlClient struct {
-	manager  *ControlManager
-	session  string
-	channel  controlChannel
-	coalesce time.Duration
+	manager      *ControlManager
+	session      string
+	channel      controlChannel
+	coalesce     time.Duration
+	modelCadence modelCadenceConfig
 
 	mu         sync.Mutex
 	subs       map[uint64]sessionSubscriber
@@ -521,12 +527,15 @@ type sessionControlClient struct {
 	// ordered actor goroutine (run). Lifecycle calls arriving on other
 	// goroutines are funnelled through actions so that model state and pane
 	// bytes are only ever touched in one place, in receive order.
-	actions     chan func()
-	quit        chan struct{}
-	models      map[uint64]*paneModelFeed
-	modelTick   chan struct{}
-	modelTimer  bool
-	discardWait bool
+	actions              chan func()
+	quit                 chan struct{}
+	actorDone            chan struct{}
+	models               map[uint64]*paneModelFeed
+	modelTick            chan uint64
+	modelTimer           modelCadenceTimer
+	modelTimerDeadline   time.Time
+	modelTimerGeneration uint64
+	discardWait          bool
 	// compare is nil unless shadow comparison is enabled.
 	compare map[string]*paneCompareState
 }
@@ -554,17 +563,19 @@ const discardProbeInterval = time.Second
 
 func newSessionControlClient(manager *ControlManager, session string, channel controlChannel, coalesce time.Duration) *sessionControlClient {
 	client := &sessionControlClient{
-		manager:    manager,
-		session:    session,
-		channel:    channel,
-		coalesce:   coalesce,
-		subs:       make(map[uint64]sessionSubscriber),
-		deliveries: make(map[uint64]*subscriberDeliveryGate),
-		panes:      make(map[string]*paneCaptureState),
-		actions:    make(chan func(), 256),
-		quit:       make(chan struct{}),
-		models:     make(map[uint64]*paneModelFeed),
-		modelTick:  make(chan struct{}, 1),
+		manager:      manager,
+		session:      session,
+		channel:      channel,
+		coalesce:     coalesce,
+		modelCadence: manager.modelCadence.normalized(),
+		subs:         make(map[uint64]sessionSubscriber),
+		deliveries:   make(map[uint64]*subscriberDeliveryGate),
+		panes:        make(map[string]*paneCaptureState),
+		actions:      make(chan func(), 256),
+		quit:         make(chan struct{}),
+		actorDone:    make(chan struct{}),
+		models:       make(map[uint64]*paneModelFeed),
+		modelTick:    make(chan uint64, 1),
 	}
 	if ScreenCompareEnabled() {
 		client.compare = make(map[string]*paneCompareState)
@@ -588,18 +599,24 @@ func (c *sessionControlClient) post(action func()) {
 // stream as %output notifications and carry their FIFO callback, so a seed
 // capture response is processed at exactly its position in the byte stream.
 func (c *sessionControlClient) run() {
+	defer close(c.actorDone)
 	for {
 		select {
 		case action := <-c.actions:
 			action()
 		case event := <-c.channel.Events():
 			c.handleEvent(event)
-		case <-c.modelTick:
-			c.publishModelFrames()
+		case generation := <-c.modelTick:
+			c.publishModelFrames(generation)
+		case <-c.quit:
+			c.stopModelTimer()
+			c.failAllModels(ResyncReconnect, errClientClosed)
+			return
 		case err := <-c.channel.Done():
 			if err == nil {
 				err = fmt.Errorf("tmux control exited")
 			}
+			c.stopModelTimer()
 			c.failAllModels(ResyncReconnect, err)
 			c.manager.clientFailed(c, err)
 			return
@@ -980,6 +997,14 @@ func (c *sessionControlClient) ensurePaneLocked(pane string) *paneCaptureState {
 }
 
 func (c *sessionControlClient) close() {
+	c.beginClose()
+	<-c.actorDone
+}
+
+// beginClose is safe from the ordered actor: it signals termination but never
+// waits for run to return. Joining belongs to close callers such as Stop and
+// unused-client removal, which run outside the actor.
+func (c *sessionControlClient) beginClose() {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
 		c.closed = true
@@ -1008,12 +1033,6 @@ func (c *sessionControlClient) close() {
 		}
 		for _, gate := range gates {
 			gate.wait()
-		}
-		// Best effort: release emulators on the actor that owns them. If the
-		// actor has already exited, its Done path did the same teardown.
-		select {
-		case c.actions <- func() { c.failAllModels(ResyncReconnect, errClientClosed) }:
-		default:
 		}
 		close(c.quit)
 		_ = c.channel.Close()

@@ -919,7 +919,6 @@ func TestUIRequests_OpenRequestEqualsHashClick(t *testing.T) {
 
 	root := t.TempDir()
 	clicked := docPaneTestPlugin(t, root, true)
-	clicked.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
 	if _, ok := clicked.activateDiffLink("abc1234"); !ok {
 		t.Fatal("hash click failed")
 	}

@@ -163,6 +163,47 @@ func TestTerminalContractSeededModelOwnsHealthySteadyState(t *testing.T) {
 	}
 }
 
+func TestModelDeliveryNoOpGateSeparatesRowsFromInteractionState(t *testing.T) {
+	m := newContractTerminal(&fakeTerminalControlSource{})
+	m.Open(Target{Session: "editor", Pane: "%1"})
+	frame := screenmodel.Frame{
+		Output: "same", Width: 80, Height: 24,
+		CursorRow: 2, CursorCol: 3, CursorVisible: true,
+		CursorStyle: screenmodel.CursorBlock,
+		Mouse:       screenmodel.MouseState{ButtonEvent: true},
+	}
+	if !m.applyModelFrame(frame) {
+		t.Fatal("first model frame did not establish presentation")
+	}
+	revision, pollGeneration := m.State.OutputBuf.Revision(), m.State.PollGeneration
+	if m.applyModelFrame(frame) {
+		t.Fatal("identical model delivery reported a change")
+	}
+	if m.State.OutputBuf.Revision() != revision || m.State.PollGeneration != pollGeneration {
+		t.Fatalf("duplicate advanced revisions: buffer %d -> %d, poll %d -> %d",
+			revision, m.State.OutputBuf.Revision(), pollGeneration, m.State.PollGeneration)
+	}
+
+	cursor := frame
+	cursor.CursorCol++
+	if !m.applyModelFrame(cursor) || m.State.OutputBuf.Revision() != revision {
+		t.Fatal("cursor-only change did not apply independently of row revision")
+	}
+
+	mode := cursor
+	mode.Mouse = screenmodel.MouseState{AnyEvent: true} // Mouse.Any remains true.
+	if !m.applyModelFrame(mode) || m.State.OutputBuf.Revision() != revision {
+		t.Fatal("individual mouse-mode change did not apply independently of row revision")
+	}
+
+	style := mode
+	style.CursorStyle = screenmodel.CursorBar
+	style.AltScreen = true
+	if !m.applyModelFrame(style) || m.State.OutputBuf.Revision() != revision {
+		t.Fatal("cursor-style/alternate-screen change did not apply independently of row revision")
+	}
+}
+
 func TestTerminalContractModelHistoryPreservesAbsoluteCoordinatesAndOverlap(t *testing.T) {
 	source := &fakeTerminalControlSource{}
 	m := newContractTerminal(source)

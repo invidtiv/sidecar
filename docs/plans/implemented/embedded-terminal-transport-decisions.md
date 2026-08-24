@@ -8,6 +8,8 @@ Sidecar uses one persistent tmux control-mode client per active tmux session. On
 
 `%output` and `%extended-output` bytes are ordered rendering input for the one shared `tty.Model`. A seeded `screenmodel` adapter owns the live grid, cursor, modes, and bounded history. Layout, pause/continue, discard, and reconnect events trigger an ordered reseed where necessary. `capture-pane` remains the bootstrap/resynchronization, lazy-history, diagnostic, and automatic-fallback adapter; it is not the healthy steady-state renderer.
 
+The session control actor consumes every ordered output byte immediately, then publishes immutable presentation snapshots on an adaptive per-pane-feed cadence. The first changed frame after an idle interval publishes immediately, sustained output publishes at no more than 30 frames per second, and one trailing timer guarantees the newest changed state. Input forwarding is independent of presentation cadence, and seed, reseed, and generation boundaries publish unconditionally. Ordinary presentation frames omit the diagnostic cell grid; fidelity comparison requests that grid explicitly.
+
 Control clients attach with `ignore-size`; a visible consumer supplies the intended size with `refresh-client -C`. Sidecar feature-detects tmux flow control by attempting `pause-after` and resumes `%pause` notifications. It does not version-sniff tmux.
 
 ## Why the VT parser is behind an adapter
@@ -27,6 +29,8 @@ The implemented model was accepted only after:
 3. alternate-screen, scroll-region, saved-cursor, wide-character, grapheme, and split-escape coverage;
 4. a resynchronization strategy after attach, dropped data, and fallback;
 5. removal of the plugin-private terminal-panel capture renderer rather than a second permanent presentation path.
+
+Performance changes retain the same fidelity contract. Duplicate consumer-visible snapshots do not reach subscribers, but cursor, mode, history, resize, alternate-screen, seed, and fallback changes still publish. The privacy-safe `SIDECAR_TERMINAL_PERF` diagnostic reports only fixed process-wide counts and output-to-frame sample/p95/max values; its publication counts aggregate every live pane-model feed and are not a per-feed frame-rate measurement.
 
 Known upstream fidelity gaps remain tracked by `td-a04666`; Sidecar does not fork the parser or add plugin-specific escape repair around them.
 

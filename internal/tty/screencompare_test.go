@@ -93,14 +93,14 @@ func TestBothMetadataLayoutsProduceTheSameSnapshot(t *testing.T) {
 }
 
 // buildModelFrame runs bytes through a real model and returns its frame.
-func buildModelFrame(t *testing.T, width, height int, payload string) screenmodel.Frame {
+func buildModelFrame(t *testing.T, width, height int, payload string) screenmodel.DiagnosticFrame {
 	t.Helper()
 	model := screenmodel.New(width, height)
 	t.Cleanup(model.Close)
 	if err := model.Write([]byte(payload)); err != nil {
 		t.Fatal(err)
 	}
-	frame, err := model.Frame()
+	frame, err := model.DiagnosticFrame()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +325,7 @@ func TestHistoryIsComparedAgainstTheCaptureWindow(t *testing.T) {
 // chose. The two history classes below are the ones an independent review found
 // acting as catch-alls, so each is asserted to require positive evidence of the
 // mechanism it names.
-func classOf(t *testing.T, frame screenmodel.Frame, tmuxHistory int) string {
+func classOf(t *testing.T, frame screenmodel.DiagnosticFrame, tmuxHistory int) string {
 	t.Helper()
 	res := compareCaptureWithModel(screenCompareInput{
 		CaptureOutput: frame.CombinedOutput(), Width: frame.Width, Height: frame.Height,
@@ -377,7 +377,7 @@ func TestHistoryDriftClassRequiresAPinnedScrollback(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	frame, err := model.Frame()
+	frame, err := model.DiagnosticFrame()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +402,7 @@ func TestRISIsCountedAcrossAWriteBoundary(t *testing.T) {
 	if err := model.Write([]byte("c")); err != nil {
 		t.Fatal(err)
 	}
-	frame, err := model.Frame()
+	frame, err := model.DiagnosticFrame()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,7 +415,7 @@ func TestRISIsCountedAcrossAWriteBoundary(t *testing.T) {
 // comparison. It previously was, which would have inflated the fidelity result
 // with comparisons that never happened.
 func TestDegenerateGeometryIsNotACleanComparison(t *testing.T) {
-	res := compareCaptureWithModel(screenCompareInput{Width: 0, Height: 0}, screenmodel.Frame{})
+	res := compareCaptureWithModel(screenCompareInput{Width: 0, Height: 0}, screenmodel.DiagnosticFrame{})
 	if !res.Invalid {
 		t.Fatal("a zero-sized capture must produce an invalid comparison")
 	}

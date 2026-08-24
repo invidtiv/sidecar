@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -45,6 +46,19 @@ type RowsInput struct {
 	// rows into a filled box wants it; one that joins them against its own
 	// chrome does not.
 	Pad bool
+
+	// Analyzer owns collision-safe raw ANSI facts for this terminal surface.
+	// Nil is correct but ephemeral; live hosts keep one so unchanged rows survive
+	// accepted buffer revisions without another ANSI walk.
+	Analyzer *RowAnalyzer
+}
+
+// DrawResult is the shared answer every terminal host composes. CanvasBackground
+// belongs to the same bounded analysis that produced Rows, so an outer renderer
+// never needs to walk the live grid again.
+type DrawResult struct {
+	Rows             []string
+	CanvasBackground string
 }
 
 // DrawRows renders the window RowsInput describes into drawn rows.
@@ -57,10 +71,10 @@ type RowsInput struct {
 //
 // It draws no cursor and no scrollbar: those are placed against the box a host
 // puts these rows in, and a second answer here would contradict the first.
-func DrawRows(in RowsInput) []string {
+func DrawRows(in RowsInput) DrawResult {
 	layout := in.Layout
 	if in.Buffer == nil || layout.EffectiveCount == 0 {
-		return nil
+		return DrawResult{}
 	}
 	truncate := in.Truncate
 	if truncate == nil {
@@ -76,39 +90,41 @@ func DrawRows(in RowsInput) []string {
 		fillWidth = layout.PadWidth
 	}
 
-	lines := in.Buffer.LinesRange(layout.Start, layout.End)
+	terminalperf.Record(terminalperf.TerminalViewRendered)
 	backgrounds := tty.NormalizeBackgroundMode(in.Backgrounds)
 	spanMax := in.BackgroundSpanMax
 	if spanMax <= 0 {
 		spanMax = tty.DefaultBackgroundSpanMax
 	}
-	// Detection costs a walk of the live grid; modes that will not fill skip it.
-	var canvasBg string
-	if backgrounds == tty.BackgroundAuto {
-		canvasBg = CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
+	analyzer := in.Analyzer
+	if analyzer == nil {
+		analyzer = &RowAnalyzer{}
 	}
-	inheritedBg := inheritedRowBackground(in.Buffer, layout.Start)
-	bandLen := 0
-	drawn := make([]string, 0, max(len(lines), layout.DisplayHeight))
-	for i, line := range lines {
-		line, nextBg, touchedBg := ui.CarryRowBackground(line, inheritedBg)
+	analysis := analyzer.analyze(in, backgrounds, spanMax)
+	canvasBg := ""
+	if backgrounds == tty.BackgroundAuto {
+		canvasBg = inferCanvas(analysis.live)
+	}
+	bandLen := analysis.visiblePredecessorBand
+	drawn := make([]string, 0, max(len(analysis.visible), layout.DisplayHeight))
+	for i, row := range analysis.visible {
+		line, touchedBg := row.wire, row.touched
 		// Band accounting reads the source stream, not the stripped output: a
 		// run keeps counting through suppressed rows so one long wall cannot
 		// masquerade as several short spans. A row belongs to the band when it
 		// paints anything — sets its own background even if it closes the row
 		// with 0m, or carries one in from the row above.
-		if touchedBg || nextBg != "" {
+		if touchedBg || row.trailing != "" {
 			bandLen++
 		} else {
 			bandLen = 0
 		}
-		inheritedBg = nextBg
 		switch {
 		case backgrounds == tty.BackgroundNever:
-			line = ui.StripRowBackgrounds(line)
+			line = row.backgroundFree
 			touchedBg = false
 		case backgrounds == tty.BackgroundBounded && bandLen > spanMax:
-			line = ui.StripRowBackgrounds(line)
+			line = row.backgroundFree
 			touchedBg = false
 		}
 		line = ui.ExpandTabs(line, tabWidth)
@@ -156,7 +172,7 @@ func DrawRows(in RowsInput) []string {
 			}
 		}
 	}
-	return drawn
+	return DrawResult{Rows: drawn, CanvasBackground: canvasBg}
 }
 
 // PadCanvasBox makes content exactly height rows of width columns. When bg is
@@ -223,128 +239,10 @@ func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string 
 	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
 		return ""
 	}
-	rows := buffer.LinesRange(paneTop, paneTop+paneHeight)
-	if len(rows) == 0 {
-		return ""
-	}
-	type painted struct {
-		bgs   map[string]struct{}
-		first string
-		blank bool
-	}
-	resolved := make([]painted, 0, len(rows))
-	inherited := inheritedRowBackground(buffer, paneTop)
-	for _, row := range rows {
-		// Counting the row as tmux would render it, not as it was captured: a
-		// canvas is emitted once and then carried, so without re-opening the
-		// inherited background only the first row of the canvas would vote.
-		text, next, _ := ui.CarryRowBackground(row, inherited)
-		inherited = next
-		resolved = append(resolved, painted{
-			bgs:   rowBackgrounds(text),
-			first: firstCellBackground(text),
-			blank: strings.TrimSpace(ansi.Strip(text)) == "",
-		})
-	}
-	// Trailing default-background blanks are unused cells after a resize, not
-	// a vote against the canvas that is still on the rows the TUI painted.
-	last := len(resolved) - 1
-	for last >= 0 && resolved[last].blank && len(resolved[last].bgs) == 0 {
-		last--
-	}
-	if last < 0 {
-		return ""
-	}
-	measured := resolved[:last+1]
-
-	// Interior rows without any background abstain rather than vote against:
-	// tmux stores cells an application never touched as default-attribute, and
-	// a real terminal draws those in its own default — which is the colour the
-	// application matched to its canvas through OSC 11. Counting them against
-	// the canvas made detection flip with every partial repaint (an opencode
-	// pane that had filled only some of its rows), and the flip itself was the
-	// visible inconsistency: the pane alternated between the canvas and the
-	// surrounding surface as the TUI redrew.
-	counts := make(map[string]int)
-	blankRows := make(map[string]int)
-	firstCell := make(map[string]int)
-	overlap := make(map[string]int)
-	paintedRowCount := 0
-	for _, row := range measured {
-		if len(row.bgs) == 0 {
-			continue
-		}
-		paintedRowCount++
-		if row.first != "" {
-			firstCell[row.first]++
-		}
-		for bg := range row.bgs {
-			counts[bg]++
-			if row.blank {
-				blankRows[bg]++
-			}
-			if len(row.bgs) > 1 {
-				overlap[bg]++
-			}
-		}
-	}
-	canvas, best, tied := "", 0, false
-	for bg, count := range counts {
-		if count > best {
-			canvas, best, tied = bg, count, false
-		} else if count == best {
-			tied = true
-		}
-	}
-	// A full-height panel rides every row the canvas does — opencode's side
-	// panel spans the grid, so both backgrounds count every row and the vote
-	// ties. The canvas is the background the rows are drawn *in*: it owns each
-	// row's first cell, either painted there or carried in from the row above,
-	// while a panel opens mid-row. Ties go to the candidate that owns the most
-	// row starts; a tie on that too means there is no single canvas to find.
-	if tied {
-		canvas = ""
-		bestFirst := 0
-		for bg, count := range counts {
-			if count != best {
-				continue
-			}
-			if firstCell[bg] > bestFirst {
-				canvas, bestFirst = bg, firstCell[bg]
-			} else if firstCell[bg] == bestFirst {
-				canvas = ""
-			}
-		}
-	}
-	// The share is measured against the rows that carry a background. A
-	// highlight drawn on top of a canvas (a Claude Code diff's added-line
-	// green) covers content rows only, so it never reaches the blank-row
-	// requirement below; the near-total bar keeps a bare majority of painted
-	// rows from promoting a panel colour.
-	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) {
-		return ""
-	}
-	// A blank row in the canvas is the usual proof it is a canvas and not
-	// highlighting — but the screen model's serialization closes every row and
-	// trims BCE tails, so the same opencode pane that proves itself in a raw
-	// capture comes back with no blank canvas rows at all, and the pane
-	// flickered between the two answers as the model took over from the first
-	// raw frame (td-fb5a9d). The fallback evidence is structural: a canvas owns
-	// the first cell of nearly every painted row (the TUI's own margin) and has
-	// other backgrounds drawn on top of it — on the same rows, which is what a
-	// box riding on a canvas looks like. A highlight has neither: a diff's
-	// green owns no margins, and its red deletions sit beside the green rows,
-	// never on them, so a second background elsewhere in the pane is no
-	// evidence at all. The co-occurrence bar is a quarter of the canvas's own
-	// rows, not a majority: a message-heavy screen is mostly bare margin rows
-	// with a box only around the input (measured live at 5 of 11), while
-	// line-level highlighting co-occurs with nothing, ever.
-	if blankRows[canvas] == 0 &&
-		(firstCell[canvas] < CanvasRowShare(paintedRowCount) ||
-			overlap[canvas] < max(2, counts[canvas]/4)) {
-		return ""
-	}
-	return canvas
+	layout := tty.Viewport{Start: paneTop, End: paneTop + paneHeight, EffectiveCount: paneHeight, PaneTop: paneTop}
+	analyzer := &RowAnalyzer{}
+	analysis := analyzer.analyze(RowsInput{Buffer: buffer, Layout: layout, PaneHeight: paneHeight}, tty.BackgroundAuto, tty.DefaultBackgroundSpanMax)
+	return inferCanvas(analysis.live)
 }
 
 // CanvasRowShare is how many of the rows that carry a background a candidate
@@ -367,62 +265,3 @@ func CanvasRowShare(rows int) int {
 // render cost independent of history size, and a background that has survived
 // this many rows unchanged is a canvas whose first row is off-screen anyway.
 const rowBackgroundLookback = 300
-
-// inheritedRowBackground resolves the background left active by the rows above
-// start, which is what start's first cell is actually drawn in.
-func inheritedRowBackground(buffer *tty.OutputBuffer, start int) string {
-	if buffer == nil || start <= 0 {
-		return ""
-	}
-	from := max(start-rowBackgroundLookback, 0)
-	bg := ""
-	for _, row := range buffer.LinesRange(from, start) {
-		_, bg, _ = ui.CarryRowBackground(row, bg)
-	}
-	return bg
-}
-
-// firstCellBackground is the background the row's first cell is drawn in: the
-// last background set before any printable content. A row with no printable
-// content answers with whatever background it leaves active.
-func firstCellBackground(row string) string {
-	bg := ""
-	state := ansi.NormalState
-	remaining := row
-	for len(remaining) > 0 {
-		seq, width, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
-		if n <= 0 {
-			break
-		}
-		if next, touches := ui.SGRBackground(seq); touches {
-			if next == ui.RowBackgroundDefault {
-				bg = ""
-			} else {
-				bg = next
-			}
-		} else if width > 0 {
-			return bg
-		}
-		state = newState
-		remaining = remaining[n:]
-	}
-	return bg
-}
-
-func rowBackgrounds(row string) map[string]struct{} {
-	backgrounds := make(map[string]struct{})
-	state := ansi.NormalState
-	remaining := row
-	for len(remaining) > 0 {
-		seq, _, n, newState := ansi.GraphemeWidth.DecodeSequenceInString(remaining, state, nil)
-		if n <= 0 {
-			break
-		}
-		if next, touches := ui.SGRBackground(seq); touches && next != ui.RowBackgroundDefault {
-			backgrounds[next] = struct{}{}
-		}
-		state = newState
-		remaining = remaining[n:]
-	}
-	return backgrounds
-}

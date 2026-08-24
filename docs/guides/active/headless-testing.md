@@ -166,6 +166,24 @@ privacy-safe `terminal capture trace` entries with reason `semantic_activity`
 and no terminal content. Correlate those reason tags with hook entries instead
 of claiming that every agent-pane capture is presentation fallback.
 
+### Terminal performance counters
+
+Use the deterministic fixture and the same two-axis isolation for terminal performance work. Run CPU profiles with `SIDECAR_PPROF=<port>` only; keep `SIDECAR_TERMINAL_PERF`, screen comparison, and terminal/overview/startup traces off because diagnostics perturb the measurement. Use a separate process for counters and latency:
+
+```bash
+terminal_perf_root="$(mktemp -d /tmp/sidecar-terminal-perf.XXXXXX)"
+export SIDECAR_DRIVE_RUN_DIR="$terminal_perf_root/drive"
+./scripts/tmux-drive.sh paths
+./scripts/terminal-performance-fixture.sh "$terminal_perf_root/fixture" "$SIDECAR_DRIVE_RUN_DIR"
+export SIDECAR_DRIVE_REPO="$terminal_perf_root/fixture/projects/project-01"
+./scripts/tmux-drive.sh paths
+SIDECAR_PPROF=17657 SIDECAR_TERMINAL_PERF=1 ./scripts/tmux-drive.sh start 200 50
+curl --fail --silent http://localhost:17657/debug/terminalperf
+./scripts/tmux-drive.sh stop
+```
+
+The endpoint exposes only fixed numeric counts plus `output_to_frame_samples`, `output_to_frame_p95_us`, and `output_to_frame_max_us`; it contains no terminal text, paths, targets, or session names. Snapshot before and after a settled phase and subtract monotonic counts. Model-frame counts are process-wide aggregates across every live pane-model feed, so they prove a per-feed frame-rate cap only when the harness independently guarantees one feed. Use the deterministic single-feed cadence tests for the 30 fps contract otherwise. Always stop the explicit run root on success or error.
+
 The fixture has committed proof files, two linked worktrees, deterministic
 `nvim`/`nano` wrappers, and an isolated config enabling Notes with only Codex in
 the agent picker. It refuses a nonempty destination and any path under `$HOME`.

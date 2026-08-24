@@ -3,7 +3,6 @@ package workspace
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/app"
@@ -11,7 +10,6 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
-	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -51,21 +49,6 @@ func (l terminalLink) span() terminallink.Span {
 	}
 }
 
-type terminalLinkMemo struct {
-	surfaces map[string]terminalLinkSurfaceMemo
-}
-
-type terminalLinkSurfaceMemo struct {
-	rawRoot  string
-	root     string
-	target   string
-	buffer   *tty.OutputBuffer
-	revision uint64
-	paths    map[string]terminalLinkResolution
-	specs    map[string]terminalLinkResolution
-	newSpecs int
-}
-
 func (p *Plugin) terminalLinkTarget(termPanel bool) string {
 	if termPanel {
 		return p.termPanelSession + "\x00" + p.termPanelPaneID
@@ -80,21 +63,6 @@ func (p *Plugin) terminalLinkTarget(termPanel bool) string {
 		return wt.Agent.TmuxSession + "\x00" + wt.Agent.TmuxPane
 	}
 	return ""
-}
-
-type terminalLinkResolution struct {
-	rel string
-	ok  bool
-}
-
-type terminalLineLinkResolver struct {
-	plugin  *Plugin
-	context terminalLinkSurfaceContext
-	buffer  *tty.OutputBuffer
-}
-
-func (r *terminalLineLinkResolver) links(line string) []terminalLink {
-	return r.plugin.resolvedTerminalLinks(r.context, r.buffer, line)
 }
 
 type terminalLinkSurfaceContext struct {
@@ -158,41 +126,7 @@ func requiresPaneLeaf(kind terminallink.Kind) bool {
 	}
 }
 
-func decorateTerminalLinks(line string, resolved *terminalLineLinkResolver) string {
-	// tmux output is untrusted. Remove source-supplied OSC controls and
-	// synthesize OSC-8 only for URLs that pass safeHTTPURL.
-	line = stripSourceOSC8(line)
-	links := detectTerminalLinks(line)
-	if resolved != nil {
-		links = resolved.links(line)
-	}
-	return terminallink.Decorate(line, spansFromTerminalLinks(links))
-}
-
-func spansFromTerminalLinks(links []terminalLink) []terminallink.Span {
-	spans := make([]terminallink.Span, 0, len(links))
-	for _, link := range links {
-		spans = append(spans, link.span())
-	}
-	return spans
-}
-
-func (p *Plugin) terminalLinkResolver(termPanel bool, buffer *tty.OutputBuffer) *terminalLineLinkResolver {
-	if p.paneRoot == nil || buffer == nil {
-		return nil
-	}
-	context := p.terminalLinkSurfaceContext(termPanel)
-	if !context.ok {
-		return nil
-	}
-	return &terminalLineLinkResolver{plugin: p, context: context, buffer: buffer}
-}
-
 func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceContext {
-	return p.terminalLinkSurfaceContextWithFreshRoot(termPanel, false)
-}
-
-func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bool) terminalLinkSurfaceContext {
 	if p.ctx == nil {
 		return terminalLinkSurfaceContext{}
 	}
@@ -219,94 +153,24 @@ func (p *Plugin) terminalLinkSurfaceContextWithFreshRoot(termPanel, freshRoot bo
 		surface += ":panel"
 	}
 	target := p.terminalLinkTarget(termPanel)
-	if !freshRoot && p.terminalLinkMemo.surfaces != nil {
-		if memo, found := p.terminalLinkMemo.surfaces[surface]; found &&
-			memo.rawRoot == filepath.Clean(rawRoot) && memo.target == target && memo.root != "" {
-			return terminalLinkSurfaceContext{rawRoot: memo.rawRoot, root: memo.root, surface: surface, target: target, ok: true}
-		}
+	cached := p.primaryLinkContext
+	if termPanel {
+		cached = p.panelLinkContext
 	}
-	rootResolver := filepath.EvalSymlinks
-	if p.terminalRootResolver != nil {
-		rootResolver = p.terminalRootResolver
+	if cached.surface == surface && cached.rawRoot == filepath.Clean(rawRoot) && cached.target == target && cached.root != "" {
+		return cached
 	}
-	root, err := rootResolver(rawRoot)
+	root, err := filepath.EvalSymlinks(rawRoot)
 	if err != nil {
 		return terminalLinkSurfaceContext{}
 	}
-	return terminalLinkSurfaceContext{rawRoot: filepath.Clean(rawRoot), root: filepath.Clean(root), surface: surface, target: target, ok: true}
-}
-
-func (p *Plugin) invalidateTerminalLinkSurface(surface string) {
-	if p.terminalLinkMemo.surfaces != nil {
-		delete(p.terminalLinkMemo.surfaces, surface)
+	context := terminalLinkSurfaceContext{rawRoot: filepath.Clean(rawRoot), root: filepath.Clean(root), surface: surface, target: target, ok: true}
+	if termPanel {
+		p.panelLinkContext = context
+	} else {
+		p.primaryLinkContext = context
 	}
-}
-
-func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffer *tty.OutputBuffer, line string) []terminalLink {
-	if p.paneRoot == nil || buffer == nil || !context.ok {
-		return detectTerminalLinks(line)
-	}
-	revision := buffer.Revision()
-	if p.terminalLinkMemo.surfaces == nil {
-		p.terminalLinkMemo.surfaces = make(map[string]terminalLinkSurfaceMemo)
-	}
-	memo, found := p.terminalLinkMemo.surfaces[context.surface]
-	if !found || memo.root != context.root || memo.target != context.target || memo.buffer != buffer || memo.revision != revision {
-		memo = terminalLinkSurfaceMemo{rawRoot: context.rawRoot, root: context.root, target: context.target, buffer: buffer, revision: revision,
-			paths: make(map[string]terminalLinkResolution), specs: make(map[string]terminalLinkResolution)}
-	}
-	if memo.specs == nil {
-		memo.specs = make(map[string]terminalLinkResolution)
-	}
-	resolver := resolveTerminalPathFromResolvedBase
-	if p.terminalPathResolver != nil {
-		resolver = p.terminalPathResolver
-	}
-	// Matchers are the live provider snapshot, and they are the whole of what
-	// makes a resource key clickable: an empty set is a scan that finds none,
-	// so an unready, failed, disabled or unconfigured provider leaves its keys
-	// as ordinary text. Matching stays pure — no process starts here.
-	links := activatableTerminalLinks(terminallink.ScanWith(line, terminallink.Options{
-		Resolve: func(raw string) (string, terminallink.Extra, bool) {
-			resolution, found := memo.paths[raw]
-			if !found {
-				rel, _, ok := resolver(context.root, raw)
-				resolution = terminalLinkResolution{rel: rel, ok: ok}
-				memo.paths[raw] = resolution
-			}
-			if !resolution.ok {
-				return "", terminallink.Extra{}, false
-			}
-			return resolution.rel, terminallink.Extra{Raw: raw}, true
-		},
-		ResolveDiff: func(raw string) (string, terminallink.Extra, bool) {
-			resolution, found := memo.specs[raw]
-			if !found {
-				if memo.newSpecs >= terminallink.MaxNewDiffResolves {
-					return "", terminallink.Extra{}, false
-				}
-				memo.newSpecs++
-				value, ok := p.resolveTerminalSpec(context.root, raw)
-				resolution = terminalLinkResolution{rel: value, ok: ok}
-				memo.specs[raw] = resolution
-			}
-			if !resolution.ok {
-				return "", terminallink.Extra{}, false
-			}
-			if resolution.rel == "" {
-				return raw, terminallink.Extra{Raw: raw}, true
-			}
-			return resolution.rel, terminallink.Extra{Raw: raw}, true
-		},
-		Matchers: p.resourceMatchers,
-	}), true)
-	for i := range links {
-		if links[i].Kind == terminallink.KindFile && links[i].Raw != "" {
-			links[i].Root = context.root
-		}
-	}
-	p.terminalLinkMemo.surfaces[context.surface] = memo
-	return links
+	return context
 }
 
 func stripSourceOSC8(line string) string {
@@ -319,14 +183,23 @@ func (p *Plugin) terminalLinkAt(action mouse.MouseAction) (terminalLink, termina
 		return terminalLink{}, terminalLinkSurfaceContext{}, false, false
 	}
 	termPanel := action.Region != nil && action.Region.ID == regionTermPanelContent
-	buffer := p.terminalOutputBuffer(termPanel)
 	context := p.terminalLinkSurfaceContext(termPanel)
-	for _, link := range p.resolvedTerminalLinks(context, buffer, ui.ExpandTabs(line, tabStopWidth)) {
-		if point.Col >= link.StartCol && point.Col <= link.EndCol {
-			return link, context, termPanel, true
-		}
+	state := p.primaryLinkState
+	if termPanel {
+		state = p.panelLinkState
 	}
-	return terminalLink{}, context, termPanel, false
+	span, ok := state.SpanAt(ui.ExpandTabs(line, tabStopWidth), point.Line, point.Col)
+	if !ok {
+		return terminalLink{}, context, termPanel, false
+	}
+	links := activatableTerminalLinks([]terminallink.Span{span}, p.paneRoot != nil)
+	if len(links) != 1 {
+		return terminalLink{}, context, termPanel, false
+	}
+	if links[0].Kind == terminallink.KindFile && links[0].Raw != "" {
+		links[0].Root = context.root
+	}
+	return links[0], context, termPanel, true
 }
 
 func (p *Plugin) activateTerminalLink(action mouse.MouseAction) (tea.Cmd, bool) {
@@ -361,9 +234,9 @@ func (p *Plugin) activateResolvedTerminalLink(link terminalLink, context termina
 			Locator:  plan.Locator,
 		})
 	case targetactivation.PlanOpenDiff:
-		return p.activateDiffLink(plan.Spec)
+		return p.revalidateTerminalLink(link, context, termPanel)
 	case targetactivation.PlanOpenFile:
-		return p.activateFilePlan(plan, link, context, termPanel)
+		return p.revalidateTerminalLink(link, context, termPanel)
 	case targetactivation.PlanAttachSession:
 		// The same lookup the public AttachSessionMsg does, and the same gate:
 		// a name matching no shell and no worktree agent attaches nothing.
@@ -389,42 +262,6 @@ func terminalHandlesPlanKind(kind targetactivation.PlanKind) bool {
 	default:
 		return false
 	}
-}
-
-// activateFilePlan re-resolves the file token against this surface's own root:
-// the plan carries the token as the text wrote it, and a terminal's root is not
-// the project's.
-func (p *Plugin) activateFilePlan(plan targetactivation.Plan, link terminalLink, context terminalLinkSurfaceContext, termPanel bool) (tea.Cmd, bool) {
-	raw := plan.Path
-	root := link.Root
-	if root == "" {
-		root = context.root
-	}
-	if link.Root != "" {
-		fresh := p.terminalLinkSurfaceContextWithFreshRoot(termPanel, true)
-		if !fresh.ok || fresh.surface != context.surface || fresh.target != context.target || fresh.root != link.Root {
-			p.invalidateTerminalLinkSurface(context.surface)
-			return nil, false
-		}
-		root = fresh.root
-	}
-	if root == "" {
-		cmd := p.openTerminalPath(raw, plan.Line)
-		if cmd != nil {
-			p.clearTerminalSelection()
-		}
-		return cmd, cmd != nil
-	}
-	display, abs, ok := resolveTerminalPathFromResolvedBase(root, raw)
-	if !ok {
-		return nil, false
-	}
-	surface := strings.TrimSuffix(context.surface, ":panel")
-	cmd := p.openResolvedFilePreview(root, surface, display, abs, plan.Line)
-	if cmd != nil {
-		p.clearTerminalSelection()
-	}
-	return cmd, cmd != nil
 }
 
 func (p *Plugin) openResolvedFilePreview(root, surface, display, abs string, line int) tea.Cmd {
@@ -504,19 +341,7 @@ func resolveTerminalPath(base, raw string) (relative, absolute string, ok bool) 
 	if err != nil {
 		return "", "", false
 	}
-	return resolveTerminalPathFromResolvedBase(baseResolved, raw)
-}
-
-func resolveTerminalPathFromResolvedBase(baseResolved, raw string) (relative, absolute string, ok bool) {
 	return terminallink.ResolveFile(baseResolved, raw)
-}
-
-func (p *Plugin) resolveTerminalSpec(root, raw string) (string, bool) {
-	if p.terminalSpecResolver != nil {
-		return p.terminalSpecResolver(root, raw)
-	}
-	value, _, ok := terminallink.ResolveGitSpec(root, raw)
-	return value, ok
 }
 
 // activateDiffLink opens the clicked git spec against the selected terminal

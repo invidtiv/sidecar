@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
 // userHomeDir is os.UserHomeDir, overridden in tests.
@@ -19,6 +21,7 @@ var userHomeDir = os.UserHomeDir
 // inside the selected worktree. Display is a root-relative slash path when
 // the file is inside base, otherwise the resolved absolute path.
 func ResolveFile(base, raw string) (display, absolute string, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
 	if raw == "" || containsControl(raw) {
 		return "", "", false
 	}
@@ -31,6 +34,25 @@ func ResolveFile(base, raw string) (display, absolute string, ok bool) {
 		}
 	}
 
+	return resolveFileFromCanonicalBase(baseResolved, raw, expanded)
+}
+
+// ResolveFileFromCanonicalBase maps raw using a base that the caller already
+// canonicalized. It avoids re-running EvalSymlinks on the root for every
+// candidate in an async terminal-link batch.
+func ResolveFileFromCanonicalBase(baseResolved, raw string) (display, absolute string, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
+	if raw == "" || containsControl(raw) {
+		return "", "", false
+	}
+	baseResolved = filepath.Clean(baseResolved)
+	if strings.TrimSpace(baseResolved) == "" || baseResolved == "." {
+		baseResolved = ""
+	}
+	return resolveFileFromCanonicalBase(baseResolved, raw, expandHome(raw))
+}
+
+func resolveFileFromCanonicalBase(baseResolved, raw, expanded string) (display, absolute string, ok bool) {
 	if baseResolved != "" && !isHomeToken(raw) {
 		if display, absolute, ok = acceptRegularFile(filepath.Join(baseResolved, expanded), baseResolved); ok {
 			return display, absolute, true
@@ -127,6 +149,7 @@ func ResolveCommit(workdir, rev string) (oid string, ok bool) {
 // "commit <rev>", or A..B / A...B. HEAD and branch names are refused here
 // even if git would accept them — those are CLI-only.
 func ResolveGitSpec(workdir, raw string) (value string, extra Extra, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
 	extra = Extra{Raw: raw}
 	a, b, parsed := parseGitSpecToken(raw)
 	if !parsed {

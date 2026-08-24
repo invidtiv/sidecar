@@ -71,11 +71,11 @@ func resourcePreviewModel(t *testing.T) *Model {
 	m, recorder := previewModel(t)
 	recorder.output["%1"] = resourceLine + "\n"
 	recorder.output["%2"] = "bravo has nothing to open\n"
-	// Git-spec resolution would shell out for every word on the line; this
-	// surface's own hook keeps the test off the developer's machine.
-	m.previewSpecResolver = func(string, string) (string, bool) { return "", false }
 	m.workspaces.SelectID("a")
 	run(t, m, m.SetWorkspacesVisible(true))
+	m.PrepareTerminalLinks()
+	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+	m.PrepareTerminalLinks()
 	m.WorkspacesView(previewWide, previewTall)
 	return m
 }
@@ -93,6 +93,7 @@ func resourceTabLocators(res *previewResource) []string {
 
 func clickResourceKey(t *testing.T, m *Model, key string) {
 	t.Helper()
+	m.PrepareTerminalLinks()
 	action := previewNeedleAction(t, m, key)
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: action.X, Y: action.Y, Button: tea.MouseLeft}))
 }
@@ -100,7 +101,8 @@ func clickResourceKey(t *testing.T, m *Model, key string) {
 func TestGlobalUnreadyProviderLeavesResourceKeysPlain(t *testing.T) {
 	m := resourcePreviewModel(t)
 
-	for _, span := range m.decoratedPreviewSpans(resourceLine) {
+	state := preparedPreviewLineForTest(t, m, resourceLine)
+	for _, span := range state.Spans(resourceLine, 0) {
 		if span.Kind == terminallink.KindResource {
 			t.Fatalf("a resource key was decorated with no matchers configured: %#v", span)
 		}
@@ -121,7 +123,7 @@ func TestGlobalResourceClickOpensFocusesAndAddsTabs(t *testing.T) {
 	m.SetResourceMatchers(jiraMatchers())
 	m.SetResourceResolver(resolver.resolve)
 
-	spans := m.decoratedPreviewSpans(resourceLine)
+	spans := preparedPreviewLineForTest(t, m, resourceLine).Spans(resourceLine, 0)
 	var keys []string
 	for _, span := range spans {
 		if span.Kind == terminallink.KindResource {

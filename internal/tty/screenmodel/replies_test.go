@@ -47,7 +47,7 @@ func TestDeviceQueriesDoNotBlockTheModel(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("Emulator.Write blocked: the reply pipe is not being drained")
 			}
-			frame, err := m.Frame()
+			frame, err := m.DiagnosticFrame()
 			if err != nil {
 				t.Fatal(err)
 			}

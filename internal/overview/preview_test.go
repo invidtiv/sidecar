@@ -12,6 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentstatus"
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
@@ -57,6 +60,7 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 
 	now := time.Now()
 	m := New(workspaceinventory.Collector{})
+	installPreviewTestTerminalLinks(m, nil)
 	recorder := &captureRecorder{output: map[string]string{}, state: map[string]tty.PaneState{}}
 	originalTerminal := newPreviewTerminal
 	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
@@ -107,6 +111,45 @@ func previewModel(t *testing.T) (*Model, *captureRecorder) {
 	return m, recorder
 }
 
+type previewTestLinkResolver struct {
+	diff func(string, string) (string, bool)
+}
+
+func (r previewTestLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+	switch candidate.Kind {
+	case contentlink.KindFile:
+		display, _, ok := terminallink.ResolveFileFromCanonicalBase(root, candidate.Raw)
+		return contentlink.Ref{Kind: candidate.Kind, Value: display}, ok
+	case contentlink.KindDiff:
+		if r.diff != nil {
+			value, ok := r.diff(root, candidate.Raw)
+			return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+		}
+		value, _, ok := terminallink.ResolveGitSpec(root, candidate.Raw)
+		return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+	default:
+		return contentlink.Ref{}, false
+	}
+}
+
+func installPreviewTestTerminalLinks(m *Model, diff func(string, string) (string, bool)) {
+	m.SetTerminalLinkCoordinator(termpreview.NewLinkCoordinator(previewTestLinkResolver{diff: diff}))
+}
+
+func preparedPreviewLineForTest(t *testing.T, m *Model, line string) termpreview.LinkState {
+	t.Helper()
+	root := m.canonicalTerminalLinkRoot(m.previewResolveRoot())
+	allowed := m.terminalAllowedLinkKinds()
+	input := termpreview.LinkPrepare{
+		Scope: termpreview.LinkScope{Host: "overview", Surface: m.preview.workspaceID, Target: "test", Root: root, Buffer: m.previewBuffer(), AllowedKinds: termpreview.AllowedKindsKey(allowed), MatcherGeneration: m.linkMatcherGeneration},
+		Rows:  []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: m.resourceMatchers,
+	}
+	state := m.terminalLinks.Prepare(input)
+	deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+	input.Previous = state
+	return m.terminalLinks.Prepare(input)
+}
+
 // run executes a command and delivers whatever it produced back to the model,
 // which is what the Bubble Tea loop does with it.
 func run(t *testing.T, m *Model, cmd tea.Cmd) tea.Cmd {
@@ -125,7 +168,33 @@ func run(t *testing.T, m *Model, cmd tea.Cmd) tea.Cmd {
 		}
 		return tea.Batch(next...)
 	}
-	return m.Update(msg)
+	next := m.Update(msg)
+	if _, revalidated := msg.(previewLinkRevalidatedMsg); revalidated {
+		return run(t, m, next)
+	}
+	m.PrepareTerminalLinks()
+	if m.terminalLinks != nil {
+		deliverPreviewLinkResults(t, m, m.terminalLinks.TakeCmd())
+		m.PrepareTerminalLinks()
+	}
+	return next
+}
+
+func deliverPreviewLinkResults(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			deliverPreviewLinkResults(t, m, child)
+		}
+		return
+	}
+	if result, ok := msg.(termpreview.LinkResultMsg); ok {
+		m.terminalLinks.Apply(result)
+	}
 }
 
 func key(k string) tea.KeyPressMsg {

@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -169,6 +170,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 // Update handles all messages and returns the updated model and commands.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	if result, ok := msg.(termpreview.LinkResultMsg); ok && m.terminalLinks != nil {
+		m.terminalLinks.Apply(result)
+	}
 	for _, h := range m.contentDecks {
 		if h.live == nil {
 			continue
@@ -185,6 +189,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	updated, cmd := m.update(msg)
 	cmds = append(cmds, cmd)
+	switch model := updated.(type) {
+	case Model:
+		model.prepareTerminalLinks()
+		cmds = append(cmds, model.terminalLinkCmd())
+		updated = model
+	case *Model:
+		model.prepareTerminalLinks()
+		cmds = append(cmds, model.terminalLinkCmd())
+	}
 	var decks map[string]*appContentDeck
 	switch model := updated.(type) {
 	case Model:

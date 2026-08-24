@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
@@ -162,6 +163,13 @@ type paneModelFeed struct {
 
 	seeds      int
 	frameDirty bool
+	// lastPublished is actor-owned presentation identity. A seed boundary is
+	// deliberately separate: every completed seed must reach the consumer even
+	// when it reconstructed byte-for-byte identical terminal state.
+	lastPublished      screenmodel.Frame
+	lastPublishedSeeds int
+	hasPublished       bool
+	lastPublishedAt    time.Time
 	// discarded is the last client_discarded value seen for this client, and
 	// discardCheckedAt is when it was seen. Published on every frame so a
 	// consumer can tell a frame whose byte stream is confirmed complete from one
@@ -174,6 +182,45 @@ type paneModelFeed struct {
 	// published frame. It is the model path's output-to-frame latency clock,
 	// started at the same event as the capture path's (paneCompareState).
 	pendingSince time.Time
+}
+
+const modelPublicationInterval = time.Second / 30
+
+// modelCadenceTimer is the one timer the ordered actor may retain for model
+// publication. The narrow interface keeps cadence tests on a deterministic
+// clock without changing the capture scheduler or the terminal input path.
+type modelCadenceTimer interface {
+	Stop() bool
+}
+
+type modelCadenceConfig struct {
+	interval  time.Duration
+	now       func() time.Time
+	afterFunc func(time.Duration, func()) modelCadenceTimer
+}
+
+func realtimeModelCadence() modelCadenceConfig {
+	return modelCadenceConfig{
+		interval: modelPublicationInterval,
+		now:      time.Now,
+		afterFunc: func(delay time.Duration, callback func()) modelCadenceTimer {
+			return time.AfterFunc(delay, callback)
+		},
+	}
+}
+
+func (c modelCadenceConfig) normalized() modelCadenceConfig {
+	realtime := realtimeModelCadence()
+	if c.interval <= 0 {
+		c.interval = realtime.interval
+	}
+	if c.now == nil {
+		c.now = realtime.now
+	}
+	if c.afterFunc == nil {
+		c.afterFunc = realtime.afterFunc
+	}
+	return c
 }
 
 func (f *paneModelFeed) close() {
@@ -329,9 +376,11 @@ func (c *sessionControlClient) stopModelFeed(id uint64) {
 	delete(c.models, id)
 	feed.close()
 	screenCompareStats.bump(&screenCompareStats.ModelsClosed, 1)
+	c.armModelTick(c.modelCadence.now())
 }
 
 func (c *sessionControlClient) failAllModels(reason ResyncReason, err error) {
+	c.stopModelTimer()
 	for id, feed := range c.models {
 		delete(c.models, id)
 		c.invalidate(feed, reason, err, true)
@@ -528,7 +577,7 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 		c.beginSeed(feed, why)
 		return
 	}
-	c.armModelTick()
+	c.scheduleModelFrames()
 }
 
 // feedModels writes one %output notification into every model on that pane.
@@ -539,6 +588,7 @@ func (c *sessionControlClient) feedModels(event controlEvent) {
 		return
 	}
 	var decoded []byte
+	wrote := false
 	for _, feed := range c.models {
 		if feed.pane != event.Pane {
 			continue
@@ -557,6 +607,7 @@ func (c *sessionControlClient) feedModels(event controlEvent) {
 				continue
 			}
 			started := time.Now()
+			outputAt := c.modelCadence.now()
 			if err := feed.model.Write(decoded); err != nil {
 				c.faultFeed(feed, ResyncModelFault, err)
 				continue
@@ -566,35 +617,48 @@ func (c *sessionControlClient) feedModels(event controlEvent) {
 				screenCompareStats.mu.Lock()
 				screenCompareStats.ModelWriteUS.add(time.Since(started))
 				screenCompareStats.mu.Unlock()
-				if feed.pendingSince.IsZero() {
-					feed.pendingSince = started
-				}
+			}
+			if feed.pendingSince.IsZero() {
+				feed.pendingSince = outputAt
 			}
 			feed.frameDirty = true
-			c.armModelTick()
+			wrote = true
 		case modelIdle, modelFailed:
 		}
 	}
+	if wrote {
+		c.scheduleModelFrames()
+	}
 }
 
-// armModelTick schedules one coalesced frame publication back onto the actor.
-func (c *sessionControlClient) armModelTick() {
-	if c.modelTimer {
+// scheduleModelFrames publishes every currently eligible dirty feed, then arms
+// one actor timer for the earliest remaining feed. Bytes have already reached
+// every model before this method runs; only immutable presentation snapshots
+// are rate-limited.
+func (c *sessionControlClient) scheduleModelFrames() {
+	now := c.modelCadence.now()
+	c.publishReadyModelFrames(now)
+	// A subscriber callback may be slow. Re-read the clock so another feed
+	// whose deadline passed during delivery is not charged an extra interval.
+	c.armModelTick(c.modelCadence.now())
+}
+
+func (c *sessionControlClient) publishModelFrames(generation uint64) {
+	if generation != c.modelTimerGeneration {
 		return
 	}
-	c.modelTimer = true
-	time.AfterFunc(c.coalesce, func() {
-		select {
-		case c.modelTick <- struct{}{}:
-		case <-c.quit:
-		}
-	})
+	c.modelTimer = nil
+	c.modelTimerDeadline = time.Time{}
+	c.scheduleModelFrames()
 }
 
-func (c *sessionControlClient) publishModelFrames() {
-	c.modelTimer = false
+func (c *sessionControlClient) publishReadyModelFrames(now time.Time) {
 	for _, feed := range c.models {
 		if feed.state != modelLive || !feed.frameDirty {
+			continue
+		}
+		force := !feed.hasPublished || feed.lastPublishedSeeds != feed.seeds
+		if !force && now.Before(feed.lastPublishedAt.Add(c.modelCadence.interval)) {
 			continue
 		}
 		rendered := time.Now()
@@ -612,10 +676,13 @@ func (c *sessionControlClient) publishModelFrames() {
 				screenCompareStats.OutputToFrameUS.add(now.Sub(feed.pendingSince))
 			}
 			screenCompareStats.mu.Unlock()
-			feed.pendingSince = time.Time{}
 			screenCompareStats.recordModelBytes(feed.model.Footprint())
 		}
 		feed.frameDirty = false
+		if !force && frame.SamePresentation(feed.lastPublished) {
+			feed.pendingSince = time.Time{}
+			continue
+		}
 		payload := ModelFrame{
 			Session:          feed.session,
 			Pane:             feed.pane,
@@ -634,8 +701,84 @@ func (c *sessionControlClient) publishModelFrames() {
 		if !valid || callback == nil {
 			continue
 		}
-		gate.invoke(func() { callback(payload) })
+		deliveryStarted := c.modelCadence.now()
+		if deliverModelFrame(gate, callback, payload) {
+			feed.lastPublished = frame
+			feed.lastPublishedSeeds = feed.seeds
+			feed.hasPublished = true
+			// Measure sustained cadence from callback completion. A slow consumer
+			// is not terminal idleness: publishing again on the next queued byte
+			// would starve ordered seed/control responses behind output traffic.
+			feed.lastPublishedAt = c.modelCadence.now()
+			if !feed.pendingSince.IsZero() {
+				terminalperf.RecordOutputToFrame(deliveryStarted.Sub(feed.pendingSince))
+			}
+		}
+		feed.pendingSince = time.Time{}
 	}
+}
+
+// armModelTick retains exactly one timer for the earliest dirty feed. A token
+// makes a callback that raced with Stop harmless instead of letting it clear a
+// newer timer. Forced seed/generation frames are handled synchronously above.
+func (c *sessionControlClient) armModelTick(now time.Time) {
+	var earliest time.Time
+	for _, feed := range c.models {
+		if feed.state != modelLive || !feed.frameDirty {
+			continue
+		}
+		force := !feed.hasPublished || feed.lastPublishedSeeds != feed.seeds
+		if force {
+			earliest = now
+			break
+		}
+		deadline := feed.lastPublishedAt.Add(c.modelCadence.interval)
+		if earliest.IsZero() || deadline.Before(earliest) {
+			earliest = deadline
+		}
+	}
+	if earliest.IsZero() {
+		c.stopModelTimer()
+		return
+	}
+	if c.modelTimer != nil && !earliest.Before(c.modelTimerDeadline) {
+		return
+	}
+	if c.modelTimer != nil {
+		c.modelTimer.Stop()
+	}
+	c.modelTimerGeneration++
+	generation := c.modelTimerGeneration
+	c.modelTimerDeadline = earliest
+	delay := earliest.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+	c.modelTimer = c.modelCadence.afterFunc(delay, func() {
+		select {
+		case c.modelTick <- generation:
+		case <-c.quit:
+		}
+	})
+}
+
+func (c *sessionControlClient) stopModelTimer() {
+	if c.modelTimer != nil {
+		c.modelTimer.Stop()
+		c.modelTimer = nil
+	}
+	c.modelTimerDeadline = time.Time{}
+	c.modelTimerGeneration++
+}
+
+// deliverModelFrame records publication inside the subscription's delivery
+// barrier. Close may deactivate the gate after publishModelFrames revalidates
+// membership; in that interleaving neither the callback nor its counter runs.
+func deliverModelFrame(gate *subscriberDeliveryGate, callback func(ModelFrame), payload ModelFrame) bool {
+	return gate.invoke(func() {
+		terminalperf.Record(terminalperf.ModelFramePublished)
+		callback(payload)
+	})
 }
 
 // faultFeed invalidates exactly one pane model. It never touches the control
@@ -645,6 +788,7 @@ func (c *sessionControlClient) faultFeed(feed *paneModelFeed, reason ResyncReaso
 	delete(c.models, feed.id)
 	c.invalidate(feed, reason, err, true)
 	feed.close()
+	c.armModelTick(c.modelCadence.now())
 }
 
 func (c *sessionControlClient) invalidate(feed *paneModelFeed, reason ResyncReason, err error, terminal bool) {

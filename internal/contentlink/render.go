@@ -59,6 +59,9 @@ type FrameResult struct {
 	Output  string
 	Spans   []Span
 	Pending []Pending
+	// ReadyHits counts file/diff candidates answered by the immutable snapshot,
+	// including cached negatives. It is diagnostic metadata only.
+	ReadyHits int
 }
 
 // ScanFrame recognizes a bounded, already-rendered ANSI frame. Explicit OSC-8
@@ -105,6 +108,7 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 				pending = appendPending(pending, Pending{Kind: kind, Raw: raw})
 				return "", Extra{}, false
 			}
+			result.ReadyHits++
 			if !found {
 				return "", Extra{}, false
 			}
