@@ -4,6 +4,39 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+## [v1.5.0] - 2026-08-24
+
+### Features
+
+- **The Files readable view recognizes content links.** Rendered Markdown
+  (`m` / Render) was the one Sidecar reading surface where a `td-*` id, a
+  `path/file.go:42` reference, a commit hash, a URL, a `sidecar://` intent, or a
+  provider key went dead — toggling Render removed the links you were about to
+  click, while the byte-identical Workspace document pane kept them live. It now
+  scans what was drawn, the same way Notes and the document viewer already do.
+- **A file opened beside Files is live too.** Document panes in the app content
+  deck scan their bodies through the same seam Workspace uses, so a token inside
+  one activates and stacks a tab in the deck it was drawn in. Issue, note,
+  resource, and diff bodies stay unscanned, matching every other surface.
+- **Provider keys inside Markdown links open their card.**
+  `[ZMS-37161](https://<site>.atlassian.net/browse/ZMS-37161)` — how a ticket
+  normally appears in a brief — could never reach a provider: the key is only in
+  the label, and an issue-key matcher can never match a whole browse URL. With
+  the destination's host listed in that instance's `claimHosts`, the label now
+  opens the Resource card and keeps its browser hyperlink, so cmd-click still
+  reaches the ticket. Only frames Sidecar's own Markdown renderer drew are
+  eligible; a program writing to a terminal still means what its destination
+  says. `claimHosts` is now documented in the provider protocol reference.
+- **`./scripts/demo.sh` ships a sample document** exercising every content-link
+  kind that works without an external provider.
+
+### Bug Fixes
+
+- **Files preview geometry followed the source line count while reading rendered
+  rows.** Harmless while rendered Markdown opted out of scanning; the drawn rows
+  and the exported geometry now read one accessor, and a truncated file no
+  longer exports one row more than it draws.
+
 ## [v1.4.0] - 2026-08-22
 
 ### Features

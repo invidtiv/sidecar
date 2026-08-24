@@ -1,6 +1,14 @@
 # Plan: Content links in the Files rendered-Markdown preview and app-deck panes
 
-**Status:** active **Written:** 2026-08-24, at `614729aa` **Tracking:** `td-d2c999` **Issue:** [marcus/sidecar#306](https://github.com/marcus/sidecar/issues/306) **Related:** [sidecar-wide content links](../implemented/sidecar-wide-content-links.md) step 7 · [terminal resource providers](../implemented/terminal-resource-providers.md)
+**Status:** implemented — all three phases shipped in v1.5.0. **Written:** 2026-08-24, at `614729aa` **Tracking:** `td-d2c999` **Issue:** [marcus/sidecar#306](https://github.com/marcus/sidecar/issues/306) **Related:** [sidecar-wide content links](sidecar-wide-content-links.md) step 7 · [terminal resource providers](terminal-resource-providers.md)
+
+## Outcome
+
+Phases 1–3 landed as written. Three things are worth recording because the plan did not anticipate them:
+
+- **The Phase 2 gate is only half-satisfiable for a Jira-shaped provider.** "The bare URL Glamour prints beneath it does too" cannot hold for an issue-key matcher — it never matches a whole browse URL, so that row correctly stays a browser link. The destination branch is real and covered, but only reachable for `sidecar-github`-shaped matchers.
+- **Taking a link over must not remove the browser escape hatch.** A label claim discards the destination from `Value`, which silently killed the cmd-click that `Decorate`'s own contract promises for claimed URLs. The destination is retained on the span and the hyperlink re-synthesized from it.
+- **"Renderer-owned" is narrower than "the viewer is in rendered mode."** Below `MinWidthForMarkdown` — reachable at a Document leaf's own floor — `internal/markdown` returns the plain-wrap fallback over the source, and Notes' preview also serves its raw view. Both now gate on `markdown.RendersMarkdownAt`. Glamour does not strip escape sequences already in the source, so a document that writes its own OSC-8 still reaches the widened branch on a genuinely renderer-owned frame; that is bounded rather than overlooked, because the branch cannot yield anything bare automatic matching would not already yield for the same text.
 
 ## Goal
 
