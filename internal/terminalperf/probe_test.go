@@ -10,7 +10,7 @@ func TestProbeRecordsOnlyFixedNumericCounters(t *testing.T) {
 	restore := Install(counters)
 	t.Cleanup(restore)
 
-	for event := ModelFrameBuilt; event <= SynchronousResolverCall; event++ {
+	for event := ModelFrameBuilt; event <= GlobalWorkspacePreviewRendered; event++ {
 		Record(event)
 	}
 	snapshot := counters.Snapshot()

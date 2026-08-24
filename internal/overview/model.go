@@ -274,6 +274,14 @@ type Model struct {
 	workspacesViewCacheW    int
 	workspacesViewCacheH    int
 	workspacesViewCacheOK   bool
+	workspacesViewRegions   []mouse.Region
+
+	// The global list is stable across live terminal frames. Its cache owns
+	// only the framed left panel and the regions that panel drew; preview and
+	// shared pane composition remain live on every frame.
+	workspaceListCache         workspaceListRenderCache
+	workspaceListDataRevision  uint64
+	workspaceListThemeRevision uint64
 
 	// showIdleWorktrees is the global-list visibility flag. Off by default;
 	// the sort/filter fly-out is the only control that turns it on.
@@ -619,6 +627,12 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case appmsg.ThemeChangedMsg:
+		// listItem contains already-styled metadata, so a palette change must
+		// rebuild the projection rather than merely dropping the rendered string.
+		m.workspaceListThemeRevision++
+		m.syncWorkspaces()
+		return nil
 	case previewDocLinkResolvedMsg:
 		m.applyPreviewDocLinkResolved(msg)
 		return nil

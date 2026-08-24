@@ -18,6 +18,8 @@ const (
 	ContentLinkResolutionRequest
 	ContentLinkResolutionCacheHit
 	SynchronousResolverCall
+	GlobalWorkspaceListRendered
+	GlobalWorkspacePreviewRendered
 )
 
 // Counters is an injectable recorder. It is intentionally data-free apart from
@@ -32,6 +34,8 @@ type Counters struct {
 	contentLinkResolutionRequests  atomic.Uint64
 	contentLinkResolutionCacheHits atomic.Uint64
 	synchronousResolverCalls       atomic.Uint64
+	globalWorkspaceListRendered    atomic.Uint64
+	globalWorkspacePreviewRendered atomic.Uint64
 }
 
 // Snapshot is a point-in-time copy suitable for benchmark metrics or
@@ -46,6 +50,8 @@ type Snapshot struct {
 	ContentLinkResolutionRequests  uint64
 	ContentLinkResolutionCacheHits uint64
 	SynchronousResolverCalls       uint64
+	GlobalWorkspaceListRendered    uint64
+	GlobalWorkspacePreviewRendered uint64
 }
 
 var active atomic.Pointer[Counters]
@@ -92,6 +98,10 @@ func Add(event Event, count int) {
 		counters.contentLinkResolutionCacheHits.Add(n)
 	case SynchronousResolverCall:
 		counters.synchronousResolverCalls.Add(n)
+	case GlobalWorkspaceListRendered:
+		counters.globalWorkspaceListRendered.Add(n)
+	case GlobalWorkspacePreviewRendered:
+		counters.globalWorkspacePreviewRendered.Add(n)
 	}
 }
 
@@ -110,5 +120,7 @@ func (c *Counters) Snapshot() Snapshot {
 		ContentLinkResolutionRequests:  c.contentLinkResolutionRequests.Load(),
 		ContentLinkResolutionCacheHits: c.contentLinkResolutionCacheHits.Load(),
 		SynchronousResolverCalls:       c.synchronousResolverCalls.Load(),
+		GlobalWorkspaceListRendered:    c.globalWorkspaceListRendered.Load(),
+		GlobalWorkspacePreviewRendered: c.globalWorkspacePreviewRendered.Load(),
 	}
 }

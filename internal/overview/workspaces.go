@@ -16,6 +16,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tabs"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -44,6 +45,7 @@ import (
 // board uses. It is called from syncBoard so the two projections can never
 // disagree about what has been collected.
 func (m *Model) syncWorkspaces() {
+	m.workspaceListDataRevision++
 	items := make([]workspacelist.Item, 0, len(m.catalog))
 	m.catalog = make(map[string]workspaceinventory.Workspace)
 	var failures []string
@@ -217,6 +219,50 @@ type workspacesLayout struct {
 	split termpreview.Split
 }
 
+type workspaceListLayout uint8
+
+const (
+	workspaceListOnly workspaceListLayout = iota + 1
+	workspaceListSplit
+)
+
+// workspaceListCacheKey names only state capable of changing the visible left
+// panel. Terminal buffers, cursor/mode state, link generations, preview scroll,
+// and right-pane hover deliberately do not appear here.
+type workspaceListCacheKey struct {
+	dataRevision, themeRevision uint64
+	layout                      workspaceListLayout
+	x, y                        int
+	contentWidth, contentHeight int
+	panelWidth, panelHeight     int
+	focused                     bool
+	selectedID                  string
+	scroll                      int
+	sort                        workspacelist.Sort
+	filterQuery                 string
+	filterFocused               bool
+	pulseFrame                  int
+	scrollbarHover              bool
+	scrollbarDrag               bool
+	sidebarVisible              bool
+	overlayMask                 uint8
+}
+
+type workspaceListRenderCache struct {
+	valid   bool
+	key     workspaceListCacheKey
+	view    string
+	regions []mouse.Region
+	bar     workspaceScrollbarState
+}
+
+const (
+	workspaceOverlayRename uint8 = 1 << iota
+	workspaceOverlayCreate
+	workspaceOverlayDelete
+	workspaceOverlayView
+)
+
 func (m *Model) workspacesLayout() workspacesLayout {
 	drawable := m.width >= 1 && m.height-paneframe.BorderWidth >= 1
 	if !m.sidebarVisible || (m.previewNarrow() && m.preview.full) {
@@ -245,15 +291,17 @@ func (m *Model) workspacesLayout() workspacesLayout {
 // columns.
 func (m *Model) WorkspacesView(width, height int) string {
 	m.width, m.height = width, height
-	if m.reuseWorkspacesViewOnce && m.workspacesViewCacheOK &&
-		m.workspacesViewCacheW == width && m.workspacesViewCacheH == height {
-		m.reuseWorkspacesViewOnce = false
-		return m.workspacesViewCache
-	}
-	m.reuseWorkspacesViewOnce = false
 	if m.workspacesMouse == nil {
 		m.workspacesMouse = mouse.NewHandler()
 	}
+	if m.reuseWorkspacesViewOnce && m.workspacesViewCacheOK &&
+		m.workspacesViewCacheW == width && m.workspacesViewCacheH == height {
+		m.reuseWorkspacesViewOnce = false
+		m.workspacesMouse.Clear()
+		m.replayWorkspaceRegions(m.workspacesViewRegions)
+		return m.workspacesViewCache
+	}
+	m.reuseWorkspacesViewOnce = false
 	m.workspacesMouse.Clear()
 	m.clearPreviewDocLinkHits()
 	layout := m.workspacesLayout()
@@ -266,14 +314,12 @@ func (m *Model) WorkspacesView(width, height int) string {
 		m.registerPreviewTermScrollbarRegions()
 	} else if layout.listOnly {
 		m.addSidebarRegion(0, width, height)
-		view = styles.RenderPanel(m.renderWorkspaceList(globalContentInset, 1, width-globalPanelOverhead, height-2), width, height, true)
+		view = m.renderWorkspaceListPanel(workspaceListOnly, globalContentInset, 1, width-globalPanelOverhead, height-2, width, height, true)
 	} else {
 		split := layout.split
 		m.addSidebarRegion(0, split.SidebarWidth, height)
 		m.addPreviewRegion(split.PreviewX, split.PreviewWidth, height)
-		list := m.renderWorkspaceList(globalContentInset, 1, split.SidebarContentWidth, height-2)
-
-		leftPane := styles.RenderPanel(list, split.SidebarWidth, height, !m.PreviewFocused())
+		leftPane := m.renderWorkspaceListPanel(workspaceListSplit, globalContentInset, 1, split.SidebarContentWidth, height-2, split.SidebarWidth, height, !m.PreviewFocused())
 		rightPane := m.renderPreviewPeer(layout.peer)
 		m.registerPreviewTermScrollbarRegions()
 		divider := ui.RenderHandle(height, true, m.dividerHandleState(workspacesDividerRegion, 0))
@@ -298,6 +344,63 @@ func (m *Model) WorkspacesView(width, height int) string {
 	m.workspacesViewCacheW = width
 	m.workspacesViewCacheH = height
 	m.workspacesViewCacheOK = true
+	m.workspacesViewRegions = m.workspacesMouse.HitMap.Regions()
+	return view
+}
+
+func (m *Model) workspaceOverlayMask() uint8 {
+	var mask uint8
+	if m.renameOpen {
+		mask |= workspaceOverlayRename
+	}
+	if m.createOpen {
+		mask |= workspaceOverlayCreate
+	}
+	if m.deleteOpen {
+		mask |= workspaceOverlayDelete
+	}
+	if m.viewFlyoutOpen {
+		mask |= workspaceOverlayView
+	}
+	return mask
+}
+
+func (m *Model) workspaceListKey(layout workspaceListLayout, x, y, contentWidth, contentHeight, panelWidth, panelHeight int, focused bool) workspaceListCacheKey {
+	filter := m.workspaces.Filter()
+	return workspaceListCacheKey{
+		dataRevision: m.workspaceListDataRevision, themeRevision: m.workspaceListThemeRevision,
+		layout: layout, x: x, y: y, contentWidth: contentWidth, contentHeight: contentHeight,
+		panelWidth: panelWidth, panelHeight: panelHeight, focused: focused,
+		selectedID: m.workspaces.SelectedID(), scroll: m.workspaces.ScrollOffset(), sort: m.workspaces.Sort(),
+		filterQuery: filter.Query(), filterFocused: filter.Focused(), pulseFrame: m.pulseFrame,
+		scrollbarHover: m.wsBar.hover, scrollbarDrag: m.wsBar.gesture.Active(),
+		sidebarVisible: m.sidebarVisible, overlayMask: m.workspaceOverlayMask(),
+	}
+}
+
+func (m *Model) replayWorkspaceRegions(regions []mouse.Region) {
+	for _, region := range regions {
+		m.workspacesMouse.HitMap.Add(region.ID, region.Rect, region.Data)
+	}
+}
+
+func (m *Model) renderWorkspaceListPanel(layout workspaceListLayout, x, y, contentWidth, contentHeight, panelWidth, panelHeight int, focused bool) string {
+	key := m.workspaceListKey(layout, x, y, contentWidth, contentHeight, panelWidth, panelHeight, focused)
+	if cache := &m.workspaceListCache; cache.valid && cache.key == key {
+		m.wsBar = cache.bar
+		m.replayWorkspaceRegions(cache.regions)
+		return cache.view
+	}
+
+	before := len(m.workspacesMouse.HitMap.Regions())
+	list := m.renderWorkspaceList(x, y, contentWidth, contentHeight)
+	view := styles.RenderPanel(list, panelWidth, panelHeight, focused)
+	allRegions := m.workspacesMouse.HitMap.Regions()
+	regions := append([]mouse.Region(nil), allRegions[before:]...)
+	// Render may clamp the scroll window, so retain the post-render identity.
+	key = m.workspaceListKey(layout, x, y, contentWidth, contentHeight, panelWidth, panelHeight, focused)
+	m.workspaceListCache = workspaceListRenderCache{valid: true, key: key, view: view, regions: regions, bar: m.wsBar}
+	terminalperf.Record(terminalperf.GlobalWorkspaceListRendered)
 	return view
 }
 
@@ -848,6 +951,7 @@ func (m *Model) toggleWorkspacePin() tea.Cmd {
 		return nil
 	}
 	ids := m.workspaces.TogglePin(item.ID)
+	m.workspaceListDataRevision++
 	if !m.loading {
 		ids = m.knownPinnedIDs(ids)
 		m.workspaces.SetPinned(ids)
@@ -875,6 +979,7 @@ func (m *Model) knownPinnedIDs(ids []string) []string {
 // the sidebar also ends interactive mode if a pane was being typed into.
 func (m *Model) toggleWorkspaceSidebar() tea.Cmd {
 	m.sidebarVisible = !m.sidebarVisible
+	m.workspaceListDataRevision++
 	if m.sidebarVisible {
 		return m.focusList()
 	}

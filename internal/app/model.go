@@ -1882,7 +1882,7 @@ func (m *Model) applyThemeName(name string) tea.Cmd {
 }
 
 // notifyThemeChanged synchronously delivers msg.ThemeChangedMsg to all plugins
-// and the global tasks host so immediate frames and inactive tabs are up to date.
+// and app-owned global hosts so immediate frames and inactive tabs are up to date.
 // It is a no-op when the resolved styles snapshot has not changed.
 func (m *Model) notifyThemeChanged() tea.Cmd {
 	current := styles.GetCurrentTheme()
@@ -1904,6 +1904,11 @@ func (m *Model) notifyThemeChanged() tea.Cmd {
 	}
 	if cmd := m.globalTasks.update(themeMsg); cmd != nil {
 		cmds = append(cmds, cmd)
+	}
+	if m.overview != nil {
+		if cmd := m.overview.Update(themeMsg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return tea.Batch(cmds...)
 }

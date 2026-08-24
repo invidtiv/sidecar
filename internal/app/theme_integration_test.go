@@ -12,6 +12,7 @@ import (
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/theme"
 )
 
@@ -139,6 +140,22 @@ func TestThemeNotificationReachesInactivePlugins(t *testing.T) {
 	}
 	if p2.themeNotices != notices2+1 {
 		t.Errorf("inactive plugin received %d notices, want %d", p2.themeNotices, notices2+1)
+	}
+}
+
+func TestThemeNotificationReachesAppOwnedOverview(t *testing.T) {
+	t.Cleanup(func() { styles.ApplyTheme("sidecar-modern") })
+	styles.ApplyTheme("sidecar-modern")
+	m := newTestThemeModel()
+	_ = m.overview.WorkspacesView(200, 50)
+
+	counters := &terminalperf.Counters{}
+	restore := terminalperf.Install(counters)
+	defer restore()
+	_ = m.applyResolvedTheme(theme.ResolvedTheme{BaseName: "dracula"})
+	_ = m.overview.WorkspacesView(200, 50)
+	if got := counters.Snapshot().GlobalWorkspaceListRendered; got != 1 {
+		t.Fatalf("overview list renders after theme notification = %d, want 1", got)
 	}
 }
 

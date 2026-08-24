@@ -36,7 +36,7 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 			paneRoot: &panelayout.Node{ID: 1, Kind: panelayout.Terminal}, paneFocus: 1,
 			rowAnalyzer: &termpreview.RowAnalyzer{},
 		},
-		workspacesMouse: mouse.NewHandler(), sidebarVisible: false,
+		workspacesMouse: mouse.NewHandler(), sidebarVisible: true, sidebarWidth: defaultWorkspaceSidebarPercent,
 		previewOwnership: &previewOwnershipLease{},
 	}
 	m.workspaces.SetItems([]workspacelist.Item{listItem(workspace.Item(), workspace.ProjectName, 0, false)})
@@ -88,4 +88,6 @@ func reportTerminalMetrics(b *testing.B, snapshot terminalperf.Snapshot) {
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionRequests)/operations, "resolution_requests/op")
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionCacheHits)/operations, "resolution_cache_hits/op")
 	b.ReportMetric(float64(snapshot.SynchronousResolverCalls)/operations, "synchronous_resolver_calls/op")
+	b.ReportMetric(float64(snapshot.GlobalWorkspaceListRendered)/operations, "workspace_list_renders/op")
+	b.ReportMetric(float64(snapshot.GlobalWorkspacePreviewRendered)/operations, "workspace_preview_renders/op")
 }
