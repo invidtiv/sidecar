@@ -147,24 +147,11 @@ type previewState struct {
 	diffAdminTargets   map[string][]livewatch.Target
 	diffAdminResolving map[string]bool
 
-	linkMemo previewLinkMemo
+	linkState termpreview.LinkState
 
 	docLinkHits       []previewDocLinkHit
 	docLinkResolution *contentlink.ResolutionIndex
 	docLinkPending    map[contentlink.Pending]bool
-}
-
-type previewLinkMemo struct {
-	root     string
-	buffer   *tty.OutputBuffer
-	revision uint64
-	specs    map[string]previewSpecResolution
-	newSpecs int
-}
-
-type previewSpecResolution struct {
-	value string
-	ok    bool
 }
 
 type previewPaneCache struct {

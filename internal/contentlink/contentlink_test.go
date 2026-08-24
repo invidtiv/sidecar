@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -354,6 +355,82 @@ func TestResolutionIndexEvictsOldestAndRejectsMismatchedResults(t *testing.T) {
 	}
 	if index.Put(a, Ref{Kind: KindIssue, Value: "td-abcd"}, true) {
 		t.Fatal("mismatched resolution kind accepted")
+	}
+}
+
+func TestResolutionIndexIsRootAwareTrueLRUWithImmutableSnapshots(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	index := NewResolutionIndexWithClock(2, func() time.Time { return now })
+	a := Pending{Kind: KindFile, Raw: "a.go"}
+	b := Pending{Kind: KindFile, Raw: "b.go"}
+	c := Pending{Kind: KindDiff, Raw: "abc1234"}
+	index.PutForRoot("/one", a, Ref{Kind: KindFile, Value: "/one/a.go"}, true)
+	index.PutForRoot("/two", b, Ref{Kind: KindFile, Value: "/two/b.go"}, true)
+
+	before := index.SnapshotForRoot("/one") // Touch a; b is now least recently used.
+	index.PutForRoot("/two", c, Ref{Kind: KindDiff, Value: "abc1234"}, true)
+	if _, _, ready := index.SnapshotForRoot("/two").Lookup(b.Kind, b.Raw); ready {
+		t.Fatal("least-recently-used entry was not evicted")
+	}
+	if ref, found, ready := index.SnapshotForRoot("/one").Lookup(a.Kind, a.Raw); !ready || !found || ref.Value != "/one/a.go" {
+		t.Fatalf("recently touched root-aware entry = (%+v, %v, %v)", ref, found, ready)
+	}
+	index.PutForRoot("/one", a, Ref{Kind: KindFile, Value: "/one/new-a.go"}, true)
+	if ref, _, _ := before.Lookup(a.Kind, a.Raw); ref.Value != "/one/a.go" {
+		t.Fatalf("previous snapshot mutated after index update: %+v", ref)
+	}
+}
+
+func TestResolutionIndexTTLsDedupeAndRejectsStaleTokens(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	index := NewResolutionIndexWithClock(8, func() time.Time { return now })
+	missing := Pending{Kind: KindFile, Raw: "missing.go"}
+	index.PutForRoot("/one", missing, Ref{}, false)
+	now = now.Add(fileNegativeTTL - time.Nanosecond)
+	if _, found, ready := index.SnapshotForRoot("/one").Lookup(missing.Kind, missing.Raw); !ready || found {
+		t.Fatalf("negative before TTL = (found=%v ready=%v)", found, ready)
+	}
+	now = now.Add(time.Nanosecond)
+	if _, _, ready := index.SnapshotForRoot("/one").Lookup(missing.Kind, missing.Raw); ready {
+		t.Fatal("negative file result survived its 2s TTL")
+	}
+
+	request, ok := index.Begin("/one", missing)
+	if !ok {
+		t.Fatal("expired candidate was not requeued")
+	}
+	if _, ok := index.Begin("/one", missing); ok {
+		t.Fatal("in-flight candidate was queued twice")
+	}
+	stale := request
+	stale.Token++
+	if _, accepted := index.Apply(ResolutionResult{Request: stale, Ref: Ref{}, Found: false}); accepted {
+		t.Fatal("mismatched token was accepted")
+	}
+	if changed, accepted := index.Apply(ResolutionResult{Request: request, Ref: Ref{Kind: KindFile, Value: "/one/missing.go"}, Found: true}); !changed || !accepted {
+		t.Fatalf("current token apply = (changed=%v accepted=%v)", changed, accepted)
+	}
+
+	positive := index.SnapshotForRoot("/one")
+	now = now.Add(resolvedTTL - time.Nanosecond)
+	if _, found, ready := index.SnapshotForRoot("/one").Lookup(missing.Kind, missing.Raw); !ready || !found {
+		t.Fatalf("positive before TTL = (found=%v ready=%v)", found, ready)
+	}
+	now = now.Add(time.Nanosecond)
+	if _, _, ready := index.SnapshotForRoot("/one").Lookup(missing.Kind, missing.Raw); ready {
+		t.Fatal("positive result survived its 30s TTL")
+	}
+	if _, found, ready := positive.Lookup(missing.Kind, missing.Raw); !ready || !found {
+		t.Fatal("expiration mutated an already published snapshot")
+	}
+
+	other, ok := index.Begin("/two", missing)
+	if !ok {
+		t.Fatal("same candidate in a different root was incorrectly deduplicated")
+	}
+	index.Reset()
+	if _, accepted := index.Apply(ResolutionResult{Request: other, Ref: Ref{}, Found: false}); accepted {
+		t.Fatal("pre-reset result was accepted")
 	}
 }
 

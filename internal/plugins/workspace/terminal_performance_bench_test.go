@@ -34,15 +34,19 @@ func projectTerminalFixture(b testing.TB) (*Plugin, terminalfixture.OpenCode, *t
 	return p, fixture, buffer
 }
 
-func TestProjectTerminalFixtureExposesSynchronousResolutionBaseline(t *testing.T) {
+func TestProjectTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	p, _, _ := projectTerminalFixture(t)
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	t.Cleanup(restore)
 	_ = p.View(200, 50)
+	_ = p.View(200, 50)
 	snapshot := counters.Snapshot()
-	if snapshot.TerminalViewsRendered == 0 || snapshot.ContentLinkResolutionRequests == 0 || snapshot.SynchronousResolverCalls == 0 {
-		t.Fatalf("project baseline counters = %+v, want a rendered view with synchronous resolution", snapshot)
+	if snapshot.TerminalViewsRendered == 0 {
+		t.Fatalf("project counters = %+v, want rendered terminal views", snapshot)
+	}
+	if snapshot.ContentLinkResolutionRequests != 0 || snapshot.SynchronousResolverCalls != 0 {
+		t.Fatalf("project repeated View counters = %+v, want zero resolution work", snapshot)
 	}
 }
 

@@ -34,6 +34,25 @@ func ResolveFile(base, raw string) (display, absolute string, ok bool) {
 		}
 	}
 
+	return resolveFileFromCanonicalBase(baseResolved, raw, expanded)
+}
+
+// ResolveFileFromCanonicalBase maps raw using a base that the caller already
+// canonicalized. It avoids re-running EvalSymlinks on the root for every
+// candidate in an async terminal-link batch.
+func ResolveFileFromCanonicalBase(baseResolved, raw string) (display, absolute string, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
+	if raw == "" || containsControl(raw) {
+		return "", "", false
+	}
+	baseResolved = filepath.Clean(baseResolved)
+	if strings.TrimSpace(baseResolved) == "" || baseResolved == "." {
+		baseResolved = ""
+	}
+	return resolveFileFromCanonicalBase(baseResolved, raw, expandHome(raw))
+}
+
+func resolveFileFromCanonicalBase(baseResolved, raw, expanded string) (display, absolute string, ok bool) {
 	if baseResolved != "" && !isHomeToken(raw) {
 		if display, absolute, ok = acceptRegularFile(filepath.Join(baseResolved, expanded), baseResolved); ok {
 			return display, absolute, true

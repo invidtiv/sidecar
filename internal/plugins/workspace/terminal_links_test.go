@@ -12,10 +12,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -30,7 +33,8 @@ func TestIssueSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
 	if links := detectTerminalLinks(line); len(links) != 0 {
 		t.Fatalf("an unbound host must ignore issue spans: %#v", links)
 	}
-	if got := decorateTerminalLinks(line, nil); strings.Contains(got, "\x1b[4m") {
+	plainKinds := contentlink.NewKindSet(contentlink.KindURL, contentlink.KindFile, contentlink.KindInternal, contentlink.KindSession)
+	if got := preparedStandaloneLineForTest(line, plainKinds, nil).Decorate(line, 0); strings.Contains(got, "\x1b[4m") {
 		t.Fatalf("issue id was decorated: %q", got)
 	}
 
@@ -61,15 +65,11 @@ func TestIssueSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 	buffer := p.shells[0].Agent.OutputBuf
 	buffer.Update(line)
 
-	resolver := p.terminalLinkResolver(false, buffer)
-	if resolver == nil {
-		t.Fatal("a bound surface produced no link resolver")
-	}
-	links := resolver.links(line)
+	state, links := preparedTerminalLineForTest(t, p, false, buffer, line)
 	if len(links) != 1 || links[0].Kind != terminallink.KindIssue || links[0].Value != "td-1a2b3c" {
 		t.Fatalf("resolved links = %#v, want one issue link", links)
 	}
-	decorated := decorateTerminalLinks(line, resolver)
+	decorated := state.Decorate(line, 0)
 	if ansi.Strip(decorated) != line || !strings.Contains(decorated, "\x1b[4m") {
 		t.Fatalf("issue decoration = %q", decorated)
 	}
@@ -117,8 +117,9 @@ func TestSafeHTTPURLRejectsNonHTTPAndControls(t *testing.T) {
 	}
 }
 
-func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
-	got := decorateTerminalLinks("visit https://example.com/x", nil)
+func TestPreparedTerminalLinksSynthesizeOnlyValidatedOSC8(t *testing.T) {
+	line := "visit https://example.com/x"
+	got := preparedStandaloneLineForTest(line, nil, nil).Decorate(line, 0)
 	if !strings.Contains(got, "\x1b]8;;https://example.com/x\x1b\\") {
 		t.Fatalf("validated URL did not receive OSC-8: %q", got)
 	}
@@ -127,7 +128,7 @@ func TestDecorateTerminalLinksSynthesizesOnlyValidatedOSC8(t *testing.T) {
 	}
 
 	source := "\x1b]8;;javascript:alert(1)\x1b\\label\x1b]8;;\x1b\\"
-	cleaned := decorateTerminalLinks(source, nil)
+	cleaned := preparedStandaloneLineForTest(source, nil, nil).Decorate(source, 0)
 	if strings.Contains(cleaned, "javascript:") || strings.Contains(cleaned, "\x1b]8;;") {
 		t.Fatalf("source-supplied OSC-8 survived sanitization: %q", cleaned)
 	}
@@ -213,8 +214,8 @@ func TestStripSourceOSC8PreservesUTF8ContainingC1ContinuationBytes(t *testing.T)
 	}
 
 	source := "\x1b]8;;https://hidden.example/\u00dc/https://evil.example\x07label\x1b]8;;\x07"
-	cleaned := decorateTerminalLinks(source, nil)
-	if ansi.Strip(cleaned) != "label" {
+	cleaned := stripSourceOSC8(source)
+	if cleaned != "label" {
 		t.Fatalf("UTF-8 URI payload leaked into label: %q", cleaned)
 	}
 	if strings.Contains(cleaned, "evil.example") || strings.Contains(cleaned, "\x1b]8;;") {
@@ -394,8 +395,8 @@ func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			links := p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, tc.line)
-			decorated := decorateTerminalLinks(tc.line, p.terminalLinkResolver(false, buffer))
+			state, links := preparedTerminalLineForTest(t, p, false, buffer, tc.line)
+			decorated := state.Decorate(tc.line, 0)
 			if ansi.Strip(decorated) != tc.line {
 				t.Fatalf("decoration changed terminal text: %q", decorated)
 			}
@@ -426,73 +427,7 @@ func TestBareMarkdownLinksResolveConservativelyAndPreserveCoordinates(t *testing
 	}
 }
 
-func TestBareMarkdownResolutionMemoizesHitsAndMissesPerAcceptedCaptureAndSurface(t *testing.T) {
-	root := t.TempDir()
-	otherRoot := t.TempDir()
-	for _, dir := range []string{root, otherRoot} {
-		if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# readme"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	buffer := tty.NewOutputBuffer(20)
-	buffer.Update("README.md missing.md README.md")
-	p := New()
-	p.ctx = &plugin.Context{WorkDir: root}
-	p.shellSelected = true
-	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{TmuxSession: "session-one", TmuxPane: "%1", OutputBuf: buffer}}}
-	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	calls := 0
-	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
-		calls++
-		return resolveTerminalPathFromResolvedBase(base, raw)
-	}
-
-	line := "README.md missing.md README.md"
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line) // unrelated render
-	if calls != 2 {
-		t.Fatalf("resolver calls = %d, want one per unique hit/miss", calls)
-	}
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(true), buffer, line)
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 4 {
-		t.Fatalf("independent panel memo calls = %d, want 4 without evicting primary", calls)
-	}
-	buffer.Update(line + " changed")
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 6 {
-		t.Fatalf("resolver calls after accepted capture = %d, want 6", calls)
-	}
-	buffer.Update(line + " changed") // rejected duplicate publication
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 6 {
-		t.Fatalf("duplicate capture invalidated memo: calls=%d", calls)
-	}
-	p.shells[0].Agent.TmuxPane = "%2"
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 8 {
-		t.Fatalf("terminal target change calls = %d, want 8", calls)
-	}
-	p.shells[0] = &ShellSession{TmuxName: "two", Agent: &Agent{TmuxSession: "session-two", TmuxPane: "%1", OutputBuf: buffer}}
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 10 {
-		t.Fatalf("surface identity change calls = %d, want 10", calls)
-	}
-	p.ctx.WorkDir = otherRoot
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 12 {
-		t.Fatalf("surface root change calls = %d, want 12", calls)
-	}
-	p.shellSelected = false
-	p.worktrees = []*Worktree{{Name: "workspace", Path: root, Agent: &Agent{OutputBuf: buffer}}}
-	p.selectedIdx = 0
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != 14 {
-		t.Fatalf("shell to workspace surface change calls = %d, want 14", calls)
-	}
-}
-
-func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.T) {
+func TestBareMarkdownPreparedDecorationAndActivationSchedulingDoNoFilesystemWork(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# readme"), 0o644); err != nil {
 		t.Fatal(err)
@@ -506,38 +441,23 @@ func TestBareMarkdownCachedDecorationAndActivationDoNoFilesystemWork(t *testing.
 		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
 	}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	rootCalls, pathCalls := 0, 0
-	p.terminalRootResolver = func(raw string) (string, error) {
-		rootCalls++
-		return filepath.EvalSymlinks(raw)
-	}
-	p.terminalPathResolver = func(base, raw string) (string, string, bool) {
-		pathCalls++
-		return resolveTerminalPathFromResolvedBase(base, raw)
-	}
-
-	resolver := p.terminalLinkResolver(false, buffer)
-	_ = decorateTerminalLinks("README.md missing.md", resolver)
-	if rootCalls != 1 || pathCalls != 2 {
-		t.Fatalf("setup calls root=%d path=%d, want 1 and 2", rootCalls, pathCalls)
-	}
+	p.width, p.height = 100, 24
+	prepareTerminalLinksForTest(t, p)
+	counters := &terminalperf.Counters{}
+	restore := terminalperf.Install(counters)
+	t.Cleanup(restore)
 	for range 5 {
-		// Decoration and activation both obtain an immutable surface context;
-		// neither may canonicalize or stat again after the accepted capture's
-		// hit and miss have populated the memo.
-		_ = decorateTerminalLinks("README.md missing.md", p.terminalLinkResolver(false, buffer))
-		context := p.terminalLinkSurfaceContext(false)
-		_ = p.resolvedTerminalLinks(context, buffer, "README.md missing.md")
+		_ = p.View(100, 24)
 	}
-	// Exercise the real pointer activation lookup as well. The narrow synthetic
-	// viewport may refuse to open a pane, but resolving the link under the click
-	// must still be entirely memo-backed.
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{Active: true}
 	p.selection.Clear()
-	_, _ = p.activateTerminalLink(actionAt(2, 4))
-	if rootCalls != 2 || pathCalls != 2 {
-		t.Fatalf("cached render performed I/O or click did more than root revalidation: root=%d path=%d", rootCalls, pathCalls)
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); !ok || cmd == nil {
+		t.Fatal("prepared file link did not schedule activation revalidation")
+	}
+	snapshot := counters.Snapshot()
+	if snapshot.SynchronousResolverCalls != 0 || snapshot.ContentLinkResolutionRequests != 0 {
+		t.Fatalf("repeated View/hit scheduling performed resolution work: %+v", snapshot)
 	}
 }
 
@@ -555,9 +475,9 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.previewScroll = 7
-	resolver := p.terminalLinkResolver(false, buffer)
-	if links := resolver.links("README.md"); len(links) != 1 || links[0].Raw != "README.md" {
-		t.Fatalf("initial resolved links = %#v", links)
+	prepareTerminalLinksForTest(t, p)
+	if span, ok := p.primaryLinkState.SpanAt("README.md", 0, 0); !ok || span.Extra.Raw != "README.md" {
+		t.Fatalf("initial prepared span = (%+v, %v)", span, ok)
 	}
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
@@ -565,8 +485,10 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); ok || cmd != nil {
-		t.Fatal("click activated cached link after path became a directory")
+	if cmd, ok := p.activateTerminalLink(actionAt(2, 4)); !ok || cmd == nil {
+		t.Fatal("prepared link did not schedule activation revalidation")
+	} else {
+		deliverLoads(t, p, cmd)
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("directory click created a document pane")
@@ -599,14 +521,13 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.previewScroll = 7
-	resolver := p.terminalLinkResolver(false, buffer)
-	links := resolver.links("README.md")
+	prepareTerminalLinksForTest(t, p)
 	rootAResolved, err := filepath.EvalSymlinks(rootA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(links) != 1 || links[0].Root != rootAResolved {
-		t.Fatalf("initial link root = %#v, want %q", links, rootAResolved)
+	if scope := p.primaryLinkState.Scope(); scope.Root != rootAResolved {
+		t.Fatalf("initial link root = %q, want %q", scope.Root, rootAResolved)
 	}
 	if err := os.Remove(current); err != nil {
 		t.Fatal(err)
@@ -614,15 +535,14 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	if err := os.Symlink(rootB, current); err != nil {
 		t.Fatal(err)
 	}
-	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd != nil {
-		t.Fatal("click activated link cached under previous selected root")
+	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd == nil {
+		t.Fatal("prepared link did not start activation revalidation")
+	} else {
+		deliverLoads(t, p, cmd)
 	}
 	if p.previewScroll != 7 || p.previewFreeze.Active() {
 		t.Fatalf("refused click mutated viewport: scroll=%d pinned=%v",
 			p.previewScroll, p.previewFreeze.Active())
-	}
-	if _, found := p.terminalLinkMemo.surfaces["shell:one"]; found {
-		t.Fatal("root mismatch did not invalidate stale surface memo")
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("retargeted-root click created a document pane")
@@ -667,9 +587,9 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 	p.paneNextID = 2
 	p.docs = make(map[int]*docPane)
 	p.interactiveState.MouseReportingEnabled = true
+	prepareTerminalLinksForTest(t, p)
 
-	resolver := p.terminalLinkResolver(false, buffer)
-	links := resolver.links(line)
+	state, links := preparedTerminalLineForTest(t, p, false, buffer, line)
 	if len(links) != 1 || links[0].Value != rel || links[0].Raw != rel {
 		t.Fatalf("Claude Update links = %#v", links)
 	}
@@ -678,7 +598,7 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 		t.Fatalf("link columns = %d..%d, want %d..%d", links[0].StartCol, links[0].EndCol,
 			wantStart, wantStart+ansi.StringWidth(rel)-1)
 	}
-	decorated := decorateTerminalLinks(line, resolver)
+	decorated := state.Decorate(line, 0)
 	if ansi.Strip(decorated) != "⏺ Update("+rel+")" || !strings.Contains(decorated, "\x1b[4m") {
 		t.Fatalf("styled decoration = %q", decorated)
 	}
@@ -688,6 +608,7 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("click on styled Claude Update path did not activate")
 	}
+	deliverLoads(t, p, cmd)
 	doc, _ := p.activeDocPane()
 	if doc == nil || doc.view().Title() != rel {
 		t.Fatalf("click opened doc = %#v", doc)
@@ -717,14 +638,6 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 	}
 	if got := ansi.Strip(p.renderCapturedTerminal(nil, nil, "", buffer, 120, 8, false, "empty")); !strings.Contains(got, "Update("+rel+")") {
 		t.Fatalf("closing document lost frozen terminal context: %q", got)
-	}
-	batch, ok := cmd().(tea.BatchMsg)
-	if !ok || len(batch) == 0 {
-		t.Fatalf("document open command = %T, want batch", cmd())
-	}
-	loaded, ok := batch[0]().(docview.LoadedMsg)
-	if !ok || loaded.Path != rel || loaded.Result.Error != nil {
-		t.Fatalf("document load = %#v", loaded)
 	}
 }
 
@@ -765,9 +678,12 @@ func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *te
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
+	prepareTerminalLinksForTest(t, p)
 
 	if cmd := p.handleMouseClick(actionAt(2, 4)); cmd == nil {
 		t.Fatal("interactive path:line did not activate")
+	} else {
+		deliverLoads(t, p, cmd)
 	}
 	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "README.md" {
 		t.Fatalf("interactive path:line opened doc = %#v", doc)
@@ -798,6 +714,7 @@ func TestInteractiveURLBesideExistingDocKeepsTerminalOwnership(t *testing.T) {
 	}
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{Active: true, MouseReportingEnabled: true, PaneOnEntry: PanePreview}
+	prepareTerminalLinksForTest(t, p)
 
 	surface := p.terminalSurfaceGeometry(false)
 	if !surface.OK {
@@ -877,6 +794,7 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	p.termPanelOutput = panel
 	p.interactiveState.TermPanel = true
 	p.selectionTermPanel = true
+	prepareTerminalLinksForTest(t, p)
 
 	surface := p.terminalSurfaceGeometry(true)
 	if !surface.OK {
@@ -888,8 +806,13 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 			X: surface.X, Y: surface.HeaderY, W: surface.Width, H: surface.Height + terminalHeaderRows,
 		}},
 	}
-	if cmd := p.handleMouseClick(action); cmd == nil || !p.termPanelFreeze.Active() {
-		t.Fatalf("panel doc activation = cmd %v frozen %v", cmd != nil, p.termPanelFreeze.Active())
+	if cmd := p.handleMouseClick(action); cmd == nil {
+		t.Fatal("panel document link did not start revalidation")
+	} else {
+		deliverLoads(t, p, cmd)
+	}
+	if !p.termPanelFreeze.Active() {
+		t.Fatal("panel document activation did not freeze the viewport")
 	}
 
 	postResize := append(append([]string{}, rows...), "Claude chrome", "", "❯", "")
@@ -988,9 +911,12 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	// window is counted back from where the live edge draws it: the same drawn
 	// window this fixture always meant, named in the corrected offset (td-bbbbfe).
 	p.previewScroll = 2
+	prepareTerminalLinksForTest(t, p)
 
 	if cmd := p.handleMouseClick(actionAt(12, 5)); cmd == nil {
 		t.Fatal("scrolled Claude link did not activate")
+	} else {
+		deliverLoads(t, p, cmd)
 	}
 	projected := p.projectedTerminalBuffer(false)
 	if projected == nil || projected.LineCount() > p.height {
@@ -1111,7 +1037,8 @@ func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	if links := p.terminalLinkResolver(false, buffer).links("README.md"); len(links) != 1 {
+	_, links := preparedTerminalLineForTest(t, p, false, buffer, "README.md")
+	if len(links) != 1 {
 		t.Fatalf("fixture links = %#v", links)
 	}
 	if err := os.Remove(path); err != nil {
@@ -1128,35 +1055,15 @@ func TestRefusedInteractiveMarkdownClickDoesNotCaptureProjection(t *testing.T) {
 	}
 }
 
-func BenchmarkDecorateTerminalBareMarkdownLinks(b *testing.B) {
-	root := b.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
-		b.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "docs", "plan.md"), []byte("# Plan"), 0o644); err != nil {
-		b.Fatal(err)
-	}
-	buffer := tty.NewOutputBuffer(20)
-	buffer.Update("| result | `docs/plan.md`, | missing.md |")
-	p := New()
-	p.ctx = &plugin.Context{WorkDir: root}
-	p.shellSelected = true
-	p.shells = []*ShellSession{{TmuxName: "bench", Agent: &Agent{OutputBuf: buffer}}}
-	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	resolver := p.terminalLinkResolver(false, buffer)
-	b.ResetTimer()
-	for range b.N {
-		_ = decorateTerminalLinks("| result | `docs/plan.md`, | missing.md |", resolver)
-	}
-}
-
 func TestActivateTerminalLinkMapsClickThroughViewportCoordinates(t *testing.T) {
 	p := newSelectionTestPlugin()
 	buffer := tty.NewOutputBuffer(20)
 	buffer.Write("go https://example.com/docs now")
 	p.shellSelected = true
-	p.shells = []*ShellSession{{Agent: &Agent{OutputBuf: buffer}}}
+	p.ctx = &plugin.Context{WorkDir: t.TempDir()}
+	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.selectedShellIdx = 0
+	prepareTerminalLinksForTest(t, p)
 
 	action := actionAt(8, 4)
 	cmd, ok := p.activateTerminalLink(action)
@@ -1178,7 +1085,7 @@ func TestBareGoPathAndLineOpenRawDocPane(t *testing.T) {
 	buffer.Update("see main.go then main.go:37")
 	p := docPaneTestPlugin(t, root, true)
 	p.shells[0].Agent.OutputBuf = buffer
-	links := p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, "see main.go then main.go:37")
+	_, links := preparedTerminalLineForTest(t, p, false, buffer, "see main.go then main.go:37")
 	if len(links) != 2 {
 		t.Fatalf("links = %#v", links)
 	}
@@ -1259,6 +1166,12 @@ func TestOpenTerminalPathPreviewsOtherWorktreeFileInPlace(t *testing.T) {
 func TestLinkDecorationPreservesSearchAndSelectionRendering(t *testing.T) {
 	buffer := tty.NewOutputBuffer(10)
 	buffer.Write("go https://example.com")
+	coordinator := termpreview.NewLinkCoordinator(nil)
+	linkState := coordinator.Prepare(termpreview.LinkPrepare{
+		Scope:   termpreview.LinkScope{Host: "test", Surface: "primary", Target: "pane", Root: "/repo", Buffer: buffer, AllowedKinds: "*"},
+		Rows:    []termpreview.LinkRow{{AbsoluteLine: 0, Text: "go https://example.com"}},
+		Allowed: contentlink.NewKindSet(contentlink.KindURL),
+	})
 	selection := &ui.SelectionState{}
 	selection.Clear()
 	selection.SelectRange(
@@ -1276,6 +1189,7 @@ func TestLinkDecorationPreservesSearchAndSelectionRendering(t *testing.T) {
 			StartCol: 11,
 			EndCol:   17,
 		}}},
+		LinkState: linkState,
 	}, ui.NewTruncateCache(16))
 	if got := terminalTextLines(result)[0]; got != "go https://example.com" {
 		t.Fatalf("combined rendering corrupted text: %q", got)
@@ -1294,9 +1208,11 @@ func TestALinkClaimedPressDropsThePreviousGesturesClick(t *testing.T) {
 	buffer.Update("https://example.com/docs and ordinary text")
 	p := newSelectionTestPlugin()
 	p.width, p.height = 100, 24
+	p.ctx = &plugin.Context{WorkDir: t.TempDir()}
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "claude", Agent: &Agent{OutputBuf: buffer}}}
 	attachLiveTerminal(p, true)
+	prepareTerminalLinksForTest(t, p)
 
 	// An ordinary press over a mouse-reporting pane arms the application's click.
 	_ = p.handleMouseClick(actionAt(30, 4))
@@ -1319,7 +1235,8 @@ func TestGitSpecSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
 	if links := detectTerminalLinks(line); len(links) != 0 {
 		t.Fatalf("an unbound host must ignore git specs: %#v", links)
 	}
-	if got := decorateTerminalLinks(line, nil); strings.Contains(got, "\x1b[4m") {
+	plainKinds := contentlink.NewKindSet(contentlink.KindURL, contentlink.KindFile, contentlink.KindInternal, contentlink.KindSession)
+	if got := preparedStandaloneLineForTest(line, plainKinds, nil).Decorate(line, 0); strings.Contains(got, "\x1b[4m") {
 		t.Fatalf("git spec was decorated: %q", got)
 	}
 
@@ -1328,7 +1245,6 @@ func TestGitSpecSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
 	p := newSelectionTestPlugin()
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
-	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, true }
 	if cmd, ok := p.activateTerminalLink(actionAt(8, 4)); ok || cmd != nil {
 		t.Fatal("clicking a git spec activated a host path with no tree")
 	}
@@ -1340,20 +1256,16 @@ func TestGitSpecSpanIsPlainTextWithoutAPaneToOpenItIn(t *testing.T) {
 func TestGitSpecSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
-	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
+	installTestTerminalLinks(t, p, func(_, raw string) (string, bool) { return raw, raw == "abc1234" })
 	line := "landed abc1234 on main"
 	buffer := p.shells[0].Agent.OutputBuf
 	buffer.Update(line)
 
-	resolver := p.terminalLinkResolver(false, buffer)
-	if resolver == nil {
-		t.Fatal("a bound surface produced no link resolver")
-	}
-	links := resolver.links(line)
+	state, links := preparedTerminalLineForTest(t, p, false, buffer, line)
 	if len(links) != 1 || links[0].Kind != terminallink.KindDiff || links[0].Value != "abc1234" {
 		t.Fatalf("resolved links = %#v, want one diff link", links)
 	}
-	decorated := decorateTerminalLinks(line, resolver)
+	decorated := state.Decorate(line, 0)
 	if ansi.Strip(decorated) != line || !strings.Contains(decorated, "\x1b[4m") {
 		t.Fatalf("git spec decoration = %q", decorated)
 	}
@@ -1365,14 +1277,6 @@ func TestGitSpecSpanIsDecoratedWhereItIsClickable(t *testing.T) {
 func TestGitSpecClickOpensDiffLeafForParseSpec(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
-	p.terminalSpecResolver = func(_, raw string) (string, bool) {
-		switch raw {
-		case "abc1234", "abc1234..def5678", "aaa1111...bbb2222":
-			return raw, true
-		default:
-			return "", false
-		}
-	}
 
 	cases := []struct {
 		token    string
@@ -1412,7 +1316,6 @@ func TestGitSpecClickOpensDiffLeafForParseSpec(t *testing.T) {
 func TestGitSpecClickEqualsOpenDiffPaneForSurface(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
-	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, raw == "abc1234" }
 	p.shells[0].Agent.OutputBuf.Update("landed abc1234\n")
 	if _, ok := p.activateDiffLink("abc1234"); !ok {
 		t.Fatal("click path failed")
@@ -1445,53 +1348,18 @@ func TestGitSpecClickEqualsOpenDiffPaneForSurface(t *testing.T) {
 	}
 }
 
-func TestGitSpecMemoCapsNewRevParsesPerBufferRevision(t *testing.T) {
-	root := t.TempDir()
-	p := docPaneTestPlugin(t, root, true)
-	calls := 0
-	p.terminalSpecResolver = func(_, raw string) (string, bool) {
-		calls++
-		return raw, true
-	}
-	buffer := p.shells[0].Agent.OutputBuf
-	var tokens []string
-	for i := 0; i < 20; i++ {
-		tokens = append(tokens, fmt.Sprintf("aaaaaa%02x", i))
-	}
-	line := strings.Join(tokens, " ")
-	buffer.Update(line)
-	ctx := p.terminalLinkSurfaceContext(false)
-	links := p.resolvedTerminalLinks(ctx, buffer, line)
-	if calls != terminallink.MaxNewDiffResolves {
-		t.Fatalf("resolver calls = %d, want cap %d", calls, terminallink.MaxNewDiffResolves)
-	}
-	if len(links) != terminallink.MaxNewDiffResolves {
-		t.Fatalf("links = %d, want %d (further tokens stay plain)", len(links), terminallink.MaxNewDiffResolves)
-	}
-	p.resolvedTerminalLinks(ctx, buffer, line)
-	if calls != terminallink.MaxNewDiffResolves {
-		t.Fatalf("memo reused: calls = %d", calls)
-	}
-	buffer.Update(line + " changed")
-	p.resolvedTerminalLinks(p.terminalLinkSurfaceContext(false), buffer, line)
-	if calls != terminallink.MaxNewDiffResolves*2 {
-		t.Fatalf("new revision calls = %d, want %d", calls, terminallink.MaxNewDiffResolves*2)
-	}
-}
-
 func TestGitSpecFilenameAndMixedCaseAreNotLinks(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
-	p.terminalSpecResolver = func(_, raw string) (string, bool) { return raw, true }
+	installTestTerminalLinks(t, p, func(_, raw string) (string, bool) { return raw, true })
 	buffer := p.shells[0].Agent.OutputBuf
 	buffer.Update("accepted")
-	ctx := p.terminalLinkSurfaceContext(false)
 	for _, line := range []string{"Abc1234", "abc1234.go", "foo/abc1234"} {
-		if links := p.resolvedTerminalLinks(ctx, buffer, line); len(links) != 0 {
+		if _, links := preparedTerminalLineForTest(t, p, false, buffer, line); len(links) != 0 {
 			t.Fatalf("%q produced %#v", line, links)
 		}
 	}
-	links := p.resolvedTerminalLinks(ctx, buffer, "abc1234..def5678")
+	_, links := preparedTerminalLineForTest(t, p, false, buffer, "abc1234..def5678")
 	if len(links) != 1 || links[0].Kind != terminallink.KindDiff || links[0].Value != "abc1234..def5678" {
 		t.Fatalf("range links = %#v", links)
 	}

@@ -329,11 +329,8 @@ type terminalDocProjection struct {
 // Both surfaces record the window as the absolute row it starts at; the panel
 // translates that back to a distance from the live bottom when it thaws.
 func (p *Plugin) captureTerminalViewportForDocOpen(termPanel bool) terminalViewportFreeze {
-	previousSource := p.selectionTermPanel
-	p.selectionTermPanel = termPanel
-	layout := p.terminalSelectionViewportLayout()
-	buffer := p.interactiveOutputBuffer()
-	p.selectionTermPanel = previousSource
+	layout := p.terminalViewportLayoutFor(termPanel)
+	buffer := p.terminalOutputBuffer(termPanel)
 	freeze := terminalViewportFreeze{termPanel: termPanel, start: layout.Start}
 	if buffer == nil || layout.End <= layout.Start {
 		return freeze

@@ -90,7 +90,8 @@ func clickResourceKey(t *testing.T, p *Plugin, line string) tea.Cmd {
 	if !context.ok {
 		t.Fatal("the selected terminal surface has no link context")
 	}
-	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
+	_, links := preparedTerminalLineForTest(t, p, false, p.terminalOutputBuffer(false), line)
+	for _, link := range links {
 		if link.Kind != terminallink.KindResource {
 			continue
 		}
@@ -214,12 +215,13 @@ func TestAnUnreadyProviderLeavesTheKeyAsPlainText(t *testing.T) {
 	if !context.ok {
 		t.Fatal("the selected terminal surface has no link context")
 	}
-	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
+	state, links := preparedTerminalLineForTest(t, p, false, p.terminalOutputBuffer(false), line)
+	for _, link := range links {
 		if link.Kind == terminallink.KindResource {
 			t.Fatalf("an unready provider still produced %#v", link)
 		}
 	}
-	if got := decorateTerminalLinks(line, p.terminalLinkResolver(false, p.terminalOutputBuffer(false))); got != line {
+	if got := state.Decorate(line, 0); got != line {
 		t.Fatalf("decorated = %q, want the line unchanged", got)
 	}
 }
@@ -411,7 +413,8 @@ func TestAReadyProviderUnderlinesTheKey(t *testing.T) {
 	}
 
 	found := false
-	for _, link := range p.resolvedTerminalLinks(context, p.terminalOutputBuffer(false), line) {
+	state, links := preparedTerminalLineForTest(t, p, false, p.terminalOutputBuffer(false), line)
+	for _, link := range links {
 		if link.Kind == terminallink.KindResource {
 			found = true
 		}
@@ -420,7 +423,7 @@ func TestAReadyProviderUnderlinesTheKey(t *testing.T) {
 		t.Error("a ready provider produced no resource link")
 	}
 
-	got := decorateTerminalLinks(line, p.terminalLinkResolver(false, p.terminalOutputBuffer(false)))
+	got := state.Decorate(line, 0)
 	if got == line {
 		t.Fatalf("decorated line is unchanged, so the key was never underlined: %q", got)
 	}

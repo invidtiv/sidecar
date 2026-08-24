@@ -51,6 +51,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case terminalLinkRevalidatedMsg:
+		return p, p.applyTerminalLinkRevalidated(msg)
 	case inlineedit.StartedMsg:
 		return p, p.applyDocEditStarted(msg)
 	case inlineedit.ExitedMsg:

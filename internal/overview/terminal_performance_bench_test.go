@@ -42,15 +42,19 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 	return m, fixture, buffer
 }
 
-func TestGlobalTerminalFixtureExposesSynchronousResolutionBaseline(t *testing.T) {
+func TestGlobalTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	m, _, _ := globalTerminalFixture(t)
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	t.Cleanup(restore)
 	_ = m.WorkspacesView(200, 50)
+	_ = m.WorkspacesView(200, 50)
 	snapshot := counters.Snapshot()
-	if snapshot.TerminalViewsRendered == 0 || snapshot.ContentLinkResolutionRequests == 0 || snapshot.SynchronousResolverCalls == 0 {
-		t.Fatalf("global baseline counters = %+v, want a rendered view with synchronous resolution", snapshot)
+	if snapshot.TerminalViewsRendered == 0 {
+		t.Fatalf("global counters = %+v, want rendered terminal views", snapshot)
+	}
+	if snapshot.ContentLinkResolutionRequests != 0 || snapshot.SynchronousResolverCalls != 0 {
+		t.Fatalf("global repeated View counters = %+v, want zero resolution work", snapshot)
 	}
 }
 

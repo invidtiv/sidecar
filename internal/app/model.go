@@ -28,6 +28,7 @@ import (
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -345,10 +346,11 @@ type Model struct {
 	// three fields own the global space that can be shown over it. Overview is
 	// an app-owned destination, not a project plugin, and is only constructed
 	// while its feature is enabled.
-	overview    *overview.Model
-	scope       AppScope
-	globalTab   GlobalTab
-	globalTasks *globalTasksHost
+	overview      *overview.Model
+	terminalLinks termpreview.LinkCoordinator
+	scope         AppScope
+	globalTab     GlobalTab
+	globalTasks   *globalTasksHost
 
 	// Configuration surface. Like the Tasks host it is app-owned rather than a
 	// registry plugin, so it survives project switches; unlike the global
@@ -508,6 +510,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 		intro:              NewIntroModel(repoName),
 		currentVersion:     currentVersion,
 	}
+	m.terminalLinks = newTerminalLinkCoordinator()
+	m.injectTerminalLinkCoordinator()
 	if watcher, err := uirequest.NewWatcher(config.StateDir()); err == nil {
 		m.uiRequestWatcher = watcher
 	}
@@ -525,6 +529,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	}
 	if features.IsEnabled(features.CrossProjectOverview.Name) {
 		m.overview = overview.New(workspaceinventory.Collector{})
+		m.overview.SetTerminalLinkCoordinator(m.terminalLinks)
 		m.overview.SetConfig(cfg)
 		// One resolution of the user's terminal settings, handed to every surface
 		// that hosts a terminal: the browser's live pane answers the chords the

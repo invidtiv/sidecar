@@ -30,6 +30,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -183,10 +184,12 @@ type Plugin struct {
 	primaryTerminalTarget workspaceTerminalTarget
 	panelTerminalTarget   workspaceTerminalTarget
 	applicationFocused    bool
-	terminalLinkMemo      terminalLinkMemo
-	terminalPathResolver  func(string, string) (string, string, bool)
-	terminalRootResolver  func(string) (string, error)
-	terminalSpecResolver  func(string, string) (string, bool)
+	terminalLinks         termpreview.LinkCoordinator
+	primaryLinkState      termpreview.LinkState
+	panelLinkState        termpreview.LinkState
+	primaryLinkContext    terminalLinkSurfaceContext
+	panelLinkContext      terminalLinkSurfaceContext
+	linkMatcherGeneration uint64
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -852,6 +855,10 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.activeLifecycleOperationID = ""
 	p.resetLifecycleState()
 	p.resetTerminalModels()
+	p.primaryLinkContext = terminalLinkSurfaceContext{}
+	p.panelLinkContext = terminalLinkSurfaceContext{}
+	p.primaryLinkState = termpreview.LinkState{}
+	p.panelLinkState = termpreview.LinkState{}
 	p.applicationFocused = true
 	p.paneRoot = nil
 	p.contentDeck = nil

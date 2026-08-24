@@ -1,16 +1,20 @@
 package workspace
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -238,6 +242,7 @@ func TestClickingATdIssueInALiveTerminalTakesTheClickFromTheApplication(t *testi
 		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
 		setWorkspaceState: func(string, state.WorkspaceState) error { return nil },
 	}
+	prepareTerminalLinksForTest(t, p)
 
 	if cmd := p.handleMouseClick(actionAt(ansi.StringWidth("follow-up is td")+1, 4)); cmd == nil {
 		t.Fatal("clicking a td id in a live terminal did not activate")
@@ -262,6 +267,7 @@ func TestClickingATdIssueInALiveTerminalTakesTheClickFromTheApplication(t *testi
 // here rather than passing against arithmetic the renderer does not share.
 func clickTerminalLink(t *testing.T, p *Plugin, want string) tea.Cmd {
 	t.Helper()
+	prepareTerminalLinksForTest(t, p)
 	p.renderListView(p.width, p.height)
 	for y := 0; y < p.height; y++ {
 		for x := 0; x < p.width; x++ {
@@ -280,6 +286,114 @@ func clickTerminalLink(t *testing.T, p *Plugin, want string) tea.Cmd {
 	return nil
 }
 
+func prepareTerminalLinksForTest(t *testing.T, p *Plugin) {
+	t.Helper()
+	ensureTestTerminalLinks(t, p)
+	p.PrepareTerminalLinks()
+	deliverTerminalLinkResolutions(t, p, p.terminalLinks.TakeCmd())
+	p.PrepareTerminalLinks()
+}
+
+func ensureTestTerminalLinks(t *testing.T, p *Plugin) {
+	t.Helper()
+	if p.terminalLinks != nil {
+		return
+	}
+	installTestTerminalLinks(t, p, nil)
+}
+
+func installTestTerminalLinks(t *testing.T, p *Plugin, diff func(string, string) (string, bool)) {
+	t.Helper()
+	p.SetTerminalLinkCoordinator(termpreview.NewLinkCoordinator(testTerminalLinkResolver{diff: diff}))
+}
+
+type testTerminalLinkResolver struct {
+	diff func(string, string) (string, bool)
+}
+
+func (r testTerminalLinkResolver) Resolve(root string, candidate contentlink.Pending) (contentlink.Ref, bool) {
+	switch candidate.Kind {
+	case contentlink.KindFile:
+		display, _, ok := terminallink.ResolveFileFromCanonicalBase(root, candidate.Raw)
+		return contentlink.Ref{Kind: candidate.Kind, Value: display}, ok
+	case contentlink.KindDiff:
+		if r.diff != nil {
+			value, ok := r.diff(root, candidate.Raw)
+			return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+		}
+		value, _, ok := terminallink.ResolveGitSpec(root, candidate.Raw)
+		return contentlink.Ref{Kind: candidate.Kind, Value: value}, ok
+	default:
+		return contentlink.Ref{}, false
+	}
+}
+
+func preparedTerminalLineForTest(t *testing.T, p *Plugin, termPanel bool, buffer *tty.OutputBuffer, line string) (termpreview.LinkState, []terminalLink) {
+	t.Helper()
+	ensureTestTerminalLinks(t, p)
+	context := p.terminalLinkSurfaceContext(termPanel)
+	if !context.ok {
+		t.Fatal("terminal link fixture has no surface context")
+	}
+	allowed := p.terminalAllowedLinkKinds()
+	scope := termpreview.LinkScope{
+		Host: "workspace", Surface: context.surface, Target: context.target, Root: context.root,
+		Buffer: buffer, AllowedKinds: termpreview.AllowedKindsKey(allowed), MatcherGeneration: p.linkMatcherGeneration,
+	}
+	input := termpreview.LinkPrepare{
+		Scope: scope, Rows: []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}},
+		Allowed: allowed, Matchers: p.resourceMatchers,
+	}
+	state := p.terminalLinks.Prepare(input)
+	deliverTerminalLinkResolutions(t, p, p.terminalLinks.TakeCmd())
+	input.Previous = state
+	state = p.terminalLinks.Prepare(input)
+	links := activatableTerminalLinks(state.Spans(line, 0), p.paneRoot != nil)
+	for i := range links {
+		if links[i].Kind == contentlink.KindFile && links[i].Raw != "" {
+			links[i].Root = context.root
+		}
+	}
+	return state, links
+}
+
+func preparedStandaloneLineForTest(line string, allowed contentlink.KindSet, matchers []contentlink.ResourceMatcher) termpreview.LinkState {
+	coordinator := termpreview.NewLinkCoordinator(nil)
+	return coordinator.Prepare(termpreview.LinkPrepare{
+		Scope: termpreview.LinkScope{Host: "test", Surface: "line", Target: "line", Root: "/", AllowedKinds: termpreview.AllowedKindsKey(allowed)},
+		Rows:  []termpreview.LinkRow{{AbsoluteLine: 0, Text: line}}, Allowed: allowed, Matchers: matchers,
+	})
+}
+
+func (r testTerminalLinkResolver) ResolveFresh(request termpreview.FreshLinkRequest) (contentlink.Ref, bool) {
+	rawRoot := request.RawRoot
+	if rawRoot == "" {
+		rawRoot = request.Root
+	}
+	root, err := filepath.EvalSymlinks(rawRoot)
+	if err != nil || filepath.Clean(root) != filepath.Clean(request.Root) {
+		return contentlink.Ref{}, false
+	}
+	return r.Resolve(filepath.Clean(root), request.Candidate)
+}
+
+func deliverTerminalLinkResolutions(t *testing.T, p *Plugin, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, child := range batch {
+			deliverTerminalLinkResolutions(t, p, child)
+		}
+		return
+	}
+	if result, ok := msg.(termpreview.LinkResultMsg); ok {
+		p.terminalLinks.Apply(result)
+	}
+}
+
 // deliverLoads runs cmd and hands any content load result back to the plugin,
 // the way the runtime would. A pane whose fetch is never delivered draws its
 // loading state, which is not the screen the journey is about.
@@ -295,6 +409,9 @@ func deliverLoads(t *testing.T, p *Plugin, cmd tea.Cmd) {
 		}
 	case docview.LoadedMsg, issueview.LoadedMsg:
 		p.update(msg)
+	case terminalLinkRevalidatedMsg:
+		_, next := p.update(msg)
+		deliverLoads(t, p, next)
 	}
 }
 

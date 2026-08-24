@@ -35,7 +35,7 @@ type terminalViewportInput struct {
 	TotalItems    int
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
-	LinkResolver  *terminalLineLinkResolver
+	LinkState     termpreview.LinkState
 
 	// Backgrounds selects how far carried backgrounds may reach (see
 	// tty.BackgroundMode). Empty means auto.
@@ -188,7 +188,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 // decorate is this surface's own per-row decoration: activatable links and
 // search matches, neither of which the browser surface has.
 func (in terminalViewportInput) decorate(line string, absoluteLine int) string {
-	line = decorateTerminalLinks(line, in.LinkResolver)
+	line = in.LinkState.Decorate(line, absoluteLine)
 	if in.SearchMatches != nil {
 		for _, match := range in.SearchMatches.Items {
 			if match.Line == absoluteLine {

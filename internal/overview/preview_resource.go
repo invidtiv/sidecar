@@ -165,6 +165,7 @@ func (m *Model) SetResourceResolver(resolve resourceview.Resolver) tea.Cmd {
 // which must read as ordinary unlinked text.
 func (m *Model) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 	m.resourceMatchers = matchers
+	m.linkMatcherGeneration++
 }
 
 // activatePreviewResource is the terminal-click entry point: a span the
