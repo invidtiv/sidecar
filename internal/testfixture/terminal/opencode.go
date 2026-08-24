@@ -136,9 +136,7 @@ func (f OpenCode) renderBurst(step int) []byte {
 	var out strings.Builder
 	fmt.Fprintf(&out, "\x1b[2;2H%s %s working  frame %03d%s", canvas, spinner, step, reset)
 	fmt.Fprintf(&out, "\x1b[15;2H%s status cell %04d%s", canvas, step, reset)
-	if step%4 == 3 {
-		fmt.Fprintf(&out, "\x1b[%d;1H\r\n%s", f.Height, paintRow(f.Width, fmt.Sprintf(" streamed synthetic row %03d", step), "history moved"))
-	}
+	fmt.Fprintf(&out, "\x1b[%d;2H%s ■■⬝⬝ synthetic progress %04d%s", f.Height-1, canvas, step, reset)
 	return []byte(out.String())
 }
 

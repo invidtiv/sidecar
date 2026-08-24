@@ -41,17 +41,17 @@ type Counters struct {
 // Snapshot is a point-in-time copy suitable for benchmark metrics or
 // diagnostics. Field names are the complete diagnostic vocabulary.
 type Snapshot struct {
-	ModelFramesBuilt               uint64
-	ModelFramesPublished           uint64
-	TerminalViewsRendered          uint64
-	RowCacheHits                   uint64
-	RowCacheMisses                 uint64
-	CanvasInferences               uint64
-	ContentLinkResolutionRequests  uint64
-	ContentLinkResolutionCacheHits uint64
-	SynchronousResolverCalls       uint64
-	GlobalWorkspaceListRendered    uint64
-	GlobalWorkspacePreviewRendered uint64
+	ModelFramesBuilt               uint64 `json:"model_frames_built"`
+	ModelFramesPublished           uint64 `json:"model_frames_published"`
+	TerminalViewsRendered          uint64 `json:"terminal_views_rendered"`
+	RowCacheHits                   uint64 `json:"row_cache_hits"`
+	RowCacheMisses                 uint64 `json:"row_cache_misses"`
+	CanvasInferences               uint64 `json:"canvas_inferences"`
+	ContentLinkResolutionRequests  uint64 `json:"content_link_resolution_requests"`
+	ContentLinkResolutionCacheHits uint64 `json:"content_link_resolution_cache_hits"`
+	SynchronousResolverCalls       uint64 `json:"synchronous_resolver_calls"`
+	GlobalWorkspaceListRendered    uint64 `json:"global_workspace_list_rendered"`
+	GlobalWorkspacePreviewRendered uint64 `json:"global_workspace_preview_rendered"`
 }
 
 var active atomic.Pointer[Counters]

@@ -42,6 +42,7 @@ import (
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/termtitle"
 	"github.com/marcus/sidecar/internal/theme"
 	"github.com/marcus/sidecar/internal/tmuxenv"
@@ -94,6 +95,15 @@ func main() {
 	// outer tmux session. This allows prefix+d to detach from the workspace's
 	// inner session rather than the user's outer tmux.
 	_ = os.Unsetenv("TMUX")
+
+	// The performance snapshot shares pprof's localhost-only diagnostic server.
+	// Keep it opt-in so ordinary builds pay only the existing nil-probe check.
+	if terminalPerformanceEnabled(os.Getenv("SIDECAR_TERMINAL_PERF")) {
+		counters := &terminalperf.Counters{}
+		restore := terminalperf.Install(counters)
+		defer restore()
+		http.Handle(terminalperf.SnapshotPath, terminalperf.SnapshotHandler(counters))
+	}
 
 	// Start pprof server if enabled (for memory profiling)
 	if pprofPort := os.Getenv("SIDECAR_PPROF"); pprofPort != "" {
@@ -287,6 +297,14 @@ func main() {
 	// another machine — is not waiting out a lease nobody holds (td-ee222a).
 	tty.ReleaseGeometryLeases()
 	restoreTitle()
+}
+
+func terminalPerformanceEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 // initialPluginForWorkDir keeps process startup on the same per-worktree state

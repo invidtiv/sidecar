@@ -17,9 +17,17 @@ func TestOpenCodeFixtureIsDeterministicPrivacySafeAndRepresentative(t *testing.T
 			t.Fatalf("fixture contains forbidden user-shaped token %q", forbidden)
 		}
 	}
-	for _, want := range []string{"\x1b[48;2;18;18;22m", "https://docs.example.test", ExistingGoPath, ExistingDocPath, MissingPath, "history moved"} {
+	for _, want := range []string{"\x1b[48;2;18;18;22m", "https://docs.example.test", ExistingGoPath, ExistingDocPath, MissingPath, "completed synthetic turn"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("fixture lacks representative token %q", want)
+		}
+	}
+	if !strings.Contains(string(first.Burst(1)), "■■⬝⬝ synthetic progress") {
+		t.Fatal("fixture burst lacks OpenCode working activity evidence")
+	}
+	for step := 1; step <= 700; step++ {
+		if burst := string(first.Burst(step)); strings.ContainsAny(burst, "\r\n") {
+			t.Fatalf("stream burst %d contains scrolling newline: %q", step, burst)
 		}
 	}
 	if got := strings.Count(first.Frame(3), "\n") + 1; got != first.Height+3 {
