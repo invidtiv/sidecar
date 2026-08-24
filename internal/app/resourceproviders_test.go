@@ -1,13 +1,21 @@
 package app
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/keymap"
+	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/resourceprovider"
+	"github.com/marcus/sidecar/internal/resourceview"
+	"github.com/marcus/sidecar/internal/terminallink"
 )
 
 func TestReadyLatchOpensOnce(t *testing.T) {
@@ -188,5 +196,66 @@ func TestProviderWorkingDirExistsWithoutAConfigDirectory(t *testing.T) {
 	}
 	if !info.IsDir() {
 		t.Fatalf("provider working directory %q is not a directory", dir)
+	}
+}
+
+// resourceSurfacePlugin is a plugin that shows resource panes. It reports the
+// work injection started, which is the whole contract publishResourceProviders
+// depends on.
+type resourceSurfacePlugin struct {
+	navigationPlugin
+	matchers []terminallink.ResourceMatcher
+	resolver resourceview.Resolver
+	waiting  bool
+	resolved bool
+}
+
+func (p *resourceSurfacePlugin) SetResourceMatchers(m []terminallink.ResourceMatcher) { p.matchers = m }
+
+func (p *resourceSurfacePlugin) SetResourceResolver(resolve resourceview.Resolver) tea.Cmd {
+	p.resolver = resolve
+	if !p.waiting {
+		return nil
+	}
+	p.waiting = false
+	return func() tea.Msg {
+		p.resolved = true
+		return nil
+	}
+}
+
+// Readiness is the only moment a tab armed at restore can finally load, and the
+// command that loads it has to be returned all the way to the runtime. Dropping
+// it is what left restored ticket panes saying "waiting for a provider" that
+// was, by then, ready.
+func TestPublishingProvidersReturnsTheWorkItStarted(t *testing.T) {
+	surface := &resourceSurfacePlugin{navigationPlugin: navigationPlugin{id: "workspaces"}, waiting: true}
+	registry := plugin.NewRegistry(nil)
+	if err := registry.Register(surface); err != nil {
+		t.Fatal(err)
+	}
+	m := New(registry, keymap.NewRegistry(), config.Default(), "", "/tmp/one", "/tmp/one", "workspaces")
+
+	manager := resourceprovider.NewManager(resourceprovider.ManagerOptions{Log: slog.Default()})
+	resourceProviderHost.mu.Lock()
+	previous := resourceProviderHost.manager
+	resourceProviderHost.manager = manager
+	resourceProviderHost.mu.Unlock()
+	t.Cleanup(func() {
+		resourceProviderHost.mu.Lock()
+		resourceProviderHost.manager = previous
+		resourceProviderHost.mu.Unlock()
+	})
+
+	cmd := m.publishResourceProviders()
+	if surface.resolver == nil {
+		t.Fatal("the surface was never given a resolver")
+	}
+	if cmd == nil {
+		t.Fatal("the surface's waiting tab produced no work, or the work was dropped")
+	}
+	cmd()
+	if !surface.resolved {
+		t.Fatal("the returned command did not carry the surface's load")
 	}
 }

@@ -1512,10 +1512,12 @@ func (p appContentCommandPlugin) Commands() []plugin.Command { return p.commands
 func (h *appContentDeck) SetResourceMatchers(matchers []contentlink.ResourceMatcher) {
 	h.resourceMatchers = append([]contentlink.ResourceMatcher(nil), matchers...)
 }
-func (h *appContentDeck) SetResourceResolver(resolve resourceview.Resolver) {
-	h.deck.ConfigureViewers(func(kind panelayout.Kind, model any) {
-		if v, ok := model.(*resourceview.Model); ok {
-			v.SetResolver(resolve)
-		}
-	})
+
+// SetResourceResolver rebinds this deck's Resource viewers and returns the load
+// that gives a tab armed before provider readiness its first chance to resolve.
+// Going through the deck rather than ConfigureViewers alone is deliberate: the
+// deck also holds the factory future Resource tabs are built from.
+func (h *appContentDeck) SetResourceResolver(resolve resourceview.Resolver) tea.Cmd {
+	h.deck.SetResourceResolver(resolve)
+	return tea.Batch(h.deck.LoadVisibleKind(panelayout.Resource)...)
 }

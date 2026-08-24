@@ -86,16 +86,32 @@ func (p *Plugin) SetResourceMatchers(matchers []terminallink.ResourceMatcher) {
 // owns the manager, the process and the timeout; this plugin only says when to
 // ask. A nil resolver is valid, and existing panes are rebound because provider
 // setup may complete after restored tabs have been constructed.
-func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) {
+//
+// It also asks the visible pane's active tab again. Restore arms tabs, and
+// until a provider is ready there is nothing to ask, so this is the first
+// moment a remembered ticket can actually load. Without it the pane sits on
+// "Waiting for <provider> to be ready" after every relaunch — of a provider
+// that already is — until the user refreshes each tab by hand.
+func (p *Plugin) SetResourceResolver(resolve resourceview.Resolver) tea.Cmd {
 	p.resolveResource = resolve
+	if p.contentDeck != nil {
+		// The deck owns the models the projection points at, so asking through
+		// the deck is asking the same tabs once, with the deck's own result
+		// identity on the answer.
+		p.contentDeck.SetResourceResolver(resolve)
+		return tea.Batch(unwrapDeckCmds(p.contentDeck.LoadVisibleKind(panelayout.Resource)...)...)
+	}
+	var cmds []tea.Cmd
 	for _, res := range p.resources {
-		if res != nil {
-			res.tabs.SetResolver(resolve)
+		if res == nil {
+			continue
+		}
+		res.tabs.SetResolver(resolve)
+		if cmd := res.tabs.ResolveActive(); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
-	if p.contentDeck != nil {
-		p.contentDeck.SetResourceResolver(resolve)
-	}
+	return tea.Batch(cmds...)
 }
 
 func (p *Plugin) newResourcePane(leafID int, root, surface string) *resourcePane {
@@ -343,9 +359,15 @@ func encodeResourceTabs(res *resourcePane) ([]state.PaneResourceTabJSON, int) {
 // decodeResourceLeaf rebuilds a Resource leaf from references alone. Every tab
 // is ARMED, never loaded: relaunching Sidecar must not fan out one provider
 // process per remembered tab, and a provider that is not ready yet is not a
-// failure — the reference waits rather than being pruned. Only selecting a tab
-// turns it into a request.
-func (p *Plugin) decodeResourceLeaf(saved *state.PaneLayoutJSON, root string, _ *[]tea.Cmd) *PaneNode {
+// failure — the reference waits rather than being pruned. Selecting a tab is
+// what turns the rest into requests.
+//
+// The one tab that does not wait to be selected is the active one, because it
+// is the one on screen. Asking for it costs a single provider call, and not
+// asking is what left a restored pane showing a waiting card for a provider
+// that was ready. If no resolver exists yet the ask starts nothing and the tab
+// stays armed, which is what SetResourceResolver later picks up.
+func (p *Plugin) decodeResourceLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
 	if saved == nil || p.ctx == nil || len(saved.ResourceTabs) == 0 {
 		return nil
 	}
@@ -384,6 +406,9 @@ func (p *Plugin) decodeResourceLeaf(saved *state.PaneLayoutJSON, root string, _ 
 		res.tabs.Arm(tab.ref, tab.scroll)
 	}
 	res.tabs.Select(active)
+	if load := res.tabs.ResolveActive(); load != nil && loads != nil {
+		*loads = append(*loads, load)
+	}
 	p.resources[id] = res
 	return &PaneNode{ID: id, Kind: PaneResource, ContentID: id}
 }

@@ -19,8 +19,16 @@ type Surface interface {
 	// SetResourceMatchers publishes the live matcher snapshot. An empty slice
 	// is meaningful: it is how output goes back to being ordinary text.
 	SetResourceMatchers([]terminallink.ResourceMatcher)
-	// SetResourceResolver injects how a reference becomes a document.
-	SetResourceResolver(Resolver)
+	// SetResourceResolver injects how a reference becomes a document, and
+	// returns the work that injection starts.
+	//
+	// Returning a command is the point, not a convenience. A tab restored
+	// before any provider was ready is armed, and its card promises it resolves
+	// when the provider reports ready. Readiness arrives here and nowhere else,
+	// so a surface that only rebound its tabs would leave that promise unkept
+	// and the user re-resolving every tab by hand after each relaunch. A
+	// surface with nothing on screen waiting returns nil.
+	SetResourceResolver(Resolver) tea.Cmd
 }
 
 // Host is everything a Resource leaf needs from the surface showing it, and

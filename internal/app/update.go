@@ -601,8 +601,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// so it is the only moment either surface needs republishing. Until
 		// this runs both surfaces hold an empty matcher set, which is why a
 		// resource key is ordinary text before a provider is ready.
-		m.publishResourceProviders()
-		return m, nil
+		return m, m.publishResourceProviders()
 
 	case firstRunProbeMsg:
 		return m, (&m).handleFirstRunProbe(msg)

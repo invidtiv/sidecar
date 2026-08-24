@@ -175,13 +175,26 @@ func (d *Deck) SetContext(ctx SurfaceContext) []tea.Cmd {
 // still needs one. Decode and SetContext arm viewers without I/O; hosts must
 // return these commands or a visible pane sits on its placeholder until
 // something else happens to select it.
-func (d *Deck) LoadVisible() []tea.Cmd {
+func (d *Deck) LoadVisible() []tea.Cmd { return d.loadVisible(nil) }
+
+// LoadVisibleKind is LoadVisible narrowed to one kind, for the moments when
+// only one viewer's dependency has changed — a resource resolver arriving after
+// startup — and re-focusing every other visible pane would be work the change
+// did not ask for.
+func (d *Deck) LoadVisibleKind(kind panelayout.Kind) []tea.Cmd {
+	return d.loadVisible(&kind)
+}
+
+func (d *Deck) loadVisible(only *panelayout.Kind) []tea.Cmd {
 	if d == nil {
 		return nil
 	}
 	var cmds []tea.Cmd
 	for _, p := range d.panes {
 		if p == nil || p.active < 0 || p.active >= len(p.tabs) {
+			continue
+		}
+		if only != nil && p.kind != *only {
 			continue
 		}
 		t := p.tabs[p.active]
@@ -551,6 +564,12 @@ func (d *Deck) ConfigureViewers(configure func(panelayout.Kind, any)) {
 
 // SetResourceResolver updates existing viewers and the factory used by future
 // Resource tabs created after provider discovery completes.
+//
+// Rebinding starts nothing. A deck that is on screen follows this with
+// LoadVisibleKind(panelayout.Resource) and returns the commands, which is what
+// finally resolves tabs armed before any provider was ready; a deck the host is
+// only holding does not, because a load whose command is dropped would leave
+// the tab loading forever.
 func (d *Deck) SetResourceResolver(resolve resourceview.Resolver) {
 	if d == nil {
 		return

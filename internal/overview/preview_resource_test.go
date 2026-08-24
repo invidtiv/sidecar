@@ -181,7 +181,10 @@ func TestGlobalResourceClickOpensFocusesAndAddsTabs(t *testing.T) {
 	}
 }
 
-func TestGlobalResourcePaneDegradesWithNoResolver(t *testing.T) {
+// Opening a tab before the app has published a resolver must not spin, and must
+// not spend the tab on an error it can never recover from: it waits, and the
+// resolver arriving is what resolves it.
+func TestGlobalResourcePaneWaitsForAResolverAndThenResolves(t *testing.T) {
 	m := resourcePreviewModel(t)
 	m.SetResourceMatchers(jiraMatchers())
 
@@ -191,11 +194,20 @@ func TestGlobalResourcePaneDegradesWithNoResolver(t *testing.T) {
 		t.Fatal("clicking a resource key opened no Resource pane")
 	}
 	view := res.view()
-	if view == nil || view.State() != resourceview.StateError {
-		t.Fatalf("an unwired resolver left the tab in state %#v, want an error card", view)
+	if view == nil || view.State() != resourceview.StateArmed {
+		t.Fatalf("an unwired resolver left the tab in state %#v, want it waiting", view)
 	}
-	if err := view.Err(); err == nil || err.Code != resource.CodeUnavailable {
-		t.Fatalf("error card = %#v, want an unavailable provider", view.Err())
+	if !strings.Contains(ansi.Strip(m.WorkspacesView(previewWide, previewTall)), "Waiting for jira-work") {
+		t.Error("the card does not say what the tab is waiting for")
+	}
+
+	resolver := &fakeResolver{}
+	run(t, m, m.SetResourceResolver(resolver.resolve))
+	if got := len(resolver.refs()); got != 1 {
+		t.Fatalf("readiness started %d resolves, want one for the tab on screen", got)
+	}
+	if got := res.view().State(); got != resourceview.StateReady {
+		t.Fatalf("state = %v, want the ticket on screen without a manual refresh", got)
 	}
 }
 

@@ -219,12 +219,38 @@ func (m *Model) Refresh() tea.Cmd {
 }
 
 func (m *Model) request(refresh bool) tea.Cmd {
-	if m.resolve == nil || !m.ref.Valid() {
+	if !m.ref.Valid() {
 		m.applyError(resource.Errorf(resource.CodeInvalidRequest,
 			"this resource reference is not something Sidecar can resolve"))
 		return nil
 	}
-	return m.resolve(m.modelID, m.generation, m.epoch, m.ref, refresh)
+	if m.resolve == nil {
+		return m.awaitProvider()
+	}
+	if cmd := m.resolve(m.modelID, m.generation, m.epoch, m.ref, refresh); cmd != nil {
+		return cmd
+	}
+	return m.awaitProvider()
+}
+
+// awaitProvider is what a request that started no work resolves to. A missing
+// resolver, or one that returns no command, is not a bad reference and not a
+// provider failure: it is the provider layer not being wired up yet. Typing
+// that as an error would strand the tab on a card it could never recover from,
+// and leaving it loading would spin forever, so it goes back to the armed card
+// — which already promises it resolves when the provider reports ready, and
+// now does, because injecting a resolver asks every armed tab again.
+func (m *Model) awaitProvider() tea.Cmd {
+	m.refreshing = false
+	m.err = nil
+	if m.hasDoc {
+		// A refresh nobody will answer leaves the document it was refreshing,
+		// which is what a failed refresh does too.
+		m.state = StateReady
+		return nil
+	}
+	m.state = StateArmed
+	return nil
 }
 
 // Accepts reports whether a result belongs to this model's current request.

@@ -33,7 +33,11 @@ func (r *recorder) resolver() Resolver {
 			ref        resource.Reference
 			refresh    bool
 		}{modelID, generation, rf, refresh})
-		return nil
+		// A resolver hands back the work that will answer. This one answers on
+		// the test's own schedule through Apply, but it still returns a command,
+		// because a resolver that starts nothing means "no provider is wired up
+		// yet" and the view deliberately treats it as such.
+		return func() tea.Msg { return nil }
 	}
 }
 
@@ -211,6 +215,74 @@ func TestArmedTabDoesNotResolveUntilAsked(t *testing.T) {
 	m.Resolve()
 	if len(rec.calls) != 1 {
 		t.Fatalf("Resolve on a loading tab must not re-request, got %d", len(rec.calls))
+	}
+}
+
+// A request nobody can answer must leave the tab where the user can get an
+// answer later. Before the app publishes a resolver there is no provider to
+// ask, and that is the state the armed card already describes — so asking early
+// costs nothing and the tab is still armed when readiness arrives.
+func TestAskingBeforeAProviderExistsLeavesTheTabArmed(t *testing.T) {
+	m := New(nil, nil)
+	m.SetSize(40, 10)
+	m.Arm(1, ref("CASH-1"), 0)
+
+	if cmd := m.Resolve(); cmd != nil {
+		t.Fatal("a tab with no resolver started work anyway")
+	}
+	if m.State() != StateArmed {
+		t.Fatalf("state = %v, want armed so readiness can still resolve it", m.State())
+	}
+	if !strings.Contains(m.View(), "Waiting for jira-work") {
+		t.Errorf("card should say what it is waiting for:\n%s", m.View())
+	}
+
+	// Readiness arrives: the same tab resolves without the user touching it.
+	rec := &recorder{}
+	m.SetResolver(rec.resolver())
+	if cmd := m.Resolve(); cmd == nil {
+		t.Fatal("a resolver arriving did not let the armed tab resolve")
+	}
+	if len(rec.calls) != 1 {
+		t.Fatalf("resolver called %d times, want one", len(rec.calls))
+	}
+	if m.State() != StateLoading {
+		t.Fatalf("state = %v, want loading", m.State())
+	}
+}
+
+// The same rule for a resolver that exists but starts nothing, which is how a
+// host says "not yet" without inventing a failure. The tab must not spin.
+func TestAResolverThatStartsNoWorkDoesNotLeaveTheTabLoading(t *testing.T) {
+	m := New(nil, func(int, uint64, uint64, resource.Reference, bool) tea.Cmd { return nil })
+	m.SetSize(40, 10)
+	m.Arm(1, ref("CASH-1"), 0)
+	m.Resolve()
+	if m.State() != StateArmed {
+		t.Fatalf("state = %v, want armed rather than a card that spins forever", m.State())
+	}
+}
+
+// A refresh nobody will answer keeps the document the user is reading, exactly
+// as a failed refresh does.
+func TestRefreshWithoutAProviderKeepsTheDocument(t *testing.T) {
+	rec := &recorder{}
+	m := New(nil, rec.resolver())
+	m.SetSize(40, 10)
+	m.Load(1, ref("CASH-1"), 0)
+	id, gen, _ := rec.last()
+	m.Apply(ResolvedMsg{ModelID: id, Generation: gen, Document: doc("CASH-1", "A title")})
+
+	m.SetResolver(nil)
+	m.Refresh()
+	if m.State() != StateReady {
+		t.Fatalf("state = %v, want the document kept", m.State())
+	}
+	if m.Refreshing() {
+		t.Error("the card still claims a refresh is in flight")
+	}
+	if !strings.Contains(m.View(), "A title") {
+		t.Errorf("the document the user was reading is gone:\n%s", m.View())
 	}
 }
 

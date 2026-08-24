@@ -4,6 +4,18 @@ All notable changes to sidecar are documented here.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **Restored resource tabs load themselves again.** With a provider configured
+  and tickets open in panes, every tab came back after a relaunch saying
+  "Waiting for `<provider>` to be ready" for a provider that already was, and
+  each one had to be refreshed by hand. Restore now asks for the tab that is on
+  screen — one call, not one per remembered tab — and a request made before any
+  provider is wired up leaves the tab armed instead of failing it, so provider
+  readiness resolves it without the user touching anything. A project or
+  worktree switch republishes providers to the rebuilt surfaces too, which had
+  been silently dropping both the matchers and the resolver.
+
 ## [v1.5.0] - 2026-08-24
 
 ### Features

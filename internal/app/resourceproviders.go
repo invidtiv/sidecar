@@ -161,18 +161,27 @@ func describeResourceProvidersCmd(cfg *config.Config) tea.Cmd {
 // Matchers are published even when empty: a provider that stopped declaring a
 // matcher must stop underlining it, and an empty snapshot is how ordinary
 // terminal output goes back to being ordinary text.
-func (m *Model) publishResourceProviders() {
+//
+// The returned command is what a restored tab has been waiting for. Restore
+// arms references without resolving them, and until this runs there is no
+// resolver to ask, so the surfaces hand back the first load for whatever
+// Resource pane is on screen.
+func (m *Model) publishResourceProviders() tea.Cmd {
 	manager := ResourceProviderManager()
 	if manager == nil {
-		return
+		return nil
 	}
 	matchers := manager.Snapshot().TerminalMatchers()
 	resolve := resourceResolver(manager)
 
+	var cmds []tea.Cmd
 	for _, surface := range m.resourceSurfaces() {
 		surface.SetResourceMatchers(matchers)
-		surface.SetResourceResolver(resolve)
+		if cmd := surface.SetResourceResolver(resolve); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
+	return tea.Batch(cmds...)
 }
 
 // resourceSurfaces is every surface currently able to show a resource pane.

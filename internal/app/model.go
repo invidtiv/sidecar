@@ -1169,6 +1169,14 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	// Reinitialize all plugins with the new working directory and project root
 	// This stops all plugins, updates the context, and starts them again
 	startCmds := m.registry.Reinit(targetPath, newProjectRoot)
+	// Reinit rebuilds every plugin, and a rebuilt surface knows nothing about
+	// providers: no matchers, so resource keys stop underlining, and no
+	// resolver, so a restored Resource tab waits for a readiness that already
+	// happened. A describe pass runs once per process, so republishing here is
+	// the only thing that puts the new surfaces back in the loop.
+	if cmd := m.publishResourceProviders(); cmd != nil {
+		startCmds = append(startCmds, cmd)
+	}
 	if themeCmd != nil {
 		startCmds = append(startCmds, themeCmd)
 	}

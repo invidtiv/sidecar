@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -123,17 +122,30 @@ type previewResourceResolvedMsg struct {
 // appears.
 var _ resourceview.Surface = (*Model)(nil)
 
-// SetResourceResolver supplies the provider-backed resolver. Until the app
-// wires one, opening a tab degrades to a typed error card rather than a
-// spinner that never ends.
-func (m *Model) SetResourceResolver(resolve resourceview.Resolver) {
+// SetResourceResolver supplies the provider-backed resolver, and returns the
+// load it starts for the pane on screen. A tab opened before the app wired one
+// is armed and waiting for readiness; this is where readiness arrives, so it is
+// where the wait ends. Cached rows are rebound but not asked — they are not on
+// screen, and showing one loads it.
+func (m *Model) SetResourceResolver(resolve resourceview.Resolver) tea.Cmd {
 	m.resolveResource = resolve
+	var cmds []tea.Cmd
 	if m.preview.deck != nil {
 		ctx := m.preview.deck.Context()
 		m.preview.deck.SetResourceResolver(m.previewResourceResolver(ctx.Surface, ctx.Epoch))
+		for _, cmd := range m.preview.deck.LoadVisibleKind(panelayout.Resource) {
+			cmds = append(cmds, wrapPreviewDeckCmd(cmd, ctx.Surface))
+		}
 	}
 	if res := m.preview.resource; res != nil {
 		res.tabs.SetResolver(m.previewResourceResolver(res.surface, res.epoch))
+		if m.preview.deck == nil {
+			// Without a deck the projection is the only owner of these tabs, so
+			// the ask has to come from here.
+			if cmd := res.tabs.ResolveActive(); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 	}
 	for workspaceID, cached := range m.preview.paneCache {
 		if cached.deck != nil {
@@ -145,6 +157,7 @@ func (m *Model) SetResourceResolver(resolve resourceview.Resolver) {
 		}
 		cached.resource.tabs.SetResolver(m.previewResourceResolver(workspaceID, cached.resource.epoch))
 	}
+	return tea.Batch(cmds...)
 }
 
 // SetResourceMatchers replaces the compiled external matchers the scanner may
@@ -190,17 +203,12 @@ func (m *Model) previewResourceResolver(workspaceID string, epoch uint64) resour
 	return func(modelID int, generation, _ uint64, ref resourceview.Ref, refresh bool) tea.Cmd {
 		resolve := m.resolveResource
 		if resolve == nil {
-			return func() tea.Msg {
-				return previewResourceResolvedMsg{
-					ResolvedMsg: resourceview.ResolvedMsg{
-						ModelID: modelID, Generation: generation, Epoch: epoch,
-						Ref: ref, Refresh: refresh,
-						Err: resource.Errorf(resource.CodeUnavailable,
-							"no resource provider is configured for %s", ref.Instance),
-					},
-					WorkspaceID: workspaceID,
-				}
-			}
+			// Starting nothing is the honest answer: the app has not published
+			// a resolver yet. resourceview reads a request that starts no work
+			// as "wait for the provider" and keeps the tab armed, so it says so
+			// on the card and resolves as soon as SetResourceResolver arrives —
+			// where a typed error here would have been a dead end.
+			return nil
 		}
 		cmd := resolve(modelID, generation, epoch, ref, refresh)
 		if cmd == nil {

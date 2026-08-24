@@ -279,9 +279,11 @@ func TestPersistenceRoundTripsReferencesOnly(t *testing.T) {
 	}
 }
 
-// Relaunch must not fan out one provider process per remembered tab. Every
-// restored tab is armed; selecting one is what turns it into a request.
-func TestRestoredResourceTabsAreArmedNotResolved(t *testing.T) {
+// Relaunch must not fan out one provider process per remembered tab. The tab
+// on screen is the exception — it loads once, because a pane the user is
+// looking at showing "waiting for a provider that is ready" is the bug this
+// costs one call to avoid. Selecting is what turns the rest into requests.
+func TestRestoreLoadsTheActiveResourceTabOnly(t *testing.T) {
 	p, stub, resolved := resourceTestPlugin(t)
 	layout := &state.PaneLayoutJSON{
 		Root: resolved, Surface: "shell:test-shell", Open: true,
@@ -293,40 +295,79 @@ func TestRestoredResourceTabsAreArmedNotResolved(t *testing.T) {
 			}},
 		},
 	}
-	if cmd := p.restorePaneLayout(layout); cmd != nil {
-		t.Fatal("restore scheduled work; a remembered reference must wait to be selected")
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("restore scheduled no work; the tab on screen must load itself")
 	}
-	if stub.calls != 0 {
-		t.Fatalf("restore called the resolver %d times, want none", stub.calls)
+	if stub.calls != 1 {
+		t.Fatalf("restore called the resolver %d times, want one for the active tab", stub.calls)
 	}
 	res, _ := p.activeResourcePane()
 	if res == nil {
 		t.Fatal("the Resource leaf was not restored")
 	}
-	for i, m := range res.tabs.All() {
-		if m.State() != resourceview.StateArmed {
-			t.Fatalf("tab %d state = %v, want armed", i, m.State())
-		}
-	}
 	if res.tabs.ActiveIndex() != 1 {
 		t.Fatalf("active tab = %d, want the persisted one", res.tabs.ActiveIndex())
 	}
+	if got := res.tabs.At(1).State(); got != resourceview.StateLoading {
+		t.Fatalf("active tab state = %v, want loading", got)
+	}
+	if got := res.tabs.At(0).State(); got != resourceview.StateArmed {
+		t.Fatalf("unselected tab state = %v, want armed", got)
+	}
 
-	// Selecting is the request, and only for the tab selected.
+	// Selecting is the request for the rest, and only for the tab selected.
 	if cmd := p.selectResourceTab(res, 0); cmd == nil {
 		t.Fatal("selecting an armed tab did not resolve it")
 	}
-	if stub.calls != 1 {
-		t.Fatalf("resolver called %d times, want one for the selected tab", stub.calls)
-	}
-	if res.tabs.At(1).State() != resourceview.StateArmed {
-		t.Fatal("selecting one tab resolved another")
+	if stub.calls != 2 {
+		t.Fatalf("resolver called %d times, want one more for the selected tab", stub.calls)
 	}
 }
 
-// A provider that is not wired up at all must produce a card that says so
-// rather than a tab that spins forever.
-func TestAMissingResolverBecomesATypedError(t *testing.T) {
+// Restore runs long before provider discovery does, so the first ask usually
+// finds no resolver at all. That must leave the tab armed rather than errored,
+// and readiness must then resolve it without the user refreshing by hand —
+// which is what the armed card promises.
+func TestReadinessResolvesARestoredTabWithoutTheUserAskingTwice(t *testing.T) {
+	p, _, resolved := resourceTestPlugin(t)
+	p.SetResourceResolver(nil)
+	layout := &state.PaneLayoutJSON{
+		Root: resolved, Surface: "shell:test-shell", Open: true,
+		Split: &state.PaneSplitJSON{Axis: "cols", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+			B: &state.PaneLayoutJSON{Kind: contentKindResource, ResourceTabs: []state.PaneResourceTabJSON{
+				{Provider: "jira-work", Matcher: "issue-key", Locator: "CASH-1245"},
+			}},
+		},
+	}
+	p.restorePaneLayout(layout)
+
+	res, _ := p.activeResourcePane()
+	if res == nil {
+		t.Fatal("the Resource leaf was not restored")
+	}
+	if got := res.tabs.Active().State(); got != resourceview.StateArmed {
+		t.Fatalf("state = %v, want armed while no provider is wired up", got)
+	}
+
+	late := &resourceStub{}
+	cmd := p.SetResourceResolver(late.resolve)
+	if cmd == nil {
+		t.Fatal("a provider becoming ready started nothing for the waiting tab")
+	}
+	if late.calls != 1 {
+		t.Fatalf("resolver called %d times on readiness, want one", late.calls)
+	}
+	p.applyResourceResolved(late.result(t))
+	if got := res.tabs.Active().State(); got != resourceview.StateReady {
+		t.Fatalf("state = %v, want the ticket on screen", got)
+	}
+}
+
+// A provider that is not wired up yet must produce a card that says so rather
+// than a tab that spins forever — and, since it may become ready a moment
+// later, one that can still resolve when it does.
+func TestAMissingResolverLeavesTheTabWaiting(t *testing.T) {
 	p, _, _ := resourceTestPlugin(t)
 	p.SetResourceResolver(nil)
 
@@ -335,8 +376,8 @@ func TestAMissingResolverBecomesATypedError(t *testing.T) {
 	if res == nil {
 		t.Fatal("the click opened no Resource leaf")
 	}
-	if got := res.tabs.Active().State(); got != resourceview.StateError {
-		t.Fatalf("state = %v, want a typed error", got)
+	if got := res.tabs.Active().State(); got != resourceview.StateArmed {
+		t.Fatalf("state = %v, want a tab still waiting on the provider", got)
 	}
 }
 
