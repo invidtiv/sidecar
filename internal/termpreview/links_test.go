@@ -97,14 +97,7 @@ func TestLinkCoordinatorReusesUnchangedRowsAcrossBufferRevisions(t *testing.T) {
 	buffer.Update("visit https://example.test\nnew revision")
 	input.Previous = first
 
-	counters := &terminalperf.Counters{}
-	restore := terminalperf.Install(counters)
-	t.Cleanup(restore)
 	second := coordinator.Prepare(input)
-	snapshot := counters.Snapshot()
-	if snapshot.RowCacheHits != 1 || snapshot.RowCacheMisses != 0 {
-		t.Fatalf("unchanged-row counters = %+v", snapshot)
-	}
 	if _, ok := second.SpanAt("visit https://example.test", 0, len("visit ")); !ok {
 		t.Fatal("reused row lost its prepared URL span")
 	}

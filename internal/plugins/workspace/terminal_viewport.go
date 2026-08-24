@@ -36,6 +36,7 @@ type terminalViewportInput struct {
 	LoadingOlder  bool
 	SearchMatches *terminalSearchMatches
 	LinkState     termpreview.LinkState
+	Analyzer      *termpreview.RowAnalyzer
 
 	// Backgrounds selects how far carried backgrounds may reach (see
 	// tty.BackgroundMode). Empty means auto.
@@ -107,6 +108,11 @@ func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, w
 	// where the window's rows sit in the buffer's coordinates (td-73fa86).
 	in.AbsoluteBase, in.TotalItems, in.LoadingOlder = p.terminalHistorySummary(termPanel, buffer)
 	in.Follow, in.Offset, in.OffsetFromBottom = p.terminalScrollState(termPanel)
+	if termPanel {
+		in.Analyzer = p.panelRowAnalyzer
+	} else {
+		in.Analyzer = p.primaryRowAnalyzer
+	}
 	return in
 }
 
@@ -129,7 +135,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		return terminalViewportResult{Layout: layout}
 	}
 
-	displayLines := termpreview.DrawRows(termpreview.RowsInput{
+	draw := termpreview.DrawRows(termpreview.RowsInput{
 		Buffer:            in.Buffer,
 		Layout:            layout,
 		AbsoluteBase:      in.AbsoluteBase,
@@ -142,7 +148,9 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 		Follow:            in.Follow,
 		Backgrounds:       in.Backgrounds,
 		BackgroundSpanMax: in.BackgroundSpanMax,
+		Analyzer:          in.Analyzer,
 	})
+	displayLines := draw.Rows
 
 	if !in.NativeCursor {
 		if x, y, ok := terminalViewportCursorPosition(in); ok && y < len(displayLines) {
@@ -171,12 +179,8 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 			bar,
 		)
 	}
-	var canvasBg string
-	if tty.NormalizeBackgroundMode(in.Backgrounds) == tty.BackgroundAuto {
-		canvasBg = termpreview.CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
-	}
-	if canvasBg != "" {
-		content = termpreview.PadCanvasBox(content, canvasBg, in.Width, in.Height,
+	if draw.CanvasBackground != "" {
+		content = termpreview.PadCanvasBox(content, draw.CanvasBackground, in.Width, in.Height,
 			func(line string, width int) string { return cache.Truncate(line, width, "") })
 	}
 	return terminalViewportResult{

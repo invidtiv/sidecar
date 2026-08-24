@@ -184,6 +184,7 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		Message: message, Decorate: m.preview.linkState.Decorate,
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 		BarStyle: m.previewTermBarStyle(),
+		Analyzer: m.preview.rowAnalyzer,
 	})
 }
 

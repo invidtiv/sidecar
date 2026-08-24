@@ -147,7 +147,8 @@ type previewState struct {
 	diffAdminTargets   map[string][]livewatch.Target
 	diffAdminResolving map[string]bool
 
-	linkState termpreview.LinkState
+	linkState   termpreview.LinkState
+	rowAnalyzer *termpreview.RowAnalyzer
 
 	docLinkHits       []previewDocLinkHit
 	docLinkResolution *contentlink.ResolutionIndex

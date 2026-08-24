@@ -174,7 +174,6 @@ func (c *linkCoordinator) Prepare(in LinkPrepare) LinkState {
 		if previousCompatible {
 			if old, ok := in.Previous.data.rows[row.AbsoluteLine]; ok && old.sourceFingerprint == sourceFingerprint {
 				state.data.rows[row.AbsoluteLine] = old
-				terminalperf.Record(terminalperf.RowCacheHit)
 				continue
 			}
 		}
@@ -190,7 +189,6 @@ func (c *linkCoordinator) Prepare(in LinkPrepare) LinkState {
 			visibleFingerprint: visibleLinkFingerprint(text),
 			spans:              spans,
 		}
-		terminalperf.Record(terminalperf.RowCacheMiss)
 		for _, candidate := range result.Pending {
 			request, outcome := c.index.BeginClassified(in.Scope.Root, candidate)
 			switch outcome {

@@ -6,6 +6,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminalperf"
+	"github.com/marcus/sidecar/internal/termpreview"
 	terminalfixture "github.com/marcus/sidecar/internal/testfixture/terminal"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -33,6 +34,7 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 		preview: previewState{
 			workspaceID: workspace.ID, buffer: buffer,
 			paneRoot: &panelayout.Node{ID: 1, Kind: panelayout.Terminal}, paneFocus: 1,
+			rowAnalyzer: &termpreview.RowAnalyzer{},
 		},
 		workspacesMouse: mouse.NewHandler(), sidebarVisible: false,
 		previewOwnership: &previewOwnershipLease{},
@@ -55,6 +57,9 @@ func TestGlobalTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	}
 	if snapshot.ContentLinkResolutionRequests != 0 || snapshot.SynchronousResolverCalls != 0 {
 		t.Fatalf("global repeated View counters = %+v, want zero resolution work", snapshot)
+	}
+	if snapshot.CanvasInferences != 2 {
+		t.Fatalf("global repeated View counters = %+v, want one canvas inference per view", snapshot)
 	}
 }
 
@@ -79,6 +84,7 @@ func reportTerminalMetrics(b *testing.B, snapshot terminalperf.Snapshot) {
 	b.ReportMetric(float64(snapshot.TerminalViewsRendered)/operations, "terminal_views/op")
 	b.ReportMetric(float64(snapshot.RowCacheHits)/operations, "row_cache_hits/op")
 	b.ReportMetric(float64(snapshot.RowCacheMisses)/operations, "row_cache_misses/op")
+	b.ReportMetric(float64(snapshot.CanvasInferences)/operations, "canvas_inferences/op")
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionRequests)/operations, "resolution_requests/op")
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionCacheHits)/operations, "resolution_cache_hits/op")
 	b.ReportMetric(float64(snapshot.SynchronousResolverCalls)/operations, "synchronous_resolver_calls/op")

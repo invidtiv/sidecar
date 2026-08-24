@@ -78,13 +78,14 @@ func TestDrawRowsFillsUnusedRowsAndColumnsWithCanvas(t *testing.T) {
 		t.Fatalf("display height %d does not add unused rows below %d captured", layout.DisplayHeight, len(lines))
 	}
 
-	drawn := DrawRows(RowsInput{
+	draw := DrawRows(RowsInput{
 		Buffer:      buffer,
 		Layout:      layout,
 		PaneHeight:  10,
 		Interactive: true,
 		Follow:      true,
 	})
+	drawn := draw.Rows
 	if len(drawn) != layout.DisplayHeight {
 		t.Fatalf("drew %d rows, want allotted height %d", len(drawn), layout.DisplayHeight)
 	}
@@ -152,10 +153,11 @@ func TestDrawRowsThenPadCanvasBoxPreservesPanelDefault(t *testing.T) {
 		Buffer: buffer, Width: 30, Height: 16, Follow: true,
 		Interactive: true, PaneWidth: 30, PaneHeight: 16, Scrollbar: true,
 	})
-	drawn := DrawRows(RowsInput{
+	draw := DrawRows(RowsInput{
 		Buffer: buffer, Layout: layout, PaneHeight: 16, Interactive: true, Follow: true,
 	})
-	got := PadCanvasBox(strings.Join(drawn, "\n"), canvasBlack, 30, 16)
+	drawn := draw.Rows
+	got := PadCanvasBox(strings.Join(drawn, "\n"), draw.CanvasBackground, 30, 16)
 	rows := strings.Split(got, "\n")
 	if len(rows) != 16 {
 		t.Fatalf("composed %d rows, want 16", len(rows))
@@ -193,7 +195,7 @@ func TestDrawRowsDoesNotInventACanvasForPlainScrollback(t *testing.T) {
 	})
 	drawn := DrawRows(RowsInput{
 		Buffer: buffer, Layout: layout, PaneHeight: 8, Interactive: true, Follow: true,
-	})
+	}).Rows
 	for i, row := range drawn {
 		if strings.Contains(row, canvasBlack) {
 			t.Errorf("plain row %d was painted as a canvas: %q", i, row)

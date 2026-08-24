@@ -32,18 +32,18 @@ func StripRowBackgrounds(line string) string {
 			out.WriteString(remaining)
 			break
 		}
-		out.WriteString(stripSequenceBackgrounds(seq))
+		out.WriteString(StripSequenceBackgrounds(seq))
 		state = newState
 		remaining = remaining[n:]
 	}
 	return out.String()
 }
 
-// stripSequenceBackgrounds neutralizes one escape sequence's background
-// parameters. Non-SGR sequences cannot set a background and pass through; SGR
-// sequences are rebuilt from their parameters with every background token
-// turned into 49.
-func stripSequenceBackgrounds(seq string) string {
+// StripSequenceBackgrounds neutralizes the background parameters in one ANSI
+// sequence. Non-SGR sequences pass through. It is exported for bounded row
+// analyzers that already own the ANSI walk and must not decode the same row a
+// second time just to build the background-free wire form.
+func StripSequenceBackgrounds(seq string) string {
 	if !strings.HasPrefix(seq, "\x1b[") || !strings.HasSuffix(seq, "m") {
 		return seq
 	}

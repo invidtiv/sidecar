@@ -45,7 +45,7 @@ func drawWithMode(t *testing.T, lines []string, mode tty.BackgroundMode, spanMax
 		Follow:            true,
 		Backgrounds:       mode,
 		BackgroundSpanMax: spanMax,
-	})
+	}).Rows
 }
 
 func TestDrawRowsBoundedKeepsShortSpans(t *testing.T) {
@@ -78,6 +78,72 @@ func TestDrawRowsBoundedDropsLongRunPastTheCap(t *testing.T) {
 	}
 	if stripped != 20-cap {
 		t.Fatalf("stripped %d rows past the cap, want %d", stripped, 20-cap)
+	}
+}
+
+func TestDrawRowsBoundedCountsPaintedRowsAboveScrolledViewport(t *testing.T) {
+	const cap = 8
+	lines := piWall(20)
+	buffer := canvasBuffer(t, lines, len(lines))
+
+	for _, tc := range []struct {
+		name        string
+		start       int
+		wantPainted int
+	}{
+		{name: "cap partly consumed above viewport", start: 6, wantPainted: 2},
+		{name: "cap already consumed above viewport", start: 10, wantPainted: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			layout := tty.Viewport{
+				Start: tc.start, End: len(lines), EffectiveCount: len(lines) - tc.start,
+				DisplayWidth: 40, DisplayHeight: len(lines) - tc.start,
+			}
+			drawn := DrawRows(RowsInput{
+				Buffer: buffer, Layout: layout,
+				Backgrounds: tty.BackgroundBounded, BackgroundSpanMax: cap,
+			}).Rows
+			painted, stripped := 0, 0
+			for _, line := range drawn {
+				switch {
+				case strings.Contains(line, piGreen):
+					painted++
+				case strings.Contains(line, "tool output"):
+					stripped++
+				}
+			}
+			if painted != tc.wantPainted {
+				t.Fatalf("painted %d visible rows, want %d after %d predecessor rows", painted, tc.wantPainted, tc.start)
+			}
+			if stripped != len(drawn)-tc.wantPainted {
+				t.Fatalf("stripped %d visible rows, want %d", stripped, len(drawn)-tc.wantPainted)
+			}
+		})
+	}
+}
+
+func TestDrawRowsBoundedCountsInheritedCarryAboveScrolledViewport(t *testing.T) {
+	const cap = 8
+	lines := []string{piGreen + "band begins above viewport"}
+	for range 19 {
+		lines = append(lines, "carried row")
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	layout := tty.Viewport{
+		Start: 10, End: len(lines), EffectiveCount: len(lines) - 10,
+		DisplayWidth: 40, DisplayHeight: len(lines) - 10,
+	}
+	drawn := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout,
+		Backgrounds: tty.BackgroundBounded, BackgroundSpanMax: cap,
+	}).Rows
+	for i, line := range drawn {
+		if strings.Contains(line, piGreen) {
+			t.Fatalf("visible row %d reopened an inherited band whose cap was consumed above the viewport: %q", i, line)
+		}
+		if !strings.Contains(line, "carried row") {
+			t.Fatalf("visible row %d lost content while stripping inherited background: %q", i, line)
+		}
 	}
 }
 
@@ -133,7 +199,7 @@ func TestDrawRowsAutoStillFillsTheCanvas(t *testing.T) {
 	drawn := DrawRows(RowsInput{
 		Buffer: buffer, Layout: layout, AbsoluteBase: 0,
 		PaneHeight: 10, Interactive: true, Follow: true,
-	})
+	}).Rows
 	filled := 0
 	for _, line := range drawn {
 		if strings.Contains(line, canvasBlack) || strings.Contains(line, "48;2;20;20;20") {

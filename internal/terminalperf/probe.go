@@ -14,6 +14,7 @@ const (
 	TerminalViewRendered
 	RowCacheHit
 	RowCacheMiss
+	CanvasInference
 	ContentLinkResolutionRequest
 	ContentLinkResolutionCacheHit
 	SynchronousResolverCall
@@ -27,6 +28,7 @@ type Counters struct {
 	terminalViewsRendered          atomic.Uint64
 	rowCacheHits                   atomic.Uint64
 	rowCacheMisses                 atomic.Uint64
+	canvasInferences               atomic.Uint64
 	contentLinkResolutionRequests  atomic.Uint64
 	contentLinkResolutionCacheHits atomic.Uint64
 	synchronousResolverCalls       atomic.Uint64
@@ -40,6 +42,7 @@ type Snapshot struct {
 	TerminalViewsRendered          uint64
 	RowCacheHits                   uint64
 	RowCacheMisses                 uint64
+	CanvasInferences               uint64
 	ContentLinkResolutionRequests  uint64
 	ContentLinkResolutionCacheHits uint64
 	SynchronousResolverCalls       uint64
@@ -81,6 +84,8 @@ func Add(event Event, count int) {
 		counters.rowCacheHits.Add(n)
 	case RowCacheMiss:
 		counters.rowCacheMisses.Add(n)
+	case CanvasInference:
+		counters.canvasInferences.Add(n)
 	case ContentLinkResolutionRequest:
 		counters.contentLinkResolutionRequests.Add(n)
 	case ContentLinkResolutionCacheHit:
@@ -101,6 +106,7 @@ func (c *Counters) Snapshot() Snapshot {
 		TerminalViewsRendered:          c.terminalViewsRendered.Load(),
 		RowCacheHits:                   c.rowCacheHits.Load(),
 		RowCacheMisses:                 c.rowCacheMisses.Load(),
+		CanvasInferences:               c.canvasInferences.Load(),
 		ContentLinkResolutionRequests:  c.contentLinkResolutionRequests.Load(),
 		ContentLinkResolutionCacheHits: c.contentLinkResolutionCacheHits.Load(),
 		SynchronousResolverCalls:       c.synchronousResolverCalls.Load(),

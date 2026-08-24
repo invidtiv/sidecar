@@ -62,6 +62,10 @@ type RenderBufferInput struct {
 	Backgrounds tty.BackgroundMode
 	// BackgroundSpanMax is the row cap for bounded mode; <= 0 uses the default.
 	BackgroundSpanMax int
+
+	// Analyzer is the terminal surface's bounded raw-row cache. Nil keeps the
+	// rendering contract but does not reuse analysis across calls.
+	Analyzer *RowAnalyzer
 }
 
 // RenderHeader draws the one row above an embedded terminal — identity chips
@@ -122,7 +126,7 @@ func RenderBody(in RenderBufferInput) string {
 
 	contentWidth := max(layout.DisplayWidth, 1)
 	backgrounds := tty.NormalizeBackgroundMode(in.Backgrounds)
-	visible := DrawRows(RowsInput{
+	draw := DrawRows(RowsInput{
 		Buffer:            in.Buffer,
 		Layout:            layout,
 		AbsoluteBase:      in.AbsoluteBase,
@@ -136,7 +140,9 @@ func RenderBody(in RenderBufferInput) string {
 		Pad:               true,
 		Backgrounds:       backgrounds,
 		BackgroundSpanMax: in.BackgroundSpanMax,
+		Analyzer:          in.Analyzer,
 	})
+	visible := draw.Rows
 
 	if layout.ShowScrollbar {
 		// JoinHorizontal aligns the scrollbar to the widest line of the block it is
@@ -156,11 +162,7 @@ func RenderBody(in RenderBufferInput) string {
 		)
 		visible = strings.Split(joined, "\n")
 	}
-	var canvasBg string
-	if backgrounds == tty.BackgroundAuto {
-		canvasBg = CanvasBackground(in.Buffer, layout.PaneTop, in.PaneHeight)
-	}
-	return PadCanvasBox(strings.Join(visible, "\n"), canvasBg, width, body, truncate)
+	return PadCanvasBox(strings.Join(visible, "\n"), draw.CanvasBackground, width, body, truncate)
 }
 
 // RenderBuffer draws a whole embedded terminal box: RenderHeader over

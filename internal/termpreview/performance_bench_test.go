@@ -26,6 +26,7 @@ func openCodeRowsInput() (RowsInput, terminalfixture.OpenCode) {
 	return RowsInput{
 		Buffer: buffer, Layout: layout, PaneHeight: fixture.Height, Follow: true,
 		Backgrounds: tty.BackgroundAuto,
+		Analyzer:    &RowAnalyzer{},
 	}, fixture
 }
 
@@ -37,13 +38,14 @@ func BenchmarkDrawRowsOpenCodeFixture(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		benchmarkRows = DrawRows(input)
+		benchmarkRows = DrawRows(input).Rows
 	}
 	b.StopTimer()
 	snapshot := counters.Snapshot()
 	b.ReportMetric(float64(snapshot.TerminalViewsRendered)/float64(b.N), "terminal_views/op")
 	b.ReportMetric(float64(snapshot.RowCacheHits)/float64(b.N), "row_cache_hits/op")
 	b.ReportMetric(float64(snapshot.RowCacheMisses)/float64(b.N), "row_cache_misses/op")
+	b.ReportMetric(float64(snapshot.CanvasInferences)/float64(b.N), "canvas_inferences/op")
 }
 
 func BenchmarkCanvasBackgroundOpenCodeFixture(b *testing.B) {

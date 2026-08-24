@@ -190,6 +190,8 @@ type Plugin struct {
 	primaryLinkContext    terminalLinkSurfaceContext
 	panelLinkContext      terminalLinkSurfaceContext
 	linkMatcherGeneration uint64
+	primaryRowAnalyzer    *termpreview.RowAnalyzer
+	panelRowAnalyzer      *termpreview.RowAnalyzer
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -701,6 +703,8 @@ func New() *Plugin {
 		shellSelected:       false, // Start with first worktree selected, not shell
 		applicationFocused:  true,
 		terminalOwnership:   &terminalOwnershipLease{},
+		primaryRowAnalyzer:  &termpreview.RowAnalyzer{},
+		panelRowAnalyzer:    &termpreview.RowAnalyzer{},
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
 }
