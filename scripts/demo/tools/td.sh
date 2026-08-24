@@ -63,6 +63,50 @@ setup_td_for_project() {
                     td note add "Lab Prep Protocol" --content "Reverse spherification with sodium alginate (0.5% w/w) in calcium lactate gluconate (1.0% w/w) bath." >/dev/null 2>&1 || true
                     ;;
             esac
+
+            write_content_links_sample "$project_dir" "$id_open"
         )
     fi
+}
+
+# write_content_links_sample drops one Markdown file whose prose exercises every
+# content-link kind that works without an external resource provider. It is
+# written here rather than in the project fixtures because the td id has to be a
+# real one the demo just created — a made-up id opens a card that errors.
+write_content_links_sample() {
+    local project_dir="$1"
+    local issue_id="${2:-}"
+
+    mkdir -p "$project_dir/notes"
+    {
+        cat <<'EOF'
+# Content Links
+
+Every reference below is clickable, and clicking one opens a pane beside Files.
+Press `m` to toggle the rendered view — the same references stay live in both,
+including inside the document panes this file opens.
+
+EOF
+        if [ -n "$issue_id" ]; then
+            printf -- '- Issue: %s\n' "$issue_id"
+        fi
+        cat <<'EOF'
+- Source file with a line: README.md:1
+- Bare source file: notes/content-links.md
+- Diff range: main..HEAD
+- URL: https://github.com/marcus/sidecar
+- Markdown link: [the Sidecar repository](https://github.com/marcus/sidecar)
+
+## Provider keys inside Markdown links
+
+A resource provider whose config lists the destination's host in `claimHosts`
+can take a link's *label* back from the browser, which is how a Jira key
+normally appears in a brief:
+
+    [ZMS-37161](https://your-site.atlassian.net/browse/ZMS-37161)
+
+That one needs a provider configured, so it stays an ordinary browser link
+here. See `docs/reference/terminal-resource-provider-protocol.md`.
+EOF
+    } > "$project_dir/notes/content-links.md"
 }
