@@ -10,7 +10,7 @@ No committed work was lost. Three threads were interrupted mid-task; all three a
 
 Sidecar reaps shell records whose tmux session has vanished, so `shells.json` was rewritten to an empty list for `recall`, `clara-home`, `vibes`, `clara`, and `td` at 13:31 — two minutes after the server restart. That erased each shell's display name, working directory, and agent configuration. Only `sidecar/shells.json` retains a pre-crash entry (`sidecar-global-workspace`, "workspace row convergence"), and only because that shell predates the reap window.
 
-There is no backup mechanism: the sole `.bak` in the state tree is `shells.json.overwritten-phase2-20260808T112359.bak` from Aug 8. This is worth a td issue — the reaper destroys the exact metadata needed to rebuild the shells it is reaping.
+There is no backup mechanism: the sole `.bak` in the state tree is `shells.json.overwritten-phase2-20260808T112359.bak` from Aug 8. The five emptied manifests are not recoverable — the data is gone. The structural fix is [shell-record-durability.md](shell-record-durability.md) (epic td-e4578b): a tmux server going away must degrade shells to offline rows, never to an empty `shells.json`.
 
 ## Where the agent sessions live
 
