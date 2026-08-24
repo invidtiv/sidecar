@@ -81,4 +81,41 @@ The private host and candidate were stopped and port 17661 closed. The real `she
 
 The real current journey misses both acceptance budgets: median visible CPU is 29.81%, above 25%, and median net visible overhead is 20.31 percentage points, above 12.10. The hidden floor also rose materially from the original baseline, but the net budget remains failed even after subtracting that drift. The existing 12 ms coalescer therefore cannot be accepted as the final policy, and this task remains open.
 
-The next candidate must implement the plan's adaptive actor-publication policy: immediate leading output after idle, sustained publication at no more than 30 fps, and a guaranteed newest trailing frame while model bytes and input remain immediate. It may ship only after a rerun meets both real CPU budgets and proves output-to-frame p95 at or below 50 ms, prompt idle-leading output, the 30 fps sustained cap, and no stranded trailing state.
+That result triggered the plan's adaptive actor-publication policy: immediate leading output after idle, sustained publication at no more than 30 frames per second per pane-model feed, and a guaranteed newest trailing frame while model bytes and input remain immediate.
+
+## Adaptive candidate: 2026-08-24
+
+The accepted adaptive candidate used:
+
+- Sidecar commit: `21d467f130ff1c12b0a5d004827e4b171af7a772`, clean `opencode-perf` checkout.
+- Embedded version: `devel+opencode-perf.21d467f1`.
+- Installed artifact: `/Users/marcus/.local/state/sidecar/dev-installs/opencode-perf-4d07caebc5bd-21d467f1-20260824T225508Z-96252/sidecar`, built with managed-install pinned dependencies.
+- Binary SHA-256: `dc004cc9a2fadcaeb0b519fafa6f8aaad70933abcaeb239d08600e2ddf3b190b`.
+- Dependencies and toolchain: `github.com/marcus/td v0.63.0`, `github.com/marcus/tasks v1.13.0`, and `go version go1.27.0 darwin/arm64` with `GOWORK=off`.
+- Configuration: deterministic 8 ms fixture, 200x50 Sidecar, pprof on localhost port 17671, diagnostic counters/screen comparison/traces off for CPU profiles.
+- Isolated proof root: `/private/tmp/sidecar-terminal-candidate-21d467f1.u7Bcb1`; both pre-fixture and post-fixture path checks placed the tmux socket, state, cache, config, and manifest beneath that root.
+
+Every pre-phase snapshot passed in one process using V-H/H-V/V-H order.
+
+| Pair | Order | Visible sampled / elapsed | Visible CPU | Hidden sampled / elapsed | Hidden CPU | Net visible overhead |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| 1 | V-H | 1.75 s / 20.06 s | 8.72% | 0.08 s / 20.08 s | 0.40% | 8.33 pp |
+| 2 | H-V | 1.78 s / 20.06 s | 8.87% | 0.07 s / 20.08 s | 0.35% | 8.52 pp |
+| 3 | V-H | 1.71 s / 20.07 s | 8.52% | 0.10 s / 20.09 s | 0.50% | 8.02 pp |
+| Median | — | — | 8.72% | — | 0.40% | 8.33 pp |
+
+Against the same synthetic fixture before cadence, median visible CPU fell from 18.31% to 8.72% and median net visible overhead fell from 17.57 to 8.33 percentage points. This is a material additional win and is within both numeric CPU budgets on the isolated fixture. It remains synthetic evidence and is not presented as a measured final real-pane CPU pass.
+
+## Adaptive latency and publication evidence
+
+A separate diagnostic process kept counters out of the CPU profiles. During the settled 20-second visible phase, model frames built and published each increased by 846, output-to-frame samples increased by 846, cumulative p95 was 34.000 ms, and maximum was 35.650 ms. During the settled 20-second hidden phase, every counter changed by exactly zero. The final transition added one sample, ending at 986 samples with the same p95 and maximum.
+
+The process-wide 846 publications over 20 seconds is an aggregate across all unlabeled `paneModelFeed` instances in the process. It is not a per-feed frame-rate measurement and must not be compared directly with the 30 fps per-feed contract. The deterministic single-feed cadence proof delivered 25 changed publications during one second of 8 ms output, with p95 and maximum latency of 40 ms, complete ordered model bytes, immediate idle-leading output, and the newest trailing state present. Independent race review repeated the cadence/lifecycle/counter tests 50 times and the coherent latency telemetry tests 25 times.
+
+## Final real-journey evidence boundary
+
+Before creating a second disposable real-state overlay, the proof preflight found that the default tmux inventory had changed from the authorized baseline of PID 94101 with 19 sessions to the same PID with 18 sessions. The target remained `sidecar-sh-intersections-1`, pane `%0`, PID 94108, running OpenCode, and the real manifest hash/stat tuple remained unchanged. The attempt stopped before copying personal state or launching another Sidecar process rather than silently treating a changed live environment as the same baseline.
+
+Marcus's direct report that the integrated candidate was a notable improvement over main, especially while scrolling, remains the real-journey qualitative evidence. That report was made against the pre-cadence Slices 1–4 candidate; it is not misattributed to the adaptive build. The adaptive build is accepted pragmatically because the same deterministic journey gains a further greater-than-half synthetic CPU reduction, its p95 remains below 50 ms, the per-feed cadence and trailing-state contract pass deterministic and race review, and final isolated visual proof is required before closing the implementation plan. No final real-pane CPU number is inferred from those facts.
+
+The synthetic candidate and diagnostic processes were stopped, their private tmux server and ports were gone, and only numeric JSON/logs plus six pprof files remain under the proof root. No real pane received input, no personal state was copied, and the default tmux server was not stopped, restarted, or replaced.
