@@ -10,6 +10,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
+	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
 // Errors returned by a [Model].
@@ -524,6 +525,9 @@ func (m *Model) Frame() (Frame, error) {
 		f = m.frame()
 		return nil
 	})
+	if err == nil {
+		terminalperf.Record(terminalperf.ModelFrameBuilt)
+	}
 	return f, err
 }
 

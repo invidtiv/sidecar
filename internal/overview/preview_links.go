@@ -18,6 +18,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -106,6 +107,7 @@ func (m *Model) previewLinkSpans(line string) []terminallink.Span {
 	}
 	return terminallink.ScanWith(line, terminallink.Options{
 		Resolve: func(raw string) (string, terminallink.Extra, bool) {
+			terminalperf.Record(terminalperf.ContentLinkResolutionRequest)
 			display, _, ok := terminallink.ResolveFile(root, raw)
 			if !ok {
 				return "", terminallink.Extra{}, false
@@ -127,7 +129,11 @@ func (m *Model) previewDiffResolver(root string) terminallink.DiffResolver {
 	}
 	memo := m.ensurePreviewLinkMemo(root, buffer)
 	return func(raw string) (string, terminallink.Extra, bool) {
+		terminalperf.Record(terminalperf.ContentLinkResolutionRequest)
 		resolution, found := memo.specs[raw]
+		if found {
+			terminalperf.Record(terminalperf.ContentLinkResolutionCacheHit)
+		}
 		if !found {
 			if memo.newSpecs >= terminallink.MaxNewDiffResolves {
 				return "", terminallink.Extra{}, false

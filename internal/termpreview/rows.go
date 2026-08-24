@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -77,6 +78,10 @@ func DrawRows(in RowsInput) []string {
 	}
 
 	lines := in.Buffer.LinesRange(layout.Start, layout.End)
+	terminalperf.Record(terminalperf.TerminalViewRendered)
+	// Slice 0 has no row-analysis cache, so every visible raw row is a miss.
+	// Slice 2 moves these events to the shared bounded cache itself.
+	terminalperf.Add(terminalperf.RowCacheMiss, len(lines))
 	backgrounds := tty.NormalizeBackgroundMode(in.Backgrounds)
 	spanMax := in.BackgroundSpanMax
 	if spanMax <= 0 {

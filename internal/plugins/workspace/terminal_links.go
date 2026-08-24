@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/targetactivation"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -268,7 +269,11 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 	// as ordinary text. Matching stays pure — no process starts here.
 	links := activatableTerminalLinks(terminallink.ScanWith(line, terminallink.Options{
 		Resolve: func(raw string) (string, terminallink.Extra, bool) {
+			terminalperf.Record(terminalperf.ContentLinkResolutionRequest)
 			resolution, found := memo.paths[raw]
+			if found {
+				terminalperf.Record(terminalperf.ContentLinkResolutionCacheHit)
+			}
 			if !found {
 				rel, _, ok := resolver(context.root, raw)
 				resolution = terminalLinkResolution{rel: rel, ok: ok}
@@ -280,7 +285,11 @@ func (p *Plugin) resolvedTerminalLinks(context terminalLinkSurfaceContext, buffe
 			return resolution.rel, terminallink.Extra{Raw: raw}, true
 		},
 		ResolveDiff: func(raw string) (string, terminallink.Extra, bool) {
+			terminalperf.Record(terminalperf.ContentLinkResolutionRequest)
 			resolution, found := memo.specs[raw]
+			if found {
+				terminalperf.Record(terminalperf.ContentLinkResolutionCacheHit)
+			}
 			if !found {
 				if memo.newSpecs >= terminallink.MaxNewDiffResolves {
 					return "", terminallink.Extra{}, false

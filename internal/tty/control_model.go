@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/terminalperf"
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
@@ -634,8 +635,18 @@ func (c *sessionControlClient) publishModelFrames() {
 		if !valid || callback == nil {
 			continue
 		}
-		gate.invoke(func() { callback(payload) })
+		deliverModelFrame(gate, callback, payload)
 	}
+}
+
+// deliverModelFrame records publication inside the subscription's delivery
+// barrier. Close may deactivate the gate after publishModelFrames revalidates
+// membership; in that interleaving neither the callback nor its counter runs.
+func deliverModelFrame(gate *subscriberDeliveryGate, callback func(ModelFrame), payload ModelFrame) bool {
+	return gate.invoke(func() {
+		terminalperf.Record(terminalperf.ModelFramePublished)
+		callback(payload)
+	})
 }
 
 // faultFeed invalidates exactly one pane model. It never touches the control

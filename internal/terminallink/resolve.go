@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+
+	"github.com/marcus/sidecar/internal/terminalperf"
 )
 
 // userHomeDir is os.UserHomeDir, overridden in tests.
@@ -19,6 +21,7 @@ var userHomeDir = os.UserHomeDir
 // inside the selected worktree. Display is a root-relative slash path when
 // the file is inside base, otherwise the resolved absolute path.
 func ResolveFile(base, raw string) (display, absolute string, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
 	if raw == "" || containsControl(raw) {
 		return "", "", false
 	}
@@ -127,6 +130,7 @@ func ResolveCommit(workdir, rev string) (oid string, ok bool) {
 // "commit <rev>", or A..B / A...B. HEAD and branch names are refused here
 // even if git would accept them — those are CLI-only.
 func ResolveGitSpec(workdir, raw string) (value string, extra Extra, ok bool) {
+	terminalperf.Record(terminalperf.SynchronousResolverCall)
 	extra = Extra{Raw: raw}
 	a, b, parsed := parseGitSpecToken(raw)
 	if !parsed {
