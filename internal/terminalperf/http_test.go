@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestSnapshotHandlerReturnsOnlyFixedNumericCounters(t *testing.T) {
@@ -14,6 +15,7 @@ func TestSnapshotHandlerReturnsOnlyFixedNumericCounters(t *testing.T) {
 	for event := ModelFrameBuilt; event <= GlobalWorkspacePreviewRendered; event++ {
 		Record(event)
 	}
+	RecordOutputToFrame(1500 * time.Microsecond)
 	restore()
 
 	recorder := httptest.NewRecorder()
@@ -32,9 +34,18 @@ func TestSnapshotHandlerReturnsOnlyFixedNumericCounters(t *testing.T) {
 	if len(got) != wantFields {
 		t.Fatalf("JSON fields = %d, want %d: %s", len(got), wantFields, recorder.Body.String())
 	}
+	wantLatency := map[string]float64{
+		"output_to_frame_samples": 1,
+		"output_to_frame_p95_us":  1500,
+		"output_to_frame_max_us":  1500,
+	}
 	for name, value := range got {
-		if value != float64(1) {
-			t.Fatalf("counter %s = %#v, want numeric 1", name, value)
+		want := float64(1)
+		if latency, ok := wantLatency[name]; ok {
+			want = latency
+		}
+		if value != want {
+			t.Fatalf("counter %s = %#v, want numeric %v", name, value, want)
 		}
 	}
 }

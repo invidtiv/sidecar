@@ -3,7 +3,11 @@
 // targets, session names, and provider payloads cannot enter a probe.
 package terminalperf
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+	"time"
+)
 
 // Event is one fixed terminal-pipeline operation.
 type Event uint8
@@ -36,6 +40,10 @@ type Counters struct {
 	synchronousResolverCalls       atomic.Uint64
 	globalWorkspaceListRendered    atomic.Uint64
 	globalWorkspacePreviewRendered atomic.Uint64
+	outputToFrameMu                sync.Mutex
+	outputToFrameSamples           uint64
+	outputToFrameMaxUS             uint64
+	outputToFrameBuckets           [outputToFrameBucketCount]uint64
 }
 
 // Snapshot is a point-in-time copy suitable for benchmark metrics or
@@ -52,7 +60,17 @@ type Snapshot struct {
 	SynchronousResolverCalls       uint64 `json:"synchronous_resolver_calls"`
 	GlobalWorkspaceListRendered    uint64 `json:"global_workspace_list_rendered"`
 	GlobalWorkspacePreviewRendered uint64 `json:"global_workspace_preview_rendered"`
+	OutputToFrameSamples           uint64 `json:"output_to_frame_samples"`
+	OutputToFrameP95US             uint64 `json:"output_to_frame_p95_us"`
+	OutputToFrameMaxUS             uint64 `json:"output_to_frame_max_us"`
 }
+
+const (
+	outputToFrameBucketWidthUS = uint64(1000)
+	// Buckets 0..99 cover <=1ms through <=100ms. The final bucket retains
+	// larger observations; its reported upper bound is the observed maximum.
+	outputToFrameBucketCount = 101
+)
 
 var active atomic.Pointer[Counters]
 
@@ -105,11 +123,67 @@ func Add(event Event, count int) {
 	}
 }
 
+// RecordOutputToFrame records a fixed numeric duration only. Millisecond
+// buckets are enough to decide the 50ms presentation gate without retaining
+// terminal content, targets, or a per-frame timestamp trail.
+func RecordOutputToFrame(duration time.Duration) {
+	counters := active.Load()
+	if counters == nil {
+		return
+	}
+	microseconds := uint64(0)
+	if duration > 0 {
+		microseconds = uint64(duration.Microseconds())
+	}
+	bucket := uint64(0)
+	if microseconds > 0 {
+		bucket = (microseconds - 1) / outputToFrameBucketWidthUS
+	}
+	if bucket >= outputToFrameBucketCount-1 {
+		bucket = outputToFrameBucketCount - 1
+	}
+	counters.outputToFrameMu.Lock()
+	if microseconds > counters.outputToFrameMaxUS {
+		counters.outputToFrameMaxUS = microseconds
+	}
+	counters.outputToFrameBuckets[bucket]++
+	counters.outputToFrameSamples++
+	counters.outputToFrameMu.Unlock()
+}
+
+func (c *Counters) outputToFrameSnapshot() (samples, p95, maximum uint64) {
+	c.outputToFrameMu.Lock()
+	defer c.outputToFrameMu.Unlock()
+	samples = c.outputToFrameSamples
+	maximum = c.outputToFrameMaxUS
+	if samples == 0 {
+		return samples, 0, maximum
+	}
+	rank := (samples*95 + 99) / 100
+	var seen uint64
+	for index := range outputToFrameBucketCount {
+		seen += c.outputToFrameBuckets[index]
+		if seen < rank {
+			continue
+		}
+		if index == outputToFrameBucketCount-1 {
+			return samples, maximum, maximum
+		}
+		upperBound := uint64(index+1) * outputToFrameBucketWidthUS
+		if maximum < upperBound {
+			return samples, maximum, maximum
+		}
+		return samples, upperBound, maximum
+	}
+	return samples, maximum, maximum
+}
+
 // Snapshot returns the current fixed counters.
 func (c *Counters) Snapshot() Snapshot {
 	if c == nil {
 		return Snapshot{}
 	}
+	latencySamples, latencyP95, latencyMax := c.outputToFrameSnapshot()
 	return Snapshot{
 		ModelFramesBuilt:               c.modelFramesBuilt.Load(),
 		ModelFramesPublished:           c.modelFramesPublished.Load(),
@@ -122,5 +196,8 @@ func (c *Counters) Snapshot() Snapshot {
 		SynchronousResolverCalls:       c.synchronousResolverCalls.Load(),
 		GlobalWorkspaceListRendered:    c.globalWorkspaceListRendered.Load(),
 		GlobalWorkspacePreviewRendered: c.globalWorkspacePreviewRendered.Load(),
+		OutputToFrameSamples:           latencySamples,
+		OutputToFrameP95US:             latencyP95,
+		OutputToFrameMaxUS:             latencyMax,
 	}
 }

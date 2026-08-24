@@ -33,6 +33,10 @@ func TestOpenCodeFixturePublishesRepeatedControlFramesWithoutTmux(t *testing.T) 
 		pushOutput(channel, "%1", string(fixture.Burst(step)))
 		waitFor(t, func() bool { return recorder.frameCount() > before })
 	}
+	// Recorder visibility occurs inside the subscriber callback. Cross the
+	// actor once more so teardown from an earlier test cannot contribute a late
+	// model build to this process-global diagnostic snapshot.
+	controlActorBarrier(t, channel)
 	snapshot := counters.Snapshot()
 	if snapshot.ModelFramesBuilt != 5 || snapshot.ModelFramesPublished != 5 {
 		t.Fatalf("publication counters = %+v, want five built and published frames", snapshot)
