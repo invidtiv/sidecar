@@ -4,7 +4,20 @@
 // There are various equivalent ways to declare your Docusaurus config.
 // See: https://docusaurus.io/docs/api/docusaurus-config
 
+import {execSync} from 'child_process';
 import {themes as prismThemes} from 'prism-react-renderer';
+
+// Compute commit count from git at build time
+let commitCount = 2374;
+try {
+  const countStr = execSync('git rev-list --count HEAD', {encoding: 'utf8'}).trim();
+  const parsed = parseInt(countStr, 10);
+  if (!isNaN(parsed) && parsed > 0) {
+    commitCount = parsed;
+  }
+} catch {
+  // Fallback if git is not available
+}
 
 // This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
 
@@ -32,6 +45,7 @@ const config = {
 
   customFields: {
     githubUrl: 'https://github.com/marcus/sidecar',
+    commitCount,
   },
 
   onBrokenLinks: 'throw',

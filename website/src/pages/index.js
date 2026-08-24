@@ -7,9 +7,7 @@ import SidecarDemo, {SidecarStill} from '@site/src/components/Tui/Demo';
 import {THEMES} from '@site/src/components/Tui/theme';
 import styles from './index.module.css';
 
-// Real numbers, so the badge is a fact rather than a flourish. Refresh with
-// `git rev-list --count HEAD` and `git log --reverse --format=%ad --date=short`.
-const COMMIT_COUNT = 1942;
+// Real commit history start date for the milestone badge
 const FIRST_COMMIT_MONTH = 'December 2025';
 
 const BREW_COMMAND = 'brew install marcus/tap/sidecar';
@@ -331,6 +329,7 @@ function ThemeGallery() {
 export default function Home() {
   const {siteConfig} = useDocusaurusContext();
   const githubUrl = siteConfig.customFields.githubUrl;
+  const commitCount = siteConfig.customFields.commitCount || 2374;
 
   return (
     <Layout
@@ -353,7 +352,7 @@ export default function Home() {
                   <span>
                     <strong>Sidecar 1.0 is here</strong>
                     <span className={styles.milestoneMeta}>
-                      {COMMIT_COUNT.toLocaleString('en-US')} commits since{' '}
+                      {commitCount.toLocaleString('en-US')} commits since{' '}
                       {FIRST_COMMIT_MONTH}
                     </span>
                   </span>
