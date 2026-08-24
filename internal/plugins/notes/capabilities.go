@@ -4,6 +4,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -85,9 +86,12 @@ func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 			contentlink.KindInternal,
 		),
 		ReadOnly: true,
-		// The note preview is always internal/markdown output; the editor pane,
-		// which is not this surface, is where raw bytes are shown.
-		RendererOwned: true,
+		// Only a Glamour render of the note is renderer-owned. The preview also
+		// serves the raw view (the markdown toggle is off) and any width too
+		// narrow for Glamour, and both of those are the note's own bytes
+		// word-wrapped — an OSC-8 sequence in them is authored content.
+		// viewSurfaceMD records which of the two ensureViewSurface just built.
+		RendererOwned: p.viewSurfaceMD && markdown.RendersMarkdownAt(p.viewSurfaceWidth),
 	}}
 }
 

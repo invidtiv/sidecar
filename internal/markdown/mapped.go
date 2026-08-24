@@ -93,7 +93,7 @@ func (r *Renderer) RenderMapped(content string, width int) MappedRender {
 	r.mu.RUnlock()
 
 	var result MappedRender
-	if width < MinWidthForMarkdown {
+	if !RendersMarkdownAt(width) {
 		result = MapWrappedSource(content, width)
 	} else {
 		lines := r.renderContent(content, width, snapshot)

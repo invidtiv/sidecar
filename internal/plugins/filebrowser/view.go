@@ -932,21 +932,12 @@ func (p *Plugin) renderPreviewPane(visibleHeight int) string {
 		return sb.String()
 	}
 
-	// Determine which lines to display
-	var lines []string
-	showLineNumbers := true
+	// The rows being drawn and the geometry exported to the content-link host
+	// read the same accessor, so they cannot disagree about what is on screen.
+	// Glamour output does not map 1:1 to source lines, so it is not numbered.
+	lines, showLineNumbers := p.previewRenderLines()
 
-	// Use markdown-rendered lines if in render mode for markdown files
-	if p.markdownRenderMode && p.isMarkdownFile() && len(p.markdownRendered) > 0 {
-		lines = p.markdownRendered
-		showLineNumbers = false // Glamour output doesn't map 1:1 to source lines
-	} else if len(p.previewHighlighted) > 0 {
-		lines = p.previewHighlighted
-	} else {
-		lines = p.previewLines
-	}
-
-	start := p.previewScroll
+	start := max(p.previewScroll, 0)
 	end := start + visibleHeight
 	if end > len(lines) {
 		end = len(lines)

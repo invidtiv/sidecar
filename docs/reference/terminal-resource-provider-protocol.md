@@ -478,7 +478,12 @@ Remove the entry and it goes back to opening the browser.
 
 The label branch applies **only** to frames Sidecar rendered. A program writing
 to a terminal can print any label over any destination, so terminal hyperlinks
-always mean what their destination says.
+always mean what their destination says. A rendered pane too narrow for the
+Markdown renderer is showing wrapped source rather than rendered output, and
+counts as source for the same reason.
+
+Reclassifying does not take the browser away: the label keeps the emulator
+hyperlink to its original destination, so cmd-click still opens it.
 
 `claimHosts` is per instance. Two Jira sites configured as two instances claim
 only their own hosts, and an instance with no `claimHosts` claims nothing.

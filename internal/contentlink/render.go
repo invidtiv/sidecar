@@ -32,8 +32,8 @@ type FrameOptions struct {
 	// The never-rewrite-an-explicit-destination rule (condition 3 of the "Why URL
 	// yield" block on yieldClaimedURLs) exists because a program writing to a PTY
 	// can lie about where its label points: it can print "td-1234" over a
-	// destination of its choosing. internal/markdown is not that adversary — its
-	// OSC-8 hyperlinks are a mechanical transcription of the document's own
+	// destination of its choosing. internal/markdown is not that adversary — the
+	// hyperlinks it emits are ones Sidecar chose to emit for the document's own
 	// Markdown links, so a label there is as trustworthy as the same text would
 	// be if the author had written it bare.
 	//
@@ -42,6 +42,16 @@ type FrameOptions struct {
 	// matcher owns. It does not widen which hosts may be claimed, it does not let
 	// an unclaimed host yield, and it is never a default — terminal scanning
 	// (internal/terminallink) leaves it false and behaves exactly as before.
+	//
+	// Glamour does not strip escape sequences already present in the source, so
+	// a document that writes its own OSC-8 reaches this path on a genuinely
+	// renderer-owned frame. That is deliberate and bounded rather than
+	// overlooked: the widened branch cannot yield anything bare automatic
+	// matching would not already yield for the same text, with the same
+	// instance, matcher, and locator — a document naming a key it does not own
+	// gets a card for that key either way. Callers still gate honestly (see
+	// markdown.RendersMarkdownAt) so the flag means what it says wherever the
+	// answer is knowable.
 	RendererOwned bool
 }
 
@@ -75,6 +85,10 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 				}
 				if span.EndCol >= MaxRenderedColumns {
 					span.EndCol = MaxRenderedColumns - 1
+					// The label is now clipped on screen. Drop the retained
+					// text so a renderer-owned yield cannot whole-match on a
+					// tail the reader cannot see.
+					span.Extra.Raw = ""
 				}
 				kept = append(kept, span)
 			}
@@ -98,8 +112,7 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 			return ref.Value, extra, true
 		}
 		autoOpts := Options{
-			Matchers:      opts.Matchers,
-			RendererOwned: opts.RendererOwned,
+			Matchers: opts.Matchers,
 			Resolve: func(raw string) (string, Extra, bool) {
 				return resolve(KindFile, raw)
 			},
@@ -109,7 +122,7 @@ func ScanFrame(frame string, opts FrameOptions) FrameResult {
 		}
 		internal := scanInternalURIs(plain, claimed, opts.InternalNamespaces)
 		spans := allowedActivatableSpans(
-			scanPlain(plain, append(claimed, internal...), autoOpts, &pending),
+			scanPlain(plain, append(claimed, internal...), autoOpts, &pending, opts.RendererOwned),
 			opts.AllowedKinds,
 		)
 		for i := range spans {
@@ -168,8 +181,12 @@ func extractExplicit(line string, namespaces map[string]URIOptions) (string, []S
 				// the token as rendered before ready resolution, and a
 				// renderer-owned frame's URL yield matches against it — a Jira key
 				// only ever appears as the label of its own browse URL, never in
-				// the destination in a shape any provider matcher recognizes. The
-				// column span is already bounded above, so the text is too.
+				// the destination in a shape any provider matcher recognizes.
+				//
+				// MaxExplicitLabelColumns bounds the columns, not the bytes: one
+				// column of combining marks is arbitrarily long. The consumer is
+				// what bounds this, and matchesWhole applies
+				// MaxResourceLocatorChars to it before any match.
 				span.Extra.Raw = ansi.Strip(text[startByte:])
 				spans = append(spans, span)
 			} else {

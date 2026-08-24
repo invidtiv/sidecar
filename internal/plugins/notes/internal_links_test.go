@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/app"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 )
@@ -173,6 +174,54 @@ func TestNotesCapabilitiesExposeExactRenderedPreviewOnly(t *testing.T) {
 		t.Fatalf("rendered Markdown body = %q, internal spans = %+v", strings.Join(body, "\n"), scanned.Spans)
 	}
 }
+
+// The preview also serves the raw view and any width too narrow for Glamour.
+// Both are the note's own bytes word-wrapped, so neither is renderer-owned and
+// an OSC-8 sequence in the note body keeps the terminal rule there.
+func TestNotesPreviewIsRendererOwnedOnlyWhenGlamourDrewIt(t *testing.T) {
+	store := openTestStore(t)
+	note := Note{ID: "nt-4jdj4e", Title: "title", Content: "See CASH-1245 today."}
+
+	newPreview := func(t *testing.T, width int, markdownView bool) *Plugin {
+		t.Helper()
+		p := navigationTestPlugin(store, "/project")
+		p.notes = []Note{note}
+		p.editorNote = &p.notes[0]
+		p.previewLines = strings.Split(note.Content, "\n")
+		p.previewMode = true
+		p.markdownView = markdownView
+		p.View(width, 12)
+		return p
+	}
+
+	wide := newPreview(t, 100, true)
+	surfaces := wide.ContentLinkSurfaces()
+	if len(surfaces) != 1 || !surfaces[0].RendererOwned {
+		t.Fatalf("a Glamour-rendered note preview is not renderer-owned: %+v", surfaces)
+	}
+
+	raw := newPreview(t, 100, false)
+	if surfaces = raw.ContentLinkSurfaces(); len(surfaces) != 1 || surfaces[0].RendererOwned {
+		t.Fatalf("the raw note view claimed to be renderer-owned: %+v", surfaces)
+	}
+
+	narrow := newPreview(t, narrowNoteFrameWidth, true)
+	if markdown.RendersMarkdownAt(narrow.viewSurfaceWidth) {
+		t.Fatalf("surface width %d still renders markdown; narrowNoteFrameWidth is too generous", narrow.viewSurfaceWidth)
+	}
+	surfaces = narrow.ContentLinkSurfaces()
+	if len(surfaces) != 1 {
+		t.Fatalf("narrow preview exported %d surfaces; the case proves nothing without one", len(surfaces))
+	}
+	if surfaces[0].RendererOwned {
+		t.Fatalf("the narrow plain-wrap fallback claimed to be renderer-owned: %+v", surfaces[0])
+	}
+}
+
+// narrowNoteFrameWidth is a whole-plugin width whose preview column lands below
+// MinWidthForMarkdown — the list, dividers, borders, and padding take the rest —
+// while still leaving a preview pane to export.
+const narrowNoteFrameWidth = 60
 
 func TestNotesContentLinksExcludeInteractiveAndOverlayStates(t *testing.T) {
 	tests := []struct {

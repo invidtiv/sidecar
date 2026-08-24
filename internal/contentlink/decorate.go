@@ -12,7 +12,10 @@ import (
 // destinations: built-in URL spans, and resource spans whose locator is itself
 // a browser URL — a claimed GitHub URL must keep its emulator hyperlink so
 // cmd-click remains the escape hatch even after Sidecar reclassifies the span.
-// Resource locators that are keys or refs stay underline-only.
+// A resource span claimed by its rendered label carries the destination it was
+// claimed away from in Extra.Destination and keeps the hyperlink through that,
+// for the same reason. Locators that are keys or refs with no destination stay
+// underline-only.
 //
 // Source OSC must first be removed by StripOSC8 or ScanFrame.
 func Decorate(line string, spans []Span) string {
@@ -29,7 +32,7 @@ func Decorate(line string, spans []Span) string {
 			if span.Explicit && len(span.Value) > MaxExplicitDestinationBytes {
 				continue
 			}
-			if safe, ok := SafeHTTPURL(span.Value); ok {
+			if safe, ok := hyperlinkFor(span); ok {
 				open = "\x1b]8;;" + safe + "\x1b\\\x1b[4m"
 				close = "\x1b[24m\x1b]8;;\x1b\\"
 			} else if span.Kind == KindURL {
@@ -39,6 +42,18 @@ func Decorate(line string, spans []Span) string {
 		line = WrapVisualRange(line, span.StartCol, span.EndCol, open, close)
 	}
 	return line
+}
+
+// hyperlinkFor is the browser destination a span should carry, preferring its
+// own locator and falling back to the destination a label claim took it from.
+func hyperlinkFor(span Span) (string, bool) {
+	if safe, ok := SafeHTTPURL(span.Value); ok {
+		return safe, true
+	}
+	if len(span.Extra.Destination) > MaxExplicitDestinationBytes {
+		return "", false
+	}
+	return SafeHTTPURL(span.Extra.Destination)
 }
 
 func WrapVisualRange(line string, startCol, endCol int, open, close string) string {

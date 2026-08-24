@@ -167,12 +167,55 @@ func TestRendererOwnedFrameYieldsGlamoursPrintedDestinationRow(t *testing.T) {
 	}
 }
 
-// Line scanning has no frame and therefore no renderer to own it.
-func TestScanWithNeverEnablesRendererOwnedYield(t *testing.T) {
-	spans := ScanWith("ZMS-37161 "+jiraBrowseURL, Options{Matchers: jiraMatchers("avalara.atlassian.net")})
-	for _, span := range spans {
-		if span.Explicit {
-			t.Fatalf("line scanning produced an explicit span: %+v", span)
-		}
+// Taking a link over must not remove the browser escape hatch it had. A label
+// claim keeps the destination so decoration still synthesizes the emulator
+// hyperlink over the label's cells — cmd-click reaches the ticket in a browser
+// exactly as it did before the provider claimed it.
+func TestRendererOwnedLabelClaimKeepsTheEmulatorHyperlink(t *testing.T) {
+	result := ScanFrame(markdownLink("ZMS-37161", jiraBrowseURL), FrameOptions{
+		Matchers:      jiraMatchers("avalara.atlassian.net"),
+		RendererOwned: true,
+		Decorate:      true,
+	})
+	got := resourceSpans(result.Spans)
+	if len(got) != 1 {
+		t.Fatalf("want 1 resource span, got %+v", result.Spans)
+	}
+	if got[0].Extra.Destination != jiraBrowseURL {
+		t.Errorf("destination = %q, want the URL the label was claimed away from", got[0].Extra.Destination)
+	}
+	if !strings.Contains(result.Output, "\x1b]8;;"+jiraBrowseURL+"\x1b\\") {
+		t.Errorf("claimed label lost its OSC-8 hyperlink: %q", result.Output)
+	}
+	if n := strings.Count(result.Output, "]8;;"); n != 2 {
+		t.Errorf("OSC-8 pair count = %d, want exactly one synthesized pair: %q", n, result.Output)
+	}
+}
+
+// A destination-branch claim keeps the URL as its locator, so it has no
+// separate destination to remember.
+func TestRendererOwnedDestinationClaimCarriesNoSeparateDestination(t *testing.T) {
+	const dest = "https://github.com/marcus/sidecar/pull/88"
+	result := ScanFrame(markdownLink("the sidecar PR", dest), FrameOptions{
+		Matchers:      claimingMatchers(),
+		RendererOwned: true,
+	})
+	got := resourceSpans(result.Spans)
+	if len(got) != 1 || got[0].Extra.Destination != "" {
+		t.Fatalf("destination-branch span = %+v, want an empty Extra.Destination", result.Spans)
+	}
+}
+
+// A label clipped by the rendered-column bound must not whole-match on the tail
+// nobody can see.
+func TestRendererOwnedFrameDropsTheLabelOfAColumnClippedSpan(t *testing.T) {
+	pad := strings.Repeat("x", MaxRenderedColumns-4)
+	frame := pad + markdownLink("ZMS-37161", jiraBrowseURL)
+	result := ScanFrame(frame, FrameOptions{
+		Matchers:      jiraMatchers("avalara.atlassian.net"),
+		RendererOwned: true,
+	})
+	if got := resourceSpans(result.Spans); len(got) != 0 {
+		t.Fatalf("clipped label still claimed: %+v", got)
 	}
 }

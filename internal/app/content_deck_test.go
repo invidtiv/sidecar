@@ -267,7 +267,7 @@ func TestAppContentDeckResolvedAbsoluteDocumentKeepsCanonicalPath(t *testing.T) 
 		t.Fatal("app content deck was not created")
 	}
 	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: raw}
-	resolved := resolveAppContentLink(h.key, "preview", root, candidate)().(appContentResolvedMsg)
+	resolved := resolveAppContentLink(h.key, root, candidate)().(appContentResolvedMsg)
 	want, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1432,23 +1432,34 @@ func TestAppContentDeckScansDocumentLeafBodies(t *testing.T) {
 		t.Fatal("document leaf body was not decorated")
 	}
 
-	// The hit sits inside the leaf body, clear of the header row the tab strip
-	// and close button own, and clear of the scrollbar column.
+	// Every hit lies inside the viewer's own content rectangle, which is what
+	// excludes the gutter, the scrollbar column, and the header row the tab
+	// strip and close button own. Asserting against hand-derived box arithmetic
+	// would restate the layout instead of checking it.
 	leafID := h.deck.Leaf(panelayout.Document)
-	var box paneframe.Box
-	for _, placement := range h.layout.Leaves {
-		if placement.Node != nil && placement.Node.ID == leafID {
-			box = paneframe.Box(placement.Box)
+	view, ok := h.deck.Viewer(leafID).(*docview.Model)
+	if !ok {
+		t.Fatal("document leaf has no docview viewer")
+	}
+	rect := view.ContentLinkRect()
+	if rect.W <= 0 || rect.H <= 0 {
+		t.Fatalf("document leaf exported no content rect: %+v", rect)
+	}
+	if !rect.Contains(hit.Rect.X, hit.Rect.Y) || !rect.Contains(hit.Rect.X+hit.Rect.W-1, hit.Rect.Y) {
+		t.Fatalf("hit %+v is not wholly inside the viewer content rect %+v", hit.Rect, rect)
+	}
+	// The chrome the rect excludes is registered where the rect is not, and the
+	// frame registers those regions last, so a hit can never win one of them.
+	for _, probe := range []struct {
+		name string
+		x, y int
+	}{
+		{"tab strip", hit.Rect.X, rect.Y - 1},
+		{"scrollbar column", rect.X + rect.W, hit.Rect.Y},
+	} {
+		if rect.Contains(probe.x, probe.y) {
+			t.Errorf("%s at %d,%d is inside the scan rect %+v", probe.name, probe.x, probe.y, rect)
 		}
-	}
-	if box.W == 0 {
-		t.Fatal("document leaf was not laid out")
-	}
-	if hit.Rect.Y <= box.Y {
-		t.Fatalf("hit row %d is on the leaf header at %d", hit.Rect.Y, box.Y)
-	}
-	if hit.Rect.X+hit.Rect.W > box.X+box.W-1 {
-		t.Fatalf("hit %+v reaches the scrollbar column of leaf box %+v", hit.Rect, box)
 	}
 	if region := h.mouse.HitMap.Test(hit.Rect.X, hit.Rect.Y); region != nil && region.ID == appDeckTabRegion {
 		t.Fatalf("hit landed on the leaf tab strip: %+v", region)
@@ -1474,9 +1485,20 @@ func TestAppContentDeckResolvesDocumentLeafPathsAgainstDeckRoot(t *testing.T) {
 	if !h.pending[candidate] {
 		t.Fatalf("document leaf queued no file resolution: %+v", h.pending)
 	}
-	resolved, ok := resolveAppContentLink(h.key, appDeckDocumentSurfaceID, h.workdir, candidate)().(appContentResolvedMsg)
-	if !ok || !resolved.Found || resolved.Ref.Value != "other.go" {
-		t.Fatalf("deck-root resolution = %#v", resolved)
+	// Run the command the deck itself queued, not one the test rebuilds: the
+	// root scanDocumentLeaf passed is exactly what is under test, and a test
+	// that supplies its own root would pass even if the deck passed "".
+	var resolved appContentResolvedMsg
+	for _, cmd := range h.queued {
+		if cmd == nil {
+			continue
+		}
+		if msg, ok := cmd().(appContentResolvedMsg); ok && msg.Candidate == candidate {
+			resolved = msg
+		}
+	}
+	if !resolved.Found || resolved.Ref.Value != "other.go" {
+		t.Fatalf("the deck's own queued resolution = %#v, want other.go found against the deck root", resolved)
 	}
 
 	updated, _ := m.Update(resolved)
@@ -1529,24 +1551,5 @@ func TestAppContentDeckActivatesFromDocumentLeafIntoSameDeck(t *testing.T) {
 	}
 	if m.currentContentDeck() != h {
 		t.Fatal("activation from a document leaf left the deck it was drawn in")
-	}
-}
-
-// Other leaf kinds stay unscanned, matching Workspace and the global browser.
-func TestAppContentDeckLeavesNonDocumentBodiesUnscanned(t *testing.T) {
-	root := t.TempDir()
-	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
-	m := appDeckTestModel(t, root, p)
-	m.renderContent(200, 40)
-	h := m.currentContentDeck()
-	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}); cmd != nil {
-		cmd()
-	}
-	m.renderContent(200, 40)
-	if h.deck.Leaf(panelayout.Issue) == 0 {
-		t.Fatal("no Issue leaf was opened, so this proves nothing")
-	}
-	for _, link := range h.links {
-		t.Fatalf("an issue card body was scanned: %+v", link)
 	}
 }

@@ -92,8 +92,10 @@ func (p *Plugin) ContentLinkSurfaces() []contentlink.Surface {
 		ReadOnly: true,
 		// Only the rendered view is drawn by internal/markdown. Raw source rows
 		// are the file's own bytes, so an OSC-8 sequence in them keeps the
-		// terminal rule.
-		RendererOwned: p.markdownRenderMode && p.isMarkdownFile(),
+		// terminal rule. No width gate is needed here the way docview and Notes
+		// need one: renderMarkdownContent clamps up to MinWidthForMarkdown, so
+		// these rows are never the plain-wrap fallback over the source.
+		RendererOwned: p.markdownRenderMode && p.isMarkdownFile() && len(p.markdownRendered) > 0,
 	}}
 }
 
@@ -163,18 +165,22 @@ func (p *Plugin) previewTextWidths() (gutterWidth, lineWidth int) {
 }
 
 func (p *Plugin) previewRenderedRows(lineWidth int) int {
-	limit := p.previewSourceRowCapacity()
-	if p.isTruncated && limit > 1 {
-		// The final visible row belongs to the truncation notice, not the source.
-		limit--
-	}
 	// Bound the walk by the slice actually being drawn, not by the source lines.
 	// In render mode previewDisplayLines is Glamour's output, which is longer or
 	// shorter than the source; counting source rows while reading rendered ones
 	// is what lands a link a row off (or clips the last rows of a long render).
 	display := p.previewDisplayLines()
+	start := max(p.previewScroll, 0)
+	limit := p.previewSourceRowCapacity()
+	// The truncation notice takes the final visible row — but only when there is
+	// more than one row to give it, which is the condition renderPreviewPane
+	// applies to the window it actually drew. Reading capacity instead would
+	// export one row too few for a truncated file with a short tail.
+	if end := min(start+limit, len(display)); p.isTruncated && end-start > 1 {
+		limit--
+	}
 	rows := 0
-	for i := p.previewScroll; i < len(display) && rows < limit; i++ {
+	for i := start; i < len(display) && rows < limit; i++ {
 		lineRows := 1
 		if p.previewWrapEnabled {
 			lineRows = len(p.wrapPreviewLine(display[i], lineWidth))

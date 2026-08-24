@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 )
 
@@ -93,8 +94,10 @@ func (m *Model) ScanContentLinks(body string, opts contentlink.FrameOptions) Con
 	}
 	// The viewer, not the host, knows whether these rows came out of
 	// internal/markdown. Raw source rows are the document's own bytes, so an
-	// OSC-8 sequence in them is authored content and keeps the terminal rule.
-	opts.RendererOwned = m.rendered
+	// OSC-8 sequence in them is authored content and keeps the terminal rule —
+	// and so are the rows of a pane too narrow for Glamour, where "rendered"
+	// mode is the plain-wrap fallback over that same source.
+	opts.RendererOwned = m.rendered && markdown.RendersMarkdownAt(m.contentWidth())
 	rect := m.ContentLinkRect()
 	if rect.W <= 0 || rect.H <= 0 {
 		return ContentLinkFrame{Output: body}

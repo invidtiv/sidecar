@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/markdown"
 )
 
 func TestContentLinkRectExcludesGutterAndMatchesVisibleSourceRows(t *testing.T) {
@@ -138,6 +139,37 @@ func TestScanContentLinksYieldsMarkdownLinkLabelsOnlyWhenRendered(t *testing.T) 
 	refs := scan(raw)
 	if len(refs) != 1 || refs[0].Kind != contentlink.KindURL {
 		t.Fatalf("raw source claimed a resource from an explicit destination: %+v", refs)
+	}
+}
+
+// Below MinWidthForMarkdown the "rendered" view is internal/markdown's
+// plain-wrap fallback over the document's own bytes, so an OSC-8 sequence in it
+// is authored content and must keep the terminal rule even though m.rendered is
+// true. Without the width gate this is the hole that lets a file hand itself a
+// renderer-owned label.
+func TestScanContentLinksTreatsTheNarrowFallbackAsSourceNotRenderer(t *testing.T) {
+	const authored = "\x1b]8;id=13-1;https://avalara.atlassian.net/browse/ZMS-37161\x1b\\ZMS-37161\x1b]8;;\x1b\\"
+	matchers := []contentlink.ResourceMatcher{{
+		Provider:   "jira-work",
+		ID:         "issue-key",
+		Re:         regexp.MustCompile(`\b[A-Z][A-Z0-9]+-[0-9]+\b`),
+		ClaimHosts: []string{"avalara.atlassian.net"},
+	}}
+
+	m := newSelectableModel(t, markdown.MinWidthForMarkdown-1, 6, authored)
+	m.SetRendered(true)
+	if markdown.RendersMarkdownAt(m.contentWidth()) {
+		t.Fatalf("content width %d still renders markdown; widen the gap", m.contentWidth())
+	}
+	frame := m.ScanContentLinks(m.View(), contentlink.FrameOptions{
+		Matchers:     matchers,
+		AllowedKinds: ContentLinkKinds(),
+		Decorate:     true,
+	})
+	for _, hit := range frame.Hits {
+		if hit.Ref.Kind == contentlink.KindResource {
+			t.Fatalf("the narrow plain-wrap fallback claimed a resource from an authored OSC-8: %+v", hit.Ref)
+		}
 	}
 }
 

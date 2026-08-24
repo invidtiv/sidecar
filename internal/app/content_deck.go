@@ -48,7 +48,6 @@ const (
 
 type appContentResolvedMsg struct {
 	Key       string
-	SurfaceID string
 	Candidate contentlink.Pending
 	Ref       contentlink.Ref
 	Found     bool
@@ -401,6 +400,11 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 	// they scan on no surface today — not Workspace, not the global browser —
 	// and making them scan is a wider change than closing the gap between a
 	// document opened beside Files and the byte-identical Workspace pane.
+	//
+	// There is no test pinning this. Every one of these viewers needs a live
+	// backend (td, a resource provider, git) before it draws a token at all, so
+	// a unit test asserting "no hits" here would be green whether or not the
+	// body were scanned. Reviewing a change to this switch is the control.
 	case *issueview.Model:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.View()
@@ -571,7 +575,7 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 				}})
 			}
 			for _, candidate := range result.Pending {
-				h.queueContentLinkResolve(surface.ID, surface.WorkDir, candidate)
+				h.queueContentLinkResolve(surface.WorkDir, candidate)
 			}
 			prefix := ansi.Cut(lines[y], 0, surface.Rect.X)
 			suffix := ansi.Cut(lines[y], surface.Rect.X+surface.Rect.W, ansi.StringWidth(lines[y]))
@@ -606,29 +610,29 @@ func (h *appContentDeck) scanDocumentLeaf(view *docview.Model, body string) stri
 		h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: hit.Ref, Rect: hit.Rect})
 	}
 	for _, candidate := range frame.Pending {
-		h.queueContentLinkResolve(appDeckDocumentSurfaceID, h.workdir, candidate)
+		h.queueContentLinkResolve(h.workdir, candidate)
 	}
 	return frame.Output
 }
 
-// appDeckDocumentSurfaceID names document leaves in resolution messages. Every
-// leaf resolves against the same root, so one name covers them all.
-const appDeckDocumentSurfaceID = "document"
-
 // queueContentLinkResolve schedules one file/diff resolution per distinct
-// candidate. The pending set is deck-wide, so the primary plugin's surface and a
-// document leaf naming the same path resolve once between them.
-func (h *appContentDeck) queueContentLinkResolve(surfaceID, root string, candidate contentlink.Pending) {
+// candidate. The pending set is deck-wide and keyed on the candidate alone, so
+// the primary plugin's surface and a document leaf naming the same path resolve
+// once between them. That is only sound because every root here is the same
+// one: a plugin's ContentLinkSurface reports its own plugin.Context.WorkDir,
+// which is the m.ui.WorkDir the deck was built with. A surface that ever
+// reported a different root would need the root in this key.
+func (h *appContentDeck) queueContentLinkResolve(root string, candidate contentlink.Pending) {
 	if h.pending[candidate] {
 		return
 	}
 	h.pending[candidate] = true
-	h.queued = append(h.queued, resolveAppContentLink(h.key, surfaceID, root, candidate))
+	h.queued = append(h.queued, resolveAppContentLink(h.key, root, candidate))
 }
 
-func resolveAppContentLink(key, surfaceID, root string, candidate contentlink.Pending) tea.Cmd {
+func resolveAppContentLink(key, root string, candidate contentlink.Pending) tea.Cmd {
 	return func() tea.Msg {
-		msg := appContentResolvedMsg{Key: key, SurfaceID: surfaceID, Candidate: candidate}
+		msg := appContentResolvedMsg{Key: key, Candidate: candidate}
 		switch candidate.Kind {
 		case contentlink.KindFile:
 			rel, _, ok := terminallink.ResolveFile(root, candidate.Raw)

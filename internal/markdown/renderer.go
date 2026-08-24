@@ -18,6 +18,15 @@ const (
 	MaxCacheEntries = 100
 )
 
+// RendersMarkdownAt reports whether a render at this width goes through Glamour
+// rather than the plain-wrap fallback. Every entry point in this package applies
+// the same gate; it is exported because a caller holding the output sometimes
+// has to know which of the two it got. The content-link RendererOwned trust bit
+// is the case that matters: below this width the "rendered" view is the
+// document's own bytes, wrapped, and an escape sequence in it is authored
+// content rather than something this package chose to emit.
+func RendersMarkdownAt(width int) bool { return width >= MinWidthForMarkdown }
+
 // Renderer wraps Glamour for markdown rendering with caching.
 type Renderer struct {
 	mu              sync.RWMutex
@@ -84,7 +93,7 @@ func (r *Renderer) RenderContent(content string, width int) []string {
 // renderContent renders against one explicit theme snapshot so a concurrent
 // theme change cannot mix one palette's cache key with another palette's style.
 func (r *Renderer) renderContent(content string, width int, snapshot ThemeSnapshot) []string {
-	if width < MinWidthForMarkdown {
+	if !RendersMarkdownAt(width) {
 		return WrapText(content, width)
 	}
 

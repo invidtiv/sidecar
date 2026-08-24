@@ -36,7 +36,7 @@ type notesMarkdownProjection struct {
 // projection carries its AST-scoped candidates and source map through anchor
 // repair; no unrelated source line is reconsidered after parsing.
 func renderNotesMarkdown(renderer *markdown.Renderer, content string, width int) markdown.MappedRender {
-	if width < markdown.MinWidthForMarkdown {
+	if !markdown.RendersMarkdownAt(width) {
 		return renderer.RenderMapped(content, width)
 	}
 	projection := projectNotesOrdinalLists(content)

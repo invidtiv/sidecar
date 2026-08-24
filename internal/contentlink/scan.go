@@ -53,10 +53,10 @@ func Scan(line string, resolve Resolver, resolveDiff DiffResolver) []Span {
 // Built-ins win in URL, path:line, file, issue, diff, resource order.
 func ScanWith(line string, opts Options) []Span {
 	plain := ansi.Strip(line)
-	return scanPlain(plain, nil, opts, nil)
+	return scanPlain(plain, nil, opts, nil, false)
 }
 
-func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) []Span {
+func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending, rendererOwned bool) []Span {
 	spans := append([]Span(nil), claimed...)
 	appendBounded := func(found []Span) {
 		for _, span := range found {
@@ -67,7 +67,7 @@ func scanPlain(plain string, claimed []Span, opts Options, pending *[]Pending) [
 		}
 	}
 	appendBounded(scanURLs(plain, spans))
-	yieldClaimedURLs(spans, opts.Matchers, opts.RendererOwned)
+	yieldClaimedURLs(spans, opts.Matchers, rendererOwned)
 	appendBounded(scanPathLines(plain, spans, opts.Resolve, pending))
 	if opts.Resolve != nil || pending != nil {
 		appendBounded(scanBareFiles(plain, spans, opts.Resolve, pending))
@@ -201,6 +201,13 @@ func yieldClaimedURLs(spans []Span, matchers []ResourceMatcher, rendererOwned bo
 			}
 			locator, matched := span.Value, matchesWhole(m, span.Value)
 			if !matched && matchesWhole(m, label) {
+				// The label is the locator, so the destination stops being
+				// Value. Keep it: decoration re-synthesizes the emulator
+				// hyperlink from it, which is what leaves cmd-click reaching the
+				// browser exactly as it did before this instance claimed the
+				// link. Dropping it would make taking a link over strictly
+				// remove an affordance.
+				span.Extra.Destination = span.Value
 				locator, matched = label, true
 			}
 			if !matched {

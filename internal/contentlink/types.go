@@ -75,12 +75,19 @@ type Surface struct {
 
 // Extra preserves the terminal-link scanner's original public shape while
 // callers migrate to Ref. Raw is the token as rendered before ready resolution.
+//
+// Destination is set only when a renderer-owned URL yield reclassified an
+// explicit hyperlink by its label: Value becomes the locator the provider is
+// invoked with, and the destination the label pointed at is kept here so
+// decoration can still synthesize the emulator hyperlink. Without it, taking a
+// link over would silently remove the browser escape hatch the label had.
 type Extra struct {
-	Line      int
-	Raw       string
-	Provider  string
-	Matcher   string
-	Namespace string
+	Line        int
+	Raw         string
+	Provider    string
+	Matcher     string
+	Namespace   string
+	Destination string
 }
 
 // Span is one non-overlapping reference in inclusive visual columns. Row is
@@ -142,14 +149,15 @@ type ResourceMatcher struct {
 	ClaimHosts []string
 }
 
+// Options is the line scanner's contract. It deliberately carries no
+// renderer-owned bit: internal/terminallink aliases this type, so a field here
+// would be one `terminallink.Options{RendererOwned: true}` away from reaching
+// terminal scanning. The bit is a parameter of the frame scanner instead, which
+// only ScanFrame can supply.
 type Options struct {
 	Resolve     Resolver
 	ResolveDiff DiffResolver
 	Matchers    []ResourceMatcher
-	// RendererOwned is FrameOptions.RendererOwned, threaded down so
-	// yieldClaimedURLs can tell a renderer-owned frame from a terminal one. Line
-	// scanning (ScanWith) never sets it.
-	RendererOwned bool
 }
 
 const (
