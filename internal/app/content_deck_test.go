@@ -12,6 +12,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
@@ -265,9 +267,7 @@ func TestAppContentDeckResolvedAbsoluteDocumentKeepsCanonicalPath(t *testing.T) 
 		t.Fatal("app content deck was not created")
 	}
 	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: raw}
-	resolved := resolveAppContentLink(h.key, contentlink.Surface{
-		ID: "preview", WorkDir: root, ProjectRoot: root,
-	}, candidate)().(appContentResolvedMsg)
+	resolved := resolveAppContentLink(h.key, "preview", root, candidate)().(appContentResolvedMsg)
 	want, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
 		t.Fatal(err)
@@ -1364,5 +1364,189 @@ func TestAppContentDeckAnnouncesSizeOnChangeNotPerFrame(t *testing.T) {
 	}
 	if p.width != 180 || p.height != 40 {
 		t.Fatalf("plugin size = %dx%d, want the resize to have reached it", p.width, p.height)
+	}
+}
+
+// openAppDeckDocument opens path as a Document leaf beside the primary plugin
+// and returns the model the load settled into.
+func openAppDeckDocument(t *testing.T, m *Model, root, pluginID, path string) *Model {
+	t.Helper()
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	if h == nil {
+		t.Fatal("app content deck was not created")
+	}
+	cmd := m.openAppContent(root, pluginID, contentlink.Ref{Kind: contentlink.KindFile, Value: path})
+	if cmd == nil {
+		t.Fatalf("opening %q returned no load", path)
+	}
+	result, ok := cmd().(contentpanes.Result)
+	if !ok {
+		t.Fatalf("document open produced %#v, want a contentpanes result", cmd())
+	}
+	updated, _ := m.Update(result)
+	got := updated.(Model)
+	return &got
+}
+
+// A document opened beside Files scans exactly like the byte-identical
+// Workspace document pane: its tokens are live, and they land where they were
+// drawn rather than on the leaf's chrome.
+func TestAppContentDeckScansDocumentLeafBodies(t *testing.T) {
+	root := t.TempDir()
+	body := "Tracking td-22f35f for the rewrite.\n"
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, "file-browser", "notes.md")
+	rendered := m.renderContent(200, 40)
+	h := m.currentContentDeck()
+
+	var hit *appContentLinkHit
+	for i := range h.links {
+		if h.links[i].Ref.Kind == contentlink.KindIssue && h.links[i].Ref.Value == "td-22f35f" {
+			hit = &h.links[i]
+		}
+	}
+	if hit == nil {
+		t.Fatalf("document leaf registered no issue hit: %+v", h.links)
+	}
+	if hit.Generation != h.generation {
+		t.Fatalf("hit generation = %d, want the current %d", hit.Generation, h.generation)
+	}
+	if hit.Rect.W != len("td-22f35f") || hit.Rect.H != 1 {
+		t.Fatalf("hit rect = %+v, want the token's own cells", hit.Rect)
+	}
+
+	// The token must actually be drawn where the hit says it is.
+	lines := strings.Split(rendered, "\n")
+	if hit.Rect.Y >= len(lines) {
+		t.Fatalf("hit row %d is outside the %d-row frame", hit.Rect.Y, len(lines))
+	}
+	drawn := ansi.Strip(ansi.Cut(lines[hit.Rect.Y], hit.Rect.X, hit.Rect.X+hit.Rect.W))
+	if drawn != "td-22f35f" {
+		t.Fatalf("cells under the hit read %q, want the token", drawn)
+	}
+	if !strings.Contains(rendered, "\x1b[4m") {
+		t.Fatal("document leaf body was not decorated")
+	}
+
+	// The hit sits inside the leaf body, clear of the header row the tab strip
+	// and close button own, and clear of the scrollbar column.
+	leafID := h.deck.Leaf(panelayout.Document)
+	var box paneframe.Box
+	for _, placement := range h.layout.Leaves {
+		if placement.Node != nil && placement.Node.ID == leafID {
+			box = paneframe.Box(placement.Box)
+		}
+	}
+	if box.W == 0 {
+		t.Fatal("document leaf was not laid out")
+	}
+	if hit.Rect.Y <= box.Y {
+		t.Fatalf("hit row %d is on the leaf header at %d", hit.Rect.Y, box.Y)
+	}
+	if hit.Rect.X+hit.Rect.W > box.X+box.W-1 {
+		t.Fatalf("hit %+v reaches the scrollbar column of leaf box %+v", hit.Rect, box)
+	}
+	if region := h.mouse.HitMap.Test(hit.Rect.X, hit.Rect.Y); region != nil && region.ID == appDeckTabRegion {
+		t.Fatalf("hit landed on the leaf tab strip: %+v", region)
+	}
+}
+
+// A path in a document leaf is pending work the deck resolves against its own
+// root, the same way the primary plugin's surface does.
+func TestAppContentDeckResolvesDocumentLeafPathsAgainstDeckRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "other.go"), []byte("package other\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("Start at other.go today.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, "file-browser", "notes.md")
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+
+	candidate := contentlink.Pending{Kind: contentlink.KindFile, Raw: "other.go"}
+	if !h.pending[candidate] {
+		t.Fatalf("document leaf queued no file resolution: %+v", h.pending)
+	}
+	resolved, ok := resolveAppContentLink(h.key, appDeckDocumentSurfaceID, h.workdir, candidate)().(appContentResolvedMsg)
+	if !ok || !resolved.Found || resolved.Ref.Value != "other.go" {
+		t.Fatalf("deck-root resolution = %#v", resolved)
+	}
+
+	updated, _ := m.Update(resolved)
+	got := updated.(Model)
+	m = &got
+	m.renderContent(200, 40)
+	h = m.currentContentDeck()
+	for _, link := range h.links {
+		if link.Ref.Kind == contentlink.KindFile && link.Ref.Value == "other.go" {
+			return
+		}
+	}
+	t.Fatalf("resolved path never became a document-leaf hit: %+v", h.links)
+}
+
+// Activation from a document leaf goes through the same deck: the issue stacks
+// beside Files rather than opening a second surface.
+func TestAppContentDeckActivatesFromDocumentLeafIntoSameDeck(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "notes.md"), []byte("Tracking td-22f35f.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, "file-browser", "notes.md")
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+
+	var hit appContentLinkHit
+	for _, link := range h.links {
+		if link.Ref.Kind == contentlink.KindIssue {
+			hit = link
+		}
+	}
+	if hit.Ref.Value != "td-22f35f" {
+		t.Fatalf("document leaf registered no issue hit: %+v", h.links)
+	}
+
+	// A drag across the token selects rather than opens.
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: hit.Rect.X, Y: hit.Rect.Y, Button: tea.MouseLeft}))
+	m.appContentMouse(tea.MouseMotionMsg(tea.Mouse{X: hit.Rect.X + 3, Y: hit.Rect.Y, Button: tea.MouseLeft}))
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: hit.Rect.X + 3, Y: hit.Rect.Y, Button: tea.MouseLeft}))
+	if h.deck.Leaf(panelayout.Issue) != 0 {
+		t.Fatal("dragging across a document-leaf link activated it")
+	}
+
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{X: hit.Rect.X, Y: hit.Rect.Y, Button: tea.MouseLeft}))
+	m.appContentMouse(tea.MouseReleaseMsg(tea.Mouse{X: hit.Rect.X, Y: hit.Rect.Y, Button: tea.MouseLeft}))
+	if h.deck.Leaf(panelayout.Issue) == 0 {
+		t.Fatal("clicking a document-leaf link opened no Issue leaf in this deck")
+	}
+	if m.currentContentDeck() != h {
+		t.Fatal("activation from a document leaf left the deck it was drawn in")
+	}
+}
+
+// Other leaf kinds stay unscanned, matching Workspace and the global browser.
+func TestAppContentDeckLeavesNonDocumentBodiesUnscanned(t *testing.T) {
+	root := t.TempDir()
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "plain preview"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}); cmd != nil {
+		cmd()
+	}
+	m.renderContent(200, 40)
+	if h.deck.Leaf(panelayout.Issue) == 0 {
+		t.Fatal("no Issue leaf was opened, so this proves nothing")
+	}
+	for _, link := range h.links {
+		t.Fatalf("an issue card body was scanned: %+v", link)
 	}
 }

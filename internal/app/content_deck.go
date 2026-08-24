@@ -396,7 +396,11 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 		// it was drawn is what makes the viewer's own bar hit-testing agree
 		// with the regions the frame registers for it.
 		v.SetOrigin(render.Origin.X, render.Origin.Y+paneframe.HeaderRows)
-		body = v.View()
+		body = c.h.scanDocumentLeaf(v, v.View())
+	// Issue, note, resource, and diff bodies stay unscanned here on purpose:
+	// they scan on no surface today — not Workspace, not the global browser —
+	// and making them scan is a wider change than closing the gap between a
+	// document opened beside Files and the byte-identical Workspace pane.
 	case *issueview.Model:
 		v.SetSize(c.size.Width, bodyH)
 		body = v.View()
@@ -567,10 +571,7 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 				}})
 			}
 			for _, candidate := range result.Pending {
-				if !h.pending[candidate] {
-					h.pending[candidate] = true
-					h.queued = append(h.queued, resolveAppContentLink(h.key, surface, candidate))
-				}
+				h.queueContentLinkResolve(surface.ID, surface.WorkDir, candidate)
 			}
 			prefix := ansi.Cut(lines[y], 0, surface.Rect.X)
 			suffix := ansi.Cut(lines[y], surface.Rect.X+surface.Rect.W, ansi.StringWidth(lines[y]))
@@ -580,19 +581,64 @@ func (h *appContentDeck) scanPrimary(frame string, origin mouse.Rect) string {
 	return strings.Join(lines, "\n")
 }
 
-func resolveAppContentLink(key string, surface contentlink.Surface, candidate contentlink.Pending) tea.Cmd {
+// scanDocumentLeaf recognizes tokens in a document leaf the deck drew beside
+// its plugin. A file opened as a Document leaf next to Files is the same
+// document as the Workspace pane that already scans, so it goes through the
+// same docview seam and registers into the deck's own hit list: press/drag/
+// release, click-vs-selection, generation invalidation, and openAppContent
+// activation are all inherited rather than reimplemented.
+//
+// docview.ContentLinkRect excludes the gutter, the scrollbar column, and the
+// header row, so a hit registered here cannot steal a tab, close, or scrollbar
+// click. Coordinates are already absolute: SetOrigin above told the viewer where
+// its body was drawn.
+func (h *appContentDeck) scanDocumentLeaf(view *docview.Model, body string) string {
+	if view == nil || !view.ContentLinksSafe() {
+		return body
+	}
+	frame := view.ScanContentLinks(body, contentlink.FrameOptions{
+		Ready:        h.resolution.Snapshot(),
+		Matchers:     h.resourceMatchers,
+		AllowedKinds: docview.ContentLinkKinds(),
+		Decorate:     true,
+	})
+	for _, hit := range frame.Hits {
+		h.links = append(h.links, appContentLinkHit{Generation: h.generation, Ref: hit.Ref, Rect: hit.Rect})
+	}
+	for _, candidate := range frame.Pending {
+		h.queueContentLinkResolve(appDeckDocumentSurfaceID, h.workdir, candidate)
+	}
+	return frame.Output
+}
+
+// appDeckDocumentSurfaceID names document leaves in resolution messages. Every
+// leaf resolves against the same root, so one name covers them all.
+const appDeckDocumentSurfaceID = "document"
+
+// queueContentLinkResolve schedules one file/diff resolution per distinct
+// candidate. The pending set is deck-wide, so the primary plugin's surface and a
+// document leaf naming the same path resolve once between them.
+func (h *appContentDeck) queueContentLinkResolve(surfaceID, root string, candidate contentlink.Pending) {
+	if h.pending[candidate] {
+		return
+	}
+	h.pending[candidate] = true
+	h.queued = append(h.queued, resolveAppContentLink(h.key, surfaceID, root, candidate))
+}
+
+func resolveAppContentLink(key, surfaceID, root string, candidate contentlink.Pending) tea.Cmd {
 	return func() tea.Msg {
-		msg := appContentResolvedMsg{Key: key, SurfaceID: surface.ID, Candidate: candidate}
+		msg := appContentResolvedMsg{Key: key, SurfaceID: surfaceID, Candidate: candidate}
 		switch candidate.Kind {
 		case contentlink.KindFile:
-			rel, _, ok := terminallink.ResolveFile(surface.WorkDir, candidate.Raw)
+			rel, _, ok := terminallink.ResolveFile(root, candidate.Raw)
 			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindFile, Value: rel}, ok
 		case contentlink.KindDiff:
 			target, ok := workspacediff.ParseSpec(candidate.Raw)
 			if !ok {
 				return msg
 			}
-			resolved, err := workspacediff.ResolveSpec(context.Background(), surface.WorkDir, target)
+			resolved, err := workspacediff.ResolveSpec(context.Background(), root, target)
 			msg.Ref, msg.Found = contentlink.Ref{Kind: contentlink.KindDiff, Value: resolved.Identity()}, err == nil
 		}
 		return msg
