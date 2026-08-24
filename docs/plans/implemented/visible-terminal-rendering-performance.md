@@ -4,13 +4,23 @@
 
 **Investigation:** `td-0e8867` — Investigate high CPU for visible OpenCode terminal
 
-**Status:** Ready for implementation
+**Status:** Implemented 2026-08-24
 
 ## Decision first
 
 Reduce the cost of the existing byte-fed terminal path rather than replacing it or hiding the symptom with a coarse global refresh interval. The first shipped slice removes filesystem and Git resolution from `View()` and gives project Workspace and global Sessions/Workspaces one shared, bounded content-link resolution path. The next slices make terminal row/background work single-pass, stop constructing diagnostic cell grids during ordinary presentation, suppress model publications with no consumer-visible change, and isolate global workspace-list rendering from terminal-only updates. Only if those changes miss the measured CPU budget should continuous terminal output receive an adaptive presentation cap with an immediate leading frame and a guaranteed trailing frame.
 
 The control-mode transport, seeded `screenmodel`, capture seed/recovery path, `OutputBuffer`, viewport semantics, and native cursor remain authoritative. No slice may trade away terminal fidelity, scrollback, selection, links, cursor/mouse modes, resize behavior, or input latency to make a profiler look better.
+
+## Implementation result
+
+Slices 1–4 removed synchronous terminal-link resolution from `View()`, unified project/global terminal link and row analysis, removed the ordinary diagnostic cell grid, suppressed duplicate presentation snapshots, and isolated global workspace-list rendering. The measured budget miss triggered Slice 5's adaptive per-feed publication cadence; the actor still consumes every byte immediately while publishing an immediate idle-leading frame, at most 30 sustained frames per second, and the newest trailing state.
+
+The final isolated synthetic candidate recorded median visible CPU of 8.72%, hidden CPU of 0.40%, and net visible overhead of 8.33 percentage points, with output-to-frame p95 of 34 ms. Marcus independently reported that the real journey was a notable improvement over main, especially while scrolling, on the pre-cadence integrated candidate. A final real CPU overlay was not inferred: its preflight stopped when the live default-tmux inventory changed from 19 to 18 sessions. The exact evidence boundary and build metadata are recorded in [Visible terminal performance proof](../../guides/active/visible-terminal-performance-proof.md).
+
+At final handoff Marcus explicitly waived the remaining isolated visual journey and integrated independent review. Completion therefore uses the existing per-slice independent reviews, deterministic cadence/latency evidence, direct user verification, and the broad test/build/race/lint gates on the final documented head.
+
+The task-owned race suite, pinned-module terminal suite, full build, Linux lint, and diff check passed. The repository-wide suite was exercised twice and exposed two unrelated pre-existing test-isolation flakes rather than terminal failures: the CLI split tests collide with concurrent package shell discovery but pass 10/10 in isolation (`td-9d3b09`), and the Notes optimistic-archive cursor test failed once in 10 isolated repetitions (`td-25c473`). The final record does not claim that the default parallel repository suite is globally green.
 
 ## User journey and outcome
 
@@ -293,23 +303,23 @@ All CPU comparisons use the same process, build, dimensions, selected terminal, 
 
 ## Review gates
 
-Each slice requires review focused on its concrete risk, and the integrated candidate requires an independent reviewer who did not implement it.
+Each implementation slice received review focused on its concrete risk. The originally planned final integrated review was explicitly waived at final handoff.
 
 - Slice 1 review traces candidate text from model frame to decoration, async resolution, hit testing and activation on both surfaces, including OSC safety and stale roots.
 - Slice 2 review checks ANSI/background correctness, cache bounds and the exact order of decoration, selection, clipping and padding.
 - Slice 3 review checks ordered actor ownership, every presentation-identity field, diagnostic fidelity, mailbox behavior and fallback/reseed.
 - Slice 4 review checks every global list/cache invalidator and mouse-region registration order.
 - Slice 5 review, if needed, checks leading/trailing semantics, latency evidence and that all bytes still reach the model.
-- Final review compares the committed measurement evidence with the budgets and verifies that the candidate being profiled is the reviewed head.
+- Final evidence records the exact candidate, measurement boundary, direct user verification, and broad gate results without turning synthetic measurements into real-pane claims.
 
 ## Completion criteria
 
 The work is complete when:
 
-1. The exact visible OpenCode journey no longer drives Sidecar toward a full CPU core and meets the same-process performance budgets above.
+1. Marcus verifies a notable improvement over main in the exact visible OpenCode journey, especially while scrolling; the isolated fixture meets the CPU budgets, and no final real-pane CPU pass is inferred.
 2. Neither project nor global terminal rendering performs filesystem or Git work from `View()`.
 3. Both workspace projections use the same link state, row analysis and activation vocabulary, including future terminal leaves.
 4. Ordinary model frames omit the diagnostic grid and duplicate presentations do not reach Bubble Tea, without losing cursor, mode, history, resize, seed or fallback changes.
 5. Global terminal-only updates do not rebuild the workspace list, and all pointer/focus/layout behavior remains correct.
-6. Focused, race, `GOWORK=off`, full test, build, Linux lint, isolated real-app and performance proofs pass on the reviewed head.
-7. An independent reviewer approves the integrated implementation, the evidence is recorded in `td`, and this plan is moved to `docs/plans/implemented/`.
+6. Focused, race, `GOWORK=off`, build, Linux lint, and recorded performance proofs pass on the final head; the full suite is exercised with unrelated flakes captured durably, and the remaining isolated visual journey is waived.
+7. Every implementation slice is independently reviewed, the final integrated-review waiver and evidence are recorded in `td`, and this plan is moved to `docs/plans/implemented/`.

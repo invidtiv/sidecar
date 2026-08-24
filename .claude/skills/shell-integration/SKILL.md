@@ -59,6 +59,7 @@ User Keypress -> handleInteractiveKeys() -> tty.MapKeyToTmux() -> tmux send-keys
 Pane output -> tmux -C ordered %output bytes
             -> session-pooled control actor
             -> seeded screenmodel adapter
+            -> adaptive per-feed presentation publication
             -> owner/target/generation-scoped Tea message
             -> OutputBuffer + cursor/modes/history
             -> pure terminal viewport + native Bubble Tea cursor
@@ -170,6 +171,10 @@ terminal surface. Adaptive capture polling exists only until the first seeded
 frame and after control/model failure. Workspace agent and shell observation
 continues independently for provider activity evidence; those captures never
 overwrite a model-owned presentation buffer.
+
+The control actor writes every ordered byte into `screenmodel` immediately. Presentation alone is adaptive: the first changed frame after idle publishes inline, sustained changed frames publish at no more than 30 fps per pane-model feed, and one tokenized timer guarantees the newest trailing frame. Seed, reseed, and generation changes bypass the cap; input never enters this cadence. Ordinary `Frame()` snapshots omit diagnostic cells, while screen comparison explicitly requests the canonical grid.
+
+For isolated performance diagnostics, run with both `SIDECAR_PPROF=<port>` and `SIDECAR_TERMINAL_PERF=1`, then read `GET /debug/terminalperf`. The endpoint is localhost-only and returns fixed numeric counts plus output-to-frame samples, p95, and maximum in microseconds. Keep counters off during CPU profiles, use a separate diagnostic process, and never interpret process-wide model-frame counts as per-feed fps when more than one pane-model feed may be live.
 
 Set `SIDECAR_TERMINAL_TRACE=1` only in an isolated proof run to log privacy-safe
 capture metadata (`surface`, `role`, `reason`, and `generation`). It never logs
@@ -343,9 +348,10 @@ func (p *Plugin) enterInlineEditMode(path string) tea.Cmd {
 6. **Preserve newer live overlap** when delayed history ranges prepend.
 7. **Control clients are per tmux session** and close/stop must invalidate and drain deliveries.
 8. **Keep keyed capture fallback working** until the first accepted model frame and after control failure; never run it as the healthy renderer.
-9. **Use native cursor only for the focused live viewport**; hide it offscreen, under modals, and in scrollback.
-10. **Treat source OSC as untrusted**; the sanitizer and independent fuzz oracle must cover nested 7-bit/C1 forms and removal-boundary synthesis.
-11. **Width sync matters**; resize panes/control clients when terminal geometry changes.
+9. **Consume all model bytes immediately and cadence only presentation snapshots**; preserve immediate idle-leading output, a newest trailing frame, and unconditional seed/generation publication.
+10. **Use native cursor only for the focused live viewport**; hide it offscreen, under modals, and in scrollback.
+11. **Treat source OSC as untrusted**; the sanitizer and independent fuzz oracle must cover nested 7-bit/C1 forms and removal-boundary synthesis.
+12. **Width sync matters**; resize panes/control clients when terminal geometry changes.
 
 ## References
 
