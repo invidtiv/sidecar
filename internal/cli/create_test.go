@@ -190,7 +190,7 @@ func TestCreateShellSplitDeclinedExit4(t *testing.T) {
 	})
 
 	var out, errOut bytes.Buffer
-	handled, code := Run([]string{"create", "shell", "--split=right", "--wait", "1s"}, &out, &errOut)
+	handled, code := Run([]string{"create", "shell", "--split=right", "--wait", ackWaitFlag}, &out, &errOut)
 	<-done
 	if !handled || code != 4 {
 		t.Fatalf("Run() = handled %v code %d stderr %q", handled, code, errOut.String())
@@ -213,7 +213,7 @@ func TestCreateShellSplitOpenedJSON(t *testing.T) {
 	})
 
 	var out, errOut bytes.Buffer
-	handled, code := Run([]string{"create", "shell", "--split", "right", "--name", "dev server", "--json", "--wait", "1s"}, &out, &errOut)
+	handled, code := Run([]string{"create", "shell", "--split", "right", "--name", "dev server", "--json", "--wait", ackWaitFlag}, &out, &errOut)
 	<-done
 	if !handled || code != 0 {
 		t.Fatalf("Run() = handled %v code %d stderr %q stdout %q", handled, code, errOut.String(), out.String())
@@ -263,14 +263,38 @@ func TestCreateShellSplitWait0WritesOptions(t *testing.T) {
 	}
 }
 
+// ackWatchBudget and ackWaitFlag are deliberately far larger than the work
+// they bound. The tests they serve assert what happens when an ack *arrives*,
+// so the only thing a tight budget can produce is a false failure on a busy
+// machine. Neither costs wall-clock on the happy path.
+const (
+	ackWatchBudget = 60 * time.Second
+	ackWaitFlag    = "30s"
+)
+
+// ackCreateRequests plays the running Sidecar instance: it watches the request
+// directory and acks the first create request it sees.
+//
+// It polls to a wall-clock deadline rather than a fixed iteration count, and
+// the tests that use it pass a --wait far longer than they need. Both halves
+// matter. The helper used to poll 40 times at 25ms — about a second — against a
+// CLI given --wait 1s, so the ack had to be found and written inside the same
+// second the CLI was willing to wait. Under a loaded `go test ./...` those
+// sleeps stretch, the budget ran out before the request was seen, and the CLI
+// timed out into exit 3 ("no running Sidecar instance is showing this shell").
+// That is td-9d3b09, and it was reproducible only in the full parallel suite.
+//
+// Nothing here is slower as a result: --wait is a ceiling, not a sleep, so the
+// happy path still returns the moment the ack lands.
 func ackCreateRequests(t *testing.T, stateHome string, ack uirequest.Ack) <-chan struct{} {
 	t.Helper()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		reqsDir := filepath.Join(stateHome, "sidecar", "requests")
-		for i := 0; i < 40; i++ {
-			time.Sleep(25 * time.Millisecond)
+		deadline := time.Now().Add(ackWatchBudget)
+		for time.Now().Before(deadline) {
+			time.Sleep(2 * time.Millisecond)
 			entries, err := os.ReadDir(reqsDir)
 			if err != nil {
 				continue

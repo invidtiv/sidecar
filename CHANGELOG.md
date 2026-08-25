@@ -47,6 +47,16 @@ All notable changes to sidecar are documented here.
 
 ### Bug Fixes
 
+- **A terminal whose control client dies is told why.** When a tmux control
+  client closed, the notice that a pane's live model had died could be dropped:
+  the close tore down the subscriber state that the notice needed, and whichever
+  of the two paths got there second found nothing to deliver to and returned
+  silently. The consumer was told to fall back to capture — that report goes out
+  on a different path — but never told its model was gone, so it had nothing to
+  re-subscribe from and a pane could sit on capture fallback indefinitely. The
+  closing path now reports any death the ordered actor has not already claimed,
+  with the claim taken under the client mutex in both places so exactly one of
+  them reports each one.
 - **The td tab survives a `td sync`.** `td sync` installs snapshots by
   atomically replacing `.todos/issues.db`, and the embedded monitor's SQLite
   connection kept pointing at the unlinked inode, where every later write failed
