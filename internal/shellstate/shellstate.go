@@ -170,7 +170,7 @@ func ListAtPath(path string) ([]Definition, error) {
 // the requested state and therefore succeeds. The definition is moved to
 // tombstones rather than dropped, so RestoreAtPath can put it back.
 func RemoveAtPath(path string, id Identity) error {
-	return mutateManifest(path, func(m *manifest) error {
+	return mutateManifestRemoving(path, func(m *manifest) error {
 		return tombstoneIdentity(m, id, time.Time{})
 	})
 }
@@ -193,7 +193,7 @@ var ErrShellChanged = errors.New("shell entry was replaced since it was observed
 // A zero observedAt means the caller has no incarnation to check and accepts an
 // unconditional removal.
 func RemoveIfUnchangedAtPath(path string, id Identity, observedAt time.Time) error {
-	return mutateManifest(path, func(m *manifest) error {
+	return mutateManifestRemoving(path, func(m *manifest) error {
 		return tombstoneIdentity(m, id, observedAt)
 	})
 }
@@ -277,6 +277,16 @@ func dropTombstone(tombs []Tombstone, id Identity) []Tombstone {
 }
 
 func mutateManifest(path string, apply func(*manifest) error) error {
+	return mutateManifestLive(path, false, apply)
+}
+
+func mutateManifestRemoving(path string, apply func(*manifest) error) error {
+	return mutateManifestLive(path, true, apply)
+}
+
+// mutateManifestLive is the shells.json writer. identityRemoval is true only
+// for RemoveAtPath and RemoveIfUnchangedAtPath.
+func mutateManifestLive(path string, identityRemoval bool, apply func(*manifest) error) error {
 	if err := config.AssertIsolatedPath(path); err != nil {
 		return &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}
 	}
@@ -294,9 +304,11 @@ func mutateManifest(path string, apply func(*manifest) error) error {
 	} else if !os.IsNotExist(readErr) {
 		return &Error{Kind: KindState, Msg: "read shell manifest", Err: readErr}
 	}
+	before := len(m.Shells)
 	if err := apply(&m); err != nil {
 		return err
 	}
+	ObserveLiveCountWrite(path, before, len(m.Shells), identityRemoval)
 	m.Version = 1
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -556,7 +568,9 @@ func RenameAtPath(path string, req RenameRequest) (RenameResult, error) {
 	if result.OldName == result.Name {
 		return result, nil
 	}
+	before := len(m.Shells)
 	m.Shells[match].DisplayName = req.Name
+	ObserveLiveCountWrite(path, before, len(m.Shells), false)
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return RenameResult{}, &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}

@@ -108,6 +108,12 @@ func LoadShellManifest(path string) (*ShellManifest, error) {
 // apply receives the fresh definitions and returns the new list plus whether
 // anything actually changed. Caller must hold m.mu.
 func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
+	return m.mutateLockedKind(false, apply)
+}
+
+// mutateLockedKind is the writer boundary. identityRemoval is true only for
+// RemoveShell; that is the only workspace path allowed to shrink live shells.
+func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
 	if err := config.AssertIsolatedPath(m.path); err != nil {
 		return err
 	}
@@ -124,11 +130,13 @@ func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefin
 	defer releaseManifestLock(lockFile)
 
 	fresh := m.readFromDiskLocked()
+	before := len(fresh)
 	next, changed := apply(fresh)
 	m.Shells = next
 	if !changed {
 		return nil
 	}
+	shellstate.ObserveLiveCountWrite(m.path, before, len(next), identityRemoval)
 	return m.writeLocked()
 }
 
@@ -228,7 +236,7 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 func (m *ShellManifest) RemoveShell(tmuxName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+	return m.mutateLockedKind(true, func(shells []ShellDefinition) ([]ShellDefinition, bool) {
 		for i, s := range shells {
 			if s.TmuxName == tmuxName {
 				m.Tombstones = appendWorkspaceTombstone(m.Tombstones, s)
