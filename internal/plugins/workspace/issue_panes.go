@@ -213,6 +213,9 @@ func (p *Plugin) handleIssueKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		view.SetActive(true)
 		view.SetFocused(true)
 	}
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
+		return true, cmd
+	}
 	switch msg.String() {
 	case "tab", "shift+tab":
 		// Declining Tab is what keeps the issue leaf in the ring: the cycle

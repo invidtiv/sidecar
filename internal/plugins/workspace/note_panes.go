@@ -116,6 +116,9 @@ func (p *Plugin) handleNoteKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if view != nil {
 		view.SetFocused(true)
 	}
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
+		return true, cmd
+	}
 	switch msg.String() {
 	case "tab", "shift+tab":
 		return false, nil

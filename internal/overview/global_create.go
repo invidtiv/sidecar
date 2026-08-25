@@ -97,20 +97,29 @@ type globalCreateBranchesMsg struct {
 func (m *Model) CreateOpen() bool { return m.createOpen }
 
 func (m *Model) OpenCreateShell(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, workspacecreate.KindShell, false)
+	return m.openCreate(projectKey, workspacecreate.KindShell, false, false)
 }
 
 func (m *Model) OpenCreateWorktree(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, workspacecreate.KindWorktree, false)
+	return m.openCreate(projectKey, workspacecreate.KindWorktree, false, false)
 }
 
 // OpenCreate opens the shared chooser used by header and section + actions.
 // A section supplies the project answer but leaves the capability choice live.
 func (m *Model) OpenCreate(projectKey string) tea.Cmd {
-	return m.openCreate(projectKey, workspacecreate.KindWorktree, true)
+	return m.openCreate(projectKey, workspacecreate.KindWorktree, true, false)
 }
 
-func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKind bool) tea.Cmd {
+// OpenPaneSwitcher opens the create modal as the pane switcher: kind list
+// focused, on the row it was last left on. It is the global browser's half of
+// the entry the project workspace binds — a pane opens beside what you are
+// reading without first leaving it — and both surfaces answer the same key in
+// the same contexts, which internal/keymap's parity test holds them to.
+func (m *Model) OpenPaneSwitcher() tea.Cmd {
+	return m.openCreate("", workspacecreate.KindWorktree, true, true)
+}
+
+func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKind, useLastKind bool) tea.Cmd {
 	if m.PreviewInteractive() || len(m.projects) == 0 {
 		return nil
 	}
@@ -126,6 +135,7 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 	m.createForm = workspacecreate.Open(workspacecreate.OpenOpts{
 		Kind:         kind,
 		FocusKind:    focusKind,
+		UseLastKind:  useLastKind,
 		ShowProject:  true,
 		ProjectKey:   key,
 		Projects:     m.createProjectItems(),

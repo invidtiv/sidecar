@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -413,12 +414,21 @@ func assertHostGlobalsPassThrough(t *testing.T, m *Model) {
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: '?', Text: "?"}); handled {
 		t.Fatal("? was swallowed; the command palette cannot open")
 	}
+	// n stays with the leaf — it must never reach the list and create a
+	// worktree under the pane — and the leaf now spends it on the pane
+	// switcher, so a second pane opens beside the one being read without
+	// leaving it. The kind step is what distinguishes the two: the list's n
+	// opens the worktree form.
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: 'n', Text: "n"}); !handled {
 		t.Fatal("n should stay with the leaf so it cannot create a worktree")
 	}
-	if m.CreateOpen() {
-		t.Fatal("n on a focused content leaf opened the create flow")
+	if !m.CreateOpen() {
+		t.Fatal("n on a focused content leaf did not open the pane switcher")
 	}
+	if m.createForm == nil || m.createForm.Step() != workspacecreate.StepKind {
+		t.Fatal("n opened something other than the switcher's kind list")
+	}
+	m.closeCreateShell()
 }
 
 func TestFocusedDiffDoesNotStartTypingOnEnter(t *testing.T) {

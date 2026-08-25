@@ -239,6 +239,12 @@ func (p *Plugin) handleDiffKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	view := diff.view()
+	// Ahead of the view's own keys: this pane used to spend `n` on next-change,
+	// which now answers to `<` / `>` so the switcher key means one thing in
+	// every pane.
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
+		return true, cmd
+	}
 	switch msg.String() {
 	case "tab", "shift+tab":
 		return false, nil

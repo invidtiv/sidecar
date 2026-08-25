@@ -18,11 +18,13 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
 func docPaneTestPlugin(t *testing.T, root string, shell bool) *Plugin {
@@ -2486,5 +2488,63 @@ func TestDocRevealKeyNeedsAFocusedPath(t *testing.T) {
 	handled, cmd = p.handleDocKey(tea.KeyPressMsg{Code: 'r', Mod: tea.ModCtrl})
 	if !handled || cmd != nil {
 		t.Fatalf("ctrl+r without a path: handled=%v cmd=%v, want handled with no command", handled, cmd != nil)
+	}
+}
+
+// The switcher must be reachable from the pane you are reading. Every content
+// pane absorbs the keys it does not own, so before this `n` did nothing there
+// and opening a second pane meant tabbing back to the sidebar first.
+func TestPaneSwitcherOpensFromEveryFocusedContentPane(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "# Read me\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.openTerminalPath("README.md", 0)
+	if !p.docFocused() {
+		t.Fatal("premise: the document leaf should own the keyboard")
+	}
+
+	handled, cmd := p.handleDocKey(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if !handled || cmd == nil {
+		t.Fatalf("n on a focused document: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if p.viewMode != ViewModeCreate {
+		t.Fatalf("n did not open the switcher: mode=%v", p.viewMode)
+	}
+	if p.createForm == nil || p.createForm.Step() != workspacecreate.StepKind {
+		t.Fatal("the switcher did not open on its kind list")
+	}
+	// The pane it was opened from is still there: this adds a pane, it does
+	// not replace the one being read.
+	if panelayout.FirstOfKind(p.paneRoot, panelayout.Document) == nil {
+		t.Fatal("opening the switcher closed the document it was opened from")
+	}
+}
+
+// A committed in-file search owns n for its next-match while it is up. The
+// switcher is asked after the pane's own input surfaces have declined, so the
+// two cannot fight over the key.
+func TestPaneSwitcherYieldsToACommittedInFileSearch(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "README.md", "alpha\nbeta\nalpha\n")
+	p := docPaneTestPlugin(t, root, true)
+	p.openTerminalPath("README.md", 0)
+	doc := p.focusedDocPane()
+	if doc == nil || doc.view() == nil {
+		t.Fatal("premise: a focused document with a view")
+	}
+	doc.view().StartSearch()
+	for _, r := range "alpha" {
+		p.handleDocKey(tea.KeyPressMsg{Code: r, Text: string(r)})
+	}
+	p.handleDocKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if !doc.view().SearchActive() {
+		t.Fatal("premise: the in-file search should still own the keyboard")
+	}
+
+	if handled, _ := p.handleDocKey(tea.KeyPressMsg{Code: 'n', Text: "n"}); !handled {
+		t.Fatal("n was not handled during a committed search")
+	}
+	if p.viewMode == ViewModeCreate {
+		t.Fatal("n opened the switcher while a search owned the keyboard")
 	}
 }

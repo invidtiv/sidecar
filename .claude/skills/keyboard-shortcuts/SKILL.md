@@ -437,6 +437,37 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 | `d` | show-diff | Open working-tree Diff leaf |
 | `ctrl+t` | toggle-terminal | Toggle a terminal split beside the preview |
 
+### The Pane Switcher Is Reachable From Every Pane
+
+`n` opens the pane switcher whenever a **content pane** has focus — Document,
+Issue, Note, Diff or Resource — on both the project workspace
+(`workspace-doc|issue|note|diff|resource`) and the global Workspaces browser
+(`global-workspaces-doc|issue|note|diff|resource`). Every content pane absorbs
+the keys it does not own, so without this the switcher was reachable only from
+the sidebar or the terminal: putting a second pane beside the one you were
+reading meant leaving it first.
+
+`n` is the same key the sidebar and the terminal preview already answer with
+"make me a new thing", so the answer does not change with focus. Two
+consequences follow, and both are deliberate:
+
+- The **Diff pane's** `n` / `N` next-change pair moved to `>` / `<` — the
+  shifted forms of its `,` / `.` file steps, so the pair reads as one
+  hierarchy: step a file, shift to step a change inside it. One key means one
+  thing in every pane; a key that meant next-change here and "new pane"
+  everywhere else is exactly the drift this codebase refuses.
+- A **live input surface inside a pane still wins**. A committed in-file
+  search owns `n` for its next-match while it is up, as does the doc editor
+  and the finder overlay; the switcher is asked only after they decline.
+
+The terminal preview keeps `o` rather than `n`, because `n` there belongs to
+the list's create. `internal/keymap`'s parity tests hold both surfaces to the
+same key in the same contexts.
+
+Other plugins (Notes, Files, Git) will grow the same entry under `ctrl+n`,
+since each already spends `n` on its own create. See
+`docs/plans/active/pane-switcher-everywhere.md`.
+
 `g` / `G` jump to the top / bottom of the preview's scrollback. `0` is
 deliberately **not** bound here: it is the header's global Tasks shortcut, and a
 context-local binding would make the same key mean two different things one tab
@@ -508,13 +539,17 @@ In-file search (`/`) is a third surface, drawn by `internal/docview` as one
 row inside the pane, and it owns every key while it is up
 (`workspace-doc-find`, `global-workspaces-doc-find`): `enter` commits,
 `n` / `N` step matches, `esc` closes. It dismisses when the pane loses focus.
+While it is up it also keeps `n` away from the pane switcher, which is asked
+only after the pane's own input surfaces decline.
 
 ### Diff Pane
 
 `d` / `show-diff` on the Workspaces list or preview opens a working-tree Diff
 leaf beside the terminal. The leaf is not a root context: `q` / `esc` hide it.
 `{` / `}` cycle Diff target tabs while the leaf is focused; `,` / `.` step
-next/prev file inside the view.
+next/prev file inside the view, and `>` / `<` step next/prev change inside a
+file (this pair was `n` / `N` until the pane switcher took `n` in every content
+pane).
 
 **One rule everywhere: `{` / `}` is always "cycle the tabs of the thing I am
 looking at."** Document, issue, File Browser and Diff leaves all obey it. The
@@ -558,7 +593,7 @@ them, and the viewer answers them before keymap dispatch.
 | `ctrl+u` / `pgup` | diff-page-up | Page up |
 | `v` | toggle-diff-view | Cycle unified → side-by-side → full-file |
 | `z` | toggle-diff-scope | Cycle working tree → commits → aggregate |
-| `n` / `N` | diff-next-change | Next / previous change (full-file mode) |
+| `>` / `<` | diff-next-change | Next / previous change (full-file mode) |
 | `f` | file-picker | Open the file picker (project pane only) |
 
 ### Issue Pane

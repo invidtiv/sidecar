@@ -1021,6 +1021,12 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if cmd, handled := p.handleDocSelectionKey(doc.view(), msg); handled {
 		return true, cmd
 	}
+	// Asked here rather than above: the editor, the finder overlay and a
+	// committed in-file search all own `n` while they are up, and each has
+	// already declined by this point.
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
+		return true, cmd
+	}
 	switch msg.String() {
 	case "/":
 		if view := doc.view(); view != nil {

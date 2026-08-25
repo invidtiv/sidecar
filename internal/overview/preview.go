@@ -430,6 +430,22 @@ func (m *Model) PreviewFocused() bool { return m.preview.focus == focusPreview }
 //
 // While the pane is merely on screen (sidebar hidden), these keys scroll it,
 // restore the list, or start typing. There is no watched-preview keyboard mode.
+// paneSwitcherKeyName opens the pane switcher from a focused content leaf.
+// It is the project workspace's key and rule, mirrored — see
+// workspace.paneSwitcherKeyName for why the Diff pane's next-change moved off
+// it.
+const paneSwitcherKeyName = "n"
+
+// paneSwitcherKey answers paneSwitcherKeyName for a focused content leaf. The
+// caller decides WHEN to ask, because only it knows whether a live input
+// surface inside the pane still owns the keyboard.
+func (m *Model) paneSwitcherKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if msg.String() != paneSwitcherKeyName {
+		return false, nil
+	}
+	return true, m.OpenPaneSwitcher()
+}
+
 func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
 	if m.previewDocEditing() {
@@ -444,6 +460,16 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// input, and a surface that answered them out here as well would send them
 		// to the pane twice.
 		return true, m.forwardToTerminal(msg)
+	}
+	// The pane switcher, ahead of every content pane's own key set: each pane
+	// absorbs what it does not own, so without this the switcher was reachable
+	// only from the list — you had to leave the pane you were reading to open
+	// one beside it. The document's input surfaces still win, because a
+	// committed in-file search owns `n` for its next-match while it is up.
+	if m.contentLeafFocused() && !m.previewDocSearchActive() && !m.previewDocFindActive() {
+		if handled, cmd := m.paneSwitcherKey(msg); handled {
+			return true, cmd
+		}
 	}
 	if handled, cmd := m.previewIssueKey(msg); handled {
 		return true, cmd
@@ -479,6 +505,12 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	switch key {
 	case "enter", interactiveEnterKeyAlt:
 		return true, m.enterPreviewInteractive()
+	case "o":
+		// The project workspace's preview answers `o` with the switcher; this
+		// surface is the same model's other projection and owes the same key.
+		// `n` from here stays the list's new-worktree, exactly as it does over
+		// there — only a focused content leaf reassigns it.
+		return true, m.OpenPaneSwitcher()
 	case "left", "h", "esc":
 		return true, m.focusList()
 	}

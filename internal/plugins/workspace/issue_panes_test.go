@@ -476,9 +476,11 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 	}
 	// Every other key is absorbed: routed through the plugin's own key path, it
 	// must leave the terminal, the selection and the tree exactly as they were.
+	// `n` is deliberately absent: the focused leaf now OWNS it and opens the
+	// pane switcher with it, which the assertion below covers.
 	tree, focus, offset := p.paneRoot, p.paneFocus, p.previewOffset
 	for _, key := range []tea.KeyPressMsg{
-		{Code: tea.KeyEnter}, {Code: 'a'}, {Code: 'n'}, {Code: 'r'}, {Code: tea.KeyRight}, {Code: tea.KeyDown},
+		{Code: tea.KeyEnter}, {Code: 'a'}, {Code: 'r'}, {Code: tea.KeyRight}, {Code: tea.KeyDown},
 	} {
 		if handled, cmd := p.handleIssueKey(key); !handled || cmd != nil {
 			t.Fatalf("key %v escaped the focused issue leaf: handled=%v cmd=%v", key, handled, cmd != nil)
@@ -493,6 +495,17 @@ func TestFocusedIssueLeafOwnsItsKeysRatherThanTheTerminals(t *testing.T) {
 				key, p.paneFocus, p.activePane, p.previewOffset)
 		}
 	}
+
+	// n opens the pane switcher without leaving the issue: putting a file
+	// beside the issue you are reading must not cost you the issue's focus.
+	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'n', Text: "n"}); !handled || cmd == nil {
+		t.Fatalf("n on a focused issue leaf: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	if p.viewMode != ViewModeCreate {
+		t.Fatalf("n on a focused issue leaf did not open the switcher: mode=%v", p.viewMode)
+	}
+	p.viewMode = ViewModeList
+	p.createForm = nil
 
 	if handled, cmd := p.handleIssueKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); !handled || cmd == nil {
 		t.Fatalf("y on a loaded issue: handled=%v cmd=%v", handled, cmd != nil)

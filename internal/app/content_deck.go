@@ -1500,7 +1500,7 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		key := map[string]string{
 			"diff-open": "enter", "diff-down": "j", "diff-up": "k", "diff-back": "h",
 			"toggle-diff-view": "v", "toggle-diff-scope": "z", "next-file": ".", "prev-file": ",",
-			"file-picker": "f", "diff-next-change": "n", "diff-top": "g", "diff-bottom": "G",
+			"file-picker": "f", "diff-next-change": ">", "diff-top": "g", "diff-bottom": "G",
 			"diff-page-down": "pgdown", "diff-page-up": "pgup", "diff-scroll-down": "j", "diff-scroll-up": "k",
 		}[id]
 		if key != "" {
