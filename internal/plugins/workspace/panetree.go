@@ -49,6 +49,13 @@ func SplitLeaf(root *PaneNode, leafID int, axis SplitAxis, leaf *PaneNode) (*Pan
 	return panelayout.SplitLeaf(root, leafID, axis, leaf)
 }
 
+// ApplyPanePlan grafts a planned open's new leaf where the plan says, so an
+// internal-node split (a column append, an occupied-cell insert) lands exactly
+// as panelayout intended it.
+func ApplyPanePlan(root *PaneNode, plan paneOpen, leaf *PaneNode) (*PaneNode, int) {
+	return panelayout.ApplyPlan(root, plan, leaf)
+}
+
 func ClosePane(root *PaneNode, leafID int) (*PaneNode, int) { return panelayout.Close(root, leafID) }
 func FindPane(root *PaneNode, id int) *PaneNode             { return panelayout.Find(root, id) }
 func SetRatio(root *PaneNode, id, ratio int) bool           { return panelayout.SetRatio(root, id, ratio) }

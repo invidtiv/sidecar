@@ -72,66 +72,35 @@ func TestPlanOpen(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "nil boxes on two content leaves split DFS-A",
+			// Two content panes put the right column ahead of the left, so the
+			// grid rule splits the primary column and the fourth pane forms a
+			// 2×2. Boxes do not choose any more: the emptiest column does.
+			name: "a third kind splits the primary column into a 2x2",
 			root: stacked,
 			kind: Diff,
-			want: OpenPlan{Split: 2, Axis: Rows},
+			want: OpenPlan{Split: 1, Axis: Rows},
 			ok:   true,
 		},
 		{
-			name: "equal areas split DFS-A",
-			root: stacked,
-			kind: Diff,
-			boxes: map[int]Box{
-				1: {W: 60, H: 20},
-				2: {W: 60, H: 10},
-				4: {W: 60, H: 10},
-			},
-			want: OpenPlan{Split: 2, Axis: Rows},
-			ok:   true,
-		},
-		{
-			name: "larger document wins",
+			name: "boxes cannot talk the grid rule out of the emptiest column",
 			root: stacked,
 			kind: Diff,
 			boxes: map[int]Box{
 				2: {W: 60, H: 14},
 				4: {W: 60, H: 6},
 			},
-			want: OpenPlan{Split: 2, Axis: Rows},
+			want: OpenPlan{Split: 1, Axis: Rows},
 			ok:   true,
 		},
 		{
-			name: "larger issue wins",
+			name: "nor the other way round",
 			root: stacked,
 			kind: Diff,
 			boxes: map[int]Box{
 				2: {W: 60, H: 6},
 				4: {W: 60, H: 14},
 			},
-			want: OpenPlan{Split: 4, Axis: Rows},
-			ok:   true,
-		},
-		{
-			name: "missing boxes fall back to DFS-A",
-			root: stacked,
-			kind: Diff,
-			boxes: map[int]Box{
-				1: {W: 60, H: 20},
-			},
-			want: OpenPlan{Split: 2, Axis: Rows},
-			ok:   true,
-		},
-		{
-			name: "terminal box is never chosen",
-			root: stacked,
-			kind: Diff,
-			boxes: map[int]Box{
-				1: {W: 200, H: 200},
-				2: {W: 10, H: 10},
-				4: {W: 10, H: 10},
-			},
-			want: OpenPlan{Split: 2, Axis: Rows},
+			want: OpenPlan{Split: 1, Axis: Rows},
 			ok:   true,
 		},
 	}
@@ -166,7 +135,10 @@ func TestApplyAxisOverride(t *testing.T) {
 	}
 }
 
-func TestPlanOpenThirdContentKeepsTerminalFullHeight(t *testing.T) {
+// The terminal-splits plan's B1 rule: once the right column holds two content
+// panes, the next open splits the primary column instead of stacking a third
+// row, and the four panes land as a 2×2 — two full-height columns of two.
+func TestPlanOpenThirdContentFormsATwoByTwoGrid(t *testing.T) {
 	root := terminalDocIssue()
 	box := Box{W: 120, H: 40}
 	leaves, _, fits := LayoutPanes(root, box, planFloors())
@@ -179,8 +151,8 @@ func TestPlanOpenThirdContentKeepsTerminalFullHeight(t *testing.T) {
 	}
 
 	plan, ok := PlanOpen(root, Diff, boxes)
-	if !ok || plan.Retarget != 0 || plan.Axis != Rows || plan.Split == 1 {
-		t.Fatalf("PlanOpen = %#v ok=%v, want a content-leaf row split", plan, ok)
+	if !ok || plan != (OpenPlan{Split: 1, Axis: Rows}) {
+		t.Fatalf("PlanOpen = %#v ok=%v, want a split of the primary column (leaf 1)", plan, ok)
 	}
 
 	root, focus := SplitLeaf(root, plan.Split, plan.Axis, &Node{ID: 6, Kind: Diff})
@@ -188,17 +160,45 @@ func TestPlanOpenThirdContentKeepsTerminalFullHeight(t *testing.T) {
 		t.Fatalf("SplitLeaf focus = %d, want the new Diff leaf", focus)
 	}
 
+	grid := GridOf(root)
+	if grid == nil {
+		t.Fatalf("the 2x2 tree escaped the grid vocabulary: %#v", root)
+	}
+	wantColumns := [][]int{{1, 6}, {2, 4}}
+	if grid.ColumnCount() != len(wantColumns) {
+		t.Fatalf("grid has %d columns, want %d (%v)", grid.ColumnCount(), len(wantColumns), wantColumns)
+	}
+	for col, wantIDs := range wantColumns {
+		cells := grid.Columns[col].Cells
+		if len(cells) != len(wantIDs) {
+			t.Fatalf("column %d holds %d cells, want %v", col+1, len(cells), wantIDs)
+		}
+		for row, wantID := range wantIDs {
+			if cells[row].ID != wantID {
+				t.Fatalf("cell %d.%d = leaf %d, want %d", col+1, row+1, cells[row].ID, wantID)
+			}
+		}
+	}
+
 	leaves, _, fits = LayoutPanes(root, box, planFloors())
 	if !fits || len(leaves) != 4 {
 		t.Fatalf("File+Issue+Diff layout leaves=%d fits=%v, want four", len(leaves), fits)
 	}
-	var terminal Box
-	for _, leaf := range leaves {
-		if leaf.Node.Kind == Terminal {
-			terminal = leaf.Box
+	var terminal, diff Box
+	for _, placement := range leaves {
+		switch placement.Node.Kind {
+		case Terminal:
+			terminal = placement.Box
+		case Diff:
+			diff = placement.Box
 		}
 	}
-	if terminal.H != box.H || terminal.Y != box.Y {
-		t.Fatalf("terminal box %#v, want the left column at the full height of %#v", terminal, box)
+	// Both columns span the full height; the primary terminal now shares its
+	// column with the new pane instead of keeping it all to itself.
+	if terminal.Y != box.Y || diff.Y != terminal.Y+terminal.H+1 {
+		t.Fatalf("the new pane is not stacked below the terminal: terminal=%#v diff=%#v box=%#v", terminal, diff, box)
+	}
+	if terminal.W+1 >= box.W {
+		t.Fatalf("terminal kept the whole width: %#v in %#v", terminal, box)
 	}
 }

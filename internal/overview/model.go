@@ -125,7 +125,8 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
-		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg:
+		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
+		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
 		return true
@@ -136,6 +137,19 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	case shellProbedMsg, shellForgottenMsg:
 		// Auto-close of a dead shell is background work; it must land whether
 		// or not this browser is the visible surface (td-6a4100).
+		return true
+	default:
+		return false
+	}
+}
+
+// IsSharedPickerMessage reports pane-switcher suggestion results. Both hosts
+// consume them — whichever surface opened its modal fired the loaders — so
+// they must reach the plugins by broadcast as well as this browser, and the
+// app's async hand-off must not stop there. See internal/app/update.go.
+func IsSharedPickerMessage(msg tea.Msg) bool {
+	switch msg.(type) {
+	case createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		return true
 	default:
 		return false
@@ -295,6 +309,10 @@ type Model struct {
 	pendingViews map[string]*pendingView
 	// openSplit is the request-scoped --split axis override ("right"/"below").
 	openSplit string
+	// pendingOpenPlan is the request-scoped explicit-cell plan (--at): set by
+	// the open request handler, applied verbatim by the next placement, and
+	// cleared whether or not it was used.
+	pendingOpenPlan *panelayout.OpenPlan
 
 	// previewCloseHover is set while the pointer is over a content-pane X.
 	previewCloseHover bool
@@ -756,6 +774,12 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case globalCreateBranchesMsg:
 		m.applyCreateBranches(msg)
+		return nil
+	case createPickerDataMsg:
+		applyPickerData(m.createForm, msg)
+		return nil
+	case workspacecreate.FilesScannedMsg:
+		m.applyCreateFileCandidates(msg)
 		return nil
 	case globalShellCreatedMsg:
 		m.createBusy = false

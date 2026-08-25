@@ -7,8 +7,8 @@ disable-model-invocation: true
 # Releasing a New Version
 
 Operator contract: **`docs/guides/active/releasing.md`**. Enforcement lives in `scripts/` and
-`RELEASE_VERSION=vX.Y.Z make release`. Prefer the one-shot command over replaying
-this checklist by hand.
+`BUMP=minor make release` (or `RELEASE_VERSION=vX.Y.Z make release` for an explicit
+version). Prefer the one-shot command over replaying this checklist by hand.
 
 ## Prerequisites
 
@@ -56,7 +56,7 @@ and note it under Dependencies) and smoke its tab in the app.
 ### 3. CHANGELOG
 
 ```markdown
-## [vX.Y.Z] - YYYY-MM-DD
+## [Unreleased]
 
 ### Features
 - …
@@ -69,7 +69,8 @@ and note it under Dependencies) and smoke its tab in the app.
 ```
 
 Commit the changelog (and any dependency bump) on `main`, then push so
-`HEAD == origin/main`.
+`HEAD == origin/main`. Leave the heading as `## [Unreleased]` — `make release`
+stamps it to `## [vX.Y.Z] - YYYY-MM-DD` for you.
 
 ## Publish
 
@@ -79,12 +80,20 @@ make release-snapshot
 ./scripts/verify-release-archives.sh dist
 ./scripts/test-release-guards.sh dist
 ./scripts/test-release-publication.sh
+make release-dry-run BUMP=minor   # prints the derived version + plan, no mutation
 
-# Cut the release (fail-closed preflight → tag → CI → formula verify/publish)
-RELEASE_VERSION=vX.Y.Z make release
+# Cut the release: derive the version, stamp the changelog, commit, push,
+# then the fail-closed preflight → tag → CI → formula verify/publish
+BUMP=minor make release
 ```
 
-What `make release` enforces and does is documented in `docs/guides/active/releasing.md`.
+The version is stated exactly once — via `BUMP` derived from the latest tag, or
+by setting `RELEASE_VERSION=vX.Y.Z` yourself (also works if you stamped the
+CHANGELOG heading by hand). `scripts/release.sh` refuses an empty `[Unreleased]`
+section, a tree dirty beyond `CHANGELOG.md`, a tag that already exists, and a
+`RELEASE_VERSION` that contradicts an already-stamped heading, before handing off
+to `scripts/publish-release.sh`. What it enforces and does end to end is
+documented in `docs/guides/active/releasing.md`.
 
 Resume only the tap step if the tag/release already exists:
 
@@ -139,8 +148,8 @@ See `docs/guides/active/releasing.md`.
 - [ ] Working tree clean; `main` == `origin/main`
 - [ ] td bump considered; td tab smoke if td moved
 - [ ] No `replace` in go.mod; `GOWORK=off` build works
-- [ ] CHANGELOG entry `## [vX.Y.Z] - …`
-- [ ] `RELEASE_VERSION=vX.Y.Z make release` succeeded
+- [ ] CHANGELOG bullets under `## [Unreleased]`
+- [ ] `BUMP=minor make release` (or `RELEASE_VERSION=vX.Y.Z make release`) succeeded
 - [ ] Release assets present; formula URL/sha match (automatic)
 - [ ] `go install` verified into throwaway `GOBIN`
 - [ ] `make install-status` proves the dev machine is on the intended binary

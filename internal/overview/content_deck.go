@@ -67,8 +67,10 @@ func (m *Model) previewDeckPlacement() (contentpanes.Placement, bool) {
 	if !ok {
 		return contentpanes.Placement{}, false
 	}
+	plan := m.pendingOpenPlan
+	m.pendingOpenPlan = nil
 	return contentpanes.Placement{
-		Box: peer, Boxes: m.lastPreviewBoxes(), Floors: previewPaneFloors(), Split: m.openSplit,
+		Box: peer, Boxes: m.lastPreviewBoxes(), Floors: previewPaneFloors(), Split: m.openSplit, Plan: plan,
 	}, true
 }
 

@@ -243,8 +243,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// returning here claimed the answer and left commit tabs on
 		// "Loading diff…" forever. Offer it to the browser, then let it reach
 		// the plugins like any other broadcast; every host drops what is not
-		// addressed to it.
-		if !overview.IsSharedDiffMessage(msg) {
+		// addressed to it. Pane-switcher picker results share for the same
+		// reason: whichever host has its modal open fired the loaders, and
+		// both hosts' forms answer to their own types.
+		if !overview.IsSharedDiffMessage(msg) && !overview.IsSharedPickerMessage(msg) {
 			return m, cmd
 		}
 		if cmd != nil {

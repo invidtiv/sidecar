@@ -188,10 +188,16 @@ func (v *View) handleDiffPaneKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "l", "right":
 		v.HorizScroll += 10
 		return nil, true
-	case "n":
+	// Next / previous change. `n` used to be this key, but the pane switcher
+	// now answers `n` in every content pane, and one key meaning two things
+	// depending on which pane has focus is the drift this codebase refuses.
+	// `>` / `<` are the shifted forms of the `.` / `,` file steps just below,
+	// which makes the pair read as one hierarchy: step a file, shift to step a
+	// change inside it.
+	case ">":
 		v.jumpPaintedChange(false)
 		return nil, true
-	case "N":
+	case "<":
 		v.jumpPaintedChange(true)
 		return nil, true
 	case "v", "V":
@@ -312,10 +318,16 @@ func (v *View) handleCommitDiffKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		v.DiffScroll = 0
 		v.HorizScroll = 0
 		return nil, true
-	case "n":
+	// Next / previous change. `n` used to be this key, but the pane switcher
+	// now answers `n` in every content pane, and one key meaning two things
+	// depending on which pane has focus is the drift this codebase refuses.
+	// `>` / `<` are the shifted forms of the `.` / `,` file steps just below,
+	// which makes the pair read as one hierarchy: step a file, shift to step a
+	// change inside it.
+	case ">":
 		v.jumpPaintedChange(false)
 		return nil, true
-	case "N":
+	case "<":
 		v.jumpPaintedChange(true)
 		return nil, true
 	case ",":

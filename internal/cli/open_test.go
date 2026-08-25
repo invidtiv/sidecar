@@ -602,3 +602,98 @@ func initOpenGitRepo(t *testing.T) (dir, oid string) {
 	}
 	return dir, strings.TrimSpace(string(out))
 }
+
+func TestOpenAtFlagValidation(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		args     []string
+		contains string
+	}{
+		{"invalid cell", []string{"open", "--at", "2.x", "README.md"}, "invalid cell"},
+		{"zero row", []string{"open", "--at", "2.0", "README.md"}, "invalid cell"},
+		{"missing value", []string{"open", "--at"}, "--at requires a grid cell"},
+		{"with split", []string{"open", "--at", "2.1", "--split", "right", "README.md"}, "mutually exclusive"},
+		{"split after at", []string{"open", "README.md", "--at=1.1", "--split=below"}, "mutually exclusive"},
+		{"empty value", []string{"open", "--at", "", "README.md"}, "--at requires a grid cell"},
+		{"empty equals form", []string{"open", "README.md", "--at="}, "--at requires a grid cell"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			handled, code := Run(tt.args, &out, &errOut)
+			if !handled || code != 2 {
+				t.Fatalf("Run(%v) = handled %v code %d, want usage error 2", tt.args, handled, code)
+			}
+			if combined := out.String() + errOut.String(); !strings.Contains(combined, tt.contains) {
+				t.Fatalf("output for %v missing %q; got %q", tt.args, tt.contains, combined)
+			}
+		})
+	}
+}
+
+// --at is a requirement carried in the request's options: the host receives
+// the cell verbatim and no split preference beside it.
+func TestOpenAtWritesCellIntoRequestOptions(t *testing.T) {
+	stateHome, socket := setupShellCLI(t, "active task")
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	t.Setenv("TMUX", socket+",1,0")
+	t.Setenv("TMUX_PANE", "%1")
+
+	workDir := t.TempDir()
+	docFile := filepath.Join(workDir, "doc.md")
+	if err := os.WriteFile(docFile, []byte("# Hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	projectDir := filepath.Join(stateHome, "sidecar", "projects", "sidecar")
+	if err := os.WriteFile(filepath.Join(projectDir, "meta.json"), []byte(`{"path":`+quoteJSON(t, workDir)+`}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	type captured struct {
+		options uirequest.Options
+		target  uirequest.Target
+	}
+	capture := make(chan captured, 1)
+	go func() {
+		reqsDir := filepath.Join(stateHome, "sidecar", "requests")
+		for i := 0; i < 40; i++ {
+			time.Sleep(25 * time.Millisecond)
+			entries, err := os.ReadDir(reqsDir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !strings.HasSuffix(e.Name(), ".json") || strings.Contains(e.Name(), ".tmp.") {
+					continue
+				}
+				req, err := uirequest.ReadRequest(filepath.Join(reqsDir, e.Name()))
+				if err != nil || req.Action != uirequest.ActionOpen {
+					continue
+				}
+				capture <- captured{options: req.Options, target: req.Target}
+				_ = uirequest.WriteAck(filepath.Join(stateHome, "sidecar"), req.ID, req.Action, uirequest.Ack{
+					Instance: "test-instance", Status: uirequest.StatusOpened, At: time.Now().UTC(),
+				})
+				return
+			}
+		}
+		close(capture)
+	}()
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"open", "doc.md", "--at", "2.1", "--wait", "1500ms"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("open = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+
+	got, ok := <-capture
+	if !ok {
+		t.Fatal("no open request was written")
+	}
+	if got.options.At != "2.1" || got.options.Split != "" {
+		t.Fatalf("options = %+v, want the cell and no split preference", got.options)
+	}
+	if got.target.Kind != uirequest.TargetKindFile {
+		t.Fatalf("target kind = %s", got.target.Kind)
+	}
+}

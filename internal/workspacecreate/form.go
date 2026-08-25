@@ -24,17 +24,6 @@ var (
 	saveAgentAutoApprove = state.SetAgentAutoApprove
 )
 
-// Kind is the workspace type the form will create.
-type Kind int
-
-const (
-	KindShell Kind = iota
-	KindWorktree
-	// KindTerminalSplit creates a live terminal beside the workspace's own
-	// terminal. It owns no branch and no agent, so it needs at most a name.
-	KindTerminalSplit
-)
-
 // lastKind is the row the list was last left on. The modal remembers it across
 // opens because the row a user picked once is the row they usually want again.
 var lastKind = KindShell
@@ -68,9 +57,17 @@ type OpenOpts struct {
 	// UseLastKind starts the list on the row it was last left on, when that
 	// row is one this host offers.
 	UseLastKind bool
-	// AllowTerminalSplit offers the Terminal split row. A host without a pane
-	// tree to place one in leaves it off.
+	// AllowTerminalSplit offers the Terminal split row — and, with it, every
+	// other HostScoped row (the configured resource providers): the flag is
+	// really "this host can place panes". A host without a pane tree to place
+	// one in leaves it off.
 	AllowTerminalSplit bool
+	// ShowNotes offers the Note row. It follows whether the notes plugin is
+	// registered, so a build without Notes never promises a note pane.
+	ShowNotes bool
+	// Providers are the configured terminal-resource provider instances; each
+	// becomes its own kind row labelled with its instance ID.
+	Providers []ProviderItem
 	// TerminalSplitDisabled is why a terminal split cannot be created right
 	// now — the on-screen live-terminal cap being the one reason today. When
 	// it is set the row and its form render disabled with this one line, and
@@ -93,9 +90,16 @@ type OpenOpts struct {
 
 // Form is the Create Workspace chooser: inputs, indexes, skip, error, and modal cache.
 type Form struct {
-	kind             Kind
+	kind Kind
+	// providerID is the instance behind the selected row when that row is a
+	// resource provider; every resource row shares KindResource, so the Kind
+	// alone cannot say which one was chosen.
+	providerID       string
 	rows             []kindRow
+	showNotes        bool
+	step             FormStep
 	placement        Placement
+	picker           pickerState
 	terminalName     string
 	terminalDisabled string
 	showProject      bool
@@ -129,8 +133,36 @@ type Form struct {
 	modal        *modal.Modal
 	modalWidth   int
 	cachedKind   Kind
+	cachedStep   FormStep
+	cachedPicker int
 	cachedBranch int
 	pendingFocus string
+}
+
+// FormStep is which screen of the two-step flow the form shows. Shell and
+// Worktree never leave StepKind; pane kinds that need a target continue to
+// StepTarget, and Esc there returns here.
+type FormStep int
+
+const (
+	StepKind FormStep = iota
+	StepTarget
+)
+
+// Stable field IDs of the target picker step.
+const (
+	FieldPickerInput = "create-picker-input"
+	pickerItemPrefix = "create-picker-item-"
+	pickerMaxVisible = 8
+)
+
+// Suggestion is one row of a target picker's list. Value is the identifier the
+// target resolves from (a workspace-relative path, a git spec, an issue or
+// note id); Label is what the row displays; Badge is optional provenance.
+type Suggestion struct {
+	Value string
+	Label string
+	Badge string
 }
 
 // Open builds form state and loads last-used agent and that agent's auto-approve.
@@ -138,7 +170,8 @@ type Form struct {
 func Open(opts OpenOpts) *Form {
 	f := &Form{
 		kind:             opts.Kind,
-		rows:             kindRowsFor(opts.AllowTerminalSplit),
+		rows:             kindRowsForOpts(rowOpts{hostScoped: opts.AllowTerminalSplit, showNotes: opts.ShowNotes, providers: opts.Providers}),
+		showNotes:        opts.ShowNotes,
 		terminalName:     strings.TrimSpace(opts.TerminalName),
 		terminalDisabled: strings.TrimSpace(opts.TerminalSplitDisabled),
 		showProject:      opts.ShowProject,
@@ -150,12 +183,16 @@ func Open(opts OpenOpts) *Form {
 		preferredAgent:   opts.PreferredAgent,
 		defaultAgent:     opts.DefaultAgent,
 	}
+	f.picker.init()
 	if opts.UseLastKind && kindLabel(f.rows, lastKind) != "" {
 		f.kind = lastKind
 	}
 	if kindLabel(f.rows, f.kind) == "" {
 		f.kind = f.rows[0].Kind
 	}
+	// The initial row resolves its provider before any change handler runs:
+	// the fields below are still being built.
+	f.providerID = f.rows[f.firstRowOfKind(f.kind)].ProviderID
 	lastKind = f.kind
 	f.nameInput = textinput.New()
 	f.nameInput.Prompt = ""
@@ -194,7 +231,8 @@ func Open(opts OpenOpts) *Form {
 	return f
 }
 
-// Build returns the cached modal, rebuilding when width or kind/branch-list visibility change.
+// Build returns the cached modal, rebuilding when width or the step/kind/
+// branch-list shape changes.
 func (f *Form) Build(width int) *modal.Modal {
 	if f == nil {
 		return nil
@@ -208,7 +246,8 @@ func (f *Form) Build(width int) *modal.Modal {
 			prevFocus = id
 		}
 	}
-	if f.modal != nil && f.modalWidth == width && f.cachedKind == f.kind && f.cachedBranch == len(f.branches) {
+	if f.modal != nil && f.modalWidth == width && f.cachedKind == f.kind && f.cachedStep == f.step &&
+		f.cachedBranch == len(f.branches) && f.cachedPicker == f.pickerSignature() {
 		return f.modal
 	}
 	if prevFocus == "" {
@@ -217,6 +256,13 @@ func (f *Form) Build(width int) *modal.Modal {
 	f.build(width, prevFocus)
 	f.pendingFocus = ""
 	return f.modal
+}
+
+// pickerSignature changes whenever the picker's visible answer could change:
+// its query or how many suggestions each source holds.
+func (f *Form) pickerSignature() int {
+	h := len(f.picker.files)*1e6 + len(f.picker.refs)*1e4 + len(f.picker.issues)*100 + len(f.picker.notes)
+	return h + len(f.picker.input.Value())
 }
 
 // RestoreFocus applies the pending focus after the modal has been rendered.
@@ -282,21 +328,53 @@ func (f *Form) Kind() Kind {
 	return f.kind
 }
 
-func (f *Form) SetKind(k Kind) {
-	if f == nil || f.kind == k {
+// selectRow makes row the chosen one. Selection is a ROW, not just a Kind:
+// resource rows all share KindResource, so the provider instance rides with
+// the row — picking the second provider must title, validate, and resolve
+// against that second instance.
+func (f *Form) selectRow(idx int) {
+	if f == nil || idx < 0 || idx >= len(f.rows) {
 		return
 	}
-	f.kind = k
-	lastKind = k
+	row := f.rows[idx]
+	if f.kind == row.Kind && f.providerID == row.ProviderID {
+		return
+	}
+	f.kind = row.Kind
+	f.providerID = row.ProviderID
+	lastKind = row.Kind
+	if f.step == StepTarget {
+		// Kind switching is a step-1 gesture; a stale picker must not survive
+		// into the next advance.
+		f.step = StepKind
+	}
 	f.applyKindChange()
 }
 
-// SetKindFromClickX picks the row under a click on the kind toggle.
-func (f *Form) SetKindFromClickX(x, regionX, regionW int) {
-	if f == nil {
-		return
+func (f *Form) SetKind(k Kind) {
+	f.selectRow(f.firstRowOfKind(k))
+}
+
+// firstRowOfKind resolves a Kind to its row, falling back to row 0 when no
+// row offers it. Resource kinds resolve to their FIRST configured instance;
+// row-precise selection goes through selectRow via clicks and arrow keys.
+func (f *Form) firstRowOfKind(k Kind) int {
+	for i, row := range f.rows {
+		if row.Kind == k {
+			return i
+		}
 	}
-	f.SetKind(kindFromClickX(f.rows, f.kind, x, regionX, regionW))
+	return 0
+}
+
+// indexOfRow is the row's position in this form's catalog.
+func (f *Form) indexOfRow(row kindRow) int {
+	for i := range f.rows {
+		if f.rows[i].Kind == row.Kind && f.rows[i].ProviderID == row.ProviderID {
+			return i
+		}
+	}
+	return 0
 }
 
 // Placement is the segmented row's current value; Auto until a placement button
@@ -357,10 +435,38 @@ func (f *Form) ApplyPlacementAction(action string) bool {
 	return true
 }
 
+// PlacementAction is what a placement button click means on the current step:
+// nothing, a continue-with-this-placement onto the picker step, or a create
+// right now. The split exists because pane kinds that need a target cannot
+// create from the kind list — but they must not lose the clicked placement,
+// which Enter on the picker step then honors.
+type PlacementAction int
+
+const (
+	PlacementIgnored PlacementAction = iota
+	PlacementAdvanced
+	PlacementSubmitted
+)
+
+// ApplyPlacementActionStep records a placement button click and answers what
+// it means for the form's current step and kind.
+func (f *Form) ApplyPlacementActionStep(action string) PlacementAction {
+	if !f.ApplyPlacementAction(action) {
+		return PlacementIgnored
+	}
+	if f.step == StepKind && f.needsTarget() {
+		f.AdvanceToTarget()
+		return PlacementAdvanced
+	}
+	return PlacementSubmitted
+}
+
 // ShowPlacement reports that the placement row belongs on screen: only a pane
-// this modal places has somewhere to put it.
+// this modal places has somewhere to put it. Every pane kind qualifies — File,
+// Git diff, td issue, resource, Note, and the Terminal split that had it
+// first. Shell and Worktree create workspace rows, not panes.
 func (f *Form) ShowPlacement() bool {
-	return f != nil && f.kind == KindTerminalSplit
+	return f != nil && kindIsPane(f.kind)
 }
 
 // TerminalName is the name a created terminal split takes: what was typed, or
@@ -484,10 +590,13 @@ func (f *Form) SyncAfterInput() {
 	if f.agentType != prev {
 		f.loadAutoApprove()
 		f.lastAgent = f.agentType
-		return
-	}
-	if f.skip != f.loadedSkip {
+	} else if f.skip != f.loadedSkip {
 		f.persistSkip()
+	}
+	// The picker's list answers its query live: every input tick reclamps the
+	// cursor and flags the modal for rebuild.
+	if f.step == StepTarget {
+		f.syncPickerCursor()
 	}
 }
 
@@ -511,10 +620,17 @@ func (f *Form) build(width int, prevFocus string) {
 
 	f.modalWidth = width
 	f.cachedKind = f.kind
+	f.cachedStep = f.step
 	f.cachedBranch = len(f.branches)
+	f.cachedPicker = f.pickerSignature()
+
+	if f.step == StepTarget {
+		f.buildPicker(width, prevFocus)
+		return
+	}
 
 	sections := []modal.Section{
-		kindToggle(FieldKind, f.rows, &f.kind, f.applyKindChange, f.kindDisabledReason),
+		kindControl(FieldKind, f.rows, f.selectedRowIndex, func(row kindRow) { f.selectRow(f.indexOfRow(row)) }, f.kindDisabledReason),
 		modal.Spacer(),
 	}
 	if f.showProject {
@@ -554,6 +670,32 @@ func (f *Form) build(width int, prevFocus string) {
 		f.assemble(width, prevFocus, sections)
 		return
 	}
+	if kindNeedsTarget(f.kind) {
+		// Step 1 of a target-needing pane kind: the kind list plus the
+		// placement row. Enter continues to the picker; a placement click
+		// continues with that placement already recorded.
+		hints := modal.WithHintText("Tab to switch · Enter continues · Esc cancels")
+		m := modal.New("Create Workspace",
+			modal.WithWidth(width),
+			modal.WithPrimaryAction(ActionCreate),
+			hints,
+			modal.WithInitialFocus(prevFocus),
+		)
+		sections = append(sections,
+			f.errorSection(),
+			modal.Spacer(),
+			placementButtons(false),
+			modal.Spacer(),
+			modal.Buttons(
+				modal.Btn(" Cancel ", ActionCancel),
+			),
+		)
+		for _, section := range sections {
+			m.AddSection(section)
+		}
+		f.modal = m
+		return
+	}
 	agentItems := f.AgentItems()
 	sections = append(sections,
 		modal.Text("Agent"),
@@ -588,6 +730,30 @@ func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 	for _, section := range sections {
 		m.AddSection(section)
 	}
+	f.modal = m
+}
+
+// buildPicker assembles the target picker step: "New · <label>" with the
+// filter/count/list sections from the picker, the placement row, and a Cancel
+// that closes (Esc is the way back). Enter opens with the recorded placement,
+// Auto unless a placement button was clicked earlier in this session; clicking
+// a placement button creates right now with it.
+func (f *Form) buildPicker(width int, prevFocus string) {
+	// The chosen ROW's label: for resource rows that is the instance ID that
+	// was picked, not whichever provider sorts first.
+	m := modal.New("New · "+f.selectedLabel(),
+		modal.WithWidth(width),
+		modal.WithPrimaryAction(ActionCreate),
+		modal.WithInitialFocus(prevFocus),
+	)
+	m.AddSection(modal.Text(styles.Muted.Render("Open " + strings.ToLower(kindLabel(f.rows, f.kind)) + " in a split")))
+	m.AddSection(modal.Spacer())
+	for _, section := range f.pickerSections() {
+		m.AddSection(section)
+	}
+	m.AddSection(modal.Spacer())
+	m.AddSection(placementButtons(false))
+	m.AddSection(f.errorSection())
 	f.modal = m
 }
 

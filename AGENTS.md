@@ -107,8 +107,8 @@ make install-status
 # Restore the installed Homebrew release
 make use-homebrew
 
-# Tag a release (prefer the one-shot path)
-RELEASE_VERSION=v0.1.0 make release
+# Cut a release: write bullets under `## [Unreleased]` in CHANGELOG.md, then run
+BUMP=minor make release
 ```
 
 See `docs/guides/active/releasing.md` and `.claude/skills/release-sidecar/SKILL.md`.

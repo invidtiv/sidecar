@@ -24,7 +24,11 @@ func TestEveryViewerKeyIsRegistered(t *testing.T) {
 	want := []string{
 		"j", "k", "down", "up", "g", "G",
 		"l", "right", "enter", "h", "left",
-		"v", "z", "f", "n", "N",
+		"v", "z", "f",
+		// Next / previous change. These were `n` / `N` until the pane switcher
+		// took `n` in every content pane; the viewer no longer answers either
+		// of those, so neither belongs in this list.
+		">", "<",
 		"ctrl+d", "ctrl+u", "pgup", "pgdown",
 		",", ".",
 	}

@@ -670,7 +670,7 @@ func (m *Model) openAppContent(workdir, pluginID string, ref contentlink.Ref) te
 		}
 		return cmd
 	}
-	out := m.openAppContentOutcome(h, ref, "")
+	out := m.openAppContentOutcome(h, ref, "", nil)
 	if out.Status == contentpanes.StatusRefused {
 		if out.Refusal == contentpanes.RefusalFit {
 			return appmsg.ShowToast("Content pane needs a wider window; layout left unchanged", 3*time.Second)
@@ -680,13 +680,13 @@ func (m *Model) openAppContent(workdir, pluginID string, ref contentlink.Ref) te
 	return out.Command
 }
 
-func (m *Model) openAppContentOutcome(h *appContentDeck, ref contentlink.Ref, split string) contentpanes.Outcome {
+func (m *Model) openAppContentOutcome(h *appContentDeck, ref contentlink.Ref, split string, plan *panelayout.OpenPlan) contentpanes.Outcome {
 	boxes := make(map[int]panelayout.Box)
 	for _, leaf := range h.layout.Leaves {
 		boxes[leaf.Node.ID] = leaf.Box
 	}
 	out := h.deck.Open(contentpanes.SurfaceContext{Root: h.workdir, DiffRoot: h.workdir, Surface: h.pluginID, Epoch: m.registry.Context().Epoch}, ref,
-		contentpanes.Placement{Box: h.canvas, Boxes: boxes, Floors: appDeckFloors(), Split: split})
+		contentpanes.Placement{Box: h.canvas, Boxes: boxes, Floors: appDeckFloors(), Split: split, Plan: plan})
 	if out.Accepted() {
 		h.syncInnerFocus()
 		m.persistAppContentDeck(h)
@@ -703,6 +703,7 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 		return nil, false
 	}
 	var ref contentlink.Ref
+	var plan *panelayout.OpenPlan
 	switch req.Target.Kind {
 	case uirequest.TargetKindIssue:
 		ref = contentlink.Ref{Kind: contentlink.KindIssue, Value: req.Target.Value}
@@ -720,7 +721,28 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	default:
 		return nil, false
 	}
-	out := m.openAppContentOutcome(h, ref, req.Options.Split)
+	if at := strings.TrimSpace(req.Options.At); at != "" {
+		// An explicit cell is a requirement on this surface too: plan it
+		// against the deck's own tree and apply it verbatim, refusing rather
+		// than landing anywhere else.
+		cell, ok := panelayout.ParseCell(at)
+		if !ok {
+			m.ackAppContentRequest(req, uirequest.StatusDeclined, fmt.Sprintf("cell %q is not a grid address like 2.1", at), 0)
+			return nil, true
+		}
+		kind, ok := appContentKindForTarget(req.Target.Kind)
+		if !ok {
+			m.ackAppContentRequest(req, uirequest.StatusDeclined, fmt.Sprintf("a %s target has no pane to place at a cell", string(req.Target.Kind)), 0)
+			return nil, true
+		}
+		planned, refusal := panelayout.PlanOpenAt(h.deck.Tree(), kind, 0, cell)
+		if refusal != "" {
+			m.ackAppContentRequest(req, uirequest.StatusDeclined, refusal, 0)
+			return nil, true
+		}
+		plan = &planned
+	}
+	out := m.openAppContentOutcome(h, ref, req.Options.Split, plan)
 	if !out.Accepted() {
 		reason := string(out.Refusal)
 		if out.Refusal == contentpanes.RefusalFit || out.Refusal == contentpanes.RefusalPlacement {
@@ -735,6 +757,23 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	}
 	m.ackAppContentRequest(req, status, "", out.LeafID)
 	return out.Command, true
+}
+
+// appContentKindForTarget maps an open request's wire kind onto its pane kind
+// for explicit-cell placement. Only the passive content kinds are placeable.
+func appContentKindForTarget(kind uirequest.TargetKind) (panelayout.Kind, bool) {
+	switch kind {
+	case uirequest.TargetKindIssue:
+		return panelayout.Issue, true
+	case uirequest.TargetKindNote:
+		return panelayout.Note, true
+	case uirequest.TargetKindDiff:
+		return panelayout.Diff, true
+	case uirequest.TargetKindResource:
+		return panelayout.Resource, true
+	default:
+		return 0, false
+	}
 }
 
 func (m *Model) appContentRequestMatchesProject(req uirequest.Request) bool {
@@ -1461,7 +1500,7 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		key := map[string]string{
 			"diff-open": "enter", "diff-down": "j", "diff-up": "k", "diff-back": "h",
 			"toggle-diff-view": "v", "toggle-diff-scope": "z", "next-file": ".", "prev-file": ",",
-			"file-picker": "f", "diff-next-change": "n", "diff-top": "g", "diff-bottom": "G",
+			"file-picker": "f", "diff-next-change": ">", "diff-top": "g", "diff-bottom": "G",
 			"diff-page-down": "pgdown", "diff-page-up": "pgup", "diff-scroll-down": "j", "diff-scroll-up": "k",
 		}[id]
 		if key != "" {

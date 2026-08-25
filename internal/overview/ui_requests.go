@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,7 +60,27 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if isSelected {
 		prevSplit := m.openSplit
 		m.openSplit = req.Options.Split
-		defer func() { m.openSplit = prevSplit }()
+		// The plan is scoped to THIS request whether or not the open reaches a
+		// placement: a resource that no matcher claims, or a kind that opens
+		// nothing, returns before previewDeckPlacement consumes it, and a plan
+		// left behind would place the NEXT open at a cell nobody asked for.
+		defer func() {
+			m.openSplit = prevSplit
+			m.pendingOpenPlan = nil
+		}()
+
+		if at := strings.TrimSpace(req.Options.At); at != "" {
+			plan, refusal, ok := m.planPreviewOpenAt(req.Target, at)
+			if !ok {
+				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
+					Status: uirequest.StatusDeclined, Reason: refusal,
+					Surface: "shell:" + targetWorkspace.TmuxName, At: time.Now().UTC(),
+				})
+				return nil
+			}
+			m.pendingOpenPlan = plan
+		}
 
 		var cmd tea.Cmd
 		// Asked before the open, because afterwards the pane exists either way:
@@ -412,6 +433,45 @@ func (m *Model) applyShellRenameRequest(req uirequest.Request) {
 	}
 	if changed {
 		m.syncBoard()
+	}
+}
+
+// planPreviewOpenAt resolves one open request's explicit cell against this
+// preview's pane tree — the same requirement semantics the workspace surface
+// runs: an unhonorable cell (out of range, over a cap, or a kind whose open
+// would retarget an existing pane) refuses instead of landing elsewhere. ok is
+// false with the reason to show.
+func (m *Model) planPreviewOpenAt(target uirequest.Target, at string) (*panelayout.OpenPlan, string, bool) {
+	cell, ok := panelayout.ParseCell(at)
+	if !ok {
+		return nil, fmt.Sprintf("cell %q is not a grid address like 2.1", at), false
+	}
+	kind, ok := previewKindForTarget(target.Kind)
+	if !ok {
+		return nil, fmt.Sprintf("a %s target has no pane to place at a cell", string(target.Kind)), false
+	}
+	plan, refusal := panelayout.PlanOpenAt(m.preview.paneRoot, kind, 0, cell)
+	if refusal != "" {
+		return nil, refusal, false
+	}
+	return &plan, "", true
+}
+
+// previewKindForTarget maps an open request's wire kind onto its pane kind.
+func previewKindForTarget(kind uirequest.TargetKind) (panelayout.Kind, bool) {
+	switch kind {
+	case uirequest.TargetKindFile:
+		return panelayout.Document, true
+	case uirequest.TargetKindIssue:
+		return panelayout.Issue, true
+	case uirequest.TargetKindNote:
+		return panelayout.Note, true
+	case uirequest.TargetKindDiff:
+		return panelayout.Diff, true
+	case uirequest.TargetKindResource:
+		return panelayout.Resource, true
+	default:
+		return 0, false
 	}
 }
 

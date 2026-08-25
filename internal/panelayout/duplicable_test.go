@@ -22,7 +22,7 @@ func terminalDocShell() *Node {
 // A Shell open is a new session, so it may never land on a leaf already showing
 // a different one. These steps walk the auto rules from an empty workspace: the
 // first content pane opens beside the primary terminal, the second stacks in the
-// right column, and a later one stacks on the largest content leaf.
+// right column, and a later one follows the grid rule into the emptiest column.
 func TestPlanOpenShellNeverRetargetsAndFollowsTheAutoRules(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -47,14 +47,14 @@ func TestPlanOpenShellNeverRetargetsAndFollowsTheAutoRules(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "step 3: a later shell stacks on the largest content leaf",
+			name: "step 3: with the right column holding two, the primary column splits (2x2)",
 			root: terminalDocIssue(),
 			kind: Shell,
 			boxes: map[int]Box{
 				2: {W: 60, H: 6},
 				4: {W: 60, H: 14},
 			},
-			want: OpenPlan{Split: 4, Axis: Rows},
+			want: OpenPlan{Split: 1, Axis: Rows},
 			ok:   true,
 		},
 		{
@@ -68,7 +68,9 @@ func TestPlanOpenShellNeverRetargetsAndFollowsTheAutoRules(t *testing.T) {
 				1: {W: 60, H: 14},
 				2: {W: 60, H: 6},
 			},
-			want: OpenPlan{Split: 1, Axis: Rows},
+			// One column of two stacks; the emptiest column is that column, so
+			// the shell appends below it by splitting the column's subtree.
+			want: OpenPlan{Split: 3, Axis: Rows},
 			ok:   true,
 		},
 		{

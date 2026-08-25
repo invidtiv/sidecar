@@ -173,6 +173,7 @@ func DefaultBindings() []Binding {
 		// Creation is hosted globally, but delegates lifecycle work to the same
 		// presentation-neutral core as the project surface.
 		{Key: "enter", Command: "interactive", Context: "global-workspaces"},
+		{Key: "o", Command: "open-pane", Context: "global-workspaces"},
 		{Key: "n", Command: "new-worktree", Context: "global-workspaces"},
 		{Key: "ctrl+n", Command: "new-shell", Context: "global-workspaces"},
 		// D acts on the selection's kind, as it does in the project list: the
@@ -221,6 +222,7 @@ func DefaultBindings() []Binding {
 
 		// Focused document leaf beside the selected terminal. q closes the
 		// pane; it must not be a root context or Sidecar would quit instead.
+		{Key: "n", Command: "open-pane", Context: "global-workspaces-doc"},
 		{Key: "q", Command: "close", Context: "global-workspaces-doc"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-doc"},
 		{Key: "x", Command: "close-tab", Context: "global-workspaces-doc"},
@@ -233,6 +235,7 @@ func DefaultBindings() []Binding {
 
 		// Focused td issue leaf. Tab keys match global-workspaces-doc;
 		// y/Y match td monitor and the project issue pane.
+		{Key: "n", Command: "open-pane", Context: "global-workspaces-issue"},
 		{Key: "enter", Command: "open-item", Context: "global-workspaces-issue"},
 		{Key: "O", Command: "open-in-td", Context: "global-workspaces-issue"},
 		{Key: "y", Command: "yank-issue", Context: "global-workspaces-issue"},
@@ -245,6 +248,7 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-issue"},
 
+		{Key: "n", Command: "open-pane", Context: "global-workspaces-note"},
 		{Key: "y", Command: "yank-note", Context: "global-workspaces-note"},
 		{Key: "Y", Command: "yank-note-key", Context: "global-workspaces-note"},
 		{Key: "q", Command: "close", Context: "global-workspaces-note"},
@@ -259,6 +263,7 @@ func DefaultBindings() []Binding {
 		// resourceview's own key vocabulary, which both terminal surfaces
 		// register, so the footer cannot advertise different keys for the
 		// same pane. q/esc are this surface's content-pane rule, as above.
+		{Key: "n", Command: "open-pane", Context: "global-workspaces-resource"},
 		{Key: "q", Command: "close", Context: "global-workspaces-resource"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-resource"},
 		{Key: "r", Command: "refresh", Context: "global-workspaces-resource"},
@@ -297,6 +302,7 @@ func DefaultBindings() []Binding {
 		// the editor, so the edit contexts register nothing: the ways out are
 		// tmux's own (ctrl+\, esc esc).
 		{Key: "e", Command: "edit", Context: "workspace-doc"},
+		{Key: "n", Command: "open-pane", Context: "workspace-doc"},
 		{Key: "e", Command: "edit", Context: "global-workspaces-doc"},
 		{Key: "r", Command: "reload", Context: "workspace-doc"},
 		{Key: "r", Command: "reload", Context: "global-workspaces-doc"},
@@ -316,6 +322,7 @@ func DefaultBindings() []Binding {
 		{Key: "enter", Command: "search-open", Context: "global-workspaces-doc-search"},
 		{Key: "shift+enter", Command: "search-open-tab", Context: "global-workspaces-doc-search"},
 
+		{Key: "n", Command: "open-pane", Context: "global-workspaces-diff"},
 		{Key: "q", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "esc", Command: "close", Context: "global-workspaces-diff"},
 		{Key: "x", Command: "close-tab", Context: "global-workspaces-diff"},
@@ -330,6 +337,7 @@ func DefaultBindings() []Binding {
 		{Key: "z", Command: "toggle-diff-scope", Context: "global-workspaces-diff"},
 
 		// Focused project Workspaces issue leaf. Tab keys match workspace-doc.
+		{Key: "n", Command: "open-pane", Context: "workspace-issue"},
 		{Key: "enter", Command: "open-item", Context: "workspace-issue"},
 		{Key: "O", Command: "open-in-td", Context: "workspace-issue"},
 		{Key: "y", Command: "yank-issue", Context: "workspace-issue"},
@@ -343,6 +351,7 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "next-pane", Context: "workspace-issue"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-issue"},
 
+		{Key: "n", Command: "open-pane", Context: "workspace-note"},
 		{Key: "y", Command: "yank-note", Context: "workspace-note"},
 		{Key: "Y", Command: "yank-note-key", Context: "workspace-note"},
 		{Key: "q", Command: "close", Context: "workspace-note"},
@@ -359,6 +368,7 @@ func DefaultBindings() []Binding {
 		// purpose: a key bound in one and not the other is the parity bug the
 		// shared resourceview.Pane exists to prevent, and the footer renders
 		// nothing for a command with no bound key.
+		{Key: "n", Command: "open-pane", Context: "workspace-resource"},
 		{Key: "q", Command: "close", Context: "workspace-resource"},
 		{Key: "esc", Command: "close", Context: "workspace-resource"},
 		{Key: "r", Command: "refresh", Context: "workspace-resource"},
@@ -371,6 +381,7 @@ func DefaultBindings() []Binding {
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-resource"},
 
 		// Focused project Workspaces Diff leaf. q hides; not a root context.
+		{Key: "n", Command: "open-pane", Context: "workspace-diff"},
 		{Key: "q", Command: "close", Context: "workspace-diff"},
 		{Key: "esc", Command: "close", Context: "workspace-diff"},
 		{Key: "x", Command: "close-tab", Context: "workspace-diff"},
@@ -806,6 +817,10 @@ func DefaultBindings() []Binding {
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
+		// The pane switcher, per the pane-layout-control plan's entry decision:
+		// `o` was the first free candidate in this context (o, alt+o, alt+n),
+		// and the mockups' footer hints it.
+		{Key: "o", Command: "open-pane", Context: "workspace-preview"},
 		// `0` deliberately has no workspace-preview binding. It is the header's
 		// Tasks shortcut now, and a context-local binding that shadowed it here
 		// would make the same key mean two different things one tab apart. The
@@ -973,8 +988,11 @@ func diffViewerBindings() []Binding {
 		{"pgdown", "diff-page-down"},
 		{"ctrl+u", "diff-page-up"},
 		{"pgup", "diff-page-up"},
-		{"n", "diff-next-change"},
-		{"N", "diff-next-change"},
+		// `>` / `<` rather than `n` / `N`: the pane switcher answers `n` in
+		// every content pane now, and these are the shifted forms of the
+		// `.` / `,` file steps — step a file, shift to step a change in it.
+		{">", "diff-next-change"},
+		{"<", "diff-next-change"},
 	}
 	contexts := []string{"workspace-diff", "global-workspaces-diff"}
 	out := make([]Binding, 0, len(keys)*len(contexts))

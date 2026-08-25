@@ -168,31 +168,28 @@ func (p *Plugin) persistCreateLastAgent() {
 	}
 }
 
-func (p *Plugin) setCreateKindFromClick(x int) {
-	if p.createForm == nil || p.mouseHandler == nil {
-		return
-	}
-	for _, region := range p.mouseHandler.HitMap.Regions() {
-		if region.ID != workspacecreate.FieldKind {
-			continue
-		}
-		p.createForm.SetKindFromClickX(x, region.Rect.X, region.Rect.W)
-		return
-	}
-}
-
-// createFormPlacementAction records a placement button click and creates
-// immediately: one click is the whole gesture, no second confirmation.
+// createFormPlacementAction records a placement button click and acts on it:
+// on the picker step (and for the terminal split) one click creates with that
+// placement; from the kind list of a target-needing kind it continues to the
+// picker with the placement recorded.
 func (p *Plugin) createFormPlacementAction(action string) tea.Cmd {
-	if p.createForm == nil || !p.createForm.ApplyPlacementAction(action) {
+	if p.createForm == nil {
 		return nil
 	}
-	return p.submitCreateForm()
+	switch p.createForm.ApplyPlacementActionStep(action) {
+	case workspacecreate.PlacementSubmitted:
+		return p.submitCreateForm()
+	default:
+		return nil
+	}
 }
 
 func (p *Plugin) submitCreateForm() tea.Cmd {
 	if p.createForm == nil {
 		return nil
+	}
+	if p.createForm.Step() == workspacecreate.StepTarget {
+		return p.submitPaneTargetForm()
 	}
 	if p.createForm.Kind() == workspacecreate.KindTerminalSplit {
 		// The disabled row refuses here too, not only in its chrome: Enter

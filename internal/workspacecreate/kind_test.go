@@ -9,21 +9,15 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-func TestKindButtonStylesHighlightSelectedWithoutFocus(t *testing.T) {
-	shell, tree := kindButtonStyles(KindShell, false)
-	assertStyle(t, "shell selected", shell, styles.ButtonFocused)
-	assertStyle(t, "worktree idle", tree, styles.Button)
+func TestKindRowStylesHighlightSelectedWithoutFocus(t *testing.T) {
+	assertStyle(t, "selected", kindRowStyle(false, true, false), styles.ButtonFocused)
+	assertStyle(t, "idle", kindRowStyle(false, false, false), styles.Button)
 
-	shell, tree = kindButtonStyles(KindWorktree, false)
-	assertStyle(t, "worktree selected", tree, styles.ButtonFocused)
-	assertStyle(t, "shell idle", shell, styles.Button)
-
-	shell, tree = kindButtonStyles(KindShell, true)
-	assertStyle(t, "shell selected while hovered", shell, styles.ButtonFocused)
-	assertStyle(t, "worktree hover", tree, styles.ButtonHover)
+	assertStyle(t, "selected while hovered", kindRowStyle(false, true, true), styles.ButtonFocused)
+	assertStyle(t, "hover", kindRowStyle(false, false, true), styles.ButtonHover)
 }
 
-func TestKindToggleKeepsShellSelectedWhenNameFocused(t *testing.T) {
+func TestKindControlKeepsShellSelectedWhenNameFocused(t *testing.T) {
 	f := Open(testOpts(KindShell))
 	renderForm(t, f)
 	if f.Modal().FocusedID() != FieldName {
@@ -32,8 +26,7 @@ func TestKindToggleKeepsShellSelectedWhenNameFocused(t *testing.T) {
 	if f.Kind() != KindShell {
 		t.Fatalf("kind = %v, want shell", f.Kind())
 	}
-	shell, _ := kindButtonStyles(f.Kind(), false)
-	assertStyle(t, "open-on-name still highlights shell", shell, styles.ButtonFocused)
+	assertStyle(t, "open-on-name still highlights the selected row", kindRowStyle(false, true, false), styles.ButtonFocused)
 }
 
 func TestKindFrameStyleMatchesInputBorder(t *testing.T) {
@@ -53,8 +46,8 @@ func TestKindFrameStyleMatchesInputBorder(t *testing.T) {
 
 func TestKindToggleFrameIsIdleWhenNameFocused(t *testing.T) {
 	rows := kindRowsFor(false)
-	idle := renderKindToggle(rows, KindShell, false, false, nil, 80)
-	focused := renderKindToggle(rows, KindShell, true, false, nil, 80)
+	idle := renderKindToggle(rows, 0, false, false, nil, 80)
+	focused := renderKindToggle(rows, 0, true, false, nil, 80)
 	if idle == focused {
 		t.Fatal("focused and idle toggles rendered identically")
 	}

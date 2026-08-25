@@ -121,6 +121,60 @@ func TestDeckPlacementAndHomogeneousTabs(t *testing.T) {
 	}
 }
 
+// A planned placement IS the placement: Open applies the caller's plan
+// verbatim — including inserts a fresh PlanOpen would never choose — while
+// still fit-testing the trial and refusing stale retargets.
+func TestDeckOpenHonorsPlannedPlacement(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	place := testPlacement()
+
+	// Occupied-cell insert above the primary: NewFirst on the root leaf.
+	plan := panelayout.OpenPlan{Split: 1, Axis: panelayout.Rows, NewFirst: true}
+	place.Plan = &plan
+	first := d.Open(ctx, issueRef("td-1a2b3c"), place)
+	if first.Status != StatusOpened || !first.CreatedLeaf {
+		t.Fatalf("planned insert = %#v", first)
+	}
+	grid := panelayout.GridOf(d.root)
+	if grid == nil || grid.Cell(1, 1).Kind != panelayout.Issue || grid.Cell(1, 2).Kind != panelayout.Primary {
+		t.Fatalf("planned insert landed wrong: %#v", d.root)
+	}
+
+	// The same open without a plan would auto-split Columns; the plan wins.
+	if d.root.Split.Axis == panelayout.Columns {
+		t.Fatalf("planned Rows split came out Columns: %#v", d.root)
+	}
+
+	// A retarget plan naming a real pane of the SAME kind is honored; one
+	// naming nothing (or the wrong kind) is refused rather than half-applied.
+	auto := d.Open(ctx, fileRef("README.md"), testPlacement())
+	if auto.Status != StatusOpened || !auto.CreatedLeaf {
+		t.Fatalf("plain doc open = %#v", auto)
+	}
+	retarget := panelayout.OpenPlan{Retarget: auto.LeafID}
+	place.Plan = &retarget
+	tab := d.Open(ctx, fileRef("docs/guide.md"), place)
+	if tab.Status != StatusOpened || tab.CreatedLeaf || tab.LeafID != auto.LeafID {
+		t.Fatalf("planned retarget = %#v", tab)
+	}
+	wrongKind := panelayout.OpenPlan{Retarget: first.LeafID}
+	place.Plan = &wrongKind
+	mismatch := d.Open(ctx, noteRef("nt-abc123"), place)
+	if mismatch.Status != StatusRefused {
+		t.Fatalf("cross-kind retarget = %#v, want refusal", mismatch)
+	}
+	stale := panelayout.OpenPlan{Retarget: 9999}
+	place.Plan = &stale
+	refused := d.Open(ctx, noteRef("nt-abc123"), place)
+	if refused.Status != StatusRefused {
+		t.Fatalf("stale retarget = %#v, want refusal", refused)
+	}
+	if panelayout.FirstOfKind(d.root, panelayout.Note) != nil {
+		t.Fatalf("refused open mutated the tree: %#v", d.root)
+	}
+}
+
 func TestDeckNotePersistRoundTrip(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})
@@ -522,7 +576,7 @@ func TestDeckDiffDirectOpenRebindRejectsOldAndZeroBindingBroadcasts(t *testing.T
 	}
 }
 
-func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
+func TestDeckThirdPaneFollowsTheGridAndFitRefusalIsNonMutating(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})
 	place := testPlacement()
@@ -532,9 +586,11 @@ func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
 		doc.LeafID:   {W: 40, H: 10},
 		issue.LeafID: {W: 80, H: 30},
 	}
+	// With the right column holding two content panes, the grid rule splits
+	// the primary column — the boxes no longer choose.
 	plan, ok := d.PlanOpen(diffRef("wt"), place.Boxes)
-	if !ok || plan.Split != issue.LeafID || plan.Axis != panelayout.Rows {
-		t.Fatalf("PlanOpen diff = %#v ok=%v", plan, ok)
+	if !ok || plan.Split != 1 || plan.Axis != panelayout.Rows {
+		t.Fatalf("PlanOpen diff = %#v ok=%v, want a split of the primary leaf", plan, ok)
 	}
 
 	before := d.Encode()

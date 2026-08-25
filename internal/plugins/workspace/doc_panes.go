@@ -764,7 +764,7 @@ func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) 
 		return false
 	}
 	trialNode := clonePaneTree(node)
-	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, trialNode)
+	trial, trialFocus := ApplyPanePlan(clonePaneTree(p.paneRoot), plan, trialNode)
 	if trialFocus != trialNode.ID {
 		return false
 	}
@@ -773,7 +773,7 @@ func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) 
 		p.toastTime = time.Now()
 		return false
 	}
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
+	treeRoot, focus := ApplyPanePlan(p.paneRoot, plan, node)
 	if focus != node.ID {
 		return false
 	}
@@ -1019,6 +1019,12 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	// pane out from under it, and the copy chord must not fall through to a
 	// document key that happens to share it.
 	if cmd, handled := p.handleDocSelectionKey(doc.view(), msg); handled {
+		return true, cmd
+	}
+	// Asked here rather than above: the editor, the finder overlay and a
+	// committed in-file search all own `n` while they are up, and each has
+	// already declined by this point.
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
 		return true, cmd
 	}
 	switch msg.String() {

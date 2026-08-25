@@ -152,6 +152,147 @@ sidecar help open
 sidecar help --json
 ```
 
+## `sidecar layout`
+
+Read and compose the pane layout agents work beside
+
+Read the current pane layout (`layout get`) or open several panes at once
+in one atomic call (`layout apply`). Both act on the surface showing this
+Sidecar shell and never queue: a request whose shell is off screen
+declines with the reason.
+
+```
+Usage: sidecar layout <command>
+```
+
+### `sidecar layout apply`
+
+Open several panes in one all-or-nothing call
+
+Compose panes onto the surface showing this Sidecar shell.
+
+--spec is a FULL layout, given as columns of stacked panes; it replaces
+what is on screen:
+
+  {"columns":[
+    {"panes":[{"kind":"primary"}]},
+    {"panes":[{"kind":"file","targets":["path:line","path2",...]},
+              {"kind":"issue","targets":["td-xxxxxx",...]}]},
+    {"panes":[{"kind":"shell","run":"...","name":"..."}]}
+  ]}
+
+A spec needs exactly one "primary" pane and must CARRY every live leaf
+already on screen exactly as `layout get` prints them: the primary as
+{"kind":"primary"}, a split terminal as {"kind":"shell","session":
+"<tmux-session>"}. A spec omitting a live terminal declines naming the
+session — apply never destroys one. Passive panes not named are closed
+freely (their content re-opens). Pass `-` to read the spec from stdin.
+
+--pane opens panes ADDITIVELY without closing anything. Each value is one
+descriptor as its JSON object verbatim:
+
+  {"kind":"file","targets":["path:line",...],"at":"2.1"}
+  {"kind":"issue","targets":["td-xxxxxx"]}
+  {"kind":"note","targets":["nt-xxxxxx"]}
+  {"kind":"diff","targets":["spec"]}   no targets = the working tree
+  {"kind":"resource","provider":"<instance>","targets":["LOCATOR"]}
+  {"kind":"shell","run":"...","type":"...","name":"..."}
+
+The first target opens a pane; the rest join it as tabs of the same kind.
+"at" is an optional grid cell col.row (1-based) and is a requirement, not a
+preference: an unreachable cell declines rather than landing elsewhere.
+File paths are workspace-relative; diffs re-resolve host-side; providers are
+validated against the live matcher snapshot.
+
+Either form is validated and fit-tested before anything changes: it all
+happens, or nothing changes and the decline names the first violation.
+
+The ack's items array lists EVERY requested pane with verdict opened,
+retargeted, carried (a live leaf the spec kept rather than created), or
+declined, plus its landed cell — so one round trip shows everything wrong
+with a refused spec. Like get, apply never queues.
+
+```
+Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...])
+```
+
+**Options:**
+
+- `--spec JSON`: A full layout replacing the screen: columns of stacked panes (- reads stdin)
+- `--pane JSON`: One pane descriptor to add (repeatable); see above for the object shape
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: applied (or every pane retargeted an existing one)
+- `1`: state failure
+- `2`: usage or validation error
+- `3`: no running instance
+- `4`: declined host-side; the reason names the first violation
+
+**Examples:**
+
+```bash
+# read before you write
+sidecar layout get --json
+# a full layout: primary left, file over issue right
+sidecar layout apply --spec '{"columns":[{"panes":[{"kind":"primary"}]},{"panes":[{"kind":"file","targets":["README.md"]},{"kind":"issue","targets":["td-756c34"]}]}]}'
+# apply a spec from stdin
+sidecar layout apply --spec - <layout.json
+# add two panes, auto-placed
+sidecar layout apply --pane '{"kind":"file","targets":["internal/palette/list.go:112","internal/palette/state.go"]}' --pane '{"kind":"shell","run":"make dev","name":"dev server"}'
+# explicit cell, structured result
+sidecar layout apply --pane '{"kind":"file","targets":["README.md"],"at":"2.1"}' --json
+```
+
+### `sidecar layout get`
+
+Read the current pane layout
+
+Read the pane layout of the surface showing this Sidecar shell: the grid
+projection, every pane's kind, targets and tmux session, geometry, and the
+caps and floors an apply would be held to.
+
+A layout that escapes the grid vocabulary reports "grid": null plus the raw
+tree; it is still valid. Human output is a small ASCII sketch plus a table;
+--json passes the payload through unchanged, which is the contract.
+
+Unlike open, a layout request never queues: when this shell is not on
+screen the request declines instead (exit 4), because a stale answer is
+worse than a refusal.
+
+```
+Usage: sidecar layout get [--json]
+```
+
+**Options:**
+
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--json`: Write the layout payload itself to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: answered
+- `1`: state failure
+- `2`: usage error
+- `3`: no running instance
+- `4`: declined: the origin shell is not on screen
+
+**Examples:**
+
+```bash
+sidecar layout get
+# the machine contract: read before you write
+sidecar layout get --json
+```
+
 ## `sidecar notify`
 
 Post, dismiss, and list Sidecar notifications
@@ -293,6 +434,9 @@ Otherwise it targets the unique running instance, or a specific --shell / --proj
 --diff with no spec is the working tree. --provider names a configured terminal resource
 provider instance and is required for a resource: a bare locator is never guessed at.
 --split only overrides the split axis; it never halves a live terminal after content is open.
+--at places the pane at an explicit grid cell and is a requirement: a kind whose open
+would retarget an existing pane, or any cell that cannot be honored exactly, declines
+rather than land elsewhere (--split expresses a preference; --at, a demand).
 
 ```
 Usage: sidecar open [options] [<target>]
@@ -315,6 +459,7 @@ Usage: sidecar open [options] [<target>]
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
 - `--split auto|right|below`: Where to place a new pane (default auto)
+- `--at COL[.ROW]`: Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
@@ -348,6 +493,8 @@ sidecar open abc1234
 sidecar open --provider jira-work CASH-1245
 # structured result for the agent
 sidecar open --json --split below README.md
+# explicit cell: second column, top row
+sidecar open README.md --at 2.1
 # from any terminal, that project's Workspaces surface
 sidecar open --project sidecar README.md
 ```

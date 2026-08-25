@@ -23,60 +23,63 @@ func (p *Plugin) Commands() []plugin.Command {
 	if p.viewMode == ViewModeList && p.docFocused() {
 		cmds := []plugin.Command{
 			{ID: "close", Name: "Close", Description: "Hide document pane", Context: "workspace-doc", Priority: 1},
-			{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Context: "workspace-doc", Priority: 2},
-			{ID: "edit", Name: "Edit", Description: "Edit this file inline", Context: "workspace-doc", Priority: 3},
-			{ID: "reload", Name: "Reload", Description: "Reload this file from disk", Context: "workspace-doc", Priority: 4},
-			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 5},
-			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 6},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 7},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 8},
-			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 9},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 10},
+			{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-doc", Priority: 2},
+			{ID: "search-content", Name: "InFile", Description: "Search this file's contents", Context: "workspace-doc", Priority: 3},
+			{ID: "edit", Name: "Edit", Description: "Edit this file inline", Context: "workspace-doc", Priority: 4},
+			{ID: "reload", Name: "Reload", Description: "Reload this file from disk", Context: "workspace-doc", Priority: 5},
+			{ID: "find-file", Name: "Find", Description: "Find a file by name in this pane", Context: "workspace-doc", Priority: 6},
+			{ID: "search-project", Name: "Search", Description: "Search the project in this pane", Context: "workspace-doc", Priority: 7},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active file", Context: "workspace-doc", Priority: 8},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: "workspace-doc", Priority: 9},
+			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: "workspace-doc", Priority: 10},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-doc", Priority: 11},
 		}
 		if doc, _ := p.activeDocPane(); doc != nil && doc.view() != nil && terminallink.Markdown(doc.view().Title()) {
 			renderName := "Raw"
 			if !doc.view().Rendered() {
 				renderName = "Render"
 			}
-			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 11})
+			cmds = append(cmds, plugin.Command{ID: "render", Name: renderName, Description: "Toggle rendered and raw markdown", Context: "workspace-doc", Priority: 12})
 		}
 		cmds = append(cmds,
-			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 12},
-			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 13},
-			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 14},
-			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 15},
-			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 16},
-			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 17},
-			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 18},
+			plugin.Command{ID: "toggle-wrap", Name: "Wrap", Description: "Toggle line wrapping", Context: "workspace-doc", Priority: 13},
+			plugin.Command{ID: "info", Name: "Info", Description: "Show file info", Context: "workspace-doc", Priority: 14},
+			plugin.Command{ID: "reveal", Name: "Reveal", Description: "Reveal in file manager", Context: "workspace-doc", Priority: 15},
+			plugin.Command{ID: "resize-pane-grow", Name: "Grow", Description: "Grow document pane", Context: "workspace-doc", Priority: 16},
+			plugin.Command{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink document pane", Context: "workspace-doc", Priority: 17},
+			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 18},
+			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 19},
 		)
 		return cmds
 	}
 	if p.viewMode == ViewModeList && p.noteFocused() {
 		return []plugin.Command{
 			{ID: "close-tab", Name: "Tab×", Description: "Close active note", Context: "workspace-note", Priority: 1},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: "workspace-note", Priority: 2},
-			{ID: "next-tab", Name: "Tab→", Description: "Next note tab", Context: "workspace-note", Priority: 3},
-			{ID: "yank-note", Name: "Yank", Description: "Copy note as markdown", Context: "workspace-note", Priority: 4},
-			{ID: "yank-note-key", Name: "YankID", Description: "Copy note ID", Context: "workspace-note", Priority: 5},
-			{ID: "close", Name: "Close", Description: "Hide note pane", Context: "workspace-note", Priority: 6},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-note", Priority: 7},
-			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-note", Priority: 8},
-			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-note", Priority: 9},
+			{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-note", Priority: 2},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: "workspace-note", Priority: 3},
+			{ID: "next-tab", Name: "Tab→", Description: "Next note tab", Context: "workspace-note", Priority: 4},
+			{ID: "yank-note", Name: "Yank", Description: "Copy note as markdown", Context: "workspace-note", Priority: 5},
+			{ID: "yank-note-key", Name: "YankID", Description: "Copy note ID", Context: "workspace-note", Priority: 6},
+			{ID: "close", Name: "Close", Description: "Hide note pane", Context: "workspace-note", Priority: 7},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-note", Priority: 8},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-note", Priority: 9},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-note", Priority: 10},
 		}
 	}
 	if p.viewMode == ViewModeList && p.issueFocused() {
 		return []plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: "workspace-issue", Priority: 1},
-			{ID: "open-in-td", Name: "TD", Description: "Open the selected issue in td", Context: "workspace-issue", Priority: 2},
-			{ID: "close-tab", Name: "Tab×", Description: "Close active issue", Context: "workspace-issue", Priority: 3},
-			{ID: "prev-tab", Name: "Tab←", Description: "Previous issue tab", Context: "workspace-issue", Priority: 4},
-			{ID: "next-tab", Name: "Tab→", Description: "Next issue tab", Context: "workspace-issue", Priority: 5},
-			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: "workspace-issue", Priority: 6},
-			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: "workspace-issue", Priority: 7},
-			{ID: "close", Name: "Close", Description: "Hide issue pane", Context: "workspace-issue", Priority: 8},
-			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 9},
-			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 10},
-			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 11},
+			{ID: "open-pane", Name: "Pane", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-issue", Priority: 2},
+			{ID: "open-in-td", Name: "TD", Description: "Open the selected issue in td", Context: "workspace-issue", Priority: 3},
+			{ID: "close-tab", Name: "Tab×", Description: "Close active issue", Context: "workspace-issue", Priority: 4},
+			{ID: "prev-tab", Name: "Tab←", Description: "Previous issue tab", Context: "workspace-issue", Priority: 5},
+			{ID: "next-tab", Name: "Tab→", Description: "Next issue tab", Context: "workspace-issue", Priority: 6},
+			{ID: "yank-issue", Name: "Yank", Description: "Copy issue as markdown", Context: "workspace-issue", Priority: 7},
+			{ID: "yank-issue-key", Name: "YankID", Description: "Copy issue ID", Context: "workspace-issue", Priority: 8},
+			{ID: "close", Name: "Close", Description: "Hide issue pane", Context: "workspace-issue", Priority: 9},
+			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 10},
+			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 11},
+			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 12},
 		}
 	}
 	if p.viewMode == ViewModeList && p.resourceFocused() {
@@ -93,6 +96,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "prev-tab", Name: "Tab←", Description: "Previous diff tab", Context: "workspace-diff", Priority: 13},
 			{ID: "next-tab", Name: "Tab→", Description: "Next diff tab", Context: "workspace-diff", Priority: 14},
 			{ID: "yank-id", Name: "YankID", Description: "Copy target identity", Context: "workspace-diff", Priority: 15},
+			{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-diff", Priority: 16},
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-diff", Priority: 24},
 			{ID: "resize-pane-grow", Name: "Grow", Description: "Grow diff pane", Context: "workspace-diff", Priority: 25},
 			{ID: "resize-pane-shrink", Name: "Shrink", Description: "Shrink diff pane", Context: "workspace-diff", Priority: 26},
@@ -253,6 +257,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Shell has no tabs - it shows primer/output directly
 			cmds = append(cmds,
 				plugin.Command{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-preview", Priority: 3},
+				// The pane switcher: open anything in a split without moving
+				// focus back to the sidebar's New.
+				plugin.Command{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-preview", Priority: 4},
 			)
 			// Also show agent commands in preview pane
 			wt := p.selectedWorktree()
@@ -550,6 +557,7 @@ func (p *Plugin) BlocksGlobalKeys() bool {
 func resourcePaneCommands() []plugin.Command {
 	cmds := []plugin.Command{
 		{ID: "close", Name: "Close", Description: "Hide resource pane", Context: "workspace-resource", Priority: 1},
+		{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-resource", Priority: 2},
 	}
 	for i, cmd := range resourceview.Commands() {
 		cmds = append(cmds, plugin.Command{
@@ -558,8 +566,8 @@ func resourcePaneCommands() []plugin.Command {
 		})
 	}
 	return append(cmds,
-		plugin.Command{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-resource", Priority: 10},
-		plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-resource", Priority: 11},
-		plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-resource", Priority: 12},
+		plugin.Command{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-resource", Priority: 11},
+		plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-resource", Priority: 12},
+		plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-resource", Priority: 13},
 	)
 }

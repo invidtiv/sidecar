@@ -18,6 +18,31 @@ import (
 )
 
 // handleKeyPress processes key input based on current view mode.
+// paneSwitcherKeyName opens the pane switcher from a focused content leaf.
+// Every content pane absorbs the keys it does not own — that is what keeps a
+// stray key from reaching the workspace behind it — so before this the
+// switcher was reachable only from the sidebar or the terminal, and putting a
+// second pane beside the one you were reading meant leaving it first. `n` is
+// the same key the sidebar and the terminal preview already answer with
+// "make me a new thing", so the answer does not change with focus.
+//
+// The Diff pane spent `n` on next-change before this; that pair moved to
+// `<` / `>` (the shifted form of its `,` / `.` file steps) so one key can
+// mean one thing in every pane. The global browser binds the same key in the
+// same contexts — internal/keymap's parity test is what holds the two to it.
+const paneSwitcherKeyName = "n"
+
+// paneSwitcherKey answers paneSwitcherKeyName for a focused content leaf. Each
+// pane asks it AFTER its own input surfaces have declined — a live editor, a
+// finder overlay, a committed in-file search — because those own every key
+// while they are up, `n` included.
+func (p *Plugin) paneSwitcherKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
+	if msg.String() != paneSwitcherKeyName {
+		return false, nil
+	}
+	return true, p.openCreateModalFocusKind()
+}
+
 func (p *Plugin) handleKeyPress(msg tea.KeyPressMsg) tea.Cmd {
 	switch p.viewMode {
 	case ViewModeList, ViewModeKanban:
@@ -613,6 +638,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "n":
 		return p.openCreateModal()
+	case "o":
+		// The pane switcher, reachable from the preview without moving focus
+		// to the sidebar: same grown create modal, kind list focused. The
+		// sidebar's n still opens it name-focused.
+		if p.activePane == PanePreview {
+			return p.openCreateModalFocusKind()
+		}
 	case "ctrl+n":
 		// Instant create: default agent, auto-approve off. Does not open the form.
 		return p.createDefaultShell(false)
@@ -991,12 +1023,14 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	p.ensureCreateModal()
-	m := p.createFormModal()
-	if m == nil {
+	if p.createForm == nil {
 		return nil
 	}
 
-	action, cmd := m.HandleKey(msg)
+	// The form owns the two-step flow: Esc on the picker step returns to the
+	// kind list, and Enter on a target-needing kind advances to it. What
+	// escapes is an action for this switch.
+	action, cmd := p.createForm.HandleKey(msg)
 	p.syncCreateFormAfterInput()
 
 	switch action {

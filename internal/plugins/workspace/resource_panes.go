@@ -234,6 +234,9 @@ func (p *Plugin) handleResourceKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if res == nil {
 		return false, nil
 	}
+	if handled, cmd := p.paneSwitcherKey(msg); handled {
+		return true, cmd
+	}
 	if p.contentDeck != nil {
 		switch msg.String() {
 		case "}":

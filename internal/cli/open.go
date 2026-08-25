@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -18,6 +19,9 @@ func runOpen(env Env, args []string) int {
 	jsonOutput := false
 	wantDiff := false
 	splitMode := "auto"
+	splitSet := false
+	atCell := ""
+	atSeen := false
 	waitDuration := 1200 * time.Millisecond
 	lineNo := 0
 	shellFlag := ""
@@ -113,16 +117,29 @@ func runOpen(env Env, args []string) int {
 			}
 			i++
 			splitMode = strings.ToLower(args[i])
+			splitSet = true
 			if splitMode != "auto" && splitMode != "right" && splitMode != "below" {
 				cliErrf(env.Stderr, "invalid split option %q (must be auto, right, or below)\n\n%s", args[i], openHelp)
 				return 2
 			}
 		case strings.HasPrefix(arg, "--split="):
 			splitMode = strings.ToLower(strings.TrimPrefix(arg, "--split="))
+			splitSet = true
 			if splitMode != "auto" && splitMode != "right" && splitMode != "below" {
 				cliErrf(env.Stderr, "invalid split option %q (must be auto, right, or below)\n\n%s", splitMode, openHelp)
 				return 2
 			}
+		case arg == "--at":
+			if i+1 >= len(args) {
+				cliErrf(env.Stderr, "--at requires a grid cell argument (col or col.row)\n\n%s", openHelp)
+				return 2
+			}
+			i++
+			atCell = args[i]
+			atSeen = true
+		case strings.HasPrefix(arg, "--at="):
+			atCell = strings.TrimPrefix(arg, "--at=")
+			atSeen = true
 		case arg == "--wait":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--wait requires a duration argument\n\n%s", openHelp)
@@ -161,6 +178,22 @@ func runOpen(env Env, args []string) int {
 		return 2
 	}
 
+	atCell = strings.TrimSpace(atCell)
+	if atSeen && atCell == "" {
+		cliErrf(env.Stderr, "--at requires a grid cell argument (col or col.row); omit the flag to auto-place\n\n%s", openHelp)
+		return 2
+	}
+	if atCell != "" {
+		if splitSet {
+			cliErrf(env.Stderr, "--at and --split are mutually exclusive: --at is a requirement (declines rather than land elsewhere), --split a preference\n\n%s", openHelp)
+			return 2
+		}
+		if _, ok := panelayout.ParseCell(atCell); !ok {
+			cliErrf(env.Stderr, "invalid cell %q for --at (use col or col.row, 1-based, like 2.1)\n\n%s", atCell, openHelp)
+			return 2
+		}
+	}
+
 	if wantDiff {
 		if len(positional) > 1 {
 			cliErrf(env.Stderr, "open accepts at most one target\n\n%s", openHelp)
@@ -197,6 +230,13 @@ func runOpen(env Env, args []string) int {
 		return 2
 	}
 
+	options := uirequest.Options{}
+	if atCell != "" {
+		// A cell replaces any axis preference: it is the whole placement.
+		options.At = atCell
+	} else if splitMode != "auto" || splitSet {
+		options.Split = splitMode
+	}
 	req := uirequest.Request{
 		Version:   1,
 		ID:        uirequest.NewRequestID(),
@@ -205,9 +245,7 @@ func runOpen(env Env, args []string) int {
 		Origin:    dest.Origin,
 		Action:    uirequest.ActionOpen,
 		Target:    target,
-		Options: uirequest.Options{
-			Split: splitMode,
-		},
+		Options:   options,
 	}
 
 	_, err = uirequest.WriteRequest(env.StateDir, req)

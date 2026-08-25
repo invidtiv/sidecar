@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,9 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	}
 	if req.Action == uirequest.ActionCreate {
 		return p.applyCreateRequest(req)
+	}
+	if req.Action == uirequest.ActionLayout {
+		return p.applyLayoutRequest(req)
 	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
@@ -387,9 +391,54 @@ func (p *Plugin) openOnSelectedSurface(req uirequest.Request) tea.Cmd {
 }
 
 func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) tea.Cmd {
+	outcome, cmd := p.performTargetOpen(req, root, surface)
+	if outcome.status == uirequest.StatusDeclined {
+		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+			Instance: hostInstanceID(),
+			Host:     uirequest.HostName(),
+			PID:      os.Getpid(),
+			Status:   uirequest.StatusDeclined,
+			Reason:   outcome.reason,
+			Surface:  surface,
+			At:       time.Now().UTC(),
+		})
+		return nil
+	}
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   outcome.status,
+		Surface:  surface,
+		Pane:     p.paneFocus,
+		At:       time.Now().UTC(),
+	})
+	return cmd
+}
+
+// openOutcome is what one target's open earned. The pane tree, not the returned
+// command, is the honest witness of an open: a split that did not fit still
+// returns the reopen command, and re-opening a file already on screen
+// legitimately returns none.
+type openOutcome struct {
+	status uirequest.Status
+	reason string
+}
+
+// performTargetOpen opens one resolved target on the given surface — the whole
+// per-kind body of `sidecar open`, minus acknowledgement writing. Both the
+// single-open ack path and the layout batch commit call it, so the two cannot
+// drift apart about what opening a target means. A request carrying an
+// explicit cell (Options.At) takes the PlanOpenAt path instead: placement is a
+// requirement there, planned before anything opens.
+func (p *Plugin) performTargetOpen(req uirequest.Request, root, surface string) (openOutcome, tea.Cmd) {
 	prevSplit := p.openSplit
 	p.openSplit = req.Options.Split
 	defer func() { p.openSplit = prevSplit }()
+
+	if at := strings.TrimSpace(req.Options.At); at != "" {
+		return p.performAtCellOpen(req.Target, at, root, surface)
+	}
 
 	var cmd tea.Cmd
 	opened := false
@@ -415,16 +464,7 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		opened = p.contentPaneOnScreen(PaneNote)
 	case uirequest.TargetKindDiff:
 		if p.paneRoot == nil {
-			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-				Instance: hostInstanceID(),
-				Host:     uirequest.HostName(),
-				PID:      os.Getpid(),
-				Status:   uirequest.StatusDeclined,
-				Reason:   features.WorkspaceDocPanesDisabledDiff,
-				Surface:  surface,
-				At:       time.Now().UTC(),
-			})
-			return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
+			return openOutcome{status: uirequest.StatusDeclined, reason: features.WorkspaceDocPanesDisabledDiff}, appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 		}
 		retargeted = p.willRetargetPane(PaneDiff)
 		spec := uirequest.DiffTarget(root, req.Target.Value)
@@ -433,16 +473,14 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 	case uirequest.TargetKindResource:
 		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
 		if refusal != "" {
-			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-				Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-				Status: uirequest.StatusDeclined, Reason: refusal, Surface: surface, At: time.Now().UTC(),
-			})
-			return nil
+			return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
 		}
 		retargeted = p.willRetargetPane(PaneResource)
 		cmd = p.openRequestedResourcePaneForSurface(root, surface, ref)
 		res, _ := p.activeResourcePane()
 		opened = res != nil && res.tabs.Find(resourceview.TabKey(ref)) >= 0
+	default:
+		return openOutcome{status: uirequest.StatusDeclined, reason: "unsupported target kind " + string(req.Target.Kind)}, nil
 	}
 
 	// Nothing on screen: the split did not fit, or the target could not be
@@ -453,32 +491,13 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		if reason == "" {
 			reason = "the window is too small to split"
 		}
-		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-			Instance: hostInstanceID(),
-			Host:     uirequest.HostName(),
-			PID:      os.Getpid(),
-			Status:   uirequest.StatusDeclined,
-			Reason:   reason,
-			Surface:  surface,
-			At:       time.Now().UTC(),
-		})
-		return nil
+		return openOutcome{status: uirequest.StatusDeclined, reason: reason}, nil
 	}
-
 	status := uirequest.StatusOpened
 	if retargeted {
 		status = uirequest.StatusRetargeted
 	}
-	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-		Instance: hostInstanceID(),
-		Host:     uirequest.HostName(),
-		PID:      os.Getpid(),
-		Status:   status,
-		Surface:  surface,
-		Pane:     p.paneFocus,
-		At:       time.Now().UTC(),
-	})
-	return cmd
+	return openOutcome{status: status}, cmd
 }
 
 func sameCanonicalPath(a, b string) bool {
@@ -486,6 +505,56 @@ func sameCanonicalPath(a, b string) bool {
 		return false
 	}
 	return canonicalOpenPath(a) == canonicalOpenPath(b)
+}
+
+// performAtCellOpen is the single-open explicit-cell path: the same plumbing
+// the layout batch's at-cells run — the SCREEN grid answers ranges, caps, and
+// retarget conflicts first (an --at that cannot land exactly where asked
+// declines; it is a requirement, never a preference), the cell then translates
+// onto the deck's own grid, and the plan that was validated is what commit
+// applies verbatim. The deck planner's refusal, if one ever comes back,
+// surfaces word for word rather than being re-guessed.
+func (p *Plugin) performAtCellOpen(target uirequest.Target, at, root, surface string) (openOutcome, tea.Cmd) {
+	cell, ok := panelayout.ParseCell(at)
+	if !ok {
+		return openOutcome{status: uirequest.StatusDeclined, reason: fmt.Sprintf("cell %q is not a grid address like 2.1", at)}, nil
+	}
+	kind, ok := paneKindForTarget(target.Kind)
+	if !ok {
+		return openOutcome{status: uirequest.StatusDeclined, reason: fmt.Sprintf("a %s target has no pane to place at a cell", string(target.Kind))}, nil
+	}
+	if _, refusal := panelayout.PlanOpenAt(p.paneRoot, kind, 0, cell); refusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
+	}
+	p.ensureWorkspaceDeck(root, surface)
+	translated, refusal := deckCellFor(p.paneRoot, cell)
+	if refusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
+	}
+	plan, deckRefusal := panelayout.PlanOpenAt(p.contentDeck.Tree(), kind, 0, translated)
+	if deckRefusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: deckRefusal}, nil
+	}
+	return p.performPlannedOpen(target, root, surface, plan)
+}
+
+// paneKindForTarget maps an open request's wire kind onto its pane kind. Only
+// the passive content kinds are placeable: shells never arrive through `open`.
+func paneKindForTarget(kind uirequest.TargetKind) (panelayout.Kind, bool) {
+	switch kind {
+	case uirequest.TargetKindFile:
+		return panelayout.Document, true
+	case uirequest.TargetKindIssue:
+		return panelayout.Issue, true
+	case uirequest.TargetKindNote:
+		return panelayout.Note, true
+	case uirequest.TargetKindDiff:
+		return panelayout.Diff, true
+	case uirequest.TargetKindResource:
+		return panelayout.Resource, true
+	default:
+		return 0, false
+	}
 }
 
 func canonicalOpenPath(path string) string {
@@ -557,6 +626,13 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 	prevSplit := p.openSplit
 	p.openSplit = pv.Options.Split
 	defer func() { p.openSplit = prevSplit }()
+
+	// An explicit cell queued with an off-screen shell is re-planned at
+	// selection time, exactly as --split is re-applied there.
+	if at := strings.TrimSpace(pv.Options.At); at != "" {
+		_, cmd := p.performAtCellOpen(pv.Target, at, root, surface)
+		return cmd
+	}
 
 	switch pv.Target.Kind {
 	case uirequest.TargetKindFile:

@@ -1,46 +1,124 @@
 package workspacecreate
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/modal"
+	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/styles"
 )
 
+// Kind is the workspace type the form will create.
+type Kind int
+
+const (
+	KindShell Kind = iota
+	KindWorktree
+	// KindTerminalSplit creates a live terminal beside the workspace's own
+	// terminal. It owns no branch and no agent, so it needs at most a name.
+	KindTerminalSplit
+	// The pane kinds below open one leaf of the pane tree. Each needs a
+	// target, so the modal grows a second step for them; each has somewhere
+	// to be placed, so the placement row shows for every one of them.
+	KindFile
+	KindDiff
+	KindIssue
+	// KindResource opens a configured terminal-resource provider's locator as
+	// a resource pane. One row exists per configured instance; ProviderID on
+	// the row says which, and the label is that instance ID.
+	KindResource
+	KindNote
+)
+
 // kindRow is one row of the create modal's kind list. The list is a table so a
-// later pane kind (File, Git diff, td issue, Note) is an entry here rather than
-// new modal code.
+// later pane kind is an entry here rather than new modal code.
 type kindRow struct {
 	Kind  Kind
 	Label string
+	// Description is the aligned second column of the vertical list.
+	Description string
+	// NeedsTarget marks the pane kinds whose step 2 is a target picker.
+	NeedsTarget bool
+	// ProviderID names the configured instance behind a KindResource row.
+	ProviderID string
 	// HostScoped rows are offered only by a host that can place them — a
-	// terminal split needs a pane tree, which the global browser's preview
-	// tiles do not have.
+	// terminal split or a resource pane needs a pane tree, which the global
+	// browser's preview tiles do not have.
 	HostScoped bool
 }
 
-// kindCatalog is every row the modal knows, in list order.
+// kindCatalog is every row the modal knows, in list order. Provider rows are
+// appended per host from config, after Issue where the mockup puts them.
 var kindCatalog = []kindRow{
-	{Kind: KindShell, Label: "Shell"},
-	{Kind: KindWorktree, Label: "Worktree"},
-	{Kind: KindTerminalSplit, Label: "Terminal split", HostScoped: true},
+	{Kind: KindShell, Label: "Shell", Description: "new agent/shell session"},
+	{Kind: KindWorktree, Label: "Worktree", Description: "shell in a new worktree"},
+	{Kind: KindTerminalSplit, Label: "Terminal split", Description: "terminal beside current pane", HostScoped: true},
+	{Kind: KindFile, Label: "File", Description: "open a file in a split", NeedsTarget: true},
+	{Kind: KindDiff, Label: "Git diff", Description: "open a diff in a split", NeedsTarget: true},
+	{Kind: KindIssue, Label: "td issue", Description: "open an issue in a split", NeedsTarget: true},
+	{Kind: KindNote, Label: "Note", Description: "open a note in a split", NeedsTarget: true},
 }
+
+// providerDescription is the fixed description for resource rows.
+const providerDescription = "open a resource in a split"
 
 const (
 	kindSeparator  = " | "
 	kindFrameOpen  = "["
 	kindFrameClose = "]"
+
+	// verticalListMinRows is the row count past which the horizontal toggle
+	// becomes the mockup's vertical list with aligned descriptions.
+	verticalListMinRows = 5
 )
+
+// ProviderItem is one configured terminal-resource provider a host offers.
+type ProviderItem struct {
+	ID string
+}
 
 // kindRowsFor is the catalog a host offers.
 func kindRowsFor(hostScoped bool) []kindRow {
-	rows := make([]kindRow, 0, len(kindCatalog))
+	return kindRowsForOpts(rowOpts{hostScoped: hostScoped})
+}
+
+// rowOpts is what shapes a host's catalog beyond the base table.
+type rowOpts struct {
+	hostScoped bool
+	showNotes  bool
+	providers  []ProviderItem
+}
+
+func kindRowsForOpts(opts rowOpts) []kindRow {
+	rows := make([]kindRow, 0, len(kindCatalog)+1+len(opts.providers))
 	for _, row := range kindCatalog {
-		if row.HostScoped && !hostScoped {
+		if row.Kind == KindNote && !opts.showNotes {
+			continue
+		}
+		if row.HostScoped && !opts.hostScoped {
 			continue
 		}
 		rows = append(rows, row)
+	}
+	for _, p := range opts.providers {
+		if !opts.hostScoped {
+			break // provider panes are HostScoped: no tree, no row
+		}
+		id := strings.TrimSpace(p.ID)
+		if id == "" {
+			continue
+		}
+		rows = append(rows, kindRow{
+			Kind:        KindResource,
+			Label:       id,
+			Description: providerDescription,
+			NeedsTarget: true,
+			ProviderID:  id,
+			HostScoped:  true,
+		})
 	}
 	return rows
 }
@@ -54,13 +132,24 @@ func kindLabel(rows []kindRow, kind Kind) string {
 	return ""
 }
 
-func kindIndex(rows []kindRow, kind Kind) int {
-	for i, row := range rows {
-		if row.Kind == kind {
-			return i
-		}
+// kindIsPane reports whether kind opens a leaf of the pane tree, which is the
+// set the placement row belongs to.
+func kindIsPane(kind Kind) bool {
+	switch kind {
+	case KindTerminalSplit, KindFile, KindDiff, KindIssue, KindResource, KindNote:
+		return true
 	}
-	return 0
+	return false
+}
+
+// kindNeedsTarget reports whether kind's create flow continues onto a target
+// picker step rather than submitting from the kind list.
+func kindNeedsTarget(kind Kind) bool {
+	switch kind {
+	case KindFile, KindDiff, KindIssue, KindResource, KindNote:
+		return true
+	}
+	return false
 }
 
 // kindSpans are each row's [start, end) columns inside the rendered toggle, so
@@ -83,9 +172,9 @@ func kindSpans(rows []kindRow) [][2]int {
 	return spans
 }
 
-// kindFromClickX maps a click on the kind toggle to the row under it. Clicks in
-// a separator, or past the last row in a region wider than the toggle, keep the
-// nearest row rather than falling through to the first.
+// kindFromClickX maps a click on the horizontal kind toggle to the row under
+// it. Clicks in a separator, or past the last row in a region wider than the
+// toggle, keep the nearest row rather than falling through to the first.
 func kindFromClickX(rows []kindRow, current Kind, x, regionX, regionW int) Kind {
 	if len(rows) == 0 || regionW <= 0 {
 		return current
@@ -105,31 +194,31 @@ func kindFromClickX(rows []kindRow, current Kind, x, regionX, regionW int) Kind 
 
 // KindFromClickX maps a click on the two-row kind toggle to Shell (left) or
 // Worktree (right). It is the host-independent form kept for callers without a
-// form in hand; hosts should use Form.SetKindFromClickX, which knows which rows
-// the form actually offers.
+// form in hand; hosts should use Form.SetKindFromClick, which knows how the
+// list is drawn this session.
 func KindFromClickX(x, regionX, regionW int) Kind {
 	return kindFromClickX(kindRowsFor(false), KindShell, x, regionX, regionW)
 }
 
 // kindDisabledSelected is the selected-but-unavailable row: the selected row's
-// chrome so the toggle still says which kind is active, in muted text so the
-// row still says it cannot be created. It is a function rather than a value so
+// chrome so the list still says which kind is active, in muted text so the row
+// still says it cannot be created. It is a function rather than a value so
 // it reads the colour at render time and follows a theme change.
 func kindDisabledSelected() lipgloss.Style {
 	return styles.ButtonHover.Foreground(styles.TextMuted)
 }
 
-func kindRowStyle(rowKind, sel Kind, disabled bool, hovered bool) lipgloss.Style {
-	if disabled && rowKind == sel {
+func kindRowStyle(disabled, selected, hovered bool) lipgloss.Style {
+	if disabled && selected {
 		// A disabled row that is still the active kind — its Name field and
 		// placement row are drawn below it — must read as selected, or the
-		// toggle shows nothing selected at all. Selected chrome, muted text.
+		// list shows nothing selected at all. Selected chrome, muted text.
 		return kindDisabledSelected()
 	}
 	if disabled {
 		return styles.Muted
 	}
-	if rowKind == sel {
+	if selected {
 		return styles.ButtonFocused
 	}
 	if hovered {
@@ -138,14 +227,9 @@ func kindRowStyle(rowKind, sel Kind, disabled bool, hovered bool) lipgloss.Style
 	return styles.Button
 }
 
-func kindButtonStyles(sel Kind, hovered bool) (shellStyle, treeStyle lipgloss.Style) {
-	return kindRowStyle(KindShell, sel, false, hovered && sel != KindShell),
-		kindRowStyle(KindWorktree, sel, false, hovered && sel != KindWorktree)
-}
-
-// kindFrameStyle is the [ ] around the kind row. It uses the same colours as a
-// modal input border so "this field is active" is not the same signal as
-// "this kind is selected".
+// kindFrameStyle is the [ ] around the horizontal kind toggle. It uses the same
+// colours as a modal input border so "this field is active" is not the same
+// signal as "this kind is selected".
 func kindFrameStyle(focused, hovered bool) lipgloss.Style {
 	s := lipgloss.NewStyle()
 	switch {
@@ -158,13 +242,14 @@ func kindFrameStyle(focused, hovered bool) lipgloss.Style {
 	}
 }
 
-func renderKindToggle(rows []kindRow, sel Kind, focused, hovered bool, disabledReason func(Kind) string, contentWidth int) string {
+func renderKindToggle(rows []kindRow, selIdx int, focused, hovered bool, disabledReason func(Kind) string, contentWidth int) string {
 	frame := kindFrameStyle(focused, hovered)
 	parts := make([]string, 0, len(rows)*2+2)
 	parts = append(parts, frame.Render(kindFrameOpen))
 	for i, row := range rows {
 		disabled := disabledReason != nil && disabledReason(row.Kind) != ""
-		style := kindRowStyle(row.Kind, sel, disabled, hovered && row.Kind != sel)
+		selected := i == selIdx
+		style := kindRowStyle(disabled, selected, hovered && !selected)
 		if i > 0 {
 			parts = append(parts, styles.Muted.Render(kindSeparator))
 		}
@@ -178,34 +263,89 @@ func renderKindToggle(rows []kindRow, sel Kind, focused, hovered bool, disabledR
 	return content
 }
 
-// kindToggle renders the row list. disabledReason answers, per row, why that
-// row cannot be created right now; a disabled row is drawn muted whether or not
-// it is selected, so the rule is visible before the row is entered.
-func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disabledReason func(Kind) string) modal.Section {
-	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
-		sel := KindShell
-		if selected != nil {
-			sel = *selected
+// renderKindList is the vertical kind list: one row per kind, label column
+// aligned, description column aligned after it. Selection is by ROW, not
+// Kind — resource providers share one Kind, so only the index can say which
+// instance is highlighted. A disabled row stays visible with its reason
+// inline in place of the description, so the rule is read before the row is
+// entered.
+func renderKindList(rows []kindRow, selIdx int, focused, hovered bool, disabledReason func(Kind) string, contentWidth int) string {
+	labelW := 0
+	for _, row := range rows {
+		if w := ansi.StringWidth(row.Label); w > labelW {
+			labelW = w
 		}
-		content := renderKindToggle(rows, sel, focusID == id, hoverID == id, disabledReason, contentWidth)
+	}
+	lines := make([]string, 0, len(rows))
+	for i, row := range rows {
+		reason := ""
+		if disabledReason != nil {
+			reason = disabledReason(row.Kind)
+		}
+		disabled := reason != ""
+		selected := i == selIdx
+		var line string
+		cursor := "  "
+		if selected {
+			cursor = "❯ "
+		}
+		line += cursor
+		line += row.Label + strings.Repeat(" ", labelW-ansi.StringWidth(row.Label)) + "   "
+		desc := row.Description
+		if disabled {
+			desc = reason
+		}
+		style := kindRowStyle(disabled, selected, hovered && !selected)
+		lines = append(lines, style.Render(line+desc))
+	}
+	content := strings.Join(lines, "\n")
+	if contentWidth > 0 {
+		content = truncateLines(content, contentWidth)
+	}
+	return content
+}
+
+// kindControl renders the row list however this catalog is drawn: the
+// horizontal toggle while it is short, the vertical description list once the
+// row count passes the mockup's threshold. Selection is row-precise: the
+// selected index resolves the highlighted row (resource providers share one
+// Kind, so only the row knows which instance), and onSelect receives that
+// whole row. disabledReason answers, per row, why that row cannot be created
+// right now; a disabled row is drawn muted whether or not it is selected, so
+// the rule is visible before the row is entered.
+func kindControl(id string, rows []kindRow, selectedIndex func() int, onSelect func(kindRow), disabledReason func(Kind) string) modal.Section {
+	vertical := len(rows) >= verticalListMinRows
+	render := renderKindToggle
+	if vertical {
+		render = renderKindList
+	}
+	height := 1
+	if vertical {
+		height = len(rows)
+	}
+	return modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+		idx := 0
+		if selectedIndex != nil {
+			idx = clampIndex(selectedIndex(), len(rows))
+		}
+		content := render(rows, idx, focusID == id, hoverID == id, disabledReason, contentWidth)
 		return modal.RenderedSection{
 			Content: content,
 			Focusables: []modal.FocusableInfo{{
 				ID: id, OffsetX: 0, OffsetY: 0,
-				Width:  ansi.StringWidth(content),
-				Height: 1,
+				Width:  contentWidth,
+				Height: height,
 			}},
 		}
 	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
-		if focusID != id || selected == nil || len(rows) == 0 {
+		if focusID != id || selectedIndex == nil || len(rows) == 0 {
 			return "", nil
 		}
 		key, ok := msg.(tea.KeyPressMsg)
 		if !ok {
 			return "", nil
 		}
-		prev := *selected
-		idx := kindIndex(rows, prev)
+		idx := clampIndex(selectedIndex(), len(rows))
 		switch key.String() {
 		case "left", "h", "up", "k":
 			if idx > 0 {
@@ -215,11 +355,62 @@ func kindToggle(id string, rows []kindRow, selected *Kind, onChange func(), disa
 			if idx < len(rows)-1 {
 				idx++
 			}
+		default:
+			return "", nil
 		}
-		*selected = rows[idx].Kind
-		if *selected != prev && onChange != nil {
-			onChange()
+		if onSelect != nil {
+			onSelect(rows[idx])
 		}
 		return "", nil
 	})
+}
+
+func clampIndex(idx, length int) int {
+	if idx < 0 {
+		return 0
+	}
+	if idx >= length {
+		return length - 1
+	}
+	return idx
+}
+
+// SetKindFromClick picks the row under a click on the kind control, whichever
+// shape it is drawn in this session: the vertical list answers by row, the
+// horizontal toggle by column spans.
+func (f *Form) SetKindFromClick(region mouse.Rect, x, y int) {
+	if f == nil {
+		return
+	}
+	if len(f.rows) < verticalListMinRows {
+		f.SetKind(kindFromClickX(f.rows, f.kind, x, region.X, region.W))
+		return
+	}
+	// The vertical list answers by row so two provider rows never collapse
+	// into one selection.
+	f.selectRow(kindIndexAt(f.rows, y-region.Y, region.H))
+}
+
+// kindIndexAt clamps a click row to a catalog index.
+func kindIndexAt(rows []kindRow, offset, regionH int) int {
+	if len(rows) == 0 || regionH <= 0 {
+		return 0
+	}
+	if offset < 0 {
+		return 0
+	}
+	if offset >= len(rows) {
+		return len(rows) - 1
+	}
+	return offset
+}
+
+// SetKindFromClickX picks the row under a click on the horizontal toggle. It
+// remains for callers and tests pinned to the short-catalog geometry; hosts
+// should call SetKindFromClick, which also serves the vertical list.
+func (f *Form) SetKindFromClickX(x, regionX, regionW int) {
+	if f == nil {
+		return
+	}
+	f.SetKind(kindFromClickX(f.rows, f.kind, x, regionX, regionW))
 }
