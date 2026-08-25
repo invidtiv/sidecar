@@ -8,17 +8,29 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	"github.com/marcus/sidecar/internal/scroll"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/version"
 )
 
-// updateModalWidth is the one width for the whole journey. The library clamps
-// it to the terminal at render time, so no per-size caching is needed.
-const updateModalWidth = 60
+// updateModalWidthFor derives the one width for the whole journey from the
+// library's own sizing: a content-sized box that leaves the roomy margin ring
+// on each side, capped at the library maximum. Responsive within the
+// library's clamps — no fixed constant, no per-size caching.
+func updateModalWidthFor(screenW int) int {
+	return min(modal.ContentBoxWidth(screenW), modal.MaxModalWidth)
+}
+
+// updateNotesToggleID is the focusable "View full changelog" element.
+const updateNotesToggleID = "update-notes-toggle"
+
+// notesCollapsedRows is the notes window before expansion.
+const notesCollapsedRows = 6
 
 // updateUIState is the heap-allocated snapshot the single update modal's
 // section closures read. The model is copied through bubbletea updates, so a
@@ -39,12 +51,25 @@ type updateUIState struct {
 	anyManaged      bool
 	restartRequired bool
 	retryCount      int
+	retryBatch      bool
+
+	// Notes-section view state. notesScroll/notesExpanded are written by
+	// gestures, keys, and the toggle action; notesTotal/notesVisible/
+	// notesPresent are refreshed by the section's render so read-only wheel-
+	// boundary queries can answer from the geometry that is on screen.
+	notesScroll   int
+	notesExpanded bool
+	notesTotal    int
+	notesVisible  int
+	notesPresent  bool
+
 	// presentedPhase records which phase the modal's presentation currently
 	// reflects so re-presenting is skipped between phase changes. It lives on
 	// the shared heap struct because separate model copies cannot see each
 	// other's writes.
 	presentedPhase UpdateModalState
 	presentedValid bool
+	presentedWidth int
 }
 
 func (u *updateUIState) includesTasks() bool {
@@ -80,6 +105,7 @@ func (m *Model) syncUpdateUI() {
 	}
 	u.restartRequired = version.RestartRequired(u.settled)
 	u.retryCount = len(version.RetryTargets(u.settled))
+	u.retryBatch = m.updateBatchRetry
 }
 
 // ensureUpdateModal builds the single update modal once and keeps its
@@ -99,7 +125,7 @@ func (m *Model) ensureUpdateModal() {
 	}
 
 	mdl := modal.New(updateTitle(u.phase),
-		modal.WithWidth(updateModalWidth),
+		modal.WithWidth(updateModalWidthFor(m.width)),
 		modal.WithVariant(updateVariant(u.phase)),
 		modal.WithHintText(updateHint(u.phase)),
 		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
@@ -109,12 +135,15 @@ func (m *Model) ensureUpdateModal() {
 		return modal.RenderedSection{Content: updateOverviewContent(u, cw)}
 	}, nil)))
 
+	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), m.updateNotesSection()))
+	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), m.updateNotesToggleSection()))
+
 	mdl.AddSection(modal.When(inPhase(UpdateModalProgress), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
-		return modal.RenderedSection{Content: updateProgressContent(u)}
+		return modal.RenderedSection{Content: updateProgressContent(u, cw)}
 	}, nil)))
 
 	mdl.AddSection(modal.When(inPhase(UpdateModalComplete), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
-		return modal.RenderedSection{Content: updateResultContent(u)}
+		return modal.RenderedSection{Content: updateResultContent(u, cw)}
 	}, nil)))
 
 	mdl.AddSection(modal.When(inPhase(UpdateModalError), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
@@ -143,12 +172,14 @@ func (m *Model) ensureUpdateModal() {
 	m.applyUpdatePresentation()
 }
 
-// applyUpdatePresentation restates what changes between phases on the one
-// persistent modal: title, border variant, hint line, and primary action.
-// Skipped while the presented phase is unchanged — Apply invalidates layout,
-// and ensure runs from View as well as Update on every frame.
+// applyUpdatePresentation restates what changes between phases — and on
+// resize — on the one persistent modal: title, border variant, hint line,
+// primary action, and width. Skipped while nothing changed: Apply invalidates
+// layout, and ensure runs from View as well as Update on every frame.
 func (m *Model) applyUpdatePresentation() {
-	if u := m.updateUI; u != nil && u.presentedValid && u.presentedPhase == m.updateModalState {
+	width := updateModalWidthFor(m.width)
+	if u := m.updateUI; u != nil && u.presentedValid &&
+		u.presentedPhase == m.updateModalState && u.presentedWidth == width {
 		return
 	}
 	m.updateModal.Apply(
@@ -156,9 +187,11 @@ func (m *Model) applyUpdatePresentation() {
 		modal.WithVariant(updateVariant(m.updateModalState)),
 		modal.WithHintText(updateHint(m.updateModalState)),
 		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
+		modal.WithWidth(width),
 	)
 	if u := m.updateUI; u != nil {
 		u.presentedPhase = m.updateModalState
+		u.presentedWidth = width
 		u.presentedValid = true
 	}
 }
@@ -191,14 +224,22 @@ func updateVariant(p UpdateModalState) modal.Variant {
 	}
 }
 
-// updateHint overrides the library default where it would lie. During an
-// install the default "Esc to cancel" is exactly the false promise the
-// honest-no-cancel stance forbids: Esc only hides the modal.
+// updateHint keeps one hint style across the journey — lowercase keys, "·"
+// separators, no library default. The defaults would promise a cancel during
+// an install (the honest-no-cancel stance forbids it: Esc only hides) and
+// read differently per phase; every phase now states its own truth in the
+// same voice.
 func updateHint(p UpdateModalState) string {
-	if p == UpdateModalProgress {
+	switch p {
+	case UpdateModalProgress:
 		return "esc hides · update continues"
+	case UpdateModalComplete:
+		return "enter confirm · esc close"
+	case UpdateModalError:
+		return "enter retry · esc close"
+	default:
+		return "enter update · esc dismiss"
 	}
-	return ""
 }
 
 func updatePrimaryAction(u *updateUIState) string {
@@ -227,6 +268,14 @@ func updateButtons(u *updateUIState) []modal.ButtonDef {
 			modal.Btn(" Update Now ", "update"),
 			modal.Btn(" Later ", "cancel"),
 		}
+	case UpdateModalProgress:
+		// The batch owns the surface until it settles: show the action that
+		// launched it, visibly disabled. Layout stays stable across the
+		// Installing → Done/Failed transition instead of buttons vanishing.
+		if u.retryBatch {
+			return []modal.ButtonDef{modal.Btn(" Retry ", "retry", modal.BtnDisabled())}
+		}
+		return []modal.ButtonDef{modal.Btn(" Update Now ", "update", modal.BtnDisabled())}
 	case UpdateModalComplete:
 		if u.restartRequired {
 			return []modal.ButtonDef{
@@ -255,9 +304,28 @@ func (m *Model) renderUpdateModalOverlay(background string) string {
 	return ui.OverlayModal(background, rendered, m.width, m.height)
 }
 
-// updateOverviewContent renders the confirmation view: what changes, the
-// Tasks note, and Sidecar's release notes inline. Notes longer than the box
-// scroll in the modal's own viewport; nothing is truncated by hand here.
+// twoColumnRow renders primary-left / secondary-right on one line with the
+// secondary flush right — modal-redesign.md's column behaviour. When the two
+// no longer fit, the left side truncates before the right is sacrificed;
+// below the minimum legible left width the row degrades to stacked lines so
+// the primary value is never hard-clipped.
+func twoColumnRow(left, right string, width int) string {
+	const gap = 2
+	const minLeft = 12
+	lw, rw := lipgloss.Width(left), lipgloss.Width(right)
+	switch {
+	case lw+gap+rw <= width:
+		return left + strings.Repeat(" ", width-lw-rw) + right
+	case width-rw-gap >= minLeft:
+		trimmed := ansi.Truncate(left, width-rw-gap, "…")
+		return trimmed + strings.Repeat(" ", width-lipgloss.Width(trimmed)-rw) + right
+	default:
+		return left + "\n" + strings.Repeat(" ", max(0, width-rw)) + right
+	}
+}
+
+// updateOverviewContent renders the confirmation view: what changes and the
+// Tasks note. Release notes live in their own scrollable section beside it.
 func updateOverviewContent(u *updateUIState, contentW int) string {
 	plan := version.SelectPlan(u.products)
 	if len(plan) == 0 {
@@ -267,7 +335,7 @@ func updateOverviewContent(u *updateUIState, contentW int) string {
 	b.WriteString(styles.Muted.Render("Updating will change:") + "\n")
 	rows := make([]string, 0, len(plan))
 	for _, t := range plan {
-		rows = append(rows, targetRow(t))
+		rows = append(rows, targetRow(t, contentW))
 	}
 	b.WriteString(strings.Join(rows, "\n"))
 
@@ -275,56 +343,63 @@ func updateOverviewContent(u *updateUIState, contentW int) string {
 		b.WriteString("\n\n" + styles.Muted.Render(
 			"Tasks here is the standalone tasks/tasks-tui/tasks-api commands.\nSidecar's embedded Tasks tab updates with Sidecar itself."))
 	}
-
-	b.WriteString("\n\n" + lipgloss.NewStyle().Bold(true).Render("What's New in Sidecar") + "\n\n")
-	notes := u.notes
-	if notes == "" {
-		notes = "No release notes available."
-	}
-	b.WriteString(renderReleaseNotes(parseReleaseNotes(notes), contentW))
 	return b.String()
+}
+
+// targetRow renders one product row: what changes, from which version to
+// which, and how Sidecar would do it.
+func targetRow(t version.Target, width int) string {
+	left := fmt.Sprintf("%s %s%s%s", t.DisplayName, t.CurrentVersion,
+		lipgloss.NewStyle().Foreground(styles.Success).Render(" → "), t.LatestVersion)
+	right := styles.Muted.Render(t.Install.Method.String())
+	if !t.Install.Managed {
+		right = styles.Muted.Render("manual")
+	}
+	row := twoColumnRow(left, right, width)
+	if !t.Install.Managed && t.Install.ManualCommand != "" {
+		row += "\n" + styles.Muted.Render("    update it yourself: "+t.Install.ManualCommand)
+	}
+	return row
 }
 
 // updateProgressContent shows which product is being changed right now, plus
 // the settled rows for targets that already finished.
-func updateProgressContent(u *updateUIState) string {
-	var b strings.Builder
+func updateProgressContent(u *updateUIState, contentW int) string {
+	muted := lipgloss.NewStyle().Foreground(styles.TextMuted)
+	rows := make([]string, 0, len(u.plan))
 	for i, t := range u.plan {
 		switch {
 		case i < len(u.results):
 			r := u.results[i]
-			fmt.Fprintf(&b, "%s %s %s\n", resultIcon(r.Status), t.DisplayName,
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(resultLabel(r)))
+			rows = append(rows, twoColumnRow(
+				resultIcon(r.Status)+" "+t.DisplayName,
+				muted.Render(resultLabel(r)), contentW))
 		case i == u.activeIdx:
 			action := "installing " + t.LatestVersion
 			if t.Install.Managed {
 				action += " via " + t.Install.Method.String()
 			}
-			fmt.Fprintf(&b, "%s %s %s\n",
-				lipgloss.NewStyle().Foreground(styles.Warning).Render("●"),
-				lipgloss.NewStyle().Bold(true).Render(t.DisplayName),
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(action))
+			rows = append(rows, twoColumnRow(
+				lipgloss.NewStyle().Foreground(styles.Warning).Render("●")+" "+
+					lipgloss.NewStyle().Bold(true).Render(t.DisplayName),
+				muted.Render(action), contentW))
 		default:
-			fmt.Fprintf(&b, "%s %s\n",
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render("○"),
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(t.DisplayName))
+			rows = append(rows, twoColumnRow(muted.Render("○ "+t.DisplayName), "", contentW))
 		}
 	}
-	b.WriteString("\n")
-	b.WriteString(lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-		fmt.Sprintf("Elapsed: %s", formatElapsed(time.Since(u.start)))))
-	return b.String()
+	return strings.Join(rows, "\n") + "\n\n" + muted.Render(
+		fmt.Sprintf("Elapsed: %s", formatElapsed(time.Since(u.start))))
 }
 
 // updateResultContent renders the settled results of a fully successful batch.
 // It reads the whole settled set, not just this batch: after retrying one
 // product, an upgrade that succeeded earlier is still part of the outcome.
-func updateResultContent(u *updateUIState) string {
-	var b strings.Builder
+func updateResultContent(u *updateUIState, contentW int) string {
 	rows := make([]string, 0, len(u.settled))
 	for _, r := range u.settled {
-		row := fmt.Sprintf("%s %s %s", resultIcon(r.Status), r.Target.DisplayName,
-			styles.Muted.Render(resultLabel(r)))
+		row := twoColumnRow(
+			resultIcon(r.Status)+" "+r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)), contentW)
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
 			row += "\n" + styles.Muted.Render("    update it yourself: "+r.Target.Install.ManualCommand)
 		}
@@ -333,6 +408,7 @@ func updateResultContent(u *updateUIState) string {
 	if len(rows) == 0 {
 		rows = append(rows, styles.Muted.Render("Nothing to update."))
 	}
+	var b strings.Builder
 	b.WriteString(strings.Join(rows, "\n"))
 	if u.restartRequired {
 		b.WriteString("\n\n" + styles.Muted.Render("Restart sidecar to use the new version."))
@@ -349,8 +425,9 @@ func updateErrorContent(u *updateUIState, contentW int) string {
 	var b strings.Builder
 	var rows []string
 	for _, r := range u.settled {
-		row := fmt.Sprintf("%s %s %s", resultIcon(r.Status), r.Target.DisplayName,
-			styles.Muted.Render(resultLabel(r)))
+		row := twoColumnRow(
+			resultIcon(r.Status)+" "+r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)), contentW)
 		if r.Status == version.StatusFailed {
 			for _, detail := range version.FailureDetail(r, 6) {
 				for _, wrapped := range wrapDetailLine(detail, contentW-4) {
@@ -416,8 +493,10 @@ func (m *Model) openUpdateModal() bool {
 func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
 	switch action {
 	case "update":
+		m.updateBatchRetry = false
 		return m, m.startUpdateBatch(version.SelectPlan(m.products))
 	case "retry":
+		m.updateBatchRetry = true
 		return m, m.startUpdateBatch(version.RetryTargets(m.settledResults()))
 	case "quit":
 		m.shutdown()
@@ -425,13 +504,20 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 	case "cancel", "close":
 		m.closeUpdateModal()
 		return m, nil
+	case "toggle-notes", updateNotesToggleID:
+		if u := m.updateUIState(); u != nil {
+			u.notesExpanded = !u.notesExpanded
+			u.notesScroll = 0
+		}
+		return m, nil
 	}
 	return m, cmd
 }
 
-// handleUpdateModalKey handles keyboard input for the update modal. Scrolling
-// rides the modal body's own viewport; everything else goes through the
-// modal's action routing.
+// handleUpdateModalKey handles keyboard input for the update modal. In the
+// Overview phase the scroll keys drive the notes section (the phase's own
+// scroller); everywhere else they ride the modal body's viewport. Everything
+// else goes through the modal's action routing.
 func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Code == tea.KeyEsc {
 		m.closeUpdateModal()
@@ -439,18 +525,35 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.ensureUpdateModal()
+	notes := m.updateNotesOwnsScroll()
 	switch msg.String() {
 	case "up", "k":
-		m.updateModal.ScrollBy(-3)
+		if notes {
+			m.scrollUpdateNotes(-3)
+		} else {
+			m.updateModal.ScrollBy(-3)
+		}
 		return m, nil
 	case "down", "j":
-		m.updateModal.ScrollBy(3)
+		if notes {
+			m.scrollUpdateNotes(3)
+		} else {
+			m.updateModal.ScrollBy(3)
+		}
 		return m, nil
 	case "pgup", "ctrl+u":
-		m.updateModal.ScrollBy(-10)
+		if notes {
+			m.scrollUpdateNotes(-10)
+		} else {
+			m.updateModal.ScrollBy(-10)
+		}
 		return m, nil
 	case "pgdown", "ctrl+d":
-		m.updateModal.ScrollBy(10)
+		if notes {
+			m.scrollUpdateNotes(10)
+		} else {
+			m.updateModal.ScrollBy(10)
+		}
 		return m, nil
 	}
 
@@ -458,25 +561,228 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m.applyUpdateAction(action, cmd)
 }
 
-// handleUpdateModalMouse handles mouse events for the update modal.
+// handleUpdateModalMouse handles mouse events for the update modal. The
+// notes bar claims its gestures before anything else sees them (see
+// modal_scrollbar.go for why this cannot route through the modal); in the
+// Overview phase the wheel drives the notes section; the rest is action
+// routing.
 func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.ensureUpdateModal()
+	if handled, _ := m.updateNotesBarEvent(msg); handled {
+		return m, nil
+	}
+	if m.updateNotesOwnsScroll() {
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			m.scrollUpdateNotes(-3)
+			return m, nil
+		case tea.MouseWheelDown:
+			m.scrollUpdateNotes(3)
+			return m, nil
+		}
+	}
 	action := m.updateModal.HandleMouse(msg, m.updateMouseHandler)
 	return m.applyUpdateAction(action, nil)
 }
 
-// targetRow renders one product row for the preview: what changes, from which
-// version to which, and how Sidecar would do it.
-func targetRow(t version.Target) string {
-	arrow := lipgloss.NewStyle().Foreground(styles.Success).Render(" → ")
-	line := fmt.Sprintf("%s %s%s%s", t.DisplayName, t.CurrentVersion, arrow, t.LatestVersion)
-	if t.Install.Managed {
-		return line + styles.Muted.Render("  · "+t.Install.Method.String())
-	}
-	return line + styles.Muted.Render("  · manual") +
-		"\n" + styles.Muted.Render("    update it yourself: "+t.Install.ManualCommand)
+// updateNotesSection renders Sidecar's release notes as the Overview phase's
+// own scrollable section: a windowed slice of the rendered markdown with an
+// interactive, draggable bar, and a "View full changelog" element that
+// expands the window in place — the modal grows within its clamp; no second
+// overlay and no width change.
+func (m *Model) updateNotesSection() modal.Section {
+	return modal.ScrollingCustom(
+		m.renderUpdateNotes,
+		m.updateNotesSectionUpdate,
+		func(regionID string) bool {
+			return regionID == modal.RegionScrollbarThumb || regionID == modal.RegionScrollbarTrack
+		},
+		func(delta int) bool { return m.updateNotesAtBoundary(delta) },
+	)
 }
 
+// notesWindowRows is how many note lines the section shows: collapsed it is
+// a teaser, expanded it grows toward the library's preferred list height for
+// the terminal — inside the modal's clamp either way.
+func (u *updateUIState) notesWindowRows(screenH int) int {
+	if !u.notesExpanded {
+		return max(notesCollapsedRows, min(3, notesCollapsedRows))
+	}
+	return max(modal.PreferredListRows(screenH), 3)
+}
+
+func (m *Model) renderUpdateNotes(contentW int, focusID, hoverID string) modal.RenderedSection {
+	u := m.updateUIState()
+	wrapW := max(10, contentW-1) // reserve the bar's column
+	lines := m.updateNotesLines(u, wrapW)
+	total := len(lines)
+
+	window := u.notesWindowRows(m.height)
+	visible := min(window, total)
+	maxOff := max(0, total-visible)
+	scroll := min(max(u.notesScroll, 0), maxOff)
+	u.notesScroll = scroll
+	u.notesTotal, u.notesVisible, u.notesPresent = total, visible, true
+
+	var b strings.Builder
+	b.WriteString(updateNotesHeader(fmt.Sprintf("%d lines", total), contentW))
+	b.WriteString("\n")
+
+	padded := make([]string, visible)
+	for i, line := range lines[scroll : scroll+visible] {
+		if w := lipgloss.Width(line); w < wrapW {
+			line += strings.Repeat(" ", wrapW-w)
+		}
+		padded[i] = line
+	}
+	bar, _ := ui.RenderScrollbarWithState(ui.ScrollbarParams{
+		TotalItems:   total,
+		ScrollOffset: scroll,
+		VisibleItems: visible,
+		TrackHeight:  visible,
+	}, m.updateNotesBar.style(m.updateMouseHandler))
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, strings.Join(padded, "\n"), bar))
+
+	return modal.RenderedSection{
+		Content: b.String(),
+		Scrollbar: &modal.SectionScrollbar{
+			TotalItems:   total,
+			ScrollOffset: scroll,
+			VisibleItems: visible,
+			TrackHeight:  visible,
+			LocalX:       contentW - 1,
+		},
+	}
+}
+
+// updateNotesToggleSection hosts the "View full changelog" element below the
+// notes window — outside the modal's scrollable body, so the affordance can
+// never scroll out of reach.
+func (m *Model) updateNotesToggleSection() modal.Section {
+	return modal.Custom(func(contentW int, focusID, hoverID string) modal.RenderedSection {
+		u := m.updateUIState()
+		if u == nil || !u.notesPresent || (u.notesTotal <= notesCollapsedRows && !u.notesExpanded) {
+			return modal.RenderedSection{}
+		}
+		label := "[ View full changelog ]"
+		if u.notesExpanded {
+			label = "[ Collapse changelog ]"
+		}
+		style := styles.Muted
+		switch {
+		case focusID == updateNotesToggleID:
+			style = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
+		case hoverID == updateNotesToggleID:
+			style = lipgloss.NewStyle().Foreground(styles.Primary)
+		}
+		rendered := style.Render(label)
+		return modal.RenderedSection{
+			Content: rendered,
+			Focusables: []modal.FocusableInfo{{
+				ID:     updateNotesToggleID,
+				Width:  lipgloss.Width(rendered),
+				Height: 1,
+			}},
+		}
+	}, m.updateNotesSectionUpdate)
+}
+
+// updateNotesHeader draws the section rule per modal-redesign.md's Header
+// shape: small-caps label, rule to the edge, right-aligned meta.
+func updateNotesHeader(meta string, width int) string {
+	label := styles.Muted.Render("WHAT'S NEW")
+	metaText := styles.Muted.Render(meta)
+	lw, mw := lipgloss.Width(label), lipgloss.Width(metaText)
+	ruleW := width - lw - mw - 2
+	if ruleW < 3 {
+		ruleW = 3
+	}
+	rule := styles.Muted.Render(strings.Repeat("─", ruleW))
+	return label + " " + rule + " " + metaText
+}
+
+func (m *Model) updateNotesSectionUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok || focusID != updateNotesToggleID {
+		return "", nil
+	}
+	switch key.String() {
+	case "enter", " ", "space":
+		return "toggle-notes", nil
+	}
+	return "", nil
+}
+
+// updateNotesLines renders the parsed notes to wrapped lines, trailing blanks
+// trimmed so the window math counts what will actually draw.
+func (m *Model) updateNotesLines(u *updateUIState, wrapW int) []string {
+	notes := u.notes
+	if strings.TrimSpace(notes) == "" {
+		notes = "No release notes available."
+	}
+	lines := strings.Split(strings.TrimRight(renderReleaseNotes(parseReleaseNotes(notes), wrapW), "\n"), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// updateNotesOwnsScroll reports that the Overview phase's scroll keys and
+// wheel belong to the notes section. It reads only render-refreshed state.
+func (m *Model) updateNotesOwnsScroll() bool {
+	u := m.updateUIState()
+	return u != nil && u.phase == UpdateModalPreview && u.notesPresent
+}
+
+func (m *Model) scrollUpdateNotes(delta int) {
+	u := m.updateUIState()
+	if u == nil {
+		return
+	}
+	m.scrollUpdateNotesTo(u.notesScroll + delta)
+}
+
+func (m *Model) scrollUpdateNotesTo(off int) {
+	u := m.updateUIState()
+	if u == nil {
+		return
+	}
+	maxOff := max(0, u.notesTotal-u.notesVisible)
+	next := min(max(off, 0), maxOff)
+	if next != u.notesScroll {
+		u.notesScroll = next
+		m.updateNotesBar.moved = true
+	}
+}
+
+func (m *Model) updateNotesAtBoundary(delta int) bool {
+	u := m.updateUIState()
+	if u == nil {
+		return false
+	}
+	maximum := max(0, u.notesTotal-u.notesVisible)
+	return scroll.Bounds{Position: u.notesScroll, Maximum: maximum}.AtBoundary(delta)
+}
+
+// updateNotesBarEvent answers the notes bar's gestures through the shared
+// switcher core: thumb grabs, jump-to-spot track presses, drag motions, and
+// lost-release settling.
+func (m *Model) updateNotesBarEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
+	return switcherBarMouseEvent(&m.updateNotesBar, m.updateModal, m.updateMouseHandler, msg,
+		switcherBarOps{
+			current: func() int {
+				if u := m.updateUIState(); u != nil {
+					return u.notesScroll
+				}
+				return 0
+			},
+			apply:     m.scrollUpdateNotesTo,
+			onRelease: func(bool) tea.Cmd { return nil },
+		})
+}
+
+// and excessive whitespace. The modal already shows "What's New" as a header,
+// so we strip any leading "What's New" headers from the content.
 // parseReleaseNotes cleans up release notes by removing duplicate headers
 // and excessive whitespace. The modal already shows "What's New" as a header,
 // so we strip any leading "What's New" headers from the content.

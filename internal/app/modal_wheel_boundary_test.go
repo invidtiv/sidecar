@@ -135,8 +135,7 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
 				h := renderedUpdateModal(t, m)
-				m.updateModal.ScrollToBottom()
-				m.updateModal.Render(m.width, m.height, h)
+				m.scrollUpdateNotesTo(1 << 20)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: false, down: true},
@@ -148,8 +147,7 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
 				h := renderedUpdateModal(t, m)
-				m.updateModal.ScrollBy(3)
-				m.updateModal.Render(m.width, m.height, h)
+				m.scrollUpdateNotesTo(3)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: false, down: false},

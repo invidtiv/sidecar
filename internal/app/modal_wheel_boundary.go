@@ -85,10 +85,23 @@ func modalWheelAtBoundary(md *modal.Modal, h *mouse.Handler, msg tea.MouseWheelM
 	return md.WheelAtBoundary(msg, h)
 }
 
-// updateModalWheelAtBoundary answers for the update overlay: one modal across
-// all phases, so the shared body answer covers Preview, Installing, and
-// Done/Failed alike.
+// updateModalWheelAtBoundary answers for the update overlay. In the Overview
+// phase the notes section owns the wheel wherever the pointer is over the
+// modal, so it answers from its last-rendered window geometry; other phases
+// use the shared body answer on the one persistent modal.
 func (m *Model) updateModalWheelAtBoundary(msg tea.MouseWheelMsg) bool {
+	if m.updateNotesOwnsScroll() {
+		var delta int
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			delta = -modalWheelLines
+		case tea.MouseWheelDown:
+			delta = modalWheelLines
+		default:
+			return false
+		}
+		return m.updateNotesAtBoundary(delta)
+	}
 	return modalWheelAtBoundary(m.updateModal, m.updateMouseHandler, msg)
 }
 

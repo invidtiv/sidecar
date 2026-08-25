@@ -328,6 +328,12 @@ type Model struct {
 	updateModal        *modal.Modal
 	updateMouseHandler *mouse.Handler
 	updateUI           *updateUIState
+	// updateBatchRetry records whether the running batch was launched as a
+	// retry, so the Installing surface shows its disabled button accordingly.
+	updateBatchRetry bool
+	// updateNotesBar is the notes section's scrollbar pointer state (hover +
+	// press-time gesture snapshot).
+	updateNotesBar switcherBarState
 
 	// Intro animation
 	intro IntroModel

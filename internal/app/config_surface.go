@@ -325,6 +325,11 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		if m.openUpdateModal() {
 			return nil, true
 		}
+		// A pending Sidecar restart deliberately gates a new confirmation;
+		// say that instead of claiming nothing is pending.
+		if m.needsRestart && m.hasUpdatesAvailable() {
+			return toast("Restart sidecar to finish the pending update first"), true
+		}
 		return toast("No update is pending right now"), true
 
 	case configui.CheckUpdatesMsg:

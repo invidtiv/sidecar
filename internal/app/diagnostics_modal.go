@@ -41,6 +41,7 @@ func (m *Model) ensureDiagnosticsModal() {
 		AddSection(modal.Spacer()).
 		AddSection(m.diagnosticsVersionSection()).
 		AddSection(m.diagnosticsUpdateSection()).
+		AddSection(m.diagnosticsUpdateButton()).
 		AddSection(m.diagnosticsErrorSection()).
 		AddSection(modal.Spacer()).
 		AddSection(modal.Buttons(modal.Btn(" Close ", "close", modal.BtnPrimary())))
@@ -252,6 +253,15 @@ func (m *Model) diagnosticsUpdateSection() modal.Section {
 
 		return modal.RenderedSection{Content: b.String()}
 	}, nil)
+}
+
+// diagnosticsUpdateButton is the mouse-reachable Update entry (decision 5 of
+// the update-flow redesign): the same "update" action the keyboard's u
+// already emits, as a real button. Gated so it exists only when an update is
+// actually available; openUpdateModal still refuses mid-nothing.
+func (m *Model) diagnosticsUpdateButton() modal.Section {
+	return modal.When(func() bool { return m.hasUpdatesAvailable() },
+		modal.Buttons(modal.Btn(" Update ", "update")))
 }
 
 // diagnosticsErrorSection renders the last error section if present.
