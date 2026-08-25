@@ -14,8 +14,8 @@ release, and updates `marcus/homebrew-tap` from a rendered formula template.
    imports to the local checkouts. Both the gate and `sync-deps` run with
    `GOWORK=off` for that reason. If a sibling jumped several minors, decide
    deliberately and smoke its tab in the app.
-2. Add a dated entry to `CHANGELOG.md` for the **v-prefixed** version
-   (`## [vX.Y.Z] - YYYY-MM-DD`).
+2. Write the changelog bullets under `## [Unreleased]` — leave the heading
+   unstamped; `make release` stamps it for you (see Publish).
 3. Make sure `main` is clean, reviewed, tested, pushed, and identical to
    `origin/main`. `check-release-state.sh` now checks Go CI's status for that
    commit itself (via `gh run list --workflow=go-ci.yml`) and fails closed if
@@ -44,14 +44,32 @@ make release-snapshot
 
 ## Publish
 
+The normal flow is: write the changelog, run one command.
+
 ```sh
-RELEASE_VERSION=v0.92.0 make release
+BUMP=minor make release      # or major / patch
 ```
 
-The command fails closed unless the version is strict SemVer, the working tree
-is clean, `HEAD` is the live `origin/main`, the changelog entry exists, there
-are no `replace` directives in `go.mod`, the tag does not exist, and the
-operator can complete Homebrew publication. It then:
+With bullets sitting under `## [Unreleased]`, the command derives the next
+version from the latest tag, stamps the heading to `## [vX.Y.Z] - <today>`,
+commits `release: prepare vX.Y.Z`, pushes `main`, and publishes. The version is
+stated exactly once. Two equivalent spellings:
+
+```sh
+RELEASE_VERSION=v0.92.0 make release   # explicit version; stamps [Unreleased] if present
+make release                           # heading already stamped `## [vX.Y.Z] - date` by hand
+```
+
+`make release-dry-run` (with the same variables) prints the full plan —
+derived version, stamp, commit, push — and exits before any mutation.
+
+The prep step refuses an empty `[Unreleased]` section, a working tree dirty
+beyond `CHANGELOG.md`, a version whose tag already exists, and a
+`RELEASE_VERSION` that contradicts an already-stamped heading. Publication then
+fails closed unless the version is strict SemVer, the working tree is clean,
+`HEAD` is the live `origin/main`, the changelog entry exists, there are no
+`replace` directives in `go.mod`, the tag does not exist, and the operator can
+complete Homebrew publication. It then:
 
 1. builds once with `GOWORK=off`;
 2. creates and pushes the annotated tag;

@@ -1,6 +1,6 @@
 .PHONY: build install install-dev install-local install-worktree worktree-init use-homebrew reap-test-tmux \
 	install-status test-dev-install test test-v clean check-clean tag \
-	release-snapshot check-release-state release release-tap \
+	release-snapshot check-release-state release release-dry-run release-tap \
 	fmt fmt-check fmt-check-all lint lint-all lint-linux goreleaser-snapshot install-hooks sync-deps
 
 # Default target
@@ -10,7 +10,10 @@ LINT_BASE ?= main
 
 # RELEASE_VERSION must come from the environment so Make never interpolates an
 # untrusted command-line value into shell source (see scripts/test-release-guards.sh).
-release_goals := $(filter check-release-state release release-tap,$(MAKECMDGOALS))
+# `release` is exempt: it hands off to scripts/release.sh, which reads
+# RELEASE_VERSION as shell data (never Make-interpolated) and can derive a
+# version on its own via BUMP=major|minor|patch, so no env var is required.
+release_goals := $(filter check-release-state release-tap,$(MAKECMDGOALS))
 ifneq ($(release_goals),)
 ifneq ($(origin RELEASE_VERSION),environment)
 $(error set RELEASE_VERSION in the environment, for example: RELEASE_VERSION=v0.92.0 make $(firstword $(release_goals)))
@@ -167,10 +170,17 @@ check-release-state:
 	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
 	./scripts/check-release-state.sh pre-tag
 
-# Cut a release: preflight, tag, wait for CI, verify/publish Homebrew formula.
+# Cut a release: derive/stamp the version, preflight, tag, wait for CI,
+# verify/publish Homebrew formula. Write bullets under `## [Unreleased]` in
+# CHANGELOG.md, then either let this derive the version (BUMP=major|minor|patch)
+# or set RELEASE_VERSION=vX.Y.Z yourself.
 release:
-	@test -n "$${RELEASE_VERSION:-}" || { echo 'RELEASE_VERSION=vX.Y.Z is required' >&2; exit 2; }
-	./scripts/publish-release.sh
+	./scripts/release.sh
+
+# Print the release plan (derived version, changelog stamp, commit, push,
+# publish) and stop before any mutation.
+release-dry-run:
+	./scripts/release.sh --dry-run
 
 # Resume Homebrew tap publication after a successful tag/release.
 release-tap:

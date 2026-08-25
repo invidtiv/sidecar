@@ -81,6 +81,145 @@ EOF
   fi
 )
 
+# scripts/release.sh: version derivation and its refusals. Every scenario
+# below dies before release.sh reaches its Homebrew --check call, so none of
+# this touches gh or the network — a stub is only needed for the one dry-run
+# happy path that runs past that call.
+release_repo="$temporary/release-repo"
+cp -R "$guard_repo" "$release_repo"
+cp "$repo_root/scripts/release.sh" "$release_repo/scripts/"
+(
+  cd "$release_repo"
+  git checkout --quiet main
+  git add scripts/release.sh
+  git -c user.name=release-test -c user.email=release-test@example.invalid \
+    commit --quiet -m 'add release.sh'
+
+  # An already-existing tag is refused, derived straight from the committed
+  # CHANGELOG.md heading (## [v1.0.0], and v1.0.0 was tagged earlier in this
+  # script) with no RELEASE_VERSION or BUMP needed.
+  if output=$(./scripts/release.sh --dry-run 2>&1); then
+    echo "release.sh accepted a version that is already tagged" >&2
+    exit 1
+  fi
+  [[ $output == *"v1.0.0"* && $output == *"already exists"* ]] || {
+    echo "release.sh did not explain the existing-tag refusal: $output" >&2
+    exit 1
+  }
+
+  # An empty [Unreleased] section is refused, whether or not it is the top
+  # heading — releasing a blank entry is always a mistake.
+  cat >CHANGELOG.md <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+## [v1.0.0] - 2026-01-01
+
+- test release
+EOF
+  if output=$(./scripts/release.sh --dry-run 2>&1); then
+    echo "release.sh accepted an empty [Unreleased] section" >&2
+    exit 1
+  fi
+  [[ $output == *empty* ]] || {
+    echo "release.sh did not explain the empty-section refusal: $output" >&2
+    exit 1
+  }
+  git checkout --quiet -- CHANGELOG.md
+
+  # A RELEASE_VERSION that contradicts an already-stamped heading is refused,
+  # naming both — the disagreement td-0dda74 exists to close.
+  cat >CHANGELOG.md <<'EOF'
+# Changelog
+
+## [v1.2.0] - 2026-02-01
+
+- something worth shipping
+
+## [v1.0.0] - 2026-01-01
+
+- test release
+EOF
+  if output=$(RELEASE_VERSION=v1.3.0 ./scripts/release.sh --dry-run 2>&1); then
+    echo "release.sh accepted a RELEASE_VERSION that contradicts the stamped heading" >&2
+    exit 1
+  fi
+  [[ $output == *"v1.3.0"* && $output == *"v1.2.0"* ]] || {
+    echo "release.sh refusal did not name both versions: $output" >&2
+    exit 1
+  }
+  git checkout --quiet -- CHANGELOG.md
+
+  # A tree dirty beyond CHANGELOG.md is refused. BUMP derives v1.0.1 (unused
+  # so far), which only leaves the dirty-tree check standing between here and
+  # the Homebrew --check call.
+  cat >CHANGELOG.md <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+- something worth shipping
+
+## [v1.0.0] - 2026-01-01
+
+- test release
+EOF
+  touch extra.txt
+  if output=$(BUMP=patch ./scripts/release.sh --dry-run 2>&1); then
+    echo "release.sh accepted a tree dirty beyond CHANGELOG.md" >&2
+    exit 1
+  fi
+  [[ $output == *"beyond CHANGELOG.md"* ]] || {
+    echo "release.sh did not explain the dirty-tree refusal: $output" >&2
+    exit 1
+  }
+  rm extra.txt
+  git checkout --quiet -- CHANGELOG.md
+
+  # Happy path: BUMP derives the version and stamps the plan without it ever
+  # being stated by hand. publish-homebrew-tap.sh is stubbed so the dry run
+  # exercises release.sh's own logic without touching gh or the network.
+  cat >scripts/publish-homebrew-tap.sh <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ ${1:-} == --check ]] || { echo "stub expected --check" >&2; exit 1; }
+[[ -n ${RELEASE_VERSION:-} ]] || { echo "stub expected RELEASE_VERSION" >&2; exit 1; }
+echo "stub: release publication prerequisites verified"
+EOF
+  chmod +x scripts/publish-homebrew-tap.sh
+  git add scripts/publish-homebrew-tap.sh
+  git -c user.name=release-test -c user.email=release-test@example.invalid \
+    commit --quiet -m 'stub publish-homebrew-tap.sh for the dry-run test'
+  cat >CHANGELOG.md <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+- something worth shipping
+
+## [v1.0.0] - 2026-01-01
+
+- test release
+EOF
+  output=$(BUMP=minor ./scripts/release.sh --dry-run 2>&1) || {
+    echo "release.sh rejected a clean BUMP-driven dry run: $output" >&2
+    exit 1
+  }
+  [[ $output == *"release plan: v1.1.0"* ]] || {
+    echo "release.sh did not derive v1.1.0 from BUMP=minor: $output" >&2
+    exit 1
+  }
+  [[ $output == *"dry run: stopping before any mutation"* ]] || {
+    echo "release.sh dry run did not stop before mutation: $output" >&2
+    exit 1
+  }
+  grep -Fq '## [Unreleased]' CHANGELOG.md || {
+    echo "release.sh dry run mutated CHANGELOG.md" >&2
+    exit 1
+  }
+)
+
 # An extra executable beside the binary must be rejected.
 probe_dist="$temporary/dist"
 cp -R "$dist" "$probe_dist"

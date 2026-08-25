@@ -2,6 +2,11 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Developer
+- **A release is now changelog + one command.** `BUMP=major|minor|patch make release` derives the next version from the latest tag, stamps `## [Unreleased]` to `## [vX.Y.Z] - <today>`, commits `release: prepare vX.Y.Z`, pushes `main`, and publishes — the version is stated exactly once, or zero times when `BUMP` implies it. Previously the operator had to hand-edit the changelog heading to a specific version and then repeat that same version on the command line via `RELEASE_VERSION`, and nothing caught the two disagreeing. `scripts/release.sh` now refuses an empty `[Unreleased]` section, a tree dirty beyond `CHANGELOG.md`, a tag that already exists, and a `RELEASE_VERSION` that contradicts an already-stamped heading, naming both versions in that last case. `make release-dry-run` prints the derived plan and exits before any mutation. `RELEASE_VERSION=vX.Y.Z make release` still works unchanged as the explicit-version path. Ported from `tasks`, which already carried this flow. (td-0dda74)
+
 ## [v1.6.0] - 2026-08-24
 
 ### Features
