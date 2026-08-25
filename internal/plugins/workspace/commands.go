@@ -253,6 +253,9 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Shell has no tabs - it shows primer/output directly
 			cmds = append(cmds,
 				plugin.Command{ID: "show-diff", Name: "Diff", Description: "Open working-tree diff pane", Context: "workspace-preview", Priority: 3},
+				// The pane switcher: open anything in a split without moving
+				// focus back to the sidebar's New.
+				plugin.Command{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-preview", Priority: 4},
 			)
 			// Also show agent commands in preview pane
 			wt := p.selectedWorktree()

@@ -431,6 +431,12 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 
 ### Preview Shortcuts
 
+| Key | Command | Action |
+|-----|---------|--------|
+| `o` | open-pane | Open the pane switcher (kind list focused) without leaving the preview |
+| `d` | show-diff | Open working-tree Diff leaf |
+| `ctrl+t` | toggle-terminal | Toggle a terminal split beside the preview |
+
 `g` / `G` jump to the top / bottom of the preview's scrollback. `0` is
 deliberately **not** bound here: it is the header's global Tasks shortcut, and a
 context-local binding would make the same key mean two different things one tab

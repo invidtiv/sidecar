@@ -9,21 +9,18 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 )
 
-func TestKindButtonStylesHighlightSelectedWithoutFocus(t *testing.T) {
-	shell, tree := kindButtonStyles(KindShell, false)
-	assertStyle(t, "shell selected", shell, styles.ButtonFocused)
-	assertStyle(t, "worktree idle", tree, styles.Button)
+func TestKindRowStylesHighlightSelectedWithoutFocus(t *testing.T) {
+	assertStyle(t, "shell selected", kindRowStyle(KindShell, KindShell, false, false), styles.ButtonFocused)
+	assertStyle(t, "worktree idle", kindRowStyle(KindWorktree, KindShell, false, false), styles.Button)
 
-	shell, tree = kindButtonStyles(KindWorktree, false)
-	assertStyle(t, "worktree selected", tree, styles.ButtonFocused)
-	assertStyle(t, "shell idle", shell, styles.Button)
+	assertStyle(t, "worktree selected", kindRowStyle(KindWorktree, KindWorktree, false, false), styles.ButtonFocused)
+	assertStyle(t, "shell idle", kindRowStyle(KindShell, KindWorktree, false, false), styles.Button)
 
-	shell, tree = kindButtonStyles(KindShell, true)
-	assertStyle(t, "shell selected while hovered", shell, styles.ButtonFocused)
-	assertStyle(t, "worktree hover", tree, styles.ButtonHover)
+	assertStyle(t, "shell selected while hovered", kindRowStyle(KindShell, KindShell, false, true), styles.ButtonFocused)
+	assertStyle(t, "worktree hover", kindRowStyle(KindWorktree, KindShell, false, true), styles.ButtonHover)
 }
 
-func TestKindToggleKeepsShellSelectedWhenNameFocused(t *testing.T) {
+func TestKindControlKeepsShellSelectedWhenNameFocused(t *testing.T) {
 	f := Open(testOpts(KindShell))
 	renderForm(t, f)
 	if f.Modal().FocusedID() != FieldName {
@@ -32,8 +29,7 @@ func TestKindToggleKeepsShellSelectedWhenNameFocused(t *testing.T) {
 	if f.Kind() != KindShell {
 		t.Fatalf("kind = %v, want shell", f.Kind())
 	}
-	shell, _ := kindButtonStyles(f.Kind(), false)
-	assertStyle(t, "open-on-name still highlights shell", shell, styles.ButtonFocused)
+	assertStyle(t, "open-on-name still highlights shell", kindRowStyle(f.Kind(), f.Kind(), false, false), styles.ButtonFocused)
 }
 
 func TestKindFrameStyleMatchesInputBorder(t *testing.T) {

@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
@@ -1620,6 +1621,12 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 				p.createForm.SetBranches(p.branchAll, current)
 			}
 		}
+
+	case createPickerDataMsg:
+		p.applyCreatePickerData(msg)
+
+	case workspacecreate.FilesScannedMsg:
+		p.applyCreateFileCandidates(msg)
 
 	case LocalBranchesMsg:
 		if p.mergeState != nil && msg.Err == nil {

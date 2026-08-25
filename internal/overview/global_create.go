@@ -132,6 +132,13 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 		Agents:       agents,
 		NextShell:    m.defaultShellDisplayName(key),
 		DefaultAgent: defaultAgent,
+		// This surface's preview owns a pane tree, so the switcher's passive
+		// rows work here exactly as they do in the project workspace. What it
+		// has no place for is a second live terminal, so HostScoped rows stay
+		// off — same rule, same flag, as before this milestone.
+		AllowTerminalSplit: false,
+		ShowNotes:          m.notesWanted(),
+		Providers:          m.configuredProviders(),
 	})
 	m.createOpen = true
 	m.createError = ""
@@ -141,7 +148,7 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 	m.createRecord = nil
 	m.createModal = nil
 	m.createModalWidth = 0
-	return m.loadCreateBranches()
+	return tea.Batch(m.loadCreateBranches(), m.loadCreatePickerData(), m.loadCreateFileCandidates())
 }
 
 func (m *Model) normalizedCreateProjectKey(explicit string) string {
@@ -260,19 +267,6 @@ func (m *Model) createProjectItems() []workspacecreate.ProjectItem {
 		items = append(items, workspacecreate.ProjectItem{Key: projectKey(project), Label: project.Name})
 	}
 	return items
-}
-
-func (m *Model) setCreateKindFromClick(x int) {
-	if m.createForm == nil || m.createMouse == nil {
-		return
-	}
-	for _, region := range m.createMouse.HitMap.Regions() {
-		if region.ID != workspacecreate.FieldKind {
-			continue
-		}
-		m.createForm.SetKindFromClickX(x, region.Rect.X, region.Rect.W)
-		return
-	}
 }
 
 func (m *Model) setCreateError(msg string) {
@@ -416,7 +410,16 @@ func (m *Model) handleCreateShellKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	if m.createForm != nil {
 		prevProject = m.createForm.ProjectKey()
 	}
-	action, cmd := md.HandleKey(msg)
+	// The form owns the two-step flow: Esc on the picker step returns to the
+	// kind list instead of closing, and Enter on a target-needing kind
+	// advances to it. What escapes is an action for this switch.
+	var action string
+	var cmd tea.Cmd
+	if m.createForm != nil {
+		action, cmd = m.createForm.HandleKey(msg)
+	} else {
+		action, cmd = md.HandleKey(msg)
+	}
 	return true, tea.Batch(cmd, m.finishCreateInput(action, prevProject))
 }
 
@@ -443,11 +446,22 @@ func (m *Model) handleCreateShellMouse(msg tea.MouseMsg) tea.Cmd {
 	action := md.HandleMouse(msg, m.createMouse)
 	if action == workspacecreate.FieldKind {
 		if click, ok := msg.(tea.MouseClickMsg); ok {
-			m.setCreateKindFromClick(click.X)
+			// The form knows which shape its kind list is drawn in this
+			// session and maps the click accordingly.
+			for _, region := range m.createMouse.HitMap.Regions() {
+				if region.ID != workspacecreate.FieldKind {
+					continue
+				}
+				m.createForm.SetKindFromClick(region.Rect, click.X, click.Y)
+				break
+			}
 		}
 	}
 	if action == workspacecreate.FieldSkip {
 		_, _ = md.HandleKey(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "})
+	}
+	if m.createForm != nil {
+		action = m.createForm.TranslateMouseAction(action)
 	}
 	return m.finishCreateInput(action, prevProject)
 }
@@ -467,6 +481,17 @@ func (m *Model) finishCreateInput(action, previousProject string) tea.Cmd {
 }
 
 func (m *Model) applyCreateAction(action string) tea.Cmd {
+	if workspacecreate.IsPlacementAction(action) {
+		// On the picker step one click creates with that placement; from the
+		// kind list of a target-needing kind it continues there instead.
+		if m.createForm == nil {
+			return nil
+		}
+		if m.createForm.ApplyPlacementActionStep(action) == workspacecreate.PlacementSubmitted {
+			return m.applyCreateAction(workspacecreate.ActionCreate)
+		}
+		return nil
+	}
 	switch action {
 	case "cancel", workspacecreate.ActionCancel, globalCreateCancelID:
 		if m.createRecord != nil {
@@ -478,7 +503,13 @@ func (m *Model) applyCreateAction(action string) tea.Cmd {
 		m.closeCreateShell()
 		return nil
 	case workspacecreate.ActionCreate:
-		if m.createForm != nil && m.createForm.Kind() == workspacecreate.KindWorktree {
+		if m.createForm == nil {
+			return nil
+		}
+		if m.createForm.Step() == workspacecreate.StepTarget {
+			return m.submitPaneTargetForm()
+		}
+		if m.createForm.Kind() == workspacecreate.KindWorktree {
 			return m.planCreateWorktree()
 		}
 		return m.submitCreateShell()

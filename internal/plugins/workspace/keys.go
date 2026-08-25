@@ -613,6 +613,13 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "n":
 		return p.openCreateModal()
+	case "o":
+		// The pane switcher, reachable from the preview without moving focus
+		// to the sidebar: same grown create modal, kind list focused. The
+		// sidebar's n still opens it name-focused.
+		if p.activePane == PanePreview {
+			return p.openCreateModalFocusKind()
+		}
 	case "ctrl+n":
 		// Instant create: default agent, auto-approve off. Does not open the form.
 		return p.createDefaultShell(false)
@@ -991,12 +998,14 @@ func (p *Plugin) handleCreateKeys(msg tea.KeyPressMsg) tea.Cmd {
 		return cmd
 	}
 	p.ensureCreateModal()
-	m := p.createFormModal()
-	if m == nil {
+	if p.createForm == nil {
 		return nil
 	}
 
-	action, cmd := m.HandleKey(msg)
+	// The form owns the two-step flow: Esc on the picker step returns to the
+	// kind list, and Enter on a target-needing kind advances to it. What
+	// escapes is an action for this switch.
+	action, cmd := p.createForm.HandleKey(msg)
 	p.syncCreateFormAfterInput()
 
 	switch action {

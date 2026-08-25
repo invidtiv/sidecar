@@ -1888,6 +1888,8 @@ func (p *Plugin) createOpenOpts(kind workspacecreate.Kind, focusKind bool, name 
 		NextShell:             nextShell,
 		PreferredAgent:        p.preferredCreateAgent(),
 		DefaultAgent:          string(p.getConfigDefaultAgentType()),
+		ShowNotes:             p.notesPluginPresent(),
+		Providers:             p.configuredProviders(),
 	}
 }
 
@@ -1927,7 +1929,7 @@ func (p *Plugin) openCreate(kind workspacecreate.Kind, focusKind bool, name stri
 	p.resetCreateFormState()
 	p.viewMode = ViewModeCreate
 	p.createForm = workspacecreate.Open(p.createOpenOpts(kind, focusKind, name))
-	return p.loadBranches()
+	return tea.Batch(p.loadBranches(), p.loadCreatePickerData(), p.loadCreateFileCandidates())
 }
 
 // openStartAgentCreate opens the shared create form on Shell so an existing
@@ -1946,7 +1948,7 @@ func (p *Plugin) openStartAgentCreate(wt *Worktree) tea.Cmd {
 		opts.PreferredAgent = string(preferred)
 	}
 	p.createForm = workspacecreate.Open(opts)
-	return p.loadBranches()
+	return tea.Batch(p.loadBranches(), p.loadCreatePickerData(), p.loadCreateFileCandidates())
 }
 
 // initCreateModalBase initializes the shared form in Worktree, Name focused.
@@ -1977,7 +1979,7 @@ func (p *Plugin) openCreateRemembered(focusKind bool) tea.Cmd {
 	opts := p.createOpenOpts(workspacecreate.KindWorktree, focusKind, "")
 	opts.UseLastKind = true
 	p.createForm = workspacecreate.Open(opts)
-	return p.loadBranches()
+	return tea.Batch(p.loadBranches(), p.loadCreatePickerData(), p.loadCreateFileCandidates())
 }
 
 // terminalSplitAutoName is the name a terminal split takes when the user types

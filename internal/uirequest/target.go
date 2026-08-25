@@ -230,6 +230,32 @@ func resolveFileTarget(workDir, raw string, explicitLine int) (Target, error) {
 	}, nil
 }
 
+// ResolveFileTarget is resolveFileTarget's exported form: file-only
+// classification for callers that have already chosen the kind (the pane
+// switcher's File picker). It is the same resolution `sidecar open` runs, so
+// both produce one target shape.
+func ResolveFileTarget(workDir, raw string, explicitLine int) (Target, error) {
+	workDir, err := canonicalizeWorkDir(workDir)
+	if err != nil {
+		return Target{}, err
+	}
+	return resolveFileTarget(workDir, raw, explicitLine)
+}
+
+// ResolveDiffSpec is resolveDiffTarget's exported form: diff-only
+// classification for callers that have already chosen the kind. An empty raw
+// resolves to the working tree, matching `sidecar open --diff`.
+func ResolveDiffSpec(workDir, raw string) (Target, error) {
+	if strings.TrimSpace(raw) == "" {
+		return Target{Kind: TargetKindDiff, Value: workspacediff.IdentityWorkingTree}, nil
+	}
+	workDir, err := canonicalizeWorkDir(workDir)
+	if err != nil {
+		return Target{}, err
+	}
+	return resolveDiffTarget(workDir, raw)
+}
+
 // TargetFromSpan maps a scanned terminal-link span onto the cross-surface
 // target vocabulary. It is the one span→Target translation: the surfaces used
 // to each keep their own, and the two drifted. It resolves nothing — a span

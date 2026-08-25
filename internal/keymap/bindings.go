@@ -806,6 +806,10 @@ func DefaultBindings() []Binding {
 		{Key: "s", Command: "start-agent", Context: "workspace-preview"},
 		{Key: "S", Command: "stop-agent", Context: "workspace-preview"},
 		{Key: "E", Command: "interactive", Context: "workspace-preview"},
+		// The pane switcher, per the pane-layout-control plan's entry decision:
+		// `o` was the first free candidate in this context (o, alt+o, alt+n),
+		// and the mockups' footer hints it.
+		{Key: "o", Command: "open-pane", Context: "workspace-preview"},
 		// `0` deliberately has no workspace-preview binding. It is the header's
 		// Tasks shortcut now, and a context-local binding that shadowed it here
 		// would make the same key mean two different things one tab apart. The

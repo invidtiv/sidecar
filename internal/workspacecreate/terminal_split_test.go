@@ -27,15 +27,24 @@ func terminalOpts() OpenOpts {
 }
 
 // The row set is a table, so the Terminal split row is offered exactly where a
-// host can place one and nowhere else.
+// host can place one and nowhere else — and the pane kinds that joined it in
+// M2 are offered everywhere, being HostScoped=false.
 func TestTerminalSplitRowIsOfferedPerHost(t *testing.T) {
 	tests := []struct {
 		name  string
 		rows  []kindRow
 		kinds []Kind
 	}{
-		{name: "host with a pane tree", rows: kindRowsFor(true), kinds: []Kind{KindShell, KindWorktree, KindTerminalSplit}},
-		{name: "host without one", rows: kindRowsFor(false), kinds: []Kind{KindShell, KindWorktree}},
+		{
+			name:  "host with a pane tree",
+			rows:  kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true}),
+			kinds: []Kind{KindShell, KindWorktree, KindTerminalSplit, KindFile, KindDiff, KindIssue, KindNote},
+		},
+		{
+			name:  "host without one",
+			rows:  kindRowsForOpts(rowOpts{hostScoped: false, showNotes: true}),
+			kinds: []Kind{KindShell, KindWorktree, KindFile, KindDiff, KindIssue, KindNote},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,32 +97,31 @@ func TestTerminalSplitRowSelection(t *testing.T) {
 	}
 }
 
-// Arrowing through the list reaches every row, and a click lands on the row it
-// is over — including the third one, which a two-way toggle could not express.
+// Arrowing through the list reaches every row and clamps at the ends, and a
+// click lands on the row it is over — by Y, now that the catalog outgrew the
+// horizontal toggle.
 func TestKindListReachesTerminalSplit(t *testing.T) {
 	f := Open(OpenOpts{Kind: KindShell, FocusKind: true, AllowTerminalSplit: true})
 	m := f.Build(52)
 	m.Render(80, 40, mouse.NewHandler())
-	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	if f.Kind() != KindWorktree {
-		t.Fatalf("right once = %v, want Worktree", f.Kind())
+	rows := kindRowsFor(true)
+	for i := 1; i < len(rows); i++ {
+		m.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+		if f.Kind() != rows[i].Kind {
+			t.Fatalf("down %d = %v, want %v", i, f.Kind(), rows[i].Kind)
+		}
 	}
-	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	if f.Kind() != KindTerminalSplit {
-		t.Fatalf("right twice = %v, want Terminal split", f.Kind())
-	}
-	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyRight})
-	if f.Kind() != KindTerminalSplit {
-		t.Fatalf("right past the end = %v, want to stay on the last row", f.Kind())
+	// Down past the end stays on the last row.
+	m.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	if f.Kind() != rows[len(rows)-1].Kind {
+		t.Fatalf("down past the end = %v, want to stay on the last row", f.Kind())
 	}
 
-	rows := kindRowsFor(true)
-	spans := kindSpans(rows)
 	for i, row := range rows {
 		click := Open(terminalOpts())
-		click.SetKindFromClickX(spans[i][0]+1, 0, spans[len(spans)-1][1])
+		click.SetKindFromClick(mouse.Rect{X: 0, Y: 10, W: 40, H: len(rows)}, 5, 10+i)
 		if click.Kind() != row.Kind {
-			t.Fatalf("click on %q = %v, want %v", row.Label, click.Kind(), row.Kind)
+			t.Fatalf("click on row %d = %v, want %v", i, click.Kind(), row.Kind)
 		}
 	}
 }
