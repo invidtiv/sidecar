@@ -4,20 +4,22 @@ Two live terminals side by side, created from the same modal that creates shells
 
 **Relationship to [workspace-windowing-system.md](../deprecated/workspace-windowing-system.md):** that document remains the architectural authority for the pane tree, floors, refuse-don't-squeeze, the live/passive leaf distinction, and the compositor — all of which have since shipped for passive panes (`internal/panelayout`, `internal/paneframe`, doc/issue/diff/resource leaves, `PlanOpen`, `sidecar open --split`). What never landed is its live-terminal half (M1/M2: absorbing `terminal_panel.go`, lifting the one-terminal cap). This plan delivers that half, and **supersedes its interaction model**: creation is modal-first with automatic placement, not chord-first. Its `alt+w` chord vocabulary is demoted to a deferred power-user tier, and its "reject auto-tiling" scope row is reversed — auto-placement *is* the primary interface here, with the mitigating difference that placement happens only at creation/close time (one resize per event), never as continuous reshuffling.
 
-**Client plan:** [agent-shell-create-cli.md](agent-shell-create-cli.md) gives agents a `sidecar create shell --split …` path; its split mode is gated on this plan's Phase A Terminal leaf and reuses the same placement vocabulary.
+**Client plan:** [../implemented/agent-shell-create-cli.md](../implemented/agent-shell-create-cli.md) gave agents the `sidecar create shell --split …` path (shipped, including the split mode built on this plan's Phase A Terminal leaf).
+
+**Successor plan:** [pane-layout-control.md](pane-layout-control.md) absorbs and supersedes B1 (fourth-pane grid rule) and B2 (create modal grows pane-kind rows), and extends the shared placement vocabulary with grid cells and a batch `sidecar layout` CLI. B3 and B4 remain owned here.
 
 ## Settled decisions
 
 These came out of design review (mockups: `~/code/tui/mockups/sidecar-splits.tui.yaml`).
 
-1. **Two phases, A then B, nothing thrown away.** Phase A adds a live Terminal leaf kind under today's placement rules. Phase B changes only the *insertion policy* (fourth pane → 2×2 grid) and widens where splits can be created from. The tree, frame, and content seam are shared throughout.
-2. **Creation goes through the existing create modal**, extended with new rows: Shell, Worktree, **Terminal split**, then later File / Git diff / td issue / Note. The modal stays minimal — no filter until the list earns one, list position is remembered, no explainer text.
+1. **Two phases, A then B, nothing thrown away.** Phase A adds a live Terminal leaf kind under today's placement rules. Phase B changes only the *insertion policy* (fourth pane → 2×2 grid; now owned by [pane-layout-control.md](pane-layout-control.md)) and widens where splits can be created from. The tree, frame, and content seam are shared throughout.
+2. **Creation goes through the existing create modal**, extended with new rows: Shell, Worktree, **Terminal split**; the later File / Git diff / td issue / Note rows are now owned by [pane-layout-control.md](pane-layout-control.md)'s pane switcher. The modal stays minimal — no filter until the list earns one, list position is remembered, no explainer text.
 3. **Placement is a segmented button row in the modal: `Auto · Right · Below`**, Auto highlighted as default. Clicking a placement button creates immediately with no further confirmation; Enter uses Auto. `Auto` follows the grid rules; Right/Below map onto the existing `panelayout.ApplyAxisOverride` vocabulary (`--split right|below`), so the modal and the CLI share one placement model.
 4. **Auto placement rules** (phase A keeps steps 1–3, which are `PlanOpen`'s current behavior; phase B adds step 4):
    1. One content pane → splits the primary column vertically (side by side).
    2. Second content pane → the right column splits horizontally (stacked).
    3. Third content pane → stacks on the largest content leaf (today's rule).
-   4. **Phase B:** fourth pane → the primary/left column splits too → 2×2 grid.
+   4. **Phase B** (now owned by [pane-layout-control.md](pane-layout-control.md)): fourth pane → the primary/left column splits too → 2×2 grid.
 5. **Sidebar representation is a badge, not a child row.** The workspace's row gets a compact layout glyph (`◧◨` for a two-way split, `⊞3`/`⊞4` for more). Rows stay 1:1 with workspaces; no `⤷` indent — that cue stays reserved for worktree shells.
 6. **A split terminal is a peer in the workspace, not owned by its neighbor.** It records which shell it was created beside (display label only), but its lifecycle belongs to the workspace: closing the shell next to it does not close it. A pane opened as an accessory often becomes primary; forced cascade-close is arbitrary.
 7. **Interaction tiers, in priority order:** (1) auto layout — creation and close re-flow the grid, nothing to learn; (2) mouse — divider drag-resize already works via `paneframe`; drag-to-rearrange is deferred but must not be precluded (see Constraints); (3) key chords — deferred power-user parity for the mouse operations, never required for anything.
@@ -32,6 +34,8 @@ These came out of design review (mockups: `~/code/tui/mockups/sidecar-splits.tui
 - All pane/split/chrome/hit-region work lands in `paneframe`/`panelayout` once and reaches both the project workspace and the global Sessions browser (AGENTS.md parity rule).
 
 ## Phase A — Terminal leaf kind (steel thread)
+
+> **Status: shipped** (`panelayout.Shell`, duplicable placement, live cap, Terminal-split modal row with placement buttons, clickable-title rename, sidebar badge; landed around commit 62bddf84). Residue: `terminal_panel.go` and `termPanelVisible`/`termPanelFocused` remain as the Shell leaf's lifecycle/keyboard flags reconciled via `syncShellLeaf`, gated on the `workspace_terminal_panel` feature flag — the A1 deletion step is not fully complete.
 
 **Demo:** in a project workspace, open the create modal, arrow to "Terminal split", Enter. A live terminal appears beside the shell per the auto rules. Run a dev server in it while the agent works in the main pane. Drag the divider; both tmux panes resize once, on release. Close the shell it was created beside; the terminal stays. Quit and relaunch; it comes back, session intact. The sidebar row shows `◧◨`.
 
@@ -80,11 +84,11 @@ Non-primary terminal leaves have no sidebar row to select (badge-only grouping),
 
 ### B1 — Fourth-pane grid rule
 
-Change `PlanOpen`'s step-3 fallback: when the right column already holds two content panes, the next open splits the primary/left column (→ 2×2) instead of stacking a third row on the right. This is an insertion-policy change only — no tree, frame, or persistence changes. Existing three-pane layouts restore unchanged.
+**Moved:** owned by [pane-layout-control.md](pane-layout-control.md) (its M1), which specifies the rule unchanged — when the right column already holds two content panes, the next open splits the primary/left column (→ 2×2) — and continues it with fills-emptiest-column and grid caps.
 
 ### B2 — Create modal grows pane-kind rows
 
-Add File / Git diff / td issue (Note when the notes plugin supports it) to the modal's list. Each row reuses the already-shipped passive leaf kinds and the `sidecar open` resolution path — the modal is a new entry point, not a new capability. Add the filter input only if/when the list outgrows one screen.
+**Moved:** owned by [pane-layout-control.md](pane-layout-control.md) (its M2, the pane switcher), which adds the File / Git diff / td issue / resource-provider / Note rows plus a per-kind target step and placement for all pane kinds. Mockup: `~/code/tui/mockups/sidecar-pane-switcher.tui.yaml`.
 
 ### B3 — Terminal splits outside the workspace surfaces
 
@@ -105,6 +109,6 @@ Let Files, Git, td, and Notes host a terminal split beside their content, via th
 ## Acceptance evidence
 
 - Phase A demo transcript + snapshots from an isolated `tmux-drive.sh` run.
-- Placement unit tables: `PlanOpen` with duplicable kinds (A2) and the grid rule (B1), every step asserted.
+- Placement unit tables: `PlanOpen` with duplicable kinds (A2), every step asserted (the grid rule's tables live with pane-layout-control.md).
 - Panel-migration table test (both layouts × both ratio directions).
 - Parity test asserting the sidebar badge and pane composition agree between the two surfaces.
