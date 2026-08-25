@@ -71,7 +71,9 @@ func (m *Model) shellLivenessTracker() *shellliveness.Tracker {
 //     server that is not running as zero panes and no error, which is the exact
 //     shape of a tmux restart and would otherwise suspect every shell at once.
 //     The probe would answer Unknown for all of them, but a guard that only
-//     works because the last line of defence holds is not a guard.
+//     works because the last line of defence holds is not a guard. This skip
+//     stays as a cheap belt even after server incarnation is a first-class
+//     identity; incarnation gating (td-388929) is the real fence.
 //   - A shell in another tmux namespace is invisible to this listing, so its
 //     absence means nothing.
 //   - A shell this browser never saw running is left alone. That is what a

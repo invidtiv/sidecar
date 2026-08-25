@@ -92,42 +92,6 @@ func LoadShellManifest(path string) (*ShellManifest, error) {
 	return m, nil
 }
 
-// Save writes the manifest to disk atomically with file locking.
-func (m *ShellManifest) Save() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.saveLocked()
-}
-
-// saveLocked replaces the whole file with this process's copy. Caller must hold
-// m.mu. Reserved for the startup reconciliation, which has just computed the
-// authoritative list; every single-entry edit goes through mutateLocked so it
-// merges instead of clobbering.
-func (m *ShellManifest) saveLocked() error {
-	// The hard floor for td-8d18de. Every writer funnels through here or
-	// mutateLocked, and the check runs before MkdirAll and before the lock file
-	// is created so an isolated run leaves no .tmp or .lock debris in the real
-	// user's tree either.
-	if err := config.AssertIsolatedPath(m.path); err != nil {
-		return err
-	}
-
-	// Ensure .sidecar directory exists
-	dir := filepath.Dir(m.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	// Acquire exclusive lock
-	lockFile, err := acquireManifestLock(m.path, true)
-	if err != nil {
-		return err
-	}
-	defer releaseManifestLock(lockFile)
-
-	return m.writeLocked()
-}
-
 // mutateLocked applies a single-entry edit against the manifest as it exists on
 // disk *right now*, not against this process's possibly-stale snapshot.
 //
@@ -185,6 +149,7 @@ func (m *ShellManifest) readFromDiskLocked() []ShellDefinition {
 
 // writeLocked marshals and atomically replaces the file. Caller must hold m.mu,
 // the exclusive file lock, and must already have asserted path isolation.
+// Only mutateLocked reaches here; there is no whole-file Save.
 func (m *ShellManifest) writeLocked() error {
 	m.Version = manifestVersion
 

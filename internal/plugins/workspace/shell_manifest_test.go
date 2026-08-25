@@ -139,12 +139,14 @@ func TestShellManifest_RenameShellUsesSharedAtomicOperation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	m := &ShellManifest{Version: manifestVersion, path: path, Shells: []ShellDefinition{
+	m := &ShellManifest{Version: manifestVersion, path: path}
+	for _, def := range []ShellDefinition{
 		{TmuxName: "sidecar-sh-one", DisplayName: "old", Namespace: "/tmp/socket"},
 		{TmuxName: "sidecar-sh-two", DisplayName: "taken", Namespace: "/tmp/socket"},
-	}}
-	if err := m.Save(); err != nil {
-		t.Fatal(err)
+	} {
+		if err := m.AddShell(def); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := m.RenameShell("sidecar-sh-one", "/tmp/socket", "taken"); err == nil {
 		t.Fatal("duplicate rename succeeded")
@@ -502,10 +504,7 @@ func TestSaveRefusesRealUserManifestUnderIsolation(t *testing.T) {
 	m := &ShellManifest{Version: manifestVersion, path: path}
 	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
 
-	if err := m.Save(); err == nil {
-		t.Fatal("Save() = nil, want refusal to write the real user manifest")
-	}
-	// Every other writer funnels through saveLocked, so they must refuse too.
+	// Every writer funnels through mutateLocked, so they must refuse.
 	if err := m.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-2"}); err == nil {
 		t.Error("AddShell() = nil, want refusal")
 	}
@@ -574,9 +573,8 @@ func TestSaveAllowsRealUserManifestWithoutIsolation(t *testing.T) {
 	path := filepath.Join(realDir, "shells.json")
 
 	m := &ShellManifest{Version: manifestVersion, path: path}
-	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
-	if err := m.Save(); err != nil {
-		t.Fatalf("Save() = %v, want nil for an ordinary run", err)
+	if err := m.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}); err != nil {
+		t.Fatalf("AddShell() = %v, want nil for an ordinary run", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("manifest not written: %v", err)

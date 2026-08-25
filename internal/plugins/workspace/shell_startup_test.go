@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 type startupHookCounts struct {
@@ -66,9 +67,9 @@ func startupTestHooks(
 				path:    path,
 			}, nil
 		},
-		discoverSessions: func(string) ([]string, error) {
+		discoverSessions: func(string) ([]string, tmuxserver.Incarnation, error) {
 			counts.discover.Add(1)
-			return []string{definition.TmuxName}, nil
+			return []string{definition.TmuxName}, tmuxserver.Present(1, 2, 3), nil
 		},
 		getPaneID: func(string) string {
 			counts.pane.Add(1)
@@ -246,7 +247,8 @@ func TestReconcileShellStartup_PreservesManifestAndMigrationSemantics(t *testing
 			},
 			{
 				// Same tmux server, and a name this workDir's discovery could
-				// have produced: absence really does mean death (td-8d18de).
+				// have produced. Startup still keeps it as an offline row
+				// (td-e27291): absence at reconcile is not death.
 				TmuxName:    "sidecar-sh-project-9",
 				DisplayName: "Dead shell",
 				Namespace:   testNamespace,
@@ -282,17 +284,20 @@ func TestReconcileShellStartup_PreservesManifestAndMigrationSemantics(t *testing
 		hooks,
 	)
 
-	if len(shells) != 2 {
-		t.Fatalf("reconciled shells = %d, want 2", len(shells))
+	if len(shells) != 3 {
+		t.Fatalf("reconciled shells = %d, want 3 (live, offline, discovered)", len(shells))
 	}
-	if shells[0].TmuxName != "sidecar-sh-project-1" || shells[0].Name != "Migrated name" {
+	if shells[0].TmuxName != "sidecar-sh-project-1" || shells[0].Name != "Migrated name" || shells[0].IsOrphaned {
 		t.Errorf("manifest shell = %#v, want migrated running shell", shells[0])
 	}
-	if shells[1].TmuxName != "sidecar-sh-project-2" || shells[1].Name != "Shell 2" {
-		t.Errorf("discovered shell = %#v, want upgraded Shell 2", shells[1])
+	if shells[1].TmuxName != "sidecar-sh-project-9" || !shells[1].IsOrphaned {
+		t.Errorf("offline shell = %#v, want retained orphaned row", shells[1])
+	}
+	if shells[2].TmuxName != "sidecar-sh-project-2" || shells[2].Name != "Shell 2" {
+		t.Errorf("discovered shell = %#v, want upgraded Shell 2", shells[2])
 	}
 	if managed["sidecar-sh-project-9"] {
-		t.Error("dead manifest shell remained managed")
+		t.Error("offline manifest shell was marked managed")
 	}
 	if !managed["sidecar-sh-project-1"] || !managed["sidecar-sh-project-2"] {
 		t.Errorf("managed sessions = %#v, want both running shells", managed)
@@ -305,11 +310,11 @@ func TestReconcileShellStartup_PreservesManifestAndMigrationSemantics(t *testing
 	if err != nil {
 		t.Fatalf("LoadShellManifest() error = %v", err)
 	}
-	if len(reloaded.Shells) != 2 {
-		t.Fatalf("persisted manifest shells = %d, want 2", len(reloaded.Shells))
+	if len(reloaded.Shells) != 3 {
+		t.Fatalf("persisted manifest shells = %d, want 3", len(reloaded.Shells))
 	}
-	if reloaded.FindShell("sidecar-sh-project-9") != nil {
-		t.Error("dead shell remained in persisted manifest")
+	if reloaded.FindShell("sidecar-sh-project-9") == nil {
+		t.Error("offline shell was dropped from persisted manifest")
 	}
 	if definition := reloaded.FindShell("sidecar-sh-project-1"); definition == nil || definition.DisplayName != "Migrated name" {
 		t.Errorf("persisted migrated definition = %#v", definition)
@@ -386,11 +391,9 @@ func TestReconcileKeepsForeignNamespaceEntries(t *testing.T) {
 	}
 }
 
-// TestReconcileClaimsLegacyEntriesMatchingOurPattern is the migration half of
-// the namespace rule: an entry written before td-8d18de has no namespace, but a
-// name only this working directory's discovery could produce can only have come
-// from this machine's default server, so it stays prunable rather than becoming
-// a permanent offline row.
+// TestReconcileClaimsLegacyEntriesMatchingOurPattern: a pre-namespace entry
+// matching this workDir is shown as an offline row; a sibling-worktree name
+// stays in the file but is not displayed here. Startup does not prune either.
 func TestReconcileClaimsLegacyEntriesMatchingOurPattern(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "shells.json")
 	manifest := &ShellManifest{
@@ -404,11 +407,98 @@ func TestReconcileClaimsLegacyEntriesMatchingOurPattern(t *testing.T) {
 
 	shells, _ := reconcileShellStartup(manifest, nil, false, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
 
-	if len(shells) != 0 {
-		t.Fatalf("reconciled shells = %d, want 0 displayed", len(shells))
+	if len(shells) != 1 || shells[0].TmuxName != "sidecar-sh-project-1" || !shells[0].IsOrphaned {
+		t.Fatalf("reconciled shells = %#v, want the matching entry as an offline row", shells)
 	}
-	if len(manifest.Shells) != 1 || manifest.Shells[0].TmuxName != "sidecar-sh-other-1" {
-		t.Fatalf("manifest shells = %#v, want only the sibling worktree's entry", manifest.Shells)
+	if len(manifest.Shells) != 2 {
+		t.Fatalf("manifest shells = %#v, want both legacy entries kept", manifest.Shells)
+	}
+	if definitionByTmuxName(manifest.Shells, "sidecar-sh-other-1") == nil {
+		t.Fatal("sibling worktree entry was dropped")
+	}
+}
+
+// TestReconcileShellStartup_KeepsDefinitionsWhenServerEvidenceIsUnusable is
+// the 2026-08-22 incident in table form. A tmux server that is down, a server
+// that came back with different sessions, and a discovery error must all leave
+// every existing definition in the manifest. Case (b) is the restarted-server
+// route that used to fail against the prune branch: discovery succeeded, so
+// absence was treated as death.
+func TestReconcileShellStartup_KeepsDefinitionsWhenServerEvidenceIsUnusable(t *testing.T) {
+	original := []ShellDefinition{
+		{
+			TmuxName:    "sidecar-sh-project-1",
+			DisplayName: "Keep me",
+			Namespace:   testNamespace,
+			CreatedAt:   time.Unix(10, 0),
+			AgentType:   "claude",
+			SkipPerms:   true,
+			WorkDir:     "/repo/project",
+		},
+		{
+			TmuxName:    "sidecar-sh-project-2",
+			DisplayName: "Keep me too",
+			Namespace:   testNamespace,
+			CreatedAt:   time.Unix(11, 0),
+			AgentType:   "cursor",
+			SkipPerms:   false,
+			WorkDir:     "/repo/project",
+		},
+	}
+
+	tests := []struct {
+		name            string
+		sessionNames    []string
+		discoveryFailed bool
+	}{
+		{
+			name:            "a_absent_no_server",
+			sessionNames:    nil,
+			discoveryFailed: false,
+		},
+		{
+			name:            "b_restarted_server_different_sessions",
+			sessionNames:    []string{"sidecar-sh-project-99"},
+			discoveryFailed: false,
+		},
+		{
+			name:            "c_discovery_error",
+			sessionNames:    nil,
+			discoveryFailed: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manifestPath := filepath.Join(t.TempDir(), "shells.json")
+			copied := make([]ShellDefinition, len(original))
+			copy(copied, original)
+			manifest := &ShellManifest{
+				Version: manifestVersion,
+				Shells:  copied,
+				path:    manifestPath,
+			}
+
+			_, _ = reconcileShellStartup(
+				manifest,
+				tt.sessionNames,
+				tt.discoveryFailed,
+				"/repo/project",
+				"/repo/project",
+				reconcileTestHooks(testNamespace),
+			)
+
+			for _, want := range original {
+				got := definitionByTmuxName(manifest.Shells, want.TmuxName)
+				if got == nil {
+					t.Errorf("definition %s was dropped from the manifest", want.TmuxName)
+					continue
+				}
+				if *got != want {
+					t.Errorf("definition %s = %#v, want original fields %#v", want.TmuxName, *got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -496,7 +586,7 @@ func TestReconcileKeepsEntriesOutsideDiscoveryPattern(t *testing.T) {
 	}
 }
 
-func TestReconcilePrunesOwnDeadSession(t *testing.T) {
+func TestReconcileRetainsOwnMissingSessionAsOffline(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "shells.json")
 	manifest := &ShellManifest{
 		Version: manifestVersion,
@@ -507,7 +597,7 @@ func TestReconcilePrunesOwnDeadSession(t *testing.T) {
 		path: manifestPath,
 	}
 
-	shells, _ := reconcileShellStartup(
+	shells, managed := reconcileShellStartup(
 		manifest,
 		[]string{"sidecar-sh-project-1"},
 		false,
@@ -516,15 +606,22 @@ func TestReconcilePrunesOwnDeadSession(t *testing.T) {
 		reconcileTestHooks(testNamespace),
 	)
 
-	if len(shells) != 1 || shells[0].TmuxName != "sidecar-sh-project-1" {
-		t.Fatalf("reconciled shells = %v, want only the live session", shells)
+	if len(shells) != 2 {
+		t.Fatalf("reconciled shells = %d, want live + offline", len(shells))
 	}
-	reloaded, err := LoadShellManifest(manifestPath)
-	if err != nil {
-		t.Fatalf("LoadShellManifest() error = %v", err)
+	live := shellByTmuxName(shells, "sidecar-sh-project-1")
+	offline := shellByTmuxName(shells, "sidecar-sh-project-2")
+	if live == nil || live.IsOrphaned {
+		t.Fatalf("live shell = %#v", live)
 	}
-	if reloaded.FindShell("sidecar-sh-project-2") != nil {
-		t.Error("our own dead session was not pruned")
+	if offline == nil || !offline.IsOrphaned {
+		t.Fatalf("missing session = %#v, want retained offline row", offline)
+	}
+	if managed["sidecar-sh-project-2"] {
+		t.Error("offline shell was marked managed")
+	}
+	if definitionByTmuxName(manifest.Shells, "sidecar-sh-project-2") == nil {
+		t.Error("missing session was dropped from the manifest")
 	}
 }
 
