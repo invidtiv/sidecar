@@ -21,6 +21,7 @@ func runOpen(env Env, args []string) int {
 	splitMode := "auto"
 	splitSet := false
 	atCell := ""
+	atSeen := false
 	waitDuration := 1200 * time.Millisecond
 	lineNo := 0
 	shellFlag := ""
@@ -135,8 +136,10 @@ func runOpen(env Env, args []string) int {
 			}
 			i++
 			atCell = args[i]
+			atSeen = true
 		case strings.HasPrefix(arg, "--at="):
 			atCell = strings.TrimPrefix(arg, "--at=")
+			atSeen = true
 		case arg == "--wait":
 			if i+1 >= len(args) {
 				cliErrf(env.Stderr, "--wait requires a duration argument\n\n%s", openHelp)
@@ -176,6 +179,10 @@ func runOpen(env Env, args []string) int {
 	}
 
 	atCell = strings.TrimSpace(atCell)
+	if atSeen && atCell == "" {
+		cliErrf(env.Stderr, "--at requires a grid cell argument (col or col.row); omit the flag to auto-place\n\n%s", openHelp)
+		return 2
+	}
 	if atCell != "" {
 		if splitSet {
 			cliErrf(env.Stderr, "--at and --split are mutually exclusive: --at is a requirement (declines rather than land elsewhere), --split a preference\n\n%s", openHelp)

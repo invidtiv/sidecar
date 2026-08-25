@@ -367,6 +367,10 @@ func (p *Plugin) planShellItem(trial *PaneNode, item layoutItemPlan) (panelayout
 // own tree, advanced by every earlier planned open — so commit can apply it
 // verbatim instead of re-planning. A retarget means the pane already exists:
 // the batch adds a tab rather than a leaf, changing no geometry at all.
+//
+// Explicit cells plan through panelayout.PlanOpenAt directly so its refusal
+// reaches the ack verbatim; only auto placement (which returns no reason)
+// falls back to passivePlanRefusal's best explanation.
 func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPlan, boxes map[int]Box) (panelayout.OpenPlan, string) {
 	cell := item.cell
 	if cell.Col != 0 {
@@ -379,9 +383,13 @@ func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPla
 		if refusal != "" {
 			return panelayout.OpenPlan{}, refusal
 		}
-		cell = translated
+		plan, refusal := panelayout.PlanOpenAt(deckTrial, item.kind, 0, translated)
+		if refusal != "" {
+			return panelayout.OpenPlan{}, refusal
+		}
+		return plan, ""
 	}
-	plan, ok := panelayout.PlanOpenAtOrContent(deckTrial, item.kind, cell, boxes)
+	plan, ok := panelayout.PlanOpenContent(deckTrial, item.kind, 0, boxes)
 	if !ok {
 		return panelayout.OpenPlan{}, passivePlanRefusal(deckTrial, item.kind)
 	}
@@ -394,11 +402,31 @@ func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPla
 // chain entirely — while the primary stays a deck leaf. The translation
 // therefore refuses a row or a column the live terminal owns outright, counts
 // only non-shell rows down to the addressed one, and renumbers the column past
-// every shell-only column to its left.
+// every shell-only column to its left — including one past the screen's last
+// column for an append, which lands right after the last surviving deck
+// column.
 func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, string) {
 	grid := panelayout.GridOf(screen)
-	if grid == nil || cell.Col > grid.ColumnCount() {
+	if grid == nil {
 		return cell, ""
+	}
+	survivorsBefore := func(col int) int {
+		count := 0
+		for i := 0; i < col; i++ {
+			for _, leaf := range grid.Columns[i].Cells {
+				if leaf.Kind != panelayout.Shell {
+					count++
+					break
+				}
+			}
+		}
+		return count
+	}
+	if cell.Col > grid.ColumnCount() {
+		// Appending beyond the screen: the new column follows every column
+		// that survives on the deck side. Screen planning already required
+		// row 1 for a column append, and the appended column starts empty.
+		return panelayout.Cell{Col: survivorsBefore(grid.ColumnCount()) + 1, Row: 1}, ""
 	}
 	column := grid.Columns[cell.Col-1]
 	hasContent := false
@@ -434,16 +462,7 @@ func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, strin
 			}
 		}
 	}
-	deckCol := 1
-	for i := 0; i < cell.Col-1; i++ {
-		for _, leaf := range grid.Columns[i].Cells {
-			if leaf.Kind != panelayout.Shell {
-				deckCol++
-				break
-			}
-		}
-	}
-	return panelayout.Cell{Col: deckCol, Row: deckRow}, ""
+	return panelayout.Cell{Col: survivorsBefore(cell.Col-1) + 1, Row: deckRow}, ""
 }
 
 // passivePlanRefusal explains a failed deck-side plan with the planner's own

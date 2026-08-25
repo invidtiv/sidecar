@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -23,19 +24,21 @@ import (
 // Commit walks the same Decode-shaped path a relaunch does (validate → build
 // → fit-test → commit → load), in two stages so both live-leaf forms land:
 //
-//  1. restorePaneLayout rebuilds the tree from primary + carried shells +
-//     passives — the ordinary PaneLayoutJSON decode that persistence already
-//     round-trips. The deck is dropped alongside it (as resetPaneTreeToTerminal
-//     does) so its next use adopts the new tree instead of reconciling the old.
-//  2. A NEW shell pane (run/type form, at most one — the live cap bounds total
-//     live leaves at two) cannot be decoded: no session exists yet. It grafts
-//     after stage 1 through PlanOpenAt at the cell the spec gave it. That plan
-//     cannot disagree with the fit-tested trial: the committed tree minus new
-//     shells has the trial's exact grid shape, and inserting or appending the
-//     shell back restores it cell for cell.
+//  1. restorePaneLayout rebuilds the tree from the WHOLE spec — new shell
+//     panes decode as ordinary Session-less Shell leaves at their spec
+//     position, because structure needs no session. The committed tree is
+//     therefore the fit-tested trial cell for cell BY CONSTRUCTION; there is
+//     no second shape to disagree with. The deck is dropped alongside (as
+//     resetPaneTreeToTerminal does) so its next use adopts the new tree.
+//  2. Each new shell leaf is ADOPTED: attachWorkspaceTerminalSplit derives
+//     and assigns its session, reuses kept scrollback when the panel had one,
+//     and fires any run/type seed. Nothing moves after restore; adoption only
+//     names what already stands.
 //
-// Every refusal happens before the first mutation, so a declined spec leaves
-// the tree byte-for-byte untouched.
+// Every refusal happens before the first mutation. New-shell items are
+// validated for everything stage 2 needs — origin on screen, terminal-panel
+// feature on, a derivable session name — so adoption cannot decline after
+// the tree has changed.
 
 const layoutSpecOriginRequired = "a new shell pane needs a Sidecar shell to split beside; run from inside one"
 
@@ -67,7 +70,8 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 
 	// Phase 1 — per-pane semantics: target resolution through the same
 	// classification `sidecar open` uses, one passive leaf per kind (the
-	// deck's own rule), and each carried session's existence on screen now.
+	// deck's own rule), each carried session's existence on screen now, and
+	// every precondition of stage-2 shell adoption while nothing has moved.
 	newShells := 0
 	passiveSeen := make(map[panelayout.Kind]int)
 	for i := range items {
@@ -85,6 +89,14 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 				continue
 			}
 			if req.Origin.TmuxSession == "" {
+				note(i, uirequest.ItemVerdictDeclined, layoutSpecOriginRequired)
+				continue
+			}
+			if !terminalPanelEnabled() {
+				note(i, uirequest.ItemVerdictDeclined, features.WorkspaceTerminalPanel.Name+" is off")
+				continue
+			}
+			if p.termPanelSessionName() == "" {
 				note(i, uirequest.ItemVerdictDeclined, layoutSpecOriginRequired)
 				continue
 			}
@@ -140,14 +152,13 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 		}
 	}
 
-	// Phase 3 — build both projections of the spec: the fit-test trial (every
-	// pane, new shells included — what the SCREEN will show) and the
-	// PaneLayoutJSON stage 1 decodes from (new shells excluded — what restore
-	// can build). Cells are recorded per item so stage 2 grafts a new shell
-	// where the spec put it.
-	trial, layout, cells := p.buildSpecTrees(spec, items)
+	// Phase 3 — build THE tree once: trial and stage-1 JSON are two encodings
+	// of the same columns, new shells included (a Session-less shell decodes
+	// fine; only its session is adopted later). Identical shapes by con-
+	// struction are what makes "committed == fit-tested" a property, not a hope.
+	trial, layout := p.buildSpecTrees(spec, items)
 
-	// Phase 4 — fit-test the COMPOSED trial once against the floors (Law 2),
+	// Phase 4 — fit-test the composed tree once against the floors (Law 2),
 	// only reached when nothing else declined.
 	if firstViolation < 0 {
 		failure := ""
@@ -196,35 +207,18 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 	p.contentDeck = nil
 	p.hiddenPaneLayout = nil
 
-	// Commit stage 2 — graft new shells where the spec put them. Unreachable
-	// refusals stay honest: if planning ever disagrees with the trial, the ack
-	// says so instead of claiming a landing.
-	status := uirequest.StatusOpened
-	stageTwoRefusal := ""
+	// Commit stage 2 — adopt each new shell: name its session, reuse kept
+	// scrollback, fire any run/type seed, take the split's title. The leaf
+	// already stands where the spec put it; adoption moves nothing.
 	for i := range items {
 		item := &items[i]
 		if item.kind != panelayout.Shell || item.spec.Session != "" {
 			continue
 		}
-		plan, refusal := panelayout.PlanOpenAt(p.paneRoot, panelayout.Shell, 0, cells[i])
-		if refusal != "" {
-			item.verdict, item.reason = uirequest.ItemVerdictDeclined, refusal
-			status = uirequest.StatusDeclined
-			if stageTwoRefusal == "" {
-				stageTwoRefusal = refusal
-			}
-			continue
-		}
-		verdict, reason, shellCmd := p.commitLayoutShell(item.spec, plan, req.Origin.TmuxSession)
+		verdict, reason, cmd := p.adoptSpecShellLeaf(item)
 		item.verdict, item.reason = verdict, reason
-		if shellCmd != nil {
-			cmds = append(cmds, shellCmd)
-		}
-		if verdict != uirequest.ItemVerdictOpened {
-			status = uirequest.StatusDeclined
-			if stageTwoRefusal == "" && reason != "" {
-				stageTwoRefusal = reason
-			}
+		if cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 	}
 
@@ -232,36 +226,57 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 	// the ordinary selection save, and a relaunch restores it under the
 	// existing rules — no new format anywhere.
 	p.saveSelectionState()
-	p.ackLayout(req, status, stageTwoRefusal, p.layoutAcks(items, surface, true), nil)
+	p.ackLayout(req, uirequest.StatusOpened, "", p.layoutAcks(items, surface, true), nil)
 	return tea.Batch(cmds...)
 }
 
-// buildSpecTrees compiles one validated spec into its two projections:
-// trialPaneTree with EVERY pane for the fit-test and caps, and the saved
-// PaneLayoutJSON stage 1 decodes from, new shells excluded because nothing
-// exists yet for them to attach to (stage 2 grafts those back at their
-// recorded cells). Both walk the same column-major order, so their shapes
-// correspond cell for cell; a column holding only a new shell is simply
-// absent from stage 1, and stage 2's cell lands one past its end.
-func (p *Plugin) buildSpecTrees(spec uirequest.LayoutSpec, items []layoutItemPlan) (*PaneNode, *state.PaneLayoutJSON, map[int]panelayout.Cell) {
+// adoptSpecShellLeaf attaches a workspace tmux session to the Shell leaf stage
+// 1 just decoded, mirroring what ctrl+t does after opening one: focus the
+// panel, title it, seed any run/type command. Phase 1 validated everything
+// this needs (origin, feature flag, derivable session), so the verdicts below
+// are defensive rather than reachable.
+func (p *Plugin) adoptSpecShellLeaf(item *layoutItemPlan) (string, string, tea.Cmd) {
+	if item.spec.Run != "" || item.spec.Type != "" {
+		p.pendingTermPanelSeed = &termPanelSeed{
+			session: p.termPanelSessionName(),
+			run:     item.spec.Run,
+			typeCmd: item.spec.Type,
+		}
+	}
+	cmd := p.attachWorkspaceTerminalSplit()
+	p.shellLeafName = strings.TrimSpace(item.spec.Name)
+	p.termPanelFocused = true
+	p.activePane = PanePreview
+	if p.termPanelSession == "" {
+		reason := p.toastMessage
+		if reason == "" {
+			reason = features.WorkspaceTerminalPanel.Name + " is off"
+		}
+		return uirequest.ItemVerdictDeclined, reason, cmd
+	}
+	return uirequest.ItemVerdictOpened, "", cmd
+}
+
+// buildSpecTrees compiles one validated spec into its two encodings: the
+// PaneNode trial the fit-test runs against and the saved PaneLayoutJSON stage
+// 1 decodes from. Both walk the same column-major order with the SAME leaves —
+// including new shells, which need no session to hold a place in the tree —
+// so the committed tree cannot help but match the fit-tested one.
+func (p *Plugin) buildSpecTrees(spec uirequest.LayoutSpec, items []layoutItemPlan) (*PaneNode, *state.PaneLayoutJSON) {
 	type builtColumn struct {
 		node  *PaneNode
 		saved *state.PaneLayoutJSON
 	}
 	built := make([]builtColumn, 0, len(spec.Columns))
-	cells := make(map[int]panelayout.Cell)
 	index, nextID := 0, 1
-	for c, column := range spec.Columns {
+	for _, column := range spec.Columns {
 		nodes := make([]*PaneNode, 0, len(column.Panes))
-		var saved []*state.PaneLayoutJSON
-		for r := range column.Panes {
+		saved := make([]*state.PaneLayoutJSON, 0, len(column.Panes))
+		for range column.Panes {
 			item := &items[index]
-			cells[index] = panelayout.Cell{Col: c + 1, Row: r + 1}
 			nodes = append(nodes, &PaneNode{ID: nextID, Kind: item.kind})
 			nextID++
-			if !isNewShellItem(item) {
-				saved = append(saved, p.specLeafJSON(item))
-			}
+			saved = append(saved, p.specLeafJSON(item))
 			index++
 		}
 		built = append(built, builtColumn{node: stackRows(nodes), saved: stackSavedRows(saved)})
@@ -270,20 +285,14 @@ func (p *Plugin) buildSpecTrees(spec uirequest.LayoutSpec, items []layoutItemPla
 	columnSaved := make([]*state.PaneLayoutJSON, 0, len(built))
 	for _, b := range built {
 		columnNodes = append(columnNodes, b.node)
-		if b.saved != nil {
-			columnSaved = append(columnSaved, b.saved)
-		}
+		columnSaved = append(columnSaved, b.saved)
 	}
-	return chainColumns(columnNodes), chainColumnsSaved(columnSaved), cells
-}
-
-func isNewShellItem(item *layoutItemPlan) bool {
-	return item.kind == panelayout.Shell && item.spec.Session == ""
+	return chainColumns(columnNodes), chainColumnsSaved(columnSaved)
 }
 
 // specLeafJSON is one spec pane's persisted-shape leaf: what stage 1 decodes.
-// New shell panes never reach here — they have no session to persist, and
-// stage 2 grafts them onto the live tree instead.
+// A new shell persists with no session — an empty selector means nothing to
+// reattach, which is exactly what stage 2's adoption fixes up.
 func (p *Plugin) specLeafJSON(item *layoutItemPlan) *state.PaneLayoutJSON {
 	switch item.kind {
 	case panelayout.Primary:
@@ -371,9 +380,6 @@ func stackRows(nodes []*PaneNode) *PaneNode {
 }
 
 func stackSavedRows(saved []*state.PaneLayoutJSON) *state.PaneLayoutJSON {
-	if len(saved) == 0 {
-		return nil
-	}
 	root := saved[0]
 	for _, next := range saved[1:] {
 		root = &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{Axis: "rows", Ratio: 50, A: root, B: next}}

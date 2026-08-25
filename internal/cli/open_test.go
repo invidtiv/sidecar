@@ -614,6 +614,8 @@ func TestOpenAtFlagValidation(t *testing.T) {
 		{"missing value", []string{"open", "--at"}, "--at requires a grid cell"},
 		{"with split", []string{"open", "--at", "2.1", "--split", "right", "README.md"}, "mutually exclusive"},
 		{"split after at", []string{"open", "README.md", "--at=1.1", "--split=below"}, "mutually exclusive"},
+		{"empty value", []string{"open", "--at", "", "README.md"}, "--at requires a grid cell"},
+		{"empty equals form", []string{"open", "README.md", "--at="}, "--at requires a grid cell"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var out, errOut bytes.Buffer

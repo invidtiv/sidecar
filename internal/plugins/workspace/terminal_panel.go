@@ -107,10 +107,26 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	p.termPanelFocused = true // Focus the terminal sub-pane so the user can Enter to interact
 	p.termPanelScroll = 0     // Reset scroll to show latest output
 	p.activePane = PanePreview
-	sessionName := p.termPanelSessionName()
-	if sessionName == "" {
+	cmd := p.attachWorkspaceTerminalSplit()
+	if p.termPanelSession == "" {
 		p.abandonShellLeaf()
 		p.syncShellLeaf()
+		return nil
+	}
+	return cmd
+}
+
+// attachWorkspaceTerminalSplit points the visible Shell leaf at its tmux
+// session: the durable selector is derived from the selection and assigned,
+// a kept session's scrollback is reused rather than cleared, and any run/type
+// seed queued for this session fires. toggleTermPanel (ctrl+t) and the layout
+// spec's adopt path share it — a leaf that exists but has no session attached
+// is exactly the state both must never persist. Returns nil without touching
+// anything when no session can be derived; callers detect that the same way:
+// termPanelSession stays empty.
+func (p *Plugin) attachWorkspaceTerminalSplit() tea.Cmd {
+	sessionName := p.termPanelSessionName()
+	if sessionName == "" {
 		return nil
 	}
 

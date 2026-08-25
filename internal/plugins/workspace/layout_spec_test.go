@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -436,5 +438,98 @@ func TestLayoutApplySpec_RelaunchRestoresAppliedTree(t *testing.T) {
 	if leaf := panelayout.FirstOfKind(relaunch.paneRoot, panelayout.Document); leaf == nil ||
 		len(relaunch.docs[leaf.ContentID].tabs.Items) != 2 {
 		t.Error("relaunch did not bring back both file tabs")
+	}
+}
+
+// THE blocker-1 repro: a new shell as the SOLE pane of a MIDDLE column. The
+// shell-only column is part of stage 1 like any other, so the committed tree
+// is the spec's shape exactly — the file stays at 3.1 instead of being
+// displaced by an insert into column 2.
+func TestLayoutApplySpec_NewShellOwnsItsMiddleColumn(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+
+	req := specPayload(t, `[
+		{"panes":[{"kind":"primary"}]},
+		{"panes":[{"kind":"shell","run":"echo hi","name":"dev server"}]},
+		{"panes":[{"kind":"file","targets":["README.md"]}]}
+	]`)
+	_ = p.handleUIRequest(req)
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusOpened {
+		t.Fatalf("ack = %s %q", ack.Status, ack.Reason)
+	}
+	wantCells := []string{"1.1", "2.1", "3.1"}
+	for _, item := range ack.Items {
+		if item.Verdict != uirequest.ItemVerdictOpened {
+			t.Errorf("item %d = %s (%s)", item.Index, item.Verdict, item.Reason)
+			continue
+		}
+		if item.Cell != wantCells[item.Index] {
+			t.Errorf("item %d landed at %s, want %s", item.Index, item.Cell, wantCells[item.Index])
+		}
+	}
+
+	kinds := gridKinds(t, p)
+	want := map[string]panelayout.Kind{
+		"1.1": panelayout.Primary,
+		"2.1": panelayout.Shell,
+		"3.1": panelayout.Document,
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("final grid = %+v, want %v", kinds, want)
+	}
+	for cell, kind := range want {
+		if kinds[cell] != kind {
+			t.Errorf("cell %s = %v, want %v", cell, kinds[cell], kind)
+		}
+	}
+	if name := p.shellLeafTitle(); name != "dev server" {
+		t.Errorf("shell title = %q, want the spec's name", name)
+	}
+	if p.termPanelSession == "" || !p.termPanelVisible || p.shellLeaf() == nil {
+		t.Error("the adopted shell has no session; the leaf would not survive a relaunch")
+	}
+}
+
+// THE blocker-2 repro: with the terminal panel off, a new-shell spec declines
+// in validation — before anything mutates — and leaves the tree byte-for-byte
+// intact.
+func TestLayoutApplySpec_TerminalPanelOffDeclinesBeforeMutating(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	features.Init(config.Default())
+	features.SetOverride(features.WorkspaceTerminalPanel.Name, false)
+	t.Cleanup(func() { features.Init(config.Default()) })
+
+	seed := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "issue", Targets: []string{"td-1a2b3c"}},
+	)
+	if cmd := p.handleUIRequest(seed); cmd == nil {
+		t.Fatal("issue seed failed")
+	}
+	before := encodedTree(t, p)
+
+	req := specPayload(t, `[
+		{"panes":[{"kind":"primary"}]},
+		{"panes":[{"kind":"shell","run":"echo hi"}]},
+		{"panes":[{"kind":"issue","targets":["td-1a2b3c"]}]}
+	]`)
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("declined spec emitted a command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined {
+		t.Fatalf("status = %s (%q)", ack.Status, ack.Reason)
+	}
+	if !strings.Contains(ack.Reason, features.WorkspaceTerminalPanel.Name) {
+		t.Fatalf("reason = %q, want the terminal-panel rule", ack.Reason)
+	}
+	if len(ack.Items) != 3 {
+		t.Fatalf("items = %+v", ack.Items)
+	}
+	if ack.Items[1].Verdict != uirequest.ItemVerdictDeclined || !strings.Contains(ack.Items[1].Reason, features.WorkspaceTerminalPanel.Name) {
+		t.Errorf("shell item = %+v, want its own declined verdict naming the flag", ack.Items[1])
+	}
+	if after := encodedTree(t, p); after != before {
+		t.Fatalf("decline mutated the tree:\nbefore %s\nafter  %s", before, after)
 	}
 }

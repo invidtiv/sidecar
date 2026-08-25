@@ -184,3 +184,64 @@ func TestOpenAt_QueuedCellStillPlacesAtTheCellWhenSelected(t *testing.T) {
 		t.Fatalf("grid = %v, want the queued cell honored after selection", kinds)
 	}
 }
+
+// The moderate repro: screen [primary|shell] with the shell owning column 2.
+// An append past it is achievable, and the deck-side cell renumbers past the
+// shell-only column instead of passing through untranslated.
+func TestOpenAt_AppendsPastShellOnlyColumn(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	showTermPanel(t, p, SplitCols, 50)
+	p.View(p.width, p.height)
+	if p.shellLeaf() == nil {
+		t.Fatal("fixture failed to open a shell leaf")
+	}
+
+	req := layoutOpenRequest(t, uirequest.Target{Kind: uirequest.TargetKindDiff, Value: "wt"}, "3.1")
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("append open emitted no command")
+	}
+	ack := readOpenAck(t, req)
+	if ack.Status != uirequest.StatusOpened {
+		t.Fatalf("ack = %s %q", ack.Status, ack.Reason)
+	}
+	kinds := gridKinds(t, p)
+	want := map[string]panelayout.Kind{
+		"1.1": panelayout.Primary,
+		"2.1": panelayout.Shell,
+		"3.1": panelayout.Diff,
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("grid = %+v, want %v", kinds, want)
+	}
+	for cell, kind := range want {
+		if kinds[cell] != kind {
+			t.Errorf("cell %s = %v, want %v", cell, kinds[cell], kind)
+		}
+	}
+}
+
+// When the deck side cannot honor a translated cell, its refusal reaches the
+// ack verbatim — not re-guessed into a row-cap message.
+func TestOpenAt_DeckRefusalSurfacesVerbatim(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	showTermPanel(t, p, SplitCols, 50)
+	p.View(p.width, p.height)
+
+	// A deck tree that escapes the grid vocabulary has no cells at all; the
+	// planner's own "does not resolve to grid columns" answer must survive.
+	escaped := &PaneNode{ID: 1, Split: &PaneSplit{Axis: SplitRows,
+		A: &PaneNode{ID: 2, Kind: PaneTerminal},
+		B: &PaneNode{ID: 3, Split: &PaneSplit{Axis: SplitCols,
+			A: &PaneNode{ID: 4, Kind: PaneIssue},
+			B: &PaneNode{ID: 5, Kind: PaneNote},
+		}},
+	}}
+	item := layoutItemPlan{
+		spec: uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}},
+		kind: panelayout.Document, cell: panelayout.Cell{Col: 3, Row: 1},
+	}
+	_, refusal := p.planPassiveItem(p.paneRoot, escaped, item, nil)
+	if !strings.Contains(refusal, "does not resolve to grid columns") {
+		t.Fatalf("refusal = %q, want the planner's own words", refusal)
+	}
+}

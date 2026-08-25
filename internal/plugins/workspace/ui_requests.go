@@ -512,7 +512,8 @@ func sameCanonicalPath(a, b string) bool {
 // retarget conflicts first (an --at that cannot land exactly where asked
 // declines; it is a requirement, never a preference), the cell then translates
 // onto the deck's own grid, and the plan that was validated is what commit
-// applies verbatim.
+// applies verbatim. The deck planner's refusal, if one ever comes back,
+// surfaces word for word rather than being re-guessed.
 func (p *Plugin) performAtCellOpen(target uirequest.Target, at, root, surface string) (openOutcome, tea.Cmd) {
 	cell, ok := panelayout.ParseCell(at)
 	if !ok {
@@ -530,9 +531,9 @@ func (p *Plugin) performAtCellOpen(target uirequest.Target, at, root, surface st
 	if refusal != "" {
 		return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
 	}
-	plan, planned := panelayout.PlanOpenAtOrContent(p.contentDeck.Tree(), kind, translated, p.lastPaneBoxes())
-	if !planned {
-		return openOutcome{status: uirequest.StatusDeclined, reason: passivePlanRefusal(p.contentDeck.Tree(), kind)}, nil
+	plan, deckRefusal := panelayout.PlanOpenAt(p.contentDeck.Tree(), kind, 0, translated)
+	if deckRefusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: deckRefusal}, nil
 	}
 	return p.performPlannedOpen(target, root, surface, plan)
 }
