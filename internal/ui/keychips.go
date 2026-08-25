@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"fmt"
-
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/styles"
@@ -41,8 +39,12 @@ func RenderKeyChips(chips []KeyChip, maxWidth int, focusID, hoverID string) (str
 		if c.Keys == "" || c.Label == "" || c.ID == "" {
 			continue
 		}
-		part := fmt.Sprintf("%s %s", chipKeyStyle(c.ID, focusID, hoverID).Render(c.Keys),
-			chipLabelStyle(c.ID, focusID, hoverID).Render(c.Label))
+		// The space between key and label belongs to the label's style run, so
+		// a highlighted chip fills as one continuous pill instead of two
+		// blocks with a hole punched between them. At rest the label style has
+		// no fill and this renders identically to a plain separator.
+		part := chipKeyStyle(c.ID, focusID, hoverID).Render(c.Keys) +
+			chipLabelStyle(c.ID, focusID, hoverID).Render(" "+c.Label)
 		w := ansi.StringWidth(part)
 		visible := w
 		if maxWidth > 0 && visible > maxWidth-x {
@@ -81,14 +83,23 @@ func KeyChipsWidth(chips []KeyChip) int {
 	return ansi.StringWidth(line)
 }
 
-// chipKeyStyle keeps the shared KeyHint chip verbatim and swaps only its
-// background for the block buttons' hover/focus colours — same padding, so a
-// highlight never moves the neighbouring chips.
+// chipKeyStyle keeps the shared KeyHint chip's geometry verbatim — same
+// padding, so a highlight never moves the neighbouring chips — and swaps its
+// fill for the block buttons' hover/focus colours.
+//
+// The focused chip must also restate its foreground. KeyHint's own colour is
+// chosen against SurfaceRaised, and in themes where the key glyphs are the
+// accent (Sidecar Modern draws both from the same gold) inheriting it onto a
+// Primary fill paints gold on gold — a chip that reads as a blank block. On a
+// Primary fill the text colour is OnPrimary, exactly as styles.ButtonFocused
+// does it.
 func chipKeyStyle(id, focusID, hoverID string) lipgloss.Style {
 	switch id {
 	case focusID:
-		return styles.KeyHint.Background(styles.Primary).Bold(true)
+		return styles.KeyHint.Foreground(styles.OnPrimaryColor).Background(styles.Primary).Bold(true)
 	case hoverID:
+		// ButtonHover is a subtle raised fill in every theme, so the key keeps
+		// its own colour here and stays recognisably a key.
 		return styles.KeyHint.Background(styles.ButtonHoverColor)
 	default:
 		return styles.KeyHint

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
@@ -72,7 +74,8 @@ func TestRenderKeyChips_HoverAndFocusHighlight(t *testing.T) {
 	if !strings.Contains(hovered, styles.KeyHint.Background(styles.ButtonHoverColor).Render("[enter/u]")) {
 		t.Error("hover highlight must recolour the KeyHint chip with the shared button-hover colour")
 	}
-	if !strings.Contains(focused, styles.KeyHint.Background(styles.Primary).Bold(true).Render("[enter/u]")) {
+	if !strings.Contains(focused, styles.KeyHint.Foreground(styles.OnPrimaryColor).
+		Background(styles.Primary).Bold(true).Render("[enter/u]")) {
 		t.Error("focus highlight must recolour the chip like a focused block button")
 	}
 	// The unhighlighted neighbour keeps the verbatim footer style.
@@ -84,6 +87,58 @@ func TestRenderKeyChips_HoverAndFocusHighlight(t *testing.T) {
 			t.Errorf("%s: highlighting must not move the geometry: %+v", name, r)
 		}
 	}
+}
+
+// A highlighted chip must stay readable in every theme. The regression this
+// guards: the key inherited KeyHint's foreground, which is chosen against
+// SurfaceRaised, onto a Primary fill. Sidecar Modern draws its key glyphs and
+// its accent from the same gold, so the focused chip painted gold on gold and
+// the key vanished — the action line rendered as a blank block with a label
+// beside it.
+func TestRenderKeyChips_HighlightedChipsStayReadableInEveryTheme(t *testing.T) {
+	original := styles.GetCurrentThemeName()
+	t.Cleanup(func() { styles.ApplyTheme(original) })
+
+	// AA for normal text. A key chip is small and bold; below this it is not
+	// a chip the user can read.
+	const minRatio = 4.5
+
+	for _, name := range styles.ListThemes() {
+		t.Run(name, func(t *testing.T) {
+			styles.ApplyTheme(name)
+			p := styles.NormalizePalette(styles.GetTheme(name).Colors)
+
+			cases := []struct {
+				state  string
+				fg, bg string
+			}{
+				{"focused key", hexOf(chipKeyStyle("a", "a", "").GetForeground()), p.Primary},
+				{"focused label", hexOf(chipLabelStyle("a", "a", "").GetForeground()), p.Primary},
+				{"hovered key", hexOf(chipKeyStyle("a", "", "a").GetForeground()), p.ButtonHover},
+				{"hovered label", hexOf(chipLabelStyle("a", "", "a").GetForeground()), p.ButtonHover},
+				{"resting key", hexOf(styles.KeyHint.GetForeground()), p.SurfaceRaised},
+			}
+			for _, c := range cases {
+				if c.fg == "" || c.bg == "" {
+					t.Fatalf("%s: missing colour (fg %q bg %q)", c.state, c.fg, c.bg)
+				}
+				if got := styles.ContrastRatio(c.fg, c.bg); got < minRatio {
+					t.Errorf("%s: %s on %s has contrast %.2f, want >= %.1f",
+						c.state, c.fg, c.bg, got, minRatio)
+				}
+			}
+		})
+	}
+}
+
+// hexOf renders a lipgloss colour back to the "#rrggbb" the contrast helpers
+// take.
+func hexOf(c color.Color) string {
+	if c == nil {
+		return ""
+	}
+	r, g, b, _ := c.RGBA()
+	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
 }
 
 // On an ultra-narrow line the leading chip's glyphs are truncated at the
