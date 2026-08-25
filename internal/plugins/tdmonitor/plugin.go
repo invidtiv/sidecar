@@ -332,7 +332,15 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 	if pending == nil {
 		return initCmd
 	}
-	return tea.Sequence(initCmd, func() tea.Msg { return pending })
+	// Batch, not Sequence. The monitor's Init is a batch whose members include
+	// scheduleTick — a tea.Tick for the whole refresh interval — and Sequence
+	// waits for every member of a batch before moving on, so sequencing the
+	// replay behind it delivers the key a full poll interval late (10s by
+	// default): the new-task modal would open long after the user moved on.
+	// Nothing here needs the ordering. The model is already adopted and can
+	// handle a key; Init's other members are async data fetches, and a key
+	// arriving before RefreshDataMsg is ordinary operation.
+	return tea.Batch(initCmd, func() tea.Msg { return pending })
 }
 
 // captureDBIdentity records the file opened by the current monitor. Failure is
@@ -461,8 +469,13 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// A passive refresh may notice the replacement just before the user
 		// presses a key. Retain that key while the replacement monitor opens,
 		// just as we retain the key that noticed the replacement directly.
+		//
+		// First press wins. The triggering key is the one the user aimed at a
+		// UI that still looked responsive; anything typed afterwards went into
+		// a pane already showing a loading state. Overwriting would silently
+		// drop the very key this exists to preserve.
 		if p.loadingModel {
-			if _, ok := msg.(tea.KeyPressMsg); ok {
+			if _, ok := msg.(tea.KeyPressMsg); ok && p.pendingTDMessage == nil {
 				p.pendingTDMessage = msg
 			}
 			return p, nil
