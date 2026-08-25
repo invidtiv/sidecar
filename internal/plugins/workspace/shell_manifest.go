@@ -22,6 +22,10 @@ import (
 type ShellManifest struct {
 	Version int               `json:"version"`
 	Shells  []ShellDefinition `json:"shells"`
+	// Tombstones holds forgotten definitions so restore can put them back.
+	// An older binary ignores this field and may drop the key on write —
+	// accepted until docs/plans/active/shell-record-durability.md part D.
+	Tombstones []shellstate.Tombstone `json:"tombstones,omitempty"`
 
 	path     string     // not serialized - file path
 	mu       sync.Mutex // protects concurrent access
@@ -144,6 +148,7 @@ func (m *ShellManifest) readFromDiskLocked() []ShellDefinition {
 		slog.Warn("manifest: read-before-write parse failed, using in-memory copy", "err", err)
 		return m.Shells
 	}
+	m.Tombstones = onDisk.Tombstones
 	return onDisk.Shells
 }
 
@@ -174,6 +179,7 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
 				shells[i] = def
@@ -209,6 +215,7 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 			}
 			shells = append(shells, def)
 			present[def.TmuxName] = true
+			m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 			changed = true
 		}
 		return shells, changed
@@ -216,18 +223,39 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 	return changed, err
 }
 
-// RemoveShell removes a shell by tmuxName and saves.
+// RemoveShell moves a shell by tmuxName into tombstones and saves.
 func (m *ShellManifest) RemoveShell(tmuxName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
 		for i, s := range shells {
 			if s.TmuxName == tmuxName {
+				m.Tombstones = appendWorkspaceTombstone(m.Tombstones, s)
 				return append(shells[:i], shells[i+1:]...), true
 			}
 		}
 		return shells, false // Not found, nothing to remove
 	})
+}
+
+func appendWorkspaceTombstone(tombs []shellstate.Tombstone, def ShellDefinition) []shellstate.Tombstone {
+	stone := shellstate.Tombstone{Definition: def, DeletedAt: time.Now().UTC()}
+	for i := range tombs {
+		if tombs[i].TmuxName == def.TmuxName {
+			tombs[i] = stone
+			return tombs
+		}
+	}
+	return append(tombs, stone)
+}
+
+func dropWorkspaceTombstone(tombs []shellstate.Tombstone, tmuxName string) []shellstate.Tombstone {
+	for i := range tombs {
+		if tombs[i].TmuxName == tmuxName {
+			return append(tombs[:i], tombs[i+1:]...)
+		}
+	}
+	return tombs
 }
 
 // FindShell returns a shell definition by tmuxName, or nil if not found.
@@ -247,6 +275,7 @@ func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
 				shells[i] = def

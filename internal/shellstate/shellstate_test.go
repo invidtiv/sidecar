@@ -269,6 +269,9 @@ func TestAddAndRemoveAtPathPreserveSiblingDefinitions(t *testing.T) {
 	if len(m.Shells) != 1 || m.Shells[0].TmuxName != "one" || !m.Shells[0].CreatedAt.Equal(created) {
 		t.Fatalf("manifest after remove = %+v", m.Shells)
 	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].TmuxName != "two" || m.Tombstones[0].AgentType != "codex" || m.Tombstones[0].DeletedAt.IsZero() {
+		t.Fatalf("tombstones after remove = %+v", m.Tombstones)
+	}
 }
 
 // An auto-close decides a shell is dead, then takes a moment to confirm it. A
@@ -310,6 +313,9 @@ func TestRemoveIfUnchangedAtPathRefusesAReplacedEntry(t *testing.T) {
 	if len(m.Shells) != 0 {
 		t.Fatalf("manifest after remove = %+v", m.Shells)
 	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].TmuxName != "one" {
+		t.Fatalf("tombstones after remove = %+v", m.Tombstones)
+	}
 }
 
 // A caller with no incarnation to check gets the unconditional behaviour.
@@ -327,5 +333,97 @@ func TestRemoveIfUnchangedAtPathWithZeroTimeRemovesUnconditionally(t *testing.T)
 	}
 	if len(m.Shells) != 0 {
 		t.Fatalf("manifest after unconditional remove = %+v", m.Shells)
+	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].TmuxName != "one" {
+		t.Fatalf("tombstones after unconditional remove = %+v", m.Tombstones)
+	}
+}
+
+func TestTombstoneMoveAndRestoreAtPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	created := time.Now().UTC().Truncate(time.Second)
+	live := Definition{
+		TmuxName: "sidecar-sh-one", DisplayName: "prior task", Namespace: "/tmp/socket",
+		CreatedAt: created, AgentType: "codex", SkipPerms: true, WorkDir: "/work/one",
+	}
+	sibling := Definition{TmuxName: "sidecar-sh-two", DisplayName: "sibling", Namespace: "/tmp/socket", CreatedAt: created}
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{live, sibling}})
+
+	if err := RemoveAtPath(path, Identity{TmuxName: live.TmuxName, Namespace: live.Namespace}); err != nil {
+		t.Fatal(err)
+	}
+	tombs, err := ListTombstonesAtPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tombs) != 1 || tombs[0].DisplayName != "prior task" || tombs[0].AgentType != "codex" || !tombs[0].SkipPerms || tombs[0].WorkDir != "/work/one" {
+		t.Fatalf("tombstone = %+v", tombs)
+	}
+
+	got, err := RestoreAtPath(path, Identity{TmuxName: live.TmuxName, Namespace: live.Namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisplayName != live.DisplayName || got.AgentType != live.AgentType || got.SkipPerms != live.SkipPerms || got.WorkDir != live.WorkDir || !got.CreatedAt.Equal(created) {
+		t.Fatalf("restored = %+v", got)
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Tombstones) != 0 {
+		t.Fatalf("tombstones after restore = %+v", m.Tombstones)
+	}
+	if len(m.Shells) != 2 {
+		t.Fatalf("shells after restore = %+v", m.Shells)
+	}
+	var found Definition
+	for _, s := range m.Shells {
+		if s.TmuxName == live.TmuxName {
+			found = s
+		}
+	}
+	if found.DisplayName != "prior task" || found.AgentType != "codex" || !found.SkipPerms || found.WorkDir != "/work/one" {
+		t.Fatalf("live after restore = %+v", found)
+	}
+	if m.Shells[0].TmuxName != "sidecar-sh-two" && m.Shells[1].TmuxName != "sidecar-sh-two" {
+		t.Fatalf("sibling lost: %+v", m.Shells)
+	}
+}
+
+func TestRestoreAtPathAlreadyLiveAndUnknown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	writeTestManifest(t, path, manifest{Version: 1, Shells: []Definition{
+		{TmuxName: "sidecar-sh-one", DisplayName: "one", Namespace: "/tmp/socket"},
+	}})
+
+	_, err := RestoreAtPath(path, Identity{TmuxName: "sidecar-sh-one", Namespace: "/tmp/socket"})
+	if !IsAlready(err) {
+		t.Fatalf("live restore error = %v, want KindAlready", err)
+	}
+	_, err = RestoreAtPath(path, Identity{TmuxName: "sidecar-sh-missing", Namespace: "/tmp/socket"})
+	if !IsNotFound(err) {
+		t.Fatalf("unknown restore error = %v, want KindNotFound", err)
+	}
+}
+
+func TestAddAtPathDropsMatchingTombstone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	def := Definition{TmuxName: "one", DisplayName: "One", Namespace: "/tmp/socket", AgentType: "claude"}
+	writeTestManifest(t, path, manifest{Version: 1, Tombstones: []Tombstone{
+		{Definition: def, DeletedAt: time.Now().UTC()},
+	}})
+	if err := AddAtPath(path, def); err != nil {
+		t.Fatal(err)
+	}
+	m, err := readManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Shells) != 1 || m.Shells[0].AgentType != "claude" {
+		t.Fatalf("shells after add = %+v", m.Shells)
+	}
+	if len(m.Tombstones) != 0 {
+		t.Fatalf("tombstone survived add: %+v", m.Tombstones)
 	}
 }

@@ -393,12 +393,81 @@ sidecar setup -project ~/code/myproject
 
 ## `sidecar shell`
 
-Manage the current Sidecar shell context
+Manage Sidecar shell records and the current shell's name
 
-Manage the current Sidecar-managed shell or worktree agent context.
+List, forget, and restore this project's shell records, or read and rename the current Sidecar-managed shell.
 
 ```
 Usage: sidecar shell <command>
+```
+
+### `sidecar shell forget`
+
+Forget a shell record by tmux name
+
+Forget a Sidecar-managed shell record in the current project. The definition
+moves to a tombstone so `sidecar shell restore` can put it back; the tmux
+session is not started or killed.
+
+A name that is already forgotten is already in that state (exit 0). A name
+that is in neither the live list nor the tombstones is not found (exit 1).
+
+```
+Usage: sidecar shell forget [--json] <tmux-name>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: forgotten, or already forgotten
+- `1`: not found, or state failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar shell forget sidecar-sh-sidecar-1
+sidecar shell forget --json sidecar-sh-sidecar-1
+```
+
+### `sidecar shell list`
+
+List this project's shell records
+
+List Sidecar-managed shell records for the current project. Live records
+are always shown. JSON also includes forgotten records so an agent can restore
+one by tmux name.
+
+This reads shells.json directly; it does not start or inspect tmux sessions.
+
+```
+Usage: sidecar shell list [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: state failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar shell list
+sidecar shell list --json
 ```
 
 ### `sidecar shell name`
@@ -465,6 +534,41 @@ Usage: sidecar shell rename [--json] <display-name>
 
 ```bash
 sidecar shell rename "shell rename implementation"
+```
+
+### `sidecar shell restore`
+
+Restore a forgotten shell record by tmux name
+
+Restore a forgotten Sidecar-managed shell record in the current project.
+Display name, agent type, skip-perms, and working directory come back with it.
+The tmux session is not started.
+
+A name that is still live is already in that state (exit 0). A name that is in
+neither the live list nor the tombstones is not found (exit 1).
+
+```
+Usage: sidecar shell restore [--json] <tmux-name>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: restored, or already live
+- `1`: not found, or state failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar shell restore sidecar-sh-sidecar-1
+sidecar shell restore --json sidecar-sh-sidecar-1
 ```
 
 ## `sidecar terminal-links`

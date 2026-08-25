@@ -94,6 +94,16 @@ func TestShellManifest_AddRemove(t *testing.T) {
 	if m.Shells[0].TmuxName != "shell-2" {
 		t.Errorf("wrong shell remaining: %q", m.Shells[0].TmuxName)
 	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].TmuxName != "shell-1" || m.Tombstones[0].DeletedAt.IsZero() {
+		t.Fatalf("tombstones after remove = %+v", m.Tombstones)
+	}
+	reloaded, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	if len(reloaded.Tombstones) != 1 || reloaded.Tombstones[0].TmuxName != "shell-1" || reloaded.Tombstones[0].DisplayName != "Shell 1" {
+		t.Fatalf("reloaded tombstones = %+v", reloaded.Tombstones)
+	}
 }
 
 func TestShellManifest_FindShell(t *testing.T) {

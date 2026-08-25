@@ -97,12 +97,107 @@ func RootCommand() *Command {
 		Run: runShellRename,
 	}
 
+	listCmd := &Command{
+		Name:    "list",
+		Summary: "List this project's shell records",
+		Usage:   "sidecar shell list [--json]",
+		Long: "List Sidecar-managed shell records for the current project. Live records\n" +
+			"are always shown. JSON also includes forgotten records so an agent can restore\n" +
+			"one by tmux name.\n\n" +
+			"This reads shells.json directly; it does not start or inspect tmux sessions.",
+		Flags: []Flag{
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "success"},
+			{Code: 1, Summary: "state failure"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar shell list"},
+			{Command: "sidecar shell list --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell list --json",
+			Summary:    "See this project's live and forgotten shell records",
+		},
+		Run: runShellList,
+	}
+
+	forgetCmd := &Command{
+		Name:    "forget",
+		Summary: "Forget a shell record by tmux name",
+		Usage:   "sidecar shell forget [--json] <tmux-name>",
+		Long: "Forget a Sidecar-managed shell record in the current project. The definition\n" +
+			"moves to a tombstone so `sidecar shell restore` can put it back; the tmux\n" +
+			"session is not started or killed.\n\n" +
+			"A name that is already forgotten is already in that state (exit 0). A name\n" +
+			"that is in neither the live list nor the tombstones is not found (exit 1).",
+		Flags: []Flag{
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "The tmux session name recorded in shells.json"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "forgotten, or already forgotten"},
+			{Code: 1, Summary: "not found, or state failure"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar shell forget sidecar-sh-sidecar-1"},
+			{Command: "sidecar shell forget --json sidecar-sh-sidecar-1"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell forget <tmux-name>",
+			Summary:    "Drop a shell record from this project without killing tmux",
+		},
+		Run: runShellForget,
+	}
+
+	restoreCmd := &Command{
+		Name:    "restore",
+		Summary: "Restore a forgotten shell record by tmux name",
+		Usage:   "sidecar shell restore [--json] <tmux-name>",
+		Long: "Restore a forgotten Sidecar-managed shell record in the current project.\n" +
+			"Display name, agent type, skip-perms, and working directory come back with it.\n" +
+			"The tmux session is not started.\n\n" +
+			"A name that is still live is already in that state (exit 0). A name that is in\n" +
+			"neither the live list nor the tombstones is not found (exit 1).",
+		Flags: []Flag{
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 1, Max: 1, Description: "The tmux session name recorded in shells.json"},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "restored, or already live"},
+			{Code: 1, Summary: "not found, or state failure"},
+			{Code: 2, Summary: "usage error"},
+		},
+		Examples: []Example{
+			{Command: "sidecar shell restore sidecar-sh-sidecar-1"},
+			{Command: "sidecar shell restore --json sidecar-sh-sidecar-1"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell restore <tmux-name>",
+			Summary:    "Put a forgotten shell record back so it can be recreated",
+		},
+		Run: runShellRestore,
+	}
+
 	shellCmd := &Command{
 		Name:    "shell",
-		Summary: "Manage the current Sidecar shell context",
+		Summary: "Manage Sidecar shell records and the current shell's name",
 		Usage:   "sidecar shell <command>",
-		Long:    "Manage the current Sidecar-managed shell or worktree agent context.",
-		Sub:     []*Command{nameCmd, renameCmd},
+		Long:    "List, forget, and restore this project's shell records, or read and rename the current Sidecar-managed shell.",
+		Sub:     []*Command{forgetCmd, listCmd, nameCmd, renameCmd, restoreCmd},
 		Run:     runShellRoot,
 	}
 
