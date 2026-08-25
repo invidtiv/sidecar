@@ -14,6 +14,45 @@ const BREW_COMMAND = 'brew install marcus/tap/sidecar';
 const CURL_COMMAND =
   'curl -fsSL https://raw.githubusercontent.com/marcus/sidecar/main/scripts/setup.sh | bash';
 
+function QuickStartNote() {
+  return (
+    <div className={styles.quickNoteWrapper}>
+      <svg
+        className={styles.noteArrow}
+        viewBox="0 0 60 34"
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-hidden="true">
+        <path
+          d="M 4 8 C 22 2, 42 6, 52 24"
+          stroke="var(--sc-accent)"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeDasharray="3 3.5"
+        />
+        <path
+          d="M 42 23 L 52 24 L 51 14"
+          stroke="var(--sc-accent)"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <div className={styles.quickNote}>
+        <div className={styles.noteTape} aria-hidden="true" />
+        <div className={styles.noteHeader}>almost zero setup —</div>
+        <div className={styles.noteBody}>
+          Just <code className={styles.noteCode}>cd</code> into your project &amp; type{' '}
+          <code className={styles.noteCode}>sidecar</code>
+        </div>
+        <div className={styles.noteFooter}>
+          no configs or daemons — it auto-detects your repo, agents &amp; tasks.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------ atoms */
 
 function CopyCommand({command, prompt = '$'}) {
@@ -368,10 +407,15 @@ export default function Home() {
                 in a single terminal. Monitor live agent sessions, inspect git diffs,
                 track durable tasks, take notes, and manage your day without losing your place.
               </p>
-              <CopyCommand command={BREW_COMMAND} />
-              <div className={styles.installAlt}>
-                <span>Linux and everything else:</span>
-                <Link to="/docs/intro">curl · binary · from source →</Link>
+              <div className={styles.heroActions}>
+                <div className={styles.installCol}>
+                  <CopyCommand command={BREW_COMMAND} />
+                  <div className={styles.installAlt}>
+                    <span>Linux and everything else:</span>
+                    <Link to="/docs/intro">curl · binary · from source →</Link>
+                  </div>
+                </div>
+                <QuickStartNote />
               </div>
             </div>
           </section>

@@ -89,7 +89,7 @@ const config = {
 
   stylesheets: [
     {
-      href: 'https://fonts.googleapis.com/css2?family=Archivo:wght@400..800&family=JetBrains+Mono:wght@300..600&display=swap',
+      href: 'https://fonts.googleapis.com/css2?family=Archivo:wght@400..800&family=JetBrains+Mono:wght@300..600&family=Caveat:wght@400..700&family=Kalam:wght@300;400;700&family=Architects+Daughter&display=swap',
       type: 'text/css',
     },
   ],

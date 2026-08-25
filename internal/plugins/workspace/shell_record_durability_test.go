@@ -354,9 +354,7 @@ func TestShellRecordsSurviveIsolatedTmuxServerDeath(t *testing.T) {
 	}
 
 	restarted := "unrelated-after-restart"
-	if out, err := tmuxAt("new-session", "-d", "-s", restarted).CombinedOutput(); err != nil {
-		t.Fatalf("tmux -S %s new-session -d -s %s: %v (%s)", socket, restarted, err, out)
-	}
+	startReplacementServer(t, tmuxAt, socket, restarted)
 	t.Cleanup(func() { _ = tmuxAt("kill-server").Run() })
 
 	_, secondInc, discErr := discoverTmuxSessionNamesForWorkDir(workDir)
@@ -470,4 +468,50 @@ func TestShellRecordsSurviveIsolatedTmuxServerDeath(t *testing.T) {
 	if err := tmuxAt("has-session", "-t", original[0].TmuxName).Run(); err != nil {
 		t.Fatalf("recreated session %s is not running: %v", original[0].TmuxName, err)
 	}
+}
+
+// startReplacementServer brings a new tmux server up on a socket a kill-server
+// just tore down.
+//
+// kill-server returns once the server has been told to exit, not once it has
+// exited: the process still has to drop its clients and unlink the socket.
+// A new-session issued inside that window binds the path the dying server is
+// still holding and fails with "server exited unexpectedly". macOS lost that
+// race rarely enough to look green locally; the Linux CI runner lost it on the
+// first run and turned main red.
+//
+// Waiting for the socket to stop answering is what makes the restart
+// deterministic. The retry is kept as well because "gone" and "the path is
+// free to bind" are not the same instant on every platform, and this test's
+// subject is what Sidecar does across a restart, not how fast tmux tears one
+// down.
+func startReplacementServer(t *testing.T, tmuxAt func(...string) *exec.Cmd, socket, session string) {
+	t.Helper()
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		_, err := tmuxAt("list-sessions").Output()
+		if err != nil && tmuxReportedNoServer(err) {
+			break
+		}
+		if _, statErr := os.Stat(socket); os.IsNotExist(statErr) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("tmux server on %s still answering 15s after kill-server", socket)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var lastErr error
+	var lastOut []byte
+	for time.Now().Before(deadline) {
+		out, err := tmuxAt("new-session", "-d", "-s", session).CombinedOutput()
+		if err == nil {
+			return
+		}
+		lastErr, lastOut = err, out
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("tmux -S %s new-session -d -s %s: %v (%s)", socket, session, lastErr, lastOut)
 }
