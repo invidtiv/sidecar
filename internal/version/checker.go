@@ -63,6 +63,7 @@ func checkProduct(ctx context.Context, env *Environment, d Descriptor, currentVe
 		if cached, err := LoadCacheFile(d.CacheFile); err == nil && IsCacheValid(cached, current) {
 			target.LatestVersion = cached.LatestVersion
 			target.HasUpdate = cached.HasUpdate
+			target.Notes = cached.Notes
 			target.Install = DetectInstallation(ctx, env, d, cached.LatestVersion)
 			msg.Target = target
 			return msg
@@ -82,10 +83,12 @@ func checkProduct(ctx context.Context, env *Environment, d Descriptor, currentVe
 		CurrentVersion: current,
 		CheckedAt:      time.Now(),
 		HasUpdate:      result.HasUpdate,
+		Notes:          result.ReleaseNotes,
 	})
 
 	target.LatestVersion = result.LatestVersion
 	target.HasUpdate = result.HasUpdate
+	target.Notes = result.ReleaseNotes
 	target.Install = DetectInstallation(ctx, env, d, result.LatestVersion)
 
 	msg.Target = target
