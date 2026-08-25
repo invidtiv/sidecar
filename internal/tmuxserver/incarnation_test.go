@@ -67,6 +67,62 @@ func TestPresentIsComparable(t *testing.T) {
 	}
 }
 
+func TestIncarnationEqualTreatsUnspecifiedPIDAsSameServer(t *testing.T) {
+	sock := Present(1, 2, 0)
+	withPID := Present(1, 2, 99)
+	otherPID := Present(1, 2, 100)
+
+	if !sock.Equal(withPID) {
+		t.Fatal("Present(1,2,0).Equal(Present(1,2,99)) = false, want true (pid 0 is unspecified)")
+	}
+	if !withPID.Equal(sock) {
+		t.Fatal("Equal must be symmetric for unspecified pid")
+	}
+	if withPID.Equal(otherPID) {
+		t.Fatal("Present(1,2,99).Equal(Present(1,2,100)) = true, want false (both pids known, different servers)")
+	}
+	if sock == withPID {
+		t.Fatal("== is field-wise and must stay so; Equal is the same-server predicate")
+	}
+
+	if sock.Equal(Absent()) {
+		t.Fatal("Present.Equal(Absent) = true, want false")
+	}
+	if Unknown().Equal(Absent()) {
+		t.Fatal("Unknown.Equal(Absent) = true, want false")
+	}
+	if Absent().Equal(withPID) {
+		t.Fatal("Absent.Equal(Present) = true, want false")
+	}
+	if !Unknown().Equal(Unknown()) {
+		t.Fatal("Unknown must Equal itself")
+	}
+	if !Absent().Equal(Absent()) {
+		t.Fatal("Absent must Equal itself")
+	}
+
+	if !Combine(sock, 99).Equal(sock) {
+		t.Fatal("Combine(socket, pid) must Equal the socket-stat observation of the same server")
+	}
+	if !Combine(sock, 99).Equal(withPID) {
+		t.Fatal("Combine(socket, 99) must Equal Present(inode, ctime, 99)")
+	}
+
+	pidOnly := Present(0, 0, 99)
+	if !pidOnly.Equal(Present(0, 0, 99)) {
+		t.Fatal("pid-only Present must Equal itself")
+	}
+	if pidOnly.Equal(Present(0, 0, 100)) {
+		t.Fatal("different pid-only Presents must not Equal")
+	}
+	if !pidOnly.Equal(withPID) {
+		t.Fatal("pid-only 99 must Equal socket+pid 99 (same server, one source missing the socket)")
+	}
+	if pidOnly.Equal(sock) {
+		t.Fatal("pid-only 99 must not Equal socket-stat with unspecified pid (no shared specified field)")
+	}
+}
+
 func TestFromFileInfoUsesInodeAndCtime(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "socket")
@@ -132,8 +188,12 @@ func TestSocketStatsTmuxenvPath(t *testing.T) {
 
 func TestCombine(t *testing.T) {
 	sock := Present(1, 2, 0)
-	if got := Combine(sock, 99); got != Present(1, 2, 99) {
+	got := Combine(sock, 99)
+	if got != Present(1, 2, 99) {
 		t.Fatalf("Combine(present, pid) = %v", got)
+	}
+	if !got.Equal(sock) {
+		t.Fatalf("Combine(socket, pid).Equal(socket) = false, want true")
 	}
 	if got := Combine(Unknown(), 99); got != Present(0, 0, 99) {
 		t.Fatalf("Combine(unknown, pid) = %v", got)

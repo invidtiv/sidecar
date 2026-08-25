@@ -26,7 +26,10 @@ import (
 //     about any shell.
 //   - Unknown: we could not ask. The zero value is Unknown.
 //
-// Any transition between distinct values invalidates prior liveness evidence.
+// Equal is the same-server predicate. == is field-wise and is the wrong
+// question: Socket()/FromFileInfo leave pid 0 ("not observed yet"), while
+// discovery Combine fills #{pid}, and those two observations are one server.
+// Any transition that Equal reports as false invalidates prior liveness.
 // If a tmux version reuses the socket inode, the stat source degrades to
 // Unknown rather than claiming the same incarnation: inode without ctime is
 // not a safe identity.
@@ -77,6 +80,41 @@ func (i Incarnation) IsAbsent() bool { return i.kind == kindAbsent }
 
 // IsPresent reports a concrete server identity.
 func (i Incarnation) IsPresent() bool { return i.kind == kindPresent }
+
+// Equal reports whether a and b identify the same server.
+//
+// pid 0 means "not observed yet". When inode+ctime match, a missing pid on
+// either side does not distinguish two servers. When both pids are set and
+// differ, the same socket file is bound to a different process — that is a
+// new incarnation. Pid-only Present values (inode 0) compare on pid alone.
+func (a Incarnation) Equal(b Incarnation) bool {
+	if a.kind != b.kind {
+		return false
+	}
+	if a.kind != kindPresent {
+		return true
+	}
+	aSock, bSock := a.hasSocket(), b.hasSocket()
+	switch {
+	case aSock && bSock:
+		if a.inode != b.inode || a.ctime != b.ctime {
+			return false
+		}
+		if a.pid != 0 && b.pid != 0 {
+			return a.pid == b.pid
+		}
+		return true
+	case !aSock && !bSock:
+		return a.pid == b.pid
+	default:
+		if a.pid != 0 && b.pid != 0 {
+			return a.pid == b.pid
+		}
+		return false
+	}
+}
+
+func (i Incarnation) hasSocket() bool { return i.inode != 0 && i.ctime != 0 }
 
 func (i Incarnation) String() string {
 	switch i.kind {

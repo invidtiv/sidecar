@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -419,11 +420,11 @@ func TestReconcileClaimsLegacyEntriesMatchingOurPattern(t *testing.T) {
 }
 
 // TestReconcileShellStartup_KeepsDefinitionsWhenServerEvidenceIsUnusable is
-// the 2026-08-22 incident in table form. A tmux server that is down, a server
-// that came back with different sessions, and a discovery error must all leave
-// every existing definition in the manifest. Case (b) is the restarted-server
-// route that used to fail against the prune branch: discovery succeeded, so
-// absence was treated as death.
+// the 2026-08-22 incident in table form, through loadShellStartup and the
+// discoverSessions hook. A tmux server that is down (Absent), a server that
+// came back with different sessions (a different Present), and a discovery
+// error must all leave every existing definition on disk. Case (b) is the
+// restarted-server route that used to fail against the prune branch.
 func TestReconcileShellStartup_KeepsDefinitionsWhenServerEvidenceIsUnusable(t *testing.T) {
 	original := []ShellDefinition{
 		{
@@ -445,61 +446,110 @@ func TestReconcileShellStartup_KeepsDefinitionsWhenServerEvidenceIsUnusable(t *t
 			WorkDir:     "/repo/project",
 		},
 	}
+	prior := tmuxserver.Present(1, 2, 3)
+	restarted := tmuxserver.Present(9, 10, 11)
+	if prior.Equal(restarted) {
+		t.Fatal("fixture incarnations must differ")
+	}
 
 	tests := []struct {
-		name            string
-		sessionNames    []string
-		discoveryFailed bool
+		name      string
+		discover  func(string) ([]string, tmuxserver.Incarnation, error)
+		wantAdded string
+		wantErr   bool
 	}{
 		{
-			name:            "a_absent_no_server",
-			sessionNames:    nil,
-			discoveryFailed: false,
+			name: "a_absent_no_server",
+			discover: func(string) ([]string, tmuxserver.Incarnation, error) {
+				return nil, tmuxserver.Absent(), nil
+			},
 		},
 		{
-			name:            "b_restarted_server_different_sessions",
-			sessionNames:    []string{"sidecar-sh-project-99"},
-			discoveryFailed: false,
+			name: "b_restarted_server_different_sessions",
+			discover: func(string) ([]string, tmuxserver.Incarnation, error) {
+				return []string{"sidecar-sh-project-99"}, restarted, nil
+			},
+			wantAdded: "sidecar-sh-project-99",
 		},
 		{
-			name:            "c_discovery_error",
-			sessionNames:    nil,
-			discoveryFailed: true,
+			name: "c_discovery_error",
+			discover: func(string) ([]string, tmuxserver.Incarnation, error) {
+				return nil, tmuxserver.Unknown(), errors.New("tmux list-sessions: broken pipe")
+			},
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			manifestPath := filepath.Join(t.TempDir(), "shells.json")
-			copied := make([]ShellDefinition, len(original))
-			copy(copied, original)
-			manifest := &ShellManifest{
-				Version: manifestVersion,
-				Shells:  copied,
-				path:    manifestPath,
+			projectDir := t.TempDir()
+			manifestPath := filepath.Join(projectDir, "shells.json")
+			seed := &ShellManifest{Version: manifestVersion, path: manifestPath}
+			for _, def := range original {
+				if err := seed.AddShell(def); err != nil {
+					t.Fatalf("AddShell(%s) = %v", def.TmuxName, err)
+				}
 			}
 
-			_, _ = reconcileShellStartup(
-				manifest,
-				tt.sessionNames,
-				tt.discoveryFailed,
-				"/repo/project",
-				"/repo/project",
-				reconcileTestHooks(testNamespace),
-			)
+			hooks := shellStartupHooks{
+				resolveProjectDir: func(string) (string, error) { return projectDir, nil },
+				loadManifest:      LoadShellManifest,
+				discoverSessions:  tt.discover,
+				getPaneID:         func(name string) string { return "%" + name },
+				newWatcher: func(string) (shellManifestWatcher, error) {
+					return newStartupTestWatcher(), nil
+				},
+				getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
+				setWorkspaceState: func(string, state.WorkspaceState) error { return nil },
+				now:               func() time.Time { return time.Unix(30, 0) },
+				namespace:         func() string { return testNamespace },
+			}
+			p := newShellStartupTestPlugin(t, 1, hooks)
 
+			result, ok := p.loadShellStartup()().(shellStartupResultMsg)
+			if !ok {
+				t.Fatal("startup command did not return shellStartupResultMsg")
+			}
+			if result.err != nil {
+				t.Fatalf("startup err = %v, want nil", result.err)
+			}
+			if tt.wantErr {
+				if result.discoveryErr == nil {
+					t.Fatal("discoveryErr = nil, want the injected error")
+				}
+			} else if result.discoveryErr != nil {
+				t.Fatalf("discoveryErr = %v, want nil", result.discoveryErr)
+			}
+
+			reloaded, err := LoadShellManifest(manifestPath)
+			if err != nil {
+				t.Fatalf("LoadShellManifest() error = %v", err)
+			}
 			for _, want := range original {
-				got := definitionByTmuxName(manifest.Shells, want.TmuxName)
+				got := reloaded.FindShell(want.TmuxName)
 				if got == nil {
-					t.Errorf("definition %s was dropped from the manifest", want.TmuxName)
+					t.Errorf("definition %s was dropped from shells.json", want.TmuxName)
 					continue
 				}
-				if *got != want {
+				if !definitionFieldsEqual(*got, want) {
 					t.Errorf("definition %s = %#v, want original fields %#v", want.TmuxName, *got, want)
 				}
 			}
+			if tt.wantAdded != "" && reloaded.FindShell(tt.wantAdded) == nil {
+				t.Errorf("discovered session %s was not recorded", tt.wantAdded)
+			}
 		})
 	}
+}
+
+func definitionFieldsEqual(got, want ShellDefinition) bool {
+	return got.TmuxName == want.TmuxName &&
+		got.DisplayName == want.DisplayName &&
+		got.Namespace == want.Namespace &&
+		got.CreatedAt.Equal(want.CreatedAt) &&
+		got.AgentType == want.AgentType &&
+		got.SkipPerms == want.SkipPerms &&
+		got.WorkDir == want.WorkDir
 }
 
 // TestReconcileNeverPrunesWhenDiscoveryFails is the "absence is not proof of
