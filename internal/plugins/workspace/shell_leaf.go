@@ -275,13 +275,13 @@ func (p *Plugin) openShellLeaf() bool {
 		p.abandonShellLeaf()
 		return false
 	}
-	trial, _ := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, &PaneNode{Kind: PaneShell})
+	trial, _ := ApplyPanePlan(clonePaneTree(p.paneRoot), plan, &PaneNode{Kind: PaneShell})
 	if _, _, fits := LayoutPanes(trial, peer, paneTreeFloors()); !fits {
 		p.abandonShellLeaf()
 		return false
 	}
 	node := &PaneNode{Kind: PaneShell}
-	root, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
+	root, focus := ApplyPanePlan(p.paneRoot, plan, node)
 	if focus != node.ID {
 		p.abandonShellLeaf()
 		return false

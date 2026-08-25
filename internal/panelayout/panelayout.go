@@ -179,11 +179,16 @@ func paneMinimum(node *Node, floors Floors) Floor {
 }
 
 // OpenPlan is the shared click-placement answer. Retarget names an existing
-// leaf of the requested kind; otherwise Split names the leaf to divide.
+// leaf of the requested kind; otherwise Split names the node to divide — a
+// leaf for an ordinary split, or a column's subtree (even the root) when the
+// grid rule appends to a stack or starts a column. NewFirst puts newLeaf above
+// the divided subtree instead of below it, which is how an insert at an
+// occupied cell pushes the occupant down.
 type OpenPlan struct {
 	Retarget int
 	Split    int
 	Axis     Axis
+	NewFirst bool
 }
 
 // ApplyAxisOverride rewrites a split plan's axis from the CLI --split flag.
@@ -268,11 +273,14 @@ func FirstOfContent(node *Node, kind Kind, contentID int) *Node {
 	return FirstOfContent(node.Split.B, kind, contentID)
 }
 
-// PlanOpen keeps the primary content in a full-height left column: the first content
-// opens beside it, a different content kind stacks in the right column, a later
-// content kind stacks on the largest content leaf, and a repeated kind
-// retargets its existing leaf. boxes may be nil; ties and missing geometry
-// follow the first content leaf in the tree.
+// PlanOpen keeps the primary content in a full-height left column: the first
+// content opens beside it, a different content kind stacks in the right
+// column, and once two content panes are on screen the grid rule takes over —
+// the emptiest column takes the next pane (so the fourth pane forms a 2×2
+// rather than a third stacked row), full columns give way to a new column,
+// and the caps refuse. boxes may be nil; they only break ties for trees that
+// escape the grid vocabulary, where the legacy largest-content-leaf rule
+// still answers.
 func PlanOpen(root *Node, kind Kind, boxes map[int]Box) (OpenPlan, bool) {
 	return PlanOpenContent(root, kind, 0, boxes)
 }
@@ -304,9 +312,39 @@ func PlanOpenContent(root *Node, kind Kind, contentID int, boxes map[int]Box) (O
 	case len(contents) == 1:
 		return OpenPlan{Split: contents[0].ID, Axis: Rows}, true
 	default:
-		if leaf := largestContentLeaf(contents, boxes); leaf != nil {
-			return OpenPlan{Split: leaf.ID, Axis: Rows}, true
+		grid := GridOf(root)
+		if grid == nil {
+			// A tree that escapes the grid vocabulary has no columns to fill;
+			// the legacy largest-leaf answer still gives it a placement.
+			if leaf := largestContentLeaf(contents, boxes); leaf != nil {
+				return OpenPlan{Split: leaf.ID, Axis: Rows}, true
+			}
+			return OpenPlan{}, false
 		}
+		return planFillEmptiestColumn(grid)
+	}
+	return OpenPlan{}, false
+}
+
+// planFillEmptiestColumn is the auto rule once two content panes are on
+// screen. The emptiest column takes the next pane — which is what makes the
+// fourth pane form a 2×2 beside the primary terminal instead of stacking a
+// third row (the right column is then the fuller one) — and ties go to the
+// leftmost column so the answer stays deterministic. When every column is
+// full, a new column opens while the vocabulary allows one; past the caps the
+// caller reports the refusal rather than squeezing.
+func planFillEmptiestColumn(grid *Grid) (OpenPlan, bool) {
+	best := 0
+	for i := range grid.Columns {
+		if len(grid.Columns[i].Cells) < len(grid.Columns[best].Cells) {
+			best = i
+		}
+	}
+	if !grid.RowsAtCap(best + 1) {
+		return OpenPlan{Split: grid.Columns[best].Node.ID, Axis: Rows}, true
+	}
+	if !grid.ColumnsAtCap() {
+		return OpenPlan{Split: grid.Root().ID, Axis: Columns}, true
 	}
 	return OpenPlan{}, false
 }
@@ -359,26 +397,43 @@ func largestContentLeaf(contents []*Node, boxes map[int]Box) *Node {
 	return best
 }
 
-func SplitLeaf(root *Node, leafID int, axis Axis, newLeaf *Node) (*Node, int) {
+// SplitLeaf divides the node targetID names — a leaf for the ordinary split,
+// or an internal node (a column's subtree, the root) when a placement appends
+// to a stack or starts a column. The divided subtree becomes the split's first
+// child and newLeaf its second; the tree is spliced in place and the new
+// leaf's ID is returned as the focus. Anything invalid — an unknown target, a
+// malformed or overlapping candidate, colliding IDs — leaves the tree
+// untouched and returns the target unchanged.
+func SplitLeaf(root *Node, targetID int, axis Axis, newLeaf *Node) (*Node, int) {
+	return splitNode(root, targetID, axis, newLeaf, false)
+}
+
+// ApplyPlan grafts newLeaf where plan says: retargets are the caller's to
+// honor, so this is SplitLeaf with the plan's own axis and ordering.
+func ApplyPlan(root *Node, plan OpenPlan, newLeaf *Node) (*Node, int) {
+	return splitNode(root, plan.Split, plan.Axis, newLeaf, plan.NewFirst)
+}
+
+func splitNode(root *Node, targetID int, axis Axis, newLeaf *Node, newFirst bool) (*Node, int) {
 	rootNodes, rootIDs, valid := inspect(root)
-	leaf := rootIDs[leafID]
-	if !valid || leaf == nil || leaf.Split != nil || newLeaf == nil || (axis != Columns && axis != Rows) {
-		return root, leafID
+	target := rootIDs[targetID]
+	if !valid || target == nil || newLeaf == nil || (axis != Columns && axis != Rows) {
+		return root, targetID
 	}
 	candidateNodes, candidateIDs, valid := inspect(newLeaf)
 	if !valid || overlaps(rootNodes, candidateNodes) {
-		return root, leafID
+		return root, targetID
 	}
 	if newLeaf.Split != nil {
 		for node := range candidateNodes {
 			if node.ID <= 0 {
-				return root, leafID
+				return root, targetID
 			}
 		}
 	}
 	for id := range candidateIDs {
 		if rootIDs[id] != nil && newLeaf.Split != nil {
-			return root, leafID
+			return root, targetID
 		}
 	}
 	nextID := max(MaxID(root), MaxID(newLeaf)) + 1
@@ -388,8 +443,12 @@ func SplitLeaf(root *Node, leafID int, axis Axis, newLeaf *Node) (*Node, int) {
 	} else if newLeaf.ID >= nextID {
 		nextID = newLeaf.ID + 1
 	}
-	existing := *leaf
-	*leaf = Node{ID: nextID, Split: &Split{Axis: axis, Ratio: 50, A: &existing, B: newLeaf}}
+	existing := *target
+	first, second := &existing, newLeaf
+	if newFirst {
+		first, second = newLeaf, &existing
+	}
+	*target = Node{ID: nextID, Split: &Split{Axis: axis, Ratio: 50, A: first, B: second}}
 	return root, firstLeaf(newLeaf).ID
 }
 

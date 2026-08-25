@@ -947,7 +947,10 @@ func TestUIRequests_OpenRequestEqualsHashClick(t *testing.T) {
 	}
 }
 
-func TestUIRequests_SplitBelowAfterFileAndIssueKeepsTerminalHeight(t *testing.T) {
+// The third open targets the emptiest (primary) column now, so --split below
+// stacks the diff under the terminal — the axis override is honored against
+// the grid rule's chosen node, and the right column keeps its stack.
+func TestUIRequests_SplitBelowAfterFileAndIssueStacksUnderTheTerminal(t *testing.T) {
 	stateHome := t.TempDir()
 	t.Setenv("XDG_STATE_HOME", stateHome)
 	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
@@ -961,8 +964,6 @@ func TestUIRequests_SplitBelowAfterFileAndIssueKeepsTerminalHeight(t *testing.T)
 	if cmd := clickTerminalLink(t, p, "td-1a2b3c"); cmd == nil {
 		t.Fatal("issue click opened nothing")
 	}
-	before, content := paneLeafBoxes(t, p)
-	termH := before[PaneTerminal].H
 
 	req := uirequest.Request{
 		ID: "req-split", Action: uirequest.ActionOpen,
@@ -974,11 +975,19 @@ func TestUIRequests_SplitBelowAfterFileAndIssueKeepsTerminalHeight(t *testing.T)
 	if cmd := p.handleUIRequest(req); cmd == nil {
 		t.Fatal("--split below opened nothing")
 	}
-	boxes, _ := paneLeafBoxes(t, p)
-	if boxes[PaneTerminal].H != termH || boxes[PaneTerminal].H != content.H {
-		t.Fatalf("terminal H changed: before %d after %#v content %#v", termH, boxes[PaneTerminal], content)
+	boxes, content := paneLeafBoxes(t, p)
+	if boxes[PaneDiff].X != boxes[PaneTerminal].X ||
+		boxes[PaneDiff].Y != boxes[PaneTerminal].Y+boxes[PaneTerminal].H+1 {
+		t.Fatalf("diff box %#v did not land below the terminal %#v", boxes[PaneDiff], boxes[PaneTerminal])
 	}
-	if p.paneRoot.Split == nil || p.paneRoot.Split.A.Kind != PaneTerminal {
+	if boxes[PaneDoc].X != boxes[PaneIssue].X || boxes[PaneDoc].W != boxes[PaneIssue].W {
+		t.Fatalf("--split below disturbed the right column: doc %#v issue %#v", boxes[PaneDoc], boxes[PaneIssue])
+	}
+	if boxes[PaneTerminal].H+boxes[PaneDiff].H+1 != content.H {
+		t.Fatalf("left column spans %d+%d+1, want the full height %d",
+			boxes[PaneTerminal].H, boxes[PaneDiff].H, content.H)
+	}
+	if p.paneRoot.Split == nil || p.paneRoot.Split.A.Kind != PaneTerminal || p.paneRoot.Split.A.Split == nil {
 		t.Fatalf("--split below retargeted onto the terminal: %#v", p.paneRoot)
 	}
 }

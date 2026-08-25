@@ -353,7 +353,7 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 
 	newLeaf := &panelayout.Node{Kind: kind}
 	trial := panelayout.Clone(d.root)
-	trial, leafID := panelayout.SplitLeaf(trial, plan.Split, plan.Axis, newLeaf)
+	trial, leafID := panelayout.ApplyPlan(trial, plan, newLeaf)
 	if leafID <= 0 {
 		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
 	}
@@ -367,7 +367,7 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 	} else {
 		p = &pane{kind: kind}
 	}
-	d.root, leafID = panelayout.SplitLeaf(d.root, plan.Split, plan.Axis, &panelayout.Node{Kind: kind})
+	d.root, leafID = panelayout.ApplyPlan(d.root, plan, &panelayout.Node{Kind: kind})
 	if leafID <= 0 {
 		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
 	}

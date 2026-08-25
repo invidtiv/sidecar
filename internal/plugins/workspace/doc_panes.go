@@ -764,7 +764,7 @@ func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) 
 		return false
 	}
 	trialNode := clonePaneTree(node)
-	trial, trialFocus := SplitLeaf(clonePaneTree(p.paneRoot), plan.Split, plan.Axis, trialNode)
+	trial, trialFocus := ApplyPanePlan(clonePaneTree(p.paneRoot), plan, trialNode)
 	if trialFocus != trialNode.ID {
 		return false
 	}
@@ -773,7 +773,7 @@ func (p *Plugin) splitOnPlannedLeaf(plan paneOpen, node *PaneNode, name string) 
 		p.toastTime = time.Now()
 		return false
 	}
-	treeRoot, focus := SplitLeaf(p.paneRoot, plan.Split, plan.Axis, node)
+	treeRoot, focus := ApplyPanePlan(p.paneRoot, plan, node)
 	if focus != node.ID {
 		return false
 	}

@@ -522,7 +522,7 @@ func TestDeckDiffDirectOpenRebindRejectsOldAndZeroBindingBroadcasts(t *testing.T
 	}
 }
 
-func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
+func TestDeckThirdPaneFollowsTheGridAndFitRefusalIsNonMutating(t *testing.T) {
 	ctx := testContext(t.TempDir())
 	d := New(ctx, Config{})
 	place := testPlacement()
@@ -532,9 +532,11 @@ func TestDeckLargestLeafChoiceAndFitRefusalAreNonMutating(t *testing.T) {
 		doc.LeafID:   {W: 40, H: 10},
 		issue.LeafID: {W: 80, H: 30},
 	}
+	// With the right column holding two content panes, the grid rule splits
+	// the primary column — the boxes no longer choose.
 	plan, ok := d.PlanOpen(diffRef("wt"), place.Boxes)
-	if !ok || plan.Split != issue.LeafID || plan.Axis != panelayout.Rows {
-		t.Fatalf("PlanOpen diff = %#v ok=%v", plan, ok)
+	if !ok || plan.Split != 1 || plan.Axis != panelayout.Rows {
+		t.Fatalf("PlanOpen diff = %#v ok=%v, want a split of the primary leaf", plan, ok)
 	}
 
 	before := d.Encode()
