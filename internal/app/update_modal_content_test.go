@@ -90,8 +90,8 @@ func TestUpdateChangelog_ExpandFetchRetryMachine(t *testing.T) {
 	if !strings.Contains(out, "couldn't load the full changelog") {
 		t.Errorf("failure should render as styled copy, not raw body text:\n%s", out)
 	}
-	if !strings.Contains(out, "[ retry ]") {
-		t.Errorf("failure should offer Retry:\n%s", out)
+	if !strings.Contains(out, "retry notes") {
+		t.Errorf("failure should offer Retry on the action line:\n%s", out)
 	}
 
 	if _, retry := m.applyUpdateAction("retry-changelog", nil); retry == nil {

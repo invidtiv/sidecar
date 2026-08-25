@@ -26,11 +26,12 @@ func updateModalWidthFor(screenW int) int {
 	return min(modal.ContentBoxWidth(screenW), modal.MaxModalWidth)
 }
 
-// updateNotesToggleID and updateChangelogRetryID are the notes section's
-// focusable affordances.
+// The notes section's two affordances are actions on the modal's one bottom
+// line, not controls embedded in the body: every button in the update journey
+// lives in the chip line.
 const (
-	updateNotesToggleID    = "update-notes-toggle"
-	updateChangelogRetryID = "update-changelog-retry"
+	actionToggleNotes    = "toggle-notes"
+	actionRetryChangelog = "retry-changelog"
 )
 
 // notesCollapsedRows is the notes window before expansion.
@@ -173,7 +174,7 @@ func (m *Model) ensureUpdateModal() {
 	}, nil)))
 
 	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), m.updateNotesSection()))
-	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), m.updateNotesToggleSection()))
+	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), m.updateChangelogStatusSection()))
 
 	mdl.AddSection(modal.When(inPhase(UpdateModalProgress), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
 		return modal.RenderedSection{Content: updateProgressContent(u, cw)}
@@ -250,39 +251,84 @@ func updateVariant(p UpdateModalState) modal.Variant {
 	}
 }
 
-// updateChips is every phase's one inline action line: key chips in exactly
-// the footer hint style. Preview confirms with enter or u and dismisses with
-// esc — offered regardless of provenance, because Enter starts the batch
-// either way and a silent primary is a lie (the engine's pre-flight guards
-// stay the source of truth at Apply time); Installing keeps the honest
-// no-cancel line; Complete/Error pair their primary with Close.
+// updateChips is every phase's one inline action line, and the only place a
+// button lives in this journey: key chips in exactly the footer/palette hint
+// style — the key on its own chip, unbracketed, then a Title-case label.
+// Preview confirms with enter or u and dismisses with esc — offered
+// regardless of provenance, because Enter starts the batch either way and a
+// silent primary is a lie (the engine's pre-flight guards stay the source of
+// truth at Apply time) — and carries the changelog affordances beside them;
+// Installing keeps the honest no-cancel line; Complete/Error pair their
+// primary with Close.
 func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
 	switch u.phase {
 	case UpdateModalProgress:
-		return []ui.KeyChip{{Keys: "[esc]", Label: "hide", ID: "cancel"}},
+		return []ui.KeyChip{{Keys: "esc", Label: "Hide", ID: "cancel"}},
 			" · update continues"
 	case UpdateModalComplete:
 		if u.restartRequired {
 			return []ui.KeyChip{
-				{Keys: "[enter]", Label: "Quit & Restart", ID: "quit"},
-				{Keys: "[esc]", Label: "Close", ID: "cancel"},
+				{Keys: "enter", Label: "Quit & Restart", ID: "quit"},
+				{Keys: "esc", Label: "Close", ID: "cancel"},
 			}, ""
 		}
-		return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
+		return []ui.KeyChip{{Keys: "esc", Label: "Close", ID: "cancel"}}, ""
 	case UpdateModalError:
 		if u.retryCount == 0 {
-			return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
+			return []ui.KeyChip{{Keys: "esc", Label: "Close", ID: "cancel"}}, ""
 		}
 		return []ui.KeyChip{
-			{Keys: "[enter]", Label: "Retry", ID: "retry"},
-			{Keys: "[esc]", Label: "Close", ID: "cancel"},
+			{Keys: "enter/r", Label: "Retry", ID: "retry"},
+			{Keys: "esc", Label: "Close", ID: "cancel"},
 		}, ""
 	default:
-		return []ui.KeyChip{
-			{Keys: "[enter/u]", Label: "Update", ID: "update"},
-			{Keys: "[esc]", Label: "Close", ID: "cancel"},
-		}, ""
+		chips := []ui.KeyChip{{Keys: "enter/u", Label: "Update", ID: "update"}}
+		if u.notesExpandable() {
+			label := "Changelog"
+			if u.notesExpanded {
+				label = "Collapse"
+			}
+			chips = append(chips, ui.KeyChip{Keys: "c", Label: label, ID: actionToggleNotes})
+		}
+		if u.notesExpanded && u.changelogState == changelogFailed {
+			chips = append(chips, ui.KeyChip{Keys: "r", Label: "Retry notes", ID: actionRetryChangelog})
+		}
+		return append(chips, ui.KeyChip{Keys: "esc", Label: "Close", ID: "cancel"}), ""
 	}
+}
+
+// notesExpandable reports whether the full-changelog affordance has anything
+// to offer: notes that overflow the collapsed teaser, or an expansion already
+// open and waiting to be collapsed. It reads only render-refreshed geometry,
+// and the chip line renders after the notes section in the same frame.
+func (u *updateUIState) notesExpandable() bool {
+	return u != nil && u.notesPresent && (u.notesExpanded || u.notesTotal > notesCollapsedRows)
+}
+
+// updateChipOptional marks the chips that may give way on a narrow terminal.
+var updateChipOptional = map[string]bool{actionToggleNotes: true, actionRetryChangelog: true}
+
+// fitUpdateChips keeps the action line one line. When the full set will not
+// fit, the changelog affordances give way from the right — the phase's
+// primary and its way out are never what gets dropped. The renderer truncates
+// whatever still overflows, and a chip clipped off the line is a chip the
+// pointer cannot reach, so the choice of what to lose is made here rather
+// than left to the column edge.
+func fitUpdateChips(chips []ui.KeyChip, width int) []ui.KeyChip {
+	for width > 0 && ui.KeyChipsWidth(chips) > width {
+		dropped := false
+		for i := len(chips) - 1; i >= 0; i-- {
+			if updateChipOptional[chips[i].ID] {
+				chips = append(chips[:i:i], chips[i+1:]...)
+				dropped = true
+				break
+			}
+		}
+		if !dropped {
+			return chips
+		}
+	}
+	return chips
 }
 
 // renderUpdateChips paints the action line, registering each chip as a real
@@ -290,6 +336,7 @@ func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
 func (m *Model) renderUpdateChips(contentW int, focusID, hoverID string) modal.RenderedSection {
 	u := m.updateUIState()
 	chips, suffix := updateChips(u)
+	chips = fitUpdateChips(chips, contentW-lipgloss.Width(suffix))
 	line, regions := ui.RenderKeyChips(chips, contentW, focusID, hoverID)
 	if line == "" {
 		return modal.RenderedSection{}
@@ -554,7 +601,7 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 	case "cancel", "close":
 		m.closeUpdateModal()
 		return m, nil
-	case "toggle-notes", updateNotesToggleID:
+	case actionToggleNotes:
 		var fetch tea.Cmd
 		if u := m.updateUIState(); u != nil {
 			u.notesExpanded = !u.notesExpanded
@@ -564,7 +611,7 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 			}
 		}
 		return m, fetch
-	case "retry-changelog", updateChangelogRetryID:
+	case actionRetryChangelog:
 		if u := m.updateUIState(); u != nil && u.hasNotesTarget() {
 			return m, m.fetchChangelogCmd()
 		}
@@ -590,9 +637,17 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if u != nil && u.phase == UpdateModalPreview {
 			return m.applyUpdateAction("update", nil)
 		}
+	case "c":
+		if u != nil && u.phase == UpdateModalPreview && u.notesExpandable() {
+			return m.applyUpdateAction(actionToggleNotes, nil)
+		}
 	case "r":
-		if u != nil && u.phase == UpdateModalError && u.retryCount > 0 {
+		switch {
+		case u == nil:
+		case u.phase == UpdateModalError && u.retryCount > 0:
 			return m.applyUpdateAction("retry", nil)
+		case u.phase == UpdateModalPreview && u.notesExpanded && u.changelogState == changelogFailed:
+			return m.applyUpdateAction(actionRetryChangelog, nil)
 		}
 	case "up", "k":
 		m.updatePreviewScroll(-3)
@@ -644,7 +699,7 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 func (m *Model) updateNotesSection() modal.Section {
 	return modal.ScrollingCustom(
 		m.renderUpdateNotes,
-		m.updateNotesSectionUpdate,
+		nil,
 		func(regionID string) bool {
 			return regionID == modal.RegionScrollbarThumb || regionID == modal.RegionScrollbarTrack
 		},
@@ -708,59 +763,26 @@ func (m *Model) renderUpdateNotes(contentW int, focusID, hoverID string) modal.R
 	}
 }
 
-// updateNotesToggleSection hosts the "View full changelog" element below the
-// notes window — outside the modal's scrollable body, so the affordance can
-// never scroll out of reach.
-func (m *Model) updateNotesToggleSection() modal.Section {
-	return modal.Custom(func(contentW int, focusID, hoverID string) modal.RenderedSection {
+// updateChangelogStatusSection reports what the expansion fetch is doing,
+// directly under the notes window. It is status text only — the affordances
+// that act on it (Changelog / Collapse / Retry notes) are chips on the
+// modal's one bottom action line, where every other button in this journey
+// also lives.
+func (m *Model) updateChangelogStatusSection() modal.Section {
+	return modal.Custom(func(contentW int, _, _ string) modal.RenderedSection {
 		u := m.updateUIState()
-		if u == nil || !u.notesPresent || (u.notesTotal <= notesCollapsedRows && !u.notesExpanded) {
+		if u == nil || !u.notesExpanded || !u.hasNotesTarget() {
 			return modal.RenderedSection{}
 		}
-		label := "[ View full changelog ]"
-		if u.notesExpanded {
-			label = "[ Collapse changelog ]"
+		switch u.changelogState {
+		case changelogLoading:
+			return modal.RenderedSection{Content: styles.Muted.Render("Loading full changelog…")}
+		case changelogFailed:
+			return modal.RenderedSection{Content: lipgloss.NewStyle().Foreground(styles.Error).
+				Render("Couldn't load the full changelog: " + updateChangelogErrText(u.changelogErr))}
 		}
-		style := styles.Muted
-		switch {
-		case focusID == updateNotesToggleID:
-			style = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true)
-		case hoverID == updateNotesToggleID:
-			style = lipgloss.NewStyle().Foreground(styles.Primary)
-		}
-		rendered := style.Render(label)
-		focusables := []modal.FocusableInfo{{
-			ID:     updateNotesToggleID,
-			Width:  lipgloss.Width(rendered),
-			Height: 1,
-		}}
-		content := rendered
-
-		if u.notesExpanded && u.hasNotesTarget() {
-			switch u.changelogState {
-			case changelogLoading:
-				content += "\n" + styles.Muted.Render("Loading full changelog…")
-			case changelogFailed:
-				errLine := lipgloss.NewStyle().Foreground(styles.Error).
-					Render("Couldn't load the full changelog: " + updateChangelogErrText(u.changelogErr))
-				retry := styles.Muted.Render("[ Retry ]")
-				if focusID == updateChangelogRetryID {
-					retry = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("[ Retry ]")
-				} else if hoverID == updateChangelogRetryID {
-					retry = lipgloss.NewStyle().Foreground(styles.Primary).Render("[ Retry ]")
-				}
-				content += "\n" + errLine + "\n" + retry
-				focusables = append(focusables, modal.FocusableInfo{
-					ID:      updateChangelogRetryID,
-					OffsetY: 2,
-					Width:   lipgloss.Width(retry),
-					Height:  1,
-				})
-			}
-		}
-
-		return modal.RenderedSection{Content: content, Focusables: focusables}
-	}, m.updateNotesSectionUpdate)
+		return modal.RenderedSection{}
+	}, nil)
 }
 
 // updateChangelogErrText words a fetch failure for the styled error line.
@@ -783,18 +805,6 @@ func updateNotesHeader(meta string, width int) string {
 	}
 	rule := styles.Muted.Render(strings.Repeat("─", ruleW))
 	return label + " " + rule + " " + metaText
-}
-
-func (m *Model) updateNotesSectionUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
-	key, ok := msg.(tea.KeyPressMsg)
-	if !ok || focusID != updateNotesToggleID {
-		return "", nil
-	}
-	switch key.String() {
-	case "enter", " ", "space":
-		return "toggle-notes", nil
-	}
-	return "", nil
 }
 
 // markdownLines renders markdown to wrapped lines, trailing blanks trimmed so

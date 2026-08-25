@@ -159,7 +159,7 @@ func (m *Model) buildAbout(b *paneBuilder) {
 			chipSpec{id: regionAboutRecheck, key: "r", label: "Check again", run: func(m *Model) tea.Cmd {
 				return func() tea.Msg { return CheckUpdatesMsg{} }
 			}},
-			chipSpec{id: regionAboutClose, key: "", keys: "[esc]", label: "Close", run: func(m *Model) tea.Cmd {
+			chipSpec{id: regionAboutClose, key: "", keys: "esc", label: "Close", run: func(m *Model) tea.Cmd {
 				return func() tea.Msg { return CloseConfigMsg{} }
 			}},
 		)

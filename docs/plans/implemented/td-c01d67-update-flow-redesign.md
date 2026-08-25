@@ -9,7 +9,12 @@ progress box are gone. M2 added two-column rows, library-derived width, a dragga
 in-place changelog expansion, disabled install buttons, and the Diagnostics Update button.
 M3 switched notes to the release body persisted in the version cache and carried per product,
 with a tag-pinned disk-cached expansion fetch and styled retry-on-failure. Review cycles caught
-and fixed a post-ack updater lockout and two value-copy state bugs. Deferred: notification-centre
+and fixed a post-ack updater lockout and two value-copy state bugs. A pre-PR review (td-d054cd)
+folded the last two body-embedded controls — the changelog toggle and its retry — into the one
+action line (which also fixed bare Enter expanding the changelog instead of confirming), dropped
+the bracketed key spelling for the app's unbracketed `KeyHint` chip, made the line drop optional
+chips rather than truncate Close out of reach, and fixed `ChangelogURL` stripping the `v` from
+the release tag (every expansion 404'd against the real raw host). Deferred: notification-centre
 dot deep-link to the updater (td-e0512b); retry double-fetch nit. Proof transcripts under
 /tmp/update-proof-td-a4f33b/ (runs 14–21 + before-after pair).
 

@@ -42,12 +42,17 @@ var changelogTagSanitizer = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 // ChangelogURL builds the raw URL for one release's changelog file. The
 // raw host can be overridden with SIDECAR_RELEASE_RAW_BASE so proofs run
 // against local fixtures instead of GitHub.
+//
+// The tag goes into the path verbatim: it is a git ref, and every product
+// here tags releases as "v1.2.3" (LatestVersion is the release's tag_name,
+// unmodified). Normalising the "v" away asks the raw host for a ref that
+// does not exist and 404s every fetch.
 func ChangelogURL(owner, repo, tag string) string {
 	base := os.Getenv(changelogRawBaseEnv)
 	if base == "" {
 		base = defaultRawBase
 	}
-	tag = strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	tag = strings.TrimSpace(tag)
 	return fmt.Sprintf("%s/%s/%s/%s/CHANGELOG.md", strings.TrimSuffix(base, "/"), owner, repo, tag)
 }
 

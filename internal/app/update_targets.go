@@ -75,7 +75,6 @@ func (m *Model) setProductStatus(msg version.ProductStatusMsg) {
 		m.products = append(m.products, msg.Target)
 	}
 	m.sortProducts()
-
 }
 
 func (m *Model) sortProducts() {

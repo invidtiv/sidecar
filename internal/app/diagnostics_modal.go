@@ -275,11 +275,11 @@ func (m *Model) diagnosticsPrimaryAction() string {
 }
 
 // diagnosticsChips is the one inline action line in the footer hint style:
-// [enter/u] Update when an update is actually available, [esc] Close always.
+// "enter/u Update" when an update is actually available, "esc Close" always.
 func (m *Model) diagnosticsChips() []ui.KeyChip {
-	chips := []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "close"}}
+	chips := []ui.KeyChip{{Keys: "esc", Label: "Close", ID: "close"}}
 	if m.hasUpdatesAvailable() {
-		chips = append([]ui.KeyChip{{Keys: "[enter/u]", Label: "Update", ID: "update"}}, chips...)
+		chips = append([]ui.KeyChip{{Keys: "enter/u", Label: "Update", ID: "update"}}, chips...)
 	}
 	return chips
 }

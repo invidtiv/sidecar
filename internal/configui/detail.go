@@ -342,7 +342,7 @@ func (b *paneBuilder) buttons(specs ...buttonSpec) {
 type chipSpec struct {
 	id    string
 	key   string // registered as the control's shortcut; "" for none
-	keys  string // rendered inside the chip; defaults to [key]
+	keys  string // rendered inside the chip; defaults to the shortcut itself
 	label string
 	run   func(*Model) tea.Cmd
 }
@@ -350,18 +350,22 @@ type chipSpec struct {
 // keyChips paints a row of actions as ONE inline line of key chips + labels,
 // through the shared ui.RenderKeyChips renderer — the same footer hint style
 // the app frame uses. Each chip is a real control: declared with its shortcut
-// and run, and given its own hit region from the renderer's geometry.
+// and run, given its own hit region from the renderer's geometry, and lit by
+// the renderer when it is the row cursor's stop or under the pointer.
 func (b *paneBuilder) keyChips(specs ...chipSpec) {
 	chips := make([]ui.KeyChip, 0, len(specs))
+	focusID := ""
 	for _, spec := range specs {
-		b.declare(spec.id, spec.key, true, spec.run)
+		if state := b.declare(spec.id, spec.key, true, spec.run); state.Focused {
+			focusID = spec.id
+		}
 		rendered := spec.keys
 		if rendered == "" {
-			rendered = "[" + spec.key + "]"
+			rendered = spec.key
 		}
 		chips = append(chips, ui.KeyChip{Keys: rendered, Label: spec.label, ID: spec.id})
 	}
-	line, regions := ui.RenderKeyChips(chips, b.inner-RowIndent, "", b.m.hoverID)
+	line, regions := ui.RenderKeyChips(chips, b.inner-RowIndent, focusID, b.m.hoverID)
 	y := len(b.lines)
 	b.lines = append(b.lines, line)
 	x := b.originX + RowIndent

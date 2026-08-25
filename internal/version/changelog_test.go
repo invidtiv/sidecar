@@ -75,14 +75,21 @@ func TestCacheEntry_NotesRoundTrip(t *testing.T) {
 	}
 }
 
+// The tag is a git ref, so it goes into the raw path exactly as the release
+// published it — releases here are tagged "v1.2.3", and asking for "1.2.3"
+// is a ref that does not exist.
 func TestChangelogURL_IsTagPinnedAndOverridable(t *testing.T) {
 	t.Setenv(changelogRawBaseEnv, "")
-	if got := ChangelogURL("marcus", "sidecar", "v9.9.9"); got != defaultRawBase+"/marcus/sidecar/9.9.9/CHANGELOG.md" {
+	if got := ChangelogURL("marcus", "sidecar", "v9.9.9"); got != defaultRawBase+"/marcus/sidecar/v9.9.9/CHANGELOG.md" {
 		t.Errorf("default URL = %q", got)
 	}
 	t.Setenv(changelogRawBaseEnv, "http://127.0.0.1:8765/raw")
-	if got := ChangelogURL("marcus", "td", "v1.1.0"); got != "http://127.0.0.1:8765/raw/marcus/td/1.1.0/CHANGELOG.md" {
+	if got := ChangelogURL("marcus", "td", "v1.1.0"); got != "http://127.0.0.1:8765/raw/marcus/td/v1.1.0/CHANGELOG.md" {
 		t.Errorf("override URL = %q", got)
+	}
+	// An unprefixed tag is equally verbatim.
+	if got := ChangelogURL("marcus", "td", "1.1.0"); got != "http://127.0.0.1:8765/raw/marcus/td/1.1.0/CHANGELOG.md" {
+		t.Errorf("unprefixed tag URL = %q", got)
 	}
 }
 
@@ -91,7 +98,7 @@ func TestFetchChangelogCmd_CachesAndPinsTag(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = append(seen, r.URL.Path)
 		switch {
-		case strings.Contains(r.URL.Path, "/9.9.9/"):
+		case strings.Contains(r.URL.Path, "/v9.9.9/"):
 			_, _ = w.Write([]byte("# Changelog v9.9.9\n\n- released entries only"))
 		case strings.Contains(r.URL.Path, "/main/"):
 			_, _ = w.Write([]byte("# main is ahead"))
