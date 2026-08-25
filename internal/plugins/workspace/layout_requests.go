@@ -105,12 +105,15 @@ func ackItemsVersion(items []uirequest.AckItem) int {
 
 // layoutItemPlan is one requested pane's journey through validation,
 // placement planning, and commit. Verdict and reason follow it the whole way
-// so a decline can still tell the agent what EVERY pane would have done.
+// so a decline can still tell the agent what EVERY pane would have done, and
+// plan is the placement the batch fit-tested — the one commit must apply
+// verbatim, not re-derive.
 type layoutItemPlan struct {
 	spec    uirequest.LayoutPane
 	kind    panelayout.Kind
 	targets []uirequest.Target
 	cell    panelayout.Cell
+	plan    panelayout.OpenPlan
 	paneID  int
 	verdict string
 	reason  string
@@ -140,6 +143,16 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 			continue
 		}
 		item.kind = kind
+		// "at" is a requirement, not a preference: it must parse here so an
+		// unaddressable cell declines before anything is planned or opened.
+		if spec.At != "" {
+			cell, ok := panelayout.ParseCell(spec.At)
+			if !ok {
+				note(i, uirequest.ItemVerdictDeclined, fmt.Sprintf("cell %q is not a grid address like 2.1", spec.At))
+				continue
+			}
+			item.cell = cell
+		}
 		switch kind {
 		case panelayout.Primary:
 			note(i, uirequest.ItemVerdictDeclined, "the primary pane is the host's own content and cannot be opened")
@@ -163,24 +176,59 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 		}
 	}
 
-	// Phase 2 — plan each pane against the shared trial tree, auto or at an
-	// explicit cell. A retarget plan means the pane already exists: the batch
-	// adds a tab rather than a leaf, which changes no geometry at all.
+	// Phase 2 — plan each pane. Two trees, two jobs:
+	//
+	//   trial is the SCREEN truth (pane tree incl. shell leaves): it answers
+	//   cell addressing, caps, and the composed fit-test.
+	//
+	//   deckTrial is where passive plans come FROM: a clone of the deck's own
+	//   tree, advanced by each planned open exactly as commit will advance the
+	//   real deck. Plans handed to deck.Open are therefore valid for it by
+	//   construction — the committed tree is the fit-tested one, not a re-plan.
+	//
+	// Shell plans stay pane-tree-native (openShellLeaf splits that tree
+	// directly), so they alone are planned on trial. A shell item planned
+	// before later at-cells is why the ack reports landed cells from the live
+	// grid afterwards: interleavings that would displace an addressed row
+	// refuse at commit rather than land somewhere else silently.
+	var deckTrial *panelayout.Node
 	for i := range items {
-		if items[i].kind == panelayout.Primary || items[i].verdict == uirequest.ItemVerdictDeclined {
+		item := &items[i]
+		if item.kind == panelayout.Primary || item.verdict == uirequest.ItemVerdictDeclined {
 			continue
 		}
-		plan, refusal := p.planLayoutItem(trial, items[i], boxes)
+		var plan panelayout.OpenPlan
+		var refusal string
+		if item.kind == panelayout.Shell {
+			plan, refusal = p.planShellItem(trial, *item)
+			if refusal == "" && plan.Retarget == 0 {
+				ApplyPanePlan(trial, plan, &PaneNode{Kind: item.kind})
+			}
+		} else {
+			if deckTrial == nil {
+				p.ensureWorkspaceDeck(root, surface)
+				deckTrial = p.contentDeck.Tree()
+			}
+			plan, refusal = p.planPassiveItem(trial, deckTrial, *item, boxes)
+			if refusal == "" && plan.Retarget == 0 {
+				panelayout.ApplyPlan(deckTrial, plan, &panelayout.Node{Kind: item.kind})
+				// Mirror the structure into the screen trial so later cells,
+				// caps, and the composed fit-test see the batch's own shapes.
+				// Ids may drift between the two trees; structure is what the
+				// screen trial is for — commit never takes targets from it.
+				ApplyPanePlan(trial, plan, &PaneNode{Kind: item.kind})
+			}
+		}
 		if refusal != "" {
 			note(i, uirequest.ItemVerdictDeclined, refusal)
 			continue
 		}
+		item.plan = plan
 		if plan.Retarget != 0 {
-			items[i].verdict = uirequest.ItemVerdictRetargeted
+			item.verdict = uirequest.ItemVerdictRetargeted
 			continue
 		}
-		ApplyPanePlan(trial, plan, &PaneNode{Kind: items[i].kind})
-		items[i].verdict = uirequest.ItemVerdictOpened
+		item.verdict = uirequest.ItemVerdictOpened
 	}
 
 	// Phase 3 — fit-test the COMPOSED trial once against the floors (Law 2).
@@ -202,19 +250,33 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 	}
 
 	if firstViolation >= 0 {
+		// Would-have-opened items keep the verdict validation evaluated for
+		// them, but never silently: without a reason an agent reads "opened"
+		// as "on screen now". Say the batch stopped before they were applied.
+		for i := range items {
+			if items[i].verdict == uirequest.ItemVerdictDeclined || items[i].reason != "" {
+				continue
+			}
+			if items[i].verdict == uirequest.ItemVerdictRetargeted {
+				items[i].reason = "would have retargeted; the batch declined before commit"
+			} else {
+				items[i].reason = "would have opened; the batch declined before commit"
+			}
+		}
 		return p.ackLayout(req, uirequest.StatusDeclined, items[firstViolation].reason, p.layoutAcks(items, surface), nil)
 	}
 
-	// Commit. Validation promised every pane fits; the real opens now walk
-	// the exact paths a single `sidecar open` walks, so the committed tree
-	// matches the trial by construction.
+	// Commit. Validation promised every pane fits; each open now applies THE
+	// PLAN that was fit-tested — performPlannedOpen hands it to deck.Open,
+	// commitLayoutShell hands it to openShellLeaf — so the committed tree is
+	// the trial tree by construction rather than by re-planning luck.
 	var cmds []tea.Cmd
 	retargetCount := 0
 	for i := range items {
 		item := &items[i]
 		if item.kind == panelayout.Shell {
 			var cmd tea.Cmd
-			item.verdict, item.reason, cmd = p.commitLayoutShell(item.spec, req.Origin.TmuxSession)
+			item.verdict, item.reason, cmd = p.commitLayoutShell(item.spec, item.plan, req.Origin.TmuxSession)
 			cmds = append(cmds, cmd)
 			if item.verdict != uirequest.ItemVerdictOpened {
 				continue
@@ -223,12 +285,7 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 				item.paneID = leaf.ID
 			}
 		} else {
-			outcome, cmd := p.performTargetOpen(uirequest.Request{
-				Action:  uirequest.ActionOpen,
-				Origin:  req.Origin,
-				Target:  item.targets[0],
-				Options: uirequest.Options{Split: "auto"},
-			}, root, surface)
+			outcome, cmd := p.performPlannedOpen(item.targets[0], root, surface, item.plan)
 			cmds = append(cmds, cmd)
 			item.verdict, item.reason = string(outcome.status), outcome.reason
 			if outcome.status == uirequest.StatusDeclined {
@@ -237,6 +294,8 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 			item.paneID = p.paneFocus
 			// Targets after the first join the pane as tabs of the same kind:
 			// the existing retarget/openTab path, one call per extra target.
+			// They carry no plan — the pane exists, so a split plan would be
+			// wrong twice over.
 			for _, extra := range item.targets[1:] {
 				p.performTargetOpen(uirequest.Request{
 					Action: uirequest.ActionOpen,
@@ -259,36 +318,108 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 	return tea.Batch(cmds...)
 }
 
-// planLayoutItem plans ONE pane against the trial tree. The returned refusal
-// is empty when a plan was made; otherwise it is the planner's own message,
-// worded to stand alone in a toast or an ack.
-func (p *Plugin) planLayoutItem(trial *PaneNode, item layoutItemPlan, boxes map[int]Box) (panelayout.OpenPlan, string) {
+// performPlannedOpen opens one target through the ordinary per-kind paths with
+// ONE difference: deck.Open applies the given plan instead of re-running its
+// own placement policy. The override is scoped to this single open — extra-tab
+// opens and every other caller re-plan (and retarget) exactly as before.
+func (p *Plugin) performPlannedOpen(target uirequest.Target, root, surface string, plan panelayout.OpenPlan) (openOutcome, tea.Cmd) {
+	prev := p.pendingOpenPlan
+	p.pendingOpenPlan = &plan
+	defer func() { p.pendingOpenPlan = prev }()
+	return p.performTargetOpen(uirequest.Request{
+		Action:  uirequest.ActionOpen,
+		Target:  target,
+		Options: uirequest.Options{Split: "auto"},
+	}, root, surface)
+}
+
+// planShellItem plans the batch's shell pane against the SCREEN trial: shells
+// split the pane tree directly (openShellLeaf), never the deck's, so their
+// placement is decided there — auto grid policy or an explicit cell.
+func (p *Plugin) planShellItem(trial *PaneNode, item layoutItemPlan) (panelayout.OpenPlan, string) {
+	if !terminalPanelEnabled() {
+		return panelayout.OpenPlan{}, features.WorkspaceTerminalPanel.Name + " is off"
+	}
+	if p.termPanelVisible || panelayout.FirstOfKind(trial, panelayout.Shell) != nil {
+		return panelayout.OpenPlan{}, shellCapMessage
+	}
 	if item.cell.Col != 0 {
 		return panelayout.PlanOpenAt(trial, item.kind, 0, item.cell)
 	}
-	if item.kind == panelayout.Shell {
-		if !terminalPanelEnabled() {
-			return panelayout.OpenPlan{}, features.WorkspaceTerminalPanel.Name + " is off"
-		}
-		if p.termPanelVisible || panelayout.FirstOfKind(trial, panelayout.Shell) != nil {
-			return panelayout.OpenPlan{}, shellCapMessage
-		}
-	}
-	plan, ok := panelayout.PlanOpenContent(trial, item.kind, 0, boxes)
+	plan, ok := panelayout.PlanOpenContent(trial, item.kind, 0, p.lastPaneBoxes())
 	if !ok {
-		grid := panelayout.GridOf(trial)
-		switch {
-		case panelayout.Duplicable(item.kind) && panelayout.IsLive(item.kind) && panelayout.LiveCapReached(trial):
-			return panelayout.OpenPlan{}, panelayout.LiveCapMessage
-		case grid != nil && grid.ColumnsAtCap():
-			return panelayout.OpenPlan{}, panelayout.GridColumnCapMessage
-		case grid != nil:
-			return panelayout.OpenPlan{}, panelayout.GridRowCapMessage
-		default:
-			return panelayout.OpenPlan{}, "no room for another " + item.kind.Name() + " pane"
-		}
+		return panelayout.OpenPlan{}, panelayout.LiveCapMessage
 	}
 	return plan, ""
+}
+
+// planPassiveItem plans ONE content pane. Addressing and refusals are stated
+// against the SCREEN grid the agent sees (the full pane tree, shell rows
+// included); the plan itself is then resolved against deckTrial — the deck's
+// own tree, advanced by every earlier planned open — so commit can apply it
+// verbatim instead of re-planning. A retarget means the pane already exists:
+// the batch adds a tab rather than a leaf, changing no geometry at all.
+func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPlan, boxes map[int]Box) (panelayout.OpenPlan, string) {
+	cell := item.cell
+	if cell.Col != 0 {
+		// The screen answer speaks first: ranges, caps, and retarget
+		// conflicts in the user's own vocabulary, including the shell row.
+		if _, refusal := panelayout.PlanOpenAt(screen, item.kind, 0, cell); refusal != "" {
+			return panelayout.OpenPlan{}, refusal
+		}
+		translated, refusal := deckCellFor(screen, cell)
+		if refusal != "" {
+			return panelayout.OpenPlan{}, refusal
+		}
+		cell = translated
+	}
+	plan, ok := panelayout.PlanOpenAtOrContent(deckTrial, item.kind, cell, boxes)
+	if !ok {
+		return panelayout.OpenPlan{}, passivePlanRefusal(deckTrial, item.kind)
+	}
+	return plan, ""
+}
+
+// deckCellFor translates a screen cell onto the deck's grid. At most ONE shell
+// leaf can exist (LiveLeafCap), sitting beside the primary terminal, so the
+// only difference between the two grids is that shell's row: cells above it
+// keep their address, the shell's own row belongs to no content pane, and
+// cells below shift up by one.
+func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, string) {
+	grid := panelayout.GridOf(screen)
+	if grid == nil || cell.Col > grid.ColumnCount() {
+		return cell, ""
+	}
+	column := grid.Columns[cell.Col-1]
+	for row, leaf := range column.Cells {
+		screenRow := row + 1
+		if leaf.Kind != panelayout.Shell {
+			continue
+		}
+		switch {
+		case screenRow == cell.Row:
+			return panelayout.Cell{}, fmt.Sprintf("cell %s holds the live terminal; content panes cannot take its place", cell.String())
+		case screenRow < cell.Row:
+			return panelayout.Cell{Col: cell.Col, Row: cell.Row - 1}, ""
+		default:
+			return cell, ""
+		}
+	}
+	return cell, ""
+}
+
+// passivePlanRefusal explains a failed deck-side plan with the planner's own
+// vocabulary, worded to stand alone in a toast or an ack.
+func passivePlanRefusal(deckTrial *PaneNode, kind panelayout.Kind) string {
+	grid := panelayout.GridOf(deckTrial)
+	switch {
+	case grid != nil && grid.ColumnsAtCap():
+		return panelayout.GridColumnCapMessage
+	case grid != nil:
+		return panelayout.GridRowCapMessage
+	default:
+		return "no room for another " + kind.Name() + " pane"
+	}
 }
 
 // resolveLayoutTargets turns a descriptor's target strings into resolved
@@ -365,9 +496,12 @@ func wireNameForTarget(kind uirequest.TargetKind) string {
 
 // commitLayoutShell opens the batch's shell pane beside the origin session —
 // createTerminalSplit and its managed-shell session, exactly as
-// `create shell --split` walks them. Placement is "auto": the batch speaks
-// the grid policy, not an axis preference.
-func (p *Plugin) commitLayoutShell(spec uirequest.LayoutPane, originSession string) (string, string, tea.Cmd) {
+// `create shell --split` walks them. The batch's fit-tested plan scopes the
+// split (pendingShellPlan → shellLeafOpenPlan), so an at-cell or a planned
+// auto placement lands the leaf where planning said; placement stays "auto"
+// for everything else, speaking the grid policy rather than an axis
+// preference.
+func (p *Plugin) commitLayoutShell(spec uirequest.LayoutPane, plan panelayout.OpenPlan, originSession string) (string, string, tea.Cmd) {
 	if !p.selectCreateSplitOrigin(originSession) {
 		return uirequest.ItemVerdictDeclined, layoutNotOnScreenReason, nil
 	}
@@ -383,7 +517,12 @@ func (p *Plugin) commitLayoutShell(spec uirequest.LayoutPane, originSession stri
 			typeCmd: spec.Type,
 		}
 	}
+	prevPlan := p.pendingShellPlan
+	if plan.Split != 0 {
+		p.pendingShellPlan = &plan
+	}
 	cmd := p.createTerminalSplit(spec.Name, "auto")
+	p.pendingShellPlan = prevPlan
 	if p.shellLeaf() == nil || p.shellLeaf() == before {
 		p.pendingTermPanelSeed = nil
 		reason := p.toastMessage

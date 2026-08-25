@@ -234,11 +234,17 @@ func (p *Plugin) setShellSplitPlacement(placement string) {
 	p.shellSplitPlacement = placement
 }
 
-// shellLeafOpenPlan answers where a shell split goes. With no placement asked
-// for, it is the remembered shape on the primary terminal — what ctrl+t has
-// always done. With one, it is panelayout's auto plan, axis-overridden by the
-// same function `sidecar open --split` uses.
+// shellLeafOpenPlan answers where a shell split goes. A batch-planned split
+// (pendingShellPlan) wins outright: the layout apply already fit-tested that
+// plan, so re-deriving an auto placement here could land the pane somewhere
+// else than the ack claims. With no placement asked for, it is the remembered
+// shape on the primary terminal — what ctrl+t has always done. With one, it is
+// panelayout's auto plan, axis-overridden by the same function `sidecar open
+// --split` uses.
 func (p *Plugin) shellLeafOpenPlan(placement string) (panelayout.OpenPlan, int, bool) {
+	if p.pendingShellPlan != nil {
+		return *p.pendingShellPlan, shellSplitDefaultRatio, true
+	}
 	axis, ratio := p.shellSplitShape()
 	if placement == "" {
 		terminal := firstPaneLeafOfKind(p.paneRoot, PaneTerminal)

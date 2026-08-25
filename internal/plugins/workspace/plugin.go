@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
@@ -674,6 +675,15 @@ type Plugin struct {
 	// Empty or "auto" leaves PlanOpen's axis alone. Set around handleUIRequest
 	// and consumePendingView only.
 	openSplit string
+	// pendingOpenPlan is the batch-scoped planned placement for ONE content
+	// open: a layout apply commits the exact plan it fit-tested rather than
+	// letting deck.Open re-plan from scratch. Nil for every other caller, and
+	// scoped to a single open by performPlannedOpen.
+	pendingOpenPlan *panelayout.OpenPlan
+	// pendingShellPlan is the same idea for the batch's shell item: set around
+	// createTerminalSplit so openShellLeaf splits where the plan said instead
+	// of re-deriving an auto placement.
+	pendingShellPlan *panelayout.OpenPlan
 }
 
 // New creates a new worktree manager plugin.

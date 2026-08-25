@@ -165,6 +165,12 @@ func TestLayoutApply_DeclineListsEveryPaneAndLeavesTreeByteIdentical(t *testing.
 		if item.Cell != "" {
 			t.Errorf("item %d claims cell %q but nothing landed", i, item.Cell)
 		}
+		if item.Reason == "" {
+			t.Errorf("item %d carries no reason; would-have-opened panes must say the batch declined", i)
+		}
+	}
+	if !strings.Contains(ack.Items[0].Reason, "would have opened") {
+		t.Errorf("item 0 reason = %q, want the not-applied explanation", ack.Items[0].Reason)
 	}
 	if last := ack.Items[2]; last.Index != 2 || last.Reason == "" {
 		t.Errorf("declined item = %+v, want its own reason", last)
@@ -366,60 +372,124 @@ func TestLayoutResolveTargets(t *testing.T) {
 	}
 }
 
-// Placement composition: the batch plans every pane against one shared trial
-// tree, so auto placement follows the grid rule step by step and explicit
-// cells resolve through PlanOpenAt's cell classes.
-func TestLayoutPlanComposition_AutoAndAtCells(t *testing.T) {
+// THE repro from review: an at-cell is a requirement. On a bare primary tree,
+// issue at 1.1 must INSERT above the primary (which shifts down to 1.2), not
+// auto-place beside it at 2.1.
+func TestLayoutApply_AtCellInsertsAbovePrimary(t *testing.T) {
 	p, _ := layoutRequestFixture(t)
 
-	trial := &PaneNode{ID: 1, Kind: PaneTerminal}
-
-	filePlan, refusal := p.planLayoutItem(trial, layoutItemPlan{kind: panelayout.Document}, nil)
-	if refusal != "" || filePlan.Split != 1 || filePlan.Axis != panelayout.Columns {
-		t.Fatalf("first open plan = %+v refusal %q, want beside the terminal", filePlan, refusal)
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "issue", Targets: []string{"td-1a2b3c"}, At: "1.1"},
+	)
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("at-cell apply emitted no command")
 	}
-	ApplyPanePlan(trial, filePlan, &PaneNode{Kind: panelayout.Document})
-	docLeaf := panelayout.FirstOfKind(trial, panelayout.Document)
-
-	issuePlan, refusal := p.planLayoutItem(trial, layoutItemPlan{kind: panelayout.Issue}, nil)
-	if refusal != "" || issuePlan.Split != docLeaf.ID || issuePlan.Axis != panelayout.Rows {
-		t.Fatalf("second open plan = %+v refusal %q, want stacked under the doc", issuePlan, refusal)
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusOpened {
+		t.Fatalf("status = %s reason %q", ack.Status, ack.Reason)
 	}
-	ApplyPanePlan(trial, issuePlan, &PaneNode{Kind: panelayout.Issue})
-
-	shellPlan, refusal := p.planLayoutItem(trial, layoutItemPlan{kind: panelayout.Shell}, nil)
-	grid := panelayout.GridOf(trial)
-	if refusal != "" || grid == nil {
-		t.Fatalf("shell plan refused %q", refusal)
-	}
-	if shellPlan.Split != grid.Columns[0].Node.ID || shellPlan.Axis != panelayout.Rows {
-		t.Fatalf("third open plan = %+v, want the emptiest (left) column taking it", shellPlan)
+	if len(ack.Items) != 1 || ack.Items[0].Verdict != uirequest.ItemVerdictOpened || ack.Items[0].Cell != "1.1" {
+		t.Fatalf("items = %+v, want the issue opened AT 1.1", ack.Items)
 	}
 
-	fresh := &PaneNode{ID: 1, Kind: PaneTerminal}
-	appendCol, refusal := p.planLayoutItem(fresh, layoutItemPlan{
-		kind: panelayout.Document, cell: panelayout.Cell{Col: 2, Row: 1},
-	}, nil)
-	if refusal != "" || appendCol.Split != fresh.ID || appendCol.Axis != panelayout.Columns {
-		t.Fatalf("one-past-end column = %+v refusal %q, want a new column off the root", appendCol, refusal)
+	grid := panelayout.GridOf(p.paneRoot)
+	if grid == nil || grid.ColumnCount() != 1 || grid.RowCount(1) != 2 {
+		t.Fatalf("tree projected to %+v, want one column of two", grid)
+	}
+	if grid.Cell(1, 1).Kind != panelayout.Issue || grid.Cell(1, 2).Kind != panelayout.Primary {
+		t.Fatalf("cells = %v/%v, want issue above primary", grid.Cell(1, 1).Kind, grid.Cell(1, 2).Kind)
+	}
+}
+
+// The other repro: a cell past the layout's live range is a refused
+// requirement — exit-4 decline with the planner's own reason and a tree that
+// never changed.
+func TestLayoutApply_OutOfRangeCellDeclines(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	before := encodedTree(t, p)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "issue", Targets: []string{"td-1a2b3c"}, At: "3.1"},
+	)
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("out-of-range cell emitted a command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined || !strings.Contains(ack.Reason, "out of range") {
+		t.Fatalf("ack = %s %q, want the out-of-range refusal", ack.Status, ack.Reason)
+	}
+	if len(ack.Items) != 1 || ack.Items[0].Verdict != uirequest.ItemVerdictDeclined || ack.Items[0].Reason == "" {
+		t.Fatalf("items = %+v, want the pane's own declined verdict", ack.Items)
+	}
+	if after := encodedTree(t, p); after != before {
+		t.Fatalf("refusal mutated the tree:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// Composed trial == committed tree: every at-cell in one batch lands exactly
+// where addressed, including a shell planned into the terminal column.
+func TestLayoutApply_CellBatchComposesExactlyAsPlanned(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}, At: "2.1"},
+		uirequest.LayoutPane{Kind: "issue", Targets: []string{"td-1a2b3c"}, At: "2.2"},
+		uirequest.LayoutPane{Kind: "shell", Run: "echo hi", Name: "dev server", At: "1.2"},
+	)
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("cell batch emitted no command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusOpened {
+		t.Fatalf("status = %s reason %q", ack.Status, ack.Reason)
+	}
+	wantCells := []string{"2.1", "2.2", "1.2"}
+	for i, item := range ack.Items {
+		if item.Verdict != uirequest.ItemVerdictOpened || item.Cell != wantCells[i] {
+			t.Errorf("item %d = %s@%s, want opened@%s", i, item.Verdict, item.Cell, wantCells[i])
+		}
 	}
 
-	insertAtOccupied, refusal := p.planLayoutItem(fresh, layoutItemPlan{
-		kind: panelayout.Document, cell: panelayout.Cell{Col: 1, Row: 1},
-	}, nil)
-	if refusal != "" || insertAtOccupied.Split != 1 || insertAtOccupied.Axis != panelayout.Rows || !insertAtOccupied.NewFirst {
-		t.Fatalf("occupied cell = %+v refusal %q, want insert-above on the occupant", insertAtOccupied, refusal)
+	grid := panelayout.GridOf(p.paneRoot)
+	if grid == nil || grid.ColumnCount() != 2 || grid.RowCount(1) != 2 || grid.RowCount(2) != 2 {
+		t.Fatalf("committed tree projected to %+v, want the planned 2x2", grid)
 	}
+	kinds := map[[2]int]panelayout.Kind{
+		{1, 1}: panelayout.Primary, {1, 2}: panelayout.Shell,
+		{2, 1}: panelayout.Document, {2, 2}: panelayout.Issue,
+	}
+	for rc, want := range kinds {
+		if got := grid.Cell(rc[0], rc[1]); got == nil || got.Kind != want {
+			t.Errorf("cell %d.%d = %+v, want %v", rc[0], rc[1], got, want)
+		}
+	}
+}
 
-	if _, refusal := p.planLayoutItem(fresh, layoutItemPlan{
-		kind: panelayout.Document, cell: panelayout.Cell{Col: panelayout.MaxGridColumns + 1},
-	}, nil); !strings.Contains(refusal, "outside") {
-		t.Fatalf("past-cap column = %q, want the cap refusal", refusal)
+// A cell addressed at the live terminal's own row cannot be honored by a
+// content pane and is declined before anything opens.
+func TestLayoutApply_CellOnShellRowDeclines(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	// Stack the split BELOW the primary on the explicit axis, so screen cell
+	// 1.2 is the live terminal's own row.
+	showTermPanel(t, p, SplitRows, 50)
+	p.View(p.width, p.height)
+	if p.shellLeaf() == nil {
+		t.Fatal("fixture failed to open a shell leaf")
 	}
-	if _, refusal := p.planLayoutItem(fresh, layoutItemPlan{
-		kind: panelayout.Document, cell: panelayout.Cell{Col: 1, Row: panelayout.MaxGridRows + 1},
-	}, nil); refusal == "" {
-		t.Fatal("far-out row accepted")
+	before := encodedTree(t, p)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}, At: "1.2"},
+	)
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("shell-row cell emitted a command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined || !strings.Contains(ack.Reason, "live terminal") {
+		t.Fatalf("ack = %s %q, want the shell-row refusal", ack.Status, ack.Reason)
+	}
+	if after := encodedTree(t, p); after != before {
+		t.Fatal("decline mutated the tree")
 	}
 }
 

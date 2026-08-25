@@ -30,11 +30,16 @@ type SurfaceContext struct {
 
 // Placement is the geometry against which a new split is trialled. Boxes are
 // the last boxes by leaf ID and let panelayout choose the largest content leaf.
+// Plan, when set, IS that choice: the open applies the caller's plan verbatim
+// instead of re-running PlanOpen, so a host that validated a composed layout
+// commits exactly the tree it fit-tested. A planned retarget must still name
+// an existing pane of the kind, or the open refuses.
 type Placement struct {
 	Box    panelayout.Box
 	Boxes  map[int]panelayout.Box
 	Floors panelayout.Floors
 	Split  string
+	Plan   *panelayout.OpenPlan
 }
 
 // Status is the typed result of Open.
@@ -336,11 +341,16 @@ func (d *Deck) Open(ctx SurfaceContext, ref contentlink.Ref, placement Placement
 		return Outcome{Status: StatusAction, Ref: normalized, Kind: kind}
 	}
 
-	plan, ok := panelayout.PlanOpen(d.root, kind, placement.Boxes)
-	if !ok {
-		return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
+	plan := panelayout.OpenPlan{}
+	if placement.Plan != nil {
+		plan = *placement.Plan
+	} else {
+		var ok bool
+		if plan, ok = panelayout.PlanOpen(d.root, kind, placement.Boxes); !ok {
+			return Outcome{Status: StatusRefused, Refusal: RefusalPlacement, Ref: normalized, Kind: kind}
+		}
+		plan = panelayout.ApplyAxisOverride(plan, placement.Split)
 	}
-	plan = panelayout.ApplyAxisOverride(plan, placement.Split)
 
 	if plan.Retarget != 0 {
 		p := d.panes[plan.Retarget]

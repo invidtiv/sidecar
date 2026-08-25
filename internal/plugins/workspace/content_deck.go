@@ -136,7 +136,11 @@ func (p *Plugin) workspaceDeckPlacement() (contentpanes.Placement, bool) {
 	if !ok {
 		return contentpanes.Placement{}, false
 	}
-	return contentpanes.Placement{Box: peer, Boxes: p.lastPaneBoxes(), Floors: paneTreeFloors(), Split: p.openSplit}, true
+	return contentpanes.Placement{
+		Box: peer, Boxes: p.lastPaneBoxes(), Floors: paneTreeFloors(),
+		Split: p.openSplit,
+		Plan:  p.pendingOpenPlan,
+	}, true
 }
 
 func (p *Plugin) openWorkspaceContent(root, surface string, ref contentlink.Ref, name string) tea.Cmd {

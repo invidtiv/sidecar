@@ -389,6 +389,17 @@ func PlanOpenContent(root *Node, kind Kind, contentID int, boxes map[int]Box) (O
 	return OpenPlan{}, false
 }
 
+// PlanOpenAtOrContent is the single placement entry for callers holding an
+// optional explicit cell: zero cell plans auto, otherwise the cell is a
+// requirement resolved by PlanOpenAt.
+func PlanOpenAtOrContent(root *Node, kind Kind, cell Cell, boxes map[int]Box) (OpenPlan, bool) {
+	if cell.Col != 0 || cell.Row != 0 {
+		plan, refusal := PlanOpenAt(root, kind, 0, cell)
+		return plan, refusal == ""
+	}
+	return PlanOpenContent(root, kind, 0, boxes)
+}
+
 // planFillEmptiestColumn is the auto rule once two content panes are on
 // screen. The emptiest column takes the next pane — which is what makes the
 // fourth pane form a 2×2 beside the primary terminal instead of stacking a
