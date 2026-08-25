@@ -280,7 +280,6 @@ func TestReconcileShellStartup_PreservesManifestAndMigrationSemantics(t *testing
 	shells, managed := reconcileShellStartup(
 		manifest,
 		[]string{"sidecar-sh-project-1", "sidecar-sh-project-2"},
-		false,
 		"/repo/project",
 		"/repo/project",
 		hooks,
@@ -369,7 +368,7 @@ func TestReconcileKeepsForeignNamespaceEntries(t *testing.T) {
 		path: manifestPath,
 	}
 
-	shells, managed := reconcileShellStartup(manifest, nil, false, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
+	shells, managed := reconcileShellStartup(manifest, nil, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
 
 	if len(shells) != 2 {
 		t.Fatalf("reconciled shells = %d, want 2 survivors", len(shells))
@@ -407,7 +406,7 @@ func TestReconcileClaimsLegacyEntriesMatchingOurPattern(t *testing.T) {
 		path: manifestPath,
 	}
 
-	shells, _ := reconcileShellStartup(manifest, nil, false, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
+	shells, _ := reconcileShellStartup(manifest, nil, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
 
 	if len(shells) != 1 || shells[0].TmuxName != "sidecar-sh-project-1" || !shells[0].IsOrphaned {
 		t.Fatalf("reconciled shells = %#v, want the matching entry as an offline row", shells)
@@ -555,7 +554,9 @@ func definitionFieldsEqual(got, want ShellDefinition) bool {
 
 // TestReconcileNeverPrunesWhenDiscoveryFails is the "absence is not proof of
 // death" rule on the discovery axis: if we could not ask tmux, every entry
-// survives and the file is not rewritten.
+// survives and the file is not rewritten. A failed discovery reaches the
+// reconciler as an empty session list — there is no flag to set, which is the
+// point: the reconciler has no way to prune even if it wanted to.
 func TestReconcileNeverPrunesWhenDiscoveryFails(t *testing.T) {
 	manifestPath := filepath.Join(t.TempDir(), "shells.json")
 	manifest := &ShellManifest{
@@ -567,7 +568,7 @@ func TestReconcileNeverPrunesWhenDiscoveryFails(t *testing.T) {
 		path: manifestPath,
 	}
 
-	shells, managed := reconcileShellStartup(manifest, nil, true, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
+	shells, managed := reconcileShellStartup(manifest, nil, "/repo/project", "/repo/project", reconcileTestHooks(testNamespace))
 
 	if len(shells) != 2 {
 		t.Fatalf("reconciled shells = %d, want both kept after a discovery failure", len(shells))
@@ -602,7 +603,6 @@ func TestReconcileKeepsEntriesOutsideDiscoveryPattern(t *testing.T) {
 	shells, managed := reconcileShellStartup(
 		manifest,
 		[]string{"sidecar-sh-sidecar-agent-status-1"},
-		false,
 		"/tmp/x/sidecar-agent-status",
 		"/tmp/x/sidecar-agent-status",
 		reconcileTestHooks(testNamespace),
@@ -651,7 +651,6 @@ func TestReconcileRetainsOwnMissingSessionAsOffline(t *testing.T) {
 	shells, managed := reconcileShellStartup(
 		manifest,
 		[]string{"sidecar-sh-project-1"},
-		false,
 		"/repo/project",
 		"/repo/project",
 		reconcileTestHooks(testNamespace),
@@ -694,7 +693,6 @@ func TestReconcileDoesNotResurrectForgottenRunningSession(t *testing.T) {
 	shells, managed := reconcileShellStartup(
 		manifest,
 		[]string{original.TmuxName, "sidecar-sh-project-2"},
-		false,
 		"/repo/project",
 		"/repo/project",
 		reconcileTestHooks(testNamespace),
@@ -743,7 +741,6 @@ func TestReconcileStampsNamespaceOnLiveEntries(t *testing.T) {
 	reconcileShellStartup(
 		manifest,
 		[]string{"sidecar-sh-project-1", "sidecar-sh-project-2"},
-		false,
 		"/repo/project",
 		"/repo/project",
 		reconcileTestHooks(testNamespace),

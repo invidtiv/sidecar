@@ -292,6 +292,44 @@ func TestRunShellListForgetRestore(t *testing.T) {
 	}
 }
 
+// The tmux name is the only argument `sidecar shell restore` takes, so the
+// human listing has to show forgotten records too. Hiding them behind --json
+// would leave a human able to forget a record and unable to name it again.
+func TestRunShellListShowsForgottenRecordsWithoutJSON(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+	live := shellstate.Definition{
+		TmuxName: "sidecar-sh-demo-1", DisplayName: "live task", Namespace: "/tmp/socket", WorkDir: workDir,
+	}
+	gone := shellstate.Definition{
+		TmuxName: "sidecar-sh-demo-2", DisplayName: "prior task", Namespace: "/tmp/socket", WorkDir: workDir,
+	}
+	writeProjectShells(t, stateDir, "demo", live, gone)
+
+	var out, errOut bytes.Buffer
+	if handled, code := Run([]string{"shell", "forget", gone.TmuxName}, &out, &errOut); !handled || code != 0 {
+		t.Fatalf("forget = %v %d %q", handled, code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code := Run([]string{"shell", "list"}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("list = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{live.TmuxName, "live task", gone.TmuxName, "prior task", "sidecar shell restore"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("list output %q is missing %q", text, want)
+		}
+	}
+}
+
 func TestRunShellNameRejectsLookalikeWorktreeSession(t *testing.T) {
 	stateHome, _, _, _, _, socket := setupWorktreeCLI(t, "panes")
 	t.Setenv("XDG_STATE_HOME", stateHome)
@@ -393,6 +431,14 @@ func writeProjectMeta(t *testing.T, stateDir, slug, workDir string) {
 
 func writeProjectShell(t *testing.T, stateDir, slug string, shell shellstate.Definition) {
 	t.Helper()
+	writeProjectShells(t, stateDir, slug, shell)
+}
+
+// writeProjectShells replaces the project's manifest with exactly these
+// definitions. It replaces rather than appends, so callers that need more than
+// one shell must pass them in a single call.
+func writeProjectShells(t *testing.T, stateDir, slug string, shells ...shellstate.Definition) {
+	t.Helper()
 	dir := filepath.Join(stateDir, "projects", slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -400,7 +446,7 @@ func writeProjectShell(t *testing.T, stateDir, slug string, shell shellstate.Def
 	manifest := struct {
 		Version int                     `json:"version"`
 		Shells  []shellstate.Definition `json:"shells"`
-	}{Version: 1, Shells: []shellstate.Definition{shell}}
+	}{Version: 1, Shells: shells}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)

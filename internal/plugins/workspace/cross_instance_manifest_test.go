@@ -73,7 +73,7 @@ func runStartup(t *testing.T, hooks shellStartupHooks, manifestPath, workDir str
 	if err != nil {
 		t.Fatalf("discoverSessions(%s) error = %v", workDir, err)
 	}
-	return reconcileShellStartup(manifest, sessions, false, workDir, workDir, hooks)
+	return reconcileShellStartup(manifest, sessions, workDir, workDir, hooks)
 }
 
 func manifestNames(t *testing.T, manifestPath string) []string {

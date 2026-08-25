@@ -84,7 +84,7 @@ func runShellList(env Env, args []string) int {
 		return writeShellJSON(env, shellListResult{Shells: items})
 	}
 
-	if len(live) == 0 {
+	if len(live) == 0 && len(tombs) == 0 {
 		if _, err := fmt.Fprintln(env.Stdout, "No shells."); err != nil {
 			return 1
 		}
@@ -92,6 +92,25 @@ func runShellList(env Env, args []string) int {
 	}
 	for _, def := range live {
 		if _, err := fmt.Fprintf(env.Stdout, "%s  %s\n", def.TmuxName, def.DisplayName); err != nil {
+			return 1
+		}
+	}
+	if len(tombs) == 0 {
+		return 0
+	}
+	// Forgotten records are listed here too, not only under --json: the tmux
+	// name is the only argument `sidecar shell restore` takes, and a human who
+	// cannot see it has no way to reach the command.
+	if len(live) > 0 {
+		if _, err := fmt.Fprintln(env.Stdout); err != nil {
+			return 1
+		}
+	}
+	if _, err := fmt.Fprintln(env.Stdout, "Forgotten (restore with: sidecar shell restore <tmux-name>)"); err != nil {
+		return 1
+	}
+	for _, stone := range tombs {
+		if _, err := fmt.Fprintf(env.Stdout, "%s  %s\n", stone.TmuxName, stone.DisplayName); err != nil {
 			return 1
 		}
 	}

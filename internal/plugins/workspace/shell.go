@@ -321,7 +321,7 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 		// would orphan every shell on screen. Say nothing instead (td-8d18de,
 		// td-e27291).
 		names, inc, discoveryErr := hooks.discoverSessions(workDir)
-		if discoveryErr != nil || inc.IsAbsent() {
+		if discoveryFailed(inc, discoveryErr) {
 			return nil
 		}
 

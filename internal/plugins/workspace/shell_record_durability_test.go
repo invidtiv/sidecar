@@ -121,8 +121,8 @@ func TestManifestWritesNeverShrinkLiveCountExceptIdentityRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShellManifest() = %v", err)
 	}
-	reconcileShellStartup(loaded, nil, false, workDir, workDir, reconcileTestHooks(testNamespace))
-	reconcileShellStartup(loaded, []string{"sidecar-sh-other-99"}, false, workDir, workDir, reconcileTestHooks(testNamespace))
+	reconcileShellStartup(loaded, nil, workDir, workDir, reconcileTestHooks(testNamespace))
+	reconcileShellStartup(loaded, []string{"sidecar-sh-other-99"}, workDir, workDir, reconcileTestHooks(testNamespace))
 
 	hooks := shellStartupHooks{
 		resolveProjectDir: func(string) (string, error) { return filepath.Dir(path), nil },

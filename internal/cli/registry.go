@@ -102,8 +102,8 @@ func RootCommand() *Command {
 		Summary: "List this project's shell records",
 		Usage:   "sidecar shell list [--json]",
 		Long: "List Sidecar-managed shell records for the current project. Live records\n" +
-			"are always shown. JSON also includes forgotten records so an agent can restore\n" +
-			"one by tmux name.\n\n" +
+			"are listed first, then forgotten ones, so either surface can restore a record\n" +
+			"by tmux name.\n\n" +
 			"This reads shells.json directly; it does not start or inspect tmux sessions.",
 		Flags: []Flag{
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},

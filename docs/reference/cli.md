@@ -441,8 +441,8 @@ sidecar shell forget --json sidecar-sh-sidecar-1
 List this project's shell records
 
 List Sidecar-managed shell records for the current project. Live records
-are always shown. JSON also includes forgotten records so an agent can restore
-one by tmux name.
+are listed first, then forgotten ones, so either surface can restore a record
+by tmux name.
 
 This reads shells.json directly; it does not start or inspect tmux sessions.
 

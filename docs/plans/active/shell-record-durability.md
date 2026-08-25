@@ -148,6 +148,15 @@ Also align `internal/overview`'s guard while in the area. `reapDeadShells` (`ove
 - Bump `manifestVersion` to 2 and, for the first time, *read* it. Two rules: a reader that sees a version it does not understand refuses to write the file rather than silently rewriting it without the fields it dropped; a reader that sees v1 upgrades in place on first write. This is a small amount of work that turns a decorative field into the forward-compatibility guard it was presumably always meant to be — and it is the same failure mode as the one this plan is about, one writer destroying what it does not understand.
 - Accept and document the degradation: an older binary reading a v2 file ignores `tombstones` and drops the key on its next write. That is no worse than today. Say it in the code comment rather than discovering it later.
 
+## Status (2026-08-24)
+
+Steps 1-6 and the tombstone half of step 7 landed on `strong-tmux`: `internal/tmuxserver`, the tracker's `ObserveServer`/server-tagged `Confirm`, both surfaces' bindings, the additive startup path (`Save`/`saveLocked` are gone), `sidecar shell list|forget|restore`, and `deletedAt` tombstones with the writer-boundary shrink test and the isolated `kill-server` end-to-end proof.
+
+Still open, both from part D:
+
+- **Schema version 2 and the refuse-to-write-unknown-version guard.** `manifestVersion` is still written and never read. The tombstone doc comments in `shellstate.go` and `shell_manifest.go` point here.
+- **Bounded tombstone retention.** Tombstones currently accumulate without expiry, so a long-lived project's `shells.json` grows by one record per shell ever forgotten. Retention must be config-backed, not a constant in a writer (see Open questions).
+
 ## Work sequence
 
 1. **Regression test first, before any fix.** In `internal/plugins/workspace`, a table-driven test over `reconcileShellStartup` covering: (a) discovery returns `Absent`, (b) discovery returns a non-empty listing from a different server incarnation, (c) discovery errors. All three must leave every definition in the manifest. Case (b) fails against `main` today and is the one that proves the fix goes past the incident. These use the `shellStartupHooks` seams (`shell_startup.go:33`) and need no tmux at all.

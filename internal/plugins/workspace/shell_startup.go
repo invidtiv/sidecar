@@ -193,7 +193,6 @@ func (p *Plugin) loadShellStartup() tea.Cmd {
 		result.shells, result.managedSessions = reconcileShellStartup(
 			manifest,
 			sessions,
-			discoveryFailed(inc, discoveryErr),
 			workDir,
 			projectRoot,
 			hooks,
@@ -204,6 +203,10 @@ func (p *Plugin) loadShellStartup() tea.Cmd {
 	}
 }
 
+// discoveryFailed reports that we have no listing to reason from: tmux could
+// not be asked (err), or it answered that no server is running (Absent). Both
+// mean the Running map is empty for a reason that has nothing to do with any
+// one shell, so no caller may read it as "these shells are gone".
 func discoveryFailed(inc tmuxserver.Incarnation, err error) bool {
 	return err != nil || inc.IsAbsent()
 }
@@ -213,15 +216,20 @@ func discoveryFailed(inc tmuxserver.Incarnation, err error) bool {
 // All persistence happens on the command goroutine, and is additive: this
 // path may add definitions and update fields on existing ones, never shrink
 // the list. A shell that is not running becomes an offline row.
+//
+// It takes no discovery-failure flag on purpose. Nothing here treats absence
+// as death any more, so "tmux answered with a listing" and "tmux could not be
+// asked" produce the same retained records and differ only in which rows
+// render live (td-e27291). Callers still distinguish the two — discoveryFailed
+// gates the sync path and the startup warning — but the reconciler must not,
+// because a flag it could read is a flag a later change could prune on.
 func reconcileShellStartup(
 	manifest *ShellManifest,
 	sessionNames []string,
-	discoveryFailed bool,
 	workDir string,
 	projectRoot string,
 	hooks shellStartupHooks,
 ) ([]*ShellSession, map[string]bool) {
-	_ = discoveryFailed // retained so callers still distinguish Absent/error from a listing; never used to drop rows
 	running := make(map[string]bool, len(sessionNames))
 	for _, name := range sessionNames {
 		running[name] = true
