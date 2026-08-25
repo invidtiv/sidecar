@@ -26,8 +26,12 @@ func updateModalWidthFor(screenW int) int {
 	return min(modal.ContentBoxWidth(screenW), modal.MaxModalWidth)
 }
 
-// updateNotesToggleID is the focusable "View full changelog" element.
-const updateNotesToggleID = "update-notes-toggle"
+// updateNotesToggleID and updateChangelogRetryID are the notes section's
+// focusable affordances.
+const (
+	updateNotesToggleID    = "update-notes-toggle"
+	updateChangelogRetryID = "update-changelog-retry"
+)
 
 // notesCollapsedRows is the notes window before expansion.
 const notesCollapsedRows = 6
@@ -46,8 +50,10 @@ type updateUIState struct {
 	running   bool
 	start     time.Time
 
-	products        []version.Target
-	notes           string
+	products []version.Target
+	// notesTarget is whose release notes the section shows: the first planned
+	// product in display order (Sidecar, td, Tasks).
+	notesTarget     version.Target
 	anyManaged      bool
 	restartRequired bool
 	retryCount      int
@@ -70,6 +76,10 @@ type updateUIState struct {
 	presentedPhase UpdateModalState
 	presentedValid bool
 	presentedWidth int
+}
+
+func (u *updateUIState) hasNotesTarget() bool {
+	return u != nil && u.notesTarget.Product != ""
 }
 
 func (u *updateUIState) includesTasks() bool {
@@ -96,7 +106,24 @@ func (m *Model) syncUpdateUI() {
 	u.running = m.updateInProgress
 	u.start = m.updateStartTime
 	u.products = m.products
-	u.notes = m.updateNotes
+	if plan := version.SelectPlan(u.products); len(plan) > 0 {
+		u.notesTarget = plan[0]
+		for _, t := range plan {
+			if strings.TrimSpace(t.Notes) != "" {
+				u.notesTarget = t
+				break
+			}
+		}
+	} else if len(u.products) > 0 {
+		u.notesTarget = u.products[0]
+	}
+	if m.changelogProduct != u.notesTarget.Product {
+		m.changelogProduct = u.notesTarget.Product
+		m.changelogState = changelogIdle
+		m.changelogBody = ""
+		m.changelogErr = nil
+		m.changelogTag = ""
+	}
 	u.anyManaged = false
 	for _, t := range version.SelectPlan(u.products) {
 		if t.Install.Managed {
@@ -505,9 +532,18 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 		m.closeUpdateModal()
 		return m, nil
 	case "toggle-notes", updateNotesToggleID:
+		var fetch tea.Cmd
 		if u := m.updateUIState(); u != nil {
 			u.notesExpanded = !u.notesExpanded
 			u.notesScroll = 0
+			if u.notesExpanded && m.changelogState == changelogIdle && u.hasNotesTarget() {
+				fetch = m.fetchChangelogCmd()
+			}
+		}
+		return m, fetch
+	case "retry-changelog", updateChangelogRetryID:
+		if u := m.updateUIState(); u != nil && u.hasNotesTarget() {
+			return m, m.fetchChangelogCmd()
 		}
 		return m, nil
 	}
@@ -525,35 +561,18 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.ensureUpdateModal()
-	notes := m.updateNotesOwnsScroll()
 	switch msg.String() {
 	case "up", "k":
-		if notes {
-			m.scrollUpdateNotes(-3)
-		} else {
-			m.updateModal.ScrollBy(-3)
-		}
+		m.updatePreviewScroll(-3)
 		return m, nil
 	case "down", "j":
-		if notes {
-			m.scrollUpdateNotes(3)
-		} else {
-			m.updateModal.ScrollBy(3)
-		}
+		m.updatePreviewScroll(3)
 		return m, nil
 	case "pgup", "ctrl+u":
-		if notes {
-			m.scrollUpdateNotes(-10)
-		} else {
-			m.updateModal.ScrollBy(-10)
-		}
+		m.updatePreviewScroll(-10)
 		return m, nil
 	case "pgdown", "ctrl+d":
-		if notes {
-			m.scrollUpdateNotes(10)
-		} else {
-			m.updateModal.ScrollBy(10)
-		}
+		m.updatePreviewScroll(10)
 		return m, nil
 	}
 
@@ -574,10 +593,10 @@ func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.updateNotesOwnsScroll() {
 		switch msg.Mouse().Button {
 		case tea.MouseWheelUp:
-			m.scrollUpdateNotes(-3)
+			m.updatePreviewScroll(-3)
 			return m, nil
 		case tea.MouseWheelDown:
-			m.scrollUpdateNotes(3)
+			m.updatePreviewScroll(3)
 			return m, nil
 		}
 	}
@@ -606,7 +625,7 @@ func (m *Model) updateNotesSection() modal.Section {
 // the terminal — inside the modal's clamp either way.
 func (u *updateUIState) notesWindowRows(screenH int) int {
 	if !u.notesExpanded {
-		return max(notesCollapsedRows, min(3, notesCollapsedRows))
+		return notesCollapsedRows
 	}
 	return max(modal.PreferredListRows(screenH), 3)
 }
@@ -614,7 +633,7 @@ func (u *updateUIState) notesWindowRows(screenH int) int {
 func (m *Model) renderUpdateNotes(contentW int, focusID, hoverID string) modal.RenderedSection {
 	u := m.updateUIState()
 	wrapW := max(10, contentW-1) // reserve the bar's column
-	lines := m.updateNotesLines(u, wrapW)
+	lines := m.updateActiveLines(u, wrapW)
 	total := len(lines)
 
 	window := u.notesWindowRows(m.height)
@@ -624,8 +643,10 @@ func (m *Model) renderUpdateNotes(contentW int, focusID, hoverID string) modal.R
 	u.notesScroll = scroll
 	u.notesTotal, u.notesVisible, u.notesPresent = total, visible, true
 
+	meta := fmt.Sprintf("%s %s · %d lines",
+		u.notesTarget.DisplayName, u.notesTarget.LatestVersion, total)
 	var b strings.Builder
-	b.WriteString(updateNotesHeader(fmt.Sprintf("%d lines", total), contentW))
+	b.WriteString(updateNotesHeader(meta, contentW))
 	b.WriteString("\n")
 
 	padded := make([]string, visible)
@@ -676,15 +697,46 @@ func (m *Model) updateNotesToggleSection() modal.Section {
 			style = lipgloss.NewStyle().Foreground(styles.Primary)
 		}
 		rendered := style.Render(label)
-		return modal.RenderedSection{
-			Content: rendered,
-			Focusables: []modal.FocusableInfo{{
-				ID:     updateNotesToggleID,
-				Width:  lipgloss.Width(rendered),
-				Height: 1,
-			}},
+		focusables := []modal.FocusableInfo{{
+			ID:     updateNotesToggleID,
+			Width:  lipgloss.Width(rendered),
+			Height: 1,
+		}}
+		content := rendered
+
+		if u.notesExpanded && u.hasNotesTarget() {
+			switch m.changelogState {
+			case changelogLoading:
+				content += "\n" + styles.Muted.Render("Loading full changelog…")
+			case changelogFailed:
+				errLine := lipgloss.NewStyle().Foreground(styles.Error).
+					Render("Couldn't load the full changelog: " + updateChangelogErrText(m.changelogErr))
+				retry := styles.Muted.Render("[ Retry ]")
+				if focusID == updateChangelogRetryID {
+					retry = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("[ Retry ]")
+				} else if hoverID == updateChangelogRetryID {
+					retry = lipgloss.NewStyle().Foreground(styles.Primary).Render("[ Retry ]")
+				}
+				content += "\n" + errLine + "\n" + retry
+				focusables = append(focusables, modal.FocusableInfo{
+					ID:      updateChangelogRetryID,
+					OffsetY: 2,
+					Width:   lipgloss.Width(retry),
+					Height:  1,
+				})
+			}
 		}
+
+		return modal.RenderedSection{Content: content, Focusables: focusables}
 	}, m.updateNotesSectionUpdate)
+}
+
+// updateChangelogErrText words a fetch failure for the styled error line.
+func updateChangelogErrText(err error) string {
+	if err == nil {
+		return "unknown error"
+	}
+	return err.Error()
 }
 
 // updateNotesHeader draws the section rule per modal-redesign.md's Header
@@ -713,18 +765,61 @@ func (m *Model) updateNotesSectionUpdate(msg tea.Msg, focusID string) (string, t
 	return "", nil
 }
 
-// updateNotesLines renders the parsed notes to wrapped lines, trailing blanks
-// trimmed so the window math counts what will actually draw.
-func (m *Model) updateNotesLines(u *updateUIState, wrapW int) []string {
-	notes := u.notes
-	if strings.TrimSpace(notes) == "" {
-		notes = "No release notes available."
-	}
-	lines := strings.Split(strings.TrimRight(renderReleaseNotes(parseReleaseNotes(notes), wrapW), "\n"), "\n")
+// markdownLines renders markdown to wrapped lines, trailing blanks trimmed so
+// the window math counts what will actually draw.
+func markdownLines(md string, wrapW int) []string {
+	lines := strings.Split(strings.TrimRight(renderReleaseNotes(parseReleaseNotes(md), wrapW), "\n"), "\n")
 	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// updateActiveLines picks what the section windows right now: the offered
+// release's body normally; once expanded and loaded, that release's full
+// tag-pinned changelog.
+func (m *Model) updateActiveLines(u *updateUIState, wrapW int) []string {
+	if u.notesExpanded && m.changelogState == changelogLoaded && m.changelogBody != "" {
+		return markdownLines(m.changelogBody, wrapW)
+	}
+	body := u.notesTarget.Notes
+	if strings.TrimSpace(body) == "" {
+		body = "No release notes were published for this release."
+	}
+	return markdownLines(body, wrapW)
+}
+
+// fetchChangelogCmd starts the tag-pinned fetch for the current notes target,
+// marking the request tag so a late response for another release is dropped.
+func (m *Model) fetchChangelogCmd() tea.Cmd {
+	t := m.updateUI.notesTarget
+	d, ok := version.DescriptorFor(t.Product)
+	if !ok || t.LatestVersion == "" {
+		return nil
+	}
+	m.changelogTag = t.LatestVersion
+	m.changelogState = changelogLoading
+	return version.FetchChangelogCmd(d.RepoOwner, d.RepoName, t.LatestVersion)
+}
+
+// handleUpdateChangelogMsg settles a changelog fetch. Responses for anything
+// other than the request still in flight are stale and dropped.
+func (m *Model) handleUpdateChangelogMsg(msg version.ChangelogMsg) {
+	d, ok := version.DescriptorFor(m.changelogProduct)
+	if !ok || msg.Tag != m.changelogTag || msg.Repo != d.RepoName {
+		return
+	}
+	if msg.Err != nil {
+		m.changelogErr = msg.Err
+		m.changelogState = changelogFailed
+	} else {
+		m.changelogBody = msg.Body
+		m.changelogErr = nil
+		m.changelogState = changelogLoaded
+	}
+	if m.updateModal != nil {
+		m.updateModal.Invalidate()
+	}
 }
 
 // updateNotesOwnsScroll reports that the Overview phase's scroll keys and
@@ -732,6 +827,19 @@ func (m *Model) updateNotesLines(u *updateUIState, wrapW int) []string {
 func (m *Model) updateNotesOwnsScroll() bool {
 	u := m.updateUIState()
 	return u != nil && u.phase == UpdateModalPreview && u.notesPresent
+}
+
+// updatePreviewScroll scrolls the Preview phase's content by delta: the notes
+// window first, spilling into the modal body once the notes hit their edge —
+// on a tiny terminal both scrollers have something to move.
+func (m *Model) updatePreviewScroll(delta int) {
+	if m.updateNotesOwnsScroll() && !m.updateNotesAtBoundary(delta) {
+		m.scrollUpdateNotes(delta)
+		return
+	}
+	if m.updateModal != nil && m.updateModal.CanScroll(delta) {
+		m.updateModal.ScrollBy(delta)
+	}
 }
 
 func (m *Model) scrollUpdateNotes(delta int) {
@@ -781,8 +889,6 @@ func (m *Model) updateNotesBarEvent(msg tea.MouseMsg) (bool, tea.Cmd) {
 		})
 }
 
-// and excessive whitespace. The modal already shows "What's New" as a header,
-// so we strip any leading "What's New" headers from the content.
 // parseReleaseNotes cleans up release notes by removing duplicate headers
 // and excessive whitespace. The modal already shows "What's New" as a header,
 // so we strip any leading "What's New" headers from the content.

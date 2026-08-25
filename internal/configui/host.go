@@ -45,6 +45,9 @@ type UpdateStatus struct {
 	Failed bool
 	// Available marks a real available update.
 	Available bool
+	// AnyPending marks any updater work worth opening the surface for:
+	// another product's pending update included, not just Sidecar's own.
+	AnyPending bool
 	// LatestVersion is the release a user would move to.
 	LatestVersion string
 }

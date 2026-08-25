@@ -121,8 +121,9 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview at top",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				td := target(version.ProductTd, "td", "1.0.0", "1.1.0", true)
+				td.Notes = strings.Repeat("- changelog entry\n", 200)
+				m.products = []version.Target{td}
 				h := renderedUpdateModal(t, m)
 				return modalBodyPoint(t, h)
 			},
@@ -132,8 +133,9 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview at bottom",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				td := target(version.ProductTd, "td", "1.0.0", "1.1.0", true)
+				td.Notes = strings.Repeat("- changelog entry\n", 200)
+				m.products = []version.Target{td}
 				h := renderedUpdateModal(t, m)
 				m.scrollUpdateNotesTo(1 << 20)
 				return modalBodyPoint(t, h)
@@ -144,8 +146,9 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview mid-content is movable both ways",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				td := target(version.ProductTd, "td", "1.0.0", "1.1.0", true)
+				td.Notes = strings.Repeat("- changelog entry\n", 200)
+				m.products = []version.Target{td}
 				h := renderedUpdateModal(t, m)
 				m.scrollUpdateNotesTo(3)
 				return modalBodyPoint(t, h)

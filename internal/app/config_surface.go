@@ -126,17 +126,21 @@ func (m *Model) configHostState() configui.HostState {
 
 // configUpdateStatus reports the release check the app already runs from Init.
 // Configuration renders it; it never runs a check of its own, and an unknown
-// answer stays unknown rather than becoming "up to date".
+// answer stays unknown rather than becoming "up to date". AnyPending is
+// deliberately independent of Sidecar's own row: another product's pending
+// update is still work worth opening the updater for.
 func (m *Model) configUpdateStatus() configui.UpdateStatus {
+	anyPending := m.hasUpdatesAvailable() || m.updateInProgress || m.needsRestart
 	target := m.productTarget(version.ProductSidecar)
 	if target == nil {
-		return configui.UpdateStatus{}
+		return configui.UpdateStatus{Checked: len(m.products) > 0, AnyPending: anyPending}
 	}
 	return configui.UpdateStatus{
 		Checked:       true,
 		Failed:        target.CheckFailed,
 		Available:     target.HasUpdate,
 		LatestVersion: target.LatestVersion,
+		AnyPending:    anyPending,
 	}
 }
 

@@ -266,6 +266,17 @@ func (m *Modal) ScrollBy(delta int) {
 	m.scrollOffset = max(0, m.scrollOffset+delta)
 }
 
+// CanScroll reports whether the body viewport can still move delta lines in
+// the given direction — what an inner scroller's owner needs to decide when
+// to hand leftover scroll keys to the body.
+func (m *Modal) CanScroll(delta int) bool {
+	if !m.layoutValid {
+		return false
+	}
+	_, moved := m.bounds().Move(delta)
+	return moved
+}
+
 // ScrollToTop scrolls to the top of the content.
 func (m *Modal) ScrollToTop() { m.scrollOffset = 0 }
 

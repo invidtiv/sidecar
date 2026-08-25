@@ -574,6 +574,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ShowToast("Error: "+msg.Err.Error(), 5*time.Second)
 		return m, nil
 
+	case version.ChangelogMsg:
+		m.handleUpdateChangelogMsg(msg)
+		return m, nil
+
 	case UpdateBatchReadyMsg:
 		return m, m.handleUpdateBatchReady(msg)
 

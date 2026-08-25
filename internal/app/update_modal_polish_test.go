@@ -150,8 +150,9 @@ func TestUpdateHint_OneStyleNoFalseCancel(t *testing.T) {
 func notesFixtureModel(t *testing.T) *Model {
 	t.Helper()
 	m := &Model{width: 100, height: 42}
-	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	m.updateNotes = strings.Repeat("- changelog entry\n", 120)
+	td := target(version.ProductTd, "td", "1.0.0", "1.1.0", true)
+	td.Notes = strings.Repeat("- changelog entry\n", 120)
+	m.products = []version.Target{td}
 	m.openUpdateModal()
 	rendered := renderUpdatePhase(m)
 	if rendered == "" {

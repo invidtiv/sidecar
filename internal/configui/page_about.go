@@ -146,7 +146,7 @@ func (m *Model) buildAbout(b *paneBuilder) {
 	b.text(FormRow("Update status", StaticField(updateStatusLabel(update), b.controlWidth(aboutControlWidth), State{}), State{}))
 
 	b.blank()
-	if update.Available {
+	if update.Available || update.AnyPending {
 		b.buttons(
 			buttonSpec{id: regionAboutUpdater, key: "", label: "Enter  Open updater", primary: true,
 				run: func(m *Model) tea.Cmd {

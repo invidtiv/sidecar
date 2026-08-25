@@ -76,11 +76,6 @@ func (m *Model) setProductStatus(msg version.ProductStatusMsg) {
 	}
 	m.sortProducts()
 
-	if msg.Target.Product == version.ProductSidecar {
-		if msg.ReleaseNotes != "" {
-			m.updateNotes = msg.ReleaseNotes
-		}
-	}
 }
 
 func (m *Model) sortProducts() {

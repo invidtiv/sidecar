@@ -298,7 +298,6 @@ type Model struct {
 	// than parallel per-product fields.
 	currentVersion string
 	products       []version.Target
-	updateNotes    string // Sidecar release notes; they describe Sidecar only
 
 	// Update feature state
 	updateInProgress bool
@@ -318,6 +317,14 @@ type Model struct {
 	updatePlanID    int
 	updateActiveIdx int
 
+	// Full-changelog expansion fetch, keyed by the offered release's tag:
+	// a response whose tag no longer matches is dropped as stale.
+	changelogState   updateChangelogState
+	changelogBody    string
+	changelogErr     error
+	changelogTag     string
+	changelogProduct version.ProductID
+
 	// Update modal state. One modal object carries every phase (Preview →
 	// Installing → Done/Failed); updateModalState selects which When-gated
 	// sections render.
@@ -334,7 +341,6 @@ type Model struct {
 	// updateNotesBar is the notes section's scrollbar pointer state (hover +
 	// press-time gesture snapshot).
 	updateNotesBar switcherBarState
-
 	// Intro animation
 	intro IntroModel
 
