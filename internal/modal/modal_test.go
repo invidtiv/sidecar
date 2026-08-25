@@ -712,8 +712,8 @@ func TestMeasureHeight(t *testing.T) {
 		{"single line", 1},
 		{"line 1\nline 2", 2},
 		{"line 1\nline 2\nline 3", 3},
-		{"with trailing\n", 1}, // Trailing newline trimmed
-		{"\n", 0},              // Only newline = empty
+		{"with trailing\n", 2}, // The trailing blank paints when sections join
+		{"\n", 2},              // One blank line plus its break
 	}
 
 	for _, tc := range cases {
