@@ -317,14 +317,6 @@ type Model struct {
 	updatePlanID    int
 	updateActiveIdx int
 
-	// Full-changelog expansion fetch, keyed by the offered release's tag:
-	// a response whose tag no longer matches is dropped as stale.
-	changelogState   updateChangelogState
-	changelogBody    string
-	changelogErr     error
-	changelogTag     string
-	changelogProduct version.ProductID
-
 	// Update modal state. One modal object carries every phase (Preview →
 	// Installing → Done/Failed); updateModalState selects which When-gated
 	// sections render.

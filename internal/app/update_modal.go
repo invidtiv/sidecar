@@ -69,6 +69,16 @@ type updateUIState struct {
 	notesVisible  int
 	notesPresent  bool
 
+	// Full-changelog expansion fetch, keyed by the offered release's tag.
+	// Lives on this shared struct because the modal's section closures are
+	// bound to whichever model copy built them; per-copy fields would go
+	// stale after the next Update.
+	changelogState   updateChangelogState
+	changelogBody    string
+	changelogErr     error
+	changelogTag     string
+	changelogProduct version.ProductID
+
 	// presentedPhase records which phase the modal's presentation currently
 	// reflects so re-presenting is skipped between phase changes. It lives on
 	// the shared heap struct because separate model copies cannot see each
@@ -117,12 +127,12 @@ func (m *Model) syncUpdateUI() {
 	} else if len(u.products) > 0 {
 		u.notesTarget = u.products[0]
 	}
-	if m.changelogProduct != u.notesTarget.Product {
-		m.changelogProduct = u.notesTarget.Product
-		m.changelogState = changelogIdle
-		m.changelogBody = ""
-		m.changelogErr = nil
-		m.changelogTag = ""
+	if u.changelogProduct != u.notesTarget.Product {
+		u.changelogProduct = u.notesTarget.Product
+		u.changelogState = changelogIdle
+		u.changelogBody = ""
+		u.changelogErr = nil
+		u.changelogTag = ""
 	}
 	u.anyManaged = false
 	for _, t := range version.SelectPlan(u.products) {
@@ -536,7 +546,7 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 		if u := m.updateUIState(); u != nil {
 			u.notesExpanded = !u.notesExpanded
 			u.notesScroll = 0
-			if u.notesExpanded && m.changelogState == changelogIdle && u.hasNotesTarget() {
+			if u.notesExpanded && u.changelogState == changelogIdle && u.hasNotesTarget() {
 				fetch = m.fetchChangelogCmd()
 			}
 		}
@@ -705,12 +715,12 @@ func (m *Model) updateNotesToggleSection() modal.Section {
 		content := rendered
 
 		if u.notesExpanded && u.hasNotesTarget() {
-			switch m.changelogState {
+			switch u.changelogState {
 			case changelogLoading:
 				content += "\n" + styles.Muted.Render("Loading full changelog…")
 			case changelogFailed:
 				errLine := lipgloss.NewStyle().Foreground(styles.Error).
-					Render("Couldn't load the full changelog: " + updateChangelogErrText(m.changelogErr))
+					Render("Couldn't load the full changelog: " + updateChangelogErrText(u.changelogErr))
 				retry := styles.Muted.Render("[ Retry ]")
 				if focusID == updateChangelogRetryID {
 					retry = lipgloss.NewStyle().Foreground(styles.Primary).Bold(true).Render("[ Retry ]")
@@ -779,8 +789,8 @@ func markdownLines(md string, wrapW int) []string {
 // release's body normally; once expanded and loaded, that release's full
 // tag-pinned changelog.
 func (m *Model) updateActiveLines(u *updateUIState, wrapW int) []string {
-	if u.notesExpanded && m.changelogState == changelogLoaded && m.changelogBody != "" {
-		return markdownLines(m.changelogBody, wrapW)
+	if u.notesExpanded && u.changelogState == changelogLoaded && u.changelogBody != "" {
+		return markdownLines(u.changelogBody, wrapW)
 	}
 	body := u.notesTarget.Notes
 	if strings.TrimSpace(body) == "" {
@@ -792,30 +802,38 @@ func (m *Model) updateActiveLines(u *updateUIState, wrapW int) []string {
 // fetchChangelogCmd starts the tag-pinned fetch for the current notes target,
 // marking the request tag so a late response for another release is dropped.
 func (m *Model) fetchChangelogCmd() tea.Cmd {
-	t := m.updateUI.notesTarget
+	u := m.updateUI
+	if u == nil {
+		return nil
+	}
+	t := u.notesTarget
 	d, ok := version.DescriptorFor(t.Product)
 	if !ok || t.LatestVersion == "" {
 		return nil
 	}
-	m.changelogTag = t.LatestVersion
-	m.changelogState = changelogLoading
+	u.changelogTag = t.LatestVersion
+	u.changelogState = changelogLoading
 	return version.FetchChangelogCmd(d.RepoOwner, d.RepoName, t.LatestVersion)
 }
 
 // handleUpdateChangelogMsg settles a changelog fetch. Responses for anything
 // other than the request still in flight are stale and dropped.
 func (m *Model) handleUpdateChangelogMsg(msg version.ChangelogMsg) {
-	d, ok := version.DescriptorFor(m.changelogProduct)
-	if !ok || msg.Tag != m.changelogTag || msg.Repo != d.RepoName {
+	u := m.updateUI
+	if u == nil {
+		return
+	}
+	d, ok := version.DescriptorFor(u.changelogProduct)
+	if !ok || msg.Tag != u.changelogTag || msg.Repo != d.RepoName {
 		return
 	}
 	if msg.Err != nil {
-		m.changelogErr = msg.Err
-		m.changelogState = changelogFailed
+		u.changelogErr = msg.Err
+		u.changelogState = changelogFailed
 	} else {
-		m.changelogBody = msg.Body
-		m.changelogErr = nil
-		m.changelogState = changelogLoaded
+		u.changelogBody = msg.Body
+		u.changelogErr = nil
+		u.changelogState = changelogLoaded
 	}
 	if m.updateModal != nil {
 		m.updateModal.Invalidate()

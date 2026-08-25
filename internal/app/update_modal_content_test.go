@@ -61,13 +61,14 @@ func TestUpdateChangelog_ExpandFetchRetryMachine(t *testing.T) {
 	m.products = []version.Target{td}
 	m.openUpdateModal()
 	renderUpdatePhase(m)
+	u := m.updateUIState()
 
 	_, fetch := m.applyUpdateAction("toggle-notes", nil)
-	if m.changelogState != changelogLoading {
-		t.Fatalf("expanding should start the fetch, state %v", m.changelogState)
+	if u.changelogState != changelogLoading {
+		t.Fatalf("expanding should start the fetch, state %v", u.changelogState)
 	}
-	if m.changelogTag != "v1.1.0" {
-		t.Fatalf("request tag = %q", m.changelogTag)
+	if u.changelogTag != "v1.1.0" {
+		t.Fatalf("request tag = %q", u.changelogTag)
 	}
 	if fetch == nil {
 		t.Fatal("expanding should return the fetch command")
@@ -75,15 +76,15 @@ func TestUpdateChangelog_ExpandFetchRetryMachine(t *testing.T) {
 
 	// A stale response for another tag changes nothing.
 	m.handleUpdateChangelogMsg(version.ChangelogMsg{Repo: "td", Tag: "v9.8.8", Body: "stale"})
-	if m.changelogState != changelogLoading {
-		t.Fatalf("a stale response must be dropped, state %v", m.changelogState)
+	if u.changelogState != changelogLoading {
+		t.Fatalf("a stale response must be dropped, state %v", u.changelogState)
 	}
 
 	// Failure renders the styled error and a retry affordance.
 	m.handleUpdateChangelogMsg(version.ChangelogMsg{Repo: "td", Tag: "v1.1.0",
 		Err: errors.New("HTTP 404")})
-	if m.changelogState != changelogFailed {
-		t.Fatalf("expected failed, got %v", m.changelogState)
+	if u.changelogState != changelogFailed {
+		t.Fatalf("expected failed, got %v", u.changelogState)
 	}
 	out := strings.ToLower(plainText(renderUpdatePhase(m)))
 	if !strings.Contains(out, "couldn't load the full changelog") {
@@ -96,14 +97,14 @@ func TestUpdateChangelog_ExpandFetchRetryMachine(t *testing.T) {
 	if _, retry := m.applyUpdateAction("retry-changelog", nil); retry == nil {
 		t.Error("retry should re-issue the fetch command")
 	}
-	if m.changelogState != changelogLoading {
-		t.Fatalf("retry should restart the fetch, state %v", m.changelogState)
+	if u.changelogState != changelogLoading {
+		t.Fatalf("retry should restart the fetch, state %v", u.changelogState)
 	}
 	// Success on retry swaps the window over to the fetched changelog.
 	m.handleUpdateChangelogMsg(version.ChangelogMsg{Repo: "td", Tag: "v1.1.0",
 		Body: "# Changelog\n\n- full history entry"})
-	if m.changelogState != changelogLoaded {
-		t.Fatalf("expected loaded, got %v", m.changelogState)
+	if u.changelogState != changelogLoaded {
+		t.Fatalf("expected loaded, got %v", u.changelogState)
 	}
 	out = plainText(renderUpdatePhase(m))
 	if !strings.Contains(out, "full history entry") {
