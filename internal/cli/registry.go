@@ -304,7 +304,10 @@ func RootCommand() *Command {
 			"Otherwise it targets the unique running instance, or a specific --shell / --project.\n" +
 			"--diff with no spec is the working tree. --provider names a configured terminal resource\n" +
 			"provider instance and is required for a resource: a bare locator is never guessed at.\n" +
-			"--split only overrides the split axis; it never halves a live terminal after content is open.",
+			"--split only overrides the split axis; it never halves a live terminal after content is open.\n" +
+			"--at places the pane at an explicit grid cell and is a requirement: a kind whose open\n" +
+			"would retarget an existing pane, or any cell that cannot be honored exactly, declines\n" +
+			"rather than land elsewhere (--split expresses a preference; --at, a demand).",
 		Targets: []TargetDoc{
 			{Target: "path", Summary: "A file inside the target workspace, optionally \"path:line\""},
 			{Target: "td-xxxxxx", Summary: "A td issue id"},
@@ -320,6 +323,7 @@ func RootCommand() *Command {
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--split", Arg: "auto|right|below", Summary: "Where to place a new pane (default auto)"},
+			{Name: "--at", Arg: "COL[.ROW]", Summary: "Place at an explicit grid cell (1-based); a requirement, mutually exclusive with --split"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms; 0 = fire and forget)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
@@ -342,6 +346,7 @@ func RootCommand() *Command {
 			{Command: "sidecar open abc1234", Description: "commit, unless a file of that name exists"},
 			{Command: "sidecar open --provider jira-work CASH-1245", Description: "resource pane for that provider's locator"},
 			{Command: "sidecar open --json --split below README.md", Description: "structured result for the agent"},
+			{Command: "sidecar open README.md --at 2.1", Description: "explicit cell: second column, top row"},
 			{Command: "sidecar open --project sidecar README.md", Description: "from any terminal, that project's Workspaces surface"},
 		},
 		Agent: AgentDoc{

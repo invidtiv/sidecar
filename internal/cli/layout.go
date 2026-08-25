@@ -79,15 +79,30 @@ func layoutCommand() *Command {
 }
 
 // applyLayoutSubcommand is `sidecar layout apply`: repeatable --pane
-// descriptors, one atomic batch, per-pane verdicts in the ack.
+// descriptors or one whole-layout --spec, one atomic call, per-pane verdicts
+// in the ack.
 func applyLayoutSubcommand() *Command {
 	return &Command{
 		Name:    "apply",
 		Summary: "Open several panes in one all-or-nothing call",
-		Usage:   "sidecar layout apply [options] --pane '<json>' [--pane '<json>' ...]",
-		Long: "Compose panes onto the surface showing this Sidecar shell. Each --pane is one\n" +
-			"descriptor, given as its JSON object verbatim while the compact grammar is\n" +
-			"still settling:\n\n" +
+		Usage:   "sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...])",
+		Long: "Compose panes onto the surface showing this Sidecar shell.\n\n" +
+			"--spec is a FULL layout, given as columns of stacked panes; it replaces\n" +
+			"what is on screen:\n\n" +
+			"  {\"columns\":[\n" +
+			"    {\"panes\":[{\"kind\":\"primary\"}]},\n" +
+			"    {\"panes\":[{\"kind\":\"file\",\"targets\":[\"path:line\",\"path2\",...]},\n" +
+			"              {\"kind\":\"issue\",\"targets\":[\"td-xxxxxx\",...]}]},\n" +
+			"    {\"panes\":[{\"kind\":\"shell\",\"run\":\"...\",\"name\":\"...\"}]}\n" +
+			"  ]}\n\n" +
+			"A spec needs exactly one \"primary\" pane and must CARRY every live leaf\n" +
+			"already on screen exactly as `layout get` prints them: the primary as\n" +
+			"{\"kind\":\"primary\"}, a split terminal as {\"kind\":\"shell\",\"session\":\n" +
+			"\"<tmux-session>\"}. A spec omitting a live terminal declines naming the\n" +
+			"session — apply never destroys one. Passive panes not named are closed\n" +
+			"freely (their content re-opens). Pass `-` to read the spec from stdin.\n\n" +
+			"--pane opens panes ADDITIVELY without closing anything. Each value is one\n" +
+			"descriptor as its JSON object verbatim:\n\n" +
 			"  {\"kind\":\"file\",\"targets\":[\"path:line\",...],\"at\":\"2.1\"}\n" +
 			"  {\"kind\":\"issue\",\"targets\":[\"td-xxxxxx\"]}\n" +
 			"  {\"kind\":\"note\",\"targets\":[\"nt-xxxxxx\"]}\n" +
@@ -99,15 +114,14 @@ func applyLayoutSubcommand() *Command {
 			"preference: an unreachable cell declines rather than landing elsewhere.\n" +
 			"File paths are workspace-relative; diffs re-resolve host-side; providers are\n" +
 			"validated against the live matcher snapshot.\n\n" +
-			"The whole batch is validated and fit-tested before anything opens: either\n" +
-			"every pane lands, or nothing changes and the decline names the first\n" +
-			"violation. The batch only ever ADDS panes — it closes nothing, moves\n" +
-			"nothing, and never destroys a live terminal.\n\n" +
+			"Either form is validated and fit-tested before anything changes: it all\n" +
+			"happens, or nothing changes and the decline names the first violation.\n\n" +
 			"The ack's items array lists EVERY requested pane with verdict opened,\n" +
 			"retargeted, or declined plus its landed cell, so one round trip shows\n" +
 			"everything wrong with a refused spec. Like get, apply never queues.",
 		Flags: []Flag{
-			{Name: "--pane", Arg: "JSON", Summary: "One pane descriptor (repeatable); see above for the object shape"},
+			{Name: "--spec", Arg: "JSON", Summary: "A full layout replacing the screen: columns of stacked panes (- reads stdin)"},
+			{Name: "--pane", Arg: "JSON", Summary: "One pane descriptor to add (repeatable); see above for the object shape"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms)"},
@@ -123,12 +137,15 @@ func applyLayoutSubcommand() *Command {
 			{Code: 4, Summary: "declined host-side; the reason names the first violation"},
 		},
 		Examples: []Example{
-			{Command: `sidecar layout apply --pane '{"kind":"file","targets":["internal/palette/list.go:112","internal/palette/state.go"]}' --pane '{"kind":"issue","targets":["td-756c34"]}' --pane '{"kind":"shell","run":"make dev","name":"dev server"}'`, Description: "three panes at once, auto-placed"},
+			{Command: `sidecar layout get --json`, Description: "read before you write"},
+			{Command: `sidecar layout apply --spec '{"columns":[{"panes":[{"kind":"primary"}]},{"panes":[{"kind":"file","targets":["README.md"]},{"kind":"issue","targets":["td-756c34"]}]}]}'`, Description: "a full layout: primary left, file over issue right"},
+			{Command: `sidecar layout apply --spec - <layout.json`, Description: "apply a spec from stdin"},
+			{Command: `sidecar layout apply --pane '{"kind":"file","targets":["internal/palette/list.go:112","internal/palette/state.go"]}' --pane '{"kind":"shell","run":"make dev","name":"dev server"}'`, Description: "add two panes, auto-placed"},
 			{Command: `sidecar layout apply --pane '{"kind":"file","targets":["README.md"],"at":"2.1"}' --json`, Description: "explicit cell, structured result"},
 		},
 		Agent: AgentDoc{
-			Invocation: `sidecar layout apply --pane '{"kind":"file|issue|note|diff|resource","targets":[...],"at":"col.row"}' [--pane ...] | --pane '{"kind":"shell","run":"...","name":"..."}'`,
-			Summary:    "Open a composed set of panes atomically, or learn exactly why nothing changed",
+			Invocation: `sidecar layout apply --spec '{"columns":[{"panes":[...]}]}' | --pane '{"kind":"file|issue|note|diff|resource","targets":[...],"at":"col.row"}' [--pane ...] | --pane '{"kind":"shell","session":"<tmux-session>"}'`,
+			Summary:    "Apply a full layout from a spec, or add panes atomically; learn exactly why nothing changed",
 		},
 		Run: runLayoutApply,
 	}

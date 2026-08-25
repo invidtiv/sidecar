@@ -1,9 +1,12 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -13,8 +16,9 @@ import (
 // runLayout is the shared runner behind layout get/apply: one uirequest, one
 // ack wait, exit codes exactly like open's (0 applied, 2 usage, 3 no
 // instance, 4 declined with the reason verbatim). Layout requests never
-// queue, so a queued ack is never expected and reads as a decline.
-func runLayout(env Env, mode string, panes []uirequest.LayoutPane, jsonOutput bool, shellFlag, projectFlag string, waitDuration time.Duration) int {
+// queue, so a queued ack is never expected and reads as a decline. A
+// non-empty specRaw is the full-layout --spec; panes is the additive batch.
+func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.RawMessage, jsonOutput bool, shellFlag, projectFlag string, waitDuration time.Duration) int {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -26,7 +30,7 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, jsonOutput bo
 		return destExitCode(err)
 	}
 
-	payload, err := json.Marshal(uirequest.LayoutPayload{Mode: mode, Panes: panes})
+	payload, err := json.Marshal(uirequest.LayoutPayload{Mode: mode, Panes: panes, Columns: specRaw})
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
@@ -172,7 +176,7 @@ func runLayoutGet(env Env, args []string) int {
 		cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeGet, nil, jsonOutput, shellFlag, projectFlag, waitDuration)
+	return runLayout(env, uirequest.LayoutModeGet, nil, nil, jsonOutput, shellFlag, projectFlag, waitDuration)
 }
 
 func runLayoutApply(env Env, args []string) int {
@@ -183,6 +187,32 @@ func runLayoutApply(env Env, args []string) int {
 	waitDuration := 1200 * time.Millisecond
 	shellFlag, projectFlag := "", ""
 	var panes []uirequest.LayoutPane
+	specColumns := json.RawMessage(nil)
+
+	takeSpecValue := func(value string) int {
+		if value == "-" {
+			raw, err := io.ReadAll(os.Stdin)
+			if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+				cliErrf(env.Stderr, "--spec - read no spec from stdin\n\n%s", help)
+				return 2
+			}
+			value = string(raw)
+		}
+		spec, code, msg := layoutSpecFlag(value)
+		if code != 0 {
+			cliErrf(env.Stderr, "%s\n\n%s", msg, help)
+			return code
+		}
+		// The payload's columns field carries the spec's column array; the
+		// object form is the user-facing grammar.
+		encoded, err := json.Marshal(spec.Columns)
+		if err != nil {
+			cliErrf(env.Stderr, "%v\n\n%s", err, help)
+			return 1
+		}
+		specColumns = encoded
+		return 0
+	}
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -200,12 +230,32 @@ func runLayoutApply(env Env, args []string) int {
 				cliErrf(env.Stderr, "--pane requires a JSON descriptor\n\n%s", help)
 				return 2
 			}
+			if specColumns != nil {
+				cliErrf(env.Stderr, "--spec and --pane are different modes: pass one or the other\n\n%s", help)
+				return 2
+			}
 			pane, code, msg := layoutPaneFlag(value)
 			if code != 0 {
 				cliErrf(env.Stderr, "%s\n\n%s", msg, help)
 				return code
 			}
 			panes = append(panes, pane)
+			i = nextArg
+			continue
+		}
+		if arg == "--spec" || strings.HasPrefix(arg, "--spec=") {
+			if len(panes) > 0 || specColumns != nil {
+				cliErrf(env.Stderr, "--spec and --pane are different modes: pass one or the other\n\n%s", help)
+				return 2
+			}
+			value, nextArg, ok := takeFlagArg(arg, args, i, "--spec")
+			if !ok || strings.TrimSpace(value) == "" {
+				cliErrf(env.Stderr, "--spec requires a JSON layout (or - for stdin)\n\n%s", help)
+				return 2
+			}
+			if code := takeSpecValue(value); code != 0 {
+				return code
+			}
 			i = nextArg
 			continue
 		}
@@ -221,11 +271,27 @@ func runLayoutApply(env Env, args []string) int {
 		return 2
 	}
 
-	if len(panes) == 0 {
-		cliErrf(env.Stderr, "layout apply needs at least one --pane descriptor\n\n%s", help)
+	if len(panes) == 0 && specColumns == nil {
+		cliErrf(env.Stderr, "layout apply needs --spec or at least one --pane descriptor\n\n%s", help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeApply, panes, jsonOutput, shellFlag, projectFlag, waitDuration)
+	return runLayout(env, uirequest.LayoutModeApply, panes, specColumns, jsonOutput, shellFlag, projectFlag, waitDuration)
+}
+
+// layoutSpecFlag validates one --spec value CLI-side through the shared
+// grammar and returns the parsed spec: shape within the caps, known kinds,
+// exactly one primary, and the fields each kind takes. Semantic resolution
+// (paths, providers, live-leaf accounting) stays host-side where the tree and
+// matchers live.
+func layoutSpecFlag(value string) (uirequest.LayoutSpec, int, string) {
+	spec, err := uirequest.DecodeLayoutSpec(json.RawMessage(value))
+	if err != nil {
+		return spec, 2, fmt.Sprintf("--spec is not a valid layout: %v", err)
+	}
+	if err := uirequest.ValidateLayoutSpec(spec); err != nil {
+		return spec, 2, err.Error()
+	}
+	return spec, 0, ""
 }
 
 // emitLayoutGet answers get: --json is the payload itself, unchanged; human

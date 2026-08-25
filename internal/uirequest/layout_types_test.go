@@ -83,3 +83,72 @@ func TestAckItemsShape(t *testing.T) {
 		t.Fatalf("declined item = %+v", decoded.Items[1])
 	}
 }
+
+func TestDecodeLayoutPayload_SpecForms(t *testing.T) {
+	apply, err := DecodeLayoutPayload(json.RawMessage(`{"mode":"apply","columns":[{"panes":[{"kind":"primary"}]}]}`))
+	if err != nil || len(apply.Columns) == 0 {
+		t.Fatalf("spec apply decode = %+v err=%v", apply, err)
+	}
+	columns, err := DecodeLayoutColumns(apply.Columns)
+	if err != nil || len(columns) != 1 || len(columns[0].Panes) != 1 || columns[0].Panes[0].Kind != "primary" {
+		t.Fatalf("columns decode = %+v err=%v", columns, err)
+	}
+	for raw, want := range map[string]string{
+		`{"mode":"apply","panes":[{"kind":"diff"}],"columns":[]}`: "never both",
+		`{"mode":"apply","columns":[]}`:                           "",
+		`{"mode":"get","columns":[]}`:                             "carries no layout spec",
+	} {
+		_, err := DecodeLayoutPayload(json.RawMessage(raw))
+		if want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("DecodeLayoutPayload(%s) = %v, want %q", raw, err, want)
+		}
+	}
+}
+
+func TestValidateLayoutSpec(t *testing.T) {
+	valid := func(panes ...string) LayoutSpec {
+		spec := LayoutSpec{}
+		for _, column := range panes {
+			var col LayoutSpecColumn
+			if err := json.Unmarshal(json.RawMessage(column), &col); err != nil {
+				t.Fatal(err)
+			}
+			spec.Columns = append(spec.Columns, col)
+		}
+		return spec
+	}
+
+	if err := ValidateLayoutSpec(valid(
+		`{"panes":[{"kind":"primary"}]}`,
+		`{"panes":[{"kind":"file","targets":["a.go"]},{"kind":"issue","targets":["td-1a2b3c"]}]}`,
+	)); err != nil {
+		t.Errorf("valid spec rejected: %v", err)
+	}
+
+	for name, tc := range map[string]struct {
+		spec LayoutSpec
+		want string
+	}{
+		"no columns":    {LayoutSpec{}, "at least one column"},
+		"five columns":  {valid(`{}`, `{}`, `{}`, `{}`, `{}`), "cap is 4"},
+		"empty column":  {valid(`{"panes":[]}`), "carries no panes"},
+		"five rows":     {valid(`{"panes":[{"kind":"primary"},{"kind":"diff"},{},{},{}]}`), "cap is 4"},
+		"unknown kind":  {valid(`{"panes":[{"kind":"browser"}]}`), "unknown pane kind"},
+		"no primary":    {valid(`{"panes":[{"kind":"file","targets":["a.go"]}]}`), "exactly one"},
+		"two primaries": {valid(`{"panes":[{"kind":"primary"}]}`, `{"panes":[{"kind":"primary"}]}`), "found 2"},
+		"at in a spec": {valid(
+			`{"panes":[{"kind":"primary"}]}`,
+			`{"panes":[{"kind":"file","targets":["a.go"],"at":"2.1"}]}`,
+		), "positions panes"},
+		"primary fields": {valid(`{"panes":[{"kind":"primary","run":"x"}]}`), "takes no other fields"},
+		"carry with run": {valid(`{"panes":[{"kind":"primary"}]}`, `{"panes":[{"kind":"shell","session":"s","run":"x"}]}`), "takes only"},
+		"shell targets":  {valid(`{"panes":[{"kind":"primary"}]}`, `{"panes":[{"kind":"shell","targets":["a.go"]}]}`), "not targets"},
+		"resource bare":  {valid(`{"panes":[{"kind":"primary"}]}`, `{"panes":[{"kind":"resource","targets":["CASH-1"]}]}`), "provider"},
+		"file no target": {valid(`{"panes":[{"kind":"primary"}]}`, `{"panes":[{"kind":"file"}]}`), "needs at least one target"},
+	} {
+		err := ValidateLayoutSpec(tc.spec)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: ValidateLayoutSpec = %v, want %q", name, err, tc.want)
+		}
+	}
+}

@@ -75,6 +75,9 @@ func (p *Plugin) answerLayout(req uirequest.Request, payload uirequest.LayoutPay
 		report := p.buildLayoutReport(root, surface)
 		return p.ackLayout(req, uirequest.StatusOpened, "", nil, report)
 	}
+	if len(payload.Columns) > 0 {
+		return p.applyLayoutSpec(req, payload, root, surface)
+	}
 	return p.applyLayoutBatch(req, payload, root, surface)
 }
 
@@ -385,42 +388,62 @@ func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPla
 	return plan, ""
 }
 
-// deckCellFor translates a screen cell onto the deck's grid. At most ONE shell
-// leaf can exist (LiveLeafCap), sitting beside the primary terminal, so the
-// only difference between the two grids is that shell's row: cells above it
-// keep their address, the shell's own row belongs to no content pane, and
-// cells below shift up by one — but only while the column keeps a non-shell
-// anchor. A column that is nothing BUT the live terminal has no deck-side
-// existence at all, so no cell in it translates.
+// deckCellFor translates a screen cell onto the deck's grid. The deck sees the
+// same layout minus every Shell leaf — a shell row shrinks out of its column's
+// stack, and a column that held NOTHING BUT the shell drops out of the column
+// chain entirely — while the primary stays a deck leaf. The translation
+// therefore refuses a row or a column the live terminal owns outright, counts
+// only non-shell rows down to the addressed one, and renumbers the column past
+// every shell-only column to its left.
 func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, string) {
 	grid := panelayout.GridOf(screen)
 	if grid == nil || cell.Col > grid.ColumnCount() {
 		return cell, ""
 	}
 	column := grid.Columns[cell.Col-1]
-	anchored := false
-	for row, leaf := range column.Cells {
-		screenRow := row + 1
+	hasContent := false
+	for _, leaf := range column.Cells {
 		if leaf.Kind != panelayout.Shell {
-			anchored = true
-			continue
-		}
-		switch {
-		case screenRow == cell.Row:
-			return panelayout.Cell{}, fmt.Sprintf("cell %s holds the live terminal; content panes cannot take its place", cell.String())
-		case screenRow < cell.Row:
-			if !anchored {
-				return panelayout.Cell{}, fmt.Sprintf("cell %s sits inside the live terminal's own column; close or move the terminal first", cell.String())
-			}
-			return panelayout.Cell{Col: cell.Col, Row: cell.Row - 1}, ""
-		default:
-			if !anchored {
-				return panelayout.Cell{}, fmt.Sprintf("cell %s sits inside the live terminal's own column; close or move the terminal first", cell.String())
-			}
-			return cell, ""
+			hasContent = true
+			break
 		}
 	}
-	return cell, ""
+	if !hasContent {
+		return panelayout.Cell{}, fmt.Sprintf("cell %s sits inside the live terminal's own column; close or move the terminal first", cell.String())
+	}
+	if cell.Row <= len(column.Cells) {
+		if occupant := column.Cells[cell.Row-1]; occupant != nil && occupant.Kind == panelayout.Shell {
+			return panelayout.Cell{}, fmt.Sprintf("cell %s holds the live terminal; content panes cannot take its place", cell.String())
+		}
+	}
+	deckRow := 0
+	if cell.Row > len(column.Cells) {
+		// One past the screen column's end appends below EVERYTHING on the
+		// screen, so the deck row is one past its last content row too.
+		for _, leaf := range column.Cells {
+			if leaf.Kind != panelayout.Shell {
+				deckRow++
+			}
+		}
+		deckRow++
+	} else {
+		// An occupied row keeps its rank among the column's content rows.
+		for row, leaf := range column.Cells {
+			if leaf.Kind != panelayout.Shell && row+1 <= cell.Row {
+				deckRow++
+			}
+		}
+	}
+	deckCol := 1
+	for i := 0; i < cell.Col-1; i++ {
+		for _, leaf := range grid.Columns[i].Cells {
+			if leaf.Kind != panelayout.Shell {
+				deckCol++
+				break
+			}
+		}
+	}
+	return panelayout.Cell{Col: deckCol, Row: deckRow}, ""
 }
 
 // passivePlanRefusal explains a failed deck-side plan with the planner's own

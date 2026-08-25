@@ -954,7 +954,7 @@ func TestAppContentDeckRefusesPassiveSplitAtFitBoundary(t *testing.T) {
 			m.renderContent(tc.width, 30)
 			h := m.currentContentDeck()
 			before := h.deck.Encode()
-			out := m.openAppContentOutcome(h, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}, "")
+			out := m.openAppContentOutcome(h, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-22f35f"}, "", nil)
 			if tc.fit {
 				if out.Status == contentpanes.StatusRefused || h.deck.Leaf(panelayout.Issue) == 0 {
 					t.Fatalf("%dx30 should fit exact borderless-primary floor: %+v", tc.width, out)

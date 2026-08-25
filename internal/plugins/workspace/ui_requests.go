@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -427,11 +428,17 @@ type openOutcome struct {
 // performTargetOpen opens one resolved target on the given surface — the whole
 // per-kind body of `sidecar open`, minus acknowledgement writing. Both the
 // single-open ack path and the layout batch commit call it, so the two cannot
-// drift apart about what opening a target means.
+// drift apart about what opening a target means. A request carrying an
+// explicit cell (Options.At) takes the PlanOpenAt path instead: placement is a
+// requirement there, planned before anything opens.
 func (p *Plugin) performTargetOpen(req uirequest.Request, root, surface string) (openOutcome, tea.Cmd) {
 	prevSplit := p.openSplit
 	p.openSplit = req.Options.Split
 	defer func() { p.openSplit = prevSplit }()
+
+	if at := strings.TrimSpace(req.Options.At); at != "" {
+		return p.performAtCellOpen(req.Target, at, root, surface)
+	}
 
 	var cmd tea.Cmd
 	opened := false
@@ -498,6 +505,55 @@ func sameCanonicalPath(a, b string) bool {
 		return false
 	}
 	return canonicalOpenPath(a) == canonicalOpenPath(b)
+}
+
+// performAtCellOpen is the single-open explicit-cell path: the same plumbing
+// the layout batch's at-cells run — the SCREEN grid answers ranges, caps, and
+// retarget conflicts first (an --at that cannot land exactly where asked
+// declines; it is a requirement, never a preference), the cell then translates
+// onto the deck's own grid, and the plan that was validated is what commit
+// applies verbatim.
+func (p *Plugin) performAtCellOpen(target uirequest.Target, at, root, surface string) (openOutcome, tea.Cmd) {
+	cell, ok := panelayout.ParseCell(at)
+	if !ok {
+		return openOutcome{status: uirequest.StatusDeclined, reason: fmt.Sprintf("cell %q is not a grid address like 2.1", at)}, nil
+	}
+	kind, ok := paneKindForTarget(target.Kind)
+	if !ok {
+		return openOutcome{status: uirequest.StatusDeclined, reason: fmt.Sprintf("a %s target has no pane to place at a cell", string(target.Kind))}, nil
+	}
+	if _, refusal := panelayout.PlanOpenAt(p.paneRoot, kind, 0, cell); refusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
+	}
+	p.ensureWorkspaceDeck(root, surface)
+	translated, refusal := deckCellFor(p.paneRoot, cell)
+	if refusal != "" {
+		return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
+	}
+	plan, planned := panelayout.PlanOpenAtOrContent(p.contentDeck.Tree(), kind, translated, p.lastPaneBoxes())
+	if !planned {
+		return openOutcome{status: uirequest.StatusDeclined, reason: passivePlanRefusal(p.contentDeck.Tree(), kind)}, nil
+	}
+	return p.performPlannedOpen(target, root, surface, plan)
+}
+
+// paneKindForTarget maps an open request's wire kind onto its pane kind. Only
+// the passive content kinds are placeable: shells never arrive through `open`.
+func paneKindForTarget(kind uirequest.TargetKind) (panelayout.Kind, bool) {
+	switch kind {
+	case uirequest.TargetKindFile:
+		return panelayout.Document, true
+	case uirequest.TargetKindIssue:
+		return panelayout.Issue, true
+	case uirequest.TargetKindNote:
+		return panelayout.Note, true
+	case uirequest.TargetKindDiff:
+		return panelayout.Diff, true
+	case uirequest.TargetKindResource:
+		return panelayout.Resource, true
+	default:
+		return 0, false
+	}
 }
 
 func canonicalOpenPath(path string) string {
@@ -569,6 +625,13 @@ func (p *Plugin) consumePendingView(tmuxName string) tea.Cmd {
 	prevSplit := p.openSplit
 	p.openSplit = pv.Options.Split
 	defer func() { p.openSplit = prevSplit }()
+
+	// An explicit cell queued with an off-screen shell is re-planned at
+	// selection time, exactly as --split is re-applied there.
+	if at := strings.TrimSpace(pv.Options.At); at != "" {
+		_, cmd := p.performAtCellOpen(pv.Target, at, root, surface)
+		return cmd
+	}
 
 	switch pv.Target.Kind {
 	case uirequest.TargetKindFile:

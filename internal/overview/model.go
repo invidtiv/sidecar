@@ -295,6 +295,10 @@ type Model struct {
 	pendingViews map[string]*pendingView
 	// openSplit is the request-scoped --split axis override ("right"/"below").
 	openSplit string
+	// pendingOpenPlan is the request-scoped explicit-cell plan (--at): set by
+	// the open request handler, applied verbatim by the next placement, and
+	// cleared whether or not it was used.
+	pendingOpenPlan *panelayout.OpenPlan
 
 	// previewCloseHover is set while the pointer is over a content-pane X.
 	previewCloseHover bool
