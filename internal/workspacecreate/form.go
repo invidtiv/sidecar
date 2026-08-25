@@ -90,7 +90,11 @@ type OpenOpts struct {
 
 // Form is the Create Workspace chooser: inputs, indexes, skip, error, and modal cache.
 type Form struct {
-	kind             Kind
+	kind Kind
+	// providerID is the instance behind the selected row when that row is a
+	// resource provider; every resource row shares KindResource, so the Kind
+	// alone cannot say which one was chosen.
+	providerID       string
 	rows             []kindRow
 	showNotes        bool
 	step             FormStep
@@ -186,6 +190,9 @@ func Open(opts OpenOpts) *Form {
 	if kindLabel(f.rows, f.kind) == "" {
 		f.kind = f.rows[0].Kind
 	}
+	// The initial row resolves its provider before any change handler runs:
+	// the fields below are still being built.
+	f.providerID = f.rows[f.firstRowOfKind(f.kind)].ProviderID
 	lastKind = f.kind
 	f.nameInput = textinput.New()
 	f.nameInput.Prompt = ""
@@ -321,18 +328,53 @@ func (f *Form) Kind() Kind {
 	return f.kind
 }
 
-func (f *Form) SetKind(k Kind) {
-	if f == nil || f.kind == k {
+// selectRow makes row the chosen one. Selection is a ROW, not just a Kind:
+// resource rows all share KindResource, so the provider instance rides with
+// the row — picking the second provider must title, validate, and resolve
+// against that second instance.
+func (f *Form) selectRow(idx int) {
+	if f == nil || idx < 0 || idx >= len(f.rows) {
 		return
 	}
-	f.kind = k
-	lastKind = k
+	row := f.rows[idx]
+	if f.kind == row.Kind && f.providerID == row.ProviderID {
+		return
+	}
+	f.kind = row.Kind
+	f.providerID = row.ProviderID
+	lastKind = row.Kind
 	if f.step == StepTarget {
 		// Kind switching is a step-1 gesture; a stale picker must not survive
 		// into the next advance.
 		f.step = StepKind
 	}
 	f.applyKindChange()
+}
+
+func (f *Form) SetKind(k Kind) {
+	f.selectRow(f.firstRowOfKind(k))
+}
+
+// firstRowOfKind resolves a Kind to its row, falling back to row 0 when no
+// row offers it. Resource kinds resolve to their FIRST configured instance;
+// row-precise selection goes through selectRow via clicks and arrow keys.
+func (f *Form) firstRowOfKind(k Kind) int {
+	for i, row := range f.rows {
+		if row.Kind == k {
+			return i
+		}
+	}
+	return 0
+}
+
+// indexOfRow is the row's position in this form's catalog.
+func (f *Form) indexOfRow(row kindRow) int {
+	for i := range f.rows {
+		if f.rows[i].Kind == row.Kind && f.rows[i].ProviderID == row.ProviderID {
+			return i
+		}
+	}
+	return 0
 }
 
 // Placement is the segmented row's current value; Auto until a placement button
@@ -588,7 +630,7 @@ func (f *Form) build(width int, prevFocus string) {
 	}
 
 	sections := []modal.Section{
-		kindControl(FieldKind, f.rows, &f.kind, f.applyKindChange, f.kindDisabledReason),
+		kindControl(FieldKind, f.rows, f.selectedRowIndex, func(row kindRow) { f.selectRow(f.indexOfRow(row)) }, f.kindDisabledReason),
 		modal.Spacer(),
 	}
 	if f.showProject {
@@ -691,13 +733,15 @@ func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 	f.modal = m
 }
 
-// buildPicker assembles the target picker step: "New · <kind>" with the
+// buildPicker assembles the target picker step: "New · <label>" with the
 // filter/count/list sections from the picker, the placement row, and a Cancel
 // that closes (Esc is the way back). Enter opens with the recorded placement,
 // Auto unless a placement button was clicked earlier in this session; clicking
 // a placement button creates right now with it.
 func (f *Form) buildPicker(width int, prevFocus string) {
-	m := modal.New("New · "+kindLabel(f.rows, f.kind),
+	// The chosen ROW's label: for resource rows that is the instance ID that
+	// was picked, not whichever provider sorts first.
+	m := modal.New("New · "+f.selectedLabel(),
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
 		modal.WithInitialFocus(prevFocus),

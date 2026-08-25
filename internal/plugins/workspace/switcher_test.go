@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -10,7 +11,9 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // switcherPlugin is a pane-placing workspace with one selected shell, ready to
@@ -161,6 +164,78 @@ func TestPickerPlacementClickSubmitsWithAxis(t *testing.T) {
 	walk(p.paneRoot)
 	if !sawRows {
 		t.Fatal("Below placement did not produce a rows split")
+	}
+}
+
+// The project surface folds loader results through the same shared folds as
+// the Sessions browser. This drives THIS host's real data paths —
+// applyCreatePickerData and applyCreateFileCandidates — over what the loaders
+// actually return, so a fold that drifts on one surface only fails here.
+func TestWorkspaceHostPickerDataResolvesLikeTheCLI(t *testing.T) {
+	dir := initTwoCommitRepo(t)
+	refs, err := workspaceops.RecentDiffRefs(context.Background(), dir, 15)
+	if err != nil {
+		t.Fatalf("RecentDiffRefs: %v", err)
+	}
+	if len(refs) == 0 {
+		t.Fatal("fixture repo yielded no refs")
+	}
+
+	p := &Plugin{ctx: &plugin.Context{WorkDir: dir}}
+	p.createForm = workspacecreate.Open(workspacecreate.OpenOpts{AllowTerminalSplit: true, ShowNotes: true})
+	p.applyCreatePickerData(createPickerDataMsg{
+		Refs:   refs,
+		Issues: []workspaceops.IssueRef{{ID: "td-756c34", Title: "fix(palette): scrollbar", Status: "in_progress"}},
+		Notes:  []workspaceops.NoteRef{{ID: "nt-4jdj4e", Title: "scratch"}},
+	})
+
+	// Diff: the ref row must resolve by identity — RecentDiffRefs embeds the
+	// hash in Label, which must never leak into Value.
+	p.createForm.SetKind(workspacecreate.KindDiff)
+	p.createForm.AdvanceToTarget()
+	p.createForm.PickerInput().SetValue(refs[0].Identity)
+	p.createForm.SyncAfterInput()
+	got, err := p.createForm.TargetFor(dir)
+	if err != nil {
+		t.Fatalf("diff TargetFor: %v", err)
+	}
+	want, err := uirequest.ResolveDiffSpec(dir, refs[0].Identity)
+	if err != nil {
+		t.Fatalf("CLI ResolveDiffSpec: %v", err)
+	}
+	if got != want {
+		t.Fatalf("workspace diff target = %+v, want the CLI's %+v", got, want)
+	}
+
+	// Note: same form, same folds, id resolves as open would classify it.
+	p.createForm.SetKind(workspacecreate.KindNote)
+	p.createForm.AdvanceToTarget()
+	p.createForm.PickerInput().SetValue("nt-4jdj4e")
+	p.createForm.SyncAfterInput()
+	got, err = p.createForm.TargetFor(dir)
+	if err != nil {
+		t.Fatalf("note TargetFor: %v", err)
+	}
+	if got.Kind != uirequest.TargetKindNote || got.Value != "nt-4jdj4e" {
+		t.Fatalf("workspace note target = %+v", got)
+	}
+
+	// File: this host's recents-first candidate fold feeds the picker.
+	p.createForm.SetKind(workspacecreate.KindFile)
+	p.createForm.AdvanceToTarget()
+	p.applyCreateFileCandidates(workspacecreate.FilesScannedMsg{Root: dir, Paths: []string{"a.go"}})
+	p.createForm.PickerInput().SetValue("a.go")
+	p.createForm.SyncAfterInput()
+	got, err = p.createForm.TargetFor(dir)
+	if err != nil {
+		t.Fatalf("file TargetFor: %v", err)
+	}
+	wantFile, err := uirequest.ResolveFileTarget(dir, "a.go", 0)
+	if err != nil {
+		t.Fatalf("CLI ResolveFileTarget: %v", err)
+	}
+	if got != wantFile {
+		t.Fatalf("workspace file target = %+v, want the CLI's %+v", got, wantFile)
 	}
 }
 

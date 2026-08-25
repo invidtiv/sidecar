@@ -2,7 +2,6 @@ package overview
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -90,44 +89,15 @@ func (m *Model) loadCreateFileCandidates() tea.Cmd {
 	}
 }
 
-func toSuggestions(values []string) []workspacecreate.Suggestion {
-	out := make([]workspacecreate.Suggestion, 0, len(values))
-	for _, v := range values {
-		out = append(out, workspacecreate.Suggestion{Value: v, Label: v})
-	}
-	return out
-}
-
 func applyPickerData(form *workspacecreate.Form, msg createPickerDataMsg) {
 	if form == nil {
 		return
 	}
-	form.SetDiffRefs(toSuggestions(func() []string {
-		values := make([]string, 0, len(msg.Refs))
-		for _, ref := range msg.Refs {
-			values = append(values, ref.Identity+"  "+ref.Label)
-		}
-		return values
-	}()))
-	issues := make([]workspacecreate.Suggestion, 0, len(msg.Issues))
-	for _, issue := range msg.Issues {
-		badge := ""
-		if issue.Status == "in_progress" {
-			badge = "in progress"
-		}
-		label := strings.TrimSpace(issue.ID + "  " + issue.Title)
-		issues = append(issues, workspacecreate.Suggestion{Value: issue.ID, Label: label, Badge: badge})
-	}
-	form.SetIssues(issues)
-	notes := make([]workspacecreate.Suggestion, 0, len(msg.Notes))
-	for _, note := range msg.Notes {
-		label := note.ID
-		if note.Title != "" {
-			label = note.ID + "  " + note.Title
-		}
-		notes = append(notes, workspacecreate.Suggestion{Value: note.ID, Label: label})
-	}
-	form.SetNotes(notes)
+	// The folds are workspacecreate's, shared with the project surface —
+	// Value carries what resolves, Label only what reads.
+	form.SetDiffRefs(workspacecreate.FoldDiffRefs(msg.Refs))
+	form.SetIssues(workspacecreate.FoldIssues(msg.Issues))
+	form.SetNotes(workspacecreate.FoldNotes(msg.Notes))
 }
 
 func (m *Model) applyCreateFileCandidates(msg workspacecreate.FilesScannedMsg) {

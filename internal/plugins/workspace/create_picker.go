@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/docview"
@@ -84,38 +83,16 @@ func (p *Plugin) loadCreateFileCandidates() tea.Cmd {
 	}
 }
 
-// applyCreatePickerData folds loaded suggestions into the form. Conversions
-// are dumb field copies; the suggestion vocabulary is the form's.
+// applyCreatePickerData folds loaded suggestions into the form through the
+// shared folds, so this surface and the Sessions browser cannot disagree
+// about what a suggestion row resolves from.
 func (p *Plugin) applyCreatePickerData(msg createPickerDataMsg) {
 	if p.createForm == nil {
 		return
 	}
-	refs := make([]workspacecreate.Suggestion, 0, len(msg.Refs))
-	for _, ref := range msg.Refs {
-		refs = append(refs, workspacecreate.Suggestion{Value: ref.Identity, Label: ref.Label})
-	}
-	p.createForm.SetDiffRefs(refs)
-	issues := make([]workspacecreate.Suggestion, 0, len(msg.Issues))
-	for _, issue := range msg.Issues {
-		badge := ""
-		if issue.Status == "in_progress" {
-			badge = "in progress"
-		}
-		title := issue.Title
-		issues = append(issues, workspacecreate.Suggestion{
-			Value: issue.ID, Label: strings.TrimSpace(issue.ID + "  " + title), Badge: badge,
-		})
-	}
-	p.createForm.SetIssues(issues)
-	notes := make([]workspacecreate.Suggestion, 0, len(msg.Notes))
-	for _, note := range msg.Notes {
-		label := note.ID
-		if note.Title != "" {
-			label = note.ID + "  " + note.Title
-		}
-		notes = append(notes, workspacecreate.Suggestion{Value: note.ID, Label: label})
-	}
-	p.createForm.SetNotes(notes)
+	p.createForm.SetDiffRefs(workspacecreate.FoldDiffRefs(msg.Refs))
+	p.createForm.SetIssues(workspacecreate.FoldIssues(msg.Issues))
+	p.createForm.SetNotes(workspacecreate.FoldNotes(msg.Notes))
 }
 
 // applyCreateFileCandidates orders the scan so what is already open in a

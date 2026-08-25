@@ -227,6 +227,74 @@ func TestSwitcherProviderRows(t *testing.T) {
 	}
 }
 
+// Two provider rows share one Kind, so selection must track the ROW: picking
+// the second provider titles, validates, and resolves against that second
+// instance, not whichever sorts first.
+func TestSwitcherProviderSelectionTracksInstance(t *testing.T) {
+	newForm := func() *Form {
+		opts := switcherOpts(KindShell)
+		opts.Providers = []ProviderItem{{ID: "jira-work"}, {ID: "linear-eng"}}
+		return Open(opts)
+	}
+	resourceRows := func(f *Form) []int {
+		var idxs []int
+		for i, row := range f.rows {
+			if row.Kind == KindResource {
+				idxs = append(idxs, i)
+			}
+		}
+		return idxs
+	}
+
+	f := newForm()
+	idxs := resourceRows(f)
+	if len(idxs) != 2 {
+		t.Fatalf("resource rows = %v, want two configured providers", idxs)
+	}
+
+	// Click the second provider's row.
+	click := newForm()
+	click.SetKindFromClick(mouse.Rect{X: 0, Y: 10, W: 40, H: len(click.rows)}, 5, 10+idxs[1])
+	if got := click.selectedProviderID(); got != "linear-eng" {
+		t.Fatalf("click selected provider = %q, want linear-eng", got)
+	}
+	if label := click.selectedLabel(); label != "linear-eng" {
+		t.Fatalf("selected label = %q, want the picked instance", label)
+	}
+	// The list highlights exactly the picked ROW — both providers share one
+	// Kind, so a Kind-based highlight would light both cursors at once.
+	view := ansi.Strip(renderForm(t, click))
+	if !strings.Contains(view, "❯ linear-eng") || strings.Contains(view, "❯ jira-work") {
+		t.Fatalf("kind list does not point at only the chosen provider:\n%s", view)
+	}
+
+	// And resolution validates against the chosen instance.
+	click.AdvanceToTarget()
+	if view := ansi.Strip(renderForm(t, click)); !strings.Contains(view, "New · linear-eng") {
+		t.Fatalf("modal title does not name the chosen instance:\n%s", view)
+	}
+	click.PickerInput().SetValue("ENG-42")
+	target, err := click.TargetFor("")
+	if err != nil {
+		t.Fatalf("TargetFor on second provider: %v", err)
+	}
+	if target.Provider != "linear-eng" || target.Value != "ENG-42" {
+		t.Fatalf("target = %+v, want locator under linear-eng", target)
+	}
+
+	// Arrow-key selection carries the instance too.
+	keys := newForm()
+	m := keys.Build(70)
+	m.Render(100, 40, mouse.NewHandler())
+	m.SetFocus(FieldKind) // the kind list owns up/down only while focused
+	for step := 0; step < idxs[1]; step++ {
+		m.HandleKey(tea.KeyPressMsg{Code: tea.KeyDown})
+	}
+	if got := keys.selectedProviderID(); got != "linear-eng" {
+		t.Fatalf("arrow selection provider = %q, want linear-eng", got)
+	}
+}
+
 // The disabled Terminal-split row stays visible with its reason inline —
 // reusing the shipped live-cap string — while the other rows keep their
 // descriptions.

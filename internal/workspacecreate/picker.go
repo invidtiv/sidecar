@@ -119,15 +119,30 @@ func (f *Form) items() []Suggestion {
 // selectedProviderID is the instance behind the selected row; empty for every
 // non-resource kind.
 func (f *Form) selectedProviderID() string {
-	if f == nil || f.kind != KindResource {
+	if f == nil {
 		return ""
 	}
-	for _, row := range f.rows {
-		if row.Kind == KindResource {
-			return row.ProviderID
+	return f.providerID
+}
+
+// selectedRowIndex is the exact row the form has chosen: Kind plus provider
+// instance, since resource rows share a Kind.
+func (f *Form) selectedRowIndex() int {
+	for i := range f.rows {
+		if f.rows[i].Kind == f.kind && f.rows[i].ProviderID == f.providerID {
+			return i
 		}
 	}
-	return ""
+	return f.firstRowOfKind(f.kind)
+}
+
+// selectedLabel is the chosen row's label — the provider's instance ID for
+// resource rows, so titles and pickers name the instance that was picked.
+func (f *Form) selectedLabel() string {
+	if f == nil || len(f.rows) == 0 {
+		return ""
+	}
+	return f.rows[f.selectedRowIndex()].Label
 }
 
 // countLine is the state line between input and list, in the switcher idiom.
@@ -383,18 +398,15 @@ func (f *Form) syncScroll() {
 	}
 }
 
-// syncPickerCursor reclamps the picker after its inputs moved — new data, a
-// new query — and flags the modal for rebuild when either changed.
+// syncPickerCursor reclamps the picker after its inputs moved — new data or a
+// new query — and flags the modal for rebuild, since both can change what the
+// list should show.
 func (f *Form) syncPickerCursor() {
-	query := f.picker.input.Value()
-	changed := query != f.picker.lastQuery
-	f.picker.lastQuery = query
+	f.picker.lastQuery = f.picker.input.Value()
 	f.syncScroll()
-	if changed || true {
-		// Data setters and query ticks both arrive here; the rebuild cost is a
-		// section re-render, and missing one leaves a stale list on screen.
-		f.invalidate()
-	}
+	// Data setters and query ticks both arrive here; the rebuild cost is a
+	// section re-render, and missing one leaves a stale list on screen.
+	f.invalidate()
 }
 
 // pickerSections renders filter input + count + suggestion list + hint line

@@ -10,14 +10,11 @@ import (
 )
 
 func TestKindRowStylesHighlightSelectedWithoutFocus(t *testing.T) {
-	assertStyle(t, "shell selected", kindRowStyle(KindShell, KindShell, false, false), styles.ButtonFocused)
-	assertStyle(t, "worktree idle", kindRowStyle(KindWorktree, KindShell, false, false), styles.Button)
+	assertStyle(t, "selected", kindRowStyle(false, true, false), styles.ButtonFocused)
+	assertStyle(t, "idle", kindRowStyle(false, false, false), styles.Button)
 
-	assertStyle(t, "worktree selected", kindRowStyle(KindWorktree, KindWorktree, false, false), styles.ButtonFocused)
-	assertStyle(t, "shell idle", kindRowStyle(KindShell, KindWorktree, false, false), styles.Button)
-
-	assertStyle(t, "shell selected while hovered", kindRowStyle(KindShell, KindShell, false, true), styles.ButtonFocused)
-	assertStyle(t, "worktree hover", kindRowStyle(KindWorktree, KindShell, false, true), styles.ButtonHover)
+	assertStyle(t, "selected while hovered", kindRowStyle(false, true, true), styles.ButtonFocused)
+	assertStyle(t, "hover", kindRowStyle(false, false, true), styles.ButtonHover)
 }
 
 func TestKindControlKeepsShellSelectedWhenNameFocused(t *testing.T) {
@@ -29,7 +26,7 @@ func TestKindControlKeepsShellSelectedWhenNameFocused(t *testing.T) {
 	if f.Kind() != KindShell {
 		t.Fatalf("kind = %v, want shell", f.Kind())
 	}
-	assertStyle(t, "open-on-name still highlights shell", kindRowStyle(f.Kind(), f.Kind(), false, false), styles.ButtonFocused)
+	assertStyle(t, "open-on-name still highlights the selected row", kindRowStyle(false, true, false), styles.ButtonFocused)
 }
 
 func TestKindFrameStyleMatchesInputBorder(t *testing.T) {
@@ -49,8 +46,8 @@ func TestKindFrameStyleMatchesInputBorder(t *testing.T) {
 
 func TestKindToggleFrameIsIdleWhenNameFocused(t *testing.T) {
 	rows := kindRowsFor(false)
-	idle := renderKindToggle(rows, KindShell, false, false, nil, 80)
-	focused := renderKindToggle(rows, KindShell, true, false, nil, 80)
+	idle := renderKindToggle(rows, 0, false, false, nil, 80)
+	focused := renderKindToggle(rows, 0, true, false, nil, 80)
 	if idle == focused {
 		t.Fatal("focused and idle toggles rendered identically")
 	}
