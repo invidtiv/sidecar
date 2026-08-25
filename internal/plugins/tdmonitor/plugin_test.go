@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	tea "charm.land/bubbletea/v2"
 	tdnotes "github.com/marcus/td/pkg/notes"
 
 	"github.com/marcus/sidecar/internal/notify"
@@ -178,6 +180,150 @@ func TestInitWithValidDatabase(t *testing.T) {
 
 	// Cleanup
 	p.Stop()
+}
+
+func TestDatabaseReplacementReopensMonitorAndReplaysKey(t *testing.T) {
+	projectRoot := findProjectRootWithDB(t)
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir: projectRoot,
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer p.Stop()
+	startAndSettle(t, p)
+
+	openedInfo := p.dbFileInfo
+	if openedInfo == nil {
+		t.Fatal("monitor did not record the database file it opened")
+	}
+
+	// Match td sync's snapshot installation: atomically replace issues.db while
+	// the embedded monitor still has the previous inode open.
+	replacementRoot := findProjectRootWithDB(t)
+	dbPath := tdroot.ResolveDBPath(projectRoot)
+	if err := os.Rename(tdroot.ResolveDBPath(replacementRoot), dbPath); err != nil {
+		t.Fatalf("replace database: %v", err)
+	}
+	currentInfo, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat replacement database: %v", err)
+	}
+	if os.SameFile(openedInfo, currentInfo) {
+		t.Fatal("test did not replace the database inode")
+	}
+
+	key := tea.KeyPressMsg{Code: 'n', Text: "n"}
+	_, rebuildCmd := p.Update(key)
+	if rebuildCmd == nil {
+		t.Fatal("database replacement did not schedule a monitor rebuild")
+	}
+	if p.model != nil || !p.loadingModel {
+		t.Fatal("stale monitor remained active while replacement was reopening")
+	}
+	if p.pendingTDMessage != key {
+		t.Fatalf("triggering key was not retained for replay: %#v", p.pendingTDMessage)
+	}
+
+	ready, ok := rebuildCmd().(MonitorReadyMsg)
+	if !ok {
+		t.Fatal("rebuild command did not return MonitorReadyMsg")
+	}
+	if ready.Err != nil {
+		t.Fatalf("reopen replacement database: %v", ready.Err)
+	}
+	_, replayCmd := p.Update(ready)
+	if replayCmd == nil {
+		t.Fatal("adopting replacement monitor did not schedule init and key replay")
+	}
+	if p.model == nil || p.loadingModel || p.pendingTDMessage != nil {
+		t.Fatal("replacement monitor was not fully adopted")
+	}
+	if p.dbFileInfo == nil || !os.SameFile(p.dbFileInfo, currentInfo) {
+		t.Fatal("replacement monitor did not capture the current database identity")
+	}
+}
+
+func TestKeyDuringDatabaseReopenIsRetained(t *testing.T) {
+	p := New()
+	p.loadingModel = true
+	key := tea.KeyPressMsg{Code: 'R', Text: "R"}
+
+	p.Update(key)
+
+	if p.pendingTDMessage != key {
+		t.Fatalf("key pressed during database reopen was not retained: %#v", p.pendingTDMessage)
+	}
+
+	// First press wins: the triggering key is the one the user aimed at a
+	// responsive UI, and later keys must not displace it.
+	p.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	if p.pendingTDMessage != key {
+		t.Fatalf("a later key displaced the retained one: %#v", p.pendingTDMessage)
+	}
+}
+
+// The replay must not be sequenced behind the monitor's Init. Init is a batch
+// containing scheduleTick — a tea.Tick for the whole refresh interval — and
+// tea.Sequence waits for every member of a batch, which would hold the key for
+// a full poll interval (10s by default) before the user's action took effect.
+func TestReplayedKeyIsNotGatedBehindTheRefreshTick(t *testing.T) {
+	projectRoot := findProjectRootWithDB(t)
+	p := New()
+	ctx := &plugin.Context{
+		WorkDir: projectRoot,
+		Logger:  slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+	if err := p.Init(ctx); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	defer p.Stop()
+
+	key := tea.KeyPressMsg{Code: 'n', Text: "n"}
+	p.pendingTDMessage = key
+	p.loadingModel = true
+
+	cmd := p.Start()
+	if cmd == nil {
+		t.Fatal("Start() returned no command")
+	}
+	ready, ok := cmd().(MonitorReadyMsg)
+	if !ok || ready.Err != nil {
+		t.Fatalf("monitor build = %#v", ready)
+	}
+	_, replay := p.Update(ready)
+	if replay == nil {
+		t.Fatal("adopting the monitor scheduled no replay")
+	}
+
+	// Drive the command the way bubbletea's runtime does, but concurrently, so
+	// the assertion is about when the key is reachable rather than about the
+	// tick. A Sequence would not surface the key here at all.
+	batch, ok := replay().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("replay command produced %T, want tea.BatchMsg (a Sequence would block on the tick)", replay())
+	}
+	found := make(chan tea.Msg, len(batch))
+	for _, c := range batch {
+		go func(c tea.Cmd) {
+			if c != nil {
+				found <- c()
+			}
+		}(c)
+	}
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-found:
+			if got, ok := msg.(tea.KeyPressMsg); ok && got == key {
+				return
+			}
+		case <-deadline:
+			t.Fatal("replayed key did not arrive within 2s; it is gated behind the refresh tick")
+		}
+	}
 }
 
 // tempTdProject returns a fresh directory with an initialized td database, so

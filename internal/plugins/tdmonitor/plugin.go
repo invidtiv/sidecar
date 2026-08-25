@@ -2,6 +2,7 @@ package tdmonitor
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"time"
 
@@ -33,6 +34,11 @@ const (
 	// on screen. Two seconds meant ~7000 subprocess spawns an hour in a session
 	// left open all day; task data does not change that fast.
 	pollInterval = 10 * time.Second
+
+	// dbIdentityCheckInterval bounds filesystem stats for passive monitor
+	// messages. Key presses always check immediately so a write never reaches a
+	// database handle made stale by td sync replacing issues.db.
+	dbIdentityCheckInterval = 2 * time.Second
 )
 
 // refreshInterval returns the configured td poll interval, falling back to
@@ -88,6 +94,14 @@ type Plugin struct {
 	// embedded monitor opens td's SQLite database, which is slow enough to be
 	// worth keeping off the pre-first-frame path (td-9c7bf2).
 	loadingModel bool
+
+	// td sync installs snapshots with an atomic rename. SQLite connections keep
+	// pointing at the unlinked inode, where later writes fail with
+	// SQLITE_READONLY. Remember the file the embedded monitor opened so we can
+	// rebuild it when the path begins naming a different file.
+	dbFileInfo       os.FileInfo
+	lastDBIdentityAt time.Time
+	pendingTDMessage tea.Msg
 
 	// installEnv is the process environment first-install runs through. Nil
 	// means the real one; a test substitutes it so no test ever runs brew.
@@ -163,6 +177,9 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.setupModal = nil
 	p.todosConflict = false
 	p.started = false
+	p.dbFileInfo = nil
+	p.lastDBIdentityAt = time.Time{}
+	p.pendingTDMessage = nil
 
 	// Check if .todos exists as a file instead of a directory (#194).
 	// This must happen before attempting to create the monitor or showing
@@ -255,6 +272,8 @@ func (m MonitorReadyMsg) GetEpoch() uint64 { return m.Epoch }
 // view) and returns the command that starts its polling.
 func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 	p.loadingModel = false
+	pending := p.pendingTDMessage
+	p.pendingTDMessage = nil
 
 	if msg.Err != nil || msg.Model == nil {
 		// Database not initialized - decide which view to show
@@ -270,6 +289,7 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 	}
 
 	p.model = msg.Model
+	p.captureDBIdentity()
 
 	// Ensure the adopted monitor has the latest resolved palette in case a
 	// theme change occurred while loading.
@@ -308,7 +328,74 @@ func (p *Plugin) adoptMonitor(msg MonitorReadyMsg) tea.Cmd {
 	// Delegate to monitor's Init which starts data fetch and tick.
 	// Mark as started to prevent duplicate poll chains on focus (td-023577)
 	p.started = true
-	return p.model.Init()
+	initCmd := p.model.Init()
+	if pending == nil {
+		return initCmd
+	}
+	// Batch, not Sequence. The monitor's Init is a batch whose members include
+	// scheduleTick — a tea.Tick for the whole refresh interval — and Sequence
+	// waits for every member of a batch before moving on, so sequencing the
+	// replay behind it delivers the key a full poll interval late (10s by
+	// default): the new-task modal would open long after the user moved on.
+	// Nothing here needs the ordering. The model is already adopted and can
+	// handle a key; Init's other members are async data fetches, and a key
+	// arriving before RefreshDataMsg is ordinary operation.
+	return tea.Batch(initCmd, func() tea.Msg { return pending })
+}
+
+// captureDBIdentity records the file opened by the current monitor. Failure is
+// harmless: a later check will establish the baseline and try again.
+func (p *Plugin) captureDBIdentity() {
+	p.dbFileInfo = nil
+	p.lastDBIdentityAt = time.Now()
+	if p.ctx == nil {
+		return
+	}
+	if info, err := os.Stat(tdroot.ResolveDBPath(p.ctx.WorkDir)); err == nil {
+		p.dbFileInfo = info
+	}
+}
+
+// databaseWasReplaced reports whether issues.db now names a different file
+// from the one the monitor opened. Passive messages are throttled; key presses
+// force the check because they may cause a write.
+func (p *Plugin) databaseWasReplaced(force bool) bool {
+	if p.ctx == nil || p.model == nil {
+		return false
+	}
+	if !force && time.Since(p.lastDBIdentityAt) < dbIdentityCheckInterval {
+		return false
+	}
+	p.lastDBIdentityAt = time.Now()
+	info, err := os.Stat(tdroot.ResolveDBPath(p.ctx.WorkDir))
+	if err != nil {
+		return false
+	}
+	if p.dbFileInfo == nil {
+		p.dbFileInfo = info
+		return false
+	}
+	return !os.SameFile(p.dbFileInfo, info)
+}
+
+// reopenReplacedDatabase closes the stale SQLite handle and asynchronously
+// builds a monitor against the current path. Preserve a triggering key press so
+// the user's action is replayed after the new monitor is ready.
+func (p *Plugin) reopenReplacedDatabase(msg tea.Msg) tea.Cmd {
+	if _, ok := msg.(tea.KeyPressMsg); ok {
+		p.pendingTDMessage = msg
+	}
+	if p.model != nil {
+		_ = p.model.Close()
+		p.model = nil
+	}
+	p.dbFileInfo = nil
+	p.started = false
+	p.loadingModel = true
+	if p.ctx != nil && p.ctx.Logger != nil {
+		p.ctx.Logger.Info("td monitor: database replaced; reopening after sync")
+	}
+	return p.buildMonitor()
 }
 
 // Stop cleans up plugin resources.
@@ -320,6 +407,9 @@ func (p *Plugin) Stop() {
 	p.notInstalled = nil
 	p.setupModal = nil
 	p.started = false
+	p.dbFileInfo = nil
+	p.lastDBIdentityAt = time.Time{}
+	p.pendingTDMessage = nil
 	// Any monitor still being built belongs to the project we just left; the
 	// MonitorReadyMsg handler closes it rather than adopting it.
 	p.loadingModel = false
@@ -376,6 +466,20 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	if p.model == nil {
+		// A passive refresh may notice the replacement just before the user
+		// presses a key. Retain that key while the replacement monitor opens,
+		// just as we retain the key that noticed the replacement directly.
+		//
+		// First press wins. The triggering key is the one the user aimed at a
+		// UI that still looked responsive; anything typed afterwards went into
+		// a pane already showing a loading state. Overwriting would silently
+		// drop the very key this exists to preserve.
+		if p.loadingModel {
+			if _, ok := msg.(tea.KeyPressMsg); ok && p.pendingTDMessage == nil {
+				p.pendingTDMessage = msg
+			}
+			return p, nil
+		}
 		// Handle setup modal
 		if p.setupModal != nil {
 			cmd := p.setupModal.Update(msg)
@@ -387,6 +491,11 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			return p, cmd
 		}
 		return p, nil
+	}
+
+	_, isKeyPress := msg.(tea.KeyPressMsg)
+	if p.databaseWasReplaced(isKeyPress) {
+		return p, p.reopenReplacedDatabase(msg)
 	}
 
 	// Handle window size - store dimensions and forward to TD
