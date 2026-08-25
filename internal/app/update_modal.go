@@ -335,8 +335,7 @@ func updateResultContent(u *updateUIState) string {
 	}
 	b.WriteString(strings.Join(rows, "\n"))
 	if u.restartRequired {
-		b.WriteString("\n\n" + styles.Muted.Render("Restart sidecar to use the new version.") +
-			"\n" + styles.Muted.Render("Tip: Press q to quit, then run 'sidecar' again."))
+		b.WriteString("\n\n" + styles.Muted.Render("Restart sidecar to use the new version."))
 	} else {
 		b.WriteString("\n\n" + styles.Muted.Render("Sidecar itself did not change; no restart needed."))
 	}
@@ -387,17 +386,16 @@ func (m *Model) closeUpdateModal() {
 
 // openUpdateModal converges every updater entry point onto one rule: open the
 // modal in whatever phase the flow is actually in. A batch in flight reopens
-// as Installing; unseen settled results reopen as Done/Failed; otherwise the
-// confirmation opens when something is available. It reports false when there
-// is nothing worth showing.
+// as Installing; settled results reopen as Done/Failed until the user has
+// seen them; once acknowledged, they yield to a fresh confirmation whenever
+// an update is still pending — a dismissed failure must never lock Retry
+// away. It reports false only when there is genuinely nothing to show.
 func (m *Model) openUpdateModal() bool {
 	m.showDiagnostics = false
 	switch {
 	case m.updateInProgress:
 		m.updateModalState = UpdateModalProgress
-	case m.updateResultsAcked:
-		return false
-	case len(m.settledResults()) > 0:
+	case !m.updateResultsAcked && len(m.settledResults()) > 0:
 		if len(version.RetryTargets(m.settledResults())) > 0 {
 			m.updateModalState = UpdateModalError
 		} else {

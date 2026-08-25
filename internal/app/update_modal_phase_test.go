@@ -118,9 +118,55 @@ func TestUpdateModal_ReopenConvergesToCurrentPhase(t *testing.T) {
 		t.Errorf("failed phase must offer Retry:\n%s", out)
 	}
 
+	// The failure left nothing pending (the dismissed target was this model's
+	// only product), so the acked outcome yields refusal rather than a stale
+	// replay of results the user has already seen.
 	m.closeUpdateModal()
 	if m.openUpdateModal() {
-		t.Error("an acknowledged outcome must yield to a fresh confirmation")
+		t.Error("with nothing pending, an acknowledged outcome must not reopen stale results")
+	}
+}
+
+// Dismissing Done/Failed must never lock the updater: while an update is
+// still pending — a failed target keeps its availability — the next entry
+// point offers a fresh confirmation instead of refusing.
+func TestUpdateModal_AckedYieldsToFreshConfirmation(t *testing.T) {
+	m := &Model{width: 100, height: 40}
+	failed := target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true)
+	pending := target(version.ProductTd, "td", "1.0.0", "1.1.0", true)
+	m.products = []version.Target{pending, failed}
+
+	// A settled failure the user has not seen yet reopens onto Failed…
+	m.updateCarried = []version.Result{{Target: failed, Status: version.StatusFailed, Err: errors.New("brew exited 1")}}
+	if !m.openUpdateModal() || m.updateModalState != UpdateModalError {
+		t.Fatalf("unseen failure should reopen onto Failed, got %v", m.updateModalState)
+	}
+	out := renderUpdatePhase(m)
+	if !strings.Contains(out, "Retry") {
+		t.Errorf("failed phase must offer Retry:\n%s", out)
+	}
+
+	// …and once acknowledged, the still-pending updates open a fresh
+	// confirmation — the pre-fix behavior refused here permanently.
+	m.closeUpdateModal()
+	if !m.openUpdateModal() || m.updateModalState != UpdateModalPreview {
+		t.Fatalf("acked outcome with a pending update must open a fresh confirmation, got %v", m.updateModalState)
+	}
+	if out := renderUpdatePhase(m); !strings.Contains(out, "td") {
+		t.Errorf("fresh confirmation should show the pending update:\n%s", out)
+	}
+
+	// From there the user can still run the failed product again: a failed
+	// target keeps its availability, so the fresh plan still includes it.
+	m.startUpdateBatch(version.SelectPlan(m.products))
+	found := false
+	for _, t := range m.updatePlan {
+		if t.Product == version.ProductTasks {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the previously failed product must be re-runnable via the fresh plan: %+v", m.updatePlan)
 	}
 }
 

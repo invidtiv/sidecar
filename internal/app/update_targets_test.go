@@ -435,6 +435,9 @@ func TestRetry_PreservesEarlierSuccess(t *testing.T) {
 	if !strings.Contains(out, "Quit & Restart") {
 		t.Errorf("completion should offer the restart:\n%s", out)
 	}
+	if strings.Contains(out, "Press q") {
+		t.Errorf("completion must not advertise keyboard shortcuts that are not wired; the button row is the affordance:\n%s", out)
+	}
 }
 
 // Enter confirms the plan. The modal is rendered once first, exactly as a real
