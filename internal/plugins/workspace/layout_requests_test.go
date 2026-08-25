@@ -465,6 +465,116 @@ func TestLayoutApply_CellBatchComposesExactlyAsPlanned(t *testing.T) {
 	}
 }
 
+// THE reviewer repro: [shell auto, file@2.2] on a bare primary tree. The
+// shell's column has no deck-side existence, and committing the shell before
+// an addressed pane lets the projection re-home the terminal split — so the
+// positional promise at 2.2 cannot be kept. "at" is a requirement: the whole
+// batch declines instead of silently opening a new column.
+func TestLayoutApply_ShellBeforeAtCellDeclinesInsteadOfMislanding(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	before := encodedTree(t, p)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "shell", Run: "echo hi", Name: "dev server"},
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}, At: "2.2"},
+	)
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("mis-landing batch emitted a command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined {
+		t.Fatalf("status = %s reason %q, want declined", ack.Status, ack.Reason)
+	}
+	if !strings.Contains(ack.Reason, "live terminal") {
+		t.Errorf("reason = %q, want the live-terminal explanation", ack.Reason)
+	}
+	if len(ack.Items) != 2 {
+		t.Fatalf("items = %+v", ack.Items)
+	}
+	if ack.Items[0].Verdict != uirequest.ItemVerdictOpened || !strings.Contains(ack.Items[0].Reason, "would have opened") {
+		t.Errorf("shell item = %+v, want would-have-opened with a reason", ack.Items[0])
+	}
+	if ack.Items[1].Verdict != uirequest.ItemVerdictDeclined || !strings.Contains(ack.Items[1].Reason, "live terminal") {
+		t.Errorf("file item = %+v, want declined with its own reason", ack.Items[1])
+	}
+	for _, item := range ack.Items {
+		if item.Pane != 0 || item.Cell != "" {
+			t.Errorf("declined batch reported a landing for item %d: %+v", item.Index, item)
+		}
+	}
+	if after := encodedTree(t, p); after != before {
+		t.Fatalf("decline mutated the tree:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// Ack cells and panes must agree with what `layout get` (GridOf over the final
+// tree) reports for every terminal state — not with ids captured mid-batch
+// before later reconciles recycled them.
+func TestLayoutApply_AckCellsAgreeWithFinalGrid(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}},
+		uirequest.LayoutPane{Kind: "issue", Targets: []string{"td-1a2b3c"}, At: "2.2"},
+		uirequest.LayoutPane{Kind: "shell", Run: "echo hi", Name: "dev server"},
+	)
+	if cmd := p.handleUIRequest(req); cmd == nil {
+		t.Fatal("batch emitted no command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusOpened {
+		t.Fatalf("status = %s reason %q", ack.Status, ack.Reason)
+	}
+
+	grid := panelayout.GridOf(p.paneRoot)
+	if grid == nil {
+		t.Fatal("final tree escaped the grid vocabulary")
+	}
+	finalCell := func(leafID int) string {
+		for c, column := range grid.Columns {
+			for r, leaf := range column.Cells {
+				if leaf.ID == leafID {
+					return panelayout.Cell{Col: c + 1, Row: r + 1}.String()
+				}
+			}
+		}
+		return ""
+	}
+	kinds := []panelayout.Kind{panelayout.Document, panelayout.Issue, panelayout.Shell}
+	for i, item := range ack.Items {
+		if item.Verdict == uirequest.ItemVerdictDeclined {
+			continue
+		}
+		var leafID int
+		if kinds[i] == panelayout.Shell {
+			if leaf := p.shellLeaf(); leaf != nil {
+				leafID = leaf.ID
+			}
+		} else if leaf := panelayout.FirstOfKind(p.paneRoot, kinds[i]); leaf != nil {
+			leafID = leaf.ID
+		}
+		if leafID == 0 {
+			t.Fatalf("item %d (%v) has no leaf in the final tree", i, kinds[i])
+		}
+		if item.Pane != leafID || item.Cell != finalCell(leafID) {
+			t.Errorf("item %d ack = pane %d @ %s, but final grid says pane %d @ %s",
+				i, item.Pane, item.Cell, leafID, finalCell(leafID))
+		}
+	}
+
+	// The composed shape itself: the auto shell takes the emptiest left
+	// column, so the batch lands as a 2x2.
+	if grid.ColumnCount() != 2 || grid.RowCount(1) != 2 || grid.RowCount(2) != 2 {
+		t.Fatalf("final grid = %dx%d/%dx%d, want 2 columns of 2/2",
+			grid.ColumnCount(), grid.RowCount(1), grid.ColumnCount(), grid.RowCount(2))
+	}
+	if grid.Cell(1, 1).Kind != panelayout.Primary || grid.Cell(1, 2).Kind != panelayout.Shell ||
+		grid.Cell(2, 1).Kind != panelayout.Document || grid.Cell(2, 2).Kind != panelayout.Issue {
+		t.Fatalf("cell kinds wrong: 1.1=%v 1.2=%v 2.1=%v 2.2=%v",
+			grid.Cell(1, 1).Kind, grid.Cell(1, 2).Kind, grid.Cell(2, 1).Kind, grid.Cell(2, 2).Kind)
+	}
+}
+
 // A cell addressed at the live terminal's own row cannot be honored by a
 // content pane and is declined before anything opens.
 func TestLayoutApply_CellOnShellRowDeclines(t *testing.T) {

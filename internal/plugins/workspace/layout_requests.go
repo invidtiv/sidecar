@@ -114,7 +114,6 @@ type layoutItemPlan struct {
 	targets []uirequest.Target
 	cell    panelayout.Cell
 	plan    panelayout.OpenPlan
-	paneID  int
 	verdict string
 	reason  string
 }
@@ -187,11 +186,17 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 	//   construction — the committed tree is the fit-tested one, not a re-plan.
 	//
 	// Shell plans stay pane-tree-native (openShellLeaf splits that tree
-	// directly), so they alone are planned on trial. A shell item planned
-	// before later at-cells is why the ack reports landed cells from the live
-	// grid afterwards: interleavings that would displace an addressed row
-	// refuse at commit rather than land somewhere else silently.
+	// directly), so they alone are planned on trial.
+	//
+	// One ordering rule keeps positional promises honest: a batch that places
+	// a shell item declines later at-cell passives. Committing the shell's
+	// split and then mutating the deck rebuilds the pane tree around it (the
+	// terminal split is re-derived on projection), so no static translation
+	// can promise an addressed row survives that — and "at" is a requirement,
+	// never a preference. All-or-nothing means nothing opens at all in that
+	// case; agents reorder the shell last or drop the cell.
 	var deckTrial *panelayout.Node
+	shellPlannedAt := -1
 	for i := range items {
 		item := &items[i]
 		if item.kind == panelayout.Primary || item.verdict == uirequest.ItemVerdictDeclined {
@@ -199,12 +204,16 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 		}
 		var plan panelayout.OpenPlan
 		var refusal string
-		if item.kind == panelayout.Shell {
+		switch {
+		case item.kind == panelayout.Shell:
 			plan, refusal = p.planShellItem(trial, *item)
 			if refusal == "" && plan.Retarget == 0 {
 				ApplyPanePlan(trial, plan, &PaneNode{Kind: item.kind})
+				shellPlannedAt = i
 			}
-		} else {
+		case item.cell.Col != 0 && shellPlannedAt >= 0:
+			refusal = fmt.Sprintf("cell %s cannot be addressed after this batch places a live terminal; put the shell last or drop \"at\"", item.cell.String())
+		default:
 			if deckTrial == nil {
 				p.ensureWorkspaceDeck(root, surface)
 				deckTrial = p.contentDeck.Tree()
@@ -263,7 +272,7 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 				items[i].reason = "would have opened; the batch declined before commit"
 			}
 		}
-		return p.ackLayout(req, uirequest.StatusDeclined, items[firstViolation].reason, p.layoutAcks(items, surface), nil)
+		return p.ackLayout(req, uirequest.StatusDeclined, items[firstViolation].reason, p.layoutAcks(items, surface, false), nil)
 	}
 
 	// Commit. Validation promised every pane fits; each open now applies THE
@@ -281,9 +290,6 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 			if item.verdict != uirequest.ItemVerdictOpened {
 				continue
 			}
-			if leaf := p.shellLeaf(); leaf != nil {
-				item.paneID = leaf.ID
-			}
 		} else {
 			outcome, cmd := p.performPlannedOpen(item.targets[0], root, surface, item.plan)
 			cmds = append(cmds, cmd)
@@ -291,7 +297,6 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 			if outcome.status == uirequest.StatusDeclined {
 				continue
 			}
-			item.paneID = p.paneFocus
 			// Targets after the first join the pane as tabs of the same kind:
 			// the existing retarget/openTab path, one call per extra target.
 			// They carry no plan — the pane exists, so a split plan would be
@@ -314,7 +319,7 @@ func (p *Plugin) applyLayoutBatch(req uirequest.Request, payload uirequest.Layou
 	if retargetCount == len(items) {
 		status = uirequest.StatusRetargeted
 	}
-	p.ackLayout(req, status, reason, p.layoutAcks(items, surface), nil)
+	p.ackLayout(req, status, reason, p.layoutAcks(items, surface, true), nil)
 	return tea.Batch(cmds...)
 }
 
@@ -384,16 +389,20 @@ func (p *Plugin) planPassiveItem(screen, deckTrial *PaneNode, item layoutItemPla
 // leaf can exist (LiveLeafCap), sitting beside the primary terminal, so the
 // only difference between the two grids is that shell's row: cells above it
 // keep their address, the shell's own row belongs to no content pane, and
-// cells below shift up by one.
+// cells below shift up by one — but only while the column keeps a non-shell
+// anchor. A column that is nothing BUT the live terminal has no deck-side
+// existence at all, so no cell in it translates.
 func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, string) {
 	grid := panelayout.GridOf(screen)
 	if grid == nil || cell.Col > grid.ColumnCount() {
 		return cell, ""
 	}
 	column := grid.Columns[cell.Col-1]
+	anchored := false
 	for row, leaf := range column.Cells {
 		screenRow := row + 1
 		if leaf.Kind != panelayout.Shell {
+			anchored = true
 			continue
 		}
 		switch {
@@ -402,6 +411,9 @@ func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, strin
 		case screenRow < cell.Row:
 			return panelayout.Cell{Col: cell.Col, Row: cell.Row - 1}, ""
 		default:
+			if !anchored {
+				return panelayout.Cell{}, fmt.Sprintf("cell %s sits inside the live terminal's own column; close or move the terminal first", cell.String())
+			}
 			return cell, ""
 		}
 	}
@@ -534,10 +546,14 @@ func (p *Plugin) commitLayoutShell(spec uirequest.LayoutPane, plan panelayout.Op
 	return uirequest.ItemVerdictOpened, "", cmd
 }
 
-// layoutAcks fills the per-pane ack items AFTER the outcome exists, reading
-// each landed pane's cell out of the live tree's grid projection. A declined
-// pane reports its own reason and no cell: it never landed anywhere.
-func (p *Plugin) layoutAcks(items []layoutItemPlan, surface string) []uirequest.AckItem {
+// layoutAcks fills the per-pane ack items AFTER the whole batch has run. On a
+// committed batch, landed panes are resolved from the FINAL tree — one leaf
+// per passive kind plus at most one shell, so kind alone identifies the pane —
+// which is what makes an ack and a later `layout get` agree for every terminal
+// state, whatever later reconciles did to intermediate ids. committed=false
+// (a validation decline) resolves nothing: nothing landed, and a would-have-
+// opened verdict must not borrow a pre-existing pane's address.
+func (p *Plugin) layoutAcks(items []layoutItemPlan, surface string, committed bool) []uirequest.AckItem {
 	cells := p.layoutCells()
 	out := make([]uirequest.AckItem, 0, len(items))
 	for i, item := range items {
@@ -547,13 +563,30 @@ func (p *Plugin) layoutAcks(items []layoutItemPlan, surface string) []uirequest.
 			Surface: surface,
 			Reason:  item.reason,
 		}
-		if item.paneID != 0 {
-			ackItem.Pane = item.paneID
-			ackItem.Cell = cells[item.paneID]
+		if committed && item.verdict != uirequest.ItemVerdictDeclined {
+			if leafID := p.landedLeaf(item.kind); leafID != 0 {
+				ackItem.Pane = leafID
+				ackItem.Cell = cells[leafID]
+			}
 		}
 		out = append(out, ackItem)
 	}
 	return out
+}
+
+// landedLeaf names where a batch's pane of this kind ended up in the final
+// tree: the kind's own leaf for passives, the shell leaf for shells.
+func (p *Plugin) landedLeaf(kind panelayout.Kind) int {
+	if kind == panelayout.Shell {
+		if leaf := p.shellLeaf(); leaf != nil {
+			return leaf.ID
+		}
+		return 0
+	}
+	if leaf := panelayout.FirstOfKind(p.paneRoot, kind); leaf != nil {
+		return leaf.ID
+	}
+	return 0
 }
 
 // layoutCells maps every leaf id in the live tree to its "col.row" address.
