@@ -65,6 +65,28 @@ func TestUpdateModal_SingleInstanceAcrossPhases(t *testing.T) {
 	}
 }
 
+// Enter must confirm even before the first paint. openUpdateModal runs on the
+// Update side, so the modal already exists in program state; a frame has not
+// necessarily rendered when the user's next key arrives.
+func TestUpdateModal_EnterBeforeFirstPaintConfirms(t *testing.T) {
+	m := &Model{width: 100, height: 40}
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+
+	if !m.openUpdateModal() {
+		t.Fatal("the confirmation should open")
+	}
+	// Deliberately no render: this is the keypress that lands in the same
+	// event batch as the open.
+	m.handleUpdateModalKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m.updateModalState != UpdateModalProgress {
+		t.Fatalf("Enter should confirm before any paint, state is %v", m.updateModalState)
+	}
+	if len(m.updatePlan) != 1 || m.updatePlan[0].Product != version.ProductTd {
+		t.Errorf("confirmed plan = %+v", m.updatePlan)
+	}
+}
+
 // A modal hidden mid-install reopens as Installing; one whose batch settled
 // while hidden lands on Done or Failed; an acknowledged outcome yields to a
 // fresh confirmation instead of replaying stale results.

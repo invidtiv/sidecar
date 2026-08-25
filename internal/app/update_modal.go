@@ -39,6 +39,12 @@ type updateUIState struct {
 	anyManaged      bool
 	restartRequired bool
 	retryCount      int
+	// presentedPhase records which phase the modal's presentation currently
+	// reflects so re-presenting is skipped between phase changes. It lives on
+	// the shared heap struct because separate model copies cannot see each
+	// other's writes.
+	presentedPhase UpdateModalState
+	presentedValid bool
 }
 
 func (u *updateUIState) includesTasks() bool {
@@ -122,7 +128,13 @@ func (m *Model) ensureUpdateModal() {
 			return modal.RenderedSection{}
 		}
 		return modal.Buttons(btns...).Render(cw, focusID, hoverID)
-	}, nil))
+	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
+		btns := updateButtons(u)
+		if len(btns) == 0 {
+			return "", nil
+		}
+		return modal.Buttons(btns...).Update(msg, focusID)
+	}))
 
 	m.updateModal = mdl
 	if m.updateMouseHandler == nil {
@@ -133,13 +145,22 @@ func (m *Model) ensureUpdateModal() {
 
 // applyUpdatePresentation restates what changes between phases on the one
 // persistent modal: title, border variant, hint line, and primary action.
+// Skipped while the presented phase is unchanged — Apply invalidates layout,
+// and ensure runs from View as well as Update on every frame.
 func (m *Model) applyUpdatePresentation() {
+	if u := m.updateUI; u != nil && u.presentedValid && u.presentedPhase == m.updateModalState {
+		return
+	}
 	m.updateModal.Apply(
 		modal.WithTitle(updateTitle(m.updateModalState)),
 		modal.WithVariant(updateVariant(m.updateModalState)),
 		modal.WithHintText(updateHint(m.updateModalState)),
 		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
 	)
+	if u := m.updateUI; u != nil {
+		u.presentedPhase = m.updateModalState
+		u.presentedValid = true
+	}
 }
 
 func (m *Model) updateUIState() *updateUIState { return m.updateUI }
@@ -361,6 +382,7 @@ func (m *Model) closeUpdateModal() {
 		m.updateResultsAcked = true
 	}
 	m.updateModalState = UpdateModalClosed
+	m.ensureUpdateModal()
 }
 
 // openUpdateModal converges every updater entry point onto one rule: open the
@@ -386,6 +408,7 @@ func (m *Model) openUpdateModal() bool {
 	default:
 		return false
 	}
+	m.ensureUpdateModal()
 	return true
 }
 

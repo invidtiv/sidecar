@@ -125,7 +125,11 @@ func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 			action, cmd = m.routeToFocusedSection(msg)
 			return m.resolveEnterAction(focusID, action), cmd
 		}
-		return "", nil
+		// No focus list yet — the modal was configured but has not rendered
+		// (or renders nothing focusable). An implicit submit still honours
+		// the modal's declared primary action rather than swallowing Enter;
+		// with no primary action there is nothing to submit.
+		return m.primaryAction, nil
 
 	default:
 		// Route other keys to the focused section

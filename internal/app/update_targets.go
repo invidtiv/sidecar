@@ -160,10 +160,12 @@ func (m *Model) startUpdateBatch(plan []version.Target) tea.Cmd {
 	if len(plan) == 0 {
 		m.updateInProgress = false
 		m.updateModalState = UpdateModalComplete
+		m.ensureUpdateModal()
 		return nil
 	}
 
 	planID := m.updatePlanID
+	m.ensureUpdateModal()
 	return tea.Batch(
 		m.startElapsedTimer(),
 		func() tea.Msg {
@@ -275,6 +277,7 @@ func (m *Model) finishUpdateBatch() tea.Cmd {
 	} else if m.updateModalState == UpdateModalProgress {
 		m.updateModalState = UpdateModalComplete
 	}
+	m.ensureUpdateModal()
 
 	if m.updateModalState == UpdateModalClosed {
 		m.ShowToast(version.Summarize(results), 10*time.Second)

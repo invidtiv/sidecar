@@ -915,3 +915,24 @@ func TestSetFocusBeforeRender(t *testing.T) {
 		t.Fatalf("after render, focus = %q, want btn-c", m.FocusedID())
 	}
 }
+
+// Enter on a modal that has never rendered (no focus list) still submits the
+// declared primary action. This is what lets a long-lived modal opened in an
+// Update handler confirm on the first keypress, before any frame has painted.
+func TestHandleKeyEnterWithoutFocusSubmitsPrimary(t *testing.T) {
+	m := New("Test", WithPrimaryAction("update")).
+		AddSection(Text("body"))
+	if m.FocusedID() != "" {
+		t.Fatal("precondition: unrendered modal has no focus")
+	}
+	action, _ := m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != "update" {
+		t.Errorf("enter without focus = %q, want primary action %q", action, "update")
+	}
+
+	plain := New("Plain").AddSection(Text("body"))
+	action, _ = plain.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != "" {
+		t.Errorf("enter without focus or primary = %q, want empty", action)
+	}
+}
