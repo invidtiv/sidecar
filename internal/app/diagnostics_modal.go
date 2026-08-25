@@ -298,8 +298,10 @@ func (m *Model) handleDiagnosticsModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cm
 		m.showDiagnostics = false
 		return m, nil
 	case "update":
-		if m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
-			m.openUpdatePreview()
+		// Same convergence as the keyboard path: reopen the updater in its
+		// current phase, including mid-batch.
+		if m.openUpdateModal() {
+			m.updateContext()
 			return m, nil
 		}
 	}

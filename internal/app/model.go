@@ -303,6 +303,10 @@ type Model struct {
 	// Update feature state
 	updateInProgress bool
 	needsRestart     bool
+	// updateResultsAcked records that the user closed the Done/Failed surface
+	// after seeing it, so a later entry point offers a fresh confirmation
+	// rather than a stale result.
+	updateResultsAcked bool
 
 	// Confirmed batch. updatePlan is immutable once confirmed; updateResults
 	// records the settled outcome of every attempted target so a later failure
@@ -314,30 +318,16 @@ type Model struct {
 	updatePlanID    int
 	updateActiveIdx int
 
-	// Update modal state
-	updateModalState      UpdateModalState
-	updateStartTime       time.Time
-	updateChangelog       string // Full changelog content
-	changelogVisible      bool
-	changelogScrollOffset int
-	changelogScrollState  *changelogViewState // Shared state for modal closure
-
-	// Update modal (declarative)
-	updatePreviewModal         *modal.Modal
-	updatePreviewModalWidth    int
-	updatePreviewMouseHandler  *mouse.Handler
-	updateCompleteModal        *modal.Modal
-	updateCompleteModalWidth   int
-	updateCompleteMouseHandler *mouse.Handler
-	updateErrorModal           *modal.Modal
-	updateErrorModalWidth      int
-	updateErrorMouseHandler    *mouse.Handler
-	changelogModal             *modal.Modal
-	changelogModalWidth        int
-	changelogMouseHandler      *mouse.Handler
-	changelogRenderedLines     []string // Cached rendered changelog lines
-	changelogMaxVisibleLines   int      // Max lines visible in viewport
-	changelogModalStyleKey     string   // Markdown style identity the modal was rendered under
+	// Update modal state. One modal object carries every phase (Preview →
+	// Installing → Done/Failed); updateModalState selects which When-gated
+	// sections render.
+	updateModalState UpdateModalState
+	updateStartTime  time.Time
+	// The single update modal and its input state. Built once per open flow;
+	// phase changes re-present it rather than rebuild it.
+	updateModal        *modal.Modal
+	updateMouseHandler *mouse.Handler
+	updateUI           *updateUIState
 
 	// Intro animation
 	intro IntroModel

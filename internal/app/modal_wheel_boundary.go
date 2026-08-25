@@ -6,7 +6,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
-	"github.com/marcus/sidecar/internal/scroll"
 )
 
 // Wheel events reaching an app-level overlay are answered by the overlay that
@@ -86,47 +85,11 @@ func modalWheelAtBoundary(md *modal.Modal, h *mouse.Handler, msg tea.MouseWheelM
 	return md.WheelAtBoundary(msg, h)
 }
 
-// updateModalWheelAtBoundary answers for the update overlay. The changelog is a
-// nested overlay drawn on top of the update dialog and Update handles its wheel
-// first, so it takes precedence over the dialog underneath it.
+// updateModalWheelAtBoundary answers for the update overlay: one modal across
+// all phases, so the shared body answer covers Preview, Installing, and
+// Done/Failed alike.
 func (m *Model) updateModalWheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	if m.changelogVisible {
-		return m.changelogWheelAtBoundary(msg)
-	}
-	switch m.updateModalState {
-	case UpdateModalPreview:
-		return modalWheelAtBoundary(m.updatePreviewModal, m.updatePreviewMouseHandler, msg)
-	case UpdateModalComplete:
-		return modalWheelAtBoundary(m.updateCompleteModal, m.updateCompleteMouseHandler, msg)
-	case UpdateModalError:
-		return modalWheelAtBoundary(m.updateErrorModal, m.updateErrorMouseHandler, msg)
-	}
-	return false
-}
-
-// changelogWheelAtBoundary uses the line count and viewport height cached when
-// the changelog modal was last built. handleUpdateModalMouse moves
-// changelogScrollOffset by three lines per notch regardless of pointer
-// position, so no hit testing is involved.
-func (m *Model) changelogWheelAtBoundary(msg tea.MouseWheelMsg) bool {
-	state := m.changelogScrollState
-	if state == nil || state.MaxVisibleLines <= 0 {
-		// Nothing rendered yet: unknown.
-		return false
-	}
-	var delta int
-	switch msg.Mouse().Button {
-	case tea.MouseWheelUp:
-		delta = -modalWheelLines
-	case tea.MouseWheelDown:
-		delta = modalWheelLines
-	default:
-		// Horizontal wheel falls through to the modal, which does nothing with
-		// it, but it is outside this vertical contract.
-		return false
-	}
-	maximum := max(len(state.RenderedLines)-state.MaxVisibleLines, 0)
-	return (scroll.Bounds{Position: m.changelogScrollOffset, Maximum: maximum}).AtBoundary(delta)
+	return modalWheelAtBoundary(m.updateModal, m.updateMouseHandler, msg)
 }
 
 // projectSwitcherMaxVisible mirrors the visible-row count handleProjectSwitcherMouse

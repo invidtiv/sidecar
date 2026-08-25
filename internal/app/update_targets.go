@@ -129,6 +129,13 @@ func (m *Model) availableUpdateCount() int {
 // carried forward, so retrying one failed product neither re-runs nor forgets
 // an upgrade that already succeeded.
 func (m *Model) startUpdateBatch(plan []version.Target) tea.Cmd {
+	// Defense in depth for the sequential-batch design: no entry point may
+	// start a second batch while one is in flight, which would bump
+	// updatePlanID and orphan the running batch's results while its
+	// package-manager subprocess keeps going.
+	if m.updateInProgress {
+		return nil
+	}
 	inPlan := make(map[version.ProductID]bool, len(plan))
 	for _, t := range plan {
 		inPlan[t.Product] = true
@@ -146,9 +153,9 @@ func (m *Model) startUpdateBatch(plan []version.Target) tea.Cmd {
 	m.updateResults = nil
 	m.updateActiveIdx = 0
 	m.updateInProgress = true
+	m.updateResultsAcked = false
 	m.updateStartTime = time.Now()
 	m.updateModalState = UpdateModalProgress
-	m.clearUpdateResultModals()
 
 	if len(plan) == 0 {
 		m.updateInProgress = false
@@ -260,7 +267,6 @@ func (m *Model) finishUpdateBatch() tea.Cmd {
 	// A Sidecar upgrade from an earlier batch still means this process is
 	// stale, so ask about the whole settled set, not just this batch.
 	m.needsRestart = version.RestartRequired(results)
-	m.clearUpdateResultModals()
 
 	if len(version.RetryTargets(results)) > 0 {
 		if m.updateModalState == UpdateModalProgress {
@@ -276,13 +282,6 @@ func (m *Model) finishUpdateBatch() tea.Cmd {
 	return nil
 }
 
-// openUpdatePreview moves the user from diagnostics into the update preview.
-func (m *Model) openUpdatePreview() {
-	m.updateModalState = UpdateModalPreview
-	m.showDiagnostics = false
-	m.clearUpdatePreviewModal()
-}
-
 // updateToastSummary describes the discovered updates in one line, so async
 // per-product checks arriving one after another do not overwrite each other
 // with partial claims.
@@ -296,25 +295,5 @@ func (m *Model) updateToastSummary() string {
 			plan[0].DisplayName, plan[0].LatestVersion)
 	default:
 		return fmt.Sprintf("%d updates available! Press ! for details", len(plan))
-	}
-}
-
-// primeUpdateModalFocus renders the active update modal once if it has no
-// focus list yet. A modal builds its focusable elements during Render, so one
-// that was rebuilt since the last frame would otherwise swallow Enter.
-func (m *Model) primeUpdateModalFocus() {
-	switch m.updateModalState {
-	case UpdateModalPreview:
-		if m.updatePreviewModal != nil && m.updatePreviewModal.FocusedID() == "" {
-			_ = m.renderUpdatePreviewModal()
-		}
-	case UpdateModalComplete:
-		if m.updateCompleteModal != nil && m.updateCompleteModal.FocusedID() == "" {
-			_ = m.renderUpdateCompleteModal()
-		}
-	case UpdateModalError:
-		if m.updateErrorModal != nil && m.updateErrorModal.FocusedID() == "" {
-			_ = m.renderUpdateErrorModal()
-		}
 	}
 }

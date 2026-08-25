@@ -13,10 +13,27 @@ const (
 // Option is a functional option for configuring a Modal.
 type Option func(*Modal)
 
+// Apply applies options to an existing modal. It is how a long-lived modal
+// changes presentation (title, variant, hints) without being rebuilt, so its
+// focus list and hit regions survive the change.
+func (m *Modal) Apply(opts ...Option) {
+	for _, opt := range opts {
+		opt(m)
+	}
+	m.Invalidate()
+}
+
 // WithWidth sets the modal width.
 func WithWidth(w int) Option {
 	return func(m *Modal) {
 		m.width = w
+	}
+}
+
+// WithTitle sets the modal title.
+func WithTitle(t string) Option {
+	return func(m *Modal) {
+		m.title = t
 	}
 }
 

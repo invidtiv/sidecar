@@ -319,10 +319,13 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		// Configuration hands an available update to the updater that already
 		// exists. It duplicates none of its confirmation, progress, or install
 		// behavior, and Configuration stays open underneath, so closing the
-		// updater returns the user to About.
-		m.openUpdatePreview()
+		// updater returns the user to About. Mid-batch this reopens the modal
+		// in its current phase instead of restarting or double-starting.
 		m.updateContext()
-		return nil, true
+		if m.openUpdateModal() {
+			return nil, true
+		}
+		return toast("No update is pending right now"), true
 
 	case configui.CheckUpdatesMsg:
 		cmds := m.productCheckCmds(true)

@@ -247,13 +247,13 @@ func TestStartUpdateBatch_EmptyPlan(t *testing.T) {
 	if m.updateModalState != UpdateModalComplete {
 		t.Errorf("an empty plan settles immediately, got %v", m.updateModalState)
 	}
-	if out := m.renderUpdateCompleteModal(); !strings.Contains(out, "Nothing to update") {
+	if out := renderUpdatePhase(m); !strings.Contains(out, "Nothing to update") {
 		t.Errorf("completion should say there was nothing to do:\n%s", out)
 	}
 }
 
-// Every modal surface must stay inside the terminal at small sizes, for zero,
-// one, two, and three visible products.
+// Every phase of the single modal must stay inside the terminal at small
+// sizes, for zero, one, two, and three visible products.
 func TestUpdateModals_ConstrainedRendering(t *testing.T) {
 	all := []version.Target{
 		target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true),
@@ -261,55 +261,115 @@ func TestUpdateModals_ConstrainedRendering(t *testing.T) {
 		target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true),
 	}
 	sizes := [][2]int{{40, 12}, {60, 20}, {120, 40}}
+	phases := []struct {
+		name  string
+		state UpdateModalState
+	}{
+		{"preview", UpdateModalPreview},
+		{"progress", UpdateModalProgress},
+		{"complete", UpdateModalComplete},
+		{"error", UpdateModalError},
+	}
 
 	for count := 0; count <= 3; count++ {
 		for _, size := range sizes {
 			m := &Model{width: size[0], height: size[1], products: all[:count]}
 			m.updatePlan = version.SelectPlan(m.products)
-			for _, tgt := range m.updatePlan {
+			for i, tgt := range m.updatePlan {
 				m.updateResults = append(m.updateResults, version.Result{
 					Target: tgt, Status: version.StatusUpdated, Version: tgt.LatestVersion})
+				m.updateActiveIdx = i + 1
 			}
 			if count == 3 {
 				m.updateResults[2] = version.Result{
-					Target: all[2], Status: version.StatusFailed, Err: errors.New("brew upgrade failed with a very long message that must be truncated")}
+					Target: all[2], Status: version.StatusFailed,
+					Output: "brew upgrade failed with a very long message that must be wrapped",
+					Err:    errors.New("brew exited 1"),
+				}
+				m.updateActiveIdx = 3
 			}
+			m.needsRestart = count > 0
 
-			for name, render := range map[string]func() string{
-				"preview":  m.renderUpdatePreviewModal,
-				"progress": m.renderUpdateProgressModal,
-				"complete": m.renderUpdateCompleteModal,
-				"error":    m.renderUpdateErrorModal,
-			} {
-				out := render()
+			for _, phase := range phases {
+				m.updateModalState = phase.state
+				out := renderUpdatePhase(m)
 				if out == "" {
 					continue
 				}
 				if w := lipgloss.Width(out); w > size[0] {
 					t.Errorf("%s modal with %d products at %dx%d is %d wide",
-						name, count, size[0], size[1], w)
+						phase.name, count, size[0], size[1], w)
 				}
 				if h := lipgloss.Height(out); h > size[1] {
 					t.Errorf("%s modal with %d products at %dx%d is %d tall",
-						name, count, size[0], size[1], h)
+						phase.name, count, size[0], size[1], h)
 				}
-				m.clearUpdatePreviewModal()
-				m.clearUpdateResultModals()
 			}
+			m.updateModal = nil
 		}
 	}
 }
 
-// The progress surface must not offer a cancel it cannot honour.
+// The installing surface must not offer a cancel it cannot honour, must say
+// that esc only hides, and must name the product being changed.
 func TestProgressModal_NoFalseCancelHint(t *testing.T) {
 	plan := []version.Target{target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true)}
 	m := modelWithBatch(plan)
-	out := m.renderUpdateProgressModal()
+
+	out := strings.ToLower(renderUpdatePhase(m))
 	if strings.Contains(out, "cancel") {
 		t.Errorf("progress modal must not claim the update is cancellable:\n%s", out)
 	}
-	if !strings.Contains(out, "Tasks") {
+	if !strings.Contains(out, "tasks") {
 		t.Errorf("progress modal should name the product being changed:\n%s", out)
+	}
+	if !strings.Contains(out, "continues") {
+		t.Errorf("progress modal should say the update continues behind a hidden modal:\n%s", out)
+	}
+}
+
+// A discovery result arriving while the confirmation is open must not rebuild
+// the modal out from under the user. The single modal reads live state through
+// its sections, so the same object simply shows the new row on the next frame.
+func TestProductStatus_DoesNotRebuildOpenPreview(t *testing.T) {
+	m := &Model{width: 80, height: 30}
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+	m.openUpdateModal()
+	renderUpdatePhase(m)
+	built := m.updateModal
+
+	updated, _ := m.Update(version.ProductStatusMsg{
+		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
+	after := updated.(Model)
+
+	if after.updateModal != built {
+		t.Error("the open preview must not be rebuilt by a late discovery result")
+	}
+	if after.updateModal.FocusedID() == "" {
+		t.Error("the open preview must keep its focus, or Enter would do nothing")
+	}
+	out := renderUpdatePhase(&after)
+	if !strings.Contains(out, "Sidecar") {
+		t.Errorf("the confirmation should show the newly discovered target:\n%s", out)
+	}
+}
+
+// Once closed, a late discovery result neither shows the modal nor moves the
+// flow's phase; the next entry point opens it in whatever phase is current.
+func TestProductStatus_RebuildsClosedPreview(t *testing.T) {
+	m := &Model{width: 80, height: 30, updateModalState: UpdateModalClosed}
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+	renderUpdatePhase(m)
+
+	updated, _ := m.Update(version.ProductStatusMsg{
+		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
+	after := updated.(Model)
+
+	if after.updateModalState != UpdateModalClosed {
+		t.Errorf("a late result must not reopen a closed flow, got %v", after.updateModalState)
+	}
+	if out := after.renderUpdateModalOverlay("BG"); out != "BG" {
+		t.Error("a closed update flow must paint nothing over the background")
 	}
 }
 
@@ -328,42 +388,6 @@ func TestSelectPlan_EnabledButNotInstalledIsNotPlanned(t *testing.T) {
 		!strings.Contains(row, "Panels → Install Tasks") ||
 		!strings.Contains(row, "brew install marcus/tap/tasks") {
 		t.Errorf("diagnostics should point at Panels install and still name the command:\n%s", row)
-	}
-}
-
-// A discovery result arriving while the confirmation is open must not rebuild
-// the modal out from under the user: the rebuilt modal has no focus until the
-// next frame, which previously made Enter do nothing. This drives the real
-// Update branch, not a restatement of it.
-func TestProductStatus_DoesNotRebuildOpenPreview(t *testing.T) {
-	m := &Model{width: 80, height: 30, updateModalState: UpdateModalPreview}
-	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	_ = m.renderUpdatePreviewModal()
-	built := m.updatePreviewModal
-
-	updated, _ := m.Update(version.ProductStatusMsg{
-		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
-	after := updated.(Model)
-
-	if after.updatePreviewModal != built {
-		t.Error("the open preview must not be rebuilt by a late discovery result")
-	}
-	if after.updatePreviewModal.FocusedID() == "" {
-		t.Error("the open preview must keep its focus, or Enter would do nothing")
-	}
-}
-
-// Once the preview is closed, a new discovery result does rebuild it.
-func TestProductStatus_RebuildsClosedPreview(t *testing.T) {
-	m := &Model{width: 80, height: 30, updateModalState: UpdateModalClosed}
-	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	_ = m.renderUpdatePreviewModal()
-
-	updated, _ := m.Update(version.ProductStatusMsg{
-		Target: target(version.ProductSidecar, "Sidecar", "0.95.0", "0.96.0", true)})
-
-	if updated.(Model).updatePreviewModal != nil {
-		t.Error("a closed preview should be dropped so it rebuilds from the new plan")
 	}
 }
 
@@ -401,7 +425,7 @@ func TestRetry_PreservesEarlierSuccess(t *testing.T) {
 	}
 
 	// The surface the user is actually looking at must say the same thing.
-	out := m.renderUpdateCompleteModal()
+	out := renderUpdatePhase(m)
 	if !strings.Contains(out, "Sidecar") || !strings.Contains(out, "Tasks") {
 		t.Errorf("completion should list both products:\n%s", out)
 	}
@@ -413,17 +437,15 @@ func TestRetry_PreservesEarlierSuccess(t *testing.T) {
 	}
 }
 
-// Enter confirms the plan even when the modal was built since the last frame
-// and so has no focus list yet: the key handler primes it first.
+// Enter confirms the plan. The modal is rendered once first, exactly as a real
+// frame would; no priming step exists any more.
 func TestPreviewEnterConfirms(t *testing.T) {
-	m := &Model{width: 80, height: 30, updateModalState: UpdateModalPreview}
+	m := &Model{width: 80, height: 30}
 	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	m.ensureUpdatePreviewModal() // built but never rendered
-	if m.updatePreviewModal.FocusedID() != "" {
-		t.Fatal("precondition: an unrendered modal has no focus")
-	}
+	m.openUpdateModal()
+	renderUpdatePhase(m)
 
-	_, _ = m.handleUpdateModalKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m.handleUpdateModalKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 
 	if m.updateModalState != UpdateModalProgress {
 		t.Fatalf("Enter should confirm the update, state is %v", m.updateModalState)

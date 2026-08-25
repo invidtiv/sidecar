@@ -264,12 +264,7 @@ func (m Model) viewContent() string {
 	case ModalHelp:
 		return m.renderHelpModal(bg)
 	case ModalUpdate:
-		// Render update modal, with optional changelog overlay
-		updateView := m.renderUpdateModalOverlay(bg)
-		if m.changelogVisible {
-			return m.renderChangelogOverlay(updateView)
-		}
-		return updateView
+		return m.renderUpdateModalOverlay(bg)
 	case ModalDiagnostics:
 		return m.renderDiagnosticsModal(bg)
 	case ModalQuitConfirm:

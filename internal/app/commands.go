@@ -285,12 +285,6 @@ const (
 // UpdateElapsedTickMsg triggers elapsed time update during update.
 type UpdateElapsedTickMsg struct{}
 
-// ChangelogLoadedMsg signals that changelog content has been loaded.
-type ChangelogLoadedMsg struct {
-	Content string
-	Err     error
-}
-
 // EditorReturnedMsg signals that an external editor process has exited.
 // Used to restore terminal state (mouse support) after returning from vim/etc.
 type EditorReturnedMsg struct {

@@ -461,6 +461,7 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 func TestConfigurationOpensTheExistingUpdater(t *testing.T) {
 	m, _ := scopeBaselineModel(t, "git")
 	m = typeKey(t, m, ",")
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 
 	updated, _ := m.Update(configui.OpenUpdaterMsg{})
 	m = asAppModel(t, updated)
@@ -469,6 +470,22 @@ func TestConfigurationOpensTheExistingUpdater(t *testing.T) {
 	}
 	if !m.configOpen() {
 		t.Fatal("handing off to the updater closed Configuration, so returning would not restore About")
+	}
+}
+
+// With nothing pending — no discovery, no batch, no unseen result — the
+// hand-off refuses instead of opening a hollow confirmation.
+func TestConfigurationOpenUpdaterRefusesWhenNothingIsPending(t *testing.T) {
+	m, _ := scopeBaselineModel(t, "git")
+	m = typeKey(t, m, ",")
+
+	updated, _ := m.Update(configui.OpenUpdaterMsg{})
+	m = asAppModel(t, updated)
+	if m.updateModalState != UpdateModalClosed {
+		t.Fatalf("update modal state = %v, want no modal at all", m.updateModalState)
+	}
+	if !m.configOpen() {
+		t.Fatal("a refused hand-off must leave Configuration open")
 	}
 }
 

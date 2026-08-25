@@ -581,21 +581,14 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleUpdateTargetResult(msg)
 
 	case UpdateElapsedTickMsg:
-		// Continue timer if update is in progress
-		if m.updateInProgress && m.updateModalState == UpdateModalProgress {
+		// The clock belongs to the batch, not to the overlay showing it:
+		// continue while a batch is in flight so hiding the modal does not
+		// kill the timer and reopening never has to restart it.
+		if m.updateInProgress {
 			return m, tea.Tick(time.Second, func(t time.Time) tea.Msg {
 				return UpdateElapsedTickMsg{}
 			})
 		}
-		return m, nil
-
-	case ChangelogLoadedMsg:
-		if msg.Err != nil {
-			m.updateChangelog = "Failed to load changelog: " + msg.Err.Error()
-		} else {
-			m.updateChangelog = msg.Content
-		}
-		m.clearChangelogModal() // Force rebuild with new content
 		return m, nil
 
 	case ActivateTargetMsg:
@@ -764,11 +757,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case version.ProductStatusMsg:
 		m.setProductStatus(msg)
 		m.clearDiagnosticsModal() // rebuild so the modal picks up new state
-		// Never rebuild the preview underneath an open confirmation: the user
-		// is deciding about the plan they were shown, and a rebuilt modal has
-		// no focus until the next frame.
-		if m.updateModalState == UpdateModalClosed {
-			m.clearUpdatePreviewModal()
+		// The single update modal reads live state through its sections, so a
+		// late discovery result needs no rebuild — only an invalidation of the
+		// cached geometry when the modal is open.
+		if m.updateModalState != UpdateModalClosed && m.updateModal != nil {
+			m.updateModal.Invalidate()
 		}
 		// Summarize rather than emitting one toast per product: the checks are
 		// asynchronous, so per-product toasts would overwrite one another.
@@ -944,16 +937,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.clearHelpModal()
 			return m, nil
 		case ModalUpdate:
-			// Handle Esc in update modal
-			if m.changelogVisible {
-				// Close changelog overlay, return to preview
-				m.changelogVisible = false
-				m.changelogScrollOffset = 0
-				m.clearChangelogModal()
-				return m, nil
-			}
-			// Close update modal
-			m.updateModalState = UpdateModalClosed
+			// Esc closes the confirmation and result phases, and hides the
+			// modal during an install (the batch keeps running; every entry
+			// point reopens it in its current phase).
+			m.closeUpdateModal()
 			return m, nil
 		case ModalDiagnostics:
 			m.showDiagnostics = false
@@ -1212,16 +1199,18 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.showDiagnostics = false
 				return m, nil
 			case "update":
-				// Open update modal instead of starting update directly
-				if m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
-					m.openUpdatePreview()
+				// Open the updater in whatever phase the flow is in — including
+				// mid-batch, where refusing left the user blind to a running
+				// install.
+				if m.openUpdateModal() {
+					m.updateContext()
 					return m, nil
 				}
 			}
 		}
 		// Handle 'u' shortcut for update - open update modal
-		if msg.String() == "u" && m.hasUpdatesAvailable() && !m.updateInProgress && !m.needsRestart {
-			m.openUpdatePreview()
+		if msg.String() == "u" && m.openUpdateModal() {
+			m.updateContext()
 			return m, nil
 		}
 		return m, nil
@@ -2503,248 +2492,8 @@ func (m *Model) handleHelpModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleUpdateModalKey handles keyboard input for the update modal.
-func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-
-	// Handle changelog overlay first if visible
-	if m.changelogVisible {
-		switch key {
-		case "j", "down":
-			m.changelogScrollOffset++
-			m.syncChangelogScroll()
-			return m, nil
-		case "k", "up":
-			if m.changelogScrollOffset > 0 {
-				m.changelogScrollOffset--
-				m.syncChangelogScroll()
-			}
-			return m, nil
-		case "ctrl+d", "pgdown":
-			m.changelogScrollOffset += 10
-			m.syncChangelogScroll()
-			return m, nil
-		case "ctrl+u", "pgup":
-			m.changelogScrollOffset -= 10
-			if m.changelogScrollOffset < 0 {
-				m.changelogScrollOffset = 0
-			}
-			m.syncChangelogScroll()
-			return m, nil
-		case "g":
-			m.changelogScrollOffset = 0
-			m.syncChangelogScroll()
-			return m, nil
-		case "G":
-			m.changelogScrollOffset = 999999 // Will be clamped during render
-			m.syncChangelogScroll()
-			return m, nil
-		case "esc", "c", "q":
-			m.changelogVisible = false
-			m.changelogScrollOffset = 0
-			m.clearChangelogModal()
-			return m, nil
-		}
-		// Route to modal for Enter (close button)
-		m.ensureChangelogModal()
-		if m.changelogModal != nil {
-			action, _ := m.changelogModal.HandleKey(msg)
-			if action == "cancel" {
-				m.changelogVisible = false
-				m.changelogScrollOffset = 0
-				m.clearChangelogModal()
-				return m, nil
-			}
-		}
-		return m, nil
-	}
-
-	// Handle keys based on modal state
-	switch m.updateModalState {
-	case UpdateModalPreview:
-		// Handle special keys first
-		switch key {
-		case "c":
-			// Show changelog
-			m.changelogScrollOffset = 0
-			if m.updateChangelog == "" {
-				m.changelogVisible = true
-				return m, fetchChangelog()
-			}
-			m.changelogVisible = true
-			return m, nil
-		case "q":
-			m.updateModalState = UpdateModalClosed
-			return m, nil
-		}
-		// Route to modal for Tab/Shift+Tab/Enter/Esc
-		m.ensureUpdatePreviewModal()
-		m.primeUpdateModalFocus()
-		if m.updatePreviewModal != nil {
-			action, cmd := m.updatePreviewModal.HandleKey(msg)
-			switch action {
-			case "update":
-				return m, m.startUpdateBatch(version.SelectPlan(m.products))
-			case "cancel":
-				m.updateModalState = UpdateModalClosed
-				return m, nil
-			}
-			if cmd != nil {
-				return m, cmd
-			}
-		}
-
-	case UpdateModalProgress:
-		// No keys during progress (except Esc handled earlier)
-		return m, nil
-
-	case UpdateModalComplete:
-		// Handle 'q' specially for quit
-		if key == "q" {
-			m.shutdown()
-			return m, tea.Quit
-		}
-		// Route to modal for Tab/Shift+Tab/Enter/Esc
-		m.ensureUpdateCompleteModal()
-		m.primeUpdateModalFocus()
-		if m.updateCompleteModal != nil {
-			action, cmd := m.updateCompleteModal.HandleKey(msg)
-			switch action {
-			case "quit":
-				m.shutdown()
-				return m, tea.Quit
-			case "cancel":
-				m.updateModalState = UpdateModalClosed
-				return m, nil
-			}
-			if cmd != nil {
-				return m, cmd
-			}
-		}
-
-	case UpdateModalError:
-		// Handle 'r' for retry and 'q' for close
-		switch key {
-		case "r":
-			return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
-		case "q":
-			m.updateModalState = UpdateModalClosed
-			return m, nil
-		}
-		// Route to modal for Tab/Shift+Tab/Enter/Esc
-		m.ensureUpdateErrorModal()
-		m.primeUpdateModalFocus()
-		if m.updateErrorModal != nil {
-			action, cmd := m.updateErrorModal.HandleKey(msg)
-			switch action {
-			case "retry":
-				return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
-			case "cancel":
-				m.updateModalState = UpdateModalClosed
-				return m, nil
-			}
-			if cmd != nil {
-				return m, cmd
-			}
-		}
-	}
-
-	return m, nil
-}
-
-// handleUpdateModalMouse handles mouse events for the update modal.
-func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	// Handle changelog overlay first if visible
-	if m.changelogVisible {
-		m.ensureChangelogModal()
-		if m.changelogMouseHandler == nil {
-			m.changelogMouseHandler = mouse.NewHandler()
-		}
-		// Handle scroll events via shared state pointer (no modal rebuild needed)
-		switch msg.Mouse().Button {
-		case tea.MouseWheelUp:
-			if m.changelogScrollOffset > 0 {
-				m.changelogScrollOffset -= 3
-				if m.changelogScrollOffset < 0 {
-					m.changelogScrollOffset = 0
-				}
-				m.syncChangelogScroll()
-			}
-			return m, nil
-		case tea.MouseWheelDown:
-			m.changelogScrollOffset += 3
-			m.syncChangelogScroll()
-			return m, nil
-		}
-		// Handle modal interaction (close button, backdrop)
-		if m.changelogModal != nil {
-			action := m.changelogModal.HandleMouse(msg, m.changelogMouseHandler)
-			if action == "cancel" {
-				m.changelogVisible = false
-				m.changelogScrollOffset = 0
-				m.clearChangelogModal()
-				return m, nil
-			}
-		}
-		return m, nil
-	}
-
-	switch m.updateModalState {
-	case UpdateModalPreview:
-		m.ensureUpdatePreviewModal()
-		if m.updatePreviewModal == nil {
-			return m, nil
-		}
-		if m.updatePreviewMouseHandler == nil {
-			m.updatePreviewMouseHandler = mouse.NewHandler()
-		}
-		action := m.updatePreviewModal.HandleMouse(msg, m.updatePreviewMouseHandler)
-		switch action {
-		case "update":
-			return m, m.startUpdateBatch(version.SelectPlan(m.products))
-		case "cancel":
-			m.updateModalState = UpdateModalClosed
-			return m, nil
-		}
-
-	case UpdateModalComplete:
-		m.ensureUpdateCompleteModal()
-		if m.updateCompleteModal == nil {
-			return m, nil
-		}
-		if m.updateCompleteMouseHandler == nil {
-			m.updateCompleteMouseHandler = mouse.NewHandler()
-		}
-		action := m.updateCompleteModal.HandleMouse(msg, m.updateCompleteMouseHandler)
-		switch action {
-		case "quit":
-			m.shutdown()
-			return m, tea.Quit
-		case "cancel":
-			m.updateModalState = UpdateModalClosed
-			return m, nil
-		}
-
-	case UpdateModalError:
-		m.ensureUpdateErrorModal()
-		if m.updateErrorModal == nil {
-			return m, nil
-		}
-		if m.updateErrorMouseHandler == nil {
-			m.updateErrorMouseHandler = mouse.NewHandler()
-		}
-		action := m.updateErrorModal.HandleMouse(msg, m.updateErrorMouseHandler)
-		switch action {
-		case "retry":
-			return m, m.startUpdateBatch(version.RetryTargets(m.updateResults))
-		case "cancel":
-			m.updateModalState = UpdateModalClosed
-			return m, nil
-		}
-	}
-
-	return m, nil
-}
+// handleUpdateModalKey and handleUpdateModalMouse live in update_modal.go;
+// both route through the single modal's own action handling.
 
 func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	action := m.quitModal.HandleMouse(msg, m.quitMouseHandler)

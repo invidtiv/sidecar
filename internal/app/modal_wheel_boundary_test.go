@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,7 +12,13 @@ import (
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/scroll/scrolltest"
+	"github.com/marcus/sidecar/internal/version"
 )
+
+// wheelBoundaryTarget is a minimal planned target for boundary-fixture results.
+func wheelBoundaryTarget(id version.ProductID) version.Target {
+	return version.Target{Product: id, DisplayName: string(id), Enabled: true, Installed: true}
+}
 
 // --- helpers ---------------------------------------------------------------
 
@@ -55,6 +62,15 @@ func renderedModal(w, h int, content string) (*modal.Modal, *mouse.Handler) {
 	handler := mouse.NewHandler()
 	md.Render(w, h, handler)
 	return md, handler
+}
+
+// renderedUpdateModal builds and renders the app's single update modal for the
+// model's current phase, plus its handler.
+func renderedUpdateModal(t *testing.T, m *Model) *mouse.Handler {
+	t.Helper()
+	m.ensureUpdateModal()
+	m.updateModal.Render(m.width, m.height, m.updateMouseHandler)
+	return m.updateMouseHandler
 }
 
 func boundaryModel(t *testing.T) Model {
@@ -105,8 +121,9 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview at top",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				md, h := renderedModal(m.width, m.height, longLines(200))
-				m.updatePreviewModal, m.updatePreviewMouseHandler = md, h
+				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				h := renderedUpdateModal(t, m)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: true, down: false},
@@ -115,10 +132,11 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview at bottom",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				md, h := renderedModal(m.width, m.height, longLines(200))
-				md.ScrollToBottom()
-				md.Render(m.width, m.height, h)
-				m.updatePreviewModal, m.updatePreviewMouseHandler = md, h
+				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				h := renderedUpdateModal(t, m)
+				m.updateModal.ScrollToBottom()
+				m.updateModal.Render(m.width, m.height, h)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: false, down: true},
@@ -127,10 +145,11 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview mid-content is movable both ways",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				md, h := renderedModal(m.width, m.height, longLines(200))
-				md.ScrollBy(3)
-				md.Render(m.width, m.height, h)
-				m.updatePreviewModal, m.updatePreviewMouseHandler = md, h
+				m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+				m.updateNotes = strings.Repeat("- changelog entry\n", 200)
+				h := renderedUpdateModal(t, m)
+				m.updateModal.ScrollBy(3)
+				m.updateModal.Render(m.width, m.height, h)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: false, down: false},
@@ -139,8 +158,7 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update preview with short content is bounded both ways",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalPreview
-				md, h := renderedModal(m.width, m.height, "all done")
-				m.updatePreviewModal, m.updatePreviewMouseHandler = md, h
+				h := renderedUpdateModal(t, m)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: true, down: true},
@@ -157,8 +175,11 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update complete dialog",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalComplete
-				md, h := renderedModal(m.width, m.height, "restart required")
-				m.updateCompleteModal, m.updateCompleteMouseHandler = md, h
+				m.needsRestart = true
+				m.updateCarried = []version.Result{
+					{Target: wheelBoundaryTarget(version.ProductSidecar), Status: version.StatusUpdated, Version: "9.9.9"},
+				}
+				h := renderedUpdateModal(t, m)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: true, down: true},
@@ -167,8 +188,11 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			name: "update error dialog",
 			setup: func(t *testing.T, m *Model) (int, int) {
 				m.updateModalState = UpdateModalError
-				md, h := renderedModal(m.width, m.height, "it failed")
-				m.updateErrorModal, m.updateErrorMouseHandler = md, h
+				m.updateCarried = []version.Result{
+					{Target: wheelBoundaryTarget(version.ProductTd), Status: version.StatusFailed,
+						Err: errors.New("brew exited 1")},
+				}
+				h := renderedUpdateModal(t, m)
 				return modalBodyPoint(t, h)
 			},
 			want: want{up: true, down: true},
@@ -478,59 +502,6 @@ func TestEveryModalKindHasALedgerRow(t *testing.T) {
 
 // --- nested precedence -----------------------------------------------------
 
-func TestChangelogTakesPrecedenceOverTheUpdateDialog(t *testing.T) {
-	m := boundaryModel(t)
-	m.updateModalState = UpdateModalPreview
-	// The dialog underneath would answer "bounded both ways".
-	md, h := renderedModal(m.width, m.height, "short")
-	m.updatePreviewModal, m.updatePreviewMouseHandler = md, h
-
-	m.changelogVisible = true
-	m.changelogScrollState = &changelogViewState{
-		RenderedLines:   strings.Split(longLines(100), "\n"),
-		MaxVisibleLines: 10,
-	}
-
-	// At the top: up bounded, down movable — the changelog, not the dialog.
-	if !m.wheelAtBoundary(wheelAt(10, 10, false)) {
-		t.Error("expected the changelog top to be bounded upward")
-	}
-	if m.wheelAtBoundary(wheelAt(10, 10, true)) {
-		t.Error("expected the changelog to be movable downward, not the dialog's bounded answer")
-	}
-
-	// At the bottom: down bounded, the reverse event passes.
-	m.changelogScrollOffset = 90
-	if !m.wheelAtBoundary(wheelAt(10, 10, true)) {
-		t.Error("expected the changelog bottom to be bounded downward")
-	}
-	if m.wheelAtBoundary(wheelAt(10, 10, false)) {
-		t.Error("expected the reverse event to pass at the changelog bottom")
-	}
-
-	// Closing the changelog hands the answer back to the dialog underneath.
-	m.changelogVisible = false
-	if !m.wheelAtBoundary(wheelAt(modalBodyPointOf(t, h))) {
-		t.Error("expected the short update dialog to answer bounded once the changelog closed")
-	}
-}
-
-// modalBodyPointOf adapts modalBodyPoint for the wheelAt(x, y, down) signature.
-func modalBodyPointOf(t *testing.T, h *mouse.Handler) (int, int, bool) {
-	t.Helper()
-	x, y := modalBodyPoint(t, h)
-	return x, y, true
-}
-
-func TestChangelogWithoutRenderedStateIsUnknown(t *testing.T) {
-	m := boundaryModel(t)
-	m.updateModalState = UpdateModalPreview
-	m.changelogVisible = true
-	if m.wheelAtBoundary(wheelAt(10, 10, true)) || m.wheelAtBoundary(wheelAt(10, 10, false)) {
-		t.Error("expected an unbuilt changelog to be unknown in both directions")
-	}
-}
-
 func TestProjectAddTakesPrecedenceOverTheSwitcherCursor(t *testing.T) {
 	m := boundaryModel(t)
 	m.showProjectSwitcher = true
@@ -581,26 +552,6 @@ func TestBoundaryWheelOverPickersDoesNoPreviewWork(t *testing.T) {
 	}
 	if tm.themeSwitcherModal != themeModal || tm.themeSwitcherSelectedIdx != 0 {
 		t.Error("boundary query mutated theme switcher state")
-	}
-}
-
-func TestBoundaryWheelDoesNotSynchronizeChangelogState(t *testing.T) {
-	m := boundaryModel(t)
-	m.updateModalState = UpdateModalPreview
-	m.changelogVisible = true
-	state := &changelogViewState{
-		RenderedLines:   strings.Split(longLines(100), "\n"),
-		MaxVisibleLines: 10,
-		ScrollOffset:    0,
-	}
-	m.changelogScrollState = state
-	m.changelogScrollOffset = 0
-
-	if got := FilterInput(m, wheelAt(10, 10, false)); got != nil {
-		t.Fatalf("boundary wheel at the changelog top survived the filter as %T", got)
-	}
-	if m.changelogScrollOffset != 0 || state.ScrollOffset != 0 {
-		t.Error("boundary query mutated changelog scroll state")
 	}
 }
 

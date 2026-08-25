@@ -2,8 +2,6 @@ package app
 
 import (
 	"fmt"
-	"io"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -18,195 +16,444 @@ import (
 	"github.com/marcus/sidecar/internal/version"
 )
 
-const changelogURL = "https://raw.githubusercontent.com/marcus/sidecar/main/CHANGELOG.md"
+// updateModalWidth is the one width for the whole journey. The library clamps
+// it to the terminal at render time, so no per-size caching is needed.
+const updateModalWidth = 60
 
-// changelogViewState holds mutable state shared between the model and the
-// modal's Custom section closure. Using a heap-allocated struct avoids
-// rebuilding the modal on every scroll event (bubbletea value semantics
-// would otherwise make the closure capture a stale model pointer).
-type changelogViewState struct {
-	ScrollOffset    int
-	RenderedLines   []string
-	MaxVisibleLines int
+// updateUIState is the heap-allocated snapshot the single update modal's
+// section closures read. The model is copied through bubbletea updates, so a
+// closure that captured the model would go stale after the first Update;
+// closures capture this pointer instead, and syncUpdateUI refreshes its
+// contents wherever the app is about to touch the modal.
+type updateUIState struct {
+	phase     UpdateModalState
+	plan      []version.Target
+	results   []version.Result
+	settled   []version.Result
+	activeIdx int
+	running   bool
+	start     time.Time
+
+	products        []version.Target
+	notes           string
+	anyManaged      bool
+	restartRequired bool
+	retryCount      int
 }
 
-// updateModalWidth returns the appropriate modal width based on screen size.
-func (m *Model) updateModalWidth() int {
-	modalW := 60
-	maxW := m.width - 4
-	if maxW < 20 {
-		maxW = 20 // Absolute minimum for very small screens
+func (u *updateUIState) includesTasks() bool {
+	for _, t := range version.SelectPlan(u.products) {
+		if t.Product == version.ProductTasks {
+			return true
+		}
 	}
-	if modalW > maxW {
-		modalW = maxW
-	}
-	if modalW < 30 {
-		modalW = 30
-	}
-	// Final cap: never exceed available space
-	if modalW > maxW {
-		modalW = maxW
-	}
-	return modalW
+	return false
 }
 
-// renderUpdateModalOverlay renders the update modal as an overlay on top of background.
-func (m *Model) renderUpdateModalOverlay(background string) string {
-	// Render modal content based on state
-	var modalContent string
-	switch m.updateModalState {
-	case UpdateModalPreview:
-		modalContent = m.renderUpdatePreviewModal()
+// syncUpdateUI copies the live update-flow state into the snapshot the modal
+// reads. Called from every path that renders or feeds input to the modal.
+func (m *Model) syncUpdateUI() {
+	if m.updateUI == nil {
+		m.updateUI = &updateUIState{}
+	}
+	u := m.updateUI
+	u.phase = m.updateModalState
+	u.plan = m.updatePlan
+	u.results = m.updateResults
+	u.settled = m.settledResults()
+	u.activeIdx = m.updateActiveIdx
+	u.running = m.updateInProgress
+	u.start = m.updateStartTime
+	u.products = m.products
+	u.notes = m.updateNotes
+	u.anyManaged = false
+	for _, t := range version.SelectPlan(u.products) {
+		if t.Install.Managed {
+			u.anyManaged = true
+		}
+	}
+	u.restartRequired = version.RestartRequired(u.settled)
+	u.retryCount = len(version.RetryTargets(u.settled))
+}
+
+// ensureUpdateModal builds the single update modal once and keeps its
+// presentation in step with the current phase. Sections are When-gated on the
+// phase and read the shared UI state, so the same modal object, mouse
+// handler, and focus list carry across Overview → Installing → Done/Failed.
+func (m *Model) ensureUpdateModal() {
+	m.syncUpdateUI()
+	if m.updateModal != nil {
+		m.applyUpdatePresentation()
+		return
+	}
+
+	u := m.updateUI
+	inPhase := func(p UpdateModalState) func() bool {
+		return func() bool { return u.phase == p }
+	}
+
+	mdl := modal.New(updateTitle(u.phase),
+		modal.WithWidth(updateModalWidth),
+		modal.WithVariant(updateVariant(u.phase)),
+		modal.WithHintText(updateHint(u.phase)),
+		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
+	)
+
+	mdl.AddSection(modal.When(inPhase(UpdateModalPreview), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
+		return modal.RenderedSection{Content: updateOverviewContent(u, cw)}
+	}, nil)))
+
+	mdl.AddSection(modal.When(inPhase(UpdateModalProgress), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
+		return modal.RenderedSection{Content: updateProgressContent(u)}
+	}, nil)))
+
+	mdl.AddSection(modal.When(inPhase(UpdateModalComplete), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
+		return modal.RenderedSection{Content: updateResultContent(u)}
+	}, nil)))
+
+	mdl.AddSection(modal.When(inPhase(UpdateModalError), modal.Custom(func(cw int, _, _ string) modal.RenderedSection {
+		return modal.RenderedSection{Content: updateErrorContent(u, cw)}
+	}, nil)))
+
+	mdl.AddSection(modal.Spacer())
+	mdl.AddSection(modal.Custom(func(cw int, focusID, hoverID string) modal.RenderedSection {
+		btns := updateButtons(u)
+		if len(btns) == 0 {
+			return modal.RenderedSection{}
+		}
+		return modal.Buttons(btns...).Render(cw, focusID, hoverID)
+	}, nil))
+
+	m.updateModal = mdl
+	if m.updateMouseHandler == nil {
+		m.updateMouseHandler = mouse.NewHandler()
+	}
+	m.applyUpdatePresentation()
+}
+
+// applyUpdatePresentation restates what changes between phases on the one
+// persistent modal: title, border variant, hint line, and primary action.
+func (m *Model) applyUpdatePresentation() {
+	m.updateModal.Apply(
+		modal.WithTitle(updateTitle(m.updateModalState)),
+		modal.WithVariant(updateVariant(m.updateModalState)),
+		modal.WithHintText(updateHint(m.updateModalState)),
+		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
+	)
+}
+
+func (m *Model) updateUIState() *updateUIState { return m.updateUI }
+
+func updateTitle(p UpdateModalState) string {
+	switch p {
 	case UpdateModalProgress:
-		modalContent = m.renderUpdateProgressModal()
+		return "Updating…"
 	case UpdateModalComplete:
-		modalContent = m.renderUpdateCompleteModal()
+		return "Update complete"
 	case UpdateModalError:
-		modalContent = m.renderUpdateErrorModal()
+		return "Update incomplete"
 	default:
+		return "Update available"
+	}
+}
+
+func updateVariant(p UpdateModalState) modal.Variant {
+	switch p {
+	case UpdateModalProgress:
+		return modal.VariantWarning
+	case UpdateModalComplete:
+		return modal.VariantInfo
+	case UpdateModalError:
+		return modal.VariantDanger
+	default:
+		return modal.VariantDefault
+	}
+}
+
+// updateHint overrides the library default where it would lie. During an
+// install the default "Esc to cancel" is exactly the false promise the
+// honest-no-cancel stance forbids: Esc only hides the modal.
+func updateHint(p UpdateModalState) string {
+	if p == UpdateModalProgress {
+		return "esc hides · update continues"
+	}
+	return ""
+}
+
+func updatePrimaryAction(u *updateUIState) string {
+	switch u.phase {
+	case UpdateModalPreview:
+		return "update"
+	case UpdateModalError:
+		return "retry"
+	case UpdateModalComplete:
+		if u.restartRequired {
+			return "quit"
+		}
+		return "cancel"
+	default:
+		return ""
+	}
+}
+
+func updateButtons(u *updateUIState) []modal.ButtonDef {
+	switch u.phase {
+	case UpdateModalPreview:
+		if !u.anyManaged {
+			return []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
+		}
+		return []modal.ButtonDef{
+			modal.Btn(" Update Now ", "update"),
+			modal.Btn(" Later ", "cancel"),
+		}
+	case UpdateModalComplete:
+		if u.restartRequired {
+			return []modal.ButtonDef{
+				modal.Btn(" Quit & Restart ", "quit"),
+				modal.Btn(" Later ", "cancel"),
+			}
+		}
+		return []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
+	case UpdateModalError:
+		return []modal.ButtonDef{
+			modal.Btn(" Retry ", "retry"),
+			modal.Btn(" Close ", "cancel"),
+		}
+	default:
+		return nil
+	}
+}
+
+// renderUpdateModalOverlay overlays the single update modal on the background.
+func (m *Model) renderUpdateModalOverlay(background string) string {
+	if m.updateModalState == UpdateModalClosed {
 		return background
 	}
-
-	return ui.OverlayModal(background, modalContent, m.width, m.height)
+	m.ensureUpdateModal()
+	rendered := m.updateModal.Render(m.width, m.height, m.updateMouseHandler)
+	return ui.OverlayModal(background, rendered, m.width, m.height)
 }
 
-// clearUpdatePreviewModal drops the cached preview modal so it rebuilds from
-// the current target list.
-func (m *Model) clearUpdatePreviewModal() {
-	m.updatePreviewModal = nil
-	m.updatePreviewModalWidth = 0
+// updateOverviewContent renders the confirmation view: what changes, the
+// Tasks note, and Sidecar's release notes inline. Notes longer than the box
+// scroll in the modal's own viewport; nothing is truncated by hand here.
+func updateOverviewContent(u *updateUIState, contentW int) string {
+	plan := version.SelectPlan(u.products)
+	if len(plan) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(styles.Muted.Render("Updating will change:") + "\n")
+	rows := make([]string, 0, len(plan))
+	for _, t := range plan {
+		rows = append(rows, targetRow(t))
+	}
+	b.WriteString(strings.Join(rows, "\n"))
+
+	if u.includesTasks() {
+		b.WriteString("\n\n" + styles.Muted.Render(
+			"Tasks here is the standalone tasks/tasks-tui/tasks-api commands.\nSidecar's embedded Tasks tab updates with Sidecar itself."))
+	}
+
+	b.WriteString("\n\n" + lipgloss.NewStyle().Bold(true).Render("What's New in Sidecar") + "\n\n")
+	notes := u.notes
+	if notes == "" {
+		notes = "No release notes available."
+	}
+	b.WriteString(renderReleaseNotes(parseReleaseNotes(notes), contentW))
+	return b.String()
 }
 
-// clearUpdateResultModals drops the cached completion/error modals. They render
-// from immutable results, so they must be rebuilt when a batch settles.
-func (m *Model) clearUpdateResultModals() {
-	m.updateCompleteModal = nil
-	m.updateCompleteModalWidth = 0
-	m.updateErrorModal = nil
-	m.updateErrorModalWidth = 0
+// updateProgressContent shows which product is being changed right now, plus
+// the settled rows for targets that already finished.
+func updateProgressContent(u *updateUIState) string {
+	var b strings.Builder
+	for i, t := range u.plan {
+		switch {
+		case i < len(u.results):
+			r := u.results[i]
+			fmt.Fprintf(&b, "%s %s %s\n", resultIcon(r.Status), t.DisplayName,
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(resultLabel(r)))
+		case i == u.activeIdx:
+			action := "installing " + t.LatestVersion
+			if t.Install.Managed {
+				action += " via " + t.Install.Method.String()
+			}
+			fmt.Fprintf(&b, "%s %s %s\n",
+				lipgloss.NewStyle().Foreground(styles.Warning).Render("●"),
+				lipgloss.NewStyle().Bold(true).Render(t.DisplayName),
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(action))
+		default:
+			fmt.Fprintf(&b, "%s %s\n",
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render("○"),
+				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(t.DisplayName))
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString(lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
+		fmt.Sprintf("Elapsed: %s", formatElapsed(time.Since(u.start)))))
+	return b.String()
+}
+
+// updateResultContent renders the settled results of a fully successful batch.
+// It reads the whole settled set, not just this batch: after retrying one
+// product, an upgrade that succeeded earlier is still part of the outcome.
+func updateResultContent(u *updateUIState) string {
+	var b strings.Builder
+	rows := make([]string, 0, len(u.settled))
+	for _, r := range u.settled {
+		row := fmt.Sprintf("%s %s %s", resultIcon(r.Status), r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)))
+		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
+			row += "\n" + styles.Muted.Render("    update it yourself: "+r.Target.Install.ManualCommand)
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		rows = append(rows, styles.Muted.Render("Nothing to update."))
+	}
+	b.WriteString(strings.Join(rows, "\n"))
+	if u.restartRequired {
+		b.WriteString("\n\n" + styles.Muted.Render("Restart sidecar to use the new version.") +
+			"\n" + styles.Muted.Render("Tip: Press q to quit, then run 'sidecar' again."))
+	} else {
+		b.WriteString("\n\n" + styles.Muted.Render("Sidecar itself did not change; no restart needed."))
+	}
+	return b.String()
+}
+
+// updateErrorContent renders a batch that settled with failures. Earlier
+// successes are retained and each failed target gets its own manual command.
+func updateErrorContent(u *updateUIState, contentW int) string {
+	errorStyle := lipgloss.NewStyle().Foreground(styles.Error)
+	var b strings.Builder
+	var rows []string
+	for _, r := range u.settled {
+		row := fmt.Sprintf("%s %s %s", resultIcon(r.Status), r.Target.DisplayName,
+			styles.Muted.Render(resultLabel(r)))
+		if r.Status == version.StatusFailed {
+			for _, detail := range version.FailureDetail(r, 6) {
+				for _, wrapped := range wrapDetailLine(detail, contentW-4) {
+					row += "\n" + errorStyle.Render("    "+wrapped)
+				}
+			}
+			if cmd := r.Target.Install.ManualCommand; cmd != "" {
+				row += "\n" + styles.Muted.Render("    manual fix: "+cmd)
+			}
+		}
+		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
+			row += "\n" + styles.Muted.Render("    update it yourself: "+r.Target.Install.ManualCommand)
+		}
+		rows = append(rows, row)
+	}
+	b.WriteString(strings.Join(rows, "\n"))
+	b.WriteString("\n\n" + styles.Muted.Render("Retry runs only the failed products.") +
+		"\n" + styles.Muted.Render("Report: github.com/marcus/sidecar/issues"))
+	return b.String()
+}
+
+// closeUpdateModal dismisses the overlay. During an install this hides the
+// modal while the batch keeps running; results the user has not seen yet stay
+// unacknowledged so reopening lands on the Done/Failed phase.
+func (m *Model) closeUpdateModal() {
+	switch m.updateModalState {
+	case UpdateModalComplete, UpdateModalError:
+		m.updateResultsAcked = true
+	}
+	m.updateModalState = UpdateModalClosed
+}
+
+// openUpdateModal converges every updater entry point onto one rule: open the
+// modal in whatever phase the flow is actually in. A batch in flight reopens
+// as Installing; unseen settled results reopen as Done/Failed; otherwise the
+// confirmation opens when something is available. It reports false when there
+// is nothing worth showing.
+func (m *Model) openUpdateModal() bool {
+	m.showDiagnostics = false
+	switch {
+	case m.updateInProgress:
+		m.updateModalState = UpdateModalProgress
+	case m.updateResultsAcked:
+		return false
+	case len(m.settledResults()) > 0:
+		if len(version.RetryTargets(m.settledResults())) > 0 {
+			m.updateModalState = UpdateModalError
+		} else {
+			m.updateModalState = UpdateModalComplete
+		}
+	case m.hasUpdatesAvailable() && !m.needsRestart:
+		m.updateModalState = UpdateModalPreview
+	default:
+		return false
+	}
+	return true
+}
+
+// applyUpdateAction routes an action from the modal's key or mouse handling.
+// Actions can only arrive from elements rendered by their own phase, so no
+// per-phase switch lives here.
+func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cmd) {
+	switch action {
+	case "update":
+		return m, m.startUpdateBatch(version.SelectPlan(m.products))
+	case "retry":
+		return m, m.startUpdateBatch(version.RetryTargets(m.settledResults()))
+	case "quit":
+		m.shutdown()
+		return m, tea.Quit
+	case "cancel", "close":
+		m.closeUpdateModal()
+		return m, nil
+	}
+	return m, cmd
+}
+
+// handleUpdateModalKey handles keyboard input for the update modal. Scrolling
+// rides the modal body's own viewport; everything else goes through the
+// modal's action routing.
+func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Code == tea.KeyEsc {
+		m.closeUpdateModal()
+		return m, nil
+	}
+
+	m.ensureUpdateModal()
+	switch msg.String() {
+	case "up", "k":
+		m.updateModal.ScrollBy(-3)
+		return m, nil
+	case "down", "j":
+		m.updateModal.ScrollBy(3)
+		return m, nil
+	case "pgup", "ctrl+u":
+		m.updateModal.ScrollBy(-10)
+		return m, nil
+	case "pgdown", "ctrl+d":
+		m.updateModal.ScrollBy(10)
+		return m, nil
+	}
+
+	action, cmd := m.updateModal.HandleKey(msg)
+	return m.applyUpdateAction(action, cmd)
+}
+
+// handleUpdateModalMouse handles mouse events for the update modal.
+func (m *Model) handleUpdateModalMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	m.ensureUpdateModal()
+	action := m.updateModal.HandleMouse(msg, m.updateMouseHandler)
+	return m.applyUpdateAction(action, nil)
 }
 
 // targetRow renders one product row for the preview: what changes, from which
 // version to which, and how Sidecar would do it.
 func targetRow(t version.Target) string {
 	arrow := lipgloss.NewStyle().Foreground(styles.Success).Render(" → ")
-	line := fmt.Sprintf("  %s %s%s%s", t.DisplayName, t.CurrentVersion, arrow, t.LatestVersion)
+	line := fmt.Sprintf("%s %s%s%s", t.DisplayName, t.CurrentVersion, arrow, t.LatestVersion)
 	if t.Install.Managed {
 		return line + styles.Muted.Render("  · "+t.Install.Method.String())
 	}
 	return line + styles.Muted.Render("  · manual") +
-		"\n" + styles.Muted.Render("      update it yourself: "+t.Install.ManualCommand)
-}
-
-// previewChromeLines estimates everything in the preview other than the
-// release notes: borders, padding, the intro line, one or two lines per target
-// row, the Tasks explanation, the section headers, and the button row.
-func previewChromeLines(targets int, includesTasks bool) int {
-	chrome := 16 + targets*2
-	if includesTasks {
-		chrome += 5
-	}
-	return chrome
-}
-
-// ensureUpdatePreviewModal builds the preview from the plan the confirmation
-// would run, so the user sees every product that will change before choosing.
-func (m *Model) ensureUpdatePreviewModal() {
-	plan := version.SelectPlan(m.products)
-	if len(plan) == 0 {
-		return
-	}
-	modalW := m.updateModalWidth()
-	if m.updatePreviewModal != nil && m.updatePreviewModalWidth == modalW {
-		return
-	}
-	m.updatePreviewModalWidth = modalW
-	contentW := modalW - 6 // borders + padding
-
-	var rows []string
-	includesSidecar, includesTasks, anyManaged := false, false, false
-	for _, t := range plan {
-		rows = append(rows, targetRow(t))
-		switch t.Product {
-		case version.ProductSidecar:
-			includesSidecar = true
-		case version.ProductTasks:
-			includesTasks = true
-		}
-		if t.Install.Managed {
-			anyManaged = true
-		}
-	}
-
-	intro := "Updating will change:"
-
-	mdl := modal.New("Update available",
-		modal.WithWidth(modalW),
-		modal.WithVariant(modal.VariantDefault),
-		modal.WithPrimaryAction("update"),
-	).
-		AddSection(modal.Text(styles.Muted.Render(intro))).
-		AddSection(modal.Text(strings.Join(rows, "\n")))
-
-	if includesTasks {
-		// Updating Sidecar refreshes its embedded Tasks plugin; updating Tasks
-		// refreshes the standalone commands. They are different artifacts.
-		mdl = mdl.AddSection(modal.Spacer()).
-			AddSection(modal.Text(styles.Muted.Render(
-				"Tasks here is the standalone tasks/tasks-tui/tasks-api commands.\nSidecar's embedded Tasks tab updates with Sidecar itself.")))
-	}
-
-	if includesSidecar {
-		notes := m.updateNotes
-		if notes == "" {
-			notes = "No release notes available."
-		}
-		rendered := m.renderReleaseNotes(parseReleaseNotes(notes), contentW)
-		lines := strings.Split(rendered, "\n")
-		// Budget the notes against the terminal, not a fixed number: the rows
-		// and the confirm buttons must stay on screen at any height.
-		maxLines := m.height - previewChromeLines(len(plan), includesTasks)
-		if maxLines > 12 {
-			maxLines = 12
-		}
-		if maxLines < 2 {
-			maxLines = 2
-		}
-		if len(lines) > maxLines {
-			lines = lines[:maxLines]
-			lines = append(lines, styles.Muted.Render("... (truncated)"))
-		}
-		mdl = mdl.AddSection(modal.Spacer()).
-			AddSection(modal.Text(lipgloss.NewStyle().Bold(true).Render("What's New in Sidecar"))).
-			AddSection(modal.Spacer()).
-			AddSection(modal.Text(strings.Join(lines, "\n"))).
-			AddSection(modal.Spacer()).
-			AddSection(modal.Text(styles.Muted.Render("[c] View Full Changelog (Sidecar only)")))
-	}
-
-	buttons := []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
-	if anyManaged {
-		buttons = []modal.ButtonDef{
-			modal.Btn(" Update Now ", "update"),
-			modal.Btn(" Later ", "cancel"),
-		}
-	}
-
-	m.updatePreviewModal = mdl.
-		AddSection(modal.Spacer()).
-		AddSection(modal.Buttons(buttons...))
-}
-
-// renderUpdatePreviewModal renders the preview state shown before confirming.
-func (m *Model) renderUpdatePreviewModal() string {
-	m.ensureUpdatePreviewModal()
-	if m.updatePreviewModal == nil {
-		return ""
-	}
-	if m.updatePreviewMouseHandler == nil {
-		m.updatePreviewMouseHandler = mouse.NewHandler()
-	}
-	return m.updatePreviewModal.Render(m.width, m.height, m.updatePreviewMouseHandler)
+		"\n" + styles.Muted.Render("    update it yourself: "+t.Install.ManualCommand)
 }
 
 // parseReleaseNotes cleans up release notes by removing duplicate headers
@@ -217,18 +464,10 @@ func parseReleaseNotes(notes string) string {
 		return notes
 	}
 
-	// Patterns to strip from the beginning of release notes
-	// Match: ## What's New, ### What's New, # What's New (case-insensitive)
-	// Also match: # Release Notes, ## Release Notes
 	headerPatterns := regexp.MustCompile(`(?im)^#+\s*(what'?s?\s*new|release\s*notes)\s*\n*`)
 
-	result := notes
+	result := strings.TrimSpace(notes)
 
-	// Strip leading whitespace and newlines first
-	result = strings.TrimSpace(result)
-
-	// Repeatedly strip matching headers from the beginning
-	// (in case there are multiple, e.g., "## What's New\n### What's New\n")
 	for {
 		loc := headerPatterns.FindStringIndex(result)
 		if loc == nil || loc[0] != 0 {
@@ -238,11 +477,9 @@ func parseReleaseNotes(notes string) string {
 		result = strings.TrimSpace(result)
 	}
 
-	// Collapse multiple consecutive newlines to at most 2
 	multiNewlines := regexp.MustCompile(`\n{3,}`)
 	result = multiNewlines.ReplaceAllString(result, "\n\n")
 
-	// If parsing emptied the content, return original
 	if strings.TrimSpace(result) == "" {
 		return strings.TrimSpace(notes)
 	}
@@ -256,8 +493,7 @@ func parseReleaseNotes(notes string) string {
 // render with a compact-document renderer: Glamour's default 2-column
 // document margin would compound with the modal's own inset and wrap the
 // text well before the box's right edge (td-65095b).
-func (m *Model) renderReleaseNotes(notes string, width int) string {
-	// Try to use markdown renderer
+func renderReleaseNotes(notes string, width int) string {
 	renderer, err := markdown.NewRenderer(markdown.CompactDocument)
 	if err != nil {
 		return notes
@@ -265,24 +501,6 @@ func (m *Model) renderReleaseNotes(notes string, width int) string {
 
 	lines := renderer.RenderContent(notes, width)
 	return strings.Join(lines, "\n")
-}
-
-// centerText centers text within a given width.
-func centerText(text string, width int) string {
-	textWidth := lipgloss.Width(text)
-	if textWidth >= width {
-		return text
-	}
-	padding := (width - textWidth) / 2
-	return strings.Repeat(" ", padding) + text
-}
-
-// dividerWidth keeps a full-width rule inside the modal's padded content box.
-func dividerWidth(contentW int) int {
-	if contentW <= 2 {
-		return 1
-	}
-	return contentW - 2
 }
 
 // resultIcon renders the settled status of one target.
@@ -309,205 +527,11 @@ func resultLabel(r version.Result) string {
 	}
 }
 
-// renderUpdateProgressModal shows which product is being changed right now,
-// plus the settled rows for targets that already finished.
-func (m *Model) renderUpdateProgressModal() string {
-	modalW := m.updateModalWidth()
-	contentW := modalW - 4
-
-	var sb strings.Builder
-
-	title := lipgloss.NewStyle().Bold(true).Foreground(styles.Warning).Render("Updating")
-	sb.WriteString(centerText(title, contentW))
-	sb.WriteString("\n\n")
-
-	for i, t := range m.updatePlan {
-		switch {
-		case i < len(m.updateResults):
-			r := m.updateResults[i]
-			fmt.Fprintf(&sb, "  %s %s %s\n", resultIcon(r.Status), t.DisplayName,
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(resultLabel(r)))
-		case i == m.updateActiveIdx:
-			action := "installing " + t.LatestVersion
-			if t.Install.Managed {
-				action += " via " + t.Install.Method.String()
-			}
-			fmt.Fprintf(&sb, "  %s %s %s\n",
-				lipgloss.NewStyle().Foreground(styles.Warning).Render("●"),
-				lipgloss.NewStyle().Bold(true).Render(t.DisplayName),
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(action))
-		default:
-			fmt.Fprintf(&sb, "  %s %s\n",
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render("○"),
-				lipgloss.NewStyle().Foreground(styles.TextMuted).Render(t.DisplayName))
-		}
-	}
-
-	sb.WriteString("\n")
-
-	elapsed := lipgloss.NewStyle().Foreground(styles.TextMuted).Render(
-		fmt.Sprintf("Elapsed: %s", formatElapsed(m.getUpdateElapsed())))
-	sb.WriteString(centerText(elapsed, contentW))
-	sb.WriteString("\n\n")
-
-	sb.WriteString(lipgloss.NewStyle().Foreground(styles.TextMuted).Render(strings.Repeat("─", dividerWidth(contentW))))
-	sb.WriteString("\n\n")
-
-	// The running package-manager subprocess is not cancellable, so do not
-	// offer a cancel that would not stop it.
-	hint := lipgloss.NewStyle().Foreground(styles.TextMuted).Render("Update in progress")
-	sb.WriteString(centerText(hint, contentW))
-
-	maxHeight := m.height - 4
-	if maxHeight < 10 {
-		maxHeight = 10
-	}
-
-	modalStyle := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(styles.TextMuted).
-		Padding(1, 2).
-		Width(modalW).
-		MaxHeight(maxHeight)
-
-	return modalStyle.Render(sb.String())
-}
-
-// getUpdateElapsed returns the elapsed time since update started.
-func (m *Model) getUpdateElapsed() time.Duration {
-	if m.updateStartTime.IsZero() {
-		return 0
-	}
-	return time.Since(m.updateStartTime)
-}
-
 // formatElapsed formats a duration as M:SS.
 func formatElapsed(d time.Duration) string {
 	minutes := int(d.Minutes())
 	seconds := int(d.Seconds()) % 60
 	return fmt.Sprintf("%d:%02d", minutes, seconds)
-}
-
-// ensureUpdateCompleteModal renders the settled results. It reads only the
-// immutable result list, so its copy cannot be invalidated by later discovery.
-func (m *Model) ensureUpdateCompleteModal() {
-	modalW := m.updateModalWidth()
-	if m.updateCompleteModal != nil && m.updateCompleteModalWidth == modalW {
-		return
-	}
-	m.updateCompleteModalWidth = modalW
-
-	// Render from the whole settled set, not just this batch: after retrying one
-	// product, an upgrade that succeeded earlier is still part of the outcome —
-	// including whether Sidecar changed.
-	settled := m.settledResults()
-
-	var rows []string
-	for _, r := range settled {
-		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
-			styles.Muted.Render(resultLabel(r)))
-		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("      update it yourself: "+r.Target.Install.ManualCommand)
-		}
-		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		rows = append(rows, styles.Muted.Render("  Nothing to update."))
-	}
-
-	restartRequired := version.RestartRequired(settled)
-	primary := "cancel"
-	if restartRequired {
-		primary = "quit"
-	}
-
-	mdl := modal.New("Update Complete",
-		modal.WithWidth(modalW),
-		modal.WithVariant(modal.VariantInfo),
-		modal.WithPrimaryAction(primary),
-	).
-		AddSection(modal.Text(strings.Join(rows, "\n"))).
-		AddSection(modal.Spacer())
-
-	var buttons []modal.ButtonDef
-	if restartRequired {
-		mdl = mdl.
-			AddSection(modal.Text(styles.Muted.Render("Restart sidecar to use the new version."))).
-			AddSection(modal.Text(styles.Muted.Render("Tip: Press q to quit, then run 'sidecar' again."))).
-			AddSection(modal.Spacer())
-		buttons = []modal.ButtonDef{
-			modal.Btn(" Quit & Restart ", "quit"),
-			modal.Btn(" Later ", "cancel"),
-		}
-	} else {
-		mdl = mdl.
-			AddSection(modal.Text(styles.Muted.Render("Sidecar itself did not change; no restart needed."))).
-			AddSection(modal.Spacer())
-		buttons = []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
-	}
-
-	m.updateCompleteModal = mdl.AddSection(modal.Buttons(buttons...))
-}
-
-// renderUpdateCompleteModal renders the completion state.
-func (m *Model) renderUpdateCompleteModal() string {
-	m.ensureUpdateCompleteModal()
-	if m.updateCompleteModal == nil {
-		return ""
-	}
-	if m.updateCompleteMouseHandler == nil {
-		m.updateCompleteMouseHandler = mouse.NewHandler()
-	}
-	return m.updateCompleteModal.Render(m.width, m.height, m.updateCompleteMouseHandler)
-}
-
-// ensureUpdateErrorModal renders a batch that settled with failures. Earlier
-// successes are retained and each failed target gets its own manual command.
-func (m *Model) ensureUpdateErrorModal() {
-	modalW := m.updateModalWidth()
-	if m.updateErrorModal != nil && m.updateErrorModalWidth == modalW {
-		return
-	}
-	m.updateErrorModalWidth = modalW
-
-	errorStyle := lipgloss.NewStyle().Foreground(styles.Error)
-
-	var rows []string
-	for _, r := range m.settledResults() {
-		row := fmt.Sprintf("  %s %s %s", resultIcon(r.Status), r.Target.DisplayName,
-			styles.Muted.Render(resultLabel(r)))
-		if r.Status == version.StatusFailed {
-			// Show why it failed, not just that it did: the error plus the tail of
-			// the command's own output, wrapped rather than cut off at one line.
-			for _, detail := range version.FailureDetail(r, 6) {
-				for _, wrapped := range wrapDetailLine(detail, modalW-12) {
-					row += "\n" + errorStyle.Render("      "+wrapped)
-				}
-			}
-			if cmd := r.Target.Install.ManualCommand; cmd != "" {
-				row += "\n" + styles.Muted.Render("      manual fix: "+cmd)
-			}
-		}
-		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("      update it yourself: "+r.Target.Install.ManualCommand)
-		}
-		rows = append(rows, row)
-	}
-
-	m.updateErrorModal = modal.New("Update Incomplete",
-		modal.WithWidth(modalW),
-		modal.WithVariant(modal.VariantDanger),
-		modal.WithPrimaryAction("retry"),
-	).
-		AddSection(modal.Text(strings.Join(rows, "\n"))).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(styles.Muted.Render("Retry runs only the failed products."))).
-		AddSection(modal.Text(styles.Muted.Render("Report: github.com/marcus/sidecar/issues"))).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Buttons(
-			modal.Btn(" Retry ", "retry"),
-			modal.Btn(" Close ", "cancel"),
-		))
 }
 
 // truncateLine keeps long package-manager errors inside the modal width.
@@ -562,182 +586,3 @@ func wrapDetailLine(s string, width int) []string {
 
 // maxDetailWrapLines bounds how many lines a single diagnostic line may occupy.
 const maxDetailWrapLines = 3
-
-// renderUpdateErrorModal renders the error state.
-func (m *Model) renderUpdateErrorModal() string {
-	m.ensureUpdateErrorModal()
-	if m.updateErrorModal == nil {
-		return ""
-	}
-	if m.updateErrorMouseHandler == nil {
-		m.updateErrorMouseHandler = mouse.NewHandler()
-	}
-	return m.updateErrorModal.Render(m.width, m.height, m.updateErrorMouseHandler)
-}
-
-// getChangelogModalWidth returns the width for the changelog modal.
-func (m *Model) getChangelogModalWidth() int {
-	modalW := m.updateModalWidth() + 10
-	maxW := m.width - 4
-	if modalW > maxW {
-		modalW = maxW
-	}
-	if modalW < 30 {
-		modalW = 30
-	}
-	return modalW
-}
-
-// ensureChangelogModal creates/updates the changelog modal with caching.
-// The modal is only rebuilt when width, height, or the markdown style changes. Scroll offset changes
-// are handled dynamically via the shared changelogScrollState pointer.
-func (m *Model) ensureChangelogModal() {
-	modalW := m.getChangelogModalWidth()
-	contentW := modalW - 6 // borders + padding
-
-	// Calculate max visible lines
-	modalMaxHeight := m.height - 6
-	if modalMaxHeight < 10 {
-		modalMaxHeight = 10
-	}
-	maxContentLines := modalMaxHeight - 8
-	if maxContentLines < 5 {
-		maxContentLines = 5
-	}
-
-	// Check if we can reuse the cached modal
-	// Rebuild only if width or max visible lines changed
-	styleKey := markdown.CurrentThemeSnapshot().StyleKey()
-	if m.changelogModal != nil &&
-		m.changelogModalWidth == modalW &&
-		m.changelogMaxVisibleLines == maxContentLines &&
-		m.changelogModalStyleKey == styleKey {
-		return
-	}
-
-	m.changelogModalWidth = modalW
-	m.changelogMaxVisibleLines = maxContentLines
-	m.changelogModalStyleKey = styleKey
-
-	// Render changelog content and cache the lines
-	content := m.updateChangelog
-	if content == "" {
-		content = "Loading changelog..."
-	}
-	renderedContent := m.renderReleaseNotes(content, contentW)
-	m.changelogRenderedLines = strings.Split(renderedContent, "\n")
-
-	// Initialize or update the shared scroll state
-	if m.changelogScrollState == nil {
-		m.changelogScrollState = &changelogViewState{}
-	}
-	m.changelogScrollState.RenderedLines = m.changelogRenderedLines
-	m.changelogScrollState.MaxVisibleLines = maxContentLines
-
-	// Capture shared pointer - survives bubbletea value copies
-	state := m.changelogScrollState
-
-	// Create a custom section that handles scrolling dynamically.
-	// The closure reads from the shared state pointer so scroll changes
-	// don't require rebuilding the modal.
-	scrollSection := modal.Custom(func(cw int, focusID, hoverID string) modal.RenderedSection {
-		lines := state.RenderedLines
-		maxVisible := state.MaxVisibleLines
-
-		// Apply scroll offset with clamping
-		startLine := state.ScrollOffset
-		maxStart := len(lines) - maxVisible
-		if maxStart < 0 {
-			maxStart = 0
-		}
-		if startLine > maxStart {
-			startLine = maxStart
-		}
-		if startLine < 0 {
-			startLine = 0
-		}
-
-		endLine := startLine + maxVisible
-		if endLine > len(lines) {
-			endLine = len(lines)
-		}
-
-		visibleLines := lines[startLine:endLine]
-		visibleContent := strings.Join(visibleLines, "\n")
-
-		// Add scroll indicator if needed
-		if len(lines) > maxVisible {
-			scrollInfo := styles.Muted.Render(fmt.Sprintf("Lines %d-%d of %d", startLine+1, endLine, len(lines)))
-			visibleContent += "\n\n" + scrollInfo
-		}
-
-		return modal.RenderedSection{Content: visibleContent}
-	}, nil)
-
-	m.changelogModal = modal.New("Changelog",
-		modal.WithWidth(modalW),
-		modal.WithVariant(modal.VariantDefault),
-		modal.WithHints(false), // We show custom hints
-	).
-		AddSection(scrollSection).
-		AddSection(modal.Spacer()).
-		AddSection(modal.Text(styles.Muted.Render("j/k scroll   Esc: close"))).
-		AddSection(modal.Buttons(
-			modal.Btn(" Close ", "cancel"),
-		))
-}
-
-// clearChangelogModal clears the changelog modal cache.
-func (m *Model) clearChangelogModal() {
-	m.changelogModal = nil
-	m.changelogModalWidth = 0
-	m.changelogMouseHandler = nil
-	m.changelogRenderedLines = nil
-	m.changelogMaxVisibleLines = 0
-	m.changelogModalStyleKey = ""
-	m.changelogScrollState = nil
-}
-
-// syncChangelogScroll updates the shared scroll state from the model field.
-// Call this after modifying changelogScrollOffset instead of clearChangelogModal.
-func (m *Model) syncChangelogScroll() {
-	if m.changelogScrollState != nil {
-		m.changelogScrollState.ScrollOffset = m.changelogScrollOffset
-	}
-}
-
-// fetchChangelog fetches the CHANGELOG.md from GitHub.
-func fetchChangelog() tea.Cmd {
-	return func() tea.Msg {
-		client := &http.Client{Timeout: 10 * time.Second}
-		resp, err := client.Get(changelogURL)
-		if err != nil {
-			return ChangelogLoadedMsg{Err: err}
-		}
-		defer func() { _ = resp.Body.Close() }()
-
-		if resp.StatusCode != http.StatusOK {
-			return ChangelogLoadedMsg{Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return ChangelogLoadedMsg{Err: err}
-		}
-
-		return ChangelogLoadedMsg{Content: string(body)}
-	}
-}
-
-// renderChangelogOverlay renders the changelog as an overlay on the update preview modal.
-func (m *Model) renderChangelogOverlay(background string) string {
-	m.ensureChangelogModal()
-	if m.changelogModal == nil {
-		return background
-	}
-	if m.changelogMouseHandler == nil {
-		m.changelogMouseHandler = mouse.NewHandler()
-	}
-	modalContent := m.changelogModal.Render(m.width, m.height, m.changelogMouseHandler)
-	return ui.OverlayModal(background, modalContent, m.width, m.height)
-}
