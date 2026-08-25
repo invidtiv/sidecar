@@ -13,6 +13,7 @@ type shellMergeInput struct {
 	Existing  []*ShellSession // current in-memory shells (nil at startup)
 	Manifest  []ShellDefinition
 	Running   map[string]bool // live sessions in THIS instance's tmux namespace
+	Forgotten map[string]bool // tmux names the user/agent explicitly forgot (tombstones)
 	PaneID    func(string) string
 	WorkDir   string
 	Namespace string
@@ -43,15 +44,18 @@ type shellMergeResult struct {
 //	    discovery pattern is kept in the manifest but not displayed.
 //	(b) An existing shell absent from the manifest but still Running here is
 //	    KEPT — appended after the manifest-ordered shells — and reported in
-//	    Restored so the caller can heal the file. This is the exact eviction
-//	    the bug exercised: a foreign instance's narrower manifest must not
-//	    unmount a session this instance can see alive.
+//	    Restored so the caller can heal the file, unless its name is in
+//	    Forgotten. A tombstone is an explicit forget (td-61117e): the tmux
+//	    session may still be alive, but the record must not be healed back.
+//	    This is the exact eviction the bug exercised: a foreign instance's
+//	    narrower manifest must not unmount a session this instance can see alive.
 //	(c) An existing shell absent from the manifest and not running is Dropped.
 //	    That preserves propagation of explicit deletes, which are the only
-//	    writers allowed to remove entries.
+//	    writers allowed to remove entries. Forgotten names are Dropped too,
+//	    even if they are still running.
 //	(d) A running session in neither the manifest nor Existing is adopted as a
-//	    new shell and reported in Restored. Adoptions are processed in sorted
-//	    order so results are deterministic.
+//	    new shell and reported in Restored, unless it is Forgotten. Adoptions
+//	    are processed in sorted order so results are deterministic.
 func mergeShellState(in shellMergeInput) shellMergeResult {
 	now := in.Now
 	if now == nil {
@@ -121,7 +125,7 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 		if seen[shell.TmuxName] {
 			continue
 		}
-		if !in.Running[shell.TmuxName] {
+		if in.Forgotten[shell.TmuxName] || !in.Running[shell.TmuxName] {
 			result.Dropped = append(result.Dropped, shell.TmuxName)
 			continue
 		}
@@ -140,7 +144,7 @@ func mergeShellState(in shellMergeInput) shellMergeResult {
 
 	adopted := make([]string, 0, len(in.Running))
 	for name := range in.Running {
-		if seen[name] || existing[name] != nil {
+		if seen[name] || existing[name] != nil || in.Forgotten[name] {
 			continue
 		}
 		adopted = append(adopted, name)

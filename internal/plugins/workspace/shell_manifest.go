@@ -195,7 +195,8 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 //
 // This is the additive counterpart to AddShell: it heals a manifest another
 // instance narrowed (td-8d18de) without ever overwriting what that instance
-// wrote.
+// wrote. A name currently in tombstones is an explicit forget, not a missing
+// definition — it is not added back, and the tombstone is not dropped.
 func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 	if len(defs) == 0 {
 		return false, nil
@@ -209,13 +210,13 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 		for _, s := range shells {
 			present[s.TmuxName] = true
 		}
+		forgotten := tombstoneTmuxNames(m.Tombstones)
 		for _, def := range defs {
-			if present[def.TmuxName] {
+			if present[def.TmuxName] || forgotten[def.TmuxName] {
 				continue
 			}
 			shells = append(shells, def)
 			present[def.TmuxName] = true
-			m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 			changed = true
 		}
 		return shells, changed
@@ -256,6 +257,16 @@ func dropWorkspaceTombstone(tombs []shellstate.Tombstone, tmuxName string) []she
 		}
 	}
 	return tombs
+}
+
+func tombstoneTmuxNames(tombs []shellstate.Tombstone) map[string]bool {
+	out := make(map[string]bool, len(tombs))
+	for _, stone := range tombs {
+		if stone.TmuxName != "" {
+			out[stone.TmuxName] = true
+		}
+	}
+	return out
 }
 
 // FindShell returns a shell definition by tmuxName, or nil if not found.

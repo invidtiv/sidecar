@@ -270,8 +270,14 @@ func reconcileShellStartup(
 		discovered = append(discovered, name)
 	}
 	sort.Strings(discovered)
+	forgotten := tombstoneTmuxNames(manifest.Tombstones)
 	var toEnsure []ShellDefinition
 	for _, name := range discovered {
+		if forgotten[name] {
+			// sidecar shell forget is record-only: the tmux session may still
+			// be running. That is not a missing definition (td-61117e).
+			continue
+		}
 		now := hooks.now()
 		def := ShellDefinition{
 			TmuxName:    name,

@@ -106,6 +106,54 @@ func TestShellManifest_AddRemove(t *testing.T) {
 	}
 }
 
+// Forget is record-only: the tmux session may still be running. EnsureShells
+// must not treat that as a missing definition and write a stub that drops
+// displayName/agentType/skipPerms, nor drop the tombstone (td-61117e).
+func TestEnsureShellsSkipsTombstonedNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	m, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := ShellDefinition{
+		TmuxName: "sidecar-sh-project-1", DisplayName: "prior task",
+		AgentType: "codex", SkipPerms: true, WorkDir: "/work/one",
+	}
+	if err := m.AddShell(def); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RemoveShell(def.TmuxName); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := ShellDefinition{TmuxName: def.TmuxName, DisplayName: "Shell 1", WorkDir: "/repo/project"}
+	sibling := ShellDefinition{TmuxName: "sidecar-sh-project-2", DisplayName: "Shell 2"}
+	changed, err := m.EnsureShells([]ShellDefinition{stub, sibling})
+	if err != nil {
+		t.Fatalf("EnsureShells() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("EnsureShells() changed = false, want the unrelated missing name healed")
+	}
+	if m.FindShell(def.TmuxName) != nil {
+		t.Fatalf("tombstoned name was resurrected as %+v", m.FindShell(def.TmuxName))
+	}
+	if m.FindShell(sibling.TmuxName) == nil {
+		t.Fatal("unrelated missing name was not healed")
+	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].DisplayName != "prior task" || m.Tombstones[0].AgentType != "codex" || !m.Tombstones[0].SkipPerms {
+		t.Fatalf("tombstone after EnsureShells = %+v", m.Tombstones)
+	}
+
+	changed, err = m.EnsureShells([]ShellDefinition{stub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("EnsureShells() rewrote the file for a tombstoned name")
+	}
+}
+
 func TestShellManifest_FindShell(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".sidecar", "shells.json")
 	m, _ := LoadShellManifest(path)

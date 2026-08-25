@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 )
@@ -672,6 +673,60 @@ func TestReconcileRetainsOwnMissingSessionAsOffline(t *testing.T) {
 	}
 	if definitionByTmuxName(manifest.Shells, "sidecar-sh-project-2") == nil {
 		t.Error("missing session was dropped from the manifest")
+	}
+}
+
+func TestReconcileDoesNotResurrectForgottenRunningSession(t *testing.T) {
+	manifestPath := filepath.Join(t.TempDir(), "shells.json")
+	original := ShellDefinition{
+		TmuxName: "sidecar-sh-project-1", DisplayName: "prior task",
+		Namespace: testNamespace, CreatedAt: time.Unix(10, 0),
+		AgentType: "codex", SkipPerms: true, WorkDir: "/work/one",
+	}
+	manifest := &ShellManifest{Version: manifestVersion, path: manifestPath}
+	if err := manifest.AddShell(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.RemoveShell(original.TmuxName); err != nil {
+		t.Fatal(err)
+	}
+
+	shells, managed := reconcileShellStartup(
+		manifest,
+		[]string{original.TmuxName, "sidecar-sh-project-2"},
+		false,
+		"/repo/project",
+		"/repo/project",
+		reconcileTestHooks(testNamespace),
+	)
+
+	if shellByTmuxName(shells, original.TmuxName) != nil {
+		t.Fatalf("forgotten running session appeared as a stub: %#v", shells)
+	}
+	if definitionByTmuxName(manifest.Shells, original.TmuxName) != nil {
+		t.Fatal("in-memory live list contains a stub for the forgotten name")
+	}
+	if shellByTmuxName(shells, "sidecar-sh-project-2") == nil || !managed["sidecar-sh-project-2"] {
+		t.Fatalf("unrelated discovered session was dropped: shells=%#v managed=%#v", shells, managed)
+	}
+
+	reloaded, err := LoadShellManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.FindShell(original.TmuxName) != nil {
+		t.Fatalf("persisted live list resurrected a stub: %+v", reloaded.Shells)
+	}
+	if len(reloaded.Tombstones) != 1 || reloaded.Tombstones[0].DisplayName != "prior task" || reloaded.Tombstones[0].AgentType != "codex" || !reloaded.Tombstones[0].SkipPerms || reloaded.Tombstones[0].WorkDir != "/work/one" {
+		t.Fatalf("tombstone after reconcile = %+v", reloaded.Tombstones)
+	}
+
+	got, err := shellstate.RestoreAtPath(manifestPath, shellstate.Identity{TmuxName: original.TmuxName, Namespace: testNamespace})
+	if err != nil {
+		t.Fatalf("RestoreAtPath() error = %v", err)
+	}
+	if got.DisplayName != "prior task" || got.AgentType != "codex" || !got.SkipPerms || got.WorkDir != "/work/one" {
+		t.Fatalf("restored = %+v", got)
 	}
 }
 

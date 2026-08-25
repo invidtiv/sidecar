@@ -390,6 +390,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		Existing:  p.shells,
 		Manifest:  p.shellManifest.Shells,
 		Running:   sync.Running,
+		Forgotten: tombstoneTmuxNames(p.shellManifest.Tombstones),
 		PaneID:    func(name string) string { return sync.PaneIDs[name] },
 		WorkDir:   p.ctx.WorkDir,
 		Namespace: sync.Namespace,
@@ -398,8 +399,8 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	p.shells = result.Shells
 	p.rebuildNestedShells(p.shellManifest.Shells, func(name string) string { return sync.PaneIDs[name] })
 
-	// Only shells that vanished from the manifest *and* are not running here
-	// reach Dropped, i.e. an explicit delete elsewhere.
+	// Only shells that vanished from the live manifest *and* are not running
+	// here — or that were explicitly forgotten — reach Dropped.
 	for _, name := range result.Dropped {
 		delete(p.managedSessions, name)
 		globalPaneCache.remove(name)
