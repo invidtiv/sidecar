@@ -59,6 +59,15 @@ func TestUpdateChips_PerPhase(t *testing.T) {
 		t.Fatalf("preview chips = %+v suffix %q", chips, suffix)
 	}
 
+	// Manual provenance changes nothing: Enter still starts the batch (the
+	// engine settles unmanaged targets as needs-manual), so the Update chip
+	// must be visible — a silent primary is the bug this line exists to kill.
+	u = &updateUIState{phase: UpdateModalPreview, anyManaged: false}
+	chips, _ = updateChips(u)
+	if len(chips) != 2 || chips[0].ID != "update" {
+		t.Fatalf("manual-only preview must still offer [enter/u] Update, got %+v", chips)
+	}
+
 	u = &updateUIState{phase: UpdateModalProgress, retryBatch: true}
 	chips, suffix = updateChips(u)
 	if len(chips) != 1 || chips[0].ID != "cancel" {
@@ -86,6 +95,42 @@ func TestUpdateChips_PerPhase(t *testing.T) {
 	chips, _ = updateChips(u)
 	if len(chips) != 2 || chips[0].ID != "retry" {
 		t.Fatalf("error with failures should pair Retry with Close, got %+v", chips)
+	}
+}
+
+// No silent primaries: whatever bare Enter does must be named by a visible
+// chip. Progress is the one honest exception — Enter deliberately does
+// nothing, and the esc-only line says so.
+func TestUpdatePrimaryAction_AlwaysHasAVisibleChip(t *testing.T) {
+	cases := []struct {
+		name    string
+		u       updateUIState
+		wantAct string
+	}{
+		{"preview", updateUIState{phase: UpdateModalPreview, anyManaged: false}, "update"},
+		{"complete-no-restart", updateUIState{phase: UpdateModalComplete}, "cancel"},
+		{"complete-restart", updateUIState{phase: UpdateModalComplete, restartRequired: true}, "quit"},
+		{"error-retryable", updateUIState{phase: UpdateModalError, retryCount: 1}, "retry"},
+		{"error-nothing-retryable", updateUIState{phase: UpdateModalError}, "cancel"},
+	}
+	for _, tc := range cases {
+		if got := updatePrimaryAction(&tc.u); got != tc.wantAct {
+			t.Errorf("%s: primary action = %q, want %q", tc.name, got, tc.wantAct)
+		}
+		chips, _ := updateChips(&tc.u)
+		found := false
+		for _, c := range chips {
+			if c.ID == tc.wantAct {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: primary action %q has no visible chip in %+v", tc.name, tc.wantAct, chips)
+		}
+	}
+
+	if got := updatePrimaryAction(&updateUIState{phase: UpdateModalProgress}); got != "" {
+		t.Errorf("progress must have no primary action (Enter does nothing), got %q", got)
 	}
 }
 
@@ -317,8 +362,8 @@ func TestDiagnosticsChips_MouseReachable(t *testing.T) {
 	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 
 	res := m.renderDiagnosticsChips(40, "", "")
-	if !strings.Contains(res.Content, "[u]") || !strings.Contains(res.Content, "Update") {
-		t.Fatalf("with a pending update diagnostics should offer a [u] Update chip, got %q", res.Content)
+	if !strings.Contains(res.Content, "[enter/u]") || !strings.Contains(res.Content, "Update") {
+		t.Fatalf("with a pending update diagnostics should offer an [enter/u] Update chip, got %q", res.Content)
 	}
 	if !strings.Contains(res.Content, "[esc]") || !strings.Contains(res.Content, "Close") {
 		t.Fatalf("the Close chip must sit on the same line, got %q", res.Content)

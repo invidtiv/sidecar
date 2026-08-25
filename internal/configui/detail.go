@@ -361,7 +361,7 @@ func (b *paneBuilder) keyChips(specs ...chipSpec) {
 		}
 		chips = append(chips, ui.KeyChip{Keys: rendered, Label: spec.label, ID: spec.id})
 	}
-	line, regions := ui.RenderKeyChips(chips, b.inner-RowIndent)
+	line, regions := ui.RenderKeyChips(chips, b.inner-RowIndent, "", b.m.hoverID)
 	y := len(b.lines)
 	b.lines = append(b.lines, line)
 	x := b.originX + RowIndent

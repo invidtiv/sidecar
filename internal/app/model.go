@@ -177,6 +177,7 @@ type Model struct {
 	showDiagnostics         bool
 	diagnosticsModal        *modal.Modal
 	diagnosticsModalWidth   int
+	diagnosticsPrimary      string // primary action currently applied to the modal
 	diagnosticsMouseHandler *mouse.Handler
 	showClock               bool
 	titleTemplate           string // ui.terminalTitle; empty leaves the terminal title alone

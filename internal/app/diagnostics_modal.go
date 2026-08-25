@@ -23,15 +23,27 @@ func (m *Model) ensureDiagnosticsModal() {
 		modalW = 20
 	}
 
+	primary := m.diagnosticsPrimaryAction()
+
 	// Only rebuild if modal doesn't exist or width changed
 	if m.diagnosticsModal != nil && m.diagnosticsModalWidth == modalW {
+		// The primary action tracks update availability — Enter must fire
+		// Update when one is available and close otherwise — so restate it
+		// whenever discovery changes it, the way the update modal restates
+		// its presentation between phases.
+		if m.diagnosticsPrimary != primary {
+			m.diagnosticsModal.Apply(modal.WithPrimaryAction(primary))
+			m.diagnosticsPrimary = primary
+		}
 		return
 	}
 	m.diagnosticsModalWidth = modalW
+	m.diagnosticsPrimary = primary
 
 	m.diagnosticsModal = modal.New("",
 		modal.WithWidth(modalW),
 		modal.WithHints(false),
+		modal.WithPrimaryAction(primary),
 	).
 		AddSection(m.diagnosticsLogoSection()).
 		AddSection(modal.Spacer()).
@@ -52,6 +64,7 @@ func (m *Model) ensureDiagnosticsModal() {
 func (m *Model) clearDiagnosticsModal() {
 	m.diagnosticsModal = nil
 	m.diagnosticsModalWidth = 0
+	m.diagnosticsPrimary = ""
 	m.diagnosticsMouseHandler = nil
 }
 
@@ -251,14 +264,22 @@ func (m *Model) diagnosticsUpdateSection() modal.Section {
 	}, nil)
 }
 
+// diagnosticsPrimaryAction is what bare Enter does on this surface: open the
+// updater when an update is actually available, otherwise put the modal away.
+// The visible chip line always names it — no silent primaries.
+func (m *Model) diagnosticsPrimaryAction() string {
+	if m.hasUpdatesAvailable() {
+		return "update"
+	}
+	return "close"
+}
+
 // diagnosticsChips is the one inline action line in the footer hint style:
-// [u] Update when an update is actually available, [esc] Close always. The
-// keyboard's u keeps its own path, so the chip is the mouse/focus twin of a
-// key that already works.
+// [enter/u] Update when an update is actually available, [esc] Close always.
 func (m *Model) diagnosticsChips() []ui.KeyChip {
 	chips := []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "close"}}
 	if m.hasUpdatesAvailable() {
-		chips = append([]ui.KeyChip{{Keys: "[u]", Label: "Update", ID: "update"}}, chips...)
+		chips = append([]ui.KeyChip{{Keys: "[enter/u]", Label: "Update", ID: "update"}}, chips...)
 	}
 	return chips
 }
@@ -266,8 +287,8 @@ func (m *Model) diagnosticsChips() []ui.KeyChip {
 // renderDiagnosticsChips paints the action line, registering each chip as a
 // real focusable control so a click and Enter both fire its action — the same
 // shape the update journey's chips use.
-func (m *Model) renderDiagnosticsChips(contentW int, _, _ string) modal.RenderedSection {
-	line, regions := ui.RenderKeyChips(m.diagnosticsChips(), contentW)
+func (m *Model) renderDiagnosticsChips(contentW int, focusID, hoverID string) modal.RenderedSection {
+	line, regions := ui.RenderKeyChips(m.diagnosticsChips(), contentW, focusID, hoverID)
 	if line == "" {
 		return modal.RenderedSection{}
 	}

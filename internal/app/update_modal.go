@@ -252,8 +252,10 @@ func updateVariant(p UpdateModalState) modal.Variant {
 
 // updateChips is every phase's one inline action line: key chips in exactly
 // the footer hint style. Preview confirms with enter or u and dismisses with
-// esc; Installing keeps the honest no-cancel line; Complete/Error pair their
-// primary with Close.
+// esc — offered regardless of provenance, because Enter starts the batch
+// either way and a silent primary is a lie (the engine's pre-flight guards
+// stay the source of truth at Apply time); Installing keeps the honest
+// no-cancel line; Complete/Error pair their primary with Close.
 func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
 	switch u.phase {
 	case UpdateModalProgress:
@@ -276,9 +278,6 @@ func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
 			{Keys: "[esc]", Label: "Close", ID: "cancel"},
 		}, ""
 	default:
-		if !u.anyManaged {
-			return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
-		}
 		return []ui.KeyChip{
 			{Keys: "[enter/u]", Label: "Update", ID: "update"},
 			{Keys: "[esc]", Label: "Close", ID: "cancel"},
@@ -291,7 +290,7 @@ func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
 func (m *Model) renderUpdateChips(contentW int, focusID, hoverID string) modal.RenderedSection {
 	u := m.updateUIState()
 	chips, suffix := updateChips(u)
-	line, regions := ui.RenderKeyChips(chips, contentW)
+	line, regions := ui.RenderKeyChips(chips, contentW, focusID, hoverID)
 	if line == "" {
 		return modal.RenderedSection{}
 	}
@@ -329,6 +328,9 @@ func updatePrimaryAction(u *updateUIState) string {
 	case UpdateModalPreview:
 		return "update"
 	case UpdateModalError:
+		if u.retryCount == 0 {
+			return "cancel"
+		}
 		return "retry"
 	case UpdateModalComplete:
 		if u.restartRequired {
@@ -585,7 +587,7 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	u := m.updateUIState()
 	switch msg.String() {
 	case "u":
-		if u != nil && u.phase == UpdateModalPreview && u.anyManaged {
+		if u != nil && u.phase == UpdateModalPreview {
 			return m.applyUpdateAction("update", nil)
 		}
 	case "r":
