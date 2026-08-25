@@ -130,6 +130,19 @@ func ForgetManagedShell(projectRoot, sessionName, namespace string, observedAt t
 	)
 }
 
+// RestoreManagedShell moves a forgotten shell record back onto the project's
+// live list. It does not start a tmux session.
+func RestoreManagedShell(projectRoot, sessionName, namespace string) (shellstate.Definition, error) {
+	projectDir, err := projectdir.Resolve(projectRoot)
+	if err != nil {
+		return shellstate.Definition{}, err
+	}
+	return shellstate.RestoreAtPath(
+		filepath.Join(projectDir, "shells.json"),
+		shellstate.Identity{TmuxName: sessionName, Namespace: namespace},
+	)
+}
+
 // ShellNames resolves the next generated display and session names from one
 // project's inventory. It tolerates legacy names while never reusing a suffix.
 func ShellNames(projectRoot string, existing []shellstate.Definition) (displayName, sessionName string) {

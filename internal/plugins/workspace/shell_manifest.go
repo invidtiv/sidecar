@@ -22,6 +22,10 @@ import (
 type ShellManifest struct {
 	Version int               `json:"version"`
 	Shells  []ShellDefinition `json:"shells"`
+	// Tombstones holds forgotten definitions so restore can put them back.
+	// An older binary ignores this field and may drop the key on write —
+	// accepted until docs/plans/active/shell-record-durability.md part D.
+	Tombstones []shellstate.Tombstone `json:"tombstones,omitempty"`
 
 	path     string     // not serialized - file path
 	mu       sync.Mutex // protects concurrent access
@@ -92,42 +96,6 @@ func LoadShellManifest(path string) (*ShellManifest, error) {
 	return m, nil
 }
 
-// Save writes the manifest to disk atomically with file locking.
-func (m *ShellManifest) Save() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.saveLocked()
-}
-
-// saveLocked replaces the whole file with this process's copy. Caller must hold
-// m.mu. Reserved for the startup reconciliation, which has just computed the
-// authoritative list; every single-entry edit goes through mutateLocked so it
-// merges instead of clobbering.
-func (m *ShellManifest) saveLocked() error {
-	// The hard floor for td-8d18de. Every writer funnels through here or
-	// mutateLocked, and the check runs before MkdirAll and before the lock file
-	// is created so an isolated run leaves no .tmp or .lock debris in the real
-	// user's tree either.
-	if err := config.AssertIsolatedPath(m.path); err != nil {
-		return err
-	}
-
-	// Ensure .sidecar directory exists
-	dir := filepath.Dir(m.path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
-	}
-
-	// Acquire exclusive lock
-	lockFile, err := acquireManifestLock(m.path, true)
-	if err != nil {
-		return err
-	}
-	defer releaseManifestLock(lockFile)
-
-	return m.writeLocked()
-}
-
 // mutateLocked applies a single-entry edit against the manifest as it exists on
 // disk *right now*, not against this process's possibly-stale snapshot.
 //
@@ -140,6 +108,12 @@ func (m *ShellManifest) saveLocked() error {
 // apply receives the fresh definitions and returns the new list plus whether
 // anything actually changed. Caller must hold m.mu.
 func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
+	return m.mutateLockedKind(false, apply)
+}
+
+// mutateLockedKind is the writer boundary. identityRemoval is true only for
+// RemoveShell; that is the only workspace path allowed to shrink live shells.
+func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]ShellDefinition) ([]ShellDefinition, bool)) error {
 	if err := config.AssertIsolatedPath(m.path); err != nil {
 		return err
 	}
@@ -156,11 +130,13 @@ func (m *ShellManifest) mutateLocked(apply func([]ShellDefinition) ([]ShellDefin
 	defer releaseManifestLock(lockFile)
 
 	fresh := m.readFromDiskLocked()
+	before := len(fresh)
 	next, changed := apply(fresh)
 	m.Shells = next
 	if !changed {
 		return nil
 	}
+	shellstate.ObserveLiveCountWrite(m.path, before, len(next), identityRemoval)
 	return m.writeLocked()
 }
 
@@ -180,11 +156,13 @@ func (m *ShellManifest) readFromDiskLocked() []ShellDefinition {
 		slog.Warn("manifest: read-before-write parse failed, using in-memory copy", "err", err)
 		return m.Shells
 	}
+	m.Tombstones = onDisk.Tombstones
 	return onDisk.Shells
 }
 
 // writeLocked marshals and atomically replaces the file. Caller must hold m.mu,
 // the exclusive file lock, and must already have asserted path isolation.
+// Only mutateLocked reaches here; there is no whole-file Save.
 func (m *ShellManifest) writeLocked() error {
 	m.Version = manifestVersion
 
@@ -209,6 +187,7 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
 				shells[i] = def
@@ -224,7 +203,8 @@ func (m *ShellManifest) AddShell(def ShellDefinition) error {
 //
 // This is the additive counterpart to AddShell: it heals a manifest another
 // instance narrowed (td-8d18de) without ever overwriting what that instance
-// wrote.
+// wrote. A name currently in tombstones is an explicit forget, not a missing
+// definition — it is not added back, and the tombstone is not dropped.
 func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 	if len(defs) == 0 {
 		return false, nil
@@ -238,8 +218,9 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 		for _, s := range shells {
 			present[s.TmuxName] = true
 		}
+		forgotten := tombstoneTmuxNames(m.Tombstones)
 		for _, def := range defs {
-			if present[def.TmuxName] {
+			if present[def.TmuxName] || forgotten[def.TmuxName] {
 				continue
 			}
 			shells = append(shells, def)
@@ -251,18 +232,49 @@ func (m *ShellManifest) EnsureShells(defs []ShellDefinition) (bool, error) {
 	return changed, err
 }
 
-// RemoveShell removes a shell by tmuxName and saves.
+// RemoveShell moves a shell by tmuxName into tombstones and saves.
 func (m *ShellManifest) RemoveShell(tmuxName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+	return m.mutateLockedKind(true, func(shells []ShellDefinition) ([]ShellDefinition, bool) {
 		for i, s := range shells {
 			if s.TmuxName == tmuxName {
+				m.Tombstones = appendWorkspaceTombstone(m.Tombstones, s)
 				return append(shells[:i], shells[i+1:]...), true
 			}
 		}
 		return shells, false // Not found, nothing to remove
 	})
+}
+
+func appendWorkspaceTombstone(tombs []shellstate.Tombstone, def ShellDefinition) []shellstate.Tombstone {
+	stone := shellstate.Tombstone{Definition: def, DeletedAt: time.Now().UTC()}
+	for i := range tombs {
+		if tombs[i].TmuxName == def.TmuxName {
+			tombs[i] = stone
+			return tombs
+		}
+	}
+	return append(tombs, stone)
+}
+
+func dropWorkspaceTombstone(tombs []shellstate.Tombstone, tmuxName string) []shellstate.Tombstone {
+	for i := range tombs {
+		if tombs[i].TmuxName == tmuxName {
+			return append(tombs[:i], tombs[i+1:]...)
+		}
+	}
+	return tombs
+}
+
+func tombstoneTmuxNames(tombs []shellstate.Tombstone) map[string]bool {
+	out := make(map[string]bool, len(tombs))
+	for _, stone := range tombs {
+		if stone.TmuxName != "" {
+			out[stone.TmuxName] = true
+		}
+	}
+	return out
 }
 
 // FindShell returns a shell definition by tmuxName, or nil if not found.
@@ -282,6 +294,7 @@ func (m *ShellManifest) UpdateShell(def ShellDefinition) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.mutateLocked(func(shells []ShellDefinition) ([]ShellDefinition, bool) {
+		m.Tombstones = dropWorkspaceTombstone(m.Tombstones, def.TmuxName)
 		for i, s := range shells {
 			if s.TmuxName == def.TmuxName {
 				shells[i] = def

@@ -94,6 +94,64 @@ func TestShellManifest_AddRemove(t *testing.T) {
 	if m.Shells[0].TmuxName != "shell-2" {
 		t.Errorf("wrong shell remaining: %q", m.Shells[0].TmuxName)
 	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].TmuxName != "shell-1" || m.Tombstones[0].DeletedAt.IsZero() {
+		t.Fatalf("tombstones after remove = %+v", m.Tombstones)
+	}
+	reloaded, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatalf("LoadShellManifest() error = %v", err)
+	}
+	if len(reloaded.Tombstones) != 1 || reloaded.Tombstones[0].TmuxName != "shell-1" || reloaded.Tombstones[0].DisplayName != "Shell 1" {
+		t.Fatalf("reloaded tombstones = %+v", reloaded.Tombstones)
+	}
+}
+
+// Forget is record-only: the tmux session may still be running. EnsureShells
+// must not treat that as a missing definition and write a stub that drops
+// displayName/agentType/skipPerms, nor drop the tombstone (td-61117e).
+func TestEnsureShellsSkipsTombstonedNames(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shells.json")
+	m, err := LoadShellManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	def := ShellDefinition{
+		TmuxName: "sidecar-sh-project-1", DisplayName: "prior task",
+		AgentType: "codex", SkipPerms: true, WorkDir: "/work/one",
+	}
+	if err := m.AddShell(def); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RemoveShell(def.TmuxName); err != nil {
+		t.Fatal(err)
+	}
+
+	stub := ShellDefinition{TmuxName: def.TmuxName, DisplayName: "Shell 1", WorkDir: "/repo/project"}
+	sibling := ShellDefinition{TmuxName: "sidecar-sh-project-2", DisplayName: "Shell 2"}
+	changed, err := m.EnsureShells([]ShellDefinition{stub, sibling})
+	if err != nil {
+		t.Fatalf("EnsureShells() error = %v", err)
+	}
+	if !changed {
+		t.Fatal("EnsureShells() changed = false, want the unrelated missing name healed")
+	}
+	if m.FindShell(def.TmuxName) != nil {
+		t.Fatalf("tombstoned name was resurrected as %+v", m.FindShell(def.TmuxName))
+	}
+	if m.FindShell(sibling.TmuxName) == nil {
+		t.Fatal("unrelated missing name was not healed")
+	}
+	if len(m.Tombstones) != 1 || m.Tombstones[0].DisplayName != "prior task" || m.Tombstones[0].AgentType != "codex" || !m.Tombstones[0].SkipPerms {
+		t.Fatalf("tombstone after EnsureShells = %+v", m.Tombstones)
+	}
+
+	changed, err = m.EnsureShells([]ShellDefinition{stub})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("EnsureShells() rewrote the file for a tombstoned name")
+	}
 }
 
 func TestShellManifest_FindShell(t *testing.T) {
@@ -139,12 +197,14 @@ func TestShellManifest_RenameShellUsesSharedAtomicOperation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatal(err)
 	}
-	m := &ShellManifest{Version: manifestVersion, path: path, Shells: []ShellDefinition{
+	m := &ShellManifest{Version: manifestVersion, path: path}
+	for _, def := range []ShellDefinition{
 		{TmuxName: "sidecar-sh-one", DisplayName: "old", Namespace: "/tmp/socket"},
 		{TmuxName: "sidecar-sh-two", DisplayName: "taken", Namespace: "/tmp/socket"},
-	}}
-	if err := m.Save(); err != nil {
-		t.Fatal(err)
+	} {
+		if err := m.AddShell(def); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := m.RenameShell("sidecar-sh-one", "/tmp/socket", "taken"); err == nil {
 		t.Fatal("duplicate rename succeeded")
@@ -502,10 +562,7 @@ func TestSaveRefusesRealUserManifestUnderIsolation(t *testing.T) {
 	m := &ShellManifest{Version: manifestVersion, path: path}
 	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
 
-	if err := m.Save(); err == nil {
-		t.Fatal("Save() = nil, want refusal to write the real user manifest")
-	}
-	// Every other writer funnels through saveLocked, so they must refuse too.
+	// Every writer funnels through mutateLocked, so they must refuse.
 	if err := m.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-2"}); err == nil {
 		t.Error("AddShell() = nil, want refusal")
 	}
@@ -574,9 +631,8 @@ func TestSaveAllowsRealUserManifestWithoutIsolation(t *testing.T) {
 	path := filepath.Join(realDir, "shells.json")
 
 	m := &ShellManifest{Version: manifestVersion, path: path}
-	m.Shells = []ShellDefinition{{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}}
-	if err := m.Save(); err != nil {
-		t.Fatalf("Save() = %v, want nil for an ordinary run", err)
+	if err := m.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "shell 1"}); err != nil {
+		t.Fatalf("AddShell() = %v, want nil for an ordinary run", err)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("manifest not written: %v", err)

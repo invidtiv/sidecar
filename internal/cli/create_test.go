@@ -323,6 +323,15 @@ func TestCreateListedForAgents(t *testing.T) {
 	if !strings.Contains(rendered, "sidecar create worktree") {
 		t.Fatalf("sidecar --agents does not list create worktree:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "sidecar shell list --json") {
+		t.Fatalf("sidecar --agents does not list shell list:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "sidecar shell forget") {
+		t.Fatalf("sidecar --agents does not list shell forget:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "sidecar shell restore") {
+		t.Fatalf("sidecar --agents does not list shell restore:\n%s", rendered)
+	}
 }
 
 func TestCreateWorktreeValidation(t *testing.T) {

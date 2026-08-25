@@ -49,6 +49,7 @@ type ErrorKind string
 const (
 	KindValidation ErrorKind = "validation"
 	KindNotFound   ErrorKind = "not_found"
+	KindAlready    ErrorKind = "already"
 	KindAmbiguous  ErrorKind = "ambiguous"
 	KindState      ErrorKind = "state"
 )
@@ -70,6 +71,16 @@ func (e *Error) Unwrap() error { return e.Err }
 func IsValidation(err error) bool {
 	var target *Error
 	return errors.As(err, &target) && target.Kind == KindValidation
+}
+
+func IsNotFound(err error) bool {
+	var target *Error
+	return errors.As(err, &target) && target.Kind == KindNotFound
+}
+
+func IsAlready(err error) bool {
+	var target *Error
+	return errors.As(err, &target) && target.Kind == KindAlready
 }
 
 type Identity struct {
@@ -117,6 +128,7 @@ func AddAtPath(path string, def Definition) error {
 		for i := range m.Shells {
 			if m.Shells[i].TmuxName == def.TmuxName && sameNamespace(m.Shells[i].Namespace, def.Namespace) {
 				m.Shells[i] = def
+				m.Tombstones = dropTombstone(m.Tombstones, Identity{TmuxName: def.TmuxName, Namespace: def.Namespace})
 				return nil
 			}
 			if m.Shells[i].DisplayName == def.DisplayName {
@@ -124,6 +136,7 @@ func AddAtPath(path string, def Definition) error {
 			}
 		}
 		m.Shells = append(m.Shells, def)
+		m.Tombstones = dropTombstone(m.Tombstones, Identity{TmuxName: def.TmuxName, Namespace: def.Namespace})
 		return nil
 	})
 }
@@ -154,16 +167,11 @@ func ListAtPath(path string) ([]Definition, error) {
 }
 
 // RemoveAtPath forgets one exact shell identity. A missing entry is already
-// the requested state and therefore succeeds.
+// the requested state and therefore succeeds. The definition is moved to
+// tombstones rather than dropped, so RestoreAtPath can put it back.
 func RemoveAtPath(path string, id Identity) error {
-	return mutateManifest(path, func(m *manifest) error {
-		for i := range m.Shells {
-			if m.Shells[i].TmuxName == id.TmuxName && sameNamespace(m.Shells[i].Namespace, id.Namespace) {
-				m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
-				return nil
-			}
-		}
-		return nil
+	return mutateManifestRemoving(path, func(m *manifest) error {
+		return tombstoneIdentity(m, id, time.Time{})
 	})
 }
 
@@ -185,22 +193,100 @@ var ErrShellChanged = errors.New("shell entry was replaced since it was observed
 // A zero observedAt means the caller has no incarnation to check and accepts an
 // unconditional removal.
 func RemoveIfUnchangedAtPath(path string, id Identity, observedAt time.Time) error {
-	return mutateManifest(path, func(m *manifest) error {
-		for i := range m.Shells {
-			if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
-				continue
-			}
-			if !observedAt.IsZero() && m.Shells[i].CreatedAt.After(observedAt) {
-				return ErrShellChanged
-			}
-			m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
-			return nil
-		}
-		return nil
+	return mutateManifestRemoving(path, func(m *manifest) error {
+		return tombstoneIdentity(m, id, observedAt)
 	})
 }
 
+// RestoreAtPath moves a forgotten definition from tombstones back onto shells.
+// Display name, agent type, skip-perms, and workdir are left intact.
+//
+// A live record is already in that state (KindAlready). An identity that is
+// in neither list is KindNotFound.
+func RestoreAtPath(path string, id Identity) (Definition, error) {
+	var restored Definition
+	err := mutateManifest(path, func(m *manifest) error {
+		for i := range m.Shells {
+			if m.Shells[i].TmuxName == id.TmuxName && sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+				restored = m.Shells[i]
+				return &Error{Kind: KindAlready, Msg: "shell record is already live"}
+			}
+		}
+		for i := range m.Tombstones {
+			if m.Tombstones[i].TmuxName != id.TmuxName || !sameNamespace(m.Tombstones[i].Namespace, id.Namespace) {
+				continue
+			}
+			restored = m.Tombstones[i].Definition
+			m.Shells = append(m.Shells, restored)
+			m.Tombstones = append(m.Tombstones[:i], m.Tombstones[i+1:]...)
+			return nil
+		}
+		return &Error{Kind: KindNotFound, Msg: "forgotten shell record not found"}
+	})
+	return restored, err
+}
+
+// ListTombstonesAtPath returns forgotten shell definitions still in the
+// manifest. A missing file is an empty list, not an error.
+func ListTombstonesAtPath(path string) ([]Tombstone, error) {
+	m, err := readManifest(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
+	}
+	out := make([]Tombstone, len(m.Tombstones))
+	copy(out, m.Tombstones)
+	return out, nil
+}
+
+func tombstoneIdentity(m *manifest, id Identity, observedAt time.Time) error {
+	for i := range m.Shells {
+		if m.Shells[i].TmuxName != id.TmuxName || !sameNamespace(m.Shells[i].Namespace, id.Namespace) {
+			continue
+		}
+		if !observedAt.IsZero() && m.Shells[i].CreatedAt.After(observedAt) {
+			return ErrShellChanged
+		}
+		m.Tombstones = appendTombstone(m.Tombstones, m.Shells[i], time.Now().UTC())
+		m.Shells = append(m.Shells[:i], m.Shells[i+1:]...)
+		return nil
+	}
+	return nil
+}
+
+func appendTombstone(tombs []Tombstone, def Definition, at time.Time) []Tombstone {
+	stone := Tombstone{Definition: def, DeletedAt: at}
+	for i := range tombs {
+		if tombs[i].TmuxName == def.TmuxName && sameNamespace(tombs[i].Namespace, def.Namespace) {
+			tombs[i] = stone
+			return tombs
+		}
+	}
+	return append(tombs, stone)
+}
+
+func dropTombstone(tombs []Tombstone, id Identity) []Tombstone {
+	for i := range tombs {
+		if tombs[i].TmuxName == id.TmuxName && sameNamespace(tombs[i].Namespace, id.Namespace) {
+			return append(tombs[:i], tombs[i+1:]...)
+		}
+	}
+	return tombs
+}
+
 func mutateManifest(path string, apply func(*manifest) error) error {
+	return mutateManifestLive(path, false, apply)
+}
+
+func mutateManifestRemoving(path string, apply func(*manifest) error) error {
+	return mutateManifestLive(path, true, apply)
+}
+
+// mutateManifestLive is the shells.json writer. identityRemoval is true only
+// for RemoveAtPath and RemoveIfUnchangedAtPath.
+func mutateManifestLive(path string, identityRemoval bool, apply func(*manifest) error) error {
 	if err := config.AssertIsolatedPath(path); err != nil {
 		return &Error{Kind: KindState, Msg: "refusing shell manifest path", Err: err}
 	}
@@ -218,9 +304,11 @@ func mutateManifest(path string, apply func(*manifest) error) error {
 	} else if !os.IsNotExist(readErr) {
 		return &Error{Kind: KindState, Msg: "read shell manifest", Err: readErr}
 	}
+	before := len(m.Shells)
 	if err := apply(&m); err != nil {
 		return err
 	}
+	ObserveLiveCountWrite(path, before, len(m.Shells), identityRemoval)
 	m.Version = 1
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
@@ -251,9 +339,20 @@ type Definition struct {
 	WorkDir string `json:"workDir,omitempty"`
 }
 
+// Tombstone is a forgotten shell definition kept so RestoreAtPath can move it
+// back. An older binary that does not know this field ignores it on read and
+// may drop the key on its next write; that is accepted until the versioned
+// format in docs/plans/active/shell-record-durability.md part D.
+type Tombstone struct {
+	Definition
+	DeletedAt time.Time `json:"deletedAt"`
+}
+
 type manifest struct {
 	Version int          `json:"version"`
 	Shells  []Definition `json:"shells"`
+	// Tombstones is omitted by older binaries; see Tombstone.
+	Tombstones []Tombstone `json:"tombstones,omitempty"`
 }
 
 func NormalizeName(name string) (string, error) {
@@ -469,7 +568,9 @@ func RenameAtPath(path string, req RenameRequest) (RenameResult, error) {
 	if result.OldName == result.Name {
 		return result, nil
 	}
+	before := len(m.Shells)
 	m.Shells[match].DisplayName = req.Name
+	ObserveLiveCountWrite(path, before, len(m.Shells), false)
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return RenameResult{}, &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}

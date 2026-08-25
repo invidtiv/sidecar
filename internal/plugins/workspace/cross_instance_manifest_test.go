@@ -14,6 +14,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // These tests model two whole Sidecar instances sharing one shells.json — the
@@ -44,10 +45,10 @@ func fakeInstance(t *testing.T, manifestPath, workDir, namespace string, live []
 			return filepath.Dir(manifestPath), nil
 		},
 		loadManifest: LoadShellManifest,
-		discoverSessions: func(string) ([]string, error) {
+		discoverSessions: func(string) ([]string, tmuxserver.Incarnation, error) {
 			// Discovery is per working directory in the real code; the caller
 			// has already picked names this workDir could produce.
-			return append([]string(nil), live...), nil
+			return append([]string(nil), live...), tmuxserver.Present(1, 2, 3), nil
 		},
 		getPaneID:         func(name string) string { return "%" + name },
 		getWorkspaceState: func(string) state.WorkspaceState { return state.WorkspaceState{} },
@@ -68,11 +69,11 @@ func runStartup(t *testing.T, hooks shellStartupHooks, manifestPath, workDir str
 	if err != nil {
 		t.Fatalf("LoadShellManifest(%s) error = %v", manifestPath, err)
 	}
-	sessions, err := hooks.discoverSessions(workDir)
+	sessions, _, err := hooks.discoverSessions(workDir)
 	if err != nil {
 		t.Fatalf("discoverSessions(%s) error = %v", workDir, err)
 	}
-	return reconcileShellStartup(manifest, sessions, false, workDir, workDir, hooks)
+	return reconcileShellStartup(manifest, sessions, workDir, workDir, hooks)
 }
 
 func manifestNames(t *testing.T, manifestPath string) []string {
@@ -202,8 +203,8 @@ func TestForeignManifestCannotRemoveLiveShellsFromMemory(t *testing.T) {
 		}},
 		path: manifestPath,
 	}
-	if err := clobbered.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := clobbered.AddShell(clobbered.Shells[0]); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
 	}
 
 	running := make(map[string]bool, len(liveA))
@@ -260,7 +261,7 @@ func TestAgentRenamePropagatesThroughLiveManifestWatcher(t *testing.T) {
 	writer := &ShellManifest{Version: manifestVersion, path: manifestPath, Shells: []ShellDefinition{{
 		TmuxName: name, DisplayName: "stale context", Namespace: namespaceA,
 	}}}
-	if err := writer.Save(); err != nil {
+	if err := writer.AddShell(writer.Shells[0]); err != nil {
 		t.Fatal(err)
 	}
 
@@ -340,9 +341,6 @@ func TestProofRunCannotWriteRealManifest(t *testing.T) {
 	}
 
 	manifest := &ShellManifest{Version: manifestVersion, path: realManifest}
-	if err := manifest.Save(); err == nil {
-		t.Fatal("Save wrote the real user manifest under asserted isolation")
-	}
 	if err := manifest.AddShell(ShellDefinition{TmuxName: "sidecar-sh-sidecar-1"}); err == nil {
 		t.Fatal("AddShell wrote the real user manifest under asserted isolation")
 	}
@@ -392,8 +390,8 @@ func TestRefreshSelfHealsClobberedManifest(t *testing.T) {
 		}},
 		path: manifestPath,
 	}
-	if err := clobbered.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := clobbered.AddShell(clobbered.Shells[0]); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
 	}
 
 	p := newInstancePlugin(t, hooksA, workDirA)

@@ -323,8 +323,11 @@ func TestShellCreatedMsgDoesNotAdoptNestedSibling(t *testing.T) {
 		{TmuxName: "sidecar-sh-sidecar-1", DisplayName: "here", WorkDir: current},
 		{TmuxName: name, DisplayName: "sibling", WorkDir: sibling},
 	}}
-	if err := manifest.Save(); err != nil {
-		t.Fatalf("Save() error = %v", err)
+	if err := manifest.AddShell(manifest.Shells[0]); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
+	}
+	if err := manifest.AddShell(manifest.Shells[1]); err != nil {
+		t.Fatalf("AddShell() error = %v", err)
 	}
 	p.shellManifest = manifest
 

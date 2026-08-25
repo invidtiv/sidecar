@@ -27,7 +27,12 @@ func TestRunDispatch(t *testing.T) {
 		{"shell help", []string{"shell", "--help"}, true, 0, "sidecar shell <command>"},
 		{"name help", []string{"shell", "name", "--help"}, true, 0, "Print the Sidecar display name"},
 		{"rename help", []string{"shell", "rename", "--help"}, true, 0, "Sidecar-managed shell or worktree agent"},
+		{"list help", []string{"shell", "list", "--help"}, true, 0, "List Sidecar-managed shell records"},
+		{"forget help", []string{"shell", "forget", "--help"}, true, 0, "Forget a Sidecar-managed shell record"},
+		{"restore help", []string{"shell", "restore", "--help"}, true, 0, "Restore a forgotten Sidecar-managed shell record"},
 		{"unknown", []string{"shell", "wat"}, true, 2, "unknown shell command"},
+		{"forget missing name", []string{"shell", "forget"}, true, 2, "exactly one tmux session name"},
+		{"restore extra args", []string{"shell", "restore", "one", "two"}, true, 2, "exactly one tmux session name"},
 		{"name positional", []string{"shell", "name", "extra"}, true, 2, "no positional"},
 		{"missing name", []string{"shell", "rename"}, true, 2, "exactly one quoted"},
 		{"unquoted name", []string{"shell", "rename", "two", "words"}, true, 2, "exactly one quoted"},
@@ -170,6 +175,161 @@ func TestRunShellCommandsResolveManagedWorktreeAgent(t *testing.T) {
 	}
 }
 
+func TestRunShellListForgetRestore(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+	def := shellstate.Definition{
+		TmuxName: "sidecar-sh-demo-1", DisplayName: "prior task", Namespace: "/tmp/socket",
+		AgentType: "codex", SkipPerms: true, WorkDir: workDir,
+	}
+	writeProjectShell(t, stateDir, "demo", def)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "list", "--json"}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("list = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var listed shellListResult
+	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
+		t.Fatalf("list json: %v (%q)", err, out.String())
+	}
+	if len(listed.Shells) != 1 || listed.Shells[0].Shell != def.TmuxName || listed.Shells[0].Name != def.DisplayName || listed.Shells[0].Status != shellStatusLive {
+		t.Fatalf("list = %+v", listed)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "forget", "--json", def.TmuxName}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("forget = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var forgotten shellRecordResult
+	if err := json.Unmarshal(out.Bytes(), &forgotten); err != nil {
+		t.Fatalf("forget json: %v (%q)", err, out.String())
+	}
+	if forgotten.Status != shellStatusForgotten || forgotten.Shell != def.TmuxName {
+		t.Fatalf("forget = %+v", forgotten)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "list", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("list after forget = %v %d %q", handled, code, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Shells) != 1 || listed.Shells[0].Status != shellStatusForgotten || listed.Shells[0].Name != "prior task" || listed.Shells[0].AgentType != "codex" || !listed.Shells[0].SkipPerms {
+		t.Fatalf("forgotten list = %+v", listed)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "forget", "--json", def.TmuxName}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("forget already = %v %d %q", handled, code, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &forgotten); err != nil {
+		t.Fatal(err)
+	}
+	if forgotten.Status != shellStatusAlreadyForgotten {
+		t.Fatalf("already forgotten = %+v", forgotten)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "forget", "sidecar-sh-missing"}, &out, &errOut)
+	if !handled || code != 1 || !strings.Contains(errOut.String(), "no shell record named") {
+		t.Fatalf("forget unknown = %v %d %q", handled, code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "restore", "--json", def.TmuxName}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("restore = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var restored shellRecordResult
+	if err := json.Unmarshal(out.Bytes(), &restored); err != nil {
+		t.Fatalf("restore json: %v (%q)", err, out.String())
+	}
+	if restored.Status != shellStatusRestored || restored.Name != "prior task" {
+		t.Fatalf("restore = %+v", restored)
+	}
+	path := filepath.Join(stateDir, "projects", "demo", "shells.json")
+	live, err := shellstate.ListAtPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(live) != 1 || live[0].DisplayName != "prior task" || live[0].AgentType != "codex" || !live[0].SkipPerms || live[0].WorkDir != workDir {
+		t.Fatalf("live after restore = %+v", live)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "restore", "--json", def.TmuxName}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("restore live = %v %d %q", handled, code, errOut.String())
+	}
+	if err := json.Unmarshal(out.Bytes(), &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Status != shellStatusAlreadyLive {
+		t.Fatalf("already live = %+v", restored)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "restore", "sidecar-sh-missing"}, &out, &errOut)
+	if !handled || code != 1 || !strings.Contains(errOut.String(), "no forgotten shell record named") {
+		t.Fatalf("restore unknown = %v %d %q", handled, code, errOut.String())
+	}
+}
+
+// The tmux name is the only argument `sidecar shell restore` takes, so the
+// human listing has to show forgotten records too. Hiding them behind --json
+// would leave a human able to forget a record and unable to name it again.
+func TestRunShellListShowsForgottenRecordsWithoutJSON(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+	live := shellstate.Definition{
+		TmuxName: "sidecar-sh-demo-1", DisplayName: "live task", Namespace: "/tmp/socket", WorkDir: workDir,
+	}
+	gone := shellstate.Definition{
+		TmuxName: "sidecar-sh-demo-2", DisplayName: "prior task", Namespace: "/tmp/socket", WorkDir: workDir,
+	}
+	writeProjectShells(t, stateDir, "demo", live, gone)
+
+	var out, errOut bytes.Buffer
+	if handled, code := Run([]string{"shell", "forget", gone.TmuxName}, &out, &errOut); !handled || code != 0 {
+		t.Fatalf("forget = %v %d %q", handled, code, errOut.String())
+	}
+
+	out.Reset()
+	errOut.Reset()
+	handled, code := Run([]string{"shell", "list"}, &out, &errOut)
+	if !handled || code != 0 || errOut.Len() != 0 {
+		t.Fatalf("list = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	text := out.String()
+	for _, want := range []string{live.TmuxName, "live task", gone.TmuxName, "prior task", "sidecar shell restore"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("list output %q is missing %q", text, want)
+		}
+	}
+}
+
 func TestRunShellNameRejectsLookalikeWorktreeSession(t *testing.T) {
 	stateHome, _, _, _, _, socket := setupWorktreeCLI(t, "panes")
 	t.Setenv("XDG_STATE_HOME", stateHome)
@@ -271,6 +431,14 @@ func writeProjectMeta(t *testing.T, stateDir, slug, workDir string) {
 
 func writeProjectShell(t *testing.T, stateDir, slug string, shell shellstate.Definition) {
 	t.Helper()
+	writeProjectShells(t, stateDir, slug, shell)
+}
+
+// writeProjectShells replaces the project's manifest with exactly these
+// definitions. It replaces rather than appends, so callers that need more than
+// one shell must pass them in a single call.
+func writeProjectShells(t *testing.T, stateDir, slug string, shells ...shellstate.Definition) {
+	t.Helper()
 	dir := filepath.Join(stateDir, "projects", slug)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
@@ -278,7 +446,7 @@ func writeProjectShell(t *testing.T, stateDir, slug string, shell shellstate.Def
 	manifest := struct {
 		Version int                     `json:"version"`
 		Shells  []shellstate.Definition `json:"shells"`
-	}{Version: 1, Shells: []shellstate.Definition{shell}}
+	}{Version: 1, Shells: shells}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		t.Fatal(err)

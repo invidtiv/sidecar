@@ -80,6 +80,39 @@ func TestMergeKeepsLocallyLiveShellAbsentFromManifest(t *testing.T) {
 	}
 }
 
+func TestMergeDoesNotRestoreForgottenRunningShell(t *testing.T) {
+	existing := mergeTestShell("sidecar-sh-sidecar-1", "prior task")
+	existing.SkipPerms = true
+	result := mergeShellState(shellMergeInput{
+		Existing:  []*ShellSession{existing},
+		Manifest:  nil,
+		Running:   map[string]bool{"sidecar-sh-sidecar-1": true},
+		Forgotten: map[string]bool{"sidecar-sh-sidecar-1": true},
+		WorkDir:   "/tmp/x/sidecar",
+		Namespace: "host:/tmp/tmux-501/default",
+	})
+
+	if len(result.Shells) != 0 {
+		t.Fatalf("shells = %v, want none", shellNames(result.Shells))
+	}
+	if len(result.Restored) != 0 {
+		t.Fatalf("restored = %v, want none", restoredNames(result.Restored))
+	}
+	assertNames(t, "dropped", result.Dropped, []string{"sidecar-sh-sidecar-1"})
+}
+
+func TestMergeDoesNotAdoptForgottenDiscoveredSession(t *testing.T) {
+	result := mergeShellState(shellMergeInput{
+		Manifest:  nil,
+		Running:   map[string]bool{"sidecar-sh-sidecar-2": true},
+		Forgotten: map[string]bool{"sidecar-sh-sidecar-2": true},
+		WorkDir:   "/tmp/x/sidecar",
+	})
+	if len(result.Shells) != 0 || len(result.Restored) != 0 {
+		t.Fatalf("adopted a forgotten session: shells=%v restored=%v", shellNames(result.Shells), restoredNames(result.Restored))
+	}
+}
+
 func TestMergeDropsShellNeitherInManifestNorLive(t *testing.T) {
 	result := mergeShellState(shellMergeInput{
 		Existing: []*ShellSession{

@@ -19,6 +19,7 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -244,43 +245,50 @@ func shellDiscoveryPattern(workDir string) *regexp.Regexp {
 	return regexp.MustCompile(`^` + regexp.QuoteMeta(basePrefix) + `(?:-(\d+))?$`)
 }
 
-// discoverTmuxSessionNamesForWorkDir lists this instance's shell sessions.
+// discoverTmuxSessionNamesForWorkDir lists this instance's shell sessions and
+// the tmux server incarnation that answered.
 //
-// The error is part of the contract (td-8d18de): "tmux told me there are no
-// sessions" and "I could not ask tmux" must never look the same, because the
-// first is permission to prune a manifest entry and the second is not. tmux
-// exits 1 with "no server running" when the server is simply down — that is a
-// genuine empty answer — while a missing binary, a broken socket or a fork
-// failure is an unknown answer and must prune nothing.
-func discoverTmuxSessionNamesForWorkDir(workDir string) ([]string, error) {
-	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
+// "No server running" is a fact about the server (Incarnation Absent), not a
+// list of zero sessions. Treating it as an empty listing is what emptied five
+// projects' shells.json on 2026-08-22: reconcile then pruned every matching
+// record. Absence of a server is not evidence that any shell died. A missing
+// binary, a broken socket, or a fork failure is Unknown and an error — also
+// not a listing.
+func discoverTmuxSessionNamesForWorkDir(workDir string) ([]string, tmuxserver.Incarnation, error) {
+	socket := tmuxserver.Socket()
+	cmd := exec.Command("tmux", "list-sessions", "-F", tmuxserver.ListSessionsFormat)
 	output, err := cmd.Output()
 	if err != nil {
-		if !tmuxReportedNoServer(err) {
-			return nil, fmt.Errorf("tmux list-sessions: %w", err)
+		if tmuxReportedNoServer(err) {
+			return nil, tmuxserver.Absent(), nil
 		}
-		return nil, nil
+		return nil, tmuxserver.Unknown(), fmt.Errorf("tmux list-sessions: %w", err)
 	}
 
 	var result []string
 	indexPattern := shellDiscoveryPattern(workDir)
+	serverPID := 0
 
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		if indexPattern.MatchString(line) {
-			result = append(result, line)
+		name, pidField, _ := strings.Cut(line, "\t")
+		name = strings.TrimSpace(name)
+		if pid, ok := tmuxserver.ParsePID(pidField); ok && serverPID == 0 {
+			serverPID = pid
+		}
+		if name != "" && indexPattern.MatchString(name) {
+			result = append(result, name)
 		}
 	}
 
-	return result, nil
+	return result, tmuxserver.Combine(socket, serverPID), nil
 }
 
-// tmuxReportedNoServer reports whether the failure was tmux answering "there is
-// no server", which is a real, trustworthy "no sessions" answer. Anything else
-// — exec.ErrNotFound, a permissions problem, a fork failure — is unknown.
+// tmuxReportedNoServer reports whether the failure was tmux answering that no
+// server (or no session list) exists. That is Absent, not an empty inventory.
 func tmuxReportedNoServer(err error) bool {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
@@ -308,11 +316,12 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 			return nil
 		}
 
-		// If we cannot ask tmux, we know nothing about what is running, and a
-		// merge fed an empty Running map would orphan every shell on screen.
-		// Say nothing instead (td-8d18de).
-		names, discoveryErr := hooks.discoverSessions(workDir)
-		if discoveryErr != nil {
+		// If we cannot ask tmux — including "no server running" — we know
+		// nothing about what is running, and a merge fed an empty Running map
+		// would orphan every shell on screen. Say nothing instead (td-8d18de,
+		// td-e27291).
+		names, inc, discoveryErr := hooks.discoverSessions(workDir)
+		if discoveryFailed(inc, discoveryErr) {
 			return nil
 		}
 
@@ -329,6 +338,7 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 			PaneIDs:      paneIDs,
 			Namespace:    hooks.namespace(),
 			BaseRevision: baseRevision,
+			Server:       inc,
 		}
 	}
 }
@@ -347,6 +357,8 @@ type shellManifestSyncMsg struct {
 	// and applying the stale snapshot would resurrect the deleted shell — so
 	// the handler re-runs the sync instead of applying it (td-8d18de).
 	BaseRevision uint64
+	// Server is the tmux server incarnation the Running map was listed from.
+	Server tmuxserver.Incarnation
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
@@ -361,6 +373,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	if p.shellManifest == nil {
 		return nil
 	}
+	p.observeTmuxServer(sync.Server)
 	// The merge replaces the slice. Preserve a top-shell selection by its
 	// durable tmux identity, never by the numeric row that happened to contain
 	// it before the replacement.
@@ -377,6 +390,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 		Existing:  p.shells,
 		Manifest:  p.shellManifest.Shells,
 		Running:   sync.Running,
+		Forgotten: tombstoneTmuxNames(p.shellManifest.Tombstones),
 		PaneID:    func(name string) string { return sync.PaneIDs[name] },
 		WorkDir:   p.ctx.WorkDir,
 		Namespace: sync.Namespace,
@@ -385,8 +399,8 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	p.shells = result.Shells
 	p.rebuildNestedShells(p.shellManifest.Shells, func(name string) string { return sync.PaneIDs[name] })
 
-	// Only shells that vanished from the manifest *and* are not running here
-	// reach Dropped, i.e. an explicit delete elsewhere.
+	// Only shells that vanished from the live manifest *and* are not running
+	// here — or that were explicitly forgotten — reach Dropped.
 	for _, name := range result.Dropped {
 		delete(p.managedSessions, name)
 		globalPaneCache.remove(name)

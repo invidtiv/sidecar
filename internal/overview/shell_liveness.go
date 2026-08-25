@@ -6,6 +6,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -20,10 +21,11 @@ import (
 // probe is the confirmation. No new timer, no per-shell polling, and nothing on
 // the startup path.
 
-// shellLivenessProbe and forgetShell are indirected for tests.
+// shellLivenessProbe, shellLivenessServer, and forgetShell are indirected for tests.
 var (
-	shellLivenessProbe = shellliveness.ProbeSession
-	forgetShell        = workspaceops.ForgetManagedShell
+	shellLivenessProbe  = shellliveness.ProbeSession
+	shellLivenessServer = tmuxserver.Socket
+	forgetShell         = workspaceops.ForgetManagedShell
 )
 
 type (
@@ -39,7 +41,10 @@ type (
 		// Incarnation fences a session this browser saw come back.
 		CreatedAt   time.Time
 		Incarnation uint64
-		Verdict     shellliveness.Verdict
+		// Server is the tmux server incarnation this verdict was taken under.
+		// Distinct from Incarnation, which is the life of the tmux name.
+		Server  tmuxserver.Incarnation
+		Verdict shellliveness.Verdict
 	}
 
 	// shellForgottenMsg reports the manifest write for a confirmed dead shell.
@@ -60,6 +65,13 @@ func (m *Model) shellLivenessTracker() *shellliveness.Tracker {
 	return m.shellLiveness
 }
 
+// observeTmuxServer is the only place this surface tells the tracker which
+// server it is watching. Pane inventory and a live socket-stat on the reap
+// path both land here; the shared decision stays in shellliveness (td-388929).
+func (m *Model) observeTmuxServer(inc tmuxserver.Incarnation) {
+	m.shellLivenessTracker().ObserveServer(inc)
+}
+
 // reapDeadShells is called at the end of a completed refresh cycle. It records
 // which shells this cycle saw alive and probes the ones that have gone missing
 // since they were last seen.
@@ -71,13 +83,20 @@ func (m *Model) shellLivenessTracker() *shellliveness.Tracker {
 //     server that is not running as zero panes and no error, which is the exact
 //     shape of a tmux restart and would otherwise suspect every shell at once.
 //     The probe would answer Unknown for all of them, but a guard that only
-//     works because the last line of defence holds is not a guard.
+//     works because the last line of defence holds is not a guard. This skip
+//     stays as a cheap belt even after server incarnation is a first-class
+//     identity; incarnation gating (td-388929) is the real fence.
 //   - A shell in another tmux namespace is invisible to this listing, so its
 //     absence means nothing.
 //   - A shell this browser never saw running is left alone. That is what a
 //     manifest entry looks like after a reboot, and the offline-shell recreate
 //     path — not auto-close — owns it.
 func (m *Model) reapDeadShells() tea.Cmd {
+	// Socket-stat is how a Sidecar running outside tmux notices a restart on
+	// this inventory pass. Observe even when we are about to skip: a vanished
+	// server still changes incarnation, and the reset must fire on that
+	// transition, not only the next non-empty listing.
+	m.observeTmuxServer(shellLivenessServer())
 	if m.tmuxErr != nil || len(m.currentPanes) == 0 {
 		return nil
 	}
@@ -117,6 +136,7 @@ func (m *Model) reapDeadShells() tea.Cmd {
 				Namespace:   workspace.Namespace,
 				CreatedAt:   workspace.CreatedAt,
 				Incarnation: tracker.Incarnation(workspace.TmuxName),
+				Server:      tracker.Server(),
 			}
 			cmds = append(cmds, func() tea.Msg {
 				probe.Verdict = shellLivenessProbe(probe.TmuxName)
@@ -144,7 +164,8 @@ func (m *Model) reapDeadShells() tea.Cmd {
 // the deletion, and the write itself is conditional on the incarnation, checked
 // under the same lock a creating write takes.
 func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
-	if !m.shellLivenessTracker().Confirm(msg.TmuxName, msg.Verdict, msg.Incarnation) {
+	m.observeTmuxServer(shellLivenessServer())
+	if !m.shellLivenessTracker().Confirm(msg.TmuxName, msg.Verdict, msg.Incarnation, msg.Server) {
 		return nil
 	}
 	m.dropShellRow(msg.ProjectKey, msg.TmuxName)
