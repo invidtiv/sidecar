@@ -507,6 +507,36 @@ func TestLayoutApply_ShellBeforeAtCellDeclinesInsteadOfMislanding(t *testing.T) 
 	}
 }
 
+// A shell left in its own column by a PRIOR session (no batch shell item)
+// must not give at-cells below it a phantom deck address: they decline with
+// the own-column refusal, tree untouched.
+func TestLayoutApply_PriorSessionShellColumnDeclinesBelowCell(t *testing.T) {
+	p, _ := layoutRequestFixture(t)
+	showTermPanel(t, p, SplitCols, 50)
+	p.View(p.width, p.height)
+	if p.shellLeaf() == nil {
+		t.Fatal("fixture failed to open a shell leaf")
+	}
+	before := encodedTree(t, p)
+
+	req := layoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}, At: "2.2"},
+	)
+	if cmd := p.handleUIRequest(req); cmd != nil {
+		t.Fatal("phantom-column cell emitted a command")
+	}
+	ack := readLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined || !strings.Contains(ack.Reason, "live terminal") {
+		t.Fatalf("ack = %s %q, want the own-column refusal", ack.Status, ack.Reason)
+	}
+	if len(ack.Items) != 1 || ack.Items[0].Verdict != uirequest.ItemVerdictDeclined || ack.Items[0].Cell != "" {
+		t.Fatalf("items = %+v, want one declined item with no landing", ack.Items)
+	}
+	if after := encodedTree(t, p); after != before {
+		t.Fatalf("decline mutated the tree:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
 // Ack cells and panes must agree with what `layout get` (GridOf over the final
 // tree) reports for every terminal state — not with ids captured mid-batch
 // before later reconciles recycled them.

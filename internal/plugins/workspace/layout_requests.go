@@ -409,6 +409,9 @@ func deckCellFor(screen *PaneNode, cell panelayout.Cell) (panelayout.Cell, strin
 		case screenRow == cell.Row:
 			return panelayout.Cell{}, fmt.Sprintf("cell %s holds the live terminal; content panes cannot take its place", cell.String())
 		case screenRow < cell.Row:
+			if !anchored {
+				return panelayout.Cell{}, fmt.Sprintf("cell %s sits inside the live terminal's own column; close or move the terminal first", cell.String())
+			}
 			return panelayout.Cell{Col: cell.Col, Row: cell.Row - 1}, ""
 		default:
 			if !anchored {
