@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxenv"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -259,5 +260,69 @@ func TestVerdictFromAPreviousLifeDoesNotDropTheRow(t *testing.T) {
 	}
 	if len(*forgotten) != 0 {
 		t.Fatalf("a verdict about a previous life deleted a live shell's entry: %v", *forgotten)
+	}
+}
+
+func stubLivenessServer(t *testing.T, inc tmuxserver.Incarnation) *tmuxserver.Incarnation {
+	t.Helper()
+	current := inc
+	previous := shellLivenessServer
+	shellLivenessServer = func() tmuxserver.Incarnation { return current }
+	t.Cleanup(func() { shellLivenessServer = previous })
+	return &current
+}
+
+// Sidecar running outside tmux sees the new server on the next inventory pass.
+// ObserveServer must fire on that transition — not only at tracker construction —
+// so a listing that simply does not contain the old shells is not a mass reap.
+func TestServerRestartWhileRunningReapsNothing(t *testing.T) {
+	server := stubLivenessServer(t, tmuxserver.Present(1, 2, 3))
+	m := reapModel(t)
+	forgotten := stubReap(t, shellliveness.Gone)
+
+	if !m.shellLivenessTracker().SeenAlive(reapSession) {
+		t.Fatal("precondition: the shell was seen alive on the first server")
+	}
+
+	*server = tmuxserver.Present(9, 10, 11)
+	m.currentPanes = otherPanes()
+	if cmd := m.reapDeadShells(); cmd != nil {
+		t.Fatal("a server restart probed for deaths")
+	}
+	if m.shellLivenessTracker().SeenAlive(reapSession) {
+		t.Fatal("overview binding did not reset seenAlive on the live transition")
+	}
+	if shellRows(m) != 1 || len(*forgotten) != 0 {
+		t.Fatalf("a server restart closed shells: rows=%d forgotten=%v", shellRows(m), *forgotten)
+	}
+}
+
+func TestStaleServerVerdictDoesNotDropTheRow(t *testing.T) {
+	server := stubLivenessServer(t, tmuxserver.Present(1, 2, 3))
+	m := reapModel(t)
+	forgotten := stubReap(t, shellliveness.Gone)
+
+	m.currentPanes = otherPanes()
+	cmd := m.reapDeadShells()
+	if cmd == nil {
+		t.Fatal("the missing shell was not probed")
+	}
+	probed, ok := cmd().(shellProbedMsg)
+	if !ok {
+		t.Fatalf("probe produced %T, want shellProbedMsg", cmd())
+	}
+
+	*server = tmuxserver.Present(9, 10, 11)
+	m.observeTmuxServer(*server)
+	m.currentPanes = append(otherPanes(), workspaceinventory.Pane{ID: "%2", Session: reapSession, Path: reapProject})
+	m.reapDeadShells()
+
+	m.update(probed)
+
+	if shellRows(m) != 1 {
+		t.Fatal("a verdict from a previous server dropped a live shell's row")
+	}
+	if len(*forgotten) != 0 {
+		t.Fatalf("a verdict from a previous server deleted a live shell's entry: %v", *forgotten)
 	}
 }

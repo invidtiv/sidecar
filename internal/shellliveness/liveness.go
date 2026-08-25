@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // Verdict is what the evidence supports, not what is true.
@@ -202,9 +204,15 @@ type entry struct {
 // Tracker remembers, per tmux session, what a surface has observed. It holds no
 // tmux handles and starts no goroutines, so constructing one costs nothing and
 // it is safe to build during plugin construction.
+//
+// Liveness is a joint property of a shell and the tmux server incarnation it
+// was seen on. ObserveServer is how a surface tells the tracker which server
+// it is currently watching; a transition (Equal reports false) invalidates
+// every prior sighting.
 type Tracker struct {
-	mu    sync.Mutex
-	state map[string]*entry
+	mu     sync.Mutex
+	state  map[string]*entry
+	server tmuxserver.Incarnation
 
 	// Confirmations and ProbeInterval default to the constants above when zero.
 	Confirmations int
@@ -224,6 +232,40 @@ func (t *Tracker) get(name string) *entry {
 		t.state[name] = e
 	}
 	return e
+}
+
+// ObserveServer records the tmux server this tracker is currently watching.
+//
+// When inc is not Equal to the tracked incarnation, seenAlive is cleared and
+// every gone count is reset on every entry. After a restart no shell has been
+// seen alive under the current server, so ShouldProbe is false and Confirm
+// cannot fire. Shells that are still there get re-observed by the next
+// discovery pass and re-enter seenAlive legitimately.
+//
+// The reset fires on the transition, not only at construction: a Sidecar
+// instance running outside tmux survives a server restart and must observe
+// it live. Equal is the predicate — == is field-wise and treats an
+// unspecified pid (0) as a different server from the same socket with pid
+// filled in.
+func (t *Tracker) ObserveServer(inc tmuxserver.Incarnation) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.server.Equal(inc) {
+		return
+	}
+	t.server = inc
+	for _, e := range t.state {
+		e.seenAlive = false
+		e.gone = 0
+	}
+}
+
+// Server is the last incarnation ObserveServer recorded. The zero value is
+// Unknown: this tracker has not yet been told which server it is watching.
+func (t *Tracker) Server() tmuxserver.Incarnation {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.server
 }
 
 // Observe records positive evidence that the session is running — a listing
@@ -302,7 +344,13 @@ func (t *Tracker) ShouldProbe(name string, now time.Time) bool {
 // Confirm folds one probe verdict in and reports whether the shell should now
 // be closed. Alive and Unknown both clear the count, so a session that flickers
 // out of reach is never condemned by accumulation.
-func (t *Tracker) Confirm(name string, verdict Verdict, incarnation uint64) bool {
+//
+// incarnation is the name-life this verdict was taken about (see Incarnation).
+// server is the tmux server incarnation it was taken under. A mismatch on
+// either is a refuse: the name may have been recreated, or the whole server
+// may have been replaced, and in both cases the verdict is about a world that
+// no longer exists. Equal, not ==, is the server predicate.
+func (t *Tracker) Confirm(name string, verdict Verdict, incarnation uint64, server tmuxserver.Incarnation) bool {
 	if name == "" {
 		return false
 	}
@@ -313,6 +361,10 @@ func (t *Tracker) Confirm(name string, verdict Verdict, incarnation uint64) bool
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	e := t.get(name)
+	if !server.Equal(t.server) {
+		e.gone = 0
+		return false
+	}
 	if verdict != Gone {
 		e.gone = 0
 		if verdict == Alive {

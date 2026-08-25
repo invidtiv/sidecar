@@ -100,6 +100,7 @@ type shellStartupResultMsg struct {
 	err             error
 	watcherErr      error
 	discoveryErr    error
+	server          tmuxserver.Incarnation
 }
 
 type shellManifestChangedMsg struct {
@@ -187,6 +188,7 @@ func (p *Plugin) loadShellStartup() tea.Cmd {
 		// session names only affect which rows render as live.
 		sessions, inc, discoveryErr := hooks.discoverSessions(workDir)
 		result.discoveryErr = discoveryErr
+		result.server = inc
 		result.manifest = manifest
 		result.shells, result.managedSessions = reconcileShellStartup(
 			manifest,
@@ -413,6 +415,7 @@ func (p *Plugin) applyShellStartup(result shellStartupResultMsg) tea.Cmd {
 	if p.managedSessions == nil {
 		p.managedSessions = make(map[string]bool)
 	}
+	p.observeTmuxServer(result.server)
 	for sessionName := range result.managedSessions {
 		p.managedSessions[sessionName] = true
 		// Discovery listed this session, which is the positive liveness a later

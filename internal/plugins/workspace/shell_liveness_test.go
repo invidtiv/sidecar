@@ -3,12 +3,12 @@ package workspace
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/shellliveness"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -91,14 +91,19 @@ func drive(t *testing.T, p *Plugin, cmd tea.Cmd) (*Plugin, tea.Msg, tea.Cmd) {
 
 func manifestContains(t *testing.T, path, tmuxName string) bool {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	manifest, err := LoadShellManifest(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false
 		}
-		t.Fatalf("read manifest: %v", err)
+		t.Fatalf("load manifest: %v", err)
 	}
-	return strings.Contains(string(data), tmuxName)
+	for _, shell := range manifest.Shells {
+		if shell.TmuxName == tmuxName {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExitedShellLeavesTheListAndTheManifest(t *testing.T) {
@@ -259,5 +264,95 @@ func TestTotalTmuxLossClosesNothing(t *testing.T) {
 
 	if len(p.shells) != 1 || !manifestContains(t, manifestPath, livenessSession) {
 		t.Fatal("a tmux server that could not be reached closed a shell")
+	}
+}
+
+func stubLivenessServer(t *testing.T, inc tmuxserver.Incarnation) *tmuxserver.Incarnation {
+	t.Helper()
+	current := inc
+	previous := shellLivenessServer
+	shellLivenessServer = func() tmuxserver.Incarnation { return current }
+	t.Cleanup(func() { shellLivenessServer = previous })
+	return &current
+}
+
+// Sidecar running outside tmux sees a server restart on the next suspicion.
+// The binding must ObserveServer on that path — construction is not enough —
+// so ShouldProbe stays false and Confirm never fires (td-388929).
+func TestServerRestartWhileRunningDoesNotCloseAShell(t *testing.T) {
+	p, manifestPath := shellDeathPlugin(t)
+	calls := stubLivenessProbe(t, shellliveness.Gone)
+	server := stubLivenessServer(t, tmuxserver.Present(1, 2, 3))
+	p.observeTmuxServer(*server)
+	p.noteShellAlive(livenessSession)
+
+	generation := p.pollScheduler.Invalidate(shellPollKey(livenessSession))
+	if cmd := p.handleShellDeathSuspected(shellDeathSuspectedMsg{
+		TmuxName: livenessSession, Generation: generation,
+	}); cmd == nil {
+		t.Fatal("precondition: a live shell on the first server must be probed")
+	} else if msg := cmd(); msg != nil {
+		if probed, ok := msg.(shellDeathProbedMsg); !ok || probed.Server != *server {
+			t.Fatalf("probe tagged %#v, want server %v", msg, *server)
+		}
+	}
+
+	*server = tmuxserver.Present(9, 10, 11)
+	generation = p.pollScheduler.Invalidate(shellPollKey(livenessSession))
+	if cmd := p.handleShellDeathSuspected(shellDeathSuspectedMsg{
+		TmuxName: livenessSession, Generation: generation,
+	}); cmd != nil {
+		if msg := cmd(); msg != nil {
+			if _, ok := msg.(shellDeathProbedMsg); ok {
+				t.Fatal("a server restart was probed as a shell death")
+			}
+		}
+	}
+	if p.shellLivenessTracker().SeenAlive(livenessSession) {
+		t.Fatal("workspace binding did not reset seenAlive on the live transition")
+	}
+	if *calls != 1 {
+		t.Fatalf("probes = %d, want 1 (the pre-restart suspicion only)", *calls)
+	}
+	if len(p.shells) != 1 || !manifestContains(t, manifestPath, livenessSession) {
+		t.Fatal("a server restart closed a shell")
+	}
+}
+
+// A verdict taken under the previous server must not close a shell that has
+// been re-seen on the new one — same shape as a reused tmux name.
+func TestStaleServerVerdictDoesNotCloseAShell(t *testing.T) {
+	p, manifestPath := shellDeathPlugin(t)
+	stubLivenessProbe(t, shellliveness.Gone)
+	server := stubLivenessServer(t, tmuxserver.Present(1, 2, 3))
+	p.observeTmuxServer(*server)
+	p.noteShellAlive(livenessSession)
+
+	generation := p.pollScheduler.Invalidate(shellPollKey(livenessSession))
+	cmd := p.handleShellDeathSuspected(shellDeathSuspectedMsg{
+		TmuxName: livenessSession, Generation: generation,
+	})
+	if cmd == nil {
+		t.Fatal("precondition: expected a probe")
+	}
+	probed, ok := cmd().(shellDeathProbedMsg)
+	if !ok || probed.Verdict != shellliveness.Gone {
+		t.Fatalf("probe produced %#v", cmd())
+	}
+
+	*server = tmuxserver.Present(9, 10, 11)
+	p.observeTmuxServer(*server)
+	p.noteShellAlive(livenessSession)
+
+	updated, closeCmd := p.Update(probed)
+	p = updated.(*Plugin)
+	if closeCmd != nil {
+		if msg := closeCmd(); msg != nil {
+			updated, _ = p.Update(msg)
+			p = updated.(*Plugin)
+		}
+	}
+	if len(p.shells) != 1 || !manifestContains(t, manifestPath, livenessSession) {
+		t.Fatal("a verdict from a previous server closed a live shell")
 	}
 }

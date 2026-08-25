@@ -338,6 +338,7 @@ func (p *Plugin) syncShellsFromManifest(scope shellStartupScope) tea.Cmd {
 			PaneIDs:      paneIDs,
 			Namespace:    hooks.namespace(),
 			BaseRevision: baseRevision,
+			Server:       inc,
 		}
 	}
 }
@@ -356,6 +357,8 @@ type shellManifestSyncMsg struct {
 	// and applying the stale snapshot would resurrect the deleted shell — so
 	// the handler re-runs the sync instead of applying it (td-8d18de).
 	BaseRevision uint64
+	// Server is the tmux server incarnation the Running map was listed from.
+	Server tmuxserver.Incarnation
 }
 
 // applyManifestSync syncs the in-memory shell list with the manifest.
@@ -370,6 +373,7 @@ func (p *Plugin) applyManifestSync(sync shellManifestSyncMsg) tea.Cmd {
 	if p.shellManifest == nil {
 		return nil
 	}
+	p.observeTmuxServer(sync.Server)
 	// The merge replaces the slice. Preserve a top-shell selection by its
 	// durable tmux identity, never by the numeric row that happened to contain
 	// it before the replacement.

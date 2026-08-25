@@ -5,15 +5,19 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/shellliveness"
+	"github.com/marcus/sidecar/internal/tmuxserver"
 )
 
 // The project Workspaces surface binds to the shared liveness rule here, and
 // nowhere else. The global browser has its own one-file binding; the decision
 // both of them apply lives in internal/shellliveness (td-6a4100).
 
-// shellLivenessProbe is indirected for tests. It is the only thing in this file
-// that touches tmux, and it never runs on the update loop.
-var shellLivenessProbe = shellliveness.ProbeSession
+// shellLivenessProbe and shellLivenessServer are indirected for tests. Probe
+// is the only tmux subprocess this file starts; Server is one stat.
+var (
+	shellLivenessProbe  = shellliveness.ProbeSession
+	shellLivenessServer = tmuxserver.Socket
+)
 
 type (
 	// shellDeathSuspectedMsg says a capture just failed in a way that names one
@@ -24,11 +28,14 @@ type (
 	}
 
 	// shellDeathProbedMsg carries the independent second opinion, tagged with
-	// the life of the tmux name it was taken about.
+	// the life of the tmux name it was taken about and the server incarnation
+	// it was taken under. Incarnation is the name-life (td-6a4100);
+	// Server is the tmux server (td-388929). They are not the same identity.
 	shellDeathProbedMsg struct {
 		TmuxName    string
 		Generation  int
 		Incarnation uint64
+		Server      tmuxserver.Incarnation
 		Verdict     shellliveness.Verdict
 	}
 )
@@ -42,12 +49,24 @@ func (p *Plugin) shellLivenessTracker() *shellliveness.Tracker {
 	return p.shellLiveness
 }
 
+// observeTmuxServer is the only place this surface tells the tracker which
+// server it is watching. Discovery, a live socket-stat on the liveness path,
+// and a confirmed probe all land here; the shared decision stays in
+// shellliveness (td-388929).
+func (p *Plugin) observeTmuxServer(inc tmuxserver.Incarnation) {
+	p.shellLivenessTracker().ObserveServer(inc)
+}
+
 // noteShellAlive records positive liveness for a shell this plugin knows is
 // running, so a later probe is allowed to close it.
 func (p *Plugin) noteShellAlive(tmuxName string) {
 	if tmuxName == "" {
 		return
 	}
+	// Capture/create/discovery all learn the current server here so a later
+	// socket-stat on the suspicion path is a live transition, not the first
+	// observation (which would otherwise clear seenAlive).
+	p.observeTmuxServer(shellLivenessServer())
 	p.shellLivenessTracker().Observe(tmuxName)
 }
 
@@ -71,6 +90,10 @@ func (p *Plugin) handleShellDeathSuspected(msg shellDeathSuspectedMsg) tea.Cmd {
 	if p.findShellByName(msg.TmuxName) == nil {
 		return nil
 	}
+	// Socket-stat is free and is how a Sidecar running outside tmux notices a
+	// server restart without waiting for the next discovery pass. Observe
+	// before ShouldProbe so a transition clears seenAlive and we do not probe.
+	p.observeTmuxServer(shellLivenessServer())
 	// The gate is the tracker's own liveness record, the same one the global
 	// browser uses. This used to accept "the row has an Agent" as a stand-in
 	// and grant liveness from it, which the nested sibling projection
@@ -82,16 +105,17 @@ func (p *Plugin) handleShellDeathSuspected(msg shellDeathSuspectedMsg) tea.Cmd {
 		return p.scheduleShellPollByName(msg.TmuxName, pollIntervalIdle)
 	}
 	tmuxName, generation := msg.TmuxName, msg.Generation
-	// Read the incarnation before the probe leaves the update loop. If the
-	// session is recreated under the same name while tmux is being asked — the
-	// user pressing Enter on the row is all it takes — the verdict comes back
-	// tagged with a life that has ended, and Confirm refuses it.
+	// Read the name-life and server incarnation before the probe leaves the
+	// update loop. If the session is recreated under the same name, or the
+	// whole server is replaced, while tmux is being asked, Confirm refuses.
 	incarnation := p.shellLivenessTracker().Incarnation(tmuxName)
+	server := p.shellLivenessTracker().Server()
 	return func() tea.Msg {
 		return shellDeathProbedMsg{
 			TmuxName:    tmuxName,
 			Generation:  generation,
 			Incarnation: incarnation,
+			Server:      server,
 			Verdict:     shellLivenessProbe(tmuxName),
 		}
 	}
@@ -103,7 +127,8 @@ func (p *Plugin) handleShellDeathProbed(msg shellDeathProbedMsg) tea.Cmd {
 	if msg.Generation != 0 && !p.pollScheduler.IsCurrent(shellPollKey(msg.TmuxName), msg.Generation) {
 		return nil
 	}
-	if p.shellLivenessTracker().Confirm(msg.TmuxName, msg.Verdict, msg.Incarnation) {
+	p.observeTmuxServer(shellLivenessServer())
+	if p.shellLivenessTracker().Confirm(msg.TmuxName, msg.Verdict, msg.Incarnation, msg.Server) {
 		tmuxName := msg.TmuxName
 		// Generation 0 marks a non-poll lifecycle close, which the dead-shell
 		// handler accepts without a generation check.
