@@ -336,6 +336,10 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		}
 		return toast("No update is pending right now"), true
 
+	case configui.CloseConfigMsg:
+		// The About chip line's Close: the same put-away the global esc does.
+		return m.closeConfiguration(), true
+
 	case configui.CheckUpdatesMsg:
 		cmds := m.productCheckCmds(true)
 		cmds = append(cmds, toast("Checking for updates…"))

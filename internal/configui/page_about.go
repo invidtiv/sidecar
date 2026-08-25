@@ -18,6 +18,7 @@ import (
 
 const (
 	regionAboutUpdater  = "config-about-updater"
+	regionAboutClose    = "config-about-close"
 	regionAboutRecheck  = "config-about-recheck"
 	regionAboutPalette  = "config-about-palette"
 	regionAboutDocs     = "config-about-docs"
@@ -38,6 +39,10 @@ const (
 // does not own release notes, confirmation, progress, or install behavior, so it
 // asks for the surface that does.
 type OpenUpdaterMsg struct{}
+
+// CloseConfigMsg asks the host to put Configuration away; the chips' Close
+// affordance has no page-local close to call.
+type CloseConfigMsg struct{}
 
 // CheckUpdatesMsg asks the host to run its release check again, bypassing the
 // per-product cache.
@@ -147,20 +152,22 @@ func (m *Model) buildAbout(b *paneBuilder) {
 
 	b.blank()
 	if update.Available || update.AnyPending {
-		b.buttons(
-			buttonSpec{id: regionAboutUpdater, key: "", label: "Enter  Open updater", primary: true,
-				run: func(m *Model) tea.Cmd {
-					return func() tea.Msg { return OpenUpdaterMsg{} }
-				}},
-			buttonSpec{id: regionAboutRecheck, key: "r", label: "R  Check again", run: func(m *Model) tea.Cmd {
+		b.keyChips(
+			chipSpec{id: regionAboutUpdater, key: "u", label: "Update", run: func(m *Model) tea.Cmd {
+				return func() tea.Msg { return OpenUpdaterMsg{} }
+			}},
+			chipSpec{id: regionAboutRecheck, key: "r", label: "Check again", run: func(m *Model) tea.Cmd {
 				return func() tea.Msg { return CheckUpdatesMsg{} }
+			}},
+			chipSpec{id: regionAboutClose, key: "", keys: "[esc]", label: "Close", run: func(m *Model) tea.Cmd {
+				return func() tea.Msg { return CloseConfigMsg{} }
 			}},
 		)
 		b.blank()
 		b.note("Release details and confirmation open in Sidecar's existing updater.")
 	} else {
-		b.buttons(
-			buttonSpec{id: regionAboutRecheck, key: "r", label: "R  Check for updates", run: func(m *Model) tea.Cmd {
+		b.keyChips(
+			chipSpec{id: regionAboutRecheck, key: "r", label: "Check for updates", run: func(m *Model) tea.Cmd {
 				return func() tea.Msg { return CheckUpdatesMsg{} }
 			}},
 		)

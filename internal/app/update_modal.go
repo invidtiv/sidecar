@@ -164,7 +164,7 @@ func (m *Model) ensureUpdateModal() {
 	mdl := modal.New(updateTitle(u.phase),
 		modal.WithWidth(updateModalWidthFor(m.width)),
 		modal.WithVariant(updateVariant(u.phase)),
-		modal.WithHintText(updateHint(u.phase)),
+		modal.WithHints(false),
 		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
 	)
 
@@ -189,18 +189,8 @@ func (m *Model) ensureUpdateModal() {
 
 	mdl.AddSection(modal.Spacer())
 	mdl.AddSection(modal.Custom(func(cw int, focusID, hoverID string) modal.RenderedSection {
-		btns := updateButtons(u)
-		if len(btns) == 0 {
-			return modal.RenderedSection{}
-		}
-		return modal.Buttons(btns...).Render(cw, focusID, hoverID)
-	}, func(msg tea.Msg, focusID string) (string, tea.Cmd) {
-		btns := updateButtons(u)
-		if len(btns) == 0 {
-			return "", nil
-		}
-		return modal.Buttons(btns...).Update(msg, focusID)
-	}))
+		return m.renderUpdateChips(cw, focusID, hoverID)
+	}, m.updateChipsSectionUpdate))
 
 	m.updateModal = mdl
 	if m.updateMouseHandler == nil {
@@ -222,7 +212,6 @@ func (m *Model) applyUpdatePresentation() {
 	m.updateModal.Apply(
 		modal.WithTitle(updateTitle(m.updateModalState)),
 		modal.WithVariant(updateVariant(m.updateModalState)),
-		modal.WithHintText(updateHint(m.updateModalState)),
 		modal.WithPrimaryAction(updatePrimaryAction(m.updateUIState())),
 		modal.WithWidth(width),
 	)
@@ -261,22 +250,78 @@ func updateVariant(p UpdateModalState) modal.Variant {
 	}
 }
 
-// updateHint keeps one hint style across the journey — lowercase keys, "·"
-// separators, no library default. The defaults would promise a cancel during
-// an install (the honest-no-cancel stance forbids it: Esc only hides) and
-// read differently per phase; every phase now states its own truth in the
-// same voice.
-func updateHint(p UpdateModalState) string {
-	switch p {
+// updateChips is every phase's one inline action line: key chips in exactly
+// the footer hint style. Preview confirms with enter or u and dismisses with
+// esc; Installing keeps the honest no-cancel line; Complete/Error pair their
+// primary with Close.
+func updateChips(u *updateUIState) ([]ui.KeyChip, string) {
+	switch u.phase {
 	case UpdateModalProgress:
-		return "esc hides · update continues"
+		return []ui.KeyChip{{Keys: "[esc]", Label: "hide", ID: "cancel"}},
+			" · update continues"
 	case UpdateModalComplete:
-		return "enter confirm · esc close"
+		if u.restartRequired {
+			return []ui.KeyChip{
+				{Keys: "[enter]", Label: "Quit & Restart", ID: "quit"},
+				{Keys: "[esc]", Label: "Close", ID: "cancel"},
+			}, ""
+		}
+		return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
 	case UpdateModalError:
-		return "enter retry · esc close"
+		if u.retryCount == 0 {
+			return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
+		}
+		return []ui.KeyChip{
+			{Keys: "[enter]", Label: "Retry", ID: "retry"},
+			{Keys: "[esc]", Label: "Close", ID: "cancel"},
+		}, ""
 	default:
-		return "enter update · esc dismiss"
+		if !u.anyManaged {
+			return []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "cancel"}}, ""
+		}
+		return []ui.KeyChip{
+			{Keys: "[enter/u]", Label: "Update", ID: "update"},
+			{Keys: "[esc]", Label: "Close", ID: "cancel"},
+		}, ""
 	}
+}
+
+// renderUpdateChips paints the action line, registering each chip as a real
+// focusable control so a click and Enter both fire its action.
+func (m *Model) renderUpdateChips(contentW int, focusID, hoverID string) modal.RenderedSection {
+	u := m.updateUIState()
+	chips, suffix := updateChips(u)
+	line, regions := ui.RenderKeyChips(chips, contentW)
+	if line == "" {
+		return modal.RenderedSection{}
+	}
+	content := line
+	if suffix != "" {
+		content += styles.Muted.Render(suffix)
+	}
+	focusables := make([]modal.FocusableInfo, 0, len(regions))
+	for _, r := range regions {
+		focusables = append(focusables, modal.FocusableInfo{
+			ID:      r.ID,
+			OffsetX: r.OffsetX,
+			Width:   r.Width,
+			Height:  1,
+		})
+	}
+	return modal.RenderedSection{Content: content, Focusables: focusables}
+}
+
+// updateChipsSectionUpdate fires a focused chip's action on Enter or space.
+func (m *Model) updateChipsSectionUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok || focusID == "" {
+		return "", nil
+	}
+	switch key.String() {
+	case "enter", " ", "space":
+		return focusID, nil
+	}
+	return "", nil
 }
 
 func updatePrimaryAction(u *updateUIState) string {
@@ -292,42 +337,6 @@ func updatePrimaryAction(u *updateUIState) string {
 		return "cancel"
 	default:
 		return ""
-	}
-}
-
-func updateButtons(u *updateUIState) []modal.ButtonDef {
-	switch u.phase {
-	case UpdateModalPreview:
-		if !u.anyManaged {
-			return []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
-		}
-		return []modal.ButtonDef{
-			modal.Btn(" Update Now ", "update"),
-			modal.Btn(" Later ", "cancel"),
-		}
-	case UpdateModalProgress:
-		// The batch owns the surface until it settles: show the action that
-		// launched it, visibly disabled. Layout stays stable across the
-		// Installing → Done/Failed transition instead of buttons vanishing.
-		if u.retryBatch {
-			return []modal.ButtonDef{modal.Btn(" Retry ", "retry", modal.BtnDisabled())}
-		}
-		return []modal.ButtonDef{modal.Btn(" Update Now ", "update", modal.BtnDisabled())}
-	case UpdateModalComplete:
-		if u.restartRequired {
-			return []modal.ButtonDef{
-				modal.Btn(" Quit & Restart ", "quit"),
-				modal.Btn(" Later ", "cancel"),
-			}
-		}
-		return []modal.ButtonDef{modal.Btn(" Close ", "cancel")}
-	case UpdateModalError:
-		return []modal.ButtonDef{
-			modal.Btn(" Retry ", "retry"),
-			modal.Btn(" Close ", "cancel"),
-		}
-	default:
-		return nil
 	}
 }
 
@@ -394,7 +403,9 @@ func targetRow(t version.Target, width int) string {
 	}
 	row := twoColumnRow(left, right, width)
 	if !t.Install.Managed && t.Install.ManualCommand != "" {
-		row += "\n" + styles.Muted.Render("    update it yourself: "+t.Install.ManualCommand)
+		// Blank padding keeps every target row two lines tall regardless of
+		// provenance, so columns line up down the list.
+		row += "\n"
 	}
 	return row
 }
@@ -438,7 +449,7 @@ func updateResultContent(u *updateUIState, contentW int) string {
 			resultIcon(r.Status)+" "+r.Target.DisplayName,
 			styles.Muted.Render(resultLabel(r)), contentW)
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("    update it yourself: "+r.Target.Install.ManualCommand)
+			row += "\n"
 		}
 		rows = append(rows, row)
 	}
@@ -476,7 +487,7 @@ func updateErrorContent(u *updateUIState, contentW int) string {
 			}
 		}
 		if r.Status == version.StatusManual && r.Target.Install.ManualCommand != "" {
-			row += "\n" + styles.Muted.Render("    update it yourself: "+r.Target.Install.ManualCommand)
+			row += "\n"
 		}
 		rows = append(rows, row)
 	}
@@ -571,7 +582,16 @@ func (m *Model) handleUpdateModalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.ensureUpdateModal()
+	u := m.updateUIState()
 	switch msg.String() {
+	case "u":
+		if u != nil && u.phase == UpdateModalPreview && u.anyManaged {
+			return m.applyUpdateAction("update", nil)
+		}
+	case "r":
+		if u != nil && u.phase == UpdateModalError && u.retryCount > 0 {
+			return m.applyUpdateAction("retry", nil)
+		}
 	case "up", "k":
 		m.updatePreviewScroll(-3)
 		return m, nil

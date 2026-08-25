@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -44,38 +45,77 @@ func TestTwoColumnRow(t *testing.T) {
 	}
 }
 
-// --- disabled buttons during install ----------------------------------------
+// --- one-line key-chip actions ----------------------------------------------
 
-func TestUpdateButtons_DisabledDuringInstall(t *testing.T) {
-	u := &updateUIState{phase: UpdateModalProgress}
-	btns := updateButtons(u)
-	if len(btns) != 1 || btns[0].ID != "update" || !btns[0].Disabled {
-		t.Fatalf("an update batch shows a disabled Update Now, got %+v", btns)
+// Every phase collapses its buttons and hint line into one footer-styled chip
+// line. Installing keeps the honest no-cancel wording and offers no update
+// affordance at all — the batch owns the surface until it settles.
+func TestUpdateChips_PerPhase(t *testing.T) {
+	u := &updateUIState{phase: UpdateModalPreview, anyManaged: true}
+	chips, suffix := updateChips(u)
+	if suffix != "" || len(chips) != 2 ||
+		chips[0].ID != "update" || chips[0].Keys != "[enter/u]" ||
+		chips[1].ID != "cancel" {
+		t.Fatalf("preview chips = %+v suffix %q", chips, suffix)
 	}
 
-	u.retryBatch = true
-	btns = updateButtons(u)
-	if len(btns) != 1 || btns[0].ID != "retry" || !btns[0].Disabled {
-		t.Fatalf("a retry batch shows a disabled Retry, got %+v", btns)
+	u = &updateUIState{phase: UpdateModalProgress, retryBatch: true}
+	chips, suffix = updateChips(u)
+	if len(chips) != 1 || chips[0].ID != "cancel" {
+		t.Fatalf("installing must offer only the hide chip, got %+v", chips)
+	}
+	if !strings.Contains(suffix, "update continues") {
+		t.Errorf("installing suffix should say the update continues: %q", suffix)
+	}
+
+	u.phase = UpdateModalComplete
+	u.restartRequired = true
+	chips, _ = updateChips(u)
+	if len(chips) != 2 || chips[0].ID != "quit" || !strings.Contains(chips[0].Label, "Quit & Restart") {
+		t.Fatalf("restart-required complete = %+v", chips)
+	}
+
+	u.restartRequired = false
+	chips, _ = updateChips(u)
+	if len(chips) != 1 || chips[0].ID != "cancel" {
+		t.Fatalf("plain complete should close only, got %+v", chips)
 	}
 
 	u.phase = UpdateModalError
-	for _, b := range updateButtons(u) {
-		if b.Disabled {
-			t.Errorf("settled phases must not disable their actions: %+v", b)
-		}
+	u.retryCount = 1
+	chips, _ = updateChips(u)
+	if len(chips) != 2 || chips[0].ID != "retry" {
+		t.Fatalf("error with failures should pair Retry with Close, got %+v", chips)
+	}
+}
+
+// The rendered line carries the footer chip style verbatim, registers real
+// hit regions per action, and never says cancel during an install.
+func TestUpdateChips_RenderedLineAndRegions(t *testing.T) {
+	m := &Model{width: 100, height: 40}
+	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+	m.openUpdateModal()
+	out := plainText(renderUpdatePhase(m))
+	if !strings.Contains(out, "[enter/u]") || !strings.Contains(out, "Update") {
+		t.Errorf("preview line missing its chips:\n%s", out)
+	}
+	regions := map[string]bool{}
+	for _, r := range m.updateMouseHandler.HitMap.Regions() {
+		regions[r.ID] = true
+	}
+	if !regions["update"] || !regions["cancel"] {
+		t.Errorf("preview must register clickable regions for both chips: %v", regions)
 	}
 
-	// Disabled means inert: no hit region to click, and Enter cannot reach it.
-	m := modelWithBatch([]version.Target{target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true)})
-	out := renderUpdatePhase(m)
-	if !strings.Contains(out, "Update Now") {
-		t.Errorf("installing surface should show its launching action, disabled:\n%s", out)
+	inst := modelWithBatch([]version.Target{target(version.ProductTasks, "Tasks", "1.5.0", "1.6.0", true)})
+	lowered := strings.ToLower(plainText(renderUpdatePhase(inst)))
+	if !strings.Contains(lowered, "[esc]") || !strings.Contains(lowered, "hide") ||
+		!strings.Contains(lowered, "update continues") {
+		t.Errorf("installing line = the honest no-cancel one-liner:\n%s", lowered)
 	}
-	handler := m.updateMouseHandler
-	for _, r := range handler.HitMap.Regions() {
-		if r.ID == "update" || r.ID == "retry" {
-			t.Errorf("disabled button registered a hit region: %s", r.ID)
+	for _, region := range inst.updateMouseHandler.HitMap.Regions() {
+		if region.ID == "update" || region.ID == "retry" {
+			t.Errorf("installing registered an update affordance: %s", region.ID)
 		}
 	}
 }
@@ -120,27 +160,40 @@ func TestUpdateModal_WidthFromLibrary(t *testing.T) {
 	}
 }
 
-// --- one hint style -----------------------------------------------------------
+// --- one action line, no false cancel ----------------------------------------
 
-func TestUpdateHint_OneStyleNoFalseCancel(t *testing.T) {
+// The chip line replaces both the stacked buttons and the old muted hint
+// line: every phase states its actions in the footer style, and none of them
+// — installing above all — may promise a cancel that does not exist.
+func TestUpdateChips_NoFalseCancelFooterStyle(t *testing.T) {
 	plan := []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
-	phases := map[UpdateModalState]string{
-		UpdateModalPreview:  "enter update",
-		UpdateModalProgress: "esc hides · update continues",
-		UpdateModalError:    "enter retry · esc close",
+	phases := map[UpdateModalState][]string{
+		UpdateModalPreview:  {"[enter/u]", "Update", "[esc]", "Close"},
+		UpdateModalProgress: {"[esc]", "hide", "update continues"},
+		UpdateModalComplete: {"[esc]", "Close"},
+		UpdateModalError:    {"[enter]", "Retry", "[esc]", "Close"},
 	}
 	for phase := range phases {
 		m := &Model{width: 100, height: 40, products: plan}
 		m.updateModalState = phase
-		out := strings.ToLower(renderUpdatePhase(m))
-		if !strings.Contains(out, phases[phase]) {
-			t.Errorf("%v hint missing %q:\n%s", phase, phases[phase], out)
+		if phase == UpdateModalError {
+			m.updateCarried = []version.Result{{Target: plan[0], Status: version.StatusFailed,
+				Err: errors.New("boom")}}
+		}
+		out := strings.ToLower(plainText(renderUpdatePhase(m)))
+		for _, want := range phases[phase] {
+			if !strings.Contains(out, strings.ToLower(want)) {
+				t.Errorf("%v line missing %q:\n%s", phase, want, out)
+			}
 		}
 		if strings.Contains(out, "cancel") {
-			t.Errorf("%v leaked a cancel hint:\n%s", phase, out)
+			t.Errorf("%v leaked a cancel affordance:\n%s", phase, out)
 		}
 		if strings.Contains(out, "tab to switch") {
 			t.Errorf("%v fell back to the library default hint style:\n%s", phase, out)
+		}
+		if !strings.Contains(strings.ToLower(plainText(renderUpdatePhase(m))), "[") {
+			t.Errorf("%v lost the key-chip styling", phase)
 		}
 	}
 }

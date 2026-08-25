@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // A Configuration page is a list of lines, some of which are controls. The
@@ -334,6 +335,38 @@ func (b *paneBuilder) buttons(specs ...buttonSpec) {
 		width := ansi.StringWidth(pill)
 		b.m.mouse.HitMap.AddRect(specs[i].id, x, 1+y, width, 1, nil)
 		x += width + 2 // ButtonRow joins with two spaces
+	}
+}
+
+// chipSpec is one key-chip pair in a footer-style action line.
+type chipSpec struct {
+	id    string
+	key   string // registered as the control's shortcut; "" for none
+	keys  string // rendered inside the chip; defaults to [key]
+	label string
+	run   func(*Model) tea.Cmd
+}
+
+// keyChips paints a row of actions as ONE inline line of key chips + labels,
+// through the shared ui.RenderKeyChips renderer — the same footer hint style
+// the app frame uses. Each chip is a real control: declared with its shortcut
+// and run, and given its own hit region from the renderer's geometry.
+func (b *paneBuilder) keyChips(specs ...chipSpec) {
+	chips := make([]ui.KeyChip, 0, len(specs))
+	for _, spec := range specs {
+		b.declare(spec.id, spec.key, true, spec.run)
+		rendered := spec.keys
+		if rendered == "" {
+			rendered = "[" + spec.key + "]"
+		}
+		chips = append(chips, ui.KeyChip{Keys: rendered, Label: spec.label, ID: spec.id})
+	}
+	line, regions := ui.RenderKeyChips(chips, b.inner-RowIndent)
+	y := len(b.lines)
+	b.lines = append(b.lines, line)
+	x := b.originX + RowIndent
+	for _, r := range regions {
+		b.m.mouse.HitMap.AddRect(r.ID, x+r.OffsetX, 1+y, r.Width, 1, nil)
 	}
 }
 

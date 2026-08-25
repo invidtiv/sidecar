@@ -64,8 +64,8 @@ func TestAboutUpdateStatusIsHonest(t *testing.T) {
 // An available update is handed to the updater Sidecar already has.
 func TestAboutOpensTheExistingUpdater(t *testing.T) {
 	m := aboutFixture(t, UpdateStatus{Checked: true, Available: true, LatestVersion: "1.1.0"}, nil)
-	view := ansi.Strip(m.View(160, 45))
-	for _, want := range []string{"1.1.0 available", "Open updater",
+	view := squashSpaces(ansi.Strip(m.View(160, 45)))
+	for _, want := range []string{"1.1.0 available", "[u] Update", "[r] Check again", "[esc] Close",
 		"Release details and confirmation open in Sidecar's existing updater."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("the update state is missing %q:\n%s", want, view)
@@ -155,4 +155,9 @@ func TestAboutProvenanceNamesEveryMethod(t *testing.T) {
 			t.Fatalf("install method %q rendered as %q, want %q", method, got, want)
 		}
 	}
+}
+
+// squashSpaces collapses chip padding so label assertions read naturally.
+func squashSpaces(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
