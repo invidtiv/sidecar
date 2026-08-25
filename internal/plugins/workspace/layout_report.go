@@ -35,13 +35,18 @@ type layoutColumnJSON struct {
 }
 
 type layoutPaneJSON struct {
-	Cell    string     `json:"cell"`
-	Kind    string     `json:"kind"`
-	Pane    int        `json:"pane"`
-	Session string     `json:"session,omitempty"`
-	Tabs    []string   `json:"tabs,omitempty"`
-	Active  int        `json:"active,omitempty"`
-	Box     *layoutBox `json:"box,omitempty"`
+	Cell string `json:"cell"`
+	Kind string `json:"kind"`
+	Pane int    `json:"pane"`
+	// Provider names the configured instance behind a resource pane. It is
+	// reported because the spec grammar REQUIRES it: without it a get answer
+	// could be read but not spoken back, and "get → edit → apply is a round
+	// trip without translation" would be false for exactly one kind.
+	Provider string     `json:"provider,omitempty"`
+	Session  string     `json:"session,omitempty"`
+	Tabs     []string   `json:"tabs,omitempty"`
+	Active   int        `json:"active,omitempty"`
+	Box      *layoutBox `json:"box,omitempty"`
 }
 
 type layoutBox struct {
@@ -134,7 +139,7 @@ func (p *Plugin) cellPanes(col int, cells []*panelayout.Node, boxes map[int]layo
 		if leaf.Kind == panelayout.Shell {
 			cell.Session = p.termPanelSession
 		}
-		cell.Tabs, cell.Active = p.leafTabs(leaf)
+		cell.Tabs, cell.Active, cell.Provider = p.leafTabs(leaf)
 		if box, ok := boxes[leaf.ID]; ok {
 			boxCopy := box
 			cell.Box = &boxCopy
@@ -144,12 +149,15 @@ func (p *Plugin) cellPanes(col int, cells []*panelayout.Node, boxes map[int]layo
 	return panes
 }
 
-// leafTabs reads one leaf's tabs and active index from the live encoder, so a
-// get answer and a relaunch restore can never disagree about what a pane holds.
-func (p *Plugin) leafTabs(leaf *panelayout.Node) ([]string, int) {
+// leafTabs reads one leaf's tabs, active index, and — for a resource pane —
+// the provider instance its tabs belong to, from the live encoder, so a get
+// answer and a relaunch restore can never disagree about what a pane holds.
+// Provider is empty for every other kind, which is exactly what the spec
+// grammar expects there.
+func (p *Plugin) leafTabs(leaf *panelayout.Node) ([]string, int, string) {
 	saved := p.encodePaneNode(leaf)
 	if saved == nil {
-		return nil, 0
+		return nil, 0, ""
 	}
 	switch saved.Kind {
 	case contentKindDoc:
@@ -157,33 +165,44 @@ func (p *Plugin) leafTabs(leaf *panelayout.Node) ([]string, int) {
 		for _, tab := range saved.Tabs {
 			labels = append(labels, tab.Path)
 		}
-		return labels, saved.Active
+		return labels, saved.Active, ""
 	case contentKindIssue:
 		labels := make([]string, 0, len(saved.IssueTabs))
 		for _, tab := range saved.IssueTabs {
 			labels = append(labels, tab.Issue)
 		}
-		return labels, saved.Active
+		return labels, saved.Active, ""
 	case contentKindNote:
 		labels := make([]string, 0, len(saved.NoteTabs))
 		for _, tab := range saved.NoteTabs {
 			labels = append(labels, tab.Note)
 		}
-		return labels, saved.Active
+		return labels, saved.Active, ""
 	case contentKindDiff:
 		labels := make([]string, 0, len(saved.DiffTabs))
 		for _, tab := range saved.DiffTabs {
 			labels = append(labels, tab.Spec)
 		}
-		return labels, saved.Active
+		return labels, saved.Active, ""
 	case contentKindResource:
 		labels := make([]string, 0, len(saved.ResourceTabs))
+		provider := ""
 		for _, tab := range saved.ResourceTabs {
 			labels = append(labels, tab.Locator)
+			// One leaf holds one provider's tabs; the active tab names it, and
+			// the first is the fallback for a pane whose active index drifted.
+			if provider == "" {
+				provider = tab.Provider
+			}
 		}
-		return labels, saved.Active
+		if saved.Active >= 0 && saved.Active < len(saved.ResourceTabs) {
+			if active := saved.ResourceTabs[saved.Active].Provider; active != "" {
+				provider = active
+			}
+		}
+		return labels, saved.Active, provider
 	default:
-		return nil, 0
+		return nil, 0, ""
 	}
 }
 

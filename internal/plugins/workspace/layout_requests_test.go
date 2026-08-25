@@ -682,3 +682,37 @@ func TestLayoutGet_EscapedTreeReportsNullGridWithRawTree(t *testing.T) {
 		t.Fatalf("raw tree missing beside null grid: %s", ack.Layout)
 	}
 }
+
+// The get report's resource pane must be speakable back as a spec pane. The
+// spec grammar REQUIRES "provider" there, so a report that prints only the
+// locator makes `layout get | edit | layout apply --spec` fail for exactly one
+// kind — the round trip the contract promises without translation.
+func TestLayoutReportResourcePaneRoundTripsAsASpecPane(t *testing.T) {
+	reported := layoutPaneJSON{
+		Cell:     "2.1",
+		Kind:     panelayout.KindNameResource,
+		Pane:     4,
+		Provider: "jira-work",
+		Tabs:     []string{"CASH-1245", "CASH-1300"},
+	}
+	raw, err := json.Marshal(reported)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"provider":"jira-work"`) {
+		t.Fatalf("get would print %s, with no provider for a spec to carry", raw)
+	}
+
+	// What an agent does with that answer: kind + provider + tabs-as-targets.
+	spec := uirequest.LayoutSpec{Columns: []uirequest.LayoutSpecColumn{
+		{Panes: []uirequest.LayoutPane{{Kind: panelayout.KindNamePrimary}}},
+		{Panes: []uirequest.LayoutPane{{
+			Kind:     reported.Kind,
+			Provider: reported.Provider,
+			Targets:  reported.Tabs,
+		}}},
+	}}
+	if err := uirequest.ValidateLayoutSpec(spec); err != nil {
+		t.Fatalf("a resource pane as get prints it is not a valid spec pane: %v", err)
+	}
+}

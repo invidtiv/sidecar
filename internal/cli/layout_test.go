@@ -47,6 +47,10 @@ func TestLayoutPaneFlag_Refuses(t *testing.T) {
 		"no provider":   {`{"kind":"resource","targets":["CASH-1245"]}`, "provider"},
 		"no target":     {`{"kind":"file"}`, "needs at least one target"},
 		"empty kind":    {`{"targets":["a.go"]}`, "not one of"},
+		// Carrying a live terminal by session is --spec grammar. A batch closes
+		// nothing, so there is no leaf to carry: accepting the field silently
+		// would open a SECOND shell where the caller asked for none.
+		"shell session": {`{"kind":"shell","session":"sidecar-tp-x"}`, "session"},
 	} {
 		_, code, msg := layoutPaneFlag(tc.raw)
 		if code != 2 {
@@ -250,5 +254,52 @@ func TestLayoutApply_SpecRidesInColumnsField(t *testing.T) {
 	}
 	if err := uirequest.ValidateLayoutSpec(uirequest.LayoutSpec{Columns: columns}); err != nil {
 		t.Fatalf("host-side grammar rejects what the CLI accepted: %v", err)
+	}
+	if strings.Contains(out.String(), `"action"`) {
+		t.Errorf("apply without --json wrote its structured result to stdout:\n%s", out.String())
+	}
+}
+
+// --json is what asks for the structured object, on apply exactly as on open.
+// Without it a human gets human lines and nothing else; with it, both.
+func TestLayoutApply_StructuredResultIsGatedOnJSON(t *testing.T) {
+	acks := []uirequest.Ack{{
+		Instance: "test-instance",
+		Status:   uirequest.StatusOpened,
+		Items: []uirequest.AckItem{
+			{Index: 0, Verdict: uirequest.ItemVerdictCarried, Cell: "1.1"},
+			{Index: 1, Verdict: uirequest.ItemVerdictOpened, Cell: "2.1"},
+			{Index: 2, Verdict: uirequest.ItemVerdictDeclined, Reason: "no room"},
+		},
+	}}
+	dest := openDestination{DisplayName: "active task", Resolved: uirequest.ResolvedCurrentShell}
+
+	var plain bytes.Buffer
+	printLayoutResult(Env{Stdout: &plain}, uirequest.LayoutModeApply, dest, acks, false)
+	if strings.Contains(plain.String(), `"action"`) {
+		t.Errorf("plain apply leaked the structured object:\n%s", plain.String())
+	}
+	for _, want := range []string{"carried the live pane already at 1.1", "opened pane at 2.1", "declined index 2: no room"} {
+		if !strings.Contains(plain.String(), want) {
+			t.Errorf("plain apply missing %q:\n%s", want, plain.String())
+		}
+	}
+
+	var structured bytes.Buffer
+	printLayoutResult(Env{Stdout: &structured}, uirequest.LayoutModeApply, dest, acks, true)
+	first, _, _ := strings.Cut(structured.String(), "\n")
+	var result struct {
+		Action string              `json:"action"`
+		Mode   string              `json:"mode"`
+		Items  []uirequest.AckItem `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(first), &result); err != nil {
+		t.Fatalf("--json first line does not decode: %v\n%s", err, structured.String())
+	}
+	if result.Action != "layout" || result.Mode != uirequest.LayoutModeApply || len(result.Items) != 3 {
+		t.Errorf("--json result = %+v, want the layout apply items", result)
+	}
+	if result.Items[0].Verdict != uirequest.ItemVerdictCarried {
+		t.Errorf("carried verdict did not survive the wire: %+v", result.Items[0])
 	}
 }

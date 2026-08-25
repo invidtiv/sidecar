@@ -42,6 +42,20 @@ import (
 
 const layoutSpecOriginRequired = "a new shell pane needs a Sidecar shell to split beside; run from inside one"
 
+// specPaneIsCarried reports the spec entries that account for a live leaf
+// rather than asking for a new pane: the mandatory primary, and a shell named
+// by the session it already runs.
+func specPaneIsCarried(item layoutItemPlan) bool {
+	switch item.kind {
+	case panelayout.Primary:
+		return true
+	case panelayout.Shell:
+		return strings.TrimSpace(item.spec.Session) != ""
+	default:
+		return false
+	}
+}
+
 func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.LayoutPayload, root, surface string) tea.Cmd {
 	columns, err := uirequest.DecodeLayoutColumns(payload.Columns)
 	if err != nil {
@@ -76,7 +90,17 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 	passiveSeen := make(map[panelayout.Kind]int)
 	for i := range items {
 		item := &items[i]
-		item.kind, _ = panelayout.KindByName(strings.TrimSpace(item.spec.Kind))
+		kind, known := panelayout.KindByName(strings.TrimSpace(item.spec.Kind))
+		if !known {
+			// ValidateLayoutSpec has already refused unknown kinds, so this is
+			// unreachable today. It is checked anyway because the failure mode
+			// if it ever becomes reachable is silent: Kind's zero value is
+			// Primary, and an unknown kind would be treated as the carried
+			// primary rather than declined.
+			note(i, uirequest.ItemVerdictDeclined, fmt.Sprintf("unknown pane kind %q", item.spec.Kind))
+			continue
+		}
+		item.kind = kind
 		switch item.kind {
 		case panelayout.Primary:
 			continue
@@ -187,11 +211,19 @@ func (p *Plugin) applyLayoutSpec(req uirequest.Request, payload uirequest.Layout
 		return p.ackLayout(req, uirequest.StatusDeclined, items[firstViolation].reason, p.layoutAcks(items, surface, false), nil)
 	}
 
-	// Validation is done: everything that survived it is going to land.
+	// Validation is done: everything that survived it is going to land. A pane
+	// the spec CARRIES — the primary, a shell named by session — is not one of
+	// them: it was already on screen and stays, so it says so rather than
+	// claiming an open.
 	for i := range items {
-		if items[i].verdict == "" {
-			items[i].verdict = uirequest.ItemVerdictOpened
+		if items[i].verdict != "" {
+			continue
 		}
+		if specPaneIsCarried(items[i]) {
+			items[i].verdict = uirequest.ItemVerdictCarried
+			continue
+		}
+		items[i].verdict = uirequest.ItemVerdictOpened
 	}
 
 	// Commit stage 1 — decode the applied tree through the ordinary relaunch

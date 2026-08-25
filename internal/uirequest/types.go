@@ -386,6 +386,13 @@ const (
 	ItemVerdictOpened     = "opened"
 	ItemVerdictRetargeted = "retargeted"
 	ItemVerdictDeclined   = "declined"
+	// ItemVerdictCarried is a --spec pane that was KEPT, not opened: the
+	// {"kind":"primary"} entry every spec must carry, and a shell carried by
+	// session. Nothing was created for it and nothing was destroyed — the spec
+	// accounted for a live leaf, which is the whole reason those entries are
+	// mandatory. Reporting it as "opened" told an agent a pane appeared when
+	// the same pane had been there all along.
+	ItemVerdictCarried = "carried"
 )
 
 // AckItem is one requested pane's verdict: what became of it, where it landed

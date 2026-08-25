@@ -208,8 +208,9 @@ Either form is validated and fit-tested before anything changes: it all
 happens, or nothing changes and the decline names the first violation.
 
 The ack's items array lists EVERY requested pane with verdict opened,
-retargeted, or declined plus its landed cell, so one round trip shows
-everything wrong with a refused spec. Like get, apply never queues.
+retargeted, carried (a live leaf the spec kept rather than created), or
+declined, plus its landed cell — so one round trip shows everything wrong
+with a refused spec. Like get, apply never queues.
 
 ```
 Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...])

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/terminallink"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -369,5 +370,73 @@ func TestOverview_PendingDiffLastWriteWins(t *testing.T) {
 	}
 	if len(m.pendingViews) != 1 {
 		t.Fatalf("pending slots = %d, want one", len(m.pendingViews))
+	}
+}
+
+// An explicit cell is a requirement on this surface too: it lands where asked.
+func TestOverview_UIRequestAtCellPlacesThePane(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	m := resourcePreviewModel(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	m.SetResourceMatchers([]terminallink.ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}})
+	m.SetResourceResolver((&fakeResolver{}).resolve)
+
+	req := uirequest.Request{
+		ID: "overview-at-open", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: selected.TmuxName},
+		Target:  uirequest.Target{Kind: uirequest.TargetKindResource, Provider: "jira-work", Value: "CASH-1245"},
+		Options: uirequest.Options{At: "2.1"},
+	}
+	if cmd := m.handleUIRequest(req); cmd == nil {
+		t.Fatal("--at request did not open")
+	}
+	grid := panelayout.GridOf(m.preview.paneRoot)
+	if grid == nil {
+		t.Fatal("preview tree has no grid projection after an --at open")
+	}
+	cell := grid.Cell(2, 1)
+	if cell == nil || cell.Kind != panelayout.Resource {
+		t.Fatalf("2.1 holds %v, want the resource pane (grid %d columns)", cell, grid.ColumnCount())
+	}
+	if m.pendingOpenPlan != nil {
+		t.Error("the request-scoped plan outlived the request that made it")
+	}
+}
+
+// A request that plans a cell and then refuses for an unrelated reason must
+// not leave its plan behind: the NEXT open would silently take it and land
+// somewhere nobody asked for.
+func TestOverview_UIRequestAtCellPlanDoesNotOutliveARefusal(t *testing.T) {
+	stateHome := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
+	m := resourcePreviewModel(t)
+	selected, ok := m.SelectedWorkspace()
+	if !ok {
+		t.Fatal("no selected workspace")
+	}
+	m.SetResourceMatchers([]terminallink.ResourceMatcher{{
+		Provider: "jira-work", ID: "issue-key", Re: regexp.MustCompile(`CASH-[0-9]+`),
+	}})
+	m.SetResourceResolver((&fakeResolver{}).resolve)
+
+	// The cell is plannable; the locator is what no matcher claims, so the
+	// refusal happens after the plan was stashed.
+	req := uirequest.Request{
+		ID: "overview-at-refused", Action: uirequest.ActionOpen, CreatedAt: time.Now().UTC(), TTLMs: 5000,
+		Origin:  uirequest.Origin{TmuxSession: selected.TmuxName},
+		Target:  uirequest.Target{Kind: uirequest.TargetKindResource, Provider: "jira-work", Value: "NOT-A-KEY"},
+		Options: uirequest.Options{At: "2.1"},
+	}
+	_ = m.handleUIRequest(req)
+	if m.pendingOpenPlan != nil {
+		t.Fatalf("a refused --at request left its plan behind: %+v", *m.pendingOpenPlan)
 	}
 }

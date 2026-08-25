@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspacediff"
 )
 
 // The `sidecar layout` host side. One uirequest action, two modes:
@@ -33,6 +34,10 @@ import (
 // get answer is worse than a refusal. When the origin shell is not on screen,
 // both modes decline and say so.
 const layoutNotOnScreenReason = "the origin shell is not on screen, and layout requests are never queued"
+
+// escapedGridReason explains a pane that landed in a tree with no grid answer,
+// so an ack never carries a bare empty cell beside a success verdict.
+const escapedGridReason = "opened, but the resulting layout no longer resolves to grid columns, so it has no cell address; layout get reports \"grid\": null with the raw tree"
 
 func (p *Plugin) applyLayoutRequest(req uirequest.Request) tea.Cmd {
 	payload, err := uirequest.DecodeLayoutPayload(req.Payload)
@@ -488,7 +493,7 @@ func (p *Plugin) resolveLayoutTargets(kind panelayout.Kind, spec uirequest.Layou
 	if len(spec.Targets) == 0 {
 		if kind == panelayout.Diff {
 			// A diff with no spec IS the working tree, same as `open --diff`.
-			return []uirequest.Target{{Kind: uirequest.TargetKindDiff, Value: "wt"}}, ""
+			return []uirequest.Target{{Kind: uirequest.TargetKindDiff, Value: workspacediff.IdentityWorkingTree}}, ""
 		}
 		return nil, "a " + kind.Name() + " pane needs at least one target"
 	}
@@ -612,6 +617,15 @@ func (p *Plugin) layoutAcks(items []layoutItemPlan, surface string, committed bo
 			if leafID := p.landedLeaf(item.kind); leafID != 0 {
 				ackItem.Pane = leafID
 				ackItem.Cell = cells[leafID]
+				if ackItem.Cell == "" && ackItem.Reason == "" {
+					// The pane landed, but in a tree the grid vocabulary cannot
+					// name — an insert beside a pre-existing pane can compose a
+					// Columns split inside a column's row stack. An empty cell
+					// beside "opened" reads as a hole in the ack; say which it
+					// is, since the same escape is why a later `layout get`
+					// answers "grid": null for a tree this apply built.
+					ackItem.Reason = escapedGridReason
+				}
 			}
 		}
 		out = append(out, ackItem)

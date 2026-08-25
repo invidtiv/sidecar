@@ -159,7 +159,7 @@ func (f *Form) countLine() string {
 			return "indexing files…"
 		}
 		if query != "" {
-			return fmt.Sprintf("%d match%s · recent first", len(filtered), plural(len(filtered)))
+			return fmt.Sprintf("%d match%s · recent first", len(filtered), plural(len(filtered), "es"))
 		}
 		return fmt.Sprintf("%d recent · path:line accepted", len(all))
 	case KindDiff:
@@ -182,7 +182,7 @@ func (f *Form) countLine() string {
 		if query != "" {
 			return fmt.Sprintf("%d of %d notes", len(filtered), len(all))
 		}
-		return fmt.Sprintf("%d note%s", len(all), plural(len(all)))
+		return fmt.Sprintf("%d note%s", len(all), plural(len(all), "s"))
 	case KindResource:
 		return "locator validated by the provider on open"
 	default:
@@ -190,11 +190,13 @@ func (f *Form) countLine() string {
 	}
 }
 
-func plural(n int) string {
+// plural is the suffix a count takes. The suffix is the caller's because it is
+// not the same one everywhere: matches take "es", notes take "s".
+func plural(n int, suffix string) string {
 	if n == 1 {
 		return ""
 	}
-	return "es"
+	return suffix
 }
 
 // Step reports which screen the form shows.

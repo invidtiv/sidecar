@@ -145,9 +145,18 @@ func TestLayoutApplySpec_RoundTripMovesPrimaryToRightColumn(t *testing.T) {
 		t.Fatalf("items = %+v, want one per spec pane", ack.Items)
 	}
 	wantCells := []string{"1.1", "2.1", "2.2", "3.1"}
+	// The carried shell and the carried primary were on screen before this
+	// apply and stay: they say so rather than claiming an open. Only the file
+	// and the issue are opened by the spec.
+	wantVerdicts := []string{
+		uirequest.ItemVerdictCarried,
+		uirequest.ItemVerdictOpened,
+		uirequest.ItemVerdictOpened,
+		uirequest.ItemVerdictCarried,
+	}
 	for _, item := range ack.Items {
-		if item.Verdict != uirequest.ItemVerdictOpened {
-			t.Errorf("item %d verdict = %s (%s)", item.Index, item.Verdict, item.Reason)
+		if item.Verdict != wantVerdicts[item.Index] {
+			t.Errorf("item %d verdict = %s (%s), want %s", item.Index, item.Verdict, item.Reason, wantVerdicts[item.Index])
 			continue
 		}
 		if item.Cell != wantCells[item.Index] {
@@ -367,9 +376,11 @@ func TestLayoutApplySpec_NewShellGraftsIntoItsSpecCell(t *testing.T) {
 	if ack.Status != uirequest.StatusOpened {
 		t.Fatalf("ack = %s %q", ack.Status, ack.Reason)
 	}
+	// file opened, primary carried, new shell opened.
+	wantVerdicts := []string{uirequest.ItemVerdictOpened, uirequest.ItemVerdictCarried, uirequest.ItemVerdictOpened}
 	for _, item := range ack.Items {
-		if item.Verdict != uirequest.ItemVerdictOpened {
-			t.Errorf("item %d = %s (%s)", item.Index, item.Verdict, item.Reason)
+		if item.Verdict != wantVerdicts[item.Index] {
+			t.Errorf("item %d = %s (%s), want %s", item.Index, item.Verdict, item.Reason, wantVerdicts[item.Index])
 		}
 	}
 
@@ -459,9 +470,11 @@ func TestLayoutApplySpec_NewShellOwnsItsMiddleColumn(t *testing.T) {
 		t.Fatalf("ack = %s %q", ack.Status, ack.Reason)
 	}
 	wantCells := []string{"1.1", "2.1", "3.1"}
+	// primary carried, new shell opened, file opened.
+	wantVerdicts := []string{uirequest.ItemVerdictCarried, uirequest.ItemVerdictOpened, uirequest.ItemVerdictOpened}
 	for _, item := range ack.Items {
-		if item.Verdict != uirequest.ItemVerdictOpened {
-			t.Errorf("item %d = %s (%s)", item.Index, item.Verdict, item.Reason)
+		if item.Verdict != wantVerdicts[item.Index] {
+			t.Errorf("item %d = %s (%s), want %s", item.Index, item.Verdict, item.Reason, wantVerdicts[item.Index])
 			continue
 		}
 		if item.Cell != wantCells[item.Index] {

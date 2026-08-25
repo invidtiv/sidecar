@@ -88,8 +88,8 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 	}
 
 	if hasDeclined && !hasOpened {
-		if jsonOutput && mode == uirequest.LayoutModeApply {
-			printLayoutResult(env, mode, dest, acks)
+		if mode == uirequest.LayoutModeApply {
+			printLayoutResult(env, mode, dest, acks, jsonOutput)
 		}
 		if reason == "" {
 			reason = "the request was declined"
@@ -101,7 +101,7 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 	if mode == uirequest.LayoutModeGet {
 		return emitLayoutGet(env, dest, acks, jsonOutput)
 	}
-	printLayoutResult(env, mode, dest, acks)
+	printLayoutResult(env, mode, dest, acks, jsonOutput)
 	return 0
 }
 
@@ -318,9 +318,11 @@ func emitLayoutGet(env Env, dest openDestination, acks []uirequest.Ack, jsonOutp
 	return 0
 }
 
-// emitApplyResult prints one structured result for apply, then the human
-// per-pane lines.
-func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequest.Ack) {
+// printLayoutResult prints apply's outcome: the structured result object only
+// when --json was asked for, exactly as `open` gates its own, then the human
+// per-pane lines. A bare `layout apply` is a human command and must not spray
+// JSON at a terminal that never asked for it.
+func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequest.Ack, jsonOutput bool) {
 	status := string(uirequest.StatusOpened)
 	reason := ""
 	items := []uirequest.AckItem{}
@@ -358,7 +360,9 @@ func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequ
 		Items:     items,
 		Results:   acks,
 	}
-	_ = json.NewEncoder(env.Stdout).Encode(result)
+	if jsonOutput {
+		_ = json.NewEncoder(env.Stdout).Encode(result)
+	}
 
 	if mode != uirequest.LayoutModeApply {
 		return
@@ -369,6 +373,8 @@ func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequ
 			_, _ = fmt.Fprintf(env.Stdout, "opened pane at %s (index %d)\n", cellOrDash(item.Cell), item.Index)
 		case uirequest.ItemVerdictRetargeted:
 			_, _ = fmt.Fprintf(env.Stdout, "retargeted the pane already showing that content at %s (index %d)\n", cellOrDash(item.Cell), item.Index)
+		case uirequest.ItemVerdictCarried:
+			_, _ = fmt.Fprintf(env.Stdout, "carried the live pane already at %s (index %d)\n", cellOrDash(item.Cell), item.Index)
 		default:
 			_, _ = fmt.Fprintf(env.Stdout, "declined index %d: %s\n", item.Index, item.Reason)
 		}

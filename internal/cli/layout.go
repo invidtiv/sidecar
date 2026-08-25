@@ -117,8 +117,9 @@ func applyLayoutSubcommand() *Command {
 			"Either form is validated and fit-tested before anything changes: it all\n" +
 			"happens, or nothing changes and the decline names the first violation.\n\n" +
 			"The ack's items array lists EVERY requested pane with verdict opened,\n" +
-			"retargeted, or declined plus its landed cell, so one round trip shows\n" +
-			"everything wrong with a refused spec. Like get, apply never queues.",
+			"retargeted, carried (a live leaf the spec kept rather than created), or\n" +
+			"declined, plus its landed cell — so one round trip shows everything wrong\n" +
+			"with a refused spec. Like get, apply never queues.",
 		Flags: []Flag{
 			{Name: "--spec", Arg: "JSON", Summary: "A full layout replacing the screen: columns of stacked panes (- reads stdin)"},
 			{Name: "--pane", Arg: "JSON", Summary: "One pane descriptor to add (repeatable); see above for the object shape"},
@@ -144,7 +145,7 @@ func applyLayoutSubcommand() *Command {
 			{Command: `sidecar layout apply --pane '{"kind":"file","targets":["README.md"],"at":"2.1"}' --json`, Description: "explicit cell, structured result"},
 		},
 		Agent: AgentDoc{
-			Invocation: `sidecar layout apply --spec '{"columns":[{"panes":[...]}]}' | --pane '{"kind":"file|issue|note|diff|resource","targets":[...],"at":"col.row"}' [--pane ...] | --pane '{"kind":"shell","session":"<tmux-session>"}'`,
+			Invocation: `sidecar layout apply --spec '{"columns":[{"panes":[...]}]}' | --pane '{"kind":"file|issue|note|diff|resource","targets":[...],"at":"col.row"}' [--pane ...] | --pane '{"kind":"shell","run":"...","name":"..."}'`,
 			Summary:    "Apply a full layout from a spec, or add panes atomically; learn exactly why nothing changed",
 		},
 		Run: runLayoutApply,
@@ -175,6 +176,13 @@ func layoutPaneFlag(value string) (uirequest.LayoutPane, int, string) {
 	if kind == panelayout.Shell {
 		if len(pane.Targets) > 0 {
 			return pane, 2, "a shell pane takes run/type/name, not targets"
+		}
+		if strings.TrimSpace(pane.Session) != "" {
+			// Carrying a live terminal by session is --spec's grammar: a batch
+			// closes nothing, so there is no leaf to carry and the field would
+			// be silently ignored. Say so rather than opening a second shell
+			// the caller did not ask for.
+			return pane, 2, "\"session\" carries a live terminal into a full --spec layout; --pane only adds, so drop it (run/type/name open a new split)"
 		}
 		return pane, 0, ""
 	}

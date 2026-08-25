@@ -60,19 +60,26 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if isSelected {
 		prevSplit := m.openSplit
 		m.openSplit = req.Options.Split
-		defer func() { m.openSplit = prevSplit }()
+		// The plan is scoped to THIS request whether or not the open reaches a
+		// placement: a resource that no matcher claims, or a kind that opens
+		// nothing, returns before previewDeckPlacement consumes it, and a plan
+		// left behind would place the NEXT open at a cell nobody asked for.
+		defer func() {
+			m.openSplit = prevSplit
+			m.pendingOpenPlan = nil
+		}()
 
 		if at := strings.TrimSpace(req.Options.At); at != "" {
-			if plan, refusal, ok := m.planPreviewOpenAt(req.Target, at); !ok {
+			plan, refusal, ok := m.planPreviewOpenAt(req.Target, at)
+			if !ok {
 				_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
 					Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
 					Status: uirequest.StatusDeclined, Reason: refusal,
 					Surface: "shell:" + targetWorkspace.TmuxName, At: time.Now().UTC(),
 				})
 				return nil
-			} else {
-				m.pendingOpenPlan = plan
 			}
+			m.pendingOpenPlan = plan
 		}
 
 		var cmd tea.Cmd
