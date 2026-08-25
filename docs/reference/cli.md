@@ -152,6 +152,123 @@ sidecar help open
 sidecar help --json
 ```
 
+## `sidecar layout`
+
+Read and compose the pane layout agents work beside
+
+Read the current pane layout (`layout get`) or open several panes at once
+in one atomic call (`layout apply`). Both act on the surface showing this
+Sidecar shell and never queue: a request whose shell is off screen
+declines with the reason.
+
+```
+Usage: sidecar layout <command>
+```
+
+### `sidecar layout apply`
+
+Open several panes in one all-or-nothing call
+
+Compose panes onto the surface showing this Sidecar shell. Each --pane is one
+descriptor, given as its JSON object verbatim while the compact grammar is
+still settling:
+
+  {"kind":"file","targets":["path:line",...],"at":"2.1"}
+  {"kind":"issue","targets":["td-xxxxxx"]}
+  {"kind":"note","targets":["nt-xxxxxx"]}
+  {"kind":"diff","targets":["spec"]}   no targets = the working tree
+  {"kind":"resource","provider":"<instance>","targets":["LOCATOR"]}
+  {"kind":"shell","run":"...","type":"...","name":"..."}
+
+The first target opens a pane; the rest join it as tabs of the same kind.
+"at" is an optional grid cell col.row (1-based) and is a requirement, not a
+preference: an unreachable cell declines rather than landing elsewhere.
+File paths are workspace-relative; diffs re-resolve host-side; providers are
+validated against the live matcher snapshot.
+
+The whole batch is validated and fit-tested before anything opens: either
+every pane lands, or nothing changes and the decline names the first
+violation. The batch only ever ADDS panes — it closes nothing, moves
+nothing, and never destroys a live terminal.
+
+The ack's items array lists EVERY requested pane with verdict opened,
+retargeted, or declined plus its landed cell, so one round trip shows
+everything wrong with a refused spec. Like get, apply never queues.
+
+```
+Usage: sidecar layout apply [options] --pane '<json>' [--pane '<json>' ...]
+```
+
+**Options:**
+
+- `--pane JSON`: One pane descriptor (repeatable); see above for the object shape
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: applied (or every pane retargeted an existing one)
+- `1`: state failure
+- `2`: usage or validation error
+- `3`: no running instance
+- `4`: declined host-side; the reason names the first violation
+
+**Examples:**
+
+```bash
+# three panes at once, auto-placed
+sidecar layout apply --pane '{"kind":"file","targets":["internal/palette/list.go:112","internal/palette/state.go"]}' --pane '{"kind":"issue","targets":["td-756c34"]}' --pane '{"kind":"shell","run":"make dev","name":"dev server"}'
+# explicit cell, structured result
+sidecar layout apply --pane '{"kind":"file","targets":["README.md"],"at":"2.1"}' --json
+```
+
+### `sidecar layout get`
+
+Read the current pane layout
+
+Read the pane layout of the surface showing this Sidecar shell: the grid
+projection, every pane's kind, targets and tmux session, geometry, and the
+caps and floors an apply would be held to.
+
+A layout that escapes the grid vocabulary reports "grid": null plus the raw
+tree; it is still valid. Human output is a small ASCII sketch plus a table;
+--json passes the payload through unchanged, which is the contract.
+
+Unlike open, a layout request never queues: when this shell is not on
+screen the request declines instead (exit 4), because a stale answer is
+worse than a refusal.
+
+```
+Usage: sidecar layout get [--json]
+```
+
+**Options:**
+
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--json`: Write the layout payload itself to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: answered
+- `1`: state failure
+- `2`: usage error
+- `3`: no running instance
+- `4`: declined: the origin shell is not on screen
+
+**Examples:**
+
+```bash
+sidecar layout get
+# the machine contract: read before you write
+sidecar layout get --json
+```
+
 ## `sidecar notify`
 
 Post, dismiss, and list Sidecar notifications

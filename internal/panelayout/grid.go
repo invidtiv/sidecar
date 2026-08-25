@@ -1,6 +1,10 @@
 package panelayout
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
 
 // The layout vocabulary is columns of stacked panes: a layout is 1..
 // MaxGridColumns columns and each column stacks 1..MaxGridRows panes. Cells
@@ -159,6 +163,35 @@ func gridColumnCells(node *Node) ([]*Node, bool) {
 type Cell struct {
 	Col int
 	Row int
+}
+
+// ParseCell reads a "col" or "col.row" address (both 1-based). A bare column
+// means row 1, which is how a one-past-the-end column append is asked for.
+func ParseCell(s string) (Cell, bool) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return Cell{}, false
+	}
+	colPart, rowPart, hasRow := strings.Cut(s, ".")
+	col, err := strconv.Atoi(colPart)
+	if err != nil || col < 1 {
+		return Cell{}, false
+	}
+	row := 1
+	if hasRow {
+		row, err = strconv.Atoi(rowPart)
+		if err != nil || row < 1 {
+			return Cell{}, false
+		}
+	} else if rowPart != "" {
+		return Cell{}, false
+	}
+	return Cell{Col: col, Row: row}, true
+}
+
+// String renders the cell as its "col.row" address.
+func (c Cell) String() string {
+	return strconv.Itoa(c.Col) + "." + strconv.Itoa(c.Row)
 }
 
 // PlanOpenAt plans an open at an explicit cell, the planner entry behind the

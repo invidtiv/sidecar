@@ -20,6 +20,18 @@ const (
 	// Its payload is a notification record rather than a target, because the
 	// object it names does not exist until the request lands.
 	ActionNotify Action = "notify"
+	// ActionLayout reads or composes a surface's pane layout in one request.
+	// Like notify, its object is not addressable as a Target: the payload is a
+	// LayoutPayload naming the mode and, for apply, every requested pane. The
+	// ack carries per-pane verdicts (Items) and, for get, the layout report
+	// itself (Layout).
+	ActionLayout Action = "layout"
+)
+
+// Layout modes. Get answers with the current layout; apply opens panes.
+const (
+	LayoutModeGet   = "get"
+	LayoutModeApply = "apply"
 )
 
 // CreatePayload is the ActionCreate record. Kind distinguishes a workspace
@@ -46,6 +58,53 @@ func (p CreatePayload) ShouldFocus() bool {
 		return true
 	}
 	return *p.Focus
+}
+
+// LayoutPane is one requested pane of an apply batch. Kind uses the layout
+// vocabulary's wire names: primary, file, issue, diff, resource, shell, note.
+// The first target opens the pane and the rest join it as tabs of the same
+// kind; shells carry run/type/name instead of targets. At is an optional grid
+// cell "col.row" (1-based) — a requirement, refused rather than re-placed.
+type LayoutPane struct {
+	Kind    string   `json:"kind"`
+	Targets []string `json:"targets,omitempty"`
+	At      string   `json:"at,omitempty"`
+	// Provider names the configured terminal resource provider instance for
+	// kind resource. Required there and ignored elsewhere: a bare locator is
+	// never guessed at.
+	Provider string `json:"provider,omitempty"`
+	Run      string `json:"run,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Name     string `json:"name,omitempty"`
+}
+
+// LayoutPayload is the ActionLayout record. Columns is reserved for the full
+// --spec layouts of a later milestone; a payload that carries one today is
+// declined rather than half-understood.
+type LayoutPayload struct {
+	Mode    string          `json:"mode"`
+	Panes   []LayoutPane    `json:"panes,omitempty"`
+	Columns json.RawMessage `json:"columns,omitempty"`
+}
+
+func DecodeLayoutPayload(raw json.RawMessage) (LayoutPayload, error) {
+	var p LayoutPayload
+	if len(raw) == 0 {
+		return p, fmt.Errorf("layout payload is required")
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return p, err
+	}
+	switch p.Mode {
+	case LayoutModeGet:
+	case LayoutModeApply:
+		if len(p.Panes) == 0 {
+			return p, fmt.Errorf("apply payload carries no panes")
+		}
+	default:
+		return p, fmt.Errorf("unknown layout mode %q", p.Mode)
+	}
+	return p, nil
 }
 
 func DecodeCreatePayload(raw json.RawMessage) (CreatePayload, error) {
@@ -168,6 +227,36 @@ type Ack struct {
 	Surface  string    `json:"surface,omitempty"`
 	Pane     int       `json:"pane,omitempty"`
 	At       time.Time `json:"at"`
+	// ItemsVersion names the shape of Items whenever Items is present; 1 today.
+	// Callers gate on it instead of guessing, so the array can grow without
+	// breaking an agent that parsed yesterday's acks.
+	ItemsVersion int       `json:"itemsVersion,omitempty"`
+	Items        []AckItem `json:"items,omitempty"`
+	// Layout carries the ActionLayout get-mode answer verbatim: the layout
+	// report the host built from its focused surface's tree. Empty for every
+	// other action and for apply acks.
+	Layout json.RawMessage `json:"layout,omitempty"`
+}
+
+// Per-pane verdicts for an ActionLayout apply. They ride beside Status, which
+// stays the overall outcome: on a decline, Items still lists EVERY requested
+// pane with the verdict each earned during validation, and Reason names the
+// first violation.
+const (
+	ItemVerdictOpened     = "opened"
+	ItemVerdictRetargeted = "retargeted"
+	ItemVerdictDeclined   = "declined"
+)
+
+// AckItem is one requested pane's verdict: what became of it, where it landed
+// (cell "col.row" and surface), and — when declined — why.
+type AckItem struct {
+	Index   int    `json:"index"`
+	Verdict string `json:"verdict"`
+	Cell    string `json:"cell,omitempty"`
+	Surface string `json:"surface,omitempty"`
+	Pane    int    `json:"pane,omitempty"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 // How a request chose its destination. Values are stable for --json callers.

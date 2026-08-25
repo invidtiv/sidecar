@@ -4,7 +4,11 @@
 // rendering, or persistence.
 package panelayout
 
-import "github.com/marcus/sidecar/internal/termpreview"
+import (
+	"fmt"
+
+	"github.com/marcus/sidecar/internal/termpreview"
+)
 
 const (
 	minRatio = 15
@@ -39,6 +43,65 @@ const (
 // Terminal is the persisted-value and source compatibility alias used by the
 // existing Workspace hosts. Primary deliberately retains its numeric value.
 const Terminal = Primary
+
+// The layout vocabulary's wire names, shared by `sidecar layout` descriptors,
+// get reports, and the ack items: one spelling per kind so an agent can read a
+// layout and speak it back without translating. KindByName and Name are the
+// only spellings; callers never hard-code the strings.
+const (
+	KindNamePrimary  = "primary"
+	KindNameFile     = "file"
+	KindNameIssue    = "issue"
+	KindNameDiff     = "diff"
+	KindNameResource = "resource"
+	KindNameShell    = "shell"
+	KindNameNote     = "note"
+)
+
+// KindByName resolves one wire name to its kind. ok is false for anything the
+// vocabulary does not name.
+func KindByName(name string) (Kind, bool) {
+	switch name {
+	case KindNamePrimary:
+		return Primary, true
+	case KindNameFile:
+		return Document, true
+	case KindNameIssue:
+		return Issue, true
+	case KindNameDiff:
+		return Diff, true
+	case KindNameResource:
+		return Resource, true
+	case KindNameShell:
+		return Shell, true
+	case KindNameNote:
+		return Note, true
+	default:
+		return 0, false
+	}
+}
+
+// Name is the kind's wire name in the layout vocabulary.
+func (k Kind) Name() string {
+	switch k {
+	case Primary:
+		return KindNamePrimary
+	case Document:
+		return KindNameFile
+	case Issue:
+		return KindNameIssue
+	case Diff:
+		return KindNameDiff
+	case Resource:
+		return KindNameResource
+	case Shell:
+		return KindNameShell
+	case Note:
+		return KindNameNote
+	default:
+		return fmt.Sprintf("kind(%d)", int(k))
+	}
+}
 
 type Axis int
 

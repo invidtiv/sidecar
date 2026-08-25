@@ -403,7 +403,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, createCmd, helpCmd, notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentsCmd, createCmd, helpCmd, layoutCommand(), notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

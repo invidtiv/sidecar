@@ -42,6 +42,9 @@ func (p *Plugin) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if req.Action == uirequest.ActionCreate {
 		return p.applyCreateRequest(req)
 	}
+	if req.Action == uirequest.ActionLayout {
+		return p.applyLayoutRequest(req)
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}
@@ -387,6 +390,45 @@ func (p *Plugin) openOnSelectedSurface(req uirequest.Request) tea.Cmd {
 }
 
 func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) tea.Cmd {
+	outcome, cmd := p.performTargetOpen(req, root, surface)
+	if outcome.status == uirequest.StatusDeclined {
+		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+			Instance: hostInstanceID(),
+			Host:     uirequest.HostName(),
+			PID:      os.Getpid(),
+			Status:   uirequest.StatusDeclined,
+			Reason:   outcome.reason,
+			Surface:  surface,
+			At:       time.Now().UTC(),
+		})
+		return nil
+	}
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: hostInstanceID(),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   outcome.status,
+		Surface:  surface,
+		Pane:     p.paneFocus,
+		At:       time.Now().UTC(),
+	})
+	return cmd
+}
+
+// openOutcome is what one target's open earned. The pane tree, not the returned
+// command, is the honest witness of an open: a split that did not fit still
+// returns the reopen command, and re-opening a file already on screen
+// legitimately returns none.
+type openOutcome struct {
+	status uirequest.Status
+	reason string
+}
+
+// performTargetOpen opens one resolved target on the given surface — the whole
+// per-kind body of `sidecar open`, minus acknowledgement writing. Both the
+// single-open ack path and the layout batch commit call it, so the two cannot
+// drift apart about what opening a target means.
+func (p *Plugin) performTargetOpen(req uirequest.Request, root, surface string) (openOutcome, tea.Cmd) {
 	prevSplit := p.openSplit
 	p.openSplit = req.Options.Split
 	defer func() { p.openSplit = prevSplit }()
@@ -415,16 +457,7 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		opened = p.contentPaneOnScreen(PaneNote)
 	case uirequest.TargetKindDiff:
 		if p.paneRoot == nil {
-			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-				Instance: hostInstanceID(),
-				Host:     uirequest.HostName(),
-				PID:      os.Getpid(),
-				Status:   uirequest.StatusDeclined,
-				Reason:   features.WorkspaceDocPanesDisabledDiff,
-				Surface:  surface,
-				At:       time.Now().UTC(),
-			})
-			return appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
+			return openOutcome{status: uirequest.StatusDeclined, reason: features.WorkspaceDocPanesDisabledDiff}, appmsg.ShowFlash(features.WorkspaceDocPanesDisabledDiff)
 		}
 		retargeted = p.willRetargetPane(PaneDiff)
 		spec := uirequest.DiffTarget(root, req.Target.Value)
@@ -433,16 +466,14 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 	case uirequest.TargetKindResource:
 		ref, refusal := resourceview.ReferenceForLocator(p.resourceMatchers, req.Target.Provider, req.Target.Value)
 		if refusal != "" {
-			_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-				Instance: hostInstanceID(), Host: uirequest.HostName(), PID: os.Getpid(),
-				Status: uirequest.StatusDeclined, Reason: refusal, Surface: surface, At: time.Now().UTC(),
-			})
-			return nil
+			return openOutcome{status: uirequest.StatusDeclined, reason: refusal}, nil
 		}
 		retargeted = p.willRetargetPane(PaneResource)
 		cmd = p.openRequestedResourcePaneForSurface(root, surface, ref)
 		res, _ := p.activeResourcePane()
 		opened = res != nil && res.tabs.Find(resourceview.TabKey(ref)) >= 0
+	default:
+		return openOutcome{status: uirequest.StatusDeclined, reason: "unsupported target kind " + string(req.Target.Kind)}, nil
 	}
 
 	// Nothing on screen: the split did not fit, or the target could not be
@@ -453,32 +484,13 @@ func (p *Plugin) applyOpenRequest(req uirequest.Request, root, surface string) t
 		if reason == "" {
 			reason = "the window is too small to split"
 		}
-		_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-			Instance: hostInstanceID(),
-			Host:     uirequest.HostName(),
-			PID:      os.Getpid(),
-			Status:   uirequest.StatusDeclined,
-			Reason:   reason,
-			Surface:  surface,
-			At:       time.Now().UTC(),
-		})
-		return nil
+		return openOutcome{status: uirequest.StatusDeclined, reason: reason}, nil
 	}
-
 	status := uirequest.StatusOpened
 	if retargeted {
 		status = uirequest.StatusRetargeted
 	}
-	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
-		Instance: hostInstanceID(),
-		Host:     uirequest.HostName(),
-		PID:      os.Getpid(),
-		Status:   status,
-		Surface:  surface,
-		Pane:     p.paneFocus,
-		At:       time.Now().UTC(),
-	})
-	return cmd
+	return openOutcome{status: status}, cmd
 }
 
 func sameCanonicalPath(a, b string) bool {
