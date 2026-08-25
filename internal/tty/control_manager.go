@@ -423,6 +423,11 @@ type sessionSubscriber struct {
 	generation uint64
 	request    ControlRequest
 	delivery   *subscriberDeliveryGate
+	// modelInvalidSent records that this subscription has already been told its
+	// model is terminally invalid, so the ordered actor and beginClose cannot
+	// both report the same death. Guarded by the client mutex, like the rest of
+	// this struct's membership state.
+	modelInvalidSent bool
 }
 
 // subscriberDeliveryGate makes subscription invalidation a callback barrier.
@@ -1001,9 +1006,21 @@ func (c *sessionControlClient) close() {
 	<-c.actorDone
 }
 
+// pendingModelInvalidation is one death notice beginClose owes a subscriber
+// whose model the ordered actor did not get to report on.
+type pendingModelInvalidation struct {
+	callback func(ModelInvalidation)
+	gate     *subscriberDeliveryGate
+	payload  ModelInvalidation
+}
+
 // beginClose is safe from the ordered actor: it signals termination but never
 // waits for run to return. Joining belongs to close callers such as Stop and
 // unused-client removal, which run outside the actor.
+//
+// It cannot hand the death notice to the actor and wait for it — not waiting is
+// the invariant that lets the actor call this itself — so it reports any notice
+// the actor has not already claimed.
 func (c *sessionControlClient) beginClose() {
 	c.closeOnce.Do(func() {
 		c.mu.Lock()
@@ -1015,6 +1032,33 @@ func (c *sessionControlClient) beginClose() {
 		for _, gate := range c.deliveries {
 			gates = append(gates, gate)
 		}
+		// The death notice has to leave with us. Tearing c.subs down here used
+		// to race the ordered actor's failAllModels: when this won, invalidate
+		// found no subscription and dropped the terminal ModelInvalidation
+		// silently, so a consumer was told to fall back (OnFallback is reported
+		// outside this guard) and never told its model had died. Collect the
+		// unsent notices while we still hold the state they need; they go out
+		// below, before any gate is deactivated.
+		pending := make([]pendingModelInvalidation, 0, len(c.subs))
+		for id, sub := range c.subs {
+			if sub.request.OnModelInvalid == nil || sub.modelInvalidSent {
+				continue
+			}
+			sub.modelInvalidSent = true
+			c.subs[id] = sub
+			pending = append(pending, pendingModelInvalidation{
+				callback: sub.request.OnModelInvalid,
+				gate:     sub.delivery,
+				payload: ModelInvalidation{
+					Session:    sub.request.Session,
+					Pane:       sub.request.Pane,
+					Generation: sub.generation,
+					Reason:     ResyncReconnect,
+					Terminal:   true,
+					Err:        errClientClosed,
+				},
+			})
+		}
 		c.subs = make(map[uint64]sessionSubscriber)
 		c.deliveries = make(map[uint64]*subscriberDeliveryGate)
 		for _, pane := range c.panes {
@@ -1025,6 +1069,13 @@ func (c *sessionControlClient) beginClose() {
 			pane.dirty = false
 		}
 		c.mu.Unlock()
+		// Before deactivation, so these still pass the gate, and outside the
+		// lock, because consumer callbacks never run under c.mu. The gate is
+		// still the barrier: a Close that has already deactivated cannot be
+		// reached, and gate.wait below drains whatever started here.
+		for _, notice := range pending {
+			notice.gate.invoke(func() { notice.callback(notice.payload) })
+		}
 		// Deactivate every subscriber before waiting for any running callback;
 		// otherwise a callback queued behind the first one could start while
 		// Close is waiting on that first callback.

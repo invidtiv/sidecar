@@ -780,3 +780,78 @@ func waitFor(t *testing.T, condition func() bool) {
 	}
 	t.Fatal("condition not met before timeout")
 }
+
+// A control client that closes must tell every model-backed subscriber its
+// model is dead, even when the close beats the ordered actor to it.
+//
+// beginClose used to wipe c.subs and set c.closed before the actor reached
+// failAllModels, and invalidate then found no subscription and dropped the
+// terminal ModelInvalidation silently. OnFallback is reported outside that
+// guard, so the consumer was told to fall back and never told why — it had no
+// terminal invalidation to drive a resubscribe from. It reproduced on CI and
+// 5 times in 25 local runs of TestModelReconnectFallsBackThenReseeds under
+// -cpu=1 -race; this test forces the losing order instead of waiting for it.
+func TestClientCloseAlwaysReportsTerminalModelInvalidation(t *testing.T) {
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	defer manager.Stop()
+
+	invalidations := make(chan ModelInvalidation, 4)
+	sub, err := manager.Subscribe(ControlRequest{
+		Session: "one",
+		Pane:    "%1",
+		Visible: true,
+		Focused: true,
+		OnModelFrame: func(ModelFrame) {
+		},
+		OnModelInvalid: func(invalid ModelInvalidation) {
+			invalidations <- invalid
+		},
+		OnFallback: func(error) {},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Close()
+
+	var client *sessionControlClient
+	deadline := time.Now().Add(5 * time.Second)
+	for client == nil && time.Now().Before(deadline) {
+		manager.mu.Lock()
+		client = manager.clients["one"]
+		manager.mu.Unlock()
+		if client == nil {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	if client == nil {
+		t.Fatal("no control client for the subscribed session")
+	}
+
+	// beginClose, not the actor: this is exactly the order that used to drop
+	// the notice on the floor.
+	client.beginClose()
+
+	select {
+	case invalid := <-invalidations:
+		if !invalid.Terminal {
+			t.Fatalf("invalidation = %+v, want Terminal", invalid)
+		}
+		if invalid.Reason != ResyncReconnect {
+			t.Fatalf("invalidation reason = %v, want %v", invalid.Reason, ResyncReconnect)
+		}
+		if invalid.Pane != "%1" || invalid.Session != "one" {
+			t.Fatalf("invalidation identifies %s/%s, want one/%%1", invalid.Session, invalid.Pane)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the control client reported no terminal model invalidation")
+	}
+
+	// Exactly once: the actor's own failAllModels must not report the same
+	// death a second time now that beginClose has claimed it.
+	select {
+	case dup := <-invalidations:
+		t.Fatalf("terminal invalidation reported twice: %+v", dup)
+	case <-time.After(500 * time.Millisecond):
+	}
+}

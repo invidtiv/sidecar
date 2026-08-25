@@ -474,15 +474,7 @@ func TestModelReconnectFallsBackThenReseeds(t *testing.T) {
 		defer h.mu.Unlock()
 		return len(h.fallbacks) > 0
 	})
-	// 15s to match the fallback wait above — the two are consecutive steps of
-	// one sequence, and every other wait in this file is 10-60s. The 5s this
-	// used to carry was the only sub-10s budget here, and it started missing
-	// on CI when adaptive presentation cadence (td-c2e878) landed: the reason
-	// is reported through a published frame, and publication is now paced. The
-	// assertion is unchanged — the reconnect must still be reported — it just
-	// no longer holds the tightest deadline in the file for the one event that
-	// has to wait for a cadence tick.
-	waitUntil(t, 15*time.Second, "the model to report reconnect", func() bool {
+	waitUntil(t, 5*time.Second, "the model to report reconnect", func() bool {
 		return h.sawReason(ResyncReconnect)
 	})
 	sub.Close()

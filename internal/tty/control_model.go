@@ -797,6 +797,13 @@ func (c *sessionControlClient) invalidate(feed *paneModelFeed, reason ResyncReas
 	valid := ok && !c.closed && sub.generation == feed.generation
 	callback := sub.request.OnModelInvalid
 	gate := sub.delivery
+	// Claim the death notice while still holding the lock beginClose takes, so
+	// exactly one of the two reports it. If beginClose got here first the
+	// subscription is already gone and this drops, which is what it claims below.
+	if valid && terminal && callback != nil {
+		sub.modelInvalidSent = true
+		c.subs[feed.id] = sub
+	}
 	c.mu.Unlock()
 	if !valid || callback == nil {
 		return
