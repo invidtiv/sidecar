@@ -1,6 +1,31 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# sibling_latest <module> — newest published version of a sibling module, or
+# nothing if it cannot be resolved.
+#
+# The VCS is asked before the module proxy. proxy.golang.org indexes a freshly
+# pushed tag a minute or two late, so during a co-release asking it for
+# <sibling>@latest answers with the *previous* tag — a stale answer that is
+# indistinguishable from a true one, and would let this check pass on exactly
+# the sibling version the release is trying to move off. The proxy stays as a
+# fallback so a run without VCS access still resolves; both failing prints
+# nothing, so the caller keeps its existing skip behavior.
+#
+# Inlined rather than sourced: test-release-guards.sh copies this script alone
+# into a synthetic repo, so it has to stand on its own.
+sibling_latest() {
+  local mod=$1 latest=""
+  latest=$(GOWORK=off GOPROXY=direct go list -m -f '{{.Version}}' "$mod@latest" 2>/dev/null || true)
+  if [[ -n $latest ]]; then
+    printf '%s\n' "$latest"
+    return 0
+  fi
+  latest=$(GOWORK=off go list -m -f '{{.Version}}' "$mod@latest" 2>/dev/null || true)
+  [[ -n $latest ]] && printf '%s\n' "$latest"
+  return 0
+}
+
 mode=${1:-}
 case "$mode" in
   pre-tag | tagged) ;;
@@ -45,15 +70,18 @@ fi
 
 # Sibling modules (td, tasks, …) must be pinned to their newest published tag.
 # v1.1.0 shipped against tasks v1.9.0 while v1.11.0 was already out, because
-# nothing checked. Skipped when the module proxy is unreachable so an offline
-# or synthetic-repo run does not fail closed.
+# nothing checked. Resolution goes through sibling_latest, which asks the VCS
+# before the module proxy: the proxy lags a freshly pushed tag by a minute or
+# two, and during a co-release that stale answer would let this gate pass on
+# the sibling version we are trying to move off. Skipped when neither source
+# resolves so an offline or synthetic-repo run does not fail closed.
 sibling_mods=$(GOWORK=off go list -m -f '{{if not .Main}}{{.Path}} {{.Version}}{{end}}' all 2>/dev/null |
   awk '$1 ~ /^github\.com\/marcus\// {print}' || true)
 if [[ -n $sibling_mods ]]; then
   stale=""
   while read -r mod cur; do
     [[ -z $mod ]] && continue
-    latest=$(GOWORK=off go list -m -f '{{.Version}}' "$mod@latest" 2>/dev/null || true)
+    latest=$(sibling_latest "$mod")
     if [[ -z $latest ]]; then
       echo "Warning: could not resolve latest version of $mod; skipping pin check" >&2
       continue

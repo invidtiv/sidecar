@@ -87,8 +87,8 @@ github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0 h1:Az/dYXiTcwcRSe59Hzw4RI1rSnAZns+1msaCXetrMFE=
 github.com/makeworld-the-better-one/dither/v2 v2.4.0/go.mod h1:VBtN8DXO7SNtyGmLiGA7IsFeKrBkQPze1/iAeM95arc=
-github.com/marcus/tasks v1.13.0 h1:uHuAIu3fFowiDkK6uLisG9f+q1ajDTdQtFQRmQ1sxZ8=
-github.com/marcus/tasks v1.13.0/go.mod h1:vcvzhFaUKOM2qlCxbHFv3jHkVacHp9FY3b1mtBPQEKk=
+github.com/marcus/tasks v1.14.0 h1:vnHGKWvsOmJ4p0TtK8Drq1NAj7sPhkJL8AcnvHZY888=
+github.com/marcus/tasks v1.14.0/go.mod h1:vcvzhFaUKOM2qlCxbHFv3jHkVacHp9FY3b1mtBPQEKk=
 github.com/marcus/td v0.63.0 h1:xyYIGtczIwgFh8MwAFwPtyEWrGl06+LfQM3/9Ua9+BI=
 github.com/marcus/td v0.63.0/go.mod h1:sUopsi4tj1biv6fSlsqYATOxz6Wmxb/dfTnh1F/wEu0=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=

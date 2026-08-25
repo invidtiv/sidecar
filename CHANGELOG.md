@@ -2,10 +2,58 @@
 
 All notable changes to sidecar are documented here.
 
-## [Unreleased]
+## [v1.6.0] - 2026-08-24
+
+### Features
+
+- **Shell records survive their tmux server.** A tmux server that died or
+  restarted used to empty a project's `shells.json`, taking every shell's
+  display name, working directory, agent type and skip-perms flag with it — and
+  those records are the only thing that can rebuild a shell, so deleting them
+  deleted the recovery path. On 2026-08-22 that emptied five projects at once.
+  Sidecar now models the tmux server as an identity of its own (socket
+  inode+ctime and the server `#{pid}`), because liveness is a joint property of
+  a shell and the server it was observed on: when the server is replaced, every
+  signal changes at once for a reason that has nothing to do with any one shell.
+  "No server running" is read as a fact about the server rather than a listing
+  of zero sessions, startup reconciliation is additive-only, and a shell that
+  is not running degrades to an offline row you can press Enter on to recreate.
+  No code path can now write a manifest with fewer entries than it read except
+  the two single-identity removals, and that is enforced by a test at the writer
+  boundary rather than by convention.
+- **`sidecar shell list`, `forget`, and `restore`.** Forgetting a shell record
+  was previously reachable only by pressing a key in the TUI, and Sidecar owns
+  these records outright — nothing underneath it can reconstruct a display name
+  or agent type — so the capability is owed a non-interactive path. `forget`
+  moves a record to a tombstone rather than dropping it, `restore` puts it back
+  with its display name, agent type, skip-perms and working directory intact,
+  and `list` shows live and forgotten records on both the human and `--json`
+  surfaces. The tmux session itself is never started or killed; this is the
+  record, which is the part Sidecar owns.
+- **A visible terminal no longer costs most of a CPU core.** Leaving an agent
+  actively rendering in a visible Sidecar terminal profiled at 53% CPU against
+  a 12.7% hidden baseline — 40 points of overhead for having the pane on
+  screen. Filesystem and Git resolution are out of `View()`, project Workspace
+  and global Sessions share one bounded content-link resolution and row
+  analysis path, ordinary frames no longer build diagnostic cell grids,
+  presentations with no consumer-visible change are suppressed, and global
+  terminal updates no longer rebuild the workspace list. Where that still
+  missed the budget, per-feed publication became adaptive: every byte is still
+  consumed immediately, with an immediate leading frame, at most 30 sustained
+  frames per second, and a guaranteed trailing frame. The isolated fixture
+  measures 8.7% visible against 0.4% hidden with output-to-frame p95 of 34 ms.
+  Scrollback, selection, links, cursor and mouse modes, resize and input
+  latency are unchanged.
 
 ### Bug Fixes
 
+- **The td tab survives a `td sync`.** `td sync` installs snapshots by
+  atomically replacing `.todos/issues.db`, and the embedded monitor's SQLite
+  connection kept pointing at the unlinked inode, where every later write failed
+  with `SQLITE_READONLY` — correct file permissions, unwritable database.
+  Sidecar now notices when `issues.db` names a different file, closes the stale
+  handle, reopens against the current one, and replays the keypress that
+  triggered the check. Thanks to @gvorwaller (#308).
 - **Restored resource tabs load themselves again.** With a provider configured
   and tickets open in panes, every tab came back after a relaunch saying
   "Waiting for `<provider>` to be ready" for a provider that already was, and
@@ -15,6 +63,16 @@ All notable changes to sidecar are documented here.
   readiness resolves it without the user touching anything. A project or
   worktree switch republishes providers to the rebuilt surfaces too, which had
   been silently dropping both the matchers and the resolver.
+- **Website**: the navbar theme switcher's dropdown and caret render correctly,
+  the homepage gained a terminal compatibility section, and the advertised
+  release version and commit count are derived at build time instead of being
+  edited by hand.
+
+### Dependencies
+
+- `github.com/marcus/tasks` v1.13.0 -> v1.14.0 (Sidecar-style modals in the
+  Tasks TUI: boxed fields, real buttons, fixed footer, draggable scrollbars).
+- `github.com/marcus/td` stays at v0.63.0.
 
 ## [v1.5.0] - 2026-08-24
 
