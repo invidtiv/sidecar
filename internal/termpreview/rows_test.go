@@ -361,3 +361,44 @@ func TestInteriorAbstentionsStillRejectHighlightOnlyCanvases(t *testing.T) {
 		t.Fatalf("green highlight promoted to canvas %q once unpainted rows abstain", got)
 	}
 }
+
+// An inset block passes the blank-row test a highlight fails: Cursor's CLI
+// draws the user's message as a three-row bubble whose top and bottom rows are
+// blank padding, indented one column from the pane edge. In a transcript that
+// paints nothing else but the input field, the bubble covered three of the four
+// painted rows and became the pane's canvas — and gave it back a moment later
+// when streamed output pushed its last row out of the live grid. Shaped from a
+// live cursor-agent 2026.08.11 capture at 120x40, abridged in both dimensions;
+// the transcript rows carry no background, so a taller grid leaves the four
+// painted rows the detector votes over unchanged.
+func TestCanvasBackgroundRejectsAnInsetMessageBubble(t *testing.T) {
+	bubble := "\x1b[48;2;36;36;40m"
+	field := "\x1b[48;2;21;21;21m"
+	pad := strings.Repeat(" ", 100)
+	lines := []string{
+		"",
+		" \x1b[2mCounting to forty, one sentence each.\x1b[0m",
+		"",
+		// The bubble: indented by one unpainted column, blank padding rows
+		// above and below the message.
+		" " + bubble + pad + "\x1b[49m",
+		" " + bubble + " Count slowly from 1 to 40." + pad + "\x1b[49m",
+		" " + bubble + pad + "\x1b[49m",
+		"",
+		" \x1b[2m1.\x1b[0m One is the first counting number.",
+		"",
+		" \x1b[2m2.\x1b[0m Two is the only even prime.",
+		"",
+		" \x1b[32m⠙\x1b[39m \x1b[1mComposing\x1b[0m",
+		// The input box: half-block borders drawn as foreground glyphs, then
+		// the field itself.
+		" \x1b[38;2;21;21;21m" + strings.Repeat("▄", 100) + "\x1b[39m",
+		" " + field + " → Add a follow-up" + pad + "\x1b[49m",
+		" \x1b[38;2;21;21;21m" + strings.Repeat("▀", 100) + "\x1b[39m",
+		"  \x1b[2mComposer 2.5\x1b[0m",
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
+		t.Fatalf("inset message bubble promoted to canvas %q", got)
+	}
+}

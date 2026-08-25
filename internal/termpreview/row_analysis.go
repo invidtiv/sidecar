@@ -364,9 +364,37 @@ func inferCanvas(rows []resolvedRow) string {
 	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) {
 		return ""
 	}
-	if blankRows[canvas] == 0 &&
-		(firstCell[canvas] < CanvasRowShare(paintedRowCount) ||
-			overlap[canvas] < max(2, counts[canvas]/4)) {
+	// Row starts are always required; how many depends on whether blank rows
+	// vouch for the candidate.
+	//
+	// A pane's canvas is the background its rows begin in. An inset block —
+	// a chat bubble, a callout, a boxed banner — opens after the row's first
+	// cell, and on a sparsely painted pane it can still cover nearly every
+	// painted row and clear the share bar. Cursor's user-message bubble is
+	// three such rows, two of them blank padding, in a grid where the only
+	// other painted row is the input field: it took the canvas and flooded
+	// the pane, then gave it back as the bubble scrolled out of the live
+	// grid — a whole-pane repaint on streamed output (see CanvasRowShare).
+	//
+	// The bar is a strict majority, so a candidate that splits the row starts
+	// evenly with another abstains rather than guessing, like the row-count
+	// tie above. Row starts cannot separate a small inset block from a large
+	// one, so a genuinely pane-wide canvas that is itself inset from column 0
+	// is rejected too: that costs the seams this detection exists to hide,
+	// which is the stable cosmetic failure it replaced flicker with. Painted
+	// share of the live grid would separate them, but a TUI that repaints in
+	// sections leaves most of its grid abstaining (see the interior-abstention
+	// case in rows_test.go), so the grid is not a denominator we can use.
+	if blankRows[canvas] == 0 {
+		// Nothing blank vouches for it: demand near-total row starts and
+		// same-row co-occurrence, which line-level highlighting never has.
+		if firstCell[canvas] < CanvasRowShare(paintedRowCount) ||
+			overlap[canvas] < max(2, counts[canvas]/4) {
+			return ""
+		}
+	} else if firstCell[canvas]*2 <= paintedRowCount {
+		// Blank rows tell a canvas from a highlight, but an inset block has
+		// those too; row starts are what separate it from a canvas.
 		return ""
 	}
 	return canvas

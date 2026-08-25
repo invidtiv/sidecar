@@ -235,6 +235,12 @@ func Letterboxed(paneHeight int, interactive, follow bool) bool {
 //
 // It is measured over the live grid, so a window with no pane behind it — a
 // watched capture, a scrollback-only view — has no canvas to find.
+//
+// Covering the rows is not enough on its own: a candidate must also open a
+// majority of them. A canvas owns column 0 of the rows it paints; an inset
+// block — a chat bubble, a callout — never does, however many of a sparsely
+// painted pane's rows it happens to cover. See CanvasRowShare for the coverage
+// bar and inferCanvas for how the two rules divide the work.
 func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
 	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
 		return ""

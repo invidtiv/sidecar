@@ -62,13 +62,20 @@ func TestCanvasProbeLiveCaptures(t *testing.T) {
 		inherited := ""
 		counts := map[string]int{}
 		blanks := map[string]int{}
+		firsts := map[string]int{}
 		painted := 0
+		short := func(bg string) string {
+			return strings.TrimPrefix(strings.TrimSuffix(bg, "m"), "\x1b[")
+		}
 		for i, row := range buffer.LinesRange(0, len(lines)) {
 			resolved := analyzeRawRow(row, 0).resolve(inherited)
 			inherited = resolved.trailing
 			blank := resolved.blank
 			if len(resolved.backgrounds) > 0 {
 				painted++
+				if resolved.first != "" {
+					firsts[resolved.first]++
+				}
 				for _, bg := range resolved.backgrounds {
 					counts[bg]++
 					if blank {
@@ -78,13 +85,15 @@ func TestCanvasProbeLiveCaptures(t *testing.T) {
 			}
 			keys := make([]string, 0, len(resolved.backgrounds))
 			for _, bg := range resolved.backgrounds {
-				keys = append(keys, strings.TrimPrefix(strings.TrimSuffix(bg, "m"), "\x1b["))
+				keys = append(keys, short(bg))
 			}
-			t.Logf("row %2d blank=%v bgs=%v", i, blank, keys)
+			// first is what the row opens in, and a candidate that does not own
+			// the row starts is rejected however well it covers them.
+			t.Logf("row %2d blank=%v first=%q bgs=%v", i, blank, short(resolved.first), keys)
 		}
-		t.Logf("painted=%d share-bar=%d", painted, CanvasRowShare(painted))
+		t.Logf("painted=%d share-bar=%d row-start-bar=%d", painted, CanvasRowShare(painted), painted/2+1)
 		for bg, n := range counts {
-			t.Logf("count %q = %d (blank rows %d)", strings.TrimPrefix(strings.TrimSuffix(bg, "m"), "\x1b["), n, blanks[bg])
+			t.Logf("count %q = %d (blank rows %d, row starts %d)", short(bg), n, blanks[bg], firsts[bg])
 		}
 	}
 }
