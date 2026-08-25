@@ -9,6 +9,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/state"
@@ -674,7 +675,7 @@ func (f *Form) build(width int, prevFocus string) {
 		// Step 1 of a target-needing pane kind: the kind list plus the
 		// placement row. Enter continues to the picker; a placement click
 		// continues with that placement already recorded.
-		hints := modal.WithHintText("Tab to switch · Enter continues · Esc cancels")
+		hints := modal.WithHintText(kindStepHint(width, "Enter continues · Esc cancels"))
 		m := modal.New("Create Workspace",
 			modal.WithWidth(width),
 			modal.WithPrimaryAction(ActionCreate),
@@ -714,12 +715,26 @@ func (f *Form) build(width int, prevFocus string) {
 	f.assemble(width, prevFocus, sections)
 }
 
+// kindStepHint is the kind step's hint line: the arrows first, because moving
+// the list without leaving the Name field is the gesture nothing else on screen
+// announces, then the tail this modal's state calls for. The hint is drawn
+// outside the section column, so nothing clamps it — a line too long for the
+// box wraps and grows the modal by a row. Tab is the part a user already
+// expects of a modal, so it is what a narrow box drops.
+func kindStepHint(width int, tail string) string {
+	full := "↑↓ type · Tab to switch · " + tail
+	if ansi.StringWidth(full) <= width-modal.ChromeWidth {
+		return full
+	}
+	return "↑↓ type · " + tail
+}
+
 func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 	// Enter resolves to Create, and Create is refused while the selected kind is
 	// disabled — so the hint line must not promise a confirm that is a no-op.
-	hints := modal.WithHints(true)
+	hints := modal.WithHintText(kindStepHint(width, "Enter to confirm · Esc to cancel"))
 	if f.KindDisabledReason() != "" {
-		hints = modal.WithHintText("Tab to switch · Esc to cancel")
+		hints = modal.WithHintText(kindStepHint(width, "Esc to cancel"))
 	}
 	m := modal.New("Create Workspace",
 		modal.WithWidth(width),

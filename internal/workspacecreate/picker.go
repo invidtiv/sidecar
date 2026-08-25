@@ -344,10 +344,15 @@ func ResolvePickerTarget(workDir string, kind Kind, providerID, raw string) (uir
 
 // HandleKey routes a key through the modal and keeps the two-step flow local:
 // Esc on the picker step goes back to the kind list instead of closing, and
-// Enter on a target-needing kind advances instead of submitting. What comes
-// back is the action the host should treat, with those two consumed.
+// Enter on a target-needing kind advances instead of submitting. Up/down on
+// the kind step steer the kind list from whichever field holds focus. What
+// comes back is the action the host should treat, with those consumed.
 func (f *Form) HandleKey(msg tea.KeyPressMsg) (string, tea.Cmd) {
 	if f == nil || f.modal == nil {
+		return "", nil
+	}
+	if delta, ok := f.kindArrowDelta(msg); ok {
+		f.moveKindSelection(delta)
 		return "", nil
 	}
 	action, cmd := f.modal.HandleKey(msg)
@@ -360,6 +365,29 @@ func (f *Form) HandleKey(msg tea.KeyPressMsg) (string, tea.Cmd) {
 		return "", cmd
 	}
 	return action, cmd
+}
+
+// kindArrowDelta answers whether this key is an up/down the kind list should
+// take from the focused field, and which way it moves the selection. It asks
+// only on the kind step: the picker step's own list already owns up/down, and
+// there is no kind list on screen to steer.
+func (f *Form) kindArrowDelta(msg tea.KeyPressMsg) (int, bool) {
+	if f.step != StepKind {
+		return 0, false
+	}
+	var delta int
+	switch msg.String() {
+	case "up":
+		delta = -1
+	case "down":
+		delta = 1
+	default:
+		return 0, false
+	}
+	if !verticalArrowsSteerKindList(f.modal.FocusedID()) {
+		return 0, false
+	}
+	return delta, true
 }
 
 // TranslateMouseAction maps picker-row clicks onto the submit action after

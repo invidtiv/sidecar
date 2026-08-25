@@ -2,6 +2,13 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **The create modal is steerable with the arrow keys alone.** Choosing a pane kind used to mean Shift+Tab up to the list, arrowing to the row, then Tab back down to the Name field — three gestures before the one that mattered. Up and down now reach the kind list from wherever focus sits, so `n`, a couple of arrows and Enter is the whole interaction, and the fields that give the arrows a meaning of their own — the Project, Base Branch and Agent combos — still keep them for their dropdowns. The hint line says so.
+- **The kind list reads as one block.** Its rows were chrome-sized to their own text, so the fill ended wherever that row's description happened to, and the list showed a ragged right edge whose shape was an accident of the longest line. Every row now spans the modal's whole content column, and a disabled row keeps the list's fill under its muted text rather than punching a hole in it.
+
 ## [v1.7.0] - 2026-08-25
 
 ### Features

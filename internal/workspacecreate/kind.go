@@ -216,7 +216,10 @@ func kindRowStyle(disabled, selected, hovered bool) lipgloss.Style {
 		return kindDisabledSelected()
 	}
 	if disabled {
-		return styles.Muted
+		// The unselected row's chrome with muted text: the list is one filled
+		// block, and a row that dropped the fill would read as a hole in it
+		// rather than as an unavailable choice.
+		return styles.Button.Foreground(styles.TextMuted)
 	}
 	if selected {
 		return styles.ButtonFocused
@@ -296,13 +299,31 @@ func renderKindList(rows []kindRow, selIdx int, focused, hovered bool, disabledR
 			desc = reason
 		}
 		style := kindRowStyle(disabled, selected, hovered && !selected)
-		lines = append(lines, style.Render(line+desc))
+		lines = append(lines, renderKindRow(style, line+desc, contentWidth))
 	}
 	content := strings.Join(lines, "\n")
 	if contentWidth > 0 {
 		content = truncateLines(content, contentWidth)
 	}
 	return content
+}
+
+// renderKindRow draws one list row across the modal's whole content column.
+// A row's fill is what separates it from its neighbours, so every row has to
+// reach the same right edge: chrome sized to the text leaves the list with a
+// ragged edge whose shape is an accident of the longest description.
+func renderKindRow(style lipgloss.Style, text string, contentWidth int) string {
+	if contentWidth < 1 {
+		return style.Render(text)
+	}
+	inner := contentWidth - style.GetHorizontalFrameSize()
+	if inner < 1 {
+		return style.Render(text)
+	}
+	if ansi.StringWidth(text) > inner {
+		text = ansi.Truncate(text, inner, "…")
+	}
+	return style.Width(contentWidth).Render(text)
 }
 
 // kindControl renders the row list however this catalog is drawn: the
@@ -363,6 +384,35 @@ func kindControl(id string, rows []kindRow, selectedIndex func() int, onSelect f
 		}
 		return "", nil
 	})
+}
+
+// verticalArrowsSteerKindList reports that up/down, pressed while focusID
+// holds focus, belong to the kind list rather than to the focused field. The
+// kind step is meant to be steered with arrows alone — open it, arrow to the
+// row, Enter — so the list keeps up/down everywhere except the fields that
+// give them a meaning of their own: a combo's dropdown moves with them, while
+// a plain input, a checkbox, and a button have nothing to do with a vertical
+// arrow. A new field that grows a vertical gesture belongs in this list.
+func verticalArrowsSteerKindList(focusID string) bool {
+	switch focusID {
+	case FieldProject, FieldBase, FieldAgent:
+		return false
+	}
+	return true
+}
+
+// moveKindSelection moves the list by delta rows and stops at either end,
+// rather than wrapping: the ends of a short list are easier to feel than to
+// count, and a wrap past Note back onto Shell reads as a lost keypress.
+func (f *Form) moveKindSelection(delta int) {
+	if f == nil || len(f.rows) == 0 {
+		return
+	}
+	idx := clampIndex(f.selectedRowIndex(), len(f.rows)) + delta
+	if idx < 0 || idx >= len(f.rows) {
+		return
+	}
+	f.selectRow(idx)
 }
 
 func clampIndex(idx, length int) int {
