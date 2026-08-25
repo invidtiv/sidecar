@@ -310,24 +310,31 @@ func TestUpdateNotes_BarRegionsRegisteredAndClaimed(t *testing.T) {
 	}
 }
 
-// --- diagnostics Update button (decision 5) ----------------------------------
+// --- diagnostics key-chip action line ----------------------------------------
 
-func TestDiagnosticsUpdateButton_MouseReachable(t *testing.T) {
+func TestDiagnosticsChips_MouseReachable(t *testing.T) {
 	m := &Model{}
 	m.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
 
-	section := m.diagnosticsUpdateButton()
-	res := section.Render(40, "", "")
-	if !strings.Contains(res.Content, "Update") {
-		t.Fatalf("with a pending update diagnostics should offer an Update button, got %q", res.Content)
+	res := m.renderDiagnosticsChips(40, "", "")
+	if !strings.Contains(res.Content, "[u]") || !strings.Contains(res.Content, "Update") {
+		t.Fatalf("with a pending update diagnostics should offer a [u] Update chip, got %q", res.Content)
 	}
-	if len(res.Focusables) != 1 || res.Focusables[0].ID != "update" {
-		t.Fatalf("the button must register its hit target as %q, got %+v", "update", res.Focusables)
+	if !strings.Contains(res.Content, "[esc]") || !strings.Contains(res.Content, "Close") {
+		t.Fatalf("the Close chip must sit on the same line, got %q", res.Content)
+	}
+	ids := make([]string, 0, len(res.Focusables))
+	for _, f := range res.Focusables {
+		ids = append(ids, f.ID)
+	}
+	if len(ids) != 2 || ids[0] != "update" || ids[1] != "close" {
+		t.Fatalf("chips must register their hit targets in order, got %+v", ids)
 	}
 
-	// Without a pending update there is no button to press.
+	// Without a pending update the line is Close only — no dead Update chip.
 	empty := &Model{}
-	if res := empty.diagnosticsUpdateButton().Render(40, "", ""); res.Content != "" || len(res.Focusables) != 0 {
-		t.Errorf("no pending update must mean no Update button, got %q %+v", res.Content, res.Focusables)
+	if res := empty.renderDiagnosticsChips(40, "", ""); !strings.Contains(res.Content, "Close") ||
+		strings.Contains(res.Content, "Update") || len(res.Focusables) != 1 || res.Focusables[0].ID != "close" {
+		t.Errorf("no pending update must mean a lone Close chip, got %q %+v", res.Content, res.Focusables)
 	}
 }

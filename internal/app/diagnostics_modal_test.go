@@ -81,6 +81,12 @@ func TestDiagnosticsModalRenderingAndInteractions(t *testing.T) {
 		t.Errorf("rendered diagnostics modal should not contain 'Press ! or esc to close'")
 	}
 
+	// The old "Press u to view details and update" instruction line is gone;
+	// the [u] Update chip supersedes it.
+	if strings.Contains(rendered, "view details") {
+		t.Errorf(`rendered diagnostics modal should not contain the "Press u to view details" instruction`)
+	}
+
 	// 5. Close button is present
 	if !strings.Contains(rendered, "Close") {
 		t.Errorf("rendered diagnostics modal missing 'Close' button")

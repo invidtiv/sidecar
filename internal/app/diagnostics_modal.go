@@ -41,10 +41,11 @@ func (m *Model) ensureDiagnosticsModal() {
 		AddSection(modal.Spacer()).
 		AddSection(m.diagnosticsVersionSection()).
 		AddSection(m.diagnosticsUpdateSection()).
-		AddSection(m.diagnosticsUpdateButton()).
 		AddSection(m.diagnosticsErrorSection()).
 		AddSection(modal.Spacer()).
-		AddSection(modal.Buttons(modal.Btn(" Close ", "close", modal.BtnPrimary())))
+		AddSection(modal.Custom(func(contentWidth int, focusID, hoverID string) modal.RenderedSection {
+			return m.renderDiagnosticsChips(contentWidth, focusID, hoverID)
+		}, m.diagnosticsChipsSectionUpdate))
 }
 
 // clearDiagnosticsModal clears the diagnostics modal state.
@@ -246,22 +247,54 @@ func (m *Model) diagnosticsUpdateSection() modal.Section {
 			fmt.Fprintf(&b, "%d updates available", count)
 		}
 
-		b.WriteString("\n  ")
-		b.WriteString(styles.Muted.Render("  Press "))
-		b.WriteString(styles.KeyHint.Render("u"))
-		b.WriteString(styles.Muted.Render(" to view details and update"))
-
 		return modal.RenderedSection{Content: b.String()}
 	}, nil)
 }
 
-// diagnosticsUpdateButton is the mouse-reachable Update entry (decision 5 of
-// the update-flow redesign): the same "update" action the keyboard's u
-// already emits, as a real button. Gated so it exists only when an update is
-// actually available; openUpdateModal still refuses mid-nothing.
-func (m *Model) diagnosticsUpdateButton() modal.Section {
-	return modal.When(func() bool { return m.hasUpdatesAvailable() },
-		modal.Buttons(modal.Btn(" Update ", "update")))
+// diagnosticsChips is the one inline action line in the footer hint style:
+// [u] Update when an update is actually available, [esc] Close always. The
+// keyboard's u keeps its own path, so the chip is the mouse/focus twin of a
+// key that already works.
+func (m *Model) diagnosticsChips() []ui.KeyChip {
+	chips := []ui.KeyChip{{Keys: "[esc]", Label: "Close", ID: "close"}}
+	if m.hasUpdatesAvailable() {
+		chips = append([]ui.KeyChip{{Keys: "[u]", Label: "Update", ID: "update"}}, chips...)
+	}
+	return chips
+}
+
+// renderDiagnosticsChips paints the action line, registering each chip as a
+// real focusable control so a click and Enter both fire its action — the same
+// shape the update journey's chips use.
+func (m *Model) renderDiagnosticsChips(contentW int, _, _ string) modal.RenderedSection {
+	line, regions := ui.RenderKeyChips(m.diagnosticsChips(), contentW)
+	if line == "" {
+		return modal.RenderedSection{}
+	}
+	focusables := make([]modal.FocusableInfo, 0, len(regions))
+	for _, r := range regions {
+		focusables = append(focusables, modal.FocusableInfo{
+			ID:      r.ID,
+			OffsetX: r.OffsetX,
+			Width:   r.Width,
+			Height:  1,
+		})
+	}
+	return modal.RenderedSection{Content: line, Focusables: focusables}
+}
+
+// diagnosticsChipsSectionUpdate fires a focused chip's action on Enter or
+// space; HandleKey routes the returned ID through the same switch as clicks.
+func (m *Model) diagnosticsChipsSectionUpdate(msg tea.Msg, focusID string) (string, tea.Cmd) {
+	key, ok := msg.(tea.KeyPressMsg)
+	if !ok || focusID == "" {
+		return "", nil
+	}
+	switch key.String() {
+	case "enter", " ", "space":
+		return focusID, nil
+	}
+	return "", nil
 }
 
 // diagnosticsErrorSection renders the last error section if present.
