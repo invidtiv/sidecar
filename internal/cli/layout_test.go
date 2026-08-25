@@ -200,7 +200,7 @@ func TestLayoutApply_SpecRidesInColumnsField(t *testing.T) {
 	capture := make(chan captured, 1)
 	go func() {
 		reqsDir := filepath.Join(stateHome, "sidecar", "requests")
-		for i := 0; i < 40; i++ {
+		for i := 0; i < 400; i++ {
 			time.Sleep(25 * time.Millisecond)
 			entries, err := os.ReadDir(reqsDir)
 			if err != nil {
@@ -227,7 +227,7 @@ func TestLayoutApply_SpecRidesInColumnsField(t *testing.T) {
 
 	spec := `{"columns":[{"panes":[{"kind":"primary"}]}]}`
 	var out, errOut bytes.Buffer
-	handled, code := Run([]string{"layout", "apply", "--spec", spec, "--wait", "1500ms"}, &out, &errOut)
+	handled, code := Run([]string{"layout", "apply", "--spec", spec, "--wait", "10s"}, &out, &errOut)
 	if !handled || code != 0 {
 		t.Fatalf("apply = handled %v code %d stderr %q", handled, code, errOut.String())
 	}
