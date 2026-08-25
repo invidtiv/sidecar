@@ -125,7 +125,11 @@ func (m *Modal) HandleKey(msg tea.KeyPressMsg) (action string, cmd tea.Cmd) {
 			action, cmd = m.routeToFocusedSection(msg)
 			return m.resolveEnterAction(focusID, action), cmd
 		}
-		return "", nil
+		// No focus list yet — the modal was configured but has not rendered
+		// (or renders nothing focusable). An implicit submit still honours
+		// the modal's declared primary action rather than swallowing Enter;
+		// with no primary action there is nothing to submit.
+		return m.primaryAction, nil
 
 	default:
 		// Route other keys to the focused section
@@ -260,6 +264,17 @@ func (m *Modal) ScrollBy(delta int) {
 		return
 	}
 	m.scrollOffset = max(0, m.scrollOffset+delta)
+}
+
+// CanScroll reports whether the body viewport can still move delta lines in
+// the given direction — what an inner scroller's owner needs to decide when
+// to hand leftover scroll keys to the body.
+func (m *Modal) CanScroll(delta int) bool {
+	if !m.layoutValid {
+		return false
+	}
+	_, moved := m.bounds().Move(delta)
+	return moved
 }
 
 // ScrollToTop scrolls to the top of the content.

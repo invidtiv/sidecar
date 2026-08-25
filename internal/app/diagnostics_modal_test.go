@@ -10,6 +10,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/version"
 )
 
 type dummyDiagPlugin struct {
@@ -81,6 +82,12 @@ func TestDiagnosticsModalRenderingAndInteractions(t *testing.T) {
 		t.Errorf("rendered diagnostics modal should not contain 'Press ! or esc to close'")
 	}
 
+	// The old "Press u to view details and update" instruction line is gone;
+	// the [u] Update chip supersedes it.
+	if strings.Contains(rendered, "view details") {
+		t.Errorf(`rendered diagnostics modal should not contain the "Press u to view details" instruction`)
+	}
+
 	// 5. Close button is present
 	if !strings.Contains(rendered, "Close") {
 		t.Errorf("rendered diagnostics modal missing 'Close' button")
@@ -128,5 +135,41 @@ func TestDiagnosticsModalRenderingAndInteractions(t *testing.T) {
 	model = enterUpdated.(*Model)
 	if model.showDiagnostics {
 		t.Errorf("expected showDiagnostics to be false after Tab + Enter on Close button")
+	}
+}
+
+// Bare Enter is a primary action, never a silent one: with an update
+// available it opens the updater exactly like pressing u; with nothing to
+// update it puts the modal away.
+func TestDiagnosticsBareEnterFollowsAvailability(t *testing.T) {
+	setup := func() *Model {
+		km := keymap.NewRegistry()
+		keymap.RegisterDefaults(km)
+		cfg := &config.Config{}
+		m := New(plugin.NewRegistry(&plugin.Context{WorkDir: "/t", Keymap: km}), km, cfg, "dev", "/t", "/t", "")
+		m.width = 100
+		m.height = 40
+		m.showDiagnostics = true
+		return &m
+	}
+
+	withUpdate := setup()
+	withUpdate.products = []version.Target{target(version.ProductTd, "td", "1.0.0", "1.1.0", true)}
+	_ = withUpdate.renderDiagnosticsModal("")
+	updated, _ := withUpdate.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	model := updated.(*Model)
+	if model.updateModalState != UpdateModalPreview {
+		t.Errorf("bare Enter with an update available must open the updater, got phase %v", model.updateModalState)
+	}
+	if model.showDiagnostics {
+		t.Error("opening the updater must put the diagnostics modal away")
+	}
+
+	nothing := setup()
+	nothing.needsRestart = true // restart pending, nothing left to update
+	_ = nothing.renderDiagnosticsModal("")
+	updated, _ = nothing.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if updated.(*Model).showDiagnostics {
+		t.Error("bare Enter with only Close offered must close the modal")
 	}
 }

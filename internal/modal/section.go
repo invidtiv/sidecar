@@ -548,12 +548,16 @@ func clampLines(content string, contentWidth int) string {
 	return strings.Join(lines, "\n")
 }
 
-// measureHeight returns the number of lines in rendered content.
-// Trims trailing newlines and returns 0 for empty content.
+// measureHeight returns the number of lines the content occupies when the
+// layout joins sections with newlines: trailing blank lines included, so
+// measured height == rendered height — the same invariant clampLines keeps
+// for width. A section that ends its content with "\n" (a padding row, a
+// deliberate gap) paints that line when joined, so it must pay for it here;
+// undercounting by one made the viewport slice the last real section — the
+// action row — off the bottom of the modal.
 func measureHeight(content string) int {
-	trimmed := strings.TrimRight(content, "\n")
-	if trimmed == "" {
+	if content == "" {
 		return 0
 	}
-	return lipgloss.Height(trimmed)
+	return strings.Count(content, "\n") + 1
 }

@@ -35,6 +35,10 @@ type Target struct {
 	// "unknown", never "up to date".
 	CheckFailed bool
 	Install     Installation
+	// Notes is the offered release's body text, carried per product so every
+	// target can show its own release notes. Empty when the check came from
+	// a cache written before notes were persisted.
+	Notes string
 }
 
 // ResultStatus is the settled outcome of one target in a confirmed batch.

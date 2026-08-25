@@ -177,6 +177,7 @@ type Model struct {
 	showDiagnostics         bool
 	diagnosticsModal        *modal.Modal
 	diagnosticsModalWidth   int
+	diagnosticsPrimary      string // primary action currently applied to the modal
 	diagnosticsMouseHandler *mouse.Handler
 	showClock               bool
 	titleTemplate           string // ui.terminalTitle; empty leaves the terminal title alone
@@ -298,11 +299,14 @@ type Model struct {
 	// than parallel per-product fields.
 	currentVersion string
 	products       []version.Target
-	updateNotes    string // Sidecar release notes; they describe Sidecar only
 
 	// Update feature state
 	updateInProgress bool
 	needsRestart     bool
+	// updateResultsAcked records that the user closed the Done/Failed surface
+	// after seeing it, so a later entry point offers a fresh confirmation
+	// rather than a stale result.
+	updateResultsAcked bool
 
 	// Confirmed batch. updatePlan is immutable once confirmed; updateResults
 	// records the settled outcome of every attempted target so a later failure
@@ -314,31 +318,22 @@ type Model struct {
 	updatePlanID    int
 	updateActiveIdx int
 
-	// Update modal state
-	updateModalState      UpdateModalState
-	updateStartTime       time.Time
-	updateChangelog       string // Full changelog content
-	changelogVisible      bool
-	changelogScrollOffset int
-	changelogScrollState  *changelogViewState // Shared state for modal closure
-
-	// Update modal (declarative)
-	updatePreviewModal         *modal.Modal
-	updatePreviewModalWidth    int
-	updatePreviewMouseHandler  *mouse.Handler
-	updateCompleteModal        *modal.Modal
-	updateCompleteModalWidth   int
-	updateCompleteMouseHandler *mouse.Handler
-	updateErrorModal           *modal.Modal
-	updateErrorModalWidth      int
-	updateErrorMouseHandler    *mouse.Handler
-	changelogModal             *modal.Modal
-	changelogModalWidth        int
-	changelogMouseHandler      *mouse.Handler
-	changelogRenderedLines     []string // Cached rendered changelog lines
-	changelogMaxVisibleLines   int      // Max lines visible in viewport
-	changelogModalStyleKey     string   // Markdown style identity the modal was rendered under
-
+	// Update modal state. One modal object carries every phase (Preview →
+	// Installing → Done/Failed); updateModalState selects which When-gated
+	// sections render.
+	updateModalState UpdateModalState
+	updateStartTime  time.Time
+	// The single update modal and its input state. Built once per open flow;
+	// phase changes re-present it rather than rebuild it.
+	updateModal        *modal.Modal
+	updateMouseHandler *mouse.Handler
+	updateUI           *updateUIState
+	// updateBatchRetry records whether the running batch was launched as a
+	// retry, so the Installing surface shows its disabled button accordingly.
+	updateBatchRetry bool
+	// updateNotesBar is the notes section's scrollbar pointer state (hover +
+	// press-time gesture snapshot).
+	updateNotesBar switcherBarState
 	// Intro animation
 	intro IntroModel
 

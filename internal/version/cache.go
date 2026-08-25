@@ -22,6 +22,9 @@ type CacheEntry struct {
 	CurrentVersion string    `json:"currentVersion"`
 	CheckedAt      time.Time `json:"checkedAt"`
 	HasUpdate      bool      `json:"hasUpdate"`
+	// Notes is the offered release's body at the time of the check, so the
+	// cache-hit path can still show release notes without a network call.
+	Notes string `json:"notes,omitempty"`
 }
 
 func isolatedConfigFile(name string) string {

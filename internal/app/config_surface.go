@@ -126,17 +126,21 @@ func (m *Model) configHostState() configui.HostState {
 
 // configUpdateStatus reports the release check the app already runs from Init.
 // Configuration renders it; it never runs a check of its own, and an unknown
-// answer stays unknown rather than becoming "up to date".
+// answer stays unknown rather than becoming "up to date". AnyPending is
+// deliberately independent of Sidecar's own row: another product's pending
+// update is still work worth opening the updater for.
 func (m *Model) configUpdateStatus() configui.UpdateStatus {
+	anyPending := m.hasUpdatesAvailable() || m.updateInProgress || m.needsRestart
 	target := m.productTarget(version.ProductSidecar)
 	if target == nil {
-		return configui.UpdateStatus{}
+		return configui.UpdateStatus{Checked: len(m.products) > 0, AnyPending: anyPending}
 	}
 	return configui.UpdateStatus{
 		Checked:       true,
 		Failed:        target.CheckFailed,
 		Available:     target.HasUpdate,
 		LatestVersion: target.LatestVersion,
+		AnyPending:    anyPending,
 	}
 }
 
@@ -319,10 +323,22 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		// Configuration hands an available update to the updater that already
 		// exists. It duplicates none of its confirmation, progress, or install
 		// behavior, and Configuration stays open underneath, so closing the
-		// updater returns the user to About.
-		m.openUpdatePreview()
+		// updater returns the user to About. Mid-batch this reopens the modal
+		// in its current phase instead of restarting or double-starting.
 		m.updateContext()
-		return nil, true
+		if m.openUpdateModal() {
+			return nil, true
+		}
+		// A pending Sidecar restart deliberately gates a new confirmation;
+		// say that instead of claiming nothing is pending.
+		if m.needsRestart && m.hasUpdatesAvailable() {
+			return toast("Restart sidecar to finish the pending update first"), true
+		}
+		return toast("No update is pending right now"), true
+
+	case configui.CloseConfigMsg:
+		// The About chip line's Close: the same put-away the global esc does.
+		return m.closeConfiguration(), true
 
 	case configui.CheckUpdatesMsg:
 		cmds := m.productCheckCmds(true)

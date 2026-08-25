@@ -712,8 +712,8 @@ func TestMeasureHeight(t *testing.T) {
 		{"single line", 1},
 		{"line 1\nline 2", 2},
 		{"line 1\nline 2\nline 3", 3},
-		{"with trailing\n", 1}, // Trailing newline trimmed
-		{"\n", 0},              // Only newline = empty
+		{"with trailing\n", 2}, // The trailing blank paints when sections join
+		{"\n", 2},              // One blank line plus its break
 	}
 
 	for _, tc := range cases {
@@ -913,5 +913,26 @@ func TestSetFocusBeforeRender(t *testing.T) {
 
 	if m.FocusedID() != "btn-c" {
 		t.Fatalf("after render, focus = %q, want btn-c", m.FocusedID())
+	}
+}
+
+// Enter on a modal that has never rendered (no focus list) still submits the
+// declared primary action. This is what lets a long-lived modal opened in an
+// Update handler confirm on the first keypress, before any frame has painted.
+func TestHandleKeyEnterWithoutFocusSubmitsPrimary(t *testing.T) {
+	m := New("Test", WithPrimaryAction("update")).
+		AddSection(Text("body"))
+	if m.FocusedID() != "" {
+		t.Fatal("precondition: unrendered modal has no focus")
+	}
+	action, _ := m.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != "update" {
+		t.Errorf("enter without focus = %q, want primary action %q", action, "update")
+	}
+
+	plain := New("Plain").AddSection(Text("body"))
+	action, _ = plain.HandleKey(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if action != "" {
+		t.Errorf("enter without focus or primary = %q, want empty", action)
 	}
 }

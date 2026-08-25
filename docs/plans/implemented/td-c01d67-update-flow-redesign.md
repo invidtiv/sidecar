@@ -1,5 +1,23 @@
 # Update Flow Redesign — One Modal, Polished
 
+## Outcome
+
+Shipped on `install-modal` (td-c01d67, commits 53601b19..4817f6c3). One phase-driven
+`modal.Modal` (internal/app/update_modal.go) carries Overview → Installing → Done/Failed;
+`primeUpdateModalFocus`, the per-phase key/mouse switches, the changelog overlay, and the raw
+progress box are gone. M2 added two-column rows, library-derived width, a draggable notes bar,
+in-place changelog expansion, disabled install buttons, and the Diagnostics Update button.
+M3 switched notes to the release body persisted in the version cache and carried per product,
+with a tag-pinned disk-cached expansion fetch and styled retry-on-failure. Review cycles caught
+and fixed a post-ack updater lockout and two value-copy state bugs. A pre-PR review (td-d054cd)
+folded the last two body-embedded controls — the changelog toggle and its retry — into the one
+action line (which also fixed bare Enter expanding the changelog instead of confirming), dropped
+the bracketed key spelling for the app's unbracketed `KeyHint` chip, made the line drop optional
+chips rather than truncate Close out of reach, and fixed `ChangelogURL` stripping the `v` from
+the release tag (every expansion 404'd against the real raw host). Deferred: notification-centre
+dot deep-link to the updater (td-e0512b); retry double-fetch nit. Proof transcripts under
+/tmp/update-proof-td-a4f33b/ (runs 14–21 + before-after pair).
+
 The in-app update journey currently walks the user through four separate modal objects — Diagnostics, "Update available", an optional Changelog drawn as a second overlay on top of the first, a hand-rolled progress box that is not a modal at all, and a Complete/Incomplete modal — each with its own width, title style, key handling, and mouse handler. This plan collapses everything after the Diagnostics entry into **one modal that changes phase in place**, and brings it up to the polish standard of the command palette: real scrollbars with draggable thumbs, real buttons (including disabled states), consistent widths and hints, columns instead of hand-indented rows.
 
 The update *engine* (`internal/version`: detection, provenance guards, `Apply`, `verifySuite`, retry/carry semantics) is correct, well-tested, and **out of scope except where the UI reads it**. This is a presentation rewrite.
