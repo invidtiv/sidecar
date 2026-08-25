@@ -1,9 +1,11 @@
 package workspace
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/panelayout"
 )
 
 // shellLeafTestPlugin is a drawn plugin with the terminal panel up as a Shell
@@ -173,5 +175,20 @@ func TestPrimarySlotOwnsTheWholeLeafWithoutAPanel(t *testing.T) {
 	}
 	if w, h := terminalSlotSize(box); w != width || h != height {
 		t.Fatalf("primary terminal sized %dx%d, want the preview's %dx%d", w, h, width, height)
+	}
+}
+
+// The toast a refused third live terminal gets and the planner's live-cap
+// refusal are one rule said in two registers — capitalized for the toast,
+// lowercase for an agent-facing ack. They must agree modulo that leading
+// case, or the two surfaces drift into promising different caps.
+func TestShellCapMessageTracksThePlannerCapMessage(t *testing.T) {
+	planner := panelayout.LiveCapMessage
+	toast := shellCapMessage
+	if len(toast) == 0 || len(planner) == 0 {
+		t.Fatal("both messages must be non-empty")
+	}
+	if !strings.EqualFold(toast, planner) {
+		t.Fatalf("shellCapMessage %q and panelayout.LiveCapMessage %q drifted", toast, planner)
 	}
 }

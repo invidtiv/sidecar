@@ -417,8 +417,8 @@ func TestSplitLeafSplitsInternalNodes(t *testing.T) {
 	if got, want := gridOfIDs(root), [][]int{{1}, {2, 4, 6}}; !idsEqual(got, want) {
 		t.Fatalf("column append produced %v, want %v", got, want)
 	}
-	if Find(root, MaxID(root)) == nil {
-		t.Fatal("the divided column subtree lost its split node")
+	if Find(root, column.ID) == nil || Find(root, column.ID).Split == nil {
+		t.Fatal("the pre-split column node lost its identity or its split")
 	}
 
 	// The root itself splits into a new trailing column.
