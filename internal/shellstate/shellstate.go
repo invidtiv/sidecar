@@ -228,6 +228,10 @@ func RestoreAtPath(path string, id Identity) (Definition, error) {
 
 // ListTombstonesAtPath returns forgotten shell definitions still in the
 // manifest. A missing file is an empty list, not an error.
+//
+// Records past the retention window are filtered out even though the next
+// write is what physically removes them, so a caller never offers a restore
+// that the write behind it would refuse.
 func ListTombstonesAtPath(path string) ([]Tombstone, error) {
 	m, err := readManifest(path)
 	if err != nil {
@@ -236,8 +240,9 @@ func ListTombstonesAtPath(path string) ([]Tombstone, error) {
 		}
 		return nil, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
 	}
-	out := make([]Tombstone, len(m.Tombstones))
-	copy(out, m.Tombstones)
+	live := expireTombstonesNow(m.Tombstones)
+	out := make([]Tombstone, len(live))
+	copy(out, live)
 	return out, nil
 }
 
@@ -298,18 +303,24 @@ func mutateManifestLive(path string, identityRemoval bool, apply func(*manifest)
 		return &Error{Kind: KindState, Msg: "lock shell manifest", Err: err}
 	}
 	defer releaseLock(lock)
-	m := manifest{Version: 1}
+	m := manifest{Version: CurrentVersion}
 	if current, readErr := readManifest(path); readErr == nil {
 		m = current
 	} else if !os.IsNotExist(readErr) {
 		return &Error{Kind: KindState, Msg: "read shell manifest", Err: readErr}
 	}
+	if err := CheckWritableVersion(m.Version); err != nil {
+		return err
+	}
+	// Expiry runs before apply so that the mutation, and anything it decides
+	// from the tombstone list, sees the same set the readers do.
+	m.Tombstones = expireTombstonesNow(m.Tombstones)
 	before := len(m.Shells)
 	if err := apply(&m); err != nil {
 		return err
 	}
 	ObserveLiveCountWrite(path, before, len(m.Shells), identityRemoval)
-	m.Version = 1
+	m.Version = CurrentVersion
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return &Error{Kind: KindState, Msg: "encode shell manifest", Err: err}
@@ -340,15 +351,23 @@ type Definition struct {
 }
 
 // Tombstone is a forgotten shell definition kept so RestoreAtPath can move it
-// back. An older binary that does not know this field ignores it on read and
-// may drop the key on its next write; that is accepted until the versioned
-// format in docs/plans/active/shell-record-durability.md part D.
+// back, for as long as TombstoneRetention says.
+//
+// It arrived with schema version 2. An older binary — one that predates
+// CurrentVersion being read at all — ignores the field on read and drops the
+// key on its next write. That degradation is accepted and unavoidable in that
+// direction; what version 2 buys is the other direction, where this build
+// refuses to rewrite a manifest whose version it does not understand rather
+// than dropping the fields it could not parse (see CheckWritableVersion).
 type Tombstone struct {
 	Definition
 	DeletedAt time.Time `json:"deletedAt"`
 }
 
 type manifest struct {
+	// Version is the schema version of the file on disk. Every writer checks
+	// it with CheckWritableVersion before rewriting, and stamps CurrentVersion
+	// on the way out, which is how a v1 file upgrades in place.
 	Version int          `json:"version"`
 	Shells  []Definition `json:"shells"`
 	// Tombstones is omitted by older binaries; see Tombstone.
@@ -547,6 +566,9 @@ func RenameAtPath(path string, req RenameRequest) (RenameResult, error) {
 	if err != nil {
 		return RenameResult{}, &Error{Kind: KindState, Msg: "read shell manifest", Err: err}
 	}
+	if err := CheckWritableVersion(m.Version); err != nil {
+		return RenameResult{}, err
+	}
 	match := -1
 	for i, shell := range m.Shells {
 		if shell.TmuxName == req.TmuxName && sameNamespace(shell.Namespace, req.Namespace) {
@@ -570,6 +592,10 @@ func RenameAtPath(path string, req RenameRequest) (RenameResult, error) {
 	}
 	before := len(m.Shells)
 	m.Shells[match].DisplayName = req.Name
+	// Every write sweeps, including this one: that is what keeps the file
+	// bounded without a sweeper that has to know where manifests live.
+	m.Tombstones = expireTombstonesNow(m.Tombstones)
+	m.Version = CurrentVersion
 	ObserveLiveCountWrite(path, before, len(m.Shells), false)
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {

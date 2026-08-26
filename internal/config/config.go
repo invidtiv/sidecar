@@ -31,6 +31,10 @@ type Config struct {
 	// because the store, the toasts, and the centre are the shell's, not any
 	// plugin's.
 	Notifications NotificationsConfig `json:"notifications,omitempty"`
+	// Shells configures the shell records Sidecar owns in shells.json. It is
+	// app-level because every surface writes those records, including
+	// `sidecar shell forget` in a process that loads no plugins.
+	Shells ShellsConfig `json:"shells,omitempty"`
 }
 
 // SelectionConfig configures text selection across surfaces.

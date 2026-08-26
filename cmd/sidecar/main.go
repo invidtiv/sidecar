@@ -38,6 +38,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/assembly"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/startupfail"
 	"github.com/marcus/sidecar/internal/startuptrace"
 	"github.com/marcus/sidecar/internal/state"
@@ -162,6 +163,11 @@ func main() {
 	// Initialize feature flags
 	features.Init(cfg)
 	applyFeatureOverrides()
+
+	// Hand shellstate the retention window from the config we just read, so no
+	// manifest write has to re-read config.json to learn it — one of those
+	// writes is on the startup path.
+	shellstate.SetTombstoneRetention(cfg.Shells.TombstoneRetentionWindow())
 
 	// Load persistent state (ignore errors - state is optional)
 	// state.json lives next to config.json, so -config relocates it too.

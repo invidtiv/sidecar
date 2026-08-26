@@ -567,6 +567,10 @@ session is not started or killed.
 A name that is already forgotten is already in that state (exit 0). A name
 that is in neither the live list nor the tombstones is not found (exit 1).
 
+A forgotten record stays restorable for 14 days by default; set
+shells.tombstoneRetention in config.json ("30d", "336h", or "forever") to
+change the window.
+
 ```
 Usage: sidecar shell forget [--json] <tmux-name>
 ```
@@ -700,7 +704,9 @@ Display name, agent type, skip-perms, and working directory come back with it.
 The tmux session is not started.
 
 A name that is still live is already in that state (exit 0). A name that is in
-neither the live list nor the tombstones is not found (exit 1).
+neither the live list nor the tombstones is not found (exit 1) — including a
+record whose retention window (shells.tombstoneRetention, 14 days by default)
+has passed.
 
 ```
 Usage: sidecar shell restore [--json] <tmux-name>

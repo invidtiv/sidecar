@@ -2,6 +2,14 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Features
+
+- **A shell record that was written by a newer Sidecar is no longer quietly rewritten without the parts this build could not read.** `shells.json` has carried a `version` field since the beginning and nothing ever read it, so a file from a newer binary would parse into the fields this one knows, lose the rest on the next write, and look fine doing it — the same failure the shell-record durability work is about, one level up in the format itself. The version is now 2 and every writer checks it: a manifest from the future is refused with a message naming both versions, and the file is left byte-identical. A version 1 file upgrades in place on its first write, keeping every field. Reads are unaffected at any version, because a read cannot lose anything. (td-362a41)
+
+- **Forgotten shell records stop accumulating forever.** Forgetting a shell moves its definition to a tombstone so `sidecar shell restore` can put it back, and until now nothing ever removed one — a long-lived project's `shells.json` grew by a record for every shell ever forgotten. Tombstones now expire after `shells.tombstoneRetention` in `config.json`, which takes a Go duration, a day count (`"30d"`), or `"forever"`, and defaults to 14 days. Expiry runs at the writer boundary, so the file is bounded without a background sweeper. One deliberate consequence: once a record's window passes, Sidecar no longer remembers the forget, so a tmux session of that name that is still running becomes an ordinary adoptable row again rather than staying invisible. (td-362a41)
+
 ## [v1.8.0] - 2026-08-26
 
 ### Features

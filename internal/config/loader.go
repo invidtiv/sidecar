@@ -71,6 +71,13 @@ type rawConfig struct {
 	// Notifications is a pointer for the same reason: an absent section leaves
 	// internal/notify's registry defaults alone.
 	Notifications *rawNotificationsConfig `json:"notifications"`
+	// Shells is a pointer for the same reason: an absent section leaves the
+	// shell-record defaults (config.DefaultTombstoneRetention) alone.
+	Shells *rawShellsConfig `json:"shells"`
+}
+
+type rawShellsConfig struct {
+	TombstoneRetention string `json:"tombstoneRetention"`
 }
 
 type rawNotificationsConfig struct {
@@ -499,6 +506,11 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 		for id, src := range raw.Notifications.Sources {
 			cfg.Notifications.Sources[id] = NotificationSourceConfig(src)
 		}
+	}
+
+	// Shells
+	if raw.Shells != nil && strings.TrimSpace(raw.Shells.TombstoneRetention) != "" {
+		cfg.Shells.TombstoneRetention = strings.TrimSpace(raw.Shells.TombstoneRetention)
 	}
 
 	// Features

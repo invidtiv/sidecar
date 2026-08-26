@@ -136,7 +136,10 @@ func RootCommand() *Command {
 			"moves to a tombstone so `sidecar shell restore` can put it back; the tmux\n" +
 			"session is not started or killed.\n\n" +
 			"A name that is already forgotten is already in that state (exit 0). A name\n" +
-			"that is in neither the live list nor the tombstones is not found (exit 1).",
+			"that is in neither the live list nor the tombstones is not found (exit 1).\n\n" +
+			"A forgotten record stays restorable for 14 days by default; set\n" +
+			"shells.tombstoneRetention in config.json (\"30d\", \"336h\", or \"forever\") to\n" +
+			"change the window.",
 		Flags: []Flag{
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
@@ -168,7 +171,9 @@ func RootCommand() *Command {
 			"Display name, agent type, skip-perms, and working directory come back with it.\n" +
 			"The tmux session is not started.\n\n" +
 			"A name that is still live is already in that state (exit 0). A name that is in\n" +
-			"neither the live list nor the tombstones is not found (exit 1).",
+			"neither the live list nor the tombstones is not found (exit 1) — including a\n" +
+			"record whose retention window (shells.tombstoneRetention, 14 days by default)\n" +
+			"has passed.",
 		Flags: []Flag{
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},

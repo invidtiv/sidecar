@@ -20,11 +20,16 @@ import (
 // ShellManifest stores persistent shell definitions for cross-instance sync
 // and reboot survival. Stored in $XDG_STATE_HOME/sidecar/projects/<slug>/shells.json.
 type ShellManifest struct {
+	// Version is the schema version of the file this handle last read. Writes
+	// check it (shellstate.CheckWritableVersion) and refuse a manifest from a
+	// newer Sidecar rather than marshalling this narrower struct over it.
 	Version int               `json:"version"`
 	Shells  []ShellDefinition `json:"shells"`
-	// Tombstones holds forgotten definitions so restore can put them back.
-	// An older binary ignores this field and may drop the key on write —
-	// accepted until docs/plans/active/shell-record-durability.md part D.
+	// Tombstones holds forgotten definitions so restore can put them back,
+	// for as long as shellstate.TombstoneRetention says. An older binary —
+	// one from before the version field was read — ignores this field and
+	// drops the key on write; see shellstate.Tombstone for why that direction
+	// is the one that cannot be defended.
 	Tombstones []shellstate.Tombstone `json:"tombstones,omitempty"`
 
 	path     string     // not serialized - file path
@@ -51,8 +56,10 @@ func (m *ShellManifest) Revision() uint64 {
 // directly rather than defining another manifest shape.
 type ShellDefinition = shellstate.Definition
 
-// manifestVersion is the current manifest format version.
-const manifestVersion = 1
+// manifestVersion is the schema version this build writes. The number lives in
+// shellstate, next to the guard that reads it, so the two surfaces cannot
+// disagree about what "current" means.
+const manifestVersion = shellstate.CurrentVersion
 
 // LoadShellManifest loads the shell manifest from disk.
 // Returns an empty manifest (not error) if file doesn't exist or is corrupted.
@@ -129,7 +136,14 @@ func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]Shel
 	}
 	defer releaseManifestLock(lockFile)
 
-	fresh := m.readFromDiskLocked()
+	fresh, onDiskVersion := m.readFromDiskLocked()
+	if err := shellstate.CheckWritableVersion(onDiskVersion); err != nil {
+		slog.Warn("manifest: refusing to rewrite newer schema", "path", m.path, "version", onDiskVersion)
+		return err
+	}
+	// Expiry runs before apply so EnsureShells and everything else that asks
+	// which names are forgotten sees the same set the readers do.
+	m.Tombstones = shellstate.ExpireTombstones(m.Tombstones, time.Now().UTC(), shellstate.TombstoneRetention())
 	before := len(fresh)
 	next, changed := apply(fresh)
 	m.Shells = next
@@ -140,24 +154,28 @@ func (m *ShellManifest) mutateLockedKind(identityRemoval bool, apply func([]Shel
 	return m.writeLocked()
 }
 
-// readFromDiskLocked returns the definitions currently on disk, falling back to
-// the in-memory copy when the file is missing or unreadable. Caller must hold
-// both m.mu and the exclusive file lock.
-func (m *ShellManifest) readFromDiskLocked() []ShellDefinition {
+// readFromDiskLocked returns the definitions currently on disk and the schema
+// version they carry, falling back to the in-memory copy when the file is
+// missing or unreadable. Caller must hold both m.mu and the exclusive file
+// lock.
+//
+// A file we could not read reports manifestVersion: there is no version to
+// respect in that case, and the fallback is this build's own in-memory copy.
+func (m *ShellManifest) readFromDiskLocked() ([]ShellDefinition, int) {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			slog.Warn("manifest: read-before-write failed, using in-memory copy", "err", err)
 		}
-		return m.Shells
+		return m.Shells, manifestVersion
 	}
 	var onDisk ShellManifest
 	if err := json.Unmarshal(data, &onDisk); err != nil {
 		slog.Warn("manifest: read-before-write parse failed, using in-memory copy", "err", err)
-		return m.Shells
+		return m.Shells, manifestVersion
 	}
 	m.Tombstones = onDisk.Tombstones
-	return onDisk.Shells
+	return onDisk.Shells, onDisk.Version
 }
 
 // writeLocked marshals and atomically replaces the file. Caller must hold m.mu,
@@ -267,7 +285,13 @@ func dropWorkspaceTombstone(tombs []shellstate.Tombstone, tmuxName string) []she
 	return tombs
 }
 
+// tombstoneTmuxNames is the "which names are forgotten" question, asked by the
+// startup reconcile, the merge, and EnsureShells. Expired records are dropped
+// here rather than only at the writer boundary, so a name whose retention
+// window has passed is adoptable again from the next read, not from the next
+// write.
 func tombstoneTmuxNames(tombs []shellstate.Tombstone) map[string]bool {
+	tombs = shellstate.ExpireTombstones(tombs, time.Now().UTC(), shellstate.TombstoneRetention())
 	out := make(map[string]bool, len(tombs))
 	for _, stone := range tombs {
 		if stone.TmuxName != "" {

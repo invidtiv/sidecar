@@ -148,14 +148,14 @@ Also align `internal/overview`'s guard while in the area. `reapDeadShells` (`ove
 - Bump `manifestVersion` to 2 and, for the first time, *read* it. Two rules: a reader that sees a version it does not understand refuses to write the file rather than silently rewriting it without the fields it dropped; a reader that sees v1 upgrades in place on first write. This is a small amount of work that turns a decorative field into the forward-compatibility guard it was presumably always meant to be — and it is the same failure mode as the one this plan is about, one writer destroying what it does not understand.
 - Accept and document the degradation: an older binary reading a v2 file ignores `tombstones` and drops the key on its next write. That is no worse than today. Say it in the code comment rather than discovering it later.
 
-## Status (2026-08-24)
+## Status (2026-08-26) — implemented
 
-Steps 1-6 and the tombstone half of step 7 landed on `strong-tmux`: `internal/tmuxserver`, the tracker's `ObserveServer`/server-tagged `Confirm`, both surfaces' bindings, the additive startup path (`Save`/`saveLocked` are gone), `sidecar shell list|forget|restore`, and `deletedAt` tombstones with the writer-boundary shrink test and the isolated `kill-server` end-to-end proof.
+Steps 1-6 and the tombstone half of step 7 landed on `strong-tmux` (v1.6.0): `internal/tmuxserver`, the tracker's `ObserveServer`/server-tagged `Confirm`, both surfaces' bindings, the additive startup path (`Save`/`saveLocked` are gone), `sidecar shell list|forget|restore`, and `deletedAt` tombstones with the writer-boundary shrink test and the isolated `kill-server` end-to-end proof.
 
-Still open, both from part D:
+The rest of step 7 — the two pieces of part D that were still open — landed under td-362a41:
 
-- **Schema version 2 and the refuse-to-write-unknown-version guard.** `manifestVersion` is still written and never read. The tombstone doc comments in `shellstate.go` and `shell_manifest.go` point here.
-- **Bounded tombstone retention.** Tombstones currently accumulate without expiry, so a long-lived project's `shells.json` grows by one record per shell ever forgotten. Retention must be config-backed, not a constant in a writer (see Open questions).
+- **Schema version 2 and the refuse-to-write-unknown-version guard.** `shellstate.CurrentVersion` is 2, and for the first time the field is read: `shellstate.CheckWritableVersion` refuses to rewrite a manifest whose version this build does not understand, in both writers (`shellstate`'s locked mutator and rename, and the workspace `ShellManifest`). A v1 file upgrades in place on first write — v1 is a subset of v2, so there is nothing to migrate beyond the number. Reads are still allowed at any version, because a read cannot lose a field and refusing one would break `sidecar shell name` against a manifest a newer binary touched.
+- **Bounded tombstone retention.** `shells.tombstoneRetention` in `config.json` — a Go duration, a day count (`"30d"`), or `"forever"` — defaulting to `config.DefaultTombstoneRetention` (14 days). Expiry is applied at every writer boundary and filtered on the read paths, so the file stays bounded without a sweeper that has to know where manifests live. Letting a tombstone go makes a still-running session of that name adoptable again; that is deliberate and pinned by `TestTombstoneExpiryRestoresAdoption`.
 
 ## Work sequence
 
@@ -212,4 +212,4 @@ Most of the coverage should not need tmux at all. `reconcileShellStartup` takes 
 - **Does `#{pid}` resolve inside a `list-sessions` format string?** It is a server-scoped format and should, which would give the incarnation for free in a call already being made. Verify on an isolated socket before designing around it; the socket-stat source is the fallback and is sufficient on its own.
 - **Does every tmux version in the supported range unlink and rebind the socket on restart**, giving a new inode? If a version reuses the file, the stat source degrades to "no signal" — which must be represented as `Unknown`, not as "same incarnation." Design the type so that is the safe default.
 - **Sidecar instances that run outside tmux** survive a server restart and would observe the transition live rather than at startup. That is the case part A is aimed at, and it is worth confirming the tracker reset fires on the transition rather than only at construction.
-- **Tombstone retention default.** 14 days is a guess. It should be config-backed either way, and the number matters less than the fact that it is not hardcoded in a writer.
+- **Tombstone retention default.** ~~14 days is a guess.~~ Resolved: `shells.tombstoneRetention`, default 14 days. The guess was kept as the default because nothing since has argued for a different number, and it is now a line in `config.json` rather than a constant in a writer, which was the part that mattered.
