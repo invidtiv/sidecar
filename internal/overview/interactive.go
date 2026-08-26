@@ -665,21 +665,31 @@ func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
 	return appmsg.ShowFlash(tty.HistoryExhaustedNotice)
 }
 
-// WorkspacesTerminalMsg offers the browser's terminal one of the terminal
-// component's own messages. Every one of them is scope-tagged, so the app hands
-// them to this surface and to the plugins alike and each activation keeps only
-// its own.
+// WorkspacesTerminalMsg offers every active terminal in the current row one of
+// the terminal component's own messages. Every message is scope-tagged, so the
+// owning activation acts and its peers ignore it. Routing only to the focused
+// leaf would make an unfocused peer miss output, control and session events.
 func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
 	if !tty.IsTerminalMessage(msg) {
 		return nil
 	}
 	// A live pane editor is the surface's second embedded terminal, and its
 	// messages arrive on the same bus, scope-tagged the same way.
-	edit := m.PreviewDocEditMsg(msg)
-	if !m.previewTerminalActive() {
-		return edit
+	cmds := []tea.Cmd{m.PreviewDocEditMsg(msg)}
+	var terminals []previewTerminal
+	if m.preview.terminalPanes != nil {
+		m.preview.terminalPanes.Range(func(_ int, leaf *termpanes.Leaf) bool {
+			state, _ := leaf.HostState.(*previewTerminalState)
+			if state != nil && state.terminal != nil && state.terminal.IsActive() {
+				terminals = append(terminals, state.terminal)
+			}
+			return true
+		})
 	}
-	return tea.Batch(edit, m.previewTerminalState().terminal.Update(msg))
+	for _, terminal := range terminals {
+		cmds = append(cmds, terminal.Update(msg))
+	}
+	return tea.Batch(cmds...)
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified

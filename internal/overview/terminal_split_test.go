@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpanes"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
@@ -167,6 +168,22 @@ func TestOverviewTerminalGeometrySettlesEveryLiveLeaf(t *testing.T) {
 	}
 	if got := len(peer.dims) - peerBefore; got != 1 {
 		t.Fatalf("peer resize count = %d, want 1", got)
+	}
+}
+
+func TestReviewTerminalMessagesReachEveryLiveLeaf(t *testing.T) {
+	m, leaf := createOverviewTerminalSplit(t, workspacecreate.PlacementAuto)
+	primaryLeaf := m.primaryTerminalLeaf()
+	m.preview.paneFocus = primaryLeaf.ID
+	primary := m.primaryTerminalState().terminal.(*fakeTerminal)
+	peer := m.terminalState(leaf.ID).terminal.(*fakeTerminal)
+
+	m.WorkspacesTerminalMsg(tty.CaptureResultMsg{Output: "fanout frame"})
+	if got := primary.buffer.String(); got != "fanout frame" {
+		t.Fatalf("focused primary output = %q", got)
+	}
+	if got := peer.buffer.String(); got != "fanout frame" {
+		t.Fatalf("unfocused peer output = %q; terminal message was not fanned out", got)
 	}
 }
 
