@@ -193,14 +193,3 @@ func (m *Model) previewTermBarOwnsDrag(dragSource string) bool {
 	return m.previewTerminalState().termBar.active &&
 		(dragSource == ui.RegionScrollbarThumb || dragSource == ui.RegionScrollbarTrack)
 }
-
-// previewTermBarStyle is the emphasis the bar draws with: hover lights
-// whichever part the pointer rests on, a live gesture keeps the thumb lit.
-func (m *Model) previewTermBarStyle() ui.ScrollbarStyle {
-	dragging := m.previewTerminalState().termBar.active
-	hovering := m.hoverTermBar && !dragging
-	return ui.ScrollbarStyle{
-		Thumb: ui.HandleStateFrom(hovering, dragging),
-		Track: ui.HandleStateFrom(hovering, false),
-	}
-}

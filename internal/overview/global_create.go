@@ -8,8 +8,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/modal"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -132,25 +135,30 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 		agents = m.config.Plugins.Workspace.Agents
 		defaultAgent = strings.TrimSpace(m.config.Plugins.Workspace.DefaultAgentType)
 	}
+	allowTerminalSplit := features.IsEnabled(features.WorkspaceTerminalPanel.Name)
+	terminalDisabled := ""
+	if allowTerminalSplit && panelayout.LiveCapReached(m.preview.paneRoot) {
+		terminalDisabled = termpanes.CapDisabledReason
+	}
+	terminalName := "Terminal"
+	if workspace, ok := m.SelectedWorkspace(); ok && strings.TrimSpace(workspace.Name) != "" {
+		terminalName = workspace.Name + " Terminal"
+	}
 	m.createForm = workspacecreate.Open(workspacecreate.OpenOpts{
-		Kind:         kind,
-		FocusKind:    focusKind,
-		UseLastKind:  useLastKind,
-		ShowProject:  true,
-		ProjectKey:   key,
-		Projects:     m.createProjectItems(),
-		Agents:       agents,
-		NextShell:    m.defaultShellDisplayName(key),
-		DefaultAgent: defaultAgent,
-		// This surface's preview owns a pane tree, so every passive row —
-		// File, Git diff, td issue, Note, and each configured resource
-		// provider — works here exactly as it does in the project workspace.
-		// The one row it cannot offer is Terminal split: this preview holds a
-		// single terminal producer, bound to the selected row, so there is
-		// nothing for a second live session to attach to.
-		AllowTerminalSplit: false,
-		ShowNotes:          m.notesWanted(),
-		Providers:          m.configuredProviders(),
+		Kind:                  kind,
+		FocusKind:             focusKind,
+		UseLastKind:           useLastKind,
+		ShowProject:           true,
+		ProjectKey:            key,
+		Projects:              m.createProjectItems(),
+		Agents:                agents,
+		NextShell:             m.defaultShellDisplayName(key),
+		DefaultAgent:          defaultAgent,
+		AllowTerminalSplit:    allowTerminalSplit,
+		TerminalSplitDisabled: terminalDisabled,
+		TerminalName:          terminalName,
+		ShowNotes:             m.notesWanted(),
+		Providers:             m.configuredProviders(),
 	})
 	m.createOpen = true
 	m.createError = ""
@@ -520,6 +528,9 @@ func (m *Model) applyCreateAction(action string) tea.Cmd {
 		}
 		if m.createForm.Step() == workspacecreate.StepTarget {
 			return m.submitPaneTargetForm()
+		}
+		if m.createForm.Kind() == workspacecreate.KindTerminalSplit {
+			return m.createPreviewTerminalSplit()
 		}
 		if m.createForm.Kind() == workspacecreate.KindWorktree {
 			return m.planCreateWorktree()

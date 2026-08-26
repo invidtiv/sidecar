@@ -2,11 +2,9 @@ package workspace
 
 import (
 	"context"
-	"fmt"
-	"os/exec"
-	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -14,7 +12,7 @@ import (
 
 const (
 	// termPanelSessionPrefix is the tmux session naming prefix for terminal panels.
-	termPanelSessionPrefix = "sidecar-tp-"
+	termPanelSessionPrefix = termpanes.SessionPrefix
 
 	// termPanelMinBoxCols / termPanelMinBoxRows are the floors each child of the
 	// split gets before the split is abandoned as too small to draw.
@@ -166,35 +164,8 @@ func (p *Plugin) createTermPanelSession(sessionName string) tea.Cmd {
 	workDir := p.termPanelWorkDir()
 
 	return func() tea.Msg {
-		// Check if session already exists
-		if sessionExists(sessionName) {
-			paneID := getPaneID(sessionName)
-			return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
-		}
-
-		if !isTmuxInstalled() {
-			return TermPanelSessionCreatedMsg{
-				SessionName: sessionName,
-				Err:         fmt.Errorf("tmux not installed"),
-			}
-		}
-
-		// Create new detached session
-		args := []string{
-			"new-session",
-			"-d",
-			"-s", sessionName,
-			"-c", workDir,
-		}
-		if err := tty.NewSession(args...); err != nil {
-			return TermPanelSessionCreatedMsg{
-				SessionName: sessionName,
-				Err:         fmt.Errorf("create terminal panel session: %w", err),
-			}
-		}
-
-		paneID := getPaneID(sessionName)
-		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID}
+		paneID, err := termpanes.EnsureSession(sessionName, workDir)
+		return TermPanelSessionCreatedMsg{SessionName: sessionName, PaneID: paneID, Err: err}
 	}
 }
 
@@ -372,14 +343,7 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 // close does this: a hidden split is reattached by the next ctrl+t, but a closed
 // one has no way back, and nothing else reaps sidecar-tp-* sessions.
 func killShellLeafSession(session string) tea.Cmd {
-	session = strings.TrimSpace(session)
-	if !strings.HasPrefix(session, termPanelSessionPrefix) {
-		return nil
-	}
-	return func() tea.Msg {
-		_ = exec.Command("tmux", "kill-session", "-t", session).Run()
-		return nil
-	}
+	return termpanes.KillSession(session)
 }
 
 // cleanupTermPanelSession resets terminal panel state without killing the tmux session.

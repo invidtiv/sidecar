@@ -78,6 +78,7 @@ func (m *Model) syncWorkspaces() {
 			items = append(items, item)
 		}
 	}
+	m.pruneDeletedTerminalRows()
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
 	m.syncCreateActions()
@@ -261,6 +262,7 @@ const (
 	workspaceOverlayCreate
 	workspaceOverlayDelete
 	workspaceOverlayView
+	workspaceOverlaySplitClose
 )
 
 func (m *Model) workspacesLayout() workspacesLayout {
@@ -331,6 +333,9 @@ func (m *Model) WorkspacesView(width, height int) string {
 	if m.renameOpen {
 		view = m.overlayRenameShell(view, width, height)
 	}
+	if m.previewSplitCloseLeaf != 0 {
+		view = m.overlayPreviewSplitClose(view, width, height)
+	}
 	if m.createOpen {
 		view = m.overlayCreateShell(view, width, height)
 	}
@@ -361,6 +366,9 @@ func (m *Model) workspaceOverlayMask() uint8 {
 	}
 	if m.viewFlyoutOpen {
 		mask |= workspaceOverlayView
+	}
+	if m.previewSplitCloseLeaf != 0 {
+		mask |= workspaceOverlaySplitClose
 	}
 	return mask
 }
@@ -721,6 +729,9 @@ func (m *Model) WorkspacesPreviewCmd() tea.Cmd { return m.previewSync() }
 // printable characters mid-query.
 func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 	key := msg.String()
+	if m.previewSplitCloseLeaf != 0 {
+		return m.handlePreviewSplitCloseKey(msg)
+	}
 	// A live pane owns the keyboard outright, before the filter and before any
 	// of the browser's own keys: while the user is typing into a terminal, "/"
 	// is a slash, "q" is a q, and ctrl+c interrupts what is running there.
@@ -1024,6 +1035,9 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	if !ok {
 		return nil
 	}
+	if m.previewSplitCloseLeaf != 0 {
+		return m.handlePreviewSplitCloseMouse(mouseMsg)
+	}
 	if m.renameOpen {
 		return m.handleRenameShellMouse(mouseMsg)
 	}
@@ -1266,7 +1280,7 @@ func (m *Model) pressInSecondaryLeaf(action mouse.MouseAction) bool {
 		return false
 	}
 	node := paneframe.LeafAt(layout, action.X, action.Y)
-	return node != nil && node.Kind != panelayout.Terminal
+	return node != nil && !panelayout.IsLive(node.Kind)
 }
 
 // WorkspacesWheelAtBoundary mirrors WorkspacesMouse's wheel routing without
@@ -1276,7 +1290,7 @@ func (m *Model) WorkspacesWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 	if m != nil && m.createOpen {
 		return m.createWheelAtBoundary(msg)
 	}
-	if m == nil || m.renameOpen || m.viewFlyoutOpen || m.workspacesMouse == nil {
+	if m == nil || m.renameOpen || m.previewSplitCloseLeaf != 0 || m.viewFlyoutOpen || m.workspacesMouse == nil {
 		return false
 	}
 	action := m.workspacesMouse.HandleMouse(msg)
@@ -1382,7 +1396,7 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 	if hit, ok := action.Region.Data.(previewPaneCloseHit); ok {
 		switch action.Type {
 		case mouse.ActionClick, mouse.ActionDoubleClick:
-			return m.closePreviewPane(hit.Kind)
+			return m.closePreviewPaneHit(hit)
 		case mouse.ActionScrollUp, mouse.ActionScrollDown:
 			return m.scrollPreviewClose(hit.Kind, action.Delta)
 		}
@@ -1409,12 +1423,12 @@ func (m *Model) workspacesRegionMouse(action mouse.MouseAction) tea.Cmd {
 		}
 		return nil
 	}
-	if _, ok := action.Region.Data.(previewPaneTitleHit); ok {
+	if hit, ok := action.Region.Data.(previewPaneTitleHit); ok {
 		// A shell leaf's name is renamed from the pane, because it has no row
 		// of its own in this list. The rename surface is the list's own, so a
 		// name changed here and a name changed with R are one act.
 		if action.Type == mouse.ActionClick || action.Type == mouse.ActionDoubleClick {
-			return m.OpenRenameShell()
+			return m.OpenRenameTerminalLeaf(int(hit))
 		}
 		return nil
 	}

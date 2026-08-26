@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -140,41 +141,43 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	}
 
 	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
-	if m.previewTerminalState().terminal == nil {
-		m.previewTerminalState().terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooks())
+	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
+	if state.terminal == nil {
+		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf.ID))
 	}
-	if m.previewTerminalActive() && m.previewTarget() == desired {
-		m.previewTerminalLeaf().Buffer = m.previewTerminalState().terminal.Buffer()
-		return m.syncTerminalGeometry()
+	if state.terminal.IsActive() && m.primaryTarget() == desired {
+		leaf.Buffer = state.terminal.Buffer()
+		return m.syncTerminalLeafGeometry(leaf.ID)
 	}
 
 	m.closePreviewTerminal()
 	m.preview.reason = ""
-	m.setPreviewTarget(desired)
+	m.setPrimaryTarget(desired)
 	var cmds []tea.Cmd
-	if width, height, ok := m.previewTerminalSize(); ok {
-		m.previewTerminalLeaf().Target.Width, m.previewTerminalLeaf().Target.Height = width, height
-		cmds = append(cmds, m.previewTerminalState().terminal.SetDimensions(width, height))
+	if width, height, ok := m.terminalLeafSize(leaf.ID); ok {
+		leaf.Target.Width, leaf.Target.Height = width, height
+		cmds = append(cmds, state.terminal.SetDimensions(width, height))
 	}
-	cmds = append(cmds, m.previewTerminalState().terminal.Open(desired))
-	m.previewTerminalLeaf().Buffer = m.previewTerminalState().terminal.Buffer()
+	cmds = append(cmds, state.terminal.Open(desired))
+	leaf.Buffer = state.terminal.Buffer()
 	m.tracef("preview terminal open workspace=%s pane=%s", workspace.ID, workspace.PaneID)
 	return tea.Batch(cmds...)
 }
 
 func (m *Model) closePreviewTerminal() {
-	if m.previewTerminalLeaf().Interactive && m.previewTerminalState().terminal != nil {
-		m.previewTerminalState().terminal.ReleaseInput()
+	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
+	if leaf.Interactive && state.terminal != nil {
+		state.terminal.ReleaseInput()
 	}
-	if m.previewTerminalState().terminal != nil && m.previewTerminalState().terminal.IsActive() {
-		m.previewTerminalState().terminal.Close()
+	if state.terminal != nil && state.terminal.IsActive() {
+		state.terminal.Close()
 	}
-	m.previewTerminalLeaf().Interactive = false
-	m.setPreviewTarget(tty.Target{})
-	m.previewTerminalLeaf().Buffer = nil
+	leaf.Interactive = false
+	m.setPrimaryTarget(tty.Target{})
+	leaf.Buffer = nil
 	// The reach belongs to the pane being released: a read still in flight is
 	// for a target this surface no longer holds.
-	m.previewTerminalLeaf().History = tty.HistoryReach{}
+	leaf.History = tty.HistoryReach{}
 }
 
 // previewTerminalHooks is everything this surface owns about a live pane, said
@@ -183,6 +186,10 @@ func (m *Model) closePreviewTerminal() {
 // noticed by polling IsActive afterwards — is a second implementation of a
 // pipeline the project surface already drives through these same hooks.
 func (m *Model) previewTerminalHooks() tty.Hooks {
+	return m.previewTerminalHooksFor(m.previewTerminalLeaf().ID)
+}
+
+func (m *Model) previewTerminalHooksFor(leafID int) tty.Hooks {
 	return tty.Hooks{
 		OnKey:      m.previewTerminalKey,
 		BeforeSend: m.beforePreviewSend,
@@ -192,10 +199,13 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList())
 		},
 		OnSessionEnded: func() tea.Cmd {
+			if leaf := panelayout.Find(m.preview.paneRoot, leafID); leaf != nil && leaf.Kind == panelayout.Shell {
+				return m.closePreviewShellLeaf(leafID, termpanes.CloseSessionEnded)
+			}
 			// A pane that died under a keystroke or a forwarded click ends the mode
 			// inside the component. The project surface raises the same toast, and a
 			// mode that ends by itself with no notice reads as a dropped keystroke.
-			m.setPreviewTarget(tty.Target{})
+			m.setPrimaryTarget(tty.Target{})
 			m.preview.reason = "The session for this workspace has ended"
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList(),
 				appmsg.Alert(notify.SourceSession, notify.SeverityInfo, "Session ended"))
@@ -281,20 +291,26 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		m.preview.reason = reason
 		return appmsg.Blocked(reason)
 	}
+	leaf := m.previewTerminalLeaf()
+	if node := panelayout.Find(m.preview.paneRoot, m.preview.paneFocus); node == nil || !panelayout.IsLive(node.Kind) {
+		leaf = m.primaryTerminalLeaf()
+		m.preview.paneFocus = leaf.ID
+	}
 	open := m.syncPreviewTerminal()
+	if node := panelayout.Find(m.preview.paneRoot, leaf.ID); node != nil && node.Kind == panelayout.Shell {
+		open = m.syncTerminalLeaf(leaf.ID)
+	}
 	if !m.previewTerminalActive() {
 		return open
 	}
 
 	m.preview.focus = focusPreview
-	m.previewTerminalLeaf().Interactive = true
+	leaf.Interactive = true
 	// The pane taking the keyboard is the terminal leaf taking focus. Saying so
 	// here is what keeps the ring and the keys one value: without it a handover
 	// that started from a document leaf would type into the shell while the ring
 	// stayed on the document.
-	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal); leaf != nil {
-		m.focusPreviewLeaf(leaf.ID)
-	}
+	m.focusPreviewLeaf(leaf.ID)
 	if m.previewNarrow() {
 		m.preview.full = true
 	}
@@ -760,15 +776,14 @@ func (m *Model) previewSurface() (termpreview.Surface, bool) {
 // new size: an idle pane under control mode emits nothing to ride along with.
 // SetDimensions is a no-op when nothing moved.
 func (m *Model) syncTerminalGeometry() tea.Cmd {
-	if !m.previewTerminalActive() {
-		return nil
+	var cmds []tea.Cmd
+	if m.preview.terminalPanes != nil {
+		m.preview.terminalPanes.Range(func(id int, _ *termpanes.Leaf) bool {
+			cmds = append(cmds, m.syncTerminalLeafGeometry(id))
+			return true
+		})
 	}
-	width, height, ok := m.previewTerminalSize()
-	if !ok {
-		return nil
-	}
-	m.previewTerminalLeaf().Target.Width, m.previewTerminalLeaf().Target.Height = width, height
-	return m.previewTerminalState().terminal.SetDimensions(width, height)
+	return tea.Batch(cmds...)
 }
 
 // previewTerminalSize is the pane size this box can actually draw: the surface
@@ -776,11 +791,7 @@ func (m *Model) syncTerminalGeometry() tea.Cmd {
 // would be one column wider than what is drawn, so it would be permanently
 // clipped and every forwarded click near the right edge would land a column off.
 func (m *Model) previewTerminalSize() (width, height int, ok bool) {
-	surface, ok := m.previewSurface()
-	if !ok {
-		return 0, 0, false
-	}
-	return tty.ContentWidth(surface.Width), surface.Height, true
+	return m.terminalLeafSize(m.previewTerminalLeaf().ID)
 }
 
 // interactiveHints is the header's right region while the pane is live. It says

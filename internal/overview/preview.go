@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/livepanes"
@@ -124,15 +123,16 @@ type previewState struct {
 }
 
 type previewPaneCache struct {
-	root     *panelayout.Node
-	focus    int
-	nextID   int
-	doc      *previewDoc
-	issue    *previewIssue
-	note     *previewNote
-	diff     *previewDiff
-	resource *previewResource
-	deck     *contentpanes.Deck
+	root      *panelayout.Node
+	focus     int
+	nextID    int
+	doc       *previewDoc
+	issue     *previewIssue
+	note      *previewNote
+	diff      *previewDiff
+	resource  *previewResource
+	deck      *contentpanes.Deck
+	terminals *termpanes.Deck
 }
 
 // WorkspacesPreviewVisible reports whether the preview believes anyone is
@@ -234,8 +234,9 @@ func (m *Model) acquirePreviewOwnership(generation uint64) (func(), bool) {
 
 // releasePreview closes the selected terminal and forgets its memory-only state.
 func (m *Model) releasePreview() {
-	m.closePreviewTerminal()
+	m.detachPreviewTerminals(false)
 	m.stashPreviewPanes()
+	m.preview.terminalPanes = termpanes.New()
 	m.preview.generation++
 	m.preview.workspaceID = ""
 	m.resetPreviewContent()
@@ -245,17 +246,18 @@ func (m *Model) releasePreview() {
 // resetPreviewContent drops the captured output and everything anchored to it.
 // A selection names buffer lines, so it cannot outlive the buffer it named.
 func (m *Model) resetPreviewContent() {
-	m.previewTerminalLeaf().Buffer = nil
-	m.previewTerminalLeaf().Scroll = 0
-	m.previewTerminalLeaf().Freeze = tty.WindowFreeze{}
+	leaf := m.primaryTerminalLeaf()
+	leaf.Buffer = nil
+	leaf.Scroll = 0
+	leaf.Freeze = tty.WindowFreeze{}
 	// The reach names lines of the buffer being dropped, and a read in flight for
 	// the old pane must not land on the new one.
-	m.previewTerminalLeaf().History = tty.HistoryReach{}
-	m.previewTerminalLeaf().Selection.Clear()
-	m.previewTerminalLeaf().Pointer.Abandon()
-	m.previewTerminalLeaf().Pointer.ResetUnit()
-	m.previewTerminalLeaf().Wheel.Reset()
-	m.previewTerminalState().termBar = previewTermBar{}
+	leaf.History = tty.HistoryReach{}
+	leaf.Selection.Clear()
+	leaf.Pointer.Abandon()
+	leaf.Pointer.ResetUnit()
+	leaf.Wheel.Reset()
+	m.primaryTerminalState().termBar = previewTermBar{}
 	m.resetActivePreviewPanes()
 }
 
@@ -289,7 +291,7 @@ func (m *Model) stashPreviewPanes() {
 	m.preview.paneCache[m.preview.workspaceID] = previewPaneCache{
 		root: m.preview.paneRoot, focus: m.preview.paneFocus, nextID: m.preview.paneNextID,
 		doc: m.preview.doc, issue: m.preview.issue, note: m.preview.note, diff: m.preview.diff,
-		resource: m.preview.resource, deck: m.preview.deck,
+		resource: m.preview.resource, deck: m.preview.deck, terminals: m.preview.terminalPanes,
 	}
 }
 
@@ -299,6 +301,14 @@ func (m *Model) restorePreviewPanes(workspaceID string) {
 		m.preview.doc, m.preview.issue, m.preview.note, m.preview.diff = cached.doc, cached.issue, cached.note, cached.diff
 		m.preview.resource = cached.resource
 		m.preview.deck = cached.deck
+		if cached.terminals != nil {
+			cached.terminals.Range(func(_ int, leaf *termpanes.Leaf) bool {
+				if leaf.Target.Source == "shell" {
+					m.preview.terminalPanes.Attach(leaf)
+				}
+				return true
+			})
+		}
 		m.preview.paneDragSplitID = 0
 		return
 	}
@@ -343,7 +353,12 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		// captures re-base line offsets and invalidate absolute anchors.
 		m.clearPreviewSelection()
 	} else {
+		m.cancelPreviewSplitClose()
+		primary := m.primaryTerminalLeaf()
+		m.detachPreviewTerminals(true)
 		m.stashPreviewPanes()
+		m.preview.terminalPanes = termpanes.New()
+		m.preview.terminalPanes.Attach(primary)
 		m.resetPreviewContent()
 	}
 	m.preview.reason = ""
@@ -369,7 +384,7 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
 		pendingCmd = cmd
 	}
-	return tea.Batch(m.syncPreviewTerminal(), pendingCmd)
+	return tea.Batch(m.syncPreviewTerminals(), pendingCmd)
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live
@@ -813,52 +828,6 @@ func (m *Model) previewSplit(width int) termpreview.Split {
 // surface in; hit testing therefore maps onto the rows drawn here.
 func (m *Model) renderPreview(width, height int) string {
 	return m.renderOutputTerminal(width, height)
-}
-
-// appendWindowStatus adds the shared facts about the drawn window to the
-// header's right region: that it is off the live edge and how to get back, that
-// older lines exist above it, that the pane is clipped, that the application has
-// the mouse. The project surface states the same ones from the same derivation.
-//
-// The region here is narrower than the project's header, so notes are dropped by
-// the shared width rule — least important first — rather than by this surface
-// never having said them.
-func (m *Model) appendWindowStatus(hints string, input tty.ViewportInput, layout tty.Viewport, width int, chips []string) string {
-	// The columns left of the chips, which the header draws first and never
-	// clips. A budget of one is a header with no room: a zero would read as
-	// "unbudgeted" and let a note overrun the row the terminal is drawn under.
-	budget := width - globalPanelOverhead
-	for _, chip := range chips {
-		budget -= ansi.StringWidth(chip) + 1
-	}
-	budget = max(budget, 1)
-	notes := tty.WindowStatus(tty.WindowStatusInput{
-		Layout:       layout,
-		AbsoluteBase: input.AbsoluteBase,
-		// The reach is the shared one, so a read of older history is in flight
-		// here exactly as it is on the project surface, and is said the same way.
-		LoadingOlder: m.previewTerminalLeaf().History.Loading,
-		// Who has the mouse is a property of the pane, asked whether or not this
-		// surface holds the keyboard: a watched notch is forwarded too, and this
-		// is the note that explains a window that did not move.
-		MouseReporting: m.previewTerminalActive() && m.previewTerminalState().terminal.PaneMouseReporting(),
-		PaneLive:       m.PreviewInteractive(),
-		PaneWidth:      input.PaneWidth,
-		PaneHeight:     input.PaneHeight,
-		LiveEdgeKey:    m.previewLiveEdgeKey(),
-	})
-	// A fetch in flight is the fact the header must keep even after Diff/Task
-	// action chips shrink the leftover. Lead with it so AppendStatus cannot
-	// drop it behind the lines-back note.
-	if m.previewTerminalLeaf().History.Loading {
-		for i, note := range notes {
-			if strings.Contains(note.Compact, "loading") || strings.Contains(note.Text, "loading") {
-				notes = append([]tty.StatusNote{note}, append(notes[:i], notes[i+1:]...)...)
-				break
-			}
-		}
-	}
-	return tty.AppendStatus(hints, notes, budget, func(note string) string { return styles.Muted.Render(note) })
 }
 
 // previewLiveEdgeKey is the chord that puts this surface's window back on the

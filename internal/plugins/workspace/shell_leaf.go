@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/termpanes"
 )
 
 // The terminal panel is a Shell leaf of the pane tree, and nothing more. Its
@@ -43,11 +44,11 @@ const (
 	// rule the user can see and act on, not a click that quietly does nothing.
 	// It is the toast a PROGRAMMATIC caller gets — ctrl+t, a CLI open — because
 	// those arrive with no modal to state the rule in first.
-	shellCapMessage = "Two live terminals at a time; close one first"
+	shellCapMessage = termpanes.CapMessage
 
 	// shellCapDisabledReason is the same rule said where the user is about to
 	// break it: one line under the create modal's disabled Terminal split row.
-	shellCapDisabledReason = "Two terminals are already on screen — close one first"
+	shellCapDisabledReason = termpanes.CapDisabledReason
 )
 
 // terminalSplitDisabledReason is why the create modal must refuse a terminal
@@ -204,22 +205,7 @@ func shellSessionSelector(persisted, derived string) string {
 // state-free rule so a headless caller could adopt it unchanged: currentCommand
 // is tmux's pane_current_command, shellCommand the session's own shell.
 func shellCloseNeedsConfirm(currentCommand, shellCommand string) bool {
-	current := strings.TrimSpace(currentCommand)
-	if current == "" {
-		return false
-	}
-	shell := strings.TrimSpace(shellCommand)
-	if shell == "" {
-		return true
-	}
-	return !strings.EqualFold(baseCommand(current), baseCommand(shell))
-}
-
-func baseCommand(command string) string {
-	if idx := strings.LastIndexByte(command, '/'); idx >= 0 {
-		command = command[idx+1:]
-	}
-	return strings.TrimPrefix(command, "-")
+	return termpanes.CloseNeedsConfirm(currentCommand, shellCommand)
 }
 
 // shellSplitPlacement is where the next shell split lands, in the `--split`
@@ -332,20 +318,20 @@ func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
 // only thing the three exits disagree about. They used to be two near-identical
 // copies that differed by accident — ctrl+t kept the user's typed name, the ✕
 // discarded it — so the difference is now a parameter rather than a fork.
-type shellCloseMode int
+type shellCloseMode = termpanes.CloseMode
 
 const (
 	// shellCloseHide is ctrl+t: the leaf goes, the session and its name stay, and
 	// the next toggle reattaches to the same shell with its scrollback intact.
-	shellCloseHide shellCloseMode = iota
+	shellCloseHide shellCloseMode = termpanes.CloseHide
 	// shellCloseExplicit is the header ✕ and the confirm's Close. Per the plan,
 	// the leaf's close closes its session: the confirm asks about a running
 	// process, so answering Close must actually stop it. Nothing else reaps
 	// sidecar-tp-* sessions, so a kept session here is an unreachable one.
-	shellCloseExplicit
+	shellCloseExplicit = termpanes.CloseExplicit
 	// shellCloseSessionEnded is the shell dying under the user. There is nothing
 	// left to kill, and the buffer and pane id go with the leaf.
-	shellCloseSessionEnded
+	shellCloseSessionEnded = termpanes.CloseSessionEnded
 )
 
 // closeShellLeaf collapses the split terminal and hands the keyboard back to

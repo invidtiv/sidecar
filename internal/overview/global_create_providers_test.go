@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
@@ -39,9 +40,19 @@ func TestGlobalSwitcherOffersConfiguredProviders(t *testing.T) {
 	if strings.Contains(view, "off-by-config") {
 		t.Fatal("global switcher offered a disabled provider")
 	}
-	// The one row this surface genuinely cannot place stays off.
-	if strings.Contains(view, "Terminal split") {
-		t.Fatalf("global switcher offered Terminal split, which needs a second live terminal:\n%s", view)
+	if !strings.Contains(view, "Terminal split") {
+		t.Fatalf("global switcher did not offer the enabled Terminal split:\n%s", view)
+	}
+}
+
+func TestGlobalSwitcherHidesTerminalSplitWithWorkspaceFlag(t *testing.T) {
+	features.Init(&config.Config{})
+	t.Cleanup(func() { features.Init(&config.Config{}) })
+	features.SetOverride(features.WorkspaceTerminalPanel.Name, false)
+	m := catalogModel(t)
+	m.OpenPaneSwitcher()
+	if view := ansi.Strip(renderCreateModal(t, m)); strings.Contains(view, "Terminal split") {
+		t.Fatalf("global switcher offered disabled Terminal split:\n%s", view)
 	}
 }
 

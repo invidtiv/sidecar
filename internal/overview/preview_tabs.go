@@ -1,13 +1,19 @@
 package overview
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -151,6 +157,10 @@ func (m *Model) previewHitChips(workspace workspaceinventory.Workspace) (chips [
 }
 
 func (m *Model) renderOutputTerminal(width, height int) string {
+	return m.renderOutputTerminalLeaf(m.primaryTerminalLeaf().ID, panelayout.Terminal, width, height)
+}
+
+func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
@@ -158,20 +168,52 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		})
 	}
 
+	leaf := m.terminalLeaf(leafID)
+	state := m.terminalState(leafID)
+	interactive := leaf.Interactive && m.preview.paneFocus == leafID && state.terminal != nil && state.terminal.IsActive()
 	chips := m.previewHeaderChips(workspace)
-	hints := m.interactiveHints()
-	if !m.PreviewInteractive() {
+	if kind == panelayout.Shell {
+		chips = []string{previewChip(leaf.Name, m.preview.paneFocus == leafID && m.previewOwnsChrome())}
+	}
+	hints := "typing · " + m.InteractiveExitKey() + " or esc esc to stop"
+	if !interactive {
 		hints = previewHints(workspace, m.PreviewFocused())
+		if kind == panelayout.Shell {
+			hints = ""
+			if m.preview.paneFocus == leafID && m.previewOwnsChrome() {
+				hints = "enter interactive"
+			}
+		}
 	}
 	message := m.preview.reason
+	if kind == panelayout.Shell {
+		message = ""
+		if leaf.Buffer == nil {
+			message = "Starting terminal..."
+		}
+	}
 	if message != "" {
 		message += "\n\n" + previewMetadata(workspace)
 	}
 
-	input := m.previewViewportInput(width, height-termpreview.HeaderRows)
+	buffer := leaf.Buffer
+	if state.terminal != nil && state.terminal.IsActive() {
+		buffer = state.terminal.Buffer()
+	}
+	base, _ := tty.BufferBase(buffer)
+	input := tty.ViewportInput{Buffer: buffer, AbsoluteBase: base, Width: width, Height: height - termpreview.HeaderRows, Scrollbar: true, TrimTrailing: tty.TrimsTrailingRows(interactive)}
+	placement := tty.PlaceWindow(&leaf.Freeze, leaf.Scroll)
+	input.Offset, input.OffsetFromBottom, input.Follow = placement.Offset, placement.FromBottom, placement.Follow
+	if state.terminal != nil && state.terminal.IsActive() {
+		input.PaneWidth, input.PaneHeight = state.terminal.PaneSize()
+		if interactive {
+			input.Interactive = true
+			input.CursorRow, input.CursorCol, input.CursorVisible = state.terminal.CursorState()
+		}
+	}
 	_, total := tty.BufferBase(input.Buffer)
 	layout := tty.FitViewport(input)
-	hints = m.appendWindowStatus(styles.Muted.Render(hints), input, layout, width, chips)
+	hints = m.appendTerminalWindowStatus(leaf, state, styles.Muted.Render(hints), input, layout, width, chips, interactive)
 	// Same resolution the project surface answers: one config rule for how far
 	// carried backgrounds reach, so a pane cannot render differently depending
 	// on which surface is showing it.
@@ -180,12 +222,31 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		Width: width, Height: height, Chips: chips, Hints: hints,
 		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
-		Follow: input.Follow, Selection: &m.previewTerminalLeaf().Selection, TabWidth: tty.DefaultTabWidth,
-		Message: message, Decorate: m.previewTerminalLeaf().LinkState.Decorate,
+		Follow: input.Follow, Selection: &leaf.Selection, TabWidth: tty.DefaultTabWidth,
+		Message: message, Decorate: leaf.LinkState.Decorate,
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
-		BarStyle: m.previewTermBarStyle(),
-		Analyzer: m.previewTerminalLeaf().RowAnalyzer,
+		BarStyle: ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
+		Analyzer: leaf.RowAnalyzer,
 	})
+}
+
+func (m *Model) appendTerminalWindowStatus(leaf *termpanes.Leaf, state *previewTerminalState, hints string, input tty.ViewportInput, layout tty.Viewport, width int, chips []string, interactive bool) string {
+	budget := width - globalPanelOverhead
+	for _, chip := range chips {
+		budget -= ansi.StringWidth(chip) + 1
+	}
+	budget = max(budget, 1)
+	mouseReporting := state.terminal != nil && state.terminal.IsActive() && state.terminal.PaneMouseReporting()
+	notes := tty.WindowStatus(tty.WindowStatusInput{Layout: layout, AbsoluteBase: input.AbsoluteBase, LoadingOlder: leaf.History.Loading, MouseReporting: mouseReporting, PaneLive: interactive, PaneWidth: input.PaneWidth, PaneHeight: input.PaneHeight, LiveEdgeKey: m.previewLiveEdgeKey()})
+	if leaf.History.Loading {
+		for i, note := range notes {
+			if strings.Contains(note.Compact, "loading") || strings.Contains(note.Text, "loading") {
+				notes = append([]tty.StatusNote{note}, append(notes[:i], notes[i+1:]...)...)
+				break
+			}
+		}
+	}
+	return tty.AppendStatus(hints, notes, budget, func(note string) string { return styles.Muted.Render(note) })
 }
 
 func (m *Model) previewHeaderChips(workspace workspaceinventory.Workspace) []string {

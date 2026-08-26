@@ -56,6 +56,7 @@ type Leaf struct {
 
 	Session string
 	PaneID  string
+	Name    string
 }
 
 // NewLeaf constructs detached leaf state without I/O.
