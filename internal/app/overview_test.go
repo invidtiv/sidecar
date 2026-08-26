@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -40,6 +41,7 @@ type navigationPlugin struct {
 	focusNotices     int
 	refreshes        int
 	clearFocusOnInit bool
+	hostBackground   string
 }
 
 func (p *navigationPlugin) ID() string   { return p.id }
@@ -58,6 +60,9 @@ func (p *navigationPlugin) Start() tea.Cmd {
 }
 func (p *navigationPlugin) Stop() {}
 func (p *navigationPlugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	if background, ok := msg.(termpreview.HostBackgroundMsg); ok {
+		p.hostBackground = background.ANSI
+	}
 	if _, ok := msg.(tea.MouseClickMsg); ok {
 		p.mouseClicks++
 	}

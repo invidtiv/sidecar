@@ -211,6 +211,64 @@ func TestModelCadencePublishesIdleLeadingAndNewestTrailingFrame(t *testing.T) {
 	}
 }
 
+func TestModelCadencePublishesOnlyCompletedSynchronizedUpdate(t *testing.T) {
+	clock := newManualModelCadenceClock()
+	recorder := &timedModelRecorder{clock: clock}
+	manager, sub, channel := startCadenceSubscription(t, clock, recorder)
+	t.Cleanup(manager.Stop)
+	t.Cleanup(sub.Close)
+	seedCadenceSubscription(t, channel, recorder)
+
+	clock.advance(modelPublicationInterval)
+	pushOutput(channel, "%1", "\x1b[?2026h\x1b[2Jpartial")
+	controlActorBarrier(t, channel)
+	if got := recorder.frameCount(); got != 1 {
+		t.Fatalf("open synchronized update published an intermediate frame: frames=%d", got)
+	}
+	if got := clock.activeTimers(); got != 1 {
+		t.Fatalf("open synchronized update timers = %d, want one bounded hold", got)
+	}
+
+	pushOutput(channel, "%1", " complete\x1b[?2026l")
+	controlActorBarrier(t, channel)
+	waitFor(t, func() bool { return recorder.frameCount() == 2 })
+	frames, _ := recorder.snapshot()
+	output := frames[1].Frame.CombinedOutput()
+	if !strings.Contains(output, "partial complete") {
+		t.Fatalf("completed synchronized frame = %q", output)
+	}
+	if got := clock.activeTimers(); got != 0 {
+		t.Fatalf("completed synchronized update left %d timers", got)
+	}
+}
+
+func TestModelCadenceBoundsAnUnclosedSynchronizedUpdate(t *testing.T) {
+	clock := newManualModelCadenceClock()
+	recorder := &timedModelRecorder{clock: clock}
+	manager, sub, channel := startCadenceSubscription(t, clock, recorder)
+	t.Cleanup(manager.Stop)
+	t.Cleanup(sub.Close)
+	seedCadenceSubscription(t, channel, recorder)
+
+	clock.advance(modelPublicationInterval)
+	pushOutput(channel, "%1", "\x1b[?2026hstuck")
+	controlActorBarrier(t, channel)
+	if got := recorder.frameCount(); got != 1 {
+		t.Fatalf("open synchronized update published before its hold ceiling: frames=%d", got)
+	}
+	clock.advance(maxSynchronizedOutputHold - time.Nanosecond)
+	controlActorBarrier(t, channel)
+	if got := recorder.frameCount(); got != 1 {
+		t.Fatalf("open synchronized update published early: frames=%d", got)
+	}
+	clock.advance(time.Nanosecond)
+	waitFor(t, func() bool { return recorder.frameCount() == 2 })
+	frames, _ := recorder.snapshot()
+	if output := frames[1].Frame.CombinedOutput(); !strings.Contains(output, "stuck") {
+		t.Fatalf("bounded synchronized frame = %q", output)
+	}
+}
+
 func TestModelCadenceSustainedRateAndLatencyStayBounded(t *testing.T) {
 	clock := newManualModelCadenceClock()
 	recorder := &timedModelRecorder{clock: clock}

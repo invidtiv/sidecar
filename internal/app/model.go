@@ -627,6 +627,7 @@ func (m Model) Init() tea.Cmd {
 		tickCmd(),
 		IntroTick(),
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		tea.RequestBackgroundColor,
 	}
 	cmds = append(cmds, m.productCheckCmds(false)...)
 	if cmd := defaultThemeNoticeCmd(m.cfg); cmd != nil {

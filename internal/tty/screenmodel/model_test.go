@@ -593,6 +593,28 @@ func TestPaneModelInterfaceIsSatisfied(t *testing.T) {
 	var _ PaneModel = New(1, 1)
 }
 
+func TestSynchronizedOutputSurvivesWriteBoundaries(t *testing.T) {
+	m := New(20, 3)
+	defer m.Close()
+
+	for _, chunk := range []string{"\x1b[?202", "6h", "\x1b[2Jpartial"} {
+		if err := m.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if synchronized, err := m.SynchronizedOutput(); err != nil || !synchronized {
+		t.Fatalf("open synchronized transaction = %v, %v; want true, nil", synchronized, err)
+	}
+	for _, chunk := range []string{"complete\x1b[?2026", "l"} {
+		if err := m.Write([]byte(chunk)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if synchronized, err := m.SynchronizedOutput(); err != nil || synchronized {
+		t.Fatalf("closed synchronized transaction = %v, %v; want false, nil", synchronized, err)
+	}
+}
+
 // TestSplitUTF8AndCSISurviveWriteBoundaries pins down which split classes are
 // safe, separately from the corpus fixture whose known-gap allowance is
 // fixture-wide. Splitting a multi-byte rune or an escape sequence must be

@@ -324,10 +324,10 @@ func TestBatchCaptureIncludesActivityMetadataInSameTmuxInvocation(t *testing.T) 
 	if got := strings.Count(joined, "capture-pane"); got != 1 {
 		t.Fatalf("capture command count = %d, want 1", got)
 	}
-	output := batchCaptureMarker("nonce", 0) + captureMetadataSeparator + "node" + captureMetadataSeparator + "⠼ repo\nworking\n"
+	output := batchCaptureMarker("nonce", 0) + captureMetadataSeparator + "4242" + captureMetadataSeparator + "node" + captureMetadataSeparator + "⠼ repo\nworking\n"
 	parsed := parseBatchCaptureOutput(output, []string{"sidecar-ws-one"}, "nonce")
 	screen, metadata := splitCaptureEnvelope(parsed["sidecar-ws-one"])
-	if screen != "working\n" || metadata.CurrentCommand != "node" || metadata.PaneTitle != "⠼ repo" {
+	if screen != "working\n" || metadata.PanePID != 4242 || metadata.CurrentCommand != "node" || metadata.PaneTitle != "⠼ repo" {
 		t.Fatalf("screen=%q metadata=%+v", screen, metadata)
 	}
 }

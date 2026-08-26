@@ -165,6 +165,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	if !ok {
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 			Width: width, Height: height, Message: "No workspace selected",
+			DefaultBackground: m.terminalDefaultBackground,
 		})
 	}
 
@@ -220,7 +221,8 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	terminalCfg := m.TerminalConfig()
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width: width, Height: height, Chips: chips, Hints: hints,
-		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
+		DefaultBackground: m.terminalDefaultBackground,
+		Layout:            layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &leaf.Selection, TabWidth: tty.DefaultTabWidth,
 		Message: message, Decorate: leaf.LinkState.Decorate,

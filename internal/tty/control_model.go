@@ -182,9 +182,21 @@ type paneModelFeed struct {
 	// published frame. It is the model path's output-to-frame latency clock,
 	// started at the same event as the capture path's (paneCompareState).
 	pendingSince time.Time
+
+	// synchronized is DEC mode 2026 as parsed by the screen model. While it is
+	// open, the child is explicitly asking the terminal not to expose its
+	// partially-applied redraw. synchronizedSince bounds that request so a
+	// crashed or malformed child cannot freeze presentation forever.
+	synchronized      bool
+	synchronizedSince time.Time
 }
 
 const modelPublicationInterval = time.Second / 30
+
+// Synchronized-output implementations conventionally put a finite ceiling on
+// a child transaction. One second is long enough for a complete redraw while
+// keeping a missing DEC mode reset self-healing.
+const maxSynchronizedOutputHold = time.Second
 
 // modelCadenceTimer is the one timer the ordered actor may retain for model
 // publication. The narrow interface keeps cadence tests on a deterministic
@@ -566,6 +578,8 @@ func (c *sessionControlClient) seedCaptureResponse(id, generation uint64, reason
 	feed.seeds++
 	feed.frameDirty = true
 	feed.pendingSince = time.Time{}
+	feed.synchronized = false
+	feed.synchronizedSince = time.Time{}
 	screenCompareStats.recordSeed(reason)
 	if reason != ResyncFirstSeed || feed.seeds > 1 {
 		c.invalidate(feed, reason, nil, false)
@@ -612,6 +626,18 @@ func (c *sessionControlClient) feedModels(event controlEvent) {
 				c.faultFeed(feed, ResyncModelFault, err)
 				continue
 			}
+			synchronized, err := feed.model.SynchronizedOutput()
+			if err != nil {
+				c.faultFeed(feed, ResyncModelFault, err)
+				continue
+			}
+			if synchronized && !feed.synchronized {
+				feed.synchronizedSince = outputAt
+			}
+			if !synchronized {
+				feed.synchronizedSince = time.Time{}
+			}
+			feed.synchronized = synchronized
 			if ScreenCompareEnabled() {
 				screenCompareStats.recordRaw(len(decoded))
 				screenCompareStats.mu.Lock()
@@ -658,6 +684,9 @@ func (c *sessionControlClient) publishReadyModelFrames(now time.Time) {
 			continue
 		}
 		force := !feed.hasPublished || feed.lastPublishedSeeds != feed.seeds
+		if !force && feed.synchronized && now.Before(feed.synchronizedSince.Add(maxSynchronizedOutputHold)) {
+			continue
+		}
 		if !force && now.Before(feed.lastPublishedAt.Add(c.modelCadence.interval)) {
 			continue
 		}
@@ -733,6 +762,12 @@ func (c *sessionControlClient) armModelTick(now time.Time) {
 			break
 		}
 		deadline := feed.lastPublishedAt.Add(c.modelCadence.interval)
+		if feed.synchronized {
+			syncDeadline := feed.synchronizedSince.Add(maxSynchronizedOutputHold)
+			if syncDeadline.After(deadline) {
+				deadline = syncDeadline
+			}
+		}
 		if earliest.IsZero() || deadline.Before(earliest) {
 			earliest = deadline
 		}

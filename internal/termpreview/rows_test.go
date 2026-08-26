@@ -107,6 +107,56 @@ func TestDrawRowsFillsUnusedRowsAndColumnsWithCanvas(t *testing.T) {
 	}
 }
 
+func TestDrawRowsResolvesChildDefaultCellsToTheHostBackground(t *testing.T) {
+	host := "\x1b[48;2;40;43;51m"
+	panel := "\x1b[48;2;69;74;81m"
+	lines := []string{
+		"plain default row",
+		panel + "panel" + ui.RowBackgroundDefault + " default tail",
+		"",
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	layout := tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: 30, Height: len(lines), Follow: true,
+		Interactive: true, PaneWidth: 30, PaneHeight: len(lines),
+	})
+	draw := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout, DefaultBackground: host,
+		PaneHeight: len(lines), Interactive: true, Follow: true,
+	})
+	if draw.CanvasBackground != host {
+		t.Fatalf("resolved default background = %q, want host %q", draw.CanvasBackground, host)
+	}
+	if !strings.HasPrefix(draw.Rows[0], host) {
+		t.Errorf("plain child-default row did not open in host background: %q", draw.Rows[0])
+	}
+	if !strings.Contains(draw.Rows[1], panel+"panel"+ui.RowBackgroundDefault+host+" default tail") {
+		t.Errorf("explicit child panel or host-default tail was lost: %q", draw.Rows[1])
+	}
+}
+
+func TestDrawRowsChildCanvasOverridesTheHostDefault(t *testing.T) {
+	host := "\x1b[48;2;40;43;51m"
+	lines := []string{
+		canvasBlack + "header\x1b[0m",
+		canvasBlack + "body\x1b[0m",
+		canvasBlack + "   \x1b[0m",
+		canvasBlack + "status\x1b[0m",
+	}
+	buffer := canvasBuffer(t, lines, len(lines))
+	layout := tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: 30, Height: len(lines), Follow: true,
+		Interactive: true, PaneWidth: 30, PaneHeight: len(lines),
+	})
+	draw := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout, DefaultBackground: host,
+		PaneHeight: len(lines), Interactive: true, Follow: true,
+	})
+	if draw.CanvasBackground != canvasBlack {
+		t.Fatalf("resolved background = %q, want child canvas %q", draw.CanvasBackground, canvasBlack)
+	}
+}
+
 func TestPadCanvasBoxFillsTheAllottedBox(t *testing.T) {
 	panel := "\x1b[48;2;36;36;36m"
 	// Rows arrive already painted (DrawRows). PadCanvasBox must not re-walk

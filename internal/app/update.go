@@ -218,6 +218,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	// A terminal-default cell belongs to the terminal hosting Sidecar, not to
+	// Sidecar's palette. Convert the host's color report once, then hand the
+	// presentation context to both workspace projections through one shared
+	// message. Project plugins receive it in the ordinary broadcast below; the
+	// app-owned global browser is offered it explicitly.
+	if background, ok := msg.(tea.BackgroundColorMsg); ok {
+		msg = termpreview.HostBackgroundMsg{ANSI: styles.BgANSISeqFor(background.Color)}
+		if m.overview != nil {
+			if cmd := m.overview.Update(msg); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+	}
 	if result, ok := msg.(contentpanes.Result); ok {
 		if cmd := (&m).applyAppContentResult(result); cmd != nil {
 			cmds = append(cmds, cmd)

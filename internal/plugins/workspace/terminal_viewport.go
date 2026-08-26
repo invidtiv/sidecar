@@ -42,6 +42,7 @@ type terminalViewportInput struct {
 	// tty.BackgroundMode). Empty means auto.
 	Backgrounds       tty.BackgroundMode
 	BackgroundSpanMax int
+	DefaultBackground string
 
 	// BarStyle is the pointer emphasis the scrollbar draws with. The zero
 	// value renders byte-identically to the idle bar.
@@ -98,6 +99,7 @@ func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, w
 		TrimTrailing:      tty.TrimsTrailingRows(interactive),
 		Backgrounds:       p.backgrounds,
 		BackgroundSpanMax: p.backgroundSpanMax,
+		DefaultBackground: p.terminalDefaultBackground,
 	}
 	in.PaneWidth, in.PaneHeight = p.resolvedPaneGeometry(termPanel, interactive)
 	if interactive {
@@ -138,6 +140,7 @@ func renderTerminalViewport(in terminalViewportInput, cache *ui.TruncateCache) t
 	draw := termpreview.DrawRows(termpreview.RowsInput{
 		Buffer:            in.Buffer,
 		Layout:            layout,
+		DefaultBackground: in.DefaultBackground,
 		AbsoluteBase:      in.AbsoluteBase,
 		TabWidth:          tabStopWidth,
 		Selection:         in.Selection,

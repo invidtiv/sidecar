@@ -359,6 +359,9 @@ type Plugin struct {
 	// app.TerminalConfig's rules so every terminal surface answers alike.
 	backgrounds       tty.BackgroundMode
 	backgroundSpanMax int
+	// terminalDefaultBackground is reported by the terminal hosting Sidecar.
+	// It survives project reinitialization because the host did not change.
+	terminalDefaultBackground string
 	// resizeDebounceDur is plugins.workspace.resizeDebounceMs. A nil pointer
 	// means tty.DefaultResizeDebounce; a set 0 is the per-event escape hatch.
 	resizeDebounceDur *time.Duration

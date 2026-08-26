@@ -23,6 +23,7 @@ import (
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -52,6 +53,9 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case termpreview.HostBackgroundMsg:
+		p.terminalDefaultBackground = msg.ANSI
+		return p, nil
 	case terminalLinkRevalidatedMsg:
 		return p, p.applyTerminalLinkRevalidated(msg)
 	case inlineedit.StartedMsg:

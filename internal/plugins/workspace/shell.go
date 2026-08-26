@@ -1025,7 +1025,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 		capturedAt := time.Now()
 		observation := agentactivity.Observation{
 			Screen: output, PaneTitle: capture.PaneTitle,
-			CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+			CurrentCommand: capture.CurrentCommand, ProcessIdentity: resolvePaneProcessIdentity(capture), CapturedAt: capturedAt,
 		}
 		observedAgentType := AgentType(agentactivity.Identify(observation))
 		if observedAgentType == "" {
@@ -1083,12 +1083,7 @@ func shellSemanticNeedsScreen(agentType AgentType) bool {
 // runtime whose provider can only be recovered from live UI chrome. Cursor's
 // official CLI is often installed as `agent` and re-execs bundled node.
 func shellNeedsIdentityScreen(currentCommand string) bool {
-	switch strings.ToLower(strings.TrimSpace(currentCommand)) {
-	case "agent", "node", "bun":
-		return true
-	default:
-		return false
-	}
+	return agentactivity.NeedsProcessIdentity(currentCommand)
 }
 
 // findShellByName returns the shell with the given TmuxName, or nil if not found.

@@ -43,7 +43,11 @@ type Observation struct {
 	Screen         string
 	PaneTitle      string
 	CurrentCommand string
-	CapturedAt     time.Time
+	// ProcessIdentity is a provider name resolved from the pane's foreground
+	// process group and argv[0]. It disambiguates shared runtimes such as Node
+	// without promoting phrases from another agent's transcript.
+	ProcessIdentity string
+	CapturedAt      time.Time
 }
 
 type Result struct {
@@ -74,39 +78,23 @@ var (
 // current screen distinguishes the provider. Callers can retain their prior
 // identity in that case without paying for a process-tree scan.
 func Identify(ob Observation) string {
+	if identity := identifyProcessName(ob.ProcessIdentity); identity != "" && identity != "shell" {
+		return identity
+	}
 	command := strings.ToLower(strings.TrimSpace(ob.CurrentCommand))
-	switch {
-	case command == "claude" || semanticVersionCommand.MatchString(command):
-		return "claude"
-	case command == "codex" || command == "codex-cli":
-		return "codex"
-	case command == "grok" || strings.HasPrefix(command, "grok-"):
-		return "grok"
-	case command == "agy" || command == "antigravity":
-		return "antigravity"
-	case command == "pi":
-		return "pi"
-	case oneOf(command, "copilot", "github-copilot", "ghcs"):
-		return "copilot"
-	case oneOf(command, "cursor-agent", "cursor", "cursor-agent.cmd"):
-		return "cursor"
-	case oneOf(command, "opencode", "open-code"):
-		return "opencode"
-	case oneOf(command, "amp", "amp-local"):
-		return "amp"
-	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
-		return "shell"
+	if identity := identifyProcessName(command); identity != "" {
+		return identity
 	}
 
 	// Shared process names need live UI chrome or a resolved argv0. Herdr
 	// never claims Cursor from screen text: `node` is unknown unless argv
 	// names a known agent, and `agent` is Cursor only when it resolves to
-	// cursor-agent. We have pane_current_command, not the job, so Codex /
-	// Claude / Grok may still be claimed from distinctive chrome, but
-	// Cursor is process-or-alias only (plus the Cursor Agent header as a
-	// last resort when the comm name is the unresolvable `agent` alias).
-	// Empty Identify lets callers retain a prior *positive* live identity
-	// — not a launch preference.
+	// cursor-agent. We have pane_current_command plus ProcessIdentity, so Codex /
+	// Claude / Grok may still be claimed from distinctive chrome, but Cursor is
+	// process-or-alias only (plus the Cursor Agent header as a last resort when
+	// the comm name is the unresolvable `agent` alias).
+	// Empty Identify lets callers retain a prior *positive* live identity — not
+	// a launch preference.
 	if command == "agent" || command == "node" || command == "bun" {
 		current := regionText(ob, Rule{Region: RegionCurrent, LastN: 24})
 		if command != "agent" {
@@ -130,6 +118,45 @@ func Identify(ob Observation) string {
 		}
 	}
 	return ""
+}
+
+func identifyProcessName(command string) string {
+	command = strings.ToLower(strings.TrimSpace(command))
+	switch {
+	case command == "claude" || semanticVersionCommand.MatchString(command):
+		return "claude"
+	case command == "codex" || command == "codex-cli":
+		return "codex"
+	case command == "grok" || strings.HasPrefix(command, "grok-"):
+		return "grok"
+	case command == "agy" || command == "antigravity":
+		return "antigravity"
+	case command == "pi":
+		return "pi"
+	case oneOf(command, "copilot", "github-copilot", "ghcs"):
+		return "copilot"
+	case oneOf(command, "cursor-agent", "cursor", "cursor-agent.cmd"):
+		return "cursor"
+	case oneOf(command, "opencode", "open-code"):
+		return "opencode"
+	case oneOf(command, "amp", "amp-local"):
+		return "amp"
+	case oneOf(command, "sh", "bash", "zsh", "fish", "nu", "pwsh"):
+		return "shell"
+	default:
+		return ""
+	}
+}
+
+// NeedsProcessIdentity reports whether tmux's command name is shared by
+// multiple agent CLIs and therefore benefits from foreground argv[0].
+func NeedsProcessIdentity(command string) bool {
+	switch strings.ToLower(strings.TrimSpace(command)) {
+	case "agent", "node", "bun":
+		return true
+	default:
+		return false
+	}
 }
 
 type Region string

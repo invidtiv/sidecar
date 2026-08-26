@@ -19,6 +19,9 @@ type RenderBufferInput struct {
 	Width, Height int
 	Chips         []string
 	Hints         string
+	// DefaultBackground is the host terminal background used by child-default
+	// cells. It is presentation context, not a Sidecar theme color.
+	DefaultBackground string
 
 	Layout tty.Viewport
 	Buffer *tty.OutputBuffer
@@ -56,9 +59,10 @@ type RenderBufferInput struct {
 	// undecorated.
 	Decorate func(line string, absoluteLine int) string
 
-	// Backgrounds selects how far carried backgrounds may reach (see
-	// tty.BackgroundMode). Empty means auto. Canvas detection and the box fill
-	// run only in auto; bounded and never render plain text beyond their rule.
+	// Backgrounds selects how far child-carried backgrounds may reach (see
+	// tty.BackgroundMode). Empty means auto. Child canvas detection runs only in
+	// auto; the host default still resolves default-background cells in every
+	// mode.
 	Backgrounds tty.BackgroundMode
 	// BackgroundSpanMax is the row cap for bounded mode; <= 0 uses the default.
 	BackgroundSpanMax int
@@ -142,6 +146,7 @@ func RenderBody(in RenderBufferInput) string {
 	draw := DrawRows(RowsInput{
 		Buffer:            in.Buffer,
 		Layout:            layout,
+		DefaultBackground: in.DefaultBackground,
 		AbsoluteBase:      in.AbsoluteBase,
 		TabWidth:          tabWidth,
 		Selection:         in.Selection,

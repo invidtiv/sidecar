@@ -16,11 +16,10 @@ import (
 //     (agent-cli-package.tar.gz index/chunks; process never launched).
 //
 // Cursor's launcher is a bash wrapper that re-execs its bundled node with
-// `exec -a "$0"`, so pane_current_command is typically `cursor-agent` (or
-// `agent` when that is the install name / symlink). Identity follows Herdr:
-// process name or a resolved `agent` → cursor-agent symlink, not screen
-// phrases. DetectCursor still requires the observation to already be labeled
-// cursor, and does not treat `node` as a Cursor process (that's Codex).
+// `exec -a "$0"`. tmux may therefore report `cursor-agent`, `agent`, or the
+// shared runtime `node`. Identity follows Herdr: process name or a foreground
+// argv[0] whose `agent` symlink resolves to cursor-agent, not activity phrases.
+// A bare node remains ambiguous; only ProcessIdentity can make it Cursor.
 //
 // Status authority is the live bottom buffer. Session hooks report identity
 // only (Herdr's model); do not reintroduce SQLite mtime as activity.
@@ -114,7 +113,7 @@ func lookupCursorAgentAlias() string {
 }
 
 func DetectCursor(ob Observation) Result {
-	if ob.Agent != "cursor" || !cursorProcess(ob.CurrentCommand) {
+	if ob.Agent != "cursor" || (!cursorProcess(ob.CurrentCommand) && ob.ProcessIdentity != "cursor") {
 		return Result{State: StateUnknown, Evidence: "cursor.process-mismatch"}
 	}
 	result := Evaluate(ob, cursorRules)

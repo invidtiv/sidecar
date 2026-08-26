@@ -14,6 +14,10 @@ import (
 type RowsInput struct {
 	Buffer *tty.OutputBuffer
 	Layout tty.Viewport
+	// DefaultBackground is the host terminal's background SGR. Cells for which
+	// the child selected the terminal default must resolve to this color, just
+	// as they do when the child runs directly in the host terminal.
+	DefaultBackground string
 	// AbsoluteBase lifts a window line index into the coordinates a selection,
 	// a search match and a link are all recorded in.
 	AbsoluteBase int
@@ -101,9 +105,14 @@ func DrawRows(in RowsInput) DrawResult {
 		analyzer = &RowAnalyzer{}
 	}
 	analysis := analyzer.analyze(in, backgrounds, spanMax)
-	canvasBg := ""
+	canvasBg := in.DefaultBackground
 	if backgrounds == tty.BackgroundAuto {
-		canvasBg = inferCanvas(analysis.live)
+		if inferred := inferCanvas(analysis.live); inferred != "" {
+			// A child-owned full-pane canvas is an explicit override of the host
+			// default. Inset bubbles and highlights never pass inferCanvas, so
+			// they retain the host fallback around their own colored cells.
+			canvasBg = inferred
+		}
 	}
 	bandLen := analysis.visiblePredecessorBand
 	drawn := make([]string, 0, max(len(analysis.visible), layout.DisplayHeight))

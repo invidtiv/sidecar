@@ -202,6 +202,7 @@ func (h HistorySnapshot) sameIdentity(other HistorySnapshot) bool {
 type PaneModel interface {
 	Seed(Seed) error
 	Write([]byte) error
+	SynchronizedOutput() (bool, error)
 	Resize(width, height int) error
 	Frame() (Frame, error)
 	DiagnosticFrame() (DiagnosticFrame, error)
@@ -228,6 +229,7 @@ type Model struct {
 	cursorStyle    CursorStyle
 	mouse          MouseState
 	bracketedPaste bool
+	synchronized   bool
 
 	// Absolute tmux history coordinates. The emulator's own scrollback is a
 	// bounded local cache; these keep the viewport's lazy-older-history
@@ -283,6 +285,7 @@ func (m *Model) reset(width, height int) {
 	m.cursorStyle = CursorBlock
 	m.mouse = MouseState{}
 	m.bracketedPaste = false
+	m.synchronized = false
 	m.absoluteHistory = 0
 	m.historyLimit = 600
 	m.seedCaptureBase = 0
@@ -342,6 +345,8 @@ func (m *Model) setMode(mode ansi.Mode, on bool) {
 		m.mouse.SGR = on
 	case 2004:
 		m.bracketedPaste = on
+	case 2026:
+		m.synchronized = on
 	}
 }
 
@@ -496,6 +501,19 @@ func (m *Model) Write(p []byte) error {
 		m.trimLoadedHistory(m.historyLimit)
 		return nil
 	})
+}
+
+// SynchronizedOutput reports whether the child has an open DEC mode 2026
+// transaction. Presentation callers use it to hold partially-applied redraws
+// until the matching reset arrives. The emulator still consumes every byte
+// immediately, so terminal input and parser state never wait on presentation.
+func (m *Model) SynchronizedOutput() (bool, error) {
+	var synchronized bool
+	err := m.do(func() error {
+		synchronized = m.synchronized
+		return nil
+	})
+	return synchronized, err
 }
 
 // scanHardResets counts RIS (ESC c) sequences in a write, carrying a trailing

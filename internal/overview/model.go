@@ -227,21 +227,22 @@ type Model struct {
 	// wsBar is the Sessions list's interactive scrollbar: the bar's last
 	// render snapshot, where its track sits on screen, whether the pointer
 	// hovers it, and any drag gesture in flight.
-	wsBar                 workspaceScrollbarState
-	hoverTermBar          bool
-	sidebarWidth          int
-	sidebarVisible        bool
-	catalog               map[string]workspaceinventory.Workspace
-	preview               previewState
-	previewOwnership      *previewOwnershipLease
-	diff                  workspacediff.View
-	terminalConfig        tty.Config
-	config                *config.Config
-	width                 int
-	height                int
-	terminalLinks         termpreview.LinkCoordinator
-	linkMatcherGeneration uint64
-	terminalLinkRoot      terminalLinkRootContext
+	wsBar                     workspaceScrollbarState
+	hoverTermBar              bool
+	sidebarWidth              int
+	sidebarVisible            bool
+	catalog                   map[string]workspaceinventory.Workspace
+	preview                   previewState
+	previewOwnership          *previewOwnershipLease
+	diff                      workspacediff.View
+	terminalConfig            tty.Config
+	terminalDefaultBackground string
+	config                    *config.Config
+	width                     int
+	height                    int
+	terminalLinks             termpreview.LinkCoordinator
+	linkMatcherGeneration     uint64
+	terminalLinkRoot          terminalLinkRootContext
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -670,6 +671,9 @@ func (m *Model) pulseCmd() tea.Cmd {
 
 func (m *Model) update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
+	case termpreview.HostBackgroundMsg:
+		m.terminalDefaultBackground = msg.ANSI
+		return nil
 	case appmsg.ThemeChangedMsg:
 		// listItem contains already-styled metadata, so a palette change must
 		// rebuild the projection rather than merely dropping the rendered string.

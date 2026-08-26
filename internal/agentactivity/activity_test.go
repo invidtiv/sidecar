@@ -75,6 +75,43 @@ func TestIdentifyAgentAliasResolvesLikeHerdrSymlink(t *testing.T) {
 	}
 }
 
+func TestForegroundProcessIdentityDisambiguatesCursorNode(t *testing.T) {
+	ob := Observation{
+		Agent: "cursor", CurrentCommand: "node", ProcessIdentity: "cursor",
+		Screen: "Run Everything\napproval mode",
+	}
+	if got := Identify(ob); got != "cursor" {
+		t.Fatalf("Identify() = %q, want cursor from foreground process identity", got)
+	}
+	result := DetectCursor(ob)
+	if result.State != StateIdle || result.Evidence != "cursor.known-live-fallback" {
+		t.Fatalf("DetectCursor() = %+v, want known live Cursor fallback", result)
+	}
+
+	ob.ProcessIdentity = ""
+	if got := Identify(ob); got != "" {
+		t.Fatalf("bare node Identify() = %q, want ambiguous", got)
+	}
+	if result := DetectCursor(ob); result.State != StateUnknown || result.Evidence != "cursor.process-mismatch" {
+		t.Fatalf("bare node DetectCursor() = %+v, want process mismatch", result)
+	}
+}
+
+func TestArgv0IdentityResolvesCursorAgentSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "cursor-agent")
+	link := filepath.Join(dir, "agent")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if got := identifyArgv0(link); got != "cursor" {
+		t.Fatalf("identifyArgv0(%q) = %q, want cursor", link, got)
+	}
+}
+
 func TestTrackerProcessChangeAcceptsInitialIdleImmediately(t *testing.T) {
 	now := time.Unix(100, 0)
 	tracker := Tracker{State: StateWorking, Evidence: "codex.screen.working"}

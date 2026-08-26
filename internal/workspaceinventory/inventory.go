@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,7 @@ const (
 
 type Pane struct {
 	ID, Session, Path, Command, Title string
+	PID                               int
 	Dead                              bool
 }
 
@@ -380,7 +382,7 @@ func (c Collector) Metrics() MetricsSnapshot {
 // ListPanes takes the single global tmux inventory used by an Overview refresh.
 func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 	c = c.defaults()
-	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}")
+	out, err := c.Runner.Output(ctx, "tmux", "list-panes", "-a", "-F", "#{pane_id}\t#{session_name}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}\t#{pane_pid}")
 	if err != nil {
 		message := strings.ToLower(string(out))
 		if strings.Contains(message, "no server running") || strings.Contains(message, "no sessions") ||
@@ -394,11 +396,14 @@ func (c Collector) ListPanes(ctx context.Context) ([]Pane, error) {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, "\t", 6)
-		if len(parts) != 6 {
+		parts := strings.SplitN(line, "\t", 7)
+		if len(parts) < 6 {
 			continue
 		}
 		p := Pane{ID: parts[0], Session: parts[1], Path: filepath.Clean(parts[2]), Command: parts[3], Title: parts[4], Dead: parts[5] == "1"}
+		if len(parts) == 7 {
+			p.PID, _ = strconv.Atoi(strings.TrimSpace(parts[6]))
+		}
 		// The pane hosting this process never enters the inventory. Correlation
 		// is by cwd, so without this a sidecar launched from a plain shell in
 		// (or beside) a catalogued project — a mosh session, an outer tmux — is
@@ -590,7 +595,11 @@ func (c Collector) observeContext(ctx context.Context, workspace *Workspace, mat
 				return
 			default:
 			}
-			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, CapturedAt: now}
+			processIdentity := ""
+			if pane.PID > 0 && agentactivity.NeedsProcessIdentity(pane.Command) {
+				processIdentity = agentactivity.ResolveForegroundAgent(pane.PID)
+			}
+			ob := agentactivity.Observation{Agent: workspace.Provider, Screen: output, PaneTitle: pane.Title, CurrentCommand: pane.Command, ProcessIdentity: processIdentity, CapturedAt: now}
 			if identified := agentactivity.Identify(ob); identified != "" {
 				if identified == "shell" {
 					// A live shell process is not the launch-preference agent.

@@ -69,6 +69,7 @@ type capturedPaneMetadata struct {
 	CaptureBase    int
 	PaneWidth      int
 	PaneHeight     int
+	PanePID        int
 	PaneTitle      string
 	CurrentCommand string
 	Valid          bool
@@ -985,7 +986,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		capturedAt := time.Now()
 		observation := agentactivity.Observation{
 			Screen: output, PaneTitle: capture.PaneTitle,
-			CurrentCommand: capture.CurrentCommand, CapturedAt: capturedAt,
+			CurrentCommand: capture.CurrentCommand, ProcessIdentity: resolvePaneProcessIdentity(capture), CapturedAt: capturedAt,
 		}
 		observedAgentType := AgentType(agentactivity.Identify(observation))
 		if observedAgentType == "" {
@@ -1128,7 +1129,7 @@ func capturePaneWithMetadata(sessionName string) (string, capturedPaneMetadata, 
 // capturePaneDirectWithJoinMetadata captures the live tail and the tmux
 // history size in one argv-only command chain.
 func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (string, capturedPaneMetadata, error) {
-	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size},#{pane_width},#{pane_height},#{pane_current_command},#{pane_title}", ";"}
+	args := []string{"display-message", "-t", sessionName, "-p", "#{history_size},#{pane_width},#{pane_height},#{pane_pid},#{pane_current_command},#{pane_title}", ";"}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
@@ -1162,9 +1163,12 @@ func capturePaneDirectWithJoinMetadata(sessionName string, joinWrapped bool) (st
 			metadata.PaneHeight = height
 		}
 	}
-	if len(fields) >= 5 {
-		metadata.CurrentCommand = strings.TrimSpace(fields[3])
-		metadata.PaneTitle = strings.Join(fields[4:], ",")
+	if len(fields) >= 4 {
+		metadata.PanePID, _ = strconv.Atoi(strings.TrimSpace(fields[3]))
+	}
+	if len(fields) >= 6 {
+		metadata.CurrentCommand = strings.TrimSpace(fields[4])
+		metadata.PaneTitle = strings.Join(fields[5:], ",")
 	}
 	return paneOutput, metadata, nil
 }
@@ -1176,7 +1180,7 @@ func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxCaptureTimeout)
 	defer cancel()
 	output, err := exec.CommandContext(ctx, "tmux", "display-message", "-t", target, "-p",
-		"#{pane_width},#{pane_height},#{pane_current_command},#{pane_title}").Output()
+		"#{pane_width},#{pane_height},#{pane_pid},#{pane_current_command},#{pane_title}").Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: timeout after %s", tmuxCaptureTimeout)
 	}
@@ -1192,7 +1196,7 @@ func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: no current target: %s", target)
 	}
 	fields := strings.Split(strings.TrimSpace(string(output)), ",")
-	if len(fields) < 4 {
+	if len(fields) < 5 {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: invalid metadata %q", output)
 	}
 	width, errWidth := strconv.Atoi(strings.TrimSpace(fields[0]))
@@ -1200,9 +1204,11 @@ func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
 	if errWidth != nil || errHeight != nil {
 		return capturedPaneMetadata{}, fmt.Errorf("pane evidence: invalid geometry %q", output)
 	}
+	panePID, _ := strconv.Atoi(strings.TrimSpace(fields[2]))
 	return capturedPaneMetadata{
 		PaneWidth: width, PaneHeight: height,
-		CurrentCommand: strings.TrimSpace(fields[2]), PaneTitle: strings.Join(fields[3:], ","),
+		PanePID:        panePID,
+		CurrentCommand: strings.TrimSpace(fields[3]), PaneTitle: strings.Join(fields[4:], ","),
 	}, nil
 }
 
@@ -1245,7 +1251,7 @@ func capturePaneDirectWithJoinAndCursor(sessionName, cursorTarget string, joinWr
 func capturePaneWithCursorArgs(sessionName, cursorTarget string, joinWrapped bool) []string {
 	args := []string{
 		"display-message", "-t", cursorTarget, "-p",
-		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_current_command},#{pane_title}",
+		"#{cursor_x},#{cursor_y},#{cursor_flag},#{pane_height},#{pane_width},#{history_size},#{mouse_any_flag},#{pane_pid},#{pane_current_command},#{pane_title}",
 		";",
 	}
 	args = append(args, capturePaneArgs(sessionName, joinWrapped)...)
@@ -1282,9 +1288,12 @@ func parseCapturedCursor(header string) capturedCursor {
 	if len(parts) >= 7 {
 		cursor.MouseReporting = parts[6] != "0" && parts[6] != ""
 	}
-	if len(parts) >= 9 {
-		cursor.CurrentCommand = strings.TrimSpace(parts[7])
-		cursor.PaneTitle = strings.Join(parts[8:], ",")
+	if len(parts) >= 8 {
+		cursor.PanePID, _ = strconv.Atoi(strings.TrimSpace(parts[7]))
+	}
+	if len(parts) >= 10 {
+		cursor.CurrentCommand = strings.TrimSpace(parts[8])
+		cursor.PaneTitle = strings.Join(parts[9:], ",")
 	}
 	return cursor
 }
@@ -1342,7 +1351,7 @@ const captureMetadataSeparator = "\x1f"
 
 func batchCaptureMetadataMarker(nonce string, index int) string {
 	return batchCaptureMarker(nonce, index) + captureMetadataSeparator +
-		"#{pane_current_command}" + captureMetadataSeparator + "#{pane_title}"
+		"#{pane_pid}" + captureMetadataSeparator + "#{pane_current_command}" + captureMetadataSeparator + "#{pane_title}"
 }
 
 func buildBatchCaptureArgs(sessions []string, nonce string, joinWrapped bool) []string {
@@ -1394,11 +1403,19 @@ func splitCaptureEnvelope(output string) (string, capturedPaneMetadata) {
 	if !found {
 		return output, capturedPaneMetadata{}
 	}
-	parts := strings.SplitN(header, captureMetadataSeparator, 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(header, captureMetadataSeparator, 4)
+	if len(parts) != 4 {
 		return output, capturedPaneMetadata{}
 	}
-	return paneOutput, capturedPaneMetadata{CurrentCommand: parts[1], PaneTitle: parts[2]}
+	pid, _ := strconv.Atoi(strings.TrimSpace(parts[1]))
+	return paneOutput, capturedPaneMetadata{PanePID: pid, CurrentCommand: parts[2], PaneTitle: parts[3]}
+}
+
+func resolvePaneProcessIdentity(capture capturedPaneMetadata) string {
+	if capture.PanePID <= 0 || !agentactivity.NeedsProcessIdentity(capture.CurrentCommand) {
+		return ""
+	}
+	return agentactivity.ResolveForegroundAgent(capture.PanePID)
 }
 
 // trimCapturedOutputRows applies the byte cap only at a complete line
