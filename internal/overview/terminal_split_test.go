@@ -208,3 +208,38 @@ func TestOverviewTerminalSplitRenameTargetsLeaf(t *testing.T) {
 		t.Fatalf("peer rename = %q open=%v", leaf.Name, m.renameOpen)
 	}
 }
+
+// The geometry the native cursor, scrollbar, and link hits are placed by must
+// name the same pane as the leaf state it is paired with: a focused split on
+// the right once drew its cursor inside the primary preview on the left.
+func TestOverviewTerminalBoxFollowsFocusedLeaf(t *testing.T) {
+	m, leaf := createOverviewTerminalSplit(t, workspacecreate.PlacementRight)
+
+	m.preview.paneFocus = leaf.ID
+	got, ok := m.previewTerminalBox()
+	if !ok {
+		t.Fatal("no box for focused split leaf")
+	}
+	want, ok := m.terminalLeafBox(leaf.ID)
+	if !ok || got != want {
+		t.Fatalf("focused split box = %+v, want its own leaf box %+v", got, want)
+	}
+
+	primary := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
+	if primary == nil {
+		t.Fatal("tree lost its primary Terminal leaf")
+	}
+	primaryBox, ok := m.terminalLeafBox(primary.ID)
+	if !ok {
+		t.Fatal("no box for primary leaf")
+	}
+	if got == primaryBox {
+		t.Fatal("split leaf box equals the primary box; geometry did not follow focus")
+	}
+
+	m.preview.paneFocus = primary.ID
+	got, ok = m.previewTerminalBox()
+	if !ok || got != primaryBox {
+		t.Fatalf("primary-focused box = %+v, want %+v", got, primaryBox)
+	}
+}

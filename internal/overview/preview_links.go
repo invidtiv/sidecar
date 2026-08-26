@@ -545,7 +545,14 @@ func (m *Model) previewPaneBox(kind panelayout.Kind, peer termpreview.Box) (term
 	return termpreview.Box{}, false
 }
 
+// previewTerminalBox is the on-screen box of the live leaf the resource-bearing
+// preview currently means — resolved by the same rule as previewTerminalLeaf,
+// so the geometry the native cursor, the scrollbar gesture, and link hits are
+// placed by can never name a different pane than the state it is paired with.
 func (m *Model) previewTerminalBox() (termpreview.Box, bool) {
+	if node := panelayout.Find(m.preview.paneRoot, m.preview.paneFocus); node != nil && node.Split == nil && panelayout.IsLive(node.Kind) {
+		return m.terminalLeafBox(node.ID)
+	}
 	peer, ok := m.previewPeerBox()
 	if !ok {
 		return termpreview.Box{}, false
