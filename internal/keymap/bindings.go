@@ -380,6 +380,84 @@ func DefaultBindings() []Binding {
 		{Key: "tab", Command: "next-pane", Context: "workspace-resource"},
 		{Key: "shift+tab", Command: "prev-pane", Context: "workspace-resource"},
 
+		// The pane switcher from an ordinary plugin. The Workspaces surfaces
+		// answer `n`; a plugin cannot, because every plugin that has a create
+		// already spends `n` on it (new-note, next-match), so the entry here is
+		// `ctrl+n` — see app.paneSwitcherKeyName.
+		//
+		// Browse and preview contexts only. `ctrl+n` is cursor-down in the
+		// global context and in every filter, finder, search and editor context
+		// (notes-search, notes-editor, file-browser-quick-open,
+		// file-browser-project-search, global-workspaces-filter,
+		// project-switcher), and a context where the key already walks a list
+		// must keep it: those are the contexts where a live input surface owns
+		// the keyboard anyway.
+		//
+		// The contexts are the ones the plugins' FocusContext() actually
+		// reports, not the ones that merely have bindings — Git names the pane
+		// and the cursor position in its context, so the sidebar-on-a-commit and
+		// file-diff states are separate contexts from `git-status`, and the
+		// `git-history` context in this file is never reported at all.
+		//
+		// notes-preview is deliberately absent: the note preview answers
+		// ctrl+n/ctrl+p as cursor motion of its own (notes.handleEditorPreviewKey),
+		// which is exactly the case the rule above stands aside for. Notes is
+		// still reachable from notes-list.
+		{Key: "ctrl+n", Command: "open-pane", Context: "notes-list"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "file-browser-tree"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "file-browser-preview"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "git-status"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "git-status-commits"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "git-status-diff"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "git-diff"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "git-commit-preview"},
+
+		// Tasks and td-monitor embed an external model, so their context names
+		// are minted elsewhere: Tasks reports tasksui.FocusContext verbatim, and
+		// td runs its own name through monitor/keymap.ContextToSidecar. The rows
+		// below are the browse and preview contexts of each that a key can
+		// actually reach, and the packages that own the mapping hold them to the
+		// upstream constants (tasks.TestBrowseContextsCarryThePaneSwitcherEntry,
+		// tdmonitor.TestBrowseContextsCarryThePaneSwitcherEntry) — a rename in
+		// either module surfaces as a failure there rather than as a key that
+		// quietly stopped working.
+		//
+		// Tasks' four are exactly its root contexts: everything else it reports
+		// is an overlay, and Tasks' BlocksGlobalKeys hands those keys to the tab
+		// at precedence level 2, well above the switcher's rung.
+		{Key: "ctrl+n", Command: "open-pane", Context: "tasks-list"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "tasks-detail"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "tasks-response"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "tasks-response-detail"},
+
+		// td's three are the views where td is browsing its own issues with
+		// nothing overlaid: the main list, board mode, and the kanban view.
+		//
+		// td-modal — the issue detail, and the pane you would most want a file
+		// beside — is deliberately absent. tdmonitor.BlocksGlobalKeys claims every
+		// key in that context for the embedded td model two rungs above the
+		// switcher, so a binding there would never fire; the same is true of the
+		// modal's sub-focus contexts (td-epic-tasks, td-parent-epic,
+		// td-blocked-by-focused, td-blocks-focused), which are states of that same
+		// open modal. td's other contexts — td-stats, td-handoffs, td-notes,
+		// td-help, td-tdq-help, td-board-picker — are its own overlays rather than
+		// browse surfaces, and td-search/td-form/td-board-editor/td-confirm/
+		// td-close-confirm type.
+		{Key: "ctrl+n", Command: "open-pane", Context: "td-monitor"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "td-board"},
+		{Key: "ctrl+n", Command: "open-pane", Context: "td-kanban"},
+
+		// The switcher's own modal, for the footer while it is up. Nothing
+		// dispatches through these — the modal answers its keys directly, as
+		// both Workspaces hosts' create modals do — they exist so the footer
+		// describes the surface that has the keyboard.
+		{Key: "esc", Command: "cancel", Context: "pane-switcher"},
+		{Key: "enter", Command: "confirm", Context: "pane-switcher"},
+		{Key: "tab", Command: "next-field", Context: "pane-switcher"},
+		{Key: "shift+tab", Command: "prev-field", Context: "pane-switcher"},
+		{Key: "up", Command: "navigate-picker", Context: "pane-switcher"},
+		{Key: "down", Command: "navigate-picker", Context: "pane-switcher"},
+
 		// Focused project Workspaces Diff leaf. q hides; not a root context.
 		{Key: "n", Command: "open-pane", Context: "workspace-diff"},
 		{Key: "q", Command: "close", Context: "workspace-diff"},

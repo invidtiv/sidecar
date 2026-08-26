@@ -33,6 +33,7 @@ import (
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -52,7 +53,8 @@ const (
 	ModalThemeSwitcher                     // Theme switcher
 	ModalOpenIn                            // Open In IDE picker
 	ModalIssueInput                        // Issue ID text input
-	ModalIssuePreview                      // Issue preview display (lowest priority)
+	ModalIssuePreview                      // Issue preview display
+	ModalPaneSwitcher                      // Pane switcher over a plugin's content deck (lowest priority)
 )
 
 // activeModal returns the highest-priority open modal.
@@ -81,6 +83,8 @@ func (m *Model) activeModal() ModalKind {
 		return ModalIssueInput
 	case m.showIssuePreview:
 		return ModalIssuePreview
+	case m.paneSwitcherOpen:
+		return ModalPaneSwitcher
 	default:
 		return ModalNone
 	}
@@ -118,6 +122,8 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 		return "issue-input", true
 	case ModalIssuePreview:
 		return "issue-preview", true
+	case ModalPaneSwitcher:
+		return paneSwitcherContext, true
 	}
 	return "", false
 }
@@ -283,6 +289,13 @@ type Model struct {
 	// issuePreviewWatcher keeps the modal's card in step with the td store. It
 	// lives exactly as long as the modal. See issue_preview_live.go.
 	issuePreviewWatcher *livewatch.PathWatcher
+
+	// Pane switcher — the shared create form hosted over a plugin's content
+	// deck. One binding site for every deck-eligible plugin; see
+	// pane_switcher.go.
+	paneSwitcherOpen  bool
+	paneSwitcher      *workspacecreate.Form
+	paneSwitcherMouse *mouse.Handler
 
 	// Header/footer
 	ui *UIState

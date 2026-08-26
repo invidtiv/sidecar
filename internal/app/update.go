@@ -102,6 +102,11 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		m.clearThemeSwitcherModal()
 		return m, cmd
 
+	case ModalPaneSwitcher:
+		// The modal covers the plugin: a paste belongs to its picker or to
+		// nothing, never to the surface underneath.
+		return m, m.paneSwitcherPaste(msg.Content)
+
 	case ModalIssueInput:
 		var cmd tea.Cmd
 		m.issueInputInput, cmd = m.issueInputInput.Update(msg)
@@ -229,6 +234,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+	case paneSwitcherPickerDataMsg:
+		(&m).applyPaneSwitcherPickerData(msg)
+		return m, tea.Batch(cmds...)
+	case paneSwitcherFilesMsg:
+		(&m).applyPaneSwitcherFiles(msg)
+		return m, tea.Batch(cmds...)
 	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg, noteview.LoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
 		resourceview.ResolvedMsg:
@@ -341,6 +352,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleIssueInputMouse(msg)
 		case ModalIssuePreview:
 			return m.handleIssuePreviewMouse(msg)
+		case ModalPaneSwitcher:
+			return m.handlePaneSwitcherMouse(msg)
 		}
 
 		// Only row 0 is painted header chrome. Left-clicks on that row stay
@@ -996,6 +1009,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resetIssueInput()
 			m.updateContext()
 			return m, nil
+		case ModalPaneSwitcher:
+			// The form owns Esc: on the picker step it returns to the kind list
+			// rather than closing, which is the same two-step flow both
+			// Workspaces hosts have. Only the kind step's cancel closes.
+			return m.handlePaneSwitcherKey(msg)
 		case ModalThemeSwitcher:
 			// Esc: clear filter if set, otherwise close (restore original)
 			if m.themeSwitcherInput.Value() != "" {
@@ -1051,6 +1069,13 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	// The pane switcher owns the keyboard while it is up, like every other
+	// app-level modal. hasModal() already keeps the rungs below off it; this is
+	// where its own keys are answered.
+	if m.paneSwitcherOpen {
+		return m.handlePaneSwitcherKey(msg)
 	}
 
 	// The notification centre owns the keyboard while it is focused, so it
@@ -1141,6 +1166,33 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// ring and passive-leaf keys. Inputs and blocking overlays above retain Tab.
 	if !m.hasModal() && !m.globalOverlayOwnsKeys() {
 		if cmd, handled := m.handleAppContentKey(msg); handled {
+			m.updateContext()
+			return m, cmd
+		}
+	}
+
+	// The pane switcher's entry, bound once here rather than once per plugin:
+	// the deck it opens into is the app's and so is the routing (decision 6).
+	//
+	// This rung sits deliberately BELOW every surface that types. `ctrl+n` is
+	// cursor-down in the global context and in each filter, finder, search and
+	// editor context, and all of those have already claimed the key by the time
+	// execution reaches here — an inline edit and workspace-interactive forward
+	// wholesale two rungs up, and precedence level 2 forwards every key of a
+	// plugin's text-input or blocking-overlay context (which is what
+	// notes-search, notes-editor, file-browser-quick-open and
+	// file-browser-project-search each report through ConsumesTextInput). A live
+	// PTY is reached the same way, so no control character is stolen from one.
+	// paneSwitcherAvailable re-checks textInputFocused rather than trusting the
+	// order alone.
+	//
+	// The key comes from the keymap rather than from a constant, so this one
+	// rung serves both shapes the entry has: `ctrl+n` in a plugin's browse
+	// context, and the `n` a focused passive leaf's context already binds on the
+	// two Workspaces surfaces. A context that never named open-pane never
+	// matches, whatever key it was.
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() && m.paneSwitcherClaimsKey(msg.String()) {
+		if cmd, opened := m.openPaneSwitcher(); opened {
 			m.updateContext()
 			return m, cmd
 		}
@@ -1864,6 +1916,11 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if commands := m.appContentCommands(); len(commands) > 0 {
 				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.focusedSurface(), commands: commands})
 			}
+			// The pane switcher's entry is the app's, contributed for whichever
+			// plugin browse context is on screen — same reason, same wrapper.
+			if commands := m.paneSwitcherCommands(); len(commands) > 0 {
+				surfaces = append(surfaces, appContentCommandPlugin{Plugin: m.focusedSurface(), commands: commands})
+			}
 			m.palette.Open(m.keymap, surfaces, m.activeContext, pluginCtx)
 			m.activeContext = "palette"
 		} else {
@@ -2100,6 +2157,11 @@ func (m *Model) pluginCommandHandler(commandID, context string) func() tea.Cmd {
 			return cmd.Handler
 		}
 	}
+	for _, cmd := range m.paneSwitcherCommands() {
+		if cmd.ID == commandID && cmd.Context == context && cmd.Handler != nil {
+			return cmd.Handler
+		}
+	}
 	var fallback func() tea.Cmd
 	for _, p := range m.surfacePlugins() {
 		for _, cmd := range p.Commands() {
@@ -2252,6 +2314,11 @@ func isTextInputContext(ctx string) bool {
 		"global-workspaces-filter",
 		"global-workspaces-rename",
 		"global-workspaces-create",
+		// The pane switcher's picker filter is a text input, and the modal has
+		// every key while it is up. Without this the footer would go on
+		// advertising the tab digits, `?` and `q` at a user who is typing them
+		// into the filter — the same reason global-workspaces-create is here.
+		"pane-switcher",
 		"issue-input":
 		return true
 	default:

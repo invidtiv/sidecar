@@ -93,7 +93,9 @@ func kindRowsFor(allowTerminalSplit bool) []kindRow {
 type rowOpts struct {
 	allowTerminalSplit bool
 	showNotes          bool
-	providers          []ProviderItem
+	// paneKindsOnly drops the rows that create a workspace rather than a pane.
+	paneKindsOnly bool
+	providers     []ProviderItem
 }
 
 func kindRowsForOpts(opts rowOpts) []kindRow {
@@ -103,6 +105,12 @@ func kindRowsForOpts(opts rowOpts) []kindRow {
 			continue
 		}
 		if row.NeedsLiveTerminal && !opts.allowTerminalSplit {
+			continue
+		}
+		// Shell and Worktree create workspace rows, which a host with no
+		// workspace list has nowhere to put. Asked as kindIsPane rather than as
+		// a Shell/Worktree exclusion so a future non-pane row is dropped too.
+		if opts.paneKindsOnly && !kindIsPane(row.Kind) {
 			continue
 		}
 		rows = append(rows, row)

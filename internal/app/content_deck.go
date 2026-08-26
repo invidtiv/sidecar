@@ -702,25 +702,15 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	if h == nil {
 		return nil, false
 	}
-	var ref contentlink.Ref
-	var plan *panelayout.OpenPlan
-	switch req.Target.Kind {
-	case uirequest.TargetKindIssue:
-		ref = contentlink.Ref{Kind: contentlink.KindIssue, Value: req.Target.Value}
-	case uirequest.TargetKindNote:
-		ref = contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: req.Target.Value}
-	case uirequest.TargetKindDiff:
-		ref = contentlink.Ref{Kind: contentlink.KindDiff, Value: req.Target.Value}
-	case uirequest.TargetKindResource:
-		resolved, refusal := resourceview.ReferenceForLocator(h.resourceMatchers, req.Target.Provider, req.Target.Value)
-		if refusal != "" {
-			m.ackAppContentRequest(req, uirequest.StatusDeclined, refusal, 0)
-			return nil, true
-		}
-		ref = contentlink.Ref{Kind: contentlink.KindResource, Provider: resolved.Instance, Matcher: resolved.Matcher, Value: resolved.Locator}
-	default:
+	ref, refusal, ok := h.contentRefForTarget(req.Target)
+	if refusal != "" {
+		m.ackAppContentRequest(req, uirequest.StatusDeclined, refusal, 0)
+		return nil, true
+	}
+	if !ok {
 		return nil, false
 	}
+	var plan *panelayout.OpenPlan
 	if at := strings.TrimSpace(req.Options.At); at != "" {
 		// An explicit cell is a requirement on this surface too: plan it
 		// against the deck's own tree and apply it verbatim, refusing rather
@@ -759,10 +749,51 @@ func (m *Model) handleAppContentUIRequest(req uirequest.Request) (tea.Cmd, bool)
 	return out.Command, true
 }
 
+// contentRefForTarget maps the cross-surface target vocabulary onto the ref
+// this deck opens. It is the whole per-kind body of the open path, shared by
+// `sidecar open` and the pane switcher so the two cannot drift: a kind the
+// agent can put beside a plugin is a kind the human can, and both land on the
+// same leaf with the same value.
+//
+// The three answers are distinct. A refusal is a target this surface
+// understands and declines with a reason the caller reports; ok=false is a
+// kind this surface does not carry at all, which leaves the request for
+// another handler; otherwise the ref is ready for openAppContentOutcome.
+func (h *appContentDeck) contentRefForTarget(target uirequest.Target) (ref contentlink.Ref, refusal string, ok bool) {
+	switch target.Kind {
+	case uirequest.TargetKindFile:
+		// Resolved against the deck's own root, exactly as the link path does
+		// (resolveAppContentLink) and as the Workspaces hosts do — the Document
+		// leaf wants the workspace-relative display path, and re-resolving here
+		// is what admits an absolute or ~-rooted path the CLI accepted.
+		display, _, resolved := terminallink.ResolveFile(h.workdir, target.Value)
+		if !resolved {
+			return contentlink.Ref{}, fmt.Sprintf("file %q is not readable from %s", target.Value, h.workdir), false
+		}
+		return contentlink.Ref{Kind: contentlink.KindFile, Value: display, Line: target.Line}, "", true
+	case uirequest.TargetKindIssue:
+		return contentlink.Ref{Kind: contentlink.KindIssue, Value: target.Value}, "", true
+	case uirequest.TargetKindNote:
+		return contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: target.Value}, "", true
+	case uirequest.TargetKindDiff:
+		return contentlink.Ref{Kind: contentlink.KindDiff, Value: target.Value}, "", true
+	case uirequest.TargetKindResource:
+		resolved, refusal := resourceview.ReferenceForLocator(h.resourceMatchers, target.Provider, target.Value)
+		if refusal != "" {
+			return contentlink.Ref{}, refusal, false
+		}
+		return contentlink.Ref{Kind: contentlink.KindResource, Provider: resolved.Instance, Matcher: resolved.Matcher, Value: resolved.Locator}, "", true
+	default:
+		return contentlink.Ref{}, "", false
+	}
+}
+
 // appContentKindForTarget maps an open request's wire kind onto its pane kind
 // for explicit-cell placement. Only the passive content kinds are placeable.
 func appContentKindForTarget(kind uirequest.TargetKind) (panelayout.Kind, bool) {
 	switch kind {
+	case uirequest.TargetKindFile:
+		return panelayout.Document, true
 	case uirequest.TargetKindIssue:
 		return panelayout.Issue, true
 	case uirequest.TargetKindNote:
@@ -1149,7 +1180,16 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	// later in the key ladder. Returning false hands them back; everything the
 	// deck structurally owns (tab, q/esc, x, tab cycling) was answered above,
 	// and an active in-document search consumed its keys even earlier.
-	if keymap.GlobalKeys[key.String()] {
+	//
+	// The pane switcher's entry is one of them for the same reason, and for one
+	// more: opening a pane beside the pane you are reading is the whole point of
+	// the entry, so the focused leaf that would otherwise absorb the key is
+	// exactly where it has to work. Here that key is the `n` this leaf's context
+	// binds on all three surfaces, which is why the release is asked of the
+	// keymap rather than spelled out. It is not in keymap.GlobalKeys because the
+	// host answers it only where a deck can take the result, and a plugin may
+	// hold it anywhere else.
+	if keymap.GlobalKeys[key.String()] || m.paneSwitcherClaimsKey(key.String()) {
 		return nil, false
 	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {

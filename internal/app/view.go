@@ -281,6 +281,8 @@ func (m Model) viewContent() string {
 		return m.renderIssueInputOverlay(bg)
 	case ModalIssuePreview:
 		return m.renderIssuePreviewOverlay(bg)
+	case ModalPaneSwitcher:
+		return (&m).renderPaneSwitcherOverlay(bg)
 	}
 
 	return bg
@@ -1354,6 +1356,14 @@ func (m Model) footerHints() []footerHint {
 			hints = m.pluginFooterHints(p, m.activeContext)
 		}
 	}
+	// The pane switcher's entry belongs to the app, not to the plugin whose
+	// browse context it appears in, so it is merged here rather than in five
+	// plugins' Commands(). It sits outside the switch on purpose: a focused
+	// passive leaf and the global Tasks host are both branches above, and the
+	// entry works in both. paneSwitcherCommands self-gates on availability and on
+	// the context's binding, so an unconditional append contributes nothing
+	// where the entry does not belong.
+	hints = append(hints, m.commandFooterHints((&m).paneSwitcherCommands(), m.activeContext)...)
 	// Then essential global hints
 	hints = append(hints, m.globalFooterHints()...)
 	return hints

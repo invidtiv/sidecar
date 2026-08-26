@@ -67,6 +67,11 @@ type OpenOpts struct {
 	// ShowNotes offers the Note row. It follows whether the notes plugin is
 	// registered, so a build without Notes never promises a note pane.
 	ShowNotes bool
+	// PaneKindsOnly drops the Shell and Worktree rows: they create workspace
+	// rows, and a host that is not a workspace surface — an ordinary plugin's
+	// pane deck — has nowhere to put one. The catalog is otherwise the same
+	// table, so a pane kind added there arrives here with no further work.
+	PaneKindsOnly bool
 	// Providers are the configured terminal-resource provider instances; each
 	// becomes its own kind row labelled with its instance ID.
 	Providers []ProviderItem
@@ -106,6 +111,10 @@ type Form struct {
 	terminalDisabled string
 	showProject      bool
 	openedFocus      string
+	// paneKindsOnly is kept past Open only to title the kind step. A host with
+	// no Shell or Worktree row cannot create a workspace, and a modal that says
+	// it can is the one thing on screen describing what the keystroke did.
+	paneKindsOnly bool
 
 	projects     []ProjectItem
 	projectKey   string
@@ -175,11 +184,12 @@ type Suggestion struct {
 func Open(opts OpenOpts) *Form {
 	f := &Form{
 		kind:             opts.Kind,
-		rows:             kindRowsForOpts(rowOpts{allowTerminalSplit: opts.AllowTerminalSplit, showNotes: opts.ShowNotes, providers: opts.Providers}),
+		rows:             kindRowsForOpts(rowOpts{allowTerminalSplit: opts.AllowTerminalSplit, showNotes: opts.ShowNotes, paneKindsOnly: opts.PaneKindsOnly, providers: opts.Providers}),
 		showNotes:        opts.ShowNotes,
 		terminalName:     strings.TrimSpace(opts.TerminalName),
 		terminalDisabled: strings.TrimSpace(opts.TerminalSplitDisabled),
 		showProject:      opts.ShowProject,
+		paneKindsOnly:    opts.PaneKindsOnly,
 		projects:         append([]ProjectItem(nil), opts.Projects...),
 		projectKey:       opts.ProjectKey,
 		allowlist:        append([]string(nil), opts.Agents...),
@@ -192,13 +202,21 @@ func Open(opts OpenOpts) *Form {
 	if opts.UseLastKind && kindLabel(f.rows, lastKind) != "" {
 		f.kind = lastKind
 	}
-	if kindLabel(f.rows, f.kind) == "" {
+	offered := kindLabel(f.rows, f.kind) != ""
+	if !offered {
 		f.kind = f.rows[0].Kind
 	}
 	// The initial row resolves its provider before any change handler runs:
 	// the fields below are still being built.
 	f.providerID = f.rows[f.firstRowOfKind(f.kind)].ProviderID
-	lastKind = f.kind
+	if offered {
+		// lastKind is the row a user left the list on, shared by every host. A
+		// row this host had to fall back to was nobody's choice, so recording it
+		// would let a narrow catalog overwrite the wider hosts' memory — a
+		// PaneKindsOnly open would silently move the Workspaces list off Shell.
+		// The first arrow key or click writes it through selectRow anyway.
+		lastKind = f.kind
+	}
 	f.nameInput = textinput.New()
 	f.nameInput.Prompt = ""
 	f.nameInput.CharLimit = 100
@@ -687,7 +705,7 @@ func (f *Form) build(width int, prevFocus string) {
 		// placement row. Enter continues to the picker; a placement click
 		// continues with that placement already recorded.
 		hints := modal.WithHintText(kindStepHint(width, "Enter continues · Esc cancels"))
-		m := modal.New("Create Workspace",
+		m := modal.New(f.title(),
 			modal.WithWidth(width),
 			modal.WithPrimaryAction(ActionCreate),
 			hints,
@@ -747,7 +765,7 @@ func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 	if f.KindDisabledReason() != "" {
 		hints = modal.WithHintText(kindStepHint(width, "Esc to cancel"))
 	}
-	m := modal.New("Create Workspace",
+	m := modal.New(f.title(),
 		modal.WithWidth(width),
 		modal.WithPrimaryAction(ActionCreate),
 		hints,
@@ -757,6 +775,17 @@ func (f *Form) assemble(width int, prevFocus string, sections []modal.Section) {
 		m.AddSection(section)
 	}
 	f.modal = m
+}
+
+// title names the kind step for the host it opened in. On the two Workspaces
+// surfaces the list starts with Shell and Worktree and the modal is what it has
+// always been; in a plugin host those rows are gone, so the same heading would
+// name the one act that host cannot perform.
+func (f *Form) title() string {
+	if f.paneKindsOnly {
+		return "Open Pane"
+	}
+	return "Create Workspace"
 }
 
 // buildPicker assembles the target picker step: "New · <label>" with the

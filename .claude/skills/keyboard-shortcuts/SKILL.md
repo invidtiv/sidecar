@@ -464,9 +464,91 @@ The terminal preview keeps `o` rather than `n`, because `n` there belongs to
 the list's create. `internal/keymap`'s parity tests hold both surfaces to the
 same key in the same contexts.
 
-Other plugins (Notes, Files, Git) will grow the same entry under `ctrl+n`,
-since each already spends `n` on its own create. See
-`docs/plans/active/pane-switcher-everywhere.md`.
+#### The plugin half: `ctrl+n`
+
+The same entry exists in the ordinary plugins, under `ctrl+n` rather than `n`.
+Every plugin that has a create already spends `n` on it — `new-note`,
+`next-match` — so displacing those would be the drift the Workspaces half
+deliberately avoided.
+
+It is bound in **one place** for all five plugins: `internal/app/pane_switcher.go`,
+not once per plugin. The deck the switcher opens into is the app's
+(`internal/app/content_deck.go`) and so is the key routing, so a plugin opts in
+simply by being deck-eligible — implementing `plugin.ContentLinkProvider` and
+`plugin.PaneFocusProvider`, with `features.PluginContentPanes` on. Today that is
+`file-browser`, `git-status`, `notes`, `tasks` and `td-monitor`; `workspace` is
+excluded because it owns its own pane tree.
+
+Three rules decide where the key appears, and none of them is a per-plugin list:
+
+- **The keymap is the whole opt-in.** The host reads the entry key out of the
+  keymap for whatever context is active (`paneSwitcherKeyFor`) rather than
+  comparing against a constant. A context that never names `open-pane` never
+  reaches the switcher, and a user who rebinds `open-pane` moves the key *and*
+  its footer hint together.
+- **Browse and preview contexts only.** `ctrl+n` is `cursor-down` in the global
+  context and in every filter, finder, search and editor context. Claiming it
+  where it already walks a list would take the cursor out from under someone who
+  is typing, so those contexts keep it. See the assignment table below.
+- **A focused passive leaf answers `n`, not `ctrl+n`.** A leaf inside a plugin's
+  deck reports the same `workspace-doc|issue|note|diff|resource` context the two
+  Workspaces surfaces report for the same pane, so it answers the same key
+  there. One model, three projections, one key each.
+
+The switcher offers **pane kinds only** outside Workspaces — File, Git diff,
+td issue, Note, one row per configured resource provider — and is titled
+"Open Pane" rather than "Create Workspace". Shell and Worktree create workspace
+rows, which a Notes plugin has nowhere to put; Terminal split is absent because
+a plugin deck is a passive `contentpanes` deck with no live-leaf host. That is
+`workspacecreate.OpenOpts.PaneKindsOnly` plus `AllowTerminalSplit: false` — the
+same data-driven catalog, one more flag, no second modal.
+
+See `docs/plans/active/pane-switcher-everywhere.md`.
+
+#### Where `ctrl+n` goes, in full
+
+Every context that binds `ctrl+n` in `keymap.DefaultBindings()`, and to what.
+`internal/keymap/pane_switcher_parity_test.go` holds this table to the tree.
+
+| Context | Command | Why |
+|---------|---------|-----|
+| `global` | `cursor-down` | The emacs/readline default. Everything below either shadows it or inherits it. |
+| `notes-list` | `open-pane` | Notes' browse context. |
+| `file-browser-tree`, `file-browser-preview` | `open-pane` | The File Browser's two browse contexts. |
+| `git-status`, `git-status-commits`, `git-status-diff`, `git-diff`, `git-commit-preview` | `open-pane` | Git names both the focused pane and the cursor's row in its context, so reading a file row, reading a commit and reading a diff are three contexts. |
+| `tasks-list`, `tasks-detail`, `tasks-response`, `tasks-response-detail` | `open-pane` | Exactly Tasks' four root contexts; everything else Tasks reports is an overlay it owns the keyboard in. |
+| `td-monitor`, `td-board`, `td-kanban` | `open-pane` | td's three browse views: the main list, board mode, the kanban view. |
+| `global-workspaces`, `workspace-list` | `new-shell` | The Workspaces lists' second create. This is the precedent `ctrl+n` follows here — one modifier out from `n`, same intent. |
+| `global-workspaces-filter`, `project-switcher` | `cursor-down` | Filters. The key walks the list while you type. |
+| `file-browser-quick-open`, `file-browser-project-search` | `cursor-down` | Finders. |
+| `notes-search`, `notes-editor` | `cursor-down` | Search and the built-in editor. |
+
+Contexts deliberately **without** a row, and the reason each is different:
+
+- `notes-preview` — the note preview answers `ctrl+n`/`ctrl+p` as its own cursor
+  motion in plugin code (`notes.handleEditorPreviewKey`), with nothing in
+  `bindings.go` to show for it. The rule stands aside; Notes stays reachable
+  from `notes-list`.
+- `td-modal` and its sub-focus states (`td-epic-tasks`, `td-parent-epic`,
+  `td-blocked-by-focused`, `td-blocks-focused`) — `tdmonitor.BlocksGlobalKeys`
+  hands every key in that context to the embedded td model at precedence level
+  2, two rungs above the switcher's, so a binding there would never fire. This
+  is the one genuinely wanted pane the entry does not reach.
+- `td-search`, `td-form`, `td-board-editor`, `td-confirm`, `td-close-confirm`,
+  and every non-root `tasks-*` context — text input or an overlay the plugin
+  forwards wholesale.
+- `git-history` — has bindings in `bindings.go` but `gitstatus.FocusContext()`
+  never reports it. A binding on a context nobody stands in is a key that does
+  nothing.
+- Anything reaching a **live PTY**. `ctrl+n` is a real control character:
+  `tty.MapKeyToTmux` encodes it as `C-n` and sends it to the pane. The tty
+  layer's own chords are `ctrl+\` (exit), `ctrl+]` (attach), `alt+c` (copy),
+  `alt+v` (paste), `ctrl+a` (select all) and the platform copy chord; its
+  scrollback set is the arrows plus the `j/k/g/G/ctrl+d/ctrl+u` pager aliases.
+  The two host `OnKey` hooks claim only terminal search and `ctrl+t`. Above all
+  of that, `workspace-interactive`, `file-browser-inline-edit`,
+  `notes-inline-edit` and `workspace-doc-edit` forward every key two rungs
+  before the switcher's is reached.
 
 `g` / `G` jump to the top / bottom of the preview's scrollback. `0` is
 deliberately **not** bound here: it is the header's global Tasks shortcut, and a
@@ -666,9 +748,35 @@ unchanged. Enter and note-body clicks follow `plugins.notes.defaultEditor`;
 
 ## TD Monitor Plugin
 
-Contexts: `td-monitor` (root), `td-modal`, `td-stats`, `td-search`, `td-confirm`, `td-epic-tasks`, `td-parent-epic`, `td-handoffs`.
+Contexts: `td-monitor` (root), `td-board`, `td-kanban`, `td-modal`, `td-stats`, `td-search`, `td-confirm`, `td-epic-tasks`, `td-parent-epic`, `td-handoffs`.
 
-Shortcuts are defined in TD's `pkg/monitor/keymap/` and auto-exported.
+Shortcuts are defined in TD's `pkg/monitor/keymap/` and auto-exported. The
+context *names* come from there too — td names its own context and
+`monitor/keymap.ContextToSidecar` spells it for sidecar — so any sidecar-side
+binding on a `td-*` context is a copy of someone else's constant.
+`tdmonitor.TestBrowseContextsCarryThePaneSwitcherEntry` derives them from the
+upstream constants so a rename in td fails a test here rather than silently
+unbinding a key.
+
+`ctrl+n` opens the pane switcher in `td-monitor`, `td-board` and `td-kanban`.
+See "The Pane Switcher Is Reachable From Every Pane" for why `td-modal` is not
+among them.
+
+## Tasks Plugin
+
+Contexts: `tasks-list`, `tasks-detail`, `tasks-response`, `tasks-response-detail`
+(the four **root** contexts), plus every overlay Tasks reports —
+`tasks-filter`, `tasks-form`, `tasks-modal`, `tasks-picker`, `tasks-prompt`,
+`tasks-task-edit`, `tasks-agent-activity` and the rest.
+
+Shortcuts are defined in Tasks' `pkg/tui` and auto-exported, and the context
+names come from there verbatim (`tasksui.FocusContext`). Root-ness is sidecar's
+own judgement (`internal/plugins/tasks/routing.go`) and it fails conservative:
+anything unknown is treated as an overlay, so sidecar's global keys do not fire
+underneath one.
+
+`ctrl+n` opens the pane switcher in the four root contexts and nowhere else —
+in an overlay, `BlocksGlobalKeys` has already handed the key to the tab.
 
 ## Project Switcher
 

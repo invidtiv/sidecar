@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/scroll/scrolltest"
 	"github.com/marcus/sidecar/internal/version"
+	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
 // wheelBoundaryTarget is a minimal planned target for boundary-fixture results.
@@ -434,6 +435,22 @@ func TestActiveModalWheelAtBoundaryLedger(t *testing.T) {
 			},
 			want: want{up: true, down: true},
 		},
+		{
+			// The switcher's kind list fits its box, so nothing in it scrolls:
+			// every wheel over it is absorbed.
+			name: "pane switcher body absorbs the wheel",
+			setup: func(t *testing.T, m *Model) (int, int) {
+				m.paneSwitcherOpen = true
+				m.paneSwitcher = workspacecreate.Open(workspacecreate.OpenOpts{
+					Kind: workspacecreate.KindFile, FocusKind: true, PaneKindsOnly: true,
+				})
+				m.paneSwitcherMouse = mouse.NewHandler()
+				m.ensurePaneSwitcherModal()
+				m.activePaneSwitcherModal().Render(m.width, m.height, m.paneSwitcherMouse)
+				return modalBodyPoint(t, m.paneSwitcherMouse)
+			},
+			want: want{up: true, down: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -493,8 +510,9 @@ func TestEveryModalKindHasALedgerRow(t *testing.T) {
 		ModalOpenIn:           "open in picker",
 		ModalIssueInput:       "issue lookup with results that overflow",
 		ModalIssuePreview:     "issue preview long card at top",
+		ModalPaneSwitcher:     "pane switcher body absorbs the wheel",
 	}
-	for kind := ModalPalette; kind <= ModalIssuePreview; kind++ {
+	for kind := ModalPalette; kind <= ModalPaneSwitcher; kind++ {
 		if _, ok := covered[kind]; !ok {
 			t.Errorf("ModalKind %d has no boundary ledger row", kind)
 		}

@@ -718,12 +718,14 @@ func (p *Plugin) FocusContext() string {
 	return p.model.CurrentContextString()
 }
 
-// ConsumesTextInput reports whether TD monitor is in a text-entry context.
-func (p *Plugin) ConsumesTextInput() bool {
-	if p.model == nil {
-		return false
-	}
-	switch p.model.CurrentContextString() {
+// contextConsumesTextInput and contextBlocksGlobalKeys answer for a td context
+// name alone, without a model. Both facts decide where in sidecar's key ladder a
+// td context is reachable — a context that satisfies either has all of its keys
+// handed to the embedded model at precedence level 2, above anything the host
+// binds for itself, including the pane switcher's entry — so they are stated as
+// data a test can enumerate rather than as switches only a live model can reach.
+func contextConsumesTextInput(context string) bool {
+	switch context {
 	case "td-search", "td-form", "td-board-editor", "td-confirm", "td-close-confirm":
 		return true
 	default:
@@ -731,9 +733,21 @@ func (p *Plugin) ConsumesTextInput() bool {
 	}
 }
 
+func contextBlocksGlobalKeys(context string) bool {
+	return context == "td-modal"
+}
+
+// ConsumesTextInput reports whether TD monitor is in a text-entry context.
+func (p *Plugin) ConsumesTextInput() bool {
+	if p.model == nil {
+		return false
+	}
+	return contextConsumesTextInput(p.model.CurrentContextString())
+}
+
 // BlocksGlobalKeys reports whether TD's generic modal owns the keyboard.
 func (p *Plugin) BlocksGlobalKeys() bool {
-	return p.model != nil && p.model.CurrentContextString() == "td-modal"
+	return p.model != nil && contextBlocksGlobalKeys(p.model.CurrentContextString())
 }
 
 // Diagnostics returns plugin health info.

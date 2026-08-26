@@ -71,6 +71,9 @@ func (m *Model) activeModalWheelAtBoundary(msg tea.MouseWheelMsg) bool {
 
 	case ModalIssuePreview:
 		return m.issuePreviewWheelAtBoundary(msg)
+
+	case ModalPaneSwitcher:
+		return m.paneSwitcherWheelAtBoundary(msg)
 	}
 	return false
 }
