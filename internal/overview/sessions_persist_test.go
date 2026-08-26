@@ -1,6 +1,9 @@
 package overview
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +45,94 @@ func TestSessionsSelectedDebounceSavesLastIDOnce(t *testing.T) {
 	m.Update(sessionsSelectedTickMsg{generation: m.sessionsSelectedGen, id: "c"})
 	if len(saved) != 1 || saved[0] != "c" {
 		t.Fatalf("saved = %v, want [c]", saved)
+	}
+}
+
+func TestSessionsRestoreCatalogSelectsRowAndWarmsComposedTree(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# catalog restore\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session := termpanes.SessionPrefix + "bravo"
+	loadSessionsSelected = func() string { return "b" }
+	loadSessionsPaneLayout = func(id string) *state.PaneLayoutJSON {
+		if id != "b" {
+			return nil
+		}
+		return &state.PaneLayoutJSON{
+			Root: root, Surface: "b", Open: true, FocusKind: "doc",
+			Split: &state.PaneSplitJSON{
+				Axis: "cols", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: "terminal"},
+				B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+					Axis: "rows", Ratio: 40,
+					A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
+					B: &state.PaneLayoutJSON{Kind: "shell", Session: session, Name: "build logs"},
+				}},
+			},
+		}
+	}
+	var ensured []string
+	original := ensurePreviewTerminalSession
+	ensurePreviewTerminalSession = func(gotSession, workDir string) (string, error) {
+		ensured = append(ensured, gotSession+"|"+workDir)
+		if gotSession != session || workDir != root {
+			t.Fatalf("EnsureSession(%q, %q), want (%q, %q)", gotSession, workDir, session, root)
+		}
+		return "%restored", nil
+	}
+	t.Cleanup(func() {
+		loadSessionsSelected = func() string { return "" }
+		loadSessionsPaneLayout = func(string) *state.PaneLayoutJSON { return nil }
+		ensurePreviewTerminalSession = original
+	})
+
+	m, _ := previewModel(t)
+	result := m.results["sidecar"]
+	workspaces := append([]workspaceinventory.Workspace(nil), result.Workspaces...)
+	for i := range workspaces {
+		if workspaces[i].ID != "b" {
+			continue
+		}
+		workspaces[i].Path = root
+		workspaces[i].ProjectRoot = root
+	}
+	result.Workspaces = workspaces
+	m.results["sidecar"] = result
+
+	// Production catalog path: projectMsg → syncBoard → SelectID(persisted) → previewSync.
+	m.pendingRestoreSelected = "b"
+	m.preview.visible = true
+	m.preview.workspaceID = ""
+	m.preview.paneCache = nil
+	m.resetActivePreviewPanes()
+	m.syncBoard()
+	run(t, m, m.previewSync())
+
+	if m.workspaces.SelectedID() != "b" {
+		t.Fatalf("selected = %q, want persisted row b", m.workspaces.SelectedID())
+	}
+	visible := m.workspaces.Visible()
+	if len(visible) == 0 || visible[0].ID == "b" {
+		first := ""
+		if len(visible) > 0 {
+			first = visible[0].ID
+		}
+		t.Fatalf("b must not be the first visible row, first=%q n=%d", first, len(visible))
+	}
+	if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document) == nil {
+		t.Fatalf("restored tree missing document: %+v", m.preview.paneRoot)
+	}
+	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if shell == nil {
+		t.Fatalf("restored tree missing shell: %+v", m.preview.paneRoot)
+	}
+	leaf := m.preview.terminalPanes.Leaf(shell.ID)
+	if leaf == nil || leaf.Session != session {
+		t.Fatalf("restored shell leaf = %+v", leaf)
+	}
+	if len(ensured) != 1 || ensured[0] != session+"|"+root {
+		t.Fatalf("EnsureSession calls = %v, want [%s|%s]", ensured, session, root)
 	}
 }
 
@@ -193,19 +284,31 @@ func TestSessionsRestoreDecodesTreeAndReattachesShellSession(t *testing.T) {
 	}
 }
 
+func assertPreviewCollapsedToPrimary(t *testing.T, m *Model) {
+	t.Helper()
+	root := m.preview.paneRoot
+	if root == nil {
+		t.Fatal("pane tree is nil")
+	}
+	if root.Split != nil {
+		t.Fatalf("split did not collapse: %+v", root)
+	}
+	if root.Kind != panelayout.Primary {
+		t.Fatalf("collapsed kind = %v, want primary", root.Kind)
+	}
+}
+
 func TestSessionsRestoreDegradationTable(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	root := m.catalog["a"].Path
 	originalEnsure := ensurePreviewTerminalSession
-	ensurePreviewTerminalSession = func(session, workDir string) (string, error) {
-		return "%recreated", nil
-	}
 	t.Cleanup(func() { ensurePreviewTerminalSession = originalEnsure })
 
 	tests := []struct {
-		name   string
-		layout *state.PaneLayoutJSON
-		check  func(*testing.T, *Model)
+		name      string
+		layout    *state.PaneLayoutJSON
+		ensureErr error
+		check     func(*testing.T, *Model)
 	}{
 		{
 			name: "missing document drops the leaf",
@@ -221,9 +324,24 @@ func TestSessionsRestoreDegradationTable(t *testing.T) {
 				if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document) != nil {
 					t.Fatalf("missing document stayed: %+v", m.preview.paneRoot)
 				}
-				if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Primary) == nil {
-					t.Fatal("primary was lost")
+				assertPreviewCollapsedToPrimary(t, m)
+			},
+		},
+		{
+			name: "missing issue drops the leaf",
+			layout: &state.PaneLayoutJSON{
+				Root: root, Surface: "a", Open: true,
+				Split: &state.PaneSplitJSON{
+					Axis: "cols", Ratio: 50,
+					A: &state.PaneLayoutJSON{Kind: "terminal"},
+					B: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "gone"}}},
+				},
+			},
+			check: func(t *testing.T, m *Model) {
+				if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Issue) != nil {
+					t.Fatalf("missing issue stayed: %+v", m.preview.paneRoot)
 				}
+				assertPreviewCollapsedToPrimary(t, m)
 			},
 		},
 		{
@@ -240,6 +358,7 @@ func TestSessionsRestoreDegradationTable(t *testing.T) {
 				if m.preview.paneRoot == nil || m.preview.paneRoot.Split != nil {
 					t.Fatalf("unknown kind did not collapse: %+v", m.preview.paneRoot)
 				}
+				assertPreviewCollapsedToPrimary(t, m)
 			},
 		},
 		{
@@ -264,6 +383,24 @@ func TestSessionsRestoreDegradationTable(t *testing.T) {
 			},
 		},
 		{
+			name:      "EnsureSession error closes the shell and collapses",
+			ensureErr: errors.New("tmux gone"),
+			layout: &state.PaneLayoutJSON{
+				Root: root, Surface: "a", Open: true,
+				Split: &state.PaneSplitJSON{
+					Axis: "cols", Ratio: 50,
+					A: &state.PaneLayoutJSON{Kind: "terminal"},
+					B: &state.PaneLayoutJSON{Kind: "shell", Session: termpanes.SessionPrefix + "dead"},
+				},
+			},
+			check: func(t *testing.T, m *Model) {
+				if panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell) != nil {
+					t.Fatalf("failed EnsureSession left a shell leaf: %+v", m.preview.paneRoot)
+				}
+				assertPreviewCollapsedToPrimary(t, m)
+			},
+		},
+		{
 			name: "gone focus falls back to primary",
 			layout: &state.PaneLayoutJSON{
 				Root: root, Surface: "a", Open: true, FocusKind: "doc",
@@ -277,6 +414,7 @@ func TestSessionsRestoreDegradationTable(t *testing.T) {
 				if kind := previewFocusKind(m.preview.paneRoot, m.preview.paneFocus); kind != "primary" {
 					t.Fatalf("focus = %q, want primary fallback", kind)
 				}
+				assertPreviewCollapsedToPrimary(t, m)
 			},
 		},
 	}
@@ -288,6 +426,12 @@ func TestSessionsRestoreDegradationTable(t *testing.T) {
 					return nil
 				}
 				return test.layout
+			}
+			ensurePreviewTerminalSession = func(session, workDir string) (string, error) {
+				if test.ensureErr != nil {
+					return "", test.ensureErr
+				}
+				return "%recreated", nil
 			}
 			t.Cleanup(func() { loadSessionsPaneLayout = func(string) *state.PaneLayoutJSON { return nil } })
 			m.resetActivePreviewPanes()
