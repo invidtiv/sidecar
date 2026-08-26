@@ -51,11 +51,13 @@ func RecentDiffRefs(ctx context.Context, workDir string, commitLimit int) ([]Dif
 	return refs, nil
 }
 
-// IssueRef is one td issue the issue picker can offer.
+// IssueRef is one td issue the issue picker can offer. Updated is when the
+// issue last changed, which is what a picker row uses to say how fresh it is.
 type IssueRef struct {
-	ID     string `json:"id"`
-	Title  string `json:"title"`
-	Status string `json:"status"`
+	ID      string
+	Title   string
+	Status  string
+	Updated time.Time
 }
 
 // RecentIssues lists a project's in-progress then open issues from td,
@@ -82,14 +84,29 @@ func runTDList(ctx context.Context, workDir, status string, limit int) ([]IssueR
 	if err != nil {
 		return nil, fmt.Errorf("td list: %w", err)
 	}
-	var issues []IssueRef
 	if len(output) == 0 {
 		return nil, nil
 	}
+	type rawIssue struct {
+		ID      string `json:"id"`
+		Title   string `json:"title"`
+		Status  string `json:"status"`
+		Updated string `json:"updated_at"`
+	}
+	var issues []rawIssue
 	if err := json.Unmarshal(output, &issues); err != nil {
 		return nil, fmt.Errorf("parse td json: %w", err)
 	}
-	return issues, nil
+	refs := make([]IssueRef, 0, len(issues))
+	for _, i := range issues {
+		refs = append(refs, IssueRef{
+			ID:      i.ID,
+			Title:   strings.TrimSpace(i.Title),
+			Status:  i.Status,
+			Updated: parseTDTime(i.Updated),
+		})
+	}
+	return refs, nil
 }
 
 // NoteRef is one td note the note picker can offer. Title is what the note
@@ -138,7 +155,7 @@ func RecentNotes(ctx context.Context, workDir string, limit int) ([]NoteRef, err
 		refs = append(refs, NoteRef{
 			ID:      n.ID,
 			Title:   NoteTitle(n.Title, n.Content),
-			Updated: parseNoteTime(n.Updated),
+			Updated: parseTDTime(n.Updated),
 		})
 	}
 	if len(refs) > limit {
@@ -164,10 +181,10 @@ func NoteTitle(title, content string) string {
 	return ""
 }
 
-// parseNoteTime reads td's timestamps, which arrive both as zone offsets and
-// as fractional UTC. A stamp that parses as neither yields the zero time, and
-// the picker simply shows no age for that row.
-func parseNoteTime(raw string) time.Time {
+// parseTDTime reads td's timestamps, which arrive both as zone offsets and as
+// fractional UTC. A stamp that parses as neither yields the zero time, and the
+// picker simply shows no age for that row.
+func parseTDTime(raw string) time.Time {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return time.Time{}

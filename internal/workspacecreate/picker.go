@@ -471,11 +471,11 @@ func (f *Form) pickerSections() []modal.Section {
 			if i == f.picker.cursor {
 				row = "❯ "
 			}
-			row += item.Label
+			badge := ""
 			if item.Badge != "" {
-				row += "  " + styles.Muted.Render("["+item.Badge+"]")
+				badge = "  " + styles.Muted.Render("["+item.Badge+"]")
 			}
-			lines = append(lines, alignMeta(row, item.Meta, contentWidth))
+			lines = append(lines, alignRow(row+item.Label, badge, item.Meta, contentWidth))
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      fmt.Sprintf("%s%d", pickerItemPrefix, i),
 				OffsetX: 0,
@@ -528,22 +528,37 @@ func (f *Form) pickerSections() []modal.Section {
 	return []modal.Section{input, count, list, hints}
 }
 
-// alignMeta pins a row's metadata to the right edge of the content column,
-// shrinking the row's own text when the two would collide so the column stays
-// straight down the list rather than following the longest label. A row with no
-// metadata is returned untouched, so a picker that offers none is unchanged.
-func alignMeta(row, meta string, contentWidth int) string {
-	if meta == "" || contentWidth < 1 {
-		return row
+// alignRow lays out one picker row: text on the left, its badge just after it,
+// and meta pinned to the right edge so the column stays straight down the list
+// rather than following the longest label.
+//
+// Both the badge and the meta are reserved before the text is fitted, and it is
+// the text that gives way. The row used to be assembled left to right and cut
+// at the content width, which meant a long title quietly ate its own "[in
+// progress]" — dropping the badge from exactly the issues it was there to mark,
+// since those are the ones with the most to say in their titles.
+func alignRow(text, badge, meta string, contentWidth int) string {
+	if contentWidth < 1 {
+		return text + badge
 	}
+	reserved := ansi.StringWidth(badge)
 	metaWidth := ansi.StringWidth(meta)
-	// At least one space between the text and its column; a width that cannot
-	// hold both keeps the text, which is the part that identifies the row.
-	if contentWidth <= metaWidth+1 {
-		return row
+	if meta != "" {
+		// At least one space between the badge and the meta column.
+		reserved += metaWidth + 1
 	}
-	if maxRow := contentWidth - metaWidth - 1; ansi.StringWidth(row) > maxRow {
-		row = ansi.Truncate(row, maxRow, "…")
+	maxText := contentWidth - reserved
+	if maxText < 1 {
+		// Too narrow to hold the furniture: the text identifies the row, so it
+		// is what survives.
+		return ansi.Truncate(text, contentWidth, "…")
+	}
+	if ansi.StringWidth(text) > maxText {
+		text = ansi.Truncate(text, maxText, "…")
+	}
+	row := text + badge
+	if meta == "" {
+		return row
 	}
 	gap := contentWidth - metaWidth - ansi.StringWidth(row)
 	return row + strings.Repeat(" ", gap) + styles.Muted.Render(meta)

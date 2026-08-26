@@ -48,6 +48,79 @@ func TestNoteRowStillMatchesItsID(t *testing.T) {
 	}
 }
 
+// Issue rows read the same way notes do: title, badge, age — no id. The badge
+// stays, because "which of these am I already on" is the question the issue
+// list is scanned for.
+func TestIssueRowsShowTitleAndAgeWithoutID(t *testing.T) {
+	now := time.Date(2026, 8, 25, 17, 0, 0, 0, time.UTC)
+	rows := foldIssuesAt([]workspaceops.IssueRef{
+		{ID: "td-f8950c", Title: "Files pane: shared file finder", Status: "in_progress", Updated: now.Add(-10 * time.Minute)},
+		{ID: "td-bcfe53", Title: "Inventory inertial wheel coverage", Status: "open", Updated: now.Add(-11 * 24 * time.Hour)},
+	}, now)
+
+	want := []Suggestion{
+		{Value: "td-f8950c", Label: "Files pane: shared file finder", Badge: "in progress", Meta: "10m"},
+		{Value: "td-bcfe53", Label: "Inventory inertial wheel coverage", Meta: "11d"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("folded %d rows, want %d", len(rows), len(want))
+	}
+	for i := range want {
+		if rows[i] != want[i] {
+			t.Fatalf("row %d = %+v, want %+v", i, rows[i], want[i])
+		}
+	}
+}
+
+// The id is gone from the issue row but not from the picker, exactly as with
+// notes: an id pasted from an agent still selects the issue it names.
+func TestIssueRowStillMatchesItsID(t *testing.T) {
+	rows := foldIssuesAt([]workspaceops.IssueRef{
+		{ID: "td-f8950c", Title: "Files pane: shared file finder"},
+		{ID: "td-bcfe53", Title: "Inventory inertial wheel coverage"},
+	}, time.Now())
+
+	got := filterSuggestions("td-bcfe53", rows)
+	if len(got) != 1 || got[0].Value != "td-bcfe53" {
+		t.Fatalf("filtering by id matched %+v, want the one issue it names", got)
+	}
+}
+
+// A title long enough to fill the row gives way to its badge rather than
+// swallowing it. The badge marks the issues already in progress, which are the
+// ones most likely to have a long title, so a row that cuts its own badge off
+// loses the signal precisely where it matters.
+func TestLongIssueTitleKeepsItsBadgeAndAge(t *testing.T) {
+	f := Open(OpenOpts{Kind: KindIssue})
+	f.SetIssues([]Suggestion{{
+		Value: "td-f8950c",
+		Label: "Files pane: shared file finder + project search, pane-scoped modals",
+		Badge: "in progress",
+		Meta:  "10d",
+	}})
+	f.AdvanceToTarget()
+
+	view := ansi.Strip(f.Build(52).Render(80, 40, mouse.NewHandler()))
+	var row string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Files pane") {
+			row = line
+		}
+	}
+	if row == "" {
+		t.Fatalf("issue row missing from the picker:\n%s", view)
+	}
+	if !strings.Contains(row, "[in progress]") {
+		t.Fatalf("long title cut off its badge:\n%q", row)
+	}
+	if !strings.Contains(row, "10d") {
+		t.Fatalf("long title cut off its age:\n%q", row)
+	}
+	if !strings.Contains(row, "…") {
+		t.Fatalf("the title should be what gives way, not the furniture:\n%q", row)
+	}
+}
+
 // The age column is straight down the list rather than trailing each title,
 // and a title too long to sit beside it gives way to it.
 func TestNotePickerAgeColumnIsRightAligned(t *testing.T) {

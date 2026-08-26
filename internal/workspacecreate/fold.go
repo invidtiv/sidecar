@@ -27,16 +27,33 @@ func FoldDiffRefs(refs []workspaceops.DiffRef) []Suggestion {
 }
 
 // FoldIssues folds td issues, in-progress ones badged so "what am I doing"
-// reads before "what exists".
+// reads before "what exists". The row is the issue's title with its age in the
+// right-hand column, on the same reasoning as the notes below: an id is what
+// you copy to hand an issue to an agent, not what you scan a list by. Value
+// keeps the id, so pasting one still matches the row it names.
 func FoldIssues(issues []workspaceops.IssueRef) []Suggestion {
+	return foldIssuesAt(issues, time.Now())
+}
+
+func foldIssuesAt(issues []workspaceops.IssueRef, now time.Time) []Suggestion {
 	out := make([]Suggestion, 0, len(issues))
 	for _, issue := range issues {
 		badge := ""
 		if issue.Status == "in_progress" {
 			badge = "in progress"
 		}
-		label := strings.TrimSpace(issue.ID + "  " + issue.Title)
-		out = append(out, Suggestion{Value: issue.ID, Label: label, Badge: badge})
+		label := strings.TrimSpace(issue.Title)
+		if label == "" {
+			// Nothing to read it by: the id is a worse name than none, but it
+			// is the only one left.
+			label = issue.ID
+		}
+		out = append(out, Suggestion{
+			Value: issue.ID,
+			Label: label,
+			Badge: badge,
+			Meta:  workspacelist.RelativeAge(issue.Updated, now),
+		})
 	}
 	return out
 }
