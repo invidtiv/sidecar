@@ -284,6 +284,131 @@ func destFromProject(proj registeredProject, workDir, resolved string) openDesti
 	}
 }
 
+// resolveSessionsDestination addresses the running instance's global Sessions
+// surface. Optional row is a durable inventory ID first, then a display name,
+// with the same ambiguity rules --shell already has.
+func resolveSessionsDestination(ctx context.Context, stateDir, row string) (openDestination, error) {
+	rowID, rowName := "", ""
+	if strings.TrimSpace(row) != "" {
+		id, name, err := matchSessionsRow(stateDir, row)
+		if err != nil {
+			return openDestination{}, err
+		}
+		rowID, rowName = id, name
+	}
+	dest, err := resolveOpenDestination(ctx, stateDir, "", "")
+	if err != nil {
+		return openDestination{}, err
+	}
+	dest.Origin.Sessions = true
+	dest.Origin.TmuxSession = ""
+	dest.Origin.Namespace = ""
+	dest.Resolved = uirequest.ResolvedSessions
+	dest.Origin.SessionsRow = rowID
+	if rowName != "" {
+		dest.DisplayName = rowName
+	} else if dest.DisplayName == "" {
+		dest.DisplayName = "Sessions"
+	}
+	return dest, nil
+}
+
+type sessionsRowHit struct {
+	id, name, tmux string
+	aliases        []string
+}
+
+func matchSessionsRow(stateDir, name string) (id, display string, err error) {
+	if name == "" {
+		return "", "", &destError{code: 2, msg: "--sessions requires a row when given an argument"}
+	}
+	projects, err := loadRegisteredProjects(stateDir)
+	if err != nil {
+		return "", "", err
+	}
+	rows := listSessionsRows(projects)
+	matches := func(pred func(sessionsRowHit) bool) []sessionsRowHit {
+		var hits []sessionsRowHit
+		for _, row := range rows {
+			if pred(row) {
+				hits = append(hits, row)
+			}
+		}
+		return hits
+	}
+	idHits := matches(func(row sessionsRowHit) bool {
+		if row.id == name {
+			return true
+		}
+		for _, alias := range row.aliases {
+			if alias == name {
+				return true
+			}
+		}
+		return false
+	})
+	hits := idHits
+	if len(hits) == 0 {
+		hits = matches(func(row sessionsRowHit) bool { return row.name == name })
+	}
+	if len(hits) == 0 {
+		hits = matches(func(row sessionsRowHit) bool { return row.tmux == name })
+	}
+	if len(hits) == 0 {
+		return "", "", &destError{code: 2, msg: fmt.Sprintf("unknown Sessions row %q", name)}
+	}
+	if len(hits) > 1 {
+		ids := make([]string, 0, len(hits))
+		for _, h := range hits {
+			ids = append(ids, h.id)
+		}
+		return "", "", &destError{
+			code: 3,
+			msg:  fmt.Sprintf("row %q matches more than one Sessions row (%s); pass --sessions with a durable id", name, strings.Join(ids, ", ")),
+		}
+	}
+	return hits[0].id, hits[0].name, nil
+}
+
+func listSessionsRows(projects []registeredProject) []sessionsRowHit {
+	var rows []sessionsRowHit
+	for _, p := range projects {
+		projectIDs := []string{p.Key}
+		if p.Path != "" {
+			canon := canonicalOpenPath(p.Path)
+			if canon != "" && canon != p.Key {
+				projectIDs = append(projectIDs, canon)
+			}
+		}
+		for _, sh := range p.Shells {
+			name := sh.DisplayName
+			if name == "" {
+				name = sh.TmuxName
+			}
+			aliases := make([]string, 0, len(projectIDs))
+			for _, key := range projectIDs {
+				aliases = append(aliases, key+":shell:"+sh.TmuxName)
+			}
+			id := aliases[len(aliases)-1]
+			rows = append(rows, sessionsRowHit{id: id, name: name, tmux: sh.TmuxName, aliases: aliases})
+		}
+		for _, path := range p.Worktrees {
+			canon := canonicalOpenPath(path)
+			base := filepath.Base(canon)
+			if base == "" {
+				base = filepath.Base(path)
+			}
+			aliases := make([]string, 0, len(projectIDs))
+			for _, key := range projectIDs {
+				aliases = append(aliases, key+":worktree:"+canon)
+			}
+			id := aliases[len(aliases)-1]
+			rows = append(rows, sessionsRowHit{id: id, name: base, aliases: aliases})
+		}
+	}
+	return rows
+}
+
 func matchProject(projects []registeredProject, name string) (registeredProject, error) {
 	if name == "" {
 		return registeredProject{}, &destError{code: 2, msg: "--project requires a project name"}

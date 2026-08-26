@@ -39,6 +39,9 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 	if req.Action == uirequest.ActionCreate {
 		return m.applyCreateRequest(req)
 	}
+	if req.Action == uirequest.ActionLayout {
+		return m.applyLayoutRequest(req)
+	}
 	if req.Action != uirequest.ActionOpen {
 		return nil
 	}

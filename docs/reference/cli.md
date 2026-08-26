@@ -158,8 +158,8 @@ Read and compose the pane layout agents work beside
 
 Read the current pane layout (`layout get`) or open several panes at once
 in one atomic call (`layout apply`). Both act on the surface showing this
-Sidecar shell and never queue: a request whose shell is off screen
-declines with the reason.
+Sidecar shell — or, with --sessions, the global Sessions surface — and never
+queue: a request whose destination is off screen declines with the reason.
 
 ```
 Usage: sidecar layout <command>
@@ -213,7 +213,7 @@ declined, plus its landed cell — so one round trip shows everything wrong
 with a refused spec. Like get, apply never queues.
 
 ```
-Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...])
+Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...]) [--sessions [ROW]]
 ```
 
 **Options:**
@@ -222,6 +222,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `--pane JSON`: One pane descriptor to add (repeatable); see above for the object shape
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
@@ -257,6 +258,10 @@ Read the pane layout of the surface showing this Sidecar shell: the grid
 projection, every pane's kind, targets and tmux session, geometry, and the
 caps and floors an apply would be held to.
 
+--sessions addresses the global Sessions surface of a running instance
+(optional ROW is a durable inventory ID, then a display name). It is
+mutually exclusive with --shell and --project.
+
 A layout that escapes the grid vocabulary reports "grid": null plus the raw
 tree; it is still valid. Human output is a small ASCII sketch plus a table;
 --json passes the payload through unchanged, which is the contract.
@@ -266,13 +271,14 @@ screen the request declines instead (exit 4), because a stale answer is
 worse than a refusal.
 
 ```
-Usage: sidecar layout get [--json]
+Usage: sidecar layout get [--json] [--sessions [ROW]]
 ```
 
 **Options:**
 
 - `--shell NAME`: Target a registered shell by display name or tmux name
 - `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
 - `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
 - `--json`: Write the layout payload itself to stdout
 - `-h, --help`: Show this help
@@ -291,6 +297,8 @@ Usage: sidecar layout get [--json]
 sidecar layout get
 # the machine contract: read before you write
 sidecar layout get --json
+# the selected row on the global Sessions surface
+sidecar layout get --sessions --json
 ```
 
 ## `sidecar notify`

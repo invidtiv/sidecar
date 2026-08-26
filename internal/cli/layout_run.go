@@ -18,13 +18,29 @@ import (
 // instance, 4 declined with the reason verbatim). Layout requests never
 // queue, so a queued ack is never expected and reads as a decline. A
 // non-empty specRaw is the full-layout --spec; panes is the additive batch.
-func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.RawMessage, jsonOutput bool, shellFlag, projectFlag string, waitDuration time.Duration) int {
+type layoutDestFlags struct {
+	shell, project, sessionsRow string
+	sessions                    bool
+}
+
+func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.RawMessage, jsonOutput bool, destFlags layoutDestFlags, waitDuration time.Duration) int {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag)
+	if destFlags.sessions && (destFlags.shell != "" || destFlags.project != "") {
+		cliErrln(env.Stderr, "--sessions cannot be combined with --shell or --project")
+		return 2
+	}
+
+	var dest openDestination
+	var err error
+	if destFlags.sessions {
+		dest, err = resolveSessionsDestination(ctx, env.StateDir, destFlags.sessionsRow)
+	} else {
+		dest, err = resolveOpenDestination(ctx, env.StateDir, destFlags.shell, destFlags.project)
+	}
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return destExitCode(err)
@@ -64,9 +80,12 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 	_ = uirequest.Cleanup(env.StateDir, req.ID, req.Action)
 
 	if len(acks) == 0 {
-		if dest.Origin.TmuxSession != "" {
+		switch {
+		case dest.Origin.Sessions:
+			cliErrln(env.Stderr, "no running Sidecar instance is showing the Sessions surface")
+		case dest.Origin.TmuxSession != "":
 			cliErrf(env.Stderr, "no running Sidecar instance is showing this shell (%s)\n", dest.Origin.TmuxSession)
-		} else {
+		default:
 			cliErrf(env.Stderr, "no running Sidecar instance is showing this project (%s)\n", dest.Origin.ProjectKey)
 		}
 		return 3
@@ -105,9 +124,9 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 	return 0
 }
 
-// takeLayoutCommonFlag consumes --shell/--project/--wait, which both layout
-// subcommands share. next < 0 means the argument was none of these.
-func takeLayoutCommonFlag(arg string, args []string, i int, help string, env Env, shellFlag, projectFlag *string, waitDuration *time.Duration) (next, code int) {
+// takeLayoutCommonFlag consumes --shell/--project/--sessions/--wait, which both
+// layout subcommands share. next < 0 means the argument was none of these.
+func takeLayoutCommonFlag(arg string, args []string, i int, help string, env Env, dest *layoutDestFlags, waitDuration *time.Duration) (next, code int) {
 	needValue := func(name string) (string, bool) {
 		value, nextArg, ok := takeFlagArg(arg, args, i, name)
 		if !ok || value == "" {
@@ -123,13 +142,24 @@ func takeLayoutCommonFlag(arg string, args []string, i int, help string, env Env
 		if !ok {
 			return -1, 2
 		}
-		*shellFlag = value
+		dest.shell = value
 	case arg == "--project" || strings.HasPrefix(arg, "--project="):
 		value, ok := needValue("--project")
 		if !ok {
 			return -1, 2
 		}
-		*projectFlag = value
+		dest.project = value
+	case arg == "--sessions" || strings.HasPrefix(arg, "--sessions="):
+		dest.sessions = true
+		if strings.HasPrefix(arg, "--sessions=") {
+			dest.sessionsRow = strings.TrimPrefix(arg, "--sessions=")
+			return i, 0
+		}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			dest.sessionsRow = args[i+1]
+			return i + 1, 0
+		}
+		return i, 0
 	case arg == "--wait" || strings.HasPrefix(arg, "--wait="):
 		value, ok := needValue("--wait")
 		if !ok {
@@ -153,7 +183,7 @@ func runLayoutGet(env Env, args []string) int {
 
 	jsonOutput := false
 	waitDuration := 1200 * time.Millisecond
-	shellFlag, projectFlag := "", ""
+	var dest layoutDestFlags
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -165,7 +195,7 @@ func runLayoutGet(env Env, args []string) int {
 			jsonOutput = true
 			continue
 		}
-		next, code := takeLayoutCommonFlag(arg, args, i, help, env, &shellFlag, &projectFlag, &waitDuration)
+		next, code := takeLayoutCommonFlag(arg, args, i, help, env, &dest, &waitDuration)
 		if code != 0 {
 			return code
 		}
@@ -176,7 +206,11 @@ func runLayoutGet(env Env, args []string) int {
 		cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeGet, nil, nil, jsonOutput, shellFlag, projectFlag, waitDuration)
+	if dest.sessions && (dest.shell != "" || dest.project != "") {
+		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", help)
+		return 2
+	}
+	return runLayout(env, uirequest.LayoutModeGet, nil, nil, jsonOutput, dest, waitDuration)
 }
 
 func runLayoutApply(env Env, args []string) int {
@@ -185,7 +219,7 @@ func runLayoutApply(env Env, args []string) int {
 
 	jsonOutput := false
 	waitDuration := 1200 * time.Millisecond
-	shellFlag, projectFlag := "", ""
+	var dest layoutDestFlags
 	var panes []uirequest.LayoutPane
 	specColumns := json.RawMessage(nil)
 
@@ -259,7 +293,7 @@ func runLayoutApply(env Env, args []string) int {
 			i = nextArg
 			continue
 		}
-		next, code := takeLayoutCommonFlag(arg, args, i, help, env, &shellFlag, &projectFlag, &waitDuration)
+		next, code := takeLayoutCommonFlag(arg, args, i, help, env, &dest, &waitDuration)
 		if code != 0 {
 			return code
 		}
@@ -271,11 +305,15 @@ func runLayoutApply(env Env, args []string) int {
 		return 2
 	}
 
+	if dest.sessions && (dest.shell != "" || dest.project != "") {
+		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", help)
+		return 2
+	}
 	if len(panes) == 0 && specColumns == nil {
 		cliErrf(env.Stderr, "layout apply needs --spec or at least one --pane descriptor\n\n%s", help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeApply, panes, specColumns, jsonOutput, shellFlag, projectFlag, waitDuration)
+	return runLayout(env, uirequest.LayoutModeApply, panes, specColumns, jsonOutput, dest, waitDuration)
 }
 
 // layoutSpecFlag validates one --spec value CLI-side through the shared

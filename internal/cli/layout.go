@@ -17,10 +17,13 @@ func layoutCommand() *Command {
 	getCmd := &Command{
 		Name:    "get",
 		Summary: "Read the current pane layout",
-		Usage:   "sidecar layout get [--json]",
+		Usage:   "sidecar layout get [--json] [--sessions [ROW]]",
 		Long: "Read the pane layout of the surface showing this Sidecar shell: the grid\n" +
 			"projection, every pane's kind, targets and tmux session, geometry, and the\n" +
 			"caps and floors an apply would be held to.\n\n" +
+			"--sessions addresses the global Sessions surface of a running instance\n" +
+			"(optional ROW is a durable inventory ID, then a display name). It is\n" +
+			"mutually exclusive with --shell and --project.\n\n" +
 			"A layout that escapes the grid vocabulary reports \"grid\": null plus the raw\n" +
 			"tree; it is still valid. Human output is a small ASCII sketch plus a table;\n" +
 			"--json passes the payload through unchanged, which is the contract.\n\n" +
@@ -30,6 +33,7 @@ func layoutCommand() *Command {
 		Flags: []Flag{
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
+			{Name: "--sessions", Arg: "[ROW]", Summary: "Target the global Sessions surface (optional row by ID or display name)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms)"},
 			{Name: "--json", Summary: "Write the layout payload itself to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
@@ -45,6 +49,7 @@ func layoutCommand() *Command {
 		Examples: []Example{
 			{Command: "sidecar layout get"},
 			{Command: "sidecar layout get --json", Description: "the machine contract: read before you write"},
+			{Command: "sidecar layout get --sessions --json", Description: "the selected row on the global Sessions surface"},
 		},
 		Agent: AgentDoc{
 			Invocation: "sidecar layout get --json",
@@ -59,8 +64,8 @@ func layoutCommand() *Command {
 		Usage:   "sidecar layout <command>",
 		Long: "Read the current pane layout (`layout get`) or open several panes at once\n" +
 			"in one atomic call (`layout apply`). Both act on the surface showing this\n" +
-			"Sidecar shell and never queue: a request whose shell is off screen\n" +
-			"declines with the reason.",
+			"Sidecar shell — or, with --sessions, the global Sessions surface — and never\n" +
+			"queue: a request whose destination is off screen declines with the reason.",
 		Sub: []*Command{applyLayoutSubcommand(), getCmd},
 		Run: func(env Env, args []string) int {
 			layoutRoot := RootCommand().FindSubcommand("layout")
@@ -85,7 +90,7 @@ func applyLayoutSubcommand() *Command {
 	return &Command{
 		Name:    "apply",
 		Summary: "Open several panes in one all-or-nothing call",
-		Usage:   "sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...])",
+		Usage:   "sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' ...]) [--sessions [ROW]]",
 		Long: "Compose panes onto the surface showing this Sidecar shell.\n\n" +
 			"--spec is a FULL layout, given as columns of stacked panes; it replaces\n" +
 			"what is on screen:\n\n" +
@@ -125,6 +130,7 @@ func applyLayoutSubcommand() *Command {
 			{Name: "--pane", Arg: "JSON", Summary: "One pane descriptor to add (repeatable); see above for the object shape"},
 			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
 			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
+			{Name: "--sessions", Arg: "[ROW]", Summary: "Target the global Sessions surface (optional row by ID or display name)"},
 			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms)"},
 			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},

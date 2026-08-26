@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -301,5 +302,170 @@ func TestLayoutApply_StructuredResultIsGatedOnJSON(t *testing.T) {
 	}
 	if result.Items[0].Verdict != uirequest.ItemVerdictCarried {
 		t.Errorf("carried verdict did not survive the wire: %+v", result.Items[0])
+	}
+}
+
+func TestLayoutGetHelpMentionsSessions(t *testing.T) {
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"layout", "get", "--help"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("help = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	got := out.String()
+	if !strings.Contains(got, "--sessions") {
+		t.Fatalf("layout get help missing --sessions:\n%s", got)
+	}
+	if !strings.Contains(got, "[ROW]") {
+		t.Fatalf("layout get help missing optional ROW:\n%s", got)
+	}
+}
+
+func TestLayoutSessionsFlagExclusiveWithShellAndProject(t *testing.T) {
+	for _, args := range [][]string{
+		{"layout", "get", "--sessions", "--shell", "x"},
+		{"layout", "get", "--sessions", "row", "--project", "sidecar"},
+		{"layout", "get", "--sessions=row", "--shell", "x"},
+		{"layout", "apply", "--sessions", "--project", "sidecar", "--pane", `{"kind":"diff"}`},
+	} {
+		var out, errOut bytes.Buffer
+		handled, code := Run(args, &out, &errOut)
+		if !handled || code != 2 {
+			t.Fatalf("Run(%v) = handled %v code %d, want usage 2", args, handled, code)
+		}
+		combined := out.String() + errOut.String()
+		if !strings.Contains(combined, "--sessions") {
+			t.Fatalf("Run(%v) output %q does not mention --sessions", args, combined)
+		}
+		if !strings.Contains(combined, "--shell") && !strings.Contains(combined, "--project") {
+			t.Fatalf("Run(%v) output %q does not mention --shell/--project", args, combined)
+		}
+	}
+}
+
+func TestLayoutSessionsParsesBareEqualsAndValue(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		row  string
+	}{
+		{"bare", []string{"layout", "get", "--sessions", "--wait", "0"}, ""},
+		{"value", []string{"layout", "get", "--sessions", "sidecar:shell:sidecar-sh-sidecar-1", "--wait", "0"}, "sidecar:shell:sidecar-sh-sidecar-1"},
+		{"equals", []string{"layout", "get", "--sessions=sidecar:shell:sidecar-sh-sidecar-1", "--wait", "0"}, "sidecar:shell:sidecar-sh-sidecar-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stateHome, stateDir := setupIsolatedCLI(t)
+			workDir := t.TempDir()
+			writeProjectMeta(t, stateDir, "sidecar", workDir)
+			writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+				TmuxName: "sidecar-sh-sidecar-1", DisplayName: "active task",
+			})
+			if err := uirequest.Announce(stateDir, uirequest.Instance{
+				PID: os.Getpid(), ProjectKey: "sidecar", Project: "sidecar", WorkDir: workDir,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			capture := make(chan uirequest.Request, 1)
+			go func() {
+				reqsDir := filepath.Join(stateHome, "sidecar", "requests")
+				for i := 0; i < 400; i++ {
+					time.Sleep(25 * time.Millisecond)
+					entries, err := os.ReadDir(reqsDir)
+					if err != nil {
+						continue
+					}
+					for _, e := range entries {
+						if !strings.HasSuffix(e.Name(), ".json") || strings.Contains(e.Name(), ".tmp.") {
+							continue
+						}
+						req, err := uirequest.ReadRequest(filepath.Join(reqsDir, e.Name()))
+						if err != nil || req.Action != uirequest.ActionLayout {
+							continue
+						}
+						capture <- req
+						_ = uirequest.WriteAck(filepath.Join(stateHome, "sidecar"), req.ID, req.Action, uirequest.Ack{
+							Instance: "test-instance", Status: uirequest.StatusOpened, At: time.Now().UTC(),
+							Layout: json.RawMessage(`{"version":1,"grid":null,"caps":{"maxColumns":4,"maxRows":4,"liveLeaves":2},"floors":{}}`),
+						})
+						return
+					}
+				}
+				close(capture)
+			}()
+
+			var out, errOut bytes.Buffer
+			args := append([]string{}, tc.args...)
+			// Give the capture loop time to see the request.
+			for i, a := range args {
+				if a == "0" && i > 0 && args[i-1] == "--wait" {
+					args[i] = "10s"
+				}
+			}
+			handled, code := Run(args, &out, &errOut)
+			if !handled || code != 0 {
+				t.Fatalf("Run(%v) = handled %v code %d stderr %q", args, handled, code, errOut.String())
+			}
+			req, ok := <-capture
+			if !ok {
+				t.Fatal("no layout request was written")
+			}
+			if !req.Origin.Sessions {
+				t.Fatalf("Origin.Sessions = false, want true: %+v", req.Origin)
+			}
+			if req.Origin.TmuxSession != "" {
+				t.Fatalf("TmuxSession = %q, want empty so the project surface ignores this", req.Origin.TmuxSession)
+			}
+			if tc.row == "" {
+				if req.Origin.SessionsRow != "" {
+					t.Fatalf("SessionsRow = %q, want empty for the selected row", req.Origin.SessionsRow)
+				}
+			} else if !strings.Contains(req.Origin.SessionsRow, "sidecar-sh-sidecar-1") {
+				t.Fatalf("SessionsRow = %q, want a durable id for sidecar-sh-sidecar-1", req.Origin.SessionsRow)
+			}
+			if req.Origin.SessionsRow == "" && req.Origin.ProjectKey != "sidecar" {
+				t.Fatalf("ProjectKey = %q, want the instance's project", req.Origin.ProjectKey)
+			}
+		})
+	}
+}
+
+func TestLayoutSessionsRowAmbiguityMatchesShell(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	a := t.TempDir()
+	b := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", a)
+	writeProjectMeta(t, stateDir, "braid", b)
+	writeProjectShell(t, stateDir, "sidecar", shellstate.Definition{
+		TmuxName: "sidecar-sh-sidecar-1", DisplayName: "dev",
+	})
+	writeProjectShell(t, stateDir, "braid", shellstate.Definition{
+		TmuxName: "sidecar-sh-braid-1", DisplayName: "dev",
+	})
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"layout", "get", "--sessions", "dev", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 3 {
+		t.Fatalf("ambiguous row = handled %v code %d, want 3 (stderr %q)", handled, code, errOut.String())
+	}
+	combined := out.String() + errOut.String()
+	if !strings.Contains(combined, "more than one") || !strings.Contains(combined, "durable id") {
+		t.Fatalf("ambiguity missing choices: %q", combined)
+	}
+	if !strings.Contains(combined, ":shell:sidecar-sh-sidecar-1") || !strings.Contains(combined, ":shell:sidecar-sh-braid-1") {
+		t.Fatalf("ambiguity missing durable ids: %q", combined)
+	}
+}
+
+func TestLayoutSessionsUnknownRowIsUsage(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	writeProjectMeta(t, stateDir, "sidecar", t.TempDir())
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"layout", "get", "--sessions", "no-such-row", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 2 {
+		t.Fatalf("unknown row = handled %v code %d, want 2 (stderr %q)", handled, code, errOut.String())
+	}
+	if combined := out.String() + errOut.String(); !strings.Contains(combined, "unknown Sessions row") {
+		t.Fatalf("unknown row message = %q", combined)
 	}
 }

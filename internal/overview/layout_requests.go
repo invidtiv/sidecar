@@ -1,0 +1,413 @@
+package overview
+
+import (
+	"encoding/json"
+	"strings"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/layoutapply"
+	"github.com/marcus/sidecar/internal/layoutreport"
+	"github.com/marcus/sidecar/internal/panecodec"
+	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/termpanes"
+	"github.com/marcus/sidecar/internal/uirequest"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
+)
+
+func (m *Model) applyLayoutRequest(req uirequest.Request) tea.Cmd {
+	if !req.Origin.Sessions {
+		return nil
+	}
+	payload, err := uirequest.DecodeLayoutPayload(req.Payload)
+	if err != nil {
+		return m.ackLayout(req, uirequest.StatusDeclined, "invalid layout payload: "+err.Error(), nil, nil)
+	}
+	if !m.preview.visible {
+		return m.ackLayout(req, uirequest.StatusDeclined, layoutapply.SessionsNotOnScreenReason, nil, nil)
+	}
+
+	rowID, ws, ok, reason := m.resolveSessionsLayoutRow(req)
+	if !ok {
+		return m.ackLayout(req, uirequest.StatusDeclined, reason, nil, nil)
+	}
+
+	if payload.Mode == uirequest.LayoutModeGet {
+		report := m.buildSessionsLayoutReport(rowID, ws)
+		return m.ackLayout(req, uirequest.StatusOpened, "", nil, report)
+	}
+
+	if cmd := m.focusSessionsLayoutRow(rowID); cmd != nil {
+		// bindPreview is synchronous; the cmd is terminal attach work.
+		_ = cmd
+	}
+	selected, has := m.SelectedWorkspace()
+	if !has || selected.ID != rowID {
+		return m.ackLayout(req, uirequest.StatusDeclined, "no Sessions row named "+rowID+" is on screen", nil, nil)
+	}
+	root := selected.Path
+	surface := selected.ID
+	return layoutapply.Apply(overviewLayoutHost{m: m, req: req, root: root, surface: surface}, req, payload, root, surface)
+}
+
+func (m *Model) resolveSessionsLayoutRow(req uirequest.Request) (string, workspaceinventory.Workspace, bool, string) {
+	rowID := strings.TrimSpace(req.Origin.SessionsRow)
+	if rowID == "" {
+		if selected, ok := m.SelectedWorkspace(); ok {
+			return selected.ID, selected, true, ""
+		}
+		if m.preview.workspaceID != "" {
+			if ws, ok := m.catalog[m.preview.workspaceID]; ok {
+				return ws.ID, ws, true, ""
+			}
+		}
+		return "", workspaceinventory.Workspace{}, false, "no Sessions row is selected"
+	}
+	if ws, ok := m.catalog[rowID]; ok {
+		return rowID, ws, true, ""
+	}
+	for _, ws := range m.catalog {
+		if ws.Name == rowID || ws.TmuxName == rowID || ws.ID == rowID {
+			return ws.ID, ws, true, ""
+		}
+	}
+	return "", workspaceinventory.Workspace{}, false, "unknown Sessions row " + strconvQuote(rowID)
+}
+
+func strconvQuote(s string) string { return `"` + s + `"` }
+
+func (m *Model) focusSessionsLayoutRow(rowID string) tea.Cmd {
+	if m.preview.workspaceID == rowID {
+		return nil
+	}
+	if !m.workspaces.SelectID(rowID) {
+		return nil
+	}
+	return m.bindPreview(false)
+}
+
+func (m *Model) buildSessionsLayoutReport(rowID string, ws workspaceinventory.Workspace) json.RawMessage {
+	root, layout := m.sessionsLayoutSource(rowID, ws)
+	var viewport *panelayout.Box
+	if peer, placed := m.previewPeerBox(); placed {
+		box := panelayout.Box(peer)
+		viewport = &box
+	}
+	boxes := map[int]panelayout.Box(nil)
+	if peer, placed := m.previewPeerBox(); placed && root != nil {
+		boxes = layoutreport.LiveBoxes(root, peer, previewPaneFloors())
+	}
+	if layout != nil {
+		layout.Root = ws.Path
+		layout.Surface = rowID
+		layout.Open = true
+	}
+	return layoutreport.Build(layoutreport.Source{
+		Surface:  rowID,
+		Root:     ws.Path,
+		Tree:     root,
+		Viewport: viewport,
+		Floors:   previewPaneFloors(),
+		Layout:   layout,
+		Boxes:    boxes,
+	})
+}
+
+func (m *Model) sessionsLayoutSource(rowID string, ws workspaceinventory.Workspace) (*panelayout.Node, *state.PaneLayoutJSON) {
+	if m.preview.workspaceID == rowID && m.preview.paneRoot != nil {
+		return m.preview.paneRoot, m.sessionsPaneLayoutJSON()
+	}
+	if cached, ok := m.preview.paneCache[rowID]; ok && cached.root != nil {
+		return cached.root, encodeCachedPreviewLayout(cached)
+	}
+	if persisted := loadSessionsPaneLayout(rowID); persisted != nil && state.PaneLayoutOpen(persisted) {
+		return treeFromPersist(persisted), persisted
+	}
+	return &panelayout.Node{ID: 1, Kind: panelayout.Primary}, nil
+}
+
+func encodeCachedPreviewLayout(cached previewPaneCache) *state.PaneLayoutJSON {
+	st := contentpanes.State{Version: 1, Root: cachedNodeState(cached.root, cached.deck)}
+	live := []panecodec.Live{{Kind: panecodec.KindTerminal}}
+	if shell := panelayout.FirstOfKind(cached.root, panelayout.Shell); shell != nil && cached.terminals != nil {
+		rec := panecodec.Live{Kind: panecodec.KindShell}
+		if leaf := cached.terminals.Leaf(shell.ID); leaf != nil {
+			rec.Session = leaf.Session
+			rec.Name = leaf.Name
+		}
+		live = append(live, rec)
+	}
+	return panecodec.Encode(st, panecodec.Options{Live: live})
+}
+
+func cachedNodeState(node *panelayout.Node, deck *contentpanes.Deck) *contentpanes.NodeState {
+	if node == nil {
+		return nil
+	}
+	if node.Split != nil {
+		axis := "columns"
+		if node.Split.Axis == panelayout.Rows {
+			axis = "rows"
+		}
+		return &contentpanes.NodeState{
+			Axis: axis, Ratio: node.Split.Ratio,
+			A: cachedNodeState(node.Split.A, deck), B: cachedNodeState(node.Split.B, deck),
+		}
+	}
+	switch node.Kind {
+	case panelayout.Primary:
+		return &contentpanes.NodeState{Kind: "primary"}
+	case panelayout.Shell:
+		return &contentpanes.NodeState{Kind: "shell"}
+	default:
+		if deck == nil {
+			return &contentpanes.NodeState{Kind: previewContentKindName(node.Kind)}
+		}
+		pane := findPreviewPaneState(deck.Encode().Root, previewContentKindName(node.Kind))
+		return previewContentLeafState(previewContentKindName(node.Kind), pane)
+	}
+}
+
+func treeFromPersist(layout *state.PaneLayoutJSON) *panelayout.Node {
+	next := 0
+	return persistNode(layout, &next)
+}
+
+func persistNode(n *state.PaneLayoutJSON, next *int) *panelayout.Node {
+	if n == nil {
+		return nil
+	}
+	if n.Split != nil {
+		a := persistNode(n.Split.A, next)
+		b := persistNode(n.Split.B, next)
+		if a == nil {
+			return b
+		}
+		if b == nil {
+			return a
+		}
+		*next++
+		axis := panelayout.Columns
+		if n.Split.Axis == "rows" {
+			axis = panelayout.Rows
+		}
+		ratio := n.Split.Ratio
+		if ratio == 0 {
+			ratio = 50
+		}
+		return &panelayout.Node{ID: *next, Split: &panelayout.Split{
+			Axis: axis, Ratio: panelayout.ClampRatio(ratio), A: a, B: b,
+		}}
+	}
+	kind, ok := restorePreviewKind(n.Kind)
+	if !ok {
+		return nil
+	}
+	*next++
+	return &panelayout.Node{ID: *next, Kind: kind}
+}
+
+func (m *Model) ackLayout(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) tea.Cmd {
+	layoutapply.WriteAck(config.StateDir(), hostInstanceID(), req, status, reason, items, layout)
+	return nil
+}
+
+type overviewLayoutHost struct {
+	m             *Model
+	req           uirequest.Request
+	root, surface string
+}
+
+func (h overviewLayoutHost) PaneRoot() *panelayout.Node { return h.m.preview.paneRoot }
+func (h overviewLayoutHost) LastBoxes() map[int]panelayout.Box {
+	return h.m.lastPreviewBoxes()
+}
+func (h overviewLayoutHost) PeerBox() (panelayout.Box, bool) {
+	return h.m.previewPeerBox()
+}
+func (h overviewLayoutHost) Floors() panelayout.Floors { return previewPaneFloors() }
+func (h overviewLayoutHost) EnsureDeck() {
+	h.m.ensurePreviewDeck()
+}
+func (h overviewLayoutHost) DeckTree() *panelayout.Node {
+	if h.m.preview.deck == nil {
+		return nil
+	}
+	return h.m.preview.deck.Tree()
+}
+func (h overviewLayoutHost) TerminalEnabled() bool {
+	return features.IsEnabled(features.WorkspaceTerminalPanel.Name)
+}
+func (h overviewLayoutHost) TerminalOffReason() string {
+	return features.WorkspaceTerminalPanel.Name + " is off"
+}
+func (h overviewLayoutHost) ShellCapMessage() string { return termpanes.CapMessage }
+func (h overviewLayoutHost) ShellVisible() bool {
+	return panelayout.FirstOfKind(h.m.preview.paneRoot, panelayout.Shell) != nil
+}
+func (h overviewLayoutHost) SplitOrigin() string {
+	if selected, ok := h.m.SelectedWorkspace(); ok {
+		return selected.TmuxName
+	}
+	return ""
+}
+func (h overviewLayoutHost) TermPanelSessionName() string {
+	if selected, ok := h.m.SelectedWorkspace(); ok && selected.TmuxName != "" {
+		return termpanes.SessionName(selected.TmuxName)
+	}
+	return ""
+}
+func (h overviewLayoutHost) LiveShellSessions() map[string]bool {
+	out := make(map[string]bool)
+	shell := panelayout.FirstOfKind(h.m.preview.paneRoot, panelayout.Shell)
+	if shell == nil || h.m.preview.terminalPanes == nil {
+		return out
+	}
+	if leaf := h.m.preview.terminalPanes.Leaf(shell.ID); leaf != nil && leaf.Session != "" {
+		out[leaf.Session] = true
+	}
+	return out
+}
+func (h overviewLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
+	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.resourceMatchers)
+}
+func (h overviewLayoutHost) CommitPassive(targets []uirequest.Target, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
+	if len(targets) == 0 {
+		return uirequest.ItemVerdictDeclined, "a pane needs at least one target", nil
+	}
+	kind, _ := previewKindForTarget(targets[0].Kind)
+	retargeted := h.m.willRetargetPreviewPane(kind)
+	if plan.Split != 0 || plan.Retarget != 0 {
+		h.m.pendingOpenPlan = &plan
+	}
+	defer func() { h.m.pendingOpenPlan = nil }()
+	cmd, opened := h.m.openPreviewTarget(targets[0])
+	if !opened {
+		reason := "the window is too small to split"
+		if cmd == nil {
+			return uirequest.ItemVerdictDeclined, reason, nil
+		}
+		return uirequest.ItemVerdictDeclined, reason, cmd
+	}
+	for _, extra := range targets[1:] {
+		extraCmd, _ := h.m.openPreviewTarget(extra)
+		cmd = tea.Batch(cmd, extraCmd)
+	}
+	if retargeted {
+		return uirequest.ItemVerdictRetargeted, "", cmd
+	}
+	return uirequest.ItemVerdictOpened, "", cmd
+}
+func (h overviewLayoutHost) CommitShell(spec uirequest.LayoutPane, plan panelayout.OpenPlan) (string, string, tea.Cmd) {
+	if !h.TerminalEnabled() {
+		return uirequest.ItemVerdictDeclined, h.TerminalOffReason(), nil
+	}
+	before := panelayout.FirstOfKind(h.m.preview.paneRoot, panelayout.Shell)
+	cmd := h.m.openPreviewTerminalSplit(spec.Name, plan)
+	after := panelayout.FirstOfKind(h.m.preview.paneRoot, panelayout.Shell)
+	if after == nil || after == before {
+		reason := "the window is too small to split"
+		return uirequest.ItemVerdictDeclined, reason, cmd
+	}
+	return uirequest.ItemVerdictOpened, "", cmd
+}
+func (h overviewLayoutHost) RestoreSpec(layout *state.PaneLayoutJSON) tea.Cmd {
+	return h.m.restoreSpecPreviewLayout(layout)
+}
+func (h overviewLayoutHost) AdoptSpecShell(spec uirequest.LayoutPane) (string, string, tea.Cmd) {
+	ws, ok := h.m.SelectedWorkspace()
+	if !ok {
+		return uirequest.ItemVerdictDeclined, layoutapply.SpecOriginRequired, nil
+	}
+	shell := panelayout.FirstOfKind(h.m.preview.paneRoot, panelayout.Shell)
+	if shell == nil {
+		return uirequest.ItemVerdictDeclined, layoutapply.SpecOriginRequired, nil
+	}
+	leaf := h.m.terminalLeaf(shell.ID)
+	leaf.Requested = true
+	if name := strings.TrimSpace(spec.Name); name != "" {
+		leaf.Name = name
+	}
+	if leaf.Name == "" {
+		leaf.Name = "Terminal"
+	}
+	if leaf.Session == "" {
+		leaf.Session = termpanes.SessionName(ws.TmuxName)
+	}
+	leaf.Target.Source = "shell"
+	leaf.Target.SourceID = ws.ID
+	h.m.persistSessionsLayout()
+	workspaceID, leafID, session, workDir := ws.ID, leaf.ID, leaf.Session, ws.Path
+	return uirequest.ItemVerdictOpened, "", func() tea.Msg {
+		paneID, err := ensurePreviewTerminalSession(session, workDir)
+		return previewTerminalSplitCreatedMsg{WorkspaceID: workspaceID, LeafID: leafID, Session: session, PaneID: paneID, Err: err}
+	}
+}
+func (h overviewLayoutHost) AfterSpecCommit() { h.m.persistSessionsLayout() }
+func (h overviewLayoutHost) LandedLeaf(kind panelayout.Kind) int {
+	return layoutapply.LandedLeafID(h.m.preview.paneRoot, kind)
+}
+func (h overviewLayoutHost) Ack(req uirequest.Request, status uirequest.Status, reason string, items []uirequest.AckItem, layout json.RawMessage) {
+	h.m.ackLayout(req, status, reason, items, layout)
+}
+
+func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {
+	ws, ok := m.SelectedWorkspace()
+	if !ok {
+		return nil
+	}
+	m.preview.contentEpoch++
+	ctx := contentpanes.SurfaceContext{
+		Root: ws.Path, DiffRoot: previewDiffPath(ws), Surface: ws.ID, Epoch: m.preview.contentEpoch,
+	}
+	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: m.acceptRestoredPreviewTab(ws.Path)})
+	if previewLiveKindCount(live, panecodec.KindTerminal) != 1 {
+		m.resetActivePreviewPanes()
+		return nil
+	}
+	deck := contentpanes.Decode(ctx, m.previewDeckConfig(ctx), st)
+	nextID := 0
+	restored := restorePreviewTree(st.Root, deck, &nextID, make(map[panelayout.Kind]bool))
+	if restored == nil || panelayout.FirstOfKind(restored, panelayout.Primary) == nil {
+		m.resetActivePreviewPanes()
+		return nil
+	}
+	m.preview.deck = deck
+	m.preview.paneRoot = restored
+	m.preview.paneNextID = panelayout.MaxID(restored) + 1
+	m.preview.paneDragSplitID = 0
+	m.attachSpecPreviewShell(ws, live)
+	m.syncPreviewDeckProjection(ctx)
+
+	var cmds []tea.Cmd
+	for _, cmd := range deck.LoadVisible() {
+		if wrapped := wrapPreviewDeckCmd(cmd, ws.ID); wrapped != nil {
+			cmds = append(cmds, wrapped)
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func (m *Model) attachSpecPreviewShell(ws workspaceinventory.Workspace, live []panecodec.Live) {
+	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if shell == nil {
+		return
+	}
+	sh := previewLiveOfKind(live, panecodec.KindShell)
+	leaf := m.terminalLeaf(shell.ID)
+	leaf.Requested = true
+	leaf.Target.Source = "shell"
+	leaf.Target.SourceID = ws.ID
+	if sh != nil {
+		leaf.Name = sh.Name
+		if strings.HasPrefix(strings.TrimSpace(sh.Session), termpanes.SessionPrefix) {
+			leaf.Session = sh.Session
+		}
+	}
+	if leaf.Name == "" {
+		leaf.Name = "Terminal"
+	}
+}

@@ -56,21 +56,43 @@ func (m *Model) createPreviewTerminalSplit() tea.Cmd {
 		return nil
 	}
 
+	name := strings.TrimSpace(m.createForm.TerminalName())
+	m.createBusy = true
+	m.setCreateError("")
+	m.createModal = nil
+	return m.openPreviewTerminalSplit(name, plan)
+}
+
+// openPreviewTerminalSplit commits a live terminal leaf at the given plan —
+// the same create path the pane-switcher modal uses after it has planned and
+// fit-tested. Layout apply reuses it so a CLI split and a modal split cannot
+// disagree about the tree.
+func (m *Model) openPreviewTerminalSplit(name string, plan panelayout.OpenPlan) tea.Cmd {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || workspace.ID == "" || workspace.TmuxName == "" {
+		return nil
+	}
 	node := &panelayout.Node{Kind: panelayout.Shell}
-	m.preview.paneRoot, m.preview.paneFocus = panelayout.ApplyPlan(m.preview.paneRoot, plan, node)
+	if plan.Split != 0 {
+		m.preview.paneRoot, m.preview.paneFocus = panelayout.ApplyPlan(m.preview.paneRoot, plan, node)
+	} else {
+		var planned bool
+		plan, planned = panelayout.PlanOpen(m.preview.paneRoot, panelayout.Shell, m.lastPreviewBoxes())
+		if !planned {
+			return nil
+		}
+		m.preview.paneRoot, m.preview.paneFocus = panelayout.ApplyPlan(m.preview.paneRoot, plan, node)
+	}
 	m.preview.paneNextID = panelayout.MaxID(m.preview.paneRoot) + 1
 	leaf := m.terminalLeaf(node.ID)
 	leaf.Requested = true
-	leaf.Name = strings.TrimSpace(m.createForm.TerminalName())
+	leaf.Name = strings.TrimSpace(name)
 	if leaf.Name == "" {
 		leaf.Name = "Terminal"
 	}
 	leaf.Session = termpanes.SessionName(workspace.TmuxName)
 	leaf.Target.Source = "shell"
 	leaf.Target.SourceID = workspace.ID
-	m.createBusy = true
-	m.setCreateError("")
-	m.createModal = nil
 	m.persistSessionsLayout()
 	workDir := workspace.Path
 	workspaceID, leafID, session := workspace.ID, leaf.ID, leaf.Session

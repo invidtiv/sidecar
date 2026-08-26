@@ -237,8 +237,8 @@ func TestOpenAt_DeckRefusalSurfacesVerbatim(t *testing.T) {
 		}},
 	}}
 	item := layoutItemPlan{
-		spec: uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}},
-		kind: panelayout.Document, cell: panelayout.Cell{Col: 3, Row: 1},
+		Spec: uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}},
+		Kind: panelayout.Document, Cell: panelayout.Cell{Col: 3, Row: 1},
 	}
 	_, refusal := p.planPassiveItem(p.paneRoot, escaped, item, nil)
 	if !strings.Contains(refusal, "does not resolve to grid columns") {

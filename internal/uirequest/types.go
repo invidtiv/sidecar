@@ -307,6 +307,13 @@ type Origin struct {
 	ProjectKey  string `json:"projectKey"`
 	WorkDir     string `json:"workDir"`
 	PID         int    `json:"pid"`
+	// Sessions is true when the request addresses the running instance's
+	// global Sessions surface rather than a project workspace. The project
+	// plugin ignores these; the overview answers them.
+	Sessions bool `json:"sessions,omitempty"`
+	// SessionsRow is the durable inventory ID of the Sessions row. Empty
+	// means the currently selected row.
+	SessionsRow string `json:"sessionsRow,omitempty"`
 }
 
 // Target identifies the object affected by the request. Value carries the
@@ -412,6 +419,7 @@ const (
 	ResolvedShell        = "shell"
 	ResolvedProject      = "project"
 	ResolvedInstance     = "instance"
+	ResolvedSessions     = "sessions"
 )
 
 // Result is the consolidated outcome presented to the agent or caller.
