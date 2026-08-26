@@ -2,8 +2,10 @@ package overview
 
 import (
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -40,5 +42,31 @@ func TestPreviewTerminalStateFollowsTreeLeafIdentity(t *testing.T) {
 	m.preview.paneFocus = got.ID + 1
 	if m.PreviewInteractive() {
 		t.Fatal("an unfocused terminal leaf retained interactive ownership")
+	}
+}
+
+func TestReviewRowSwitchClearsTerminalLeafGestures(t *testing.T) {
+	m, _ := previewModel(t)
+	leaf := m.previewTerminalLeaf()
+	at := time.Unix(300, 0)
+	if _, ok := leaf.Wheel.Add(1, at); !ok {
+		t.Fatal("test premise: first wheel event was unexpectedly held")
+	}
+	if _, ok := leaf.Wheel.Add(1, at.Add(tty.WheelDebounceInterval/2)); ok || leaf.Wheel.Pending() == 0 {
+		t.Fatal("test premise: second wheel event did not leave a pending burst")
+	}
+	m.previewTerminalState().termBar = previewTermBar{active: true}
+
+	m.workspaces.SelectID("b")
+	m.bindPreview(false)
+
+	if got := m.previewTerminalLeaf(); got != leaf {
+		t.Fatal("test premise: row switch did not reuse the N=1 terminal leaf")
+	}
+	if pending := leaf.Wheel.Pending(); pending != 0 {
+		t.Fatalf("row switch retained pending terminal wheel delta %d", pending)
+	}
+	if m.previewTerminalState().termBar.active {
+		t.Fatal("row switch retained the previous row's scrollbar gesture")
 	}
 }

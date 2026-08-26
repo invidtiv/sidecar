@@ -254,6 +254,8 @@ func (m *Model) resetPreviewContent() {
 	m.previewTerminalLeaf().Selection.Clear()
 	m.previewTerminalLeaf().Pointer.Abandon()
 	m.previewTerminalLeaf().Pointer.ResetUnit()
+	m.previewTerminalLeaf().Wheel.Reset()
+	m.previewTerminalState().termBar = previewTermBar{}
 	m.resetActivePreviewPanes()
 }
 
