@@ -8,11 +8,6 @@ const (
 	TargetSidebar TargetKind = iota
 	// TargetLeaf is a pane-tree leaf, identified by Target.Leaf.
 	TargetLeaf
-	// TargetTermPanel is the terminal panel's entry. The panel is a Shell leaf
-	// of the tree, but which of the two live terminals owns the KEYBOARD is not
-	// the leaf ring's answer on that host, so the panel is named separately and
-	// Shell leaves are skipped in the leaf walk.
-	TargetTermPanel
 )
 
 // Target is a single focusable window. Leaf is meaningful only for TargetLeaf.
@@ -22,36 +17,33 @@ type Target struct {
 }
 
 // Ring lists the focusable windows in cycle order: the sidebar (when visible),
-// then every tree leaf in placement order, then the terminal panel (when
-// visible). Leaf order matches the A-then-B walk LayoutPanes performs, so Tab
-// follows the same sequence the panes are drawn in.
-//
-// Shell leaves are not leaf stops: the panel is the stop that names them, so a
-// ring that listed both would stop on the same window twice.
-func Ring(root *Node, sidebarVisible, termPanelVisible bool) []Target {
+// then every passive tree leaf in placement order, then every live Shell leaf.
+// Appending Shell leaves preserves the historical cycle order while making a
+// live terminal's pane-tree leaf ID its only focus identity.
+func Ring(root *Node, sidebarVisible bool, shellVisible ...bool) []Target {
 	var ring []Target
 	if sidebarVisible {
 		ring = append(ring, Target{Kind: TargetSidebar})
 	}
-	ring = appendLeafTargets(root, ring)
-	if termPanelVisible {
-		ring = append(ring, Target{Kind: TargetTermPanel})
+	ring = appendLeafTargets(root, ring, false)
+	if len(shellVisible) == 0 || shellVisible[0] {
+		ring = appendLeafTargets(root, ring, true)
 	}
 	return ring
 }
 
-func appendLeafTargets(node *Node, ring []Target) []Target {
+func appendLeafTargets(node *Node, ring []Target, shells bool) []Target {
 	if node == nil {
 		return ring
 	}
 	if node.Split == nil {
-		if node.Kind == Shell {
+		if (node.Kind == Shell) != shells {
 			return ring
 		}
 		return append(ring, Target{Kind: TargetLeaf, Leaf: node.ID})
 	}
-	ring = appendLeafTargets(node.Split.A, ring)
-	return appendLeafTargets(node.Split.B, ring)
+	ring = appendLeafTargets(node.Split.A, ring, shells)
+	return appendLeafTargets(node.Split.B, ring, shells)
 }
 
 // CycleTarget returns the next target after current, wrapping at both ends. A

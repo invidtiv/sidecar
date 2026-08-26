@@ -106,7 +106,7 @@ func TestConvertedLayoutRestoresAsAShellLeaf(t *testing.T) {
 	)
 	p.restorePaneLayout(layout)
 
-	if !p.termPanelVisible {
+	if !p.shellLeafVisible() {
 		t.Fatal("a restored shell leaf must turn the panel on")
 	}
 	leaf := p.shellLeaf()

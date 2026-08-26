@@ -154,7 +154,7 @@ func TestSidebarNavigationIsShellFirstAndClampsAtBothEnds(t *testing.T) {
 func TestSidebarSelectionChangeResetsPreviewScrollAndFollowsLiveOutput(t *testing.T) {
 	p := sidebarBaselinePlugin(t)
 	p.previewOffset = 12
-	p.previewScroll = 9
+	p.primaryTermPane().Scroll = 9
 	p.diff.Cursor = 3
 	p.scrollOffset = 5
 
@@ -162,22 +162,22 @@ func TestSidebarSelectionChangeResetsPreviewScrollAndFollowsLiveOutput(t *testin
 	if selectionLabel(p) != "shell:two" {
 		t.Fatalf("selection did not move: %q", selectionLabel(p))
 	}
-	if p.previewOffset != 0 || p.previewScroll != 0 || p.diff.Cursor != 0 {
+	if p.previewOffset != 0 || p.primaryTermPane().Scroll != 0 || p.diff.Cursor != 0 {
 		t.Fatalf("selection change left stale preview state: offset=%d scroll=%d diffCursor=%d",
-			p.previewOffset, p.previewScroll, p.diff.Cursor)
+			p.previewOffset, p.primaryTermPane().Scroll, p.diff.Cursor)
 	}
 
 	// A movement that changes nothing (already clamped) leaves the state alone.
 	p.previewOffset = 7
-	p.previewScroll = 7
+	p.primaryTermPane().Scroll = 7
 	pressList(p, "k")
 	pressList(p, "k")
 	if selectionLabel(p) != "shell:one" {
 		t.Fatalf("selection = %q, want the clamped first shell", selectionLabel(p))
 	}
-	if p.previewOffset != 0 || p.previewScroll != 0 {
+	if p.previewOffset != 0 || p.primaryTermPane().Scroll != 0 {
 		t.Fatalf("clamped move should still have reset once: offset=%d scroll=%d",
-			p.previewOffset, p.previewScroll)
+			p.previewOffset, p.primaryTermPane().Scroll)
 	}
 
 	// g resets the sidebar scroll offset with the selection.
@@ -196,15 +196,15 @@ func TestSidebarSelectionOnlyMovesInsideTheSidebarPane(t *testing.T) {
 	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(500)
 	p.shells[0].Agent.OutputBuf.Write(strings.Repeat("line\n", 200))
 	// A window already back in scrollback, so j has somewhere to move it.
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 
 	pressList(p, "j")
 	pressList(p, "j")
 	if got := selectionLabel(p); got != before {
 		t.Fatalf("preview-pane j changed selection: %q -> %q", before, got)
 	}
-	if p.previewScroll != 3 {
-		t.Fatalf("preview-pane j did not scroll the preview instead: scroll=%d", p.previewScroll)
+	if p.primaryTermPane().Scroll != 3 {
+		t.Fatalf("preview-pane j did not scroll the preview instead: scroll=%d", p.primaryTermPane().Scroll)
 	}
 }
 

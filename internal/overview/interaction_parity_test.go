@@ -271,7 +271,8 @@ func TestTabWalksTheSameWindowsAsTheProjectSurface(t *testing.T) {
 	} {
 		arrangement.set()
 		for _, target := range m.focusRing() {
-			if target.Kind == panelayout.TargetTermPanel {
+			leaf := panelayout.Find(m.preview.paneRoot, target.Leaf)
+			if target.Kind == panelayout.TargetLeaf && leaf != nil && leaf.Kind == panelayout.Shell {
 				t.Fatalf("the %s ring names a terminal panel this surface never draws", arrangement.name)
 			}
 		}

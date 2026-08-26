@@ -25,6 +25,10 @@ func terminalDocIssue() *Node {
 	)
 }
 
+func terminalDocIssueShell() *Node {
+	return split(7, Columns, 50, terminalDocIssue(), leaf(6, Shell))
+}
+
 func TestRingLeafOrderMatchesLayoutPlacement(t *testing.T) {
 	tests := []struct {
 		name string
@@ -50,7 +54,7 @@ func TestRingLeafOrderMatchesLayoutPlacement(t *testing.T) {
 			for _, placement := range placements {
 				want = append(want, Target{Kind: TargetLeaf, Leaf: placement.Node.ID})
 			}
-			got := Ring(test.root, false, false)
+			got := Ring(test.root, false)
 			if len(got) != len(want) {
 				t.Fatalf("ring = %v, want placement order %v", got, want)
 			}
@@ -65,11 +69,10 @@ func TestRingLeafOrderMatchesLayoutPlacement(t *testing.T) {
 
 func TestRingVisibility(t *testing.T) {
 	tests := []struct {
-		name      string
-		root      *Node
-		sidebar   bool
-		termPanel bool
-		want      []Target
+		name    string
+		root    *Node
+		sidebar bool
+		want    []Target
 	}{
 		{
 			name: "leaves only",
@@ -83,30 +86,27 @@ func TestRingVisibility(t *testing.T) {
 			want:    []Target{{Kind: TargetSidebar}, {Kind: TargetLeaf, Leaf: 1}, {Kind: TargetLeaf, Leaf: 2}},
 		},
 		{
-			name:      "panel last",
-			root:      terminalOnly(),
-			termPanel: true,
-			want:      []Target{{Kind: TargetLeaf, Leaf: 1}, {Kind: TargetTermPanel}},
+			name: "shell leaf last",
+			root: split(3, Columns, 50, terminalOnly(), leaf(2, Shell)),
+			want: []Target{{Kind: TargetLeaf, Leaf: 1}, {Kind: TargetLeaf, Leaf: 2}},
 		},
 		{
-			name:      "sidebar leaves panel",
-			root:      terminalDocIssue(),
-			sidebar:   true,
-			termPanel: true,
+			name:    "sidebar leaves panel",
+			root:    terminalDocIssueShell(),
+			sidebar: true,
 			want: []Target{
 				{Kind: TargetSidebar},
 				{Kind: TargetLeaf, Leaf: 1},
 				{Kind: TargetLeaf, Leaf: 2},
 				{Kind: TargetLeaf, Leaf: 4},
-				{Kind: TargetTermPanel},
+				{Kind: TargetLeaf, Leaf: 6},
 			},
 		},
 		{
-			name:      "nil tree keeps sidebar and panel",
-			root:      nil,
-			sidebar:   true,
-			termPanel: true,
-			want:      []Target{{Kind: TargetSidebar}, {Kind: TargetTermPanel}},
+			name:    "nil tree keeps sidebar",
+			root:    nil,
+			sidebar: true,
+			want:    []Target{{Kind: TargetSidebar}},
 		},
 		{
 			name: "nil tree with nothing visible is empty",
@@ -116,7 +116,7 @@ func TestRingVisibility(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := Ring(test.root, test.sidebar, test.termPanel)
+			got := Ring(test.root, test.sidebar)
 			if len(got) != len(test.want) {
 				t.Fatalf("Ring = %v, want %v", got, test.want)
 			}
@@ -130,7 +130,7 @@ func TestRingVisibility(t *testing.T) {
 }
 
 func TestCycleTarget(t *testing.T) {
-	full := Ring(terminalDocIssue(), true, true)
+	full := Ring(terminalDocIssueShell(), true)
 	tests := []struct {
 		name    string
 		ring    []Target
@@ -140,16 +140,16 @@ func TestCycleTarget(t *testing.T) {
 	}{
 		{name: "sidebar to first leaf", ring: full, current: Target{Kind: TargetSidebar}, want: Target{Kind: TargetLeaf, Leaf: 1}},
 		{name: "leaf to leaf", ring: full, current: Target{Kind: TargetLeaf, Leaf: 1}, want: Target{Kind: TargetLeaf, Leaf: 2}},
-		{name: "last leaf to panel", ring: full, current: Target{Kind: TargetLeaf, Leaf: 4}, want: Target{Kind: TargetTermPanel}},
-		{name: "panel wraps to sidebar", ring: full, current: Target{Kind: TargetTermPanel}, want: Target{Kind: TargetSidebar}},
-		{name: "reverse sidebar wraps to panel", ring: full, current: Target{Kind: TargetSidebar}, reverse: true, want: Target{Kind: TargetTermPanel}},
-		{name: "reverse panel to last leaf", ring: full, current: Target{Kind: TargetTermPanel}, reverse: true, want: Target{Kind: TargetLeaf, Leaf: 4}},
+		{name: "last passive leaf to shell", ring: full, current: Target{Kind: TargetLeaf, Leaf: 4}, want: Target{Kind: TargetLeaf, Leaf: 6}},
+		{name: "shell wraps to sidebar", ring: full, current: Target{Kind: TargetLeaf, Leaf: 6}, want: Target{Kind: TargetSidebar}},
+		{name: "reverse sidebar wraps to shell", ring: full, current: Target{Kind: TargetSidebar}, reverse: true, want: Target{Kind: TargetLeaf, Leaf: 6}},
+		{name: "reverse shell to last passive leaf", ring: full, current: Target{Kind: TargetLeaf, Leaf: 6}, reverse: true, want: Target{Kind: TargetLeaf, Leaf: 4}},
 		{name: "reverse first leaf to sidebar", ring: full, current: Target{Kind: TargetLeaf, Leaf: 1}, reverse: true, want: Target{Kind: TargetSidebar}},
 		{name: "unknown current starts at first", ring: full, current: Target{Kind: TargetLeaf, Leaf: 99}, want: Target{Kind: TargetSidebar}},
-		{name: "unknown current reverse starts at last", ring: full, current: Target{Kind: TargetLeaf, Leaf: 99}, reverse: true, want: Target{Kind: TargetTermPanel}},
+		{name: "unknown current reverse starts at last", ring: full, current: Target{Kind: TargetLeaf, Leaf: 99}, reverse: true, want: Target{Kind: TargetLeaf, Leaf: 6}},
 		{name: "single entry ring stays put", ring: []Target{{Kind: TargetSidebar}}, current: Target{Kind: TargetSidebar}, want: Target{Kind: TargetSidebar}},
 		{name: "empty ring returns current", ring: nil, current: Target{Kind: TargetLeaf, Leaf: 2}, want: Target{Kind: TargetLeaf, Leaf: 2}},
-		{name: "empty ring reverse returns current", ring: nil, current: Target{Kind: TargetTermPanel}, reverse: true, want: Target{Kind: TargetTermPanel}},
+		{name: "empty ring reverse returns current", ring: nil, current: Target{Kind: TargetLeaf, Leaf: 6}, reverse: true, want: Target{Kind: TargetLeaf, Leaf: 6}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -161,7 +161,7 @@ func TestCycleTarget(t *testing.T) {
 }
 
 func TestCycleTargetWalksWholeRing(t *testing.T) {
-	ring := Ring(terminalDocIssue(), true, true)
+	ring := Ring(terminalDocIssueShell(), true)
 	for _, reverse := range []bool{false, true} {
 		current := ring[0]
 		seen := map[Target]bool{current: true}

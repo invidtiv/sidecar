@@ -174,8 +174,8 @@ func TestApplyTerminalHistoryPrependsAndReplaysPendingScroll(t *testing.T) {
 	if !ok || start != 0 || end != 1220 {
 		t.Fatalf("absolute range = [%d,%d) ok=%v, want [0,1220)", start, end, ok)
 	}
-	if p.previewScroll != 20 {
-		t.Fatalf("preview scroll = %d, want the 20-line scroll replayed, unmoved by the prepend", p.previewScroll)
+	if p.primaryTermPane().Scroll != 20 {
+		t.Fatalf("preview scroll = %d, want the 20-line scroll replayed, unmoved by the prepend", p.primaryTermPane().Scroll)
 	}
 	state := p.terminalHistory[terminalHistoryKey("shell", "shell-1")]
 	if state.Loading || !state.Exhausted {
@@ -287,8 +287,8 @@ func TestTerminalHistoryAccumulatesScrollIntentWhileLoading(t *testing.T) {
 		},
 		RequestGen: state.RequestGen,
 	})
-	if p.previewScroll != 21 {
-		t.Fatalf("preview scroll = %d, want the accumulated 21-line intent replayed", p.previewScroll)
+	if p.primaryTermPane().Scroll != 21 {
+		t.Fatalf("preview scroll = %d, want the accumulated 21-line intent replayed", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -322,8 +322,8 @@ func TestTerminalHistoryLateResponseCannotLeaveLiveView(t *testing.T) {
 		RequestGen: oldGen,
 	})
 	start, _, _ := buffer.AbsoluteRange()
-	if start != 600 || p.previewScroll != 0 {
-		t.Fatalf("late response changed live view: base=%d scroll=%d", start, p.previewScroll)
+	if start != 600 || p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("late response changed live view: base=%d scroll=%d", start, p.primaryTermPane().Scroll)
 	}
 }
 

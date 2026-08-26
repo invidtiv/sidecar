@@ -63,13 +63,13 @@ func TestTerminalSearchInputAndNavigationAreConsumed(t *testing.T) {
 	if !handled || p.terminalSearch.InputActive || len(p.terminalSearch.Matches) != 2 {
 		t.Fatalf("completed search state = %#v", p.terminalSearch)
 	}
-	firstScroll := p.previewScroll
+	firstScroll := p.primaryTermPane().Scroll
 	handled, _ = p.handleTerminalSearchKey(tea.KeyPressMsg{Code: 'n', Text: "n"}, false)
 	// The later match is nearer the live bottom, so the window sits fewer rows
 	// back from it.
-	if !handled || p.terminalSearch.Current != 1 || p.previewScroll >= firstScroll {
+	if !handled || p.terminalSearch.Current != 1 || p.primaryTermPane().Scroll >= firstScroll {
 		t.Fatalf("next match did not advance: current=%d scroll=%d first=%d",
-			p.terminalSearch.Current, p.previewScroll, firstScroll)
+			p.terminalSearch.Current, p.primaryTermPane().Scroll, firstScroll)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestTerminalViewportHighlightsSearchMatch(t *testing.T) {
 
 func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 	p := terminalSearchPlugin(numberedTerminalLines(600, 620), 600)
-	p.previewScroll = 10
+	p.primaryTermPane().Scroll = 10
 	key := terminalHistoryKey("shell", "search-shell")
 	p.terminalHistory[key] = tty.HistoryReach{HistorySize: 1200}
 
@@ -139,8 +139,8 @@ func TestTerminalSearchLoadsAndSearchesUnvisitedHistory(t *testing.T) {
 	if len(p.terminalSearch.Matches) != 1 || p.terminalSearch.Matches[0].Line != 10 {
 		t.Fatalf("full-history matches = %#v, want absolute line 10", p.terminalSearch.Matches)
 	}
-	if p.previewScroll != 10 {
-		t.Fatalf("viewport scroll = %d, want the prepend to leave a bottom-relative window alone", p.previewScroll)
+	if p.primaryTermPane().Scroll != 10 {
+		t.Fatalf("viewport scroll = %d, want the prepend to leave a bottom-relative window alone", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -172,9 +172,9 @@ func TestClearedTerminalSearchRejectsLateHistoryWithoutChangingFollow(t *testing
 		SearchGen:  searchGen,
 	})
 	start, _, _ := p.shells[0].Agent.OutputBuf.AbsoluteRange()
-	if start != 600 || p.previewScroll != 0 || p.terminalSearch.Query != "" {
+	if start != 600 || p.primaryTermPane().Scroll != 0 || p.terminalSearch.Query != "" {
 		t.Fatalf("late cleared search changed state: base=%d scroll=%d search=%#v",
-			start, p.previewScroll, p.terminalSearch)
+			start, p.primaryTermPane().Scroll, p.terminalSearch)
 	}
 }
 
@@ -278,7 +278,7 @@ func TestSearchHistoryReplaysAScrollCoalescedOntoIt(t *testing.T) {
 	if p.beginTerminalSearch() == nil {
 		t.Fatal("search did not request unvisited history")
 	}
-	p.previewScroll = p.terminalMaxScroll(false)
+	p.primaryTermPane().Scroll = p.terminalMaxScroll(false)
 
 	// The bound, reached while the search read is in flight.
 	if cmd := p.loadOlderTerminalHistory(false, 20); cmd != nil {
@@ -289,7 +289,7 @@ func TestSearchHistoryReplaysAScrollCoalescedOntoIt(t *testing.T) {
 			p.terminalHistory[key].PendingScroll)
 	}
 
-	before := p.previewScroll
+	before := p.primaryTermPane().Scroll
 	p.applyTerminalSearchHistory(terminalSearchHistoryLoadedMsg{
 		Source: terminalHistorySource{
 			Key:    key,
@@ -306,9 +306,9 @@ func TestSearchHistoryReplaysAScrollCoalescedOntoIt(t *testing.T) {
 		SearchGen:  p.terminalSearch.Generation,
 	})
 
-	if p.previewScroll != before+20 {
+	if p.primaryTermPane().Scroll != before+20 {
 		t.Fatalf("window at %d rows back, want %d — the rows the reader scrolled for",
-			p.previewScroll, before+20)
+			p.primaryTermPane().Scroll, before+20)
 	}
 }
 

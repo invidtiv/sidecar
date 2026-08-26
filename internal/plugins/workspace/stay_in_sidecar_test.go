@@ -97,7 +97,7 @@ func TestWatchedHeaderRestoresAttachCopyWhenEnabled(t *testing.T) {
 func TestInteractiveHeaderIsExitOnlyByDefault(t *testing.T) {
 	p := surfacePlugin(false)
 	p.viewMode = ViewModeInteractive
-	p.interactiveState = &InteractiveState{Active: true, TermPanel: false}
+	p.interactiveState = &InteractiveState{Active: true, LeafID: 0}
 	view := ansi.Strip(p.renderOutputContent(160, 20))
 	if !strings.Contains(view, "INTERACTIVE") {
 		t.Fatalf("interactive header missing INTERACTIVE:\n%s", view)
@@ -233,7 +233,7 @@ func TestTerminalPanelFlagOffGatesEverything(t *testing.T) {
 		t.Fatal("workspace_terminal_panel override did not turn the flag off")
 	}
 	p := surfacePlugin(false)
-	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); cmd != nil || p.termPanelVisible {
+	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); cmd != nil || p.shellLeafVisible() {
 		t.Fatal("ctrl+t toggled the terminal panel with the flag off")
 	}
 	if cmd := p.handleListKeys(tea.KeyPressMsg{Code: 't', Mod: tea.ModAlt}); cmd != nil {

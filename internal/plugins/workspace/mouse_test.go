@@ -279,9 +279,9 @@ func TestPreviewPaneImmediateDragSelectsWithoutActivatingOrJumping(t *testing.T)
 	if !p.selection.HasSelection() {
 		t.Fatal("immediate click-drag did not create a selection")
 	}
-	if p.previewFreeze.Start() != renderedStart {
+	if p.primaryTermPane().Freeze.Start() != renderedStart {
 		t.Fatalf("selection froze viewport at %d, want rendered live start %d",
-			p.previewFreeze.Start(), renderedStart)
+			p.primaryTermPane().Freeze.Start(), renderedStart)
 	}
 }
 
@@ -461,14 +461,14 @@ func TestScrollFallbackUsesRenderedPreviewSplit(t *testing.T) {
 				p.shells[0].Agent.OutputBuf = markerBuffer("FIRST", 100)
 				// A window already back in scrollback, so a notch towards the
 				// live edge has somewhere to move it.
-				p.previewScroll = 5
+				p.primaryTermPane().Scroll = 5
 
 				p.handleMouseScroll(mouse.MouseAction{Delta: 1, X: pos.x})
 				gotSidebar := p.selectedShellIdx == 1
 				// A notch the preview took moves its window one row towards the
 				// live bottom; one the sidebar took resets it to the live edge
 				// with the selection, which is not the same answer.
-				gotPreview := p.previewScroll == 4
+				gotPreview := p.primaryTermPane().Scroll == 4
 				if gotSidebar != pos.wantSidebar || gotPreview == pos.wantSidebar {
 					t.Fatalf("x=%d split=%+v: sidebar scrolled=%v preview scrolled=%v, want sidebar=%v",
 						pos.x, split, gotSidebar, gotPreview, pos.wantSidebar)

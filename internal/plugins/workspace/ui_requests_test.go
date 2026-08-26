@@ -106,14 +106,14 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 			if !ok {
 				t.Fatal("no terminal leaf before split")
 			}
-			openArmedAt := armDeferredResize(p.primaryTerminal)
+			openArmedAt := armDeferredResize(p.primaryTermPane().Terminal)
 
 			cmd := p.handleUIRequest(uirequest.Request{
 				ID: "interactive-" + tt.name, Action: uirequest.ActionOpen,
 				CreatedAt: time.Now().UTC(), TTLMs: 5000,
 				Origin: uirequest.Origin{TmuxSession: "test-shell"}, Target: tt.target,
 			})
-			assertResizeStayedDeferred(t, p.primaryTerminal, openArmedAt)
+			assertResizeStayedDeferred(t, p.primaryTermPane().Terminal, openArmedAt)
 			after, ok := p.terminalLeafBox()
 			if !ok || after.W >= before.W {
 				t.Fatalf("post-open terminal leaf = %+v ok=%v, want narrower than %+v", after, ok, before)
@@ -123,15 +123,15 @@ func TestUIRequests_InteractiveOpenAssertsPostSplitTerminalGeometryOnce(t *testi
 			if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
 				t.Fatal("sidecar open exited the live interactive terminal")
 			}
-			openW, openH := p.primaryTerminal.Width, p.primaryTerminal.Height
+			openW, openH := p.primaryTermPane().Terminal.Width, p.primaryTermPane().Terminal.Height
 			_ = p.View(p.width, p.height)
-			if len(p.paneSizeCmds) != 0 || p.primaryTerminal.Width != openW || p.primaryTerminal.Height != openH {
-				t.Fatalf("View scheduled or applied terminal geometry: queued=%d size=%dx%d", len(p.paneSizeCmds), p.primaryTerminal.Width, p.primaryTerminal.Height)
+			if len(p.paneSizeCmds) != 0 || p.primaryTermPane().Terminal.Width != openW || p.primaryTermPane().Terminal.Height != openH {
+				t.Fatalf("View scheduled or applied terminal geometry: queued=%d size=%dx%d", len(p.paneSizeCmds), p.primaryTermPane().Terminal.Width, p.primaryTermPane().Terminal.Height)
 			}
 
-			closeArmedAt := armDeferredResize(p.primaryTerminal)
+			closeArmedAt := armDeferredResize(p.primaryTermPane().Terminal)
 			closeCmd := tt.close(p)
-			assertResizeStayedDeferred(t, p.primaryTerminal, closeArmedAt)
+			assertResizeStayedDeferred(t, p.primaryTermPane().Terminal, closeArmedAt)
 			grown, ok := p.terminalLeafBox()
 			if !ok || grown != before {
 				t.Fatalf("post-close terminal leaf = %+v ok=%v, want original %+v", grown, ok, before)
@@ -190,8 +190,8 @@ func TestUIRequests_CreateShellSplitPlacement(t *testing.T) {
 			if err != nil || len(acks) != 1 || acks[0].Status != uirequest.StatusOpened {
 				t.Fatalf("acks = %+v err=%v", acks, err)
 			}
-			if acks[0].Surface != "shell:"+p.termPanelSession {
-				t.Fatalf("surface = %q session = %q", acks[0].Surface, p.termPanelSession)
+			if acks[0].Surface != "shell:"+p.requireShellTermPane().Session {
+				t.Fatalf("surface = %q session = %q", acks[0].Surface, p.requireShellTermPane().Session)
 			}
 		})
 	}
@@ -207,12 +207,12 @@ func TestUIRequests_CreateShellSplitSeedsReusedSession(t *testing.T) {
 	if p.createTerminalSplit("dev server", "right") == nil {
 		t.Fatal("first split did not open")
 	}
-	if p.shellLeaf() == nil || p.termPanelSession == "" || p.termPanelOutput == nil {
+	if p.shellLeaf() == nil || p.requireShellTermPane().Session == "" || p.requireShellTermPane().Buffer == nil {
 		t.Fatal("first split did not claim a session")
 	}
 	p.rememberShellSplit()
-	p.termPanelVisible = false
-	p.termPanelFocused = false
+	p.hideShellTermPane()
+	p.setShellLeafFocused(false)
 	p.shellLeafSurface = ""
 	p.syncShellLeaf()
 	if p.shellLeaf() != nil {
@@ -502,7 +502,7 @@ func TestUIRequests_RefusedInteractiveSplitEmitsNoGeometryAssertion(t *testing.T
 			p := interactiveUIRequestTestPlugin(t, root)
 			p.width = 40
 			beforeTree := clonePaneTree(p.paneRoot)
-			beforeGeometry := terminalModelGeometry(p.primaryTerminal)
+			beforeGeometry := terminalModelGeometry(p.primaryTermPane().Terminal)
 			beforeInteractive := *p.interactiveState
 			beforeFocus, beforeNext, beforePane, beforeMode := p.paneFocus, p.paneNextID, p.activePane, p.viewMode
 
@@ -517,7 +517,7 @@ func TestUIRequests_RefusedInteractiveSplitEmitsNoGeometryAssertion(t *testing.T
 			if !reflect.DeepEqual(p.paneRoot, beforeTree) {
 				t.Fatalf("refused split changed pane tree\n before: %#v\n  after: %#v", beforeTree, p.paneRoot)
 			}
-			if got := terminalModelGeometry(p.primaryTerminal); got != beforeGeometry {
+			if got := terminalModelGeometry(p.primaryTermPane().Terminal); got != beforeGeometry {
 				t.Fatalf("refused split changed terminal geometry/state: before=%+v after=%+v", beforeGeometry, got)
 			}
 			if p.interactiveState == nil || *p.interactiveState != beforeInteractive {
@@ -540,18 +540,18 @@ func interactiveUIRequestTestPlugin(t *testing.T, root string) *Plugin {
 	if !ok {
 		t.Fatal("test terminal leaf is not placed")
 	}
-	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
-	p.primaryTerminal.Width = p.terminalContentWidth(box.W)
-	p.primaryTerminal.Height = box.H - terminalHeaderRows
+	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.primaryTermPane().Terminal.Width = p.terminalContentWidth(box.W)
+	p.primaryTermPane().Terminal.Height = box.H - terminalHeaderRows
 	// Activate the model without Open: Open would start a real control client,
 	// while this contract must never query or resize the developer's tmux server.
-	p.primaryTerminal.State = &tty.State{
+	p.primaryTermPane().Terminal.State = &tty.State{
 		Active: true, TargetSession: "test-shell", TargetPane: "%901",
 		OutputBuf: tty.NewOutputBuffer(20),
 	}
-	p.primaryTerminalTarget = workspaceTerminalTarget{
-		Session: "test-shell", Pane: "%901", Width: p.primaryTerminal.Width,
-		Height: p.primaryTerminal.Height, Source: "shell", SourceID: "test-shell",
+	p.primaryTermPane().Target = workspaceTerminalTarget{
+		Session: "test-shell", Pane: "%901", Width: p.primaryTermPane().Terminal.Width,
+		Height: p.primaryTermPane().Terminal.Height, Source: "shell", SourceID: "test-shell",
 	}
 	p.viewMode = ViewModeInteractive
 	p.interactiveState = &InteractiveState{
@@ -563,8 +563,8 @@ func interactiveUIRequestTestPlugin(t *testing.T, root string) *Plugin {
 func assertInteractiveTerminalGeometry(t *testing.T, p *Plugin, leaf Box) {
 	t.Helper()
 	wantW, wantH := p.terminalContentWidth(leaf.W), leaf.H-terminalHeaderRows
-	if p.primaryTerminal.Width != wantW || p.primaryTerminal.Height != wantH {
-		t.Fatalf("live terminal geometry = %dx%d, want leaf viewport %dx%d", p.primaryTerminal.Width, p.primaryTerminal.Height, wantW, wantH)
+	if p.primaryTermPane().Terminal.Width != wantW || p.primaryTermPane().Terminal.Height != wantH {
+		t.Fatalf("live terminal geometry = %dx%d, want leaf viewport %dx%d", p.primaryTermPane().Terminal.Width, p.primaryTermPane().Terminal.Height, wantW, wantH)
 	}
 }
 
@@ -607,13 +607,13 @@ func assertDeferredGeometryAssertion(t *testing.T, p *Plugin, cmd tea.Cmd, leaf 
 	if got := reflect.TypeOf(msg).String(); got != "tty.deferredResizeMsg" {
 		t.Fatalf("geometry command emitted %s, want tty.deferredResizeMsg", got)
 	}
-	before := p.primaryTerminal.State.LastResizeAt
-	assertCmd := p.primaryTerminal.Update(msg)
+	before := p.primaryTermPane().Terminal.State.LastResizeAt
+	assertCmd := p.primaryTermPane().Terminal.Update(msg)
 	if assertCmd == nil {
 		t.Fatal("the same active terminal rejected its deferred resize assertion")
 	}
-	if !p.primaryTerminal.State.LastResizeAt.After(before) {
-		t.Fatalf("accepted assertion did not advance LastResizeAt: %v -> %v", before, p.primaryTerminal.State.LastResizeAt)
+	if !p.primaryTermPane().Terminal.State.LastResizeAt.After(before) {
+		t.Fatalf("accepted assertion did not advance LastResizeAt: %v -> %v", before, p.primaryTermPane().Terminal.State.LastResizeAt)
 	}
 	assertInteractiveTerminalGeometry(t, p, leaf)
 	// Do not execute assertCmd: it is the real tmux query/resize closure. A

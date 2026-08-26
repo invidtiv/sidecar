@@ -25,9 +25,9 @@ type terminalWindow struct {
 
 func (p *Plugin) terminalWindow(termPanel bool) terminalWindow {
 	if termPanel {
-		return terminalWindow{freeze: &p.termPanelFreeze, scroll: &p.termPanelScroll, pinnedByDoc: &p.termPanelFreezeDoc}
+		return terminalWindow{freeze: &p.requireShellTermPane().Freeze, scroll: &p.requireShellTermPane().Scroll, pinnedByDoc: &p.requireShellTermPane().FreezeDoc}
 	}
-	return terminalWindow{freeze: &p.previewFreeze, scroll: &p.previewScroll, pinnedByDoc: &p.previewFreezeDoc}
+	return terminalWindow{freeze: &p.primaryTermPane().Freeze, scroll: &p.primaryTermPane().Scroll, pinnedByDoc: &p.primaryTermPane().FreezeDoc}
 }
 
 // terminalMaxScroll is the furthest back a surface's window can sit, in rows
@@ -41,7 +41,7 @@ func (p *Plugin) terminalWindow(termPanel bool) terminalWindow {
 // answer for a surface with no geometry, from the preview's size.
 func (p *Plugin) terminalMaxScroll(termPanel bool) int {
 	if termPanel {
-		if p.termPanelOutput == nil {
+		if p.requireShellTermPane().Buffer == nil {
 			return 0
 		}
 		if _, _, ok := p.calculateTermPanelDimensions(); !ok {

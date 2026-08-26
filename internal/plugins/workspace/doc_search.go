@@ -359,7 +359,7 @@ func (p *Plugin) openFinderPane() tea.Cmd {
 	if doc, leaf := p.activeDocPane(); doc != nil && leaf != nil {
 		p.paneFocus = leaf.ID
 		p.activePane = PanePreview
-		p.termPanelFocused = false
+		p.setShellLeafFocused(false)
 		return p.openDocFinder(doc)
 	}
 	plan, planned := planPaneOpen(p.paneRoot, PaneDoc, p.lastPaneBoxes())
@@ -379,7 +379,7 @@ func (p *Plugin) openFinderPane() tea.Cmd {
 	// chooses the first tab.
 	p.docs[docID] = newDocPane(p.paneFocus, root, surface, nil)
 	p.activePane = PanePreview
-	p.termPanelFocused = false
+	p.setShellLeafFocused(false)
 	p.saveSelectionState()
 	return tea.Batch(p.openDocFinder(p.docs[docID]), p.resizeDocTerminalCmd())
 }

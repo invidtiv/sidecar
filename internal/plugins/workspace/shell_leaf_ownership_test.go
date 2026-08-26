@@ -62,7 +62,7 @@ func TestSplitTerminalStaysOnTheWorkspaceItWasOpenedOn(t *testing.T) {
 	p, saved := twoShellPlugin(t)
 
 	p.toggleTermPanel()
-	if !p.termPanelVisible || p.shellLeaf() == nil {
+	if !p.shellLeafVisible() || p.shellLeaf() == nil {
 		t.Fatal("ctrl+t did not open a split on the selected workspace")
 	}
 	firstSurface := p.shellLeafSurface
@@ -71,10 +71,10 @@ func TestSplitTerminalStaysOnTheWorkspaceItWasOpenedOn(t *testing.T) {
 	}
 
 	selectShell(p, 1)
-	if p.termPanelVisible || p.shellLeaf() != nil {
+	if p.shellLeafVisible() || p.shellLeaf() != nil {
 		t.Fatal("the split followed the selection onto a workspace that was never split")
 	}
-	if p.termPanelFocused {
+	if p.shellLeafFocused() {
 		t.Fatal("a released split left its focus behind")
 	}
 	p.saveSelectionState()
@@ -86,7 +86,7 @@ func TestSplitTerminalStaysOnTheWorkspaceItWasOpenedOn(t *testing.T) {
 	}
 
 	selectShell(p, 0)
-	if !p.termPanelVisible || p.shellLeaf() == nil {
+	if !p.shellLeafVisible() || p.shellLeaf() == nil {
 		t.Fatal("the owning workspace did not get its split back")
 	}
 	if p.shellLeafSurface != firstSurface {
@@ -101,7 +101,7 @@ func TestCreatingASplitPersistsItsSessionSelector(t *testing.T) {
 	p, saved := twoShellPlugin(t)
 
 	p.createTerminalSplit("dev server", "auto")
-	if p.termPanelSession == "" {
+	if p.requireShellTermPane().Session == "" {
 		t.Fatal("a created split has no session")
 	}
 
@@ -109,8 +109,8 @@ func TestCreatingASplitPersistsItsSessionSelector(t *testing.T) {
 	if leaf == nil {
 		t.Fatal("the created split was not persisted as a shell leaf")
 	}
-	if leaf.Session != p.termPanelSession {
-		t.Fatalf("persisted session %q, want the leaf's own %q", leaf.Session, p.termPanelSession)
+	if leaf.Session != p.requireShellTermPane().Session {
+		t.Fatalf("persisted session %q, want the leaf's own %q", leaf.Session, p.requireShellTermPane().Session)
 	}
 	if !strings.HasPrefix(leaf.Session, termPanelSessionPrefix) {
 		t.Fatalf("persisted session %q is not a durable selector", leaf.Session)

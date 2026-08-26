@@ -88,7 +88,7 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	if !terminalPanelEnabled() {
 		return nil
 	}
-	if p.termPanelVisible {
+	if p.shellLeafVisible() {
 		// Hide is a close that keeps the session and the user's typed name. It is
 		// the same exit the ✕ takes, told apart by its mode, so the two paths
 		// cannot drift into disagreeing about anything else.
@@ -99,16 +99,16 @@ func (p *Plugin) toggleTermPanel() tea.Cmd {
 	// before it exists: syncShellLeaf releases any split whose owner is not the
 	// selection, and an unclaimed one would be released on the spot.
 	p.claimShellLeafSurface()
-	p.termPanelVisible = true
+	p.requestShellLeaf()
 	if !p.syncShellLeaf() {
-		p.termPanelFocused = false
+		p.setShellLeafFocused(false)
 		return nil
 	}
-	p.termPanelFocused = true // Focus the terminal sub-pane so the user can Enter to interact
-	p.termPanelScroll = 0     // Reset scroll to show latest output
+	p.setShellLeafFocused(true)         // Focus the terminal sub-pane so the user can Enter to interact
+	p.requireShellTermPane().Scroll = 0 // Reset scroll to show latest output
 	p.activePane = PanePreview
 	cmd := p.attachWorkspaceTerminalSplit()
-	if p.termPanelSession == "" {
+	if p.requireShellTermPane().Session == "" {
 		p.abandonShellLeaf()
 		p.syncShellLeaf()
 		return nil
@@ -134,8 +134,8 @@ func (p *Plugin) attachWorkspaceTerminalSplit() tea.Cmd {
 	// first one that will encode the leaf: assigning it after the save is how a
 	// freshly created split was persisted with no session at all, and came back
 	// from a relaunch attached to whatever the selection derived.
-	reusing := p.termPanelSession == sessionName && p.termPanelOutput != nil
-	p.termPanelSession = sessionName
+	reusing := p.requireShellTermPane().Session == sessionName && p.requireShellTermPane().Buffer != nil
+	p.requireShellTermPane().Session = sessionName
 	p.saveSelectionState()
 
 	// If we already have an active session for this, just show it.
@@ -152,10 +152,10 @@ func (p *Plugin) attachWorkspaceTerminalSplit() tea.Cmd {
 
 	// Switch to the new session (old session preserved for later reuse)
 	p.releaseTerminalDocProjection(true)
-	if p.termPanelOutput == nil {
-		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
+	if p.requireShellTermPane().Buffer == nil {
+		p.requireShellTermPane().Buffer = tty.NewOutputBuffer(outputBufferCap)
 	} else {
-		p.termPanelOutput.Clear()
+		p.requireShellTermPane().Buffer.Clear()
 	}
 
 	return p.createTermPanelSession(sessionName)
@@ -257,16 +257,16 @@ func (p *Plugin) calculateAgentPaneDimensions() (width, height int) {
 // resizeTermPanelPaneCmd returns a command that resizes the terminal panel's
 // tmux pane to match the current split dimensions.
 func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
-	if p.termPanelSession == "" || !p.termPanelVisible {
+	if p.requireShellTermPane().Session == "" || !p.shellLeafVisible() {
 		return nil
 	}
 	ownership := p.currentTerminalOwnership()
 	if ownership == 0 {
 		return nil
 	}
-	target := p.termPanelPaneID
+	target := p.requireShellTermPane().PaneID
 	if target == "" {
-		target = p.termPanelSession
+		target = p.requireShellTermPane().Session
 	}
 	w, h, ok := p.calculateTermPanelDimensions()
 	if !ok {
@@ -288,7 +288,7 @@ func (p *Plugin) resizeTermPanelPaneCmd() tea.Cmd {
 // termPanelChip is the terminal panel's identity chip, the left region of its
 // header row.
 func (p *Plugin) termPanelChip() string {
-	return p.paneFocusChip(p.shellLeafTitle(), p.termPanelFocused)
+	return p.paneFocusChip(p.shellLeafTitle(), p.shellLeafFocused())
 }
 
 // termPanelHints is the right region of the terminal panel's header row.
@@ -296,7 +296,7 @@ func (p *Plugin) termPanelHints() string {
 	if p.interactiveDescribes(true) {
 		return p.interactiveExitHint()
 	}
-	if p.termPanelFocused {
+	if p.shellLeafFocused() {
 		return dimText("enter interactive")
 	}
 	return ""
@@ -312,7 +312,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	if leaf := p.shellLeaf(); leaf != nil {
 		closeLeafID = leaf.ID
 	}
-	if p.termPanelOutput == nil {
+	if p.requireShellTermPane().Buffer == nil {
 		hintFloor := 0
 		if p.interactiveDescribes(true) {
 			hintFloor = p.interactiveHintFloor()
@@ -337,7 +337,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 	}
 	// The terminal panel has no action chips of its own; Diff and Task belong
 	// to the surface's primary header.
-	return p.renderCapturedTerminalWithClose(chips, nil, p.termPanelHints(), p.termPanelOutput, width, height, true, "Terminal ready", closeLeafID)
+	return p.renderCapturedTerminalWithClose(chips, nil, p.termPanelHints(), p.requireShellTermPane().Buffer, width, height, true, "Terminal ready", closeLeafID)
 }
 
 // refreshTermPanelForSelection points the terminal panel at the session its own
@@ -350,20 +350,20 @@ func (p *Plugin) refreshTermPanelForSelection() tea.Cmd {
 		return nil
 	}
 	newSession := p.termPanelSessionName()
-	if newSession == "" || newSession == p.termPanelSession {
+	if newSession == "" || newSession == p.requireShellTermPane().Session {
 		return nil
 	}
 	// Switch to new session (old session preserved for later reuse)
-	p.termPanelSession = newSession
+	p.requireShellTermPane().Session = newSession
 	p.forgetShellLeafName()
 	p.releaseTerminalDocProjection(true)
-	p.termPanelPaneID = ""
-	p.termPanelScroll = 0
+	p.requireShellTermPane().PaneID = ""
+	p.requireShellTermPane().Scroll = 0
 	p.releaseTerminalWindowPin(true)
-	if p.termPanelOutput == nil {
-		p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
+	if p.requireShellTermPane().Buffer == nil {
+		p.requireShellTermPane().Buffer = tty.NewOutputBuffer(outputBufferCap)
 	} else {
-		p.termPanelOutput.Clear()
+		p.requireShellTermPane().Buffer.Clear()
 	}
 	return p.createTermPanelSession(newSession)
 }
@@ -386,8 +386,8 @@ func killShellLeafSession(session string) tea.Cmd {
 // Sessions are preserved so they can be reattached on next launch (like agent sessions).
 func (p *Plugin) cleanupTermPanelSession() {
 	p.releaseTerminalDocProjection(true)
-	p.termPanelSession = ""
-	p.termPanelPaneID = ""
-	p.termPanelOutput = nil
+	p.requireShellTermPane().Session = ""
+	p.requireShellTermPane().PaneID = ""
+	p.requireShellTermPane().Buffer = nil
 	p.releaseTerminalWindowPin(true)
 }

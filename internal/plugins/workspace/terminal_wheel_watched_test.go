@@ -41,8 +41,8 @@ func watchedWheelPlugin(t *testing.T, mouseReporting bool) *Plugin {
 		PaneHeight:            20,
 		OutputBuf:             buffer,
 	}
-	p.primaryTerminal = model
-	p.primaryTerminalTarget = workspaceTerminalTarget{
+	p.primaryTermPane().Terminal = model
+	p.primaryTermPane().Target = workspaceTerminalTarget{
 		Session: "sidecar-sh-one", Pane: "%7", Source: "shell", SourceID: "sidecar-sh-one",
 	}
 	p.SetFocused(true)
@@ -86,7 +86,7 @@ func TestWatchedWheelForwardsToAMouseReportingPane(t *testing.T) {
 	p := watchedWheelPlugin(t, true)
 	// A window left scrolled back would sit over stale rows while the app
 	// repaints below, so a claimed notch pins it first.
-	p.previewScroll = 3
+	p.primaryTermPane().Scroll = 3
 
 	col, row, ok := p.terminalMouseCoords(false, 60, 8)
 	if !ok {
@@ -112,8 +112,8 @@ func TestWatchedWheelForwardsToAMouseReportingPane(t *testing.T) {
 	if !strings.Contains(logged, "-t %7") {
 		t.Fatalf("the report was not addressed to the watched pane: %s", logged)
 	}
-	if p.previewScroll != 0 {
-		t.Fatalf("previewScroll = %d, want the window pinned to the live edge", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("previewScroll = %d, want the window pinned to the live edge", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -124,8 +124,8 @@ func TestWatchedWheelForwardsToAMouseReportingPane(t *testing.T) {
 func TestAnObservedMouseFlagOutlivesThePollThatSawIt(t *testing.T) {
 	logPath := installSuccessfulFakeTmux(t)
 	p := watchedWheelPlugin(t, false)
-	p.primaryTerminal = nil
-	p.primaryTerminalTarget = workspaceTerminalTarget{}
+	p.primaryTermPane().Terminal = nil
+	p.primaryTermPane().Target = workspaceTerminalTarget{}
 
 	p.update(ShellOutputMsg{
 		TmuxName: "sidecar-sh-one", Output: strings.Repeat("watched row\n", 60),
@@ -135,7 +135,7 @@ func TestAnObservedMouseFlagOutlivesThePollThatSawIt(t *testing.T) {
 		t.Fatal("the observed mouse flag did not survive the poll that saw it")
 	}
 
-	p.previewScroll = 3
+	p.primaryTermPane().Scroll = 3
 	col, row, ok := p.terminalMouseCoords(false, 60, 8)
 	if !ok {
 		t.Fatal("test premise: the pointer does not land on a pane cell")
@@ -149,8 +149,8 @@ func TestAnObservedMouseFlagOutlivesThePollThatSawIt(t *testing.T) {
 	if want := sgrWheelHex(true, col, row); !strings.Contains(logged, want) {
 		t.Fatalf("the pane never received the wheel report %q: %s", want, logged)
 	}
-	if p.previewScroll != 0 {
-		t.Fatalf("previewScroll = %d, want the window pinned to the live edge", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("previewScroll = %d, want the window pinned to the live edge", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -159,15 +159,15 @@ func TestAnObservedMouseFlagOutlivesThePollThatSawIt(t *testing.T) {
 func TestWatchedWheelWithoutMouseReportingScrollsLocally(t *testing.T) {
 	logPath := installSuccessfulFakeTmux(t)
 	p := watchedWheelPlugin(t, false)
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 
 	p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -1, X: 60, Y: 8,
 		Region: &mouse.Region{ID: regionPreviewPane},
 	})
 
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want 6 after a local notch back through scrollback", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 after a local notch back through scrollback", p.primaryTermPane().Scroll)
 	}
 	if logged := readTmuxLog(t, logPath); strings.Contains(logged, "send-keys") {
 		t.Fatalf("a notch was forwarded to a watched pane that tracks no mouse: %s", logged)
@@ -186,7 +186,7 @@ func TestWatchedTerminalBoundaryDropsOnlyLocalExhaustedInertia(t *testing.T) {
 	if p.WheelAtBoundary(up) {
 		t.Fatal("local terminal wheel toward available history was dropped")
 	}
-	p.previewScroll = p.terminalMaxScroll(false)
+	p.primaryTermPane().Scroll = p.terminalMaxScroll(false)
 	source, ok := p.terminalHistoryFor(false)
 	if !ok {
 		t.Fatal("test premise: terminal history source unavailable")
@@ -210,15 +210,15 @@ func TestWatchedTerminalBoundaryDropsOnlyLocalExhaustedInertia(t *testing.T) {
 func TestWatchedAltWheelStaysLocal(t *testing.T) {
 	logPath := installSuccessfulFakeTmux(t)
 	p := watchedWheelPlugin(t, true)
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 
 	p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -1, X: 60, Y: 8, Alt: true,
 		Region: &mouse.Region{ID: regionPreviewPane},
 	})
 
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want 6 — alt+wheel must stay local", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 — alt+wheel must stay local", p.primaryTermPane().Scroll)
 	}
 	if logged := readTmuxLog(t, logPath); strings.Contains(logged, "send-keys") {
 		t.Fatalf("alt+wheel was forwarded to the watched pane: %s", logged)
@@ -236,15 +236,15 @@ func TestWheelIsNotForwardedWithWritesDisabled(t *testing.T) {
 
 	logPath := installSuccessfulFakeTmux(t)
 	p := watchedWheelPlugin(t, true)
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 
 	p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -1, X: 60, Y: 8,
 		Region: &mouse.Region{ID: regionPreviewPane},
 	})
 
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want the notch on this surface's own window", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want the notch on this surface's own window", p.primaryTermPane().Scroll)
 	}
 	if logged := readTmuxLog(t, logPath); strings.Contains(logged, "send-keys") {
 		t.Fatalf("a notch was forwarded with write support disabled: %s", logged)

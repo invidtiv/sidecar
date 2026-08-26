@@ -255,7 +255,7 @@ func TestClickingATdIssueInALiveTerminalTakesTheClickFromTheApplication(t *testi
 		t.Fatalf("issue activation kept the live terminal: mode=%v interactive=%#v focus=%d",
 			p.viewMode, p.interactiveState, p.paneFocus)
 	}
-	if !p.previewFreeze.Active() {
+	if !p.primaryTermPane().Freeze.Active() {
 		t.Fatal("issue activation did not freeze the clicked viewport")
 	}
 }

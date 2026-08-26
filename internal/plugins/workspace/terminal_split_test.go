@@ -73,20 +73,20 @@ func TestTerminalSplitRefusesPastTheLiveCapWithAToast(t *testing.T) {
 	// The refusal is panelayout's, not this surface's: openShellLeaf turns the
 	// flag back off rather than claiming a leaf nothing drew.
 	p.toastMessage = ""
-	p.termPanelVisible = true
+	p.requestShellLeaf()
 	p.paneRoot, p.paneFocus = ClosePane(p.paneRoot, before.ID)
 	extra := &PaneNode{Kind: PaneShell}
 	p.paneRoot, _ = SplitLeaf(p.paneRoot, terminalLeafID(p.paneRoot), SplitCols, extra)
-	p.termPanelVisible = false
+	p.releaseShellTermPane()
 	if !panelayout.LiveCapReached(p.paneRoot) {
 		t.Fatal("premise: the tree is at the cap")
 	}
-	p.termPanelVisible = true
+	p.requestShellLeaf()
 	if p.openShellLeaf() {
 		t.Fatal("openShellLeaf opened a third live terminal")
 	}
-	if p.termPanelVisible {
-		t.Fatal("a refused open left the panel flagged visible")
+	if p.shellLeafRequested() {
+		t.Fatal("a refused open left the panel requested")
 	}
 	if p.toastMessage != shellCapMessage {
 		t.Fatalf("toast = %q, want %q", p.toastMessage, shellCapMessage)
@@ -98,7 +98,7 @@ func TestTerminalSplitRefusesPastTheLiveCapWithAToast(t *testing.T) {
 func TestClosingANeighbourLeavesTheShellLeaf(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitRows)
-	p.termPanelSession = termPanelSessionPrefix + "peer"
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "peer"
 	shell := p.shellLeaf()
 	if shell == nil {
 		t.Fatal("premise: a shell leaf is on screen")
@@ -112,21 +112,22 @@ func TestClosingANeighbourLeavesTheShellLeaf(t *testing.T) {
 	if got := p.shellLeaf(); got == nil || got.ID != shell.ID {
 		t.Fatalf("shell leaf after a neighbour closed = %+v, want %d", got, shell.ID)
 	}
-	if p.termPanelSession != termPanelSessionPrefix+"peer" {
-		t.Fatalf("session = %q, want the leaf to keep owning it", p.termPanelSession)
+	if p.requireShellTermPane().Session != termPanelSessionPrefix+"peer" {
+		t.Fatalf("session = %q, want the leaf to keep owning it", p.requireShellTermPane().Session)
 	}
 }
 
 // The leaf's identity is persisted as a durable selector — the session name it
 // owns — and restore reattaches that, not a pane id.
 func TestShellLeafPersistsItsSessionSelector(t *testing.T) {
-	p := &Plugin{termPanelSession: termPanelSessionPrefix + "sidecar-main"}
+	p := &Plugin{}
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "sidecar-main"
 	encoded := p.encodePaneNode(&PaneNode{ID: 1, Kind: PaneShell})
 	if encoded == nil || encoded.Kind != contentKindShell {
 		t.Fatalf("encoded = %+v, want a shell leaf", encoded)
 	}
-	if encoded.Session != p.termPanelSession {
-		t.Fatalf("persisted session = %q, want %q", encoded.Session, p.termPanelSession)
+	if encoded.Session != p.requireShellTermPane().Session {
+		t.Fatalf("persisted session = %q, want %q", encoded.Session, p.requireShellTermPane().Session)
 	}
 
 	tests := []struct {

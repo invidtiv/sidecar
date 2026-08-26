@@ -109,9 +109,9 @@ func (p *Plugin) terminalWindowInput(termPanel bool, buffer *tty.OutputBuffer, w
 	in.AbsoluteBase, in.TotalItems, in.LoadingOlder = p.terminalHistorySummary(termPanel, buffer)
 	in.Follow, in.Offset, in.OffsetFromBottom = p.terminalScrollState(termPanel)
 	if termPanel {
-		in.Analyzer = p.panelRowAnalyzer
+		in.Analyzer = p.requireShellTermPane().RowAnalyzer
 	} else {
-		in.Analyzer = p.primaryRowAnalyzer
+		in.Analyzer = p.primaryTermPane().RowAnalyzer
 	}
 	return in
 }

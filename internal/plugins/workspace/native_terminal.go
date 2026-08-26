@@ -17,7 +17,7 @@ func (p *Plugin) Cursor() *tea.Cursor {
 	if !p.nativeTerminalActive() || !p.interactiveState.CursorVisible {
 		return nil
 	}
-	termPanel := p.interactiveState.TermPanel
+	termPanel := p.terminalPaneIsPanel(p.interactiveState.LeafID)
 	buffer, width, height, x, y, ok := p.nativeTerminalGeometry(termPanel)
 	if !ok || buffer == nil || buffer.LineCount() == 0 {
 		return nil
@@ -67,10 +67,10 @@ func (p *Plugin) nativeTerminalGeometry(termPanel bool) (*tty.OutputBuffer, int,
 	}
 
 	if termPanel {
-		if p.termPanelOutput == nil {
+		if p.requireShellTermPane().Buffer == nil {
 			return nil, 0, 0, 0, 0, false
 		}
-		return p.termPanelOutput, surface.Width, surface.Height, surface.X, surface.Y, true
+		return p.requireShellTermPane().Buffer, surface.Width, surface.Height, surface.X, surface.Y, true
 	}
 
 	var buffer *tty.OutputBuffer

@@ -89,7 +89,7 @@ func TestDiffBodyClickFocusesTheDiffLeaf(t *testing.T) {
 	if p.activePane != PanePreview {
 		t.Fatalf("file-row click activePane = %v, want preview", p.activePane)
 	}
-	if p.termPanelFocused {
+	if p.shellLeafFocused() {
 		t.Fatal("file-row click left the terminal panel focused")
 	}
 	if view.Focus != DiffTabFocusFileList {
@@ -114,7 +114,7 @@ func TestDiffBodyClickFocusesTheDiffLeaf(t *testing.T) {
 	if p.activePane != PanePreview {
 		t.Fatalf("hunk-pane click activePane = %v, want preview", p.activePane)
 	}
-	if p.termPanelFocused {
+	if p.shellLeafFocused() {
 		t.Fatal("hunk-pane click left the terminal panel focused")
 	}
 	if view.Focus != DiffTabFocusDiff {

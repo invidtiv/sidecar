@@ -937,7 +937,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		switch action.Region.ID {
 		case regionTermPanelContent:
 			p.activePane = PanePreview
-			if p.interactiveState != nil && !p.interactiveState.TermPanel {
+			if p.interactiveState != nil && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 				// Switch from agent pane to terminal panel
 				p.exitInteractiveMode()
 				return p.enterTermPanelInteractiveMode()
@@ -950,7 +950,7 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 			return p.forwardClickToTmux(action.X, action.Y)
 		case regionPreviewPane:
 			p.activePane = PanePreview
-			if p.interactiveState != nil && p.interactiveState.TermPanel {
+			if p.interactiveState != nil && p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 				// Switch from terminal panel to agent pane
 				p.exitInteractiveMode()
 				return p.enterInteractiveMode()
@@ -1293,10 +1293,10 @@ func (p *Plugin) handleMouseDoubleClick(action mouse.MouseAction) tea.Cmd {
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
-		p.termPanelFocused = true
+		p.setShellLeafFocused(true)
 		return p.selectTerminalWord(action)
 	case regionPreviewPane:
-		p.termPanelFocused = false
+		p.setShellLeafFocused(false)
 		return p.selectTerminalWord(action)
 	case regionWorktreeItem:
 		// Double-click on worktree or shell - attach to tmux session if exists
@@ -1402,11 +1402,11 @@ func (p *Plugin) handleMouseTripleClick(action mouse.MouseAction) tea.Cmd {
 	switch action.Region.ID {
 	case regionTermPanelContent:
 		p.activePane = PanePreview
-		p.termPanelFocused = true
+		p.setShellLeafFocused(true)
 		return p.selectTerminalLine(action)
 	case regionPreviewPane:
 		p.activePane = PanePreview
-		p.termPanelFocused = false
+		p.setShellLeafFocused(false)
 		return p.selectTerminalLine(action)
 	}
 	return p.handleMouseDoubleClick(action)

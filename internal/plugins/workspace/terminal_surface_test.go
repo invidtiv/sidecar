@@ -251,9 +251,9 @@ func TestTerminalSurfaceGeometryTermPanelMatchesRenderedOrigin(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := surfacePlugin(tc.shell)
 			showTermPanel(t, p, tc.layout, 50)
-			p.termPanelSession = "panel-session"
-			p.termPanelPaneID = "%13"
-			p.termPanelOutput = markerBuffer("PANEL", 3)
+			p.requireShellTermPane().Session = "panel-session"
+			p.requireShellTermPane().PaneID = "%13"
+			p.requireShellTermPane().Buffer = markerBuffer("PANEL", 3)
 
 			surface := p.terminalSurfaceGeometry(true)
 			if !surface.OK {
@@ -288,9 +288,9 @@ func TestExactlyOneHeaderRowAboveEveryTerminal(t *testing.T) {
 		t.Helper()
 		p := surfacePlugin(shell)
 		showTermPanel(t, p, layout, 50)
-		p.termPanelSession = "panel-session"
-		p.termPanelPaneID = "%13"
-		p.termPanelOutput = markerBuffer("PANEL", 3)
+		p.requireShellTermPane().Session = "panel-session"
+		p.requireShellTermPane().PaneID = "%13"
+		p.requireShellTermPane().Buffer = markerBuffer("PANEL", 3)
 		return p
 	}
 
@@ -443,32 +443,32 @@ func TestFlashHintRendersInHeaderAndAddsNoRow(t *testing.T) {
 
 func TestTerminalScrollState(t *testing.T) {
 	p := surfacePlugin(false)
-	p.previewScroll = 7
+	p.primaryTermPane().Scroll = 7
 
 	follow, offset, fromBottom := p.terminalScrollState(false)
 	if follow || offset != 7 || !fromBottom {
 		t.Fatalf("primary scroll state = (%v,%d,%v), want (false,7,true)", follow, offset, fromBottom)
 	}
 
-	p.previewFreeze.Freeze(5)
+	p.primaryTermPane().Freeze.Freeze(5)
 	follow, offset, fromBottom = p.terminalScrollState(false)
 	if follow || offset != 5 || fromBottom {
 		t.Fatalf("pinned primary scroll state = (%v,%d,%v), want (false,5,false)",
 			follow, offset, fromBottom)
 	}
-	p.previewFreeze.Release()
-	p.previewScroll = 0
+	p.primaryTermPane().Freeze.Release()
+	p.primaryTermPane().Scroll = 0
 	if follow, _, _ = p.terminalScrollState(false); !follow {
 		t.Fatal("a window against the live bottom is not following output")
 	}
 
-	p.termPanelScroll = 3
+	p.requireShellTermPane().Scroll = 3
 	follow, offset, fromBottom = p.terminalScrollState(true)
 	if follow || offset != 3 || !fromBottom {
 		t.Fatalf("panel scroll state = (%v,%d,%v), want (false,3,true)", follow, offset, fromBottom)
 	}
 
-	p.termPanelFreeze.Freeze(11)
+	p.requireShellTermPane().Freeze.Freeze(11)
 	follow, offset, fromBottom = p.terminalScrollState(true)
 	if follow || offset != 11 || fromBottom {
 		t.Fatalf("anchored panel scroll state = (%v,%d,%v), want (false,11,false)",
@@ -505,17 +505,17 @@ func TestSplitRowsMouseRowMatchesRenderedRow(t *testing.T) {
 			p := surfacePlugin(false)
 			p.height = height
 			showTermPanel(t, p, SplitRows, 50)
-			p.termPanelFocused = true
-			p.termPanelSession = "panel-session"
-			p.termPanelPaneID = "%13"
+			p.setShellLeafFocused(true)
+			p.requireShellTermPane().Session = "panel-session"
+			p.requireShellTermPane().PaneID = "%13"
 
 			width, panelHeight, _ := p.calculateTermPanelDimensions()
 			// A pane exactly the size of its viewport: every viewport row is the
 			// tmux row with the same index, so an off-by-one is unambiguous.
-			p.termPanelOutput = markerBuffer("PANEL", panelHeight)
+			p.requireShellTermPane().Buffer = markerBuffer("PANEL", panelHeight)
 			p.viewMode = ViewModeInteractive
 			p.interactiveState = &InteractiveState{
-				Active: true, TermPanel: true,
+				Active: true, LeafID: 2,
 				TargetSession: "panel-session", TargetPane: "%13",
 				PaneWidth: width, PaneHeight: panelHeight, CursorVisible: true,
 			}
@@ -696,11 +696,11 @@ func TestTermPanelRefusesASplitTheViewportCannotHold(t *testing.T) {
 		p.sidebarVisible = false
 		p.width, p.height = 10, 6 // below both floors
 		p.shellSplitAxis, p.shellSplitRatio = axis, 50
-		p.termPanelVisible = true
+		p.requestShellLeaf()
 		if p.syncShellLeaf() {
 			t.Fatalf("axis %v: a split was opened in a viewport that cannot hold one", axis)
 		}
-		if p.termPanelVisible || p.shellLeaf() != nil {
+		if p.shellLeafVisible() || p.shellLeaf() != nil {
 			t.Fatalf("axis %v: a refused split left the panel flagged up", axis)
 		}
 

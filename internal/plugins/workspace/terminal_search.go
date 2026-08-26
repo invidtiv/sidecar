@@ -22,7 +22,7 @@ type terminalSearchMatches struct {
 type terminalSearchState struct {
 	InputActive bool
 	SourceKey   string
-	TermPanel   bool
+	Panel       bool
 	Query       string
 	Matches     []terminalSearchMatch
 	Current     int
@@ -93,9 +93,9 @@ func (p *Plugin) handleTerminalSearchKey(msg tea.KeyPressMsg, interactive bool) 
 }
 
 func (p *Plugin) beginTerminalSearch() tea.Cmd {
-	termPanel := p.termPanelVisible && p.termPanelFocused
+	termPanel := p.shellLeafVisible() && p.shellLeafFocused()
 	if p.viewMode == ViewModeInteractive && p.interactiveState != nil {
-		termPanel = p.interactiveState.TermPanel
+		termPanel = p.terminalPaneIsPanel(p.interactiveState.LeafID)
 	}
 	source, ok := p.terminalHistoryFor(termPanel)
 	if !ok {
@@ -113,7 +113,7 @@ func (p *Plugin) beginTerminalSearch() tea.Cmd {
 	}
 	p.terminalSearch.InputActive = true
 	p.terminalSearch.SourceKey = source.Key
-	p.terminalSearch.TermPanel = termPanel
+	p.terminalSearch.Panel = termPanel
 	p.terminalSearch.Generation++
 	searchGen := p.terminalSearch.Generation
 	base, _, absolute := source.Buffer.AbsoluteRange()
@@ -161,7 +161,7 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 		p.terminalHistory[msg.Source.Key] = state
 		return nil
 	}
-	current, ok := p.terminalHistoryFor(msg.Source.TermPanel)
+	current, ok := p.terminalHistoryFor(p.terminalPaneIsPanel(msg.Source.LeafID))
 	if !ok || current.Key != msg.Source.Key || current.Buffer != msg.Source.Buffer {
 		p.terminalHistory[msg.Source.Key] = state
 		return nil
@@ -178,19 +178,19 @@ func (p *Plugin) applyTerminalSearchHistory(msg terminalSearchHistoryLoadedMsg) 
 	p.terminalHistory[msg.Source.Key] = state
 	// A window placed from the live bottom rides the renumbering out; only one
 	// pinned to an absolute row has to be shifted by the rows just prepended.
-	if msg.Source.TermPanel {
-		p.termPanelFreeze.Rebase(added)
-		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.terminalMaxScroll(true))
+	if p.terminalPaneIsPanel(msg.Source.LeafID) {
+		p.requireShellTermPane().Freeze.Rebase(added)
+		p.requireShellTermPane().Scroll = min(p.requireShellTermPane().Scroll+scrollLines, p.terminalMaxScroll(true))
 	} else {
-		p.previewFreeze.Rebase(added)
-		p.previewScroll = min(p.previewScroll+scrollLines, p.terminalMaxScroll(false))
+		p.primaryTermPane().Freeze.Rebase(added)
+		p.primaryTermPane().Scroll = min(p.primaryTermPane().Scroll+scrollLines, p.terminalMaxScroll(false))
 	}
 	p.recomputeTerminalSearch()
 	if !p.terminalSearch.InputActive {
 		p.revealTerminalSearchMatch()
 	}
 	if more {
-		return p.loadOlderTerminalHistory(msg.Source.TermPanel, remainder)
+		return p.loadOlderTerminalHistory(p.terminalPaneIsPanel(msg.Source.LeafID), remainder)
 	}
 	return nil
 }
@@ -219,7 +219,7 @@ func (p *Plugin) recomputeTerminalSearch() {
 	if len(queryTokens) == 0 {
 		return
 	}
-	source, ok := p.terminalHistoryFor(search.TermPanel)
+	source, ok := p.terminalHistoryFor(search.Panel)
 	if !ok || source.Key != search.SourceKey || source.Buffer == nil {
 		return
 	}
@@ -294,7 +294,7 @@ func (p *Plugin) revealTerminalSearchMatch() {
 	if len(search.Matches) == 0 || search.Current < 0 || search.Current >= len(search.Matches) {
 		return
 	}
-	source, ok := p.terminalHistoryFor(search.TermPanel)
+	source, ok := p.terminalHistoryFor(search.Panel)
 	if !ok || source.Key != search.SourceKey {
 		return
 	}
@@ -309,24 +309,24 @@ func (p *Plugin) revealTerminalSearchMatch() {
 	// the match off centre wherever the two disagree (td-bbbbfe). No panel drawn
 	// means no viewport to centre in; the clamp then pins the scroll to the top
 	// of the (empty) range.
-	if search.TermPanel {
+	if search.Panel {
 		p.thawTerminalWindow(true)
 		maxScroll := p.terminalMaxScroll(true)
 		height := p.terminalViewportLayoutFor(true).DisplayHeight
 		start := min(max(localLine-height/2, 0), maxScroll)
-		p.termPanelScroll = maxScroll - start
+		p.requireShellTermPane().Scroll = maxScroll - start
 		return
 	}
 	p.thawTerminalWindow(false)
 	maxScroll := p.terminalMaxScroll(false)
 	height := p.terminalViewportLayoutFor(false).DisplayHeight
 	start := min(max(localLine-height/2, 0), maxScroll)
-	p.previewScroll = maxScroll - start
+	p.primaryTermPane().Scroll = maxScroll - start
 }
 
 func (p *Plugin) terminalSearchMatches(termPanel bool) *terminalSearchMatches {
 	search := &p.terminalSearch
-	if search.Query == "" || search.TermPanel != termPanel {
+	if search.Query == "" || search.Panel != termPanel {
 		return nil
 	}
 	source, ok := p.terminalHistoryFor(termPanel)

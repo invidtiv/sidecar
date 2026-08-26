@@ -85,11 +85,11 @@ func TestHandleMouseScrollHonorsFullWheelDelta(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 20
+	p.primaryTermPane().Scroll = 20
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -3})
-	if p.previewScroll != 23 {
-		t.Fatalf("previewScroll = %d, want 23 after Delta -3", p.previewScroll)
+	if p.primaryTermPane().Scroll != 23 {
+		t.Fatalf("previewScroll = %d, want 23 after Delta -3", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -98,16 +98,16 @@ func TestHandleMouseScrollHonorsFullWheelDeltaInTerminalPanel(t *testing.T) {
 	// window rule, which does not step past the top of what is loaded, so a
 	// fixture with no output at all has nowhere for the delta to land.
 	p := passiveWheelPanelPlugin(t)
-	p.termPanelScroll = 10
+	p.requireShellTermPane().Scroll = 10
 	region := &mouse.Region{ID: regionTermPanelContent}
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -3, Region: region})
-	if p.termPanelScroll != 13 {
-		t.Fatalf("termPanelScroll = %d, want 13 after Delta -3", p.termPanelScroll)
+	if p.requireShellTermPane().Scroll != 13 {
+		t.Fatalf("termPanelScroll = %d, want 13 after Delta -3", p.requireShellTermPane().Scroll)
 	}
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 3, Region: region})
-	if p.termPanelScroll != 10 {
-		t.Fatalf("termPanelScroll = %d, want 10 after Delta +3", p.termPanelScroll)
+	if p.requireShellTermPane().Scroll != 10 {
+		t.Fatalf("termPanelScroll = %d, want 10 after Delta +3", p.requireShellTermPane().Scroll)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 20
+	p.primaryTermPane().Scroll = 20
 	// The burst takes the time from its caller, so the whole flick is driven here
 	// rather than waited out.
 	at := time.Now()
@@ -124,8 +124,8 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 	p.terminalWheel(false).Add(0, at)
 
 	p.wheelTerminal(false, mouse.MouseAction{}, -3)
-	if p.previewScroll != 20 {
-		t.Fatalf("previewScroll = %d, want the debounced notch held back", p.previewScroll)
+	if p.primaryTermPane().Scroll != 20 {
+		t.Fatalf("previewScroll = %d, want the debounced notch held back", p.primaryTermPane().Scroll)
 	}
 	if got := p.terminalWheel(false).Pending(); got != -3 {
 		t.Fatalf("held-back delta = %d, want the whole notch retained (-3)", got)
@@ -133,9 +133,9 @@ func TestScrollBurstAccumulatesDebouncedDeltas(t *testing.T) {
 
 	at = at.Add(2 * tty.WheelDebounceInterval)
 	p.wheelTerminal(false, mouse.MouseAction{}, -3)
-	if p.previewScroll != 26 {
+	if p.primaryTermPane().Scroll != 26 {
 		t.Fatalf("previewScroll = %d, want the held-back notch to arrive with the next one (26)",
-			p.previewScroll)
+			p.primaryTermPane().Scroll)
 	}
 	if got := p.terminalWheel(false).Pending(); got != 0 {
 		t.Fatalf("delta left pending after a flush = %d", got)
@@ -361,10 +361,10 @@ func attachLiveTerminal(p *Plugin, mouseReporting bool) *tty.Model {
 		CursorVisible:         true,
 		OutputBuf:             tty.NewOutputBuffer(outputBufferCap),
 	}
-	if p.interactiveState.TermPanel {
-		p.panelTerminal = model
+	if p.terminalPaneIsPanel(p.interactiveState.LeafID) {
+		p.requireShellTermPane().Terminal = model
 	} else {
-		p.primaryTerminal = model
+		p.primaryTermPane().Terminal = model
 	}
 	return model
 }
@@ -509,7 +509,7 @@ func TestAWheelOverTheSidebarStaysWithTheLiveTerminal(t *testing.T) {
 		{Name: "two", TmuxName: "sc-two"},
 	}
 	p.selectedShellIdx = 0
-	p.previewScroll = 12
+	p.primaryTermPane().Scroll = 12
 	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{
@@ -517,8 +517,8 @@ func TestAWheelOverTheSidebarStaysWithTheLiveTerminal(t *testing.T) {
 		Region: &mouse.Region{ID: regionSidebar},
 	})
 
-	if p.previewScroll != 15 {
-		t.Fatalf("previewScroll = %d, want the notch to have scrolled the terminal to 15", p.previewScroll)
+	if p.primaryTermPane().Scroll != 15 {
+		t.Fatalf("previewScroll = %d, want the notch to have scrolled the terminal to 15", p.primaryTermPane().Scroll)
 	}
 	if p.viewMode != ViewModeInteractive || p.interactiveState == nil || !p.interactiveState.Active {
 		t.Fatal("a notch over the sidebar dropped the user out of interactive mode")

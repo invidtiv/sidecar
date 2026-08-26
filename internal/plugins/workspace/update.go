@@ -139,8 +139,8 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 			// Poll captures cursor atomically - no separate query needed
 			resizeCmds := []tea.Cmd{p.resizeInteractivePaneCmd(), p.pollInteractivePaneImmediate()}
 			// Also resize the non-interactive pane so both sides match the new window dimensions
-			if p.termPanelVisible {
-				if p.interactiveState.TermPanel {
+			if p.shellLeafVisible() {
+				if p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 					resizeCmds = append(resizeCmds, p.resizeSelectedPaneCmd())
 				} else {
 					resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
@@ -150,7 +150,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Resize selected pane and terminal panel so capture-pane output matches preview width
 		resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
-		if p.termPanelVisible {
+		if p.shellLeafVisible() {
 			resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
 		}
 		return p, tea.Batch(resizeCmds...)
@@ -777,7 +777,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				p.updateBracketedPasteMode(msg.Output)
 				// Use cursor position captured atomically with output (no separate query needed)
@@ -840,7 +840,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Use interactive polling in interactive mode for fast response
 		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
@@ -926,7 +926,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		}
 		// Use interactive polling for the selected worktree (td-8856c9: no stagger)
 		if !p.primaryTerminalOwns("agent", msg.WorkspaceName) && p.viewMode == ViewModeInteractive && !p.selectingShell() &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 			if wt := p.selectedWorktree(); wt != nil && wt.IdentityKey() == msg.WorkspaceName {
 				cmds = append(cmds, p.pollInteractivePane())
 				// Use cursor position captured atomically with output
@@ -1389,7 +1389,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		cmds = appendActivityAnimationCmd(cmds, p.startActivityAnimation())
 		// Update bracketed paste mode and cursor position if in interactive mode (td-79ab6163)
 		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 			if selectedShell := p.getSelectedShell(); selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				p.updateBracketedPasteMode(msg.Output)
 				// Use cursor position captured atomically with output (no separate query needed)
@@ -1444,7 +1444,7 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 		// If visible AND focused, keep the fast interval (pollIntervalActive/pollIntervalIdle)
 		// Use interactive polling in interactive mode for fast response
 		if !p.primaryTerminalOwns("shell", msg.TmuxName) && p.viewMode == ViewModeInteractive && p.selectingShell() &&
-			p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
+			p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 			if selectedShell != nil && selectedShell.TmuxName == msg.TmuxName {
 				cmds = append(cmds, p.pollInteractivePane())
 				return p, tea.Batch(cmds...)
@@ -2101,18 +2101,18 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 
 	case TermPanelSessionCreatedMsg:
 		if p.ctx != nil && p.ctx.Logger != nil {
-			p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.termPanelSession)
+			p.ctx.Logger.Debug("termPanel: SessionCreatedMsg", "session", msg.SessionName, "pane", msg.PaneID, "err", msg.Err, "current", p.requireShellTermPane().Session)
 		}
 		if msg.Err != nil {
-			p.termPanelVisible = false
-			p.termPanelFocused = false
+			p.releaseShellTermPane()
+			p.setShellLeafFocused(false)
 			if p.pendingTermPanelSeed != nil && p.pendingTermPanelSeed.session == msg.SessionName {
 				p.pendingTermPanelSeed = nil
 			}
 			return p, appmsg.Alert(notify.SourceSession, notify.SeverityError, "Terminal: "+msg.Err.Error())
 		}
-		if msg.SessionName == p.termPanelSession {
-			p.termPanelPaneID = msg.PaneID
+		if msg.SessionName == p.requireShellTermPane().Session {
+			p.requireShellTermPane().PaneID = msg.PaneID
 			// Session ready — resize to match split dimensions. The shared
 			// terminal model opens during reconciliation after this update.
 			return p, tea.Batch(
@@ -2206,14 +2206,14 @@ func (p *Plugin) completeInitialWorkspaceLoad() []tea.Cmd {
 
 	// Restore terminal panel only after selection is final, since its session
 	// identity depends on the selected shell/worktree.
-	if p.termPanelVisible && p.termPanelSession == "" {
+	if p.shellLeafVisible() && p.requireShellTermPane().Session == "" {
 		// A restored leaf reattaches the session it owned; createTermPanelSession
 		// recreates it in the workspace's workdir when it is gone.
 		sessionName := shellSessionSelector(p.restoredShellSession, p.termPanelSessionName())
 		p.restoredShellSession = ""
 		if sessionName != "" {
-			p.termPanelSession = sessionName
-			p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
+			p.requireShellTermPane().Session = sessionName
+			p.requireShellTermPane().Buffer = tty.NewOutputBuffer(outputBufferCap)
 			commands = append(commands, p.createTermPanelSession(sessionName))
 		}
 	}

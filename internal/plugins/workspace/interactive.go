@@ -207,7 +207,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	if target != "" {
 		// When terminal panel is visible, agent pane only gets a portion
 		var previewWidth, previewHeight int
-		if p.termPanelVisible {
+		if p.shellLeafVisible() {
 			previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 		} else {
 			previewWidth, previewHeight = p.calculatePreviewDimensions()
@@ -230,6 +230,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// Initialize interactive state
 	p.interactiveState = &InteractiveState{
 		Active:        true,
+		LeafID:        p.terminalLeafID(false),
 		TargetPane:    paneID,
 		TargetSession: sessionName,
 		LastKeyTime:   time.Now(),
@@ -241,7 +242,7 @@ func (p *Plugin) enterInteractiveMode() tea.Cmd {
 	// reporting on it, and entering from the sidebar without this is interactive
 	// mode with no visible cursor at all (td-62b8ab).
 	p.activePane = PanePreview
-	p.selectionTermPanel = false
+	p.selectionPanel = false
 	p.clearTerminalSelection()
 
 	p.viewMode = ViewModeInteractive
@@ -276,7 +277,7 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 	if !features.IsEnabled(features.TmuxInteractiveInput.Name) {
 		return nil
 	}
-	if p.termPanelSession == "" || !p.termPanelVisible {
+	if p.requireShellTermPane().Session == "" || !p.shellLeafVisible() {
 		return nil
 	}
 	// Resize terminal panel pane to match its split dimensions. A split too
@@ -286,8 +287,8 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		return nil
 	}
 
-	sessionName := p.termPanelSession
-	paneID := p.termPanelPaneID
+	sessionName := p.requireShellTermPane().Session
+	paneID := p.requireShellTermPane().PaneID
 	target := paneID
 	if target == "" {
 		target = sessionName
@@ -307,19 +308,19 @@ func (p *Plugin) enterTermPanelInteractiveMode() tea.Cmd {
 		return nil
 	})
 
-	p.termPanelScroll = 0 // Reset scroll so output aligns with cursor position
+	p.requireShellTermPane().Scroll = 0 // Reset scroll so output aligns with cursor position
 	p.releaseTerminalWindowPin(true)
 	p.interactiveState = &InteractiveState{
 		Active:        true,
+		LeafID:        p.terminalLeafID(true),
 		TargetPane:    paneID,
 		TargetSession: sessionName,
-		TermPanel:     true,
 		LastKeyTime:   time.Now(),
 		CursorVisible: true,
 		PaneOnEntry:   p.activePane,
 	}
 	p.activePane = PanePreview
-	p.selectionTermPanel = true
+	p.selectionPanel = true
 	p.clearTerminalSelection()
 	p.viewMode = ViewModeInteractive
 
@@ -387,7 +388,7 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 	// Determine dimensions: terminal panel target gets terminal panel dims,
 	// agent target gets split-aware dims, or full dims if no panel.
 	var previewWidth, previewHeight int
-	isTermPanel := p.termPanelVisible && (target == p.termPanelPaneID || target == p.termPanelSession)
+	isTermPanel := p.shellLeafVisible() && (target == p.requireShellTermPane().PaneID || target == p.requireShellTermPane().Session)
 	if isTermPanel {
 		var drawn bool
 		previewWidth, previewHeight, drawn = p.calculateTermPanelDimensions()
@@ -395,7 +396,7 @@ func (p *Plugin) resizeTmuxTargetCmd(target string) tea.Cmd {
 			// No panel is drawn at this size, so there is no geometry to assert.
 			return nil
 		}
-	} else if p.termPanelVisible {
+	} else if p.shellLeafVisible() {
 		previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
@@ -438,14 +439,14 @@ func (p *Plugin) maybeResizeInteractivePane(paneWidth, paneHeight int) tea.Cmd {
 	}
 
 	var previewWidth, previewHeight int
-	isTermPanel := p.interactiveState.TermPanel
-	if isTermPanel && p.termPanelVisible {
+	isTermPanel := p.terminalPaneIsPanel(p.interactiveState.LeafID)
+	if isTermPanel && p.shellLeafVisible() {
 		var drawn bool
 		previewWidth, previewHeight, drawn = p.calculateTermPanelDimensions()
 		if !drawn {
 			return nil
 		}
-	} else if p.termPanelVisible {
+	} else if p.shellLeafVisible() {
 		previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 	} else {
 		previewWidth, previewHeight = p.calculatePreviewDimensions()
@@ -529,20 +530,20 @@ func (p *Plugin) cancelDeferredPaneResize() {
 	if p.interactiveState != nil {
 		p.interactiveState.ResizeRetryPending = false
 	}
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.CancelDeferredResize()
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.CancelDeferredResize()
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.CancelDeferredResize()
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.CancelDeferredResize()
 	}
 }
 
 func (p *Plugin) setTerminalResizeHold(hold bool) {
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.SetResizeHold(hold)
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.SetResizeHold(hold)
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.SetResizeHold(hold)
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.SetResizeHold(hold)
 	}
 }
 
@@ -596,7 +597,7 @@ func (p *Plugin) terminalModelForTarget(target string) *tty.Model {
 	if target == "" {
 		return nil
 	}
-	for _, model := range []*tty.Model{p.primaryTerminal, p.panelTerminal} {
+	for _, model := range []*tty.Model{p.primaryTermPane().Terminal, p.requireShellTermPane().Terminal} {
 		if model != nil && model.IsActive() && model.GetTarget() == target {
 			return model
 		}
@@ -631,7 +632,7 @@ func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int
 		if !drawn {
 			return nil
 		}
-	} else if p.termPanelVisible {
+	} else if p.shellLeafVisible() {
 		width, height = p.calculateAgentPaneDimensions()
 	} else {
 		width, height = p.calculatePreviewDimensions()
@@ -653,7 +654,7 @@ func (p *Plugin) maybeResizeVisiblePane(target string, paneWidth, paneHeight int
 
 func (p *Plugin) liveTerminalOutputBuffer(termPanel bool) *tty.OutputBuffer {
 	if termPanel {
-		return p.termPanelOutput
+		return p.requireShellTermPane().Buffer
 	}
 	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
@@ -799,7 +800,7 @@ func (p *Plugin) handleInteractiveKeys(msg tea.KeyPressMsg) tea.Cmd {
 func (p *Plugin) interactiveTerminal() (*tty.Model, tea.Cmd) {
 	terminal := p.activeInteractiveTerminal()
 	if terminal == nil {
-		if p.primaryTerminal == nil || p.panelTerminal == nil {
+		if p.primaryTermPane().Terminal == nil || p.requireShellTermPane().Terminal == nil {
 			p.resetTerminalModels()
 		}
 		terminal = p.activeInteractiveTerminal()
@@ -833,8 +834,8 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		cmd := p.toggleTermPanel()
 		// If interactive mode survived the toggle (agent pane still active),
 		// keep focus on agent pane and resize the interactive pane.
-		if p.interactiveState != nil && p.interactiveState.Active && !p.interactiveState.TermPanel {
-			p.termPanelFocused = false
+		if p.interactiveState != nil && p.interactiveState.Active && !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
+			p.setShellLeafFocused(false)
 			return tea.Batch(cmd, p.resizeInteractivePaneCmd()), true
 		}
 		return cmd, true
@@ -845,7 +846,7 @@ func (p *Plugin) interactiveKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return p.terminalConfig().ResolveSurfaceChord(msg, tty.SurfaceChords{
 		Copy: p.copyInteractiveSelectionCmd,
 		SelectAll: func() tea.Cmd {
-			p.selectAllTerminalOutput(p.interactiveState.TermPanel)
+			p.selectAllTerminalOutput(p.terminalPaneIsPanel(p.interactiveState.LeafID))
 			return nil
 		},
 		Scrollback: func(key tea.KeyPressMsg) (tea.Cmd, bool) {
@@ -863,7 +864,7 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 		return
 	}
 	p.interactiveState.LastKeyTime = time.Now()
-	if p.previewScroll == 0 && !p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll == 0 && !p.primaryTermPane().Freeze.Active() {
 		return
 	}
 	// A paste is the user's own act on the viewport, so it snaps back
@@ -882,21 +883,21 @@ func (p *Plugin) beforeInteractiveSend(msg tea.KeyPressMsg) {
 // screen are the ones the reader was reading, and the window keeps following
 // output from there as soon as it is back at zero.
 func (p *Plugin) leaveInteractiveMode() tea.Cmd {
-	termPanel := p.interactiveState != nil && p.interactiveState.TermPanel
+	termPanel := p.interactiveState != nil && p.terminalPaneIsPanel(p.interactiveState.LeafID)
 	// Esc is a navigation back: restore the window that held focus before the
 	// live pane claimed the keyboard, so Enter-from-the-list still returns to
 	// the list. Plugin blur uses exitInteractiveMode directly and must not.
 	if p.interactiveState != nil {
-		p.termPanelFocused = p.interactiveState.TermPanel
+		p.setShellLeafFocused(p.terminalPaneIsPanel(p.interactiveState.LeafID))
 		p.activePane = p.interactiveState.PaneOnEntry
 	}
 	p.exitInteractiveMode()
 	if termPanel {
-		p.termPanelScroll = tty.LeaveLiveWindow(&p.termPanelFreeze, p.termPanelScroll, p.terminalMaxScroll(true))
-		p.termPanelFreezeDoc = false
+		p.requireShellTermPane().Scroll = tty.LeaveLiveWindow(&p.requireShellTermPane().Freeze, p.requireShellTermPane().Scroll, p.terminalMaxScroll(true))
+		p.requireShellTermPane().FreezeDoc = false
 	} else {
-		p.previewScroll = tty.LeaveLiveWindow(&p.previewFreeze, p.previewScroll, p.terminalWindowBound(false))
-		p.previewFreezeDoc = false
+		p.primaryTermPane().Scroll = tty.LeaveLiveWindow(&p.primaryTermPane().Freeze, p.primaryTermPane().Scroll, p.terminalWindowBound(false))
+		p.primaryTermPane().FreezeDoc = false
 	}
 	return p.pollSelectedAgentNowIfVisible()
 }
@@ -912,7 +913,7 @@ func (p *Plugin) noteSessionEnded() tea.Cmd {
 	// happens whether or not the user was typing: a shell killed from outside
 	// must close too.
 	suspects := make([]tea.Cmd, 0, 2)
-	for _, target := range []workspaceTerminalTarget{p.primaryTerminalTarget, p.panelTerminalTarget} {
+	for _, target := range []workspaceTerminalTarget{p.primaryTermPane().Target, p.requireShellTermPane().Target} {
 		if target.Source != "shell" {
 			continue
 		}
@@ -938,10 +939,10 @@ func (p *Plugin) attachFromInteractive() tea.Cmd {
 	if !fullTmuxAttachEnabled() {
 		return nil
 	}
-	isTermPanel := p.interactiveState != nil && p.interactiveState.TermPanel
+	isTermPanel := p.interactiveState != nil && p.terminalPaneIsPanel(p.interactiveState.LeafID)
 	p.exitInteractiveMode()
-	if isTermPanel && p.termPanelSession != "" {
-		sessionName := p.termPanelSession
+	if isTermPanel && p.requireShellTermPane().Session != "" {
+		sessionName := p.requireShellTermPane().Session
 		return p.attachWithResize(sessionName, sessionName, "terminal", func(err error) tea.Msg {
 			return TmuxAttachFinishedMsg{Err: err}
 		})
@@ -1055,11 +1056,11 @@ func (p *Plugin) terminalWheelAtBoundary(termPanel bool, action mouse.MouseActio
 	if route == tty.WheelPane {
 		return false
 	}
-	maximum, offset := p.terminalMaxScroll(false), p.previewScroll
-	freeze := &p.previewFreeze
+	maximum, offset := p.terminalMaxScroll(false), p.primaryTermPane().Scroll
+	freeze := &p.primaryTermPane().Freeze
 	if termPanel {
-		maximum, offset = p.terminalMaxScroll(true), p.termPanelScroll
-		freeze = &p.termPanelFreeze
+		maximum, offset = p.terminalMaxScroll(true), p.requireShellTermPane().Scroll
+		freeze = &p.requireShellTermPane().Freeze
 	}
 	position := maximum - offset
 	if freeze.Active() {
@@ -1126,7 +1127,7 @@ func (p *Plugin) sendTerminalWheelNotches(termPanel bool, up bool, col, row, not
 // while it is driving a live pane, and the component's otherwise.
 func (p *Plugin) noteTerminalInputActivity(termPanel bool) {
 	if p.interactiveState != nil && p.interactiveState.Active &&
-		p.interactiveState.TermPanel == termPanel {
+		p.terminalPaneIsPanel(p.interactiveState.LeafID) == termPanel {
 		p.interactiveState.LastKeyTime = time.Now()
 	}
 	if model := p.terminalModelForSurface(termPanel); model != nil {
@@ -1142,16 +1143,16 @@ func (p *Plugin) noteTerminalInputActivity(termPanel bool) {
 // the same reason. Nothing is touched when the window is already live.
 func (p *Plugin) pinTerminalWindowToLive(termPanel bool) {
 	if termPanel {
-		if p.termPanelScroll != 0 || p.termPanelFreeze.Active() {
+		if p.requireShellTermPane().Scroll != 0 || p.requireShellTermPane().Freeze.Active() {
 			p.clearTerminalSelection()
 			// A jump chooses its own window, so the pin is dropped rather than thawed.
 			p.releaseTerminalWindowPin(true)
-			p.termPanelScroll = 0
+			p.requireShellTermPane().Scroll = 0
 			p.cancelTerminalHistoryIntent(true)
 		}
 		return
 	}
-	if p.previewScroll == 0 && !p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll == 0 && !p.primaryTermPane().Freeze.Active() {
 		return
 	}
 	p.clearTerminalSelection()
@@ -1187,7 +1188,7 @@ func (p *Plugin) handleWatchedScrollbackKey(msg tea.KeyPressMsg) (bool, tea.Cmd)
 	if p.activePane != PanePreview || !p.previewShowsTerminal() {
 		return false, nil
 	}
-	termPanel := p.termPanelFocused && p.termPanelVisible
+	termPanel := p.shellLeafFocused() && p.shellLeafVisible()
 	move, ok := tty.MapScrollbackKey(tty.ScrollbackWatched, msg, p.terminalSurfaceRows(termPanel))
 	if !ok {
 		return false, nil
@@ -1226,7 +1227,7 @@ func (p *Plugin) applyScrollbackMove(termPanel bool, move tty.ScrollbackMove) te
 	case move.ToOldest:
 		if termPanel {
 			p.releaseTerminalWindowPin(true)
-			p.termPanelScroll = p.terminalMaxScroll(true)
+			p.requireShellTermPane().Scroll = p.terminalMaxScroll(true)
 			return p.loadOlderTerminalHistory(true, historyLoadChunk)
 		}
 		p.jumpPreviewWindow(p.terminalMaxScroll(false))
@@ -1234,7 +1235,7 @@ func (p *Plugin) applyScrollbackMove(termPanel bool, move tty.ScrollbackMove) te
 	case move.ToLive:
 		if termPanel {
 			p.releaseTerminalWindowPin(true)
-			p.termPanelScroll = 0
+			p.requireShellTermPane().Scroll = 0
 			p.cancelTerminalHistoryIntent(true)
 			return nil
 		}
@@ -1287,9 +1288,9 @@ func (p *Plugin) scrollTerminalWindow(termPanel bool, delta int) tea.Cmd {
 // surfaces answer it from their own window, which is the same window the
 // renderer drew.
 func (p *Plugin) terminalHistoryIntentForScroll(termPanel bool, delta int) tea.Cmd {
-	offset := p.previewScroll
+	offset := p.primaryTermPane().Scroll
 	if termPanel {
-		offset = p.termPanelScroll
+		offset = p.requireShellTermPane().Scroll
 	}
 	if delta < 0 && offset == 0 {
 		p.cancelTerminalHistoryIntent(termPanel)
@@ -1321,7 +1322,7 @@ func (p *Plugin) forwardClickToTmux(x, y int) tea.Cmd {
 // the one question the keyboard's position answers: which of the two surfaces a
 // live notch or click belongs to, wherever the pointer is.
 func (p *Plugin) interactiveTermPanel() bool {
-	return p.interactiveState != nil && p.interactiveState.TermPanel
+	return p.interactiveState != nil && p.terminalPaneIsPanel(p.interactiveState.LeafID)
 }
 
 // terminalMouseCoords maps a screen position onto the 1-indexed pane cell under
@@ -1332,7 +1333,7 @@ func (p *Plugin) terminalMouseCoords(termPanel bool, x, y int) (col, row int, ok
 	if p.width <= 0 || p.height <= 0 {
 		return 0, 0, false
 	}
-	if termPanel && !p.termPanelVisible {
+	if termPanel && !p.shellLeafVisible() {
 		return 0, 0, false
 	}
 
@@ -1381,7 +1382,7 @@ func (p *Plugin) pollInteractivePane() tea.Cmd {
 		interval = remaining
 	}
 
-	if p.interactiveState.TermPanel {
+	if p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 		return nil
 	}
 
@@ -1412,7 +1413,7 @@ func (p *Plugin) pollInteractivePaneImmediate() tea.Cmd {
 		delay = remaining
 	}
 
-	if p.interactiveState.TermPanel {
+	if p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 		return nil
 	}
 

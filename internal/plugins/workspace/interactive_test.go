@@ -815,8 +815,8 @@ func TestForwardScrollToTmux_ScrollUp(t *testing.T) {
 	}
 	givePaneScrollableOutput(p, 120)
 	p.wheelTerminal(false, mouse.MouseAction{}, -1)
-	if p.previewScroll != 1 {
-		t.Errorf("expected the window 1 row back from the live bottom, got %d", p.previewScroll)
+	if p.primaryTermPane().Scroll != 1 {
+		t.Errorf("expected the window 1 row back from the live bottom, got %d", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -828,10 +828,10 @@ func TestForwardScrollToTmux_ScrollDown(t *testing.T) {
 		terminalHistory: make(map[string]tty.HistoryReach),
 	}
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 1
+	p.primaryTermPane().Scroll = 1
 	p.wheelTerminal(false, mouse.MouseAction{}, 1)
-	if p.previewScroll != 0 {
-		t.Errorf("expected the window back at the live bottom, got %d rows back", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Errorf("expected the window back at the live bottom, got %d rows back", p.primaryTermPane().Scroll)
 	}
 }
 

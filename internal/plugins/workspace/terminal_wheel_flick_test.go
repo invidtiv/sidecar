@@ -54,18 +54,18 @@ func TestAFlickTravelsTheSameDistanceOnBothTerminalSurfaces(t *testing.T) {
 	preview := flickWheelPlugin(t, gap)
 	flickOver(preview, regionPreviewPane, events)
 
-	if panel.termPanelScroll == 0 {
+	if panel.requireShellTermPane().Scroll == 0 {
 		t.Fatal("the flick over the panel moved nothing")
 	}
-	if panel.termPanelScroll != preview.previewScroll {
+	if panel.requireShellTermPane().Scroll != preview.primaryTermPane().Scroll {
 		t.Fatalf("panel travelled %d rows, preview %d — one flick, two distances",
-			panel.termPanelScroll, preview.previewScroll)
+			panel.requireShellTermPane().Scroll, preview.primaryTermPane().Scroll)
 	}
 	// The coalescing is real: an uncoalesced flick lands on every line of every
 	// event it emitted.
-	if panel.termPanelScroll >= events*mouse.WheelScrollLines {
+	if panel.requireShellTermPane().Scroll >= events*mouse.WheelScrollLines {
 		t.Fatalf("panel travelled %d rows for %d events: the flick was not coalesced",
-			panel.termPanelScroll, events)
+			panel.requireShellTermPane().Scroll, events)
 	}
 }
 
@@ -79,20 +79,20 @@ func TestCrossingBetweenTerminalSurfacesEndsTheFlickItLeaves(t *testing.T) {
 	// Two notches over the preview: the first lands, the second is held back
 	// inside the debounce window.
 	flickOver(p, regionPreviewPane, 2)
-	if p.previewScroll != mouse.WheelScrollLines {
+	if p.primaryTermPane().Scroll != mouse.WheelScrollLines {
 		t.Fatalf("previewScroll = %d, want only the first notch (%d) landed",
-			p.previewScroll, mouse.WheelScrollLines)
+			p.primaryTermPane().Scroll, mouse.WheelScrollLines)
 	}
 
 	flickOver(p, regionTermPanelContent, 1)
 
-	if p.termPanelScroll != mouse.WheelScrollLines {
+	if p.requireShellTermPane().Scroll != mouse.WheelScrollLines {
 		t.Fatalf("termPanelScroll = %d, want only the panel's own notch (%d)",
-			p.termPanelScroll, mouse.WheelScrollLines)
+			p.requireShellTermPane().Scroll, mouse.WheelScrollLines)
 	}
-	if p.previewScroll != mouse.WheelScrollLines {
+	if p.primaryTermPane().Scroll != mouse.WheelScrollLines {
 		t.Fatalf("previewScroll = %d, want the preview left where the pointer left it",
-			p.previewScroll)
+			p.primaryTermPane().Scroll)
 	}
 	if pending := p.terminalWheel(false).Pending(); pending != 0 {
 		t.Fatalf("the preview still holds %d lines of a flick the pointer has left", pending)
@@ -139,17 +139,17 @@ func TestHeldWheelReusesOneProjectWorkspacesFrameOnBothTerminalSurfaces(t *testi
 func TestALocalNotchCountsAsActivityOnTheSurfaceItScrolled(t *testing.T) {
 	p := watchedWheelPlugin(t, false)
 	stale := time.Now().Add(-time.Hour)
-	p.primaryTerminal.State.LastKeyTime = stale
+	p.primaryTermPane().Terminal.State.LastKeyTime = stale
 
 	p.handleMouseScroll(mouse.MouseAction{
 		Type: mouse.ActionScrollUp, Delta: -1, X: 60, Y: 8,
 		Region: &mouse.Region{ID: regionPreviewPane},
 	})
 
-	if got := p.primaryTerminal.State.LastKeyTime; !got.After(stale) {
+	if got := p.primaryTermPane().Terminal.State.LastKeyTime; !got.After(stale) {
 		t.Fatal("a local notch left the pane's capture cadence decaying towards the idle tier")
 	}
-	if interval := tty.CalculatePollingInterval(p.primaryTerminal.State.LastKeyTime); interval != tty.PollingDecayFast {
+	if interval := tty.CalculatePollingInterval(p.primaryTermPane().Terminal.State.LastKeyTime); interval != tty.PollingDecayFast {
 		t.Fatalf("the scrolled pane repaints every %v, want the active tier %v",
 			interval, tty.PollingDecayFast)
 	}

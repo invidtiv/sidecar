@@ -64,13 +64,13 @@ func showLiveShellLeaf(t *testing.T, p *Plugin) string {
 	t.Helper()
 	showTermPanel(t, p, SplitCols, 50)
 	p.View(p.width, p.height)
-	if p.termPanelSession == "" {
-		p.termPanelSession = p.termPanelSessionName()
+	if p.requireShellTermPane().Session == "" {
+		p.requireShellTermPane().Session = p.termPanelSessionName()
 	}
-	if p.shellLeaf() == nil || p.termPanelSession == "" {
+	if p.shellLeaf() == nil || p.requireShellTermPane().Session == "" {
 		t.Fatal("fixture failed to open a shell leaf with a session")
 	}
-	return p.termPanelSession
+	return p.requireShellTermPane().Session
 }
 
 // The M4 proof's first half: read the layout back, speak it as a spec with the
@@ -182,7 +182,7 @@ func TestLayoutApplySpec_RoundTripMovesPrimaryToRightColumn(t *testing.T) {
 	if leaf := panelayout.FirstOfKind(p.paneRoot, panelayout.Document); leaf == nil || len(p.docs[leaf.ContentID].tabs.Items) != 2 {
 		t.Error("the file pane did not come back with both tabs")
 	}
-	if p.termPanelSession == "" || p.shellLeaf() == nil || !p.termPanelVisible {
+	if p.requireShellTermPane().Session == "" || p.shellLeaf() == nil || !p.shellLeafVisible() {
 		t.Error("the carried shell did not survive the apply")
 	}
 }
@@ -220,7 +220,7 @@ func TestLayoutApplySpec_OmittedLiveShellDeclinesNamingSession(t *testing.T) {
 	if after := encodedTree(t, p); after != before {
 		t.Fatalf("decline mutated the tree:\nbefore %s\nafter  %s", before, after)
 	}
-	if p.shellLeaf() == nil || p.termPanelSession != session {
+	if p.shellLeaf() == nil || p.requireShellTermPane().Session != session {
 		t.Fatal("the live shell did not survive the decline")
 	}
 }
@@ -355,7 +355,7 @@ func TestLayoutApplySpec_ReplacesPassivesAndKeepsLiveLeaves(t *testing.T) {
 	if p.contentDeck != nil {
 		t.Error("the stale deck was kept; the next open would reconcile the old tree")
 	}
-	if p.shellLeaf() == nil || p.termPanelSession != session {
+	if p.shellLeaf() == nil || p.requireShellTermPane().Session != session {
 		t.Error("the carried shell lost its session")
 	}
 }
@@ -401,7 +401,7 @@ func TestLayoutApplySpec_NewShellGraftsIntoItsSpecCell(t *testing.T) {
 	if name := p.shellLeafTitle(); name != "dev server" {
 		t.Errorf("shell title = %q, want the spec's name", name)
 	}
-	if !p.termPanelVisible || p.shellLeaf() == nil {
+	if !p.shellLeafVisible() || p.shellLeaf() == nil {
 		t.Error("the new shell did not become the visible terminal split")
 	}
 }
@@ -499,7 +499,7 @@ func TestLayoutApplySpec_NewShellOwnsItsMiddleColumn(t *testing.T) {
 	if name := p.shellLeafTitle(); name != "dev server" {
 		t.Errorf("shell title = %q, want the spec's name", name)
 	}
-	if p.termPanelSession == "" || !p.termPanelVisible || p.shellLeaf() == nil {
+	if p.requireShellTermPane().Session == "" || !p.shellLeafVisible() || p.shellLeaf() == nil {
 		t.Error("the adopted shell has no session; the leaf would not survive a relaunch")
 	}
 }

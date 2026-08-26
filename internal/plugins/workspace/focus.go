@@ -22,7 +22,7 @@ func (p *Plugin) paneTreeShowing() bool {
 // a panel nobody drew would hand it the next keystrokes with no focus ring to
 // show for it.
 func (p *Plugin) termPanelOnScreen() bool {
-	if !p.termPanelVisible || !p.paneTreeShowing() {
+	if !p.shellLeafVisible() || !p.paneTreeShowing() {
 		return false
 	}
 	_, drawn := p.shellLeafBox()
@@ -48,14 +48,10 @@ func (p *Plugin) focusRing() []panelayout.Target {
 // currentFocusTarget names the window that holds focus now, reading the same
 // state setFocusTarget writes so a cycle starts where the frame drew focus.
 func (p *Plugin) currentFocusTarget() panelayout.Target {
-	switch {
-	case p.activePane == PaneSidebar:
+	if p.activePane == PaneSidebar {
 		return panelayout.Target{Kind: panelayout.TargetSidebar}
-	case p.termPanelOnScreen() && p.termPanelFocused:
-		return panelayout.Target{Kind: panelayout.TargetTermPanel}
-	default:
-		return panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: p.paneFocus}
 	}
+	return panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: p.paneFocus}
 }
 
 // setFocusTarget is the sole writer of focus state — activePane, paneFocus and
@@ -79,22 +75,15 @@ func (p *Plugin) setFocusTarget(t panelayout.Target) (cmdOut tea.Cmd) {
 	switch t.Kind {
 	case panelayout.TargetSidebar:
 		p.activePane = PaneSidebar
-		p.termPanelFocused = false
-	// TargetTermPanel is the panel's transitional entry: deleted when windowing
-	// M1 absorbs the panel as a tree leaf, which folds this arm into the next.
-	case panelayout.TargetTermPanel:
-		p.activePane = PanePreview
-		p.paneFocus = terminalLeafID(p.paneRoot)
-		p.termPanelFocused = true
-		// Focus is an explicit navigation of the panel, so its window stops
-		// being pinned where a document or a gesture left it. Without this the
-		// panel arrives frozen and the first key moves nothing.
-		p.thawTerminalWindow(true)
-		p.syncDeckFocus()
+		p.setShellLeafFocused(false)
 	default:
 		p.activePane = PanePreview
 		p.paneFocus = t.Leaf
-		p.termPanelFocused = false
+		p.setShellLeafFocused(false)
+		if leaf := p.shellLeaf(); leaf != nil && leaf.ID == t.Leaf {
+			p.setShellLeafFocused(true)
+			p.thawTerminalWindow(true)
+		}
 		p.syncDeckFocus()
 	}
 	return
@@ -117,11 +106,9 @@ func (p *Plugin) syncDeckFocus() {
 // with it when focus lands on it.
 func (p *Plugin) targetOwnsTerminalKeyboard(t panelayout.Target) bool {
 	switch t.Kind {
-	case panelayout.TargetTermPanel:
-		return true
 	case panelayout.TargetLeaf:
 		leaf := FindPane(p.paneRoot, t.Leaf)
-		return leaf != nil && leaf.Split == nil && leaf.Kind == PaneTerminal
+		return leaf != nil && leaf.Split == nil && (leaf.Kind == PaneTerminal || leaf.Kind == PaneShell)
 	default:
 		return false
 	}
@@ -143,7 +130,9 @@ func (p *Plugin) focusSidebar() {
 
 // focusTermPanel is the click path's shorthand for the terminal panel.
 func (p *Plugin) focusTermPanel() {
-	p.setFocusTarget(panelayout.Target{Kind: panelayout.TargetTermPanel})
+	if leaf := p.shellLeaf(); leaf != nil {
+		p.setFocusTarget(panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: leaf.ID})
+	}
 }
 
 // focusLeaf is the click path's shorthand for the leaf a region carries.

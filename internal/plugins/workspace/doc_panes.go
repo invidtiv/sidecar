@@ -358,7 +358,7 @@ func (p *Plugin) clickDocTab(data any) tea.Cmd {
 	}
 	p.activePane = PanePreview
 	p.paneFocus = hit.LeafID
-	p.termPanelFocused = false
+	p.setShellLeafFocused(false)
 	p.pointer.Abandon()
 	if p.viewMode == ViewModeInteractive {
 		p.exitInteractiveMode()
@@ -908,7 +908,7 @@ func (p *Plugin) docTerminalResizeCmds() []tea.Cmd {
 	if cmd := p.resizeSelectedPaneCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if p.termPanelVisible {
+	if p.shellLeafVisible() {
 		if cmd := p.resizeTermPanelPaneCmd(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
@@ -1369,7 +1369,7 @@ func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
 	if node.Kind == PaneShell {
 		// The leaf owns its session, so its identity is persisted with it
 		// rather than re-derived: a durable selector, never a pane id.
-		return &state.PaneLayoutJSON{Kind: contentKindShell, Session: p.termPanelSession}
+		return &state.PaneLayoutJSON{Kind: contentKindShell, Session: p.requireShellTermPane().Session}
 	}
 	if node.Kind == PaneIssue {
 		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
@@ -1443,6 +1443,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if !ok || filepath.Clean(layout.Root) != root || layout.Surface != surface {
 		return nil
 	}
+	oldPaneRoot := p.paneRoot
 	p.releaseAllDocEdits()
 	p.docs = make(map[int]*docPane)
 	p.issues = make(map[int]*issuePane)
@@ -1457,6 +1458,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 		p.resetPaneTreeToTerminal()
 		return nil
 	}
+	p.rebindTerminalPaneTree(oldPaneRoot, restored)
 	p.paneRoot = restored
 	p.paneFocus = terminalLeafID(restored)
 	p.paneNextID = maxPaneID(restored) + 1
@@ -1465,12 +1467,12 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	// workspace's saved layout is the whole answer. Anything else opens a split
 	// on a workspace the user never split.
 	if shellCount > 0 {
-		p.termPanelVisible = true
+		p.requestShellLeaf()
 		p.shellLeafSurface = surface
 		p.rememberShellSplit()
 	} else {
-		p.termPanelVisible = false
-		p.termPanelFocused = false
+		p.releaseShellTermPane()
+		p.setShellLeafFocused(false)
 		p.shellLeafSurface = ""
 	}
 	p.syncShellLeaf()

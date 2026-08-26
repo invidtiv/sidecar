@@ -45,9 +45,9 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 	if termPanel {
 		panel := testTerminalBuffer(strings.Repeat("panel row\n", 60))
 		showTermPanel(t, p, SplitRows, 50)
-		p.termPanelSession = "sidecar-panel"
-		p.termPanelPaneID = "%9"
-		p.termPanelOutput = panel
+		p.requireShellTermPane().Session = "sidecar-panel"
+		p.requireShellTermPane().PaneID = "%9"
+		p.requireShellTermPane().Buffer = panel
 		model := p.newWorkspaceTerminal(workspaceTerminalPrimary)
 		model.State = &tty.State{
 			Active:                true,
@@ -58,7 +58,7 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 			PaneHeight:            20,
 			OutputBuf:             panel,
 		}
-		p.panelTerminal = model
+		p.requireShellTermPane().Terminal = model
 		p.recordPaneGeometry("panel", "sidecar-panel", 80, 20)
 	}
 
@@ -70,7 +70,7 @@ func parityWheelPlugin(t *testing.T, termPanel, live, reporting bool) *Plugin {
 		p.viewMode = ViewModeInteractive
 		p.interactiveState = &InteractiveState{
 			Active: true, TargetSession: target, TargetPane: pane,
-			TermPanel: termPanel, PaneWidth: 80, PaneHeight: 20,
+			LeafID: p.terminalLeafID(termPanel), PaneWidth: 80, PaneHeight: 20,
 			// A live pane reports where its cursor is, and the window a clipped
 			// grid draws follows it. Leaving it unset would place the live window
 			// against the top of the pane and make the two fixtures differ in
@@ -120,9 +120,9 @@ func parityWheelOutcome(t *testing.T, logPath string, termPanel, live, reporting
 	region := regionPreviewPane
 	if termPanel {
 		region = regionTermPanelContent
-		p.termPanelScroll = parityWheelStart
+		p.requireShellTermPane().Scroll = parityWheelStart
 	} else {
-		p.previewScroll = parityWheelStart
+		p.primaryTermPane().Scroll = parityWheelStart
 	}
 
 	// Read from the window the notch is about to be taken over, which is the one
@@ -138,9 +138,9 @@ func parityWheelOutcome(t *testing.T, logPath string, termPanel, live, reporting
 		Region: &mouse.Region{ID: region},
 	}))
 
-	window := p.previewScroll
+	window := p.primaryTermPane().Scroll
 	if termPanel {
-		window = p.termPanelScroll
+		window = p.requireShellTermPane().Scroll
 	}
 	return wheelOutcome{report: wheelSends(t, logPath), col: col, row: row, window: window}
 }
@@ -251,7 +251,7 @@ func TestNoNotchIsForwardedFromAnySurfaceInAnyStateWithWritesDisabled(t *testing
 // pane forwards when the preview draws it.
 func TestThePanelsPaneKeepsTheMouseFlagItsModelObserved(t *testing.T) {
 	p := parityWheelPlugin(t, true, false, true)
-	p.panelTerminalTarget = workspaceTerminalTarget{
+	p.requireShellTermPane().Target = workspaceTerminalTarget{
 		Session: "sidecar-panel", Pane: "%9", Source: "panel", SourceID: "sidecar-panel",
 	}
 	p.syncTerminalModels()
@@ -261,7 +261,7 @@ func TestThePanelsPaneKeepsTheMouseFlagItsModelObserved(t *testing.T) {
 
 	// A model closes whenever its surface stops being drawn; the pane it was
 	// reading is still the pane a notch over that surface lands on.
-	p.panelTerminal.State.Active = false
+	p.requireShellTermPane().Terminal.State.Active = false
 	if !p.paneMouseReporting(true) {
 		t.Fatal("the panel's observed mouse flag died with the model that observed it")
 	}

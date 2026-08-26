@@ -298,7 +298,7 @@ func (p *Plugin) Commands() []plugin.Command {
 			// Terminal panel toggle (show on Output tab when an agent or shell is active)
 			if terminalPanelEnabled() {
 				termName := "Term"
-				if p.termPanelVisible {
+				if p.shellLeafVisible() {
 					termName = "Hide"
 				}
 				cmds = append(cmds,
@@ -409,7 +409,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		}
 		if terminalPanelEnabled() {
 			termName := "Term"
-			if p.termPanelVisible {
+			if p.shellLeafVisible() {
 				termName = "Hide"
 			}
 			cmds = append(cmds,

@@ -20,7 +20,7 @@ func TestWatchedPaneNamesTheLiveEdgeKeyItAnswers(t *testing.T) {
 	p.interactiveState = nil
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 10
+	p.primaryTermPane().Scroll = 10
 
 	view := ansi.Strip(p.renderShellOutput(120, 40))
 	if !strings.Contains(view, "lines back") {
@@ -36,7 +36,7 @@ func TestWatchedPaneNamesTheLiveEdgeKeyItAnswers(t *testing.T) {
 	// Answered, not merely advertised.
 	p.activePane = PanePreview
 	p.handleKeyPress(tea.KeyPressMsg{Code: rune(watchedLiveEdgeKey[0]), Text: watchedLiveEdgeKey})
-	if p.previewScroll != 0 {
+	if p.primaryTermPane().Scroll != 0 {
 		t.Fatalf("%q did not put the watched window back on the live edge", watchedLiveEdgeKey)
 	}
 	if back := ansi.Strip(p.renderShellOutput(120, 40)); strings.Contains(back, "lines back") {
@@ -50,7 +50,7 @@ func TestLivePaneNamesTheShiftedLiveEdgeKey(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 10
+	p.primaryTermPane().Scroll = 10
 
 	view := ansi.Strip(p.renderShellOutput(120, 40))
 	if !strings.Contains(view, tty.LiveEdgeKey) {
@@ -66,7 +66,7 @@ func TestHeaderNotesLeadWithTheWindowBeingOffTheLiveEdge(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 120, 40
 	givePaneScrollableOutput(p, 120)
-	p.previewScroll = 10
+	p.primaryTermPane().Scroll = 10
 	p.recordPaneMouseReporting("shell", "sc-one", true)
 
 	view := ansi.Strip(p.renderShellOutput(200, 40))

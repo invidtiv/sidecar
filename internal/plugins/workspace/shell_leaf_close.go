@@ -51,10 +51,10 @@ func loginShellCommand() string {
 // The probe is a command rather than an inline tmux call because this runs on
 // the update path, where a blocking spawn is a dropped frame.
 func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
-	if !p.termPanelVisible {
+	if !p.shellLeafVisible() {
 		return nil
 	}
-	session := strings.TrimSpace(p.termPanelSession)
+	session := strings.TrimSpace(p.requireShellTermPane().Session)
 	if session == "" {
 		return p.closeShellLeaf(shellCloseSessionEnded)
 	}
@@ -75,7 +75,7 @@ func (p *Plugin) requestCloseShellLeaf() tea.Cmd {
 // handleShellLeafCloseProbe acts on the probe: a pane that is gone, or one
 // running nothing but its own shell, closes immediately; anything else asks.
 func (p *Plugin) handleShellLeafCloseProbe(msg ShellLeafCloseProbeMsg) tea.Cmd {
-	if !p.termPanelVisible || msg.Session != strings.TrimSpace(p.termPanelSession) {
+	if !p.shellLeafVisible() || msg.Session != strings.TrimSpace(p.requireShellTermPane().Session) {
 		return nil
 	}
 	// The gesture is abandoned if the user has moved on: an async answer must not

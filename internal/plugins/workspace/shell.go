@@ -920,7 +920,7 @@ func (p *Plugin) captureShellSessionByName(tmuxName string, generation int) tea.
 	if !interactiveCapture && features.IsEnabled(features.TmuxInteractiveInput.Name) {
 		if selectedShell != nil && selectedShell.TmuxName == tmuxName {
 			directCapture = true
-			if p.termPanelVisible {
+			if p.shellLeafVisible() {
 				previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 			} else {
 				previewWidth, previewHeight = p.calculatePreviewDimensions()

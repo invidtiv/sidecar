@@ -21,7 +21,7 @@ import (
 // The payload, not the region ID alone, is what routes a press: both surfaces
 // share one hit map and can draw bars at the same time.
 type terminalScrollbarHit struct {
-	TermPanel bool
+	LeafID int
 }
 
 // termBarGesture is one surface's in-flight pointer gesture on its bar. The
@@ -83,7 +83,7 @@ func (p *Plugin) registerTerminalScrollbarHits(termPanel bool) {
 	// letterboxes (td-26bdb2).
 	barX := surface.X + surface.Width - 1
 	top := surface.Y
-	hit := terminalScrollbarHit{TermPanel: termPanel}
+	hit := terminalScrollbarHit{LeafID: p.terminalLeafID(termPanel)}
 	p.mouseHandler.HitMap.Add(regionTermScrollbarTrack, mouse.Rect{X: barX, Y: top, W: 1, H: geom.TrackRect.Dy()}, hit)
 	// The thumb is added after the track so the reverse scan hands a press on
 	// their overlap to the thumb, exactly as the shared geometry orders them.
@@ -94,7 +94,7 @@ func (p *Plugin) registerTerminalScrollbarHits(termPanel bool) {
 // lights whichever part the pointer rests on, a live gesture keeps the thumb lit.
 func (p *Plugin) terminalBarStyle(termPanel bool) ui.ScrollbarStyle {
 	dragging := p.termBar.active && p.termBar.termPanel == termPanel
-	hovering := p.hoverTermBarSet && p.hoverTermBar == (terminalScrollbarHit{TermPanel: termPanel}) && !dragging
+	hovering := p.hoverTermBarSet && p.hoverTermBar == (terminalScrollbarHit{LeafID: p.terminalLeafID(termPanel)}) && !dragging
 	return ui.ScrollbarStyle{
 		Thumb: ui.HandleStateFrom(hovering, dragging),
 		Track: ui.HandleStateFrom(hovering, false),
@@ -117,7 +117,7 @@ func (p *Plugin) pressTerminalScrollbar(action mouse.MouseAction) {
 	if !ok || action.Region == nil {
 		return
 	}
-	termPanel := hit.TermPanel
+	termPanel := p.terminalPaneIsPanel(hit.LeafID)
 	p.releaseTerminalDocProjection(termPanel)
 	p.thawTerminalWindow(termPanel)
 	p.clearTerminalSelectionOnScroll(termPanel)
