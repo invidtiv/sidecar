@@ -160,11 +160,14 @@ const (
 
 // Suggestion is one row of a target picker's list. Value is the identifier the
 // target resolves from (a workspace-relative path, a git spec, an issue or
-// note id); Label is what the row displays; Badge is optional provenance.
+// note id); Label is what the row displays; Badge is optional provenance; Meta
+// is an optional right-aligned column — an age, today — that answers "which of
+// these is the one I want" without competing with the label for the left edge.
 type Suggestion struct {
 	Value string
 	Label string
 	Badge string
+	Meta  string
 }
 
 // Open builds form state and loads last-used agent and that agent's auto-approve.
@@ -224,7 +227,7 @@ func Open(opts OpenOpts) *Form {
 	f.lastAgent = f.agentType
 	f.prefillAgentInput()
 
-	if opts.FocusKind {
+	if opts.FocusKind || !kindUsesName(f.kind) {
 		f.openedFocus = FieldKind
 	} else {
 		f.openedFocus = FieldName
@@ -610,6 +613,11 @@ func (f *Form) Modal() *modal.Modal {
 }
 
 func (f *Form) build(width int, prevFocus string) {
+	if !kindUsesName(f.kind) && prevFocus == FieldName {
+		// The Name field is gone for this row, and focus cannot stay on a field
+		// that is not drawn — the kind list is where the gesture came from.
+		prevFocus = FieldKind
+	}
 	if prevFocus != FieldProject {
 		f.prefillProjectInput()
 	}
@@ -643,8 +651,10 @@ func (f *Form) build(width int, prevFocus string) {
 				modal.WithComboFilter(comboExactOrAllFilter(projectItems))),
 		)
 	}
-	sections = append(sections, modal.InputWithLabel(FieldName, "Name", &f.nameInput))
-	sections = append(sections, f.slugHintSection())
+	if kindUsesName(f.kind) {
+		sections = append(sections, modal.InputWithLabel(FieldName, "Name", &f.nameInput))
+		sections = append(sections, f.slugHintSection())
+	}
 	if f.kind == KindWorktree {
 		branchItems := f.branchItems()
 		sections = append(sections,

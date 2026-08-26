@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/ui"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // calculatePaneWidths sets the list and editor pane widths.
@@ -655,16 +656,13 @@ func (p *Plugin) renderNoteRow(note Note, selected bool, maxWidth int) string {
 		titleWidth = 10
 	}
 
-	// Get title (first line of content, or "untitled" if empty)
-	title := note.Title
+	// Get title (first line of content, or "untitled" if empty). The rule lives
+	// in workspaceops because the create modal's note picker names its rows the
+	// same way; a private copy here is how the picker came to show bare ids for
+	// the notes this list showed by name.
+	title := workspaceops.NoteTitle(note.Title, note.Content)
 	if title == "" {
-		// Use first line of content as title
-		lines := strings.SplitN(note.Content, "\n", 2)
-		if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
-			title = strings.TrimSpace(lines[0])
-		} else {
-			title = "untitled"
-		}
+		title = "untitled"
 	}
 
 	// Truncate by terminal cells; byte slicing can split Unicode titles.

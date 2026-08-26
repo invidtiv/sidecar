@@ -2,7 +2,9 @@ package workspacecreate
 
 import (
 	"strings"
+	"time"
 
+	"github.com/marcus/sidecar/internal/workspacelist"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -39,15 +41,29 @@ func FoldIssues(issues []workspaceops.IssueRef) []Suggestion {
 	return out
 }
 
-// FoldNotes folds td notes.
+// FoldNotes folds td notes. The row is the note's title with its age in the
+// right-hand column, and the id is nowhere on it: a note id is a thing to copy
+// for an agent, not a thing anyone recognises a note by, and it crowded out the
+// one column that says which note this is. The id stays in Value, so pasting or
+// typing one still matches the row it names.
 func FoldNotes(notes []workspaceops.NoteRef) []Suggestion {
+	return foldNotesAt(notes, time.Now())
+}
+
+func foldNotesAt(notes []workspaceops.NoteRef, now time.Time) []Suggestion {
 	out := make([]Suggestion, 0, len(notes))
 	for _, note := range notes {
-		label := note.ID
-		if note.Title != "" {
-			label = note.ID + "  " + note.Title
+		label := note.Title
+		if label == "" {
+			// Nothing to read it by: the id is a worse name than none, but it
+			// is the only one left.
+			label = note.ID
 		}
-		out = append(out, Suggestion{Value: note.ID, Label: label})
+		out = append(out, Suggestion{
+			Value: note.ID,
+			Label: label,
+			Meta:  workspacelist.RelativeAge(note.Updated, now),
+		})
 	}
 	return out
 }

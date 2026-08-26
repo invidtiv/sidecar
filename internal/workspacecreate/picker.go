@@ -475,7 +475,7 @@ func (f *Form) pickerSections() []modal.Section {
 			if item.Badge != "" {
 				row += "  " + styles.Muted.Render("["+item.Badge+"]")
 			}
-			lines = append(lines, row)
+			lines = append(lines, alignMeta(row, item.Meta, contentWidth))
 			focusables = append(focusables, modal.FocusableInfo{
 				ID:      fmt.Sprintf("%s%d", pickerItemPrefix, i),
 				OffsetX: 0,
@@ -526,6 +526,27 @@ func (f *Form) pickerSections() []modal.Section {
 		return modal.RenderedSection{Content: styles.Muted.Render(text)}
 	}, nil)
 	return []modal.Section{input, count, list, hints}
+}
+
+// alignMeta pins a row's metadata to the right edge of the content column,
+// shrinking the row's own text when the two would collide so the column stays
+// straight down the list rather than following the longest label. A row with no
+// metadata is returned untouched, so a picker that offers none is unchanged.
+func alignMeta(row, meta string, contentWidth int) string {
+	if meta == "" || contentWidth < 1 {
+		return row
+	}
+	metaWidth := ansi.StringWidth(meta)
+	// At least one space between the text and its column; a width that cannot
+	// hold both keeps the text, which is the part that identifies the row.
+	if contentWidth <= metaWidth+1 {
+		return row
+	}
+	if maxRow := contentWidth - metaWidth - 1; ansi.StringWidth(row) > maxRow {
+		row = ansi.Truncate(row, maxRow, "…")
+	}
+	gap := contentWidth - metaWidth - ansi.StringWidth(row)
+	return row + strings.Repeat(" ", gap) + styles.Muted.Render(meta)
 }
 
 // truncateLines holds every line of a section's content to contentWidth, the

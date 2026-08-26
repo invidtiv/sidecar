@@ -145,6 +145,20 @@ func kindIsPane(kind Kind) bool {
 	return false
 }
 
+// kindUsesName reports whether kind takes a name the user types. Shell,
+// Worktree and the Terminal split are things a user names — a worktree's name
+// even becomes its branch. Every other pane kind is named by what it shows: a
+// file by its path, an issue and a note by their titles. Offering those a Name
+// field asked for a value no create path ever read, and implied a pane could be
+// called something other than the thing inside it.
+func kindUsesName(kind Kind) bool {
+	switch kind {
+	case KindShell, KindWorktree, KindTerminalSplit:
+		return true
+	}
+	return false
+}
+
 // kindNeedsTarget reports whether kind's create flow continues onto a target
 // picker step rather than submitting from the kind list.
 func kindNeedsTarget(kind Kind) bool {

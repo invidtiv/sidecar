@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // DiffRef is one recent commit or branch the diff picker can offer. Identity
@@ -91,14 +92,19 @@ func runTDList(ctx context.Context, workDir, status string, limit int) ([]IssueR
 	return issues, nil
 }
 
-// NoteRef is one td note the note picker can offer.
+// NoteRef is one td note the note picker can offer. Title is what the note
+// reads as, not the raw title column: most notes carry an empty title and are
+// known by their first line, so the picker would otherwise offer rows a user
+// cannot tell apart. Updated is when the note last changed, which is what a
+// picker row uses to say how fresh it is.
 type NoteRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID      string
+	Title   string
+	Updated time.Time
 }
 
 // RecentNotes lists a project's non-deleted notes from td, pinned first as td
-// orders them. Only identity and title are decoded; bodies stay on disk.
+// orders them.
 func RecentNotes(ctx context.Context, workDir string, limit int) ([]NoteRef, error) {
 	if limit <= 0 {
 		limit = 20
@@ -115,6 +121,8 @@ func RecentNotes(ctx context.Context, workDir string, limit int) ([]NoteRef, err
 	type rawNote struct {
 		ID      string `json:"id"`
 		Title   string `json:"title"`
+		Content string `json:"content"`
+		Updated string `json:"updated_at"`
 		Pinned  bool   `json:"pinned"`
 		Deleted any    `json:"deleted_at"`
 	}
@@ -127,10 +135,45 @@ func RecentNotes(ctx context.Context, workDir string, limit int) ([]NoteRef, err
 		if n.ID == "" || n.Deleted != nil {
 			continue
 		}
-		refs = append(refs, NoteRef{ID: n.ID, Title: strings.TrimSpace(n.Title)})
+		refs = append(refs, NoteRef{
+			ID:      n.ID,
+			Title:   NoteTitle(n.Title, n.Content),
+			Updated: parseNoteTime(n.Updated),
+		})
 	}
 	if len(refs) > limit {
 		refs = refs[:limit]
 	}
 	return refs, nil
+}
+
+// NoteTitle is what a note is called on screen: its own title, or the first
+// non-blank line of its body when it has none. td leaves the title column
+// empty for notes captured body-first, and the notes plugin has always shown
+// that first line — this is the same rule, shared so a note does not read as
+// "untitled" in one surface and by name in another.
+func NoteTitle(title, content string) string {
+	if t := strings.TrimSpace(title); t != "" {
+		return t
+	}
+	for _, line := range strings.Split(content, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// parseNoteTime reads td's timestamps, which arrive both as zone offsets and
+// as fractional UTC. A stamp that parses as neither yields the zero time, and
+// the picker simply shows no age for that row.
+func parseNoteTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, raw); err == nil {
+		return t
+	}
+	return time.Time{}
 }
