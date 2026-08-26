@@ -174,12 +174,17 @@ func (p *Plugin) terminalPaneIsPanel(id int) bool {
 
 func (p *Plugin) rebindTerminalPaneTree(oldRoot, newRoot *PaneNode) {
 	deck := p.ensureTerminalPanes()
-	var primary, shell *termpanes.Leaf
-	if id := terminalLeafID(oldRoot); id > 0 {
-		primary = deck.Leaf(id)
-	}
+	oldPrimaryID := terminalLeafID(oldRoot)
+	oldShellID := 0
 	if node := firstPaneLeafOfKind(oldRoot, PaneShell); node != nil {
-		shell = deck.Leaf(node.ID)
+		oldShellID = node.ID
+	}
+	var primary, shell *termpanes.Leaf
+	if oldPrimaryID > 0 {
+		primary = deck.Leaf(oldPrimaryID)
+	}
+	if oldShellID > 0 {
+		shell = deck.Leaf(oldShellID)
 	}
 	if shell == nil {
 		shell = deck.Leaf(0)
@@ -200,4 +205,14 @@ func (p *Plugin) rebindTerminalPaneTree(oldRoot, newRoot *PaneNode) {
 		next.Attach(shell)
 	}
 	p.terminalPanes = next
+	if p.interactiveState != nil {
+		activeID := p.interactiveState.LeafID
+		if oldPrimaryID > 0 && activeID == oldPrimaryID {
+			p.interactiveState.LeafID = terminalLeafID(newRoot)
+		} else if oldShellID > 0 && activeID == oldShellID {
+			if node := firstPaneLeafOfKind(newRoot, PaneShell); node != nil {
+				p.interactiveState.LeafID = node.ID
+			}
+		}
+	}
 }

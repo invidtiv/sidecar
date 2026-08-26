@@ -840,13 +840,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.refreshOperationID = ""
 	p.activeLifecycleOperationID = ""
 	p.resetLifecycleState()
+	// Init starts a new pane-tree identity space. Drop the old collection before
+	// constructing models so a new primary ID cannot alias an old Shell leaf.
+	p.paneRoot = nil
+	p.terminalPanes = termpanes.New()
 	p.resetTerminalModels()
 	p.primaryTermPane().LinkContext = terminalLinkSurfaceContext{}
 	p.requireShellTermPane().LinkContext = terminalLinkSurfaceContext{}
 	p.primaryTermPane().LinkState = termpreview.LinkState{}
 	p.requireShellTermPane().LinkState = termpreview.LinkState{}
 	p.applicationFocused = true
-	p.paneRoot = nil
 	p.contentDeck = nil
 	p.paneFocus = 0
 	p.paneNextID = 1
