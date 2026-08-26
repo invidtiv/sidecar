@@ -85,8 +85,18 @@ func TestOverviewTerminalSplitCapRefusesCreate(t *testing.T) {
 	if got := m.createForm.KindDisabledReason(); got != termpanes.CapDisabledReason {
 		t.Fatalf("disabled reason = %q", got)
 	}
-	if cmd := m.createPreviewTerminalSplit(); cmd != nil {
-		t.Fatal("cap-refused create returned a command")
+	for _, action := range []string{
+		workspacecreate.ActionCreate,
+		workspacecreate.ActionPlaceAuto,
+		workspacecreate.ActionPlaceRight,
+		workspacecreate.ActionPlaceBelow,
+	} {
+		if cmd := m.applyCreateAction(action); cmd != nil {
+			t.Fatalf("cap-refused action %s returned a command", action)
+		}
+		if panelayout.LiveLeafCount(m.preview.paneRoot) != panelayout.LiveLeafCap {
+			t.Fatalf("cap-refused action %s changed the live leaf count", action)
+		}
 	}
 }
 

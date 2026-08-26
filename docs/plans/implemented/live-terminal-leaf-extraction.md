@@ -1,18 +1,20 @@
 # Live Terminal Leaf Extraction
 
-One host-independent home for the state of a *live terminal leaf*, so a surface can hold as many of them as its pane tree allows — and, on top of that, terminal splits in the global Sessions browser at parity with the project workspace.
+**Status:** Implemented. The shared `internal/termpanes` lifecycle is adopted by both workspace surfaces, global Sessions offers the parity Terminal split, the integrated gates pass, and the isolated real-app proof covers creation through cap refusal. **Tracking:** `td-ab1bf4`, `td-6aee8c`, `td-c11e1a`, and integration `td-539a36`.
 
-This is the missing half of the pane-leaf story. Passive leaves already have their host-independent lifecycle in `internal/contentpanes`, adopted by both surfaces; live leaves do not, and the two hosts each hand-roll their own. That is why `AllowTerminalSplit` follows the `WorkspaceTerminalPanel` feature flag (`terminalPanelEnabled()`) in `internal/plugins/workspace` and is hard-coded `false` in `internal/overview`, and why closing that gap is a refactor before it is a feature.
+This work established one host-independent home for the state of a *live terminal leaf*, so a surface can hold as many of them as its pane tree allows, and delivered terminal splits in the global Sessions browser at parity with the project workspace.
+
+This was the missing half of the pane-leaf story. Passive leaves already had their host-independent lifecycle in `internal/contentpanes`, adopted by both surfaces; live leaves did not, and the two hosts each hand-rolled their own. The implementation first closed that lifecycle gap, then enabled the global surface through the same `WorkspaceTerminalPanel` feature flag as the project workspace.
 
 **Owns:** the shared live-terminal-leaf seam, and the global Sessions browser's Terminal split row.
 
-**Relationship to [terminal-splits-and-windowing.md](terminal-splits-and-windowing.md):** that plan delivered the live Terminal leaf inside the project workspace (its phase A) and remains the authority on placement policy, the live-leaf cap, sidebar badges, and the deferred chord tier. Its A6 assumed the global browser would get split terminals for free by mirroring "whatever the primary terminal gets on that surface". That turned out not to be free: the two hosts implement a live terminal in incompatible shapes, so A6's rule is correct as an *outcome* and silent about the work. This plan takes ownership of that work and of resolved question 2 in that document.
+**Relationship to [terminal-splits-and-windowing.md](../active/terminal-splits-and-windowing.md):** that plan delivered the live Terminal leaf inside the project workspace (its phase A) and remains the authority on placement policy, the live-leaf cap, sidebar badges, and the deferred chord tier. Its A6 assumed the global browser would get split terminals for free by mirroring "whatever the primary terminal gets on that surface". That turned out not to be free: the two hosts implemented a live terminal in incompatible shapes, so A6's rule was correct as an *outcome* and silent about the work. This plan took ownership of that work and of resolved question 2 in that document.
 
-**Precedent to follow:** [`internal/contentpanes`](../../../internal/contentpanes/deck.go) — "the host-independent lifecycle of Sidecar's passive Document, Issue, Note, Diff, and Resource panes. A Deck deliberately does not render or persist itself." Everything below is that sentence with "passive" replaced by "live".
+**Implementation precedent:** [`internal/contentpanes`](../../../internal/contentpanes/deck.go) — "the host-independent lifecycle of Sidecar's passive Document, Issue, Note, Diff, and Resource panes. A Deck deliberately does not render or persist itself." The implementation applied that shape to live leaves.
 
-**Related:** [pane-switcher-everywhere.md](pane-switcher-everywhere.md) extends where the create modal opens from; it does not change what the modal may offer, which is this plan's concern.
+**Related:** [pane-switcher-everywhere.md](../active/pane-switcher-everywhere.md) extends where the create modal opens from; it does not change what the modal may offer, which was this plan's concern.
 
-## The problem, stated from the code
+## The original problem, stated from the code
 
 The project workspace holds exactly two terminals as parallel pairs of flat fields on `Plugin`:
 
@@ -92,7 +94,7 @@ The capability, which is now an addition rather than a rebuild.
 
 - **Persisting the global surface's tree.** Decision 8 leaves it memory-only. If a peer terminal there should survive a restart, `state.PaneLayoutJSON` is the existing vehicle and the global browser would become a second writer of it, keyed by workspace ID.
 - **`sidecar layout get`/`apply` on the global surface.** The CLI reports and composes the project workspace's tree. Once the global browser hosts live leaves, the same projection can answer for it — and the parity rule says it eventually should.
-- **Terminal splits outside the two workspace surfaces** (Files, Git, td, Notes) remains [terminal-splits-and-windowing.md](terminal-splits-and-windowing.md)'s B3, and becomes tractable once `termpanes` exists, since a plugin would adopt the package rather than reimplement the pairs.
+- **Terminal splits outside the two workspace surfaces** (Files, Git, td, Notes) remains [terminal-splits-and-windowing.md](../active/terminal-splits-and-windowing.md)'s B3, and is tractable now that `termpanes` exists, since a plugin can adopt the package rather than reimplement the pairs.
 
 ## Acceptance evidence
 
@@ -102,8 +104,8 @@ The capability, which is now an addition rather than a rebuild.
 - **Real-app proof on a fully isolated run** (`scripts/tmux-drive.sh`, both the tmux socket and the state tree isolated — confirm with `tmux-drive.sh paths` that nothing resolves under `~/.local/state/sidecar` or `~/.config/sidecar`): the phase 3 ship criteria driven end to end on the global browser, with snapshots.
 - **A live-leaf cap table** covering both surfaces: at the cap the row is disabled with its reason, Enter on it is inert, and each placement button refuses.
 
-## Open questions
+## Resolved and deferred questions
 
-1. **Do gestures belong to the leaf or to the surface?** Phase 2 step 2 proposes per-leaf, by analogy with `docSelectLeaf`. It needs deciding before the fields move, because moving them twice is the expensive order.
-2. **Should the global browser persist its pane tree?** Decision 8 says no for now. The argument for is that a terminal split you made is work you expect to find again; the argument against is that the global browser's tree is scoped to a row the user is passing through, and persisting it makes a browsing gesture durable.
+1. **Gestures belong to the leaf.** Phase 2 moved selection, pointer, wheel, and terminal-bar gesture state into each live leaf on both surfaces, matching the `docSelectLeaf` rule that a drag is answered by where it began.
+2. **The global browser does not persist its pane tree.** Decision 8 remains the shipped behavior. Persisting that browsing state is a separate future decision.
 3. **Does `LiveLeafCap` stay per tree or become per process?** Two live terminals per surface is four across both if a user has each open. The cap exists for control-mode subscriptions and resize cost, which are process-wide, so the current per-tree reading may be the wrong unit — but changing it is a behaviour change for the project workspace and belongs in a separate decision.

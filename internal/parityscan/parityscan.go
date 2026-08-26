@@ -12,12 +12,68 @@
 package parityscan
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"sort"
 	"testing"
 )
+
+// StructFields returns the written field types of one named struct. It lets a
+// parity test hold a shared-state seam in place without importing either host
+// or duplicating runtime behavior in test support.
+func StructFields(t *testing.T, file, typeName string) map[string]string {
+	t.Helper()
+	fset := token.NewFileSet()
+	parsed, err := parser.ParseFile(fset, file, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", file, err)
+	}
+	for _, decl := range parsed.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok || typeSpec.Name.Name != typeName {
+				continue
+			}
+			structure, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				t.Fatalf("%s: %s is not a struct", file, typeName)
+			}
+			fields := make(map[string]string)
+			for _, field := range structure.Fields.List {
+				var rendered bytes.Buffer
+				if err := printer.Fprint(&rendered, fset, field.Type); err != nil {
+					t.Fatalf("print %s.%s field type: %v", file, typeName, err)
+				}
+				for _, name := range field.Names {
+					fields[name.Name] = rendered.String()
+				}
+			}
+			return fields
+		}
+	}
+	t.Fatalf("%s: no struct %s — the parity scan is reading the wrong source", file, typeName)
+	return nil
+}
+
+// RequireFieldType holds one shared ownership seam and its legacy exclusions.
+func RequireFieldType(t *testing.T, surface string, fields map[string]string, field, wantType string, forbidden ...string) {
+	t.Helper()
+	if got := fields[field]; got != wantType {
+		t.Fatalf("%s %s type = %q, want %q", surface, field, got, wantType)
+	}
+	for _, name := range forbidden {
+		if got, ok := fields[name]; ok {
+			t.Fatalf("%s regained host-owned terminal field %s (%s)", surface, name, got)
+		}
+	}
+}
 
 // HandledKinds returns the targetactivation.Plan* constants named by the case
 // clauses of the switch inside fn, as it is written in file. The file path is

@@ -54,8 +54,10 @@ func TestCreateModalDisablesTerminalSplitAtTheCap(t *testing.T) {
 			}
 			// The placement buttons are a create path too, and they refuse for
 			// the same reason rather than by a second rule.
-			if form.ApplyPlacementAction(workspacecreate.ActionPlaceRight) {
-				t.Fatal("a placement button created past the cap")
+			for _, action := range []string{workspacecreate.ActionPlaceAuto, workspacecreate.ActionPlaceRight, workspacecreate.ActionPlaceBelow} {
+				if form.ApplyPlacementAction(action) {
+					t.Fatalf("placement %s created past the cap", action)
+				}
 			}
 			if got := panelayout.LiveLeafCount(p.paneRoot); got > panelayout.LiveLeafCap {
 				t.Fatalf("live leaves = %d, past the cap", got)
