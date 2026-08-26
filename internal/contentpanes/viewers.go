@@ -138,7 +138,16 @@ func (v *documentViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) t
 	if filepath.IsAbs(filepath.FromSlash(ref.Value)) {
 		root = ""
 	}
+	// Arm already applied persisted render/wrap. Load resets them; put the
+	// armed values back so restore does not turn a raw tab into rendered.
+	armed := v.view.Title() != "" && v.view.NeedsLoad()
+	rendered, wrap := v.view.Rendered(), v.view.Wrap()
 	cmd := v.view.Load(id, root, ref.Value, ref.Line, ctx.Epoch)
+	if armed {
+		v.view.SetRendered(rendered)
+		v.view.SetWrap(wrap)
+		return cmd
+	}
 	// Load defaults every line-zero target to rendered. The shared content rule
 	// is narrower: only Markdown opens rendered; source and plain text stay raw.
 	v.view.SetRendered(terminallink.Markdown(ref.Value) && ref.Line == 0)
@@ -183,13 +192,18 @@ type issueViewer struct{ view *issueview.Model }
 
 func (v *issueViewer) model() any { return v.view }
 func (v *issueViewer) load(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
-	return v.view.Load(id, ctx.Root, ref.Value, ctx.Epoch)
+	root := ctx.Root
+	if name, adopted := v.view.Owner(); name != "" && adopted != "" {
+		root = adopted
+	}
+	return v.view.Load(id, root, ref.Value, ctx.Epoch)
 }
 func (v *issueViewer) reload(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
 	return v.load(ctx, ref, id)
 }
 func (v *issueViewer) arm(ctx SurfaceContext, ref contentlink.Ref, id int, state TabState) {
 	v.view.Arm(id, ref.Value, ctx.Epoch)
+	v.view.RestoreOwner(state.OwnerName, state.OwnerRoot)
 	v.view.SetPendingScroll(state.Scroll)
 }
 func (v *issueViewer) focus(ctx SurfaceContext, ref contentlink.Ref, id int) tea.Cmd {
@@ -206,7 +220,11 @@ func (v *issueViewer) reference(ref contentlink.Ref) (contentlink.Ref, string) {
 	return ref, ref.Value
 }
 func (v *issueViewer) snapshot(ref contentlink.Ref) TabState {
-	return TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
+	out := TabState{Ref: ref, Scroll: v.view.ScrollOffset()}
+	if name, root := v.view.Owner(); name != "" && root != "" {
+		out.OwnerName, out.OwnerRoot = name, root
+	}
+	return out
 }
 
 type noteViewer struct{ view *noteview.Model }

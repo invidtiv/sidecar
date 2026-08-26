@@ -14,3 +14,10 @@ func TestLiveTerminalHostsKeepSharedLeafOwnership(t *testing.T) {
 		"terminal", "terminalTarget", "buffer", "offset", "freeze", "history",
 		"selection", "pointer", "wheel", "termBar", "linkState", "rowAnalyzer", "interactive")
 }
+
+func TestHostsDoNotEncodePaneLayoutJSON(t *testing.T) {
+	RequireNoPrivatePaneLayoutCodec(t, "project workspace",
+		ReceiverMethods(t, "../plugins/workspace", "Plugin"))
+	RequireNoPrivatePaneLayoutCodec(t, "global Sessions",
+		ReceiverMethods(t, "../overview", "previewState"))
+}

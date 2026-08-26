@@ -1124,6 +1124,7 @@ func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	stubTd(t)
 	p := docPaneTestPlugin(t, root, true)
 	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
@@ -1131,14 +1132,14 @@ func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
 			Axis: "rows", Ratio: 50,
 			A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "one.md"}}},
-			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "two.md"}}},
+			B: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-1111aa"}}},
 		}},
 	}}
 	if cmd := p.restorePaneLayout(layout); cmd == nil {
 		t.Fatal("nested stack restored without scheduling its loads")
 	}
-	if p.paneRoot.Split == nil || p.paneRoot.Split.B.Split == nil || len(p.docs) != 2 {
-		t.Fatalf("nested stack was not restored: root=%#v docs=%d", p.paneRoot, len(p.docs))
+	if p.paneRoot.Split == nil || p.paneRoot.Split.B.Split == nil || len(p.docs) != 1 || len(p.issues) != 1 {
+		t.Fatalf("nested stack was not restored: root=%#v docs=%d issues=%d", p.paneRoot, len(p.docs), len(p.issues))
 	}
 	if p.paneFocus != terminalLeafID(p.paneRoot) {
 		t.Fatalf("restored focus = %d, want the terminal leaf", p.paneFocus)
@@ -1159,8 +1160,8 @@ func TestSplitAfterRestoredDocumentLoadsTheVisibleFile(t *testing.T) {
 		B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "README.md"}}},
 	}}
 	applyDocOpen(t, p, p.restorePaneLayout(layout))
-	if p.contentDeck != nil {
-		t.Fatal("restore created a content deck; the split path would not adopt the live viewers")
+	if p.contentDeck == nil {
+		t.Fatal("restore did not adopt through the content deck; a later split would re-arm the viewers")
 	}
 	doc := p.activeDocPaneOrNil()
 	if doc == nil || doc.view() == nil {

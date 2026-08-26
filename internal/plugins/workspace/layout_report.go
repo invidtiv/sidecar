@@ -155,7 +155,7 @@ func (p *Plugin) cellPanes(col int, cells []*panelayout.Node, boxes map[int]layo
 // Provider is empty for every other kind, which is exactly what the spec
 // grammar expects there.
 func (p *Plugin) leafTabs(leaf *panelayout.Node) ([]string, int, string) {
-	saved := p.encodePaneNode(leaf)
+	saved := p.paneLayoutJSON(leaf)
 	if saved == nil {
 		return nil, 0, ""
 	}
@@ -210,7 +210,7 @@ func (p *Plugin) leafTabs(leaf *panelayout.Node) ([]string, int, string) {
 // Open filled exactly as a stored layout carries them. This is what answers
 // when the grid projection is null, and what M4's --spec will consume.
 func (p *Plugin) layoutTreeJSON(root, surface string) json.RawMessage {
-	saved := p.encodePaneNode(p.paneRoot)
+	saved := p.paneLayoutJSON(p.paneRoot)
 	if saved == nil {
 		return nil
 	}

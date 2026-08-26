@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -58,10 +57,6 @@ func (p *Plugin) openNotePaneForSurface(root, surface, noteID string) tea.Cmd {
 		return nil
 	}
 	return p.openWorkspaceContent(root, surface, contentlink.Ref{Kind: contentlink.KindInternal, Namespace: "note", Value: noteID}, "Note")
-}
-
-func (p *Plugin) newNoteModel() *noteview.Model {
-	return noteview.New(p.markdownRenderer)
 }
 
 func (p *Plugin) nextNoteModelID() int {
@@ -320,80 +315,6 @@ func (p *Plugin) loadNoteView(view *noteview.Model, root, noteID string) tea.Cmd
 		modelID = p.nextNoteModelID()
 	}
 	return view.Load(modelID, root, noteID, p.ctx.Epoch)
-}
-
-func encodeNoteTabs(note *notePane) ([]state.PaneNoteTabJSON, int) {
-	if note == nil {
-		return nil, 0
-	}
-	tabs := make([]state.PaneNoteTabJSON, 0, len(note.tabs.Items))
-	active := 0
-	for i, item := range note.tabs.Items {
-		id := noteview.NormalizeID(item.Key)
-		if id == "" && item.Value != nil {
-			id = noteview.NormalizeID(item.Value.NoteID())
-		}
-		if id == "" {
-			continue
-		}
-		scroll := 0
-		if item.Value != nil {
-			scroll = item.Value.ScrollOffset()
-		}
-		if i == note.tabs.Active {
-			active = len(tabs)
-		}
-		tabs = append(tabs, state.PaneNoteTabJSON{Note: id, Scroll: scroll})
-	}
-	return tabs, active
-}
-
-func (p *Plugin) decodeNoteLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
-	if saved == nil || p.ctx == nil || len(saved.NoteTabs) == 0 {
-		return nil
-	}
-	wanted := saved.Active
-	if wanted < 0 || wanted >= len(saved.NoteTabs) {
-		wanted = 0
-	}
-	type restoredTab struct {
-		id     string
-		scroll int
-	}
-	var pending []restoredTab
-	active := 0
-	for i, tab := range saved.NoteTabs {
-		id := noteview.NormalizeID(tab.Note)
-		if id == "" {
-			continue
-		}
-		if i == wanted {
-			active = len(pending)
-		}
-		pending = append(pending, restoredTab{id: id, scroll: tab.Scroll})
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	if p.notes == nil {
-		p.notes = make(map[int]*notePane)
-	}
-	id := p.nextPaneID()
-	pane := &notePane{leafID: id, root: root, surface: savedRootSurface(p, root)}
-	p.notes[id] = pane
-	var group noteview.Tabs
-	for _, tab := range pending {
-		view := p.newNoteModel()
-		view.Arm(p.nextNoteModelID(), tab.id, p.ctx.Epoch)
-		view.SetPendingScroll(tab.scroll)
-		group.Append(tab.id, view)
-	}
-	group.Select(active)
-	pane.tabs = group
-	if load := p.ensureActiveNoteTabLoaded(pane); load != nil {
-		*loads = append(*loads, load)
-	}
-	return &PaneNode{ID: id, Kind: PaneNote, ContentID: id}
 }
 
 func (p *Plugin) closeNotePane(leafID int) tea.Cmd {

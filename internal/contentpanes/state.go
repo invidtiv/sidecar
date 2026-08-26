@@ -42,6 +42,11 @@ type TabState struct {
 	Scope    string          `json:"scope,omitempty"`
 	Mode     string          `json:"mode,omitempty"`
 	Path     string          `json:"path,omitempty"`
+	// OwnerName and OwnerRoot identify a cross-project issue tab's owning
+	// store. Empty on a local issue. Restore reinstates the adoption before
+	// the first load so the card does not re-run the search.
+	OwnerName string `json:"ownerName,omitempty"`
+	OwnerRoot string `json:"ownerRoot,omitempty"`
 }
 
 // Encode projects the deck to references and view state only.
@@ -175,7 +180,7 @@ func (d *Deck) decodeNode(saved *NodeState, seen map[panelayout.Kind]bool, nextI
 func (d *Deck) decodePane(saved PaneState, kind panelayout.Kind, leafID int) *pane {
 	p := &pane{kind: kind, leafID: leafID}
 	identities := make(map[string]bool)
-	for _, state := range saved.Tabs {
+	for i, state := range saved.Tabs {
 		ref, gotKind, identity, ok := normalizeRef(d.ctx, state.Ref)
 		if !ok || gotKind != kind || identities[identity] {
 			continue
@@ -184,12 +189,14 @@ func (d *Deck) decodePane(saved PaneState, kind panelayout.Kind, leafID int) *pa
 		d.nextTabID++
 		v := newViewer(d.cfg, kind)
 		v.arm(d.ctx, ref, int(d.nextTabID), state)
+		if i == saved.Active {
+			p.active = len(p.tabs)
+		}
 		p.tabs = append(p.tabs, &tab{id: d.nextTabID, identity: identity, ref: ref, view: v, ctx: d.ctx})
 	}
 	if len(p.tabs) == 0 {
 		return nil
 	}
-	p.active = saved.Active
 	if p.active < 0 || p.active >= len(p.tabs) {
 		p.active = 0
 	}

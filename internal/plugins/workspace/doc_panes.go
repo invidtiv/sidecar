@@ -8,11 +8,13 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/markdown"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panebadge"
+	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panesearch"
@@ -533,7 +535,7 @@ func paneLayoutHasNoteTabs(layout *state.PaneLayoutJSON) bool {
 // rememberHiddenPaneLayout merges the live tree into the surface's hidden
 // snapshot so a later q on the remaining sibling keeps the first-hidden tabs.
 func (p *Plugin) rememberHiddenPaneLayout(root, surface string) {
-	live := p.encodePaneNode(p.paneRoot)
+	live := p.paneLayoutJSON(p.paneRoot)
 	if live == nil {
 		return
 	}
@@ -1190,10 +1192,10 @@ func (p *Plugin) persistedPaneLayout() *state.PaneLayoutJSON {
 			return &state.PaneLayoutJSON{Root: root, Surface: surface, Kind: contentKindTerminal, Open: true}
 		}
 	}
-	return p.encodeSurfacePaneLayout(root, surface)
+	return p.persistedSurfaceLayout(root, surface)
 }
 
-func (p *Plugin) encodeSurfacePaneLayout(root, surface string) *state.PaneLayoutJSON {
+func (p *Plugin) persistedSurfaceLayout(root, surface string) *state.PaneLayoutJSON {
 	if p.hiddenPaneLayout != nil && p.hiddenPaneLayout.Surface == surface && paneLayoutHasRetainedTabs(p.hiddenPaneLayout) {
 		layout := p.hiddenPaneLayout
 		layout.Root = root
@@ -1202,7 +1204,7 @@ func (p *Plugin) encodeSurfacePaneLayout(root, surface string) *state.PaneLayout
 		normalizePersistedIssueLeaves(layout)
 		return layout
 	}
-	layout := p.encodePaneNode(p.paneRoot)
+	layout := p.paneLayoutJSON(p.paneRoot)
 	if layout == nil {
 		return nil
 	}
@@ -1281,7 +1283,7 @@ func (p *Plugin) storeLivePaneLayout(root, surface string) {
 	if p.paneRoot == nil || surface == "" {
 		return
 	}
-	layout := p.encodeSurfacePaneLayout(root, surface)
+	layout := p.persistedSurfaceLayout(root, surface)
 	if layout == nil {
 		return
 	}
@@ -1349,92 +1351,6 @@ func (p *Plugin) takePaneRestoreCmd() tea.Cmd {
 	return cmd
 }
 
-func (p *Plugin) encodePaneNode(node *PaneNode) *state.PaneLayoutJSON {
-	if node == nil {
-		return nil
-	}
-	if node.Split != nil {
-		axis := "cols"
-		if node.Split.Axis == SplitRows {
-			axis = "rows"
-		}
-		return &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
-			Axis: axis, Ratio: clampPaneRatio(node.Split.Ratio),
-			A: p.encodePaneNode(node.Split.A), B: p.encodePaneNode(node.Split.B),
-		}}
-	}
-	if node.Kind == PaneTerminal {
-		return &state.PaneLayoutJSON{Kind: contentKindTerminal}
-	}
-	if node.Kind == PaneShell {
-		// The leaf owns its session, so its identity is persisted with it
-		// rather than re-derived: a durable selector, never a pane id.
-		return &state.PaneLayoutJSON{Kind: contentKindShell, Session: p.requireShellTermPane().Session}
-	}
-	if node.Kind == PaneIssue {
-		tabs, active := encodeIssueTabs(p.issues[node.ContentID])
-		if len(tabs) == 0 {
-			return nil
-		}
-		return &state.PaneLayoutJSON{Kind: contentKindIssue, IssueTabs: tabs, Active: active}
-	}
-	if node.Kind == PaneNote {
-		tabs, active := encodeNoteTabs(p.notes[node.ContentID])
-		if len(tabs) == 0 {
-			return nil
-		}
-		return &state.PaneLayoutJSON{Kind: contentKindNote, NoteTabs: tabs, Active: active}
-	}
-	if node.Kind == PaneDiff {
-		tabs, active := encodeDiffTabs(p.diffs[node.ContentID])
-		if len(tabs) == 0 {
-			return nil
-		}
-		return &state.PaneLayoutJSON{Kind: contentKindDiff, DiffTabs: tabs, Active: active}
-	}
-	if node.Kind == PaneResource {
-		tabs, active := encodeResourceTabs(p.resources[node.ContentID])
-		if len(tabs) == 0 {
-			return nil
-		}
-		return &state.PaneLayoutJSON{Kind: contentKindResource, ResourceTabs: tabs, Active: active}
-	}
-	doc := p.docs[node.ContentID]
-	tabs, active := encodeDocTabs(doc)
-	if len(tabs) == 0 {
-		return nil
-	}
-	return &state.PaneLayoutJSON{Kind: contentKindDoc, Tabs: tabs, Active: active}
-}
-
-func encodeDocTabs(doc *docPane) ([]state.PaneDocTabJSON, int) {
-	if doc == nil {
-		return nil, 0
-	}
-	tabs := make([]state.PaneDocTabJSON, 0, len(doc.tabs.Items))
-	active := 0
-	for i, item := range doc.tabs.Items {
-		view := item.View
-		if view == nil || view.Title() == "" {
-			continue
-		}
-		if i == doc.tabs.Active {
-			active = len(tabs)
-		}
-		mode := "raw"
-		if view.Rendered() {
-			mode = "rendered"
-		}
-		tabs = append(tabs, state.PaneDocTabJSON{
-			Path:   docview.NormalizeTabPath(view.Title()),
-			Mode:   mode,
-			Wrap:   view.Wrap(),
-			Scroll: view.ScrollOffset(),
-		})
-	}
-	return tabs, active
-}
-
 func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	if p.paneRoot == nil || layout == nil || p.ctx == nil {
 		return nil
@@ -1451,22 +1367,31 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	p.diffs = make(map[int]*diffPane)
 	p.resources = make(map[int]*resourcePane)
 	p.paneNextID = 1
-	terminalCount, shellCount := 0, 0
-	var loads []tea.Cmd
-	restored := p.decodePaneNode(layout, root, &terminalCount, &shellCount, &loads)
-	if restored == nil || terminalCount != 1 || !supportedPaneTree(restored) {
+
+	st, live := panecodec.Decode(layout, panecodec.Options{AcceptTab: p.acceptRestoredTab(root)})
+	if liveKindCount(live, panecodec.KindTerminal) != 1 {
 		p.resetPaneTreeToTerminal()
 		return nil
 	}
+	ctx := p.workspaceDeckContext(root, surface)
+	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
+	deck := contentpanes.Decode(ctx, cfg, st)
+	if deck == nil {
+		p.resetPaneTreeToTerminal()
+		return nil
+	}
+	nextID := 0
+	restored := paneTreeFromState(st.Root, &nextID)
+	if restored == nil || !supportedPaneTree(restored) || countPaneKind(restored, PaneTerminal) != 1 {
+		p.resetPaneTreeToTerminal()
+		return nil
+	}
+	p.contentDeck = deck
 	p.rebindTerminalPaneTree(oldPaneRoot, restored)
 	p.paneRoot = restored
-	p.paneFocus = terminalLeafID(restored)
-	p.paneNextID = maxPaneID(restored) + 1
-	// A restored shell leaf turns the split back on FOR THIS SURFACE, and a
-	// layout without one turns it off: the split is the workspace's own, so the
-	// workspace's saved layout is the whole answer. Anything else opens a split
-	// on a workspace the user never split.
-	if shellCount > 0 {
+	p.adoptRestoredDeckMaps(root, surface)
+	if sh := liveOfKind(live, panecodec.KindShell); sh != nil && firstPaneLeafOfKind(restored, PaneShell) != nil {
+		p.restoredShellSession = shellSessionSelector(sh.Session, "")
 		p.requestShellLeaf()
 		p.shellLeafSurface = surface
 		p.rememberShellSplit()
@@ -1476,7 +1401,42 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 		p.shellLeafSurface = ""
 	}
 	p.syncShellLeaf()
-	return tea.Batch(loads...)
+	if !supportedPaneTree(p.paneRoot) {
+		p.resetPaneTreeToTerminal()
+		return nil
+	}
+	p.paneFocus = terminalLeafID(p.paneRoot)
+	p.paneNextID = maxPaneID(p.paneRoot) + 1
+	return tea.Batch(unwrapDeckCmds(deck.LoadVisible()...)...)
+}
+
+func (p *Plugin) acceptRestoredTab(root string) func(string, contentpanes.TabState) bool {
+	return func(kind string, tab contentpanes.TabState) bool {
+		if kind != panecodec.KindDoc {
+			return true
+		}
+		rel, _, valid := resolveTerminalPath(root, tab.Ref.Value)
+		return valid && !filepath.IsAbs(rel)
+	}
+}
+
+func liveKindCount(live []panecodec.Live, kind string) int {
+	n := 0
+	for _, l := range live {
+		if l.Kind == kind {
+			n++
+		}
+	}
+	return n
+}
+
+func liveOfKind(live []panecodec.Live, kind string) *panecodec.Live {
+	for i := range live {
+		if live[i].Kind == kind {
+			return &live[i]
+		}
+	}
+	return nil
 }
 
 // supportedPaneTree accepts any tree whose leaves are kinds this build can
@@ -1502,128 +1462,6 @@ func supportedPaneTree(root *PaneNode) bool {
 	}
 	return root.Split.A != nil && root.Split.B != nil &&
 		supportedPaneTree(root.Split.A) && supportedPaneTree(root.Split.B)
-}
-
-func (p *Plugin) decodePaneNode(saved *state.PaneLayoutJSON, root string, terminalCount, shellCount *int, loads *[]tea.Cmd) *PaneNode {
-	if saved == nil {
-		return nil
-	}
-	if saved.Split != nil {
-		axis := SplitCols
-		switch saved.Split.Axis {
-		case "cols":
-		case "rows":
-			axis = SplitRows
-		default:
-			return nil
-		}
-		a := p.decodePaneNode(saved.Split.A, root, terminalCount, shellCount, loads)
-		b := p.decodePaneNode(saved.Split.B, root, terminalCount, shellCount, loads)
-		if a == nil {
-			return b
-		}
-		if b == nil {
-			return a
-		}
-		id := p.nextPaneID()
-		return &PaneNode{ID: id, Split: &PaneSplit{Axis: axis, Ratio: clampPaneRatio(saved.Split.Ratio), A: a, B: b}}
-	}
-	switch saved.Kind {
-	case contentKindTerminal:
-		*terminalCount++
-		if *terminalCount > 1 {
-			return nil
-		}
-		return &PaneNode{ID: p.nextPaneID(), Kind: PaneTerminal}
-	case contentKindShell:
-		// One shell leaf, for the same reason there is one terminal leaf: a
-		// second would draw a tmux session that is already on screen.
-		if *shellCount > 0 {
-			return nil
-		}
-		*shellCount++
-		p.restoredShellSession = shellSessionSelector(saved.Session, "")
-		return &PaneNode{ID: p.nextPaneID(), Kind: PaneShell}
-	case contentKindDoc:
-		return p.decodeDocLeaf(saved, root, loads)
-	case contentKindIssue:
-		return p.decodeIssueLeaf(saved, root, loads)
-	case contentKindNote:
-		return p.decodeNoteLeaf(saved, root, loads)
-	case contentKindDiff:
-		return p.decodeDiffLeaf(saved, root, loads)
-	case contentKindResource:
-		return p.decodeResourceLeaf(saved, root, loads)
-	}
-	return nil
-}
-
-func (p *Plugin) decodeDocLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
-	if saved == nil || len(saved.Tabs) == 0 || p.ctx == nil {
-		return nil
-	}
-	wanted := saved.Active
-	if wanted < 0 || wanted >= len(saved.Tabs) {
-		wanted = 0
-	}
-	type restoredTab struct {
-		rel    string
-		mode   string
-		wrap   bool
-		scroll int
-	}
-	var pending []restoredTab
-	active := 0
-	for i, tab := range saved.Tabs {
-		rel, _, valid := resolveTerminalPath(root, tab.Path)
-		// ResolveFile may accept a file outside root, reporting it as an
-		// absolute display path. A restored layout only ever addresses the
-		// viewer with a root-relative path, so an escaping tab is dropped
-		// rather than joined onto root as if it were relative.
-		if !valid || filepath.IsAbs(rel) {
-			continue
-		}
-		if i == wanted {
-			active = len(pending)
-		}
-		pending = append(pending, restoredTab{
-			rel:    filepath.ToSlash(rel),
-			mode:   tab.Mode,
-			wrap:   tab.Wrap,
-			scroll: tab.Scroll,
-		})
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	id := p.nextPaneID()
-	items := make([]docview.Item, 0, len(pending))
-	for _, tab := range pending {
-		viewer := docview.New(nil)
-		viewer.SetRendered(tab.mode != "raw")
-		viewer.SetWrap(tab.wrap)
-		viewer.SetPendingScroll(tab.scroll)
-		viewer.Arm(id, tab.rel, p.ctx.Epoch)
-		items = append(items, docview.Item{View: viewer})
-	}
-	tabs := docview.Tabs{Items: items, Active: active}
-	view := tabs.ActiveView()
-	rendered := view.Rendered()
-	wrap := view.Wrap()
-	load := view.Load(id, root, view.Title(), 0, p.ctx.Epoch)
-	view.SetRendered(rendered)
-	view.SetWrap(wrap)
-	p.docs[id] = &docPane{leafID: id, root: root, surface: savedRootSurface(p, root), tabs: tabs}
-	*loads = append(*loads, load)
-	return &PaneNode{ID: id, Kind: PaneDoc, ContentID: id}
-}
-
-func savedRootSurface(p *Plugin, root string) string {
-	selectedRoot, surface, ok := p.selectedTerminalSurface()
-	if !ok || selectedRoot != root {
-		return ""
-	}
-	return surface
 }
 
 func (p *Plugin) nextPaneID() int {

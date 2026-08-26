@@ -3,9 +3,11 @@ package workspace
 import (
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/issueview"
+	"github.com/marcus/sidecar/internal/panecodec"
+	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 )
@@ -16,24 +18,41 @@ func TestIssueTabOwnerFieldsRoundTrip(t *testing.T) {
 	view := p.newIssueModel(pane)
 	pane.tabs.Append("td-abc1", view)
 
-	tabs, active := encodeIssueTabs(pane)
-	if active != 0 || len(tabs) != 1 {
-		t.Fatalf("tabs = %#v active = %d", tabs, active)
+	local := panecodec.Encode(issueStateFromView("td-abc1", view), panecodec.Options{})
+	if local == nil || len(local.IssueTabs) != 1 {
+		t.Fatalf("tabs = %#v", local)
 	}
-	if tabs[0].OwnerName != "" || tabs[0].OwnerRoot != "" {
-		t.Fatalf("local tab persisted owner fields: %#v", tabs[0])
+	if local.IssueTabs[0].OwnerName != "" || local.IssueTabs[0].OwnerRoot != "" {
+		t.Fatalf("local tab persisted owner fields: %#v", local.IssueTabs[0])
 	}
 
 	// The decode path reinstates a persisted adoption; encode must persist it
 	// back out so the badge and owning store survive another save.
 	view.RestoreOwner("Proj-B", "/tmp/proj-b")
-	tabs, _ = encodeIssueTabs(pane)
-	if tabs[0].OwnerName != "Proj-B" || tabs[0].OwnerRoot != "/tmp/proj-b" {
-		t.Fatalf("owner fields not persisted: %#v", tabs[0])
+	tabs := panecodec.Encode(issueStateFromView("td-abc1", view), panecodec.Options{})
+	if tabs == nil || len(tabs.IssueTabs) != 1 {
+		t.Fatalf("owned tabs = %#v", tabs)
+	}
+	if tabs.IssueTabs[0].OwnerName != "Proj-B" || tabs.IssueTabs[0].OwnerRoot != "/tmp/proj-b" {
+		t.Fatalf("owner fields not persisted: %#v", tabs.IssueTabs[0])
 	}
 	if name, root := view.Owner(); name != "Proj-B" || root != "/tmp/proj-b" {
 		t.Fatalf("Owner() = %q, %q after restore", name, root)
 	}
+}
+
+func issueStateFromView(id string, view *issueview.Model) contentpanes.State {
+	tab := contentpanes.TabState{Ref: contentlink.Ref{Kind: contentlink.KindIssue, Value: id}}
+	if view != nil {
+		tab.Scroll = view.ScrollOffset()
+		if name, root := view.Owner(); name != "" && root != "" {
+			tab.OwnerName, tab.OwnerRoot = name, root
+		}
+	}
+	return contentpanes.State{Version: 1, Root: &contentpanes.NodeState{
+		Kind: "issue",
+		Pane: &contentpanes.PaneState{Kind: "issue", Tabs: []contentpanes.TabState{tab}},
+	}}
 }
 
 // TestLoadIssueViewHonorsAdoptedWorkDir proves a restored cross-project tab
@@ -59,50 +78,61 @@ func TestLoadIssueViewHonorsAdoptedWorkDir(t *testing.T) {
 }
 
 func TestDecodeLeafReinstatesPersistedOwner(t *testing.T) {
-	p := &Plugin{ctx: &plugin.Context{}}
-	p.issues = make(map[int]*issuePane)
-	saved := &state.PaneLayoutJSON{
-		Kind: contentKindIssue,
-		IssueTabs: []state.PaneIssueTabJSON{
-			{Issue: "td-abc1", Scroll: 3, OwnerName: "Proj-B", OwnerRoot: "/tmp/proj-b"},
+	saved := &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{
+			Kind: contentKindIssue,
+			IssueTabs: []state.PaneIssueTabJSON{
+				{Issue: "td-abc1", Scroll: 3, OwnerName: "Proj-B", OwnerRoot: "/tmp/proj-b"},
+			},
 		},
-		Active: 0,
+	}}
+	st, _ := panecodec.Decode(saved, panecodec.Options{})
+	ctx := contentpanes.SurfaceContext{Root: "/tmp/proj-a", Surface: "shell:test", Epoch: 1}
+	deck := contentpanes.Decode(ctx, contentpanes.Config{}, st)
+	if deck.Leaf(panelayout.Issue) == 0 {
+		t.Fatal("decode produced no issue leaf")
 	}
-	var loads []tea.Cmd
-	node := p.decodeIssueLeaf(saved, "/tmp/proj-a", &loads)
-	if node == nil {
-		t.Fatal("decodeIssueLeaf returned nil")
+	items, _ := deck.Tabs(deck.Leaf(panelayout.Issue))
+	if len(items) != 1 {
+		t.Fatalf("tabs = %#v", items)
 	}
-	pane := p.issues[node.ContentID]
-	if pane == nil {
-		t.Fatal("decoded leaf has no issue pane")
-	}
-	view := pane.view()
-	if view == nil {
-		t.Fatal("decoded pane has no view")
+	view, ok := items[0].Viewer.(*issueview.Model)
+	if !ok {
+		t.Fatalf("viewer = %T", items[0].Viewer)
 	}
 	if name, root := view.Owner(); name != "Proj-B" || root != "/tmp/proj-b" {
 		t.Fatalf("restored Owner() = %q, %q; want Proj-B at /tmp/proj-b", name, root)
 	}
+	loads := deck.LoadVisible()
 	if len(loads) != 1 {
 		t.Fatalf("loads = %d commands, want the active tab's fetch", len(loads))
 	}
 }
 
 func TestDecodeLeafLocalTabHasNoOwner(t *testing.T) {
-	p := &Plugin{ctx: &plugin.Context{}}
-	p.issues = make(map[int]*issuePane)
-	saved := &state.PaneLayoutJSON{
-		Kind:      contentKindIssue,
-		IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-abc2", Scroll: 0}},
-		Active:    0,
+	saved := &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+		B: &state.PaneLayoutJSON{
+			Kind:      contentKindIssue,
+			IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-abc2", Scroll: 0}},
+		},
+	}}
+	st, _ := panecodec.Decode(saved, panecodec.Options{})
+	ctx := contentpanes.SurfaceContext{Root: "/tmp/proj-a", Surface: "shell:test", Epoch: 1}
+	deck := contentpanes.Decode(ctx, contentpanes.Config{}, st)
+	items, _ := deck.Tabs(deck.Leaf(panelayout.Issue))
+	if len(items) != 1 {
+		t.Fatal("decode produced no issue tab")
 	}
-	var loads []tea.Cmd
-	node := p.decodeIssueLeaf(saved, "/tmp/proj-a", &loads)
-	if node == nil {
-		t.Fatal("decodeIssueLeaf returned nil")
+	view := items[0].Viewer.(*issueview.Model)
+	loads := deck.LoadVisible()
+	if len(loads) != 1 {
+		t.Fatalf("loads = %d, want the active tab's fetch", len(loads))
 	}
-	if name, root := p.issues[node.ContentID].view().Owner(); name != "" || root != "/tmp/proj-a" {
+	if name, root := view.Owner(); name != "" || root != "/tmp/proj-a" {
 		t.Fatalf("local restore Owner() = %q, %q; want empty at the pane root", name, root)
 	}
 }

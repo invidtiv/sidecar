@@ -17,7 +17,10 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +63,71 @@ func StructFields(t *testing.T, file, typeName string) map[string]string {
 	}
 	t.Fatalf("%s: no struct %s — the parity scan is reading the wrong source", file, typeName)
 	return nil
+}
+
+// ReceiverMethods returns the method names declared on typeName in dir, from
+// non-test files. Spread methods are the usual Go case; parsing one file is
+// how a codec would hide in a neighbour.
+func ReceiverMethods(t *testing.T, dir, typeName string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	seen := make(map[string]struct{})
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || fn.Name == nil || len(fn.Recv.List) == 0 {
+				continue
+			}
+			if receiverTypeName(fn.Recv.List[0].Type) != typeName {
+				continue
+			}
+			seen[fn.Name.Name] = struct{}{}
+		}
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func receiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return receiverTypeName(t.X)
+	default:
+		return ""
+	}
+}
+
+// RequireNoPrivatePaneLayoutCodec fails when a host still encodes or decodes
+// PaneLayoutJSON itself rather than through panecodec.
+func RequireNoPrivatePaneLayoutCodec(t *testing.T, surface string, methods []string) {
+	t.Helper()
+	for _, name := range methods {
+		lower := strings.ToLower(name)
+		if !strings.Contains(lower, "encode") && !strings.Contains(lower, "decode") {
+			continue
+		}
+		if strings.Contains(lower, "pane") || strings.Contains(lower, "leaf") || strings.Contains(lower, "layout") {
+			t.Fatalf("%s still declares private PaneLayoutJSON codec method %s", surface, name)
+		}
+	}
 }
 
 // RequireFieldType holds one shared ownership seam and its legacy exclusions.

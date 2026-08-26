@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -711,6 +712,53 @@ func TestDeckEncodeDecodeIsReferenceOnlyAndArmsRestoredTabs(t *testing.T) {
 	if cmd := restored.SelectTab(doc.leafID, 0); cmd == nil {
 		t.Fatal("selecting restored document did not start its deferred load")
 	}
+}
+
+func TestIssueOwnerFieldsSurviveEncodeDecode(t *testing.T) {
+	ctx := testContext(t.TempDir())
+	d := New(ctx, Config{})
+	opened := d.Open(ctx, issueRef("td-abc1"), testPlacement())
+	if opened.Status != StatusOpened {
+		t.Fatalf("open = %#v", opened)
+	}
+	items, _ := d.Tabs(opened.LeafID)
+	view, ok := items[0].Viewer.(*issueview.Model)
+	if !ok {
+		t.Fatalf("viewer = %T", items[0].Viewer)
+	}
+	view.RestoreOwner("Proj-B", "/tmp/proj-b")
+
+	st := d.Encode()
+	issue := paneStateOfKind(st.Root, "issue")
+	if issue == nil || len(issue.Tabs) != 1 || issue.Tabs[0].OwnerName != "Proj-B" || issue.Tabs[0].OwnerRoot != "/tmp/proj-b" {
+		t.Fatalf("encoded owner = %#v", issue)
+	}
+
+	restored := Decode(ctx, Config{}, st)
+	restoredItems, _ := restored.Tabs(restored.Leaf(panelayout.Issue))
+	if len(restoredItems) != 1 {
+		t.Fatalf("restored tabs = %#v", restoredItems)
+	}
+	got, ok := restoredItems[0].Viewer.(*issueview.Model)
+	if !ok {
+		t.Fatalf("restored viewer = %T", restoredItems[0].Viewer)
+	}
+	if name, root := got.Owner(); name != "Proj-B" || root != "/tmp/proj-b" {
+		t.Fatalf("restored Owner() = %q, %q", name, root)
+	}
+}
+
+func paneStateOfKind(n *NodeState, kind string) *PaneState {
+	if n == nil {
+		return nil
+	}
+	if n.Kind == kind && n.Pane != nil {
+		return n.Pane
+	}
+	if p := paneStateOfKind(n.A, kind); p != nil {
+		return p
+	}
+	return paneStateOfKind(n.B, kind)
 }
 
 func TestDecodeCollapsesUnknownKindsAndInvalidTabs(t *testing.T) {

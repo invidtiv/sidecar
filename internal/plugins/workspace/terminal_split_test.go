@@ -4,9 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -122,7 +121,7 @@ func TestClosingANeighbourLeavesTheShellLeaf(t *testing.T) {
 func TestShellLeafPersistsItsSessionSelector(t *testing.T) {
 	p := &Plugin{}
 	p.requireShellTermPane().Session = termPanelSessionPrefix + "sidecar-main"
-	encoded := p.encodePaneNode(&PaneNode{ID: 1, Kind: PaneShell})
+	encoded := p.paneLayoutJSON(&PaneNode{ID: 1, Kind: PaneShell})
 	if encoded == nil || encoded.Kind != contentKindShell {
 		t.Fatalf("encoded = %+v, want a shell leaf", encoded)
 	}
@@ -169,14 +168,11 @@ func TestShellLeafPersistsItsSessionSelector(t *testing.T) {
 	}
 
 	// A persisted layout round-trips the selector into the restore path.
-	host := &Plugin{}
-	shellCount := 0
 	saved := &state.PaneLayoutJSON{Kind: contentKindShell, Session: termPanelSessionPrefix + "restored"}
-	if node := host.decodePaneNode(saved, "", new(int), &shellCount, new([]tea.Cmd)); node == nil || node.Kind != PaneShell {
-		t.Fatalf("decoded = %+v, want a shell leaf", node)
-	}
-	if host.restoredShellSession != saved.Session {
-		t.Fatalf("restored selector = %q, want %q", host.restoredShellSession, saved.Session)
+	_, live := panecodec.Decode(saved, panecodec.Options{})
+	got := liveOfKind(live, panecodec.KindShell)
+	if got == nil || got.Session != saved.Session {
+		t.Fatalf("decoded live = %+v, want session %q", live, saved.Session)
 	}
 }
 

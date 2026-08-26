@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/contentpanes"
 	"github.com/marcus/sidecar/internal/docview"
+	"github.com/marcus/sidecar/internal/panecodec"
 )
 
 // docPaneSplitTree builds terminal | doc, the shipped two-leaf journey, and
@@ -76,8 +79,17 @@ func TestContentKindIsThePersistedLeafKey(t *testing.T) {
 	p := docPaneTestPlugin(t, root, true)
 	terminal, leaf, _ := docPaneSplitTree(t, p, root, "one.md")
 
+	states := map[int]contentpanes.State{
+		terminal.ID: {Version: 1, Root: &contentpanes.NodeState{Kind: "primary"}},
+		leaf.ID: {Version: 1, Root: &contentpanes.NodeState{
+			Kind: "document",
+			Pane: &contentpanes.PaneState{Kind: "document", Tabs: []contentpanes.TabState{
+				{Ref: contentlink.Ref{Kind: contentlink.KindFile, Value: "one.md"}},
+			}},
+		}},
+	}
 	for _, node := range []*PaneNode{terminal, leaf} {
-		saved := p.encodePaneNode(node)
+		saved := panecodec.Encode(states[node.ID], panecodec.Options{})
 		if saved == nil {
 			t.Fatalf("leaf %d did not encode", node.ID)
 		}

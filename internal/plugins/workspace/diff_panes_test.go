@@ -195,7 +195,7 @@ func TestDiffLeafEncodeDecodeRoundTripWT(t *testing.T) {
 	}
 	diff.view().Scroll = 3
 
-	saved := p.encodePaneNode(p.paneRoot)
+	saved := p.paneLayoutJSON(p.paneRoot)
 	if saved == nil || saved.Split == nil {
 		t.Fatalf("encode lost the tree: %#v", saved)
 	}

@@ -1241,7 +1241,7 @@ func TestLegacyIssueScrollRestoresAsOneTabThenSavesIssueTabs(t *testing.T) {
 		t.Fatalf("legacy restore = %v scroll=%d loading=%v", got, issue.view().ScrollOffset(), issue.view().Loading())
 	}
 
-	saved := p.encodePaneNode(p.paneRoot)
+	saved := p.paneLayoutJSON(p.paneRoot)
 	if saved == nil || saved.Split == nil {
 		t.Fatalf("re-encode lost the tree: %#v", saved)
 	}

@@ -438,37 +438,6 @@ func issueLoadRoot(view *issueview.Model, root string) string {
 	return root
 }
 
-func encodeIssueTabs(issue *issuePane) ([]state.PaneIssueTabJSON, int) {
-	if issue == nil {
-		return nil, 0
-	}
-	tabs := make([]state.PaneIssueTabJSON, 0, len(issue.tabs.Items))
-	active := 0
-	for i, item := range issue.tabs.Items {
-		id := issueview.NormalizeID(item.Key)
-		if id == "" && item.Value != nil {
-			id = issueview.NormalizeID(item.Value.IssueID())
-		}
-		if id == "" {
-			continue
-		}
-		scroll := 0
-		tab := state.PaneIssueTabJSON{}
-		if item.Value != nil {
-			scroll = item.Value.ScrollOffset()
-			if name, root := item.Value.Owner(); name != "" && root != "" {
-				tab.OwnerName, tab.OwnerRoot = name, root
-			}
-		}
-		if i == issue.tabs.Active {
-			active = len(tabs)
-		}
-		tab.Issue, tab.Scroll = id, scroll
-		tabs = append(tabs, tab)
-	}
-	return tabs, active
-}
-
 func persistedIssueTabs(saved *state.PaneLayoutJSON) []state.PaneIssueTabJSON {
 	if saved == nil {
 		return nil
@@ -521,65 +490,6 @@ func normalizePersistedIssueLeaves(layout *state.PaneLayoutJSON) {
 	layout.Active = active
 	layout.Issue = ""
 	layout.Scroll = 0
-}
-
-func (p *Plugin) decodeIssueLeaf(saved *state.PaneLayoutJSON, root string, loads *[]tea.Cmd) *PaneNode {
-	if saved == nil || p.ctx == nil {
-		return nil
-	}
-	raw := persistedIssueTabs(saved)
-	if len(raw) == 0 {
-		return nil
-	}
-	wanted := saved.Active
-	if wanted < 0 || wanted >= len(raw) {
-		wanted = 0
-	}
-	type restoredTab struct {
-		id        string
-		scroll    int
-		ownerName string
-		ownerRoot string
-	}
-	var pending []restoredTab
-	active := 0
-	for i, tab := range raw {
-		id := issueview.NormalizeID(tab.Issue)
-		if id == "" {
-			continue
-		}
-		if i == wanted {
-			active = len(pending)
-		}
-		pending = append(pending, restoredTab{id: id, scroll: tab.Scroll,
-			ownerName: tab.OwnerName, ownerRoot: tab.OwnerRoot})
-	}
-	if len(pending) == 0 {
-		return nil
-	}
-	if p.issues == nil {
-		p.issues = make(map[int]*issuePane)
-	}
-	id := p.nextPaneID()
-	pane := &issuePane{leafID: id, root: root, surface: savedRootSurface(p, root)}
-	p.issues[id] = pane
-	var group issueview.Tabs
-	for _, tab := range pending {
-		view := p.newIssueModel(pane)
-		// A persisted cross-project tab reinstates its adoption before the
-		// first load so restore fetches from the owning store without re-running
-		// the search; loadIssueView honors the adopted directory.
-		view.RestoreOwner(tab.ownerName, tab.ownerRoot)
-		view.Arm(p.nextIssueModelID(), tab.id, p.ctx.Epoch)
-		view.SetPendingScroll(tab.scroll)
-		group.Append(tab.id, view)
-	}
-	group.Select(active)
-	pane.tabs = group
-	if load := p.ensureActiveIssueTabLoaded(pane); load != nil {
-		*loads = append(*loads, load)
-	}
-	return &PaneNode{ID: id, Kind: PaneIssue, ContentID: id}
 }
 
 // closeIssuePane removes the issue leaf and gives its box back to its sibling.

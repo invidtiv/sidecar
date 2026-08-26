@@ -58,7 +58,7 @@ func readLayoutAck(t *testing.T, req uirequest.Request) uirequest.Ack {
 
 func encodedTree(t *testing.T, p *Plugin) string {
 	t.Helper()
-	raw, err := json.Marshal(p.encodePaneNode(p.paneRoot))
+	raw, err := json.Marshal(p.paneLayoutJSON(p.paneRoot))
 	if err != nil {
 		t.Fatal(err)
 	}

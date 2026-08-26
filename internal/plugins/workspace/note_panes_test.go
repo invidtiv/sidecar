@@ -5,6 +5,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/panelayout"
 )
 
@@ -64,7 +65,7 @@ func TestNotePanePersistRoundTrip(t *testing.T) {
 	}
 	_ = p.openNotePaneForSurface(surfaceRoot, surface, "nt-abc123")
 	_ = p.openNotePaneForSurface(surfaceRoot, surface, "nt-def456")
-	saved := p.encodePaneNode(p.paneRoot)
+	saved := p.paneLayoutJSON(p.paneRoot)
 	if saved == nil {
 		t.Fatal("encode produced no layout")
 	}
@@ -74,7 +75,8 @@ func TestNotePanePersistRoundTrip(t *testing.T) {
 	}
 
 	ctx := p.workspaceDeckContext(surfaceRoot, surface)
-	restored := contentpanes.Decode(ctx, contentpanes.Config{}, contentpanes.State{Version: 1, Root: workspaceDeckNode(saved)})
+	st, _ := panecodec.Decode(saved, panecodec.Options{})
+	restored := contentpanes.Decode(ctx, contentpanes.Config{}, st)
 	if restored.Leaf(panelayout.Note) == 0 {
 		t.Fatal("decoded deck lost the note leaf")
 	}
