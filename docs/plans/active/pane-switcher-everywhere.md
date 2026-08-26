@@ -43,10 +43,10 @@ Verified in the tree at the time of writing. The important thing is how much alr
 
 7. **Gated with the deck.** The entry appears only where `features.PluginContentPanes` is on and the plugin is deck-eligible. A key that opens a modal whose result has nowhere to land is worse than no key.
 
+8. **Every deck-eligible plugin gets the entry — `tasks` and `tdmonitor` included, and the File Browser first among them.** Deck eligibility is the opt-in: a plugin that declares the interfaces and holds a deck offers the key, with no per-plugin intent question on top. A pane beside a task list is not meaningless — it is the td issue the task names, the diff the work produced. And the File Browser is not a strange host but the furthest along: its deck integration is the most complete of the five, and "open the td issue this file's TODO names" beside the preview is exactly the reading pattern this plan exists for. Per-host kind filtering stays M2's escape hatch if one catalog proves wrong in use, not a precondition.
+
 ## Unresolved questions
 
-- **`tasks` and `tdmonitor`**: both are deck-eligible, but neither was considered when the switcher was designed. Do they want the entry, or is a pane beside a task list meaningless? Decide per plugin rather than assuming the interface implies the intent.
-- **Does the File Browser want it at all?** Its whole surface is already a file list with a preview. "Open a file pane" there may be a strange thing to offer, where "open the td issue this file's TODO names" is not. Possibly a per-host kind filter rather than one catalog.
 - **`ctrl+n` in a terminal.** Any plugin context that forwards keys to a live PTY must not claim it — `ctrl+n` is a real control character. Audit before binding.
 
 ## Work sequence
@@ -66,11 +66,11 @@ The deck side of the File question is answered in the tree: `contentpanes` decks
 - `Commands()` entries so the footer and `?` find it.
 - **Proof:** a keymap parity test in the shape of `pane_switcher_parity_test.go` — every deck-eligible plugin's browse context binds `open-pane` to `ctrl+n`, and no list-navigation context does.
 
-### M2 — Per-plugin opt-in and kind filters
+### M2 — Kind filters and proofs across all five hosts
 
-- Decide `tasks` and `tdmonitor` (unresolved above); decide the File Browser's kind list.
+- Enumerate the `tasks` and `tdmonitor` browse contexts and bind them per decision 2 (all five plugins are in — decision 8).
 - Per-host kind filtering if M1's single catalog proves wrong in use.
-- **Proof:** isolated `tmux-drive.sh` snapshots — from Notes, `ctrl+n` → td issue → pane beside the note; from Git, `ctrl+n` → File → pane beside the commit.
+- **Proof:** isolated `tmux-drive.sh` snapshots — from Notes, `ctrl+n` → td issue → pane beside the note; from Git, `ctrl+n` → File → pane beside the commit; from the File Browser, `ctrl+n` → td issue → pane beside the preview.
 
 ### M3 — Audit and document
 
