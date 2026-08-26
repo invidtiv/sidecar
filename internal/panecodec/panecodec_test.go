@@ -132,6 +132,44 @@ func TestShellSessionIsNeverAPaneID(t *testing.T) {
 	}
 }
 
+func TestDecodeDropsExtraShellLeaves(t *testing.T) {
+	layout := &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+		Axis: axisCols, Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: KindTerminal},
+		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: axisRows, Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: KindShell, Session: "sidecar-tp-first"},
+			B: &state.PaneLayoutJSON{Kind: KindShell, Session: "sidecar-tp-second"},
+		}},
+	}}
+	st, live := Decode(layout, Options{})
+	var shells []Live
+	for _, l := range live {
+		if l.Kind == KindShell {
+			shells = append(shells, l)
+		}
+	}
+	if len(shells) != 1 || shells[0].Session != "sidecar-tp-first" {
+		t.Fatalf("live shells = %#v, want the first only", live)
+	}
+	if n := countStateKind(st.Root, stateKindShell); n != 1 {
+		t.Fatalf("state shell nodes = %d, want 1 after extras collapse", n)
+	}
+}
+
+func countStateKind(n *contentpanes.NodeState, kind string) int {
+	if n == nil {
+		return 0
+	}
+	if n.A != nil || n.B != nil {
+		return countStateKind(n.A, kind) + countStateKind(n.B, kind)
+	}
+	if n.Kind == kind {
+		return 1
+	}
+	return 0
+}
+
 func fixtureState() contentpanes.State {
 	return contentpanes.State{Version: 1, Root: &contentpanes.NodeState{
 		Axis: stateAxisColumns, Ratio: 50,

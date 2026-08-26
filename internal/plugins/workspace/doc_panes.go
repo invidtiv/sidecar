@@ -1376,21 +1376,16 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	ctx := p.workspaceDeckContext(root, surface)
 	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
 	deck := contentpanes.Decode(ctx, cfg, st)
-	if deck == nil {
-		p.resetPaneTreeToTerminal()
-		return nil
-	}
 	nextID := 0
-	restored := paneTreeFromState(st.Root, &nextID)
-	if restored == nil || !supportedPaneTree(restored) || countPaneKind(restored, PaneTerminal) != 1 {
+	restored := restoreTree(st.Root, deck, &nextID, make(map[PaneKind]bool))
+	if restored == nil || !supportedPaneTree(restored) || firstPaneLeafOfKind(restored, PaneTerminal) == nil {
 		p.resetPaneTreeToTerminal()
 		return nil
 	}
 	p.contentDeck = deck
 	p.rebindTerminalPaneTree(oldPaneRoot, restored)
 	p.paneRoot = restored
-	p.adoptRestoredDeckMaps(root, surface)
-	if sh := liveOfKind(live, panecodec.KindShell); sh != nil && firstPaneLeafOfKind(restored, PaneShell) != nil {
+	if sh := liveOfKind(live, panecodec.KindShell); sh != nil {
 		p.restoredShellSession = shellSessionSelector(sh.Session, "")
 		p.requestShellLeaf()
 		p.shellLeafSurface = surface
@@ -1401,6 +1396,7 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 		p.shellLeafSurface = ""
 	}
 	p.syncShellLeaf()
+	p.adoptRestoredDeckMaps(root, surface)
 	if !supportedPaneTree(p.paneRoot) {
 		p.resetPaneTreeToTerminal()
 		return nil

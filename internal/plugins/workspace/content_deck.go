@@ -359,13 +359,17 @@ func contentKindName(kind panelayout.Kind) string {
 	}
 }
 
-func paneTreeFromState(n *contentpanes.NodeState, nextID *int) *PaneNode {
+// restoreTree is the live pane tree for a decoded layout: State supplies
+// structure (including the one shell), the deck supplies admission. A content
+// kind the deck dropped — invalid tabs, a duplicate kind — is not re-created
+// as an empty ghost leaf; its split collapses.
+func restoreTree(n *contentpanes.NodeState, deck *contentpanes.Deck, nextID *int, seen map[PaneKind]bool) *PaneNode {
 	if n == nil {
 		return nil
 	}
 	if n.A != nil || n.B != nil {
-		a := paneTreeFromState(n.A, nextID)
-		b := paneTreeFromState(n.B, nextID)
+		a := restoreTree(n.A, deck, nextID, seen)
+		b := restoreTree(n.B, deck, nextID, seen)
 		if a == nil {
 			return b
 		}
@@ -383,15 +387,21 @@ func paneTreeFromState(n *contentpanes.NodeState, nextID *int) *PaneNode {
 		}
 		return &PaneNode{ID: *nextID, Split: &PaneSplit{Axis: axis, Ratio: clampPaneRatio(ratio), A: a, B: b}}
 	}
-	kind, ok := paneKindFromState(n.Kind)
-	if !ok {
+	kind, ok := restoreTreeKind(n.Kind)
+	if !ok || seen[kind] {
 		return nil
 	}
+	if kind != PaneTerminal && kind != PaneShell {
+		if deck == nil || deck.Leaf(kind) == 0 {
+			return nil
+		}
+	}
+	seen[kind] = true
 	*nextID++
 	return &PaneNode{ID: *nextID, Kind: kind, ContentID: *nextID}
 }
 
-func paneKindFromState(kind string) (PaneKind, bool) {
+func restoreTreeKind(kind string) (PaneKind, bool) {
 	switch kind {
 	case "primary", panecodec.KindTerminal:
 		return PaneTerminal, true
@@ -410,19 +420,6 @@ func paneKindFromState(kind string) (PaneKind, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func countPaneKind(n *PaneNode, kind PaneKind) int {
-	if n == nil {
-		return 0
-	}
-	if n.Split != nil {
-		return countPaneKind(n.Split.A, kind) + countPaneKind(n.Split.B, kind)
-	}
-	if n.Kind == kind {
-		return 1
-	}
-	return 0
 }
 
 func (p *Plugin) adoptRestoredDeckMaps(root, surface string) {

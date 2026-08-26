@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -173,6 +174,36 @@ func TestShellLeafPersistsItsSessionSelector(t *testing.T) {
 	got := liveOfKind(live, panecodec.KindShell)
 	if got == nil || got.Session != saved.Session {
 		t.Fatalf("decoded live = %+v, want session %q", live, saved.Session)
+	}
+}
+
+func TestRestorePaneLayoutReattachesShellSessionAndDropsExtras(t *testing.T) {
+	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	session := termPanelSessionPrefix + "restored"
+	layout := &state.PaneLayoutJSON{
+		Root: resolved, Surface: "shell:test-shell", Open: true,
+		Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+			B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+				Axis: "rows", Ratio: 50,
+				A: &state.PaneLayoutJSON{Kind: contentKindShell, Session: session},
+				B: &state.PaneLayoutJSON{Kind: contentKindShell, Session: termPanelSessionPrefix + "extra"},
+			}},
+		},
+	}
+	_ = p.restorePaneLayout(layout)
+	if p.restoredShellSession != session {
+		t.Fatalf("restored selector = %q, want %q", p.restoredShellSession, session)
+	}
+	if n := countLeavesOfKind(p.paneRoot, PaneShell); n != 1 {
+		t.Fatalf("shell leaves = %d, want 1 (extras collapsed)", n)
 	}
 }
 

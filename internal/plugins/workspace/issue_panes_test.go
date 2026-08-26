@@ -1216,6 +1216,9 @@ func TestAllInvalidIssueTabsCollapseTheLeaf(t *testing.T) {
 	if issue, _ := p.activeIssuePane(); issue != nil {
 		t.Fatalf("all-invalid issue leaf was restored: %v", issueTabIDs(issue))
 	}
+	if n := countLeavesOfKind(p.paneRoot, PaneIssue); n != 0 {
+		t.Fatalf("ghost issue leaf still in the tree: root=%#v", p.paneRoot)
+	}
 	if doc, _ := p.activeDocPane(); doc == nil || p.paneRoot.Split == nil {
 		t.Fatalf("all-invalid issue leaf reset the layout: root=%#v", p.paneRoot)
 	}

@@ -153,6 +153,9 @@ func decodeNode(j *state.PaneLayoutJSON, parentAxis string, parentRatio int, new
 		*live = append(*live, Live{Kind: KindTerminal, Session: j.Session, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
 		return &contentpanes.NodeState{Kind: stateKindPrimary}
 	case KindShell:
+		if liveHas(*live, KindShell) {
+			return nil
+		}
 		*live = append(*live, Live{Kind: KindShell, Session: j.Session, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
 		return &contentpanes.NodeState{Kind: stateKindShell}
 	case KindDoc, KindIssue, KindNote, KindDiff, KindResource:
@@ -361,6 +364,15 @@ func issueTabs(j *state.PaneLayoutJSON) []state.PaneIssueTabJSON {
 		return []state.PaneIssueTabJSON{{Issue: j.Issue, Scroll: j.Scroll}}
 	}
 	return nil
+}
+
+func liveHas(live []Live, kind string) bool {
+	for _, l := range live {
+		if l.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func applyLive(j *state.PaneLayoutJSON, live []Live) {

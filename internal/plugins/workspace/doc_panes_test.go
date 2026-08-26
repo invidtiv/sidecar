@@ -63,6 +63,19 @@ func workspacePaneLayout(s state.WorkspaceState, surface string) *state.PaneLayo
 	return s.PaneLayoutFor(surface)
 }
 
+func countLeavesOfKind(n *PaneNode, kind PaneKind) int {
+	if n == nil {
+		return 0
+	}
+	if n.Split != nil {
+		return countLeavesOfKind(n.Split.A, kind) + countLeavesOfKind(n.Split.B, kind)
+	}
+	if n.Kind == kind {
+		return 1
+	}
+	return 0
+}
+
 func layoutHasDocPath(layout *state.PaneLayoutJSON, path string) bool {
 	if layout == nil {
 		return false
@@ -1124,7 +1137,6 @@ func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stubTd(t)
 	p := docPaneTestPlugin(t, root, true)
 	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
 		Axis: "cols", Ratio: 50,
@@ -1132,14 +1144,22 @@ func TestRestorePaneLayoutAcceptsNestedDocumentStack(t *testing.T) {
 		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
 			Axis: "rows", Ratio: 50,
 			A: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "one.md"}}},
-			B: &state.PaneLayoutJSON{Kind: "issue", IssueTabs: []state.PaneIssueTabJSON{{Issue: "td-1111aa"}}},
+			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "two.md"}}},
 		}},
 	}}
 	if cmd := p.restorePaneLayout(layout); cmd == nil {
 		t.Fatal("nested stack restored without scheduling its loads")
 	}
-	if p.paneRoot.Split == nil || p.paneRoot.Split.B.Split == nil || len(p.docs) != 1 || len(p.issues) != 1 {
-		t.Fatalf("nested stack was not restored: root=%#v docs=%d issues=%d", p.paneRoot, len(p.docs), len(p.issues))
+	// contentpanes allows at most one leaf per kind, so the second document is
+	// dropped and its split collapses. A surviving empty doc leaf is a ghost.
+	if p.paneRoot.Split == nil {
+		t.Fatalf("terminal+doc split was lost: root=%#v", p.paneRoot)
+	}
+	if n := countLeavesOfKind(p.paneRoot, PaneDoc); n != 1 {
+		t.Fatalf("doc leaves = %d, want 1 (no ghost second pane)", n)
+	}
+	if len(p.docs) != 1 {
+		t.Fatalf("docs map = %d, want 1", len(p.docs))
 	}
 	if p.paneFocus != terminalLeafID(p.paneRoot) {
 		t.Fatalf("restored focus = %d, want the terminal leaf", p.paneFocus)
@@ -1219,6 +1239,34 @@ func TestRestorePaneLayoutRejectsUnknownLeafKind(t *testing.T) {
 	}
 	if p.paneRoot.Split != nil || p.paneRoot.Kind != PaneTerminal {
 		t.Fatalf("unknown leaf did not collapse to the terminal: root=%#v", p.paneRoot)
+	}
+}
+
+func TestRestorePaneLayoutCollapsesNestedUnknownBesideDocument(t *testing.T) {
+	root := t.TempDir()
+	writeDocPaneFixture(t, root, "one.md", "one")
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{Root: resolvedRoot, Surface: "shell:test-shell", Split: &state.PaneSplitJSON{
+		Axis: "cols", Ratio: 50,
+		A: &state.PaneLayoutJSON{Kind: "terminal"},
+		B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
+			Axis: "rows", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: "hologram"},
+			B: &state.PaneLayoutJSON{Kind: "doc", Tabs: []state.PaneDocTabJSON{{Path: "one.md"}}},
+		}},
+	}}
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("the surviving document did not schedule its load")
+	}
+	if p.paneRoot.Split == nil || countLeavesOfKind(p.paneRoot, PaneDoc) != 1 || countLeavesOfKind(p.paneRoot, PaneTerminal) != 1 {
+		t.Fatalf("nested unknown did not collapse onto terminal|doc: root=%#v", p.paneRoot)
+	}
+	if p.paneRoot.Split.B != nil && p.paneRoot.Split.B.Split != nil {
+		t.Fatalf("inner split around the unknown leaf survived: root=%#v", p.paneRoot)
 	}
 }
 

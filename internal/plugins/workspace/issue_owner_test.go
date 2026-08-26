@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/contentlink"
@@ -108,6 +109,41 @@ func TestDecodeLeafReinstatesPersistedOwner(t *testing.T) {
 	loads := deck.LoadVisible()
 	if len(loads) != 1 {
 		t.Fatalf("loads = %d commands, want the active tab's fetch", len(loads))
+	}
+}
+
+func TestRestorePaneLayoutReinstatesIssueOwner(t *testing.T) {
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := docPaneTestPlugin(t, root, true)
+	layout := &state.PaneLayoutJSON{
+		Root: resolved, Surface: "shell:test-shell", Open: true,
+		Split: &state.PaneSplitJSON{
+			Axis: "cols", Ratio: 50,
+			A: &state.PaneLayoutJSON{Kind: contentKindTerminal},
+			B: &state.PaneLayoutJSON{
+				Kind: contentKindIssue,
+				IssueTabs: []state.PaneIssueTabJSON{
+					{Issue: "td-abc1", Scroll: 3, OwnerName: "Proj-B", OwnerRoot: "/tmp/proj-b"},
+				},
+			},
+		},
+	}
+	if cmd := p.restorePaneLayout(layout); cmd == nil {
+		t.Fatal("restore scheduled no load")
+	}
+	if n := countLeavesOfKind(p.paneRoot, PaneIssue); n != 1 {
+		t.Fatalf("issue leaves = %d, want 1", n)
+	}
+	issue, _ := p.activeIssuePane()
+	if issue == nil || issue.view() == nil {
+		t.Fatal("restored issue did not land on p.issues")
+	}
+	if name, ownerRoot := issue.view().Owner(); name != "Proj-B" || ownerRoot != "/tmp/proj-b" {
+		t.Fatalf("restored Owner() = %q, %q; want Proj-B at /tmp/proj-b", name, ownerRoot)
 	}
 }
 
