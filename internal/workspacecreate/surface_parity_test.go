@@ -30,19 +30,21 @@ func canonicalProviders() []ProviderItem {
 // resolves targets through the core rather than growing its own path. This
 // test holds both.
 func TestPaneSwitcherSurfacesStayInParity(t *testing.T) {
-	// The project workspace passes AllowTerminalSplit (it has a pane tree);
-	// the global browser leaves it off (its preview has passive panes only).
-	projectRows := kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true, providers: canonicalProviders()})
-	globalRows := kindRowsForOpts(rowOpts{hostScoped: false, showNotes: true, providers: canonicalProviders()})
+	// The project workspace passes AllowTerminalSplit (it can run a second
+	// live terminal); the global browser leaves it off (one producer, bound to
+	// the selected row). Everything else places a passive pane in a tree, and
+	// both surfaces have one.
+	projectRows := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true, providers: canonicalProviders()})
+	globalRows := kindRowsForOpts(rowOpts{allowTerminalSplit: false, showNotes: true, providers: canonicalProviders()})
 
 	var placeable []kindRow
 	for _, row := range projectRows {
-		if !row.HostScoped {
+		if !row.NeedsLiveTerminal {
 			placeable = append(placeable, row)
 		}
 	}
 	if len(placeable) != len(globalRows) {
-		t.Fatalf("after dropping HostScoped rows the project surface offers %d rows, global %d", len(placeable), len(globalRows))
+		t.Fatalf("after dropping the live-terminal row the project surface offers %d rows, global %d", len(placeable), len(globalRows))
 	}
 	for i, want := range globalRows {
 		got := placeable[i]

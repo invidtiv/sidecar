@@ -58,10 +58,11 @@ type OpenOpts struct {
 	// UseLastKind starts the list on the row it was last left on, when that
 	// row is one this host offers.
 	UseLastKind bool
-	// AllowTerminalSplit offers the Terminal split row — and, with it, every
-	// other HostScoped row (the configured resource providers): the flag is
-	// really "this host can place panes". A host without a pane tree to place
-	// one in leaves it off.
+	// AllowTerminalSplit offers the Terminal split row, and nothing else: the
+	// flag means "this host can run a SECOND live terminal beside its own".
+	// Every other row places a passive pane in a tree, which both hosts have,
+	// so no other row is gated on it — bundling them here is what once cost the
+	// global browser its resource-provider rows.
 	AllowTerminalSplit bool
 	// ShowNotes offers the Note row. It follows whether the notes plugin is
 	// registered, so a build without Notes never promises a note pane.
@@ -171,7 +172,7 @@ type Suggestion struct {
 func Open(opts OpenOpts) *Form {
 	f := &Form{
 		kind:             opts.Kind,
-		rows:             kindRowsForOpts(rowOpts{hostScoped: opts.AllowTerminalSplit, showNotes: opts.ShowNotes, providers: opts.Providers}),
+		rows:             kindRowsForOpts(rowOpts{allowTerminalSplit: opts.AllowTerminalSplit, showNotes: opts.ShowNotes, providers: opts.Providers}),
 		showNotes:        opts.ShowNotes,
 		terminalName:     strings.TrimSpace(opts.TerminalName),
 		terminalDisabled: strings.TrimSpace(opts.TerminalSplitDisabled),

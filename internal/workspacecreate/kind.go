@@ -44,10 +44,14 @@ type kindRow struct {
 	NeedsTarget bool
 	// ProviderID names the configured instance behind a KindResource row.
 	ProviderID string
-	// HostScoped rows are offered only by a host that can place them — a
-	// terminal split or a resource pane needs a pane tree, which the global
-	// browser's preview tiles do not have.
-	HostScoped bool
+	// NeedsLiveTerminal marks the row that opens a SECOND live terminal beside
+	// the host's own. It is the one capability the two hosts genuinely differ
+	// on: the project workspace owns a live terminal peer, the global browser
+	// has one producer bound to the selected row. Every other row places a
+	// passive pane in a tree, which both hosts have — so nothing else belongs
+	// here, and a passive row tagged with it goes missing on a surface that
+	// could have drawn it.
+	NeedsLiveTerminal bool
 }
 
 // kindCatalog is every row the modal knows, in list order. Provider rows are
@@ -55,7 +59,7 @@ type kindRow struct {
 var kindCatalog = []kindRow{
 	{Kind: KindShell, Label: "Shell", Description: "new agent/shell session"},
 	{Kind: KindWorktree, Label: "Worktree", Description: "shell in a new worktree"},
-	{Kind: KindTerminalSplit, Label: "Terminal split", Description: "terminal beside current pane", HostScoped: true},
+	{Kind: KindTerminalSplit, Label: "Terminal split", Description: "terminal beside current pane", NeedsLiveTerminal: true},
 	{Kind: KindFile, Label: "File", Description: "open a file in a split", NeedsTarget: true},
 	{Kind: KindDiff, Label: "Git diff", Description: "open a diff in a split", NeedsTarget: true},
 	{Kind: KindIssue, Label: "td issue", Description: "open an issue in a split", NeedsTarget: true},
@@ -81,15 +85,15 @@ type ProviderItem struct {
 }
 
 // kindRowsFor is the catalog a host offers.
-func kindRowsFor(hostScoped bool) []kindRow {
-	return kindRowsForOpts(rowOpts{hostScoped: hostScoped})
+func kindRowsFor(allowTerminalSplit bool) []kindRow {
+	return kindRowsForOpts(rowOpts{allowTerminalSplit: allowTerminalSplit})
 }
 
 // rowOpts is what shapes a host's catalog beyond the base table.
 type rowOpts struct {
-	hostScoped bool
-	showNotes  bool
-	providers  []ProviderItem
+	allowTerminalSplit bool
+	showNotes          bool
+	providers          []ProviderItem
 }
 
 func kindRowsForOpts(opts rowOpts) []kindRow {
@@ -98,15 +102,15 @@ func kindRowsForOpts(opts rowOpts) []kindRow {
 		if row.Kind == KindNote && !opts.showNotes {
 			continue
 		}
-		if row.HostScoped && !opts.hostScoped {
+		if row.NeedsLiveTerminal && !opts.allowTerminalSplit {
 			continue
 		}
 		rows = append(rows, row)
 	}
+	// A provider row opens a passive Resource pane, which every host with a
+	// pane tree can place — and both hosts have one. It is offered wherever the
+	// provider is configured, exactly like the File and Git diff rows beside it.
 	for _, p := range opts.providers {
-		if !opts.hostScoped {
-			break // provider panes are HostScoped: no tree, no row
-		}
 		id := strings.TrimSpace(p.ID)
 		if id == "" {
 			continue
@@ -117,7 +121,6 @@ func kindRowsForOpts(opts rowOpts) []kindRow {
 			Description: providerDescription,
 			NeedsTarget: true,
 			ProviderID:  id,
-			HostScoped:  true,
 		})
 	}
 	return rows

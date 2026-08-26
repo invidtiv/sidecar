@@ -142,10 +142,12 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 		Agents:       agents,
 		NextShell:    m.defaultShellDisplayName(key),
 		DefaultAgent: defaultAgent,
-		// This surface's preview owns a pane tree, so the switcher's passive
-		// rows work here exactly as they do in the project workspace. What it
-		// has no place for is a second live terminal, so HostScoped rows stay
-		// off — same rule, same flag, as before this milestone.
+		// This surface's preview owns a pane tree, so every passive row —
+		// File, Git diff, td issue, Note, and each configured resource
+		// provider — works here exactly as it does in the project workspace.
+		// The one row it cannot offer is Terminal split: this preview holds a
+		// single terminal producer, bound to the selected row, so there is
+		// nothing for a second live session to attach to.
 		AllowTerminalSplit: false,
 		ShowNotes:          m.notesWanted(),
 		Providers:          m.configuredProviders(),

@@ -37,12 +37,12 @@ func TestTerminalSplitRowIsOfferedPerHost(t *testing.T) {
 	}{
 		{
 			name:  "host with a pane tree",
-			rows:  kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true}),
+			rows:  kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true}),
 			kinds: []Kind{KindShell, KindWorktree, KindTerminalSplit, KindFile, KindDiff, KindIssue, KindNote},
 		},
 		{
 			name:  "host without one",
-			rows:  kindRowsForOpts(rowOpts{hostScoped: false, showNotes: true}),
+			rows:  kindRowsForOpts(rowOpts{allowTerminalSplit: false, showNotes: true}),
 			kinds: []Kind{KindShell, KindWorktree, KindFile, KindDiff, KindIssue, KindNote},
 		},
 	}

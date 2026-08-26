@@ -14,7 +14,7 @@ import (
 // with a filled background, so a row sized to its own text leaves the list
 // with an edge whose shape is an accident of the longest description.
 func TestKindListRowsFillTheContentColumn(t *testing.T) {
-	rows := kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true})
+	rows := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true})
 	const contentWidth = 64
 	for _, line := range strings.Split(renderKindList(rows, 0, false, false, nil, contentWidth), "\n") {
 		if got := ansi.StringWidth(line); got != contentWidth {
@@ -35,7 +35,7 @@ func TestDisabledKindRowKeepsTheListFill(t *testing.T) {
 	}
 
 	const reason = "Two terminals are already on screen — close one first"
-	rows := kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true})
+	rows := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true})
 	disabled := func(k Kind) string {
 		if k == KindTerminalSplit {
 			return reason

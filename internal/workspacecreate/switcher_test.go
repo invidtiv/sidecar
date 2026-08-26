@@ -56,18 +56,26 @@ func TestSwitcherKindListIsVerticalWithDescriptions(t *testing.T) {
 	}
 }
 
-// A host that cannot place panes loses exactly the HostScoped rows and keeps
-// every passive one — the parity rule, stated at the core both hosts share.
-func TestSwitcherCatalogDropsOnlyHostScopedRows(t *testing.T) {
-	full := kindRowsForOpts(rowOpts{hostScoped: true, showNotes: true, providers: []ProviderItem{{ID: "jira"}}})
-	bare := kindRowsForOpts(rowOpts{hostScoped: false, showNotes: true})
-	if len(full)-len(bare) != 2 { // the Terminal split row and the provider row
-		t.Fatalf("full catalog = %d rows, bare = %d; want exactly the HostScoped rows dropped", len(full), len(bare))
+// A host that cannot run a second live terminal loses exactly one row — the
+// Terminal split — and keeps every passive one, resource providers included.
+// That is the parity rule, stated at the core both hosts share: a provider row
+// opens a Resource pane, which any host with a pane tree can place, so gating
+// it on the live-terminal capability is what made it vanish from the global
+// browser while `sidecar open <locator>` opened it there perfectly well.
+func TestSwitcherCatalogDropsOnlyTheLiveTerminalRow(t *testing.T) {
+	providers := []ProviderItem{{ID: "jira"}}
+	full := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true, providers: providers})
+	bare := kindRowsForOpts(rowOpts{allowTerminalSplit: false, showNotes: true, providers: providers})
+	if len(full)-len(bare) != 1 {
+		t.Fatalf("full catalog = %d rows, bare = %d; want exactly the Terminal split row dropped", len(full), len(bare))
 	}
 	for i, row := range bare {
-		if row.HostScoped {
-			t.Fatalf("bare catalog kept HostScoped row %+v at %d", row, i)
+		if row.NeedsLiveTerminal {
+			t.Fatalf("bare catalog kept live-terminal row %+v at %d", row, i)
 		}
+	}
+	if kindLabel(bare, KindResource) != "jira" {
+		t.Fatal("a host without a live-terminal peer lost its configured provider row")
 	}
 }
 
