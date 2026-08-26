@@ -32,13 +32,14 @@ func globalTerminalFixture(b testing.TB) (*Model, terminalfixture.OpenCode, *tty
 	m := &Model{
 		catalog: map[string]workspaceinventory.Workspace{workspace.ID: workspace},
 		preview: previewState{
-			workspaceID: workspace.ID, buffer: buffer,
-			paneRoot: &panelayout.Node{ID: 1, Kind: panelayout.Terminal}, paneFocus: 1,
-			rowAnalyzer: &termpreview.RowAnalyzer{},
+			workspaceID: workspace.ID,
+			paneRoot:    &panelayout.Node{ID: 1, Kind: panelayout.Terminal}, paneFocus: 1,
 		},
 		workspacesMouse: mouse.NewHandler(), sidebarVisible: true, sidebarWidth: defaultWorkspaceSidebarPercent,
 		previewOwnership: &previewOwnershipLease{},
 	}
+	m.previewTerminalLeaf().Buffer = buffer
+	m.previewTerminalLeaf().RowAnalyzer = &termpreview.RowAnalyzer{}
 	m.workspaces.SetItems([]workspacelist.Item{listItem(workspace.Item(), workspace.ProjectName, 0, false)})
 	m.workspaces.SelectID(workspace.ID)
 	return m, fixture, buffer

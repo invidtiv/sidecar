@@ -16,8 +16,8 @@ import (
 func termScrollbarPreview(t *testing.T) *Model {
 	t.Helper()
 	m, _ := previewModel(t)
-	m.preview.buffer = tty.NewOutputBuffer(400)
-	if !m.preview.buffer.Update(strings.Repeat("history line\n", 200)) {
+	m.previewTerminalLeaf().Buffer = tty.NewOutputBuffer(400)
+	if !m.previewTerminalLeaf().Buffer.Update(strings.Repeat("history line\n", 200)) {
 		t.Fatal("seeding scrollback changed nothing")
 	}
 	m.WorkspacesView(previewWide, previewTall)
@@ -56,12 +56,12 @@ func TestPreviewTermScrollbarDragEndToEndThroughHost(t *testing.T) {
 	if got := m.workspacesMouse.DragRegion(); got != ui.RegionScrollbarThumb {
 		t.Fatalf("bar press started drag %q, want %s", got, ui.RegionScrollbarThumb)
 	}
-	if !m.preview.termBar.active || !m.preview.freeze.Active() {
+	if !m.previewTerminalState().termBar.active || !m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("bar press did not arm the host gesture and its freeze")
 	}
-	pinned := m.preview.freeze.Start()
-	if m.preview.offset != 0 {
-		t.Fatalf("thumb grab at rest moved the offset to %d", m.preview.offset)
+	pinned := m.previewTerminalLeaf().Freeze.Start()
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("thumb grab at rest moved the offset to %d", m.previewTerminalLeaf().Scroll)
 	}
 
 	// The window is at the live edge (thumb at the bottom of the track), so
@@ -69,18 +69,18 @@ func TestPreviewTermScrollbarDragEndToEndThroughHost(t *testing.T) {
 	// ending anything.
 	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: thumb.X, Y: thumb.Y - 3, Button: tea.MouseLeft}))
 	window := m.previewWindow()
-	if window.layout.Start != m.preview.freeze.Start() {
-		t.Fatalf("drawn start %d does not match the frozen pin %d", window.layout.Start, m.preview.freeze.Start())
+	if window.layout.Start != m.previewTerminalLeaf().Freeze.Start() {
+		t.Fatalf("drawn start %d does not match the frozen pin %d", window.layout.Start, m.previewTerminalLeaf().Freeze.Start())
 	}
-	if m.preview.freeze.Start() >= pinned {
-		t.Fatalf("dragging up did not walk back: start %d >= pinned %d", m.preview.freeze.Start(), pinned)
+	if m.previewTerminalLeaf().Freeze.Start() >= pinned {
+		t.Fatalf("dragging up did not walk back: start %d >= pinned %d", m.previewTerminalLeaf().Freeze.Start(), pinned)
 	}
 
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: 1, Y: 1}))
-	if m.preview.termBar.active || m.preview.freeze.Active() {
+	if m.previewTerminalState().termBar.active || m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("release did not settle the gesture and its freeze")
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("release lost the rows the drag walked back to")
 	}
 
@@ -89,7 +89,7 @@ func TestPreviewTermScrollbarDragEndToEndThroughHost(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 	fresh := termBarRect(t, m, ui.RegionScrollbarThumb)
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: fresh.X, Y: fresh.Y, Button: tea.MouseLeft}))
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		t.Fatal("fresh grab refused after settle")
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: 1, Y: 1}))
@@ -105,10 +105,10 @@ func TestPreviewTermTrackClickAnchorsAndContinues(t *testing.T) {
 	pressRow := track.H / 2 // a genuine track press below the thumb
 
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: track.X, Y: track.Y + pressRow, Button: tea.MouseLeft}))
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		t.Fatal("track press did not arm the gesture")
 	}
-	got := m.preview.freeze.Start()
+	got := m.previewTerminalLeaf().Freeze.Start()
 	if got == 0 {
 		t.Fatal("track click did not jump off the live edge")
 	}
@@ -116,8 +116,8 @@ func TestPreviewTermTrackClickAnchorsAndContinues(t *testing.T) {
 	// The jump anchors the gesture: continuing motion maps straight onto
 	// track rows through the press-time snapshot.
 	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: track.X, Y: track.Y + pressRow - 3, Button: tea.MouseLeft}))
-	if m.preview.freeze.Start() >= got {
-		t.Fatalf("anchored drag did not move back up: %d >= %d", m.preview.freeze.Start(), got)
+	if m.previewTerminalLeaf().Freeze.Start() >= got {
+		t.Fatalf("anchored drag did not move back up: %d >= %d", m.previewTerminalLeaf().Freeze.Start(), got)
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: 1, Y: 1}))
 }
@@ -140,19 +140,19 @@ func TestPreviewTermBarPressBeatsBodyAndDoublePressReGrabs(t *testing.T) {
 
 	click := tea.MouseClickMsg{X: thumb.X, Y: thumb.Y, Button: tea.MouseLeft}
 	run(t, m, m.WorkspacesMouse(click))
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		t.Fatal("first press did not arm the gesture")
 	}
-	if m.preview.selection.Anchor.Valid() {
+	if m.previewTerminalLeaf().Selection.Anchor.Valid() {
 		t.Fatal("press on the bar armed a text selection")
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: thumb.X, Y: thumb.Y}))
-	if m.preview.termBar.active {
+	if m.previewTerminalState().termBar.active {
 		t.Fatal("release did not settle the first grab")
 	}
 	// Bubble Tea emits the second press as ActionDoubleClick; it re-grabs.
 	run(t, m, m.WorkspacesMouse(click))
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		t.Fatal("a rapid second press on the bar did not re-grab it")
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseReleaseMsg{X: 1, Y: 1}))
@@ -165,12 +165,12 @@ func TestPreviewTermScrollbarLostReleaseRecoversOnHover(t *testing.T) {
 	thumb := termBarRect(t, m, ui.RegionScrollbarThumb)
 
 	run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: thumb.X, Y: thumb.Y, Button: tea.MouseLeft}))
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		t.Fatal("press did not arm the gesture")
 	}
 
 	run(t, m, m.WorkspacesMouse(tea.MouseMotionMsg{X: thumb.X, Y: thumb.Y + 2}))
-	if m.preview.termBar.active || m.preview.freeze.Active() {
+	if m.previewTerminalState().termBar.active || m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("lost release left the scrollbar gesture and its freeze live")
 	}
 	if m.workspacesMouse.IsDragging() {

@@ -341,10 +341,10 @@ func TestTheConfiguredExitKeyIsTheOneTheSurfaceAnswers(t *testing.T) {
 	m, _, _ := interactiveModel(t)
 	m.SetTerminalConfig(tty.Config{ExitKey: "ctrl+q"})
 	m.closePreviewTerminal()
-	m.preview.terminal = nil
+	m.previewTerminalState().terminal = nil
 	run(t, m, m.syncPreviewTerminal())
 	// The rebuilt pane is the one under test, not the one the helper made.
-	terminal := m.preview.terminal.(*fakeTerminal)
+	terminal := m.previewTerminalState().terminal.(*fakeTerminal)
 	enterInteractive(t, m)
 
 	if terminal.config.ExitKey != "ctrl+q" {
@@ -572,7 +572,7 @@ func TestTheWheelOverALivePaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	if len(terminal.wheel) != 0 {
 		t.Fatalf("a notch reached a pane that never asked for mouse events: %+v", terminal.wheel)
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("the wheel did nothing over a live pane that has no mouse reporting")
 	}
 	if m.workspaces.SelectedID() != selected {
@@ -580,17 +580,17 @@ func TestTheWheelOverALivePaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	}
 
 	// The same notch downwards walks back towards the live edge.
-	back := m.preview.offset
+	back := m.previewTerminalLeaf().Scroll
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: surface.X + 2, Y: surface.Y + 3, Button: tea.MouseWheelDown}))
-	if m.preview.offset >= back {
-		t.Fatalf("scrolling down left the window at %d, want closer to the live edge than %d", m.preview.offset, back)
+	if m.previewTerminalLeaf().Scroll >= back {
+		t.Fatalf("scrolling down left the window at %d, want closer to the live edge than %d", m.previewTerminalLeaf().Scroll, back)
 	}
 
 	// Once the application asks for mouse events the notch is its own, in its
 	// own coordinates.
 	terminal.reporting = true
-	m.preview.offset = 0
+	m.previewTerminalLeaf().Scroll = 0
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: surface.X + 2, Y: surface.Y + 3, Button: tea.MouseWheelUp}))
 	if len(terminal.wheel) != 1 {
@@ -602,11 +602,11 @@ func TestTheWheelOverALivePaneRoutesToTheAppOrTheWindow(t *testing.T) {
 
 	// While the app owns the wheel it owns what the pane shows, so a window left
 	// scrolled back is pinned to the live frame rather than left over stale rows.
-	m.preview.offset = 4
+	m.previewTerminalLeaf().Scroll = 4
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: surface.X + 2, Y: surface.Y + 3, Button: tea.MouseWheelUp}))
-	if m.preview.offset != 0 {
-		t.Fatalf("the window stayed at %d while the app owned the wheel", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("the window stayed at %d while the app owned the wheel", m.previewTerminalLeaf().Scroll)
 	}
 	terminal.wheel = terminal.wheel[:1]
 
@@ -617,7 +617,7 @@ func TestTheWheelOverALivePaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	if len(terminal.wheel) != 1 {
 		t.Fatalf("alt+wheel was forwarded to the app: %+v", terminal.wheel)
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("alt+wheel did not scroll the window")
 	}
 

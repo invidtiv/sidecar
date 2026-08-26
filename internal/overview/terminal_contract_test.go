@@ -50,7 +50,7 @@ func TestLivePaneChordsAreAnsweredThroughTheComponentsHook(t *testing.T) {
 	if len(terminal.keys) != 0 {
 		t.Fatalf("the chord also reached the pane as %v", terminal.keys)
 	}
-	if !m.preview.selection.HasSelection() {
+	if !m.previewTerminalLeaf().Selection.HasSelection() {
 		t.Fatal("select-all selected nothing, so the hook never ran")
 	}
 }
@@ -151,7 +151,7 @@ func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
 	pointerDown(t, m, x, y+2)
 	dragTo(t, m, x+6, y+3)
 	frozen := m.previewWindow().layout
-	anchor := m.preview.selection.Anchor
+	anchor := m.previewTerminalLeaf().Selection.Anchor
 	before, ok := tty.LineTextAt(m.previewBuffer(), anchor.Line)
 	if !ok {
 		t.Fatal("test premise: the drag anchored on no buffer row")
@@ -173,7 +173,7 @@ func TestADragFreezesTheWindowAgainstAMidGestureCapture(t *testing.T) {
 	}
 
 	release(t, m, x+6, y+3)
-	if m.preview.freeze.Active() {
+	if m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("the window stayed pinned after the gesture that pinned it ended")
 	}
 }

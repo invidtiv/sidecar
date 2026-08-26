@@ -348,8 +348,8 @@ func TestSelectionRebindsTheSingleTerminalProducer(t *testing.T) {
 	if !strings.Contains(view, "BRAVO OUTPUT") || strings.Contains(view, "ALPHA OUTPUT") {
 		t.Fatalf("selection did not rebind the producer to bravo:\n%s", view)
 	}
-	if m.preview.terminalTarget != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
-		t.Fatalf("terminal target = %+v, want bravo", m.preview.terminalTarget)
+	if m.previewTarget() != (tty.Target{Session: "sc-bravo", Pane: "%2"}) {
+		t.Fatalf("terminal target = %+v, want bravo", m.previewTerminalLeaf().Target)
 	}
 }
 
@@ -375,7 +375,7 @@ func TestHiddenTabDoesNoWorkAndKeepsNothing(t *testing.T) {
 	if m.preview.generation == generation {
 		t.Fatal("hiding did not supersede the in-flight capture")
 	}
-	if m.preview.buffer != nil || m.preview.workspaceID != "" || m.previewTerminalActive() {
+	if m.previewTerminalLeaf().Buffer != nil || m.preview.workspaceID != "" || m.previewTerminalActive() {
 		t.Fatal("hidden preview retained its terminal producer")
 	}
 	if got := recorder.panes(); len(got) != 1 {
@@ -433,7 +433,7 @@ func TestListKeysMoveTheListNotThePreview(t *testing.T) {
 
 	selected := m.workspaces.SelectedID()
 	press(t, m, "j")
-	if m.preview.offset != 0 {
+	if m.previewTerminalLeaf().Scroll != 0 {
 		t.Fatal("list navigation scrolled the preview")
 	}
 	if m.workspaces.SelectedID() == selected {
@@ -455,13 +455,13 @@ func TestWheelOverThePreviewScrollsTheCaptureNotTheList(t *testing.T) {
 	scroll := m.workspaces.SelectedID()
 
 	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseWheelUp}))
-	if m.preview.offset != 3 {
-		t.Fatalf("wheel over the preview did not use the shared three-row step: offset %d", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 3 {
+		t.Fatalf("wheel over the preview did not use the shared three-row step: offset %d", m.previewTerminalLeaf().Scroll)
 	}
 	settleWheel()
 	m.WorkspacesMouse(tea.MouseWheelMsg(tea.Mouse{X: x, Y: y, Button: tea.MouseWheelDown}))
-	if m.preview.offset != 0 {
-		t.Fatalf("wheel down did not return to live output: offset %d", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("wheel down did not return to live output: offset %d", m.previewTerminalLeaf().Scroll)
 	}
 	if m.workspaces.SelectedID() != scroll {
 		t.Fatal("the wheel over the preview moved the list")
@@ -813,7 +813,7 @@ func TestAWatchedFullScreenPaneIsDrawnFromItsLiveGridNotItsHistory(t *testing.T)
 	grid[paneHeight-4] = "INPUT BOX"
 	// tmux terminates its capture, so the pane's last row is a real blank row
 	// rather than the tail of the row above it.
-	terminal, ok := m.preview.terminal.(*fakeTerminal)
+	terminal, ok := m.previewTerminalState().terminal.(*fakeTerminal)
 	if !ok {
 		t.Fatal("test preview did not use the terminal seam")
 	}

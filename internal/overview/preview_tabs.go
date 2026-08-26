@@ -180,11 +180,11 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 		Width: width, Height: height, Chips: chips, Hints: hints,
 		Layout: layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
-		Follow: input.Follow, Selection: &m.preview.selection, TabWidth: tty.DefaultTabWidth,
-		Message: message, Decorate: m.preview.linkState.Decorate,
+		Follow: input.Follow, Selection: &m.previewTerminalLeaf().Selection, TabWidth: tty.DefaultTabWidth,
+		Message: message, Decorate: m.previewTerminalLeaf().LinkState.Decorate,
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 		BarStyle: m.previewTermBarStyle(),
-		Analyzer: m.preview.rowAnalyzer,
+		Analyzer: m.previewTerminalLeaf().RowAnalyzer,
 	})
 }
 

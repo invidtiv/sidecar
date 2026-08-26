@@ -1057,8 +1057,8 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	// not it is routed there: the terminal component's bare-"[" gate reads a
 	// host-wide last-mouse time, and a split SGR sequence would otherwise leak
 	// into the pane as a literal bracket.
-	if m.preview.terminal != nil {
-		m.preview.terminal.NoteMouseActivity()
+	if m.previewTerminalState().terminal != nil {
+		m.previewTerminalState().terminal.NoteMouseActivity()
 	}
 
 	wasDragging := m.workspacesMouse.IsDragging()
@@ -1084,7 +1084,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 			note.bar = previewNoteBar{}
 		}
 		m.hoverTermBar = isPreviewTermBarRegion(action.Region)
-		if m.preview.termBar.active && !m.workspacesMouse.IsDragging() {
+		if m.previewTerminalState().termBar.active && !m.workspacesMouse.IsDragging() {
 			m.settlePreviewTermScrollbar()
 		}
 	}
@@ -1216,7 +1216,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 		pressAway = false
 	}
 	if pressAway {
-		m.preview.pointer.Abandon()
+		m.previewTerminalLeaf().Pointer.Abandon()
 	}
 	// Focus follows the pointer's LEAF before any region handler runs, so the
 	// ring lands on what was pressed whether or not that leaf's kind happens to

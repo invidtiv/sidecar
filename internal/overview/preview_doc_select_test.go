@@ -190,7 +190,7 @@ func TestPreviewDocSelectionIsExclusiveWithTheTerminal(t *testing.T) {
 	m := previewDocSelectFixture(t, "alpha beta\nsecond line\n")
 
 	// A terminal selection is up in the box beside the document.
-	m.preview.selection.SelectRange(
+	m.previewTerminalLeaf().Selection.SelectRange(
 		ui.SelectionPoint{Line: 0, Col: 0}, ui.SelectionPoint{Line: 0, Col: 4}, false)
 
 	x, y := previewDocTextCell(t, m, 2, 0, 0)
@@ -200,7 +200,7 @@ func TestPreviewDocSelectionIsExclusiveWithTheTerminal(t *testing.T) {
 	if !m.preview.doc.view().HasSelection() {
 		t.Fatal("the drag selected nothing")
 	}
-	if m.preview.selection.HasSelection() {
+	if m.previewTerminalLeaf().Selection.HasSelection() {
 		t.Error("a document selection left the terminal's highlight up beside it")
 	}
 

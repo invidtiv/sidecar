@@ -111,7 +111,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 		return terminallink.Span{}, false
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
-	span, ok := m.preview.linkState.SpanAt(line, cell.Line, cell.Col)
+	span, ok := m.previewTerminalLeaf().LinkState.SpanAt(line, cell.Line, cell.Col)
 	return span, ok
 }
 

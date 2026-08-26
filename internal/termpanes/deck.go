@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // Target is the currently attached terminal identity and geometry. Source and
@@ -43,6 +44,15 @@ type Leaf struct {
 	LinkState   termpreview.LinkState
 	LinkContext any
 	RowAnalyzer *termpreview.RowAnalyzer
+
+	// Interaction state belongs to the leaf where the gesture or input mode
+	// began. HostState retains host-specific adapters without teaching this
+	// presentation-neutral collection either host's private interface.
+	Selection   ui.SelectionState
+	Pointer     tty.Pointer
+	Wheel       tty.WheelBurst
+	Interactive bool
+	HostState   any
 
 	Session string
 	PaneID  string
