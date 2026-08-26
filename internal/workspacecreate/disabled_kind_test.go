@@ -34,8 +34,10 @@ func TestTerminalSplitDisabledGatesEveryCreatePath(t *testing.T) {
 			if tc.want != "" && f.Validate() != tc.want {
 				t.Fatalf("Validate = %q, want the same refusal %q", f.Validate(), tc.want)
 			}
-			if got := f.ApplyPlacementAction(ActionPlaceRight); got != (tc.want == "") {
-				t.Fatalf("ApplyPlacementAction = %v, want %v", got, tc.want == "")
+			for _, action := range []string{ActionPlaceAuto, ActionPlaceRight, ActionPlaceBelow} {
+				if got := f.ApplyPlacementAction(action); got != (tc.want == "") {
+					t.Fatalf("ApplyPlacementAction(%s) = %v, want %v", action, got, tc.want == "")
+				}
 			}
 		})
 	}

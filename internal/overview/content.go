@@ -66,15 +66,17 @@ func (m *Model) paneContent(node *panelayout.Node) Content {
 		}
 		return &noteContent{m: m, note: m.preview.note}
 	default:
-		return &terminalContent{m: m}
+		return &terminalContent{m: m, leafID: node.ID, kind: node.Kind}
 	}
 }
 
 // terminalContent is the live pane leaf. Its header row is drawn from inside its
 // own body by the shared buffer renderer, exactly as on the project surface.
 type terminalContent struct {
-	m    *Model
-	size Size
+	m      *Model
+	size   Size
+	leafID int
+	kind   panelayout.Kind
 }
 
 func (c *terminalContent) Kind() string { return contentKindTerminal }
@@ -82,6 +84,9 @@ func (c *terminalContent) Kind() string { return contentKindTerminal }
 // Title is the workspace this pane is showing, which is the name the list chose
 // it by.
 func (c *terminalContent) Title() string {
+	if c.kind == panelayout.Shell {
+		return c.m.terminalLeaf(c.leafID).Name
+	}
 	if workspace, ok := c.m.SelectedWorkspace(); ok {
 		return workspace.Name
 	}
@@ -97,7 +102,7 @@ func (c *terminalContent) SetSize(size Size) tea.Cmd {
 }
 
 func (c *terminalContent) View(Render) string {
-	return c.m.renderOutputTerminal(c.size.Width, c.size.Height)
+	return c.m.renderOutputTerminalLeaf(c.leafID, c.kind, c.size.Width, c.size.Height)
 }
 
 // docContent is the document leaf: the pane's own header row above a document

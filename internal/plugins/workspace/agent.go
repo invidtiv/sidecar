@@ -875,7 +875,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 	interactiveCapture := p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
-		!p.interactiveState.TermPanel &&
+		!p.terminalPaneIsPanel(p.interactiveState.LeafID) &&
 		!p.selectingShell()
 	if interactiveCapture {
 		if selected := p.selectedWorktree(); selected == nil || selected.IdentityKey() != worktreeName {
@@ -899,7 +899,7 @@ func (p *Plugin) handlePollAgent(worktreeName string, generation int) tea.Cmd {
 		if selected := p.selectedWorktree(); selected != nil && selected.IdentityKey() == worktreeName {
 			directCapture = true
 			if features.IsEnabled(features.TmuxInteractiveInput.Name) {
-				if p.termPanelVisible {
+				if p.shellLeafVisible() {
 					previewWidth, previewHeight = p.calculateAgentPaneDimensions()
 				} else {
 					previewWidth, previewHeight = p.calculatePreviewDimensions()

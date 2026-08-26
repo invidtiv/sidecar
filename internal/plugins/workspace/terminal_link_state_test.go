@@ -58,10 +58,10 @@ func TestTerminalActivationRejectsReplacedPreparedBuffer(t *testing.T) {
 			p := docPaneTestPlugin(t, root, true)
 			buffer := p.shells[0].Agent.OutputBuf
 			if test.termPanel {
-				p.termPanelVisible = true
-				p.termPanelSession, p.termPanelPaneID = "panel", "%panel"
+				showTermPanel(t, p, SplitCols, 50)
+				p.requireShellTermPane().Session, p.requireShellTermPane().PaneID = "panel", "%panel"
 				buffer = tty.NewOutputBuffer(4)
-				p.termPanelOutput = buffer
+				p.requireShellTermPane().Buffer = buffer
 			}
 			buffer.Update("README.md")
 			state, links := preparedTerminalLineForTest(t, p, test.termPanel, buffer, "README.md")
@@ -69,9 +69,9 @@ func TestTerminalActivationRejectsReplacedPreparedBuffer(t *testing.T) {
 				t.Fatalf("prepared links = %#v", links)
 			}
 			if test.termPanel {
-				p.panelLinkState = state
+				p.requireShellTermPane().LinkState = state
 			} else {
-				p.primaryLinkState = state
+				p.primaryTermPane().LinkState = state
 			}
 			context := p.terminalLinkSurfaceContext(test.termPanel)
 			cmd, ok := p.revalidateTerminalLink(links[0], context, test.termPanel)
@@ -85,7 +85,7 @@ func TestTerminalActivationRejectsReplacedPreparedBuffer(t *testing.T) {
 			replacement := tty.NewOutputBuffer(4)
 			replacement.Update("README.md")
 			if test.termPanel {
-				p.termPanelOutput = replacement
+				p.requireShellTermPane().Buffer = replacement
 			} else {
 				p.shells[0].Agent.OutputBuf = replacement
 			}
@@ -101,9 +101,9 @@ func TestTerminalActivationRejectsReplacedPreparedBuffer(t *testing.T) {
 			}
 			if current := func() termpreview.LinkScope {
 				if test.termPanel {
-					return p.panelLinkState.Scope()
+					return p.requireShellTermPane().LinkState.Scope()
 				}
-				return p.primaryLinkState.Scope()
+				return p.primaryTermPane().LinkState.Scope()
 			}(); current.Buffer != replacement {
 				t.Fatalf("current prepared buffer = %p, want replacement %p", current.Buffer, replacement)
 			}
@@ -126,7 +126,7 @@ func TestTerminalActivationAcceptsUnchangedPreparedScope(t *testing.T) {
 	buffer := p.shells[0].Agent.OutputBuf
 	buffer.Update("README.md")
 	state, links := preparedTerminalLineForTest(t, p, false, buffer, "README.md")
-	p.primaryLinkState = state
+	p.primaryTermPane().LinkState = state
 	cmd, ok := p.revalidateTerminalLink(links[0], p.terminalLinkSurfaceContext(false), false)
 	if !ok || cmd == nil {
 		t.Fatal("prepared file did not start activation revalidation")
@@ -144,7 +144,7 @@ func TestTerminalCanonicalContextsStayBoundedAndResetOnInit(t *testing.T) {
 	rootA, rootB := t.TempDir(), t.TempDir()
 	p := docPaneTestPlugin(t, rootA, true)
 	p.shells[0].WorkDir = rootA
-	p.termPanelSession, p.termPanelPaneID = "panel", "%panel"
+	p.requireShellTermPane().Session, p.requireShellTermPane().PaneID = "panel", "%panel"
 
 	primaryA := p.terminalLinkSurfaceContext(false)
 	panelA := p.terminalLinkSurfaceContext(true)
@@ -153,25 +153,29 @@ func TestTerminalCanonicalContextsStayBoundedAndResetOnInit(t *testing.T) {
 	}
 	p.shells[0].WorkDir = rootB
 	primaryB := p.terminalLinkSurfaceContext(false)
-	if !primaryB.ok || primaryB.rawRoot != filepath.Clean(rootB) || p.primaryLinkContext != primaryB {
-		t.Fatalf("rotated primary context = %+v cached=%+v", primaryB, p.primaryLinkContext)
+	primaryCached, _ := p.primaryTermPane().LinkContext.(terminalLinkSurfaceContext)
+	if !primaryB.ok || primaryB.rawRoot != filepath.Clean(rootB) || primaryCached != primaryB {
+		t.Fatalf("rotated primary context = %+v cached=%+v", primaryB, primaryCached)
 	}
-	if p.panelLinkContext != panelA {
-		t.Fatalf("primary rotation changed the independent panel slot: %+v", p.panelLinkContext)
+	panelCached, _ := p.requireShellTermPane().LinkContext.(terminalLinkSurfaceContext)
+	if panelCached != panelA {
+		t.Fatalf("primary rotation changed the independent panel slot: %+v", panelCached)
 	}
-	if p.primaryLinkContext == primaryA {
+	if primaryCached == primaryA {
 		t.Fatal("old primary canonical context survived rotation")
 	}
 
-	p.primaryLinkState = termpreview.NewLinkCoordinator(nil).Prepare(termpreview.LinkPrepare{Scope: termpreview.LinkScope{Root: primaryB.root}})
-	p.panelLinkState = termpreview.NewLinkCoordinator(nil).Prepare(termpreview.LinkPrepare{Scope: termpreview.LinkScope{Root: panelA.root}})
+	p.primaryTermPane().LinkState = termpreview.NewLinkCoordinator(nil).Prepare(termpreview.LinkPrepare{Scope: termpreview.LinkScope{Root: primaryB.root}})
+	p.requireShellTermPane().LinkState = termpreview.NewLinkCoordinator(nil).Prepare(termpreview.LinkPrepare{Scope: termpreview.LinkScope{Root: panelA.root}})
 	if err := p.Init(&plugin.Context{Epoch: 18, WorkDir: rootB, ProjectRoot: rootB}); err != nil {
 		t.Fatal(err)
 	}
-	if p.primaryLinkContext != (terminalLinkSurfaceContext{}) || p.panelLinkContext != (terminalLinkSurfaceContext{}) {
-		t.Fatalf("reinit retained canonical contexts: primary=%+v panel=%+v", p.primaryLinkContext, p.panelLinkContext)
+	primaryContext, _ := p.primaryTermPane().LinkContext.(terminalLinkSurfaceContext)
+	panelContext, _ := p.requireShellTermPane().LinkContext.(terminalLinkSurfaceContext)
+	if primaryContext != (terminalLinkSurfaceContext{}) || panelContext != (terminalLinkSurfaceContext{}) {
+		t.Fatalf("reinit retained canonical contexts: primary=%+v panel=%+v", primaryContext, panelContext)
 	}
-	if p.primaryLinkState.Scope() != (termpreview.LinkScope{}) || p.panelLinkState.Scope() != (termpreview.LinkScope{}) {
+	if p.primaryTermPane().LinkState.Scope() != (termpreview.LinkScope{}) || p.requireShellTermPane().LinkState.Scope() != (termpreview.LinkScope{}) {
 		t.Fatal("reinit retained prepared terminal link state")
 	}
 }

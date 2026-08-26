@@ -38,7 +38,7 @@ func (p *Plugin) paneMouseReporting(termPanel bool) bool {
 // model is the pane under its own surface.
 func (p *Plugin) terminalModelForSurface(termPanel bool) *tty.Model {
 	if termPanel {
-		return p.panelTerminal
+		return p.requireShellTermPane().Terminal
 	}
-	return p.primaryTerminal
+	return p.primaryTermPane().Terminal
 }

@@ -117,10 +117,10 @@ func (m *Model) pressPreviewTermScrollbar(action mouse.MouseAction) {
 	m.clearPreviewSelectionOnScroll()
 
 	start := min(max(window.layout.Start, 0), max(window.layout.MaxOffset, 0))
-	if !m.preview.freeze.Active() {
+	if !m.previewTerminalLeaf().Freeze.Active() {
 		// Pin before anything reads or moves the window: a capture landing
 		// mid-gesture would otherwise renumber the rows under it.
-		m.preview.freeze.Freeze(start)
+		m.previewTerminalLeaf().Freeze.Freeze(start)
 	}
 
 	trackTopY := action.Region.Rect.Y
@@ -132,10 +132,10 @@ func (m *Model) pressPreviewTermScrollbar(action mouse.MouseAction) {
 		// Track press: jump-to-spot, anchored at the grabbed row.
 		bound := max(m.previewMaxOffset(), 0)
 		target := min(max(sb.StartAtTrackRow(action.Y-trackTopY), 0), bound)
-		m.preview.freeze.Scroll(start-target, bound)
+		m.previewTerminalLeaf().Freeze.Scroll(start-target, bound)
 		start = target
 	}
-	m.preview.termBar = previewTermBar{
+	m.previewTerminalState().termBar = previewTermBar{
 		sb:        sb,
 		trackTopY: trackTopY,
 		grabDelta: grabDelta,
@@ -151,16 +151,16 @@ func (m *Model) pressPreviewTermScrollbar(action mouse.MouseAction) {
 // its existing freeze — no thaw between motions — so output arriving mid-drag
 // cannot slide the rows under the reader.
 func (m *Model) dragPreviewTermScrollbar(y int) {
-	g := m.preview.termBar
+	g := m.previewTerminalState().termBar
 	if !g.active {
 		return
 	}
 	target := g.sb.StartAtTrackRow(y - g.trackTopY - g.grabDelta)
 	bound := max(m.previewMaxOffset(), 0)
 	target = min(max(target, 0), bound)
-	m.preview.freeze.Scroll(g.lastStart-target, bound)
+	m.previewTerminalLeaf().Freeze.Scroll(g.lastStart-target, bound)
 	g.lastStart = target
-	m.preview.termBar = g
+	m.previewTerminalState().termBar = g
 }
 
 // settlePreviewTermScrollbar ends a finished or cancelled gesture: the window
@@ -169,18 +169,18 @@ func (m *Model) dragPreviewTermScrollbar(y int) {
 // for older history), and parking at the oldest row reaches for older history
 // exactly as a wheel notch there would.
 func (m *Model) settlePreviewTermScrollbar() {
-	if !m.preview.termBar.active {
+	if !m.previewTerminalState().termBar.active {
 		return
 	}
-	m.preview.termBar = previewTermBar{}
+	m.previewTerminalState().termBar = previewTermBar{}
 	m.thawPreviewWindow()
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		// Back at the live edge: whatever older history the reader was reaching
 		// for is no longer where they are looking.
-		m.preview.history.Cancel()
+		m.previewTerminalLeaf().History.Cancel()
 		return
 	}
-	if m.preview.offset >= m.previewMaxOffset() {
+	if m.previewTerminalLeaf().Scroll >= m.previewMaxOffset() {
 		m.reachOlderPreviewHistory(tty.HistoryChunkLines)
 	}
 }
@@ -190,17 +190,6 @@ func (m *Model) settlePreviewTermScrollbar() {
 // the same shared region IDs, so the live-gesture state — not the ID alone —
 // is what tells them apart.
 func (m *Model) previewTermBarOwnsDrag(dragSource string) bool {
-	return m.preview.termBar.active &&
+	return m.previewTerminalState().termBar.active &&
 		(dragSource == ui.RegionScrollbarThumb || dragSource == ui.RegionScrollbarTrack)
-}
-
-// previewTermBarStyle is the emphasis the bar draws with: hover lights
-// whichever part the pointer rests on, a live gesture keeps the thumb lit.
-func (m *Model) previewTermBarStyle() ui.ScrollbarStyle {
-	dragging := m.preview.termBar.active
-	hovering := m.hoverTermBar && !dragging
-	return ui.ScrollbarStyle{
-		Thumb: ui.HandleStateFrom(hovering, dragging),
-		Track: ui.HandleStateFrom(hovering, false),
-	}
 }

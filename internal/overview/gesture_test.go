@@ -82,7 +82,7 @@ func TestDraggingOverThePreviewSelectsInsteadOfActivating(t *testing.T) {
 	if m.PreviewFocused() {
 		t.Fatal("a drag-select from the list left the keyboard on a watched preview")
 	}
-	if !m.preview.selection.HasSelection() {
+	if !m.previewTerminalLeaf().Selection.HasSelection() {
 		t.Fatal("dragging across the preview selected nothing")
 	}
 	if got := strings.Join(m.previewSelectionLines(), "\n"); !strings.HasPrefix(got, "live pa") {
@@ -282,20 +282,20 @@ func TestTypingSnapsAScrolledBackPreviewToTheLiveEdge(t *testing.T) {
 	enterInteractive(t, m)
 	m.WorkspacesView(previewWide, previewTall)
 
-	m.preview.offset = 6
+	m.previewTerminalLeaf().Scroll = 6
 	press(t, m, "a")
-	if m.preview.offset != 0 {
-		t.Fatalf("the window stayed at %d while the user typed into the pane", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("the window stayed at %d while the user typed into the pane", m.previewTerminalLeaf().Scroll)
 	}
 	if len(terminal.keys) == 0 || terminal.keys[len(terminal.keys)-1] != "a" {
 		t.Fatalf("the keystroke did not reach the pane: %v", terminal.keys)
 	}
 
 	// A key that is not typing leaves the window where the reader put it.
-	m.preview.offset = 6
+	m.previewTerminalLeaf().Scroll = 6
 	press(t, m, "esc")
-	if m.preview.offset != 6 {
-		t.Fatalf("escape moved the window to %d", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 6 {
+		t.Fatalf("escape moved the window to %d", m.previewTerminalLeaf().Scroll)
 	}
 }
 
@@ -310,13 +310,13 @@ func TestReachingTheTopOfAnUnnumberedCaptureClaimsNothing(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 
 	x, y := previewAt(t, m)
-	m.preview.offset = m.previewMaxOffset()
+	m.previewTerminalLeaf().Scroll = m.previewMaxOffset()
 	settleWheel()
 	if cmd := m.WorkspacesMouse(tea.MouseWheelMsg{X: x + 2, Y: y + 2, Button: tea.MouseWheelUp}); cmd != nil {
 		t.Fatalf("a buffer with no absolute coordinates answered %#v at its top", cmd())
 	}
-	if m.preview.offset != m.previewMaxOffset() {
-		t.Fatalf("the window moved past the top of the capture to %d", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != m.previewMaxOffset() {
+		t.Fatalf("the window moved past the top of the capture to %d", m.previewTerminalLeaf().Scroll)
 	}
 }
 
@@ -338,11 +338,11 @@ func TestClickingAwayAbandonsAnArmedTerminalGesture(t *testing.T) {
 			}
 
 			pointerDown(t, m, x+3, y+1)
-			if m.preview.pointer.Resolution != tty.ClickActivate {
-				t.Fatalf("the press armed %v, want activation", m.preview.pointer.Resolution)
+			if m.previewTerminalLeaf().Pointer.Resolution != tty.ClickActivate {
+				t.Fatalf("the press armed %v, want activation", m.previewTerminalLeaf().Pointer.Resolution)
 			}
 			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: away.x, Y: away.y, Button: tea.MouseLeft}))
-			if m.preview.pointer.Resolution != tty.ClickNone {
+			if m.previewTerminalLeaf().Pointer.Resolution != tty.ClickNone {
 				t.Fatalf("clicking %s left the terminal's click armed", away.name)
 			}
 		})

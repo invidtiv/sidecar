@@ -32,12 +32,12 @@ func TestWatchedGlobalPreviewAnswersTheScrollbackKeys(t *testing.T) {
 	}
 
 	press(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	if m.preview.offset != rows-1 {
-		t.Fatalf("pgup left the window at %d, want a page of %d rows back", m.preview.offset, rows-1)
+	if m.previewTerminalLeaf().Scroll != rows-1 {
+		t.Fatalf("pgup left the window at %d, want a page of %d rows back", m.previewTerminalLeaf().Scroll, rows-1)
 	}
 	press(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if m.preview.offset != 0 {
-		t.Fatalf("pgdown left the window %d rows back, want the live edge", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("pgdown left the window %d rows back, want the live edge", m.previewTerminalLeaf().Scroll)
 	}
 
 	// Half a page is half the rows this surface draws — the same number the
@@ -47,12 +47,12 @@ func TestWatchedGlobalPreviewAnswersTheScrollbackKeys(t *testing.T) {
 		t.Fatal("the shared rule did not claim ctrl+u for a watched pane")
 	}
 	press(ctrlKey('u'))
-	if m.preview.offset != want.Rows {
-		t.Fatalf("ctrl+u moved %d rows, want %d", m.preview.offset, want.Rows)
+	if m.previewTerminalLeaf().Scroll != want.Rows {
+		t.Fatalf("ctrl+u moved %d rows, want %d", m.previewTerminalLeaf().Scroll, want.Rows)
 	}
 	press(ctrlKey('d'))
-	if m.preview.offset != 0 {
-		t.Fatalf("ctrl+d left the window %d rows back, want the live edge", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("ctrl+d left the window %d rows back, want the live edge", m.previewTerminalLeaf().Scroll)
 	}
 
 	// The jumps land where g and G land. The reach the jump opens is the wheel's
@@ -61,12 +61,12 @@ func TestWatchedGlobalPreviewAnswersTheScrollbackKeys(t *testing.T) {
 	if handled, _ := m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyHome}); !handled {
 		t.Fatal("the watched preview refused home")
 	}
-	if m.preview.offset != bound {
-		t.Fatalf("home left the window at %d, want the oldest row held, %d", m.preview.offset, bound)
+	if m.previewTerminalLeaf().Scroll != bound {
+		t.Fatalf("home left the window at %d, want the oldest row held, %d", m.previewTerminalLeaf().Scroll, bound)
 	}
 	press(tea.KeyPressMsg{Code: tea.KeyEnd})
-	if m.preview.offset != 0 {
-		t.Fatalf("end left the window %d rows back, want the live edge", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("end left the window %d rows back, want the live edge", m.previewTerminalLeaf().Scroll)
 	}
 }
 

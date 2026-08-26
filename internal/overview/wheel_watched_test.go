@@ -40,7 +40,7 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	if len(terminal.wheel) != 0 {
 		t.Fatalf("a notch reached a pane that never asked for mouse events: %+v", terminal.wheel)
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("the wheel did nothing over a watched pane with no mouse reporting")
 	}
 	// A locally scrolled pane is being read too, and its capture cadence decays
@@ -53,7 +53,7 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	// own 1-indexed coordinates.
 	terminal.reporting = true
 	terminal.inputNoted = 0
-	m.preview.offset = 0
+	m.previewTerminalLeaf().Scroll = 0
 	notch(0)
 	if len(terminal.wheel) != 1 {
 		t.Fatalf("the watched pane received wheel notches %+v, want one", terminal.wheel)
@@ -61,8 +61,8 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	if got := terminal.wheel[0]; !got.up || got.col != 3 || got.row != 4 || got.notches < 1 {
 		t.Fatalf("wheel notch = %+v, want an upward notch at the pane's own 3,4", got)
 	}
-	if m.preview.offset != 0 {
-		t.Fatalf("the window moved to %d while the app owned the wheel", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("the window moved to %d while the app owned the wheel", m.previewTerminalLeaf().Scroll)
 	}
 	if terminal.inputNoted == 0 {
 		t.Fatal("the notch was not noted as input; the pane would be recaptured at its idle tier")
@@ -70,10 +70,10 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 
 	// While the app owns the wheel it owns what the pane shows, so a window left
 	// scrolled back is pinned to the live frame rather than left over stale rows.
-	m.preview.offset = 4
+	m.previewTerminalLeaf().Scroll = 4
 	notch(0)
-	if m.preview.offset != 0 {
-		t.Fatalf("the window stayed at %d while the app owned the wheel", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("the window stayed at %d while the app owned the wheel", m.previewTerminalLeaf().Scroll)
 	}
 	terminal.wheel = terminal.wheel[:1]
 
@@ -83,7 +83,7 @@ func TestTheWheelOverAWatchedPaneRoutesToTheAppOrTheWindow(t *testing.T) {
 	if len(terminal.wheel) != 1 {
 		t.Fatalf("alt+wheel was forwarded to the app: %+v", terminal.wheel)
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("alt+wheel did not scroll the window")
 	}
 }
@@ -114,7 +114,7 @@ func TestTheWheelIsNotForwardedWithWritesDisabled(t *testing.T) {
 	if len(terminal.wheel) != 0 {
 		t.Fatalf("a notch was forwarded with write support disabled: %+v", terminal.wheel)
 	}
-	if m.preview.offset == 0 {
+	if m.previewTerminalLeaf().Scroll == 0 {
 		t.Fatal("the notch that stayed here moved nothing")
 	}
 }

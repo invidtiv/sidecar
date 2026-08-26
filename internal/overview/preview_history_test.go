@@ -185,11 +185,11 @@ func TestASupersededPreviewReadIsRefused(t *testing.T) {
 	if cmd := m.reachOlderPreviewHistory(20); cmd == nil {
 		t.Fatal("the reach never opened a read")
 	}
-	stale := m.preview.history.RequestGen
+	stale := m.previewTerminalLeaf().History.RequestGen
 	m.pinPreviewToLive()
 
 	m.Update(previewHistoryLoadedMsg{
-		Target:     m.preview.terminalTarget,
+		Target:     m.previewTarget(),
 		Capture:    tty.CaptureRange{Output: numberedPaneLines(0, 600), HistorySize: 1200, StartLine: 0, EndLine: 600},
 		Generation: stale,
 	})
@@ -197,8 +197,8 @@ func TestASupersededPreviewReadIsRefused(t *testing.T) {
 	if base, _, _ := terminal.buffer.AbsoluteRange(); base != 600 {
 		t.Fatalf("a superseded read prepended anyway: base = %d", base)
 	}
-	if m.preview.offset != 0 {
-		t.Fatalf("a superseded read moved the window to %d", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 0 {
+		t.Fatalf("a superseded read moved the window to %d", m.previewTerminalLeaf().Scroll)
 	}
 }
 

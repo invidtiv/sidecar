@@ -24,13 +24,13 @@ func TestPreviewActivationRejectsStaleGenerationRootAndTarget(t *testing.T) {
 			m.PrepareTerminalLinks()
 		}},
 		{name: "target", rotate: func(_ *testing.T, m *Model) {
-			m.preview.terminalTarget.Pane = "%new-target"
+			m.previewTerminalLeaf().Target.Pane = "%new-target"
 			m.PrepareTerminalLinks()
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			m := linkPreviewModel(t, workspaceinventory.KindWorktree)
-			scope := m.preview.linkState.Scope()
+			scope := m.previewTerminalLeaf().LinkState.Scope()
 			span := contentlink.Span{Kind: contentlink.KindFile, Value: "README.md", Extra: contentlink.Extra{Raw: "README.md"}}
 			msg := previewLinkRevalidatedMsg{
 				Generation: m.preview.generation, WorkspaceID: m.preview.workspaceID, Scope: scope, Span: span,
@@ -64,14 +64,14 @@ func TestPreviewPreparationUsesCanonicalRootOncePerAcceptedContext(t *testing.T)
 	workspace := m.catalog[m.preview.workspaceID]
 	workspace.Path = alias
 	m.catalog[m.preview.workspaceID] = workspace
-	m.preview.buffer = tty.NewOutputBuffer(4)
-	m.preview.buffer.Update("https://example.test")
+	m.previewTerminalLeaf().Buffer = tty.NewOutputBuffer(4)
+	m.previewTerminalLeaf().Buffer.Update("https://example.test")
 	m.PrepareTerminalLinks()
 	want, err := filepath.EvalSymlinks(alias)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := m.preview.linkState.Scope().Root; got != filepath.Clean(want) {
+	if got := m.previewTerminalLeaf().LinkState.Scope().Root; got != filepath.Clean(want) {
 		t.Fatalf("scope root = %q, want %q", got, filepath.Clean(want))
 	}
 }

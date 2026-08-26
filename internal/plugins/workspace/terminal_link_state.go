@@ -33,11 +33,11 @@ func (p *Plugin) PrepareTerminalLinks() {
 	if p == nil || p.terminalLinks == nil {
 		return
 	}
-	p.primaryLinkState = p.prepareTerminalLinkSurface(false, p.primaryLinkState)
-	if p.termPanelVisible {
-		p.panelLinkState = p.prepareTerminalLinkSurface(true, p.panelLinkState)
+	p.primaryTermPane().LinkState = p.prepareTerminalLinkSurface(false, p.primaryTermPane().LinkState)
+	if p.shellLeafVisible() {
+		p.requireShellTermPane().LinkState = p.prepareTerminalLinkSurface(true, p.requireShellTermPane().LinkState)
 	} else {
-		p.panelLinkState = termpreview.LinkState{}
+		p.requireShellTermPane().LinkState = termpreview.LinkState{}
 	}
 }
 
@@ -74,7 +74,7 @@ type terminalLinkRevalidatedMsg struct {
 	Epoch      uint64
 	Context    terminalLinkSurfaceContext
 	Scope      termpreview.LinkScope
-	TermPanel  bool
+	LeafID     int
 	Link       terminalLink
 	Freeze     terminalViewportFreeze
 	PaneTarget bool
@@ -90,9 +90,9 @@ func (p *Plugin) revalidateTerminalLink(link terminalLink, context terminalLinkS
 		raw = link.Value
 	}
 	request := termpreview.FreshLinkRequest{Root: context.root, RawRoot: context.rawRoot, Candidate: contentlink.Pending{Kind: link.Kind, Raw: raw}}
-	scope := p.primaryLinkState.Scope()
+	scope := p.primaryTermPane().LinkState.Scope()
 	if termPanel {
-		scope = p.panelLinkState.Scope()
+		scope = p.requireShellTermPane().LinkState.Scope()
 	}
 	if scope.Root == "" || scope.Root != context.root || scope.Surface != context.surface || scope.Target != context.target {
 		return nil, false
@@ -101,7 +101,7 @@ func (p *Plugin) revalidateTerminalLink(link terminalLink, context terminalLinkS
 	freeze := p.captureTerminalViewportForDocOpen(termPanel)
 	paneTarget := p.paneRoot != nil && (link.Kind == contentlink.KindDiff || (link.Kind == contentlink.KindFile && docPaneTarget(link.Value)))
 	cmd := p.terminalLinks.ResolveFresh(request, func(result termpreview.FreshLinkResult) tea.Msg {
-		return terminalLinkRevalidatedMsg{Epoch: epoch, Context: context, Scope: scope, TermPanel: termPanel, Link: link, Freeze: freeze, PaneTarget: paneTarget, Result: result}
+		return terminalLinkRevalidatedMsg{Epoch: epoch, Context: context, Scope: scope, LeafID: p.terminalLeafID(termPanel), Link: link, Freeze: freeze, PaneTarget: paneTarget, Result: result}
 	})
 	return cmd, cmd != nil
 }
@@ -110,10 +110,11 @@ func (p *Plugin) applyTerminalLinkRevalidated(msg terminalLinkRevalidatedMsg) te
 	if p.ctx == nil || msg.Epoch != p.ctx.Epoch || !msg.Result.Found || msg.Result.Ref.Kind != msg.Link.Kind {
 		return nil
 	}
-	current := p.terminalLinkSurfaceContext(msg.TermPanel)
-	currentScope := p.primaryLinkState.Scope()
-	if msg.TermPanel {
-		currentScope = p.panelLinkState.Scope()
+	termPanel := p.terminalPaneIsPanel(msg.LeafID)
+	current := p.terminalLinkSurfaceContext(termPanel)
+	currentScope := p.primaryTermPane().LinkState.Scope()
+	if termPanel {
+		currentScope = p.requireShellTermPane().LinkState.Scope()
 	}
 	if !current.ok || current != msg.Context || currentScope != msg.Scope || msg.Result.Request.Root != current.root {
 		return nil
@@ -137,13 +138,13 @@ func (p *Plugin) applyTerminalLinkRevalidated(msg terminalLinkRevalidatedMsg) te
 		cmd := p.openResolvedFilePreview(current.root, strings.TrimSuffix(current.surface, ":panel"), display, absolute, plan.Line)
 		if cmd != nil {
 			p.clearTerminalSelection()
-			p.completeRevalidatedPaneActivation(contentlink.KindFile, msg.TermPanel, msg.Freeze, msg.PaneTarget)
+			p.completeRevalidatedPaneActivation(contentlink.KindFile, termPanel, msg.Freeze, msg.PaneTarget)
 		}
 		return cmd
 	case targetactivation.PlanOpenDiff:
 		cmd, _ := p.activateDiffLink(plan.Spec)
 		if cmd != nil {
-			p.completeRevalidatedPaneActivation(contentlink.KindDiff, msg.TermPanel, msg.Freeze, msg.PaneTarget)
+			p.completeRevalidatedPaneActivation(contentlink.KindDiff, termPanel, msg.Freeze, msg.PaneTarget)
 		}
 		return cmd
 	default:
@@ -163,5 +164,5 @@ func (p *Plugin) completeRevalidatedPaneActivation(kind contentlink.Kind, termPa
 	p.exitInteractiveMode()
 	p.activePane = PanePreview
 	p.paneFocus = leaf.ID
-	p.termPanelFocused = false
+	p.setShellLeafFocused(false)
 }

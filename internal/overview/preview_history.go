@@ -44,11 +44,11 @@ func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
 	// The pane's own report of how much history it holds is the origin the
 	// relative coordinates of a capture are measured from, so it is read at the
 	// moment of the request rather than remembered from an older frame.
-	if info := m.preview.terminal.History(); info.HasHistory {
-		m.preview.history.Record(info.HistorySize)
+	if info := m.previewTerminalState().terminal.History(); info.HasHistory {
+		m.previewTerminalLeaf().History.Record(info.HistorySize)
 	}
 	base, _, absolute := buffer.AbsoluteRange()
-	request, outcome := m.preview.history.Request(base, absolute, scrollLines)
+	request, outcome := m.previewTerminalLeaf().History.Request(base, absolute, scrollLines)
 	switch outcome {
 	case tty.HistoryRequested:
 	case tty.HistoryEnded:
@@ -80,7 +80,7 @@ func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
 // by. capture-pane takes a pane where there is one; the session is the fallback
 // for a target named only by its session.
 func (m *Model) previewHistoryTarget() (tty.Target, string) {
-	target := m.preview.terminalTarget
+	target := m.previewTarget()
 	if target.Pane != "" {
 		return target, target.Pane
 	}
@@ -90,10 +90,10 @@ func (m *Model) previewHistoryTarget() (tty.Target, string) {
 // applyPreviewHistory merges a completed read into the pane's buffer and
 // replays the movement waiting on it.
 func (m *Model) applyPreviewHistory(msg previewHistoryLoadedMsg) tea.Cmd {
-	if msg.Target != m.preview.terminalTarget || !m.previewTerminalActive() {
+	if msg.Target != m.previewTarget() || !m.previewTerminalActive() {
 		return nil
 	}
-	scrollLines, ok := m.preview.history.Accept(msg.Generation)
+	scrollLines, ok := m.previewTerminalLeaf().History.Accept(msg.Generation)
 	if !ok || msg.Err != nil {
 		return nil
 	}
@@ -102,18 +102,18 @@ func (m *Model) applyPreviewHistory(msg previewHistoryLoadedMsg) tea.Cmd {
 		return nil
 	}
 	oldBase, _, absolute := buffer.AbsoluteRange()
-	if !absolute || !m.preview.terminal.PrependHistory(msg.Capture.Output, msg.Capture.StartLine) {
+	if !absolute || !m.previewTerminalState().terminal.PrependHistory(msg.Capture.Output, msg.Capture.StartLine) {
 		return nil
 	}
 	newBase, _, _ := buffer.AbsoluteRange()
 	added := oldBase - newBase
-	m.preview.history.Settle(newBase, msg.Capture.HistorySize)
+	m.previewTerminalLeaf().History.Settle(newBase, msg.Capture.HistorySize)
 	// A window placed from the live bottom is not renumbered by a prepend; only
 	// a gesture's pin, which names an absolute row, is. So only the reader's own
 	// pending movement is replayed here.
-	m.preview.freeze.Rebase(added)
+	m.previewTerminalLeaf().Freeze.Rebase(added)
 	m.scrollPreview(scrollLines)
-	if remainder, more := m.preview.history.Remainder(scrollLines, added); more {
+	if remainder, more := m.previewTerminalLeaf().History.Remainder(scrollLines, added); more {
 		return m.reachOlderPreviewHistory(remainder)
 	}
 	return nil

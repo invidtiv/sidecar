@@ -32,10 +32,10 @@ func passiveWheelPanelPlugin(t *testing.T) *Plugin {
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelSession = "panel-session"
-	p.termPanelPaneID = "%2"
-	p.termPanelOutput = panel
-	p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)] = tty.HistoryReach{HistorySize: 1200}
+	p.requireShellTermPane().Session = "panel-session"
+	p.requireShellTermPane().PaneID = "%2"
+	p.requireShellTermPane().Buffer = panel
+	p.terminalHistory[terminalHistoryKey("panel", p.requireShellTermPane().Session)] = tty.HistoryReach{HistorySize: 1200}
 	if p.terminalMaxScroll(true) <= 0 {
 		t.Fatal("test premise: the panel fixture has nothing to scroll back through")
 	}
@@ -68,13 +68,13 @@ func TestPassivePanelWheelStopsAtTheLoadedTopAndAsksForHistory(t *testing.T) {
 		}
 	}
 
-	if bound := p.terminalMaxScroll(true); p.termPanelScroll != bound {
-		t.Fatalf("panel wheel left scroll %d, want the loaded bound %d", p.termPanelScroll, bound)
+	if bound := p.terminalMaxScroll(true); p.requireShellTermPane().Scroll != bound {
+		t.Fatalf("panel wheel left scroll %d, want the loaded bound %d", p.requireShellTermPane().Scroll, bound)
 	}
 	if lastCmd == nil {
 		t.Fatal("reaching the top of the loaded buffer never asked for older history")
 	}
-	if state := p.terminalHistory[terminalHistoryKey("panel", p.termPanelSession)]; !state.Loading {
+	if state := p.terminalHistory[terminalHistoryKey("panel", p.requireShellTermPane().Session)]; !state.Loading {
 		t.Fatal("the history request was never recorded against the panel")
 	}
 }
@@ -86,7 +86,7 @@ func TestPassivePanelWheelStopsAtTheLoadedTopAndAsksForHistory(t *testing.T) {
 // yes. Thawing before the clear is what puts that question to the right buffer.
 func TestPanelWheelKeepsAnAbsoluteSelectionThroughADocProjection(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
-	live := p.termPanelOutput
+	live := p.requireShellTermPane().Buffer
 
 	// The panel is pinned by a document activation, showing a snapshot of the
 	// rows that were on screen — the shape captureTerminalViewportForDocOpen
@@ -126,14 +126,14 @@ func TestPanelWheelThawsAGesturePinRatherThanDroppingIt(t *testing.T) {
 	}
 	relative := tty.NewOutputBuffer(400)
 	relative.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
-	p.termPanelOutput = relative
+	p.requireShellTermPane().Buffer = relative
 
 	bound := p.terminalMaxScroll(true)
 	// A gesture froze the window well back through the scrollback while the
 	// offset behind it still read the live edge: thawing that pin and dropping
 	// it land in visibly different places.
 	const pinnedStart = 20
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 	p.pinTerminalWindow(true, pinnedStart, false)
 	p.selection.Clear()
 	p.selection.Start = ui.SelectionPoint{Line: 1, Col: 0}
@@ -145,10 +145,10 @@ func TestPanelWheelThawsAGesturePinRatherThanDroppingIt(t *testing.T) {
 	// The pinned rows come back as a distance from the live bottom, and the
 	// notch steps five rows further back from there. Dropping the pin instead
 	// would resume from the stale zero the gesture froze over and land on 5.
-	if want := tty.ThawOffsetFrom(pinnedStart, bound) + 5; p.termPanelScroll != want {
-		t.Fatalf("panel wheel over a gesture pin left scroll %d, want %d", p.termPanelScroll, want)
+	if want := tty.ThawOffsetFrom(pinnedStart, bound) + 5; p.requireShellTermPane().Scroll != want {
+		t.Fatalf("panel wheel over a gesture pin left scroll %d, want %d", p.requireShellTermPane().Scroll, want)
 	}
-	if p.termPanelFreeze.Active() {
+	if p.requireShellTermPane().Freeze.Active() {
 		t.Fatal("the notch left the gesture pin holding the window")
 	}
 }
@@ -159,13 +159,13 @@ func TestPassivePanelWheelReturnsToTheLiveEdge(t *testing.T) {
 	region := &mouse.Region{ID: regionTermPanelContent}
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -5, Region: region})
-	if p.termPanelScroll != 5 {
-		t.Fatalf("panel wheel up left scroll %d, want 5", p.termPanelScroll)
+	if p.requireShellTermPane().Scroll != 5 {
+		t.Fatalf("panel wheel up left scroll %d, want 5", p.requireShellTermPane().Scroll)
 	}
 	for range 10 {
 		p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollDown, Delta: 5, Region: region})
 	}
-	if p.termPanelScroll != 0 {
-		t.Fatalf("panel wheel down left scroll %d, want the live edge", p.termPanelScroll)
+	if p.requireShellTermPane().Scroll != 0 {
+		t.Fatalf("panel wheel down left scroll %d, want the live edge", p.requireShellTermPane().Scroll)
 	}
 }

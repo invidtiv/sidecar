@@ -9,6 +9,7 @@ import (
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	sharedscroll "github.com/marcus/sidecar/internal/scroll"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -140,40 +141,43 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	}
 
 	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
-	if m.preview.terminal == nil {
-		m.preview.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooks())
+	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
+	if state.terminal == nil {
+		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf.ID))
 	}
-	if m.previewTerminalActive() && m.preview.terminalTarget == desired {
-		m.preview.buffer = m.preview.terminal.Buffer()
-		return m.syncTerminalGeometry()
+	if state.terminal.IsActive() && m.primaryTarget() == desired {
+		leaf.Buffer = state.terminal.Buffer()
+		return m.syncTerminalLeafGeometry(leaf.ID)
 	}
 
 	m.closePreviewTerminal()
 	m.preview.reason = ""
-	m.preview.terminalTarget = desired
+	m.setPrimaryTarget(desired)
 	var cmds []tea.Cmd
-	if width, height, ok := m.previewTerminalSize(); ok {
-		cmds = append(cmds, m.preview.terminal.SetDimensions(width, height))
+	if width, height, ok := m.terminalLeafSize(leaf.ID); ok {
+		leaf.Target.Width, leaf.Target.Height = width, height
+		cmds = append(cmds, state.terminal.SetDimensions(width, height))
 	}
-	cmds = append(cmds, m.preview.terminal.Open(desired))
-	m.preview.buffer = m.preview.terminal.Buffer()
+	cmds = append(cmds, state.terminal.Open(desired))
+	leaf.Buffer = state.terminal.Buffer()
 	m.tracef("preview terminal open workspace=%s pane=%s", workspace.ID, workspace.PaneID)
 	return tea.Batch(cmds...)
 }
 
 func (m *Model) closePreviewTerminal() {
-	if m.preview.interactive && m.preview.terminal != nil {
-		m.preview.terminal.ReleaseInput()
+	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
+	if leaf.Interactive && state.terminal != nil {
+		state.terminal.ReleaseInput()
 	}
-	if m.preview.terminal != nil && m.preview.terminal.IsActive() {
-		m.preview.terminal.Close()
+	if state.terminal != nil && state.terminal.IsActive() {
+		state.terminal.Close()
 	}
-	m.preview.interactive = false
-	m.preview.terminalTarget = tty.Target{}
-	m.preview.buffer = nil
+	leaf.Interactive = false
+	m.setPrimaryTarget(tty.Target{})
+	leaf.Buffer = nil
 	// The reach belongs to the pane being released: a read still in flight is
 	// for a target this surface no longer holds.
-	m.preview.history = tty.HistoryReach{}
+	leaf.History = tty.HistoryReach{}
 }
 
 // previewTerminalHooks is everything this surface owns about a live pane, said
@@ -182,6 +186,10 @@ func (m *Model) closePreviewTerminal() {
 // noticed by polling IsActive afterwards — is a second implementation of a
 // pipeline the project surface already drives through these same hooks.
 func (m *Model) previewTerminalHooks() tty.Hooks {
+	return m.previewTerminalHooksFor(m.previewTerminalLeaf().ID)
+}
+
+func (m *Model) previewTerminalHooksFor(leafID int) tty.Hooks {
 	return tty.Hooks{
 		OnKey:      m.previewTerminalKey,
 		BeforeSend: m.beforePreviewSend,
@@ -191,10 +199,13 @@ func (m *Model) previewTerminalHooks() tty.Hooks {
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList())
 		},
 		OnSessionEnded: func() tea.Cmd {
+			if leaf := panelayout.Find(m.preview.paneRoot, leafID); leaf != nil && leaf.Kind == panelayout.Shell {
+				return m.closePreviewShellLeaf(leafID, termpanes.CloseSessionEnded)
+			}
 			// A pane that died under a keystroke or a forwarded click ends the mode
 			// inside the component. The project surface raises the same toast, and a
 			// mode that ends by itself with no notice reads as a dropped keystroke.
-			m.preview.terminalTarget = tty.Target{}
+			m.setPrimaryTarget(tty.Target{})
 			m.preview.reason = "The session for this workspace has ended"
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList(),
 				appmsg.Alert(notify.SourceSession, notify.SeverityInfo, "Session ended"))
@@ -216,10 +227,10 @@ func (m *Model) previewTerminalKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // itself: a window left in scrollback would take the keystroke and show none of
 // it.
 func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
-	if m.preview.offset == 0 && !m.preview.freeze.Active() {
+	if m.previewTerminalLeaf().Scroll == 0 && !m.previewTerminalLeaf().Freeze.Active() {
 		return
 	}
-	if m.TerminalConfig().IsPasteChord(msg) || tty.ShouldSnapBack(msg, m.now().Sub(m.preview.wheel.LastAt())) {
+	if m.TerminalConfig().IsPasteChord(msg) || tty.ShouldSnapBack(msg, m.now().Sub(m.previewTerminalLeaf().Wheel.LastAt())) {
 		m.pinPreviewToLive()
 	}
 }
@@ -231,9 +242,9 @@ func (m *Model) beforePreviewSend(msg tea.KeyPressMsg) {
 // the project workspace's leaveInteractiveMode the same one (td-651ca2).
 func (m *Model) releasePreviewKeyboard() tea.Cmd {
 	m.tracef("preview interactive exit workspace=%s", m.preview.workspaceID)
-	m.preview.interactive = false
+	m.previewTerminalLeaf().Interactive = false
 	m.clearPreviewSelection()
-	m.preview.offset = tty.LeaveLiveWindow(&m.preview.freeze, m.preview.offset, m.previewMaxOffset())
+	m.previewTerminalLeaf().Scroll = tty.LeaveLiveWindow(&m.previewTerminalLeaf().Freeze, m.previewTerminalLeaf().Scroll, m.previewMaxOffset())
 	return nil
 }
 
@@ -241,11 +252,12 @@ func (m *Model) releasePreviewKeyboard() tea.Cmd {
 // live pane. The app asks so the keymap context, the footer hints, the mouse
 // mode and the native cursor all follow the same fact.
 func (m *Model) PreviewInteractive() bool {
-	return m.preview.interactive && m.previewTerminalActive()
+	leaf := m.previewTerminalLeaf()
+	return leaf.ID == m.preview.paneFocus && leaf.Interactive && m.previewTerminalActive()
 }
 
 func (m *Model) previewTerminalActive() bool {
-	return m.preview.terminal != nil && m.preview.terminal.IsActive()
+	return m.previewTerminalState().terminal != nil && m.previewTerminalState().terminal.IsActive()
 }
 
 // PreviewCanType reports that the selection has a live pane this surface could
@@ -279,20 +291,26 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		m.preview.reason = reason
 		return appmsg.Blocked(reason)
 	}
+	leaf := m.previewTerminalLeaf()
+	if node := panelayout.Find(m.preview.paneRoot, m.preview.paneFocus); node == nil || !panelayout.IsLive(node.Kind) {
+		leaf = m.primaryTerminalLeaf()
+		m.preview.paneFocus = leaf.ID
+	}
 	open := m.syncPreviewTerminal()
+	if node := panelayout.Find(m.preview.paneRoot, leaf.ID); node != nil && node.Kind == panelayout.Shell {
+		open = m.syncTerminalLeaf(leaf.ID)
+	}
 	if !m.previewTerminalActive() {
 		return open
 	}
 
 	m.preview.focus = focusPreview
-	m.preview.interactive = true
+	leaf.Interactive = true
 	// The pane taking the keyboard is the terminal leaf taking focus. Saying so
 	// here is what keeps the ring and the keys one value: without it a handover
 	// that started from a document leaf would type into the shell while the ring
 	// stayed on the document.
-	if leaf := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal); leaf != nil {
-		m.focusPreviewLeaf(leaf.ID)
-	}
+	m.focusPreviewLeaf(leaf.ID)
 	if m.previewNarrow() {
 		m.preview.full = true
 	}
@@ -302,8 +320,8 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	m.clearPreviewSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, open)
-	if buffer := m.preview.terminal.Buffer(); buffer != nil {
-		m.preview.buffer = buffer
+	if buffer := m.previewTerminalState().terminal.Buffer(); buffer != nil {
+		m.previewTerminalLeaf().Buffer = buffer
 	}
 	m.tracef("preview interactive enter workspace=%s pane=%s", workspace.ID, workspace.PaneID)
 	if !m.preview.interactiveHintShown {
@@ -333,7 +351,7 @@ func (m *Model) exitPreviewInteractive() tea.Cmd {
 	if !m.PreviewInteractive() {
 		return nil
 	}
-	m.preview.terminal.ReleaseInput()
+	m.previewTerminalState().terminal.ReleaseInput()
 	return m.releasePreviewKeyboard()
 }
 
@@ -345,7 +363,7 @@ func (m *Model) forwardToTerminal(msg tea.Msg) tea.Cmd {
 	if !m.PreviewInteractive() {
 		return nil
 	}
-	return m.preview.terminal.Update(msg)
+	return m.previewTerminalState().terminal.Update(msg)
 }
 
 // pressPreview arms a pointer gesture over the preview box. Nothing is decided
@@ -368,7 +386,7 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 	linkCmd, claimed := m.activatePreviewLinkAt(action, modified)
 	want := tty.ResolveClick(tty.ClickIntent{
 		Live:           m.PreviewInteractive(),
-		MouseReporting: m.PreviewInteractive() && m.preview.terminal.PaneMouseReporting(),
+		MouseReporting: m.PreviewInteractive() && m.previewTerminalState().terminal.PaneMouseReporting(),
 		Modified:       modified,
 		LinkClaimed:    claimed,
 	})
@@ -376,7 +394,7 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 		// Arm a no-op release so the click is claimed (LinkClaimed) and is
 		// not "start typing". Shift/alt never reach here.
 		m.workspacesMouse.StartDrag(action.X, action.Y, previewRegionKind, 0)
-		m.preview.pointer.Press(geometry, m.previewBuffer(), &m.preview.selection, tty.PressEvent{
+		m.previewTerminalLeaf().Pointer.Press(geometry, m.previewBuffer(), &m.previewTerminalLeaf().Selection, tty.PressEvent{
 			X: action.X, Y: action.Y,
 			Shift: action.Shift, Alt: action.Alt,
 			Rect: action.Region.Rect, Want: want,
@@ -389,7 +407,7 @@ func (m *Model) pressPreview(action mouse.MouseAction) tea.Cmd {
 	// padding: a plain click still needs its release, and motion can become
 	// selectable once it reaches a row.
 	m.workspacesMouse.StartDrag(action.X, action.Y, previewRegionKind, 0)
-	m.preview.pointer.Press(geometry, m.previewBuffer(), &m.preview.selection, tty.PressEvent{
+	m.previewTerminalLeaf().Pointer.Press(geometry, m.previewBuffer(), &m.previewTerminalLeaf().Selection, tty.PressEvent{
 		X: action.X, Y: action.Y,
 		Shift: action.Shift, Alt: action.Alt,
 		Rect: action.Region.Rect, Want: want,
@@ -412,19 +430,19 @@ func (m *Model) dragPreview(action mouse.MouseAction) tea.Cmd {
 		return nil
 	}
 	buffer := m.previewBuffer()
-	if !m.preview.selection.Anchor.Valid() &&
-		!m.preview.pointer.AnchorFrom(geometry, buffer, &m.preview.selection,
+	if !m.previewTerminalLeaf().Selection.Anchor.Valid() &&
+		!m.previewTerminalLeaf().Pointer.AnchorFrom(geometry, buffer, &m.previewTerminalLeaf().Selection,
 			action.X-action.DragDX, action.Y-action.DragDY, action.Alt) {
 		return nil
 	}
 	// The tick re-reads this position, so a pointer held still past an edge keeps
 	// scrolling after motion events stop arriving. Real motion also restarts the
 	// hold budget that bounds a chain running on a lost release.
-	m.preview.pointer.NoteDragMotion(action.X, action.Y)
+	m.previewTerminalLeaf().Pointer.NoteDragMotion(action.X, action.Y)
 	m.scrollPreviewRows(tty.EdgeScrollDelta(geometry, action.Y, tty.DragScrollStep))
 	// The window may have moved under the pointer, so ask again before extending.
 	geometry, _ = m.previewGeometry()
-	if !m.preview.pointer.DragTo(geometry, buffer, &m.preview.selection, action.X, action.Y) {
+	if !m.previewTerminalLeaf().Pointer.DragTo(geometry, buffer, &m.previewTerminalLeaf().Selection, action.X, action.Y) {
 		return nil
 	}
 	if tty.EdgeScrollDelta(geometry, action.Y, tty.AutoScrollStep) == 0 {
@@ -440,8 +458,8 @@ func (m *Model) selectPreviewUnit(action mouse.MouseAction, unit tty.SelectionUn
 	if !ok || action.Region == nil {
 		return nil
 	}
-	m.preview.pointer.AdoptSurface(&m.preview.selection, action.Region.Rect)
-	if !m.preview.pointer.SelectUnitAt(geometry, m.previewBuffer(), &m.preview.selection,
+	m.previewTerminalLeaf().Pointer.AdoptSurface(&m.previewTerminalLeaf().Selection, action.Region.Rect)
+	if !m.previewTerminalLeaf().Pointer.SelectUnitAt(geometry, m.previewBuffer(), &m.previewTerminalLeaf().Selection,
 		action.X, action.Y, unit) {
 		return nil
 	}
@@ -461,7 +479,7 @@ func (m *Model) finishPreviewGesture() tea.Cmd {
 	// The gesture is over, so the window goes back to following the live edge
 	// from wherever it was pinned.
 	m.thawPreviewWindow()
-	resolution, selected := m.preview.pointer.Release(&m.preview.selection)
+	resolution, selected := m.previewTerminalLeaf().Pointer.Release(&m.previewTerminalLeaf().Selection)
 	if selected {
 		if m.TerminalConfig().CopyOnSelect {
 			return m.copyPreviewSelectionCmd()
@@ -475,12 +493,12 @@ func (m *Model) finishPreviewGesture() tea.Cmd {
 	case tty.ClickForward:
 		// The press position, not the release: a click that resolves here never
 		// moved, and the send carries a press and a release together.
-		pressX, pressY := m.preview.pointer.PressPoint()
+		pressX, pressY := m.previewTerminalLeaf().Pointer.PressPoint()
 		col, row, ok := m.previewPaneCoords(pressX, pressY)
 		if !ok {
 			return nil
 		}
-		return m.preview.terminal.SendClick(col, row)
+		return m.previewTerminalState().terminal.SendClick(col, row)
 	}
 	return nil
 }
@@ -491,8 +509,8 @@ func (m *Model) finishPreviewGesture() tea.Cmd {
 func (m *Model) abandonPreviewGesture() tea.Cmd {
 	// Before anything else: an edge scroll tick still in flight belongs to a
 	// gesture that is over.
-	m.preview.pointer.Abandon()
-	if m.preview.selection.Anchor.Valid() {
+	m.previewTerminalLeaf().Pointer.Abandon()
+	if m.previewTerminalLeaf().Selection.Anchor.Valid() {
 		// The release happened, outside the window. Close the selection where the
 		// shared handler abandons its drag.
 		return m.finishPreviewGesture()
@@ -509,7 +527,7 @@ type previewAutoScrollTickMsg struct {
 }
 
 func (m *Model) schedulePreviewAutoScroll() tea.Cmd {
-	return m.preview.pointer.ScheduleAutoScroll(func(generation uint64) tea.Msg {
+	return m.previewTerminalLeaf().Pointer.ScheduleAutoScroll(func(generation uint64) tea.Msg {
 		return previewAutoScrollTickMsg{generation: generation}
 	})
 }
@@ -518,7 +536,7 @@ func (m *Model) schedulePreviewAutoScroll() tea.Cmd {
 // edge and re-arms itself. It stops when the gesture ended, the pointer came
 // back inside the content, or the window has no more rows in that direction.
 func (m *Model) advancePreviewAutoScroll(msg previewAutoScrollTickMsg) tea.Cmd {
-	if !m.preview.pointer.AdvanceAutoScroll(msg.generation, m.previewAutoScrollTarget()) {
+	if !m.previewTerminalLeaf().Pointer.AdvanceAutoScroll(msg.generation, m.previewAutoScrollTarget()) {
 		return nil
 	}
 	return m.schedulePreviewAutoScroll()
@@ -529,7 +547,7 @@ func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 	return tty.AutoScrollTarget{
 		Geometry:  func() tty.Geometry { geometry, _ := m.previewGeometry(); return geometry },
 		Buffer:    func() tty.Buffer { return m.previewBuffer() },
-		Selection: &m.preview.selection,
+		Selection: &m.previewTerminalLeaf().Selection,
 		Scroll: func(delta int) bool {
 			before := m.previewScrollAnchor()
 			m.scrollPreviewRows(delta)
@@ -548,18 +566,20 @@ func (m *Model) previewAutoScrollTarget() tty.AutoScrollTarget {
 // across its live frame.
 func (m *Model) wheelPreview(action mouse.MouseAction) tea.Cmd {
 	return tty.WheelHandler{
-		Burst: &m.preview.wheel,
+		Burst: &m.previewTerminalLeaf().Wheel,
 		// A forwarded notch is input, and input to a pane is gated exactly as
 		// typing is.
-		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
-		MouseReporting: func() bool { return m.previewTerminalActive() && m.preview.terminal.PaneMouseReporting() },
-		PaneCoords:     m.previewPaneCoords,
-		PinToLive:      m.pinPreviewToLive,
+		WritesEnabled: features.IsEnabled(features.TmuxInteractiveInput.Name),
+		MouseReporting: func() bool {
+			return m.previewTerminalActive() && m.previewTerminalState().terminal.PaneMouseReporting()
+		},
+		PaneCoords: m.previewPaneCoords,
+		PinToLive:  m.pinPreviewToLive,
 		// The notch is user input, and the pane's capture cadence decays from the
 		// component's own clock: a pane being scrolled is being read.
 		NoteActivity: m.notePreviewInput,
 		SendNotches: func(up bool, col, row, notches int) tea.Cmd {
-			return m.preview.terminal.SendWheelNotches(up, col, row, notches)
+			return m.previewTerminalState().terminal.SendWheelNotches(up, col, row, notches)
 		},
 		ScrollLocal: m.scrollPreviewByWheel,
 		OnHold:      func() { m.reuseWorkspacesViewOnce = true },
@@ -580,7 +600,7 @@ func (m *Model) previewWheelAtBoundary(action mouse.MouseAction) bool {
 		Delta:          action.Delta,
 		Shift:          action.Shift,
 		Alt:            action.Alt,
-		MouseReporting: m.previewTerminalActive() && m.preview.terminal.PaneMouseReporting(),
+		MouseReporting: m.previewTerminalActive() && m.previewTerminalState().terminal.PaneMouseReporting(),
 		InPane:         inPane,
 		WritesEnabled:  features.IsEnabled(features.TmuxInteractiveInput.Name),
 	})
@@ -588,28 +608,28 @@ func (m *Model) previewWheelAtBoundary(action mouse.MouseAction) bool {
 		return false
 	}
 	maximum := m.previewMaxOffset()
-	position := maximum - m.preview.offset
-	if m.preview.freeze.Active() {
-		position = m.preview.freeze.Start()
+	position := maximum - m.previewTerminalLeaf().Scroll
+	if m.previewTerminalLeaf().Freeze.Active() {
+		position = m.previewTerminalLeaf().Freeze.Start()
 	}
 	boundary := (sharedscroll.Bounds{Position: position, Maximum: maximum}).AtBoundary(action.Delta)
 	if !boundary {
 		return false
 	}
-	if action.Delta < 0 && m.previewTerminalActive() && !m.preview.history.Exhausted {
+	if action.Delta < 0 && m.previewTerminalActive() && !m.previewTerminalLeaf().History.Exhausted {
 		return false
 	}
-	m.preview.wheel.Reset()
+	m.previewTerminalLeaf().Wheel.Reset()
 	return true
 }
 
 // notePreviewInput records input this surface delivered to the pane against the
 // clock the component's capture cadence decays from.
 func (m *Model) notePreviewInput() {
-	if m.preview.terminal == nil {
+	if m.previewTerminalState().terminal == nil {
 		return
 	}
-	m.preview.terminal.NoteInput()
+	m.previewTerminalState().terminal.NoteInput()
 }
 
 // scrollPreviewByWheel moves this surface's own window by a coalesced notch, and
@@ -620,10 +640,10 @@ func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 	// A notch counts up the screen and the window counts back from the live
 	// bottom; the shared rule owns that reconciliation.
 	m.scrollPreviewRows(delta)
-	if delta > 0 && m.preview.offset == 0 {
+	if delta > 0 && m.previewTerminalLeaf().Scroll == 0 {
 		// Back at the live edge: whatever older history the reader was reaching
 		// for is no longer where they are looking.
-		m.preview.history.Cancel()
+		m.previewTerminalLeaf().History.Cancel()
 	}
 	if delta < 0 && m.previewScrollAnchor() == before {
 		return m.reachOlderPreviewHistory(-delta)
@@ -639,27 +659,37 @@ func (m *Model) scrollPreviewByWheel(delta int) tea.Cmd {
 // tmux's history ends, so what is left to say is the same thing the project
 // surface says, in the same words.
 func (m *Model) notePreviewScrollbackLimit() tea.Cmd {
-	if !m.preview.history.NoteEnd() {
+	if !m.previewTerminalLeaf().History.NoteEnd() {
 		return nil
 	}
 	return appmsg.ShowFlash(tty.HistoryExhaustedNotice)
 }
 
-// WorkspacesTerminalMsg offers the browser's terminal one of the terminal
-// component's own messages. Every one of them is scope-tagged, so the app hands
-// them to this surface and to the plugins alike and each activation keeps only
-// its own.
+// WorkspacesTerminalMsg offers every active terminal in the current row one of
+// the terminal component's own messages. Every message is scope-tagged, so the
+// owning activation acts and its peers ignore it. Routing only to the focused
+// leaf would make an unfocused peer miss output, control and session events.
 func (m *Model) WorkspacesTerminalMsg(msg tea.Msg) tea.Cmd {
 	if !tty.IsTerminalMessage(msg) {
 		return nil
 	}
 	// A live pane editor is the surface's second embedded terminal, and its
 	// messages arrive on the same bus, scope-tagged the same way.
-	edit := m.PreviewDocEditMsg(msg)
-	if !m.previewTerminalActive() {
-		return edit
+	cmds := []tea.Cmd{m.PreviewDocEditMsg(msg)}
+	var terminals []previewTerminal
+	if m.preview.terminalPanes != nil {
+		m.preview.terminalPanes.Range(func(_ int, leaf *termpanes.Leaf) bool {
+			state, _ := leaf.HostState.(*previewTerminalState)
+			if state != nil && state.terminal != nil && state.terminal.IsActive() {
+				terminals = append(terminals, state.terminal)
+			}
+			return true
+		})
 	}
-	return tea.Batch(edit, m.preview.terminal.Update(msg))
+	for _, terminal := range terminals {
+		cmds = append(cmds, terminal.Update(msg))
+	}
+	return tea.Batch(cmds...)
 }
 
 // WorkspacesTerminalKeySequence routes an unparsed CSI sequence — a modified
@@ -670,7 +700,7 @@ func (m *Model) WorkspacesTerminalKeySequence(msg tea.Msg) (bool, tea.Cmd) {
 	if !m.PreviewInteractive() {
 		return false, nil
 	}
-	return true, m.preview.terminal.SendUnknownSequence(msg)
+	return true, m.previewTerminalState().terminal.SendUnknownSequence(msg)
 }
 
 // WorkspacesTerminalPaste routes bracketed-paste content into a live pane and
@@ -756,14 +786,14 @@ func (m *Model) previewSurface() (termpreview.Surface, bool) {
 // new size: an idle pane under control mode emits nothing to ride along with.
 // SetDimensions is a no-op when nothing moved.
 func (m *Model) syncTerminalGeometry() tea.Cmd {
-	if !m.previewTerminalActive() {
-		return nil
+	var cmds []tea.Cmd
+	if m.preview.terminalPanes != nil {
+		m.preview.terminalPanes.Range(func(id int, _ *termpanes.Leaf) bool {
+			cmds = append(cmds, m.syncTerminalLeafGeometry(id))
+			return true
+		})
 	}
-	width, height, ok := m.previewTerminalSize()
-	if !ok {
-		return nil
-	}
-	return m.preview.terminal.SetDimensions(width, height)
+	return tea.Batch(cmds...)
 }
 
 // previewTerminalSize is the pane size this box can actually draw: the surface
@@ -771,11 +801,7 @@ func (m *Model) syncTerminalGeometry() tea.Cmd {
 // would be one column wider than what is drawn, so it would be permanently
 // clipped and every forwarded click near the right edge would land a column off.
 func (m *Model) previewTerminalSize() (width, height int, ok bool) {
-	surface, ok := m.previewSurface()
-	if !ok {
-		return 0, 0, false
-	}
-	return tty.ContentWidth(surface.Width), surface.Height, true
+	return m.terminalLeafSize(m.previewTerminalLeaf().ID)
 }
 
 // interactiveHints is the header's right region while the pane is live. It says

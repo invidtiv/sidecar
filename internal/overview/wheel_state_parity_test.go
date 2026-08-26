@@ -49,7 +49,7 @@ func parityPreviewOutcome(t *testing.T, live, reporting, alt bool) previewWheelO
 	}
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: x + 2, Y: y + 3, Button: tea.MouseWheelUp, Mod: mod}))
 
-	outcome := previewWheelOutcome{sends: len(terminal.wheel), window: m.preview.offset}
+	outcome := previewWheelOutcome{sends: len(terminal.wheel), window: m.previewTerminalLeaf().Scroll}
 	if len(terminal.wheel) > 0 {
 		outcome.forwarded = terminal.wheel[len(terminal.wheel)-1]
 	}

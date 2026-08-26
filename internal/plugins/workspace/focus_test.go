@@ -17,8 +17,8 @@ func leafTarget(id int) panelayout.Target {
 	return panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: id}
 }
 
-func panelTarget() panelayout.Target {
-	return panelayout.Target{Kind: panelayout.TargetTermPanel}
+func panelTarget(p *Plugin) panelayout.Target {
+	return leafTarget(p.shellLeaf().ID)
 }
 
 // assertFocus reads the three fields the frame draws focus from rather than the
@@ -26,21 +26,22 @@ func panelTarget() panelayout.Target {
 // here instead of agreeing with itself.
 func assertFocus(t *testing.T, p *Plugin, want panelayout.Target, step string) {
 	t.Helper()
-	switch want.Kind {
-	case panelayout.TargetSidebar:
-		if p.activePane != PaneSidebar || p.termPanelFocused {
-			t.Fatalf("%s: pane=%v panelFocused=%v, want the sidebar", step, p.activePane, p.termPanelFocused)
+	if want.Kind == panelayout.TargetSidebar {
+		if p.activePane != PaneSidebar || p.shellLeafFocused() {
+			t.Fatalf("%s: pane=%v panelFocused=%v, want the sidebar", step, p.activePane, p.shellLeafFocused())
 		}
-	case panelayout.TargetTermPanel:
-		if p.activePane != PanePreview || !p.termPanelFocused || p.paneFocus != terminalLeafID(p.paneRoot) {
+		return
+	}
+	if leaf := p.shellLeaf(); leaf != nil && want.Leaf == leaf.ID {
+		if p.activePane != PanePreview || !p.shellLeafFocused() || p.paneFocus != leaf.ID {
 			t.Fatalf("%s: pane=%v focus=%d panelFocused=%v, want the terminal panel",
-				step, p.activePane, p.paneFocus, p.termPanelFocused)
+				step, p.activePane, p.paneFocus, p.shellLeafFocused())
 		}
-	default:
-		if p.activePane != PanePreview || p.termPanelFocused || p.paneFocus != want.Leaf {
-			t.Fatalf("%s: pane=%v focus=%d panelFocused=%v, want leaf %d",
-				step, p.activePane, p.paneFocus, p.termPanelFocused, want.Leaf)
-		}
+		return
+	}
+	if p.activePane != PanePreview || p.shellLeafFocused() || p.paneFocus != want.Leaf {
+		t.Fatalf("%s: pane=%v focus=%d panelFocused=%v, want leaf %d",
+			step, p.activePane, p.paneFocus, p.shellLeafFocused(), want.Leaf)
 	}
 }
 
@@ -67,10 +68,10 @@ func TestTabCyclesEveryVisibleWindowIncludingTheTerminalPanel(t *testing.T) {
 	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(sidebarTarget())
 
-	forward := []panelayout.Target{leafTarget(1), leafTarget(2), leafTarget(3), panelTarget(), sidebarTarget()}
+	forward := []panelayout.Target{leafTarget(1), leafTarget(2), leafTarget(3), panelTarget(p), sidebarTarget()}
 	walkFocus(t, p, tabKey(), forward, "tab")
 
-	reverse := []panelayout.Target{panelTarget(), leafTarget(3), leafTarget(2), leafTarget(1), sidebarTarget()}
+	reverse := []panelayout.Target{panelTarget(p), leafTarget(3), leafTarget(2), leafTarget(1), sidebarTarget()}
 	walkFocus(t, p, shiftTabKey(), reverse, "shift+tab")
 }
 
@@ -86,14 +87,14 @@ func TestTabToTheTerminalPanelThawsItsWindow(t *testing.T) {
 	showTermPanel(t, p, SplitRows, 50)
 	p.setFocusTarget(leafTarget(3))
 	p.pinTerminalWindow(true, 4, true)
-	if !p.termPanelFreeze.Active() {
+	if !p.requireShellTermPane().Freeze.Active() {
 		t.Fatal("the panel window did not pin")
 	}
 
 	p.handleListKeys(tabKey())
-	assertFocus(t, p, panelTarget(), "tab to panel")
-	if p.termPanelFreeze.Active() || p.termPanelFreezeDoc {
-		t.Fatalf("panel focus arrived frozen: active=%v doc=%v", p.termPanelFreeze.Active(), p.termPanelFreezeDoc)
+	assertFocus(t, p, panelTarget(p), "tab to panel")
+	if p.requireShellTermPane().Freeze.Active() || p.requireShellTermPane().FreezeDoc {
+		t.Fatalf("panel focus arrived frozen: active=%v doc=%v", p.requireShellTermPane().Freeze.Active(), p.requireShellTermPane().FreezeDoc)
 	}
 }
 
@@ -195,7 +196,7 @@ func TestClickFocusesTheWindowUnderThePointer(t *testing.T) {
 	}{
 		{"doc leaf", mouse.Region{ID: regionPaneLeaf, Data: 2}, leafTarget(2)},
 		{"issue leaf", mouse.Region{ID: regionPaneLeaf, Data: 3}, leafTarget(3)},
-		{"terminal panel", mouse.Region{ID: regionTermPanelContent}, panelTarget()},
+		{"terminal panel", mouse.Region{ID: regionTermPanelContent}, panelTarget(p)},
 		{"preview terminal", mouse.Region{ID: regionPreviewPane}, leafTarget(1)},
 		{"sidebar", mouse.Region{ID: regionSidebar}, sidebarTarget()},
 	}
@@ -338,7 +339,7 @@ func TestTabSkipsTheTerminalPanelWhenTheSplitDoesNotFit(t *testing.T) {
 	}
 
 	for _, target := range p.focusRing() {
-		if target.Kind == panelayout.TargetTermPanel {
+		if leaf := p.shellLeaf(); leaf != nil && target.Leaf == leaf.ID {
 			t.Fatalf("undrawn panel is still in the ring: %+v", p.focusRing())
 		}
 	}

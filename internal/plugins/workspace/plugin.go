@@ -31,6 +31,7 @@ import (
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
@@ -176,23 +177,14 @@ type Plugin struct {
 	selectionSince time.Time
 	width          int
 	height         int
+	terminalPanes  *termpanes.Deck
 
 	// Shared terminal components for the selected primary pane and its optional
 	// per-worktree/project terminal panel. Workspaces owns target/layout policy;
 	// tty.Model owns transport, model presentation, fallback, input, and delivery.
-	primaryTerminal       *tty.Model
-	panelTerminal         *tty.Model
-	primaryTerminalTarget workspaceTerminalTarget
-	panelTerminalTarget   workspaceTerminalTarget
 	applicationFocused    bool
 	terminalLinks         termpreview.LinkCoordinator
-	primaryLinkState      termpreview.LinkState
-	panelLinkState        termpreview.LinkState
-	primaryLinkContext    terminalLinkSurfaceContext
-	panelLinkContext      terminalLinkSurfaceContext
 	linkMatcherGeneration uint64
-	primaryRowAnalyzer    *termpreview.RowAnalyzer
-	panelRowAnalyzer      *termpreview.RowAnalyzer
 
 	// Worktree state
 	worktrees                  []*Worktree
@@ -223,21 +215,10 @@ type Plugin struct {
 	sidebarBar sidebarBarState
 	// previewOffset is the document tabs' scroll position: an absolute line
 	// from the top of the rendered content. The terminal surfaces do not use
-	// it — a window over a live buffer is placed from the live bottom instead,
-	// which is previewScroll below.
-	previewOffset int
-	// previewScroll is the primary terminal surface's window: rows back from
-	// the live bottom, where zero is live. Following output is derived from it
-	// rather than tracked beside it, so the two cannot disagree.
-	previewScroll int
-	// previewFreeze holds that window still at an absolute start while a
-	// pointer gesture reads its rows or a document keeps the context it was
-	// opened from. previewFreezeDoc says which of the two is holding it: a
-	// gesture's pin ends with the gesture, a document's outlives it.
-	previewFreeze    tty.WindowFreeze
-	previewFreezeDoc bool
-	sidebarWidth     int  // Persisted sidebar width
-	sidebarVisible   bool // Whether sidebar is visible (toggled with \)
+	// it — each live terminal leaf keeps its own distance from the live bottom.
+	previewOffset  int
+	sidebarWidth   int  // Persisted sidebar width
+	sidebarVisible bool // Whether sidebar is visible (toggled with \)
 
 	// listFilter is the shared `/` filter over the sidebar list. The component
 	// is internal/workspacelist, the same one the global Workspaces browser
@@ -357,7 +338,7 @@ type Plugin struct {
 
 	// Interactive selection state (preview pane)
 	selection                     ui.SelectionState
-	selectionTermPanel            bool
+	selectionPanel                bool
 	pointer                       tty.Pointer // click/drag state machine over the terminal
 	interactiveCopyPasteHintShown bool
 	terminalHistory               map[string]tty.HistoryReach
@@ -437,11 +418,8 @@ type Plugin struct {
 
 	// Terminal panel state (Ctrl+T toggle). The panel is a Shell leaf of the
 	// pane tree: where it sits and how big it is are the tree's, and
-	// termPanelVisible says only whether that leaf belongs in it — see
-	// syncShellLeaf, which is the one place the two are reconciled.
-	termPanelVisible bool      // Whether the terminal panel's leaf is in the tree
-	shellSplitAxis   SplitAxis // Axis the next shell split opens at
-	shellSplitRatio  int       // Primary terminal's share of that split
+	shellSplitAxis  SplitAxis // Axis the next shell split opens at
+	shellSplitRatio int       // Primary terminal's share of that split
 	// shellSplitPlacement is the `--split` placement the create modal asked
 	// for, consumed by the open that follows it. Empty means ctrl+t's
 	// remembered shape.
@@ -464,13 +442,6 @@ type Plugin struct {
 	// the first persisted layout it can be spliced into.
 	legacyTermPanel       termPanelPrefs
 	legacyTermPanelTaken  bool
-	termPanelSession      string            // Tmux session name for the terminal panel
-	termPanelPaneID       string            // Tmux pane ID for resize operations
-	termPanelOutput       *tty.OutputBuffer // Captured output from the terminal session
-	termPanelScroll       int               // Rows back from the live bottom; 0 follows output
-	termPanelFreeze       tty.WindowFreeze  // Pins the panel to an absolute start while a gesture or a document holds it
-	termPanelFreezeDoc    bool              // Whether that pin belongs to a document activation rather than a pointer gesture
-	termPanelFocused      bool              // Whether the terminal panel sub-pane is focused (vs agent output)
 	terminalDocProjection terminalDocProjection
 	// termBar is a live pointer gesture on one of this plugin's two terminal
 	// scrollbars, armed by a press on that surface's bar regions and settled
@@ -691,7 +662,7 @@ func New() *Plugin {
 	// Create markdown renderer (ignore error, will fall back to plain text)
 	mdRenderer, _ := markdown.NewRenderer()
 
-	return &Plugin{
+	p := &Plugin{
 		worktrees:           make([]*Worktree, 0),
 		agents:              make(map[string]*Agent),
 		managedSessions:     make(map[string]bool),
@@ -713,10 +684,11 @@ func New() *Plugin {
 		shellSelected:       false, // Start with first worktree selected, not shell
 		applicationFocused:  true,
 		terminalOwnership:   &terminalOwnershipLease{},
-		primaryRowAnalyzer:  &termpreview.RowAnalyzer{},
-		panelRowAnalyzer:    &termpreview.RowAnalyzer{},
+		terminalPanes:       termpanes.New(),
 		shellStartupHooks:   defaultShellStartupHooks(),
 	}
+	p.primaryTermPane().RowAnalyzer = &termpreview.RowAnalyzer{}
+	return p
 }
 
 // ID returns the plugin identifier.
@@ -868,13 +840,16 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	p.refreshOperationID = ""
 	p.activeLifecycleOperationID = ""
 	p.resetLifecycleState()
-	p.resetTerminalModels()
-	p.primaryLinkContext = terminalLinkSurfaceContext{}
-	p.panelLinkContext = terminalLinkSurfaceContext{}
-	p.primaryLinkState = termpreview.LinkState{}
-	p.panelLinkState = termpreview.LinkState{}
-	p.applicationFocused = true
+	// Init starts a new pane-tree identity space. Drop the old collection before
+	// constructing models so a new primary ID cannot alias an old Shell leaf.
 	p.paneRoot = nil
+	p.terminalPanes = termpanes.New()
+	p.resetTerminalModels()
+	p.primaryTermPane().LinkContext = terminalLinkSurfaceContext{}
+	p.requireShellTermPane().LinkContext = terminalLinkSurfaceContext{}
+	p.primaryTermPane().LinkState = termpreview.LinkState{}
+	p.requireShellTermPane().LinkState = termpreview.LinkState{}
+	p.applicationFocused = true
 	p.contentDeck = nil
 	p.paneFocus = 0
 	p.paneNextID = 1
@@ -1088,7 +1063,7 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// remembered shape is taken either way, because it is what ctrl+t opens at.
 	if prefs := p.takeLegacyTermPanelPrefs(); restoreTermPanelVisible(prefs.Visible) {
 		p.legacyTermPanel = prefs
-		p.termPanelVisible = true
+		p.requestShellLeaf()
 	}
 
 	// Load saved diff view mode
@@ -1654,7 +1629,7 @@ func (p *Plugin) getOutputLineCount() int {
 func (p *Plugin) getPreviewVisibleHeight() int {
 	if p.width > 0 && p.height > 0 {
 		var h int
-		if p.termPanelVisible {
+		if p.shellLeafVisible() {
 			_, h = p.calculateAgentPaneDimensions()
 		} else {
 			_, h = p.calculatePreviewDimensions()
@@ -1696,7 +1671,7 @@ func (p *Plugin) previewShowsTerminal() bool {
 // own window rather than resuming from the one a gesture was reading.
 func (p *Plugin) jumpPreviewWindow(offset int) {
 	p.releaseTerminalWindowPin(false)
-	p.previewScroll = max(offset, 0)
+	p.primaryTermPane().Scroll = max(offset, 0)
 }
 
 // resetPreviewScroll puts the preview back where a new selection or a newly
@@ -2148,7 +2123,7 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 	// Refresh terminal panel session if selection changed, and resize it
 	if cmd := p.refreshTermPanelForSelection(); cmd != nil {
 		cmds = append(cmds, cmd)
-	} else if p.termPanelVisible {
+	} else if p.shellLeafVisible() {
 		// Session unchanged — still resize to match current split dimensions
 		if cmd := p.resizeTermPanelPaneCmd(); cmd != nil {
 			cmds = append(cmds, cmd)

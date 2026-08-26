@@ -51,7 +51,7 @@ func (l terminalLink) span() terminallink.Span {
 
 func (p *Plugin) terminalLinkTarget(termPanel bool) string {
 	if termPanel {
-		return p.termPanelSession + "\x00" + p.termPanelPaneID
+		return p.requireShellTermPane().Session + "\x00" + p.requireShellTermPane().PaneID
 	}
 	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil && shell.Agent != nil {
@@ -153,9 +153,9 @@ func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceC
 		surface += ":panel"
 	}
 	target := p.terminalLinkTarget(termPanel)
-	cached := p.primaryLinkContext
-	if termPanel {
-		cached = p.panelLinkContext
+	cached, _ := p.terminalPane(termPanel).LinkContext.(terminalLinkSurfaceContext)
+	if p.terminalPane(termPanel) == nil {
+		return terminalLinkSurfaceContext{}
 	}
 	if cached.surface == surface && cached.rawRoot == filepath.Clean(rawRoot) && cached.target == target && cached.root != "" {
 		return cached
@@ -165,11 +165,7 @@ func (p *Plugin) terminalLinkSurfaceContext(termPanel bool) terminalLinkSurfaceC
 		return terminalLinkSurfaceContext{}
 	}
 	context := terminalLinkSurfaceContext{rawRoot: filepath.Clean(rawRoot), root: filepath.Clean(root), surface: surface, target: target, ok: true}
-	if termPanel {
-		p.panelLinkContext = context
-	} else {
-		p.primaryLinkContext = context
-	}
+	p.terminalPane(termPanel).LinkContext = context
 	return context
 }
 
@@ -184,9 +180,9 @@ func (p *Plugin) terminalLinkAt(action mouse.MouseAction) (terminalLink, termina
 	}
 	termPanel := action.Region != nil && action.Region.ID == regionTermPanelContent
 	context := p.terminalLinkSurfaceContext(termPanel)
-	state := p.primaryLinkState
+	state := p.primaryTermPane().LinkState
 	if termPanel {
-		state = p.panelLinkState
+		state = p.requireShellTermPane().LinkState
 	}
 	span, ok := state.SpanAt(ui.ExpandTabs(line, tabStopWidth), point.Line, point.Col)
 	if !ok {

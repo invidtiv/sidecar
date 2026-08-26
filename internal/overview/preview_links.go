@@ -35,7 +35,8 @@ const (
 
 // previewPaneCloseHit names the content pane whose header X was clicked.
 type previewPaneCloseHit struct {
-	Kind panelayout.Kind
+	Kind   panelayout.Kind
+	LeafID int
 }
 
 func isPreviewDocRegion(kind string) bool {
@@ -111,7 +112,7 @@ func (m *Model) previewLinkAt(action mouse.MouseAction) (terminallink.Span, bool
 		return terminallink.Span{}, false
 	}
 	line = ui.ExpandTabs(line, tty.DefaultTabWidth)
-	span, ok := m.preview.linkState.SpanAt(line, cell.Line, cell.Col)
+	span, ok := m.previewTerminalLeaf().LinkState.SpanAt(line, cell.Line, cell.Col)
 	return span, ok
 }
 
@@ -459,7 +460,7 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 	// drawn on the document while keys land in the shell is exactly what a
 	// per-site rule leaks the first time a site forgets.
 	var cmd tea.Cmd
-	if leaf.Kind != panelayout.Terminal {
+	if !panelayout.IsLive(leaf.Kind) {
 		cmd = m.exitPreviewInteractive()
 	}
 	m.preview.paneFocus = leaf.ID
@@ -749,7 +750,7 @@ func (m *Model) composePreviewHeader(tabsRow string, width int, kind panelayout.
 	return ui.ComposeHeaderClose(tabsRow, width, m.previewCloseHover && m.hoverPreviewClose == kind)
 }
 
-func (m *Model) registerPreviewCloseRegion(kind panelayout.Kind, box termpreview.Box) {
+func (m *Model) registerPreviewCloseRegionFor(leafID int, kind panelayout.Kind, box termpreview.Box) {
 	reserve := ui.ReserveHeaderClose(box.W)
 	if reserve.CloseW < 1 {
 		return
@@ -757,8 +758,15 @@ func (m *Model) registerPreviewCloseRegion(kind panelayout.Kind, box termpreview
 	m.workspacesMouse.HitMap.AddRect(
 		previewPaneCloseKind,
 		box.X+reserve.CloseCol, box.Y, reserve.CloseW, 1,
-		previewPaneCloseHit{Kind: kind},
+		previewPaneCloseHit{Kind: kind, LeafID: leafID},
 	)
+}
+
+func (m *Model) closePreviewPaneHit(hit previewPaneCloseHit) tea.Cmd {
+	if hit.Kind == panelayout.Shell {
+		return m.requestClosePreviewShellLeaf(hit.LeafID)
+	}
+	return m.closePreviewPane(hit.Kind)
 }
 
 func (m *Model) closePreviewPane(kind panelayout.Kind) tea.Cmd {

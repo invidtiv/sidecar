@@ -474,9 +474,9 @@ func TestBareMarkdownClickRefusesPathSwappedOutsideAfterDecoration(t *testing.T)
 	p.shellSelected = true
 	p.shells = []*ShellSession{{TmuxName: "one", Agent: &Agent{OutputBuf: buffer}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	p.previewScroll = 7
+	p.primaryTermPane().Scroll = 7
 	prepareTerminalLinksForTest(t, p)
-	if span, ok := p.primaryLinkState.SpanAt("README.md", 0, 0); !ok || span.Extra.Raw != "README.md" {
+	if span, ok := p.primaryTermPane().LinkState.SpanAt("README.md", 0, 0); !ok || span.Extra.Raw != "README.md" {
 		t.Fatalf("initial prepared span = (%+v, %v)", span, ok)
 	}
 	if err := os.Remove(path); err != nil {
@@ -520,13 +520,13 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 		TmuxSession: "session", TmuxPane: "%1", OutputBuf: buffer,
 	}}}
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
-	p.previewScroll = 7
+	p.primaryTermPane().Scroll = 7
 	prepareTerminalLinksForTest(t, p)
 	rootAResolved, err := filepath.EvalSymlinks(rootA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scope := p.primaryLinkState.Scope(); scope.Root != rootAResolved {
+	if scope := p.primaryTermPane().LinkState.Scope(); scope.Root != rootAResolved {
 		t.Fatalf("initial link root = %q, want %q", scope.Root, rootAResolved)
 	}
 	if err := os.Remove(current); err != nil {
@@ -540,9 +540,9 @@ func TestBareMarkdownClickRefusesRetargetedSelectedRoot(t *testing.T) {
 	} else {
 		deliverLoads(t, p, cmd)
 	}
-	if p.previewScroll != 7 || p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll != 7 || p.primaryTermPane().Freeze.Active() {
 		t.Fatalf("refused click mutated viewport: scroll=%d pinned=%v",
-			p.previewScroll, p.previewFreeze.Active())
+			p.primaryTermPane().Scroll, p.primaryTermPane().Freeze.Active())
 	}
 	if doc, _ := p.activeDocPane(); doc != nil {
 		t.Fatal("retargeted-root click created a document pane")
@@ -617,9 +617,9 @@ func TestClaudeUpdateStyledMarkdownPathDecoratesAndActivates(t *testing.T) {
 		t.Fatalf("doc activation retained interactive terminal ownership: mode=%v interactive=%#v focus=%d",
 			p.viewMode, p.interactiveState, p.paneFocus)
 	}
-	if !p.previewFreeze.Active() || p.previewFreeze.Start() != 0 {
+	if !p.primaryTermPane().Freeze.Active() || p.primaryTermPane().Freeze.Start() != 0 {
 		t.Fatalf("doc activation did not freeze clicked viewport: pinned=%v start=%d",
-			p.previewFreeze.Active(), p.previewFreeze.Start())
+			p.primaryTermPane().Freeze.Active(), p.primaryTermPane().Freeze.Start())
 	}
 	// Claude redraws after the split: the transcript containing the clicked link
 	// moves into history while its new live grid is mostly chrome and blank rows.
@@ -688,9 +688,9 @@ func TestInteractiveAuthoritativeMarkdownPathLineUsesDocViewportTransition(t *te
 	if doc, _ := p.activeDocPane(); doc == nil || doc.view().Title() != "README.md" {
 		t.Fatalf("interactive path:line opened doc = %#v", doc)
 	}
-	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.previewFreeze.Active() {
+	if p.viewMode != ViewModeList || p.interactiveState != nil || !p.primaryTermPane().Freeze.Active() {
 		t.Fatalf("path:line retained live ownership/follow: mode=%v interactive=%#v pinned=%v",
-			p.viewMode, p.interactiveState, p.previewFreeze.Active())
+			p.viewMode, p.interactiveState, p.primaryTermPane().Freeze.Active())
 	}
 }
 
@@ -724,9 +724,9 @@ func TestInteractiveURLBesideExistingDocKeepsTerminalOwnership(t *testing.T) {
 		t.Fatal("interactive URL did not activate")
 	}
 	if p.viewMode != ViewModeInteractive || p.interactiveState == nil ||
-		p.previewScroll != 0 || p.previewFreeze.Active() {
+		p.primaryTermPane().Scroll != 0 || p.primaryTermPane().Freeze.Active() {
 		t.Fatalf("URL beside doc changed terminal ownership: mode=%v interactive=%#v scroll=%d pinned=%v",
-			p.viewMode, p.interactiveState, p.previewScroll, p.previewFreeze.Active())
+			p.viewMode, p.interactiveState, p.primaryTermPane().Scroll, p.primaryTermPane().Freeze.Active())
 	}
 }
 
@@ -742,9 +742,9 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 	p.paneRoot = &PaneNode{ID: 1, Kind: PaneTerminal}
 	p.paneFocus, p.paneNextID = 1, 2
 	showTermPanel(t, p, SplitCols, 50)
-	p.termPanelOutput = buffer
-	p.interactiveState.TermPanel = true
-	p.selectionTermPanel = true
+	p.requireShellTermPane().Buffer = buffer
+	p.interactiveState.LeafID = p.terminalLeafID(true)
+	p.selectionPanel = true
 
 	freeze := p.captureTerminalViewportForDocOpen(true)
 	p.applyTerminalViewportFreeze(freeze)
@@ -758,7 +758,7 @@ func TestDocViewportFreezePinsTerminalPanelByAbsoluteRow(t *testing.T) {
 		t.Fatalf("panel freeze = follow %v offset %d fromBottom %v, want absolute %d",
 			follow, offset, fromBottom, freeze.start)
 	}
-	if p.previewScroll != 0 || p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll != 0 || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("panel freeze disturbed independent primary follow state")
 	}
 }
@@ -789,11 +789,11 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	p.paneFocus, p.paneNextID = 1, 2
 	p.docs = make(map[int]*docPane)
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelSession = "panel-session"
-	p.termPanelPaneID = "%2"
-	p.termPanelOutput = panel
-	p.interactiveState.TermPanel = true
-	p.selectionTermPanel = true
+	p.requireShellTermPane().Session = "panel-session"
+	p.requireShellTermPane().PaneID = "%2"
+	p.requireShellTermPane().Buffer = panel
+	p.interactiveState.LeafID = p.terminalLeafID(true)
+	p.selectionPanel = true
 	prepareTerminalLinksForTest(t, p)
 
 	surface := p.terminalSurfaceGeometry(true)
@@ -811,7 +811,7 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 	} else {
 		deliverLoads(t, p, cmd)
 	}
-	if !p.termPanelFreeze.Active() {
+	if !p.requireShellTermPane().Freeze.Active() {
 		t.Fatal("panel document activation did not freeze the viewport")
 	}
 
@@ -820,24 +820,24 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 		Output: strings.Join(postResize, "\n"), BaseLine: 50, Absolute: true,
 		HistoryRows: len(rows), PaneRows: 4,
 	})
-	if cmd := p.closeDocPane(); cmd == nil || !p.termPanelFreeze.Active() {
-		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.termPanelFreeze.Active())
+	if cmd := p.closeDocPane(); cmd == nil || !p.requireShellTermPane().Freeze.Active() {
+		t.Fatalf("close lost preserved panel context: cmd %v frozen %v", cmd != nil, p.requireShellTermPane().Freeze.Active())
 	}
-	frozenStart := p.termPanelFreeze.Start()
+	frozenStart := p.requireShellTermPane().Freeze.Start()
 	follow, offset, fromBottom := p.terminalScrollState(true)
 	if follow || fromBottom || offset != frozenStart {
 		t.Fatalf("closed panel context = follow %v offset %d fromBottom %v", follow, offset, fromBottom)
 	}
 
 	p.activePane = PanePreview
-	p.termPanelFocused = true
+	p.setShellLeafFocused(true)
 	p.handleListKeys(tea.KeyPressMsg{Code: 'G', Text: "G"})
 	follow, offset, fromBottom = p.terminalScrollState(true)
-	if p.termPanelFreeze.Active() || !follow || !fromBottom || offset != 0 {
+	if p.requireShellTermPane().Freeze.Active() || !follow || !fromBottom || offset != 0 {
 		t.Fatalf("G did not return panel live: frozen %v follow %v offset %d fromBottom %v",
-			p.termPanelFreeze.Active(), follow, offset, fromBottom)
+			p.requireShellTermPane().Freeze.Active(), follow, offset, fromBottom)
 	}
-	if p.previewScroll != 0 || p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll != 0 || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("panel navigation disturbed independent primary follow")
 	}
 
@@ -854,21 +854,21 @@ func TestTerminalPanelDocFreezeReleasesOnPassiveNavigation(t *testing.T) {
 		Output: strings.Join(history, "\n"), BaseLine: 50, Absolute: true,
 		PaneRows: len(history),
 	})
-	t.Logf("DBG max=%d leaf=%v root=%+v", p.terminalMaxScroll(true), p.shellLeaf() != nil, p.termPanelVisible)
+	t.Logf("DBG max=%d leaf=%v root=%+v", p.terminalMaxScroll(true), p.shellLeaf() != nil, p.shellLeafVisible())
 	pinned := p.terminalMaxScroll(true) / 2
 	if pinned <= 0 {
 		t.Fatal("test premise: the panel has no rows above its window to pin over")
 	}
-	p.termPanelFreeze.Release()
-	p.termPanelFreeze.Freeze(pinned)
+	p.requireShellTermPane().Freeze.Release()
+	p.requireShellTermPane().Freeze.Freeze(pinned)
 	p.thawTerminalWindow(true)
-	before := p.termPanelScroll
-	p.termPanelFreeze.Release()
-	p.termPanelFreeze.Freeze(pinned)
+	before := p.requireShellTermPane().Scroll
+	p.requireShellTermPane().Freeze.Release()
+	p.requireShellTermPane().Freeze.Freeze(pinned)
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, Region: action.Region})
-	if p.termPanelFreeze.Active() || p.termPanelScroll <= before {
+	if p.requireShellTermPane().Freeze.Active() || p.requireShellTermPane().Scroll <= before {
 		t.Fatalf("wheel did not release and move panel: frozen %v scroll %d, translated %d",
-			p.termPanelFreeze.Active(), p.termPanelScroll, before)
+			p.requireShellTermPane().Freeze.Active(), p.requireShellTermPane().Scroll, before)
 	}
 }
 
@@ -910,7 +910,7 @@ func TestScrolledClaudeDocProjectionSurvivesDestructiveResizeRedraw(t *testing.T
 	// notches, because the 4-row pane is letterboxed into this viewport and the
 	// window is counted back from where the live edge draws it: the same drawn
 	// window this fixture always meant, named in the corrected offset (td-bbbbfe).
-	p.previewScroll = 2
+	p.primaryTermPane().Scroll = 2
 	prepareTerminalLinksForTest(t, p)
 
 	if cmd := p.handleMouseClick(actionAt(12, 5)); cmd == nil {
@@ -1006,9 +1006,9 @@ func TestTerminalDocProjectionRejectsRecreatedBufferWithSameTargetIDs(t *testing
 
 	t.Run("panel", func(t *testing.T) {
 		p := newSelectionTestPlugin()
-		p.termPanelSession, p.termPanelPaneID = "S", "%2"
+		p.requireShellTermPane().Session, p.requireShellTermPane().PaneID = "S", "%2"
 		original := tty.NewOutputBuffer(2)
-		p.termPanelOutput = original
+		p.requireShellTermPane().Buffer = original
 		projected := tty.NewOutputBuffer(1)
 		projected.Update("old panel screen")
 		p.terminalDocProjection = terminalDocProjection{
@@ -1016,8 +1016,8 @@ func TestTerminalDocProjectionRejectsRecreatedBufferWithSameTargetIDs(t *testing
 			identity: p.terminalProjectionIdentity(true),
 		}
 		p.cleanupTermPanelSession()
-		p.termPanelSession, p.termPanelPaneID = "S", "%2"
-		p.termPanelOutput = tty.NewOutputBuffer(2)
+		p.requireShellTermPane().Session, p.requireShellTermPane().PaneID = "S", "%2"
+		p.requireShellTermPane().Buffer = tty.NewOutputBuffer(2)
 		if p.projectedTerminalBuffer(true) != nil || p.terminalDocProjection.buffer != nil {
 			t.Fatal("panel projection survived cleanup and resurrected over recreated target")
 		}

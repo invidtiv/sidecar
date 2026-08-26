@@ -23,31 +23,23 @@ func canonicalProviders() []ProviderItem {
 // TestPaneSwitcherSurfacesStayInParity is the switcher's parity contract, the
 // create action's rule carried to the grown modal: rows and pickers work
 // identically from the project workspace and the global Sessions browser,
-// minus exactly the HostScoped rows where no pane tree exists.
+// including the live-terminal row now that both hosts own a pane tree.
 //
 // Both surfaces build their form from this package, so parity lives or dies in
 // two places — the catalogs their OpenOpts produce, and whether each host
 // resolves targets through the core rather than growing its own path. This
 // test holds both.
 func TestPaneSwitcherSurfacesStayInParity(t *testing.T) {
-	// The project workspace passes AllowTerminalSplit (it can run a second
-	// live terminal); the global browser leaves it off (one producer, bound to
-	// the selected row). Everything else places a passive pane in a tree, and
-	// both surfaces have one.
+	// Both hosts can place a second live terminal, so their catalogs are the
+	// same when the shared feature is allowed.
 	projectRows := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true, providers: canonicalProviders()})
-	globalRows := kindRowsForOpts(rowOpts{allowTerminalSplit: false, showNotes: true, providers: canonicalProviders()})
+	globalRows := kindRowsForOpts(rowOpts{allowTerminalSplit: true, showNotes: true, providers: canonicalProviders()})
 
-	var placeable []kindRow
-	for _, row := range projectRows {
-		if !row.NeedsLiveTerminal {
-			placeable = append(placeable, row)
-		}
-	}
-	if len(placeable) != len(globalRows) {
-		t.Fatalf("after dropping the live-terminal row the project surface offers %d rows, global %d", len(placeable), len(globalRows))
+	if len(projectRows) != len(globalRows) {
+		t.Fatalf("project surface offers %d rows, global %d", len(projectRows), len(globalRows))
 	}
 	for i, want := range globalRows {
-		got := placeable[i]
+		got := projectRows[i]
 		if got.Kind != want.Kind || got.Label != want.Label || got.NeedsTarget != want.NeedsTarget {
 			t.Fatalf("row %d differs: project %+v, global %+v", i, got, want)
 		}

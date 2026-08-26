@@ -84,7 +84,7 @@ func TestAWheelScrollKeepsAnAbsoluteSelection(t *testing.T) {
 		PaneHeight: 10,
 	}))
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
-	p.previewScroll = 40
+	p.primaryTermPane().Scroll = 40
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 520, Col: 0}, ui.SelectionPoint{Line: 520, Col: 5}, false)
 
@@ -111,7 +111,7 @@ func TestAScrollbackKeyKeepsAnAbsoluteSelection(t *testing.T) {
 		PaneHeight: 10,
 	}))
 	p.shells = []*ShellSession{{Name: "one", TmuxName: "sc-one", Agent: &Agent{OutputBuf: buffer}}}
-	p.previewScroll = 40
+	p.primaryTermPane().Scroll = 40
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 520, Col: 0}, ui.SelectionPoint{Line: 520, Col: 5}, false)
 
@@ -174,8 +174,8 @@ func TestLeavingALivePaneKeepsTheReadersWindow(t *testing.T) {
 	// allowed to compute its own expectation from that rule, or a regression
 	// that snapped both sides to the live edge would pass on both. The rule's
 	// value is pinned once, in tty's TestLeaveLiveWindowKeepsTheReadersWindow.
-	if p.previewScroll != 10 {
-		t.Fatalf("window = %d rows back, want the 10 the reader left it at", p.previewScroll)
+	if p.primaryTermPane().Scroll != 10 {
+		t.Fatalf("window = %d rows back, want the 10 the reader left it at", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -188,21 +188,21 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 	givePaneScrollableOutput(p, 120)
 
 	p.freezeTerminalSelectionViewport()
-	if !p.previewFreeze.Active() {
+	if !p.primaryTermPane().Freeze.Active() {
 		t.Fatal("the window was not pinned to begin with")
 	}
 	p.scrollTerminalSelectionViewport(-20)
-	pinned := p.previewFreeze.Start()
+	pinned := p.primaryTermPane().Freeze.Start()
 
 	p.leaveInteractiveMode()
 
-	if p.previewFreeze.Active() {
+	if p.primaryTermPane().Freeze.Active() {
 		t.Fatal("the window stayed pinned after the mode that pinned it ended")
 	}
-	if want := p.terminalMaxScroll(false) - pinned; p.previewScroll != want {
-		t.Fatalf("window = %d rows back, want the %d the pinned rows sit at", p.previewScroll, want)
+	if want := p.terminalMaxScroll(false) - pinned; p.primaryTermPane().Scroll != want {
+		t.Fatalf("window = %d rows back, want the %d the pinned rows sit at", p.primaryTermPane().Scroll, want)
 	}
-	if p.previewScroll == 0 {
+	if p.primaryTermPane().Scroll == 0 {
 		t.Fatal("a window left in scrollback was dragged back to the live edge")
 	}
 }
@@ -229,7 +229,7 @@ func focusWindowName(t *testing.T, p *Plugin) string {
 	if p.activePane == PaneSidebar {
 		return "sidebar"
 	}
-	if p.termPanelVisible && p.termPanelFocused {
+	if p.shellLeafVisible() && p.shellLeafFocused() {
 		return "panel"
 	}
 	leaf := FindPane(p.paneRoot, p.paneFocus)
@@ -268,7 +268,7 @@ func TestTabWalksTheSameWindowsAsTheBrowser(t *testing.T) {
 
 	// Without the panel the two surfaces draw the same windows, so they owe the
 	// same walk.
-	p.termPanelVisible = false
+	p.releaseShellTermPane()
 	p.setFocusTarget(sidebarTarget())
 	if got := tabWalk(t, p, len(parityFocusWalk)); !sameWalk(got, parityFocusWalk) {
 		t.Fatalf("tab walk = %v, want the shared walk %v", got, parityFocusWalk)

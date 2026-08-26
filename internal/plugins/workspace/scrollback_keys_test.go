@@ -44,20 +44,20 @@ func TestWatchedPreviewAnswersThePagerKeys(t *testing.T) {
 	bound := p.terminalMaxScroll(false)
 
 	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyPgUp})
-	if p.previewScroll != page {
-		t.Fatalf("pgup left the window at %d, want a page of %d rows back", p.previewScroll, page)
+	if p.primaryTermPane().Scroll != page {
+		t.Fatalf("pgup left the window at %d, want a page of %d rows back", p.primaryTermPane().Scroll, page)
 	}
 	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyPgDown})
-	if p.previewScroll != 0 {
-		t.Fatalf("pgdown left the window %d rows back, want the live edge", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("pgdown left the window %d rows back, want the live edge", p.primaryTermPane().Scroll)
 	}
 	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyHome})
-	if p.previewScroll != bound {
-		t.Fatalf("home left the window at %d, want the oldest row held, %d", p.previewScroll, bound)
+	if p.primaryTermPane().Scroll != bound {
+		t.Fatalf("home left the window at %d, want the oldest row held, %d", p.primaryTermPane().Scroll, bound)
 	}
 	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyEnd})
-	if p.previewScroll != 0 {
-		t.Fatalf("end left the window %d rows back, want the live edge", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("end left the window %d rows back, want the live edge", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -77,12 +77,12 @@ func TestWatchedHalfPageIsTheSurfaceNotThePlugin(t *testing.T) {
 	}
 
 	p.handleKeyPress(tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl})
-	if p.previewScroll != want.Rows {
-		t.Fatalf("ctrl+u moved %d rows, want %d — half the rows the surface draws", p.previewScroll, want.Rows)
+	if p.primaryTermPane().Scroll != want.Rows {
+		t.Fatalf("ctrl+u moved %d rows, want %d — half the rows the surface draws", p.primaryTermPane().Scroll, want.Rows)
 	}
 	p.handleKeyPress(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
-	if p.previewScroll != 0 {
-		t.Fatalf("ctrl+d left the window %d rows back, want the live edge", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("ctrl+d left the window %d rows back, want the live edge", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestWatchedHalfPageIsTheSurfaceNotThePlugin(t *testing.T) {
 func TestAWatchedScrollbackKeyReachesForHistoryAtTheBound(t *testing.T) {
 	p := watchedTerminalPlugin(t, 300)
 	p.recordTerminalHistory("shell", "sc-one", 5000)
-	p.previewScroll = p.terminalMaxScroll(false)
+	p.primaryTermPane().Scroll = p.terminalMaxScroll(false)
 
 	cmd := p.handleKeyPress(tea.KeyPressMsg{Code: 'k', Text: "k"})
 	if cmd == nil {
@@ -128,8 +128,8 @@ func TestWatchedPreviewAnswersTheShiftedNavigationKeys(t *testing.T) {
 		{"shift+end", tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModShift}, 0},
 	} {
 		p.handleKeyPress(step.msg)
-		if p.previewScroll != step.want {
-			t.Fatalf("%s left the watched window %d rows back, want %d", step.name, p.previewScroll, step.want)
+		if p.primaryTermPane().Scroll != step.want {
+			t.Fatalf("%s left the watched window %d rows back, want %d", step.name, p.primaryTermPane().Scroll, step.want)
 		}
 	}
 }
@@ -146,7 +146,7 @@ func TestAShiftedWatchedKeyThatDropsTheProjectionMovesTheWindow(t *testing.T) {
 	if p.terminalDocProjection.buffer != nil {
 		t.Fatal("the projection survived a key that moves the window")
 	}
-	if p.previewScroll != 1 {
-		t.Fatalf("the window moved %d rows after the projection was dropped, want 1", p.previewScroll)
+	if p.primaryTermPane().Scroll != 1 {
+		t.Fatalf("the window moved %d rows after the projection was dropped, want 1", p.primaryTermPane().Scroll)
 	}
 }

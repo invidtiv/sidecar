@@ -172,7 +172,7 @@ func TestGlobalWorkspaceListCacheIgnoresPreviewOnlyState(t *testing.T) {
 		mutate func(*Model, *tty.OutputBuffer)
 	}{
 		{"terminal output", func(_ *Model, b *tty.OutputBuffer) { b.Update("changed terminal output") }},
-		{"preview scroll", func(m *Model, _ *tty.OutputBuffer) { m.preview.offset++ }},
+		{"preview scroll", func(m *Model, _ *tty.OutputBuffer) { m.previewTerminalLeaf().Scroll++ }},
 		{"terminal scrollbar hover", func(m *Model, _ *tty.OutputBuffer) { m.hoverTermBar = !m.hoverTermBar }},
 		{"preview divider hover", func(m *Model, _ *tty.OutputBuffer) {
 			m.hoverHandleRegion = previewPaneDividerKind

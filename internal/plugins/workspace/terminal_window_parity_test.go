@@ -28,11 +28,11 @@ func scrolledBackPanelPlugin(t *testing.T) *Plugin {
 	p.sidebarWidth = 40
 	p.viewMode = ViewModeList
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelSession = "term-1"
-	p.termPanelOutput = testTerminalBuffer(strings.Join(rows, "\n"))
-	p.termPanelScroll = 6
+	p.requireShellTermPane().Session = "term-1"
+	p.requireShellTermPane().Buffer = testTerminalBuffer(strings.Join(rows, "\n"))
+	p.requireShellTermPane().Scroll = 6
 	p.truncateCache = ui.NewTruncateCache(64)
-	p.selectionTermPanel = true
+	p.selectionPanel = true
 	p.selection.Clear()
 	return p
 }

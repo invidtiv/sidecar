@@ -35,6 +35,7 @@ import (
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/terminallink"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -125,7 +126,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
-		renameShellDoneMsg, globalShellCreatedMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
+		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
 		// routed to the global host even while its modal owns focus.
@@ -323,13 +324,19 @@ type Model struct {
 	hoverHandleRegion string
 	hoverHandleSplit  int
 
-	renameOpen       bool
-	renameWorkspace  workspaceinventory.Workspace
-	renameInput      textinput.Model
-	renameError      string
-	renameModal      *modal.Modal
-	renameModalWidth int
-	renameMouse      *mouse.Handler
+	renameOpen           bool
+	renameWorkspace      workspaceinventory.Workspace
+	renameInput          textinput.Model
+	renameError          string
+	renameModal          *modal.Modal
+	renameModalWidth     int
+	renameMouse          *mouse.Handler
+	renameTerminalLeafID int
+
+	previewSplitCloseLeaf    int
+	previewSplitCloseCommand string
+	previewSplitCloseModal   *modal.Modal
+	previewSplitCloseModalW  int
 
 	createOpen         bool
 	createForm         *workspacecreate.Form
@@ -386,7 +393,8 @@ func New(collector workspaceinventory.Collector) *Model {
 		collector = collector.SeedTrackers(activitystore.Load(path, time.Now()))
 	}
 	m := &Model{collector: collector, results: make(map[string]workspaceinventory.ProjectResult), projectErrors: make(map[string]error), stale: make(map[string]bool), completed: make(map[int]bool), cards: make(map[string]workspaceinventory.Workspace), catalog: make(map[string]workspaceinventory.Workspace), mouse: mouse.NewHandler(), workspacesMouse: mouse.NewHandler(), viewFlyoutMouse: mouse.NewHandler(), renameMouse: mouse.NewHandler(), createMouse: mouse.NewHandler(), deleteMouse: mouse.NewHandler(), sidebarWidth: defaultWorkspaceSidebarPercent, sidebarVisible: true, showIdleWorktrees: loadShowIdleWorktrees(), previewOwnership: &previewOwnershipLease{}}
-	m.preview.rowAnalyzer = &termpreview.RowAnalyzer{}
+	m.preview.terminalPanes = termpanes.New()
+	m.previewTerminalLeaf().RowAnalyzer = &termpreview.RowAnalyzer{}
 	if savedWidth := loadWorkspaceSidebarWidth(); savedWidth > 0 {
 		m.sidebarWidth = savedWidth
 	}
@@ -791,6 +799,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)
+	case previewTerminalSplitCreatedMsg:
+		return m.applyPreviewTerminalSplitCreated(msg)
+	case previewSplitCloseProbeMsg:
+		return m.applyPreviewSplitCloseProbe(msg)
 	case globalWorktreePlannedMsg:
 		m.createBusy = false
 		if msg.Err != nil {

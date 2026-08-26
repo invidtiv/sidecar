@@ -54,8 +54,10 @@ func TestCreateModalDisablesTerminalSplitAtTheCap(t *testing.T) {
 			}
 			// The placement buttons are a create path too, and they refuse for
 			// the same reason rather than by a second rule.
-			if form.ApplyPlacementAction(workspacecreate.ActionPlaceRight) {
-				t.Fatal("a placement button created past the cap")
+			for _, action := range []string{workspacecreate.ActionPlaceAuto, workspacecreate.ActionPlaceRight, workspacecreate.ActionPlaceBelow} {
+				if form.ApplyPlacementAction(action) {
+					t.Fatalf("placement %s created past the cap", action)
+				}
 			}
 			if got := panelayout.LiveLeafCount(p.paneRoot); got > panelayout.LiveLeafCap {
 				t.Fatalf("live leaves = %d, past the cap", got)
@@ -129,9 +131,9 @@ func TestShellLeafCloseProbeRoutesConfirmOrClose(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 			p := shellLeafTestPlugin(t, SplitCols)
-			p.termPanelSession = termPanelSessionPrefix + "probe"
+			p.requireShellTermPane().Session = termPanelSessionPrefix + "probe"
 			p.handleShellLeafCloseProbe(ShellLeafCloseProbeMsg{
-				Session:        p.termPanelSession,
+				Session:        p.requireShellTermPane().Session,
 				CurrentCommand: tc.current,
 				ShellCommand:   "zsh",
 				Err:            tc.err,
@@ -163,15 +165,15 @@ func TestShellLeafCloseProbeRoutesConfirmOrClose(t *testing.T) {
 func TestShellLeafSessionEndClosesTheSplitAndUnwedgesFocus(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitRows)
-	p.termPanelSession = termPanelSessionPrefix + "exit"
-	p.termPanelFocused = true
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "exit"
+	p.setShellLeafFocused(true)
 	p.activePane = PanePreview
 
 	p.noteShellLeafSessionEnded()
 
 	assertSplitClosedAndPrimaryFocusable(t, p)
-	if p.termPanelSession != "" || p.termPanelPaneID != "" {
-		t.Fatalf("a dead session outlived its leaf: %q/%q", p.termPanelSession, p.termPanelPaneID)
+	if p.requireShellTermPane().Session != "" || p.requireShellTermPane().PaneID != "" {
+		t.Fatalf("a dead session outlived its leaf: %q/%q", p.requireShellTermPane().Session, p.requireShellTermPane().PaneID)
 	}
 	// No confirm: the process the confirm would ask about has already ended.
 	if p.viewMode == ViewModeConfirmCloseSplit {
@@ -191,10 +193,10 @@ func assertSplitClosedAndPrimaryFocusable(t *testing.T, p *Plugin) {
 	if leaf := p.shellLeaf(); leaf != nil {
 		t.Fatalf("the split leaf survived the close: %+v", leaf)
 	}
-	if p.termPanelVisible {
+	if p.shellLeafVisible() {
 		t.Fatal("termPanelVisible outlived the leaf")
 	}
-	if p.termPanelFocused {
+	if p.shellLeafFocused() {
 		t.Fatal("termPanelFocused outlived the leaf — the keyboard is wedged")
 	}
 	if p.shellLeafSurface != "" {
@@ -213,7 +215,7 @@ func assertSplitClosedAndPrimaryFocusable(t *testing.T, p *Plugin) {
 	// The proof that focus is not wedged: the surface's own focus setter puts
 	// the keyboard back on the primary terminal.
 	p.focusLeaf(primary.ID)
-	if p.termPanelFocused || p.paneFocus != primary.ID {
+	if p.shellLeafFocused() || p.paneFocus != primary.ID {
 		t.Fatal("the primary terminal could not take focus back")
 	}
 }
@@ -225,8 +227,8 @@ func assertSplitClosedAndPrimaryFocusable(t *testing.T, p *Plugin) {
 func TestPanelTerminalSessionEndIsWiredToTheShellLeafClose(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitRows)
-	p.termPanelSession = termPanelSessionPrefix + "wiring"
-	p.termPanelFocused = true
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "wiring"
+	p.setShellLeafFocused(true)
 	p.activePane = PanePreview
 
 	model := p.newWorkspaceTerminal(workspaceTerminalPanel)
@@ -251,11 +253,11 @@ func TestPanelTerminalSessionEndIsWiredToTheShellLeafClose(t *testing.T) {
 func TestShellLeafCloseProbeAbandonsWhenTheUserMovedOn(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitCols)
-	p.termPanelSession = termPanelSessionPrefix + "probe"
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "probe"
 	p.viewMode = ViewModeCreate
 
 	p.handleShellLeafCloseProbe(ShellLeafCloseProbeMsg{
-		Session:        p.termPanelSession,
+		Session:        p.requireShellTermPane().Session,
 		CurrentCommand: "node",
 		ShellCommand:   "zsh",
 		Mode:           ViewModeList,
@@ -286,18 +288,18 @@ func TestShellLeafHideKeepsTheSessionAndCloseEndsIt(t *testing.T) {
 			enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 			p := shellLeafTestPlugin(t, SplitRows)
 			p.shellLeafName = "my split"
-			p.termPanelSession = termPanelSessionPrefix + "keep"
+			p.requireShellTermPane().Session = termPanelSessionPrefix + "keep"
 
 			p.closeShellLeaf(tc.mode)
 
-			if p.shellLeaf() != nil || p.termPanelVisible {
+			if p.shellLeaf() != nil || p.shellLeafVisible() {
 				t.Fatal("the split survived its close")
 			}
 			if p.shellLeafName != tc.wantName {
 				t.Fatalf("shellLeafName = %q, want %q", p.shellLeafName, tc.wantName)
 			}
-			if p.termPanelSession != tc.wantSession {
-				t.Fatalf("termPanelSession = %q, want %q", p.termPanelSession, tc.wantSession)
+			if p.requireShellTermPane().Session != tc.wantSession {
+				t.Fatalf("termPanelSession = %q, want %q", p.requireShellTermPane().Session, tc.wantSession)
 			}
 		})
 	}
@@ -308,8 +310,8 @@ func TestShellLeafHideKeepsTheSessionAndCloseEndsIt(t *testing.T) {
 func TestShellLeafSessionEndKeepsSidebarFocus(t *testing.T) {
 	enableWorkspaceFeature(t, features.WorkspaceTerminalPanel.Name)
 	p := shellLeafTestPlugin(t, SplitRows)
-	p.termPanelSession = termPanelSessionPrefix + "outside"
-	p.termPanelFocused = false
+	p.requireShellTermPane().Session = termPanelSessionPrefix + "outside"
+	p.setShellLeafFocused(false)
 	p.activePane = PaneSidebar
 
 	p.noteShellLeafSessionEnded()

@@ -326,9 +326,8 @@ type InteractiveState struct {
 	// TargetSession is the tmux session name for the active pane.
 	TargetSession string
 
-	// TermPanel is true when interactive mode targets the terminal panel session
-	// (rather than the main agent/shell session).
-	TermPanel bool
+	// LeafID is the pane-tree leaf receiving input.
+	LeafID int
 
 	// PaneOnEntry is the pane that was active before interactive mode took over.
 	// leaveInteractiveMode (Esc) restores it so Enter-from-the-list still

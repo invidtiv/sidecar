@@ -25,7 +25,7 @@ func showTermPanel(t *testing.T, p *Plugin, axis SplitAxis, primaryRatio int) {
 		enableSingleTerminalTree(p)
 	}
 	p.shellSplitAxis, p.shellSplitRatio = axis, primaryRatio
-	p.termPanelVisible = true
+	p.requestShellLeaf()
 	if !p.syncShellLeaf() {
 		t.Fatalf("shell split did not fit at %dx%d", p.width, p.height)
 	}
@@ -34,7 +34,7 @@ func showTermPanel(t *testing.T, p *Plugin, axis SplitAxis, primaryRatio int) {
 func configureTerminalPanel(t *testing.T, p *Plugin, axis SplitAxis) {
 	t.Helper()
 	showTermPanel(t, p, axis, 60)
-	p.termPanelOutput = markerBuffer("PANEL", 4)
+	p.requireShellTermPane().Buffer = markerBuffer("PANEL", 4)
 }
 
 // A lone terminal leaf still renders exactly the legacy preview. The terminal

@@ -269,8 +269,8 @@ func (p *Plugin) applyCreateShellSplit(req uirequest.Request, payload uirequest.
 		p.ackCreateDeclined(req, reason)
 		return nil
 	}
-	if p.termPanelSession != "" {
-		session = p.termPanelSession
+	if p.requireShellTermPane().Session != "" {
+		session = p.requireShellTermPane().Session
 	}
 	p.ackCreate(req, "shell:"+session)
 	return cmd

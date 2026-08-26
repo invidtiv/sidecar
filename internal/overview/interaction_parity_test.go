@@ -27,7 +27,7 @@ func TestAWheelOverTheListStaysWithTheLivePane(t *testing.T) {
 	enterInteractive(t, m)
 	m.WorkspacesView(previewWide, previewTall)
 	selected := m.workspaces.SelectedID()
-	m.preview.offset = 10
+	m.previewTerminalLeaf().Scroll = 10
 
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: 2, Y: 6, Button: tea.MouseWheelUp}))
@@ -38,7 +38,7 @@ func TestAWheelOverTheListStaysWithTheLivePane(t *testing.T) {
 	if got := m.workspaces.SelectedID(); got != selected {
 		t.Fatalf("selection moved to %q on a wheel notch", got)
 	}
-	if m.preview.offset == 10 {
+	if m.previewTerminalLeaf().Scroll == 10 {
 		t.Fatal("the notch reached neither the pane nor its window")
 	}
 }
@@ -73,7 +73,7 @@ func TestAHighlightIsDrawnOnTheRowItCoversInAPaneWithHistory(t *testing.T) {
 
 	// The first drawn row, in the coordinates a click on it would record.
 	line := tty.AbsoluteLine(m.previewBuffer(), window.layout.Start)
-	m.preview.selection.SelectRange(
+	m.previewTerminalLeaf().Selection.SelectRange(
 		ui.SelectionPoint{Line: line, Col: 0}, ui.SelectionPoint{Line: line, Col: 7}, false)
 
 	view := m.WorkspacesView(previewWide, previewTall)
@@ -111,7 +111,7 @@ func TestPressingAwayFromThePreviewEndsTheGestureAndTheMode(t *testing.T) {
 			pointerDown(t, m, x+3, y+1)
 			run(t, m, m.WorkspacesMouse(tea.MouseClickMsg{X: away.x, Y: away.y, Button: tea.MouseLeft}))
 
-			if m.preview.pointer.Resolution != tty.ClickNone {
+			if m.previewTerminalLeaf().Pointer.Resolution != tty.ClickNone {
 				t.Fatalf("pressing %s left the terminal's click armed", away.name)
 			}
 			if m.PreviewInteractive() {
@@ -134,12 +134,12 @@ func TestScrollingKeepsAnAbsoluteSelection(t *testing.T) {
 	}))
 	enterInteractive(t, m)
 	x, y := previewAt(t, m)
-	m.preview.selection.SelectRange(
+	m.previewTerminalLeaf().Selection.SelectRange(
 		ui.SelectionPoint{Line: 520, Col: 0}, ui.SelectionPoint{Line: 520, Col: 5}, false)
 
 	settleWheel()
 	run(t, m, m.WorkspacesMouse(tea.MouseWheelMsg{X: x + 2, Y: y + 2, Button: tea.MouseWheelUp}))
-	if !m.preview.selection.HasSelection() {
+	if !m.previewTerminalLeaf().Selection.HasSelection() {
 		t.Fatal("a wheel notch destroyed a selection that names absolute rows")
 	}
 
@@ -147,11 +147,11 @@ func TestScrollingKeepsAnAbsoluteSelection(t *testing.T) {
 	if !handled {
 		t.Fatal("shift+up was not taken as a scrollback move")
 	}
-	if !m.preview.selection.HasSelection() {
+	if !m.previewTerminalLeaf().Selection.HasSelection() {
 		t.Fatal("a scrollback key destroyed a selection that names absolute rows")
 	}
-	if m.preview.selection.Start.Line != 520 {
-		t.Fatalf("the selection moved to line %d", m.preview.selection.Start.Line)
+	if m.previewTerminalLeaf().Selection.Start.Line != 520 {
+		t.Fatalf("the selection moved to line %d", m.previewTerminalLeaf().Selection.Start.Line)
 	}
 }
 
@@ -271,7 +271,8 @@ func TestTabWalksTheSameWindowsAsTheProjectSurface(t *testing.T) {
 	} {
 		arrangement.set()
 		for _, target := range m.focusRing() {
-			if target.Kind == panelayout.TargetTermPanel {
+			leaf := panelayout.Find(m.preview.paneRoot, target.Leaf)
+			if target.Kind == panelayout.TargetLeaf && leaf != nil && leaf.Kind == panelayout.Shell {
 				t.Fatalf("the %s ring names a terminal panel this surface never draws", arrangement.name)
 			}
 		}

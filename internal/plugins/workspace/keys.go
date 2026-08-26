@@ -478,7 +478,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	// document projection it may be showing has no window to move. Which keys
 	// those are is the shared rule's, so the set here cannot drift from the set
 	// that scrolls.
-	if p.activePane == PanePreview && !p.termPanelFocused && tty.IsScrollbackKey(tty.ScrollbackWatched, msg) {
+	if p.activePane == PanePreview && !p.shellLeafFocused() && tty.IsScrollbackKey(tty.ScrollbackWatched, msg) {
 		p.releaseTerminalDocProjection(false)
 	}
 	if p.activePane == PanePreview {
@@ -488,7 +488,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		config := p.terminalConfig()
 		switch {
 		case config.IsSelectAllChord(msg):
-			p.selectAllTerminalOutput(p.termPanelVisible && p.termPanelFocused)
+			p.selectAllTerminalOutput(p.shellLeafVisible() && p.shellLeafFocused())
 			return nil
 		case config.IsCopyChord(msg):
 			return p.copyInteractiveSelectionCmd()
@@ -526,9 +526,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
-			if !p.termPanelFocused {
-				p.termPanelFocused = true
+		if p.activePane == PanePreview && p.shellLeafVisible() && !p.shellSplitIsColumns() {
+			if !p.shellLeafFocused() {
+				p.setShellLeafFocused(true)
 				return nil
 			}
 			// Already at terminal panel (bottom) — scroll it.
@@ -553,9 +553,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		// Terminal panel split: switch focus between agent and terminal sub-panes
 		// Only applies on Output tab (or shell view) where the terminal panel is rendered
-		if p.activePane == PanePreview && p.termPanelVisible && !p.shellSplitIsColumns() {
-			if p.termPanelFocused {
-				p.termPanelFocused = false
+		if p.activePane == PanePreview && p.shellLeafVisible() && !p.shellSplitIsColumns() {
+			if p.shellLeafFocused() {
+				p.setShellLeafFocused(false)
 				return nil
 			}
 			// Already at agent (top) — fall through to scroll agent output
@@ -697,10 +697,10 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		if p.activePane == PaneSidebar {
 			p.activePane = PanePreview
-		} else if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && !p.termPanelFocused {
+		} else if p.activePane == PanePreview && p.shellLeafVisible() && p.shellSplitIsColumns() && !p.shellLeafFocused() {
 			// Right layout: move focus from agent to terminal panel
 			p.thawTerminalWindow(true)
-			p.termPanelFocused = true
+			p.setShellLeafFocused(true)
 		}
 	case "enter":
 		// Kanban mode: sync cursor to selection, then fall through to activate
@@ -712,7 +712,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.applyKanbanSelectionChange(oldShellSelected, oldShellIdx, oldWorktreeIdx)
 		}
 		// Terminal panel focused: enter interactive mode for the terminal panel
-		if p.termPanelFocused && p.termPanelVisible {
+		if p.shellLeafFocused() && p.shellLeafVisible() {
 			if cmd := p.enterTermPanelInteractiveMode(); cmd != nil {
 				return cmd
 			}
@@ -774,14 +774,14 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			p.moveKanbanColumn(-1)
 			return nil
 		}
-		if p.activePane == PanePreview && p.termPanelVisible && p.shellSplitIsColumns() && p.termPanelFocused {
+		if p.activePane == PanePreview && p.shellLeafVisible() && p.shellSplitIsColumns() && p.shellLeafFocused() {
 			// Right layout: move focus from terminal panel back to agent
-			p.termPanelFocused = false
+			p.setShellLeafFocused(false)
 			p.releaseTerminalDocProjection(false)
 			return nil
 		}
 		if p.activePane == PanePreview {
-			p.termPanelFocused = false // Reset when leaving preview
+			p.setShellLeafFocused(false) // Reset when leaving preview
 			p.activePane = PaneSidebar
 		}
 	case "esc":
@@ -790,7 +790,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 			return p.resizeSelectedPaneCmd()
 		}
 		if p.activePane == PanePreview {
-			p.termPanelFocused = false
+			p.setShellLeafFocused(false)
 			p.activePane = PaneSidebar
 		}
 	case "+":
@@ -822,7 +822,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	case tty.EnterInteractiveKeyAlt:
 		// E is the explicit type key. i is Sidecar's find-TD-task shortcut
 		// (td-ba46ea); enter remains the primary way in.
-		if p.termPanelFocused && p.termPanelVisible {
+		if p.shellLeafFocused() && p.shellLeafVisible() {
 			return p.enterTermPanelInteractiveMode()
 		}
 		return p.enterInteractiveMode()
@@ -987,7 +987,7 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 func (p *Plugin) toggleSidebarCmd() tea.Cmd {
 	p.toggleSidebar()
 	resizeCmds := []tea.Cmd{p.resizeSelectedPaneCmd()}
-	if p.termPanelVisible {
+	if p.shellLeafVisible() {
 		resizeCmds = append(resizeCmds, p.resizeTermPanelPaneCmd())
 	}
 	if !p.sidebarVisible {

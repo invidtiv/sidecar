@@ -49,7 +49,39 @@ func (m *Model) SelectedShell() bool {
 // OpenRenameShell opens the Rename Shell modal, prefilled with the selected
 // shell's display name.
 func (m *Model) OpenRenameShell() tea.Cmd {
+	m.renameTerminalLeafID = 0
 	return m.openRename(workspaceinventory.KindShell)
+}
+
+// OpenRenameTerminalLeaf opens the same rename surface for a peer terminal.
+// The leaf ID is the identity: the selected catalog row is only its owner and
+// must not accidentally rename a persisted shell record.
+func (m *Model) OpenRenameTerminalLeaf(leafID int) tea.Cmd {
+	if m.PreviewInteractive() {
+		return nil
+	}
+	leaf := m.preview.terminalPanes.Leaf(leafID)
+	if leaf == nil || leaf.Target.Source != "shell" {
+		return nil
+	}
+	m.closeViewFlyout()
+	m.renameTerminalLeafID = leafID
+	m.renameOpen = true
+	m.renameWorkspace = workspaceinventory.Workspace{Kind: workspaceinventory.KindShell, Name: leaf.Name}
+	m.renameInput = textinput.New()
+	m.renameInput.SetValue(leaf.Name)
+	m.renameInput.CharLimit = shellstate.MaxNameBytes
+	m.renameInput.SetWidth(30)
+	m.renameInput.Prompt = ""
+	m.renameError = ""
+	m.renameModal = nil
+	m.renameModalWidth = 0
+	m.ensureRenameShellModal()
+	if m.renameModal != nil {
+		m.renameModal.Reset()
+		m.renameModal.SetFocus(renameShellInputID)
+	}
+	return nil
 }
 
 // OpenRenameWorktree opens the display-name modal for the selected worktree.
@@ -59,6 +91,7 @@ func (m *Model) OpenRenameWorktree() tea.Cmd {
 }
 
 func (m *Model) openRename(kind workspaceinventory.Kind) tea.Cmd {
+	m.renameTerminalLeafID = 0
 	if m.PreviewInteractive() {
 		return nil
 	}
@@ -104,6 +137,7 @@ func (m *Model) closeRenameShell() {
 	m.renameError = ""
 	m.renameModal = nil
 	m.renameModalWidth = 0
+	m.renameTerminalLeafID = 0
 }
 
 // RenameShellPaste inserts pasted text into the rename field.
@@ -226,6 +260,21 @@ func (m *Model) handleRenameShellMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) executeRename() tea.Cmd {
+	if m.renameTerminalLeafID != 0 {
+		newName, err := shellstate.NormalizeName(m.renameInput.Value())
+		if err != nil {
+			m.renameError = err.Error()
+			return nil
+		}
+		leaf := m.preview.terminalPanes.Leaf(m.renameTerminalLeafID)
+		if leaf == nil || leaf.Target.Source != "shell" {
+			m.closeRenameShell()
+			return nil
+		}
+		leaf.Name = newName
+		m.closeRenameShell()
+		return nil
+	}
 	if m.renameWorkspace.Kind == workspaceinventory.KindWorktree {
 		return m.executeRenameWorktree()
 	}

@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/plugin"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tty"
 )
 
@@ -64,14 +65,7 @@ const (
 	workspaceTerminalPanel
 )
 
-type workspaceTerminalTarget struct {
-	Session  string
-	Pane     string
-	Width    int
-	Height   int
-	Source   string
-	SourceID string
-}
+type workspaceTerminalTarget = termpanes.Target
 
 // Update routes terminal-owned lifecycle messages through the shared component
 // before applying workspace product state. Ordinary keys and mouse events are
@@ -154,11 +148,11 @@ func (p *Plugin) newWorkspaceTerminal(role workspaceTerminalRole) *tty.Model {
 
 func (p *Plugin) applyResizeDebounceToTerminals() {
 	d := p.resizeDebounce()
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.SetResizeDebounce(d)
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.SetResizeDebounce(d)
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.SetResizeDebounce(d)
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.SetResizeDebounce(d)
 	}
 }
 
@@ -189,27 +183,27 @@ func (p *Plugin) terminalHooks(role workspaceTerminalRole) tty.Hooks {
 }
 
 func (p *Plugin) resetTerminalModels() {
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.Close()
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.Close()
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.Close()
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.Close()
 	}
-	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
-	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
-	p.primaryTerminalTarget = workspaceTerminalTarget{}
-	p.panelTerminalTarget = workspaceTerminalTarget{}
+	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	p.primaryTermPane().Target = workspaceTerminalTarget{}
+	p.requireShellTermPane().Target = workspaceTerminalTarget{}
 }
 
 func (p *Plugin) stopTerminalModels() {
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.Close()
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.Close()
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.Close()
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.Close()
 	}
-	p.primaryTerminalTarget = workspaceTerminalTarget{}
-	p.panelTerminalTarget = workspaceTerminalTarget{}
+	p.primaryTermPane().Target = workspaceTerminalTarget{}
+	p.requireShellTermPane().Target = workspaceTerminalTarget{}
 }
 
 func (p *Plugin) activateTerminalOwnership() {
@@ -321,32 +315,32 @@ func (p *Plugin) terminalOwnershipIsActive() bool {
 // surfaces. It is deliberately not scoped to whichever one is live: the gate it
 // feeds asks whether a mouse event reached this host at all.
 func (p *Plugin) noteTerminalMouseActivity() {
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.NoteMouseActivity()
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.NoteMouseActivity()
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.NoteMouseActivity()
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.NoteMouseActivity()
 	}
 }
 
 func (p *Plugin) setTerminalFocus(focused bool) {
-	if p.primaryTerminal != nil {
-		p.primaryTerminal.SetFocused(focused && p.focused)
+	if p.primaryTermPane().Terminal != nil {
+		p.primaryTermPane().Terminal.SetFocused(focused && p.focused)
 	}
-	if p.panelTerminal != nil {
-		p.panelTerminal.SetFocused(focused && p.focused)
+	if p.requireShellTermPane().Terminal != nil {
+		p.requireShellTermPane().Terminal.SetFocused(focused && p.focused)
 	}
 }
 
 func (p *Plugin) updateTerminalModels(msg tea.Msg) []tea.Cmd {
 	var cmds []tea.Cmd
-	if p.primaryTerminal != nil {
-		if cmd := p.primaryTerminal.Update(msg); cmd != nil {
+	if p.primaryTermPane().Terminal != nil {
+		if cmd := p.primaryTermPane().Terminal.Update(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
-	if p.panelTerminal != nil {
-		if cmd := p.panelTerminal.Update(msg); cmd != nil {
+	if p.requireShellTermPane().Terminal != nil {
+		if cmd := p.requireShellTermPane().Terminal.Update(msg); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -364,8 +358,8 @@ func (p *Plugin) terminalOutputSurfaceVisible() bool {
 }
 
 func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
-	if !p.termPanelVisible || !p.terminalOutputSurfaceVisible() ||
-		p.termPanelSession == "" || p.termPanelPaneID == "" {
+	if !p.shellLeafVisible() || !p.terminalOutputSurfaceVisible() ||
+		p.requireShellTermPane().Session == "" || p.requireShellTermPane().PaneID == "" {
 		return workspaceTerminalTarget{}, false
 	}
 	width, height, ok := p.calculateTermPanelDimensions()
@@ -374,8 +368,8 @@ func (p *Plugin) desiredPanelTerminal() (workspaceTerminalTarget, bool) {
 	}
 	width = p.terminalContentWidth(width)
 	return workspaceTerminalTarget{
-		Session: p.termPanelSession, Pane: p.termPanelPaneID,
-		Width: width, Height: height, Source: "panel", SourceID: p.termPanelSession,
+		Session: p.requireShellTermPane().Session, Pane: p.requireShellTermPane().PaneID,
+		Width: width, Height: height, Source: "panel", SourceID: p.requireShellTermPane().Session,
 	}, true
 }
 
@@ -408,7 +402,7 @@ func (p *Plugin) desiredPrimaryTerminal() (workspaceTerminalTarget, bool) {
 }
 
 func (p *Plugin) reconcileTerminalModels() []tea.Cmd {
-	if p.primaryTerminal == nil || p.panelTerminal == nil {
+	if p.primaryTermPane().Terminal == nil || p.requireShellTermPane().Terminal == nil {
 		p.resetTerminalModels()
 	}
 	var cmds []tea.Cmd
@@ -457,17 +451,17 @@ func (p *Plugin) reconcileTerminalModel(role workspaceTerminalRole, desired work
 
 func (p *Plugin) terminalModelAndTarget(role workspaceTerminalRole) (*tty.Model, workspaceTerminalTarget) {
 	if role == workspaceTerminalPanel {
-		return p.panelTerminal, p.panelTerminalTarget
+		return p.requireShellTermPane().Terminal, p.requireShellTermPane().Target
 	}
-	return p.primaryTerminal, p.primaryTerminalTarget
+	return p.primaryTermPane().Terminal, p.primaryTermPane().Target
 }
 
 func (p *Plugin) setTerminalTarget(role workspaceTerminalRole, target workspaceTerminalTarget) {
 	if role == workspaceTerminalPanel {
-		p.panelTerminalTarget = target
+		p.requireShellTermPane().Target = target
 		return
 	}
-	p.primaryTerminalTarget = target
+	p.primaryTermPane().Target = target
 }
 
 func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspaceTerminalTarget, model *tty.Model) {
@@ -475,10 +469,10 @@ func (p *Plugin) bindTerminalBuffer(role workspaceTerminalRole, target workspace
 		return
 	}
 	if role == workspaceTerminalPanel {
-		if p.termPanelOutput != model.State.OutputBuf {
+		if p.requireShellTermPane().Buffer != model.State.OutputBuf {
 			p.releaseTerminalDocProjection(true)
 		}
-		p.termPanelOutput = model.State.OutputBuf
+		p.requireShellTermPane().Buffer = model.State.OutputBuf
 		return
 	}
 	switch target.Source {
@@ -527,7 +521,7 @@ func (p *Plugin) syncTerminalModel(role workspaceTerminalRole) {
 	// component that observed it, for every pane identity a surface can hold.
 	p.recordPaneMouseReporting(target.Source, historyID, model.PaneMouseReporting())
 	if p.interactiveState == nil || !p.interactiveState.Active ||
-		(p.interactiveState.TermPanel != (role == workspaceTerminalPanel)) {
+		(p.terminalPaneIsPanel(p.interactiveState.LeafID) != (role == workspaceTerminalPanel)) {
 		return
 	}
 	state := model.State
@@ -545,20 +539,20 @@ func (p *Plugin) activeInteractiveTerminal() *tty.Model {
 	if p.interactiveState == nil || !p.interactiveState.Active {
 		return nil
 	}
-	if p.interactiveState.TermPanel {
-		return p.panelTerminal
+	if p.terminalPaneIsPanel(p.interactiveState.LeafID) {
+		return p.requireShellTermPane().Terminal
 	}
-	return p.primaryTerminal
+	return p.primaryTermPane().Terminal
 }
 
 func (p *Plugin) primaryTerminalOwns(source, sourceID string) bool {
-	return p.primaryTerminal != nil && p.primaryTerminal.IsActive() &&
-		p.primaryTerminalTarget.Source == source && p.primaryTerminalTarget.SourceID == sourceID
+	return p.primaryTermPane().Terminal != nil && p.primaryTermPane().Terminal.IsActive() &&
+		p.primaryTermPane().Target.Source == source && p.primaryTermPane().Target.SourceID == sourceID
 }
 
 func (p *Plugin) panelTerminalOwns() bool {
-	return p.panelTerminal != nil && p.panelTerminal.IsActive() &&
-		p.panelTerminalTarget.Session == p.termPanelSession
+	return p.requireShellTermPane().Terminal != nil && p.requireShellTermPane().Terminal.IsActive() &&
+		p.requireShellTermPane().Target.Session == p.requireShellTermPane().Session
 }
 
 // semanticAgentPollInterval is deliberately independent of terminal frame

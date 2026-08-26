@@ -51,43 +51,43 @@ func termBarRegion(t *testing.T, p *Plugin, id string) mouse.Region {
 // resumes only when the window is back at the live edge.
 func TestTerminalScrollbarDragEndToEndThroughHost(t *testing.T) {
 	p := terminalScrollbarOverflowPlugin(t)
-	before := p.previewScroll
+	before := p.primaryTermPane().Scroll
 
 	thumb := termBarRegion(t, p, regionTermScrollbarThumb)
 	p.handleMouse(tea.MouseClickMsg{X: thumb.Rect.X, Y: thumb.Rect.Y, Button: tea.MouseLeft})
 	if got := p.mouseHandler.DragRegion(); got != regionTermScrollbarThumb {
 		t.Fatalf("bar press started drag %q, want %s", got, regionTermScrollbarThumb)
 	}
-	if !p.termBar.active || !p.previewFreeze.Active() {
+	if !p.termBar.active || !p.primaryTermPane().Freeze.Active() {
 		t.Fatal("bar press did not arm the host gesture and its freeze")
 	}
-	if p.previewScroll != before {
-		t.Fatalf("thumb grab at rest moved the window to offset %d", p.previewScroll)
+	if p.primaryTermPane().Scroll != before {
+		t.Fatalf("thumb grab at rest moved the window to offset %d", p.primaryTermPane().Scroll)
 	}
 
 	// The window is at the live edge (thumb at the bottom of the track), so
 	// dragging UP walks back into history; down would clamp at live without
 	// ending anything.
-	pinned := p.previewFreeze.Start()
+	pinned := p.primaryTermPane().Freeze.Start()
 	p.handleMouse(tea.MouseMotionMsg{X: thumb.Rect.X, Y: thumb.Rect.Y - 3, Button: tea.MouseLeft})
 	layout := calculateTerminalViewportLayout(p.terminalWindowInputFor(false))
-	if got := layout.Start; got != p.previewFreeze.Start() {
-		t.Fatalf("drawn start %d does not match the frozen pin %d", got, p.previewFreeze.Start())
+	if got := layout.Start; got != p.primaryTermPane().Freeze.Start() {
+		t.Fatalf("drawn start %d does not match the frozen pin %d", got, p.primaryTermPane().Freeze.Start())
 	}
-	if p.previewFreeze.Start() >= pinned {
-		t.Fatalf("dragging up did not walk back: start %d >= pinned %d", p.previewFreeze.Start(), pinned)
+	if p.primaryTermPane().Freeze.Start() >= pinned {
+		t.Fatalf("dragging up did not walk back: start %d >= pinned %d", p.primaryTermPane().Freeze.Start(), pinned)
 	}
 
 	p.handleMouse(tea.MouseReleaseMsg{X: 1, Y: 1})
-	if p.termBar.active || p.previewFreeze.Active() {
+	if p.termBar.active || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("release did not settle the gesture and its freeze")
 	}
 	follow, offset, fromBottom := p.terminalScrollState(false)
 	if !fromBottom || follow || offset == 0 {
 		t.Fatalf("window parked in history reports follow=%v offset=%d fromBottom=%v", follow, offset, fromBottom)
 	}
-	if offset != p.previewScroll {
-		t.Fatalf("thawed offset %d does not hold the rows the drag left at %d", offset, p.previewScroll)
+	if offset != p.primaryTermPane().Scroll {
+		t.Fatalf("thawed offset %d does not hold the rows the drag left at %d", offset, p.primaryTermPane().Scroll)
 	}
 
 	// A fresh frame re-registers the bar where the new offset put the thumb,
@@ -124,13 +124,13 @@ func TestTerminalTrackClickAnchorsAndContinues(t *testing.T) {
 	if !p.termBar.active {
 		t.Fatal("track press did not arm the gesture")
 	}
-	if p.previewFreeze.Start() != wantStart {
-		t.Fatalf("track click pinned start %d, want anchor %d", p.previewFreeze.Start(), wantStart)
+	if p.primaryTermPane().Freeze.Start() != wantStart {
+		t.Fatalf("track click pinned start %d, want anchor %d", p.primaryTermPane().Freeze.Start(), wantStart)
 	}
 
 	p.handleMouse(tea.MouseMotionMsg{X: track.Rect.X, Y: track.Rect.Y + pressRow - 3, Button: tea.MouseLeft})
-	if p.previewFreeze.Start() >= wantStart {
-		t.Fatalf("anchored drag did not move back up: %d >= %d", p.previewFreeze.Start(), wantStart)
+	if p.primaryTermPane().Freeze.Start() >= wantStart {
+		t.Fatalf("anchored drag did not move back up: %d >= %d", p.primaryTermPane().Freeze.Start(), wantStart)
 	}
 	p.handleMouse(tea.MouseReleaseMsg{X: 1, Y: 1})
 }
@@ -188,7 +188,7 @@ func TestTerminalScrollbarLostReleaseSettlesOnHover(t *testing.T) {
 	}
 
 	p.handleMouse(tea.MouseMotionMsg{X: 1, Y: 1})
-	if p.termBar.active || p.previewFreeze.Active() {
+	if p.termBar.active || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("lost release left the scrollbar gesture and its freeze live")
 	}
 }

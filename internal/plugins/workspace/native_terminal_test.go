@@ -49,11 +49,11 @@ func TestWorkspaceNativeCursorFullPreviewAndSuppression(t *testing.T) {
 		t.Fatalf("workspace painted a cursor while native cursor owns it: %q", rendered)
 	}
 
-	p.previewScroll = 1
+	p.primaryTermPane().Scroll = 1
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("off-live Cursor() = %#v, want nil", cursor)
 	}
-	p.previewScroll = 0
+	p.primaryTermPane().Scroll = 0
 	p.activePane = PaneSidebar
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("sidebar-focused Cursor() = %#v, want nil", cursor)
@@ -74,10 +74,10 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.sidebarWidth = 40
 	p.shellSelected = true
 	p.selectedShellIdx = 0
-	p.termPanelSession = "panel-session"
-	p.termPanelPaneID = "%12"
-	p.termPanelOutput = tty.NewOutputBuffer(outputBufferCap)
-	p.termPanelOutput.Write("zero\none")
+	p.requireShellTermPane().Session = "panel-session"
+	p.requireShellTermPane().PaneID = "%12"
+	p.requireShellTermPane().Buffer = tty.NewOutputBuffer(outputBufferCap)
+	p.requireShellTermPane().Buffer.Write("zero\none")
 	p.shells = []*ShellSession{{
 		Name: "Shell", TmuxName: "shell-session",
 		Agent: &Agent{
@@ -86,7 +86,7 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 		},
 	}}
 	p.interactiveState = &InteractiveState{
-		Active: true, TermPanel: true, TargetSession: "panel-session", TargetPane: "%12",
+		Active: true, LeafID: 2, TargetSession: "panel-session", TargetPane: "%12",
 		CursorRow: 1, CursorCol: 2, CursorVisible: true,
 	}
 
@@ -96,7 +96,7 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.interactiveState.PaneHeight = height
 	assertPanelCursorAtSurface(t, p, "right-panel")
 
-	p.termPanelVisible = false
+	p.hideShellTermPane()
 	p.syncShellLeaf()
 	showTermPanel(t, p, SplitRows, 50)
 	width, height, _ = p.calculateTermPanelDimensions()
@@ -104,7 +104,7 @@ func TestWorkspaceNativeCursorTerminalPanelRightAndBottom(t *testing.T) {
 	p.interactiveState.PaneHeight = height
 	assertPanelCursorAtSurface(t, p, "bottom-panel")
 
-	p.termPanelScroll = 1
+	p.requireShellTermPane().Scroll = 1
 	if cursor := p.Cursor(); cursor != nil {
 		t.Fatalf("scrolled panel Cursor() = %#v, want nil", cursor)
 	}

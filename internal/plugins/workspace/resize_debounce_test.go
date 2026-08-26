@@ -261,10 +261,10 @@ func liveOwnedDividerPlugin(t *testing.T) (*Plugin, *tty.Model) {
 	// Production always has both models. A nil panel would make
 	// reconcileTerminalModels reset both and Open the primary, which
 	// resizes tmux synchronously.
-	if p.panelTerminal == nil {
-		p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	if p.requireShellTermPane().Terminal == nil {
+		p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	}
-	return p, p.primaryTerminal
+	return p, p.primaryTermPane().Terminal
 }
 
 func armModelDeferredResize(t *testing.T, model *tty.Model) tea.Msg {

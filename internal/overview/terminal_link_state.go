@@ -29,7 +29,7 @@ func (m *Model) SetTerminalLinkCoordinator(coordinator termpreview.LinkCoordinat
 }
 
 // PrepareTerminalLinks builds the immutable visible-row answer on the update
-// path. View and pointer hit testing only read preview.linkState.
+// path. View and pointer hit testing only read the terminal leaf's link state.
 func (m *Model) PrepareTerminalLinks() {
 	if m == nil || m.terminalLinks == nil || !m.preview.visible {
 		return
@@ -39,7 +39,7 @@ func (m *Model) PrepareTerminalLinks() {
 	rawRoot := m.previewResolveRoot()
 	root := m.canonicalTerminalLinkRoot(rawRoot)
 	if !window.ok || buffer == nil || root == "" {
-		m.preview.linkState = termpreview.LinkState{}
+		m.previewTerminalLeaf().LinkState = termpreview.LinkState{}
 		return
 	}
 	lines := buffer.LinesRange(window.layout.Start, window.layout.End)
@@ -50,7 +50,7 @@ func (m *Model) PrepareTerminalLinks() {
 			Text:         line,
 		})
 	}
-	target := m.preview.terminalTarget.Session + "\x00" + m.preview.terminalTarget.Pane
+	target := m.previewTerminalLeaf().Target.Session + "\x00" + m.previewTerminalLeaf().Target.Pane
 	allowed := m.terminalAllowedLinkKinds()
 	scope := termpreview.LinkScope{
 		Host: "overview", Surface: m.preview.workspaceID, Target: target,
@@ -58,9 +58,9 @@ func (m *Model) PrepareTerminalLinks() {
 		AllowedKinds:      termpreview.AllowedKindsKey(allowed),
 		MatcherGeneration: m.linkMatcherGeneration,
 	}
-	m.preview.linkState = m.terminalLinks.Prepare(termpreview.LinkPrepare{
+	m.previewTerminalLeaf().LinkState = m.terminalLinks.Prepare(termpreview.LinkPrepare{
 		Scope: scope, Rows: rows, Allowed: allowed,
-		Matchers: m.resourceMatchers, Previous: m.preview.linkState,
+		Matchers: m.resourceMatchers, Previous: m.previewTerminalLeaf().LinkState,
 	})
 }
 
@@ -93,7 +93,7 @@ func (m *Model) revalidatePreviewLink(span contentlink.Span) (tea.Cmd, bool) {
 	if m.terminalLinks == nil {
 		return nil, false
 	}
-	scope := m.preview.linkState.Scope()
+	scope := m.previewTerminalLeaf().LinkState.Scope()
 	if scope.Root == "" {
 		return nil, false
 	}
@@ -110,7 +110,7 @@ func (m *Model) revalidatePreviewLink(span contentlink.Span) (tea.Cmd, bool) {
 }
 
 func (m *Model) applyPreviewLinkRevalidated(msg previewLinkRevalidatedMsg) tea.Cmd {
-	current := m.preview.linkState.Scope()
+	current := m.previewTerminalLeaf().LinkState.Scope()
 	if msg.Generation != m.preview.generation || msg.WorkspaceID != m.preview.workspaceID || msg.Scope != current || !msg.Result.Found ||
 		msg.Result.Request.Root != current.Root || msg.Result.Ref.Kind != msg.Span.Kind {
 		return nil

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/termpanes"
 )
 
 // The terminal panel is a Shell leaf of the pane tree, and nothing more. Its
@@ -14,12 +15,10 @@ import (
 // exactly like a document's or a diff's — there is no second split system
 // beside the tree, and no arithmetic here that panelayout does not already own.
 //
-// termPanelVisible remains the panel's LIFECYCLE flag: the tmux session it owns
-// outlives a hidden panel, so "is the session ours" and "is a leaf on screen"
-// are different questions. syncShellLeaf is the single place the tree is made to
-// agree with it — exactly one Shell leaf while the panel is up, none while it is
-// not — so no other path can leave a leaf drawn for a panel that was hidden, or
-// a panel flagged visible with nowhere to draw.
+// A requested collection entry is the panel's lifecycle signal. The tmux
+// session it owns outlives a hidden panel, so "is the session ours" and "is a
+// leaf on screen" are different questions. syncShellLeaf is the single place
+// that reconciles the collection with the tree.
 //
 // The flag is scoped by shellLeafSurface: a split terminal is a peer IN one
 // workspace, not a plugin-wide preference that follows the sidebar around. The
@@ -45,11 +44,11 @@ const (
 	// rule the user can see and act on, not a click that quietly does nothing.
 	// It is the toast a PROGRAMMATIC caller gets — ctrl+t, a CLI open — because
 	// those arrive with no modal to state the rule in first.
-	shellCapMessage = "Two live terminals at a time; close one first"
+	shellCapMessage = termpanes.CapMessage
 
 	// shellCapDisabledReason is the same rule said where the user is about to
 	// break it: one line under the create modal's disabled Terminal split row.
-	shellCapDisabledReason = "Two terminals are already on screen — close one first"
+	shellCapDisabledReason = termpanes.CapDisabledReason
 )
 
 // terminalSplitDisabledReason is why the create modal must refuse a terminal
@@ -60,7 +59,7 @@ func (p *Plugin) terminalSplitDisabledReason() string {
 	if !terminalPanelEnabled() {
 		return ""
 	}
-	if p.termPanelVisible || panelayout.LiveCapReached(p.paneRoot) {
+	if p.shellLeafVisible() || panelayout.LiveCapReached(p.paneRoot) {
 		return shellCapDisabledReason
 	}
 	return ""
@@ -114,9 +113,8 @@ func (p *Plugin) shellSplitShape() (SplitAxis, int) {
 	return axis, clampPaneRatio(ratio)
 }
 
-// syncShellLeaf makes the pane tree agree with termPanelVisible. It is called
-// wherever that flag moves and wherever the tree is rebuilt, so the two cannot
-// drift apart for a frame.
+// syncShellLeaf makes the pane tree agree with the terminal collection. It is
+// called wherever membership moves and wherever the tree is rebuilt.
 //
 // It reports whether the tree changed, which is a caller's cue that terminal
 // geometry moved.
@@ -127,9 +125,9 @@ func (p *Plugin) syncShellLeaf() bool {
 	p.releaseShellLeafOffSurface()
 	leaf := p.shellLeaf()
 	switch {
-	case p.termPanelVisible && leaf == nil:
+	case p.shellLeafRequested() && leaf == nil:
 		return p.openShellLeaf()
-	case !p.termPanelVisible && leaf != nil:
+	case !p.shellLeafRequested() && leaf != nil:
 		p.paneRoot, p.paneFocus = ClosePane(p.paneRoot, leaf.ID)
 		return true
 	}
@@ -159,7 +157,7 @@ func (p *Plugin) claimShellLeafSurface() {
 // selection rather than being thrown away, which is what the pre-ownership
 // build did with every split.
 func (p *Plugin) releaseShellLeafOffSurface() {
-	if !p.termPanelVisible {
+	if !p.shellLeafRequested() {
 		p.shellLeafSurface = ""
 		return
 	}
@@ -174,8 +172,8 @@ func (p *Plugin) releaseShellLeafOffSurface() {
 	if surface == p.shellLeafSurface {
 		return
 	}
-	p.termPanelVisible = false
-	p.termPanelFocused = false
+	p.releaseShellTermPane()
+	p.setShellLeafFocused(false)
 	p.shellLeafSurface = ""
 	p.forgetShellLeafName()
 }
@@ -183,7 +181,7 @@ func (p *Plugin) releaseShellLeafOffSurface() {
 // shellLeafOwnsSelection reports that the open split terminal is the selected
 // workspace's own.
 func (p *Plugin) shellLeafOwnsSelection() bool {
-	if !p.termPanelVisible {
+	if !p.shellLeafRequested() {
 		return false
 	}
 	_, surface, ok := p.selectedTerminalSurface()
@@ -207,22 +205,7 @@ func shellSessionSelector(persisted, derived string) string {
 // state-free rule so a headless caller could adopt it unchanged: currentCommand
 // is tmux's pane_current_command, shellCommand the session's own shell.
 func shellCloseNeedsConfirm(currentCommand, shellCommand string) bool {
-	current := strings.TrimSpace(currentCommand)
-	if current == "" {
-		return false
-	}
-	shell := strings.TrimSpace(shellCommand)
-	if shell == "" {
-		return true
-	}
-	return !strings.EqualFold(baseCommand(current), baseCommand(shell))
-}
-
-func baseCommand(command string) string {
-	if idx := strings.LastIndexByte(command, '/'); idx >= 0 {
-		command = command[idx+1:]
-	}
-	return strings.TrimPrefix(command, "-")
+	return termpanes.CloseNeedsConfirm(currentCommand, shellCommand)
 }
 
 // shellSplitPlacement is where the next shell split lands, in the `--split`
@@ -306,8 +289,8 @@ func (p *Plugin) openShellLeaf() bool {
 // ownership go together. Leaving termPanelFocused set behind a refused split is
 // how a surface ends up with no leaf drawing focused chrome.
 func (p *Plugin) abandonShellLeaf() {
-	p.termPanelVisible = false
-	p.termPanelFocused = false
+	p.releaseShellTermPane()
+	p.setShellLeafFocused(false)
 	p.shellLeafSurface = ""
 }
 
@@ -320,7 +303,7 @@ func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
 	if !terminalPanelEnabled() {
 		return nil
 	}
-	if p.termPanelVisible {
+	if p.shellLeafVisible() {
 		p.shellLeafName = strings.TrimSpace(name)
 		p.toastMessage = shellCapMessage
 		p.toastTime = time.Now()
@@ -335,20 +318,20 @@ func (p *Plugin) createTerminalSplit(name, placement string) tea.Cmd {
 // only thing the three exits disagree about. They used to be two near-identical
 // copies that differed by accident — ctrl+t kept the user's typed name, the ✕
 // discarded it — so the difference is now a parameter rather than a fork.
-type shellCloseMode int
+type shellCloseMode = termpanes.CloseMode
 
 const (
 	// shellCloseHide is ctrl+t: the leaf goes, the session and its name stay, and
 	// the next toggle reattaches to the same shell with its scrollback intact.
-	shellCloseHide shellCloseMode = iota
+	shellCloseHide shellCloseMode = termpanes.CloseHide
 	// shellCloseExplicit is the header ✕ and the confirm's Close. Per the plan,
 	// the leaf's close closes its session: the confirm asks about a running
 	// process, so answering Close must actually stop it. Nothing else reaps
 	// sidecar-tp-* sessions, so a kept session here is an unreachable one.
-	shellCloseExplicit
+	shellCloseExplicit = termpanes.CloseExplicit
 	// shellCloseSessionEnded is the shell dying under the user. There is nothing
 	// left to kill, and the buffer and pane id go with the leaf.
-	shellCloseSessionEnded
+	shellCloseSessionEnded = termpanes.CloseSessionEnded
 )
 
 // closeShellLeaf collapses the split terminal and hands the keyboard back to
@@ -358,23 +341,27 @@ const (
 // focus, and the surface claim) can never be left disagreeing with the tree.
 // Leaving any of them set is exactly the wedge that made "exit" cost a restart.
 func (p *Plugin) closeShellLeaf(mode shellCloseMode) tea.Cmd {
-	if !p.termPanelVisible && p.shellLeaf() == nil {
+	if !p.shellLeafVisible() && p.shellLeaf() == nil {
 		return nil
 	}
 	// Only a leaf that HELD the keyboard hands it back. A shell killed from
 	// outside while the user works in the sidebar must not yank focus to the
 	// preview under them.
-	hadFocus := p.termPanelFocused || p.activePane == PanePreview
-	if p.interactiveState != nil && p.interactiveState.Active && p.interactiveState.TermPanel {
+	hadFocus := p.shellLeafFocused() || p.activePane == PanePreview
+	if p.interactiveState != nil && p.interactiveState.Active && p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 		p.exitInteractiveMode()
 	}
 	// The shape it was closed at is what the next ctrl+t opens at.
 	p.rememberShellSplit()
-	session := strings.TrimSpace(p.termPanelSession)
-	p.termPanelVisible = false
-	p.termPanelFocused = false
+	session := strings.TrimSpace(p.requireShellTermPane().Session)
+	if mode == shellCloseHide {
+		p.hideShellTermPane()
+	} else {
+		p.releaseShellTermPane()
+	}
+	p.setShellLeafFocused(false)
 	p.shellLeafSurface = ""
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 	if mode != shellCloseHide {
 		p.forgetShellLeafName()
 	}
@@ -408,7 +395,7 @@ func (p *Plugin) noteShellLeafSessionEnded() tea.Cmd {
 	// raises shell-death suspicion. Closing first would let leaveInteractiveMode
 	// put termPanelFocused back on a leaf that is gone.
 	shared := p.noteSessionEnded()
-	if !p.termPanelVisible {
+	if !p.shellLeafVisible() {
 		return shared
 	}
 	return tea.Batch(shared, p.closeShellLeaf(shellCloseSessionEnded))

@@ -353,7 +353,7 @@ func (p *Plugin) planShellItem(trial *PaneNode, item layoutItemPlan) (panelayout
 	if !terminalPanelEnabled() {
 		return panelayout.OpenPlan{}, features.WorkspaceTerminalPanel.Name + " is off"
 	}
-	if p.termPanelVisible || panelayout.FirstOfKind(trial, panelayout.Shell) != nil {
+	if p.shellLeafVisible() || panelayout.FirstOfKind(trial, panelayout.Shell) != nil {
 		return panelayout.OpenPlan{}, shellCapMessage
 	}
 	if item.cell.Col != 0 {

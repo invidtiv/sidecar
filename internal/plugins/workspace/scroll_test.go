@@ -100,8 +100,8 @@ func TestPreviewWindowJumps(t *testing.T) {
 	}
 
 	p.jumpPreviewWindow(0)
-	if p.previewScroll != 0 {
-		t.Errorf("jump to live: previewScroll = %d, want 0", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Errorf("jump to live: previewScroll = %d, want 0", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -139,16 +139,16 @@ func TestScrollDirectionConsistency(t *testing.T) {
 	t.Run("output tab j moves towards the live bottom", func(t *testing.T) {
 		p := scrollTestOutputPlugin(5)
 		p.scrollTerminalWindow(false, -1)
-		if p.previewScroll != 4 {
-			t.Errorf("after j: previewScroll = %d, want 4", p.previewScroll)
+		if p.primaryTermPane().Scroll != 4 {
+			t.Errorf("after j: previewScroll = %d, want 4", p.primaryTermPane().Scroll)
 		}
 	})
 
 	t.Run("output tab k moves back through scrollback", func(t *testing.T) {
 		p := scrollTestOutputPlugin(5)
 		p.scrollTerminalWindow(false, 1)
-		if p.previewScroll != 6 {
-			t.Errorf("after k: previewScroll = %d, want 6", p.previewScroll)
+		if p.primaryTermPane().Scroll != 6 {
+			t.Errorf("after k: previewScroll = %d, want 6", p.primaryTermPane().Scroll)
 		}
 	})
 }
@@ -156,11 +156,8 @@ func TestScrollDirectionConsistency(t *testing.T) {
 // scrollTestOutputPlugin is an Output tab with 100 lines of captured output and
 // its window scroll rows back from the live bottom.
 func scrollTestOutputPlugin(scroll int) *Plugin {
-	p := &Plugin{
-		height:        20,
-		activePane:    PanePreview,
-		previewScroll: scroll,
-	}
+	p := &Plugin{height: 20, activePane: PanePreview}
+	p.primaryTermPane().Scroll = scroll
 	buffer := tty.NewOutputBuffer(500)
 	buffer.Write(strings.TrimSuffix(strings.Repeat("line\n", 100), "\n"))
 	p.worktrees = []*Worktree{{Name: "test", Agent: &Agent{OutputBuf: buffer}}}
@@ -199,8 +196,8 @@ func TestScrollbackStopsAtTheOldestDrawnRow(t *testing.T) {
 
 	// Walk back further than any bound could allow.
 	p.scrollTerminalWindow(false, 1000)
-	if p.previewScroll != bound {
-		t.Fatalf("previewScroll = %d, want the bound %d", p.previewScroll, bound)
+	if p.primaryTermPane().Scroll != bound {
+		t.Fatalf("previewScroll = %d, want the bound %d", p.primaryTermPane().Scroll, bound)
 	}
 	if start := p.terminalViewportLayoutFor(false).Start; start != 0 {
 		t.Fatalf("drawn window starts at %d, want the oldest row 0", start)
@@ -303,19 +300,16 @@ func TestPageScrollClamping(t *testing.T) {
 // TestTabSwitchResetsOffset verifies switching tabs resets both scroll models:
 // the document to the top of its content, the terminal to its live bottom.
 func TestTabSwitchResetsOffset(t *testing.T) {
-	p := &Plugin{
-		height:        20,
-		previewOffset: 50,
-		previewScroll: 12,
-	}
+	p := &Plugin{height: 20, previewOffset: 50}
+	p.primaryTermPane().Scroll = 12
 
 	p.resetPreviewScroll()
 
 	if p.previewOffset != 0 {
 		t.Errorf("after tab switch: previewOffset = %d, want 0", p.previewOffset)
 	}
-	if p.previewScroll != 0 {
-		t.Errorf("after tab switch: previewScroll = %d, want the live bottom", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Errorf("after tab switch: previewScroll = %d, want the live bottom", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -411,8 +405,8 @@ func TestWheelForwardsToPaneWhenAppTracksMouse(t *testing.T) {
 		t.Fatalf("no SGR wheel-up report reached tmux: %s", logged)
 	}
 
-	if p.previewScroll != 0 {
-		t.Fatalf("local scrollback moved: previewScroll=%d", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("local scrollback moved: previewScroll=%d", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -423,14 +417,14 @@ func TestForwardedWheelPinsViewportToLiveOutput(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
 	p.width, p.height = 100, 30
 	p.shellSelected = true
-	p.previewScroll = 12
+	p.primaryTermPane().Scroll = 12
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
 
-	if p.previewScroll != 0 {
-		t.Fatalf("viewport not pinned to live: previewScroll=%d", p.previewScroll)
+	if p.primaryTermPane().Scroll != 0 {
+		t.Fatalf("viewport not pinned to live: previewScroll=%d", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -461,14 +455,14 @@ func TestWheelScrollsScrollbackWhenAppIgnoresMouse(t *testing.T) {
 	p.width, p.height = 100, 30
 	givePaneScrollableOutput(p, 120)
 	// Far enough back from the live bottom that a notch has somewhere to go.
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 	attachLiveTerminal(p, false)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5})
 	tty.WaitForPendingSends()
 
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want 6 after scrolling local scrollback back a row", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 after scrolling local scrollback back a row", p.primaryTermPane().Scroll)
 	}
 	logged, err := os.ReadFile(logPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -490,14 +484,14 @@ func TestWheelWithAltScrollsScrollbackDespiteMouseTracking(t *testing.T) {
 	p.width, p.height = 100, 30
 	givePaneScrollableOutput(p, 120)
 	// Far enough back from the live bottom that a notch has somewhere to go.
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 10, Y: 5, Alt: true})
 	tty.WaitForPendingSends()
 
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want 6 — alt+wheel must stay local", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 — alt+wheel must stay local", p.primaryTermPane().Scroll)
 	}
 	logged, err := os.ReadFile(logPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -516,12 +510,12 @@ func TestWheelOutsidePaneFallsBackToScrollback(t *testing.T) {
 	p.width, p.height = 100, 30
 	givePaneScrollableOutput(p, 120)
 	// Far enough back from the live bottom that a notch has somewhere to go.
-	p.previewScroll = 5
+	p.primaryTermPane().Scroll = 5
 	attachLiveTerminal(p, true)
 
 	p.handleMouseScroll(mouse.MouseAction{Type: mouse.ActionScrollUp, Delta: -1, X: 0, Y: 0})
-	if p.previewScroll != 6 {
-		t.Fatalf("previewScroll = %d, want 6 when the pointer maps outside the pane", p.previewScroll)
+	if p.primaryTermPane().Scroll != 6 {
+		t.Fatalf("previewScroll = %d, want 6 when the pointer maps outside the pane", p.primaryTermPane().Scroll)
 	}
 }
 
@@ -613,7 +607,7 @@ func TestForwardedWheelKeepsRepaintPrompt(t *testing.T) {
 // be left highlighting rows the user never picked.
 func TestPinningViewportClearsSelection(t *testing.T) {
 	p := newInteractiveInputTestPlugin()
-	p.previewScroll = 12
+	p.primaryTermPane().Scroll = 12
 	p.selection.SelectRange(ui.SelectionPoint{Line: 2, Col: 0}, ui.SelectionPoint{Line: 4, Col: 5}, false)
 	if !p.selection.HasSelection() {
 		t.Fatal("test setup did not produce a selection")
@@ -650,10 +644,10 @@ func TestPanelBoundIsTheDrawnPanelWindow(t *testing.T) {
 		Output: strings.Join(rows, "\n"), BaseLine: 500, Absolute: true,
 		PaneHeight: 3,
 	}))
-	p.termPanelOutput = panel
+	p.requireShellTermPane().Buffer = panel
 
 	bound := p.terminalMaxScroll(true)
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 	live := p.terminalViewportLayoutFor(true).Start
 	if live != bound {
 		t.Fatalf("panel live edge starts at %d but its bound is %d — the panel's window "+

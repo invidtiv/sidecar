@@ -278,9 +278,9 @@ func (p *Plugin) terminalScrollState(termPanel bool) (follow bool, offset int, o
 	if p.projectedTerminalBuffer(termPanel) != nil {
 		return false, 0, false
 	}
-	freeze, scroll := &p.previewFreeze, p.previewScroll
+	freeze, scroll := &p.primaryTermPane().Freeze, p.primaryTermPane().Scroll
 	if termPanel {
-		freeze, scroll = &p.termPanelFreeze, p.termPanelScroll
+		freeze, scroll = &p.requireShellTermPane().Freeze, p.requireShellTermPane().Scroll
 	}
 	placement := tty.PlaceWindow(freeze, scroll)
 	return placement.Follow, placement.Offset, placement.FromBottom
@@ -296,7 +296,7 @@ func (p *Plugin) interactiveDescribes(termPanel bool) bool {
 	return p.viewMode == ViewModeInteractive &&
 		p.interactiveState != nil &&
 		p.interactiveState.Active &&
-		p.interactiveState.TermPanel == termPanel
+		p.terminalPaneIsPanel(p.interactiveState.LeafID) == termPanel
 }
 
 // resolvedPaneGeometry returns the tmux pane size a surface should be laid out

@@ -137,7 +137,7 @@ func (p *Plugin) cellPanes(col int, cells []*panelayout.Node, boxes map[int]layo
 			Pane: leaf.ID,
 		}
 		if leaf.Kind == panelayout.Shell {
-			cell.Session = p.termPanelSession
+			cell.Session = p.requireShellTermPane().Session
 		}
 		cell.Tabs, cell.Active, cell.Provider = p.leafTabs(leaf)
 		if box, ok := boxes[leaf.ID]; ok {

@@ -259,14 +259,14 @@ func TestTerminalPanelUsesPanelBufferForSelection(t *testing.T) {
 	panel := testTerminalBuffer("panel-0\npanel-1\npanel-2")
 	agent := testTerminalBuffer("agent-0")
 	p := &Plugin{
-		viewMode:        ViewModeInteractive,
-		termPanelOutput: panel,
+		viewMode: ViewModeInteractive,
 		interactiveState: &InteractiveState{
-			Active:    true,
-			TermPanel: true,
+			Active: true,
+			LeafID: 2,
 		},
 		worktrees: []*Worktree{{Agent: &Agent{OutputBuf: agent}}},
 	}
+	p.requireShellTermPane().Buffer = panel
 
 	if got := p.interactiveOutputBuffer(); got != panel {
 		t.Fatal("terminal-panel selection did not use terminal-panel output")
@@ -284,36 +284,36 @@ func TestTerminalRenderersDoNotMutateViewportState(t *testing.T) {
 	p := &Plugin{
 		viewMode:         ViewModeInteractive,
 		selectedIdx:      0,
-		previewScroll:    2,
-		termPanelOutput:  panelBuffer,
-		termPanelScroll:  99,
 		interactiveState: state,
 		worktrees: []*Worktree{{
 			Agent: &Agent{OutputBuf: agentBuffer},
 		}},
 		truncateCache: ui.NewTruncateCache(32),
 	}
+	p.primaryTermPane().Scroll = 2
+	p.requireShellTermPane().Buffer = panelBuffer
+	p.requireShellTermPane().Scroll = 99
 	p.selection.Clear()
 	beforeState := *state
-	beforePreviewScroll := p.previewScroll
-	beforePanelScroll := p.termPanelScroll
+	beforePreviewScroll := p.primaryTermPane().Scroll
+	beforePanelScroll := p.requireShellTermPane().Scroll
 
 	_ = p.renderOutputContent(20, 4)
 	if *state != beforeState {
 		t.Fatalf("agent render mutated interactive state: got %+v want %+v", *state, beforeState)
 	}
-	state.TermPanel = true
+	state.LeafID = p.terminalLeafID(true)
 	beforeState = *state
 	_ = p.renderTermPanelOutput(20, 4)
 
 	if *state != beforeState {
 		t.Fatalf("panel render mutated interactive state: got %+v want %+v", *state, beforeState)
 	}
-	if p.previewScroll != beforePreviewScroll {
-		t.Fatalf("render mutated previewScroll: got %d want %d", p.previewScroll, beforePreviewScroll)
+	if p.primaryTermPane().Scroll != beforePreviewScroll {
+		t.Fatalf("render mutated previewScroll: got %d want %d", p.primaryTermPane().Scroll, beforePreviewScroll)
 	}
-	if p.termPanelScroll != beforePanelScroll {
-		t.Fatalf("render mutated termPanelScroll: got %d want %d", p.termPanelScroll, beforePanelScroll)
+	if p.requireShellTermPane().Scroll != beforePanelScroll {
+		t.Fatalf("render mutated termPanelScroll: got %d want %d", p.requireShellTermPane().Scroll, beforePanelScroll)
 	}
 }
 
@@ -339,12 +339,12 @@ func TestShiftPageUpScrollsSidecarViewport(t *testing.T) {
 	if !handled {
 		t.Fatal("shift+PageUp was forwarded instead of scrolling sidecar")
 	}
-	if p.previewScroll == 0 {
+	if p.primaryTermPane().Scroll == 0 {
 		t.Fatal("shift+PageUp did not leave live-follow mode")
 	}
-	if p.previewScroll > p.terminalMaxScroll(false) {
+	if p.primaryTermPane().Scroll > p.terminalMaxScroll(false) {
 		t.Fatalf("shift+PageUp moved past the buffer: scroll=%d max=%d",
-			p.previewScroll, p.terminalMaxScroll(false))
+			p.primaryTermPane().Scroll, p.terminalMaxScroll(false))
 	}
 }
 
@@ -354,10 +354,10 @@ func TestTerminalPanelSelectionMapsFromPanelViewport(t *testing.T) {
 		width:            80,
 		height:           20,
 		viewMode:         ViewModeInteractive,
-		termPanelVisible: true,
-		termPanelOutput:  panel,
-		interactiveState: &InteractiveState{Active: true, TermPanel: true},
+		interactiveState: &InteractiveState{Active: true, LeafID: 2},
 	}
+	p.requestShellLeaf()
+	p.requireShellTermPane().Buffer = panel
 	p.selection.ViewRect = mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
 
 	layout := p.terminalSelectionViewportLayout()
@@ -406,7 +406,7 @@ func TestAgentUpdatesDoNotHijackInteractiveTerminalPanel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			state := &InteractiveState{
 				Active:                true,
-				TermPanel:             true,
+				LeafID:                2,
 				BracketedPasteEnabled: true,
 				MouseReportingEnabled: true,
 				CursorRow:             8,
@@ -488,11 +488,11 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 		width:            80,
 		height:           20,
 		viewMode:         ViewModeInteractive,
-		termPanelVisible: true,
-		termPanelOutput:  panel,
 		mouseHandler:     handler,
-		interactiveState: &InteractiveState{Active: true, TermPanel: true},
+		interactiveState: &InteractiveState{Active: true, LeafID: 2},
 	}
+	p.requestShellLeaf()
+	p.requireShellTermPane().Buffer = panel
 	rect := mouse.Rect{X: 10, Y: 5, W: 40, H: 8}
 	action := mouse.MouseAction{
 		Type:   mouse.ActionClick,
@@ -505,7 +505,7 @@ func TestTerminalPanelSelectionStopsOnlyPanelFollow(t *testing.T) {
 	if !p.selection.Anchor.Valid() {
 		t.Fatal("panel selection did not establish an anchor")
 	}
-	if p.previewScroll != 0 || p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll != 0 || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("panel selection disabled independent agent auto-follow")
 	}
 	frozen := p.terminalSelectionViewportLayout()

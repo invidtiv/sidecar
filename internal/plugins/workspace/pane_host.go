@@ -55,7 +55,7 @@ func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 		// The panel's keyboard is termPanelFocused's, not paneFocus's: the ring
 		// names the terminal leaf for both terminals and that flag says which of
 		// them has the keys.
-		if p.activePane != PanePreview || !p.termPanelFocused {
+		if p.activePane != PanePreview || !p.shellLeafFocused() {
 			return paneframe.ChromeIdle
 		}
 		if p.interactiveDescribes(true) {
@@ -63,7 +63,7 @@ func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 		}
 		return paneframe.ChromeActive
 	}
-	focused := node != nil && p.activePane == PanePreview && p.paneFocus == node.ID && !p.termPanelFocused
+	focused := node != nil && p.activePane == PanePreview && p.paneFocus == node.ID && !p.shellLeafFocused()
 	if !focused {
 		return paneframe.ChromeIdle
 	}

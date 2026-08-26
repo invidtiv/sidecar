@@ -133,11 +133,11 @@ func (p *Plugin) scrollTerminalSelectionViewport(delta int) {
 		return
 	}
 	layout := p.terminalSelectionViewportLayout()
-	if p.selectionTermPanel {
-		p.termPanelScroll = tty.ScrollWindowRows(&p.termPanelFreeze, p.termPanelScroll, delta, layout.MaxOffset)
+	if p.selectionPanel {
+		p.requireShellTermPane().Scroll = tty.ScrollWindowRows(&p.requireShellTermPane().Freeze, p.requireShellTermPane().Scroll, delta, layout.MaxOffset)
 		return
 	}
-	p.previewScroll = tty.ScrollWindowRows(&p.previewFreeze, p.previewScroll, delta, layout.MaxOffset)
+	p.primaryTermPane().Scroll = tty.ScrollWindowRows(&p.primaryTermPane().Freeze, p.primaryTermPane().Scroll, delta, layout.MaxOffset)
 }
 
 // prepareInteractiveDrag arms the pointer over a terminal surface. want is what
@@ -148,7 +148,7 @@ func (p *Plugin) prepareInteractiveDrag(action mouse.MouseAction, want tty.Click
 		return nil
 	}
 	targetTermPanel := action.Region.ID == regionTermPanelContent
-	sameSource := p.selectionTermPanel == targetTermPanel
+	sameSource := p.selectionPanel == targetTermPanel
 	p.prepareTerminalSelectionSource(targetTermPanel)
 	// Name the surface before the geometry is built, so hit testing can use it.
 	p.pointer.AdoptSurface(&p.selection, action.Region.Rect)
@@ -173,7 +173,7 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 	// A document pane is drawn beside the terminal, so its highlight is one of
 	// the selections a gesture starting here takes over from.
 	p.clearDocSelectionsExcept(nil)
-	if p.selectionTermPanel != termPanel {
+	if p.selectionPanel != termPanel {
 		p.selection.Clear()
 		// The anchor unit's span is in the old surface's coordinates.
 		p.pointer.ResetUnit()
@@ -181,7 +181,7 @@ func (p *Plugin) prepareTerminalSelectionSource(termPanel bool) {
 		// it — before the new source reads the panel's window back.
 		p.releaseTerminalGesturePin(true)
 	}
-	p.selectionTermPanel = termPanel
+	p.selectionPanel = termPanel
 	if termPanel && !p.selection.Anchor.Valid() {
 		// Pin the panel before anything hit-tests against it: a gesture reads the
 		// rows it was armed on, whatever output arrives underneath.
@@ -280,7 +280,7 @@ func (p *Plugin) activateTerminalLinkAt(action mouse.MouseAction, modified bool)
 	p.exitInteractiveMode()
 	p.activePane = PanePreview
 	p.paneFocus = leaf.ID
-	p.termPanelFocused = false
+	p.setShellLeafFocused(false)
 	return cmd, true
 }
 
@@ -376,7 +376,7 @@ func (p *Plugin) projectedTerminalBuffer(termPanel bool) *tty.OutputBuffer {
 
 func (p *Plugin) terminalProjectionIdentity(termPanel bool) string {
 	if termPanel {
-		return "panel:" + p.termPanelSession + "\x00" + p.termPanelPaneID
+		return "panel:" + p.requireShellTermPane().Session + "\x00" + p.requireShellTermPane().PaneID
 	}
 	if p.selectingShell() {
 		if shell := p.getSelectedShell(); shell != nil {
@@ -423,7 +423,7 @@ func (p *Plugin) handleInteractiveSelectionDrag(action mouse.MouseAction) tea.Cm
 // so a gesture that outlived an intervening thaw still holds its own rows.
 func (p *Plugin) freezeTerminalSelectionViewport() {
 	layout := p.terminalSelectionViewportLayout()
-	if p.selectionTermPanel {
+	if p.selectionPanel {
 		p.pinTerminalWindow(true, layout.Start, false)
 		return
 	}
@@ -438,7 +438,7 @@ func (p *Plugin) freezeTerminalSelectionViewport() {
 // of every gesture that took one. Both halves are the shared rule's; which
 // surface they apply to is all this call site decides.
 func (p *Plugin) thawTerminalSelectionViewport() {
-	if p.selectionTermPanel {
+	if p.selectionPanel {
 		return
 	}
 	p.thawTerminalGesturePin(false)
@@ -471,7 +471,7 @@ func (p *Plugin) finishInteractiveSelection() tea.Cmd {
 
 	switch resolution {
 	case tty.ClickActivate:
-		if p.selectionTermPanel {
+		if p.selectionPanel {
 			return p.enterTermPanelInteractiveMode()
 		}
 		return p.enterInteractiveMode()
@@ -493,9 +493,9 @@ func (p *Plugin) interactiveOutputBuffer() *tty.OutputBuffer {
 
 func (p *Plugin) effectiveSelectionTermPanel() bool {
 	if p.viewMode == ViewModeInteractive && p.interactiveState != nil && p.interactiveState.Active {
-		return p.interactiveState.TermPanel
+		return p.terminalPaneIsPanel(p.interactiveState.LeafID)
 	}
-	return p.selectionTermPanel
+	return p.selectionPanel
 }
 
 func (p *Plugin) interactiveSelectionLines() []string {

@@ -43,8 +43,8 @@ func TestLeavingInteractiveKeepsTheOutputProducer(t *testing.T) {
 	// the rule it is being held to, or a rule that snapped to the live edge
 	// would produce its own passing answer. The rule's own value is pinned in
 	// TestLeaveLiveWindowKeepsTheReadersWindow; this is the host obeying it.
-	if m.preview.offset != 2 {
-		t.Fatalf("scroll position = %d, want the 2 rows back the reader was at", m.preview.offset)
+	if m.previewTerminalLeaf().Scroll != 2 {
+		t.Fatalf("scroll position = %d, want the 2 rows back the reader was at", m.previewTerminalLeaf().Scroll)
 	}
 	view := m.WorkspacesView(previewWide, previewTall)
 	if strings.Contains(ansi.Strip(view), "No output captured") {
@@ -63,11 +63,11 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 	m.WorkspacesView(previewWide, previewTall)
 
 	m.freezePreviewWindow()
-	if !m.preview.freeze.Active() {
+	if !m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("the window was not pinned to begin with")
 	}
 	m.scrollPreview(20)
-	pinned := m.preview.freeze.Start()
+	pinned := m.previewTerminalLeaf().Freeze.Start()
 
 	terminal.hooks.OnExit()
 
@@ -76,15 +76,15 @@ func TestLeavingALivePaneThawsAPinnedWindow(t *testing.T) {
 	// interactive state could disagree with the one the leave rule actually saw.
 	bound := m.previewMaxOffset()
 
-	if m.preview.freeze.Active() {
+	if m.previewTerminalLeaf().Freeze.Active() {
 		t.Fatal("the window stayed pinned after the mode that pinned it ended")
 	}
 	want := tty.ThawOffsetFrom(pinned, bound)
 	if want == 0 {
 		t.Fatalf("the fixture never left the live edge (pin %d, bound %d)", pinned, bound)
 	}
-	if m.preview.offset != want {
-		t.Fatalf("window = %d rows back, want the %d the thawed pin sits at", m.preview.offset, want)
+	if m.previewTerminalLeaf().Scroll != want {
+		t.Fatalf("window = %d rows back, want the %d the thawed pin sits at", m.previewTerminalLeaf().Scroll, want)
 	}
 }
 
@@ -137,7 +137,7 @@ func TestEveryWayOutOfTheLivePaneReleasesInput(t *testing.T) {
 func TestLivePaneHeaderStatesTheWindowIsOffTheLiveEdge(t *testing.T) {
 	m, _, _ := interactiveModel(t)
 	enterInteractive(t, m)
-	m.preview.terminal.Buffer().ApplySnapshot(tty.PaneSnapshot{Output: longPaneOutput(200)})
+	m.previewTerminalState().terminal.Buffer().ApplySnapshot(tty.PaneSnapshot{Output: longPaneOutput(200)})
 	m.jumpPreviewWindow(30)
 
 	view := ansi.Strip(m.WorkspacesView(previewWide, previewTall))

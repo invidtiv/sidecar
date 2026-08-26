@@ -58,7 +58,7 @@ func TestShellLeafIsAPaneOfTheTree(t *testing.T) {
 				t.Fatal("a tree holding a shell leaf must be supported")
 			}
 
-			p.termPanelVisible = false
+			p.releaseShellTermPane()
 			p.syncShellLeaf()
 			if p.shellLeaf() != nil {
 				t.Fatal("a hidden panel must leave no leaf behind")
@@ -145,12 +145,12 @@ func TestToggleTermPanelOpensAtTheRememberedShape(t *testing.T) {
 	p.rememberShellSplit()
 
 	p.toggleTermPanel() // the fixture is already open; this closes it
-	if p.termPanelVisible || p.shellLeaf() != nil {
+	if p.shellLeafVisible() || p.shellLeaf() != nil {
 		t.Fatal("toggle did not close the panel")
 	}
 
 	p.toggleTermPanel()
-	if !p.termPanelVisible || p.shellLeaf() == nil {
+	if !p.shellLeafVisible() || p.shellLeaf() == nil {
 		t.Fatal("toggle did not reopen the panel")
 	}
 	split := FindPane(p.paneRoot, p.shellSplitID())

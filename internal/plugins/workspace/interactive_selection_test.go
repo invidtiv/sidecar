@@ -771,7 +771,7 @@ func TestPlainClickWithoutDragPreservesFollowMode(t *testing.T) {
 
 	p.prepareInteractiveDrag(actionAt(2, 4), tty.ClickNone)
 	p.finishInteractiveSelection()
-	if p.previewScroll != 0 || p.previewFreeze.Active() {
+	if p.primaryTermPane().Scroll != 0 || p.primaryTermPane().Freeze.Active() {
 		t.Fatal("click without drag disabled follow mode")
 	}
 }
@@ -782,8 +782,8 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 	p.height = 20
 	p.viewMode = ViewModeList
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 50))
-	p.selectionTermPanel = false
+	p.requireShellTermPane().Buffer = testTerminalBuffer(strings.Repeat("panel row\n", 50))
+	p.selectionPanel = false
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 10, Col: 1},
 		ui.SelectionPoint{Line: 10, Col: 3},
@@ -808,16 +808,16 @@ func TestShiftClickCannotExtendAcrossTerminalSources(t *testing.T) {
 		t.Fatalf("agent selection was extended into panel coordinates: %+v..%+v",
 			p.selection.Start, p.selection.End)
 	}
-	if !p.selectionTermPanel || !p.selection.Anchor.Valid() {
+	if !p.selectionPanel || !p.selection.Anchor.Valid() {
 		t.Fatalf("panel started with wrong source/anchor: panel=%v anchor=%+v",
-			p.selectionTermPanel, p.selection.Anchor)
+			p.selectionPanel, p.selection.Anchor)
 	}
-	if p.termPanelFreeze.Start() == 0 {
+	if p.requireShellTermPane().Freeze.Start() == 0 {
 		t.Fatal("panel selection reused the stale zero offset instead of freezing its live viewport")
 	}
-	if p.selection.Anchor.Line < p.termPanelFreeze.Start() {
+	if p.selection.Anchor.Line < p.requireShellTermPane().Freeze.Start() {
 		t.Fatalf("panel anchor line %d precedes frozen viewport %d",
-			p.selection.Anchor.Line, p.termPanelFreeze.Start())
+			p.selection.Anchor.Line, p.requireShellTermPane().Freeze.Start())
 	}
 }
 
@@ -827,8 +827,8 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 	p.height = 20
 	p.viewMode = ViewModeList
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panelword tail\n", 50))
-	p.selectionTermPanel = false
+	p.requireShellTermPane().Buffer = testTerminalBuffer(strings.Repeat("panelword tail\n", 50))
+	p.selectionPanel = false
 	p.selection.SelectRange(
 		ui.SelectionPoint{Line: 10, Col: 1},
 		ui.SelectionPoint{Line: 10, Col: 3},
@@ -847,15 +847,15 @@ func TestDoubleClickSwitchesTerminalSourceBeforeHitTesting(t *testing.T) {
 	}
 
 	p.selectTerminalWord(action)
-	if !p.selectionTermPanel || !p.selection.HasSelection() {
+	if !p.selectionPanel || !p.selection.HasSelection() {
 		t.Fatal("double-click did not create a terminal-panel selection")
 	}
-	if p.termPanelFreeze.Start() == 0 {
+	if p.requireShellTermPane().Freeze.Start() == 0 {
 		t.Fatal("double-click reused stale panel offset zero")
 	}
-	if p.selection.Start.Line < p.termPanelFreeze.Start() {
+	if p.selection.Start.Line < p.requireShellTermPane().Freeze.Start() {
 		t.Fatalf("selected line %d precedes panel viewport %d",
-			p.selection.Start.Line, p.termPanelFreeze.Start())
+			p.selection.Start.Line, p.requireShellTermPane().Freeze.Start())
 	}
 }
 
@@ -880,7 +880,7 @@ func newTerminalDragTestPlugin() *Plugin {
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 200))
 	// The window starts at the oldest row the buffer holds, so a gesture over it
 	// names rows these tests can assert by absolute line.
-	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset
+	p.primaryTermPane().Scroll = p.terminalSelectionViewportLayout().MaxOffset
 	return p
 }
 
@@ -936,7 +936,7 @@ func TestDragOutsideContentClampsInsteadOfStalling(t *testing.T) {
 // Dragging past an edge is how a selection reaches text that is not on screen.
 func TestDragPastEdgeScrollsSelectionThroughScrollback(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 50
+	p.primaryTermPane().Scroll = p.terminalSelectionViewportLayout().MaxOffset - 50
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	start := p.terminalSelectionViewportLayout().Start
@@ -1106,7 +1106,7 @@ func TestSingleCharWordSurvivesDragEnd(t *testing.T) {
 // to keep scrolling on its own, and has to stop at the buffer edge.
 func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
+	p.primaryTermPane().Scroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	if cmd := terminalDragTo(p, 66, 0); cmd == nil {
@@ -1140,7 +1140,7 @@ func TestHeldPointerPastEdgeKeepsScrollingUntilTheTop(t *testing.T) {
 
 func TestSelectionAutoScrollStopsWhenGestureEnds(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
+	p.primaryTermPane().Scroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
@@ -1185,7 +1185,7 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 	p.height = 20
 	p.viewMode = ViewModeList
 	showTermPanel(t, p, SplitRows, 50)
-	p.termPanelOutput = testTerminalBuffer(strings.Repeat("panel row\n", 200))
+	p.requireShellTermPane().Buffer = testTerminalBuffer(strings.Repeat("panel row\n", 200))
 	panel := p.terminalSurfaceGeometry(true)
 	if !panel.OK {
 		t.Fatal("fixture drew no panel")
@@ -1203,16 +1203,16 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a panel drag past the top edge scheduled no auto-scroll tick")
 	}
-	before := p.termPanelFreeze.Start()
+	before := p.requireShellTermPane().Freeze.Start()
 	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd == nil {
 		t.Fatal("the panel tick did not re-arm while the pointer was still past the edge")
 	}
-	if p.termPanelFreeze.Start() >= before {
-		t.Errorf("panel offset = %d, want less than %d", p.termPanelFreeze.Start(), before)
+	if p.requireShellTermPane().Freeze.Start() >= before {
+		t.Errorf("panel offset = %d, want less than %d", p.requireShellTermPane().Freeze.Start(), before)
 	}
-	if p.selection.Start.Line != p.termPanelFreeze.Start() {
+	if p.selection.Start.Line != p.requireShellTermPane().Freeze.Start() {
 		t.Errorf("panel selection start = %d, want the newly revealed top row %d",
-			p.selection.Start.Line, p.termPanelFreeze.Start())
+			p.selection.Start.Line, p.requireShellTermPane().Freeze.Start())
 	}
 
 	for range tty.AutoScrollMaxRun {
@@ -1225,9 +1225,9 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 			break
 		}
 	}
-	if p.termPanelFreeze.Start() != 0 {
+	if p.requireShellTermPane().Freeze.Start() != 0 {
 		t.Fatalf("panel auto-scroll stopped at %d, want the top of the panel buffer",
-			p.termPanelFreeze.Start())
+			p.requireShellTermPane().Freeze.Start())
 	}
 	if _, cmd := p.update(selectionAutoScrollTickMsg{generation: p.pointer.Generation()}); cmd != nil {
 		t.Error("panel auto-scroll re-armed at the buffer edge")
@@ -1238,7 +1238,7 @@ func TestHeldPointerPastEdgeScrollsTerminalPanel(t *testing.T) {
 // scrolls the pane under the modal all the way to line zero.
 func TestSelectionAutoScrollStopsUnderAModal(t *testing.T) {
 	p := newTerminalDragTestPlugin()
-	p.previewScroll = p.terminalSelectionViewportLayout().MaxOffset - 60
+	p.primaryTermPane().Scroll = p.terminalSelectionViewportLayout().MaxOffset - 60
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
@@ -1266,7 +1266,7 @@ func TestSelectionAutoScrollSelfLimitsWithoutMotion(t *testing.T) {
 	p.shells[0].Agent.OutputBuf = tty.NewOutputBuffer(1000)
 	p.shells[0].Agent.OutputBuf.Update(strings.Repeat("selectable terminal row here\n", 900))
 	// From the live bottom, so the chain has the whole buffer to run through.
-	p.previewScroll = 0
+	p.primaryTermPane().Scroll = 0
 	p.handleMouseClick(previewClickAction(false, false))
 	terminalDragTo(p, 66, 8)
 	terminalDragTo(p, 66, 0)
@@ -1335,33 +1335,33 @@ func TestSelectAllResetsWordGestureBeforeShiftClick(t *testing.T) {
 // to where the gesture started (td-e0a220).
 func TestEmptyPanelGestureThawsTheWindowItScrolled(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 
 	// Arming the gesture pins the panel to the window it was armed on, then the
 	// edge auto-scroll body walks that window back through the scrollback.
 	p.prepareTerminalSelectionSource(true)
-	if !p.termPanelFreeze.Active() {
+	if !p.requireShellTermPane().Freeze.Active() {
 		t.Fatal("test premise: arming the panel gesture pinned no window")
 	}
-	armed := p.termPanelFreeze.Start()
+	armed := p.requireShellTermPane().Freeze.Start()
 	p.scrollTerminalSelectionViewport(-5)
-	scrolled := p.termPanelFreeze.Start()
+	scrolled := p.requireShellTermPane().Freeze.Start()
 	if scrolled >= armed {
 		t.Fatalf("test premise: the gesture did not move the window (%d -> %d)", armed, scrolled)
 	}
 
 	p.finishInteractiveSelection()
 
-	if p.termPanelFreeze.Active() {
+	if p.requireShellTermPane().Freeze.Active() {
 		t.Fatal("the empty release left the gesture pin holding the panel window")
 	}
 	want := tty.ThawOffsetFrom(scrolled, p.terminalMaxScroll(true))
 	if want == 0 {
 		t.Fatal("test premise: the scrolled window is indistinguishable from the live edge")
 	}
-	if p.termPanelScroll != want {
+	if p.requireShellTermPane().Scroll != want {
 		t.Fatalf("empty panel gesture left scroll %d, want the rows it scrolled to at %d",
-			p.termPanelScroll, want)
+			p.requireShellTermPane().Scroll, want)
 	}
 }
 
@@ -1370,14 +1370,14 @@ func TestEmptyPanelGestureThawsTheWindowItScrolled(t *testing.T) {
 // (td-ac8c74).
 func TestEmptyPanelGestureAtTheLiveEdgeResumesFollowing(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 
 	p.prepareTerminalSelectionSource(true)
 	p.finishInteractiveSelection()
 
-	if p.termPanelFreeze.Active() || p.termPanelScroll != 0 {
+	if p.requireShellTermPane().Freeze.Active() || p.requireShellTermPane().Scroll != 0 {
 		t.Fatalf("live-edge gesture left frozen %v scroll %d, want a following window",
-			p.termPanelFreeze.Active(), p.termPanelScroll)
+			p.requireShellTermPane().Freeze.Active(), p.requireShellTermPane().Scroll)
 	}
 }
 
@@ -1386,32 +1386,32 @@ func TestEmptyPanelGestureAtTheLiveEdgeResumesFollowing(t *testing.T) {
 // survive the clear instead of snapping back to the pre-gesture offset.
 func TestClearingATerminalSelectionThawsThePanelPin(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 	p.prepareTerminalSelectionSource(true)
 	p.scrollTerminalSelectionViewport(-5)
-	pinned := p.termPanelFreeze.Start()
+	pinned := p.requireShellTermPane().Freeze.Start()
 
 	p.clearTerminalSelection()
 
 	want := tty.ThawOffsetFrom(pinned, p.terminalMaxScroll(true))
-	if p.termPanelFreeze.Active() || p.termPanelScroll != want {
+	if p.requireShellTermPane().Freeze.Active() || p.requireShellTermPane().Scroll != want {
 		t.Fatalf("clear left frozen %v scroll %d, want the thawed offset %d",
-			p.termPanelFreeze.Active(), p.termPanelScroll, want)
+			p.requireShellTermPane().Freeze.Active(), p.requireShellTermPane().Scroll, want)
 	}
 }
 
 // A document's pin outlives the selection a click made, so neither path ends it.
 func TestPanelDocPinSurvivesAnEmptyGesture(t *testing.T) {
 	p := passiveWheelPanelPlugin(t)
-	p.termPanelScroll = 0
+	p.requireShellTermPane().Scroll = 0
 	p.pinTerminalWindow(true, 20, true)
 
-	p.selectionTermPanel = true
+	p.selectionPanel = true
 	p.finishInteractiveSelection()
 	p.clearTerminalSelection()
 
-	if !p.termPanelFreeze.Active() || p.termPanelFreeze.Start() != 20 || !p.termPanelFreezeDoc {
+	if !p.requireShellTermPane().Freeze.Active() || p.requireShellTermPane().Freeze.Start() != 20 || !p.requireShellTermPane().FreezeDoc {
 		t.Fatalf("gesture end dropped the document's pin: active %v start %d doc %v",
-			p.termPanelFreeze.Active(), p.termPanelFreeze.Start(), p.termPanelFreezeDoc)
+			p.requireShellTermPane().Freeze.Active(), p.requireShellTermPane().Freeze.Start(), p.requireShellTermPane().FreezeDoc)
 	}
 }

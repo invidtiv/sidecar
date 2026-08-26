@@ -26,8 +26,8 @@ func TestLosingFocusClosesVisibleTerminalModelsAndHiddenResizeDoesNotOwnGeometry
 	}
 
 	p.SetFocused(false)
-	if model.IsActive() || p.primaryTerminalTarget != (workspaceTerminalTarget{}) {
-		t.Fatalf("covered project retained terminal ownership: active=%v target=%+v", model.IsActive(), p.primaryTerminalTarget)
+	if model.IsActive() || p.primaryTermPane().Target != (workspaceTerminalTarget{}) {
+		t.Fatalf("covered project retained terminal ownership: active=%v target=%+v", model.IsActive(), p.primaryTermPane().Target)
 	}
 	_, cmd := p.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	if cmd != nil {
@@ -50,15 +50,15 @@ func TestRegainingFocusReconcilesTheSelectedTerminalOnce(t *testing.T) {
 	p.SetFocused(true)
 
 	_, _ = p.Update(app.PluginFocusedMsg{})
-	if p.primaryTerminal == nil || !p.primaryTerminal.IsActive() {
+	if p.primaryTermPane().Terminal == nil || !p.primaryTermPane().Terminal.IsActive() {
 		t.Fatal("returning to project focus did not reopen the selected terminal")
 	}
-	if got := p.primaryTerminalTarget; got.Session != "project" || got.Pane != "%1" {
+	if got := p.primaryTermPane().Target; got.Session != "project" || got.Pane != "%1" {
 		t.Fatalf("restored terminal target = %+v", got)
 	}
-	firstGeneration := p.primaryTerminal.Scope().Generation
+	firstGeneration := p.primaryTermPane().Terminal.Scope().Generation
 	_, _ = p.Update(app.PluginFocusedMsg{})
-	if got := p.primaryTerminal.Scope().Generation; got != firstGeneration {
+	if got := p.primaryTermPane().Terminal.Scope().Generation; got != firstGeneration {
 		t.Fatalf("duplicate focus notification reopened terminal: generation %d -> %d", firstGeneration, got)
 	}
 }
@@ -90,8 +90,8 @@ func newTerminalEmbeddingTestPlugin() *Plugin {
 	p.applicationFocused = true
 	p.viewMode = ViewModeList
 	p.SetFocused(true)
-	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
-	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	return p
 }
 
@@ -134,8 +134,8 @@ func TestWorkspaceTerminalSwitchRejectsStaleCapture(t *testing.T) {
 	if got := model.State.OutputBuf.String(); got != "SECOND" {
 		t.Fatalf("switched output = %q, want only SECOND", got)
 	}
-	if p.primaryTerminalTarget.SourceID != "second-key" {
-		t.Fatalf("selected target = %#v", p.primaryTerminalTarget)
+	if p.primaryTermPane().Target.SourceID != "second-key" {
+		t.Fatalf("selected target = %#v", p.primaryTermPane().Target)
 	}
 }
 
@@ -156,8 +156,8 @@ func TestWorkspaceTerminalFallbackBindsModelBuffer(t *testing.T) {
 
 func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
 	p := nestedSidebarPlugin(t)
-	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
-	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	const session = "sidecar-sh-sidecar-feature-1"
 	parent, shell := p.findNestedShell(session)
 	if shell == nil {
@@ -195,8 +195,8 @@ func TestNestedShellSelectionOpensPrimaryTerminalFromSessionOnly(t *testing.T) {
 
 func TestNestedShellSwitchRejectsPriorTerminalFrame(t *testing.T) {
 	p := nestedSidebarPlugin(t)
-	p.primaryTerminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
-	p.panelTerminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
+	p.primaryTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPrimary)
+	p.requireShellTermPane().Terminal = p.newWorkspaceTerminal(workspaceTerminalPanel)
 	const nestedSession = "sidecar-sh-sidecar-feature-1"
 	parent, nested := p.findNestedShell(nestedSession)
 	nested.Agent = &Agent{
@@ -234,8 +234,8 @@ func TestNestedShellSwitchRejectsPriorTerminalFrame(t *testing.T) {
 	if !strings.Contains(view, "top current") || strings.Contains(view, "STALE NESTED FRAME") || strings.Contains(view, "nested current") {
 		t.Fatalf("shell switch rendered stale nested content:\n%s", view)
 	}
-	if p.primaryTerminalTarget.SourceID != top.TmuxName {
-		t.Fatalf("primary target after switch = %#v", p.primaryTerminalTarget)
+	if p.primaryTermPane().Target.SourceID != top.TmuxName {
+		t.Fatalf("primary target after switch = %#v", p.primaryTermPane().Target)
 	}
 }
 
@@ -248,9 +248,9 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			p.sidebarVisible = false
 			p.activePane = PanePreview
 			showTermPanel(t, p, SplitRows, 50)
-			p.termPanelFocused = true
-			p.termPanelSession = "panel-session"
-			p.termPanelPaneID = "%2"
+			p.setShellLeafFocused(true)
+			p.requireShellTermPane().Session = "panel-session"
+			p.requireShellTermPane().PaneID = "%2"
 
 			primaryTarget := workspaceTerminalTarget{
 				Session: "primary-session", Pane: "%1", Source: "agent", SourceID: "worktree-key",
@@ -277,7 +277,7 @@ func TestFocusedPanelShortcutRoutesAllInteractiveInputToPanelModel(t *testing.T)
 			})
 
 			p.handleListKeys(keyPressFor("E"))
-			if p.interactiveState == nil || !p.interactiveState.Active || !p.interactiveState.TermPanel {
+			if p.interactiveState == nil || !p.interactiveState.Active || !p.terminalPaneIsPanel(p.interactiveState.LeafID) {
 				t.Fatalf("focused panel E entry chose primary interaction: %#v", p.interactiveState)
 			}
 			if p.interactiveState.TargetSession != "panel-session" || p.interactiveState.TargetPane != "%2" {

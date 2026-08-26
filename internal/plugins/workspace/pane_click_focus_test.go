@@ -138,6 +138,7 @@ func TestFocusTargetLeavingTheTerminalEndsInteractiveMode(t *testing.T) {
 	root := t.TempDir()
 	p := docPaneTestPlugin(t, root, true)
 	everyKindPaneTree(t, p, root)
+	showTermPanel(t, p, SplitRows, 50)
 	t.Cleanup(p.stopTerminalModels)
 
 	cases := []struct {
@@ -149,7 +150,7 @@ func TestFocusTargetLeavingTheTerminalEndsInteractiveMode(t *testing.T) {
 		{"doc leaf", false, panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: 2}},
 		{"issue leaf", false, panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: 3}},
 		{"diff leaf", false, panelayout.Target{Kind: panelayout.TargetLeaf, Leaf: 4}},
-		{"terminal panel", true, panelayout.Target{Kind: panelayout.TargetTermPanel}},
+		{"terminal panel", true, panelTarget(p)},
 		{"sidebar", false, panelayout.Target{Kind: panelayout.TargetSidebar}},
 	}
 	for _, tc := range cases {

@@ -15,10 +15,10 @@ import (
 // coordinates a prepend renumbered.
 
 type terminalHistorySource struct {
-	Key       string
-	Target    string
-	Buffer    *tty.OutputBuffer
-	TermPanel bool
+	Key    string
+	Target string
+	Buffer *tty.OutputBuffer
+	LeafID int
 }
 
 type terminalHistoryLoadedMsg struct {
@@ -50,18 +50,18 @@ func (p *Plugin) recordTerminalHistory(kind, target string, historySize int) {
 
 func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool) {
 	if termPanel {
-		target := p.termPanelPaneID
+		target := p.requireShellTermPane().PaneID
 		if target == "" {
-			target = p.termPanelSession
+			target = p.requireShellTermPane().Session
 		}
-		if target == "" || p.termPanelOutput == nil {
+		if target == "" || p.requireShellTermPane().Buffer == nil {
 			return terminalHistorySource{}, false
 		}
 		return terminalHistorySource{
-			Key:       terminalHistoryKey("panel", p.termPanelSession),
-			Target:    target,
-			Buffer:    p.termPanelOutput,
-			TermPanel: true,
+			Key:    terminalHistoryKey("panel", p.requireShellTermPane().Session),
+			Target: target,
+			Buffer: p.requireShellTermPane().Buffer,
+			LeafID: p.terminalLeafID(true),
 		}, true
 	}
 	if p.selectingShell() {
@@ -77,6 +77,7 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 			Key:    terminalHistoryKey("shell", shell.TmuxName),
 			Target: target,
 			Buffer: shell.Agent.OutputBuf,
+			LeafID: p.terminalLeafID(false),
 		}, true
 	}
 	wt := p.selectedWorktree()
@@ -91,6 +92,7 @@ func (p *Plugin) terminalHistoryFor(termPanel bool) (terminalHistorySource, bool
 		Key:    terminalHistoryKey("agent", wt.Agent.TmuxSession),
 		Target: target,
 		Buffer: wt.Agent.OutputBuf,
+		LeafID: p.terminalLeafID(false),
 	}, true
 }
 
@@ -163,7 +165,8 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 		}
 		return nil
 	}
-	current, ok := p.terminalHistoryFor(msg.Source.TermPanel)
+	termPanel := p.terminalPaneIsPanel(msg.Source.LeafID)
+	current, ok := p.terminalHistoryFor(termPanel)
 	if !ok || current.Key != msg.Source.Key || current.Buffer != msg.Source.Buffer {
 		p.terminalHistory[msg.Source.Key] = state
 		return nil
@@ -192,10 +195,10 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 		p.recomputeTerminalSearch()
 	}
 
-	if msg.Source.TermPanel {
+	if termPanel {
 		// A pinned window names an absolute row, which the prepend just renumbered.
-		p.termPanelFreeze.Rebase(added)
-		p.termPanelScroll = min(p.termPanelScroll+scrollLines, p.terminalMaxScroll(true))
+		p.requireShellTermPane().Freeze.Rebase(added)
+		p.requireShellTermPane().Scroll = min(p.requireShellTermPane().Scroll+scrollLines, p.terminalMaxScroll(true))
 		if more {
 			return p.loadOlderTerminalHistory(true, remainder)
 		}
@@ -203,8 +206,8 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 	}
 	// A window placed from the live bottom is not renumbered by a prepend, so
 	// only the user's pending upward movement is replayed here.
-	p.previewFreeze.Rebase(added)
-	p.previewScroll = min(p.previewScroll+scrollLines, p.terminalMaxScroll(false))
+	p.primaryTermPane().Freeze.Rebase(added)
+	p.primaryTermPane().Scroll = min(p.primaryTermPane().Scroll+scrollLines, p.terminalMaxScroll(false))
 	if more {
 		return p.loadOlderTerminalHistory(false, remainder)
 	}
@@ -212,16 +215,16 @@ func (p *Plugin) applyTerminalHistory(msg terminalHistoryLoadedMsg) tea.Cmd {
 }
 
 func (p *Plugin) terminalModelForHistorySource(source terminalHistorySource) *tty.Model {
-	if source.TermPanel {
-		if p.panelTerminalOwns() && p.panelTerminal != nil && p.panelTerminal.State != nil &&
-			p.panelTerminal.State.OutputBuf == source.Buffer {
-			return p.panelTerminal
+	if p.terminalPaneIsPanel(source.LeafID) {
+		if p.panelTerminalOwns() && p.requireShellTermPane().Terminal != nil && p.requireShellTermPane().Terminal.State != nil &&
+			p.requireShellTermPane().Terminal.State.OutputBuf == source.Buffer {
+			return p.requireShellTermPane().Terminal
 		}
 		return nil
 	}
-	if p.primaryTerminal != nil && p.primaryTerminal.IsActive() && p.primaryTerminal.State != nil &&
-		p.primaryTerminal.State.OutputBuf == source.Buffer {
-		return p.primaryTerminal
+	if p.primaryTermPane().Terminal != nil && p.primaryTermPane().Terminal.IsActive() && p.primaryTermPane().Terminal.State != nil &&
+		p.primaryTermPane().Terminal.State.OutputBuf == source.Buffer {
+		return p.primaryTermPane().Terminal
 	}
 	return nil
 }

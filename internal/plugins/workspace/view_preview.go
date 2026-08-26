@@ -173,18 +173,18 @@ func (p *Plugin) paneFocusChip(label string, focused bool) string {
 }
 
 func (p *Plugin) primaryTerminalFocused() bool {
-	if p.activePane != PanePreview || p.termPanelFocused {
+	if p.activePane != PanePreview || p.shellLeafFocused() {
 		return false
 	}
 	if _, doc := p.activeDocPane(); doc != nil {
 		return p.paneFocus == terminalLeafID(p.paneRoot)
 	}
-	return p.termPanelVisible
+	return p.shellLeafVisible()
 }
 
 func (p *Plugin) primaryTerminalFocusVisible() bool {
 	_, doc := p.activeDocPane()
-	return p.termPanelVisible || doc != nil
+	return p.shellLeafVisible() || doc != nil
 }
 
 // terminalHeader renders a surface's single header row at the plugin's
@@ -324,14 +324,14 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	// hit testing and the native cursor. Only decoration is added here.
 	input := p.terminalWindowInput(termPanel, buffer, width, height)
 	input.NativeCursor = interactive
-	if p.selectionTermPanel == termPanel {
+	if p.selectionPanel == termPanel {
 		input.Selection = &p.selection
 	}
 	input.SearchMatches = p.terminalSearchMatches(termPanel)
 	if termPanel {
-		input.LinkState = p.panelLinkState
+		input.LinkState = p.requireShellTermPane().LinkState
 	} else {
-		input.LinkState = p.primaryLinkState
+		input.LinkState = p.primaryTermPane().LinkState
 	}
 	input.BarStyle = p.terminalBarStyle(termPanel)
 	result := renderTerminalViewport(input, p.truncateCache)
@@ -353,7 +353,7 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 		PaneHeight:     input.PaneHeight,
 		LiveEdgeKey:    terminalLiveEdgeKey(interactive),
 	}), 0, dimText)
-	if p.terminalSearch.TermPanel == termPanel && p.terminalSearch.SourceKey != "" {
+	if p.terminalSearch.Panel == termPanel && p.terminalSearch.SourceKey != "" {
 		if p.terminalSearch.InputActive {
 			hint += " " + dimText("/"+p.terminalSearch.Query+"▌")
 		} else if p.terminalSearch.Query != "" {
@@ -550,7 +550,7 @@ func (p *Plugin) renderShellOutput(width, height int) string {
 	case p.interactiveDescribes(false):
 		// Interactive mode targeting this shell pane
 		hint = p.interactiveExitHint()
-	case p.termPanelVisible && p.activePane == PanePreview:
+	case p.shellLeafVisible() && p.activePane == PanePreview:
 		if shellFocused {
 			hint = dimText("enter interactive")
 		}

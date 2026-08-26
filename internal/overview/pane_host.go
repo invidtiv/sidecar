@@ -48,7 +48,7 @@ func (h paneHost) SetFocus(node *panelayout.Node) {
 	// while the list still owns the keyboard, and deferring there would light an
 	// active border on the terminal while j/k moved the list — this ticket's own
 	// bug in a narrower case.
-	if node.Kind == panelayout.Terminal && !m.previewOwnsChrome() {
+	if panelayout.IsLive(node.Kind) && !m.previewOwnsChrome() {
 		m.preview.paneFocus = node.ID
 		return
 	}
@@ -99,7 +99,7 @@ func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 	if node == nil || !m.previewOwnsChrome() || m.preview.paneFocus != node.ID {
 		return paneframe.ChromeIdle
 	}
-	if node.Kind == panelayout.Terminal && m.PreviewInteractive() {
+	if panelayout.IsLive(node.Kind) && m.PreviewInteractive() {
 		return paneframe.ChromeInteractive
 	}
 	return paneframe.ChromeActive
@@ -197,7 +197,7 @@ func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 	if r.m.paneContent(node) == nil {
 		return
 	}
-	r.m.registerPreviewCloseRegion(node.Kind, inner)
+	r.m.registerPreviewCloseRegionFor(node.ID, node.Kind, inner)
 }
 
 // Body is anything a leaf's content owns inside its own box — the terminal

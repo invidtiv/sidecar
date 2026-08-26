@@ -277,9 +277,9 @@ func (p *Plugin) adoptSpecShellLeaf(item *layoutItemPlan) (string, string, tea.C
 	}
 	cmd := p.attachWorkspaceTerminalSplit()
 	p.shellLeafName = strings.TrimSpace(item.spec.Name)
-	p.termPanelFocused = true
+	p.setShellLeafFocused(true)
 	p.activePane = PanePreview
-	if p.termPanelSession == "" {
+	if p.requireShellTermPane().Session == "" {
 		reason := p.toastMessage
 		if reason == "" {
 			reason = features.WorkspaceTerminalPanel.Name + " is off"
@@ -380,8 +380,8 @@ func (p *Plugin) liveShellSessions() map[string]bool {
 			return
 		}
 		if node.Split == nil {
-			if node.Kind == panelayout.Shell && p.termPanelSession != "" {
-				out[p.termPanelSession] = true
+			if node.Kind == panelayout.Shell && p.requireShellTermPane().Session != "" {
+				out[p.requireShellTermPane().Session] = true
 			}
 			return
 		}
