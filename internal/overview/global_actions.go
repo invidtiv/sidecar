@@ -34,8 +34,9 @@ var (
 )
 
 type globalShellDeletedMsg struct {
-	Project Project
-	Err     error
+	Project     Project
+	WorkspaceID string
+	Err         error
 }
 
 func (m *Model) DeleteOpen() bool { return m.deleteOpen }
@@ -207,9 +208,10 @@ func (m *Model) projectRootFor(workspace workspaceinventory.Workspace) string {
 }
 
 type globalWorktreeDeleteDoneMsg struct {
-	Project  Project
-	Warnings []string
-	Err      error
+	Project     Project
+	WorkspaceID string
+	Warnings    []string
+	Err         error
 }
 
 func (m *Model) applyWorktreeDeleteOutcome(outcome worktreedelete.Outcome) tea.Cmd {
@@ -250,7 +252,7 @@ func (m *Model) executeWorktreeDelete() tea.Cmd {
 			Path: target.Path, Branch: target.Branch,
 			Missing: target.IsMissing, Force: true,
 		}); err != nil {
-			return globalWorktreeDeleteDoneMsg{Project: project, Err: err}
+			return globalWorktreeDeleteDoneMsg{Project: project, WorkspaceID: workspace.ID, Err: err}
 		}
 		var warnings []string
 		if deleteLocal {
@@ -267,7 +269,7 @@ func (m *Model) executeWorktreeDelete() tea.Cmd {
 				warnings = append(warnings, fmt.Sprintf("Remote branch: %v", err))
 			}
 		}
-		return globalWorktreeDeleteDoneMsg{Project: project, Warnings: warnings}
+		return globalWorktreeDeleteDoneMsg{Project: project, WorkspaceID: workspace.ID, Warnings: warnings}
 	}
 }
 
@@ -275,6 +277,7 @@ func (m *Model) applyWorktreeDeleteDone(msg globalWorktreeDeleteDoneMsg) tea.Cmd
 	if msg.Err != nil {
 		return appmsg.ShowToast("Delete failed: "+msg.Err.Error(), 4*time.Second)
 	}
+	m.forgetSessionsRow(msg.WorkspaceID)
 	cmds := []tea.Cmd{m.refreshProjectAfterMutation(msg.Project)}
 	if len(msg.Warnings) > 0 {
 		cmds = append(cmds, appmsg.ShowToast(strings.Join(msg.Warnings, "; "), 4*time.Second))
@@ -374,7 +377,7 @@ func (m *Model) applyDeleteAction(action string) tea.Cmd {
 		m.deleteBusy = true
 		m.deleteModal = nil
 		return func() tea.Msg {
-			return globalShellDeletedMsg{Project: project, Err: deleteManagedShell(project.Path, workspace.TmuxName, workspace.Namespace)}
+			return globalShellDeletedMsg{Project: project, WorkspaceID: workspace.ID, Err: deleteManagedShell(project.Path, workspace.TmuxName, workspace.Namespace)}
 		}
 	}
 	return nil

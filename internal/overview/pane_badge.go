@@ -17,12 +17,10 @@ import (
 // The project sidebar answers its selected row from its live tree instead, and
 // that is not a divergence: there, the live tree IS the workspace's layout, the
 // one that gets saved, so reading it only spares the badge a save's worth of
-// lag. Here the preview tree is this browser's own ephemeral projection — it is
-// built as a lone Terminal node per selection, never restored from disk and
-// never written back, and it has no Shell content to hold a split terminal at
-// all. Answering the selected row from it made a split workspace lose its badge
-// the moment it was selected, which is precisely the disagreement between the
-// two lists that the badge exists to avoid.
+// lag. Here the preview tree is this browser's own projection, stored
+// separately from the project's WorkspaceState. Answering the selected row from
+// it would still show a different glyph than the project sidebar for the same
+// workspace, which is precisely the disagreement the badge exists to avoid.
 func (m *Model) paneRowBadge(workspace workspaceinventory.Workspace) string {
 	surface := workspaceSurfaceIdentity(workspace)
 	if surface == "" {

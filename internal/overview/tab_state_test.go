@@ -66,13 +66,13 @@ func TestEachGlobalTabKeepsItsViewStateAcrossSpaceToggles(t *testing.T) {
 	}
 }
 
-// The global browser hands a project an identity and nothing else. Pane layouts
-// — reading them, rewriting them, pruning them — belong to the project's own
-// Workspaces plugin, and this keeps that boundary honest against the next
-// convenient shortcut.
+// The global browser and the project workspace keep separate trees (decision 4).
+// Global Sessions persist through state.SessionsPaneLayouts. Reading a project's
+// WorkspaceState for the shared layout badge is allowed; rewriting that map is
+// not.
 func TestNoGlobalPackageTouchesAProjectsPaneLayout(t *testing.T) {
 	packages := []string{"../app", "../overview", "../workspacelist", "../workspaceinventory", "../termpreview"}
-	needles := []string{"PaneLayout", "paneLayout", "PaneSplitJSON", "PaneDocTabJSON"}
+	needles := []string{"SetWorkspaceState", "ForgetPaneLayouts"}
 	for _, pkg := range packages {
 		entries, err := os.ReadDir(pkg)
 		if err != nil {

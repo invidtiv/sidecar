@@ -71,6 +71,7 @@ func (m *Model) createPreviewTerminalSplit() tea.Cmd {
 	m.createBusy = true
 	m.setCreateError("")
 	m.createModal = nil
+	m.persistSessionsLayout()
 	workDir := workspace.Path
 	workspaceID, leafID, session := workspace.ID, leaf.ID, leaf.Session
 	return func() tea.Msg {
@@ -108,11 +109,13 @@ func (m *Model) applyPreviewTerminalSplitCreated(msg previewTerminalSplitCreated
 		m.preview.terminalPanes.Release(msg.LeafID)
 		m.createModal = nil
 		m.setCreateError(msg.Err.Error())
+		m.persistSessionsLayout()
 		return nil
 	}
 	leaf.PaneID = msg.PaneID
 	leaf.Target.Session, leaf.Target.Pane = msg.Session, msg.PaneID
 	m.closeCreateShell()
+	m.persistSessionsLayout()
 	return tea.Batch(m.syncTerminalLeaf(msg.LeafID), m.syncTerminalGeometry())
 }
 

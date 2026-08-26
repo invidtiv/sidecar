@@ -84,6 +84,7 @@ func (m *Model) closePreviewShellLeaf(leafID int, mode termpanes.CloseMode) tea.
 	m.preview.paneNextID = panelayout.MaxID(m.preview.paneRoot) + 1
 	m.preview.terminalPanes.Release(leafID)
 	m.cancelPreviewSplitClose()
+	m.persistSessionsLayout()
 	var ended tea.Cmd
 	if mode == termpanes.CloseExplicit {
 		ended = killPreviewTerminalSession(session)

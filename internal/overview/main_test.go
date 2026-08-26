@@ -34,6 +34,11 @@ func TestMain(m *testing.M) {
 	saveWorkspaceListSort = func(string) error { return nil }
 	loadLastGlobalCreateProject = func() string { return "" }
 	saveLastGlobalCreateProject = func(string) error { return nil }
+	loadSessionsSelected = func() string { return "" }
+	saveSessionsSelected = func(string) error { return nil }
+	loadSessionsPaneLayout = func(string) *state.PaneLayoutJSON { return nil }
+	saveSessionsPaneLayout = func(string, *state.PaneLayoutJSON) error { return nil }
+	sessionsSelectedDebounce = 0
 	if err := state.InitWithDir(dir); err != nil {
 		panic(err)
 	}

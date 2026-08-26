@@ -976,6 +976,134 @@ func TestSetLastScopeSkipsAnUnchangedWrite(t *testing.T) {
 	}
 }
 
+func TestGetSessionsSelected_DefaultIsEmpty(t *testing.T) {
+	originalCurrent := current
+	defer func() { current = originalCurrent }()
+
+	current = nil
+	if got := GetSessionsSelected(); got != "" {
+		t.Errorf("GetSessionsSelected() with nil current = %q, want empty", got)
+	}
+	current = &State{}
+	if err := json.Unmarshal([]byte(`{"lastScope":"global"}`), current); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetSessionsSelected(); got != "" {
+		t.Errorf("GetSessionsSelected() for a pre-upgrade file = %q, want empty", got)
+	}
+}
+
+func TestSetSessionsSelectedRoundTripsAndSkipsUnchanged(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	path = stateFile
+	current = nil
+
+	if err := SetSessionsSelected("proj:shell:alpha"); err != nil {
+		t.Fatalf("SetSessionsSelected() failed: %v", err)
+	}
+	if current == nil || current.SessionsSelected != "proj:shell:alpha" {
+		t.Fatalf("current.SessionsSelected = %#v", current)
+	}
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"sessionsSelected"`) {
+		t.Fatalf("persisted JSON should name sessionsSelected:\n%s", data)
+	}
+
+	current = nil
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := GetSessionsSelected(); got != "proj:shell:alpha" {
+		t.Errorf("reloaded SessionsSelected = %q", got)
+	}
+
+	if err := os.Remove(stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSessionsSelected("proj:shell:alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("unchanged selected row wrote the state file: %v", err)
+	}
+}
+
+func TestSessionsPaneLayoutsRoundTripAndSkipUnchanged(t *testing.T) {
+	originalPath, originalCurrent := path, current
+	defer func() { path, current = originalPath, originalCurrent }()
+
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	path = stateFile
+	current = nil
+
+	if got := GetSessionsPaneLayout("missing"); got != nil {
+		t.Fatalf("fresh GetSessionsPaneLayout = %#v, want nil", got)
+	}
+	if got := GetSessionsPaneLayouts(); got != nil {
+		t.Fatalf("fresh GetSessionsPaneLayouts = %#v, want nil", got)
+	}
+
+	layout := &PaneLayoutJSON{
+		Root: "/repo", Surface: "proj:worktree:/repo/wt", Open: true, FocusKind: "doc",
+		Split: &PaneSplitJSON{
+			Axis: "cols", Ratio: 50,
+			A: &PaneLayoutJSON{Kind: "terminal"},
+			B: &PaneLayoutJSON{Kind: "doc", Tabs: []PaneDocTabJSON{{Path: "README.md", Mode: "raw"}}},
+		},
+	}
+	id := "proj:worktree:/repo/wt"
+	if err := SetSessionsPaneLayout(id, layout); err != nil {
+		t.Fatalf("SetSessionsPaneLayout() failed: %v", err)
+	}
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"sessionsPaneLayouts"`) {
+		t.Fatalf("persisted JSON should name sessionsPaneLayouts:\n%s", data)
+	}
+
+	current = nil
+	if err := Load(); err != nil {
+		t.Fatal(err)
+	}
+	got := GetSessionsPaneLayout(id)
+	if got == nil || !got.Open || got.FocusKind != "doc" || got.Split == nil || got.Split.B == nil || len(got.Split.B.Tabs) != 1 {
+		t.Fatalf("reloaded layout = %#v", got)
+	}
+	got.FocusKind = "terminal"
+	if current.SessionsPaneLayouts[id].FocusKind != "doc" {
+		t.Fatal("GetSessionsPaneLayout exposed the stored record")
+	}
+
+	if err := os.Remove(stateFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetSessionsPaneLayout(id, layout); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stateFile); !os.IsNotExist(err) {
+		t.Fatalf("unchanged layout wrote the state file: %v", err)
+	}
+
+	if err := SetSessionsPaneLayout(id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if GetSessionsPaneLayout(id) != nil || GetSessionsPaneLayouts() != nil {
+		t.Fatalf("deleted layout still present: %#v", GetSessionsPaneLayouts())
+	}
+	if current.SessionsPaneLayouts != nil {
+		t.Fatalf("empty map was not cleared: %#v", current.SessionsPaneLayouts)
+	}
+}
+
 func TestGetShowIdleWorktrees_Default(t *testing.T) {
 	originalCurrent := current
 	defer func() { current = originalCurrent }()

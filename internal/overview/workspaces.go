@@ -81,6 +81,7 @@ func (m *Model) syncWorkspaces() {
 	m.pruneDeletedTerminalRows()
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)
+	m.applyPendingSessionsSelection()
 	m.syncCreateActions()
 	if !m.loading {
 		m.pruneGonePins()
@@ -1199,6 +1200,7 @@ func (m *Model) WorkspacesMouse(msg tea.Msg) tea.Cmd {
 	}
 	if action.Type == mouse.ActionDragEnd && action.DragStartID == previewPaneDividerKind {
 		m.preview.paneDragSplitID = 0
+		m.persistSessionsLayout()
 		return m.syncTerminalGeometry()
 	}
 	// Whether a notch is placed by region or stays with the pointer is the

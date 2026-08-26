@@ -69,6 +69,15 @@ type State struct {
 	// global Workspaces list. First-pinned first. Gone IDs are dropped on sync.
 	PinnedWorkspaceIDs []string `json:"pinnedWorkspaceIDs,omitempty"`
 
+	// SessionsSelected is the durable inventory row ID last shown in the
+	// global Sessions browser. Empty (fresh profile, or a version that never
+	// wrote it) leaves selection to the catalog's default.
+	SessionsSelected string `json:"sessionsSelected,omitempty"`
+	// SessionsPaneLayouts is the global Sessions browser's per-row pane trees,
+	// keyed by the same durable inventory IDs as SessionsSelected. Only
+	// composed trees are stored: a bare primary preview writes nothing.
+	SessionsPaneLayouts map[string]*PaneLayoutJSON `json:"sessionsPaneLayouts,omitempty"`
+
 	// WorkspaceListSort is the global Workspaces list's chosen order, stored as
 	// its display label ("Activity", "Project", "Recent", "Name") rather than
 	// an ordinal, so the file reads plainly and the enum can be reordered.
@@ -163,6 +172,14 @@ type PaneLayoutJSON struct {
 	// server and mean nothing after a restart, so a leaf that persisted one
 	// would reattach to whatever now holds that id.
 	Session string `json:"session,omitempty"`
+	// Name is a live leaf's display title (a terminal split's header). Empty
+	// on every other kind. Additive: older files omit it.
+	Name string `json:"name,omitempty"`
+	// FocusKind is the focused leaf in this tree, in PaneLayoutJSON kind
+	// vocabulary (terminal|doc|issue|note|diff|resource|shell). Restore that
+	// leaf; if it is gone, fall back to the primary. Additive: older files
+	// omit it and restore focus to primary.
+	FocusKind string `json:"focusKind,omitempty"`
 }
 
 // PaneIssueTabJSON is one persisted issue tab. Restore re-fetches the issue
@@ -946,6 +963,129 @@ func SetPinnedWorkspaceIDs(ids []string) error {
 	current.PinnedWorkspaceIDs = uniquePinnedIDs(ids)
 	mu.Unlock()
 	return Save()
+}
+
+// GetSessionsSelected returns the durable Sessions row ID last shown, or empty
+// when none is saved.
+func GetSessionsSelected() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil {
+		return ""
+	}
+	return current.SessionsSelected
+}
+
+// SetSessionsSelected saves the Sessions row last shown. An unchanged value
+// is a no-op so arrowing the sidebar can debounce down to one write.
+func SetSessionsSelected(id string) error {
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if current.SessionsSelected == id {
+		mu.Unlock()
+		return nil
+	}
+	current.SessionsSelected = id
+	mu.Unlock()
+	return Save()
+}
+
+// GetSessionsPaneLayout returns a copy of the persisted Sessions tree for row
+// id, or nil when none is stored.
+func GetSessionsPaneLayout(id string) *PaneLayoutJSON {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || current.SessionsPaneLayouts == nil || id == "" {
+		return nil
+	}
+	return clonePaneLayout(current.SessionsPaneLayouts[id])
+}
+
+// GetSessionsPaneLayouts returns a copy of every persisted Sessions tree.
+func GetSessionsPaneLayouts() map[string]*PaneLayoutJSON {
+	mu.RLock()
+	defer mu.RUnlock()
+	if current == nil || len(current.SessionsPaneLayouts) == 0 {
+		return nil
+	}
+	out := make(map[string]*PaneLayoutJSON, len(current.SessionsPaneLayouts))
+	for id, layout := range current.SessionsPaneLayouts {
+		out[id] = clonePaneLayout(layout)
+	}
+	return out
+}
+
+// SetSessionsPaneLayout stores (or, when layout is nil, deletes) the Sessions
+// tree for row id. Unchanged JSON is a no-op.
+func SetSessionsPaneLayout(id string, layout *PaneLayoutJSON) error {
+	if id == "" {
+		return nil
+	}
+	mu.Lock()
+	if current == nil {
+		current = &State{}
+	}
+	if layout == nil {
+		if current.SessionsPaneLayouts == nil {
+			mu.Unlock()
+			return nil
+		}
+		if _, ok := current.SessionsPaneLayouts[id]; !ok {
+			mu.Unlock()
+			return nil
+		}
+		delete(current.SessionsPaneLayouts, id)
+		if len(current.SessionsPaneLayouts) == 0 {
+			current.SessionsPaneLayouts = nil
+		}
+		mu.Unlock()
+		return Save()
+	}
+	if paneLayoutJSONEqual(current.SessionsPaneLayouts[id], layout) {
+		mu.Unlock()
+		return nil
+	}
+	if current.SessionsPaneLayouts == nil {
+		current.SessionsPaneLayouts = make(map[string]*PaneLayoutJSON)
+	}
+	current.SessionsPaneLayouts[id] = clonePaneLayout(layout)
+	mu.Unlock()
+	return Save()
+}
+
+func clonePaneLayout(l *PaneLayoutJSON) *PaneLayoutJSON {
+	if l == nil {
+		return nil
+	}
+	raw, err := json.Marshal(l)
+	if err != nil {
+		return nil
+	}
+	var out PaneLayoutJSON
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return &out
+}
+
+func paneLayoutJSONEqual(a, b *PaneLayoutJSON) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	left, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	right, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(left) == string(right)
 }
 
 func uniquePinnedIDs(ids []string) []string {

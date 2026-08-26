@@ -78,7 +78,14 @@ type Options struct {
 // Empty content leaves (no tabs) are omitted the way encodePaneNode omitted them.
 // Root, Surface, and Open are host policy and are left unset.
 func Encode(st contentpanes.State, opts Options) *state.PaneLayoutJSON {
-	return encodeNode(st.Root, opts.Live)
+	out := encodeNode(st.Root, opts.Live)
+	if out == nil {
+		return nil
+	}
+	if st.FocusKind != "" {
+		out.FocusKind = jsonKind(st.FocusKind)
+	}
+	return out
 }
 
 // Decode projects PaneLayoutJSON onto contentpanes.State plus live-leaf records.
@@ -90,7 +97,11 @@ func Decode(layout *state.PaneLayoutJSON, opts Options) (contentpanes.State, []L
 	}
 	var live []Live
 	root := decodeNode(layout, "", 0, false, &live, opts)
-	return contentpanes.State{Version: 1, Root: root}, live
+	st := contentpanes.State{Version: 1, Root: root}
+	if layout.FocusKind != "" {
+		st.FocusKind = stateKind(layout.FocusKind)
+	}
+	return st, live
 }
 
 func encodeNode(n *contentpanes.NodeState, live []Live) *state.PaneLayoutJSON {
@@ -150,13 +161,13 @@ func decodeNode(j *state.PaneLayoutJSON, parentAxis string, parentRatio int, new
 	}
 	switch j.Kind {
 	case KindTerminal:
-		*live = append(*live, Live{Kind: KindTerminal, Session: j.Session, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
+		*live = append(*live, Live{Kind: KindTerminal, Session: j.Session, Name: j.Name, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
 		return &contentpanes.NodeState{Kind: stateKindPrimary}
 	case KindShell:
 		if liveHas(*live, KindShell) {
 			return nil
 		}
-		*live = append(*live, Live{Kind: KindShell, Session: j.Session, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
+		*live = append(*live, Live{Kind: KindShell, Session: j.Session, Name: j.Name, Axis: parentAxis, Ratio: parentRatio, NewFirst: newFirst})
 		return &contentpanes.NodeState{Kind: stateKindShell}
 	case KindDoc, KindIssue, KindNote, KindDiff, KindResource:
 		pane := decodePane(j, opts)
@@ -385,6 +396,9 @@ func applyLive(j *state.PaneLayoutJSON, live []Live) {
 		}
 		if l.Session != "" {
 			j.Session = l.Session
+		}
+		if l.Name != "" {
+			j.Name = l.Name
 		}
 	}
 }

@@ -468,6 +468,9 @@ func (m *Model) focusPreviewLeaf(leafID int) (bool, tea.Cmd) {
 		m.preview.deck.FocusLeaf(leaf.ID)
 	}
 	m.preview.focus = focusPreview
+	if previewTreeComposed(m.preview.paneRoot) {
+		m.persistSessionsLayout()
+	}
 	if m.preview.doc != nil {
 		m.preview.doc.focused = leaf.Kind == panelayout.Document
 	}

@@ -29,11 +29,12 @@ import (
 // pipelines. Inventory remains cheap and read-only: no terminal is opened for
 // list rows, hidden tabs, or unselected panes.
 //
-// Nothing is written to disk. The bounded terminal buffer lives only while the
-// selected Output preview is visible; secondary pane models stay cached in
-// memory so cursoring to another shell and back preserves their layout and
-// scroll positions. Leaving the tab or selecting a row with no live pane closes
-// the control subscription and releases the terminal buffer.
+// Composed pane trees and the selected row are persisted to global state.json
+// (sessionsSelected / sessionsPaneLayouts). The bounded terminal buffer still
+// lives only while the selected Output preview is visible; secondary pane
+// models stay cached in memory so cursoring to another shell and back preserves
+// their layout and scroll positions. Leaving the tab or selecting a row with no
+// live pane closes the control subscription and releases the terminal buffer.
 
 const (
 	// The initial bounded live/history window this surface captures. tty.Model
@@ -295,26 +296,6 @@ func (m *Model) stashPreviewPanes() {
 	}
 }
 
-func (m *Model) restorePreviewPanes(workspaceID string) {
-	if cached, ok := m.preview.paneCache[workspaceID]; ok && cached.root != nil {
-		m.preview.paneRoot, m.preview.paneFocus, m.preview.paneNextID = cached.root, cached.focus, cached.nextID
-		m.preview.doc, m.preview.issue, m.preview.note, m.preview.diff = cached.doc, cached.issue, cached.note, cached.diff
-		m.preview.resource = cached.resource
-		m.preview.deck = cached.deck
-		if cached.terminals != nil {
-			cached.terminals.Range(func(_ int, leaf *termpanes.Leaf) bool {
-				if leaf.Target.Source == "shell" {
-					m.preview.terminalPanes.Attach(leaf)
-				}
-				return true
-			})
-		}
-		m.preview.paneDragSplitID = 0
-		return
-	}
-	m.resetActivePreviewPanes()
-}
-
 // previewSync reconciles the one visible terminal when selection or tab state
 // changes. Inventory rows themselves never allocate terminal resources.
 func (m *Model) previewSync() tea.Cmd {
@@ -369,22 +350,27 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		return nil
 	}
 	m.preview.workspaceID = workspace.ID
-	if !keep {
-		m.restorePreviewPanes(workspace.ID)
+	if m.pendingRestoreSelected != "" && workspace.ID == m.pendingRestoreSelected {
+		m.pendingRestoreSelected = ""
+	}
+	reason, unavailable := previewUnavailable(workspace)
+	var restoreCmd tea.Cmd
+	if !keep && !unavailable {
+		restoreCmd = m.restorePreviewPanes(workspace.ID)
 	}
 	// An item with no single live pane behind it opens no model. There is nothing
 	// to read, and guessing among several panes is exactly what the catalog refuses.
-	if reason, unavailable := previewUnavailable(workspace); unavailable {
+	if unavailable {
 		m.preview.reason = reason
 		m.closePreviewTerminal()
 		m.resetPreviewContent()
-		return nil
+		return m.armSessionsSelected(workspace.ID)
 	}
 	var pendingCmd tea.Cmd
 	if cmd := m.consumePendingView(workspace.TmuxName); cmd != nil {
 		pendingCmd = cmd
 	}
-	return tea.Batch(m.syncPreviewTerminals(), pendingCmd)
+	return tea.Batch(restoreCmd, m.syncPreviewTerminals(), pendingCmd, m.armSessionsSelected(workspace.ID))
 }
 
 // previewUnavailable explains, in the user's terms, why an item has no live

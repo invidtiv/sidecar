@@ -273,6 +273,7 @@ func (m *Model) executeRename() tea.Cmd {
 		}
 		leaf.Name = newName
 		m.closeRenameShell()
+		m.persistSessionsLayout()
 		return nil
 	}
 	if m.renameWorkspace.Kind == workspaceinventory.KindWorktree {

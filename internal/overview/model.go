@@ -125,6 +125,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	}
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
+		sessionsSelectedTickMsg,
 		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
@@ -362,6 +363,15 @@ type Model struct {
 	// (internal/worktreedelete) — the same construction the project surface
 	// raises. Only the shell confirmation above is this surface's own.
 	worktreeDelete worktreedelete.State
+
+	// pendingRestoreSelected is the Sessions row ID to select once the catalog
+	// delivers it. Cleared when the row appears or the inventory cycle finishes
+	// without it.
+	pendingRestoreSelected string
+	// sessionsSelectedPending / sessionsSelectedGen debounce writes so arrowing
+	// the sidebar is one save of the last ID, not one per row.
+	sessionsSelectedPending string
+	sessionsSelectedGen     int
 }
 
 // ActivityStorePath is overridable so tests never touch the user's state dir.
@@ -382,6 +392,10 @@ var (
 	saveWorkspaceListSort       = state.SetWorkspaceListSort
 	loadLastGlobalCreateProject = state.GetLastGlobalCreateProject
 	saveLastGlobalCreateProject = state.SetLastGlobalCreateProject
+	loadSessionsSelected        = state.GetSessionsSelected
+	saveSessionsSelected        = state.SetSessionsSelected
+	loadSessionsPaneLayout      = state.GetSessionsPaneLayout
+	saveSessionsPaneLayout      = state.SetSessionsPaneLayout
 )
 
 func New(collector workspaceinventory.Collector) *Model {
@@ -407,6 +421,9 @@ func New(collector workspaceinventory.Collector) *Model {
 	if mode, ok := workspacelist.SortFromLabel(loadWorkspaceListSort(), workspacelist.SortModes); ok {
 		m.workspaces.SetSort(mode)
 	}
+	// In-memory only: state.json is already loaded. Decoding pane trees waits
+	// until a row is first shown.
+	m.pendingRestoreSelected = loadSessionsSelected()
 	if value := os.Getenv("SIDECAR_OVERVIEW_TRACE"); value == "1" || value == "stderr" {
 		m.traceWriter = os.Stderr
 	}
@@ -672,6 +689,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.pulseFrame++
 		m.workspaces.SetPulseFrame(m.pulseFrame)
 		return nil
+	case sessionsSelectedTickMsg:
+		m.applySessionsSelectedTick(msg)
+		return nil
 	case panesMsg:
 		if msg.Generation != m.generation {
 			return nil
@@ -881,6 +901,7 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			m.deleteModal = nil
 			return nil
 		}
+		m.forgetSessionsRow(msg.WorkspaceID)
 		m.closeDelete()
 		return m.refreshProjectAfterMutation(msg.Project)
 	case projectMutationRefreshMsg:

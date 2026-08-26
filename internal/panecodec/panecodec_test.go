@@ -120,6 +120,29 @@ func TestUnknownKindPreservedForContentpanesCollapse(t *testing.T) {
 	}
 }
 
+func TestFocusKindRoundTrips(t *testing.T) {
+	st := fixtureState()
+	st.FocusKind = stateKindDocument
+	encoded := Encode(st, Options{Live: []Live{
+		{Kind: KindTerminal},
+		{Kind: KindShell, Session: "sidecar-tp-abc", Name: "dev"},
+	}})
+	if encoded == nil || encoded.FocusKind != KindDoc {
+		t.Fatalf("encoded FocusKind = %#v, want %q", encoded, KindDoc)
+	}
+	back, _ := Decode(encoded, Options{})
+	if back.FocusKind != stateKindDocument {
+		t.Fatalf("decoded FocusKind = %q, want %q", back.FocusKind, stateKindDocument)
+	}
+
+	legacy := fixtureJSON()
+	legacy.FocusKind = ""
+	st, _ = Decode(legacy, Options{})
+	if st.FocusKind != "" {
+		t.Fatalf("legacy without focusKind decoded FocusKind = %q", st.FocusKind)
+	}
+}
+
 func TestShellSessionIsNeverAPaneID(t *testing.T) {
 	st := contentpanes.State{Version: 1, Root: &contentpanes.NodeState{Kind: stateKindShell}}
 	encoded := Encode(st, Options{Live: []Live{{Kind: KindShell, Session: "sidecar-tp-main"}}})
@@ -243,7 +266,7 @@ func fixtureJSON() *state.PaneLayoutJSON {
 						B: &state.PaneLayoutJSON{Split: &state.PaneSplitJSON{
 							Axis: axisRows, Ratio: 50,
 							A: &state.PaneLayoutJSON{Kind: KindResource, ResourceTabs: []state.PaneResourceTabJSON{{Provider: "jira-work", Matcher: "issue-key", Locator: "CASH-1245", Scroll: 5}}},
-							B: &state.PaneLayoutJSON{Kind: KindShell, Session: "sidecar-tp-abc"},
+							B: &state.PaneLayoutJSON{Kind: KindShell, Session: "sidecar-tp-abc", Name: "dev"},
 						}},
 					}},
 				}},

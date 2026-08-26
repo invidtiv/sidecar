@@ -26,26 +26,29 @@ func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 	}, true
 }
 
-func (m *Model) newPreviewDeck(ctx contentpanes.SurfaceContext) *contentpanes.Deck {
-	configure := func(kind panelayout.Kind, model any) {
-		switch view := model.(type) {
-		case *issueview.Model:
-			view.OpenHandler = func(id string) tea.Cmd { return m.openPreviewIssue(id) }
-			view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
-			// Same cross-project fallback as the other two hosts: the app-level
-			// config, read inside the fetch command.
-			view.FallbackRefs = m.issueFallbackRefs
-		case *workspacediff.View:
-			view.ViewMode = m.diff.ViewMode
-			if w := state.GetDiffTabFileListWidth(); w > 0 {
-				view.SetListWidth(w)
-			}
-		}
-	}
-	return contentpanes.New(ctx, contentpanes.Config{
+func (m *Model) previewDeckConfig(ctx contentpanes.SurfaceContext) contentpanes.Config {
+	return contentpanes.Config{
 		ResourceResolver: m.previewResourceResolver(ctx.Surface, ctx.Epoch),
-		ConfigureViewer:  configure,
-	})
+		ConfigureViewer: func(kind panelayout.Kind, model any) {
+			switch view := model.(type) {
+			case *issueview.Model:
+				view.OpenHandler = func(id string) tea.Cmd { return m.openPreviewIssue(id) }
+				view.OpenInTDHandler = func(id string) tea.Cmd { return func() tea.Msg { return OpenIssueInTDMsg{IssueID: id} } }
+				// Same cross-project fallback as the other two hosts: the app-level
+				// config, read inside the fetch command.
+				view.FallbackRefs = m.issueFallbackRefs
+			case *workspacediff.View:
+				view.ViewMode = m.diff.ViewMode
+				if w := state.GetDiffTabFileListWidth(); w > 0 {
+					view.SetListWidth(w)
+				}
+			}
+		},
+	}
+}
+
+func (m *Model) newPreviewDeck(ctx contentpanes.SurfaceContext) *contentpanes.Deck {
+	return contentpanes.New(ctx, m.previewDeckConfig(ctx))
 }
 
 func (m *Model) ensurePreviewDeck() (*contentpanes.Deck, contentpanes.SurfaceContext, []tea.Cmd, bool) {
@@ -255,6 +258,7 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 		focusID = focusShell
 	}
 	m.focusPreviewPaneByID(focusID)
+	m.persistSessionsLayout()
 }
 
 func (m *Model) focusPreviewPaneByID(id int) {
