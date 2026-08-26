@@ -49,7 +49,7 @@ What is **not** the problem, and therefore not in scope to rebuild: transport an
 5. **Phases 1 and 2 change no behaviour.** The existing terminal parity, scroll, surface, interactive, and wheel-boundary behavioral assertions and outcomes remain intact. Private white-box fixtures and selectors that directly named the deleted host fields or `TargetTermPanel` are migrated mechanically to the leaf-ID collection because they cannot compile against the new ownership model; those migrations do not weaken or remove behavioral assertions.
 6. **On the global surface a terminal leaf is scoped to the selected row**, exactly as its primary terminal already is. Navigating away detaches; navigating back reattaches. The tmux session is durable, so the peer survives the round trip the same way the primary does, and `previewUnavailable`, the generation counter, and `closePreviewTerminal` govern both by one rule rather than two.
 7. **`panelayout.LiveLeafCap` stays at 2 and stays global to a tree.** The global browser's tree then holds at most its primary plus one peer, which is the same budget the project workspace works within, and the same refusal string (`shellCapMessage`) reaches the modal through `OpenOpts.TerminalSplitDisabled`, which already exists for this purpose.
-8. **The global surface's pane tree remains memory-only.** It caches per workspace ID in `previewState.paneCache` and persists nothing; only the project workspace writes `state.PaneLayoutJSON`. A peer terminal created in the global browser therefore does not survive a Sidecar restart, while its tmux session does. Changing that is a separate decision — see open questions.
+8. **The global surface's pane tree was memory-only in this plan.** Persistence shipped later in [global-sessions-persistence.md](global-sessions-persistence.md).
 9. **`AllowTerminalSplit` keeps its post-fix meaning: "this host can run a second live terminal beside its own", and gates exactly the Terminal split row.** Passive rows are never gated on it. Bundling them is what cost the global browser its resource-provider rows.
 
 ## Phase 1 — Extract, project workspace only
@@ -92,8 +92,7 @@ The capability, which is now an addition rather than a rebuild.
 
 ## Phase 4 — Follow-ons, not blockers
 
-- **Persisting the global surface's tree.** Decision 8 leaves it memory-only. If a peer terminal there should survive a restart, `state.PaneLayoutJSON` is the existing vehicle and the global browser would become a second writer of it, keyed by workspace ID.
-- **`sidecar layout get`/`apply` on the global surface.** The CLI reports and composes the project workspace's tree. Once the global browser hosts live leaves, the same projection can answer for it — and the parity rule says it eventually should.
+- **Persisting the global surface's tree** and **`sidecar layout get`/`apply` on the global surface** shipped in [global-sessions-persistence.md](global-sessions-persistence.md).
 - **Terminal splits outside the two workspace surfaces** (Files, Git, td, Notes) remains [terminal-splits-and-windowing.md](../active/terminal-splits-and-windowing.md)'s B3, and is tractable now that `termpanes` exists, since a plugin can adopt the package rather than reimplement the pairs.
 
 ## Acceptance evidence
@@ -107,5 +106,5 @@ The capability, which is now an addition rather than a rebuild.
 ## Resolved and deferred questions
 
 1. **Gestures belong to the leaf.** Phase 2 moved selection, pointer, wheel, and terminal-bar gesture state into each live leaf on both surfaces, matching the `docSelectLeaf` rule that a drag is answered by where it began.
-2. **The global browser does not persist its pane tree.** Decision 8 remains the shipped behavior. Persisting that browsing state is a separate future decision.
+2. **The global browser's pane tree persistence** shipped in [global-sessions-persistence.md](global-sessions-persistence.md).
 3. **Does `LiveLeafCap` stay per tree or become per process?** Two live terminals per surface is four across both if a user has each open. The cap exists for control-mode subscriptions and resize cost, which are process-wide, so the current per-tree reading may be the wrong unit — but changing it is a behaviour change for the project workspace and belongs in a separate decision.

@@ -1,12 +1,14 @@
 # Global Sessions Persistence
 
+**Status:** Implemented. The global Sessions browser persists its selected row and per-row composed pane trees on global `state.json`, restores them lazily through `internal/panecodec`, reattaches terminal splits by tmux session name, and `sidecar layout get`/`apply --sessions [ROW]` answers for the surface. **Tracking:** `td-6d1ad3` (epic), `td-0170e0`, `td-e5a987`, `td-b6178f`.
+
 Quit Sidecar with the global Sessions browser open — a row selected, a pane tree composed on it, a terminal split running — and restarting puts you back exactly there: same tab, same row selected, same panes open, the terminal split reattached to its still-running tmux session with scrollback intact. On top of that, `sidecar layout get`/`apply` answer for this surface, because a tree an agent cannot read or compose is a parity bug.
 
 **Owns:** persistence and restart-restore of the global Sessions browser's selection and per-row pane trees, the host-independent pane-layout codec, and the Sessions destination of the `sidecar layout` CLI.
 
-**Relationship to [live-terminal-leaf-extraction.md](../implemented/live-terminal-leaf-extraction.md):** that plan's decision 8 deliberately left the global surface's tree memory-only and named the change a separate decision; this plan is that decision, answering its open question 2 with *yes, persist it*. Its phase 4 listed three follow-ons — this plan takes the first two (persistence, layout CLI) and explicitly does not take the third; see "Not in this plan".
+**Relationship to [live-terminal-leaf-extraction.md](live-terminal-leaf-extraction.md):** that plan's decision 8 deliberately left the global surface's tree memory-only and named the change a separate decision; this plan is that decision, answering its open question 2 with *yes, persist it*. Its phase 4 listed three follow-ons — this plan takes the first two (persistence, layout CLI) and explicitly does not take the third; see "Not in this plan".
 
-**Relationship to [terminal-splits-and-windowing.md](terminal-splits-and-windowing.md):** that plan owns the persistence evolution rules for `state.PaneLayoutJSON` (additive fields; unknown kind ⇒ drop the leaf and collapse its split), and this plan inherits them unchanged. Its B3 (splits on non-workspace surfaces) stays there.
+**Relationship to [terminal-splits-and-windowing.md](../active/terminal-splits-and-windowing.md):** that plan owns the persistence evolution rules for `state.PaneLayoutJSON` (additive fields; unknown kind ⇒ drop the leaf and collapse its split), and this plan inherits them unchanged. Its B3 (splits on non-workspace surfaces) stays there.
 
 ## What already works, and the exact gaps
 
@@ -70,8 +72,11 @@ No user-visible change. The project workspace ends the phase encoding and decodi
 - **The degradation table:** persisted layouts naming a deleted row, a missing document, a dead `sidecar-tp-*` session, and an unknown pane kind each restore to the documented lesser state without an error state or a crash.
 - **CLI parity:** `layout get --json` and a two-pane `apply` on the Sessions surface, asserted equal in shape to the same operations on a project surface, in the idiom of the existing catalog parity tests.
 
-## Open questions
+## Settled during implementation
 
-1. **The destination flag's name.** `--sessions` matches the fleet vocabulary in the header; `--global` matches `ScopeGlobal` in the code. Whichever is chosen, the row selector (by display name? by durable ID?) needs the same ambiguity rules `--shell` already has.
-2. **Should `sessionsSelected` also capture pane focus within the row's tree?** Restoring focus to the exact leaf is more faithful; restoring to the primary preview is simpler and never focuses a leaf that failed to restore. Lean: persist `focus` (it is already in the cache and the JSON has `Active` precedent), fall back to primary when the leaf is gone.
-3. **When is a persisted layout for an absent row garbage?** A worktree row absent because the branch is checked out elsewhere returns; a shell row absent because the session died usually does not. Options: prune entries whose row is absent after a full inventory sweep for N consecutive launches, or cap the map's size LRU-style. Needs deciding before `sessionsPaneLayouts` can grow unbounded, but not before phase 2 ships behind decision 5's only-composed rule, which keeps growth slow.
+1. **The destination flag is `--sessions [ROW]`.** Optional ROW is the durable inventory ID first, display-name fallback, same ambiguity rules as `--shell`. Default is the currently selected row.
+2. **Pane focus is persisted** as additive `PaneLayoutJSON.FocusKind`. Restore that leaf; if it is gone, fall back to the primary preview.
+
+## Remaining
+
+3. **When is a persisted layout for an absent row garbage?** A worktree row absent because the branch is checked out elsewhere returns; a shell row absent because the session died usually does not. Options: prune entries whose row is absent after a full inventory sweep for N consecutive launches, or cap the map's size LRU-style. Decision 5 (only-composed trees) keeps growth slow enough that this did not block shipping.
