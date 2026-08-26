@@ -336,17 +336,7 @@ func matchSessionsRow(stateDir, name string) (id, display string, err error) {
 		}
 		return hits
 	}
-	idHits := matches(func(row sessionsRowHit) bool {
-		if row.id == name {
-			return true
-		}
-		for _, alias := range row.aliases {
-			if alias == name {
-				return true
-			}
-		}
-		return false
-	})
+	idHits := matches(func(row sessionsRowHit) bool { return sessionsRowMatchesID(row, name) })
 	hits := idHits
 	if len(hits) == 0 {
 		hits = matches(func(row sessionsRowHit) bool { return row.name == name })
@@ -355,6 +345,15 @@ func matchSessionsRow(stateDir, name string) (id, display string, err error) {
 		hits = matches(func(row sessionsRowHit) bool { return row.tmux == name })
 	}
 	if len(hits) == 0 {
+		// Durable inventory IDs the CLI has not enumerated (the main checkout
+		// before we listed it, a git worktree Sidecar never registered) still
+		// address a live catalog row. Usage-failing them made get→apply on the
+		// surface ID get printed die with "unknown Sessions row". Send the
+		// ID through and let the host accept or decline.
+		if _, _, _, ok := sessionsInventoryID(name); ok {
+			id := canonicalizeSessionsRowID(name)
+			return id, sessionsRowDisplay(id), nil
+		}
 		return "", "", &destError{code: 2, msg: fmt.Sprintf("unknown Sessions row %q", name)}
 	}
 	if len(hits) > 1 {
@@ -374,10 +373,11 @@ func listSessionsRows(projects []registeredProject) []sessionsRowHit {
 	var rows []sessionsRowHit
 	for _, p := range projects {
 		projectIDs := []string{p.Key}
+		rootCanon := ""
 		if p.Path != "" {
-			canon := canonicalOpenPath(p.Path)
-			if canon != "" && canon != p.Key {
-				projectIDs = append(projectIDs, canon)
+			rootCanon = canonicalOpenPath(p.Path)
+			if rootCanon != "" && rootCanon != p.Key {
+				projectIDs = append(projectIDs, rootCanon)
 			}
 		}
 		for _, sh := range p.Shells {
@@ -392,21 +392,113 @@ func listSessionsRows(projects []registeredProject) []sessionsRowHit {
 			id := aliases[len(aliases)-1]
 			rows = append(rows, sessionsRowHit{id: id, name: name, tmux: sh.TmuxName, aliases: aliases})
 		}
-		for _, path := range p.Worktrees {
+		seenWorktrees := map[string]bool{}
+		addWorktree := func(path string) {
+			if path == "" {
+				return
+			}
 			canon := canonicalOpenPath(path)
+			if seenWorktrees[canon] {
+				return
+			}
+			seenWorktrees[canon] = true
 			base := filepath.Base(canon)
 			if base == "" {
 				base = filepath.Base(path)
 			}
-			aliases := make([]string, 0, len(projectIDs))
+			aliases := make([]string, 0, len(projectIDs)*2)
 			for _, key := range projectIDs {
 				aliases = append(aliases, key+":worktree:"+canon)
+				if path != canon {
+					aliases = append(aliases, key+":worktree:"+path)
+				}
 			}
 			id := aliases[len(aliases)-1]
+			if rootCanon != "" {
+				id = rootCanon + ":worktree:" + canon
+			}
 			rows = append(rows, sessionsRowHit{id: id, name: base, aliases: aliases})
+		}
+		// The main checkout is a Sessions catalog row. Registered worktrees
+		// under projects/<slug>/worktrees/ are extras; inventory always
+		// includes canonical(root):worktree:canonical(root).
+		addWorktree(p.Path)
+		for _, path := range p.Worktrees {
+			addWorktree(path)
 		}
 	}
 	return rows
+}
+
+func sessionsRowMatchesID(row sessionsRowHit, name string) bool {
+	if row.id == name {
+		return true
+	}
+	for _, alias := range row.aliases {
+		if alias == name {
+			return true
+		}
+	}
+	want := canonicalizeSessionsRowID(name)
+	if row.id == want || canonicalizeSessionsRowID(row.id) == want {
+		return true
+	}
+	for _, alias := range row.aliases {
+		if alias == want || canonicalizeSessionsRowID(alias) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionsInventoryID splits a durable catalog ID (projectKey:shell:key or
+// projectKey:worktree:path). ok is false for a display name.
+func sessionsInventoryID(s string) (kind, project, key string, ok bool) {
+	for _, k := range []string{"shell", "worktree"} {
+		sep := ":" + k + ":"
+		i := strings.Index(s, sep)
+		if i <= 0 {
+			continue
+		}
+		return k, s[:i], s[i+len(sep):], true
+	}
+	return "", "", "", false
+}
+
+func canonicalizeSessionsRowID(id string) string {
+	kind, project, key, ok := sessionsInventoryID(id)
+	if !ok {
+		return id
+	}
+	if kind == "worktree" {
+		if looksLikePath(project) {
+			project = canonicalOpenPath(project)
+		}
+		if key != "" {
+			key = canonicalOpenPath(key)
+		}
+	}
+	return project + ":" + kind + ":" + key
+}
+
+func looksLikePath(s string) bool {
+	return filepath.IsAbs(s) || strings.Contains(s, string(filepath.Separator))
+}
+
+func sessionsRowDisplay(id string) string {
+	kind, _, key, ok := sessionsInventoryID(id)
+	if !ok {
+		return id
+	}
+	if kind == "worktree" {
+		if base := filepath.Base(key); base != "" && base != "." {
+			return base
+		}
+	}
+	if key != "" {
+		return key
+	}
+	return id
 }
 
 func matchProject(projects []registeredProject, name string) (registeredProject, error) {

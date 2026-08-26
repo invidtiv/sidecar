@@ -328,8 +328,18 @@ func TestOverviewLayoutGet_NamedRow(t *testing.T) {
 	m, _ := layoutSessionsModel(t)
 	run(t, m, m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}, "Document"))
 
+	m.workspaces.SelectID("b")
+	run(t, m, m.bindPreview(false))
+	m.WorkspacesView(previewWide, previewTall)
+	m.workspaces.SelectID("a")
+	run(t, m, m.bindPreview(false))
+	m.WorkspacesView(previewWide, previewTall)
+	if m.preview.workspaceID != "a" {
+		t.Fatalf("selected = %q, want a before get of b", m.preview.workspaceID)
+	}
+
 	req := sessionsLayoutPayload(t, uirequest.LayoutModeGet)
-	req.Origin.SessionsRow = "a"
+	req.Origin.SessionsRow = "b"
 	_ = m.handleUIRequest(req)
 	ack := readSessionsLayoutAck(t, req)
 	if ack.Status != uirequest.StatusOpened {
@@ -339,7 +349,48 @@ func TestOverviewLayoutGet_NamedRow(t *testing.T) {
 	if err := json.Unmarshal(ack.Layout, &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Surface != "a" {
-		t.Fatalf("surface = %q, want the named row", report.Surface)
+	if report.Surface != "b" {
+		t.Fatalf("surface = %q, want b while a is selected", report.Surface)
+	}
+	if m.preview.workspaceID != "a" {
+		t.Fatalf("get of b mutated the selection to %q", m.preview.workspaceID)
+	}
+	if report.Grid != nil {
+		for _, col := range report.Grid.Columns {
+			for _, pane := range col.Panes {
+				if pane.Kind == "file" {
+					t.Fatalf("b's tree carried a's file pane: %+v", report.Grid)
+				}
+			}
+		}
+	}
+}
+
+func TestOverviewLayoutApply_FloorsRefuseWhenPreviewTooNarrow(t *testing.T) {
+	m, _ := layoutSessionsModel(t)
+	m.WorkspacesView(73, 24)
+	peer, placed := m.previewPeerBox()
+	if !placed || peer.W == 0 {
+		t.Skip("preview not placed at the split minimum")
+	}
+	before, _ := json.Marshal(m.sessionsPaneLayoutJSON())
+	req := sessionsLayoutPayload(t, uirequest.LayoutModeApply,
+		uirequest.LayoutPane{Kind: "file", Targets: []string{"README.md"}},
+	)
+	cmd := m.handleUIRequest(req)
+	ack := readSessionsLayoutAck(t, req)
+	if ack.Status != uirequest.StatusDeclined {
+		t.Skipf("preview still fit a file pane at %dx%d (status %s)", peer.W, peer.H, ack.Status)
+	}
+	if cmd != nil {
+		t.Fatal("floor-refused apply emitted a command")
+	}
+	if ack.Reason != "the composed layout needs a larger window; layout left unchanged" &&
+		ack.Reason != "the window is too small to split" {
+		t.Fatalf("reason = %q, want a floor/window refusal", ack.Reason)
+	}
+	after, _ := json.Marshal(m.sessionsPaneLayoutJSON())
+	if string(after) != string(before) {
+		t.Fatalf("floor refusal mutated the tree")
 	}
 }

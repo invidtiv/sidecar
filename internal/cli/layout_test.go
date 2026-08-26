@@ -469,3 +469,44 @@ func TestLayoutSessionsUnknownRowIsUsage(t *testing.T) {
 		t.Fatalf("unknown row message = %q", combined)
 	}
 }
+
+// The main checkout is a Sessions catalog row even when Sidecar has registered
+// no extra worktrees. layout get prints canonical(root):worktree:canonical(root)
+// as surface; apply --sessions $surface must not die as "unknown Sessions row".
+func TestLayoutSessionsMainCheckoutWorktreeID(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	writeProjectMeta(t, stateDir, "sidecar", workDir)
+	canon := canonicalOpenPath(workDir)
+	ids := []string{
+		canon + ":worktree:" + canon,
+		workDir + ":worktree:" + workDir,
+		"sidecar:worktree:" + canon,
+	}
+	for _, id := range ids {
+		var out, errOut bytes.Buffer
+		handled, code := Run([]string{"layout", "get", "--sessions", id, "--wait", "0"}, &out, &errOut)
+		combined := out.String() + errOut.String()
+		if strings.Contains(combined, "unknown Sessions row") {
+			t.Fatalf("main-checkout id %q refused as unknown: %q", id, combined)
+		}
+		if !handled || code != 3 {
+			t.Fatalf("id %q = handled %v code %d, want 3 no-instance (stderr %q)", id, handled, code, combined)
+		}
+	}
+}
+
+func TestLayoutSessionsIDShapedUnknownPassesThrough(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	writeProjectMeta(t, stateDir, "sidecar", t.TempDir())
+	id := "/tmp/not-a-registered-project:worktree:/tmp/not-a-registered-project"
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"layout", "get", "--sessions", id, "--wait", "0"}, &out, &errOut)
+	combined := out.String() + errOut.String()
+	if strings.Contains(combined, "unknown Sessions row") {
+		t.Fatalf("ID-shaped row usage-failed; host should decline: %q", combined)
+	}
+	if !handled || code != 3 {
+		t.Fatalf("pass-through = handled %v code %d, want 3 (stderr %q)", handled, code, combined)
+	}
+}
