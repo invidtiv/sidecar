@@ -75,8 +75,9 @@ Non-primary terminal leaves have no sidebar row to select (badge-only grouping),
 
 ### A6 — Parity and persistence
 
-- Both surfaces bind through their `pane_host.go`. The rule is parity with the primary terminal: on each surface, a split terminal leaf gets exactly the treatment the primary terminal gets there — interactive where the primary is interactive (project workspace), capture-preview where the primary is a preview (global Sessions browser tiles). No special case in either direction.
-- Persistence evolves `state.PaneLayoutJSON` in place; unknown kind ⇒ drop the leaf and collapse its split (windowing plan persistence rules).
+- Both surfaces bind through their `pane_host.go`. The rule is parity with the primary terminal: on each surface, a split terminal leaf gets exactly the treatment the primary terminal gets there. No special case in either direction.
+- **The global Sessions browser's half is owned by [live-terminal-leaf-extraction.md](live-terminal-leaf-extraction.md)**, along with resolved question 2 below. Shipping it is not the free consequence this section assumed: the two hosts implement a live terminal in incompatible shapes — parallel `primary*`/`panel*` field pairs in the project plugin, a single set of `previewState` fields in the browser — so parity needs the per-leaf state extracted into a shared package first. That plan states the rule as an outcome and owns the work.
+- Persistence evolves `state.PaneLayoutJSON` in place; unknown kind ⇒ drop the leaf and collapse its split (windowing plan persistence rules). The global browser's tree stays memory-only until that plan's open question 2 is answered.
 
 **Ship criteria:** existing terminal parity/scroll/surface test suites pass; panel-migration table test covers both old layouts and both ratio directions; real-app proof on a fully isolated run (`tmux-drive.sh`, both axes isolated) showing create-via-modal → two live terminals → divider drag → one resize per pane on release → neighbor close leaves the terminal → relaunch restores it.
 
@@ -103,7 +104,7 @@ Let Files, Git, td, and Notes host a terminal split beside their content, via th
 ## Resolved questions
 
 1. **Live-leaf cap:** 2 live terminals on screen at a time; unlimited across screens; no idle `SetVisible(false)` demotion unless a measured performance problem forces it (see A2).
-2. **Global Sessions browser:** split terminals mirror the primary terminal's treatment per surface — no separate liveness decision (see A6).
+2. **Global Sessions browser:** split terminals mirror the primary terminal's treatment per surface — no separate liveness decision (see A6). The work that gets there is owned by [live-terminal-leaf-extraction.md](live-terminal-leaf-extraction.md).
 3. **Rename:** clickable pane-title label opens the rename modal, shipped in phase A (see A4). Sidebar grouping stays badge-only.
 
 ## Acceptance evidence
