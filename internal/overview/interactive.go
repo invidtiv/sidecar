@@ -143,7 +143,7 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
 	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
 	if state.terminal == nil {
-		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf.ID))
+		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf))
 	}
 	if state.terminal.IsActive() && m.primaryTarget() == desired {
 		leaf.Buffer = state.terminal.Buffer()
@@ -186,10 +186,14 @@ func (m *Model) closePreviewTerminal() {
 // noticed by polling IsActive afterwards — is a second implementation of a
 // pipeline the project surface already drives through these same hooks.
 func (m *Model) previewTerminalHooks() tty.Hooks {
-	return m.previewTerminalHooksFor(m.previewTerminalLeaf().ID)
+	return m.previewTerminalHooksFor(m.previewTerminalLeaf())
 }
 
-func (m *Model) previewTerminalHooksFor(leafID int) tty.Hooks {
+// previewTerminalHooksFor binds hooks to the leaf's state, not to a captured
+// leaf ID: a deck projection may rekey the leaf while its terminal keeps
+// running, and a hook that remembered the old ID would answer for a pane that
+// no longer exists.
+func (m *Model) previewTerminalHooksFor(hookLeaf *termpanes.Leaf) tty.Hooks {
 	return tty.Hooks{
 		OnKey:      m.previewTerminalKey,
 		BeforeSend: m.beforePreviewSend,
@@ -199,6 +203,7 @@ func (m *Model) previewTerminalHooksFor(leafID int) tty.Hooks {
 			return tea.Batch(m.releasePreviewKeyboard(), m.focusList())
 		},
 		OnSessionEnded: func() tea.Cmd {
+			leafID := hookLeaf.ID
 			if leaf := panelayout.Find(m.preview.paneRoot, leafID); leaf != nil && leaf.Kind == panelayout.Shell {
 				return m.closePreviewShellLeaf(leafID, termpanes.CloseSessionEnded)
 			}

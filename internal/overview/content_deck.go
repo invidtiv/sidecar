@@ -140,8 +140,14 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 	if deck == nil {
 		return
 	}
-	m.preview.paneRoot = deck.Tree()
+	root, focusShell := m.graftPreviewShellLeaves(m.preview.paneRoot, deck.Tree())
+	m.preview.paneRoot = root
 	m.preview.paneFocus = deck.FocusedLeaf()
+	// A projection must not steal the keyboard from a live terminal the user is
+	// in — the deck's focus answer only knows its own passive leaves.
+	if focusShell != 0 {
+		m.preview.paneFocus = focusShell
+	}
 	m.preview.paneNextID = panelayout.MaxID(m.preview.paneRoot) + 1
 
 	oldDoc := m.preview.doc
@@ -244,7 +250,11 @@ func (m *Model) syncPreviewDeckProjection(ctx contentpanes.SurfaceContext) {
 			m.preview.resource = res
 		}
 	}
-	m.focusPreviewPaneByID(deck.FocusedLeaf())
+	focusID := deck.FocusedLeaf()
+	if focusShell != 0 {
+		focusID = focusShell
+	}
+	m.focusPreviewPaneByID(focusID)
 }
 
 func (m *Model) focusPreviewPaneByID(id int) {

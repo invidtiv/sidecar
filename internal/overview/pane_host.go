@@ -194,7 +194,10 @@ func (r paneRegions) Close(node *panelayout.Node, inner paneframe.Box) {
 	if node == nil || node.Split != nil || node.Kind == panelayout.Terminal {
 		return
 	}
-	if r.m.paneContent(node) == nil {
+	// A split terminal is closable like any other non-primary leaf; it has no
+	// passive content to gate on. The PRIMARY terminal stays unclosable: it is
+	// the surface the row selects, exactly as on the project surface.
+	if node.Kind != panelayout.Shell && r.m.paneContent(node) == nil {
 		return
 	}
 	r.m.registerPreviewCloseRegionFor(node.ID, node.Kind, inner)

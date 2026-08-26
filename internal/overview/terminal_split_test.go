@@ -6,9 +6,11 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacecreate"
 )
 
@@ -241,5 +243,49 @@ func TestOverviewTerminalBoxFollowsFocusedLeaf(t *testing.T) {
 	got, ok = m.previewTerminalBox()
 	if !ok || got != primaryBox {
 		t.Fatalf("primary-focused box = %+v, want %+v", got, primaryBox)
+	}
+}
+
+// Opening a passive pane replaces the tree with the deck's projection, and the
+// deck has never heard of a Shell leaf: without the graft this silently closed
+// a running terminal split. The split must survive, its state must follow any
+// rekey, and the keyboard must stay in the split it was in.
+func TestOverviewPassiveOpenKeepsTerminalSplit(t *testing.T) {
+	m, leaf := createOverviewTerminalSplit(t, workspacecreate.PlacementRight)
+	session := leaf.Session
+
+	if cmd := m.openPreviewContent(contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}, "Document"); cmd == nil {
+		t.Fatal("document open returned no command")
+	}
+	if m.preview.doc == nil {
+		t.Fatal("document pane did not open")
+	}
+	if doc := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document); doc == nil {
+		t.Fatal("document leaf missing from the tree")
+	}
+	shell := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Shell)
+	if shell == nil {
+		t.Fatal("terminal split was dropped by the deck projection")
+	}
+	moved := m.preview.terminalPanes.Leaf(shell.ID)
+	if moved == nil || moved.Session != session || moved.Target.Source != "shell" {
+		t.Fatalf("shell state did not follow the graft: %+v", moved)
+	}
+	if m.preview.paneFocus != shell.ID {
+		t.Fatalf("projection stole focus from the shell: focus=%d shell=%d", m.preview.paneFocus, shell.ID)
+	}
+	if terminal := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal); terminal == nil {
+		t.Fatal("primary terminal leaf missing from the tree")
+	}
+}
+
+// The split's header carries the same × every non-primary leaf has. Before a
+// document opens, the shell is the only leaf that may draw one — the primary
+// terminal never does.
+func TestOverviewTerminalSplitHeaderDrawsClose(t *testing.T) {
+	m, _ := createOverviewTerminalSplit(t, workspacecreate.PlacementRight)
+	view := m.WorkspacesView(previewWide, previewTall)
+	if !strings.Contains(view, ui.CloseButtonLabel) {
+		t.Fatalf("terminal split header draws no close button:\n%s", view)
 	}
 }

@@ -66,6 +66,13 @@ type RenderBufferInput struct {
 	// Analyzer is the terminal surface's bounded raw-row cache. Nil keeps the
 	// rendering contract but does not reuse analysis across calls.
 	Analyzer *RowAnalyzer
+
+	// CloseButton reserves the shared header × on the right of the header row,
+	// drawn hovered when CloseHovered. The button is reserved out of the header
+	// row alone — the viewport under it is tmux geometry and keeps every column
+	// it was sized for, the same rule the project surface reserves by.
+	CloseButton  bool
+	CloseHovered bool
 }
 
 // RenderHeader draws the one row above an embedded terminal — identity chips
@@ -82,6 +89,12 @@ func RenderHeader(in RenderBufferInput) string {
 	truncate := in.Truncate
 	if truncate == nil {
 		truncate = TruncateANSI
+	}
+	if in.CloseButton {
+		if reserve := ui.ReserveHeaderClose(in.Width); reserve.CloseW > 0 {
+			row := fill(HeaderRow(in.Chips, in.Hints, reserve.TabsWidth, 0, truncate), reserve.TabsWidth, truncate)
+			return ui.ComposeHeaderClose(row, in.Width, in.CloseHovered)
+		}
 	}
 	return fill(HeaderRow(in.Chips, in.Hints, in.Width, 0, truncate), in.Width, truncate)
 }

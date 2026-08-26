@@ -227,6 +227,10 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 		BarStyle: ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
 		Analyzer: leaf.RowAnalyzer,
+		// A split terminal is closable exactly like any other non-primary leaf,
+		// the same header × the project surface draws on its split.
+		CloseButton:  kind == panelayout.Shell,
+		CloseHovered: kind == panelayout.Shell && m.previewCloseHover && m.hoverPreviewClose == panelayout.Shell,
 	})
 }
 
