@@ -33,7 +33,7 @@ Verified in the tree at the time of writing. The important thing is how much alr
 
    Contexts that must keep `ctrl+n` as-is: `notes-editor`, `notes-search`, `file-browser-quick-open`, `file-browser-project-search`. Contexts that should gain it: `notes-list`, `notes-preview`, `file-browser-tree`, `file-browser-preview`, `git-status`, `git-history`, `git-diff`, `git-commit-preview`, and the `tasks` / `tdmonitor` equivalents once their contexts are enumerated.
 
-3. **The switcher offers pane kinds only, outside Workspaces.** Shell, Worktree and Terminal split create *workspace rows*, not panes; a Notes plugin has no workspace to put them in and no pane tree to split a live terminal into. In a plugin host the kind list shows File, Git diff, td issue, Note and the configured resource providers. Mechanically this is `AllowTerminalSplit: false` plus a new `PaneKindsOnly` option that drops the Shell and Worktree rows — the same data-driven catalog, one more flag, no second modal.
+3. **The switcher offers pane kinds only, outside Workspaces.** Shell and Worktree create *workspace rows*, not panes, and a Notes plugin has no workspace to put them in. Terminal split is excluded for a different reason now that `internal/termpanes` exists: the plugin decks are passive `contentpanes` decks with no live-leaf host — no `termpanes` binding, no tty routing, no live-leaf cap enforcement. That adoption is [terminal-splits-and-windowing.md](terminal-splits-and-windowing.md)'s B3, and when it lands the row arrives here by flipping `AllowTerminalSplit`, exactly as it did on the global Sessions browser. In a plugin host the kind list shows File, Git diff, td issue, Note and the configured resource providers. Mechanically this is `AllowTerminalSplit: false` plus a new `PaneKindsOnly` option that drops the Shell and Worktree rows — the same data-driven catalog, one more flag, no second modal.
 
 4. **Placement stays `auto|right|below`.** The app deck plans through the same `panelayout` policy, including the fourth-pane 2×2 rule, so the placement row means exactly what it means in Workspaces. Explicit cells remain the CLI's precision tool (`sidecar open --at`), unchanged.
 
@@ -45,17 +45,17 @@ Verified in the tree at the time of writing. The important thing is how much alr
 
 ## Unresolved questions
 
-- **Does the app deck open File panes?** Link resolution handles `contentlink.KindFile`, but `appContentKindForTarget` — the `--at` mapping — lists only Issue, Note, Diff and Resource. If the deck genuinely cannot hold a document leaf, the File row must be hidden in plugin hosts, and that is a bigger gap than this plan: File is the row users will reach for first from the Git and Notes plugins. **Settle this before anything else; it may promote itself to M1.**
 - **`tasks` and `tdmonitor`**: both are deck-eligible, but neither was considered when the switcher was designed. Do they want the entry, or is a pane beside a task list meaningless? Decide per plugin rather than assuming the interface implies the intent.
 - **Does the File Browser want it at all?** Its whole surface is already a file list with a preview. "Open a file pane" there may be a strange thing to offer, where "open the td issue this file's TODO names" is not. Possibly a per-host kind filter rather than one catalog.
 - **`ctrl+n` in a terminal.** Any plugin context that forwards keys to a live PTY must not claim it — `ctrl+n` is a real control character. Audit before binding.
 
 ## Work sequence
 
-### M0 — Settle the File-pane question
+### M0 — Close the File-target mapping
 
-- Determine whether `contentpanes.Deck` in an `appContentDeck` can hold a Document leaf, end to end: open, tab, persist, restore, live-refresh.
-- If it cannot, that is this plan's real first milestone and the rest waits on it.
+The deck side of the File question is answered in the tree: `contentpanes` decks hold Document leaves on both Workspaces surfaces, the app deck already resolves `contentlink.KindFile` in its link path, and app-deck persistence exists (`persistAppContentDeck` through `contentpanes.State`/`Decode`, whose unknown-kind collapse is the degradation rule). The picker already resolves `KindFile` to `uirequest.TargetKindFile`, which the Workspaces hosts handle. The one genuine gap is `appContentKindForTarget`: the app host's target mapping lists only Issue, Note, Diff and Resource.
+
+- Add the `TargetKindFile → panelayout.Document` case and whatever value resolution it needs, mirroring the Workspaces hosts' handling.
 - **Proof:** `sidecar open <path>` against a plugin surface with the deck flag on, in an isolated `tmux-drive.sh` run; the pane is there after a relaunch.
 
 ### M1 — The host entry
