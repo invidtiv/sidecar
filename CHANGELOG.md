@@ -2,6 +2,12 @@
 
 All notable changes to sidecar are documented here.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **An apostrophe in a task description no longer breaks agent launch on macOS.** The generated `start.sh` passed the prompt through a heredoc nested inside `$(...)`, and bash 3.2 — still what `/bin/bash` is on macOS — mis-tracks single-quote state while scanning for the closing paren. An odd number of apostrophes in the prompt turned the whole script into a syntax error, so `fix today's bug` failed to launch while `don't break the user's code` worked, which is why this survived so long: an even count accidentally re-balances the lexer, including in the test that was supposed to cover it. A `"` or a `)` in the prompt was broken by the same pattern, with `)` silently truncating the prompt and leaking the heredoc delimiter into the agent's argv. The prompt is now staged in a tmpfile written by a top-level heredoc and read back with a plain `cat`, which parses correctly on every bash. Thanks to [@imsickofmaps](https://github.com/imsickofmaps) for the diagnosis and the fix. ([#262](https://github.com/marcus/sidecar/pull/262))
+
 ## [v1.9.0] - 2026-08-27
 
 ### Features
