@@ -20,13 +20,26 @@ $(error set RELEASE_VERSION in the environment, for example: RELEASE_VERSION=v0.
 endif
 endif
 
+# Build metadata injected via ldflags. Assigned lazily with `=` so that parsing
+# this Makefile for an unrelated target (`make test`) never spawns git or date.
+#
+# main.Version is deliberately NOT set here. These targets are unmanaged builds
+# of possibly-unreleased code, and stamping a `git describe` tag onto them would
+# make internal/version read the binary as an up-to-date release and stop
+# offering updates. Leaving it empty keeps the devel+sha fallback in
+# effectiveVersion. The managed path (scripts/dev-install.sh) sets Version itself.
+BUILD_COMMIT = $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_DIRTY = $(shell git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null && echo false || echo true)
+BUILD_DATE = $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+BUILD_LDFLAGS = -X main.Commit=$(BUILD_COMMIT) -X main.Dirty=$(BUILD_DIRTY) -X main.BuildDate=$(BUILD_DATE)
+
 # Build the binary
 build:
-	go build -o bin/sidecar ./cmd/sidecar
+	go build -ldflags "$(BUILD_LDFLAGS)" -o bin/sidecar ./cmd/sidecar
 
 # Unmanaged Go install to GOBIN. This does not change Homebrew links or PATH.
 install:
-	go install ./cmd/sidecar
+	go install -ldflags "$(BUILD_LDFLAGS)" ./cmd/sidecar
 
 # Managed machine-wide development installs and Homebrew switching.
 install-local:
@@ -152,10 +165,10 @@ lint lint-all lint-linux:
 
 # Build for multiple platforms (local testing only — GoReleaser handles release builds)
 build-all:
-	GOOS=darwin GOARCH=amd64 go build -o bin/sidecar-darwin-amd64 ./cmd/sidecar
-	GOOS=darwin GOARCH=arm64 go build -o bin/sidecar-darwin-arm64 ./cmd/sidecar
-	GOOS=linux GOARCH=amd64 go build -o bin/sidecar-linux-amd64 ./cmd/sidecar
-	GOOS=linux GOARCH=arm64 go build -o bin/sidecar-linux-arm64 ./cmd/sidecar
+	GOOS=darwin GOARCH=amd64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/sidecar-darwin-amd64 ./cmd/sidecar
+	GOOS=darwin GOARCH=arm64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/sidecar-darwin-arm64 ./cmd/sidecar
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/sidecar-linux-amd64 ./cmd/sidecar
+	GOOS=linux GOARCH=arm64 go build -ldflags "$(BUILD_LDFLAGS)" -o bin/sidecar-linux-arm64 ./cmd/sidecar
 
 # Test GoReleaser locally (creates snapshot build without publishing)
 release-snapshot goreleaser-snapshot:

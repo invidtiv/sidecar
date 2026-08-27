@@ -51,8 +51,16 @@ import (
 	"golang.org/x/term"
 )
 
-// Version is set at build time via ldflags
-var Version = ""
+// Build metadata injected at build time via ldflags. Version is the only field
+// both the managed install and the release pipeline set; the rest fall back to
+// debug.ReadBuildInfo, which carries VCS data for an ordinary `go build`.
+var (
+	Version      = "" // release version, or the composite devel+branch.sha from dev-install.sh
+	Commit       = "" // short commit hash
+	Dirty        = "" // "true" when the tree was modified at build time
+	BuildDate    = "" // RFC3339 build timestamp
+	BuildProfile = "" // "release" for goreleaser builds, "development" otherwise
+)
 
 var (
 	configPath     = flag.String("config", "", "path to config file")
@@ -122,7 +130,9 @@ func main() {
 
 	// Handle version flag
 	if *versionFlag || *shortVersion {
-		fmt.Printf("sidecar version %s\n", effectiveVersion(Version))
+		for _, line := range versionLines(effectiveVersion(Version), resolveBuildDetails()) {
+			fmt.Println(line)
+		}
 		os.Exit(0)
 	}
 
@@ -369,6 +379,82 @@ func effectiveVersion(v string) string {
 	}
 
 	return "devel"
+}
+
+// buildDetails is the build metadata reported under the first line of --version.
+type buildDetails struct {
+	commit  string
+	dirty   bool
+	date    string
+	profile string
+}
+
+// resolveBuildDetails prefers the ldflags values and falls back to
+// debug.ReadBuildInfo, so a plain `go build` still reports a usable commit.
+func resolveBuildDetails() buildDetails {
+	details := buildDetails{
+		commit:  Commit,
+		dirty:   Dirty == "true",
+		date:    BuildDate,
+		profile: BuildProfile,
+	}
+
+	if details.commit == "" || details.date == "" || Dirty == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, setting := range info.Settings {
+				switch setting.Key {
+				case "vcs.revision":
+					if details.commit == "" {
+						details.commit = shortCommit(setting.Value)
+					}
+				case "vcs.modified":
+					if Dirty == "" {
+						details.dirty = setting.Value == "true"
+					}
+				case "vcs.time":
+					if details.date == "" {
+						details.date = setting.Value
+					}
+				}
+			}
+		}
+	}
+
+	if details.profile == "" {
+		details.profile = "development"
+	}
+
+	return details
+}
+
+// shortCommit truncates a revision to the customary seven characters.
+func shortCommit(revision string) string {
+	if len(revision) > 7 {
+		return revision[:7]
+	}
+	return revision
+}
+
+// versionLines renders the --version output. The first line is load-bearing and
+// must stay a single "sidecar version <v>" line: scripts/dev-install.sh matches
+// it by prefix and scripts/verify-release-archives.sh compares it exactly. Any
+// added detail belongs on the indented lines below it.
+func versionLines(version string, details buildDetails) []string {
+	lines := []string{"sidecar version " + version}
+
+	if details.commit != "" {
+		commit := details.commit
+		if details.dirty {
+			commit += " (dirty)"
+		}
+		lines = append(lines, "  commit:  "+commit)
+	}
+	if details.date != "" {
+		lines = append(lines, "  date:    "+details.date)
+	}
+	lines = append(lines, "  profile: "+details.profile)
+
+	return lines
 }
 
 func init() {

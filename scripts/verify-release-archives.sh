@@ -81,7 +81,9 @@ while IFS= read -r archive; do
     # GoReleaser strips the leading v from {{ .Version }}; archives look like
     # sidecar_0.91.0_darwin_arm64.tar.gz (or SNAPSHOT for local snapshots).
     version=$(basename "$archive" | sed -E 's/^sidecar_([^_]+)_.*/\1/')
-    output=$("$binary" --version)
+    # --version prints commit/date/profile detail on indented lines below the
+    # first, so compare only the first line.
+    output=$("$binary" --version | head -n 1)
     [[ $output == "sidecar version $version" || $output == "sidecar version v$version" ]] || {
       echo "$archive has an unexpected version string: $output (expected $version)" >&2
       exit 1
