@@ -30,7 +30,7 @@ func (m *Model) openPreviewDocFinder() tea.Cmd {
 	}
 	mode, scan := panesearch.NewFinder(&m.docFinderCaches, doc.root, doc.epoch)
 	doc.mode = mode
-	return previewDocSearchCmd(scan)
+	return previewDocSearchCmd(scan, doc.surface)
 }
 
 // openPreviewDocProjectSearch opens the ripgrep project search in the focused
@@ -50,12 +50,16 @@ func (m *Model) openPreviewDocProjectSearch() tea.Cmd {
 
 // previewDocSearchMsg wraps one search surface's own async message on its way
 // back to the pane that issued it. The surfaces' messages are broadcast types
-// the Files plugin also uses, and a file scan carries no root, so an unwrapped
-// filefind.ScannedMsg from another surface's finder would land in this pane's
-// cache as if it described this pane's directory.
-type previewDocSearchMsg struct{ Msg tea.Msg }
+// the Files plugin also uses, and a file scan carries neither root nor surface,
+// so an unwrapped filefind.ScannedMsg could land in the wrong pane's cache. The
+// surface also keeps the result attached to its originating pane while the
+// global Sessions selection is visiting another workspace.
+type previewDocSearchMsg struct {
+	Msg         tea.Msg
+	WorkspaceID string
+}
 
-func previewDocSearchCmd(cmd tea.Cmd) tea.Cmd {
+func previewDocSearchCmd(cmd tea.Cmd, workspaceID string) tea.Cmd {
 	if cmd == nil {
 		return nil
 	}
@@ -64,7 +68,7 @@ func previewDocSearchCmd(cmd tea.Cmd) tea.Cmd {
 		if msg == nil {
 			return nil
 		}
-		return previewDocSearchMsg{Msg: msg}
+		return previewDocSearchMsg{Msg: msg, WorkspaceID: workspaceID}
 	}
 }
 
@@ -72,10 +76,21 @@ func previewDocSearchCmd(cmd tea.Cmd) tea.Cmd {
 // pane that issued it. A pane that has since closed its surface drops the
 // message, and a stale epoch is dropped inside the surface.
 func (m *Model) applyPreviewDocSearchMsg(msg previewDocSearchMsg) tea.Cmd {
-	if m.preview.doc == nil || m.preview.doc.mode == nil {
+	doc := m.previewDocForWorkspace(msg.WorkspaceID)
+	if doc == nil || doc.mode == nil {
 		return nil
 	}
-	return previewDocSearchCmd(m.preview.doc.mode.Update(msg.Msg))
+	return previewDocSearchCmd(doc.mode.Update(msg.Msg), msg.WorkspaceID)
+}
+
+func (m *Model) previewDocForWorkspace(workspaceID string) *previewDoc {
+	if m.preview.doc != nil && m.preview.workspaceID == workspaceID {
+		return m.preview.doc
+	}
+	if cached, ok := m.preview.paneCache[workspaceID]; ok {
+		return cached.doc
+	}
+	return nil
 }
 
 // previewDocSearchActive reports whether a pane-scoped search surface owns the
@@ -176,7 +191,11 @@ func (m *Model) handlePreviewDocSearchMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) applyPreviewDocSearchOutcome(out panesearch.Outcome, cmd tea.Cmd) tea.Cmd {
-	wrapped := previewDocSearchCmd(cmd)
+	workspaceID := ""
+	if m.preview.doc != nil {
+		workspaceID = m.preview.doc.surface
+	}
+	wrapped := previewDocSearchCmd(cmd, workspaceID)
 	switch {
 	case out.Cancelled:
 		return tea.Batch(wrapped, m.cancelPreviewDocSearch())

@@ -123,6 +123,54 @@ func TestPreviewDocAnswersFinderAndProjectSearch(t *testing.T) {
 	m.closePreviewDocSearch()
 }
 
+// A file walk can finish after the user visits another Sessions row. Its
+// result still belongs to the pane that issued it; otherwise the active pane
+// rejects the foreign epoch and the original finder remains on "Scanning..."
+// forever when the user returns.
+func TestPreviewDocFinderResultFollowsOriginatingWorkspace(t *testing.T) {
+	m := focusedDocPreview(t)
+	originID := m.preview.workspaceID
+	originDoc := m.preview.doc
+	scan := m.openPreviewDocFinder()
+	if scan == nil || originDoc.mode == nil || originDoc.mode.Finder() == nil {
+		t.Fatal("opening the finder did not start its first scan")
+	}
+
+	m.stashPreviewPanes()
+	m.preview.workspaceID = "other-workspace"
+	m.preview.doc = &previewDoc{surface: "other-workspace", root: t.TempDir(), epoch: originDoc.epoch + 1}
+
+	raw := scan()
+	msg, ok := raw.(previewDocSearchMsg)
+	if !ok {
+		t.Fatalf("scan returned %T, want previewDocSearchMsg", raw)
+	}
+	if msg.WorkspaceID != originID {
+		t.Fatalf("scan surface = %q, want %q", msg.WorkspaceID, originID)
+	}
+	if !IsAsyncMessage(msg) {
+		t.Fatal("the app would not route the finder result back to the global Overview")
+	}
+	run(t, m, func() tea.Msg { return msg })
+
+	finder := originDoc.mode.Finder()
+	if finder.Cache.Scanning {
+		t.Fatal("originating finder stayed in its scanning state")
+	}
+	if got := finder.Matches(); len(got) != 2 || got[0].Path != "main.go" || got[1].Path != "README.md" {
+		t.Fatalf("originating finder matches = %#v, want files from its own root", got)
+	}
+	if m.preview.doc.mode != nil {
+		t.Fatal("the scan result was delivered to the currently active foreign pane")
+	}
+
+	m.preview.workspaceID = originID
+	_ = m.restorePreviewPanes(originID)
+	if m.preview.doc != originDoc || m.preview.doc.mode.Finder().Cache.Scanning {
+		t.Fatal("returning to the originating workspace did not restore the completed finder")
+	}
+}
+
 // Both pane surfaces register the same keys for the same bar.
 func TestPreviewDocSearchBindingsMatchTheProjectSurface(t *testing.T) {
 	registry := keymap.NewRegistry()

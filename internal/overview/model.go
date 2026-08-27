@@ -126,7 +126,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 	switch msg.(type) {
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
-		previewDocLoadedMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
+		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
