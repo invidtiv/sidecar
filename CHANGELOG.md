@@ -12,6 +12,10 @@ All notable changes to sidecar are documented here.
 
 - **Forgotten shell records stop accumulating forever.** Forgetting a shell moves its definition to a tombstone so `sidecar shell restore` can put it back, and until now nothing ever removed one — a long-lived project's `shells.json` grew by a record for every shell ever forgotten. Tombstones now expire after `shells.tombstoneRetention` in `config.json`, which takes a Go duration, a day count (`"30d"`), or `"forever"`, and defaults to 14 days. Expiry runs at the writer boundary, so the file is bounded without a background sweeper. One deliberate consequence: once a record's window passes, Sidecar no longer remembers the forget, so a tmux session of that name that is still running becomes an ordinary adoptable row again rather than staying invisible. (td-362a41)
 
+### Dependencies
+
+- **Tasks moves to v1.15.0, and the Tasks tab gains its new triage surface.** `N` marks the selected open task as a GTD next action in one keypress from the list or detail view, and it refuses politely on proposed and done tasks rather than mutating from an input context. An empty Next tab now explains itself — how many dated items are waiting on Agenda, counted by the same query the Agenda tab paints, and how to mark one — instead of rendering a blank pane beside a full Agenda. The Inbox tab buckets approvals and accepted rows under project headings so a triage pass stays inside one theme, with headings as unselectable chrome the a/r walk steps past. `tasks move` files a PROPOSED task into a project without the reject-and-re-propose dance that used to mint a new id.
+
 ## [v1.8.0] - 2026-08-26
 
 ### Features
