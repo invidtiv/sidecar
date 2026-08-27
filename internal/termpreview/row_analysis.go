@@ -320,8 +320,10 @@ func inferCanvas(rows []resolvedRow) string {
 	blankRows := make(map[string]int)
 	firstCell := make(map[string]int)
 	overlap := make(map[string]int)
+	firstRow := make(map[string]int)
+	lastRow := make(map[string]int)
 	paintedRowCount := 0
-	for _, row := range rows {
+	for rowIndex, row := range rows {
 		if len(row.backgrounds) == 0 {
 			continue
 		}
@@ -330,7 +332,11 @@ func inferCanvas(rows []resolvedRow) string {
 			firstCell[row.first]++
 		}
 		for _, bg := range row.backgrounds {
+			if counts[bg] == 0 {
+				firstRow[bg] = rowIndex
+			}
 			counts[bg]++
+			lastRow[bg] = rowIndex
 			if row.blank {
 				blankRows[bg]++
 			}
@@ -362,6 +368,18 @@ func inferCanvas(rows []resolvedRow) string {
 		}
 	}
 	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) {
+		return ""
+	}
+	// A canvas reaches through the live content; a composer, status box, or
+	// message bubble is a localized horizontal band even when it is the only
+	// thing currently painting backgrounds. Width changes can move one other
+	// painted row across the viewport edge, so voting only over painted rows
+	// made Codex's four-row composer flip between 4/5 (accepted) and 4/6
+	// (rejected) as the pane changed by one column. Measure the candidate's
+	// vertical span against the effective live content too. Interior untouched
+	// rows still abstain from the color vote, while a sectionally repainted
+	// canvas remains eligible when it appears near both ends of the pane.
+	if span := lastRow[canvas] - firstRow[canvas] + 1; span*2 <= len(rows) {
 		return ""
 	}
 	// Row starts are always required; how many depends on whether blank rows

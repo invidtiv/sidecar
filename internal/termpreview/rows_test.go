@@ -1,6 +1,7 @@
 package termpreview
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -450,5 +451,50 @@ func TestCanvasBackgroundRejectsAnInsetMessageBubble(t *testing.T) {
 	buffer := canvasBuffer(t, lines, len(lines))
 	if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
 		t.Fatalf("inset message bubble promoted to canvas %q", got)
+	}
+}
+
+// Codex's composer is a full-width four-row band: two painted blank rows, the
+// prompt row, and a footer row that inherits the same background. A one-column
+// resize can wrap one transcript line across the live-grid edge, changing the
+// composer from four of six painted rows to four of five. Four of five reaches
+// CanvasRowShare even though the band occupies only the bottom of the pane.
+// Both adjacent shapes must abstain so child-default transcript cells keep the
+// host terminal background at every width.
+func TestCanvasBackgroundRejectsCodexComposerAcrossAdjacentWrapBoundaries(t *testing.T) {
+	host := "\x1b[48;2;40;43;51m"
+	composer := "\x1b[48;2;30;30;30m"
+	diff := "\x1b[48;2;33;58;43m"
+	for _, extraPaintedRows := range []int{1, 2} {
+		t.Run(fmt.Sprintf("four_of_%d_painted", 4+extraPaintedRows), func(t *testing.T) {
+			lines := []string{diff + "+ changed line\x1b[49m"}
+			if extraPaintedRows == 2 {
+				lines = append(lines, diff+"+ wrapped continuation\x1b[49m")
+			}
+			for range 43 - len(lines) {
+				lines = append(lines, "default-background transcript")
+			}
+			lines = append(lines,
+				composer+strings.Repeat(" ", 80)+"\x1b[49m",
+				composer+"› Ask Codex to do anything\x1b[49m",
+				composer+strings.Repeat(" ", 80)+"\x1b[49m",
+				composer+"gpt-5.6-sol xhigh\x1b[49m",
+			)
+			buffer := canvasBuffer(t, lines, len(lines))
+			if got := CanvasBackground(buffer, 0, len(lines)); got != "" {
+				t.Fatalf("localized Codex composer promoted to canvas %q", got)
+			}
+			layout := tty.FitViewport(tty.ViewportInput{
+				Buffer: buffer, Width: 100, Height: len(lines), Follow: true,
+				Interactive: true, PaneWidth: 100, PaneHeight: len(lines),
+			})
+			draw := DrawRows(RowsInput{
+				Buffer: buffer, Layout: layout, DefaultBackground: host,
+				PaneHeight: len(lines), Interactive: true, Follow: true,
+			})
+			if draw.CanvasBackground != host {
+				t.Fatalf("resolved background = %q, want host %q", draw.CanvasBackground, host)
+			}
+		})
 	}
 }

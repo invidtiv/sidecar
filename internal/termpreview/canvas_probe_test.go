@@ -2,6 +2,7 @@ package termpreview
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,27 +12,57 @@ import (
 	"github.com/marcus/sidecar/internal/tty/screenmodel"
 )
 
-// TestCanvasProbeLiveCaptures is a diagnostic, not a regression test. It reads
-// raw `tmux capture-pane -e` dumps from the scratchpad and reports what the
-// canvas detector sees for each. Run with -run CanvasProbeLive -v.
+type canvasProbeCapture struct {
+	name    string
+	content string
+}
+
+// TestCanvasProbeLiveCaptures is an opt-in diagnostic, not a regression test.
+// It reads saved `tmux capture-pane -e` dumps or captures one live target
+// read-only, then reports what the canvas detector sees before and after the
+// screen-model seam:
+//
+//	CANVAS_PROBE_DIR=/path/to/captures go test ./internal/termpreview -run CanvasProbeLive -v
+//	CANVAS_PROBE_TARGET=%42 go test ./internal/termpreview -run CanvasProbeLive -v
+//
+// A directory may contain captures from several widths or TUIs. The live mode
+// never sends input or resizes the target, so it is safe to use on a session
+// whose current geometry is the evidence under investigation.
 func TestCanvasProbeLiveCaptures(t *testing.T) {
+	var captures []canvasProbeCapture
 	dir := os.Getenv("CANVAS_PROBE_DIR")
-	if dir == "" {
-		t.Skip("set CANVAS_PROBE_DIR to a directory of capture files")
-	}
-	files, _ := filepath.Glob(filepath.Join(dir, "cap-*.txt"))
-	for _, f := range files {
-		raw, err := os.ReadFile(f)
-		if err != nil {
-			t.Fatal(err)
+	if dir != "" {
+		files, _ := filepath.Glob(filepath.Join(dir, "cap-*.txt"))
+		for _, file := range files {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			captures = append(captures, canvasProbeCapture{name: filepath.Base(file), content: string(raw)})
 		}
-		content := strings.TrimSuffix(string(raw), "\n")
+	}
+	if target := os.Getenv("CANVAS_PROBE_TARGET"); target != "" {
+		raw, err := exec.Command("tmux", "capture-pane", "-p", "-e", "-t", target).Output()
+		if err != nil {
+			t.Fatalf("capture live tmux target %q: %v", target, err)
+		}
+		captures = append(captures, canvasProbeCapture{name: "tmux:" + target, content: string(raw)})
+	}
+	if len(captures) == 0 {
+		t.Skip("set CANVAS_PROBE_DIR or CANVAS_PROBE_TARGET")
+	}
+
+	requireStable := os.Getenv("CANVAS_PROBE_REQUIRE_STABLE") == "1"
+	baselineName, baselineCanvas := "", ""
+	haveBaseline := false
+	for _, capture := range captures {
+		content := strings.TrimSuffix(capture.content, "\n")
 		lines := strings.Split(content, "\n")
 		buffer := tty.NewOutputBuffer(len(lines) + 10)
 		buffer.ApplySnapshot(tty.PaneSnapshot{Output: content, PaneRows: len(lines)})
 
 		got := CanvasBackground(buffer, 0, len(lines))
-		t.Logf("=== %s: rows=%d canvas=%q", filepath.Base(f), len(lines), got)
+		t.Logf("=== %s: rows=%d canvas=%q", capture.name, len(lines), got)
 
 		// The live interactive path replays the capture through the screen
 		// model and renders frames from the emulator, so detection must also
@@ -54,9 +85,17 @@ func TestCanvasProbeLiveCaptures(t *testing.T) {
 		fbuf.ApplySnapshot(tty.PaneSnapshot{Output: frame.Output, PaneRows: len(lines)})
 		fgot := CanvasBackground(fbuf, 0, len(lines))
 		t.Logf("    via screenmodel: canvas=%q", fgot)
+		if requireStable {
+			if !haveBaseline {
+				baselineName, baselineCanvas = capture.name, fgot
+				haveBaseline = true
+			} else if fgot != baselineCanvas {
+				t.Errorf("screen-model canvas changed across adjacent captures: %s=%q, %s=%q",
+					baselineName, baselineCanvas, capture.name, fgot)
+			}
+		}
 		if fgot != got {
 			t.Logf("    MISMATCH raw=%q model=%q", got, fgot)
-			_ = os.WriteFile(f+".frame", []byte(frame.Output), 0o644)
 		}
 
 		inherited := ""

@@ -166,6 +166,23 @@ privacy-safe `terminal capture trace` entries with reason `semantic_activity`
 and no terminal content. Correlate those reason tags with hook entries instead
 of claiming that every agent-pane capture is presentation fallback.
 
+### Terminal background and width fidelity
+
+`scripts/terminal-fidelity.sh` exercises the shared canvas detector directly. Its `live` mode captures an existing tmux target read-only and reports the inferred background for both tmux's ANSI capture and the screen-model serialization Sidecar actually renders. It never sends input or resizes the target:
+
+```bash
+./scripts/terminal-fidelity.sh live %42
+```
+
+Its `sweep` mode launches any real TUI on an explicit throwaway tmux socket, walks adjacent widths, retains one raw ANSI capture per width plus a manifest, and analyzes them all with the same production code. The run fails if the screen-model canvas decision changes between widths. Use adjacent widths around a reported boundary so wrapping can move exactly one painted row into or out of the live grid:
+
+```bash
+./scripts/terminal-fidelity.sh sweep --command codex --widths 144,145,146 --height 53
+./scripts/terminal-fidelity.sh sweep --command cursor-agent --widths 99,100,101 --out /tmp/cursor-fidelity
+```
+
+The private socket protects the default tmux server, but the launched command deliberately keeps the normal environment and `HOME` so installed agent TUIs can find their credentials and configuration. It may therefore perform whatever startup work that command normally performs; the harness sends no prompt text. Capture directories can also be reanalyzed without launching anything with `CANVAS_PROBE_DIR=/path/to/captures go test ./internal/termpreview -run CanvasProbeLive -count=1 -v`.
+
 ### Terminal performance counters
 
 Use the deterministic fixture and the same two-axis isolation for terminal performance work. Run CPU profiles with `SIDECAR_PPROF=<port>` only; keep `SIDECAR_TERMINAL_PERF`, screen comparison, and terminal/overview/startup traces off because diagnostics perturb the measurement. Use a separate process for counters and latency:
