@@ -588,7 +588,9 @@ fi
 
 	// Use a heredoc with quoted delimiter to prevent ALL shell expansion.
 	// This safely handles backticks, $variables, quotes, newlines, etc.
-	// The prompt is embedded directly in the script, not read from a file.
+	// Non-Amp agents stage the prompt in a tmpfile first: on bash 3.2 (macOS)
+	// a heredoc nested inside $(...) mis-tracks quote state and an odd number of
+	// apostrophes in the prompt makes the script a syntax error.
 	var script string
 	switch agentType {
 	case AgentAider:
@@ -596,12 +598,12 @@ fi
 		// Use tmpfile to avoid bash 3.2 bug: apostrophes in heredoc inside $(...) break parsing on macOS.
 		script = fmt.Sprintf(`#!/bin/bash
 %s
-TMPFILE=$(mktemp /tmp/sidecar-prompt.XXXXXX)
+TMPFILE=$(mktemp "${TMPDIR:-/tmp}/sidecar-prompt.XXXXXX") || exit 1
+trap 'rm -f "$TMPFILE"' EXIT
 cat > "$TMPFILE" <<'SIDECAR_PROMPT_EOF'
 %s
 SIDECAR_PROMPT_EOF
 %s --message "$(cat "$TMPFILE")"
-rm -f "$TMPFILE"
 rm -f %q
 `, shellSetup, prompt, baseCmd, launcherFile)
 	case AgentOpenCode:
@@ -609,12 +611,12 @@ rm -f %q
 		// Use tmpfile to avoid bash 3.2 bug: apostrophes in heredoc inside $(...) break parsing on macOS.
 		script = fmt.Sprintf(`#!/bin/bash
 %s
-TMPFILE=$(mktemp /tmp/sidecar-prompt.XXXXXX)
+TMPFILE=$(mktemp "${TMPDIR:-/tmp}/sidecar-prompt.XXXXXX") || exit 1
+trap 'rm -f "$TMPFILE"' EXIT
 cat > "$TMPFILE" <<'SIDECAR_PROMPT_EOF'
 %s
 SIDECAR_PROMPT_EOF
 %s run "$(cat "$TMPFILE")"
-rm -f "$TMPFILE"
 rm -f %q
 `, shellSetup, prompt, baseCmd, launcherFile)
 	case AgentAmp:
@@ -631,12 +633,12 @@ rm -f %q
 		// Use tmpfile to avoid bash 3.2 bug: apostrophes in heredoc inside $(...) break parsing on macOS.
 		script = fmt.Sprintf(`#!/bin/bash
 %s
-TMPFILE=$(mktemp /tmp/sidecar-prompt.XXXXXX)
+TMPFILE=$(mktemp "${TMPDIR:-/tmp}/sidecar-prompt.XXXXXX") || exit 1
+trap 'rm -f "$TMPFILE"' EXIT
 cat > "$TMPFILE" <<'SIDECAR_PROMPT_EOF'
 %s
 SIDECAR_PROMPT_EOF
 %s "$(cat "$TMPFILE")"
-rm -f "$TMPFILE"
 rm -f %q
 `, shellSetup, prompt, baseCmd, launcherFile)
 	}

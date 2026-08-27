@@ -3,6 +3,7 @@ package workspace
 import (
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1157,10 +1158,19 @@ func TestWriteAgentLauncher(t *testing.T) {
 			wantCmd:   "bash '" + expectedLauncherPath + "'",
 		},
 		{
-			name:      "claude with apostrophe in prompt (bash 3.2 regression)",
+			// Odd apostrophe count is what trips the bash 3.2 lexer; an even
+			// count accidentally re-balances and parses fine.
+			name:      "claude with odd apostrophe count (bash 3.2 regression)",
 			agentType: AgentClaude,
 			baseCmd:   "claude",
-			prompt:    "fix today's bug — don't break it",
+			prompt:    "fix today's bug",
+			wantCmd:   "bash '" + expectedLauncherPath + "'",
+		},
+		{
+			name:      "claude with quotes and parens in prompt",
+			agentType: AgentClaude,
+			baseCmd:   "claude",
+			prompt:    "handle the \"quoted\" case ) and don't regress",
 			wantCmd:   "bash '" + expectedLauncherPath + "'",
 		},
 	}
@@ -1222,6 +1232,17 @@ func TestWriteAgentLauncher(t *testing.T) {
 				}
 				if !strings.Contains(scriptStr, `"$(cat "$TMPFILE")"`) {
 					t.Errorf("script should read prompt from tmpfile, got:\n%s", scriptStr)
+				}
+			}
+
+			// The generated script must actually parse. This is the real
+			// regression guard: on macOS bash 3.2 a heredoc nested in $(...)
+			// mis-tracks quote state, so a prompt with an odd number of
+			// apostrophes produced a script that died with a syntax error.
+			if _, err := exec.LookPath("bash"); err == nil {
+				out, err := exec.Command("bash", "-n", expectedLauncherPath).CombinedOutput()
+				if err != nil {
+					t.Errorf("generated script is not valid bash: %v\n%s\nscript:\n%s", err, out, scriptStr)
 				}
 			}
 
