@@ -137,12 +137,9 @@ func IsScrollbarRegion(kind RegionKind) bool {
 const emptySpacerMinBody = 3
 
 // emptySpacerFits reports whether a short pane can afford the blank line
-// between the panel's chrome and an empty-state message. A non-empty list never
-// uses it: its first visible section must sit flush against the chrome, while
-// later sections own their explicit pre-header line.
-//
-// It sits below the filter row rather than directly under the title because the
-// filter is part of the header's chrome.
+// between the panel's chrome and an empty-state message. It sits below the
+// filter row rather than directly under the title because the filter is part
+// of the header's chrome.
 func emptySpacerFits(opts SidebarOptions) bool {
 	chrome := 1 + len(opts.PrefixLines)
 	if opts.FilterActive {
@@ -150,6 +147,32 @@ func emptySpacerFits(opts SidebarOptions) bool {
 	}
 	chrome += min(len(opts.FooterLines), max(0, opts.Height-chrome))
 	return opts.Height-chrome > emptySpacerMinBody
+}
+
+// listSpacerFits keeps one quiet row between the panel controls and list
+// content, but never spends the row that a short pane needs to show its first
+// complete heading and content row. The spacer is chrome: it stays fixed while the
+// list scrolls and the scrollbar starts beside content, not beside empty air.
+func listSpacerFits(opts SidebarOptions, flat []sidebarFlatRow, chromeRows int) bool {
+	if len(flat) == 0 {
+		return false
+	}
+	footerRows := min(len(opts.FooterLines), max(0, opts.Height-chromeRows))
+	available := max(0, opts.Height-chromeRows-footerRows)
+	if available < 2 {
+		return false
+	}
+
+	// Use the first row the existing viewport would show without the spacer.
+	// This respects a restored scroll offset or a selection that has moved out
+	// of view, while keeping the spacer decision state-free and deterministic.
+	scroll := adjustSidebarScroll(flat, opts.Sections, opts.ScrollOffset, available, opts.Width, opts.SelectedID, opts.Focused, opts.FreeScroll)
+	entry := flat[min(max(scroll, 0), len(flat)-1)]
+	needed := 1 + max(1, len(sidebarRowLines(entry.row.Render(max(1, opts.Width-1), entry.row.ID == opts.SelectedID, opts.Focused))))
+	if opts.Sections[entry.section].Title != "" {
+		needed++
+	}
+	return available >= needed
 }
 
 type sidebarFlatRow struct {
@@ -189,7 +212,9 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 			flat = append(flat, sidebarFlatRow{section: sectionIndex, row: row})
 		}
 	}
-	if len(flat) == 0 && emptySpacerFits(opts) {
+	if len(flat) > 0 && listSpacerFits(opts, flat, len(lines)) {
+		lines = append(lines, strings.Repeat(" ", width))
+	} else if len(flat) == 0 && emptySpacerFits(opts) {
 		// Padded rather than empty: this line is chrome, so unlike the body's
 		// section separators it is never widened by the scrollbar join and would
 		// otherwise leave a zero-width line inside a fixed-width box.
@@ -216,9 +241,9 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 			lines = append(lines, "")
 			y++
 		} else if entry.section != lastSection && section.Title != "" {
-			// Sections are separated by one blank line; the first heading in view
-			// sits flush against the chrome above it, so a scrolled list does not
-			// spend a row on a separator with nothing before it.
+			// Sections are separated by one blank line. The fixed top-content
+			// spacer already separates the first visible heading from the chrome,
+			// so only later sections own an additional pre-header line.
 			if y > bodyStart {
 				lines = append(lines, "")
 				y++

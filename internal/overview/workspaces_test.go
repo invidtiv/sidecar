@@ -840,8 +840,8 @@ func TestGlobalListSeparatesChromeAndDropsRepeatedProjectUnderProjectSort(t *tes
 	if !strings.Contains(lines[0], "Workspaces") {
 		t.Fatalf("row 0 is not the panel header: %q", lines[0])
 	}
-	if !strings.Contains(lines[1], "◆ NEEDS ATTENTION") {
-		t.Fatalf("first section is not flush under the global panel header: %q", lines[1])
+	if strings.TrimSpace(lines[1]) != "" || !strings.Contains(lines[2], "◆ NEEDS ATTENTION") {
+		t.Fatalf("global panel rows 1-2 = %q / %q, want one blank then the first section", lines[1], lines[2])
 	}
 
 	m.workspaces.SetSort(workspacelist.SortProject)

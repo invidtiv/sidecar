@@ -75,6 +75,9 @@ func TestInteractiveSidebarEmitsBarRegionsAfterContent(t *testing.T) {
 		t.Fatal("a bar region was registered before a content region")
 	}
 	bar := rendered.Scrollbar
+	if bar.TrackTop != 2 || track.Y != 2 {
+		t.Fatalf("bar starts at row %d (track region %d), want below header and spacer at row 2", bar.TrackTop, track.Y)
+	}
 	if track.X != renderedBodyX(30) || track.W != 1 || track.H != bar.Params.TrackHeight {
 		t.Fatalf("track region %#v does not match the drawn bar %#v", track, bar)
 	}

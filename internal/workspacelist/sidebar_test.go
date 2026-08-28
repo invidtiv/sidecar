@@ -80,10 +80,10 @@ func TestRenderSidebarSeparatesSectionsAndKeepsRegionsOnTheirRows(t *testing.T) 
 			for i, line := range lines {
 				trimmed[i] = strings.TrimRight(line, " ")
 			}
-			// The filter is chrome; the first visible section sits immediately
-			// beneath it, while later sections own a pre-header blank line.
-			if trimmed[1] != "/ filter…" || !strings.HasPrefix(trimmed[2], "○ SHELLS (2) ─") {
-				t.Fatalf("first section is not flush against the filter chrome:\n%s", strings.Join(trimmed[:5], "\n"))
+			// The filter is chrome; one quiet row separates it from the first
+			// section, and later sections keep their own pre-header blank line.
+			if trimmed[1] != "/ filter…" || trimmed[2] != "" || !strings.HasPrefix(trimmed[3], "○ SHELLS (2) ─") {
+				t.Fatalf("first section does not have one row below the filter chrome:\n%s", strings.Join(trimmed[:6], "\n"))
 			}
 			workspaces := indexOfLineContaining(trimmed, "○ WORKSPACES (1) ─")
 			if workspaces < 2 || trimmed[workspaces-1] != "" || trimmed[workspaces-2] == "" {
@@ -259,7 +259,7 @@ func TestSectionHeadersUseSharedCategoryGrammarRuleAndActionGeometry(t *testing.
 		t.Run(tc.title, func(t *testing.T) {
 			section := SidebarSection{Title: tc.title, Count: 2, Action: &SidebarAction{ID: "add", Label: "+"}, Rows: numberedSidebarRows(2)}
 			rendered := RenderSidebar(SidebarOptions{Width: 40, Height: 12, Sections: []SidebarSection{section}})
-			line := strings.TrimRight(strings.Split(ansi.Strip(rendered.View), "\n")[1], " ")
+			line := strings.TrimRight(strings.Split(ansi.Strip(rendered.View), "\n")[2], " ")
 			if !strings.HasPrefix(line, tc.want) || !strings.HasSuffix(line, "+") {
 				t.Fatalf("header = %q, want glyph/title/count/rule/action", line)
 			}
@@ -269,7 +269,7 @@ func TestSectionHeadersUseSharedCategoryGrammarRuleAndActionGeometry(t *testing.
 					action = &rendered.Regions[i]
 				}
 			}
-			if action == nil || action.X+action.W != 39 || action.Y != 1 {
+			if action == nil || action.X+action.W != 39 || action.Y != 2 {
 				t.Fatalf("section action geometry = %#v, want it on the header's trailing cells", action)
 			}
 		})
@@ -278,7 +278,7 @@ func TestSectionHeadersUseSharedCategoryGrammarRuleAndActionGeometry(t *testing.
 	narrow := RenderSidebar(SidebarOptions{Width: 12, Height: 8, Sections: []SidebarSection{{
 		Title: "Needs Attention", Count: 23, Action: &SidebarAction{ID: "add", Label: "+"}, Rows: numberedSidebarRows(1),
 	}}})
-	line := strings.Split(ansi.Strip(narrow.View), "\n")[1]
+	line := strings.Split(ansi.Strip(narrow.View), "\n")[2]
 	if ansi.StringWidth(line) != 12 || strings.Contains(line, "+") || strings.Contains(line, "(23)") {
 		t.Fatalf("narrow section header did not drop action then count cleanly: %q", line)
 	}
@@ -293,7 +293,7 @@ func TestProjectSectionHeaderUsesReadableProjectHueOnlyForIdentity(t *testing.T)
 	projectKey := "sidecar"
 	section := SidebarSection{Title: "sidecar", ProjectKey: projectKey, Count: 2, Rows: numberedSidebarRows(2)}
 	rendered := RenderSidebar(SidebarOptions{Width: 40, Height: 10, Sections: []SidebarSection{section}})
-	header := strings.Split(rendered.View, "\n")[1]
+	header := strings.Split(rendered.View, "\n")[2]
 
 	projectStyle := styles.Title.Foreground(styles.ProjectHue(projectKey))
 	wantProject := segmentForeground(projectStyle.Render("SIDECAR"), "SIDECAR")
@@ -315,7 +315,7 @@ func TestProjectSectionHeaderUsesReadableProjectHueOnlyForIdentity(t *testing.T)
 	neutral := RenderSidebar(SidebarOptions{Width: 40, Height: 8, Sections: []SidebarSection{{
 		Title: "Idle", Count: 1, Rows: numberedSidebarRows(1),
 	}}})
-	neutralHeader := strings.Split(neutral.View, "\n")[1]
+	neutralHeader := strings.Split(neutral.View, "\n")[2]
 	wantNeutral := segmentForeground(styles.Title.Render("IDLE"), "IDLE")
 	if got := segmentForeground(neutralHeader, "IDLE"); got != wantNeutral {
 		t.Fatalf("non-project header foreground = %q, want neutral title %q: %q", got, wantNeutral, neutralHeader)
@@ -428,7 +428,7 @@ func TestHeaderRegionsSitUnderTheirControls(t *testing.T) {
 	}
 }
 
-func TestFirstVisibleSectionIsFlushAgainstChromeOnBothSurfaces(t *testing.T) {
+func TestFirstVisibleSectionHasBreathingRoomOnBothSurfaces(t *testing.T) {
 	sections := []SidebarSection{
 		{Title: "Shells", Count: 2, Action: &SidebarAction{ID: "new-shell", Label: "+"}, Rows: []SidebarRow{
 			oneLineSidebarRow("shell:a", "alpha"), oneLineSidebarRow("shell:b", "beta"),
@@ -440,18 +440,41 @@ func TestFirstVisibleSectionIsFlushAgainstChromeOnBothSurfaces(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts.Width, opts.Height, opts.Title, opts.Focused, opts.Sections = 40, 20, "Workspaces", true, sections
-			lines := strings.Split(ansi.Strip(RenderSidebar(opts).View), "\n")
+			rendered := RenderSidebar(opts)
+			lines := strings.Split(ansi.Strip(rendered.View), "\n")
 			if !strings.Contains(lines[0], "Workspaces") {
 				t.Fatalf("row 0 is not the header: %q", lines[0])
 			}
-			if !strings.Contains(lines[1], "○ SHELLS (2) ─") {
-				t.Fatalf("first heading = %q, want it flush under the header", lines[1])
+			if strings.TrimSpace(lines[1]) != "" || !strings.Contains(lines[2], "○ SHELLS (2) ─") {
+				t.Fatalf("rows 1-2 = %q / %q, want one blank then the first heading", lines[1], lines[2])
+			}
+			for _, region := range rendered.Regions {
+				if region.Y == 1 {
+					t.Fatalf("top-content spacer registered an interactive region: %#v", region)
+				}
 			}
 		})
 	}
 }
 
-func TestFlushFirstSectionDoesNotClipAShortPane(t *testing.T) {
+func TestUnheadedListKeepsTheSameTopContentSpacer(t *testing.T) {
+	opts := SidebarOptions{
+		Width: 40, Height: 8, Title: "Workspaces", Focused: true,
+		Sections: []SidebarSection{{Rows: []SidebarRow{oneLineSidebarRow("a", "alpha")}}},
+	}
+	lines := strings.Split(ansi.Strip(RenderSidebar(opts).View), "\n")
+	if strings.TrimSpace(lines[1]) != "" || !strings.Contains(lines[2], "alpha") {
+		t.Fatalf("ordinary-height unheaded list rows 1-2 = %q / %q, want blank then row", lines[1], lines[2])
+	}
+
+	opts.Height = 2
+	lines = strings.Split(ansi.Strip(RenderSidebar(opts).View), "\n")
+	if !strings.Contains(lines[1], "alpha") {
+		t.Fatalf("short unheaded list spent its only content row on padding:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+func TestFirstSectionSpacerYieldsToAShortPane(t *testing.T) {
 	rows := numberedSidebarRows(6)
 	for height := 1; height <= 12; height++ {
 		opts := SidebarOptions{
@@ -467,8 +490,8 @@ func TestFlushFirstSectionDoesNotClipAShortPane(t *testing.T) {
 		if !strings.Contains(lines[0], "Workspaces") {
 			t.Fatalf("height %d pushed the header off the top: %q", height, lines[0])
 		}
-		// Wherever the list can draw a whole heading plus its first card, the
-		// heading is directly below the panel header at row 1.
+		// The spacer appears only when the pane can still draw a whole heading
+		// plus its first card. At height 3, content wins and stays flush.
 		heading := -1
 		for i, line := range lines {
 			if strings.Contains(line, "○ ITEMS (6) ─") {
@@ -480,8 +503,12 @@ func TestFlushFirstSectionDoesNotClipAShortPane(t *testing.T) {
 			t.Fatalf("height %d drew a partial list it cannot fit:\n%s", height, strings.Join(lines, "\n"))
 		}
 		if height >= 3 {
-			if heading != 1 {
-				t.Fatalf("height %d put the first heading on row %d, want row 1:\n%s", height, heading, strings.Join(lines, "\n"))
+			wantHeading := 1
+			if height >= 4 {
+				wantHeading = 2
+			}
+			if heading != wantHeading {
+				t.Fatalf("height %d put the first heading on row %d, want row %d:\n%s", height, heading, wantHeading, strings.Join(lines, "\n"))
 			}
 			if !strings.Contains(ansi.Strip(view), "item-0") {
 				t.Fatalf("height %d clipped the first card:\n%s", height, strings.Join(lines, "\n"))

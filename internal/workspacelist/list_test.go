@@ -420,19 +420,23 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	}
 
 	// The filter row is chrome the list only spends a row on while a query is
-	// live, so an unfiltered list starts at its first heading.
+	// live. A non-empty list keeps one quiet row between chrome and content.
 	if strings.Contains(wide, "/ filter") {
 		t.Fatalf("an unfiltered list drew the filter row:\n%s", wide)
 	}
-	// The first visible section is flush against the panel chrome.
+	// The first visible section has one row of breathing room below the panel.
 	rows := strings.Split(wide, "\n")
-	if got := rows[1]; !strings.Contains(got, "◆ NEEDS ATTENTION (1)") {
-		t.Fatalf("the first heading is on row %q, want it flush under the title", got)
+	if strings.TrimSpace(rows[1]) != "" || !strings.Contains(rows[2], "◆ NEEDS ATTENTION (1)") {
+		t.Fatalf("rows 1-2 = %q / %q, want one blank then the first heading", rows[1], rows[2])
 	}
 	m.FocusFilter()
 	filtering := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
-	if row := strings.Split(filtering, "\n")[1]; !strings.HasPrefix(row, "/ ") {
+	filterRows := strings.Split(filtering, "\n")
+	if row := filterRows[1]; !strings.HasPrefix(row, "/ ") {
 		t.Fatalf("a live filter drew %q under the title, want its query row:\n%s", row, filtering)
+	}
+	if strings.TrimSpace(filterRows[2]) != "" || !strings.Contains(filterRows[3], "◆ NEEDS ATTENTION (1)") {
+		t.Fatalf("live filter lost the chrome/content spacer:\n%s", filtering)
 	}
 	m.Filter().Reset()
 
