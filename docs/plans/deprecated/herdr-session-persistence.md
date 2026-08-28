@@ -1,5 +1,14 @@
 # Research Report: Herdr Background Session Persistence vs. Sidecar Tmux Architecture
 
+> **DEPRECATED 2026-08-28:** This was a source-and-documentation survey written
+> before anyone drove a real Herdr server. Several of its claims were corrected
+> by the live probe recorded in
+> [Replacing Sidecar's tmux integration with Herdr](./replacing-tmux-with-herdr.md)
+> (which is itself deprecated), and the current direction is
+> [Herdr as Sidecar's remote host runtime](../active/herdr-remote-hosts.md).
+> Retained for the architecture comparison in §3; do not cite its API surface,
+> which was incomplete.
+
 ## Executive Summary
 
 This report explores how **[Herdr](https://github.com/herdrdev/herdr)** (an open-source, Rust-based multiplexer for AI coding agents) manages persistent background sessions, and compares its architecture with **Sidecar**'s current `tmux`-backed workspace model. 

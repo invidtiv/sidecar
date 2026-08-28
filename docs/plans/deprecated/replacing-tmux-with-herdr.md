@@ -1,11 +1,17 @@
 # Replacing Sidecar's tmux integration with Herdr
 
-Status: **on hold**, 2026-08-08 — see
-[What Sidecar can learn from Herdr without replacing tmux](./lessons-from-herdr.md)
-for the value being harvested instead.  
+> **DEPRECATED 2026-08-28:** Superseded by
+> [Herdr as Sidecar's remote host runtime](../active/herdr-remote-hosts.md), which
+> keeps tmux as the local runtime and scopes Herdr to machines Sidecar is not
+> running on. This document is retained because its verified findings about
+> Herdr's API, bridge, frame dialect, and identity model remain accurate and are
+> cited by the successor plan. Its *framing* — Herdr as a local tmux replacement,
+> phased to tmux removal — is not the intended direction. Do not execute the
+> phase plan below.
+
 Herdr source inspected: [`herdrdev/herdr`](https://github.com/herdrdev/herdr) at `10974c822d607f03e20e9741ec027910f0c1f93a`  
 Herdr binary exercised: `herdr 0.8.0` (installed), API protocol `19`  
-Related research: [Herdr session persistence](./herdr-session-persistence.md)
+Related research: [What Sidecar can learn from Herdr without replacing tmux](../../research/active/lessons-from-herdr.md), [Herdr session persistence](./herdr-session-persistence.md)
 
 ## Decision first
 

@@ -1,9 +1,14 @@
 # What Sidecar can learn from Herdr without replacing tmux
 
-Status: research, 2026-08-08
-Companion to: [Replacing Sidecar's tmux integration with Herdr](../hold/replacing-tmux-with-herdr.md) — **on hold**
-Related plan: [Workspace agent activity status (td-48ecf2)](../../plans/active/td-48ecf2-workspace-agent-activity-status.md)
-Related plan: [Byte-fed tmux screen model (td-64c916)](../../plans/active/td-64c916-byte-fed-tmux-screen-model.md)
+Status: research, 2026-08-08. The portable lessons below have been executed; the
+document stands as the reasoning behind them, and its
+["What we cannot fix without replacing tmux"](#what-we-cannot-fix-without-replacing-tmux)
+section is live input to the current Herdr plan.
+
+Current Herdr plan: [Herdr as Sidecar's remote host runtime](../../plans/active/herdr-remote-hosts.md)
+Superseded companion: [Replacing Sidecar's tmux integration with Herdr](../../plans/deprecated/replacing-tmux-with-herdr.md) — **deprecated**
+Related plan: [Workspace agent activity status (td-48ecf2)](../../plans/implemented/td-48ecf2-workspace-agent-activity-status.md) — implemented
+Related plan: [Byte-fed tmux screen model (td-64c916)](../../plans/implemented/td-64c916-byte-fed-tmux-screen-model.md) — implemented
 
 ## Why this document
 
@@ -237,9 +242,13 @@ half of the Herdr proposal's value with no new runtime dependency.
    constant, bound by bytes, and either use or stop decoding
    `controlEvent.Data`.
 3. **Next real investment:** execute the scoped
-   [byte-fed tmux screen model plan](../../plans/active/td-64c916-byte-fed-tmux-screen-model.md)
+   [byte-fed tmux screen model plan](../../plans/implemented/td-64c916-byte-fed-tmux-screen-model.md)
    — feed `%output` into a cell grid behind a flag, with a fidelity harness
    comparing the grid against `capture-pane` on known byte sequences. Decide
-   from measurements, not from this document.
+   from measurements, not from this document. **Done:** `internal/tty/screenmodel`.
 4. **Only if (3) says "we are writing a terminal emulator":** reopen the Herdr
-   replacement question, leading with the geometry argument.
+   replacement question, leading with the geometry argument. **Not fired.** The
+   Herdr question was instead reopened on a different axis —
+   [remote hosts](../../plans/active/herdr-remote-hosts.md) — where Herdr
+   supplies something tmux structurally cannot rather than replacing something
+   tmux already does.
