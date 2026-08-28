@@ -387,7 +387,7 @@ func (m *Model) Render(opts RenderOptions) Rendered {
 	}
 	sidebarSections := make([]SidebarSection, 0, len(sections))
 	for _, section := range sections {
-		s := SidebarSection{Title: section.Title, Count: len(section.Items)}
+		s := SidebarSection{Title: section.Title, ProjectKey: section.Key, Count: len(section.Items)}
 		if action := m.sectionActions[section.Key]; action != nil {
 			copy := *action
 			s.Action = &copy
@@ -508,10 +508,8 @@ func selectionStyle(focused bool) lipgloss.Style {
 	if focused {
 		return styles.ListItemSelected
 	}
-	// The ordinary card now owns BgSecondary, so an unfocused selection needs
-	// the next theme surface to remain a selection instead of disappearing into
-	// every neighbouring card. Text stays secondary to preserve the existing
-	// focused/unfocused hierarchy.
+	// Focus changes the text hierarchy, not the selection geometry: selected
+	// rows keep the same full-width BgTertiary fill on both shared surfaces.
 	return lipgloss.NewStyle().Background(styles.BgTertiary).Foreground(styles.TextSecondary)
 }
 

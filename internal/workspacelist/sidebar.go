@@ -35,10 +35,13 @@ type SidebarRow struct {
 // beside it. They are kept apart rather than pre-joined so a narrow heading can
 // drop the count and still name its rows. An empty Title means an unheaded run.
 type SidebarSection struct {
-	Title  string
-	Count  int
-	Action *SidebarAction
-	Rows   []SidebarRow
+	Title string
+	// ProjectKey opts a project-group heading into the stable, theme-normalized
+	// project hue. Category and time sections leave it empty and stay neutral.
+	ProjectKey string
+	Count      int
+	Action     *SidebarAction
+	Rows       []SidebarRow
 }
 
 // SidebarOptions contains only resolved presentation state. Collection,
@@ -546,6 +549,12 @@ func sidebarSectionHeader(section SidebarSection, width int) (string, int, int) 
 // the shared renderer without inventing a second heading species.
 func sectionHeaderLabel(section SidebarSection, count bool, width int) string {
 	glyph, glyphStyle := sectionHeaderGlyph(section.Title)
+	titleStyle := styles.Title
+	if section.ProjectKey != "" {
+		projectHue := styles.ProjectHue(section.ProjectKey)
+		glyphStyle = lipgloss.NewStyle().Foreground(projectHue)
+		titleStyle = titleStyle.Foreground(projectHue)
+	}
 	title := strings.ToUpper(section.Title)
 	countText := fmt.Sprintf("(%d)", section.Count)
 	if width > 0 {
@@ -558,7 +567,7 @@ func sectionHeaderLabel(section SidebarSection, count bool, width int) string {
 		}
 		title = ansi.Truncate(title, available, "…")
 	}
-	label := glyphStyle.Render(glyph) + " " + styles.Title.Render(title)
+	label := glyphStyle.Render(glyph) + " " + titleStyle.Render(title)
 	if count {
 		label += " " + styles.Muted.Render(countText)
 	}

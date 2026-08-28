@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 func testSidebarRow(id, text string, data any) SidebarRow {
@@ -284,6 +286,39 @@ func TestSectionHeadersUseSharedCategoryGrammarRuleAndActionGeometry(t *testing.
 		if region.Kind == RegionSectionAction {
 			t.Fatalf("narrow header kept an invisible action region: %#v", region)
 		}
+	}
+}
+
+func TestProjectSectionHeaderUsesReadableProjectHueOnlyForIdentity(t *testing.T) {
+	projectKey := "sidecar"
+	section := SidebarSection{Title: "sidecar", ProjectKey: projectKey, Count: 2, Rows: numberedSidebarRows(2)}
+	rendered := RenderSidebar(SidebarOptions{Width: 40, Height: 10, Sections: []SidebarSection{section}})
+	header := strings.Split(rendered.View, "\n")[1]
+
+	projectStyle := styles.Title.Foreground(styles.ProjectHue(projectKey))
+	wantProject := segmentForeground(projectStyle.Render("SIDECAR"), "SIDECAR")
+	if got := segmentForeground(header, "SIDECAR"); got == "" || got != wantProject {
+		t.Fatalf("project title foreground = %q, want stable project hue %q: %q", got, wantProject, header)
+	}
+	if got := segmentForeground(header, "○"); got != wantProject {
+		t.Fatalf("project glyph foreground = %q, want project hue %q: %q", got, wantProject, header)
+	}
+	wantCount := segmentForeground(styles.Muted.Render("(2)"), "(2)")
+	if got := segmentForeground(header, "(2)"); got != wantCount {
+		t.Fatalf("project count foreground = %q, want muted %q: %q", got, wantCount, header)
+	}
+	wantRule := segmentForeground(lipgloss.NewStyle().Foreground(styles.BorderNormal).Render("─"), "─")
+	if got := segmentForeground(header, "─"); got != wantRule {
+		t.Fatalf("project rule foreground = %q, want neutral border %q: %q", got, wantRule, header)
+	}
+
+	neutral := RenderSidebar(SidebarOptions{Width: 40, Height: 8, Sections: []SidebarSection{{
+		Title: "Idle", Count: 1, Rows: numberedSidebarRows(1),
+	}}})
+	neutralHeader := strings.Split(neutral.View, "\n")[1]
+	wantNeutral := segmentForeground(styles.Title.Render("IDLE"), "IDLE")
+	if got := segmentForeground(neutralHeader, "IDLE"); got != wantNeutral {
+		t.Fatalf("non-project header foreground = %q, want neutral title %q: %q", got, wantNeutral, neutralHeader)
 	}
 }
 

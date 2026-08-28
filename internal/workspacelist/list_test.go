@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/styles"
 )
 
 // Slice 2 of docs/plans/active/global-overview-workspaces.md: the list, filter,
@@ -449,11 +450,16 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 
 	// Project and Recent print headings; Name stays a flat run.
 	m.SetSort(SortProject)
-	projectView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces"}).View)
+	projectStyled := m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces"}).View
+	projectView := ansi.Strip(projectStyled)
 	for _, want := range []string{"○ SIDECAR (2)", "○ BRAID (1)", "○ TD (1)"} {
 		if !strings.Contains(projectView, want) {
 			t.Fatalf("project sort missing heading %q:\n%s", want, projectView)
 		}
+	}
+	wantProjectHue := segmentForeground(styles.Title.Foreground(styles.ProjectHue("sidecar")).Render("SIDECAR"), "SIDECAR")
+	if got := segmentForeground(projectStyled, "SIDECAR"); got != wantProjectHue {
+		t.Fatalf("project sort did not carry the stable project key into its heading: got %q want %q", got, wantProjectHue)
 	}
 	m.SetSort(SortRecent)
 	recentView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Now: time.Date(2026, 8, 11, 12, 30, 0, 0, time.UTC)}).View)

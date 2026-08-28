@@ -82,44 +82,48 @@ func TestSelectedRowNameKeepsSelectionBackground(t *testing.T) {
 	}
 }
 
-func TestCardTintCoversBothLinesAndSelectionOverridesIt(t *testing.T) {
+func TestUnselectedRowsInheritCanvasAndSelectionFillsEveryLine(t *testing.T) {
 	row := RowPresentation{
 		Marker:        RowMarker{Icon: "●", Lane: "working"},
 		Kind:          KindWorktree,
-		Name:          "workspace cards",
+		Name:          "cards",
 		Provider:      "codex",
 		AfterProvider: []RowField{PlainField("working")},
 	}
-	unselected := RenderRow(row, 46, false, true)
-	if len(unselected) != 2 {
-		t.Fatalf("unselected row has %d lines, want 2", len(unselected))
+	wantSelectionBackground := segmentBackground(styles.ListItemSelected.Render("selection"), "selection")
+	if wantSelectionBackground == "" {
+		t.Fatal("ListItemSelected has no semantic selection background")
 	}
-	for _, target := range []struct {
-		line int
-		text string
-	}{
-		{0, "●"},         // nested marker foreground
-		{0, "workspace"}, // content after the marker reset
-		{1, "working"},   // content after the provider chip reset
-	} {
-		if !segmentHasBackground(unselected[target.line], target.text) {
-			t.Fatalf("card line %d segment %q has no background: %q", target.line, target.text, unselected[target.line])
+	for _, width := range []int{20, 33, 34, 45, 46} {
+		unselected := RenderRow(row, width, false, true)
+		for _, target := range []string{"●", "cards"} {
+			if got := segmentBackground(unselected[0], target); got != "" {
+				t.Fatalf("width=%d unselected segment %q painted row background %q: %q", width, target, got, unselected[0])
+			}
 		}
-	}
+		providerLine := len(unselected) - 1
+		if !segmentHasBackground(unselected[providerLine], "cod") {
+			t.Fatalf("width=%d provider chip lost its local background: %q", width, unselected[providerLine])
+		}
+		if len(unselected) == 2 {
+			if got := segmentBackground(unselected[1], "working"); got != "" {
+				t.Fatalf("width=%d detail after provider chip painted row background %q: %q", width, got, unselected[1])
+			}
+		}
 
-	cardBackground := segmentBackground(unselected[0], "workspace")
-	if cardBackground == "" {
-		t.Fatal("unselected card has no identifiable background")
-	}
-	for _, focused := range []bool{true, false} {
-		selected := RenderRow(row, 46, true, focused)
-		if len(selected) != 2 {
-			t.Fatalf("focused=%v selected row has %d lines, want 2", focused, len(selected))
-		}
-		for line, target := range []string{"workspace", "working"} {
-			got := segmentBackground(selected[line], target)
-			if got == "" || got == cardBackground {
-				t.Fatalf("focused=%v selected line %d did not override the card tint: card=%q selected=%q line=%q", focused, line, cardBackground, got, selected[line])
+		for _, focused := range []bool{true, false} {
+			selected := RenderRow(row, width, true, focused)
+			for line, target := range []string{"cards", "cod"} {
+				line = min(line, len(selected)-1)
+				got := segmentBackground(selected[line], target)
+				if got != wantSelectionBackground {
+					t.Fatalf("width=%d focused=%v selected segment %q background = %q, want semantic selection %q: %q", width, focused, target, got, wantSelectionBackground, selected[line])
+				}
+			}
+			for line, rendered := range selected {
+				if got := ansi.StringWidth(rendered); got != width {
+					t.Fatalf("width=%d focused=%v selected line %d is %d cells: %q", width, focused, line, got, rendered)
+				}
 			}
 		}
 	}
@@ -130,6 +134,14 @@ func segmentHasBackground(styled, text string) bool {
 }
 
 func segmentBackground(styled, text string) string {
+	return segmentColor(styled, text, sgrBackground)
+}
+
+func segmentForeground(styled, text string) string {
+	return segmentColor(styled, text, sgrForeground)
+}
+
+func segmentColor(styled, text string, colorFromSGR func(string) string) string {
 	plain := ansi.Strip(styled)
 	at := strings.Index(plain, text)
 	if at < 0 {
@@ -137,12 +149,12 @@ func segmentBackground(styled, text string) string {
 	}
 	target := at
 	pos := 0
-	bg := ""
+	current := ""
 	i := 0
 	for i < len(styled) {
 		if styled[i] != 0x1b {
 			if pos == target {
-				return bg
+				return current
 			}
 			pos++
 			i++
@@ -157,11 +169,43 @@ func segmentBackground(styled, text string) string {
 		}
 		code := styled[i : j+1]
 		if code == "\x1b[m" || code == "\x1b[0m" {
-			bg = ""
-		} else if strings.Contains(code, "48;") {
-			bg = code
+			current = ""
+		} else if value := colorFromSGR(code); value != "" {
+			current = value
 		}
 		i = j + 1
+	}
+	return ""
+}
+
+func sgrForeground(code string) string {
+	return sgrColor(code, "38", []string{"30", "31", "32", "33", "34", "35", "36", "37", "90", "91", "92", "93", "94", "95", "96", "97"})
+}
+
+func sgrBackground(code string) string {
+	return sgrColor(code, "48", []string{"40", "41", "42", "43", "44", "45", "46", "47", "100", "101", "102", "103", "104", "105", "106", "107"})
+}
+
+func sgrColor(code, extended string, basic []string) string {
+	params := strings.Split(strings.TrimSuffix(strings.TrimPrefix(code, "\x1b["), "m"), ";")
+	for i, value := range params {
+		if value == extended {
+			if i+1 >= len(params) {
+				return ""
+			}
+			width := 3 // 38/48;5;n
+			if params[i+1] == "2" {
+				width = 5 // 38/48;2;r;g;b
+			}
+			if i+width <= len(params) {
+				return strings.Join(params[i:i+width], ";")
+			}
+		}
+		for _, candidate := range basic {
+			if value == candidate {
+				return value
+			}
+		}
 	}
 	return ""
 }

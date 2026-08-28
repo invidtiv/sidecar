@@ -116,7 +116,7 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 	}
 	return []string{
 		finishRowLine(row.Marker, icon, rest, width, false, focused),
-		paintCardLine(line2, width),
+		paintNormalLine(line2, width),
 	}
 }
 
@@ -250,18 +250,16 @@ func finishRowLine(marker RowMarker, icon, rest string, width int, selected, foc
 	if selected {
 		return paintSelectedLine(marker, icon, rest, width, focused)
 	}
-	return paintCardLine(" "+markerStyle(marker).Render(icon)+rest, width)
+	return paintNormalLine(" "+markerStyle(marker).Render(icon)+rest, width)
 }
 
-// paintCardLine fills an unselected workspace card with the theme's secondary
-// surface. Nested marker and provider styles end with an ANSI reset; wrapping
-// the completed line in one parent style would therefore punch a background-
-// coloured hole after each nested span. Repaint each reset-delimited segment
-// instead so every cell, including the marker and right padding, owns the card
-// background while each nested foreground or chip remains intact.
-func paintCardLine(line string, width int) string {
+// paintNormalLine keeps an unselected row on the pane's existing canvas while
+// applying the ordinary text foreground around nested marker and provider
+// styles. Those nested styles end with an ANSI reset, so repaint each segment
+// to keep the foreground consistent without introducing a row-level fill.
+func paintNormalLine(line string, width int) string {
 	line = fit(line, width)
-	style := styles.ListItemNormal.Background(styles.BgSecondary)
+	style := styles.ListItemNormal
 	var painted strings.Builder
 	for line != "" {
 		at, resetWidth := firstANSIReset(line)
