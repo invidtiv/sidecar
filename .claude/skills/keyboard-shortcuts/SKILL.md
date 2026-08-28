@@ -373,6 +373,8 @@ no-op. File stepping is `,` / `.`, the same as in the Workspaces Diff pane.
 | `R` | rename | Rename |
 | `ctrl+r` | reveal | Reveal in file manager |
 
+A file opened in an app content pane beside Files uses the shared `workspace-doc` document context. It keeps the same file-facing shortcuts as the primary Files preview wherever the shared viewer owns the capability: `/` InFile, `ctrl+p` Find, `f` Search, `e` inline Edit, `E` external Editor, `r` Reload, `m` Render, `w` Wrap, `I` Info, `ctrl+r` Reveal, `y` Contents, `Y` Path, configured selection copy/select-all, `{` / `}` tabs, and `+` / `-` resize. Its finder and project search are the same `internal/panesearch` surfaces used by project and global Workspace document panes, rooted at that content deck's project and loading results back into the focused pane. Files-only tree operations such as rename and its full-screen blame mode remain owned by the primary Files surface; they are not document-viewer shortcuts and are not forwarded to a potentially different file behind the focused pane.
+
 ## Conversations Plugin
 
 ### Contexts

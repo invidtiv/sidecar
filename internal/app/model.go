@@ -1018,7 +1018,7 @@ func (m *Model) enterOverview() tea.Cmd {
 	}
 	var deckCmd tea.Cmd
 	if h := m.currentContentDeck(); h != nil {
-		h.releaseAppContentDocumentEdit()
+		h.releaseAppContentInputs()
 		h.laidOut = false
 		h.links = nil
 		h.press = nil
@@ -1047,7 +1047,7 @@ func (m *Model) leaveOverview(restoreProject bool) tea.Cmd {
 	var deckCmd tea.Cmd
 	if wasGlobal {
 		if h := m.currentContentDeck(); h != nil {
-			h.releaseAppContentDocumentEdit()
+			h.releaseAppContentInputs()
 			h.laidOut = false
 			h.links = nil
 			h.press = nil

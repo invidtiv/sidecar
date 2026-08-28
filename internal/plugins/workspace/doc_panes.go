@@ -1037,6 +1037,11 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, nil
 	case "e":
 		return true, p.enterDocEdit(doc)
+	case "E":
+		if view := doc.view(); view != nil {
+			return true, docview.EditExternal(view.Root(), view.Title(), view.ScrollOffset()+1)
+		}
+		return true, nil
 	case "r":
 		return true, p.reloadFocusedDoc()
 	case "ctrl+p":
@@ -1065,6 +1070,11 @@ func (p *Plugin) handleDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		return true, p.revealActiveDoc()
 	case "Y":
 		return true, p.yankActiveDocPath()
+	case "y":
+		if view := doc.view(); view != nil {
+			return true, view.YankSelectionOrContents()
+		}
+		return true, nil
 	case "+":
 		return true, p.resizeFocusedDoc(5)
 	case "-":

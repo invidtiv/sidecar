@@ -700,6 +700,11 @@ func (m *Model) previewDocKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				return true, docview.YankPath(view.Title())
 			}
 			return true, nil
+		case "y":
+			if view := m.preview.doc.view(); view != nil {
+				return true, view.YankSelectionOrContents()
+			}
+			return true, nil
 		case "r":
 			return true, m.reloadPreviewDoc()
 		case "enter", interactiveEnterKeyAlt:

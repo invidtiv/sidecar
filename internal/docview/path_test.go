@@ -6,7 +6,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/marcus/sidecar/internal/plugin"
 )
+
+func TestEditExternalTargetsTheFocusedDocument(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("EDITOR", "test-editor")
+	cmd := EditExternal(root, "docs/note.md", 17)
+	if cmd == nil {
+		t.Fatal("external edit returned no command")
+	}
+	got, ok := cmd().(plugin.OpenFileMsg)
+	if !ok || got.Editor != "test-editor" || got.Path != filepath.Join(root, "docs/note.md") || got.LineNo != 17 {
+		t.Fatalf("external edit = %#v", got)
+	}
+	if EditExternal(root, "", 0) != nil {
+		t.Fatal("empty external edit should be a no-op")
+	}
+}
 
 func TestRevealWaitsForTheHelperAndReportsItsFailure(t *testing.T) {
 	wantErr := errors.New("exit status 7")

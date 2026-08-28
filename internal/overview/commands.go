@@ -80,7 +80,8 @@ func (m *Model) Commands() []plugin.Command {
 			{ID: "prev-tab", Name: "Tab←", Description: "Previous file tab", Context: ctxGlobalWorkspacesDoc, Priority: 8},
 			{ID: "next-tab", Name: "Tab→", Description: "Next file tab", Context: ctxGlobalWorkspacesDoc, Priority: 9},
 			{ID: "render", Name: "Raw", Description: "Toggle rendered and raw markdown", Context: ctxGlobalWorkspacesDoc, Priority: 10},
-			{ID: "yank-path", Name: "Yank", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 11},
+			{ID: "yank-contents", Name: "Yank", Description: "Copy file contents", Context: ctxGlobalWorkspacesDoc, Priority: 11},
+			{ID: "yank-path", Name: "Path", Description: "Copy the relative path", Context: ctxGlobalWorkspacesDoc, Priority: 12},
 		}
 		return cmds
 	case ctxGlobalWorkspacesDiff:

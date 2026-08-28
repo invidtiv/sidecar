@@ -358,7 +358,7 @@ func (m *Model) setGlobalTab(tab GlobalTab) tea.Cmd {
 	previous := m.globalTab
 	var deckCmd tea.Cmd
 	if h := m.currentContentDeck(); h != nil {
-		h.releaseAppContentDocumentEdit()
+		h.releaseAppContentInputs()
 		h.laidOut = false
 		h.links = nil
 		h.press = nil
@@ -704,6 +704,7 @@ func (m *Model) shutdown() {
 		_ = state.SetActivePlugin(m.ui.WorkDir, activePlugin.ID())
 	}
 	for _, h := range m.contentDecks {
+		h.releaseAppContentInputs()
 		if h.live != nil {
 			h.live.Stop()
 		}

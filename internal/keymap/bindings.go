@@ -229,6 +229,7 @@ func DefaultBindings() []Binding {
 		{Key: "{", Command: "prev-tab", Context: "global-workspaces-doc"},
 		{Key: "}", Command: "next-tab", Context: "global-workspaces-doc"},
 		{Key: "m", Command: "render", Context: "global-workspaces-doc"},
+		{Key: "y", Command: "yank-contents", Context: "global-workspaces-doc"},
 		{Key: "Y", Command: "yank-path", Context: "global-workspaces-doc"},
 		{Key: "tab", Command: "switch-pane", Context: "global-workspaces-doc"},
 		{Key: "shift+tab", Command: "switch-pane", Context: "global-workspaces-doc"},
@@ -302,10 +303,12 @@ func DefaultBindings() []Binding {
 		// the editor, so the edit contexts register nothing: the ways out are
 		// tmux's own (ctrl+\, esc esc).
 		{Key: "e", Command: "edit", Context: "workspace-doc"},
+		{Key: "E", Command: "edit-external", Context: "workspace-doc"},
 		{Key: "n", Command: "open-pane", Context: "workspace-doc"},
 		{Key: "e", Command: "edit", Context: "global-workspaces-doc"},
 		{Key: "r", Command: "reload", Context: "workspace-doc"},
 		{Key: "r", Command: "reload", Context: "global-workspaces-doc"},
+		{Key: "y", Command: "yank-contents", Context: "workspace-doc"},
 
 		{Key: "enter", Command: "confirm", Context: "workspace-doc-find"},
 		{Key: "n", Command: "next-match", Context: "workspace-doc-find"},

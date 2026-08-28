@@ -85,6 +85,9 @@ type appContentDeck struct {
 	pending          map[contentlink.Pending]bool
 	resourceMatchers []contentlink.ResourceMatcher
 	dragSplit        int
+	search           appDeckSearch
+	info             *docview.Info
+	infoLeaf         int
 	live             *livepanes.Set
 	suppressRefresh  bool
 	edit             *appDeckDocumentEdit
@@ -176,6 +179,18 @@ func (m Model) currentContentDeck() *appContentDeck {
 	return m.contentDecks[appDeckKey(stateRoot, p.ID())]
 }
 
+// appContentPassiveFocused reports that the visible keyboard focus is in an
+// app-owned sibling of the primary plugin leaf. Primary may retain internal
+// modal state while focus is away, but that hidden state does not own keys.
+func (m Model) appContentPassiveFocused() bool {
+	h := m.currentContentDeck()
+	if h == nil || h.deck == nil {
+		return false
+	}
+	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+	return leaf != nil && leaf.Kind != panelayout.Primary
+}
+
 func (m Model) contentDeckSurface() (plugin.Plugin, string, bool) {
 	if m.globalTasksFocused() {
 		return m.globalTasksPlugin(), globalTasksDeckRoot, true
@@ -220,7 +235,7 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	h.selKeys, h.selCopyOnSelect = terminal.SelectionKeys(), terminal.CopyOnSelect
 	for _, other := range m.contentDecks {
 		if other != h && other.laidOut {
-			other.releaseAppContentDocumentEdit()
+			other.releaseAppContentInputs()
 			other.laidOut = false
 			if other.live != nil {
 				other.queued = append(other.queued, other.live.Reconcile())
@@ -240,6 +255,10 @@ func (m *Model) renderContentDeck(h *appContentDeck, width, height int) string {
 	view := paneframe.Compose(appDeckHost{h}, layout, h.canvas, width, height)
 	m.adoptAppContentPlugin(h)
 	paneframe.RegisterRegions(appDeckRegions{h}, appDeckHost{h}, layout)
+	h.registerAppContentSearchRegions()
+	if h.info != nil {
+		view = ui.OverlayModal(view, h.info.Render(width, height, h.mouse), width, height)
+	}
 	if h.live != nil {
 		h.queued = append(h.queued, h.live.Reconcile())
 	}
@@ -396,6 +415,9 @@ func (c *appDeckContent) View(render paneframe.Render) string {
 		// with the regions the frame registers for it.
 		v.SetOrigin(render.Origin.X, render.Origin.Y+paneframe.HeaderRows)
 		body = c.h.scanDocumentLeaf(v, v.View())
+		body = c.h.renderAppContentSearch(c.node.ID, body,
+			mouse.Rect{X: render.Origin.X, Y: render.Origin.Y + paneframe.HeaderRows},
+			paneframe.Size{Width: c.size.Width, Height: bodyH})
 	// Issue, note, resource, and diff bodies stay unscanned here on purpose:
 	// they scan on no surface today — not Workspace, not the global browser —
 	// and making them scan is a wider change than closing the gap between a
@@ -430,8 +452,11 @@ type appDeckTabHit struct {
 func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused bool) string {
 	items, active := h.deck.Tabs(leafID)
 	labels := make([]tabs.Label, 0, len(items))
-	for _, item := range items {
+	for i, item := range items {
 		label := item.Ref.Value
+		if h.search.mode != nil && h.search.leafID == leafID && i == active {
+			label = h.search.mode.HeaderLabel()
+		}
 		if view, ok := item.Viewer.(*noteview.Model); ok && view.Title() != "" {
 			label = view.Title()
 		}
@@ -470,6 +495,12 @@ func (h *appContentDeck) setTabCloseHover(x, y int) {
 }
 
 func (h *appContentDeck) syncInnerFocus() {
+	if h.search.mode != nil && h.search.leafID != h.deck.FocusedLeaf() {
+		h.closeAppContentSearch()
+	}
+	if h.info != nil && h.infoLeaf != h.deck.FocusedLeaf() {
+		h.info, h.infoLeaf = nil, 0
+	}
 	provider, ok := h.plugin.(plugin.PaneFocusProvider)
 	if ok {
 		provider.SetPaneFocusActive(h.deck.Leaf(panelayout.Primary) == h.deck.FocusedLeaf())
@@ -899,6 +930,15 @@ func (m *Model) appContentMouse(msg tea.MouseMsg) (tea.Cmd, bool) {
 	if h == nil || !h.laidOut {
 		return nil, false
 	}
+	if h.info != nil {
+		if h.info.HandleMouse(msg, h.mouse) {
+			h.info, h.infoLeaf = nil, 0
+		}
+		return nil, true
+	}
+	if cmd, handled := m.handleAppContentSearchMouse(msg); handled {
+		return cmd, true
+	}
 	mi := msg.Mouse()
 	// A release can be lost when the pointer leaves the window or a modal takes
 	// input mid-gesture. The shared handler cancels that stale drag on the next
@@ -1078,6 +1118,9 @@ func (m Model) appContentWheelAtBoundary(wheel tea.MouseWheelMsg) (boundary, own
 	if h == nil || !h.laidOut {
 		return false, false
 	}
+	if h.info != nil {
+		return h.info.WheelAtBoundary(wheel, h.mouse), true
+	}
 	delta := 0
 	switch wheel.Button {
 	case tea.MouseWheelUp:
@@ -1142,6 +1185,22 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, false
 		}
 	}
+	if h.info != nil {
+		if key.String() == "ctrl+c" {
+			return nil, false
+		}
+		closed, cmd := h.info.HandleKey(key)
+		if closed {
+			h.info, h.infoLeaf = nil, 0
+		}
+		return cmd, true
+	}
+	if h.appContentSearchActive() {
+		if key.String() == "ctrl+c" {
+			return nil, false
+		}
+		return m.handleAppContentSearchKey(key), true
+	}
 	if key.Code == tea.KeyTab {
 		cmd := h.cycleCombinedFocus(key.Mod.Contains(tea.ModShift))
 		m.persistAppContentDeck(h)
@@ -1153,6 +1212,15 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	if view, ok := h.deck.Viewer(leaf.ID).(*docview.Model); ok && view.SearchActive() {
 		_, cmd := view.HandleSearchKey(key)
 		return cmd, true
+	}
+	// Selection chords belong to the document before pane-level escape and
+	// ordinary viewer keys. In particular, escape clears a selection instead
+	// of hiding the pane, matching Files and both Workspace document hosts.
+	if view, ok := h.deck.Viewer(leaf.ID).(*docview.Model); ok {
+		result := view.HandleSelectionKey(key)
+		if result.Handled {
+			return appDeckSelectionCopyCmd(view, result), true
+		}
 	}
 	switch key.String() {
 	case "q", "esc":
@@ -1200,8 +1268,14 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		case "e":
 			return m.enterAppContentDocumentEdit(), true
+		case "E":
+			return docview.EditExternal(v.Root(), v.Title(), v.ScrollOffset()+1), true
 		case "r":
 			return h.deck.ReloadFocused(), true
+		case "ctrl+p":
+			return h.openAppContentFinder(), true
+		case "f":
+			return h.openAppContentProjectSearch(), true
 		case "m":
 			v.ToggleRenderMode()
 			return nil, true
@@ -1210,6 +1284,18 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return nil, true
 		case "ctrl+r":
 			return docview.Reveal(v.Root(), v.Title()), true
+		case "I":
+			return h.openAppContentInfo(v, leaf.ID), true
+		case "Y", "shift+y":
+			return docview.YankPath(v.Title()), true
+		case "y":
+			return v.YankSelectionOrContents(), true
+		case "+":
+			m.resizeAppContentFocused(h, 5)
+			return nil, true
+		case "-":
+			m.resizeAppContentFocused(h, -5)
+			return nil, true
 		}
 		v.HandleKey(key)
 		return nil, true
@@ -1306,6 +1392,50 @@ func (h *appContentDeck) cycleCombinedFocus(reverse bool) tea.Cmd {
 	return nil
 }
 
+// resizeAppContentFocused grows or shrinks the focused passive leaf against
+// its nearest enclosing split. The sign follows the leaf rather than the
+// split's A/B ordering, matching the Workspace document pane's +/- behavior.
+func (m *Model) resizeAppContentFocused(h *appContentDeck, delta int) {
+	if h == nil || h.deck == nil || delta == 0 {
+		return
+	}
+	root := h.deck.Tree()
+	parent, inA := enclosingAppContentSplit(root, h.deck.FocusedLeaf())
+	if parent == nil || parent.Split == nil {
+		return
+	}
+	ratio := parent.Split.Ratio
+	if inA {
+		ratio += delta
+	} else {
+		ratio -= delta
+	}
+	if h.deck.SetRatio(parent.ID, ratio) {
+		m.persistAppContentDeck(h)
+	}
+}
+
+func enclosingAppContentSplit(node *panelayout.Node, leafID int) (*panelayout.Node, bool) {
+	if node == nil || node.Split == nil {
+		return nil, false
+	}
+	if panelayout.Find(node.Split.A, leafID) != nil {
+		if node.Split.A.ID == leafID {
+			return node, true
+		}
+		if parent, inA := enclosingAppContentSplit(node.Split.A, leafID); parent != nil {
+			return parent, inA
+		}
+	}
+	if panelayout.Find(node.Split.B, leafID) != nil {
+		if node.Split.B.ID == leafID {
+			return node, false
+		}
+		return enclosingAppContentSplit(node.Split.B, leafID)
+	}
+	return nil, false
+}
+
 type appDeckFocusCycler struct{ h *appContentDeck }
 
 func (c appDeckFocusCycler) AtFocusCycleEnd(reverse bool) bool {
@@ -1361,6 +1491,9 @@ func (m Model) appContentContext() (string, bool) {
 		if view, ok := h.deck.Viewer(leaf.ID).(*docview.Model); ok && view.SearchActive() {
 			return "workspace-doc-find", true
 		}
+		if h.appContentSearchActive() {
+			return "workspace-doc-search", true
+		}
 		return "workspace-doc", true
 	case panelayout.Issue:
 		return "workspace-issue", true
@@ -1392,6 +1525,13 @@ func (m *Model) appContentCommands() []plugin.Command {
 		}
 		return cmds
 	}
+	if ctx == "workspace-doc-search" {
+		return []plugin.Command{
+			command("search-open", "Open", "Open the selected file in this pane", 1),
+			command("search-open-tab", "Tab+", "Open the selected file in a new tab", 2),
+			command("search-cancel", "Cancel", "Close the search and return to the document", 3),
+		}
+	}
 	if ctx == "workspace-doc-edit" {
 		return nil
 	}
@@ -1413,15 +1553,24 @@ func (m *Model) appContentCommands() []plugin.Command {
 		cmds = append(cmds,
 			command("search-content", "InFile", "Search this file's contents", 7),
 			command("edit", "Edit", "Edit this file inline", 8),
-			command("toggle-wrap", "Wrap", "Toggle line wrapping", 10),
-			command("reveal", "Reveal", "Reveal in file manager", 11),
+			command("edit-external", "Editor", "Open this file in the external editor", 9),
+			command("reload", "Reload", "Reload this file from disk", 10),
+			command("find-file", "Find", "Find a file by name in this pane", 11),
+			command("search-project", "Search", "Search the project in this pane", 12),
+			command("toggle-wrap", "Wrap", "Toggle line wrapping", 14),
+			command("reveal", "Reveal", "Reveal in file manager", 15),
+			command("info", "Info", "Show file info", 16),
+			command("yank-path", "Path", "Copy the relative path", 17),
+			command("yank-contents", "Yank", "Copy file contents", 18),
+			command("resize-pane-grow", "Grow", "Grow document pane", 19),
+			command("resize-pane-shrink", "Shrink", "Shrink document pane", 20),
 		)
 		if terminallink.Markdown(v.Title()) {
 			name := "Raw"
 			if !v.Rendered() {
 				name = "Render"
 			}
-			cmds = append(cmds, command("render", name, "Toggle rendered and raw markdown", 9))
+			cmds = append(cmds, command("render", name, "Toggle rendered and raw markdown", 13))
 		}
 	case *issueview.Model:
 		cmds = append(cmds,
@@ -1500,12 +1649,36 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 			view.StartSearch()
 		case "edit":
 			return m.enterAppContentDocumentEdit()
+		case "edit-external":
+			return docview.EditExternal(view.Root(), view.Title(), view.ScrollOffset()+1)
+		case "reload":
+			return h.deck.ReloadFocused()
+		case "find-file":
+			return h.openAppContentFinder()
+		case "search-project":
+			return h.openAppContentProjectSearch()
 		case "render":
 			view.ToggleRenderMode()
 		case "toggle-wrap":
 			view.ToggleWrap()
 		case "reveal":
 			return docview.Reveal(view.Root(), view.Title())
+		case "info":
+			return h.openAppContentInfo(view, leaf.ID)
+		case "yank-path":
+			return docview.YankPath(view.Title())
+		case "yank-contents":
+			return view.YankSelectionOrContents()
+		case "resize-pane-grow":
+			m.resizeAppContentFocused(h, 5)
+		case "resize-pane-shrink":
+			m.resizeAppContentFocused(h, -5)
+		case "search-open":
+			return m.handleAppContentSearchKey(appContentKeyPress("enter"))
+		case "search-open-tab":
+			return m.handleAppContentSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+		case "search-cancel":
+			return m.handleAppContentSearchKey(appContentKeyPress("esc"))
 		case "confirm":
 			_, cmd := view.HandleSearchKey(tea.KeyPressMsg{Code: tea.KeyEnter})
 			return cmd

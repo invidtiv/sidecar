@@ -247,13 +247,29 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tea.Batch(cmds...)
+	case appDeckSearchMsg:
+		if h := m.contentDecks[msg.DeckKey]; h != nil {
+			if cmd := h.applyAppContentSearchMsg(msg); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case appDeckInfoMsg:
+		if h := m.contentDecks[msg.DeckKey]; h != nil {
+			h.applyAppContentInfoMsg(msg)
+		}
+		return m, tea.Batch(cmds...)
 	case paneSwitcherPickerDataMsg:
 		(&m).applyPaneSwitcherPickerData(msg)
 		return m, tea.Batch(cmds...)
 	case paneSwitcherFilesMsg:
 		(&m).applyPaneSwitcherFiles(msg)
 		return m, tea.Batch(cmds...)
-	case docview.LoadedMsg, docview.GitInfoMsg, issueview.LoadedMsg, noteview.LoadedMsg,
+	case docview.GitInfoMsg:
+		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case docview.LoadedMsg, issueview.LoadedMsg, noteview.LoadedMsg,
 		workspacediff.SnapshotMsg, workspacediff.RangeMsg, workspacediff.CommitDetailMsg, workspacediff.CommitFileDiffMsg,
 		resourceview.ResolvedMsg:
 		if cmd := (&m).applyAppContentBroadcast(msg); cmd != nil {
@@ -1150,6 +1166,20 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.updateContext()
 			return m, cmd
 		}
+	}
+	// A finder or project search belongs to the app-owned document leaf, not to
+	// the primary plugin under it. It takes the same precedence as the two
+	// Workspace hosts' pane searches: every key is query input except ctrl+c,
+	// which remains Sidecar's interrupt.
+	if !m.hasModal() && !m.globalOverlayOwnsKeys() && m.appContentSearchActive() {
+		if msg.String() == "ctrl+c" {
+			m.initQuitModal()
+			m.showQuitConfirm = true
+			return m, nil
+		}
+		cmd, _ := m.handleAppContentKey(msg)
+		m.updateContext()
+		return m, cmd
 	}
 	if !m.hasModal() && !m.globalOverlayOwnsKeys() &&
 		(m.activeContext == "workspace-interactive" || m.activeContext == "file-browser-inline-edit" ||
@@ -2221,6 +2251,13 @@ func (m *Model) pluginBlocksGlobalKeys() bool {
 	if m.hasModal() {
 		return false
 	}
+	// A plugin mode left open in the primary leaf is visually underneath a
+	// focused app-owned content pane. Its modal/input claims stop at that focus
+	// boundary; otherwise Files quick-open can steal ctrl+p/f from the document
+	// the user is visibly typing into.
+	if m.appContentPassiveFocused() {
+		return false
+	}
 	p := m.focusedSurface()
 	blocker, ok := p.(plugin.GlobalKeyBlocker)
 	return ok && blocker.BlocksGlobalKeys()
@@ -2282,6 +2319,15 @@ func (m *Model) consumesTextInput() bool {
 // above all, which has to know whether the keys it is about to advertise are
 // already spoken for.
 func (m Model) textInputFocused() bool {
+	if m.appContentSearchActive() {
+		return true
+	}
+	// The primary plugin may retain an input mode while focus moves to an
+	// app-owned sibling. It is no longer the keyboard owner until Primary is
+	// focused again.
+	if m.appContentPassiveFocused() {
+		return isTextInputContext(m.activeContext)
+	}
 	// A global view overlays the plugin pane and takes keyboard focus, so a
 	// plugin sitting in a text-input mode underneath it does not consume keys.
 	// focusedSurface answers nil for exactly that case.

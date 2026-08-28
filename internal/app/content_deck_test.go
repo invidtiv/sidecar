@@ -14,6 +14,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/contentpanes"
@@ -25,10 +26,12 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resource"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
+	"github.com/marcus/sidecar/internal/textselect"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -46,6 +49,8 @@ type deckHostTestPlugin struct {
 	linkRect      mouse.Rect
 	linkKinds     contentlink.KindSet
 	zeroLinkKinds bool
+	consumeText   bool
+	blockGlobal   bool
 }
 
 type queuedAppDeckTestMsg struct{}
@@ -76,6 +81,8 @@ func (p *deckHostTestPlugin) SetPaneFocus(id string) tea.Cmd {
 	return nil
 }
 func (p *deckHostTestPlugin) SetPaneFocusActive(active bool) { p.innerActive = active }
+func (p *deckHostTestPlugin) ConsumesTextInput() bool        { return p.consumeText }
+func (p *deckHostTestPlugin) BlocksGlobalKeys() bool         { return p.blockGlobal }
 func (p *deckHostTestPlugin) ContentLinkSurfaces() []contentlink.Surface {
 	rect := p.linkRect
 	if rect == (mouse.Rect{}) {
@@ -649,17 +656,15 @@ func TestAppContentDeckAdvertisesAndRunsSupportedViewerCommands(t *testing.T) {
 		return commands
 	}
 
-	docCommands := assertCommands(panelayout.Document, "search-content", "edit", "render", "toggle-wrap", "reveal")
-	// Finder, project search, file info, sidebar and resize are Workspace host
-	// surfaces, not docview interactions. The app deck does not advertise them
-	// until it has those host adapters.
-	for _, excluded := range []string{"find-file", "search-project", "info", "toggle-sidebar", "resize-pane-grow", "resize-pane-shrink"} {
+	docCommands := assertCommands(panelayout.Document,
+		"search-content", "edit", "edit-external", "reload", "find-file", "search-project", "render", "toggle-wrap",
+		"reveal", "info", "yank-path", "yank-contents", "resize-pane-grow", "resize-pane-shrink")
+	// The Workspace sidebar command has no app-deck equivalent: the primary is
+	// a complete plugin surface, not the document pane's sidebar.
+	for _, excluded := range []string{"toggle-sidebar"} {
 		if _, ok := docCommands[excluded]; ok {
 			t.Fatalf("unsupported app host command %q was advertised", excluded)
 		}
-	}
-	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'I', Text: "I"}); !handled {
-		t.Fatal("unsupported Workspace-only info key escaped the focused passive document")
 	}
 	doc := h.deck.Viewer(h.deck.Leaf(panelayout.Document)).(*docview.Model)
 	beforeRendered, beforeWrap := doc.Rendered(), doc.Wrap()
@@ -673,6 +678,49 @@ func TestAppContentDeckAdvertisesAndRunsSupportedViewerCommands(t *testing.T) {
 		t.Fatal("InFile command did not enter shared docview search")
 	}
 	doc.CloseSearch()
+	docCommands["find-file"].Handler()
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindFinder {
+		t.Fatal("Find command did not open the shared pane finder")
+	}
+	h.closeAppContentSearch()
+	docCommands["search-project"].Handler()
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindProject {
+		t.Fatal("Search command did not open the shared pane project search")
+	}
+	h.closeAppContentSearch()
+	infoCmd := docCommands["info"].Handler()
+	if h.info == nil {
+		t.Fatal("Info command did not open the shared document info modal")
+	}
+	if infoCmd == nil {
+		t.Fatal("Info command did not fetch git metadata")
+	}
+	wrapped, ok := infoCmd().(appDeckInfoMsg)
+	if !ok || wrapped.DeckKey != h.key || wrapped.LeafID != h.infoLeaf {
+		t.Fatalf("Info command result = %#v, want deck %q leaf %d", wrapped, h.key, h.infoLeaf)
+	}
+	seen := len(p.seen)
+	wrong := appDeckInfoMsg{DeckKey: h.key + "-other", LeafID: h.infoLeaf, Msg: docview.GitInfoMsg{
+		Path: "README.md", Status: "wrong project", LastCommit: "wrong commit",
+	}}
+	m.Update(wrong)
+	if h.info.GitStatus != "Loading..." {
+		t.Fatalf("cross-deck info result was accepted: %+v", h.info)
+	}
+	right := wrong
+	right.DeckKey = h.key
+	m.Update(right)
+	if h.info.GitStatus != "wrong project" || len(p.seen) != seen {
+		t.Fatalf("targeted info = %+v plugin seen %d -> %d", h.info, seen, len(p.seen))
+	}
+	h.info, h.infoLeaf = nil, 0
+	before := h.deck.Tree()
+	parentBefore, _ := enclosingAppContentSplit(before, h.deck.FocusedLeaf())
+	docCommands["resize-pane-grow"].Handler()
+	parentAfter, _ := enclosingAppContentSplit(h.deck.Tree(), h.deck.FocusedLeaf())
+	if parentBefore == nil || parentAfter == nil || parentBefore.Split.Ratio == parentAfter.Split.Ratio {
+		t.Fatalf("Grow command did not resize focused document: before=%+v after=%+v", parentBefore, parentAfter)
+	}
 
 	assertCommands(panelayout.Issue, "open-item", "open-in-td", "yank-issue", "yank-issue-key")
 	issue := h.deck.Viewer(h.deck.Leaf(panelayout.Issue)).(*issueview.Model)
@@ -696,6 +744,283 @@ func TestAppContentDeckAdvertisesAndRunsSupportedViewerCommands(t *testing.T) {
 	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindResource, Provider: "test", Matcher: "item", Value: "one"})
 	m.renderContent(200, 40)
 	assertCommands(panelayout.Resource, resourceview.CommandRefresh, resourceview.CommandOpenSource)
+}
+
+func TestAppContentDeckDocumentFindAndSearchOwnTheFocusedPane(t *testing.T) {
+	root := t.TempDir()
+	for path, body := range map[string]string{
+		"README.md":      "# title\nbody\n",
+		"docs/guide.md":  "guide needle\n",
+		"cmd/sidecar.go": "package main\n",
+	} {
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := appDeckTestModel(t, root, p)
+	m.renderContent(180, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"})
+	m.renderContent(180, 40)
+	h := m.currentContentDeck()
+	docID := h.deck.Leaf(panelayout.Document)
+
+	adopt := func(updated tea.Model) {
+		t.Helper()
+		switch updated := updated.(type) {
+		case Model:
+			*m = updated
+		case *Model:
+			m = updated
+		default:
+			t.Fatalf("updated model type %T", updated)
+		}
+	}
+	press := func(msg tea.KeyPressMsg) tea.Cmd {
+		t.Helper()
+		updated, cmd := m.Update(msg)
+		adopt(updated)
+		return cmd
+	}
+
+	press(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindFinder || m.activeContext != "workspace-doc-search" {
+		t.Fatalf("ctrl+p mode=%v context=%q", h.search.mode, m.activeContext)
+	}
+	press(tea.KeyPressMsg{Code: 'g', Text: "g"})
+	if got := h.search.mode.Query(); got != "g" {
+		t.Fatalf("finder query = %q, want g", got)
+	}
+	if frame := m.renderContent(180, 40); !strings.Contains(ansi.Strip(frame), "⌕ Find g") {
+		t.Fatalf("focused pane header did not identify its finder: %q", frame)
+	}
+	press(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if h.search.mode != nil || m.activeContext != "workspace-doc" {
+		t.Fatalf("finder cancel mode=%v context=%q", h.search.mode, m.activeContext)
+	}
+
+	press(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindProject || m.activeContext != "workspace-doc-search" {
+		t.Fatalf("f mode=%v context=%q", h.search.mode, m.activeContext)
+	}
+	press(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if got := h.search.mode.Query(); got != "n" {
+		t.Fatalf("project-search query = %q, want n", got)
+	}
+
+	cmd := m.applyAppContentSearchOutcome(h, panesearch.Outcome{Open: true, Path: "docs/guide.md", Line: 1}, nil)
+	if cmd == nil || h.search.mode != nil || h.deck.FocusedLeaf() != docID {
+		t.Fatalf("replace result cmd=%v mode=%v focused=%d want=%d", cmd != nil, h.search.mode, h.deck.FocusedLeaf(), docID)
+	}
+	items, active := h.deck.Tabs(docID)
+	if len(items) != 1 || active != 0 || items[0].Ref.Value != "docs/guide.md" {
+		t.Fatalf("replace result tabs=%+v active=%d", items, active)
+	}
+
+	h.openAppContentFinder()
+	cmd = m.applyAppContentSearchOutcome(h, panesearch.Outcome{Open: true, Path: "cmd/sidecar.go", NewTab: true}, nil)
+	items, active = h.deck.Tabs(docID)
+	if cmd == nil || len(items) != 2 || active != 1 || items[1].Ref.Value != "cmd/sidecar.go" {
+		t.Fatalf("new-tab result cmd=%v tabs=%+v active=%d", cmd != nil, items, active)
+	}
+}
+
+func TestAppContentDeckReopenedSearchRejectsQueuedPriorGeneration(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	h := m.currentContentDeck()
+	h.openAppContentProjectSearch()
+	stale := appDeckSearchMsg{
+		DeckKey: h.key, LeafID: h.search.leafID, Generation: h.search.generation,
+	}
+	h.closeAppContentSearch()
+	h.openAppContentProjectSearch()
+	if stale.Generation == h.search.generation {
+		t.Fatalf("reopened search reused generation %d", stale.Generation)
+	}
+	if h.appContentSearchMsgCurrent(stale) {
+		t.Fatal("reopened search accepted a queued result from its prior mode")
+	}
+	current := stale
+	current.Generation = h.search.generation
+	if !h.appContentSearchMsgCurrent(current) {
+		t.Fatal("current search generation did not match its own envelope")
+	}
+}
+
+func TestAppContentDeckDocumentKeysOutrankStalePrimaryInput(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# title\nbody\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{
+		id: "file-browser", focus: "preview", frame: "primary",
+		consumeText: true, blockGlobal: true,
+	}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	m.renderContent(180, 40)
+	var h *appContentDeck
+	seen := len(p.seen)
+	adopt := func(updated tea.Model) {
+		t.Helper()
+		switch updated := updated.(type) {
+		case Model:
+			*m = updated
+		case *Model:
+			m = updated
+		default:
+			t.Fatalf("updated model type %T", updated)
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	adopt(updated)
+	h = m.currentContentDeck()
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindFinder {
+		t.Fatal("primary plugin's stale input claim stole ctrl+p from the focused document")
+	}
+	if len(p.seen) != seen {
+		t.Fatalf("focused document key reached stale primary mode: seen %d -> %d", seen, len(p.seen))
+	}
+
+	h.closeAppContentSearch()
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'f', Text: "f"})
+	adopt(updated)
+	h = m.currentContentDeck()
+	if !h.appContentSearchActive() || h.search.mode.Kind() != panesearch.KindProject {
+		t.Fatal("primary plugin's stale blocking overlay stole f from the focused document")
+	}
+}
+
+func TestAppContentDeckSearchLeavesHeaderCloseOneClick(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# title\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	h := m.currentContentDeck()
+	h.openAppContentFinder()
+	m.renderContent(180, 40)
+
+	var close *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		if region.ID == appDeckCloseRegion {
+			copy := region
+			close = &copy
+			break
+		}
+	}
+	if close == nil {
+		t.Fatal("document header has no close region")
+	}
+	if _, handled := m.appContentMouse(tea.MouseClickMsg(tea.Mouse{
+		X: close.Rect.X + close.Rect.W/2, Y: close.Rect.Y, Button: tea.MouseLeft,
+	})); !handled {
+		t.Fatal("search did not route the visible header close")
+	}
+	if h.search.mode != nil || h.deck.Leaf(panelayout.Document) != 0 {
+		t.Fatalf("one click left search=%v document=%d, want both closed", h.search.mode, h.deck.Leaf(panelayout.Document))
+	}
+}
+
+func TestAppContentDeckSearchHeaderCloseTargetsTheClickedPane(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# title\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	h := m.currentContentDeck()
+	m.renderContent(300, 40)
+	m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindIssue, Value: "td-a91834"})
+	docID, issueID := h.deck.Leaf(panelayout.Document), h.deck.Leaf(panelayout.Issue)
+	if docID == 0 || issueID == 0 {
+		t.Fatalf("test panes did not open: document=%d issue=%d", docID, issueID)
+	}
+	h.deck.FocusLeaf(docID)
+	h.openAppContentFinder()
+	m.renderContent(300, 40)
+
+	var close *mouse.Region
+	for _, region := range h.mouse.HitMap.Regions() {
+		leafID, ok := region.Data.(int)
+		if region.ID == appDeckCloseRegion && ok && leafID == issueID {
+			copy := region
+			close = &copy
+			break
+		}
+	}
+	if close == nil {
+		t.Fatal("other pane header has no close region")
+	}
+	m.appContentMouse(tea.MouseClickMsg(tea.Mouse{
+		X: close.Rect.X + close.Rect.W/2, Y: close.Rect.Y, Button: tea.MouseLeft,
+	}))
+	if h.deck.Leaf(panelayout.Issue) != 0 || h.deck.Leaf(panelayout.Document) != docID {
+		t.Fatalf("header close left issue=%d document=%d, want issue closed and document=%d", h.deck.Leaf(panelayout.Issue), h.deck.Leaf(panelayout.Document), docID)
+	}
+}
+
+func TestAppContentDeckDocumentSelectionKeysPrecedePaneEscape(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("alpha beta\nsecond line\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	m.renderContent(180, 40)
+	h := m.currentContentDeck()
+	docID := h.deck.Leaf(panelayout.Document)
+	view := h.deck.Viewer(docID).(*docview.Model)
+
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}); !handled || !view.HasSelection() {
+		t.Fatal("configured select-all was not handled by the focused document")
+	}
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: tea.KeyEscape}); !handled {
+		t.Fatal("escape did not clear the document selection")
+	}
+	if view.HasSelection() || h.deck.Leaf(panelayout.Document) != docID {
+		t.Fatal("escape hid the pane instead of clearing its live selection")
+	}
+	if _, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'a', Mod: tea.ModCtrl}); !handled || !view.HasSelection() {
+		t.Fatal("select-all did not prepare the y selection-parity case")
+	}
+	selected := textselect.SelectionText(view.SelectionText())
+	clip.ResetRecent()
+	t.Cleanup(clip.ResetRecent)
+	if cmd, handled := m.handleAppContentKey(tea.KeyPressMsg{Code: 'y', Text: "y"}); !handled || cmd == nil {
+		t.Fatal("y did not use the shared copy-file-contents behavior")
+	}
+	if copied, ok := clip.LastCopied(); !ok || copied != selected {
+		t.Fatalf("y copied %q, want live selection %q", copied, selected)
+	}
+}
+
+func TestAppContentDeckShutdownReleasesActiveSearch(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("needle\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := openAppDeckDocument(t, appDeckTestModel(t, root, p), root, p.id, "README.md")
+	h := m.currentContentDeck()
+	h.openAppContentProjectSearch()
+	if h.search.mode == nil {
+		t.Fatal("project search did not open")
+	}
+	m.shutdown()
+	if h.search.mode != nil {
+		t.Fatal("shutdown did not close the active project search")
+	}
 }
 
 func TestAppContentDeckBorderlessPrimaryRuleIsCapabilityDriven(t *testing.T) {

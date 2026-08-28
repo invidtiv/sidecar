@@ -14,12 +14,31 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/clip"
 	"github.com/marcus/sidecar/internal/msg"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/textselect"
+	"github.com/marcus/sidecar/internal/tty"
 )
 
 // RevealErrorMsg is sent when reveal in the OS file manager fails.
 type RevealErrorMsg struct {
 	Err error
+}
+
+// EditExternal opens a document through Sidecar's shared external-editor
+// launcher. Hosts pass the viewer's root and title so the action remains tied
+// to the focused document rather than to a primary file-browser selection.
+func EditExternal(root, path string, line int) tea.Cmd {
+	if path == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		return plugin.OpenFileMsg{
+			Editor: tty.ResolveEditor(),
+			Path:   resolvePath(root, path),
+			LineNo: line,
+		}
+	}
 }
 
 // GitInfoMsg is git status and last commit for a path.
@@ -114,6 +133,25 @@ func YankContents(root, path string) tea.Cmd {
 			return msg.FlashMsg{Text: r.Message(fmt.Sprintf("Copied %d lines", lines))}
 		},
 	)
+}
+
+// YankSelectionOrContents matches the Files preview's y behavior for every
+// document host: copy the visible selection when one exists, otherwise copy
+// the file itself. Keeping the choice here prevents each pane projection from
+// quietly choosing a different source.
+func (m *Model) YankSelectionOrContents() tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if selected := m.SelectionText(); len(selected) > 0 {
+		return m.SelectionCopyCmd(textselect.Result{Copy: selected, CopyAsked: true}, func(notice textselect.CopyNotice) tea.Msg {
+			if notice.IsError {
+				return msg.ToastMsg{Message: notice.Message, Duration: notice.Duration, IsError: true}
+			}
+			return msg.FlashMsg{Text: notice.Message}
+		})
+	}
+	return YankContents(m.Root(), m.Title())
 }
 
 // FetchGitInfo retrieves git status and last commit for a root-relative path.
