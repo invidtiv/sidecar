@@ -42,9 +42,9 @@ const (
 	GroupNoSession      Group = "No Session"
 )
 
-// SectionTitle words a list section's heading. Both the project sidebar and the
-// global browser render through it so a heading cannot gain a count on one
-// surface and lose it on the other.
+// SectionTitle words the semantic name/count pair for a list section. The
+// shared sidebar renderer adds the category glyph, uppercase treatment, and
+// trailing rule around the same pair for both project and global surfaces.
 //
 // The Kanban board words its lane headers itself: a column is as narrow as 17
 // columns there, which "Needs Attention (0)" overruns, and its label and count

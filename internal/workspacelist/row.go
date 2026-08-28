@@ -116,7 +116,7 @@ func RenderRow(row RowPresentation, width int, selected, focused bool) []string 
 	}
 	return []string{
 		finishRowLine(row.Marker, icon, rest, width, false, focused),
-		styles.ListItemNormal.Width(width).Render(fit(line2, width)),
+		paintCardLine(line2, width),
 	}
 }
 
@@ -250,7 +250,44 @@ func finishRowLine(marker RowMarker, icon, rest string, width int, selected, foc
 	if selected {
 		return paintSelectedLine(marker, icon, rest, width, focused)
 	}
-	return styles.ListItemNormal.Width(width).Render(fit(" "+markerStyle(marker).Render(icon)+rest, width))
+	return paintCardLine(" "+markerStyle(marker).Render(icon)+rest, width)
+}
+
+// paintCardLine fills an unselected workspace card with the theme's secondary
+// surface. Nested marker and provider styles end with an ANSI reset; wrapping
+// the completed line in one parent style would therefore punch a background-
+// coloured hole after each nested span. Repaint each reset-delimited segment
+// instead so every cell, including the marker and right padding, owns the card
+// background while each nested foreground or chip remains intact.
+func paintCardLine(line string, width int) string {
+	line = fit(line, width)
+	style := styles.ListItemNormal.Background(styles.BgSecondary)
+	var painted strings.Builder
+	for line != "" {
+		at, resetWidth := firstANSIReset(line)
+		if at < 0 {
+			painted.WriteString(style.Render(line))
+			break
+		}
+		if at > 0 {
+			painted.WriteString(style.Render(line[:at]))
+		}
+		line = line[at+resetWidth:]
+	}
+	return painted.String()
+}
+
+func firstANSIReset(line string) (at, width int) {
+	short := strings.Index(line, "\x1b[m")
+	long := strings.Index(line, "\x1b[0m")
+	switch {
+	case short < 0:
+		return long, len("\x1b[0m")
+	case long < 0 || short < long:
+		return short, len("\x1b[m")
+	default:
+		return long, len("\x1b[0m")
+	}
 }
 
 // paintSelectedLine applies the selection fill without wrapping a pre-rendered

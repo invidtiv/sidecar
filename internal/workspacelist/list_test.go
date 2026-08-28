@@ -280,7 +280,7 @@ func TestModelTogglePinHeadsTheListAndDoesNotDuplicate(t *testing.T) {
 		t.Fatalf("visible after pin = %s, want pinned first then activity", got)
 	}
 	view := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20}).View)
-	if !strings.Contains(view, "Pinned (2)") {
+	if !strings.Contains(view, "📌 PINNED (2)") {
 		t.Fatalf("missing Pinned heading:\n%s", view)
 	}
 	if strings.Count(view, "old worktree") != 1 || strings.Count(view, "modal look and feel") != 1 {
@@ -407,7 +407,7 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	m.SetItems(items())
 
 	wide := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
-	for _, want := range []string{"Workspaces", "Activity", "Needs Attention (1)", "Working (1)", "No Session (1)", "sidecar", "braid"} {
+	for _, want := range []string{"Workspaces", "Activity", "◆ NEEDS ATTENTION (1)", "● WORKING (1)", "○ NO SESSION (1)", "sidecar", "braid"} {
 		if !strings.Contains(wide, want) {
 			t.Fatalf("wide render is missing %q:\n%s", want, wide)
 		}
@@ -423,14 +423,10 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	if strings.Contains(wide, "/ filter") {
 		t.Fatalf("an unfiltered list drew the filter row:\n%s", wide)
 	}
-	// One blank line separates the panel's chrome from its content, so the first
-	// heading is the row after it rather than flush under the title.
+	// The first visible section is flush against the panel chrome.
 	rows := strings.Split(wide, "\n")
-	if strings.TrimSpace(rows[1]) != "" {
-		t.Fatalf("no blank line under the title, got %q", rows[1])
-	}
-	if got := rows[2]; !strings.Contains(got, "Needs Attention (1)") {
-		t.Fatalf("the first heading is on row %q, want it one blank line under the title", got)
+	if got := rows[1]; !strings.Contains(got, "◆ NEEDS ATTENTION (1)") {
+		t.Fatalf("the first heading is on row %q, want it flush under the title", got)
 	}
 	m.FocusFilter()
 	filtering := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces", Focused: true}).View)
@@ -454,14 +450,14 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	// Project and Recent print headings; Name stays a flat run.
 	m.SetSort(SortProject)
 	projectView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Title: "Workspaces"}).View)
-	for _, want := range []string{"sidecar (2)", "braid (1)", "td (1)"} {
+	for _, want := range []string{"○ SIDECAR (2)", "○ BRAID (1)", "○ TD (1)"} {
 		if !strings.Contains(projectView, want) {
 			t.Fatalf("project sort missing heading %q:\n%s", want, projectView)
 		}
 	}
 	m.SetSort(SortRecent)
 	recentView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20, Now: time.Date(2026, 8, 11, 12, 30, 0, 0, time.UTC)}).View)
-	if !strings.Contains(recentView, "New (1)") || !strings.Contains(recentView, "Today (2)") {
+	if !strings.Contains(recentView, "○ NEW (1)") || !strings.Contains(recentView, "○ TODAY (2)") {
 		t.Fatalf("recent sort missing buckets:\n%s", recentView)
 	}
 	if strings.Contains(recentView, "This week") {
@@ -469,7 +465,7 @@ func TestRenderShowsCountsGroupsNoMatchAndNarrowRows(t *testing.T) {
 	}
 	m.SetSort(SortName)
 	nameView := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 20}).View)
-	if strings.Contains(nameView, " (") && strings.Contains(nameView, "sidecar (") {
+	if strings.Contains(nameView, " (") && strings.Contains(nameView, "SIDECAR (") {
 		t.Fatalf("name sort grew project headings:\n%s", nameView)
 	}
 	m.SetSort(SortActivity)
@@ -692,7 +688,7 @@ func TestProjectSortDropsTheRedundantProjectFromEachRow(t *testing.T) {
 
 	m.SetSort(SortProject)
 	byProject := ansi.Strip(m.Render(RenderOptions{Width: 46, Height: 24, Title: "Workspaces", Focused: true}).View)
-	if !strings.Contains(byProject, "sidecar (2)") {
+	if !strings.Contains(byProject, "○ SIDECAR (2)") {
 		t.Fatalf("project heading missing:\n%s", byProject)
 	}
 	for _, line := range strings.Split(byProject, "\n") {

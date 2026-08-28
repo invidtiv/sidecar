@@ -82,15 +82,62 @@ func TestSelectedRowNameKeepsSelectionBackground(t *testing.T) {
 	}
 }
 
+func TestCardTintCoversBothLinesAndSelectionOverridesIt(t *testing.T) {
+	row := RowPresentation{
+		Marker:        RowMarker{Icon: "●", Lane: "working"},
+		Kind:          KindWorktree,
+		Name:          "workspace cards",
+		Provider:      "codex",
+		AfterProvider: []RowField{PlainField("working")},
+	}
+	unselected := RenderRow(row, 46, false, true)
+	if len(unselected) != 2 {
+		t.Fatalf("unselected row has %d lines, want 2", len(unselected))
+	}
+	for _, target := range []struct {
+		line int
+		text string
+	}{
+		{0, "●"},         // nested marker foreground
+		{0, "workspace"}, // content after the marker reset
+		{1, "working"},   // content after the provider chip reset
+	} {
+		if !segmentHasBackground(unselected[target.line], target.text) {
+			t.Fatalf("card line %d segment %q has no background: %q", target.line, target.text, unselected[target.line])
+		}
+	}
+
+	cardBackground := segmentBackground(unselected[0], "workspace")
+	if cardBackground == "" {
+		t.Fatal("unselected card has no identifiable background")
+	}
+	for _, focused := range []bool{true, false} {
+		selected := RenderRow(row, 46, true, focused)
+		if len(selected) != 2 {
+			t.Fatalf("focused=%v selected row has %d lines, want 2", focused, len(selected))
+		}
+		for line, target := range []string{"workspace", "working"} {
+			got := segmentBackground(selected[line], target)
+			if got == "" || got == cardBackground {
+				t.Fatalf("focused=%v selected line %d did not override the card tint: card=%q selected=%q line=%q", focused, line, cardBackground, got, selected[line])
+			}
+		}
+	}
+}
+
 func segmentHasBackground(styled, text string) bool {
+	return segmentBackground(styled, text) != ""
+}
+
+func segmentBackground(styled, text string) string {
 	plain := ansi.Strip(styled)
 	at := strings.Index(plain, text)
 	if at < 0 {
-		return false
+		return ""
 	}
 	target := at
 	pos := 0
-	bg := false
+	bg := ""
 	i := 0
 	for i < len(styled) {
 		if styled[i] != 0x1b {
@@ -106,17 +153,17 @@ func segmentHasBackground(styled, text string) bool {
 			j++
 		}
 		if j >= len(styled) {
-			return false
+			return ""
 		}
 		code := styled[i : j+1]
 		if code == "\x1b[m" || code == "\x1b[0m" {
-			bg = false
+			bg = ""
 		} else if strings.Contains(code, "48;") {
-			bg = true
+			bg = code
 		}
 		i = j + 1
 	}
-	return false
+	return ""
 }
 
 func TestRowProviderChipAndSelectedLabelTreatment(t *testing.T) {

@@ -508,7 +508,11 @@ func selectionStyle(focused bool) lipgloss.Style {
 	if focused {
 		return styles.ListItemSelected
 	}
-	return lipgloss.NewStyle().Background(styles.BgSecondary).Foreground(styles.TextSecondary)
+	// The ordinary card now owns BgSecondary, so an unfocused selection needs
+	// the next theme surface to remain a selection instead of disappearing into
+	// every neighbouring card. Text stays secondary to preserve the existing
+	// focused/unfocused hierarchy.
+	return lipgloss.NewStyle().Background(styles.BgTertiary).Foreground(styles.TextSecondary)
 }
 
 func fit(line string, width int) string {

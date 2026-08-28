@@ -105,7 +105,7 @@ func TestGlobalWorkspacesListsEveryProjectsShellsAndWorktrees(t *testing.T) {
 
 	for _, want := range []string{
 		"Workspaces", "Activity",
-		"Needs Attention (1)", "Working (1)", "Live (1)",
+		"◆ NEEDS ATTENTION (1)", "● WORKING (1)", "● LIVE (1)",
 		"modal", "Shell 1", "pipeline",
 		"sidecar", "braid",
 	} {
@@ -247,7 +247,7 @@ func TestProjectAndRecentSortsRenderSectionHeadings(t *testing.T) {
 	m.WorkspacesView(60, 24)
 	m.workspaces.SetSort(workspacelist.SortProject)
 	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
-	if !strings.Contains(list, "sidecar (2)") || !strings.Contains(list, "braid (1)") {
+	if !strings.Contains(list, "○ SIDECAR (2)") || !strings.Contains(list, "○ BRAID (1)") {
 		t.Fatalf("project sort lost per-project headings:\n%s", list)
 	}
 
@@ -255,7 +255,7 @@ func TestProjectAndRecentSortsRenderSectionHeadings(t *testing.T) {
 	m.collector.Now = func() time.Time { return now }
 	m.workspaces.SetSort(workspacelist.SortRecent)
 	list = ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
-	if !strings.Contains(list, "New (") && !strings.Contains(list, "Today (") {
+	if !strings.Contains(list, "○ NEW (") && !strings.Contains(list, "○ TODAY (") {
 		t.Fatalf("recent sort lost time-bucket headings:\n%s", list)
 	}
 }
@@ -395,7 +395,7 @@ func TestHideIdleWorktreesIsTheDefaultAndTheFlyOutRestoresThem(t *testing.T) {
 		t.Fatalf("turning idle on did not restore the no-session row: %#v", got)
 	}
 	view := ansi.Strip(m.WorkspacesView(60, 24))
-	if !strings.Contains(view, "No Session (1)") || !strings.Contains(view, "dormant") {
+	if !strings.Contains(view, "○ NO SESSION (1)") || !strings.Contains(view, "dormant") {
 		t.Fatalf("idle rows did not return:\n%s", view)
 	}
 
@@ -624,7 +624,7 @@ func TestPinKeyTogglesAPinnedSectionAboveTheSort(t *testing.T) {
 		t.Fatalf("visible = %v, want pinned first then activity", got)
 	}
 	list := ansi.Strip(m.renderWorkspaceList(0, 0, 50, 22))
-	if !strings.Contains(list, "Pinned (2)") {
+	if !strings.Contains(list, "📌 PINNED (2)") {
 		t.Fatalf("missing Pinned heading:\n%s", list)
 	}
 	if strings.Count(list, "sidecar Shell 1") != 1 || strings.Count(list, "sidecar modal") != 1 {
@@ -840,11 +840,8 @@ func TestGlobalListSeparatesChromeAndDropsRepeatedProjectUnderProjectSort(t *tes
 	if !strings.Contains(lines[0], "Workspaces") {
 		t.Fatalf("row 0 is not the panel header: %q", lines[0])
 	}
-	if strings.TrimSpace(lines[1]) != "" {
-		t.Fatalf("no blank line under the global panel header: %q", lines[1])
-	}
-	if strings.TrimSpace(lines[2]) == "" {
-		t.Fatalf("more than one blank line under the header:\n%s", strings.Join(lines[:5], "\n"))
+	if !strings.Contains(lines[1], "◆ NEEDS ATTENTION") {
+		t.Fatalf("first section is not flush under the global panel header: %q", lines[1])
 	}
 
 	m.workspaces.SetSort(workspacelist.SortProject)

@@ -1,6 +1,7 @@
 package workspacelist
 
 import (
+	"fmt"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -39,9 +40,6 @@ type SidebarSection struct {
 	Action *SidebarAction
 	Rows   []SidebarRow
 }
-
-// heading is the section's widest form: name and count together.
-func (s SidebarSection) heading() string { return SectionTitle(s.Title, s.Count) }
 
 // SidebarOptions contains only resolved presentation state. Collection,
 // selection side effects, preview loading and mutations stay with the caller.
@@ -131,30 +129,24 @@ func IsScrollbarRegion(kind RegionKind) bool {
 	return kind == RegionScrollbarTrack || kind == RegionScrollbarThumb
 }
 
-// headerSpacerMinBody is how many body rows must survive the blank line under
-// the panel header for that line to be worth spending. A heading plus two rows
-// is the smallest list that still reads as a list; below that the spacer is
-// costing the user content to buy air, so it is dropped.
-const headerSpacerMinBody = 3
+// emptySpacerMinBody is how many body rows must survive the blank line under
+// the panel header for an empty-state message to afford that breathing room.
+const emptySpacerMinBody = 3
 
-// headerSpacerFits reports whether a short pane can afford the blank line
-// between the panel's chrome and its first content row. The panel header and
-// the section heading beneath it both carry a "+" that creates a workspace, and
-// flush against each other they read as one two-button cluster rather than as
-// chrome and content. One blank line separates them — but not at the cost of
-// clipping the list on a small terminal, which is why the body is measured
-// first.
+// emptySpacerFits reports whether a short pane can afford the blank line
+// between the panel's chrome and an empty-state message. A non-empty list never
+// uses it: its first visible section must sit flush against the chrome, while
+// later sections own their explicit pre-header line.
 //
 // It sits below the filter row rather than directly under the title because the
-// filter is part of the header's chrome, not the first thing in the list: the
-// separator belongs between chrome and content wherever the chrome ends.
-func headerSpacerFits(opts SidebarOptions) bool {
+// filter is part of the header's chrome.
+func emptySpacerFits(opts SidebarOptions) bool {
 	chrome := 1 + len(opts.PrefixLines)
 	if opts.FilterActive {
 		chrome++
 	}
 	chrome += min(len(opts.FooterLines), max(0, opts.Height-chrome))
-	return opts.Height-chrome > headerSpacerMinBody
+	return opts.Height-chrome > emptySpacerMinBody
 }
 
 type sidebarFlatRow struct {
@@ -188,7 +180,13 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		lines = append(lines, fit(opts.FilterLine, width))
 		regions = append(regions, Region{Kind: RegionFilter, X: 0, Y: y, W: width, H: 1})
 	}
-	if headerSpacerFits(opts) {
+	flat := make([]sidebarFlatRow, 0)
+	for sectionIndex, section := range opts.Sections {
+		for _, row := range section.Rows {
+			flat = append(flat, sidebarFlatRow{section: sectionIndex, row: row})
+		}
+	}
+	if len(flat) == 0 && emptySpacerFits(opts) {
 		// Padded rather than empty: this line is chrome, so unlike the body's
 		// section separators it is never widened by the scrollbar join and would
 		// otherwise leave a zero-width line inside a fixed-width box.
@@ -197,12 +195,6 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 
 	footerRows := min(len(opts.FooterLines), max(0, height-len(lines)))
 	bodyHeight := max(0, height-len(lines)-footerRows)
-	flat := make([]sidebarFlatRow, 0)
-	for sectionIndex, section := range opts.Sections {
-		for _, row := range section.Rows {
-			flat = append(flat, sidebarFlatRow{section: sectionIndex, row: row})
-		}
-	}
 
 	scroll := adjustSidebarScroll(flat, opts.Sections, opts.ScrollOffset, bodyHeight, width, opts.SelectedID, opts.Focused, opts.FreeScroll)
 	visibleEnd := sidebarVisibleEnd(flat, opts.Sections, scroll, bodyHeight, width, opts.SelectedID, opts.Focused)
@@ -214,7 +206,13 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 	for i := scroll; i < visibleEnd; i++ {
 		entry := flat[i]
 		section := opts.Sections[entry.section]
-		if entry.section != lastSection && section.Title != "" {
+		if entry.section == lastSection && y > bodyStart {
+			// Adjacent cards get exactly one empty physical line. It is not part
+			// of either row's hit region, and a row scrolled to the top never pays
+			// for a gap whose preceding card is outside the viewport.
+			lines = append(lines, "")
+			y++
+		} else if entry.section != lastSection && section.Title != "" {
 			// Sections are separated by one blank line; the first heading in view
 			// sits flush against the chrome above it, so a scrolled list does not
 			// spend a row on a separator with nothing before it.
@@ -228,7 +226,6 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 				regions = append(regions, Region{Kind: RegionSectionAction, ID: section.Action.ID, X: x, Y: y, W: w, H: 1, SectionHeader: true})
 			}
 			y++
-			lastSection = entry.section
 		}
 		rowLines := sidebarRowLines(entry.row.Render(rowWidth, entry.row.ID == opts.SelectedID, opts.Focused))
 		if len(rowLines) == 0 {
@@ -240,6 +237,7 @@ func RenderSidebar(opts SidebarOptions) SidebarRendered {
 		lines = append(lines, rowLines...)
 		regions = append(regions, Region{Kind: RegionRow, ID: entry.row.ID, X: 0, Y: y, W: rowWidth, H: len(rowLines), VisibleIndex: i, Data: entry.row.Data})
 		y += len(rowLines)
+		lastSection = entry.section
 		visibleRows++
 	}
 	if len(flat) == 0 {
@@ -361,7 +359,9 @@ func sidebarVisibleEnd(flat []sidebarFlatRow, sections []SidebarSection, scroll,
 		entry := flat[end]
 		section := sections[entry.section]
 		need := 0
-		if entry.section != lastSection && section.Title != "" {
+		if entry.section == lastSection && remaining < height {
+			need++ // the inter-card line RenderSidebar draws within a section
+		} else if entry.section != lastSection && section.Title != "" {
 			need++
 			if remaining < height {
 				need++ // the blank separator RenderSidebar draws above the heading
@@ -509,26 +509,89 @@ func headerAttempts(sort, create *SidebarAction) [][]headerCandidate {
 	}
 }
 
-// sidebarSectionHeader lays out one section heading and its optional action.
+// sidebarSectionHeader lays out one category heading and its optional action.
 //
 // The degradation order is deliberate: the action goes first, then the count,
 // then the name truncates. A heading's job is naming what the rows beneath it
 // are, and the panel header already offers the same create action the section
 // "+" does — so when the two compete for a narrow row, the words win.
 func sidebarSectionHeader(section SidebarSection, width int) (string, int, int) {
-	full := section.heading()
+	if width <= 0 || section.Title == "" {
+		return "", 0, 0
+	}
+	full := sectionHeaderLabel(section, true, 0)
 	if section.Action != nil && section.Action.Label != "" {
 		button := renderControl(section.Action)
 		w := ansi.StringWidth(button)
-		if ansi.StringWidth(full)+1+w <= width {
+		// Keep the action only when the full label and at least one rule glyph
+		// fit beside it. The action is the first degradation step; preserving a
+		// button by silently losing the header's rule would invert that order.
+		if ansi.StringWidth(full)+2+w <= width {
 			x := width - w
-			return styles.Muted.Render(full) + strings.Repeat(" ", x-ansi.StringWidth(full)) + button, x, w
+			return sectionHeaderWithRule(full, x) + button, x, w
 		}
 	}
 	if ansi.StringWidth(full) > width {
-		full = section.Title
+		full = sectionHeaderLabel(section, false, 0)
 	}
-	return styles.Muted.Render(full), 0, 0
+	if ansi.StringWidth(full) > width {
+		full = sectionHeaderLabel(section, false, width)
+	}
+	return sectionHeaderWithRule(full, width), 0, 0
+}
+
+// sectionHeaderLabel gives every section the same category grammar. Known
+// activity buckets carry their semantic glyph and colour; project/time/custom
+// groups use the quiet open circle so arbitrary caller-owned titles still fit
+// the shared renderer without inventing a second heading species.
+func sectionHeaderLabel(section SidebarSection, count bool, width int) string {
+	glyph, glyphStyle := sectionHeaderGlyph(section.Title)
+	title := strings.ToUpper(section.Title)
+	countText := fmt.Sprintf("(%d)", section.Count)
+	if width > 0 {
+		available := max(0, width-ansi.StringWidth(glyph)-1)
+		if count {
+			available -= ansi.StringWidth(countText) + 1
+		}
+		if available < 1 {
+			return glyphStyle.Render(glyph)
+		}
+		title = ansi.Truncate(title, available, "…")
+	}
+	label := glyphStyle.Render(glyph) + " " + styles.Title.Render(title)
+	if count {
+		label += " " + styles.Muted.Render(countText)
+	}
+	return label
+}
+
+func sectionHeaderGlyph(title string) (string, lipgloss.Style) {
+	switch strings.ToLower(strings.TrimSpace(title)) {
+	case "pinned":
+		return "📌", lipgloss.NewStyle().Foreground(styles.Warning)
+	case "needs attention":
+		return "◆", lipgloss.NewStyle().Foreground(styles.Error)
+	case "working", "done", "live":
+		return "●", lipgloss.NewStyle().Foreground(styles.Success)
+	default:
+		return "○", styles.Muted
+	}
+}
+
+// sectionHeaderWithRule starts the border-coloured solid rule immediately
+// after the label and extends it through every remaining column. rightEdge is
+// either the full content width or the first cell of a trailing action.
+func sectionHeaderWithRule(label string, rightEdge int) string {
+	labelWidth := ansi.StringWidth(label)
+	if labelWidth >= rightEdge {
+		return ansi.Truncate(label, rightEdge, "…")
+	}
+	ruleWidth := rightEdge - labelWidth - 1
+	rule := " "
+	if ruleWidth > 0 {
+		rule += lipgloss.NewStyle().Foreground(styles.BorderNormal).Render(strings.Repeat("─", ruleWidth))
+	}
+	return label + rule
 }
 
 // MoveIndex applies the shared clamped selection semantics used by keyboard

@@ -50,6 +50,9 @@ func TestInteractiveSidebarEmitsBarRegionsAfterContent(t *testing.T) {
 	if !rendered.Scrollbar.Has {
 		t.Fatal("overflowing list reported no scrollbar")
 	}
+	if rendered.VisibleRows != 4 || rendered.Scrollbar.Params.VisibleItems != 4 || rendered.Scrollbar.Params.TrackHeight != 12 {
+		t.Fatalf("spaced-card scrollbar geometry = visible %d params %#v, want four cards over all 12 painted body rows", rendered.VisibleRows, rendered.Scrollbar.Params)
+	}
 	var track, thumb *Region
 	lastContent := -1
 	for i := range rendered.Regions {
@@ -112,7 +115,17 @@ func indexOfRegion(regions []Region, target *Region) int {
 func TestScrollbarRegionsWinOverRows(t *testing.T) {
 	rendered := RenderSidebar(interactiveOpts())
 	track, _ := barRegions(rendered)
-	rowY := rendered.Scrollbar.Params.TrackHeight / 2
+	var contentRow Region
+	for _, region := range rendered.Regions {
+		if region.Kind == RegionRow {
+			contentRow = region
+			break
+		}
+	}
+	if contentRow.Kind == "" {
+		t.Fatal("rendered list has no row region")
+	}
+	rowY := contentRow.Y - track.Y
 
 	hit, ok := RegionAt(rendered.Regions, track.X, track.Y+rowY)
 	if !ok {
