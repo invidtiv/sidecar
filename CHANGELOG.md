@@ -2,7 +2,7 @@
 
 All notable changes to sidecar are documented here.
 
-## [Unreleased]
+## [v1.10.0] - 2026-08-28
 
 ### Features
 
