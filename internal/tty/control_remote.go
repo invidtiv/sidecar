@@ -123,12 +123,44 @@ func controlQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	if !strings.ContainsAny(s, " \t;\"'\\$#*?[]{}<>()|&`~!\n\r") {
+	if isPlainControlWord(s) {
 		return s
 	}
 	if !strings.Contains(s, "'") {
 		return "'" + s + "'"
 	}
-	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+	// Inside double quotes tmux expands $ and backticks and honours
+	// backslashes, so all four are neutralised. A newline cannot be escaped in
+	// either quoting form, so it is stripped: the transport rejects multiline
+	// commands outright, and this keeps controlQuote's own contract — one word
+	// — true on its own rather than relying on that check.
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`", "\n", "", "\r", "")
 	return `"` + replacer.Replace(s) + `"`
+}
+
+// isPlainControlWord reports whether s can go on a tmux command line unquoted.
+//
+// An allow-list, for the reason the shell one is: tmux's parser has more
+// special forms than a deny-list keeps up with. Two that a character-class
+// deny-list misses entirely, both verified against tmux 3.6b:
+//
+//   - A word starting with "-" is consumed as a flag by whichever command
+//     receives it, so a literal "-X" reaches send-keys' own getopt.
+//   - "%" followed by a letter lexes as a directive (%if, %hidden) and is a
+//     syntax error for the whole line. Pane IDs are %<digits>, which is why
+//     digits after % are allowed and letters are not.
+func isPlainControlWord(s string) bool {
+	if strings.HasPrefix(s, "-") {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '/' || r == '@' || r == ':' || r == '+' || r == ',' || r == '-':
+		case r == '%' && i == 0 && len(s) > 1 && s[1] >= '0' && s[1] <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }

@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/marcus/sidecar/internal/hostproto"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -115,17 +118,74 @@ func TestServeEmitsHelloFirst(t *testing.T) {
 	}
 }
 
-// TestServeIsReadOnly is the guarantee the whole design rests on. It asserts
-// against the commands actually issued: serve may read tmux and git, and must
-// never resize, kill, send keys, or set an option — the last one being how a
-// geometry lease would be taken.
+// liveProject builds a project the collector will fully traverse: a real
+// directory, a registered state directory with a shell manifest, and a pane in
+// the listing that the manifest's namespace matches.
+//
+// Without all four, the status pass short-circuits and never reaches the
+// capture path — which is how an earlier version of TestServeIsReadOnly came
+// to assert against three list-panes calls and nothing else.
+func liveProject(t *testing.T, runner *fakeRunner) Project {
+	t.Helper()
+	root := t.TempDir()
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+
+	projectDir := filepath.Join(state, "sidecar", "projects", "spike")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// projectdir resolves a project by its meta.json path, not by directory
+	// name, and matches on the canonical path.
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(projectDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("meta.json", fmt.Sprintf(`{"path": %q}`, canonical))
+	// The namespace must be the tmux socket path: RefreshProjectStatus refuses
+	// to correlate a shell row to a pane unless it matches exactly.
+	write("shells.json", fmt.Sprintf(
+		`{"version":2,"shells":[{"tmuxName":"spike-claude","displayName":"Claude pane","agentType":"claude","namespace":%q}]}`,
+		tmuxenv.Namespace()))
+
+	runner.panes = strings.Join([]string{
+		"%1", "spike-claude", canonical, "node", "spinner title", "0", "4242",
+	}, "\t") + "\n"
+	return Project{Name: "spike", Path: canonical}
+}
+
+// TestServeIsReadOnly is the guarantee the whole design rests on.
+//
+// It asserts against the commands actually issued, because that — not "the
+// package links in no writer" — is the level at which the guarantee really
+// holds: hostserve depends on internal/tty, which contains resize-window,
+// send-keys and the geometry lease.
+//
+// The project is a real one with a live pane, so the run reaches the status
+// pass, the capture, and the tracker. A version of this test that stops at a
+// missing directory proves only that a loop which does nothing mutates
+// nothing.
 func TestServeIsReadOnly(t *testing.T) {
 	var out strings.Builder
 	runner := &fakeRunner{}
+	project := liveProject(t, runner)
+
 	opts := baseOptions(&out, runner, time.Now)
+	opts.Projects = []Project{project}
 	opts.Cycles = 3
 	opts.LivePoll, opts.ReadyPoll, opts.IdlePoll = time.Millisecond, time.Millisecond, time.Millisecond
 	opts.InventoryEvery = time.Nanosecond
+
+	var captured int
+	opts.Capture = func(target string, lines int) (string, tty.PaneState, error) {
+		captured++
+		return "esc to interrupt\n> working", tty.PaneState{}, nil
+	}
 
 	if err := Serve(context.Background(), opts); err != nil {
 		t.Fatalf("Serve: %v", err)
@@ -134,18 +194,115 @@ func TestServeIsReadOnly(t *testing.T) {
 	forbidden := []string{
 		"resize-window", "resize-pane", "send-keys", "kill-session", "kill-pane",
 		"kill-server", "set-option", "new-session", "respawn-pane", "rename-session",
+		"set-buffer", "paste-buffer", "split-window", "kill-window",
 	}
 	runner.mu.Lock()
-	defer runner.mu.Unlock()
-	for _, call := range runner.calls {
+	calls := append([]string(nil), runner.calls...)
+	runner.mu.Unlock()
+	for _, call := range calls {
 		for _, verb := range forbidden {
 			if strings.Contains(call, verb) {
 				t.Errorf("serve issued a mutating command: %q", call)
 			}
 		}
 	}
-	if len(runner.calls) == 0 {
-		t.Fatal("serve issued no commands at all; the assertion above proves nothing")
+
+	// The run must actually have reached the interesting code, or the loop
+	// above is vacuous. Both a git read and a capture are required.
+	if captured == 0 {
+		t.Error("no pane was ever captured; the assertions above are vacuous")
+	}
+	var sawGit, sawListPanes bool
+	for _, call := range calls {
+		sawGit = sawGit || strings.HasPrefix(call, "git ")
+		sawListPanes = sawListPanes || strings.Contains(call, "list-panes")
+	}
+	if !sawGit || !sawListPanes {
+		t.Errorf("serve never read git (%v) or tmux (%v); calls=%v", sawGit, sawListPanes, calls)
+	}
+}
+
+// TestServeShipsThePreviewItAlreadyCaptured covers the mechanism the design
+// leans on for zero-extra-capture previews: the capture decorator retains the
+// text the status pass took, and it reaches the wire.
+func TestServeShipsThePreviewItAlreadyCaptured(t *testing.T) {
+	var out strings.Builder
+	runner := &fakeRunner{}
+	project := liveProject(t, runner)
+
+	opts := baseOptions(&out, runner, time.Now)
+	opts.Projects = []Project{project}
+	opts.Cycles = 1
+	opts.Capture = func(string, int) (string, tty.PaneState, error) {
+		return "PREVIEW-MARKER", tty.PaneState{}, nil
+	}
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	var found bool
+	for _, msg := range decode(t, out.String()) {
+		if msg.Kind != hostproto.KindSnapshot {
+			continue
+		}
+		for _, p := range msg.Snapshot.Projects {
+			for _, item := range p.Items {
+				if item.Preview == "PREVIEW-MARKER" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the capture text never reached the wire: %s", out.String())
+	}
+}
+
+// TestServeDropsAStalePreviewWhenCaptureFails. A preview retained from an
+// earlier cycle would be shipped with a CapturedAt of now — a silently stale
+// screen, which is the failure this feature exists to avoid.
+func TestServeDropsAStalePreviewWhenCaptureFails(t *testing.T) {
+	var out strings.Builder
+	runner := &fakeRunner{}
+	project := liveProject(t, runner)
+
+	opts := baseOptions(&out, runner, time.Now)
+	opts.Projects = []Project{project}
+	opts.Cycles = 2
+	opts.LivePoll, opts.ReadyPoll, opts.IdlePoll = time.Millisecond, time.Millisecond, time.Millisecond
+	opts.InventoryEvery = time.Nanosecond
+
+	var calls int
+	opts.Capture = func(string, int) (string, tty.PaneState, error) {
+		calls++
+		if calls == 1 {
+			return "FIRST-CYCLE-TEXT", tty.PaneState{}, nil
+		}
+		return "", tty.PaneState{}, fmt.Errorf("capture failed")
+	}
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+
+	snapshots := 0
+	for _, msg := range decode(t, out.String()) {
+		if msg.Kind != hostproto.KindSnapshot {
+			continue
+		}
+		snapshots++
+		if snapshots == 1 {
+			continue
+		}
+		for _, p := range msg.Snapshot.Projects {
+			for _, item := range p.Items {
+				if strings.Contains(item.Preview, "FIRST-CYCLE-TEXT") {
+					t.Errorf("cycle %d shipped the previous cycle's capture as current", snapshots)
+				}
+			}
+		}
+	}
+	if snapshots < 2 {
+		t.Fatalf("only %d snapshots; the assertion never ran", snapshots)
 	}
 }
 

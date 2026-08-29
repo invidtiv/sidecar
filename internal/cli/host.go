@@ -201,7 +201,22 @@ func runHostServe(env Env, args []string) int {
 
 	projects := explicit
 	if len(projects) == 0 {
-		projects = configuredProjects()
+		var err error
+		projects, err = configuredProjects()
+		if err != nil {
+			// A host whose config will not parse must not present as a healthy
+			// host with nothing configured. Those are opposite problems and
+			// only one of them is the user's to fix.
+			_ = hostproto.NewEncoder(env.Stdout).Encode(hostproto.Message{
+				Kind: hostproto.KindError,
+				Error: &hostproto.Error{
+					Code:    hostproto.ErrNoConfig,
+					Message: fmt.Sprintf("cannot read the remote Sidecar config: %v", err),
+					Fatal:   true,
+				},
+			})
+			return 1
+		}
 	}
 
 	// SIGPIPE is the normal way this process ends: the viewer disconnected.
@@ -229,10 +244,13 @@ func runHostServe(env Env, args []string) int {
 // configuredProjects reads the same projects.list the local Overview reads.
 // Host discovery is not a new mechanism: whatever the remote machine's own
 // Sidecar shows is exactly what it serves.
-func configuredProjects() []hostserve.Project {
+func configuredProjects() ([]hostserve.Project, error) {
 	cfg, err := config.Load()
-	if err != nil || cfg == nil {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, nil
 	}
 	projects := make([]hostserve.Project, 0, len(cfg.Projects.List))
 	for _, project := range cfg.Projects.List {
@@ -246,7 +264,7 @@ func configuredProjects() []hostserve.Project {
 		}
 		projects = append(projects, hostserve.Project{Name: name, Path: path})
 	}
-	return projects
+	return projects, nil
 }
 
 // probeResult is the structured verdict --json emits.
@@ -489,7 +507,7 @@ func probeHost(env Env, host hosts.Host, cycles int, timeout time.Duration, raw 
 		if err != nil {
 			result.Bytes = counting.count
 			if result.Hello == nil {
-				result.State, result.Detail = classifyProbeFailure(err, stderr.String(), ctx, counting.count)
+				result.State, result.Detail = classifyProbeFailure(ctx, err, stderr.String(), counting.count)
 				return result
 			}
 			// Data already arrived, so the stream simply ended. That is only a
@@ -536,6 +554,7 @@ func probeHost(env Env, host hosts.Host, cycles int, timeout time.Duration, raw 
 			result.Events++
 		case hostproto.KindError:
 			if msg.Error != nil && msg.Error.Fatal {
+				result.OK = false
 				result.State, result.Detail = msg.Error.Code, msg.Error.Message
 				result.Bytes = counting.count
 				return result
@@ -550,11 +569,16 @@ func probeHost(env Env, host hosts.Host, cycles int, timeout time.Duration, raw 
 // does report a Homebrew-installed sidecar as "command not found", and a
 // remote profile that echoes really does put a banner on the same pipe as the
 // protocol.
-func classifyProbeFailure(err error, stderr string, ctx context.Context, read int64) (string, string) {
+func classifyProbeFailure(ctx context.Context, err error, stderr string, read int64) (string, string) {
 	detail := strings.TrimSpace(stderr)
 	lowered := strings.ToLower(detail)
 	switch {
-	case strings.Contains(lowered, "command not found"), strings.Contains(lowered, "no such file or directory"):
+	// Anchored on the binary name. A bare "no such file or directory" also
+	// comes from unrelated remote failures, and telling someone to install
+	// sidecar when sidecar is running fine is a worse answer than not guessing.
+	case strings.Contains(lowered, "command not found"),
+		strings.Contains(lowered, "sidecar: no such file"),
+		strings.Contains(lowered, "not found") && strings.Contains(lowered, "sidecar"):
 		return probeStateNoSidecar, detail
 	case strings.Contains(lowered, "permission denied"),
 		strings.Contains(lowered, "could not resolve hostname"),

@@ -343,48 +343,16 @@ func loadConfig(path string) (*config.Config, error) {
 	return config.Load()
 }
 
-// effectiveVersion returns the version string, with fallback to build info.
+// effectiveVersion returns the version string this binary reports.
+//
+// It delegates rather than deriving. The same string goes into `sidecar host
+// serve`'s protocol hello, which is built under internal/ and cannot see this
+// package — and two independently maintained copies of the derivation would
+// eventually disagree about the version of the very binary the hello is
+// describing.
 func effectiveVersion(v string) string {
-	if v != "" {
-		return v
-	}
-
-	// Try to get version from Go build info
-	info, ok := debug.ReadBuildInfo()
-	if !ok {
-		return "unknown"
-	}
-
-	// Check module version
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-
-	// Fall back to VCS info
-	var revision string
-	var dirty bool
-
-	for _, setting := range info.Settings {
-		switch setting.Key {
-		case "vcs.revision":
-			revision = setting.Value
-		case "vcs.modified":
-			dirty = setting.Value == "true"
-		}
-	}
-
-	if revision != "" {
-		ver := "devel+" + revision
-		if len(ver) > 20 {
-			ver = ver[:20]
-		}
-		if dirty {
-			ver += "+dirty"
-		}
-		return ver
-	}
-
-	return "devel"
+	buildinfo.Set(v)
+	return buildinfo.Version()
 }
 
 // buildDetails is the build metadata reported under the first line of --version.

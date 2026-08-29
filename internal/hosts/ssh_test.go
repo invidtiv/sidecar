@@ -1,6 +1,7 @@
 package hosts
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -79,8 +80,40 @@ func TestSidecarCommandUsesALoginShell(t *testing.T) {
 	if !strings.Contains(command, "$SHELL -l -c") {
 		t.Errorf("serve command does not resolve PATH through a login shell: %s", command)
 	}
-	if !strings.Contains(command, "host serve --stdio") {
-		t.Errorf("serve command is not the serve invocation: %s", command)
+	// The flag is quoted because shellQuote's allow-list refuses any word
+	// starting with "-": a value read as a flag by the receiving command is the
+	// bug that rule exists to prevent, and quoting a flag we ourselves supplied
+	// is harmless — the shell strips the quotes and argv still gets --stdio.
+	for _, part := range []string{"host", "serve", "--stdio"} {
+		if !strings.Contains(command, part) {
+			t.Errorf("serve command is missing %q: %s", part, command)
+		}
+	}
+}
+
+// TestQuotedFlagsStillReachArgv proves the claim above rather than asserting
+// it: render the command, run it through a real shell, and read back the argv
+// the program actually received.
+func TestQuotedFlagsStillReachArgv(t *testing.T) {
+	transport := newTestTransport(t, Host{ID: "h", Target: "h", RemoteBinary: "/bin/echo"})
+	command := transport.SidecarCommand("--stdio", "--cycles", "1", "=weird", "a b")
+	// Substitute a concrete shell for $SHELL and drop -l, so the test does not
+	// depend on the developer's login profile.
+	command = strings.Replace(command, "$SHELL -l -c ", "/bin/sh -c ", 1)
+
+	out, err := exec.Command("/bin/sh", "-c", command).Output()
+	if err != nil {
+		t.Fatalf("running %s: %v", command, err)
+	}
+	got := strings.TrimSpace(string(out))
+	// Every flag arrives unquoted, and the value with a space stays one word.
+	for _, want := range []string{"--stdio", "--cycles", "1", "=weird", "a b"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("argv %q is missing %q (from %s)", got, want, command)
+		}
+	}
+	if strings.Contains(got, "'") {
+		t.Errorf("quotes survived into argv: %q", got)
 	}
 }
 

@@ -72,8 +72,16 @@ const (
 // NewTransport prepares a transport. dir must be a private directory; the
 // control socket is created inside it.
 func NewTransport(host Host, dir string) (*Transport, error) {
-	if strings.TrimSpace(host.Target) == "" {
+	target := strings.TrimSpace(host.Target)
+	if target == "" {
 		return nil, fmt.Errorf("hosts: empty ssh target for host %q", host.ID)
+	}
+	// The target reaches ssh's argv, and ssh accepts options interspersed with
+	// operands — so a target of "-oProxyCommand=..." is local command
+	// execution. Today's only caller rejects leading dashes in its own parser,
+	// but Phase A reads hosts from config, where nothing else would catch it.
+	if strings.HasPrefix(target, "-") {
+		return nil, fmt.Errorf("hosts: ssh target %q may not start with '-': it would be read as an ssh option", target)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("hosts: control dir: %w", err)
@@ -189,14 +197,42 @@ func (t *Transport) Close() error {
 }
 
 // shellQuote renders s as a single POSIX shell word.
+//
+// The rule is an allow-list, not a deny-list, and that is the whole point. A
+// deny-list has to enumerate every character every shell treats specially, and
+// it will be wrong: an earlier version here omitted "=", which zsh's EQUALS
+// option (on by default, and $SHELL is zsh on macOS) expands to the resolved
+// path of that command — so a tmux session named "=build" turned into
+// /usr/local/bin/build, or aborted the whole command line with "build not
+// found". Listing what is safe instead of what is dangerous makes that class
+// of miss impossible rather than merely unlikely.
 func shellQuote(s string) string {
 	if s == "" {
 		return "''"
 	}
-	if !strings.ContainsAny(s, " \t\n\"'\\$`&;|<>()*?[]{}~#!") {
+	if isPlainShellWord(s) {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// isPlainShellWord reports whether s can reach a shell unquoted. Alphanumerics
+// and a short set of punctuation that no shell assigns meaning to anywhere in
+// a word. A leading "-" is excluded as well, so a value can never be read as a
+// flag by whatever command receives it.
+func isPlainShellWord(s string) bool {
+	if strings.HasPrefix(s, "-") {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '/' || r == '@' || r == ':' || r == '+' || r == ',' || r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // shellQuoteAssignment quotes the value half of a KEY=VALUE pair, leaving the

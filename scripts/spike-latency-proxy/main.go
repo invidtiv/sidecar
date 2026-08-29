@@ -88,6 +88,11 @@ func pipe(dst, src net.Conn, delay time.Duration, done chan<- struct{}) {
 	}
 	queue := make(chan chunk, 1024)
 
+	// abandoned tells the producer the consumer has gone. Without it, a write
+	// error leaves the producer blocked forever on a full queue — it is not
+	// blocked on Read, so closing the connection does not free it — holding up
+	// to 1024 x 64 KiB for the life of the process.
+	abandoned := make(chan struct{})
 	go func() {
 		defer close(queue)
 		buffer := make([]byte, 64<<10)
@@ -96,7 +101,11 @@ func pipe(dst, src net.Conn, delay time.Duration, done chan<- struct{}) {
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buffer[:n])
-				queue <- chunk{data: payload, at: time.Now().Add(delay)}
+				select {
+				case queue <- chunk{data: payload, at: time.Now().Add(delay)}:
+				case <-abandoned:
+					return
+				}
 			}
 			if err != nil {
 				return
@@ -109,6 +118,7 @@ func pipe(dst, src net.Conn, delay time.Duration, done chan<- struct{}) {
 			time.Sleep(wait)
 		}
 		if _, err := dst.Write(c.data); err != nil {
+			close(abandoned)
 			_, _ = io.Copy(io.Discard, src)
 			return
 		}

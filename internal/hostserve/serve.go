@@ -10,16 +10,25 @@
 // them, the adaptive poll cadence, and tracker commit at the end of a
 // completed generation.
 //
-// # Read-only by construction
+// # Read-only
 //
-// Serve writes nothing. Not "writes nothing unless a flag is set" — the
-// package imports no writer. It does not touch shells.json, does not reap,
-// does not take a geometry lease, and does not resize a pane. That is a
-// stronger guarantee than a runtime check, and it is the direct lesson of the
-// shells-wipe incident (td-8d18de): the safest state-writing code is the code
-// that is not linked in. When mutations arrive in Phase C they go through the
-// existing guarded writers in workspaceops/shellstate, never through bespoke
-// logic here.
+// Serve writes nothing: it does not touch shells.json, does not reap, does not
+// take a geometry lease, and does not resize a pane. When mutations arrive in
+// Phase C they go through the existing guarded writers in
+// workspaceops/shellstate, never through bespoke logic here.
+//
+// Be precise about what kind of guarantee that is, because overstating it is
+// how it quietly stops being true. It is NOT "the package links in no writer":
+// hostserve depends on internal/tty, which contains resize-window, send-keys,
+// kill-session and the geometry lease. The guarantee is call-graph discipline
+// — the only tty function reached from here is CapturePaneWithState, and the
+// only subprocesses this package can cause are `tmux list-panes`,
+// `tmux capture-pane`, `tmux display-message`, git, and ps.
+//
+// TestServeIsReadOnly enforces that by asserting on the commands actually
+// issued, which is the level the guarantee actually holds at. Anyone adding a
+// call into tty from this package is responsible for keeping it true; the
+// shells-wipe incident (td-8d18de) is what the care is for.
 //
 // The one place that discipline needs care is the capture path, because a
 // capture is an observation that can have a side effect: the Overview's
@@ -42,6 +51,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/buildinfo"
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/tmuxserver"
@@ -72,6 +82,13 @@ const (
 	// discipline is a byte cap (plugins.workspace.tmuxCaptureMaxBytes); this
 	// is the same idea applied per row before transmission.
 	DefaultPreviewBytes = 16 << 10
+
+	// DefaultSnapshotPreviewBytes bounds the previews in ONE snapshot, which
+	// the per-row cap does not: a host with enough agent panes would otherwise
+	// build a message past hostproto.MaxLineBytes, and a viewer whose scanner
+	// hits that limit is dead for the rest of the connection with no resync.
+	// Rows past the budget ship without a preview rather than not at all.
+	DefaultSnapshotPreviewBytes = 1 << 20
 
 	// DefaultMaxCaptures bounds concurrent capture-pane subprocesses, the same
 	// bound the Overview applies for the same reason: an unbounded fan-out
@@ -125,7 +142,9 @@ type Options struct {
 
 	PreviewLines int
 	PreviewBytes int
-	MaxCaptures  int
+	// SnapshotPreviewBytes bounds the total preview payload in one snapshot.
+	SnapshotPreviewBytes int
+	MaxCaptures          int
 
 	// Cycles bounds how many collection cycles run before Serve returns. Zero
 	// means run until the context is cancelled. A measurement harness sets it
@@ -189,6 +208,9 @@ func (o Options) withDefaults() Options {
 	if o.PreviewBytes <= 0 {
 		o.PreviewBytes = DefaultPreviewBytes
 	}
+	if o.SnapshotPreviewBytes <= 0 {
+		o.SnapshotPreviewBytes = DefaultSnapshotPreviewBytes
+	}
 	if o.MaxCaptures <= 0 {
 		o.MaxCaptures = DefaultMaxCaptures
 	}
@@ -203,6 +225,9 @@ func (o Options) withDefaults() Options {
 // ending: it means the viewer disconnected and this ephemeral process has no
 // further reason to exist.
 func Serve(ctx context.Context, opts Options) error {
+	if opts.Out == nil {
+		return fmt.Errorf("hostserve: no output writer")
+	}
 	opts = opts.withDefaults()
 
 	previews := newPreviewStore(opts.PreviewBytes)
@@ -239,10 +264,11 @@ func Serve(ctx context.Context, opts Options) error {
 	}
 
 	var (
-		generation    uint64
-		inventories   = make(map[string]workspaceinventory.ProjectResult, len(opts.Projects))
-		lastInventory time.Time
-		previous      map[string]hostproto.Item
+		generation          uint64
+		inventories         = make(map[string]workspaceinventory.ProjectResult, len(opts.Projects))
+		lastInventory       time.Time
+		previous            map[string]hostproto.Item
+		previousIncarnation uint64
 	)
 
 	for {
@@ -251,6 +277,8 @@ func Serve(ctx context.Context, opts Options) error {
 		}
 		generation++
 		cycleStart := opts.Now()
+		// Previews describe this cycle only. See previewStore.
+		previews.reset()
 
 		now := opts.Now()
 		fullInventory := lastInventory.IsZero() || now.Sub(lastInventory) >= opts.InventoryEvery
@@ -281,12 +309,13 @@ func Serve(ctx context.Context, opts Options) error {
 		claims := workspaceinventory.BuildShellClaims(ordered)
 		refresh := collector.ForRefresh(opts.MaxCaptures, claims)
 
+		previewBudget := opts.SnapshotPreviewBytes
 		snapshot := hostproto.Snapshot{
 			Generation:        generation,
 			ObservedAt:        now,
 			ServerIncarnation: incarnationID(incarnation),
 		}
-		for i, project := range opts.Projects {
+		for _, project := range opts.Projects {
 			base, ok := inventories[project.Path]
 			if !ok {
 				continue
@@ -298,15 +327,36 @@ func Serve(ctx context.Context, opts Options) error {
 					liveness.Observe(workspace.TmuxName)
 				}
 			}
-			snapshot.Projects = append(snapshot.Projects, projectMessage(result, opts.HostID, previews))
-			_ = i
+			snapshot.Projects = append(snapshot.Projects, projectMessage(result, opts.HostID, previews, &previewBudget))
 		}
 		refresh.CommitTrackers()
 
 		if paneErr != nil {
+			// ListPanes already answers "no server running" and "no sessions"
+			// with an empty list and no error, so a non-nil error here means
+			// tmux is present and something else went wrong. Reporting it as
+			// ErrNoTmux would tell the user to install software they already
+			// have; ErrCollect says what is true.
+			code := hostproto.ErrCollect
+			if strings.Contains(paneErr.Error(), exec.ErrNotFound.Error()) {
+				code = hostproto.ErrNoTmux
+			}
 			if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &hostproto.Error{
-				Code:    hostproto.ErrNoTmux,
+				Code:    code,
 				Message: fmt.Sprintf("tmux inventory failed on %s: %v", opts.HostID, paneErr),
+			}}); err != nil {
+				return err
+			}
+		}
+
+		// The server event goes out BEFORE this cycle's rows. A viewer that
+		// learned liveness was suspect only after applying the new server's
+		// rows would have already trusted them.
+		if generation > 1 && previousIncarnation != snapshot.ServerIncarnation {
+			if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindEvent, Event: &hostproto.Event{
+				Kind:              hostproto.EventServer,
+				Generation:        generation,
+				ServerIncarnation: snapshot.ServerIncarnation,
 			}}); err != nil {
 				return err
 			}
@@ -327,19 +377,8 @@ func Serve(ctx context.Context, opts Options) error {
 				}
 			}
 		}
-		if previous != nil {
-			if before, after := serverOf(previous), snapshot.ServerIncarnation; before != after {
-				if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindEvent, Event: &hostproto.Event{
-					Kind:              hostproto.EventServer,
-					Generation:        generation,
-					ServerIncarnation: after,
-				}}); err != nil {
-					return err
-				}
-			}
-		}
-		current[serverKey] = hostproto.Item{ID: serverKey, ObservedAt: now, Preview: fmt.Sprint(snapshot.ServerIncarnation)}
 		previous = current
+		previousIncarnation = snapshot.ServerIncarnation
 
 		if opts.OnCycle != nil {
 			opts.OnCycle(generation, opts.Now().Sub(cycleStart), refresh.Metrics().Captures)
@@ -354,21 +393,6 @@ func Serve(ctx context.Context, opts Options) error {
 		case <-time.After(pollInterval(snapshot, opts)):
 		}
 	}
-}
-
-// serverKey is a reserved pseudo-item ID carrying the previous cycle's server
-// incarnation, so the diff can notice a restart without a second state field.
-// It is prefixed with a NUL-adjacent marker that no collector ID can produce.
-const serverKey = "\x00server"
-
-func serverOf(items map[string]hostproto.Item) uint64 {
-	item, ok := items[serverKey]
-	if !ok {
-		return 0
-	}
-	var value uint64
-	_, _ = fmt.Sscan(item.Preview, &value)
-	return value
 }
 
 // pollInterval mirrors the Overview's cadence rule exactly, including its
@@ -393,8 +417,7 @@ func pollInterval(snapshot hostproto.Snapshot, opts Options) time.Duration {
 }
 
 func buildHello(opts Options) *hostproto.Hello {
-	tmuxPath, tmuxPresent := opts.TmuxPath()
-	_ = tmuxPath
+	_, tmuxPresent := opts.TmuxPath()
 	hello := &hostproto.Hello{
 		Proto:       hostproto.Version,
 		Version:     buildinfo.Version(),
@@ -410,7 +433,11 @@ func buildHello(opts Options) *hostproto.Hello {
 			// of presenting a degraded provider guess as fact.
 			ProcessIdentity: runtime.GOOS == "darwin",
 			IsolatedState:   os.Getenv("SIDECAR_ISOLATED_STATE") == "1",
-			StateDir:        os.Getenv("XDG_STATE_HOME"),
+			// The RESOLVED root, not $XDG_STATE_HOME. The raw variable is
+			// empty in an ordinary run and names the parent in an isolated
+			// one, so echoing it made the isolation evidence wrong in every
+			// case — which is the opposite of what this field is for.
+			StateDir: config.StateDir(),
 		},
 	}
 	if tmuxPresent {
@@ -421,7 +448,7 @@ func buildHello(opts Options) *hostproto.Hello {
 	return hello
 }
 
-func projectMessage(result workspaceinventory.ProjectResult, hostID string, previews *previewStore) hostproto.Project {
+func projectMessage(result workspaceinventory.ProjectResult, hostID string, previews *previewStore, budget *int) hostproto.Project {
 	project := hostproto.Project{
 		Key:  result.ProjectKey,
 		Name: result.ProjectName,
@@ -431,12 +458,12 @@ func projectMessage(result workspaceinventory.ProjectResult, hostID string, prev
 		project.Err = result.Err.Error()
 	}
 	for _, workspace := range result.Workspaces {
-		project.Items = append(project.Items, itemMessage(workspace, hostID, previews))
+		project.Items = append(project.Items, itemMessage(workspace, hostID, previews, budget))
 	}
 	return project
 }
 
-func itemMessage(w workspaceinventory.Workspace, hostID string, previews *previewStore) hostproto.Item {
+func itemMessage(w workspaceinventory.Workspace, hostID string, previews *previewStore, budget *int) hostproto.Item {
 	item := hostproto.Item{
 		ID:          w.ID,
 		HostID:      hostID,
@@ -462,7 +489,10 @@ func itemMessage(w workspaceinventory.Workspace, hostID string, previews *previe
 		item.Agent = &presentation
 	}
 	if w.PaneID != "" {
-		item.Preview = previews.get(w.PaneID)
+		if preview := previews.get(w.PaneID); len(preview) <= *budget {
+			item.Preview = preview
+			*budget -= len(preview)
+		}
 	}
 	return item
 }
@@ -503,13 +533,13 @@ func diffItems(previous, current map[string]hostproto.Item, generation uint64) [
 	ids := make([]string, 0, len(current)+len(previous))
 	seen := make(map[string]bool, len(current)+len(previous))
 	for id := range current {
-		if id != serverKey && !seen[id] {
+		if !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
 	}
 	for id := range previous {
-		if id != serverKey && !seen[id] {
+		if !seen[id] {
 			seen[id] = true
 			ids = append(ids, id)
 		}
@@ -574,10 +604,30 @@ func incarnationID(inc tmuxserver.Incarnation) uint64 {
 	return hash.Sum64() | 2
 }
 
-// previewStore keeps the most recent capture text per pane, truncated to the
-// wire budget. Truncation keeps the tail: the bottom of a pane is where an
-// agent's current prompt and its question live, which is the whole reason a
-// preview cell is worth showing.
+// previewStore keeps the capture text taken during the current cycle,
+// truncated to the wire budget. Truncation keeps the tail: the bottom of a
+// pane is where an agent's current prompt and its question live, which is the
+// whole reason a preview cell is worth showing.
+//
+// It is deliberately per-cycle rather than a cache. Retaining text across
+// cycles is worse than showing nothing twice over:
+//
+//   - A capture that fails for one cycle would ship the previous cycle's
+//     screen as if it were current, with a CapturedAt of now. A preview that
+//     is silently stale is exactly the failure mode this whole feature exists
+//     to avoid.
+//   - tmux restarts pane IDs at %0 after a server restart, so a retained entry
+//     for %1 would be painted into a brand-new, unrelated pane.
+//   - A long-lived connection would accumulate an entry for every pane ID it
+//     ever saw, at up to the byte limit each, with nothing ever evicting them.
+//
+// The cost of resetting is that a row whose capture failed ships no preview
+// that cycle, which is the honest answer.
+//
+// Not synchronised, because the serve loop refreshes projects sequentially
+// (workspaceinventory.RefreshProjectStatus is a plain loop, and Serve calls it
+// one project at a time). Introducing concurrency into that loop must add a
+// mutex here.
 type previewStore struct {
 	limit int
 	text  map[string]string
@@ -585,6 +635,11 @@ type previewStore struct {
 
 func newPreviewStore(limit int) *previewStore {
 	return &previewStore{limit: limit, text: make(map[string]string)}
+}
+
+// reset drops every retained preview. Called at the top of each cycle.
+func (s *previewStore) reset() {
+	clear(s.text)
 }
 
 func (s *previewStore) put(paneID, text string) {

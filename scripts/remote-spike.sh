@@ -46,14 +46,37 @@ HOST="${SPIKE_HOST:-marcusbook}"
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_DIR="${SPIKE_RUN_DIR:-/tmp/sidecar-spike-$(id -un)}"
 
-# Refuse a run root that is not an absolute path under a temp directory. A
-# typo here is how a teardown deletes something that matters.
+# Refuse anything teardown must not be allowed to delete.
+#
+# teardown runs `rm -rf "$RUN_DIR"` on the REMOTE machine, so this guard is the
+# only thing between a typo and someone else's data. It is deliberately
+# stricter than "is it under /tmp":
+#
+#   - A trailing slash or an empty component is rejected, because a prefix glob
+#     like /tmp/* matches "/tmp/" itself — one stray character turns the run
+#     root into the whole temp tree.
+#   - /var/folders is not an accepted base at all. On macOS the DEFAULT tmux
+#     server's socket lives under $TMPDIR there, so an rm -rf with that base
+#     destroys the exact thing this script exists to protect.
+#   - The first component must be named for this harness, so the run root can
+#     only ever be a directory this script created.
+refuse_run_dir() {
+    echo "refusing SPIKE_RUN_DIR='$RUN_DIR': $1" >&2
+    exit 1
+}
 case "$RUN_DIR" in
-    /tmp/*|/private/tmp/*|/var/folders/*) ;;
-    *) echo "refusing SPIKE_RUN_DIR='$RUN_DIR': must be under /tmp" >&2; exit 1 ;;
+    */)     refuse_run_dir "a trailing slash makes the temp root itself the target" ;;
+    *//*)   refuse_run_dir "empty path component" ;;
 esac
 case "/$RUN_DIR/" in
-    */../*|*/./*) echo "refusing SPIKE_RUN_DIR='$RUN_DIR': dot components not allowed" >&2; exit 1 ;;
+    */../*|*/./*) refuse_run_dir "dot and dotdot components are not allowed" ;;
+esac
+case "$RUN_DIR" in
+    /tmp/sidecar-spike*|/private/tmp/sidecar-spike*) ;;
+    *) refuse_run_dir "must be /tmp/sidecar-spike* — teardown deletes this path recursively" ;;
+esac
+case "$RUN_DIR" in
+    *[!A-Za-z0-9_./-]*) refuse_run_dir "unsupported characters" ;;
 esac
 
 REMOTE_BIN="$RUN_DIR/sidecar"
@@ -124,8 +147,11 @@ rsh() {
     ssh "${SSH_OPTS[@]}" "$HOST" "D=\$(echo $encoded | base64 --decode); \$SHELL -l -c \"\$D\""
 }
 
-# rsh_raw is rsh without the login shell, for the cases that must not inherit a
-# profile (the serve stream, whose stdout is the protocol).
+# rsh_raw is rsh without the login shell, and without the base64 wrapper, so
+# the caller keeps stdin. The control-mode attach needs both: stdin carries the
+# commands, and stdout carries the tmux control protocol. The serve stream does
+# NOT use this — it needs the login shell's PATH to find tmux, and pays for it
+# by having to tolerate whatever the profile prints. See cmd_serve.
 rsh_raw() {
     ssh "${SSH_OPTS[@]}" "$HOST" "$@"
 }
@@ -165,10 +191,16 @@ cmd_deploy() {
     echo "building darwin/arm64 from the working tree..."
     (cd "$REPO_DIR" && GOOS=darwin GOARCH=arm64 go build -o "/tmp/sidecar-spike-build" ./cmd/sidecar)
     rsh "mkdir -p $(printf %q "$RUN_DIR") $(printf %q "$REMOTE_STATE") $(printf %q "$REMOTE_CONFIG_DIR") $(printf %q "$REMOTE_TMUX_TMPDIR") && chmod 700 $(printf %q "$REMOTE_TMUX_TMPDIR")"
-    # tmux refuses to create its socket if the tmux-<uid> directory is absent,
-    # and it will not create that directory itself under a custom TMUX_TMPDIR.
-    rsh "mkdir -p $(printf %q "$(remote_socket)" | sed 's:/default.$:&:')"
+    # tmux will not create the tmux-<uid> directory itself under a custom
+    # TMUX_TMPDIR, and refuses to bind its socket without it. Create the
+    # PARENT only: creating the socket path itself as a directory makes every
+    # later tmux command fail with "Socket operation on non-socket".
     rsh "mkdir -p \$(dirname $(printf %q "$(remote_socket)")) && chmod 700 \$(dirname $(printf %q "$(remote_socket)"))"
+    # Delete before copying. scp overwrites in place, which keeps the inode —
+    # and macOS caches a code signature against the vnode, so the second deploy
+    # of a differing binary is SIGKILLed on exec (exit 137) with no diagnostic
+    # anywhere. A fresh inode gets a fresh signature check.
+    rsh "rm -f $(printf %q "$REMOTE_BIN")"
     scp "${SSH_OPTS[@]}" -q /tmp/sidecar-spike-build "$HOST:$REMOTE_BIN"
     rsh "chmod +x $(printf %q "$REMOTE_BIN")"
     # A config pointing at the fixture project only. The host's real config is
@@ -305,6 +337,7 @@ cmd_replay() {
     if [ ! -f /tmp/sidecar-spike-holdpane ]; then
         (cd "$REPO_DIR" && GOOS=darwin GOARCH=arm64 go build -o /tmp/sidecar-spike-holdpane ./scripts/spike-holdpane)
     fi
+    rsh "rm -f $(printf %q "$RUN_DIR/bin/$command")"
     scp "${SSH_OPTS[@]}" -q /tmp/sidecar-spike-holdpane "$HOST:$RUN_DIR/bin/$command"
     rsh "chmod +x $(printf %q "$RUN_DIR/bin/$command")"
 

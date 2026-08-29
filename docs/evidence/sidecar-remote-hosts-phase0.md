@@ -2,7 +2,7 @@
 
 Plan: [docs/plans/active/sidecar-remote-hosts.md](../plans/active/sidecar-remote-hosts.md)
 Date: 2026-08-29
-Verdict: **proceed to Phase A**, with three findings that change what Phase A must build.
+Verdict: **proceed to Phase A**, with four findings that change what Phase A must build. Retained code independently reviewed; the review's critical and high findings are fixed (see [Review](#review)).
 
 ## What was actually run
 
@@ -123,11 +123,33 @@ This is not a bug, but it constrains Phase A's health vocabulary: **"the remote 
 
 `runHostServe` now calls it explicitly, so the plan's isolation guarantee holds for this command. **The wider gap is not fixed** — `notify`, `create`, `shell`, `layout` and `open` still skip it. That is a separate change with its own blast radius and belongs in its own task, not in a spike.
 
+### 4. The remote reaper behaved correctly, observed live
+
+Not sought, but worth recording because it is the plan's named hazard. While a viewer was observing, a Sidecar TUI running on the host noticed one of the fixture's tmux sessions had been killed and reaped its shell record. It wrote a **tombstone**, not a deletion — the row stayed restorable, and nothing else in `shells.json` was touched. That is the post-td-8d18de hardening working on a real remote machine, under observation, which is the condition Phase C's remote reap parity has to inherit.
+
+Serve did nothing, because serve does not reap. That is the intended division and it held.
+
 ### Two smaller ones
 
 **Duplicate project directories shadow each other.** `projectdir.Lookup` returns the first directory whose `meta.json` matches, and a project registered under both `/tmp/x` and `/private/tmp/x` produces two directories — one of which has no manifest. The symptom is a Sessions browser with no shells in it and no error anywhere. This cost real time in the spike. Not a remote-hosts problem, but worth a task.
 
+**macOS SIGKILLs a binary overwritten in place.** `scp` overwrites without changing the inode, and macOS caches a code-signature verdict against the vnode — so the *second* deploy of a differing binary is killed on exec with exit 137 and no diagnostic anywhere. Deleting before copying gets a fresh inode and a fresh check. The same trap applies to any tool that redeploys a binary over ssh.
+
 **The remote pane fixture needed a purpose-built binary.** Provider detectors gate on `pane_current_command`, so a replay pane must *identify* as the provider, not just look like it. Copying `/bin/sh` to the target name fails on Apple Silicon (the copy loses its signature and will not exec); ad-hoc re-signing makes it exec but the pane still reports `bash`; symlinking resolves to the real name. `scripts/spike-holdpane` is the working answer and is retained.
+
+## Review
+
+The retained code was reviewed by an independent fresh-context reviewer against commit `f52db3dd`. Seventeen findings; the ones that mattered are fixed in the follow-up commit:
+
+- **Critical, in the harness.** `scripts/remote-spike.sh`'s run-root guard accepted the temp root *itself* — `/tmp/*` matches `/tmp/`, and teardown runs `rm -rf "$RUN_DIR"` on the remote. `SPIKE_RUN_DIR=/var/folders/` would have wiped the host's entire per-user temp tree, including the default tmux server's socket: precisely the thing the script exists to protect, reachable by one trailing character. The guard now rejects trailing slashes and empty components, drops `/var/folders` as a base entirely, and requires the run root to be named for this harness.
+- **High.** A no-op `sed` made `deploy` create a *directory* at the tmux socket path, so tmux could never bind it. And `shellQuote`'s deny-list missed `=`, which zsh's EQUALS option (on by default; `$SHELL` is zsh on macOS) expands to a command path — a session named `=build` became `/usr/local/bin/build`. Both quoting functions are now allow-lists, which closes the class rather than the instance; `controlQuote` additionally rejects a leading `-` (consumed as a flag by the receiving tmux command) and `%` followed by a letter (lexes as a tmux directive and is a syntax error for the whole line).
+- **Medium.** Previews were retained across cycles, so a capture that failed for one cycle shipped the previous screen with a current timestamp — and pane IDs restart at `%0` after a server restart, so a stale entry could be painted into an unrelated pane. The store is now per-cycle. A generic tmux failure was reported as `no_tmux` ("fix: install tmux") when tmux was present. A remote config that would not parse was served as "no projects", indistinguishable from a healthy empty host. `Capabilities.StateDir` echoed the raw `XDG_STATE_HOME` rather than the resolved root, making the isolation evidence wrong in every case.
+- **Two tests proved nothing.** `TestServeIsReadOnly` ran against a nonexistent project, so the status pass and capture were never reached and the assertion was vacuous; it now uses a real project with a live pane, and the preview mechanism it exercises finally has coverage. `TestNewControlManagerLocalPathUnchanged` would have passed if the local path *had* been rerouted through the remote factory; it now pins the factory by identity.
+- **An overstated claim, corrected.** The package doc said `hostserve` "imports no writer". It does: it depends on `internal/tty`, which contains `resize-window`, `send-keys` and the geometry lease. The real guarantee is call-graph discipline plus a test that asserts on the commands actually issued, and the doc now says that instead.
+
+The reviewer confirmed the two things most worth confirming: `previewStore`'s missing mutex is safe today because `RefreshProjectStatus` is sequential and serve calls it one project at a time (`-race` clean), and the local control path is genuinely untouched.
+
+Two design gaps were raised and deliberately left for Phase A/B rather than fixed here: `newProcessControlChannelCommand`'s hardcoded 3-second attach timeout is not parameterised and could be exceeded by a cold ControlMaster on a slow link; and `controlChannel` has no batch-send API, so the in-band sender's "one write on one pipe" claim is not yet achievable for a batch of more than three keys. Both belong to the phase that builds the interactive sender.
 
 ## What was kept
 

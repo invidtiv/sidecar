@@ -2,6 +2,7 @@ package tty
 
 import (
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,16 @@ func TestNewControlManagerLocalPathUnchanged(t *testing.T) {
 	}
 	if manager.coalesce == 0 {
 		t.Error("local manager lost its capture coalesce window")
+	}
+	// Identity, not behaviour. Asserting only that the factory errors on an
+	// empty session would still pass if NewControlManager were rewritten as
+	// NewRemoteControlManager(localSpawner) — which is exactly the change this
+	// test exists to forbid, since it would route the local path through the
+	// remote one. Comparing the function pointer is the only assertion that
+	// actually distinguishes them.
+	want := reflect.ValueOf(newProcessControlChannel).Pointer()
+	if got := reflect.ValueOf(manager.factory).Pointer(); got != want {
+		t.Error("the local manager no longer uses newProcessControlChannel directly; the local path must not route through the remote factory")
 	}
 	if _, err := manager.factory(""); err == nil {
 		t.Error("local factory accepted an empty session")
@@ -40,6 +51,11 @@ func TestNewRemoteControlManagerUsesTheSpawner(t *testing.T) {
 	}
 	if manager.coalesce != NewControlManager().coalesce {
 		t.Error("remote manager uses a different coalesce window than local; that is a decision, not an accident — update the comment if intended")
+	}
+	// The converse of the local test: the remote manager must NOT be the local
+	// factory.
+	if reflect.ValueOf(manager.factory).Pointer() == reflect.ValueOf(newProcessControlChannel).Pointer() {
+		t.Error("remote manager is using the local factory; the spawner would be ignored")
 	}
 }
 
