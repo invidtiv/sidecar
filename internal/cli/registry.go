@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 )
 
 // RootCommand returns the root command hierarchy.
@@ -425,6 +426,59 @@ func RootCommand() *Command {
 // Posting prefers a running instance (the user sees it immediately) and falls
 // back to writing the log, so nothing is lost either way.
 func notifyCommand() *Command {
+	configSetCmd := &Command{
+		Name:    "set",
+		Summary: "Set global notification delivery modes",
+		Usage:   "sidecar notify config set [--native MODE] [--sound MODE] [--json]",
+		Long:    "Set one or both global delivery modes. Values are off, background, or always. The save is validated, preserves unrelated notification rules, and applies to running Sidecar instances without restart.",
+		Flags: []Flag{
+			{Name: "--native", Arg: "MODE", Summary: "Set system notifications: off, background, or always"},
+			{Name: "--sound", Arg: "MODE", Summary: "Set sounds: off, background, or always"},
+			{Name: "--json", Summary: "Write the resulting notification configuration as JSON", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		ExitCodes: []ExitCode{{Code: 0, Summary: "saved"}, {Code: 1, Summary: "configuration I/O failure"}, {Code: 2, Summary: "usage or validation error"}},
+		Examples:  []Example{{Command: "sidecar notify config set --native background --sound background"}},
+		Agent:     AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] --json", Summary: "Change external notification modes without restarting Sidecar"},
+		Run:       runNotifyConfigSet,
+	}
+	configCmd := &Command{
+		Name:    "config",
+		Summary: "Show or change notification delivery configuration",
+		Usage:   "sidecar notify config [--json]",
+		Long:    "Print resolved notification settings and defaults without changing the file. Use config set for global native and sound modes; source and quiet-hour mutation arrive with the focused rule routes.",
+		Flags:   []Flag{{Name: "--json", Summary: "Write notification configuration as JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
+		Sub:     []*Command{configSetCmd},
+		Agent:   AgentDoc{Invocation: "sidecar notify config --json", Summary: "Inspect external notification modes and rules"},
+		Run:     runNotifyConfig,
+	}
+	statusCmd := &Command{
+		Name:      "status",
+		Summary:   "Probe native and sound provider availability",
+		Usage:     "sidecar notify status [--json]",
+		Long:      "Probe providers without sending a notification or changing configuration.",
+		Flags:     []Flag{{Name: "--json", Summary: "Write provider capabilities as JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
+		ExitCodes: []ExitCode{{Code: 0, Summary: "probe completed"}, {Code: 1, Summary: "output failure"}, {Code: 2, Summary: "usage error"}},
+		Examples:  []Example{{Command: "sidecar notify status --json"}},
+		Agent:     AgentDoc{Invocation: "sidecar notify status --json", Summary: "Check native notification and sound providers without sending anything"},
+		Run:       runNotifyStatus,
+	}
+	testCmd := &Command{
+		Name:    "test",
+		Summary: "Explicitly test enabled notification channels",
+		Usage:   "sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--json]",
+		Long:    "Exercise enabled providers without creating a notification-centre record. Explicit tests bypass foreground and quiet-hours suppression but still honor disabled channels and unavailable providers.",
+		Flags: []Flag{
+			{Name: "--channel", Arg: "CHANNEL", Summary: "Test native, sound, or all (required)"},
+			{Name: "--event", Arg: "EVENT", Summary: "Use waiting, done, or failure (default waiting)"},
+			{Name: "--json", Summary: "Write per-channel attempted/provider/delivered/error results", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		ExitCodes: []ExitCode{{Code: 0, Summary: "requested channels delivered"}, {Code: 1, Summary: "provider or output failure"}, {Code: 2, Summary: "usage error"}, {Code: 3, Summary: "a requested channel was disabled or unavailable"}},
+		Examples:  []Example{{Command: "sidecar notify test --channel all --event waiting --json"}},
+		Agent:     AgentDoc{Invocation: "sidecar notify test --channel native|sound|all [--event EVENT] --json", Summary: "Explicitly test enabled providers without filing a centre notification"},
+		Run:       runNotifyTest,
+	}
 	postCmd := &Command{
 		Name:    "post",
 		Summary: "Post a notification the user sees in Sidecar",
@@ -537,11 +591,11 @@ func notifyCommand() *Command {
 
 	return &Command{
 		Name:    "notify",
-		Summary: "Post, dismiss, and list Sidecar notifications",
+		Summary: "Configure, test, post, dismiss, and list Sidecar notifications",
 		Usage:   "sidecar notify <command>",
 		Long: "Sidecar's notification surface: a toast in the running instance, an entry in the\n" +
 			"notification centre, and a count in the header until the user reads it.",
-		Sub: []*Command{dismissCmd, listCmd, postCmd},
+		Sub: []*Command{configCmd, dismissCmd, listCmd, postCmd, statusCmd, testCmd},
 		Run: runNotifyRoot,
 	}
 }
@@ -704,10 +758,12 @@ func runShellRoot(env Env, args []string) int {
 }
 
 func defaultEnv(stdout, stderr io.Writer) Env {
+	stateDir := config.StateDir()
 	return Env{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		StateDir: config.StateDir(),
-		Ctx:      context.Background(),
+		Stdout:               stdout,
+		Stderr:               stderr,
+		StateDir:             stateDir,
+		Ctx:                  context.Background(),
+		NotificationDelivery: notifydelivery.NewDefault(stateDir),
 	}
 }

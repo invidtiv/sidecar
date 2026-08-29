@@ -116,14 +116,15 @@ type Model struct {
 
 	// Page state. Each is built lazily against the running configuration and
 	// dropped when Configuration closes.
-	appearanceState *appearanceState
-	projectsState   *projectsState
-	agentsState     *agentsState
-	terminalState   *terminalState
-	panelsState     *panelsState
-	advancedState   *advancedState
-	aboutState      *aboutState
-	enable          *enableState
+	appearanceState    *appearanceState
+	projectsState      *projectsState
+	agentsState        *agentsState
+	notificationsState *notificationsState
+	terminalState      *terminalState
+	panelsState        *panelsState
+	advancedState      *advancedState
+	aboutState         *aboutState
+	enable             *enableState
 	// installing is a confirmed install whose route was left while it ran. The
 	// attempt is the user's own, so its outcome is still announced and a
 	// successful one still enables the panel.
@@ -205,6 +206,7 @@ func (m *Model) Open(page PageID) {
 	m.appearanceState = nil
 	m.projectsState = nil
 	m.agentsState = nil
+	m.notificationsState = nil
 	m.terminalState = nil
 	m.panelsState = nil
 	m.advancedState = nil
@@ -223,6 +225,7 @@ func (m *Model) Open(page PageID) {
 	m.enable = nil
 	m.installing = inFlight
 	m.resetDetail()
+	m.queueNotificationProbe()
 }
 
 // Reopen puts the surface back where it was when it last closed: the same
@@ -286,6 +289,7 @@ func (m *Model) restoreActivePreview() {
 func (m *Model) resetDetail() {
 	m.detailFocus = false
 	m.rowCursor = 0
+	m.controls = nil
 	m.confirm = nil
 	m.showColorSteps = false
 	// Whatever the route being left knew about its own check goes with it;
@@ -333,6 +337,7 @@ func (m *Model) Navigate(page PageID) {
 	m.results = false
 	m.saved = nil
 	m.resetDetail()
+	m.queueNotificationProbe()
 }
 
 // PushChild opens a focused child route with parent-return behavior. The
@@ -455,6 +460,8 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "remove-project", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
 	case "g":
 		return plugin.Command{ID: "use-global-theme", Name: "Use global", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 8}, true
+	case "t":
+		return plugin.Command{ID: "test-notifications", Name: "Test", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
 	}
 	return plugin.Command{}, false
 }
@@ -945,6 +952,7 @@ func (m *Model) navigateFromSidebar(page PageID) {
 	m.router.navigate(page)
 	m.results = false
 	m.resetDetail()
+	m.queueNotificationProbe()
 }
 
 // View renders the whole Configuration content area. It never returns more rows
@@ -1171,6 +1179,8 @@ func (m *Model) buildDetail(originX, inner, paneHeight int) ([]string, bool) {
 		m.buildWorkspaces(builder)
 	case route.Page == PageAgents:
 		m.buildAgents(builder)
+	case route.Page == PageNotifications:
+		m.buildNotifications(builder)
 	case route.Page == PageTerminal:
 		m.buildTerminal(builder)
 	case route.Page == PagePanels:

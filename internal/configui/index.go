@@ -62,6 +62,13 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAgents, Label: "Agent instructions", Keywords: []string{"agents.md", "instructions", "guidance", "repair"}},
 	{Page: PageAgents, Label: "Default launch command", Keywords: []string{"agentstart", "command", "default", "reset", "agent"}},
 
+	// Notifications
+	{Page: PageNotifications, Label: "System notifications", Keywords: []string{"native", "desktop", "system notification", "terminal-notifier", "osascript"}},
+	{Page: PageNotifications, Label: "Sounds", Keywords: []string{"sound", "audio", "afplay", "waiting", "finished", "failure"}},
+	{Page: PageNotifications, Label: "Quiet hours", Keywords: []string{"quiet hours", "mute", "schedule"}},
+	{Page: PageNotifications, Label: "Agent activity rules", Keywords: []string{"waiting", "finished", "session ended", "source", "rules"}},
+	{Page: PageNotifications, Label: "Delivery status and test", Keywords: []string{"provider", "status", "test", "native", "sound"}},
+
 	// Terminal
 	{Page: PageTerminal, Label: "Exit interactive mode", Keywords: []string{"terminal", "interactive", "exit", "shortcut", "key"}},
 	{Page: PageTerminal, Label: "Attach to tmux", Keywords: []string{"tmux", "attach", "terminal", "client"}},

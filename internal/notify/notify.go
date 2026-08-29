@@ -9,6 +9,7 @@ package notify
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -175,6 +176,18 @@ type Origin struct {
 	PID         int    `json:"pid,omitempty"`
 }
 
+// StableKey is the host-local identity used for logical transition dedupe and
+// native replacement grouping. It hashes paths rather than repeating them in
+// coordination records.
+func (o Origin) StableKey() string {
+	raw := strings.Join([]string{o.TmuxSession, o.ProjectKey, o.WorkDir}, "\x00")
+	if raw == "\x00\x00" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%x", sum[:12])
+}
+
 // Zero reports whether the origin identifies nobody.
 func (o Origin) Zero() bool {
 	return o.TmuxSession == "" && o.WorkDir == "" && o.ProjectKey == ""
@@ -214,6 +227,29 @@ type Notification struct {
 	Origin    Origin     `json:"origin,omitempty"`
 	// Sticky means the toast has no countdown and waits for the user.
 	Sticky bool `json:"sticky,omitempty"`
+	// Transition is present only for structured agent-lane events. Titles and
+	// bodies remain presentation; policy and reconciliation never parse them.
+	Transition *TransitionMetadata `json:"transition,omitempty"`
+}
+
+type TransitionClass string
+
+const (
+	TransitionWaiting TransitionClass = "waiting"
+	TransitionDone    TransitionClass = "done"
+	TransitionFailure TransitionClass = "failure"
+)
+
+// TransitionMetadata carries the stable machine meaning of one agent event.
+type TransitionMetadata struct {
+	Class          TransitionClass `json:"class"`
+	LaneKey        string          `json:"laneKey"`
+	DedupeKey      string          `json:"dedupeKey"`
+	ReplacementKey string          `json:"replacementKey,omitempty"`
+	// ProjectRoot is the durable lexical identity of the project that produced
+	// this transition. It lets restart reconciliation distinguish same-named
+	// checkouts without consulting the filesystem or current inventory.
+	ProjectRoot string `json:"projectRoot,omitempty"`
 }
 
 // Read reports whether the notification has been seen.

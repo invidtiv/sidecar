@@ -303,13 +303,57 @@ sidecar layout get --sessions --json
 
 ## `sidecar notify`
 
-Post, dismiss, and list Sidecar notifications
+Configure, test, post, dismiss, and list Sidecar notifications
 
 Sidecar's notification surface: a toast in the running instance, an entry in the
 notification centre, and a count in the header until the user reads it.
 
 ```
 Usage: sidecar notify <command>
+```
+
+### `sidecar notify config`
+
+Show or change notification delivery configuration
+
+Print resolved notification settings and defaults without changing the file. Use config set for global native and sound modes; source and quiet-hour mutation arrive with the focused rule routes.
+
+```
+Usage: sidecar notify config [--json]
+```
+
+**Options:**
+
+- `--json`: Write notification configuration as JSON
+- `-h, --help`: Show this help
+
+#### `sidecar notify config set`
+
+Set global notification delivery modes
+
+Set one or both global delivery modes. Values are off, background, or always. The save is validated, preserves unrelated notification rules, and applies to running Sidecar instances without restart.
+
+```
+Usage: sidecar notify config set [--native MODE] [--sound MODE] [--json]
+```
+
+**Options:**
+
+- `--native MODE`: Set system notifications: off, background, or always
+- `--sound MODE`: Set sounds: off, background, or always
+- `--json`: Write the resulting notification configuration as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: saved
+- `1`: configuration I/O failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar notify config set --native background --sound background
 ```
 
 ### `sidecar notify dismiss`
@@ -430,6 +474,63 @@ sidecar notify post "Need a decision" --source waiting --expiry never
 sidecar notify post "Build failed" --body "go test ./internal/app" --json
 sidecar notify post "Review needed" --target issue:td-4c1f9a --target file:internal/app/model.go:42
 sidecar notify post "Fixed upstream" --target issue:td-99aabb@braid
+```
+
+### `sidecar notify status`
+
+Probe native and sound provider availability
+
+Probe providers without sending a notification or changing configuration.
+
+```
+Usage: sidecar notify status [--json]
+```
+
+**Options:**
+
+- `--json`: Write provider capabilities as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: probe completed
+- `1`: output failure
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar notify status --json
+```
+
+### `sidecar notify test`
+
+Explicitly test enabled notification channels
+
+Exercise enabled providers without creating a notification-centre record. Explicit tests bypass foreground and quiet-hours suppression but still honor disabled channels and unavailable providers.
+
+```
+Usage: sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--json]
+```
+
+**Options:**
+
+- `--channel CHANNEL`: Test native, sound, or all (required)
+- `--event EVENT`: Use waiting, done, or failure (default waiting)
+- `--json`: Write per-channel attempted/provider/delivered/error results
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: requested channels delivered
+- `1`: provider or output failure
+- `2`: usage error
+- `3`: a requested channel was disabled or unavailable
+
+**Examples:**
+
+```bash
+sidecar notify test --channel all --event waiting --json
 ```
 
 ## `sidecar open`

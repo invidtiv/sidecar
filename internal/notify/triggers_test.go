@@ -15,6 +15,7 @@ func obs(key string, lane agentstatus.LaneID, health bool) LaneObservation {
 		Provider:     "claude",
 		Presentation: agentstatus.Presentation{Lane: lane, Health: health},
 		Origin:       Origin{TmuxSession: key, ProjectKey: "sidecar"},
+		ProjectRoot:  "/repos/sidecar",
 	}
 }
 
@@ -61,6 +62,9 @@ func TestWaitingPostsStickyAndSelfDismisses(t *testing.T) {
 	}
 	if waiting.Origin.TmuxSession != "a" {
 		t.Fatalf("origin not carried: %#v", waiting.Origin)
+	}
+	if waiting.Transition == nil || waiting.Transition.Class != TransitionWaiting || waiting.Transition.LaneKey != "a" || waiting.Transition.DedupeKey == "" || waiting.Transition.ReplacementKey == "" || waiting.Transition.ProjectRoot != "/repos/sidecar" {
+		t.Fatalf("structured waiting transition = %#v", waiting.Transition)
 	}
 
 	// Answering the prompt withdraws the notification the tracker posted.
@@ -187,5 +191,61 @@ func TestLabelFallsBackToProvider(t *testing.T) {
 	}
 	if got := laneName(LaneObservation{}); got != "Agent" {
 		t.Fatalf("laneName = %q", got)
+	}
+}
+
+func TestSeededWaitingDismissesAcrossRestart(t *testing.T) {
+	now := time.Unix(9000, 0)
+	seed := Notification{ID: "retained-wait", Source: SourceWaiting, CreatedAt: now, Sticky: true, Transition: &TransitionMetadata{Class: TransitionWaiting, LaneKey: "a", DedupeKey: "origin-a:waiting"}}
+	tr := &LaneTracker{Debounce: time.Second}
+	tr.Seed([]Notification{seed})
+	tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now.Add(time.Second))
+	events := tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now.Add(2*time.Second))
+	if len(events.Dismiss) != 1 || events.Dismiss[0] != seed.ID {
+		t.Fatalf("restart transition dismissed %#v", events.Dismiss)
+	}
+}
+
+func TestSeededWaitingWinsStartupBaselineRace(t *testing.T) {
+	now := time.Unix(9500, 0)
+	seed := Notification{ID: "retained-wait", Source: SourceWaiting, CreatedAt: now, Transition: &TransitionMetadata{Class: TransitionWaiting, LaneKey: "a", DedupeKey: "origin-a:waiting"}}
+	tr := &LaneTracker{Debounce: time.Second}
+	tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now)
+	tr.Seed([]Notification{seed})
+	tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now.Add(time.Second))
+	events := tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now.Add(2*time.Second))
+	if len(events.Dismiss) != 1 || events.Dismiss[0] != seed.ID {
+		t.Fatalf("startup race dismissed %#v", events.Dismiss)
+	}
+}
+
+func TestSeededUserDismissedWaitingStaysDismissedUntilNewEpisode(t *testing.T) {
+	now := time.Unix(10000, 0)
+	dismissedAt := now.Add(time.Second)
+	seed := Notification{ID: "dismissed-wait", Source: SourceWaiting, CreatedAt: now, DismissedAt: &dismissedAt, Transition: &TransitionMetadata{Class: TransitionWaiting, LaneKey: "a", DedupeKey: "origin-a:waiting"}}
+	tr := &LaneTracker{Debounce: time.Second}
+	tr.Seed([]Notification{seed})
+	if events := tr.Observe([]LaneObservation{obs("a", agentstatus.LaneBlocked, false)}, now.Add(2*time.Second)); !events.Empty() {
+		t.Fatalf("dismissed blocked episode replayed: %#v", events)
+	}
+	settle(t, tr, obs("a", agentstatus.LaneWorking, false), now.Add(3*time.Second))
+	events := settle(t, tr, obs("a", agentstatus.LaneBlocked, false), now.Add(6*time.Second))
+	if len(events.Post) != 1 || events.Post[0].ID == seed.ID {
+		t.Fatalf("new blocked episode = %#v", events)
+	}
+}
+
+func TestLogicalDedupeWinnerBecomesWaitingDismissTarget(t *testing.T) {
+	now := time.Unix(11000, 0)
+	tr := &LaneTracker{Debounce: time.Second}
+	tr.Observe([]LaneObservation{obs("a", agentstatus.LaneWorking, false)}, now)
+	events := settle(t, tr, obs("a", agentstatus.LaneBlocked, false), now.Add(time.Second))
+	local := events.Post[0]
+	winner := local
+	winner.ID = "other-process-winner"
+	tr.ReconcilePosted(winner)
+	events = settle(t, tr, obs("a", agentstatus.LaneWorking, false), now.Add(4*time.Second))
+	if len(events.Dismiss) != 1 || events.Dismiss[0] != winner.ID {
+		t.Fatalf("dedupe reconciliation dismissed %#v", events.Dismiss)
 	}
 }

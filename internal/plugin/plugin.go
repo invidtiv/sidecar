@@ -22,6 +22,22 @@ type Plugin interface {
 	FocusContext() string
 }
 
+// AttentionOriginProvider projects the workspace/session actually visible in
+// a presentation-only surface. The app owns focus and publishes this identity
+// for host-wide background policy.
+type AttentionOriginProvider interface {
+	AttentionOrigin() (AttentionOrigin, bool)
+}
+
+// AttentionOrigin is the app-level identity shared by project and global
+// workspace projections. It deliberately contains no notification or
+// transport types.
+type AttentionOrigin struct {
+	TmuxSession string
+	ProjectKey  string
+	WorkDir     string
+}
+
 // PaneFocusStop names one directly focusable window inside a plugin. IDs are
 // stable while visual order is expressed by the provider's returned slice.
 type PaneFocusStop struct {

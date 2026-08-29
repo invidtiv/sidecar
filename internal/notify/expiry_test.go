@@ -52,3 +52,34 @@ func TestUnreadableExpiryIsIgnoredRatherThanFatal(t *testing.T) {
 		t.Fatalf("a bad duration must leave the default in place, got %s", got)
 	}
 }
+
+func TestApplyConfigPublishesAnImmutableResolvedSnapshot(t *testing.T) {
+	t.Cleanup(func() { ApplyConfig(config.DefaultNotificationsConfig()) })
+	native := true
+	cfg := config.DefaultNotificationsConfig()
+	cfg.Native.Mode = config.DeliveryBackground
+	cfg.Sources = map[string]config.NotificationSourceConfig{
+		"waiting": {Native: &native, Sound: config.SoundAttention, Expiry: "33s"},
+	}
+	ApplyConfig(cfg)
+
+	// Mutating the loader model after Apply cannot mutate the live policy.
+	native = false
+	configured := cfg.Sources["waiting"]
+	configured.Expiry = "1s"
+	cfg.Sources["waiting"] = configured
+	snapshot := CurrentConfig()
+	rule := snapshot.SourceRule(SourceWaiting)
+	if snapshot.NativeMode != config.DeliveryBackground || !rule.Native || rule.Expiry != 33*time.Second {
+		t.Fatalf("resolved snapshot changed through source config: mode=%q rule=%+v", snapshot.NativeMode, rule)
+	}
+
+	// Inspection returns a defensive copy too.
+	rules := snapshot.SourceRules()
+	mutated := rules[SourceWaiting]
+	mutated.Native = false
+	rules[SourceWaiting] = mutated
+	if !CurrentConfig().SourceRule(SourceWaiting).Native {
+		t.Fatal("SourceRules exposed the live policy map")
+	}
+}

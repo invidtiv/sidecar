@@ -1,6 +1,6 @@
 # Notification sounds and native delivery
 
-**Status:** Planned **Tracking:** `td-95db32` **Created:** 2026-08-28
+**Status:** In progress — M0 and M1 complete **Tracking:** `td-95db32`, implementation epic `td-7b9ccc` **Created:** 2026-08-28 **Updated:** 2026-08-29
 
 This is the controlling plan for Sidecar notification sounds, native operating-system notifications, and their Configuration experience. It supersedes the unimplemented terminal-BEL configuration and OSC desktop-notification phases in [Notifications — toasts, centre, indicator, sources](../implemented/notifications.md). The existing in-app notification centre, toast renderer, JSONL store, calls to action, and agent-transition triggers remain the foundation.
 
@@ -354,7 +354,7 @@ The external delivery host must start no background loop of its own. It rides th
 
 ## Work sequence
 
-### M0 — Contracts, configuration, and duplicate prevention
+### M0 — Contracts, configuration, and duplicate prevention — Complete
 
 1. Extend `NotificationsConfig`, loader/raw types, validation, defaults, managed save path, `SaveNotifications`, and config round-trip tests.
 2. Extract immutable resolved delivery policy and its reason codes; retain `notify.ExpiryFor` behavior through the new snapshot.
@@ -366,7 +366,7 @@ The external delivery host must start no background loop of its own. It rides th
 
 Exit gate: a pure test matrix can prove foreground/background decisions and one claim winner across two stores/process models before any test can make sound or post to the OS.
 
-### M1 — macOS steel thread through both channels
+### M1 — macOS steel thread through both channels — Complete
 
 1. Add embedded `attention`, `done`, and `failure` assets plus the lazy versioned cache.
 2. Implement the asynchronous audio arbiter and macOS `afplay` adapter behind a fake runner.

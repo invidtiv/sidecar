@@ -173,7 +173,11 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 }
 
 // Update handles all messages and returns the updated model and commands.
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model) Update(msg tea.Msg) (result tea.Model, command tea.Cmd) {
+	if _, ok := msg.(attentionRefreshMsg); ok {
+		m.attentionTracking = true
+	}
+	defer func() { result, command = attachAttentionPublish(result, command) }()
 	var cmds []tea.Cmd
 	if result, ok := msg.(termpreview.LinkResultMsg); ok && m.terminalLinks != nil {
 		m.terminalLinks.Apply(result)
@@ -196,10 +200,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds = append(cmds, cmd)
 	switch model := updated.(type) {
 	case Model:
+		cmds = append(cmds, model.takeNotificationDeliveryCmds()...)
 		model.prepareTerminalLinks()
 		cmds = append(cmds, model.terminalLinkCmd())
 		updated = model
 	case *Model:
+		cmds = append(cmds, model.takeNotificationDeliveryCmds()...)
 		model.prepareTerminalLinks()
 		cmds = append(cmds, model.terminalLinkCmd())
 	}
@@ -588,6 +594,15 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := (&m).postNotification(msg.Notification)
 		return m, tea.Batch(cmd, (&m).syncToastReveal(time.Now()))
 
+	case notify.PostedMsg:
+		if msg.Created {
+			if current, ok := m.findNotification(msg.Notification.ID); ok && !current.Dismissed() {
+				cmds = append(cmds, m.deliverNotificationCmd(current, false))
+			} else if ok {
+				cmds = append(cmds, m.cancelNotificationCmd(current))
+			}
+		}
+
 	case notify.DismissMsg:
 		(&m).dismissNotification(msg.ID)
 		return m, (&m).syncToastReveal(time.Now())
@@ -880,6 +895,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, cmd)
 			}
 		}
+		if msg.Request.Action == uirequest.ActionConfigReload {
+			if cmd := (&m).handleConfigReloadRequest(msg.Request); cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+		}
 		if m.uiRequestWatcher != nil {
 			cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))
 		}
@@ -1087,7 +1107,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "quit":
 			// Save active plugin before quitting
 			m.shutdown()
-			return m, tea.Quit
+			return m, quitWithInstanceWithdrawal()
 		case "cancel":
 			m.showQuitConfirm = false
 			return m, nil
@@ -2633,7 +2653,7 @@ func (m *Model) handleQuitConfirmMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case "quit":
 		// Save active plugin before quitting
 		m.shutdown()
-		return m, tea.Quit
+		return m, quitWithInstanceWithdrawal()
 	case "cancel":
 		m.showQuitConfirm = false
 		return m, nil

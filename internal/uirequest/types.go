@@ -23,6 +23,10 @@ const (
 	// Its payload is a notification record rather than a target, because the
 	// object it names does not exist until the request lands.
 	ActionNotify Action = "notify"
+	// ActionConfigReload tells live instances that a targeted CLI save has
+	// completed. The config file remains authoritative; the request carries no
+	// settings payload for a host to trust or merge.
+	ActionConfigReload Action = "config-reload"
 	// ActionLayout reads or composes a surface's pane layout in one request.
 	// Like notify, its object is not addressable as a Target: the payload is a
 	// LayoutPayload naming the mode and, for apply, every requested pane. The

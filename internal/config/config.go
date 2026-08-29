@@ -349,6 +349,7 @@ func Default() *Config {
 		Features: FeaturesConfig{
 			Flags: make(map[string]bool),
 		},
+		Notifications: DefaultNotificationsConfig(),
 	}
 }
 

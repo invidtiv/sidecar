@@ -9,10 +9,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/notify"
-	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/overlay"
 	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/styles"
+	"github.com/marcus/sidecar/internal/ui"
 )
 
 // Toasts are a bordered floating block in the top-right of the *content

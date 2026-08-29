@@ -2,6 +2,7 @@ package notify
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -60,6 +61,9 @@ type LaneObservation struct {
 	// through the CLI and a lane trigger about the same shell agree on identity
 	// and the origin-checked dismiss path keeps working.
 	Origin Origin
+	// ProjectRoot is the stable owning project identity already resolved by the
+	// producer. It may differ from Origin.WorkDir for an external worktree.
+	ProjectRoot string
 }
 
 // LaneEvents is what one Observe call produced: notifications to post, and the
@@ -174,7 +178,7 @@ func (t *LaneTracker) commit(st *laneState, prior agentstatus.LaneID, o LaneObse
 	switch {
 	case st.lane == agentstatus.LaneBlocked:
 		n := laneNotification(o, now, SourceWaiting, SeverityWarning,
-			fmt.Sprintf("%s needs input", laneName(o)), laneBody(o))
+			TransitionWaiting, fmt.Sprintf("%s needs input", laneName(o)), laneBody(o))
 		n.Sticky = true
 		st.waitingID = n.ID
 		events.Post = append(events.Post, n)
@@ -186,7 +190,7 @@ func (t *LaneTracker) commit(st *laneState, prior agentstatus.LaneID, o LaneObse
 			return
 		}
 		events.Post = append(events.Post, laneNotification(o, now, SourceSession, SeverityError,
-			fmt.Sprintf("%s session ended", laneName(o)), laneBody(o)))
+			TransitionFailure, fmt.Sprintf("%s session ended", laneName(o)), laneBody(o)))
 
 	case st.lane == agentstatus.LaneDone:
 		// Done means "just finished a turn". Reaching it from idle or paused is
@@ -195,11 +199,16 @@ func (t *LaneTracker) commit(st *laneState, prior agentstatus.LaneID, o LaneObse
 			return
 		}
 		events.Post = append(events.Post, laneNotification(o, now, SourceSession, SeverityInfo,
-			fmt.Sprintf("%s finished", laneName(o)), laneBody(o)))
+			TransitionDone, fmt.Sprintf("%s finished", laneName(o)), laneBody(o)))
 	}
 }
 
-func laneNotification(o LaneObservation, now time.Time, source SourceID, sev Severity, title, body string) Notification {
+func laneNotification(o LaneObservation, now time.Time, source SourceID, sev Severity, class TransitionClass, title, body string) Notification {
+	stableOrigin := o.Origin.StableKey()
+	dedupeKey := o.Key + ":" + string(class)
+	if stableOrigin != "" {
+		dedupeKey = stableOrigin + ":" + string(class)
+	}
 	return Notification{
 		ID:        NewID(),
 		Source:    source,
@@ -208,6 +217,97 @@ func laneNotification(o LaneObservation, now time.Time, source SourceID, sev Sev
 		Body:      body,
 		CreatedAt: now.UTC(),
 		Origin:    o.Origin,
+		Transition: &TransitionMetadata{
+			Class: class, LaneKey: o.Key, DedupeKey: dedupeKey, ReplacementKey: stableOrigin,
+			ProjectRoot: lexicalProjectRoot(o.ProjectRoot),
+		},
+	}
+}
+
+// TransitionOwnedByProject is the deterministic ownership gate for restart
+// seeding and post reconciliation. New structured records compare their
+// producer-captured root directly. Legacy records without that field are
+// accepted only when Origin.WorkDir is lexically inside the current root;
+// basename-only ProjectKey records are ambiguous and remain retained without
+// giving this project authority to dismiss them.
+func TransitionOwnedByProject(n Notification, projectRoot string) bool {
+	meta := n.Transition
+	if meta == nil || meta.LaneKey == "" {
+		return false
+	}
+	projectRoot = lexicalProjectRoot(projectRoot)
+	if projectRoot == "" {
+		return false
+	}
+	if owner := lexicalProjectRoot(meta.ProjectRoot); owner != "" {
+		return owner == projectRoot
+	}
+	if key := strings.TrimSpace(n.Origin.ProjectKey); key != "" && key != filepath.Base(projectRoot) {
+		return false
+	}
+	workDir := lexicalProjectRoot(n.Origin.WorkDir)
+	if workDir == "" {
+		return false
+	}
+	return workDir == projectRoot || strings.HasPrefix(workDir, strings.TrimSuffix(projectRoot, string(filepath.Separator))+string(filepath.Separator))
+}
+
+func lexicalProjectRoot(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Clean(path)
+}
+
+// Seed restores the latest retained transition for each lane. A retained
+// waiting record makes the blocked episode resumable across restart. A
+// user-dismissed wait seeds the lane without restoring waitingID, so it stays
+// dismissed until the lane leaves and later blocks again.
+func (t *LaneTracker) Seed(all []Notification) {
+	if t.states == nil {
+		t.states = make(map[string]*laneState)
+	}
+	ordered := append([]Notification(nil), all...)
+	SortNewestFirst(ordered)
+	seen := make(map[string]bool)
+	for _, n := range ordered {
+		meta := n.Transition
+		if meta == nil || meta.LaneKey == "" || seen[meta.LaneKey] {
+			continue
+		}
+		seen[meta.LaneKey] = true
+		if meta.Class != TransitionWaiting {
+			continue
+		}
+		st, exists := t.states[meta.LaneKey]
+		if !exists {
+			st = &laneState{}
+			t.states[meta.LaneKey] = st
+		}
+		// The seed is authoritative for the episode that survived on disk. This
+		// also closes the startup race where an async agent baseline arrives
+		// before the seed message: the next settled observation still reconciles
+		// the retained wait instead of silently orphaning it.
+		st.lane = agentstatus.LaneBlocked
+		st.candidate = ""
+		st.waitingID = ""
+		if !n.Dismissed() {
+			st.waitingID = n.ID
+		}
+	}
+}
+
+// ReconcilePosted adopts the store's authoritative id after Post. This matters
+// when another process won logical-event dedupe: the local tracker generated a
+// different id and must dismiss the retained winner when the lane leaves.
+func (t *LaneTracker) ReconcilePosted(n Notification) {
+	meta := n.Transition
+	if meta == nil || meta.Class != TransitionWaiting || meta.LaneKey == "" || t.states == nil {
+		return
+	}
+	if st := t.states[meta.LaneKey]; st != nil && st.lane == agentstatus.LaneBlocked {
+		st.waitingID = n.ID
 	}
 }
 

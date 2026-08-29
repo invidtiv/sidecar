@@ -60,7 +60,7 @@ func TestCentreSelectedEntryIsHighlightedAcrossBothRowsAndEveryStyledSpan(t *tes
 	m.notificationCentreCursor = 0
 
 	const inner = 40
-	lines := m.notificationCentreItemLines(stored, inner, 0, time.Now())
+	lines := m.notificationCentreItemLines(stored.Notification, inner, 0, time.Now())
 	if len(lines) != 2 {
 		t.Fatalf("entry rendered %d rows, want the title row and the body row", len(lines))
 	}

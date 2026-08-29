@@ -3,14 +3,17 @@ package cli
 import (
 	"context"
 	"io"
+
+	"github.com/marcus/sidecar/internal/notifydelivery"
 )
 
 // Env holds the execution environment passed to a command handler.
 type Env struct {
-	Stdout   io.Writer
-	Stderr   io.Writer
-	StateDir string
-	Ctx      context.Context
+	Stdout               io.Writer
+	Stderr               io.Writer
+	StateDir             string
+	Ctx                  context.Context
+	NotificationDelivery notifydelivery.Coordinator
 }
 
 // Flag defines a command line flag.

@@ -577,9 +577,8 @@ type Plugin struct {
 	// wheel coalesces a trackpad flick, so this surface takes the same amount of
 	// one as every other terminal surface does — one flick per terminal surface,
 	// because the preview and the panel scroll independently. clock is the time it
-	// and its cooldowns read: a field, because the burst takes the time from its
-	// caller so a whole flick can be driven a notch at a time without sleeping.
-	// nil is the wall clock.
+	// and other in-memory transition policy read: a field so behavior can be
+	// driven without sleeping. nil is the wall clock.
 	wheel tty.WheelBursts
 	clock func() time.Time
 
@@ -607,7 +606,8 @@ type Plugin struct {
 	// agentLaneTracker turns agent lane transitions into notifications. It is
 	// the plugin's only notification state: the rules live in internal/notify,
 	// and this holds the per-workspace history they debounce against.
-	agentLaneTracker notify.LaneTracker
+	agentLaneTracker      notify.LaneTracker
+	pendingAgentLaneSeeds []notify.Notification
 	// nestedByWorkDir is the nest projection of the full manifest, keyed by
 	// parent worktree path. Current workDir shells stay out of this map.
 	nestedByWorkDir map[string][]*ShellSession
@@ -899,6 +899,8 @@ func (p *Plugin) Init(ctx *plugin.Context) error {
 	// Reset agent-related state for clean reinit (important for project switching)
 	// Without this, reconnectAgents() won't run again after switching projects
 	p.initialReconnectDone = false
+	p.agentLaneTracker = notify.LaneTracker{}
+	p.pendingAgentLaneSeeds = nil
 	p.agents = make(map[string]*Agent)
 	p.managedSessions = make(map[string]bool)
 	p.worktrees = make([]*Worktree, 0)
@@ -2142,7 +2144,7 @@ func (p *Plugin) loadSelectedContent() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// now is the clock every wheel-burst decision reads.
+// now is the clock for in-memory interaction and transition decisions.
 func (p *Plugin) now() time.Time {
 	if p.clock != nil {
 		return p.clock()

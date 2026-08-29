@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tty"
@@ -72,6 +73,7 @@ type workspaceTerminalTarget = termpanes.Target
 // routed explicitly by interactive mode so a visible preview never captures
 // input intended for workspace navigation.
 func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
+	_, seedingLaneTrackers := msg.(notify.SeedLaneTrackersMsg)
 	// Hold must be on the models before a forwarded deferredResizeMsg can
 	// assert, and again after mouse handling so reconcile sees the drag state.
 	p.syncTerminalResizeHold()
@@ -128,8 +130,10 @@ func (p *Plugin) Update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 	// Agent lane transitions are swept here for the same reason: too many paths
 	// mutate an agent's activity to trust each of them to notice a transition.
-	if cmd := p.notifyAgentTransitions(time.Now()); cmd != nil {
-		cmds = append(cmds, cmd)
+	if !seedingLaneTrackers {
+		if cmd := p.notifyAgentTransitions(p.now()); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 	return p, tea.Batch(cmds...)
 }

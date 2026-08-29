@@ -113,6 +113,7 @@ func DefaultBindings() []Binding {
 		{Key: "]", Command: "move-project-down", Context: "config"},
 		// The theme picker, on Appearance and inline in Add Project.
 		{Key: "g", Command: "use-global-theme", Context: "config"},
+		{Key: "t", Command: "test-notifications", Context: "config"},
 
 		// notification-centre: the app-level right panel. Its keys are answered
 		// by the app before keymap dispatch (it is the focused surface, not a

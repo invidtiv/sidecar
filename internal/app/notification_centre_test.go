@@ -80,7 +80,7 @@ func postCentreNotification(t *testing.T, m *Model, source notify.SourceID, titl
 		t.Fatal(err)
 	}
 	m.refreshNotifications()
-	return stored
+	return stored.Notification
 }
 
 // The reservation is the feature: every plugin must be handed the narrowed

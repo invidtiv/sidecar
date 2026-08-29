@@ -24,7 +24,7 @@ func postTargetNotification(t *testing.T, m *Model, title, body string, targets 
 		t.Fatal(err)
 	}
 	m.refreshNotifications()
-	return stored
+	return stored.Notification
 }
 
 // activateOne runs a command and returns the single message it produced,

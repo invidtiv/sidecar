@@ -10,6 +10,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
@@ -31,6 +32,421 @@ func runNotifyRoot(env Env, args []string) int {
 	}
 	cliErrf(env.Stderr, "unknown notify command %q\n\n%s", args[0], RenderHelp(cmd))
 	return 2
+}
+
+func runNotifyConfig(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("config")
+	if len(args) > 0 && args[0] == "set" {
+		return runNotifyConfigSet(env, args[1:])
+	}
+	jsonOutput := false
+	for _, arg := range args {
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		default:
+			cliErrf(env.Stderr, "unknown notify config option %q\n\n%s", arg, RenderHelp(cmd))
+			return 2
+		}
+	}
+	cfg, err := loadAndApplyNotificationConfig()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	return writeNotificationConfig(env, cfg.Notifications, jsonOutput)
+}
+
+func runNotifyConfigSet(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("config").FindSubcommand("set")
+	help := RenderHelp(cmd)
+	jsonOutput := false
+	var nativeMode, soundMode string
+	setNative, setSound := false, false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value := func(flag string) (string, bool) {
+			if strings.HasPrefix(arg, flag+"=") {
+				return strings.TrimPrefix(arg, flag+"="), true
+			}
+			if arg == flag && i+1 < len(args) {
+				i++
+				return args[i], true
+			}
+			return "", false
+		}
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--native" || strings.HasPrefix(arg, "--native="):
+			v, ok := value("--native")
+			if !ok {
+				cliErrf(env.Stderr, "--native requires off, background, or always\n\n%s", help)
+				return 2
+			}
+			nativeMode, setNative = v, true
+		case arg == "--sound" || strings.HasPrefix(arg, "--sound="):
+			v, ok := value("--sound")
+			if !ok {
+				cliErrf(env.Stderr, "--sound requires off, background, or always\n\n%s", help)
+				return 2
+			}
+			soundMode, setSound = v, true
+		default:
+			cliErrf(env.Stderr, "unknown notify config set option %q\n\n%s", arg, help)
+			return 2
+		}
+	}
+	if !setNative && !setSound {
+		cliErrf(env.Stderr, "notify config set requires --native or --sound\n\n%s", help)
+		return 2
+	}
+	prospective, err := loadAndApplyNotificationConfig()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	if setNative {
+		prospective.Notifications.Native.Mode = config.DeliveryMode(nativeMode)
+	}
+	if setSound {
+		prospective.Notifications.Sound.Mode = config.DeliveryMode(soundMode)
+	}
+	if err := config.ValidateNotifications(prospective.Notifications, config.ConfigPath()); err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	err = config.SaveNotifications(func(cfg *config.NotificationsConfig) {
+		if setNative {
+			cfg.Native.Mode = config.DeliveryMode(nativeMode)
+		}
+		if setSound {
+			cfg.Sound.Mode = config.DeliveryMode(soundMode)
+		}
+	})
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	cfg, err := loadAndApplyNotificationConfig()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	broadcastNotificationConfigReload(env)
+	return writeNotificationConfig(env, cfg.Notifications, jsonOutput)
+}
+
+func writeNotificationConfig(env Env, cfg config.NotificationsConfig, jsonOutput bool) int {
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(notificationConfigView(cfg)); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "System notifications: %s\nSounds: %s\n", notificationModeText(cfg.Native.Mode), notificationModeText(cfg.Sound.Mode))
+	if cfg.QuietHours.Enabled {
+		_, _ = fmt.Fprintf(env.Stdout, "Quiet hours: %s-%s\n", cfg.QuietHours.Start, cfg.QuietHours.End)
+	} else {
+		_, _ = fmt.Fprintln(env.Stdout, "Quiet hours: off")
+	}
+	return 0
+}
+
+type notificationSourceView struct {
+	Toast  bool            `json:"toast"`
+	Native bool            `json:"native"`
+	Sound  config.SoundCue `json:"sound"`
+	Expiry string          `json:"expiry"`
+}
+
+type notificationConfigResult struct {
+	Native     config.NativeNotificationsConfig  `json:"native"`
+	Sound      config.SoundNotificationsConfig   `json:"sound"`
+	QuietHours config.QuietHoursConfig           `json:"quietHours"`
+	Sources    map[string]notificationSourceView `json:"sources"`
+}
+
+func notificationConfigView(cfg config.NotificationsConfig) notificationConfigResult {
+	resolved := notify.ResolveConfig(cfg)
+	// Report the policy this build will actually apply. In particular, an
+	// unrecognized hand-edited mode resolves to off in both human and JSON
+	// output while the original spelling remains untouched on disk for repair.
+	cfg.Native.Mode = resolved.NativeMode
+	cfg.Sound.Mode = resolved.SoundMode
+	sources := make(map[string]notificationSourceView)
+	for id, rule := range resolved.SourceRules() {
+		expiry := rule.Expiry.String()
+		if rule.Expiry == 0 {
+			expiry = "sticky"
+		}
+		sources[string(id)] = notificationSourceView{Toast: rule.Toast, Native: rule.Native, Sound: rule.Sound, Expiry: expiry}
+	}
+	// Unknown future sources are retained and reported even though this build
+	// resolves them centre-only.
+	for id, configured := range cfg.Sources {
+		if _, known := sources[id]; known {
+			continue
+		}
+		view := notificationSourceView{Toast: true, Sound: config.SoundNone, Expiry: notify.SourceOf(notify.SourceID(id)).DefaultExpiry.String()}
+		if configured.Toast != nil {
+			view.Toast = *configured.Toast
+		}
+		if configured.Native != nil {
+			view.Native = *configured.Native
+		}
+		if configured.Sound != "" {
+			view.Sound = configured.Sound
+		}
+		if configured.Expiry != "" {
+			view.Expiry = configured.Expiry
+		}
+		sources[id] = view
+	}
+	return notificationConfigResult{Native: cfg.Native, Sound: cfg.Sound, QuietHours: cfg.QuietHours, Sources: sources}
+}
+
+// loadAndApplyNotificationConfig gives every fresh notify command the same
+// persisted, resolved policy snapshot as the running app. This is deliberately
+// done at command execution, after -config has selected the authoritative file.
+func loadAndApplyNotificationConfig() (*config.Config, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	notify.ApplyConfig(cfg.Notifications)
+	return cfg, nil
+}
+
+func notificationModeText(mode config.DeliveryMode) string {
+	switch mode {
+	case config.DeliveryBackground:
+		return "background only"
+	case config.DeliveryAlways:
+		return "always"
+	default:
+		return "off"
+	}
+}
+
+func runNotifyStatus(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("status")
+	jsonOutput := false
+	for _, arg := range args {
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		default:
+			cliErrf(env.Stderr, "unknown notify status option %q\n\n%s", arg, RenderHelp(cmd))
+			return 2
+		}
+	}
+	if _, err := loadAndApplyNotificationConfig(); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	status := notifydelivery.Status{
+		Native: notifydelivery.Capability{Reason: "provider status unavailable"},
+		Sound:  notifydelivery.Capability{Reason: "provider status unavailable"},
+	}
+	if provider, ok := env.NotificationDelivery.(notifydelivery.StatusProvider); ok {
+		ctx := env.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		status = provider.Status(ctx)
+	}
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(status); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	_, _ = fmt.Fprintln(env.Stdout, formatCapability("Native", status.Native))
+	_, _ = fmt.Fprintln(env.Stdout, formatCapability("Sound", status.Sound))
+	if status.Remote {
+		_, _ = fmt.Fprintln(env.Stdout, "Context: remote shell")
+	} else {
+		_, _ = fmt.Fprintln(env.Stdout, "Context: local")
+	}
+	return 0
+}
+
+func formatCapability(label string, capability notifydelivery.Capability) string {
+	if capability.Available {
+		return label + ": ready (" + capability.Provider + ")"
+	}
+	reason := capability.Reason
+	if reason == "" {
+		reason = "unavailable"
+	}
+	return label + ": unavailable (" + reason + ")"
+}
+
+func runNotifyTest(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("test")
+	help := RenderHelp(cmd)
+	jsonOutput := false
+	channel := ""
+	event := notifydelivery.TestWaiting
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value := func(flag string) (string, bool) {
+			if strings.HasPrefix(arg, flag+"=") {
+				return strings.TrimPrefix(arg, flag+"="), true
+			}
+			if arg == flag && i+1 < len(args) {
+				i++
+				return args[i], true
+			}
+			return "", false
+		}
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--channel" || strings.HasPrefix(arg, "--channel="):
+			v, ok := value("--channel")
+			if !ok || (v != notifydelivery.ChannelNative && v != notifydelivery.ChannelSound && v != "all") {
+				cliErrf(env.Stderr, "--channel requires native, sound, or all\n\n%s", help)
+				return 2
+			}
+			if v != "all" {
+				channel = v
+			}
+		case arg == "--event" || strings.HasPrefix(arg, "--event="):
+			v, ok := value("--event")
+			event = notifydelivery.TestEvent(v)
+			if !ok || (event != notifydelivery.TestWaiting && event != notifydelivery.TestDone && event != notifydelivery.TestFailure) {
+				cliErrf(env.Stderr, "--event requires waiting, done, or failure\n\n%s", help)
+				return 2
+			}
+		default:
+			cliErrf(env.Stderr, "unknown notify test option %q\n\n%s", arg, help)
+			return 2
+		}
+	}
+	if channel == "" && !containsArg(args, "--channel") {
+		cliErrf(env.Stderr, "notify test requires --channel native, sound, or all\n\n%s", help)
+		return 2
+	}
+	if _, err := loadAndApplyNotificationConfig(); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	request, err := notifydelivery.ExplicitTestRequest(event)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	request.Channel = channel
+	result := notifydelivery.Result{}
+	if env.NotificationDelivery != nil {
+		ctx := env.Ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		result = env.NotificationDelivery.Deliver(ctx, request)
+	}
+	out := struct {
+		Event   notifydelivery.TestEvent     `json:"event"`
+		Channel string                       `json:"channel"`
+		Native  notifydelivery.ChannelResult `json:"native"`
+		Sound   notifydelivery.ChannelResult `json:"sound"`
+	}{Event: event, Channel: selectedChannelText(channel), Native: result.Native, Sound: result.Sound}
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(out); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+	} else {
+		_, _ = fmt.Fprintln(env.Stdout, "Native: "+formatChannelResult(result.Native))
+		_, _ = fmt.Fprintln(env.Stdout, "Sound: "+formatChannelResult(result.Sound))
+	}
+	return notificationTestExitCode(channel, result)
+}
+
+func containsArg(args []string, flag string) bool {
+	for _, arg := range args {
+		if arg == flag || strings.HasPrefix(arg, flag+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func selectedChannelText(channel string) string {
+	if channel == "" {
+		return "all"
+	}
+	return channel
+}
+
+func formatChannelResult(result notifydelivery.ChannelResult) string {
+	switch {
+	case result.Delivered && result.Error != "":
+		provider := result.Provider
+		if provider == "" {
+			provider = "provider"
+		}
+		return "delivered (" + provider + "); coordination failed: " + result.Error
+	case result.Error != "":
+		return "failed: " + result.Error
+	case result.Delivered:
+		return "delivered (" + result.Provider + ")"
+	case result.Reason != "":
+		return strings.ReplaceAll(string(result.Reason), "_", " ")
+	default:
+		return "not attempted"
+	}
+}
+
+func notificationTestExitCode(channel string, result notifydelivery.Result) int {
+	channels := []notifydelivery.ChannelResult{result.Native, result.Sound}
+	switch channel {
+	case notifydelivery.ChannelNative:
+		channels = channels[:1]
+	case notifydelivery.ChannelSound:
+		channels = channels[1:]
+	}
+	for _, result := range channels {
+		if result.Error != "" {
+			return 1
+		}
+	}
+	for _, result := range channels {
+		if !result.Delivered {
+			return 3
+		}
+	}
+	return 0
+}
+
+// broadcastNotificationConfigReload makes an out-of-process targeted save
+// live in every running Sidecar instance. The file is the source of truth; the
+// request deliberately carries no config payload.
+func broadcastNotificationConfigReload(env Env) {
+	instances, err := uirequest.ListInstances(env.StateDir)
+	if err != nil || len(instances) == 0 {
+		return
+	}
+	_, _ = uirequest.WriteRequest(env.StateDir, uirequest.Request{
+		Action: uirequest.ActionConfigReload,
+		Origin: originForRequest(notifyOrigin(env)),
+	})
 }
 
 func runNotifyPost(env Env, args []string) int {
@@ -172,9 +588,17 @@ func runNotifyPost(env Env, args []string) int {
 			return 1
 		}
 		defer func() { _ = store.Close() }()
-		if _, err := store.Post(n); err != nil {
+		result, err := store.Post(n)
+		if err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
+		}
+		if result.Created && env.NotificationDelivery != nil {
+			ctx := env.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			env.NotificationDelivery.Deliver(ctx, notifydelivery.Request{Notification: result.Notification})
 		}
 	}
 
@@ -250,6 +674,16 @@ func runNotifyDismiss(env Env, args []string) int {
 		if err := store.Dismiss(id); err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
+		}
+		if env.NotificationDelivery != nil {
+			ctx := env.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if err := env.NotificationDelivery.Remove(ctx, target); err != nil {
+				cliErrln(env.Stderr, err)
+				return 1
+			}
 		}
 	}
 

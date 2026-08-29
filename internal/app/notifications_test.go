@@ -38,8 +38,10 @@ func TestPostDismissAndSweep(t *testing.T) {
 
 	if cmd := m.postNotification(notify.Notification{Source: notify.SourceAgent, Title: "done"}); cmd == nil {
 		t.Fatalf("posting should broadcast the stored record")
-	} else if _, ok := cmd().(notify.PostedMsg); !ok {
+	} else if posted, ok := cmd().(notify.PostedMsg); !ok {
 		t.Fatalf("expected a PostedMsg broadcast")
+	} else if !posted.Created || posted.Reason != notify.PostCreated {
+		t.Fatalf("new post result = %+v", posted)
 	}
 	if m.UnreadNotifications() != 1 {
 		t.Fatalf("unread = %d, want 1", m.UnreadNotifications())
@@ -65,6 +67,23 @@ func TestPostDismissAndSweep(t *testing.T) {
 	m.sweepNotifications(time.Now().Add(notify.Retention + time.Minute))
 	if len(m.Notifications()) != 0 {
 		t.Fatalf("sweeping past retention should compact it away")
+	}
+}
+
+func TestExistingPostBroadcastsWithoutClaimingCreation(t *testing.T) {
+	m := notifyModel()
+	n := notify.Notification{ID: "fixed", Source: notify.SourceAgent, Title: "once"}
+	first := m.postNotification(n)
+	if first == nil {
+		t.Fatal("first post returned nil")
+	}
+	second := m.postNotification(n)
+	if second == nil {
+		t.Fatal("existing post must still reconcile its authoritative id")
+	}
+	posted, ok := second().(notify.PostedMsg)
+	if !ok || posted.Created || posted.Reason != notify.PostExistingID || posted.Notification.ID != "fixed" {
+		t.Fatalf("existing post result = %+v", posted)
 	}
 }
 
