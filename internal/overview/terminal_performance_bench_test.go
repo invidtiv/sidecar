@@ -59,9 +59,6 @@ func TestGlobalTerminalFixtureViewPerformsNoResolutionWork(t *testing.T) {
 	if snapshot.ContentLinkResolutionRequests != 0 || snapshot.SynchronousResolverCalls != 0 {
 		t.Fatalf("global repeated View counters = %+v, want zero resolution work", snapshot)
 	}
-	if snapshot.CanvasInferences != 2 {
-		t.Fatalf("global repeated View counters = %+v, want one canvas inference per view", snapshot)
-	}
 }
 
 func BenchmarkGlobalTerminalFrameOpenCodeFixture(b *testing.B) {
@@ -85,7 +82,6 @@ func reportTerminalMetrics(b *testing.B, snapshot terminalperf.Snapshot) {
 	b.ReportMetric(float64(snapshot.TerminalViewsRendered)/operations, "terminal_views/op")
 	b.ReportMetric(float64(snapshot.RowCacheHits)/operations, "row_cache_hits/op")
 	b.ReportMetric(float64(snapshot.RowCacheMisses)/operations, "row_cache_misses/op")
-	b.ReportMetric(float64(snapshot.CanvasInferences)/operations, "canvas_inferences/op")
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionRequests)/operations, "resolution_requests/op")
 	b.ReportMetric(float64(snapshot.ContentLinkResolutionCacheHits)/operations, "resolution_cache_hits/op")
 	b.ReportMetric(float64(snapshot.SynchronousResolverCalls)/operations, "synchronous_resolver_calls/op")

@@ -105,15 +105,19 @@ func DrawRows(in RowsInput) DrawResult {
 		analyzer = &RowAnalyzer{}
 	}
 	analysis := analyzer.analyze(in, backgrounds, spanMax)
+	// The host terminal's own background is the answer for every cell the child
+	// left at the terminal default, which is what those cells resolve to when
+	// the child runs in that terminal directly.
+	//
+	// Sidecar used to override this with a colour voted for out of the live
+	// grid, because a trimmed capture could not say what a blank row's cells
+	// were and a full-screen TUI's canvas would otherwise fall through to the
+	// surrounding panel. Captures are taken with -N now, so tmux states every
+	// cell and there is nothing left to infer: the vote could only overrule a
+	// fact. It also could not be made stable, because its inputs were the live
+	// rows, so one column of resize or one row of streamed output flipped it and
+	// repainted the pane. See docs/reference/terminal-background-fidelity.md.
 	canvasBg := in.DefaultBackground
-	if backgrounds == tty.BackgroundAuto {
-		if inferred := inferCanvas(analysis.live); inferred != "" {
-			// A child-owned full-pane canvas is an explicit override of the host
-			// default. Inset bubbles and highlights never pass inferCanvas, so
-			// they retain the host fallback around their own colored cells.
-			canvasBg = inferred
-		}
-	}
 	// tailWidth is the last column that still belongs to a captured pane row.
 	// tmux trims each row's trailing blank cells but keeps the SGR change that
 	// applied to them, so the row's own trailing background is what those cells
@@ -264,44 +268,6 @@ func PadCanvasBox(content, bg string, width, height int, truncate ...func(string
 // follow and interactive answer the same because both show the live pane.
 func Letterboxed(paneHeight int, interactive, follow bool) bool {
 	return paneHeight > 0 && (interactive || follow)
-}
-
-// CanvasBackground recognizes the background carried across a substantial share
-// of a fullscreen TUI's live rows. tmux renders later default-background cells
-// correctly in a real terminal because that terminal's default matches the
-// canvas. Inside Sidecar those cells otherwise fall through to the surrounding
-// surface and form rectangular seams.
-//
-// It is measured over the live grid, so a window with no pane behind it — a
-// watched capture, a scrollback-only view — has no canvas to find.
-//
-// Covering the rows is not enough on its own: a candidate must also open a
-// majority of them. A canvas owns column 0 of the rows it paints; an inset
-// block — a chat bubble, a callout — never does, however many of a sparsely
-// painted pane's rows it happens to cover. See CanvasRowShare for the coverage
-// bar and inferCanvas for how the two rules divide the work.
-func CanvasBackground(buffer *tty.OutputBuffer, paneTop, paneHeight int) string {
-	if buffer == nil || paneTop < 0 || paneHeight <= 0 {
-		return ""
-	}
-	layout := tty.Viewport{Start: paneTop, End: paneTop + paneHeight, EffectiveCount: paneHeight, PaneTop: paneTop}
-	analyzer := &RowAnalyzer{}
-	analysis := analyzer.analyze(RowsInput{Buffer: buffer, Layout: layout, PaneHeight: paneHeight}, tty.BackgroundAuto, tty.DefaultBackgroundSpanMax)
-	return inferCanvas(analysis.live)
-}
-
-// CanvasRowShare is how many of the rows that carry a background a candidate
-// must cover to be the pane's canvas rather than highlighting drawn on top of
-// one. Rows without any background are abstentions (see CanvasBackground), so
-// the share is measured over the painted ones.
-//
-// The bar is deliberately near-total rather than a simple majority. Measured
-// against live panes: Grok's canvas covers 43 of 43 and 56 of 56 rows, while a
-// Claude Code diff's added-line green covered 19 of 55. An earlier one-third
-// rule sat directly between those two, so scrolling a long diff by a single row
-// flipped it and repainted the whole pane green.
-func CanvasRowShare(rows int) int {
-	return max(2, rows*9/10)
 }
 
 // rowBackgroundLookback bounds how far back the inherited background is

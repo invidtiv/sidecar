@@ -11,7 +11,6 @@ import (
 
 var (
 	benchmarkRows  []string
-	benchmarkColor string
 	benchmarkSpans []terminallink.Span
 )
 
@@ -45,16 +44,6 @@ func BenchmarkDrawRowsOpenCodeFixture(b *testing.B) {
 	b.ReportMetric(float64(snapshot.TerminalViewsRendered)/float64(b.N), "terminal_views/op")
 	b.ReportMetric(float64(snapshot.RowCacheHits)/float64(b.N), "row_cache_hits/op")
 	b.ReportMetric(float64(snapshot.RowCacheMisses)/float64(b.N), "row_cache_misses/op")
-	b.ReportMetric(float64(snapshot.CanvasInferences)/float64(b.N), "canvas_inferences/op")
-}
-
-func BenchmarkCanvasBackgroundOpenCodeFixture(b *testing.B) {
-	input, fixture := openCodeRowsInput()
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		benchmarkColor = CanvasBackground(input.Buffer, 3, fixture.Height)
-	}
 }
 
 func BenchmarkLinkScanOpenCodeFixture(b *testing.B) {

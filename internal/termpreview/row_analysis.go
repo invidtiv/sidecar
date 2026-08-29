@@ -41,16 +41,12 @@ type analyzedRow struct {
 	backgroundFree string
 	visibleText    string
 	visibleWidth   int
-	blank          bool
 
 	hasTransition bool
 	trailing      string
-	prefixTouches bool
-	prefixBG      string
 	hasPrintable  bool
 	hasTab        bool
 	described     bool
-	explicitBGs   []string
 
 	resolvedValid    bool
 	resolvedIncoming string
@@ -63,9 +59,6 @@ type resolvedRow struct {
 	backgroundFree string
 	trailing       string
 	touched        bool
-	backgrounds    []string
-	first          string
-	blank          bool
 
 	// visibleWidth is the row's printable width before tab expansion, and
 	// hasTab says whether expansion can change it. Together they let a drawn
@@ -84,7 +77,6 @@ type analysisWindow struct {
 	revision               uint64
 	visible                []resolvedRow
 	visiblePredecessorBand int
-	live                   []resolvedRow
 }
 
 type indexedRows struct {
@@ -104,14 +96,9 @@ func (a *RowAnalyzer) analyze(in RowsInput, backgrounds tty.BackgroundMode, span
 	layout := in.Layout
 	visibleFrom := max(layout.Start-rowBackgroundLookback, 0)
 	visibleTo := layout.End
-	liveFrom, liveTo := 0, 0
-	if backgrounds == tty.BackgroundAuto && layout.PaneTop >= 0 && in.PaneHeight > 0 {
-		liveFrom = max(layout.PaneTop-rowBackgroundLookback, 0)
-		liveTo = layout.PaneTop + in.PaneHeight
-	}
 
-	revision, bands := consistentBands(buffer, [][2]int{{visibleFrom, visibleTo}, {liveFrom, liveTo}})
-	visibleBand, liveBand := bands[0], bands[1]
+	revision, bands := consistentBands(buffer, [][2]int{{visibleFrom, visibleTo}})
+	visibleBand := bands[0]
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -140,20 +127,18 @@ func (a *RowAnalyzer) analyze(in RowsInput, backgrounds tty.BackgroundMode, span
 		a.rows = make(map[int]*analyzedRow)
 	}
 
-	required := make(map[int]struct{}, len(visibleBand.rows)+len(liveBand.rows))
-	for _, band := range []indexedRows{visibleBand, liveBand} {
-		for i, raw := range band.rows {
-			index := band.from + i
-			required[index] = struct{}{}
-			fingerprint := maphash.String(rowAnalysisSeed, raw)
-			cached, ok := a.rows[index]
-			if ok && cached.fingerprint == fingerprint && cached.byteLen == len(raw) && cached.raw == raw {
-				terminalperf.Record(terminalperf.RowCacheHit)
-				continue
-			}
-			a.rows[index] = analyzeRawRow(raw, fingerprint)
-			terminalperf.Record(terminalperf.RowCacheMiss)
+	required := make(map[int]struct{}, len(visibleBand.rows))
+	for i, raw := range visibleBand.rows {
+		index := visibleBand.from + i
+		required[index] = struct{}{}
+		fingerprint := maphash.String(rowAnalysisSeed, raw)
+		cached, ok := a.rows[index]
+		if ok && cached.fingerprint == fingerprint && cached.byteLen == len(raw) && cached.raw == raw {
+			terminalperf.Record(terminalperf.RowCacheHit)
+			continue
 		}
+		a.rows[index] = analyzeRawRow(raw, fingerprint)
+		terminalperf.Record(terminalperf.RowCacheMiss)
 	}
 	for index := range a.rows {
 		if _, ok := required[index]; !ok {
@@ -162,12 +147,10 @@ func (a *RowAnalyzer) analyze(in RowsInput, backgrounds tty.BackgroundMode, span
 	}
 
 	visible, visiblePredecessorBand := a.resolveBand(visibleBand, layout.Start)
-	live, _ := a.resolveBand(liveBand, layout.PaneTop)
 	return analysisWindow{
 		revision:               revision,
 		visible:                visible,
 		visiblePredecessorBand: visiblePredecessorBand,
-		live:                   live,
 	}
 }
 
@@ -202,7 +185,6 @@ func analyzeRawRow(raw string, fingerprint uint64) *analyzedRow {
 	var backgroundFree, visible strings.Builder
 	backgroundFree.Grow(len(raw))
 	visible.Grow(len(raw))
-	explicit := make(map[string]struct{})
 	state := ansi.NormalState
 	remaining := raw
 	for len(remaining) > 0 {
@@ -219,11 +201,6 @@ func analyzeRawRow(raw string, fingerprint uint64) *analyzedRow {
 				row.trailing = ""
 			} else {
 				row.trailing = next
-				explicit[next] = struct{}{}
-			}
-			if !row.hasPrintable {
-				row.prefixTouches = true
-				row.prefixBG = row.trailing
 			}
 		}
 		if width > 0 {
@@ -236,11 +213,6 @@ func analyzeRawRow(raw string, fingerprint uint64) *analyzedRow {
 	}
 	row.backgroundFree = backgroundFree.String()
 	row.visibleText = visible.String()
-	row.blank = strings.TrimSpace(row.visibleText) == ""
-	row.explicitBGs = make([]string, 0, len(explicit))
-	for bg := range explicit {
-		row.explicitBGs = append(row.explicitBGs, bg)
-	}
 	return row
 }
 
@@ -286,26 +258,11 @@ func (r *analyzedRow) resolve(incoming string) resolvedRow {
 		wire = incoming + wire
 		backgroundFree = ui.RowBackgroundDefault + backgroundFree
 	}
-	backgrounds := append([]string(nil), r.explicitBGs...)
-	if incoming != "" {
-		backgrounds = appendUnique(backgrounds, incoming)
-	}
-	first := incoming
-	if r.hasPrintable {
-		if r.prefixTouches {
-			first = r.prefixBG
-		}
-	} else {
-		first = trailing
-	}
 	resolved := resolvedRow{
 		wire:           wire,
 		backgroundFree: backgroundFree,
 		trailing:       trailing,
 		touched:        incoming != "" || r.hasTransition,
-		backgrounds:    backgrounds,
-		first:          first,
-		blank:          r.blank,
 		visibleWidth:   r.visibleWidth,
 		hasTab:         r.hasTab,
 		described:      r.described,
@@ -315,128 +272,4 @@ func (r *analyzedRow) resolve(incoming string) resolvedRow {
 	r.resolvedValid = true
 	r.resolveCount++
 	return resolved
-}
-
-func appendUnique(values []string, value string) []string {
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append(values, value)
-}
-
-func inferCanvas(rows []resolvedRow) string {
-	terminalperf.Record(terminalperf.CanvasInference)
-	if len(rows) == 0 {
-		return ""
-	}
-	last := len(rows) - 1
-	for last >= 0 && rows[last].blank && len(rows[last].backgrounds) == 0 {
-		last--
-	}
-	if last < 0 {
-		return ""
-	}
-	rows = rows[:last+1]
-	counts := make(map[string]int)
-	blankRows := make(map[string]int)
-	firstCell := make(map[string]int)
-	overlap := make(map[string]int)
-	firstRow := make(map[string]int)
-	lastRow := make(map[string]int)
-	paintedRowCount := 0
-	for rowIndex, row := range rows {
-		if len(row.backgrounds) == 0 {
-			continue
-		}
-		paintedRowCount++
-		if row.first != "" {
-			firstCell[row.first]++
-		}
-		for _, bg := range row.backgrounds {
-			if counts[bg] == 0 {
-				firstRow[bg] = rowIndex
-			}
-			counts[bg]++
-			lastRow[bg] = rowIndex
-			if row.blank {
-				blankRows[bg]++
-			}
-			if len(row.backgrounds) > 1 {
-				overlap[bg]++
-			}
-		}
-	}
-	canvas, best, tied := "", 0, false
-	for bg, count := range counts {
-		if count > best {
-			canvas, best, tied = bg, count, false
-		} else if count == best {
-			tied = true
-		}
-	}
-	if tied {
-		canvas = ""
-		bestFirst := 0
-		for bg, count := range counts {
-			if count != best {
-				continue
-			}
-			if firstCell[bg] > bestFirst {
-				canvas, bestFirst = bg, firstCell[bg]
-			} else if firstCell[bg] == bestFirst {
-				canvas = ""
-			}
-		}
-	}
-	if canvas == "" || paintedRowCount == 0 || best < CanvasRowShare(paintedRowCount) {
-		return ""
-	}
-	// A canvas reaches through the live content; a composer, status box, or
-	// message bubble is a localized horizontal band even when it is the only
-	// thing currently painting backgrounds. Width changes can move one other
-	// painted row across the viewport edge, so voting only over painted rows
-	// made Codex's four-row composer flip between 4/5 (accepted) and 4/6
-	// (rejected) as the pane changed by one column. Measure the candidate's
-	// vertical span against the effective live content too. Interior untouched
-	// rows still abstain from the color vote, while a sectionally repainted
-	// canvas remains eligible when it appears near both ends of the pane.
-	if span := lastRow[canvas] - firstRow[canvas] + 1; span*2 <= len(rows) {
-		return ""
-	}
-	// Row starts are always required; how many depends on whether blank rows
-	// vouch for the candidate.
-	//
-	// A pane's canvas is the background its rows begin in. An inset block —
-	// a chat bubble, a callout, a boxed banner — opens after the row's first
-	// cell, and on a sparsely painted pane it can still cover nearly every
-	// painted row and clear the share bar. Cursor's user-message bubble is
-	// three such rows, two of them blank padding, in a grid where the only
-	// other painted row is the input field: it took the canvas and flooded
-	// the pane, then gave it back as the bubble scrolled out of the live
-	// grid — a whole-pane repaint on streamed output (see CanvasRowShare).
-	//
-	// The bar is a strict majority, so a candidate that splits the row starts
-	// evenly with another abstains rather than guessing, like the row-count
-	// tie above. Row starts cannot separate a small inset block from a large
-	// one, so a genuinely pane-wide canvas that is itself inset from column 0
-	// is rejected too: that costs the seams this detection exists to hide,
-	// which is the stable cosmetic failure it replaced flicker with. Painted
-	// share of the live grid would separate them, but a TUI that repaints in
-	// sections leaves most of its grid abstaining (see the interior-abstention
-	// case in rows_test.go), so the grid is not a denominator we can use.
-	if blankRows[canvas] == 0 {
-		// Nothing blank vouches for it: demand near-total row starts and
-		// same-row co-occurrence, which line-level highlighting never has.
-		if firstCell[canvas] < CanvasRowShare(paintedRowCount) ||
-			overlap[canvas] < max(2, counts[canvas]/4) {
-			return ""
-		}
-	} else if firstCell[canvas]*2 <= paintedRowCount {
-		// Blank rows tell a canvas from a highlight, but an inset block has
-		// those too; row starts are what separate it from a canvas.
-		return ""
-	}
-	return canvas
 }

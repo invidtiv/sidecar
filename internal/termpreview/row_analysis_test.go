@@ -36,13 +36,13 @@ func TestRowAnalyzerAnalyzesEachRequiredRawRowOnceAndReusesFacts(t *testing.T) {
 	t.Cleanup(restore)
 	first := DrawRows(in)
 	firstSnapshot := counters.Snapshot()
-	// Visible requires [0,70); live requires [100,440). The gap [70,100)
-	// is deliberately absent, so 410 distinct raw rows are retained/analyzed.
-	if firstSnapshot.RowCacheMisses != 410 || firstSnapshot.CanvasInferences != 1 {
-		t.Fatalf("first draw counters = %+v, want 410 analyses and one inference", firstSnapshot)
+	// The visible window is [50,70) and its lookback clamps to zero, so the
+	// required band is [0,70): 70 distinct raw rows retained and analyzed.
+	if firstSnapshot.RowCacheMisses != 70 {
+		t.Fatalf("first draw counters = %+v, want 70 analyses", firstSnapshot)
 	}
-	if len(analyzer.rows) != 410 {
-		t.Fatalf("retained rows = %d, want the 410-row union", len(analyzer.rows))
+	if len(analyzer.rows) != 70 {
+		t.Fatalf("retained rows = %d, want the 70-row band", len(analyzer.rows))
 	}
 
 	secondCounters := &terminalperf.Counters{}
@@ -50,54 +50,22 @@ func TestRowAnalyzerAnalyzesEachRequiredRawRowOnceAndReusesFacts(t *testing.T) {
 	second := DrawRows(in)
 	restoreSecond()
 	secondSnapshot := secondCounters.Snapshot()
-	if secondSnapshot.RowCacheMisses != 0 || secondSnapshot.RowCacheHits != 410 || secondSnapshot.CanvasInferences != 1 {
-		t.Fatalf("same-revision draw counters = %+v, want all facts reused and one inference", secondSnapshot)
+	if secondSnapshot.RowCacheMisses != 0 || secondSnapshot.RowCacheHits != 70 {
+		t.Fatalf("same-revision draw counters = %+v, want all facts reused", secondSnapshot)
 	}
 	if strings.Join(first.Rows, "\n") != strings.Join(second.Rows, "\n") || first.CanvasBackground != second.CanvasBackground {
 		t.Fatal("same-revision cache changed the drawn result")
 	}
 
-	lines[430] = "row-430 changed"
+	lines[30] = "row-030 changed"
 	buffer.Update(strings.Join(lines, "\n"))
 	changedCounters := &terminalperf.Counters{}
 	restoreChanged := terminalperf.Install(changedCounters)
 	_ = DrawRows(in)
 	restoreChanged()
 	changed := changedCounters.Snapshot()
-	if changed.RowCacheMisses != 1 || changed.RowCacheHits != 409 || changed.CanvasInferences != 1 {
+	if changed.RowCacheMisses != 1 || changed.RowCacheHits != 69 {
 		t.Fatalf("one-row revision counters = %+v, want one changed fingerprint only", changed)
-	}
-}
-
-func TestRowAnalyzerDeduplicatesOverlappingVisibleAndLiveBands(t *testing.T) {
-	lines := make([]string, 100)
-	for i := range lines {
-		lines[i] = fmt.Sprintf("row-%03d", i)
-	}
-	buffer := tty.NewOutputBuffer(120)
-	buffer.Update(strings.Join(lines, "\n"))
-	analyzer := &RowAnalyzer{}
-	in := RowsInput{
-		Buffer: buffer,
-		Layout: tty.Viewport{
-			Start: 70, End: 90, EffectiveCount: 20,
-			DisplayWidth: 80, DisplayHeight: 20,
-			PaneTop: 60,
-		},
-		PaneHeight:  30,
-		Follow:      true,
-		Backgrounds: tty.BackgroundAuto,
-		Analyzer:    analyzer,
-	}
-	counters := &terminalperf.Counters{}
-	restore := terminalperf.Install(counters)
-	_ = DrawRows(in)
-	restore()
-	got := counters.Snapshot()
-	// Both 300-row lookbacks clamp to zero, so both requested bands are
-	// [0,90). The second acquisition is a hit, never a second ANSI analysis.
-	if got.RowCacheMisses != 90 || len(analyzer.rows) != 90 {
-		t.Fatalf("overlap counters = %+v, retained=%d; want 90 distinct analyses", got, len(analyzer.rows))
 	}
 }
 
@@ -123,29 +91,29 @@ func TestRowAnalyzerRotatesWindowsAndModesWithoutRetainingHistoryGaps(t *testing
 	}
 	_ = DrawRows(in)
 
-	// Scroll far below the original window. The retained union becomes
-	// visible [150,470) plus live [100,440): exactly [100,470), without the
-	// original [0,20) or any unrelated history.
+	// Scroll far below the original window. The retained band becomes
+	// [150,470): the new window plus its lookback, without the original
+	// [0,20) or any unrelated history.
 	in.Layout.Start, in.Layout.End = 450, 470
 	_ = DrawRows(in)
-	if len(analyzer.rows) != 370 {
-		t.Fatalf("rotated retained rows = %d, want 370", len(analyzer.rows))
+	if len(analyzer.rows) != 320 {
+		t.Fatalf("rotated retained rows = %d, want 320", len(analyzer.rows))
 	}
 	for index := range analyzer.rows {
-		if index < 100 || index >= 470 {
+		if index < 150 || index >= 470 {
 			t.Fatalf("rotated cache retained out-of-window row %d", index)
 		}
 	}
 
-	// Never mode has no canvas/live-grid dependency. It retains only the
-	// visible row band and its lookback while reusing the still-present facts.
+	// A mode change owns a new carried derivation but not new raw facts, so
+	// the same band is retained and every row is reused.
 	in.Backgrounds = tty.BackgroundNever
 	counters := &terminalperf.Counters{}
 	restore := terminalperf.Install(counters)
 	_ = DrawRows(in)
 	restore()
 	got := counters.Snapshot()
-	if len(analyzer.rows) != 320 || got.RowCacheMisses != 0 || got.RowCacheHits != 320 || got.CanvasInferences != 0 {
+	if len(analyzer.rows) != 320 || got.RowCacheMisses != 0 || got.RowCacheHits != 320 {
 		t.Fatalf("mode rotation counters = %+v retained=%d, want visible-band reuse only", got, len(analyzer.rows))
 	}
 }

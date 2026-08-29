@@ -1,6 +1,11 @@
 #!/bin/bash
-# Inspect embedded-terminal background decisions from a live pane or sweep a
-# real TUI across adjacent widths on a throwaway tmux server.
+# Check that Sidecar draws the screen tmux says is there, for a live pane or for
+# a real TUI swept across adjacent widths on a throwaway tmux server.
+#
+# The oracle is `capture-pane -e -N` of the same pane: the trimmed capture
+# Sidecar consumes with the trailing blank cells left in. Both sides are decoded
+# to cell grids and compared, so a disagreement names a row and column.
+# See docs/reference/terminal-background-fidelity.md.
 
 set -euo pipefail
 
@@ -13,12 +18,12 @@ Usage:
   ./scripts/terminal-fidelity.sh sweep --command <command> [options]
 
 Modes:
-  live TARGET          Capture TARGET read-only and print Sidecar's canvas
-                       decision before and after the screen-model seam.
+  live TARGET          Capture TARGET read-only and report every cell whose
+                       background Sidecar would draw differently from tmux.
 
   sweep                Launch a real TUI on an isolated tmux server, resize it
                        through adjacent widths, retain raw ANSI captures, and
-                       analyze every capture with Sidecar's production logic.
+                       check every capture against tmux's own answer.
 
 Sweep options:
   --command COMMAND    TUI command to launch (required).
@@ -43,7 +48,7 @@ EOF
 
 run_probe() {
     cd "$REPO_DIR"
-    go test ./internal/termpreview -run CanvasProbeLive -count=1 -v
+    go test ./internal/termpreview -run FidelityProbeLive -count=1 -v
 }
 
 if [[ $# -lt 1 ]]; then
@@ -64,7 +69,7 @@ if [[ "$MODE" == "live" ]]; then
         usage >&2
         exit 2
     fi
-    CANVAS_PROBE_TARGET="$1" run_probe
+    FIDELITY_PROBE_TARGET="$1" run_probe
     exit
 fi
 
@@ -151,7 +156,7 @@ if [[ -z "$OUT_DIR" ]]; then
 else
     mkdir -p "$OUT_DIR"
     shopt -s nullglob
-    existing=("$OUT_DIR"/cap-*.txt)
+    existing=("$OUT_DIR"/*.pad)
     if [[ ${#existing[@]} -gt 0 ]]; then
         printf 'refusing to overwrite existing captures in %s\n' "$OUT_DIR" >&2
         exit 2
@@ -173,10 +178,13 @@ for width in "${WIDTH_LIST[@]}"; do
     actual_width="$("${TMUX[@]}" display-message -p -t "$SESSION" '#{pane_width}')"
     current_command="$("${TMUX[@]}" display-message -p -t "$SESSION" '#{pane_current_command}')"
     pane_dead="$("${TMUX[@]}" display-message -p -t "$SESSION" '#{pane_dead}')"
-    capture="cap-${width}x${HEIGHT}.txt"
-    "${TMUX[@]}" capture-pane -p -e -t "$SESSION" > "$OUT_DIR/$capture"
+    capture="w${width}x${HEIGHT}"
+    # .trim is what Sidecar consumes; .pad is the same pane with the trailing
+    # blank cells tmux would otherwise drop, which is what it is checked against.
+    "${TMUX[@]}" capture-pane -p -e    -t "$SESSION" > "$OUT_DIR/$capture.trim"
+    "${TMUX[@]}" capture-pane -p -e -N -t "$SESSION" > "$OUT_DIR/$capture.pad"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$width" "$actual_width" "$HEIGHT" "$current_command" "$pane_dead" "$capture" >> "$MANIFEST"
 done
 
 printf 'captures: %s\n' "$OUT_DIR"
-CANVAS_PROBE_DIR="$OUT_DIR" CANVAS_PROBE_REQUIRE_STABLE=1 run_probe | tee "$OUT_DIR/analysis.log"
+FIDELITY_PROBE_DIR="$OUT_DIR" FIDELITY_PROBE_REQUIRE_CLEAN=1 run_probe | tee "$OUT_DIR/analysis.log"

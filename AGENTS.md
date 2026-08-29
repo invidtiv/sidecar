@@ -155,6 +155,19 @@ content is not on the filesystem.
 
 See td-331dbf19 for diff paging implementation.
 
+## Terminal Background Fidelity
+
+Every cell inside an embedded pane takes its colour from tmux and nothing else.
+Captures use `capture-pane -e -N` because the trimmed form cannot tell a blank
+row in a carried colour from a blank row in the default, and `internal/termpreview.DrawRows`
+is the only place a background is decided. Do not add a second decider, and do
+not infer a colour from content: a heuristic here fails at one width and passes
+at the next, which is how the pane used to flicker and flood.
+
+See `docs/reference/terminal-background-fidelity.md` for the capture semantics,
+the failure modes, and how to check a live pane with
+`./scripts/terminal-fidelity.sh`.
+
 ## Startup Latency
 
 Everything a plugin does in `Init()` — and everything `Start()` does before

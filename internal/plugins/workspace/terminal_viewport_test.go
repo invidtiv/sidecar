@@ -8,7 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
-	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -1007,7 +1006,10 @@ func TestTerminalViewportHighlightsEveryRowOfAStyledSelection(t *testing.T) {
 	}
 }
 
-func TestTerminalViewportUsesFullscreenCanvasForDefaultCells(t *testing.T) {
+// A cell the child left at the terminal default belongs to the terminal
+// hosting Sidecar, not to Sidecar's palette, so it resolves to the background
+// that terminal reported rather than falling through to the panel.
+func TestTerminalViewportUsesHostBackgroundForDefaultCells(t *testing.T) {
 	canvas := "\x1b[48;2;20;20;20m"
 	panel := "\x1b[48;2;36;36;36m"
 	buffer := tty.NewOutputBuffer(100)
@@ -1018,7 +1020,7 @@ func TestTerminalViewportUsesFullscreenCanvasForDefaultCells(t *testing.T) {
 	})
 
 	result := renderTerminalViewport(terminalViewportInput{
-		Buffer: buffer, Width: 30, Height: 4, Follow: true,
+		Buffer: buffer, Width: 30, Height: 4, Follow: true, DefaultBackground: canvas,
 		Interactive: true, PaneWidth: 30, PaneHeight: 4,
 	}, ui.NewTruncateCache(32))
 	rows := strings.Split(result.Content, "\n")
@@ -1137,37 +1139,6 @@ func TestTerminalViewportDetectsCanvasCarriedAcrossRows(t *testing.T) {
 	}
 }
 
-// The one-third rule sat between the two cases it had to separate, so scrolling
-// a long diff by a single row flipped the verdict and washed the pane green.
-// The row counts here are the ones measured off live panes: a Grok canvas
-// covers every row, a Claude Code diff covered 19 of 55.
-func TestCanvasRowShareSeparatesCanvasFromDiffHighlighting(t *testing.T) {
-	if got := termpreview.CanvasRowShare(55); got <= 19 {
-		t.Errorf("a 19-of-55 diff still reaches the canvas threshold (%d)", got)
-	}
-	for _, rows := range []int{43, 56} {
-		if got := termpreview.CanvasRowShare(rows); got > rows {
-			t.Errorf("a canvas covering all %d rows cannot reach the threshold (%d)", rows, got)
-		}
-	}
-}
-
-// A diff can fill the whole pane while scrolled through a large hunk, so row
-// share alone is not enough: highlighting never paints a row that has no text.
-func TestTerminalViewportDoesNotTreatFullPaneDiffAsCanvas(t *testing.T) {
-	green := "\x1b[48;2;0;80;0m"
-	var rows []string
-	for i := range 10 {
-		rows = append(rows, fmt.Sprintf("%s+ added line %d\x1b[49m", green, i))
-	}
-	buffer := tty.NewOutputBuffer(100)
-	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(rows, "\n"), PaneRows: len(rows)})
-
-	if bg := termpreview.CanvasBackground(buffer, 0, len(rows)); bg != "" {
-		t.Errorf("a fully green diff was promoted to canvas %q", bg)
-	}
-}
-
 // A pane that grew past the last painted TUI row (or a capture shorter than
 // the allotted box) still owes the extra cells the canvas, not Sidecar's
 // surface. That is the large-window Grok gap: default-bg cells, unused
@@ -1189,7 +1160,7 @@ func TestTerminalViewportFillsCanvasOnLargeAllottedBox(t *testing.T) {
 
 	const width, height = 30, 16
 	result := renderTerminalViewport(terminalViewportInput{
-		Buffer: buffer, Width: width, Height: height, Follow: true,
+		Buffer: buffer, Width: width, Height: height, Follow: true, DefaultBackground: canvas,
 		Interactive: true, PaneWidth: width, PaneHeight: height,
 	}, ui.NewTruncateCache(32))
 
