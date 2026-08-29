@@ -1,0 +1,203 @@
+# Sidecar as its own remote host runtime
+
+Status: **active, planning**, 2026-08-28
+
+Related: [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) — the competing alternative for the same deliverable; see [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) for what decides between them. [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal to both.
+Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan.
+
+## Decision first
+
+Sidecar becomes its own remote host agent. To see what is running on the Mac mini, the user installs Sidecar there — nothing else — and registers `remote:mac-mini` in the local Sidecar. The remote machine's shells, worktrees, agent states, and live panes appear in the Sessions browser, served by two channels over SSH:
+
+1. **Pane content: proxied tmux control mode.** The local Sidecar attaches to the remote tmux server by spawning `ssh host tmux -C attach-session -f ignore-size -t <session>` instead of a local `tmux -C`. This is not a new protocol — it is tmux's own control protocol, which Sidecar's entire terminal stack already consumes, arriving over a different pipe.
+2. **Sidecar-level truth: `sidecar host serve`.** A headless, ephemeral, read-only (until Phase C) process spawned on the remote host over SSH stdio, running the existing inventory/liveness/agent-status stack and streaming snapshots and status transitions as versioned JSONL.
+
+The "new streaming transport" is therefore mostly channel 2, and it is small: the pane-bytes problem — the hard, latency-sensitive, high-bandwidth part — is solved by reusing a protocol both ends already speak.
+
+## Why the codebase is already most of the way there
+
+Three findings make this plan an integration exercise rather than a build:
+
+**The control-mode consumer is transport-agnostic behind one seam.** `newProcessControlChannelCommand(session, cmd *exec.Cmd)` (`internal/tty/control_transport.go:70-116`) wires any `exec.Cmd`'s pipes into the line parser; nothing below it knows the command is local. Production hardcodes the local spawn via `controlChannelFactory` (`control_transport.go:31`, `control_manager.go:146-150`). Swapping the factory's `exec.Cmd` for an ssh invocation carries the entire downstream stack unchanged: the single ordered-actor delivery (`control_manager.go:606-630`), seed transactions and race detection (`control_model.go:261-277, 529-540`), the byte-fed `screenmodel` with 30 fps publication (`control_model.go:194`), `%pause`/`%continue` reseeds, the capture path with its 12 ms coalesce, and the polling fallback that engages on control failure.
+
+**The geometry problem was already solved for exactly this case.** `geometry_lease.go`'s own header describes the scenario: "Two sidecar instances on two machines can be attached to one tmux server. Each asserts its own pane geometry unconditionally, the last resize-window wins … a continuous ping-pong" (td-ee222a, `internal/tty/geometry_lease.go:16-21`). The lease store is a tmux session option — the server is the shared medium, so remote and local claimants coordinate through the same store with no extra machinery; tokens carry durations, not timestamps, precisely so they survive clock skew across machines (`geometry_lease.go:42-44`); the decision function is state-free "so a headless caller can adopt it unchanged" (`geometry_lease.go:160-191`). And `pane_fit.go` is already the non-owner's rendering path — clip with cursor-anchored offsets when the pane is bigger, letterbox when smaller, never stretch, with the "200x50, showing 120x40" indicator (`pane_fit.go:5-14, 169-177`). A read-only remote viewer is a lease non-owner by definition and reuses this wholesale.
+
+**The awareness stack is UI-free by construction.** `workspaceinventory`, `shellliveness`, `shellstate`, `tmuxserver`, `agentactivity`, `agentstatus`, `activitystore`, `workspaceops`, and every `adapter` have zero Bubble Tea references (verified by grep); collectors take injectable runners, captures, and clocks (`workspaceinventory/inventory.go:226-239`); `workspaceops` already exposes shell and worktree creation as plain functions exercised headlessly by `sidecar create` today. A headless server is orchestration over existing libraries — the one piece of UI choreography to re-implement headlessly is the reap sequence in `internal/overview/shell_liveness.go` (~150 lines), and Phase A does not reap at all.
+
+## Relationship to the Herdr plan
+
+Both plans deliver the same product surface: a **Host** in the Sessions browser. They differ in the on-host agent, and each is honest about what that buys:
+
+| Axis | Herdr on the host | Sidecar on the host |
+| --- | --- | --- |
+| On-host dependency | Herdr installed *and its server running*; no CLI verb to start it detached (upstream request filed) | Sidecar installed. No daemon at all — `host serve` is spawned per connection over SSH stdio and dies with it |
+| Pane streaming | Herdr's frame protocol: absolutely-positioned cell blits, full frame on resize, no offset/range history | tmux control mode: `%output` deltas, absolute history addressing via `capture-pane -S/-E`, so lazy history, frozen selection, and search work remotely unchanged (`internal/tty/history.go`, `capture_range.go:49-81`) |
+| Agent status | Herdr's detection manifests, computed by its server | Sidecar's own `agentactivity`/`agentstatus` stack — identical semantics to local, same lanes, same done-TTL, same provider detectors |
+| Transcripts | Not available (`agent.read` is screen text; stores unreadable remotely) | The adapter stack runs on the host and can serve session lists/messages — a capability the Herdr path can never offer |
+| Creation fidelity | `layout.apply` workaround for the argv gap; Phase C risk | `workspaceops.CreateManagedShell`/`LaunchWorktreeSession`, the same code paths as local, already headless |
+| Protocol risk | Herdr's protocol integer moves fast (19→20→21); string-matched close reasons; silent-EOF crash semantics | Both ends are this repo; protocol versioned here, errors structured here |
+| What it costs | Depends on a third-party product's pace and priorities | Sidecar must build the host protocol, a headless entry point, and maintain its own remote transport forever |
+| Terminal runtime on the host | Herdr **is** the terminal runtime — it sees panes it owns | tmux — Sidecar sees any tmux session on the default server, including shells no Sidecar created |
+
+Decision posture: **both plans stay active through their Phase 0 spikes; this plan's spike is cheaper and should run first.** If proxied control mode over a real link feels as good as the seam analysis predicts, the Herdr path's remaining advantage is Herdr-native users' workflows, not capability, and the Herdr plan should then be re-scoped or deprecated with that evidence cited. If the spike finds the SSH round-trips make in-band capture sluggish in a way Herdr's push-frames avoid, that is the number that keeps the Herdr plan alive. The shared pieces — host registry, SSH/ControlMaster transport (adopt the ssh recipe recorded in the Herdr plan: `-S <dir>/ctl -o ControlMaster=auto -o ControlPersist=yes -T`, generated `-F` config with `ServerAliveInterval 15`/`CountMax 4`, `ssh -O exit` teardown), Sessions-browser host grouping, `HostID` on `workspaceinventory.Workspace` — are identical in both plans and are not throwaway whichever wins.
+
+## Scope boundary
+
+**In scope**
+
+- A host registry and SSH transport (shared shape with the Herdr plan).
+- `sidecar host serve`: headless, stdio, versioned JSONL; read-only through Phase B.
+- Read-only remote observation: inventory, agent status with full local fidelity, live pane view via proxied control mode.
+- Interactive remote panes (Phase B): in-band input, cross-host geometry lease rules.
+- Remote creation (Phase C): shells and worktrees through the existing `workspaceops` pipeline.
+- Remote conversations via the adapter stack (Phase C, gated on demand).
+
+**Explicitly out of scope**
+
+- Any change to local behavior. The transport injection must leave the local path byte-identical.
+- A persistent daemon on the remote host. Serve processes are per-connection and ephemeral; if that ever changes, it changes in its own plan.
+- Exposing anything to a network. SSH stdio is the only transport; serve never binds a socket.
+- Remote git/diff/file browsing beyond what inventory already summarizes. Same boundary as the Herdr plan.
+- A Sidecar plugin system. Noted as a possible future direction (and [the Herdr-plugin plan](herdr-plugin-support.md) takes the opposite bet); neither is prerequisite to this work.
+
+## Architecture
+
+```text
+Sidecar (viewer)
+├── internal/hosts                 NEW — registry, health, SSH transport (ControlMaster; shared with the Herdr plan)
+├── internal/tty                   control channel factory becomes host-aware; alternate terminalInputSender
+├── internal/hostproto             NEW — the serve protocol: types, version, encode/decode (shared by both ends)
+├── internal/workspaceinventory    gains HostID; TmuxName stops leaking upward (owed regardless of this plan)
+├── internal/overview              Sessions browser host grouping; remote rows fed by the serve stream
+└── internal/paneframe/panelayout  unchanged — a remote pane is an ordinary leaf
+
+Sidecar (host, same binary)
+└── internal/hostserve             NEW — `sidecar host serve`: collector loop, liveness tracker,
+                                   activity trackers, status resolution, JSONL stream over stdio
+```
+
+### Channel 1 — pane content
+
+- **Attach:** the host-aware `controlChannelFactory` builds `ssh <target> tmux -C attach-session -f ignore-size -t <session>` through the ControlMaster transport. Everything downstream is untouched.
+- **Input (Phase B):** a second `terminalInputSender` implementation (`internal/tty/terminal_surface.go:45-166` is the interface) that routes `send-keys`/paste through the control channel's own stdin (`Send`/`SendPair`, `control_transport.go:14-29`) instead of spawning subprocesses — one write on an open pipe rather than one ssh exec per keystroke, preserving the FIFO ordering the send queue exists for (td-8fcd2e, `send_queue.go:48-101`).
+- **History, metadata, captures:** the in-band command path already exists — the capture path issues `display-message` + `capture-pane` pairs through the control channel today (`control_manager.go:1115-1129`). `CapturePaneRange`'s absolute `-S/-E` windows move in-band the same way, keeping `HistoryReach`, `WindowFreeze`, and search working remotely with their existing contracts.
+- **Resize (Phase B):** `assertDimensions` currently restarts the control transport on every geometry change (`tty.go:1376-1436`). Locally that is cheap; over SSH it is a subprocess respawn through the master connection (~fast, but measured, not assumed — Phase 0 item 3). If the number is bad, the work item is teaching the transport to reseed without a process restart, which is a local-path improvement too.
+- **Out-of-band one-shots** (`ResizeTmuxPane`, `QueryPaneSize`, lease option reads/writes) run as `ssh <target> tmux …` through the master connection, or move in-band where ordering matters.
+
+### Channel 2 — the serve protocol
+
+`ssh <target> sidecar host serve --stdio`, spawned by the viewer per connection. Newline-delimited JSON, both directions, defined once in `internal/hostproto`:
+
+- **Hello:** `{proto, version, host, os, tmuxPresent, projects: N}` — protocol integer checked first; the version string is display-only. The running version currently lives in `main`-only ldflags (`cmd/sidecar/main.go:57-63`); a library accessor is a small prerequisite work item.
+- **Snapshot:** the remote machine's own `config.json` `projects.list` (discovery mechanism unchanged — `internal/config/config.go:54-59`), each project's shells.json contents, worktrees, and resolved `agentstatus.Presentation` per workspace — the same `CollectProjectInventory` → `RefreshProjectStatus` pipeline the overview runs (`workspaceinventory/inventory.go:442-556`), driven by serve's own loop at the overview's adaptive cadence (5 s live / 10 s ready / 30 s idle).
+- **Events:** inventory deltas and presentation transitions, pushed as they happen. This is the event stream the Herdr plan could only request upstream; here it is simply built. `notify.LaneTracker` — written so "a headless watcher tomorrow" reimplements only the adapter file (`internal/notify/triggers.go:11-29`) — is that adapter's second consumer.
+- **Previews:** the status pass already captures ~80 lines per agent pane (`inventory.go:562-635`); serve ships that text (bounded by the existing `tmuxCaptureMaxBytes` discipline) so Sessions-browser preview cells work without opening a control channel. Full pane view on selection uses channel 1.
+- **Requests (Phase C only):** create shell / worktree / start agent, mapping 1:1 onto `workspaceops` functions that the `sidecar create` CLI already exercises headlessly.
+
+Serve is **read-only until Phase C** — it never writes shells.json, never reaps, never takes a geometry lease, and never resizes (the one capture path that resizes, the lease-gated semantic preview at `workspace/agent.go:905-925`, is disabled under serve). When Phase C adds mutations, they go through the existing guarded writers: flock + read-modify-write (`shellstate.go:294-336`), tombstones instead of deletions, incarnation fencing — the exact hardening added after the td-8d18de/shells-wipe incident, which is also why serve gets no bespoke state-writing code of its own.
+
+### Ephemeral serve dissolves the daemon problem
+
+Herdr needs its server because the server *is* the terminal runtime. Sidecar's remote truth lives in the tmux server and the state tree, both of which outlive any Sidecar process — so serve can be spawned per connection and die on disconnect. There is no autostart question, no stale-daemon question, and no version-skew-restart question: the viewer spawns whatever binary is on the host, reads its protocol integer from the hello, and renders "sidecar too old on <host> (proto 3, need 4)" as an actionable row state. Multiple viewers each spawn their own serve; concurrent read-only serves against one state tree are the already-normal multi-instance case (flocked writes, atomic renames, fsnotify cross-instance visibility — `overview/live_shells.go:27-40`).
+
+### Geometry across hosts (Phase B)
+
+The lease already coordinates cross-machine through the tmux option store. Two rules need sharpening for a claimant whose PID is not on the tmux server's machine, both localized in `DecideGeometryLease`'s policy:
+
+- **No defunct-PID reclaim of foreign tokens.** `OwnerDefunct` liveness checking is only valid on the owner's machine (`geometry_lease.go:143-147`); a remote viewer treats any token from another host as live and relies on idle/stale preemption only.
+- **Input evidence is local.** The tty-matched `client_activity` harvest (`geometry_lease.go:340-371`) doesn't exist for a remote claimant; its "I typed recently" evidence comes from its own send-queue timestamps instead.
+
+Everything else — duration-not-timestamp tokens, tick-based staleness, back-off on a fresh foreign token — was designed for this and transfers unchanged. A read-only viewer never claims; an interactive viewer claims on focus exactly as the local interactive mode does, and the human sitting at the remote machine wins it back by typing, per the idle-preemption rule that already exists.
+
+### Where it binds in the UI
+
+Identical to the Herdr plan, and stated once: remote panes are ordinary `paneframe` leaves; the remote pane kind gets one `livepanes.Binding` per surface fed by the frame stream rather than `livewatch`; hosts are overview-only until a remote checkout earns a project identity; nothing runs before the first frame (`SIDECAR_STARTUP_TRACE=stderr` must show no new pre-frame phase). `workspaceinventory.Workspace` gains `HostID` and drops the `TmuxName` leak — owed whichever remote plan ships, or neither.
+
+## Work items surfaced by the research
+
+- **Library-visible version/protocol accessor** (currently `main`-only ldflags).
+- **Linux process identity.** `process_identity_other.go` is a stub — argv0 disambiguation of shared-runtime panes (node/bun/agent) silently degrades to screen-chrome detection on Linux, and remote hosts will often be Linux. A `/proc`-based implementation (tpgid from `/proc/<pid>/stat`, argv0 from `cmdline`) is a Phase A item that also improves any Linux user's local fidelity today.
+- **Host-aware control channel factory + remote `terminalInputSender`** — the two seams in `internal/tty`.
+- **Resize-without-transport-restart** if Phase 0 item 3 says the respawn is felt.
+- **Headless reap choreography** — not before Phase C, and only by porting the overview's guards (empty-listing skip, incarnation fence, tombstone writes), never fresh logic.
+
+## Phases
+
+### Phase 0 — spike
+
+A second machine with Sidecar installed, a real link (LAN and a WAN/VPN hop), agents running in tmux sessions over there.
+
+1. **Proxied control mode.** Swap the factory `exec.Cmd` for the ssh invocation against a remote session. Verify seed, byte continuity, `%pause` reseeds, and history windows behave identically to local. Measure: keystroke-to-frame latency (once input lands in Phase 0 item 4), output-burst throughput, idle cost (should be zero bytes), and seed cost on attach.
+2. **Headless serve.** Drive `Collector` + `shellliveness.Tracker` + activity trackers + `agentstatus.Resolve` in a loop with no Bubble Tea, streaming snapshot + transitions as JSONL to a local consumer. Exit check: status shown locally matches the remote machine's own Sidecar TUI for working/blocked/done/idle across at least three agent providers, including the `done` decay.
+3. **Resize cost.** Measure the control-transport restart over SSH per geometry change; decide whether reseed-without-restart is Phase A work or deferrable.
+4. **In-band input.** Prototype the control-channel `terminalInputSender`; verify FIFO ordering under fast typing and paste; measure RTT per keystroke batch on the WAN hop.
+5. **Failure axes.** ssh drop mid-stream (keepalive detection, fallback engagement, clean reattach); remote tmux server death (incarnation transition must mark rows dead, never wipe anything); sidecar missing/too old on the host (distinct actionable states); two viewers on one host; a viewer plus a human TUI on the host.
+
+**Exit gate:** a recorded matrix of latency/bandwidth/CPU numbers and the answer to the only existential question: does a proxied-control-mode pane feel local-grade? Compare directly against the Herdr plan's Phase 0 numbers if both spikes run; this table is the bake-off input.
+
+### Phase A — read-only remote hosts
+
+Behind `features.SidecarRemoteHosts`, default off.
+
+- Host registry with per-host config (ssh target, optional remote binary path — resolved via the login-shell probe recipe recorded in the Herdr plan — optional remote config path).
+- Sessions browser host grouping; per-host projects/shells/worktrees with the full local status vocabulary; preview cells from serve captures.
+- Live read-only pane view on selection via proxied control mode, rendered through `FitPane` at the pane's own size; never resizes, never claims a lease.
+- Health as first-class row states: unreachable, no sidecar, protocol too old, no tmux server, stale data. Each names the fix.
+- Linux process identity; version accessor; protocol v1.
+
+**Exit gate:** the Herdr plan's, verbatim — on a real second machine, Sidecar answers "what is running over there and is anything blocked?" without opening a terminal, and a full day of use produces no stale or wrong status while a pane is on screen. Plus: the local path is provably untouched (no behavior or state diff with the flag off, and none with it on until a host is registered).
+
+### Phase B — interactive remote panes
+
+- In-band input sender; interactive-mode entry on a remote pane with the same chrome and exit rules as local.
+- Cross-host lease rules (no foreign defunct-PID reclaim; local input evidence); claim on interactive entry, release on blur/exit; the remote human's typing preempts per the existing idle rule.
+- History, search, and frozen selection over in-band `CapturePaneRange`.
+- Resize etiquette: resizing a remote pane is a lease-gated explicit act, debounced through the existing 300 ms `assertDimensions` path; reseed-without-restart if Phase 0 said so.
+
+**Exit gate:** a blocked agent prompt on the remote host answered from the local Sidecar, with input ordering correct under fast typing, and a human at the remote machine able to take the pane back just by using it.
+
+### Phase C — creation, mutation, conversations
+
+- Serve gains a request channel: create shell, create worktree (with the setup-hook confirmation flow surfaced locally), start agent, rename — all mapping onto existing `workspaceops` functions with their existing guards.
+- Reap parity for remote rows, by porting the overview's guarded choreography.
+- Remote conversations: the adapter stack served over the protocol (session lists first; messages on demand). This is the capability that exists on no other path and should be scoped by real demand, not built speculatively.
+
+**Exit gate:** create → work → observe → answer → close entirely from the local Sidecar, with remote state trees left exactly as a local Sidecar would leave them, verified across a remote tmux restart and a serve reconnect.
+
+## Failure, degradation, security
+
+- **Degrade the host, not the app** — a dead link marks one host offline; never blocks a frame; never touches local state (inherited verbatim from the Herdr plan).
+- **Serve is read-only until Phase C, and provably so** — Phase A/B builds carry no state-writing code paths in `hostserve` at all, which is a stronger guarantee than a runtime flag.
+- **The reaper never runs remotely until it has all three local guards.** The shells-wipe class of bug (td-8d18de) is the named hazard; empty-pane-listing skip, incarnation fencing, and tombstones are the named mitigations, already in the writers serve would eventually call.
+- **SSH is the entire trust boundary.** Serve speaks stdio only; no sockets, no ports, no forwarding. The user's ssh config, keys, and agent are the security model, same as the Herdr plan.
+- **Isolation discipline extends remotely.** Serve honors `SIDECAR_ISOLATED_STATE` and the `AssertIsolatedPath` guards, so proof runs against a remote host can never touch a real remote state tree — the same rule `tmux-drive.sh` enforces locally.
+- **Bound everything:** serve output framed and capped; preview captures under the existing byte cap; control mailbox overflow already forces clean reseed (`terminal_surface.go:21, 301-312`); reconnect with backoff.
+
+## Open questions
+
+- **Does the serve loop's capture pass disturb a human using the remote machine?** It reuses the overview's semaphore-bounded, non-resizing observation, which coexists with a local TUI today — but "today" is same-machine; Phase 0 item 5 confirms nothing changes when the observer is remote-spawned.
+- **One serve per viewer vs one serve shared.** Per-viewer is the simple default and matches the ephemeral design; if a host ever has many viewers, the collector work duplicates. Revisit only on evidence.
+- **Namespace/socket scope.** Inventory correlates shell rows only on the default tmux socket namespace (`inventory.go:549`); whether remote hosts should surface non-default-socket sessions follows the local answer, whatever it becomes.
+- **Should the hello carry host capabilities** (process-identity fidelity, adapter availability) so the viewer can render honest confidence per host? Likely yes and cheap; decide with the protocol v1 schema.
+- **Bake-off criteria vs the Herdr plan** are recorded in [Relationship](#relationship-to-the-herdr-plan); the open question is who runs both spikes and when, not what to measure.
+
+## Acceptance evidence
+
+| Journey | Evidence |
+| --- | --- |
+| Startup | `SIDECAR_STARTUP_TRACE=stderr` shows no host work before the first ready frame, with an unreachable host configured |
+| Host health | unreachable / no sidecar / protocol too old / no tmux / stale each render a distinct row state naming the fix |
+| Status truth | Remote lanes match the remote machine's own Sidecar TUI, including `blocked` and `done` decay, across ≥3 providers |
+| Live pane | A remote full-screen TUI, wide chars, colors, and alt-screen render correctly through the proxied control channel; idle costs zero bytes |
+| History | Lazy history, search, and drag-selection during output work on a remote pane with the same contracts as local |
+| Geometry | A read-only viewer never resizes anything; an interactive viewer's lease is preempted by the remote human typing |
+| Coexistence | A human's Sidecar TUI on the remote host sees no behavior change while a viewer observes; two viewers coexist |
+| Reconnect | Link drop and tmux-server restart both reconverge (incarnation transition → dead rows → recovery), with nothing wiped |
+| Isolation | Serve under `SIDECAR_ISOLATED_STATE` refuses to touch a real state tree |
+| Rollback | Flag off → local behavior and state byte-identical |
+
+Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matrix, side by side with the Herdr plan's numbers if both spikes run. The decision between the two plans is made from that table, on the record.
+
+## Changelog
+
+- **2026-08-28** — Created, from source research into the control-mode transport seam, the geometry lease's explicit two-machine design (td-ee222a), the UI-free awareness stack, shells.json v2 hardening, and the headless-readiness of `workspaceops`. Positioned as the competing alternative to the Herdr remote-hosts plan with a recorded bake-off posture.
