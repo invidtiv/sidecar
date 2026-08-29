@@ -207,7 +207,8 @@ func (m *Model) attachPreviewSession(session string) tea.Cmd {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
-		if m.catalog[id].TmuxName != session {
+		// A session name in a local pane's output names a local session.
+		if m.catalog[id].Remote() || m.catalog[id].TmuxName != session {
 			continue
 		}
 		if !m.workspaces.SelectID(id) {

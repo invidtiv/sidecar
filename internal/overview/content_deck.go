@@ -18,6 +18,15 @@ import (
 
 func (m *Model) previewDeckContext() (contentpanes.SurfaceContext, bool) {
 	workspace, ok := m.SelectedWorkspace()
+	// A remote workspace's Path names a directory on ANOTHER machine. Handing
+	// it to the content panes would run git, walk the file tree and read files
+	// here — and on a machine that has the same checkout, that succeeds, and
+	// shows this machine's diff labelled as the remote one's. Refusing is the
+	// only honest answer until Phase C can serve those reads over the host
+	// protocol.
+	if ok && workspace.Remote() {
+		return contentpanes.SurfaceContext{}, false
+	}
 	if !ok || workspace.ID == "" || workspace.Path == "" {
 		return contentpanes.SurfaceContext{}, false
 	}

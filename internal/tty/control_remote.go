@@ -88,6 +88,26 @@ func (m *Model) UseRemoteControl(spawn ControlSpawner) {
 	m.remote = true
 }
 
+// UseLocalControl restores the ordinary local transport, sender and capture.
+//
+// This is not symmetry for its own sake. The preview reuses ONE tty.Model
+// across row selections, so without a way back a Model that had once shown a
+// remote pane stayed remote forever: the next LOCAL row would be opened by
+// `ssh <host> tmux -C attach-session -t <local session name>`. Both machines
+// run Sidecar and derive session names the same way, so that attach often
+// SUCCEEDS — painting the other machine's pane into a local workspace's
+// preview, offering interactive mode that silently swallows every keystroke,
+// and never resizing the pane again.
+//
+// Callers must set the mode on every activation rather than only when it
+// changes. UseRemoteControl and this are the two halves of one decision.
+func (m *Model) UseLocalControl() {
+	m.control = defaultControlSource()
+	m.input = defaultTerminalInputSender{model: m}
+	m.capture = defaultTerminalCaptureSource{}
+	m.remote = false
+}
+
 // IsRemote reports whether this terminal is served by another machine.
 func (m *Model) IsRemote() bool { return m != nil && m.remote }
 

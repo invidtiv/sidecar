@@ -95,11 +95,11 @@ func platformForegroundArgv0s(group int) []string {
 // defeat exactly this kind of parser). The reliable cut is the LAST ')' in the
 // line, because every field after it is a plain token.
 func linuxStatFields(stat []byte) []string {
-	close := bytes.LastIndexByte(stat, ')')
-	if close < 0 || close+1 >= len(stat) {
+	closeParen := bytes.LastIndexByte(stat, ')')
+	if closeParen < 0 || closeParen+1 >= len(stat) {
 		return nil
 	}
-	return strings.Fields(string(stat[close+1:]))
+	return strings.Fields(string(stat[closeParen+1:]))
 }
 
 // linuxStatField returns proc(5) field number n (1-based, as documented),

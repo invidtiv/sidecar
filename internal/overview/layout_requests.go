@@ -70,6 +70,14 @@ func (m *Model) resolveSessionsLayoutRow(req uirequest.Request) (string, workspa
 		return rowID, ws, true, ""
 	}
 	for _, ws := range m.catalog {
+		// Remote rows are excluded from the by-name fallback for the same
+		// reason as the `sidecar open` path: a display name or session name is
+		// unique per machine, and unordered iteration would bind a local
+		// request to another machine's row at random. An explicit row ID still
+		// resolves above, because that IS host-scoped.
+		if ws.Remote() {
+			continue
+		}
 		if ws.Name == rowID || ws.TmuxName == rowID || ws.ID == rowID {
 			return ws.ID, ws, true, ""
 		}
@@ -357,6 +365,12 @@ func (h overviewLayoutHost) Ack(req uirequest.Request, status uirequest.Status, 
 func (m *Model) restoreSpecPreviewLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	ws, ok := m.SelectedWorkspace()
 	if !ok {
+		return nil
+	}
+	// A remote workspace's Path is a directory on another machine; restoring
+	// content panes against it would read this machine's files under the
+	// remote row's name. See previewDeckContext.
+	if ws.Remote() {
 		return nil
 	}
 	m.preview.contentEpoch++

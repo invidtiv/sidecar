@@ -82,10 +82,10 @@ func (m *Model) syncWorkspaces() {
 	// HostID, so they group, filter, sort and pin exactly as local ones do;
 	// the host name goes into the project label, which is both what a row
 	// shows and what the Project sort groups by.
-	remoteOrder := len(m.projects)
-	m.eachHostWorkspace(func(project Project, label string, workspace workspaceinventory.Workspace, stale bool) {
+	remoteBase := len(m.projects)
+	m.eachHostWorkspace(func(order int, label string, workspace workspaceinventory.Workspace, stale bool) {
 		m.catalog[workspace.ID] = workspace
-		item := listItem(workspace.Item(), label, remoteOrder+project.Index, stale)
+		item := listItem(workspace.Item(), label, remoteBase+order, stale)
 		if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
 			return
 		}

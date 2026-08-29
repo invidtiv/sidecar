@@ -145,12 +145,13 @@ func (t *Transport) SSHArgs() []string {
 
 // Command builds an ssh invocation running remote on the host.
 //
-// The remote side is wrapped in a login shell when the host does not pin an
-// absolute binary path, because that is the only reliable way to find a
-// Homebrew-installed binary: `ssh host sidecar` runs a non-login,
-// non-interactive shell whose PATH omits /opt/homebrew/bin, and the failure
-// reads as "sidecar is not installed" when it plainly is. This was observed on
-// a real host during the Phase 0 spike, not anticipated.
+// remote is expected to already be a login-shell wrapper — SidecarCommand and
+// ControlCommand both build one through RemoteShell, unconditionally, even
+// when the binary path is absolute. That is not redundant: an absolute path
+// starts the right binary, but the binary then shells out to tmux and git BY
+// NAME, and a non-login ssh shell has no /opt/homebrew/bin on PATH. The
+// failure reads as "tmux is not installed" on a machine where it plainly is.
+// Observed on a real host during the Phase 0 spike, not anticipated.
 func (t *Transport) Command(ctx context.Context, remote string) *exec.Cmd {
 	args := append(t.SSHArgs(), t.host.Target, remote)
 	return exec.CommandContext(ctx, "ssh", args...) //nolint:gosec // args are built here, not user-concatenated

@@ -1,6 +1,8 @@
 package tty
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -181,5 +183,79 @@ func TestControlQuoteNeutralisesExpansionInDoubleQuotes(t *testing.T) {
 	}
 	if strings.Contains(got, "`id`") && !strings.Contains(got, "\\`id\\`") {
 		t.Errorf("backtick not escaped: %q", got)
+	}
+}
+
+// TestUseLocalControlRestoresTheLocalPath is the fix for a real defect, not a
+// symmetry exercise.
+//
+// The preview reuses ONE tty.Model across row selections. Before this existed,
+// a Model that had shown a remote pane stayed remote forever: the next LOCAL
+// row was opened by `ssh <host> tmux -C attach-session -t <local session>`,
+// which often SUCCEEDS because both machines derive session names the same
+// way — painting the other machine's pane into a local workspace's preview,
+// offering interactive mode that swallowed every keystroke, and never resizing
+// the pane again.
+func TestUseLocalControlRestoresTheLocalPath(t *testing.T) {
+	model := New(nil)
+	localControl, localInput, localCapture := model.control, model.input, model.capture
+
+	model.UseRemoteControl(func(string) *exec.Cmd { return exec.Command("false") })
+	if !model.IsRemote() {
+		t.Fatal("UseRemoteControl did not mark the model remote")
+	}
+	if _, readOnly := model.input.(readOnlyInputSender); !readOnly {
+		t.Error("remote model still has a writing input sender")
+	}
+	if _, unavailable := model.capture.(unavailableCaptureSource); !unavailable {
+		t.Error("remote model still has a local capture source")
+	}
+
+	model.UseLocalControl()
+	if model.IsRemote() {
+		t.Fatal("UseLocalControl left the model remote")
+	}
+	if _, stillReadOnly := model.input.(readOnlyInputSender); stillReadOnly {
+		t.Error("input sender was not restored; a local pane would swallow every key")
+	}
+	if _, stillUnavailable := model.capture.(unavailableCaptureSource); stillUnavailable {
+		t.Error("capture source was not restored; a local pane would lose its fallback")
+	}
+	if fmt.Sprintf("%T", model.control) != fmt.Sprintf("%T", localControl) {
+		t.Errorf("control source = %T, want %T", model.control, localControl)
+	}
+	if fmt.Sprintf("%T", model.input) != fmt.Sprintf("%T", localInput) {
+		t.Errorf("input sender = %T, want %T", model.input, localInput)
+	}
+	if fmt.Sprintf("%T", model.capture) != fmt.Sprintf("%T", localCapture) {
+		t.Errorf("capture source = %T, want %T", model.capture, localCapture)
+	}
+}
+
+// TestRemoteModelNeverResizes: a viewer must not move the window under the
+// person sitting at that machine.
+func TestRemoteModelNeverResizes(t *testing.T) {
+	model := New(nil)
+	model.UseRemoteControl(func(string) *exec.Cmd { return exec.Command("false") })
+	if cmd := model.assertDimensions(); cmd != nil {
+		t.Error("a remote model produced a resize command")
+	}
+}
+
+// TestRemoteCaptureFailsRatherThanReadingLocalTmux is the subtlest of the
+// three read-only seams. Pane IDs are per-server, so a local capture of a
+// remote pane %4 does not fail — it succeeds against an unrelated local pane.
+func TestRemoteCaptureFailsRatherThanReadingLocalTmux(t *testing.T) {
+	model := New(nil)
+	model.UseRemoteControl(func(string) *exec.Cmd { return exec.Command("false") })
+	text, _, err := model.capture.Capture("%4", 80)
+	if err == nil {
+		t.Fatal("a remote model captured something from local tmux")
+	}
+	if !errors.Is(err, ErrRemoteCaptureUnavailable) {
+		t.Errorf("err = %v, want ErrRemoteCaptureUnavailable", err)
+	}
+	if text != "" {
+		t.Errorf("content returned for a remote pane: %q", text)
 	}
 }

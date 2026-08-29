@@ -163,8 +163,16 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
+		// A host health row is not a workspace, so it lands here — and it is
+		// the row most in need of explaining itself. "No workspace selected"
+		// on the row that says a machine is unreachable is the least useful
+		// thing this pane could say.
+		message := m.HostHealthDetail(m.workspaces.SelectedID())
+		if message == "" {
+			message = "No workspace selected"
+		}
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
-			Width: width, Height: height, Message: "No workspace selected",
+			Width: width, Height: height, Message: message,
 			DefaultBackground: m.terminalDefaultBackground,
 		})
 	}

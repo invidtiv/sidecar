@@ -18,8 +18,14 @@ import (
 // SourceID are host vocabulary used to distinguish projections of the same tmux
 // target without coupling the deck to a particular surface.
 type Target struct {
-	Session  string
-	Pane     string
+	Session string
+	Pane    string
+	// Host names the machine the session lives on; empty is this machine. It
+	// is stored rather than derived because the surface compares its stored
+	// target against a desired one to decide "am I already showing this?" —
+	// and a comparison that always dropped Host could never answer yes for a
+	// remote pane, so every poll tore down its ssh connection and reseeded.
+	Host     string
 	Width    int
 	Height   int
 	Source   string

@@ -1,15 +1,20 @@
 package overview
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/tty"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspacelist"
 )
@@ -128,9 +133,27 @@ func TestRemoteAgentsShareTheBoardLanes(t *testing.T) {
 func TestUnhealthyHostShowsARowNotASilence(t *testing.T) {
 	for _, state := range []hosts.State{
 		hosts.StateUnreachable, hosts.StateNoSidecar, hosts.StateProtocol,
-		hosts.StateNoTmux, hosts.StateNotProtocol,
+		hosts.StateNoTmux, hosts.StateNotProtocol, hosts.StateDisabled,
 	} {
-		m := hostModel(t, "mac-mini", hosts.Health{State: state, Detail: "because reasons"}, remoteSnapshot("working"))
+		// Seed the rows FIRST, from a healthy snapshot, then drive the host
+		// into the unhealthy state through handleHostUpdate. Building the
+		// fixture already-unhealthy tested the fixture: its helper only
+		// populates results when the state shows them, so the "no rows left on
+		// screen" assertion below was true by construction rather than because
+		// handleHostUpdate drops them.
+		m := hostModel(t, "mac-mini", hosts.Health{State: hosts.StateOnline}, remoteSnapshot("working"))
+		m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
+		t.Cleanup(m.hostRegistry.Stop)
+		m.hostRegistered = map[string]bool{"mac-mini": true}
+		m.syncWorkspaces()
+		if _, seeded := m.hostResults["mac-mini"]; !seeded {
+			t.Fatalf("%s: fixture did not seed rows to begin with", state)
+		}
+
+		m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
+			HostID: "mac-mini",
+			Health: hosts.Health{State: state, Detail: "because reasons"},
+		}})
 		m.syncWorkspaces()
 
 		var health workspacelist.Item
@@ -298,14 +321,232 @@ func TestRemotePaneRefusesInteractiveMode(t *testing.T) {
 		t.Fatalf("selection is not the remote row: %+v ok=%v", workspace, ok)
 	}
 
+	// Assert on the refusal itself. PreviewInteractive() is false in this
+	// fixture whatever happens — it requires a live terminal the fixture never
+	// builds — so checking it would pass with the guard deleted.
 	cmd := m.enterPreviewInteractive()
-	if m.PreviewInteractive() {
-		t.Error("a remote pane entered interactive mode")
-	}
 	if cmd == nil {
 		t.Fatal("entering interactive on a remote pane said nothing at all")
 	}
-	if msg := cmd(); msg == nil {
-		t.Error("no refusal message")
+	post, ok := cmd().(notify.PostMsg)
+	if !ok {
+		t.Fatalf("entering interactive on a remote pane produced %T, want a refusal", cmd())
+	}
+	if !strings.Contains(post.Notification.Title, "mac-mini") {
+		t.Errorf("refusal does not name the machine: %q", post.Notification.Title)
+	}
+	if m.previewTerminalLeaf().Interactive {
+		t.Error("the leaf was put into interactive mode anyway")
+	}
+}
+
+// TestLocalPaneStillEntersInteractive is the other half: the guard must refuse
+// remote panes only. Without this, returning a refusal unconditionally would
+// pass every assertion above.
+func TestLocalPaneStillEntersInteractive(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	local := workspaceinventory.Workspace{
+		ID: "local-1", Kind: workspaceinventory.KindShell, Name: "Local shell",
+		TmuxName: "proj-1", PaneID: "%1", Live: true, Path: t.TempDir(),
+	}
+	m.catalog = map[string]workspaceinventory.Workspace{local.ID: local}
+	m.workspaces.SetItems([]workspacelist.Item{{ID: local.ID, Name: local.Name}})
+	m.workspaces.SelectID(local.ID)
+	m.preview.visible = true
+	m.preview.workspaceID = local.ID
+
+	if cmd := m.enterPreviewInteractive(); cmd != nil {
+		if post, refused := cmd().(notify.PostMsg); refused {
+			t.Errorf("a local pane was refused interactive mode: %q", post.Notification.Title)
+		}
+	}
+}
+
+// TestPreviewSetsControlModeOnEveryActivation is the integration half of the
+// contaminated-Model defect: the surface must SET the mode each time, not
+// change it when it notices a difference.
+func TestPreviewSetsControlModeOnEveryActivation(t *testing.T) {
+	var calls []string
+	original := newPreviewTerminal
+	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
+		return &modeRecordingTerminal{calls: &calls}
+	}
+	t.Cleanup(func() { newPreviewTerminal = original })
+
+	m := hostModel(t, "mac-mini", hosts.Health{State: hosts.StateOnline}, remoteSnapshot("working"))
+	m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
+	t.Cleanup(m.hostRegistry.Stop)
+	m.hostRegistry.Sync(context.Background(), []hosts.Host{{ID: "mac-mini", Target: "mac-mini"}})
+	m.preview.visible = true
+	m.syncWorkspaces()
+
+	remote, ok := m.catalog[hosts.ScopedKey("mac-mini", "/home/me/api:shell:s1")]
+	if !ok {
+		t.Fatalf("no remote row in the catalog: %v", rowNames(m))
+	}
+	local := workspaceinventory.Workspace{
+		ID: "local-1", Kind: workspaceinventory.KindShell, Name: "Local shell",
+		TmuxName: "proj-1", PaneID: "%1", Live: true,
+	}
+	m.catalog[local.ID] = local
+	m.workspaces.SetItems([]workspacelist.Item{{ID: remote.ID, Name: remote.Name}, {ID: local.ID, Name: local.Name}})
+
+	// Remote first, then local — the order that used to leave the local pane
+	// wired to the remote host's ssh.
+	m.workspaces.SelectID(remote.ID)
+	m.preview.workspaceID = remote.ID
+	m.syncPreviewTerminal()
+
+	m.workspaces.SelectID(local.ID)
+	m.preview.workspaceID = local.ID
+	m.syncPreviewTerminal()
+
+	if len(calls) < 2 {
+		t.Fatalf("mode was set %d times for two activations: %v", len(calls), calls)
+	}
+	if calls[0] != "remote" {
+		t.Errorf("first activation set %q, want remote", calls[0])
+	}
+	if last := calls[len(calls)-1]; last != "local" {
+		t.Errorf("after selecting a local row the mode is %q; the terminal is still pointed at the remote host", last)
+	}
+}
+
+// modeRecordingTerminal is a previewTerminal that records only which control
+// mode it was put into. Everything else is inert: this test is about the
+// decision, not about a tmux.
+type modeRecordingTerminal struct {
+	calls  *[]string
+	active bool
+}
+
+func (t *modeRecordingTerminal) UseRemoteControl(tty.ControlSpawner) {
+	*t.calls = append(*t.calls, "remote")
+}
+func (t *modeRecordingTerminal) UseLocalControl() { *t.calls = append(*t.calls, "local") }
+
+func (t *modeRecordingTerminal) Open(tty.Target) tea.Cmd { t.active = true; return nil }
+func (t *modeRecordingTerminal) Close()                  { t.active = false }
+func (t *modeRecordingTerminal) IsActive() bool          { return t.active }
+func (t *modeRecordingTerminal) Buffer() *tty.OutputBuffer {
+	return nil
+}
+func (t *modeRecordingTerminal) SetDimensions(int, int) tea.Cmd      { return nil }
+func (t *modeRecordingTerminal) PaneSize() (int, int)                { return 80, 24 }
+func (t *modeRecordingTerminal) CursorState() (int, int, bool)       { return 0, 0, false }
+func (t *modeRecordingTerminal) SetHooks(tty.Hooks)                  {}
+func (t *modeRecordingTerminal) ReleaseInput()                       {}
+func (t *modeRecordingTerminal) Exit()                               {}
+func (t *modeRecordingTerminal) Update(tea.Msg) tea.Cmd              { return nil }
+func (t *modeRecordingTerminal) SendUnknownSequence(tea.Msg) tea.Cmd { return nil }
+func (t *modeRecordingTerminal) History() tty.HistoryInfo            { return tty.HistoryInfo{} }
+func (t *modeRecordingTerminal) PrependHistory(string, int) bool     { return false }
+func (t *modeRecordingTerminal) PaneMouseReporting() bool            { return false }
+func (t *modeRecordingTerminal) SendClick(int, int) tea.Cmd          { return nil }
+func (t *modeRecordingTerminal) NoteMouseActivity()                  {}
+func (t *modeRecordingTerminal) NoteInput()                          {}
+func (t *modeRecordingTerminal) SendWheelNotches(bool, int, int, int) tea.Cmd {
+	return nil
+}
+
+// TestHostOrdinalsDoNotCollideAcrossHosts. Restarting the project index at
+// zero per host made every host's first project tie with every other's, so the
+// Project sort interleaved two machines instead of grouping them.
+func TestHostOrdinalsDoNotCollideAcrossHosts(t *testing.T) {
+	m := New(workspaceinventory.Collector{})
+	m.hostHealth = map[string]hosts.Health{}
+	m.hostResults = map[string][]workspaceinventory.ProjectResult{}
+	m.hostProjects = map[string][]Project{}
+	for _, id := range []string{"alpha", "beta"} {
+		m.hostHealth[id] = hosts.Health{State: hosts.StateOnline}
+		results := hosts.ProjectResults(id, *remoteSnapshot("working"), false)
+		m.hostResults[id] = results
+		for index, result := range results {
+			m.hostProjects[id] = append(m.hostProjects[id], Project{
+				Name: result.ProjectName, Path: result.ProjectRoot, Key: result.ProjectKey, Index: index,
+			})
+		}
+	}
+
+	seen := map[int]string{}
+	m.eachHostWorkspace(func(order int, label string, _ workspaceinventory.Workspace, _ bool) {
+		host := strings.SplitN(label, hostRowPrefix, 2)[0]
+		if other, clash := seen[order]; clash && other != host {
+			t.Errorf("ordinal %d is shared by %s and %s", order, other, host)
+		}
+		seen[order] = host
+	})
+	if len(seen) < 2 {
+		t.Fatalf("expected distinct ordinals per host, got %v", seen)
+	}
+}
+
+// TestDisabledHostIsVisible. `disabled` means "off this week"; a machine that
+// silently vanished would be indistinguishable from a deleted entry.
+func TestDisabledHostIsVisible(t *testing.T) {
+	m := hostModel(t, "sleepy", hosts.Health{State: hosts.StateDisabled}, nil)
+	m.syncWorkspaces()
+	var row workspacelist.Item
+	for _, item := range m.workspaces.Items() {
+		if IsHostHealthRow(item.ID) {
+			row = item
+		}
+	}
+	if row.ID == "" {
+		t.Fatalf("a disabled host produced no row: %v", rowNames(m))
+	}
+	if !strings.Contains(row.Status, string(hosts.StateDisabled)) {
+		t.Errorf("status %q does not say it is disabled", row.Status)
+	}
+	if !strings.Contains(row.Status, hosts.StateDisabled.Fix()) {
+		t.Errorf("status %q does not name the fix", row.Status)
+	}
+}
+
+// TestDeregisteredHostIsNotResurrected. A stopped client can still deliver one
+// last update after its state was pruned; applying it would leave a permanent
+// error row for a machine the user removed.
+func TestDeregisteredHostIsNotResurrected(t *testing.T) {
+	m := hostModel(t, "gone", hosts.Health{State: hosts.StateOnline}, remoteSnapshot("working"))
+	m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
+	t.Cleanup(m.hostRegistry.Stop)
+	// The user removed this host: it is no longer registered.
+	m.hostRegistered = map[string]bool{"still-here": true}
+	delete(m.hostHealth, "gone")
+
+	m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
+		HostID: "gone",
+		Health: hosts.Health{State: hosts.StateUnreachable, Detail: "the connection to the host ended"},
+	}})
+	if _, back := m.hostHealth["gone"]; back {
+		t.Error("a de-registered host came back as an error row")
+	}
+}
+
+// TestHostHealthRowExplainsItselfInThePreview. The health row is the row most
+// in need of explaining itself, and it is not a workspace — so the preview's
+// ordinary path misses it and would go blank exactly when the user clicked the
+// thing telling them something is wrong.
+func TestHostHealthRowExplainsItselfInThePreview(t *testing.T) {
+	m := hostModel(t, "mac-mini", hosts.Health{
+		State:  hosts.StateNoSidecar,
+		Detail: "zsh:1: command not found: sidecar",
+	}, nil)
+
+	detail := m.HostHealthDetail(hostHealthRowID("mac-mini"))
+	if detail == "" {
+		t.Fatal("a health row has nothing to show in the preview")
+	}
+	for _, want := range []string{"mac-mini", string(hosts.StateNoSidecar), "command not found", hosts.StateNoSidecar.Fix()} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail %q is missing %q", detail, want)
+		}
+	}
+	// A workspace row must fall through to the ordinary preview.
+	if got := m.HostHealthDetail("some-project:shell:x"); got != "" {
+		t.Errorf("a workspace row was treated as a health row: %q", got)
+	}
+	if got := m.HostHealthDetail(hostHealthRowID("never-registered")); got != "" {
+		t.Errorf("an unknown host produced detail: %q", got)
 	}
 }

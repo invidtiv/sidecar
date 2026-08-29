@@ -6,7 +6,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
@@ -54,6 +53,32 @@ func FromConfig(cfg *config.Config) []Host {
 	return hosts
 }
 
+// DisabledFromConfig lists the hosts a user has registered but switched off.
+//
+// They are returned separately because they must still be SEEN. `disabled` is
+// for a machine that is off this week, and a host that simply vanished from
+// the browser would be indistinguishable from one whose entry was deleted —
+// which is the opposite of what the setting is for. The caller shows them as
+// their own row state; no client is created and no connection is attempted.
+func DisabledFromConfig(cfg *config.Config) []string {
+	if cfg == nil || !features.IsEnabled(features.SidecarRemoteHosts.Name) {
+		return nil
+	}
+	var ids []string
+	for _, entry := range cfg.Hosts.List {
+		if !entry.Disabled || strings.TrimSpace(entry.Target) == "" {
+			continue
+		}
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			id = strings.TrimSpace(entry.Target)
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // Registry owns the set of live host clients.
 //
 // Its job is to make "which machines are we watching" a single answer that
@@ -68,6 +93,12 @@ type Registry struct {
 	options ClientOptions
 	dir     string
 	stopped bool
+
+	// forwardMu and forwarders guard the merged stream's lifetime: Stop waits
+	// for every forwarder to finish before closing the channel they send on.
+	forwardMu     sync.RWMutex
+	forwarders    sync.WaitGroup
+	updatesClosed bool
 }
 
 // NewRegistry builds an empty registry. opts is applied to every client;
@@ -146,6 +177,7 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		}
 	}
 	for i, client := range starting {
+		r.forwarders.Add(1)
 		go client.Run(contexts[i])
 		go r.forward(client)
 	}
@@ -192,13 +224,19 @@ func (r *Registry) controlDirLocked(id string) string {
 }
 
 func (r *Registry) forward(client *Client) {
+	defer r.forwarders.Done()
 	for update := range client.Updates() {
-		select {
-		case r.updates <- update:
-		default:
-			// Dropped rather than blocked: the newest state is what matters,
-			// and a stalled forward would freeze that host's reader loop.
+		r.forwardMu.RLock()
+		if !r.updatesClosed {
+			select {
+			case r.updates <- update:
+			default:
+				// Dropped rather than blocked: the newest state is what
+				// matters, and a stalled forward would freeze that host's
+				// reader loop.
+			}
 		}
+		r.forwardMu.RUnlock()
 	}
 }
 
@@ -262,8 +300,26 @@ func (r *Registry) Stop() {
 			cancel()
 		}
 	}
+	// Close the merged stream so a consumer blocked on Updates() ends rather
+	// than parking for the life of the process. It is closed after the
+	// clients, and forward() is the only sender, so nothing can be mid-send.
+	r.closeUpdates()
 	if dir != "" {
 		_ = os.RemoveAll(dir)
+	}
+}
+
+// closeUpdates ends the merged stream once, guarding the forwarders.
+func (r *Registry) closeUpdates() {
+	// Wait BEFORE taking the lock. Waiting while holding it deadlocks against
+	// any forwarder still in flight, because a forwarder takes the read side
+	// to send.
+	r.forwarders.Wait()
+	r.forwardMu.Lock()
+	defer r.forwardMu.Unlock()
+	if !r.updatesClosed {
+		r.updatesClosed = true
+		close(r.updates)
 	}
 }
 
@@ -368,11 +424,3 @@ func presentation(p hostproto.Presentation) agentstatus.Presentation {
 type remoteError string
 
 func (e remoteError) Error() string { return string(e) }
-
-// StaleAge is how old a host's last update is, for a row that wants to say so.
-func StaleAge(health Health, now time.Time) time.Duration {
-	if health.Since.IsZero() {
-		return 0
-	}
-	return now.Sub(health.Since)
-}

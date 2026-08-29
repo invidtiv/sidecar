@@ -146,9 +146,17 @@ type Client struct {
 	closeOnce sync.Once
 	done      chan struct{}
 
+	// publishMu guards the update channel's lifetime against publishers on
+	// other goroutines. See publish and closeUpdates.
+	publishMu     sync.RWMutex
+	updatesClosed bool
+
 	// controlDir is where this host's ssh ControlMaster socket lives, shared
-	// by the serve stream and every pane channel.
-	controlDir string
+	// by the serve stream and every pane channel. ownsControlDir marks one
+	// this client created and must therefore remove; a Registry-supplied
+	// directory belongs to the registry.
+	controlDir     string
+	ownsControlDir bool
 }
 
 // Client defaults. StaleAfter is deliberately generous: the serve loop drops
@@ -198,8 +206,11 @@ func NewClient(host Host, opts ClientOptions) *Client {
 	}
 	client.controlDir = opts.ControlDir
 	if client.controlDir == "" {
-		if dir, err := os.MkdirTemp("", "sidecar-host-"); err == nil {
-			client.controlDir = dir
+		// /tmp rather than os.MkdirTemp's default: macOS sets TMPDIR to
+		// /var/folders/<2>/<28>/T/, and ssh's ControlPath there exceeds the
+		// ~104-byte unix socket limit. See Registry.controlDirLocked.
+		if dir, err := os.MkdirTemp("/tmp", "sc-host-"); err == nil {
+			client.controlDir, client.ownsControlDir = dir, true
 		}
 	}
 	if client.dial == nil {
@@ -255,14 +266,19 @@ func (c *Client) ControlCommand(ctx context.Context, session string) *exec.Cmd {
 
 // Close stops the client. Safe to call more than once.
 func (c *Client) Close() {
-	c.closeOnce.Do(func() { close(c.done) })
+	c.closeOnce.Do(func() {
+		close(c.done)
+		if c.ownsControlDir && c.controlDir != "" {
+			_ = os.RemoveAll(c.controlDir)
+		}
+	})
 }
 
 // Run drives connect, consume, and reconnect until ctx is cancelled or Close
 // is called. It returns only when stopping, and never returns an error: a host
 // that cannot be reached is a state to render, not a failure to propagate.
 func (c *Client) Run(ctx context.Context) {
-	defer close(c.updates)
+	defer c.closeUpdates()
 
 	attempts := 0
 	for {
@@ -275,6 +291,17 @@ func (c *Client) Run(ctx context.Context) {
 		}
 
 		state, detail := c.session(ctx)
+		// A deliberate stop is not a failure. Checking before setHealth keeps
+		// a shutdown or a de-registration from emitting an "unreachable" that
+		// arrives after the owner has already forgotten this host — which
+		// resurrects it as a permanent error row.
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.done:
+			return
+		default:
+		}
 		if state == StateOnline {
 			// A connection that carried data and then ended is an ordinary
 			// disconnect, not a fault: reset the backoff so a long-lived host
@@ -560,9 +587,38 @@ func (c *Client) MarkStaleIfQuiet() bool {
 // that is behind will read the newest state next time; blocking here would
 // stall the stream and turn a slow renderer into a stale host.
 func (c *Client) publish(update Update) {
+	// The done check is not an optimisation. Run closes c.updates on the way
+	// out, and MarkStaleIfQuiet/Sync publish from other goroutines, so without
+	// it a stale tick landing during shutdown is a send on a closed channel —
+	// a panic, not a dropped update.
+	//
+	// This narrows the window rather than closing it; closeDone is only set
+	// once Run has returned, so the send below cannot overlap the close.
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	c.publishMu.RLock()
+	defer c.publishMu.RUnlock()
+	if c.updatesClosed {
+		return
+	}
 	select {
 	case c.updates <- update:
 	default:
+	}
+}
+
+// closeUpdates ends the update stream exactly once, under the same lock
+// publish takes, so a concurrent publish either happens before the close or
+// sees the flag and drops.
+func (c *Client) closeUpdates() {
+	c.publishMu.Lock()
+	defer c.publishMu.Unlock()
+	if !c.updatesClosed {
+		c.updatesClosed = true
+		close(c.updates)
 	}
 }
 

@@ -172,11 +172,19 @@ Behind `features.SidecarRemoteHosts`, default off.
 
 **Not met:** the full day of use. That is a soak, not a build step, and it is the remaining Phase A evidence.
 
+The retained code was then independently reviewed. One CRITICAL defect, two HIGH, and several medium findings were fixed; the critical one is worth recording because no unit test would have found it and the real run did not surface it either:
+
+**A `tty.Model` made remote stayed remote forever.** The preview reuses one terminal model across row selections, and `UseRemoteControl` had no counterpart — so after viewing a remote pane once, the next LOCAL row was opened by `ssh <host> tmux -C attach-session -t <local session name>`. Both machines run Sidecar and derive session names the same way, so that attach often *succeeds*: another machine's pane painted into a local workspace's preview, interactive mode offered and silently swallowing every keystroke, and the local pane never resized again. The fix is `UseLocalControl`, and the rule that the surface SETS the mode on every activation rather than changing it when it notices a difference. Pinned by a test that fails when the reset is removed.
+
+Two more that mattered: preview content panes (diff, file finder, doc) resolved a remote workspace's path against the LOCAL filesystem — and on a machine with the same checkout that succeeds, showing this machine's diff under the remote row's name; and `tty.Target.Host` was dropped by the stored target, so "am I already showing this?" could never answer yes for a remote pane and every poll tore down its ssh connection and reseeded.
+
 Three things the real run found that no unit test would have:
 
 1. `hosts` in config.json parsed into nothing. The loader merges a `rawConfig` field by field, so a key present only on `Config` is silently ignored — a correct config producing no hosts and no error.
 2. ssh's ControlMaster socket blew the ~104-byte unix path limit under macOS's `$TMPDIR` (`/var/folders/<2>/<28>/T/`), surfacing as an unreachable host with no hint of the cause. The control root is now under `/tmp`.
 3. A registered host was invisible until its first connection resolved — and an ssh dial to a machine that is off runs to a full connect timeout. Initial health is now published at registration.
+
+One deliberate limitation, recorded rather than hidden: `SyncHosts` has a single caller (`app.Init`), so hosts are **start-time only** — editing the host list or toggling the feature takes effect on the next launch. The reconciliation behind it is written, correct and tested; wiring it to a config-reload seam is td-998e58.
 
 ### Phase B — interactive remote panes
 

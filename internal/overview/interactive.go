@@ -111,6 +111,17 @@ type previewTerminal interface {
 
 var _ previewTerminal = (*tty.Model)(nil)
 
+// controlModeSwitcher is the optional capability a real terminal has and a
+// test fake does not: pointing itself at a local or a remote tmux. Both halves
+// are here together because they are one decision — a caller that can make a
+// terminal remote and cannot make it local again leaves it contaminated.
+type controlModeSwitcher interface {
+	UseRemoteControl(tty.ControlSpawner)
+	UseLocalControl()
+}
+
+var _ controlModeSwitcher = (*tty.Model)(nil)
+
 // newPreviewTerminal builds the browser's terminal with the host contract the
 // component calls back through. It is a variable so the seam can be substituted
 // without a tmux server behind it; a substitute is handed the same hooks, so a
@@ -154,26 +165,34 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	m.preview.reason = ""
 	m.setPrimaryTarget(desired)
 	var cmds []tea.Cmd
-	// Point the terminal at the right machine before it opens. Host is part of
-	// the target identity, so a change between a local and a remote row
-	// reaches the close-and-reopen path above and this runs on a fresh
-	// activation rather than mutating a live one.
+	// Point the terminal at the right machine before it opens — on EVERY
+	// activation, including local ones.
+	//
+	// The preview reuses one tty.Model across row selections, so this is a
+	// mode that must be set rather than a mode that must be changed. Setting
+	// it only for remote rows left a Model that had shown a remote pane
+	// permanently wired to that host's ssh, and the next local row was then
+	// opened against the remote tmux — which often succeeds, because both
+	// machines name sessions the same way.
 	//
 	// The capability is discovered rather than declared on previewTerminal:
 	// four tests substitute that seam with fakes that have no business
 	// knowing about ssh, and widening the interface for a case none of them
 	// exercise would be a worse trade than an assertion here.
-	if workspace.Remote() {
-		remote, ok := state.terminal.(interface {
-			UseRemoteControl(tty.ControlSpawner)
-		})
+	switcher, canSwitch := state.terminal.(controlModeSwitcher)
+	switch {
+	case !workspace.Remote():
+		if canSwitch {
+			switcher.UseLocalControl()
+		}
+	default:
 		spawn := m.hostControlSpawner(workspace.HostID)
-		if !ok || spawn == nil {
+		if !canSwitch || spawn == nil {
 			m.preview.reason = "Cannot open a live view of " + workspace.HostID + " right now"
 			m.closePreviewTerminal()
 			return nil
 		}
-		remote.UseRemoteControl(spawn)
+		switcher.UseRemoteControl(spawn)
 	}
 	if width, height, ok := m.terminalLeafSize(leaf.ID); ok {
 		leaf.Target.Width, leaf.Target.Height = width, height

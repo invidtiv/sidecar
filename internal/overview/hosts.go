@@ -2,7 +2,6 @@ package overview
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
@@ -49,7 +48,12 @@ func IsHostMessage(msg tea.Msg) bool {
 type hostUpdateMsg struct{ Update hosts.Update }
 
 // hostStaleTickMsg ages connected hosts that have gone quiet.
-type hostStaleTickMsg struct{ Generation int }
+//
+// It carries no generation deliberately. Host connections are not bound to the
+// refresh generation — that is the whole reason hostCtx exists — so a
+// generation here would read as a staleness guard while guarding nothing.
+// Exactly one tick chain runs, started once from startHosts.
+type hostStaleTickMsg struct{}
 
 // hostStaleTick is how often quiet hosts are re-examined. It is the tick, not
 // the staleness window: hosts.DefaultStaleAfter decides when a host is
@@ -64,14 +68,21 @@ const hostStaleTick = 15 * time.Second
 const hostRowPrefix = " · "
 
 // startHosts brings the configured hosts up and begins consuming their
-// updates. Safe to call repeatedly: Sync reconciles, leaving unchanged hosts
-// connected.
+// updates.
+//
+// It is written to be called repeatedly — Sync reconciles and leaves unchanged
+// hosts connected — but today it has exactly one caller, app.Init. Hosts are
+// therefore start-time only: editing `hosts` or toggling the feature takes
+// effect on the next launch. Wiring it to a config-reload seam is td-a3f1c2;
+// the reconciliation below is correct and tested, it is simply not yet
+// reached a second time.
 func (m *Model) startHosts() tea.Cmd {
 	registered := hosts.FromConfig(m.config)
-	if len(registered) == 0 {
+	disabled := hosts.DisabledFromConfig(m.config)
+	if len(registered) == 0 && len(disabled) == 0 {
 		// Either the feature is off or nothing is registered. Tear down any
-		// registry a previous config had, so turning the feature off at
-		// runtime actually stops the ssh children.
+		// registry a previous config had — which matters once this is called
+		// on config reload; see the note above.
 		if m.hostRegistry != nil {
 			m.hostRegistry.Stop()
 			m.hostRegistry = nil
@@ -84,18 +95,36 @@ func (m *Model) startHosts() tea.Cmd {
 
 	first := m.hostRegistry == nil
 	if first {
+		m.hostRegistered = make(map[string]bool)
 		m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
 		m.hostResults = make(map[string][]workspaceinventory.ProjectResult)
 		m.hostHealth = make(map[string]hosts.Health)
 		m.hostProjects = make(map[string][]Project)
 	}
+	m.hostRegistered = make(map[string]bool, len(registered)+len(disabled))
+	for _, host := range registered {
+		m.hostRegistered[host.ID] = true
+	}
+	for _, id := range disabled {
+		m.hostRegistered[id] = true
+	}
 	m.hostRegistry.Sync(m.hostContext(), registered)
+
+	// Disabled hosts get no client and no connection, but they do get a row:
+	// `disabled` means "off this week", and a machine that silently vanished
+	// would be indistinguishable from one whose entry was deleted.
+	for _, id := range hosts.DisabledFromConfig(m.config) {
+		m.hostHealth[id] = hosts.Health{State: hosts.StateDisabled}
+	}
 
 	// Drop retained state for hosts that are no longer registered, or their
 	// rows would outlive the host they came from.
-	live := make(map[string]bool, len(registered))
+	live := make(map[string]bool, len(registered)+len(disabled))
 	for _, host := range registered {
 		live[host.ID] = true
+	}
+	for _, id := range disabled {
+		live[id] = true
 	}
 	for id := range m.hostHealth {
 		if !live[id] {
@@ -153,10 +182,7 @@ func (m *Model) waitForHostUpdate() tea.Cmd {
 }
 
 func (m *Model) scheduleHostStaleTick() tea.Cmd {
-	generation := m.generation
-	return tea.Tick(hostStaleTick, func(time.Time) tea.Msg {
-		return hostStaleTickMsg{Generation: generation}
-	})
+	return tea.Tick(hostStaleTick, func(time.Time) tea.Msg { return hostStaleTickMsg{} })
 }
 
 // handleHostUpdate folds one host's new state into the model.
@@ -165,6 +191,13 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 		return nil
 	}
 	update := msg.Update
+	// A client that has just been stopped can still deliver one last update
+	// through the merged stream, after startHosts pruned this host's state.
+	// Applying it would resurrect a de-registered machine as a permanent
+	// error row.
+	if len(m.hostRegistered) > 0 && !m.hostRegistered[update.HostID] {
+		return m.waitForHostUpdate()
+	}
 	m.hostHealth[update.HostID] = update.Health
 
 	if update.Snapshot != nil && update.Health.State.Shows() {
@@ -194,15 +227,13 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 }
 
 // handleHostStaleTick ages quiet hosts and reschedules itself.
-func (m *Model) handleHostStaleTick(msg hostStaleTickMsg) tea.Cmd {
+func (m *Model) handleHostStaleTick(hostStaleTickMsg) tea.Cmd {
 	if m.hostRegistry == nil {
 		return nil
 	}
-	if m.hostRegistry.MarkStaleIfQuiet() {
-		// The transition arrives as an ordinary update; nothing to do here but
-		// let it come.
-		_ = msg
-	}
+	// A transition arrives as an ordinary update on the stream; there is
+	// nothing to apply here.
+	m.hostRegistry.MarkStaleIfQuiet()
 	return m.scheduleHostStaleTick()
 }
 
@@ -222,19 +253,29 @@ func (m *Model) hostOrder() []string {
 // It exists so the list and the board iterate remote rows the same way. Two
 // loops over the same data is how the two projections start disagreeing, which
 // is the failure the shared catalog exists to prevent.
-func (m *Model) eachHostWorkspace(visit func(project Project, label string, workspace workspaceinventory.Workspace, stale bool)) {
+func (m *Model) eachHostWorkspace(visit func(order int, label string, workspace workspaceinventory.Workspace, stale bool)) {
+	// Ordinals are global across hosts, not per host. Restarting the index at
+	// zero for each machine made every host's first project tie with every
+	// other's, so the Project sort — stable, ties keep insertion order —
+	// interleaved two machines' rows instead of grouping them.
+	order := 0
 	for _, id := range m.hostOrder() {
 		stale := !m.hostHealth[id].State.Healthy()
-		for _, project := range m.hostProjects[id] {
+		results := m.hostResults[id]
+		for index, project := range m.hostProjects[id] {
 			label := id + hostRowPrefix + project.Name
-			for _, result := range m.hostResults[id] {
-				if result.ProjectKey != project.Key {
-					continue
-				}
-				for _, workspace := range result.Workspaces {
-					visit(project, label, workspace, stale)
-				}
+			// hostProjects is built 1:1 from hostResults in handleHostUpdate,
+			// so the index pairs them directly. Matching by ProjectKey instead
+			// visited every workspace twice whenever a host reported two
+			// projects with the same key, producing duplicate rows and
+			// duplicate kanban card IDs.
+			if index >= len(results) {
+				continue
 			}
+			for _, workspace := range results[index].Workspaces {
+				visit(order, label, workspace, stale)
+			}
+			order++
 		}
 	}
 }
@@ -287,11 +328,16 @@ func hostHealthRow(id string, health hosts.Health) workspacelist.Item {
 
 // hostHealthRowID is deliberately unlike any workspace ID, so a health row can
 // never be mistaken for a row something can be done to.
-func hostHealthRowID(id string) string { return "host-health:" + id }
+func hostHealthRowID(id string) string { return hostHealthPrefix + id }
 
-// IsHostHealthRow reports whether a selected row is a host's health rather
-// than a workspace.
-func IsHostHealthRow(id string) bool { return strings.HasPrefix(id, "host-health:") }
+// hostHealthPrefix marks a row that is a host's condition rather than a
+// workspace. It is deliberately unlike any workspace ID, so a health row can
+// never be mistaken for a row something can be done to.
+const hostHealthPrefix = "host-health:"
+
+// IsHostHealthRow reports whether a row is a host's health rather than a
+// workspace.
+func IsHostHealthRow(id string) bool { return strings.HasPrefix(id, hostHealthPrefix) }
 
 func firstLine(s string) string {
 	if index := strings.IndexByte(s, '\n'); index >= 0 {
@@ -339,21 +385,24 @@ func remotePreviewSnapshot(workspace workspaceinventory.Workspace) string {
 	return strings.Join(lines, "\n")
 }
 
-// HostSummary is one line about every registered host, for the places that
-// want to say how many machines are being watched and whether they are well.
-func (m *Model) HostSummary() string {
-	if m.hostRegistry == nil {
+// HostHealthDetail is what the preview shows for a selected host health row:
+// the state, what went wrong, and what to do. Empty for anything that is not
+// a health row, which is how the preview knows to fall through.
+func (m *Model) HostHealthDetail(rowID string) string {
+	if !IsHostHealthRow(rowID) {
 		return ""
 	}
-	ids := m.hostOrder()
-	if len(ids) == 0 {
+	id := strings.TrimPrefix(rowID, hostHealthPrefix)
+	health, ok := m.hostHealth[id]
+	if !ok {
 		return ""
 	}
-	online := 0
-	for _, id := range ids {
-		if m.hostHealth[id].State.Healthy() {
-			online++
-		}
+	lines := []string{id + " — " + string(health.State)}
+	if detail := strings.TrimSpace(health.Detail); detail != "" {
+		lines = append(lines, "", detail)
 	}
-	return fmt.Sprintf("%d/%d hosts online", online, len(ids))
+	if fix := health.Fix(); fix != "" {
+		lines = append(lines, "", fix)
+	}
+	return strings.Join(lines, "\n")
 }

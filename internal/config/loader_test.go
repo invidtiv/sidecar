@@ -706,3 +706,64 @@ func TestLoadFrom_TerminalBackgrounds(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadFromParsesHosts is a regression test with a specific history.
+//
+// The loader merges a rawConfig into defaults field by field, so a key that
+// exists on Config but not on rawConfig parses into nothing — silently, with
+// no error. `hosts` shipped that way: a correctly written config produced no
+// hosts and no complaint, and it was only found by running the feature against
+// a real machine. Deleting the three-line merge block reintroduces it with a
+// green suite unless this test exists.
+func TestLoadFromParsesHosts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	document := `{
+	  "hosts": { "list": [
+	    { "id": "mac-mini", "target": "mini.local", "binary": "/opt/sidecar",
+	      "config": "/etc/sc.json", "env": ["K=V"] },
+	    { "target": "other", "disabled": true }
+	  ] }
+	}`
+	if err := os.WriteFile(path, []byte(document), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Hosts.List) != 2 {
+		t.Fatalf("hosts = %d, want 2 — the `hosts` key parsed into nothing", len(cfg.Hosts.List))
+	}
+	first := cfg.Hosts.List[0]
+	if first.ID != "mac-mini" || first.Target != "mini.local" {
+		t.Errorf("identity lost: %+v", first)
+	}
+	if first.Binary != "/opt/sidecar" || first.Config != "/etc/sc.json" {
+		t.Errorf("per-host paths lost: %+v", first)
+	}
+	if len(first.Env) != 1 || first.Env[0] != "K=V" {
+		t.Errorf("env lost: %+v", first.Env)
+	}
+	if !cfg.Hosts.List[1].Disabled {
+		t.Errorf("disabled lost: %+v", cfg.Hosts.List[1])
+	}
+}
+
+// TestLoadFromWithoutHostsLeavesNone: an absent section is not an error and
+// must not invent a host.
+func TestLoadFromWithoutHostsLeavesNone(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"ui": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFrom(path)
+	if err != nil {
+		t.Fatalf("LoadFrom: %v", err)
+	}
+	if len(cfg.Hosts.List) != 0 {
+		t.Errorf("hosts = %+v, want none", cfg.Hosts.List)
+	}
+}

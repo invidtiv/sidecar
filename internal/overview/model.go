@@ -258,8 +258,12 @@ type Model struct {
 	hostCtx      context.Context
 	hostCancel   context.CancelFunc
 	hostResults  map[string][]workspaceinventory.ProjectResult
-	hostHealth   map[string]hosts.Health
-	hostProjects map[string][]Project
+	// hostRegistered is the set of host IDs config currently names, so a final
+	// update from a client that has just been stopped cannot resurrect a
+	// de-registered machine as a permanent error row.
+	hostRegistered map[string]bool
+	hostHealth     map[string]hosts.Health
+	hostProjects   map[string][]Project
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -1477,12 +1481,12 @@ func (m *Model) syncBoard() {
 	// belongs in the same column as a local one rather than in a section of
 	// its own that a reader has to remember to look at.
 	remoteBase := len(m.projects)
-	m.eachHostWorkspace(func(project Project, label string, workspace workspaceinventory.Workspace, stale bool) {
+	m.eachHostWorkspace(func(ordinal int, label string, workspace workspaceinventory.Workspace, stale bool) {
 		if !workspace.HasAgent() {
 			return
 		}
 		m.cards[workspace.ID] = workspace
-		order[workspace.ID] = cardOrder{project: remoteBase + project.Index, changedAt: workspace.Presentation.ChangedAt}
+		order[workspace.ID] = cardOrder{project: remoteBase + ordinal, changedAt: workspace.Presentation.ChangedAt}
 		card := kanban.Card{ID: workspace.ID, Lines: cardLines(workspace, stale, now)}
 		for i := range lanes {
 			if lanes[i].ID == kanban.LaneID(workspace.Presentation.Lane) {
