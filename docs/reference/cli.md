@@ -152,6 +152,100 @@ sidecar help open
 sidecar help --json
 ```
 
+## `sidecar host`
+
+Remote host observation over SSH
+
+Observe another machine's Sidecar state. `serve` runs on the remote host;
+`probe` connects to one from here.
+
+```
+Usage: sidecar host <serve|probe> [options]
+```
+
+### `sidecar host probe`
+
+Connect to a remote host's serve stream and report what came back
+
+Spawn `sidecar host serve --stdio` on an SSH target and consume its stream.
+
+Prints a health verdict naming the fix when something is wrong: unreachable,
+no sidecar on the host, protocol too old on either end, no tmux, or a stream
+that is not the protocol at all (a login-shell banner on stdout is the usual
+cause). With --raw it passes the JSONL through untouched, which is the form
+to capture when recording evidence.
+
+```
+Usage: sidecar host probe <ssh-target> [--json] [--raw] [--cycles N] [--timeout D]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `--raw`: Pass the host's JSONL through verbatim
+- `--cycles N`: Stop after N snapshots (default 1)
+- `--timeout D`: Give up after this long (default 30s)
+- `--binary PATH`: Explicit sidecar path on the host
+- `--remote-config PATH`: -config path for the remote sidecar
+- `--env K=V`: Environment for the remote process (repeatable)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: host answered and is compatible
+- `1`: host unreachable, incompatible, or not serving the protocol
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar host probe marcusbook
+# Record a raw transcript
+sidecar host probe marcusbook --raw --cycles 3
+```
+
+### `sidecar host serve`
+
+Stream this machine's Sidecar state as JSONL (spawned over SSH by a remote viewer)
+
+Run the headless, read-only host agent: collect this machine's projects,
+shells, worktrees and agent status on the ordinary Overview cadence, and
+stream a versioned JSONL snapshot plus status transitions to stdout.
+
+This is not a daemon. It is spawned per connection over an SSH stdio pipe
+and exits when that pipe closes. It writes no Sidecar state: it never
+touches shells.json, never reaps a dead shell, never takes a geometry
+lease, and never resizes a pane.
+
+Nothing is bound to a network. SSH is the entire transport and the entire
+trust boundary.
+
+```
+Usage: sidecar host serve --stdio [--cycles N] [--project NAME=PATH]
+```
+
+**Options:**
+
+- `--stdio`: Serve on stdin/stdout (the only transport)
+- `--cycles N`: Exit after N collection cycles (0 = run until the pipe closes)
+- `--project NAME=PATH`: Observe this project instead of the configured list (repeatable)
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: stream ended cleanly
+- `1`: serve failed
+- `2`: usage error
+
+**Examples:**
+
+```bash
+# What a viewer runs over ssh
+sidecar host serve --stdio
+# One cycle, for inspection
+sidecar host serve --stdio --cycles 1
+```
+
 ## `sidecar layout`
 
 Read and compose the pane layout agents work beside

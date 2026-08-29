@@ -1,9 +1,9 @@
 # Sidecar as its own remote host runtime
 
-Status: **active, planning**, 2026-08-28
+Status: **active, Phase 0 complete — proceed to Phase A**, 2026-08-29
 
 Related: [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) — the competing alternative for the same deliverable; see [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) for what decides between them. [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal to both.
-Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan.
+Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 was run end to end against a second real machine on 2026-08-29 — measurements, transcripts and findings in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md).
 
 ## Decision first
 
@@ -115,15 +115,18 @@ Identical to the Herdr plan, and stated once: remote panes are ordinary `panefra
 
 ## Work items surfaced by the research
 
-- **Library-visible version/protocol accessor** (currently `main`-only ldflags).
+- ~~**Library-visible version/protocol accessor** (currently `main`-only ldflags).~~ **Done in Phase 0** — `internal/buildinfo`.
+- **Login-shell binary resolution is mandatory, not an optimisation.** A non-login ssh shell has no `/opt/homebrew/bin` on PATH, so a host with tmux plainly installed reports `tmux: executable file not found`. The remote command must be wrapped in `$SHELL -l -c CMD` — and specifically not `$SHELL -l -s`, which additionally runs the shell's interactive preexec hooks and writes OSC sequences onto the same stdout the protocol uses. Both forms were measured on a real host; `internal/hosts.RemoteShell` implements the safe one.
+- **A "stream is not the protocol" row state.** Some host will have a login profile that prints to stdout regardless. The viewer must name that specific failure and its fix rather than surfacing a JSON syntax error.
+- **Server death is not an incarnation change.** `tmux kill-server` does not unlink its socket (verified by inode), so `tmuxserver.Socket()` reports the same identity across a death; the incarnation only moves when a new server recreates the socket. "The remote server died" must be driven by the pane listing going empty — which is exactly the condition the reaper must refuse to act on (td-8d18de).
 - **Linux process identity.** `process_identity_other.go` is a stub — argv0 disambiguation of shared-runtime panes (node/bun/agent) silently degrades to screen-chrome detection on Linux, and remote hosts will often be Linux. A `/proc`-based implementation (tpgid from `/proc/<pid>/stat`, argv0 from `cmdline`) is a Phase A item that also improves any Linux user's local fidelity today.
 - **Host-aware control channel factory + remote `terminalInputSender`** — the two seams in `internal/tty`.
-- **Resize-without-transport-restart** if Phase 0 item 3 says the respawn is felt.
+- ~~**Resize-without-transport-restart** if Phase 0 item 3 says the respawn is felt.~~ **Measured and dropped from Phase A.** A reseed over ssh costs 82–383 ms on a real link and 258–854 ms at 150 ms RTT — noticeable but not felt on a debounced, lease-gated, deliberate act. Revisit on Phase B experience, not on principle.
 - **Headless reap choreography** — not before Phase C, and only by porting the overview's guards (empty-listing skip, incarnation fence, tombstone writes), never fresh logic.
 
 ## Phases
 
-### Phase 0 — spike
+### Phase 0 — spike ✅ complete (2026-08-29)
 
 A second machine with Sidecar installed, a real link (LAN and a WAN/VPN hop), agents running in tmux sessions over there.
 
@@ -134,6 +137,16 @@ A second machine with Sidecar installed, a real link (LAN and a WAN/VPN hop), ag
 5. **Failure axes.** ssh drop mid-stream (keepalive detection, fallback engagement, clean reattach); remote tmux server death (incarnation transition must mark rows dead, never wipe anything); sidecar missing/too old on the host (distinct actionable states); two viewers on one host; a viewer plus a human TUI on the host.
 
 **Exit gate:** a recorded matrix of latency/bandwidth/CPU numbers and the answer to the only existential question: does a proxied-control-mode pane feel local-grade? Compare directly against the Herdr plan's Phase 0 numbers if both spikes run; this table is the bake-off input.
+
+**Result: passed. Proceed to Phase A.** Run against `marcusbook` over LAN, Tailscale, and two shaped-latency columns, with both machines' default tmux servers and real state trees provably untouched. Headlines:
+
+- **A proxied pane is local-grade.** Attach + first frame 94 ms on a LAN, 876 ms at 150 ms RTT. Seed 623 bytes. An idle pane costs **zero `%output` notifications**. A 256 KiB burst converges in 230 ms (LAN) / 913 ms (150 ms RTT) at 8–27 fps. No fallbacks in any run.
+- **In-band input is worth building and the number says why.** Its overhead is a near-constant ~23 ms above link RTT (10.4 / 83.7 / 173.3 ms at 0 / 60 / 150 ms). Out-of-band — one `ssh tmux send-keys` per batch — costs 2.1×–6.2× more. FIFO held across 40 back-to-back batches on every link.
+- **Serve matches the host's own TUI exactly.** Three providers, same lanes, same providers, same attention flags, same rows, at the same moment — because serve runs `agentactivity` and `agentstatus.Resolve` on the host over the host's own captures. Previews ship for free by decorating the capture the status pass already takes.
+- **Failure axes held.** ssh drop → fallback in 0 ms and clean reattach. Remote tmux death → rows went `paused`, and `shells.json` was **byte-identical before and after**. Two viewers coexisted; a human's TUI on the host coexisted with a viewer; neither disturbed the other.
+- **Not proven:** done-TTL decay over the wire, a Linux host (both machines are arm64 macOS, so the `process_identity` Linux stub was never exercised), a relayed WAN path, and a full day of use.
+
+The three findings that change Phase A are recorded in the work items above and in the evidence document.
 
 ### Phase A — read-only remote hosts
 
@@ -200,4 +213,5 @@ Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matr
 
 ## Changelog
 
+- **2026-08-29** — Phase 0 run end to end against a second real machine. Verdict: proceed to Phase A. Resize-without-restart dropped from Phase A on measured evidence; login-shell resolution, a not-the-protocol row state, and the incarnation-vs-death distinction added as required Phase A items. Retained: `internal/hostproto`, `internal/hostserve`, `internal/hosts`, `internal/tty/control_remote.go`, `internal/buildinfo`, `sidecar host serve|probe`, and the spike harnesses under `scripts/`.
 - **2026-08-28** — Created, from source research into the control-mode transport seam, the geometry lease's explicit two-machine design (td-ee222a), the UI-free awareness stack, shells.json v2 hardening, and the headless-readiness of `workspaceops`. Positioned as the competing alternative to the Herdr remote-hosts plan with a recorded bake-off posture.

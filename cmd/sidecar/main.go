@@ -29,6 +29,7 @@ import (
 	_ "github.com/marcus/sidecar/internal/adapter/piagent"
 	_ "github.com/marcus/sidecar/internal/adapter/warp"
 	"github.com/marcus/sidecar/internal/app"
+	"github.com/marcus/sidecar/internal/buildinfo"
 	"github.com/marcus/sidecar/internal/cli"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configui"
@@ -73,6 +74,11 @@ var (
 )
 
 func main() {
+	// Publish the ldflags-injected version to library code before anything can
+	// read it. `sidecar host serve` puts this string in its protocol hello, and
+	// that hello is built under internal/, which cannot see package main.
+	buildinfo.Set(Version)
+
 	// Non-interactive commands dispatch before flag parsing and before any TUI
 	// initialization, logging, state creation, or TMUX environment changes.
 	args := os.Args[1:]
