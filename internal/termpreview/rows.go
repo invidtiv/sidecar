@@ -151,14 +151,13 @@ func DrawRows(in RowsInput) DrawResult {
 		// only a carry into the next row, so the colour lands one row late and
 		// the cells it belonged to fall through to whatever pads them.
 		//
-		// Only a row tmux described at all can be rebuilt this way. A row it
-		// emitted no bytes for is either a wholly blank row of the carried
-		// colour or a wholly blank default row, and the trimmed capture spells
-		// both `""`; filling it would paint every blank separator between two
-		// coloured blocks. Those rows keep going to the canvas, which is the
-		// answer built for exactly that ambiguity. A row that carries only an
-		// SGR change is described: tmux trimmed its blanks but told us what
-		// colour they were.
+		// Only a row tmux described at all can be rebuilt this way. Captures are
+		// taken with -N (see tty.CapturePaneOutput), so a row of blanks in the
+		// carried colour arrives as those blanks and a row tmux emitted no bytes
+		// for is a row nothing was ever written to: default, and not this row's
+		// to paint. Filling it would colour every blank separator between two
+		// highlighted blocks. Without -N the two spell the same empty string,
+		// which is the ambiguity the flag exists to remove.
 		if touchedBg && row.trailing != "" && row.described {
 			width := row.visibleWidth
 			if row.hasTab {

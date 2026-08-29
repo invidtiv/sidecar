@@ -342,8 +342,17 @@ func SendSGRMouse(sessionName string, button, col, row int, release bool) error 
 // Uses capture-pane with -p flag to print to stdout and -e to preserve
 // ANSI escape sequences (colors, styles).
 // The scrollback parameter controls how many lines of history to capture.
+//
+// -N keeps each row's trailing blank cells. Without it tmux trims them, and a
+// trimmed row spells two different screens the same way: a row of blanks in
+// the carried colour and a row of blanks in the terminal default are both the
+// empty string. Every consumer downstream then has to guess which one it has,
+// and a wrong guess is a coloured stripe through an input box or a default
+// stripe through a full-screen TUI's canvas. The blanks cost roughly a quarter
+// more capture bytes and remove the guess entirely. Trailing blank *rows* are
+// still trimmed, so a capture's row count is unchanged (see FitViewport).
 func CapturePaneOutput(target string, scrollback int) (string, error) {
-	args := []string{"capture-pane", "-p", "-e", "-t", target}
+	args := []string{"capture-pane", "-p", "-e", "-N", "-t", target}
 	if scrollback > 0 {
 		args = append(args, "-S", fmt.Sprintf("-%d", scrollback))
 	}

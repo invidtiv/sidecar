@@ -10,7 +10,7 @@ func TestCapturePaneRangeArgsUseArgvOnlyBounds(t *testing.T) {
 	want := []string{
 		"display-message", "-t", "%12", "-p", "#{history_size}",
 		";",
-		"capture-pane", "-p", "-e", "-t", "%12",
+		"capture-pane", "-p", "-e", "-N", "-t", "%12",
 		"-S", "-1200", "-E", "-601",
 	}
 	if !slices.Equal(got, want) {

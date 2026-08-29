@@ -23,36 +23,48 @@ import (
 // text is a cell the capture describes only by leaving its colour open.
 func TestDrawRowsMatchesPaddedCaptureBackgrounds(t *testing.T) {
 	for _, width := range []int{85, 100, 121} {
-		t.Run(fmt.Sprintf("w%d", width), func(t *testing.T) {
-			trimmed := readCaptureFixture(t, fmt.Sprintf("codex-edit-w%d.trim", width))
-			padded := readCaptureFixture(t, fmt.Sprintf("codex-edit-w%d.pad", width))
-			height := len(padded)
-
-			res := drawCapture(t, trimmed, width, height)
-			if len(res.Rows) != height {
-				t.Fatalf("drew %d rows, oracle has %d", len(res.Rows), height)
-			}
-			want := screenmodel.DecodeCapture(strings.Join(padded, "\n"), width, height)
-			got := screenmodel.DecodeCapture(strings.Join(res.Rows, "\n"), width, height)
-
-			var bg []screenmodel.Mismatch
-			for _, m := range screenmodel.CompareGrids(want, got, width, height) {
-				if m.Field == "bg" {
-					bg = append(bg, m)
-				}
-			}
-			if len(bg) == 0 {
-				return
-			}
-			t.Errorf("%d background cells disagree with tmux at width %d", len(bg), width)
-			for i, m := range bg {
-				if i == 8 {
-					t.Logf("... and %d more", len(bg)-i)
-					break
-				}
-				t.Log(m.String())
-			}
+		padded := readCaptureFixture(t, fmt.Sprintf("codex-edit-w%d.pad", width))
+		// What production reads: the -N capture is both the input and the
+		// oracle, so any disagreement is a screen Sidecar was handed intact and
+		// then distorted.
+		t.Run(fmt.Sprintf("padded/w%d", width), func(t *testing.T) {
+			assertBackgroundsMatch(t, padded, padded, width)
 		})
+		// The trimmed form of the same screen still has to reach the same
+		// answer, because the reconstruction is what makes a row shorter than
+		// its pane come out right after truncation or a horizontal offset.
+		t.Run(fmt.Sprintf("trimmed/w%d", width), func(t *testing.T) {
+			assertBackgroundsMatch(t, readCaptureFixture(t, fmt.Sprintf("codex-edit-w%d.trim", width)), padded, width)
+		})
+	}
+}
+
+func assertBackgroundsMatch(t *testing.T, input, oracle []string, width int) {
+	t.Helper()
+	height := len(oracle)
+	res := drawCapture(t, input, width, height)
+	if len(res.Rows) != height {
+		t.Fatalf("drew %d rows, oracle has %d", len(res.Rows), height)
+	}
+	want := screenmodel.DecodeCapture(strings.Join(oracle, "\n"), width, height)
+	got := screenmodel.DecodeCapture(strings.Join(res.Rows, "\n"), width, height)
+
+	var bg []screenmodel.Mismatch
+	for _, m := range screenmodel.CompareGrids(want, got, width, height) {
+		if m.Field == "bg" {
+			bg = append(bg, m)
+		}
+	}
+	if len(bg) == 0 {
+		return
+	}
+	t.Errorf("%d background cells disagree with tmux at width %d", len(bg), width)
+	for i, m := range bg {
+		if i == 8 {
+			t.Logf("... and %d more", len(bg)-i)
+			break
+		}
+		t.Log(m.String())
 	}
 }
 

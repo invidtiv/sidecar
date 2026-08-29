@@ -448,10 +448,14 @@ type screenCompareResult struct {
 }
 
 // beyondCaptureExtent reports whether a cell difference falls in the region
-// `capture-pane -e` cannot describe: at or past the column where tmux trimmed
-// the row's trailing blanks, with the model also holding a plain blank there.
-// A real character the capture does not have is still a mismatch; only the
-// *styling* of trailing blanks is unknowable.
+// the capture cannot describe: at or past the column where the row's cells
+// end, with the model also holding a plain blank there. A real character the
+// capture does not have is still a mismatch.
+//
+// Captures are taken with -N, which keeps each row's trailing blanks, so this
+// region is now empty for any row a pane actually wrote to and the excuse
+// almost never fires. It stays for the rows tmux emits nothing at all for,
+// where there is no styling to compare against.
 func beyondCaptureExtent(extents []screenExtent, m screenmodel.Mismatch, got screenmodel.Cell) bool {
 	if m.Row < 0 || m.Col < 0 || m.Row >= len(extents) {
 		return false

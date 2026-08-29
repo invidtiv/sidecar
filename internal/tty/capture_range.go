@@ -50,7 +50,9 @@ func capturePaneRangeArgs(target string, start, end int) []string {
 	return []string{
 		"display-message", "-t", target, "-p", "#{history_size}",
 		";",
-		"capture-pane", "-p", "-e", "-t", target,
+		// -N keeps each row's trailing blanks; see CapturePaneOutput for why the
+		// trimmed form is ambiguous.
+		"capture-pane", "-p", "-e", "-N", "-t", target,
 		"-S", strconv.Itoa(start),
 		"-E", strconv.Itoa(end),
 	}

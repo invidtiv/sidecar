@@ -271,8 +271,10 @@ func buildSeedCommands(pane string, scrollback int) (metadata, mainCapture, capt
 	// actor ignores that middle response unless the preceding metadata says the
 	// alternate screen is active. Keeping it unconditional gives SendTriple a
 	// fixed three-response transaction with no race between metadata and capture.
-	mainCapture = "capture-pane -p -e -a -S -" + strconv.Itoa(scrollback) + " -t " + pane
-	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
+	// -N keeps each row's trailing blanks; see CapturePaneOutput for why the
+	// trimmed form is ambiguous.
+	mainCapture = "capture-pane -p -e -N -a -S -" + strconv.Itoa(scrollback) + " -t " + pane
+	capture = "capture-pane -p -e -N -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, mainCapture, capture, nil
 }
 

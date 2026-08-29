@@ -1124,7 +1124,9 @@ func buildControlCaptureCommandsLayout(pane string, scrollback int, extended boo
 		fields = captureCompareMetadataFields
 	}
 	metadata = "display-message -p -t " + pane + " '" + fields + "'"
-	capture = "capture-pane -p -e -S -" + strconv.Itoa(scrollback) + " -t " + pane
+	// -N keeps each row's trailing blanks; see CapturePaneOutput for why the
+	// trimmed form is ambiguous.
+	capture = "capture-pane -p -e -N -S -" + strconv.Itoa(scrollback) + " -t " + pane
 	return metadata, capture, nil
 }
 

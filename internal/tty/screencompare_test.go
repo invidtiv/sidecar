@@ -36,7 +36,7 @@ func TestCaptureCommandsUnchangedWhenCompareOff(t *testing.T) {
 	if metadata != wantMeta {
 		t.Errorf("metadata command changed:\n got %q\nwant %q", metadata, wantMeta)
 	}
-	if want := "capture-pane -p -e -S -600 -t %3"; capture != want {
+	if want := "capture-pane -p -e -N -S -600 -t %3"; capture != want {
 		t.Errorf("capture command = %q, want %q", capture, want)
 	}
 	if wantsModelFeed(ControlRequest{}) {
@@ -58,7 +58,7 @@ func TestCompareOnAddsOnlyMetadataFieldsAndNoExtraCommand(t *testing.T) {
 	if strings.Count(metadata, "display-message") != 1 || strings.Contains(metadata, ";") {
 		t.Errorf("compare metadata is not a single command: %q", metadata)
 	}
-	if want := "capture-pane -p -e -S -600 -t %3"; capture != want {
+	if want := "capture-pane -p -e -N -S -600 -t %3"; capture != want {
 		t.Errorf("capture command = %q, want %q", capture, want)
 	}
 	if !wantsModelFeed(ControlRequest{}) {
