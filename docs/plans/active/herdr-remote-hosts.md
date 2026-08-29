@@ -4,6 +4,7 @@ Status: **active, planning**, 2026-08-28
 
 Supersedes: [Replacing Sidecar's tmux integration with Herdr](../deprecated/replacing-tmux-with-herdr.md) (deprecated) and [Herdr session persistence](../deprecated/herdr-session-persistence.md) (deprecated)
 Research input: [What Sidecar can learn from Herdr without replacing tmux](../../research/active/lessons-from-herdr.md)
+Related: [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) — independent axis; this plan makes Sidecar a client of remote Herdr servers, that one makes Sidecar a local host for Herdr's plugin ecosystem
 Herdr source inspected: [`herdrdev/herdr`](https://github.com/herdrdev/herdr) at `c2637dc1` (local checkout `~/code/herdr`), protocol 21 (`src/protocol/wire.rs:16`)
 
 ## Decision first
