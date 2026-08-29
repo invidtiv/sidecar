@@ -1079,12 +1079,16 @@ func TestTerminalViewportDoesNotTreatScrollbackDiffAsCanvas(t *testing.T) {
 
 // tmux writes only the SGR delta, so a background opened on one row stays open
 // on every row after it. Rows are rendered independently — sliced, truncated,
-// padded — so each has to close what it opened or the colour smears.
+// padded — so each has to close what it opened or the colour smears into the
+// row below. It has to reach the pane edge first: the cells tmux trimmed off
+// the end of this row were green, and leaving them unpainted is what made a
+// diff hunk stop mid-row.
 func TestTerminalViewportClosesBackgroundAtEndOfRow(t *testing.T) {
 	green := "\x1b[48;2;0;80;0m"
 	buffer := tty.NewOutputBuffer(100)
 	// Exactly what `capture-pane -e` delivers for a background erased to end of
-	// line: the trailing filled cells are trimmed and the reset goes with them.
+	// line: the trailing filled cells are trimmed and the colour is left open,
+	// which is how tmux says the rest of the row is still green.
 	buffer.ApplySnapshot(tty.PaneSnapshot{
 		Output:   green + "+ added",
 		PaneRows: 1,
@@ -1096,12 +1100,14 @@ func TestTerminalViewportClosesBackgroundAtEndOfRow(t *testing.T) {
 	}, ui.NewTruncateCache(32))
 
 	row := strings.Split(result.Content, "\n")[0]
-	// The reset closes the text, so the padding that follows is default-background
-	// rather than a green bar running to the pane edge.
-	if !strings.Contains(row, "+ added"+ui.RowBackgroundDefault) {
-		t.Errorf("row does not close its background: %q", row)
+	reset := strings.LastIndex(row, ui.RowBackgroundDefault)
+	if reset < 0 {
+		t.Fatalf("row does not close its background: %q", row)
 	}
-	if tail := row[strings.LastIndex(row, ui.RowBackgroundDefault):]; strings.Contains(tail, green) {
+	if painted := ansi.StringWidth(row[:reset]); painted < 19 {
+		t.Errorf("green stops after %d columns instead of reaching the pane edge: %q", painted, row)
+	}
+	if tail := row[reset:]; strings.Contains(tail, green) {
 		t.Errorf("row re-opens the background after closing it: %q", row)
 	}
 }

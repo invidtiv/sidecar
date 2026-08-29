@@ -48,6 +48,8 @@ type analyzedRow struct {
 	prefixTouches bool
 	prefixBG      string
 	hasPrintable  bool
+	hasTab        bool
+	described     bool
 	explicitBGs   []string
 
 	resolvedValid    bool
@@ -64,6 +66,18 @@ type resolvedRow struct {
 	backgrounds    []string
 	first          string
 	blank          bool
+
+	// visibleWidth is the row's printable width before tab expansion, and
+	// hasTab says whether expansion can change it. Together they let a drawn
+	// row rebuild the cells tmux trimmed without a second ANSI walk.
+	visibleWidth int
+	hasTab       bool
+
+	// described says the capture emitted bytes for this row. A row it emitted
+	// nothing for is the one shape the trimmed capture cannot spell: a wholly
+	// blank row of the carried colour and a wholly blank default row are both
+	// the empty string.
+	described bool
 }
 
 type analysisWindow struct {
@@ -178,7 +192,13 @@ func analyzeRawRow(raw string, fingerprint uint64) *analyzedRow {
 	// OutputBuffer rows are split substrings and may still point at the full
 	// capture allocation. The cache outlives that snapshot, so its collision
 	// guard must own only this bounded row's bytes.
-	row := &analyzedRow{fingerprint: fingerprint, byteLen: len(raw), raw: strings.Clone(raw)}
+	row := &analyzedRow{
+		fingerprint: fingerprint,
+		byteLen:     len(raw),
+		raw:         strings.Clone(raw),
+		hasTab:      strings.IndexByte(raw, '\t') >= 0,
+		described:   len(raw) > 0,
+	}
 	var backgroundFree, visible strings.Builder
 	backgroundFree.Grow(len(raw))
 	visible.Grow(len(raw))
@@ -286,6 +306,9 @@ func (r *analyzedRow) resolve(incoming string) resolvedRow {
 		backgrounds:    backgrounds,
 		first:          first,
 		blank:          r.blank,
+		visibleWidth:   r.visibleWidth,
+		hasTab:         r.hasTab,
+		described:      r.described,
 	}
 	r.resolvedIncoming = incoming
 	r.resolved = resolved

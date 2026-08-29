@@ -114,6 +114,15 @@ func DrawRows(in RowsInput) DrawResult {
 			canvasBg = inferred
 		}
 	}
+	// tailWidth is the last column that still belongs to a captured pane row.
+	// tmux trims each row's trailing blank cells but keeps the SGR change that
+	// applied to them, so the row's own trailing background is what those cells
+	// were; rebuilding them here is reconstruction, not inference. Columns past
+	// this belong to the viewport around a letterboxed pane, not to the row.
+	tailWidth := contentWidth + layout.Fit.ColOffset
+	if layout.Fit.LetterboxedWidth && layout.Fit.Width > 0 {
+		tailWidth = layout.Fit.Width + layout.Fit.ColOffset
+	}
 	bandLen := analysis.visiblePredecessorBand
 	drawn := make([]string, 0, max(len(analysis.visible), layout.DisplayHeight))
 	for i, row := range analysis.visible {
@@ -137,6 +146,28 @@ func DrawRows(in RowsInput) DrawResult {
 			touchedBg = false
 		}
 		line = ui.ExpandTabs(line, tabWidth)
+		// Restore the cells tmux trimmed off the end of this row before anything
+		// reads the row's shape. Without them the row's trailing background is
+		// only a carry into the next row, so the colour lands one row late and
+		// the cells it belonged to fall through to whatever pads them.
+		//
+		// Only a row tmux described at all can be rebuilt this way. A row it
+		// emitted no bytes for is either a wholly blank row of the carried
+		// colour or a wholly blank default row, and the trimmed capture spells
+		// both `""`; filling it would paint every blank separator between two
+		// coloured blocks. Those rows keep going to the canvas, which is the
+		// answer built for exactly that ambiguity. A row that carries only an
+		// SGR change is described: tmux trimmed its blanks but told us what
+		// colour they were.
+		if touchedBg && row.trailing != "" && row.described {
+			width := row.visibleWidth
+			if row.hasTab {
+				width = ansi.StringWidth(line)
+			}
+			if gap := tailWidth - width; gap > 0 {
+				line += row.trailing + strings.Repeat(" ", gap)
+			}
+		}
 		absoluteLine := in.AbsoluteBase + layout.Start + i
 		if in.Decorate != nil {
 			line = in.Decorate(line, absoluteLine)
