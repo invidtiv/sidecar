@@ -409,7 +409,9 @@ cmd_teardown() {
         *) echo "refusing teardown: resolved socket '$socket' is outside $RUN_DIR" >&2; exit 1 ;;
     esac
     echo "killing ONLY the private server at $socket"
-    rsh "TMUX= if [ -S $(printf %q "$socket") ]; then tmux -S $(printf %q "$socket") kill-server 2>/dev/null || true; else echo '  (no private server running)'; fi"
+    # `TMUX= if ...` is a syntax error: an assignment prefix may only precede a
+    # simple command, never a compound one. Export it on its own line instead.
+    rsh "export TMUX=; if [ -S $(printf %q "$socket") ]; then tmux -S $(printf %q "$socket") kill-server 2>/dev/null || true; else echo '  (no private server running)'; fi"
     rsh "rm -rf $(printf %q "$RUN_DIR")"
     ssh "${SSH_OPTS[@]}" -O exit "$HOST" 2>/dev/null || true
     rm -f /tmp/sidecar-spike-build /tmp/sidecar-spike-holdpane
