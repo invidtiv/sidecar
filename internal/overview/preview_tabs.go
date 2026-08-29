@@ -193,13 +193,25 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 			message = "Starting terminal..."
 		}
 	}
-	if message != "" {
-		message += "\n\n" + previewMetadata(workspace)
-	}
-
 	buffer := leaf.Buffer
 	if state.terminal != nil && state.terminal.IsActive() {
 		buffer = state.terminal.Buffer()
+	}
+	// A remote row with no live channel still has something true to show: the
+	// capture the host's own status pass already took and shipped with the
+	// snapshot. It costs nothing extra — the host took it either way — and it
+	// is the difference between "that machine has a blocked agent" and "that
+	// machine has a blocked agent, and here is the question it is asking".
+	if buffer == nil && workspace.Remote() {
+		if snapshot := remotePreviewSnapshot(workspace); snapshot != "" {
+			if message == "" {
+				message = "Last seen on " + workspace.HostID
+			}
+			message += "\n\n" + snapshot
+		}
+	}
+	if message != "" {
+		message += "\n\n" + previewMetadata(workspace)
 	}
 	base, _ := tty.BufferBase(buffer)
 	input := tty.ViewportInput{Buffer: buffer, AbsoluteBase: base, Width: width, Height: height - termpreview.HeaderRows, Scrollbar: true, TrimTrailing: tty.TrimsTrailingRows(interactive)}

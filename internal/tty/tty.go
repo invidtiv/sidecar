@@ -179,10 +179,14 @@ type Model struct {
 	// mutate pane geometry. Close clears it synchronously, so a resize closure
 	// already returned to Bubble Tea cannot resize a pane after its surface is
 	// hidden even though its eventual result would be scope-rejected.
-	activeGeneration          atomic.Uint64
-	activationMu              sync.RWMutex
-	scopeTarget               string
-	control                   terminalControlSource
+	activeGeneration atomic.Uint64
+	activationMu     sync.RWMutex
+	scopeTarget      string
+	control          terminalControlSource
+	// remote marks a terminal served by a tmux on another machine. It gates
+	// every side effect this process could have on that machine: see
+	// UseRemoteControl.
+	remote                    bool
 	subscription              terminalControlSubscription
 	mailbox                   *terminalMailbox
 	mailboxDone               chan struct{}
@@ -416,6 +420,14 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 type Target struct {
 	Session string
 	Pane    string
+	// Host names the machine the session lives on. Empty is this machine.
+	//
+	// It is part of the target identity rather than a separate field on the
+	// surface, so a caller comparing "am I already showing this?" cannot
+	// accidentally match a local session against a remote one with the same
+	// name — which would leave a terminal wired to the wrong tmux server and
+	// paint an unrelated pane.
+	Host string
 }
 
 // Open activates the terminal for target. Enter remains as the compatibility
@@ -1375,6 +1387,13 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 // from the other side).
 func (m *Model) assertDimensions() tea.Cmd {
 	if !m.IsActive() {
+		return nil
+	}
+	// A remote pane is observed at whatever size it already is. Resizing it
+	// would move the window under the person sitting at that machine, and a
+	// read-only viewer has no claim on its geometry. FitPane renders the
+	// difference — clipped when the pane is larger, letterboxed when smaller.
+	if m.remote {
 		return nil
 	}
 

@@ -1,10 +1,13 @@
 package tty
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
 // This file is the whole of the terminal stack's remote-host support.
@@ -58,6 +61,63 @@ func spawnedControlChannelFactory(spawn ControlSpawner) controlChannelFactory {
 		}
 		return newProcessControlChannelCommand(session, cmd)
 	}
+}
+
+// UseRemoteControl points this terminal at a tmux server on another machine.
+//
+// The model becomes read-only, and all three parts of that matter:
+//
+//   - Input is dropped. Phase A observes; the in-band sender arrives in Phase
+//     B with the cross-host lease rules that make typing safe.
+//   - The pane is never resized and no geometry lease is claimed. A viewer
+//     that resized a remote pane would move the window under whoever is
+//     sitting at that machine.
+//   - The capture fallback is disabled rather than left pointing at local
+//     tmux. This is the important one: pane IDs are per-server, so a local
+//     `capture-pane -t %4` for a remote pane %4 does not fail — it succeeds,
+//     against an unrelated local pane, and paints someone else's session into
+//     the remote pane's view. An empty pane is a visible problem; the wrong
+//     pane's content is an invisible one.
+//
+// Everything else is the ordinary local path: the same ordered actor, the same
+// byte-fed screen model, the same seed and reseed behaviour.
+func (m *Model) UseRemoteControl(spawn ControlSpawner) {
+	m.control = controlManagerSource{manager: NewRemoteControlManager(spawn)}
+	m.input = readOnlyInputSender{}
+	m.capture = unavailableCaptureSource{}
+	m.remote = true
+}
+
+// IsRemote reports whether this terminal is served by another machine.
+func (m *Model) IsRemote() bool { return m != nil && m.remote }
+
+// readOnlyInputSender accepts every input and does nothing with it. Returning
+// nil commands rather than refusing loudly is deliberate: a read-only pane
+// should feel inert, not broken, and the surface above already declines to
+// offer interactive mode for a remote row.
+type readOnlyInputSender struct{}
+
+func (readOnlyInputSender) SendKeys(MessageScope, string, ...KeySpec) tea.Cmd { return nil }
+func (readOnlyInputSender) SendPaste(MessageScope, string, string) tea.Cmd    { return nil }
+func (readOnlyInputSender) SendEscapePaste(MessageScope, string, string) tea.Cmd {
+	return nil
+}
+func (readOnlyInputSender) PasteClipboard(MessageScope, string) tea.Cmd      { return nil }
+func (readOnlyInputSender) SendMouse(MessageScope, string, int, int) tea.Cmd { return nil }
+func (readOnlyInputSender) SendWheel(MessageScope, string, bool, int, int, int) tea.Cmd {
+	return nil
+}
+
+// ErrRemoteCaptureUnavailable is what the fallback capture path reports for a
+// remote pane. Phase B gives it an in-band CapturePaneRange; until then the
+// honest answer is that this machine cannot capture that pane.
+var ErrRemoteCaptureUnavailable = errors.New(
+	"tmux capture: pane is on another machine; capture arrives with in-band history in Phase B")
+
+type unavailableCaptureSource struct{}
+
+func (unavailableCaptureSource) Capture(string, int) (string, PaneState, error) {
+	return "", PaneState{}, ErrRemoteCaptureUnavailable
 }
 
 // InBandSendKeys renders a key batch as tmux command lines to be written to an

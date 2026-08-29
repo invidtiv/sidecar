@@ -140,7 +140,7 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 		return nil
 	}
 
-	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
+	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID, Host: workspace.HostID}
 	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
 	if state.terminal == nil {
 		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf))
@@ -154,6 +154,27 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	m.preview.reason = ""
 	m.setPrimaryTarget(desired)
 	var cmds []tea.Cmd
+	// Point the terminal at the right machine before it opens. Host is part of
+	// the target identity, so a change between a local and a remote row
+	// reaches the close-and-reopen path above and this runs on a fresh
+	// activation rather than mutating a live one.
+	//
+	// The capability is discovered rather than declared on previewTerminal:
+	// four tests substitute that seam with fakes that have no business
+	// knowing about ssh, and widening the interface for a case none of them
+	// exercise would be a worse trade than an assertion here.
+	if workspace.Remote() {
+		remote, ok := state.terminal.(interface {
+			UseRemoteControl(tty.ControlSpawner)
+		})
+		spawn := m.hostControlSpawner(workspace.HostID)
+		if !ok || spawn == nil {
+			m.preview.reason = "Cannot open a live view of " + workspace.HostID + " right now"
+			m.closePreviewTerminal()
+			return nil
+		}
+		remote.UseRemoteControl(spawn)
+	}
 	if width, height, ok := m.terminalLeafSize(leaf.ID); ok {
 		leaf.Target.Width, leaf.Target.Height = width, height
 		cmds = append(cmds, state.terminal.SetDimensions(width, height))
@@ -294,6 +315,18 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	}
 	if reason, unavailable := previewUnavailable(workspace); unavailable {
 		m.preview.reason = reason
+		return appmsg.Blocked(reason)
+	}
+	// A remote pane is watched, not typed into. Input is already dropped by
+	// the read-only sender, but entering the mode anyway would put "typing" in
+	// the header of a pane that cannot receive a keystroke — a worse failure
+	// than refusing, because it looks like it worked.
+	//
+	// Phase B brings the in-band sender and the cross-host lease rules that
+	// make typing into another machine's pane safe; the refusal says so.
+	if workspace.Remote() {
+		reason := "Watching " + workspace.HostID + " — typing into a remote pane arrives in a later release"
+		m.preview.reason = ""
 		return appmsg.Blocked(reason)
 	}
 	leaf := m.previewTerminalLeaf()

@@ -11,6 +11,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/styles"
@@ -98,6 +99,10 @@ func (m *Model) openRename(kind workspaceinventory.Kind) tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || workspace.Kind != kind {
 		return nil
+	}
+	// One guard, on the shared path both rename entry points delegate to.
+	if reason := remoteActionRefusal(workspace, "rename"); reason != "" {
+		return appmsg.Blocked(reason)
 	}
 	m.closeViewFlyout()
 	m.renameOpen = true

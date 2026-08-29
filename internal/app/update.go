@@ -223,6 +223,12 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// presentation context to both workspace projections through one shared
 	// message. Project plugins receive it in the ordinary broadcast below; the
 	// app-owned global browser is offered it explicitly.
+	// Remote-host stream messages reach the global browser whatever is on
+	// screen. See overview.IsHostMessage: each delivery schedules the next
+	// read, so dropping one on a focus check would stop the stream for good.
+	if m.overview != nil && overview.IsHostMessage(msg) {
+		return m, m.overview.Update(msg)
+	}
 	if background, ok := msg.(tea.BackgroundColorMsg); ok {
 		msg = termpreview.HostBackgroundMsg{ANSI: styles.BgANSISeqFor(background.Color)}
 		if m.overview != nil {

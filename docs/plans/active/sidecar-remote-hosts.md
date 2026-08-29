@@ -1,6 +1,6 @@
 # Sidecar as its own remote host runtime
 
-Status: **active, Phase 0 complete — proceed to Phase A**, 2026-08-29
+Status: **active, Phase A complete — read-only remote hosts behind a flag**, 2026-08-29
 
 Related: [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) — the competing alternative for the same deliverable; see [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) for what decides between them. [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal to both.
 Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 was run end to end against a second real machine on 2026-08-29 — measurements, transcripts and findings in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md).
@@ -148,7 +148,7 @@ A second machine with Sidecar installed, a real link (LAN and a WAN/VPN hop), ag
 
 The three findings that change Phase A are recorded in the work items above and in the evidence document.
 
-### Phase A — read-only remote hosts
+### Phase A — read-only remote hosts ✅ complete (2026-08-29)
 
 Behind `features.SidecarRemoteHosts`, default off.
 
@@ -159,6 +159,24 @@ Behind `features.SidecarRemoteHosts`, default off.
 - Linux process identity; version accessor; protocol v1.
 
 **Exit gate:** the Herdr plan's, verbatim — on a real second machine, Sidecar answers "what is running over there and is anything blocked?" without opening a terminal, and a full day of use produces no stale or wrong status while a pane is on screen. Plus: the local path is provably untouched (no behavior or state diff with the flag off, and none with it on until a host is registered).
+
+**Result: the gate is met except for the day of use.** Driven end to end against `marcusbook` from a fully isolated local Sidecar:
+
+- **The question is answered without opening a terminal.** The Sessions browser showed `marcusbook · spike Claude pane` and `Opencode pane` under NEEDS ATTENTION, `Codex pane` under WORKING, and the worktree and plain shell under LIVE — the remote machine's real lanes, resolved by its own detectors.
+- **Remote rows are ordinary rows.** They group, filter, sort and pin through the existing projections because `hosts.ProjectResults` converts a snapshot into `workspaceinventory` results carrying a `HostID`. Host grouping is the project label; no new renderer.
+- **Health is a row, not a silence.** A deliberately unreachable second host showed `⚠ ghost` with ssh's own reason and the fix. Each state names one.
+- **The live pane works.** Selecting the remote Claude row opened its actual screen through proxied control mode — the agent's question, rendered locally.
+- **Read-only is enforced at three seams, not one.** Input is dropped, the pane is never resized and no lease is claimed, and the capture fallback is disabled rather than left pointing at local tmux — a local `capture-pane -t %4` for a remote `%4` does not fail, it paints an unrelated local pane. Interactive mode is refused outright rather than entered inertly.
+- **Rollback is provable.** With the flag off: no rows, no registry, no ssh process. `SIDECAR_STARTUP_TRACE` shows the first ready frame at 63.7ms with an unreachable host configured, and no host phase before it.
+- **Both machines were untouched:** default tmux servers and real state trees unchanged, run roots removed.
+
+**Not met:** the full day of use. That is a soak, not a build step, and it is the remaining Phase A evidence.
+
+Three things the real run found that no unit test would have:
+
+1. `hosts` in config.json parsed into nothing. The loader merges a `rawConfig` field by field, so a key present only on `Config` is silently ignored — a correct config producing no hosts and no error.
+2. ssh's ControlMaster socket blew the ~104-byte unix path limit under macOS's `$TMPDIR` (`/var/folders/<2>/<28>/T/`), surfacing as an unreachable host with no hint of the cause. The control root is now under `/tmp`.
+3. A registered host was invisible until its first connection resolved — and an ssh dial to a machine that is off runs to a full connect timeout. Initial health is now published at registration.
 
 ### Phase B — interactive remote panes
 
@@ -213,5 +231,6 @@ Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matr
 
 ## Changelog
 
+- **2026-08-29** — Phase A built and driven end to end against a second real machine: host registry and config, a long-lived serve client with reconnect/backoff and a health vocabulary that names its fix, `HostID` on the inventory, remote rows in the Sessions browser and the Activity board, host grouping, health rows, a read-only live pane over proxied control mode, preview content from serve captures, and Linux `/proc` process identity. Behind `features.SidecarRemoteHosts`, default off. Remaining Phase A evidence: a full day of use.
 - **2026-08-29** — Phase 0 run end to end against a second real machine. Verdict: proceed to Phase A. Resize-without-restart dropped from Phase A on measured evidence; login-shell resolution, a not-the-protocol row state, and the incarnation-vs-death distinction added as required Phase A items. Retained: `internal/hostproto`, `internal/hostserve`, `internal/hosts`, `internal/tty/control_remote.go`, `internal/buildinfo`, `sidecar host serve|probe`, and the spike harnesses under `scripts/`.
 - **2026-08-28** — Created, from source research into the control-mode transport seam, the geometry lease's explicit two-machine design (td-ee222a), the UI-free awareness stack, shells.json v2 hardening, and the headless-readiness of `workspaceops`. Positioned as the competing alternative to the Herdr remote-hosts plan with a recorded bake-off posture.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -144,6 +145,10 @@ type Client struct {
 
 	closeOnce sync.Once
 	done      chan struct{}
+
+	// controlDir is where this host's ssh ControlMaster socket lives, shared
+	// by the serve stream and every pane channel.
+	controlDir string
 }
 
 // Client defaults. StaleAfter is deliberately generous: the serve loop drops
@@ -191,8 +196,14 @@ func NewClient(host Host, opts ClientOptions) *Client {
 	if client.maxBackoff <= 0 {
 		client.maxBackoff = DefaultMaxBackoff
 	}
+	client.controlDir = opts.ControlDir
+	if client.controlDir == "" {
+		if dir, err := os.MkdirTemp("", "sidecar-host-"); err == nil {
+			client.controlDir = dir
+		}
+	}
 	if client.dial == nil {
-		client.dial = sshDialer(host, opts.ControlDir)
+		client.dial = sshDialer(host, client.controlDir)
 	}
 	client.health = Health{State: StateConnecting, Since: client.now()}
 	return client
@@ -226,6 +237,21 @@ func (c *Client) Snapshot() (hostproto.Snapshot, bool) {
 
 // Host returns the host this client serves.
 func (c *Client) Host() Host { return c.host }
+
+// ControlCommand builds the ssh invocation that carries one remote tmux
+// session's control channel — channel 1, the pane bytes.
+//
+// It rides the same multiplexed master the serve stream uses, so opening a
+// pane costs a round trip rather than a connection. Returning an *exec.Cmd
+// rather than an opened channel keeps process lifetime with the caller, which
+// is what tty.ControlSpawner expects.
+func (c *Client) ControlCommand(ctx context.Context, session string) *exec.Cmd {
+	transport, err := NewTransport(c.host, c.controlDir)
+	if err != nil {
+		return nil
+	}
+	return transport.Command(ctx, transport.ControlCommand(session))
+}
 
 // Close stops the client. Safe to call more than once.
 func (c *Client) Close() {

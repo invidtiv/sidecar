@@ -47,6 +47,7 @@ func FromConfig(cfg *config.Config) []Host {
 			Target:       target,
 			RemoteBinary: strings.TrimSpace(entry.Binary),
 			RemoteConfig: strings.TrimSpace(entry.Config),
+			Env:          append([]string(nil), entry.Env...),
 		})
 	}
 	sort.Slice(hosts, func(a, b int) bool { return hosts[a].ID < hosts[b].ID })
@@ -130,6 +131,15 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 	}
 	r.mu.Unlock()
 
+	// Publish the initial health for every host being started, so a
+	// registered machine appears the moment it is registered rather than when
+	// its first connection resolves. An ssh dial to a machine that is off runs
+	// to a full connect timeout; without this, that host is invisible until it
+	// fails, which reads as "Sidecar forgot about it".
+	for _, client := range starting {
+		client.publish(Update{HostID: client.host.ID, Health: client.Health()})
+	}
+
 	for _, cancel := range stopping {
 		if cancel != nil {
 			cancel()
@@ -144,11 +154,24 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 // controlDirLocked gives each host its own private directory for its ssh
 // control socket. Per host rather than shared, so one host's stuck master
 // cannot block another's.
+//
+// The root is under /tmp rather than os.MkdirTemp's default, and that is not a
+// preference. A unix socket path is capped near 104 bytes, and macOS sets
+// TMPDIR to /var/folders/<2>/<28>/T/ — 49 characters before anything of ours
+// is added. With a per-run random suffix and a host directory on top, ssh
+// fails with `unix_listener: path too long`, which surfaces as a host that is
+// simply unreachable with no hint that the path is the problem. Observed, not
+// anticipated.
 func (r *Registry) controlDirLocked(id string) string {
 	if r.dir == "" {
-		dir, err := os.MkdirTemp("", "sidecar-hosts-")
+		dir, err := os.MkdirTemp("/tmp", "sc-hosts-")
 		if err != nil {
-			return ""
+			// Fall back rather than lose the feature: a long path still works
+			// for hosts whose sanitised ID is short enough.
+			dir, err = os.MkdirTemp("", "sc-hosts-")
+			if err != nil {
+				return ""
+			}
 		}
 		r.dir = dir
 	}

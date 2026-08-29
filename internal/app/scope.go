@@ -713,5 +713,10 @@ func (m *Model) shutdown() {
 	m.globalTasks.stop()
 	if m.overview != nil {
 		m.overview.Stop()
+		// Stop() runs whenever the global tab is left, so host connections
+		// deliberately survive it. Shutdown is the one place they must not:
+		// an ssh child that outlives Sidecar is a process the user did not ask
+		// for and cannot see.
+		m.overview.StopHosts()
 	}
 }

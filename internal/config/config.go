@@ -66,6 +66,14 @@ type HostConfig struct {
 	// Config is an optional -config path for the remote sidecar, so a host can
 	// be observed against a config other than its user default.
 	Config string `json:"config,omitempty"`
+	// Env is extra environment for the remote Sidecar, as KEY=VALUE strings.
+	//
+	// It exists so a proof run can pin a host to an isolated tmux server and
+	// state tree (TMUX_TMPDIR, XDG_STATE_HOME, SIDECAR_ISOLATED_STATE) exactly
+	// as a local proof run does. Without it the isolation discipline stops at
+	// the machine boundary, which is the point at which it matters most — the
+	// remote tree belongs to someone else.
+	Env []string `json:"env,omitempty"`
 	// Disabled keeps a host registered but unconnected, which is what a user
 	// wants for a machine that is off this week — deleting the entry to stop
 	// the reconnect attempts would lose its settings.
