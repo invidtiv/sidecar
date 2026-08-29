@@ -125,6 +125,19 @@ var (
 		Default:     true,
 		Description: "Enable the cross-project agent overview",
 	}
+
+	// SidecarRemoteHosts enables observing other machines that have Sidecar
+	// installed, over SSH. Off by default through Phase A: it is new, it is
+	// read-only, and it should cost nothing at all until a user asks for it.
+	//
+	// With the flag off, no host is read from config, no connection is made,
+	// and no remote row exists — the local path is byte-identical. With it on
+	// but no host registered, the same is true.
+	SidecarRemoteHosts = Feature{
+		Name:        "sidecar_remote_hosts",
+		Default:     false,
+		Description: "Observe other machines running Sidecar, over SSH (read-only)",
+	}
 )
 
 // allFeatures is the registry of all known features.
@@ -141,6 +154,7 @@ var allFeatures = []Feature{
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 	TerminalResourceProviders,
+	SidecarRemoteHosts,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

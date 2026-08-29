@@ -22,6 +22,9 @@ import (
 )
 
 // Host is a registered remote machine.
+//
+// Env is a slice, so Host is not comparable with ==; use Host.Same to ask
+// whether two registrations describe the same connection.
 type Host struct {
 	// ID is the local name for this host. It scopes remote workspace IDs and
 	// is what a row is grouped under in the Sessions browser.
@@ -40,6 +43,24 @@ type Host struct {
 	// Env is extra environment for the remote process, as KEY=VALUE. It is how
 	// a proof run pins the remote to an isolated tmux server and state tree.
 	Env []string
+}
+
+// Same reports whether two registrations describe the same connection, so a
+// config reload can leave an unchanged host's stream alone instead of
+// reconnecting it. A host whose rows blink out because an unrelated setting
+// moved is a worse experience than a slightly slower reload.
+func (h Host) Same(other Host) bool {
+	if h.ID != other.ID || h.Target != other.Target ||
+		h.RemoteBinary != other.RemoteBinary || h.RemoteConfig != other.RemoteConfig ||
+		len(h.Env) != len(other.Env) {
+		return false
+	}
+	for i := range h.Env {
+		if h.Env[i] != other.Env[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Transport owns one host's multiplexed SSH connection.

@@ -49,6 +49,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentactivity"
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/buildinfo"
 	"github.com/marcus/sidecar/internal/config"
@@ -427,11 +428,11 @@ func buildHello(opts Options) *hostproto.Hello {
 		TmuxPresent: tmuxPresent,
 		Projects:    len(opts.Projects),
 		Capabilities: hostproto.Capabilities{
-			// argv0 disambiguation of shared-runtime panes is implemented on
-			// darwin only; process_identity_other.go is a stub. Saying so in
+			// argv0 disambiguation of shared-runtime panes needs a platform
+			// implementation; process_identity_other.go is a stub. Saying so in
 			// the hello is what lets a viewer render honest confidence instead
 			// of presenting a degraded provider guess as fact.
-			ProcessIdentity: runtime.GOOS == "darwin",
+			ProcessIdentity: agentactivity.HasProcessIdentity(),
 			IsolatedState:   os.Getenv("SIDECAR_ISOLATED_STATE") == "1",
 			// The RESOLVED root, not $XDG_STATE_HOME. The raw variable is
 			// empty in an ordinary run and names the parent in an isolated

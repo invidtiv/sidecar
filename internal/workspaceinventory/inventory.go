@@ -39,9 +39,20 @@ type Pane struct {
 
 type Workspace struct {
 	ID, ProjectKey, ProjectName, ProjectRoot string
-	Kind                                     Kind
-	Key, Name, Path, Branch, TaskID          string
-	TmuxName, PaneID, Provider, Namespace    string
+	// HostID names the machine this workspace lives on. Empty means this
+	// machine, which is what every locally collected workspace is — the field
+	// exists so a remote row can be an ordinary workspace rather than a
+	// parallel type with its own rendering. Anything that acts on a workspace
+	// rather than merely displaying it must check it: an action resolved
+	// against a local path would operate on the wrong machine's filesystem.
+	HostID string
+	// Preview is capture text the collector on the owning machine already
+	// took. Empty for local workspaces, which read their preview live rather
+	// than carrying it.
+	Preview                               string
+	Kind                                  Kind
+	Key, Name, Path, Branch, TaskID       string
+	TmuxName, PaneID, Provider, Namespace string
 	// Plain marks a workspace collected with no agent evidence at all: a Git
 	// worktree with no recorded agent. It is the catalog's honest answer to
 	// "is there an agent here?", and it is what keeps the Agents projection
@@ -70,6 +81,15 @@ type Workspace struct {
 	CreatedAt time.Time
 }
 
+// Remote reports whether this workspace lives on another machine. Every
+// mutating path must refuse a remote workspace until Phase C gives the host
+// protocol a request channel; until then an action resolved here would run
+// against a local path that either does not exist or, worse, does.
+func (w Workspace) Remote() bool { return w.HostID != "" }
+
+// Remote reports whether this catalog row lives on another machine.
+func (i Item) Remote() bool { return i.HostID != "" }
+
 // HasAgent reports durable or detected agent evidence. A worktree earns it
 // from its recorded `agent` file; a shell earns it from a configured agent
 // type or from live identification, which is why an unidentified shell can
@@ -87,6 +107,8 @@ func (w Workspace) HasAgent() bool {
 // semantic state.
 type Item struct {
 	ID                      string
+	HostID                  string
+	Preview                 string
 	ProjectKey, ProjectName string
 	ProjectRoot             string
 	Kind                    Kind
@@ -103,7 +125,8 @@ type Item struct {
 // Item projects one collected workspace into its catalog row.
 func (w Workspace) Item() Item {
 	item := Item{
-		ID: w.ID, ProjectKey: w.ProjectKey, ProjectName: w.ProjectName, ProjectRoot: w.ProjectRoot,
+		ID: w.ID, HostID: w.HostID, Preview: w.Preview,
+		ProjectKey: w.ProjectKey, ProjectName: w.ProjectName, ProjectRoot: w.ProjectRoot,
 		Kind: w.Kind, Key: w.Key, Name: w.Name, Path: w.Path, Branch: w.Branch, TaskID: w.TaskID,
 		Provider: w.Provider, PaneID: w.PaneID, TmuxName: w.TmuxName,
 		Live: w.Live, Ambiguous: w.Ambiguous, IsMain: w.IsMain, ObservedAt: w.ObservedAt,
