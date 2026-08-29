@@ -211,7 +211,7 @@ func DrawRows(in RowsInput) DrawResult {
 		}
 		for i, line := range drawn {
 			if gap := padTo - ansi.StringWidth(line); gap > 0 {
-				drawn[i] = line + strings.Repeat(" ", gap)
+				drawn[i] = line + ui.BlankInkDefault + strings.Repeat(" ", gap)
 			}
 		}
 	}
@@ -253,7 +253,7 @@ func PadCanvasBox(content, bg string, width, height int, truncate ...func(string
 			continue
 		}
 		if gap := width - ansi.StringWidth(line); gap > 0 {
-			line += bg + strings.Repeat(" ", gap) + ui.RowBackgroundDefault
+			line += bg + ui.BlankInkDefault + strings.Repeat(" ", gap) + ui.RowBackgroundDefault
 		}
 		out[i] = line
 	}

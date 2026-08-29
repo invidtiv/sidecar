@@ -51,7 +51,11 @@ terminal default ->  ""                      (nothing was ever written here)
 
 `-N` costs roughly a quarter more capture bytes. It does **not** change row counts: trailing blank *rows* are still trimmed, which is why nothing in the viewport, geometry or cursor paths had to move. Do not use `-J`; it joins wrapped lines and drops the trailing SGR entirely, which destroys exactly the information this depends on.
 
-Captures are taken with `-N` at all four call sites (`internal/tty/capture_range.go`, `control_model.go`, `control_manager.go`, `session.go`). `CapturePaneOutput` carries the rationale.
+Captures are taken with `-N` everywhere a capture reaches a renderer: the four `internal/tty` sites (`capture_range.go`, `control_model.go`, `control_manager.go`, `session.go`) and the workspace polling site (`internal/plugins/workspace/agent.go`, `capturePaneArgs`). `CapturePaneOutput` carries the rationale.
+
+There are two producers, which is easy to miss. `internal/tty` serves any pane the screen model owns, and the polling path in `internal/plugins/workspace` serves the rest through `Agent.OutputBuf`. Adding a flag to one and not the other is how the same pane comes out right on one surface and wrong on another.
+
+The polling path also has a `-J` mode, used for shells nobody is looking at, where the capture is scraped for agent status rather than drawn. `-J` cannot carry backgrounds at all: it drops the trailing SGR of every row and collapses a wholly blank coloured row to `""`, and passing `-N` alongside it does not help because `-J` wins. Keep it away from anything that renders.
 
 ## The two rules that follow
 
@@ -133,9 +137,17 @@ Correct output is: two full-width diff bars, an uncoloured context row, an uncol
 - If a capture flag changes, re-record the fixtures with `scripts/terminal-fidelity.sh sweep` and say what moved.
 - Widths one column apart are the useful test. Anything that depends on a coverage ratio or a row count will pass at one width and fail at the next.
 
+## Padding and the pen
+
+Padding a row out to the box is Sidecar's, not the child's, so it must not inherit what the child's last row left switched on. Every place Sidecar appends its own cells emits `ui.BlankInkDefault` first, which clears exactly the attributes that render on a cell with no glyph: underline, blink, reverse and strikethrough.
+
+It deliberately does not clear bold, faint, italic or the foreground colour. Those show only where there is a glyph, so they cost nothing on padding, and clearing them would clear them for the row *below* as well. Rows are joined into one stream and only the background is re-established per row, so the child's foreground and text attributes genuinely carry across a row boundary, exactly as they do in tmux's own output.
+
+The complete version of this is to carry the whole pen per row rather than only the background, which would make every drawn row independent and let it close with a plain `\x1b[0m`. That is a larger change to the analyzer than the visible symptom justifies today. If you ever need it, the reason is here.
+
 ## Known residue
 
-A drawn row closes its background at the end of the row but not its *attributes*, so padding on a row following one that left faint or italic set inherits that attribute. It is invisible for faint on a default background, which is the only case seen in practice, but reverse video would show. The fix is for every drawn row to end in a full SGR reset rather than `\x1b[49m`.
+The cell-grid comparison still reports an attribute difference on padding that follows a row leaving faint set, because faint is not cleared. It has no visual effect: faint changes foreground intensity and a padded cell has no glyph.
 
 ## History
 

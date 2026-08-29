@@ -36,56 +36,70 @@ func TestFidelityProbeLive(t *testing.T) {
 	requireClean := os.Getenv("FIDELITY_PROBE_REQUIRE_CLEAN") == "1"
 
 	for _, capture := range captures {
-		trimmed := splitCaptureRows(capture.trimmed)
 		padded := splitCaptureRows(capture.padded)
 		width, height := captureWidth(padded), len(padded)
 		if width == 0 || height == 0 {
 			t.Logf("=== %s: empty capture", capture.name)
 			continue
 		}
-
-		buffer := tty.NewOutputBuffer(len(trimmed) + 10)
-		buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(trimmed, "\n"), PaneRows: len(trimmed)})
-		layout := tty.FitViewport(tty.ViewportInput{
-			Buffer: buffer, Width: width, Height: height, Follow: true,
-			Interactive: true, PaneWidth: width, PaneHeight: len(trimmed),
-		})
-		res := DrawRows(RowsInput{
-			Buffer: buffer, Layout: layout, PaneHeight: len(trimmed),
-			Interactive: true, Follow: true, Pad: true,
-		})
-
-		// Both sides are one continuous SGR stream, so a row's opening state is
-		// whatever the row above left behind and they have to decode together.
-		want := screenmodel.DecodeCapture(strings.Join(padded, "\n"), width, height)
-		got := screenmodel.DecodeCapture(strings.Join(res.Rows, "\n"), width, height)
-		perRow := map[int]int{}
-		sample := map[int]screenmodel.Mismatch{}
-		total := 0
-		for _, m := range screenmodel.CompareGrids(want, got, width, height) {
-			if m.Field != "bg" {
-				continue
-			}
-			if perRow[m.Row] == 0 {
-				sample[m.Row] = m
-			}
-			perRow[m.Row]++
-			total++
-		}
-		t.Logf("=== %s: %dx%d, %d background cells disagree across %d rows",
-			capture.name, width, height, total, len(perRow))
-		for row := range height {
-			if perRow[row] == 0 {
-				continue
-			}
-			t.Logf("row %d: %d cells, first %s", row, perRow[row], sample[row].String())
-			t.Logf("   tmux %q", padded[row])
-			t.Logf("   drew %q", res.Rows[row])
-		}
+		// The -N capture is what production consumes, so it is the subject as
+		// well as the oracle: any disagreement is a screen Sidecar was handed
+		// intact and then distorted. This is the leg that gates.
+		total := probeOne(t, capture.name+"/padded", padded, padded, width, height)
 		if requireClean && total > 0 {
 			t.Errorf("%s: %d background cells disagree with tmux", capture.name, total)
 		}
+		// The trimmed form is reported but never gates. A wholly blank row is
+		// the same empty string there whether its cells carry a colour or the
+		// terminal default, so this leg is expected to differ on exactly those
+		// rows; that ambiguity is why captures are taken with -N at all. What it
+		// is good for is showing the reconstruction still handles every row the
+		// capture does describe.
+		probeOne(t, capture.name+"/trimmed", splitCaptureRows(capture.trimmed), padded, width, height)
 	}
+}
+
+func probeOne(t *testing.T, name string, input, oracle []string, width, height int) int {
+	t.Helper()
+	buffer := tty.NewOutputBuffer(len(input) + 10)
+	buffer.ApplySnapshot(tty.PaneSnapshot{Output: strings.Join(input, "\n"), PaneRows: len(input)})
+	layout := tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: width, Height: height, Follow: true,
+		Interactive: true, PaneWidth: width, PaneHeight: len(input),
+	})
+	res := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout, PaneHeight: len(input),
+		Interactive: true, Follow: true, Pad: true,
+	})
+
+	// Both sides are one continuous SGR stream, so a row's opening state is
+	// whatever the row above left behind and they have to decode together.
+	want := screenmodel.DecodeCapture(strings.Join(oracle, "\n"), width, height)
+	got := screenmodel.DecodeCapture(strings.Join(res.Rows, "\n"), width, height)
+	perRow := map[int]int{}
+	sample := map[int]screenmodel.Mismatch{}
+	total := 0
+	for _, m := range screenmodel.CompareGrids(want, got, width, height) {
+		if m.Field != "bg" {
+			continue
+		}
+		if perRow[m.Row] == 0 {
+			sample[m.Row] = m
+		}
+		perRow[m.Row]++
+		total++
+	}
+	t.Logf("=== %s: %dx%d, %d background cells disagree across %d rows",
+		name, width, height, total, len(perRow))
+	for row := range height {
+		if perRow[row] == 0 {
+			continue
+		}
+		t.Logf("row %d: %d cells, first %s", row, perRow[row], sample[row].String())
+		t.Logf("   tmux %q", oracle[row])
+		t.Logf("   drew %q", res.Rows[row])
+	}
+	return total
 }
 
 type probeCapture struct {

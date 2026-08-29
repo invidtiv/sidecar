@@ -172,3 +172,32 @@ func backgroundAt(line string, col int) screenmodel.Color {
 	grid := screenmodel.DecodeCapture(line, col+1, 1)
 	return grid.Normalize(col+1, 1)[0][col].Bg
 }
+
+// Padding a row out to the box is Sidecar's own, not the child's. A row that
+// ends with underline or reverse still switched on used to hand those to the
+// pad cells, where they show: underline draws on a blank and reverse paints it.
+// Bold, faint and italic are deliberately left alone, because they only show
+// where there is a glyph and clearing them would clear them for the row below
+// too, which inherits the child's pen through the joined stream.
+func TestDrawRowsPadsWithoutInheritingBlankVisibleAttributes(t *testing.T) {
+	rows := append(transcript(4), "\x1b[4m\x1b[7munderlined and reversed")
+	buffer := canvasBuffer(t, rows, len(rows))
+	layout := tty.FitViewport(tty.ViewportInput{
+		Buffer: buffer, Width: 60, Height: len(rows), Follow: true,
+		Interactive: true, PaneWidth: 60, PaneHeight: len(rows),
+	})
+	res := DrawRows(RowsInput{
+		Buffer: buffer, Layout: layout, PaneHeight: len(rows),
+		Interactive: true, Follow: true, Pad: true,
+	})
+	last := res.Rows[len(res.Rows)-1]
+	grid := screenmodel.DecodeCapture(last, 60, 1).Normalize(60, 1)
+	text := grid[0][10] // inside "underlined and reversed"
+	pad := grid[0][55]  // padding Sidecar appended
+	if text.Attrs == pad.Attrs {
+		t.Fatalf("padding kept the child's attributes: text=%v pad=%v", text.Attrs, pad.Attrs)
+	}
+	if pad.Attrs != 0 {
+		t.Errorf("padding carries attributes %v, want none", pad.Attrs)
+	}
+}

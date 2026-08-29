@@ -210,6 +210,9 @@ func fill(line string, width int, truncate func(string, int) string) string {
 		line = truncate(line, width)
 	}
 	if gap := width - ansi.StringWidth(line); gap > 0 {
+		if strings.Contains(line, "\x1b[") {
+			line += ui.BlankInkDefault
+		}
 		line += strings.Repeat(" ", gap)
 	}
 	return line

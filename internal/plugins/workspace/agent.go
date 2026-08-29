@@ -1223,10 +1223,17 @@ func capturePaneEvidence(target string) (capturedPaneMetadata, error) {
 	}, nil
 }
 
+// capturePaneArgs builds the polling capture. -J collapses wrapped lines, which
+// is what a text scrape of a shell nobody is looking at wants; it also drops the
+// trailing SGR of every row, so a capture taken with it can never say what a
+// row's trailing cells were and must not reach a renderer. Everything that is
+// drawn takes the -N form instead, for the reason in tty.CapturePaneOutput.
 func capturePaneArgs(sessionName string, joinWrapped bool) []string {
 	args := []string{"capture-pane", "-p", "-e"}
 	if joinWrapped {
 		args = append(args, "-J")
+	} else {
+		args = append(args, "-N")
 	}
 	return append(args, "-S", fmt.Sprintf("-%d", captureLineCount), "-t", sessionName)
 }

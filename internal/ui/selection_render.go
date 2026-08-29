@@ -269,6 +269,20 @@ func SGRBackground(seq string) (string, bool) {
 // cannot bleed into whatever is drawn after it.
 const RowBackgroundDefault = "\x1b[49m"
 
+// BlankInkDefault clears the attributes that render on a cell with no glyph:
+// underline, blink, reverse video and strikethrough. Sidecar appends its own
+// padding to rows that are shorter than the box they are drawn in, and those
+// cells belong to Sidecar rather than to the child, so they must not inherit
+// what the child's last row left switched on.
+//
+// It deliberately leaves bold, faint, italic and the foreground colour alone.
+// Those only show where there is a glyph, so they cost nothing on padding, and
+// clearing them here would clear them for the row below too: rows are joined
+// into one stream and only the background is re-established per row, so the
+// child's foreground and text attributes genuinely carry. Making rows fully
+// independent means carrying the whole pen, not resetting it.
+const BlankInkDefault = "\x1b[24;25;27;29m"
+
 // CarryRowBackground makes one captured row self-contained.
 //
 // tmux emits `capture-pane -e` as a single continuous SGR stream and writes
@@ -339,6 +353,7 @@ func ApplyTerminalDefaultBackground(line, bg string, width int) string {
 	}
 	if gap := width - ansi.StringWidth(line); gap > 0 {
 		out.WriteString(bg)
+		out.WriteString(BlankInkDefault)
 		out.WriteString(strings.Repeat(" ", gap))
 	}
 	out.WriteString("\x1b[49m")

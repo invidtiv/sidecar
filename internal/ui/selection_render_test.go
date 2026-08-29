@@ -192,7 +192,9 @@ func TestApplyTerminalDefaultBackgroundPadsShortAndEmptyRows(t *testing.T) {
 	if ansi.StringWidth(short) != 6 {
 		t.Errorf("short row width = %d, want 6: %q", ansi.StringWidth(short), short)
 	}
-	if !strings.HasPrefix(short, canvas+"hi") || !strings.Contains(short, canvas+"    ") {
+	// The padding is Sidecar's own, so it takes the canvas but not whatever
+	// underline or reverse the child left switched on.
+	if !strings.HasPrefix(short, canvas+"hi") || !strings.Contains(short, canvas+BlankInkDefault+"    ") {
 		t.Errorf("short row did not pad with canvas spaces: %q", short)
 	}
 
