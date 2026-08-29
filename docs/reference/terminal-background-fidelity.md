@@ -141,4 +141,4 @@ A drawn row closes its background at the end of the row but not its *attributes*
 
 - `cbd07652` paint each captured row's trailing background to the pane edge
 - `501b6661` capture panes with `-N` so blank rows say what colour they are
-- the commit removing `inferCanvas`
+- `e3d60644` remove the canvas vote: tmux already says what every cell is
