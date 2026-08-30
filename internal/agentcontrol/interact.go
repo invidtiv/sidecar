@@ -159,6 +159,14 @@ func (s Service) Wait(ctx context.Context, req WaitRequest) (Agent, error) {
 // SendKeys writes a validated logical-key sequence to a pinned managed agent.
 // Every key is encoded before any of them is sent, so a caller answering a
 // blocked agent's UI can never deliver half a sequence.
+//
+// The validation is the service's, not the adapter's. The local tmux adapter
+// re-encodes for its own writes and the CLI validates early to answer a typo
+// without spawning anything, but neither of those is where the invariant can
+// live: a second Terminal implementation — the remote host adapter this
+// interface exists for — would otherwise be free to write a partial sequence
+// and nothing above it would notice. Validating here means every adapter
+// inherits it by construction.
 func (s Service) SendKeys(ctx context.Context, req KeysRequest) (Agent, error) {
 	s = s.defaults()
 	if s.Terminal == nil {
@@ -166,6 +174,11 @@ func (s Service) SendKeys(ctx context.Context, req KeysRequest) (Agent, error) {
 	}
 	if len(req.Keys) == 0 {
 		return Agent{}, &Error{Code: ErrNotReady, Message: "at least one key is required", Target: &req.Target}
+	}
+	// Before the target is even observed: an unencodable name is the caller's
+	// mistake and costs no terminal round trip to find.
+	if err := ValidateKeys(req.Keys); err != nil {
+		return Agent{}, &Error{Code: ErrNotReady, Message: err.Error(), Target: &req.Target, Err: err}
 	}
 	var tracker agentactivity.Tracker
 	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)

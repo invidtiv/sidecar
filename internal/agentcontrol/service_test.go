@@ -35,10 +35,10 @@ func (t *sequenceTerminal) Submit(_ context.Context, _ Snapshot, text string) er
 	t.submitted = append(t.submitted, text)
 	return nil
 }
+
+// SendKeys records without validating, like stageTerminal: validate-all-before-
+// write is the service's invariant, so no fake may supply it.
 func (t *sequenceTerminal) SendKeys(_ context.Context, _ Snapshot, names []string) error {
-	if err := ValidateKeys(names); err != nil {
-		return err
-	}
 	t.keys = append(t.keys, names...)
 	return nil
 }
