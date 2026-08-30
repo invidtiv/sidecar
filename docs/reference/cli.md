@@ -4,9 +4,11 @@ Sidecar provides non-interactive commands for scripting and agent workflows.
 
 ## `sidecar agent`
 
-Inspect and start agents in Sidecar-managed shells
+Inspect, start, and coordinate agents in Sidecar-managed shells
 
 Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.
+
+The safe sequence is: create the layout separately with sidecar create shell, start the provider with agent start, prompt and wait, read before you send keys, and never close a target you did not create.
 
 ```
 Usage: sidecar agent <command>
@@ -72,6 +74,142 @@ Usage: sidecar agent list [--project NAME] [--json]
 sidecar agent list --json
 ```
 
+### `sidecar agent prompt`
+
+Send a prompt to a managed agent, optionally waiting for it to settle
+
+With two positional arguments the first is the target and the second is the prompt.
+With one, the prompt goes to the shell named by SIDECAR_SHELL.
+
+Nothing is written to a target that is blocked, unidentified, stale, dead, or
+occupied by a replacement process. The text goes through the same ordered,
+bracketed-paste-aware path the embedded terminal uses, and the submission key is
+sent separately, so a headless prompt delivers exactly what typing it would.
+
+A prompt sent from idle or done must produce an observed lifecycle change within 5s
+or the command reports agent_prompt_stalled. A prompt sent to an agent that is
+already working makes no claim about which turn is which: completion of the turn
+already in flight may satisfy --wait.
+
+```
+Usage: sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeout DURATION] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+- `--wait`: Submit and wait for the agent to settle under one pinned target
+- `--until STATUS`: Repeatable settled state: idle, done, blocked, or working (default idle, done, blocked)
+- `--timeout DURATION`: Required with --wait; there is no implicit timeout
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent prompt reviewer "Review the current diff and report only actionable findings." --wait --timeout 2m
+# the shell you are running in
+sidecar agent prompt "Summarise what changed." --json
+```
+
+### `sidecar agent read`
+
+Read a managed agent's output without touching it
+
+Every source is a passive snapshot. Reads never scroll, resize, or otherwise
+manipulate the agent's own screen.
+
+  visible           the current screen
+  recent            the screen plus recent scrollback
+  recent-unwrapped  recent, with soft-wrapped lines joined back together
+  detection         the exact slice the lifecycle detector read
+  transcript        the provider's own conversation, once an exact session
+                    binding exists; otherwise transcript_unavailable. It is
+                    never guessed from the newest session in the same directory.
+
+```
+Usage: sidecar agent read [TARGET] [--source SOURCE] [--lines N] [--ansi] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+- `--source SOURCE`: visible, recent, recent-unwrapped, detection, or transcript (default visible)
+- `--lines N`: Bound the result to the last N lines
+- `--ansi`: Preserve styling where the source has it
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent read reviewer --source recent-unwrapped --lines 120
+# the evidence behind the status
+sidecar agent read reviewer --source detection --json
+```
+
+### `sidecar agent send-keys`
+
+Send validated logical keys to a managed agent's UI
+
+With two or more positional arguments the first is the target and the rest are
+keys. With exactly one, the key goes to the shell named by SIDECAR_SHELL.
+
+Keys are named, not typed: enter, esc, tab, space, backspace, delete, insert,
+the arrows, home, end, pageup, pagedown, f1-f12, ctrl+<letter>, ctrl+space,
+alt+<key>, shift+tab, shift+enter, shift+<arrow>, and any single character.
+The whole list is validated before any of it is written, so a typo sends
+nothing at all.
+
+This is for answering an agent's UI, not for typing at it: prompt text belongs
+to sidecar agent prompt. When a wait returns blocked the sequence is read the
+screen, decide, then send keys. Sidecar never answers an approval for you.
+
+```
+Usage: sidecar agent send-keys [TARGET] KEY [KEY ...] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent send-keys reviewer down enter
+# dismiss a picker
+sidecar agent send-keys reviewer esc
+```
+
 ### `sidecar agent start`
 
 Start a provider in an idle managed shell and wait for readiness
@@ -103,6 +241,43 @@ Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_A
 
 ```bash
 sidecar agent start reviewer --kind codex --timeout 30s
+```
+
+### `sidecar agent wait`
+
+Wait for a managed agent to reach a settled state
+
+Observes the target without writing to it. The target stays pinned to the same
+tmux session, pane, pane process, server, and provider for the whole wait: a
+replacement occupant is reported as agent_replaced rather than satisfying it.
+
+```
+Usage: sidecar agent wait [TARGET] [--until STATUS]... --timeout DURATION [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+- `--until STATUS`: Repeatable settled state: idle, done, blocked, or working (default idle, done, blocked)
+- `--timeout DURATION`: Required; there is no implicit timeout
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent wait reviewer --timeout 5m --json
+# blocked no longer settles the wait
+sidecar agent wait reviewer --until done --timeout 5m
 ```
 
 ## `sidecar agents`
