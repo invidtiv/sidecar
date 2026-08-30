@@ -381,6 +381,16 @@ type Model struct {
 	createPlan         *workspaceops.WorktreePlan
 	createRecord       *workspaceops.WorktreeRecord
 	pendingCreatedPath string
+	// pendingCreatedHost scopes the pending selection to the machine the
+	// workspace was created on. Empty means this one. Without it a remote
+	// creation is answered by a local row that happens to share a path or a
+	// session name — see honorPendingCreated.
+	pendingCreatedHost string
+	// createTargetHost is the host the create flow is currently addressing, or
+	// "" for this machine. It is SET on every submission rather than adjusted
+	// when a difference is noticed, which is the rule that stops a surface that
+	// went remote once from staying remote (Phase A's tty.Model defect).
+	createTargetHost string
 
 	deleteOpen      bool
 	deleteBusy      bool
@@ -881,11 +891,22 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.applyCreateFileCandidates(msg)
 		return nil
 	case globalShellCreatedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
 		m.createBusy = false
 		if msg.Err != nil {
 			m.createModal = nil
-			m.setCreateError(msg.Err.Error())
+			m.setCreateError(remoteActionError(msg.Err))
 			m.clearPendingCreated()
+			return nil
+		}
+		if msg.HostID != "" {
+			// The row arrives with that host's next snapshot. Nothing is
+			// synthesized here, and no local inventory is taken: a local
+			// refresh would answer a question about another machine.
+			m.pendingCreatedTmux = msg.Tmux
+			m.closeCreateShell()
 			return nil
 		}
 		m.closeCreateShell()
@@ -895,16 +916,25 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewSplitCloseProbeMsg:
 		return m.applyPreviewSplitCloseProbe(msg)
 	case globalWorktreePlannedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
 		m.createBusy = false
 		if msg.Err != nil {
 			m.createModal = nil
-			m.setCreateError(msg.Err.Error())
+			m.setCreateError(remoteActionError(msg.Err))
 			return nil
 		}
 		m.createPlan = msg.Plan
 		m.createModal = nil
 		return nil
 	case globalWorktreeCreatedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
+		if msg.HostID != "" {
+			return m.applyRemoteWorktreeCreated(msg)
+		}
 		m.createBusy = false
 		m.createPlan, m.createRecord = msg.Plan, msg.Record
 		if msg.Record == nil {

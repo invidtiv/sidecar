@@ -28,6 +28,7 @@ const (
 
 // renameShellDoneMsg is the async persist result. The modal stays open on error.
 type renameShellDoneMsg struct {
+	remoteReply
 	ID      string
 	NewName string
 	Err     error
@@ -265,6 +266,11 @@ func (m *Model) handleRenameShellMouse(msg tea.MouseMsg) tea.Cmd {
 }
 
 func (m *Model) executeRename() tea.Cmd {
+	// Resolved from the workspace this modal was opened on, every time it is
+	// submitted. Nothing here remembers that a previous rename was remote.
+	if m.renameTerminalLeafID == 0 && m.renameWorkspace.Remote() {
+		return m.executeRemoteRename()
+	}
 	if m.renameTerminalLeafID != 0 {
 		newName, err := shellstate.NormalizeName(m.renameInput.Value())
 		if err != nil {
@@ -285,6 +291,24 @@ func (m *Model) executeRename() tea.Cmd {
 		return m.executeRenameWorktree()
 	}
 	return m.executeRenameShell()
+}
+
+// executeRemoteRename renames a shell or a worktree on the host that owns it.
+//
+// One call for both kinds: `sidecar shell rename --target` resolves the target
+// against that project's manifest and dispatches to the shell record or the
+// worktree display name itself, which is the same dispatch the local path makes
+// — made on the machine that can actually see the state.
+//
+// The name is normalised here as well as there so a bad name is refused without
+// a round trip; the host's answer still wins.
+func (m *Model) executeRemoteRename() tea.Cmd {
+	newName, err := shellstate.NormalizeName(m.renameInput.Value())
+	if err != nil {
+		m.renameError = err.Error()
+		return nil
+	}
+	return m.renameRemoteWorkspace(m.renameWorkspace, newName)
 }
 
 func (m *Model) executeRenameWorktree() tea.Cmd {
@@ -354,26 +378,45 @@ func (m *Model) applyRenameShell(msg renameShellDoneMsg) {
 	if !m.renameOpen || m.renameWorkspace.ID != msg.ID {
 		return
 	}
+	if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+		// The host was removed or retargeted while the rename was in flight.
+		// Whatever it did is not this configuration's to show.
+		m.renameError = remoteReplyDropped(msg.HostID)
+		return
+	}
 	if msg.Err != nil {
-		m.renameError = msg.Err.Error()
+		m.renameError = remoteActionError(msg.Err)
 		return
 	}
 	m.applyRenamedShell(msg.ID, msg.NewName)
 	m.closeRenameShell()
 }
 
+// applyRenamedShell shows the new name immediately, on whichever machine's
+// results the row came from. A host's next snapshot restates it either way;
+// this is only so the row does not lag the confirmation.
 func (m *Model) applyRenamedShell(id, newName string) {
 	workspace, ok := m.catalog[id]
 	if !ok {
 		return
 	}
-	if result, ok := m.results[workspace.ProjectKey]; ok {
-		for i := range result.Workspaces {
-			if result.Workspaces[i].ID == id {
-				result.Workspaces[i].Name = newName
+	renameIn := func(results []workspaceinventory.Workspace) bool {
+		for i := range results {
+			if results[i].ID == id {
+				results[i].Name = newName
+				return true
+			}
+		}
+		return false
+	}
+	if workspace.HostID != "" {
+		for _, result := range m.hostResults[workspace.HostID] {
+			if renameIn(result.Workspaces) {
 				break
 			}
 		}
+	} else if result, ok := m.results[workspace.ProjectKey]; ok {
+		renameIn(result.Workspaces)
 		m.results[workspace.ProjectKey] = result
 	}
 	m.syncBoard()

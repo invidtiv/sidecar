@@ -40,12 +40,30 @@ func ResolveAgentCommand(worktreePath, agentType string, configured map[string]s
 	if strings.TrimSpace(agentType) == "" {
 		return ""
 	}
-	command := readAgentStart(worktreePath)
-	if command == "" {
-		for _, key := range []string{agentType, "*", "default"} {
-			if command = sanitizeAgentCommand(configured[key]); command != "" {
-				break
-			}
+	if command := readAgentStart(worktreePath); command != "" {
+		return finishAgentCommand(command, agentType, skipPerms)
+	}
+	return ResolveAgentCommandFromConfig(agentType, configured, skipPerms)
+}
+
+// ResolveAgentCommandFromConfig resolves an agent's launch command from
+// configuration and the built-in defaults alone, without consulting the
+// checkout's .sidecar-agent-start file.
+//
+// It exists for callers whose worktree is on ANOTHER machine. Handing a remote
+// path to ResolveAgentCommand does not fail — it reads THIS machine's file at a
+// path that, on a developer's two similarly laid out machines, usually exists
+// here too, and launches whatever that file says. That is the same failure class
+// as resolving a remote workspace's path against the local filesystem, and it
+// is silent.
+func ResolveAgentCommandFromConfig(agentType string, configured map[string]string, skipPerms bool) string {
+	if strings.TrimSpace(agentType) == "" {
+		return ""
+	}
+	command := ""
+	for _, key := range []string{agentType, "*", "default"} {
+		if command = sanitizeAgentCommand(configured[key]); command != "" {
+			break
 		}
 	}
 	if command == "" {
@@ -54,6 +72,12 @@ func ResolveAgentCommand(worktreePath, agentType string, configured map[string]s
 	if command == "" {
 		command = agentDefaults["claude"]
 	}
+	return finishAgentCommand(command, agentType, skipPerms)
+}
+
+// finishAgentCommand applies the per-agent rewrites every resolution shares,
+// whatever the command's source was.
+func finishAgentCommand(command, agentType string, skipPerms bool) string {
 	if agentType == "opencode" {
 		if match := openCodeRunPrefix.FindStringSubmatch(command); len(match) > 0 {
 			command = strings.TrimSpace(match[1] + match[2])

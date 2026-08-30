@@ -70,23 +70,41 @@ func (m *Model) RunDeleteCommand(id string) tea.Cmd {
 	}
 }
 
-// remoteActionRefusal is the guard every mutating action shares: a remote
-// workspace is observation only until Phase C gives the host protocol a
-// request channel.
+// remoteVerbs answers "can a host do this?" for one action.
 //
-// State-free and returning a reason rather than a command, because that is the
-// shape the surrounding refusals already take — and because a headless caller
-// should be able to adopt the rule unchanged when the request channel arrives
-// and this becomes "can this host do it?" instead of "no".
+// The entries are the verbs that reach a host as a `sidecar <verb> --json`
+// invocation it runs itself, so the machine that owns the state is the machine
+// that changes it. Everything absent from this map is refused, and each absence
+// is a decision:
+//
+//   - delete and merge resolve the workspace's path against a git repository
+//     and a shells.json. Their implementations run here, on this filesystem,
+//     which is the failure this guard exists to prevent.
+//   - open (navigation, and the Git plugin jump) switches THIS Sidecar's
+//     project to a checkout. There is no checkout here to switch to.
+//
+// Each of those becomes a supported verb by gaining a host-side CLI verb and an
+// entry here — not by relaxing the guard.
+var remoteVerbs = map[string]bool{
+	"create": true,
+	"rename": true,
+	"send":   true,
+}
+
+// remoteActionRefusal answers whether a host can do what is being asked of one
+// of its workspaces, and says why not when it cannot.
+//
+// State-free and returning a reason rather than a command, so a headless caller
+// can adopt the rule unchanged.
 //
 // The failure it prevents is not a confusing error. It is an action resolving
 // a remote path against THIS machine's filesystem and succeeding, because the
 // path happens to exist here too.
 func remoteActionRefusal(workspace workspaceinventory.Workspace, verb string) string {
-	if !workspace.Remote() {
+	if !workspace.Remote() || remoteVerbs[verb] {
 		return ""
 	}
-	return fmt.Sprintf("%s is on %s — Sidecar can watch a remote workspace but cannot %s one yet",
+	return fmt.Sprintf("%s is on %s — Sidecar can watch and change a remote workspace, but cannot %s one",
 		workspace.Name, workspace.HostID, verb)
 }
 

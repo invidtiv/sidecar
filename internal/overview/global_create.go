@@ -44,24 +44,46 @@ var (
 	resolveGlobalAgentCmd = workspaceops.ResolveAgentCommand
 )
 
+// remoteReply is the fence a host's answer carries back.
+//
+// Empty HostID means the work happened on this machine and nothing needs
+// fencing. A remote answer names the host it was addressed to and the
+// host-client incarnation that was current when it was sent, so a reply that
+// arrives after a config save removed or retargeted that host can be
+// recognised and dropped — the same two fences handleHostUpdate applies to the
+// snapshot stream, not a parallel mechanism.
+type remoteReply struct {
+	HostID      string
+	Incarnation uint64
+}
+
 type globalShellCreatedMsg struct {
+	remoteReply
 	Project Project
 	Tmux    string
 	Err     error
 }
 
 type globalWorktreePlannedMsg struct {
+	remoteReply
 	Project Project
 	Plan    *workspaceops.WorktreePlan
 	Err     error
 }
 
 type globalWorktreeCreatedMsg struct {
+	remoteReply
 	Project  Project
 	Plan     *workspaceops.WorktreePlan
 	Record   *workspaceops.WorktreeRecord
 	Outcomes []workspaceops.SetupOutcome
 	Err      error
+	// RemotePath and RemoteSession are what a host reported creating. A remote
+	// creation produces no local Record on purpose: a WorktreeRecord is a
+	// handle onto a checkout this machine can act on, and the recovery flow it
+	// feeds — retry setup, open anyway, delete — is entirely local git.
+	RemotePath    string
+	RemoteSession string
 }
 
 type globalWorktreeDeletedMsg struct {
@@ -123,7 +145,11 @@ func (m *Model) OpenPaneSwitcher() tea.Cmd {
 }
 
 func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKind, useLastKind bool) tea.Cmd {
-	if m.PreviewInteractive() || len(m.projects) == 0 {
+	// A machine with no local projects but a registered host still has
+	// somewhere to create; with no hosts this is len(m.projects) exactly as
+	// before.
+	projectItems := m.createProjectItems()
+	if m.PreviewInteractive() || len(projectItems) == 0 {
 		return nil
 	}
 	m.closeViewFlyout()
@@ -150,7 +176,7 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 		UseLastKind:           useLastKind,
 		ShowProject:           true,
 		ProjectKey:            key,
-		Projects:              m.createProjectItems(),
+		Projects:              projectItems,
 		Agents:                agents,
 		NextShell:             m.defaultShellDisplayName(key),
 		DefaultAgent:          defaultAgent,
@@ -168,29 +194,39 @@ func (m *Model) openCreate(projectKey string, kind workspacecreate.Kind, focusKi
 	m.createRecord = nil
 	m.createModal = nil
 	m.createModalWidth = 0
+	m.createTargetHost = ""
 	return tea.Batch(m.loadCreateBranches(), m.loadCreatePickerData(), m.loadCreateFileCandidates())
 }
 
 func (m *Model) normalizedCreateProjectKey(explicit string) string {
 	key := m.defaultCreateProject(explicit)
-	if idx := m.projectIndex(key); idx >= 0 {
-		return projectKey(m.projects[idx])
+	if target, ok := m.resolveCreateTarget(key); ok {
+		return projectKey(target.Project)
 	}
 	return key
 }
 
 func (m *Model) defaultCreateProject(explicit string) string {
-	if m.projectIndex(explicit) >= 0 {
+	if _, ok := m.resolveCreateTarget(explicit); ok {
 		return explicit
 	}
-	if selected, ok := m.SelectedWorkspace(); ok && m.projectIndex(selected.ProjectKey) >= 0 {
-		return selected.ProjectKey
+	// A remote row selected in the list defaults the form to its own project,
+	// the same way a local one does.
+	if selected, ok := m.SelectedWorkspace(); ok {
+		if _, ok := m.resolveCreateTarget(selected.ProjectKey); ok {
+			return selected.ProjectKey
+		}
 	}
-	if last := loadLastGlobalCreateProject(); m.projectIndex(last) >= 0 {
-		return last
+	if last := loadLastGlobalCreateProject(); last != "" {
+		if _, ok := m.resolveCreateTarget(last); ok {
+			return last
+		}
 	}
 	if len(m.projects) > 0 {
 		return projectKey(m.projects[0])
+	}
+	if items := m.createProjectItems(); len(items) > 0 {
+		return items[0].Key
 	}
 	return ""
 }
@@ -216,9 +252,8 @@ func (m *Model) selectedCreateProject() (Project, bool) {
 }
 
 func (m *Model) shellDefinitions(key string) []shellstate.Definition {
-	result := m.results[key]
 	defs := make([]shellstate.Definition, 0)
-	for _, workspace := range result.Workspaces {
+	for _, workspace := range m.projectWorkspaces(key) {
 		if workspace.Kind != workspaceinventory.KindShell {
 			continue
 		}
@@ -227,12 +262,18 @@ func (m *Model) shellDefinitions(key string) []shellstate.Definition {
 	return defs
 }
 
+// defaultShellDisplayName is the placeholder the form shows for the next shell.
+//
+// It is a placeholder and nothing more: for a remote project it is a guess made
+// from the rows the last snapshot carried, and the host decides the real name
+// when it creates the shell. ShellNames is pure string work over the path's last
+// element, so asking it about a remote path reaches no filesystem.
 func (m *Model) defaultShellDisplayName(key string) string {
-	idx := m.projectIndex(key)
-	if idx < 0 {
+	target, ok := m.resolveCreateTarget(key)
+	if !ok {
 		return "Shell 1"
 	}
-	display, _ := workspaceops.ShellNames(m.projects[idx].Path, m.shellDefinitions(projectKey(m.projects[idx])))
+	display, _ := workspaceops.ShellNames(target.Project.Path, m.shellDefinitions(projectKey(target.Project)))
 	return display
 }
 
@@ -281,10 +322,25 @@ func (m *Model) activeCreateModal() *modal.Modal {
 	return m.createModal
 }
 
+// createProjectItems is every project a workspace can be created in: this
+// machine's, then each host's.
+//
+// A host's projects are labelled the way its rows already are — host, then the
+// separator, then the project — so the name in the picker is the name on the
+// row it will produce. Their keys are host-scoped already (hosts.ScopedKey), so
+// two machines with the same checkout path stay two entries.
 func (m *Model) createProjectItems() []workspacecreate.ProjectItem {
 	items := make([]workspacecreate.ProjectItem, 0, len(m.projects))
 	for _, project := range m.projects {
 		items = append(items, workspacecreate.ProjectItem{Key: projectKey(project), Label: project.Name})
+	}
+	for _, id := range m.hostOrder() {
+		for _, project := range m.hostProjects[id] {
+			items = append(items, workspacecreate.ProjectItem{
+				Key:   projectKey(project),
+				Label: id + hostRowPrefix + project.Name,
+			})
+		}
 	}
 	return items
 }
@@ -297,10 +353,19 @@ func (m *Model) setCreateError(msg string) {
 }
 
 func (m *Model) loadCreateBranches() tea.Cmd {
-	project, ok := m.selectedCreateProject()
+	target, ok := m.selectedCreateTarget()
 	if !ok {
 		return nil
 	}
+	if target.Remote() {
+		// Running `git branch` here would run it on THIS machine against the
+		// host's path, which on a similarly laid out second machine answers
+		// with the wrong repository's branches. The host resolves its own
+		// default base ref when no --base is passed; that is the honest answer
+		// until a verb exists to ask it for the list.
+		return nil
+	}
+	project := target.Project
 	key := projectKey(project)
 	dir := project.Path
 	return func() tea.Msg {
@@ -328,9 +393,7 @@ func (m *Model) ensureCreatePlanModal(modalW int) {
 	if plan == nil {
 		return
 	}
-	sections := []modal.Section{
-		modal.Text(fmt.Sprintf("Create %s at\n%s\n\nFrom %s (%s)\n%s", plan.Branch, plan.Path, plan.SourceRef, shortCreateOID(plan.SourceOID), plan.RemotePolicy)),
-	}
+	sections := []modal.Section{modal.Text(createPlanSummary(plan, m.createTargetHost))}
 	if m.createError != "" {
 		sections = append(sections, modal.Spacer(), modal.Text("Error: "+m.createError))
 	}
@@ -357,6 +420,44 @@ func (m *Model) ensureCreatePlanModal(modalW int) {
 	for _, section := range sections {
 		m.createModal.AddSection(section)
 	}
+}
+
+// createPlanSummary is the confirmation's description of a resolved worktree
+// plan, for a plan resolved here or on a host.
+//
+// One renderer, because a plan is a plan: the fields mean the same thing
+// whichever machine resolved them, and two renderers is how a local and a
+// remote confirmation come to say different things about the same operation.
+func createPlanSummary(plan *workspaceops.WorktreePlan, hostID string) string {
+	var sb strings.Builder
+	if hostID != "" {
+		fmt.Fprintf(&sb, "On %s\n\n", hostID)
+	}
+	fmt.Fprintf(&sb, "Create %s at\n%s\n\nFrom %s (%s)\n%s\n%s",
+		plan.Branch, plan.Path, plan.SourceRef, shortCreateOID(plan.SourceOID),
+		plan.RemotePolicy, createPlanHookLine(plan))
+	return sb.String()
+}
+
+// createPlanHookLine states whether creating this worktree will run a setup
+// hook, and whether creation depends on it succeeding.
+//
+// A line of text and not a checkbox, deliberately. This confirmation says what
+// is about to happen; choosing whether the hook runs belongs to configuration
+// and to the project surface's richer form, and adding a second place to decide
+// it would make the two surfaces disagree about the answer.
+func createPlanHookLine(plan *workspaceops.WorktreePlan) string {
+	if !plan.RunHook {
+		return "No setup hook"
+	}
+	hook := strings.TrimSpace(plan.HookPath)
+	if hook == "" {
+		hook = "setup hook"
+	}
+	if plan.HookRequired {
+		return "Runs " + hook + " — required, creation fails if it does"
+	}
+	return "Runs " + hook + " — optional"
 }
 
 func shortCreateOID(oid string) string {
@@ -386,6 +487,7 @@ func (m *Model) closeCreateShell() {
 	m.createModalWidth = 0
 	m.createPlan = nil
 	m.createRecord = nil
+	m.createTargetHost = ""
 }
 
 func (m *Model) CreatePaste(value string) bool {
@@ -549,7 +651,7 @@ func (m *Model) applyCreateAction(action string) tea.Cmd {
 }
 
 func (m *Model) planCreateWorktree() tea.Cmd {
-	project, ok := m.selectedCreateProject()
+	target, ok := m.selectedCreateTarget()
 	if !ok {
 		m.setCreateError("Choose a project")
 		return nil
@@ -561,6 +663,7 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 		m.setCreateError(err)
 		return nil
 	}
+	project := target.Project
 	setup := config.WorktreeSetupConfig{}
 	dirPrefix := true
 	if m.config != nil {
@@ -574,8 +677,18 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 	m.createBusy = true
 	m.setCreateError("")
 	m.createModal = nil
-	_ = saveLastGlobalCreateProject(project.Path)
+	// Set on every submission, never adjusted on noticing a difference: that is
+	// the rule that keeps a surface which went remote once from staying remote
+	// for the next local action.
+	m.createTargetHost = target.HostID
+	_ = saveLastGlobalCreateProject(lastCreateProjectValue(target))
 	m.createForm.PersistLastAgent()
+	if target.Remote() {
+		// The host resolves the plan with its own config, its own setup hook
+		// and its own repository. --plan mutates nothing, so a cancelled
+		// confirmation leaves that machine untouched.
+		return m.planRemoteWorktree(target, name, base, agent, skip)
+	}
 	return func() tea.Msg {
 		plan, err := resolveGlobalWorktree(context.Background(), project.Path, project.Path, name, base, dirPrefix, setup)
 		if plan != nil {
@@ -589,14 +702,28 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 }
 
 func (m *Model) executeCreateWorktree() tea.Cmd {
-	project, ok := m.selectedCreateProject()
+	target, ok := m.selectedCreateTarget()
 	if !ok || m.createPlan == nil {
 		return nil
 	}
+	project := target.Project
 	plan := m.createPlan
 	m.createBusy = true
 	m.createError = ""
 	m.createModal = nil
+	m.createTargetHost = target.HostID
+	if target.Remote() {
+		// The host runs its whole create sequence — execute, journal, identity,
+		// configured setup, launch — because that sequence is
+		// `sidecar create worktree`. It re-resolves the plan from the same
+		// arguments the confirmation was built from.
+		if m.createForm == nil {
+			return nil
+		}
+		return m.executeRemoteWorktree(target,
+			strings.TrimSpace(m.createForm.Name()), m.createForm.BaseBranch(),
+			m.createForm.Agent(), m.createForm.SkipPerms())
+	}
 	return func() tea.Msg {
 		record, err := executeGlobalWorktree(context.Background(), projectKey(project), plan)
 		if record == nil {
@@ -709,11 +836,12 @@ func (m *Model) deleteCreatedWorktree() tea.Cmd {
 }
 
 func (m *Model) submitCreateShell() tea.Cmd {
-	project, ok := m.selectedCreateProject()
+	target, ok := m.selectedCreateTarget()
 	if !ok {
 		m.setCreateError("Choose a project")
 		return nil
 	}
+	project := target.Project
 	key := projectKey(project)
 	display, session := workspaceops.ShellNames(project.Path, m.shellDefinitions(key))
 	custom := ""
@@ -744,11 +872,22 @@ func (m *Model) submitCreateShell() tea.Cmd {
 	m.createBusy = true
 	m.setCreateError("")
 	m.createModal = nil
-	m.pendingCreatedTmux = session
+	// Set unconditionally on every submission — see planCreateWorktree.
+	m.createTargetHost = target.HostID
+	m.pendingCreatedHost = target.HostID
 	m.pendingCreatedPath = ""
-	_ = saveLastGlobalCreateProject(project.Path)
+	m.pendingCreatedTmux = session
+	if target.Remote() {
+		// The host names the session from its own manifest, so there is nothing
+		// to pend on until it answers.
+		m.pendingCreatedTmux = ""
+	}
+	_ = saveLastGlobalCreateProject(lastCreateProjectValue(target))
 	if m.createForm != nil {
 		m.createForm.PersistLastAgent()
+	}
+	if target.Remote() {
+		return m.submitRemoteCreateShell(target, remoteShellName(custom, display), m.remoteAgentCommand(agent, skip))
 	}
 	return func() tea.Msg {
 		_, err := createManagedShell(spec)
@@ -763,6 +902,50 @@ func (m *Model) submitCreateShell() tea.Cmd {
 		}
 		return globalShellCreatedMsg{Project: project, Tmux: session, Err: err}
 	}
+}
+
+// remoteShellName is the display name to send with a remote create: the one
+// that was typed, or nothing at all.
+//
+// Never the locally computed default. That default is "Shell N" counted from
+// the rows this viewer last saw, so sending it would name a shell after the
+// wrong machine's numbering and race any shell created there since. Sending
+// nothing lets the host name it from its own manifest, which is what the local
+// path also does.
+func remoteShellName(typed, normalized string) string {
+	if strings.TrimSpace(typed) == "" {
+		return ""
+	}
+	return normalized
+}
+
+// remoteAgentCommand resolves the command that starts the chosen agent in a
+// shell on another machine, or "" when no agent was chosen.
+//
+// Config-only resolution, and the same naming instruction the local path
+// appends. See workspaceops.ResolveAgentCommandFromConfig: reading the
+// checkout's .sidecar-agent-start for a remote path reads this machine's file.
+func (m *Model) remoteAgentCommand(agent string, skip bool) string {
+	if strings.TrimSpace(agent) == "" {
+		return ""
+	}
+	configured := map[string]string(nil)
+	if m.config != nil {
+		configured = m.config.Plugins.Workspace.AgentStart
+	}
+	return withGlobalShellNaming(resolveRemoteAgentCmd(agent, configured, skip), agent)
+}
+
+// lastCreateProjectValue is what "create here again next time" remembers.
+//
+// A remote project is remembered by its host-scoped key, never by its path: a
+// path remembered from another machine would match a local project with the
+// same path the next time the form opens, and silently create there instead.
+func lastCreateProjectValue(target createTarget) string {
+	if target.Remote() {
+		return projectKey(target.Project)
+	}
+	return target.Project.Path
 }
 
 func withGlobalShellNaming(command, agent string) string {
@@ -876,19 +1059,48 @@ func (m *Model) applyProjectMutationRefresh(msg projectMutationRefreshMsg) tea.C
 func (m *Model) clearPendingCreated() {
 	m.pendingCreatedTmux = ""
 	m.pendingCreatedPath = ""
+	m.pendingCreatedHost = ""
 }
 
 // honorPendingCreated selects a still-pending created workspace once it is
 // present in results and visible. Pending stays set until that happens.
+//
+// The match is scoped to the machine the workspace was created on. Without
+// that, a remote worktree at /home/me/api-feature would be answered by a LOCAL
+// worktree at the same path, and a tmux session name derived from a directory
+// name is even easier to collide on — the row would be selected, the preview
+// would open, and everything after it would be about the wrong machine.
 func (m *Model) honorPendingCreated() bool {
 	if m.pendingCreatedTmux == "" && m.pendingCreatedPath == "" {
 		return false
 	}
-	for _, result := range m.results {
+	matches := func(workspace workspaceinventory.Workspace) bool {
+		if workspace.HostID != m.pendingCreatedHost {
+			return false
+		}
+		createdShell := m.pendingCreatedTmux != "" && workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
+		createdWorktree := m.pendingCreatedPath != "" && workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == m.pendingCreatedPath
+		return createdShell || createdWorktree
+	}
+	results := m.results
+	if m.pendingCreatedHost != "" {
+		results = nil
+	}
+	for _, result := range results {
 		for _, workspace := range result.Workspaces {
-			createdShell := m.pendingCreatedTmux != "" && workspace.Kind == workspaceinventory.KindShell && workspace.TmuxName == m.pendingCreatedTmux
-			createdWorktree := m.pendingCreatedPath != "" && workspace.Kind == workspaceinventory.KindWorktree && workspace.Path == m.pendingCreatedPath
-			if !createdShell && !createdWorktree {
+			if !matches(workspace) {
+				continue
+			}
+			if m.workspaces.SelectID(workspace.ID) {
+				m.clearPendingCreated()
+				return true
+			}
+			return false
+		}
+	}
+	for _, result := range m.hostResults[m.pendingCreatedHost] {
+		for _, workspace := range result.Workspaces {
+			if !matches(workspace) {
 				continue
 			}
 			if m.workspaces.SelectID(workspace.ID) {

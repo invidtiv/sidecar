@@ -44,10 +44,7 @@ type createPickerDataMsg struct {
 }
 
 func (m *Model) loadCreatePickerData() tea.Cmd {
-	root := ""
-	if selected, ok := m.SelectedWorkspace(); ok {
-		root = selected.Path
-	}
+	root := m.localSelectedRoot()
 	if root == "" && len(m.projects) > 0 {
 		root = m.projects[0].Path
 	}
@@ -74,11 +71,23 @@ func (m *Model) loadCreatePickerData() tea.Cmd {
 	}
 }
 
-func (m *Model) loadCreateFileCandidates() tea.Cmd {
-	root := ""
-	if selected, ok := m.SelectedWorkspace(); ok {
-		root = selected.Path
+// localSelectedRoot is the selected row's directory, but only when that
+// directory is on this machine.
+//
+// Everything these pickers do — git log, gh issue list, a filesystem scan —
+// runs here. Handed a remote row's path they would walk a same-named directory
+// on THIS machine and offer its commits, issues and files as if they belonged
+// to the other one.
+func (m *Model) localSelectedRoot() string {
+	selected, ok := m.SelectedWorkspace()
+	if !ok || selected.Remote() {
+		return ""
 	}
+	return selected.Path
+}
+
+func (m *Model) loadCreateFileCandidates() tea.Cmd {
+	root := m.localSelectedRoot()
 	if root == "" {
 		return nil
 	}

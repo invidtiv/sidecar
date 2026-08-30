@@ -47,7 +47,7 @@ func remoteSnapshot(lane string) *hostproto.Snapshot {
 		Projects: []hostproto.Project{{
 			Key: "/home/me/api", Name: "api", Root: "/home/me/api",
 			Items: []hostproto.Item{{
-				ID: "/home/me/api:shell:s1", ProjectKey: "/home/me/api", ProjectName: "api",
+				ID: "/home/me/api:shell:s1", ProjectKey: "/home/me/api", ProjectName: "api", ProjectRoot: "/home/me/api",
 				Kind: "shell", Key: "s1", Name: "Claude pane", Session: "api-claude", PaneID: "%7",
 				Provider: "claude", Live: true, Preview: "line one\nDo you want to proceed?",
 				Agent: &hostproto.Presentation{Lane: lane, Label: lane, Icon: "◆", Attention: lane == "blocked"},
@@ -198,21 +198,31 @@ func TestStaleHostKeepsItsRowsAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestRemoteWorkspacesAreNeverActedOn is the safety property. A remote path
-// resolved against THIS machine either fails confusingly or — far worse —
-// succeeds against an unrelated local directory.
+// TestRemoteWorkspacesAreNeverActedOn is the safety property, now asked as a
+// capability question rather than a blanket no.
+//
+// The verbs that reach the host as its own `sidecar` invocation are allowed,
+// because the machine that owns the state is the machine that changes it. The
+// verbs whose implementation runs HERE stay refused: a remote path resolved
+// against this filesystem either fails confusingly or — far worse — succeeds
+// against an unrelated local directory.
 func TestRemoteWorkspacesAreNeverActedOn(t *testing.T) {
 	remote := workspaceinventory.Workspace{
 		ID: "h\x1fx", HostID: "mac-mini", Name: "Claude pane",
 		Kind: workspaceinventory.KindWorktree, Path: "/home/me/api",
 	}
-	for _, verb := range []string{"delete", "rename", "open"} {
+	for _, verb := range []string{"delete", "merge", "open"} {
 		reason := remoteActionRefusal(remote, verb)
 		if reason == "" {
 			t.Fatalf("%s was permitted on a remote workspace", verb)
 		}
 		if !strings.Contains(reason, "mac-mini") {
 			t.Errorf("%s refusal %q does not say which machine", verb, reason)
+		}
+	}
+	for _, verb := range []string{"create", "rename", "send"} {
+		if reason := remoteActionRefusal(remote, verb); reason != "" {
+			t.Errorf("%s is a host-side verb but was refused: %q", verb, reason)
 		}
 	}
 	local := workspaceinventory.Workspace{ID: "x", Name: "local", Kind: workspaceinventory.KindWorktree}
