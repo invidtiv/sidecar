@@ -26,7 +26,16 @@ import (
 // or done. It is deliberately a shell loop rather than a real provider — the
 // contract under test is Sidecar's, and a paid provider cannot be part of an
 // ordinary test run.
-const fakeProviderScript = `printf 'FAKE_IDLE\n'; while IFS= read -r line; do printf 'FAKE_WORKING:%s\n' "$line"; sleep 0.3; if [ "$line" = block ]; then printf 'FAKE_BLOCKED\n'; else printf 'FAKE_DONE\n'; fi; done`
+//
+// The markers are assembled from $m at runtime rather than written as literals.
+// A launch is typed into the shell, so the script's own source is echoed onto
+// the pane before it runs — and with literal markers that echo ends in
+// FAKE_DONE, which a last-marker-wins detector reads as a finished agent. The
+// window between the echo and the first real marker is short, so it only opened
+// under load, and it made every "the idle agent has not settled" precondition
+// in this file a coin flip. Building the markers keeps the fixture's source out
+// of the fixture's own evidence.
+const fakeProviderScript = `m=FAKE; printf '%s_IDLE\n' "$m"; while IFS= read -r line; do printf '%s_WORKING:%s\n' "$m" "$line"; sleep 0.3; if [ "$line" = block ]; then printf '%s_BLOCKED\n' "$m"; else printf '%s_DONE\n' "$m"; fi; done`
 
 // fakeProviderDetect reads the fake provider's markers. The most recent marker
 // on screen wins, which is how a real screen-evidence detector behaves.
@@ -229,9 +238,48 @@ func controlClients(t *testing.T) int {
 // M0 observer decision: an event-driven observer is only worth having if a
 // cancelled, timed-out, or completed wait releases every client and goroutine
 // it made.
+// countingSignaler wraps the real terminal and counts the observer clients a
+// wait opens and releases. The leak this test exists to catch is a Signal
+// without its stop, and counting the pair says so directly rather than
+// inferring it from a client census that anything else on the server also
+// moves. It also proves the satisfied case reached the observer at all.
+type countingSignaler struct {
+	*LocalTerminal
+	mu      sync.Mutex
+	signals int
+	stops   int
+}
+
+func (c *countingSignaler) Signal(ctx context.Context, snap Snapshot) (<-chan Signal, func(), error) {
+	signals, stop, err := c.LocalTerminal.Signal(ctx, snap)
+	if err != nil {
+		return signals, stop, err
+	}
+	c.mu.Lock()
+	c.signals++
+	c.mu.Unlock()
+	var once sync.Once
+	return signals, func() {
+		stop()
+		once.Do(func() {
+			c.mu.Lock()
+			c.stops++
+			c.mu.Unlock()
+		})
+	}, nil
+}
+
+func (c *countingSignaler) counts() (int, int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.signals, c.stops
+}
+
 func TestObserverLeavesNoControlClientOrGoroutineBehind(t *testing.T) {
 	requireTmux(t)
 	svc, terminal, target := startFakeAgent(t, "leaks")
+	observer := &countingSignaler{LocalTerminal: terminal}
+	svc.Terminal = observer
 
 	settle := func() {
 		deadline := time.Now().Add(5 * time.Second)
@@ -249,16 +297,40 @@ func TestObserverLeavesNoControlClientOrGoroutineBehind(t *testing.T) {
 
 	// A timed-out wait, a cancelled wait, and a satisfied wait each exercise a
 	// different exit from the observer loop.
+	//
+	// The two waits below can only time out if the target is not already what
+	// they are waiting for, so assert that directly instead of reading it out
+	// of their failure: "the wait failed" is also what a broken fixture looks
+	// like, and this precondition used to be a coin flip under load.
+	if agent, err := svc.Get(context.Background(), target); err != nil || agent.Agent.Status != StatusIdle {
+		t.Fatalf("precondition: target reads %+v (err %v), want a settled idle agent", agent.Agent, err)
+	}
 	if _, err := svc.Wait(context.Background(), WaitRequest{Target: target, Until: []Status{StatusDone}, Timeout: 400 * time.Millisecond}); err == nil {
 		t.Fatal("precondition: the idle agent should not have settled as done")
+	} else if got := codeOf(t, err); got != ErrTimeout {
+		t.Fatalf("precondition: wanted the wait to time out, got %s: %v", got, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(300 * time.Millisecond); cancel() }()
 	if _, err := svc.Wait(ctx, WaitRequest{Target: target, Until: []Status{StatusDone}, Timeout: 15 * time.Second}); err == nil {
 		t.Fatal("precondition: the cancelled wait should have failed")
 	}
-	if _, err := svc.Wait(context.Background(), WaitRequest{Target: target, Until: []Status{StatusIdle}, Timeout: 5 * time.Second}); err != nil {
+
+	// The satisfied wait has to build an observer and then release it. Waiting
+	// for the state the agent is already in returns from watch's first accept,
+	// before the Signaler is ever constructed, which proves nothing about
+	// cleanup — so drive a real turn and wait for its completion.
+	if _, err := svc.Prompt(context.Background(), PromptRequest{Target: target, Text: "finish"}); err != nil {
+		t.Fatalf("starting a turn for the satisfied wait: %v", err)
+	}
+	if _, err := svc.Wait(context.Background(), WaitRequest{Target: target, Until: []Status{StatusDone}, Timeout: 20 * time.Second}); err != nil {
 		t.Fatalf("satisfied wait: %v", err)
+	}
+
+	// Every observer that was opened was released. This is the leak itself,
+	// stated as the invariant rather than as a side effect.
+	if signals, stops := observer.counts(); signals == 0 || signals != stops {
+		t.Fatalf("observer clients: %d opened, %d released", signals, stops)
 	}
 
 	settle()
