@@ -149,6 +149,13 @@ func OriginForeground(origin Origin, attention []Attention) bool {
 }
 
 func originsMatch(a, b Origin) bool {
+	// Machine first. A remote workspace and a local one are different places
+	// however much their session names, project keys, or paths agree, and
+	// treating them as one would silence a remote agent's alert because
+	// something local happened to be selected.
+	if a.HostID != b.HostID {
+		return false
+	}
 	if a.TmuxSession != "" || b.TmuxSession != "" {
 		return a.TmuxSession != "" && a.TmuxSession == b.TmuxSession
 	}

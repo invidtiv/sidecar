@@ -36,6 +36,11 @@ type AttentionOrigin struct {
 	TmuxSession string
 	ProjectKey  string
 	WorkDir     string
+	// HostID names the registered remote host the visible workspace lives on,
+	// empty for one on this machine. Two machines legitimately share a session
+	// name and a checkout path, so without it a local selection would answer
+	// "is the user looking at that remote workspace" with yes.
+	HostID string
 }
 
 // PaneFocusStop names one directly focusable window inside a plugin. IDs are

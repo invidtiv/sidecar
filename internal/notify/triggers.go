@@ -235,6 +235,14 @@ func TransitionOwnedByProject(n Notification, projectRoot string) bool {
 	if meta == nil || meta.LaneKey == "" {
 		return false
 	}
+	// A record forwarded from a remote host belongs to no local project, even
+	// when that host has a checkout at the same path. Adopting one would seed a
+	// local lane tracker with a key no local observation can produce, and the
+	// next complete sweep would withdraw the remote agent's wait while it was
+	// still waiting.
+	if n.Origin.HostID != "" {
+		return false
+	}
 	projectRoot = lexicalProjectRoot(projectRoot)
 	if projectRoot == "" {
 		return false

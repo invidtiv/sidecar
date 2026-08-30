@@ -174,17 +174,33 @@ type Origin struct {
 	ProjectKey  string `json:"projectKey,omitempty"`
 	WorkDir     string `json:"workDir,omitempty"`
 	PID         int    `json:"pid,omitempty"`
+	// HostID names the registered remote host this work runs on. Empty means
+	// this machine, which is every locally produced notification.
+	//
+	// It is part of identity rather than presentation because two machines
+	// legitimately have a tmux session called `sidecar-agent-1` and a checkout
+	// at the same path. Without it, a viewer showing a local workspace would
+	// count as visibly showing the remote one, and the remote agent's alert
+	// would be suppressed as foreground while nobody was looking at it.
+	HostID string `json:"hostId,omitempty"`
 }
 
-// StableKey is the host-local identity used for logical transition dedupe and
-// native replacement grouping. It hashes paths rather than repeating them in
+// StableKey is the identity used for logical transition dedupe and native
+// replacement grouping. It hashes paths rather than repeating them in
 // coordination records.
+//
+// A remote origin's host ID joins the hash only when there is one, so local
+// keys are byte-identical to what earlier builds produced and an upgrade does
+// not reshuffle every retained replacement group.
 func (o Origin) StableKey() string {
-	raw := strings.Join([]string{o.TmuxSession, o.ProjectKey, o.WorkDir}, "\x00")
-	if raw == "\x00\x00" {
+	if o.Zero() {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(raw))
+	parts := []string{o.TmuxSession, o.ProjectKey, o.WorkDir}
+	if o.HostID != "" {
+		parts = append(parts, o.HostID)
+	}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return fmt.Sprintf("%x", sum[:12])
 }
 
@@ -199,6 +215,12 @@ func (o Origin) Zero() bool {
 // session, or failing that its working directory.
 func (o Origin) Matches(caller Origin) bool {
 	if o.Zero() || caller.Zero() {
+		return false
+	}
+	// Work on a remote host and work here are never the same poster, whatever
+	// their session names agree on. A local `sidecar notify dismiss` must not
+	// reach a record that came off another machine's stream.
+	if o.HostID != caller.HostID {
 		return false
 	}
 	if o.TmuxSession != "" || caller.TmuxSession != "" {
@@ -267,6 +289,20 @@ func NewID() string {
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("ntf-%013x-%s", time.Now().UTC().UnixNano()/1e3, hex.EncodeToString(b))
+}
+
+// RemoteID is the local record ID for one forwarded remote transition.
+//
+// It is derived rather than generated, and that is the whole of same-machine
+// duplicate prevention for remote work: two Sidecar processes here, each with
+// its own connection to the same host, compute the same ID for one remote
+// event, so the store files one record and the delivery ledger has one thing
+// to claim. Two Sidecars on two different computers derive the same ID too and
+// deliver independently, which is intended — the dedupe boundary is one
+// destination host, because each user needs their own attention.
+func RemoteID(hostID, eventKey string) string {
+	sum := sha256.Sum256([]byte(hostID + "\x00" + eventKey))
+	return "ntf-remote-" + hex.EncodeToString(sum[:10])
 }
 
 // Normalize fills in the defaults a poster may leave out: id, creation time,

@@ -686,7 +686,8 @@ func (a stateAttention) Foreground(origin notify.Origin) (bool, error) {
 		return false, err
 	}
 	return uirequest.OriginForeground(uirequest.Origin{
-		TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey, WorkDir: origin.WorkDir,
+		TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey,
+		WorkDir: origin.WorkDir, HostID: origin.HostID,
 	}, records), nil
 }
 
