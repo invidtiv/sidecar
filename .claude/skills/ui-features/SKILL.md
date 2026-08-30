@@ -380,6 +380,20 @@ func (p *Plugin) View(width, height int) string {
 
 Regions tested in reverse order. Add general regions first, specific regions last.
 
+## Pane header controls (internal/ui + internal/panereposition)
+
+A pane header's right edge carries two controls: the layout button `⊞` (U+229E) and the close `×`. Both are drawn through `ui.ResolveButtonStyle` with the same one-cell padding, so a pane header never invents a third button look, and both are gated on the `pane_move` feature for the layout button's half.
+
+**Reserve, do not measure.** `ui.ReserveHeaderControls(width, controls ...HeaderControl)` returns the tab strip's usable width and each control's column in one call; `panereposition.ReserveMovableHeader(width, movable, hasClose)` is the pane-side wrapper. Each host binds it once per frame in its own `reserveHeader`/`composeHeader` pair (`workspace.Plugin`, `overview.Model`, `app.appContentDeck`) so its header renderer, its tab strips and its region sink all measure from one answer — a strip laid out for a different reserve than the header composes is how a tab click lands on the wrong tab.
+
+**`movable` comes from the tree, via `panereposition.Movable`: it is false with no tree and false for a tree of one leaf.** `PlanMove` refuses every destination on a single leaf, so a control there is a target the user aims at for nothing, and a header with no leaf at all used to compare hover against leaf `0` — which every un-hovered header matches — and paint a permanently hovered button. `ui.ReserveHeaderClose` remains a one-line compatibility wrapper for headers that carry only the `×`. The arithmetic assumes a **one-column glyph** and the test suite pins `ansi.StringWidth` of the rendered label; a wider glyph silently shifts every hit region on the row.
+
+**Drop order as the row narrows: the layout button goes first, the close `×` last.** A control is dropped all-or-nothing. A half-drawn control is a target whose meaning cannot be recovered, and the close button is the one a user cannot work around.
+
+**The `Layout` region rung is after `Title` and before `Close`.** `paneframe.RegionSink` registers `Layout(node *panelayout.Node, hit Box)` at that rung for the same reason `RegisterRegions` documents for the close button, one step earlier: regions are tested in reverse order, so the later-registered `Close` wins the cell it actually occupies while `Layout` still outranks the title strip underneath it. All three pane hosts implement it beside their close-region binding, with the same hover tracking.
+
+The button opens `panereposition.Controller` — the same modal `M` opens. See `.claude/skills/keyboard-shortcuts/SKILL.md` for the key and its target resolution, and `.claude/skills/drag-pane/SKILL.md` for where the region sits in the windowing model.
+
 ### Coordinate system
 
 App offsets Y by `headerHeight` (the single painted header row) before forwarding to plugins. Plugins operate in local coords where Y=0 is plugin content top.

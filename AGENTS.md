@@ -37,6 +37,16 @@ the user asks.
 
 Run `sidecar agents` for what you can do from here, and use it. (`sidecar --agents` was the legacy spelling and may fail on current builds.) The two that earn their keep every session: keep the shell's name describing your current task, and put a file or issue in front of the user rather than describing its path (`sidecar open` works from any context, not only a Sidecar shell). Never edit `shells.json` or rename tmux sessions directly.
 
+### The pane layout is readable and writable
+
+Three verbs over one model, all acting on the surface showing this shell (or, with `--sessions`, the global Sessions surface), and none of them ever queues — a request whose destination is off screen declines with the reason instead of arriving late.
+
+- `sidecar layout get --json` reads the grid: every pane's cell, kind, targets, session, geometry, and the caps and floors a write would be held to. Read before you write.
+- `sidecar layout apply` composes panes onto it: `--pane` adds without closing anything, `--spec` replaces the whole layout. All-or-nothing, with a per-pane verdict for each requested pane.
+- `sidecar layout move` repositions one pane that is already open: `sidecar layout move 2.1 --to 1.2`, `--to 3` to append to a column, or `--focused --to left|right|up|down` for the same direction rule the reposition modal's `h/j/k/l` use. Use this rather than rebuilding a whole `--spec` to move one pane. A move with nothing to do reports `unchanged` and exits 0; a refusal exits 4 with the reason.
+
+Full reference: `docs/reference/cli.md`.
+
 ## Demoing Features
 
 When you finish building or modifying a user-facing feature, make it easy for

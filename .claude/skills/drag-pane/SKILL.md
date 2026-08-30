@@ -83,6 +83,44 @@ Tests that hold this: `internal/paneframe/paneframe_test.go`,
 `internal/plugins/workspace/pane_peer_chrome_test.go`, and
 `internal/overview/pane_peer_chrome_test.go`.
 
+### The header's layout button is part of the same model
+
+A pane can be **moved**, not only resized, and that entry point lives in the same
+chrome the drag handle does. `internal/panereposition` owns the shared
+interaction policy — the modal controller, the header adapter, the structural
+fingerprint, and the graft helpers — while `panelayout.PlanMove`/`ApplyMove` own
+the structure. There are three hosts, and all three get it: project Workspaces,
+global Sessions, and the app content decks.
+
+- **Reserve.** `panereposition.ReserveMovableHeader(width, movable, hasClose)`
+  wraps `ui.ReserveHeaderControls` and returns the tab strip's width plus each
+  control's column. Each host binds it once per frame in its own
+  `reserveHeader`/`composeHeader` pair, and every header renderer, tab strip and
+  region on that surface goes through those — a strip laid out for one reserve
+  while the header composes another is how a tab click lands on the wrong tab.
+  The **drop order as the row narrows is layout first, close `×` last**,
+  all-or-nothing per control: a clipped button is a target whose meaning cannot
+  be recovered.
+- **`movable` comes from the tree** (`panereposition.Movable`): false with no
+  tree, and false for a tree of one leaf, because `PlanMove` refuses every
+  destination on a single leaf. A header with no leaf also used to compare hover
+  against leaf `0`, which every un-hovered header matches, and painted a
+  permanently hovered button.
+- **Register.** `paneframe.RegionSink.Layout(node, hit)` is registered **after
+  `Title` and before `Close`** — one rung earlier than the close button, for the
+  reason `RegisterRegions` already documents. Regions are tested in reverse
+  order, so `Close` keeps the cell it occupies and `Layout` still outranks the
+  title strip beneath it. Each host binds it in its own `pane_host.go` beside
+  the close region, with the same hover tracking.
+- **Do not add a second one.** A click on `⊞` and the `M` key open the *same*
+  `panereposition.Controller`; the controller edits a clone and commits
+  atomically, so no host mutates a live tree from a mouse handler. `sidecar
+  layout move` is the third caller of the same planner.
+
+A zoomed leaf is drawn through the shared compose/register path, so the visible
+`⊞` and its hit region come from the same placement — the regression that made a
+zoomed Primary's button unclickable on one surface and not the other.
+
 ## Implementation Steps
 
 ### Step 1: Add Mouse Handler to Plugin Struct

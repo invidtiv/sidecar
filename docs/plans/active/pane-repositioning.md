@@ -1,10 +1,10 @@
 # Pane Repositioning — the layout modal and `sidecar layout move`
 
-**Status:** in progress — M0–M2 complete; the Phase 1/2 modal-entry and zoom-hit stabilization is implemented and verified under `td-e43609`; M3–M5 remain. **Tracking:** `td-2ec104`.
+**Status:** complete — M0–M5 implemented and verified; `pane_move` is default on. **Tracking:** `td-2ec104`.
 
 One sentence: **a pane you have opened should be movable — by keyboard or mouse through one transactional modal, and by an agent through the same planner.**
 
-M0–M2 close the human-facing gap: project Workspaces and global Sessions open the reposition modal with `M` from either their list or a focused non-interactive pane, and all three pane hosts have the same header button, modal, and scoped zoom. The feature remains default-off while M3 adds `M` modal entry to plugin content decks, M4 adds the direct agent verb and flips the flag on, and M5 updates durable user and agent documentation.
+All three pane hosts — project Workspaces, the global Sessions browser, and the plugin content decks — open one reposition modal from `M` and from the header `⊞`, and `sidecar layout move` is a third caller of the same planner. `pane_move` is default on.
 
 ## Implementation status
 
@@ -13,9 +13,9 @@ M0–M2 close the human-facing gap: project Workspaces and global Sessions open 
 | M0 — structural planner | Complete | `PlanMove`, direction resolution, identity-preserving apply, ratio carry, fit/cap/refusal behavior | `td-c16c3c` closed; commit `48d15888` |
 | M1 — Workspace keyboard entry | Complete | `M` opens the shared modal from a focused non-interactive pane or the selected list row's Primary terminal on project Workspaces and global Sessions | `td-7a552b` closed; original implementation in `9743b39f`; modal-first stabilization in `td-e43609` |
 | M2 — header modal and zoom | Complete | Shared `⊞`, modal draft/revalidation/commit, mouse targeting, scoped zoom, input-ownership release, and clickable zoomed-Primary headers on project Workspaces, global Sessions, and plugin content decks | `td-90aae8` closed; original implementation in `9743b39f`; isolated mouse proof; zoom regression coverage in `td-e43609` |
-| M3 — plugin deck keyboard entry | Remaining | Add `M` as a second entry to the existing modal for focused leaves inside app content decks | Not started |
-| M4 — `sidecar layout move` | Remaining | Add the single-call CLI verb over `PlanMove`, structured acknowledgements, and default-on rollout | Not started |
-| M5 — documentation | Remaining | Update shortcut, UI, drag-pane, agent, and layout references after the final surface lands | Not started |
+| M3 — plugin deck keyboard entry | Complete | `M` on the app deck's structural key rung opens the same modal for a focused passive leaf; absent with `plugin_content_panes` or `pane_move` off | `td-8564eb`; commit `ef2aa2b1` |
+| M4 — `sidecar layout move` | Complete | Third `layoutapply` mode over `PlanMove`; `--focused`, cell, column and direction forms; `moved`/`unchanged`/declined acks; `pane_move` default on | `td-18eb1d` |
+| M5 — documentation | Complete | Shortcut, UI, drag-pane, AGENTS and CLI references describe the shipped default-on feature | `td-3f5b6e` |
 
 ## The model: extract and reinsert
 
@@ -40,10 +40,10 @@ The layout can therefore gain and lose columns, which is the point: a move is ho
 - **`internal/panereposition` owns shared interaction policy.** Its modal controller, header adapter, structural fingerprint, and host-leaf graft helpers keep direction semantics, stale/refusal handling, and passive/live projection adoption aligned across hosts.
 - **`internal/paneframe` and `internal/ui` own shared chrome.** `RegionSink.Layout` is registered after `Title` and before `Close`; `ReserveHeaderControls` reserves the `⊞` and `×` with layout-first drop order, and `ReserveHeaderClose` remains the compatibility wrapper.
 - **Project Workspaces and global Sessions own thin host adapters.** Both resolve `M` to the focused preview leaf or the selected list row's Primary leaf, open the same modal as `⊞`, preserve focused/live leaf identity, adopt passive deck projections, persist the committed layout, and invoke their existing terminal geometry synchronizers.
-- **Plugin content decks have the M2 header/modal/zoom path.** `internal/app/content_deck.go` exposes `RegionSink.Layout`, app modal routing, mouse targeting, paste absorption, atomic deck adoption, and scoped zoom. `M` entry inside a deck remains M3.
+- **Plugin content decks have the full path.** `internal/app/content_deck.go` exposes `RegionSink.Layout`, app modal routing, mouse targeting, paste absorption, atomic deck adoption, and scoped zoom, and `M` on its structural key rung opens the same modal for a focused passive leaf.
 - **Zoom is transient tree-scoped view state.** A requested zoom and forced-fit zoom share `LayoutTreeWithZoom`; zoom follows a moved leaf, clears on close or tree replacement, and is never encoded in persisted layouts.
-- **`pane_move` is registered and defaults off.** Its availability gates the thirteen Workspace list/pane bindings and header reserve; Configuration → Feature Flags exposes it as **Move panes** through a scrolling registry page.
-- **The agent surface still uses full-layout read-modify-write.** `sidecar layout get --json` plus `sidecar layout apply --spec` can rearrange a layout today. M4 adds the narrower `sidecar layout move` verb over the implemented planner.
+- **`pane_move` is registered and defaults on.** Its availability gates the thirteen Workspace list/pane bindings, the deck's own entry, and the header reserve; Configuration → Feature Flags exposes it through a scrolling registry page. It stays a flag because the header chrome is visible to every user of every surface on the first frame after install, and turning it off must remove the whole feature rather than part of it.
+- **The agent surface has the narrow verb.** `sidecar layout move` is the third mode in `internal/layoutapply`, over the same `PlanMove`. `uirequest` owns the shared move grammar (`LayoutMove`, `ParseLayoutMoveTo`, `ValidateLayoutMove`) so a CLI usage error and a host decline cannot disagree, and `panereposition.ApplyLive` is the one identity-preserving commit both hosts call. `layout get --json` plus `layout apply --spec` remain the whole-layout path.
 - **Remote host identity and input ownership remain authoritative.** Move code does not call remote resize or lease APIs directly; modal entry releases interactive ownership through the existing path, and browse-state moves do not resize the remote tmux server.
 
 ## Settled decisions
@@ -203,24 +203,29 @@ Implemented in `9743b39f`; `td-90aae8` is closed.
 - Independent review is clean. Isolated real-app proof clicked the Shell header `⊞`, clicked the Primary destination in the miniature, observed the stacked draft, committed Shell-over-Primary, and stopped the private driver cleanly.
 - The Phase 1/2 stabilization passed `go test ./...`, `go vet ./...`, `go build ./...`, `make fmt-check`, `make lint`, and `git diff --check`. A fresh private `tmux-drive.sh` run opened the modal from the project list and from the focused non-interactive Primary terminal, then stopped cleanly.
 
-### M3 — Plugin deck keyboard modal entry — remaining
+### M3 — Plugin deck keyboard modal entry — complete
 
-- Route `M` through the app-level key boundary to the existing reposition modal when a passive content-deck leaf is focused; the M2 header modal, zoom, and deck adoption are already present.
-- Keep entry absent when `PluginContentPanes` is off and do not let plugin list/input contexts leak into the modal.
-- **Proof:** a deck test driving `M` through the real app key ladder from a focused content-deck leaf, plus a regression that the entry is absent when `PluginContentPanes` is off.
+- `M` is answered on `handleAppContentKey`'s structural rung, which runs below every surface that types: an inline edit, a finder, a document search and precedence level 2's text-input forward have all claimed the key before it is reached, so no plugin list or input context can leak into the modal. A focused Primary plugin leaf returns the key rather than moving.
+- The deck exists only while `PluginContentPanes` is on, which is what makes the entry absent with that flag off; `pane_move` gates the key and the footer command independently.
+- The deck advertises the same `Move` command the two Workspace surfaces do, and it opens the M2 controller — no second modal, planner, or commit path.
+- **Proof:** `TestAppDeckMoveKeyOpensTheSharedRepositionModal` drives `M`, `h` and `enter` through `Model.Update`, then asserts leaf identity, a changed grid, and deck adoption; regressions cover the focused Primary leaf, a focused deck input surface, and both flags off.
 
-### M4 — `sidecar layout move` — remaining
+### M4 — `sidecar layout move` — complete
 
-- The third mode in `internal/layoutapply` over `PlanMove`, the CLI command with `--focused`, cell and direction forms, `--sessions`/`--shell`/`--project` destinations, `StatusUnchanged`/`ItemVerdictUnchanged` for an accepted no-op, and the ack carrying the landed cell and host-scoped surface.
-- `--help`, examples, and the `AgentDoc` entry, plus a note in `sidecar agents` output.
-- Flip `pane_move` on by default.
-- **Proof:** CLI tests proving the verb resolves to the same `MovePlan` the keys and the modal produce, that an explicit remote Sessions row changes only the viewer-owned layout, and that an ambiguous local name cannot select a remote row; a host test for the decline path; a gendoc refresh.
+- `applyMove` is the third mode in `internal/layoutapply`, reached from the same `Apply` entry both hosts already call. It resolves the source (`--focused` or a pre-move cell), compiles the destination (cell, column, or `panelayout.MoveDirection` for a direction word), plans with `PlanMove`, and commits through the host's `CommitMove`.
+- `Host` grew exactly two methods: `FocusedLeaf` and `CommitMove`. Both hosts implement `CommitMove` over `panereposition.ApplyLive` with deck adoption asked before the live tree is touched, zoom that follows its leaf, persistence, and their existing geometry synchronizer.
+- `StatusMoved`/`ItemVerdictMoved` and `StatusUnchanged`/`ItemVerdictUnchanged` are distinct from `opened`, `retargeted` and `declined`; both are exit 0, and a decline is exit 4 with the reason verbatim.
+- A move is declined while that surface's reposition modal has a draft: the draft is validated against the tree it was opened on, and a structural edit underneath it would invalidate a human's work silently.
+- `--help`, six examples, the `AgentDoc` entry, a `sidecar agents` line about the layout surface, and a regenerated `docs/reference/cli.md`. `pane_move` now defaults on.
+- **The flip surfaced a bug the flag had been hiding.** A pane header drawn with no tree behind it reserved and painted a layout button, in the *hovered* style, because it compared hover against leaf `0` — which every un-hovered header matches. `panereposition.Movable` now answers from the tree and each host binds it once per frame through its own `reserveHeader`/`composeHeader`, so the drawn glyph and its hit box can never be measured differently. A tree with fewer than two leaves offers no control at all: `PlanMove` refuses every destination on a single leaf, so the button could only ever have been a target the user aims at for nothing. The compositor goldens gained the `⊞` and lost three columns of tab strip, which is the shipped appearance.
+- **Proof:** `TestLayoutMoveAndTheModalCompileTheSameMoveFromTheSameTree` runs each direction through the verb and through the modal's own keypress on an identical tree and compares the results, both outer edges included; cell and column forms are held to the planner directly. Host tests on both surfaces cover the moved, unchanged, declined, modal-open and off-screen paths, and the Sessions tests cover an explicit remote row and the local-name fallback that must not bind one.
 
-### M5 — Document — remaining
+### M5 — Document — complete
 
-- `.claude/skills/keyboard-shortcuts/SKILL.md`: the `M` assignment table, why `m` was rejected, list-versus-preview target resolution, and the rule that input and unrelated plugin contexts retain printable keys.
-- `.claude/skills/ui-features/SKILL.md` and `drag-pane/SKILL.md`: the header control reserve and its drop order, and the new region rung.
-- `AGENTS.md` / the layout reference: `layout move` beside `layout get` and `layout apply`.
+- `.claude/skills/keyboard-shortcuts/SKILL.md`: a section on the `M` assignment — the bound and deliberately unbound contexts, list-versus-preview target resolution, why `m` was rejected — plus `M` rows in the project list, preview, and global Workspaces tables.
+- `.claude/skills/ui-features/SKILL.md`: a pane-header-controls section covering `ReserveHeaderControls`, the one-column glyph assumption, the layout-first drop order, and the `Layout` region rung.
+- `.claude/skills/drag-pane/SKILL.md`: the same reserve/register/do-not-duplicate rules stated inside the windowing-parity model, beside the drag handle they share chrome with.
+- `AGENTS.md`: `layout move` beside `layout get` and `layout apply`, with the never-queue rule and the exit codes. `docs/reference/cli.md` is regenerated from the registry.
 
 ## Acceptance evidence
 
@@ -238,8 +243,11 @@ Implemented in `9743b39f`; `td-90aae8` is closed.
 - Integrated verification passed: `go test ./...`, `go vet ./...`, `go build ./...`, `make lint`, `make fmt-check`, `git diff --check`, and `./scripts/test-tmux-drive.sh`.
 - M0, M1, and M2 each passed independent review; their td tasks are closed.
 
-### Remaining
+### Added by M3–M5
 
-- A plugin-deck test must drive `M` modal entry through the real app keyboard ladder and prove the entry is absent when `PluginContentPanes` is off.
-- A CLI test must prove `layout move` and keyboard or modal movement compile the same plan from the same tree, including left/right outer-edge moves and an explicitly host-scoped Sessions row.
-- Final documentation verification must keep shortcut, UI, drag-pane, agent, and layout references aligned with the shipped default-on feature.
+- `internal/app/pane_reposition_test.go` drives `M` through the real app key ladder from a focused content-deck leaf and proves the entry is absent with `plugin_content_panes` off, with `pane_move` off, from the primary plugin leaf, and from a focused deck input surface.
+- `internal/layoutapply/move_test.go` proves the verb and the modal compile the same move from the same tree for all four directions including both outer edges, holds the cell and column forms to the planner directly, and covers identity preservation, the unchanged no-op, and nine decline paths that each leave the layout untouched.
+- `internal/overview/layout_move_test.go` covers the Sessions surface: the moved ack naming the row it changed, `--focused` agreeing with the keyboard's target, an explicit remote row ID moving only this machine's viewer tree with no work scheduled for the other host, the local-name fallback declining rather than binding a remote row, the modal-open decline, and the off-screen decline.
+- `internal/plugins/workspace/layout_move_test.go` covers the same contract on the project surface, including deck adoption and a byte-identical tree after a no-op.
+- `internal/cli/layout_move_test.go` covers thirteen usage errors that never reach the bus, the accepted grammar surviving the wire into the host's own validator, the column-versus-cell reading of a bare number, and the moved / unchanged / declined exit codes and output through a real request-and-ack round trip.
+- `go build ./...`, `go vet ./...`, `go test ./...`, `make fmt-check`, `make lint`, and `git diff --check` all pass with `pane_move` default on.
