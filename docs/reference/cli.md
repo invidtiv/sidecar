@@ -175,13 +175,104 @@ sidecar help --json
 
 ## `sidecar host`
 
-Remote host observation over SSH
+Remote hosts: register them, and observe them over SSH
 
-Observe another machine's Sidecar state. `serve` runs on the remote host;
-`probe` connects to one from here.
+Register and observe other machines running Sidecar.
+
+`list`, `add`, `remove` and `set` edit this Sidecar's host registry — the
+same entries the Remote Hosts page in Configuration shows, written through
+the same validation. `probe` asks one machine what it is answering with;
+`serve` is the half that runs on the remote host.
 
 ```
-Usage: sidecar host <serve|probe> [options]
+Usage: sidecar host <list|add|remove|set|probe|serve> [options]
+```
+
+### `sidecar host add`
+
+Register a remote host
+
+Register another machine running Sidecar, to be observed over SSH.
+
+The target is whatever `ssh <target>` already resolves on this machine —
+its keys, its ProxyJump, its agent. Sidecar adds no second place to
+describe how to reach a host, so anything that works in ssh works here and
+nothing that does not can be fixed from this command.
+
+--id names the host in the UI and scopes its workspace rows; it defaults to
+the target. --binary is for a machine whose login shell does not find
+sidecar on PATH. --config observes a host against a config other than its
+user default. --env is extra environment for the remote process, which is
+how a proof host is pinned to its own tmux server and state tree
+(TMUX_TMPDIR, XDG_STATE_HOME, SIDECAR_ISOLATED_STATE).
+
+--disabled registers a machine without connecting to it, which is what a
+host that is off this week wants: the entry keeps its settings.
+
+```
+Usage: sidecar host add <ssh-target> [--id NAME] [--binary PATH] [--config PATH] [--env KEY=VALUE]... [--disabled] [--json]
+```
+
+**Options:**
+
+- `--id NAME`: Local name for the host (defaults to the target)
+- `--binary PATH`: Explicit sidecar path on the host
+- `--config PATH`: -config path for the remote sidecar
+- `--env KEY=VALUE`: Environment for the remote process (repeatable)
+- `--disabled`: Register the host without connecting to it
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: registered
+- `1`: the configuration could not be read or written
+- `2`: usage error
+- `5`: a value was rejected — an empty target, a name already registered, or a malformed --env
+
+**Examples:**
+
+```bash
+sidecar host add marcusbook
+# Name it, and point at a sidecar the login shell cannot find
+sidecar host add marcusbook --id book --binary /opt/homebrew/bin/sidecar
+# A proof host pinned to its own tmux server and state tree
+sidecar host add proof-host --env TMUX_TMPDIR=/tmp/proof --env SIDECAR_ISOLATED_STATE=1
+```
+
+### `sidecar host list`
+
+List the registered remote hosts
+
+List the machines registered in this Sidecar's configuration, with the
+target each resolves through ssh_config and whether it is switched off.
+
+This reads config.json. It connects to nothing: use `sidecar host probe`
+to ask whether a machine actually answers.
+
+Registered hosts are only observed while the sidecar_remote_hosts feature
+flag is on; the output says so when it is off.
+
+```
+Usage: sidecar host list [--json]
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: the configuration could not be read
+- `2`: usage error
+
+**Examples:**
+
+```bash
+sidecar host list
+sidecar host list --json
 ```
 
 ### `sidecar host probe`
@@ -225,6 +316,40 @@ sidecar host probe marcusbook
 sidecar host probe marcusbook --raw --cycles 3
 ```
 
+### `sidecar host remove`
+
+Unregister a remote host
+
+Drop a machine from this Sidecar's registry, by the name `sidecar host list`
+shows.
+
+Nothing on that machine is touched: the entry described how to watch it, not
+what runs there. To stop connecting while keeping the settings, use
+`sidecar host set <id> --disabled` instead.
+
+```
+Usage: sidecar host remove [--json] <id>
+```
+
+**Options:**
+
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: unregistered
+- `1`: the configuration could not be read or written
+- `2`: usage error
+- `3`: no host is registered under that id
+
+**Examples:**
+
+```bash
+sidecar host remove marcusbook
+sidecar host remove --json book
+```
+
 ### `sidecar host serve`
 
 Stream this machine's Sidecar state as JSONL (spawned over SSH by a remote viewer)
@@ -265,6 +390,53 @@ Usage: sidecar host serve --stdio [--cycles N] [--project NAME=PATH]
 sidecar host serve --stdio
 # One cycle, for inspection
 sidecar host serve --stdio --cycles 1
+```
+
+### `sidecar host set`
+
+Change a registered host's settings
+
+Change one registered machine. Every field left unnamed is left alone.
+
+--env replaces the whole environment list rather than appending to it, so
+the entry after the command is exactly what the flags said; pass a single
+empty --env "" to clear it. --binary and --config likewise clear when given
+an empty value.
+
+--disabled keeps the host registered but unconnected, which is what a
+machine that is off this week wants; --enabled connects to it again.
+
+```
+Usage: sidecar host set <id> [--target T] [--id NEWID] [--binary PATH] [--config PATH] [--env KEY=VALUE]... [--enabled|--disabled] [--json]
+```
+
+**Options:**
+
+- `--target T`: New ssh destination
+- `--id NEWID`: Rename the host
+- `--binary PATH`: Explicit sidecar path on the host
+- `--config PATH`: -config path for the remote sidecar
+- `--env KEY=VALUE`: Replace the remote environment (repeatable)
+- `--enabled`: Connect to this host again
+- `--disabled`: Keep the host registered but unconnected
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: saved
+- `1`: the configuration could not be read or written
+- `2`: usage error
+- `3`: no host is registered under that id
+- `5`: a value was rejected — an empty target, a name already registered, or a malformed --env
+
+**Examples:**
+
+```bash
+sidecar host set book --disabled
+sidecar host set book --target marcusbook.local --enabled
+# Clear the pinned environment
+sidecar host set proof --env ""
 ```
 
 ## `sidecar layout`

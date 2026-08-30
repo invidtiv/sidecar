@@ -35,6 +35,36 @@ type HostState struct {
 	// reports it and hands an available update to the existing updater; it never
 	// checks, downloads, or installs anything itself.
 	Update UpdateStatus
+	// RemoteHosts is each registered machine's condition as the running host
+	// registry knows it. Configuration reports it and never probes: a settings
+	// screen with its own ssh connection would be a second answer to a question
+	// the registry is already answering, and the two would disagree the moment
+	// one was slower than the other.
+	//
+	// Note the name. HostState above is about the Sidecar hosting this surface;
+	// these are the other machines it watches. The two senses of "host" meet
+	// only here, so everything about the remote sense says "remote".
+	RemoteHosts []RemoteHost
+}
+
+// RemoteHost is one registered machine's live condition.
+//
+// It carries the state's own fix line rather than leaving the page to write
+// one, so the row a user reads in Configuration and the row they read in the
+// Sessions browser say the same thing about the same machine.
+type RemoteHost struct {
+	// ID is the name the host is registered under.
+	ID string
+	// State is the health state's name, as hosts.State spells it.
+	State string
+	// Detail is what went wrong, when anything did.
+	Detail string
+	// Fix names what to do about the state, in the imperative. Empty for the
+	// states that need nothing done.
+	Fix string
+	// Connected reports a machine whose rows are current, so a page can say
+	// "watching" without having to know every state name.
+	Connected bool
 }
 
 // UpdateStatus is the app's release check as About needs to state it. It
@@ -65,6 +95,17 @@ type OpenInApp struct {
 func (m *Model) SetHostState(state HostState) {
 	m.host = state
 	m.syncHostState()
+}
+
+// SetRemoteHosts refreshes only the registered machines' health. The app calls
+// it whenever a host's condition changes while Configuration is open.
+//
+// It is deliberately narrower than SetHostState: health changes on the
+// registry's own cadence, several times a minute, and pushing a whole host
+// state that often would re-run syncHostState — which would snap a live theme
+// preview back to the saved theme while a user was still looking at it.
+func (m *Model) SetRemoteHosts(remotes []RemoteHost) {
+	m.host.RemoteHosts = remotes
 }
 
 // RefreshNotificationProbe invalidates any in-flight result and queues a fresh

@@ -177,10 +177,15 @@ var previewCopy = map[string]preview{
 		note:    "Providers are described once at startup; turning this off stops every provider process.",
 	},
 	features.SidecarRemoteHosts.Name: {
-		label:   "Remote hosts",
-		help:    "Watch other machines running Sidecar, over SSH. Read-only.",
-		restart: true,
-		note:    "Hosts are registered under `hosts` in config.json; connections are made when Sidecar starts.",
+		label: "Remote hosts",
+		help:  "Watch other machines running Sidecar, over SSH.",
+		// Not restart-scoped. hosts.FromConfig asks features.IsEnabled every
+		// time the registry is reconciled, and every save reconciles it
+		// (app.applyConfigSaved → overview.SyncHosts), so turning this on
+		// connects to the registered machines without a restart. The row said
+		// otherwise while the registry was hand-written and nothing reconciled
+		// it on a save.
+		note: "Register machines on Remote Hosts, or with `sidecar host add`.",
 	},
 	features.NotesPlugin.Name: {
 		label:        "Notes panel",

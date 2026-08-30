@@ -127,7 +127,29 @@ func (m *Model) configHostState() configui.HostState {
 	if project := m.currentProjectConfig(); project != nil {
 		state.ProjectPath = project.Path
 	}
+	state.RemoteHosts = m.configRemoteHosts()
 	return state
+}
+
+// configRemoteHosts is each registered machine's condition as the running host
+// registry knows it. Configuration reports what the browser already learned
+// over its existing connections; it never opens one of its own.
+func (m *Model) configRemoteHosts() []configui.RemoteHost {
+	if m.overview == nil {
+		return nil
+	}
+	conditions := m.overview.HostConditions()
+	remotes := make([]configui.RemoteHost, 0, len(conditions))
+	for _, condition := range conditions {
+		remotes = append(remotes, configui.RemoteHost{
+			ID:        condition.ID,
+			State:     string(condition.Health.State),
+			Detail:    condition.Health.Detail,
+			Fix:       condition.Health.Fix(),
+			Connected: condition.Health.State.Healthy(),
+		})
+	}
+	return remotes
 }
 
 // configUpdateStatus reports the release check the app already runs from Init.

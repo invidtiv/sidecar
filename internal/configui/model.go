@@ -118,6 +118,7 @@ type Model struct {
 	// dropped when Configuration closes.
 	appearanceState    *appearanceState
 	projectsState      *projectsState
+	remotesState       *remotesState
 	agentsState        *agentsState
 	notificationsState *notificationsState
 	terminalState      *terminalState
@@ -130,6 +131,8 @@ type Model struct {
 	// successful one still enables the panel.
 	installing *enableState
 	addProject *projectForm
+	// remoteForm is an open Add/Edit host draft.
+	remoteForm *remoteForm
 	// confirm is a consequential change awaiting an explicit yes.
 	confirm *confirmState
 
@@ -205,6 +208,7 @@ func (m *Model) Open(page PageID) {
 	m.saved = nil
 	m.appearanceState = nil
 	m.projectsState = nil
+	m.remotesState = nil
 	m.agentsState = nil
 	m.notificationsState = nil
 	m.terminalState = nil
@@ -212,6 +216,7 @@ func (m *Model) Open(page PageID) {
 	m.advancedState = nil
 	m.aboutState = nil
 	m.addProject = nil
+	m.remoteForm = nil
 	// A confirmed install already in flight belongs to the user, not this
 	// Open. Dropping it would swallow the result if Configuration is closed
 	// and reopened while Homebrew or go is still working.
@@ -458,6 +463,10 @@ func controlCommand(key string) (plugin.Command, bool) {
 		return plugin.Command{ID: "init-repo", Name: "Init", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
 	case "d":
 		return plugin.Command{ID: "remove-project", Name: "Remove", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 6}, true
+	case "e":
+		return plugin.Command{ID: "edit-host", Name: "Edit", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 5}, true
+	case "f":
+		return plugin.Command{ID: "enable-remote-hosts", Name: "Turn on", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 7}, true
 	case "g":
 		return plugin.Command{ID: "use-global-theme", Name: "Use global", Category: plugin.CategoryActions, Context: ContextConfig, Priority: 8}, true
 	case "t":
@@ -1177,6 +1186,8 @@ func (m *Model) buildDetail(originX, inner, paneHeight int) ([]string, bool) {
 		m.buildProjects(builder)
 	case route.Page == PageWorkspaces:
 		m.buildWorkspaces(builder)
+	case route.Page == PageRemotes:
+		m.buildRemotes(builder)
 	case route.Page == PageAgents:
 		m.buildAgents(builder)
 	case route.Page == PageNotifications:
@@ -1290,6 +1301,7 @@ func (m *Model) Escape() bool {
 	}
 	if m.Route().IsChild() {
 		m.closeProjectForm()
+		m.closeRemoteForm()
 		return m.Back()
 	}
 	return false

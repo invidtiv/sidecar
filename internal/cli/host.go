@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,13 +91,23 @@ func hostCommand() *Command {
 		Run: runHostProbe,
 	}
 
+	// The registry verbs sort in with serve and probe rather than sitting under
+	// a group of their own: "which machines do I watch" and "what does one of
+	// them say" are the same subject, and a user who found `host probe` should
+	// find `host add` in the same help.
+	sub := append([]*Command{probeCmd, serveCmd}, hostRegistryCommands()...)
+	sort.Slice(sub, func(a, b int) bool { return sub[a].Name < sub[b].Name })
+
 	return &Command{
 		Name:    "host",
-		Summary: "Remote host observation over SSH",
-		Usage:   "sidecar host <serve|probe> [options]",
-		Long: "Observe another machine's Sidecar state. `serve` runs on the remote host;\n" +
-			"`probe` connects to one from here.",
-		Sub: []*Command{probeCmd, serveCmd},
+		Summary: "Remote hosts: register them, and observe them over SSH",
+		Usage:   "sidecar host <list|add|remove|set|probe|serve> [options]",
+		Long: "Register and observe other machines running Sidecar.\n\n" +
+			"`list`, `add`, `remove` and `set` edit this Sidecar's host registry — the\n" +
+			"same entries the Remote Hosts page in Configuration shows, written through\n" +
+			"the same validation. `probe` asks one machine what it is answering with;\n" +
+			"`serve` is the half that runs on the remote host.",
+		Sub: sub,
 		// A group needs its own Run. Dispatch only looks at a top-level
 		// command's Run and Launch, so a group without one is "handled" and
 		// exits 0 having done nothing — which reads, over an ssh pipe, as a
