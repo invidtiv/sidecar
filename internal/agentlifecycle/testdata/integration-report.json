@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "provider": "opencode",
+  "source": "sidecar.opencode.plugin",
+  "status": "outdated",
+  "bundledVersion": "2",
+  "installedVersion": "1",
+  "providerVersion": "1.18.23",
+  "providerInTestedRange": true,
+  "effectiveTier": "advisory",
+  "tierReason": "capability_unproved",
+  "targetPaths": [
+    "~/.config/opencode/plugin/sidecar-lifecycle.js"
+  ],
+  "knownGaps": [
+    "cancellation is untraced"
+  ],
+  "message": "run `sidecar agent integration update opencode` to install asset version 2"
+}

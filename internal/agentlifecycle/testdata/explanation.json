@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "state": "blocked",
+  "authority": "lifecycle",
+  "tier": "full",
+  "freshness": "fresh",
+  "provider": "opencode",
+  "source": "sidecar.opencode.plugin",
+  "sourceVersion": "1",
+  "integrationStatus": "current",
+  "screenState": "working",
+  "screenEvidence": "opencode.screen.progress-working",
+  "reportState": "blocked",
+  "reportKind": "state",
+  "reportReason": "permission_request",
+  "reportSequence": 42,
+  "reportAt": "2026-08-30T17:00:00Z",
+  "reportAge": "2s",
+  "freshnessWindow": "8h0m0s",
+  "identity": {
+    "host": "local",
+    "serverIncarnation": "present inode=10 ctime=20 pid=30",
+    "paneId": "%7",
+    "provider": "opencode",
+    "runId": "run-7f3a",
+    "processGeneration": "pid=4242 start=1000",
+    "sessionFingerprint": "sf-9c1d4e2b"
+  },
+  "processAlive": true
+}

@@ -1,0 +1,7 @@
+{
+  "state": "idle",
+  "evidence": "claude.known-live-fallback",
+  "changedAt": "2026-08-30T17:00:00Z",
+  "seen": true,
+  "idleInferred": true
+}
