@@ -1,12 +1,12 @@
 # Herdr gap closure: agent control and cold session restoration
 
-**Status:** active; M0 and M1 implemented on 2026-08-30, M2 onward planned. **Research baseline:** Sidecar `main` at `13ddaaa6` (2026-08-29); Herdr v0.8.2 at commit `9eb52145`. Herdr is the feature benchmark this plan measures against — the bar is parity, and where Sidecar's runtime allows it, better. It is not a runtime Sidecar depends on: the Herdr remote-hosts plan is deprecated, and Sidecar is its own remote host runtime.
+**Status:** active; M0–M2 implemented on 2026-08-30, M3 onward planned. **Research baseline:** Sidecar `main` at `13ddaaa6` (2026-08-29); Herdr v0.8.2 at commit `9eb52145`. Herdr is the feature benchmark this plan measures against — the bar is parity, and where Sidecar's runtime allows it, better. It is not a runtime Sidecar depends on: the Herdr remote-hosts plan is deprecated, and Sidecar is its own remote host runtime.
 
 One sentence: **an agent working inside Sidecar should be able to start and coordinate another managed agent through provider-aware commands, and a machine restart should reconstruct Sidecar's durable workspace shape and optionally resume the exact agent conversations that were running, without replacing tmux or pretending tmux can live-handoff its PTYs.**
 
 Related plans:
 
-- [Pane repositioning](pane-repositioning.md) owns interactive and agent-driven pane movement. This plan composes with its `layout get` / `layout apply` / `layout move` surface and adds no second layout grammar.
+- [Pane repositioning](../implemented/pane-repositioning.md) (implemented) owns interactive and agent-driven pane movement. This plan composes with its `layout get` / `layout apply` / `layout move` surface and adds no second layout grammar.
 - [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) owns host registration, SSH transport, remote inventory, remote terminal control, and — as of its completed Phase C — remote mutation, shipped as one-shot `ssh <target> sidecar <verb> --json` invocations over the existing ControlMaster. Because this plan's commands are headless, target-taking CLI verbs, that seam carries them remotely without new protocol work; see [Interaction with remote hosts](#interaction-with-remote-hosts).
 - [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal. A plugin may eventually call the same agent-control core, but plugin hosting is not part of this plan.
 - [Deterministic agent lifecycle hooks](notification-agent-lifecycle-hooks.md) owns lifecycle reporting, authority arbitration, provider integration installation/status, and screen fallback. This plan owns the session-identity and resume semantics that use the same reporting envelope without claiming lifecycle authority.
@@ -87,7 +87,7 @@ Replacing the Sidecar executable does not touch the default tmux server and does
 | Create an ordinary managed terminal | Workspace/tab/pane create and split | `sidecar create shell`, including `--split`, `--tab`, `--run`, `--type` | Covered |
 | Create a worktree and agent shell | `herdr worktree` plus pane/agent commands | `sidecar create worktree --agent`, using Sidecar's setup/journal pipeline | Covered, but readiness becomes this plan's shared start core |
 | Read and replace pane topology | Workspace/tab/pane commands | `sidecar layout get` / `layout apply` | Covered |
-| Move an existing pane | `pane move` | Read-modify-write works; direct move is planned | Other plan: [pane repositioning](pane-repositioning.md) |
+| Move an existing pane | `pane move` | `sidecar layout move` shipped | Other plan: [pane repositioning](../implemented/pane-repositioning.md), implemented |
 | Start a known agent in an existing idle terminal | `agent start`, provider allowlist, readiness wait | `shell send --target --run` starts one headlessly (and remotely) but proves no provider identity or readiness | Gap narrowed to the readiness contract; `agent start` supersedes the raw send for agents |
 | Address an agent independently of UI focus | Unique live name or pane ID | Phase C's `shell rename --target` / `shell send --target` resolve durable managed targets headlessly (`internal/cli/shell_target.go`) | Partial; agent commands reuse that resolver rather than inventing a second alias namespace |
 | Query one agent's provider, lifecycle, freshness, and evidence | `agent get` / `list` | `agentactivity`, `agentstatus`, and `workspaceinventory` compute this for TUI rows | Gap only at the application/CLI boundary |
