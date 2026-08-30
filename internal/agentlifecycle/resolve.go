@@ -264,6 +264,15 @@ func Resolve(in Input) Decision {
 		return fallback(ReasonNoReport)
 	}
 
+	// A state report must carry a lane this package recognises. The store
+	// validates before persisting, but the resolver does not get to assume that
+	// held: it is fed by a file other processes write, and authoring an empty or
+	// unknown lane would push a meaningless state onto every surface. Distrust
+	// here is cheap and the failure mode it prevents is not.
+	if !isReportState(r.State) {
+		return fallback(ReasonInvalidReports)
+	}
+
 	window := policy.For(r.State)
 	age := in.Now.Sub(r.ObservedAt)
 	exp.FreshnessWindow = window.String()
@@ -316,6 +325,16 @@ func lifecycleResult(provider string, r Report) agentactivity.Result {
 		VisibleWorking: r.State == agentactivity.StateWorking,
 		VisibleBlocker: r.State == agentactivity.StateBlocked,
 	}
+}
+
+// isReportState reports whether a lane is one a report is allowed to assert.
+func isReportState(s agentactivity.State) bool {
+	for _, v := range ReportStates() {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 // identityMismatch compares the live identity with a report's, returning the

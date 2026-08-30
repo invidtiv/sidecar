@@ -529,6 +529,28 @@ func TestArbitrationTable(t *testing.T) {
 			wantReason:    ReasonIntegrationNeedsRepair,
 		},
 		{
+			name: "a state report carrying no lane cannot author one",
+			in: mutate(func(in *Input) {
+				in.Latest = withReport(in.Latest, func(r *Report) { r.State = "" })
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierFull,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonInvalidReports,
+		},
+		{
+			name: "a state report carrying the unknown lane cannot author one",
+			in: mutate(func(in *Input) {
+				in.Latest = withReport(in.Latest, func(r *Report) { r.State = agentactivity.StateUnknown })
+			}),
+			wantState:     agentactivity.StateWorking,
+			wantAuthority: AuthorityScreen,
+			wantTier:      TierFull,
+			wantFreshness: FreshnessNone,
+			wantReason:    ReasonInvalidReports,
+		},
+		{
 			name:          "an unreadable store disables authority rather than guessing",
 			in:            mutate(func(in *Input) { in.StoreUnavailable = true }),
 			wantState:     agentactivity.StateWorking,
