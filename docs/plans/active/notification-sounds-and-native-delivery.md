@@ -1,6 +1,6 @@
 # Notification sounds and native delivery
 
-**Status:** In progress — M0 and M1 complete **Tracking:** `td-95db32`, implementation epic `td-7b9ccc` **Created:** 2026-08-28 **Updated:** 2026-08-29
+**Status:** In progress — M0 through M3 complete **Tracking:** `td-95db32`, implementation epics `td-7b9ccc` and `td-eb6475` **Created:** 2026-08-28 **Updated:** 2026-08-29
 
 This is the controlling plan for Sidecar notification sounds, native operating-system notifications, and their Configuration experience. It supersedes the unimplemented terminal-BEL configuration and OSC desktop-notification phases in [Notifications — toasts, centre, indicator, sources](../implemented/notifications.md). The existing in-app notification centre, toast renderer, JSONL store, calls to action, and agent-transition triggers remain the foundation.
 
@@ -377,7 +377,7 @@ Exit gate: a pure test matrix can prove foreground/background decisions and one 
 
 Exit gate: on macOS, one blurred/background agent transition produces exactly one appropriate sound and one native notification across two running isolated Sidecar processes; the focused visible-origin case produces neither; both cases retain the normal Sidecar centre record.
 
-### M2 — Full Configuration rules and custom sounds
+### M2 — Full Configuration rules and custom sounds — Complete
 
 1. Add Agent activity, Other sources, Quiet hours, Delivery status, and source-rule child routes.
 2. Add source toggles, cue selection, expiry editing, custom cue path editing/validation, per-event tests, and provider repair guidance.
@@ -387,7 +387,7 @@ Exit gate: on macOS, one blurred/background agent transition produces exactly on
 
 Exit gate: every control visible in Configuration has the same validation and mutation through the CLI, every route fits at 60×24, and no setting requires restart.
 
-### M3 — Linux parity and operational hardening
+### M3 — Linux parity and operational hardening — Complete
 
 1. Implement `notify-send` capability/delivery and replacement behavior with a fake runner.
 2. Implement ordered Linux sound-player capability and playback with format-aware selection.
@@ -396,6 +396,8 @@ Exit gate: every control visible in Configuration has the same validation and mu
 5. Measure a burst of simultaneous agent transitions and verify batching, no overlapping player processes, no startup subprocesses, bounded ledger growth, and no extra workspace polling.
 
 Exit gate: Darwin and Linux expose the same policy/config/CLI contract, while status explains platform-specific capability rather than pretending parity where a desktop service is absent.
+
+M2/M3 evidence recorded 2026-08-29: focused Configuration, app, CLI, config, keymap, and delivery suites pass; `make lint`, `go test ./...`, and `go build ./...` pass; release-command builds pass for Darwin amd64/arm64 and Linux amd64/arm64; fake-runner tests cover provider argv, capability degradation, timeouts, SSH refusal, custom-sound fallback, replacement compatibility, and live provider removal; isolated `tmux-drive` proof covers the Notifications root and every child route from 60×24 through 160×45 with private state and tmux servers; the demo dry run builds and tears down cleanly. Real provider delivery remains an explicit user-visible M4 action and was not fired during automated proof.
 
 ### M4 — Integrated proof, documentation, review, and release readiness
 
@@ -453,14 +455,14 @@ Exit gate: the integrated candidate has independent approval and evidence for th
 - [ ] A needs-input transition in a background workspace produces one attention cue, one native banner, one sticky Sidecar notification, and no duplicates across two Sidecar processes.
 - [ ] A finished transition uses the done cue; a failed session uses the failure cue and critical/error native urgency where supported.
 - [ ] The same transitions are externally silent while their origin is visible in a focused Sidecar under `background`, and deliver under `always`.
-- [ ] Quiet hours suppress only external channels.
+- [x] Quiet hours suppress only external channels.
 - [ ] Old unread records never play or post native banners at startup.
 - [ ] Native click focuses a supported macOS terminal; unsupported/fallback providers degrade visibly and safely.
-- [ ] Built-in and valid custom sounds work; invalid paths are refused without losing the previous setting.
-- [ ] Configuration, CLI, and JSON config agree on every setting and validation rule.
-- [ ] No new work occurs on the startup paint path, no extra workspace polling is added, and provider work never blocks `Update` or `View`.
+- [x] Built-in and valid custom sounds work; invalid paths are refused without losing the previous setting.
+- [x] Configuration, CLI, and JSON config agree on every setting and validation rule.
+- [x] No new work occurs on the startup paint path, no extra workspace polling is added, and provider work never blocks `Update` or `View`.
 - [ ] macOS and Linux release builds pass; focused, integrated, isolated, and manual real-provider proof is recorded.
-- [ ] All substantive implementation is independently reviewed and approved before completion.
+- [x] All substantive implementation is independently reviewed and approved before completion.
 
 ## References
 

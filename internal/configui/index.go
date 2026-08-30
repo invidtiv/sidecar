@@ -63,10 +63,12 @@ var settingsIndex = []IndexEntry{
 	{Page: PageAgents, Label: "Default launch command", Keywords: []string{"agentstart", "command", "default", "reset", "agent"}},
 
 	// Notifications
-	{Page: PageNotifications, Label: "System notifications", Keywords: []string{"native", "desktop", "system notification", "terminal-notifier", "osascript"}},
-	{Page: PageNotifications, Label: "Sounds", Keywords: []string{"sound", "audio", "afplay", "waiting", "finished", "failure"}},
+	{Page: PageNotifications, Label: "System notifications", Keywords: []string{"native", "desktop", "system notification", "terminal-notifier", "osascript", "notify-send"}},
+	{Page: PageNotifications, Label: "Sounds", Keywords: []string{"sound", "audio", "afplay", "paplay", "pw-play", "aplay", "ffplay", "mpv", "waiting", "finished", "failure"}},
 	{Page: PageNotifications, Label: "Quiet hours", Keywords: []string{"quiet hours", "mute", "schedule"}},
 	{Page: PageNotifications, Label: "Agent activity rules", Keywords: []string{"waiting", "finished", "session ended", "source", "rules"}},
+	{Page: PageNotifications, Label: "Other source rules", Keywords: []string{"agent posts", "td", "tasks", "system", "toast", "expiry"}},
+	{Page: PageNotifications, Label: "Custom sound choices", Keywords: []string{"attention path", "done path", "failure path", "wav", "mp3", "custom sound"}},
 	{Page: PageNotifications, Label: "Delivery status and test", Keywords: []string{"provider", "status", "test", "native", "sound"}},
 
 	// Terminal

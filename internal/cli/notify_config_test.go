@@ -84,6 +84,102 @@ func TestNotifyConfigSetRefusesInvalidModeWithoutChangingFile(t *testing.T) {
 	}
 }
 
+func TestNotifyConfigSetQuietHoursAndCustomPathsPreservePriorConfig(t *testing.T) {
+	env, out, errOut, path := notificationConfigEnv(t)
+	soundPath := filepath.Join(filepath.Dir(path), "attention.wav")
+	if err := os.WriteFile(soundPath, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code := runNotifyConfigSet(env, []string{"--quiet-hours", "10:00-10:00", "--attention-path", "attention.wav", "--json"}); code != 0 {
+		t.Fatalf("set=%d stderr=%q output=%q", code, errOut.String(), out.String())
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Notifications.QuietHours.Enabled || loaded.Notifications.QuietHours.Start != "10:00" || loaded.Notifications.QuietHours.End != "10:00" {
+		t.Fatalf("quiet hours=%+v", loaded.Notifications.QuietHours)
+	}
+	if loaded.Notifications.Sound.AttentionPath != "attention.wav" {
+		t.Fatalf("attention path=%q", loaded.Notifications.Sound.AttentionPath)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := runNotifyConfig(env, nil); code != 0 || !strings.Contains(out.String(), "Quiet hours: 10:00-10:00 (all day)") {
+		t.Fatalf("all-day quiet hours were ambiguous: exit=%d output=%q stderr=%q", code, out.String(), errOut.String())
+	}
+	for _, want := range []string{"Sound choices:", "Attention: attention.wav", "Done: built-in", "Failure: built-in", "Source rules:", "waiting: toast on, native on, sound attention, expiry sticky", "future-source:"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("human config omitted %q:\n%s", want, out.String())
+		}
+	}
+	before, _ := os.ReadFile(path)
+	out.Reset()
+	errOut.Reset()
+	if code := runNotifyConfigSet(env, []string{"--done-path", "missing.wav"}); code != 2 {
+		t.Fatalf("invalid path exit=%d stderr=%q", code, errOut.String())
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatalf("invalid path changed prior config:\nbefore=%s\nafter=%s", before, after)
+	}
+	if !bytes.Contains(after, []byte(`"futureRoot"`)) || !bytes.Contains(after, []byte(`"future-source"`)) {
+		t.Fatalf("targeted save lost unknown config: %s", after)
+	}
+	if code := runNotifyConfigSet(env, []string{"--quiet-hours", "off", "--attention-path="}); code != 0 {
+		t.Fatalf("reset=%d stderr=%q", code, errOut.String())
+	}
+	loaded, _ = config.Load()
+	if loaded.Notifications.QuietHours.Enabled || loaded.Notifications.Sound.AttentionPath != "" {
+		t.Fatalf("reset result=%+v", loaded.Notifications)
+	}
+}
+
+func TestNotifySourceSetUsesSharedValidationAndAppliesLive(t *testing.T) {
+	env, out, errOut, path := notificationConfigEnv(t)
+	if code := runNotifySourceSet(env, []string{"waiting", "--toast", "off", "--native=on", "--sound", "failure", "--expiry", "sticky", "--json"}); code != 0 {
+		t.Fatalf("source set=%d stderr=%q output=%q", code, errOut.String(), out.String())
+	}
+	var result struct {
+		Source string                 `json:"source"`
+		Rule   notificationSourceView `json:"rule"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json=%v output=%q", err, out.String())
+	}
+	if result.Source != "waiting" || result.Rule.Toast || !result.Rule.Native || result.Rule.Sound != config.SoundFailure || result.Rule.Expiry != "sticky" {
+		t.Fatalf("result=%+v", result)
+	}
+	rule := notify.CurrentConfig().SourceRule(notify.SourceWaiting)
+	if rule.Toast || !rule.Native || rule.Sound != config.SoundFailure || rule.Expiry != 0 {
+		t.Fatalf("live rule=%+v", rule)
+	}
+	raw, _ := os.ReadFile(path)
+	if !bytes.Contains(raw, []byte(`"futureRoot"`)) || !bytes.Contains(raw, []byte(`"future-source"`)) {
+		t.Fatalf("source save lost unknown config: %s", raw)
+	}
+}
+
+func TestNotifySourceSetRefusesInvalidValuesWithoutWriting(t *testing.T) {
+	env, _, errOut, path := notificationConfigEnv(t)
+	for _, args := range [][]string{
+		{"unknown", "--native", "on"},
+		{"td", "--toast", "yes"},
+		{"tasks", "--sound", "loud"},
+		{"system", "--expiry", "tomorrow"},
+	} {
+		before, _ := os.ReadFile(path)
+		errOut.Reset()
+		if code := runNotifySourceSet(env, args); code != 2 {
+			t.Fatalf("args=%v exit=%d stderr=%q", args, code, errOut.String())
+		}
+		after, _ := os.ReadFile(path)
+		if !bytes.Equal(before, after) {
+			t.Fatalf("args=%v changed config", args)
+		}
+	}
+}
+
 func TestNotifyConfigNormalizesMalformedPersistedModeInHumanAndJSONWithoutMutation(t *testing.T) {
 	env, out, errOut, path := notificationConfigEnv(t)
 	raw := []byte(`{"notifications":{"native":{"mode":"sometimes","provider":"auto"},"sound":{"mode":"off"}}}`)
@@ -144,6 +240,19 @@ func TestNotifyStatusHumanAndJSONAreReadOnly(t *testing.T) {
 	}
 }
 
+func TestNotifyStatusHumanPreservesWarningOnAvailableFallback(t *testing.T) {
+	env, out, errOut, _ := notificationConfigEnv(t)
+	env.NotificationDelivery = &fakeCLIDelivery{status: notifydelivery.Status{
+		Sound: notifydelivery.Capability{Available: true, Provider: "afplay", Reason: "custom file unsupported; built-in fallback ready"},
+	}}
+	if code := runNotifyStatus(env, nil); code != 0 {
+		t.Fatalf("status=%d stderr=%q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "Sound: ready (afplay); warning: custom file unsupported; built-in fallback ready") {
+		t.Fatalf("available warning was hidden: %q", out.String())
+	}
+}
+
 func TestNotifyTestUsesSharedExplicitBoundaryAndCreatesNoRecord(t *testing.T) {
 	env, out, errOut, _ := notificationConfigEnv(t)
 	delivery := &fakeCLIDelivery{result: notifydelivery.Result{
@@ -171,6 +280,24 @@ func TestNotifyTestUsesSharedExplicitBoundaryAndCreatesNoRecord(t *testing.T) {
 		if !bytes.Contains(out.Bytes(), []byte(field)) {
 			t.Fatalf("structured test result missing %s: %s", field, out.String())
 		}
+	}
+}
+
+func TestNotifyTestCanExerciseSelectedSourceRule(t *testing.T) {
+	env, out, errOut, _ := notificationConfigEnv(t)
+	delivery := &fakeCLIDelivery{result: notifydelivery.Result{Native: notifydelivery.ChannelResult{Reason: notify.ReasonSourceOff}}}
+	env.NotificationDelivery = delivery
+	if code := runNotifyTest(env, []string{"--channel", "native", "--source", "td", "--json"}); code != 3 {
+		t.Fatalf("test=%d stderr=%q output=%q", code, errOut.String(), out.String())
+	}
+	if len(delivery.requests) != 1 || delivery.requests[0].Notification.Source != notify.SourceTD {
+		t.Fatalf("requests=%+v", delivery.requests)
+	}
+	if !bytes.Contains(out.Bytes(), []byte(`"source":"td"`)) {
+		t.Fatalf("json omitted selected source: %s", out.String())
+	}
+	if code := runNotifyTest(env, []string{"--channel", "native", "--source", "unknown"}); code != 2 {
+		t.Fatalf("invalid source exit=%d", code)
 	}
 }
 
@@ -271,7 +398,7 @@ func TestNotifyTestHumanResultPreservesDeliveryWithCoordinationFailure(t *testin
 
 func TestNotificationDeliveryCommandsAreDiscoverable(t *testing.T) {
 	agents := RenderAgents(RootCommand())
-	for _, want := range []string{"sidecar notify config --json", "sidecar notify config set", "sidecar notify status --json", "sidecar notify test --channel"} {
+	for _, want := range []string{"sidecar notify config --json", "sidecar notify config set", "sidecar notify source set", "sidecar notify status --json", "sidecar notify test --channel"} {
 		if !strings.Contains(agents, want) {
 			t.Fatalf("sidecar agents missing %q:\n%s", want, agents)
 		}
@@ -283,5 +410,16 @@ func TestNotificationDeliveryCommandsAreDiscoverable(t *testing.T) {
 	setHelp := RenderHelp(RootCommand().FindSubcommand("notify").FindSubcommand("config").FindSubcommand("set"))
 	if !strings.Contains(setHelp, "--native MODE") || !strings.Contains(setHelp, "--sound MODE") {
 		t.Fatalf("notify config set help is incomplete:\n%s", setHelp)
+	}
+	for _, want := range []string{"--quiet-hours RANGE", "--attention-path PATH", "--done-path PATH", "--failure-path PATH"} {
+		if !strings.Contains(setHelp, want) {
+			t.Fatalf("notify config set help missing %q:\n%s", want, setHelp)
+		}
+	}
+	sourceHelp := RenderHelp(RootCommand().FindSubcommand("notify").FindSubcommand("source").FindSubcommand("set"))
+	for _, want := range []string{"--toast on|off", "--native on|off", "--sound CUE", "--expiry DURATION"} {
+		if !strings.Contains(sourceHelp, want) {
+			t.Fatalf("notify source set help missing %q:\n%s", want, sourceHelp)
+		}
 	}
 }

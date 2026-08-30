@@ -68,6 +68,37 @@ func TestNotificationTestFlashPreservesDeliveryWithCoordinationFailure(t *testin
 	}
 }
 
+func TestConfigurationOtherSourceTestsKeepSelectedSourcePolicy(t *testing.T) {
+	delivery := &fakeDeliveryCoordinator{}
+	m, _ := scopeBaselineModel(t, "git")
+	m.notificationDelivery = delivery
+	for _, source := range []notify.SourceID{notify.SourceTD, notify.SourceTasks, notify.SourceSystem} {
+		cmd, handled := m.configSurfaceMsg(configui.TestNotificationDeliveryMsg{Event: notifydelivery.TestWaiting, Source: source})
+		if !handled || cmd == nil {
+			t.Fatalf("source=%q test was not scheduled", source)
+		}
+		_ = cmd()
+		request := delivery.requests[len(delivery.requests)-1]
+		if request.Notification.Source != source {
+			t.Fatalf("source=%q request used %q", source, request.Notification.Source)
+		}
+		cfg := config.DefaultNotificationsConfig()
+		cfg.Native.Mode, cfg.Sound.Mode = config.DeliveryAlways, config.DeliveryAlways
+		cfg.Sources = map[string]config.NotificationSourceConfig{
+			string(source): {Native: boolPointerApp(false), Sound: config.SoundNone},
+		}
+		decision := notify.ResolveDelivery(request.Notification, notify.ResolveConfig(cfg), notify.RuntimeContext{
+			Now: request.Notification.CreatedAt, ExplicitTest: true,
+			Capabilities: notify.CapabilitySet{Native: true, Sound: true},
+		})
+		if decision.Native.Reason != notify.ReasonSourceOff || decision.Sound.Reason != notify.ReasonSourceOff {
+			t.Fatalf("source=%q policy ignored selected rule: %+v", source, decision)
+		}
+	}
+}
+
+func boolPointerApp(value bool) *bool { return &value }
+
 func TestConfigReloadRequestAppliesCLIChangeLive(t *testing.T) {
 	dir := t.TempDir()
 	config.SetTestConfigPath(filepath.Join(dir, "config.json"))
@@ -96,5 +127,43 @@ func TestConfigReloadRequestAppliesCLIChangeLive(t *testing.T) {
 	resolved := notify.CurrentConfig()
 	if resolved.NativeMode != config.DeliveryAlways || resolved.SoundMode != config.DeliveryBackground {
 		t.Fatalf("delivery policy did not apply live: native=%q sound=%q", resolved.NativeMode, resolved.SoundMode)
+	}
+}
+
+func TestConfigSaveQueuesFreshNotificationCapabilitySummary(t *testing.T) {
+	dir := t.TempDir()
+	config.SetTestConfigPath(filepath.Join(dir, "config.json"))
+	config.SetTestStateDir(filepath.Join(dir, "state"))
+	t.Cleanup(config.ResetTestConfigPath)
+	t.Cleanup(config.ResetTestStateDir)
+	cfg := config.Default()
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := scopeBaselineModel(t, "git")
+	m.config.Open(configui.PageNotifications)
+	m.config.SetHostState(m.configHostState())
+	_ = m.config.TakePending() // Leave the initial provider and validation probes in flight.
+
+	if err := config.SaveNotifications(func(n *config.NotificationsConfig) {
+		n.Sound.Mode = config.DeliveryAlways
+	}); err != nil {
+		t.Fatal(err)
+	}
+	msgs := collectMsgs(m.applyConfigSaved(configui.ConfigSavedMsg{Notice: "Sounds: Always"}))
+	var providerProbe, configValidation bool
+	for _, msg := range msgs {
+		switch msg.(type) {
+		case configui.ProbeNotificationDeliveryMsg:
+			providerProbe = true
+		case configui.NotificationConfigValidationMsg:
+			configValidation = true
+		}
+	}
+	if !providerProbe || !configValidation {
+		t.Fatalf("save did not refresh live capability summary: provider=%v config=%v messages=%#v", providerProbe, configValidation, msgs)
+	}
+	if notify.CurrentConfig().SoundMode != config.DeliveryAlways {
+		t.Fatalf("saved sound mode did not apply live: %q", notify.CurrentConfig().SoundMode)
 	}
 }

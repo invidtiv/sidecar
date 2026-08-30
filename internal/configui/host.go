@@ -3,6 +3,7 @@ package configui
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/theme"
 )
@@ -66,6 +67,19 @@ func (m *Model) SetHostState(state HostState) {
 	m.syncHostState()
 }
 
+// RefreshNotificationProbe invalidates any in-flight result and queues a fresh
+// capability and config check against the current host state. The app calls it
+// after a successful save, including while an earlier probe is still running.
+func (m *Model) RefreshNotificationProbe() {
+	if m.Page() != PageNotifications {
+		return
+	}
+	state := m.notifications()
+	state.checking = false
+	state.configChecking = false
+	m.queueNotificationProbe()
+}
+
 // Config is the running configuration, never nil.
 func (m *Model) Config() *config.Config {
 	if m.host.Config == nil {
@@ -109,19 +123,33 @@ type ConfigSavedMsg struct {
 
 // ProbeNotificationDeliveryMsg asks the app host to run the lazy provider
 // probes. It is emitted only after the Notifications page is entered.
-type ProbeNotificationDeliveryMsg struct{}
+type ProbeNotificationDeliveryMsg struct{ Generation uint64 }
 
 // TestNotificationDeliveryMsg asks the host to exercise enabled channels
 // through its shared delivery service. It never creates a centre record.
 type TestNotificationDeliveryMsg struct {
-	Event notifydelivery.TestEvent
+	Event  notifydelivery.TestEvent
+	Source notify.SourceID
 }
 
 // NotificationDeliveryStatusMsg carries a completed read-only probe back to
 // the Configuration surface.
-type NotificationDeliveryStatusMsg struct{ Status notifydelivery.Status }
+type NotificationDeliveryStatusMsg struct {
+	Generation uint64
+	Status     notifydelivery.Status
+}
 
 func (NotificationDeliveryStatusMsg) configMsg() {}
+
+// NotificationConfigValidationMsg reports the asynchronous custom-path and
+// notification-config validation requested by Delivery status. Validation may
+// touch the filesystem, so it never runs from View.
+type NotificationConfigValidationMsg struct {
+	Generation uint64
+	Err        string
+}
+
+func (NotificationConfigValidationMsg) configMsg() {}
 
 // NotificationTestResultMsg carries one explicit test result back to the page.
 type NotificationTestResultMsg struct{ Result notifydelivery.Result }
@@ -157,7 +185,16 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 		return m.tickInstallSpinner()
 	case NotificationDeliveryStatusMsg:
 		state := m.notifications()
+		if msg.Generation != 0 && msg.Generation != state.probeGeneration {
+			break
+		}
 		state.checking, state.checked, state.status = false, true, msg.Status
+	case NotificationConfigValidationMsg:
+		state := m.notifications()
+		if msg.Generation != 0 && msg.Generation != state.probeGeneration {
+			break
+		}
+		state.configChecking, state.configChecked, state.configError = false, true, msg.Err
 	case NotificationTestResultMsg:
 		state := m.notifications()
 		state.testing, state.tested, state.result = false, true, msg.Result

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const providerTimeout = 10 * time.Second
+
 type Runner interface {
 	LookPath(string) (string, error)
 	Run(context.Context, string, ...string) error

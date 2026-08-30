@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -358,21 +359,29 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return m.applyConfigSaved(msg), true
 
 	case configui.ProbeNotificationDeliveryMsg:
+		generation := msg.Generation
 		delivery, ok := m.notificationDelivery.(notifydelivery.StatusProvider)
 		if !ok {
 			return func() tea.Msg {
-				return configui.NotificationDeliveryStatusMsg{Status: notifydelivery.Status{
+				return configui.NotificationDeliveryStatusMsg{Generation: generation, Status: notifydelivery.Status{
 					Native: notifydelivery.Capability{Reason: "provider status unavailable"},
 					Sound:  notifydelivery.Capability{Reason: "provider status unavailable"},
 				}}
 			}, true
 		}
 		return func() tea.Msg {
-			return configui.NotificationDeliveryStatusMsg{Status: delivery.Status(context.Background())}
+			return configui.NotificationDeliveryStatusMsg{Generation: generation, Status: delivery.Status(context.Background())}
 		}, true
 
 	case configui.TestNotificationDeliveryMsg:
 		request, err := notifydelivery.ExplicitTestRequest(msg.Event)
+		if err == nil && msg.Source != "" {
+			if !notify.ValidSource(msg.Source) {
+				err = fmt.Errorf("unknown notification source %q", msg.Source)
+			} else {
+				request.Notification.Source = msg.Source
+			}
+		}
 		if err != nil || m.notificationDelivery == nil {
 			return func() tea.Msg {
 				result := notifydelivery.Result{
@@ -442,6 +451,7 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 	}
 	var themeCmd tea.Cmd
 	var hostCmd tea.Cmd
+	var configPending tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
 		features.SetConfig(cfg)
@@ -469,8 +479,10 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 	if m.config != nil {
 		m.config.SetHostState(m.configHostState())
 		m.config.SetCheckInput(m.configCheckInput())
+		m.config.RefreshNotificationProbe()
+		configPending = m.config.TakePending()
 	}
-	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd, hostCmd, m.syncOverviewProjects()}
+	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd, hostCmd, configPending, m.syncOverviewProjects()}
 	if msg.Notice != "" {
 		cmds = append(cmds, toast(msg.Notice))
 	}

@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -20,6 +21,10 @@ const (
 	ChannelNative = "native"
 	ChannelSound  = "sound"
 	DefaultLease  = 30 * time.Second
+	// RemoteUnavailableReason is stable status text for the deliberately local
+	// delivery boundary. Sidecar never substitutes delivery on an SSH host for
+	// delivery by a future local client.
+	RemoteUnavailableReason = "remote SSH session; external delivery requires a local Sidecar process"
 )
 
 var ErrUnsupported = errors.New("notifydelivery: operation unsupported")
@@ -61,6 +66,7 @@ type Message struct {
 	Title              string
 	Body               string
 	Severity           notify.Severity
+	Sticky             bool
 	Group              string
 	ActivationBundleID string
 }
@@ -114,7 +120,7 @@ type StatusProvider interface {
 }
 
 // Status is the provider state reported by Configuration and the CLI. Remote
-// is informational: delivery policy still decides whether a channel runs.
+// explains why both deliberately local external channels are unavailable.
 type Status struct {
 	Native Capability `json:"native"`
 	Sound  Capability `json:"sound"`
@@ -164,6 +170,7 @@ type ServiceOptions struct {
 	Attention        AttentionResolver
 	Config           func() notify.ResolvedConfig
 	Clock            Clock
+	Getenv           func(string) string
 	Owner            string
 	Lease            time.Duration
 }
@@ -177,6 +184,7 @@ type Service struct {
 	attention AttentionResolver
 	config    func() notify.ResolvedConfig
 	clock     Clock
+	getenv    func(string) string
 	owner     string
 	lease     time.Duration
 
@@ -205,13 +213,19 @@ func NewService(opts ServiceOptions) *Service {
 	if lease <= 0 {
 		lease = DefaultLease
 	}
+	getenv := opts.Getenv
+	if getenv == nil {
+		// Injecting no environment keeps constructed services deterministic.
+		// Production NewDefault explicitly supplies the process environment.
+		getenv = func(string) string { return "" }
+	}
 	sound := opts.SoundCoordinator
 	if sound == nil && opts.Sound != nil {
 		sound = directSoundCoordinator{SoundPlayer: opts.Sound}
 	}
 	return &Service{
 		native: opts.Native, sound: sound, ledgerFn: opts.Ledger,
-		attention: opts.Attention, config: configFn, clock: clock,
+		attention: opts.Attention, config: configFn, clock: clock, getenv: getenv,
 		owner: owner, lease: lease,
 	}
 }
@@ -220,7 +234,12 @@ func NewService(opts ServiceOptions) *Service {
 // anything. Callers must invoke it asynchronously; construction and rendering
 // remain I/O-free.
 func (s *Service) Status(ctx context.Context) Status {
-	status := Status{Remote: os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != ""}
+	status := Status{Remote: remoteSession(s.getenv)}
+	if status.Remote {
+		status.Native = Capability{Reason: RemoteUnavailableReason}
+		status.Sound = Capability{Reason: RemoteUnavailableReason}
+		return status
+	}
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -298,13 +317,17 @@ func (s *Service) Deliver(ctx context.Context, req Request) Result {
 		ExplicitTest: req.ExplicitTest,
 		Capabilities: notify.CapabilitySet{Native: true, Sound: true},
 	}
+	remote := remoteSession(s.getenv)
 	cfg := s.config()
 	decision := notify.ResolveDelivery(n, cfg, runtime)
 	decision = selectRequestedChannel(decision, req.Channel)
 
 	var nativeCapability, soundCapability Capability
 	var probeWG sync.WaitGroup
-	if decision.Native.Deliver && s.native != nil {
+	if remote {
+		runtime.Capabilities.Native = false
+		runtime.Capabilities.Sound = false
+	} else if decision.Native.Deliver && s.native != nil {
 		probeWG.Add(1)
 		go func() {
 			defer probeWG.Done()
@@ -313,7 +336,10 @@ func (s *Service) Deliver(ctx context.Context, req Request) Result {
 	} else if decision.Native.Deliver {
 		runtime.Capabilities.Native = false
 	}
-	if decision.Sound.Deliver && s.sound != nil {
+	if remote {
+		// Both capability facts were resolved above without touching either
+		// provider. Explicit tests bypass focus and quiet hours, not locality.
+	} else if decision.Sound.Deliver && s.sound != nil {
 		probeWG.Add(1)
 		go func() {
 			defer probeWG.Done()
@@ -370,6 +396,13 @@ func (s *Service) Deliver(ctx context.Context, req Request) Result {
 	}
 	wg.Wait()
 	return result
+}
+
+func remoteSession(getenv func(string) string) bool {
+	if getenv == nil {
+		return false
+	}
+	return strings.TrimSpace(getenv("SSH_CONNECTION")) != "" || strings.TrimSpace(getenv("SSH_TTY")) != ""
 }
 
 func applyCoordinationFailure(result *Result, decision notify.DeliveryDecision, err error) {
@@ -526,6 +559,7 @@ func NativeMessage(n notify.Notification) Message {
 		Title:              truncateRunes(sanitizeText(n.Title), 120),
 		Body:               truncateRunes(sanitizeText(n.Body), 500),
 		Severity:           n.Severity,
+		Sticky:             n.Sticky,
 		Group:              GroupFor(n),
 		ActivationBundleID: HostingTerminalBundle(os.Getenv),
 	}
@@ -660,12 +694,25 @@ func (a stateAttention) Foreground(origin notify.Origin) (bool, error) {
 // state tree, PATH, or subprocesses. Those are all lazy first-delivery work.
 func NewDefault(stateDir string) Coordinator {
 	runner := ExecRunner{}
-	cache := NewEmbeddedAssetCache("")
+	embedded := NewEmbeddedAssetCache("")
+	cache := NewConfiguredAssetCache(embedded, func() (SoundPaths, error) {
+		cfg, err := config.Load()
+		if err != nil {
+			return SoundPaths{}, err
+		}
+		return SoundPaths{
+			ConfigPath: config.ConfigPath(),
+			Attention:  cfg.Notifications.Sound.AttentionPath,
+			Done:       cfg.Notifications.Sound.DonePath,
+			Failure:    cfg.Notifications.Sound.FailurePath,
+		}, nil
+	})
 	native := NewPlatformNative(runner)
 	sound := NewHostSound(stateDir, NewPlatformSound(runner, cache), 75*time.Millisecond, DefaultLease, RealClock{})
 	return NewService(ServiceOptions{
 		Native: native, SoundCoordinator: sound,
 		Ledger:    func() (Ledger, error) { return Open(stateDir) },
 		Attention: stateAttention{stateDir: stateDir},
+		Getenv:    os.Getenv,
 	})
 }
