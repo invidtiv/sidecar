@@ -160,6 +160,11 @@ func listItem(item workspaceinventory.Item, projectName string, order int, stale
 		Provider:     item.Provider,
 		TmuxName:     item.TmuxName,
 		Kind:         string(item.Kind),
+		// Provenance the catalog has carried all along and this projection used
+		// to drop. It earns the row the shared host glyph and the host's colour;
+		// the machine's NAME stays in the project label, which is where the
+		// heading and the filter already read it from.
+		Host: item.HostID,
 	}
 	if row.Project == "" {
 		row.Project = item.ProjectName

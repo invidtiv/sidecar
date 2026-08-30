@@ -226,8 +226,13 @@ type Item struct {
 	// TmuxName is an identity key, never rendered. It is searchable so two
 	// shells sharing a display name inside one project can be told apart.
 	TmuxName string
-	Status   string
-	Detail   string
+	// Host names the machine this row was collected on. Empty is this machine,
+	// which is what every local row is. It is provenance, not status: it earns
+	// the row a glyph and a per-host colour, and never touches the gutter
+	// marker.
+	Host   string
+	Status string
+	Detail string
 	// Kind is a presentation string ("worktree" / "shell"), not a catalog type.
 	Kind      string
 	Marker    RowMarker
@@ -237,10 +242,14 @@ type Item struct {
 }
 
 // haystack is the exact field set the filter promises to search: workspace or
-// shell name, project, branch, task, provider, tmux session name, and the
-// semantic status label.
+// shell name, project, host, branch, task, provider, tmux session name, and
+// the semantic status label.
+//
+// Host is listed even though the global browser also writes the host into the
+// project label, so a caller that carries provenance in Host alone is still
+// findable by machine.
 func (i Item) haystack() string {
-	return strings.ToLower(strings.Join([]string{i.Name, i.Project, i.Branch, i.Task, i.Provider, i.TmuxName, i.Status, string(i.Group)}, "\x00"))
+	return strings.ToLower(strings.Join([]string{i.Name, i.Project, i.Host, i.Branch, i.Task, i.Provider, i.TmuxName, i.Status, string(i.Group)}, "\x00"))
 }
 
 // Match reports whether an item satisfies a query. Matching is

@@ -1637,12 +1637,22 @@ func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time
 	if dormant {
 		nameColor = styles.TextMuted
 	}
-	line1 := kanban.Line{Spans: []kanban.Span{
-		{Text: spine, Foreground: hue},
-		{Text: " " + workspace.ProjectName, Foreground: hue, Bold: true},
-		{Text: " " + kindGlyph(workspace.Kind), Foreground: styles.TextMuted},
-		{Text: " " + workspace.Name, Foreground: nameColor},
-	}}
+	line1 := kanban.Line{Spans: []kanban.Span{{Text: spine, Foreground: hue}}}
+	// The board's half of the same provenance the Sessions row carries: the
+	// shared glyph, in the shared per-host colour. It goes on line one because
+	// that is the line a narrow lane still draws in full at its head, and it is
+	// a glyph rather than the host's name because a card is as narrow as 16
+	// columns and the name would be spent before the workspace's own. The name
+	// itself lands on line three below, where there is room for it.
+	if workspace.Remote() {
+		hostHue := workspacelist.HostHue(workspace.HostID)
+		line1.Spans = append(line1.Spans, kanban.Span{Text: " " + workspacelist.HostGlyph, Foreground: hostHue})
+	}
+	line1.Spans = append(line1.Spans,
+		kanban.Span{Text: " " + workspace.ProjectName, Foreground: hue, Bold: true},
+		kanban.Span{Text: " " + kindGlyph(workspace.Kind), Foreground: styles.TextMuted},
+		kanban.Span{Text: " " + workspace.Name, Foreground: nameColor},
+	)
 
 	status := workspace.Presentation.Label
 	if workspace.Presentation.Attention {
@@ -1680,6 +1690,13 @@ func cardLines(workspace workspaceinventory.Workspace, stale bool, now time.Time
 		parts = append(parts, string(workspace.Presentation.Freshness))
 	}
 	line3 := kanban.Line{Spans: []kanban.Span{{Text: spine, Foreground: hue}}}
+	// Which machine, spelled out. A remote card carries only the bare project
+	// name — the host is not in it, the way it is in the Sessions row's project
+	// label — so without this the board could say a card is remote but never
+	// which of two hosts it came from.
+	if workspace.Remote() {
+		line3.Spans = append(line3.Spans, kanban.Span{Text: " " + workspace.HostID, Foreground: workspacelist.HostHue(workspace.HostID)})
+	}
 	if len(parts) > 0 {
 		line3.Spans = append(line3.Spans, kanban.Span{Text: " " + strings.Join(parts, " · "), Foreground: styles.TextMuted})
 	}
@@ -1784,7 +1801,16 @@ func compactCardText(lane string, card kanban.Card, workspace workspaceinventory
 	if workspace.ID == "" {
 		return fmt.Sprintf(" %-15s %s  %s", lane, card.Title, card.Subtitle)
 	}
-	project := lipgloss.NewStyle().Foreground(styles.ProjectHue(workspace.ProjectKey)).Render(workspace.ProjectName + " / " + workspace.Name)
+	label := workspace.ProjectName + " / " + workspace.Name
+	project := lipgloss.NewStyle().Foreground(styles.ProjectHue(workspace.ProjectKey)).Render(label)
+	// The compact fallback is the same board at a width that cannot hold lanes,
+	// so it owes the same provenance mark. Naming the host here rather than
+	// only glyphing it: this line has the whole terminal width to spend.
+	if workspace.Remote() {
+		host := lipgloss.NewStyle().Foreground(workspacelist.HostHue(workspace.HostID)).
+			Render(workspacelist.HostGlyph + " " + workspace.HostID)
+		project = host + " " + project
+	}
 	agent := lipgloss.NewStyle().Foreground(styles.AgentColor(workspace.Provider)).Render(styles.AgentLabel(workspace.Provider))
 	return fmt.Sprintf(" %-15s %s  %s · %s", lane, project, agent, workspace.Presentation.Label)
 }

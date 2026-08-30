@@ -476,13 +476,7 @@ func (m *Model) showsProjectInRow(section Section) bool {
 }
 
 func (m *Model) renderRow(item Item, selected, focused bool, width int, now time.Time, showProject bool) []string {
-	namePrefix := RowField{}
-	if showProject && item.Project != "" {
-		namePrefix = RowField{
-			Text:     item.Project + " ",
-			Rendered: lipgloss.NewStyle().Foreground(styles.ProjectHue(item.ProjectKey)).Render(item.Project) + " ",
-		}
-	}
+	namePrefix := rowNamePrefix(item, showProject)
 	after := make([]RowField, 0, 1)
 	if item.Detail != "" {
 		after = append(after, RowField{Text: item.Detail, Rendered: styles.Muted.Render(item.Detail)})
@@ -502,6 +496,37 @@ func (m *Model) renderRow(item Item, selected, focused bool, width int, now time
 		AfterProvider: after,
 		Pinned:        m.IsPinned(item.ID),
 	}, width, selected, focused)
+}
+
+// rowNamePrefix is everything that precedes a row's own name: the host glyph
+// when the row came from another machine, then the project label when the
+// section heading is not already carrying it.
+//
+// The host is deliberately NOT repeated as text. The global browser writes it
+// into the project label already ("mini · api"), which is what the Project
+// sort groups by and what the heading shows, so a second copy beside the name
+// would say the same machine twice on the same line. What the row was missing
+// is that the label reads as an ordinary project name: the glyph and the
+// per-host colour are what make it read as a machine. Under the Project sort
+// the label is hidden and the heading says the host instead, so the glyph
+// stands alone — which is still the one thing a reader needs at a glance.
+func rowNamePrefix(item Item, showProject bool) RowField {
+	prefix := RowField{}
+	hue := styles.ProjectHue(item.ProjectKey)
+	if item.Host != "" {
+		hue = HostHue(item.Host)
+		prefix = RowField{
+			Text:     HostGlyph + " ",
+			Rendered: lipgloss.NewStyle().Foreground(hue).Render(HostGlyph) + " ",
+		}
+	}
+	if !showProject || item.Project == "" {
+		return prefix
+	}
+	return RowField{
+		Text:     prefix.Text + item.Project + " ",
+		Rendered: prefix.Rendered + lipgloss.NewStyle().Foreground(hue).Render(item.Project) + " ",
+	}
 }
 
 func selectionStyle(focused bool) lipgloss.Style {
