@@ -267,7 +267,11 @@ func TestRemoteGeometryClaimReleasesOnBlurAndReclaimsOnFocus(t *testing.T) {
 	if store.sets != 1 || store.current() == "" {
 		t.Fatalf("entry lease sets=%d token=%q", store.sets, store.current())
 	}
-	_ = model.SetApplicationFocused(false)
+	if cmd := model.SetApplicationFocused(false); cmd == nil {
+		t.Fatal("blur did not schedule a release")
+	} else {
+		_ = cmd()
+	}
 	if store.clears != 1 || store.current() != "" {
 		t.Fatalf("blur lease clears=%d token=%q", store.clears, store.current())
 	}
@@ -299,6 +303,151 @@ func TestQueuedRemoteActivationCannotReclaimAfterInputRelease(t *testing.T) {
 	if store.reads != 0 || store.sets != 0 || store.current() != "" {
 		t.Fatalf("late activation reclaimed lease: reads=%d sets=%d token=%q", store.reads, store.sets, store.current())
 	}
+}
+
+func TestReleaseInputReturnsWhileRemoteActivationReadIsBlocked(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	model.Width, model.Height = 80, 24
+	activate := model.ActivateInput()
+	activated := make(chan struct{})
+	go func() {
+		_ = activate()
+		close(activated)
+	}()
+
+	leaseRead := waitForRemoteLeaseRead(t, channel, 0)
+	released := make(chan struct{})
+	go func() {
+		model.ReleaseInput()
+		close(released)
+	}()
+	select {
+	case <-released:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ReleaseInput waited on the blocked remote activation read")
+	}
+	select {
+	case <-activated:
+		t.Fatal("activation unexpectedly completed without its remote response")
+	default:
+	}
+
+	leaseRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("activation did not drain after its remote response")
+	}
+
+	var unset fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "set-option -u") && strings.Contains(command.text, leaseOptionName) {
+				unset = command
+				return true
+			}
+		}
+		return false
+	})
+	channel.mu.Lock()
+	for _, command := range channel.commands {
+		if strings.Contains(command.text, "#{pane_width},#{pane_height}") ||
+			strings.Contains(command.text, "resize-window") || strings.Contains(command.text, "resize-pane") {
+			channel.mu.Unlock()
+			t.Fatalf("invalidated activation issued late geometry command %q", command.text)
+		}
+	}
+	channel.mu.Unlock()
+	// Complete the retained clear so this test leaves no lifetime timer behind.
+	unset.callback(controlResponse{})
+}
+
+func TestReleaseAndExitReturnWhileRemoteLeaseRefreshIsBlocked(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	ticker := &manualTicker{}
+	ticker.install(model.remoteBackend.lease)
+	activate := model.ActivateInput()
+	activated := make(chan struct{})
+	go func() {
+		_ = activate()
+		close(activated)
+	}()
+	initialRead := waitForRemoteLeaseRead(t, channel, 0)
+	initialRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("remote activation did not complete")
+	}
+
+	ticker.c <- time.Now()
+	refreshRead := waitForRemoteLeaseRead(t, channel, 1)
+	released := make(chan struct{})
+	go func() {
+		model.ReleaseInput()
+		close(released)
+	}()
+	select {
+	case <-released:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ReleaseInput joined the network-blocked lease refresher")
+	}
+	exited := make(chan struct{})
+	go func() {
+		model.Exit()
+		close(exited)
+	}()
+	select {
+	case <-exited:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("retarget/Exit waited on the network-blocked lease refresher")
+	}
+	if channel.closeCount() != 0 {
+		t.Fatal("last control subscription closed before the pending release could clear its lease")
+	}
+
+	refreshRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
+	var unset fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "set-option -u") && strings.Contains(command.text, leaseOptionName) {
+				unset = command
+				return true
+			}
+		}
+		return false
+	})
+	if channel.closeCount() != 0 {
+		t.Fatal("control closed before the eventual lease unset response")
+	}
+	channel.events <- controlEvent{Kind: controlEventResponse, Callback: unset.callback}
+	waitFor(t, func() bool { return channel.closeCount() == 1 })
+}
+
+func waitForRemoteLeaseRead(t *testing.T, channel *fakeControlChannel, index int) fakeControlCommand {
+	t.Helper()
+	var found fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		seen := 0
+		for _, command := range channel.commands {
+			if !strings.Contains(command.text, "#{session_name}") || !strings.Contains(command.text, leaseOptionName) {
+				continue
+			}
+			if seen == index {
+				found = command
+				return true
+			}
+			seen++
+		}
+		return false
+	})
+	return found
 }
 
 func TestRemoteInteractivePeriodicLeaseRefreshLetsTypingPeerPreempt(t *testing.T) {

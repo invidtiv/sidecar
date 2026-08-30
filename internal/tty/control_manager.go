@@ -411,18 +411,13 @@ func (m *ControlManager) sendControlBarrier(session, command string) error {
 	if session == "" || command == "" {
 		return fmt.Errorf("tmux control: empty session or barrier command")
 	}
-	m.mu.Lock()
-	client := m.clients[session]
-	if client == nil || !client.retainBarrier() {
-		m.mu.Unlock()
-		return fmt.Errorf("tmux control: session %q is unavailable", session)
+	client, release, err := m.retainControlLifetime(session)
+	if err != nil {
+		return err
 	}
-	m.mu.Unlock()
 
 	var once sync.Once
-	finish := func() {
-		once.Do(func() { m.finishBarrier(client) })
-	}
+	finish := func() { once.Do(release) }
 	// A dead or non-responsive transport must not retain a client forever. The
 	// ordinary request path uses the same four-second response bound.
 	timer := time.AfterFunc(4*time.Second, finish)
@@ -436,6 +431,26 @@ func (m *ControlManager) sendControlBarrier(session, command string) error {
 		return err
 	}
 	return nil
+}
+
+// retainControlLifetime prevents teardown after the final subscription while
+// an asynchronous lifecycle operation is still reaching the remote server.
+// Acquiring and releasing the reference touches only local mutexes; callers
+// may therefore install it synchronously before returning to Bubble Tea.
+func (m *ControlManager) retainControlLifetime(session string) (*sessionControlClient, func(), error) {
+	m.mu.Lock()
+	client := m.clients[session]
+	if client == nil || !client.retainBarrier() {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("tmux control: session %q is unavailable", session)
+	}
+	m.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() { m.finishBarrier(client) })
+	}
+	return client, release, nil
 }
 
 // finishBarrier may run on the client's ordered actor. It therefore initiates

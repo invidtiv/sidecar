@@ -1442,22 +1442,21 @@ func (m *Model) assertDimensions() tea.Cmd {
 		restart = m.restartControlForResize()
 	}
 
-	resize := func() tea.Msg {
-		return m.withActivationMessage(scope, func() tea.Msg {
-			if m.remote {
-				if m.remoteBackend.resize(target, width, height) {
-					return PaneResizedMsg{Scope: scope}
+	var resize tea.Cmd
+	if m.remote {
+		resize = m.remoteResizeCommand(scope, target, m.State.TargetSession, width, height)
+	} else {
+		resize = func() tea.Msg {
+			return m.withActivationMessage(scope, func() tea.Msg {
+				// Check if resize is needed
+				actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+				if ok && actualWidth == width && actualHeight == height {
+					return nil
 				}
-				return nil
-			}
-			// Check if resize is needed
-			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
-			if ok && actualWidth == width && actualHeight == height {
-				return nil
-			}
-			terminalResizePane(target, width, height)
-			return PaneResizedMsg{Scope: scope}
-		})
+				terminalResizePane(target, width, height)
+				return PaneResizedMsg{Scope: scope}
+			})
+		}
 	}
 	if restart == nil {
 		return resize
@@ -1510,21 +1509,20 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	m.State.LastResizeAt = m.now()
 
 	// Resize command
-	resizeCmd := func() tea.Msg {
-		return m.withActivationMessage(scope, func() tea.Msg {
-			if m.remote {
-				if m.remoteBackend.resize(target, width, height) {
-					return PaneResizedMsg{Scope: scope}
+	var resizeCmd tea.Cmd
+	if m.remote {
+		resizeCmd = m.remoteResizeCommand(scope, target, m.State.TargetSession, width, height)
+	} else {
+		resizeCmd = func() tea.Msg {
+			return m.withActivationMessage(scope, func() tea.Msg {
+				actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+				if ok && actualWidth == width && actualHeight == height {
+					return nil
 				}
-				return nil
-			}
-			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
-			if ok && actualWidth == width && actualHeight == height {
-				return nil
-			}
-			terminalResizePane(target, width, height)
-			return PaneResizedMsg{Scope: scope}
-		})
+				terminalResizePane(target, width, height)
+				return PaneResizedMsg{Scope: scope}
+			})
+		}
 	}
 
 	if controlOwned {
