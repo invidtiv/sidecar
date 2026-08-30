@@ -20,6 +20,7 @@ const (
 	ChildNotificationSoundPaths ChildID = "notification-sound-paths"
 	ChildNotificationStatus     ChildID = "notification-status"
 	ChildNotificationSourceRule ChildID = "notification-source-rule"
+	ChildNotificationSSH        ChildID = "notification-ssh"
 
 	regionNotificationNative      = "config-notifications-native"
 	regionNotificationSound       = "config-notifications-sound"
@@ -39,6 +40,9 @@ const (
 	regionNotificationRecheck     = "config-notifications-recheck"
 	regionNotificationPathPrefix  = "config-notifications-path-"
 	regionNotificationSource      = "config-notifications-source-"
+	regionNotificationSSH         = "config-notifications-ssh"
+	regionNotificationSSHManaged  = "config-notifications-ssh-managed"
+	regionNotificationSSHTerminal = "config-notifications-ssh-terminal"
 
 	notificationModeWidth  = 20
 	notificationFieldWidth = 48
@@ -145,6 +149,9 @@ func (m *Model) buildNotifications(b *paneBuilder) {
 		notificationModeOptions(), string(cfg.Native.Mode), saveNativeMode)
 	b.selectRow(regionNotificationSound, "Sounds", notificationModeWidth,
 		notificationModeOptions(), string(cfg.Sound.Mode), saveSoundMode)
+	b.notificationRouteRow(regionNotificationSSH, "SSH delivery", sshDeliverySummary(cfg.SSH), func(m *Model) {
+		m.PushChild(ChildNotificationSSH, "SSH delivery")
+	})
 
 	b.text(SectionHeader("Rules"))
 	b.notificationRouteRow(regionNotificationQuiet, "Quiet hours", quietHoursSummary(cfg.QuietHours), func(m *Model) {
@@ -192,6 +199,82 @@ func quietHoursSummary(q config.QuietHoursConfig) string {
 		return q.Start + "–" + q.End + " (all day)"
 	}
 	return q.Start + "–" + q.End
+}
+
+// sshDeliverySummary names whichever of the two independent remote paths is on.
+// They are unrelated mechanisms — one delivers a remote host's work to this
+// desktop, the other notifies through the terminal Sidecar is sitting in — so
+// the summary says which, rather than collapsing both to "On".
+func sshDeliverySummary(ssh config.SSHNotificationsConfig) string {
+	terminal := ssh.Terminal != "" && ssh.Terminal != config.TerminalNotifierOff
+	switch {
+	case ssh.ManagedHosts && terminal:
+		return "Hosts · " + terminalLabel(ssh.Terminal)
+	case ssh.ManagedHosts:
+		return "Managed hosts"
+	case terminal:
+		return terminalLabel(ssh.Terminal)
+	default:
+		return "Off"
+	}
+}
+
+func notificationTerminalOptions() []dropdownOption {
+	return []dropdownOption{
+		{id: string(config.TerminalNotifierOff), label: "Off"},
+		{id: string(config.TerminalNotifierAuto), label: "Detect"},
+		{id: string(config.TerminalNotifierGhostty), label: "Ghostty"},
+		{id: string(config.TerminalNotifierITerm2), label: "iTerm2"},
+		{id: string(config.TerminalNotifierWezTerm), label: "WezTerm"},
+		{id: string(config.TerminalNotifierKitty), label: "Kitty"},
+	}
+}
+
+func terminalLabel(name config.TerminalNotifier) string {
+	for _, option := range notificationTerminalOptions() {
+		if option.id == string(name) {
+			return option.label
+		}
+	}
+	return "Off"
+}
+
+func (m *Model) buildNotificationSSH(b *paneBuilder) {
+	ssh := m.Config().Notifications.SSH
+	b.lead("Two independent ways to be reached about work on another machine.")
+
+	b.text(SectionHeader("Registered hosts"))
+	b.toggleRow(regionNotificationSSHManaged, "Deliver forwarded alerts", ssh.ManagedHosts, func(m *Model) tea.Cmd {
+		next := !m.Config().Notifications.SSH.ManagedHosts
+		return SaveCmd("Managed-host delivery "+onOffSummary(next), func() error {
+			return config.SaveNotifications(func(cfg *config.NotificationsConfig) { cfg.SSH.ManagedHosts = next })
+		})
+	})
+	if b.inner >= 55 {
+		b.note("A registered host sends a bounded, typed event — never terminal output, prompts, or a command. This machine re-checks it, then applies your own rules, quiet hours, and providers. The remote host plays no sound and shows no banner.")
+	}
+
+	b.text(SectionHeader("This SSH session"))
+	b.selectRow(regionNotificationSSHTerminal, "Notify through terminal", notificationModeWidth,
+		notificationTerminalOptions(), terminalSelection(ssh.Terminal), saveTerminalNotifier)
+	if b.inner >= 55 {
+		b.note("Used only when Sidecar itself runs over SSH. Ghostty, iTerm2, and WezTerm share one sequence; Kitty has its own. Detect reports unavailable when SSH has hidden the terminal's identity, which is common.")
+		b.note("Best effort: the outer terminal owns the banner, so there is no Sidecar sound, click-to-focus, replacement, or delivery receipt. Inside tmux this needs `set -g allow-passthrough on`.")
+	}
+}
+
+func terminalSelection(name config.TerminalNotifier) string {
+	if name == "" {
+		return string(config.TerminalNotifierOff)
+	}
+	return string(name)
+}
+
+func saveTerminalNotifier(_ *Model, option dropdownOption) tea.Cmd {
+	name := config.TerminalNotifier(option.id)
+	return SaveCmd("Terminal notifications: "+option.label, func() error {
+		return config.SaveNotifications(func(cfg *config.NotificationsConfig) { cfg.SSH.Terminal = name })
+	})
 }
 
 func customSoundsSummary(sound config.SoundNotificationsConfig) string {
@@ -486,7 +569,7 @@ func (m *Model) buildNotificationStatus(b *paneBuilder) {
 		m.queueNotificationProbe()
 		return m.TakePending()
 	}})
-	if guidance := notificationRepairGuidance(state); guidance != "" {
+	if guidance := notificationRepairGuidance(state, m.Config().Notifications.SSH.Terminal); guidance != "" {
 		b.text(SectionHeader("Repair guidance"))
 		if command := notificationRepairCommand(state); command != "" {
 			b.text(IndentedRaw(CodeChip(command)))
@@ -520,12 +603,18 @@ func capabilitySummary(capability notifydelivery.Capability, checked bool) strin
 	return "Unavailable"
 }
 
-func notificationRepairGuidance(state *notificationsState) string {
+func notificationRepairGuidance(state *notificationsState, terminal config.TerminalNotifier) string {
 	if state == nil || !state.checked {
 		return ""
 	}
 	if state.status.Remote {
-		return "This process appears to be remote over SSH. Sidecar reports local desktop providers honestly and does not send terminal escape notifications."
+		// Remote is not a failure to repair, so the guidance explains the two
+		// paths out rather than naming a package to install. Sound has no path
+		// out at all: it never crosses the SSH boundary.
+		if terminal == "" || terminal == config.TerminalNotifierOff {
+			return "This process is remote over SSH, so local desktop providers are unavailable. Turn on SSH delivery to notify through the outer terminal, or register this machine as a host so a local Sidecar delivers for you."
+		}
+		return "This process is remote over SSH. System notifications go through the outer terminal; sounds cannot cross the connection."
 	}
 	if runtime.GOOS == "darwin" {
 		if state.status.Native.Available && state.status.Native.Provider == "osascript" {

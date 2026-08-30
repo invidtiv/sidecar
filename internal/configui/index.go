@@ -69,6 +69,8 @@ var settingsIndex = []IndexEntry{
 	{Page: PageNotifications, Label: "Agent activity rules", Keywords: []string{"waiting", "finished", "session ended", "source", "rules"}},
 	{Page: PageNotifications, Label: "Other source rules", Keywords: []string{"agent posts", "td", "tasks", "system", "toast", "expiry"}},
 	{Page: PageNotifications, Label: "Custom sound choices", Keywords: []string{"attention path", "done path", "failure path", "wav", "mp3", "custom sound"}},
+	{Page: PageNotifications, Label: "SSH delivery", Keywords: []string{"ssh", "remote host", "remote", "managed hosts", "forwarded", "viewer"}},
+	{Page: PageNotifications, Label: "Terminal notifications over SSH", Keywords: []string{"terminal notification", "ssh", "ghostty", "iterm2", "wezterm", "kitty", "osc", "passthrough"}},
 	{Page: PageNotifications, Label: "Delivery status and test", Keywords: []string{"provider", "status", "test", "native", "sound"}},
 
 	// Terminal

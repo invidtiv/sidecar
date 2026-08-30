@@ -446,9 +446,9 @@ Usage: sidecar notify config [--json]
 
 #### `sidecar notify config set`
 
-Set notification delivery, quiet hours, and custom sounds
+Set notification delivery, quiet hours, custom sounds, and SSH delivery
 
-Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.
+Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. SSH delivery has two independent switches, both off by default: --ssh-managed-hosts lets this machine deliver notifications forwarded by a registered remote host, and --ssh-terminal picks the outer terminal to notify through when Sidecar itself runs inside an SSH session. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.
 
 ```
 Usage: sidecar notify config set [options]
@@ -462,6 +462,8 @@ Usage: sidecar notify config set [options]
 - `--attention-path PATH`: Set the attention cue file; empty restores built-in
 - `--done-path PATH`: Set the done cue file; empty restores built-in
 - `--failure-path PATH`: Set the failure cue file; empty restores built-in
+- `--ssh-managed-hosts on|off`: Deliver notifications forwarded by registered remote hosts
+- `--ssh-terminal TERMINAL`: Set off, auto, ghostty, iterm2, wezterm, or kitty
 - `--json`: Write the resulting notification configuration as JSON
 - `-h, --help`: Show this help
 
@@ -477,6 +479,8 @@ Usage: sidecar notify config set [options]
 sidecar notify config set --native background --sound background
 sidecar notify config set --quiet-hours 22:00-08:00 --json
 sidecar notify config set --attention-path ~/Sounds/attention.wav
+sidecar notify config set --ssh-managed-hosts on --json
+sidecar notify config set --ssh-terminal ghostty
 ```
 
 ### `sidecar notify dismiss`

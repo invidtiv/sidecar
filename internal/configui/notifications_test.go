@@ -34,6 +34,7 @@ func TestNotificationChildRoutesFitAndKeepEveryControlReachable(t *testing.T) {
 		{"other rules", func(m *Model) { m.PushChild(ChildNotificationOtherRules, "Other sources") }, []string{"Agent posts", "TD", "Tasks", "System"}, []string{regionNotificationSource + "agent", regionNotificationSource + "td", regionNotificationSource + "tasks", regionNotificationSource + "system"}},
 		{"sound choices", func(m *Model) { m.PushChild(ChildNotificationSoundPaths, "Sound choices") }, []string{"Attention", "Done", "Failure"}, []string{regionNotificationPathPrefix + "attention", regionNotificationPathPrefix + "done", regionNotificationPathPrefix + "failure"}},
 		{"status", func(m *Model) { m.PushChild(ChildNotificationStatus, "Delivery status") }, []string{"System notifications", "Sounds", "Delivery context", "Custom sounds", "Recheck"}, []string{regionNotificationRecheck}},
+		{"ssh", func(m *Model) { m.PushChild(ChildNotificationSSH, "SSH delivery") }, []string{"Deliver forwarded alerts", "Notify through terminal"}, []string{regionNotificationSSHManaged, regionNotificationSSHTerminal}},
 		{"source rule", func(m *Model) {
 			state := m.notifications()
 			state.source, state.event, state.sourceTitle = notify.SourceWaiting, notifydelivery.TestWaiting, "Needs input"
@@ -230,7 +231,8 @@ func TestNotificationsFollowsAgentsAndIsSearchable(t *testing.T) {
 			}
 		}
 	}
-	for _, query := range []string{"sound", "audio", "native", "desktop", "system notification", "waiting", "finished", "quiet hours", "terminal-notifier", "afplay", "notify-send", "paplay", "pw-play", "aplay", "ffplay", "mpv"} {
+	for _, query := range []string{"sound", "audio", "native", "desktop", "system notification", "waiting", "finished", "quiet hours", "terminal-notifier", "afplay", "notify-send", "paplay", "pw-play", "aplay", "ffplay", "mpv",
+		"ssh", "remote host", "terminal notification", "managed hosts", "ghostty", "iterm2", "wezterm", "kitty"} {
 		found := false
 		for _, match := range Search(query) {
 			found = found || match.Page == PageNotifications
@@ -256,11 +258,71 @@ func TestNotificationsRootFitsSupportedSizes(t *testing.T) {
 			}
 		}
 		plain := strings.Join(strings.Fields(ansi.Strip(view)), " ")
-		for _, want := range []string{"Notifications", "Privacy:", "never uploads", "title/body", "only", "to the OS", "lock", "screen.", "retain", "System notifications", "Sounds", "Delivery status", "Test enabled channels"} {
+		for _, want := range []string{"Notifications", "Privacy:", "never uploads", "title/body", "only", "to the OS", "lock", "screen.", "retain", "System notifications", "Sounds", "SSH delivery", "Delivery status", "Test enabled channels"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("size=%v missing %q:\n%s", size, want, plain)
 			}
 		}
+	}
+}
+
+func TestSSHDeliverySummaryNamesWhichPathIsOn(t *testing.T) {
+	// The two switches are unrelated mechanisms, so the root row has to say
+	// which one is on rather than collapsing both to a bare "On".
+	for _, test := range []struct {
+		name string
+		ssh  config.SSHNotificationsConfig
+		want string
+	}{
+		{"both off", config.SSHNotificationsConfig{Terminal: config.TerminalNotifierOff}, "Off"},
+		{"omitted terminal reads as off", config.SSHNotificationsConfig{}, "Off"},
+		{"hosts only", config.SSHNotificationsConfig{ManagedHosts: true}, "Managed hosts"},
+		{"terminal only", config.SSHNotificationsConfig{Terminal: config.TerminalNotifierKitty}, "Kitty"},
+		{"both", config.SSHNotificationsConfig{ManagedHosts: true, Terminal: config.TerminalNotifierGhostty}, "Hosts · Ghostty"},
+	} {
+		if got := sshDeliverySummary(test.ssh); got != test.want {
+			t.Errorf("%s: summary=%q, want %q", test.name, got, test.want)
+		}
+	}
+}
+
+func TestSSHRouteSavesBothSwitchesAndAppliesLive(t *testing.T) {
+	m, path := configFixture(t, config.Default())
+	raw := []byte(`{"futureRoot":{"keep":true},"notifications":{"sources":{"future-source":{"expiry":"17s"}}}}`)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.SetHostState(HostState{Config: loaded})
+	m.Open(PageNotifications)
+	m.PushChild(ChildNotificationSSH, "SSH delivery")
+
+	activate(t, m, regionNotificationSSHManaged)
+	choose(t, m, regionNotificationSSHTerminal, string(config.TerminalNotifierWezTerm))
+
+	after, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Notifications.SSH.ManagedHosts || after.Notifications.SSH.Terminal != config.TerminalNotifierWezTerm {
+		t.Fatalf("the route did not reach config.json: %+v", after.Notifications.SSH)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(written, []byte(`"futureRoot"`)) || !bytes.Contains(written, []byte(`"future-source"`)) {
+		t.Fatalf("the SSH save dropped unrelated config:\n%s", written)
+	}
+
+	// The root summary must follow the saved settings with no restart.
+	m.Back()
+	plain := ansi.Strip(m.View(100, 30))
+	if !strings.Contains(plain, "Hosts · WezTerm") {
+		t.Fatalf("the root row did not follow the saved settings:\n%s", plain)
 	}
 }
 

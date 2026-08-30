@@ -135,6 +135,81 @@ func TestNotifyConfigSetQuietHoursAndCustomPathsPreservePriorConfig(t *testing.T
 	}
 }
 
+func TestNotifyConfigSetAppliesSSHDeliveryAndReportsItEverywhere(t *testing.T) {
+	env, out, errOut, path := notificationConfigEnv(t)
+	if code := runNotifyConfigSet(env, []string{"--ssh-managed-hosts", "on", "--ssh-terminal=kitty", "--json"}); code != 0 {
+		t.Fatalf("set=%d stderr=%q", code, errOut.String())
+	}
+	var written notificationConfigResult
+	if err := json.Unmarshal(out.Bytes(), &written); err != nil {
+		t.Fatalf("json=%v output=%q", err, out.String())
+	}
+	if !written.SSH.ManagedHosts || written.SSH.Terminal != config.TerminalNotifierKitty {
+		t.Fatalf("ssh result=%+v", written.SSH)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Notifications.SSH != written.SSH {
+		t.Fatalf("file and result diverged: file=%+v result=%+v", loaded.Notifications.SSH, written.SSH)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(raw, []byte(`"futureRoot"`)) || !bytes.Contains(raw, []byte(`"future-source"`)) {
+		t.Fatalf("targeted SSH save lost unrelated data: %s", raw)
+	}
+
+	out.Reset()
+	if code := runNotifyConfig(env, nil); code != 0 {
+		t.Fatalf("config=%d stderr=%q", code, errOut.String())
+	}
+	for _, want := range []string{"SSH delivery:", "Managed hosts: on", "Terminal: kitty"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("human config omitted %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestNotifyConfigSetRefusesInvalidSSHValuesWithoutChangingFile(t *testing.T) {
+	env, _, errOut, path := notificationConfigEnv(t)
+	before, _ := os.ReadFile(path)
+	for _, args := range [][]string{
+		{"--ssh-terminal", "bell"},
+		{"--ssh-managed-hosts", "yes"},
+	} {
+		errOut.Reset()
+		if code := runNotifyConfigSet(env, args); code != 2 {
+			t.Fatalf("%v exit=%d stderr=%q", args, code, errOut.String())
+		}
+		after, _ := os.ReadFile(path)
+		if !bytes.Equal(before, after) {
+			t.Fatalf("%v changed config:\nbefore=%s\nafter=%s", args, before, after)
+		}
+	}
+}
+
+func TestNotifyConfigSSHDefaultsAreOffAndReportedExplicitly(t *testing.T) {
+	env, out, errOut, _ := notificationConfigEnv(t)
+	if code := runNotifyConfig(env, []string{"--json"}); code != 0 {
+		t.Fatalf("config=%d stderr=%q", code, errOut.String())
+	}
+	var view notificationConfigResult
+	if err := json.Unmarshal(out.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	if view.SSH.ManagedHosts {
+		t.Fatal("managed-host delivery must be off until the user asks for it")
+	}
+	// An omitted terminal is reported as the explicit "off" it behaves as,
+	// rather than an empty string a reader has to interpret.
+	if view.SSH.Terminal != config.TerminalNotifierOff {
+		t.Fatalf("terminal=%q, want an explicit off", view.SSH.Terminal)
+	}
+}
+
 func TestNotifySourceSetUsesSharedValidationAndAppliesLive(t *testing.T) {
 	env, out, errOut, path := notificationConfigEnv(t)
 	if code := runNotifySourceSet(env, []string{"waiting", "--toast", "off", "--native=on", "--sound", "failure", "--expiry", "sticky", "--json"}); code != 0 {
