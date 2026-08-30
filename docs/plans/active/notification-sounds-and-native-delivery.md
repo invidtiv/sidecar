@@ -37,7 +37,7 @@ The remote-host steel thread is:
 | M2 — full Configuration | Complete | Child routes, source rules, quiet hours, custom sounds, CLI parity, live saves, responsive rendering, and isolated UI proof are complete. |
 | M3 — Linux and hardening | Complete | Linux providers, failure/degradation paths, release-architecture builds, burst behavior, and broad automated gates are complete. |
 | M4 — integrated release proof | In progress | Automated integrated gates and isolated Configuration proof are recorded; real sound/native background-journey proof plus final documentation and release-readiness closure remain. |
-| M5 — SSH delivery | Planned | Managed-host typed forwarding and opt-in direct-terminal delivery are specified below and not yet implemented. |
+| M5 — SSH delivery | In progress | Managed-host typed forwarding, the direct-terminal transport, the SSH delivery route, and CLI parity are implemented with automated gates green. Real SSH and real outer-terminal proof remain, and are user-visible manual actions. |
 | M6 — deterministic agent lifecycle reporting | Planned | [Agent lifecycle hooks](notification-agent-lifecycle-hooks.md) controls the separate initiative for Herdr-like hook reporting, authority arbitration, integration management, and screen-detection fallback. |
 
 ## Scope
@@ -473,7 +473,7 @@ M2/M3 evidence recorded 2026-08-29: focused Configuration, app, CLI, config, key
 
 Exit gate: the integrated candidate has independent approval and evidence for the real background-agent journey, not only adapter unit tests.
 
-### M5 — SSH delivery through local viewers and supported terminals — Planned
+### M5 — SSH delivery through local viewers and supported terminals — In progress
 
 1. Add the versioned `hostproto` notification event with stable transition identity, bounded payload validation, server/client fixtures, and explicit old/new protocol mismatch tests. Emit it only for live `LaneTracker` transitions, never snapshots or reconnect state.
 2. Extend notification origin and attention identity with a remote host ID, adapt received events into the ordinary local post seam, and prove that local source rules, quiet hours, foreground detection, stale-event rejection, claims, centre records, and providers remain the only policy path.
@@ -484,6 +484,12 @@ Exit gate: the integrated candidate has independent approval and evidence for th
 7. Update remote-host and notification documentation, generated CLI help, example config, and security/privacy language. Independently review protocol compatibility, duplicate prevention, escape safety, focus semantics, config parity, and real proof evidence.
 
 Exit gate: a live remote needs-input transition reaches exactly one local centre record and one set of locally configured external channels without invoking a remote desktop/audio provider; the visible-origin and reconnect cases remain silent; and direct-terminal mode emits exactly one valid sanitized sequence only when explicitly enabled for a supported terminal.
+
+M5 implementation recorded 2026-08-30. `hostproto` moved to `Version = 2` with one server-to-viewer `notify` kind and no request direction, so `hostserve` keeps its read-only call graph; bounds are validated on both encode and decode and a violation fails closed with the existing actionable mismatch error. The event key is `sha256(origin, class, occurrence truncated to the 15s logical-dedupe quantum)`, never the connection sequence or snapshot generation, so concurrent `host serve` processes and reconnects agree; the local record ID combines the configured host identity with that key, making the dedupe boundary one destination host. Withdrawals were added to the wire schema because without them a remote sticky wait could never leave the local centre. `internal/termnotify` holds the four fixed encoders, sanitization, and tmux DCS passthrough, bound to the delivery seam by a `RemoteCapable` gate that leaves M3's fail-closed refusal intact for every desktop and audio provider. The TUI supplies its own terminal writer so the renderer emits the sequence between frames rather than a delivery goroutine writing mid-frame. Configuration gained the SSH delivery child route and the CLI gained `notify config set --ssh-managed-hosts` and `--ssh-terminal`, both off by default.
+
+A pre-existing flake was found and fixed while proving the claim path: `TestTwoServiceSteelThreadDeliversOnceAndRetainsCentreRecords` failed roughly one run in three at the base commit because the ledger releases expired leases against the wall clock while the test stamped claims with a fixed 2026-08-29 clock. The product was correct; the test now stamps near the current time.
+
+Real provider proof over a real SSH hop was not fired by any automated run. Every outer-terminal family remains untested rather than passing, per step 6.
 
 ### M6 — Deterministic agent lifecycle reporting — Planned separately
 
