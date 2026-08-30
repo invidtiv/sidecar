@@ -330,6 +330,41 @@ func TestPromptWaitRunsSubmissionAndSettleUnderOnePin(t *testing.T) {
 	}
 }
 
+// The documented caveat path: `--wait` from an already-working agent. There is
+// no new turn to identify, so the prompt makes no turn claim and the wait is
+// allowed to be satisfied by the completion of the turn that was already
+// running. That is a deliberate weakening of the stall rule, and help text says
+// so, which makes it worth pinning rather than leaving to the reader.
+func TestPromptWaitFromAWorkingAgentIsSatisfiedByTheRunningTurn(t *testing.T) {
+	terminal := newStage("fake:working")
+	terminal.onInspect = func(s *stageTerminal, n int) {
+		if n >= 3 {
+			s.set("fake:done")
+		}
+	}
+	got, err := stageService(terminal).Prompt(context.Background(),
+		PromptRequest{Target: terminal.target, Text: "and also this", Wait: true, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.Status != StatusDone {
+		t.Fatalf("agent = %+v, want the running turn's completion to settle the wait", got.Agent)
+	}
+	// The text still went out; the caveat is about what may be concluded from
+	// the settle, not about withholding the prompt.
+	if wrote := terminal.wrote(); len(wrote) != 1 || wrote[0] != "and also this" {
+		t.Fatalf("submitted = %q", wrote)
+	}
+	// And it never went through the stall rule: no prompt-landed observation is
+	// possible when the agent was already working, so this cannot be reported
+	// as stalled however long the existing turn takes to change status.
+	terminal2 := newStage("fake:working")
+	if _, err := stageService(terminal2).Prompt(context.Background(),
+		PromptRequest{Target: terminal2.target, Text: "again", Wait: true, Timeout: 200 * time.Millisecond}); codeOf(t, err) != ErrTimeout {
+		t.Fatalf("a never-finishing turn = %v, want a timeout rather than a stall", err)
+	}
+}
+
 func TestWaitAcceptsOnlyTheNamedStates(t *testing.T) {
 	terminal := newStage("fake:working")
 	terminal.onInspect = func(s *stageTerminal, n int) {

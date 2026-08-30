@@ -38,7 +38,9 @@ func agentCommand() *Command {
 		Summary: "Send a prompt to a managed agent, optionally waiting for it to settle",
 		Usage:   "sidecar agent prompt [TARGET] TEXT [--wait] [--until STATUS]... [--timeout DURATION] [--json]",
 		Long: "With two positional arguments the first is the target and the second is the prompt.\n" +
-			"With one, the prompt goes to the shell named by SIDECAR_SHELL.\n\n" +
+			"With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that one\n" +
+			"argument names a managed target, which is read as a missing prompt rather than as\n" +
+			"a prompt that happens to be a target's name. Empty text is a usage error too.\n\n" +
 			"Nothing is written to a target that is blocked, unidentified, stale, dead, or\n" +
 			"occupied by a replacement process. The text goes through the same ordered,\n" +
 			"bracketed-paste-aware path the embedded terminal uses, and the submission key is\n" +
@@ -338,6 +340,25 @@ func runAgentPrompt(env Env, args []string) int {
 	}
 	if !f.wait && (f.timeout > 0 || len(f.until) > 0) {
 		cliErrf(env.Stderr, "--timeout and --until apply to --wait\n\n%s", help)
+		return 2
+	}
+	// One positional is the prompt text, sent to this shell. But if that one
+	// word names a managed target, the caller meant `agent prompt TARGET TEXT`
+	// and left the text off — and carrying on would type the target's own name
+	// into the caller's own shell, which is both useless and unasked for. Say
+	// what is missing instead.
+	if len(f.positional) == 1 {
+		if _, _, err := findShellTarget(env, f.positional[0], f.shell, f.project, f.shell == "" && f.project == "", tmuxenv.Namespace()); err == nil {
+			cliErrf(env.Stderr, "agent prompt %s: the prompt text is missing\n\n%s", f.positional[0], help)
+			return 2
+		}
+	}
+	// Empty text is a usage mistake like every other one here, answered before
+	// a target is resolved. The service refuses it too, but that refusal is an
+	// operational code — a caller cannot tell "I built the command line wrong"
+	// from "the agent would not take it" if both leave by the same exit.
+	if strings.TrimSpace(f.positional[len(f.positional)-1]) == "" {
+		cliErrf(env.Stderr, "agent prompt TEXT must not be empty\n\n%s", help)
 		return 2
 	}
 	if code = requireAgentControl(env, f.json); code >= 0 {

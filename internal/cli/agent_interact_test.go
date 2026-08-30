@@ -127,6 +127,57 @@ func TestAgentWaitAndPromptRefuseAnImplicitTimeout(t *testing.T) {
 	}
 }
 
+// A lone positional is the prompt text — except when it names a managed
+// target, in which case the caller left the text off and carrying on would type
+// a shell's own name into the shell the caller is sitting in. Empty text is a
+// usage error by the same reasoning: exit 2 is "you built the command line
+// wrong", and a caller cannot act on the difference if it arrives as an
+// operational refusal.
+func TestAgentPromptRefusesAMissingOrEmptyPromptWithoutWriting(t *testing.T) {
+	idle := agentFixture(t, "startup_idle.txt")
+	targetProject(t)
+	terminal := &cliAgentTerminal{launched: true, screen: idle}
+	useCLIAgentTerminal(t, terminal)
+	t.Setenv(shellstate.SessionEnv, "sidecar-sh-demo-1")
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"a lone target name is a missing prompt", []string{"agent", "prompt", "sidecar-sh-demo-2"}, "the prompt text is missing"},
+		{"empty text", []string{"agent", "prompt", "sidecar-sh-demo-2", ""}, "must not be empty"},
+		{"blank text", []string{"agent", "prompt", "   "}, "must not be empty"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, errOut := runAgentCLI(t, tc.args...)
+			if code != 2 {
+				t.Fatalf("%v = exit %d, want 2 (a usage error); stderr=%q", tc.args, code, errOut)
+			}
+			if out != "" {
+				t.Fatalf("a usage error wrote to stdout: %q", out)
+			}
+			if !strings.Contains(errOut, tc.want) {
+				t.Fatalf("stderr = %q, want it to name %q", errOut, tc.want)
+			}
+		})
+	}
+	if len(terminal.submitted) != 0 {
+		t.Fatalf("a usage error still wrote %q to a pane", terminal.submitted)
+	}
+
+	// The guard is about targets, not about words: an ordinary prompt that is
+	// not a target's name still reaches the caller's own shell. This fixture's
+	// screen never moves, so the command goes on to report a stall — what
+	// matters here is that it was delivered rather than refused as usage.
+	if code, _, errOut := runAgentCLI(t, "agent", "prompt", "look at the failing test"); code == 2 {
+		t.Fatalf("an ordinary one-argument prompt was refused as usage: %q", errOut)
+	}
+	if len(terminal.submitted) != 1 || terminal.submitted[0] != "look at the failing test" {
+		t.Fatalf("submitted = %q", terminal.submitted)
+	}
+}
+
 func TestAgentWaitRejectsAnUnknownState(t *testing.T) {
 	targetProject(t)
 	code, _, errOut := runAgentCLI(t, "agent", "wait", "sidecar-sh-demo-2", "--until", "settled", "--timeout", "1s")
