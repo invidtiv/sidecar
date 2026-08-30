@@ -1705,9 +1705,13 @@ func attentionOriginFor(workspace workspaceinventory.Workspace) plugin.Attention
 	}
 }
 
-// attentionProjectKey reduces a project key to its last path element. A remote
-// key is host-scoped by hosts.ScopedKey and has no separator to cut, so it
-// survives whole — which is what keeps the two sides comparable.
+// attentionProjectKey reduces a project key to its last path element.
+//
+// A host-scoped key loses its host prefix here along with everything else
+// before the final element. That is fine, and deliberately not what separates
+// one machine's workspace from another's: notify.Origin.HostID does that, and
+// is compared first. What matters here is only that both sides of a comparison
+// reduce the same key the same way.
 func attentionProjectKey(key string) string {
 	key = strings.TrimSpace(key)
 	if key == "" {

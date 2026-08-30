@@ -246,6 +246,26 @@ func (m *Model) dismissNotification(id string) {
 	}
 }
 
+// dismissTransition dismisses the live record for one logical transition,
+// found by its dedupe key rather than by ID.
+//
+// It dismisses at most one record. The dedupe key is what the store already
+// uses to collapse duplicates of the same logical event, so more than one
+// undismissed match would mean the store had failed at its own job; taking the
+// first keeps a withdrawal from cascading if it ever does.
+func (m *Model) dismissTransition(dedupeKey string) {
+	if dedupeKey == "" {
+		return
+	}
+	for _, n := range m.notificationCache {
+		if n.Transition == nil || n.Transition.DedupeKey != dedupeKey || n.Dismissed() {
+			continue
+		}
+		m.dismissNotification(n.ID)
+		return
+	}
+}
+
 func (m *Model) takeNotificationDeliveryCmds() []tea.Cmd {
 	cmds := m.notificationDeliveryCmds
 	m.notificationDeliveryCmds = nil
@@ -284,22 +304,8 @@ func (m *Model) deliverNotificationCmd(n notify.Notification, discovered bool) t
 			}
 		}
 		delivery.Deliver(context.Background(), notifydelivery.Request{Notification: n, Discovered: discovered})
-		return rawTerminalNotification(writer)
+		return terminalNotifyMsg(writer)
 	}
-}
-
-// rawTerminalNotification hands anything the direct-terminal transport wrote to
-// Bubble Tea, so it reaches the terminal between frames instead of inside one.
-// It is nil in the ordinary case where the transport is off or not remote.
-func rawTerminalNotification(writer *terminalNotifyWriter) tea.Msg {
-	if writer == nil {
-		return nil
-	}
-	sequence := writer.drain()
-	if sequence == "" {
-		return nil
-	}
-	return tea.Raw(sequence)()
 }
 
 func (m *Model) cancelNotificationCmd(n notify.Notification) tea.Cmd {

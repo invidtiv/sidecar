@@ -92,17 +92,57 @@ func TestNotifyKeyIsStableAcrossObservers(t *testing.T) {
 	}
 }
 
+// Seq and Generation are facts about one connection, and the key must not be
+// derived from either — a key that moved with the connection would give two
+// viewers of one host two records for one transition.
+//
+// The guarantee is structural: NotifyKey takes no such parameter. What is
+// worth asserting is that the encoder's own sequence numbering, which does
+// advance per message, leaves the key alone.
 func TestNotifyKeyIgnoresConnectionFacts(t *testing.T) {
-	// Seq and Generation are facts about one connection. The key is derived
-	// from arguments that contain neither, which this test states by showing
-	// the same inputs produce the same key from a fresh encoder.
 	origin := sampleNotify().Origin
 	at := time.Date(2026, 8, 30, 9, 0, 4, 0, time.UTC)
 	want := NotifyKey(origin, NotifyFailure, at)
-	for seq := 0; seq < 3; seq++ {
-		if got := NotifyKey(origin, NotifyFailure, at); got != want {
-			t.Fatalf("key changed on repeat: %q != %q", got, want)
+
+	var buf bytes.Buffer
+	encoder := NewEncoder(&buf)
+	for i := 0; i < 3; i++ {
+		event := sampleNotify()
+		event.Key = NotifyKey(origin, NotifyFailure, at)
+		event.Class, event.OccurredAt, event.Origin = NotifyFailure, at, origin
+		if err := encoder.Encode(Message{Kind: KindNotify, Notify: &event}); err != nil {
+			t.Fatal(err)
 		}
+	}
+	decoder := NewDecoder(bytes.NewReader(buf.Bytes()))
+	seen := map[uint64]string{}
+	for i := 0; i < 3; i++ {
+		msg, err := decoder.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen[msg.Seq] = msg.Notify.Key
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected three distinct sequence numbers, got %v", seen)
+	}
+	for seq, key := range seen {
+		if key != want {
+			t.Errorf("message %d carried key %q, want %q — the key moved with the connection", seq, key, want)
+		}
+	}
+}
+
+// Two observers whose clocks disagree by a hair can land either side of a
+// bucket boundary and produce two keys for one transition. The store's logical
+// dedupe window is the second rule that collapses them; that the two keys
+// really are distinct is this package's half of the claim, and that the window
+// is wide enough is asserted in internal/hostserve, which sees both packages.
+func TestNotifyKeyStraddlingABucketBoundaryProducesDistinctKeys(t *testing.T) {
+	origin := sampleNotify().Origin
+	boundary := time.Date(2026, 8, 30, 9, 0, 15, 0, time.UTC)
+	if before, after := NotifyKey(origin, NotifyWaiting, boundary.Add(-time.Millisecond)), NotifyKey(origin, NotifyWaiting, boundary); before == after {
+		t.Fatal("the boundary case the logical-dedupe fallback exists for cannot occur; the reasoning behind it is wrong")
 	}
 }
 
@@ -123,6 +163,24 @@ func TestNotifyValidationFailsClosed(t *testing.T) {
 		{"long origin", func(e *NotifyEvent) { e.Origin.Path = strings.Repeat("p", MaxNotifyOriginBytes+1) }, "origin field exceeds"},
 		{"unknown class", func(e *NotifyEvent) { e.Class = "restarted" }, "unknown notify class"},
 		{"withdrawal with content", func(e *NotifyEvent) { e.Withdraws = "abc" }, "withdrawal carries no notification content"},
+		{"transition withdrawal with content", func(e *NotifyEvent) { e.WithdrawsTransition = true }, "withdrawal carries no notification content"},
+		{"withdrawal naming both forms", func(e *NotifyEvent) {
+			*e = NotifyEvent{Withdraws: "abc", WithdrawsTransition: true, Class: NotifyWaiting, Origin: valid.Origin}
+		}, "not both"},
+		{"transition withdrawal without an origin", func(e *NotifyEvent) {
+			*e = NotifyEvent{WithdrawsTransition: true, Class: NotifyWaiting}
+		}, "no origin"},
+		{"transition withdrawal of something other than a wait", func(e *NotifyEvent) {
+			*e = NotifyEvent{WithdrawsTransition: true, Class: NotifyDone, Origin: valid.Origin}
+		}, "only a wait"},
+		{"transition withdrawal with an oversized origin", func(e *NotifyEvent) {
+			origin := valid.Origin
+			origin.Path = strings.Repeat("p", MaxNotifyOriginBytes+1)
+			*e = NotifyEvent{WithdrawsTransition: true, Class: NotifyWaiting, Origin: origin}
+		}, "origin field exceeds"},
+		{"withdrawal by key carrying a transition identity", func(e *NotifyEvent) {
+			*e = NotifyEvent{Withdraws: "abc", Class: NotifyWaiting, Origin: valid.Origin}
+		}, "no transition identity"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
@@ -36,21 +37,38 @@ type notifier struct {
 	// The viewer never sees a tracker ID: it derives its local record ID from
 	// the wire key, and a withdrawal has to name that same key.
 	keys map[string]string
+	// inherited holds the origins this process found already waiting rather
+	// than watched enter a wait.
+	//
+	// A reconnect or a restart is a NEW serve process whose tracker starts
+	// empty, which is what keeps reconnects silent. The cost is that the
+	// process cannot name the key of a wait it never announced — but the
+	// viewer is still holding that sticky record, and it has to be retired
+	// when the wait is answered or it never leaves the centre. So the origin
+	// is remembered here and withdrawn by transition instead of by key.
+	inherited map[string]hostproto.NotifyOrigin
 }
 
 func newNotifier(debounce time.Duration) *notifier {
-	return &notifier{tracker: notify.LaneTracker{Debounce: debounce}, keys: make(map[string]string)}
+	return &notifier{
+		tracker:   notify.LaneTracker{Debounce: debounce},
+		keys:      make(map[string]string),
+		inherited: make(map[string]hostproto.NotifyOrigin),
+	}
 }
 
 // observe folds one complete cycle's observations into the tracker and returns
 // the messages to send. The set must be complete: a workspace missing from it
 // is how the tracker learns a shell is gone.
 func (n *notifier) observe(obs []notify.LaneObservation, now time.Time) []hostproto.NotifyEvent {
+	// Inherited waits are settled against this cycle's observations before the
+	// tracker runs, because the tracker cannot answer for an episode it never
+	// saw begin.
+	out := n.settleInherited(obs)
 	events := n.tracker.Observe(obs, now)
 	if events.Empty() {
-		return nil
+		return out
 	}
-	out := make([]hostproto.NotifyEvent, 0, len(events.Post)+len(events.Dismiss))
 	for _, posted := range events.Post {
 		event, ok := notifyEvent(posted)
 		if !ok {
@@ -77,6 +95,67 @@ func (n *notifier) observe(obs []notify.LaneObservation, now time.Time) []hostpr
 		out = append(out, hostproto.NotifyEvent{Withdraws: key})
 	}
 	return out
+}
+
+// settleInherited records the workspaces this process found already waiting,
+// and withdraws them once they stop waiting or go away.
+//
+// The first sight of a workspace is a baseline, never a notification — that is
+// what makes a reconnect silent, and it must stay true. But silence about a
+// wait that is already on the viewer's screen is only correct until the wait
+// ends. Without this, answering an agent after a reconnect leaves a sticky
+// "needs input" row in the local centre with nothing left to dismiss it: the
+// hole M0 closed for local work, reopened across the connection.
+func (n *notifier) settleInherited(obs []notify.LaneObservation) []hostproto.NotifyEvent {
+	var out []hostproto.NotifyEvent
+	present := make(map[string]bool, len(obs))
+	for _, o := range obs {
+		present[o.Key] = true
+		blocked := o.Presentation.Lane == agentstatus.LaneBlocked
+		if _, inherited := n.inherited[o.Key]; !inherited {
+			// Only a workspace the tracker has not seen before can be
+			// inherited; anything else is an episode this process will
+			// announce and withdraw by key itself.
+			if blocked && !n.tracker.Knows(o.Key) {
+				n.inherited[o.Key] = wireOrigin(o)
+			}
+			continue
+		}
+		if blocked {
+			continue
+		}
+		out = append(out, n.withdrawInherited(o.Key))
+	}
+	// A workspace that vanished while inheriting a wait strands the same
+	// record: the shell is gone, so the wait certainly is too.
+	for key := range n.inherited {
+		if !present[key] {
+			out = append(out, n.withdrawInherited(key))
+		}
+	}
+	return out
+}
+
+func (n *notifier) withdrawInherited(key string) hostproto.NotifyEvent {
+	origin := n.inherited[key]
+	delete(n.inherited, key)
+	return hostproto.NotifyEvent{
+		WithdrawsTransition: true,
+		Class:               hostproto.NotifyWaiting,
+		Origin:              origin,
+	}
+}
+
+// wireOrigin builds the identity both sides derive independently. It must
+// match what notifyEvent sends for a full event, or a withdrawal would name a
+// transition the viewer has no record under.
+func wireOrigin(o notify.LaneObservation) hostproto.NotifyOrigin {
+	return hostproto.NotifyOrigin{
+		ItemID:     o.Key,
+		ProjectKey: o.Origin.ProjectKey,
+		Session:    o.Origin.TmuxSession,
+		Path:       o.Origin.WorkDir,
+	}
 }
 
 // notifyEvent projects one tracker notification onto the wire.

@@ -403,7 +403,14 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		if m.config != nil {
 			_ = m.config.Handle(msg)
 		}
-		return func() tea.Msg { return FlashMsg{Text: notificationTestFlash(msg.Result)} }, true
+		// An explicit test delivers through the same providers as real work,
+		// so it can have written a direct-terminal sequence. Emitting it here
+		// rather than in the test command keeps the drain on the far side of
+		// Deliver without the command having to carry two messages.
+		return tea.Batch(
+			m.terminalNotifyCmd(),
+			func() tea.Msg { return FlashMsg{Text: notificationTestFlash(msg.Result)} },
+		), true
 
 	case configui.Msg:
 		// Work the surface started for itself — a directory listing, so far.

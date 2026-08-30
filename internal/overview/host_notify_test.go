@@ -60,6 +60,8 @@ func collectPosts(t *testing.T, cmd tea.Cmd) ([]notify.Notification, []string) {
 			posts = append(posts, typed.Notification)
 		case notify.DismissMsg:
 			dismissed = append(dismissed, typed.ID)
+		case notify.DismissTransitionMsg:
+			dismissed = append(dismissed, typed.DedupeKey)
 		case tea.BatchMsg:
 			for _, sub := range typed {
 				if sub != nil {
@@ -145,6 +147,50 @@ func TestForwardedWithdrawalDismissesTheDerivedRecord(t *testing.T) {
 	}
 	if len(dismissed) != 1 || dismissed[0] != notify.RemoteID(remoteHostID, event.Key) {
 		t.Errorf("dismissed = %v", dismissed)
+	}
+}
+
+// A serve process that reconnected cannot name the key of a wait it never
+// announced, so it withdraws the transition instead. The dedupe key it
+// resolves to must be exactly the one the original post carried, or the
+// withdrawal matches nothing and fails silently.
+func TestForwardedTransitionWithdrawalNamesThePostedRecordsIdentity(t *testing.T) {
+	m := managedHostModel(t, true)
+	event := remoteNotifyEvent(time.Now().UTC())
+	posts, _ := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: remoteHostID, Notify: []hostproto.NotifyEvent{event}}))
+	if len(posts) != 1 || posts[0].Transition == nil {
+		t.Fatalf("posts = %+v", posts)
+	}
+
+	withdrawal := hostproto.NotifyEvent{WithdrawsTransition: true, Class: event.Class, Origin: event.Origin}
+	if err := (hostproto.Message{Kind: hostproto.KindNotify, Notify: &withdrawal}).Validate(); err != nil {
+		t.Fatalf("transition withdrawal is not a valid message: %v", err)
+	}
+	newPosts, dismissed := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: remoteHostID, Notify: []hostproto.NotifyEvent{withdrawal}}))
+	if len(newPosts) != 0 {
+		t.Errorf("a withdrawal posted %d notification(s)", len(newPosts))
+	}
+	if len(dismissed) != 1 || dismissed[0] != posts[0].Transition.DedupeKey {
+		t.Errorf("dismissed %v, want the posted record's dedupe key %q", dismissed, posts[0].Transition.DedupeKey)
+	}
+}
+
+// A transition withdrawal from one host must not name another host's record,
+// even for the identical workspace path — the dedupe key leads with the host.
+func TestForwardedTransitionWithdrawalCannotCrossHosts(t *testing.T) {
+	m := managedHostModel(t, true)
+	event := remoteNotifyEvent(time.Now().UTC())
+	posts, _ := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: remoteHostID, Notify: []hostproto.NotifyEvent{event}}))
+	if len(posts) != 1 {
+		t.Fatalf("posts = %+v", posts)
+	}
+	withdrawal := hostproto.NotifyEvent{WithdrawsTransition: true, Class: event.Class, Origin: event.Origin}
+	_, dismissed := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: "other-host", Notify: []hostproto.NotifyEvent{withdrawal}}))
+	if len(dismissed) != 1 {
+		t.Fatalf("dismissals = %v", dismissed)
+	}
+	if dismissed[0] == posts[0].Transition.DedupeKey {
+		t.Error("a withdrawal from another host named this host's record")
 	}
 }
 

@@ -41,6 +41,18 @@ func (m *Model) forwardHostNotifications(update hosts.Update) tea.Cmd {
 	cmds := make([]tea.Cmd, 0, len(update.Notify))
 	for _, event := range update.Notify {
 		if event.IsWithdrawal() {
+			if event.WithdrawsTransition {
+				// The wait was answered on a host whose serve process could not
+				// name the event key, because it reconnected or restarted after
+				// the wait began. Both sides derive the same dedupe key from the
+				// origin and class, so the answer still reaches the record.
+				key, ok := remoteDedupeKey(update.HostID, event)
+				if !ok {
+					continue
+				}
+				cmds = append(cmds, func() tea.Msg { return notify.DismissTransitionMsg{DedupeKey: key} })
+				continue
+			}
 			// The wait was answered on the host. Withdrawing by derived ID
 			// works from any local process, including one that never saw the
 			// post: the ID is a function of the host and the event key.
@@ -95,12 +107,7 @@ func remoteNotification(hostID string, event hostproto.NotifyEvent, now time.Tim
 		// written against the sources they can see.
 		source = defaultSourceFor(class)
 	}
-	origin := notify.Origin{
-		HostID:      hostID,
-		TmuxSession: event.Origin.Session,
-		ProjectKey:  attentionProjectKey(hosts.ScopedKey(hostID, event.Origin.ProjectKey)),
-		WorkDir:     event.Origin.Path,
-	}
+	origin := remoteOrigin(hostID, event.Origin)
 	stable := origin.StableKey()
 	return notify.Notification{
 		ID:        notify.RemoteID(hostID, event.Key),
@@ -119,10 +126,38 @@ func remoteNotification(hostID string, event hostproto.NotifyEvent, now time.Tim
 			// fell either side of the event key's time bucket produce two IDs
 			// for one transition, and the store's logical window collapses
 			// them here.
-			DedupeKey:      hostID + ":" + stable + ":" + string(class),
+			DedupeKey:      dedupeKeyFor(hostID, stable, class),
 			ReplacementKey: stable,
 		},
 	}, true
+}
+
+// remoteOrigin builds the local origin for a remote event.
+//
+// A post and a transition withdrawal both derive identity through here, and
+// that is the point: a withdrawal computing the key even slightly differently
+// would match no record and fail silently, which is indistinguishable from the
+// bug it exists to fix.
+func remoteOrigin(hostID string, o hostproto.NotifyOrigin) notify.Origin {
+	return notify.Origin{
+		HostID:      hostID,
+		TmuxSession: o.Session,
+		ProjectKey:  attentionProjectKey(hosts.ScopedKey(hostID, o.ProjectKey)),
+		WorkDir:     o.Path,
+	}
+}
+
+func dedupeKeyFor(hostID, stableOrigin string, class notify.TransitionClass) string {
+	return hostID + ":" + stableOrigin + ":" + string(class)
+}
+
+// remoteDedupeKey names the transition a withdrawal retires.
+func remoteDedupeKey(hostID string, event hostproto.NotifyEvent) (string, bool) {
+	class := transitionClass(event.Class)
+	if class == "" || hostID == "" {
+		return "", false
+	}
+	return dedupeKeyFor(hostID, remoteOrigin(hostID, event.Origin).StableKey(), class), true
 }
 
 func transitionClass(class hostproto.NotifyClass) notify.TransitionClass {

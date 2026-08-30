@@ -3,10 +3,13 @@ package notifydelivery
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
@@ -449,16 +452,36 @@ func TestServiceStaysSilentWhenAutoCannotIdentifyTheTerminal(t *testing.T) {
 	}
 }
 
-// Structured CLI output and protocol bytes must not share a stream. The
-// transport writes only through its injected writer, and the default writer is
-// standard error, so nothing it does can reach a JSON document on stdout.
-func TestTerminalTransportNeverTouchesStandardOutput(t *testing.T) {
+// The transport emits only through its injected writer — it never reaches for
+// a stream of its own. That is what lets a host choose where the bytes go, and
+// it is why structured CLI output on stdout cannot receive them: the CLI's
+// writer is standard error, and the TUI's is the renderer.
+//
+// This asserts the injection property. Which stream the default writer picks
+// is a separate claim, proven by TestStderrTerminalWriterRefusesANonTerminal.
+func TestTerminalTransportEmitsOnlyThroughItsInjectedWriter(t *testing.T) {
 	notifier, sink := newTerminalNative(t, config.TerminalNotifierKitty, nil)
 	if _, err := notifier.Deliver(context.Background(), Message{NotificationID: "ntf-01", Title: "hi"}); err != nil {
 		t.Fatalf("Deliver() error = %v", err)
 	}
 	if len(sink.written()) != 1 {
 		t.Fatalf("writes = %q, want the injected writer to have received everything", sink.written())
+	}
+}
+
+// The default writer refuses a standard error that is not a terminal, which is
+// what keeps a sequence out of a redirected log file or a pipe. Under `go
+// test` stderr is not a terminal, so this exercises the refusal directly.
+func TestStderrTerminalWriterRefusesANonTerminal(t *testing.T) {
+	if term.IsTerminal(int(os.Stderr.Fd())) {
+		t.Skip("standard error is a terminal in this environment")
+	}
+	n, err := StderrTerminalWriter([]byte("\x1b]9;hi\x07"))
+	if err == nil {
+		t.Fatal("a non-terminal standard error accepted a notification sequence")
+	}
+	if n != 0 {
+		t.Fatalf("wrote %d bytes to a non-terminal standard error", n)
 	}
 }
 

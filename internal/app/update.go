@@ -625,6 +625,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		(&m).dismissNotification(msg.ID)
 		return m, (&m).syncToastReveal(time.Now())
 
+	case notify.DismissTransitionMsg:
+		(&m).dismissTransition(msg.DedupeKey)
+		return m, (&m).syncToastReveal(time.Now())
+
 	case notify.ReadMsg:
 		(&m).readNotification(msg.ID)
 		return m, nil

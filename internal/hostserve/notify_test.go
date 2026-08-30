@@ -235,6 +235,99 @@ func TestNotifierDropsAnUnknownWithdrawal(t *testing.T) {
 	}
 }
 
+// The reconnect case. A second serve process finds the agent already waiting,
+// so it says nothing — that silence is required. But the viewer is still
+// holding the sticky record from the first process, and answering the agent
+// has to retire it. The second process cannot name the original key, so it
+// withdraws the transition instead.
+func TestNotifierWithdrawsAWaitItInheritedFromAnEarlierConnection(t *testing.T) {
+	at := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+
+	first := newNotifier(time.Nanosecond)
+	first.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at)
+	first.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at.Add(time.Second))
+	posted := first.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at.Add(2*time.Second))
+	if len(posted) != 1 || posted[0].Class != hostproto.NotifyWaiting {
+		t.Fatalf("first connection posts = %+v", posted)
+	}
+
+	// The stream drops and a new serve process starts against the same wait.
+	second := newNotifier(time.Nanosecond)
+	if quiet := second.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at.Add(3*time.Second)); len(quiet) != 0 {
+		t.Fatalf("the reconnect announced an existing wait: %+v", quiet)
+	}
+
+	answered := second.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at.Add(4*time.Second))
+	if len(answered) != 1 {
+		t.Fatalf("answering an inherited wait produced %+v", answered)
+	}
+	got := answered[0]
+	if !got.IsWithdrawal() || !got.WithdrawsTransition {
+		t.Fatalf("withdrawal = %+v, want a transition withdrawal", got)
+	}
+	if got.Withdraws != "" {
+		t.Errorf("a process that never saw the post named a key: %q", got.Withdraws)
+	}
+	// The withdrawal must name the same transition the first connection's post
+	// did, or the viewer has nothing to match it against.
+	if got.Origin != posted[0].Origin || got.Class != posted[0].Class {
+		t.Errorf("withdrawal identity %+v/%s does not match the post %+v/%s", got.Origin, got.Class, posted[0].Origin, posted[0].Class)
+	}
+	if err := (hostproto.Message{Kind: hostproto.KindNotify, Notify: &got}).Validate(); err != nil {
+		t.Errorf("transition withdrawal is not a valid message: %v", err)
+	}
+
+	// Only once: the wait has been settled and must not be withdrawn again.
+	if again := second.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at.Add(5*time.Second)); len(again) != 0 {
+		t.Errorf("the inherited wait was withdrawn twice: %+v", again)
+	}
+}
+
+// The event key quantizes occurrence to 15s, so two observers either side of a
+// bucket boundary produce two keys for one transition. The store's logical
+// dedupe window is what collapses them, and it can only do that while it is at
+// least as wide as the quantum. Narrowing either one without the other would
+// make a straddling remote transition post twice, silently.
+func TestLogicalDedupeWindowCoversTheEventKeyQuantum(t *testing.T) {
+	if notify.LogicalDedupeWindow < hostproto.NotifyKeyResolution {
+		t.Fatalf("logical dedupe window %s is narrower than the key quantum %s, so a transition straddling a bucket boundary posts twice",
+			notify.LogicalDedupeWindow, hostproto.NotifyKeyResolution)
+	}
+}
+
+// A workspace that goes away while its inherited wait is outstanding strands
+// the same record, so it is withdrawn on disappearance too.
+func TestNotifierWithdrawsAnInheritedWaitThatDisappears(t *testing.T) {
+	at := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	n := newNotifier(time.Nanosecond)
+	n.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at)
+	gone := n.observe(nil, at.Add(time.Second))
+	if len(gone) != 1 || !gone[0].WithdrawsTransition {
+		t.Fatalf("disappearance of an inherited wait produced %+v", gone)
+	}
+}
+
+// A wait this process watched begin is withdrawn by key, not by transition:
+// the key form is exact, and using both would retire the record twice.
+func TestNotifierPrefersTheKeyFormForAWaitItAnnounced(t *testing.T) {
+	at := time.Date(2026, 8, 30, 9, 0, 0, 0, time.UTC)
+	n := newNotifier(time.Nanosecond)
+	n.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at)
+	n.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at.Add(time.Second))
+	posted := n.observe([]notify.LaneObservation{blockedObservation("w1", "s1", at)}, at.Add(2*time.Second))
+	if len(posted) != 1 {
+		t.Fatalf("posts = %+v", posted)
+	}
+	answered := n.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at.Add(3*time.Second))
+	answered = append(answered, n.observe([]notify.LaneObservation{workingObservation("w1", "s1", at)}, at.Add(4*time.Second))...)
+	if len(answered) != 1 {
+		t.Fatalf("withdrawals = %+v", answered)
+	}
+	if answered[0].WithdrawsTransition || answered[0].Withdraws != posted[0].Key {
+		t.Errorf("withdrawal = %+v, want the key form naming %q", answered[0], posted[0].Key)
+	}
+}
+
 func TestLaneObservationsSkipRowsWithoutAnAgent(t *testing.T) {
 	result := workspaceinventory.ProjectResult{
 		ProjectKey: "spike", ProjectName: "spike", ProjectRoot: "/project",

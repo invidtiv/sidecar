@@ -34,6 +34,20 @@ type LaneTracker struct {
 	states   map[string]*laneState
 }
 
+// Knows reports whether the tracker already holds state for a workspace.
+//
+// It exists for a caller that has to tell a first sighting from a subsequent
+// one, because the two mean different things: the first is a baseline the
+// tracker will never announce, so anything already in progress at that moment
+// belongs to whoever was watching before.
+func (t *LaneTracker) Knows(key string) bool {
+	if t.states == nil {
+		return false
+	}
+	_, ok := t.states[key]
+	return ok
+}
+
 // DefaultLaneDebounce is the window a lane must hold before it posts. Long
 // enough to swallow the flicker as an agent's prompt renders, short enough that
 // "your agent is waiting" still arrives while the user is looking.

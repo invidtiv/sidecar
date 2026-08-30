@@ -328,11 +328,25 @@ type NotifyEvent struct {
 	// and no origin — it is an answer to something the viewer already has, and
 	// a message that both announced and withdrew would have two meanings.
 	Withdraws string `json:"withdraws,omitempty"`
+
+	// WithdrawsTransition retires whatever wait is outstanding for this event's
+	// Origin and Class without naming an event key.
+	//
+	// It exists because a serve process cannot always name the key. The key is
+	// a function of the occurrence time, and a process that reconnected or
+	// restarted never saw the original event — but the viewer still holds the
+	// sticky record, and a wait that outlives its answer is worse than no wait
+	// at all. Origin and Class are both derivable from what the process is
+	// observing right now, on either side, so this form survives a reconnect
+	// where the key form cannot.
+	//
+	// It still carries no text: it can only retire a record, never create one.
+	WithdrawsTransition bool `json:"withdrawsTransition,omitempty"`
 }
 
 // IsWithdrawal reports whether this message retires an earlier notification
 // rather than announcing a new one.
-func (e NotifyEvent) IsWithdrawal() bool { return e.Withdraws != "" }
+func (e NotifyEvent) IsWithdrawal() bool { return e.Withdraws != "" || e.WithdrawsTransition }
 
 // NotifyKeyResolution quantizes the occurrence time inside an event key.
 //
@@ -392,10 +406,35 @@ func (e NotifyEvent) validate() error {
 		if len(e.Withdraws) > MaxNotifyKeyBytes {
 			return fmt.Errorf("%w: withdrawal key exceeds %d bytes", ErrInvalid, MaxNotifyKeyBytes)
 		}
+		// The two forms are alternatives, not a spectrum. One names a key, the
+		// other names an origin and class; a message carrying both would leave
+		// a viewer to choose which identity it meant.
+		if e.Withdraws != "" && e.WithdrawsTransition {
+			return fmt.Errorf("%w: a withdrawal names a key or a transition, not both", ErrInvalid)
+		}
 		// A withdrawal that also carried text would be two messages in one, and
 		// a viewer applying both would post the thing it was told to retire.
-		if e.Key != "" || e.Title != "" || e.Body != "" || e.Class != "" || !e.Origin.empty() {
+		// Every field is checked, not only the ones the viewer reads today, so
+		// "a withdrawal carries no notification content" stays true of the wire
+		// rather than only of the current reader.
+		if e.Key != "" || e.Title != "" || e.Body != "" || e.Source != "" || e.Severity != "" || e.Sticky {
 			return fmt.Errorf("%w: a withdrawal carries no notification content", ErrInvalid)
+		}
+		if e.WithdrawsTransition {
+			// This form is identified by what it names, so those two fields are
+			// required here exactly where the key form forbids them.
+			if e.Origin.empty() {
+				return fmt.Errorf("%w: a transition withdrawal has no origin", ErrInvalid)
+			}
+			switch e.Class {
+			case NotifyWaiting:
+			default:
+				return fmt.Errorf("%w: only a wait can be withdrawn by transition", ErrInvalid)
+			}
+			return e.Origin.validateBounds()
+		}
+		if e.Class != "" || !e.Origin.empty() || !e.OccurredAt.IsZero() {
+			return fmt.Errorf("%w: a withdrawal by key carries no transition identity", ErrInvalid)
 		}
 		return nil
 	}
@@ -420,7 +459,19 @@ func (e NotifyEvent) validate() error {
 	default:
 		return fmt.Errorf("%w: unknown notify class %q", ErrInvalid, e.Class)
 	}
-	for _, field := range []string{e.Origin.ItemID, e.Origin.ProjectKey, e.Origin.Session, e.Origin.Path, e.Source, e.Severity} {
+	for _, field := range []string{e.Source, e.Severity} {
+		if len(field) > MaxNotifyOriginBytes {
+			return fmt.Errorf("%w: notify origin field exceeds %d bytes", ErrInvalid, MaxNotifyOriginBytes)
+		}
+	}
+	return e.Origin.validateBounds()
+}
+
+// validateBounds enforces the per-field limits on an origin. It is separate so
+// a transition withdrawal, which carries an origin and nothing else, is bounded
+// by the same rule as a full event rather than by a second copy of it.
+func (o NotifyOrigin) validateBounds() error {
+	for _, field := range []string{o.ItemID, o.ProjectKey, o.Session, o.Path} {
 		if len(field) > MaxNotifyOriginBytes {
 			return fmt.Errorf("%w: notify origin field exceeds %d bytes", ErrInvalid, MaxNotifyOriginBytes)
 		}
