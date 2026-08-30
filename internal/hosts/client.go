@@ -149,6 +149,14 @@ type Client struct {
 
 	closeOnce sync.Once
 	done      chan struct{}
+	// stopTransport is set only for the production SSH dialer. Ordinary
+	// reconnects leave the multiplexed master warm; deliberate Client.Close
+	// tears it down before its private control socket directory is removed.
+	stopTransport func()
+	transportDone chan struct{}
+	runMu         sync.Mutex
+	runStarted    bool
+	runDone       chan struct{}
 
 	// publishMu guards the update channel's lifetime against publishers on
 	// other goroutines. See publish and closeUpdates.
@@ -187,14 +195,16 @@ type ClientOptions struct {
 // NewClient builds a client for one host. It does not connect; call Run.
 func NewClient(host Host, opts ClientOptions) *Client {
 	client := &Client{
-		host:       host,
-		dial:       opts.Dial,
-		now:        opts.Now,
-		updates:    make(chan Update, 16),
-		staleAfter: opts.StaleAfter,
-		minBackoff: opts.MinBackoff,
-		maxBackoff: opts.MaxBackoff,
-		done:       make(chan struct{}),
+		host:          host,
+		dial:          opts.Dial,
+		now:           opts.Now,
+		updates:       make(chan Update, 16),
+		staleAfter:    opts.StaleAfter,
+		minBackoff:    opts.MinBackoff,
+		maxBackoff:    opts.MaxBackoff,
+		done:          make(chan struct{}),
+		transportDone: make(chan struct{}),
+		runDone:       make(chan struct{}),
 	}
 	if client.now == nil {
 		client.now = time.Now
@@ -219,6 +229,12 @@ func NewClient(host Host, opts ClientOptions) *Client {
 	}
 	if client.dial == nil {
 		client.dial = sshDialer(host, client.controlDir)
+		client.stopTransport = func() {
+			transport, err := NewTransport(host, client.controlDir)
+			if err == nil {
+				_ = transport.Close()
+			}
+		}
 	}
 	client.health = Health{State: StateConnecting, Since: client.now()}
 	return client
@@ -272,17 +288,49 @@ func (c *Client) ControlCommand(ctx context.Context, session string) *exec.Cmd {
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
-		if c.ownsControlDir && c.controlDir != "" {
-			_ = os.RemoveAll(c.controlDir)
+		finish := func() {
+			if c.stopTransport != nil {
+				// First let the channel process finish cancellation and Wait.
+				// Otherwise -O exit can race an initial dial that has not created
+				// its master yet, leaving that late master alive after the socket
+				// check already failed. Injected dialers have no transport to stop
+				// and may not make their reader context-aware, so never join those.
+				c.runMu.Lock()
+				runStarted := c.runStarted
+				c.runMu.Unlock()
+				if runStarted {
+					<-c.runDone
+				}
+				c.stopTransport()
+			}
+			if c.ownsControlDir && c.controlDir != "" {
+				_ = os.RemoveAll(c.controlDir)
+			}
+			close(c.transportDone)
 		}
+		if c.stopTransport == nil {
+			finish()
+			return
+		}
+		// Config reload calls Close from the Bubble Tea update path. Keep that
+		// path local-only; Registry.Stop joins this bounded cleanup on process exit.
+		go finish()
 	})
 }
+
+func (c *Client) waitTransportStopped() { <-c.transportDone }
 
 // Run drives connect, consume, and reconnect until ctx is cancelled or Close
 // is called. It returns only when stopping, and never returns an error: a host
 // that cannot be reached is a state to render, not a failure to propagate.
 func (c *Client) Run(ctx context.Context) {
-	defer c.closeUpdates()
+	c.runMu.Lock()
+	c.runStarted = true
+	c.runMu.Unlock()
+	defer func() {
+		c.closeUpdates()
+		close(c.runDone)
+	}()
 
 	attempts := 0
 	for {
@@ -643,6 +691,12 @@ func sshDialer(host Host, controlDir string) Dialer {
 			return nil, err
 		}
 		cmd := transport.Command(ctx, transport.ServeCommand())
+		// OpenSSH multiplexing (and ProxyCommand) may leave a descendant holding
+		// the stderr descriptor after the channel process has been killed. With
+		// the zero os/exec default, Wait then blocks until that descendant exits —
+		// observed as a minute-plus pause after confirming Quit. Bound both that
+		// pipe drain and a child that does not promptly honor context cancellation.
+		cmd.WaitDelay = 250 * time.Millisecond
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			return nil, err

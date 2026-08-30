@@ -210,8 +210,13 @@ func (t *Transport) ControlCommand(session string) string {
 // also work, but an explicit exit means quitting Sidecar leaves no ssh process
 // behind at all, which is the behaviour a user expects and can verify.
 func (t *Transport) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
 	args := append(t.SSHArgs(), "-O", "exit", t.host.Target)
-	cmd := exec.Command("ssh", args...) //nolint:gosec // args are built here
+	cmd := exec.CommandContext(ctx, "ssh", args...) //nolint:gosec // args are built here
+	// Apply the same pipe/descendant bound as the serve channel. A wedged
+	// ControlMaster must not turn explicit cleanup back into a quit delay.
+	cmd.WaitDelay = 250 * time.Millisecond
 	// A master that was never started makes this fail; that is not an error
 	// worth reporting to anyone.
 	_ = cmd.Run()

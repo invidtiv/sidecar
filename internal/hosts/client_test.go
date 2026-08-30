@@ -4,8 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -45,6 +49,119 @@ func heldOpenReader(stream string) (io.Reader, func()) {
 		}
 	}()
 	return pipeReader, func() { _ = pipeWriter.Close(); _ = pipeReader.Close() }
+}
+
+// TestSSHDialerCloseDoesNotWaitForInheritedStderr reproduces the quit delay
+// seen with OpenSSH multiplexing. A ControlMaster or ProxyCommand descendant
+// may retain the stderr descriptor after the channel process has been killed;
+// os/exec otherwise waits for that descriptor's EOF before Wait returns.
+func TestSSHDialerCloseDoesNotWaitForInheritedStderr(t *testing.T) {
+	dir := t.TempDir()
+	ssh := filepath.Join(dir, "ssh")
+	childPIDPath := filepath.Join(dir, "child.pid")
+	script := "#!/bin/sh\n/bin/sleep 2 &\nprintf '%s\\n' \"$!\" > \"$FAKE_SSH_CHILD_PID_FILE\"\nprintf x\n/bin/sleep 60\n"
+	if err := os.WriteFile(ssh, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake ssh: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("FAKE_SSH_CHILD_PID_FILE", childPIDPath)
+
+	dial := sshDialer(Host{ID: "slow-close", Target: "slow-close"}, t.TempDir())
+	conn, err := dial(context.Background())
+	if err != nil {
+		t.Fatalf("dial fake ssh: %v", err)
+	}
+	ready := make([]byte, 1)
+	if _, err := io.ReadFull(conn.Stdout, ready); err != nil {
+		t.Fatalf("wait for fake ssh: %v", err)
+	}
+	childPID, err := os.ReadFile(childPIDPath)
+	if err != nil {
+		t.Fatalf("read fake ssh child pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(childPID)))
+	if err != nil {
+		t.Fatalf("parse fake ssh child pid: %v", err)
+	}
+	t.Cleanup(func() {
+		if process, findErr := os.FindProcess(pid); findErr == nil {
+			_ = process.Kill()
+		}
+	})
+	started := time.Now()
+	conn.Close()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("closing ssh channel took %v; inherited stderr held Wait open", elapsed)
+	}
+}
+
+// TestRegistryStopTerminatesTheSSHMaster covers the app's actual quit owner:
+// Registry.Stop must stop both the serve channel and the private multiplexing
+// master before removing the socket directory needed to address that master.
+func TestRegistryStopTerminatesTheSSHMaster(t *testing.T) {
+	dir := t.TempDir()
+	ssh := filepath.Join(dir, "ssh")
+	childPIDPath := filepath.Join(dir, "master.pid")
+	script := `#!/bin/sh
+case " $* " in
+  *" -O exit "*)
+    if test -f "$FAKE_SSH_MASTER_PID_FILE"; then
+      /bin/kill "$(/bin/cat "$FAKE_SSH_MASTER_PID_FILE")" 2>/dev/null || true
+    fi
+    exit 0
+    ;;
+esac
+/bin/sleep 60 &
+printf '%s\n' "$!" > "$FAKE_SSH_MASTER_PID_FILE"
+printf x
+/bin/sleep 60
+`
+	if err := os.WriteFile(ssh, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake ssh: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("FAKE_SSH_MASTER_PID_FILE", childPIDPath)
+
+	registry := NewRegistry(ClientOptions{})
+	registry.Sync(context.Background(), []Host{{ID: "slow-close", Target: "slow-close"}})
+	var pid int
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if childPID, err := os.ReadFile(childPIDPath); err == nil {
+			pid, err = strconv.Atoi(strings.TrimSpace(string(childPID)))
+			if err == nil {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if pid == 0 {
+		registry.Stop()
+		t.Fatal("fake ssh master never started")
+	}
+	t.Cleanup(func() {
+		if process, findErr := os.FindProcess(pid); findErr == nil {
+			_ = process.Kill()
+		}
+	})
+
+	started := time.Now()
+	registry.Stop()
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("Registry.Stop took %v", elapsed)
+	}
+	deadline = time.Now().Add(time.Second)
+	for processAlive(pid) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		t.Fatal("Registry.Stop left the fake ssh master running")
+	}
+}
+
+func processAlive(pid int) bool {
+	process, err := os.FindProcess(pid)
+	return err == nil && process.Signal(syscall.Signal(0)) == nil
 }
 
 func encodeStream(t *testing.T, messages ...hostproto.Message) string {

@@ -137,6 +137,7 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 	}
 
 	var stopping []context.CancelFunc
+	var stoppingClients []*Client
 	for id, client := range r.clients {
 		host, keep := wanted[id]
 		if keep && host.Same(client.Host()) {
@@ -145,6 +146,7 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		// Either gone, or its settings changed — a changed target is a
 		// different machine as far as the stream is concerned.
 		stopping = append(stopping, r.cancels[id])
+		stoppingClients = append(stoppingClients, client)
 		client.Close()
 		delete(r.clients, id)
 		delete(r.cancels, id)
@@ -173,6 +175,17 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		incarnations = append(incarnations, incarnation)
 	}
 	r.mu.Unlock()
+	for _, cancel := range stopping {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	// A retargeted host reuses its per-ID control path. Do not let the new
+	// client create a master there until the old client's bounded -O exit has
+	// completed, or late cleanup can kill the replacement connection.
+	for _, client := range stoppingClients {
+		client.waitTransportStopped()
+	}
 
 	// Publish the initial health for every host being started, so a
 	// registered machine appears the moment it is registered rather than when
@@ -183,11 +196,6 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		client.publish(Update{HostID: client.host.ID, Health: client.Health()})
 	}
 
-	for _, cancel := range stopping {
-		if cancel != nil {
-			cancel()
-		}
-	}
 	for i, client := range starting {
 		r.forwarders.Add(1)
 		go client.Run(contexts[i])
@@ -325,6 +333,13 @@ func (r *Registry) Stop() {
 	// than parking for the life of the process. It is closed after the
 	// clients, and forward() is the only sender, so nothing can be mid-send.
 	r.closeUpdates()
+	// Client.Close starts each production ControlMaster teardown concurrently,
+	// so N configured hosts cost one bounded shutdown window rather than N.
+	// Join before removing the socket root: after that, ssh -O exit can no
+	// longer address a master that still needs to be reaped.
+	for _, client := range clients {
+		client.waitTransportStopped()
+	}
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 	}
