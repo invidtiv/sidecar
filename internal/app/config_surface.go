@@ -1,7 +1,9 @@
 package app
 
 import (
+	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -15,9 +17,11 @@ import (
 	"github.com/marcus/sidecar/internal/configui"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/theme"
+	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/version"
 )
 
@@ -78,7 +82,7 @@ func (m *Model) openConfiguration(page configui.PageID) tea.Cmd {
 	// have changed since the last look, and none of them may be touched on the
 	// render path.
 	m.config.SetCheckInput(m.configCheckInput())
-	return m.config.Recheck()
+	return tea.Batch(m.config.Recheck(), m.config.TakePending())
 }
 
 // toggleConfiguration is what every "settings" control does: the gear, the
@@ -353,6 +357,45 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 	case configui.ConfigSavedMsg:
 		return m.applyConfigSaved(msg), true
 
+	case configui.ProbeNotificationDeliveryMsg:
+		delivery, ok := m.notificationDelivery.(notifydelivery.StatusProvider)
+		if !ok {
+			return func() tea.Msg {
+				return configui.NotificationDeliveryStatusMsg{Status: notifydelivery.Status{
+					Native: notifydelivery.Capability{Reason: "provider status unavailable"},
+					Sound:  notifydelivery.Capability{Reason: "provider status unavailable"},
+				}}
+			}, true
+		}
+		return func() tea.Msg {
+			return configui.NotificationDeliveryStatusMsg{Status: delivery.Status(context.Background())}
+		}, true
+
+	case configui.TestNotificationDeliveryMsg:
+		request, err := notifydelivery.ExplicitTestRequest(msg.Event)
+		if err != nil || m.notificationDelivery == nil {
+			return func() tea.Msg {
+				result := notifydelivery.Result{
+					Native: notifydelivery.ChannelResult{Error: "notification delivery unavailable"},
+					Sound:  notifydelivery.ChannelResult{Error: "notification delivery unavailable"},
+				}
+				if err != nil {
+					result.Native.Error, result.Sound.Error = err.Error(), err.Error()
+				}
+				return configui.NotificationTestResultMsg{Result: result}
+			}, true
+		}
+		delivery := m.notificationDelivery
+		return func() tea.Msg {
+			return configui.NotificationTestResultMsg{Result: delivery.Deliver(context.Background(), request)}
+		}, true
+
+	case configui.NotificationTestResultMsg:
+		if m.config != nil {
+			_ = m.config.Handle(msg)
+		}
+		return func() tea.Msg { return FlashMsg{Text: notificationTestFlash(msg.Result)} }, true
+
 	case configui.Msg:
 		// Work the surface started for itself — a directory listing, so far.
 		if m.config == nil {
@@ -361,6 +404,30 @@ func (m *Model) configSurfaceMsg(msg tea.Msg) (tea.Cmd, bool) {
 		return m.config.Handle(msg), true
 	}
 	return nil, false
+}
+
+func notificationTestFlash(result notifydelivery.Result) string {
+	delivered := 0
+	for _, channel := range []notifydelivery.ChannelResult{result.Native, result.Sound} {
+		if channel.Delivered && channel.Error != "" {
+			return "Notification test delivered; coordination failed: " + channel.Error
+		}
+	}
+	for _, channel := range []notifydelivery.ChannelResult{result.Native, result.Sound} {
+		if channel.Delivered {
+			delivered++
+		}
+		if channel.Error != "" {
+			return "Notification test failed: " + channel.Error
+		}
+	}
+	if delivered == 0 {
+		return "Notification test: no enabled provider delivered"
+	}
+	if delivered == 1 {
+		return "Notification test delivered on 1 channel"
+	}
+	return "Notification test delivered on 2 channels"
 }
 
 // applyConfigSaved reloads after Configuration wrote a setting and reapplies the
@@ -411,6 +478,18 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		cmds = append(cmds, m.config.Recheck())
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) handleConfigReloadRequest(req uirequest.Request) tea.Cmd {
+	cmd := m.applyConfigSaved(configui.ConfigSavedMsg{})
+	_ = uirequest.WriteAck(config.StateDir(), req.ID, req.Action, uirequest.Ack{
+		Instance: uirequest.InstanceID("app"),
+		Host:     uirequest.HostName(),
+		PID:      os.Getpid(),
+		Status:   uirequest.StatusOpened,
+		Surface:  "configuration",
+	})
+	return cmd
 }
 
 // openConfigFile puts a file in front of the user. A file inside the project

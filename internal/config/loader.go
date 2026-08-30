@@ -91,11 +91,17 @@ type rawShellsConfig struct {
 }
 
 type rawNotificationsConfig struct {
-	Sources map[string]rawNotificationSourceConfig `json:"sources"`
+	Native     NativeNotificationsConfig              `json:"native"`
+	Sound      SoundNotificationsConfig               `json:"sound"`
+	QuietHours *QuietHoursConfig                      `json:"quietHours"`
+	Sources    map[string]rawNotificationSourceConfig `json:"sources"`
 }
 
 type rawNotificationSourceConfig struct {
-	Expiry string `json:"expiry"`
+	Toast  *bool    `json:"toast"`
+	Native *bool    `json:"native"`
+	Sound  SoundCue `json:"sound"`
+	Expiry string   `json:"expiry"`
 }
 
 type rawSelectionConfig struct {
@@ -509,6 +515,23 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 
 	// Notifications
+	if raw.Notifications != nil {
+		if raw.Notifications.Native.Mode != "" {
+			cfg.Notifications.Native.Mode = raw.Notifications.Native.Mode
+		}
+		if raw.Notifications.Native.Provider != "" {
+			cfg.Notifications.Native.Provider = raw.Notifications.Native.Provider
+		}
+		if raw.Notifications.Sound.Mode != "" {
+			cfg.Notifications.Sound.Mode = raw.Notifications.Sound.Mode
+		}
+		cfg.Notifications.Sound.AttentionPath = raw.Notifications.Sound.AttentionPath
+		cfg.Notifications.Sound.DonePath = raw.Notifications.Sound.DonePath
+		cfg.Notifications.Sound.FailurePath = raw.Notifications.Sound.FailurePath
+		if raw.Notifications.QuietHours != nil {
+			cfg.Notifications.QuietHours = *raw.Notifications.QuietHours
+		}
+	}
 	if raw.Notifications != nil && len(raw.Notifications.Sources) > 0 {
 		if cfg.Notifications.Sources == nil {
 			cfg.Notifications.Sources = make(map[string]NotificationSourceConfig, len(raw.Notifications.Sources))

@@ -22,6 +22,7 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -306,6 +307,8 @@ type Model struct {
 	// Ready state
 	ready              bool
 	applicationFocused bool
+	attentionPublished attentionSnapshot
+	attentionTracking  bool
 
 	// Version info. One discovered target per product (Sidecar, td, and — only
 	// when the tasks_plugin feature is effectively enabled — Tasks), rather
@@ -396,6 +399,12 @@ type Model struct {
 	// worktree switches, and is the single writer for this process.
 	notifications     notify.Store
 	notificationCache []notify.Notification
+	// notificationDelivery is the shared app/CLI coordinator. Its production
+	// value is lazy: construction performs no state, PATH, cache, or subprocess
+	// work on the startup paint path. Commands queued by nested dismissal paths
+	// are drained by the Update postlude.
+	notificationDelivery     notifydelivery.Coordinator
+	notificationDeliveryCmds []tea.Cmd
 	// notificationCTAs memoizes each notification's reconciled target list by
 	// id, so the file-existence check behind a verified underline runs once per
 	// record rather than once per frame. See notification_targets.go.
@@ -482,6 +491,12 @@ func WithStartupConfigPage(page configui.PageID) Option {
 	return func(m *Model) { m.startupConfigPage = page }
 }
 
+// WithNotificationDelivery injects a coordinator for focused app tests and
+// alternate hosts. Production uses the lazy platform coordinator.
+func WithNotificationDelivery(delivery notifydelivery.Coordinator) Option {
+	return func(m *Model) { m.notificationDelivery = delivery }
+}
+
 // New creates a new application model.
 // initialPluginID optionally specifies which plugin to focus on startup (empty = first plugin).
 func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentVersion, workDir, projectRoot, initialPluginID string, opts ...Option) Model {
@@ -529,6 +544,7 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	notify.ApplyConfig(cfg.Notifications)
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
+	m.notificationDelivery = notifydelivery.NewDefault(config.StateDir())
 	m.notificationCentreMouse = mouse.NewHandler()
 	m.notificationCentreWheel = &tty.WheelBurst{}
 	m.toastMouse = mouse.NewHandler()
@@ -627,6 +643,10 @@ func (m Model) Init() tea.Cmd {
 		tickCmd(),
 		IntroTick(),
 		announceInstanceCmd(m.ui.WorkDir, m.ui.ProjectRoot),
+		func() tea.Msg { return attentionRefreshMsg{} },
+		func() tea.Msg {
+			return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
+		},
 		tea.RequestBackgroundColor,
 	}
 	cmds = append(cmds, m.productCheckCmds(false)...)
@@ -1195,6 +1215,13 @@ func (m *Model) switchProjectWithSelection(projectPath string, inventory []Workt
 	// Reinitialize all plugins with the new working directory and project root
 	// This stops all plugins, updates the context, and starts them again
 	startCmds := m.registry.Reinit(targetPath, newProjectRoot)
+	// The workspace lane tracker is project-scoped and Reinit deliberately
+	// clears it. Re-offer the already-loaded cache to the new project; the
+	// plugin filters ownership and waits for its asynchronous inventory before
+	// treating absence as a real lane departure.
+	startCmds = append(startCmds, func() tea.Msg {
+		return notify.SeedLaneTrackersMsg{Notifications: append([]notify.Notification(nil), m.notificationCache...)}
+	})
 	// Reinit rebuilds every plugin, and a rebuilt surface knows nothing about
 	// providers: no matchers, so resource keys stop underlining, and no
 	// resolver, so a restored Resource tab waits for a readiness that already

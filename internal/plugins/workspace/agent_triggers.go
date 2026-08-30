@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/plugin"
 )
 
 // Agent lane transitions become notifications here — and only here.
@@ -31,6 +32,16 @@ func (p *Plugin) notifyAgentTransitions(now time.Time) tea.Cmd {
 	if p == nil {
 		return nil
 	}
+	if len(p.pendingAgentLaneSeeds) > 0 {
+		// A complete observation set is the tracker's deletion signal. Do not
+		// apply retained waits until both independently loaded inventories are
+		// ready, or the empty startup projection would immediately withdraw them.
+		if !p.stateRestored {
+			return nil
+		}
+		p.agentLaneTracker.Seed(p.pendingAgentLaneSeeds)
+		p.pendingAgentLaneSeeds = nil
+	}
 	events := p.agentLaneTracker.Observe(p.agentLaneObservations(), now)
 	if events.Empty() {
 		return nil
@@ -45,6 +56,24 @@ func (p *Plugin) notifyAgentTransitions(now time.Time) tea.Cmd {
 		cmds = append(cmds, func() tea.Msg { return notify.DismissMsg{ID: dismissed} })
 	}
 	return tea.Batch(cmds...)
+}
+
+// queueAgentLaneSeeds applies only the pure structured ownership contract. The
+// accepted records still wait for complete inventory before absence can mean a
+// real lane departure.
+func (p *Plugin) queueAgentLaneSeeds(all []notify.Notification) {
+	for _, n := range all {
+		if p.ownsAgentLaneNotification(n) {
+			p.pendingAgentLaneSeeds = append(p.pendingAgentLaneSeeds, n)
+		}
+	}
+}
+
+func (p *Plugin) ownsAgentLaneNotification(n notify.Notification) bool {
+	if p == nil {
+		return false
+	}
+	return notify.TransitionOwnedByProject(n, p.laneProjectRoot())
 }
 
 // agentLaneObservations is the whole set of workspaces this plugin can speak
@@ -86,6 +115,7 @@ func (p *Plugin) worktreeObservation(wt *Worktree) (notify.LaneObservation, bool
 		Provider:     string(wt.Agent.Type),
 		Presentation: agentStatusPresentation(wt),
 		Origin:       p.laneOrigin(wt.Agent.TmuxSession, wt.Path),
+		ProjectRoot:  p.laneProjectRoot(),
 	}, true
 }
 
@@ -100,6 +130,7 @@ func (p *Plugin) shellObservation(shell *ShellSession) (notify.LaneObservation, 
 		Provider:     string(shell.Agent.Type),
 		Presentation: shellAgentStatusPresentation(shell),
 		Origin:       p.laneOrigin(shell.TmuxName, shell.WorkDir),
+		ProjectRoot:  p.laneProjectRoot(),
 	}, true
 }
 
@@ -120,10 +151,25 @@ func (p *Plugin) laneContext(branch string) string {
 }
 
 func (p *Plugin) laneProjectKey() string {
-	if p.ctx == nil || strings.TrimSpace(p.ctx.WorkDir) == "" {
+	root := p.laneProjectRoot()
+	if root == "" {
 		return ""
 	}
-	return filepath.Base(filepath.Clean(p.ctx.WorkDir))
+	return filepath.Base(root)
+}
+
+func (p *Plugin) laneProjectRoot() string {
+	if p.ctx == nil {
+		return ""
+	}
+	root := strings.TrimSpace(p.ctx.ProjectRoot)
+	if root == "" {
+		root = strings.TrimSpace(p.ctx.WorkDir)
+	}
+	if root == "" {
+		return ""
+	}
+	return filepath.Clean(root)
 }
 
 // laneOrigin records the shell the notification is about, in the same shape the
@@ -135,4 +181,23 @@ func (p *Plugin) laneOrigin(tmuxSession, workDir string) notify.Origin {
 		ProjectKey:  p.laneProjectKey(),
 		WorkDir:     strings.TrimSpace(workDir),
 	}
+}
+
+// AttentionOrigin projects the selected shell/worktree through the same
+// identity vocabulary the global Sessions browser uses.
+func (p *Plugin) AttentionOrigin() (plugin.AttentionOrigin, bool) {
+	if p == nil || !p.focused {
+		return plugin.AttentionOrigin{}, false
+	}
+	if shell := p.getSelectedShell(); shell != nil {
+		return plugin.AttentionOrigin{TmuxSession: shell.TmuxName, ProjectKey: p.laneProjectKey(), WorkDir: shell.WorkDir}, true
+	}
+	if wt := p.selectedWorktree(); wt != nil {
+		session := ""
+		if wt.Agent != nil {
+			session = wt.Agent.TmuxSession
+		}
+		return plugin.AttentionOrigin{TmuxSession: session, ProjectKey: p.laneProjectKey(), WorkDir: wt.Path}, true
+	}
+	return plugin.AttentionOrigin{}, false
 }

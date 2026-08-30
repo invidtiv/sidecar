@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -11,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/notify"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/reveal"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -215,13 +217,15 @@ func (m *Model) postNotification(n notify.Notification) tea.Cmd {
 	if m.notifications == nil {
 		return nil
 	}
-	stored, err := m.notifications.Post(n)
+	result, err := m.notifications.Post(n)
 	if err != nil {
 		slog.Debug("notify: post failed", "err", err)
 		return nil
 	}
 	m.refreshNotifications()
-	return func() tea.Msg { return notify.PostedMsg{Notification: stored} }
+	return func() tea.Msg {
+		return notify.PostedMsg{Notification: result.Notification, Created: result.Created, Reason: result.Reason}
+	}
 }
 
 // dismissNotification dismisses by id, ignoring an id the store never saw.
@@ -229,11 +233,71 @@ func (m *Model) dismissNotification(id string) {
 	if m.notifications == nil || id == "" {
 		return
 	}
+	n, found := m.findNotification(id)
 	if err := m.notifications.Dismiss(id); err != nil {
 		slog.Debug("notify: dismiss failed", "id", id, "err", err)
 		return
 	}
 	m.refreshNotifications()
+	if found {
+		if cmd := m.cancelNotificationCmd(n); cmd != nil {
+			m.notificationDeliveryCmds = append(m.notificationDeliveryCmds, cmd)
+		}
+	}
+}
+
+func (m *Model) takeNotificationDeliveryCmds() []tea.Cmd {
+	cmds := m.notificationDeliveryCmds
+	m.notificationDeliveryCmds = nil
+	return cmds
+}
+
+func (m *Model) deliverNotificationCmd(n notify.Notification, discovered bool) tea.Cmd {
+	if m.notificationDelivery == nil {
+		return nil
+	}
+	delivery := m.notificationDelivery
+	store := m.notifications
+	return func() tea.Msg {
+		if store != nil {
+			all, err := store.List()
+			if err != nil {
+				slog.Debug("notifydelivery: current notification state unavailable", "id", n.ID, "err", err)
+				return nil
+			}
+			found := false
+			for _, current := range all {
+				if current.ID != n.ID {
+					continue
+				}
+				found = true
+				if current.Dismissed() {
+					_ = delivery.Remove(context.Background(), current)
+					return nil
+				}
+				n = current
+				break
+			}
+			if !found {
+				return nil
+			}
+		}
+		delivery.Deliver(context.Background(), notifydelivery.Request{Notification: n, Discovered: discovered})
+		return nil
+	}
+}
+
+func (m *Model) cancelNotificationCmd(n notify.Notification) tea.Cmd {
+	if m.notificationDelivery == nil {
+		return nil
+	}
+	delivery := m.notificationDelivery
+	return func() tea.Msg {
+		if err := delivery.Remove(context.Background(), n); err != nil {
+			slog.Debug("notifydelivery: cancellation/removal failed", "id", n.ID, "err", err)
+		}
+		return nil
+	}
 }
 
 // readNotification marks one notification read.
@@ -270,19 +334,27 @@ func (m *Model) readNotification(id string) {
 // the first tick — which is still current — is the one to keep.
 func (m *Model) reconcileNotifications(now time.Time) tea.Cmd {
 	revealCmd := m.syncToastReveal(now)
-	m.sweepNotifications(now)
+	discovered := m.sweepNotifications(now)
 	if cmd := m.syncToastReveal(now); cmd != nil {
 		revealCmd = cmd
 	}
-	return revealCmd
+	cmds := []tea.Cmd{revealCmd}
+	for _, n := range discovered {
+		cmds = append(cmds, m.deliverNotificationCmd(n, true))
+	}
+	return tea.Batch(cmds...)
 }
 
 // sweepNotifications runs on the 1s heartbeat. It retires toasts whose
 // countdown has run out (they stay in the centre — suppressed is not dropped)
 // and compacts records past the 24h retention window.
-func (m *Model) sweepNotifications(now time.Time) {
+func (m *Model) sweepNotifications(now time.Time) []notify.Notification {
 	if m.notifications == nil {
-		return
+		return nil
+	}
+	known := make(map[string]notify.Notification, len(m.notificationCache))
+	for _, n := range m.notificationCache {
+		known[n.ID] = n
 	}
 	// Record what is on screen right now. A toast whose countdown then runs out
 	// has had its moment and is read — without this nothing ever marks anything
@@ -343,12 +415,30 @@ func (m *Model) sweepNotifications(now time.Time) {
 
 	if _, err := m.notifications.Sweep(now); err != nil {
 		slog.Debug("notify: sweep failed", "err", err)
-		return
+		return nil
 	}
 	// Always refresh, not only when something was pruned: Sweep is also where
 	// the store re-reads the log, so this is where records another process
 	// appended become visible.
 	m.refreshNotifications()
+	var discovered []notify.Notification
+	for _, n := range m.notificationCache {
+		previous, existed := known[n.ID]
+		if !existed {
+			if n.Dismissed() {
+				if cmd := m.cancelNotificationCmd(n); cmd != nil {
+					m.notificationDeliveryCmds = append(m.notificationDeliveryCmds, cmd)
+				}
+			} else {
+				discovered = append(discovered, n)
+			}
+		} else if !previous.Dismissed() && n.Dismissed() {
+			if cmd := m.cancelNotificationCmd(n); cmd != nil {
+				m.notificationDeliveryCmds = append(m.notificationDeliveryCmds, cmd)
+			}
+		}
+	}
+	return discovered
 }
 
 // handleNotifyRequest answers a `notify` request from the file-RPC bus: the

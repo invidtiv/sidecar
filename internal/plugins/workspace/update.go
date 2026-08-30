@@ -53,6 +53,14 @@ func (p *Plugin) update(msg tea.Msg) (plugin.Plugin, tea.Cmd) {
 	}
 
 	switch msg := msg.(type) {
+	case notify.SeedLaneTrackersMsg:
+		p.queueAgentLaneSeeds(msg.Notifications)
+		return p, nil
+	case notify.PostedMsg:
+		if p.ownsAgentLaneNotification(msg.Notification) {
+			p.agentLaneTracker.ReconcilePosted(msg.Notification)
+		}
+		return p, nil
 	case termpreview.HostBackgroundMsg:
 		p.terminalDefaultBackground = msg.ANSI
 		return p, nil

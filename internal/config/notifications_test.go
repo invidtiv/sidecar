@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,79 @@ func TestNotificationsSectionIsReadFromTheConfigFile(t *testing.T) {
 	}
 	if _, ok := expiries["system"]; ok {
 		t.Fatal("an unparseable expiry must be skipped, not guessed at")
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestSaveNotificationsPreservesUnknownRootsAndSources(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	SetTestConfigPath(path)
+	t.Cleanup(ResetTestConfigPath)
+	if err := os.WriteFile(path, []byte(`{
+  "futureRoot": {"keep": true},
+  "notifications": {
+    "native": {"mode": "off", "provider": "auto"},
+    "sound": {"mode": "off"},
+    "quietHours": {"enabled": false, "start": "22:00", "end": "08:00"},
+    "sources": {"future-source": {"native": false, "sound": "none", "expiry": "19s"}}
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveNotifications(func(cfg *NotificationsConfig) {
+		cfg.Native.Mode = DeliveryBackground
+		cfg.Sources["waiting"] = NotificationSourceConfig{Native: boolPtr(true), Sound: SoundAttention, Expiry: "sticky"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["futureRoot"]; !ok {
+		t.Fatal("targeted notification save dropped an unrelated root key")
+	}
+	reloaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Notifications.Native.Mode != DeliveryBackground {
+		t.Fatalf("native mode = %q", reloaded.Notifications.Native.Mode)
+	}
+	if got := reloaded.Notifications.Sources["future-source"].Expiry; got != "19s" {
+		t.Fatalf("unknown source was not preserved: %q", got)
+	}
+}
+
+func TestSaveNotificationsRejectsInvalidEditWithoutTouchingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	SetTestConfigPath(path)
+	t.Cleanup(ResetTestConfigPath)
+	if err := Save(Default()); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveNotifications(func(cfg *NotificationsConfig) { cfg.Sound.Mode = "sometimes" }); err == nil {
+		t.Fatal("invalid mode was saved")
+	}
+	after, _ := os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("failed validation changed config.json")
+	}
+	if err := SaveNotifications(func(cfg *NotificationsConfig) { cfg.Sound.AttentionPath = "missing.wav" }); err == nil {
+		t.Fatal("missing custom path was saved")
+	}
+	after, _ = os.ReadFile(path)
+	if string(after) != string(before) {
+		t.Fatal("failed path validation changed config.json")
 	}
 }
 

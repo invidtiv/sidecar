@@ -68,8 +68,12 @@ func TestPostRoundTrip(t *testing.T) {
 func TestPostIsIdempotentByID(t *testing.T) {
 	s := testStore(t)
 	n := Notification{ID: "ntf-fixed", Source: SourceSystem, Title: "once"}
-	if _, err := s.Post(n); err != nil {
+	first, err := s.Post(n)
+	if err != nil {
 		t.Fatalf("first post: %v", err)
+	}
+	if !first.Created || first.Reason != PostCreated {
+		t.Fatalf("first result = %+v", first)
 	}
 	n.Title = "twice"
 	again, err := s.Post(n)
@@ -79,9 +83,35 @@ func TestPostIsIdempotentByID(t *testing.T) {
 	if again.Title != "once" {
 		t.Fatalf("re-posting an id must return the stored record, got %q", again.Title)
 	}
+	if again.Created || again.Reason != PostExistingID {
+		t.Fatalf("idempotent result = %+v", again)
+	}
 	all, _ := s.List()
 	if len(all) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(all))
+	}
+}
+
+func TestLogicalTransitionDedupeAcrossStores(t *testing.T) {
+	path := filepath.Join(t.TempDir(), FileName)
+	one, _ := OpenPath(path)
+	two, _ := OpenPath(path)
+	now := time.Now().UTC()
+	base := Notification{Source: SourceSession, Severity: SeverityInfo, CreatedAt: now, Title: "Shell finished", Transition: &TransitionMetadata{Class: TransitionDone, LaneKey: "shell:a", DedupeKey: "origin-a:done"}}
+	first, err := one.Post(base)
+	if err != nil || !first.Created {
+		t.Fatalf("first post = %+v, %v", first, err)
+	}
+	base.ID = "different-id"
+	second, err := two.Post(base)
+	if err != nil || second.Created || second.Reason != PostExistingLogical || second.ID != first.ID {
+		t.Fatalf("logical duplicate = %+v, %v", second, err)
+	}
+	base.ID = "later-turn"
+	base.CreatedAt = now.Add(LogicalDedupeWindow + time.Second)
+	later, err := two.Post(base)
+	if err != nil || !later.Created {
+		t.Fatalf("later logical event = %+v, %v", later, err)
 	}
 }
 

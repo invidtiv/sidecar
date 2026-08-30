@@ -25,9 +25,9 @@ var ErrNotFound = errors.New("notification not found")
 // all, as MemStore does in tests — without any caller changing.
 type Store interface {
 	// Post records a notification, filling in its defaults, and returns the
-	// stored record. Posting an id that already exists is a no-op that returns
-	// the existing record, so a CLI fallback path can never double-file.
-	Post(n Notification) (Notification, error)
+	// result. Posting an id or short-lived logical event that already exists is
+	// an explicit no-op, so delivery callers cannot mistake it for new work.
+	Post(n Notification) (PostResult, error)
 	MarkRead(id string) error
 	Dismiss(id string) error
 	// List returns every retained notification, newest first.
@@ -36,6 +36,21 @@ type Store interface {
 	// returns how many it removed.
 	Sweep(now time.Time) (int, error)
 	Close() error
+}
+
+type PostReason string
+
+const (
+	PostCreated         PostReason = "created"
+	PostExistingID      PostReason = "existing_id"
+	PostExistingLogical PostReason = "existing_logical_event"
+	LogicalDedupeWindow            = 15 * time.Second
+)
+
+type PostResult struct {
+	Notification `json:"notification"`
+	Created      bool       `json:"created"`
+	Reason       PostReason `json:"reason"`
 }
 
 // Path returns the notification log path under stateDir.
@@ -327,12 +342,12 @@ func (s *JSONLStore) append(ev event) error {
 }
 
 // Post implements Store.
-func (s *JSONLStore) Post(n Notification) (Notification, error) {
+func (s *JSONLStore) Post(n Notification) (PostResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	n = Normalize(n, time.Now())
-	var out Notification
+	var out PostResult
 	err := s.withFileLock(func() error {
 		// Re-fold first: another process may have posted since this store last
 		// looked, and a dedupe decision made against a stale memory is how a
@@ -341,7 +356,11 @@ func (s *JSONLStore) Post(n Notification) (Notification, error) {
 			return err
 		}
 		if existing, ok := s.records[n.ID]; ok {
-			out = existing
+			out = PostResult{Notification: existing, Reason: PostExistingID}
+			return nil
+		}
+		if existing, ok := logicalDuplicate(s.order, s.records, n); ok {
+			out = PostResult{Notification: existing, Reason: PostExistingLogical}
 			return nil
 		}
 		rec := n
@@ -350,13 +369,38 @@ func (s *JSONLStore) Post(n Notification) (Notification, error) {
 		}
 		s.order = append(s.order, n.ID)
 		s.records[n.ID] = n
-		out = n
+		out = PostResult{Notification: n, Created: true, Reason: PostCreated}
 		return nil
 	})
 	if err != nil {
-		return Notification{}, err
+		return PostResult{}, err
 	}
 	return out, nil
+}
+
+func logicalDuplicate(order []string, records map[string]Notification, candidate Notification) (Notification, bool) {
+	if candidate.Transition == nil || candidate.Transition.DedupeKey == "" {
+		return Notification{}, false
+	}
+	var best Notification
+	found := false
+	for _, id := range order {
+		existing, ok := records[id]
+		if !ok || existing.Transition == nil || existing.Transition.DedupeKey != candidate.Transition.DedupeKey {
+			continue
+		}
+		delta := candidate.CreatedAt.Sub(existing.CreatedAt)
+		if delta < 0 {
+			delta = -delta
+		}
+		if delta > LogicalDedupeWindow {
+			continue
+		}
+		if !found || existing.CreatedAt.After(best.CreatedAt) {
+			best, found = existing, true
+		}
+	}
+	return best, found
 }
 
 // MarkRead implements Store.

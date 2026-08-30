@@ -11,17 +11,18 @@ package configui
 type PageID string
 
 const (
-	PageSetup       PageID = "setup"
-	PageAppearance  PageID = "appearance"
-	PageProjects    PageID = "projects"
-	PageWorkspaces  PageID = "workspaces"
-	PageAgents      PageID = "agents"
-	PageTerminal    PageID = "terminal"
-	PagePanels      PageID = "panels"
-	PageDiagnostics PageID = "diagnostics"
-	PageFlags       PageID = "flags"
-	PageAdvanced    PageID = "advanced"
-	PageAbout       PageID = "about"
+	PageSetup         PageID = "setup"
+	PageAppearance    PageID = "appearance"
+	PageProjects      PageID = "projects"
+	PageWorkspaces    PageID = "workspaces"
+	PageAgents        PageID = "agents"
+	PageNotifications PageID = "notifications"
+	PageTerminal      PageID = "terminal"
+	PagePanels        PageID = "panels"
+	PageDiagnostics   PageID = "diagnostics"
+	PageFlags         PageID = "flags"
+	PageAdvanced      PageID = "advanced"
+	PageAbout         PageID = "about"
 )
 
 // DefaultPage is where the gear, the palette command, and `sidecar setup` all
@@ -52,6 +53,7 @@ var groups = []Group{
 			{ID: PageProjects, Title: "Projects"},
 			{ID: PageWorkspaces, Title: "Workspaces"},
 			{ID: PageAgents, Title: "Agents"},
+			{ID: PageNotifications, Title: "Notifications"},
 			{ID: PageTerminal, Title: "Terminal"},
 			{ID: PagePanels, Title: "Panels & Integrations"},
 		},

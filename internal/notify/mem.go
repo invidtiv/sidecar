@@ -23,16 +23,19 @@ func NewMemStore() *MemStore {
 }
 
 // Post implements Store.
-func (s *MemStore) Post(n Notification) (Notification, error) {
+func (s *MemStore) Post(n Notification) (PostResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n = Normalize(n, time.Now())
 	if existing, ok := s.records[n.ID]; ok {
-		return existing, nil
+		return PostResult{Notification: existing, Reason: PostExistingID}, nil
+	}
+	if existing, ok := logicalDuplicate(s.order, s.records, n); ok {
+		return PostResult{Notification: existing, Reason: PostExistingLogical}, nil
 	}
 	s.order = append(s.order, n.ID)
 	s.records[n.ID] = n
-	return n, nil
+	return PostResult{Notification: n, Created: true, Reason: PostCreated}, nil
 }
 
 // MarkRead implements Store.

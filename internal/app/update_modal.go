@@ -597,7 +597,7 @@ func (m *Model) applyUpdateAction(action string, cmd tea.Cmd) (tea.Model, tea.Cm
 		return m, m.startUpdateBatch(version.RetryTargets(m.settledResults()))
 	case "quit":
 		m.shutdown()
-		return m, tea.Quit
+		return m, quitWithInstanceWithdrawal()
 	case "cancel", "close":
 		m.closeUpdateModal()
 		return m, nil

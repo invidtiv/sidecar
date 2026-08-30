@@ -3,6 +3,7 @@ package configui
 import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/theme"
 )
 
@@ -106,6 +107,27 @@ type ConfigSavedMsg struct {
 	Err string
 }
 
+// ProbeNotificationDeliveryMsg asks the app host to run the lazy provider
+// probes. It is emitted only after the Notifications page is entered.
+type ProbeNotificationDeliveryMsg struct{}
+
+// TestNotificationDeliveryMsg asks the host to exercise enabled channels
+// through its shared delivery service. It never creates a centre record.
+type TestNotificationDeliveryMsg struct {
+	Event notifydelivery.TestEvent
+}
+
+// NotificationDeliveryStatusMsg carries a completed read-only probe back to
+// the Configuration surface.
+type NotificationDeliveryStatusMsg struct{ Status notifydelivery.Status }
+
+func (NotificationDeliveryStatusMsg) configMsg() {}
+
+// NotificationTestResultMsg carries one explicit test result back to the page.
+type NotificationTestResultMsg struct{ Result notifydelivery.Result }
+
+func (NotificationTestResultMsg) configMsg() {}
+
 // SaveCmd wraps a Load→mutate→Save call as a command.
 func SaveCmd(notice string, save func() error) tea.Cmd {
 	return func() tea.Msg {
@@ -133,6 +155,12 @@ func (m *Model) Handle(msg Msg) tea.Cmd {
 		return m.applyInstallResult(msg)
 	case installTickMsg:
 		return m.tickInstallSpinner()
+	case NotificationDeliveryStatusMsg:
+		state := m.notifications()
+		state.checking, state.checked, state.status = false, true, msg.Status
+	case NotificationTestResultMsg:
+		state := m.notifications()
+		state.testing, state.tested, state.result = false, true, msg.Result
 	}
 	return nil
 }

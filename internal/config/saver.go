@@ -18,6 +18,7 @@ type saveConfig struct {
 	// TerminalResources is written only when it has content; see Save.
 	TerminalResources saveTerminalResourcesConfig `json:"terminalResources,omitempty"`
 	Selection         saveSelectionConfig         `json:"selection"`
+	Notifications     NotificationsConfig         `json:"notifications"`
 }
 
 type saveSelectionConfig struct {
@@ -157,6 +158,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 		Features:          cfg.Features,
 		TerminalResources: toSaveTerminalResources(cfg.TerminalResources),
 		Selection:         saveSelectionConfig{CopyOnSelect: &cfg.Selection.CopyOnSelect},
+		Notifications:     cfg.Notifications,
 	}
 }
 
@@ -224,6 +226,9 @@ func Save(cfg *Config) error {
 	} else {
 		delete(raw, "terminalResources")
 	}
+	// notifications is now a managed key. A targeted source save must preserve
+	// the validated global channel and quiet-hours policy it was based on.
+	fields["notifications"] = sc.Notifications
 	for key, val := range fields {
 		b, err := json.Marshal(val)
 		if err != nil {
@@ -330,6 +335,20 @@ func SaveWorkspace(mutate func(*WorkspacePluginConfig)) error {
 	}
 	mutate(&cfg.Plugins.Workspace)
 	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	return Save(cfg)
+}
+
+// SaveNotifications reloads immediately before applying a targeted mutation,
+// validates the complete section, and writes only after validation succeeds.
+func SaveNotifications(mutate func(*NotificationsConfig)) error {
+	cfg, err := Load()
+	if err != nil {
+		return err
+	}
+	mutate(&cfg.Notifications)
+	if err := ValidateNotifications(cfg.Notifications, ConfigPath()); err != nil {
 		return err
 	}
 	return Save(cfg)

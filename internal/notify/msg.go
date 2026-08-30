@@ -25,6 +25,14 @@ type DismissMsg struct {
 // timestamps the store holds.
 type PostedMsg struct {
 	Notification Notification
+	Created      bool
+	Reason       PostReason
+}
+
+// SeedLaneTrackersMsg restores structured transition state after the store has
+// loaded. It carries in-memory records only; plugins perform no startup I/O.
+type SeedLaneTrackersMsg struct {
+	Notifications []Notification
 }
 
 // Alert builds a PostMsg for a source-specific notification. It exists so a

@@ -57,6 +57,19 @@ func RenderHelp(cmd *Command) string {
 		default:
 			fmt.Fprintf(&buf, "\nRun \"sidecar %s <command> --help\" for command details.\n", cmd.Name)
 		}
+		if len(cmd.Flags) > 0 {
+			buf.WriteString("\nOptions:\n")
+			for _, f := range cmd.Flags {
+				name := f.Name
+				if f.Short != "" {
+					name = f.Short + ", " + name
+				}
+				if f.Arg != "" {
+					name += " " + f.Arg
+				}
+				fmt.Fprintf(&buf, "  %-16s%s\n", name, f.Summary)
+			}
+		}
 		return buf.String()
 	}
 

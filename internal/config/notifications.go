@@ -1,53 +1,90 @@
 package config
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-// NotificationsConfig is the app-level `notifications` section.
-//
-// Phase 1.5 populates only the per-source toast expiry: the defaults live in
-// internal/notify's source registry, and this is how a user lengthens or
-// shortens one without a rebuild. There is deliberately no configui page yet —
-// Phase 4 renders the full per-source table (toast / centre / bell / expiry)
-// over this same struct — but the values are user-editable in config.json from
-// day one, which is the point.
-//
-// Example:
-//
-//	"notifications": {
-//	  "sources": {
-//	    "agent":   { "expiry": "20s" },
-//	    "session": { "expiry": "sticky" }
-//	  }
-//	}
+// DeliveryMode controls when an external notification channel is eligible.
+type DeliveryMode string
+
+const (
+	DeliveryOff        DeliveryMode = "off"
+	DeliveryBackground DeliveryMode = "background"
+	DeliveryAlways     DeliveryMode = "always"
+
+	NativeProviderAuto = "auto"
+)
+
+// SoundCue is the configured sound behavior for one notification source.
+type SoundCue string
+
+const (
+	SoundNone      SoundCue = "none"
+	SoundEvent     SoundCue = "event"
+	SoundAttention SoundCue = "attention"
+	SoundDone      SoundCue = "done"
+	SoundFailure   SoundCue = "failure"
+)
+
+// NotificationsConfig is the app-level `notifications` section. External
+// delivery remains off unless the user explicitly changes a channel mode.
 type NotificationsConfig struct {
-	// Sources is keyed by notification source id (`agent`, `waiting`,
-	// `session`, `tasks`, `td`, `system`). An unknown key is kept rather than
-	// dropped: internal/notify decides what a source id means, and a config
-	// written by a newer build must survive a round trip through an older one.
-	Sources map[string]NotificationSourceConfig `json:"sources,omitempty"`
+	Native     NativeNotificationsConfig           `json:"native,omitempty"`
+	Sound      SoundNotificationsConfig            `json:"sound,omitempty"`
+	QuietHours QuietHoursConfig                    `json:"quietHours,omitempty"`
+	Sources    map[string]NotificationSourceConfig `json:"sources,omitempty"`
 }
 
-// NotificationSourceConfig is the per-source overrides.
+type NativeNotificationsConfig struct {
+	Mode     DeliveryMode `json:"mode,omitempty"`
+	Provider string       `json:"provider,omitempty"`
+}
+
+type SoundNotificationsConfig struct {
+	Mode          DeliveryMode `json:"mode,omitempty"`
+	AttentionPath string       `json:"attentionPath,omitempty"`
+	DonePath      string       `json:"donePath,omitempty"`
+	FailurePath   string       `json:"failurePath,omitempty"`
+}
+
+type QuietHoursConfig struct {
+	Enabled bool   `json:"enabled,omitempty"`
+	Start   string `json:"start,omitempty"`
+	End     string `json:"end,omitempty"`
+}
+
+// NotificationSourceConfig is the per-source override. Pointer booleans keep
+// an explicit false distinct from an omitted value that inherits the source
+// registry default.
 type NotificationSourceConfig struct {
-	// Expiry is how long a toast from this source stays on screen: any Go
-	// duration string ("12s", "1m30s"), or "sticky" / "0" for a toast with no
-	// countdown that waits for the user.
-	Expiry string `json:"expiry,omitempty"`
+	Toast  *bool    `json:"toast,omitempty"`
+	Native *bool    `json:"native,omitempty"`
+	Sound  SoundCue `json:"sound,omitempty"`
+	Expiry string   `json:"expiry,omitempty"`
+}
+
+// DefaultNotificationsConfig is intentionally silent. Source defaults only
+// become relevant after a channel is enabled.
+func DefaultNotificationsConfig() NotificationsConfig {
+	return NotificationsConfig{
+		Native:     NativeNotificationsConfig{Mode: DeliveryOff, Provider: NativeProviderAuto},
+		Sound:      SoundNotificationsConfig{Mode: DeliveryOff},
+		QuietHours: QuietHoursConfig{Start: "22:00", End: "08:00"},
+	}
 }
 
 // StickyExpiry is the sentinel a zero duration carries: a source whose toasts
-// have no countdown. It is a named constant so callers do not have to know
-// that "sticky" and 0 are the same statement.
+// have no countdown.
 const StickyExpiry time.Duration = 0
 
-// SourceExpiries resolves the configured expiries into durations, keyed by
-// source id. Anything unparseable is skipped with a warning rather than
-// failing the load: one bad duration in a config file must not cost the user
-// their notifications, let alone their startup.
+// SourceExpiries resolves configured expiry overrides. This remains tolerant
+// for direct JSON repair and older files; interactive and CLI writes go
+// through ValidateNotifications and reject invalid values before saving.
 func (c NotificationsConfig) SourceExpiries() map[string]time.Duration {
 	if len(c.Sources) == 0 {
 		return nil
@@ -58,12 +95,8 @@ func (c NotificationsConfig) SourceExpiries() map[string]time.Duration {
 		if raw == "" {
 			continue
 		}
-		if strings.EqualFold(raw, "sticky") || strings.EqualFold(raw, "never") {
-			out[id] = StickyExpiry
-			continue
-		}
-		d, err := time.ParseDuration(raw)
-		if err != nil || d < 0 {
+		d, err := ParseNotificationExpiry(raw)
+		if err != nil {
 			slog.Warn("notifications: ignoring unreadable expiry", "source", id, "expiry", raw)
 			continue
 		}
@@ -73,4 +106,105 @@ func (c NotificationsConfig) SourceExpiries() map[string]time.Duration {
 		return nil
 	}
 	return out
+}
+
+// ParseNotificationExpiry validates the persisted duration vocabulary.
+func ParseNotificationExpiry(raw string) (time.Duration, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.EqualFold(raw, "sticky") || strings.EqualFold(raw, "never") || raw == "0" {
+		return StickyExpiry, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("invalid notification expiry %q", raw)
+	}
+	return d, nil
+}
+
+// ValidateNotifications validates a prospective targeted save. Custom sound
+// paths are resolved only for validation; the user's inspectable spelling is
+// retained in config.json.
+func ValidateNotifications(c NotificationsConfig, configPath string) error {
+	for name, mode := range map[string]DeliveryMode{"native": c.Native.Mode, "sound": c.Sound.Mode} {
+		switch mode {
+		case DeliveryOff, DeliveryBackground, DeliveryAlways:
+		default:
+			return fmt.Errorf("notifications.%s.mode must be off, background, or always", name)
+		}
+	}
+	if c.Native.Provider != NativeProviderAuto {
+		return fmt.Errorf("notifications.native.provider must be auto")
+	}
+	if _, err := parseWallClock(c.QuietHours.Start); err != nil {
+		return fmt.Errorf("notifications.quietHours.start: %w", err)
+	}
+	if _, err := parseWallClock(c.QuietHours.End); err != nil {
+		return fmt.Errorf("notifications.quietHours.end: %w", err)
+	}
+	for id, source := range c.Sources {
+		if source.Sound != "" {
+			switch source.Sound {
+			case SoundNone, SoundEvent, SoundAttention, SoundDone, SoundFailure:
+			default:
+				return fmt.Errorf("notifications.sources.%s.sound is invalid", id)
+			}
+		}
+		if strings.TrimSpace(source.Expiry) != "" {
+			if _, err := ParseNotificationExpiry(source.Expiry); err != nil {
+				return fmt.Errorf("notifications.sources.%s.expiry: %w", id, err)
+			}
+		}
+	}
+	for name, path := range map[string]string{
+		"attentionPath": c.Sound.AttentionPath,
+		"donePath":      c.Sound.DonePath,
+		"failurePath":   c.Sound.FailurePath,
+	} {
+		if err := validateSoundPath(path, configPath); err != nil {
+			return fmt.Errorf("notifications.sound.%s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func parseWallClock(raw string) (int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(raw))
+	if err != nil || parsed.Format("15:04") != strings.TrimSpace(raw) {
+		return 0, fmt.Errorf("must be HH:MM")
+	}
+	return parsed.Hour()*60 + parsed.Minute(), nil
+}
+
+func validateSoundPath(raw, configPath string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	path := raw
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(filepath.Dir(configPath), path)
+	}
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return fmt.Errorf("not readable: %w", err)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("not readable: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("must resolve to a regular file")
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		return fmt.Errorf("not readable: %w", err)
+	}
+	return f.Close()
 }

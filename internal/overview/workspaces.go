@@ -2,6 +2,7 @@ package overview
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -13,6 +14,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/tabs"
@@ -1634,6 +1636,24 @@ func (m *Model) SelectedWorkspace() (workspaceinventory.Workspace, bool) {
 	}
 	workspace, ok := m.catalog[item.ID]
 	return workspace, ok
+}
+
+// AttentionOrigin projects the selected global Sessions row through the same
+// app-level identity shape as the project workspace surface.
+func (m *Model) AttentionOrigin() (plugin.AttentionOrigin, bool) {
+	workspace, ok := m.SelectedWorkspace()
+	if !ok || !m.preview.visible {
+		return plugin.AttentionOrigin{}, false
+	}
+	projectKey := strings.TrimSpace(workspace.ProjectKey)
+	if projectKey != "" {
+		projectKey = filepath.Base(filepath.Clean(projectKey))
+	}
+	return plugin.AttentionOrigin{
+		TmuxSession: workspace.TmuxName,
+		ProjectKey:  projectKey,
+		WorkDir:     workspace.Path,
+	}, true
 }
 
 // WorkspacesSummary is the header-right text for the tab.
