@@ -552,6 +552,8 @@ The same Create Workspace form is on the global Sessions browser (`8`, or the Se
 
 The Project field is shown on this surface. Base Branch appears when Kind is Worktree; Auto-approve appears when the selected agent has a skip flag. Fetch PR is a separate project-surface action (`P`), not a form kind.
 
+With the `sidecar_remote_hosts` feature enabled, this surface also lists the shells, worktrees and agents on machines you have registered, and the Project field can name a project on one of them. See [Remote Hosts](./remote-hosts) for what you can and cannot do to a workspace that lives on another machine.
+
 ### Deleting Workspaces
 
 | Key | Action |

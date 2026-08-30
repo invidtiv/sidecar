@@ -214,7 +214,10 @@ const toggleSuffix = "-toggle"
 
 // toggleRow paints a labelled ON/OFF setting. The row is selectable; only the
 // pill itself toggles on click. Enter on the row still toggles.
-func (b *paneBuilder) toggleRow(id, label string, on bool, run func(*Model) tea.Cmd) {
+//
+// The row's state is returned for a caller that paints something only while the
+// user is on it, for the same reason panelToggleFocusDetail returns one.
+func (b *paneBuilder) toggleRow(id, label string, on bool, run func(*Model) tea.Cmd) State {
 	toggleID := id + toggleSuffix
 	rowState := b.declareClickless(id, "", true, run)
 	toggleState := b.declare(toggleID, "", false, run)
@@ -230,6 +233,7 @@ func (b *paneBuilder) toggleRow(id, label string, on bool, run func(*Model) tea.
 	b.lines = append(b.lines, FormRow(label, pill, rowState))
 	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, b.inner, 1, nil)
 	b.m.mouse.HitMap.AddRect(toggleID, b.originX+ControlColumn, 1+y, ansi.StringWidth(pill), 1, nil)
+	return rowState
 }
 
 // panelToggle paints a two-line surface switch the way Panels & Integrations
@@ -269,7 +273,12 @@ func (b *paneBuilder) panelToggle(id, title, badge, detail string, on bool, run 
 //
 // detailFor receives the row's interaction state so a caller can vary the copy
 // with focus; returning "" paints no second line.
-func (b *paneBuilder) panelToggleFocusDetail(id, title, badge string, detailFor func(State) string, on bool, run func(*Model) tea.Cmd) {
+//
+// The row's own state is returned for a caller that paints something beneath a
+// row only while the user is on it. Reading m.focusedID instead would answer
+// from the previous frame's cursor, which is one frame wrong exactly when the
+// cursor has just moved.
+func (b *paneBuilder) panelToggleFocusDetail(id, title, badge string, detailFor func(State) string, on bool, run func(*Model) tea.Cmd) State {
 	toggleID := id + toggleSuffix
 	rowState := b.declareClickless(id, "", true, run)
 	toggleState := b.declare(toggleID, "", false, run)
@@ -288,6 +297,7 @@ func (b *paneBuilder) panelToggleFocusDetail(id, title, badge string, detailFor 
 	rowWidth := RowWidth(b.inner)
 	b.m.mouse.HitMap.AddRect(id, b.originX, 1+y, rowWidth, len(lines), nil)
 	b.m.mouse.HitMap.AddRect(toggleID, b.originX+rowWidth-ansi.StringWidth(pill), 1+y, ansi.StringWidth(pill), 1, nil)
+	return rowState
 }
 
 // panelStatus paints a panelToggle-shaped row for a setting this page reports

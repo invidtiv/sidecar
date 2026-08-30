@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/shellstate"
@@ -964,7 +965,7 @@ func (m *Model) submitCreateShell() tea.Cmd {
 		m.createForm.PersistLastAgent()
 	}
 	if target.Remote() {
-		return m.submitRemoteCreateShell(target, remoteShellName(custom, display), m.remoteAgentCommand(agent, skip))
+		return m.submitRemoteCreateShell(target, remoteShellName(custom, display), agent, m.remoteAgentCommand(agent, skip))
 	}
 	return func() tea.Msg {
 		_, err := createManagedShell(spec)
@@ -1108,6 +1109,21 @@ func (m *Model) refreshOneProject(project Project, background bool) tea.Cmd {
 // before it. A caller holding panes from a just-completed cycle passes them
 // instead, saving a subprocess spawn per project.
 func (m *Model) refreshOneProjectWithPanes(project Project, background bool, panes []workspaceinventory.Pane) tea.Cmd {
+	// A host-scoped key names a project on another machine (hosts.ScopedKey),
+	// and everything below answers a question about THIS one: it stats a path,
+	// runs git in it, asks the local tmux server about it, and folds the answer
+	// back under that key. That is rule 1 of remote_actions.go — a remote path
+	// is never resolved here — and on two machines with the same checkout
+	// layout it does not fail, it succeeds against the wrong repository.
+	//
+	// Refused at the funnel rather than at each call site because the remote
+	// mutation replies land in handlers shared with the local ones: a reply that
+	// closes a modal must not have to remember which machine it came from to be
+	// safe. A remote change becomes visible when its host's next snapshot
+	// carries it, which is the only source of truth this surface has for it.
+	if _, _, scoped := hosts.SplitScopedKey(projectKey(project)); scoped {
+		return nil
+	}
 	collector := m.collector.ForRefresh(maxCaptures, m.shellClaims)
 	roots := append([]string(nil), m.roots...)
 	// Snapshot the other projects' results here, on the update goroutine. The

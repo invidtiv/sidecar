@@ -1,6 +1,7 @@
 package workspacelist
 
 import (
+	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -61,6 +62,26 @@ func KindGlyph(kind string) string {
 		return ""
 	}
 }
+
+// HostGlyph marks a row that lives on another machine. It sits beside
+// KindGlyph deliberately: both projections of the shared catalog — the
+// Sessions list and the Activity board — read their provenance mark from here,
+// so a remote row cannot come to look remote on one surface and local on the
+// other.
+//
+// It is not a status marker. The gutter marker means agent activity
+// (working / blocked / live / ambiguous), and overloading it with provenance
+// would cost the thing it is for; see RowPresentation.
+const HostGlyph = "⇅"
+
+// HostHue is the colour a machine is drawn in, everywhere it appears.
+//
+// The theme's project ramp is the cycle, hashed from the host ID, for the same
+// three reasons ProjectHue exists: it survives a theme switch, every curated
+// theme has already chosen a ramp that reads in its own light or dark, and the
+// hash is stable, so a host keeps its colour across restarts. Nothing here
+// depends on map iteration or on the order hosts were registered in.
+func HostHue(hostID string) color.Color { return styles.ProjectHue(hostID) }
 
 // RowPresentation is the neutral two-line workspace row contract shared by
 // the project and global Workspaces surfaces. Callers resolve all state and

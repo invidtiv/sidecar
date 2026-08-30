@@ -228,6 +228,14 @@ owns the keyboard, so shortcuts work even if an embedded shell was focused under
 Global shortcuts (`@`, `#`, `W`, `?`, `!`, `[` / `]`, `1`-`7`, `8` / `9` / `0`) keep working; switching plugins
 closes the Overview. In the Overview, `q` closes the board rather than quitting sidecar.
 
+### Remote Hosts (opt-in)
+
+Sidecar can watch and drive sessions on another machine over SSH, with Sidecar installed on both ends and no daemon on the remote host. Remote shells, worktrees and agents appear in the Sessions browser beside your own, and you can open a remote pane and type into it.
+
+Off by default. Enable the `sidecar_remote_hosts` feature flag, then register a machine from Configuration → **Remote Hosts** or with `sidecar host add <ssh-target>`.
+
+[Full Remote Hosts documentation →](./remote-hosts)
+
 ### Project Switching
 
 Press `@` to switch back and forth between projects instantly. Your context is preserved per-project:
@@ -409,6 +417,7 @@ brew install marcus/tap/tasks
 - **[Git Plugin](./git-plugin)** - Full reference for staging, diffing, and commits
 - **[Workspaces Plugin](./workspaces-plugin)** - Parallel agent setup and management
 - **[Project Switching](./project-switching)** - Multi-repo workflow configuration
+- **[Remote Hosts](./remote-hosts)** - Watch and drive sessions on another machine over SSH
 - **[TD Integration](./td)** - Task tracking across sessions
 - **[GitHub Repository](https://github.com/marcus/sidecar)** - Source code and issues
 

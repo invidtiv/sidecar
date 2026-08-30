@@ -25,12 +25,22 @@ type fakeRunner struct {
 	panes string
 	err   error
 	calls []string
+
+	// hook, when set, runs just before each answer, with the call it is about
+	// to serve. Tests that need one cycle to see something different from the
+	// next — a pane that leaves the listing, an inventory that starts failing —
+	// use it to change the fixture in step with the loop rather than racing it.
+	// It runs under the runner's lock and must not re-enter it.
+	hook func(f *fakeRunner, name string, args []string)
 }
 
 func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if f.hook != nil {
+		f.hook(f, name, args)
+	}
 	if name == "tmux" {
 		if f.err != nil {
 			return nil, f.err
@@ -585,5 +595,29 @@ func TestServeStopsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Serve did not return on context cancel")
+	}
+}
+
+// TestHelloAdvertisesVerbCapabilities. A viewer chooses the argument list for a
+// remote mutation from what the host said it understands, so a host that
+// silently stopped announcing a flag it accepts would make every viewer fall
+// back forever. This is the one assertion holding the announcement to the build.
+func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
+	var out strings.Builder
+	runner := &fakeRunner{}
+	opts := baseOptions(&out, runner, time.Now)
+	opts.Cycles = 1
+
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	hello := decode(t, out.String())[0].Hello
+	if hello == nil {
+		t.Fatal("no hello")
+	}
+	// This build's CLI takes `create shell --agent`, so it must say so: a viewer
+	// that reads false falls back to the two-step create-then-send.
+	if !hello.Capabilities.Verbs.CreateShellAgent {
+		t.Error("the host does not advertise `create shell --agent`, so no viewer will ever send it")
 	}
 }

@@ -42,6 +42,7 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		// route down the same way. Leaving a draft behind would strand a form the
 		// user can no longer see — and, with it, its theme preview.
 		m.closeProjectForm()
+		m.closeRemoteForm()
 		m.Back()
 		return nil
 	})
@@ -55,6 +56,8 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 	switch route.Child {
 	case ChildAddProject, ChildEditProject:
 		m.buildProjectForm(b)
+	case ChildAddRemote, ChildEditRemote:
+		m.buildRemoteForm(b)
 	case ChildRepairTmux:
 		m.buildTmuxRepair(b)
 	case ChildRepairTerminalColors:

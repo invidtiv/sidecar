@@ -470,10 +470,21 @@ func previewLiveOfKind(live []panecodec.Live, kind string) *panecodec.Live {
 	return nil
 }
 
+// forgetSessionsRow drops everything this surface remembers about a workspace
+// that has just gone away: its cached pane, its persisted pane layout, and any
+// selection still pointing at it.
+//
+// A local deletion's row disappears because the mutation is followed by a
+// re-inventory of the project it belonged to. A remote one has no such refresh
+// — a local inventory would answer a question about another machine — so the
+// row is dropped from that host's last-known results here instead. See
+// dropRemoteWorkspaceRow: it is a latency mask, and the host's next snapshot
+// restates the project either way.
 func (m *Model) forgetSessionsRow(id string) {
 	if id == "" {
 		return
 	}
+	m.dropRemoteWorkspaceRow(id)
 	if m.preview.paneCache != nil {
 		delete(m.preview.paneCache, id)
 	}

@@ -133,6 +133,40 @@ type Capabilities struct {
 	// StateDir is the resolved state root, echoed so an isolation failure is
 	// visible in the transcript rather than inferred from behaviour.
 	StateDir string `json:"stateDir,omitempty"`
+
+	// Verbs is what the host's CLI accepts, for the arguments a viewer cannot
+	// otherwise find out before sending them.
+	Verbs VerbCapabilities `json:"verbs"`
+}
+
+// VerbCapabilities is what a host says it understands about the one-shot
+// `sidecar <verb> --json` invocations a viewer makes of it.
+//
+// Deliberately minimal, and deliberately not a negotiation framework: one flat
+// set of booleans, added to when a verb gains an option a viewer must know
+// about before sending it. Anything more elaborate would be inventing a
+// mechanism for a protocol whose two ends are both this repository.
+//
+// It is additive, so Version stays where it is: a decoder ignores unknown
+// fields, and a viewer talking to a host that predates a field reads the zero
+// value — which is the correct answer, "that host does not have it". Version
+// strings cannot answer this. Dev builds carry git revisions rather than
+// releases, so comparing them decides nothing.
+type VerbCapabilities struct {
+	// CreateShellAgent is `sidecar create shell --agent <family>`, which records
+	// the agent family in the host's own shells.json as the shell is created, so
+	// HasAgent() is true from that moment rather than from the first successful
+	// screen identification. A host that advertises it also accepts --agent
+	// alongside --run, which is how a viewer says it owns the launch.
+	//
+	// A host that predates the flag answers `unknown option "--agent"` and exits
+	// 2, so a viewer that sent it unconditionally did not degrade — it broke
+	// remote agent-shell creation outright against any machine updated later
+	// than the viewer's. Mixed versions are the normal state: nobody updates two
+	// machines at the same moment. A viewer that reads false here falls back to
+	// creating the shell and then starting the agent with `shell send --run`,
+	// which is what it did before the flag existed.
+	CreateShellAgent bool `json:"createShellAgent,omitempty"`
 }
 
 // Snapshot is the complete observable state of the host at one instant. Serve

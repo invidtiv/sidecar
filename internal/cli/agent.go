@@ -90,6 +90,24 @@ func parseAgentCommon(env Env, args []string, help string) (agentFlags, int) {
 	return f, -1
 }
 
+// agentControlEnabled answers whether this run may drive the provider-aware
+// agent commands, without deciding what to do about the answer.
+//
+// Separate from requireAgentControl because the two callers want different
+// things from the same fact: `sidecar agent …` is the feature and refuses
+// without it, while `create shell --agent` has work to do either way — it
+// records the agent family whether or not it can also start it.
+func agentControlEnabled(env Env) (bool, error) {
+	if enabled, ok := env.FeatureOverrides[features.AgentControl.Name]; ok {
+		return enabled, nil
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return false, err
+	}
+	return cfg.Features.Flags[features.AgentControl.Name], nil
+}
+
 func requireAgentControl(env Env, jsonOutput bool) int {
 	if enabled, ok := env.FeatureOverrides[features.AgentControl.Name]; ok && enabled {
 		return -1
@@ -97,11 +115,11 @@ func requireAgentControl(env Env, jsonOutput bool) int {
 	if enabled, ok := env.FeatureOverrides[features.AgentControl.Name]; ok && !enabled {
 		return emitAgentError(env, jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrFeatureDisabled, Message: "agent control is disabled"})
 	}
-	cfg, err := config.Load()
+	enabled, err := agentControlEnabled(env)
 	if err != nil {
 		return emitAgentError(env, jsonOutput, err)
 	}
-	if !cfg.Features.Flags[features.AgentControl.Name] {
+	if !enabled {
 		return emitAgentError(env, jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrFeatureDisabled, Message: "agent control is disabled; enable the agent_control feature"})
 	}
 	return -1

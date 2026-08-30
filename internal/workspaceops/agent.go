@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -25,6 +26,62 @@ func AgentSkipFlag(agentType string) string {
 		return family.SkipPermissionsArg
 	}
 	return ""
+}
+
+// agentCommandWildcards are the configured keys that answer for any agent
+// rather than naming one. They resolve a command; they do not make a name a
+// family.
+var agentCommandWildcards = map[string]bool{"*": true, "default": true}
+
+// KnownAgentType reports whether agentType names an agent family this Sidecar
+// can launch: a catalog family, a launchable legacy one, or a name the caller
+// has configured a start command for.
+//
+// It exists because a value a caller has just typed deserves a verdict rather
+// than a resolution. `--agent claud` records "claud" as the family, and every
+// surface that keys off the agent type — the provider column, activity
+// identification, session lookup — would then disagree with whatever ends up
+// running in the pane. A picker cannot produce that value; a flag can, so the
+// flag checks. It is deliberately wider than agentcatalog.Find: this answers
+// "can this Sidecar launch it", which includes the legacy and configured
+// families a picker no longer offers.
+func KnownAgentType(agentType string, configured map[string]string) bool {
+	agentType = strings.TrimSpace(agentType)
+	if agentType == "" || agentCommandWildcards[agentType] {
+		return false
+	}
+	if _, ok := agentcatalog.FindLaunch(agentType); ok {
+		return true
+	}
+	_, ok := configured[agentType]
+	return ok
+}
+
+// KnownAgentTypes lists the agent families a caller should choose from, sorted,
+// so a refusal can say what was expected rather than only what was wrong.
+//
+// Narrower than KnownAgentType on purpose, and in one direction only: the
+// legacy families agentcatalog keeps launchable are still accepted but are not
+// offered here, for the same reason no picker offers them. A list is advice
+// about what to type next, and advertising a compatibility case would be advice
+// to start using it.
+func KnownAgentTypes(configured map[string]string) []string {
+	catalog := agentcatalog.Families()
+	seen := make(map[string]bool, len(catalog)+len(configured))
+	for _, family := range catalog {
+		seen[family.ID] = true
+	}
+	for agent := range configured {
+		if !agentCommandWildcards[agent] {
+			seen[agent] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for agent := range seen {
+		out = append(out, agent)
+	}
+	sort.Strings(out)
+	return out
 }
 
 var openCodeRunPrefix = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)

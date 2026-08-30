@@ -67,7 +67,7 @@ func runCreateShell(env Env, args []string) int {
 		case arg == "--agent" || strings.HasPrefix(arg, "--agent="):
 			val, next, ok := takeFlagArg(arg, args, i, "--agent")
 			if !ok || val == "" {
-				cliErrf(env.Stderr, "--agent requires a provider kind\n\n%s", help)
+				cliErrf(env.Stderr, "--agent requires an agent type\n\n%s", help)
 				return 2
 			}
 			agentKind = val
@@ -91,20 +91,62 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "--run and --type are mutually exclusive\n\n%s", help)
 		return 2
 	}
-	if agentKind != "" && (runCmd != "" || typeCmd != "") {
-		cliErrf(env.Stderr, "--agent cannot be combined with --run or --type\n\n%s", help)
-		return 2
-	}
+	// Trimmed before it is judged, not after: `--agent "  "` names no family, and
+	// a guard that ran against the untrimmed value would let it through and then
+	// record a shell with no agent type but SkipPerms set — durable state, and
+	// replayed on every later start of that shell.
+	agentKind = strings.TrimSpace(agentKind)
 	if skipPerms && agentKind == "" {
 		cliErrf(env.Stderr, "--skip-permissions requires --agent\n\n%s", help)
 		return 2
 	}
+
+	// One flag, two layers. The floor is the durable record: --agent always
+	// writes the agent family into the shell's manifest row, ungated, because
+	// that record is what keeps the shell on the Activity board while the agent
+	// boots and whenever live screen identification misses a frame. On top of
+	// that, when agent control is enabled and the caller named no command of
+	// their own, the same flag starts the provider and waits for it to be ready.
+	//
+	// The layering is what lets one flag serve both callers. A viewer creating a
+	// shell on a remote host passes --agent with --run: it owns the launch, so
+	// the record is all it wants, and it gets the same answer whether or not
+	// that host has agent control turned on.
+	startAgent := false
 	if agentKind != "" {
-		if _, ok := agentcatalog.Find(agentKind); !ok {
-			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: fmt.Sprintf("unknown agent kind %q", agentKind)})
+		// The family is checked before anything is created, and against the
+		// families this Sidecar can actually launch, because a value a caller has
+		// just typed deserves a verdict: `--agent claud` would otherwise create a
+		// shell recorded as "claud", and every surface keyed on the type would
+		// disagree with the pane. See workspaceops.KnownAgentType.
+		//
+		// Through emitAgentError so that both of this block's value refusals
+		// answer a --json caller in the same shape. They already share an exit
+		// code; printing one as an envelope and the other as prose would make
+		// that code the only thing a script could rely on.
+		configured := loadCreateConfig().Plugins.Workspace.AgentStart
+		if !workspaceops.KnownAgentType(agentKind, configured) {
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{
+				Code: agentcontrol.ErrNotReady,
+				Message: fmt.Sprintf("unknown agent type %q; known types are %s",
+					agentKind, strings.Join(workspaceops.KnownAgentTypes(configured), ", ")),
+			})
 		}
-		if code := requireAgentControl(env, flags.jsonOutput); code >= 0 {
-			return code
+		if runCmd == "" && typeCmd == "" {
+			enabled, err := agentControlEnabled(env)
+			if err != nil {
+				return emitAgentError(env, flags.jsonOutput, err)
+			}
+			startAgent = enabled
+		}
+		// Only the start needs a launchable catalog family. A configured name
+		// this Sidecar can record but agent control cannot launch is refused
+		// here rather than after the shell exists, which is where
+		// ResolveAgentLaunchArgv would otherwise say it.
+		if startAgent {
+			if _, ok := agentcatalog.FindLaunch(agentKind); !ok {
+				return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: fmt.Sprintf("unknown agent kind %q", agentKind)})
+			}
 		}
 	}
 
@@ -122,6 +164,15 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "--split and --tab name different placements\n\n%s", help)
 		return 2
 	}
+	// --agent writes a field of a workspace shell's durable record, and a
+	// beside-the-session split adds no such record ("do not add a workspace
+	// row", below). Refused rather than accepted and dropped: a caller that
+	// asked for the durable agent type and silently did not get one is exactly
+	// the defect this flag exists to fix.
+	if agentKind != "" && flags.splitSet {
+		cliErrf(env.Stderr, "--agent records a workspace shell's agent type, and a beside-the-session split adds no workspace row\n\n%s", help)
+		return 2
+	}
 	// A shell asked for from inside a Sidecar shell opens beside that session
 	// by default; switching the whole workspace to the new shell is what --tab
 	// asks for explicitly (nt-7c82c9). Outside any Sidecar shell there is
@@ -134,7 +185,11 @@ func runCreateShell(env Env, args []string) int {
 			}
 		}
 	}
-	if flags.splitSet || (!flags.tab && dest.Origin.TmuxSession != "") {
+	// --agent implies workspace placement for the same reason it is refused
+	// with --split: it names a field only a workspace row has. It is not
+	// spelled --tab because the caller did not ask where the shell goes; it
+	// asked for something only one placement can carry.
+	if flags.splitSet || (!flags.tab && agentKind == "" && dest.Origin.TmuxSession != "") {
 		if dest.Origin.TmuxSession == "" {
 			cliErrf(env.Stderr, "%s\n\n%s", createSplitNeedsShell, help)
 			return 2
@@ -142,7 +197,7 @@ func runCreateShell(env Env, args []string) int {
 		if !flags.splitSet {
 			flags.splitMode = "auto"
 		}
-		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms)
+		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
 		// Beside-the-session was only the default, not something the caller
 		// asked for: a DECLINE (feature off, no room, no live instance) falls
 		// back to a workspace shell so the command still lands.
@@ -161,10 +216,10 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "no beside-the-session placement available; created a workspace shell instead\n")
 	}
 
-	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms)
+	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms, startAgent)
 }
 
-func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms bool) int {
+func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms, startAgent bool) int {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -196,8 +251,15 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			DisplayName: display,
 		},
 		ProjectRoot: proj.Path,
-		AgentType:   agentKind,
-		SkipPerms:   skipPerms,
+		// The durable statement of which agent family this shell is for, in the
+		// same field the TUI's Create Shell writes. It is written whether or not
+		// this run also starts the process: it is the backstop that keeps the
+		// shell on the Activity board while the agent is still booting and
+		// whenever live screen identification momentarily fails — which is the
+		// whole reason a remote agent shell used to go missing where its local
+		// twin did not.
+		AgentType: agentKind,
+		SkipPerms: skipPerms,
 	}
 	if _, err := workspaceops.CreateManagedShell(spec); err != nil {
 		cliErrln(env.Stderr, err)
@@ -209,7 +271,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		seedErr = workspaceops.StartAgentInShell(ctx, session, runCmd)
 	} else if typeCmd != "" {
 		seedErr = workspaceops.TypeInShell(ctx, session, typeCmd)
-	} else if agentKind != "" {
+	} else if startAgent {
 		_, seedErr = startCreatedAgent(ctx, proj, session, display, proj.Path, agentKind, skipPerms)
 	}
 
@@ -266,7 +328,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 	return 0
 }
 
-func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms bool) int {
+func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd string) int {
 	display := strings.TrimSpace(nameFlag)
 	if display != "" {
 		normalized, err := shellstate.NormalizeName(display)
@@ -328,9 +390,6 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 	}
 
 	if flags.wait <= 0 {
-		if agentKind != "" {
-			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: "create shell --agent requires a positive placement acknowledgement; --wait 0 is not allowed"})
-		}
 		emit()
 		return 0
 	}
@@ -343,19 +402,6 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 	}
 
 	if createAcksOpened(acks) {
-		if agentKind != "" {
-			proj, err := registeredProjectForCreate(env.StateDir, dest)
-			if err != nil {
-				return emitAgentError(env, flags.jsonOutput, err)
-			}
-			ctx := env.Ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			if _, err := startCreatedAgent(ctx, proj, result.Shell.Session, display, proj.Path, agentKind, skipPerms); err != nil {
-				return emitAgentError(env, flags.jsonOutput, err)
-			}
-		}
 		emit()
 		return 0
 	}

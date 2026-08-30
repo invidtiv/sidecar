@@ -448,6 +448,25 @@ func (m *Model) handleControlDelivery(msg terminalControlMsg) tea.Cmd {
 	case terminalFallbackEvent:
 		m.modelLive = false
 		m.stopControl()
+		// A remote pane learns that its session has ended here or nowhere.
+		//
+		// Locally, a control channel that fails falls back to polling
+		// capture-pane, and the first capture answers "can't find pane", which
+		// is what ends the mode. A remote model has no capture fallback on
+		// purpose — pane IDs are per-server, so a local capture-pane for a
+		// remote %4 does not fail, it paints an unrelated local pane — so that
+		// answer never arrives. The mode stayed on, the retry loop respawned
+		// ssh every 250ms forever, and every keystroke went into a session that
+		// no longer existed: the row went away and the preview did not.
+		//
+		// The evidence is the attach error, which now carries the child's
+		// stderr (see newProcessControlChannelCommand). "can't find session"
+		// ends the mode; an ssh failure does not match a gone marker and so
+		// keeps retrying, which is the difference between a dead session and a
+		// dead link and the reason this is not simply a retry budget.
+		if m.remote && IsSessionDeadError(msg.Event.err) {
+			return m.endDeadSession()
+		}
 		m.recoveryPending = true
 		m.consecutiveRecoveryBlanks = 0
 		cmd = m.schedulePoll(0)

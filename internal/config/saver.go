@@ -19,6 +19,8 @@ type saveConfig struct {
 	TerminalResources saveTerminalResourcesConfig `json:"terminalResources,omitempty"`
 	Selection         saveSelectionConfig         `json:"selection"`
 	Notifications     NotificationsConfig         `json:"notifications"`
+	// Hosts is written only when a machine is registered; see Save.
+	Hosts HostsConfig `json:"hosts,omitempty"`
 }
 
 type saveSelectionConfig struct {
@@ -159,6 +161,7 @@ func toSaveConfig(cfg *Config) saveConfig {
 		TerminalResources: toSaveTerminalResources(cfg.TerminalResources),
 		Selection:         saveSelectionConfig{CopyOnSelect: &cfg.Selection.CopyOnSelect},
 		Notifications:     cfg.Notifications,
+		Hosts:             cfg.Hosts,
 	}
 }
 
@@ -229,6 +232,19 @@ func Save(cfg *Config) error {
 	// notifications is now a managed key. A targeted source save must preserve
 	// the validated global channel and quiet-hours policy it was based on.
 	fields["notifications"] = sc.Notifications
+	// hosts is managed on exactly the terms terminalResources is: written when
+	// a machine is registered, and the key removed when the last one goes.
+	//
+	// Until the registry became editable, `hosts` was only ever hand-written and
+	// Save carried it forward as an unknown key. That was silently wrong the
+	// moment anything wrote it: an entry added to cfg.Hosts was dropped on the
+	// way out, and — worse in the other direction — unregistering the last host
+	// would have resurrected the whole section from the preserved raw block.
+	if len(sc.Hosts.List) > 0 {
+		fields["hosts"] = sc.Hosts
+	} else {
+		delete(raw, "hosts")
+	}
 	for key, val := range fields {
 		b, err := json.Marshal(val)
 		if err != nil {

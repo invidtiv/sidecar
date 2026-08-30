@@ -20,6 +20,14 @@ import (
 // with no pane in a successful listing is the suspicion; one `list-sessions`
 // probe is the confirmation. No new timer, no per-shell polling, and nothing on
 // the startup path.
+//
+// The sequence itself — which evidence may be acted on, which records are in
+// scope, and what has to be true again at the moment of the write — moved to
+// shellliveness.PlanReap/ConfirmReap/ReapShell when `sidecar host serve` gained
+// a reap of its own (td-e3d108). This file is now the binding: it turns this
+// surface's cached inventory into an observation, runs the probes as tea.Cmds,
+// and drops rows from this surface's projections. There is exactly one
+// implementation of the guards, and it is not here.
 
 // shellLivenessProbe, shellLivenessServer, and forgetShell are indirected for tests.
 var (
@@ -29,21 +37,12 @@ var (
 )
 
 type (
-	// shellProbedMsg carries one session's independent second opinion.
+	// shellProbedMsg carries one session's independent second opinion. The
+	// probe it answers — including the name-life and server incarnation the
+	// suspicion was formed under — travels with it, so nothing about the fence
+	// is re-derived on delivery.
 	shellProbedMsg struct {
-		ProjectKey  string
-		ProjectRoot string
-		TmuxName    string
-		Namespace   string
-		// CreatedAt and Incarnation both identify the life this verdict is
-		// about. tmux names are reused, so a verdict outlives the thing it
-		// judged: CreatedAt fences a replacement entry written to the manifest,
-		// Incarnation fences a session this browser saw come back.
-		CreatedAt   time.Time
-		Incarnation uint64
-		// Server is the tmux server incarnation this verdict was taken under.
-		// Distinct from Incarnation, which is the life of the tmux name.
-		Server  tmuxserver.Incarnation
+		Probe   shellliveness.ReapProbe
 		Verdict shellliveness.Verdict
 	}
 
@@ -72,115 +71,93 @@ func (m *Model) observeTmuxServer(inc tmuxserver.Incarnation) {
 	m.shellLivenessTracker().ObserveServer(inc)
 }
 
-// reapDeadShells is called at the end of a completed refresh cycle. It records
-// which shells this cycle saw alive and probes the ones that have gone missing
-// since they were last seen.
+// reapDeadShells is called at the end of a completed refresh cycle. It hands
+// this cycle's evidence to the shared plan and turns the probes it asks for
+// into commands.
 //
-// Three things keep it conservative:
-//
-//   - A tmux inventory that failed (m.tmuxErr) is no evidence about anything,
-//     so the whole pass is skipped. So is an empty one: the collector reports a
-//     server that is not running as zero panes and no error, which is the exact
-//     shape of a tmux restart and would otherwise suspect every shell at once.
-//     The probe would answer Unknown for all of them, but a guard that only
-//     works because the last line of defence holds is not a guard. This skip
-//     stays as a cheap belt even after server incarnation is a first-class
-//     identity; incarnation gating (td-388929) is the real fence.
-//   - A shell in another tmux namespace is invisible to this listing, so its
-//     absence means nothing.
-//   - A shell this browser never saw running is left alone. That is what a
-//     manifest entry looks like after a reboot, and the offline-shell recreate
-//     path — not auto-close — owns it.
+// Every guard the decision applies — a failed or empty pane listing, a foreign
+// tmux namespace, a shell that was never seen running — lives in
+// shellliveness.PlanReap and is described there. What belongs here is only the
+// shape of this surface's evidence: the single `tmux list-panes -a` the refresh
+// cycle already took, and the cached per-project inventory it was correlated
+// against.
 func (m *Model) reapDeadShells() tea.Cmd {
-	// Socket-stat is how a Sidecar running outside tmux notices a restart on
-	// this inventory pass. Observe even when we are about to skip: a vanished
-	// server still changes incarnation, and the reset must fire on that
-	// transition, not only the next non-empty listing.
-	m.observeTmuxServer(shellLivenessServer())
-	if m.tmuxErr != nil || len(m.currentPanes) == 0 {
-		return nil
+	obs := shellliveness.ReapObservation{
+		// Socket-stat is how a Sidecar running outside tmux notices a restart
+		// on this inventory pass. PlanReap records it before its own guards, so
+		// a vanished server resets the tracker even on a cycle that decides
+		// nothing.
+		Server:        shellLivenessServer(),
+		Namespace:     tmuxenv.Namespace(),
+		ListingFailed: m.tmuxErr != nil,
+		Now:           time.Now(),
 	}
-	namespace := tmuxenv.Namespace()
-	if namespace == "" {
-		return nil
-	}
-	live := make(map[string]bool, len(m.currentPanes))
+	// One entry per pane, blank session names included: the empty-listing guard
+	// is about whether tmux listed anything at all, so filtering here would
+	// change what it sees.
+	obs.Panes = make([]string, 0, len(m.currentPanes))
 	for _, pane := range m.currentPanes {
-		live[pane.Session] = true
+		obs.Panes = append(obs.Panes, pane.Session)
 	}
-	tracker := m.shellLivenessTracker()
-	now := time.Now()
-	var cmds []tea.Cmd
 	for _, result := range m.results {
 		if result.Err != nil {
 			continue
 		}
 		for _, workspace := range result.Workspaces {
-			if workspace.Kind != workspaceinventory.KindShell || workspace.TmuxName == "" {
+			if workspace.Kind != workspaceinventory.KindShell {
 				continue
 			}
-			if workspace.Namespace != namespace {
-				continue
-			}
-			if live[workspace.TmuxName] {
-				tracker.Observe(workspace.TmuxName)
-				continue
-			}
-			if !tracker.ShouldProbe(workspace.TmuxName, now) {
-				continue
-			}
-			probe := shellProbedMsg{
+			obs.Shells = append(obs.Shells, shellliveness.Shell{
 				ProjectKey:  result.ProjectKey,
 				ProjectRoot: result.ProjectRoot,
 				TmuxName:    workspace.TmuxName,
 				Namespace:   workspace.Namespace,
 				CreatedAt:   workspace.CreatedAt,
-				Incarnation: tracker.Incarnation(workspace.TmuxName),
-				Server:      tracker.Server(),
-			}
-			cmds = append(cmds, func() tea.Msg {
-				probe.Verdict = shellLivenessProbe(probe.TmuxName)
-				return probe
 			})
 		}
 	}
-	if len(cmds) == 0 {
+
+	plan := shellliveness.PlanReap(m.shellLivenessTracker(), obs)
+	if plan.Skipped != "" {
+		m.tracef("shell reap skipped: %s", plan.Skipped)
 		return nil
+	}
+	if len(plan.Probes) == 0 {
+		return nil
+	}
+	cmds := make([]tea.Cmd, 0, len(plan.Probes))
+	for _, probe := range plan.Probes {
+		cmds = append(cmds, func() tea.Msg {
+			return shellProbedMsg{Probe: probe, Verdict: shellLivenessProbe(probe.TmuxName)}
+		})
 	}
 	return tea.Batch(cmds...)
 }
 
 // applyShellProbe acts only on a confirmed Gone verdict. The row leaves the
 // board immediately so the next cycle does not probe it again, and the manifest
-// entry is dropped through the shared shell operation rather than by writing
+// entry is tombstoned through the shared write half rather than by touching
 // shells.json here.
 //
-// A verdict is a statement about the moment it was taken. Between that moment
-// and this write the user can have brought the same tmux name back — pressing
-// Enter on an offline row recreates the session under its old name — and
-// deleting the identity of a shell that is now alive is the one outcome this
-// feature must never produce. Two independent things prevent it: the probe is
-// repeated inside the write command, so the evidence is fresh at the moment of
-// the deletion, and the write itself is conditional on the incarnation, checked
-// under the same lock a creating write takes.
+// Both halves of the resurrection defence live in shellliveness — the
+// incarnation fence in ConfirmReap, the fresh re-probe in ReapShell — and are
+// described there. What this surface adds is dropping the row between them.
 func (m *Model) applyShellProbe(msg shellProbedMsg) tea.Cmd {
-	m.observeTmuxServer(shellLivenessServer())
-	if !m.shellLivenessTracker().Confirm(msg.TmuxName, msg.Verdict, msg.Incarnation, msg.Server) {
+	if !shellliveness.ConfirmReap(m.shellLivenessTracker(), shellLivenessServer(), msg.Probe, msg.Verdict) {
 		return nil
 	}
-	m.dropShellRow(msg.ProjectKey, msg.TmuxName)
+	m.dropShellRow(msg.Probe.ProjectKey, msg.Probe.TmuxName)
 	m.syncBoard()
-	probe := msg
+	probe := msg.Probe
 	return func() tea.Msg {
-		if shellLivenessProbe(probe.TmuxName) != shellliveness.Gone {
-			// It came back while we were deciding. Leave the manifest alone;
-			// the next refresh re-reads shells.json and restores the row.
-			return shellForgottenMsg{ProjectKey: probe.ProjectKey, TmuxName: probe.TmuxName, Resurrected: true}
-		}
+		resurrected, err := shellliveness.ReapShell(shellLivenessProbe, forgetShell, probe)
+		// A resurrected shell leaves the manifest alone; the next refresh
+		// re-reads shells.json and restores the row.
 		return shellForgottenMsg{
-			ProjectKey: probe.ProjectKey,
-			TmuxName:   probe.TmuxName,
-			Err:        forgetShell(probe.ProjectRoot, probe.TmuxName, probe.Namespace, probe.CreatedAt),
+			ProjectKey:  probe.ProjectKey,
+			TmuxName:    probe.TmuxName,
+			Resurrected: resurrected,
+			Err:         err,
 		}
 	}
 }

@@ -237,7 +237,17 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// next read of the update channel, so dropping one on a focus check would
 	// not delay a row — it would end the stream for the rest of the session.
 	if m.overview != nil && overview.IsHostMessage(msg) {
-		return m, m.overview.Update(msg)
+		cmd := m.overview.Update(msg)
+		// The Remote Hosts page reads health from the running registry rather
+		// than probing, so a machine that has just connected — or just stopped
+		// answering — has to reach an open Configuration surface by the same
+		// stream that reaches the browser. Only the health is pushed: a full
+		// host state on this cadence would re-run Configuration's own sync
+		// several times a minute.
+		if m.configOpen() {
+			m.config.SetRemoteHosts(m.configRemoteHosts())
+		}
+		return m, cmd
 	}
 	var cmds []tea.Cmd
 	// A terminal-default cell belongs to the terminal hosting Sidecar, not to

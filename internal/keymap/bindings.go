@@ -111,6 +111,11 @@ func DefaultBindings() []Binding {
 		{Key: "shift+down", Command: "move-project-down", Context: "config"},
 		{Key: "[", Command: "move-project-up", Context: "config"},
 		{Key: "]", Command: "move-project-down", Context: "config"},
+		// Remote Hosts: edit the selected machine, and turn the feature on from
+		// the page it configures. Add and Remove are the Projects keys above,
+		// which both pages mean the same way.
+		{Key: "e", Command: "edit-host", Context: "config"},
+		{Key: "f", Command: "enable-remote-hosts", Context: "config"},
 		// The theme picker, on Appearance and inline in Add Project.
 		{Key: "g", Command: "use-global-theme", Context: "config"},
 		{Key: "t", Command: "test-notifications", Context: "config"},

@@ -33,7 +33,20 @@ var (
 	execDeleteRemoteBranch = workspaceops.DeleteRemoteBranch
 )
 
+// globalShellDeletedMsg is the result of a shell delete, local or remote.
+//
+// One message for both because the outcome is the same in both: the row goes,
+// the confirmation closes, and a failure is shown in the confirmation rather
+// than swallowed. What differs is who did the work — here, or the host running
+// `sidecar shell delete` on the machine that owns the session.
+//
+// A remote reply carries the row's host-scoped ProjectKey and NO path.
+// refreshOneProjectWithPanes refuses a host-scoped key, so the local
+// re-inventory this message ends in is a no-op for a remote delete: the host's
+// own snapshot is what confirms the deletion, and a local inventory would
+// answer a question about another machine.
 type globalShellDeletedMsg struct {
+	remoteReply
 	Project     Project
 	WorkspaceID string
 	Err         error
@@ -70,29 +83,50 @@ func (m *Model) RunDeleteCommand(id string) tea.Cmd {
 	}
 }
 
-// remoteVerbs answers "can a host do this?" for one action.
+// remoteVerbs answers "can a host do this?" for one action on one kind of
+// workspace.
 //
 // The entries are the verbs that reach a host as a `sidecar <verb> --json`
 // invocation it runs itself, so the machine that owns the state is the machine
 // that changes it. Everything absent from this map is refused, and each absence
 // is a decision:
 //
-//   - delete and merge resolve the workspace's path against a git repository
-//     and a shells.json. Their implementations run here, on this filesystem,
-//     which is the failure this guard exists to prevent.
+//   - delete of a WORKTREE, and merge, resolve the workspace's path against a
+//     git repository. Their implementations run here, on this filesystem, which
+//     is the failure this guard exists to prevent. Worktree removal also
+//     carries branch-cleanup decisions the host verb has no way to express.
 //   - open (navigation, and the Git plugin jump) switches THIS Sidecar's
 //     project to a checkout. There is no checkout here to switch to.
 //
 // Each of those becomes a supported verb by gaining a host-side CLI verb and an
-// entry here — not by relaxing the guard.
+// entry here — not by relaxing the guard. That is exactly how delete arrived
+// for shells: `sidecar shell delete` closes the session and tombstones the
+// record on the machine that owns both, so the entry below is a statement about
+// a verb that exists there, not a relaxation of the rule.
+//
+// The value is per-kind because the answer is. One verb name reaches two
+// different host-side operations depending on what --target resolves to, and a
+// flat map[string]bool could only say yes to both or no to both — which is how
+// permitting shell delete would have quietly permitted worktree delete.
 //
 // Only verbs this map is actually consulted for belong in it. Creation does not
 // pass through here at all: it resolves a createTarget from the form and asks
 // that whether it is remote, because a create has no selected row to judge.
 // Listing "create" and "send" here described a gate nothing opened, and a test
 // asserting on them proved only that the map contained what the map contained.
-var remoteVerbs = map[string]bool{
-	"rename": true,
+var remoteVerbs = map[string]map[workspaceinventory.Kind]bool{
+	// `sidecar shell rename --target` dispatches on what the target resolves
+	// to, renaming a shells.json record or a registered worktree's display
+	// name; both are the host editing its own state.
+	"rename": {
+		workspaceinventory.KindShell:    true,
+		workspaceinventory.KindWorktree: true,
+	},
+	// `sidecar shell delete --target` refuses a worktree session on the host
+	// side too, so the two surfaces cannot disagree about what delete means.
+	"delete": {
+		workspaceinventory.KindShell: true,
+	},
 }
 
 // remoteActionRefusal answers whether a host can do what is being asked of one
@@ -104,12 +138,33 @@ var remoteVerbs = map[string]bool{
 // The failure it prevents is not a confusing error. It is an action resolving
 // a remote path against THIS machine's filesystem and succeeding, because the
 // path happens to exist here too.
+//
+// The kind is part of the question, not a detail of the answer: delete is a
+// host-side verb for a shell and refused for a worktree, so a rule that read
+// only the verb would have to be right by accident.
 func remoteActionRefusal(workspace workspaceinventory.Workspace, verb string) string {
-	if !workspace.Remote() || remoteVerbs[verb] {
+	if !workspace.Remote() || remoteVerbs[verb][workspace.Kind] {
 		return ""
 	}
-	return fmt.Sprintf("%s is on %s — Sidecar can watch and change a remote workspace, but cannot %s one",
-		workspace.Name, workspace.HostID, verb)
+	// The kind is named in the sentence for the same reason it is in the rule:
+	// with shell delete supported, "cannot delete one" invites the reader to
+	// conclude that Sidecar cannot delete anything on a host.
+	return fmt.Sprintf("%s is on %s — Sidecar can watch and change a remote workspace, but cannot %s a remote %s",
+		workspace.Name, workspace.HostID, verb, remoteKindLabel(workspace.Kind))
+}
+
+// remoteKindLabel names a workspace kind the way the refusal sentence reads it.
+// An unrecognised kind falls back to the neutral word rather than printing an
+// internal identifier at the user.
+func remoteKindLabel(kind workspaceinventory.Kind) string {
+	switch kind {
+	case workspaceinventory.KindShell:
+		return "shell"
+	case workspaceinventory.KindWorktree:
+		return "worktree"
+	default:
+		return "workspace"
+	}
 }
 
 func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
@@ -333,6 +388,21 @@ func (m *Model) applyWorktreeDeleteDone(msg globalWorktreeDeleteDoneMsg) tea.Cmd
 	return tea.Batch(cmds...)
 }
 
+// deleteShellPrompt is what the confirmation asks.
+//
+// A remote shell's prompt names its host, in the question itself rather than in
+// a footnote: the tmux session being closed is on another machine, and every
+// other consequence sentence in this app describes work on the one in front of
+// the user. State-free and taking only the row, so the wording is a thing a
+// test can read without building a model.
+func deleteShellPrompt(workspace workspaceinventory.Workspace) string {
+	if workspace.Remote() {
+		return fmt.Sprintf("Delete %s on %s?\n\n%s runs the delete itself: it closes the tmux session there and removes the shell's Sidecar identity on that machine.",
+			workspace.Name, workspace.HostID, workspace.HostID)
+	}
+	return fmt.Sprintf("Delete %s?\n\nThis closes its tmux session and removes its Sidecar identity.", workspace.Name)
+}
+
 func (m *Model) ensureDeleteModal() {
 	if !m.deleteOpen {
 		return
@@ -349,7 +419,7 @@ func (m *Model) ensureDeleteModal() {
 	}
 	m.deleteModalW = width
 	m.deleteModal = modal.New("Delete Shell", modal.WithWidth(width), modal.WithPrimaryAction(globalDeleteConfirmID))
-	m.deleteModal.AddSection(modal.Text(fmt.Sprintf("Delete %s?\n\nThis closes its tmux session and removes its Sidecar identity.", m.deleteWorkspace.Name)))
+	m.deleteModal.AddSection(modal.Text(deleteShellPrompt(m.deleteWorkspace)))
 	if m.deleteError != "" {
 		m.deleteModal.AddSection(modal.Spacer())
 		m.deleteModal.AddSection(modal.Text("Error: " + m.deleteError))
@@ -415,6 +485,15 @@ func (m *Model) applyDeleteAction(action string) tea.Cmd {
 		m.closeDelete()
 	case globalDeleteConfirmID:
 		workspace := m.deleteWorkspace
+		// A remote row has no entry in m.projects — its project belongs to a
+		// host — and the local path below would resolve its shells.json against
+		// THIS filesystem. The host runs `sidecar shell delete` instead, which
+		// is the same workspaceops call on the machine that owns the session.
+		if workspace.Remote() {
+			m.deleteBusy = true
+			m.deleteModal = nil
+			return m.deleteRemoteShell(workspace)
+		}
 		idx := m.projectIndex(workspace.ProjectKey)
 		if idx < 0 {
 			m.deleteError = "Owning project is no longer configured"

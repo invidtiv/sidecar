@@ -11,6 +11,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/workspacecreate"
@@ -111,7 +112,7 @@ func remoteCreateModel(t *testing.T) (*Model, *remoteRunnerStub) {
 			t.Fatal(err)
 		}
 	}
-	m := hostModel(t, "mac-mini", hosts.Health{State: hosts.StateOnline}, remoteSnapshot("working"))
+	m := hostModel(t, "mac-mini", hosts.Health{State: hosts.StateOnline, Hello: currentHostHello()}, remoteSnapshot("working"))
 	m.projects = []Project{{Name: "sidecar", Path: "/tmp/sidecar", Key: "sidecar"}}
 	m.results["sidecar"] = workspaceinventory.ProjectResult{ProjectKey: "sidecar"}
 	m.config = config.Default()
@@ -123,6 +124,19 @@ func remoteCreateModel(t *testing.T) (*Model, *remoteRunnerStub) {
 	stub := &remoteRunnerStub{}
 	stub.install(t)
 	return m, stub
+}
+
+// currentHostHello is the handshake of a host running a Sidecar as new as this
+// one: it advertises every verb capability this build knows about. A host whose
+// hello is nil or whose Verbs are zero is an OLDER machine, which is its own
+// case — see TestRemoteCreateShellOmitsAgentOnAHostThatCannotParseIt.
+func currentHostHello() *hostproto.Hello {
+	return &hostproto.Hello{
+		Proto: hostproto.Version,
+		Capabilities: hostproto.Capabilities{
+			Verbs: hostproto.VerbCapabilities{CreateShellAgent: true},
+		},
+	}
 }
 
 // remoteProjectKey is the create-form key for the host project remoteSnapshot
@@ -228,11 +242,72 @@ func TestRemoteCreateShellSendsATypedNameOnly(t *testing.T) {
 	}
 }
 
-// TestRemoteCreateShellStartsTheAgentOnTheHost mirrors the local two-step:
-// create the shell, then start the agent in the session that came back.
+// TestRemoteCreateShellStartsTheAgentOnTheHost. The create carries both halves
+// of "this is a Claude shell": the family the host records, and the command that
+// starts it.
+//
+// One invocation, not two. A host that advertises the flag reads them together
+// — it records the family and runs exactly the command it was given — so there
+// is no window in which agent control could start a second provider in the same
+// pane behind a `shell send --run`.
 func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 	m, stub := remoteCreateModel(t)
 	localSeamGuard(t)
+	stub.results = []any{map[string]any{"shell": map[string]any{"session": "api-claude-2"}}}
+
+	run(t, m, m.OpenCreateShell(remoteProjectKey()))
+	selectCreateAgent(t, m, "claude")
+	cmd := m.submitCreateShell()
+	if cmd == nil {
+		t.Fatalf("no command; error=%q", m.createError)
+	}
+	msg := cmd().(globalShellCreatedMsg)
+	if msg.Err != nil {
+		t.Fatalf("remote create failed: %v", msg.Err)
+	}
+
+	if len(stub.calls) != 1 {
+		t.Fatalf("invocations = %v, want the create alone", stub.calls)
+	}
+	// The CREATE carries the agent family, so the host writes it into its own
+	// shells.json as the shell appears. Without it a remote agent shell's only
+	// evidence of an agent was live screen identification: it was missing from
+	// the Activity board while the agent booted and dropped off whenever
+	// identification missed a frame, where a local shell kept its card because
+	// the manifest said so.
+	create := stub.argv(t, 0)
+	for i, want := range []string{"create", "shell", "--project", "/home/me/api", "--agent", "claude", "--run"} {
+		if i >= len(create) || create[i] != want {
+			t.Fatalf("create argv = %v, want %v at %d", create, want, i)
+		}
+	}
+	if !strings.HasPrefix(create[7], "claude") {
+		t.Errorf("agent command = %q, want the resolved claude command", create[7])
+	}
+	if create[len(create)-1] != "--json" {
+		t.Errorf("create argv did not ask for JSON: %v", create)
+	}
+}
+
+// TestRemoteCreateShellOmitsAgentOnAHostThatCannotParseIt. Mixed versions are
+// the normal state — nobody updates two machines at the same moment — and a
+// host running a Sidecar that predates `create shell --agent` answers `unknown
+// option "--agent"` and exits 2. Sending it regardless does not degrade the
+// durable agent record; it breaks remote agent-shell creation outright against
+// a machine where it used to work.
+//
+// The host says what it can do, in its hello. Version strings cannot answer
+// this: dev builds carry git revisions, so comparing them decides nothing.
+func TestRemoteCreateShellOmitsAgentOnAHostThatCannotParseIt(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	localSeamGuard(t)
+	// An older Sidecar: it sent a hello, and that hello has no verb
+	// capabilities in it at all, which is precisely what the decoder produces
+	// for a field the host's build never wrote.
+	m.hostHealth["mac-mini"] = hosts.Health{
+		State: hosts.StateOnline,
+		Hello: &hostproto.Hello{Proto: hostproto.Version},
+	}
 	stub.results = []any{map[string]any{"shell": map[string]any{"session": "api-claude-2"}}, nil}
 
 	run(t, m, m.OpenCreateShell(remoteProjectKey()))
@@ -246,6 +321,12 @@ func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 		t.Fatalf("remote create failed: %v", msg.Err)
 	}
 
+	want := []string{"create", "shell", "--project", "/home/me/api", "--json"}
+	if got := stub.argv(t, 0); !equalArgs(got, want) {
+		t.Fatalf("create argv = %v, want %v — an older host exits 2 on --agent", got, want)
+	}
+	// And the fallback is the whole of the previous behaviour, not half of it:
+	// the agent is still started, by the send that always did it.
 	if len(stub.calls) != 2 {
 		t.Fatalf("invocations = %v, want create then send", stub.calls)
 	}
@@ -254,12 +335,6 @@ func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 		if i >= len(send) || send[i] != want {
 			t.Fatalf("send argv = %v, want %v at %d", send, want, i)
 		}
-	}
-	if !strings.HasPrefix(send[7], "claude") {
-		t.Errorf("agent command = %q, want the resolved claude command", send[7])
-	}
-	if send[len(send)-1] != "--json" {
-		t.Errorf("send argv did not ask for JSON: %v", send)
 	}
 }
 

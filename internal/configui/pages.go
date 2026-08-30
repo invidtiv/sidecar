@@ -15,6 +15,7 @@ const (
 	PageAppearance    PageID = "appearance"
 	PageProjects      PageID = "projects"
 	PageWorkspaces    PageID = "workspaces"
+	PageRemotes       PageID = "remotes"
 	PageAgents        PageID = "agents"
 	PageNotifications PageID = "notifications"
 	PageTerminal      PageID = "terminal"
@@ -52,6 +53,7 @@ var groups = []Group{
 			{ID: PageAppearance, Title: "Appearance"},
 			{ID: PageProjects, Title: "Projects"},
 			{ID: PageWorkspaces, Title: "Workspaces"},
+			{ID: PageRemotes, Title: "Remote Hosts"},
 			{ID: PageAgents, Title: "Agents"},
 			{ID: PageNotifications, Title: "Notifications"},
 			{ID: PageTerminal, Title: "Terminal"},

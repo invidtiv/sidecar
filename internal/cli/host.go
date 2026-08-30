@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -30,13 +31,18 @@ func hostCommand() *Command {
 		Name:    "serve",
 		Summary: "Stream this machine's Sidecar state as JSONL (spawned over SSH by a remote viewer)",
 		Usage:   "sidecar host serve --stdio [--cycles N] [--project NAME=PATH]",
-		Long: "Run the headless, read-only host agent: collect this machine's projects,\n" +
-			"shells, worktrees and agent status on the ordinary Overview cadence, and\n" +
-			"stream a versioned JSONL snapshot plus status transitions to stdout.\n\n" +
+		Long: "Run the headless host agent: collect this machine's projects, shells,\n" +
+			"worktrees and agent status on the ordinary Overview cadence, and stream a\n" +
+			"versioned JSONL snapshot plus status transitions to stdout.\n\n" +
 			"This is not a daemon. It is spawned per connection over an SSH stdio pipe\n" +
-			"and exits when that pipe closes. It writes no Sidecar state: it never\n" +
-			"touches shells.json, never reaps a dead shell, never takes a geometry\n" +
-			"lease, and never resizes a pane.\n\n" +
+			"and exits when that pipe closes.\n\n" +
+			"It has exactly one write, and it is the same one a local Sidecar makes: a\n" +
+			"shell record whose tmux session is confirmed gone is reaped — tombstoned\n" +
+			"through the flocked, conditional writer the Sessions browser uses, so\n" +
+			"`sidecar shell restore` still brings it back. Without it a row for a shell\n" +
+			"the user had already exited stayed on the viewer's screen until somebody\n" +
+			"opened Sidecar on this machine. Nothing else is written: no geometry lease,\n" +
+			"no pane resize, no mutating tmux command at all.\n\n" +
 			"Nothing is bound to a network. SSH is the entire transport and the entire\n" +
 			"trust boundary.",
 		Flags: []Flag{
@@ -54,7 +60,22 @@ func hostCommand() *Command {
 			{Description: "What a viewer runs over ssh", Command: "sidecar host serve --stdio"},
 			{Description: "One cycle, for inspection", Command: "sidecar host serve --stdio --cycles 1"},
 		},
-		Run: runHostServe,
+		// Serve reaps, so it writes state outside this process and the
+		// isolation gate must arm before the loop starts rather than at the
+		// first tombstone. shellstate still fails closed underneath; this is
+		// ordering, not a new guarantee — a proof run that forgot to move the
+		// state tree should be refused before it has observed anything, not
+		// after it has already tombstoned a record in the developer's real
+		// manifest.
+		//
+		// The flags cannot disarm it. asksForHelp reads them the way this
+		// command's own parser does — only -h/--help count, and a token after a
+		// value-taking flag is that flag's value — so `--project help` and
+		// `--cycles --help` are values, not requests for usage. That distinction
+		// is the Phase C incident recorded in cli.go: `shell send --run help`
+		// sailed past the gate and reached tmux.
+		Mutates: true,
+		Run:     runHostServe,
 	}
 
 	probeCmd := &Command{
@@ -90,13 +111,23 @@ func hostCommand() *Command {
 		Run: runHostProbe,
 	}
 
+	// The registry verbs sort in with serve and probe rather than sitting under
+	// a group of their own: "which machines do I watch" and "what does one of
+	// them say" are the same subject, and a user who found `host probe` should
+	// find `host add` in the same help.
+	sub := append([]*Command{probeCmd, serveCmd}, hostRegistryCommands()...)
+	sort.Slice(sub, func(a, b int) bool { return sub[a].Name < sub[b].Name })
+
 	return &Command{
 		Name:    "host",
-		Summary: "Remote host observation over SSH",
-		Usage:   "sidecar host <serve|probe> [options]",
-		Long: "Observe another machine's Sidecar state. `serve` runs on the remote host;\n" +
-			"`probe` connects to one from here.",
-		Sub: []*Command{probeCmd, serveCmd},
+		Summary: "Remote hosts: register them, and observe them over SSH",
+		Usage:   "sidecar host <list|add|remove|set|probe|serve> [options]",
+		Long: "Register and observe other machines running Sidecar.\n\n" +
+			"`list`, `add`, `remove` and `set` edit this Sidecar's host registry — the\n" +
+			"same entries the Remote Hosts page in Configuration shows, written through\n" +
+			"the same validation. `probe` asks one machine what it is answering with;\n" +
+			"`serve` is the half that runs on the remote host.",
+		Sub: sub,
 		// A group needs its own Run. Dispatch only looks at a top-level
 		// command's Run and Launch, so a group without one is "handled" and
 		// exits 0 having done nothing — which reads, over an ssh pipe, as a

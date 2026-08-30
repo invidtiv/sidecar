@@ -27,6 +27,11 @@ func TestCreateShellValidation(t *testing.T) {
 		{"positional", []string{"create", "shell", "extra"}, 2, "takes no positional"},
 		{"run and type", []string{"create", "shell", "--run", "true", "--type", "false"}, 2, "mutually exclusive"},
 		{"split invalid", []string{"create", "shell", "--split", "diagonal"}, 2, "invalid split option"},
+		{"skip perms without agent", []string{"create", "shell", "--skip-permissions"}, 2, "--skip-permissions requires --agent"},
+		// Blank names no agent, so it must reach the same refusal. Judged
+		// untrimmed, it would pass this guard and then record a shell with no
+		// agent type and skipPerms set — durable state, replayed on every start.
+		{"skip perms with a blank agent", []string{"create", "shell", "--agent", "  ", "--skip-permissions"}, 2, "--skip-permissions requires --agent"},
 		{"unknown create kind", []string{"create", "wat"}, 2, "unknown create command"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -670,5 +675,82 @@ func TestCreateShellDefaultsToBesideSession(t *testing.T) {
 	}
 	if code == 0 && !strings.Contains(out.String(), `"placement":"workspace"`) {
 		t.Fatalf("stdout = %q, want workspace placement for --tab", out.String())
+	}
+}
+
+// TestCreateShellRecordsTheAgentType is the durable half of "this is a Claude
+// shell".
+//
+// The TUI's Create Shell has always written AgentType as it creates, so
+// HasAgent() is true from that moment and the shell keeps its Activity card
+// while the agent boots. The CLI had no way to say it, so a remote create —
+// which is this verb over ssh — produced a shell whose only evidence of an
+// agent was live screen identification, and it went missing from the board
+// whenever that missed a frame.
+func TestCreateShellRecordsTheAgentType(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--agent", "claude", "--json", "--wait", "0"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("Run() = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run()
+	})
+
+	listed, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].AgentType != "claude" {
+		t.Fatalf("manifest = %+v, want one record carrying agentType claude", listed)
+	}
+	// --agent alone starts nothing: recording the family and launching the
+	// process are separate concerns, and the caller that passes --run (or
+	// `shell send --run` afterwards) owns the second.
+	if result.Shell.Session == "" {
+		t.Fatal("no session was created")
+	}
+}
+
+// TestCreateShellRefusesAnUnknownAgentType. An unchecked --agent would create a
+// shell recorded as "claud", and every surface keyed on the agent type — the
+// provider column, activity identification, session lookup — would then disagree
+// with whatever ends up in the pane. Exit 5, not 2: it is a verdict on a value,
+// and a caller on another machine reads 2 as version skew.
+func TestCreateShellRefusesAnUnknownAgentType(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--agent", "claud", "--wait", "0"}, &out, &errOut)
+	if !handled || code != exitInputRejected {
+		t.Fatalf("unknown agent = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), "unknown agent type") || !strings.Contains(errOut.String(), "claude") {
+		t.Fatalf("stderr = %q, want the refusal and the accepted list", errOut.String())
+	}
+	listed, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("a refused agent type still created a shell: %+v", listed)
 	}
 }

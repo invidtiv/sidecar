@@ -10,7 +10,7 @@ Evidence: all claims verified against the Sidecar codebase on `main` (citations 
 Sidecar becomes its own remote host agent. To see what is running on the Mac mini, the user installs Sidecar there — nothing else — and registers `remote:mac-mini` in the local Sidecar. The remote machine's shells, worktrees, agent states, and live panes appear in the Sessions browser, served by two channels over SSH:
 
 1. **Pane content: proxied tmux control mode.** The local Sidecar attaches to the remote tmux server by spawning `ssh host tmux -C attach-session -f ignore-size -t <session>` instead of a local `tmux -C`. This is not a new protocol — it is tmux's own control protocol, which Sidecar's entire terminal stack already consumes, arriving over a different pipe.
-2. **Sidecar-level truth: `sidecar host serve`.** A headless, ephemeral, read-only (until Phase C) process spawned on the remote host over SSH stdio, running the existing inventory/liveness/agent-status stack and streaming snapshots and status transitions as versioned JSONL.
+2. **Sidecar-level truth: `sidecar host serve`.** A headless, ephemeral process spawned on the remote host over SSH stdio, running the existing inventory/liveness/agent-status stack and streaming snapshots and status transitions as versioned JSONL. Read-only through Phase C; it now has exactly one write, the reap — see [Remote shell improvements](remote-shells-improvements.md).
 
 The "new streaming transport" is therefore mostly channel 2, and it is small: the pane-bytes problem — the hard, latency-sensitive, high-bandwidth part — is solved by reusing a protocol both ends already speak.
 
@@ -46,7 +46,7 @@ Decision posture: **resolved — this plan won.** Its Phase 0 spike ran first, p
 **In scope**
 
 - A host registry and SSH transport (shared shape with the Herdr plan).
-- `sidecar host serve`: headless, stdio, versioned JSONL; read-only through Phase B.
+- `sidecar host serve`: headless, stdio, versioned JSONL; read-only through Phase C, with the reap as its one write afterwards.
 - Read-only remote observation: inventory, agent status with full local fidelity, live pane view via proxied control mode.
 - Interactive remote panes (Phase B): in-band input, cross-host geometry lease rules.
 - Remote creation (Phase C): shells and worktrees through the existing `workspaceops` pipeline.
@@ -94,7 +94,9 @@ Sidecar (host, same binary)
 - **Previews:** the status pass already captures ~80 lines per agent pane (`inventory.go:562-635`); serve ships that text (bounded by the existing `tmuxCaptureMaxBytes` discipline) so Sessions-browser preview cells work without opening a control channel. Full pane view on selection uses channel 1.
 - **Requests (Phase C only):** create shell / worktree / start agent, mapping 1:1 onto `workspaceops` functions that the `sidecar create` CLI already exercises headlessly.
 
-Serve is **read-only until Phase C** — it never writes shells.json, never reaps, never takes a geometry lease, and never resizes (the one capture path that resizes, the lease-gated semantic preview at `workspace/agent.go:905-925`, is disabled under serve). When Phase C adds mutations, they go through the existing guarded writers: flock + read-modify-write (`shellstate.go:294-336`), tombstones instead of deletions, incarnation fencing — the exact hardening added after the td-8d18de/shells-wipe incident, which is also why serve gets no bespoke state-writing code of its own.
+Serve was **read-only through Phase C** — it never wrote shells.json, never reaped, never took a geometry lease, and never resized (the one capture path that resizes, the lease-gated semantic preview at `workspace/agent.go:905-925`, is disabled under serve). Phase C's mutations arrived as one-shot `sidecar <verb> --json` invocations rather than as serve writes, so that held.
+
+**It now has exactly one write, and the paragraph above is why it is the only one.** A remote shell the user had exited kept its record until somebody opened Sidecar on that machine, so serve reaps — through the existing guarded writers: flock + read-modify-write (`shellstate.go:294-336`), tombstones instead of deletions, incarnation fencing, the exact hardening added after the td-8d18de/shells-wipe incident. Serve still gets no bespoke state-writing code of its own: the decision half lives in `internal/shellliveness/reap.go` and the Sessions browser is the other caller. `TestServeIsReadOnly` continues to hold the tmux side of the guarantee, which is the part that was never in question. See [Remote shell improvements](remote-shells-improvements.md).
 
 ### Ephemeral serve dissolves the daemon problem
 
@@ -122,7 +124,7 @@ Identical to the Herdr plan, and stated once: remote panes are ordinary `panefra
 - **Linux process identity.** `process_identity_other.go` is a stub — argv0 disambiguation of shared-runtime panes (node/bun/agent) silently degrades to screen-chrome detection on Linux, and remote hosts will often be Linux. A `/proc`-based implementation (tpgid from `/proc/<pid>/stat`, argv0 from `cmdline`) is a Phase A item that also improves any Linux user's local fidelity today.
 - **Host-aware control channel factory + remote `terminalInputSender`** — the two seams in `internal/tty`.
 - ~~**Resize-without-transport-restart** if Phase 0 item 3 says the respawn is felt.~~ **Measured and dropped from Phase A.** A reseed over ssh costs 82–383 ms on a real link and 258–854 ms at 150 ms RTT — noticeable but not felt on a debounced, lease-gated, deliberate act. Revisit on Phase B experience, not on principle.
-- **Headless reap choreography** — not before Phase C, and only by porting the overview's guards (empty-listing skip, incarnation fence, tombstone writes), never fresh logic.
+- ~~**Headless reap choreography** — not before Phase C, and only by porting the overview's guards (empty-listing skip, incarnation fence, tombstone writes), never fresh logic.~~ **Done** in [Remote shell improvements](remote-shells-improvements.md), and by moving the guards rather than porting them: `internal/shellliveness/reap.go` is the single decision function, with the overview and hostserve as its two bindings.
 
 ## Phases
 
@@ -205,7 +207,7 @@ Host configuration is live-reloaded. Saving config refreshes feature resolution,
 
 What that buys is worth stating, because the plan originally specified the other shape:
 
-- `hostproto` gains no request direction, and `hostserve` gains no write paths — so "serve is read-only by construction rather than by flag" remains a property of its call graph, checked by `TestServeIsReadOnly`, rather than a claim that quietly stopped being true. (The protocol integer itself later moved to `Version = 2` for M5's server-to-viewer notification event, which adds no direction: see the note below.)
+- `hostproto` gains no request direction, and `hostserve` gains no write paths — so "serve is read-only by construction rather than by flag" remains a property of its call graph, checked by `TestServeIsReadOnly`, rather than a claim that quietly stopped being true. (Two later corrections, neither of them a request direction. The protocol integer moved to `Version = 2` for M5's server-to-viewer notification event: see the note below. And serve now has exactly one write, the reap — `TestServeIsReadOnly` still holds the tmux half, since serve issues no mutating tmux command, and the state write goes through `shellstate`'s conditional writer. The narrower claim is the true one.)
 - The in-flight/replaced-transport ordering hazards are absent by construction. Phase B spent four consecutive review cycles on exactly that class inside one long-lived channel; a one-shot invocation with a deadline has no such state.
 - Every mutation is equally reachable by an agent over plain ssh, which is the parity the project's design principles ask for. The verbs are the deliverable, not a byproduct.
 
@@ -257,7 +259,7 @@ Also left: `remoteCreateShellArgs` does not pass `--tab` (it lands on workspace 
 ## Failure, degradation, security
 
 - **Degrade the host, not the app** — a dead link marks one host offline; never blocks a frame; never touches local state (inherited verbatim from the Herdr plan).
-- **Serve is read-only until Phase C, and provably so** — Phase A/B builds carry no state-writing code paths in `hostserve` at all, which is a stronger guarantee than a runtime flag.
+- **Serve is read-only until Phase C, and provably so** — Phase A/B builds carry no state-writing code paths in `hostserve` at all, which is a stronger guarantee than a runtime flag. (True as written for Phases A through C; the reap added one write afterwards.)
 - **The reaper never runs remotely until it has all three local guards.** The shells-wipe class of bug (td-8d18de) is the named hazard; empty-pane-listing skip, incarnation fencing, and tombstones are the named mitigations, already in the writers serve would eventually call.
 - **SSH is the entire trust boundary.** Serve speaks stdio only; no sockets, no ports, no forwarding. The user's ssh config, keys, and agent are the security model, same as the Herdr plan.
 - **Isolation discipline extends remotely.** Serve honors `SIDECAR_ISOLATED_STATE` and the `AssertIsolatedPath` guards, so proof runs against a remote host can never touch a real remote state tree — the same rule `tmux-drive.sh` enforces locally.

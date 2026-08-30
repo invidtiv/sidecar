@@ -225,6 +225,50 @@ func RootCommand() *Command {
 		Run:     runShellForget,
 	}
 
+	deleteCmd := &Command{
+		Name:    "delete",
+		Summary: "Delete a shell: close its tmux session and forget its record",
+		Usage:   "sidecar shell delete --target SESSION [--project NAME] [--json]",
+		Long: "Delete a Sidecar-managed shell. This closes the tmux session and moves the\n" +
+			"record to a tombstone, which is exactly what Delete does in the Sessions\n" +
+			"browser — the same workspaceops call, so the two cannot drift.\n\n" +
+			"`sidecar shell forget` is the half of this that only drops the record; use it\n" +
+			"for a shell whose session is already gone, or one recorded on another tmux\n" +
+			"server. Either way `sidecar shell restore` can put the record back.\n\n" +
+			"--target is required and must name a session the resolved project owns: a\n" +
+			"sidecar-sh-… record in its shells.json. tmux resolves a session name against\n" +
+			"whatever answers to it, so an unregistered name is refused (exit 3) rather\n" +
+			"than killed. A sidecar-ws-… worktree session resolves but is refused (exit 5):\n" +
+			"removing a checkout carries branch-cleanup decisions this verb cannot express.\n\n" +
+			"There is no current-shell form. Deleting the shell you are sitting in would\n" +
+			"kill the session running the command, so the subject is always named.",
+		Flags: []Flag{
+			{Name: "--target", Arg: "SESSION", Summary: "The tmux session to delete (required)"},
+			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
+			{Name: "--project", Arg: "NAME", Summary: "Target project (slug, basename, or path)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 0},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "deleted"},
+			{Code: 1, Summary: "tmux, ambiguity, or state failure"},
+			{Code: 2, Summary: "usage error, including a missing --target"},
+			{Code: 3, Summary: "--target names no session this project owns, or one recorded on a different tmux server"},
+			{Code: 5, Summary: "a value was rejected: --target names a worktree, or an unknown --project / --shell"},
+		},
+		Examples: []Example{
+			{Command: "sidecar shell delete --target sidecar-sh-sidecar-2"},
+			{Command: "sidecar shell delete --target sidecar-sh-sidecar-2 --project sidecar --json"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar shell delete --target SESSION",
+			Summary:    "Close a Sidecar shell and forget it, the way the user's Delete does",
+		},
+		Mutates: true,
+		Run:     runShellDelete,
+	}
+
 	restoreCmd := &Command{
 		Name:    "restore",
 		Summary: "Restore a forgotten shell record by tmux name",
@@ -265,8 +309,8 @@ func RootCommand() *Command {
 		Name:    "shell",
 		Summary: "Manage Sidecar shell records and the current shell's name",
 		Usage:   "sidecar shell <command>",
-		Long:    "List, forget, and restore this project's shell records; read or rename a shell; and send a command into one.",
-		Sub:     []*Command{forgetCmd, listCmd, nameCmd, renameCmd, restoreCmd, sendCmd},
+		Long:    "List, forget, restore, and delete this project's shells; read or rename a shell; and send a command into one.",
+		Sub:     []*Command{deleteCmd, forgetCmd, listCmd, nameCmd, renameCmd, restoreCmd, sendCmd},
 		Run:     runShellRoot,
 	}
 
@@ -284,10 +328,19 @@ func RootCommand() *Command {
 			"beside-the-session split explicitly (the workspace_terminal_panel feature,\n" +
 			"on by default, must not be disabled). Beside-the-session modes need a running\n" +
 			"instance and a current shell (SIDECAR_SHELL / --shell) and do not add a\n" +
-			"workspace row.",
+			"workspace row.\n\n" +
+			"--agent records which agent family the shell is for, in the same durable field\n" +
+			"the TUI's Create Shell writes. That record is what keeps the shell on the\n" +
+			"Activity board while the agent is booting and whenever live screen\n" +
+			"identification misses a frame. With the agent_control feature enabled and no\n" +
+			"--run or --type of your own, --agent also starts the provider and returns only\n" +
+			"when it is ready; otherwise it records the family and starts nothing, and --run\n" +
+			"(or `sidecar shell send --run` afterwards) owns the launch. Because only a\n" +
+			"workspace row carries the field, --agent places the shell there: it is refused\n" +
+			"with --split and overrides the beside-the-session default.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
-			{Name: "--agent", Arg: "KIND", Summary: "Start a catalog provider and return only when ready"},
+			{Name: "--agent", Arg: "TYPE", Summary: "Record the agent family (claude, codex, …), and start it when agent_control is on"},
 			{Name: "--skip-permissions", Summary: "Pass the selected provider's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
@@ -306,17 +359,18 @@ func RootCommand() *Command {
 			{Code: 2, Summary: "usage error, or this directory is not in a registered project"},
 			{Code: 3, Summary: "no running instance (split mode)"},
 			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
-			{Code: 5, Summary: "a value was rejected: --name, or an unknown --project / --shell"},
+			{Code: 5, Summary: "a value was rejected: --name, --agent, or an unknown --project / --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name reviewer --agent codex --json"},
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
+			{Command: "sidecar create shell --agent claude --run claude", Description: "an agent shell the board knows is one"},
 			{Command: "sidecar create shell --split right --run \"python3 -m http.server 8765\""},
 			{Command: "sidecar create shell --json --wait 0"},
 			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create shell [--name NAME] [--agent KIND | --run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
+			Invocation: "sidecar create shell [--name NAME] [--agent TYPE] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
 			Summary:    "Create a shell beside the current session (default) or as a workspace tab (--tab)",
 		},
 		Mutates: true,

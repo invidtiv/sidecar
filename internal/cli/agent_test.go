@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -191,6 +193,52 @@ func TestAgentJSONErrorEnvelope(t *testing.T) {
 	handled, code := Run([]string{"--enable-feature=agent_control", "agent", "get", "missing", "--json"}, &out, &errOut)
 	if !handled || code != 3 || out.Len() != 0 || !strings.Contains(errOut.String(), `"code":"agent_not_found"`) {
 		t.Fatalf("missing = handled=%v code=%d stdout=%q stderr=%q", handled, code, out.String(), errOut.String())
+	}
+}
+
+// TestCreateShellAgentWithARunCommandStartsNothingItself pins the layering the
+// one --agent flag rests on.
+//
+// The flag's floor is the durable record, and that is ungated: the family is
+// written into shells.json whether or not agent control is available, because
+// that record is what keeps the shell on the Activity board while the agent
+// boots. Starting the provider is the layer on top, and it applies only when
+// the caller named no command of their own.
+//
+// A caller that passes --run has said it owns the launch. Starting a provider
+// as well would put two agents in one pane — which is exactly what a remote
+// create would have done, since the viewer resolves the command itself and
+// sends both.
+func TestCreateShellAgentWithARunCommandStartsNothingItself(t *testing.T) {
+	idleScreen := codexIdleFixture(t)
+	stateDir, _ := targetProject(t)
+	terminal := &cliAgentTerminal{screen: idleScreen}
+	useCLIAgentTerminal(t, terminal)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"--enable-feature=agent_control", "create", "shell", "--tab", "--name", "seeded", "--agent", "codex", "--run", "codex --search", "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("create = handled=%v code=%d stderr=%q", handled, code, errOut.String())
+	}
+	var result createShellResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("json: %v (%q)", err, out.String())
+	}
+	t.Cleanup(func() { _ = exec.Command("tmux", "kill-session", "-t", result.Shell.Session).Run() })
+	if terminal.launched {
+		t.Fatalf("agent control launched %v behind the caller's own --run", terminal.argv)
+	}
+	listed, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var record *shellstate.Definition
+	for i := range listed {
+		if listed[i].TmuxName == result.Shell.Session {
+			record = &listed[i]
+		}
+	}
+	if record == nil || record.AgentType != "codex" {
+		t.Fatalf("manifest = %+v, want the created shell recorded as codex", listed)
 	}
 }
 

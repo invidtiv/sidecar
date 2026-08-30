@@ -56,6 +56,17 @@ var settingsIndex = []IndexEntry{
 	{Page: PageWorkspaces, Label: "Sidebar display", Keywords: []string{"sidebar", "display", "agent", "task", "stats", "prefix", "workspace"}},
 	{Page: PageWorkspaces, Label: "Worktree setup", Keywords: []string{"worktree", "setup", "hook", "env", "copy"}},
 
+	// Remote Hosts
+	{Page: PageRemotes, Label: "Remote hosts", Keywords: []string{"remote", "host", "ssh", "machine", "another computer", "sidecar_remote_hosts"}},
+	{Page: PageRemotes, Label: "Add host", Keywords: []string{"remote", "host", "add", "register", "ssh", "target", "machine"}},
+	{Page: PageRemotes, Label: "SSH target", Keywords: []string{"ssh", "target", "hostname", "ssh_config", "alias", "proxyjump"}},
+	{Page: PageRemotes, Label: "Sidecar path on the host", Keywords: []string{"binary", "path", "remote", "login shell", "homebrew"}},
+	{Page: PageRemotes, Label: "Remote config path", Keywords: []string{"config", "path", "remote", "host"}},
+	{Page: PageRemotes, Label: "Remote environment", Keywords: []string{"env", "environment", "tmux_tmpdir", "xdg_state_home", "isolated", "proof"}},
+	{Page: PageRemotes, Label: "Switch a host off", Keywords: []string{"disable", "disabled", "off", "pause", "remote", "host"}},
+	{Page: PageRemotes, Label: "Remove host", Keywords: []string{"remove", "delete", "unregister", "remote", "host"}},
+	{Page: PageRemotes, Label: "Host health", Keywords: []string{"unreachable", "no-sidecar", "no tmux", "protocol", "stale", "online", "health", "connection"}},
+
 	// Agents
 	{Page: PageAgents, Label: "Available agents", Keywords: []string{"agent", "claude", "codex", "opencode", "grok", "enable"}},
 	{Page: PageAgents, Label: "Agent launch command", Keywords: []string{"agent", "command", "launch", "start"}},

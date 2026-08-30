@@ -155,3 +155,45 @@ func TestRoundTripPreservesPresentation(t *testing.T) {
 		t.Errorf("session = %q; a viewer cannot open a control channel without it", got.Session)
 	}
 }
+
+// TestOlderHostHelloReadsAsNoVerbCapabilities is why the capability set could be
+// added without moving Version. An older host's hello has no `verbs` object in
+// it at all, and the decoder answers "that host cannot do it" rather than
+// failing — which is exactly what a viewer needs before it chooses an argument
+// list. A protocol bump would instead have made every un-updated host
+// unreachable to fix a flag one verb accepts.
+func TestOlderHostHelloReadsAsNoVerbCapabilities(t *testing.T) {
+	line := `{"proto":1,"kind":"hello","seq":1,"hello":{"proto":1,"version":"0.9.0","host":"mac-mini","tmuxPresent":true,"capabilities":{"processIdentity":true}}}`
+	msg, err := NewDecoder(strings.NewReader(line + "\n")).Next()
+	if err != nil {
+		t.Fatalf("an older host's hello no longer decodes: %v", err)
+	}
+	if msg.Hello == nil {
+		t.Fatal("no hello decoded")
+	}
+	if msg.Hello.Capabilities.Verbs.CreateShellAgent {
+		t.Error("a host that never wrote the field was read as supporting --agent")
+	}
+	if !msg.Hello.Capabilities.ProcessIdentity {
+		t.Error("the capabilities that were present stopped decoding")
+	}
+}
+
+// TestVerbCapabilitiesSurviveTheWire. The field is only useful if it arrives.
+func TestVerbCapabilitiesSurviveTheWire(t *testing.T) {
+	var buffer bytes.Buffer
+	encoder := NewEncoder(&buffer)
+	if err := encoder.Encode(Message{Kind: KindHello, Hello: &Hello{
+		Proto:        Version,
+		Capabilities: Capabilities{Verbs: VerbCapabilities{CreateShellAgent: true}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	msg, err := NewDecoder(&buffer).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !msg.Hello.Capabilities.Verbs.CreateShellAgent {
+		t.Fatalf("the advertised verb capability did not survive the wire: %s", buffer.String())
+	}
+}
