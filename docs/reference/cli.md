@@ -911,7 +911,7 @@ Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <displa
 - `0`: renamed, or already named that
 - `1`: identity, ambiguity, or state failure
 - `2`: usage error; without --target, also a rejected display name (the current-shell form's long-standing code)
-- `3`: --target names no session this project owns, or one on a different tmux server
+- `3`: --target names no session this project owns
 - `5`: with --target: a value was rejected — the display name (already used, or not legal), or an unknown --project / --shell
 
 **Examples:**

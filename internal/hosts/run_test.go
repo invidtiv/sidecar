@@ -242,6 +242,8 @@ func TestRunSidecarClassifiesExitCodes(t *testing.T) {
 		{"unowned target", 3, "no registered Sidecar shell or worktree session named \"x\"\n", FailNoTarget, "no registered Sidecar shell"},
 		{"instance declined", 4, "the window is too small to split\n", FailRefused, "too small"},
 		{"no sidecar", 127, "zsh: command not found: sidecar\n", FailNoSidecar, "command not found"},
+		{"missing binary reported at exit 1", 1, "bash: line 1: sidecar: command not found\n", FailNoSidecar, "command not found"},
+		{"failing child of the verb is not a missing sidecar", 1, "./.worktree-setup.sh: line 3: pnpm: command not found\n", FailRefused, "pnpm"},
 		{"ssh failure", 255, "ssh: connect to host mac-mini port 22: Host is down\n", FailTransport, "Host is down"},
 		{"other status", 7, "something else went wrong\n", FailExit, "something else"},
 		{"exit 1 without a message", 1, "", FailRefused, "without saying why"},

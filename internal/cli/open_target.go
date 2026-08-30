@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -625,7 +626,11 @@ func configuredProjectFallback(stateDir, name string, register projectRegistrati
 			filepath.Base(canon) != name && filepath.Base(filepath.Clean(raw)) != name {
 			continue
 		}
-		matched = append(matched, canon)
+		// Two configured entries naming the same directory — one by name, one
+		// by path — are one project, not an ambiguity.
+		if !slices.Contains(matched, canon) {
+			matched = append(matched, canon)
+		}
 	}
 	if len(matched) != 1 {
 		return registeredProject{}, false

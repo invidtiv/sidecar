@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/marcus/sidecar/internal/config"
 )
@@ -402,17 +403,36 @@ func missingSidecarDetail(detail string) string {
 // isMissingSidecar matches the shapes a shell uses to say the binary is not
 // there. Same distinctions as classifyStreamFailure, and for the same observed
 // reason: a non-login ssh shell reports a Homebrew-installed binary as missing.
+//
+// The thing reported missing must be sidecar itself. Stderr also carries the
+// verb's children — a project setup hook failing with `pnpm: command not
+// found` exits the verb 1, and reading that as an uninstalled Sidecar tells
+// the user to install a binary that plainly just ran.
 func isMissingSidecar(stderr string) bool {
-	lowered := strings.ToLower(stderr)
-	switch {
-	case strings.Contains(lowered, "command not found"),
-		strings.Contains(lowered, "sidecar: no such file"):
-		return true
-	case strings.Contains(lowered, "not found") && strings.Contains(lowered, "sidecar"):
-		return true
-	default:
-		return false
+	for _, line := range strings.Split(strings.ToLower(stderr), "\n") {
+		line = strings.TrimSpace(line)
+		var missing string
+		switch {
+		case strings.HasSuffix(line, ": command not found"),
+			strings.HasSuffix(line, ": not found"),
+			strings.HasSuffix(line, ": no such file or directory"):
+			// bash/dash name the command before the phrase:
+			// "bash: line 1: sidecar: command not found".
+			parts := strings.Split(line, ":")
+			if len(parts) >= 2 {
+				missing = strings.TrimSpace(parts[len(parts)-2])
+			}
+		case strings.Contains(line, "command not found: "),
+			strings.Contains(line, "no such file or directory: "):
+			// zsh names it after the phrase:
+			// "zsh:1: command not found: sidecar".
+			missing = strings.TrimSpace(line[strings.LastIndex(line, ": ")+2:])
+		}
+		if missing == "sidecar" || strings.HasSuffix(missing, "/sidecar") {
+			return true
+		}
 	}
+	return false
 }
 
 // ResultValidator is implemented by a result type that can recognise its own
@@ -524,38 +544,71 @@ func isEmptyResultType(elem reflect.Type) bool {
 // non-space byte of any line that opens an object or an array. Bounded, so a
 // host that writes a megabyte of braces cannot turn this into a quadratic
 // parse.
+//
+// The bound keeps the LAST candidates. The CLI writes its result after
+// anything a profile or wrapper logs, so when a host emits more JSON-looking
+// lines than the cap it is the earliest that are disposable — capping from the
+// front dropped the result behind a chatty structured-log profile, the exact
+// false failure the last-first decode order exists to prevent.
 func jsonStarts(data []byte) []int {
 	const maxCandidates = 32
-	var offsets []int
-	for offset := 0; offset < len(data) && len(offsets) < maxCandidates; {
+	var ring [maxCandidates]int
+	total := 0
+	for offset := 0; offset < len(data); {
 		line := data[offset:]
 		if end := bytes.IndexByte(line, '\n'); end >= 0 {
 			line = line[:end]
 		}
 		trimmed := bytes.TrimLeft(line, " \t\r\v\f")
 		if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
-			offsets = append(offsets, offset+(len(line)-len(trimmed)))
+			ring[total%maxCandidates] = offset + (len(line) - len(trimmed))
+			total++
 		}
 		offset += len(line) + 1
+	}
+	count := min(total, maxCandidates)
+	offsets := make([]int, 0, count)
+	for i := total - count; i < total; i++ {
+		offsets = append(offsets, ring[i%maxCandidates])
 	}
 	return offsets
 }
 
 // firstRunLine is the one line of a remote's output worth putting in a row: the
-// first non-blank one, bounded so a host cannot write a paragraph into the UI.
+// first non-blank one, bounded so a host cannot write a paragraph into the UI,
+// and stripped of control characters so a host cannot write escape sequences
+// into the local terminal — this is host-controlled text on a display path.
 func firstRunLine(text string) string {
 	const maxDetail = 200
 	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSpace(stripControls(line))
 		if line == "" {
 			continue
 		}
 		if len(line) > maxDetail {
-			return line[:maxDetail] + "…"
+			cut := maxDetail
+			for cut > 0 && !utf8.RuneStart(line[cut]) {
+				cut--
+			}
+			return line[:cut] + "…"
 		}
 		return line
 	}
 	return ""
+}
+
+// stripControls drops C0 and C1 control characters (keeping tabs), which is
+// what turns an ESC/OSC sequence from a compromised host into inert text.
+func stripControls(text string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, text)
 }
 
 func boundedText(data []byte, limit int) string {

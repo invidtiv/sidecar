@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // shellLike and planLike are the shapes the Sessions browser actually decodes
@@ -137,5 +138,44 @@ func TestRunSidecarAcceptsAnEmptyResultType(t *testing.T) {
 	var result struct{}
 	if err := client.RunSidecar(context.Background(), []string{"shell", "send", "--json"}, &result); err != nil {
 		t.Fatalf("RunSidecar: %v", err)
+	}
+}
+
+// TestRunSidecarFindsTheResultBehindManyLogLines: the candidate window is
+// bounded, and the first version of the bound kept the FIRST 32 JSON-looking
+// lines — so a profile emitting more structured-log lines than that pushed the
+// result (always written last) out of the window entirely, reporting a named
+// failure for a mutation that ran and exited 0. The window must keep the last
+// candidates, not the first.
+func TestRunSidecarFindsTheResultBehindManyLogLines(t *testing.T) {
+	var stdout strings.Builder
+	for i := 0; i < 40; i++ {
+		stdout.WriteString(`{"level":"info","msg":"loading nvm"}` + "\n")
+	}
+	stdout.WriteString(`{"shell":{"session":"proj-demo"}}` + "\n")
+	client := testRunClient(t, Host{ID: "h", Target: "h"}, stubInvoker(stdout.String(), "", 0))
+	var result shellLike
+	if err := client.RunSidecar(context.Background(), []string{"create", "shell", "--json"}, &result); err != nil {
+		t.Fatalf("RunSidecar: %v", err)
+	}
+	if result.Shell.Session != "proj-demo" {
+		t.Fatalf("session = %q, want proj-demo (the result fell outside the candidate window)", result.Shell.Session)
+	}
+}
+
+// TestFirstRunLineNeutralisesHostControlBytes: RunError detail is
+// host-controlled text on a display path, so escape sequences must arrive as
+// inert text and a length cut must not split a rune.
+func TestFirstRunLineNeutralisesHostControlBytes(t *testing.T) {
+	got := firstRunLine("\x1b]0;owned\x07pnpm: command \x1b[31mnot found\x1b[0m")
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Fatalf("control bytes survived: %q", got)
+	}
+	if !strings.Contains(got, "pnpm: command") {
+		t.Fatalf("stripped too much: %q", got)
+	}
+	long := strings.Repeat("x", 199) + "é" // the two-byte rune straddles the 200-byte cut
+	if cut := firstRunLine(long); !utf8.ValidString(cut) {
+		t.Fatalf("length cut split a rune: %q", cut)
 	}
 }

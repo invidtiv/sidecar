@@ -95,7 +95,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "renamed, or already named that"},
 			{Code: 1, Summary: "identity, ambiguity, or state failure"},
 			{Code: 2, Summary: "usage error; without --target, also a rejected display name (the current-shell form's long-standing code)"},
-			{Code: 3, Summary: "--target names no session this project owns, or one on a different tmux server"},
+			{Code: 3, Summary: "--target names no session this project owns"},
 			{Code: 5, Summary: "with --target: a value was rejected — the display name (already used, or not legal), or an unknown --project / --shell"},
 		},
 		Examples: []Example{
@@ -519,6 +519,7 @@ func notifyCommand() *Command {
 		ExitCodes: []ExitCode{{Code: 0, Summary: "saved"}, {Code: 1, Summary: "configuration I/O failure"}, {Code: 2, Summary: "usage or validation error"}},
 		Examples:  []Example{{Command: "sidecar notify config set --native background --sound background"}},
 		Agent:     AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] --json", Summary: "Change external notification modes without restarting Sidecar"},
+		Mutates:   true,
 		Run:       runNotifyConfigSet,
 	}
 	configCmd := &Command{
