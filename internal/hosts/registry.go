@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
@@ -86,13 +87,14 @@ func DisabledFromConfig(cfg *config.Config) []string {
 // only what changed, so a host whose settings did not move keeps its stream
 // and its rows rather than blinking out and reconnecting.
 type Registry struct {
-	mu      sync.Mutex
-	clients map[string]*Client
-	cancels map[string]context.CancelFunc
-	updates chan Update
-	options ClientOptions
-	dir     string
-	stopped bool
+	mu           sync.Mutex
+	clients      map[string]*Client
+	cancels      map[string]context.CancelFunc
+	incarnations map[string]uint64
+	updates      chan Update
+	options      ClientOptions
+	dir          string
+	stopped      bool
 
 	// forwardMu and forwarders guard the merged stream's lifetime: Stop waits
 	// for every forwarder to finish before closing the channel they send on.
@@ -101,12 +103,17 @@ type Registry struct {
 	updatesClosed bool
 }
 
+// nextHostIncarnation is process-wide so stopping and recreating a Registry
+// cannot make a queued update collide with a replacement client's identity.
+var nextHostIncarnation atomic.Uint64
+
 // NewRegistry builds an empty registry. opts is applied to every client;
 // leave it zero for production defaults.
 func NewRegistry(opts ClientOptions) *Registry {
 	return &Registry{
-		clients: make(map[string]*Client),
-		cancels: make(map[string]context.CancelFunc),
+		clients:      make(map[string]*Client),
+		cancels:      make(map[string]context.CancelFunc),
+		incarnations: make(map[string]uint64),
 		// Buffered so a burst of host transitions cannot stall a client's
 		// reader loop while the UI is mid-frame.
 		updates: make(chan Update, 64),
@@ -141,10 +148,12 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		client.Close()
 		delete(r.clients, id)
 		delete(r.cancels, id)
+		delete(r.incarnations, id)
 	}
 
 	var starting []*Client
 	var contexts []context.Context
+	var incarnations []uint64
 	for id, host := range wanted {
 		if _, running := r.clients[id]; running {
 			continue
@@ -157,8 +166,11 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 		clientCtx, cancel := context.WithCancel(ctx)
 		r.clients[id] = client
 		r.cancels[id] = cancel
+		incarnation := nextHostIncarnation.Add(1)
+		r.incarnations[id] = incarnation
 		starting = append(starting, client)
 		contexts = append(contexts, clientCtx)
+		incarnations = append(incarnations, incarnation)
 	}
 	r.mu.Unlock()
 
@@ -179,7 +191,7 @@ func (r *Registry) Sync(ctx context.Context, hosts []Host) {
 	for i, client := range starting {
 		r.forwarders.Add(1)
 		go client.Run(contexts[i])
-		go r.forward(client)
+		go r.forward(client, incarnations[i])
 	}
 }
 
@@ -223,9 +235,10 @@ func (r *Registry) controlDirLocked(id string) string {
 	return path
 }
 
-func (r *Registry) forward(client *Client) {
+func (r *Registry) forward(client *Client, incarnation uint64) {
 	defer r.forwarders.Done()
 	for update := range client.Updates() {
+		update.Incarnation = incarnation
 		r.forwardMu.RLock()
 		if !r.updatesClosed {
 			select {
@@ -238,6 +251,14 @@ func (r *Registry) forward(client *Client) {
 		}
 		r.forwardMu.RUnlock()
 	}
+}
+
+// Incarnation returns the concrete running client identity for id.
+func (r *Registry) Incarnation(id string) (uint64, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	incarnation, ok := r.incarnations[id]
+	return incarnation, ok
 }
 
 // Clients returns the live clients, ordered by host ID.

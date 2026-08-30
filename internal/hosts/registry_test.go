@@ -94,6 +94,14 @@ func TestSyncKeepsUnchangedHostsConnected(t *testing.T) {
 	if !ok {
 		t.Fatal("host a was not started")
 	}
+	firstAIncarnation, ok := registry.Incarnation("a")
+	if !ok {
+		t.Fatal("host a has no incarnation")
+	}
+	firstBIncarnation, ok := registry.Incarnation("b")
+	if !ok {
+		t.Fatal("host b has no incarnation")
+	}
 
 	// Same registration for a, changed target for b, c added, and nothing
 	// removed.
@@ -102,9 +110,17 @@ func TestSyncKeepsUnchangedHostsConnected(t *testing.T) {
 	if !ok || again != first {
 		t.Error("an unchanged host was restarted")
 	}
+	againAIncarnation, _ := registry.Incarnation("a")
+	if againAIncarnation != firstAIncarnation {
+		t.Errorf("unchanged host incarnation = %d, want %d", againAIncarnation, firstAIncarnation)
+	}
 	changed, ok := registry.Client("b")
 	if !ok || changed.Host().Target != "moved" {
 		t.Errorf("a changed host did not restart: %+v", changed)
+	}
+	changedBIncarnation, _ := registry.Incarnation("b")
+	if changedBIncarnation == firstBIncarnation {
+		t.Errorf("retargeted host retained incarnation %d", firstBIncarnation)
 	}
 	if len(registry.Clients()) != 3 {
 		t.Errorf("clients = %d, want 3", len(registry.Clients()))

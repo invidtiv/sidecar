@@ -99,9 +99,13 @@ func (h Health) Fix() string { return h.State.Fix() }
 
 // Update is one change to a host's observable state.
 type Update struct {
-	HostID   string
-	Health   Health
-	Snapshot *hostproto.Snapshot
+	HostID string
+	// Incarnation identifies one concrete registry client for HostID. It is
+	// stamped by Registry, not the remote host, so a queued update from an old
+	// SSH target cannot be mistaken for the replacement using the same ID.
+	Incarnation uint64
+	Health      Health
+	Snapshot    *hostproto.Snapshot
 }
 
 // Conn is one open connection to a host's serve process.

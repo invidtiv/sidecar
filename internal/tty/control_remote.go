@@ -89,9 +89,12 @@ func (m *Model) UseRemoteControl(spawn ControlSpawner) {
 	m.control = controlManagerSource{manager: manager}
 	m.input = inBandInputSender{backend: backend}
 	m.capture = unavailableCaptureSource{}
+	m.remoteInputMu.Lock()
 	m.remoteBackend = backend
 	m.remoteInteractive = false
+	m.remoteInputGeneration++
 	m.remote = true
+	m.remoteInputMu.Unlock()
 }
 
 // UseLocalControl restores the ordinary local transport, sender and capture.
@@ -112,8 +115,11 @@ func (m *Model) UseLocalControl() {
 	m.control = defaultControlSource()
 	m.input = defaultTerminalInputSender{model: m}
 	m.capture = defaultTerminalCaptureSource{}
+	m.remoteInputMu.Lock()
 	m.remoteBackend = nil
 	m.remote = false
+	m.remoteInputGeneration++
+	m.remoteInputMu.Unlock()
 }
 
 // IsRemote reports whether this terminal is served by another machine.
@@ -246,7 +252,11 @@ func (s remoteLeaseStore) set(session, token string) {
 
 func (s remoteLeaseStore) clear(session string) {
 	if s.backend != nil {
-		_ = s.backend.manager.sendControlBatch(s.backend.session(),
+		// A release is a lifetime barrier, not an advisory write. The manager
+		// retains the client until tmux executes the unset, even if the pane's last
+		// subscription closes immediately afterward. Sending stays non-blocking so
+		// Exit and ReleaseInput never stall Bubble Tea on a network round trip.
+		_ = s.backend.manager.sendControlBarrier(s.backend.session(),
 			"set-option -u -t "+controlQuote(session)+" "+leaseOptionName)
 	}
 }
@@ -261,7 +271,7 @@ func (s remoteLeaseStore) inputMark(string) string {
 type inBandInputSender struct{ backend *remoteTerminalBackend }
 
 func (s inBandInputSender) send(scope MessageScope, commands ...string) tea.Cmd {
-	if s.backend == nil || s.backend.model == nil || !s.backend.model.remoteInteractive {
+	if s.backend == nil || s.backend.model == nil || !s.backend.model.remoteInputOwned(s.backend, 0) {
 		return nil
 	}
 	session := s.backend.session()
@@ -301,7 +311,7 @@ func (s inBandInputSender) SendEscapePaste(scope MessageScope, target, text stri
 }
 
 func (s inBandInputSender) PasteClipboard(scope MessageScope, target string) tea.Cmd {
-	if s.backend == nil || !s.backend.model.remoteInteractive {
+	if s.backend == nil || !s.backend.model.remoteInputOwned(s.backend, 0) {
 		return nil
 	}
 	var result PasteResultMsg
@@ -379,13 +389,27 @@ func (m *Model) ActivateInput() tea.Cmd {
 	if !m.remote || m.remoteBackend == nil || !m.IsActive() {
 		return nil
 	}
+	m.remoteInputMu.Lock()
 	m.remoteInteractive = true
+	m.remoteInputGeneration++
+	generation := m.remoteInputGeneration
+	backend := m.remoteBackend
+	m.remoteInputMu.Unlock()
 	scope, target := m.Scope(), m.GetTarget()
 	width, height := m.Width, m.Height
 	return func() tea.Msg {
 		return m.withActivationMessage(scope, func() tea.Msg {
-			m.remoteBackend.lease.claim(target)
-			if m.remoteBackend.resize(target, width, height) {
+			m.remoteInputMu.Lock()
+			defer m.remoteInputMu.Unlock()
+			if !m.remote || !m.remoteInteractive || m.remoteBackend != backend ||
+				m.remoteInputGeneration != generation {
+				return nil
+			}
+			// Interactive ownership is a standing geometry-driving path, just
+			// like an attached client: periodic ordinary arbitration ticks keep
+			// the token fresh and its idle evidence honest at a settled size.
+			backend.lease.hold(target)
+			if backend.resize(target, width, height) {
 				return PaneResizedMsg{Scope: scope}
 			}
 			return nil
@@ -394,11 +418,29 @@ func (m *Model) ActivateInput() tea.Cmd {
 }
 
 func (m *Model) releaseRemoteInput() {
-	if m == nil || !m.remoteInteractive || m.remoteBackend == nil {
+	if m == nil {
+		return
+	}
+	m.remoteInputMu.Lock()
+	defer m.remoteInputMu.Unlock()
+	if !m.remoteInteractive || m.remoteBackend == nil {
 		return
 	}
 	m.remoteInteractive = false
+	m.remoteInputGeneration++
 	m.remoteBackend.lease.release()
+}
+
+// remoteInputOwned fences work queued for an older input activation. A zero
+// generation asks only whether backend currently owns input.
+func (m *Model) remoteInputOwned(backend *remoteTerminalBackend, generation uint64) bool {
+	if m == nil {
+		return false
+	}
+	m.remoteInputMu.Lock()
+	defer m.remoteInputMu.Unlock()
+	return m.remote && m.remoteInteractive && m.remoteBackend == backend &&
+		(generation == 0 || m.remoteInputGeneration == generation)
 }
 
 // SetApplicationFocused releases a remote geometry claim on blur and reclaims
@@ -407,8 +449,11 @@ func (m *Model) SetApplicationFocused(focused bool) tea.Cmd {
 	if !m.remote || m.remoteBackend == nil {
 		return nil
 	}
-	m.remoteBackend.lease.setFocused(focused)
-	if focused && m.remoteInteractive {
+	m.remoteInputMu.Lock()
+	backend, interactive := m.remoteBackend, m.remoteInteractive
+	backend.lease.setFocused(focused)
+	m.remoteInputMu.Unlock()
+	if focused && interactive {
 		return m.ActivateInput()
 	}
 	return nil

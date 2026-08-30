@@ -100,6 +100,7 @@ func (m *Model) startHosts() tea.Cmd {
 			m.hostProjects = nil
 		}
 		m.hostRegistered = make(map[string]bool)
+		m.hostIncarnations = make(map[string]uint64)
 		m.syncBoard()
 		return nil
 	}
@@ -120,6 +121,12 @@ func (m *Model) startHosts() tea.Cmd {
 		m.hostRegistered[id] = true
 	}
 	m.hostRegistry.Sync(m.hostContext(), registered)
+	m.hostIncarnations = make(map[string]uint64, len(registered))
+	for _, host := range registered {
+		if incarnation, ok := m.hostRegistry.Incarnation(host.ID); ok {
+			m.hostIncarnations[host.ID] = incarnation
+		}
+	}
 
 	// Disabled hosts get no client and no connection, but they do get a row:
 	// `disabled` means "off this week", and a machine that silently vanished
@@ -217,6 +224,12 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 	// error row.
 	if m.hostRegistered != nil && !m.hostRegistered[update.HostID] {
 		return m.waitForHostUpdate()
+	}
+	if m.hostIncarnations != nil {
+		expected, ok := m.hostIncarnations[update.HostID]
+		if !ok || update.Incarnation != expected {
+			return m.waitForHostUpdate()
+		}
 	}
 	m.hostHealth[update.HostID] = update.Health
 

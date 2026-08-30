@@ -263,6 +263,9 @@ type Model struct {
 	// update from a client that has just been stopped cannot resurrect a
 	// de-registered machine as a permanent error row.
 	hostRegistered map[string]bool
+	// hostIncarnations fences queued updates across a same-ID transport
+	// replacement. Nil means host reconciliation has not run yet.
+	hostIncarnations map[string]uint64
 	// hostConfigured is the last reconciled transport identity. A selected
 	// terminal owns its own control process, not the serve registry's, so a
 	// removed or retargeted HostID must close that terminal explicitly.

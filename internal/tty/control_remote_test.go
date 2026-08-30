@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -278,6 +279,142 @@ func TestRemoteGeometryClaimReleasesOnBlurAndReclaimsOnFocus(t *testing.T) {
 	if store.sets != 2 || store.current() == "" {
 		t.Fatalf("focus lease sets=%d token=%q", store.sets, store.current())
 	}
+	model.ReleaseInput()
+}
+
+func TestQueuedRemoteActivationCannotReclaimAfterInputRelease(t *testing.T) {
+	store := &fakeLeaseStore{}
+	model := New(nil)
+	model.remote = true
+	model.State = &State{Active: true, TargetSession: "remote-session", TargetPane: "%4"}
+	model.remoteBackend = &remoteTerminalBackend{model: model}
+	model.remoteBackend.lease = newTestKeeper(store, "viewer", DefaultLeasePolicy)
+
+	cmd := model.ActivateInput()
+	if cmd == nil {
+		t.Fatal("remote activation returned no command")
+	}
+	model.ReleaseInput()
+	_ = cmd()
+	if store.reads != 0 || store.sets != 0 || store.current() != "" {
+		t.Fatalf("late activation reclaimed lease: reads=%d sets=%d token=%q", store.reads, store.sets, store.current())
+	}
+}
+
+func TestRemoteInteractivePeriodicLeaseRefreshLetsTypingPeerPreempt(t *testing.T) {
+	store := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	model := New(nil)
+	model.remote = true
+	model.State = &State{Active: true, TargetSession: "remote-session", TargetPane: "%4"}
+	model.remoteBackend = &remoteTerminalBackend{model: model}
+	viewer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	viewer.selfID = "viewer"
+	viewer.now = readNow
+	viewer.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(viewer)
+	model.remoteBackend.lease = viewer
+
+	peer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	peer.selfID = "remote-human"
+	peer.now = readNow
+	peer.lastInput = readNow()
+
+	cmd := model.ActivateInput()
+	if cmd == nil {
+		t.Fatal("remote activation returned no command")
+	}
+	_ = cmd()
+	defer model.ReleaseInput()
+	if leaseOwner(store.current()) != "viewer" {
+		t.Fatalf("entry lease = %q, want viewer", store.current())
+	}
+
+	advance(10 * time.Second)
+	for range max(DefaultLeasePolicy.RefreshTicks, 1) {
+		before := store.activity()
+		ticker.c <- readNow()
+		waitForActivity(t, store, before)
+		advance(time.Second)
+	}
+	waitForSets(t, store, 2)
+	parsed := parseLeaseToken(store.current())
+	if !parsed.idleKnown || parsed.idle < 10*time.Second || store.sets < 2 {
+		t.Fatalf("periodic refresh token=%q idle=%s known=%v sets=%d", store.current(), parsed.idle, parsed.idleKnown, store.sets)
+	}
+
+	peer.noteInput()
+	if !peer.allow("%4") || leaseOwner(store.current()) != "remote-human" {
+		t.Fatalf("typing peer did not preempt periodically refreshed idle owner: %q", store.current())
+	}
+}
+
+func TestRemoteExitRetainsControlUntilLeaseUnsetCompletes(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	activate := model.ActivateInput()
+	activated := make(chan struct{})
+	go func() {
+		_ = activate()
+		close(activated)
+	}()
+
+	var leaseRead fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "#{session_name}") && strings.Contains(command.text, leaseOptionName) {
+				leaseRead = command
+				return true
+			}
+		}
+		return false
+	})
+	leaseRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("remote activation did not complete")
+	}
+
+	model.Exit()
+	var unset fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "set-option -u") && strings.Contains(command.text, leaseOptionName) {
+				unset = command
+				return true
+			}
+		}
+		return false
+	})
+	if channel.closeCount() != 0 {
+		t.Fatal("control closed before tmux confirmed the lease unset")
+	}
+	// Exit has already returned on this goroutine: response waiting belongs to
+	// the control manager, not Bubble Tea. Deliver the response through the real
+	// ordered actor and prove it is the lifetime barrier for the transport.
+	channel.events <- controlEvent{
+		Kind:     controlEventResponse,
+		Response: controlResponse{},
+		Callback: unset.callback,
+	}
+	waitFor(t, func() bool { return channel.closeCount() == 1 })
 }
 
 func TestControlQuoteHandlesEveryQuotingShape(t *testing.T) {

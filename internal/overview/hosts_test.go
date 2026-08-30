@@ -588,6 +588,11 @@ func TestHostRetargetClosesSelectedRemoteControlBeforeReconnect(t *testing.T) {
 		return nil, context.Canceled
 	}})
 	t.Cleanup(m.hostRegistry.Stop)
+	m.hostRegistry.Sync(context.Background(), []hosts.Host{{ID: "mini", Target: "old"}})
+	oldIncarnation, ok := m.hostRegistry.Incarnation("mini")
+	if !ok {
+		t.Fatal("old host client has no incarnation")
+	}
 	m.hostResults = make(map[string][]workspaceinventory.ProjectResult)
 	m.hostHealth = make(map[string]hosts.Health)
 	m.hostProjects = make(map[string][]Project)
@@ -611,6 +616,28 @@ func TestHostRetargetClosesSelectedRemoteControlBeforeReconnect(t *testing.T) {
 	}
 	if m.previewTarget() != (tty.Target{}) || m.primaryTerminalLeaf().History.HistorySize != 0 {
 		t.Fatalf("retargeted host retained old target/history: target=%+v history=%+v", m.previewTarget(), m.primaryTerminalLeaf().History)
+	}
+	newIncarnation, ok := m.hostRegistry.Incarnation("mini")
+	if !ok || newIncarnation == oldIncarnation {
+		t.Fatalf("retarget incarnation old=%d new=%d found=%v", oldIncarnation, newIncarnation, ok)
+	}
+
+	// This message was already queued when the old client was replaced. The ID
+	// alone still matches, so only the incarnation can keep the old machine from
+	// overwriting the new registration.
+	_ = m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
+		HostID: "mini", Incarnation: oldIncarnation,
+		Health: hosts.Health{State: hosts.StateUnreachable, Detail: "old target"},
+	}})
+	if health, exists := m.hostHealth["mini"]; exists && health.Detail == "old target" {
+		t.Fatalf("queued old-client update applied after retarget: %+v", health)
+	}
+	_ = m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
+		HostID: "mini", Incarnation: newIncarnation,
+		Health: hosts.Health{State: hosts.StateUnreachable, Detail: "new target"},
+	}})
+	if got := m.hostHealth["mini"].Detail; got != "new target" {
+		t.Fatalf("current-client update detail = %q, want new target", got)
 	}
 }
 

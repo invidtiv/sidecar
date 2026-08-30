@@ -187,7 +187,9 @@ type Model struct {
 	// every side effect this process could have on that machine: see
 	// UseRemoteControl.
 	remote                    bool
+	remoteInputMu             sync.Mutex
 	remoteInteractive         bool
+	remoteInputGeneration     uint64
 	remoteBackend             *remoteTerminalBackend
 	subscription              terminalControlSubscription
 	mailbox                   *terminalMailbox

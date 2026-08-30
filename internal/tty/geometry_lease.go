@@ -732,10 +732,12 @@ func (k *leaseKeeper) hold(target string) {
 	}
 	ticks, stopTicker := k.newTicker(k.holdEvery)
 	done := make(chan struct{})
+	finished := make(chan struct{})
 	k.holds[target] = &leaseHold{
 		stop: func() {
 			stopTicker()
 			close(done)
+			<-finished
 		},
 		// Primed so the refresher measures input from the attach onwards. The
 		// claim above has already stamped this moment as input.
@@ -744,6 +746,7 @@ func (k *leaseKeeper) hold(target string) {
 	k.mu.Unlock()
 
 	go func() {
+		defer close(finished)
 		for {
 			select {
 			case <-done:

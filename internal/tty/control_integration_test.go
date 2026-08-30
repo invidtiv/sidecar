@@ -126,6 +126,53 @@ func TestControlManagerIsolatedTmuxSessionPool(t *testing.T) {
 	}
 }
 
+func TestControlBarrierUnsetsLeaseBeforeLastClientCloses(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping tmux integration in short mode")
+	}
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	socket := fmt.Sprintf("/tmp/sidecar-control-barrier-test-%d-%d.sock", os.Getpid(), time.Now().UnixNano())
+	t.Cleanup(func() { _ = exec.Command("tmux", "-S", socket, "kill-server").Run() })
+	const session = "release-barrier"
+	if output, err := exec.Command("tmux", "-S", socket, "new-session", "-d", "-s", session).CombinedOutput(); err != nil {
+		t.Fatalf("create session: %v: %s", err, output)
+	}
+	pane := isolatedPaneID(t, socket, session)
+	if output, err := exec.Command("tmux", "-S", socket, "set-option", "-t", session,
+		leaseOptionName, "viewer:1:0").CombinedOutput(); err != nil {
+		t.Fatalf("seed lease: %v: %s", err, output)
+	}
+
+	manager := newControlManager(func(string) (controlChannel, error) {
+		return newProcessControlChannelForSocket(socket, session)
+	}, 5*time.Millisecond)
+	defer manager.Stop()
+	sub, err := manager.Subscribe(ControlRequest{
+		Session: session,
+		Pane:    pane,
+		Visible: true,
+		Focused: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, sub.UsingControl)
+	if err := manager.sendControlBarrier(session,
+		"set-option -u -t "+controlQuote(session)+" "+leaseOptionName); err != nil {
+		t.Fatal(err)
+	}
+	// This is the reproduction: before the barrier lifetime ref, Close killed
+	// the control process immediately after the pipe write and tmux could retain
+	// the option indefinitely.
+	sub.Close()
+	waitFor(t, func() bool {
+		output, err := exec.Command("tmux", "-S", socket, "show-options", "-v", "-t", session, leaseOptionName).Output()
+		return err != nil || strings.TrimSpace(string(output)) == ""
+	})
+}
+
 func isolatedPaneID(t *testing.T, socket, session string) string {
 	t.Helper()
 	output, err := exec.Command("tmux", "-S", socket, "display-message", "-p", "-t", session, "#{pane_id}").Output()
