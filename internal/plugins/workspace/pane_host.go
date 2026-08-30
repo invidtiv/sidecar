@@ -52,9 +52,6 @@ func (h paneHost) QueueSizeCmd(cmd tea.Cmd) { h.p.paneSizeCmds = append(h.p.pane
 // muted on neighbours. Content bytes are not dimmed.
 func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 	p := h.p
-	if node != nil && p.paneMoveActive() && p.paneMove.LeafID() == node.ID {
-		return paneframe.ChromeMoving
-	}
 	if node != nil && node.Kind == PaneShell {
 		// The panel's keyboard is termPanelFocused's, not paneFocus's: the ring
 		// names the terminal leaf for both terminals and that flag says which of

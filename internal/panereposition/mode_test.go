@@ -6,43 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/panelayout"
 )
 
-func TestModeIsScopedAndDiesWithItsLeaf(t *testing.T) {
-	root := &panelayout.Node{ID: 1, Kind: panelayout.Primary}
-	var mode Mode
-	if !mode.Start("surface:1", 1) || !mode.Reconcile("surface:1", root) {
-		t.Fatal("mode did not start on its scoped leaf")
-	}
-	if mode.Reconcile("surface:2", root) || mode.LeafID() != 0 {
-		t.Fatal("mode crossed a tree scope")
-	}
-	mode.Start("surface:1", 1)
-	if mode.Reconcile("surface:1", &panelayout.Node{ID: 2, Kind: panelayout.Primary}) || mode.LeafID() != 0 {
-		t.Fatal("mode survived its leaf closing")
-	}
-}
-
-func TestDecodeOwnsMoveAndExitKeys(t *testing.T) {
-	for key, want := range map[string]panelayout.Direction{
-		"h": panelayout.DirectionLeft, "left": panelayout.DirectionLeft,
-		"j": panelayout.DirectionDown, "down": panelayout.DirectionDown,
-		"k": panelayout.DirectionUp, "up": panelayout.DirectionUp,
-		"l": panelayout.DirectionRight, "right": panelayout.DirectionRight,
-	} {
-		got := Decode(key)
-		if !got.Move || got.Exit || got.Direction != want {
-			t.Errorf("Decode(%q) = %+v", key, got)
-		}
-	}
-	for _, key := range []string{"M", "enter", "esc"} {
-		if got := Decode(key); !got.Exit || got.Move {
-			t.Errorf("Decode(%q) = %+v", key, got)
-		}
-	}
-	if got := Decode("q"); got != (Action{}) {
-		t.Fatalf("unrecognized key = %+v", got)
-	}
-}
-
 func TestLeafGraftPreservesExactLeafAndShape(t *testing.T) {
 	primary := &panelayout.Node{ID: 1, Kind: panelayout.Primary}
 	doc := &panelayout.Node{ID: 2, Kind: panelayout.Document}

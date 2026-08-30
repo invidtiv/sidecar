@@ -247,7 +247,6 @@ type Plugin struct {
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
-	paneMove        panereposition.Mode
 	paneLayoutModal *panereposition.Controller
 	paneZoom        panereposition.Zoom
 	paneRestoreCmd  tea.Cmd

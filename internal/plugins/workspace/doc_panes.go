@@ -1320,7 +1320,6 @@ func (p *Plugin) restoreIncomingPaneLayoutHonoringOpen() {
 }
 
 func (p *Plugin) restoreSurfacePaneLayout(honorOpen bool) {
-	p.paneMove.Reset()
 	if p.paneRoot == nil {
 		return
 	}
@@ -1554,16 +1553,10 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	// The zoomed leaf is drawn from here only when it is content the preview
-	// owns: a terminal leaf, or a content leaf still holding paneFocus while the
-	// sidebar has the keyboard, is the legacy renderer's box. This is decided
-	// before anything composes, because composing a leaf sizes its content.
-	if layout.Zoomed && !p.previewLeafFocused() {
-		return "", false
-	}
-	// One leaf is still composed, not returned: the clip-and-pad the compositor
-	// guarantees is what makes the leaf's box the leaf's box, and a lone leaf
-	// that keeps its own shape is the one placement nothing holds to it.
+	// A zoomed leaf still composes here, including Primary. Routing Primary
+	// through the legacy fallback drew its header but skipped RegisterRegions,
+	// leaving the visible layout button inert. One shared frame now owns both
+	// the cells and their targets in tiled and zoomed states.
 	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
 	p.registerPaneTreeRegions(layout)
 	// The frame a pointer is tested against is THIS frame, recorded beside the

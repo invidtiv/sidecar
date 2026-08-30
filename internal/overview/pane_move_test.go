@@ -1,14 +1,11 @@
 package overview
 
 import (
-	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
-	appmsg "github.com/marcus/sidecar/internal/msg"
-	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -24,95 +21,54 @@ func enableGlobalPaneMove(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 }
 
-func TestGlobalPaneMoveRunsThroughTheHostKeyLadder(t *testing.T) {
+func TestGlobalPaneMoveShortcutOpensModalFromPreviewAndList(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
 	m.preview.focus = focusPreview
 	doc := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Document)
 	primary := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
-	if doc == nil || primary == nil || m.preview.deck == nil {
+	if doc == nil || primary == nil {
 		t.Fatalf("test tree is incomplete: %+v", m.preview.paneRoot)
 	}
-	m.preview.paneRoot.Split.Ratio = 64
 	m.preview.paneFocus = doc.ID
-	docBefore := doc
-	peer, ok := m.previewPeerBox()
-	if !ok {
-		t.Fatal("global preview has no peer box")
-	}
-	_, _, fits := panelayout.LayoutPanes(m.preview.paneRoot, panelayout.Box(peer), previewPaneFloors())
-	if !fits {
-		t.Fatal("non-50 test tree does not fit")
-	}
 
-	// The default-off flag leaves the real preview ladder and context alone.
 	if handled, _ := m.previewKey(globalMoveKey('M')); handled {
 		t.Fatal("default-off pane_move claimed M")
-	}
-	if m.WorkspaceFocusContext() == panereposition.Context {
-		t.Fatal("default-off pane_move changed the context")
 	}
 
 	enableGlobalPaneMove(t)
 	if !hasGlobalPaneMoveCommand(m.Commands(), panereposition.CommandMove) {
-		t.Fatal("global browse commands do not advertise pane move")
+		t.Fatal("global preview commands do not advertise pane reposition")
 	}
 	if handled, _ := m.previewKey(globalMoveKey('M')); !handled {
 		t.Fatal("enabled pane_move did not claim M")
 	}
-	if got := m.WorkspaceFocusContext(); got != panereposition.Context {
-		t.Fatalf("context after M = %q, want %q", got, panereposition.Context)
+	if m.paneLayoutModal == nil || m.paneLayoutModal.LeafID() != doc.ID || m.WorkspaceFocusContext() != panereposition.ModalContext {
+		t.Fatalf("preview M opened modal=%v leaf=%d context=%q, want doc %d", m.paneLayoutModal != nil, m.paneLayoutModal.LeafID(), m.WorkspaceFocusContext(), doc.ID)
 	}
-	if !hasGlobalPaneMoveCommand(m.Commands(), "move-pane-left") {
-		t.Fatal("global mode commands do not advertise directional movement")
+	m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	run(t, m, m.focusList())
+	if !hasGlobalPaneMoveCommand(m.Commands(), panereposition.CommandMove) {
+		t.Fatal("global list commands do not advertise pane reposition")
 	}
-	if got := (paneHost{m}).Chrome(doc); got != paneframe.ChromeMoving {
-		t.Fatalf("moving leaf chrome = %v", got)
+	if handled, _ := m.WorkspacesKey(globalMoveKey('M')); !handled {
+		t.Fatal("global list M was not handled")
 	}
-	if handled, _ := m.previewKey(globalMoveKey('x')); !handled || m.WorkspaceFocusContext() != panereposition.Context {
-		t.Fatal("unknown mode key escaped to the pane below")
+	if m.paneLayoutModal == nil || m.paneLayoutModal.LeafID() != primary.ID {
+		t.Fatalf("list M targeted leaf %d, want Primary %d", m.paneLayoutModal.LeafID(), primary.ID)
 	}
-
-	if handled, _ := m.previewKey(globalMoveKey('h')); !handled {
-		t.Fatal("move key was not handled")
+	m.WorkspacesKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	_, focusCmd := m.focusPreviewLeaf(primary.ID)
+	run(t, m, focusCmd)
+	m.terminalSearch.InputActive = true
+	m.WorkspacesKey(globalMoveKey('M'))
+	if m.paneLayoutModal != nil || m.terminalSearch.Query != "M" {
+		t.Fatalf("Sessions terminal search lost M: modal=%v query=%q", m.paneLayoutModal != nil, m.terminalSearch.Query)
 	}
-	if panelayout.Find(m.preview.paneRoot, doc.ID) != docBefore {
-		t.Fatal("host move reconstructed the moved leaf")
-	}
-	if m.preview.paneFocus != doc.ID || m.WorkspaceFocusContext() != panereposition.Context {
-		t.Fatalf("move lost focus/mode: focus=%d context=%q", m.preview.paneFocus, m.WorkspaceFocusContext())
-	}
-	_, _, fits = panelayout.LayoutPanes(m.preview.paneRoot, panelayout.Box(peer), previewPaneFloors())
-	if !fits || m.preview.paneRoot.Split == nil || m.preview.paneRoot.Split.Ratio == 50 {
-		t.Fatalf("host discarded the carried non-50 ratio: tree=%+v", m.preview.paneRoot)
-	}
-	if got, want := globalMoveGridIDs(m.preview.deck.Tree()), globalMoveGridIDs(m.preview.paneRoot); !reflect.DeepEqual(got, want) {
-		t.Fatalf("passive deck did not adopt moved order: %+v", m.preview.deck.Tree())
-	}
-
-	// Primary follows the same path and keeps the actual live leaf object.
-	m.previewKey(globalMoveKey('M')) // exit
-	primaryBefore := panelayout.Find(m.preview.paneRoot, primary.ID)
-	m.focusPreviewLeaf(primary.ID)
-	m.previewKey(globalMoveKey('M'))
-	m.previewKey(globalMoveKey('h'))
-	if panelayout.Find(m.preview.paneRoot, primary.ID) != primaryBefore || m.preview.paneFocus != primary.ID {
-		t.Fatal("moving Primary lost identity or focus")
-	}
-	m.previewKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if m.WorkspaceFocusContext() == panereposition.Context {
-		t.Fatal("escape did not exit pane-move mode")
-	}
-
-	m.focusPreviewLeaf(doc.ID)
-	m.previewKey(globalMoveKey('M'))
-	sameRoot := m.preview.paneRoot
-	m.preview.paneRoot.Split.A, m.preview.paneRoot.Split.B = m.preview.paneRoot.Split.B, m.preview.paneRoot.Split.A
-	if m.preview.paneRoot != sameRoot {
-		t.Fatal("fixture replaced the root instead of rewriting it in place")
-	}
-	if m.WorkspaceFocusContext() == panereposition.Context {
-		t.Fatal("same-pointer active-tree rewrite retained pane-move mode")
+	m.terminalSearch.InputActive = false
+	m.terminalSearch.Query = ""
+	if handled, _ := m.WorkspacesKey(globalMoveKey('M')); !handled || m.paneLayoutModal == nil || m.paneLayoutModal.LeafID() != primary.ID {
+		t.Fatal("focused non-interactive Sessions terminal M did not open its modal")
 	}
 }
 
@@ -125,18 +81,21 @@ func hasGlobalPaneMoveCommand(commands []plugin.Command, id string) bool {
 	return false
 }
 
-func TestGlobalPaneMoveBoundaryUsesFlash(t *testing.T) {
+func TestGlobalPaneMoveBoundaryUsesToast(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	m.preview.focus = focusPreview
 	enableGlobalPaneMove(t)
-	m.previewKey(globalMoveKey('M'))
-	handled, cmd := m.previewKey(globalMoveKey('k'))
-	if !handled || cmd == nil {
-		t.Fatal("global boundary did not produce a flash command")
+	handled, _ := m.WorkspacesKey(globalMoveKey('M'))
+	if !handled || m.paneLayoutModal == nil {
+		t.Fatal("global M did not open the reposition modal")
 	}
-	flash, ok := cmd().(appmsg.FlashMsg)
-	if !ok || flash.Text != "already at the top" {
-		t.Fatalf("boundary result = %#v, want top-boundary flash", flash)
+	handled, cmd := m.WorkspacesKey(globalMoveKey('k'))
+	if !handled || cmd == nil {
+		t.Fatal("global modal boundary did not produce a toast command")
+	}
+	toast, ok := firstToast(cmd)
+	if !ok || toast.Message != "already at the top" {
+		t.Fatalf("boundary result = %#v, want top-boundary toast", toast)
 	}
 }
 

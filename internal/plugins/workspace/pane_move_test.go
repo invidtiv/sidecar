@@ -1,12 +1,10 @@
 package workspace
 
 import (
-	"reflect"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
-	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -15,94 +13,52 @@ import (
 
 func moveKey(r rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: r, Text: string(r)} }
 
-func TestProjectPaneMoveRunsThroughTheHostKeyLadder(t *testing.T) {
+func TestProjectPaneMoveShortcutOpensModalFromPreviewAndList(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# move\n")
 	p := docPaneTestPlugin(t, root, false)
 	p.openTerminalPath("README.md", 1)
 	doc := panelayout.FirstOfKind(p.paneRoot, panelayout.Document)
 	primary := panelayout.FirstOfKind(p.paneRoot, panelayout.Terminal)
-	if doc == nil || primary == nil || p.contentDeck == nil {
+	if doc == nil || primary == nil {
 		t.Fatalf("test tree is incomplete: %+v", p.paneRoot)
 	}
-	p.paneRoot.Split.Ratio = 63
-	p.paneFocus = doc.ID
-	docBefore := doc
-	peer, ok := p.previewPeerBox()
-	if !ok {
-		t.Fatal("project preview has no peer box")
-	}
-	_, _, fits := panelayout.LayoutPanes(p.paneRoot, peer, paneTreeFloors())
-	if !fits {
-		t.Fatal("non-50 test tree does not fit")
-	}
 
-	// The default-off flag leaves the real host ladder and context untouched.
-	p.handleListKeys(moveKey('M'))
-	if p.paneMove.Active(p.paneMoveScope(), p.paneRoot) || p.FocusContext() == panereposition.Context {
-		t.Fatal("default-off pane_move entered mode")
+	p.focusLeaf(doc.ID)
+	p.handleKeyPress(moveKey('M'))
+	if p.paneLayoutModal != nil {
+		t.Fatal("default-off pane_move opened the modal")
 	}
 
 	enableWorkspaceFeature(t, features.PaneMove.Name)
 	if !hasPaneMoveCommand(p.Commands(), panereposition.CommandMove) {
-		t.Fatal("project browse commands do not advertise pane move")
+		t.Fatal("project preview commands do not advertise pane reposition")
 	}
-	p.handleListKeys(moveKey('M'))
-	if got := p.FocusContext(); got != panereposition.Context {
-		t.Fatalf("context after M = %q, want %q", got, panereposition.Context)
+	p.handleKeyPress(moveKey('M'))
+	if p.paneLayoutModal == nil || p.paneLayoutModal.LeafID() != doc.ID || p.FocusContext() != panereposition.ModalContext {
+		t.Fatalf("preview M opened modal=%v leaf=%d context=%q, want doc %d", p.paneLayoutModal != nil, p.paneLayoutModal.LeafID(), p.FocusContext(), doc.ID)
 	}
-	if !hasPaneMoveCommand(p.Commands(), "move-pane-left") {
-		t.Fatal("project mode commands do not advertise directional movement")
+	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyEscape})
+	p.activePane = PaneSidebar
+	if !hasPaneMoveCommand(p.Commands(), panereposition.CommandMove) {
+		t.Fatal("project list commands do not advertise pane reposition")
 	}
-	if got := (paneHost{p}).Chrome(doc); got != paneframe.ChromeMoving {
-		t.Fatalf("moving leaf chrome = %v", got)
+	p.handleKeyPress(moveKey('M'))
+	if p.paneLayoutModal == nil || p.paneLayoutModal.LeafID() != primary.ID {
+		t.Fatalf("list M targeted leaf %d, want Primary %d", p.paneLayoutModal.LeafID(), primary.ID)
 	}
-	// Unknown keys belong to the mode and cannot leak into the document.
-	p.handleListKeys(moveKey('x'))
-	if p.FocusContext() != panereposition.Context {
-		t.Fatal("unknown mode key escaped to the pane below")
-	}
-
-	p.handleListKeys(moveKey('h'))
-	if panelayout.Find(p.paneRoot, doc.ID) != docBefore {
-		t.Fatalf("host move reconstructed the moved leaf: %p -> %p", docBefore, panelayout.Find(p.paneRoot, doc.ID))
-	}
-	if p.paneFocus != doc.ID || p.FocusContext() != panereposition.Context {
-		t.Fatalf("move lost focus/mode: focus=%d context=%q", p.paneFocus, p.FocusContext())
-	}
-	_, _, fits = panelayout.LayoutPanes(p.paneRoot, peer, paneTreeFloors())
-	if !fits || p.paneRoot.Split == nil || p.paneRoot.Split.Ratio == 50 {
-		t.Fatalf("host discarded the carried non-50 ratio: tree=%+v", p.paneRoot)
-	}
-	if got, want := moveGridIDs(p.contentDeck.Tree()), moveGridIDs(p.paneRoot); !reflect.DeepEqual(got, want) {
-		t.Fatalf("passive deck did not adopt moved order: %+v", p.contentDeck.Tree())
-	}
-
-	// Primary is movable through the same host path and retains its identity.
-	p.handleListKeys(moveKey('M')) // exit
-	primaryBefore := panelayout.Find(p.paneRoot, primary.ID)
+	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyEscape})
 	p.focusLeaf(primary.ID)
-	p.handleListKeys(moveKey('M'))
-	p.handleListKeys(moveKey('h'))
-	if panelayout.Find(p.paneRoot, primary.ID) != primaryBefore || p.paneFocus != primary.ID {
-		t.Fatal("moving Primary lost identity or focus")
+	p.terminalSearch.InputActive = true
+	p.handleKeyPress(moveKey('M'))
+	if p.paneLayoutModal != nil || p.terminalSearch.Query != "M" {
+		t.Fatalf("project terminal search lost M: modal=%v query=%q", p.paneLayoutModal != nil, p.terminalSearch.Query)
 	}
-	p.handleListKeys(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if p.FocusContext() == panereposition.Context {
-		t.Fatal("enter did not exit pane-move mode")
-	}
-
-	// An external in-place rewrite has a new structural generation even though
-	// the root pointer and every leaf ID are unchanged.
-	p.focusLeaf(doc.ID)
-	p.handleListKeys(moveKey('M'))
-	sameRoot := p.paneRoot
-	p.paneRoot.Split.A, p.paneRoot.Split.B = p.paneRoot.Split.B, p.paneRoot.Split.A
-	if p.paneRoot != sameRoot {
-		t.Fatal("fixture replaced the root instead of rewriting it in place")
-	}
-	if p.FocusContext() == panereposition.Context {
-		t.Fatal("same-pointer active-tree rewrite retained pane-move mode")
+	p.terminalSearch.InputActive = false
+	p.terminalSearch.Query = ""
+	p.handleKeyPress(moveKey('M'))
+	if p.paneLayoutModal == nil || p.paneLayoutModal.LeafID() != primary.ID {
+		t.Fatal("focused non-interactive project terminal M did not open its modal")
 	}
 }
 
@@ -133,8 +89,8 @@ func moveGridIDs(root *panelayout.Node) [][]int {
 func TestProjectPaneMoveBoundaryUsesToast(t *testing.T) {
 	p := docPaneTestPlugin(t, t.TempDir(), false)
 	enableWorkspaceFeature(t, features.PaneMove.Name)
-	p.handleListKeys(moveKey('M'))
-	p.handleListKeys(moveKey('k'))
+	p.handleKeyPress(moveKey('M'))
+	p.handleKeyPress(moveKey('k'))
 	if p.toastMessage != "already at the top" {
 		t.Fatalf("boundary toast = %q", p.toastMessage)
 	}
@@ -157,8 +113,9 @@ func TestProjectMovedShellSurvivesPassiveDeckReprojection(t *testing.T) {
 
 	enableWorkspaceFeature(t, features.PaneMove.Name)
 	p.focusLeaf(shell.ID)
-	p.handleListKeys(moveKey('M'))
-	p.handleListKeys(moveKey('l')) // move Shell from under Primary to the doc column
+	p.handleKeyPress(moveKey('M'))
+	p.handleKeyPress(moveKey('l')) // draft Shell from under Primary to the doc column
+	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyEnter})
 	shapeBefore, ok := shellGraftShape(p.paneRoot, shell.ID)
 	if !ok || shapeBefore.anchorID == primary.ID {
 		t.Fatalf("Shell did not move away from Primary: %+v tree=%+v", shapeBefore, p.paneRoot)
@@ -249,8 +206,9 @@ func TestProjectRestoredShellMoveUsesDeckOwnedPassiveIDs(t *testing.T) {
 
 	enableWorkspaceFeature(t, features.PaneMove.Name)
 	p.focusLeaf(shell.ID)
-	p.handleListKeys(moveKey('M'))
-	p.handleListKeys(moveKey('l'))
+	p.handleKeyPress(moveKey('M'))
+	p.handleKeyPress(moveKey('l'))
+	p.handleKeyPress(tea.KeyPressMsg{Code: tea.KeyEnter})
 	shapeBefore, moved := shellGraftShape(p.paneRoot, shell.ID)
 	if !moved || shapeBefore.anchorID == primary.ID {
 		t.Fatalf("restored Shell move did not leave Primary: %+v", shapeBefore)

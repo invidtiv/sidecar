@@ -97,9 +97,6 @@ func (m *Model) queuePreviewCmd(cmd tea.Cmd) {
 // neighbours. Content bytes are not dimmed.
 func (h paneHost) Chrome(node *panelayout.Node) paneframe.Chrome {
 	m := h.m
-	if node != nil && m.paneMoveActive() && m.preview.paneMove.LeafID() == node.ID {
-		return paneframe.ChromeMoving
-	}
 	if node == nil || !m.previewOwnsChrome() || m.preview.paneFocus != node.ID {
 		return paneframe.ChromeIdle
 	}

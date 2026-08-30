@@ -900,14 +900,14 @@ func TestDocPaneNarrowRefusalAndFocusedLeafFallback(t *testing.T) {
 		t.Fatal("focused narrow fallback escape did not close the document")
 	}
 
-	// Reopen to retain the original assertion: terminal focus at the same narrow
-	// size falls back to the legacy full terminal rather than an invalid split.
+	// Reopen to retain the terminal fallback assertion: terminal focus at the
+	// same narrow size composes one full-box leaf through the shared frame.
 	p.width = 140
 	p.openTerminalPath("README.md", 1)
 	p.width = 40
 	p.paneFocus = terminalLeafID(p.paneRoot)
-	if _, ok := p.renderDocumentSplit(36, 20); ok {
-		t.Fatal("terminal-focused narrow layout did not fall back to legacy full terminal")
+	if _, ok := p.renderDocumentSplit(36, 20); !ok {
+		t.Fatal("terminal-focused narrow layout did not compose the full terminal leaf")
 	}
 }
 

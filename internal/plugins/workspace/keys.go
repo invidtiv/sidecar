@@ -417,9 +417,9 @@ func (p *Plugin) handleListKeys(msg tea.KeyPressMsg) tea.Cmd {
 	}
 	// Clear any deletion warnings on key interaction
 	p.deleteWarnings = nil
-	// Pane-move is a transient keyboard owner. Search/editor/input surfaces were
-	// answered above or are rejected by paneMoveCanStart; once entered, every
-	// key is swallowed until the mode exits.
+	// M opens the same transactional reposition modal as the pane-header button.
+	// The resolver targets the focused preview leaf or the sidebar row's Primary
+	// leaf and declines every text-input/overlay state.
 	if handled, cmd := p.handlePaneMoveKey(msg); handled {
 		return cmd
 	}

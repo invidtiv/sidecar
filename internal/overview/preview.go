@@ -11,7 +11,6 @@ import (
 	"github.com/marcus/sidecar/internal/livewatch"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/termpreview"
@@ -102,7 +101,6 @@ type previewState struct {
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
-	paneMove        panereposition.Mode
 	paneCache       map[string]previewPaneCache
 	// paneSizeCmds holds geometry a content asserted from inside a render, where
 	// there is no runtime to dispatch it with. See paneHost.QueueSizeCmd.
@@ -265,7 +263,6 @@ func (m *Model) resetPreviewContent() {
 }
 
 func (m *Model) resetActivePreviewPanes() {
-	m.preview.paneMove.Reset()
 	m.preview.doc.releaseEdit()
 	m.preview.doc = nil
 	m.preview.issue = nil
@@ -337,7 +334,6 @@ func (m *Model) bindPreview(keepContent bool) tea.Cmd {
 		// captures re-base line offsets and invalidate absolute anchors.
 		m.clearPreviewSelection()
 	} else {
-		m.preview.paneMove.Reset()
 		m.cancelPreviewSplitClose()
 		primary := m.primaryTerminalLeaf()
 		m.detachPreviewTerminals(true)

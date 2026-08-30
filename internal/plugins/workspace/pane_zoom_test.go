@@ -3,6 +3,9 @@ package workspace
 import (
 	"strings"
 	"testing"
+
+	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 )
 
 // zoomTestTree is terminal | doc, the smallest tree with two candidates for the
@@ -67,6 +70,7 @@ func TestZoomedLeafOwnsBothTheBoxAndThePixels(t *testing.T) {
 	root := t.TempDir()
 	writeDocPaneFixture(t, root, "README.md", "# zoom\n")
 	p := docPaneTestPlugin(t, root, true)
+	enableWorkspaceFeature(t, features.PaneMove.Name)
 	p.openTerminalPath("README.md", 1)
 	doc, docLeaf := p.activeDocPane()
 	if doc == nil {
@@ -91,12 +95,29 @@ func TestZoomedLeafOwnsBothTheBoxAndThePixels(t *testing.T) {
 	}
 
 	p.paneFocus = terminalLeafID(p.paneRoot)
+	p.paneZoom.Set(p.paneLayoutModalScope(), p.paneRoot, p.paneFocus)
 	box, ok := p.terminalLeafBox()
 	inner := insetPanelChrome(peer)
 	if !ok || box != inner {
 		t.Fatalf("terminal-focused zoom box = %+v ok=%v, want the peer inner %+v", box, ok, inner)
 	}
-	if _, ok := p.renderDocumentSplit(peer.W, peer.H); ok {
-		t.Fatal("terminal-focused zoom rendered the document split instead of the legacy terminal")
+	rendered, ok = p.renderDocumentSplit(peer.W, peer.H)
+	if !ok || !strings.Contains(rendered, "⊞") {
+		t.Fatalf("terminal-focused zoom rendered ok=%v without its layout control", ok)
+	}
+	var layoutX, layoutY int
+	found := false
+	for _, region := range p.mouseHandler.HitMap.Regions() {
+		if region.ID == regionPaneLayout && region.Data == p.paneFocus {
+			layoutX, layoutY, found = region.Rect.X, region.Rect.Y, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("zoomed terminal drew a layout control without a hit region")
+	}
+	p.handleMouse(tea.MouseClickMsg(tea.Mouse{X: layoutX, Y: layoutY, Button: tea.MouseLeft}))
+	if p.paneLayoutModal == nil || p.paneLayoutModal.LeafID() != p.paneFocus {
+		t.Fatal("zoomed terminal layout control did not open its modal")
 	}
 }

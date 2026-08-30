@@ -1,19 +1,19 @@
-# Pane Repositioning — move mode, the layout button, and `sidecar layout move`
+# Pane Repositioning — the layout modal and `sidecar layout move`
 
-**Status:** in progress — M0–M2 complete, verified, and independently reviewed; M3–M5 remain. **Tracking:** `td-2ec104`.
+**Status:** in progress — M0–M2 complete; the Phase 1/2 modal-entry and zoom-hit stabilization is implemented and verified under `td-e43609`; M3–M5 remain. **Tracking:** `td-2ec104`.
 
-One sentence: **a pane you have opened should be movable — by keyboard from where you are standing, by mouse from a button in its own header, and by an agent through the same planner.**
+One sentence: **a pane you have opened should be movable — by keyboard or mouse through one transactional modal, and by an agent through the same planner.**
 
-M0–M2 close the human-facing gap: project Workspaces and global Sessions have keyboard move mode, and all three pane hosts have the header button, reposition modal, and scoped zoom. The feature remains default-off while M3 adds keyboard move mode to plugin content decks, M4 adds the direct agent verb and flips the flag on, and M5 updates durable user and agent documentation.
+M0–M2 close the human-facing gap: project Workspaces and global Sessions open the reposition modal with `M` from either their list or a focused non-interactive pane, and all three pane hosts have the same header button, modal, and scoped zoom. The feature remains default-off while M3 adds `M` modal entry to plugin content decks, M4 adds the direct agent verb and flips the flag on, and M5 updates durable user and agent documentation.
 
 ## Implementation status
 
 | Milestone | Status | Current result | Evidence |
 |---|---|---|---|
 | M0 — structural planner | Complete | `PlanMove`, direction resolution, identity-preserving apply, ratio carry, fit/cap/refusal behavior | `td-c16c3c` closed; commit `48d15888` |
-| M1 — Workspace move mode | Complete | `M` plus `h/j/k/l` and arrows on project Workspaces and global Sessions, with shared chrome, persistence, geometry reconciliation, and refusal feedback | `td-7a552b` closed; commit `9743b39f`; isolated keyboard and ratio proof |
-| M2 — header modal and zoom | Complete | Shared `⊞`, modal draft/revalidation/commit, mouse targeting, scoped zoom, and input-ownership release on project Workspaces, global Sessions, and plugin content decks | `td-90aae8` closed; commit `9743b39f`; isolated mouse proof; independent review clean |
-| M3 — plugin deck move mode | Remaining | Add the direct `M` keyboard journey to focused leaves inside app content decks; header modal and zoom are already present | Not started |
+| M1 — Workspace keyboard entry | Complete | `M` opens the shared modal from a focused non-interactive pane or the selected list row's Primary terminal on project Workspaces and global Sessions | `td-7a552b` closed; original implementation in `9743b39f`; modal-first stabilization in `td-e43609` |
+| M2 — header modal and zoom | Complete | Shared `⊞`, modal draft/revalidation/commit, mouse targeting, scoped zoom, input-ownership release, and clickable zoomed-Primary headers on project Workspaces, global Sessions, and plugin content decks | `td-90aae8` closed; original implementation in `9743b39f`; isolated mouse proof; zoom regression coverage in `td-e43609` |
+| M3 — plugin deck keyboard entry | Remaining | Add `M` as a second entry to the existing modal for focused leaves inside app content decks | Not started |
 | M4 — `sidecar layout move` | Remaining | Add the single-call CLI verb over `PlanMove`, structured acknowledgements, and default-on rollout | Not started |
 | M5 — documentation | Remaining | Update shortcut, UI, drag-pane, agent, and layout references after the final surface lands | Not started |
 
@@ -37,26 +37,26 @@ The layout can therefore gain and lose columns, which is the point: a move is ho
 ## Current implementation
 
 - **`internal/panelayout` owns structure and the grid vocabulary.** `Grid`/`GridOf` project a tree onto columns-of-stacked-panes; `PlanMove`, `MoveDirection`, and `ApplyMove` implement extract-and-reinsert over the same placement grammar as `PlanOpenAt` while preserving the moved leaf pointer, ID, and carried share.
-- **`internal/panereposition` owns shared interaction policy.** Its mode, modal controller, header adapter, structural fingerprint, and host-leaf graft helpers keep direction semantics, stale/refusal handling, and passive/live projection adoption aligned across hosts.
+- **`internal/panereposition` owns shared interaction policy.** Its modal controller, header adapter, structural fingerprint, and host-leaf graft helpers keep direction semantics, stale/refusal handling, and passive/live projection adoption aligned across hosts.
 - **`internal/paneframe` and `internal/ui` own shared chrome.** `RegionSink.Layout` is registered after `Title` and before `Close`; `ReserveHeaderControls` reserves the `⊞` and `×` with layout-first drop order, and `ReserveHeaderClose` remains the compatibility wrapper.
-- **Project Workspaces and global Sessions own thin host adapters.** Both expose keyboard move mode and the modal, preserve focused/live leaf identity, adopt passive deck projections, persist the committed layout, and invoke their existing terminal geometry synchronizers.
-- **Plugin content decks have the M2 header/modal/zoom path.** `internal/app/content_deck.go` exposes `RegionSink.Layout`, app modal routing, mouse targeting, paste absorption, atomic deck adoption, and scoped zoom. Direct `M` keyboard move mode inside a deck remains M3.
+- **Project Workspaces and global Sessions own thin host adapters.** Both resolve `M` to the focused preview leaf or the selected list row's Primary leaf, open the same modal as `⊞`, preserve focused/live leaf identity, adopt passive deck projections, persist the committed layout, and invoke their existing terminal geometry synchronizers.
+- **Plugin content decks have the M2 header/modal/zoom path.** `internal/app/content_deck.go` exposes `RegionSink.Layout`, app modal routing, mouse targeting, paste absorption, atomic deck adoption, and scoped zoom. `M` entry inside a deck remains M3.
 - **Zoom is transient tree-scoped view state.** A requested zoom and forced-fit zoom share `LayoutTreeWithZoom`; zoom follows a moved leaf, clears on close or tree replacement, and is never encoded in persisted layouts.
-- **`pane_move` is registered and defaults off.** Its availability gates the twelve pane-browse bindings and header reserve; Configuration → Feature Flags exposes it as **Move panes** through a scrolling registry page.
+- **`pane_move` is registered and defaults off.** Its availability gates the thirteen Workspace list/pane bindings and header reserve; Configuration → Feature Flags exposes it as **Move panes** through a scrolling registry page.
 - **The agent surface still uses full-layout read-modify-write.** `sidecar layout get --json` plus `sidecar layout apply --spec` can rearrange a layout today. M4 adds the narrower `sidecar layout move` verb over the implemented planner.
 - **Remote host identity and input ownership remain authoritative.** Move code does not call remote resize or lease APIs directly; modal entry releases interactive ownership through the existing path, and browse-state moves do not resize the remote tmux server.
 
 ## Settled decisions
 
-### 1. `M` enters move mode; `h/j/k/l` and the arrows move; `esc`/`enter` leave it
+### 1. `M` opens the same transactional modal as `⊞`
 
-A transient mode rather than a chord tier or four direct chords. One key to discover, one mnemonic to remember, and repeated moves cost one keystroke each — which is what rearranging actually involves. It also sidesteps the problem that killed `ctrl+w` in the deprecated windowing plan: mode is enterable only from browse state, so nothing new competes with a live PTY for a keystroke.
+There is one reposition interaction, with two entry points. `M` and the header button both open the modal; `h/j/k/l` and the arrows change its draft; `enter` commits; `esc` cancels. This removes the earlier mismatch where `M` mutated the live tree in a direct mode while `⊞` edited a reversible draft.
 
 **Why `M` and not `m`.** `m` is free in `workspace-doc`, `workspace-issue`, `workspace-note`, `workspace-resource`, `workspace-diff`, `workspace-preview`, `global-workspaces-issue`, `global-workspaces-note`, `global-workspaces-resource` and `global-workspaces-diff` — but it is **taken in exactly the two contexts that would break parity**: `global-workspaces-doc` spends it on `render`, and `global-workspaces` (the context a focused primary terminal reports on the Sessions surface) spends it on `merge-workflow`. One key must mean one thing in every pane, so a key that works in ten pane contexts and not the other two is not a candidate. `M` is bound nowhere except `git-status` (`stash-pop`), which is a plugin browse context and never a pane leaf.
 
-Bindings live in the twelve pane-leaf contexts only — `workspace-preview`, `workspace-doc|issue|note|diff|resource`, `global-workspaces`, `global-workspaces-doc|issue|note|diff|resource` — and **not** in the plugins' own browse contexts (`file-browser-tree`, `git-status`, `notes-list`, …). Standing in a plugin's list is not standing in a pane; move mode is entered from the pane you mean to move. A focused passive leaf inside a plugin deck already reports the appropriate pane context, but the app-level key-routing adapter that starts and owns move mode there remains M3.
+Bindings live in the project list plus the twelve existing Workspace pane/browse contexts — `workspace-list`, `workspace-preview`, `workspace-doc|issue|note|diff|resource`, `global-workspaces`, `global-workspaces-doc|issue|note|diff|resource` — and **not** in text-input, interactive-terminal, modal, or unrelated plugin browse contexts (`file-browser-tree`, `git-status`, `notes-list`, …). From a focused preview, `M` targets that leaf. From either left-hand Workspace list, it targets the selected row's Primary terminal. The global list and its Primary preview intentionally share `global-workspaces`; host focus decides which leaf is meant.
 
-While move mode is live it owns the keyboard for the surface, at the same precedence a focused content's overlay owns it. Its keys:
+While the modal is open it owns the keyboard for the surface, at the same precedence as the other input overlays. Its keys:
 
 | Key | Action |
 |---|---|
@@ -64,9 +64,8 @@ While move mode is live it owns the keyboard for the surface, at the same preced
 | `l` / `right` | Move to the column right; open a new column if there is none |
 | `j` / `down` | Move down one row within the column |
 | `k` / `up` | Move up one row within the column |
-| `esc` / `enter` / `M` | Leave move mode, keeping every move made |
-
-There is no undo key; a move is its own inverse, and `esc` committing rather than reverting is what makes the mode feel like dragging and not like a transaction.
+| `enter` | Commit the complete draft atomically |
+| `esc` | Cancel and leave the live layout unchanged |
 
 **The direction rule** — how a keypress becomes a `MoveDestination`, given a focused leaf at `(c, r)` in the pre-move grid:
 
@@ -78,13 +77,11 @@ Appending at the bottom of the destination column, rather than inserting at the 
 
 The planner destination is therefore **not just a `Cell`**. A pre-move cell can express every occupied-cell insert and the one-past-the-end right column, but it cannot distinguish "insert at `1.1`" from "create a new column before column 1." `MoveDestination` represents either a pre-move cell or an outer column edge (`before-first-column` / `after-last-column`). Direction keys compile to that type; the CLI's cell form remains a cell, while `--to left|right` can reach the symmetric outer edges. This keeps the left-edge rule explicit instead of smuggling a zero or another invalid coordinate through `Cell`.
 
-**Every refusal and no-op is spoken.** A move that the caps or the floors decline shows the existing message (`GridColumnCapMessage`, `GridRowCapMessage`, or the fit refusal) as a toast on the surface. A boundary or identity no-op says why (`already at the top`, `that move leaves the layout unchanged`) through the surface's replaceable toast rather than stacking repeated messages. A key that silently does nothing in a mode built for direct manipulation is the worst outcome available.
-
-**Chrome while moving.** The moving leaf takes the shared `paneframe` moving border state beside focused and interactive. The two Workspace surfaces use it today, their footers swap to the mode's hints through `Commands()`, and M3 reuses the same state in the app deck.
+**Every refusal and no-op is spoken.** A draft move that the caps or floors decline shows the existing message (`GridColumnCapMessage`, `GridRowCapMessage`, or the fit refusal) as a toast on the surface. A boundary or identity no-op says why (`already at the top`, `that move leaves the layout unchanged`) through the surface's replaceable toast rather than stacking repeated messages.
 
 ### 2. A layout button in the pane header, left of the `×`
 
-The second control on the header's right edge, opening the reposition modal for **that** leaf. It is what makes the feature discoverable: a keyboard mode nobody knows about is a feature nobody has.
+The second control on the header's right edge, opening the reposition modal for **that** leaf. It makes the same interaction discoverable without requiring someone to know the shortcut first.
 
 `ui.ReserveHeaderControls(width, controls ...HeaderControl)` returns the tab strip's width and each control's column, with an explicit **drop order** as the row narrows: the layout button is dropped first, the close `×` last. A clipped control is a target whose meaning cannot be recovered, so the all-or-nothing rule per control stands. `ReserveHeaderClose` remains a one-line compatibility wrapper.
 
@@ -108,7 +105,7 @@ A miniature of the current layout with the pane it was opened from highlighted. 
   hjkl move   z zoom   enter done   esc cancel
 ```
 
-**`esc` in the modal reverts** — the opposite of move mode's `esc`, and deliberately so. The modal shows a preview of a proposed arrangement, so it gets a cancel; the mode moves the real thing under you, so it does not. This is the one place the two entry points differ, and it is the difference between a dialog and direct manipulation. The modal edits a structural clone and records its accepted move destinations; `enter` first replays the entire sequence against a fresh clone of the still-active tree, then replays it against the live tree only if every move still accepts. A changed tree identity/generation or any newly refused step leaves the live tree untouched and reports the stale/refused result. `esc` simply discards the draft. The clone is never installed as the live tree because doing that would replace the node identities whose host-owned state the move promises to preserve.
+**`esc` in the modal reverts.** The modal edits a structural clone and records its accepted move destinations; `enter` first replays the entire sequence against a fresh clone of the still-active tree, then replays it against the live tree only if every move still accepts. A changed tree identity/generation or any newly refused step leaves the live tree untouched and reports the stale/refused result. `esc` simply discards the draft. The clone is never installed as the live tree because doing that would replace the node identities whose host-owned state the move promises to preserve.
 
 Opening the modal from an interactive live pane first releases input ownership but leaves the control subscription open; closing the modal returns to browse state. On a remote pane, that same transition releases the geometry lease and fences queued input or resize work before the first draft move. The modal cannot own the keyboard while the PTY or a remote lease still does.
 
@@ -118,7 +115,7 @@ The modal is built on `internal/modal` with the miniature as a `Custom` section.
 
 ### 4. All three paneframe hosts, or it is a bug
 
-Project Workspaces, the global Sessions browser, and the plugin content decks share the planner, header chrome, modal controller, scoped zoom, and one `paneframe` binding per host. Project and global surfaces also have keyboard move mode. M3 finishes keyboard parity for the app deck without adding a second planner, compositor, or modal.
+Project Workspaces, the global Sessions browser, and the plugin content decks share the planner, header chrome, modal controller, scoped zoom, and one `paneframe` binding per host. Project and global surfaces also have `M` modal entry. M3 finishes keyboard parity for the app deck without adding a second planner, compositor, or modal.
 
 ### 5. Parity: `sidecar layout move`, as a verb over a capability agents already have
 
@@ -128,7 +125,7 @@ What is missing is ergonomics: expressing "put the diff below the issue" as a wh
 
 ```
 sidecar layout move 2.1 --to 1.2          # by cell
-sidecar layout move --focused --to right  # by direction, the move-mode rule
+sidecar layout move --focused --to right  # by the modal/keyboard direction rule
 sidecar layout move 2.1 --to 3            # append to a column; opens one past the end
 ```
 
@@ -136,7 +133,7 @@ It will route through `internal/layoutapply` as a third mode beside batch and sp
 
 For `--sessions`, the move changes the local viewer's pane tree even when the selected workspace is remote; it does not send a layout mutation to `sidecar host serve`. Destination resolution inherits `remote-sidecar`'s host-scoped rule: an explicit remote row ID may resolve, while the local-only name/session fallback must not bind an ambiguous row from another machine. The acknowledgement names the host-scoped surface it actually changed.
 
-The planner itself — `panelayout.PlanMove` — is state-free and takes a tree, a leaf ID, and a destination. Keyboard mode and the modal already call it; M4 makes the CLI the third caller. This seam keeps the CLI verb a thin addition rather than a parallel implementation.
+The planner itself — `panelayout.PlanMove` — is state-free and takes a tree, a leaf ID, and a destination. The modal already calls it from both human entry points; M4 makes the CLI another thin caller rather than a parallel implementation.
 
 ### 6. Gated on a feature flag until it is proven
 
@@ -148,7 +145,7 @@ A live leaf's position is geometry, not session identity: the leaf and the host-
 
 The alternative — pinning the primary — would make it the one pane in the grid vocabulary that has an address but cannot be sent to one, and `layout apply --spec` already accepts a primary in any column. A rule the agent surface does not enforce is not a rule.
 
-Two consequences to hold: a local live leaf's geometry change goes through the host's existing `syncTerminalGeometry`/resize path after the structural commit, never through an ad hoc resize inside the planner; and `LiveLeafCap` is unaffected because a move creates no live leaf. Remote geometry follows `remote-sidecar`'s ownership contract instead: move mode is unreachable while the PTY owns the keyboard, the header modal releases interactive input and its lease before moving, and a remote leaf in browse state is fitted into its new local box without resizing the remote tmux server. Re-entering interactive mode may claim the lease and assert the new geometry through the existing remote path. In every case the `Host` target and live control subscription survive the move.
+Two consequences to hold: a local live leaf's geometry change goes through the host's existing `syncTerminalGeometry`/resize path after the structural commit, never through an ad hoc resize inside the planner; and `LiveLeafCap` is unaffected because a move creates no live leaf. Remote geometry follows `remote-sidecar`'s ownership contract instead: `M` is unreachable while the PTY owns the keyboard, modal entry releases interactive input and its lease before moving, and a remote leaf in browse state is fitted into its new local box without resizing the remote tmux server. Re-entering interactive mode may claim the lease and assert the new geometry through the existing remote path. In every case the `Host` target and live control subscription survive the move.
 
 ### 8. The moved pane carries its ratio
 
@@ -185,14 +182,14 @@ Implemented in `48d15888`; `td-c16c3c` is closed.
 - Table coverage exercises the grid shapes, both outer edges, caps, escaped-grid and floor refusals, address translation, outcome separation, ratio carry and clamp, repeated moves, and unchanged-tree refusal.
 - Primary and Shell coverage proves pointer, ID, and `LiveLeafCount` preservation.
 
-### M1 — Move mode on the two Workspace surfaces — complete
+### M1 — Keyboard modal entry on the two Workspace surfaces — complete
 
 Implemented in `9743b39f`; `td-7a552b` is closed.
 
-- The twelve pane-leaf contexts expose feature-gated `M`; the shared move context owns `h/j/k/l`, arrows, `M`, Enter, and Escape while active, and input/plugin browse contexts remain untouched.
-- `paneframe` owns moving-leaf chrome; project Workspaces and global Sessions own thin command, toast/flash, persistence, projection-adoption, and geometry-sync adapters.
+- The project list and twelve existing Workspace pane/browse contexts expose feature-gated `M`; focused previews target their active leaf and lists target the selected row's Primary terminal. Input, interactive-terminal, overlay, and unrelated plugin contexts remain untouched.
+- `M` opens the same clone-only modal as the header `⊞`; project Workspaces and global Sessions own thin command, toast, persistence, projection-adoption, and geometry-sync adapters.
 - Local live leaves reconcile geometry through existing host synchronizers. Browsed remote panes do not assert remote geometry, and move code does not call remote resize or lease APIs.
-- Isolated `tmux-drive.sh` proof moved Primary off `1.1` and back and carried a dragged 62% pane share across columns and back, with private tmux and Sidecar state roots.
+- The earlier isolated `tmux-drive.sh` proof moved Primary off `1.1` and back and carried a dragged 62% pane share across columns and back, with private tmux and Sidecar state roots. The stabilized entry path now performs those changes as a modal draft and atomic commit.
 
 ### M2 — The header button and the modal — complete
 
@@ -200,15 +197,17 @@ Implemented in `9743b39f`; `td-90aae8` is closed.
 
 - `ReserveHeaderControls`, the `ReserveHeaderClose` wrapper, `⊞` width assertion, layout-first drop order, and `RegionSink.Layout` registration order are shared and tested.
 - Project Workspaces, global Sessions, and plugin content decks expose the header control, hover, declarative miniature, keyboard and mouse targeting, clone-only draft, stale/refusal prevalidation, identity-preserving replay, cancel, and tree-scoped transient zoom.
+- Project Primary zoom now remains inside the shared `paneframe` compose/register path; the visible `⊞` and its hit region therefore come from the same zoomed placement. Global Sessions pins the same behavior with a parity regression.
 - Local and remote live-pane modal entry releases interactive ownership first; remote release retains the control subscription while releasing the geometry lease and fencing queued work.
 - Paste is absorbed at the actual project, Sessions, and app dispatch boundaries while the modal owns input. The Feature Flags page scrolls its registry and presents `pane_move` as **Move panes**.
 - Independent review is clean. Isolated real-app proof clicked the Shell header `⊞`, clicked the Primary destination in the miniature, observed the stacked draft, committed Shell-over-Primary, and stopped the private driver cleanly.
+- The Phase 1/2 stabilization passed `go test ./...`, `go vet ./...`, `go build ./...`, `make fmt-check`, `make lint`, and `git diff --check`. A fresh private `tmux-drive.sh` run opened the modal from the project list and from the focused non-interactive Primary terminal, then stopped cleanly.
 
-### M3 — Plugin deck keyboard move mode — remaining
+### M3 — Plugin deck keyboard modal entry — remaining
 
-- Reuse `panereposition.Mode` through the app-level key-routing boundary when a passive content-deck leaf is focused; the M2 header modal, zoom, deck adoption, and shared chrome are already present.
-- Keep entry absent when `PluginContentPanes` is off and do not let plugin list/input contexts leak into move mode.
-- **Proof:** a deck test driving the real app key ladder from a focused content-deck leaf, plus a regression that the entry is absent when `PluginContentPanes` is off.
+- Route `M` through the app-level key boundary to the existing reposition modal when a passive content-deck leaf is focused; the M2 header modal, zoom, and deck adoption are already present.
+- Keep entry absent when `PluginContentPanes` is off and do not let plugin list/input contexts leak into the modal.
+- **Proof:** a deck test driving `M` through the real app key ladder from a focused content-deck leaf, plus a regression that the entry is absent when `PluginContentPanes` is off.
 
 ### M4 — `sidecar layout move` — remaining
 
@@ -219,7 +218,7 @@ Implemented in `9743b39f`; `td-90aae8` is closed.
 
 ### M5 — Document — remaining
 
-- `.claude/skills/keyboard-shortcuts/SKILL.md`: the `M` assignment table, why `m` was rejected, and the rule that move-mode keys are bound in pane-leaf contexts only.
+- `.claude/skills/keyboard-shortcuts/SKILL.md`: the `M` assignment table, why `m` was rejected, list-versus-preview target resolution, and the rule that input and unrelated plugin contexts retain printable keys.
 - `.claude/skills/ui-features/SKILL.md` and `drag-pane/SKILL.md`: the header control reserve and its drop order, and the new region rung.
 - `AGENTS.md` / the layout reference: `layout move` beside `layout get` and `layout apply`.
 
@@ -231,15 +230,16 @@ Implemented in `9743b39f`; `td-90aae8` is closed.
 - Ratio-carry tests cover both child positions at extraction and landing, an axis change, a repeated walk, and clamp behavior.
 - Live-leaf tests on `Primary` and `Shell` prove node identity and `LiveLeafCount` survive.
 - Host tests prove remote `Host`, terminal/deck identity, and control ownership survive; browse-state movement performs no remote resize; modal entry releases remote input and its geometry lease first.
-- Keymap parity tests hold project Workspaces and global Sessions to `M` in every pane context and assert input and plugin contexts are unchanged.
+- Keymap parity tests hold both Workspace lists and every pane context to feature-gated `M`, remove the obsolete direct-move context, and assert input and unrelated plugin contexts are unchanged.
 - `paneframe` tests pin the `Layout` region rung over nested trees, and header tests pin layout-first narrow-width drop order and `⊞` width.
 - Modal tests prove live identity on commit, clone discard on cancel, all-or-nothing stale or late-refusal behavior, tree-scoped zoom, and input/paste ownership at the real host dispatch boundaries.
+- Zoom regressions prove a zoomed Primary's visible header control has a matching click region on project Workspaces and global Sessions; shortcut regressions prove list targeting, focused live-pane targeting, and terminal-search ownership of `M` on both surfaces.
 - Isolated `tmux-drive.sh` proof used private tmux, state, cache, and config roots for both M1 and M2; the default tmux server was untouched and the driver was stopped.
 - Integrated verification passed: `go test ./...`, `go vet ./...`, `go build ./...`, `make lint`, `make fmt-check`, `git diff --check`, and `./scripts/test-tmux-drive.sh`.
 - M0, M1, and M2 each passed independent review; their td tasks are closed.
 
 ### Remaining
 
-- A plugin-deck test must drive move mode through the real app keyboard ladder and prove the entry is absent when `PluginContentPanes` is off.
+- A plugin-deck test must drive `M` modal entry through the real app keyboard ladder and prove the entry is absent when `PluginContentPanes` is off.
 - A CLI test must prove `layout move` and keyboard or modal movement compile the same plan from the same tree, including left/right outer-edge moves and an explicitly host-scoped Sessions row.
 - Final documentation verification must keep shortcut, UI, drag-pane, agent, and layout references aligned with the shipped default-on feature.

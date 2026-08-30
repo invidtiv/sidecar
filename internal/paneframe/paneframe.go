@@ -160,8 +160,6 @@ const (
 	ChromeInteractive
 	// ChromeFlash is the focused terminal leaf's attention flash.
 	ChromeFlash
-	// ChromeMoving is the leaf currently owned by pane move mode.
-	ChromeMoving
 	// ChromeNone leaves the placed outer box unframed. Its content receives the
 	// whole box, so an already-composed primary surface can sit beside framed
 	// passive leaves without acquiring a second, visually nested perimeter.
@@ -195,8 +193,6 @@ func WrapLeaf(content string, outer Box, chrome Chrome) string {
 		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetInteractiveGradient())
 	case ChromeFlash:
 		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetFlashGradient())
-	case ChromeMoving:
-		return styles.RenderPanelWithGradient(content, outer.W, outer.H, styles.GetMovingGradient())
 	case ChromeActive:
 		return styles.RenderPanel(content, outer.W, outer.H, true)
 	default:

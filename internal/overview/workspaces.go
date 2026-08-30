@@ -829,6 +829,12 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		}
 		return true, m.previewSync()
 	}
+	// M is available from either Workspaces window: the focused preview leaf or
+	// the selected list row's Primary terminal. Input and overlays were answered
+	// above, so they retain the printable key.
+	if handled, cmd := m.handlePaneMoveKey(msg); handled {
+		return true, cmd
+	}
 	if key == "\\" {
 		return true, m.toggleWorkspaceSidebar()
 	}
@@ -930,9 +936,6 @@ func (m *Model) WorkspacesKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 func (m *Model) WorkspaceFocusContext() string {
 	if m.paneLayoutModal != nil {
 		return panereposition.ModalContext
-	}
-	if m.paneMoveActive() {
-		return panereposition.Context
 	}
 	if m.PreviewInteractive() {
 		return "global-workspaces-terminal"

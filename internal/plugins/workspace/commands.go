@@ -11,9 +11,6 @@ import (
 
 // Commands returns the available commands.
 func (p *Plugin) Commands() []plugin.Command {
-	if p.paneMoveActive() {
-		return panereposition.Commands()
-	}
 	if p.viewMode == ViewModeList && p.docSearchActive() {
 		return []plugin.Command{
 			{ID: "search-open", Name: "Open", Description: "Open the selected file in this pane", Context: "workspace-doc-search", Priority: 1},
@@ -423,7 +420,7 @@ func (p *Plugin) Commands() []plugin.Command {
 				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 19},
 			)
 		}
-		return cmds
+		return p.withPaneMoveCommand(cmds, "workspace-list")
 	}
 }
 
@@ -431,9 +428,6 @@ func (p *Plugin) Commands() []plugin.Command {
 func (p *Plugin) FocusContext() string {
 	if p.paneLayoutModal != nil {
 		return panereposition.ModalContext
-	}
-	if p.paneMoveActive() {
-		return panereposition.Context
 	}
 	switch p.viewMode {
 	case ViewModeInteractive:
@@ -527,11 +521,11 @@ func (p *Plugin) FocusContext() string {
 }
 
 func (p *Plugin) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {
-	if !p.paneMoveCanStart() {
+	if p.paneLayoutShortcutLeaf() == 0 {
 		return cmds
 	}
 	return append(cmds, plugin.Command{
-		ID: panereposition.CommandMove, Name: "Move", Description: "Move this pane",
+		ID: panereposition.CommandMove, Name: "Move", Description: "Reposition this pane",
 		Context: context, Priority: 90,
 	})
 }

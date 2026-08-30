@@ -32,9 +32,6 @@ const (
 // WorkspaceFocusContext. Bindings live in the keymap; names and priorities
 // live here so a focused issue or document cannot advertise the list's keys.
 func (m *Model) Commands() []plugin.Command {
-	if m.paneMoveActive() {
-		return panereposition.Commands()
-	}
 	switch m.WorkspaceFocusContext() {
 	case ctxGlobalWorkspacesFilter:
 		return []plugin.Command{
@@ -183,11 +180,11 @@ func (m *Model) Commands() []plugin.Command {
 }
 
 func (m *Model) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {
-	if !m.paneMoveCanStart() {
+	if m.paneLayoutShortcutLeaf() == 0 {
 		return cmds
 	}
 	return append(cmds, plugin.Command{
-		ID: panereposition.CommandMove, Name: "Move", Description: "Move this pane",
+		ID: panereposition.CommandMove, Name: "Move", Description: "Reposition this pane",
 		Context: context, Priority: 90,
 	})
 }

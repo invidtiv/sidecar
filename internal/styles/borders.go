@@ -325,14 +325,6 @@ func GetInteractiveGradient() Gradient {
 	return NewGradient(colors, DefaultGradientAngle)
 }
 
-// GetMovingGradient returns the distinct border used while a pane is being
-// repositioned. Info plus accent reads as structural/navigation state without
-// borrowing the warning/success language of interactive input.
-func GetMovingGradient() Gradient {
-	theme := GetCurrentTheme()
-	return NewGradient([]string{theme.Colors.Info, theme.Colors.Accent}, DefaultGradientAngle)
-}
-
 // RenderPanel renders content in a panel with gradient borders.
 // This is the main function plugins should use for bordered panels.
 // active determines whether to use active (focused) or normal gradient.

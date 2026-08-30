@@ -67,6 +67,36 @@ func TestSessionsPaneLayoutHeaderModalPreservesIdentityAndZoom(t *testing.T) {
 	}
 }
 
+func TestSessionsZoomedPrimaryLayoutControlRemainsClickable(t *testing.T) {
+	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
+	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
+	enableGlobalPaneMove(t)
+	m.preview.focus = focusPreview
+	primary := panelayout.FirstOfKind(m.preview.paneRoot, panelayout.Terminal)
+	if primary == nil {
+		t.Fatal("fixture has no Primary leaf")
+	}
+	m.preview.paneFocus = primary.ID
+	m.paneZoom.Set(m.paneLayoutScope(), m.preview.paneRoot, primary.ID)
+	m.WorkspacesView(previewWide, previewTall)
+
+	var layout *mouse.Region
+	for _, region := range m.workspacesMouse.HitMap.Regions() {
+		if hit, ok := region.Data.(previewPaneLayoutHit); region.ID == previewPaneLayoutKind && ok && int(hit) == primary.ID {
+			copy := region
+			layout = &copy
+			break
+		}
+	}
+	if layout == nil {
+		t.Fatal("zoomed Sessions Primary drew no clickable layout region")
+	}
+	m.WorkspacesMouse(tea.MouseClickMsg(tea.Mouse{X: layout.Rect.X, Y: layout.Rect.Y, Button: tea.MouseLeft}))
+	if m.paneLayoutModal == nil || m.paneLayoutModal.LeafID() != primary.ID {
+		t.Fatal("zoomed Sessions Primary layout control did not open its modal")
+	}
+}
+
 func TestSessionsPaneLayoutModalAbsorbsPasteBeforeHiddenFilter(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
