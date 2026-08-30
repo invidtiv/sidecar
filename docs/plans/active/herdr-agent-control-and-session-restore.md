@@ -399,6 +399,14 @@ Therefore:
 
 **Exit gate:** two isolated managed agents run concurrently; the caller prompts each, one returns done and one blocked, waits cannot be satisfied by replacement processes, and reading/sending keys to the blocked agent affects only the named shell. A `tmux-drive.sh` demo puts both panes in front of the user without stealing focus during creation.
 
+**Implemented proof (2026-08-30):** `TestTwoIsolatedAgentsPromptWaitReadAndKeysInvolveOnlyTheirOwnShell` runs both agents concurrently on the package's private tmux server, settles one at `done` and one at `blocked`, reads the blocked one, answers it with logical keys, and proves the untargeted shell's screen is byte-identical before and after. `TestWaitCannotBeSatisfiedByARealReplacementOccupant` hands the pane to a `respawn-pane -k` process that prints the exact marker the wait is looking for and the wait returns `agent_replaced`. `TestObserverLeavesNoControlClientOrGoroutineBehind` exercises the timed-out, cancelled, and satisfied exits from the observer and proves no control client or goroutine survives.
+
+The ordered input encoding lives in `internal/tty/agentinput.go`: `EncodeLogicalKey` builds a `tea.KeyPressMsg` and hands it to the existing `MapKeyToTmux`, so a headless key and a typed key are the same bytes by construction — pinned in both directions by `TestEncodeLogicalKeyMatchesTheEmbeddedTerminalEncoding`. `PromptSteps` is the ordered paste-then-Enter submission both the TUI launch path and `agent prompt` use.
+
+The observer follows M0's decision with one split: the pooled `tty.ControlManager` is the *signal* that decides when to look, and `Inspect` remains the *truth* that decides what is so. Control events carry the screen, title, and current command but not pane identity, death, copy mode, or the server, so every verdict is confirmed by a full `Inspect` before it is returned and a slow verification heartbeat runs regardless of signals.
+
+**Correction found in M2:** the M1 occupant pin compared `ServerIncarnation`, whose string embeds the socket's ctime. tmux rewrites its socket's permission bits whenever the set of attached clients changes, so attaching M2's own control-mode observer bumped the ctime and made every observed target report itself replaced the instant it began being observed. `Target` now carries `ServerPID` and `sameOccupant` compares that; the incarnation stays as reported evidence about the socket, and is no longer compared.
+
 ### M3 — Exact session reporting and unified resume registry
 
 - Add `internal/agentsession`, v3 shell manifest fields, `agent report-session`, generation fencing, validation, redacted list behavior, and global deduplication.
