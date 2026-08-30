@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -32,6 +33,55 @@ var agentSkipFlags = map[string]string{
 // whether to show the auto-approve checkbox; do not copy this map elsewhere.
 func AgentSkipFlag(agentType string) string {
 	return agentSkipFlags[agentType]
+}
+
+// agentCommandWildcards are the configured keys that answer for any agent
+// rather than naming one. They resolve a command; they do not make a name a
+// family.
+var agentCommandWildcards = map[string]bool{"*": true, "default": true}
+
+// KnownAgentType reports whether agentType names an agent family this Sidecar
+// can launch: a built-in one, or one the caller has configured a start command
+// for by name.
+//
+// It exists because resolution deliberately does not refuse.
+// ResolveAgentCommandFromConfig falls back to Claude's command for a type it
+// does not recognise, which is right for a type stored by a newer version and
+// wrong as an acceptance rule for a value a caller has just typed: `--agent
+// claud` would start Claude while recording "claud" as the family, and every
+// surface that keys off the agent type — the provider column, activity
+// identification, session lookup — would then disagree with what is running in
+// the pane. A picker cannot produce that value; a flag can, so the flag checks.
+func KnownAgentType(agentType string, configured map[string]string) bool {
+	agentType = strings.TrimSpace(agentType)
+	if agentType == "" || agentCommandWildcards[agentType] {
+		return false
+	}
+	if _, ok := agentDefaults[agentType]; ok {
+		return true
+	}
+	_, ok := configured[agentType]
+	return ok
+}
+
+// KnownAgentTypes lists the agent families KnownAgentType accepts, sorted, so a
+// refusal can say what was expected rather than only what was wrong.
+func KnownAgentTypes(configured map[string]string) []string {
+	seen := make(map[string]bool, len(agentDefaults)+len(configured))
+	for agent := range agentDefaults {
+		seen[agent] = true
+	}
+	for agent := range configured {
+		if !agentCommandWildcards[agent] {
+			seen[agent] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for agent := range seen {
+		out = append(out, agent)
+	}
+	sort.Strings(out)
+	return out
 }
 
 var openCodeRunPrefix = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)

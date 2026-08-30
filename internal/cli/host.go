@@ -31,13 +31,18 @@ func hostCommand() *Command {
 		Name:    "serve",
 		Summary: "Stream this machine's Sidecar state as JSONL (spawned over SSH by a remote viewer)",
 		Usage:   "sidecar host serve --stdio [--cycles N] [--project NAME=PATH]",
-		Long: "Run the headless, read-only host agent: collect this machine's projects,\n" +
-			"shells, worktrees and agent status on the ordinary Overview cadence, and\n" +
-			"stream a versioned JSONL snapshot plus status transitions to stdout.\n\n" +
+		Long: "Run the headless host agent: collect this machine's projects, shells,\n" +
+			"worktrees and agent status on the ordinary Overview cadence, and stream a\n" +
+			"versioned JSONL snapshot plus status transitions to stdout.\n\n" +
 			"This is not a daemon. It is spawned per connection over an SSH stdio pipe\n" +
-			"and exits when that pipe closes. It writes no Sidecar state: it never\n" +
-			"touches shells.json, never reaps a dead shell, never takes a geometry\n" +
-			"lease, and never resizes a pane.\n\n" +
+			"and exits when that pipe closes.\n\n" +
+			"It has exactly one write, and it is the same one a local Sidecar makes: a\n" +
+			"shell record whose tmux session is confirmed gone is reaped — tombstoned\n" +
+			"through the flocked, conditional writer the Sessions browser uses, so\n" +
+			"`sidecar shell restore` still brings it back. Without it a row for a shell\n" +
+			"the user had already exited stayed on the viewer's screen until somebody\n" +
+			"opened Sidecar on this machine. Nothing else is written: no geometry lease,\n" +
+			"no pane resize, no mutating tmux command at all.\n\n" +
 			"Nothing is bound to a network. SSH is the entire transport and the entire\n" +
 			"trust boundary.",
 		Flags: []Flag{
@@ -55,7 +60,22 @@ func hostCommand() *Command {
 			{Description: "What a viewer runs over ssh", Command: "sidecar host serve --stdio"},
 			{Description: "One cycle, for inspection", Command: "sidecar host serve --stdio --cycles 1"},
 		},
-		Run: runHostServe,
+		// Serve reaps, so it writes state outside this process and the
+		// isolation gate must arm before the loop starts rather than at the
+		// first tombstone. shellstate still fails closed underneath; this is
+		// ordering, not a new guarantee — a proof run that forgot to move the
+		// state tree should be refused before it has observed anything, not
+		// after it has already tombstoned a record in the developer's real
+		// manifest.
+		//
+		// The flags cannot disarm it. asksForHelp reads them the way this
+		// command's own parser does — only -h/--help count, and a token after a
+		// value-taking flag is that flag's value — so `--project help` and
+		// `--cycles --help` are values, not requests for usage. That distinction
+		// is the Phase C incident recorded in cli.go: `shell send --run help`
+		// sailed past the gate and reached tmux.
+		Mutates: true,
+		Run:     runHostServe,
 	}
 
 	probeCmd := &Command{

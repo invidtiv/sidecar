@@ -248,6 +248,16 @@ func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 	if len(stub.calls) != 2 {
 		t.Fatalf("invocations = %v, want create then send", stub.calls)
 	}
+	// The CREATE carries the agent family, so the host writes it into its own
+	// shells.json as the shell appears. Without it a remote agent shell's only
+	// evidence of an agent was live screen identification: it was missing from
+	// the Activity board while the agent booted and dropped off whenever
+	// identification missed a frame, where a local shell kept its card because
+	// the manifest said so.
+	want := []string{"create", "shell", "--project", "/home/me/api", "--agent", "claude", "--json"}
+	if got := stub.argv(t, 0); !equalArgs(got, want) {
+		t.Fatalf("create argv = %v, want %v", got, want)
+	}
 	send := stub.argv(t, 1)
 	for i, want := range []string{"shell", "send", "--target", "api-claude-2", "--project", "/home/me/api", "--run"} {
 		if i >= len(send) || send[i] != want {

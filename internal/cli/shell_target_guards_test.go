@@ -189,6 +189,7 @@ func TestMutatingVerbsRefuseAMisconfiguredProofBeforeTouchingAnything(t *testing
 		{"create", "shell", "--tab"},
 		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "echo hi"},
 		{"shell", "rename", "--target", "sidecar-sh-demo-1", "renamed"},
+		{"shell", "delete", "--target", "sidecar-sh-demo-1"},
 		// A flag VALUE must not disarm the gate. The first version of this
 		// scanned every argument for -h/--help/help, so `--run help` — an
 		// ordinary thing to send into a shell — sailed past it and reached
@@ -196,11 +197,24 @@ func TestMutatingVerbsRefuseAMisconfiguredProofBeforeTouchingAnything(t *testing
 		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "help"},
 		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "--help"},
 		{"shell", "send", "--target", "sidecar-sh-demo-1", "--type", "-h"},
+		{"shell", "delete", "--target", "help"},
 		{"shell", "rename", "--target", "sidecar-sh-demo-1", "--", "help"},
 		{"shell", "rename", "--target", "sidecar-sh-demo-1", "--", "--help"},
 		{"create", "worktree", "--base", "help", "wt-proof"},
 		{"create", "worktree", "--", "help"},
 		{"create", "shell", "--tab", "--name", "help"},
+		// `host serve` reaps: it tombstones a shell record whose session is
+		// confirmed gone, through the same flocked writer the browser uses. That
+		// is state outside this process, so the gate arms before the loop
+		// starts — a proof run that forgot to move the state tree must be
+		// refused before it observes anything, not after it has tombstoned a
+		// record in the developer's real manifest. --cycles bounds the damage if
+		// this ever regresses: an unarmed gate then runs one cycle instead of
+		// serving until stdin closes.
+		{"host", "serve", "--stdio", "--cycles", "1"},
+		// And a flag VALUE must not disarm it here either.
+		{"host", "serve", "--stdio", "--cycles", "1", "--project", "help"},
+		{"host", "serve", "--stdio", "--cycles", "--help"},
 		// These three write the notification log and the request bus, which is
 		// state outside this process by the same definition the tmux and git
 		// verbs meet.

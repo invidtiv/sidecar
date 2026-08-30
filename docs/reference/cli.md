@@ -50,6 +50,15 @@ on by default, must not be disabled). Beside-the-session modes need a running
 instance and a current shell (SIDECAR_SHELL / --shell) and do not add a
 workspace row.
 
+--agent records which agent family the shell is for, in the same durable field
+the TUI's Create Shell writes. It does not start the agent — --run does that,
+and the two are separate so a caller that starts the process itself can still
+record the type. The record is what keeps the shell on the Activity board while
+the agent is booting and whenever live screen identification misses a frame, so
+`--agent claude --run claude` is the full spelling of what the TUI's form does.
+Because only a workspace row carries the field, --agent places the shell there:
+it is refused with --split and overrides the beside-the-session default.
+
 ```
 Usage: sidecar create shell [options]
 ```
@@ -57,6 +66,7 @@ Usage: sidecar create shell [options]
 **Options:**
 
 - `--name NAME`: Display name (default: the next Shell N)
+- `--agent TYPE`: Record the agent family (claude, codex, …); --run starts it
 - `--run COMMAND`: Execute COMMAND in the new shell
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell
@@ -74,12 +84,14 @@ Usage: sidecar create shell [options]
 - `2`: usage error, or this directory is not in a registered project
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
-- `5`: a value was rejected: --name, or an unknown --project / --shell
+- `5`: a value was rejected: --name, --agent, or an unknown --project / --shell
 
 **Examples:**
 
 ```bash
 sidecar create shell --name "dev server" --run "python3 -m http.server"
+# an agent shell the board knows is one
+sidecar create shell --agent claude --run claude
 sidecar create shell --split right --run "python3 -m http.server 8765"
 sidecar create shell --json --wait 0
 # type a command for the user to review
@@ -354,14 +366,20 @@ sidecar host remove --json book
 
 Stream this machine's Sidecar state as JSONL (spawned over SSH by a remote viewer)
 
-Run the headless, read-only host agent: collect this machine's projects,
-shells, worktrees and agent status on the ordinary Overview cadence, and
-stream a versioned JSONL snapshot plus status transitions to stdout.
+Run the headless host agent: collect this machine's projects, shells,
+worktrees and agent status on the ordinary Overview cadence, and stream a
+versioned JSONL snapshot plus status transitions to stdout.
 
 This is not a daemon. It is spawned per connection over an SSH stdio pipe
-and exits when that pipe closes. It writes no Sidecar state: it never
-touches shells.json, never reaps a dead shell, never takes a geometry
-lease, and never resizes a pane.
+and exits when that pipe closes.
+
+It has exactly one write, and it is the same one a local Sidecar makes: a
+shell record whose tmux session is confirmed gone is reaped — tombstoned
+through the flocked, conditional writer the Sessions browser uses, so
+`sidecar shell restore` still brings it back. Without it a row for a shell
+the user had already exited stayed on the viewer's screen until somebody
+opened Sidecar on this machine. Nothing else is written: no geometry lease,
+no pane resize, no mutating tmux command at all.
 
 Nothing is bound to a network. SSH is the entire transport and the entire
 trust boundary.
@@ -991,10 +1009,58 @@ sidecar setup -project ~/code/myproject
 
 Manage Sidecar shell records and the current shell's name
 
-List, forget, and restore this project's shell records; read or rename a shell; and send a command into one.
+List, forget, restore, and delete this project's shells; read or rename a shell; and send a command into one.
 
 ```
 Usage: sidecar shell <command>
+```
+
+### `sidecar shell delete`
+
+Delete a shell: close its tmux session and forget its record
+
+Delete a Sidecar-managed shell. This closes the tmux session and moves the
+record to a tombstone, which is exactly what Delete does in the Sessions
+browser — the same workspaceops call, so the two cannot drift.
+
+`sidecar shell forget` is the half of this that only drops the record; use it
+for a shell whose session is already gone, or one recorded on another tmux
+server. Either way `sidecar shell restore` can put the record back.
+
+--target is required and must name a session the resolved project owns: a
+sidecar-sh-… record in its shells.json. tmux resolves a session name against
+whatever answers to it, so an unregistered name is refused (exit 3) rather
+than killed. A sidecar-ws-… worktree session resolves but is refused (exit 5):
+removing a checkout carries branch-cleanup decisions this verb cannot express.
+
+There is no current-shell form. Deleting the shell you are sitting in would
+kill the session running the command, so the subject is always named.
+
+```
+Usage: sidecar shell delete --target SESSION [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--target SESSION`: The tmux session to delete (required)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: deleted
+- `1`: tmux, ambiguity, or state failure
+- `2`: usage error, including a missing --target
+- `3`: --target names no session this project owns, or one recorded on a different tmux server
+- `5`: a value was rejected: --target names a worktree, or an unknown --project / --shell
+
+**Examples:**
+
+```bash
+sidecar shell delete --target sidecar-sh-sidecar-2
+sidecar shell delete --target sidecar-sh-sidecar-2 --project sidecar --json
 ```
 
 ### `sidecar shell forget`

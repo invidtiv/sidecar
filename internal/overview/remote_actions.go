@@ -420,10 +420,23 @@ func remoteWorkspaceProjectRef(workspace workspaceinventory.Workspace) string {
 // An empty display name is left off entirely: the host names the shell from its
 // own manifest,
 // and guessing from here would number it against the wrong machine's shells.
-func remoteCreateShellArgs(projectRef, displayName string) []string {
+//
+// --agent is the durable half of "this is a Claude shell". The local create
+// writes AgentType into shells.json as it creates, so HasAgent() is true from
+// that moment; the remote create used to send no agent at all and leave the
+// answer entirely to live screen identification, so a remote agent shell was
+// absent from the Activity board while its agent booted and dropped off the
+// board whenever identification missed a frame — where its local twin kept its
+// card because the manifest said so. The `shell send --run` round trip that
+// follows still starts the process: recording the family and launching it are
+// two things, and the host needs both.
+func remoteCreateShellArgs(projectRef, displayName, agentType string) []string {
 	args := []string{"create", "shell", "--project", projectRef}
 	if displayName != "" {
 		args = append(args, "--name", displayName)
+	}
+	if agentType != "" {
+		args = append(args, "--agent", agentType)
 	}
 	return append(args, "--json")
 }
@@ -477,6 +490,18 @@ func remoteRenameArgs(projectRef, session, newName string) []string {
 	return []string{"shell", "rename", "--target", session, "--project", projectRef, "--json", "--", newName}
 }
 
+// remoteDeleteShellArgs is `sidecar shell delete`, the host-side verb that
+// closes a managed shell's tmux session and tombstones its record.
+//
+// --project travels with --target for the reason send's does: the host resolves
+// the target against that project's manifest and refuses a session it does not
+// own, which is what keeps a name collision from becoming a killed session
+// belonging to somebody else. No `--` terminator, because this verb takes no
+// positional and a tmux session name is never a flag.
+func remoteDeleteShellArgs(projectRef, session string) []string {
+	return []string{"shell", "delete", "--target", session, "--project", projectRef, "--json"}
+}
+
 // remoteTargetSession is the tmux session name a remote row is addressed by.
 //
 // A worktree that is not running has no session in the snapshot, but its name
@@ -499,13 +524,19 @@ func remoteTargetSession(workspace workspaceinventory.Workspace) string {
 // Two round trips rather than one, mirroring exactly what the local path does:
 // createManagedShell, then StartAgentInShell against the session that came
 // back. The host names the session; nothing here predicts it.
-func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentCommand string) tea.Cmd {
+//
+// agentType goes with the CREATE, and agentCommand with the send. The type is
+// durable state the host writes into its own manifest as the shell appears; the
+// command is this viewer's config-only resolution of how to launch it. Sending
+// only the second is what left a remote agent shell with no durable evidence of
+// its agent — see remoteCreateShellArgs.
+func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentType, agentCommand string) tea.Cmd {
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
 	incarnation := m.hostIncarnationFor(hostID)
 	parent := m.hostContext()
 	projectRef := remoteProjectRef(project)
-	createArgs := remoteCreateShellArgs(projectRef, displayName)
+	createArgs := remoteCreateShellArgs(projectRef, displayName, agentType)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteCreateShellTimeout)
 		defer cancel()
@@ -617,6 +648,122 @@ func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, ne
 		}
 		return reply
 	}
+}
+
+// deleteRemoteShell closes a shell on the host that owns it and forgets its
+// record there, by running the host's own `sidecar shell delete`.
+//
+// The row is dropped when the answer comes back, before the host's next
+// snapshot arrives — a latency mask, not a second source of truth. hostserve
+// watches the shells.json it reports, so the machine that owns the state
+// confirms the removal within a coalesce window; nothing here synthesizes the
+// absence and nothing here would notice if the delete had silently failed,
+// which is why a failure keeps the confirmation open and says what the host
+// said.
+func (m *Model) deleteRemoteShell(workspace workspaceinventory.Workspace) tea.Cmd {
+	registry := m.hostRegistry
+	hostID := workspace.HostID
+	incarnation := m.hostIncarnationFor(hostID)
+	parent := m.hostContext()
+	id := workspace.ID
+	// The project is carried by its host-scoped key and without a path: the
+	// shared reply handler ends in a local re-inventory, and the safest thing to
+	// hand it is an identifier this machine cannot resolve into a directory.
+	project := Project{Name: workspace.ProjectName, Key: workspace.ProjectKey}
+
+	refuse := func(reason string) tea.Cmd {
+		return func() tea.Msg {
+			return globalShellDeletedMsg{
+				remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation},
+				Project:     project, WorkspaceID: id, Err: errors.New(reason),
+			}
+		}
+	}
+	// Asked before dispatch: a host that is registered but has no live client
+	// cannot be asked anything, and sending anyway produces an ssh failure whose
+	// reply reads as "removed or retargeted" — the wrong sentence for a host the
+	// user disabled.
+	if reason := m.remoteHostUnavailable(hostID); reason != "" {
+		return refuse(reason)
+	}
+	session := remoteTargetSession(workspace)
+	if session == "" {
+		return refuse("that row carries no tmux session name, so the host cannot be told which shell to delete")
+	}
+	args := remoteDeleteShellArgs(remoteWorkspaceProjectRef(workspace), session)
+
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
+		defer cancel()
+		reply := globalShellDeletedMsg{
+			remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation},
+			Project:     project, WorkspaceID: id,
+		}
+		var result remoteShellDeleteResult
+		if err := runRemoteSidecar(ctx, registry, hostID, args, &result); err != nil {
+			// Shaped here rather than at the confirmation, so the sentence the
+			// user reads is the host's own words plus the fix — the same
+			// treatment every other remote failure gets — and so the whole
+			// failure, including the half a narrow modal drops, reaches the
+			// debug log.
+			reply.Err = errors.New(remoteActionError(err))
+			return reply
+		}
+		return reply
+	}
+}
+
+// dropRemoteWorkspaceRow removes a row from the last-known results of the host
+// that reported it, so a deletion the user just confirmed is visible before
+// that host says so again.
+//
+// Only the optimism is here; the truth is on the host. Its next snapshot
+// restates the whole project, so a delete that did not really happen puts the
+// row back rather than leaving this browser lying indefinitely — and with
+// hostserve watching the shells.json it reports, that correction arrives within
+// a coalesce window rather than on the next inventory tick.
+//
+// A local row is left alone: its project is re-inventoried after the mutation,
+// which is a stronger answer than this one.
+func (m *Model) dropRemoteWorkspaceRow(id string) {
+	workspace, ok := m.catalog[id]
+	if !ok || workspace.HostID == "" {
+		return
+	}
+	results := m.hostResults[workspace.HostID]
+	for i := range results {
+		for j := range results[i].Workspaces {
+			if results[i].Workspaces[j].ID != id {
+				continue
+			}
+			results[i].Workspaces = append(results[i].Workspaces[:j], results[i].Workspaces[j+1:]...)
+			m.hostResults[workspace.HostID] = results
+			// syncBoard rebuilds the list projection too, so the row leaves both
+			// surfaces at once — a card that outlived its row is the parity bug
+			// the shared catalog exists to prevent.
+			m.syncBoard()
+			return
+		}
+	}
+}
+
+// remoteShellDeleteResult is the subset of `sidecar shell delete --json` this
+// surface reads. Nothing here needs the payload — the row is addressed by the
+// ID it already has — so the type exists to say what a real answer looks like.
+type remoteShellDeleteResult struct {
+	Shell  string `json:"shell"`
+	Status string `json:"status"`
+}
+
+// ValidRemoteResult: the deleted session and its status are both always present
+// in the verb's result, and a login-profile log line carrying one of those key
+// names does not carry the other. Without this floor an object that merely
+// parses is accepted as the answer, and a delete that never ran is reported as
+// a delete that did — the failure recorded at the top of this file's result
+// section, arriving here on the one verb whose optimistic row drop would then
+// hide a live shell until the host's next snapshot brought it back.
+func (r remoteShellDeleteResult) ValidRemoteResult() bool {
+	return strings.TrimSpace(r.Shell) != "" && strings.TrimSpace(r.Status) != ""
 }
 
 // remoteRenameResult is the subset of `sidecar shell rename --json` this
