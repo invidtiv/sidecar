@@ -307,6 +307,14 @@ type leaseStore interface {
 	inputMark(session string) string
 }
 
+// leaseClearWaiter is implemented by stores whose clear is asynchronous. A
+// lifecycle spanning multiple transports waits for this completion before a
+// replacement claimant may proceed; ordinary local stores clear synchronously
+// and need no second interface.
+type leaseClearWaiter interface {
+	clearAndWait(session string) <-chan struct{}
+}
+
 type tmuxLeaseStore struct{}
 
 // read asks for the session and the option in one invocation: the lease is
@@ -846,7 +854,7 @@ func (k *leaseKeeper) setFocused(focused bool) {
 	k.mu.Unlock()
 
 	for _, session := range release {
-		k.store.clear(session)
+		k.clearAndWait(session)
 	}
 }
 
@@ -863,8 +871,18 @@ func (k *leaseKeeper) release() {
 		stop()
 	}
 	for _, session := range sessions {
-		k.store.clear(session)
+		k.clearAndWait(session)
 	}
+}
+
+func (k *leaseKeeper) clearAndWait(session string) {
+	if waiter, ok := k.store.(leaseClearWaiter); ok {
+		if done := waiter.clearAndWait(session); done != nil {
+			<-done
+		}
+		return
+	}
+	k.store.clear(session)
 }
 
 // dropStatesLocked forgets all tick history and, when releasing, reports the

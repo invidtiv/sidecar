@@ -6,7 +6,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -149,12 +148,7 @@ type remoteTerminalBackend struct {
 	lease   *leaseKeeper
 	input   atomic.Uint64
 
-	// Lifecycle work is appended synchronously but runs off the Bubble Tea
-	// goroutine. The tail chain gives activation, blur, release and resize a
-	// strict order without making an exit wait on a remote response.
-	lifecycleMu   sync.Mutex
-	lifecycleTail <-chan struct{}
-	leaseSession  atomic.Value // string
+	leaseSession atomic.Value // string
 }
 
 func newRemoteTerminalBackend(model *Model, manager *ControlManager) *remoteTerminalBackend {
@@ -171,11 +165,24 @@ func (b *remoteTerminalBackend) session() string {
 }
 
 func (b *remoteTerminalBackend) enqueueLifecycle(run func()) <-chan struct{} {
+	if b == nil || b.model == nil {
+		done := make(chan struct{})
+		close(done)
+		return done
+	}
+	return b.model.enqueueRemoteLifecycle(run)
+}
+
+// enqueueRemoteLifecycle orders remote geometry lifecycle across backend
+// replacement. The preview reuses one Model but creates a fresh backend and
+// control pipe for each remote row activation; keeping this tail on the Model
+// prevents an old delayed release from clearing a newer backend's claim.
+func (m *Model) enqueueRemoteLifecycle(run func()) <-chan struct{} {
 	done := make(chan struct{})
-	b.lifecycleMu.Lock()
-	previous := b.lifecycleTail
-	b.lifecycleTail = done
-	b.lifecycleMu.Unlock()
+	m.remoteLifecycleMu.Lock()
+	previous := m.remoteLifecycleTail
+	m.remoteLifecycleTail = done
+	m.remoteLifecycleMu.Unlock()
 	go func() {
 		defer close(done)
 		if previous != nil {
@@ -255,15 +262,27 @@ func (b *remoteTerminalBackend) querySize(session, target string) (width, height
 	return width, height, errW == nil && errH == nil
 }
 
-func (b *remoteTerminalBackend) resize(session, target string, width, height int) bool {
-	if b == nil || target == "" || width <= 0 || height <= 0 || !b.lease.allow(target) {
+func (b *remoteTerminalBackend) resize(session, target string, width, height int, valid func() bool) bool {
+	if b == nil || target == "" || width <= 0 || height <= 0 || !valid() || !b.lease.allow(target) {
+		return false
+	}
+	if !valid() {
 		return false
 	}
 	if actualW, actualH, ok := b.querySize(session, target); ok && actualW == width && actualH == height {
 		return false
 	}
+	// querySize is response-bearing. Input may have been released while it was
+	// in flight, so ownership must be checked at the mutation boundary rather
+	// than only when the lifecycle task began.
+	if !valid() {
+		return false
+	}
 	command := "resize-window -t " + controlQuote(target) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
 	if _, err := b.manager.requestControlBatch(session, command); err != nil {
+		if !valid() {
+			return false
+		}
 		fallback := "resize-pane -t " + controlQuote(target) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
 		if _, fallbackErr := b.manager.requestControlBatch(session, fallback); fallbackErr != nil {
 			return false
@@ -299,14 +318,24 @@ func (s remoteLeaseStore) set(session, token string) {
 }
 
 func (s remoteLeaseStore) clear(session string) {
+	_ = s.clearAndWait(session)
+}
+
+func (s remoteLeaseStore) clearAndWait(session string) <-chan struct{} {
 	if s.backend != nil {
 		// A release is a lifetime barrier, not an advisory write. The manager
 		// retains the client until tmux executes the unset, even if the pane's last
 		// subscription closes immediately afterward. Sending stays non-blocking so
 		// Exit and ReleaseInput never stall Bubble Tea on a network round trip.
-		_ = s.backend.manager.sendControlBarrier(s.backend.currentLeaseSession(),
+		done, err := s.backend.manager.sendControlBarrierWait(s.backend.currentLeaseSession(),
 			"set-option -u -t "+controlQuote(session)+" "+leaseOptionName)
+		if err == nil {
+			return done
+		}
 	}
+	done := make(chan struct{})
+	close(done)
+	return done
 }
 
 func (s remoteLeaseStore) inputMark(string) string {
@@ -467,7 +496,10 @@ func (m *Model) ActivateInput() tea.Cmd {
 				backend.lease.release()
 				return nil
 			}
-			if backend.resize(session, target, width, height) {
+			valid := func() bool {
+				return m.remoteInputOwned(backend, generation) && m.activeGeneration.Load() == scope.Generation
+			}
+			if backend.resize(session, target, width, height, valid) {
 				return PaneResizedMsg{Scope: scope}
 			}
 			return nil
@@ -570,7 +602,10 @@ func (m *Model) remoteResizeCommand(scope MessageScope, target, session string, 
 				return nil
 			}
 			backend.setLeaseSession(session)
-			if backend.resize(session, target, width, height) {
+			valid := func() bool {
+				return m.remoteInputOwned(backend, generation) && m.activeGeneration.Load() == scope.Generation
+			}
+			if backend.resize(session, target, width, height, valid) {
 				return PaneResizedMsg{Scope: scope}
 			}
 			return nil

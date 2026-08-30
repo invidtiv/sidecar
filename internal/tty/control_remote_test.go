@@ -333,12 +333,6 @@ func TestReleaseInputReturnsWhileRemoteActivationReadIsBlocked(t *testing.T) {
 	}
 
 	leaseRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
-	select {
-	case <-activated:
-	case <-time.After(time.Second):
-		t.Fatal("activation did not drain after its remote response")
-	}
-
 	var unset fakeControlCommand
 	waitFor(t, func() bool {
 		channel.mu.Lock()
@@ -362,6 +356,11 @@ func TestReleaseInputReturnsWhileRemoteActivationReadIsBlocked(t *testing.T) {
 	channel.mu.Unlock()
 	// Complete the retained clear so this test leaves no lifetime timer behind.
 	unset.callback(controlResponse{})
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("activation did not drain after its claim and clear responses")
+	}
 }
 
 func TestReleaseAndExitReturnWhileRemoteLeaseRefreshIsBlocked(t *testing.T) {
@@ -426,6 +425,212 @@ func TestReleaseAndExitReturnWhileRemoteLeaseRefreshIsBlocked(t *testing.T) {
 	}
 	channel.events <- controlEvent{Kind: controlEventResponse, Callback: unset.callback}
 	waitFor(t, func() bool { return channel.closeCount() == 1 })
+}
+
+func TestReplacementBackendWaitsForOldBlockedRelease(t *testing.T) {
+	shared := &fakeLeaseStore{}
+	store := newBlockingLeaseStore(shared, 2)
+	store.blockFirstClear = true
+	model := New(nil)
+	model.remote = true
+	model.State = &State{Active: true, TargetSession: "remote-session", TargetPane: "%4"}
+
+	backendA := &remoteTerminalBackend{model: model}
+	backendA.lease = newTestKeeper(store, "backend-a", DefaultLeasePolicy)
+	ticker := &manualTicker{}
+	ticker.install(backendA.lease)
+	model.remoteBackend = backendA
+	if cmd := model.ActivateInput(); cmd == nil {
+		t.Fatal("backend A activation returned no command")
+	} else {
+		_ = cmd()
+	}
+	if leaseOwner(shared.current()) != "backend-a" {
+		t.Fatalf("backend A did not claim lease: %q", shared.current())
+	}
+
+	ticker.c <- time.Now()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("backend A refresher did not enter blocked read")
+	}
+	model.ReleaseInput()
+
+	backendB := &remoteTerminalBackend{model: model}
+	backendB.lease = newTestKeeper(shared, "backend-b", DefaultLeasePolicy)
+	model.remoteInputMu.Lock()
+	model.State = &State{Active: true, TargetSession: "remote-session", TargetPane: "%4"}
+	model.remoteBackend = backendB
+	model.remoteInteractive = false
+	model.remoteInputGeneration++
+	model.remoteInputMu.Unlock()
+	activateB := model.ActivateInput()
+	activatedB := make(chan struct{})
+	go func() {
+		_ = activateB()
+		close(activatedB)
+	}()
+	select {
+	case <-activatedB:
+		t.Fatal("replacement backend bypassed the old backend release fence")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(store.unblock)
+	select {
+	case <-store.clearEntered:
+	case <-time.After(time.Second):
+		t.Fatal("old backend did not reach its asynchronous clear barrier")
+	}
+	select {
+	case <-activatedB:
+		t.Fatal("replacement backend claimed before old clear was confirmed")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(store.clearUnblock)
+	select {
+	case <-activatedB:
+	case <-time.After(time.Second):
+		t.Fatal("replacement backend did not activate after old release drained")
+	}
+	if owner := leaseOwner(shared.current()); owner != "backend-b" {
+		t.Fatalf("old backend release cleared replacement claim; owner=%q token=%q", owner, shared.current())
+	}
+	model.ReleaseInput()
+	waitForRemoteLifecycle(t, model)
+}
+
+func TestReleaseDuringRemoteSizeQueryPreventsLateResize(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	activate := model.ActivateInput()
+	activated := make(chan struct{})
+	go func() {
+		_ = activate()
+		close(activated)
+	}()
+	initialRead := waitForRemoteLeaseRead(t, channel, 0)
+	initialRead.callback(controlResponse{Lines: []string{"remote-session\t"}})
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("remote activation did not complete")
+	}
+
+	resize := model.remoteResizeCommand(model.Scope(), "%4", "remote-session", 100, 40)
+	resized := make(chan struct{})
+	go func() {
+		_ = resize()
+		close(resized)
+	}()
+	var sizeQuery fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.Contains(command.text, "#{pane_width},#{pane_height}") {
+				sizeQuery = command
+				return true
+			}
+		}
+		return false
+	})
+	model.ReleaseInput()
+	sizeQuery.callback(controlResponse{Lines: []string{"80,24"}})
+	select {
+	case <-resized:
+	case <-time.After(time.Second):
+		t.Fatal("remote resize did not drain after size response")
+	}
+
+	var unset fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for _, command := range channel.commands {
+			if strings.HasPrefix(command.text, "resize-window") || strings.HasPrefix(command.text, "resize-pane") {
+				t.Fatalf("released remote input issued late mutation %q", command.text)
+			}
+			if strings.Contains(command.text, "set-option -u") && strings.Contains(command.text, leaseOptionName) {
+				unset = command
+			}
+		}
+		return unset.callback != nil
+	})
+	unset.callback(controlResponse{})
+}
+
+type blockingLeaseStore struct {
+	inner     *fakeLeaseStore
+	mu        sync.Mutex
+	reads     int
+	blockRead int
+	entered   chan struct{}
+	unblock   chan struct{}
+	once      sync.Once
+
+	blockFirstClear bool
+	clearEntered    chan struct{}
+	clearUnblock    chan struct{}
+	clearOnce       sync.Once
+	clearCount      int
+}
+
+func newBlockingLeaseStore(inner *fakeLeaseStore, blockRead int) *blockingLeaseStore {
+	return &blockingLeaseStore{
+		inner: inner, blockRead: blockRead,
+		entered: make(chan struct{}), unblock: make(chan struct{}),
+		clearEntered: make(chan struct{}), clearUnblock: make(chan struct{}),
+	}
+}
+
+func (s *blockingLeaseStore) read(target string) (string, string, bool) {
+	s.mu.Lock()
+	s.reads++
+	block := s.reads == s.blockRead
+	s.mu.Unlock()
+	if block {
+		s.once.Do(func() { close(s.entered) })
+		<-s.unblock
+	}
+	return s.inner.read(target)
+}
+
+func (s *blockingLeaseStore) set(session, token string) { s.inner.set(session, token) }
+func (s *blockingLeaseStore) clear(session string)      { s.inner.clear(session) }
+func (s *blockingLeaseStore) clearAndWait(session string) <-chan struct{} {
+	done := make(chan struct{})
+	s.mu.Lock()
+	s.clearCount++
+	block := s.blockFirstClear && s.clearCount == 1
+	s.mu.Unlock()
+	go func() {
+		defer close(done)
+		if block {
+			s.clearOnce.Do(func() { close(s.clearEntered) })
+			<-s.clearUnblock
+		}
+		s.inner.clear(session)
+	}()
+	return done
+}
+func (s *blockingLeaseStore) inputMark(session string) string {
+	return s.inner.inputMark(session)
+}
+
+func waitForRemoteLifecycle(t *testing.T, model *Model) {
+	t.Helper()
+	model.remoteLifecycleMu.Lock()
+	tail := model.remoteLifecycleTail
+	model.remoteLifecycleMu.Unlock()
+	if tail == nil {
+		return
+	}
+	select {
+	case <-tail:
+	case <-time.After(time.Second):
+		t.Fatal("remote lifecycle did not drain")
+	}
 }
 
 func waitForRemoteLeaseRead(t *testing.T, channel *fakeControlChannel, index int) fakeControlCommand {

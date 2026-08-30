@@ -408,16 +408,30 @@ func (m *ControlManager) sendControlBatch(session string, commands ...string) er
 // waiting here would block Bubble Tea, but closing the control process as soon
 // as that subscription disappears could discard the write before tmux runs it.
 func (m *ControlManager) sendControlBarrier(session, command string) error {
+	_, err := m.sendControlBarrierWait(session, command)
+	return err
+}
+
+// sendControlBarrierWait is sendControlBarrier with an execution-completion
+// signal for lifecycle queues that must order work across separate control
+// pipes. The channel closes on response, write failure, or the bounded timeout.
+func (m *ControlManager) sendControlBarrierWait(session, command string) (<-chan struct{}, error) {
 	if session == "" || command == "" {
-		return fmt.Errorf("tmux control: empty session or barrier command")
+		return nil, fmt.Errorf("tmux control: empty session or barrier command")
 	}
 	client, release, err := m.retainControlLifetime(session)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	done := make(chan struct{})
 	var once sync.Once
-	finish := func() { once.Do(release) }
+	finish := func() {
+		once.Do(func() {
+			release()
+			close(done)
+		})
+	}
 	// A dead or non-responsive transport must not retain a client forever. The
 	// ordinary request path uses the same four-second response bound.
 	timer := time.AfterFunc(4*time.Second, finish)
@@ -428,9 +442,9 @@ func (m *ControlManager) sendControlBarrier(session, command string) error {
 	if err := client.channel.Send(command, callback); err != nil {
 		timer.Stop()
 		finish()
-		return err
+		return done, err
 	}
-	return nil
+	return done, nil
 }
 
 // retainControlLifetime prevents teardown after the final subscription while

@@ -191,6 +191,8 @@ type Model struct {
 	remoteInteractive         bool
 	remoteInputGeneration     uint64
 	remoteBackend             *remoteTerminalBackend
+	remoteLifecycleMu         sync.Mutex
+	remoteLifecycleTail       <-chan struct{}
 	subscription              terminalControlSubscription
 	mailbox                   *terminalMailbox
 	mailboxDone               chan struct{}
