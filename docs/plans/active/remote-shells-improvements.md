@@ -1,6 +1,6 @@
 # Remote shells: freshness, deletion, visibility, and configuration
 
-Status: **active, planned**, 2026-08-30
+Status: **all six workstreams built and reviewed; the two-machine exit gate is unrun**, 2026-08-30
 
 Source: note `nt-b4db4e` — seven observations from the first real use of remote shells after [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) Phase C landed.
 
@@ -153,3 +153,21 @@ From a local Sidecar against a real second machine, with both default tmux serve
 7. The docs page describes what the build actually does, including every refusal.
 
 Plus the standing constraint from the parent plan: **no change to local behavior.** Flag off, nothing new runs; flag on with no host registered, no ssh child is ever spawned.
+
+## Result
+
+All six workstreams landed: `6de0f98e` (E), `05b5f452` (A), `c57eab69` (C+D), `585cda92` (B), `366fde34` (F), with review fixes in `6e18817a`. Full repository build and tests green.
+
+**Workstream C found no bug.** The Activity board already carried remote agent-backed shells; the shell in the report was a plain one, absent for exactly the reason a local plain shell is. What that investigation did find was a real asymmetry: the remote create path never recorded `agentType`, so a remote agent shell's `Provider` came only from live screen identification with no manifest backstop, and it vanished from the board whenever identification missed a frame. `create shell --agent` closes it.
+
+**Two defects were found in the fix for item 1, not in the original code.** An independent review caught that a host where Sidecar had never been opened never started the manifest watch at all and could not recover without a reconnect — the first-use case, and the one machine where the fix most needed to work. It also caught that remote delete was the only mutation whose reply ignored the staleness fence it carried. Both are closed in `6e18817a`, each with a test that fails when the mechanism is reverted.
+
+**One regression was introduced and caught before shipping.** `create shell --agent` was sent unconditionally, which breaks remote agent creation against a host running an older Sidecar. `hostproto`'s hello now advertises verb capabilities additively; an absent field reads as "cannot", which is the correct answer for an old host.
+
+### What is proven, and what is not
+
+Proven by test and by negative control: the watch drives re-inventory; the watch starts and its note is withdrawn when a cold host warms up; the reap refuses an empty listing, a failed listing, a replaced server between plan and confirm, and a session resurrected between confirm and write; a remote pane whose session dies leaves interactive mode; stale delete replies are dropped; the result discriminator rejects a login profile's JSON log line; list and board carry the same host glyph and hue.
+
+**Not proven: the exit gate itself.** Every numbered item in it needs a real second machine, and none of it has been run. `ssh localhost` is refused here and there is no second host available, so the entire seven-item gate — including whether a created shell actually appears within the coalesce window and whether the reap behaves against a live remote state tree — is outstanding. The reap is the change that can destroy state on a machine nobody is looking at; the review's judgement is that it is safe to run, and its guards are the pre-existing ones moved verbatim rather than reimplemented, but "reviewed as safe" is not "observed to be safe."
+
+Also unrun: multi-host and host-churn paths, concurrent mutations, a link dropped mid-mutation, and any timeout path.
