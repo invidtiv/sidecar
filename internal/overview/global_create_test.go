@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/modal"
 	"github.com/marcus/sidecar/internal/mouse"
@@ -30,6 +31,15 @@ func createActionPoint(m *Model, kind workspacelist.RegionKind) (int, int, strin
 		}
 	}
 	return 0, 0, "", false
+}
+
+func stubGlobalAgentShellReady(t *testing.T) {
+	t.Helper()
+	original := waitGlobalShellReady
+	t.Cleanup(func() { waitGlobalShellReady = original })
+	waitGlobalShellReady = func(_ context.Context, target agentcontrol.Target, _ time.Duration) (agentcontrol.Snapshot, error) {
+		return agentcontrol.Snapshot{Target: target}, nil
+	}
 }
 
 func TestGlobalWorktreePlanUsesOnlyTargetProjectConfig(t *testing.T) {
@@ -150,26 +160,37 @@ func TestGlobalWorktreePartialMutationAndJournalFailuresStayRecoverable(t *testi
 }
 
 func TestGlobalWorktreeLaunchesConfiguredAgentBeforeRefresh(t *testing.T) {
+	stubGlobalAgentShellReady(t)
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{AgentStart: map[string]string{"codex": "codex-custom"}}}}
 	m.OpenCreateWorktree("")
 	plan := &workspaceops.WorktreePlan{MainWorktree: t.TempDir(), Path: t.TempDir(), Branch: "created", AgentType: "codex"}
 	record := &workspaceops.WorktreeRecord{Path: plan.Path, Name: "Created", Branch: plan.Branch, HEADOID: "abc"}
-	originalRemove, originalLaunch := removeGlobalJournal, launchGlobalSession
-	defer func() { removeGlobalJournal, launchGlobalSession = originalRemove, originalLaunch }()
+	originalRemove, originalLaunch, originalStart := removeGlobalJournal, launchGlobalSession, startGlobalAgent
+	defer func() {
+		removeGlobalJournal, launchGlobalSession, startGlobalAgent = originalRemove, originalLaunch, originalStart
+	}()
 	removeGlobalJournal = func(*workspaceops.WorktreePlan) error { return nil }
 	var spec workspaceops.AgentLaunchSpec
 	launchGlobalSession = func(_ context.Context, got workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
 		spec = got
 		return workspaceops.AgentLaunchResult{SessionName: got.SessionName, PaneID: "%1"}, nil
 	}
+	var request agentcontrol.StartRequest
+	startGlobalAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
 	launchCmd := m.update(globalWorktreeCreatedMsg{Project: m.projects[0], Plan: plan, Record: record})
 	if launchCmd == nil {
 		t.Fatal("successful setup refreshed before launching")
 	}
 	launchMsg := launchCmd().(globalWorkspaceLaunchedMsg)
-	if !spec.StartAgent || !strings.Contains(spec.AgentCommand, "codex-custom") || spec.WorkDir != plan.Path {
-		t.Fatalf("launch spec = %+v", spec)
+	if spec.StartAgent || spec.AgentCommand != "" || spec.WorkDir != plan.Path {
+		t.Fatalf("workspace launch spec = %+v", spec)
+	}
+	if request.Kind != "codex" || request.Target.Project != projectKey(m.projects[0]) || !strings.Contains(strings.Join(request.Argv, " "), "codex-custom") {
+		t.Fatalf("agentcontrol request = %+v", request)
 	}
 	if refresh := m.update(launchMsg); refresh == nil || m.CreateOpen() {
 		t.Fatalf("launch success did not close and refresh: refresh=%v open=%v", refresh, m.CreateOpen())
@@ -308,25 +329,76 @@ func TestGlobalCreateResolvesNamesAndConfigInsideTargetProject(t *testing.T) {
 }
 
 func TestGlobalShellCreateLaunchesConfiguredAgent(t *testing.T) {
+	stubGlobalAgentShellReady(t)
 	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "codex", AgentStart: map[string]string{"codex": "codex-custom"},
 	}}}
-	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
-	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	originalCreate, originalStart := createManagedShell, startGlobalAgent
+	defer func() { createManagedShell, startGlobalAgent = originalCreate, originalStart }()
 	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
 		return workspaceops.ShellResult{SessionName: spec.SessionName}, nil
 	}
-	var session, command string
-	startGlobalShellAgent = func(_ context.Context, gotSession, gotCommand string) error {
-		session, command = gotSession, gotCommand
-		return nil
+	var request agentcontrol.StartRequest
+	startGlobalAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
 	}
 	m.OpenCreateShell("sidecar")
 	msg := m.submitCreateShell()().(globalShellCreatedMsg)
-	if msg.Err != nil || session == "" || !strings.Contains(command, "codex-custom") {
-		t.Fatalf("configured agent launch: session=%q command=%q err=%v", session, command, msg.Err)
+	if msg.Err != nil || request.Target.Session == "" || !strings.Contains(strings.Join(request.Argv, " "), "codex-custom") {
+		t.Fatalf("configured agent launch: request=%+v err=%v", request, msg.Err)
+	}
+}
+
+func TestGlobalCatalogLaunchesUseStructuredAgentControlAcrossShellAndWorktree(t *testing.T) {
+	stubGlobalAgentShellReady(t)
+	_ = state.SetLastCreateAgent("")
+	m := catalogModel(t)
+	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{DefaultAgentType: "codex"}}}
+	project := m.projects[0]
+
+	originalCreate, originalLaunch, originalStart := createManagedShell, launchGlobalSession, startGlobalAgent
+	defer func() {
+		createManagedShell, launchGlobalSession, startGlobalAgent = originalCreate, originalLaunch, originalStart
+	}()
+	createManagedShell = func(spec workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
+		return workspaceops.ShellResult{SessionName: spec.SessionName, PaneID: "%shell"}, nil
+	}
+	launchGlobalSession = func(_ context.Context, spec workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		if spec.StartAgent || spec.AgentCommand != "" {
+			t.Fatalf("workspaceops received agent launch fields: %+v", spec)
+		}
+		return workspaceops.AgentLaunchResult{SessionName: spec.SessionName, PaneID: "%worktree", Reconnected: true}, nil
+	}
+	var requests []agentcontrol.StartRequest
+	startGlobalAgent = func(_ context.Context, request agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		requests = append(requests, request)
+		return agentcontrol.Agent{Target: request.Target}, nil
+	}
+
+	m.OpenCreateShell(projectKey(project))
+	shellMsg := m.submitCreateShell()().(globalShellCreatedMsg)
+	if shellMsg.Err != nil {
+		t.Fatalf("shell launch failed: %v", shellMsg.Err)
+	}
+	plan := &workspaceops.WorktreePlan{MainWorktree: project.Path, Path: t.TempDir(), Branch: "feature", AgentType: "codex"}
+	record := &workspaceops.WorktreeRecord{Path: plan.Path, Name: "Feature", Branch: plan.Branch}
+	worktreeMsg := m.launchCreatedWorktree(project, plan, record)().(globalWorkspaceLaunchedMsg)
+	if worktreeMsg.Err != nil {
+		t.Fatalf("worktree launch failed: %v", worktreeMsg.Err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("agentcontrol requests = %d, want shell and worktree: %+v", len(requests), requests)
+	}
+	for i, request := range requests {
+		if request.Kind != "codex" || len(request.Argv) != 1 || request.Argv[0] != "codex" || request.Target.Project != projectKey(project) || request.Timeout != globalAgentStartTimeout {
+			t.Fatalf("request[%d] = %+v", i, request)
+		}
+	}
+	if !worktreeMsg.Result.Reconnected {
+		t.Fatal("reconnected shell did not retain its result after verified start")
 	}
 }
 
@@ -649,6 +721,7 @@ func TestCreateModalKindSwitchKeepsChosenAgent(t *testing.T) {
 }
 
 func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
+	stubGlobalAgentShellReady(t)
 	_ = state.SetLastCreateAgent("")
 	m := catalogModel(t)
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
@@ -656,19 +729,19 @@ func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 		Agents:           []string{"claude", "grok"},
 		AgentStart:       map[string]string{"grok": "grok-custom"},
 	}}}
-	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
-	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	originalCreate, originalStart := createManagedShell, startGlobalAgent
+	defer func() { createManagedShell, startGlobalAgent = originalCreate, originalStart }()
 	var spec workspaceops.ManagedShellSpec
 	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
 		spec = got
 		return workspaceops.ShellResult{SessionName: got.SessionName}, nil
 	}
-	var session, command string
+	var request agentcontrol.StartRequest
 	started := 0
-	startGlobalShellAgent = func(_ context.Context, gotSession, gotCommand string) error {
+	startGlobalAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
 		started++
-		session, command = gotSession, gotCommand
-		return nil
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
 	}
 
 	m.OpenCreateShell("sidecar")
@@ -682,8 +755,8 @@ func TestCreateModalAgentComboSelectedAgentIsUsed(t *testing.T) {
 	}
 
 	msg := m.submitCreateShell()().(globalShellCreatedMsg)
-	if msg.Err != nil || spec.AgentType != "grok" || session == "" || !strings.Contains(command, "grok-custom") {
-		t.Fatalf("chosen agent not used: spec=%+v session=%q command=%q err=%v", spec, session, command, msg.Err)
+	if msg.Err != nil || spec.AgentType != "grok" || request.Target.Session == "" || !strings.Contains(strings.Join(request.Argv, " "), "grok-custom") {
+		t.Fatalf("chosen agent not used: spec=%+v request=%+v err=%v", spec, request, msg.Err)
 	}
 	if started != 1 {
 		t.Fatalf("start count = %d", started)
@@ -712,17 +785,17 @@ func TestCreateModalNoneDoesNotStartAgent(t *testing.T) {
 	m.config = &config.Config{Plugins: config.PluginsConfig{Workspace: config.WorkspacePluginConfig{
 		DefaultAgentType: "claude", AgentStart: map[string]string{"claude": "claude-custom"},
 	}}}
-	originalCreate, originalStart := createManagedShell, startGlobalShellAgent
-	defer func() { createManagedShell, startGlobalShellAgent = originalCreate, originalStart }()
+	originalCreate, originalStart := createManagedShell, startGlobalAgent
+	defer func() { createManagedShell, startGlobalAgent = originalCreate, originalStart }()
 	var spec workspaceops.ManagedShellSpec
 	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
 		spec = got
 		return workspaceops.ShellResult{SessionName: got.SessionName}, nil
 	}
 	started := 0
-	startGlobalShellAgent = func(context.Context, string, string) error {
+	startGlobalAgent = func(_ context.Context, _ agentcontrol.StartRequest) (agentcontrol.Agent, error) {
 		started++
-		return nil
+		return agentcontrol.Agent{}, nil
 	}
 	m.OpenCreateShell("sidecar")
 	selectCreateAgent(t, m, "")
@@ -1115,6 +1188,7 @@ func TestPlanCreateWorktreePassesFormBaseNotHEAD(t *testing.T) {
 }
 
 func TestSkipPermsReachesShellAndWorktree(t *testing.T) {
+	stubGlobalAgentShellReady(t)
 	_ = state.SetLastCreateAgent("")
 	_ = state.SetAgentAutoApprove("claude", false)
 	m := catalogModel(t)
@@ -1122,9 +1196,9 @@ func TestSkipPermsReachesShellAndWorktree(t *testing.T) {
 		DefaultAgentType: "claude",
 		AgentStart:       map[string]string{"claude": "claude-custom"},
 	}}}
-	originalCreate, originalStart, originalAgent := createManagedShell, startGlobalShellAgent, resolveGlobalAgentCmd
+	originalCreate, originalStart, originalAgent := createManagedShell, startGlobalAgent, resolveGlobalAgentCmd
 	defer func() {
-		createManagedShell, startGlobalShellAgent, resolveGlobalAgentCmd = originalCreate, originalStart, originalAgent
+		createManagedShell, startGlobalAgent, resolveGlobalAgentCmd = originalCreate, originalStart, originalAgent
 	}()
 	var spec workspaceops.ManagedShellSpec
 	createManagedShell = func(got workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
@@ -1136,7 +1210,9 @@ func TestSkipPermsReachesShellAndWorktree(t *testing.T) {
 		agentSkip = skip
 		return originalAgent(path, agent, configured, skip)
 	}
-	startGlobalShellAgent = func(context.Context, string, string) error { return nil }
+	startGlobalAgent = func(_ context.Context, req agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		return agentcontrol.Agent{Target: req.Target}, nil
+	}
 
 	m.OpenCreateShell("sidecar")
 	md := createFormModal(t, m)

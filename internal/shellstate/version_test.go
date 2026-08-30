@@ -86,6 +86,27 @@ func TestReadsAllowUnknownSchemaVersion(t *testing.T) {
 	}
 }
 
+func TestM0VersionTwoManifestCompatibilityFixture(t *testing.T) {
+	defs, err := ListAtPath("testdata/v2-shells.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("definitions = %+v", defs)
+	}
+	got := defs[0]
+	if got.TmuxName != "sidecar-sh-sidecar-4" || got.DisplayName != "reviewer" || got.AgentType != "codex" || !got.SkipPerms || got.WorkDir != "/repo" {
+		t.Fatalf("v2 fixture drifted: %+v", got)
+	}
+	manifest, err := readManifest("testdata/v2-shells.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Version != 2 || len(manifest.Tombstones) != 0 {
+		t.Fatalf("manifest = %+v", manifest)
+	}
+}
+
 func TestFirstWriteUpgradesVersionOneInPlace(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "shells.json")
 	created := time.Now().UTC().Truncate(time.Second)

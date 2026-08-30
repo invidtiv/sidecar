@@ -147,6 +147,15 @@ var (
 		Default:     false,
 		Description: "Use Sidecar sessions on other machines over SSH",
 	}
+
+	// AgentControl gates provider-aware agent list/get/start while the start,
+	// prompt, and restore journey is being completed. Help and command metadata
+	// remain visible when disabled so an agent can discover the capability.
+	AgentControl = Feature{
+		Name:        "agent_control",
+		Default:     false,
+		Description: "Control Sidecar-managed agents through provider-aware commands",
+	}
 )
 
 // allFeatures is the registry of all known features.
@@ -165,6 +174,7 @@ var allFeatures = []Feature{
 	CrossProjectOverview,
 	TerminalResourceProviders,
 	SidecarRemoteHosts,
+	AgentControl,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

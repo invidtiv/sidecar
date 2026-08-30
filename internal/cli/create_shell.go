@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/agentcatalog"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -19,6 +21,8 @@ func runCreateShell(env Env, args []string) int {
 	nameFlag := ""
 	runCmd := ""
 	typeCmd := ""
+	agentKind := ""
+	skipPerms := false
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -60,6 +64,16 @@ func runCreateShell(env Env, args []string) int {
 			}
 			typeCmd = val
 			i = next
+		case arg == "--agent" || strings.HasPrefix(arg, "--agent="):
+			val, next, ok := takeFlagArg(arg, args, i, "--agent")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--agent requires a provider kind\n\n%s", help)
+				return 2
+			}
+			agentKind = val
+			i = next
+		case arg == "--skip-permissions":
+			skipPerms = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -76,6 +90,22 @@ func runCreateShell(env Env, args []string) int {
 	if runCmd != "" && typeCmd != "" {
 		cliErrf(env.Stderr, "--run and --type are mutually exclusive\n\n%s", help)
 		return 2
+	}
+	if agentKind != "" && (runCmd != "" || typeCmd != "") {
+		cliErrf(env.Stderr, "--agent cannot be combined with --run or --type\n\n%s", help)
+		return 2
+	}
+	if skipPerms && agentKind == "" {
+		cliErrf(env.Stderr, "--skip-permissions requires --agent\n\n%s", help)
+		return 2
+	}
+	if agentKind != "" {
+		if _, ok := agentcatalog.Find(agentKind); !ok {
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: fmt.Sprintf("unknown agent kind %q", agentKind)})
+		}
+		if code := requireAgentControl(env, flags.jsonOutput); code >= 0 {
+			return code
+		}
 	}
 
 	ctx := env.Ctx
@@ -112,7 +142,7 @@ func runCreateShell(env Env, args []string) int {
 		if !flags.splitSet {
 			flags.splitMode = "auto"
 		}
-		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
+		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms)
 		// Beside-the-session was only the default, not something the caller
 		// asked for: a DECLINE (feature off, no room, no live instance) falls
 		// back to a workspace shell so the command still lands.
@@ -131,10 +161,10 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "no beside-the-session placement available; created a workspace shell instead\n")
 	}
 
-	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd)
+	return runCreateShellWorkspace(env, dest, flags, nameFlag, runCmd, typeCmd, agentKind, skipPerms)
 }
 
-func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd string) int {
+func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms bool) int {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -166,6 +196,8 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 			DisplayName: display,
 		},
 		ProjectRoot: proj.Path,
+		AgentType:   agentKind,
+		SkipPerms:   skipPerms,
 	}
 	if _, err := workspaceops.CreateManagedShell(spec); err != nil {
 		cliErrln(env.Stderr, err)
@@ -177,6 +209,8 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		seedErr = workspaceops.StartAgentInShell(ctx, session, runCmd)
 	} else if typeCmd != "" {
 		seedErr = workspaceops.TypeInShell(ctx, session, typeCmd)
+	} else if agentKind != "" {
+		_, seedErr = startCreatedAgent(ctx, proj, session, display, proj.Path, agentKind, skipPerms)
 	}
 
 	focus := true
@@ -232,7 +266,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 	return 0
 }
 
-func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd string) int {
+func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags, nameFlag, runCmd, typeCmd, agentKind string, skipPerms bool) int {
 	display := strings.TrimSpace(nameFlag)
 	if display != "" {
 		normalized, err := shellstate.NormalizeName(display)
@@ -294,6 +328,9 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 	}
 
 	if flags.wait <= 0 {
+		if agentKind != "" {
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: "create shell --agent requires a positive placement acknowledgement; --wait 0 is not allowed"})
+		}
 		emit()
 		return 0
 	}
@@ -306,6 +343,19 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 	}
 
 	if createAcksOpened(acks) {
+		if agentKind != "" {
+			proj, err := registeredProjectForCreate(env.StateDir, dest)
+			if err != nil {
+				return emitAgentError(env, flags.jsonOutput, err)
+			}
+			ctx := env.Ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			if _, err := startCreatedAgent(ctx, proj, result.Shell.Session, display, proj.Path, agentKind, skipPerms); err != nil {
+				return emitAgentError(env, flags.jsonOutput, err)
+			}
+		}
 		emit()
 		return 0
 	}

@@ -13,25 +13,18 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/marcus/sidecar/internal/agentcatalog"
 	"github.com/marcus/sidecar/internal/tty"
 )
-
-var agentDefaults = map[string]string{
-	"claude": "claude", "codex": "codex", "copilot": "copilot", "aider": "aider", "antigravity": "agy",
-	"cursor": "cursor-agent", "opencode": "opencode", "pi": "pi", "amp": "amp", "grok": "grok",
-}
-
-var agentSkipFlags = map[string]string{
-	"claude": "--dangerously-skip-permissions", "codex": "--dangerously-bypass-approvals-and-sandbox", "aider": "--yes",
-	"antigravity": "--dangerously-skip-permissions", "cursor": "-f", "amp": "--dangerously-allow-all", "grok": "--always-approve",
-	"opencode": "--auto",
-}
 
 // AgentSkipFlag returns the CLI flag that opts this agent into auto-approve,
 // or "" if the agent has no such flag. Creation forms use this to decide
 // whether to show the auto-approve checkbox; do not copy this map elsewhere.
 func AgentSkipFlag(agentType string) string {
-	return agentSkipFlags[agentType]
+	if family, ok := agentcatalog.FindLaunch(agentType); ok {
+		return family.SkipPermissionsArg
+	}
+	return ""
 }
 
 var openCodeRunPrefix = regexp.MustCompile(`^(\S+)\s+run(\s+.*)?$`)
@@ -44,6 +37,33 @@ func ResolveAgentCommand(worktreePath, agentType string, configured map[string]s
 		return finishAgentCommand(command, agentType, skipPerms)
 	}
 	return ResolveAgentCommandFromConfig(agentType, configured, skipPerms)
+}
+
+// ResolveAgentLaunchArgv preserves the difference between catalog launches
+// and legacy user-authored shell commands. Catalog launches remain structured
+// argv. A .sidecar-agent-start or plugins.workspace.agentStart override stays
+// opaque and is evaluated once through sh -lc; it must never be persisted as
+// replayable structured provider metadata.
+func ResolveAgentLaunchArgv(worktreePath, agentType string, configured map[string]string, skipPerms bool) (argv []string, opaque bool, err error) {
+	family, ok := agentcatalog.FindLaunch(strings.TrimSpace(agentType))
+	if !ok {
+		return nil, false, fmt.Errorf("unknown agent kind %q", agentType)
+	}
+	command := readAgentStart(worktreePath)
+	if command == "" {
+		for _, key := range []string{agentType, "*", "default"} {
+			if command = sanitizeAgentCommand(configured[key]); command != "" {
+				break
+			}
+		}
+	}
+	if command == "" {
+		argv, err := family.LaunchArgv(nil, skipPerms)
+		return argv, false, err
+	}
+	command = finishAgentCommand(command, agentType, skipPerms)
+	argv, err = agentcatalog.OpaqueLaunchArgv(command)
+	return argv, true, err
 }
 
 // ResolveAgentCommandFromConfig resolves an agent's launch command from
@@ -67,10 +87,11 @@ func ResolveAgentCommandFromConfig(agentType string, configured map[string]strin
 		}
 	}
 	if command == "" {
-		command = agentDefaults[agentType]
-	}
-	if command == "" {
-		command = agentDefaults["claude"]
+		family, ok := agentcatalog.FindLaunch(agentType)
+		if !ok {
+			return ""
+		}
+		command = family.Command
 	}
 	return finishAgentCommand(command, agentType, skipPerms)
 }
@@ -83,8 +104,8 @@ func finishAgentCommand(command, agentType string, skipPerms bool) string {
 			command = strings.TrimSpace(match[1] + match[2])
 		}
 	}
-	if skipPerms && agentSkipFlags[agentType] != "" {
-		command += " " + agentSkipFlags[agentType]
+	if skipPerms && AgentSkipFlag(agentType) != "" {
+		command += " " + AgentSkipFlag(agentType)
 	}
 	return command
 }

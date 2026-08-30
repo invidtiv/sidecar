@@ -110,3 +110,65 @@ func TestForegroundArgv0sReadsAFixtureProcTree(t *testing.T) {
 		t.Errorf("argv0s = %v, want the group leader first", argv0s)
 	}
 }
+
+func TestForegroundShellReadyLinuxFixtureMatrix(t *testing.T) {
+	original := linuxProcRoot
+	t.Cleanup(func() { linuxProcRoot = original })
+	type fixtureProcess struct {
+		pid         int
+		comm        string
+		pgrp, tpgid int
+		argv0       string
+	}
+
+	tests := []struct {
+		name           string
+		panePID        int
+		currentCommand string
+		processes      []fixtureProcess
+		want           bool
+	}{
+		{
+			name: "sole foreground interactive shell", panePID: 100, currentCommand: "bash", want: true,
+			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}},
+		},
+		{
+			name: "foreground command group replaces shell", panePID: 100, currentCommand: "bash",
+			processes: []fixtureProcess{{100, "bash", 100, 200, "bash"}, {200, "vim", 200, 200, "vim"}},
+		},
+		{
+			name: "helper shares foreground shell group", panePID: 100, currentCommand: "bash",
+			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}, {101, "helper", 100, 100, "helper"}},
+		},
+		{
+			name: "unknown foreground executable", panePID: 100, currentCommand: "bash",
+			processes: []fixtureProcess{{100, "mystery", 100, 100, "mystery"}},
+		},
+		{
+			name: "tmux command disagrees with process", panePID: 100, currentCommand: "vim",
+			processes: []fixtureProcess{{100, "bash", 100, 100, "bash"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			linuxProcRoot = root
+			for _, process := range tt.processes {
+				dir := filepath.Join(root, strconv.Itoa(process.pid))
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "stat"), []byte(statLine(process.pid, process.comm, process.pgrp, process.tpgid)), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "cmdline"), []byte(process.argv0+"\x00"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := ForegroundShellReady(tt.panePID, tt.currentCommand); got != tt.want {
+				t.Fatalf("ForegroundShellReady(%d, %q) = %v, want %v", tt.panePID, tt.currentCommand, got, tt.want)
+			}
+		})
+	}
+}

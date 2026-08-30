@@ -43,6 +43,7 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	// dispatch fell through to TUI startup and died with "Sidecar requires an
 	// interactive terminal". Strip them here and apply the one that changes
 	// where a command reads and writes.
+	featureOverrides := leadingFeatureOverrides(args)
 	args, configPath, ok := stripGlobalFlags(args)
 	if !ok || len(args) == 0 {
 		return false, 0
@@ -57,6 +58,7 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	}
 
 	env := defaultEnv(stdout, stderr)
+	env.FeatureOverrides = featureOverrides
 
 	if args[0] == "-h" || args[0] == "--help" {
 		return true, runHelpCommand(env, args[1:])
@@ -100,6 +102,45 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 	}
 
 	return true, 0
+}
+
+func leadingFeatureOverrides(args []string) map[string]bool {
+	result := map[string]bool{}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !strings.HasPrefix(arg, "-") {
+			break
+		}
+		name, value, hasValue := arg, "", false
+		if at := strings.IndexByte(arg, '='); at > 0 {
+			name, value, hasValue = arg[:at], arg[at+1:], true
+		}
+		canonical := "-" + strings.TrimLeft(name, "-")
+		switch canonical {
+		case "-enable-feature", "-disable-feature":
+			if !hasValue {
+				if i+1 >= len(args) {
+					return result
+				}
+				i++
+				value = args[i]
+			}
+			for _, feature := range strings.Split(value, ",") {
+				feature = strings.TrimSpace(feature)
+				if feature != "" {
+					result[feature] = canonical == "-enable-feature"
+				}
+			}
+		case "-config", "-project":
+			if !hasValue {
+				i++
+			}
+		case "-debug":
+		default:
+			return result
+		}
+	}
+	return result
 }
 
 // mutatesState resolves the deepest subcommand these arguments name and reports

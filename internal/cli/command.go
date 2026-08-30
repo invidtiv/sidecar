@@ -14,6 +14,7 @@ type Env struct {
 	StateDir             string
 	Ctx                  context.Context
 	NotificationDelivery notifydelivery.Coordinator
+	FeatureOverrides     map[string]bool
 }
 
 // Flag defines a command line flag.

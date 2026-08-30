@@ -2,6 +2,109 @@
 
 Sidecar provides non-interactive commands for scripting and agent workflows.
 
+## `sidecar agent`
+
+Inspect and start agents in Sidecar-managed shells
+
+Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.
+
+```
+Usage: sidecar agent <command>
+```
+
+### `sidecar agent get`
+
+Get one managed agent
+
+TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.
+
+```
+Usage: sidecar agent get [TARGET] [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent get reviewer --json
+```
+
+### `sidecar agent list`
+
+List live managed agents
+
+```
+Usage: sidecar agent list [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent list --json
+```
+
+### `sidecar agent start`
+
+Start a provider in an idle managed shell and wait for readiness
+
+Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.
+
+```
+Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+- `--kind KIND`: Catalog provider kind (required)
+- `--timeout DURATION`: Bound the readiness wait (default 30s)
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent start reviewer --kind codex --timeout 30s
+```
+
 ## `sidecar agents`
 
 List what an agent can do from Sidecar
@@ -57,6 +160,8 @@ Usage: sidecar create shell [options]
 **Options:**
 
 - `--name NAME`: Display name (default: the next Shell N)
+- `--agent KIND`: Start a catalog provider and return only when ready
+- `--skip-permissions`: Pass the selected provider's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new shell
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell
@@ -79,6 +184,7 @@ Usage: sidecar create shell [options]
 **Examples:**
 
 ```bash
+sidecar create shell --name reviewer --agent codex --json
 sidecar create shell --name "dev server" --run "python3 -m http.server"
 sidecar create shell --split right --run "python3 -m http.server 8765"
 sidecar create shell --json --wait 0

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/state"
@@ -67,10 +68,10 @@ func (s *remoteRunnerStub) argv(t *testing.T, index int) []string {
 func localSeamGuard(t *testing.T) {
 	t.Helper()
 	create, resolve, execute, branches := createManagedShell, resolveGlobalWorktree, executeGlobalWorktree, listCreateBranches
-	agent := startGlobalShellAgent
+	agent := startGlobalAgent
 	t.Cleanup(func() {
 		createManagedShell, resolveGlobalWorktree, executeGlobalWorktree, listCreateBranches = create, resolve, execute, branches
-		startGlobalShellAgent = agent
+		startGlobalAgent = agent
 	})
 	createManagedShell = func(workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
 		t.Error("a remote action ran the LOCAL createManagedShell")
@@ -88,9 +89,9 @@ func localSeamGuard(t *testing.T) {
 		t.Error("a remote action listed branches from a LOCAL git repository")
 		return nil, nil
 	}
-	startGlobalShellAgent = func(context.Context, string, string) error {
+	startGlobalAgent = func(context.Context, agentcontrol.StartRequest) (agentcontrol.Agent, error) {
 		t.Error("a remote action sent keys to a LOCAL tmux session")
-		return nil
+		return agentcontrol.Agent{}, nil
 	}
 }
 
