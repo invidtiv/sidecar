@@ -22,6 +22,7 @@ func runCreateWorktree(env Env, args []string) int {
 	runCmd := ""
 	skipPerms := false
 	noLaunch := false
+	planOnly := false
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -67,6 +68,8 @@ func runCreateWorktree(env Env, args []string) int {
 			skipPerms = true
 		case arg == "--no-launch":
 			noLaunch = true
+		case arg == "--plan":
+			planOnly = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -85,6 +88,14 @@ func runCreateWorktree(env Env, args []string) int {
 	}
 	if noLaunch && (agent != "" || runCmd != "") {
 		cliErrf(env.Stderr, "--no-launch cannot be combined with --agent or --run\n\n%s", help)
+		return 2
+	}
+	// --plan resolves and prints; it never reaches a session, so the flags that
+	// only describe one are refused rather than silently ignored. --agent and
+	// --skip-permissions are kept: they are plan fields the confirming caller
+	// needs to see back.
+	if planOnly && (noLaunch || runCmd != "") {
+		cliErrf(env.Stderr, "--plan cannot be combined with --run or --no-launch\n\n%s", help)
 		return 2
 	}
 
@@ -126,9 +137,17 @@ func runCreateWorktree(env Env, args []string) int {
 	} else {
 		plan.RepoKey = workspaceops.StablePathKey(proj.Path)
 	}
-	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	plan.AgentType = agent
 	plan.SkipPerms = skipPerms
+
+	// Everything above this line reads: ResolveWorktreePlan validates names,
+	// source identity, destination containment, and configured setup without
+	// touching the repository. --plan stops here, so nothing is created, no
+	// journal is written, and no session is launched.
+	if planOnly {
+		return emitWorktreePlan(env, flags.jsonOutput, plan)
+	}
+	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 
 	record, err := workspaceops.ExecuteWorktree(ctx, plan.RepoKey, plan)
 	if record == nil {
@@ -235,6 +254,50 @@ func runCreateWorktree(env Env, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// emitWorktreePlan writes the resolved plan and returns. The plan struct is
+// the contract a confirm modal renders: branch, path, source ref and OID,
+// remote policy, and whether a setup hook will run.
+func emitWorktreePlan(env Env, jsonOutput bool, plan *workspaceops.WorktreePlan) int {
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(plan); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	lines := []string{
+		fmt.Sprintf("Branch:  %s", plan.Branch),
+		fmt.Sprintf("Path:    %s", plan.Path),
+		fmt.Sprintf("Source:  %s (%s)", plan.SourceRef, shortPlanOID(plan.SourceOID)),
+		fmt.Sprintf("Remote:  %s", plan.RemotePolicy),
+	}
+	if plan.RunHook {
+		hook := plan.HookPath
+		if plan.HookRequired {
+			hook += " (required)"
+		}
+		lines = append(lines, "Hook:    "+hook)
+	} else {
+		lines = append(lines, "Hook:    none")
+	}
+	if len(plan.EnvFiles) > 0 {
+		lines = append(lines, "Env:     "+strings.Join(plan.EnvFiles, ", "))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(env.Stdout, line); err != nil {
+			return 1
+		}
+	}
+	return 0
+}
+
+func shortPlanOID(oid string) string {
+	if len(oid) > 8 {
+		return oid[:8]
+	}
+	return oid
 }
 
 func loadCreateConfig() *config.Config {

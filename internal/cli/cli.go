@@ -186,7 +186,35 @@ func runShellName(env Env, args []string) int {
 	return 0
 }
 
+// runShellRename picks between the two forms of the verb. Without --target the
+// call is handed to runShellRenameCurrent unchanged: that path resolves "which
+// shell am I" from the local tmux environment and is what agents run in every
+// session, so nothing about it — parsing, messages, exit codes — moves.
 func runShellRename(env Env, args []string) int {
+	if namesShellRenameFlag(args, "--target") {
+		return runShellRenameTarget(env, args)
+	}
+	// --project and --shell scope a --target; alone they have nothing to scope,
+	// and the current-shell path would only report them as unknown options.
+	for _, flag := range []string{"--project", "--shell"} {
+		if namesShellRenameFlag(args, flag) {
+			cliErrf(env.Stderr, "%s only applies with --target\n\n%s", flag, RenderHelp(RootCommand().FindSubcommand("shell").FindSubcommand("rename")))
+			return 2
+		}
+	}
+	return runShellRenameCurrent(env, args)
+}
+
+func namesShellRenameFlag(args []string, name string) bool {
+	for _, arg := range args {
+		if arg == name || strings.HasPrefix(arg, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+func runShellRenameCurrent(env Env, args []string) int {
 	renameCmd := RootCommand().FindSubcommand("shell").FindSubcommand("rename")
 	renameHelp := RenderHelp(renameCmd)
 	jsonOutput := false

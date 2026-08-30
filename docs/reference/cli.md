@@ -94,6 +94,15 @@ plan, add, pending-creation journal, identity, and configured hook/env-file rule
 --agent launches the worktree session (sidecar-ws-…). --no-launch skips that
 launch after the worktree and setup still complete.
 
+--plan resolves the same plan and prints it without changing anything: no
+worktree is added, no directory is created, no journal is written. It answers
+the questions a confirmation has to ask — branch, path, source ref and OID,
+remote policy, and whether a setup hook will run — while every validation
+failure (an existing branch, an occupied path, an unsafe hook) still surfaces
+as exit 2. --run and --no-launch describe a launch --plan never performs, so
+they are refused with it; --agent and --skip-permissions are kept, since they
+come back as plan fields.
+
 ```
 Usage: sidecar create worktree [options] <name>
 ```
@@ -101,6 +110,7 @@ Usage: sidecar create worktree [options] <name>
 **Options:**
 
 - `--base REF`: Base ref (default HEAD)
+- `--plan`: Resolve and print the plan without creating anything
 - `--agent TYPE`: Launch this agent in the new worktree session
 - `--skip-permissions`: Pass the agent's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new worktree session
@@ -113,7 +123,7 @@ Usage: sidecar create worktree [options] <name>
 
 **Exit codes:**
 
-- `0`: created (missing ack is non-fatal)
+- `0`: created (missing ack is non-fatal), or plan resolved with --plan
 - `1`: git, setup, or tmux failure
 - `2`: usage or validation error
 
@@ -122,6 +132,8 @@ Usage: sidecar create worktree [options] <name>
 ```bash
 sidecar create worktree fix-auth --base main --agent claude
 sidecar create worktree scratch --no-launch --json
+# what would be created, without creating it
+sidecar create worktree fix-auth --base main --plan --json
 ```
 
 ## `sidecar help`
@@ -745,7 +757,7 @@ sidecar setup -project ~/code/myproject
 
 Manage Sidecar shell records and the current shell's name
 
-List, forget, and restore this project's shell records, or read and rename the current Sidecar-managed shell.
+List, forget, and restore this project's shell records; read or rename a shell; and send a command into one.
 
 ```
 Usage: sidecar shell <command>
@@ -859,35 +871,47 @@ sidecar shell name --json
 
 ### `sidecar shell rename`
 
-Rename the current shell's display name
+Rename the current shell, or one named with --target
 
-Rename only the Sidecar-managed shell or worktree agent containing this command.
-This changes Sidecar's display name; it does not rename the tmux session, Git
-branch, or worktree directory.
+Rename the Sidecar-managed shell or worktree agent containing this command, or
+with --target, one you are not sitting in. This changes Sidecar's display name;
+it does not rename the tmux session, Git branch, or worktree directory.
 
 The current display name is also published as $SIDECAR_SHELL_NAME. "Shell 3"
 is the unset default; a previous task's name is equally stale — rename when
 the name no longer describes the work in this shell.
 
+--target takes a tmux session name: a sidecar-sh-… record from `sidecar shell
+list`, or a sidecar-ws-… worktree agent. The session must belong to the resolved
+project (--project, or the project this directory is in) — a name Sidecar does
+not own is refused rather than renamed. --shell and --project only scope a
+--target; without one, the current shell is the only subject.
+
 ```
-Usage: sidecar shell rename [--json] <display-name>
+Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <display-name>
 ```
 
 **Options:**
 
+- `--target SESSION`: Rename this tmux session instead of the current shell
+- `--shell NAME`: Resolve the project from a registered shell (with --target)
+- `--project NAME`: Target project (slug, basename, or path; with --target)
 - `--json`: Write one structured result object to stdout
 - `-h, --help`: Show this help
 
 **Exit codes:**
 
-- `0`: success
-- `1`: identity or state failure
-- `2`: usage or validation error
+- `0`: renamed, or already named that
+- `1`: identity, ambiguity, or state failure
+- `2`: usage or validation error (including a name already used in this project)
+- `3`: --target names no session this project owns
 
 **Examples:**
 
 ```bash
 sidecar shell rename "shell rename implementation"
+sidecar shell rename --target sidecar-sh-sidecar-2 --json "release prep"
+sidecar shell rename --project sidecar --target sidecar-ws-sidecar-fix-auth "fix auth"
 ```
 
 ### `sidecar shell restore`
@@ -925,6 +949,55 @@ Usage: sidecar shell restore [--json] <tmux-name>
 ```bash
 sidecar shell restore sidecar-sh-sidecar-1
 sidecar shell restore --json sidecar-sh-sidecar-1
+```
+
+### `sidecar shell send`
+
+Run or type a command in a shell you are not sitting in
+
+Send a command to an existing Sidecar-managed session. --run presses Enter;
+--type leaves the command on the prompt for the user to read and run. This is
+the same distinction `sidecar create shell --run/--type` makes, for a session
+that already exists.
+
+--target is required and must name a session the resolved project owns: a
+sidecar-sh-… record in its shells.json, or a sidecar-ws-… agent for one of its
+registered worktrees. tmux resolves a session name against whatever answers to
+it, so an unregistered name is refused (exit 3) rather than typed into.
+
+The keys go to the tmux server this process resolves, and the session must be
+running: a record for a session that is not up is a tmux failure (exit 1), not
+a silent success.
+
+```
+Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--target SESSION`: The tmux session to send to (required)
+- `--run COMMAND`: Execute COMMAND in the session
+- `--type COMMAND`: Type COMMAND without pressing Enter
+- `--shell NAME`: Resolve the project from a registered shell
+- `--project NAME`: Target project (slug, basename, or path)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: sent
+- `1`: tmux, ambiguity, or state failure
+- `2`: usage or validation error
+- `3`: --target names no session this project owns
+
+**Examples:**
+
+```bash
+# start an agent in an existing shell
+sidecar shell send --target sidecar-sh-sidecar-2 --run "claude"
+sidecar shell send --target sidecar-ws-sidecar-fix-auth --run "go test ./..."
+# leave it for the user to run
+sidecar shell send --target sidecar-sh-sidecar-2 --type "git push" --json
 ```
 
 ## `sidecar terminal-links`
