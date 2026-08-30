@@ -80,3 +80,5 @@ func parseDarwinProcessArgv0(data []byte) string {
 	}
 	return string(rest[pos : pos+end])
 }
+
+const processIdentitySupported = true

@@ -60,6 +60,27 @@ func TestIsEnabled_CLIOverrideTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestSetConfigRefreshesFlagsAndPreservesCLIOverrides(t *testing.T) {
+	initial := config.Default()
+	initial.Features.Flags[SidecarRemoteHosts.Name] = false
+	initial.Features.Flags[TmuxInteractiveInput.Name] = false
+	Init(initial)
+	defer func() { globalManager = nil }()
+	SetOverride(TmuxInteractiveInput.Name, true)
+
+	next := config.Default()
+	next.Features.Flags[SidecarRemoteHosts.Name] = true
+	next.Features.Flags[TmuxInteractiveInput.Name] = false
+	SetConfig(next)
+
+	if !IsEnabled(SidecarRemoteHosts.Name) {
+		t.Fatal("reloaded feature flag did not take effect")
+	}
+	if !IsEnabled(TmuxInteractiveInput.Name) {
+		t.Fatal("config reload discarded the CLI override")
+	}
+}
+
 func TestList(t *testing.T) {
 	cfg := config.Default()
 	Init(cfg)

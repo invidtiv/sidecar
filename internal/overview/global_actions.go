@@ -70,10 +70,33 @@ func (m *Model) RunDeleteCommand(id string) tea.Cmd {
 	}
 }
 
+// remoteActionRefusal is the guard every mutating action shares: a remote
+// workspace is observation only until Phase C gives the host protocol a
+// request channel.
+//
+// State-free and returning a reason rather than a command, because that is the
+// shape the surrounding refusals already take — and because a headless caller
+// should be able to adopt the rule unchanged when the request channel arrives
+// and this becomes "can this host do it?" instead of "no".
+//
+// The failure it prevents is not a confusing error. It is an action resolving
+// a remote path against THIS machine's filesystem and succeeding, because the
+// path happens to exist here too.
+func remoteActionRefusal(workspace workspaceinventory.Workspace, verb string) string {
+	if !workspace.Remote() {
+		return ""
+	}
+	return fmt.Sprintf("%s is on %s — Sidecar can watch a remote workspace but cannot %s one yet",
+		workspace.Name, workspace.HostID, verb)
+}
+
 func (m *Model) OpenDeleteSelectedShell() tea.Cmd {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok || workspace.Kind != workspaceinventory.KindShell || workspace.TmuxName == "" {
 		return nil
+	}
+	if reason := remoteActionRefusal(workspace, "delete"); reason != "" {
+		return appmsg.Blocked(reason)
 	}
 	m.deleteOpen = true
 	m.deleteBusy = false
@@ -105,6 +128,9 @@ func worktreeActionState(workspace workspaceinventory.Workspace) *workspaceops.W
 // deleteRefusal is the shared refusal for deleting the selected worktree —
 // the same presentation-neutral rules the project surface applies.
 func deleteRefusal(workspace workspaceinventory.Workspace) string {
+	if reason := remoteActionRefusal(workspace, "delete"); reason != "" {
+		return reason
+	}
 	if workspace.Kind != workspaceinventory.KindWorktree {
 		return "delete requires a worktree"
 	}

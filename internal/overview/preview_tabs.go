@@ -163,8 +163,16 @@ func (m *Model) renderOutputTerminal(width, height int) string {
 func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width, height int) string {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
+		// A host health row is not a workspace, so it lands here — and it is
+		// the row most in need of explaining itself. "No workspace selected"
+		// on the row that says a machine is unreachable is the least useful
+		// thing this pane could say.
+		message := m.HostHealthDetail(m.workspaces.SelectedID())
+		if message == "" {
+			message = "No workspace selected"
+		}
 		return termpreview.RenderBuffer(termpreview.RenderBufferInput{
-			Width: width, Height: height, Message: "No workspace selected",
+			Width: width, Height: height, Message: message,
 			DefaultBackground: m.terminalDefaultBackground,
 		})
 	}
@@ -193,13 +201,25 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 			message = "Starting terminal..."
 		}
 	}
-	if message != "" {
-		message += "\n\n" + previewMetadata(workspace)
-	}
-
 	buffer := leaf.Buffer
 	if state.terminal != nil && state.terminal.IsActive() {
 		buffer = state.terminal.Buffer()
+	}
+	// A remote row with no live channel still has something true to show: the
+	// capture the host's own status pass already took and shipped with the
+	// snapshot. It costs nothing extra — the host took it either way — and it
+	// is the difference between "that machine has a blocked agent" and "that
+	// machine has a blocked agent, and here is the question it is asking".
+	if buffer == nil && workspace.Remote() {
+		if snapshot := remotePreviewSnapshot(workspace); snapshot != "" {
+			if message == "" {
+				message = "Last seen on " + workspace.HostID
+			}
+			message += "\n\n" + snapshot
+		}
+	}
+	if message != "" {
+		message += "\n\n" + previewMetadata(workspace)
 	}
 	base, _ := tty.BufferBase(buffer)
 	input := tty.ViewportInput{Buffer: buffer, AbsoluteBase: base, Width: width, Height: height - termpreview.HeaderRows, Scrollbar: true, TrimTrailing: tty.TrimsTrailingRows(interactive)}
@@ -215,6 +235,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	_, total := tty.BufferBase(input.Buffer)
 	layout := tty.FitViewport(input)
 	hints = m.appendTerminalWindowStatus(leaf, state, styles.Muted.Render(hints), input, layout, width, chips, interactive)
+	hints = m.appendPreviewTerminalSearchStatus(hints)
 	// Same resolution the project surface answers: one config rule for how far
 	// carried backgrounds reach, so a pane cannot render differently depending
 	// on which surface is showing it.
@@ -225,7 +246,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 		Layout:            layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &leaf.Selection, TabWidth: tty.DefaultTabWidth,
-		Message: message, Decorate: leaf.LinkState.Decorate,
+		Message: message, Decorate: m.previewTerminalDecorator(leaf),
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 		BarStyle: ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
 		Analyzer: leaf.RowAnalyzer,

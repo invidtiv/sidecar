@@ -75,3 +75,12 @@ func identifyArgv0(argv0 string) string {
 	name := strings.TrimPrefix(filepath.Base(resolved), "-")
 	return identifyProcessName(name)
 }
+
+// HasProcessIdentity reports whether this platform can disambiguate a pane's
+// foreground job by argv[0].
+//
+// It exists so the answer is read from the build rather than restated as a
+// GOOS list somewhere else — the host protocol's hello carries this bit, and a
+// second copy of "which platforms are implemented" would be wrong the moment a
+// third one is added.
+func HasProcessIdentity() bool { return processIdentitySupported }

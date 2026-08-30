@@ -1,6 +1,8 @@
 package configui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
 )
@@ -28,8 +30,16 @@ func (m *Model) buildFlags(b *paneBuilder) {
 		b.blank()
 		b.note(m.restartNote)
 	}
-	b.blank()
-
+	// One blank between the title and the first row, not two. PaneTitle already
+	// emits its own trailing blank, and at 31 rows — an ordinary terminal — the
+	// second one costs the last flag in the list.
+	//
+	// This page is AT CAPACITY. It fits thirteen flags at 120x31 and no more,
+	// because the pane truncates rather than scrolling and the row cursor still
+	// walks onto rows that were cut. The next flag added to internal/features
+	// will fail TestFlagsPageFitsAnOrdinaryTerminal, and the fix at that point
+	// is to make this pane scroll — there is no spacing left to reclaim.
+	//
 	// Flags another page owns sort last, so the switches that work here are not
 	// interleaved with rows that only point elsewhere.
 	items := previews()
@@ -52,8 +62,10 @@ func (m *Model) buildFlags(b *paneBuilder) {
 	}
 
 	if len(owned) > 0 {
-		// SectionHeader supplies its own leading blank line.
-		b.text(SectionHeader("Set on other pages"))
+		// SectionHeader's own leading blank is dropped here, for the same
+		// reason as above: the header text separates the groups on its own,
+		// and the blank costs a row this page does not have.
+		b.text(strings.TrimPrefix(SectionHeader("Set on other pages"), "\n"))
 		for _, item := range owned {
 			m.previewRow(b, item)
 		}
@@ -163,6 +175,12 @@ var previewCopy = map[string]preview{
 		help:    "Turn terminal text into openable links via external providers.",
 		restart: true,
 		note:    "Providers are described once at startup; turning this off stops every provider process.",
+	},
+	features.SidecarRemoteHosts.Name: {
+		label:   "Remote hosts",
+		help:    "Watch other machines running Sidecar, over SSH. Read-only.",
+		restart: true,
+		note:    "Hosts are registered under `hosts` in config.json; connections are made when Sidecar starts.",
 	},
 	features.NotesPlugin.Name: {
 		label:        "Notes panel",

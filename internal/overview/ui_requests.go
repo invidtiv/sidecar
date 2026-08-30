@@ -48,6 +48,13 @@ func (m *Model) handleUIRequest(req uirequest.Request) tea.Cmd {
 
 	var targetWorkspace *workspaceinventory.Workspace
 	for _, ws := range m.catalog {
+		// Session names are unique per machine, not globally: two machines
+		// running Sidecar on the same project produce the same name. A request
+		// that originated in a local shell must never bind to a remote row,
+		// which unordered map iteration would otherwise do at random.
+		if ws.Remote() {
+			continue
+		}
 		if ws.TmuxName == req.Origin.TmuxSession {
 			targetWorkspace = &ws
 			break

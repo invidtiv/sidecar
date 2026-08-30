@@ -490,6 +490,8 @@ func DefaultBindings() []Binding {
 		{Key: "shift+down", Command: "scrollback", Context: "global-workspaces-terminal"},
 		{Key: "shift+pgup", Command: "scrollback", Context: "global-workspaces-terminal"},
 		{Key: "shift+pgdown", Command: "scrollback", Context: "global-workspaces-terminal"},
+		{Key: "ctrl+shift+f", Command: "search-terminal", Context: "global-workspaces-terminal"},
+		{Key: "ctrl+shift+f", Command: "search-terminal", Context: "workspace-interactive"},
 
 		// Global Workspaces filter context. While the query owns the keyboard it
 		// is a text input: only these keys mean anything else, and navigation

@@ -37,6 +37,15 @@ func (f *fakeControlChannel) Send(command string, callback func(controlResponse)
 	return nil
 }
 
+func (f *fakeControlChannel) SendBatch(commands []string, callbacks []func(controlResponse)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range commands {
+		f.commands = append(f.commands, fakeControlCommand{text: commands[i], callback: callbacks[i]})
+	}
+	return nil
+}
+
 func (f *fakeControlChannel) SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

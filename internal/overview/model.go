@@ -20,6 +20,7 @@ import (
 	"github.com/marcus/sidecar/internal/agentstatus"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/contentpanes"
+	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/kanban"
 	"github.com/marcus/sidecar/internal/livewatch"
@@ -124,9 +125,14 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		return true
 	}
 	switch msg.(type) {
+	case hostUpdateMsg, hostStaleTickMsg:
+		// A host reporting in is background work by the same rule live-refresh
+		// results are: nobody gestured, and a remote row left stale because a
+		// modal owned focus is the defect this classification prevents.
+		return true
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
-		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
+		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
@@ -237,12 +243,35 @@ type Model struct {
 	diff                      workspacediff.View
 	terminalConfig            tty.Config
 	terminalDefaultBackground string
+	terminalSearch            previewTerminalSearchState
 	config                    *config.Config
 	width                     int
 	height                    int
 	terminalLinks             termpreview.LinkCoordinator
 	linkMatcherGeneration     uint64
 	terminalLinkRoot          terminalLinkRootContext
+
+	// Remote hosts. All nil with features.SidecarRemoteHosts off, or with no
+	// host registered — see hosts.go. hostCtx is separate from m.ctx on
+	// purpose: m.ctx is cancelled on every refresh generation, and hanging ssh
+	// connections off it would reconnect every host on each poll.
+	hostRegistry *hosts.Registry
+	hostCtx      context.Context
+	hostCancel   context.CancelFunc
+	hostResults  map[string][]workspaceinventory.ProjectResult
+	// hostRegistered is the set of host IDs config currently names, so a final
+	// update from a client that has just been stopped cannot resurrect a
+	// de-registered machine as a permanent error row.
+	hostRegistered map[string]bool
+	// hostIncarnations fences queued updates across a same-ID transport
+	// replacement. Nil means host reconciliation has not run yet.
+	hostIncarnations map[string]uint64
+	// hostConfigured is the last reconciled transport identity. A selected
+	// terminal owns its own control process, not the serve registry's, so a
+	// removed or retargeted HostID must close that terminal explicitly.
+	hostConfigured map[string]hosts.Host
+	hostHealth     map[string]hosts.Health
+	hostProjects   map[string][]Project
 
 	// docFinderCaches holds one file list per pane root, so the file finder a
 	// document pane opens walks a tree once rather than once per ctrl+p.
@@ -435,6 +464,11 @@ func New(collector workspaceinventory.Collector) *Model {
 // plugins receive, without instantiating or temporarily switching a plugin.
 func (m *Model) SetConfig(cfg *config.Config) { m.config = cfg }
 
+// SyncHosts brings remote host connections in line with the current config.
+// Returns the command that begins consuming their updates, or nil when the
+// feature is off or nothing is registered.
+func (m *Model) SyncHosts() tea.Cmd { return m.startHosts() }
+
 // persistActivity writes committed trackers after a completed cycle. Failure
 // is silent by design: the store is a convenience, and a state directory that
 // cannot be written should not interrupt the board.
@@ -552,6 +586,12 @@ func (m *Model) start(projects []Project, reason string) tea.Cmd {
 	}
 }
 
+// StopHosts disconnects every remote host. It is separate from Stop because
+// Stop runs whenever the tab is left, and a host connection must outlive that:
+// reconnecting every machine each time a user switches tabs would be both slow
+// and, on a flaky link, a source of rows that blink.
+func (m *Model) StopHosts() { m.stopHosts() }
+
 func (m *Model) Stop() {
 	m.deactivatePreviewOwnership()
 	m.pulseGeneration++
@@ -585,8 +625,33 @@ func (m *Model) RequestNavigation(workspace workspaceinventory.Workspace) tea.Cm
 }
 
 func (m *Model) RequestNavigationAction(workspace workspaceinventory.Workspace, action string) tea.Cmd {
+	// A remote workspace is observation only until Phase C gives the host
+	// protocol a request channel. Navigating to one would resolve its path
+	// against THIS machine's filesystem — which either fails confusingly or,
+	// far worse, succeeds against an unrelated local directory that happens to
+	// share the path. Refusing here covers every activation route into
+	// navigation: the board, the list, and reveal.
+	if workspace.Remote() {
+		return m.refuseRemoteAction(workspace, "open")
+	}
 	m.requestID++
 	msg := NavigateMsg{Workspace: workspace, Action: action, Generation: m.generation, RequestID: m.requestID}
+	return func() tea.Msg { return msg }
+}
+
+// refuseRemoteAction reports a refusal as an ordinary validation failure, so
+// every surface that already renders a failed navigation renders this too. It
+// says which machine the row is on, because "not supported" without a reason
+// reads as a bug.
+func (m *Model) refuseRemoteAction(workspace workspaceinventory.Workspace, verb string) tea.Cmd {
+	m.requestID++
+	msg := ValidationMsg{
+		Workspace:  workspace,
+		Generation: m.generation,
+		RequestID:  m.requestID,
+		Err: fmt.Errorf("%s lives on %s; Sidecar can watch a remote workspace but cannot %s one yet",
+			workspace.Name, workspace.HostID, verb),
+	}
 	return func() tea.Msg { return msg }
 }
 
@@ -791,6 +856,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case previewHistoryLoadedMsg:
 		return m.applyPreviewHistory(msg)
+	case previewTerminalSearchLoadedMsg:
+		return m.applyPreviewTerminalSearchHistory(msg)
 	case workspacediff.SnapshotMsg:
 		return m.applyDiffSnapshot(msg)
 	case workspacediff.CommitDetailMsg:
@@ -916,6 +983,10 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return m.applyShellForgotten(msg)
 	case uirequest.RequestMsg:
 		return m.handleUIRequest(msg.Request)
+	case hostUpdateMsg:
+		return m.handleHostUpdate(msg)
+	case hostStaleTickMsg:
+		return m.handleHostStaleTick(msg)
 	case pollMsg:
 		if msg.Generation != m.generation || m.ctx == nil {
 			m.tracef("cycle generation=%d poll_drained stale_generation=%d", m.generation, msg.Generation)
@@ -1415,6 +1486,25 @@ func (m *Model) syncBoard() {
 	m.cards = make(map[string]workspaceinventory.Workspace)
 	order := make(map[string]cardOrder)
 	now := time.Now()
+	// Remote agents share the lanes with local ones. "Is anything blocked?" is
+	// a question about every machine at once, so a remote blocked agent
+	// belongs in the same column as a local one rather than in a section of
+	// its own that a reader has to remember to look at.
+	remoteBase := len(m.projects)
+	m.eachHostWorkspace(func(ordinal int, label string, workspace workspaceinventory.Workspace, stale bool) {
+		if !workspace.HasAgent() {
+			return
+		}
+		m.cards[workspace.ID] = workspace
+		order[workspace.ID] = cardOrder{project: remoteBase + ordinal, changedAt: workspace.Presentation.ChangedAt}
+		card := kanban.Card{ID: workspace.ID, Lines: cardLines(workspace, stale, now)}
+		for i := range lanes {
+			if lanes[i].ID == kanban.LaneID(workspace.Presentation.Lane) {
+				lanes[i].Cards = append(lanes[i].Cards, card)
+				break
+			}
+		}
+	})
 	for i, project := range m.projects {
 		key := projectKey(project)
 		result, loaded := m.results[key]

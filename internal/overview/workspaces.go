@@ -78,6 +78,23 @@ func (m *Model) syncWorkspaces() {
 			items = append(items, item)
 		}
 	}
+	// Remote workspaces join the same list. They are ordinary rows carrying a
+	// HostID, so they group, filter, sort and pin exactly as local ones do;
+	// the host name goes into the project label, which is both what a row
+	// shows and what the Project sort groups by.
+	remoteBase := len(m.projects)
+	m.eachHostWorkspace(func(order int, label string, workspace workspaceinventory.Workspace, stale bool) {
+		m.catalog[workspace.ID] = workspace
+		item := listItem(workspace.Item(), label, remoteBase+order, stale)
+		if !m.showIdleWorktrees && item.Group == workspacelist.GroupNoSession {
+			return
+		}
+		items = append(items, item)
+	})
+	// A host with a problem contributes a row saying so. A machine that simply
+	// stops appearing is indistinguishable from one with nothing running.
+	items = append(items, m.hostHealthRows()...)
+
 	m.pruneDeletedTerminalRows()
 	sort.SliceStable(failures, func(a, b int) bool { return failures[a] < failures[b] })
 	m.workspaces.SetItems(items)

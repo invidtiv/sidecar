@@ -11,6 +11,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/keymap"
 	"github.com/marcus/sidecar/internal/palette"
 	"github.com/marcus/sidecar/internal/plugin"
@@ -433,6 +434,7 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	cfg.UI.NerdFontsEnabled = true
 	cfg.UI.TerminalTitle = "{dir}"
 	cfg.Plugins.Notes.DefaultEditor = config.NotesEditorPane
+	cfg.Features.Flags[features.SidecarRemoteHosts.Name] = true
 	if err := config.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -453,6 +455,9 @@ func TestHostReloadsAfterConfigurationSave(t *testing.T) {
 	}
 	if liveContext.Config == nil || liveContext.Config.Plugins.Notes.DefaultEditor != config.NotesEditorPane {
 		t.Fatal("the host did not refresh the live plugin configuration")
+	}
+	if !features.IsEnabled(features.SidecarRemoteHosts.Name) {
+		t.Fatal("the host did not refresh feature resolution before runtime reconciliation")
 	}
 }
 

@@ -179,10 +179,28 @@ type Model struct {
 	// mutate pane geometry. Close clears it synchronously, so a resize closure
 	// already returned to Bubble Tea cannot resize a pane after its surface is
 	// hidden even though its eventual result would be scope-rejected.
-	activeGeneration          atomic.Uint64
-	activationMu              sync.RWMutex
-	scopeTarget               string
-	control                   terminalControlSource
+	activeGeneration atomic.Uint64
+	activationMu     sync.RWMutex
+	scopeTarget      string
+	control          terminalControlSource
+	// remote marks a terminal served by a tmux on another machine. It gates
+	// every side effect this process could have on that machine: see
+	// UseRemoteControl.
+	remote                    bool
+	remoteInputMu             sync.Mutex
+	remoteInteractive         bool
+	remoteInputGeneration     uint64
+	remoteInputWidth          int
+	remoteInputHeight         int
+	remoteBackend             *remoteTerminalBackend
+	remoteLifecycleMu         sync.Mutex
+	remoteLifecycleTail       <-chan struct{}
+	localGeometryMu           sync.Mutex
+	localGeometryGeneration   uint64
+	localGeometryTarget       string
+	localGeometryWidth        int
+	localGeometryHeight       int
+	localGeometryKeeper       *leaseKeeper
 	subscription              terminalControlSubscription
 	mailbox                   *terminalMailbox
 	mailboxDone               chan struct{}
@@ -350,6 +368,7 @@ var nextModelID atomic.Uint64
 var (
 	terminalQueryPaneSize = QueryPaneSize
 	terminalResizePane    = ResizeTmuxPane
+	terminalResizeClaimed = resizeTmuxPaneClaimed
 	terminalBeforeClose   func()
 )
 
@@ -395,7 +414,7 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 	if target == "" {
 		target = sessionName
 	}
-	if target != "" && m.Width > 0 && m.Height > 0 {
+	if !m.remote && target != "" && m.Width > 0 && m.Height > 0 {
 		scope := m.Scope()
 		_ = m.withActivationError(scope, func() error {
 			terminalResizePane(target, m.Width, m.Height)
@@ -416,6 +435,14 @@ func (m *Model) Enter(sessionName, paneID string) tea.Cmd {
 type Target struct {
 	Session string
 	Pane    string
+	// Host names the machine the session lives on. Empty is this machine.
+	//
+	// It is part of the target identity rather than a separate field on the
+	// surface, so a caller comparing "am I already showing this?" cannot
+	// accidentally match a local session against a remote one with the same
+	// name — which would leave a terminal wired to the wrong tmux server and
+	// paint an unrelated pane.
+	Host string
 }
 
 // Open activates the terminal for target. Enter remains as the compatibility
@@ -472,6 +499,8 @@ func (m *Model) guardActiveCommand(scope MessageScope, cmd tea.Cmd) tea.Cmd {
 
 // Exit exits interactive mode.
 func (m *Model) Exit() {
+	m.releaseRemoteInput()
+	m.releaseLocalGeometryInput()
 	if terminalBeforeClose != nil {
 		terminalBeforeClose()
 	}
@@ -526,6 +555,8 @@ func (m *Model) ReleaseInput() { m.releaseInput() }
 // the pane until a host hands the keyboard back. Whether the terminal behind it
 // closes with the mode is [Model.ExitAction]'s answer, not this one's.
 func (m *Model) releaseInput() {
+	m.releaseRemoteInput()
+	m.releaseLocalGeometryInput()
 	m.fragment.Reset()
 	if m.State != nil {
 		m.State.EscapePressed = false
@@ -1345,6 +1376,8 @@ func (m *Model) now() time.Time {
 
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
+	m.setLocalGeometrySize(width, height)
+	m.setRemoteInputSize(width, height)
 	if width == m.Width && height == m.Height {
 		return nil
 	}
@@ -1375,6 +1408,12 @@ func (m *Model) SetDimensions(width, height int) tea.Cmd {
 // from the other side).
 func (m *Model) assertDimensions() tea.Cmd {
 	if !m.IsActive() {
+		return nil
+	}
+	// A remote pane is observed at whatever size it already is until an
+	// explicit interactive entry takes a host-aware lease. FitPane renders the
+	// read-only difference without touching either the local or remote server.
+	if m.remote && (!m.remoteInteractive || m.remoteBackend == nil) {
 		return nil
 	}
 
@@ -1418,16 +1457,21 @@ func (m *Model) assertDimensions() tea.Cmd {
 		restart = m.restartControlForResize()
 	}
 
-	resize := func() tea.Msg {
-		return m.withActivationMessage(scope, func() tea.Msg {
-			// Check if resize is needed
-			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
-			if ok && actualWidth == width && actualHeight == height {
-				return nil
-			}
-			terminalResizePane(target, width, height)
-			return PaneResizedMsg{Scope: scope}
-		})
+	var resize tea.Cmd
+	if m.remote {
+		resize = m.remoteResizeCommand(scope, target, m.State.TargetSession, width, height)
+	} else {
+		resize = func() tea.Msg {
+			return m.withActivationMessage(scope, func() tea.Msg {
+				// Check if resize is needed
+				actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+				if ok && actualWidth == width && actualHeight == height {
+					return nil
+				}
+				terminalResizePane(target, width, height)
+				return PaneResizedMsg{Scope: scope}
+			})
+		}
 	}
 	if restart == nil {
 		return resize
@@ -1445,11 +1489,16 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	same := width == m.Width && height == m.Height
 	m.Width = width
 	m.Height = height
+	m.setLocalGeometrySize(width, height)
+	m.setRemoteInputSize(width, height)
 	if same && !m.resizeOwed {
 		return nil
 	}
 
 	if !m.IsActive() {
+		return nil
+	}
+	if m.remote && (!m.remoteInteractive || m.remoteBackend == nil) {
 		return nil
 	}
 
@@ -1477,15 +1526,20 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	m.State.LastResizeAt = m.now()
 
 	// Resize command
-	resizeCmd := func() tea.Msg {
-		return m.withActivationMessage(scope, func() tea.Msg {
-			actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
-			if ok && actualWidth == width && actualHeight == height {
-				return nil
-			}
-			terminalResizePane(target, width, height)
-			return PaneResizedMsg{Scope: scope}
-		})
+	var resizeCmd tea.Cmd
+	if m.remote {
+		resizeCmd = m.remoteResizeCommand(scope, target, m.State.TargetSession, width, height)
+	} else {
+		resizeCmd = func() tea.Msg {
+			return m.withActivationMessage(scope, func() tea.Msg {
+				actualWidth, actualHeight, ok := terminalQueryPaneSize(target)
+				if ok && actualWidth == width && actualHeight == height {
+					return nil
+				}
+				terminalResizePane(target, width, height)
+				return PaneResizedMsg{Scope: scope}
+			})
+		}
 	}
 
 	if controlOwned {

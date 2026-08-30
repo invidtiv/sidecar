@@ -35,6 +35,49 @@ type Config struct {
 	// app-level because every surface writes those records, including
 	// `sidecar shell forget` in a process that loads no plugins.
 	Shells ShellsConfig `json:"shells,omitempty"`
+	// Hosts registers other machines to observe over SSH. App-level because a
+	// host contributes rows to the global Sessions browser, which belongs to
+	// the shell rather than to any project or plugin.
+	Hosts HostsConfig `json:"hosts,omitempty"`
+}
+
+// HostsConfig registers remote machines running Sidecar.
+//
+// Reachability is deliberately not configured here. The target is whatever the
+// user's ssh_config already resolves — their keys, their ProxyJump, their
+// agent — so Sidecar adds no second place to describe how to reach a machine,
+// and anything that works in `ssh <target>` works here.
+type HostsConfig struct {
+	List []HostConfig `json:"list"`
+}
+
+// HostConfig is one registered machine.
+type HostConfig struct {
+	// ID is the local name shown in the UI and used to scope remote workspace
+	// IDs. Defaults to Target when empty.
+	ID string `json:"id,omitempty"`
+	// Target is the ssh destination.
+	Target string `json:"target"`
+	// Binary is an explicit path to sidecar on that host. Usually unnecessary:
+	// the connection runs through a login shell, which finds a Homebrew or
+	// package-managed install. Set it when the host puts sidecar somewhere a
+	// login shell does not look.
+	Binary string `json:"binary,omitempty"`
+	// Config is an optional -config path for the remote sidecar, so a host can
+	// be observed against a config other than its user default.
+	Config string `json:"config,omitempty"`
+	// Env is extra environment for the remote Sidecar, as KEY=VALUE strings.
+	//
+	// It exists so a proof run can pin a host to an isolated tmux server and
+	// state tree (TMUX_TMPDIR, XDG_STATE_HOME, SIDECAR_ISOLATED_STATE) exactly
+	// as a local proof run does. Without it the isolation discipline stops at
+	// the machine boundary, which is the point at which it matters most — the
+	// remote tree belongs to someone else.
+	Env []string `json:"env,omitempty"`
+	// Disabled keeps a host registered but unconnected, which is what a user
+	// wants for a machine that is off this week — deleting the entry to stop
+	// the reconnect attempts would lose its settings.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // SelectionConfig configures text selection across surfaces.

@@ -74,6 +74,16 @@ type rawConfig struct {
 	// Shells is a pointer for the same reason: an absent section leaves the
 	// shell-record defaults (config.DefaultTombstoneRetention) alone.
 	Shells *rawShellsConfig `json:"shells"`
+	// Hosts is a pointer for the same reason: an absent section means no
+	// remote machines, which is different from an explicitly empty list only
+	// in what it says, not in what it does.
+	//
+	// This section exists here as well as on Config because the loader merges
+	// a raw document into defaults field by field. A key that is only on
+	// Config parses into nothing and is silently ignored — which is exactly
+	// what happened to `hosts` the first time, and the symptom was a
+	// correctly-written config that produced no hosts and no error.
+	Hosts *HostsConfig `json:"hosts"`
 }
 
 type rawShellsConfig struct {
@@ -509,6 +519,9 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 	}
 
 	// Shells
+	if raw.Hosts != nil {
+		cfg.Hosts = *raw.Hosts
+	}
 	if raw.Shells != nil && strings.TrimSpace(raw.Shells.TombstoneRetention) != "" {
 		cfg.Shells.TombstoneRetention = strings.TrimSpace(raw.Shells.TombstoneRetention)
 	}

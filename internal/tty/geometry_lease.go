@@ -307,6 +307,14 @@ type leaseStore interface {
 	inputMark(session string) string
 }
 
+// leaseClearWaiter is implemented by stores whose clear is asynchronous. A
+// lifecycle spanning multiple transports waits for this completion before a
+// replacement claimant may proceed; ordinary local stores clear synchronously
+// and need no second interface.
+type leaseClearWaiter interface {
+	clearAndWait(session string) <-chan struct{}
+}
+
 type tmuxLeaseStore struct{}
 
 // read asks for the session and the option in one invocation: the lease is
@@ -427,8 +435,10 @@ type leaseState struct {
 // the last tmux input marker the refresher saw, which is what tells a suspended
 // instance that the user is still typing into the session it is attached to.
 type leaseHold struct {
-	stop func()
-	mark string
+	stop      func()
+	mark      string
+	onAllowed func()
+	allowed   bool
 }
 
 // leaseKeeper holds the per-session tick counters that DecideGeometryLease is
@@ -577,7 +587,8 @@ func (k *leaseKeeper) allow(target string) bool {
 			return state.lastResize
 		}
 	}
-	return k.tickLocked(target, now, true)
+	allowed, _, _ := k.tickLocked(target, now, true)
+	return allowed
 }
 
 // tickLocked is one round of arbitration for target: read the shared option,
@@ -587,10 +598,10 @@ func (k *leaseKeeper) allow(target string) bool {
 // interval, which is what keeps a per-poll caller to one tmux read per tick. A
 // hold's refresher passes false: while the event loop is suspended its ticks are
 // the only cadence there is, so they must never be thrown away.
-func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) bool {
+func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) (allowed, acquired, resolved bool) {
 	session, token, ok := k.store.read(target)
 	if !ok {
-		return true
+		return true, false, false
 	}
 	k.targets[target] = session
 
@@ -601,7 +612,7 @@ func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) b
 	}
 	// A second target in the same session can resolve inside an existing tick.
 	if rateLimit && !state.lastTick.IsZero() && now.Sub(state.lastTick) < k.interval {
-		return state.lastResize
+		return state.lastResize, false, true
 	}
 	state.lastTick = now
 
@@ -636,7 +647,8 @@ func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) b
 	}
 	state.owned = decision.Resize
 	state.lastResize = decision.Resize
-	return decision.Resize
+	acquired = decision.Resize && leaseOwner(token) != k.selfID
+	return decision.Resize, acquired, true
 }
 
 // sinceWrite is how long ago this instance last stamped a token, zero when it
@@ -721,29 +733,42 @@ func (k *leaseKeeper) claimLocked(target string) bool {
 // It cannot strand the lease: the goroutine lives and dies with this process, so
 // a crash mid-attach stops the token changing and peers reclaim it normally.
 func (k *leaseKeeper) hold(target string) {
+	k.holdWithAction(target, nil)
+}
+
+// holdWithAction is hold plus a geometry assertion to run after each allowed
+// periodic tick. Embedded local terminals use it to restore their own viewport
+// when fresh human input preempts a remote viewer while the pane is settled.
+func (k *leaseKeeper) holdWithAction(target string, onAllowed func()) {
 	k.mu.Lock()
 	if !k.claimLocked(target) {
 		k.mu.Unlock()
 		return
 	}
-	if k.holds[target] != nil {
+	if hold := k.holds[target]; hold != nil {
+		hold.onAllowed = onAllowed
 		k.mu.Unlock()
 		return
 	}
 	ticks, stopTicker := k.newTicker(k.holdEvery)
 	done := make(chan struct{})
+	finished := make(chan struct{})
 	k.holds[target] = &leaseHold{
 		stop: func() {
 			stopTicker()
 			close(done)
+			<-finished
 		},
 		// Primed so the refresher measures input from the attach onwards. The
 		// claim above has already stamped this moment as input.
-		mark: k.store.inputMark(k.targets[target]),
+		mark:      k.store.inputMark(k.targets[target]),
+		onAllowed: onAllowed,
+		allowed:   true,
 	}
 	k.mu.Unlock()
 
 	go func() {
+		defer close(finished)
 		for {
 			select {
 			case <-done:
@@ -775,10 +800,10 @@ func (k *leaseKeeper) hold(target string) {
 // those keystrokes into the evidence arbitration already knows how to use.
 func (k *leaseKeeper) refreshHold(target string) {
 	k.mu.Lock()
-	defer k.mu.Unlock()
 
 	hold := k.holds[target]
 	if hold == nil {
+		k.mu.Unlock()
 		return
 	}
 	now := k.now()
@@ -794,7 +819,14 @@ func (k *leaseKeeper) refreshHold(target string) {
 			k.lastInput = now
 		}
 	}
-	k.tickLocked(target, now, false)
+	allowed, acquired, resolved := k.tickLocked(target, now, false)
+	onAllowed := hold.onAllowed
+	transitioned := !hold.allowed && allowed
+	hold.allowed = allowed
+	k.mu.Unlock()
+	if resolved && (acquired || transitioned) && onAllowed != nil {
+		onAllowed()
+	}
 }
 
 // releaseHold ends the background refresh for target. The lease itself stays put
@@ -808,6 +840,34 @@ func (k *leaseKeeper) releaseHold(target string) {
 
 	if hold != nil {
 		hold.stop()
+	}
+}
+
+// releaseInteractive ends an embedded terminal's hold and clears the session
+// only when this keeper still owns it. Unlike an attach detach, leaving
+// interactive mode is an explicit handoff: a remote viewer should not wait for
+// the stale budget before taking geometry. The ownership read also prevents a
+// local exit from clearing a peer that already preempted it.
+func (k *leaseKeeper) releaseInteractive(target string) {
+	k.mu.Lock()
+	hold := k.holds[target]
+	delete(k.holds, target)
+	session := k.targets[target]
+	owned := session != "" && k.states[session] != nil && k.states[session].owned
+	delete(k.targets, target)
+	if session != "" {
+		delete(k.states, session)
+	}
+	k.mu.Unlock()
+	if hold != nil {
+		hold.stop()
+	}
+	if !owned {
+		return
+	}
+	resolved, token, ok := k.store.read(target)
+	if ok && resolved == session && leaseOwner(token) == k.selfID {
+		k.clearAndWait(session)
 	}
 }
 
@@ -843,7 +903,7 @@ func (k *leaseKeeper) setFocused(focused bool) {
 	k.mu.Unlock()
 
 	for _, session := range release {
-		k.store.clear(session)
+		k.clearAndWait(session)
 	}
 }
 
@@ -860,8 +920,18 @@ func (k *leaseKeeper) release() {
 		stop()
 	}
 	for _, session := range sessions {
-		k.store.clear(session)
+		k.clearAndWait(session)
 	}
+}
+
+func (k *leaseKeeper) clearAndWait(session string) {
+	if waiter, ok := k.store.(leaseClearWaiter); ok {
+		if done := waiter.clearAndWait(session); done != nil {
+			<-done
+		}
+		return
+	}
+	k.store.clear(session)
 }
 
 // dropStatesLocked forgets all tick history and, when releasing, reports the

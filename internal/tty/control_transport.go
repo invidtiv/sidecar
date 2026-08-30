@@ -13,6 +13,10 @@ import (
 
 type controlChannel interface {
 	Send(command string, callback func(controlResponse)) error
+	// SendBatch writes an arbitrary command group atomically. Input uses this
+	// so a fast key batch, an escape followed by a paste, and a mouse click's
+	// press/release cannot be interleaved with another control command.
+	SendBatch(commands []string, callbacks []func(controlResponse)) error
 	// SendPair writes two commands in a single write so tmux reads and queues
 	// them together and executes them back to back. tmux emits one response
 	// block per command line, so two FIFO callbacks are registered; a parse
@@ -117,6 +121,13 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 
 func (c *processControlChannel) Send(command string, callback func(controlResponse)) error {
 	return c.write([]string{command}, []func(controlResponse){callback})
+}
+
+func (c *processControlChannel) SendBatch(commands []string, callbacks []func(controlResponse)) error {
+	if len(commands) == 0 || len(commands) != len(callbacks) {
+		return fmt.Errorf("tmux control: command/callback count mismatch")
+	}
+	return c.write(commands, callbacks)
 }
 
 func (c *processControlChannel) SendPair(first, second string, firstCallback, secondCallback func(controlResponse)) error {

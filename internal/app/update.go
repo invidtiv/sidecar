@@ -217,6 +217,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Remote-host stream messages reach the global browser whatever is on
+	// screen. See overview.IsHostMessage: each delivery is what schedules the
+	// next read of the update channel, so dropping one on a focus check would
+	// not delay a row — it would end the stream for the rest of the session.
+	if m.overview != nil && overview.IsHostMessage(msg) {
+		return m, m.overview.Update(msg)
+	}
 	var cmds []tea.Cmd
 	// A terminal-default cell belongs to the terminal hosting Sidecar, not to
 	// Sidecar's palette. Convert the host's color report once, then hand the
@@ -954,6 +961,11 @@ func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
 	tty.SetAppFocused(m.applicationFocused)
 
 	var cmds []tea.Cmd
+	if m.overview != nil {
+		if cmd := m.overview.SetApplicationFocused(m.applicationFocused); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	for _, p := range m.registry.Plugins() {
 		_, cmd := p.Update(msg)
 		if cmd != nil {

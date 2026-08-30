@@ -668,6 +668,18 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 
+	// Remote hosts connect after the first frame, in a command, like every
+	// other startup fetch. Nothing about a host may run before the first
+	// render: dialling ssh on the startup path would put a network round trip
+	// — and on an unreachable host, a full connect timeout — in front of the
+	// user's first frame. With the feature off this returns nil and no
+	// connection is ever attempted.
+	if m.overview != nil {
+		if cmd := m.overview.SyncHosts(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
+
 	if m.uiRequestWatcher != nil {
 		m.uiRequestWatcher.Start()
 		cmds = append(cmds, listenForUIRequests(m.uiRequestWatcher.Messages()))

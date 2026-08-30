@@ -111,6 +111,20 @@ type previewTerminal interface {
 
 var _ previewTerminal = (*tty.Model)(nil)
 
+// controlModeSwitcher is the optional capability a real terminal has and a
+// test fake does not: pointing itself at a local or a remote tmux. Both halves
+// are here together because they are one decision — a caller that can make a
+// terminal remote and cannot make it local again leaves it contaminated.
+type controlModeSwitcher interface {
+	UseRemoteControl(tty.ControlSpawner)
+	UseLocalControl()
+}
+
+type inputActivator interface{ ActivateInput() tea.Cmd }
+type applicationFocusTerminal interface{ SetApplicationFocused(bool) tea.Cmd }
+
+var _ controlModeSwitcher = (*tty.Model)(nil)
+
 // newPreviewTerminal builds the browser's terminal with the host contract the
 // component calls back through. It is a variable so the seam can be substituted
 // without a tmux server behind it; a substitute is handed the same hooks, so a
@@ -140,7 +154,7 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 		return nil
 	}
 
-	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID}
+	desired := tty.Target{Session: workspace.TmuxName, Pane: workspace.PaneID, Host: workspace.HostID}
 	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
 	if state.terminal == nil {
 		state.terminal = newPreviewTerminal(m.TerminalConfig(), m.previewTerminalHooksFor(leaf))
@@ -154,6 +168,35 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 	m.preview.reason = ""
 	m.setPrimaryTarget(desired)
 	var cmds []tea.Cmd
+	// Point the terminal at the right machine before it opens — on EVERY
+	// activation, including local ones.
+	//
+	// The preview reuses one tty.Model across row selections, so this is a
+	// mode that must be set rather than a mode that must be changed. Setting
+	// it only for remote rows left a Model that had shown a remote pane
+	// permanently wired to that host's ssh, and the next local row was then
+	// opened against the remote tmux — which often succeeds, because both
+	// machines name sessions the same way.
+	//
+	// The capability is discovered rather than declared on previewTerminal:
+	// four tests substitute that seam with fakes that have no business
+	// knowing about ssh, and widening the interface for a case none of them
+	// exercise would be a worse trade than an assertion here.
+	switcher, canSwitch := state.terminal.(controlModeSwitcher)
+	switch {
+	case !workspace.Remote():
+		if canSwitch {
+			switcher.UseLocalControl()
+		}
+	default:
+		spawn := m.hostControlSpawner(workspace.HostID)
+		if !canSwitch || spawn == nil {
+			m.preview.reason = "Cannot open a live view of " + workspace.HostID + " right now"
+			m.closePreviewTerminal()
+			return nil
+		}
+		switcher.UseRemoteControl(spawn)
+	}
 	if width, height, ok := m.terminalLeafSize(leaf.ID); ok {
 		leaf.Target.Width, leaf.Target.Height = width, height
 		cmds = append(cmds, state.terminal.SetDimensions(width, height))
@@ -165,6 +208,7 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 }
 
 func (m *Model) closePreviewTerminal() {
+	m.clearPreviewTerminalSearch()
 	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
 	if leaf.Interactive && state.terminal != nil {
 		state.terminal.ReleaseInput()
@@ -325,6 +369,9 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	m.clearPreviewSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, open)
+	if activator, ok := m.previewTerminalState().terminal.(inputActivator); ok {
+		cmds = append(cmds, activator.ActivateInput())
+	}
 	if buffer := m.previewTerminalState().terminal.Buffer(); buffer != nil {
 		m.previewTerminalLeaf().Buffer = buffer
 	}
@@ -334,6 +381,20 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		cmds = append(cmds, appmsg.ShowFlash("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop"))
 	}
 	return tea.Batch(cmds...)
+}
+
+// SetApplicationFocused gives a remote interactive terminal the same process
+// focus lifecycle as local geometry arbitration: blur releases its claim;
+// focus reclaims only when this pane still owns input.
+func (m *Model) SetApplicationFocused(focused bool) tea.Cmd {
+	state := m.previewTerminalState()
+	if state == nil || state.terminal == nil {
+		return nil
+	}
+	if terminal, ok := state.terminal.(applicationFocusTerminal); ok {
+		return terminal.SetApplicationFocused(focused)
+	}
+	return nil
 }
 
 // switchPreviewInteractive rebinds a live pane to the current selection. Used

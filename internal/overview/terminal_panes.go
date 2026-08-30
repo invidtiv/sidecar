@@ -89,16 +89,16 @@ func (m *Model) primaryTerminalState() *previewTerminalState {
 
 func (m *Model) previewTarget() tty.Target {
 	target := m.previewTerminalLeaf().Target
-	return tty.Target{Session: target.Session, Pane: target.Pane}
+	return tty.Target{Session: target.Session, Pane: target.Pane, Host: target.Host}
 }
 
 func (m *Model) primaryTarget() tty.Target {
 	target := m.primaryTerminalLeaf().Target
-	return tty.Target{Session: target.Session, Pane: target.Pane}
+	return tty.Target{Session: target.Session, Pane: target.Pane, Host: target.Host}
 }
 
 func (m *Model) setPrimaryTarget(target tty.Target) {
 	leaf := m.primaryTerminalLeaf()
 	source := leaf.Target.Source
-	leaf.Target = termpanes.Target{Session: target.Session, Pane: target.Pane, Source: source}
+	leaf.Target = termpanes.Target{Session: target.Session, Pane: target.Pane, Host: target.Host, Source: source}
 }

@@ -1,0 +1,26 @@
+ ◱ Sidecar │   Sessions     Activity                                                                                                                                ↖ project   Select Project ▾  ●4  ⚙
+╭─────────────────────────────────────────────────────────────────────────────╮ ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Workspaces                                               ⇅ Activity     +   │┃│  Diff   Git                                                                                                     live │
+│                                                                             │┃│                                                                                                                      │
+│ ◆ NEEDS ATTENTION (2) ────────────────────────────────────────────────────  │┃│ The default interactive shell is now zsh.                                                                            │
+│  ◇ ❯ spike Claude pane                                                now   │┃│ To update your account to use zsh, please run `chsh -s /bin/zsh`.                                                    │
+│      ◆ claude                                                               │┃│ For more details, please visit https://support.apple.com/kb/HT208050.                                                │
+│                                                                             │┃│ bash-3.2$                                                                                                            │
+│  ◇ ❯ spike Opencode pane                                              now   │┃│                                                                                                                      │
+│      ◇ opencode                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│ ● WORKING (1) ────────────────────────────────────────────────────────────  │┃│                                                                                                                      │
+│  ∙ ❯ spike Codex pane                                                 now   │┃│                                                                                                                      │
+│      ▶ codex                                                                │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│ ● LIVE (2) ───────────────────────────────────────────────────────────────  │┃│                                                                                                                      │
+│  ◎ ⑂ spike project                                                          │┃│                                                                                                                      │
+│      main                                                                   │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│  ◎ ❯ spike Plain shell                                                      │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │
+│                                                                             │┃│                                                                                                                      │

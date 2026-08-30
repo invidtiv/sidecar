@@ -358,6 +358,172 @@ func (m *ControlManager) usingControl(id uint64) bool {
 	return client != nil && client.has(id, sub.generation)
 }
 
+// clientForCommand returns the live session client, waiting through the short
+// replacement window created by a resize reseed. It is called only from
+// command goroutines (input's ordered send queue and history/geometry tea.Cmds),
+// never from Bubble Tea's update loop.
+func (m *ControlManager) clientForCommand(session string) (*sessionControlClient, error) {
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		m.mu.Lock()
+		client := m.clients[session]
+		starting := m.starting[session]
+		stopped := m.stopped
+		m.mu.Unlock()
+		if client != nil {
+			return client, nil
+		}
+		if stopped {
+			return nil, fmt.Errorf("tmux control: manager stopped")
+		}
+		if !starting || time.Now().After(deadline) {
+			return nil, fmt.Errorf("tmux control: session %q is unavailable", session)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// sendControlBatch writes commands onto one session's already-open control
+// pipe. It deliberately does not wait for responses: the send queue is a FIFO
+// of writes, not network round trips, so fast typing can fill the pipe at local
+// speed while tmux executes those writes in order.
+func (m *ControlManager) sendControlBatch(session string, commands ...string) error {
+	if session == "" || len(commands) == 0 {
+		return fmt.Errorf("tmux control: empty session or command batch")
+	}
+	client, err := m.clientForCommand(session)
+	if err != nil {
+		return err
+	}
+	callbacks := make([]func(controlResponse), len(commands))
+	for i := range callbacks {
+		callbacks[i] = func(controlResponse) {}
+	}
+	return client.channel.SendBatch(commands, callbacks)
+}
+
+// sendControlBarrier writes one command without waiting on the caller, while
+// retaining the session client until tmux returns its response. It is for
+// teardown writes whose execution must outlive the last pane subscription:
+// waiting here would block Bubble Tea, but closing the control process as soon
+// as that subscription disappears could discard the write before tmux runs it.
+func (m *ControlManager) sendControlBarrier(session, command string) error {
+	_, err := m.sendControlBarrierWait(session, command)
+	return err
+}
+
+// sendControlBarrierWait is sendControlBarrier with an execution-completion
+// signal for lifecycle queues that must order work across separate control
+// pipes. The channel closes on response, write failure, or the bounded timeout.
+func (m *ControlManager) sendControlBarrierWait(session, command string) (<-chan struct{}, error) {
+	if session == "" || command == "" {
+		return nil, fmt.Errorf("tmux control: empty session or barrier command")
+	}
+	client, release, err := m.retainControlLifetime(session)
+	if err != nil {
+		return nil, err
+	}
+
+	done := make(chan struct{})
+	var once sync.Once
+	finish := func() {
+		once.Do(func() {
+			release()
+			close(done)
+		})
+	}
+	// A dead or non-responsive transport must not retain a client forever. The
+	// ordinary request path uses the same four-second response bound.
+	timer := time.AfterFunc(4*time.Second, finish)
+	callback := func(controlResponse) {
+		timer.Stop()
+		finish()
+	}
+	if err := client.channel.Send(command, callback); err != nil {
+		timer.Stop()
+		finish()
+		return done, err
+	}
+	return done, nil
+}
+
+// retainControlLifetime prevents teardown after the final subscription while
+// an asynchronous lifecycle operation is still reaching the remote server.
+// Acquiring and releasing the reference touches only local mutexes; callers
+// may therefore install it synchronously before returning to Bubble Tea.
+func (m *ControlManager) retainControlLifetime(session string) (*sessionControlClient, func(), error) {
+	m.mu.Lock()
+	client := m.clients[session]
+	if client == nil || !client.retainBarrier() {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("tmux control: session %q is unavailable", session)
+	}
+	m.mu.Unlock()
+
+	var once sync.Once
+	release := func() {
+		once.Do(func() { m.finishBarrier(client) })
+	}
+	return client, release, nil
+}
+
+// finishBarrier may run on the client's ordered actor. It therefore initiates
+// shutdown without joining that actor; external close paths retain their
+// stronger join through removeClientIfUnused.
+func (m *ControlManager) finishBarrier(client *sessionControlClient) {
+	m.mu.Lock()
+	client.releaseBarrier()
+	closeClient := m.clients[client.session] == client && !client.inUse()
+	if closeClient {
+		delete(m.clients, client.session)
+	}
+	m.mu.Unlock()
+	if closeClient {
+		client.beginClose()
+	}
+}
+
+// requestControlBatch writes a response-bearing command group atomically and
+// waits for all response blocks. History and geometry use this from tea.Cmds;
+// input never does.
+func (m *ControlManager) requestControlBatch(session string, commands ...string) ([]controlResponse, error) {
+	if session == "" || len(commands) == 0 {
+		return nil, fmt.Errorf("tmux control: empty session or command batch")
+	}
+	client, err := m.clientForCommand(session)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]controlResponse, len(commands))
+	done := make(chan int, len(commands))
+	callbacks := make([]func(controlResponse), len(commands))
+	for i := range callbacks {
+		i := i
+		callbacks[i] = func(response controlResponse) {
+			responses[i] = response
+			done <- i
+		}
+	}
+	if err := client.channel.SendBatch(commands, callbacks); err != nil {
+		return nil, err
+	}
+	timer := time.NewTimer(4 * time.Second)
+	defer timer.Stop()
+	for range commands {
+		select {
+		case <-done:
+		case <-timer.C:
+			return nil, fmt.Errorf("tmux control: command response timeout")
+		}
+	}
+	for _, response := range responses {
+		if response.Err != nil {
+			return nil, response.Err
+		}
+	}
+	return responses, nil
+}
+
 func (m *ControlManager) unsubscribe(id uint64) {
 	m.mu.Lock()
 	sub := m.subs[id]
@@ -375,11 +541,11 @@ func (m *ControlManager) unsubscribe(id uint64) {
 }
 
 func (m *ControlManager) removeClientIfUnused(client *sessionControlClient) {
-	if client.subscriberCount() != 0 {
+	if client.inUse() {
 		return
 	}
 	m.mu.Lock()
-	if m.clients[client.session] == client && client.subscriberCount() == 0 {
+	if m.clients[client.session] == client && !client.inUse() {
 		delete(m.clients, client.session)
 		m.mu.Unlock()
 		client.close()
@@ -527,6 +693,7 @@ type sessionControlClient struct {
 	panes      map[string]*paneCaptureState
 	closed     bool
 	closeOnce  sync.Once
+	barriers   int
 
 	// actions, models, modelTick, modelTimer and discardArmed belong to the
 	// ordered actor goroutine (run). Lifecycle calls arriving on other
@@ -783,10 +950,28 @@ func (c *sessionControlClient) has(id, generation uint64) bool {
 	return ok && sub.generation == generation && !c.closed
 }
 
-func (c *sessionControlClient) subscriberCount() int {
+func (c *sessionControlClient) retainBarrier() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.subs)
+	if c.closed {
+		return false
+	}
+	c.barriers++
+	return true
+}
+
+func (c *sessionControlClient) releaseBarrier() {
+	c.mu.Lock()
+	if c.barriers > 0 {
+		c.barriers--
+	}
+	c.mu.Unlock()
+}
+
+func (c *sessionControlClient) inUse() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.subs) != 0 || c.barriers != 0
 }
 
 func (c *sessionControlClient) setFocused(id, generation uint64, focused bool) {

@@ -100,6 +100,11 @@ func (m *Model) persistSessionsLayout() {
 		return
 	}
 	if ws, ok := m.catalog[id]; ok {
+		if ws.Remote() {
+			// Never persist another machine's path into this machine's state
+			// tree: a later restore would resolve it locally.
+			return
+		}
 		layout.Root = ws.Path
 	}
 	layout.Surface = id
@@ -275,7 +280,7 @@ func (m *Model) restorePreviewPanes(workspaceID string) tea.Cmd {
 
 func (m *Model) warmPreviewFromLayout(workspaceID string, layout *state.PaneLayoutJSON) tea.Cmd {
 	ws, ok := m.catalog[workspaceID]
-	if !ok {
+	if !ok || ws.Remote() {
 		m.resetActivePreviewPanes()
 		return nil
 	}

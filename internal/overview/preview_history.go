@@ -19,6 +19,10 @@ import (
 // the order can be proved without a tmux server behind it.
 var capturePreviewHistory = tty.CapturePaneRange
 
+type previewRangeCapturer interface {
+	CaptureRange(start, end int) (tty.CaptureRange, error)
+}
+
 // previewHistoryLoadedMsg carries one completed read. Target and Generation
 // scope it: a result for a pane the preview has moved off, or for a request
 // something has since superseded, is not applied to whatever is on screen now.
@@ -60,16 +64,22 @@ func (m *Model) reachOlderPreviewHistory(scrollLines int) tea.Cmd {
 	if pane == "" {
 		return nil
 	}
+	capture := capturePreviewHistory
+	if terminal, ok := m.previewTerminalState().terminal.(previewRangeCapturer); ok {
+		capture = func(_ string, start, end int) (tty.CaptureRange, error) {
+			return terminal.CaptureRange(start, end)
+		}
+	}
 	return func() tea.Msg {
 		release, ok := m.acquirePreviewOwnership(ownership)
 		if !ok {
 			return nil
 		}
 		defer release()
-		capture, err := capturePreviewHistory(pane, request.Start, request.End)
+		captured, err := capture(pane, request.Start, request.End)
 		return previewHistoryLoadedMsg{
 			Target:     target,
-			Capture:    capture,
+			Capture:    captured,
 			Generation: request.Generation,
 			Err:        err,
 		}
