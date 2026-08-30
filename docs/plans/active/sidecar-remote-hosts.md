@@ -1,9 +1,9 @@
 # Sidecar as its own remote host runtime
 
-Status: **active, Phase B complete — interactive remote hosts behind a flag**, 2026-08-29
+Status: **active, Phase C complete — remote creation, mutation, and rename behind a flag**, 2026-08-30
 
-Related: [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) — the competing alternative for the same deliverable; see [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) for what decides between them. [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal to both.
-Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 measurements, transcripts, and findings are in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md). Phase B's final-candidate tests and isolated two-machine proof are in [docs/evidence/sidecar-remote-hosts-phase-b.md](../../evidence/sidecar-remote-hosts-phase-b.md).
+Related: [Herdr as Sidecar's remote host runtime](../deprecated/herdr-remote-hosts.md) was the competing alternative for the same deliverable; it is deprecated — this plan won on its Phase 0 numbers, and [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) records what was compared. [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal.
+Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 measurements, transcripts, and findings are in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md). Phase B's final-candidate tests and isolated two-machine proof are in [docs/evidence/sidecar-remote-hosts-phase-b.md](../../evidence/sidecar-remote-hosts-phase-b.md). Phase C's isolated two-machine proof is in [docs/evidence/sidecar-remote-hosts-phase-c.md](../../evidence/sidecar-remote-hosts-phase-c.md).
 
 ## Decision first
 
@@ -39,7 +39,7 @@ Both plans deliver the same product surface: a **Host** in the Sessions browser.
 | What it costs | Depends on a third-party product's pace and priorities | Sidecar must build the host protocol, a headless entry point, and maintain its own remote transport forever |
 | Terminal runtime on the host | Herdr **is** the terminal runtime — it sees panes it owns | tmux — Sidecar sees any tmux session on the default server, including shells no Sidecar created |
 
-Decision posture: **both plans stay active through their Phase 0 spikes; this plan's spike is cheaper and should run first.** If proxied control mode over a real link feels as good as the seam analysis predicts, the Herdr path's remaining advantage is Herdr-native users' workflows, not capability, and the Herdr plan should then be re-scoped or deprecated with that evidence cited. If the spike finds the SSH round-trips make in-band capture sluggish in a way Herdr's push-frames avoid, that is the number that keeps the Herdr plan alive. The shared pieces — host registry, SSH/ControlMaster transport (adopt the ssh recipe recorded in the Herdr plan: `-S <dir>/ctl -o ControlMaster=auto -o ControlPersist=yes -T`, generated `-F` config with `ServerAliveInterval 15`/`CountMax 4`, `ssh -O exit` teardown), Sessions-browser host grouping, `HostID` on `workspaceinventory.Workspace` — are identical in both plans and are not throwaway whichever wins.
+Decision posture: **resolved — this plan won.** Its Phase 0 spike ran first, proxied control mode proved local-grade on a real link, and the Herdr plan was deprecated with that evidence cited, exactly as this paragraph originally provided for. The table above stays as the record of what was weighed. Herdr's remaining relevance is as the feature benchmark: where it names a capability Sidecar lacks, the bar is parity or better on Sidecar's own runtime — tracked in [the agent-control plan](herdr-agent-control-and-session-restore.md), not here. The shared transport pieces (the ssh ControlMaster recipe: `-S <dir>/ctl -o ControlMaster=auto -o ControlPersist=yes -T`, generated `-F` config with `ServerAliveInterval 15`/`CountMax 4`, `ssh -O exit` teardown) were adopted from the Herdr plan's research and shipped in `internal/hosts`.
 
 ## Scope boundary
 
@@ -199,13 +199,60 @@ Host configuration is live-reloaded. Saving config refreshes feature resolution,
 
 **Result: passed.** The final `7cff6d1e` candidate was driven between isolated Sidecars on `aerie` and `marcusbook`. Exact ordered input arrived on the remote pane. With deliberately different viewports, viewer input reclaimed and restored 103×45, then remote-human input reclaimed and restored 73×30 without either side leaving interactive mode. Viewer exit preserved the human's lease; human exit removed it. Both default tmux servers and real Sidecar state trees were untouched. Full repository tests, build, focused race tests, and independent review passed; see the Phase B evidence document.
 
-### Phase C — creation, mutation, conversations
+### Phase C — creation, mutation, rename ✅ complete (2026-08-29)
 
-- Serve gains a request channel: create shell, create worktree (with the setup-hook confirmation flow surfaced locally), start agent, rename — all mapping onto existing `workspaceops` functions with their existing guards.
-- Reap parity for remote rows, by porting the overview's guarded choreography.
-- Remote conversations: the adapter stack served over the protocol (session lists first; messages on demand). This is the capability that exists on no other path and should be scoped by real demand, not built speculatively.
+**Serve did not gain a request channel, and that is the phase's main design decision.** Mutations are one-shot `ssh <target> sidecar <verb> --json` invocations through the ControlMaster that already carries the serve stream and tmux control mode. `hosts.Transport.SidecarCommand` already rendered that invocation; the CLI was already the proven headless caller with every guard; `create shell` and `create worktree` already emitted structured `--json` results.
 
-**Exit gate:** create → work → observe → answer → close entirely from the local Sidecar, with remote state trees left exactly as a local Sidecar would leave them, verified across a remote tmux restart and a serve reconnect.
+What that buys is worth stating, because the plan originally specified the other shape:
+
+- `hostproto` stays at `Version = 1` with no request direction, and `hostserve` gains no write paths — so "serve is read-only by construction rather than by flag" remains a property of its call graph, checked by `TestServeIsReadOnly`, rather than a claim that quietly stopped being true.
+- The in-flight/replaced-transport ordering hazards are absent by construction. Phase B spent four consecutive review cycles on exactly that class inside one long-lived channel; a one-shot invocation with a deadline has no such state.
+- Every mutation is equally reachable by an agent over plain ssh, which is the parity the project's design principles ask for. The verbs are the deliverable, not a byproduct.
+
+The cost is one ssh exec per deliberate act — measured at 82–383 ms on a real link in Phase 0 — and three CLI verbs that had to be written because the capability was TUI-only.
+
+- **Headless verbs, owed regardless of remote hosts.** `shell rename --target` renames a shell you are not sitting in; `shell send --target --run/--type` sends a command into an existing shell; `create worktree --plan` resolves a plan and emits it without mutating, so a confirmation can show branch, path, source OID, and whether a setup hook will run.
+- **Four actions on a remote row**: create shell, create worktree (plan → confirm → execute), seed an agent, rename. Rows arrive through the ordinary next serve snapshot rather than being synthesized, so what the user sees is what the host reports.
+- **`remoteActionRefusal` stopped being an unconditional no** and became a question about the verb, which is what its own doc comment anticipated. Delete, merge, and navigate still refuse: their implementations resolve paths against the local filesystem.
+
+**Exit gate:** create → work → observe → answer → close entirely from the local Sidecar, with remote state trees left exactly as a local Sidecar would leave them.
+
+**Result: passed, after a review cycle that found nine defects.** Driven between an isolated local Sidecar and `marcusbook`. Six of seven journeys passed outright; the seventh (a failed mutation being actionable) was partial until its fix landed.
+
+`marcusbook` was byte-identical before and after — same default-server socket inode, same server pid, same 489 state files, same manifest checksum — and its installed sidecar still reported the pre-Phase-C build, because the proof pointed the registry's `remoteBinary` at a scratch path rather than installing anything. Remote isolation was proven three ways rather than asserted: the live ssh command line carried every lever, the host's own serve hello reported `isolatedState: true` with its resolved scratch `stateDir`, and the fail-closed backstop was demonstrated refusing when a lever was removed.
+
+**The defect worth recording is the one about the safety surface.** `RunSidecar` decoded the *first* JSON value on stdout, and because Go tolerates missing fields, a host whose login profile emits structured log lines (`{"level":"info","msg":"loading nvm"}`) had that line accepted as the result — with a nil error and an all-zero value. The remote worktree confirmation then rendered blank, and pressing Create still ran the real `sidecar create worktree` on the host. The plan already named "a login profile that prints to stdout regardless" as a required row state; this is that condition one notch more specific, and no unit test found it because every banner fixture used non-JSON text. The decoder now prefers the last value, refuses a zero-value decode, and lets a result type declare which fields make an object its verb's answer — while still tolerating unknown fields, because forward compatibility is real.
+
+Three more that mattered:
+
+1. **Exit 2 meant both "usage error" and "your input was rejected."** Renaming a remote shell to a name already in use produced a perfectly good host message wrapped in "update Sidecar on whichever machine is older." Validation now has its own exit code (5); exit 2 keeps its version-skew meaning.
+2. **`shell send` proved ownership against one tmux server and typed into another.** The record's namespace *is* the socket path, and the send path discarded it. The rename path passes it through and is pinned by a test; send is now refused on a mismatch. Every fixture in the suite shared one namespace, so deleting namespace handling entirely left the tests green.
+3. **A host project that had never been opened on the host could not be mutated at all.** Serve advertises projects from the host's `config.projects.list`, but `--project` resolved only through already-existing state directories, so a first-run remote project returned `unknown project`. This was found by the live proof, not by review, and it is the first thing a new user of the feature would have hit.
+
+The `pendingCreatedHost` finding is the Phase A `tty.Model` defect class verbatim — a field set on one of four activation paths, four lines below a comment stating the correct rule. It is now set on all four. That rule has earned its place as the first thing to check in this area.
+
+**Not proven:** a first-run remote host end to end (it was blocked by the finding above and fixed after the run), multi-host and host-churn paths, so `hostReplyStale`/`remoteReplyDropped` went unexercised; concurrent mutations; a link dropped mid-mutation; any timeout path; a required or failing setup hook; and an agent actually doing work remotely — it reached its trust prompt unanswered.
+
+**The fix cycle then needed a fix cycle, and that is the other thing worth recording.** Verifying the fixes found two regressions in local, flag-off behavior that the fixes' own green suite did not catch. One of them falsified the guarantee the first cycle had just established: `mutatesState` scanned every argument for `-h`/`--help`/`help` before resolving the subcommand, so a flag *value* disarmed the isolation gate — `shell send --run "help"`, an ordinary thing to send into a shell, skipped it and issued the tmux call. The gate now resolves the subcommand path first and reads the remainder the way the verb's own parser does. The other: the new exit 5 fell outside the set of codes meaning "the split placement declined", so `create shell --name <illegal>` printed its error, claimed it had created a workspace shell instead, printed the error again, and exited 5 having created nothing. That condition is now keyed on the decline codes, so the next code added is final by default rather than accidentally a fallback.
+
+The lesson generalizes past this phase: a fix commit is a change like any other and earns its own verification pass. Both regressions were introduced by fixes to findings, both were in code the flag never gates, and neither was caught by the tests written alongside them.
+
+**Gaps recorded rather than closed**, each with a task:
+
+- `SIDECAR_ISOLATED_STATE` gates writes but not reads: an isolated run read a real repo's `.sidecar/shells.json` into its isolated tree (source unmodified, no damage). Closing it means read-boundary assertions with their own blast radius, since an isolated proof legitimately reads the repo — just not the real state tree.
+- `config.Save` has no `AssertIsolatedPath` at all, so a proof run can write the real `config.json`. The dispatch-level `Command.Mutates` gate cannot cover it, because the TUI's config surface reaches the writer without passing through `cli.Run` — the fix belongs in the writer (td-cfa9a4).
+- Worktree sessions record no tmux namespace, so `shell send` against a worktree target can still reach the wrong server. Same class as the shell-record hole this phase closed, narrower in practice, and it needs a new state field plus a migration (td-aad4f1).
+- `/tmp/sc-hosts-*` ControlMaster directories outlive `tmux-drive.sh stop`.
+- `sidecar shell rename` returns 5 for a rejected name with `--target` and 2 without. The exit tables describe both accurately; making them agree is a public exit-code change on a path unrelated to remote hosts, so it was left as a deliberate inconsistency rather than smuggled in here.
+
+### Deferred from Phase C
+
+Both were in the original Phase C scope and were cut deliberately, not forgotten:
+
+- **Reap parity for remote rows.** This is the td-8d18de shells-wipe hazard class, executed against a machine the user is not sitting at. Remote shells are structurally never reaped today — `reapDeadShells` iterates local results only — so nothing regresses by waiting. Revisit when a real host actually accumulates dead rows, and only by porting the overview's three guards rather than writing fresh logic.
+- **Remote conversations.** The plan's own position is that this should be scoped by real demand rather than built speculatively, and no demand has been recorded.
+
+Also left: `remoteCreateShellArgs` does not pass `--tab` (it lands on workspace placement through an implicit dependency on the host's login environment, with a covering fallback), and create-with-agent is still two round trips (`create shell` then `shell send --run`) rather than one atomic `create shell --run`.
 
 ## Failure, degradation, security
 
@@ -222,7 +269,7 @@ Host configuration is live-reloaded. Saving config refreshes feature resolution,
 - **One serve per viewer vs one serve shared.** Per-viewer is the simple default and matches the ephemeral design; if a host ever has many viewers, the collector work duplicates. Revisit only on evidence.
 - **Namespace/socket scope.** Inventory correlates shell rows only on the default tmux socket namespace (`inventory.go:549`); whether remote hosts should surface non-default-socket sessions follows the local answer, whatever it becomes.
 - **Should the hello carry host capabilities** (process-identity fidelity, adapter availability) so the viewer can render honest confidence per host? Likely yes and cheap; decide with the protocol v1 schema.
-- **Bake-off criteria vs the Herdr plan** are recorded in [Relationship](#relationship-to-the-herdr-plan); the open question is who runs both spikes and when, not what to measure.
+- ~~**Bake-off criteria vs the Herdr plan.**~~ Settled: this plan's spike ran, the numbers were decisive, and the Herdr plan is deprecated.
 
 ## Acceptance evidence
 
@@ -236,13 +283,19 @@ Host configuration is live-reloaded. Saving config refreshes feature resolution,
 | Geometry | A read-only viewer never resizes anything; viewer and remote-human input preempt each other without re-entry and restore their own distinct viewports |
 | Coexistence | A human's Sidecar TUI on the remote host sees no behavior change while a viewer observes; two viewers coexist |
 | Reconnect | Link drop and tmux-server restart both reconverge (incarnation transition → dead rows → recovery), with nothing wiped |
-| Isolation | Serve under `SIDECAR_ISOLATED_STATE` refuses to touch a real state tree |
+| Isolation | Serve under `SIDECAR_ISOLATED_STATE` refuses to touch a real state tree, and a mutating CLI verb refuses before it creates a tmux session or a git worktree |
 | Rollback | Flag off → local behavior and state byte-identical |
+| Mutation | Create shell, create worktree through its confirmation, seed an agent, and rename both kinds, each landing on the host and returning as an ordinary row in the next snapshot |
+| Refusal | Delete, merge, navigate and open-in-Git each refuse a remote row and name the machine |
+| Mutation failure | A rejected mutation renders the host's own reason plus its fix, wrapped rather than truncated, and is recoverable from the running app's log |
 
-Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matrix, side by side with the Herdr plan's numbers if both spikes run. The decision between the two plans is made from that table, on the record.
+Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matrix. The Herdr spike never needed to run; the decision between the two plans was made from this plan's numbers alone, on the record.
 
 ## Changelog
 
+- **2026-08-30** — Pre-merge review pass (two fresh-context reviewers over the whole Phase C diff) closed six CLI/hosts findings and seven Sessions-browser findings before the branch reached `main`. The ones that changed contracts: `create worktree --expect-source-oid` now pins a confirmed remote plan to its commit, so a ref that moves between plan and Create is refused with exit 5 instead of silently building from the new head — the guard the local modal already had from executing its stored plan; a failing setup hook's own `command not found` is no longer misread as an uninstalled Sidecar; the result decoder's candidate window keeps the last JSON lines rather than the first, so a profile emitting 32+ structured-log lines cannot push a successful result out of the window; `notify config set` is now marked mutating and inside the isolation gate; and host-derived error text is stripped of terminal control bytes before display. In the browser: disabled hosts are refused up front with an accurate message instead of failing as "removed or retargeted", the rename modal gained an in-flight guard against double-Enter races, a stale reply from one host no longer wipes another host's pending selection, switching the create form to a remote project clears the local repo's branch list, and Merge is hidden on remote rows rather than offered and refused. Also updated the Herdr framing here and in the agent-control plan: the bake-off is resolved, the Herdr remote-hosts plan is deprecated, and Herdr remains the feature benchmark only.
+- **2026-08-30** — Phase C fixes verified, and the verification found two regressions the fixes had introduced in local flag-off behavior: an isolation gate a flag value could disarm, and a rejected `--name` reported as a shell that had been created. Both repaired, with the exit-code tables and `docs/reference/cli.md` corrected to match. Recorded four gaps as tasks rather than widening the changeset: `config.Save`'s missing isolation assertion (td-cfa9a4), worktree sessions carrying no tmux namespace (td-aad4f1), reads not being gated by `SIDECAR_ISOLATED_STATE`, and the two rename forms disagreeing on a validation exit code.
+- **2026-08-29** — Phase C completed, independently reviewed, and proven between two real machines. Mutations ship as one-shot `sidecar <verb> --json` invocations over the existing ssh master rather than as a serve request channel, so `hostproto` stays v1 and `hostserve` keeps its read-only call graph. Added three headless CLI verbs (`shell rename --target`, `shell send --target`, `create worktree --plan`), the `hosts.RunSidecar` seam, and remote create/worktree/seed-agent/rename in the Sessions browser. Review and the live run together found nine defects, including a decoder that let a host's structured log line blank the worktree confirmation for an operation that then really ran, and a configured-but-never-opened remote project that could not be mutated at all. Fixed `OpenSelectedInGit`, which had no remote guard and sent a remote path into a local `SwitchWorktree`. Reap parity and remote conversations deferred with reasons. Evidence in `docs/evidence/sidecar-remote-hosts-phase-c.md`.
 - **2026-08-29** — Phase B completed and independently reviewed. Added ordered in-band remote input, Sessions interactive/search/history parity, host-aware lease and capture paths, bidirectional input-driven geometry takeover, nonblocking ordered teardown across control/backend replacement, and live host-config reconciliation including td-998e58. The final isolated two-machine gate passed with distinct 103×45 and 73×30 viewports; evidence is recorded in `docs/evidence/sidecar-remote-hosts-phase-b.md`.
 - **2026-08-29** — Phase A built and driven end to end against a second real machine: host registry and config, a long-lived serve client with reconnect/backoff and a health vocabulary that names its fix, `HostID` on the inventory, remote rows in the Sessions browser and the Activity board, host grouping, health rows, a read-only live pane over proxied control mode, preview content from serve captures, and Linux `/proc` process identity. Behind `features.SidecarRemoteHosts`, default off. Remaining Phase A evidence: a full day of use.
 - **2026-08-29** — Phase 0 run end to end against a second real machine. Verdict: proceed to Phase A. Resize-without-restart dropped from Phase A on measured evidence; login-shell resolution, a not-the-protocol row state, and the incarnation-vs-death distinction added as required Phase A items. Retained: `internal/hostproto`, `internal/hostserve`, `internal/hosts`, `internal/tty/control_remote.go`, `internal/buildinfo`, `sidecar host serve|probe`, and the spike harnesses under `scripts/`.

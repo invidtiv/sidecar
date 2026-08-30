@@ -39,7 +39,11 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 	if destFlags.sessions {
 		dest, err = resolveSessionsDestination(ctx, env.StateDir, destFlags.sessionsRow)
 	} else {
-		dest, err = resolveOpenDestination(ctx, env.StateDir, destFlags.shell, destFlags.project)
+		// Like open: layout writes a request onto the bus for a running
+		// instance and needs no project state directory of its own, so it
+		// resolves --project without creating one. Registering is for the
+		// verbs that are about to write INTO a project's state.
+		dest, err = resolveOpenDestination(ctx, env.StateDir, destFlags.shell, destFlags.project, resolveProjectOnly)
 	}
 	if err != nil {
 		cliErrln(env.Stderr, err)

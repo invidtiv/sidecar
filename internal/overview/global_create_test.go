@@ -424,6 +424,25 @@ func selectCreateAgent(t *testing.T, m *Model, agent string) {
 	t.Fatalf("could not select agent %q, got %q", agent, m.createForm.Agent())
 }
 
+// selectCreateProject arrows the form's project combo to the given key, the
+// way selectCreateAgent does for agents, so the switch runs the real
+// finishCreateInput path a user's keystroke runs.
+func selectCreateProject(t *testing.T, m *Model, key string) {
+	t.Helper()
+	md := createFormModal(t, m)
+	md.SetFocus(workspacecreate.FieldProject)
+	renderCreateModal(t, m)
+	for _, dir := range []string{"up", "down"} {
+		for i := 0; i < 24; i++ {
+			if m.createForm.ProjectKey() == key {
+				return
+			}
+			m.handleCreateShellKey(createKey(dir))
+		}
+	}
+	t.Fatalf("could not select project %q, got %q", key, m.createForm.ProjectKey())
+}
+
 func clearFocusedCombo(m *Model) {
 	for i := 0; i < 80; i++ {
 		m.handleCreateShellKey(createKey("backspace"))

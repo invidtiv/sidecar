@@ -2,6 +2,7 @@ package overview
 
 import (
 	tea "charm.land/bubbletea/v2"
+	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
 
@@ -15,6 +16,11 @@ type OpenInGitMsg struct {
 // OpenSelectedInGit jumps to the project's Git plugin at the checkout the
 // mini-diff showed: worktree Path, or ProjectRoot for a shell.
 func (m *Model) OpenSelectedInGit() tea.Cmd {
+	if workspace, ok := m.SelectedWorkspace(); ok {
+		if reason := remoteActionRefusal(workspace, "open"); reason != "" {
+			return appmsg.Blocked(reason)
+		}
+	}
 	path, ok := m.openInGitPath()
 	if !ok {
 		return nil
@@ -22,9 +28,19 @@ func (m *Model) OpenSelectedInGit() tea.Cmd {
 	return func() tea.Msg { return OpenInGitMsg{Path: path} }
 }
 
+// openInGitPath is the local checkout the Git plugin would open.
+//
+// A remote row has none. Its Path names a directory on another machine, and
+// the app answers OpenInGitMsg with a local SwitchWorktree — which on a machine
+// laid out like the other one does not fail, it silently opens THIS machine's
+// repository under the remote row's name. That is the same class the navigation
+// guard refuses, and this is the second door into it.
 func (m *Model) openInGitPath() (string, bool) {
 	workspace, ok := m.SelectedWorkspace()
 	if !ok {
+		return "", false
+	}
+	if remoteActionRefusal(workspace, "open") != "" {
 		return "", false
 	}
 	path := workspace.Path

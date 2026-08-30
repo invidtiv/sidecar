@@ -44,10 +44,16 @@ type createPickerDataMsg struct {
 }
 
 func (m *Model) loadCreatePickerData() tea.Cmd {
-	root := ""
-	if selected, ok := m.SelectedWorkspace(); ok {
-		root = selected.Path
+	if m.remoteSelection() {
+		// The fallback below is "any local project will do", which is true when
+		// nothing is selected and false when the selection is on another
+		// machine: it would fill the diff, issue and note pickers with THIS
+		// machine's commits and issues while the form targets a host. Its
+		// siblings loadCreateFileCandidates and loadCreateBranches both answer
+		// nothing in that situation; so does this.
+		return nil
 	}
+	root := m.localSelectedRoot()
 	if root == "" && len(m.projects) > 0 {
 		root = m.projects[0].Path
 	}
@@ -74,11 +80,34 @@ func (m *Model) loadCreatePickerData() tea.Cmd {
 	}
 }
 
-func (m *Model) loadCreateFileCandidates() tea.Cmd {
-	root := ""
-	if selected, ok := m.SelectedWorkspace(); ok {
-		root = selected.Path
+// localSelectedRoot is the selected row's directory, but only when that
+// directory is on this machine.
+//
+// Everything these pickers do — git log, gh issue list, a filesystem scan —
+// runs here. Handed a remote row's path they would walk a same-named directory
+// on THIS machine and offer its commits, issues and files as if they belonged
+// to the other one.
+func (m *Model) localSelectedRoot() string {
+	selected, ok := m.SelectedWorkspace()
+	if !ok || selected.Remote() {
+		return ""
 	}
+	return selected.Path
+}
+
+// remoteSelection reports that the selected row is on another machine.
+//
+// localSelectedRoot returns "" for both "nothing selected" and "selected
+// elsewhere", and those two want opposite answers from a caller that has a
+// local fallback: any project will do for the first, and none will do for the
+// second.
+func (m *Model) remoteSelection() bool {
+	selected, ok := m.SelectedWorkspace()
+	return ok && selected.Remote()
+}
+
+func (m *Model) loadCreateFileCandidates() tea.Cmd {
+	root := m.localSelectedRoot()
 	if root == "" {
 		return nil
 	}

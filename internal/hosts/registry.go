@@ -289,6 +289,21 @@ func (r *Registry) Client(id string) (*Client, bool) {
 	return client, ok
 }
 
+// RunSidecar runs a sidecar verb on one registered host, decoding its --json
+// result into out. See Client.RunSidecar; this only resolves the host, so that
+// "there is no such host" and "that host is not connected" are one refusal
+// shape rather than two unrelated ones at the call site.
+func (r *Registry) RunSidecar(ctx context.Context, hostID string, args []string, out any) error {
+	client, ok := r.Client(hostID)
+	if !ok {
+		return &RunError{
+			Failure: FailUnavailable, HostID: hostID, Args: args, ExitCode: -1,
+			Detail: "no host is registered as " + hostID,
+		}
+	}
+	return client.RunSidecar(ctx, args, out)
+}
+
 // MarkStaleIfQuiet ages every connected host, returning true if any moved.
 func (r *Registry) MarkStaleIfQuiet() bool {
 	changed := false

@@ -2,6 +2,8 @@ package overview
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +49,7 @@ func remoteSnapshot(lane string) *hostproto.Snapshot {
 		Projects: []hostproto.Project{{
 			Key: "/home/me/api", Name: "api", Root: "/home/me/api",
 			Items: []hostproto.Item{{
-				ID: "/home/me/api:shell:s1", ProjectKey: "/home/me/api", ProjectName: "api",
+				ID: "/home/me/api:shell:s1", ProjectKey: "/home/me/api", ProjectName: "api", ProjectRoot: "/home/me/api",
 				Kind: "shell", Key: "s1", Name: "Claude pane", Session: "api-claude", PaneID: "%7",
 				Provider: "claude", Live: true, Preview: "line one\nDo you want to proceed?",
 				Agent: &hostproto.Presentation{Lane: lane, Label: lane, Icon: "◆", Attention: lane == "blocked"},
@@ -198,21 +200,72 @@ func TestStaleHostKeepsItsRowsAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestRemoteWorkspacesAreNeverActedOn is the safety property. A remote path
-// resolved against THIS machine either fails confusingly or — far worse —
-// succeeds against an unrelated local directory.
+// remoteVerbCallSites is every verb literal remoteActionRefusal is actually
+// called with, read out of this package's own source rather than typed here by
+// hand — a hand-maintained list is exactly how "create" and "send" survived in
+// remoteVerbs, asserted on by a test, while no call site ever passed them.
+func remoteVerbCallSites(t *testing.T) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package source: %v", err)
+	}
+	pattern := regexp.MustCompile(`remoteActionRefusal\([^,]+,\s*"([^"]+)"`)
+	verbs := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+			verbs[match[1]] = true
+		}
+	}
+	if len(verbs) == 0 {
+		t.Fatal("no remoteActionRefusal call sites found; the scan is broken, not the code")
+	}
+	return verbs
+}
+
+// TestRemoteWorkspacesAreNeverActedOn is the safety property, now asked as a
+// capability question rather than a blanket no.
+//
+// The verbs that reach the host as its own `sidecar` invocation are allowed,
+// because the machine that owns the state is the machine that changes it. The
+// verbs whose implementation runs HERE stay refused: a remote path resolved
+// against this filesystem either fails confusingly or — far worse — succeeds
+// against an unrelated local directory.
 func TestRemoteWorkspacesAreNeverActedOn(t *testing.T) {
 	remote := workspaceinventory.Workspace{
 		ID: "h\x1fx", HostID: "mac-mini", Name: "Claude pane",
 		Kind: workspaceinventory.KindWorktree, Path: "/home/me/api",
 	}
-	for _, verb := range []string{"delete", "rename", "open"} {
+	for _, verb := range []string{"delete", "merge", "open"} {
 		reason := remoteActionRefusal(remote, verb)
 		if reason == "" {
 			t.Fatalf("%s was permitted on a remote workspace", verb)
 		}
 		if !strings.Contains(reason, "mac-mini") {
 			t.Errorf("%s refusal %q does not say which machine", verb, reason)
+		}
+	}
+	// rename is the one verb this gate is consulted for and permits. "create"
+	// and "send" used to be listed here and asserted on here, and neither the
+	// gate nor the assertion was reachable from any call site: creation
+	// resolves a createTarget from the form rather than judging a selected row,
+	// and there is no standalone send action. A map entry nothing consults is a
+	// gate that looks open without being a gate.
+	if reason := remoteActionRefusal(remote, "rename"); reason != "" {
+		t.Errorf("rename is a host-side verb but was refused: %q", reason)
+	}
+	asked := remoteVerbCallSites(t)
+	for verb := range remoteVerbs {
+		if !asked[verb] {
+			t.Errorf("remoteVerbs lists %q, which remoteActionRefusal is never called with", verb)
 		}
 	}
 	local := workspaceinventory.Workspace{ID: "x", Name: "local", Kind: workspaceinventory.KindWorktree}
@@ -223,6 +276,12 @@ func TestRemoteWorkspacesAreNeverActedOn(t *testing.T) {
 	// check must be inside it, not beside it.
 	if reason := deleteRefusal(remote); !strings.Contains(reason, "mac-mini") {
 		t.Errorf("deleteRefusal did not refuse a remote worktree: %q", reason)
+	}
+	// mergeRefusal likewise: it is what the footer consults, so with the
+	// remote clause inside it Merge is hidden on a remote row up front rather
+	// than offered and then taken back by the navigation guard.
+	if reason := mergeRefusal(remote); !strings.Contains(reason, "mac-mini") {
+		t.Errorf("mergeRefusal did not refuse a remote worktree: %q", reason)
 	}
 }
 

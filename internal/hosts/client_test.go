@@ -125,7 +125,9 @@ printf x
 	registry := NewRegistry(ClientOptions{})
 	registry.Sync(context.Background(), []Host{{ID: "slow-close", Target: "slow-close"}})
 	var pid int
-	deadline := time.Now().Add(2 * time.Second)
+	// The budget covers spawning the fake ssh under a fully loaded parallel
+	// test run; a passing run waits only as long as the spawn actually takes.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if childPID, err := os.ReadFile(childPIDPath); err == nil {
 			pid, err = strconv.Atoi(strings.TrimSpace(string(childPID)))

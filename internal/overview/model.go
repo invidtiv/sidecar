@@ -355,7 +355,12 @@ type Model struct {
 	hoverHandleRegion string
 	hoverHandleSplit  int
 
-	renameOpen           bool
+	renameOpen bool
+	// renameBusy marks a rename whose persist is in flight. Input is swallowed
+	// while it is set — the remote round trip takes long enough for a second
+	// Enter, which raced two renames on the host with the loser's reply
+	// silently dropped.
+	renameBusy           bool
 	renameWorkspace      workspaceinventory.Workspace
 	renameInput          textinput.Model
 	renameError          string
@@ -381,6 +386,21 @@ type Model struct {
 	createPlan         *workspaceops.WorktreePlan
 	createRecord       *workspaceops.WorktreeRecord
 	pendingCreatedPath string
+	// pendingCreatedHost scopes the pending selection to the machine the
+	// workspace was created on. Empty means this one. Without it a remote
+	// creation is answered by a local row that happens to share a path or a
+	// session name — see honorPendingCreated.
+	//
+	// Like createTargetHost it is SET on every path that queues a pending
+	// selection, never adjusted on noticing a difference. A path that sets
+	// pendingCreatedTmux or pendingCreatedPath and leaves this alone inherits
+	// the previous creation's machine and then searches the wrong snapshot.
+	pendingCreatedHost string
+	// createTargetHost is the host the create flow is currently addressing, or
+	// "" for this machine. It is SET on every submission rather than adjusted
+	// when a difference is noticed, which is the rule that stops a surface that
+	// went remote once from staying remote (Phase A's tty.Model defect).
+	createTargetHost string
 
 	deleteOpen      bool
 	deleteBusy      bool
@@ -640,17 +660,15 @@ func (m *Model) RequestNavigationAction(workspace workspaceinventory.Workspace, 
 }
 
 // refuseRemoteAction reports a refusal as an ordinary validation failure, so
-// every surface that already renders a failed navigation renders this too. It
-// says which machine the row is on, because "not supported" without a reason
-// reads as a bug.
+// every surface that already renders a failed navigation renders this too. The
+// sentence is remoteActionRefusal's, not a second wording of the same rule.
 func (m *Model) refuseRemoteAction(workspace workspaceinventory.Workspace, verb string) tea.Cmd {
 	m.requestID++
 	msg := ValidationMsg{
 		Workspace:  workspace,
 		Generation: m.generation,
 		RequestID:  m.requestID,
-		Err: fmt.Errorf("%s lives on %s; Sidecar can watch a remote workspace but cannot %s one yet",
-			workspace.Name, workspace.HostID, verb),
+		Err:        fmt.Errorf("%s", remoteActionRefusal(workspace, verb)),
 	}
 	return func() tea.Msg { return msg }
 }
@@ -881,11 +899,24 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		m.applyCreateFileCandidates(msg)
 		return nil
 	case globalShellCreatedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
 		m.createBusy = false
 		if msg.Err != nil {
 			m.createModal = nil
-			m.setCreateError(msg.Err.Error())
+			m.setCreateError(remoteActionError(msg.Err))
 			m.clearPendingCreated()
+			return nil
+		}
+		if msg.HostID != "" {
+			// The row arrives with that host's next snapshot. Nothing is
+			// synthesized here, and no local inventory is taken: a local
+			// refresh would answer a question about another machine.
+			m.pendingCreatedTmux = msg.Tmux
+			m.pendingCreatedPath = ""
+			m.pendingCreatedHost = msg.HostID
+			m.closeCreateShell()
 			return nil
 		}
 		m.closeCreateShell()
@@ -895,16 +926,25 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case previewSplitCloseProbeMsg:
 		return m.applyPreviewSplitCloseProbe(msg)
 	case globalWorktreePlannedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
 		m.createBusy = false
 		if msg.Err != nil {
 			m.createModal = nil
-			m.setCreateError(msg.Err.Error())
+			m.setCreateError(remoteActionError(msg.Err))
 			return nil
 		}
 		m.createPlan = msg.Plan
 		m.createModal = nil
 		return nil
 	case globalWorktreeCreatedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteCreateReply(msg.HostID)
+		}
+		if msg.HostID != "" {
+			return m.applyRemoteWorktreeCreated(msg)
+		}
 		m.createBusy = false
 		m.createPlan, m.createRecord = msg.Plan, msg.Record
 		if msg.Record == nil {
@@ -949,6 +989,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.pendingCreatedPath = msg.Record.Path
 		m.pendingCreatedTmux = ""
+		// Local launch: SET the machine, do not leave whatever the last remote
+		// create put there. This is the field's own rule (see the declaration)
+		// and it was obeyed on one activation path in four — a browser that had
+		// created remotely once then failed to select anything it created here.
+		m.pendingCreatedHost = ""
 		m.showIdleWorktrees = true
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)

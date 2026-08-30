@@ -129,8 +129,11 @@ type Dialer func(ctx context.Context) (*Conn, error)
 // division is deliberate: "degrade the host, not the app" is only achievable
 // if the thing that can fail is entirely behind this boundary.
 type Client struct {
-	host    Host
-	dial    Dialer
+	host Host
+	dial Dialer
+	// invoke runs a one-shot remote verb. Nil means the production runner; see
+	// run.go, which owns everything about the request seam.
+	invoke  Invoker
 	now     func() time.Time
 	updates chan Update
 
@@ -182,7 +185,9 @@ const (
 
 // ClientOptions configures a Client. Every field is optional.
 type ClientOptions struct {
-	Dial       Dialer
+	Dial Dialer
+	// Invoke replaces the runner used by RunSidecar. Leave nil in production.
+	Invoke     Invoker
 	Now        func() time.Time
 	StaleAfter time.Duration
 	MinBackoff time.Duration
@@ -197,6 +202,7 @@ func NewClient(host Host, opts ClientOptions) *Client {
 	client := &Client{
 		host:          host,
 		dial:          opts.Dial,
+		invoke:        opts.Invoke,
 		now:           opts.Now,
 		updates:       make(chan Update, 16),
 		staleAfter:    opts.StaleAfter,
@@ -722,21 +728,44 @@ func sshDialer(host Host, controlDir string) Dialer {
 	}
 }
 
-// syncBuffer collects a child's stderr for later diagnosis. It is synchronised
+// syncBuffer collects a child's output for later diagnosis. It is synchronised
 // because os/exec writes to it on its own goroutine while the reader loop may
-// be reading it to classify a failure.
+// be reading it to classify a failure — and, on the one-shot path, because
+// WaitDelay can let Wait return while a copying goroutine is still writing.
+//
+// limit bounds it; zero means defaultSyncBufferLimit. A host that spews must
+// not grow the viewer's heap, which is the same reasoning as
+// hostproto.MaxLineBytes.
 type syncBuffer struct {
-	mu   sync.Mutex
-	data []byte
+	mu        sync.Mutex
+	limit     int
+	data      []byte
+	truncated bool
 }
+
+// defaultSyncBufferLimit is what the serve channel's stderr has always used.
+const defaultSyncBufferLimit = 8 << 10
 
 func (b *syncBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	// Bounded: a host that spews to stderr must not grow this without limit.
-	if len(b.data) < 8<<10 {
-		b.data = append(b.data, p...)
+	limit := b.limit
+	if limit <= 0 {
+		limit = defaultSyncBufferLimit
 	}
+	if room := limit - len(b.data); room > 0 {
+		if len(p) > room {
+			b.data = append(b.data, p[:room]...)
+			b.truncated = true
+		} else {
+			b.data = append(b.data, p...)
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	// Always report a full write: a child that is told its pipe is short does
+	// not stop writing, it dies of SIGPIPE, and a diagnostic cap must not be
+	// able to kill the command it is diagnosing.
 	return len(p), nil
 }
 
@@ -744,4 +773,18 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.data)
+}
+
+// Bytes copies the collected output.
+func (b *syncBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.data...)
+}
+
+// Truncated reports whether the cap discarded anything.
+func (b *syncBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
 }

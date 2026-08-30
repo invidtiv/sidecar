@@ -363,6 +363,18 @@ func TestSetBranchesPrefillsCurrentWithoutClobberingTypedValue(t *testing.T) {
 	if f.BaseBranch() != "feat" {
 		t.Fatalf("typed value gone should reset to current = %q, want feat", f.BaseBranch())
 	}
+
+	// An empty list clears everything — list and prefill. This is how a form
+	// whose project switched to a remote target sheds the LOCAL repository's
+	// branches: keeping either would offer a base another machine resolves
+	// against a different history.
+	f.SetBranches(nil, "")
+	if f.BaseBranch() != "" {
+		t.Fatalf("clearing the list kept base = %q", f.BaseBranch())
+	}
+	if len(f.branches) != 0 {
+		t.Fatalf("clearing the list kept branches = %v", f.branches)
+	}
 }
 
 func TestComboDoesNotOverwriteFocusedFilterOnRebuild(t *testing.T) {
@@ -467,5 +479,24 @@ func TestErrorSection(t *testing.T) {
 	view := renderForm(t, f)
 	if !strings.Contains(view, "Error: Name is required") {
 		t.Fatalf("missing error:\n%s", view)
+	}
+}
+
+// TestErrorSectionWrapsRatherThanTruncates. A remote failure's message is two
+// halves — the host's own sentence, then what to do about it — and the modal is
+// narrower than either. Rendered as one unwrapped line the tail was cut, which
+// always meant the actionable half: the live two-machine proof saw "Error: the
+// remote Sidecar did not accept this…" and nothing else.
+func TestErrorSectionWrapsRatherThanTruncates(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	message := `branch "phase-c-wt" already exists — pick another name, or delete that branch on the host`
+	f.SetError(message)
+	view := renderForm(t, f)
+	// Word by word, because wrapping moves the line breaks around: what must
+	// not happen is a word going missing.
+	for _, word := range strings.Fields(message) {
+		if !strings.Contains(view, word) {
+			t.Fatalf("the error was truncated before %q:\n%s", word, view)
+		}
 	}
 }

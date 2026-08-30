@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
@@ -411,6 +412,13 @@ func setupIsolatedCLI(t *testing.T) (stateHome, stateDir string) {
 	t.Setenv("SIDECAR_ISOLATED_STATE", "1")
 	t.Setenv("TMUX", "")
 	t.Setenv("TMUX_PANE", "")
+	// Both isolation axes, not one. XDG_STATE_HOME moves the state tree;
+	// config.json and state.json are $HOME-based and only -config moves them
+	// (AGENTS.md, td-8d18de). Without this the config path still resolved into
+	// the developer's real ~/.config/sidecar, which is exactly what the
+	// pre-handler CheckStateIsolation gate now refuses for a mutating verb.
+	config.SetConfigPath(filepath.Join(stateHome, "config", "config.json"))
+	t.Cleanup(func() { config.SetConfigPath(defaultTestConfigPath) })
 	stateDir = filepath.Join(stateHome, "sidecar")
 	if err := os.MkdirAll(filepath.Join(stateDir, "projects"), 0755); err != nil {
 		t.Fatal(err)

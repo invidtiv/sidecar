@@ -20,8 +20,10 @@ func runCreateWorktree(env Env, args []string) int {
 	base := ""
 	agent := ""
 	runCmd := ""
+	expectOID := ""
 	skipPerms := false
 	noLaunch := false
+	planOnly := false
 	var positional []string
 
 	for i := 0; i < len(args); i++ {
@@ -39,6 +41,12 @@ func runCreateWorktree(env Env, args []string) int {
 			continue
 		}
 		switch {
+		case arg == "--":
+			// Everything after `--` is a value, not a flag: a worktree may
+			// legitimately be named "-fix", and refusing it here made the
+			// local and remote paths disagree about what a legal name is.
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
 		case arg == "--base" || strings.HasPrefix(arg, "--base="):
 			val, next, ok := takeFlagArg(arg, args, i, "--base")
 			if !ok || val == "" {
@@ -55,6 +63,14 @@ func runCreateWorktree(env Env, args []string) int {
 			}
 			agent = val
 			i = next
+		case arg == "--expect-source-oid" || strings.HasPrefix(arg, "--expect-source-oid="):
+			val, next, ok := takeFlagArg(arg, args, i, "--expect-source-oid")
+			if !ok || val == "" {
+				cliErrf(env.Stderr, "--expect-source-oid requires a commit OID\n\n%s", help)
+				return 2
+			}
+			expectOID = val
+			i = next
 		case arg == "--run" || strings.HasPrefix(arg, "--run="):
 			val, next, ok := takeFlagArg(arg, args, i, "--run")
 			if !ok || val == "" {
@@ -67,6 +83,8 @@ func runCreateWorktree(env Env, args []string) int {
 			skipPerms = true
 		case arg == "--no-launch":
 			noLaunch = true
+		case arg == "--plan":
+			planOnly = true
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -87,13 +105,21 @@ func runCreateWorktree(env Env, args []string) int {
 		cliErrf(env.Stderr, "--no-launch cannot be combined with --agent or --run\n\n%s", help)
 		return 2
 	}
+	// --plan resolves and prints; it never reaches a session, so the flags that
+	// only describe one are refused rather than silently ignored. --agent and
+	// --skip-permissions are kept: they are plan fields the confirming caller
+	// needs to see back.
+	if planOnly && (noLaunch || runCmd != "") {
+		cliErrf(env.Stderr, "--plan cannot be combined with --run or --no-launch\n\n%s", help)
+		return 2
+	}
 
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
-	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
+	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag, registerProject)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return createDestExitCode(err)
@@ -119,16 +145,42 @@ func runCreateWorktree(env Env, args []string) int {
 	plan, err := workspaceops.ResolveWorktreePlan(ctx, workDir, proj.Path, positional[0], base, dirPrefix, setup)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		return 2
+		// 5, not 2: an existing branch, an occupied path, a base ref this
+		// machine does not have are all judgements about the values the caller
+		// supplied. Exit 2 stays reserved for a command that could not be
+		// parsed, which across a host boundary means version skew.
+		return exitInputRejected
 	}
 	if repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, proj.Path); keyErr == nil {
 		plan.RepoKey = repoKey
 	} else {
 		plan.RepoKey = workspaceops.StablePathKey(proj.Path)
 	}
-	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 	plan.AgentType = agent
 	plan.SkipPerms = skipPerms
+
+	// --expect-source-oid pins the plan a confirming caller already showed.
+	// The local modal gets this guard from executing its stored plan —
+	// ExecuteWorktree re-verifies that the source ref still resolves to the
+	// confirmed OID — but a remote confirmation re-runs this command from raw
+	// arguments, so without the pin a ref that moved between plan and Create
+	// (an agent pushing to main is this feature's normal operating condition)
+	// would silently produce a worktree at the new head. Refused with exit 5:
+	// the command parsed, and a value in it was rejected.
+	if expectOID != "" && plan.SourceOID != expectOID {
+		cliErrf(env.Stderr, "%s has moved since the plan was confirmed: it now resolves to %s, not the expected %s\n",
+			plan.SourceRef, plan.SourceOID, expectOID)
+		return exitInputRejected
+	}
+
+	// Everything above this line reads: ResolveWorktreePlan validates names,
+	// source identity, destination containment, and configured setup without
+	// touching the repository. --plan stops here, so nothing is created, no
+	// journal is written, and no session is launched.
+	if planOnly {
+		return emitWorktreePlan(env, flags.jsonOutput, plan)
+	}
+	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 
 	record, err := workspaceops.ExecuteWorktree(ctx, plan.RepoKey, plan)
 	if record == nil {
@@ -235,6 +287,50 @@ func runCreateWorktree(env Env, args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// emitWorktreePlan writes the resolved plan and returns. The plan struct is
+// the contract a confirm modal renders: branch, path, source ref and OID,
+// remote policy, and whether a setup hook will run.
+func emitWorktreePlan(env Env, jsonOutput bool, plan *workspaceops.WorktreePlan) int {
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(plan); err != nil {
+			cliErrln(env.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	lines := []string{
+		fmt.Sprintf("Branch:  %s", plan.Branch),
+		fmt.Sprintf("Path:    %s", plan.Path),
+		fmt.Sprintf("Source:  %s (%s)", plan.SourceRef, shortPlanOID(plan.SourceOID)),
+		fmt.Sprintf("Remote:  %s", plan.RemotePolicy),
+	}
+	if plan.RunHook {
+		hook := plan.HookPath
+		if plan.HookRequired {
+			hook += " (required)"
+		}
+		lines = append(lines, "Hook:    "+hook)
+	} else {
+		lines = append(lines, "Hook:    none")
+	}
+	if len(plan.EnvFiles) > 0 {
+		lines = append(lines, "Env:     "+strings.Join(plan.EnvFiles, ", "))
+	}
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(env.Stdout, line); err != nil {
+			return 1
+		}
+	}
+	return 0
+}
+
+func shortPlanOID(oid string) string {
+	if len(oid) > 8 {
+		return oid[:8]
+	}
+	return oid
 }
 
 func loadCreateConfig() *config.Config {
