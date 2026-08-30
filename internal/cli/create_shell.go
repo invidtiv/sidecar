@@ -91,6 +91,11 @@ func runCreateShell(env Env, args []string) int {
 		cliErrf(env.Stderr, "--run and --type are mutually exclusive\n\n%s", help)
 		return 2
 	}
+	// Trimmed before it is judged, not after: `--agent "  "` names no family, and
+	// a guard that ran against the untrimmed value would let it through and then
+	// record a shell with no agent type but SkipPerms set — durable state, and
+	// replayed on every later start of that shell.
+	agentKind = strings.TrimSpace(agentKind)
 	if skipPerms && agentKind == "" {
 		cliErrf(env.Stderr, "--skip-permissions requires --agent\n\n%s", help)
 		return 2
@@ -108,17 +113,24 @@ func runCreateShell(env Env, args []string) int {
 	// the record is all it wants, and it gets the same answer whether or not
 	// that host has agent control turned on.
 	startAgent := false
-	if agentKind = strings.TrimSpace(agentKind); agentKind != "" {
+	if agentKind != "" {
 		// The family is checked before anything is created, and against the
-		// families this Sidecar can actually launch. Resolution does not refuse
-		// for a name it does not know, so `--agent claud` would otherwise create
-		// a shell recorded as "claud", and every surface keyed on the type would
+		// families this Sidecar can actually launch, because a value a caller has
+		// just typed deserves a verdict: `--agent claud` would otherwise create a
+		// shell recorded as "claud", and every surface keyed on the type would
 		// disagree with the pane. See workspaceops.KnownAgentType.
+		//
+		// Through emitAgentError so that both of this block's value refusals
+		// answer a --json caller in the same shape. They already share an exit
+		// code; printing one as an envelope and the other as prose would make
+		// that code the only thing a script could rely on.
 		configured := loadCreateConfig().Plugins.Workspace.AgentStart
 		if !workspaceops.KnownAgentType(agentKind, configured) {
-			cliErrf(env.Stderr, "unknown agent type %q; known types are %s\n",
-				agentKind, strings.Join(workspaceops.KnownAgentTypes(configured), ", "))
-			return exitInputRejected
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{
+				Code: agentcontrol.ErrNotReady,
+				Message: fmt.Sprintf("unknown agent type %q; known types are %s",
+					agentKind, strings.Join(workspaceops.KnownAgentTypes(configured), ", ")),
+			})
 		}
 		if runCmd == "" && typeCmd == "" {
 			enabled, err := agentControlEnabled(env)

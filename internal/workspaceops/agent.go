@@ -57,8 +57,14 @@ func KnownAgentType(agentType string, configured map[string]string) bool {
 	return ok
 }
 
-// KnownAgentTypes lists the agent families KnownAgentType accepts, sorted, so a
-// refusal can say what was expected rather than only what was wrong.
+// KnownAgentTypes lists the agent families a caller should choose from, sorted,
+// so a refusal can say what was expected rather than only what was wrong.
+//
+// Narrower than KnownAgentType on purpose, and in one direction only: the
+// legacy families agentcatalog keeps launchable are still accepted but are not
+// offered here, for the same reason no picker offers them. A list is advice
+// about what to type next, and advertising a compatibility case would be advice
+// to start using it.
 func KnownAgentTypes(configured map[string]string) []string {
 	catalog := agentcatalog.Families()
 	seen := make(map[string]bool, len(catalog)+len(configured))

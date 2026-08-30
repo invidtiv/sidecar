@@ -27,6 +27,11 @@ func TestCreateShellValidation(t *testing.T) {
 		{"positional", []string{"create", "shell", "extra"}, 2, "takes no positional"},
 		{"run and type", []string{"create", "shell", "--run", "true", "--type", "false"}, 2, "mutually exclusive"},
 		{"split invalid", []string{"create", "shell", "--split", "diagonal"}, 2, "invalid split option"},
+		{"skip perms without agent", []string{"create", "shell", "--skip-permissions"}, 2, "--skip-permissions requires --agent"},
+		// Blank names no agent, so it must reach the same refusal. Judged
+		// untrimmed, it would pass this guard and then record a shell with no
+		// agent type and skipPerms set — durable state, replayed on every start.
+		{"skip perms with a blank agent", []string{"create", "shell", "--agent", "  ", "--skip-permissions"}, 2, "--skip-permissions requires --agent"},
 		{"unknown create kind", []string{"create", "wat"}, 2, "unknown create command"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -719,10 +724,11 @@ func TestCreateShellRecordsTheAgentType(t *testing.T) {
 	}
 }
 
-// TestCreateShellRefusesAnUnknownAgentType. Resolution falls back to Claude's
-// command for a name it does not know, so an unchecked --agent would create a
-// shell recorded as "claud" with Claude running in it. Exit 5, not 2: it is a
-// verdict on a value, and a caller on another machine reads 2 as version skew.
+// TestCreateShellRefusesAnUnknownAgentType. An unchecked --agent would create a
+// shell recorded as "claud", and every surface keyed on the agent type — the
+// provider column, activity identification, session lookup — would then disagree
+// with whatever ends up in the pane. Exit 5, not 2: it is a verdict on a value,
+// and a caller on another machine reads 2 as version skew.
 func TestCreateShellRefusesAnUnknownAgentType(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	workDir := t.TempDir()
