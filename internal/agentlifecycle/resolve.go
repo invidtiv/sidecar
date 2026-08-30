@@ -235,7 +235,11 @@ func Resolve(in Input) Decision {
 	exp.ReportOutcome = r.Outcome
 	exp.ReportSequence = r.Sequence
 	exp.ReportAt = r.ObservedAt
-	exp.SourceVersion = r.SourceVersion
+	// Prefer the version the report was actually written by, but never let a
+	// report that omitted it erase the installed version we already know.
+	if r.SourceVersion != "" {
+		exp.SourceVersion = r.SourceVersion
+	}
 
 	if r.Source != in.Capability.Source {
 		return fallback(ReasonSourceMismatch)
