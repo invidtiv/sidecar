@@ -160,6 +160,7 @@ There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→
 | `esc` | Leave the global space (or clear the filter first) |
 | `q` | Quit Sidecar (confirmation modal) |
 | `K` | Toggle the global space |
+| `M` | Open the reposition modal on the focused pane, or on the selected row's Primary terminal from the list (`pane_move`) |
 
 `ctrl+]` attach stays project-only and is off unless `tmux_full_attach` is enabled. While typing, `i` and `q` go to the pane.
 
@@ -430,6 +431,7 @@ A file opened in an app content pane beside Files uses the shared `workspace-doc
 | `S` | stop-agent | Stop agent |
 | `F` | find-file | Open a file pane on the fuzzy file finder |
 | `P` | fetch-pr | Fetch a remote PR as a workspace |
+| `M` | move-pane | Open the reposition modal on the selected row's Primary terminal (`pane_move`) |
 
 
 ### Preview Shortcuts
@@ -439,6 +441,7 @@ A file opened in an app content pane beside Files uses the shared `workspace-doc
 | `o` | open-pane | Open the pane switcher (kind list focused) without leaving the preview |
 | `d` | show-diff | Open working-tree Diff leaf |
 | `ctrl+t` | toggle-terminal | Toggle a terminal split beside the preview |
+| `M` | move-pane | Open the reposition modal on the focused pane (`pane_move`) |
 
 ### The Pane Switcher Is Reachable From Every Pane
 
@@ -558,6 +561,26 @@ deliberately **not** bound here: it is the header's global Tasks shortcut, and a
 context-local binding would make the same key mean two different things one tab
 apart. (It previously carried a `reset-scroll` command that had no handler
 anywhere in the tree.)
+
+### `M` Opens the Reposition Modal From Every Pane
+
+`M` (`move-pane`, feature `pane_move`, default on) opens the shared pane reposition modal — the same modal the pane header's `⊞` button opens, and the same one for all three pane hosts. It is an entry point, not a second interaction: `M` never mutates the live tree by itself. Inside the modal, `h/j/k/l` and the arrows edit a draft, `z` toggles zoom, `enter` commits the whole sequence atomically, and `esc` discards it.
+
+**Which pane it targets** depends on which window owns the keyboard:
+
+- **From a focused pane** — a preview, a document, an issue, a note, a diff, a resource — `M` targets that leaf.
+- **From either Workspaces list** (`workspace-list`, and `global-workspaces`, which the Sessions surface also reports for a focused Primary terminal) `M` targets the selected row's Primary terminal. Host focus decides which of the two the shared `global-workspaces` context means.
+- **From a plugin content deck** the key is answered on the app's own structural rung, so it targets the focused passive leaf and never the primary plugin leaf underneath.
+
+**Bound contexts** (all feature-gated on `pane_move`): `workspace-list`, `workspace-preview`, `workspace-doc`, `workspace-issue`, `workspace-note`, `workspace-diff`, `workspace-resource`, `global-workspaces`, `global-workspaces-doc`, `global-workspaces-issue`, `global-workspaces-note`, `global-workspaces-diff`, `global-workspaces-resource`. The app content decks report the same `workspace-*` context names for their own leaves and inherit these bindings.
+
+**Not bound** in text-input, interactive-terminal, modal, or unrelated plugin browse contexts — `workspace-filter`, `workspace-interactive`, `workspace-doc-edit|search|find`, `global-workspaces-filter`, `global-workspaces-terminal`, `file-browser-tree`, `git-status`, `notes-list`, and the rest. Those contexts keep every printable key for themselves, and `internal/keymap/pane_move_parity_test.go` holds them to it.
+
+**Why `M` and not `m`.** `m` is free in ten of the twelve pane contexts, and taken in exactly the two that would break parity: `global-workspaces-doc` spends it on `render`, and `global-workspaces` (what a focused Primary terminal reports on the Sessions surface) spends it on `merge-workflow`. One key must mean one thing in every pane, so a key that works in ten and not the other two is not a candidate. `M` is bound nowhere else except `git-status` (`stash-pop`), a plugin browse context that is never a pane leaf.
+
+**A pane with nowhere to go has no entry.** A tree with a single leaf offers neither the key's modal nor the header's `⊞`: `PlanMove` refuses every destination on it, so both would open onto a layout that cannot change. The button appears when a second pane does.
+
+**The agent's half of the same capability is `sidecar layout move`** over the same planner, with `--to left|right|up|down` compiling through the identical direction rule. See `.claude/skills/ui-features/SKILL.md` and `docs/reference/cli.md`.
 
 ### Interactive Mode
 

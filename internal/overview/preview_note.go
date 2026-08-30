@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/ui"
 )
@@ -188,7 +187,7 @@ func (m *Model) renderPreviewNote(note *previewNote, box termpreview.Box) string
 		view.SetSize(box.W, contentHeight)
 		view.SetFocused(focused)
 	}
-	header := m.composePreviewHeader(noteview.LayoutTabStrip(note.tabs, panereposition.ReserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Note)).Row, box.W, panelayout.Note)
+	header := m.composePreviewHeader(noteview.LayoutTabStrip(note.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Note)).Row, box.W, panelayout.Note)
 	if contentHeight <= 0 {
 		return header
 	}
@@ -215,7 +214,7 @@ func (m *Model) registerPreviewNoteTabRegions(noteBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.note.focused
-	strip := noteview.LayoutTabStrip(m.preview.note.tabs, panereposition.ReserveHeader(noteBox.W, true).TabsWidth, focused)
+	strip := noteview.LayoutTabStrip(m.preview.note.tabs, m.reserveHeader(noteBox.W, true).TabsWidth, focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewNoteTabKind,

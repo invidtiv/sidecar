@@ -25,9 +25,13 @@ func TestProjectPaneMoveShortcutOpensModalFromPreviewAndList(t *testing.T) {
 	}
 
 	p.focusLeaf(doc.ID)
+	disableWorkspaceFeature(t, features.PaneMove.Name)
 	p.handleKeyPress(moveKey('M'))
 	if p.paneLayoutModal != nil {
-		t.Fatal("default-off pane_move opened the modal")
+		t.Fatal("pane_move turned off opened the modal")
+	}
+	if hasPaneMoveCommand(p.Commands(), panereposition.CommandMove) {
+		t.Fatal("pane_move turned off still advertises pane reposition")
 	}
 
 	enableWorkspaceFeature(t, features.PaneMove.Name)

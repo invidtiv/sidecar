@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
 	"github.com/marcus/sidecar/internal/panereposition"
@@ -53,6 +54,44 @@ func (m *Model) openAppPaneLayoutModal(h *appContentDeck, leafID int) tea.Cmd {
 	)
 	m.updateContext()
 	return nil
+}
+
+// appPaneMoveShortcutLeaf resolves M inside an app content deck. Only a laid-out
+// deck's focused passive leaf is a target: the primary plugin leaf, the deck's
+// own info overlay, and an already-open modal keep the key. The plugin's list,
+// input, and editor contexts never reach this rung — handleAppContentKey answers
+// below every surface that types — so the modal cannot be opened from one.
+//
+// The deck exists at all only while PluginContentPanes is on, which is what
+// keeps the entry absent when that flag is off.
+func (m *Model) appPaneMoveShortcutLeaf(h *appContentDeck, leaf *panelayout.Node) int {
+	if h == nil || leaf == nil || !features.IsEnabled(features.PaneMove.Name) {
+		return 0
+	}
+	if !h.laidOut || h.root == nil || h.layoutModal != nil || h.info != nil {
+		return 0
+	}
+	if leaf.Split != nil || leaf.Kind == panelayout.Primary {
+		return 0
+	}
+	if target := panelayout.Find(h.root, leaf.ID); target == nil || target.Split != nil {
+		return 0
+	}
+	return leaf.ID
+}
+
+// appPaneMoveKey is the M entry the deck's workspace-* contexts advertise. It is
+// the second door onto the modal the header ⊞ already opens, never a second
+// interaction.
+func (m *Model) appPaneMoveKey(h *appContentDeck, leaf *panelayout.Node, key tea.KeyPressMsg) (tea.Cmd, bool) {
+	if key.String() != "M" {
+		return nil, false
+	}
+	leafID := m.appPaneMoveShortcutLeaf(h, leaf)
+	if leafID == 0 {
+		return nil, false
+	}
+	return m.openAppPaneLayoutModal(h, leafID), true
 }
 
 func (m *Model) handleAppPaneLayoutKey(msg tea.KeyPressMsg) tea.Cmd {
@@ -122,4 +161,20 @@ func (m Model) renderAppPaneLayoutOverlay(background string) string {
 		return background
 	}
 	return ui.OverlayModal(background, controller.Render(m.width, m.height, h.mouse), m.width, m.height)
+}
+
+// reserveHeader and composeHeader bind the shared pane-header chrome to this
+// deck's tree: the layout control is offered only when a leaf here can go
+// somewhere, and the renderer and the region sink share one measurement.
+func (h *appContentDeck) reserveHeader(width int, closable bool) panereposition.HeaderReserve {
+	return panereposition.ReserveMovableHeader(width, h.paneHeaderMovable(), closable)
+}
+
+func (h *appContentDeck) composeHeader(tabsRow string, width int, closable, layoutHovered, closeHovered bool) string {
+	movable := h.paneHeaderMovable()
+	return panereposition.ComposeMovableHeader(tabsRow, width, movable, closable, movable && layoutHovered, closeHovered)
+}
+
+func (h *appContentDeck) paneHeaderMovable() bool {
+	return h != nil && panereposition.Movable(h.root)
 }

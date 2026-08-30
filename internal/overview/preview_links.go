@@ -14,7 +14,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/targetactivation"
@@ -578,7 +577,7 @@ func (m *Model) registerPreviewDocTabRegions(docBox termpreview.Box) {
 	if m.preview.doc == nil {
 		return
 	}
-	strip := docview.LayoutTabStrip(m.preview.doc.tabs, panereposition.ReserveHeader(docBox.W, true).TabsWidth, m.PreviewFocused() && m.preview.doc.focused)
+	strip := docview.LayoutTabStrip(m.preview.doc.tabs, m.reserveHeader(docBox.W, true).TabsWidth, m.PreviewFocused() && m.preview.doc.focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(previewDocTabKind, docBox.X+col, docBox.Y, width, 1, previewDocTabHit{Index: index, Close: close})
 	})
@@ -736,7 +735,7 @@ func (m *Model) renderPreviewDoc(doc *previewDoc, box termpreview.Box) string {
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	tabsWidth := panereposition.ReserveHeader(box.W, true).TabsWidth
+	tabsWidth := m.reserveHeader(box.W, true).TabsWidth
 	focused := m.PreviewFocused() && doc.focused
 	strip := docview.LayoutTabStrip(doc.tabs, tabsWidth, focused)
 	if doc.mode != nil {
@@ -770,13 +769,13 @@ func (m *Model) composePreviewHeader(tabsRow string, width int, kind panelayout.
 	if leaf != nil {
 		leafID = leaf.ID
 	}
-	return panereposition.ComposeHeader(tabsRow, width, kind != panelayout.Terminal,
+	return m.composeHeader(tabsRow, width, kind != panelayout.Terminal,
 		leafID != 0 && m.hoverPreviewLayout == leafID,
 		m.previewCloseHover && m.hoverPreviewClose == kind)
 }
 
 func (m *Model) registerPreviewCloseRegionFor(leafID int, kind panelayout.Kind, box termpreview.Box) {
-	reserve := panereposition.ReserveHeader(box.W, true)
+	reserve := m.reserveHeader(box.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}

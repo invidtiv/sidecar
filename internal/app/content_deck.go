@@ -473,7 +473,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 		}
 		labels = append(labels, tabs.Label{Text: label})
 	}
-	reserve := panereposition.ReserveHeader(width, true)
+	reserve := h.reserveHeader(width, true)
 	strip := tabs.LayoutStrip(labels, active, reserve.TabsWidth, focused, nil)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		h.tabHits = append(h.tabHits, appDeckTabHit{
@@ -481,7 +481,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
 		})
 	})
-	return panereposition.ComposeHeader(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, true, h.hoverLayout == leafID, false)
+	return h.composeHeader(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, true, h.hoverLayout == leafID, false)
 }
 
 // setTabCloseHover lights the × of the deck tab the pointer is inside. Only
@@ -565,7 +565,7 @@ func (r appDeckRegions) Layout(n *panelayout.Node, b paneframe.Box) {
 	if n == nil || n.Split != nil || n.Kind == panelayout.Primary {
 		return
 	}
-	reserve := panereposition.ReserveHeader(b.W, true)
+	reserve := r.h.reserveHeader(b.W, true)
 	if reserve.LayoutW < 1 {
 		return
 	}
@@ -580,7 +580,7 @@ func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	// the hit rect must be the same reserved geometry. Registering only the
 	// last column left the glyph itself dead: clicks had to land one cell to
 	// its right to close.
-	reserve := panereposition.ReserveHeader(b.W, true)
+	reserve := r.h.reserveHeader(b.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}
@@ -1265,6 +1265,12 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return appDeckSelectionCopyCmd(view, result), true
 		}
 	}
+	// M is the deck's own entry onto the reposition modal, beside the header ⊞.
+	// It sits with the structural keys because moving this leaf is structural,
+	// and it declines rather than consuming the key when the deck cannot answer.
+	if cmd, handled := m.appPaneMoveKey(h, leaf, key); handled {
+		return cmd, true
+	}
 	switch key.String() {
 	case "q", "esc":
 		h.deck.HideFocused()
@@ -1591,6 +1597,13 @@ func (m *Model) appContentCommands() []plugin.Command {
 	if leaf == nil {
 		return cmds
 	}
+	if m.appPaneMoveShortcutLeaf(h, leaf) != 0 {
+		cmds = append(cmds, plugin.Command{
+			ID: panereposition.CommandMove, Name: "Move", Description: "Reposition this pane",
+			Context: ctx, Priority: 90,
+			Handler: func() tea.Cmd { return m.runAppContentCommand(panereposition.CommandMove) },
+		})
+	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:
 		cmds = append(cmds,
@@ -1680,6 +1693,13 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		m.persistAppContentDeck(h)
 		m.updateContext()
 		return cmd
+	case panereposition.CommandMove:
+		leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+		leafID := m.appPaneMoveShortcutLeaf(h, leaf)
+		if leafID == 0 {
+			return nil
+		}
+		return m.openAppPaneLayoutModal(h, leafID)
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
 	if leaf == nil {

@@ -494,7 +494,9 @@ func clickDrawnDocTab(t *testing.T, p *Plugin, index int) {
 		t.Fatal("document pane has no hit region")
 	}
 	inner := insetPanelChrome(pane.Rect)
-	strip := layoutDocTabStrip(doc, ui.ReserveHeaderClose(inner.W).TabsWidth, p.paneFocus == leaf.ID)
+	// The same reserve the renderer used, or this helper models a strip that is
+	// not the one on screen: the header now carries the layout ⊞ beside the ×.
+	strip := layoutDocTabStrip(doc, p.reserveHeader(inner.W, true).TabsWidth, p.paneFocus == leaf.ID)
 	var tab *docTabPlacement
 	for i := range strip.Tabs {
 		if strip.Tabs[i].Index == index {

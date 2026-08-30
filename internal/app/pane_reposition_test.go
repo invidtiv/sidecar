@@ -91,6 +91,161 @@ func TestAppPaneLayoutHeaderModalCommitsMoveAndZoom(t *testing.T) {
 	}
 }
 
+// appDeckMoveFixture opens a document beside the primary plugin leaf, focuses
+// it, and returns the model with pane_move on. The deck is the app's own, so
+// every assertion below travels through the real app key ladder.
+func appDeckMoveFixture(t *testing.T) (*Model, *appContentDeck, int) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("# pane\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &deckHostTestPlugin{id: "file-browser", focus: "preview", frame: "primary"}
+	m := appDeckTestModel(t, root, p)
+	features.SetOverride(features.PaneMove.Name, true)
+	t.Cleanup(func() { features.SetOverride(features.PaneMove.Name, features.PaneMove.Default) })
+	m.renderContent(200, 40)
+	if cmd := m.openAppContent(root, p.id, contentlink.Ref{Kind: contentlink.KindFile, Value: "README.md"}); cmd == nil {
+		t.Fatal("document open returned no load command")
+	}
+	m.renderContent(200, 40)
+	h := m.currentContentDeck()
+	if h == nil {
+		t.Fatal("app content deck was not created")
+	}
+	docID := h.deck.Leaf(panelayout.Document)
+	if docID == 0 {
+		t.Fatal("document leaf did not open")
+	}
+	h.deck.FocusLeaf(docID)
+	h.syncInnerFocus()
+	m.updateContext()
+	return m, h, docID
+}
+
+// M3: the deck's second entry onto the shared modal. The press goes through
+// Update, so it passes every rung the real app runs — inputs, editors, the
+// global switch — and lands on the same controller the header ⊞ opens.
+func TestAppDeckMoveKeyOpensTheSharedRepositionModal(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	if m.activeContext != "workspace-doc" {
+		t.Fatalf("focused document leaf reports context %q, want workspace-doc", m.activeContext)
+	}
+	beforeGrid := gridIDs(h.root)
+	docBefore := panelayout.Find(h.root, docID)
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal == nil || h.layoutModal.LeafID() != docID {
+		t.Fatalf("M did not open the deck's reposition modal for the focused leaf: %v", h.layoutModal)
+	}
+	if got.activeModal() != ModalPaneReposition || got.activeContext != panereposition.ModalContext {
+		t.Fatalf("M left app modal routing at modal=%v context=%q", got.activeModal(), got.activeContext)
+	}
+
+	// The modal owns the keyboard from here, still through the real ladder.
+	updated, _ = got.Update(tea.KeyPressMsg{Code: 'h', Text: "h"})
+	got = asAppModel(t, updated)
+	updated, _ = got.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	got = asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("enter did not close the modal M opened")
+	}
+	if panelayout.Find(h.root, docID) != docBefore {
+		t.Fatal("the committed move replaced the moved leaf instead of grafting it")
+	}
+	if after := gridIDs(h.root); reflect.DeepEqual(after, beforeGrid) {
+		t.Fatalf("M-driven commit left the deck grid unchanged: %+v", after)
+	}
+	if deck := gridIDs(h.deck.Tree()); !reflect.DeepEqual(deck, gridIDs(h.root)) {
+		t.Fatalf("deck did not adopt the M-driven move: deck=%v host=%v", deck, gridIDs(h.root))
+	}
+}
+
+// The primary plugin leaf is the plugin's own browse surface. M there belongs to
+// the plugin, and the deck must not turn it into a pane move.
+func TestAppDeckMoveKeyIgnoresTheFocusedPrimaryLeaf(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	primary := h.deck.Leaf(panelayout.Primary)
+	if primary == 0 || primary == docID {
+		t.Fatalf("fixture has no distinct primary leaf: primary=%d doc=%d", primary, docID)
+	}
+	h.deck.FocusLeaf(primary)
+	h.syncInnerFocus()
+	m.updateContext()
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal from the primary plugin leaf")
+	}
+}
+
+// A deck-owned input surface types. M is text there, and the modal — which
+// would take the keyboard away from the input — must not open.
+func TestAppDeckMoveKeyLeavesDeckInputSurfacesAlone(t *testing.T) {
+	m, h, _ := appDeckMoveFixture(t)
+	h.openAppContentFinder()
+	if !h.appContentSearchActive() {
+		t.Fatal("fixture did not open a document input surface")
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal out of a focused deck input surface")
+	}
+	if !h.appContentSearchActive() {
+		t.Fatal("M closed the deck input surface it should have been typed into")
+	}
+}
+
+// The entry exists because the deck does. With plugin_content_panes off there
+// is no deck to move a pane inside, and M must find nothing to open.
+func TestAppDeckMoveEntryIsAbsentWithoutPluginContentPanes(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	features.SetOverride(features.PluginContentPanes.Name, false)
+	t.Cleanup(func() { features.SetOverride(features.PluginContentPanes.Name, features.PluginContentPanes.Default) })
+
+	if deck := m.currentContentDeck(); deck != nil {
+		t.Fatal("a content deck is still the focused surface with plugin_content_panes off")
+	}
+	leaf := panelayout.Find(h.deck.Tree(), docID)
+	if id := m.appPaneMoveShortcutLeaf(m.currentContentDeck(), leaf); id != 0 {
+		t.Fatalf("M resolved leaf %d with plugin_content_panes off", id)
+	}
+	if _, ok := m.appContentContext(); ok {
+		t.Fatal("the deck still reports a pane context with plugin_content_panes off")
+	}
+	for _, cmd := range m.appContentCommands() {
+		if cmd.ID == panereposition.CommandMove {
+			t.Fatal("the Move command is still advertised with plugin_content_panes off")
+		}
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal with plugin_content_panes off")
+	}
+}
+
+// Without pane_move the whole entry is gone: no key, no footer command.
+func TestAppDeckMoveEntryIsAbsentWithoutPaneMove(t *testing.T) {
+	m, h, _ := appDeckMoveFixture(t)
+	features.SetOverride(features.PaneMove.Name, false)
+
+	for _, cmd := range m.appContentCommands() {
+		if cmd.ID == panereposition.CommandMove {
+			t.Fatal("the Move command is still advertised with pane_move off")
+		}
+	}
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal with pane_move off")
+	}
+}
+
 func TestSessionsPaneLayoutModalAbsorbsPasteAtAppBoundary(t *testing.T) {
 	m := globalFrameModel(t)
 	features.SetOverride(features.PaneMove.Name, true)
@@ -105,7 +260,18 @@ func TestSessionsPaneLayoutModalAbsorbsPasteAtAppBoundary(t *testing.T) {
 	}
 	_ = m.overview.SetWorkspacesVisible(true)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	// A lone Primary has nowhere to be moved to, so its header offers no layout
+	// control. Open a Diff leaf beside it first — that is also the shape this
+	// test is about, since the modal's draft only means anything with two panes.
+	contentHeightBefore := m.height - headerHeight - footerHeight
+	diffX, diffY, hasDiff := renderedCell(m.renderContent(m.contentWidth(), contentHeightBefore), "Diff")
+	if !hasDiff {
+		t.Fatal("fixture rendered no Diff chip to open a second pane with")
+	}
+	updated, _ := m.Update(tea.MouseClickMsg{X: diffX, Y: headerHeight + diffY, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	m = asAppModel(t, updated)
 	for _, r := range "sessions" {
 		updated, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})

@@ -7,7 +7,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/features"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/tty"
@@ -266,7 +265,7 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	if headerLeafID == 0 {
 		headerLeafID = terminalLeafID(p.paneRoot)
 	}
-	reserve := panereposition.ReserveHeader(width, closeLeafID != 0)
+	reserve := p.reserveHeader(width, closeLeafID != 0)
 	headerWidth := reserve.TabsWidth
 	interactive := p.interactiveDescribes(termPanel)
 	// While interactive the exit key leads the hints and is what the row must
@@ -277,8 +276,11 @@ func (p *Plugin) renderCapturedTerminalWithClose(chips, actions []string, hint s
 	}
 	renderHeader := func(hint string) string {
 		row := p.terminalHeaderWithActions(chips, actions, hint, headerWidth, hintFloor)
-		return panereposition.ComposeHeader(row, width, closeLeafID != 0,
-			p.hoverPaneLayout == headerLeafID, p.hoverPaneClose == closeLeafID)
+		// headerLeafID is 0 when there is no pane tree, and every un-hovered
+		// header would match that; the wrapper's movable answer is what keeps a
+		// leafless header from painting a hovered control it cannot act on.
+		return p.composeHeader(row, width, closeLeafID != 0,
+			headerLeafID != 0 && p.hoverPaneLayout == headerLeafID, p.hoverPaneClose == closeLeafID)
 	}
 
 	// The attach flash lives in the right region rather than on a row of its

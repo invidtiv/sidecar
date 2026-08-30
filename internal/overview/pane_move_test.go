@@ -21,6 +21,15 @@ func enableGlobalPaneMove(t *testing.T) {
 	t.Cleanup(func() { features.Init(config.Default()) })
 }
 
+// pane_move ships on, so proving the gate still exists means turning it off
+// explicitly rather than relying on the default.
+func disableGlobalPaneMove(t *testing.T) {
+	t.Helper()
+	features.Init(config.Default())
+	features.SetOverride(features.PaneMove.Name, false)
+	t.Cleanup(func() { features.Init(config.Default()) })
+}
+
 func TestGlobalPaneMoveShortcutOpensModalFromPreviewAndList(t *testing.T) {
 	m := linkPreviewModel(t, workspaceinventory.KindWorktree)
 	run(t, m, openPreviewDocSpan(m, mustPreviewSpan(t, m, previewNeedleAction(t, m, "README.md"))))
@@ -32,8 +41,12 @@ func TestGlobalPaneMoveShortcutOpensModalFromPreviewAndList(t *testing.T) {
 	}
 	m.preview.paneFocus = doc.ID
 
+	disableGlobalPaneMove(t)
 	if handled, _ := m.previewKey(globalMoveKey('M')); handled {
-		t.Fatal("default-off pane_move claimed M")
+		t.Fatal("pane_move turned off still claimed M")
+	}
+	if hasGlobalPaneMoveCommand(m.Commands(), panereposition.CommandMove) {
+		t.Fatal("pane_move turned off still advertises pane reposition")
 	}
 
 	enableGlobalPaneMove(t)

@@ -279,6 +279,10 @@ func (h overviewLayoutHost) LiveShellSessions() map[string]bool {
 	}
 	return out
 }
+func (h overviewLayoutHost) FocusedLeaf() int { return h.m.layoutMoveFocusedLeaf() }
+func (h overviewLayoutHost) CommitMove(plan panelayout.MovePlan) (string, tea.Cmd) {
+	return h.m.commitLayoutMove(plan)
+}
 func (h overviewLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
 	return layoutapply.ResolveTargets(kind, spec, h.root, h.m.resourceMatchers)
 }

@@ -54,6 +54,15 @@ type Host interface {
 	TermPanelSessionName() string
 	LiveShellSessions() map[string]bool
 
+	// FocusedLeaf is the surface's focused pane leaf, or 0 when nothing on it
+	// has pane focus. It answers `layout move --focused`.
+	FocusedLeaf() int
+	// CommitMove installs an accepted MovePlan on the live tree through the
+	// host's own path — identity-preserving apply, deck adoption, persistence,
+	// and the existing terminal geometry sync — and reports a user-visible
+	// reason instead when it cannot. A non-empty reason means nothing changed.
+	CommitMove(plan panelayout.MovePlan) (reason string, cmd tea.Cmd)
+
 	ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string)
 
 	CommitPassive(targets []uirequest.Target, plan panelayout.OpenPlan) (verdict, reason string, cmd tea.Cmd)
@@ -79,10 +88,13 @@ type ItemPlan struct {
 	Reason  string
 }
 
-// Apply is the host-side apply: a batch of --pane descriptors or one --spec,
-// all-or-nothing. Get is the host's to answer; this package does not build
-// reports.
+// Apply is the host-side write path: a batch of --pane descriptors, one --spec,
+// or one move, all-or-nothing. Get is the host's to answer; this package does
+// not build reports.
 func Apply(h Host, req uirequest.Request, payload uirequest.LayoutPayload, root, surface string) tea.Cmd {
+	if payload.Mode == uirequest.LayoutModeMove {
+		return applyMove(h, req, payload, surface)
+	}
 	if len(payload.Columns) > 0 {
 		return applySpec(h, req, payload, root, surface)
 	}

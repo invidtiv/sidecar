@@ -467,10 +467,11 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "navigate-picker", Context: "pane-switcher"},
 		{Key: "down", Command: "navigate-picker", Context: "pane-switcher"},
 
-		// Pane repositioning is available only from a pane leaf in the two
-		// Workspaces projections. Plugin browse, input, search, editor, and live
-		// terminal contexts are intentionally absent. Plugin content decks share
-		// some workspace-* context names, but do not implement the mode until M3.
+		// Pane repositioning is available only from a pane leaf: the two
+		// Workspaces projections and the app content decks, which report the same
+		// workspace-* context names for their own passive leaves and now open the
+		// same modal from them. Plugin browse, input, search, editor, and live
+		// terminal contexts are intentionally absent.
 		{Key: "M", Command: "move-pane", Context: "workspace-preview", Feature: "pane_move"},
 		{Key: "M", Command: "move-pane", Context: "workspace-list", Feature: "pane_move"},
 		{Key: "M", Command: "move-pane", Context: "workspace-doc", Feature: "pane_move"},

@@ -6,7 +6,6 @@ import (
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/noteview"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 )
 
 // notePane is one td note leaf's tab group. The pane tree points at this,
@@ -322,7 +321,7 @@ func (p *Plugin) closeNotePane(leafID int) tea.Cmd {
 }
 
 func (p *Plugin) notePaneHeaderRow(note *notePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutNoteTabStrip(note, panereposition.ReserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(noteLeafID(note))).Row, width, noteLeafID(note), note != nil && p.hoverPaneClose == note.leafID)
+	return p.composeContentHeader(layoutNoteTabStrip(note, p.reserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(noteLeafID(note))).Row, width, noteLeafID(note), note != nil && p.hoverPaneClose == note.leafID)
 }
 
 func (p *Plugin) registerNotePaneRegions(note *notePane, leafID int, box Box) {
@@ -330,7 +329,7 @@ func (p *Plugin) registerNotePaneRegions(note *notePane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerNoteTabRegions(note *notePane, leafID int, box Box) {
-	strip := layoutNoteTabStrip(note, panereposition.ReserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
+	strip := layoutNoteTabStrip(note, p.reserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		p.mouseHandler.HitMap.AddRect(regionNoteTab, box.X+col, box.Y, width, 1, noteTabHit{LeafID: leafID, Index: index, Close: close})
 	})

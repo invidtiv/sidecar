@@ -112,6 +112,10 @@ func (h workspaceLayoutHost) TermPanelSessionName() string {
 func (h workspaceLayoutHost) LiveShellSessions() map[string]bool {
 	return h.p.liveShellSessions()
 }
+func (h workspaceLayoutHost) FocusedLeaf() int { return h.p.layoutMoveFocusedLeaf() }
+func (h workspaceLayoutHost) CommitMove(plan panelayout.MovePlan) (string, tea.Cmd) {
+	return h.p.commitLayoutMove(plan)
+}
 func (h workspaceLayoutHost) ResolveTargets(kind panelayout.Kind, spec uirequest.LayoutPane) ([]uirequest.Target, string) {
 	return h.p.resolveLayoutTargets(kind, spec, h.root)
 }

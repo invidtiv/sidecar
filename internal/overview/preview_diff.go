@@ -9,7 +9,6 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/termpreview"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -204,7 +203,7 @@ func (m *Model) renderPreviewDiff(diff *previewDiff, box termpreview.Box) string
 	if view != nil {
 		view.SetSize(box.W, contentHeight)
 	}
-	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, panereposition.ReserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Diff)).Row, box.W, panelayout.Diff)
+	header := m.composePreviewHeader(layoutPreviewDiffStrip(diff.tabs, m.reserveHeader(box.W, true).TabsWidth, focused).HoverClose(m.tabCloseHoverIn(panelayout.Diff)).Row, box.W, panelayout.Diff)
 	if contentHeight <= 0 {
 		return header
 	}
@@ -253,7 +252,7 @@ func (m *Model) registerPreviewDiffTabRegions(diffBox termpreview.Box) {
 		return
 	}
 	focused := m.PreviewFocused() && m.preview.diff.focused
-	strip := layoutPreviewDiffStrip(m.preview.diff.tabs, panereposition.ReserveHeader(diffBox.W, true).TabsWidth, focused)
+	strip := layoutPreviewDiffStrip(m.preview.diff.tabs, m.reserveHeader(diffBox.W, true).TabsWidth, focused)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		m.workspacesMouse.HitMap.AddRect(
 			previewDiffTabKind,
