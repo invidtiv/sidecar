@@ -1,15 +1,14 @@
 # Herdr gap closure: agent control and cold session restoration
 
-**Status:** active, planning. **Research baseline:** Sidecar `main` at `13ddaaa6` (2026-08-29); Herdr v0.8.2 at commit `9eb52145`.
+**Status:** active, planning. **Research baseline:** Sidecar `main` at `13ddaaa6` (2026-08-29); Herdr v0.8.2 at commit `9eb52145`. Herdr is the feature benchmark this plan measures against — the bar is parity, and where Sidecar's runtime allows it, better. It is not a runtime Sidecar depends on: the Herdr remote-hosts plan is deprecated, and Sidecar is its own remote host runtime.
 
 One sentence: **an agent working inside Sidecar should be able to start and coordinate another managed agent through provider-aware commands, and a machine restart should reconstruct Sidecar's durable workspace shape and optionally resume the exact agent conversations that were running, without replacing tmux or pretending tmux can live-handoff its PTYs.**
 
 Related plans:
 
 - [Pane repositioning](pane-repositioning.md) owns interactive and agent-driven pane movement. This plan composes with its `layout get` / `layout apply` / `layout move` surface and adds no second layout grammar.
-- [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) owns host registration, SSH transport, remote inventory, and remote terminal control. This plan owns the host-neutral agent commands that Phase C of that plan should carry remotely.
-- [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) is the competing on-host runtime for remote machines. It is not a prerequisite for local agent control or cold tmux restoration.
-- [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal. A plugin may eventually call the same agent-control core, but plugin hosting is not part of this plan.
+- [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) owns host registration, SSH transport, remote inventory, remote terminal control, and — as of its completed Phase C — remote mutation, shipped as one-shot `ssh <target> sidecar <verb> --json` invocations over the existing ControlMaster. Because this plan's commands are headless, target-taking CLI verbs, that seam carries them remotely without new protocol work; see [Interaction with remote hosts](#interaction-with-remote-hosts).
+- [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal. A plugin may eventually call the same agent-control core, but plugin hosting is not part of this plan.
 - [Native Agent Orchestration in Sidecar](../deprecated/agent-orchestration-integration.md) remains deprecated. This plan deliberately exposes small coordination primitives and does not revive a Sidecar-owned plan/build/review engine, task policy, validator topology, or merge loop.
 
 ## Decision first
@@ -33,7 +32,7 @@ The Herdr comparison is against the checked-out v0.8.2 tag, not a feature list o
 - [`src/agent_resume.rs`](https://github.com/herdrdev/herdr/blob/v0.8.2/src/agent_resume.rs) accepts session references only from allowlisted official integration sources, validates ID/path shape, builds argv as an argument vector, and deduplicates a native session across panes.
 - [`src/server/handoff.rs`](https://github.com/herdrdev/herdr/blob/v0.8.2/src/server/handoff.rs) shows why handoff belongs to the PTY owner: the old process passes PTY file descriptors over a Unix socket, with an explicit 64-FD cap and reconnect semantics for interrupted requests.
 
-The Sidecar baseline is the checked-out source, not whichever development binary wins `PATH`. At the research snapshot, the installed binary was built from the separate `remote-sidecar` worktree and exposed experimental `host` commands that `main` does not register. Those commands belong to the remote-host plan and are not credited as shipped capability here.
+The Sidecar baseline is the checked-out source, not whichever development binary wins `PATH`. The research snapshot predates the remote-hosts merges; `main` now registers the `host` command group and the Phase A–C remote-host capability behind `features.SidecarRemoteHosts`, along with the headless `shell rename --target`, `shell send --target`, and `create worktree --plan` verbs Phase C added. Where those change a matrix row below, the row says so.
 
 ## The journeys this plan must make real
 
@@ -88,8 +87,8 @@ Replacing the Sidecar executable does not touch the default tmux server and does
 | Create a worktree and agent shell | `herdr worktree` plus pane/agent commands | `sidecar create worktree --agent`, using Sidecar's setup/journal pipeline | Covered, but readiness becomes this plan's shared start core |
 | Read and replace pane topology | Workspace/tab/pane commands | `sidecar layout get` / `layout apply` | Covered |
 | Move an existing pane | `pane move` | Read-modify-write works; direct move is planned | Other plan: [pane repositioning](pane-repositioning.md) |
-| Start a known agent in an existing idle terminal | `agent start`, provider allowlist, readiness wait | TUI/create paths send a command after 100 ms; no headless verb and no readiness result | Gap |
-| Address an agent independently of UI focus | Unique live name or pane ID | Managed tmux name and display-name resolution exist; no agent command uses them | Gap; use shell identity rather than inventing a second alias namespace |
+| Start a known agent in an existing idle terminal | `agent start`, provider allowlist, readiness wait | `shell send --target --run` starts one headlessly (and remotely) but proves no provider identity or readiness | Gap narrowed to the readiness contract; `agent start` supersedes the raw send for agents |
+| Address an agent independently of UI focus | Unique live name or pane ID | Phase C's `shell rename --target` / `shell send --target` resolve durable managed targets headlessly (`internal/cli/shell_target.go`) | Partial; agent commands reuse that resolver rather than inventing a second alias namespace |
 | Query one agent's provider, lifecycle, freshness, and evidence | `agent get` / `list` | `agentactivity`, `agentstatus`, and `workspaceinventory` compute this for TUI rows | Gap only at the application/CLI boundary |
 | Guarded prompt submission | `agent prompt`; blocked refusal; bracketed-paste-aware input | Interactive TUI input exists; no provider-aware headless prompt | Gap |
 | Wait for lifecycle state | Event-driven `agent wait`; target occupant pinned | TUI polling sees working/blocked/done/idle; no targeted wait API | Gap |
@@ -106,8 +105,8 @@ Replacing the Sidecar executable does not touch the default tmux server and does
 | Persist terminal screen history across cold restart | Optional `session-history.json`, off by default | tmux scrollback dies with the server; Sidecar stores no output bodies | Non-goal for first delivery; transcripts are the better agent-history source and shell output may contain secrets |
 | Live server binary handoff without process loss | Experimental Unix SCM_RIGHTS transfer by the PTY owner | Sidecar does not own tmux PTY FDs | Non-goal; impossible through supported tmux interfaces |
 | Local application update without process loss | Live handoff may replace Herdr server | Sidecar binary replacement leaves the external tmux server and children untouched | Covered already; document and test the release path |
-| Remote observation/control | Native remote Herdr flow | Active Sidecar/Herdr remote-host plans | Other plan; this plan supplies reusable agent semantics to their mutation phase |
-| Host plugins | Herdr plugin manifest/runtime | Active Herdr-plugin support plan | Other plan |
+| Remote observation/control | Native remote Herdr flow | Shipped by the Sidecar remote-hosts plan (Phases A–C) behind a flag | Other plan; agent verbs ride its one-shot CLI seam when they exist |
+| Host plugins | Herdr plugin manifest/runtime | On-hold Herdr-plugin support plan | Other plan |
 
 ## Product boundary: what Sidecar owns
 
@@ -118,7 +117,7 @@ Sidecar remains a presentation-layer tool over files, git, tmux, and harness CLI
 - Sidecar owns the refusal that says a prompt may not be sent to a blocked or replaced agent, and the contract that a start does not succeed until the expected provider is ready.
 - Sidecar owns its exact binding between a managed shell and an officially reported provider session reference, plus the policy deciding whether that reference may be resumed after a cold restart.
 
-Sidecar does not own arbitrary tmux pane input, command execution, output matching, or process supervision. An agent that wants to run a command in a raw terminal can use tmux. Sidecar should not grow `sidecar shell run`, `shell send-text`, or `shell wait-output` merely to mirror Herdr's pane namespace. The new agent commands earn their place because they enforce provider-aware rules that a raw tmux command cannot.
+Sidecar does not own arbitrary tmux pane input, command execution, output matching, or process supervision. An agent that wants to run a command in a raw terminal can use tmux. The remote-hosts Phase C added `sidecar shell send --target --run/--type`, and it stays on the right side of this line for a specific reason: it refuses any session that is not a live Sidecar-managed record for the resolved project, and refuses one recorded on a different tmux server — it is Sidecar's ownership rules wrapped around a send, not a raw pane wrapper. `shell wait-output` and output matching remain non-goals. The new agent commands earn their place because they enforce provider-aware rules that neither raw tmux nor `shell send` can.
 
 Sidecar also does not own the workflow being coordinated. A caller may use `td`, `tasks`, a markdown plan, another harness, or no task engine at all. This plan does not choose planners, reviewers, models, timeouts for an entire workflow, merge policy, or retry topology.
 
@@ -217,7 +216,7 @@ future TUI actions ────┘           │
                                    ├─ session binding store (shellstate v3)
                                    └─ Terminal adapter
                                       ├─ local tmux
-                                      └─ future remote hostserve/Herdr adapter
+                                      └─ future remote adapter (hosts.RunSidecar one-shot verbs)
 ```
 
 ### Package responsibilities
@@ -227,7 +226,7 @@ future TUI actions ────┘           │
 - **`internal/agentcatalog`** remains the single family catalog but grows capability-bearing provider entries or small provider adapters: canonical ID/aliases, launch argv builder, resume argv builder, supported session-ref kinds, skip-permissions argument, and optional integration installer/status hook. The current resume switch in `internal/plugins/conversations/view_content.go` moves here; the Conversations UI, restore coordinator, and CLI become clients of the same builder.
 - **`internal/agentactivity` and `internal/agentstatus`** keep their existing evidence and presentation jobs. Control code consumes them; it does not add a second lifecycle classifier.
 - **`internal/shellstate`** remains the only writer of managed-shell persistence. No command edits `shells.json` directly.
-- **Terminal adapter.** The default implementation resolves the tmux session's sole managed pane, foreground process identity, capture sources, control-mode output events, ordered paste, and logical keys. Tests use a fake adapter. The remote-host plan supplies the second implementation through its versioned host protocol.
+- **Terminal adapter.** The default implementation resolves the tmux session's sole managed pane, foreground process identity, capture sources, control-mode output events, ordered paste, and logical keys. Tests use a fake adapter. The remote-host plan supplies the second implementation through its shipped transport: the proxied control-mode channel for terminal I/O and one-shot CLI verbs for commands.
 
 Do not turn the conversation-history `adapter.Adapter` into the live terminal adapter. Conversation stores and terminal control are independent seams. `agentsession` may query a matching history adapter after an exact binding exists, but a missing/disabled Conversations plugin must not disable start, prompt, wait, or restore metadata.
 
@@ -340,15 +339,13 @@ Integration installation is explicit and reversible. `sidecar integration status
 
 ## Interaction with remote hosts
 
-The local steel thread ships independently. When [sidecar-remote-hosts.md](sidecar-remote-hosts.md) reaches mutation Phase C:
+The local steel thread ships independently. [sidecar-remote-hosts.md](sidecar-remote-hosts.md) has since completed its mutation Phase C, and its shape settles how agent control travels: mutations are one-shot `ssh <target> sidecar <verb> --json` invocations over the existing ControlMaster (`hosts.RunSidecar`), not a request channel in `hostproto` — `hostserve` stays read-only by construction. That is exactly the seam this plan's commands were designed for. Every `sidecar agent` verb is headless, target-taking, and `--json` from birth, so remote agent control is transport plumbing plus host-scoped target identity, not new protocol work:
 
-- `hostserve` exposes typed `agentcontrol` requests and streams the same `Agent` outcomes; it does not accept arbitrary shell command strings as a substitute.
+- `agent list/get/start/prompt/wait/read/send-keys` run on the host as ordinary CLI invocations through `hosts.RunSidecar`, following the exit-code discipline the Phase C verbs established (2 usage/version skew, 5 value rejected) and decoding results through its banner-tolerant result decoder. An older host answers a verb it lacks with a usage error the viewer already renders as version skew — capability negotiation falls out of the exit-code contract.
+- Waits are the one shape that strains a one-shot invocation. `agent wait --timeout` runs as a bounded invocation whose deadline the caller owns, matching `hosts.RunSidecar`'s deadline discipline; a resident subscription channel is not built unless real usage shows the bounded form is insufficient.
 - Target identity includes `HostID` from the beginning, so local and remote shells with the same tmux name cannot collide.
 - Session references stay on the host that owns the provider store. The viewer receives presence/capability by default; exact IDs/paths cross SSH only for an explicit operation and are not persisted into the viewer's local `shells.json`.
 - Cold restore executes on the host. A remote viewer may request/observe it, but it never reconstructs the host's state locally.
-- The remote protocol advertises agent-control and restore capabilities by version, so an older host degrades with an actionable response instead of a guessed command.
-
-If the Herdr remote-host alternative wins instead, its adapter maps Herdr `agent.get/start/prompt/wait/read/send_keys` outcomes into the same Sidecar `agentcontrol` types. Sidecar still owns its shell/session-restore feature only for Sidecar-managed tmux hosts; it does not rewrite Herdr's `session.json` or duplicate Herdr restore policy.
 
 ## Live handoff: explicit non-goal and operational posture
 
@@ -414,10 +411,10 @@ Therefore:
 
 ### M5 — Remote adapter and rollout
 
-- After the remote-host protocol's mutation phase exists, add host capability negotiation and the remote terminal/session adapters; keep exact session values host-local by default.
+- The remote-host plan's mutation seam exists (Phase C: one-shot CLI verbs over `hosts.RunSidecar`). Add the remote terminal/session adapters over it; keep exact session values host-local by default.
 - Run the local/remote parity suite over start/get/prompt/wait/read/key behavior and restore-plan reporting.
 - Keep agent control behind a default-off feature flag through M2; enable by default after the live provider matrix passes. Keep `resumeAgents=ask` even after rollout; `auto` remains explicit.
-- Add release notes and a demo recipe. Move this plan to implemented only after local agent control, exact session binding, and cold restore all ship; remote support may remain a linked follow-on if its parent plan has not reached mutation Phase C.
+- Add release notes and a demo recipe. Move this plan to implemented only after local agent control, exact session binding, and cold restore all ship; remote support may remain a linked follow-on.
 
 ## Verification and acceptance evidence
 
@@ -439,7 +436,7 @@ Therefore:
 - A purpose-built reboot harness may kill only its named isolated tmux server and preserves its temp state directory between Sidecar launches. It must prove the server socket/incarnation changed before claiming cold restore.
 - Live provider matrix: Codex, Claude Code, Cursor Agent CLI, Grok, and at least one hook-authoritative provider where installed. Start/get/status/read are non-mutating after launch; prompt/resume proofs require explicit operator opt-in because they can create paid or externally mutating work.
 - Startup trace with multiple restore candidates proves first frame is not delayed.
-- Remote proof, when available, runs the same JSON contract through `hostserve` on a real second machine and confirms a blocked prompt can be inspected and deliberately answered.
+- Remote proof, when available, runs the same JSON contract as one-shot `sidecar agent` invocations over `hosts.RunSidecar` against a real second machine and confirms a blocked prompt can be inspected and deliberately answered.
 
 ### Safety invariants
 
