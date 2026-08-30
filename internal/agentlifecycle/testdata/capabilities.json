@@ -1,0 +1,112 @@
+[
+  {
+    "schemaVersion": 1,
+    "provider": "opencode",
+    "source": "sidecar.opencode.plugin",
+    "assetVersion": "0",
+    "tier": "advisory",
+    "evidence": "real-trace",
+    "minProviderVersion": "1.18.0",
+    "testedProviderRange": "1.18.23",
+    "covered": [
+      "work_start",
+      "tool_use",
+      "blocked_on_request",
+      "unblocked",
+      "turn_complete",
+      "session_identity",
+      "process_exit"
+    ],
+    "knownGaps": [
+      "Cancellation is untraced. No dedicated cancel event exists; the expectation is that an interrupt resolves through session.status, but that was not observed. This is the single transition blocking promotion to full lifecycle authority.",
+      "Subagent activity has no dedicated event. Child sessions are identifiable only by info.parentID on session events.",
+      "The blocked lane is transition-shaped, not state-shaped: session.status only ever carried busy or idle, and blocking is visible solely as the permission.asked/permission.replied pair. A dropped permission.asked therefore does not self-correct the way a dropped busy/idle does.",
+      "tool.execute.after did not fire on 1.18.23 even though tool.execute.before did, so tool completion cannot be relied on as an event."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://opencode.ai/docs/plugins/",
+    "sourceVersionNote": "Traced against opencode 1.18.23 on darwin/arm64, 2026-08-30. Docs page states no version or stability level; the hook interface was cross-read from packages/plugin/src/index.ts."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "codex",
+    "source": "sidecar.codex.hooks",
+    "assetVersion": "0",
+    "tier": "advisory",
+    "evidence": "docs-only",
+    "minProviderVersion": "0.151.0",
+    "testedProviderRange": "",
+    "covered": [
+      "work_start",
+      "tool_use",
+      "blocked_on_request",
+      "turn_complete",
+      "cancelled",
+      "session_identity",
+      "subagent",
+      "process_exit"
+    ],
+    "knownGaps": [
+      "No Sidecar trace was captured. Every transition above is read from the upstream HookEventName schema, not observed.",
+      "Hooks are disabled by default behind features.hooks, so an integration must modify config.toml as well as install a hook file: two owned mutations rather than one.",
+      "Unblocking has no explicit resolution event and must be inferred from PostToolUse.",
+      "Herdr shipped a full-lifecycle Codex hook set through eight asset versions and then deliberately removed it, retaining SessionStart for session identity only. That rollback is unexplained by the published contract and must be reproduced or refuted before Codex is trusted for state."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://developers.openai.com/codex/config-reference",
+    "sourceVersionNote": "codex-cli 0.151.0 installed locally but not traced. The published config-reference URL redirects and truncates before the hooks section; the authoritative contract is codex-rs/app-server-protocol HookEventName plus the generated JSON schemas."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "claude",
+    "source": "sidecar.claude.hooks",
+    "assetVersion": "0",
+    "tier": "session-identity",
+    "evidence": "docs-only",
+    "minProviderVersion": "2.1.0",
+    "testedProviderRange": "",
+    "covered": [
+      "work_start",
+      "tool_use",
+      "blocked_on_request",
+      "session_identity",
+      "subagent",
+      "process_exit"
+    ],
+    "knownGaps": [
+      "No user-cancellation event exists at all. This is a contract gap rather than a tracing gap, and it alone prevents full lifecycle authority: a state machine driven only by these hooks latches on working when the user interrupts a turn.",
+      "Stop means stopped generating, not ready for input, so turn completion cannot be taken from it without reconciliation against screen state.",
+      "Hook configuration merges additively across five layers, so Sidecar can add entries but can never own the effective hook set.",
+      "Herdr shipped a full-lifecycle Claude hook set and then removed it, keeping only SessionStart for session identity, citing missed permission results and escape interrupts."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://code.claude.com/docs/en/hooks",
+    "sourceVersionNote": "claude 2.1.220 installed locally but not traced. Event list is vendor documentation prose only."
+  },
+  {
+    "schemaVersion": 1,
+    "provider": "pi",
+    "source": "sidecar.pi.extension",
+    "assetVersion": "0",
+    "tier": "session-identity",
+    "evidence": "docs-only",
+    "minProviderVersion": "0.84.0",
+    "testedProviderRange": "",
+    "covered": [
+      "work_start",
+      "tool_use",
+      "turn_complete",
+      "session_identity",
+      "process_exit"
+    ],
+    "knownGaps": [
+      "No Sidecar trace was captured.",
+      "The blocked lane has no portable official source. The one working production integration obtains it from a pi.events bus message named for that consumer rather than from a documented lifecycle event, and ui_prompt_start covers only extension-driven prompts.",
+      "No subagent events are enumerated, and there is no cancellation event.",
+      "The extension API publishes no version or stability guarantee."
+    ],
+    "orderingGuaranteed": false,
+    "sourceDoc": "https://pi.dev/docs/latest/extensions",
+    "sourceVersionNote": "pi 0.84.3 installed locally but not traced. Event list is vendor documentation prose only; upstream type definitions were not read."
+  }
+]
