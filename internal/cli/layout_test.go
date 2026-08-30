@@ -262,7 +262,8 @@ func TestLayoutApply_SpecRidesInColumnsField(t *testing.T) {
 }
 
 // --json is what asks for the structured object, on apply exactly as on open.
-// Without it a human gets human lines and nothing else; with it, both.
+// The two projections are alternatives: without it a human gets human lines and
+// nothing else, with it stdout is the object and nothing else.
 func TestLayoutApply_StructuredResultIsGatedOnJSON(t *testing.T) {
 	acks := []uirequest.Ack{{
 		Instance: "test-instance",

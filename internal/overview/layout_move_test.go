@@ -7,6 +7,7 @@ import (
 
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 )
@@ -129,9 +130,22 @@ func TestSessionsLayoutMove_ExplicitRemoteRowMovesOnlyTheLocalViewer(t *testing.
 		B: shell,
 	}}
 	m.preview.paneNextID = 4
+	// Bind that leaf to a live pane on the other machine, in browse state — the
+	// terminal seam exists and knows its remote target, but nothing has claimed
+	// the keyboard. Without a pane here the geometry sync has no terminal to
+	// call at all and the "no remote resize" claim below would hold for the
+	// wrong reason.
+	remoteTTY := newFakeTerminal("remote pane body")
+	remoteTTY.active = false
+	remoteLeaf := m.terminalLeaf(shell.ID)
+	remoteLeaf.Target = termpanes.Target{Session: remote.TmuxName, Pane: "%7", Host: remote.HostID}
+	m.terminalState(shell.ID).terminal = remoteTTY
 	m.WorkspacesView(previewWide, previewTall)
 	if got := sessionsGridIDs(m.preview.paneRoot); len(got) != 2 {
 		t.Fatalf("remote fixture grid = %v, want two columns", got)
+	}
+	if len(remoteTTY.dims) != 0 {
+		t.Fatalf("the fixture resized the remote pane before the move: %v", remoteTTY.dims)
 	}
 
 	req := sessionsMovePayload(t, uirequest.LayoutMove{From: "2.1", To: "left"})
@@ -154,6 +168,17 @@ func TestSessionsLayoutMove_ExplicitRemoteRowMovesOnlyTheLocalViewer(t *testing.
 	// is no remote layout mutation and no remote resize to run.
 	if cmd != nil {
 		t.Fatal("a browse-state remote move scheduled work")
+	}
+	// And nothing was asserted on the other machine. The move refitted the leaf
+	// into its new local box, but a browse-state pane is never told a new size,
+	// so `syncTerminalLeafGeometry`'s live-terminal guard is what stands between
+	// a local layout change and a resize of someone else's tmux server. Deleting
+	// that guard fails both assertions rather than passing silently.
+	if len(remoteTTY.dims) != 0 {
+		t.Fatalf("the move resized the remote pane: %v", remoteTTY.dims)
+	}
+	if got := m.terminalLeaf(shell.ID); got.Target.Width != 0 || got.Target.Height != 0 {
+		t.Fatalf("the move wrote geometry onto the remote target: %dx%d", got.Target.Width, got.Target.Height)
 	}
 }
 

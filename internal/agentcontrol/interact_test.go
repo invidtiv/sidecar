@@ -31,11 +31,15 @@ type stageTerminal struct {
 	processIdentity string
 	inspects        int
 	onInspect       func(t *stageTerminal, n int)
-	submitted       []string
-	submitErr       error
-	keys            []string
-	captures        []ReadRequest
-	captureErr      error
+	// beforeWrite runs once, inside the mutating path and under the lock, just
+	// after the service handed over its pinned snapshot and just before the
+	// adapter re-proves it. That gap is the real race a replacement wins.
+	beforeWrite func(t *stageTerminal)
+	submitted   []string
+	submitErr   error
+	keys        []string
+	captures    []ReadRequest
+	captureErr  error
 }
 
 func newStage(stage string) *stageTerminal {
@@ -82,9 +86,33 @@ func (t *stageTerminal) Inspect(context.Context, Target) (Snapshot, error) {
 
 func (t *stageTerminal) Launch(context.Context, Snapshot, []string) error { return nil }
 
-func (t *stageTerminal) Submit(_ context.Context, _ Snapshot, text string) error {
+// replaced re-proves the pinned snapshot against the current occupant, which is
+// the mutating half of the Terminal contract: every adapter is handed an
+// already-pinned Snapshot precisely so it can refuse a pane that changed hands
+// between the preflight observation and the write. LocalTerminal does this with
+// a second tmux inspection; modelling it here is what lets the service's
+// "nothing is sent to a replaced target" promise be tested at all.
+func (t *stageTerminal) replaced(snap Snapshot, what string) error {
+	if t.beforeWrite != nil {
+		hook := t.beforeWrite
+		t.beforeWrite = nil
+		hook(t)
+	}
+	current := t.target
+	current.PanePID = t.panePID
+	if sameOccupant(snap.Target, current) {
+		return nil
+	}
+	pinned := snap.Target
+	return &Error{Code: ErrReplaced, Message: "managed pane was replaced before " + what, Target: &pinned}
+}
+
+func (t *stageTerminal) Submit(_ context.Context, snap Snapshot, text string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err := t.replaced(snap, "prompt"); err != nil {
+		return err
+	}
 	if t.submitErr != nil {
 		return t.submitErr
 	}
@@ -92,12 +120,15 @@ func (t *stageTerminal) Submit(_ context.Context, _ Snapshot, text string) error
 	return nil
 }
 
-func (t *stageTerminal) SendKeys(_ context.Context, _ Snapshot, names []string) error {
-	if err := ValidateKeys(names); err != nil {
-		return err
-	}
+// SendKeys deliberately does NOT validate. It stands in for an adapter that
+// trusts what it is handed — the shape a remote adapter is free to take — so
+// the refusal of an unencodable key can only be the service's own.
+func (t *stageTerminal) SendKeys(_ context.Context, snap Snapshot, names []string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if err := t.replaced(snap, "keys"); err != nil {
+		return err
+	}
 	t.keys = append(t.keys, names...)
 	return nil
 }
@@ -299,6 +330,41 @@ func TestPromptWaitRunsSubmissionAndSettleUnderOnePin(t *testing.T) {
 	}
 }
 
+// The documented caveat path: `--wait` from an already-working agent. There is
+// no new turn to identify, so the prompt makes no turn claim and the wait is
+// allowed to be satisfied by the completion of the turn that was already
+// running. That is a deliberate weakening of the stall rule, and help text says
+// so, which makes it worth pinning rather than leaving to the reader.
+func TestPromptWaitFromAWorkingAgentIsSatisfiedByTheRunningTurn(t *testing.T) {
+	terminal := newStage("fake:working")
+	terminal.onInspect = func(s *stageTerminal, n int) {
+		if n >= 3 {
+			s.set("fake:done")
+		}
+	}
+	got, err := stageService(terminal).Prompt(context.Background(),
+		PromptRequest{Target: terminal.target, Text: "and also this", Wait: true, Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent.Status != StatusDone {
+		t.Fatalf("agent = %+v, want the running turn's completion to settle the wait", got.Agent)
+	}
+	// The text still went out; the caveat is about what may be concluded from
+	// the settle, not about withholding the prompt.
+	if wrote := terminal.wrote(); len(wrote) != 1 || wrote[0] != "and also this" {
+		t.Fatalf("submitted = %q", wrote)
+	}
+	// And it never went through the stall rule: no prompt-landed observation is
+	// possible when the agent was already working, so this cannot be reported
+	// as stalled however long the existing turn takes to change status.
+	terminal2 := newStage("fake:working")
+	if _, err := stageService(terminal2).Prompt(context.Background(),
+		PromptRequest{Target: terminal2.target, Text: "again", Wait: true, Timeout: 200 * time.Millisecond}); codeOf(t, err) != ErrTimeout {
+		t.Fatalf("a never-finishing turn = %v, want a timeout rather than a stall", err)
+	}
+}
+
 func TestWaitAcceptsOnlyTheNamedStates(t *testing.T) {
 	terminal := newStage("fake:working")
 	terminal.onInspect = func(s *stageTerminal, n int) {
@@ -386,6 +452,11 @@ func TestWaitReportsCallerCancellationAsTransportNotTimeout(t *testing.T) {
 	}
 }
 
+// The adapter under this service records whatever it is handed without
+// checking it, so the refusal below is the service's own. If the validation
+// moved back down into an adapter, this fake would happily write "down" and
+// "enter" and the test would fail on the keys assertion rather than passing
+// because something, somewhere, happened to check.
 func TestSendKeysValidatesTheWholeListBeforeWritingAny(t *testing.T) {
 	terminal := newStage("fake:blocked")
 	svc := stageService(terminal)
@@ -393,8 +464,16 @@ func TestSendKeysValidatesTheWholeListBeforeWritingAny(t *testing.T) {
 	if err == nil {
 		t.Fatal("SendKeys accepted an unencodable key")
 	}
+	if got := codeOf(t, err); got != ErrNotReady {
+		t.Fatalf("unencodable key = %s, want %s", got, ErrNotReady)
+	}
 	if len(terminal.keys) != 0 {
 		t.Fatalf("rejected sequence still wrote %q", terminal.keys)
+	}
+	// Nothing was observed either: a name that cannot be encoded is answered
+	// before the target costs a terminal round trip.
+	if terminal.inspects != 0 {
+		t.Fatalf("an unencodable key cost %d inspections", terminal.inspects)
 	}
 
 	// A blocked agent is exactly what send-keys is for, so it is not refused.
@@ -409,6 +488,42 @@ func TestSendKeysValidatesTheWholeListBeforeWritingAny(t *testing.T) {
 	if _, err := svc.SendKeys(context.Background(), KeysRequest{Target: terminal.target}); err == nil {
 		t.Fatal("SendKeys accepted an empty sequence")
 	}
+}
+
+// "Refusals happen before any byte is written ... a replaced one gets
+// agent_replaced ... nothing is sent in any of them" is the documented promise
+// for prompt and send-keys alike. The pane can change hands after the preflight
+// observation and before the write, so the refusal has to come from the write
+// path re-proving its pin, and the thing worth testing is that the service
+// surfaces it as agent_replaced with nothing delivered.
+func TestPromptAndSendKeysWriteNothingToAReplacedTarget(t *testing.T) {
+	t.Run("prompt", func(t *testing.T) {
+		terminal := newStage("fake:idle")
+		// Something else takes the pane after the preflight pinned it, so the
+		// snapshot the service carries into Submit is already stale.
+		terminal.beforeWrite = func(s *stageTerminal) { s.panePID = 4242 }
+		_, err := stageService(terminal).Prompt(context.Background(),
+			PromptRequest{Target: terminal.target, Text: "review the diff"})
+		if got := codeOf(t, err); got != ErrReplaced {
+			t.Fatalf("code = %s, want %s", got, ErrReplaced)
+		}
+		if len(terminal.submitted) != 0 {
+			t.Fatalf("a replaced target still received %q", terminal.submitted)
+		}
+	})
+
+	t.Run("send-keys", func(t *testing.T) {
+		terminal := newStage("fake:blocked")
+		terminal.beforeWrite = func(s *stageTerminal) { s.panePID = 4242 }
+		_, err := stageService(terminal).SendKeys(context.Background(),
+			KeysRequest{Target: terminal.target, Keys: []string{"down", "enter"}})
+		if got := codeOf(t, err); got != ErrReplaced {
+			t.Fatalf("code = %s, want %s", got, ErrReplaced)
+		}
+		if len(terminal.keys) != 0 {
+			t.Fatalf("a replaced target still received %q", terminal.keys)
+		}
+	})
 }
 
 func TestSendKeysRefusesAPaneWithNoIdentifiedProvider(t *testing.T) {

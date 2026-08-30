@@ -79,7 +79,9 @@ sidecar agent list --json
 Send a prompt to a managed agent, optionally waiting for it to settle
 
 With two positional arguments the first is the target and the second is the prompt.
-With one, the prompt goes to the shell named by SIDECAR_SHELL.
+With one, the prompt goes to the shell named by SIDECAR_SHELL — unless that one
+argument names a managed target, which is read as a missing prompt rather than as
+a prompt that happens to be a target's name. Empty text is a usage error too.
 
 Nothing is written to a target that is blocked, unidentified, stale, dead, or
 occupied by a replacement process. The text goes through the same ordered,

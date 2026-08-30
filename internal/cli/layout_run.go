@@ -440,10 +440,13 @@ func emitLayoutGet(env Env, dest openDestination, acks []uirequest.Ack, jsonOutp
 	return 0
 }
 
-// printLayoutResult prints apply's outcome: the structured result object only
-// when --json was asked for, exactly as `open` gates its own, then the human
-// per-pane lines. A bare `layout apply` is a human command and must not spray
-// JSON at a terminal that never asked for it.
+// printLayoutResult prints apply's and move's outcome in one projection or the
+// other, never both. A bare `layout apply` is a human command and must not
+// spray JSON at a terminal that never asked for it; `--json` is the documented
+// promise of "one structured result object to stdout", which a jq pipe can only
+// read if the human per-pane lines are not appended after it. Both projections
+// carry the same per-item verdicts, cells, and reasons, so nothing is lost by
+// choosing one — `get` already answers this way.
 func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequest.Ack, jsonOutput bool) {
 	status := string(uirequest.StatusOpened)
 	reason := ""
@@ -484,6 +487,7 @@ func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequ
 	}
 	if jsonOutput {
 		_ = json.NewEncoder(env.Stdout).Encode(result)
+		return
 	}
 
 	if mode == uirequest.LayoutModeMove {

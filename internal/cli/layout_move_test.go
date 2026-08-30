@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,9 +201,6 @@ func TestLayoutMove_UnchangedIsASuccessWithItsOwnWord(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("unchanged = exit %d, stderr %q", code, errOut)
 	}
-	if !strings.Contains(out, "unchanged: the pane is still at 2.1") || !strings.Contains(out, "already at the top") {
-		t.Fatalf("unchanged output does not say what happened:\n%s", out)
-	}
 	first, _, _ := strings.Cut(out, "\n")
 	var result struct {
 		Mode   string              `json:"mode"`
@@ -217,6 +215,78 @@ func TestLayoutMove_UnchangedIsASuccessWithItsOwnWord(t *testing.T) {
 	}
 	if len(result.Items) != 1 || result.Items[0].Verdict != uirequest.ItemVerdictUnchanged {
 		t.Fatalf("structured items = %+v, want an unchanged verdict", result.Items)
+	}
+	if result.Items[0].Reason != "already at the top" {
+		t.Fatalf("structured item reason = %q, want the no-op's own words", result.Items[0].Reason)
+	}
+	// Without --json the same outcome is spoken in the human projection. The
+	// two are alternatives, and the next test holds --json to being only the
+	// object.
+	_, plain, _, _ := moveAckRun(t, []string{"layout", "move", "--focused", "--to", "up"},
+		func(req uirequest.Request) uirequest.Ack {
+			return uirequest.Ack{
+				Instance: "test-instance", Status: uirequest.StatusUnchanged, Reason: "already at the top",
+				At: time.Now().UTC(), ItemsVersion: 1,
+				Items: []uirequest.AckItem{{
+					Verdict: uirequest.ItemVerdictUnchanged, Cell: "2.1", Pane: 7,
+					Surface: "shell:sidecar-sh-x", Reason: "already at the top",
+				}},
+			}
+		})
+	if !strings.Contains(plain, "unchanged: the pane is still at 2.1") || !strings.Contains(plain, "already at the top") {
+		t.Fatalf("plain unchanged output does not say what happened:\n%s", plain)
+	}
+}
+
+// `--json` is the documented promise of one structured result object on stdout.
+// Appending the human lines after it broke every `| jq` pipe, which is the only
+// reason an agent asks for --json at all. Both verbs answer the same way, and
+// `get` already did.
+func TestLayoutJSONWritesOnlyTheObjectToStdout(t *testing.T) {
+	dest := openDestination{DisplayName: "active task", Resolved: uirequest.ResolvedCurrentShell}
+	for _, tc := range []struct {
+		name string
+		mode string
+		acks []uirequest.Ack
+	}{
+		{
+			name: "move",
+			mode: uirequest.LayoutModeMove,
+			acks: []uirequest.Ack{{
+				Instance: "test-instance", Status: uirequest.StatusMoved,
+				Items: []uirequest.AckItem{{Verdict: uirequest.ItemVerdictMoved, Cell: "1.2", Surface: "shell:sidecar-sh-x"}},
+			}},
+		},
+		{
+			name: "apply",
+			mode: uirequest.LayoutModeApply,
+			acks: []uirequest.Ack{{
+				Instance: "test-instance", Status: uirequest.StatusOpened,
+				Items: []uirequest.AckItem{
+					{Index: 0, Verdict: uirequest.ItemVerdictOpened, Cell: "2.1"},
+					{Index: 1, Verdict: uirequest.ItemVerdictDeclined, Reason: "no room"},
+				},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printLayoutResult(Env{Stdout: &buf}, tc.mode, dest, tc.acks, true)
+			out := buf.String()
+			// Exactly one JSON document and nothing after it: decode the whole
+			// stream and require it to end there.
+			decoder := json.NewDecoder(strings.NewReader(out))
+			var first map[string]any
+			if err := decoder.Decode(&first); err != nil {
+				t.Fatalf("--json stdout does not decode: %v\n%s", err, out)
+			}
+			if err := decoder.Decode(new(map[string]any)); err != io.EOF {
+				t.Fatalf("--json stdout carries trailing output after the object (%v):\n%s", err, out)
+			}
+			if first["mode"] != tc.mode {
+				t.Fatalf("structured mode = %v, want %q", first["mode"], tc.mode)
+			}
+		})
 	}
 }
 

@@ -35,7 +35,9 @@ func TestIsolatedTmuxFakeProviderSteelThread(t *testing.T) {
 		return AgentState{Kind: "fake", Status: status, Freshness: "current", Evidence: "fake.screen", CapturedAt: s.CapturedAt}
 	}
 	svc := Service{Terminal: terminal, Poll: 20 * time.Millisecond, Detect: detect}
-	script := `printf 'FAKE_IDLE\n'; while IFS= read -r line; do printf 'FAKE_WORKING:%s\n' "$line"; sleep 0.2; if [ "$line" = block ]; then printf 'FAKE_BLOCKED\n'; else printf 'FAKE_DONE\n'; fi; done`
+	// Markers are built from $m so the echoed launch line does not itself read
+	// as a finished agent; see fakeProviderScript for why that matters.
+	script := `m=FAKE; printf '%s_IDLE\n' "$m"; while IFS= read -r line; do printf '%s_WORKING:%s\n' "$m" "$line"; sleep 0.2; if [ "$line" = block ]; then printf '%s_BLOCKED\n' "$m"; else printf '%s_DONE\n' "$m"; fi; done`
 	ready, err := svc.WaitShellReady(context.Background(), target, 3*time.Second)
 	if err != nil {
 		t.Fatal(err)

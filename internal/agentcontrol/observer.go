@@ -140,6 +140,14 @@ func (s Service) watch(ctx context.Context, initial Snapshot, state AgentState, 
 			lastVerified = s.Now()
 			snap, err := s.Terminal.Inspect(ctx, pinned)
 			if err != nil {
+				// A deadline or cancellation that lands while an observation is
+				// in flight is still the caller's, not the transport's. Without
+				// this, one outcome reported two different codes depending on
+				// where the clock fell: agent_timeout when the select noticed
+				// first, transport_failed when the tmux call did.
+				if ctx.Err() != nil {
+					return Snapshot{}, AgentState{}, waitDeadline(ctx, pinned)
+				}
 				return Snapshot{}, AgentState{}, transport(pinned, err)
 			}
 			if !sameOccupant(pinned, snap.Target) {
