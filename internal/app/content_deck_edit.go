@@ -19,6 +19,13 @@ import (
 
 const appContentEditSurfacePrefix = "app-content-edit\x00"
 
+// editSessionAlive reports whether an editor's tmux session is still there. It
+// is a variable because it is the only thing standing between a model test and
+// a real tmux server: the confirmation that protects an unsaved buffer is
+// reachable only for a live session, so without a seam here the guard could be
+// exercised only by a proof run that starts tmux.
+var editSessionAlive = (*inlineedit.Session).IsAlive
+
 // appDeckDocumentEdit is the app deck's host state around inlineedit's
 // shared tmux lifecycle. The Deck still owns the document model and tab; this
 // state owns only the transient editor session drawn in front of that model.
@@ -267,9 +274,13 @@ func (m *Model) handleAppContentEditKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		outcome, _ := session.HandleConfirmKey(msg.String())
 		switch outcome {
 		case inlineedit.OutcomeSave, inlineedit.OutcomeDiscard:
-			exit := h.exitAppContentDocumentEdit()
+			// Take the deferred action before exiting: exit clears e.pending
+			// itself, so reading it afterwards always found nil and the action
+			// the user was asked about never ran. That was invisible while the
+			// only guarded caller deferred a no-op.
 			pending := e.pending
 			e.pending = nil
+			exit := h.exitAppContentDocumentEdit()
 			if pending != nil {
 				return tea.Batch(exit, pending()), true
 			}
@@ -290,9 +301,14 @@ func (m *Model) handleAppContentEditKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	return cmd, true
 }
 
+// guardAppContentDocumentEdit raises the editor's Save/Discard/Cancel dialog in
+// front of an action that would otherwise destroy a live buffer, stashing the
+// action to run once the user has chosen. It reports true when the caller must
+// stand down and let the dialog answer. A dead session has nothing to lose, so
+// the guard declines and the caller proceeds.
 func (h *appContentDeck) guardAppContentDocumentEdit(action func() tea.Cmd) bool {
 	e := h.appContentDocumentEdit(false)
-	if e == nil || !e.editing() || !e.session.IsAlive() {
+	if e == nil || !e.editing() || !editSessionAlive(e.session) {
 		return false
 	}
 	e.session.ShowExitConfirm = true

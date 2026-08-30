@@ -12,7 +12,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/contentlink"
+	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/inlineedit"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/panelayout"
@@ -196,6 +198,156 @@ func TestAppDeckMoveKeyLeavesDeckInputSurfacesAlone(t *testing.T) {
 	}
 	if !h.appContentSearchActive() {
 		t.Fatal("M closed the deck input surface it should have been typed into")
+	}
+}
+
+// The in-file search types into the document, so M is a character there. The
+// finder above proves the deck-owned search rung; this one proves the docview
+// rung under it, which the ladder answers separately.
+func TestAppDeckMoveKeyLeavesTheInFileSearchAlone(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	view, ok := h.deck.Viewer(docID).(*docview.Model)
+	if !ok {
+		t.Fatalf("focused leaf %d is not a document view", docID)
+	}
+	view.StartSearch()
+	if !view.SearchActive() {
+		t.Fatal("fixture did not open the in-file search")
+	}
+	m.updateContext()
+	if m.activeContext != "workspace-doc-find" {
+		t.Fatalf("in-file search reports context %q, want workspace-doc-find", m.activeContext)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal out of the in-file search")
+	}
+	if !view.SearchActive() {
+		t.Fatal("M closed the in-file search instead of being typed into it")
+	}
+	if q := view.SearchQuery(); q != "M" {
+		t.Fatalf("in-file search query = %q, want the typed M", q)
+	}
+}
+
+// A live inline editor owns every key, so M is a character inside tmux. The
+// editor rung sits above the deck's own keys in the ladder; this pins that
+// order rather than trusting it.
+func TestAppDeckMoveKeyLeavesTheInlineEditorAlone(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	e := h.appContentDocumentEdit(true)
+	e.leafID = docID
+	session := e.editor()
+	session.Active = true
+	session.Path = "README.md"
+	t.Cleanup(h.releaseAppContentDocumentEdit)
+	if !h.appContentDocumentEditing() {
+		t.Fatal("fixture did not put a live editor on the focused leaf")
+	}
+	m.updateContext()
+	// The deck would otherwise answer M here: the leaf itself is a legal target.
+	if leaf := panelayout.Find(h.deck.Tree(), docID); m.appPaneMoveShortcutLeaf(h, leaf) != docID {
+		t.Fatal("fixture leaf is not a move target, so the ladder order proves nothing")
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal out of a live inline editor")
+	}
+	// The editor rung consumed the key. Its session has no tmux behind it here,
+	// so it answers by exiting — the point is that it answered, above the deck.
+	if h.appContentDocumentEditing() {
+		t.Fatal("the editor rung did not answer M")
+	}
+}
+
+// The deck's info overlay owns its keys, and appPaneMoveShortcutLeaf refuses
+// while it is up. Both rungs are pinned: the resolver and the real ladder.
+func TestAppDeckMoveKeyLeavesTheInfoOverlayAlone(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	view, ok := h.deck.Viewer(docID).(*docview.Model)
+	if !ok {
+		t.Fatalf("focused leaf %d is not a document view", docID)
+	}
+	_ = h.openAppContentInfo(view, docID)
+	if h.info == nil || h.infoLeaf != docID {
+		t.Fatalf("fixture did not open the info overlay: info=%v leaf=%d", h.info, h.infoLeaf)
+	}
+	leaf := panelayout.Find(h.deck.Tree(), docID)
+	if id := m.appPaneMoveShortcutLeaf(h, leaf); id != 0 {
+		t.Fatalf("M resolved leaf %d with the info overlay open", id)
+	}
+
+	updated, _ := m.Update(tea.KeyPressMsg{Code: 'M', Text: "M"})
+	got := asAppModel(t, updated)
+	if h.layoutModal != nil || got.activeModal() == ModalPaneReposition {
+		t.Fatal("M opened the reposition modal out of the info overlay")
+	}
+	if h.info == nil {
+		t.Fatal("M closed the info overlay it should have been handed to")
+	}
+}
+
+// Opening the modal releases the deck's input surfaces, and for a live inline
+// edit that release kills a tmux session holding an unsaved buffer. Unlike the
+// plugin/scope/shutdown releases, the modal leaves this deck laid out and comes
+// back to it, so the buffer is asked about rather than discarded — through the
+// same confirmation the editor's click-away path raises, and then the modal
+// opens on the leaf that was actually requested.
+func TestAppPaneLayoutModalConfirmsBeforeDiscardingALiveInlineEdit(t *testing.T) {
+	m, h, docID := appDeckMoveFixture(t)
+	primary := h.deck.Leaf(panelayout.Primary)
+	if primary == 0 || primary == docID {
+		t.Fatalf("fixture has no distinct primary leaf: primary=%d doc=%d", primary, docID)
+	}
+	e := h.appContentDocumentEdit(true)
+	e.leafID = docID
+	session := e.editor()
+	session.Active = true
+	session.Path = "README.md"
+	t.Cleanup(h.releaseAppContentDocumentEdit)
+	// Pin the session live without a tmux server; the guard exists only for a
+	// session that still has something to lose.
+	original := editSessionAlive
+	editSessionAlive = func(*inlineedit.Session) bool { return true }
+	t.Cleanup(func() { editSessionAlive = original })
+
+	// Focus sits away from the editor, which is the state where both doors — M
+	// and the header ⊞ — used to reach the release and kill the buffer silently.
+	h.deck.FocusLeaf(primary)
+	h.syncInnerFocus()
+	m.updateContext()
+
+	if cmd := m.openAppPaneLayoutModal(h, docID); cmd != nil {
+		t.Fatal("the guarded open scheduled work instead of standing down")
+	}
+	if h.layoutModal != nil {
+		t.Fatal("the modal opened over a live inline edit without asking")
+	}
+	if !session.ShowExitConfirm {
+		t.Fatal("no confirmation was raised before discarding the editor buffer")
+	}
+	if !session.Active || h.appContentDocumentEdit(false) == nil {
+		t.Fatalf("the editor was torn down anyway: active=%v state=%v", session.Active, h.appContentDocumentEdit(false))
+	}
+	if h.deck.FocusedLeaf() != docID {
+		t.Fatalf("focus is on leaf %d, so the confirmation's keys cannot reach it", h.deck.FocusedLeaf())
+	}
+
+	// Discard: the dialog answers, the editor goes, and the move the user asked
+	// for is what they get — one gesture, not a lost buffer and a lost modal.
+	session.ConfirmSelection = 1
+	if _, handled := m.handleAppContentEditKey(tea.KeyPressMsg{Code: tea.KeyEnter}); !handled {
+		t.Fatal("the confirmation did not answer enter")
+	}
+	if session.ShowExitConfirm || session.Active {
+		t.Fatalf("discard left the editor up: confirm=%v active=%v", session.ShowExitConfirm, session.Active)
+	}
+	if h.layoutModal == nil || h.layoutModal.LeafID() != docID {
+		t.Fatalf("the deferred modal did not open on the requested leaf: %v", h.layoutModal)
 	}
 }
 

@@ -45,6 +45,29 @@ func (m *Model) openAppPaneLayoutModal(h *appContentDeck, leafID int) tea.Cmd {
 	if leaf == nil || leaf.Split != nil || leaf.Kind == panelayout.Primary {
 		return nil
 	}
+	// A live inline edit is a tmux session holding a buffer that
+	// releaseAppContentInputs kills outright. Every other caller of that release
+	// is a surface teardown — a plugin switch, a scope change, shutdown, another
+	// deck taking over — which drops `laidOut` and leaves the editor nowhere to
+	// be drawn. The reposition modal is the one caller that keeps this deck laid
+	// out and comes back to it, so nothing forces the buffer to die and it must
+	// not be discarded unasked. Raise the same Save/Discard/Cancel dialog the
+	// click-away path uses and re-enter here once the user has chosen, so the
+	// door the user came through — M or the header ⊞ — cannot decide whether
+	// their unsaved edit survives.
+	//
+	// Focus follows the editor because the dialog's keys only route while its
+	// own leaf is focused; the leaf being asked about is also the one to show.
+	if e := h.appContentDocumentEdit(false); e != nil && e.editing() {
+		if h.deck.FocusedLeaf() != e.leafID {
+			h.deck.FocusLeaf(e.leafID)
+			h.syncInnerFocus()
+		}
+		if h.guardAppContentDocumentEdit(func() tea.Cmd { return m.openAppPaneLayoutModal(h, leafID) }) {
+			m.updateContext()
+			return nil
+		}
+	}
 	// Release every deck-owned editor/search surface before the modal starts;
 	// the primary app content deck has no terminal lease of its own.
 	h.releaseAppContentInputs()
