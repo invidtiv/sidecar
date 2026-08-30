@@ -1265,6 +1265,12 @@ func (m *Model) handleAppContentKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 			return appDeckSelectionCopyCmd(view, result), true
 		}
 	}
+	// M is the deck's own entry onto the reposition modal, beside the header ⊞.
+	// It sits with the structural keys because moving this leaf is structural,
+	// and it declines rather than consuming the key when the deck cannot answer.
+	if cmd, handled := m.appPaneMoveKey(h, leaf, key); handled {
+		return cmd, true
+	}
 	switch key.String() {
 	case "q", "esc":
 		h.deck.HideFocused()
@@ -1591,6 +1597,13 @@ func (m *Model) appContentCommands() []plugin.Command {
 	if leaf == nil {
 		return cmds
 	}
+	if m.appPaneMoveShortcutLeaf(h, leaf) != 0 {
+		cmds = append(cmds, plugin.Command{
+			ID: panereposition.CommandMove, Name: "Move", Description: "Reposition this pane",
+			Context: ctx, Priority: 90,
+			Handler: func() tea.Cmd { return m.runAppContentCommand(panereposition.CommandMove) },
+		})
+	}
 	switch v := h.deck.Viewer(leaf.ID).(type) {
 	case *docview.Model:
 		cmds = append(cmds,
@@ -1680,6 +1693,13 @@ func (m *Model) runAppContentCommand(id string) tea.Cmd {
 		m.persistAppContentDeck(h)
 		m.updateContext()
 		return cmd
+	case panereposition.CommandMove:
+		leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
+		leafID := m.appPaneMoveShortcutLeaf(h, leaf)
+		if leafID == 0 {
+			return nil
+		}
+		return m.openAppPaneLayoutModal(h, leafID)
 	}
 	leaf := panelayout.Find(h.deck.Tree(), h.deck.FocusedLeaf())
 	if leaf == nil {
