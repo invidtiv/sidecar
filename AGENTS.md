@@ -59,7 +59,7 @@ You can present the demo in two ways:
 2. **Launch a demo shell / split for the user (Sidecar Inception)**:
    When working inside a Sidecar shell, you can launch the demo directly into
    the user's running session using the shell creation CLI (per
-   `docs/plans/active/agent-shell-create-cli.md` and `docs/plans/active/terminal-splits-and-windowing.md`):
+   `docs/plans/implemented/agent-shell-create-cli.md` and `docs/plans/implemented/terminal-splits-and-windowing.md`):
    ```bash
    # Create a dedicated workspace demo shell:
    sidecar create shell --name "Demo: <Feature>" --run "./scripts/demo.sh"
