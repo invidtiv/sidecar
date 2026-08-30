@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/marcus/sidecar/internal/testenv"
 )
 
 // tmux is a real terminal emulator with a real escape parser, which makes it
@@ -110,12 +112,18 @@ func startIsolatedTmux(t *testing.T) *tmuxServer {
 	}
 	// A short temp dir rather than t.TempDir: a unix socket path is capped at
 	// around a hundred bytes, and a path built from the test's own name is
-	// already over it on macOS.
-	dir, err := os.MkdirTemp("", "termnotify")
+	// already over it on macOS. The name and socket layout are the ones
+	// testenv.IsolateTmux uses, so `make reap-test-tmux` can find and clean up
+	// after a run that panicked before its cleanup ran.
+	dir, err := os.MkdirTemp("", "sidecar-tmux-test")
 	if err != nil {
 		t.Fatalf("temp dir: %v", err)
 	}
-	server := &tmuxServer{socket: filepath.Join(dir, "sock"), tmpDir: dir}
+	socket := testenv.SocketPath(dir)
+	if err := os.MkdirAll(filepath.Dir(socket), 0o700); err != nil {
+		t.Fatalf("socket dir: %v", err)
+	}
+	server := &tmuxServer{socket: socket, tmpDir: dir}
 
 	// A holder session keeps the server alive between cases, and exists before
 	// allow-passthrough is set so no case can race the option.
