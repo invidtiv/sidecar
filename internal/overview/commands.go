@@ -59,6 +59,7 @@ func (m *Model) Commands() []plugin.Command {
 	case ctxGlobalWorkspacesTerminal:
 		return []plugin.Command{
 			{ID: "exit-interactive", Name: "Stop", Description: "Stop typing and return to the list", Context: ctxGlobalWorkspacesTerminal, Priority: 1},
+			{ID: "search-terminal", Name: "Search", Description: "Search the complete terminal history", Context: ctxGlobalWorkspacesTerminal, Priority: 2},
 		}
 	case ctxGlobalWorkspacesDocSearch:
 		return []plugin.Command{

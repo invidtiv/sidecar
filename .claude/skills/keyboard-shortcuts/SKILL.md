@@ -148,6 +148,7 @@ There is no watched-preview focus: hiding the sidebar is layout only. `l` / `→
 | double-click a row | Open that identity in its owning project |
 | wheel on terminal | Scroll only; do not activate |
 | `ctrl+\` / `esc esc` | Stop typing and land on the list |
+| `ctrl+shift+f` while typing | Search the complete terminal history |
 | `i` | Find TD task (`open-issue`). Not interactive |
 | `n` | Open Create Workspace (Worktree) |
 | `ctrl+n` | Open Create Workspace with Shell selected (modal) |
@@ -565,6 +566,7 @@ anywhere in the tree.)
 | `ctrl+\` | exit |
 | `ctrl+]` | attach (`tmux_full_attach`, default off) |
 | `ctrl+t` | toggle a terminal split beside the preview (`workspace_terminal_panel`, default on) |
+| `ctrl+shift+f` | search complete terminal history |
 | `alt+c` | copy |
 | `super+c` | copy (Cmd+C, when the emulator passes it through) |
 | `alt+v` | paste |

@@ -492,9 +492,11 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 // the browser around it. They are answered in both of the preview's states,
 // because the selection they act on exists in both.
 func (m *Model) terminalKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
-	// The set and the order are the shared layer's. This surface has no chords
-	// of its own to answer ahead of them: the search and the panel toggles the
-	// project surface answers first belong to a panel this one does not draw.
+	if handled, cmd := m.handlePreviewTerminalSearchKey(msg); handled {
+		return true, cmd
+	}
+	// The set and the order are the shared layer's. Search is answered above on
+	// both workspace surfaces; the project-only panel toggle has no peer here.
 	cmd, handled := m.TerminalConfig().ResolveSurfaceChord(msg, tty.SurfaceChords{
 		Copy:      m.copyPreviewSelectionCmd,
 		SelectAll: func() tea.Cmd { m.selectAllPreviewOutput(); return nil },

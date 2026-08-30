@@ -132,7 +132,7 @@ func IsAsyncMessage(msg tea.Msg) bool {
 		return true
 	case panesMsg, projectMsg, pollMsg, previewAutoScrollTickMsg, workspacePulseTickMsg,
 		sessionsSelectedTickMsg,
-		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, contentpanes.Result,
+		previewDocLoadedMsg, previewDocSearchMsg, previewIssueLoadedMsg, previewNoteLoadedMsg, previewResourceResolvedMsg, previewHistoryLoadedMsg, previewTerminalSearchLoadedMsg, contentpanes.Result,
 		renameShellDoneMsg, globalShellCreatedMsg, previewTerminalSplitCreatedMsg, previewSplitCloseProbeMsg, projectMutationRefreshMsg, globalCreateBranchesMsg, previewLinkRevalidatedMsg,
 		createPickerDataMsg, workspacecreate.FilesScannedMsg:
 		// creation is a multi-stage async workflow; every result must stay
@@ -243,6 +243,7 @@ type Model struct {
 	diff                      workspacediff.View
 	terminalConfig            tty.Config
 	terminalDefaultBackground string
+	terminalSearch            previewTerminalSearchState
 	config                    *config.Config
 	width                     int
 	height                    int
@@ -262,6 +263,10 @@ type Model struct {
 	// update from a client that has just been stopped cannot resurrect a
 	// de-registered machine as a permanent error row.
 	hostRegistered map[string]bool
+	// hostConfigured is the last reconciled transport identity. A selected
+	// terminal owns its own control process, not the serve registry's, so a
+	// removed or retargeted HostID must close that terminal explicitly.
+	hostConfigured map[string]hosts.Host
 	hostHealth     map[string]hosts.Health
 	hostProjects   map[string][]Project
 
@@ -848,6 +853,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		return nil
 	case previewHistoryLoadedMsg:
 		return m.applyPreviewHistory(msg)
+	case previewTerminalSearchLoadedMsg:
+		return m.applyPreviewTerminalSearchHistory(msg)
 	case workspacediff.SnapshotMsg:
 		return m.applyDiffSnapshot(msg)
 	case workspacediff.CommitDetailMsg:

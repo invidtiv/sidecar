@@ -235,6 +235,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	_, total := tty.BufferBase(input.Buffer)
 	layout := tty.FitViewport(input)
 	hints = m.appendTerminalWindowStatus(leaf, state, styles.Muted.Render(hints), input, layout, width, chips, interactive)
+	hints = m.appendPreviewTerminalSearchStatus(hints)
 	// Same resolution the project surface answers: one config rule for how far
 	// carried backgrounds reach, so a pane cannot render differently depending
 	// on which surface is showing it.
@@ -245,7 +246,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 		Layout:            layout, Buffer: input.Buffer, AbsoluteBase: input.AbsoluteBase,
 		TotalItems: total, PaneHeight: input.PaneHeight, Interactive: input.Interactive,
 		Follow: input.Follow, Selection: &leaf.Selection, TabWidth: tty.DefaultTabWidth,
-		Message: message, Decorate: leaf.LinkState.Decorate,
+		Message: message, Decorate: m.previewTerminalDecorator(leaf),
 		Backgrounds: terminalCfg.Backgrounds, BackgroundSpanMax: terminalCfg.BackgroundSpanMax,
 		BarStyle: ui.ScrollbarStyle{Thumb: ui.HandleStateFrom(false, state.termBar.active)},
 		Analyzer: leaf.RowAnalyzer,

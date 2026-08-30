@@ -126,9 +126,9 @@ var (
 		Description: "Enable the cross-project agent overview",
 	}
 
-	// SidecarRemoteHosts enables observing other machines that have Sidecar
-	// installed, over SSH. Off by default through Phase A: it is new, it is
-	// read-only, and it should cost nothing at all until a user asks for it.
+	// SidecarRemoteHosts enables viewing and interacting with sessions on other
+	// machines that have Sidecar installed, over SSH. It should cost nothing at
+	// all until a user asks for it.
 	//
 	// With the flag off, no host is read from config, no connection is made,
 	// and no remote row exists — the local path is byte-identical. With it on
@@ -136,7 +136,7 @@ var (
 	SidecarRemoteHosts = Feature{
 		Name:        "sidecar_remote_hosts",
 		Default:     false,
-		Description: "Observe other machines running Sidecar, over SSH (read-only)",
+		Description: "Use Sidecar sessions on other machines over SSH",
 	}
 )
 
@@ -198,6 +198,20 @@ func Init(cfg *config.Config) {
 		cfg:       cfg,
 		overrides: make(map[string]bool),
 	}
+}
+
+// SetConfig replaces the configuration snapshot while preserving command-line
+// overrides. Configuration saves use this so feature-gated runtime
+// reconciliation sees the just-written flags without changing override
+// precedence.
+func SetConfig(cfg *config.Config) {
+	if globalManager == nil {
+		Init(cfg)
+		return
+	}
+	globalManager.mu.Lock()
+	globalManager.cfg = cfg
+	globalManager.mu.Unlock()
 }
 
 // SetOverride sets a CLI override for a feature flag.

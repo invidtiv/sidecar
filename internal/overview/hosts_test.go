@@ -303,11 +303,22 @@ func TestControlSpawnerRefusesAnUnreachableHost(t *testing.T) {
 	}
 }
 
-// TestRemotePaneRefusesInteractiveMode. Input is already dropped by the
-// read-only sender, but entering the mode would put "typing" in the header of
-// a pane that cannot receive a keystroke — which looks like it worked.
-func TestRemotePaneRefusesInteractiveMode(t *testing.T) {
+// TestRemotePaneEntersInteractiveMode proves the Phase B surface handoff: the
+// same local chrome becomes interactive and the terminal component is asked to
+// claim input. The fake keeps ssh/tmux out of this surface-level test.
+func TestRemotePaneEntersInteractiveMode(t *testing.T) {
+	var terminal *activatingRemoteTerminal
+	original := newPreviewTerminal
+	newPreviewTerminal = func(config tty.Config, hooks tty.Hooks) previewTerminal {
+		terminal = &activatingRemoteTerminal{modeRecordingTerminal: modeRecordingTerminal{calls: &[]string{}}}
+		return terminal
+	}
+	t.Cleanup(func() { newPreviewTerminal = original })
+
 	m := hostModel(t, "mac-mini", hosts.Health{State: hosts.StateOnline}, remoteSnapshot("blocked"))
+	m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
+	t.Cleanup(m.hostRegistry.Stop)
+	m.hostRegistry.Sync(context.Background(), []hosts.Host{{ID: "mac-mini", Target: "mac-mini"}})
 	m.syncWorkspaces()
 	m.preview.visible = true
 	for _, item := range m.workspaces.Items() {
@@ -321,22 +332,13 @@ func TestRemotePaneRefusesInteractiveMode(t *testing.T) {
 		t.Fatalf("selection is not the remote row: %+v ok=%v", workspace, ok)
 	}
 
-	// Assert on the refusal itself. PreviewInteractive() is false in this
-	// fixture whatever happens — it requires a live terminal the fixture never
-	// builds — so checking it would pass with the guard deleted.
-	cmd := m.enterPreviewInteractive()
-	if cmd == nil {
-		t.Fatal("entering interactive on a remote pane said nothing at all")
+	m.syncPreviewTerminal()
+	_ = m.enterPreviewInteractive()
+	if terminal == nil || terminal.activated != 1 {
+		t.Fatalf("remote input activation count = %v, want 1", terminal)
 	}
-	post, ok := cmd().(notify.PostMsg)
-	if !ok {
-		t.Fatalf("entering interactive on a remote pane produced %T, want a refusal", cmd())
-	}
-	if !strings.Contains(post.Notification.Title, "mac-mini") {
-		t.Errorf("refusal does not name the machine: %q", post.Notification.Title)
-	}
-	if m.previewTerminalLeaf().Interactive {
-		t.Error("the leaf was put into interactive mode anyway")
+	if !m.previewTerminalLeaf().Interactive || !m.PreviewInteractive() {
+		t.Error("remote pane did not enter the ordinary interactive chrome")
 	}
 }
 
@@ -418,6 +420,16 @@ func TestPreviewSetsControlModeOnEveryActivation(t *testing.T) {
 type modeRecordingTerminal struct {
 	calls  *[]string
 	active bool
+}
+
+type activatingRemoteTerminal struct {
+	modeRecordingTerminal
+	activated int
+}
+
+func (t *activatingRemoteTerminal) ActivateInput() tea.Cmd {
+	t.activated++
+	return nil
 }
 
 func (t *modeRecordingTerminal) UseRemoteControl(tty.ControlSpawner) {
@@ -511,7 +523,9 @@ func TestDeregisteredHostIsNotResurrected(t *testing.T) {
 	m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{})
 	t.Cleanup(m.hostRegistry.Stop)
 	// The user removed this host: it is no longer registered.
-	m.hostRegistered = map[string]bool{"still-here": true}
+	// Empty-but-non-nil is the feature-off/no-host reload state. The guard must
+	// not use len(map)>0 or this exact final update gets through.
+	m.hostRegistered = map[string]bool{}
 	delete(m.hostHealth, "gone")
 
 	m.handleHostUpdate(hostUpdateMsg{Update: hosts.Update{
@@ -520,6 +534,83 @@ func TestDeregisteredHostIsNotResurrected(t *testing.T) {
 	}})
 	if _, back := m.hostHealth["gone"]; back {
 		t.Error("a de-registered host came back as an error row")
+	}
+}
+
+func TestRemoteControlInvalidatedByRemovalOrRetarget(t *testing.T) {
+	target := tty.Target{Session: "s", Pane: "%1", Host: "mini"}
+	old := map[string]hosts.Host{"mini": {ID: "mini", Target: "old"}}
+	for name, next := range map[string]map[string]hosts.Host{
+		"removed":    {},
+		"retargeted": {"mini": {ID: "mini", Target: "new"}},
+	} {
+		if !remoteControlInvalidated(target, old, next) {
+			t.Errorf("%s host left the selected control alive", name)
+		}
+	}
+	if remoteControlInvalidated(target, old, map[string]hosts.Host{"mini": {ID: "mini", Target: "old"}}) {
+		t.Error("unchanged host unnecessarily invalidated its selected control")
+	}
+}
+
+func TestHostRemovalClosesSelectedRemoteTerminalAndHistory(t *testing.T) {
+	features.Init(config.Default())
+	features.SetOverride(features.SidecarRemoteHosts.Name, true)
+	t.Cleanup(func() { features.SetOverride(features.SidecarRemoteHosts.Name, features.SidecarRemoteHosts.Default) })
+
+	m := New(workspaceinventory.Collector{})
+	terminal := newFakeTerminal("remote")
+	terminal.active = true
+	m.primaryTerminalState().terminal = terminal
+	m.setPrimaryTarget(tty.Target{Session: "s", Pane: "%1", Host: "mini"})
+	m.primaryTerminalLeaf().Buffer = terminal.buffer
+	m.primaryTerminalLeaf().History.Record(100)
+	m.primaryTerminalLeaf().Interactive = true
+	m.hostConfigured = map[string]hosts.Host{"mini": {ID: "mini", Target: "old"}}
+	m.SetConfig(&config.Config{})
+
+	_ = m.SyncHosts()
+	if terminal.released != 1 || terminal.active {
+		t.Fatalf("removed host terminal lifecycle: closes=%d releases=%d active=%v", terminal.closes, terminal.released, terminal.active)
+	}
+	if m.previewTarget() != (tty.Target{}) || m.primaryTerminalLeaf().History.HistorySize != 0 || m.primaryTerminalLeaf().History.Loading {
+		t.Fatalf("removed host retained target/history: target=%+v history=%+v", m.previewTarget(), m.primaryTerminalLeaf().History)
+	}
+}
+
+func TestHostRetargetClosesSelectedRemoteControlBeforeReconnect(t *testing.T) {
+	features.Init(config.Default())
+	features.SetOverride(features.SidecarRemoteHosts.Name, true)
+	t.Cleanup(func() { features.SetOverride(features.SidecarRemoteHosts.Name, features.SidecarRemoteHosts.Default) })
+
+	m := New(workspaceinventory.Collector{})
+	m.hostRegistry = hosts.NewRegistry(hosts.ClientOptions{Dial: func(context.Context) (*hosts.Conn, error) {
+		return nil, context.Canceled
+	}})
+	t.Cleanup(m.hostRegistry.Stop)
+	m.hostResults = make(map[string][]workspaceinventory.ProjectResult)
+	m.hostHealth = make(map[string]hosts.Health)
+	m.hostProjects = make(map[string][]Project)
+	m.hostRegistered = map[string]bool{"mini": true}
+
+	terminal := newFakeTerminal("remote")
+	terminal.active = true
+	m.primaryTerminalState().terminal = terminal
+	m.setPrimaryTarget(tty.Target{Session: "s", Pane: "%1", Host: "mini"})
+	m.primaryTerminalLeaf().Buffer = terminal.buffer
+	m.primaryTerminalLeaf().History.Record(100)
+	m.primaryTerminalLeaf().Interactive = true
+	m.hostConfigured = map[string]hosts.Host{"mini": {ID: "mini", Target: "old"}}
+	cfg := config.Default()
+	cfg.Hosts.List = []config.HostConfig{{ID: "mini", Target: "new"}}
+	m.SetConfig(cfg)
+
+	_ = m.SyncHosts()
+	if terminal.released != 1 || terminal.active {
+		t.Fatalf("retargeted host terminal lifecycle: closes=%d releases=%d active=%v", terminal.closes, terminal.released, terminal.active)
+	}
+	if m.previewTarget() != (tty.Target{}) || m.primaryTerminalLeaf().History.HistorySize != 0 {
+		t.Fatalf("retargeted host retained old target/history: target=%+v history=%+v", m.previewTarget(), m.primaryTerminalLeaf().History)
 	}
 }
 

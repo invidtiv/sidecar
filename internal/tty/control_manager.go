@@ -358,6 +358,91 @@ func (m *ControlManager) usingControl(id uint64) bool {
 	return client != nil && client.has(id, sub.generation)
 }
 
+// clientForCommand returns the live session client, waiting through the short
+// replacement window created by a resize reseed. It is called only from
+// command goroutines (input's ordered send queue and history/geometry tea.Cmds),
+// never from Bubble Tea's update loop.
+func (m *ControlManager) clientForCommand(session string) (*sessionControlClient, error) {
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		m.mu.Lock()
+		client := m.clients[session]
+		starting := m.starting[session]
+		stopped := m.stopped
+		m.mu.Unlock()
+		if client != nil {
+			return client, nil
+		}
+		if stopped {
+			return nil, fmt.Errorf("tmux control: manager stopped")
+		}
+		if !starting || time.Now().After(deadline) {
+			return nil, fmt.Errorf("tmux control: session %q is unavailable", session)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// sendControlBatch writes commands onto one session's already-open control
+// pipe. It deliberately does not wait for responses: the send queue is a FIFO
+// of writes, not network round trips, so fast typing can fill the pipe at local
+// speed while tmux executes those writes in order.
+func (m *ControlManager) sendControlBatch(session string, commands ...string) error {
+	if session == "" || len(commands) == 0 {
+		return fmt.Errorf("tmux control: empty session or command batch")
+	}
+	client, err := m.clientForCommand(session)
+	if err != nil {
+		return err
+	}
+	callbacks := make([]func(controlResponse), len(commands))
+	for i := range callbacks {
+		callbacks[i] = func(controlResponse) {}
+	}
+	return client.channel.SendBatch(commands, callbacks)
+}
+
+// requestControlBatch writes a response-bearing command group atomically and
+// waits for all response blocks. History and geometry use this from tea.Cmds;
+// input never does.
+func (m *ControlManager) requestControlBatch(session string, commands ...string) ([]controlResponse, error) {
+	if session == "" || len(commands) == 0 {
+		return nil, fmt.Errorf("tmux control: empty session or command batch")
+	}
+	client, err := m.clientForCommand(session)
+	if err != nil {
+		return nil, err
+	}
+	responses := make([]controlResponse, len(commands))
+	done := make(chan int, len(commands))
+	callbacks := make([]func(controlResponse), len(commands))
+	for i := range callbacks {
+		i := i
+		callbacks[i] = func(response controlResponse) {
+			responses[i] = response
+			done <- i
+		}
+	}
+	if err := client.channel.SendBatch(commands, callbacks); err != nil {
+		return nil, err
+	}
+	timer := time.NewTimer(4 * time.Second)
+	defer timer.Stop()
+	for range commands {
+		select {
+		case <-done:
+		case <-timer.C:
+			return nil, fmt.Errorf("tmux control: command response timeout")
+		}
+	}
+	for _, response := range responses {
+		if response.Err != nil {
+			return nil, response.Err
+		}
+	}
+	return responses, nil
+}
+
 func (m *ControlManager) unsubscribe(id uint64) {
 	m.mu.Lock()
 	sub := m.subs[id]

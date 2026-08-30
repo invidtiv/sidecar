@@ -961,6 +961,11 @@ func (m *Model) forwardApplicationFocus(msg tea.Msg) tea.Cmd {
 	tty.SetAppFocused(m.applicationFocused)
 
 	var cmds []tea.Cmd
+	if m.overview != nil {
+		if cmd := m.overview.SetApplicationFocused(m.applicationFocused); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	}
 	for _, p := range m.registry.Plugins() {
 		_, cmd := p.Update(msg)
 		if cmd != nil {

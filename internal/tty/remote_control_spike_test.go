@@ -167,6 +167,11 @@ func (c *countingChannel) Send(command string, cb func(controlResponse)) error {
 	return c.inner.Send(command, cb)
 }
 
+func (c *countingChannel) SendBatch(commands []string, callbacks []func(controlResponse)) error {
+	c.commands.Add(int64(len(commands)))
+	return c.inner.SendBatch(commands, callbacks)
+}
+
 func (c *countingChannel) SendPair(a, b string, ca, cb func(controlResponse)) error {
 	c.commands.Add(2)
 	return c.inner.SendPair(a, b, ca, cb)

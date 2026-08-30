@@ -7,7 +7,30 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func remoteModelWithFakeControl(t *testing.T) (*Model, *ControlManager, *fakeControlChannel) {
+	t.Helper()
+	factory := newFakeControlFactory()
+	manager := newControlManager(factory.create, 0)
+	t.Cleanup(manager.Stop)
+	model := New(nil)
+	backend := newRemoteTerminalBackend(model, manager)
+	model.control = controlManagerSource{manager: manager}
+	model.input = inBandInputSender{backend: backend}
+	model.capture = unavailableCaptureSource{}
+	model.remoteBackend = backend
+	model.remote = true
+	_ = model.Enter("remote-session", "%4")
+	t.Cleanup(model.Exit)
+	var channel *fakeControlChannel
+	waitFor(t, func() bool {
+		channel = factory.channel("remote-session")
+		return channel != nil
+	})
+	return model, manager, channel
+}
 
 // TestNewControlManagerLocalPathUnchanged is the rollback guarantee stated in
 // the plan: adding remote support must leave the local path byte-identical.
@@ -151,6 +174,112 @@ func TestInBandSendKeysPreservesOrder(t *testing.T) {
 	}
 }
 
+func TestRemoteInputUsesTheOpenControlPipeAndSendQueue(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	model.remoteInteractive = true
+	cmd := model.input.SendKeys(model.Scope(), "%4",
+		KeySpec{Value: "a", Literal: true},
+		KeySpec{Value: "b", Literal: true},
+		KeySpec{Value: "Enter"},
+	)
+	if cmd == nil {
+		t.Fatal("interactive remote input returned no command")
+	}
+	_ = cmd()
+
+	channel.mu.Lock()
+	var sends []string
+	for _, command := range channel.commands {
+		if strings.HasPrefix(command.text, "send-keys -t %4") {
+			sends = append(sends, command.text)
+		}
+	}
+	channel.mu.Unlock()
+	if len(sends) != 3 {
+		t.Fatalf("in-band sends = %v, want three commands on the existing channel", sends)
+	}
+	if got := model.remoteBackend.input.Load(); got != 1 {
+		t.Fatalf("successful local sends recorded input mark %d times, want 1", got)
+	}
+	for i, suffix := range []string{"61", "62", "Enter"} {
+		if !strings.HasSuffix(sends[i], suffix) {
+			t.Fatalf("send %d = %q, want suffix %q", i, sends[i], suffix)
+		}
+	}
+}
+
+func TestRemoteCaptureRangeIsInBandAndAbsolute(t *testing.T) {
+	model, _, channel := remoteModelWithFakeControl(t)
+	type result struct {
+		capture CaptureRange
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		capture, err := model.CaptureRange(-50, -1)
+		done <- result{capture: capture, err: err}
+	}()
+
+	var metadata, capture fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		for i, command := range channel.commands {
+			if strings.Contains(command.text, "capture-pane") && strings.Contains(command.text, "-S -50") {
+				if i == 0 {
+					return false
+				}
+				metadata, capture = channel.commands[i-1], command
+				return true
+			}
+		}
+		return false
+	})
+	metadata.callback(controlResponse{Lines: []string{"120"}})
+	capture.callback(controlResponse{Lines: []string{"old-a", "old-b"}})
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		if got.capture.HistorySize != 120 || got.capture.StartLine != 70 || got.capture.Output != "old-a\nold-b" {
+			t.Fatalf("capture = %+v", got.capture)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-band range capture did not complete")
+	}
+}
+
+func TestRemoteGeometryClaimReleasesOnBlurAndReclaimsOnFocus(t *testing.T) {
+	store := &fakeLeaseStore{}
+	model := New(nil)
+	model.remote = true
+	model.State = &State{Active: true, TargetSession: "remote-session", TargetPane: "%4"}
+	model.remoteBackend = &remoteTerminalBackend{model: model}
+	model.remoteBackend.lease = newTestKeeper(store, "viewer-1", DefaultLeasePolicy)
+
+	if cmd := model.ActivateInput(); cmd == nil {
+		t.Fatal("remote interactive entry did not claim")
+	} else {
+		_ = cmd()
+	}
+	if store.sets != 1 || store.current() == "" {
+		t.Fatalf("entry lease sets=%d token=%q", store.sets, store.current())
+	}
+	_ = model.SetApplicationFocused(false)
+	if store.clears != 1 || store.current() != "" {
+		t.Fatalf("blur lease clears=%d token=%q", store.clears, store.current())
+	}
+	if cmd := model.SetApplicationFocused(true); cmd == nil {
+		t.Fatal("focus did not schedule a reclaim")
+	} else {
+		_ = cmd()
+	}
+	if store.sets != 2 || store.current() == "" {
+		t.Fatalf("focus lease sets=%d token=%q", store.sets, store.current())
+	}
+}
+
 func TestControlQuoteHandlesEveryQuotingShape(t *testing.T) {
 	cases := map[string]string{
 		"%3":          "%3", // plain word, left alone
@@ -204,8 +333,8 @@ func TestUseLocalControlRestoresTheLocalPath(t *testing.T) {
 	if !model.IsRemote() {
 		t.Fatal("UseRemoteControl did not mark the model remote")
 	}
-	if _, readOnly := model.input.(readOnlyInputSender); !readOnly {
-		t.Error("remote model still has a writing input sender")
+	if _, inBand := model.input.(inBandInputSender); !inBand {
+		t.Error("remote model does not have its host-aware in-band sender")
 	}
 	if _, unavailable := model.capture.(unavailableCaptureSource); !unavailable {
 		t.Error("remote model still has a local capture source")
@@ -215,8 +344,8 @@ func TestUseLocalControlRestoresTheLocalPath(t *testing.T) {
 	if model.IsRemote() {
 		t.Fatal("UseLocalControl left the model remote")
 	}
-	if _, stillReadOnly := model.input.(readOnlyInputSender); stillReadOnly {
-		t.Error("input sender was not restored; a local pane would swallow every key")
+	if _, stillRemote := model.input.(inBandInputSender); stillRemote {
+		t.Error("input sender was not restored; a local pane would write through the remote host")
 	}
 	if _, stillUnavailable := model.capture.(unavailableCaptureSource); stillUnavailable {
 		t.Error("capture source was not restored; a local pane would lose its fallback")
@@ -232,13 +361,32 @@ func TestUseLocalControlRestoresTheLocalPath(t *testing.T) {
 	}
 }
 
-// TestRemoteModelNeverResizes: a viewer must not move the window under the
-// person sitting at that machine.
-func TestRemoteModelNeverResizes(t *testing.T) {
+// A watched remote model has no geometry claim and must not move the window.
+func TestRemoteModelNeverResizesBeforeInteractiveClaim(t *testing.T) {
 	model := New(nil)
 	model.UseRemoteControl(func(string) *exec.Cmd { return exec.Command("false") })
 	if cmd := model.assertDimensions(); cmd != nil {
 		t.Error("a remote model produced a resize command")
+	}
+}
+
+// Opening a remote pane is a viewer operation. Pane IDs are server-local, so
+// even one ambient query/resize here can mutate an unrelated local %N.
+func TestRemoteOpenWithDimensionsNeverTouchesLocalGeometry(t *testing.T) {
+	model := New(nil)
+	model.UseRemoteControl(func(string) *exec.Cmd { return exec.Command("false") })
+	model.Width, model.Height = 120, 40
+
+	originalQuery, originalResize := terminalQueryPaneSize, terminalResizePane
+	defer func() { terminalQueryPaneSize, terminalResizePane = originalQuery, originalResize }()
+	queries, resizes := 0, 0
+	terminalQueryPaneSize = func(string) (int, int, bool) { queries++; return 0, 0, false }
+	terminalResizePane = func(string, int, int) { resizes++ }
+
+	_ = model.Open(Target{Session: "remote-session", Pane: "%7", Host: "other-host"})
+	model.Exit()
+	if queries != 0 || resizes != 0 {
+		t.Fatalf("remote Open touched local geometry: queries=%d resizes=%d", queries, resizes)
 	}
 }
 

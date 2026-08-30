@@ -21,8 +21,8 @@ import (
 // a HostID (hosts.ProjectResults), and from that point the catalog, the board,
 // the lane grouping, the filter and the pins all treat it as any other
 // workspace. The only things this file adds are: where the data enters, how a
-// host's own health is shown when it has no rows to contribute, and the rule
-// that a remote row is never acted on.
+// host's own health is shown when it has no rows to contribute, and how a
+// selected terminal's separate control connection follows host registration.
 //
 // Nothing below runs with the feature off: hosts.FromConfig returns no hosts,
 // so no registry is created and no ssh child is ever spawned.
@@ -70,15 +70,24 @@ const hostRowPrefix = " · "
 // startHosts brings the configured hosts up and begins consuming their
 // updates.
 //
-// It is written to be called repeatedly — Sync reconciles and leaves unchanged
-// hosts connected — but today it has exactly one caller, app.Init. Hosts are
-// therefore start-time only: editing `hosts` or toggling the feature takes
-// effect on the next launch. Wiring it to a config-reload seam is td-a3f1c2;
-// the reconciliation below is correct and tested, it is simply not yet
-// reached a second time.
+// It is called at startup and after a configuration save. Sync reconciles and
+// leaves unchanged hosts connected; removals and retargets also revoke any
+// selected terminal control process before the registry client changes.
 func (m *Model) startHosts() tea.Cmd {
 	registered := hosts.FromConfig(m.config)
 	disabled := hosts.DisabledFromConfig(m.config)
+	nextConfigured := make(map[string]hosts.Host, len(registered))
+	for _, host := range registered {
+		nextConfigured[host.ID] = host
+	}
+	// The selected terminal's ssh control process is independent of Registry's
+	// serve client. Reconcile it before Registry.Sync stops/replaces that client,
+	// or a removed/retargeted HostID keeps accepting input and late history on
+	// the old machine.
+	if remoteControlInvalidated(m.previewTarget(), m.hostConfigured, nextConfigured) {
+		m.closePreviewTerminal()
+	}
+	m.hostConfigured = nextConfigured
 	if len(registered) == 0 && len(disabled) == 0 {
 		// Either the feature is off or nothing is registered. Tear down any
 		// registry a previous config had — which matters once this is called
@@ -90,6 +99,8 @@ func (m *Model) startHosts() tea.Cmd {
 			m.hostHealth = nil
 			m.hostProjects = nil
 		}
+		m.hostRegistered = make(map[string]bool)
+		m.syncBoard()
 		return nil
 	}
 
@@ -139,6 +150,15 @@ func (m *Model) startHosts() tea.Cmd {
 		return nil
 	}
 	return tea.Batch(m.waitForHostUpdate(), m.scheduleHostStaleTick())
+}
+
+func remoteControlInvalidated(target tty.Target, previous, next map[string]hosts.Host) bool {
+	if target.Host == "" {
+		return false
+	}
+	oldHost, existed := previous[target.Host]
+	newHost, remains := next[target.Host]
+	return !remains || !existed || !oldHost.Same(newHost)
 }
 
 // hostContext is the lifetime host connections hang off. It is deliberately
@@ -195,7 +215,7 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 	// through the merged stream, after startHosts pruned this host's state.
 	// Applying it would resurrect a de-registered machine as a permanent
 	// error row.
-	if len(m.hostRegistered) > 0 && !m.hostRegistered[update.HostID] {
+	if m.hostRegistered != nil && !m.hostRegistered[update.HostID] {
 		return m.waitForHostUpdate()
 	}
 	m.hostHealth[update.HostID] = update.Health

@@ -89,6 +89,16 @@ func TestInteractiveTerminalSearchShortcut(t *testing.T) {
 	}
 }
 
+func TestInteractiveTerminalSearchCommandIsAdvertised(t *testing.T) {
+	p := &Plugin{viewMode: ViewModeInteractive}
+	for _, command := range p.Commands() {
+		if command.ID == "search-terminal" && command.Context == "workspace-interactive" {
+			return
+		}
+	}
+	t.Fatalf("interactive Commands() omitted search-terminal: %#v", p.Commands())
+}
+
 func TestTerminalViewportHighlightsSearchMatch(t *testing.T) {
 	buffer := tty.NewOutputBuffer(10)
 	buffer.UpdateSnapshot("find needle here", 20)

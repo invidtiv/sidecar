@@ -13,6 +13,7 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/configchecks"
 	"github.com/marcus/sidecar/internal/configui"
+	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/styles"
@@ -373,8 +374,10 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		}
 	}
 	var themeCmd tea.Cmd
+	var hostCmd tea.Cmd
 	if cfg, err := config.Load(); err == nil {
 		m.cfg = cfg
+		features.SetConfig(cfg)
 		if m.registry != nil && m.registry.Context() != nil {
 			m.registry.Context().Config = cfg
 		}
@@ -391,12 +394,16 @@ func (m *Model) applyConfigSaved(msg configui.ConfigSavedMsg) tea.Cmd {
 		if m.config == nil || !m.config.PreviewingTheme() {
 			themeCmd = m.applyResolvedTheme(theme.ResolveTheme(cfg, m.ui.WorkDir))
 		}
+		if m.overview != nil {
+			m.overview.SetConfig(cfg)
+			hostCmd = m.overview.SyncHosts()
+		}
 	}
 	if m.config != nil {
 		m.config.SetHostState(m.configHostState())
 		m.config.SetCheckInput(m.configCheckInput())
 	}
-	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd, m.syncOverviewProjects()}
+	cmds := []tea.Cmd{m.syncTerminalTitle(true), themeCmd, hostCmd, m.syncOverviewProjects()}
 	if msg.Notice != "" {
 		cmds = append(cmds, toast(msg.Notice))
 	}

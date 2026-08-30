@@ -120,6 +120,9 @@ type controlModeSwitcher interface {
 	UseLocalControl()
 }
 
+type inputActivator interface{ ActivateInput() tea.Cmd }
+type applicationFocusTerminal interface{ SetApplicationFocused(bool) tea.Cmd }
+
 var _ controlModeSwitcher = (*tty.Model)(nil)
 
 // newPreviewTerminal builds the browser's terminal with the host contract the
@@ -205,6 +208,7 @@ func (m *Model) syncPreviewTerminal() tea.Cmd {
 }
 
 func (m *Model) closePreviewTerminal() {
+	m.clearPreviewTerminalSearch()
 	leaf, state := m.primaryTerminalLeaf(), m.primaryTerminalState()
 	if leaf.Interactive && state.terminal != nil {
 		state.terminal.ReleaseInput()
@@ -336,18 +340,6 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		m.preview.reason = reason
 		return appmsg.Blocked(reason)
 	}
-	// A remote pane is watched, not typed into. Input is already dropped by
-	// the read-only sender, but entering the mode anyway would put "typing" in
-	// the header of a pane that cannot receive a keystroke — a worse failure
-	// than refusing, because it looks like it worked.
-	//
-	// Phase B brings the in-band sender and the cross-host lease rules that
-	// make typing into another machine's pane safe; the refusal says so.
-	if workspace.Remote() {
-		reason := "Watching " + workspace.HostID + " — typing into a remote pane arrives in a later release"
-		m.preview.reason = ""
-		return appmsg.Blocked(reason)
-	}
 	leaf := m.previewTerminalLeaf()
 	if node := panelayout.Find(m.preview.paneRoot, m.preview.paneFocus); node == nil || !panelayout.IsLive(node.Kind) {
 		leaf = m.primaryTerminalLeaf()
@@ -377,6 +369,9 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 	m.clearPreviewSelection()
 	var cmds []tea.Cmd
 	cmds = append(cmds, open)
+	if activator, ok := m.previewTerminalState().terminal.(inputActivator); ok {
+		cmds = append(cmds, activator.ActivateInput())
+	}
 	if buffer := m.previewTerminalState().terminal.Buffer(); buffer != nil {
 		m.previewTerminalLeaf().Buffer = buffer
 	}
@@ -386,6 +381,20 @@ func (m *Model) enterPreviewInteractive() tea.Cmd {
 		cmds = append(cmds, appmsg.ShowFlash("Typing into "+workspace.Name+" — "+m.InteractiveExitKey()+" or esc esc to stop"))
 	}
 	return tea.Batch(cmds...)
+}
+
+// SetApplicationFocused gives a remote interactive terminal the same process
+// focus lifecycle as local geometry arbitration: blur releases its claim;
+// focus reclaims only when this pane still owns input.
+func (m *Model) SetApplicationFocused(focused bool) tea.Cmd {
+	state := m.previewTerminalState()
+	if state == nil || state.terminal == nil {
+		return nil
+	}
+	if terminal, ok := state.terminal.(applicationFocusTerminal); ok {
+		return terminal.SetApplicationFocused(focused)
+	}
+	return nil
 }
 
 // switchPreviewInteractive rebinds a live pane to the current selection. Used

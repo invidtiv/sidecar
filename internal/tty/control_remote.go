@@ -4,10 +4,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/clip"
 )
 
 // This file is the whole of the terminal stack's remote-host support.
@@ -65,14 +68,13 @@ func spawnedControlChannelFactory(spawn ControlSpawner) controlChannelFactory {
 
 // UseRemoteControl points this terminal at a tmux server on another machine.
 //
-// The model becomes read-only, and all three parts of that matter:
+// The model's host-dependent operations all move onto the control connection:
 //
-//   - Input is dropped. Phase A observes; the in-band sender arrives in Phase
-//     B with the cross-host lease rules that make typing safe.
-//   - The pane is never resized and no geometry lease is claimed. A viewer
-//     that resized a remote pane would move the window under whoever is
-//     sitting at that machine.
-//   - The capture fallback is disabled rather than left pointing at local
+//   - Interactive input is serialized through the ordinary ordered send queue.
+//   - Geometry is protected by the same lease protocol as local viewers, with
+//     this control connection's own input as its activity evidence.
+//   - Bounded history capture is issued in-band. The ambient fallback remains
+//     disabled rather than left pointing at local
 //     tmux. This is the important one: pane IDs are per-server, so a local
 //     `capture-pane -t %4` for a remote pane %4 does not fail — it succeeds,
 //     against an unrelated local pane, and paints someone else's session into
@@ -82,9 +84,13 @@ func spawnedControlChannelFactory(spawn ControlSpawner) controlChannelFactory {
 // Everything else is the ordinary local path: the same ordered actor, the same
 // byte-fed screen model, the same seed and reseed behaviour.
 func (m *Model) UseRemoteControl(spawn ControlSpawner) {
-	m.control = controlManagerSource{manager: NewRemoteControlManager(spawn)}
-	m.input = readOnlyInputSender{}
+	manager := NewRemoteControlManager(spawn)
+	backend := newRemoteTerminalBackend(m, manager)
+	m.control = controlManagerSource{manager: manager}
+	m.input = inBandInputSender{backend: backend}
 	m.capture = unavailableCaptureSource{}
+	m.remoteBackend = backend
+	m.remoteInteractive = false
 	m.remote = true
 }
 
@@ -102,42 +108,310 @@ func (m *Model) UseRemoteControl(spawn ControlSpawner) {
 // Callers must set the mode on every activation rather than only when it
 // changes. UseRemoteControl and this are the two halves of one decision.
 func (m *Model) UseLocalControl() {
+	m.releaseRemoteInput()
 	m.control = defaultControlSource()
 	m.input = defaultTerminalInputSender{model: m}
 	m.capture = defaultTerminalCaptureSource{}
+	m.remoteBackend = nil
 	m.remote = false
 }
 
 // IsRemote reports whether this terminal is served by another machine.
 func (m *Model) IsRemote() bool { return m != nil && m.remote }
 
-// readOnlyInputSender accepts every input and does nothing with it. Returning
-// nil commands rather than refusing loudly is deliberate: a read-only pane
-// should feel inert, not broken, and the surface above already declines to
-// offer interactive mode for a remote row.
-type readOnlyInputSender struct{}
-
-func (readOnlyInputSender) SendKeys(MessageScope, string, ...KeySpec) tea.Cmd { return nil }
-func (readOnlyInputSender) SendPaste(MessageScope, string, string) tea.Cmd    { return nil }
-func (readOnlyInputSender) SendEscapePaste(MessageScope, string, string) tea.Cmd {
-	return nil
-}
-func (readOnlyInputSender) PasteClipboard(MessageScope, string) tea.Cmd      { return nil }
-func (readOnlyInputSender) SendMouse(MessageScope, string, int, int) tea.Cmd { return nil }
-func (readOnlyInputSender) SendWheel(MessageScope, string, bool, int, int, int) tea.Cmd {
-	return nil
-}
-
 // ErrRemoteCaptureUnavailable is what the fallback capture path reports for a
-// remote pane. Phase B gives it an in-band CapturePaneRange; until then the
-// honest answer is that this machine cannot capture that pane.
+// remote pane. Snapshot fallback remains disabled: bounded history has an
+// explicit in-band path, while a fallback that ran local capture-pane could
+// silently read an unrelated local pane with the same ID.
 var ErrRemoteCaptureUnavailable = errors.New(
-	"tmux capture: pane is on another machine; capture arrives with in-band history in Phase B")
+	"tmux capture: remote fallback unavailable; use in-band capture")
 
 type unavailableCaptureSource struct{}
 
 func (unavailableCaptureSource) Capture(string, int) (string, PaneState, error) {
 	return "", PaneState{}, ErrRemoteCaptureUnavailable
+}
+
+// remoteTerminalBackend is every operation that belongs to the tmux server on
+// another host. It never calls the ambient tmux binary: input, bounded history,
+// lease storage, size queries, and resize all travel on manager's existing ssh
+// control pipe.
+type remoteTerminalBackend struct {
+	model   *Model
+	manager *ControlManager
+	lease   *leaseKeeper
+	input   atomic.Uint64
+}
+
+func newRemoteTerminalBackend(model *Model, manager *ControlManager) *remoteTerminalBackend {
+	backend := &remoteTerminalBackend{model: model, manager: manager}
+	backend.lease = newLeaseKeeper(remoteLeaseStore{backend: backend}, DefaultLeasePolicy, time.Second)
+	return backend
+}
+
+func (b *remoteTerminalBackend) session() string {
+	if b == nil || b.model == nil || b.model.State == nil {
+		return ""
+	}
+	return b.model.State.TargetSession
+}
+
+func (b *remoteTerminalBackend) noteInput() {
+	if b == nil {
+		return
+	}
+	b.input.Add(1)
+	b.lease.noteInput()
+}
+
+func (b *remoteTerminalBackend) captureRange(start, end int) (CaptureRange, error) {
+	if start > end {
+		return CaptureRange{}, fmt.Errorf("capture pane range: start %d after end %d", start, end)
+	}
+	target, session := b.model.GetTarget(), b.session()
+	if target == "" || session == "" {
+		return CaptureRange{}, fmt.Errorf("capture pane range: empty remote target")
+	}
+	commands := []string{
+		"display-message -t " + controlQuote(target) + " -p '#{history_size}'",
+		"capture-pane -p -e -N -t " + controlQuote(target) + " -S " + strconv.Itoa(start) + " -E " + strconv.Itoa(end),
+	}
+	responses, err := b.manager.requestControlBatch(session, commands...)
+	if err != nil {
+		return CaptureRange{}, fmt.Errorf("capture pane range: %w", err)
+	}
+	if len(responses) != 2 || len(responses[0].Lines) == 0 {
+		return CaptureRange{}, fmt.Errorf("capture pane range: missing history metadata")
+	}
+	return parseCapturePaneRange(responses[0].Lines[0]+"\n"+strings.Join(responses[1].Lines, "\n"), start)
+}
+
+func (b *remoteTerminalBackend) querySize(target string) (width, height int, ok bool) {
+	responses, err := b.manager.requestControlBatch(b.session(),
+		"display-message -t "+controlQuote(target)+" -p '#{pane_width},#{pane_height}'")
+	if err != nil || len(responses) != 1 || len(responses[0].Lines) == 0 {
+		return 0, 0, false
+	}
+	parts := strings.SplitN(responses[0].Lines[0], ",", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, errW := strconv.Atoi(parts[0])
+	height, errH := strconv.Atoi(parts[1])
+	return width, height, errW == nil && errH == nil
+}
+
+func (b *remoteTerminalBackend) resize(target string, width, height int) bool {
+	if b == nil || target == "" || width <= 0 || height <= 0 || !b.lease.allow(target) {
+		return false
+	}
+	if actualW, actualH, ok := b.querySize(target); ok && actualW == width && actualH == height {
+		return false
+	}
+	command := "resize-window -t " + controlQuote(target) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
+	if _, err := b.manager.requestControlBatch(b.session(), command); err != nil {
+		fallback := "resize-pane -t " + controlQuote(target) + " -x " + strconv.Itoa(width) + " -y " + strconv.Itoa(height)
+		if _, fallbackErr := b.manager.requestControlBatch(b.session(), fallback); fallbackErr != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// remoteLeaseStore keeps cross-host arbitration in the tmux session option,
+// but reaches that option through the remote control pipe. inputMark is the
+// viewer's own successful-send counter; probing remote client tty/activity
+// would confuse input on another machine with input here.
+type remoteLeaseStore struct{ backend *remoteTerminalBackend }
+
+func (s remoteLeaseStore) read(target string) (session, token string, ok bool) {
+	if s.backend == nil || s.backend.session() == "" {
+		return "", "", false
+	}
+	responses, err := s.backend.manager.requestControlBatch(s.backend.session(),
+		"display-message -t "+controlQuote(target)+" -p '#{session_name}\t#{"+leaseOptionName+"}'")
+	if err != nil || len(responses) != 1 || len(responses[0].Lines) == 0 {
+		return "", "", false
+	}
+	session, token, found := strings.Cut(responses[0].Lines[0], "\t")
+	return session, strings.TrimSpace(token), found && session != ""
+}
+
+func (s remoteLeaseStore) set(session, token string) {
+	if s.backend != nil {
+		_ = s.backend.manager.sendControlBatch(s.backend.session(),
+			"set-option -t "+controlQuote(session)+" "+leaseOptionName+" "+controlQuote(token))
+	}
+}
+
+func (s remoteLeaseStore) clear(session string) {
+	if s.backend != nil {
+		_ = s.backend.manager.sendControlBatch(s.backend.session(),
+			"set-option -u -t "+controlQuote(session)+" "+leaseOptionName)
+	}
+}
+
+func (s remoteLeaseStore) inputMark(string) string {
+	if s.backend == nil {
+		return ""
+	}
+	return strconv.FormatUint(s.backend.input.Load(), 10)
+}
+
+type inBandInputSender struct{ backend *remoteTerminalBackend }
+
+func (s inBandInputSender) send(scope MessageScope, commands ...string) tea.Cmd {
+	if s.backend == nil || s.backend.model == nil || !s.backend.model.remoteInteractive {
+		return nil
+	}
+	session := s.backend.session()
+	queueKey := fmt.Sprintf("remote:%p:%s", s.backend.manager, session)
+	return awaitOrderedSend(scope, SendOrdered(queueKey, func() error {
+		return s.backend.model.withActivationError(scope, func() error {
+			if err := s.backend.manager.sendControlBatch(session, commands...); err != nil {
+				return err
+			}
+			s.noteInput()
+			return nil
+		})
+	}))
+}
+
+func (s inBandInputSender) noteInput() { s.backend.noteInput() }
+
+func (s inBandInputSender) SendKeys(scope MessageScope, target string, keys ...KeySpec) tea.Cmd {
+	return s.send(scope, InBandSendKeys(target, keys...)...)
+}
+
+func (s inBandInputSender) pasteText(text string) string {
+	if s.backend.model.State != nil && s.backend.model.State.BracketedPasteEnabled {
+		return "\x1b[200~" + text + "\x1b[201~"
+	}
+	return text
+}
+
+func (s inBandInputSender) SendPaste(scope MessageScope, target, text string) tea.Cmd {
+	return s.send(scope, InBandSendLiteral(target, s.pasteText(text)))
+}
+
+func (s inBandInputSender) SendEscapePaste(scope MessageScope, target, text string) tea.Cmd {
+	commands := InBandSendKeys(target, KeySpec{Value: "Escape"})
+	commands = append(commands, InBandSendLiteral(target, s.pasteText(text)))
+	return s.send(scope, commands...)
+}
+
+func (s inBandInputSender) PasteClipboard(scope MessageScope, target string) tea.Cmd {
+	if s.backend == nil || !s.backend.model.remoteInteractive {
+		return nil
+	}
+	var result PasteResultMsg
+	session := s.backend.session()
+	queueKey := fmt.Sprintf("remote:%p:%s", s.backend.manager, session)
+	done := SendOrdered(queueKey, func() error {
+		return s.backend.model.withActivationError(scope, func() error {
+			result.Scope = scope
+			text, err := clip.ReadAll()
+			if err != nil || text == "" {
+				if recent, ok := clip.LastCopied(); ok && recent != "" {
+					text, err = recent, nil
+				}
+			}
+			if err != nil {
+				result.Err = err
+				return nil
+			}
+			if text == "" {
+				result.Empty = true
+				return nil
+			}
+			result.Err = s.backend.manager.sendControlBatch(session, InBandSendLiteral(target, s.pasteText(text)))
+			if result.Err == nil {
+				s.noteInput()
+			}
+			return nil
+		})
+	})
+	return func() tea.Msg {
+		<-done
+		if result.Scope.Owner == 0 {
+			return nil
+		}
+		return result
+	}
+}
+
+func (s inBandInputSender) SendMouse(scope MessageScope, target string, col, row int) tea.Cmd {
+	if col <= 0 || row <= 0 {
+		return nil
+	}
+	press := fmt.Sprintf("\x1b[<0;%d;%dM", col, row)
+	release := fmt.Sprintf("\x1b[<0;%d;%dm", col, row)
+	return s.send(scope, InBandSendLiteral(target, press), InBandSendLiteral(target, release))
+}
+
+func (s inBandInputSender) SendWheel(scope MessageScope, target string, up bool, col, row, notches int) tea.Cmd {
+	if col <= 0 || row <= 0 || notches <= 0 {
+		return nil
+	}
+	button := SGRWheelDown
+	if up {
+		button = SGRWheelUp
+	}
+	report := fmt.Sprintf("\x1b[<%d;%d;%dM", button, col, row)
+	return s.send(scope, InBandSendLiteral(target, strings.Repeat(report, notches)))
+}
+
+// CaptureRange reads bounded history from the terminal's own host.
+func (m *Model) CaptureRange(start, end int) (CaptureRange, error) {
+	if m.remote {
+		if m.remoteBackend == nil {
+			return CaptureRange{}, ErrRemoteCaptureUnavailable
+		}
+		return m.remoteBackend.captureRange(start, end)
+	}
+	return CapturePaneRange(m.GetTarget(), start, end)
+}
+
+// ActivateInput turns a remote viewer into an interactive claimant. Local
+// terminals already claim through their existing surface path, so this is a
+// no-op for them.
+func (m *Model) ActivateInput() tea.Cmd {
+	if !m.remote || m.remoteBackend == nil || !m.IsActive() {
+		return nil
+	}
+	m.remoteInteractive = true
+	scope, target := m.Scope(), m.GetTarget()
+	width, height := m.Width, m.Height
+	return func() tea.Msg {
+		return m.withActivationMessage(scope, func() tea.Msg {
+			m.remoteBackend.lease.claim(target)
+			if m.remoteBackend.resize(target, width, height) {
+				return PaneResizedMsg{Scope: scope}
+			}
+			return nil
+		})
+	}
+}
+
+func (m *Model) releaseRemoteInput() {
+	if m == nil || !m.remoteInteractive || m.remoteBackend == nil {
+		return
+	}
+	m.remoteInteractive = false
+	m.remoteBackend.lease.release()
+}
+
+// SetApplicationFocused releases a remote geometry claim on blur and reclaims
+// it on focus if this pane still owns input.
+func (m *Model) SetApplicationFocused(focused bool) tea.Cmd {
+	if !m.remote || m.remoteBackend == nil {
+		return nil
+	}
+	m.remoteBackend.lease.setFocused(focused)
+	if focused && m.remoteInteractive {
+		return m.ActivateInput()
+	}
+	return nil
 }
 
 // InBandSendKeys renders a key batch as tmux command lines to be written to an
