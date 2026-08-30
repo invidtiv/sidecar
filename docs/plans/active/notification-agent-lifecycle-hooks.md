@@ -217,6 +217,8 @@ Exit gate: one pure arbitration table proves every tier and fallback reason, and
 
 ### Phase B — Report core and local steel thread
 
+**Entry condition (Phase A review, 2026-08-30):** trace OpenCode cancellation before building the steel thread. At `advisory` tier the resolver vetoes any report the screen contradicts, so this phase's exit gate — the lane walk driven *by native provider events* — is only honestly satisfiable once OpenCode earns `full`, and cancellation is the one untraced transition holding it at `advisory`. If cancellation proves untraceable on the current release, this plan must make an explicit recorded decision — either restate the exit gate tier-honestly (for example, the lane walk with screen detection disabled) or hold Phase B for a provider release that closes the gap — rather than quietly dropping `cancelled` from the full-lifecycle transition set.
+
 1. Add `internal/agentlifecycle`, memory and JSONL stores, locking/compaction, validation, sequence/run handling, and the pure authority resolver.
 2. Extend Sidecar-managed shell environment identity and implement `sidecar agent report`, `end`, `release`, and `explain` with human/JSON output and generated CLI documentation.
 3. Extract one observation-plus-authority resolver and call it from project worktree polling, project managed-shell polling, and `workspaceinventory` before their existing trackers. Keep provider detectors as the unchanged fallback, keep `agent_triggers.go` as the project notification adapter, and let the M5 remote adapter consume the same resolved semantics at its separate boundary.
