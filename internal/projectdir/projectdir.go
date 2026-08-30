@@ -68,10 +68,36 @@ func LookupAllWithBase(base string, projectRoots []string) map[string]string {
 	if len(projectRoots) == 0 {
 		return nil
 	}
-	wanted := make(map[string]bool, len(projectRoots))
+	// Both sides are compared canonically, because the two strings come from
+	// different places and only agree by luck. A configured path is whatever the
+	// user or a config file wrote; meta.Path was canonicalised when the project
+	// was registered. On macOS a project under /tmp registers as /private/tmp,
+	// and a raw string match then reports a project that plainly exists as never
+	// registered.
+	//
+	// That is not a hypothetical. A remote host whose project was configured by
+	// one path and registered under another answered "no project state directory
+	// exists on this host yet" while `sidecar shell list` was returning that
+	// project's shells, and the freshness watch over shells.json silently never
+	// registered — the fix it exists to deliver simply absent, with nothing
+	// saying so. Any symlinked project root reaches the same place.
+	//
+	// The result stays keyed by the caller's own root string: callers look their
+	// configured path back up, and handing them a canonical key they never used
+	// would trade this bug for a lookup miss.
+	wanted := make(map[string]string, len(projectRoots))
 	for _, root := range projectRoots {
-		if root != "" {
-			wanted[root] = true
+		if root == "" {
+			continue
+		}
+		key := root
+		if normalized, err := normalizePath(root); err == nil {
+			key = normalized
+		}
+		// First configured root wins, so two entries naming one directory
+		// resolve deterministically rather than by map order.
+		if _, seen := wanted[key]; !seen {
+			wanted[key] = root
 		}
 	}
 	entries, err := os.ReadDir(filepath.Join(base, "projects"))
@@ -88,12 +114,20 @@ func LookupAllWithBase(base string, projectRoots []string) map[string]string {
 		}
 		dir := filepath.Join(base, "projects", e.Name())
 		meta, err := readMeta(dir)
-		if err != nil || !wanted[meta.Path] {
+		if err != nil {
+			continue
+		}
+		key := meta.Path
+		if normalized, err := normalizePath(meta.Path); err == nil {
+			key = normalized
+		}
+		root, want := wanted[key]
+		if !want {
 			continue
 		}
 		// First registration wins, matching findByMeta's scan order semantics.
-		if _, seen := found[meta.Path]; !seen {
-			found[meta.Path] = dir
+		if _, seen := found[root]; !seen {
+			found[root] = dir
 		}
 	}
 	return found

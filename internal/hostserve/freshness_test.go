@@ -196,6 +196,32 @@ func coldProject(t *testing.T) (Project, func() string) {
 	return Project{Name: "cold", Path: canonical}, gainState
 }
 
+// TestColdWatchSignalsWhenAProjectDirectoryAppears is the mechanism the cold
+// host depends on, tested where it actually has to work: before any reconcile
+// has run, because reconcile only runs on a full inventory and the whole point
+// is not to wait for one.
+//
+// Without the state-root target this test hangs for its full second: the
+// project directory is created, nothing is registered to notice, and the shell
+// waits for the 60s inventory tick. That is what a real host measured at 57.8s.
+func TestColdWatchSignalsWhenAProjectDirectoryAppears(t *testing.T) {
+	project, gainState := coldProject(t)
+
+	w := startManifestWatch([]Project{project})
+	defer w.stop()
+	if w.signals() == nil {
+		t.Fatal("a cold watch has no signal channel, so nothing can wake the serve loop")
+	}
+
+	gainState()
+
+	select {
+	case <-w.signals():
+	case <-time.After(2 * time.Second):
+		t.Fatal("a project directory appearing did not signal; the first shell on a fresh host still waits for the inventory tick")
+	}
+}
+
 // TestManifestWatchStartsWhenAProjectGainsAStateDirectory is the first-use case:
 // a host where Sidecar has never been opened has no project state directory, so
 // there is nothing to register on at connect time. That must be a watch waiting
@@ -209,11 +235,17 @@ func TestManifestWatchStartsWhenAProjectGainsAStateDirectory(t *testing.T) {
 	if w.watcher == nil {
 		t.Fatal("a host with no project state directory created no watcher, so nothing can ever bring the watch up")
 	}
-	if len(w.targets()) != 0 {
-		t.Fatalf("a watch with no manifest to watch registered %v", w.targets())
+	// The state root stands in for the manifests that do not exist yet, so the
+	// project directory being created is an event rather than something the
+	// next inventory tick discovers. Driven against a real host, waiting for
+	// that tick cost 57.8s on the first shell — the latency this file exists to
+	// remove.
+	targets := w.targets()
+	if len(targets) != 1 || !targets[0].Dir {
+		t.Fatalf("a cold watch must watch the state root so it can notice a project appearing; registered %v", targets)
 	}
 	if w.Degraded() == "" {
-		t.Error("a watch with nothing registered claimed to be whole")
+		t.Error("a watch with no manifest registered claimed to be whole")
 	}
 
 	manifest := gainState()

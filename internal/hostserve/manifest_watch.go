@@ -2,9 +2,11 @@ package hostserve
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/livewatch"
 	"github.com/marcus/sidecar/internal/projectdir"
 )
@@ -183,12 +185,18 @@ func (w *manifestWatch) Degraded() string {
 //
 // It is called from the full-inventory phase rather than every cycle, and only
 // while the set is incomplete, because resolution reads every registered
-// project's meta.json. A project that gains a state directory — the first
-// `sidecar create shell` in a remote project that had never been opened on that
-// host, which is exactly the case Phase C found the hard way — therefore starts
-// being watched within one inventory tick, which is the freshness it had
-// before. On a host where NO project had one, this is the whole of how the
-// watch ever starts.
+// project's meta.json.
+//
+// What makes that cadence sufficient is [manifestWatch.pending]: while any
+// project is unresolved, the state root is itself watched, so a project
+// directory being created signals, the signal forces a full inventory, and this
+// runs on that cycle. Reaching here on the 60s tick alone would be too late for
+// the case that matters most — the first `sidecar create shell` on a host where
+// Sidecar has never been opened. Measured against a real host, that shell took
+// 57.8s to reach the viewer: the record appeared instantly, the watch was not
+// yet registered to notice, and the inventory clock surfaced it. That is the
+// exact latency this whole file exists to remove, so the cold host is watched
+// too rather than waited on.
 func (w *manifestWatch) reconcile() {
 	if w == nil || w.watcher == nil || len(w.paths) >= len(w.roots) {
 		return
@@ -209,14 +217,67 @@ func (w *manifestWatch) reconcile() {
 // A file target registers its parent directory, and a project's state directory
 // holds only a handful of entries, so the descriptor cost is proportional to
 // project count rather than to worktree count.
+//
+// While any project is still unresolved, the state root joins the set. See
+// pending.
 func (w *manifestWatch) targets() []livewatch.Target {
-	targets := make([]livewatch.Target, 0, len(w.paths))
+	targets := make([]livewatch.Target, 0, len(w.paths)+1)
 	for _, root := range w.roots {
 		if path := w.paths[root]; path != "" {
 			targets = append(targets, livewatch.File(path))
 		}
 	}
+	if dir := w.pending(); dir != "" {
+		targets = append(targets, livewatch.Dir(dir))
+	}
 	return targets
+}
+
+// pending is the state root to watch while the manifest set is incomplete, or
+// "" once every project has resolved.
+//
+// A project's state directory is created by the first gesture that writes state
+// for it, and until it exists there is no shells.json to register on. Watching
+// the directory that will contain it turns "this project became watchable" into
+// an event instead of something reconcile can only discover on the next
+// inventory tick.
+//
+// It is dropped once the set is whole, because at that point it can only report
+// writes the per-manifest targets already report, and a directory holding one
+// entry per project is a descriptor worth giving back.
+//
+// This is the projects directory, not the state tree: <state>/projects holds one
+// entry per project, so its cost is bounded by project count. The worktrees
+// reasoning at the top of this file is why nothing deeper is watched.
+//
+// On a truly cold host that directory does not exist either — a machine where
+// Sidecar has never run has no state tree at all — so this walks up to the
+// nearest ancestor that does. fsnotify cannot register on a path that is not
+// there, and serve must not create one: it reports a host's state and the
+// decision to write into another machine's state tree is not one a watch gets
+// to make. Watching an ancestor costs a coarser signal, which is harmless here
+// because a signal only asks the loop to re-inventory and the loop then decides
+// whether anything changed.
+func (w *manifestWatch) pending() string {
+	if len(w.paths) >= len(w.roots) {
+		return ""
+	}
+	return nearestExisting(filepath.Join(config.StateDir(), "projects"))
+}
+
+// nearestExisting is the deepest ancestor of path that exists, or "" if even the
+// root does not. It never creates anything.
+func nearestExisting(path string) string {
+	for dir := path; ; {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }
 
 // stop gives every descriptor back.

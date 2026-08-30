@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -416,4 +417,40 @@ func mustFind(t *testing.T, projectsDir, root string) string {
 		t.Fatalf("findByMeta could not resolve %s", root)
 	}
 	return dir
+}
+
+// TestLookupAllMatchesASymlinkedProjectRoot pins the canonical comparison.
+//
+// A configured path and the meta.Path written at registration come from
+// different places and agree only by luck. Driven against a real host, a
+// project configured as /tmp/... and registered as /private/tmp/... reported
+// itself unregistered while its shells were being listed, which silently
+// disabled the shells.json freshness watch that reads this.
+func TestLookupAllMatchesASymlinkedProjectRoot(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "real-project")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "linked-project")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	state := filepath.Join(base, "state")
+	dir := filepath.Join(state, "projects", "p1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Registered under the resolved path, as registration canonicalises.
+	if err := os.WriteFile(filepath.Join(dir, "meta.json"),
+		[]byte(`{"path":`+strconv.Quote(real)+`}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Asked for by the symlinked path, as a config file would carry it.
+	got := LookupAllWithBase(state, []string{link})
+	if got[link] != dir {
+		t.Fatalf("a project registered at its resolved path was not found via its symlinked path: got %v, want %s -> %s", got, link, dir)
+	}
 }
