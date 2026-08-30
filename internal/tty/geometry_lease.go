@@ -587,7 +587,7 @@ func (k *leaseKeeper) allow(target string) bool {
 			return state.lastResize
 		}
 	}
-	allowed, _ := k.tickLocked(target, now, true)
+	allowed, _, _ := k.tickLocked(target, now, true)
 	return allowed
 }
 
@@ -598,10 +598,10 @@ func (k *leaseKeeper) allow(target string) bool {
 // interval, which is what keeps a per-poll caller to one tmux read per tick. A
 // hold's refresher passes false: while the event loop is suspended its ticks are
 // the only cadence there is, so they must never be thrown away.
-func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) (allowed, acquired bool) {
+func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) (allowed, acquired, resolved bool) {
 	session, token, ok := k.store.read(target)
 	if !ok {
-		return true, false
+		return true, false, false
 	}
 	k.targets[target] = session
 
@@ -612,7 +612,7 @@ func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) (
 	}
 	// A second target in the same session can resolve inside an existing tick.
 	if rateLimit && !state.lastTick.IsZero() && now.Sub(state.lastTick) < k.interval {
-		return state.lastResize, false
+		return state.lastResize, false, true
 	}
 	state.lastTick = now
 
@@ -648,7 +648,7 @@ func (k *leaseKeeper) tickLocked(target string, now time.Time, rateLimit bool) (
 	state.owned = decision.Resize
 	state.lastResize = decision.Resize
 	acquired = decision.Resize && leaseOwner(token) != k.selfID
-	return decision.Resize, acquired
+	return decision.Resize, acquired, true
 }
 
 // sinceWrite is how long ago this instance last stamped a token, zero when it
@@ -819,12 +819,12 @@ func (k *leaseKeeper) refreshHold(target string) {
 			k.lastInput = now
 		}
 	}
-	allowed, acquired := k.tickLocked(target, now, false)
+	allowed, acquired, resolved := k.tickLocked(target, now, false)
 	onAllowed := hold.onAllowed
 	transitioned := !hold.allowed && allowed
 	hold.allowed = allowed
 	k.mu.Unlock()
-	if (acquired || transitioned) && onAllowed != nil {
+	if resolved && (acquired || transitioned) && onAllowed != nil {
 		onAllowed()
 	}
 }

@@ -479,6 +479,7 @@ func (m *Model) ActivateInput() tea.Cmd {
 	generation := m.remoteInputGeneration
 	backend := m.remoteBackend
 	session := m.State.TargetSession
+	m.remoteInputWidth, m.remoteInputHeight = m.Width, m.Height
 	m.remoteInputMu.Unlock()
 	scope, target := m.Scope(), m.GetTarget()
 	width, height := m.Width, m.Height
@@ -495,7 +496,22 @@ func (m *Model) ActivateInput() tea.Cmd {
 			// Interactive ownership is a standing geometry-driving path, just
 			// like an attached client: periodic ordinary arbitration ticks keep
 			// the token fresh and its idle evidence honest at a settled size.
-			backend.lease.hold(target)
+			restore := func() {
+				// The lease refresher is not the lifecycle actor. Append restoration
+				// without waiting: release may be the actor currently joining this
+				// refresher, and waiting here would deadlock the two.
+				backend.enqueueLifecycle(func() {
+					width, height, ok := m.remoteInputGeometry(backend, generation)
+					if !ok || m.activeGeneration.Load() != scope.Generation {
+						return
+					}
+					valid := func() bool {
+						return m.remoteInputOwned(backend, generation) && m.activeGeneration.Load() == scope.Generation
+					}
+					backend.resize(session, target, width, height, valid)
+				})
+			}
+			backend.lease.holdWithAction(target, restore)
 			// ReleaseInput may have invalidated us while the claim was waiting on
 			// the remote response. Never let that late claim progress to resize;
 			// hand it back in FIFO before the queued release task continues.
@@ -639,6 +655,21 @@ func (m *Model) remoteInputOwned(backend *remoteTerminalBackend, generation uint
 	defer m.remoteInputMu.Unlock()
 	return m.remote && m.remoteInteractive && m.remoteBackend == backend &&
 		(generation == 0 || m.remoteInputGeneration == generation)
+}
+
+func (m *Model) remoteInputGeometry(backend *remoteTerminalBackend, generation uint64) (int, int, bool) {
+	m.remoteInputMu.Lock()
+	defer m.remoteInputMu.Unlock()
+	if !m.remote || !m.remoteInteractive || m.remoteBackend != backend || m.remoteInputGeneration != generation {
+		return 0, 0, false
+	}
+	return m.remoteInputWidth, m.remoteInputHeight, true
+}
+
+func (m *Model) setRemoteInputSize(width, height int) {
+	m.remoteInputMu.Lock()
+	m.remoteInputWidth, m.remoteInputHeight = width, height
+	m.remoteInputMu.Unlock()
 }
 
 // SetApplicationFocused releases a remote geometry claim on blur and reclaims

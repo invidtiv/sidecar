@@ -656,6 +656,40 @@ func waitForRemoteLeaseRead(t *testing.T, channel *fakeControlChannel, index int
 	return found
 }
 
+func waitForControlCommand(t *testing.T, channel *fakeControlChannel, needle string, index int) fakeControlCommand {
+	t.Helper()
+	var found fakeControlCommand
+	waitFor(t, func() bool {
+		channel.mu.Lock()
+		defer channel.mu.Unlock()
+		seen := 0
+		for _, command := range channel.commands {
+			if !strings.Contains(command.text, needle) {
+				continue
+			}
+			if seen == index {
+				found = command
+				return true
+			}
+			seen++
+		}
+		return false
+	})
+	return found
+}
+
+func countControlCommands(channel *fakeControlChannel, needle string) int {
+	channel.mu.Lock()
+	defer channel.mu.Unlock()
+	count := 0
+	for _, command := range channel.commands {
+		if strings.Contains(command.text, needle) {
+			count++
+		}
+	}
+	return count
+}
+
 func TestRemoteInteractivePeriodicLeaseRefreshLetsTypingPeerPreempt(t *testing.T) {
 	store := &fakeLeaseStore{}
 	var clock sync.Mutex
@@ -813,6 +847,125 @@ func TestLocalEmbeddedHumanInputPreemptsRemoteViewerWithoutReentry(t *testing.T)
 	if holding {
 		t.Fatal("Model.Exit leaked local interactive geometry refresher")
 	}
+}
+
+func TestRemoteViewerAndLocalHumanRestoreGeometryOnEachTakeover(t *testing.T) {
+	shared := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	viewerModel, _, channel := remoteModelWithFakeControl(t)
+	viewerModel.Width, viewerModel.Height = 85, 40
+	viewer := newLeaseKeeper(shared, DefaultLeasePolicy, time.Second)
+	viewer.selfID = "remote-viewer"
+	viewer.now = readNow
+	viewer.lastInput = readNow()
+	viewerTicker := &manualTicker{}
+	viewerTicker.install(viewer)
+	viewerModel.remoteBackend.lease = viewer
+	activateViewer := viewerModel.ActivateInput()
+	viewerActivated := make(chan struct{})
+	go func() {
+		_ = activateViewer()
+		close(viewerActivated)
+	}()
+	initialSize := waitForControlCommand(t, channel, "#{pane_width},#{pane_height}", 0)
+	initialSize.callback(controlResponse{Lines: []string{"85,40"}})
+	select {
+	case <-viewerActivated:
+	case <-time.After(time.Second):
+		t.Fatal("remote viewer did not finish initial activation")
+	}
+
+	human := newLeaseKeeper(shared, DefaultLeasePolicy, time.Second)
+	human.selfID = "local-human"
+	human.now = readNow
+	human.lastInput = readNow()
+	humanModel := New(nil)
+	humanModel.State = &State{Active: true, TargetSession: "shared", TargetPane: "%4"}
+	humanModel.Width, humanModel.Height = 73, 30
+	humanModel.localGeometryKeeper = human
+	originalResize := terminalResizeClaimed
+	defer func() { terminalResizeClaimed = originalResize }()
+	var paneMu sync.Mutex
+	paneWidth, paneHeight := 85, 40
+	terminalResizeClaimed = func(_ string, width, height int) {
+		paneMu.Lock()
+		paneWidth, paneHeight = width, height
+		paneMu.Unlock()
+	}
+	_ = humanModel.ActivateInput()()
+	if owner := leaseOwner(shared.current()); owner != "local-human" {
+		t.Fatalf("local human did not take viewer lease: %q", shared.current())
+	}
+	paneMu.Lock()
+	if paneWidth != 73 || paneHeight != 30 {
+		paneMu.Unlock()
+		t.Fatalf("local takeover geometry=%dx%d want 73x30", paneWidth, paneHeight)
+	}
+	paneMu.Unlock()
+
+	advance(10 * time.Second)
+	human.allow("%4") // publish ten seconds of human idle
+	viewer.noteInput()
+	before := shared.activity()
+	viewerTicker.c <- readNow()
+	waitForActivity(t, shared, before)
+	restoreSize := waitForControlCommand(t, channel, "#{pane_width},#{pane_height}", 1)
+	restoreSize.callback(controlResponse{Lines: []string{"73,30"}})
+	resize := waitForControlCommand(t, channel, "resize-window", 0)
+	if !strings.Contains(resize.text, "-x 85") || !strings.Contains(resize.text, "-y 40") {
+		t.Fatalf("remote restore command=%q want 85x40", resize.text)
+	}
+	paneMu.Lock()
+	paneWidth, paneHeight = 85, 40
+	paneMu.Unlock()
+	resize.callback(controlResponse{})
+	waitFor(t, func() bool { return leaseOwner(shared.current()) == "remote-viewer" })
+
+	// A settled owner refreshes its token but does not query/resize every tick.
+	before = shared.activity()
+	viewerTicker.c <- readNow()
+	waitForActivity(t, shared, before)
+	time.Sleep(20 * time.Millisecond)
+	if got := countControlCommands(channel, "#{pane_width},#{pane_height}"); got != 2 {
+		t.Fatalf("settled remote owner size queries=%d want 2", got)
+	}
+	humanModel.Exit()
+	waitForRemoteLifecycle(t, humanModel)
+	viewerModel.ReleaseInput()
+	waitForRemoteLifecycle(t, viewerModel)
+}
+
+func TestHeldLeaseReadFailureDoesNotSynthesizeGeometryAcquisition(t *testing.T) {
+	store := &fakeLeaseStore{}
+	keeper := newTestKeeper(store, "viewer", DefaultLeasePolicy)
+	peer := newTestKeeper(store, "human", DefaultLeasePolicy)
+	var restores atomic.Int32
+	keeper.holdWithAction("%4", func() { restores.Add(1) })
+	peer.claim("%4")
+	keeper.refreshHold("%4") // observe denial by the peer
+	if got := restores.Load(); got != 0 {
+		t.Fatalf("denied holder restored geometry %d times", got)
+	}
+	store.mu.Lock()
+	store.unknown = true
+	store.mu.Unlock()
+	keeper.refreshHold("%4")
+	if got := restores.Load(); got != 0 {
+		t.Fatalf("unresolved lease read synthesized %d geometry restorations", got)
+	}
+	keeper.releaseHold("%4")
 }
 
 func TestReleaseDuringBlockedLocalActivationLeavesNoClaimOrResize(t *testing.T) {

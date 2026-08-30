@@ -190,6 +190,8 @@ type Model struct {
 	remoteInputMu             sync.Mutex
 	remoteInteractive         bool
 	remoteInputGeneration     uint64
+	remoteInputWidth          int
+	remoteInputHeight         int
 	remoteBackend             *remoteTerminalBackend
 	remoteLifecycleMu         sync.Mutex
 	remoteLifecycleTail       <-chan struct{}
@@ -1375,6 +1377,7 @@ func (m *Model) now() time.Time {
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
 	m.setLocalGeometrySize(width, height)
+	m.setRemoteInputSize(width, height)
 	if width == m.Width && height == m.Height {
 		return nil
 	}
@@ -1487,6 +1490,7 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	m.Width = width
 	m.Height = height
 	m.setLocalGeometrySize(width, height)
+	m.setRemoteInputSize(width, height)
 	if same && !m.resizeOwed {
 		return nil
 	}
