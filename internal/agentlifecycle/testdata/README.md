@@ -21,15 +21,32 @@ steel-thread decision, is `docs/reference/agent-lifecycle-capability-matrix.md`.
 
 Captured 2026-08-30 on darwin/arm64.
 
-| Trace | Provider | Version | Model | Outcome |
-| --- | --- | --- | --- | --- |
-| `traces/opencode/tool-turn-with-permission.tsv` | opencode | 1.18.23 | openai/gpt-4o-mini | success |
-| `traces/opencode/session-error-turn.tsv` | opencode | 1.18.23 | google/gemini-2.5-flash | provider auth error |
+| Trace | Provider | Version | Model | Outcome | Captured |
+| --- | --- | --- | --- | --- | --- |
+| `traces/opencode/tool-turn-with-permission.tsv` | opencode | 1.18.23 | openai/gpt-4o-mini | success | Phase A |
+| `traces/opencode/session-error-turn.tsv` | opencode | 1.18.23 | google/gemini-2.5-flash | provider auth error | Phase A |
+| `traces/opencode/cancelled-turn.tsv` | opencode | 1.18.25 | openai/gpt-4o-mini | user cancellation | Phase B |
+| `traces/opencode/provider-error-named.tsv` | opencode | 1.18.25 | google/gemini-2.5-flash | provider auth error | Phase B |
 
 The error trace is kept deliberately. A failed turn is a real lifecycle path,
 and it is the one that shows `session.error` resolving to `session.idle` rather
 than latching the pane on `working` — which is exactly the failure mode the
 resolver has to survive.
+
+The Phase B pair exists because cancellation and failure are the *same shape* on
+the OpenCode bus. `cancelled-turn.tsv` is a turn interrupted by the user;
+`provider-error-named.tsv` is the same harness with no credentials for the
+selected model. They differ in exactly one recorded value — the bounded error
+class name, `MessageAbortedError` against `ProviderAuthError` — and that is the
+whole reason the second one is checked in. Without it, "an aborted message means
+the user cancelled" would be an assumption rather than a measurement.
+
+Two things about capturing a cancellation, both learned the hard way. The
+OpenCode TUI needs **two** Escape presses to interrupt: the first only arms the
+confirmation and changes the footer from `esc interrupt` to `esc again to
+interrupt`. And the abort reaches the event bus a few seconds after the screen
+stops showing the busy indicator, so tearing the session down as soon as the
+screen settles records a truncated trace that looks like no events fired.
 
 ## How they were captured, and what was not touched
 
@@ -46,6 +63,14 @@ cheapest available model. The permission event pair was produced by setting
 `"permission": {"bash": "ask"}` in the temporary config and asking for a single
 `echo`.
 
+Cancellation cannot be produced by `opencode run`, because there is no
+interactive session to interrupt. The Phase B cancellation trace therefore drove
+the real TUI inside a **private tmux server** (`tmux -S` on a dedicated socket,
+never the machine's default server), sent one prompt, waited for
+`session.status {"type":"busy"}`, and then sent Escape twice. The tmux server
+was killed at the end of the run and nothing outside the temporary tree was
+touched.
+
 ## Sanitization
 
 Sanitization is by construction rather than by redaction, which is the only
@@ -61,7 +86,19 @@ startup catalog chatter (`plugin.added`, `catalog.updated`, `integration.updated
 `reference.updated`) that says nothing about lifecycle.
 
 Columns are: `offset_ms`, `kind` (`bus` or `hook`), `type`, `status`, `tool`,
-`session-id present`, `parent-id present`.
+`session-id present`, `parent-id present`, and — on Phase B traces only — the
+bounded `error class name`. The Phase A files predate error-name capture and
+have seven columns; readers must tolerate both widths, which `readTrace` in
+`capability_test.go` does.
+
+The error column records a class name such as `MessageAbortedError`, truncated
+to 64 bytes. It never carries the error message, stack, or any provider payload
+text. A class name is a closed vocabulary chosen by the provider's own source,
+which is what makes it safe to record where a message would not be.
+
+Phase B traces additionally drop `message.part.delta`. The TUI streams one of
+those per token, so a single cancelled turn produced 1604 of them; they carry no
+lifecycle information and would bury the fixture.
 
 ## Re-capturing
 

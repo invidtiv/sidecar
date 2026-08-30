@@ -173,3 +173,205 @@ func TestOpenCodeTraceProvesTheSteelThreadTransitions(t *testing.T) {
 		}
 	}
 }
+
+// traceRow is one sanitized trace line. Phase A files carry seven columns and
+// Phase B files carry eight; the extra column is the bounded error class name,
+// which is what made cancellation distinguishable from failure.
+type traceRow struct {
+	kind   string
+	typ    string
+	status string
+	err    string
+}
+
+func readTrace(t *testing.T, name string) []traceRow {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", "traces", "opencode", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []traceRow
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		cols := strings.Split(line, "\t")
+		if len(cols) < 7 {
+			t.Fatalf("malformed trace row: %q", line)
+		}
+		row := traceRow{kind: cols[1], typ: cols[2], status: cols[3]}
+		if len(cols) > 7 && cols[7] != "-" {
+			row.err = cols[7]
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// TestOpenCodeCancellationTraceProvesTheCancelledTransition is the Phase B
+// entry-condition evidence, asserted rather than described.
+//
+// It is what allows the capability matrix to list `cancelled` in OpenCode's
+// covered set, and therefore what allows TierFor to derive `full` for it. If
+// this trace were removed or its shape changed, the matrix entry would become
+// a claim with nothing behind it — so the assertion is deliberately specific
+// about the event sequence and the discriminator.
+func TestOpenCodeCancellationTraceProvesTheCancelledTransition(t *testing.T) {
+	rows := readTrace(t, "cancelled-turn.tsv")
+
+	// The turn must actually have started working before it was cancelled,
+	// otherwise the trace proves nothing about interrupting live work.
+	var sawBusy bool
+	var abortIdx = -1
+	for i, r := range rows {
+		if r.typ == "session.status" && r.status == `{"type":"busy"}` {
+			sawBusy = true
+		}
+		if r.typ == "session.error" && r.err == "MessageAbortedError" {
+			if !sawBusy {
+				t.Fatal("cancellation recorded before the session ever went busy")
+			}
+			abortIdx = i
+			break
+		}
+	}
+	if abortIdx < 0 {
+		t.Fatal("no session.error carrying MessageAbortedError; the cancellation evidence is missing")
+	}
+
+	// The abort must resolve to idle, and it must do so through the
+	// state-shaped session.status rather than leaving the lane to be inferred.
+	// This is the property that lets a cancelled turn self-correct even if the
+	// error event itself is dropped.
+	var sawStatusIdle, sawSessionIdle bool
+	for _, r := range rows[abortIdx:] {
+		if r.typ == "session.status" && r.status == `{"type":"idle"}` {
+			sawStatusIdle = true
+		}
+		if r.typ == "session.idle" {
+			sawSessionIdle = true
+		}
+	}
+	if !sawStatusIdle {
+		t.Fatal("cancellation did not resolve through session.status{idle}; the lane would have to be inferred")
+	}
+	if !sawSessionIdle {
+		t.Fatal("cancellation did not emit session.idle")
+	}
+
+	// A cancelled turn and a failed turn are the same shape on the bus. The
+	// only thing separating them is the bounded error class name, so the
+	// contrast trace is part of the evidence rather than a nicety: without it
+	// "MessageAbortedError means cancelled" would be an assumption.
+	var contrastErr string
+	for _, r := range readTrace(t, "provider-error-named.tsv") {
+		if r.typ == "session.error" && r.err != "" {
+			contrastErr = r.err
+			break
+		}
+	}
+	if contrastErr == "" {
+		t.Fatal("contrast trace records no error name, so cancellation is not shown to be distinguishable")
+	}
+	if contrastErr == "MessageAbortedError" {
+		t.Fatalf("a provider failure also reports MessageAbortedError; cancellation is not distinguishable")
+	}
+}
+
+// TestOpenCodeEarnsFullOnlyFromTheCancellationEvidence ties the promotion to
+// the trace rather than to an edit.
+//
+// Removing `cancelled` from the covered set — the state Phase A was in — must
+// take the entry back to advisory. That is the check that keeps the tier and
+// the evidence from drifting apart in opposite directions.
+func TestOpenCodeEarnsFullOnlyFromTheCancellationEvidence(t *testing.T) {
+	var oc Capability
+	for _, c := range loadCapabilityMatrix(t) {
+		if c.Provider == "opencode" {
+			oc = c
+		}
+	}
+	if oc.Provider == "" {
+		t.Fatal("no opencode entry in the capability matrix")
+	}
+	if got, _ := oc.TierFor(StatusCurrent, true); got != TierFull {
+		t.Fatalf("opencode earns %q, want full", got)
+	}
+
+	without := oc
+	without.Covered = nil
+	for _, tr := range oc.Covered {
+		if tr != TransitionCancelled {
+			without.Covered = append(without.Covered, tr)
+		}
+	}
+	if len(without.Covered) == len(oc.Covered) {
+		t.Fatal("opencode does not claim the cancelled transition")
+	}
+	got, reason := without.TierFor(StatusCurrent, true)
+	if got != TierAdvisory || reason != ReasonCapabilityUnproved {
+		t.Fatalf("without cancellation evidence opencode earns %q (%s), want advisory/capability_unproved", got, reason)
+	}
+}
+
+// TestTierForPolicesEveryTierBoundary covers td-f4d92c finding 1: before this,
+// only the full-to-advisory boundary was enforced, so an entry could claim
+// `advisory` or `session-identity` with no evidence at all and be believed.
+// Advisory is not a harmless tier — it still authors state whenever the screen
+// has no opinion — so an empty claim has to fall out entirely.
+func TestTierForPolicesEveryTierBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		cap        Capability
+		wantTier   Tier
+		wantReason FallbackReason
+	}{
+		{
+			name:       "advisory with no evidence",
+			cap:        Capability{Tier: TierAdvisory, Evidence: EvidenceNone, Covered: []Transition{TransitionWorkStart}},
+			wantTier:   TierScreenFallback,
+			wantReason: ReasonCapabilityUnproved,
+		},
+		{
+			name:       "advisory covering nothing",
+			cap:        Capability{Tier: TierAdvisory, Evidence: EvidenceDocsOnly},
+			wantTier:   TierScreenFallback,
+			wantReason: ReasonCapabilityUnproved,
+		},
+		{
+			name:       "session identity that cannot identify a session",
+			cap:        Capability{Tier: TierSessionIdentity, Evidence: EvidenceDocsOnly, Covered: []Transition{TransitionWorkStart}},
+			wantTier:   TierScreenFallback,
+			wantReason: ReasonCapabilityUnproved,
+		},
+		{
+			name:       "session identity with no evidence",
+			cap:        Capability{Tier: TierSessionIdentity, Evidence: EvidenceNone, Covered: []Transition{TransitionSessionIdentity}},
+			wantTier:   TierScreenFallback,
+			wantReason: ReasonCapabilityUnproved,
+		},
+		{
+			name:       "honest advisory survives",
+			cap:        Capability{Tier: TierAdvisory, Evidence: EvidenceDocsOnly, Covered: []Transition{TransitionWorkStart}},
+			wantTier:   TierAdvisory,
+			wantReason: ReasonNone,
+		},
+		{
+			name:       "honest session identity survives",
+			cap:        Capability{Tier: TierSessionIdentity, Evidence: EvidenceDocsOnly, Covered: []Transition{TransitionSessionIdentity}},
+			wantTier:   TierSessionIdentity,
+			wantReason: ReasonNone,
+		},
+		{
+			name:       "screen fallback needs no evidence",
+			cap:        Capability{Tier: TierScreenFallback, Evidence: EvidenceNone},
+			wantTier:   TierScreenFallback,
+			wantReason: ReasonNone,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := tc.cap.TierFor(StatusCurrent, true)
+			if got != tc.wantTier || reason != tc.wantReason {
+				t.Fatalf("got %q/%q, want %q/%q", got, reason, tc.wantTier, tc.wantReason)
+			}
+		})
+	}
+}

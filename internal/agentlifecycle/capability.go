@@ -147,15 +147,21 @@ type Capability struct {
 	SourceVersionNote string `json:"sourceVersionNote,omitempty"`
 }
 
+// Covers reports whether real evidence covered one transition.
+func (c Capability) Covers(t Transition) bool {
+	for _, got := range c.Covered {
+		if got == t {
+			return true
+		}
+	}
+	return false
+}
+
 // CoversFullLifecycle reports whether Covered includes every transition in
 // [FullLifecycleTransitions].
 func (c Capability) CoversFullLifecycle() bool {
-	have := make(map[Transition]bool, len(c.Covered))
-	for _, t := range c.Covered {
-		have[t] = true
-	}
 	for _, need := range FullLifecycleTransitions() {
-		if !have[need] {
+		if !c.Covers(need) {
 			return false
 		}
 	}
@@ -172,6 +178,13 @@ func (c Capability) CoversFullLifecycle() bool {
 //     coverage is incomplete, cannot exercise TierFull however it is declared.
 //     This is checked here rather than trusted at registry-authoring time so a
 //     mistaken registry entry degrades safely instead of silently taking over.
+//   - Every lower claim is policed the same way. An advisory claim needs at
+//     least one covered transition and some evidence behind it, and a
+//     session-identity claim needs to actually cover session identity.
+//     Otherwise an entry could be typed down from `full` into `advisory` — a
+//     tier that still speaks whenever the screen has no opinion — and escape
+//     scrutiny entirely by claiming less. Only [TierScreenFallback], which
+//     asserts nothing, needs no evidence.
 //   - An asset needing repair, missing, or unsupported has no authority.
 //   - An outdated asset keeps its last proved tier only while the provider is
 //     still inside the tested range; otherwise it drops to advisory.
@@ -191,9 +204,24 @@ func (c Capability) TierFor(status IntegrationStatus, providerInRange bool) (Tie
 	tier := c.Tier
 	reason := ReasonNone
 
-	// An unearned full claim is demoted here, not honored and audited later.
-	if tier == TierFull && (c.Evidence != EvidenceRealTrace || !c.CoversFullLifecycle()) {
-		return TierAdvisory, ReasonCapabilityUnproved
+	// An unearned claim is demoted here, not honored and audited later. Each
+	// branch drops to the strongest tier the recorded evidence does support.
+	switch tier {
+	case TierFull:
+		if c.Evidence != EvidenceRealTrace || !c.CoversFullLifecycle() {
+			return TierAdvisory, ReasonCapabilityUnproved
+		}
+	case TierAdvisory:
+		// Advisory still authors state when the screen is undecided, so an
+		// entry with no evidence or no covered transition has to fall all the
+		// way out rather than be trusted to "only advise".
+		if c.Evidence == EvidenceNone || len(c.Covered) == 0 {
+			return TierScreenFallback, ReasonCapabilityUnproved
+		}
+	case TierSessionIdentity:
+		if c.Evidence == EvidenceNone || !c.Covers(TransitionSessionIdentity) {
+			return TierScreenFallback, ReasonCapabilityUnproved
+		}
 	}
 	// An outdated asset keeps its proved tier while the provider is still
 	// inside the tested range; outside it, the asset's age is the more
