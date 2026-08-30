@@ -1,9 +1,9 @@
 # Sidecar as its own remote host runtime
 
-Status: **active, Phase A complete — read-only remote hosts behind a flag**, 2026-08-29
+Status: **active, Phase B complete — interactive remote hosts behind a flag**, 2026-08-29
 
 Related: [Herdr as Sidecar's remote host runtime](herdr-remote-hosts.md) — the competing alternative for the same deliverable; see [Relationship to the Herdr plan](#relationship-to-the-herdr-plan) for what decides between them. [Hosting Herdr plugins in Sidecar](herdr-plugin-support.md) is orthogonal to both.
-Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 was run end to end against a second real machine on 2026-08-29 — measurements, transcripts and findings in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md).
+Evidence: all claims verified against the Sidecar codebase on `main` (citations inline); the Herdr comparisons reference the source inspection at `c2637dc1` recorded in the Herdr plan. Phase 0 measurements, transcripts, and findings are in [docs/evidence/sidecar-remote-hosts-phase0.md](../../evidence/sidecar-remote-hosts-phase0.md). Phase B's final-candidate tests and isolated two-machine proof are in [docs/evidence/sidecar-remote-hosts-phase-b.md](../../evidence/sidecar-remote-hosts-phase-b.md).
 
 ## Decision first
 
@@ -184,16 +184,20 @@ Three things the real run found that no unit test would have:
 2. ssh's ControlMaster socket blew the ~104-byte unix path limit under macOS's `$TMPDIR` (`/var/folders/<2>/<28>/T/`), surfacing as an unreachable host with no hint of the cause. The control root is now under `/tmp`.
 3. A registered host was invisible until its first connection resolved — and an ssh dial to a machine that is off runs to a full connect timeout. Initial health is now published at registration.
 
-One deliberate limitation, recorded rather than hidden: `SyncHosts` has a single caller (`app.Init`), so hosts are **start-time only** — editing the host list or toggling the feature takes effect on the next launch. The reconciliation behind it is written, correct and tested; wiring it to a config-reload seam is td-998e58.
+Host configuration is live-reloaded. Saving config refreshes feature resolution, reconciles the host registry, closes a selected terminal when its host is removed or retargeted, and rejects queued updates from the replaced host-client incarnation. This is the Phase B completion of td-998e58; restart-only host configuration is no longer a product limitation.
 
-### Phase B — interactive remote panes
+### Phase B — interactive remote panes ✅ complete (2026-08-29)
 
-- In-band input sender; interactive-mode entry on a remote pane with the same chrome and exit rules as local.
-- Cross-host lease rules (no foreign defunct-PID reclaim; local input evidence); claim on interactive entry, release on blur/exit; the remote human's typing preempts per the existing idle rule.
-- History, search, and frozen selection over in-band `CapturePaneRange`.
-- Resize etiquette: resizing a remote pane is a lease-gated explicit act, debounced through the existing 300 ms `assertDimensions` path; reseed-without-restart if Phase 0 said so.
+- In-band input uses the existing host-aware control pipe and a model-level FIFO, preserving exact ordering for fast keys, literal input, paste, mouse reports, lease changes, and backend replacement.
+- Remote panes enter the Sessions browser's ordinary interactive mode with the same chrome, reserved chords, double-escape behavior, and immediate exit semantics as local panes.
+- Cross-host leases use viewer-local input evidence, never foreign PID liveness. Interactive owners refresh at a settled size, blur/exit releases safely, and either machine restores its current viewport when its human input preempts the other.
+- Complete history, search, match navigation, and frozen selection use the terminal model's host-aware in-band `CapturePaneRange`; no remote fallback can read an ambient local pane with the same ID.
+- Remote resize remains a lease-gated explicit act through the existing debounced restart/reseed path. Generation and incarnation fences reject late activation, resize, host-update, and old-backend teardown work.
+- Config saves refresh feature resolution and reconcile hosts without restart, including removal, same-ID retarget, selected-terminal teardown, and queued old-client rejection (td-998e58).
 
 **Exit gate:** a blocked agent prompt on the remote host answered from the local Sidecar, with input ordering correct under fast typing, and a human at the remote machine able to take the pane back just by using it.
+
+**Result: passed.** The final `7cff6d1e` candidate was driven between isolated Sidecars on `aerie` and `marcusbook`. Exact ordered input arrived on the remote pane. With deliberately different viewports, viewer input reclaimed and restored 103×45, then remote-human input reclaimed and restored 73×30 without either side leaving interactive mode. Viewer exit preserved the human's lease; human exit removed it. Both default tmux servers and real Sidecar state trees were untouched. Full repository tests, build, focused race tests, and independent review passed; see the Phase B evidence document.
 
 ### Phase C — creation, mutation, conversations
 
@@ -229,7 +233,7 @@ One deliberate limitation, recorded rather than hidden: `SyncHosts` has a single
 | Status truth | Remote lanes match the remote machine's own Sidecar TUI, including `blocked` and `done` decay, across ≥3 providers |
 | Live pane | A remote full-screen TUI, wide chars, colors, and alt-screen render correctly through the proxied control channel; idle costs zero bytes |
 | History | Lazy history, search, and drag-selection during output work on a remote pane with the same contracts as local |
-| Geometry | A read-only viewer never resizes anything; an interactive viewer's lease is preempted by the remote human typing |
+| Geometry | A read-only viewer never resizes anything; viewer and remote-human input preempt each other without re-entry and restore their own distinct viewports |
 | Coexistence | A human's Sidecar TUI on the remote host sees no behavior change while a viewer observes; two viewers coexist |
 | Reconnect | Link drop and tmux-server restart both reconverge (incarnation transition → dead rows → recovery), with nothing wiped |
 | Isolation | Serve under `SIDECAR_ISOLATED_STATE` refuses to touch a real state tree |
@@ -239,6 +243,7 @@ Latency, bandwidth, and remote CPU are measured and recorded in the Phase 0 matr
 
 ## Changelog
 
+- **2026-08-29** — Phase B completed and independently reviewed. Added ordered in-band remote input, Sessions interactive/search/history parity, host-aware lease and capture paths, bidirectional input-driven geometry takeover, nonblocking ordered teardown across control/backend replacement, and live host-config reconciliation including td-998e58. The final isolated two-machine gate passed with distinct 103×45 and 73×30 viewports; evidence is recorded in `docs/evidence/sidecar-remote-hosts-phase-b.md`.
 - **2026-08-29** — Phase A built and driven end to end against a second real machine: host registry and config, a long-lived serve client with reconnect/backoff and a health vocabulary that names its fix, `HostID` on the inventory, remote rows in the Sessions browser and the Activity board, host grouping, health rows, a read-only live pane over proxied control mode, preview content from serve captures, and Linux `/proc` process identity. Behind `features.SidecarRemoteHosts`, default off. Remaining Phase A evidence: a full day of use.
 - **2026-08-29** — Phase 0 run end to end against a second real machine. Verdict: proceed to Phase A. Resize-without-restart dropped from Phase A on measured evidence; login-shell resolution, a not-the-protocol row state, and the incarnation-vs-death distinction added as required Phase A items. Retained: `internal/hostproto`, `internal/hostserve`, `internal/hosts`, `internal/tty/control_remote.go`, `internal/buildinfo`, `sidecar host serve|probe`, and the spike harnesses under `scripts/`.
 - **2026-08-28** — Created, from source research into the control-mode transport seam, the geometry lease's explicit two-machine design (td-ee222a), the UI-free awareness stack, shells.json v2 hardening, and the headless-readiness of `workspaceops`. Positioned as the competing alternative to the Herdr remote-hosts plan with a recorded bake-off posture.
