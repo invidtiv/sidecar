@@ -45,6 +45,10 @@ func LayoutPaneTree(root *PaneNode, box Box, floors Floors, focus int) (PaneLayo
 	return panelayout.LayoutTree(root, box, floors, focus)
 }
 
+func LayoutPaneTreeWithZoom(root *PaneNode, box Box, floors Floors, focus, zoom int) (PaneLayout, bool) {
+	return panelayout.LayoutTreeWithZoom(root, box, floors, focus, zoom)
+}
+
 func SplitLeaf(root *PaneNode, leafID int, axis SplitAxis, leaf *PaneNode) (*PaneNode, int) {
 	return panelayout.SplitLeaf(root, leafID, axis, leaf)
 }

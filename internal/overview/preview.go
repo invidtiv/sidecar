@@ -432,6 +432,9 @@ func (m *Model) previewKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 		// to the pane twice.
 		return true, m.forwardToTerminal(msg)
 	}
+	if handled, cmd := m.handlePaneMoveKey(msg); handled {
+		return true, cmd
+	}
 	// The pane switcher, ahead of every content pane's own key set: each pane
 	// absorbs what it does not own, so without this the switcher was reachable
 	// only from the list — you had to leave the pane you were reading to open

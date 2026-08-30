@@ -94,7 +94,15 @@ type rawNotificationsConfig struct {
 	Native     NativeNotificationsConfig              `json:"native"`
 	Sound      SoundNotificationsConfig               `json:"sound"`
 	QuietHours *QuietHoursConfig                      `json:"quietHours"`
+	SSH        *rawSSHNotificationsConfig             `json:"ssh"`
 	Sources    map[string]rawNotificationSourceConfig `json:"sources"`
+}
+
+// rawSSHNotificationsConfig keeps ManagedHosts a pointer so an absent key
+// leaves the default in force rather than reading as an explicit false.
+type rawSSHNotificationsConfig struct {
+	ManagedHosts *bool            `json:"managedHosts"`
+	Terminal     TerminalNotifier `json:"terminal"`
 }
 
 type rawNotificationSourceConfig struct {
@@ -530,6 +538,14 @@ func mergeConfig(cfg *Config, raw *rawConfig) {
 		cfg.Notifications.Sound.FailurePath = raw.Notifications.Sound.FailurePath
 		if raw.Notifications.QuietHours != nil {
 			cfg.Notifications.QuietHours = *raw.Notifications.QuietHours
+		}
+		if raw.Notifications.SSH != nil {
+			if raw.Notifications.SSH.ManagedHosts != nil {
+				cfg.Notifications.SSH.ManagedHosts = *raw.Notifications.SSH.ManagedHosts
+			}
+			if raw.Notifications.SSH.Terminal != "" {
+				cfg.Notifications.SSH.Terminal = raw.Notifications.SSH.Terminal
+			}
 		}
 	}
 	if raw.Notifications != nil && len(raw.Notifications.Sources) > 0 {

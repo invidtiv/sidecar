@@ -25,6 +25,7 @@ import (
 	"github.com/marcus/sidecar/internal/notifydelivery"
 	"github.com/marcus/sidecar/internal/overview"
 	"github.com/marcus/sidecar/internal/palette"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/state"
@@ -55,6 +56,7 @@ const (
 	ModalOpenIn                            // Open In IDE picker
 	ModalIssueInput                        // Issue ID text input
 	ModalIssuePreview                      // Issue preview display
+	ModalPaneReposition                    // Reposition one app content-deck leaf
 	ModalPaneSwitcher                      // Pane switcher over a plugin's content deck (lowest priority)
 )
 
@@ -84,6 +86,8 @@ func (m *Model) activeModal() ModalKind {
 		return ModalIssueInput
 	case m.showIssuePreview:
 		return ModalIssuePreview
+	case func() bool { _, controller := m.activePaneLayoutController(); return controller != nil }():
+		return ModalPaneReposition
 	case m.paneSwitcherOpen:
 		return ModalPaneSwitcher
 	default:
@@ -123,6 +127,8 @@ func modalFocusContext(kind ModalKind) (string, bool) {
 		return "issue-input", true
 	case ModalIssuePreview:
 		return "issue-preview", true
+	case ModalPaneReposition:
+		return panereposition.ModalContext, true
 	case ModalPaneSwitcher:
 		return paneSwitcherContext, true
 	}
@@ -405,6 +411,10 @@ type Model struct {
 	// are drained by the Update postlude.
 	notificationDelivery     notifydelivery.Coordinator
 	notificationDeliveryCmds []tea.Cmd
+	// terminalNotifyWriter collects direct-terminal notification bytes so the
+	// renderer emits them rather than a delivery goroutine. Nil when delivery
+	// was injected by a test.
+	terminalNotifyWriter *terminalNotifyWriter
 	// notificationCTAs memoizes each notification's reconciled target list by
 	// id, so the file-existence check behind a verified underline runs once per
 	// record rather than once per frame. See notification_targets.go.
@@ -544,7 +554,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	notify.ApplyConfig(cfg.Notifications)
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
-	m.notificationDelivery = notifydelivery.NewDefault(config.StateDir())
+	m.terminalNotifyWriter = &terminalNotifyWriter{}
+	m.notificationDelivery = notifydelivery.NewDefaultWithTerminalWriter(config.StateDir(), m.terminalNotifyWriter.Write)
 	m.notificationCentreMouse = mouse.NewHandler()
 	m.notificationCentreWheel = &tty.WheelBurst{}
 	m.toastMouse = mouse.NewHandler()

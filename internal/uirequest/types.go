@@ -318,6 +318,11 @@ type Origin struct {
 	// SessionsRow is the durable inventory ID of the Sessions row. Empty
 	// means the currently selected row.
 	SessionsRow string `json:"sessionsRow,omitempty"`
+	// HostID names the registered remote host a workspace lives on. Empty
+	// means this machine. It is set on an attention record's visible origin so
+	// "the user is looking at that workspace" cannot be answered by a local
+	// workspace that merely shares a tmux session name with a remote one.
+	HostID string `json:"hostId,omitempty"`
 }
 
 // Target identifies the object affected by the request. Value carries the

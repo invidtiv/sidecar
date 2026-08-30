@@ -165,6 +165,19 @@ type Layout struct {
 }
 
 func LayoutTree(root *Node, box Box, floors Floors, focus int) (Layout, bool) {
+	return LayoutTreeWithZoom(root, box, floors, focus, 0)
+}
+
+// LayoutTreeWithZoom gives a valid requested leaf the whole box. A missing
+// request falls through to the ordinary layout, including its existing
+// focused-leaf fallback when the complete tree cannot fit.
+func LayoutTreeWithZoom(root *Node, box Box, floors Floors, focus, requestedZoom int) (Layout, bool) {
+	if requestedZoom > 0 {
+		zoomed := Find(root, requestedZoom)
+		if zoomed != nil && zoomed.Split == nil {
+			return Layout{Leaves: []Placement{{Node: zoomed, Box: box}}, Zoomed: true}, true
+		}
+	}
 	if leaves, dividers, fits := LayoutPanes(root, box, floors); fits {
 		return Layout{Leaves: leaves, Dividers: dividers}, true
 	}

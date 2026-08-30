@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -9,11 +10,81 @@ import (
 	"testing"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/projectdir"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
+
+func TestStartAgentWithOptionsRoutesCatalogLaunchThroughAgentControl(t *testing.T) {
+	root, worktree := t.TempDir(), t.TempDir()
+	p := &Plugin{ctx: &plugin.Context{Epoch: 9, ProjectRoot: root, WorkDir: root, Config: config.Default()}, operationCtx: context.Background()}
+	wt := &Worktree{Key: "feature-key", Name: "feature", Path: worktree}
+
+	originalLaunch, originalStart := launchWorkspaceSession, startWorkspaceAgent
+	defer func() { launchWorkspaceSession, startWorkspaceAgent = originalLaunch, originalStart }()
+	var spec workspaceops.AgentLaunchSpec
+	launchWorkspaceSession = func(_ context.Context, got workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		spec = got
+		return workspaceops.AgentLaunchResult{SessionName: got.SessionName, PaneID: "%setup", Reconnected: true}, nil
+	}
+	var request agentcontrol.StartRequest
+	startWorkspaceAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		got.Target.PaneID = "%ready"
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
+
+	msg := p.StartAgentWithOptions(wt, AgentCodex, true)().(AgentStartedMsg)
+	if msg.Err != nil {
+		t.Fatalf("start failed: %v", msg.Err)
+	}
+	if spec.StartAgent || spec.AgentCommand != "" {
+		t.Fatalf("workspaceops still launched agent: %+v", spec)
+	}
+	if request.Kind != "codex" || strings.Join(request.Argv, " ") != "codex --dangerously-bypass-approvals-and-sandbox" {
+		t.Fatalf("agentcontrol request = %+v", request)
+	}
+	if request.Target.Project != workspaceinventory.CanonicalPath(root) || request.Target.Session != spec.SessionName || request.Target.Name != "feature" || request.Timeout != agentStartTimeout {
+		t.Fatalf("target/timeout = %+v timeout=%v", request.Target, request.Timeout)
+	}
+	if msg.PaneID != "%ready" || !msg.Reconnected {
+		t.Fatalf("result = %+v", msg)
+	}
+}
+
+func TestStartAgentWithOptionsKeepsConfiguredLaunchOpaqueButReadyChecked(t *testing.T) {
+	root, worktree := t.TempDir(), t.TempDir()
+	cfg := config.Default()
+	cfg.Plugins.Workspace.AgentStart = map[string]string{"codex": "codex-custom --profile fast"}
+	p := &Plugin{ctx: &plugin.Context{Epoch: 3, ProjectRoot: root, WorkDir: root, Config: cfg}, operationCtx: context.Background()}
+
+	originalLaunch, originalWait, originalStart := launchWorkspaceSession, waitWorkspaceShellReady, startWorkspaceAgent
+	defer func() {
+		launchWorkspaceSession, waitWorkspaceShellReady, startWorkspaceAgent = originalLaunch, originalWait, originalStart
+	}()
+	launchWorkspaceSession = func(_ context.Context, got workspaceops.AgentLaunchSpec) (workspaceops.AgentLaunchResult, error) {
+		return workspaceops.AgentLaunchResult{SessionName: got.SessionName, PaneID: "%1"}, nil
+	}
+	waitWorkspaceShellReady = func(_ context.Context, target agentcontrol.Target, _ time.Duration) (agentcontrol.Snapshot, error) {
+		return agentcontrol.Snapshot{Target: target}, nil
+	}
+	var request agentcontrol.StartRequest
+	startWorkspaceAgent = func(_ context.Context, got agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		request = got
+		return agentcontrol.Agent{Target: got.Target}, nil
+	}
+
+	msg := p.StartAgentWithOptions(&Worktree{Name: "feature", Path: worktree}, AgentCodex, false)().(AgentStartedMsg)
+	if msg.Err != nil {
+		t.Fatalf("start failed: %v", msg.Err)
+	}
+	if request.Kind != "codex" || len(request.Argv) != 3 || request.Argv[1] != "-lc" || request.Argv[2] != "codex-custom --profile fast" {
+		t.Fatalf("opaque request = %+v", request)
+	}
+}
 
 func TestSanitizeName(t *testing.T) {
 	tests := []struct {
@@ -209,11 +280,11 @@ func TestResolveAgentBaseCommand(t *testing.T) {
 			expected:  "codex",
 		},
 		{
-			name:      "unknown type falls back to claude",
+			name:      "unknown type is refused instead of launching claude",
 			agentType: AgentCustom,
 			hasFile:   false,
 			content:   "",
-			expected:  "claude",
+			expected:  "",
 		},
 	}
 

@@ -230,6 +230,10 @@ type RegionSink interface {
 	// its own so a pointer can act on the name a leaf is drawn with — renaming
 	// it today, dragging the leaf by it later.
 	Title(node *panelayout.Node, hit Box)
+	// Layout is the leaf's header layout button, in its chrome-aware content
+	// box. The sink derives the exact visible rectangle from the same shared
+	// reserve the renderer used.
+	Layout(node *panelayout.Node, inner Box)
 	// Close is a leaf's header X, in its chrome-aware content box.
 	Close(node *panelayout.Node, inner Box)
 	// Body is anything a leaf's content owns inside its own box — a diff list
@@ -254,6 +258,7 @@ type RegionSink interface {
 //     header, which is the cell a click on the leftmost tab lands on.
 //   - Title text next: it is drawn over the left end of the tab strip's row,
 //     so it has to beat the strip for the cells it covers.
+//   - Layout buttons next: they sit left of close and beat a long title.
 //   - Close buttons next: the X occupies the right edge the strip no longer
 //     claims, and a one-cell miss on a tab must not steal the close. It is
 //     registered after the title so a title that ran the width of a narrow
@@ -280,6 +285,9 @@ func RegisterRegions(sink RegionSink, host Host, layout panelayout.Layout) {
 		if hit, ok := TitleHitBox(host.Content(placement.Node), regionGeometry(host, placement).Inner); ok {
 			sink.Title(placement.Node, hit)
 		}
+	}
+	for _, placement := range layout.Leaves {
+		sink.Layout(placement.Node, regionGeometry(host, placement).Inner)
 	}
 	for _, placement := range layout.Leaves {
 		sink.Close(placement.Node, regionGeometry(host, placement).Inner)

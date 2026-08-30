@@ -3,6 +3,7 @@ package workspace
 import (
 	"github.com/marcus/sidecar/internal/docview"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -52,10 +53,10 @@ func (p *Plugin) Commands() []plugin.Command {
 			plugin.Command{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-doc", Priority: 19},
 			plugin.Command{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-doc", Priority: 20},
 		)
-		return cmds
+		return p.withPaneMoveCommand(cmds, "workspace-doc")
 	}
 	if p.viewMode == ViewModeList && p.noteFocused() {
-		return []plugin.Command{
+		return p.withPaneMoveCommand([]plugin.Command{
 			{ID: "close-tab", Name: "Tab×", Description: "Close active note", Context: "workspace-note", Priority: 1},
 			{ID: "open-pane", Name: "Open", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-note", Priority: 2},
 			{ID: "prev-tab", Name: "Tab←", Description: "Previous note tab", Context: "workspace-note", Priority: 3},
@@ -66,10 +67,10 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-note", Priority: 8},
 			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-note", Priority: 9},
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-note", Priority: 10},
-		}
+		}, "workspace-note")
 	}
 	if p.viewMode == ViewModeList && p.issueFocused() {
-		return []plugin.Command{
+		return p.withPaneMoveCommand([]plugin.Command{
 			{ID: "open-item", Name: "Open", Description: "Open selected parent or subtask", Context: "workspace-issue", Priority: 1},
 			{ID: "open-pane", Name: "Pane", Description: "Open a pane (file, diff, issue, note…)", Context: "workspace-issue", Priority: 2},
 			{ID: "open-in-td", Name: "TD", Description: "Open the selected issue in td", Context: "workspace-issue", Priority: 3},
@@ -82,10 +83,10 @@ func (p *Plugin) Commands() []plugin.Command {
 			{ID: "toggle-sidebar", Name: "Sidebar", Description: "Toggle sidebar visibility", Context: "workspace-issue", Priority: 10},
 			{ID: "next-pane", Name: "Focus", Description: "Focus next pane", Context: "workspace-issue", Priority: 11},
 			{ID: "prev-pane", Name: "Back", Description: "Focus previous pane", Context: "workspace-issue", Priority: 12},
-		}
+		}, "workspace-issue")
 	}
 	if p.viewMode == ViewModeList && p.resourceFocused() {
-		return resourcePaneCommands()
+		return p.withPaneMoveCommand(resourcePaneCommands(), "workspace-resource")
 	}
 	if p.viewMode == ViewModeList && p.diffFocused() {
 		// Priorities leave 2..11 to the viewer's own navigation (see
@@ -108,7 +109,7 @@ func (p *Plugin) Commands() []plugin.Command {
 		if view := p.activeDiffView(); view != nil {
 			cmds = append(cmds, view.Commands("workspace-diff")...)
 		}
-		return cmds
+		return p.withPaneMoveCommand(cmds, "workspace-diff")
 	}
 	switch p.viewMode {
 	case ViewModeInteractive:
@@ -308,7 +309,7 @@ func (p *Plugin) Commands() []plugin.Command {
 					plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-preview", Priority: 16},
 				)
 			}
-			return cmds
+			return p.withPaneMoveCommand(cmds, "workspace-preview")
 		}
 
 		// Filter focus is its own context: while a query is being typed the only
@@ -419,12 +420,15 @@ func (p *Plugin) Commands() []plugin.Command {
 				plugin.Command{ID: "toggle-terminal", Name: termName, Description: "Toggle terminal panel", Context: "workspace-list", Priority: 19},
 			)
 		}
-		return cmds
+		return p.withPaneMoveCommand(cmds, "workspace-list")
 	}
 }
 
 // FocusContext returns the current focus context for keybinding dispatch.
 func (p *Plugin) FocusContext() string {
+	if p.paneLayoutModal != nil {
+		return panereposition.ModalContext
+	}
 	switch p.viewMode {
 	case ViewModeInteractive:
 		return "workspace-interactive"
@@ -514,6 +518,16 @@ func (p *Plugin) FocusContext() string {
 		}
 		return "workspace-list"
 	}
+}
+
+func (p *Plugin) withPaneMoveCommand(cmds []plugin.Command, context string) []plugin.Command {
+	if p.paneLayoutShortcutLeaf() == 0 {
+		return cmds
+	}
+	return append(cmds, plugin.Command{
+		ID: panereposition.CommandMove, Name: "Move", Description: "Reposition this pane",
+		Context: context, Priority: 90,
+	})
 }
 
 // ConsumesTextInput reports whether the workspace plugin is currently in a

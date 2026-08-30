@@ -330,16 +330,18 @@ func RootCommand() *Command {
 			"instance and a current shell (SIDECAR_SHELL / --shell) and do not add a\n" +
 			"workspace row.\n\n" +
 			"--agent records which agent family the shell is for, in the same durable field\n" +
-			"the TUI's Create Shell writes. It does not start the agent — --run does that,\n" +
-			"and the two are separate so a caller that starts the process itself can still\n" +
-			"record the type. The record is what keeps the shell on the Activity board while\n" +
-			"the agent is booting and whenever live screen identification misses a frame, so\n" +
-			"`--agent claude --run claude` is the full spelling of what the TUI's form does.\n" +
-			"Because only a workspace row carries the field, --agent places the shell there:\n" +
-			"it is refused with --split and overrides the beside-the-session default.",
+			"the TUI's Create Shell writes. That record is what keeps the shell on the\n" +
+			"Activity board while the agent is booting and whenever live screen\n" +
+			"identification misses a frame. With the agent_control feature enabled and no\n" +
+			"--run or --type of your own, --agent also starts the provider and returns only\n" +
+			"when it is ready; otherwise it records the family and starts nothing, and --run\n" +
+			"(or `sidecar shell send --run` afterwards) owns the launch. Because only a\n" +
+			"workspace row carries the field, --agent places the shell there: it is refused\n" +
+			"with --split and overrides the beside-the-session default.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
-			{Name: "--agent", Arg: "TYPE", Summary: "Record the agent family (claude, codex, …); --run starts it"},
+			{Name: "--agent", Arg: "TYPE", Summary: "Record the agent family (claude, codex, …), and start it when agent_control is on"},
+			{Name: "--skip-permissions", Summary: "Pass the selected provider's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
@@ -360,6 +362,7 @@ func RootCommand() *Command {
 			{Code: 5, Summary: "a value was rejected: --name, --agent, or an unknown --project / --shell"},
 		},
 		Examples: []Example{
+			{Command: "sidecar create shell --name reviewer --agent codex --json"},
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
 			{Command: "sidecar create shell --agent claude --run claude", Description: "an agent shell the board knows is one"},
 			{Command: "sidecar create shell --split right --run \"python3 -m http.server 8765\""},
@@ -553,7 +556,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 
@@ -567,9 +570,9 @@ func RootCommand() *Command {
 func notifyCommand() *Command {
 	configSetCmd := &Command{
 		Name:    "set",
-		Summary: "Set notification delivery, quiet hours, and custom sounds",
+		Summary: "Set notification delivery, quiet hours, custom sounds, and SSH delivery",
+		Long:    "Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. SSH delivery has two independent switches, both off by default: --ssh-managed-hosts lets this machine deliver notifications forwarded by a registered remote host, and --ssh-terminal picks the outer terminal to notify through when Sidecar itself runs inside an SSH session. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.",
 		Usage:   "sidecar notify config set [options]",
-		Long:    "Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.",
 		Flags: []Flag{
 			{Name: "--native", Arg: "MODE", Summary: "Set system notifications: off, background, or always"},
 			{Name: "--sound", Arg: "MODE", Summary: "Set sounds: off, background, or always"},
@@ -577,6 +580,8 @@ func notifyCommand() *Command {
 			{Name: "--attention-path", Arg: "PATH", Summary: "Set the attention cue file; empty restores built-in"},
 			{Name: "--done-path", Arg: "PATH", Summary: "Set the done cue file; empty restores built-in"},
 			{Name: "--failure-path", Arg: "PATH", Summary: "Set the failure cue file; empty restores built-in"},
+			{Name: "--ssh-managed-hosts", Arg: "on|off", Summary: "Deliver notifications forwarded by registered remote hosts"},
+			{Name: "--ssh-terminal", Arg: "TERMINAL", Summary: "Set off, auto, ghostty, iterm2, wezterm, or kitty"},
 			{Name: "--json", Summary: "Write the resulting notification configuration as JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
@@ -585,8 +590,10 @@ func notifyCommand() *Command {
 			{Command: "sidecar notify config set --native background --sound background"},
 			{Command: "sidecar notify config set --quiet-hours 22:00-08:00 --json"},
 			{Command: "sidecar notify config set --attention-path ~/Sounds/attention.wav"},
+			{Command: "sidecar notify config set --ssh-managed-hosts on --json"},
+			{Command: "sidecar notify config set --ssh-terminal ghostty"},
 		},
-		Agent:   AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] [--quiet-hours RANGE] --json", Summary: "Change external notification settings without restarting Sidecar"},
+		Agent:   AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] [--quiet-hours RANGE] [--ssh-managed-hosts on|off] [--ssh-terminal TERMINAL] --json", Summary: "Change external notification settings without restarting Sidecar"},
 		Mutates: true,
 		Run:     runNotifyConfigSet,
 	}

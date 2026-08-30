@@ -510,6 +510,7 @@ func TestEveryModalKindHasALedgerRow(t *testing.T) {
 		ModalOpenIn:           "open in picker",
 		ModalIssueInput:       "issue lookup with results that overflow",
 		ModalIssuePreview:     "issue preview long card at top",
+		ModalPaneReposition:   "pane reposition body absorbs the wheel",
 		ModalPaneSwitcher:     "pane switcher body absorbs the wheel",
 	}
 	for kind := ModalPalette; kind <= ModalPaneSwitcher; kind++ {

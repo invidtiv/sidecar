@@ -17,6 +17,7 @@ import (
 	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -1386,7 +1387,9 @@ func (p *Plugin) restorePaneLayout(layout *state.PaneLayoutJSON) tea.Cmd {
 	ctx := p.workspaceDeckContext(root, surface)
 	cfg := contentpanes.Config{Renderer: p.markdownRenderer, ResourceResolver: p.resolveResource, ConfigureViewer: p.configureDeckViewer}
 	deck := contentpanes.Decode(ctx, cfg, st)
-	nextID := 0
+	// Deck owns every passive node ID. Host-only Shell leaves and the extra
+	// split nodes needed to carry them start above that namespace.
+	nextID := panelayout.MaxID(deck.Tree())
 	restored := restoreTree(st.Root, deck, &nextID, make(map[PaneKind]bool))
 	if restored == nil || !supportedPaneTree(restored) || firstPaneLeafOfKind(restored, PaneTerminal) == nil {
 		p.resetPaneTreeToTerminal()
@@ -1497,7 +1500,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 
 // docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
 func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
-	return p.composeContentHeader(layoutDocTabStrip(doc, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(docLeafID(doc))).Row, width, doc != nil && p.hoverPaneClose == doc.leafID)
+	return p.composeContentHeader(layoutDocTabStrip(doc, panereposition.ReserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(docLeafID(doc))).Row, width, docLeafID(doc), doc != nil && p.hoverPaneClose == doc.leafID)
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -1530,7 +1533,7 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
-	strip := layoutDocTabStrip(doc, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip := layoutDocTabStrip(doc, panereposition.ReserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+col, box.Y, width, 1, docTabHit{LeafID: leafID, Index: index, Close: close})
 	})
@@ -1545,20 +1548,15 @@ func (p *Plugin) renderDocumentSplit(width, height int) (string, bool) {
 	// not leave last frame's modal regions on screen.
 	p.clearDocSearchRegions()
 	canvasBox := p.previewLayoutBox(width, height)
-	layout, ok := LayoutPaneTree(p.paneRoot, canvasBox, paneTreeFloors(), p.paneFocus)
+	zoom := p.paneZoom.Leaf(p.paneLayoutModalScope(), p.paneRoot)
+	layout, ok := LayoutPaneTreeWithZoom(p.paneRoot, canvasBox, paneTreeFloors(), p.paneFocus, zoom)
 	if !ok {
 		return "", false
 	}
-	// The zoomed leaf is drawn from here only when it is content the preview
-	// owns: a terminal leaf, or a content leaf still holding paneFocus while the
-	// sidebar has the keyboard, is the legacy renderer's box. This is decided
-	// before anything composes, because composing a leaf sizes its content.
-	if layout.Zoomed && !p.previewLeafFocused() {
-		return "", false
-	}
-	// One leaf is still composed, not returned: the clip-and-pad the compositor
-	// guarantees is what makes the leaf's box the leaf's box, and a lone leaf
-	// that keeps its own shape is the one placement nothing holds to it.
+	// A zoomed leaf still composes here, including Primary. Routing Primary
+	// through the legacy fallback drew its header but skipped RegisterRegions,
+	// leaving the visible layout button inert. One shared frame now owns both
+	// the cells and their targets in tiled and zoomed states.
 	view := paneframe.Compose(paneHost{p}, layout, canvasBox, width, height)
 	p.registerPaneTreeRegions(layout)
 	// The frame a pointer is tested against is THIS frame, recorded beside the

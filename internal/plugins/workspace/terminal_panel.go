@@ -6,7 +6,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/termpanes"
 	"github.com/marcus/sidecar/internal/tty"
-	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -284,27 +283,7 @@ func (p *Plugin) renderTermPanelOutput(width, height int) string {
 		closeLeafID = leaf.ID
 	}
 	if p.requireShellTermPane().Buffer == nil {
-		hintFloor := 0
-		if p.interactiveDescribes(true) {
-			hintFloor = p.interactiveHintFloor()
-		}
-		headerWidth := width
-		reserve := ui.HeaderClose{CloseCol: -1}
-		if closeLeafID != 0 {
-			reserve = ui.ReserveHeaderClose(width)
-			if reserve.CloseW > 0 {
-				headerWidth = reserve.TabsWidth
-			}
-		}
-		header := p.terminalHeader(chips, p.termPanelHints(), headerWidth, hintFloor)
-		if reserve.CloseW > 0 {
-			header = ui.ComposeHeaderClose(header, width, p.hoverPaneClose == closeLeafID)
-		}
-		if height <= terminalHeaderRows {
-			return header
-		}
-		empty := p.truncateCache.Truncate(dimText("Starting terminal..."), width, "")
-		return header + "\n" + empty
+		return p.renderCapturedTerminalWithClose(chips, nil, p.termPanelHints(), nil, width, height, true, "Starting terminal...", closeLeafID)
 	}
 	// The terminal panel has no action chips of its own; Diff and Task belong
 	// to the surface's primary header.

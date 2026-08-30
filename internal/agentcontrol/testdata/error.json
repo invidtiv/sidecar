@@ -1,0 +1,16 @@
+{
+  "error": {
+    "code": "agent_replaced",
+    "message": "managed pane was replaced",
+    "target": {
+      "host": "local",
+      "project": "sidecar",
+      "session": "sidecar-sh-sidecar-4",
+      "name": "reviewer",
+      "namespace": "/private/tmp/tmux/default",
+      "paneId": "%7",
+      "panePid": 4242,
+      "serverIncarnation": "present inode=10 ctime=20 pid=30"
+    }
+  }
+}

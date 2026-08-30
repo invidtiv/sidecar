@@ -4,10 +4,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/contentlink"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
-	"github.com/marcus/sidecar/internal/ui"
 )
 
 // resourcePane is one Resource leaf on this surface. What a click does, what
@@ -367,8 +367,8 @@ func layoutResourceTabStrip(res *resourcePane, width int, focused bool) resource
 // resourcePaneHeaderRow is the Resource leaf's header: the tab strip plus the
 // shared X.
 func (p *Plugin) resourcePaneHeaderRow(res *resourcePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutResourceTabStrip(res, ui.ReserveHeaderClose(width).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(resourceLeafID(res))).Row,
-		width, res != nil && p.hoverPaneClose == res.leafID)
+	return p.composeContentHeader(layoutResourceTabStrip(res, panereposition.ReserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(resourceLeafID(res))).Row,
+		width, resourceLeafID(res), res != nil && p.hoverPaneClose == res.leafID)
 }
 
 func (p *Plugin) registerResourcePaneRegions(res *resourcePane, leafID int, box Box) {
@@ -376,7 +376,7 @@ func (p *Plugin) registerResourcePaneRegions(res *resourcePane, leafID int, box 
 }
 
 func (p *Plugin) registerResourceTabRegions(res *resourcePane, leafID int, box Box) {
-	strip := layoutResourceTabStrip(res, ui.ReserveHeaderClose(box.W).TabsWidth, p.paneFocus == leafID)
+	strip := layoutResourceTabStrip(res, panereposition.ReserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		p.mouseHandler.HitMap.AddRect(regionResourceTab, box.X+col, box.Y, width, 1,
 			resourceTabHit{LeafID: leafID, Index: index, Close: close})

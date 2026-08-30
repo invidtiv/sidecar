@@ -236,9 +236,14 @@ func NewService(opts ServiceOptions) *Service {
 func (s *Service) Status(ctx context.Context) Status {
 	status := Status{Remote: remoteSession(s.getenv)}
 	if status.Remote {
-		status.Native = Capability{Reason: RemoteUnavailableReason}
+		// Sound never crosses the SSH boundary, and neither does a desktop
+		// provider. The opt-in direct-terminal transport is the one exception:
+		// it writes to the terminal this process is already attached to.
 		status.Sound = Capability{Reason: RemoteUnavailableReason}
-		return status
+		if !remoteCapableNative(s.native) {
+			status.Native = Capability{Reason: RemoteUnavailableReason}
+			return status
+		}
 	}
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -252,6 +257,9 @@ func (s *Service) Status(ctx context.Context) Status {
 	}()
 	go func() {
 		defer wg.Done()
+		if status.Remote {
+			return // Already answered above, without touching the player.
+		}
 		if s.sound == nil {
 			status.Sound = Capability{Reason: "no sound player"}
 			return
@@ -325,8 +333,14 @@ func (s *Service) Deliver(ctx context.Context, req Request) Result {
 	var nativeCapability, soundCapability Capability
 	var probeWG sync.WaitGroup
 	if remote {
-		runtime.Capabilities.Native = false
+		// Sound never crosses the SSH boundary. Native does only through the
+		// opt-in direct-terminal transport, which declares itself remote-capable
+		// because it writes to the terminal this process is already attached to
+		// rather than a desktop service the remote host does not run.
 		runtime.Capabilities.Sound = false
+	}
+	if remote && !remoteCapableNative(s.native) {
+		runtime.Capabilities.Native = false
 	} else if decision.Native.Deliver && s.native != nil {
 		probeWG.Add(1)
 		go func() {
@@ -337,8 +351,8 @@ func (s *Service) Deliver(ctx context.Context, req Request) Result {
 		runtime.Capabilities.Native = false
 	}
 	if remote {
-		// Both capability facts were resolved above without touching either
-		// provider. Explicit tests bypass focus and quiet hours, not locality.
+		// The sound fact was resolved above without touching the player.
+		// Explicit tests bypass focus and quiet hours, not locality.
 	} else if decision.Sound.Deliver && s.sound != nil {
 		probeWG.Add(1)
 		go func() {
@@ -686,13 +700,26 @@ func (a stateAttention) Foreground(origin notify.Origin) (bool, error) {
 		return false, err
 	}
 	return uirequest.OriginForeground(uirequest.Origin{
-		TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey, WorkDir: origin.WorkDir,
+		TmuxSession: origin.TmuxSession, ProjectKey: origin.ProjectKey,
+		WorkDir: origin.WorkDir, HostID: origin.HostID,
 	}, records), nil
 }
 
 // NewDefault constructs the production adapters without touching the cache,
 // state tree, PATH, or subprocesses. Those are all lazy first-delivery work.
+//
+// The terminal transport writes to standard error. That is right for a CLI
+// process but wrong inside the TUI, where the renderer owns the screen and an
+// escape written from a delivery goroutine can land mid-frame; the TUI passes
+// its own writer to [NewDefaultWithTerminalWriter] instead.
 func NewDefault(stateDir string) Coordinator {
+	return NewDefaultWithTerminalWriter(stateDir, StderrTerminalWriter)
+}
+
+// NewDefaultWithTerminalWriter is [NewDefault] with the direct-terminal
+// transport's writer supplied by the caller, so a host that already owns the
+// terminal can sequence the sequence with its own output.
+func NewDefaultWithTerminalWriter(stateDir string, write func([]byte) (int, error)) Coordinator {
 	runner := ExecRunner{}
 	embedded := NewEmbeddedAssetCache("")
 	cache := NewConfiguredAssetCache(embedded, func() (SoundPaths, error) {
@@ -707,7 +734,21 @@ func NewDefault(stateDir string) Coordinator {
 			Failure:    cfg.Notifications.Sound.FailurePath,
 		}, nil
 	})
-	native := NewPlatformNative(runner)
+	// Locality picks the native provider: the desktop provider locally, the
+	// opt-in direct-terminal transport inside SSH. Reading the terminal choice
+	// per probe rather than here keeps construction I/O-free and lets a
+	// Configuration change apply without a restart.
+	native := NewNativeWithTerminal(NewPlatformNative(runner), NewTerminalNative(TerminalOptions{
+		Getenv: os.Getenv,
+		Selected: func() config.TerminalNotifier {
+			cfg, err := config.Load()
+			if err != nil {
+				return config.TerminalNotifierOff
+			}
+			return cfg.Notifications.SSH.Terminal
+		},
+		Write: write,
+	}), os.Getenv)
 	sound := NewHostSound(stateDir, NewPlatformSound(runner, cache), 75*time.Millisecond, DefaultLease, RealClock{})
 	return NewService(ServiceOptions{
 		Native: native, SoundCoordinator: sound,

@@ -193,6 +193,9 @@ func (p *Plugin) WheelAtBoundary(msg tea.MouseWheelMsg) bool {
 // ViewModeFilePicker stays unknown: it is not one of the modal mouse branches
 // and renders its own overlay over the list regions.
 func (p *Plugin) modalWheelAtBoundary(msg tea.MouseWheelMsg) (bounded, ok bool) {
+	if p.paneLayoutModal != nil {
+		return p.paneLayoutModal.Modal().WheelAtBoundary(msg, p.mouseHandler), true
+	}
 	if p.docInfo != nil {
 		return p.docInfo.WheelAtBoundary(msg, p.mouseHandler), true
 	}
@@ -278,6 +281,9 @@ func (p *Plugin) handleMouse(msg tea.MouseMsg) tea.Cmd {
 	// them or not: the shared key gate reads that clock to tell the bracket of a
 	// split SGR report from a typed one, and the component owns it.
 	p.noteTerminalMouseActivity()
+	if p.paneLayoutModal != nil {
+		return p.handlePaneLayoutModalMouse(msg)
+	}
 
 	// The View surface hit-tests its own regions, so a click inside it cannot
 	// reach the list underneath.
@@ -759,6 +765,7 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 		p.hoverWorkspacesPlusButton = false
 		p.hoverStartAgentButton = false
 		p.hoverPaneClose = 0
+		p.hoverPaneLayout = 0
 		p.hoverTabClose = tabs.CloseHover{}
 		p.hoverDividerRegion = ""
 		p.hoverDividerID = 0
@@ -805,6 +812,11 @@ func (p *Plugin) handleMouseHover(action mouse.MouseAction) tea.Cmd {
 			case regionPaneClose:
 				if leafID, ok := action.Region.Data.(int); ok {
 					p.hoverPaneClose = leafID
+				}
+				p.clearIssueHover()
+			case regionPaneLayout:
+				if leafID, ok := action.Region.Data.(int); ok {
+					p.hoverPaneLayout = leafID
 				}
 				p.clearIssueHover()
 			case regionPaneLeaf:
@@ -892,6 +904,12 @@ func (p *Plugin) handleMouseClick(action mouse.MouseAction) tea.Cmd {
 		paneframe.FocusLeafAt(paneHost{p}, action.X, action.Y)
 	}
 	p.notePressAwayFromTerminal(action)
+	if action.Region.ID == regionPaneLayout {
+		if leafID, ok := action.Region.Data.(int); ok {
+			return p.openPaneLayoutModal(leafID)
+		}
+		return nil
+	}
 	if cmd, ok := p.clickPaneCloseAt(action.X, action.Y); ok {
 		return cmd
 	}

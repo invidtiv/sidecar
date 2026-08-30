@@ -107,6 +107,9 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		// nothing, never to the surface underneath.
 		return m, m.paneSwitcherPaste(msg.Content)
 
+	case ModalPaneReposition:
+		return m, nil
+
 	case ModalIssueInput:
 		var cmd tea.Cmd
 		m.issueInputInput, cmd = m.issueInputInput.Update(msg)
@@ -125,6 +128,12 @@ func (m *Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 			m.issueSearchCursor = -1
 		}
 		return m, cmd
+	}
+	// The global Sessions pane modal is owned by overview rather than the app's
+	// ModalKind stack. Stop paste at that host boundary before any hidden global
+	// filter, terminal, app-content editor, or project plugin can receive it.
+	if m.globalWorkspacesVisible() && m.overview.WorkspacesPaneLayoutModalOpen() {
+		return m, nil
 	}
 
 	if m.globalWorkspacesVisible() && m.overview.CreateOpen() && m.overview.CreatePaste(msg.Content) {
@@ -404,6 +413,8 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleIssueInputMouse(msg)
 		case ModalIssuePreview:
 			return m.handleIssuePreviewMouse(msg)
+		case ModalPaneReposition:
+			return m, (&m).handleAppPaneLayoutMouse(msg)
 		case ModalPaneSwitcher:
 			return m.handlePaneSwitcherMouse(msg)
 		}
@@ -622,6 +633,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case notify.DismissMsg:
 		(&m).dismissNotification(msg.ID)
+		return m, (&m).syncToastReveal(time.Now())
+
+	case notify.DismissTransitionMsg:
+		(&m).dismissTransition(msg.DedupeKey)
 		return m, (&m).syncToastReveal(time.Now())
 
 	case notify.ReadMsg:
@@ -1080,6 +1095,8 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.resetIssueInput()
 			m.updateContext()
 			return m, nil
+		case ModalPaneReposition:
+			return m, m.handleAppPaneLayoutKey(msg)
 		case ModalPaneSwitcher:
 			// The form owns Esc: on the picker step it returns to the kind list
 			// rather than closing, which is the same two-step flow both
@@ -1140,6 +1157,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Handle update modal keys
 	if m.updateModalState != UpdateModalClosed {
 		return m.handleUpdateModalKey(msg)
+	}
+
+	if _, controller := m.activePaneLayoutController(); controller != nil {
+		return m, m.handleAppPaneLayoutKey(msg)
 	}
 
 	// The pane switcher owns the keyboard while it is up, like every other

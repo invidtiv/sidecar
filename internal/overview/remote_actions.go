@@ -447,21 +447,27 @@ func remoteWorkspaceProjectRef(workspace workspaceinventory.Workspace) string {
 // answer entirely to live screen identification, so a remote agent shell was
 // absent from the Activity board while its agent booted and dropped off the
 // board whenever identification missed a frame — where its local twin kept its
-// card because the manifest said so. The `shell send --run` round trip that
-// follows still starts the process: recording the family and launching it are
-// two things, and the host needs both.
+// card because the manifest said so.
+//
+// --run is the other half: the command that starts the process. The two travel
+// together because the host reads them together — a create that names a command
+// records the family and runs exactly that, and never reaches for agent control
+// to start something of its own.
 //
 // agentType arrives empty for a host that did not advertise the flag, which is
 // how an older machine keeps working; submitRemoteCreateShell owns that
 // decision, because it is the only thing here that knows which host is being
 // asked.
-func remoteCreateShellArgs(projectRef, displayName, agentType string) []string {
+func remoteCreateShellArgs(projectRef, displayName, agentType, runCommand string) []string {
 	args := []string{"create", "shell", "--project", projectRef}
 	if displayName != "" {
 		args = append(args, "--name", displayName)
 	}
 	if agentType != "" {
 		args = append(args, "--agent", agentType)
+	}
+	if runCommand != "" {
+		args = append(args, "--run", runCommand)
 	}
 	return append(args, "--json")
 }
@@ -546,15 +552,19 @@ func remoteTargetSession(workspace workspaceinventory.Workspace) string {
 // submitRemoteCreateShell creates a shell on a host and, when the form chose an
 // agent, starts it there.
 //
-// Two round trips rather than one, mirroring exactly what the local path does:
-// createManagedShell, then StartAgentInShell against the session that came
-// back. The host names the session; nothing here predicts it.
+// One round trip where the host understands --agent, two where it does not. The
+// host names the session; nothing here predicts it.
 //
-// agentType goes with the CREATE, and agentCommand with the send. The type is
-// durable state the host writes into its own manifest as the shell appears; the
-// command is this viewer's config-only resolution of how to launch it. Sending
-// only the second is what left a remote agent shell with no durable evidence of
-// its agent — see remoteCreateShellArgs.
+// agentType is durable state the host writes into its own manifest as the shell
+// appears; agentCommand is this viewer's config-only resolution of how to launch
+// it. Sending only the second is what left a remote agent shell with no durable
+// evidence of its agent — see remoteCreateShellArgs.
+//
+// Sending both in the create is also what keeps the launch unambiguous. On a
+// host with agent control enabled, `create shell --agent X` alone starts the
+// provider itself; a `shell send --run` behind it would then be a second launch
+// into a pane that already has one. Naming the command in the create is the
+// caller saying it owns the launch, and the host does exactly that and no more.
 func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentType, agentCommand string) tea.Cmd {
 	registry := m.hostRegistry
 	hostID, project := target.HostID, target.Project
@@ -568,10 +578,15 @@ func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentT
 	// updated yet. Dropping it falls back to exactly the two-step behaviour that
 	// preceded it: the shell is created, and the `shell send --run` below starts
 	// the agent.
-	if !m.hostVerbs(hostID).CreateShellAgent {
+	createRun := ""
+	if m.hostVerbs(hostID).CreateShellAgent {
+		if agentType != "" {
+			createRun, agentCommand = agentCommand, ""
+		}
+	} else {
 		agentType = ""
 	}
-	createArgs := remoteCreateShellArgs(projectRef, displayName, agentType)
+	createArgs := remoteCreateShellArgs(projectRef, displayName, agentType, createRun)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteCreateShellTimeout)
 		defer cancel()

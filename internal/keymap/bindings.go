@@ -467,6 +467,27 @@ func DefaultBindings() []Binding {
 		{Key: "up", Command: "navigate-picker", Context: "pane-switcher"},
 		{Key: "down", Command: "navigate-picker", Context: "pane-switcher"},
 
+		// Pane repositioning is available only from a pane leaf in the two
+		// Workspaces projections. Plugin browse, input, search, editor, and live
+		// terminal contexts are intentionally absent. Plugin content decks share
+		// some workspace-* context names, but do not implement the mode until M3.
+		{Key: "M", Command: "move-pane", Context: "workspace-preview", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-list", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-doc", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-issue", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-note", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-diff", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "workspace-resource", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-doc", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-issue", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-note", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-diff", Feature: "pane_move"},
+		{Key: "M", Command: "move-pane", Context: "global-workspaces-resource", Feature: "pane_move"},
+
+		// While the transient mode is live it owns every directional key and all
+		// three explicit ways out. The surfaces swallow every other key too.
+
 		// Focused project Workspaces Diff leaf. q hides; not a root context.
 		{Key: "n", Command: "open-pane", Context: "workspace-diff"},
 		{Key: "q", Command: "close", Context: "workspace-diff"},

@@ -2,6 +2,109 @@
 
 Sidecar provides non-interactive commands for scripting and agent workflows.
 
+## `sidecar agent`
+
+Inspect and start agents in Sidecar-managed shells
+
+Provider-aware control over shells Sidecar owns. The feature is discoverable while disabled; enable agent_control to run it.
+
+```
+Usage: sidecar agent <command>
+```
+
+### `sidecar agent get`
+
+Get one managed agent
+
+TARGET is a managed tmux session name or unique display name. Inside a managed shell it may be omitted.
+
+```
+Usage: sidecar agent get [TARGET] [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent get reviewer --json
+```
+
+### `sidecar agent list`
+
+List live managed agents
+
+```
+Usage: sidecar agent list [--project NAME] [--json]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent list --json
+```
+
+### `sidecar agent start`
+
+Start a provider in an idle managed shell and wait for readiness
+
+Refuses commands, editors, copy mode, agents, ambiguous panes, and replacement processes. Provider arguments remain structured until the final shell boundary.
+
+```
+Usage: sidecar agent start [TARGET] --kind KIND [--timeout DURATION] [-- AGENT_ARG ...]
+```
+
+**Options:**
+
+- `--project NAME`: Target project (slug, basename, or path)
+- `--shell NAME`: Resolve the project from a registered shell
+- `--json`: Write stable structured JSON
+- `-h, --help`: Show this help
+- `--kind KIND`: Catalog provider kind (required)
+- `--timeout DURATION`: Bound the readiness wait (default 30s)
+
+**Exit codes:**
+
+- `0`: success
+- `1`: transport, timeout, or internal failure
+- `2`: usage error or version skew
+- `3`: target is not registered
+- `5`: feature disabled or semantic/value refusal
+
+**Examples:**
+
+```bash
+sidecar agent start reviewer --kind codex --timeout 30s
+```
+
 ## `sidecar agents`
 
 List what an agent can do from Sidecar
@@ -51,13 +154,14 @@ instance and a current shell (SIDECAR_SHELL / --shell) and do not add a
 workspace row.
 
 --agent records which agent family the shell is for, in the same durable field
-the TUI's Create Shell writes. It does not start the agent — --run does that,
-and the two are separate so a caller that starts the process itself can still
-record the type. The record is what keeps the shell on the Activity board while
-the agent is booting and whenever live screen identification misses a frame, so
-`--agent claude --run claude` is the full spelling of what the TUI's form does.
-Because only a workspace row carries the field, --agent places the shell there:
-it is refused with --split and overrides the beside-the-session default.
+the TUI's Create Shell writes. That record is what keeps the shell on the
+Activity board while the agent is booting and whenever live screen
+identification misses a frame. With the agent_control feature enabled and no
+--run or --type of your own, --agent also starts the provider and returns only
+when it is ready; otherwise it records the family and starts nothing, and --run
+(or `sidecar shell send --run` afterwards) owns the launch. Because only a
+workspace row carries the field, --agent places the shell there: it is refused
+with --split and overrides the beside-the-session default.
 
 ```
 Usage: sidecar create shell [options]
@@ -66,7 +170,8 @@ Usage: sidecar create shell [options]
 **Options:**
 
 - `--name NAME`: Display name (default: the next Shell N)
-- `--agent TYPE`: Record the agent family (claude, codex, …); --run starts it
+- `--agent TYPE`: Record the agent family (claude, codex, …), and start it when agent_control is on
+- `--skip-permissions`: Pass the selected provider's auto-approve flag
 - `--run COMMAND`: Execute COMMAND in the new shell
 - `--type COMMAND`: Type COMMAND without pressing Enter
 - `--shell NAME`: Resolve the project from a registered shell
@@ -89,6 +194,7 @@ Usage: sidecar create shell [options]
 **Examples:**
 
 ```bash
+sidecar create shell --name reviewer --agent codex --json
 sidecar create shell --name "dev server" --run "python3 -m http.server"
 # an agent shell the board knows is one
 sidecar create shell --agent claude --run claude
@@ -636,9 +742,9 @@ Usage: sidecar notify config [--json]
 
 #### `sidecar notify config set`
 
-Set notification delivery, quiet hours, and custom sounds
+Set notification delivery, quiet hours, custom sounds, and SSH delivery
 
-Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.
+Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. SSH delivery has two independent switches, both off by default: --ssh-managed-hosts lets this machine deliver notifications forwarded by a registered remote host, and --ssh-terminal picks the outer terminal to notify through when Sidecar itself runs inside an SSH session. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.
 
 ```
 Usage: sidecar notify config set [options]
@@ -652,6 +758,8 @@ Usage: sidecar notify config set [options]
 - `--attention-path PATH`: Set the attention cue file; empty restores built-in
 - `--done-path PATH`: Set the done cue file; empty restores built-in
 - `--failure-path PATH`: Set the failure cue file; empty restores built-in
+- `--ssh-managed-hosts on|off`: Deliver notifications forwarded by registered remote hosts
+- `--ssh-terminal TERMINAL`: Set off, auto, ghostty, iterm2, wezterm, or kitty
 - `--json`: Write the resulting notification configuration as JSON
 - `-h, --help`: Show this help
 
@@ -667,6 +775,8 @@ Usage: sidecar notify config set [options]
 sidecar notify config set --native background --sound background
 sidecar notify config set --quiet-hours 22:00-08:00 --json
 sidecar notify config set --attention-path ~/Sounds/attention.wav
+sidecar notify config set --ssh-managed-hosts on --json
+sidecar notify config set --ssh-terminal ghostty
 ```
 
 ### `sidecar notify dismiss`

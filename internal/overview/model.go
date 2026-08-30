@@ -29,6 +29,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/resourceview"
 	"github.com/marcus/sidecar/internal/shellliveness"
@@ -347,8 +348,11 @@ type Model struct {
 	pendingOpenPlan *panelayout.OpenPlan
 
 	// previewCloseHover is set while the pointer is over a content-pane X.
-	previewCloseHover bool
-	hoverPreviewClose panelayout.Kind
+	previewCloseHover  bool
+	hoverPreviewClose  panelayout.Kind
+	hoverPreviewLayout int
+	paneLayoutModal    *panereposition.Controller
+	paneZoom           panereposition.Zoom
 	// hoverTabClose is the per-tab × under the pointer, keyed by preview kind.
 	hoverTabClose tabs.CloseHover
 	// hoverHandleRegion / hoverHandleSplit are the resizable split under the pointer.

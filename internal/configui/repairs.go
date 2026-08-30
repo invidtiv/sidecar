@@ -80,6 +80,8 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		m.buildNotificationStatus(b)
 	case ChildNotificationSourceRule:
 		m.buildNotificationSourceRule(b)
+	case ChildNotificationSSH:
+		m.buildNotificationSSH(b)
 	default:
 		b.lead("This focused route arrives in a later phase.")
 	}

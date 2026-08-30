@@ -256,7 +256,10 @@ func (m *Model) handleHostUpdate(msg hostUpdateMsg) tea.Cmd {
 	}
 
 	m.syncBoard()
-	return m.waitForHostUpdate()
+	// Notifications are forwarded after the rows they belong to have been
+	// applied, so a toast about a remote agent can never arrive before the
+	// workspace it names exists in the browser.
+	return tea.Batch(m.forwardHostNotifications(update), m.waitForHostUpdate())
 }
 
 // handleHostStaleTick ages quiet hosts and reschedules itself.

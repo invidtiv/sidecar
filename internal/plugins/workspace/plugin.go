@@ -23,6 +23,7 @@ import (
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/notify"
 	"github.com/marcus/sidecar/internal/panelayout"
+	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/plugin"
 	"github.com/marcus/sidecar/internal/plugins/gitstatus"
@@ -159,6 +160,7 @@ const (
 	regionResourceTab        = "resource-tab"
 	regionDiffTargetTab      = "diff-target-tab"
 	regionPaneClose          = "pane-close"
+	regionPaneLayout         = "pane-layout"
 	// regionPaneTitle is a leaf's header name, which is a click target so a
 	// pane with no sidebar row of its own can still be renamed.
 	regionPaneTitle       = "pane-title"
@@ -245,6 +247,8 @@ type Plugin struct {
 	paneFocus       int
 	paneNextID      int
 	paneDragSplitID int
+	paneLayoutModal *panereposition.Controller
+	paneZoom        panereposition.Zoom
 	paneRestoreCmd  tea.Cmd
 	// paneLayoutSurface is the surface the live tree currently represents.
 	// Empty until a restore or save binds it, so an init terminal is not
@@ -590,7 +594,8 @@ type Plugin struct {
 	hoverStartAgentButton     bool
 	startAgentBtn             startAgentButtonHit
 	// hoverPaneClose is the content leaf whose header X is under the pointer.
-	hoverPaneClose int
+	hoverPaneClose  int
+	hoverPaneLayout int
 	// hoverTabClose is the per-tab × under the pointer. It is the pane X's
 	// smaller twin: same hover paint, addressed by leaf and tab index.
 	hoverTabClose tabs.CloseHover

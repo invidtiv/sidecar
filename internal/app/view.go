@@ -281,6 +281,8 @@ func (m Model) viewContent() string {
 		return m.renderIssueInputOverlay(bg)
 	case ModalIssuePreview:
 		return m.renderIssuePreviewOverlay(bg)
+	case ModalPaneReposition:
+		return m.renderAppPaneLayoutOverlay(bg)
 	case ModalPaneSwitcher:
 		return (&m).renderPaneSwitcherOverlay(bg)
 	}

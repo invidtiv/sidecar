@@ -103,6 +103,15 @@ var (
 		Description: "Open passive content panes beside eligible project plugins",
 	}
 
+	// PaneMove enables the transient keyboard mode for repositioning panes.
+	// It stays off until the complete keyboard, modal, and agent journeys have
+	// been proven together.
+	PaneMove = Feature{
+		Name:        "pane_move",
+		Default:     false,
+		Description: "Reposition panes with a keyboard move mode",
+	}
+
 	// WorkspaceDocPanesDisabledDiff is the toast/no-op copy when Diff is
 	// requested while the pane tree is off.
 	WorkspaceDocPanesDisabledDiff = "Document panes are disabled; Diff needs the workspace pane tree"
@@ -138,6 +147,15 @@ var (
 		Default:     false,
 		Description: "Use Sidecar sessions on other machines over SSH",
 	}
+
+	// AgentControl gates provider-aware agent list/get/start while the start,
+	// prompt, and restore journey is being completed. Help and command metadata
+	// remain visible when disabled so an agent can discover the capability.
+	AgentControl = Feature{
+		Name:        "agent_control",
+		Default:     false,
+		Description: "Control Sidecar-managed agents through provider-aware commands",
+	}
 )
 
 // allFeatures is the registry of all known features.
@@ -151,10 +169,12 @@ var allFeatures = []Feature{
 	ConversationsPlugin,
 	WorkspaceDocPanes,
 	PluginContentPanes,
+	PaneMove,
 	WorkspaceTerminalPanel,
 	CrossProjectOverview,
 	TerminalResourceProviders,
 	SidecarRemoteHosts,
+	AgentControl,
 }
 
 // defaultValues provides O(1) lookup for feature defaults.

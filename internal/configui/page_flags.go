@@ -5,15 +5,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/features"
+	"github.com/marcus/sidecar/internal/mouse"
 )
 
 const regionFlag = "config-flag-"
 
 // Feature Flags is the whole flag registry, one switch per flag, in the shape
 // Panels & Integrations uses for surfaces. It is a page of its own rather than
-// a section on Advanced because the Configuration detail pane does not scroll —
-// clampLines truncates — so a list that grows with the registry cannot share a
-// page with anything a user still needs to reach.
+// a section on Advanced because the registry grows independently of configui;
+// the page scrolls its detail pane to keep the focused flag visible.
 //
 // The list is derived from internal/features rather than curated here. A
 // hand-picked list is how tmux_interactive_input, tmux_inline_edit,
@@ -31,45 +31,53 @@ func (m *Model) buildFlags(b *paneBuilder) {
 		b.note(m.restartNote)
 	}
 	// One blank between the title and the first row, not two. PaneTitle already
-	// emits its own trailing blank, and at 31 rows — an ordinary terminal — the
-	// second one costs the last flag in the list.
-	//
-	// This page is AT CAPACITY. It fits thirteen flags at 120x31 and no more,
-	// because the pane truncates rather than scrolling and the row cursor still
-	// walks onto rows that were cut. The next flag added to internal/features
-	// will fail TestFlagsPageFitsAnOrdinaryTerminal, and the fix at that point
-	// is to make this pane scroll — there is no spacing left to reclaim.
+	// emits its own trailing blank, leaving more of the scrolling window for
+	// actual settings on an ordinary terminal.
 	//
 	// Flags another page owns sort last, so the switches that work here are not
 	// interleaved with rows that only point elsewhere.
-	items := previews()
-	owned := make([]preview, 0, len(items))
-	switches := make([]preview, 0, len(items))
-	for _, item := range items {
+	items := flagPagePreviews()
+	ownedAt := len(items)
+	for i, item := range items {
 		if item.owner != "" {
-			owned = append(owned, item)
-			continue
+			ownedAt = i
+			break
 		}
-		switches = append(switches, item)
 	}
 
-	// No blank line between rows: the list has to stay shorter than the pane at
-	// ordinary terminal heights, because the pane truncates and the row cursor
-	// walks onto rows that were cut. Each row is one line and the focused one
-	// explains itself.
-	for _, item := range switches {
+	// No blank line between rows: the scrolling window should spend its height
+	// on settings. Each row carries its explanation directly beneath its name.
+	for _, item := range items[:ownedAt] {
 		m.previewRow(b, item)
 	}
 
-	if len(owned) > 0 {
+	if ownedAt < len(items) {
 		// SectionHeader's own leading blank is dropped here, for the same
 		// reason as above: the header text separates the groups on its own,
 		// and the blank costs a row this page does not have.
 		b.text(strings.TrimPrefix(SectionHeader("Set on other pages"), "\n"))
-		for _, item := range owned {
+		for _, item := range items[ownedAt:] {
 			m.previewRow(b, item)
 		}
 	}
+}
+
+// flagPagePreviews is the page's cursor order. Flags owned by another settings
+// page remain at the end as one read-only group.
+func flagPagePreviews() []preview {
+	items := previews()
+	ordered := make([]preview, 0, len(items))
+	for _, item := range items {
+		if item.owner == "" {
+			ordered = append(ordered, item)
+		}
+	}
+	for _, item := range items {
+		if item.owner != "" {
+			ordered = append(ordered, item)
+		}
+	}
+	return ordered
 }
 
 // preview is one feature flag offered on Feature Flags.
@@ -170,6 +178,10 @@ var previewCopy = map[string]preview{
 		label: "Plugin content panes",
 		help:  "Open a content pane beside Files, Git, Notes, and issue views.",
 	},
+	features.PaneMove.Name: {
+		label: "Move panes",
+		help:  "Reposition an open pane with the keyboard or its header control.",
+	},
 	features.TerminalResourceProviders.Name: {
 		label:   "Terminal resource providers",
 		help:    "Turn terminal text into openable links via external providers.",
@@ -206,6 +218,75 @@ var previewCopy = map[string]preview{
 		ownerControl: regionPanel + panelIDConversations,
 		reads:        (*Model).conversationsOn,
 	},
+}
+
+// scrollFlagsPage keeps the focused flag inside the detail pane while retaining
+// every registered control in keyboard order. The page is the one general
+// settings list whose length is intentionally registry-driven; applying the
+// window here avoids changing the geometry of unrelated configuration pages.
+//
+// Regions are built against the full list, then clipped and translated with the
+// same offset as the painted lines. A hidden row therefore cannot leave a live
+// mouse target behind, and the row that becomes visible is clickable in the
+// cell where it is actually drawn.
+func (m *Model) scrollFlagsPage(lines []string, height int) []string {
+	if height <= 0 {
+		m.flagsScroll = 0
+		return nil
+	}
+	maxScroll := max(0, len(lines)-height)
+	if !m.detailOwnsKeys() {
+		m.flagsScroll = 0
+	}
+	m.flagsScroll = min(max(0, m.flagsScroll), maxScroll)
+
+	if index := m.cursorControl(); index >= 0 && index < len(m.controls) {
+		focusedID := m.controls[index].id
+		for _, region := range m.mouse.HitMap.Regions() {
+			if region.ID != focusedID {
+				continue
+			}
+			top := region.Rect.Y - 1
+			bottom := top + region.Rect.H
+			if top < m.flagsScroll {
+				m.flagsScroll = top
+			} else if bottom > m.flagsScroll+height {
+				m.flagsScroll = bottom - height
+			}
+			m.flagsScroll = min(max(0, m.flagsScroll), maxScroll)
+			break
+		}
+	}
+
+	start := m.flagsScroll
+	end := min(len(lines), start+height)
+	m.translateFlagRegions(start, end)
+	return lines[start:end]
+}
+
+func (m *Model) translateFlagRegions(start, end int) {
+	regions := m.mouse.HitMap.Regions()
+	m.mouse.HitMap.Clear()
+	for _, region := range regions {
+		if !strings.HasPrefix(region.ID, regionFlag) {
+			m.mouse.HitMap.Add(region.ID, region.Rect, region.Data)
+			continue
+		}
+		top := region.Rect.Y - 1
+		bottom := top + region.Rect.H
+		visibleTop := max(top, start)
+		visibleBottom := min(bottom, end)
+		if visibleTop >= visibleBottom {
+			continue
+		}
+		rect := mouse.Rect{
+			X: region.Rect.X,
+			Y: 1 + visibleTop - start,
+			W: region.Rect.W,
+			H: visibleBottom - visibleTop,
+		}
+		m.mouse.HitMap.Add(region.ID, rect, region.Data)
+	}
 }
 
 // previews is every registered feature flag, in registry order, each carrying

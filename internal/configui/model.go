@@ -57,6 +57,10 @@ type Model struct {
 	controls    []control
 	rowCursor   int
 	detailFocus bool
+	// flagsScroll is the first painted line in Feature Flags. That registry can
+	// grow independently of configui, so the page follows its focused control
+	// instead of letting clampLines hide reachable rows below the pane.
+	flagsScroll int
 	// saved is the parent selection each open child route will return to.
 	saved []savedFocus
 
@@ -1222,6 +1226,9 @@ func (m *Model) buildDetail(originX, inner, paneHeight int) ([]string, bool) {
 		m.focusRenderedControl(id)
 	}
 	m.clampRowCursor()
+	if route.Page == PageFlags && !route.IsChild() && m.confirm == nil {
+		lines = m.scrollFlagsPage(lines, builder.height)
+	}
 	return lines, m.rowCursor == painted
 }
 

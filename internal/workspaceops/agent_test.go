@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -129,6 +130,30 @@ func TestResolveAgentCommandUsesConfiguredOverrideAndSkipFlag(t *testing.T) {
 	}
 }
 
+func TestResolveAgentLaunchArgvKeepsCatalogStructuredAndOverridesOpaque(t *testing.T) {
+	argv, opaque, err := ResolveAgentLaunchArgv(t.TempDir(), "codex", nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"codex", "--dangerously-bypass-approvals-and-sandbox"}
+	if opaque || !reflect.DeepEqual(argv, want) {
+		t.Fatalf("catalog launch = %#v opaque=%v, want %#v false", argv, opaque, want)
+	}
+
+	argv, opaque, err = ResolveAgentLaunchArgv(t.TempDir(), "codex", map[string]string{"codex": "codex-custom --profile fast"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{"sh", "-lc", "codex-custom --profile fast --dangerously-bypass-approvals-and-sandbox"}
+	if !opaque || !reflect.DeepEqual(argv, want) {
+		t.Fatalf("override launch = %#v opaque=%v, want %#v true", argv, opaque, want)
+	}
+
+	if _, _, err := ResolveAgentLaunchArgv(t.TempDir(), "not-real", nil, false); err == nil {
+		t.Fatal("unknown provider received a launch")
+	}
+}
+
 func TestAgentSkipFlag(t *testing.T) {
 	if got := AgentSkipFlag("codex"); got != "--dangerously-bypass-approvals-and-sandbox" {
 		t.Fatalf("codex skip flag = %q", got)
@@ -138,6 +163,9 @@ func TestAgentSkipFlag(t *testing.T) {
 	}
 	if got := AgentSkipFlag("opencode"); got != "--auto" {
 		t.Fatalf("opencode skip flag = %q, want --auto", got)
+	}
+	if got := AgentSkipFlag("aider"); got != "--yes" {
+		t.Fatalf("legacy aider skip flag = %q, want --yes", got)
 	}
 	if got := AgentSkipFlag("copilot"); got != "" {
 		t.Fatalf("copilot skip flag = %q, want empty", got)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
@@ -68,10 +69,10 @@ func (s *remoteRunnerStub) argv(t *testing.T, index int) []string {
 func localSeamGuard(t *testing.T) {
 	t.Helper()
 	create, resolve, execute, branches := createManagedShell, resolveGlobalWorktree, executeGlobalWorktree, listCreateBranches
-	agent := startGlobalShellAgent
+	agent := startGlobalAgent
 	t.Cleanup(func() {
 		createManagedShell, resolveGlobalWorktree, executeGlobalWorktree, listCreateBranches = create, resolve, execute, branches
-		startGlobalShellAgent = agent
+		startGlobalAgent = agent
 	})
 	createManagedShell = func(workspaceops.ManagedShellSpec) (workspaceops.ShellResult, error) {
 		t.Error("a remote action ran the LOCAL createManagedShell")
@@ -89,9 +90,9 @@ func localSeamGuard(t *testing.T) {
 		t.Error("a remote action listed branches from a LOCAL git repository")
 		return nil, nil
 	}
-	startGlobalShellAgent = func(context.Context, string, string) error {
+	startGlobalAgent = func(context.Context, agentcontrol.StartRequest) (agentcontrol.Agent, error) {
 		t.Error("a remote action sent keys to a LOCAL tmux session")
-		return nil
+		return agentcontrol.Agent{}, nil
 	}
 }
 
@@ -241,12 +242,18 @@ func TestRemoteCreateShellSendsATypedNameOnly(t *testing.T) {
 	}
 }
 
-// TestRemoteCreateShellStartsTheAgentOnTheHost mirrors the local two-step:
-// create the shell, then start the agent in the session that came back.
+// TestRemoteCreateShellStartsTheAgentOnTheHost. The create carries both halves
+// of "this is a Claude shell": the family the host records, and the command that
+// starts it.
+//
+// One invocation, not two. A host that advertises the flag reads them together
+// — it records the family and runs exactly the command it was given — so there
+// is no window in which agent control could start a second provider in the same
+// pane behind a `shell send --run`.
 func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 	m, stub := remoteCreateModel(t)
 	localSeamGuard(t)
-	stub.results = []any{map[string]any{"shell": map[string]any{"session": "api-claude-2"}}, nil}
+	stub.results = []any{map[string]any{"shell": map[string]any{"session": "api-claude-2"}}}
 
 	run(t, m, m.OpenCreateShell(remoteProjectKey()))
 	selectCreateAgent(t, m, "claude")
@@ -259,8 +266,8 @@ func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 		t.Fatalf("remote create failed: %v", msg.Err)
 	}
 
-	if len(stub.calls) != 2 {
-		t.Fatalf("invocations = %v, want create then send", stub.calls)
+	if len(stub.calls) != 1 {
+		t.Fatalf("invocations = %v, want the create alone", stub.calls)
 	}
 	// The CREATE carries the agent family, so the host writes it into its own
 	// shells.json as the shell appears. Without it a remote agent shell's only
@@ -268,21 +275,17 @@ func TestRemoteCreateShellStartsTheAgentOnTheHost(t *testing.T) {
 	// the Activity board while the agent booted and dropped off whenever
 	// identification missed a frame, where a local shell kept its card because
 	// the manifest said so.
-	want := []string{"create", "shell", "--project", "/home/me/api", "--agent", "claude", "--json"}
-	if got := stub.argv(t, 0); !equalArgs(got, want) {
-		t.Fatalf("create argv = %v, want %v", got, want)
-	}
-	send := stub.argv(t, 1)
-	for i, want := range []string{"shell", "send", "--target", "api-claude-2", "--project", "/home/me/api", "--run"} {
-		if i >= len(send) || send[i] != want {
-			t.Fatalf("send argv = %v, want %v at %d", send, want, i)
+	create := stub.argv(t, 0)
+	for i, want := range []string{"create", "shell", "--project", "/home/me/api", "--agent", "claude", "--run"} {
+		if i >= len(create) || create[i] != want {
+			t.Fatalf("create argv = %v, want %v at %d", create, want, i)
 		}
 	}
-	if !strings.HasPrefix(send[7], "claude") {
-		t.Errorf("agent command = %q, want the resolved claude command", send[7])
+	if !strings.HasPrefix(create[7], "claude") {
+		t.Errorf("agent command = %q, want the resolved claude command", create[7])
 	}
-	if send[len(send)-1] != "--json" {
-		t.Errorf("send argv did not ask for JSON: %v", send)
+	if create[len(create)-1] != "--json" {
+		t.Errorf("create argv did not ask for JSON: %v", create)
 	}
 }
 

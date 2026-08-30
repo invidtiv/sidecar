@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marcus/sidecar/internal/agentcatalog"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -105,6 +107,15 @@ func runCreateWorktree(env Env, args []string) int {
 		cliErrf(env.Stderr, "--no-launch cannot be combined with --agent or --run\n\n%s", help)
 		return 2
 	}
+	if agent != "" && runCmd != "" {
+		cliErrf(env.Stderr, "--agent and --run are separate launch modes and cannot be combined\n\n%s", help)
+		return 2
+	}
+	if agent != "" {
+		if _, ok := agentcatalog.Find(agent); !ok {
+			return emitAgentError(env, flags.jsonOutput, &agentcontrol.Error{Code: agentcontrol.ErrNotReady, Message: fmt.Sprintf("unknown agent kind %q", agent)})
+		}
+	}
 	// --plan resolves and prints; it never reaches a session, so the flags that
 	// only describe one are refused rather than silently ignored. --agent and
 	// --skip-permissions are kept: they are plan fields the confirming caller
@@ -180,6 +191,11 @@ func runCreateWorktree(env Env, args []string) int {
 	if planOnly {
 		return emitWorktreePlan(env, flags.jsonOutput, plan)
 	}
+	if agent != "" {
+		if code := requireAgentControl(env, flags.jsonOutput); code >= 0 {
+			return code
+		}
+	}
 	plan.OperationID = fmt.Sprintf("cli-%d", time.Now().UnixNano())
 
 	record, err := workspaceops.ExecuteWorktree(ctx, plan.RepoKey, plan)
@@ -209,15 +225,9 @@ func runCreateWorktree(env Env, args []string) int {
 	session := workspaceops.WorktreeSessionName(record.Path, record.Name)
 	var launchErr error
 	if !noLaunch && len(requiredFailed) == 0 {
-		configured := map[string]string(nil)
-		if cfg != nil {
-			configured = cfg.Plugins.Workspace.AgentStart
-		}
-		startAgent := agent != "" || runCmd != ""
+		startAgent := runCmd != ""
 		command := ""
-		if agent != "" {
-			command = workspaceops.ResolveAgentCommand(record.Path, agent, configured, skipPerms)
-		} else if runCmd != "" {
+		if runCmd != "" {
 			command = runCmd
 		}
 		_, launchErr = workspaceops.LaunchWorktreeSession(ctx, workspaceops.AgentLaunchSpec{
@@ -227,8 +237,8 @@ func runCreateWorktree(env Env, args []string) int {
 			Env:          workspaceops.BuildEnvOverrides(plan.MainWorktree),
 			StartAgent:   startAgent,
 		})
-		if launchErr == nil && agent != "" && runCmd != "" {
-			launchErr = workspaceops.StartAgentInShell(ctx, session, runCmd)
+		if launchErr == nil && agent != "" {
+			_, launchErr = startCreatedAgent(ctx, proj, session, record.Name, record.Path, agent, skipPerms)
 		}
 	}
 

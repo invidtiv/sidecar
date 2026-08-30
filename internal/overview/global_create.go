@@ -7,6 +7,8 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/agentcatalog"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/hosts"
@@ -39,11 +41,18 @@ var (
 	removeGlobalJournal   = workspaceops.RemovePendingCreation
 	deleteGlobalWorktree  = workspaceops.DeleteCreatedWorktree
 	launchGlobalSession   = workspaceops.LaunchWorktreeSession
-	startGlobalShellAgent = workspaceops.StartAgentInShell
+	waitGlobalShellReady  = func(ctx context.Context, target agentcontrol.Target, timeout time.Duration) (agentcontrol.Snapshot, error) {
+		return (agentcontrol.Service{Terminal: agentcontrol.NewLocalTerminal()}).WaitShellReady(ctx, target, timeout)
+	}
+	startGlobalAgent = func(ctx context.Context, req agentcontrol.StartRequest) (agentcontrol.Agent, error) {
+		return (agentcontrol.Service{Terminal: agentcontrol.NewLocalTerminal()}).Start(ctx, req)
+	}
 	listCreateBranches    = workspaceops.ListLocalBranches
 	currentCreateBranch   = workspaceops.CurrentBranch
 	resolveGlobalAgentCmd = workspaceops.ResolveAgentCommand
 )
+
+const globalAgentStartTimeout = 30 * time.Second
 
 // remoteReply is the fence a host's answer carries back.
 //
@@ -843,18 +852,41 @@ func (m *Model) launchCreatedWorktree(project Project, plan *workspaceops.Worktr
 	}
 	startAgent := plan.AgentType != ""
 	command := ""
+	var launchArgv []string
+	var launchErr error
 	if startAgent {
 		command = resolveGlobalAgentCmd(record.Path, plan.AgentType, configured, plan.SkipPerms)
+		launchArgv, launchErr = globalAgentLaunchArgv(plan.AgentType, plan.SkipPerms, command, nil)
 	}
 	spec := workspaceops.AgentLaunchSpec{
 		SessionName: workspaceops.WorktreeSessionName(record.Path, record.Name), WorkDir: record.Path,
-		AgentCommand: command, TaskID: plan.TaskID, Env: workspaceops.BuildEnvOverrides(plan.MainWorktree),
-		StartAgent: startAgent,
+		TaskID: plan.TaskID, Env: workspaceops.BuildEnvOverrides(plan.MainWorktree), StartAgent: false,
 	}
 	m.createBusy = true
 	m.createModal = nil
 	return func() tea.Msg {
+		if launchErr != nil {
+			return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Err: launchErr}
+		}
 		result, err := launchGlobalSession(context.Background(), spec)
+		if err == nil && startAgent {
+			target := agentcontrol.Target{Host: "local", Project: projectKey(project), Session: spec.SessionName, Name: record.Name}
+			if !result.Reconnected {
+				_, err = waitGlobalShellReady(context.Background(), target, globalAgentStartTimeout)
+			}
+			if err != nil {
+				return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: fmt.Errorf("prepare agent shell: %w", err)}
+			}
+			started, startErr := startGlobalAgent(context.Background(), agentcontrol.StartRequest{
+				Target: target,
+				Kind:   plan.AgentType, Argv: launchArgv, Timeout: globalAgentStartTimeout,
+			})
+			if startErr != nil {
+				err = fmt.Errorf("start agent: %w", startErr)
+			} else if started.Target.PaneID != "" {
+				result.PaneID = started.Target.PaneID
+			}
+		}
 		return globalWorkspaceLaunchedMsg{Project: project, Plan: plan, Record: record, Result: result, Err: err}
 	}
 }
@@ -944,10 +976,60 @@ func (m *Model) submitCreateShell() tea.Cmd {
 			}
 			command := resolveGlobalAgentCmd(project.Path, agent, configured, skip)
 			command = withGlobalShellNaming(command, agent)
-			err = startGlobalShellAgent(context.Background(), session, command)
+			extra := globalShellNamingArgv(agent)
+			var launchArgv []string
+			launchArgv, err = globalAgentLaunchArgv(agent, skip, command, extra)
+			if err == nil {
+				target := agentcontrol.Target{Host: "local", Project: projectKey(project), Session: session, Name: display}
+				_, err = waitGlobalShellReady(context.Background(), target, globalAgentStartTimeout)
+				if err != nil {
+					return globalShellCreatedMsg{Project: project, Tmux: session, Err: fmt.Errorf("prepare agent shell: %w", err)}
+				}
+				_, err = startGlobalAgent(context.Background(), agentcontrol.StartRequest{
+					Target: target,
+					Kind:   agent, Argv: launchArgv, Timeout: globalAgentStartTimeout,
+				})
+			}
 		}
 		return globalShellCreatedMsg{Project: project, Tmux: session, Err: err}
 	}
+}
+
+func globalAgentLaunchArgv(agent string, skip bool, resolvedCommand string, extra []string) ([]string, error) {
+	base, err := agentcatalog.BuildLaunch(agent, nil, skip)
+	if err != nil {
+		return nil, fmt.Errorf("build agent launch: %w", err)
+	}
+	structured, err := agentcatalog.BuildLaunch(agent, extra, skip)
+	if err != nil {
+		return nil, fmt.Errorf("build agent launch: %w", err)
+	}
+	defaultCommand := strings.Join(base, " ")
+	if len(extra) > 0 {
+		defaultCommand = withGlobalShellNaming(defaultCommand, agent)
+	}
+	if strings.TrimSpace(resolvedCommand) == defaultCommand {
+		return structured, nil
+	}
+	// User configuration and .sidecar-agent-start are opaque shell snippets.
+	// The wrapper preserves their behavior while agentcontrol still verifies
+	// the expected live provider and readiness. These argv are not safe launch
+	// metadata and must not be persisted or replayed as catalog launches.
+	return agentcatalog.OpaqueLaunchArgv(resolvedCommand)
+}
+
+func globalShellNamingArgv(agent string) []string {
+	flag := ""
+	switch agent {
+	case "claude":
+		flag = "--append-system-prompt"
+	case "grok":
+		flag = "--rules"
+	}
+	if flag == "" {
+		return nil
+	}
+	return []string{flag, shellstate.NamingInstruction}
 }
 
 // remoteShellName is the display name to send with a remote create: the one

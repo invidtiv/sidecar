@@ -64,7 +64,7 @@ func TestRegisterRegionsPutsTheTitleAfterTabsAndBeforeClose(t *testing.T) {
 	}
 	sink := &recordingSink{}
 	RegisterRegions(sink, host, layout)
-	want := []string{"leaf:1", "tabs:1", "title:1", "close:1", "body:1"}
+	want := []string{"leaf:1", "tabs:1", "title:1", "layout:1", "close:1", "body:1"}
 	if strings.Join(sink.calls, ",") != strings.Join(want, ",") {
 		t.Fatalf("registration order = %v, want %v", sink.calls, want)
 	}
