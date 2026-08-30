@@ -193,6 +193,12 @@ type Model struct {
 	remoteBackend             *remoteTerminalBackend
 	remoteLifecycleMu         sync.Mutex
 	remoteLifecycleTail       <-chan struct{}
+	localGeometryMu           sync.Mutex
+	localGeometryGeneration   uint64
+	localGeometryTarget       string
+	localGeometryWidth        int
+	localGeometryHeight       int
+	localGeometryKeeper       *leaseKeeper
 	subscription              terminalControlSubscription
 	mailbox                   *terminalMailbox
 	mailboxDone               chan struct{}
@@ -360,6 +366,7 @@ var nextModelID atomic.Uint64
 var (
 	terminalQueryPaneSize = QueryPaneSize
 	terminalResizePane    = ResizeTmuxPane
+	terminalResizeClaimed = resizeTmuxPaneClaimed
 	terminalBeforeClose   func()
 )
 
@@ -491,6 +498,7 @@ func (m *Model) guardActiveCommand(scope MessageScope, cmd tea.Cmd) tea.Cmd {
 // Exit exits interactive mode.
 func (m *Model) Exit() {
 	m.releaseRemoteInput()
+	m.releaseLocalGeometryInput()
 	if terminalBeforeClose != nil {
 		terminalBeforeClose()
 	}
@@ -546,6 +554,7 @@ func (m *Model) ReleaseInput() { m.releaseInput() }
 // closes with the mode is [Model.ExitAction]'s answer, not this one's.
 func (m *Model) releaseInput() {
 	m.releaseRemoteInput()
+	m.releaseLocalGeometryInput()
 	m.fragment.Reset()
 	if m.State != nil {
 		m.State.EscapePressed = false
@@ -1365,6 +1374,7 @@ func (m *Model) now() time.Time {
 
 // SetDimensions updates the view dimensions for resize handling.
 func (m *Model) SetDimensions(width, height int) tea.Cmd {
+	m.setLocalGeometrySize(width, height)
 	if width == m.Width && height == m.Height {
 		return nil
 	}
@@ -1476,6 +1486,7 @@ func (m *Model) ResizeAndPollImmediate(width, height int) tea.Cmd {
 	same := width == m.Width && height == m.Height
 	m.Width = width
 	m.Height = height
+	m.setLocalGeometrySize(width, height)
 	if same && !m.resizeOwed {
 		return nil
 	}

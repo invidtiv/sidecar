@@ -243,7 +243,20 @@ func ResizeTmuxPane(paneID string, width, height int) {
 	if !defaultLeaseKeeper.allow(paneID) {
 		return
 	}
+	resizeTmuxPaneClaimed(paneID, width, height)
+}
 
+// resizeTmuxPaneClaimed performs the mutation after arbitration has already
+// granted ownership. Interactive lease refresh uses it when a local human
+// preempts a remote viewer on a periodic tick; calling ResizeTmuxPane there
+// would arbitrate recursively while the keeper is completing that same tick.
+func resizeTmuxPaneClaimed(paneID string, width, height int) {
+	if width <= 0 && height <= 0 {
+		return
+	}
+	if refusesHostingPane(paneID) {
+		return
+	}
 	args := []string{"resize-window", "-t", paneID}
 	if width > 0 {
 		args = append(args, "-x", strconv.Itoa(width))

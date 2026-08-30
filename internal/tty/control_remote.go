@@ -84,6 +84,7 @@ func spawnedControlChannelFactory(spawn ControlSpawner) controlChannelFactory {
 // Everything else is the ordinary local path: the same ordered actor, the same
 // byte-fed screen model, the same seed and reseed behaviour.
 func (m *Model) UseRemoteControl(spawn ControlSpawner) {
+	m.releaseLocalGeometryInput()
 	manager := NewRemoteControlManager(spawn)
 	backend := newRemoteTerminalBackend(m, manager)
 	m.control = controlManagerSource{manager: manager}
@@ -463,7 +464,13 @@ func (m *Model) CaptureRange(start, end int) (CaptureRange, error) {
 // terminals already claim through their existing surface path, so this is a
 // no-op for them.
 func (m *Model) ActivateInput() tea.Cmd {
-	if !m.remote || m.remoteBackend == nil || !m.IsActive() {
+	if !m.IsActive() {
+		return nil
+	}
+	if !m.remote {
+		return m.activateLocalGeometryInput()
+	}
+	if m.remoteBackend == nil {
 		return nil
 	}
 	m.remoteInputMu.Lock()
@@ -504,6 +511,90 @@ func (m *Model) ActivateInput() tea.Cmd {
 			}
 			return nil
 		})
+	}
+}
+
+func (m *Model) localKeeper() *leaseKeeper {
+	if m.localGeometryKeeper != nil {
+		return m.localGeometryKeeper
+	}
+	return defaultLeaseKeeper
+}
+
+// activateLocalGeometryInput gives the embedded local terminal the same
+// standing arbitration path as a remote interactive viewer. App-level input
+// updates defaultLeaseKeeper.lastInput; the periodic hold is what consumes that
+// evidence after a remote viewer has taken the session and restores this
+// terminal's current viewport without requiring exit/re-entry.
+func (m *Model) activateLocalGeometryInput() tea.Cmd {
+	target, scope := m.GetTarget(), m.Scope()
+	if target == "" {
+		return nil
+	}
+	m.localGeometryMu.Lock()
+	m.localGeometryGeneration++
+	generation := m.localGeometryGeneration
+	m.localGeometryTarget = target
+	m.localGeometryWidth, m.localGeometryHeight = m.Width, m.Height
+	keeper := m.localKeeper()
+	m.localGeometryMu.Unlock()
+	return func() tea.Msg {
+		var result tea.Msg
+		done := m.enqueueRemoteLifecycle(func() {
+			if m.activeGeneration.Load() != scope.Generation || !m.localGeometryOwned(target, generation) {
+				return
+			}
+			resize := func() {
+				width, height, ok := m.localGeometrySize(target, generation)
+				if ok {
+					terminalResizeClaimed(target, width, height)
+				}
+			}
+			keeper.holdWithAction(target, resize)
+			if !m.localGeometryOwned(target, generation) || m.activeGeneration.Load() != scope.Generation {
+				keeper.releaseInteractive(target)
+				return
+			}
+			if keeper.allow(target) {
+				resize()
+			}
+			result = PaneResizedMsg{Scope: scope}
+		})
+		<-done
+		return result
+	}
+}
+
+func (m *Model) localGeometryOwned(target string, generation uint64) bool {
+	m.localGeometryMu.Lock()
+	defer m.localGeometryMu.Unlock()
+	return m.localGeometryTarget == target && m.localGeometryGeneration == generation
+}
+
+func (m *Model) localGeometrySize(target string, generation uint64) (int, int, bool) {
+	m.localGeometryMu.Lock()
+	defer m.localGeometryMu.Unlock()
+	if m.localGeometryTarget != target || m.localGeometryGeneration != generation {
+		return 0, 0, false
+	}
+	return m.localGeometryWidth, m.localGeometryHeight, true
+}
+
+func (m *Model) setLocalGeometrySize(width, height int) {
+	m.localGeometryMu.Lock()
+	m.localGeometryWidth, m.localGeometryHeight = width, height
+	m.localGeometryMu.Unlock()
+}
+
+func (m *Model) releaseLocalGeometryInput() {
+	m.localGeometryMu.Lock()
+	target := m.localGeometryTarget
+	m.localGeometryTarget = ""
+	m.localGeometryGeneration++
+	keeper := m.localKeeper()
+	m.localGeometryMu.Unlock()
+	if target != "" {
+		m.enqueueRemoteLifecycle(func() { keeper.releaseInteractive(target) })
 	}
 }
 

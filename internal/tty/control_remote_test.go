@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -713,6 +714,153 @@ func TestRemoteInteractivePeriodicLeaseRefreshLetsTypingPeerPreempt(t *testing.T
 	peer.noteInput()
 	if !peer.allow("%4") || leaseOwner(store.current()) != "remote-human" {
 		t.Fatalf("typing peer did not preempt periodically refreshed idle owner: %q", store.current())
+	}
+}
+
+func TestLocalEmbeddedHumanInputPreemptsRemoteViewerWithoutReentry(t *testing.T) {
+	store := &fakeLeaseStore{}
+	var clock sync.Mutex
+	now := time.Now()
+	readNow := func() time.Time {
+		clock.Lock()
+		defer clock.Unlock()
+		return now
+	}
+	advance := func(d time.Duration) {
+		clock.Lock()
+		now = now.Add(d)
+		clock.Unlock()
+	}
+
+	human := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	human.selfID = "local-human"
+	human.now = readNow
+	human.lastInput = readNow()
+	ticker := &manualTicker{}
+	ticker.install(human)
+	viewer := newLeaseKeeper(store, DefaultLeasePolicy, time.Second)
+	viewer.selfID = "remote-viewer"
+	viewer.now = readNow
+	viewer.lastInput = readNow()
+
+	model := New(nil)
+	model.State = &State{Active: true, TargetSession: "shared", TargetPane: "%4"}
+	model.Width, model.Height = 92, 31
+	model.localGeometryKeeper = human
+	originalResize := terminalResizeClaimed
+	defer func() { terminalResizeClaimed = originalResize }()
+	var paneMu sync.Mutex
+	paneWidth, paneHeight, resizeCount := 0, 0, 0
+	terminalResizeClaimed = func(_ string, width, height int) {
+		paneMu.Lock()
+		paneWidth, paneHeight = width, height
+		resizeCount++
+		paneMu.Unlock()
+	}
+
+	activate := model.ActivateInput()
+	if activate == nil {
+		t.Fatal("local embedded terminal entry did not start geometry ownership")
+	}
+	_ = activate()
+	if owner := leaseOwner(store.current()); owner != "local-human" {
+		t.Fatalf("local entry owner=%q token=%q", owner, store.current())
+	}
+	// A window-size update while the hold is live becomes the viewport a later
+	// reclaim restores; the returned command is irrelevant to this race.
+	_ = model.ResizeAndPollImmediate(96, 33)
+
+	// The remote viewer explicitly enters later and imposes its viewport, just
+	// like the second-machine proof. The local human stays in interactive mode.
+	viewer.claim("%4")
+	paneMu.Lock()
+	paneWidth, paneHeight = 103, 45
+	paneMu.Unlock()
+	advance(10 * time.Second)
+	viewer.allow("%4") // refresh a token carrying ten seconds of viewer idle
+	if owner := leaseOwner(store.current()); owner != "remote-viewer" {
+		t.Fatalf("viewer did not take lease: %q", store.current())
+	}
+
+	// app.Update calls NoteUserInput for this keystroke; the model's local
+	// keeper is defaultLeaseKeeper in production, so this is the same evidence.
+	human.noteInput()
+	before := store.activity()
+	ticker.c <- readNow()
+	waitForActivity(t, store, before)
+	waitFor(t, func() bool {
+		paneMu.Lock()
+		defer paneMu.Unlock()
+		return leaseOwner(store.current()) == "local-human" && paneWidth == 96 && paneHeight == 33
+	})
+	paneMu.Lock()
+	resizesAfterPreempt := resizeCount
+	paneMu.Unlock()
+	before = store.activity()
+	ticker.c <- readNow()
+	waitForActivity(t, store, before)
+	paneMu.Lock()
+	if resizeCount != resizesAfterPreempt {
+		paneMu.Unlock()
+		t.Fatalf("settled owner resized on every refresh: before=%d after=%d", resizesAfterPreempt, resizeCount)
+	}
+	paneMu.Unlock()
+	model.Exit()
+	waitForRemoteLifecycle(t, model)
+	human.mu.Lock()
+	_, holding := human.holds["%4"]
+	human.mu.Unlock()
+	if holding {
+		t.Fatal("Model.Exit leaked local interactive geometry refresher")
+	}
+}
+
+func TestReleaseDuringBlockedLocalActivationLeavesNoClaimOrResize(t *testing.T) {
+	shared := &fakeLeaseStore{}
+	store := newBlockingLeaseStore(shared, 1)
+	keeper := newTestKeeper(store, "local-human", DefaultLeasePolicy)
+	model := New(nil)
+	model.State = &State{Active: true, TargetSession: "shared", TargetPane: "%4"}
+	model.Width, model.Height = 92, 31
+	model.localGeometryKeeper = keeper
+	originalResize := terminalResizeClaimed
+	defer func() { terminalResizeClaimed = originalResize }()
+	var resizes atomic.Int32
+	terminalResizeClaimed = func(string, int, int) { resizes.Add(1) }
+
+	activate := model.ActivateInput()
+	activated := make(chan struct{})
+	go func() {
+		_ = activate()
+		close(activated)
+	}()
+	select {
+	case <-store.entered:
+	case <-time.After(time.Second):
+		t.Fatal("local activation did not enter blocked lease read")
+	}
+	released := make(chan struct{})
+	go func() {
+		model.ReleaseInput()
+		close(released)
+	}()
+	select {
+	case <-released:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("ReleaseInput waited on blocked local lease activation")
+	}
+	close(store.unblock)
+	select {
+	case <-activated:
+	case <-time.After(time.Second):
+		t.Fatal("local activation did not drain after lease response")
+	}
+	waitForRemoteLifecycle(t, model)
+	if token := shared.current(); token != "" {
+		t.Fatalf("late local activation left post-exit lease %q", token)
+	}
+	if got := resizes.Load(); got != 0 {
+		t.Fatalf("late local activation resized %d times after release", got)
 	}
 }
 
