@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "shells": [
+    {
+      "tmuxName": "sidecar-sh-sidecar-4",
+      "displayName": "reviewer",
+      "namespace": "/private/tmp/tmux/default",
+      "createdAt": "2026-08-30T17:00:00Z",
+      "agentType": "codex",
+      "skipPerms": true,
+      "workDir": "/repo"
+    }
+  ],
+  "tombstones": []
+}

@@ -1,0 +1,12 @@
+{
+  "shell": {
+    "displayName": "fix auth",
+    "session": "sidecar-ws-fix-auth",
+    "workDir": "/repo-fix-auth"
+  },
+  "path": "/repo-fix-auth",
+  "branch": "fix-auth",
+  "setup": [],
+  "acked": false,
+  "placement": "workspace"
+}

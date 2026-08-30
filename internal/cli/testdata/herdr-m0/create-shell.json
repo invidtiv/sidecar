@@ -1,0 +1,10 @@
+{
+  "shell": {
+    "displayName": "reviewer",
+    "session": "sidecar-sh-sidecar-4",
+    "workDir": "/repo"
+  },
+  "acked": true,
+  "surface": "workspace",
+  "placement": "workspace"
+}

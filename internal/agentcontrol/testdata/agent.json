@@ -1,0 +1,22 @@
+{
+  "target": {
+    "host": "local",
+    "project": "sidecar",
+    "session": "sidecar-sh-sidecar-4",
+    "name": "reviewer",
+    "namespace": "/private/tmp/tmux/default",
+    "paneId": "%7",
+    "panePid": 4242,
+    "serverIncarnation": "present inode=10 ctime=20 pid=30"
+  },
+  "agent": {
+    "kind": "codex",
+    "status": "blocked",
+    "freshness": "current",
+    "attention": true,
+    "evidence": "codex.approval.command",
+    "changedAt": "2026-08-30T17:00:00Z",
+    "capturedAt": "2026-08-30T17:00:01Z",
+    "interactiveReady": false
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/managedtarget"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
@@ -51,104 +52,108 @@ type shellTarget struct {
 }
 
 func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (shellTarget, int) {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		cliErrf(env.Stderr, "--target requires a tmux session name\n\n%s", help)
-		return shellTarget{}, 2
+	return resolveShellTargetMode(env, target, shellFlag, projectFlag, help, false)
+}
+
+func resolveShellTargetMode(env Env, target, shellFlag, projectFlag, help string, globalExplicit bool) (shellTarget, int) {
+	resolved, code, err := findShellTarget(env, target, shellFlag, projectFlag, globalExplicit, "")
+	if err == nil {
+		return resolved, 0
 	}
-	// rename and send both change something; resolveShellTarget is never on a
-	// read path.
-	proj, manifest, code := resolveShellRecordsProject(env, shellRecordFlags{shellFlag: shellFlag, projectFlag: projectFlag}, help, registerProject)
-	if code != 0 {
+	if code == 2 {
+		cliErrf(env.Stderr, "--target requires a tmux session name\n\n%s", help)
 		return shellTarget{}, code
 	}
+	if code == shellTargetUnregistered {
+		cliErrf(env.Stderr, "no registered Sidecar shell or worktree session named %q; run `sidecar shell list --json` to see what Sidecar owns\n", strings.TrimSpace(target))
+		return shellTarget{}, code
+	}
+	cliErrln(env.Stderr, err)
+	return shellTarget{}, code
+}
 
-	defs, err := shellstate.ListAtPath(manifest)
+// findShellTarget is the shared non-rendering resolver. The shell commands
+// wrap it with their established human errors; agent commands wrap the same
+// result in their stable JSON error envelope.
+func findShellTarget(env Env, target, shellFlag, projectFlag string, globalExplicit bool, namespace string) (shellTarget, int, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return shellTarget{}, 2, fmt.Errorf("target is required")
+	}
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var projects []registeredProject
+	if dest, err := resolveCreateDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly); !globalExplicit && err == nil {
+		if proj, projectErr := registeredProjectForCreate(env.StateDir, dest); projectErr == nil {
+			projects = []registeredProject{proj}
+		}
+	} else if shellFlag != "" || projectFlag != "" {
+		return shellTarget{}, createDestExitCode(err), err
+	}
+	if len(projects) == 0 {
+		var err error
+		projects, err = loadRegisteredProjects(env.StateDir)
+		if err != nil {
+			return shellTarget{}, 1, err
+		}
+	}
+
+	byProject := make(map[string]registeredProject, len(projects))
+	for _, proj := range projects {
+		byProject[proj.Key] = proj
+	}
+	candidates, err := managedTargetCandidates(env, projects)
 	if err != nil {
-		cliErrln(env.Stderr, err)
-		return shellTarget{}, 1
+		return shellTarget{}, 1, err
 	}
-	var shells []shellstate.Definition
-	for _, def := range defs {
-		if def.TmuxName == target {
-			shells = append(shells, def)
+	resolved, err := managedtarget.Resolve(candidates, managedtarget.Query{Host: "local", Namespace: namespace, Value: target})
+	if err != nil {
+		if typed, ok := err.(*managedtarget.Error); ok && typed.Kind == managedtarget.NotFound {
+			return shellTarget{}, shellTargetUnregistered, err
 		}
+		return shellTarget{}, 1, err
 	}
-	if len(shells) > 1 {
-		cliErrf(env.Stderr, "shell %q appears more than once in project %q; refusing an ambiguous target\n", target, proj.Key)
-		return shellTarget{}, 1
-	}
-	if len(shells) == 1 {
-		workDir := shells[0].WorkDir
-		if workDir == "" {
-			workDir = proj.Path
-		}
-		return shellTarget{
-			Kind:         shellTargetKindShell,
-			Session:      target,
-			DisplayName:  shells[0].DisplayName,
-			Namespace:    shells[0].Namespace,
-			WorkDir:      workDir,
-			Project:      proj,
-			ManifestPath: manifest,
-		}, 0
-	}
+	proj := byProject[resolved.Project]
+	return shellTarget{Kind: resolved.Kind, Session: resolved.Session, DisplayName: resolved.Name, Namespace: resolved.Namespace, WorkDir: resolved.WorkDir, WorktreeRoot: resolved.WorktreeRoot, Project: proj, ManifestPath: resolved.ManifestPath}, 0, nil
+}
 
-	seen := map[string]bool{}
-	matching := func(paths []string) []string {
-		var out []string
-		for _, path := range paths {
-			if path == "" {
-				continue
+func managedTargetCandidates(env Env, projects []registeredProject) ([]managedtarget.Target, error) {
+	var candidates []managedtarget.Target
+	for _, proj := range projects {
+		manifest := ""
+		if proj.Dir != "" {
+			manifest = filepath.Join(proj.Dir, "shells.json")
+		}
+		defs, err := shellstate.ListAtPath(manifest)
+		if err != nil {
+			return nil, err
+		}
+		for _, def := range defs {
+			workDir := def.WorkDir
+			if workDir == "" {
+				workDir = proj.Path
 			}
-			canon := canonicalOpenPath(path)
-			if seen[canon] {
-				continue
-			}
-			seen[canon] = true
-			if workspaceops.WorktreeSessionName(path, "") == target {
-				out = append(out, path)
+			candidates = append(candidates, managedtarget.Target{Host: "local", Project: proj.Key, ProjectRoot: proj.Path, Kind: shellTargetKindShell, Session: def.TmuxName, Name: def.DisplayName, Namespace: def.Namespace, WorkDir: workDir, ManifestPath: manifest, Priority: 0})
+		}
+		registered, discovered := worktreeRootsForTarget(env, proj)
+		seen := map[string]bool{}
+		addRoots := func(roots []string, priority int) {
+			for _, root := range roots {
+				root = canonicalOpenPath(root)
+				if root == "" || seen[root] {
+					continue
+				}
+				seen[root] = true
+				name, _ := workspaceops.LookupWorktreeDisplayName(env.StateDir, proj.Path, root)
+				candidates = append(candidates, managedtarget.Target{Host: "local", Project: proj.Key, ProjectRoot: proj.Path, Kind: shellTargetKindWorktree, Session: workspaceops.WorktreeSessionName(root, ""), Name: name, Namespace: tmuxenv.Namespace(), WorkDir: root, WorktreeRoot: root, ManifestPath: manifest, Priority: priority})
 			}
 		}
-		return out
+		addRoots(registered, 1)
+		addRoots(discovered, 2)
 	}
-	registered, discovered := worktreeRootsForTarget(env, proj)
-	roots := matching(registered)
-	// The worktrees Sidecar registered win a basename collision, and only when
-	// they answer nothing does git's wider list get a turn.
-	//
-	// WorktreeSessionName is "sidecar-ws-" plus the sanitized last path element,
-	// so /x/a/feature and /x/b/feature are one session name. Searching both
-	// tiers together turned a target that had always resolved uniquely against
-	// the registered set into an ambiguity refusal as soon as an unregistered
-	// sibling with the same basename existed. Tiering restores that without
-	// putting hand-made worktrees back out of reach: within a tier, a genuine
-	// collision is still refused.
-	if len(roots) == 0 {
-		roots = matching(discovered)
-	}
-	if len(roots) > 1 {
-		cliErrf(env.Stderr, "worktree session %q matches more than one worktree in project %q; refusing an ambiguous target\n", target, proj.Key)
-		return shellTarget{}, 1
-	}
-	if len(roots) == 1 {
-		name, nameErr := workspaceops.LookupWorktreeDisplayName(env.StateDir, proj.Path, roots[0])
-		if nameErr != nil {
-			name = ""
-		}
-		return shellTarget{
-			Kind:         shellTargetKindWorktree,
-			Session:      target,
-			DisplayName:  name,
-			WorkDir:      roots[0],
-			WorktreeRoot: roots[0],
-			Project:      proj,
-			ManifestPath: manifest,
-		}, 0
-	}
-
-	cliErrf(env.Stderr, "no registered Sidecar shell or worktree session named %q in project %q; run `sidecar shell list --json` to see what this project owns\n", target, proj.Key)
-	return shellTarget{}, shellTargetUnregistered
+	return candidates, nil
 }
 
 // worktreeRootsForTarget is every worktree of this project a row can be shown

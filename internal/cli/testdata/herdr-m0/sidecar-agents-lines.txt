@@ -1,0 +1,12 @@
+sidecar agent get [TARGET] --json
+sidecar agent list --json
+sidecar agent start [TARGET] --kind KIND
+sidecar create shell
+sidecar create worktree
+sidecar layout get --json
+sidecar notify post
+sidecar open
+sidecar shell list --json
+sidecar shell name
+sidecar shell rename
+sidecar shell send

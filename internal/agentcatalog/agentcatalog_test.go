@@ -56,3 +56,48 @@ func TestLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestEveryFamilyBuildsStructuredLaunchArgv(t *testing.T) {
+	for _, family := range Families() {
+		argv, err := family.LaunchArgv([]string{"--model", "space value"}, true)
+		if err != nil {
+			t.Fatalf("%s: %v", family.ID, err)
+		}
+		if len(argv) < 3 || argv[0] != family.Command || argv[len(argv)-1] != "space value" {
+			t.Fatalf("%s argv = %#v", family.ID, argv)
+		}
+		argv[len(argv)-1] = "changed"
+		if family.Command == "changed" {
+			t.Fatalf("%s launch aliased catalog storage", family.ID)
+		}
+	}
+	if _, err := BuildLaunch("not-real", nil, false); err == nil {
+		t.Fatal("unknown family received a launch")
+	}
+}
+
+func TestOpaqueLaunchIsExplicitShellBoundary(t *testing.T) {
+	got, err := OpaqueLaunchArgv("custom-agent --profile 'team one'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sh", "-lc", "custom-agent --profile 'team one'"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("opaque argv = %#v, want %#v", got, want)
+	}
+}
+
+func TestLegacyAiderLaunchDoesNotEnterSelectableFamilies(t *testing.T) {
+	if _, ok := Find("aider"); ok {
+		t.Fatal("legacy aider appeared in selectable catalog")
+	}
+	family, ok := FindLaunch("aider")
+	if !ok || family.Command != "aider" || family.SkipPermissionsArg != "--yes" {
+		t.Fatalf("legacy aider = %+v, %v", family, ok)
+	}
+	for _, family := range Families() {
+		if family.ID == "aider" {
+			t.Fatal("legacy aider appeared in Families")
+		}
+	}
+}

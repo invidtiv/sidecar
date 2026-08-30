@@ -287,6 +287,8 @@ func RootCommand() *Command {
 			"workspace row.",
 		Flags: []Flag{
 			{Name: "--name", Arg: "NAME", Summary: "Display name (default: the next Shell N)"},
+			{Name: "--agent", Arg: "KIND", Summary: "Start a catalog provider and return only when ready"},
+			{Name: "--skip-permissions", Summary: "Pass the selected provider's auto-approve flag", Bool: true},
 			{Name: "--run", Arg: "COMMAND", Summary: "Execute COMMAND in the new shell"},
 			{Name: "--type", Arg: "COMMAND", Summary: "Type COMMAND without pressing Enter"},
 			{Name: "--shell", Arg: "NAME", Summary: "Resolve the project from a registered shell"},
@@ -307,13 +309,14 @@ func RootCommand() *Command {
 			{Code: 5, Summary: "a value was rejected: --name, or an unknown --project / --shell"},
 		},
 		Examples: []Example{
+			{Command: "sidecar create shell --name reviewer --agent codex --json"},
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
 			{Command: "sidecar create shell --split right --run \"python3 -m http.server 8765\""},
 			{Command: "sidecar create shell --json --wait 0"},
 			{Command: "sidecar create shell --type \"go test ./...\"", Description: "type a command for the user to review"},
 		},
 		Agent: AgentDoc{
-			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
+			Invocation: "sidecar create shell [--name NAME] [--agent KIND | --run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
 			Summary:    "Create a shell beside the current session (default) or as a workspace tab (--tab)",
 		},
 		Mutates: true,
@@ -499,7 +502,7 @@ func RootCommand() *Command {
 		Launch: runSetupLaunch,
 	}
 
-	root.Sub = []*Command{agentsCmd, createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
+	root.Sub = []*Command{agentCommand(), agentsCmd, createCmd, helpCmd, hostCommand(), layoutCommand(), notifyCommand(), openCmd, setupCmd, shellCmd, terminalLinksCommand()}
 	return root
 }
 

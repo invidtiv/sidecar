@@ -27,6 +27,18 @@ var foregroundIdentities = struct {
 // does not scan the process table on every frame, while a new foreground job
 // invalidates the cache immediately.
 func ResolveForegroundAgent(panePID int) string {
+	identity := ResolveForegroundProcess(panePID)
+	if identity == "shell" {
+		return ""
+	}
+	return identity
+}
+
+// ResolveForegroundProcess identifies the known program in the pane's actual
+// foreground process group, including "shell" when the group belongs to an
+// interactive shell. Unlike pane_current_command, this is process ownership
+// evidence and is therefore safe for agent-control's shell-ready gate.
+func ResolveForegroundProcess(panePID int) string {
 	if panePID <= 0 {
 		return ""
 	}
@@ -43,11 +55,21 @@ func ResolveForegroundAgent(panePID int) string {
 	}
 
 	identity := ""
+	shell := false
+
+scan:
 	for _, argv0 := range platformForegroundArgv0s(group) {
-		if candidate := identifyArgv0(argv0); candidate != "" && candidate != "shell" {
+		switch candidate := identifyArgv0(argv0); candidate {
+		case "shell":
+			shell = true
+		case "":
+		default:
 			identity = candidate
-			break
+			break scan
 		}
+	}
+	if identity == "" && shell {
+		identity = "shell"
 	}
 
 	foregroundIdentities.Lock()
@@ -61,6 +83,21 @@ func ResolveForegroundAgent(panePID int) string {
 	foregroundIdentities.entries[panePID] = foregroundIdentityEntry{group: group, identity: identity, resolvedAt: now}
 	foregroundIdentities.Unlock()
 	return identity
+}
+
+// ForegroundShellReady is the strict launch gate for a managed tmux pane. It
+// accepts only the pane shell's own process group with exactly one member, and
+// that member must resolve to a known interactive shell. Unknown helpers are
+// busy, not ignorable.
+func ForegroundShellReady(panePID int, currentCommand string) bool {
+	if panePID <= 0 || platformForegroundProcessGroup(panePID) != panePID {
+		return false
+	}
+	argv0s := platformForegroundArgv0s(panePID)
+	if len(argv0s) != 1 || identifyArgv0(argv0s[0]) != "shell" {
+		return false
+	}
+	return identifyProcessName(strings.ToLower(strings.TrimSpace(currentCommand))) == "shell"
 }
 
 func identifyArgv0(argv0 string) string {

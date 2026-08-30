@@ -16,11 +16,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/marcus/sidecar/internal/agentactivity"
+	"github.com/marcus/sidecar/internal/agentcatalog"
+	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/features"
 	"github.com/marcus/sidecar/internal/shellliveness"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
+	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
@@ -704,9 +707,42 @@ func (p *Plugin) startAgentInShell(tmuxName string, agentType AgentType, skipPer
 			}
 		}
 		baseCmd = withShellNamingInstruction(baseCmd, agentType)
+		launchArgv, launchErr := agentcatalog.OpaqueLaunchArgv(baseCmd)
+		if launchErr != nil {
+			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", launchErr)}
+		}
+		if !p.hasAgentLaunchOverride(workDir, agentType) {
+			extra := []string(nil)
+			if flag := SystemPromptAppendFlags[agentType]; flag != "" {
+				extra = []string{flag, shellstate.NamingInstruction}
+			}
+			var err error
+			launchArgv, err = agentcatalog.BuildLaunch(string(agentType), extra, skipPerms)
+			if err != nil {
+				return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("build agent launch: %w", err)}
+			}
+		}
 
-		// Send the command to the shell's tmux session
-		if err := workspaceops.StartAgentInShell(context.Background(), tmuxName, baseCmd); err != nil {
+		name := ""
+		for _, shell := range p.shells {
+			if shell != nil && shell.TmuxName == tmuxName {
+				name = shell.Name
+				break
+			}
+		}
+		projectRoot := workDir
+		if p.ctx != nil && strings.TrimSpace(p.ctx.ProjectRoot) != "" {
+			projectRoot = p.ctx.ProjectRoot
+		}
+		target := agentcontrol.Target{Host: "local", Project: workspaceinventory.CanonicalPath(projectRoot), Session: tmuxName, Name: name}
+		if _, err := waitWorkspaceShellReady(context.Background(), target, agentStartTimeout); err != nil {
+			return ShellAgentErrorMsg{TmuxName: tmuxName, Err: fmt.Errorf("prepare agent shell: %w", err)}
+		}
+		_, err := startWorkspaceAgent(context.Background(), agentcontrol.StartRequest{
+			Target: target,
+			Kind:   string(agentType), Argv: launchArgv, Timeout: agentStartTimeout,
+		})
+		if err != nil {
 			return ShellAgentErrorMsg{
 				TmuxName: tmuxName,
 				Err:      fmt.Errorf("failed to start agent: %w", err),
