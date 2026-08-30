@@ -168,6 +168,22 @@ All six workstreams landed: `6de0f98e` (E), `05b5f452` (A), `c57eab69` (C+D), `5
 
 Proven by test and by negative control: the watch drives re-inventory; the watch starts and its note is withdrawn when a cold host warms up; the reap refuses an empty listing, a failed listing, a replaced server between plan and confirm, and a session resurrected between confirm and write; a remote pane whose session dies leaves interactive mode; stale delete replies are dropped; the result discriminator rejects a login profile's JSON log line; list and board carry the same host glyph and hue.
 
-**Not proven: the exit gate itself.** Every numbered item in it needs a real second machine, and none of it has been run. `ssh localhost` is refused here and there is no second host available, so the entire seven-item gate — including whether a created shell actually appears within the coalesce window and whether the reap behaves against a live remote state tree — is outstanding. The reap is the change that can destroy state on a machine nobody is looking at; the review's judgement is that it is safe to run, and its guards are the pre-existing ones moved verbatim rather than reimplemented, but "reviewed as safe" is not "observed to be safe."
+### The live run, and the two defects it found
+
+Driven against `marcusbook` over SSH, with the host pinned to its own tmux server and state tree via `Env` and `SIDECAR_ISOLATED_STATE`. The isolation gate was tested first, before anything was created: a mutating verb against a non-isolated state tree was refused, naming the real directory it would have touched. marcusbook's real state tree was byte-identical before and after (same hash across all 11 `shells.json` files) and its real tmux server kept its one session throughout.
+
+**The cold-host watch did not do what it claimed, and only a real host showed it.** `reconcile` runs in the full-inventory phase, so on a machine where Sidecar has never been opened nothing was registered to notice the first `sidecar create shell`; the 60s inventory tick surfaced it. **Measured: 57.8 seconds** — the exact latency this plan exists to remove, in the one case a user meets first. The unit test passed throughout, because it called `reconcile` directly. While any project is unresolved the state root is now watched as well, so a project directory appearing is an event. **Measured after: 0.48 seconds**, and the degraded note is withdrawn on the stream.
+
+**`projectdir.LookupAll` compared configured paths to `meta.json` paths as raw strings**, which is how the above hid. A project configured as `/tmp/x` registers as `/private/tmp/x`, so the manifest watch silently never registered while `sidecar shell list` returned that project's shells perfectly well. Both sides are canonicalised now. `internal/overview/live_shells.go` reads the same function, so any symlinked project root was losing local freshness the same way — this was never remote-only.
+
+**The reap, exercised where it matters.** A shell whose session was killed was tombstoned in **9.5 seconds** with a live sibling left untouched, and `sidecar shell restore` brought it back, proving a tombstone rather than a delete. Two refusals were observed rather than argued: killing the *only* session left the record alone (the empty-listing guard, td-8d18de), and a record this serve process had never seen alive was left alone.
+
+**Remote delete end to end.** `sidecar shell delete --target` closed the tmux session on the host and tombstoned the record; the session list was empty afterwards and the record restorable.
+
+**Version skew, confirmed working.** marcusbook was running a build predating `585cda92`, so the hello's `verbs.createShellAgent` capability was exercised against a genuinely older host rather than a simulated one.
+
+### Still not proven
+
+The TUI itself. Everything above was driven through the CLI and the raw serve stream, which is a sharper instrument but not the surface a user touches: the Sessions row appearing, the host glyph and colour, the Configuration page, and a remote pane going non-interactive when its session dies have not been seen on screen against a real host.
 
 Also unrun: multi-host and host-churn paths, concurrent mutations, a link dropped mid-mutation, and any timeout path.
