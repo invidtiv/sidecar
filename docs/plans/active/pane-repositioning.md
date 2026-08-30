@@ -8,7 +8,7 @@ Today a pane's position is decided once, at open time, by `PlanOpen`'s auto rule
 
 ## The model: extract and reinsert
 
-A move **pulls the leaf out of the tree and grafts it back at the destination**, exactly as if it had been opened there. The sibling takes the removed leaf's place and its split collapses; the destination is planned against the tree that remains.
+A move **pulls the leaf out of the tree and grafts it back at the destination**, placed by the same rules an open at that cell would use. The sibling takes the removed leaf's place and its split collapses; the destination is planned against the tree that remains. It is not quite a close-and-re-open: the leaf is spliced as the same `*Node`, so its content, its tabs, its scroll position and any live tmux session travel with it — and so does its share of the box, per decision 8.
 
 ```
 before                after: move the focused pane right
@@ -125,11 +125,31 @@ The planner itself — `panelayout.PlanMove` — is state-free and takes a tree,
 
 `pane_move`, default off, checked in exactly two places: the key binding's availability and the header control's reserve. A flag here is cheap because it is the same shape as `plugin_content_panes` and because the header chrome change is visible to every user of every surface on the first frame after install.
 
-## Unresolved questions
+### 7. Live `Shell` and `Primary` leaves move like any other pane
 
-- **Does a move mode belong on a live `Shell` or `Primary` leaf at all?** The planner allows it — a live leaf's position is geometry, not session identity, so moving one costs a tmux resize and nothing else. But the primary terminal is the surface's own content and lives at `1.1` by every convention in the tree, and a layout with the primary at `3.2` may read as broken rather than arranged. **Proposed answer, to confirm during M1:** allow it, because refusing would be the only place the grid vocabulary has a pane it cannot address, and the `--spec` path already permits any primary position. Revisit if the proof run looks wrong.
-- **Do ratios travel with a moved pane?** `SplitLeaf` creates every split at `Ratio: 50`, so a pane dragged to 70% and then moved lands back at 50/50. That is the existing behaviour of every structural edit and is probably right — a move is a re-open, and a re-open does not remember a ratio it never had. Recorded so it is a decision rather than a surprise.
-- **Does the miniature share code with `cli/layout_render.go`'s ASCII sketch?** Both draw the same `Grid` projection; one is plain text for a terminal, one is styled for a modal. **Proposed: no shared renderer, one shared projection.** Two renderers over `GridOf` is fine; a third *projection* is not. Confirm when the miniature is written.
+A live leaf's position is geometry, not session identity: moving one costs a tmux resize and nothing else, and the session is spliced as the same `*Node` rather than re-created. So the primary terminal is movable off `1.1` and a split shell is movable anywhere the caps allow.
+
+The alternative — pinning the primary — would make it the one pane in the grid vocabulary that has an address but cannot be sent to one, and `layout apply --spec` already accepts a primary in any column. A rule the agent surface does not enforce is not a rule.
+
+Two consequences to hold: a live leaf's geometry change must go through the host's existing resize batching rather than a per-move resize (the same path a divider drag already uses on release), and `LiveLeafCap` is unaffected because a move creates no live leaf.
+
+### 8. The moved pane carries its ratio
+
+`SplitLeaf` creates every split at `Ratio: 50`, so the naive move drops a pane you had dragged to 70% back to half. It should not: a pane's share of its box is something you set deliberately, and losing it on every move would make rearranging a layout cost a re-drag each time.
+
+The rule, stated precisely because "the pane's ratio" is not a thing the tree stores — a *split* owns a ratio, a leaf does not:
+
+- **At extraction**, the leaf carries the percentage of its parent split it occupied: its parent's `Ratio` when it is the `A` child, `100 - Ratio` when it is `B`. A leaf with no parent split (it was the whole tree) carries nothing.
+- **At reinsertion**, the new split's `Ratio` is set so the moved leaf gets that same percentage — the carried value directly when it lands as `A` (a `NewFirst` insert), inverted when it lands as `B`. `MovePlan` therefore gains a `Ratio int` field, and `ApplyMove` sets it after splicing, because `SplitLeaf`'s hardcoded 50 stays the right default for an *open*.
+- **The carry is axis-agnostic.** A leaf that was 70% of a column's width becomes 70% of its new row stack's height. Carrying per-axis instead would mean a pane moved right then down loses the value anyway, which is the behaviour this decision exists to remove.
+- **`ClampRatio` and the floors still apply**, unchanged and at the usual time: the carried value is a request, and a 15/85 clamp or a floor that cannot be met resolves it exactly as it resolves a dragged one. Nothing new refuses.
+- **Repeated moves carry it forward**, so walking a pane across the layout with four `l` presses preserves the share through all four.
+
+What is *not* carried is the ratio of the split the pane leaves behind: `Close` splices the sibling over the parent, and that split's ratio ceases to exist. That is already true of every close today.
+
+### 9. The modal miniature and the CLI sketch share a projection, not a renderer
+
+`cli/layout_render.go`'s `renderLayoutSketch` already draws an ASCII picture of a layout for terminal output; the modal needs a styled one for a `Custom` section. Two renderers over `GridOf` is fine — they have different targets, different constraints and no shared styling. A third *projection* of the tree is not: both read `Grid` and neither derives columns for itself.
 
 ## Work sequence
 
@@ -137,17 +157,19 @@ The planner itself — `panelayout.PlanMove` — is state-free and takes a tree,
 
 The whole feature in one state-free function plus one tree edit, testable with no surface at all.
 
-- `panelayout.PlanMove(root *Node, leafID int, dest Cell) (MovePlan, string)` — remove the leaf from a trial copy, translate `dest` from the pre-move grid into the post-removal tree, then plan the insert with `PlanOpenAt`'s rules. Returns the visible reason on refusal, empty on success. A destination that resolves to the leaf's own position returns a no-op verdict, distinct from a refusal.
+- `panelayout.PlanMove(root *Node, leafID int, dest Cell) (MovePlan, string)` — remove the leaf from a trial copy, translate `dest` from the pre-move grid into the post-removal tree, then plan the insert with `PlanOpenAt`'s rules. Returns the visible reason on refusal, empty on success. A destination that resolves to the leaf's own position returns a no-op verdict, distinct from a refusal. `MovePlan` carries the destination plan **and** decision 8's `Ratio`, read off the leaf's parent split before the removal.
 - `panelayout.MoveDirection(root *Node, leafID int, dir Direction) (Cell, bool)` — decision 1's direction rule, so the keys, the modal and `--to right` compile the same answer.
-- `panelayout.ApplyMove(root *Node, plan MovePlan) (*Node, int)` — `Close` then `ApplyPlan`, splicing the same `*Node` (content identity is preserved; nothing is re-created) and returning the new focus.
-- **Proof:** table tests over the grid vocabulary — every direction from every cell of a 1×1, 2×1, 2×2, 1×4 and 4×1 layout; both caps; the tree that escapes the grid (refused with the existing reason); the no-op cases; and a fit test proving a move that would break the floors is refused with the tree byte-for-byte untouched.
+- `panelayout.ApplyMove(root *Node, plan MovePlan) (*Node, int)` — `Close` then `ApplyPlan`, splicing the same `*Node` (content identity is preserved; nothing is re-created), then setting the new split's ratio from the plan, and returning the new focus.
+- **Proof:** table tests over the grid vocabulary — every direction from every cell of a 1×1, 2×1, 2×2, 1×4 and 4×1 layout; both caps; the tree that escapes the grid (refused with the existing reason); the no-op cases; a fit test proving a move that would break the floors is refused with the tree byte-for-byte untouched; and the ratio carry: `A`-child and `B`-child extraction, `A`-child and `B`-child landing, an axis change preserving the percentage, four moves in a row preserving it, and the clamp still applying to a carried value outside 15–85.
+- Live-leaf coverage belongs here too: a `Primary` move off `1.1` and a `Shell` move, both asserting the leaf is the same `*Node` afterwards and that `LiveLeafCount` is unchanged.
 
 ### M1 — Move mode on the two Workspaces surfaces
 
 - `M` bindings in the ten pane-leaf contexts, plus `Commands()` entries so the footer and `?` find them; the mode's own keys registered as a context that owns the keyboard while it is live.
 - The moving-leaf border state in `paneframe`, and the toast path for every refusal string.
+- Live-leaf geometry: a move that changes a `Primary` or `Shell` leaf's box goes through the host's existing resize batching, not a per-move tmux resize, so walking a live pane across the layout is one resize per landing and not one per keystroke.
 - The `pane_move` flag.
-- **Proof:** `internal/keymap` parity test asserting both surfaces bind `M` to `move-pane` in every pane context and that the navigation, search and editor contexts are untouched; a host test driving the real key ladder; and an isolated `tmux-drive.sh` run (`paths` confirmed first, both axes private) carrying a pane across a 2×2 and back.
+- **Proof:** `internal/keymap` parity test asserting both surfaces bind `M` to `move-pane` in every pane context and that the navigation, search and editor contexts are untouched; a host test driving the real key ladder; and an isolated `tmux-drive.sh` run (`paths` confirmed first, both axes private) carrying a pane across a 2×2 and back, including one run that moves the primary terminal off `1.1` and one that moves a pane whose ratio was dragged away from 50.
 
 ### M2 — The header button and the modal
 
@@ -178,6 +200,8 @@ The whole feature in one state-free function plus one tree edit, testable with n
 ## Acceptance evidence
 
 - `PlanMove` table tests covering every direction from every cell of five layout shapes, both caps, the escaped grid, the no-ops, and the floors refusal leaving the tree untouched.
+- Ratio-carry tests covering both child positions at extraction and at landing, an axis change, a repeated walk, and the clamp.
+- A live-leaf move test on both `Primary` and `Shell` proving node identity and `LiveLeafCount` survive.
 - A keymap parity test holding both Workspaces surfaces to `M` in every pane context, and asserting the input contexts are unchanged.
 - A `paneframe` region-order test including the new `Layout` rung over a nested tree.
 - A narrow-header reserve test proving the drop order.
