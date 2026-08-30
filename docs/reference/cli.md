@@ -433,7 +433,7 @@ Usage: sidecar notify <command>
 
 Show or change notification delivery configuration
 
-Print resolved notification settings and defaults without changing the file. Use config set for global native and sound modes; source and quiet-hour mutation arrive with the focused rule routes.
+Print resolved notification settings and defaults without changing the file. Use config set for global modes, quiet hours, and custom sound paths; use source set for per-source rules.
 
 ```
 Usage: sidecar notify config [--json]
@@ -446,18 +446,22 @@ Usage: sidecar notify config [--json]
 
 #### `sidecar notify config set`
 
-Set global notification delivery modes
+Set notification delivery, quiet hours, and custom sounds
 
-Set one or both global delivery modes. Values are off, background, or always. The save is validated, preserves unrelated notification rules, and applies to running Sidecar instances without restart.
+Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.
 
 ```
-Usage: sidecar notify config set [--native MODE] [--sound MODE] [--json]
+Usage: sidecar notify config set [options]
 ```
 
 **Options:**
 
 - `--native MODE`: Set system notifications: off, background, or always
 - `--sound MODE`: Set sounds: off, background, or always
+- `--quiet-hours RANGE`: Set off or local HH:MM-HH:MM (equal times mean all day)
+- `--attention-path PATH`: Set the attention cue file; empty restores built-in
+- `--done-path PATH`: Set the done cue file; empty restores built-in
+- `--failure-path PATH`: Set the failure cue file; empty restores built-in
 - `--json`: Write the resulting notification configuration as JSON
 - `-h, --help`: Show this help
 
@@ -471,6 +475,8 @@ Usage: sidecar notify config set [--native MODE] [--sound MODE] [--json]
 
 ```bash
 sidecar notify config set --native background --sound background
+sidecar notify config set --quiet-hours 22:00-08:00 --json
+sidecar notify config set --attention-path ~/Sounds/attention.wav
 ```
 
 ### `sidecar notify dismiss`
@@ -593,6 +599,48 @@ sidecar notify post "Review needed" --target issue:td-4c1f9a --target file:inter
 sidecar notify post "Fixed upstream" --target issue:td-99aabb@braid
 ```
 
+### `sidecar notify source`
+
+Configure per-source notification rules
+
+Inspect resolved rules with notify config; use source set for deterministic non-interactive mutation.
+
+```
+Usage: sidecar notify source <command>
+```
+
+#### `sidecar notify source set`
+
+Set one notification source rule
+
+Change one or more fields for a registered notification source. The same validation and targeted save boundary as Configuration preserves unrelated root keys and unknown future source entries, and the running app reloads the result without restart.
+
+```
+Usage: sidecar notify source set <source> [options]
+```
+
+**Options:**
+
+- `--toast on|off`: Enable or disable the in-app toast
+- `--native on|off`: Enable or disable system notifications for this source
+- `--sound CUE`: Set none, event, attention, done, or failure
+- `--expiry DURATION`: Set a Go duration or sticky
+- `--json`: Write the resulting resolved source rule as JSON
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: saved
+- `1`: configuration I/O failure
+- `2`: usage or validation error
+
+**Examples:**
+
+```bash
+sidecar notify source set waiting --toast on --native on --sound attention --expiry sticky
+sidecar notify source set td --native on --json
+```
+
 ### `sidecar notify status`
 
 Probe native and sound provider availability
@@ -627,13 +675,14 @@ Explicitly test enabled notification channels
 Exercise enabled providers without creating a notification-centre record. Explicit tests bypass foreground and quiet-hours suppression but still honor disabled channels and unavailable providers.
 
 ```
-Usage: sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--json]
+Usage: sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--source SOURCE] [--json]
 ```
 
 **Options:**
 
 - `--channel CHANNEL`: Test native, sound, or all (required)
 - `--event EVENT`: Use waiting, done, or failure (default waiting)
+- `--source SOURCE`: Test the selected registered source rule (default follows event)
 - `--json`: Write per-channel attempted/provider/delivered/error results
 - `-h, --help`: Show this help
 
@@ -648,6 +697,7 @@ Usage: sidecar notify test --channel native|sound|all [--event waiting|done|fail
 
 ```bash
 sidecar notify test --channel all --event waiting --json
+sidecar notify test --channel native --source td --json
 ```
 
 ## `sidecar open`

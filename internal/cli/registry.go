@@ -513,26 +513,34 @@ func RootCommand() *Command {
 func notifyCommand() *Command {
 	configSetCmd := &Command{
 		Name:    "set",
-		Summary: "Set global notification delivery modes",
-		Usage:   "sidecar notify config set [--native MODE] [--sound MODE] [--json]",
-		Long:    "Set one or both global delivery modes. Values are off, background, or always. The save is validated, preserves unrelated notification rules, and applies to running Sidecar instances without restart.",
+		Summary: "Set notification delivery, quiet hours, and custom sounds",
+		Usage:   "sidecar notify config set [options]",
+		Long:    "Set one or more global notification settings. Modes are off, background, or always. Quiet hours are off or a local wall-clock range such as 22:00-08:00. Custom sound paths may be absolute, start with ~, or be relative to config.json; an empty --*-path= restores the built-in cue. The complete prospective configuration is validated before write, preserves unrelated rules, and applies to running Sidecar instances without restart.",
 		Flags: []Flag{
 			{Name: "--native", Arg: "MODE", Summary: "Set system notifications: off, background, or always"},
 			{Name: "--sound", Arg: "MODE", Summary: "Set sounds: off, background, or always"},
+			{Name: "--quiet-hours", Arg: "RANGE", Summary: "Set off or local HH:MM-HH:MM (equal times mean all day)"},
+			{Name: "--attention-path", Arg: "PATH", Summary: "Set the attention cue file; empty restores built-in"},
+			{Name: "--done-path", Arg: "PATH", Summary: "Set the done cue file; empty restores built-in"},
+			{Name: "--failure-path", Arg: "PATH", Summary: "Set the failure cue file; empty restores built-in"},
 			{Name: "--json", Summary: "Write the resulting notification configuration as JSON", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "saved"}, {Code: 1, Summary: "configuration I/O failure"}, {Code: 2, Summary: "usage or validation error"}},
-		Examples:  []Example{{Command: "sidecar notify config set --native background --sound background"}},
-		Agent:     AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] --json", Summary: "Change external notification modes without restarting Sidecar"},
-		Mutates:   true,
-		Run:       runNotifyConfigSet,
+		Examples: []Example{
+			{Command: "sidecar notify config set --native background --sound background"},
+			{Command: "sidecar notify config set --quiet-hours 22:00-08:00 --json"},
+			{Command: "sidecar notify config set --attention-path ~/Sounds/attention.wav"},
+		},
+		Agent:   AgentDoc{Invocation: "sidecar notify config set [--native MODE] [--sound MODE] [--quiet-hours RANGE] --json", Summary: "Change external notification settings without restarting Sidecar"},
+		Mutates: true,
+		Run:     runNotifyConfigSet,
 	}
 	configCmd := &Command{
 		Name:    "config",
 		Summary: "Show or change notification delivery configuration",
 		Usage:   "sidecar notify config [--json]",
-		Long:    "Print resolved notification settings and defaults without changing the file. Use config set for global native and sound modes; source and quiet-hour mutation arrive with the focused rule routes.",
+		Long:    "Print resolved notification settings and defaults without changing the file. Use config set for global modes, quiet hours, and custom sound paths; use source set for per-source rules.",
 		Flags:   []Flag{{Name: "--json", Summary: "Write notification configuration as JSON", Bool: true}, {Name: "--help", Short: "-h", Summary: "Show this help", Bool: true}},
 		Sub:     []*Command{configSetCmd},
 		Agent:   AgentDoc{Invocation: "sidecar notify config --json", Summary: "Inspect external notification modes and rules"},
@@ -552,18 +560,52 @@ func notifyCommand() *Command {
 	testCmd := &Command{
 		Name:    "test",
 		Summary: "Explicitly test enabled notification channels",
-		Usage:   "sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--json]",
+		Usage:   "sidecar notify test --channel native|sound|all [--event waiting|done|failure] [--source SOURCE] [--json]",
 		Long:    "Exercise enabled providers without creating a notification-centre record. Explicit tests bypass foreground and quiet-hours suppression but still honor disabled channels and unavailable providers.",
 		Flags: []Flag{
 			{Name: "--channel", Arg: "CHANNEL", Summary: "Test native, sound, or all (required)"},
 			{Name: "--event", Arg: "EVENT", Summary: "Use waiting, done, or failure (default waiting)"},
+			{Name: "--source", Arg: "SOURCE", Summary: "Test the selected registered source rule (default follows event)"},
 			{Name: "--json", Summary: "Write per-channel attempted/provider/delivered/error results", Bool: true},
 			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
 		},
 		ExitCodes: []ExitCode{{Code: 0, Summary: "requested channels delivered"}, {Code: 1, Summary: "provider or output failure"}, {Code: 2, Summary: "usage error"}, {Code: 3, Summary: "a requested channel was disabled or unavailable"}},
-		Examples:  []Example{{Command: "sidecar notify test --channel all --event waiting --json"}},
-		Agent:     AgentDoc{Invocation: "sidecar notify test --channel native|sound|all [--event EVENT] --json", Summary: "Explicitly test enabled providers without filing a centre notification"},
-		Run:       runNotifyTest,
+		Examples: []Example{
+			{Command: "sidecar notify test --channel all --event waiting --json"},
+			{Command: "sidecar notify test --channel native --source td --json"},
+		},
+		Agent: AgentDoc{Invocation: "sidecar notify test --channel native|sound|all [--event EVENT] [--source SOURCE] --json", Summary: "Explicitly test enabled providers without filing a centre notification"},
+		Run:   runNotifyTest,
+	}
+	sourceSetCmd := &Command{
+		Name:    "set",
+		Summary: "Set one notification source rule",
+		Usage:   "sidecar notify source set <source> [options]",
+		Long:    "Change one or more fields for a registered notification source. The same validation and targeted save boundary as Configuration preserves unrelated root keys and unknown future source entries, and the running app reloads the result without restart.",
+		Flags: []Flag{
+			{Name: "--toast", Arg: "on|off", Summary: "Enable or disable the in-app toast"},
+			{Name: "--native", Arg: "on|off", Summary: "Enable or disable system notifications for this source"},
+			{Name: "--sound", Arg: "CUE", Summary: "Set none, event, attention, done, or failure"},
+			{Name: "--expiry", Arg: "DURATION", Summary: "Set a Go duration or sticky"},
+			{Name: "--json", Summary: "Write the resulting resolved source rule as JSON", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args:      ArgSpec{Min: 1, Max: 1, Description: "Registered source: agent, waiting, session, tasks, td, or system"},
+		ExitCodes: []ExitCode{{Code: 0, Summary: "saved"}, {Code: 1, Summary: "configuration I/O failure"}, {Code: 2, Summary: "usage or validation error"}},
+		Examples: []Example{
+			{Command: "sidecar notify source set waiting --toast on --native on --sound attention --expiry sticky"},
+			{Command: "sidecar notify source set td --native on --json"},
+		},
+		Agent: AgentDoc{Invocation: "sidecar notify source set <source> [--toast on|off] [--native on|off] [--sound CUE] [--expiry DURATION] --json", Summary: "Change one notification source rule without restarting Sidecar"},
+		Run:   runNotifySourceSet,
+	}
+	sourceCmd := &Command{
+		Name:    "source",
+		Summary: "Configure per-source notification rules",
+		Usage:   "sidecar notify source <command>",
+		Long:    "Inspect resolved rules with notify config; use source set for deterministic non-interactive mutation.",
+		Sub:     []*Command{sourceSetCmd},
+		Run:     runNotifySourceRoot,
 	}
 	postCmd := &Command{
 		Name:    "post",
@@ -683,7 +725,7 @@ func notifyCommand() *Command {
 		Usage:   "sidecar notify <command>",
 		Long: "Sidecar's notification surface: a toast in the running instance, an entry in the\n" +
 			"notification centre, and a count in the header until the user reads it.",
-		Sub: []*Command{configCmd, dismissCmd, listCmd, postCmd, statusCmd, testCmd},
+		Sub: []*Command{configCmd, dismissCmd, listCmd, postCmd, sourceCmd, statusCmd, testCmd},
 		Run: runNotifyRoot,
 	}
 }

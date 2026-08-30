@@ -65,6 +65,18 @@ func (m *Model) buildChild(b *paneBuilder, route Route) {
 		m.buildConfigRepair(b)
 	case ChildEnableIntegration:
 		m.buildEnableRoute(b)
+	case ChildNotificationAgentRules:
+		m.buildNotificationAgentRules(b)
+	case ChildNotificationOtherRules:
+		m.buildNotificationOtherRules(b)
+	case ChildNotificationQuietHours:
+		m.buildNotificationQuietHours(b)
+	case ChildNotificationSoundPaths:
+		m.buildNotificationSoundPaths(b)
+	case ChildNotificationStatus:
+		m.buildNotificationStatus(b)
+	case ChildNotificationSourceRule:
+		m.buildNotificationSourceRule(b)
 	default:
 		b.lead("This focused route arrives in a later phase.")
 	}

@@ -136,6 +136,36 @@ func TestServiceClaimsChannelsIndependentlyAndOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestServiceRefusesAllRemoteSSHDeliveryWithoutProbingOrClaiming(t *testing.T) {
+	now := time.Now().UTC()
+	native := &fakeNative{capability: Capability{Available: true, Provider: "native-fake"}}
+	sound := &fakeSound{capability: Capability{Available: true, Provider: "sound-fake"}}
+	ledgerCalls := 0
+	service := NewService(ServiceOptions{
+		Native: native, Sound: sound,
+		Ledger: func() (Ledger, error) { ledgerCalls++; return NewMemoryLedger(), nil },
+		Config: enabledPolicy, Clock: fixedClock{now: now},
+		Getenv: func(name string) string {
+			if name == "SSH_CONNECTION" {
+				return "client 123 host 22"
+			}
+			return ""
+		},
+	})
+	status := service.Status(context.Background())
+	if !status.Remote || status.Native.Available || status.Sound.Available || status.Native.Reason != RemoteUnavailableReason || status.Sound.Reason != RemoteUnavailableReason {
+		t.Fatalf("remote status = %+v", status)
+	}
+	n := notify.Notification{ID: "ntf-remote", Source: notify.SourceWaiting, Severity: notify.SeverityWarning, CreatedAt: now}
+	result := service.Deliver(context.Background(), Request{Notification: n, ExplicitTest: true})
+	if result.Native.Reason != notify.ReasonUnavailable || result.Sound.Reason != notify.ReasonUnavailable || result.Native.Attempted || result.Sound.Attempted {
+		t.Fatalf("remote explicit test = %+v", result)
+	}
+	if ledgerCalls != 0 || len(native.delivered) != 0 || len(sound.played) != 0 {
+		t.Fatalf("remote delivery touched ledger/providers: ledger=%d native=%d sound=%d", ledgerCalls, len(native.delivered), len(sound.played))
+	}
+}
+
 func TestServiceDoesNotProbeOrClaimSuppressedEvents(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
 	native := &fakeNative{capability: Capability{Available: true, Provider: "native-fake"}}

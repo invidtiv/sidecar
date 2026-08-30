@@ -9,6 +9,7 @@ Related plans:
 - [Pane repositioning](pane-repositioning.md) owns interactive and agent-driven pane movement. This plan composes with its `layout get` / `layout apply` / `layout move` surface and adds no second layout grammar.
 - [Sidecar as its own remote host runtime](sidecar-remote-hosts.md) owns host registration, SSH transport, remote inventory, remote terminal control, and — as of its completed Phase C — remote mutation, shipped as one-shot `ssh <target> sidecar <verb> --json` invocations over the existing ControlMaster. Because this plan's commands are headless, target-taking CLI verbs, that seam carries them remotely without new protocol work; see [Interaction with remote hosts](#interaction-with-remote-hosts).
 - [Hosting Herdr plugins in Sidecar](../hold/herdr-plugin-support.md) is on hold and orthogonal. A plugin may eventually call the same agent-control core, but plugin hosting is not part of this plan.
+- [Deterministic agent lifecycle hooks](notification-agent-lifecycle-hooks.md) owns lifecycle reporting, authority arbitration, provider integration installation/status, and screen fallback. This plan owns the session-identity and resume semantics that use the same reporting envelope without claiming lifecycle authority.
 - [Native Agent Orchestration in Sidecar](../deprecated/agent-orchestration-integration.md) remains deprecated. This plan deliberately exposes small coordination primitives and does not revive a Sidecar-owned plan/build/review engine, task policy, validator topology, or merge loop.
 
 ## Decision first
@@ -223,7 +224,7 @@ future TUI actions ────┘           │
 
 - **`internal/agentcontrol`** owns typed commands/outcomes, target pinning, shell-readiness checks, prompt/wait refusal policy, lifecycle monitoring, and read/key operations. It imports no Bubble Tea package and no conversation plugin.
 - **`internal/agentsession`** owns `SessionRef` validation (`id` or absolute `path`), official-source trust, provider resume planning, deduplication keys, and cold-restore decisions. It works on structured values and argv, not shell strings.
-- **`internal/agentcatalog`** remains the single family catalog but grows capability-bearing provider entries or small provider adapters: canonical ID/aliases, launch argv builder, resume argv builder, supported session-ref kinds, skip-permissions argument, and optional integration installer/status hook. The current resume switch in `internal/plugins/conversations/view_content.go` moves here; the Conversations UI, restore coordinator, and CLI become clients of the same builder.
+- **`internal/agentcatalog`** remains the single family catalog but grows capability-bearing provider entries or small provider adapters: canonical ID/aliases, launch argv builder, resume argv builder, supported session-ref kinds, skip-permissions argument, and the provider metadata consumed by the lifecycle integration manager. The current resume switch in `internal/plugins/conversations/view_content.go` moves here; the Conversations UI, restore coordinator, CLI, and [lifecycle-hook plan](notification-agent-lifecycle-hooks.md) become clients of the same catalog rather than defining parallel provider registries.
 - **`internal/agentactivity` and `internal/agentstatus`** keep their existing evidence and presentation jobs. Control code consumes them; it does not add a second lifecycle classifier.
 - **`internal/shellstate`** remains the only writer of managed-shell persistence. No command edits `shells.json` directly.
 - **Terminal adapter.** The default implementation resolves the tmux session's sole managed pane, foreground process identity, capture sources, control-mode output events, ordered paste, and logical keys. Tests use a fake adapter. The remote-host plan supplies the second implementation through its shipped transport: the proxied control-mode channel for terminal I/O and one-shot CLI verbs for commands.
@@ -335,7 +336,7 @@ The steel thread supports Codex and Claude because Sidecar already has launch, a
 3. Record source/version so an outdated integration can be reported honestly and upgraded without changing the shell schema.
 4. Expand to every catalog provider for which Sidecar can build and verify a native resume argv. Providers without native resume still gain start/get/prompt/wait/read and restore as plain shells.
 
-Integration installation is explicit and reversible. `sidecar integration status [--json]` reports provider, installed version, lifecycle authority, session-identity capability, and minimum version. Installing hooks must merge with user configuration through provider-specific adapters and preserve unrelated hooks/settings. This may reuse patterns from the adapter stack, but no hook becomes authoritative for lifecycle unless it covers the complete lifecycle; session-only hooks report identity only and `agentactivity` remains the status authority.
+Integration installation, status, versioning, safe configuration merge, and CLI/Configuration surfaces are controlled by [Deterministic agent lifecycle hooks](notification-agent-lifecycle-hooks.md). This plan contributes the session-reference validator and resume capability metadata to that shared application service. `sidecar agent integration status [--json]` reports provider, installed version, lifecycle authority, session-identity capability, and minimum version; session-only hooks report identity only and existing screen/process detection remains the status authority.
 
 ## Interaction with remote hosts
 
@@ -394,7 +395,7 @@ Therefore:
 
 - Add `internal/agentsession`, v3 shell manifest fields, `agent report-session`, generation fencing, validation, redacted list behavior, and global deduplication.
 - Move every resume command builder out of the Conversations plugin into the provider registry as structured argv. The optional Conversations UI consumes the registry and keeps its current user-confirmed behavior.
-- Build and test Codex and Claude session-report integrations first; then add providers with proven native resume commands one adapter at a time. `integration status` reports unsupported/missing/outdated honestly.
+- Build and test Codex and Claude session-report mappings first through the shared lifecycle integration assets; then add providers with proven native resume commands one adapter at a time. `sidecar agent integration status` reports unsupported/missing/outdated honestly.
 - Add an exact-bound transcript reader that resolves the bound session through the provider's existing history adapter without constructing the Conversations plugin.
 
 **Exit gate:** a fake hook can report, rotate, clear, and attempt a stale late update; only the current process generation wins. Real Codex and Claude sessions bind to the exact current conversation and `agent read --source transcript` returns that conversation, not the newest other session in the same cwd.
@@ -459,6 +460,5 @@ Therefore:
 ## Open questions to settle in M0
 
 1. **Targeted observer implementation.** Can the existing control-mode manager be extracted without inheriting TUI geometry ownership, or is a smaller read-only control client warranted? Decide from the latency/spawn measurements, not package aesthetics.
-2. **Provider hook installation surface.** Should `sidecar integration install <kind>` live under a new root group or under `sidecar agent integration`? The behavior is settled; choose the smallest discoverable command tree after inspecting generated help width.
-3. **Exact transcript output shape.** Reuse the adapter `Message` representation directly or define a smaller stable agent-control projection. Prefer the smaller projection unless an existing public JSON contract already exists by M3.
-4. **Prior-live marker source.** Confirm whether the existing tmux-server incarnation tracker plus shell liveness transitions can record eligibility without an extra process spawn or write amplification. If not, add the smallest manifest transition needed; do not introduce a second runtime ledger.
+2. **Exact transcript output shape.** Reuse the adapter `Message` representation directly or define a smaller stable agent-control projection. Prefer the smaller projection unless an existing public JSON contract already exists by M3.
+3. **Prior-live marker source.** Confirm whether the existing tmux-server incarnation tracker plus shell liveness transitions can record eligibility without an extra process spawn or write amplification. If not, add the smallest manifest transition needed; do not introduce a second runtime ledger.

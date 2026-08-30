@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -64,8 +65,10 @@ func runNotifyConfigSet(env Env, args []string) int {
 	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("config").FindSubcommand("set")
 	help := RenderHelp(cmd)
 	jsonOutput := false
-	var nativeMode, soundMode string
-	setNative, setSound := false, false
+	var nativeMode, soundMode, quietHours string
+	var attentionPath, donePath, failurePath string
+	setNative, setSound, setQuiet := false, false, false
+	setAttentionPath, setDonePath, setFailurePath := false, false, false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value := func(flag string) (string, bool) {
@@ -98,13 +101,41 @@ func runNotifyConfigSet(env Env, args []string) int {
 				return 2
 			}
 			soundMode, setSound = v, true
+		case arg == "--quiet-hours" || strings.HasPrefix(arg, "--quiet-hours="):
+			v, ok := value("--quiet-hours")
+			if !ok {
+				cliErrf(env.Stderr, "--quiet-hours requires off or HH:MM-HH:MM\n\n%s", help)
+				return 2
+			}
+			quietHours, setQuiet = v, true
+		case arg == "--attention-path" || strings.HasPrefix(arg, "--attention-path="):
+			v, ok := value("--attention-path")
+			if !ok {
+				cliErrf(env.Stderr, "--attention-path requires a file path (use --attention-path= to restore the built-in sound)\n\n%s", help)
+				return 2
+			}
+			attentionPath, setAttentionPath = v, true
+		case arg == "--done-path" || strings.HasPrefix(arg, "--done-path="):
+			v, ok := value("--done-path")
+			if !ok {
+				cliErrf(env.Stderr, "--done-path requires a file path (use --done-path= to restore the built-in sound)\n\n%s", help)
+				return 2
+			}
+			donePath, setDonePath = v, true
+		case arg == "--failure-path" || strings.HasPrefix(arg, "--failure-path="):
+			v, ok := value("--failure-path")
+			if !ok {
+				cliErrf(env.Stderr, "--failure-path requires a file path (use --failure-path= to restore the built-in sound)\n\n%s", help)
+				return 2
+			}
+			failurePath, setFailurePath = v, true
 		default:
 			cliErrf(env.Stderr, "unknown notify config set option %q\n\n%s", arg, help)
 			return 2
 		}
 	}
-	if !setNative && !setSound {
-		cliErrf(env.Stderr, "notify config set requires --native or --sound\n\n%s", help)
+	if !setNative && !setSound && !setQuiet && !setAttentionPath && !setDonePath && !setFailurePath {
+		cliErrf(env.Stderr, "notify config set requires at least one setting\n\n%s", help)
 		return 2
 	}
 	prospective, err := loadAndApplyNotificationConfig()
@@ -118,6 +149,27 @@ func runNotifyConfigSet(env Env, args []string) int {
 	if setSound {
 		prospective.Notifications.Sound.Mode = config.DeliveryMode(soundMode)
 	}
+	if setQuiet {
+		enabled, start, end, parseErr := parseQuietHoursSetting(quietHours)
+		if parseErr != nil {
+			cliErrln(env.Stderr, parseErr)
+			return 2
+		}
+		prospective.Notifications.QuietHours.Enabled = enabled
+		if enabled {
+			prospective.Notifications.QuietHours.Start = start
+			prospective.Notifications.QuietHours.End = end
+		}
+	}
+	if setAttentionPath {
+		prospective.Notifications.Sound.AttentionPath = strings.TrimSpace(attentionPath)
+	}
+	if setDonePath {
+		prospective.Notifications.Sound.DonePath = strings.TrimSpace(donePath)
+	}
+	if setFailurePath {
+		prospective.Notifications.Sound.FailurePath = strings.TrimSpace(failurePath)
+	}
 	if err := config.ValidateNotifications(prospective.Notifications, config.ConfigPath()); err != nil {
 		cliErrln(env.Stderr, err)
 		return 2
@@ -128,6 +180,18 @@ func runNotifyConfigSet(env Env, args []string) int {
 		}
 		if setSound {
 			cfg.Sound.Mode = config.DeliveryMode(soundMode)
+		}
+		if setQuiet {
+			cfg.QuietHours = prospective.Notifications.QuietHours
+		}
+		if setAttentionPath {
+			cfg.Sound.AttentionPath = prospective.Notifications.Sound.AttentionPath
+		}
+		if setDonePath {
+			cfg.Sound.DonePath = prospective.Notifications.Sound.DonePath
+		}
+		if setFailurePath {
+			cfg.Sound.FailurePath = prospective.Notifications.Sound.FailurePath
 		}
 	})
 	if err != nil {
@@ -143,9 +207,193 @@ func runNotifyConfigSet(env Env, args []string) int {
 	return writeNotificationConfig(env, cfg.Notifications, jsonOutput)
 }
 
-func writeNotificationConfig(env Env, cfg config.NotificationsConfig, jsonOutput bool) int {
+func parseQuietHoursSetting(raw string) (bool, string, string, error) {
+	if raw == "off" {
+		return false, "", "", nil
+	}
+	if len(raw) != len("HH:MM-HH:MM") || raw[5] != '-' {
+		return false, "", "", fmt.Errorf("quiet hours must be off or HH:MM-HH:MM")
+	}
+	start, end := raw[:5], raw[6:]
+	prospective := config.DefaultNotificationsConfig()
+	prospective.QuietHours.Enabled = true
+	prospective.QuietHours.Start = start
+	prospective.QuietHours.End = end
+	if err := config.ValidateNotifications(prospective, config.ConfigPath()); err != nil {
+		return false, "", "", err
+	}
+	return true, start, end, nil
+}
+
+func runNotifySourceRoot(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("source")
+	if len(args) == 0 || isHelp(args[0]) {
+		_, _ = fmt.Fprint(env.Stdout, RenderHelp(cmd))
+		return 0
+	}
+	if args[0] == "set" {
+		return runNotifySourceSet(env, args[1:])
+	}
+	cliErrf(env.Stderr, "unknown notify source command %q\n\n%s", args[0], RenderHelp(cmd))
+	return 2
+}
+
+func runNotifySourceSet(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("notify").FindSubcommand("source").FindSubcommand("set")
+	help := RenderHelp(cmd)
+	jsonOutput := false
+	var sourceID string
+	var toastValue, nativeValue, soundValue, expiryValue string
+	setToast, setNative, setSound, setExpiry := false, false, false, false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value := func(flag string) (string, bool) {
+			if strings.HasPrefix(arg, flag+"=") {
+				return strings.TrimPrefix(arg, flag+"="), true
+			}
+			if arg == flag && i+1 < len(args) {
+				i++
+				return args[i], true
+			}
+			return "", false
+		}
+		switch {
+		case isHelp(arg):
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		case arg == "--json":
+			jsonOutput = true
+		case arg == "--toast" || strings.HasPrefix(arg, "--toast="):
+			v, ok := value("--toast")
+			if !ok {
+				cliErrf(env.Stderr, "--toast requires on or off\n\n%s", help)
+				return 2
+			}
+			toastValue, setToast = v, true
+		case arg == "--native" || strings.HasPrefix(arg, "--native="):
+			v, ok := value("--native")
+			if !ok {
+				cliErrf(env.Stderr, "--native requires on or off\n\n%s", help)
+				return 2
+			}
+			nativeValue, setNative = v, true
+		case arg == "--sound" || strings.HasPrefix(arg, "--sound="):
+			v, ok := value("--sound")
+			if !ok {
+				cliErrf(env.Stderr, "--sound requires none, event, attention, done, or failure\n\n%s", help)
+				return 2
+			}
+			soundValue, setSound = v, true
+		case arg == "--expiry" || strings.HasPrefix(arg, "--expiry="):
+			v, ok := value("--expiry")
+			if !ok {
+				cliErrf(env.Stderr, "--expiry requires a duration or sticky\n\n%s", help)
+				return 2
+			}
+			expiryValue, setExpiry = v, true
+		case strings.HasPrefix(arg, "-"):
+			cliErrf(env.Stderr, "unknown notify source set option %q\n\n%s", arg, help)
+			return 2
+		case sourceID == "":
+			sourceID = arg
+		default:
+			cliErrf(env.Stderr, "notify source set accepts exactly one source\n\n%s", help)
+			return 2
+		}
+	}
+	if !notify.ValidSource(notify.SourceID(sourceID)) {
+		cliErrf(env.Stderr, "source must be one of %s\n\n%s", strings.Join(notify.SourceIDs(), ", "), help)
+		return 2
+	}
+	if !setToast && !setNative && !setSound && !setExpiry {
+		cliErrf(env.Stderr, "notify source set requires at least one setting\n\n%s", help)
+		return 2
+	}
+	toast, err := parseOnOff("toast", toastValue, setToast)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	native, err := parseOnOff("native", nativeValue, setNative)
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	prospective, err := loadAndApplyNotificationConfig()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	apply := func(cfg *config.NotificationsConfig) {
+		if cfg.Sources == nil {
+			cfg.Sources = map[string]config.NotificationSourceConfig{}
+		}
+		rule := cfg.Sources[sourceID]
+		if setToast {
+			rule.Toast = &toast
+		}
+		if setNative {
+			rule.Native = &native
+		}
+		if setSound {
+			rule.Sound = config.SoundCue(soundValue)
+		}
+		if setExpiry {
+			rule.Expiry = expiryValue
+		}
+		cfg.Sources[sourceID] = rule
+	}
+	apply(&prospective.Notifications)
+	if err := config.ValidateNotifications(prospective.Notifications, config.ConfigPath()); err != nil {
+		cliErrln(env.Stderr, err)
+		return 2
+	}
+	if err := config.SaveNotifications(apply); err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	cfg, err := loadAndApplyNotificationConfig()
+	if err != nil {
+		cliErrln(env.Stderr, err)
+		return 1
+	}
+	broadcastNotificationConfigReload(env)
+	view := notificationConfigView(cfg.Notifications).Sources[sourceID]
 	if jsonOutput {
-		if err := json.NewEncoder(env.Stdout).Encode(notificationConfigView(cfg)); err != nil {
+		return writeJSON(env, struct {
+			Source string                 `json:"source"`
+			Rule   notificationSourceView `json:"rule"`
+		}{Source: sourceID, Rule: view})
+	}
+	_, _ = fmt.Fprintf(env.Stdout, "%s: toast %s, native %s, sound %s, expiry %s\n", sourceID, onOffText(view.Toast), onOffText(view.Native), view.Sound, view.Expiry)
+	return 0
+}
+
+func parseOnOff(name, raw string, set bool) (bool, error) {
+	if !set {
+		return false, nil
+	}
+	switch raw {
+	case "on":
+		return true, nil
+	case "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("--%s must be on or off", name)
+	}
+}
+
+func onOffText(value bool) string {
+	if value {
+		return "on"
+	}
+	return "off"
+}
+
+func writeNotificationConfig(env Env, cfg config.NotificationsConfig, jsonOutput bool) int {
+	view := notificationConfigView(cfg)
+	if jsonOutput {
+		if err := json.NewEncoder(env.Stdout).Encode(view); err != nil {
 			cliErrln(env.Stderr, err)
 			return 1
 		}
@@ -153,11 +401,47 @@ func writeNotificationConfig(env Env, cfg config.NotificationsConfig, jsonOutput
 	}
 	_, _ = fmt.Fprintf(env.Stdout, "System notifications: %s\nSounds: %s\n", notificationModeText(cfg.Native.Mode), notificationModeText(cfg.Sound.Mode))
 	if cfg.QuietHours.Enabled {
-		_, _ = fmt.Fprintf(env.Stdout, "Quiet hours: %s-%s\n", cfg.QuietHours.Start, cfg.QuietHours.End)
+		allDay := ""
+		if cfg.QuietHours.Start == cfg.QuietHours.End {
+			allDay = " (all day)"
+		}
+		_, _ = fmt.Fprintf(env.Stdout, "Quiet hours: %s-%s%s\n", cfg.QuietHours.Start, cfg.QuietHours.End, allDay)
 	} else {
 		_, _ = fmt.Fprintln(env.Stdout, "Quiet hours: off")
 	}
+	_, _ = fmt.Fprintln(env.Stdout, "Sound choices:")
+	_, _ = fmt.Fprintln(env.Stdout, "  Attention: "+soundPathText(cfg.Sound.AttentionPath))
+	_, _ = fmt.Fprintln(env.Stdout, "  Done: "+soundPathText(cfg.Sound.DonePath))
+	_, _ = fmt.Fprintln(env.Stdout, "  Failure: "+soundPathText(cfg.Sound.FailurePath))
+	_, _ = fmt.Fprintln(env.Stdout, "Source rules:")
+	seen := make(map[string]bool, len(view.Sources))
+	for _, source := range notify.Sources() {
+		id := string(source.ID)
+		writeNotificationSourceLine(env, id, view.Sources[id])
+		seen[id] = true
+	}
+	unknown := make([]string, 0, len(view.Sources)-len(seen))
+	for id := range view.Sources {
+		if !seen[id] {
+			unknown = append(unknown, id)
+		}
+	}
+	sort.Strings(unknown)
+	for _, id := range unknown {
+		writeNotificationSourceLine(env, id, view.Sources[id])
+	}
 	return 0
+}
+
+func soundPathText(path string) string {
+	if strings.TrimSpace(path) == "" {
+		return "built-in"
+	}
+	return path
+}
+
+func writeNotificationSourceLine(env Env, id string, rule notificationSourceView) {
+	_, _ = fmt.Fprintf(env.Stdout, "  %s: toast %s, native %s, sound %s, expiry %s\n", id, onOffText(rule.Toast), onOffText(rule.Native), rule.Sound, rule.Expiry)
 }
 
 type notificationSourceView struct {
@@ -285,7 +569,14 @@ func runNotifyStatus(env Env, args []string) int {
 
 func formatCapability(label string, capability notifydelivery.Capability) string {
 	if capability.Available {
-		return label + ": ready (" + capability.Provider + ")"
+		ready := label + ": ready"
+		if capability.Provider != "" {
+			ready += " (" + capability.Provider + ")"
+		}
+		if capability.Reason != "" {
+			ready += "; warning: " + capability.Reason
+		}
+		return ready
 	}
 	reason := capability.Reason
 	if reason == "" {
@@ -300,6 +591,7 @@ func runNotifyTest(env Env, args []string) int {
 	jsonOutput := false
 	channel := ""
 	event := notifydelivery.TestWaiting
+	source := notify.SourceID("")
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		value := func(flag string) (string, bool) {
@@ -334,6 +626,13 @@ func runNotifyTest(env Env, args []string) int {
 				cliErrf(env.Stderr, "--event requires waiting, done, or failure\n\n%s", help)
 				return 2
 			}
+		case arg == "--source" || strings.HasPrefix(arg, "--source="):
+			v, ok := value("--source")
+			source = notify.SourceID(v)
+			if !ok || !notify.ValidSource(source) {
+				cliErrf(env.Stderr, "--source requires one of %s\n\n%s", strings.Join(notify.SourceIDs(), ", "), help)
+				return 2
+			}
 		default:
 			cliErrf(env.Stderr, "unknown notify test option %q\n\n%s", arg, help)
 			return 2
@@ -352,6 +651,9 @@ func runNotifyTest(env Env, args []string) int {
 		cliErrln(env.Stderr, err)
 		return 2
 	}
+	if source != "" {
+		request.Notification.Source = source
+	}
 	request.Channel = channel
 	result := notifydelivery.Result{}
 	if env.NotificationDelivery != nil {
@@ -363,10 +665,11 @@ func runNotifyTest(env Env, args []string) int {
 	}
 	out := struct {
 		Event   notifydelivery.TestEvent     `json:"event"`
+		Source  notify.SourceID              `json:"source"`
 		Channel string                       `json:"channel"`
 		Native  notifydelivery.ChannelResult `json:"native"`
 		Sound   notifydelivery.ChannelResult `json:"sound"`
-	}{Event: event, Channel: selectedChannelText(channel), Native: result.Native, Sound: result.Sound}
+	}{Event: event, Source: request.Notification.Source, Channel: selectedChannelText(channel), Native: result.Native, Sound: result.Sound}
 	if jsonOutput {
 		if err := json.NewEncoder(env.Stdout).Encode(out); err != nil {
 			cliErrln(env.Stderr, err)

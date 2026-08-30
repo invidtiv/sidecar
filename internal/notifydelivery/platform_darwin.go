@@ -4,7 +4,9 @@ package notifydelivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +18,6 @@ const (
 	terminalNotifierProvider = "terminal-notifier"
 	osaScriptProvider        = "osascript"
 	afplayProvider           = "afplay"
-	providerTimeout          = 10 * time.Second
 )
 
 type darwinNative struct {
@@ -163,7 +164,24 @@ func (p *darwinSound) Probe(context.Context) Capability {
 	if _, err := p.runner.LookPath("/usr/bin/afplay"); err != nil {
 		return Capability{Provider: afplayProvider, Reason: "/usr/bin/afplay is unavailable"}
 	}
-	return Capability{Available: true, Provider: afplayProvider}
+	capability := Capability{Available: true, Provider: afplayProvider}
+	if inspector, ok := p.cache.(fallbackAssetCache); ok {
+		var notes []string
+		for _, selection := range inspector.Selections() {
+			if !selection.Custom {
+				continue
+			}
+			if selection.Err != nil {
+				notes = append(notes, fmt.Sprintf("%s custom sound is unavailable and will use the built-in WAV", selection.Cue))
+				continue
+			}
+			if format := strings.TrimPrefix(strings.ToLower(filepath.Ext(selection.Path)), "."); format != "wav" && format != "mp3" {
+				notes = append(notes, fmt.Sprintf("%s custom .%s sound is unsupported and will use the built-in WAV", selection.Cue, formatLabel(format)))
+			}
+		}
+		capability.Reason = strings.Join(notes, "; ")
+	}
+	return capability
 }
 
 func (p *darwinSound) Play(ctx context.Context, cue Cue) (ProviderReceipt, error) {
@@ -171,12 +189,42 @@ func (p *darwinSound) Play(ctx context.Context, cue Cue) (ProviderReceipt, error
 	if err != nil {
 		return ProviderReceipt{Provider: afplayProvider, At: time.Now().UTC()}, err
 	}
+	receipt, err := p.playPath(ctx, path)
+	if err == nil {
+		return receipt, nil
+	}
+	fallback, ok := p.cache.(fallbackAssetCache)
+	if !ok {
+		return receipt, err
+	}
+	builtIn, useFallback, fallbackErr := fallback.Fallback(cue, path, err)
+	if !useFallback {
+		return receipt, err
+	}
+	if fallbackErr != nil {
+		return receipt, errors.Join(err, fallbackErr)
+	}
+	fallbackReceipt, fallbackErr := p.playPath(ctx, builtIn)
+	if fallbackErr != nil {
+		return fallbackReceipt, errors.Join(err, fmt.Errorf("built-in sound fallback failed: %w", fallbackErr))
+	}
+	fallbackReceipt.Reason = "custom_sound_fallback"
+	return fallbackReceipt, nil
+}
+
+func (p *darwinSound) playPath(ctx context.Context, path string) (ProviderReceipt, error) {
+	receipt := ProviderReceipt{Provider: afplayProvider, At: time.Now().UTC()}
+	format := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if format != "wav" && format != "mp3" {
+		return receipt, fmt.Errorf("afplay custom .%s sound is unsupported; Sidecar supports WAV and MP3", formatLabel(format))
+	}
 	player, err := p.runner.LookPath("/usr/bin/afplay")
 	if err != nil {
-		return ProviderReceipt{Provider: afplayProvider, At: time.Now().UTC()}, err
+		return receipt, err
 	}
 	callCtx, cancel := context.WithTimeout(ctx, providerTimeout)
 	defer cancel()
 	err = p.runner.Run(callCtx, player, path)
-	return ProviderReceipt{Provider: afplayProvider, Delivered: err == nil, At: time.Now().UTC()}, err
+	receipt.Delivered = err == nil
+	return receipt, err
 }
