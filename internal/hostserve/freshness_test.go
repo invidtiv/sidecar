@@ -164,6 +164,150 @@ func TestServeReInventoriesWhenAManifestChanges(t *testing.T) {
 	}
 }
 
+// coldProject is a configured project on a machine where Sidecar has never been
+// opened: a real directory, and no state directory at all. gainState creates the
+// state directory and its manifest, which is what that machine's first `sidecar
+// create shell` does, and returns the manifest path.
+func coldProject(t *testing.T) (Project, func() string) {
+	t.Helper()
+	root := t.TempDir()
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	canonical, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gainState := func() string {
+		t.Helper()
+		projectDir := filepath.Join(state, "sidecar", "projects", "cold")
+		if err := os.MkdirAll(projectDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, "meta.json"),
+			fmt.Appendf(nil, `{"path": %q}`, canonical), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		manifest := filepath.Join(projectDir, "shells.json")
+		if err := os.WriteFile(manifest, []byte(`{"version":2,"shells":[]}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return manifest
+	}
+	return Project{Name: "cold", Path: canonical}, gainState
+}
+
+// TestManifestWatchStartsWhenAProjectGainsAStateDirectory is the first-use case:
+// a host where Sidecar has never been opened has no project state directory, so
+// there is nothing to register on at connect time. That must be a watch waiting
+// to start, not a watch that can never start — the whole freshness fix is absent
+// for the life of the connection otherwise, and only a reconnect restores it.
+func TestManifestWatchStartsWhenAProjectGainsAStateDirectory(t *testing.T) {
+	project, gainState := coldProject(t)
+
+	w := startManifestWatch([]Project{project})
+	defer w.stop()
+	if w.watcher == nil {
+		t.Fatal("a host with no project state directory created no watcher, so nothing can ever bring the watch up")
+	}
+	if len(w.targets()) != 0 {
+		t.Fatalf("a watch with no manifest to watch registered %v", w.targets())
+	}
+	if w.Degraded() == "" {
+		t.Error("a watch with nothing registered claimed to be whole")
+	}
+
+	manifest := gainState()
+	w.reconcile()
+
+	if len(w.paths) != 1 {
+		t.Fatalf("paths = %v after the project gained a state directory", w.paths)
+	}
+	if w.signals() == nil {
+		t.Fatal("the watch never came up; new shells still cost a full inventory tick")
+	}
+	if note := w.Degraded(); note != "" {
+		t.Errorf("the host still claims to be degraded after the watch came up: %q", note)
+	}
+
+	// A registered target rather than a merely non-nil channel: the fix is only
+	// real if a write to that manifest actually signals.
+	writeManifest(t, manifest, "cold-created-remotely")
+	select {
+	case <-w.signals():
+	case <-time.After(5 * time.Second):
+		t.Fatal("a manifest write produced no signal; the watch is registered on nothing")
+	}
+}
+
+// TestManifestWatchCountsResolvableProjects. "Whole" is measured against the
+// projects that can actually resolve, not against the config entry count. Two
+// entries naming one path, or an entry with no path at all, otherwise leave the
+// set permanently short — and reconcile then pays a ReadDir of the state tree
+// plus a meta.json read per entry on every full inventory, forever.
+func TestManifestWatchCountsResolvableProjects(t *testing.T) {
+	project, _ := watchedProject(t, nil)
+	w := startManifestWatch([]Project{
+		project,
+		{Name: "same project, second entry", Path: project.Path},
+		{Name: "never configured with a path"},
+	})
+	defer w.stop()
+
+	if note := w.Degraded(); note != "" {
+		t.Errorf("a duplicate and a blank config entry made a whole watch report itself degraded: %q", note)
+	}
+	// This is the condition reconcile early-returns on, which is what stops the
+	// repeated resolution.
+	if len(w.paths) < len(w.roots) {
+		t.Fatalf("paths = %d, roots = %d; the set can never become whole, so every inventory re-resolves it",
+			len(w.paths), len(w.roots))
+	}
+	if len(w.targets()) != 1 {
+		t.Errorf("targets = %v; one project named twice is one manifest", w.targets())
+	}
+}
+
+// TestServeWithdrawsTheWatchNoteWhenTheWatchComesUp. The note is a statement
+// about the host's condition, and a condition that ended has to be said to have
+// ended: a viewer or a transcript reader left holding the first sentence would
+// believe a current host is still on the clock.
+func TestServeWithdrawsTheWatchNoteWhenTheWatchComesUp(t *testing.T) {
+	out := &syncBuilder{}
+	runner := &fakeRunner{}
+	project, gainState := coldProject(t)
+
+	opts := baseOptions(nil, runner, time.Now)
+	opts.Out = out
+	opts.Projects = []Project{project}
+	opts.Cycles = 0
+	opts.InventoryEvery = time.Nanosecond
+	opts.LivePoll, opts.ReadyPoll, opts.IdlePoll = 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, opts) }()
+
+	says := func(fragment string) func() bool {
+		return func() bool {
+			for _, msg := range decode(t, out.String()) {
+				if msg.Kind == hostproto.KindError && msg.Error != nil && strings.Contains(msg.Error.Message, fragment) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	waitFor(t, "the cold host to say its watch could not be established", says("no project state directory exists"))
+	gainState()
+	waitFor(t, "the note to be withdrawn once the watch came up", says("no longer applies"))
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+}
+
 // TestServeStillServesWhenTheWatchCannotStart is the degradation contract. A
 // host out of inotify watches must keep serving on the clock and must say so,
 // because a viewer that cannot tell "degraded" from "unreachable" will read the
@@ -237,8 +381,13 @@ func TestServeSaysNothingWhenTheWatchIsWhole(t *testing.T) {
 // reapOptions builds a serve run whose probe and manifest writer are recorded
 // rather than real.
 type reapRecorder struct {
-	mu        sync.Mutex
-	verdict   shellliveness.Verdict
+	mu      sync.Mutex
+	verdict shellliveness.Verdict
+	// verdicts, when set, is answered one per probe before verdict takes over.
+	// The reap probes twice on the way to a write — once for the second opinion
+	// and once more at the instant of the tombstone — and the case that matters
+	// is the one where those two answers differ.
+	verdicts  []shellliveness.Verdict
 	probes    []string
 	forgotten []string
 }
@@ -247,7 +396,18 @@ func (r *reapRecorder) probe(session string) shellliveness.Verdict {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.probes = append(r.probes, session)
+	if len(r.verdicts) > 0 {
+		verdict := r.verdicts[0]
+		r.verdicts = r.verdicts[1:]
+		return verdict
+	}
 	return r.verdict
+}
+
+func (r *reapRecorder) probeCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.probes)
 }
 
 func (r *reapRecorder) forget(_, session, _ string, _ time.Time) error {
@@ -288,12 +448,18 @@ func onSecondListing(runner *fakeRunner, change func(*fakeRunner)) {
 // is the variable each guard test changes.
 func reapRun(t *testing.T, verdict shellliveness.Verdict, second func(*fakeRunner), mutate func(*Options)) *reapRecorder {
 	t.Helper()
+	return reapRunWith(t, &reapRecorder{verdict: verdict}, second, mutate)
+}
+
+// reapRunWith is reapRun with the probe answers supplied, for the guards that
+// turn on one probe answering differently from the next.
+func reapRunWith(t *testing.T, recorder *reapRecorder, second func(*fakeRunner), mutate func(*Options)) *reapRecorder {
+	t.Helper()
 	var out strings.Builder
 	runner := &fakeRunner{}
 	project, manifest := watchedProject(t, runner)
 	writeManifest(t, manifest, "spike-dying-shell")
 
-	recorder := &reapRecorder{verdict: verdict}
 	opts := baseOptions(&out, runner, time.Now)
 	opts.Projects = []Project{project}
 	opts.Cycles = 2
@@ -392,6 +558,70 @@ func TestServeReapsNothingAcrossAServerRestart(t *testing.T) {
 	}
 	if probes := len(recorder.probes); probes != 0 {
 		t.Fatalf("a server restart produced %d probes; the transition must clear every prior sighting", probes)
+	}
+}
+
+// TestServeReapsNothingWhenTheServerIsReplacedWhileTheProbeRuns is the second
+// half of the incarnation fence, and the half that only exists on the write
+// path: the server can be replaced between the suspicion being formed and the
+// verdict being applied, so reapPass re-reads the incarnation at ConfirmReap
+// rather than reusing the one from the top of the cycle.
+//
+// TestServeReapsNothingAcrossAServerRestart cannot cover it. There the
+// replacement lands between cycles, so PlanReap's own reset fires and the pass
+// never reaches a probe at all — which is why this test asserts that a probe
+// really ran. Reuse the top-of-cycle incarnation here and a shell on somebody
+// else's machine is tombstoned on evidence about a tmux server that no longer
+// exists.
+func TestServeReapsNothingWhenTheServerIsReplacedWhileTheProbeRuns(t *testing.T) {
+	recorder := reapRun(t, shellliveness.Gone, nil, func(opts *Options) {
+		var mu sync.Mutex
+		calls := 0
+		opts.ServerIncarnation = func() tmuxserver.Incarnation {
+			mu.Lock()
+			defer mu.Unlock()
+			calls++
+			// Call 1 is the hello's; calls 2 and 3 are the two cycles' own reads,
+			// so the suspicion forms under one consistent server and a probe is
+			// really planned. Call 4 is ConfirmReap's, taken after the probe ran,
+			// and that is where the replacement lands.
+			if calls > 3 {
+				return tmuxserver.Present(99, 1234, 4321)
+			}
+			return tmuxserver.Present(11, 22, 33)
+		}
+	})
+	if got := recorder.forgottenNames(); len(got) != 0 {
+		t.Fatalf("a shell was tombstoned on a verdict taken under a server that had already been replaced: %v", got)
+	}
+	// Without this the test would also pass on a pass that never started, which
+	// is exactly how the fence went uncovered.
+	if probes := recorder.probeCount(); probes == 0 {
+		t.Fatal("no probe ran, so the confirm fence was never reached and this test proves nothing")
+	}
+}
+
+// TestServeReapsNothingWhenTheSessionComesBackBeforeTheWrite is ReapShell's
+// fresh re-probe, over ssh, on somebody else's machine.
+//
+// Between the second opinion and the tombstone the user can have brought the
+// same tmux name back — pressing Enter on an offline row recreates the session
+// under its old name — and deleting the identity of a shell that is running
+// right now is the one outcome this feature must never produce. The incarnation
+// fence does not catch it: serve's tracker only learns about a resurrection from
+// a pane listing, and no listing happens between the confirm and the write.
+func TestServeReapsNothingWhenTheSessionComesBackBeforeTheWrite(t *testing.T) {
+	recorder := reapRunWith(t, &reapRecorder{
+		// Gone to the second opinion, Alive to the probe taken at the instant of
+		// the write.
+		verdict:  shellliveness.Alive,
+		verdicts: []shellliveness.Verdict{shellliveness.Gone, shellliveness.Alive},
+	}, nil, nil)
+	if got := recorder.forgottenNames(); len(got) != 0 {
+		t.Fatalf("a shell that came back before the write was tombstoned anyway: %v", got)
+	}
+	if probes := recorder.probeCount(); probes != 2 {
+		t.Fatalf("probes = %d, want the second opinion and a fresh one at the write", probes)
 	}
 }
 

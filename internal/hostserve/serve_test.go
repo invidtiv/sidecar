@@ -597,3 +597,27 @@ func TestServeStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Serve did not return on context cancel")
 	}
 }
+
+// TestHelloAdvertisesVerbCapabilities. A viewer chooses the argument list for a
+// remote mutation from what the host said it understands, so a host that
+// silently stopped announcing a flag it accepts would make every viewer fall
+// back forever. This is the one assertion holding the announcement to the build.
+func TestHelloAdvertisesVerbCapabilities(t *testing.T) {
+	var out strings.Builder
+	runner := &fakeRunner{}
+	opts := baseOptions(&out, runner, time.Now)
+	opts.Cycles = 1
+
+	if err := Serve(context.Background(), opts); err != nil {
+		t.Fatalf("Serve: %v", err)
+	}
+	hello := decode(t, out.String())[0].Hello
+	if hello == nil {
+		t.Fatal("no hello")
+	}
+	// This build's CLI takes `create shell --agent`, so it must say so: a viewer
+	// that reads false falls back to the two-step create-then-send.
+	if !hello.Capabilities.Verbs.CreateShellAgent {
+		t.Error("the host does not advertise `create shell --agent`, so no viewer will ever send it")
+	}
+}

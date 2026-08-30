@@ -245,6 +245,8 @@ Structured log lines are the nastiest version of this, because a line of JSON ca
 
 **`protocol-mismatch`.** The two ends are different Sidecar builds. Update the older one; the probe output tells you which versions are in play.
 
+**Mixed Sidecar versions that do share a protocol number.** These are fine, and they are the normal state: nobody updates two machines at the same moment. Within one protocol, a host announces in its handshake what its own CLI accepts, and the viewer sends only what that host said it understands. Creating an agent shell on a host running an older Sidecar still works, for example; it simply starts the agent rather than also recording the agent family in that machine's manifest as it creates the shell, which is what the newer host-side flag adds.
+
 **Rows appear but never change.** Look for `stale` on the host. A connected but quiet host keeps showing its last-known rows, marked as such, because last-known state is more useful than a blank machine as long as it says so.
 
 **A remote pane that stops accepting keystrokes.** If the session on the host has ended, the pane leaves interactive mode and says so. If it has not, check that the machine is still reachable; a dropped link degrades the one host, never the app.

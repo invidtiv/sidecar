@@ -165,6 +165,121 @@ func TestRemoteShellDeleteRefusesADisabledHost(t *testing.T) {
 	}
 }
 
+// confirmRemoteDelete opens the confirmation for the one remote shell row and
+// runs it, returning the host's answer without applying it. The host is
+// registered with a known incarnation so a test can move it afterwards, which is
+// what retargeting or removing it in Configuration does.
+func confirmRemoteDelete(t *testing.T, m *Model) globalShellDeletedMsg {
+	t.Helper()
+	m.hostRegistered = map[string]bool{"mac-mini": true}
+	m.hostIncarnations = map[string]uint64{"mac-mini": 7}
+	m.workspaces.SelectID(remoteShellRowID())
+	m.OpenDeleteSelectedShell()
+	cmd := m.applyDeleteAction(globalDeleteConfirmID)
+	if cmd == nil {
+		t.Fatalf("confirming dispatched nothing; error=%q", m.deleteError)
+	}
+	done, ok := cmd().(globalShellDeletedMsg)
+	if !ok {
+		t.Fatalf("the delete replied with %T", cmd())
+	}
+	if done.Incarnation != 7 {
+		t.Fatalf("the reply carries incarnation %d; the fence has nothing to check", done.Incarnation)
+	}
+	return done
+}
+
+// TestRemoteDeleteReplyIsDroppedWhenTheHostWasRetargeted. remoteQuickTimeout is
+// 30 seconds, and a user can retarget a host in Configuration inside it —
+// SyncHosts bumps the incarnation. The answer then describes the PREVIOUS
+// machine, and applying it drops a row belonging to the current one, with the
+// correcting snapshot coming from a host this configuration no longer watches.
+// Every sibling remote reply opens with this fence; delete carried one and
+// checked it nowhere.
+func TestRemoteDeleteReplyIsDroppedWhenTheHostWasRetargeted(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	localSeamGuard(t)
+	noLocalShellDelete(t)
+	stub.results = []any{map[string]any{"shell": "api-claude", "status": "deleted", "deleted": true}}
+
+	done := confirmRemoteDelete(t, m)
+	if done.Err != nil {
+		t.Fatalf("remote delete failed: %v", done.Err)
+	}
+	// Retargeted while the answer was in flight.
+	m.hostIncarnations["mac-mini"] = 8
+
+	m.Update(done)
+	if _, still := m.catalog[remoteShellRowID()]; !still {
+		t.Error("an answer from the previous machine dropped a row belonging to the current one")
+	}
+	if !m.DeleteOpen() {
+		t.Fatal("the confirmation closed on an answer that was thrown away, so the user was told nothing")
+	}
+	if m.deleteBusy {
+		t.Error("the confirmation is still waiting on a round trip that is over")
+	}
+	if !strings.Contains(m.deleteError, "removed or retargeted") {
+		t.Errorf("the confirmation does not say why the answer was dropped: %q", m.deleteError)
+	}
+}
+
+// TestRemoteDeleteFailureFromARemovedHostSaysWhatHappened. On the failure branch
+// the unfenced handler showed the raw ssh error, which describes a machine this
+// configuration no longer points at rather than the thing the user just did.
+func TestRemoteDeleteFailureFromARemovedHostSaysWhatHappened(t *testing.T) {
+	m, stub := remoteCreateModel(t)
+	localSeamGuard(t)
+	noLocalShellDelete(t)
+	stub.errs = []error{&hosts.RunError{
+		Failure: hosts.FailUnavailable, HostID: "mac-mini", ExitCode: -1,
+		Detail: "ssh: connect to host mac-mini port 22: No route to host",
+	}}
+
+	done := confirmRemoteDelete(t, m)
+	if done.Err == nil {
+		t.Fatal("an unreachable host reported success")
+	}
+	// Removed from configuration while the answer was in flight.
+	m.hostRegistered = map[string]bool{}
+	delete(m.hostIncarnations, "mac-mini")
+
+	m.Update(done)
+	if !m.DeleteOpen() || m.deleteBusy {
+		t.Fatalf("the confirmation is not showing the outcome: open=%v busy=%v", m.DeleteOpen(), m.deleteBusy)
+	}
+	if strings.Contains(m.deleteError, "No route to host") {
+		t.Errorf("the user reads the removed host's ssh error rather than what happened: %q", m.deleteError)
+	}
+	if !strings.Contains(m.deleteError, "removed or retargeted") {
+		t.Errorf("the confirmation does not say why the answer was dropped: %q", m.deleteError)
+	}
+}
+
+// TestRemoteDeleteReplyForAnotherRowLeavesTheConfirmationAlone. A dropped answer
+// un-sticks only the confirmation that asked for it. A user who cancelled and
+// started deleting something else has a round trip of their own in flight, and
+// clearing its busy flag would let a second confirm land on top of it.
+func TestRemoteDeleteReplyForAnotherRowLeavesTheConfirmationAlone(t *testing.T) {
+	m, _ := remoteCreateModel(t)
+	m.hostRegistered = map[string]bool{"mac-mini": true}
+	m.hostIncarnations = map[string]uint64{"mac-mini": 7}
+	m.workspaces.SelectID(remoteShellRowID())
+	m.OpenDeleteSelectedShell()
+	m.deleteBusy = true
+
+	m.Update(globalShellDeletedMsg{
+		remoteReply: remoteReply{HostID: "mac-mini", Incarnation: 1},
+		WorkspaceID: "some-other-row",
+	})
+	if !m.deleteBusy {
+		t.Error("a stale answer about another row un-stuck a delete that is still running")
+	}
+	if m.deleteError != "" {
+		t.Errorf("a stale answer about another row wrote into an unrelated confirmation: %q", m.deleteError)
+	}
+}
+
 // TestRemoteWorktreeDeleteStaysRefused. The gate is per-kind, and widening it
 // for shells must not widen it for worktrees: removing a checkout resolves a
 // path against a git repository here and carries branch-cleanup decisions the
@@ -216,6 +331,13 @@ func TestRemoteResultDiscriminatorRejectsALogLine(t *testing.T) {
 	}
 	if !(remoteShellDeleteResult{Shell: "api-claude", Status: "deleted"}).ValidRemoteResult() {
 		t.Error("a real delete result was rejected")
+	}
+	// A status this verb does not write is not this verb's answer. "Non-empty"
+	// would read a future partial failure — session killed, record not
+	// tombstoned — as success and optimistically drop the row for a shell whose
+	// identity is still on the host.
+	if (remoteShellDeleteResult{Shell: "api-claude", Status: "partial"}).ValidRemoteResult() {
+		t.Error("a status `shell delete` never writes was accepted as a successful delete")
 	}
 }
 

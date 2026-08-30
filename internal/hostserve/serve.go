@@ -304,13 +304,31 @@ func Serve(ctx context.Context, opts Options) error {
 	// watch.
 	watch := startManifestWatch(opts.Projects)
 	defer watch.stop()
-	if note := watch.Degraded(); note != "" {
-		if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &hostproto.Error{
+
+	// The watch's condition is reported whenever it CHANGES, not once at the
+	// start. A cold host — one where Sidecar has never been opened, so no project
+	// has a state directory — starts degraded and comes up the moment a project
+	// gains one, and a host that keeps saying it is degraded after it has stopped
+	// being so is a host nobody will believe the next time. The withdrawal goes
+	// out on the same non-fatal error channel the note did, because that is where
+	// a reader following this host's condition is already looking.
+	reportedWatch := ""
+	reportWatch := func() error {
+		note := watch.Degraded()
+		if note == reportedWatch {
+			return nil
+		}
+		reportedWatch = note
+		if note == "" {
+			note = "every configured project's shells.json is watched now; the earlier watch note no longer applies"
+		}
+		return encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &hostproto.Error{
 			Code:    hostproto.ErrInternal,
 			Message: note + " (" + opts.HostID + ")",
-		}}); err != nil {
-			return err
-		}
+		}})
+	}
+	if err := reportWatch(); err != nil {
+		return err
 	}
 
 	var (
@@ -344,6 +362,9 @@ func Serve(ctx context.Context, opts Options) error {
 			// had never been opened on this host joins the watch after its
 			// first shell is created there.
 			watch.reconcile()
+			if err := reportWatch(); err != nil {
+				return err
+			}
 			for _, project := range opts.Projects {
 				inventories[project.Path] = collector.CollectProjectInventory(ctx, project.Name, project.Path)
 			}
@@ -492,6 +513,19 @@ func pollInterval(snapshot hostproto.Snapshot, opts Options) time.Duration {
 	return interval
 }
 
+// serveVerbCapabilities is what THIS build's CLI accepts, announced so a viewer
+// can choose an argument list a host will actually parse rather than guess from
+// a version string.
+//
+// A literal rather than something derived from the command table, because
+// internal/cli is what runs this loop and cannot be imported back from here.
+// The rule that keeps it true is the ordinary one for a wire contract: a verb
+// that gains an option a viewer must know about gains a field here in the same
+// change.
+var serveVerbCapabilities = hostproto.VerbCapabilities{
+	CreateShellAgent: true,
+}
+
 func buildHello(opts Options) *hostproto.Hello {
 	_, tmuxPresent := opts.TmuxPath()
 	hello := &hostproto.Hello{
@@ -514,6 +548,7 @@ func buildHello(opts Options) *hostproto.Hello {
 			// one, so echoing it made the isolation evidence wrong in every
 			// case — which is the opposite of what this field is for.
 			StateDir: config.StateDir(),
+			Verbs:    serveVerbCapabilities,
 		},
 	}
 	if tmuxPresent {

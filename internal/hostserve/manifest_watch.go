@@ -57,6 +57,13 @@ import (
 // is degraded" from "this machine is unreachable". So the watch degrades to the
 // pre-existing clock behaviour and says so on the stream, non-fatally.
 //
+// The two degrade differently, and conflating them is what made a first-use host
+// permanently slow. A watcher that could not be created at all stays on the clock
+// for the life of the connection. A project with no state directory yet is
+// temporary: the watcher exists with nothing registered on it, reconcile picks
+// the project up on the first full inventory after one appears, and the note is
+// withdrawn on the stream rather than left standing.
+//
 // Everything below runs on the serve loop's own goroutine — start, reconcile,
 // and stop are all called from Serve — so there is no lock here. The only value
 // crossing goroutines is the watcher's signal channel, which livewatch owns.
@@ -78,8 +85,16 @@ var newManifestWatcher = livewatch.NewPathWatcher
 // value is inert and safe: signals() returns a nil channel, which a select
 // simply never takes.
 type manifestWatch struct {
-	watcher  *livewatch.PathWatcher
-	projects []Project
+	watcher *livewatch.PathWatcher
+
+	// roots is the deduplicated set of non-empty configured project paths, in
+	// configured order. It is what "the watch is whole" is measured against, and
+	// it is not len(projects): two config entries naming one Path, or an entry
+	// with an empty Path, would leave the set permanently short of the project
+	// count, and reconcile would then pay a projectdir.LookupAll — a ReadDir of
+	// <state>/projects plus a meta.json read per entry — on every full inventory
+	// for the life of the connection.
+	roots []string
 
 	// paths is project root -> shells.json. It can be incomplete, which is a
 	// normal state rather than an error: a project configured on the host but
@@ -87,25 +102,32 @@ type manifestWatch struct {
 	paths map[string]string
 
 	// degraded is what to tell the viewer about a watch that could not be
-	// established in full, or empty when there is nothing to say.
+	// established in full, or empty when there is nothing to say. It is
+	// re-derived on every reconcile, because a note that is never withdrawn
+	// leaves a host claiming to be degraded after it has stopped being so.
 	degraded string
 }
 
-// startManifestWatch resolves each project's manifest and registers a watch
-// over them. It never returns nil and never returns an error: every failure
-// mode degrades to the clock, and Degraded says which one happened.
+// startManifestWatch registers a watch over each project's manifest. It never
+// returns nil and never returns an error: every failure mode degrades to the
+// clock, and Degraded says which one happened.
+//
+// The watcher is created whenever there is a project to watch, even when not
+// one of them has a state directory yet — which is the first-use case, a
+// machine where Sidecar has never been opened. Returning early there left the
+// watch unstartable for the life of the connection: reconcile has nothing to
+// register onto without a watcher, so the first `sidecar create shell` on that
+// host went back to costing a full inventory tick, and the degraded note said
+// so forever. A watcher with no targets holds no descriptors (livewatch.Watch
+// releases every registration when passed none), so creating it up front costs
+// one fsnotify handle and buys the recovery.
 //
 // This runs after the hello has been written, not before. A hello that waited
 // on a directory read would make every viewer's first impression of a host
 // slower for a freshness gain none of them can observe yet.
 func startManifestWatch(projects []Project) *manifestWatch {
-	w := &manifestWatch{projects: projects}
-	if len(projects) == 0 {
-		return w
-	}
-	w.paths = resolveManifests(projects)
-	if len(w.paths) == 0 {
-		w.degraded = "no project state directory exists on this host yet, so shells.json cannot be watched; new shells appear on the inventory cadence"
+	w := &manifestWatch{roots: manifestRoots(projects)}
+	if len(w.roots) == 0 {
 		return w
 	}
 	watcher, err := newManifestWatcher(livewatch.Config{
@@ -117,12 +139,25 @@ func startManifestWatch(projects []Project) *manifestWatch {
 		return w
 	}
 	w.watcher = watcher
+	w.paths = resolveManifests(w.roots)
 	w.watcher.Watch(w.targets()...)
-	if len(w.paths) < len(projects) {
-		w.degraded = fmt.Sprintf("watching %d of %d project manifests; the rest have no state directory on this host yet and appear on the inventory cadence",
-			len(w.paths), len(projects))
-	}
+	w.degraded = w.note()
 	return w
+}
+
+// note is what a watch of this shape has to tell the viewer, or "" when it is
+// whole. Derived rather than assigned once, so the same function that raises
+// the note is the one that withdraws it.
+func (w *manifestWatch) note() string {
+	switch {
+	case len(w.paths) == 0:
+		return "no project state directory exists on this host yet, so shells.json cannot be watched; new shells appear on the inventory cadence until one does"
+	case len(w.paths) < len(w.roots):
+		return fmt.Sprintf("watching %d of %d project manifests; the rest have no state directory on this host yet and appear on the inventory cadence",
+			len(w.paths), len(w.roots))
+	default:
+		return ""
+	}
 }
 
 // signals is the channel a cycle's tail select waits on beside the poll timer.
@@ -152,17 +187,19 @@ func (w *manifestWatch) Degraded() string {
 // `sidecar create shell` in a remote project that had never been opened on that
 // host, which is exactly the case Phase C found the hard way — therefore starts
 // being watched within one inventory tick, which is the freshness it had
-// before.
+// before. On a host where NO project had one, this is the whole of how the
+// watch ever starts.
 func (w *manifestWatch) reconcile() {
-	if w == nil || w.watcher == nil || len(w.paths) >= len(w.projects) {
+	if w == nil || w.watcher == nil || len(w.paths) >= len(w.roots) {
 		return
 	}
-	paths := resolveManifests(w.projects)
+	paths := resolveManifests(w.roots)
 	if len(paths) <= len(w.paths) {
 		return
 	}
 	w.paths = paths
 	w.watcher.Watch(w.targets()...)
+	w.degraded = w.note()
 }
 
 // targets is the watch set: one shells.json per configured project, in
@@ -174,8 +211,8 @@ func (w *manifestWatch) reconcile() {
 // project count rather than to worktree count.
 func (w *manifestWatch) targets() []livewatch.Target {
 	targets := make([]livewatch.Target, 0, len(w.paths))
-	for _, project := range w.projects {
-		if path := w.paths[project.Path]; path != "" {
+	for _, root := range w.roots {
+		if path := w.paths[root]; path != "" {
 			targets = append(targets, livewatch.File(path))
 		}
 	}
@@ -191,13 +228,24 @@ func (w *manifestWatch) stop() {
 	w.watcher = nil
 }
 
-func resolveManifests(projects []Project) map[string]string {
+// manifestRoots is the deduplicated, non-empty project paths in configured
+// order. Duplicates and blanks are dropped here rather than tolerated
+// downstream, because every count taken of this set — "is the watch whole?" —
+// would otherwise be measured against entries that can never resolve.
+func manifestRoots(projects []Project) []string {
 	roots := make([]string, 0, len(projects))
+	seen := make(map[string]bool, len(projects))
 	for _, project := range projects {
-		if project.Path != "" {
-			roots = append(roots, project.Path)
+		if project.Path == "" || seen[project.Path] {
+			continue
 		}
+		seen[project.Path] = true
+		roots = append(roots, project.Path)
 	}
+	return roots
+}
+
+func resolveManifests(roots []string) map[string]string {
 	dirs := projectdir.LookupAll(roots)
 	paths := make(map[string]string, len(dirs))
 	for root, dir := range dirs {

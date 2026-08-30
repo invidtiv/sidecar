@@ -1011,6 +1011,9 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 	case globalWorktreeDeleteDoneMsg:
 		return m.applyWorktreeDeleteDone(msg)
 	case globalShellDeletedMsg:
+		if m.hostReplyStale(msg.HostID, msg.Incarnation) {
+			return m.dropRemoteDeleteReply(msg)
+		}
 		m.deleteBusy = false
 		if msg.Err != nil {
 			m.deleteError = msg.Err.Error()

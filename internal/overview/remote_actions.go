@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/hosts"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -193,6 +194,25 @@ func (m *Model) remoteHostUnavailable(hostID string) string {
 		}
 	}
 	return hostID + " is disabled or not connected, so nothing can be changed there"
+}
+
+// hostVerbs is what a host said its CLI understands, read from the hello it
+// sent. The zero value — an unknown host, or one whose Sidecar predates the
+// field — means "assume nothing", which is what makes an older host degrade
+// rather than fail.
+//
+// From the retained Health.Hello rather than from a version string: dev builds
+// carry git revisions, so version comparison decides nothing, and the hello
+// survives a reconnect so a host that is momentarily stale still answers.
+func (m *Model) hostVerbs(hostID string) hostproto.VerbCapabilities {
+	if hostID == "" {
+		return hostproto.VerbCapabilities{}
+	}
+	health, ok := m.hostHealth[hostID]
+	if !ok || health.Hello == nil {
+		return hostproto.VerbCapabilities{}
+	}
+	return health.Hello.Capabilities.Verbs
 }
 
 // createFormHostID is the host the create form's current project key names, or
@@ -430,6 +450,11 @@ func remoteWorkspaceProjectRef(workspace workspaceinventory.Workspace) string {
 // card because the manifest said so. The `shell send --run` round trip that
 // follows still starts the process: recording the family and launching it are
 // two things, and the host needs both.
+//
+// agentType arrives empty for a host that did not advertise the flag, which is
+// how an older machine keeps working; submitRemoteCreateShell owns that
+// decision, because it is the only thing here that knows which host is being
+// asked.
 func remoteCreateShellArgs(projectRef, displayName, agentType string) []string {
 	args := []string{"create", "shell", "--project", projectRef}
 	if displayName != "" {
@@ -536,6 +561,16 @@ func (m *Model) submitRemoteCreateShell(target createTarget, displayName, agentT
 	incarnation := m.hostIncarnationFor(hostID)
 	parent := m.hostContext()
 	projectRef := remoteProjectRef(project)
+	// --agent only where the host said it understands it. A Sidecar that
+	// predates the flag answers `unknown option "--agent"` and exits 2, so
+	// sending it unconditionally turned a durability improvement into a total
+	// failure of remote agent creation against a machine the user had not
+	// updated yet. Dropping it falls back to exactly the two-step behaviour that
+	// preceded it: the shell is created, and the `shell send --run` below starts
+	// the agent.
+	if !m.hostVerbs(hostID).CreateShellAgent {
+		agentType = ""
+	}
 	createArgs := remoteCreateShellArgs(projectRef, displayName, agentType)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(parent, remoteCreateShellTimeout)
@@ -713,6 +748,38 @@ func (m *Model) deleteRemoteShell(workspace workspaceinventory.Workspace) tea.Cm
 	}
 }
 
+// dropRemoteDeleteReply throws away a delete answer from a host that is no
+// longer the host it was addressed to — removed from configuration, or
+// retargeted at another machine, while the round trip was in flight.
+//
+// The same fence every other remote reply opens with (hostReplyStale), and it
+// matters more here than anywhere else: applying the answer would run
+// forgetSessionsRow, so a `deleted` from the PREVIOUS machine would drop a row
+// belonging to the current one, and the correcting snapshot comes from a host
+// this configuration no longer watches. The 30s remoteQuickTimeout is the whole
+// window a user has to retarget a host in Configuration — which calls SyncHosts
+// and bumps or clears the incarnation — while a delete is running.
+//
+// The row is deliberately left alone rather than dropped, and the confirmation
+// is left open with the reason rather than closed: a delete that silently
+// appeared to work against a machine that is no longer addressed is exactly the
+// outcome the fence exists to prevent. On the failure branch this also replaces
+// the raw ssh error the user would otherwise read with the sentence that is
+// actually true about their configuration.
+func (m *Model) dropRemoteDeleteReply(msg globalShellDeletedMsg) tea.Cmd {
+	// Only when the confirmation is still the one that asked. A user who
+	// cancelled and opened a delete for another row has a modal that has nothing
+	// to do with this answer, and clearing its busy flag would un-stick a round
+	// trip that is still running.
+	if !m.deleteOpen || m.deleteWorkspace.ID != msg.WorkspaceID {
+		return nil
+	}
+	m.deleteBusy = false
+	m.deleteModal = nil
+	m.deleteError = remoteReplyDropped(msg.HostID)
+	return nil
+}
+
 // dropRemoteWorkspaceRow removes a row from the last-known results of the host
 // that reported it, so a deletion the user just confirmed is visible before
 // that host says so again.
@@ -755,15 +822,28 @@ type remoteShellDeleteResult struct {
 	Status string `json:"status"`
 }
 
-// ValidRemoteResult: the deleted session and its status are both always present
-// in the verb's result, and a login-profile log line carrying one of those key
-// names does not carry the other. Without this floor an object that merely
-// parses is accepted as the answer, and a delete that never ran is reported as
-// a delete that did — the failure recorded at the top of this file's result
-// section, arriving here on the one verb whose optimistic row drop would then
-// hide a live shell until the host's next snapshot brought it back.
+// remoteShellDeleteStatus is the only status `sidecar shell delete` writes
+// (shellStatusDeleted, internal/cli/shell_delete.go). It is restated here rather
+// than imported because this is the viewer's end of a host boundary and the
+// value on the wire may come from a different build of that CLI.
+const remoteShellDeleteStatus = "deleted"
+
+// ValidRemoteResult: the deleted session, and the one status the verb writes.
+// Without this floor an object that merely parses is accepted as the answer, and
+// a delete that never ran is reported as a delete that did — the failure
+// recorded at the top of this file's result section, arriving here on the one
+// verb whose optimistic row drop would then hide a live shell until the host's
+// next snapshot brought it back.
+//
+// The status is matched rather than merely required, because "non-empty" is not
+// a statement about this verb at all. A future host that reported a partial
+// failure — the session killed, the record not tombstoned — would satisfy a
+// non-empty check and be read as success, and the row would be dropped for a
+// shell whose identity is still there. Refusing an unrecognised status instead
+// surfaces the mutation as failed and keeps the row, which is the direction this
+// surface must err in.
 func (r remoteShellDeleteResult) ValidRemoteResult() bool {
-	return strings.TrimSpace(r.Shell) != "" && strings.TrimSpace(r.Status) != ""
+	return strings.TrimSpace(r.Shell) != "" && strings.TrimSpace(r.Status) == remoteShellDeleteStatus
 }
 
 // remoteRenameResult is the subset of `sidecar shell rename --json` this
