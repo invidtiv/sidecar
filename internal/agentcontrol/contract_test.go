@@ -10,7 +10,7 @@ import (
 )
 
 func contractTarget() Target {
-	return Target{Host: "local", Project: "sidecar", Session: "sidecar-sh-sidecar-4", Name: "reviewer", Namespace: "/private/tmp/tmux/default", PaneID: "%7", PanePID: 4242, ServerIncarnation: "present inode=10 ctime=20 pid=30"}
+	return Target{Host: "local", Project: "sidecar", Session: "sidecar-sh-sidecar-4", Name: "reviewer", Namespace: "/private/tmp/tmux/default", PaneID: "%7", PanePID: 4242, ServerPID: 30, ServerIncarnation: "present inode=10 ctime=20 pid=30"}
 }
 
 func assertJSONFixture(t *testing.T, path string, value any) {

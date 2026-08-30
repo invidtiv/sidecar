@@ -25,19 +25,48 @@ type Snapshot struct {
 	CapturedAt      time.Time
 }
 
+// Terminal is the adapter every control operation goes through. The local
+// implementation speaks tmux; the remote-host plan supplies the second one.
+//
+// Every method takes an already-pinned Snapshot rather than a bare Target for
+// the mutating operations, because the adapter re-proves the occupant against
+// that pin immediately before it writes and refuses a replacement.
 type Terminal interface {
 	Inspect(context.Context, Target) (Snapshot, error)
 	Launch(context.Context, Snapshot, []string) error
+	// Submit sends exact prompt text followed by a separate submission key,
+	// through the same ordered bracketed-paste path the embedded terminal uses.
+	Submit(context.Context, Snapshot, string) error
+	// SendKeys encodes every logical key name before writing any of them.
+	SendKeys(context.Context, Snapshot, []string) error
+	// Capture is a passive terminal read. It never manipulates the pane.
+	Capture(context.Context, Snapshot, ReadRequest) (string, error)
 }
 
 type Detector func(Snapshot, *agentactivity.Tracker) AgentState
 
 type Service struct {
-	Terminal       Terminal
-	Now            func() time.Time
+	Terminal Terminal
+	Now      func() time.Time
+	// Poll is the bounded cadence used by start and by any watch whose terminal
+	// offers no event stream.
 	Poll           time.Duration
 	ShellStableFor time.Duration
-	Detect         Detector
+	// Observe is the minimum interval between full observations while a control
+	// stream is delivering signals. It bounds what an output burst can cost:
+	// without it, a coalesced control client can signal dozens of times a
+	// second and each signal would buy two tmux processes.
+	Observe time.Duration
+	// Verify is how often a signalled watch re-reads the pane even when nothing
+	// signalled. It is what makes a silent replacement, death, or copy-mode
+	// entry unable to hold a wait open.
+	Verify time.Duration
+	// StallAfter is the PromptStallWindow, overridable for tests.
+	StallAfter time.Duration
+	Detect     Detector
+	// Transcript is nil until M3 binds an exact provider session. A nil reader
+	// is a documented refusal, never a fallback to guessing.
+	Transcript TranscriptReader
 }
 
 func (s Service) defaults() Service {
@@ -49,6 +78,15 @@ func (s Service) defaults() Service {
 	}
 	if s.ShellStableFor <= 0 {
 		s.ShellStableFor = 200 * time.Millisecond
+	}
+	if s.Observe <= 0 {
+		s.Observe = 50 * time.Millisecond
+	}
+	if s.Verify <= 0 {
+		s.Verify = time.Second
+	}
+	if s.StallAfter <= 0 {
+		s.StallAfter = PromptStallWindow
 	}
 	if s.Detect == nil {
 		s.Detect = detect
@@ -100,7 +138,7 @@ func (s Service) WaitShellReady(ctx context.Context, target Target, timeout time
 	if err != nil {
 		return Snapshot{}, transport(target, err)
 	}
-	if initial.PaneCount != 1 || initial.Dead || initial.CopyMode || initial.PaneID == "" || initial.PanePID <= 0 || initial.ServerIncarnation == "" {
+	if initial.PaneCount != 1 || initial.Dead || initial.CopyMode || initial.PaneID == "" || initial.PanePID <= 0 || initial.ServerPID <= 0 {
 		return Snapshot{}, shellReady(initial)
 	}
 
@@ -226,7 +264,7 @@ func (s Service) waitShellReady(ctx context.Context, initial Snapshot, timeout t
 	// Only an otherwise-live pane still reporting its interactive shell can be
 	// shell initialization. A command/editor/agent, copy mode, dead pane, or
 	// multi-pane session is a semantic busy refusal immediately.
-	if initial.PaneCount != 1 || initial.Dead || initial.CopyMode || !interactiveShell(initial.CurrentCommand) || initial.PaneID == "" || initial.PanePID <= 0 || initial.ServerIncarnation == "" {
+	if initial.PaneCount != 1 || initial.Dead || initial.CopyMode || !interactiveShell(initial.CurrentCommand) || initial.PaneID == "" || initial.PanePID <= 0 || initial.ServerPID <= 0 {
 		return Snapshot{}, shellReady(initial)
 	}
 	grace := 2 * time.Second
@@ -280,7 +318,7 @@ func shellReady(s Snapshot) error {
 	if s.CopyMode {
 		return refuse("managed pane is in copy or another tmux mode")
 	}
-	if s.PaneID == "" || s.PanePID <= 0 || s.ServerIncarnation == "" {
+	if s.PaneID == "" || s.PanePID <= 0 || s.ServerPID <= 0 {
 		return refuse("managed pane identity is incomplete")
 	}
 	if !interactiveShell(s.CurrentCommand) || !s.ShellReady {
@@ -299,8 +337,12 @@ func interactiveShell(command string) bool {
 	return false
 }
 
+// sameOccupant is the pin: the same pane, of the same session, on the same
+// server, still running the same process. ServerIncarnation is deliberately not
+// part of it — see Target.ServerPID for why a ctime-bearing identity cannot pin
+// a target that is being observed.
 func sameOccupant(a, b Target) bool {
-	return a.Host == b.Host && a.Project == b.Project && a.Namespace == b.Namespace && a.Session == b.Session && a.PaneID == b.PaneID && a.PanePID == b.PanePID && a.ServerIncarnation == b.ServerIncarnation
+	return a.Host == b.Host && a.Project == b.Project && a.Namespace == b.Namespace && a.Session == b.Session && a.PaneID == b.PaneID && a.PanePID == b.PanePID && a.ServerPID == b.ServerPID
 }
 
 func detect(snap Snapshot, tracker *agentactivity.Tracker) AgentState {

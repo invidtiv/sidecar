@@ -29,7 +29,7 @@ func metadata(pane string) string {
 
 func TestLocalLaunchRevalidatesBeforeWriting(t *testing.T) {
 	inc := tmuxserver.Combine(tmuxserver.Socket(), 71).String()
-	snap := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: tmuxenv.Namespace(), PaneID: "%1", PanePID: 999999, ServerIncarnation: inc}}
+	snap := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: tmuxenv.Namespace(), PaneID: "%1", PanePID: 999999, ServerPID: 71, ServerIncarnation: inc}}
 	pasted := false
 	terminal := &LocalTerminal{Runner: &scriptedRunner{metadata: []string{metadata("%2")}}, Paste: func(string, string) error { pasted = true; return nil }, Key: func(string, string) error { return nil }}
 	err := terminal.Launch(context.Background(), snap, []string{"fake"})
@@ -44,7 +44,7 @@ func TestLocalLaunchRevalidatesBeforeWriting(t *testing.T) {
 
 func TestSubmitPreservesMultilineUnicodeAndMetacharacters(t *testing.T) {
 	inc := tmuxserver.Combine(tmuxserver.Socket(), 71).String()
-	snap := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: tmuxenv.Namespace(), PaneID: "%1", PanePID: 999999, ServerIncarnation: inc}}
+	snap := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: tmuxenv.Namespace(), PaneID: "%1", PanePID: 999999, ServerPID: 71, ServerIncarnation: inc}}
 	want := "first line\n雪 $HOME ; 'quoted' #{pane_id}"
 	got := ""
 	key := ""

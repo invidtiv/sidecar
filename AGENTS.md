@@ -47,6 +47,14 @@ Three verbs over one model, all acting on the surface showing this shell (or, wi
 
 Full reference: `docs/reference/cli.md`.
 
+## Coordinating another agent
+
+Sidecar can start and drive a second agent in a shell it owns, behind the default-off `agent_control` feature flag. See `.claude/skills/coordinate-agents/SKILL.md` for the full contract; the sequence it exists to protect is:
+
+discover (`sidecar agent list --json`) → create the layout separately (`sidecar create shell`, never `agent start`) → start the provider (`sidecar agent start TARGET --kind KIND`, which returns only at ready) → `sidecar agent prompt TARGET TEXT --wait --timeout ...` → **read before you send keys** (`sidecar agent read TARGET --source recent-unwrapped`) → answer with `sidecar agent send-keys TARGET ...`.
+
+Preserve the user's focus, and never close a target you did not create. There is no implicit timeout on any wait. A blocked agent is a question for you to read and answer deliberately — Sidecar never auto-answers an approval. Raw terminal work still belongs to tmux, not to `agent send-keys`.
+
 ## Demoing Features
 
 When you finish building or modifying a user-facing feature, make it easy for
