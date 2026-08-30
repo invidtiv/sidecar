@@ -56,7 +56,12 @@ func (n *notifier) observe(obs []notify.LaneObservation, now time.Time) []hostpr
 		if !ok {
 			continue
 		}
-		n.keys[posted.ID] = event.Key
+		if event.Class == hostproto.NotifyWaiting {
+			// Only a wait can be withdrawn, so only a wait needs remembering.
+			// Retaining every finished turn would grow this map for as long as
+			// the connection lives, with nothing ever removing an entry.
+			n.keys[posted.ID] = event.Key
+		}
 		out = append(out, event)
 	}
 	for _, id := range events.Dismiss {
