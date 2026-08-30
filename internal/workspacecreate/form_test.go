@@ -469,3 +469,22 @@ func TestErrorSection(t *testing.T) {
 		t.Fatalf("missing error:\n%s", view)
 	}
 }
+
+// TestErrorSectionWrapsRatherThanTruncates. A remote failure's message is two
+// halves — the host's own sentence, then what to do about it — and the modal is
+// narrower than either. Rendered as one unwrapped line the tail was cut, which
+// always meant the actionable half: the live two-machine proof saw "Error: the
+// remote Sidecar did not accept this…" and nothing else.
+func TestErrorSectionWrapsRatherThanTruncates(t *testing.T) {
+	f := Open(testOpts(KindWorktree))
+	message := `branch "phase-c-wt" already exists — pick another name, or delete that branch on the host`
+	f.SetError(message)
+	view := renderForm(t, f)
+	// Word by word, because wrapping moves the line breaks around: what must
+	// not happen is a word going missing.
+	for _, word := range strings.Fields(message) {
+		if !strings.Contains(view, word) {
+			t.Fatalf("the error was truncated before %q:\n%s", word, view)
+		}
+	}
+}

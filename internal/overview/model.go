@@ -385,6 +385,11 @@ type Model struct {
 	// workspace was created on. Empty means this one. Without it a remote
 	// creation is answered by a local row that happens to share a path or a
 	// session name — see honorPendingCreated.
+	//
+	// Like createTargetHost it is SET on every path that queues a pending
+	// selection, never adjusted on noticing a difference. A path that sets
+	// pendingCreatedTmux or pendingCreatedPath and leaves this alone inherits
+	// the previous creation's machine and then searches the wrong snapshot.
 	pendingCreatedHost string
 	// createTargetHost is the host the create flow is currently addressing, or
 	// "" for this machine. It is SET on every submission rather than adjusted
@@ -906,6 +911,8 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 			// synthesized here, and no local inventory is taken: a local
 			// refresh would answer a question about another machine.
 			m.pendingCreatedTmux = msg.Tmux
+			m.pendingCreatedPath = ""
+			m.pendingCreatedHost = msg.HostID
 			m.closeCreateShell()
 			return nil
 		}
@@ -979,6 +986,11 @@ func (m *Model) update(msg tea.Msg) tea.Cmd {
 		}
 		m.pendingCreatedPath = msg.Record.Path
 		m.pendingCreatedTmux = ""
+		// Local launch: SET the machine, do not leave whatever the last remote
+		// create put there. This is the field's own rule (see the declaration)
+		// and it was obeyed on one activation path in four — a browser that had
+		// created remotely once then failed to select anything it created here.
+		m.pendingCreatedHost = ""
 		m.showIdleWorktrees = true
 		m.closeCreateShell()
 		return m.refreshProjectAfterMutation(msg.Project)

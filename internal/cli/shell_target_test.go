@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
@@ -46,9 +47,15 @@ func targetProject(t *testing.T) (stateDir, workDir string) {
 	}
 	t.Chdir(workDir)
 	writeProjectMeta(t, stateDir, "demo", workDir)
+	// The namespace is this process's own tmux socket, which is what
+	// CreateManagedShell records and what `shell send` now compares against.
+	// The fixture used to hard-code "/tmp/socket" for every record, which meant
+	// every send test passed while the verb was proving ownership on one server
+	// and typing into another — deleting Namespace from shellTarget entirely
+	// left the whole file green.
 	writeProjectShells(t, stateDir, "demo",
-		shellstate.Definition{TmuxName: "sidecar-sh-demo-1", DisplayName: "one", Namespace: "/tmp/socket", WorkDir: workDir},
-		shellstate.Definition{TmuxName: "sidecar-sh-demo-2", DisplayName: "two", Namespace: "/tmp/socket", WorkDir: workDir},
+		shellstate.Definition{TmuxName: "sidecar-sh-demo-1", DisplayName: "one", Namespace: tmuxenv.Namespace(), WorkDir: workDir},
+		shellstate.Definition{TmuxName: "sidecar-sh-demo-2", DisplayName: "two", Namespace: tmuxenv.Namespace(), WorkDir: workDir},
 	)
 	return stateDir, workDir
 }
@@ -120,8 +127,8 @@ func TestShellRenameTargetSurfacesNameInUse(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	handled, code := Run([]string{"shell", "rename", "--target", "sidecar-sh-demo-2", "one"}, &out, &errOut)
-	if !handled || code != 2 {
-		t.Fatalf("duplicate name = handled %v code %d stderr %q", handled, code, errOut.String())
+	if !handled || code != exitInputRejected {
+		t.Fatalf("duplicate name = handled %v code %d stderr %q, want %d", handled, code, errOut.String(), exitInputRejected)
 	}
 	if !strings.Contains(errOut.String(), "already in use") {
 		t.Fatalf("stderr = %q, want the manifest's own refusal", errOut.String())
@@ -283,6 +290,7 @@ func TestShellSendReachesRegisteredWorktreeSession(t *testing.T) {
 }
 
 func TestShellSendValidation(t *testing.T) {
+	setupIsolatedCLI(t)
 	for _, tt := range []struct {
 		name     string
 		args     []string

@@ -154,7 +154,8 @@ func applyLayoutSubcommand() *Command {
 			Invocation: `sidecar layout apply --spec '{"columns":[{"panes":[...]}]}' | --pane '{"kind":"file|issue|note|diff|resource","targets":[...],"at":"col.row"}' [--pane ...] | --pane '{"kind":"shell","run":"...","name":"..."}'`,
 			Summary:    "Apply a full layout from a spec, or add panes atomically; learn exactly why nothing changed",
 		},
-		Run: runLayoutApply,
+		Mutates: true,
+		Run:     runLayoutApply,
 	}
 }
 

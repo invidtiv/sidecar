@@ -3,6 +3,7 @@ package overview
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -175,6 +176,16 @@ func remoteReplyDropped(hostID string) string {
 	return hostID + " was removed or retargeted while that was running; its answer was dropped"
 }
 
+// missingCreateTarget is what a create says when the project it was built for
+// can no longer be resolved: a host removed or retargeted between opening the
+// form and pressing Create.
+func missingCreateTarget(hostID string) string {
+	if hostID == "" {
+		return "the project this create was started for is no longer available"
+	}
+	return hostID + " is no longer available, so this create has nowhere to run"
+}
+
 // remoteActionError is the sentence a failed remote mutation shows: the
 // remote's own words, then what to do about it — the same shape a host health
 // row uses, because it is the same reader with the same problem.
@@ -188,11 +199,29 @@ func remoteActionError(err error) string {
 		if detail == "" {
 			detail = runErr.Error()
 		}
+		message := detail
 		if fix := runErr.Fix(); fix != "" {
-			return detail + " — " + fix
+			message = detail + " — " + fix
 		}
-		return detail
+		// Log the whole thing as well as returning it. The actionable half of
+		// this sentence is the second half, which is exactly the half a narrow
+		// modal drops, and until now nothing wrote it anywhere: a user who saw
+		// "the remote Sidecar did not accept this…" had no way, from inside the
+		// running app, to find out what the host actually said. This goes to
+		// the ordinary debug log, alongside the command and the remote's own
+		// stderr, so `sidecar -debug` and a bug report can both reach it.
+		slog.Warn("remote mutation failed",
+			"host", runErr.HostID,
+			"command", "sidecar "+strings.Join(runErr.Args, " "),
+			"failure", string(runErr.Failure),
+			"exit", runErr.ExitCode,
+			"detail", detail,
+			"fix", runErr.Fix(),
+			"stderr", runErr.Stderr,
+		)
+		return message
 	}
+	slog.Warn("remote mutation failed", "err", err)
 	return err.Error()
 }
 
@@ -204,14 +233,26 @@ func remoteActionError(err error) string {
 // configuration no longer points at; the modal is un-stuck rather than left
 // spinning because a user who removed a host should not be left waiting on it.
 func (m *Model) dropRemoteCreateReply(hostID string) tea.Cmd {
-	if !m.createOpen {
-		m.clearPendingCreated()
+	// The pending selection is always cleared: it named a row on a machine this
+	// configuration no longer points at, and leaving it set makes the next
+	// creation search the wrong snapshot.
+	m.clearPendingCreated()
+	// The form is only touched when it is still the form that asked. A user who
+	// removed the host and immediately started a LOCAL create has an open
+	// create modal that has nothing to do with this answer, and writing "mac-mini
+	// was removed" into it turns an unrelated form into a stuck one.
+	if !m.createOpen || m.createTargetHost != hostID {
+		return nil
+	}
+	// And only when the form still points there. createTargetHost records who
+	// asked; the form's own project key records where the next submission would
+	// go, and a user who has already retargeted it has moved on.
+	if target, ok := m.selectedCreateTarget(); ok && target.HostID != hostID {
 		return nil
 	}
 	m.createBusy = false
 	m.createModal = nil
 	m.createPlan = nil
-	m.clearPendingCreated()
 	m.setCreateError(remoteReplyDropped(hostID))
 	return nil
 }
@@ -238,6 +279,17 @@ func (m *Model) applyRemoteWorktreeCreated(msg globalWorktreeCreatedMsg) tea.Cmd
 	return nil
 }
 
+// The result types below each say which fields make a decoded object their
+// verb's answer (hosts.ResultValidator).
+//
+// Without that, an object is this surface's result if it merely parses: Go
+// ignores unknown fields and tolerates missing ones, so a login profile
+// emitting `{"level":"info","msg":"loading nvm"}` decoded into every one of
+// these with a nil error and an all-zero value. The consequences were not
+// cosmetic — a blank confirmation for a worktree that would really be created,
+// and a shell created on a host that the browser then never mentioned again —
+// so each type states its own floor rather than trusting the decode.
+
 // remoteShellResult is the subset of `sidecar create shell --json` this surface
 // reads. Only the session matters: it is the identity the follow-up agent send
 // addresses and the row the next snapshot will carry.
@@ -249,6 +301,11 @@ type remoteShellResult struct {
 	} `json:"shell"`
 }
 
+// ValidRemoteResult: the session is the whole point of the call.
+func (r remoteShellResult) ValidRemoteResult() bool {
+	return strings.TrimSpace(r.Shell.Session) != ""
+}
+
 // remoteWorktreeResult is the subset of `sidecar create worktree --json` this
 // surface reads.
 type remoteWorktreeResult struct {
@@ -258,6 +315,32 @@ type remoteWorktreeResult struct {
 	} `json:"shell"`
 	Path   string `json:"path"`
 	Branch string `json:"branch"`
+}
+
+// ValidRemoteResult: the path is what the pending selection matches on and the
+// session is how the row is addressed afterwards. `sidecar create worktree`
+// always reports both, and a log line carrying a "path" key reports neither of
+// the pair.
+func (r remoteWorktreeResult) ValidRemoteResult() bool {
+	return strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.Shell.Session) != ""
+}
+
+// remoteWorktreePlan carries `sidecar create worktree --plan --json` with a
+// statement of what makes it a plan.
+//
+// Embedded rather than duplicated: the confirmation renders workspaceops'
+// own plan fields, and a second copy of that struct here would be a second
+// thing to keep in step with the CLI. The embedding promotes every JSON field,
+// so what decodes is identical.
+type remoteWorktreePlan struct {
+	workspaceops.WorktreePlan
+}
+
+// ValidRemoteResult: branch and path are the two lines the confirmation is
+// built from. A plan missing either is the blank confirmation this guard
+// exists to stop — the user reads "Create  at " and presses Create anyway.
+func (p remoteWorktreePlan) ValidRemoteResult() bool {
+	return strings.TrimSpace(p.Branch) != "" && strings.TrimSpace(p.Path) != ""
 }
 
 // remoteProjectRef is the value passed as --project on the host.
@@ -328,13 +411,19 @@ func remoteWorktreeArgs(projectRef, name, base, agent string, skipPerms, plan bo
 	if plan {
 		args = append(args, "--plan")
 	}
-	return append(args, "--json", name)
+	// `--` before the positional. A worktree may legitimately be named "-fix",
+	// and without the terminator the host's parser reads it as a flag and exits
+	// 2 — which, being a usage error, told the user to update Sidecar.
+	return append(args, "--json", "--", name)
 }
 
 // remoteRenameArgs is `sidecar shell rename`, which renames a shell record or a
 // registered worktree's display name depending on what --target resolves to.
 func remoteRenameArgs(projectRef, session, newName string) []string {
-	return []string{"shell", "rename", "--target", session, "--project", projectRef, "--json", newName}
+	// `--` for the same reason remoteWorktreeArgs passes one: shellstate accepts
+	// a leading dash in a display name, so "-wip" must reach the host as a name
+	// rather than as an unknown option.
+	return []string{"shell", "rename", "--target", session, "--project", projectRef, "--json", "--", newName}
 }
 
 // remoteTargetSession is the tmux session name a remote row is addressed by.
@@ -403,12 +492,12 @@ func (m *Model) planRemoteWorktree(target createTarget, name, base, agent string
 		ctx, cancel := context.WithTimeout(parent, remoteQuickTimeout)
 		defer cancel()
 		reply := globalWorktreePlannedMsg{remoteReply: remoteReply{HostID: hostID, Incarnation: incarnation}, Project: project}
-		var plan workspaceops.WorktreePlan
+		var plan remoteWorktreePlan
 		if err := runRemoteSidecar(ctx, registry, hostID, args, &plan); err != nil {
 			reply.Err = err
 			return reply
 		}
-		reply.Plan = &plan
+		reply.Plan = &plan.WorktreePlan
 		return reply
 	}
 }
@@ -480,6 +569,17 @@ func (m *Model) renameRemoteWorkspace(workspace workspaceinventory.Workspace, ne
 // remoteRenameResult is the subset of `sidecar shell rename --json` this
 // surface reads. The host's normalisation wins over the one done locally for
 // immediate feedback.
+//
+// Shell is carried only to recognise the result: the verb always names the
+// session it renamed, and a log line that happens to have a "name" key does
+// not.
 type remoteRenameResult struct {
-	Name string `json:"name"`
+	Shell string `json:"shell"`
+	Name  string `json:"name"`
+}
+
+// ValidRemoteResult: the renamed session and its new name are both always
+// present in shellstate.RenameResult.
+func (r remoteRenameResult) ValidRemoteResult() bool {
+	return strings.TrimSpace(r.Shell) != "" && strings.TrimSpace(r.Name) != ""
 }

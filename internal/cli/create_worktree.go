@@ -40,6 +40,12 @@ func runCreateWorktree(env Env, args []string) int {
 			continue
 		}
 		switch {
+		case arg == "--":
+			// Everything after `--` is a value, not a flag: a worktree may
+			// legitimately be named "-fix", and refusing it here made the
+			// local and remote paths disagree about what a legal name is.
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
 		case arg == "--base" || strings.HasPrefix(arg, "--base="):
 			val, next, ok := takeFlagArg(arg, args, i, "--base")
 			if !ok || val == "" {
@@ -130,7 +136,11 @@ func runCreateWorktree(env Env, args []string) int {
 	plan, err := workspaceops.ResolveWorktreePlan(ctx, workDir, proj.Path, positional[0], base, dirPrefix, setup)
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		return 2
+		// 5, not 2: an existing branch, an occupied path, a base ref this
+		// machine does not have are all judgements about the values the caller
+		// supplied. Exit 2 stays reserved for a command that could not be
+		// parsed, which across a host boundary means version skew.
+		return exitInputRejected
 	}
 	if repoKey, keyErr := workspaceops.RepoKeyForPath(ctx, proj.Path); keyErr == nil {
 		plan.RepoKey = repoKey

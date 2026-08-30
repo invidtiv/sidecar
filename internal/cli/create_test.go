@@ -359,6 +359,7 @@ func TestCreateListedForAgents(t *testing.T) {
 }
 
 func TestCreateWorktreeValidation(t *testing.T) {
+	setupIsolatedCLI(t)
 	for _, tt := range []struct {
 		name     string
 		args     []string

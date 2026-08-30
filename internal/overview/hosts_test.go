@@ -2,6 +2,8 @@ package overview
 
 import (
 	"context"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -198,6 +200,37 @@ func TestStaleHostKeepsItsRowsAndSaysSo(t *testing.T) {
 	}
 }
 
+// remoteVerbCallSites is every verb literal remoteActionRefusal is actually
+// called with, read out of this package's own source rather than typed here by
+// hand — a hand-maintained list is exactly how "create" and "send" survived in
+// remoteVerbs, asserted on by a test, while no call site ever passed them.
+func remoteVerbCallSites(t *testing.T) map[string]bool {
+	t.Helper()
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package source: %v", err)
+	}
+	pattern := regexp.MustCompile(`remoteActionRefusal\([^,]+,\s*"([^"]+)"`)
+	verbs := map[string]bool{}
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		for _, match := range pattern.FindAllStringSubmatch(string(data), -1) {
+			verbs[match[1]] = true
+		}
+	}
+	if len(verbs) == 0 {
+		t.Fatal("no remoteActionRefusal call sites found; the scan is broken, not the code")
+	}
+	return verbs
+}
+
 // TestRemoteWorkspacesAreNeverActedOn is the safety property, now asked as a
 // capability question rather than a blanket no.
 //
@@ -220,9 +253,19 @@ func TestRemoteWorkspacesAreNeverActedOn(t *testing.T) {
 			t.Errorf("%s refusal %q does not say which machine", verb, reason)
 		}
 	}
-	for _, verb := range []string{"create", "rename", "send"} {
-		if reason := remoteActionRefusal(remote, verb); reason != "" {
-			t.Errorf("%s is a host-side verb but was refused: %q", verb, reason)
+	// rename is the one verb this gate is consulted for and permits. "create"
+	// and "send" used to be listed here and asserted on here, and neither the
+	// gate nor the assertion was reachable from any call site: creation
+	// resolves a createTarget from the form rather than judging a selected row,
+	// and there is no standalone send action. A map entry nothing consults is a
+	// gate that looks open without being a gate.
+	if reason := remoteActionRefusal(remote, "rename"); reason != "" {
+		t.Errorf("rename is a host-side verb but was refused: %q", reason)
+	}
+	asked := remoteVerbCallSites(t)
+	for verb := range remoteVerbs {
+		if !asked[verb] {
+			t.Errorf("remoteVerbs lists %q, which remoteActionRefusal is never called with", verb)
 		}
 	}
 	local := workspaceinventory.Workspace{ID: "x", Name: "local", Kind: workspaceinventory.KindWorktree}

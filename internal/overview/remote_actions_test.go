@@ -312,7 +312,7 @@ func TestRemoteWorktreePlansThenCreates(t *testing.T) {
 	if planned.Err != nil {
 		t.Fatalf("plan failed: %v", planned.Err)
 	}
-	want := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--plan", "--json", "feature"}
+	want := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--plan", "--json", "--", "feature"}
 	if got := stub.argv(t, 0); !equalArgs(got, want) {
 		t.Fatalf("plan argv = %v, want %v", got, want)
 	}
@@ -339,7 +339,7 @@ func TestRemoteWorktreePlansThenCreates(t *testing.T) {
 	if created.Err != nil {
 		t.Fatalf("execute failed: %v", created.Err)
 	}
-	wantExec := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--json", "feature"}
+	wantExec := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "claude", "--json", "--", "feature"}
 	if got := stub.argv(t, 1); !equalArgs(got, wantExec) {
 		t.Fatalf("execute argv = %v, want %v (no --plan)", got, wantExec)
 	}
@@ -371,7 +371,7 @@ func TestRemoteWorktreePassesTheChosenAgentToTheHost(t *testing.T) {
 		t.Fatalf("no plan command; error=%q", m.createError)
 	}
 	cmd()
-	want := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "codex", "--plan", "--json", "f"}
+	want := []string{"create", "worktree", "--project", "/home/me/api", "--agent", "codex", "--plan", "--json", "--", "f"}
 	if got := stub.argv(t, 0); !equalArgs(got, want) {
 		t.Errorf("argv = %v, want %v", got, want)
 	}
@@ -381,11 +381,11 @@ func TestRemoteWorktreePassesTheChosenAgentToTheHost(t *testing.T) {
 // the contract between this surface and the host's CLI.
 func TestRemoteWorktreeArgsCarryEveryChoice(t *testing.T) {
 	got := remoteWorktreeArgs("/home/me/api", "feature", "main", "claude", true, false)
-	want := []string{"create", "worktree", "--project", "/home/me/api", "--base", "main", "--agent", "claude", "--skip-permissions", "--json", "feature"}
+	want := []string{"create", "worktree", "--project", "/home/me/api", "--base", "main", "--agent", "claude", "--skip-permissions", "--json", "--", "feature"}
 	if !equalArgs(got, want) {
 		t.Fatalf("argv = %v, want %v", got, want)
 	}
-	if plan := remoteWorktreeArgs("/home/me/api", "feature", "", "", false, true); !equalArgs(plan, []string{"create", "worktree", "--project", "/home/me/api", "--plan", "--json", "feature"}) {
+	if plan := remoteWorktreeArgs("/home/me/api", "feature", "", "", false, true); !equalArgs(plan, []string{"create", "worktree", "--project", "/home/me/api", "--plan", "--json", "--", "feature"}) {
 		t.Fatalf("plan argv = %v", plan)
 	}
 }
@@ -450,7 +450,7 @@ func TestRemoteRenameTargetsTheSessionOnItsHost(t *testing.T) {
 	if done.Err != nil {
 		t.Fatalf("remote rename failed: %v", done.Err)
 	}
-	want := []string{"shell", "rename", "--target", "api-claude", "--project", "/home/me/api", "--json", "Reviewer"}
+	want := []string{"shell", "rename", "--target", "api-claude", "--project", "/home/me/api", "--json", "--", "Reviewer"}
 	if got := stub.argv(t, 0); !equalArgs(got, want) {
 		t.Fatalf("argv = %v, want %v", got, want)
 	}

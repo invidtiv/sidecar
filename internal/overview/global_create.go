@@ -702,8 +702,20 @@ func (m *Model) planCreateWorktree() tea.Cmd {
 }
 
 func (m *Model) executeCreateWorktree() tea.Cmd {
+	if m.createPlan == nil {
+		return nil
+	}
 	target, ok := m.selectedCreateTarget()
-	if !ok || m.createPlan == nil {
+	if !ok {
+		// The project the confirmation was built for is no longer resolvable —
+		// a host removed or retargeted between the plan and the Create press.
+		// Every other host-removal path in this file says so; a confirmation
+		// that answers a keypress with nothing is the one behaviour a user
+		// cannot tell from a hang.
+		m.createBusy = false
+		m.createModal = nil
+		m.createPlan = nil
+		m.setCreateError(missingCreateTarget(m.createTargetHost))
 		return nil
 	}
 	project := target.Project
@@ -718,6 +730,9 @@ func (m *Model) executeCreateWorktree() tea.Cmd {
 		// `sidecar create worktree`. It re-resolves the plan from the same
 		// arguments the confirmation was built from.
 		if m.createForm == nil {
+			m.createBusy = false
+			m.createPlan = nil
+			m.setCreateError(missingCreateTarget(target.HostID))
 			return nil
 		}
 		return m.executeRemoteWorktree(target,

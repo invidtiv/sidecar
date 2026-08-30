@@ -221,9 +221,12 @@ func TestRunSidecarIgnoresStdoutWhenNoResultIsWanted(t *testing.T) {
 // TestRunSidecarClassifiesExitCodes pins the mapping from the CLI's documented
 // statuses (internal/cli/registry.go) onto something a viewer can render.
 //
-// The 1/2 split is the one that carries information: exit 1 is the remote
-// deciding, exit 2 is the two Sidecars disagreeing about the verb, and only the
-// second one is fixed by updating a binary.
+// The 2/5 split is the one that carries information and the one this table used
+// to have collapsed. Exit 2 is "the command as written is not usable", which
+// between two copies of this repo means version skew and is fixed by updating a
+// binary. Exit 5 is "that value is not usable", which is fixed by typing a
+// different one. Mapping a rename collision onto 2 told users to upgrade
+// Sidecar in answer to "another shell is already named Demo".
 func TestRunSidecarClassifiesExitCodes(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -234,9 +237,13 @@ func TestRunSidecarClassifiesExitCodes(t *testing.T) {
 	}{
 		{"state failure", 1, "another shell is already named \"Demo\"\n", FailRefused, "already named"},
 		{"usage error", 2, "unknown flag \"--display-name\"\n", FailUnsupported, "unknown flag"},
+		{"rejected name", 5, "another shell is already named \"Demo\"\n", FailRejected, "already named"},
+		{"rejected plan", 5, "branch \"phase-c\" already exists\n", FailRejected, "already exists"},
+		{"unowned target", 3, "no registered Sidecar shell or worktree session named \"x\"\n", FailNoTarget, "no registered Sidecar shell"},
+		{"instance declined", 4, "the window is too small to split\n", FailRefused, "too small"},
 		{"no sidecar", 127, "zsh: command not found: sidecar\n", FailNoSidecar, "command not found"},
 		{"ssh failure", 255, "ssh: connect to host mac-mini port 22: Host is down\n", FailTransport, "Host is down"},
-		{"other status", 3, "something else went wrong\n", FailExit, "something else"},
+		{"other status", 7, "something else went wrong\n", FailExit, "something else"},
 		{"exit 1 without a message", 1, "", FailRefused, "without saying why"},
 	}
 	for _, testCase := range cases {

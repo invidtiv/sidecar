@@ -85,10 +85,14 @@ func (m *Model) RunDeleteCommand(id string) tea.Cmd {
 //
 // Each of those becomes a supported verb by gaining a host-side CLI verb and an
 // entry here — not by relaxing the guard.
+//
+// Only verbs this map is actually consulted for belong in it. Creation does not
+// pass through here at all: it resolves a createTarget from the form and asks
+// that whether it is remote, because a create has no selected row to judge.
+// Listing "create" and "send" here described a gate nothing opened, and a test
+// asserting on them proved only that the map contained what the map contained.
 var remoteVerbs = map[string]bool{
-	"create": true,
 	"rename": true,
-	"send":   true,
 }
 
 // remoteActionRefusal answers whether a host can do what is being asked of one

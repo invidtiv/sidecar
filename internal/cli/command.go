@@ -64,6 +64,21 @@ type Command struct {
 	Sub       []*Command              `json:"subcommands,omitempty"`
 	Run       func(Env, []string) int `json:"-"`
 
+	// Mutates marks a command that changes state outside this process: a tmux
+	// session, a git worktree, a manifest, the notification log.
+	//
+	// It is what makes SIDECAR_ISOLATED_STATE a guarantee rather than a claim.
+	// A misconfigured proof run — the variable exported, the state tree still
+	// the real one — is refused by Run before the handler is entered, so it
+	// cannot get as far as `tmux new-session` or `git worktree add` and then
+	// fail an assert on the write that follows. Per-write assertions still
+	// exist and still fail closed; this only moves the refusal to before the
+	// side effects instead of after the first of them (td-8d18de).
+	//
+	// Not published in the command tree: it is dispatch's business, not a
+	// contract a caller reads.
+	Mutates bool `json:"-"`
+
 	// Launch is for a command that does not run non-interactively at all: it
 	// records what the app should do and hands the process back to normal
 	// startup by reporting handled=false. `sidecar setup` is the only one — it

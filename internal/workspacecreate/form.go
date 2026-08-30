@@ -1048,6 +1048,13 @@ func (f *Form) errorSection() modal.Section {
 			return modal.RenderedSection{}
 		}
 		errStyle := lipgloss.NewStyle().Foreground(styles.Error)
+		// Wrap rather than let the modal cut the line off. A remote failure's
+		// message is two halves — what the host said, then what to do about it
+		// — and the half that gets clipped at this width is always the second
+		// one, which is the only half the user can act on.
+		if contentWidth > 0 {
+			errStyle = errStyle.Width(contentWidth)
+		}
 		return modal.RenderedSection{Content: errStyle.Render("Error: " + f.err)}
 	}, nil)
 }

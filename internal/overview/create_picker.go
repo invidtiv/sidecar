@@ -44,6 +44,15 @@ type createPickerDataMsg struct {
 }
 
 func (m *Model) loadCreatePickerData() tea.Cmd {
+	if m.remoteSelection() {
+		// The fallback below is "any local project will do", which is true when
+		// nothing is selected and false when the selection is on another
+		// machine: it would fill the diff, issue and note pickers with THIS
+		// machine's commits and issues while the form targets a host. Its
+		// siblings loadCreateFileCandidates and loadCreateBranches both answer
+		// nothing in that situation; so does this.
+		return nil
+	}
 	root := m.localSelectedRoot()
 	if root == "" && len(m.projects) > 0 {
 		root = m.projects[0].Path
@@ -84,6 +93,17 @@ func (m *Model) localSelectedRoot() string {
 		return ""
 	}
 	return selected.Path
+}
+
+// remoteSelection reports that the selected row is on another machine.
+//
+// localSelectedRoot returns "" for both "nothing selected" and "selected
+// elsewhere", and those two want opposite answers from a caller that has a
+// local fallback: any project will do for the first, and none will do for the
+// second.
+func (m *Model) remoteSelection() bool {
+	selected, ok := m.SelectedWorkspace()
+	return ok && selected.Remote()
 }
 
 func (m *Model) loadCreateFileCandidates() tea.Cmd {

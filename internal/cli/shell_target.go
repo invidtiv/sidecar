@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/marcus/sidecar/internal/shellstate"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/uirequest"
 	"github.com/marcus/sidecar/internal/workspaceops"
@@ -92,7 +94,7 @@ func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (s
 
 	var roots []string
 	seen := map[string]bool{}
-	for _, path := range append([]string{proj.Path}, proj.Worktrees...) {
+	for _, path := range worktreeRootsForTarget(env, proj) {
 		if path == "" {
 			continue
 		}
@@ -127,6 +129,76 @@ func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (s
 
 	cliErrf(env.Stderr, "no registered Sidecar shell or worktree session named %q in project %q; run `sidecar shell list --json` to see what this project owns\n", target, proj.Key)
 	return shellTarget{}, shellTargetUnregistered
+}
+
+// worktreeRootsForTarget is every worktree of this project a row can be shown
+// for, which is what a --target must be resolvable against.
+//
+// proj.Worktrees alone is the set Sidecar CREATED (<projectDir>/worktrees/*).
+// The rows come from Git's own `worktree list`, a superset that also holds a
+// worktree the user made by hand — and locally RenameWorktreeDisplayName
+// creates the state directory on demand, so renaming one of those works. Scoped
+// to the created set, a remote rename of a hand-made worktree exited 3 while the
+// identical local rename succeeded, for a row the user could see either way.
+//
+// Git is asked only when the name matched no shell record, so the ordinary
+// `--target sidecar-sh-…` path still spawns nothing. A repository Git cannot
+// read falls back to the created set rather than failing the verb.
+func worktreeRootsForTarget(env Env, proj registeredProject) []string {
+	roots := append([]string{proj.Path}, proj.Worktrees...)
+	if proj.Path == "" {
+		return roots
+	}
+	ctx := env.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	states, err := workspaceops.ListWorktreeStates(ctx, proj.Path)
+	if err != nil {
+		return roots
+	}
+	for _, state := range states {
+		if state.Bare || state.Path == "" {
+			continue
+		}
+		roots = append(roots, state.Path)
+	}
+	return roots
+}
+
+// sameTmuxServer reports whether a recorded namespace names the tmux server
+// this process's tmux children will actually reach.
+//
+// tmuxenv.Namespace() is the socket path, and it is the whole identity of "the
+// server whose sessions this process can see". A record proved present on one
+// socket says nothing about what answers to that session name on another, which
+// is why send compares them: proving ownership against server A and then typing
+// into server B is worse than refusing.
+//
+// An empty namespace is not a mismatch. A worktree agent session carries no
+// recorded socket, so there is nothing to compare and nothing is claimed.
+func sameTmuxServer(namespace string) bool {
+	if strings.TrimSpace(namespace) == "" {
+		return true
+	}
+	return canonicalSocketPath(namespace) == canonicalSocketPath(tmuxenv.Namespace())
+}
+
+// canonicalSocketPath resolves the directory holding a tmux socket so two
+// spellings of one server compare equal. The socket file itself is not
+// resolved: it need not exist, and a server that is not running must still be
+// recognised as the same server.
+func canonicalSocketPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	cleaned := filepath.Clean(path)
+	dir, base := filepath.Split(cleaned)
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(dir))
+	if err != nil {
+		return cleaned
+	}
+	return filepath.Join(resolved, base)
 }
 
 // runShellRenameTarget renames a shell or worktree the caller is not sitting
@@ -175,6 +247,13 @@ func runShellRenameTarget(env Env, args []string) int {
 			}
 			projectFlag = val
 			i = next
+		case arg == "--":
+			// Everything after `--` is a value, not a flag. NormalizeName
+			// accepts a leading dash, so "-wip" is a legal display name here
+			// and legal in the TUI; without this the only spelling that
+			// reached the parser came back as `unknown option "-wip"`.
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -190,7 +269,7 @@ func runShellRenameTarget(env Env, args []string) int {
 	name, err := shellstate.NormalizeName(positional[0])
 	if err != nil {
 		cliErrln(env.Stderr, err)
-		return 2
+		return exitInputRejected
 	}
 
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
@@ -223,7 +302,15 @@ func runShellRenameTarget(env Env, args []string) int {
 	// Refresh the environment cue so anything started in that session later
 	// reads the new name. The manifest, not the environment, is authoritative;
 	// a session that is not running simply has nothing to update.
-	_ = tty.SetSessionEnv(tgt.Session, shellstate.NameEnv, result.Name)
+	//
+	// Skipped when the record belongs to another tmux server: SetSessionEnv
+	// resolves -t against THIS process's socket, so the one thing it could
+	// still find there is an unrelated session with a colliding name. Renaming
+	// the record is correct across servers; writing a variable into a stranger
+	// is not.
+	if sameTmuxServer(tgt.Namespace) {
+		_ = tty.SetSessionEnv(tgt.Session, shellstate.NameEnv, result.Name)
+	}
 
 	if result.Changed {
 		writeRenameTargetRepaint(env, tgt, result.Name)
@@ -249,11 +336,16 @@ func runShellRenameTarget(env Env, args []string) int {
 }
 
 // renameTargetExitCode maps the guards RenameAtPath already enforces onto the
-// command's documented codes: a refused name is the caller's to fix (2), a
+// command's documented codes: a refused name is the caller's to fix (5), a
 // manifest that cannot answer which record it means is not (1).
+//
+// 5 rather than 2 because "another shell is already named Demo" is a fact about
+// the value, not about the command. A caller on another machine reads 2 as
+// "these two Sidecars disagree about this verb" and tells its user to upgrade;
+// what that user actually has to do is pick a different name.
 func renameTargetExitCode(err error) int {
 	if shellstate.IsValidation(err) {
-		return 2
+		return exitInputRejected
 	}
 	if shellstate.IsNotFound(err) {
 		return shellTargetUnregistered
@@ -354,6 +446,14 @@ func runShellSend(env Env, args []string) int {
 			}
 			projectFlag = val
 			i = next
+		case arg == "--":
+			// Everything after `--` is a value, not a flag. This verb takes no
+			// positionals, so the terminator only changes which message a
+			// caller gets — "takes no positional arguments" rather than
+			// "unknown option" — but the two parsers agreeing about what ends
+			// flag parsing is worth more than the saved four lines.
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
@@ -382,6 +482,19 @@ func runShellSend(env Env, args []string) int {
 	tgt, code := resolveShellTarget(env, target, shellFlag, projectFlag, help)
 	if code != 0 {
 		return code
+	}
+	// The ownership proof and the keystrokes must land on the same tmux server.
+	// resolveShellTarget proves a record exists on the socket the record names;
+	// the runner below resolves `-t <session>` on the socket THIS process uses.
+	// Where those differ, a matching session name on this server is a different
+	// session belonging to someone else, and typing into it is the failure this
+	// verb exists to make impossible. Refuse rather than guess.
+	if !sameTmuxServer(tgt.Namespace) {
+		cliErrf(env.Stderr,
+			"shell %q in project %q is recorded on tmux server %s, but this process talks to %s; "+
+				"run `sidecar shell send` from that server so the keys cannot reach a different session\n",
+			tgt.Session, tgt.Project.Key, tgt.Namespace, tmuxenv.Namespace())
+		return shellTargetUnregistered
 	}
 
 	ctx := env.Ctx

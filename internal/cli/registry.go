@@ -94,8 +94,9 @@ func RootCommand() *Command {
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "renamed, or already named that"},
 			{Code: 1, Summary: "identity, ambiguity, or state failure"},
-			{Code: 2, Summary: "usage or validation error (including a name already used in this project)"},
-			{Code: 3, Summary: "--target names no session this project owns"},
+			{Code: 2, Summary: "usage error (an unknown flag, a missing display name)"},
+			{Code: 3, Summary: "--target names no session this project owns, or one on a different tmux server"},
+			{Code: 5, Summary: "with --target: the display name was rejected (already used in this project, or not a legal name)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell rename \"shell rename implementation\""},
@@ -106,7 +107,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar shell rename [--target SESSION] \"<short context>\"",
 			Summary:    "Keep the shell's name describing the work you are doing now",
 		},
-		Run: runShellRename,
+		Mutates: true,
+		Run:     runShellRename,
 	}
 
 	sendCmd := &Command{
@@ -137,8 +139,8 @@ func RootCommand() *Command {
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "sent"},
 			{Code: 1, Summary: "tmux, ambiguity, or state failure"},
-			{Code: 2, Summary: "usage or validation error"},
-			{Code: 3, Summary: "--target names no session this project owns"},
+			{Code: 2, Summary: "usage error"},
+			{Code: 3, Summary: "--target names no session this project owns, or one recorded on a different tmux server"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell send --target sidecar-sh-sidecar-2 --run \"claude\"", Description: "start an agent in an existing shell"},
@@ -149,7 +151,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar shell send --target SESSION (--run COMMAND | --type COMMAND)",
 			Summary:    "Start an agent or run a command in another Sidecar shell",
 		},
-		Run: runShellSend,
+		Mutates: true,
+		Run:     runShellSend,
 	}
 
 	listCmd := &Command{
@@ -215,7 +218,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar shell forget <tmux-name>",
 			Summary:    "Drop a shell record from this project without killing tmux",
 		},
-		Run: runShellForget,
+		Mutates: true,
+		Run:     runShellForget,
 	}
 
 	restoreCmd := &Command{
@@ -249,7 +253,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar shell restore <tmux-name>",
 			Summary:    "Put a forgotten shell record back so it can be recreated",
 		},
-		Run: runShellRestore,
+		Mutates: true,
+		Run:     runShellRestore,
 	}
 
 	shellCmd := &Command{
@@ -295,6 +300,7 @@ func RootCommand() *Command {
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance (split mode)"},
 			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
+			{Code: 5, Summary: "--name was rejected (not a legal display name)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
@@ -306,7 +312,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar create shell [--name NAME] [--run COMMAND | --type COMMAND] [--split auto|right|below | --tab]",
 			Summary:    "Create a shell beside the current session (default) or as a workspace tab (--tab)",
 		},
-		Run: runCreateShell,
+		Mutates: true,
+		Run:     runCreateShell,
 	}
 
 	createWorktreeCmd := &Command{
@@ -322,7 +329,7 @@ func RootCommand() *Command {
 			"the questions a confirmation has to ask — branch, path, source ref and OID,\n" +
 			"remote policy, and whether a setup hook will run — while every validation\n" +
 			"failure (an existing branch, an occupied path, an unsafe hook) still surfaces\n" +
-			"as exit 2. --run and --no-launch describe a launch --plan never performs, so\n" +
+			"as exit 5. --run and --no-launch describe a launch --plan never performs, so\n" +
 			"they are refused with it; --agent and --skip-permissions are kept, since they\n" +
 			"come back as plan fields.",
 		Flags: []Flag{
@@ -342,7 +349,8 @@ func RootCommand() *Command {
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "created (missing ack is non-fatal), or plan resolved with --plan"},
 			{Code: 1, Summary: "git, setup, or tmux failure"},
-			{Code: 2, Summary: "usage or validation error"},
+			{Code: 2, Summary: "usage error (an unknown flag, a refused flag combination)"},
+			{Code: 5, Summary: "the plan was rejected (branch exists, path occupied, unknown base ref, unsafe hook)"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create worktree fix-auth --base main --agent claude"},
@@ -353,7 +361,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar create worktree <name> [--base REF] [--agent TYPE] [--no-launch | --plan]",
 			Summary:    "Create a Sidecar-visible git worktree with the same setup as the TUI",
 		},
-		Run: runCreateWorktree,
+		Mutates: true,
+		Run:     runCreateWorktree,
 	}
 
 	createCmd := &Command{

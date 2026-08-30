@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strings"
 	"time"
 
@@ -77,12 +78,26 @@ const (
 	// declined. The message is the remote's own refusal and is worth showing
 	// verbatim, because it was written for exactly this reader.
 	FailRefused Failure = "refused"
-	// FailUnsupported is exit 2: a usage or validation error. Distinct from
-	// refused on purpose. The viewer builds every one of these argument lists
-	// itself, so the remote rejecting one as unusable is not a decision about
-	// the operation — it means the two Sidecars disagree about the verb, which
-	// is a version-skew story with a different fix.
+	// FailUnsupported is exit 2: the command as written is not usable — an
+	// unknown flag, a missing required flag, a flag combination the verb does
+	// not offer. The viewer builds the SHAPE of every argument list itself, so
+	// a host that cannot parse the shape means the two Sidecars disagree about
+	// the verb, which is a version-skew story with its own fix.
+	//
+	// It deliberately does not cover a rejected value: the viewer does not
+	// invent branch names or display names, the user supplies them, and telling
+	// that user to update a binary because a name is already taken is a wrong
+	// answer to a question they can fix themselves. That is FailRejected.
 	FailUnsupported Failure = "unsupported"
+	// FailRejected is exit 5: the remote sidecar parsed the command and refused
+	// a value inside it — a display name already in use, a branch that exists,
+	// a base ref that machine does not have. The remote's own sentence is the
+	// whole answer; nothing here needs updating.
+	FailRejected Failure = "rejected"
+	// FailNoTarget is exit 3 from a target-taking verb: the host does not own
+	// the workspace the action addressed. A row that has gone away on the other
+	// machine, or one this Sidecar can see but that one does not manage.
+	FailNoTarget Failure = "no-target"
 	// FailExit is any other non-zero status.
 	FailExit Failure = "exit"
 	// FailNotResult means the command exited 0 but stdout was not the result.
@@ -140,6 +155,8 @@ func (e *RunError) Fix() string {
 		return "the host did not answer in time; try again once it is responsive"
 	case FailUnsupported:
 		return "update Sidecar on whichever machine is older: this one asked for something that one does not accept"
+	case FailNoTarget:
+		return "refresh that host's workspaces: the session may have been renamed or removed on that machine"
 	case FailNotResult:
 		return "that machine's login shell prints to stdout; send it to stderr or guard it with a non-interactive check"
 	default:
@@ -203,6 +220,13 @@ func (c *Client) SidecarCommand(ctx context.Context, args ...string) (*exec.Cmd,
 // host registration also points it at a temp state tree — so the failure mode
 // of a misconfigured proof is a refusal, not a write into someone's live
 // shells.json (td-8d18de).
+//
+// That check runs on the host BEFORE the verb's handler, not on its first
+// write: internal/cli marks its mutating verbs and dispatch refuses them
+// (Command.Mutates). It used to run only in cmd/sidecar/main.go, which a CLI
+// verb never reaches, so what actually failed closed was the per-write
+// assertion — after `tmux new-session`, after `git worktree add`. The sentence
+// above was true about the outcome and wrong about the moment.
 //
 // An explicit host Env entry wins: a registration that deliberately sets the
 // variable is a statement about that host, and this must not overwrite it.
@@ -308,8 +332,16 @@ func classifyRun(ctx context.Context, output Output, err error, stderr string) (
 	}
 
 	// The remote sidecar's documented statuses (internal/cli/registry.go):
-	// 0 success, 1 state or identity failure, 2 usage or validation error.
-	// Everything else came from the shell or from ssh, not from sidecar.
+	// 0 success, 1 state or identity failure, 2 usage error, 3 the target names
+	// nothing that project owns, 4 an instance declined, 5 a value in the
+	// command was rejected. Everything outside that set came from the shell or
+	// from ssh, not from sidecar.
+	//
+	// The 2/5 split is the one that carries information and the one this
+	// changeset had wrong: 2 is "the two Sidecars disagree about the verb",
+	// which a user fixes by updating a binary, and 5 is "that name is taken",
+	// which they fix by typing a different name. Collapsing them told people to
+	// upgrade in answer to an ordinary rename collision.
 	switch output.ExitCode {
 	case 0:
 		return "", ""
@@ -326,6 +358,21 @@ func classifyRun(ctx context.Context, output Output, err error, stderr string) (
 			detail = "the host did not accept the command"
 		}
 		return FailUnsupported, "the remote Sidecar did not accept this command: " + detail
+	case 3:
+		if detail == "" {
+			detail = "the host does not own the workspace this action addressed"
+		}
+		return FailNoTarget, detail
+	case 4:
+		if detail == "" {
+			detail = "the host declined the operation without saying why"
+		}
+		return FailRefused, detail
+	case 5:
+		if detail == "" {
+			detail = "the host rejected that value without saying why"
+		}
+		return FailRejected, detail
 	case 126, 127:
 		return FailNoSidecar, missingSidecarDetail(detail)
 	case 255:
@@ -368,6 +415,25 @@ func isMissingSidecar(stderr string) bool {
 	}
 }
 
+// ResultValidator is implemented by a result type that can recognise its own
+// verb's result.
+//
+// It exists because JSON decoding cannot: Go ignores unknown fields and
+// tolerates missing ones, so almost any object "decodes" into any struct and
+// comes back all-zero with a nil error. Tolerating unknown fields is real
+// forward compatibility and must survive — a host one version ahead adds
+// fields, and that is not an error — so the answer is not DisallowUnknownFields
+// but a per-type statement of which fields make the value this verb's answer.
+//
+// Implement it on any type passed as RunSidecar's out. Without it the decoder
+// still refuses an all-zero value, which is the floor; with it, a result that
+// happens to share one field name with a log line is refused too.
+type ResultValidator interface {
+	// ValidRemoteResult reports whether the decoded value carries the fields
+	// that make it this verb's result.
+	ValidRemoteResult() bool
+}
+
 // decodeRemoteResult decodes the host's --json result out of stdout, and
 // returns "" on success or the sentence to show on failure.
 //
@@ -377,34 +443,81 @@ func isMissingSidecar(stderr string) bool {
 // JSON syntax error, and this must say the same thing, because it is the same
 // machine with the same profile and the user needs the same fix.
 //
-// Leading non-JSON lines are tolerated the way the protocol decoder tolerates
-// blank ones — the result is found rather than demanded — but a stdout with no
-// decodable value in it is reported honestly, including what was actually
-// there, since the banner text is the evidence the user needs.
+// Two rules make "find the result" mean the result rather than the first thing
+// that parses:
+//
+//  1. Candidates are tried LAST first. The CLI writes its result last; a
+//     profile, a wrapper, a version nag all write before the verb runs.
+//  2. A candidate that decodes to the zero value is rejected, not returned.
+//     Without this a profile emitting structured log lines — `{"level":"info"}`
+//     — decoded into every result type with a nil error, and the surface
+//     rendered a blank confirmation for an operation that then really ran on
+//     the user's machine. A type implementing ResultValidator says more
+//     precisely what "not the result" means for it.
+//
+// Each candidate decodes into a scratch value and is copied out only once
+// accepted, so a rejected object cannot leave half a result behind.
 func decodeRemoteResult(stdout []byte, out any) string {
 	if len(bytes.TrimSpace(stdout)) == 0 {
 		return "the host ran the command but wrote nothing to stdout, so there is no result to read"
 	}
+	target := reflect.ValueOf(out)
+	if target.Kind() != reflect.Pointer || target.IsNil() {
+		return "the remote result could not be read: no destination was given for it"
+	}
+	elem := target.Type().Elem()
+	// A caller passing &struct{}{} is asking only "did it exit 0 and write
+	// JSON"; the zero value is the only value that type can hold, so the
+	// emptiness rule has nothing to say about it.
+	demandNonZero := !isEmptyResultType(elem)
+
+	offsets := jsonStarts(stdout)
 	var shapeDetail string
-	for _, offset := range jsonStarts(stdout) {
-		decoder := json.NewDecoder(bytes.NewReader(stdout[offset:]))
+	sawZeroResult := false
+	for i := len(offsets) - 1; i >= 0; i-- {
+		decoder := json.NewDecoder(bytes.NewReader(stdout[offsets[i]:]))
 		var raw json.RawMessage
 		if err := decoder.Decode(&raw); err != nil {
 			continue
 		}
-		if err := json.Unmarshal(raw, out); err != nil {
+		candidate := reflect.New(elem)
+		if err := json.Unmarshal(raw, candidate.Interface()); err != nil {
 			if shapeDetail == "" {
 				shapeDetail = "the host returned JSON that is not the expected result: " + err.Error()
 			}
 			continue
 		}
+		if demandNonZero && !resultIsPresent(candidate, elem) {
+			sawZeroResult = true
+			continue
+		}
+		target.Elem().Set(candidate.Elem())
 		return ""
+	}
+	if sawZeroResult {
+		return "the host wrote JSON to stdout, but none of it is this command's result " +
+			"(a login profile or wrapper logging to stdout is the usual cause); the host wrote: " +
+			firstRunLine(string(stdout))
 	}
 	if shapeDetail != "" {
 		return shapeDetail
 	}
 	return "the remote output is not the expected result (a shell banner on stdout is the usual cause); the host wrote: " +
 		firstRunLine(string(stdout))
+}
+
+// resultIsPresent reports whether a decoded candidate is actually this verb's
+// result rather than an object that merely survived decoding.
+func resultIsPresent(candidate reflect.Value, elem reflect.Type) bool {
+	if validator, ok := candidate.Interface().(ResultValidator); ok {
+		return validator.ValidRemoteResult()
+	}
+	return !reflect.DeepEqual(candidate.Interface(), reflect.New(elem).Interface())
+}
+
+// isEmptyResultType reports a result type with nothing to fill.
+func isEmptyResultType(elem reflect.Type) bool {
+	return elem.Kind() == reflect.Struct && elem.NumField() == 0
 }
 
 // jsonStarts lists the byte offsets where a JSON value might begin: the first

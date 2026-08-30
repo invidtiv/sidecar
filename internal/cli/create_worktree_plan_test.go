@@ -137,7 +137,11 @@ func TestCreateWorktreePlanHumanOutput(t *testing.T) {
 }
 
 // A plan that cannot be resolved is still a plan-time refusal, not a partial
-// creation: the validation exit code is what the confirming caller sees.
+// creation, and it exits 5 rather than 2.
+//
+// The distinction is not cosmetic across a host boundary: internal/hosts reads
+// exit 2 as "the two Sidecars disagree about this verb" and tells the user to
+// update a binary, which is a wrong answer to "that branch already exists".
 func TestCreateWorktreePlanRefusesInvalidPlan(t *testing.T) {
 	_, stateDir := setupIsolatedCLI(t)
 	repo, cfgPath := planTestRepo(t, stateDir)
@@ -145,8 +149,8 @@ func TestCreateWorktreePlanRefusesInvalidPlan(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	handled, code := Run([]string{"-config", cfgPath, "create", "worktree", "--plan", "--json", "taken"}, &out, &errOut)
-	if !handled || code != 2 {
-		t.Fatalf("existing branch = handled %v code %d stderr %q", handled, code, errOut.String())
+	if !handled || code != exitInputRejected {
+		t.Fatalf("existing branch = handled %v code %d stderr %q, want %d", handled, code, errOut.String(), exitInputRejected)
 	}
 	if !strings.Contains(errOut.String(), "already exists") {
 		t.Fatalf("stderr = %q", errOut.String())
@@ -154,6 +158,7 @@ func TestCreateWorktreePlanRefusesInvalidPlan(t *testing.T) {
 }
 
 func TestCreateWorktreePlanRefusesLaunchFlags(t *testing.T) {
+	setupIsolatedCLI(t)
 	for _, args := range [][]string{
 		{"create", "worktree", "--plan", "--run", "true", "x"},
 		{"create", "worktree", "--plan", "--no-launch", "x"},

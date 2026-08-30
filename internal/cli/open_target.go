@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/marcus/sidecar/internal/config"
+	"github.com/marcus/sidecar/internal/projectdir"
 	"github.com/marcus/sidecar/internal/shellstate"
 	"github.com/marcus/sidecar/internal/uirequest"
 )
@@ -195,7 +197,7 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string) (openDe
 
 	var proj registeredProject
 	if projectFlag != "" {
-		proj, err = matchProject(projects, projectFlag)
+		proj, err = matchProject(stateDir, projects, projectFlag)
 		if err != nil {
 			return openDestination{}, err
 		}
@@ -501,7 +503,7 @@ func sessionsRowDisplay(id string) string {
 	return id
 }
 
-func matchProject(projects []registeredProject, name string) (registeredProject, error) {
+func matchProject(stateDir string, projects []registeredProject, name string) (registeredProject, error) {
 	if name == "" {
 		return registeredProject{}, &destError{code: 2, msg: "--project requires a project name"}
 	}
@@ -535,8 +537,74 @@ func matchProject(projects []registeredProject, name string) (registeredProject,
 			msg:  fmt.Sprintf("project %q matches more than one Sidecar project (%s); pass --project with a slug", name, strings.Join(keys, ", ")),
 		}
 	default:
+		if proj, ok := configuredProjectFallback(stateDir, name); ok {
+			return proj, nil
+		}
 		return registeredProject{}, &destError{code: 2, msg: fmt.Sprintf("unknown project %q", name)}
 	}
+}
+
+// configuredProjectFallback resolves --project against the projects the user
+// CONFIGURED, and registers the one it finds.
+//
+// Two lists were being treated as one. `sidecar host serve` advertises
+// config.projects.list, so a host's projects appear in another Sidecar's picker
+// as soon as the host is reachable; --project resolved only
+// $STATE/sidecar/projects/<slug>, which exists after a project has been OPENED
+// on that machine. A configured-but-never-opened project was therefore listed,
+// selectable, and refused by every mutation with `unknown project` — the first
+// thing a new user of remote hosts hits, with no way to guess that the answer
+// is "go and open it over there once".
+//
+// Registration goes through projectdir.ResolveWithBase, the same call the local
+// first-open path makes, so there is one implementation of "what a registered
+// project directory looks like" and one AssertIsolatedPath gate over it: an
+// isolated run still refuses to create this directory in the real state tree.
+//
+// Only an unambiguous single match registers anything. A name matching two
+// configured projects keeps the existing refusal rather than picking one and
+// materialising state for it.
+func configuredProjectFallback(stateDir, name string) (registeredProject, bool) {
+	cfg, err := config.Load()
+	if err != nil || cfg == nil {
+		return registeredProject{}, false
+	}
+	wantPath := canonicalOpenPath(name)
+	var matched []string
+	for _, entry := range cfg.Projects.List {
+		raw := strings.TrimSpace(config.ExpandPath(entry.Path))
+		if raw == "" {
+			continue
+		}
+		canon := canonicalOpenPath(raw)
+		// The same three spellings matchProject accepts, so a configured
+		// project answers to exactly what a registered one answers to.
+		if entry.Name != name && canon != wantPath &&
+			filepath.Base(canon) != name && filepath.Base(filepath.Clean(raw)) != name {
+			continue
+		}
+		matched = append(matched, canon)
+	}
+	if len(matched) != 1 {
+		return registeredProject{}, false
+	}
+	root := matched[0]
+	if info, statErr := os.Stat(root); statErr != nil || !info.IsDir() {
+		// A configured path that is not there is not a project this machine can
+		// act on, and inventing a state directory for it would only move the
+		// failure later.
+		return registeredProject{}, false
+	}
+	dir, err := projectdir.ResolveWithBase(stateDir, root)
+	if err != nil {
+		return registeredProject{}, false
+	}
+	return registeredProject{
+		Key:       filepath.Base(dir),
+		Path:      root,
+		Dir:       dir,
+		Worktrees: listRegisteredWorktrees(dir),
+	}, true
 }
 
 func matchShell(projects []registeredProject, name string, refuseMultiProject bool) (registeredProject, shellstate.Definition, error) {

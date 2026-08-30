@@ -74,6 +74,7 @@ Usage: sidecar create shell [options]
 - `2`: usage or validation error
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
+- `5`: --name was rejected (not a legal display name)
 
 **Examples:**
 
@@ -99,7 +100,7 @@ worktree is added, no directory is created, no journal is written. It answers
 the questions a confirmation has to ask — branch, path, source ref and OID,
 remote policy, and whether a setup hook will run — while every validation
 failure (an existing branch, an occupied path, an unsafe hook) still surfaces
-as exit 2. --run and --no-launch describe a launch --plan never performs, so
+as exit 5. --run and --no-launch describe a launch --plan never performs, so
 they are refused with it; --agent and --skip-permissions are kept, since they
 come back as plan fields.
 
@@ -125,7 +126,8 @@ Usage: sidecar create worktree [options] <name>
 
 - `0`: created (missing ack is non-fatal), or plan resolved with --plan
 - `1`: git, setup, or tmux failure
-- `2`: usage or validation error
+- `2`: usage error (an unknown flag, a refused flag combination)
+- `5`: the plan was rejected (branch exists, path occupied, unknown base ref, unsafe hook)
 
 **Examples:**
 
@@ -903,8 +905,9 @@ Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <displa
 
 - `0`: renamed, or already named that
 - `1`: identity, ambiguity, or state failure
-- `2`: usage or validation error (including a name already used in this project)
-- `3`: --target names no session this project owns
+- `2`: usage error (an unknown flag, a missing display name)
+- `3`: --target names no session this project owns, or one on a different tmux server
+- `5`: with --target: the display name was rejected (already used in this project, or not a legal name)
 
 **Examples:**
 
@@ -987,8 +990,8 @@ Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--p
 
 - `0`: sent
 - `1`: tmux, ambiguity, or state failure
-- `2`: usage or validation error
-- `3`: --target names no session this project owns
+- `2`: usage error
+- `3`: --target names no session this project owns, or one recorded on a different tmux server
 
 **Examples:**
 

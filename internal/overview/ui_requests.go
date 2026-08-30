@@ -296,6 +296,9 @@ func (m *Model) applyCreateShellRequest(req uirequest.Request, payload uirequest
 	if payload.ShouldFocus() {
 		m.pendingCreatedTmux = payload.Session
 		m.pendingCreatedPath = ""
+		// A CLI-driven create ran on this machine, by construction: the request
+		// file it came from is in this machine's state tree.
+		m.pendingCreatedHost = ""
 		if !m.workspaces.SelectID(ws.ID) {
 			m.honorPendingCreated()
 		} else {
@@ -335,6 +338,7 @@ func (m *Model) applyCreateWorktreeRequest(req uirequest.Request, payload uirequ
 	if payload.ShouldFocus() {
 		m.pendingCreatedPath = path
 		m.pendingCreatedTmux = ""
+		m.pendingCreatedHost = ""
 		if !m.workspaces.SelectID(ws.ID) {
 			m.honorPendingCreated()
 		} else {

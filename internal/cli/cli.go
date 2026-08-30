@@ -18,6 +18,18 @@ import (
 	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
+// exitInputRejected is the exit code for "the command parsed, and a value
+// inside it was refused": a display name already in use, a branch that already
+// exists, a base ref this machine does not have.
+//
+// Additive rather than a redefinition. Exit 2 keeps meaning exactly what it
+// meant — this command is not usable as written, an unknown flag, a missing
+// required one — which for a caller on another machine is a statement about
+// version skew (internal/hosts.FailUnsupported). Collapsing the two is how a
+// user whose rename collided with an existing name came to be told to update
+// Sidecar on one of their machines.
+const exitInputRejected = 5
+
 // Run dispatches a non-interactive command. handled=false leaves legacy TUI
 // flag parsing entirely untouched.
 func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
@@ -71,11 +83,49 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 		return cmd.Launch(env, args[1:])
 	}
 
+	// Fail closed before the handler, not on its first write. cmd.Run for a
+	// mutating verb reaches tmux and git before anything asserts a path, so a
+	// proof run that forgot to move the state tree used to leave a real session
+	// or a real branch behind and only then refuse. Non-mutating verbs are
+	// untouched: reading is what a misconfigured proof is allowed to do.
+	if mutatesState(cmd, args[1:]) {
+		if err := config.CheckStateIsolation(); err != nil {
+			cliErrf(env.Stderr, "sidecar %s refuses to run: %v\n", cmd.Name, err)
+			return true, 1
+		}
+	}
+
 	if cmd.Run != nil {
 		return true, cmd.Run(env, args[1:])
 	}
 
 	return true, 0
+}
+
+// mutatesState resolves the deepest subcommand these arguments name and reports
+// whether it changes state outside this process.
+//
+// It walks the tree rather than reading the top-level command's marker so that
+// `sidecar shell list` is not gated by `sidecar shell send`'s. Help is never
+// gated: printing usage is the one thing a misconfigured run should still be
+// able to do.
+func mutatesState(cmd *Command, args []string) bool {
+	for _, arg := range args {
+		if isHelp(arg) {
+			return false
+		}
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			break
+		}
+		sub := cmd.FindSubcommand(arg)
+		if sub == nil {
+			break
+		}
+		cmd = sub
+	}
+	return cmd.Mutates
 }
 
 // globalValueFlags are the process-level flags that take a value. They are

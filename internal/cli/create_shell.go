@@ -146,7 +146,7 @@ func runCreateShellWorkspace(env Env, dest openDestination, flags createCommonFl
 		display, err = shellstate.NormalizeName(custom)
 		if err != nil {
 			cliErrln(env.Stderr, err)
-			return 2
+			return exitInputRejected
 		}
 	}
 
@@ -229,7 +229,7 @@ func runCreateShellSplit(env Env, dest openDestination, flags createCommonFlags,
 		normalized, err := shellstate.NormalizeName(display)
 		if err != nil {
 			cliErrln(env.Stderr, err)
-			return 2
+			return exitInputRejected
 		}
 		display = normalized
 	}
