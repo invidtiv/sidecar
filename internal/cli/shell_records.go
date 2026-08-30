@@ -56,7 +56,7 @@ func runShellList(env Env, args []string) int {
 		return code
 	}
 
-	_, path, code := resolveShellRecordsProject(env, flags, help)
+	_, path, code := resolveShellRecordsProject(env, flags, help, resolveProjectOnly)
 	if code != 0 {
 		return code
 	}
@@ -126,7 +126,7 @@ func runShellForget(env Env, args []string) int {
 	}
 	tmuxName := flags.positional[0]
 
-	proj, path, code := resolveShellRecordsProject(env, flags, help)
+	proj, path, code := resolveShellRecordsProject(env, flags, help, registerProject)
 	if code != 0 {
 		return code
 	}
@@ -178,7 +178,7 @@ func runShellRestore(env Env, args []string) int {
 	}
 	tmuxName := flags.positional[0]
 
-	proj, path, code := resolveShellRecordsProject(env, flags, help)
+	proj, path, code := resolveShellRecordsProject(env, flags, help, registerProject)
 	if code != 0 {
 		return code
 	}
@@ -288,12 +288,20 @@ func parseShellRecordArgs(args []string, help string, env Env, wantPositional in
 	return flags, -1
 }
 
-func resolveShellRecordsProject(env Env, flags shellRecordFlags, help string) (registeredProject, string, int) {
+// resolveShellRecordsProject finds the project a shell-records verb addresses
+// and the manifest it should read or write.
+//
+// register is the caller's answer to "am I about to write": a read resolves a
+// configured-but-never-opened project without creating its state directory, and
+// gets an empty manifest path — which is the truth, since Sidecar owns no
+// records for a project nobody has opened here. A writer asks for the directory
+// and gets one.
+func resolveShellRecordsProject(env Env, flags shellRecordFlags, help string, register projectRegistration) (registeredProject, string, int) {
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
+	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag, register)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return registeredProject{}, "", createDestExitCode(err)
@@ -303,9 +311,19 @@ func resolveShellRecordsProject(env Env, flags shellRecordFlags, help string) (r
 		cliErrln(env.Stderr, err)
 		return registeredProject{}, "", createDestExitCode(err)
 	}
-	if proj.Dir == "" || proj.Path == "" {
+	if proj.Path == "" {
 		cliErrf(env.Stderr, "%s\n\n%s", unregisteredCreateProject, help)
 		return registeredProject{}, "", 2
+	}
+	if proj.Dir == "" {
+		if register == registerProject {
+			// A writer with nowhere to write is a failure, not an empty answer.
+			cliErrf(env.Stderr, "%s\n\n%s", unregisteredCreateProject, help)
+			return registeredProject{}, "", 2
+		}
+		// shellstate.ListAtPath treats a manifest that is not there as no
+		// records, which is exactly what this project has.
+		return proj, "", 0
 	}
 	return proj, filepath.Join(proj.Dir, "shells.json"), 0
 }

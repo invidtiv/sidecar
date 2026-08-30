@@ -110,7 +110,7 @@ func runCreateWorktree(env Env, args []string) int {
 		ctx = context.Background()
 	}
 
-	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
+	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag, registerProject)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return createDestExitCode(err)

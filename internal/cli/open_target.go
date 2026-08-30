@@ -20,6 +20,13 @@ type openDestination struct {
 	Origin      uirequest.Origin
 	DisplayName string
 	Resolved    string
+	// Project is the project this destination resolved to, when resolution
+	// already found one. It is carried rather than re-derived because a
+	// configured project that has never been opened here has no state directory
+	// to be found by a second lookup — resolveProjectOnly deliberately did not
+	// create one — and re-deriving would turn a resolved project back into
+	// "unknown project".
+	Project registeredProject
 }
 
 type destError struct {
@@ -39,15 +46,34 @@ type registeredProject struct {
 
 const unregisteredCreateProject = "no Sidecar project is registered for this directory; pass --project or run from a registered project"
 
+// projectRegistration says whether resolving --project may CREATE the state
+// directory for a project that is configured but has never been opened here.
+//
+// It exists because those two answers belong to different callers.
+// `create worktree --project X` is about to write X's state and must have a
+// directory to write into; `shell list --project X` is only asking what X owns,
+// and answering that by materialising a directory makes a read leave something
+// behind. Passed explicitly at every resolution site rather than inferred, so
+// which callers can create is a thing you can read off the call sites.
+type projectRegistration bool
+
+const (
+	// registerProject: a mutating verb, which needs somewhere to write.
+	registerProject projectRegistration = true
+	// resolveProjectOnly: a read. An unregistered project resolves with no
+	// directory, which is the honest answer — Sidecar owns no state for it.
+	resolveProjectOnly projectRegistration = false
+)
+
 // resolveCreateDestination is open's ladder plus cwd's already-registered
 // project, including sibling worktrees. A Sidecar-owned session whose
 // LookupOrigin misses (sidecar-ws-* is not in shells.json) continues to unique
 // instance then cwd rather than failing. KindState read errors stay exit 1.
 // Missing or ambiguous running instances are not fatal: a registered project
 // is enough. Unknown projects stay a usage error and never initialize state.
-func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
+func resolveCreateDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
 	if shellFlag != "" || projectFlag != "" {
-		return resolveExplicitDestination(stateDir, shellFlag, projectFlag)
+		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
 	}
 
 	if identity, err := currentShellIdentity(ctx); err == nil {
@@ -156,12 +182,18 @@ func registeredProjectForCreate(stateDir string, dest openDestination) (register
 			return p, nil
 		}
 	}
+	// Neither lookup can find a project with no directory on disk, which is
+	// exactly what a read-only resolution of a never-opened configured project
+	// produces. It was already resolved; use it rather than losing it.
+	if dest.Project.Path != "" {
+		return dest.Project, nil
+	}
 	return registeredProject{}, &destError{code: 2, msg: unregisteredCreateProject}
 }
 
-func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string) (openDestination, error) {
+func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
 	if shellFlag != "" || projectFlag != "" {
-		return resolveExplicitDestination(stateDir, shellFlag, projectFlag)
+		return resolveExplicitDestination(stateDir, shellFlag, projectFlag, register)
 	}
 
 	if identity, err := currentShellIdentity(ctx); err == nil {
@@ -189,7 +221,7 @@ func resolveOpenDestination(ctx context.Context, stateDir, shellFlag, projectFla
 	}
 }
 
-func resolveExplicitDestination(stateDir, shellFlag, projectFlag string) (openDestination, error) {
+func resolveExplicitDestination(stateDir, shellFlag, projectFlag string, register projectRegistration) (openDestination, error) {
 	projects, err := loadRegisteredProjects(stateDir)
 	if err != nil {
 		return openDestination{}, err
@@ -197,7 +229,7 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string) (openDe
 
 	var proj registeredProject
 	if projectFlag != "" {
-		proj, err = matchProject(stateDir, projects, projectFlag)
+		proj, err = matchProject(stateDir, projects, projectFlag, register)
 		if err != nil {
 			return openDestination{}, err
 		}
@@ -228,7 +260,9 @@ func resolveExplicitDestination(stateDir, shellFlag, projectFlag string) (openDe
 
 func destFromUniqueInstance(stateDir string, inst uirequest.Instance) (openDestination, error) {
 	if inst.ProjectKey != "" {
-		if dest, err := resolveExplicitDestination(stateDir, "", inst.ProjectKey); err == nil {
+		// A running instance's project key names a directory that already
+		// exists, so nothing here can need creating.
+		if dest, err := resolveExplicitDestination(stateDir, "", inst.ProjectKey, resolveProjectOnly); err == nil {
 			dest.Resolved = uirequest.ResolvedInstance
 			return dest, nil
 		}
@@ -272,6 +306,7 @@ func destFromShell(proj registeredProject, shell shellstate.Definition, workDir,
 		},
 		DisplayName: shell.DisplayName,
 		Resolved:    resolved,
+		Project:     proj,
 	}
 }
 
@@ -283,6 +318,7 @@ func destFromProject(proj registeredProject, workDir, resolved string) openDesti
 			PID:        os.Getpid(),
 		},
 		Resolved: resolved,
+		Project:  proj,
 	}
 }
 
@@ -298,7 +334,7 @@ func resolveSessionsDestination(ctx context.Context, stateDir, row string) (open
 		}
 		rowID, rowName = id, name
 	}
-	dest, err := resolveOpenDestination(ctx, stateDir, "", "")
+	dest, err := resolveOpenDestination(ctx, stateDir, "", "", resolveProjectOnly)
 	if err != nil {
 		return openDestination{}, err
 	}
@@ -503,7 +539,7 @@ func sessionsRowDisplay(id string) string {
 	return id
 }
 
-func matchProject(stateDir string, projects []registeredProject, name string) (registeredProject, error) {
+func matchProject(stateDir string, projects []registeredProject, name string, register projectRegistration) (registeredProject, error) {
 	if name == "" {
 		return registeredProject{}, &destError{code: 2, msg: "--project requires a project name"}
 	}
@@ -537,10 +573,16 @@ func matchProject(stateDir string, projects []registeredProject, name string) (r
 			msg:  fmt.Sprintf("project %q matches more than one Sidecar project (%s); pass --project with a slug", name, strings.Join(keys, ", ")),
 		}
 	default:
-		if proj, ok := configuredProjectFallback(stateDir, name); ok {
+		if proj, ok := configuredProjectFallback(stateDir, name, register); ok {
 			return proj, nil
 		}
-		return registeredProject{}, &destError{code: 2, msg: fmt.Sprintf("unknown project %q", name)}
+		// 5, not 2. "unknown project" is a verdict on a value the caller
+		// supplied, and a caller on another machine reads 2 as version skew and
+		// tells its user to update Sidecar. That reading is especially wrong
+		// here: `host serve` advertises every configured project without
+		// checking the path still exists, so the commonest way to reach this
+		// line is a stale entry in the host's own config.
+		return registeredProject{}, &destError{code: exitInputRejected, msg: fmt.Sprintf("unknown project %q", name)}
 	}
 }
 
@@ -564,7 +606,7 @@ func matchProject(stateDir string, projects []registeredProject, name string) (r
 // Only an unambiguous single match registers anything. A name matching two
 // configured projects keeps the existing refusal rather than picking one and
 // materialising state for it.
-func configuredProjectFallback(stateDir, name string) (registeredProject, bool) {
+func configuredProjectFallback(stateDir, name string, register projectRegistration) (registeredProject, bool) {
 	cfg, err := config.Load()
 	if err != nil || cfg == nil {
 		return registeredProject{}, false
@@ -594,6 +636,13 @@ func configuredProjectFallback(stateDir, name string) (registeredProject, bool) 
 		// act on, and inventing a state directory for it would only move the
 		// failure later.
 		return registeredProject{}, false
+	}
+	if register != registerProject {
+		// A read resolves the project and creates nothing. There is no state
+		// directory, and that is the answer rather than a problem: Sidecar owns
+		// no shells and no worktrees for a project nobody has opened here, so
+		// the empty Dir below correctly produces an empty manifest.
+		return registeredProject{Key: filepath.Base(root), Path: root}, true
 	}
 	dir, err := projectdir.ResolveWithBase(stateDir, root)
 	if err != nil {
@@ -631,7 +680,8 @@ func matchShell(projects []registeredProject, name string, refuseMultiProject bo
 		hits = tmux
 	}
 	if len(hits) == 0 {
-		return registeredProject{}, shellstate.Definition{}, &destError{code: 2, msg: fmt.Sprintf("unknown shell %q", name)}
+		// A rejected value, like unknown project above.
+		return registeredProject{}, shellstate.Definition{}, &destError{code: exitInputRejected, msg: fmt.Sprintf("unknown shell %q", name)}
 	}
 	if len(hits) > 1 && refuseMultiProject {
 		var keys []string

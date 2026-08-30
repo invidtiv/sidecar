@@ -209,7 +209,11 @@ func runOpen(env Env, args []string) int {
 		ctx = context.Background()
 	}
 
-	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag)
+	// open needs no project state directory of its own — it writes a request
+	// onto the bus for a running instance — so it resolves without creating
+	// one. It is still a mutating verb for the isolation gate: the request bus
+	// is state outside this process.
+	dest, err := resolveOpenDestination(ctx, env.StateDir, shellFlag, projectFlag, resolveProjectOnly)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return destExitCode(err)

@@ -106,17 +106,12 @@ func Run(args []string, stdout, stderr io.Writer) (handled bool, exitCode int) {
 // whether it changes state outside this process.
 //
 // It walks the tree rather than reading the top-level command's marker so that
-// `sidecar shell list` is not gated by `sidecar shell send`'s. Help is never
-// gated: printing usage is the one thing a misconfigured run should still be
-// able to do.
+// `sidecar shell list` is not gated by `sidecar shell send`'s.
 func mutatesState(cmd *Command, args []string) bool {
-	for _, arg := range args {
-		if isHelp(arg) {
-			return false
-		}
-	}
-	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") {
+	rest := args
+	for i, arg := range args {
+		rest = args[i:]
+		if arg == "--" || strings.HasPrefix(arg, "-") {
 			break
 		}
 		sub := cmd.FindSubcommand(arg)
@@ -124,8 +119,59 @@ func mutatesState(cmd *Command, args []string) bool {
 			break
 		}
 		cmd = sub
+		rest = args[i+1:]
 	}
-	return cmd.Mutates
+	if !cmd.Mutates {
+		return false
+	}
+	return !asksForHelp(cmd, rest)
+}
+
+// asksForHelp reports whether these arguments — everything after the resolved
+// subcommand path — request usage rather than the verb's work.
+//
+// Printing usage is the one thing a misconfigured run should still be able to
+// do, so help is exempt from the isolation gate. But this decides whether a
+// safety gate arms, and the first version of it simply scanned every argument
+// for -h/--help/help. That let a flag VALUE disarm it: `shell send --run help`
+// and `shell send --run --help` are ordinary things to send into a shell, and
+// both sailed past the gate and reached tmux. So this reads the arguments the
+// way the verb's own parser does instead of grepping them:
+//
+//   - only the flag spellings count. The bare word "help" is a subcommand of
+//     root and of nothing that mutates, so treating it as a request here could
+//     only ever misread a worktree named "help".
+//   - a token following a value-taking flag is that flag's value, skipped.
+//   - nothing after `--` is a flag at all.
+//
+// Anything it cannot read as a request for usage is treated as the verb running
+// for real, which is the direction that fails closed.
+func asksForHelp(cmd *Command, args []string) bool {
+	takesValue := make(map[string]bool, len(cmd.Flags))
+	for _, flag := range cmd.Flags {
+		if flag.Bool {
+			continue
+		}
+		if flag.Name != "" {
+			takesValue[flag.Name] = true
+		}
+		if flag.Short != "" {
+			takesValue[flag.Short] = true
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; {
+		case arg == "--":
+			return false
+		case arg == "-h" || arg == "--help":
+			return true
+		case takesValue[arg]:
+			// Its value is next, and a value is never a flag. `--name=X` needs
+			// no skip: the whole token is one argument.
+			i++
+		}
+	}
+	return false
 }
 
 // globalValueFlags are the process-level flags that take a value. They are
@@ -237,9 +283,11 @@ func runShellName(env Env, args []string) int {
 }
 
 // runShellRename picks between the two forms of the verb. Without --target the
-// call is handed to runShellRenameCurrent unchanged: that path resolves "which
-// shell am I" from the local tmux environment and is what agents run in every
-// session, so nothing about it — parsing, messages, exit codes — moves.
+// call is handed to runShellRenameCurrent: that path resolves "which shell am
+// I" from the local tmux environment and is what agents run in every session,
+// so its messages and its exit codes do not move. The one thing that does is
+// `--`, which only ever turned a refusal into a working rename, and which the
+// --target form already accepted.
 func runShellRename(env Env, args []string) int {
 	if namesShellRenameFlag(args, "--target") {
 		return runShellRenameTarget(env, args)
@@ -255,8 +303,18 @@ func runShellRename(env Env, args []string) int {
 	return runShellRenameCurrent(env, args)
 }
 
+// namesShellRenameFlag reports whether args pass this flag, stopping at `--`.
+//
+// The terminator matters because this decides which of the two forms of the
+// verb runs: without it, `shell rename -- --target` — renaming the current
+// shell to the literal string "--target" — would be routed to the form that
+// takes one, and refused for not having supplied it. Same shape of mistake as
+// letting a flag value disarm the isolation gate, one decision further out.
 func namesShellRenameFlag(args []string, name string) bool {
 	for _, arg := range args {
+		if arg == "--" {
+			return false
+		}
 		if arg == name || strings.HasPrefix(arg, name+"=") {
 			return true
 		}
@@ -269,8 +327,8 @@ func runShellRenameCurrent(env Env, args []string) int {
 	renameHelp := RenderHelp(renameCmd)
 	jsonOutput := false
 	var positional []string
-	for _, arg := range args {
-		switch arg {
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; arg {
 		case "-h", "--help":
 			if _, err := fmt.Fprint(env.Stdout, renameHelp); err != nil {
 				return 1
@@ -278,6 +336,14 @@ func runShellRenameCurrent(env Env, args []string) int {
 			return 0
 		case "--json":
 			jsonOutput = true
+		case "--":
+			// Everything after `--` is a value, not a flag. NormalizeName
+			// accepts a leading dash, so "-wip" is a legal display name — and
+			// this is the form every agent runs in its own shell, so refusing
+			// the spelling its --target sibling accepts made one verb disagree
+			// with itself about what a name is.
+			positional = append(positional, args[i+1:]...)
+			i = len(args)
 		default:
 			if strings.HasPrefix(arg, "-") {
 				cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, renameHelp)

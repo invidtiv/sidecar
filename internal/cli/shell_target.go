@@ -56,7 +56,9 @@ func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (s
 		cliErrf(env.Stderr, "--target requires a tmux session name\n\n%s", help)
 		return shellTarget{}, 2
 	}
-	proj, manifest, code := resolveShellRecordsProject(env, shellRecordFlags{shellFlag: shellFlag, projectFlag: projectFlag}, help)
+	// rename and send both change something; resolveShellTarget is never on a
+	// read path.
+	proj, manifest, code := resolveShellRecordsProject(env, shellRecordFlags{shellFlag: shellFlag, projectFlag: projectFlag}, help, registerProject)
 	if code != 0 {
 		return shellTarget{}, code
 	}
@@ -92,23 +94,41 @@ func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (s
 		}, 0
 	}
 
-	var roots []string
 	seen := map[string]bool{}
-	for _, path := range worktreeRootsForTarget(env, proj) {
-		if path == "" {
-			continue
+	matching := func(paths []string) []string {
+		var out []string
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			canon := canonicalOpenPath(path)
+			if seen[canon] {
+				continue
+			}
+			seen[canon] = true
+			if workspaceops.WorktreeSessionName(path, "") == target {
+				out = append(out, path)
+			}
 		}
-		canon := canonicalOpenPath(path)
-		if seen[canon] {
-			continue
-		}
-		seen[canon] = true
-		if workspaceops.WorktreeSessionName(path, "") == target {
-			roots = append(roots, path)
-		}
+		return out
+	}
+	registered, discovered := worktreeRootsForTarget(env, proj)
+	roots := matching(registered)
+	// The worktrees Sidecar registered win a basename collision, and only when
+	// they answer nothing does git's wider list get a turn.
+	//
+	// WorktreeSessionName is "sidecar-ws-" plus the sanitized last path element,
+	// so /x/a/feature and /x/b/feature are one session name. Searching both
+	// tiers together turned a target that had always resolved uniquely against
+	// the registered set into an ambiguity refusal as soon as an unregistered
+	// sibling with the same basename existed. Tiering restores that without
+	// putting hand-made worktrees back out of reach: within a tier, a genuine
+	// collision is still refused.
+	if len(roots) == 0 {
+		roots = matching(discovered)
 	}
 	if len(roots) > 1 {
-		cliErrf(env.Stderr, "worktree session %q matches more than one registered worktree in project %q; refusing an ambiguous target\n", target, proj.Key)
+		cliErrf(env.Stderr, "worktree session %q matches more than one worktree in project %q; refusing an ambiguous target\n", target, proj.Key)
 		return shellTarget{}, 1
 	}
 	if len(roots) == 1 {
@@ -132,22 +152,24 @@ func resolveShellTarget(env Env, target, shellFlag, projectFlag, help string) (s
 }
 
 // worktreeRootsForTarget is every worktree of this project a row can be shown
-// for, which is what a --target must be resolvable against.
+// for, split into the ones Sidecar registered and the ones only Git knows.
 //
-// proj.Worktrees alone is the set Sidecar CREATED (<projectDir>/worktrees/*).
-// The rows come from Git's own `worktree list`, a superset that also holds a
+// proj.Worktrees is the set Sidecar CREATED (<projectDir>/worktrees/*). The
+// rows come from Git's own `worktree list`, a superset that also holds a
 // worktree the user made by hand — and locally RenameWorktreeDisplayName
 // creates the state directory on demand, so renaming one of those works. Scoped
-// to the created set, a remote rename of a hand-made worktree exited 3 while the
-// identical local rename succeeded, for a row the user could see either way.
+// to the created set, a remote rename of a hand-made worktree exited 3 while
+// the identical local rename succeeded, for a row the user could see either way.
 //
-// Git is asked only when the name matched no shell record, so the ordinary
-// `--target sidecar-sh-…` path still spawns nothing. A repository Git cannot
-// read falls back to the created set rather than failing the verb.
-func worktreeRootsForTarget(env Env, proj registeredProject) []string {
-	roots := append([]string{proj.Path}, proj.Worktrees...)
+// The two come back separately because a session name is derived from a
+// basename and therefore collides across directories; the caller resolves the
+// registered tier first. Git is asked only when the name matched no shell
+// record, so the ordinary `--target sidecar-sh-…` path still spawns nothing,
+// and a repository Git cannot read simply has no discovered tier.
+func worktreeRootsForTarget(env Env, proj registeredProject) (registered, discovered []string) {
+	registered = append([]string{proj.Path}, proj.Worktrees...)
 	if proj.Path == "" {
-		return roots
+		return registered, nil
 	}
 	ctx := env.Ctx
 	if ctx == nil {
@@ -155,15 +177,15 @@ func worktreeRootsForTarget(env Env, proj registeredProject) []string {
 	}
 	states, err := workspaceops.ListWorktreeStates(ctx, proj.Path)
 	if err != nil {
-		return roots
+		return registered, nil
 	}
 	for _, state := range states {
 		if state.Bare || state.Path == "" {
 			continue
 		}
-		roots = append(roots, state.Path)
+		discovered = append(discovered, state.Path)
 	}
-	return roots
+	return registered, discovered
 }
 
 // sameTmuxServer reports whether a recorded namespace names the tmux server

@@ -189,6 +189,24 @@ func TestMutatingVerbsRefuseAMisconfiguredProofBeforeTouchingAnything(t *testing
 		{"create", "shell", "--tab"},
 		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "echo hi"},
 		{"shell", "rename", "--target", "sidecar-sh-demo-1", "renamed"},
+		// A flag VALUE must not disarm the gate. The first version of this
+		// scanned every argument for -h/--help/help, so `--run help` — an
+		// ordinary thing to send into a shell — sailed past it and reached
+		// tmux. Same for a positional after the `--` terminator.
+		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "help"},
+		{"shell", "send", "--target", "sidecar-sh-demo-1", "--run", "--help"},
+		{"shell", "send", "--target", "sidecar-sh-demo-1", "--type", "-h"},
+		{"shell", "rename", "--target", "sidecar-sh-demo-1", "--", "help"},
+		{"shell", "rename", "--target", "sidecar-sh-demo-1", "--", "--help"},
+		{"create", "worktree", "--base", "help", "wt-proof"},
+		{"create", "worktree", "--", "help"},
+		{"create", "shell", "--tab", "--name", "help"},
+		// These three write the notification log and the request bus, which is
+		// state outside this process by the same definition the tmux and git
+		// verbs meet.
+		{"open", "README.md"},
+		{"notify", "post", "hello"},
+		{"notify", "dismiss", "ntf-000000000000-00000000"},
 	} {
 		var out, errOut bytes.Buffer
 		handled, code := Run(args, &out, &errOut)
@@ -285,7 +303,11 @@ func TestConfiguredProjectResolvesBeforeItHasBeenOpened(t *testing.T) {
 	out.Reset()
 	errOut.Reset()
 	handled, code = Run([]string{"-config", cfgPath, "create", "worktree", "--project", "not-a-project", "--plan", "x"}, &out, &errOut)
-	if !handled || code != 2 || !strings.Contains(errOut.String(), "unknown project") {
+	// 5, not 2: a --project nobody can resolve is a verdict on a value, and
+	// exit 2 is what the viewer reads as "update Sidecar on one of these
+	// machines" — which is exactly the wrong instruction for a stale entry in
+	// the host's own configured project list.
+	if !handled || code != exitInputRejected || !strings.Contains(errOut.String(), "unknown project") {
 		t.Fatalf("unknown project = handled %v code %d stderr %q", handled, code, errOut.String())
 	}
 	if entries, err := os.ReadDir(filepath.Join(stateDir, "projects")); err != nil || len(entries) != 1 {
@@ -301,10 +323,193 @@ func TestConfiguredProjectFallbackRefusesTheRealStateTree(t *testing.T) {
 	t.Chdir(t.TempDir())
 	config.SetConfigPath(cfgPath)
 
-	if _, ok := configuredProjectFallback(stateDir, repo); !ok {
+	if _, ok := configuredProjectFallback(stateDir, repo, registerProject); !ok {
 		t.Fatal("configuredProjectFallback did not resolve a configured project in an isolated tree")
 	}
-	if _, ok := configuredProjectFallback(config.RealUserStateDir(), repo); ok {
+	if _, ok := configuredProjectFallback(config.RealUserStateDir(), repo, registerProject); ok {
 		t.Fatal("configuredProjectFallback registered a project inside the real user state tree")
+	}
+}
+
+// TestCreateShellRejectedNameIsFinal. Beside-the-session placement is only the
+// DEFAULT, so a decline falls back to a workspace shell. A verdict on the
+// command itself is not a decline: it will be the same verdict wherever the
+// shell would have gone.
+//
+// Exit 5 was missing from the list of codes that stop there, so a rejected
+// --name printed its refusal, then "created a workspace shell instead", then
+// the refusal again — announcing a shell that was never created.
+func TestCreateShellRejectedNameIsFinal(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	workDir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(workDir); err == nil {
+		workDir = resolved
+	}
+	t.Chdir(workDir)
+	writeProjectMeta(t, stateDir, "demo", workDir)
+	writeProjectShells(t, stateDir, "demo",
+		shellstate.Definition{TmuxName: "sidecar-sh-demo-1", DisplayName: "one", Namespace: tmuxenv.Namespace(), WorkDir: workDir},
+	)
+
+	tooLong := strings.Repeat("n", 51)
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"create", "shell", "--shell", "sidecar-sh-demo-1", "--name", tooLong, "--wait", "0"}, &out, &errOut)
+	if !handled || code != exitInputRejected {
+		t.Fatalf("rejected --name = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if strings.Contains(errOut.String(), "created a workspace shell instead") {
+		t.Fatalf("a rejected name was reported as a created shell:\n%s", errOut.String())
+	}
+	if got := strings.Count(errOut.String(), "too long"); got != 1 {
+		t.Fatalf("the refusal was printed %d times:\n%s", got, errOut.String())
+	}
+	// And nothing was created under either placement.
+	defs, err := shellstate.ListAtPath(filepath.Join(stateDir, "projects", "demo", "shells.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("a rejected name still created a shell: %+v", defs)
+	}
+}
+
+// TestShellRenameCurrentAcceptsALeadingDashName. The two forms of one verb must
+// agree about what a display name is: --target already accepted `-- -wip`, and
+// this is the form every agent runs in its own shell.
+func TestShellRenameCurrentAcceptsALeadingDashName(t *testing.T) {
+	setupIsolatedCLI(t)
+
+	// No tmux identity here, so the rename cannot complete — but it must get
+	// as far as resolving one, which means the name parsed. Before `--`, the
+	// parser refused first with "unknown option".
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "rename", "--", "-wip"}, &out, &errOut)
+	if !handled {
+		t.Fatalf("shell rename -- -wip was not handled")
+	}
+	if strings.Contains(errOut.String(), "unknown option") {
+		t.Fatalf("the terminator did not end flag parsing: %q", errOut.String())
+	}
+	if code != 1 || !strings.Contains(errOut.String(), "not inside tmux") {
+		t.Fatalf("rename -- -wip = code %d stderr %q; want the unchanged current-shell identity refusal", code, errOut.String())
+	}
+
+	// The terminator also must not be read as a flag by the form chooser:
+	// `rename -- --target` names a shell, it does not pass --target.
+	out.Reset()
+	errOut.Reset()
+	handled, code = Run([]string{"shell", "rename", "--", "--target"}, &out, &errOut)
+	if !handled || strings.Contains(errOut.String(), "--target requires") {
+		t.Fatalf("`rename -- --target` was routed to the --target form: code %d stderr %q", code, errOut.String())
+	}
+}
+
+// TestShellListDoesNotRegisterAProjectItOnlyRead. The finding-8 fallback has to
+// register for a writer — it is about to need somewhere to write — but a read
+// that materialises state is a read with a side effect, and `shell list` is
+// exactly the verb an agent runs to find out whether there is anything there.
+func TestShellListDoesNotRegisterAProjectItOnlyRead(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	repo, cfgPath := configuredOnlyProject(t)
+	t.Chdir(t.TempDir())
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"-config", cfgPath, "shell", "list", "--project", repo, "--json"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("shell list on a never-opened project = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if !strings.Contains(out.String(), `"shells":[]`) && !strings.Contains(out.String(), `"shells":null`) {
+		t.Fatalf("stdout = %q, want an empty shell list", out.String())
+	}
+	entries, err := os.ReadDir(filepath.Join(stateDir, "projects"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a read registered %d project directories: %v", len(entries), entries)
+	}
+
+	// The writer on the same project still gets its directory.
+	out.Reset()
+	errOut.Reset()
+	if handled, code := Run([]string{"-config", cfgPath, "create", "worktree", "--project", repo, "--plan", "--json", "fix-auth"}, &out, &errOut); !handled || code != 0 {
+		t.Fatalf("create worktree = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	if entries, err := os.ReadDir(filepath.Join(stateDir, "projects")); err != nil || len(entries) != 1 {
+		t.Fatalf("a writer did not register the project: %v %v", entries, err)
+	}
+}
+
+// TestShellRenameTargetPrefersTheRegisteredWorktree. WorktreeSessionName is
+// "sidecar-ws-" plus the last path element, so two worktrees of one repo in
+// differently named parent directories share a session name. Searching git's
+// full list for a --target turned a rename that had always resolved uniquely
+// against the registered set into an ambiguity refusal.
+func TestShellRenameTargetPrefersTheRegisteredWorktree(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	root := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	repo := filepath.Join(root, "repo")
+	initGitRepo(t, repo)
+	registered := filepath.Join(root, "a", "feature")
+	discovered := filepath.Join(root, "b", "feature")
+	runGit(t, repo, "worktree", "add", "-b", "reg", registered)
+	runGit(t, repo, "worktree", "add", "-b", "disc", discovered)
+	// writeRegisteredWorktree registers the project as a side effect, exactly
+	// as first use does; a second hand-written meta.json would make two
+	// project directories for one repo.
+	writeRegisteredWorktree(t, stateDir, repo, registered)
+	t.Chdir(repo)
+
+	session := workspaceops.WorktreeSessionName(registered, "")
+	if session != workspaceops.WorktreeSessionName(discovered, "") {
+		t.Fatalf("the fixture does not produce a collision: %q", session)
+	}
+
+	var out, errOut bytes.Buffer
+	handled, code := Run([]string{"shell", "rename", "--target", session, "--json", "the registered one"}, &out, &errOut)
+	if !handled || code != 0 {
+		t.Fatalf("collision = handled %v code %d stderr %q", handled, code, errOut.String())
+	}
+	got, err := workspaceops.LookupWorktreeDisplayName(stateDir, repo, registered)
+	if err != nil || got != "the registered one" {
+		t.Fatalf("registered worktree name = %q, %v", got, err)
+	}
+}
+
+// TestStaleConfiguredProjectIsARejectedValueNotVersionSkew. `sidecar host
+// serve` advertises every config.projects.list entry without checking the path
+// still exists, so the commonest way to reach "unknown project" from another
+// machine is a stale entry in the host's own configuration.
+//
+// internal/hosts reads exit 2 as "the two Sidecars disagree about this verb"
+// and renders "update Sidecar on whichever machine is older". That is a wrong
+// instruction for a directory the user moved: the code has to be 5, which
+// hosts renders as the host's own words.
+func TestStaleConfiguredProjectIsARejectedValueNotVersionSkew(t *testing.T) {
+	_, stateDir := setupIsolatedCLI(t)
+	gone := filepath.Join(t.TempDir(), "moved-away")
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	body := `{"projects":{"list":[{"name":"Gone","path":` + quoteJSON(t, gone) + `}]}}`
+	if err := os.WriteFile(cfgPath, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(t.TempDir())
+
+	for _, name := range []string{gone, "Gone", "moved-away"} {
+		var out, errOut bytes.Buffer
+		handled, code := Run([]string{"-config", cfgPath, "create", "worktree", "--project", name, "--plan", "--json", "x"}, &out, &errOut)
+		if !handled || code != exitInputRejected {
+			t.Fatalf("--project %q on a stale entry = handled %v code %d stderr %q, want %d",
+				name, handled, code, errOut.String(), exitInputRejected)
+		}
+		if !strings.Contains(errOut.String(), "unknown project") {
+			t.Fatalf("stderr = %q", errOut.String())
+		}
+	}
+	if entries, err := os.ReadDir(filepath.Join(stateDir, "projects")); err != nil || len(entries) != 0 {
+		t.Fatalf("a configured path that is not there still registered state: %v %v", entries, err)
 	}
 }

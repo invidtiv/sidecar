@@ -45,6 +45,7 @@ func layoutCommand() *Command {
 			{Code: 2, Summary: "usage error"},
 			{Code: 3, Summary: "no running instance"},
 			{Code: 4, Summary: "declined: the origin shell is not on screen"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar layout get"},
@@ -142,6 +143,7 @@ func applyLayoutSubcommand() *Command {
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance"},
 			{Code: 4, Summary: "declined host-side; the reason names the first violation"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: `sidecar layout get --json`, Description: "read before you write"},

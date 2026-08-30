@@ -83,7 +83,7 @@ func runCreateShell(env Env, args []string) int {
 		ctx = context.Background()
 	}
 
-	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag)
+	dest, err := resolveCreateDestination(ctx, env.StateDir, flags.shellFlag, flags.projectFlag, registerProject)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return createDestExitCode(err)
@@ -114,9 +114,18 @@ func runCreateShell(env Env, args []string) int {
 		}
 		code := runCreateShellSplit(env, dest, flags, nameFlag, runCmd, typeCmd)
 		// Beside-the-session was only the default, not something the caller
-		// asked for: a decline (feature off, no room, no live instance) falls
+		// asked for: a DECLINE (feature off, no room, no live instance) falls
 		// back to a workspace shell so the command still lands.
-		if code == 0 || code == 2 || flags.splitSet {
+		//
+		// Only a decline. A verdict about the command itself is final wherever
+		// placement would have put it, and retrying it can only produce the
+		// same refusal twice — which is exactly what exit 5 did when it was
+		// missing from this list: `--name <too long>` printed its refusal, then
+		// "created a workspace shell instead", then the refusal again, having
+		// created nothing. Listed by what falls through rather than by what
+		// does not, so the next new code is final by default.
+		declined := code == 3 || code == 4
+		if !declined || flags.splitSet {
 			return code
 		}
 		cliErrf(env.Stderr, "no beside-the-session placement available; created a workspace shell instead\n")

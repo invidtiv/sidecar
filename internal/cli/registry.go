@@ -94,9 +94,9 @@ func RootCommand() *Command {
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "renamed, or already named that"},
 			{Code: 1, Summary: "identity, ambiguity, or state failure"},
-			{Code: 2, Summary: "usage error (an unknown flag, a missing display name)"},
+			{Code: 2, Summary: "usage error; without --target, also a rejected display name (the current-shell form's long-standing code)"},
 			{Code: 3, Summary: "--target names no session this project owns, or one on a different tmux server"},
-			{Code: 5, Summary: "with --target: the display name was rejected (already used in this project, or not a legal name)"},
+			{Code: 5, Summary: "with --target: a value was rejected — the display name (already used, or not legal), or an unknown --project / --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell rename \"shell rename implementation\""},
@@ -141,6 +141,7 @@ func RootCommand() *Command {
 			{Code: 1, Summary: "tmux, ambiguity, or state failure"},
 			{Code: 2, Summary: "usage error"},
 			{Code: 3, Summary: "--target names no session this project owns, or one recorded on a different tmux server"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell send --target sidecar-sh-sidecar-2 --run \"claude\"", Description: "start an agent in an existing shell"},
@@ -174,6 +175,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "success"},
 			{Code: 1, Summary: "state failure"},
 			{Code: 2, Summary: "usage error"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell list"},
@@ -209,6 +211,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "forgotten, or already forgotten"},
 			{Code: 1, Summary: "not found, or state failure"},
 			{Code: 2, Summary: "usage error"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell forget sidecar-sh-sidecar-1"},
@@ -244,6 +247,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "restored, or already live"},
 			{Code: 1, Summary: "not found, or state failure"},
 			{Code: 2, Summary: "usage error"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar shell restore sidecar-sh-sidecar-1"},
@@ -297,10 +301,10 @@ func RootCommand() *Command {
 		ExitCodes: []ExitCode{
 			{Code: 0, Summary: "created (missing ack is non-fatal in workspace-shell mode)"},
 			{Code: 1, Summary: "state or tmux failure"},
-			{Code: 2, Summary: "usage or validation error"},
+			{Code: 2, Summary: "usage error, or this directory is not in a registered project"},
 			{Code: 3, Summary: "no running instance (split mode)"},
 			{Code: 4, Summary: "instance declined (cap, too small, or feature off)"},
-			{Code: 5, Summary: "--name was rejected (not a legal display name)"},
+			{Code: 5, Summary: "a value was rejected: --name, or an unknown --project / --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create shell --name \"dev server\" --run \"python3 -m http.server\""},
@@ -350,7 +354,7 @@ func RootCommand() *Command {
 			{Code: 0, Summary: "created (missing ack is non-fatal), or plan resolved with --plan"},
 			{Code: 1, Summary: "git, setup, or tmux failure"},
 			{Code: 2, Summary: "usage error (an unknown flag, a refused flag combination)"},
-			{Code: 5, Summary: "the plan was rejected (branch exists, path occupied, unknown base ref, unsafe hook)"},
+			{Code: 5, Summary: "a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), or an unknown --project / --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar create worktree fix-auth --base main --agent claude"},
@@ -414,6 +418,7 @@ func RootCommand() *Command {
 			{Code: 2, Summary: "usage or validation error"},
 			{Code: 3, Summary: "no running instance, or several running with no target"},
 			{Code: 4, Summary: "an instance declined (e.g. the window is too small to split)"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
 		},
 		Examples: []Example{
 			{Command: "sidecar open internal/cli/cli.go", Description: "file, in a split beside the terminal"},
@@ -432,7 +437,8 @@ func RootCommand() *Command {
 			Invocation: "sidecar open <path>[:line] | td-xxxxxx | sidecar://note/nt-xxxx | --diff [spec] | --provider ID <locator> [--split right|below] [--at COL[.ROW]]",
 			Summary:    "Put a file, a td issue, a td note, a git diff, or a provider resource in front of the user",
 		},
-		Run: runOpen,
+		Mutates: true,
+		Run:     runOpen,
 	}
 
 	agentsCmd := &Command{
@@ -599,7 +605,8 @@ func notifyCommand() *Command {
 			Invocation: "sidecar notify post \"<short title>\" [--body TEXT] [--source ID] [--target kind:value[:line][@project]]",
 			Summary:    "Tell the user something happened without making them watch this shell",
 		},
-		Run: runNotifyPost,
+		Mutates: true,
+		Run:     runNotifyPost,
 	}
 
 	dismissCmd := &Command{
@@ -629,7 +636,8 @@ func notifyCommand() *Command {
 			Invocation: "sidecar notify dismiss <id>",
 			Summary:    "Take back a notification you posted once it no longer matters",
 		},
-		Run: runNotifyDismiss,
+		Mutates: true,
+		Run:     runNotifyDismiss,
 	}
 
 	listCmd := &Command{

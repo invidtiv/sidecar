@@ -873,7 +873,7 @@ func notifyOrigin(env Env) notify.Origin {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if dest, err := resolveOpenDestination(ctx, env.StateDir, "", ""); err == nil {
+	if dest, err := resolveOpenDestination(ctx, env.StateDir, "", "", resolveProjectOnly); err == nil {
 		return notify.Origin{
 			TmuxSession: dest.Origin.TmuxSession,
 			ProjectKey:  dest.Origin.ProjectKey,

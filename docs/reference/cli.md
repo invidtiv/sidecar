@@ -71,10 +71,10 @@ Usage: sidecar create shell [options]
 
 - `0`: created (missing ack is non-fatal in workspace-shell mode)
 - `1`: state or tmux failure
-- `2`: usage or validation error
+- `2`: usage error, or this directory is not in a registered project
 - `3`: no running instance (split mode)
 - `4`: instance declined (cap, too small, or feature off)
-- `5`: --name was rejected (not a legal display name)
+- `5`: a value was rejected: --name, or an unknown --project / --shell
 
 **Examples:**
 
@@ -127,7 +127,7 @@ Usage: sidecar create worktree [options] <name>
 - `0`: created (missing ack is non-fatal), or plan resolved with --plan
 - `1`: git, setup, or tmux failure
 - `2`: usage error (an unknown flag, a refused flag combination)
-- `5`: the plan was rejected (branch exists, path occupied, unknown base ref, unsafe hook)
+- `5`: a value was rejected: the plan (branch exists, path occupied, unknown base ref, unsafe hook), or an unknown --project / --shell
 
 **Examples:**
 
@@ -342,6 +342,7 @@ Usage: sidecar layout apply (--spec '<json>' | --pane '<json>' [--pane '<json>' 
 - `2`: usage or validation error
 - `3`: no running instance
 - `4`: declined host-side; the reason names the first violation
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -398,6 +399,7 @@ Usage: sidecar layout get [--json] [--sessions [ROW]]
 - `2`: usage error
 - `3`: no running instance
 - `4`: declined: the origin shell is not on screen
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -688,6 +690,7 @@ Usage: sidecar open [options] [<target>]
 - `2`: usage or validation error
 - `3`: no running instance, or several running with no target
 - `4`: an instance declined (e.g. the window is too small to split)
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -796,6 +799,7 @@ Usage: sidecar shell forget [--json] <tmux-name>
 - `0`: forgotten, or already forgotten
 - `1`: not found, or state failure
 - `2`: usage error
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -830,6 +834,7 @@ Usage: sidecar shell list [--json]
 - `0`: success
 - `1`: state failure
 - `2`: usage error
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -905,9 +910,9 @@ Usage: sidecar shell rename [--target SESSION [--project NAME]] [--json] <displa
 
 - `0`: renamed, or already named that
 - `1`: identity, ambiguity, or state failure
-- `2`: usage error (an unknown flag, a missing display name)
+- `2`: usage error; without --target, also a rejected display name (the current-shell form's long-standing code)
 - `3`: --target names no session this project owns, or one on a different tmux server
-- `5`: with --target: the display name was rejected (already used in this project, or not a legal name)
+- `5`: with --target: a value was rejected — the display name (already used, or not legal), or an unknown --project / --shell
 
 **Examples:**
 
@@ -946,6 +951,7 @@ Usage: sidecar shell restore [--json] <tmux-name>
 - `0`: restored, or already live
 - `1`: not found, or state failure
 - `2`: usage error
+- `5`: an unknown --project or --shell
 
 **Examples:**
 
@@ -992,6 +998,7 @@ Usage: sidecar shell send --target SESSION (--run COMMAND | --type COMMAND) [--p
 - `1`: tmux, ambiguity, or state failure
 - `2`: usage error
 - `3`: --target names no session this project owns, or one recorded on a different tmux server
+- `5`: an unknown --project or --shell
 
 **Examples:**
 

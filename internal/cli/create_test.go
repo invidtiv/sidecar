@@ -67,7 +67,10 @@ func TestCreateShellUnknownProjectDoesNotInitState(t *testing.T) {
 	out.Reset()
 	errOut.Reset()
 	handled, code = Run([]string{"create", "shell", "--project", "nosuch", "--wait", "0"}, &out, &errOut)
-	if !handled || code != 2 {
+	// A --project nobody can resolve is a rejected value (5), not a command
+	// that could not be parsed (2). Across a host boundary the second reads as
+	// version skew and sends the user off to update a binary.
+	if !handled || code != exitInputRejected {
 		t.Fatalf("--project unknown = handled %v code %d stderr %q", handled, code, errOut.String())
 	}
 	if !strings.Contains(errOut.String(), "unknown project") {
