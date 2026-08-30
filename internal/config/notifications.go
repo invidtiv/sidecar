@@ -31,13 +31,42 @@ const (
 	SoundFailure   SoundCue = "failure"
 )
 
+// TerminalNotifier names the outer terminal Sidecar encodes a notification
+// sequence for when it runs directly inside an SSH terminal. It selects a fixed
+// encoder and nothing else: no command, TTY path, or raw escape is configurable.
+type TerminalNotifier string
+
+const (
+	TerminalNotifierOff     TerminalNotifier = "off"
+	TerminalNotifierAuto    TerminalNotifier = "auto"
+	TerminalNotifierGhostty TerminalNotifier = "ghostty"
+	TerminalNotifierITerm2  TerminalNotifier = "iterm2"
+	TerminalNotifierWezTerm TerminalNotifier = "wezterm"
+	TerminalNotifierKitty   TerminalNotifier = "kitty"
+)
+
 // NotificationsConfig is the app-level `notifications` section. External
 // delivery remains off unless the user explicitly changes a channel mode.
 type NotificationsConfig struct {
 	Native     NativeNotificationsConfig           `json:"native,omitempty"`
 	Sound      SoundNotificationsConfig            `json:"sound,omitempty"`
 	QuietHours QuietHoursConfig                    `json:"quietHours,omitempty"`
+	SSH        SSHNotificationsConfig              `json:"ssh,omitempty"`
 	Sources    map[string]NotificationSourceConfig `json:"sources,omitempty"`
+}
+
+// SSHNotificationsConfig covers the two independent remote-work paths. Both
+// default off so an upgrade never moves remote notification text onto a local
+// desktop, or starts writing escape sequences into a remote terminal, without
+// the user asking for it.
+type SSHNotificationsConfig struct {
+	// ManagedHosts lets a local viewer deliver notifications forwarded by a
+	// registered remote host. It controls local consumption and delivery, not
+	// whether the read-only remote status stream exists.
+	ManagedHosts bool `json:"managedHosts,omitempty"`
+	// Terminal is the opt-in direct transport used when Sidecar itself runs in
+	// an ordinary SSH terminal with no local viewer attached.
+	Terminal TerminalNotifier `json:"terminal,omitempty"`
 }
 
 type NativeNotificationsConfig struct {
@@ -75,6 +104,7 @@ func DefaultNotificationsConfig() NotificationsConfig {
 		Native:     NativeNotificationsConfig{Mode: DeliveryOff, Provider: NativeProviderAuto},
 		Sound:      SoundNotificationsConfig{Mode: DeliveryOff},
 		QuietHours: QuietHoursConfig{Start: "22:00", End: "08:00"},
+		SSH:        SSHNotificationsConfig{Terminal: TerminalNotifierOff},
 	}
 }
 
@@ -140,6 +170,12 @@ func ValidateNotifications(c NotificationsConfig, configPath string) error {
 	}
 	if _, err := parseWallClock(c.QuietHours.End); err != nil {
 		return fmt.Errorf("notifications.quietHours.end: %w", err)
+	}
+	switch c.SSH.Terminal {
+	case TerminalNotifierOff, TerminalNotifierAuto, TerminalNotifierGhostty,
+		TerminalNotifierITerm2, TerminalNotifierWezTerm, TerminalNotifierKitty:
+	default:
+		return fmt.Errorf("notifications.ssh.terminal must be off, auto, ghostty, iterm2, wezterm, or kitty")
 	}
 	for id, source := range c.Sources {
 		if source.Sound != "" {
