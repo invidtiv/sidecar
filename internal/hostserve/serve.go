@@ -10,25 +10,30 @@
 // them, the adaptive poll cadence, and tracker commit at the end of a
 // completed generation.
 //
-// # Read-only
+// # What serve is allowed to touch
 //
-// Serve writes nothing: it does not touch shells.json, does not reap, does not
-// take a geometry lease, and does not resize a pane. When mutations arrive in
-// Phase C they go through the existing guarded writers in
-// workspaceops/shellstate, never through bespoke logic here.
+// Serve does not take a geometry lease, does not resize a pane, and issues no
+// mutating tmux command at all. It has exactly one write: the shell reap, which
+// tombstones a manifest record whose tmux session is confirmed gone. That write
+// goes through workspaceops/shellstate — the same flocked, conditional,
+// tombstoning writer the Sessions browser calls — and its whole decision is
+// shellliveness.PlanReap/ConfirmReap/ReapShell, shared with the browser rather
+// than restated here. See reap.go.
 //
-// Be precise about what kind of guarantee that is, because overstating it is
-// how it quietly stops being true. It is NOT "the package links in no writer":
-// hostserve depends on internal/tty, which contains resize-window, send-keys,
-// kill-session and the geometry lease. The guarantee is call-graph discipline
-// — the only tty function reached from here is CapturePaneWithState, and the
-// only subprocesses this package can cause are `tmux list-panes`,
-// `tmux capture-pane`, `tmux display-message`, git, and ps.
+// Be precise about what kind of guarantee the rest is, because overstating it
+// is how it quietly stops being true. It is NOT "the package links in no
+// writer": hostserve depends on internal/tty, which contains resize-window,
+// send-keys, kill-session and the geometry lease. The guarantee is call-graph
+// discipline — the only tty function reached from here is CapturePaneWithState,
+// and the only subprocesses this package can cause are `tmux list-panes`,
+// `tmux capture-pane`, `tmux list-sessions`, `tmux display-message`, git, and
+// ps.
 //
 // TestServeIsReadOnly enforces that by asserting on the commands actually
 // issued, which is the level the guarantee actually holds at. Anyone adding a
 // call into tty from this package is responsible for keeping it true; the
-// shells-wipe incident (td-8d18de) is what the care is for.
+// shells-wipe incident (td-8d18de) is what the care is for, and it is why the
+// one write serve does have carries none of its own logic.
 //
 // The one place that discipline needs care is the capture path, because a
 // capture is an observation that can have a side effect: the Overview's
@@ -55,9 +60,11 @@ import (
 	"github.com/marcus/sidecar/internal/config"
 	"github.com/marcus/sidecar/internal/hostproto"
 	"github.com/marcus/sidecar/internal/shellliveness"
+	"github.com/marcus/sidecar/internal/tmuxenv"
 	"github.com/marcus/sidecar/internal/tmuxserver"
 	"github.com/marcus/sidecar/internal/tty"
 	"github.com/marcus/sidecar/internal/workspaceinventory"
+	"github.com/marcus/sidecar/internal/workspaceops"
 )
 
 // Poll cadences. These are the Overview's numbers and the comment explaining
@@ -130,6 +137,20 @@ type Options struct {
 	// can drive a server death without killing one.
 	ServerIncarnation func() tmuxserver.Incarnation
 
+	// Namespace, ProbeShell and ForgetShell are the reap's three seams. They
+	// are injectable for the same reason the rest of this struct is: a test
+	// that had to spawn a real tmux to exercise a reap would be a test nobody
+	// runs, and this is the one path in the package that writes.
+	//
+	// Namespace reports which tmux server this host's shell records belong to;
+	// a record in another namespace is invisible to the pane listing and is
+	// never judged. ProbeShell is the independent second opinion. ForgetShell
+	// writes the tombstone — workspaceops.ForgetManagedShell in production,
+	// which is the browser's writer, not a second one.
+	Namespace   func() string
+	ProbeShell  shellliveness.ProbeFunc
+	ForgetShell shellliveness.ForgetFunc
+
 	// Hostname, TmuxPath and TmuxVersion feed the hello. Injectable for the
 	// same reason.
 	Hostname    func() string
@@ -166,6 +187,15 @@ func (o Options) withDefaults() Options {
 	}
 	if o.ServerIncarnation == nil {
 		o.ServerIncarnation = tmuxserver.Socket
+	}
+	if o.Namespace == nil {
+		o.Namespace = tmuxenv.Namespace
+	}
+	if o.ProbeShell == nil {
+		o.ProbeShell = shellliveness.ProbeSession
+	}
+	if o.ForgetShell == nil {
+		o.ForgetShell = workspaceops.ForgetManagedShell
 	}
 	if o.Hostname == nil {
 		o.Hostname = func() string {
@@ -256,6 +286,10 @@ func Serve(ctx context.Context, opts Options) error {
 		Now:     opts.Now,
 	}.WithDefaults()
 
+	// One tracker for the life of the connection. It is the reap's memory —
+	// which shells this serve has seen alive, under which server, and when each
+	// was last probed — and reapPass is the only thing that writes to it, so
+	// "seen alive" means exactly what shellliveness says it means.
 	liveness := shellliveness.NewTracker()
 	encoder := hostproto.NewEncoder(opts.Out)
 	encoder.SetClock(opts.Now)
@@ -264,12 +298,33 @@ func Serve(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	// After the hello, never before it: the watch reads directories, and a
+	// viewer's first impression of a host must not wait on that. See
+	// manifest_watch.go for why serve watches at all and what it refuses to
+	// watch.
+	watch := startManifestWatch(opts.Projects)
+	defer watch.stop()
+	if note := watch.Degraded(); note != "" {
+		if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &hostproto.Error{
+			Code:    hostproto.ErrInternal,
+			Message: note + " (" + opts.HostID + ")",
+		}}); err != nil {
+			return err
+		}
+	}
+
 	var (
 		generation          uint64
 		inventories         = make(map[string]workspaceinventory.ProjectResult, len(opts.Projects))
 		lastInventory       time.Time
 		previous            map[string]hostproto.Item
 		previousIncarnation uint64
+		// manifestChanged carries a watcher signal from the tail of one cycle
+		// into the head of the next. The signal never starts a collection of
+		// its own; it only says that the next cycle's inventory must be a full
+		// one, so burst coalescing and single-flight stay where they already
+		// are.
+		manifestChanged bool
 	)
 
 	for {
@@ -282,8 +337,13 @@ func Serve(ctx context.Context, opts Options) error {
 		previews.reset()
 
 		now := opts.Now()
-		fullInventory := lastInventory.IsZero() || now.Sub(lastInventory) >= opts.InventoryEvery
+		fullInventory := manifestChanged || lastInventory.IsZero() || now.Sub(lastInventory) >= opts.InventoryEvery
+		manifestChanged = false
 		if fullInventory {
+			// Cheap and skipped once the set is whole; it is how a project that
+			// had never been opened on this host joins the watch after its
+			// first shell is created there.
+			watch.reconcile()
 			for _, project := range opts.Projects {
 				inventories[project.Path] = collector.CollectProjectInventory(ctx, project.Name, project.Path)
 			}
@@ -295,7 +355,6 @@ func Serve(ctx context.Context, opts Options) error {
 		// collision resolution possible at all.
 		panes, paneErr := collector.ListPanes(ctx)
 		incarnation := opts.ServerIncarnation()
-		liveness.ObserveServer(incarnation)
 
 		ordered := make([]workspaceinventory.ProjectResult, 0, len(opts.Projects))
 		roots := make([]string, 0, len(opts.Projects))
@@ -316,6 +375,7 @@ func Serve(ctx context.Context, opts Options) error {
 			ObservedAt:        now,
 			ServerIncarnation: incarnationID(incarnation),
 		}
+		refreshed := make([]workspaceinventory.ProjectResult, 0, len(opts.Projects))
 		for _, project := range opts.Projects {
 			base, ok := inventories[project.Path]
 			if !ok {
@@ -323,14 +383,23 @@ func Serve(ctx context.Context, opts Options) error {
 			}
 			result := refresh.RefreshProjectStatus(ctx, base, roots, panes)
 			inventories[project.Path] = result
-			for _, workspace := range result.Workspaces {
-				if workspace.Live && workspace.TmuxName != "" {
-					liveness.Observe(workspace.TmuxName)
-				}
-			}
+			refreshed = append(refreshed, result)
 			snapshot.Projects = append(snapshot.Projects, projectMessage(result, opts.HostID, previews, &previewBudget))
 		}
 		refresh.CommitTrackers()
+
+		// The reap runs on this cycle's evidence but changes nothing in this
+		// cycle's snapshot. That is deliberate: what the viewer sees is what the
+		// host's manifest says, and the tombstone the reap writes is itself a
+		// write to a watched shells.json — so the watcher signal is already
+		// pending at the tail select below, the next cycle re-reads durable
+		// state, and the row leaves within about a second rather than on the
+		// next inventory tick. A1 is what makes A2 observable.
+		for _, reapErr := range reapPass(liveness, opts, opts.Namespace(), incarnation, panes, paneErr, refreshed) {
+			if err := encoder.Encode(hostproto.Message{Kind: hostproto.KindError, Error: &reapErr}); err != nil {
+				return err
+			}
+		}
 
 		if paneErr != nil {
 			// ListPanes already answers "no server running" and "no sessions"
@@ -388,9 +457,15 @@ func Serve(ctx context.Context, opts Options) error {
 			return nil
 		}
 
+		// The watcher joins the poll timer here rather than replacing it. A
+		// create must wake the loop instead of waiting the cadence out, and the
+		// timer still has to fire on a host whose watch could not be
+		// established at all.
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-watch.signals():
+			manifestChanged = true
 		case <-time.After(pollInterval(snapshot, opts)):
 		}
 	}

@@ -41,6 +41,11 @@ type processControlChannel struct {
 	done   chan error
 	dead   chan struct{}
 	ready  chan struct{}
+	// waited closes once cmd.Wait has returned, which is also when stderr has
+	// finished being copied into diagnostics.
+	waited chan struct{}
+	// diagnostics is whatever the command wrote to stderr, bounded.
+	diagnostics *boundedTail
 
 	parser controlParser
 
@@ -79,31 +84,40 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 	if err != nil {
 		return nil, fmt.Errorf("tmux control stdout: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("tmux control stderr: %w", err)
-	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, fmt.Errorf("tmux control stdin: %w", err)
 	}
 	channel := &processControlChannel{
-		cmd:    cmd,
-		stdin:  stdin,
-		events: make(chan controlEvent, 128),
-		done:   make(chan error, 1),
-		dead:   make(chan struct{}),
-		ready:  make(chan struct{}),
+		cmd:         cmd,
+		stdin:       stdin,
+		events:      make(chan controlEvent, 128),
+		done:        make(chan error, 1),
+		dead:        make(chan struct{}),
+		ready:       make(chan struct{}),
+		waited:      make(chan struct{}),
+		diagnostics: &boundedTail{limit: maxControlStderrBytes},
 	}
+	// stderr is recorded rather than discarded, because it is the only place
+	// the reason for a failed attach exists. `attach-session -t gone` writes
+	// "can't find session: gone" here and exits 1; without this the caller sees
+	// "exit status 1" and cannot tell a dead session from a dead link — which
+	// is precisely the distinction a remote pane has nothing else to make. See
+	// Model.handleControlDelivery's fallback case.
+	//
+	// Assigning a plain io.Writer rather than taking StderrPipe is deliberate:
+	// cmd.Wait then copies stderr itself and does not return until the copy is
+	// complete, so the text is guaranteed present once waited closes. A pipe
+	// plus a copier goroutine races Wait's closing of that pipe, which is the
+	// documented hazard in os/exec.
+	cmd.Stderr = channel.diagnostics
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start tmux control: %w", err)
 	}
 	go channel.readLoop(stdout)
 	go func() {
-		_, _ = io.Copy(io.Discard, stderr)
-	}()
-	go func() {
 		err := cmd.Wait()
+		close(channel.waited)
 		channel.finish(err)
 	}()
 
@@ -111,12 +125,70 @@ func newProcessControlChannelCommand(session string, cmd *exec.Cmd) (controlChan
 	case <-channel.ready:
 		return channel, nil
 	case err := <-channel.done:
+		// The channel died before it answered, so the process is on its way
+		// out. Give Wait a bounded moment to finish so whatever tmux (or ssh)
+		// wrote to stderr can name the reason: readLoop's EOF and the process
+		// exit race, and readLoop is usually first, so the raw error here is
+		// often "reader EOF" with no cause in it at all.
+		select {
+		case <-channel.waited:
+		case <-time.After(attachDiagnosticsWait):
+		}
 		_ = channel.Close()
-		return nil, fmt.Errorf("tmux control attach: %w", err)
+		return nil, fmt.Errorf("tmux control attach: %w", channel.withDiagnostics(err))
 	case <-time.After(3 * time.Second):
 		_ = channel.Close()
 		return nil, fmt.Errorf("tmux control attach: timeout")
 	}
+}
+
+const (
+	// maxControlStderrBytes bounds what one channel retains from stderr. A
+	// login profile that prints on every ssh can be arbitrarily chatty, and the
+	// only part that ever matters is the tail, where the failure is.
+	maxControlStderrBytes = 4 << 10
+
+	// attachDiagnosticsWait is how long a failed attach waits for the child's
+	// stderr before reporting without it. The process has already exited by
+	// this point, so this is a bound on a race, not on a subprocess.
+	attachDiagnosticsWait = 500 * time.Millisecond
+)
+
+// withDiagnostics folds the command's stderr into its error so the message
+// survives the trip to whoever has to classify it.
+func (c *processControlChannel) withDiagnostics(err error) error {
+	message := strings.TrimSpace(c.diagnostics.String())
+	if message == "" {
+		return err
+	}
+	if err == nil {
+		return fmt.Errorf("tmux control exited: %s", message)
+	}
+	return fmt.Errorf("%w: %s", err, message)
+}
+
+// boundedTail keeps the last limit bytes written to it. It is written by
+// os/exec's copier and read by the attach path, so it locks.
+type boundedTail struct {
+	limit int
+	mu    sync.Mutex
+	buf   []byte
+}
+
+func (t *boundedTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if t.limit > 0 && len(t.buf) > t.limit {
+		t.buf = t.buf[len(t.buf)-t.limit:]
+	}
+	return len(p), nil
+}
+
+func (t *boundedTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return string(t.buf)
 }
 
 func (c *processControlChannel) Send(command string, callback func(controlResponse)) error {

@@ -25,12 +25,22 @@ type fakeRunner struct {
 	panes string
 	err   error
 	calls []string
+
+	// hook, when set, runs just before each answer, with the call it is about
+	// to serve. Tests that need one cycle to see something different from the
+	// next — a pane that leaves the listing, an inventory that starts failing —
+	// use it to change the fixture in step with the loop rather than racing it.
+	// It runs under the runner's lock and must not re-enter it.
+	hook func(f *fakeRunner, name string, args []string)
 }
 
 func (f *fakeRunner) Output(_ context.Context, name string, args ...string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, name+" "+strings.Join(args, " "))
+	if f.hook != nil {
+		f.hook(f, name, args)
+	}
 	if name == "tmux" {
 		if f.err != nil {
 			return nil, f.err
