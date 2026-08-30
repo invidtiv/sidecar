@@ -1,0 +1,15 @@
+{
+  "error": {
+    "code": "lifecycle_stale_sequence",
+    "message": "sequence 41 does not advance past 42 for this source and run",
+    "identity": {
+      "host": "local",
+      "serverIncarnation": "present inode=10 ctime=20 pid=30",
+      "paneId": "%7",
+      "provider": "opencode",
+      "runId": "run-7f3a",
+      "processGeneration": "pid=4242 start=1000",
+      "sessionFingerprint": "sf-9c1d4e2b"
+    }
+  }
+}

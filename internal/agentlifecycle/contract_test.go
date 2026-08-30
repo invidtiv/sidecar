@@ -32,6 +32,8 @@ func assertJSONFixture(t *testing.T, path string, value any) {
 	}
 }
 
+func ptr[T any](v T) *T { return &v }
+
 func contractIdentity() Identity {
 	return Identity{
 		Host:               "local",
@@ -97,6 +99,22 @@ func TestLifecycleJSONContracts(t *testing.T) {
 		Identity:          contractIdentity(),
 		ProcessAlive:      true,
 	})
+
+	assertJSONFixture(t, "testdata/report-result.json", ReportResult{
+		SchemaVersion: SchemaVersion,
+		Accepted:      AcceptedAdvisory,
+		Tier:          TierAdvisory,
+		TierReason:    ReasonCapabilityUnproved,
+		ID:            "rpt-01J9",
+		Sequence:      42,
+		Identity:      contractIdentity(),
+	})
+
+	assertJSONFixture(t, "testdata/error.json", ErrorEnvelope{Error: &Error{
+		Code:     ErrStaleSequence,
+		Message:  "sequence 41 does not advance past 42 for this source and run",
+		Identity: ptr(contractIdentity()),
+	}})
 
 	assertJSONFixture(t, "testdata/integration-report.json", IntegrationReport{
 		SchemaVersion:         SchemaVersion,
