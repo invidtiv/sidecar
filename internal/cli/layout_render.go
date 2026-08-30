@@ -196,3 +196,13 @@ func cellOrDash(cell string) string {
 	}
 	return cell
 }
+
+// surfaceOrDash names the surface an ack item actually changed. On Sessions
+// that is the row's durable inventory ID, which is host-scoped: it says which
+// machine's workspace the local viewer was showing.
+func surfaceOrDash(surface string) string {
+	if strings.TrimSpace(surface) == "" {
+		return "-"
+	}
+	return surface
+}

@@ -162,3 +162,19 @@ func (m Model) renderAppPaneLayoutOverlay(background string) string {
 	}
 	return ui.OverlayModal(background, controller.Render(m.width, m.height, h.mouse), m.width, m.height)
 }
+
+// reserveHeader and composeHeader bind the shared pane-header chrome to this
+// deck's tree: the layout control is offered only when a leaf here can go
+// somewhere, and the renderer and the region sink share one measurement.
+func (h *appContentDeck) reserveHeader(width int, closable bool) panereposition.HeaderReserve {
+	return panereposition.ReserveMovableHeader(width, h.paneHeaderMovable(), closable)
+}
+
+func (h *appContentDeck) composeHeader(tabsRow string, width int, closable, layoutHovered, closeHovered bool) string {
+	movable := h.paneHeaderMovable()
+	return panereposition.ComposeMovableHeader(tabsRow, width, movable, closable, movable && layoutHovered, closeHovered)
+}
+
+func (h *appContentDeck) paneHeaderMovable() bool {
+	return h != nil && panereposition.Movable(h.root)
+}

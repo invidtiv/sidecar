@@ -13,17 +13,19 @@ import (
 	"github.com/marcus/sidecar/internal/uirequest"
 )
 
-// runLayout is the shared runner behind layout get/apply: one uirequest, one
-// ack wait, exit codes exactly like open's (0 applied, 2 usage, 3 no
-// instance, 4 declined with the reason verbatim). Layout requests never
-// queue, so a queued ack is never expected and reads as a decline. A
-// non-empty specRaw is the full-layout --spec; panes is the additive batch.
+// runLayout is the shared runner behind layout get/apply/move: one uirequest,
+// one ack wait, exit codes exactly like open's (0 applied — which for a move
+// includes an accepted no-op, 2 usage, 3 no instance, 4 declined with the
+// reason verbatim). Layout requests never queue, so a queued ack is never
+// expected and reads as a decline. The payload names its own mode and carries
+// the batch's panes, the full-layout spec, or the move record.
 type layoutDestFlags struct {
 	shell, project, sessionsRow string
 	sessions                    bool
 }
 
-func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.RawMessage, jsonOutput bool, destFlags layoutDestFlags, waitDuration time.Duration) int {
+func runLayout(env Env, payload uirequest.LayoutPayload, jsonOutput bool, destFlags layoutDestFlags, waitDuration time.Duration) int {
+	mode := payload.Mode
 	ctx := env.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -50,7 +52,7 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 		return destExitCode(err)
 	}
 
-	payload, err := json.Marshal(uirequest.LayoutPayload{Mode: mode, Panes: panes, Columns: specRaw})
+	encoded, err := json.Marshal(payload)
 	if err != nil {
 		cliErrln(env.Stderr, err)
 		return 1
@@ -62,7 +64,7 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 		TTLMs:     int(uirequest.DefaultTTL / time.Millisecond),
 		Origin:    dest.Origin,
 		Action:    uirequest.ActionLayout,
-		Payload:   payload,
+		Payload:   encoded,
 	}
 	if _, err := uirequest.WriteRequest(env.StateDir, req); err != nil {
 		cliErrln(env.Stderr, err)
@@ -107,11 +109,16 @@ func runLayout(env Env, mode string, panes []uirequest.LayoutPane, specRaw json.
 			}
 		case uirequest.StatusOpened, uirequest.StatusRetargeted:
 			hasOpened = true
+		case uirequest.StatusMoved, uirequest.StatusUnchanged:
+			// Moved and already-there are both exit 0. A move that had nothing
+			// to do is a satisfied request, not a refusal — the pane is where
+			// the caller asked for it to be.
+			hasOpened = true
 		}
 	}
 
 	if hasDeclined && !hasOpened {
-		if mode == uirequest.LayoutModeApply {
+		if mode != uirequest.LayoutModeGet {
 			printLayoutResult(env, mode, dest, acks, jsonOutput)
 		}
 		if reason == "" {
@@ -214,7 +221,7 @@ func runLayoutGet(env Env, args []string) int {
 		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeGet, nil, nil, jsonOutput, dest, waitDuration)
+	return runLayout(env, uirequest.LayoutPayload{Mode: uirequest.LayoutModeGet}, jsonOutput, dest, waitDuration)
 }
 
 func runLayoutApply(env Env, args []string) int {
@@ -317,7 +324,80 @@ func runLayoutApply(env Env, args []string) int {
 		cliErrf(env.Stderr, "layout apply needs --spec or at least one --pane descriptor\n\n%s", help)
 		return 2
 	}
-	return runLayout(env, uirequest.LayoutModeApply, panes, specColumns, jsonOutput, dest, waitDuration)
+	return runLayout(env, uirequest.LayoutPayload{Mode: uirequest.LayoutModeApply, Panes: panes, Columns: specColumns}, jsonOutput, dest, waitDuration)
+}
+
+// runLayoutMove is `sidecar layout move`. It validates the move's grammar
+// through the same uirequest helpers the host validates with, so a usage error
+// here and a decline there can never disagree about what a move even is. Which
+// pane sits at a cell, what "right" means for this tree, and every cap and
+// floor are the host's to answer against the live layout.
+func runLayoutMove(env Env, args []string) int {
+	cmd := RootCommand().FindSubcommand("layout").FindSubcommand("move")
+	help := RenderHelp(cmd)
+
+	jsonOutput := false
+	waitDuration := 1200 * time.Millisecond
+	var dest layoutDestFlags
+	move := uirequest.LayoutMove{}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if isHelp(arg) {
+			_, _ = fmt.Fprint(env.Stdout, help)
+			return 0
+		}
+		if arg == "--json" {
+			jsonOutput = true
+			continue
+		}
+		if arg == "--focused" {
+			move.Focused = true
+			continue
+		}
+		if arg == "--to" || strings.HasPrefix(arg, "--to=") {
+			value, nextArg, ok := takeFlagArg(arg, args, i, "--to")
+			if !ok || strings.TrimSpace(value) == "" {
+				cliErrf(env.Stderr, "--to requires a destination\n\n%s", help)
+				return 2
+			}
+			move.To = value
+			i = nextArg
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			if move.From != "" {
+				cliErrf(env.Stderr, "layout move names one pane to move, and %q is a second\n\n%s", arg, help)
+				return 2
+			}
+			move.From = arg
+			continue
+		}
+		next, code := takeLayoutCommonFlag(arg, args, i, help, env, &dest, &waitDuration)
+		if code != 0 {
+			return code
+		}
+		if next >= 0 {
+			i = next
+			continue
+		}
+		cliErrf(env.Stderr, "unknown option %q\n\n%s", arg, help)
+		return 2
+	}
+
+	if dest.sessions && (dest.shell != "" || dest.project != "") {
+		cliErrf(env.Stderr, "--sessions cannot be combined with --shell or --project\n\n%s", help)
+		return 2
+	}
+	if strings.TrimSpace(move.To) == "" {
+		cliErrf(env.Stderr, "layout move needs --to naming where the pane goes\n\n%s", help)
+		return 2
+	}
+	if err := uirequest.ValidateLayoutMove(move); err != nil {
+		cliErrf(env.Stderr, "%v\n\n%s", err, help)
+		return 2
+	}
+	return runLayout(env, uirequest.LayoutPayload{Mode: uirequest.LayoutModeMove, Move: &move}, jsonOutput, dest, waitDuration)
 }
 
 // layoutSpecFlag validates one --spec value CLI-side through the shared
@@ -406,6 +486,20 @@ func printLayoutResult(env Env, mode string, dest openDestination, acks []uirequ
 		_ = json.NewEncoder(env.Stdout).Encode(result)
 	}
 
+	if mode == uirequest.LayoutModeMove {
+		for _, item := range items {
+			switch item.Verdict {
+			case uirequest.ItemVerdictMoved:
+				_, _ = fmt.Fprintf(env.Stdout, "moved the pane to %s on %s\n", cellOrDash(item.Cell), surfaceOrDash(item.Surface))
+			case uirequest.ItemVerdictUnchanged:
+				_, _ = fmt.Fprintf(env.Stdout, "unchanged: the pane is still at %s on %s (%s)\n",
+					cellOrDash(item.Cell), surfaceOrDash(item.Surface), item.Reason)
+			default:
+				_, _ = fmt.Fprintf(env.Stdout, "declined: %s\n", item.Reason)
+			}
+		}
+		return
+	}
 	if mode != uirequest.LayoutModeApply {
 		return
 	}

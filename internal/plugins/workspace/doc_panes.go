@@ -17,7 +17,6 @@ import (
 	"github.com/marcus/sidecar/internal/panecodec"
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/panesearch"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/terminallink"
@@ -1500,7 +1499,7 @@ func (p *Plugin) resetPaneTreeToTerminal() {
 
 // docPaneHeaderRow is the doc leaf's header: the tab strip plus the shared X.
 func (p *Plugin) docPaneHeaderRow(doc *docPane, width int, focused bool) string {
-	return p.composeContentHeader(layoutDocTabStrip(doc, panereposition.ReserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(docLeafID(doc))).Row, width, docLeafID(doc), doc != nil && p.hoverPaneClose == doc.leafID)
+	return p.composeContentHeader(layoutDocTabStrip(doc, p.reserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(docLeafID(doc))).Row, width, docLeafID(doc), doc != nil && p.hoverPaneClose == doc.leafID)
 }
 
 func (p *Plugin) toggleDocRenderMode() {
@@ -1533,7 +1532,7 @@ func (p *Plugin) registerDocPaneRegions(doc *docPane, leafID int, box Box) {
 }
 
 func (p *Plugin) registerDocTabRegions(doc *docPane, leafID int, box Box) {
-	strip := layoutDocTabStrip(doc, panereposition.ReserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
+	strip := layoutDocTabStrip(doc, p.reserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		p.mouseHandler.HitMap.AddRect(regionDocTab, box.X+col, box.Y, width, 1, docTabHit{LeafID: leafID, Index: index, Close: close})
 	})

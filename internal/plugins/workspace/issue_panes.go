@@ -7,7 +7,6 @@ import (
 	"github.com/marcus/sidecar/internal/issueview"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/tty"
 )
@@ -499,7 +498,7 @@ func (p *Plugin) closeIssuePane(leafID int) tea.Cmd {
 
 // issuePaneHeaderRow is the issue leaf's header: the tab strip plus the shared X.
 func (p *Plugin) issuePaneHeaderRow(issue *issuePane, width int, focused bool) string {
-	return p.composeContentHeader(layoutIssueTabStrip(issue, panereposition.ReserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(issueLeafID(issue))).Row, width, issueLeafID(issue), issue != nil && p.hoverPaneClose == issue.leafID)
+	return p.composeContentHeader(layoutIssueTabStrip(issue, p.reserveHeader(width, true).TabsWidth, focused).HoverClose(p.hoverTabClose.IndexFor(issueLeafID(issue))).Row, width, issueLeafID(issue), issue != nil && p.hoverPaneClose == issue.leafID)
 }
 
 func (p *Plugin) registerIssuePaneRegions(issue *issuePane, leafID int, box Box) {
@@ -518,7 +517,7 @@ func (p *Plugin) finishIssueScrollbarDrag() {
 }
 
 func (p *Plugin) registerIssueTabRegions(issue *issuePane, leafID int, box Box) {
-	strip := layoutIssueTabStrip(issue, panereposition.ReserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
+	strip := layoutIssueTabStrip(issue, p.reserveHeader(box.W, true).TabsWidth, p.paneFocus == leafID)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		p.mouseHandler.HitMap.AddRect(regionIssueTab, box.X+col, box.Y, width, 1, issueTabHit{LeafID: leafID, Index: index, Close: close})
 	})

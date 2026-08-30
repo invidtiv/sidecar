@@ -567,10 +567,11 @@ sidecar host set proof --env ""
 
 Read and compose the pane layout agents work beside
 
-Read the current pane layout (`layout get`) or open several panes at once
-in one atomic call (`layout apply`). Both act on the surface showing this
-Sidecar shell — or, with --sessions, the global Sessions surface — and never
-queue: a request whose destination is off screen declines with the reason.
+Read the current pane layout (`layout get`), open several panes at once in
+one atomic call (`layout apply`), or reposition one pane that is already
+open (`layout move`). All three act on the surface showing this Sidecar
+shell — or, with --sessions, the global Sessions surface — and never queue:
+a request whose destination is off screen declines with the reason.
 
 ```
 Usage: sidecar layout <command>
@@ -712,6 +713,84 @@ sidecar layout get
 sidecar layout get --json
 # the selected row on the global Sessions surface
 sidecar layout get --sessions --json
+```
+
+### `sidecar layout move`
+
+Reposition one open pane
+
+Move a pane that is already open to another place in the grid. The pane is
+pulled out and grafted back at the destination: its content, tabs, scroll
+position and any live terminal travel with it, and so does the share of the
+box you dragged it to.
+
+Name the pane to move by its grid cell (`2.1`, column.row, 1-based) or with
+--focused. Addresses are read against the layout AS IT STANDS — run
+`layout get` and use the cells it prints; you never compensate for the
+source column collapsing.
+
+--to takes three forms:
+
+  1.2      a cell in the current grid. An occupied cell is an insert:
+           the pane lands there and the occupant moves down.
+  3        a column number. The pane lands at the BOTTOM of that column,
+           and a number one past the last column opens a new one.
+  left     the direction rule the modal's h/j/k/l use. up and down step
+  right    one row within the column; left and right append at the bottom
+  up       of the column beside this one, and open a new outer column when
+  down     there is none — including a new leftmost column, which no cell
+           address can name.
+
+It all happens or nothing does. Caps (a 4x4 grid), per-kind floors, and a
+window too small for the result decline with that reason and leave the
+layout untouched. A move with nothing to do — the pane is already there, or
+a direction with no room beyond it — is a SUCCESS reported as "unchanged",
+never as moved and never as a refusal.
+
+With --sessions this changes the pane tree of the Sessions viewer on THIS
+machine, including for a row whose workspace lives on another one: no
+layout mutation is sent to the remote host. The acknowledgement names the
+surface it changed. Like get and apply, move never queues.
+
+```
+Usage: sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|up|down) [--sessions [ROW]]
+```
+
+**Options:**
+
+- `--focused`: Move the surface's focused pane instead of naming a cell
+- `--to DEST`: Destination: a cell (1.2), a column (3), or left|right|up|down
+- `--shell NAME`: Target a registered shell by display name or tmux name
+- `--project NAME`: Target a project's Workspaces surface (slug, basename, or path)
+- `--sessions [ROW]`: Target the global Sessions surface (optional row by ID or display name)
+- `--wait DURATION`: Time to wait for instances to acknowledge (default 1200ms)
+- `--json`: Write one structured result object to stdout
+- `-h, --help`: Show this help
+
+**Exit codes:**
+
+- `0`: moved, or already in the requested place
+- `1`: state failure
+- `2`: usage error
+- `3`: no running instance
+- `4`: declined host-side; the reason names the refusal
+- `5`: an unknown --project or --shell
+
+**Examples:**
+
+```bash
+# read the cells before you move one
+sidecar layout get --json
+# put the pane at 2.1 below the one at 1.1
+sidecar layout move 2.1 --to 1.2
+# the direction rule the modal's l uses
+sidecar layout move --focused --to right
+# append to column 3, opening it one past the end
+sidecar layout move 2.1 --to 3
+# open a new leftmost column, structured result
+sidecar layout move 1.1 --to left --json
+# the global Sessions viewer's own layout
+sidecar layout move --focused --to up --sessions
 ```
 
 ## `sidecar notify`

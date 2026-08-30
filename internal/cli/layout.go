@@ -63,11 +63,12 @@ func layoutCommand() *Command {
 		Name:    "layout",
 		Summary: "Read and compose the pane layout agents work beside",
 		Usage:   "sidecar layout <command>",
-		Long: "Read the current pane layout (`layout get`) or open several panes at once\n" +
-			"in one atomic call (`layout apply`). Both act on the surface showing this\n" +
-			"Sidecar shell — or, with --sessions, the global Sessions surface — and never\n" +
-			"queue: a request whose destination is off screen declines with the reason.",
-		Sub: []*Command{applyLayoutSubcommand(), getCmd},
+		Long: "Read the current pane layout (`layout get`), open several panes at once in\n" +
+			"one atomic call (`layout apply`), or reposition one pane that is already\n" +
+			"open (`layout move`). All three act on the surface showing this Sidecar\n" +
+			"shell — or, with --sessions, the global Sessions surface — and never queue:\n" +
+			"a request whose destination is off screen declines with the reason.",
+		Sub: []*Command{applyLayoutSubcommand(), getCmd, moveLayoutSubcommand()},
 		Run: func(env Env, args []string) int {
 			layoutRoot := RootCommand().FindSubcommand("layout")
 			if len(args) == 0 || isHelp(args[0]) {
@@ -158,6 +159,79 @@ func applyLayoutSubcommand() *Command {
 		},
 		Mutates: true,
 		Run:     runLayoutApply,
+	}
+}
+
+// moveLayoutSubcommand is `sidecar layout move`: reposition one pane that is
+// already open. It is a verb over the planner the reposition modal and the M
+// key already call, not a second way to rearrange a layout — `layout get` plus
+// `layout apply --spec` could always do this, at the cost of reconstructing
+// every pane on screen to move one of them.
+func moveLayoutSubcommand() *Command {
+	return &Command{
+		Name:    "move",
+		Summary: "Reposition one open pane",
+		Usage:   "sidecar layout move (CELL | --focused) --to (CELL | COLUMN | left|right|up|down) [--sessions [ROW]]",
+		Long: "Move a pane that is already open to another place in the grid. The pane is\n" +
+			"pulled out and grafted back at the destination: its content, tabs, scroll\n" +
+			"position and any live terminal travel with it, and so does the share of the\n" +
+			"box you dragged it to.\n\n" +
+			"Name the pane to move by its grid cell (`2.1`, column.row, 1-based) or with\n" +
+			"--focused. Addresses are read against the layout AS IT STANDS — run\n" +
+			"`layout get` and use the cells it prints; you never compensate for the\n" +
+			"source column collapsing.\n\n" +
+			"--to takes three forms:\n\n" +
+			"  1.2      a cell in the current grid. An occupied cell is an insert:\n" +
+			"           the pane lands there and the occupant moves down.\n" +
+			"  3        a column number. The pane lands at the BOTTOM of that column,\n" +
+			"           and a number one past the last column opens a new one.\n" +
+			"  left     the direction rule the modal's h/j/k/l use. up and down step\n" +
+			"  right    one row within the column; left and right append at the bottom\n" +
+			"  up       of the column beside this one, and open a new outer column when\n" +
+			"  down     there is none — including a new leftmost column, which no cell\n" +
+			"           address can name.\n\n" +
+			"It all happens or nothing does. Caps (a 4x4 grid), per-kind floors, and a\n" +
+			"window too small for the result decline with that reason and leave the\n" +
+			"layout untouched. A move with nothing to do — the pane is already there, or\n" +
+			"a direction with no room beyond it — is a SUCCESS reported as \"unchanged\",\n" +
+			"never as moved and never as a refusal.\n\n" +
+			"With --sessions this changes the pane tree of the Sessions viewer on THIS\n" +
+			"machine, including for a row whose workspace lives on another one: no\n" +
+			"layout mutation is sent to the remote host. The acknowledgement names the\n" +
+			"surface it changed. Like get and apply, move never queues.",
+		Flags: []Flag{
+			{Name: "--focused", Summary: "Move the surface's focused pane instead of naming a cell", Bool: true},
+			{Name: "--to", Arg: "DEST", Summary: "Destination: a cell (1.2), a column (3), or left|right|up|down"},
+			{Name: "--shell", Arg: "NAME", Summary: "Target a registered shell by display name or tmux name"},
+			{Name: "--project", Arg: "NAME", Summary: "Target a project's Workspaces surface (slug, basename, or path)"},
+			{Name: "--sessions", Arg: "[ROW]", Summary: "Target the global Sessions surface (optional row by ID or display name)"},
+			{Name: "--wait", Arg: "DURATION", Summary: "Time to wait for instances to acknowledge (default 1200ms)"},
+			{Name: "--json", Summary: "Write one structured result object to stdout", Bool: true},
+			{Name: "--help", Short: "-h", Summary: "Show this help", Bool: true},
+		},
+		Args: ArgSpec{Min: 0, Max: 1},
+		ExitCodes: []ExitCode{
+			{Code: 0, Summary: "moved, or already in the requested place"},
+			{Code: 1, Summary: "state failure"},
+			{Code: 2, Summary: "usage error"},
+			{Code: 3, Summary: "no running instance"},
+			{Code: 4, Summary: "declined host-side; the reason names the refusal"},
+			{Code: 5, Summary: "an unknown --project or --shell"},
+		},
+		Examples: []Example{
+			{Command: "sidecar layout get --json", Description: "read the cells before you move one"},
+			{Command: "sidecar layout move 2.1 --to 1.2", Description: "put the pane at 2.1 below the one at 1.1"},
+			{Command: "sidecar layout move --focused --to right", Description: "the direction rule the modal's l uses"},
+			{Command: "sidecar layout move 2.1 --to 3", Description: "append to column 3, opening it one past the end"},
+			{Command: "sidecar layout move 1.1 --to left --json", Description: "open a new leftmost column, structured result"},
+			{Command: "sidecar layout move --focused --to up --sessions", Description: "the global Sessions viewer's own layout"},
+		},
+		Agent: AgentDoc{
+			Invocation: "sidecar layout move (2.1 | --focused) --to (1.2 | 3 | left|right|up|down)",
+			Summary:    "Reposition one open pane without rebuilding the layout around it",
+		},
+		Mutates: true,
+		Run:     runLayoutMove,
 	}
 }
 

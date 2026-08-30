@@ -8,7 +8,6 @@ import (
 	"github.com/marcus/sidecar/internal/features"
 	appmsg "github.com/marcus/sidecar/internal/msg"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/state"
 	"github.com/marcus/sidecar/internal/styles"
 	"github.com/marcus/sidecar/internal/termpanes"
@@ -241,7 +240,7 @@ func (m *Model) renderOutputTerminalLeaf(leafID int, kind panelayout.Kind, width
 	// carried backgrounds reach, so a pane cannot render differently depending
 	// on which surface is showing it.
 	terminalCfg := m.TerminalConfig()
-	header := panereposition.ReserveHeader(width, kind == panelayout.Shell)
+	header := m.reserveHeader(width, kind == panelayout.Shell)
 	return termpreview.RenderBuffer(termpreview.RenderBufferInput{
 		Width: width, Height: height, Chips: chips, Hints: hints,
 		DefaultBackground: m.terminalDefaultBackground,

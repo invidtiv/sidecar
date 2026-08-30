@@ -3,6 +3,7 @@ package uirequest
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,10 +36,12 @@ const (
 	ActionLayout Action = "layout"
 )
 
-// Layout modes. Get answers with the current layout; apply opens panes.
+// Layout modes. Get answers with the current layout; apply opens panes; move
+// repositions one pane that is already open.
 const (
 	LayoutModeGet   = "get"
 	LayoutModeApply = "apply"
+	LayoutModeMove  = "move"
 )
 
 // CreatePayload is the ActionCreate record. Kind distinguishes a workspace
@@ -211,12 +214,111 @@ func validateSpecPane(pane LayoutPane) error {
 	}
 }
 
+// LayoutMove is the ActionLayout move record: which pane moves and where.
+// Exactly one source form is set — Focused for the surface's focused pane, or
+// From as a pre-move grid cell "col.row" — and To names the destination.
+//
+// To is carried VERBATIM rather than pre-resolved because the direction words
+// mean what the keyboard and the modal mean by them, and only the host has the
+// tree to ask. The CLI validates the grammar with ParseLayoutMoveTo and the
+// host resolves it against panelayout, so neither can drift.
+type LayoutMove struct {
+	From    string `json:"from,omitempty"`
+	Focused bool   `json:"focused,omitempty"`
+	To      string `json:"to"`
+}
+
+// LayoutMoveForm names how a To value addresses its destination.
+type LayoutMoveForm int
+
+const (
+	// LayoutMoveCell is "col.row" in the pre-move grid.
+	LayoutMoveCell LayoutMoveForm = iota
+	// LayoutMoveColumn is a bare column number: append at the bottom of that
+	// column, opening one past the last if it does not exist yet.
+	LayoutMoveColumn
+	// LayoutMoveDirection is left/right/up/down, resolved by the same
+	// panelayout.MoveDirection rule the modal's h/j/k/l use.
+	LayoutMoveDirection
+)
+
+// LayoutMoveTarget is a validated To value. Exactly one field is meaningful,
+// named by Form.
+type LayoutMoveTarget struct {
+	Form      LayoutMoveForm
+	Cell      panelayout.Cell
+	Column    int
+	Direction panelayout.Direction
+}
+
+// LayoutMoveDirections is the accepted direction vocabulary, in help order.
+var LayoutMoveDirections = []string{"left", "right", "up", "down"}
+
+// ParseLayoutMoveTo validates one --to value. A bare number is a column, so it
+// is checked before the cell form, which would otherwise read "3" as 3.1.
+func ParseLayoutMoveTo(value string) (LayoutMoveTarget, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return LayoutMoveTarget{}, fmt.Errorf("a move needs a destination: a cell like 1.2, a column like 3, or one of %s", strings.Join(LayoutMoveDirections, "/"))
+	}
+	switch strings.ToLower(trimmed) {
+	case "left":
+		return LayoutMoveTarget{Form: LayoutMoveDirection, Direction: panelayout.DirectionLeft}, nil
+	case "right":
+		return LayoutMoveTarget{Form: LayoutMoveDirection, Direction: panelayout.DirectionRight}, nil
+	case "up":
+		return LayoutMoveTarget{Form: LayoutMoveDirection, Direction: panelayout.DirectionUp}, nil
+	case "down":
+		return LayoutMoveTarget{Form: LayoutMoveDirection, Direction: panelayout.DirectionDown}, nil
+	}
+	if column, err := strconv.Atoi(trimmed); err == nil {
+		if column < 1 || column > panelayout.MaxGridColumns {
+			return LayoutMoveTarget{}, fmt.Errorf("column %d is outside the %d-column grid", column, panelayout.MaxGridColumns)
+		}
+		return LayoutMoveTarget{Form: LayoutMoveColumn, Column: column}, nil
+	}
+	cell, ok := panelayout.ParseCell(trimmed)
+	if !ok {
+		return LayoutMoveTarget{}, fmt.Errorf("%q is not a cell like 1.2, a column like 3, or one of %s", value, strings.Join(LayoutMoveDirections, "/"))
+	}
+	if cell.Col > panelayout.MaxGridColumns || cell.Row > panelayout.MaxGridRows {
+		return LayoutMoveTarget{}, fmt.Errorf("cell %s is outside the %dx%d layout grid", cell.String(), panelayout.MaxGridColumns, panelayout.MaxGridRows)
+	}
+	return LayoutMoveTarget{Form: LayoutMoveCell, Cell: cell}, nil
+}
+
+// ValidateLayoutMove checks a move record's grammar. It knows nothing about the
+// current tree: which pane sits at a cell, whether the destination fits, and
+// every cap and floor are the host's to answer.
+func ValidateLayoutMove(move LayoutMove) error {
+	from := strings.TrimSpace(move.From)
+	switch {
+	case move.Focused && from != "":
+		return fmt.Errorf("name the pane to move by cell or with --focused, not both")
+	case !move.Focused && from == "":
+		return fmt.Errorf("name the pane to move: a cell like 2.1, or --focused")
+	}
+	if from != "" {
+		cell, ok := panelayout.ParseCell(from)
+		if !ok {
+			return fmt.Errorf("%q is not a grid cell like 2.1", move.From)
+		}
+		if cell.Col > panelayout.MaxGridColumns || cell.Row > panelayout.MaxGridRows {
+			return fmt.Errorf("cell %s is outside the %dx%d layout grid", cell.String(), panelayout.MaxGridColumns, panelayout.MaxGridRows)
+		}
+	}
+	_, err := ParseLayoutMoveTo(move.To)
+	return err
+}
+
 // LayoutPayload is the ActionLayout record. Apply carries either the batch's
-// Panes or a full-layout Columns spec, never both; get carries neither.
+// Panes or a full-layout Columns spec, never both; get carries neither; move
+// carries only its Move record.
 type LayoutPayload struct {
 	Mode    string          `json:"mode"`
 	Panes   []LayoutPane    `json:"panes,omitempty"`
 	Columns json.RawMessage `json:"columns,omitempty"`
+	Move    *LayoutMove     `json:"move,omitempty"`
 }
 
 func DecodeLayoutPayload(raw json.RawMessage) (LayoutPayload, error) {
@@ -238,6 +340,16 @@ func DecodeLayoutPayload(raw json.RawMessage) (LayoutPayload, error) {
 		}
 		if len(p.Panes) == 0 && len(p.Columns) == 0 {
 			return p, fmt.Errorf("apply payload carries no panes")
+		}
+	case LayoutModeMove:
+		if len(p.Panes) > 0 || len(p.Columns) > 0 {
+			return p, fmt.Errorf("move repositions one open pane; it carries no panes or spec")
+		}
+		if p.Move == nil {
+			return p, fmt.Errorf("move payload carries no move record")
+		}
+		if err := ValidateLayoutMove(*p.Move); err != nil {
+			return p, err
 		}
 	default:
 		return p, fmt.Errorf("unknown layout mode %q", p.Mode)
@@ -302,6 +414,15 @@ const (
 	StatusRetargeted Status = "retargeted"
 	StatusDeclined   Status = "declined"
 	StatusError      Status = "error"
+	// StatusMoved is an accepted layout move: a pane that was already open
+	// changed position. Nothing opened and nothing closed, which is why it is
+	// its own word rather than StatusOpened.
+	StatusMoved Status = "moved"
+	// StatusUnchanged is an accepted request that had nothing to do — a move to
+	// the cell the pane already occupies, or a direction with no room beyond it.
+	// It is a success, not a refusal, and deliberately not StatusRetargeted:
+	// nothing was re-pointed at anything.
+	StatusUnchanged Status = "unchanged"
 )
 
 // Origin identifies the calling process and its owning Sidecar project shell.
@@ -409,6 +530,12 @@ const (
 	// mandatory. Reporting it as "opened" told an agent a pane appeared when
 	// the same pane had been there all along.
 	ItemVerdictCarried = "carried"
+	// ItemVerdictMoved is layout move's accepted outcome: this pane changed
+	// position and Cell names where it landed.
+	ItemVerdictMoved = "moved"
+	// ItemVerdictUnchanged is an accepted no-op. Cell names where the pane still
+	// is, and Reason says why nothing moved.
+	ItemVerdictUnchanged = "unchanged"
 )
 
 // AckItem is one requested pane's verdict: what became of it, where it landed

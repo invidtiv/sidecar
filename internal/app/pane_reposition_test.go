@@ -260,7 +260,18 @@ func TestSessionsPaneLayoutModalAbsorbsPasteAtAppBoundary(t *testing.T) {
 	}
 	_ = m.overview.SetWorkspacesVisible(true)
 
-	updated, _ := m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	// A lone Primary has nowhere to be moved to, so its header offers no layout
+	// control. Open a Diff leaf beside it first — that is also the shape this
+	// test is about, since the modal's draft only means anything with two panes.
+	contentHeightBefore := m.height - headerHeight - footerHeight
+	diffX, diffY, hasDiff := renderedCell(m.renderContent(m.contentWidth(), contentHeightBefore), "Diff")
+	if !hasDiff {
+		t.Fatal("fixture rendered no Diff chip to open a second pane with")
+	}
+	updated, _ := m.Update(tea.MouseClickMsg{X: diffX, Y: headerHeight + diffY, Button: tea.MouseLeft})
+	m = asAppModel(t, updated)
+
+	updated, _ = m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
 	m = asAppModel(t, updated)
 	for _, r := range "sessions" {
 		updated, _ = m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})

@@ -473,7 +473,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 		}
 		labels = append(labels, tabs.Label{Text: label})
 	}
-	reserve := panereposition.ReserveHeader(width, true)
+	reserve := h.reserveHeader(width, true)
 	strip := tabs.LayoutStrip(labels, active, reserve.TabsWidth, focused, nil)
 	strip.RegisterHits(func(col, width, index int, close bool) {
 		h.tabHits = append(h.tabHits, appDeckTabHit{
@@ -481,7 +481,7 @@ func (h *appContentDeck) tabHeader(leafID, width int, origin mouse.Rect, focused
 			rect: mouse.Rect{X: origin.X + col, Y: origin.Y, W: width, H: 1},
 		})
 	})
-	return panereposition.ComposeHeader(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, true, h.hoverLayout == leafID, false)
+	return h.composeHeader(strip.HoverClose(h.hoverTabClose.IndexFor(leafID)).Row, width, true, h.hoverLayout == leafID, false)
 }
 
 // setTabCloseHover lights the × of the deck tab the pointer is inside. Only
@@ -565,7 +565,7 @@ func (r appDeckRegions) Layout(n *panelayout.Node, b paneframe.Box) {
 	if n == nil || n.Split != nil || n.Kind == panelayout.Primary {
 		return
 	}
-	reserve := panereposition.ReserveHeader(b.W, true)
+	reserve := r.h.reserveHeader(b.W, true)
 	if reserve.LayoutW < 1 {
 		return
 	}
@@ -580,7 +580,7 @@ func (r appDeckRegions) Close(n *panelayout.Node, b paneframe.Box) {
 	// the hit rect must be the same reserved geometry. Registering only the
 	// last column left the glyph itself dead: clicks had to land one cell to
 	// its right to close.
-	reserve := panereposition.ReserveHeader(b.W, true)
+	reserve := r.h.reserveHeader(b.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}

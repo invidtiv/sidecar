@@ -5,7 +5,6 @@ import (
 
 	"github.com/marcus/sidecar/internal/paneframe"
 	"github.com/marcus/sidecar/internal/panelayout"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/ui"
 )
 
@@ -115,7 +114,7 @@ func (r paneRegions) Layout(node *panelayout.Node, inner paneframe.Box) {
 	if node == nil || node.Split != nil {
 		return
 	}
-	reserve := panereposition.ReserveHeader(inner.W, node.Kind != PaneTerminal)
+	reserve := r.p.reserveHeader(inner.W, node.Kind != PaneTerminal)
 	if reserve.LayoutW < 1 {
 		return
 	}

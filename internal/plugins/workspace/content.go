@@ -5,7 +5,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/marcus/sidecar/internal/mouse"
 	"github.com/marcus/sidecar/internal/paneframe"
-	"github.com/marcus/sidecar/internal/panereposition"
 	"github.com/marcus/sidecar/internal/tabs"
 	"github.com/marcus/sidecar/internal/ui"
 	"github.com/marcus/sidecar/internal/workspacediff"
@@ -422,13 +421,13 @@ func composePaneLeaf(header, body string) string {
 // composeContentHeader is the tab strip plus the shared layout and close
 // controls. Tabs are already laid out in the reserved leftover width.
 func (p *Plugin) composeContentHeader(tabsRow string, width, leafID int, closeHovered bool) string {
-	return panereposition.ComposeHeader(tabsRow, width, true, p.hoverPaneLayout == leafID, closeHovered)
+	return p.composeHeader(tabsRow, width, true, p.hoverPaneLayout == leafID, closeHovered)
 }
 
 // registerPaneCloseRegion puts the header X last so it wins the cells it
 // occupies over the tab strip and the leaf body.
 func (p *Plugin) registerPaneCloseRegion(leafID int, box Box) {
-	reserve := panereposition.ReserveHeader(box.W, true)
+	reserve := p.reserveHeader(box.W, true)
 	if reserve.CloseW < 1 {
 		return
 	}

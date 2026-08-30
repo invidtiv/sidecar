@@ -103,13 +103,18 @@ var (
 		Description: "Open passive content panes beside eligible project plugins",
 	}
 
-	// PaneMove enables the transient keyboard mode for repositioning panes.
-	// It stays off until the complete keyboard, modal, and agent journeys have
-	// been proven together.
+	// PaneMove enables pane repositioning: the M key and the header ⊞ opening
+	// the shared reposition modal on all three pane hosts, and the `sidecar
+	// layout move` verb over the same planner.
+	//
+	// Default on since the complete journey — keyboard, modal, and agent — is
+	// proven together. It remains a flag because the header control is visible
+	// to every user of every surface on the first frame after install, and
+	// turning it off must remove the whole feature rather than part of it.
 	PaneMove = Feature{
 		Name:        "pane_move",
-		Default:     false,
-		Description: "Reposition panes with a keyboard move mode",
+		Default:     true,
+		Description: "Reposition panes with M, the pane header's layout button, and sidecar layout move",
 	}
 
 	// WorkspaceDocPanesDisabledDiff is the toast/no-op copy when Diff is
