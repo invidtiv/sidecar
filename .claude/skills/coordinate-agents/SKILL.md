@@ -64,7 +64,7 @@ sidecar agent prompt "$target" "Review the current diff and report only actionab
 
 `--wait` submits and waits as one operation, so no second command can race a replacement occupant into the gap. Things to know:
 
-- **Refusals happen before any byte is written.** A blocked, unidentified, stale, dead, or replaced target gets `agent_blocked` / `agent_not_ready` / `agent_replaced` and nothing is sent.
+- **Refusals happen before any byte is written.** A blocked target gets `agent_blocked`; an unidentified or stale one gets `agent_not_ready`; a replaced one gets `agent_replaced`; and a dead pane, a pane in copy mode, or a session that no longer holds exactly one pane gets `agent_pane_busy`. Nothing is sent in any of them.
 - **There is no implicit timeout.** `--wait` requires `--timeout`, and so does `agent wait`.
 - **Settled means `idle`, `done`, or `blocked`** by default. Narrow it with repeated `--until done`, or widen it with `--until working`.
 - **A prompt that goes nowhere is reported, not hidden.** If the lifecycle does not move within 5 seconds of a prompt sent from idle or done, you get `agent_prompt_stalled`. The bytes were written; the agent did not react. Read the screen before you send anything else.

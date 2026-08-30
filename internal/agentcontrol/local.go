@@ -81,6 +81,13 @@ func (t *LocalTerminal) Signal(ctx context.Context, snap Snapshot) (<-chan Signa
 	if snap.Session == "" || snap.PaneID == "" {
 		return nil, nil, fmt.Errorf("cannot observe an unpinned target")
 	}
+	// After Close the pool is gone and the once is spent, so controlManager
+	// returns nil. Refusing here degrades the watch to bounded polling — the
+	// documented fallback — instead of dereferencing a stopped manager.
+	manager := t.controlManager()
+	if manager == nil {
+		return nil, nil, fmt.Errorf("control-mode pool is closed")
+	}
 	signals := make(chan Signal, 1)
 	// The channel is closed exactly once, under the same lock every send takes,
 	// so a control callback racing teardown cannot send on a closed channel.
@@ -102,7 +109,7 @@ func (t *LocalTerminal) Signal(ctx context.Context, snap Snapshot) (<-chan Signa
 	if now == nil {
 		now = time.Now
 	}
-	subscription, err := t.controlManager().Subscribe(tty.ControlRequest{
+	subscription, err := manager.Subscribe(tty.ControlRequest{
 		Session:    snap.Session,
 		Pane:       snap.PaneID,
 		Scrollback: DetectionScrollback,
