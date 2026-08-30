@@ -22,16 +22,29 @@ package hostproto
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Version is the protocol integer. Bump it for any change a viewer of the
 // previous version could misread; adding an optional field a decoder ignores
 // is not such a change.
-const Version = 1
+//
+// v2 added KindNotify. It is a bump rather than an ignorable addition on
+// purpose: a v1 viewer would silently discard every notification a v2 host
+// sends, and a user who enabled managed-host notifications and heard nothing
+// would have no way to learn why. Failing the handshake with the existing
+// actionable message says which machine to update.
+const Version = 2
 
 // MaxLineBytes bounds one encoded message. A remote host that somehow produces
 // a larger line is a bug or an attack, and either way the viewer must fail
@@ -49,6 +62,13 @@ const (
 	KindSnapshot Kind = "snapshot"
 	KindEvent    Kind = "event"
 	KindError    Kind = "error"
+	// KindNotify is one settled agent transition the host considers worth a
+	// notification. It is deliberately separate from KindEvent: an event is a
+	// row's state changing, which a viewer folds into its snapshot, while this
+	// is a thing that happened once and is gone. Folding one into state, or
+	// deriving one from state, is exactly how a reconnect would replay an old
+	// prompt onto someone's desktop.
+	KindNotify Kind = "notify"
 )
 
 // Message is the envelope. Exactly one of the payload pointers is set, chosen
@@ -59,10 +79,11 @@ type Message struct {
 	Seq   uint64    `json:"seq"`
 	At    time.Time `json:"at"`
 
-	Hello    *Hello    `json:"hello,omitempty"`
-	Snapshot *Snapshot `json:"snapshot,omitempty"`
-	Event    *Event    `json:"event,omitempty"`
-	Error    *Error    `json:"error,omitempty"`
+	Hello    *Hello       `json:"hello,omitempty"`
+	Snapshot *Snapshot    `json:"snapshot,omitempty"`
+	Event    *Event       `json:"event,omitempty"`
+	Error    *Error       `json:"error,omitempty"`
+	Notify   *NotifyEvent `json:"notify,omitempty"`
 }
 
 // Hello is the first message on every connection. A viewer that does not
@@ -234,6 +255,209 @@ type Event struct {
 	ServerIncarnation uint64 `json:"serverIncarnation,omitempty"`
 }
 
+// NotifyClass names the settled agent transition a notification is about. The
+// vocabulary is the viewer's own transition classes, spelled here as plain
+// strings so this package stays free of the notification model.
+type NotifyClass string
+
+const (
+	NotifyWaiting NotifyClass = "waiting"
+	NotifyDone    NotifyClass = "done"
+	NotifyFailure NotifyClass = "failure"
+)
+
+// Notify field bounds. They are small on purpose. Everything here is going to
+// be handed to a local desktop notification service, so the wire schema states
+// what may cross and how much of it; a host that exceeds a bound is refused at
+// decode rather than truncated, because a payload that does not fit the
+// contract is not a payload to guess at.
+const (
+	MaxNotifyKeyBytes   = 128
+	MaxNotifyTitleBytes = 200
+	MaxNotifyBodyBytes  = 800
+	// MaxNotifyOriginBytes is generous because a workspace path is a real path
+	// on a real machine, and PATH_MAX is 1024 on macOS. It is a bound against
+	// a hostile peer, not a budget anyone should have to fit inside.
+	MaxNotifyOriginBytes = 1024
+)
+
+// NotifyOrigin is the stable remote identity of the workspace a notification
+// is about, in the same vocabulary the viewer already keys remote rows on.
+//
+// It is deliberately the whole of what crosses about *where* the event
+// happened. There is no pane ID, TTY path, environment, bundle identifier, or
+// command: nothing here can select something for the local machine to run.
+type NotifyOrigin struct {
+	// ItemID is the remote collector's workspace ID, the same one Item.ID
+	// carries, so a viewer can line an event up with the row it belongs to.
+	ItemID     string `json:"itemId"`
+	ProjectKey string `json:"projectKey,omitempty"`
+	Session    string `json:"session,omitempty"`
+	Path       string `json:"path,omitempty"`
+}
+
+func (o NotifyOrigin) empty() bool {
+	return o.ItemID == "" && o.ProjectKey == "" && o.Session == "" && o.Path == ""
+}
+
+// NotifyEvent is one live remote transition, or the withdrawal of one.
+//
+// The host performs no delivery of its own: it does not claim, does not write
+// a receipt, and never invokes a desktop or audio service. This message is the
+// entire remote half of the feature.
+type NotifyEvent struct {
+	// Key identifies this transition independently of the connection that
+	// carried it. See NotifyKey for how it is derived and why.
+	Key string `json:"key,omitempty"`
+	// OccurredAt is when the host settled the transition, not when it was
+	// encoded. A viewer compares it against its own live-event window, so a
+	// message that queued behind a slow link does not arrive as fresh news.
+	OccurredAt time.Time `json:"occurredAt,omitzero"`
+
+	Class    NotifyClass `json:"class,omitempty"`
+	Source   string      `json:"source,omitempty"`
+	Severity string      `json:"severity,omitempty"`
+	Title    string      `json:"title,omitempty"`
+	Body     string      `json:"body,omitempty"`
+	Sticky   bool        `json:"sticky,omitempty"`
+
+	Origin NotifyOrigin `json:"origin,omitzero"`
+
+	// Withdraws names an earlier event key this message answers: the agent has
+	// left the lane that was waiting for input. A withdrawal carries no text
+	// and no origin — it is an answer to something the viewer already has, and
+	// a message that both announced and withdrew would have two meanings.
+	Withdraws string `json:"withdraws,omitempty"`
+}
+
+// IsWithdrawal reports whether this message retires an earlier notification
+// rather than announcing a new one.
+func (e NotifyEvent) IsWithdrawal() bool { return e.Withdraws != "" }
+
+// NotifyKeyResolution quantizes the occurrence time inside an event key.
+//
+// Two `sidecar host serve` processes watch one machine on independent poll
+// clocks, so they cannot agree on the exact instant a transition settled. A
+// key built from an exact time would therefore differ per connection, and two
+// viewers of the same host would each store their own copy of one event —
+// which is the duplicate this key exists to prevent. Rounding to the window
+// the viewer's store already treats as one logical event makes them agree.
+//
+// A transition that straddles a bucket boundary still produces two keys. That
+// case is caught by the second rule rather than this one: the viewer's store
+// collapses two posts carrying the same logical dedupe key inside the same
+// window. Widening this constant to close it would instead swallow an agent's
+// genuine next turn, which is worse.
+const NotifyKeyResolution = 15 * time.Second
+
+// NotifyKey derives the stable identity of one remote transition from what
+// both ends can agree on: where it happened, what kind of change it was, and
+// roughly when.
+//
+// It must never involve Message.Seq or Snapshot.Generation. Those are facts
+// about one connection, and a key built from them would make every reconnect —
+// and every second viewer — a new event.
+func NotifyKey(origin NotifyOrigin, class NotifyClass, occurredAt time.Time) string {
+	bucket := occurredAt.UTC().Truncate(NotifyKeyResolution).UnixNano()
+	raw := strings.Join([]string{
+		origin.ItemID, origin.ProjectKey, origin.Session, origin.Path,
+		string(class), strconv.FormatInt(bucket, 10),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:16])
+}
+
+// ErrInvalid marks a line that parsed as JSON but violates the protocol: a
+// bound exceeded, a required field missing, a message that means two things at
+// once. It is a named error so a viewer can report "that machine is not
+// speaking this protocol correctly" rather than a decoder's phrasing, and so
+// the failure is closed — nothing is stored or delivered from a message the
+// contract does not cover.
+var ErrInvalid = errors.New("hostproto: invalid message")
+
+// Validate checks a decoded message against the parts of the contract JSON
+// cannot express. It runs on every decoded line, on both ends.
+func (m Message) Validate() error {
+	if m.Kind == KindNotify {
+		if m.Notify == nil {
+			return fmt.Errorf("%w: notify message carried no payload", ErrInvalid)
+		}
+		return m.Notify.validate()
+	}
+	return nil
+}
+
+func (e NotifyEvent) validate() error {
+	if e.IsWithdrawal() {
+		if len(e.Withdraws) > MaxNotifyKeyBytes {
+			return fmt.Errorf("%w: withdrawal key exceeds %d bytes", ErrInvalid, MaxNotifyKeyBytes)
+		}
+		// A withdrawal that also carried text would be two messages in one, and
+		// a viewer applying both would post the thing it was told to retire.
+		if e.Key != "" || e.Title != "" || e.Body != "" || e.Class != "" || !e.Origin.empty() {
+			return fmt.Errorf("%w: a withdrawal carries no notification content", ErrInvalid)
+		}
+		return nil
+	}
+	switch {
+	case e.Key == "":
+		return fmt.Errorf("%w: notify event has no key", ErrInvalid)
+	case len(e.Key) > MaxNotifyKeyBytes:
+		return fmt.Errorf("%w: notify key exceeds %d bytes", ErrInvalid, MaxNotifyKeyBytes)
+	case e.Title == "":
+		return fmt.Errorf("%w: notify event has no title", ErrInvalid)
+	case len(e.Title) > MaxNotifyTitleBytes:
+		return fmt.Errorf("%w: notify title exceeds %d bytes", ErrInvalid, MaxNotifyTitleBytes)
+	case len(e.Body) > MaxNotifyBodyBytes:
+		return fmt.Errorf("%w: notify body exceeds %d bytes", ErrInvalid, MaxNotifyBodyBytes)
+	case e.OccurredAt.IsZero():
+		return fmt.Errorf("%w: notify event has no occurrence time", ErrInvalid)
+	case e.Origin.empty():
+		return fmt.Errorf("%w: notify event has no origin", ErrInvalid)
+	}
+	switch e.Class {
+	case NotifyWaiting, NotifyDone, NotifyFailure:
+	default:
+		return fmt.Errorf("%w: unknown notify class %q", ErrInvalid, e.Class)
+	}
+	for _, field := range []string{e.Origin.ItemID, e.Origin.ProjectKey, e.Origin.Session, e.Origin.Path, e.Source, e.Severity} {
+		if len(field) > MaxNotifyOriginBytes {
+			return fmt.Errorf("%w: notify origin field exceeds %d bytes", ErrInvalid, MaxNotifyOriginBytes)
+		}
+	}
+	return nil
+}
+
+// BoundNotifyText sanitizes and truncates one text field for the wire.
+//
+// Control characters are removed at the source as well as at the viewer,
+// because the bounded schema is what makes this text safe to hand to a desktop
+// service later: a title carrying an escape sequence is not a title. The cut
+// is on a rune boundary so a truncated field is still valid UTF-8.
+func BoundNotifyText(s string, limit int) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t' || r == '\r':
+			b.WriteByte(' ')
+		case r == utf8.RuneError, unicode.IsControl(r):
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	out := strings.Join(strings.Fields(b.String()), " ")
+	if len(out) <= limit {
+		return out
+	}
+	out = out[:limit]
+	for len(out) > 0 && !utf8.ValidString(out) {
+		out = out[:len(out)-1]
+	}
+	return strings.TrimSpace(out)
+}
+
 // Error is a structured failure the host can name. Fatal marks a condition the
 // serve loop cannot continue past, so the viewer stops waiting for data
 // instead of showing a host that is quietly stuck.
@@ -278,8 +502,13 @@ func NewEncoder(w io.Writer) *Encoder {
 // SetClock replaces the timestamp source.
 func (e *Encoder) SetClock(now func() time.Time) { e.now = now }
 
-// Encode stamps and writes one message.
+// Encode stamps and writes one message. A message that violates the contract
+// is refused here rather than written: the host is the first place that can
+// tell, and a viewer's decode-time refusal would cost the connection.
 func (e *Encoder) Encode(msg Message) error {
+	if err := msg.Validate(); err != nil {
+		return err
+	}
 	e.seq++
 	msg.Proto = Version
 	msg.Seq = e.seq
@@ -333,6 +562,12 @@ func (d *Decoder) Next() (Message, error) {
 		var msg Message
 		if err := json.Unmarshal(line, &msg); err != nil {
 			return Message{}, fmt.Errorf("hostproto: unparseable line (remote output is not the protocol; a shell banner on stdout is the usual cause): %w", err)
+		}
+		// Bounds are checked before the caller ever sees the payload, so a
+		// message that violates the schema cannot be stored, rendered, or
+		// delivered on the strength of having parsed.
+		if err := msg.Validate(); err != nil {
+			return Message{}, err
 		}
 		return msg, nil
 	}
