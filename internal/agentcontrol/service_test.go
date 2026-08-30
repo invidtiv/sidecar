@@ -13,6 +13,8 @@ type sequenceTerminal struct {
 	snapshots []Snapshot
 	launched  []string
 	launchErr error
+	submitted []string
+	keys      []string
 }
 
 func (t *sequenceTerminal) Inspect(context.Context, Target) (Snapshot, error) {
@@ -29,9 +31,23 @@ func (t *sequenceTerminal) Launch(_ context.Context, _ Snapshot, argv []string) 
 	t.launched = append([]string(nil), argv...)
 	return t.launchErr
 }
+func (t *sequenceTerminal) Submit(_ context.Context, _ Snapshot, text string) error {
+	t.submitted = append(t.submitted, text)
+	return nil
+}
+func (t *sequenceTerminal) SendKeys(_ context.Context, _ Snapshot, names []string) error {
+	if err := ValidateKeys(names); err != nil {
+		return err
+	}
+	t.keys = append(t.keys, names...)
+	return nil
+}
+func (t *sequenceTerminal) Capture(_ context.Context, snap Snapshot, req ReadRequest) (string, error) {
+	return string(req.Source) + ":" + snap.Screen, nil
+}
 
 func pinnedSnapshot(screen string) Snapshot {
-	snapshot := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: "n", PaneID: "%1", PanePID: 42, ServerIncarnation: "server-1"}, PaneCount: 1, CurrentCommand: "zsh", ProcessIdentity: "shell", ShellReady: true, Screen: screen, CapturedAt: time.Unix(10, 0)}
+	snapshot := Snapshot{Target: Target{Host: "local", Project: "p", Session: "s", Namespace: "n", PaneID: "%1", PanePID: 42, ServerPID: 7, ServerIncarnation: "server-1"}, PaneCount: 1, CurrentCommand: "zsh", ProcessIdentity: "shell", ShellReady: true, Screen: screen, CapturedAt: time.Unix(10, 0)}
 	if screen == "working" || screen == "idle" || screen == "blocked" {
 		snapshot.CurrentCommand = "fake"
 		snapshot.ProcessIdentity = "fake"
@@ -113,7 +129,7 @@ func TestShellReadyStrictRefusalTable(t *testing.T) {
 		},
 		"unknown foreground": func(s *Snapshot) { s.ShellReady = false },
 		"missing pane":       func(s *Snapshot) { s.PaneID = "" },
-		"missing server":     func(s *Snapshot) { s.ServerIncarnation = "" },
+		"missing server":     func(s *Snapshot) { s.ServerPID = 0 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

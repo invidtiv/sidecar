@@ -21,13 +21,26 @@ const (
 
 // Target is the pinned, host-shaped identity of one managed pane.
 type Target struct {
-	Host              string `json:"host"`
-	Project           string `json:"project"`
-	Session           string `json:"session"`
-	Name              string `json:"name,omitempty"`
-	Namespace         string `json:"namespace,omitempty"`
-	PaneID            string `json:"paneId,omitempty"`
-	PanePID           int    `json:"panePid,omitempty"`
+	Host      string `json:"host"`
+	Project   string `json:"project"`
+	Session   string `json:"session"`
+	Name      string `json:"name,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	PaneID    string `json:"paneId,omitempty"`
+	PanePID   int    `json:"panePid,omitempty"`
+	// ServerPID is the tmux server process, and it — not ServerIncarnation — is
+	// what the occupant check compares.
+	//
+	// The incarnation string includes the socket's ctime, and tmux rewrites the
+	// socket's permission bits whenever the set of attached clients changes
+	// (server_update_socket). Attaching M2's own control-mode observer
+	// therefore bumps the ctime, and an incarnation-based pin would report
+	// every observed target as replaced the instant it began observing it. The
+	// server pid answers the question the pin is actually asking — is this the
+	// same server process? — and cannot drift because somebody attached.
+	ServerPID int `json:"serverPid,omitempty"`
+	// ServerIncarnation stays as observed evidence about the socket. It is
+	// reported, not compared.
 	ServerIncarnation string `json:"serverIncarnation,omitempty"`
 }
 

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcus/sidecar/internal/agentcontrol"
 	"github.com/marcus/sidecar/internal/config"
@@ -21,6 +22,14 @@ type cliAgentTerminal struct {
 	launched bool
 	argv     []string
 	screen   string
+	// screens, when set, is consumed one entry per Inspect and its last entry
+	// repeats, which is how a CLI test drives a lifecycle transition without
+	// reimplementing the service.
+	screens   []string
+	inspects  int
+	submitted []string
+	keys      []string
+	captured  []agentcontrol.ReadRequest
 }
 
 func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target) (agentcontrol.Snapshot, error) {
@@ -28,13 +37,18 @@ func (t *cliAgentTerminal) Inspect(_ context.Context, target agentcontrol.Target
 	target.Namespace = tmuxenv.Namespace()
 	target.PaneID = "%11"
 	target.PanePID = 111
+	target.ServerPID = 99
 	target.ServerIncarnation = "server-fixture"
-	snapshot := agentcontrol.Snapshot{Target: target, PaneCount: 1, CurrentCommand: "zsh", ProcessIdentity: "shell", ShellReady: true}
+	t.inspects++
+	snapshot := agentcontrol.Snapshot{Target: target, PaneCount: 1, CurrentCommand: "zsh", ProcessIdentity: "shell", ShellReady: true, CapturedAt: time.Unix(1000, int64(t.inspects))}
 	if t.launched {
 		snapshot.CurrentCommand = "codex"
 		snapshot.ProcessIdentity = "codex"
 		snapshot.ShellReady = false
 		snapshot.Screen = t.screen
+		if len(t.screens) > 0 {
+			snapshot.Screen = t.screens[min(t.inspects-1, len(t.screens)-1)]
+		}
 	}
 	return snapshot, nil
 }
@@ -43,6 +57,24 @@ func (t *cliAgentTerminal) Launch(_ context.Context, _ agentcontrol.Snapshot, ar
 	t.launched = true
 	t.argv = append([]string(nil), argv...)
 	return nil
+}
+
+func (t *cliAgentTerminal) Submit(_ context.Context, _ agentcontrol.Snapshot, text string) error {
+	t.submitted = append(t.submitted, text)
+	return nil
+}
+
+func (t *cliAgentTerminal) SendKeys(_ context.Context, _ agentcontrol.Snapshot, names []string) error {
+	if err := agentcontrol.ValidateKeys(names); err != nil {
+		return err
+	}
+	t.keys = append(t.keys, names...)
+	return nil
+}
+
+func (t *cliAgentTerminal) Capture(_ context.Context, _ agentcontrol.Snapshot, req agentcontrol.ReadRequest) (string, error) {
+	t.captured = append(t.captured, req)
+	return string(req.Source) + " capture\n", nil
 }
 
 func useCLIAgentTerminal(t *testing.T, terminal *cliAgentTerminal) {
