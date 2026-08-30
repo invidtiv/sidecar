@@ -411,6 +411,10 @@ type Model struct {
 	// are drained by the Update postlude.
 	notificationDelivery     notifydelivery.Coordinator
 	notificationDeliveryCmds []tea.Cmd
+	// terminalNotifyWriter collects direct-terminal notification bytes so the
+	// renderer emits them rather than a delivery goroutine. Nil when delivery
+	// was injected by a test.
+	terminalNotifyWriter *terminalNotifyWriter
 	// notificationCTAs memoizes each notification's reconciled target list by
 	// id, so the file-existence check behind a verified underline runs once per
 	// record rather than once per frame. See notification_targets.go.
@@ -550,7 +554,8 @@ func New(reg *plugin.Registry, km *keymap.Registry, cfg *config.Config, currentV
 	notify.ApplyConfig(cfg.Notifications)
 	m.notifications = openNotificationStore()
 	m.refreshNotifications()
-	m.notificationDelivery = notifydelivery.NewDefault(config.StateDir())
+	m.terminalNotifyWriter = &terminalNotifyWriter{}
+	m.notificationDelivery = notifydelivery.NewDefaultWithTerminalWriter(config.StateDir(), m.terminalNotifyWriter.Write)
 	m.notificationCentreMouse = mouse.NewHandler()
 	m.notificationCentreWheel = &tty.WheelBurst{}
 	m.toastMouse = mouse.NewHandler()

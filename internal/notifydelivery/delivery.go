@@ -707,7 +707,19 @@ func (a stateAttention) Foreground(origin notify.Origin) (bool, error) {
 
 // NewDefault constructs the production adapters without touching the cache,
 // state tree, PATH, or subprocesses. Those are all lazy first-delivery work.
+//
+// The terminal transport writes to standard error. That is right for a CLI
+// process but wrong inside the TUI, where the renderer owns the screen and an
+// escape written from a delivery goroutine can land mid-frame; the TUI passes
+// its own writer to [NewDefaultWithTerminalWriter] instead.
 func NewDefault(stateDir string) Coordinator {
+	return NewDefaultWithTerminalWriter(stateDir, StderrTerminalWriter)
+}
+
+// NewDefaultWithTerminalWriter is [NewDefault] with the direct-terminal
+// transport's writer supplied by the caller, so a host that already owns the
+// terminal can sequence the sequence with its own output.
+func NewDefaultWithTerminalWriter(stateDir string, write func([]byte) (int, error)) Coordinator {
 	runner := ExecRunner{}
 	embedded := NewEmbeddedAssetCache("")
 	cache := NewConfiguredAssetCache(embedded, func() (SoundPaths, error) {
@@ -735,7 +747,7 @@ func NewDefault(stateDir string) Coordinator {
 			}
 			return cfg.Notifications.SSH.Terminal
 		},
-		Write: StderrTerminalWriter,
+		Write: write,
 	}), os.Getenv)
 	sound := NewHostSound(stateDir, NewPlatformSound(runner, cache), 75*time.Millisecond, DefaultLease, RealClock{})
 	return NewService(ServiceOptions{

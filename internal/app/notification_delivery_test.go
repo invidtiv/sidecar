@@ -167,6 +167,50 @@ func TestDelayedPostedMsgAfterDismissNeverDelivers(t *testing.T) {
 	}
 }
 
+// The direct-terminal transport must not write to the terminal itself from a
+// delivery goroutine: the renderer owns the screen, and bytes written from
+// under it land inside a frame. The app collects them and returns them as raw
+// output so Bubble Tea emits them between frames.
+func TestTerminalNotificationBytesReachTheRendererRatherThanTheTerminal(t *testing.T) {
+	writer := &terminalNotifyWriter{}
+	sequence := "\x1b]9;needs input\x07"
+	delivery := &writingDeliveryCoordinator{write: func() { _, _ = writer.Write([]byte(sequence)) }}
+	m := notifyModel()
+	m.notificationDelivery = delivery
+	m.terminalNotifyWriter = writer
+	n := notify.Notification{ID: "ntf-terminal", Source: notify.SourceWaiting, Title: "needs input", CreatedAt: time.Now().UTC()}
+	if _, err := m.notifications.Post(n); err != nil {
+		t.Fatal(err)
+	}
+	m.refreshNotifications()
+
+	msg := m.deliverNotificationCmd(n, false)()
+	if msg == nil {
+		t.Fatal("the written sequence was dropped instead of being handed to the renderer")
+	}
+	if got := writer.drain(); got != "" {
+		t.Fatalf("the sequence was left buffered as well as emitted: %q", got)
+	}
+
+	// A delivery that writes nothing — the ordinary local case — must not push
+	// an empty raw message through the renderer.
+	quiet := &fakeDeliveryCoordinator{}
+	m.notificationDelivery = quiet
+	if msg := m.deliverNotificationCmd(n, false)(); msg != nil {
+		t.Fatalf("a silent delivery produced renderer output: %#v", msg)
+	}
+}
+
+type writingDeliveryCoordinator struct {
+	fakeDeliveryCoordinator
+	write func()
+}
+
+func (c *writingDeliveryCoordinator) Deliver(ctx context.Context, request notifydelivery.Request) notifydelivery.Result {
+	c.write()
+	return c.fakeDeliveryCoordinator.Deliver(ctx, request)
+}
+
 func TestQueuedDeliveryRevalidatesDismissedStateBeforeProviderWork(t *testing.T) {
 	delivery := &fakeDeliveryCoordinator{}
 	m := notifyModel()

@@ -258,6 +258,7 @@ func (m *Model) deliverNotificationCmd(n notify.Notification, discovered bool) t
 	}
 	delivery := m.notificationDelivery
 	store := m.notifications
+	writer := m.terminalNotifyWriter
 	return func() tea.Msg {
 		if store != nil {
 			all, err := store.List()
@@ -283,8 +284,22 @@ func (m *Model) deliverNotificationCmd(n notify.Notification, discovered bool) t
 			}
 		}
 		delivery.Deliver(context.Background(), notifydelivery.Request{Notification: n, Discovered: discovered})
+		return rawTerminalNotification(writer)
+	}
+}
+
+// rawTerminalNotification hands anything the direct-terminal transport wrote to
+// Bubble Tea, so it reaches the terminal between frames instead of inside one.
+// It is nil in the ordinary case where the transport is off or not remote.
+func rawTerminalNotification(writer *terminalNotifyWriter) tea.Msg {
+	if writer == nil {
 		return nil
 	}
+	sequence := writer.drain()
+	if sequence == "" {
+		return nil
+	}
+	return tea.Raw(sequence)()
 }
 
 func (m *Model) cancelNotificationCmd(n notify.Notification) tea.Cmd {
