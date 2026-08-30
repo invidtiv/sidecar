@@ -1,6 +1,6 @@
 # Notification sounds and native delivery
 
-**Status:** In progress — M0 through M3 complete; M4 local release readiness and M5 SSH delivery remain **Tracking:** `td-95db32`, implementation epics `td-7b9ccc` and `td-eb6475`, SSH planning `td-58679c` **Created:** 2026-08-28 **Updated:** 2026-08-30
+**Status:** In progress — M0 through M3 complete; M4 local release readiness, M5 SSH delivery, and M6 deterministic agent lifecycle reporting remain **Tracking:** `td-95db32`, implementation epics `td-7b9ccc` and `td-eb6475`, SSH planning `td-58679c`, lifecycle-hook planning `td-43a93f` **Created:** 2026-08-28 **Updated:** 2026-08-30
 
 This is the controlling plan for Sidecar notification sounds, native operating-system notifications, and their Configuration experience. It supersedes the unimplemented terminal-BEL configuration and OSC desktop-notification phases in [Notifications — toasts, centre, indicator, sources](../implemented/notifications.md). The existing in-app notification centre, toast renderer, JSONL store, calls to action, and agent-transition triggers remain the foundation.
 
@@ -38,6 +38,7 @@ The remote-host steel thread is:
 | M3 — Linux and hardening | Complete | Linux providers, failure/degradation paths, release-architecture builds, burst behavior, and broad automated gates are complete. |
 | M4 — integrated release proof | In progress | Automated integrated gates and isolated Configuration proof are recorded; real sound/native background-journey proof plus final documentation and release-readiness closure remain. |
 | M5 — SSH delivery | Planned | Managed-host typed forwarding and opt-in direct-terminal delivery are specified below and not yet implemented. |
+| M6 — deterministic agent lifecycle reporting | Planned | [Agent lifecycle hooks](notification-agent-lifecycle-hooks.md) controls the separate initiative for Herdr-like hook reporting, authority arbitration, integration management, and screen-detection fallback. |
 
 ## Scope
 
@@ -484,6 +485,14 @@ Exit gate: the integrated candidate has independent approval and evidence for th
 
 Exit gate: a live remote needs-input transition reaches exactly one local centre record and one set of locally configured external channels without invoking a remote desktop/audio provider; the visible-origin and reconnect cases remain silent; and direct-terminal mode emits exactly one valid sanitized sequence only when explicitly enabled for a supported terminal.
 
+### M6 — Deterministic agent lifecycle reporting — Planned separately
+
+[Agent lifecycle hooks](notification-agent-lifecycle-hooks.md) is the controlling plan for this major initiative. Provider hooks report structured lifecycle facts into Sidecar's shared agent-state core; they never post notifications directly. One authority resolver combines those facts with process and screen observation, and the resulting lane transitions continue through the existing `notify.LaneTracker`, notification store, delivery policy, claims, and M5 transport without a second notification path.
+
+M6 depends on the implemented M0–M3 state and notification seams. Its local steel thread can ship independently of M5; once M5 exists, the remote host resolves hook-backed state locally and forwards the same semantic notification event as any screen-backed transition. Screen detection remains the honest fallback for missing, partial, stale, conflicting, or failed integrations.
+
+Exit gate: an installed full-lifecycle integration can drive one needs-input and one finished transition without screen-text heuristics, disagreement from the screen cannot duplicate or reverse a fresh authoritative report, and removing or breaking the integration returns that pane to the existing fallback with an actionable status.
+
 ## Test matrix
 
 ### Policy and config
@@ -551,10 +560,13 @@ Exit gate: a live remote needs-input transition reaches exactly one local centre
 - [ ] A registered remote needs-input transition creates one local centre record and invokes only the local viewer's enabled sound/native providers; two local viewers on the same destination host do not duplicate it.
 - [ ] Showing the remote origin suppresses managed `background` delivery, while reconnect snapshots and transitions that occurred without an attached viewer never replay.
 - [ ] Direct SSH terminal delivery is off by default, emits one sanitized supported-terminal sequence when enabled, works through isolated tmux passthrough, reports unsupported terminals honestly, and never invokes a remote sound/native provider.
+- [ ] A full-lifecycle agent integration drives needs-input and finished notifications through the existing lane/store/delivery path without parsing screen text or posting directly from the hook.
+- [ ] Missing, partial, stale, conflicting, or failed lifecycle integrations fall back to current screen/process detection without duplicate or replayed notifications.
 
 ## References
 
 - [Herdr configuration: Notifications and Sound](https://herdr.dev/docs/configuration/) is the product reference for background agent cues, native-vs-terminal delivery, and custom sounds. Herdr commit `4a3b04f59ba3b7d8a15cea187b23e1e80c343b0c` was also inspected for its headless server-to-foreground-client notification forwarding and its Ghostty/iTerm2/WezTerm/Kitty terminal encoders with tmux passthrough. Sidecar intentionally keeps its existing notification centre and separate native/sound channel modes.
 - [Remote hosts](sidecar-remote-hosts.md) controls Sidecar's SSH stdio protocol, host registration, local viewer lifecycle, and remote pane identity. M5 adds a one-way typed notification event without introducing remote mutation.
+- [Agent lifecycle hooks](notification-agent-lifecycle-hooks.md) controls M6 lifecycle reporting, authority arbitration, integration management, diagnostics, and fallback behavior.
 - [terminal-notifier](https://github.com/julienXX/terminal-notifier/blob/master/README.markdown) documents macOS Notification Center delivery, grouping/replacement, sound, and application activation.
 - [Desktop Notifications Specification](https://specifications.freedesktop.org/notification/latest-single/) defines Linux app name, urgency, replacement ID, and notification-server behavior.
