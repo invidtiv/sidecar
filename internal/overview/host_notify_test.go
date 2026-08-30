@@ -339,6 +339,65 @@ func TestForwardedRecordIsNotOwnedByALocalProject(t *testing.T) {
 	}
 }
 
+// A forwarded record is an ordinary input to the delivery policy. Nothing in
+// it is special-cased, so the user's source rules, channel modes, and quiet
+// hours govern a remote agent exactly as they govern a local one — and the
+// remote host runs no provider either way.
+func TestForwardedRecordResolvesThroughTheOrdinaryPolicy(t *testing.T) {
+	m := managedHostModel(t, true)
+	event := remoteNotifyEvent(time.Now().UTC())
+	posts, _ := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: remoteHostID, Notify: []hostproto.NotifyEvent{event}}))
+	if len(posts) != 1 {
+		t.Fatalf("posts = %d", len(posts))
+	}
+	n := posts[0]
+	runtime := notify.RuntimeContext{
+		Now:          time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC),
+		Capabilities: notify.CapabilitySet{Native: true, Sound: true},
+	}
+
+	background := config.DefaultNotificationsConfig()
+	background.Native.Mode, background.Sound.Mode = config.DeliveryBackground, config.DeliveryBackground
+	decision := notify.ResolveDelivery(n, notify.ResolveConfig(background), runtime)
+	if !decision.Native.Deliver || !decision.Sound.Deliver {
+		t.Fatalf("background decision = %+v", decision)
+	}
+	if decision.Cue != notify.CueAttention {
+		t.Errorf("cue = %q, want the waiting cue", decision.Cue)
+	}
+
+	// Foreground: the user is looking at that remote workspace.
+	visible := runtime
+	visible.Foreground = true
+	if decision := notify.ResolveDelivery(n, notify.ResolveConfig(background), visible); decision.Native.Deliver || decision.Sound.Deliver {
+		t.Errorf("a visible remote workspace still delivered: %+v", decision)
+	}
+	// Always delivers either way.
+	always := background
+	always.Native.Mode, always.Sound.Mode = config.DeliveryAlways, config.DeliveryAlways
+	if decision := notify.ResolveDelivery(n, notify.ResolveConfig(always), visible); !decision.Native.Deliver || !decision.Sound.Deliver {
+		t.Errorf("always suppressed a visible remote workspace: %+v", decision)
+	}
+
+	// A source the user switched off.
+	muted := background
+	muted.Sources = map[string]config.NotificationSourceConfig{
+		string(notify.SourceWaiting): {Native: ptrTo(false), Sound: config.SoundNone},
+	}
+	if decision := notify.ResolveDelivery(n, notify.ResolveConfig(muted), runtime); decision.Native.Deliver || decision.Sound.Deliver {
+		t.Errorf("a muted source still delivered: %+v", decision)
+	}
+
+	// Quiet hours suppress the external channels and nothing else.
+	quiet := background
+	quiet.QuietHours = config.QuietHoursConfig{Enabled: true, Start: "00:00", End: "23:59"}
+	if decision := notify.ResolveDelivery(n, notify.ResolveConfig(quiet), runtime); decision.Native.Deliver || decision.Sound.Deliver {
+		t.Errorf("quiet hours did not suppress a remote event: %+v", decision)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
 // isolatedStateDir gives a test its own state tree and the marker the state
 // helpers refuse to run without.
 func isolatedStateDir(t *testing.T) string {

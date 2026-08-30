@@ -50,3 +50,30 @@ func TestAttentionRoundTripAndForegroundResolution(t *testing.T) {
 		t.Fatalf("withdraw left %+v, %v", live, err)
 	}
 }
+
+// Visible-origin resolution is per machine. Without that, a local workspace
+// that happens to share a tmux session name with a remote one would answer
+// "the user is looking at that workspace" — and the remote agent's alert would
+// be suppressed as foreground while nobody was looking at it.
+func TestOriginForegroundSeparatesMachines(t *testing.T) {
+	remote := Origin{TmuxSession: "api-claude", ProjectKey: "api", WorkDir: "/home/me/api", HostID: "mac-mini"}
+	focused := func(o Origin) []Attention {
+		return []Attention{{PID: 1, Focused: true, VisibleOrigin: o}}
+	}
+	if !OriginForeground(remote, focused(remote)) {
+		t.Error("a viewer showing that remote workspace was not foreground")
+	}
+	local := remote
+	local.HostID = ""
+	if OriginForeground(remote, focused(local)) {
+		t.Error("a local look-alike suppressed a remote alert")
+	}
+	if OriginForeground(local, focused(remote)) {
+		t.Error("a visible remote workspace suppressed a local alert")
+	}
+	otherHost := remote
+	otherHost.HostID = "linux-box"
+	if OriginForeground(remote, focused(otherHost)) {
+		t.Error("the same workspace on another host counted as foreground")
+	}
+}

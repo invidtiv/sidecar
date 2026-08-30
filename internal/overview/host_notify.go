@@ -79,6 +79,11 @@ func remoteNotification(hostID string, event hostproto.NotifyEvent, now time.Tim
 	if occurred.IsZero() || now.Sub(occurred) > notify.LiveEventGrace {
 		return notify.Notification{}, false
 	}
+	if occurred.After(now) {
+		// A host whose clock runs ahead must not pin a toast to a countdown
+		// that has not started. The event is as fresh as it can be: now.
+		occurred = now
+	}
 	title := hostproto.BoundNotifyText(event.Title, hostproto.MaxNotifyTitleBytes)
 	if title == "" {
 		return notify.Notification{}, false
