@@ -196,16 +196,33 @@ func TestM0ObserverPollingVersusControlManagerMeasurement(t *testing.T) {
 			t.Fatal("control startup snapshots did not settle")
 		}
 	}
-	controlCPUStart, controlCPUFound := controlChildCPU()
-	snapshotMu.Lock()
-	idleBefore := controlSnapshots
-	snapshotMu.Unlock()
-	time.Sleep(300 * time.Millisecond)
-	controlCPUEnd, controlCPUEndFound := controlChildCPU()
+	// The idle window must not begin until startup delivery is genuinely over,
+	// and no quiet-gap heuristic can prove that under load: tmux may deliver the
+	// startup scrollback in chunks separated by more than any fixed gap. So the
+	// measurement searches for a 300 ms window containing zero snapshots. A
+	// window a residual startup chunk lands in is discarded and the window
+	// restarts; only a client that never goes quiet fails the invariant below.
+	var (
+		controlCPUStart, controlCPUEnd      time.Duration
+		controlCPUFound, controlCPUEndFound bool
+		controlIdleSnapshots                int
+	)
+	idleDeadline := time.Now().Add(10 * time.Second)
+	for {
+		controlCPUStart, controlCPUFound = controlChildCPU()
+		snapshotMu.Lock()
+		idleBefore := controlSnapshots
+		snapshotMu.Unlock()
+		time.Sleep(300 * time.Millisecond)
+		controlCPUEnd, controlCPUEndFound = controlChildCPU()
+		snapshotMu.Lock()
+		controlIdleSnapshots = controlSnapshots - idleBefore
+		snapshotMu.Unlock()
+		if controlIdleSnapshots == 0 || time.Now().After(idleDeadline) {
+			break
+		}
+	}
 	controlIdleCPU := controlCPUEnd - controlCPUStart
-	snapshotMu.Lock()
-	controlIdleSnapshots := controlSnapshots - idleBefore
-	snapshotMu.Unlock()
 	select {
 	case err := <-fallback:
 		t.Fatalf("control fallback: %v", err)
