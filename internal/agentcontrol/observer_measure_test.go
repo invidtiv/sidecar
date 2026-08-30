@@ -172,8 +172,14 @@ func TestM0ObserverPollingVersusControlManagerMeasurement(t *testing.T) {
 	// that finite startup burst settle before defining the idle-window baseline;
 	// otherwise a delayed initial callback is miscounted as idle activity under
 	// load in the full repository suite.
-	settleDeadline := time.Now().Add(2 * time.Second)
-	for {
+	// Two consecutive quiet windows, not one: on a loaded machine a single quiet
+	// 50 ms window can fall between two startup callbacks, and the idle-window
+	// baseline then counts the rest of startup as idle activity. The claim being
+	// measured is unchanged — an idle control client produces no snapshots — this
+	// only makes sure startup is actually over before the measurement begins.
+	settleDeadline := time.Now().Add(5 * time.Second)
+	quiet := 0
+	for quiet < 2 {
 		snapshotMu.Lock()
 		before := controlSnapshots
 		snapshotMu.Unlock()
@@ -182,7 +188,9 @@ func TestM0ObserverPollingVersusControlManagerMeasurement(t *testing.T) {
 		after := controlSnapshots
 		snapshotMu.Unlock()
 		if after == before {
-			break
+			quiet++
+		} else {
+			quiet = 0
 		}
 		if time.Now().After(settleDeadline) {
 			t.Fatal("control startup snapshots did not settle")

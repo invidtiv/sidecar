@@ -77,7 +77,19 @@ func (s Service) Prompt(ctx context.Context, req PromptRequest) (Agent, error) {
 		return Agent{}, &Error{Code: ErrNotReady, Message: "--wait requires an explicit --timeout", Target: &req.Target}
 	}
 
-	snap, state, err := s.observeOnce(ctx, req.Target)
+	// One tracker serves the preflight and every later observation.
+	//
+	// Restarting it after submission looked tidier — lifecycle history from
+	// before the prompt should not let the previous turn's completion satisfy
+	// this one — but it silently broke the stall rule: the reset tracker
+	// reported a different status for the very same snapshot, so "the
+	// lifecycle moved" was satisfied by the reseeding rather than by the agent
+	// reacting, and a prompt into a wedged pane returned success. The stall
+	// rule's own requirement — a change away from the status the prompt was
+	// sent from — is what keeps a stale completion out, and it only means
+	// anything if both readings come from the same tracker.
+	var tracker agentactivity.Tracker
+	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -90,13 +102,8 @@ func (s Service) Prompt(ctx context.Context, req PromptRequest) (Agent, error) {
 		return Agent{}, transport(snap.Target, err)
 	}
 
-	// The tracker restarts at submission. Lifecycle history from before the
-	// prompt would let the *previous* turn's completion satisfy this one.
-	var tracker agentactivity.Tracker
-	tracker.ResetForProcessChange(s.Now())
-
 	if before != StatusWorking {
-		snap, state, err = s.awaitPromptLanded(ctx, snap, &tracker, pinnedKind, before)
+		snap, state, err = s.awaitPromptLanded(ctx, snap, state, &tracker, pinnedKind, before)
 		if err != nil {
 			return Agent{}, err
 		}
@@ -111,7 +118,7 @@ func (s Service) Prompt(ctx context.Context, req PromptRequest) (Agent, error) {
 
 	waitCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	snap, state, err = s.awaitSettled(waitCtx, snap, &tracker, pinnedKind, req.Until)
+	snap, state, err = s.awaitSettled(waitCtx, snap, state, &tracker, pinnedKind, req.Until)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -128,7 +135,8 @@ func (s Service) Wait(ctx context.Context, req WaitRequest) (Agent, error) {
 	if req.Timeout <= 0 {
 		return Agent{}, &Error{Code: ErrNotReady, Message: "agent wait requires an explicit --timeout", Target: &req.Target}
 	}
-	snap, state, err := s.observeOnce(ctx, req.Target)
+	var tracker agentactivity.Tracker
+	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -139,11 +147,9 @@ func (s Service) Wait(ctx context.Context, req WaitRequest) (Agent, error) {
 		return Agent{}, &Error{Code: ErrNotReady, Message: "no agent provider is identified in the target pane", Target: &snap.Target}
 	}
 
-	var tracker agentactivity.Tracker
-	tracker.ResetForProcessChange(s.Now())
 	waitCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	snap, state, err = s.awaitSettled(waitCtx, snap, &tracker, state.Kind, req.Until)
+	snap, state, err = s.awaitSettled(waitCtx, snap, state, &tracker, state.Kind, req.Until)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -161,7 +167,8 @@ func (s Service) SendKeys(ctx context.Context, req KeysRequest) (Agent, error) {
 	if len(req.Keys) == 0 {
 		return Agent{}, &Error{Code: ErrNotReady, Message: "at least one key is required", Target: &req.Target}
 	}
-	snap, state, err := s.observeOnce(ctx, req.Target)
+	var tracker agentactivity.Tracker
+	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)
 	if err != nil {
 		return Agent{}, err
 	}
@@ -191,7 +198,8 @@ func (s Service) Read(ctx context.Context, req ReadRequest) (ReadResult, error) 
 	if !source.valid() {
 		return ReadResult{}, &Error{Code: ErrNotReady, Message: fmt.Sprintf("unknown read source %q", req.Source), Target: &req.Target}
 	}
-	snap, state, err := s.observeOnce(ctx, req.Target)
+	var tracker agentactivity.Tracker
+	snap, state, err := s.observeOnce(ctx, req.Target, &tracker)
 	if err != nil {
 		return ReadResult{}, err
 	}
@@ -229,26 +237,26 @@ func (s Service) Read(ctx context.Context, req ReadRequest) (ReadResult, error) 
 // target plus the lifecycle verdict, with the same quiet tracker seeding Get
 // uses so a provider whose composer has no explicit idle marker is not
 // mistaken for an unidentified pane.
-func (s Service) observeOnce(ctx context.Context, target Target) (Snapshot, AgentState, error) {
+func (s Service) observeOnce(ctx context.Context, target Target, tracker *agentactivity.Tracker) (Snapshot, AgentState, error) {
 	snap, err := s.Terminal.Inspect(ctx, target)
 	if err != nil {
 		return Snapshot{}, AgentState{}, transport(target, err)
 	}
-	var tracker agentactivity.Tracker
 	tracker.ResetForProcessChange(snap.CapturedAt)
-	return snap, s.Detect(snap, &tracker), nil
+	return snap, s.Detect(snap, tracker), nil
 }
 
 // awaitPromptLanded is the PromptStallWindow rule. It ends as soon as the
 // lifecycle moves off the state the prompt was sent from.
-func (s Service) awaitPromptLanded(ctx context.Context, from Snapshot, tracker *agentactivity.Tracker, kind string, before Status) (Snapshot, AgentState, error) {
+func (s Service) awaitPromptLanded(ctx context.Context, from Snapshot, fromState AgentState, tracker *agentactivity.Tracker, kind string, before Status) (Snapshot, AgentState, error) {
 	stallCtx, cancel := context.WithTimeout(ctx, s.StallAfter)
 	defer cancel()
-	snap, state, err := s.watch(stallCtx, from, tracker, func(_ Snapshot, state AgentState) (watchOutcome, error) {
+	snap, state, err := s.watch(stallCtx, from, fromState, tracker, func(_ Snapshot, state AgentState) (watchOutcome, error) {
 		if err := stillTheSameProvider(from.Target, kind, state); err != nil {
 			return watchContinue, err
 		}
-		if state.Status != before {
+		// unknown is losing track of the agent, not evidence that it reacted.
+		if state.Status != before && state.Status != StatusUnknown {
 			return watchSettled, nil
 		}
 		return watchContinue, nil
@@ -272,12 +280,12 @@ func (s Service) awaitPromptLanded(ctx context.Context, from Snapshot, tracker *
 }
 
 // awaitSettled observes until the agent reaches one of the accepted states.
-func (s Service) awaitSettled(ctx context.Context, from Snapshot, tracker *agentactivity.Tracker, kind string, until []Status) (Snapshot, AgentState, error) {
+func (s Service) awaitSettled(ctx context.Context, from Snapshot, fromState AgentState, tracker *agentactivity.Tracker, kind string, until []Status) (Snapshot, AgentState, error) {
 	accepted := until
 	if len(accepted) == 0 {
 		accepted = DefaultSettledStates()
 	}
-	return s.watch(ctx, from, tracker, func(_ Snapshot, state AgentState) (watchOutcome, error) {
+	return s.watch(ctx, from, fromState, tracker, func(_ Snapshot, state AgentState) (watchOutcome, error) {
 		if err := stillTheSameProvider(from.Target, kind, state); err != nil {
 			return watchContinue, err
 		}

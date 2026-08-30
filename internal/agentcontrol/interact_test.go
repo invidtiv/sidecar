@@ -3,6 +3,8 @@ package agentcontrol
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -16,28 +18,34 @@ import (
 // by stageDetect, so lifecycle scenarios are written as the states they mean
 // rather than as provider fixture text.
 type stageTerminal struct {
-	mu         sync.Mutex
-	stage      string
-	target     Target
-	dead       bool
-	copyMode   bool
-	paneCount  int
-	panePID    int
-	inspects   int
-	onInspect  func(t *stageTerminal, n int)
-	submitted  []string
-	submitErr  error
-	keys       []string
-	captures   []ReadRequest
-	captureErr error
+	mu        sync.Mutex
+	stage     string
+	target    Target
+	dead      bool
+	copyMode  bool
+	paneCount int
+	panePID   int
+	// currentCommand and processIdentity default to the fake provider; a test
+	// that wants the real detector names a provider the catalog knows.
+	currentCommand  string
+	processIdentity string
+	inspects        int
+	onInspect       func(t *stageTerminal, n int)
+	submitted       []string
+	submitErr       error
+	keys            []string
+	captures        []ReadRequest
+	captureErr      error
 }
 
 func newStage(stage string) *stageTerminal {
 	return &stageTerminal{
-		stage:     stage,
-		target:    Target{Host: "local", Project: "p", Session: "s", Namespace: "n", PaneID: "%1", ServerPID: 7, ServerIncarnation: "server-1"},
-		paneCount: 1,
-		panePID:   42,
+		stage:           stage,
+		target:          Target{Host: "local", Project: "p", Session: "s", Namespace: "n", PaneID: "%1", ServerPID: 7, ServerIncarnation: "server-1"},
+		paneCount:       1,
+		panePID:         42,
+		currentCommand:  "fake",
+		processIdentity: "fake",
 	}
 }
 
@@ -65,8 +73,8 @@ func (t *stageTerminal) Inspect(context.Context, Target) (Snapshot, error) {
 		Dead:            t.dead,
 		CopyMode:        t.copyMode,
 		PaneCount:       t.paneCount,
-		CurrentCommand:  "fake",
-		ProcessIdentity: "fake",
+		CurrentCommand:  t.currentCommand,
+		ProcessIdentity: t.processIdentity,
 		Screen:          t.stage,
 		CapturedAt:      time.Unix(100, int64(n)),
 	}, nil
@@ -180,6 +188,51 @@ func TestPromptReportsStalledWhenTheLifecycleNeverMoves(t *testing.T) {
 	// that nothing was written.
 	if wrote := terminal.wrote(); len(wrote) != 1 || wrote[0] != "review the diff" {
 		t.Fatalf("submitted = %q", wrote)
+	}
+}
+
+// TestPromptStallRuleHoldsUnderTheRealDetector runs the rule through the
+// package's own detect and a checked-in provider fixture rather than the stage
+// detector, because the stage detector answers from the screen string alone and
+// cannot see the thing that broke this rule in practice: the real detector's
+// verdict depends on the lifecycle tracker it is given, so reading "before" and
+// "after" through two differently seeded trackers made the reseeding itself
+// look like the agent reacting. A prompt into a pane that never changed
+// returned success. Found by running the real binary against an isolated tmux
+// server; the mechanism needs the real detector, so the test uses it.
+func TestPromptStallRuleHoldsUnderTheRealDetector(t *testing.T) {
+	idle, err := os.ReadFile(filepath.Join("..", "agentactivity", "testdata", "codex", "startup_idle.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := newStage(string(idle))
+	terminal.currentCommand, terminal.processIdentity = "codex", "codex"
+	svc := stageService(terminal)
+	svc.Detect = nil // the real detector
+
+	_, err = svc.Prompt(context.Background(), PromptRequest{Target: terminal.target, Text: "review the diff"})
+	if got := codeOf(t, err); got != ErrPromptStalled {
+		t.Fatalf("Prompt() code = %s, want %s; a screen that never changed reported success", got, ErrPromptStalled)
+	}
+	if wrote := terminal.wrote(); len(wrote) != 1 {
+		t.Fatalf("submitted = %q", wrote)
+	}
+}
+
+// TestPromptStallRuleIgnoresAStatusThatBecameUnknown pins the other half of the
+// rule. unknown is Sidecar losing sight of the agent, not the agent reacting,
+// and accepting it would turn "the prompt landed" into "something changed on
+// screen" — which is exactly what the rule exists to distinguish.
+func TestPromptStallRuleIgnoresAStatusThatBecameUnknown(t *testing.T) {
+	terminal := newStage("fake:idle")
+	terminal.onInspect = func(s *stageTerminal, n int) {
+		if n >= 2 {
+			s.set("fake:unknown")
+		}
+	}
+	_, err := stageService(terminal).Prompt(context.Background(), PromptRequest{Target: terminal.target, Text: "go"})
+	if got := codeOf(t, err); got != ErrPromptStalled {
+		t.Fatalf("Prompt() code = %s, want %s; losing track of the agent was read as it reacting", got, ErrPromptStalled)
 	}
 }
 

@@ -62,20 +62,23 @@ const (
 
 // watch drives one bounded lifecycle observation of an already-pinned target.
 //
-// initial is the verified observation the caller pinned; tracker carries the
-// lifecycle history across observations so a working→idle transition can be
-// read as completion. accept sees every observation in order and says whether
-// the watch is done. It may also return an error to refuse outright.
+// initial and state are the verified observation the caller pinned, already
+// read through tracker — the state is passed rather than re-derived because
+// running the detector twice over one snapshot with a differently seeded
+// tracker can produce two different answers, and a caller comparing "before"
+// against the watch's first reading would then be comparing two frames.
+// tracker carries lifecycle history across observations so a working→idle
+// transition can be read as completion. accept sees every observation in order
+// and says whether the watch is done. It may also refuse outright.
 //
 // ctx must already carry the caller's explicit deadline. There is no implicit
 // timeout anywhere in this package.
-func (s Service) watch(ctx context.Context, initial Snapshot, tracker *agentactivity.Tracker, accept func(Snapshot, AgentState) (watchOutcome, error)) (Snapshot, AgentState, error) {
+func (s Service) watch(ctx context.Context, initial Snapshot, state AgentState, tracker *agentactivity.Tracker, accept func(Snapshot, AgentState) (watchOutcome, error)) (Snapshot, AgentState, error) {
 	s = s.defaults()
 	pinned := initial.Target
 
 	// The caller's own pinned observation is the first thing accept sees; a
 	// standalone wait whose target is already settled must not pay for a tick.
-	state := s.Detect(initial, tracker)
 	switch outcome, err := accept(initial, state); {
 	case err != nil:
 		return Snapshot{}, AgentState{}, err
