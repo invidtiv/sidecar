@@ -1,6 +1,7 @@
 package overview
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -408,4 +409,75 @@ func isolatedStateDir(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+// countingNative and countingSound record whether a provider was ever asked to
+// do anything. They deliberately succeed: the assertion is about who was
+// invoked, not about whether an invocation would have worked.
+type countingNative struct{ delivered int }
+
+func (n *countingNative) Probe(context.Context) notifydelivery.Capability {
+	return notifydelivery.Capability{Available: true, Provider: "counting-native"}
+}
+
+func (n *countingNative) Deliver(context.Context, notifydelivery.Message) (notifydelivery.ProviderReceipt, error) {
+	n.delivered++
+	return notifydelivery.ProviderReceipt{Provider: "counting-native", Delivered: true}, nil
+}
+
+func (n *countingNative) Remove(context.Context, string) error { return nil }
+
+type countingSound struct{ played int }
+
+func (s *countingSound) Probe(context.Context) notifydelivery.Capability {
+	return notifydelivery.Capability{Available: true, Provider: "counting-sound"}
+}
+
+func (s *countingSound) Play(context.Context, notifydelivery.Cue) (notifydelivery.ProviderReceipt, error) {
+	s.played++
+	return notifydelivery.ProviderReceipt{Provider: "counting-sound", Delivered: true}, nil
+}
+
+// Managed delivery happens on the local viewer, and only there. A forwarded
+// payload must not become a way to make a machine inside SSH — which is what
+// the remote host itself is running — invoke a desktop or audio service. M3's
+// refusal is a property of the process, not of the notification, and nothing
+// on the wire can reach it.
+func TestForwardedRecordCannotBypassTheSSHRefusal(t *testing.T) {
+	stateDir := isolatedStateDir(t)
+	m := managedHostModel(t, true)
+	event := remoteNotifyEvent(time.Now().UTC())
+	posts, _ := collectPosts(t, m.forwardHostNotifications(hosts.Update{HostID: remoteHostID, Notify: []hostproto.NotifyEvent{event}}))
+	if len(posts) != 1 {
+		t.Fatalf("posts = %d", len(posts))
+	}
+
+	cfg := config.DefaultNotificationsConfig()
+	cfg.Native.Mode, cfg.Sound.Mode = config.DeliveryAlways, config.DeliveryAlways
+	policy := notify.ResolveConfig(cfg)
+	native, sound := &countingNative{}, &countingSound{}
+	service := notifydelivery.NewService(notifydelivery.ServiceOptions{
+		Native: native, Sound: sound,
+		Ledger: func() (notifydelivery.Ledger, error) { return notifydelivery.Open(stateDir) },
+		Config: func() notify.ResolvedConfig { return policy },
+		Owner:  "inside-ssh",
+		// A process inside an SSH session, which is exactly what a remote host
+		// runs and what a forwarded payload might hope to reach.
+		Getenv: func(name string) string {
+			if name == "SSH_CONNECTION" {
+				return "10.0.0.2 51000 10.0.0.1 22"
+			}
+			return ""
+		},
+	})
+	result := service.Deliver(context.Background(), notifydelivery.Request{Notification: posts[0]})
+	if native.delivered != 0 || sound.played != 0 {
+		t.Fatalf("a forwarded payload invoked providers inside SSH: native=%d sound=%d", native.delivered, sound.played)
+	}
+	if result.Native.Delivered || result.Sound.Delivered {
+		t.Errorf("result claims delivery: %+v", result)
+	}
+	if !strings.Contains(result.Native.Error+result.Sound.Error+string(result.Native.Reason)+string(result.Sound.Reason), "unavailable") {
+		t.Errorf("the refusal is not reported as unavailable: %+v", result)
+	}
 }
